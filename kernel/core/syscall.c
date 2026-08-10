@@ -1,6 +1,6 @@
 #include "syscall.h"
 #include "process.h"
-#include "serial.h"
+#include "klog.h"
 #include "vga.h"
 #include "vmm.h"
 #include "gfx.h"
@@ -218,7 +218,7 @@ void syscall_dispatch(uint64_t *regs) {
 
     if (rax == SYS_EXIT) {
         int code = (int)rdi;
-        serial_write("syscall: exit() called by ring-3 process\n");
+        klog_write("syscall: exit() called by ring-3 process\n");
         syscall_process_exit_cleanup(vmm_current_pml4());
         if (scheduler_current_pid()) {
             // Scheduler-managed process (spawned by scheduler_demo_run(),
@@ -254,7 +254,7 @@ void syscall_dispatch(uint64_t *regs) {
 
         if (fd == 1 || fd == 2) { // stdout / stderr -> the console, as before
             if (!vmm_validate_user_range(pml4, buf_ptr, len)) {
-                serial_write("syscall: write() rejected -- invalid buffer pointer\n");
+                klog_write("syscall: write() rejected -- invalid buffer pointer\n");
                 regs[14] = (uint64_t)-1; // simplified error indicator (no errno yet)
             } else {
                 const char *buf = (const char *)(uintptr_t)buf_ptr;
@@ -267,10 +267,10 @@ void syscall_dispatch(uint64_t *regs) {
             int slot = fd - FD_BASE;
             if (slot < 0 || slot >= FD_TABLE_SIZE || !fd_table[slot].used ||
                 fd_table[slot].owner_pml4 != pml4 || fd_table[slot].mode != FD_MODE_WRITE) {
-                serial_write("syscall: write() rejected -- bad fd\n");
+                klog_write("syscall: write() rejected -- bad fd\n");
                 regs[14] = (uint64_t)-1;
             } else if (!vmm_validate_user_range(pml4, buf_ptr, len)) {
-                serial_write("syscall: write() rejected -- invalid buffer pointer\n");
+                klog_write("syscall: write() rejected -- invalid buffer pointer\n");
                 regs[14] = (uint64_t)-1;
             } else {
                 // fs_write() (fs.c) works on NUL-terminated C strings,
@@ -298,10 +298,10 @@ void syscall_dispatch(uint64_t *regs) {
         int slot = fd - FD_BASE;
         if (slot < 0 || slot >= FD_TABLE_SIZE || !fd_table[slot].used ||
             fd_table[slot].owner_pml4 != pml4 || fd_table[slot].mode != FD_MODE_READ) {
-            serial_write("syscall: read() rejected -- bad fd\n");
+            klog_write("syscall: read() rejected -- bad fd\n");
             regs[14] = (uint64_t)-1;
         } else if (!vmm_validate_user_range(pml4, buf_ptr, len)) {
-            serial_write("syscall: read() rejected -- invalid buffer pointer\n");
+            klog_write("syscall: read() rejected -- invalid buffer pointer\n");
             regs[14] = (uint64_t)-1;
         } else {
             uint32_t file_size = 0;
@@ -331,7 +331,7 @@ void syscall_dispatch(uint64_t *regs) {
         // NUL-terminated well before the end -- an acceptable tradeoff
         // for a path buffer this small.
         if (!vmm_validate_user_range(pml4, rdi, FS_PATH_MAX)) {
-            serial_write("syscall: open() rejected -- invalid path pointer\n");
+            klog_write("syscall: open() rejected -- invalid path pointer\n");
             regs[14] = (uint64_t)-1;
         } else {
             const char *upath = (const char *)(uintptr_t)rdi;
@@ -349,7 +349,7 @@ void syscall_dispatch(uint64_t *regs) {
             int exists = fs_read(name, &existing_size) != 0;
 
             if (!exists && !(want_write && want_creat)) {
-                serial_write("syscall: open() rejected -- file not found\n");
+                klog_write("syscall: open() rejected -- file not found\n");
                 regs[14] = (uint64_t)-1;
             } else {
                 int slot = -1;
@@ -357,7 +357,7 @@ void syscall_dispatch(uint64_t *regs) {
                     if (!fd_table[i].used) { slot = i; break; }
                 }
                 if (slot < 0) {
-                    serial_write("syscall: open() rejected -- fd table full\n");
+                    klog_write("syscall: open() rejected -- fd table full\n");
                     regs[14] = (uint64_t)-1;
                 } else {
                     if (want_write) {
@@ -388,7 +388,7 @@ void syscall_dispatch(uint64_t *regs) {
         uint64_t pml4 = vmm_current_pml4();
 
         if (!vmm_validate_user_range(pml4, rdi, sizeof(struct gui_info))) {
-            serial_write("syscall: gui_init() rejected -- invalid info pointer\n");
+            klog_write("syscall: gui_init() rejected -- invalid info pointer\n");
             regs[14] = 0;
         } else {
             struct gui_info info;
@@ -409,7 +409,7 @@ void syscall_dispatch(uint64_t *regs) {
                     break;
                 }
             }
-            serial_write(ok ? "syscall: gui_init() mapped the framebuffer\n"
+            klog_write(ok ? "syscall: gui_init() mapped the framebuffer\n"
                              : "syscall: gui_init() failed to map the framebuffer\n");
             regs[14] = (uint64_t)ok;
         }
@@ -446,7 +446,7 @@ void syscall_dispatch(uint64_t *regs) {
         // comment) gets a clean -1 instead of silently mapping pages
         // into the wrong address space.
         if (g_heap_pml4 == 0 || pml4 != g_heap_pml4) {
-            serial_write("syscall: sbrk() rejected -- no heap armed for this process\n");
+            klog_write("syscall: sbrk() rejected -- no heap armed for this process\n");
             regs[14] = (uint64_t)-1;
         } else {
             uint64_t old_brk = g_heap_brk;
@@ -466,7 +466,7 @@ void syscall_dispatch(uint64_t *regs) {
             }
 
             if (!ok) {
-                serial_write("syscall: sbrk() rejected -- out of physical memory\n");
+                klog_write("syscall: sbrk() rejected -- out of physical memory\n");
                 regs[14] = (uint64_t)-1;
             } else {
                 g_heap_brk = new_brk;
@@ -477,14 +477,14 @@ void syscall_dispatch(uint64_t *regs) {
         uint64_t pml4 = vmm_current_pml4();
 
         if (!vmm_validate_user_range(pml4, rdi, sizeof(struct win_request))) {
-            serial_write("syscall: win_create() rejected -- invalid request pointer\n");
+            klog_write("syscall: win_create() rejected -- invalid request pointer\n");
             regs[14] = 0;
         } else {
             struct win_request req = *(struct win_request *)(uintptr_t)rdi;
             int bad_size = (req.w == 0 || req.h == 0 || req.w > WIN_MAX_W || req.h > WIN_MAX_H);
 
             if (bad_size) {
-                serial_write("syscall: win_create() rejected -- bad size\n");
+                klog_write("syscall: win_create() rejected -- bad size\n");
                 regs[14] = 0;
             } else {
                 uint64_t size = (uint64_t)req.w * 4 * req.h;
@@ -506,7 +506,7 @@ void syscall_dispatch(uint64_t *regs) {
 
                 if (!ok) {
                     for (uint32_t j = 0; j < i; j++) pmm_free_frame(g_win_frames[j]);
-                    serial_write("syscall: win_create() rejected -- out of physical memory\n");
+                    klog_write("syscall: win_create() rejected -- out of physical memory\n");
                     regs[14] = 0;
                 } else {
                     g_win_pml4 = pml4;
@@ -535,7 +535,7 @@ void syscall_dispatch(uint64_t *regs) {
     } else if (rax == SYS_UNLINK) {
         uint64_t pml4 = vmm_current_pml4();
         if (!vmm_validate_user_range(pml4, rdi, FS_PATH_MAX)) {
-            serial_write("syscall: unlink() rejected -- invalid path pointer\n");
+            klog_write("syscall: unlink() rejected -- invalid path pointer\n");
             regs[14] = 0;
         } else {
             const char *upath = (const char *)(uintptr_t)rdi;
@@ -552,7 +552,7 @@ void syscall_dispatch(uint64_t *regs) {
 
         if (!vmm_validate_user_range(pml4, rdi, FS_PATH_MAX) ||
             !vmm_validate_user_range(pml4, rsi, (uint64_t)max * sizeof(struct dirent))) {
-            serial_write("syscall: listdir() rejected -- invalid pointer\n");
+            klog_write("syscall: listdir() rejected -- invalid pointer\n");
             regs[14] = (uint64_t)-1;
         } else {
             const char *upath = (const char *)(uintptr_t)rdi;
@@ -572,7 +572,7 @@ void syscall_dispatch(uint64_t *regs) {
     } else if (rax == SYS_GETTIME) {
         uint64_t pml4 = vmm_current_pml4();
         if (!vmm_validate_user_range(pml4, rdi, sizeof(struct rtc_time))) {
-            serial_write("syscall: gettime() rejected -- invalid pointer\n");
+            klog_write("syscall: gettime() rejected -- invalid pointer\n");
             regs[14] = 0;
         } else {
             struct rtc_time t;

@@ -6,7 +6,7 @@
 #include "syscall.h"
 #include "multiboot.h"
 #include "vga.h"
-#include "serial.h"
+#include "klog.h"
 
 #define STACK_VADDR 0x8000200000ULL
 
@@ -59,11 +59,11 @@ void echo_test_run(void) {
 
     vga_write("Running echo -- type to see it echoed back by the process\n");
     vga_write("itself (via SYS_READ_KEY + SYS_WRITE), Esc to quit:\n\n");
-    serial_write("echo_test: calling process_run_ring3()\n");
+    klog_write("echo_test: calling process_run_ring3()\n");
 
     int exit_code = process_run_ring3(as, entry, STACK_VADDR + 4096);
 
-    serial_write("echo_test: process_run_ring3() returned\n");
+    klog_write("echo_test: process_run_ring3() returned\n");
     vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
     vga_write("\nProcess finished. Exit code: ");
     vga_write_exit_code(exit_code);

@@ -5,7 +5,7 @@
 #include "process.h"
 #include "multiboot.h"
 #include "vga.h"
-#include "serial.h"
+#include "klog.h"
 
 #define STACK_VADDR 0x8000200000ULL
 
@@ -47,11 +47,11 @@ void win_test_run(void) {
     vga_write("chrome'd window (title bar + close button, drawn but not\n");
     vga_write("yet mouse-clickable -- there's no mouse syscall). Any key\n");
     vga_write("cycles its color, Esc or 'q' returns here.\n\n");
-    serial_write("win_test: calling process_run_ring3()\n");
+    klog_write("win_test: calling process_run_ring3()\n");
 
     int exit_code = process_run_ring3(as, entry, STACK_VADDR + 4096);
 
-    serial_write("win_test: process_run_ring3() returned\n");
+    klog_write("win_test: process_run_ring3() returned\n");
 
     // Same as gui_test_run(): the window's content was drawn straight
     // onto the real screen by SYS_WIN_PRESENT (kernel-side), so this

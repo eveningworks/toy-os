@@ -5,6 +5,67 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 327 (feature, +10) -- `dmesg`, and a categorized/professional `help`
+
+Two requests: a Linux-dmesg-style command, and a cleaner, more
+professional-looking `help` that doesn't mix everyday commands with
+the ~13 ring-3/syscall/scheduler diagnostic ones.
+
+- **`kernel/include/klog.h` / `kernel/core/klog.c`** (new): a 16KB
+  ring buffer behind `klog_write()`/`klog_putc()`/`klog_dump()`. Every
+  kernel-side diagnostic message used to go only to the physical COM1
+  serial port (`serial_write()`, `kernel/core/serial.c`) with nothing
+  kept in memory -- a real dmesg needs something to actually query.
+  `klog_write()` is a thin decorator, not a replacement: it still
+  forwards every raw byte to `serial_write()`/`serial_putc()`
+  unchanged (so `tools/qmp_test.py`'s and `tools/boot_smoke_test.py`'s
+  `serial.log` capture is completely unaffected), and additionally
+  buffers a timestamped copy. `serial.c` itself never changed -- still
+  just the raw UART driver, doesn't know klog exists. Timestamps
+  (`[secs.hh]`, PIT-tick-based -- 100Hz is this kernel's real tick
+  rate, so hundredths is honest resolution) are added once per
+  *logical* line, not once per call -- tracked via an `at_line_start`
+  flag, since some call sites (e.g. `idt.c`'s panic path) build one
+  line across several separate `serial_write()`/now-`klog_write()`
+  calls with no `\n` until the last one.
+- **Mechanically renamed every `serial_write()` call site to
+  `klog_write()`** across all ~15 files that had one (`kernel.c`,
+  `idt.c`, `syscall.c`, `tfs.c`, `scheduler.c`, and every `*_test.c`),
+  swapping `#include "serial.h"` for `#include "klog.h"` in the 14 that
+  no longer call `serial_init()` directly (only `kernel.c` still does,
+  and keeps both includes). This is what makes `dmesg` show real,
+  complete kernel history from boot -- not just new call sites.
+- **`kapi.h`**: added `klog.h` (for `klog_dump()`) to the apps-facing
+  surface.
+- **`apps/shell.c`**: new `dmesg` command -- dumps the ring buffer,
+  paginated the same way `help` already was (`-- more --`, `'q'` to
+  quit; unpaginated when running inside a GUI Terminal's non-blocking
+  sink, same as `help`'s existing sink check) via a small
+  `dmesg_putc_cb` callback. Pagination state lives in file-scope
+  statics rather than threaded through the callback, matching this
+  codebase's existing plain-callback convention (see `fs_list()`/
+  syscall.c's "SYS_LISTDIR scratch state" comment) since
+  `klog_dump()`'s callback deliberately has no userdata slot.
+- **`help` split in two**: `HELP_LINES` is now a shorter, categorized
+  list (General / Files & filesystem / System info / Appearance,
+  `dmesg` included) with the ~13 ring3test/elftest/syscalltest/etc.
+  diagnostic commands removed entirely. `TEST_HELP_LINES` holds them,
+  unchanged in content, behind a new `help tests` (an optional argument
+  to `cmd_help()`, the same pattern `timezone <city>` already uses --
+  no new top-level command name to remember). Each list points at the
+  other at top/bottom.
+- `README.md`: updated the shell command list to include `dmesg` and
+  the `help`/`help tests` split.
+- Verified in headless QEMU: `dmesg` after a fresh boot shows all 6
+  init messages, correctly timestamped, in order. Ran `syscalltest`
+  and confirmed its diagnostic lines (`syscall_test: calling
+  process_run_ring3()`, `syscall: exit() called by ring-3 process`,
+  ...) then showed up in a follow-up `dmesg` -- proving the retrofit
+  actually works end to end, not just for boot messages. `help`
+  paginates cleanly through all four categories; `help tests` shows
+  the full diagnostic-command list with a pointer back to `help`.
+  Screenshots in `screenshots/2026-08-10/`.
+
 ## Build 317 (feature, +10) -- header dependency tracking, a boot smoke test, and CI
 
 Requested after a conversation about what would minimize testing

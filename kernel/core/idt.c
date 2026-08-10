@@ -1,6 +1,6 @@
 #include "idt.h"
 #include "vga.h"
-#include "serial.h"
+#include "klog.h"
 #include "pic.h"
 #include "keyboard.h"
 #include "i8042.h"
@@ -191,9 +191,9 @@ void isr_dispatch(uint64_t *regs) {
         if (vector == 14) { vga_write("  CR2="); vga_write_hex(cr2); }
         vga_putc('\n');
 
-        serial_write(recoverable ? "RING-3 CRASH: " : "PANIC: ");
-        serial_write(exception_names[vector]);
-        serial_write("\n");
+        klog_write(recoverable ? "RING-3 CRASH: " : "PANIC: ");
+        klog_write(exception_names[vector]);
+        klog_write("\n");
 
         if ((cs & 3) == 3 && ring3_hook) {
             ring3_hook(vector, error_code, cs, cr2);

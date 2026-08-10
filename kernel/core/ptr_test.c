@@ -5,7 +5,7 @@
 #include "process.h"
 #include "multiboot.h"
 #include "vga.h"
-#include "serial.h"
+#include "klog.h"
 
 #define STACK_VADDR 0x8000200000ULL
 
@@ -41,11 +41,11 @@ void ptr_test_run(void) {
 
     vga_write("Running a process that deliberately passes a kernel-only\n");
     vga_write("pointer (0x1000) to the write syscall...\n");
-    serial_write("ptr_test: calling process_run_ring3()\n");
+    klog_write("ptr_test: calling process_run_ring3()\n");
 
     int result = process_run_ring3(as, entry, STACK_VADDR + 4096);
 
-    serial_write("ptr_test: process_run_ring3() returned\n");
+    klog_write("ptr_test: process_run_ring3() returned\n");
     if (result == 1) {
         vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
         vga_write("\nPointer validation confirmed: the write syscall correctly\n");

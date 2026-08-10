@@ -5,7 +5,7 @@
 #include "process.h"
 #include "multiboot.h"
 #include "vga.h"
-#include "serial.h"
+#include "klog.h"
 
 // Separate from USERLAND_MARKER_ADDR (used by hello.c/ring3_test's-style
 // tests) since this test's stack lives in its own address space anyway
@@ -52,11 +52,11 @@ void syscall_test_run(void) {
 
     vga_write("Running the process (via a real int 0x80 exit syscall this\n");
     vga_write("time, not a deliberate fault)...\n");
-    serial_write("syscall_test: calling process_run_ring3()\n");
+    klog_write("syscall_test: calling process_run_ring3()\n");
 
     int exit_code = process_run_ring3(as, entry, STACK_VADDR + 4096);
 
-    serial_write("syscall_test: process_run_ring3() returned\n");
+    klog_write("syscall_test: process_run_ring3() returned\n");
     vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
     vga_write("\nThe process finished (via exit syscall, or a caught fault). Exit code: ");
     vga_write_exit_code(exit_code);

@@ -5,7 +5,7 @@
 #include "process.h"
 #include "multiboot.h"
 #include "vga.h"
-#include "serial.h"
+#include "klog.h"
 
 #define STACK_VADDR 0x8000200000ULL
 
@@ -40,11 +40,11 @@ void gui_test_run(void) {
     vga_write("Handing the real screen to a ring-3 process. It'll fill the\n");
     vga_write("screen with a color; press any key to cycle colors, 'q' to\n");
     vga_write("return here.\n");
-    serial_write("gui_test: calling process_run_ring3()\n");
+    klog_write("gui_test: calling process_run_ring3()\n");
 
     int exit_code = process_run_ring3(as, entry, STACK_VADDR + 4096);
 
-    serial_write("gui_test: process_run_ring3() returned\n");
+    klog_write("gui_test: process_run_ring3() returned\n");
 
     // The process just drew directly over the real screen -- clear it
     // back to a normal console before printing anything further.

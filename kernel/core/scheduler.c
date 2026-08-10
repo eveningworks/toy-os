@@ -82,7 +82,7 @@
 #include "multiboot.h"
 #include "gdt.h"
 #include "vga.h"
-#include "serial.h"
+#include "klog.h"
 #include <stddef.h>
 
 // Defined in idt.c; isr.asm's isr_common epilogue reloads rsp from this
@@ -275,7 +275,7 @@ void scheduler_demo_run(void) {
     vga_write("between them without either ever yielding voluntarily. Output\n");
     vga_write("below is interleaved DIRECTLY by each process's own write\n");
     vga_write("syscall, not narrated by the kernel:\n\n");
-    serial_write("scheduler: demo armed, waiting for both processes to exit\n");
+    klog_write("scheduler: demo armed, waiting for both processes to exit\n");
 
     scheduler_armed = 1;
     while (alive_count > 0) {
@@ -285,5 +285,5 @@ void scheduler_demo_run(void) {
 
     vga_write("\n\nBoth processes exited. Scheduler disarmed -- every other\n");
     vga_write("command behaves exactly as it did before M16.\n");
-    serial_write("scheduler: demo complete, disarmed\n");
+    klog_write("scheduler: demo complete, disarmed\n");
 }

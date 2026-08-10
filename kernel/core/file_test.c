@@ -5,7 +5,7 @@
 #include "process.h"
 #include "multiboot.h"
 #include "vga.h"
-#include "serial.h"
+#include "klog.h"
 
 #define STACK_VADDR 0x8000200000ULL
 
@@ -50,11 +50,11 @@ void file_test_run(void) {
     vga_write("it (SYS_WRITE, now fd-aware), closes it, reopens it for\n");
     vga_write("reading, reads it back (SYS_READ), and echoes what it read\n");
     vga_write("to stdout -- all via real syscalls against fs.c:\n\n");
-    serial_write("file_test: calling process_run_ring3()\n");
+    klog_write("file_test: calling process_run_ring3()\n");
 
     int exit_code = process_run_ring3(as, entry, STACK_VADDR + 4096);
 
-    serial_write("file_test: process_run_ring3() returned\n");
+    klog_write("file_test: process_run_ring3() returned\n");
     vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
     vga_write("\nProcess finished. Exit code: ");
     vga_write_exit_code(exit_code);

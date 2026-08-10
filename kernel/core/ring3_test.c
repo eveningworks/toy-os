@@ -4,7 +4,7 @@
 #include "pmm.h"
 #include "idt.h"
 #include "vga.h"
-#include "serial.h"
+#include "klog.h"
 #include <stddef.h>
 
 // Physical address of the data frame, kept around so the fault-hook can
@@ -32,10 +32,10 @@ static void on_ring3_fault(uint64_t vector, uint64_t error_code, uint64_t cs, ui
         vga_write("  -> matches 0xdeadbeef: the ring-3 code executed in its own\n");
         vga_write("     private address space and wrote to its own mapped memory\n");
         vga_write("     *before* hlt correctly trapped as a privilege violation.\n\n");
-        serial_write("ring3_test: fault confirmed at ring 3, marker matched\n");
+        klog_write("ring3_test: fault confirmed at ring 3, marker matched\n");
     } else {
         vga_write("  -> unexpected value -- something didn't run as intended.\n\n");
-        serial_write("ring3_test: fault confirmed at ring 3, marker DID NOT match\n");
+        klog_write("ring3_test: fault confirmed at ring 3, marker DID NOT match\n");
     }
 
     vmm_switch_address_space(vmm_kernel_pml4_phys());
@@ -48,7 +48,7 @@ static void on_ring3_fault(uint64_t vector, uint64_t error_code, uint64_t cs, ui
     vga_write("kernel to recover TO -- see process.h. Restart the OS (or the\n");
     vga_write("QEMU window) to use the shell again.\n");
 
-    serial_write("ring3_test: halting after fault diagnostics\n");
+    klog_write("ring3_test: halting after fault diagnostics\n");
 }
 
 void ring3_test_run(void) {
@@ -118,7 +118,7 @@ void ring3_test_run(void) {
     vmm_switch_address_space(as);
 
     vga_write("Dropping to ring 3 (iretq)...\n");
-    serial_write("ring3_test: about to iretq to user mode in a private address space\n");
+    klog_write("ring3_test: about to iretq to user mode in a private address space\n");
 
     uint64_t user_rip = code_vaddr;
     uint64_t user_rsp = stack_vaddr + 4096;

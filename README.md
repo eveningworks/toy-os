@@ -103,12 +103,14 @@ again once code has grown around them.
 
 ### Shell commands
 
-`help`, `clear`, `time`, `uptime`, `echo <text>`, `about`, `meminfo`,
-`color <name>`, `reboot`, `ls`, `cat <f>`, `touch <f>`, `write <f> <text>`,
-`append <f> <text>`, `rm <f>`, `gui`, `apps`, `run <app>`, `ring3test`,
-`elftest`, `syscalltest`, `writetest`, `ptrtest`, `guitest`, `history`,
-`schedtest`, `fontsize <tiny|small|medium|large>`, `echotest`, `wintest`,
-`filetest`, `newsyscalltest`, `crashtest`
+`help` (categorized; `help tests` for the developer/diagnostic ones
+below), `clear`, `time`, `uptime`, `echo <text>`, `about`, `meminfo`,
+`dmesg`, `color <name>`, `reboot`, `ls`, `cat <f>`, `touch <f>`,
+`write <f> <text>`, `append <f> <text>`, `rm <f>`, `gui`, `apps`,
+`run <app>`, `history`, `fontsize <tiny|small|medium|large>`, and the
+developer/diagnostic set (`help tests`): `ring3test`, `elftest`,
+`syscalltest`, `writetest`, `ptrtest`, `guitest`, `schedtest`,
+`echotest`, `wintest`, `filetest`, `newsyscalltest`, `crashtest`
 
 ## Building on CachyOS
 

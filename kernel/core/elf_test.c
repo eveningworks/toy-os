@@ -7,7 +7,7 @@
 #include "multiboot.h"
 #include "userland_contract.h"
 #include "vga.h"
-#include "serial.h"
+#include "klog.h"
 #include <stddef.h>
 
 // Where the test's private stack lives -- chosen well clear of
@@ -34,10 +34,10 @@ static void on_elf_fault(uint64_t vector, uint64_t error_code, uint64_t cs, uint
     if (marker == 0xC0FFEE) {
         vga_write("  -> matches 0xc0ffee: a real compiled+linked ELF64 binary was\n");
         vga_write("     loaded via its program headers and executed correctly.\n\n");
-        serial_write("elf_test: fault confirmed at ring 3, marker matched\n");
+        klog_write("elf_test: fault confirmed at ring 3, marker matched\n");
     } else {
         vga_write("  -> unexpected value -- something didn't run as intended.\n\n");
-        serial_write("elf_test: fault confirmed at ring 3, marker DID NOT match\n");
+        klog_write("elf_test: fault confirmed at ring 3, marker DID NOT match\n");
     }
 
     vmm_switch_address_space(vmm_kernel_pml4_phys());
@@ -50,7 +50,7 @@ static void on_elf_fault(uint64_t vector, uint64_t error_code, uint64_t cs, uint
     vga_write("processes that DO go through it (see `crashtest`). Restart the OS\n");
     vga_write("(or the QEMU window) to use the shell again.\n");
 
-    serial_write("elf_test: halting after fault diagnostics\n");
+    klog_write("elf_test: halting after fault diagnostics\n");
 }
 
 void elf_test_run(void) {
@@ -94,7 +94,7 @@ void elf_test_run(void) {
     idt_set_ring3_fault_hook(on_elf_fault);
 
     vga_write("Switching CR3 and dropping to ring 3 at the ELF's entry point...\n");
-    serial_write("elf_test: about to iretq into a loaded ELF binary\n");
+    klog_write("elf_test: about to iretq into a loaded ELF binary\n");
     vmm_switch_address_space(as);
 
     uint64_t user_rip = entry;

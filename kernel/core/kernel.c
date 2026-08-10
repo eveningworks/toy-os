@@ -4,6 +4,7 @@
 // about hardware.
 #include "vga.h"
 #include "serial.h"
+#include "klog.h"
 #include "idt.h"
 #include "gdt.h"
 #include "multiboot.h"
@@ -17,7 +18,7 @@
 
 void kernel_main(uint64_t multiboot_info_addr) {
     serial_init();
-    serial_write("toy-os: kernel_main reached, initializing...\n");
+    klog_write("toy-os: kernel_main reached, initializing...\n");
 
     multiboot_set_info(multiboot_info_addr);
 
@@ -25,13 +26,13 @@ void kernel_main(uint64_t multiboot_info_addr) {
     vga_write("toy-os booting...\n");
 
     gdt_init();
-    serial_write("toy-os: GDT/TSS initialized\n");
+    klog_write("toy-os: GDT/TSS initialized\n");
 
     idt_init();
-    serial_write("toy-os: IDT/PIC/PIT initialized, interrupts enabled\n");
+    klog_write("toy-os: IDT/PIC/PIT initialized, interrupts enabled\n");
 
     pmm_init();
-    serial_write("toy-os: physical frame allocator initialized\n");
+    klog_write("toy-os: physical frame allocator initialized\n");
 
     fs_init();
     fs_mkdir("/etc"); // config-file convention (see tz.c) -- a no-op if it already exists
@@ -40,7 +41,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
     vga_reflow(); // apply it to the console's cell layout (no-op if nothing was persisted)
 
     scheduler_init();
-    serial_write("toy-os: scheduler initialized (disarmed; see `schedtest`)\n");
+    klog_write("toy-os: scheduler initialized (disarmed; see `schedtest`)\n");
 
     apps_start();
 

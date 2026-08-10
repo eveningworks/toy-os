@@ -73,7 +73,7 @@
 #include "tfs.h"
 #include "string.h"
 #include "ata.h"
-#include "serial.h"
+#include "klog.h"
 
 enum fs_entry_type { FS_TYPE_FILE = 0, FS_TYPE_DIR = 1 };
 
@@ -159,7 +159,7 @@ static int tfs_init(void) {
 
     ata_init();
     if (!ata_present()) {
-        serial_write("fs: no disk found -- files are RAM-only, won't survive reboot\n");
+        klog_write("fs: no disk found -- files are RAM-only, won't survive reboot\n");
         return 0;
     }
 
@@ -182,7 +182,7 @@ static int tfs_init(void) {
             }
             if (ok) deserialize_record(&files[i], rec);
         }
-        serial_write("fs: loaded persistent filesystem from disk\n");
+        klog_write("fs: loaded persistent filesystem from disk\n");
     } else {
         // Blank, foreign, or old-version disk -- format it fresh: write
         // the superblock and every (currently-empty, thanks to the
@@ -190,7 +190,7 @@ static int tfs_init(void) {
         g_disk_backed = 1;
         write_superblock();
         for (int i = 0; i < FS_MAX_FILES; i++) persist_record(i);
-        serial_write("fs: formatted a fresh persistent filesystem on disk\n");
+        klog_write("fs: formatted a fresh persistent filesystem on disk\n");
     }
     return g_disk_backed;
 }

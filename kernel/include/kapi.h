@@ -17,6 +17,7 @@
 #include "tz.h"        // rtc_read_local, timezone selection (see kernel/core/tz.c)
 #include "font_config.h" // font size persistence (see kernel/core/font_config.c)
 #include "fs.h"        // the filesystem (backend-agnostic API -- see fs.h's top comment)
+#include "klog.h"      // klog_dump -- the kernel's in-memory log, what `dmesg` reads (see klog.c)
 #include "multiboot.h" // multiboot_print_meminfo
 #include "pmm.h"       // pmm_total_frames/pmm_free_frames -- physical frame allocator stats
 #include "power.h"     // system_reboot

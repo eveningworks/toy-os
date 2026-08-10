@@ -144,19 +144,31 @@ static void console_page(const char *const *lines, uint32_t count) {
     }
 }
 
+// Split in two (see CHANGELOG.md for the request/reasoning): HELP_LINES
+// is what a day-to-day user actually needs, grouped under headers
+// rather than one flat 50-line list. TEST_HELP_LINES holds the ring-3/
+// syscall/scheduler diagnostic commands -- genuinely useful (they're
+// how this kernel proves its own isolation/syscall/scheduler claims,
+// see README), but not something you need in front of you to use the
+// shell day to day, so they're one level down behind `help tests`
+// rather than mixed into the main list. Both go through console_page()
+// (see its own comment) for pagination, same as before the split.
 static const char *const HELP_LINES[] = {
-    "Available commands:\n",
-    "  help          - show this list\n",
+    "toy-os shell -- available commands:\n",
+    "\n",
+    "General:\n",
+    "  help          - show this list ('help tests' for developer/\n",
+    "                  diagnostic test commands)\n",
     "  clear         - clear the screen\n",
-    "  time          - show date/time (local, see `timezone`)\n",
-    "  timezone      - show/pick your timezone (interactive list)\n",
-    "  timezone <c>  - set timezone directly, e.g. `timezone helsinki`\n",
-    "  uptime        - show ticks since boot\n",
-    "  echo <text>   - print the given text back\n",
     "  about         - show OS info\n",
-    "  meminfo       - show memory map from GRUB\n",
-    "  color <name>  - change shell text color\n",
+    "  apps          - list all registered apps\n",
+    "  run <app>     - launch an app by name\n",
+    "  gui           - graphics mode (Esc returns here)\n",
+    "  history       - list past commands (arrows browse history)\n",
+    "  echo <text>   - print the given text back\n",
     "  reboot        - reset the machine\n",
+    "\n",
+    "Files & filesystem:\n",
     "  ls [dir]      - list a directory (default: cwd)\n",
     "  cd [dir]      - change directory (default: /)\n",
     "  pwd           - print the current directory\n",
@@ -167,10 +179,28 @@ static const char *const HELP_LINES[] = {
     "  append <f> <t>- append text t to file f\n",
     "  rm <f>        - delete a file, or an empty directory\n",
     "  (paths may be relative to cwd or absolute, e.g. /docs/todo.txt)\n",
-    "  gui           - graphics mode (Esc returns here)\n",
-    "  apps          - list all registered apps\n",
-    "  history       - list past commands\n",
-    "  run <app>     - launch an app by name\n",
+    "\n",
+    "System info:\n",
+    "  time          - show date/time (local, see `timezone`)\n",
+    "  timezone      - show/pick your timezone (interactive list)\n",
+    "  timezone <c>  - set timezone directly, e.g. `timezone helsinki`\n",
+    "  uptime        - show ticks since boot\n",
+    "  meminfo       - show memory map + physical frame allocator stats\n",
+    "  dmesg         - show the kernel log (boot messages, driver/\n",
+    "                  syscall diagnostics, timestamped)\n",
+    "\n",
+    "Appearance:\n",
+    "  color <name>  - change shell text color\n",
+    "  fontsize <s>  - set font size: tiny, small, medium, or large\n",
+};
+#define HELP_LINE_COUNT (sizeof(HELP_LINES) / sizeof(HELP_LINES[0]))
+
+static const char *const TEST_HELP_LINES[] = {
+    "toy-os shell -- developer/diagnostic test commands:\n",
+    "(these exercise specific kernel subsystems -- see README for what\n",
+    "each one actually proves; most are meant to be read via their\n",
+    "diagnostic output, not used for everyday work)\n",
+    "\n",
     "  ring3test     - proof-of-concept ring 3 + paging isolation\n",
     "                  (does not return; see README)\n",
     "  elftest       - load+run a real ELF64 binary in ring 3\n",
@@ -185,7 +215,6 @@ static const char *const HELP_LINES[] = {
     "  schedtest     - preemptive round-robin scheduler demo: two\n",
     "                  ring-3 processes run concurrently, neither\n",
     "                  ever yielding (returns once both exit)\n",
-    "  fontsize <s>  - set font size: tiny, small, medium, or large\n",
     "  echotest      - interactive ring-3 process: type and see it\n",
     "                  echoed back via SYS_READ_KEY+SYS_SBRK (Esc\n",
     "                  quits, returns to the shell)\n",
@@ -200,12 +229,17 @@ static const char *const HELP_LINES[] = {
     "  crashtest     - ring-3 process deliberately faults -- proves the\n",
     "                  kernel recovers (tears it down, returns) instead\n",
     "                  of halting (returns)\n",
-    "(arrows browse history; 'history' lists it)\n",
+    "\n",
+    "Run `help` (no arguments) for everyday commands.\n",
 };
-#define HELP_LINE_COUNT (sizeof(HELP_LINES) / sizeof(HELP_LINES[0]))
+#define TEST_HELP_LINE_COUNT (sizeof(TEST_HELP_LINES) / sizeof(TEST_HELP_LINES[0]))
 
-static void cmd_help(void) {
-    console_page(HELP_LINES, HELP_LINE_COUNT);
+static void cmd_help(const char *args) {
+    if (args && k_strcmp(args, "tests") == 0) {
+        console_page(TEST_HELP_LINES, TEST_HELP_LINE_COUNT);
+    } else {
+        console_page(HELP_LINES, HELP_LINE_COUNT);
+    }
 }
 
 static void cmd_time(void) {
@@ -330,6 +364,50 @@ static void cmd_meminfo(void) {
     vga_write(" ("); vga_write_dec((uint32_t)(total * 4 / 1024)); vga_write(" MB)\n");
     vga_write("  used:  "); vga_write_dec((uint32_t)used);
     vga_write("  free:  "); vga_write_dec((uint32_t)free); vga_putc('\n');
+}
+
+// dmesg scratch state -- klog_dump() (klog.h) takes a plain
+// void(*)(char) callback with no userdata slot, same pattern fs_list()
+// uses (see syscall.c's "SYS_LISTDIR scratch state" comment), so
+// pagination state that needs to survive across callback invocations
+// lives in file-scope statics here instead of being threaded through
+// the callback itself.
+static uint32_t dmesg_rows_shown;
+static uint32_t dmesg_page_rows;
+static int dmesg_quit;
+
+static void dmesg_putc_cb(char c) {
+    // klog_dump() is an unconditional walk of the ring buffer with no
+    // way to signal "stop" back into it mid-stream (see its own doc
+    // comment) -- so quitting early doesn't stop the dump itself, it
+    // just makes this callback stop actually drawing anything for the
+    // remainder of that walk. Cheap and correct: klog_dump() still
+    // touches every remaining byte, this just becomes a no-op for them.
+    if (dmesg_quit) return;
+
+    vga_putc(c);
+    if (c != '\n') return;
+    dmesg_rows_shown++;
+    if (dmesg_rows_shown < dmesg_page_rows) return;
+    vga_write("-- more (press any key, 'q' to quit) --");
+    int key = keyboard_getchar();
+    vga_write("\n");
+    dmesg_rows_shown = 0;
+    if (key == 'q' || key == 'Q') dmesg_quit = 1;
+}
+
+static void cmd_dmesg(void) {
+    dmesg_rows_shown = 0;
+    dmesg_quit = 0;
+    // A sink means this might be running inside a non-blocking GUI
+    // callback (see console_page()'s identical check) -- pagination's
+    // keyboard_getchar() would hang whatever's driving that. Dump
+    // everything unpaginated in that case; Terminal's own scrollback
+    // widget handles "doesn't fit one screen" there, same as it does
+    // for every other command's output.
+    dmesg_page_rows = vga_sink_active() ? 0xFFFFFFFFu
+                                         : (vga_rows() > 1 ? vga_rows() - 1 : vga_rows());
+    klog_dump(dmesg_putc_cb);
 }
 
 static void cmd_reboot(void) {
@@ -591,7 +669,7 @@ static void dispatch(char *line) {
     if (k_strlen(cmd) == 0) {
         return;
     } else if (k_strcmp(cmd, "help") == 0) {
-        cmd_help();
+        cmd_help(args);
     } else if (k_strcmp(cmd, "clear") == 0) {
         vga_clear();
     } else if (k_strcmp(cmd, "time") == 0) {
@@ -606,6 +684,8 @@ static void dispatch(char *line) {
         cmd_echo(args ? args : "");
     } else if (k_strcmp(cmd, "meminfo") == 0) {
         cmd_meminfo();
+    } else if (k_strcmp(cmd, "dmesg") == 0) {
+        cmd_dmesg();
     } else if (k_strcmp(cmd, "reboot") == 0) {
         cmd_reboot();
     } else if (k_strcmp(cmd, "color") == 0) {
