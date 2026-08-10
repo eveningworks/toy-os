@@ -116,6 +116,22 @@ caller. See `kernel/core/etc_config.c`'s top comment for the file
 format itself and CHANGELOG.md's **Build 357** for the full writeup
 including the migration logic.
 
+## Timezone city list is a database file, not a hardcoded array or a config key
+
+`/etc/timezones` (a CSV-style `name,offset_minutes,dst_rule` list,
+auto-seeded on first boot) and `/etc/toyos.conf`'s `timezone=<city>`
+key are deliberately two different files, not one -- the database
+(every city this build knows about) and the selection (which one is
+active) change for different reasons and at different rates, so they
+went through `etc_config.c`'s generic engine (selection) and a
+purpose-built small parser (database) respectively rather than forcing
+both into `toyos.conf`. This is also the concrete case **Build 357**'s
+"a setting with enough keys of its own gets its own file" escape hatch
+was written for -- a city list doesn't fit `key=value` shape at all.
+Editing the database only takes effect on the next boot (no live-
+reload command yet); see CHANGELOG.md's **Build 367** for the full
+writeup and what was verified.
+
 ## Build-number scheme: fix/feature/major tiers, not dates or semver
 
 Replaced an earlier date-plus-same-day-counter scheme

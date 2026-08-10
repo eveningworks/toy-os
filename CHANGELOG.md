@@ -5,6 +5,66 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 367 (feature, +10) -- `/etc/timezones` city database, separate from the toyos.conf selection
+
+Asked whether the handful of hardcoded timezone cities could become a
+clear-text "database" file under `/etc`, with `/etc/toyos.conf`'s
+`timezone=<city>` key staying as just the *selection* on top of it.
+Presented choices for seeding, file format, and scope up front. Went
+with: auto-seed the file on first boot if it's missing rather than
+shipping it pre-populated on the ISO; simple CSV-style rows
+(`name,offset_minutes,dst_rule`); and file-editing only for this pass
+-- no new shell command for managing entries, `write`/`append` (already
+existing commands) are enough to hand-edit the database.
+
+- **`kernel/core/tz.c`**: the old compile-time `const struct tz_city
+  TZ_CITIES[]` (7 hardcoded entries) is now a runtime-loaded, fixed-
+  capacity table (`TZ_MAX_CITIES` = 32) populated from `/etc/timezones`
+  by a new `tz_load_or_seed_db()`, called first thing in `tz_init()`
+  (before the existing `/etc/toyos.conf` selection lookup, which is
+  otherwise unchanged). The same 7 cities that used to be the hardcoded
+  array now live in a `TZ_DEFAULT_CITIES[]` array used only as seed
+  data (written out to `/etc/timezones` the first time it doesn't
+  exist) and as an in-memory-only fallback if the file exists but
+  parses to zero valid rows (e.g. emptied by hand) -- that fallback
+  deliberately does NOT rewrite the file, since a file that fails to
+  parse right now might just be mid-edit.
+- **New parser, `tz_load_cities()`**: one `name,offset_minutes,dst` row
+  per city (e.g. `helsinki,120,eu`), `#` comments (whole-line or
+  trailing), blank lines skipped, whitespace trimmed per field -- same
+  spirit as `etc_config.c`'s key=value parser (see **Build 357**), just
+  three comma-separated fields instead of one key=value pair. A
+  malformed row (missing a comma, an empty or too-long name) is skipped
+  rather than aborting the whole load, so one bad hand-edited line
+  doesn't cost every other city. `dst` accepts `eu`/`us`; anything else
+  (including empty or a typo) means no DST rather than a load error --
+  don't guess, but don't refuse to load the row either.
+- **`struct tz_city`'s `name` field** changed from `const char *`
+  (pointing at a string literal) to a fixed `char name[TZ_NAME_MAX]`
+  array (`TZ_NAME_MAX` = 20), since city names are now parsed from a
+  file at runtime rather than known at compile time. `kapi.h`-facing
+  behavior (`tz_city_count()`, `tz_city_name()`, `tz_set_index()`,
+  `tz_find_by_name()`) is unchanged -- they just read from the loaded
+  table instead of the old hardcoded array.
+- **Database vs. selection stays a clean split**: `/etc/timezones` is
+  every city this build knows about; `/etc/toyos.conf`'s `timezone=`
+  key is which one is active, unchanged from **Build 357**. Editing
+  `/etc/timezones` (adding/removing/renaming a city) only takes effect
+  on the next boot, since the table is loaded once in `tz_init()` --
+  there's no live-reload command in this pass, by design (file-editing
+  only was the chosen scope).
+- **Verified in headless QEMU**: a fresh disk auto-seeds `/etc/timezones`
+  on first boot with the expected 7 default CSV rows (confirmed via
+  `cat /etc/timezones`); overwriting the file with a single custom row
+  (`sydney,600,none`) via `write`, rebooting, and running `timezone
+  sydney` correctly selected it (previously "Unknown timezone" before
+  the reboot, since the in-memory table doesn't reload without one) and
+  `time` showed the correct +10h offset; the persisted `timezone`
+  selection in `/etc/toyos.conf` survived the reboot and matched the
+  new city correctly. Also reconfirmed with a full `make clean && make
+  all`, `make iso`, and `tools/boot_smoke_test.py`. Screenshots in
+  `screenshots/2026-08-10/timezones_db_*.png`.
+
 ## Build 357 (feature, +10) -- shared /etc config engine, consolidated into toyos.conf
 
 Asked for a centrally managed config-file structure: a shared tool any

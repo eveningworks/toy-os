@@ -3,19 +3,22 @@
 
 #include "timer.h"
 
-// A small built-in list of cities, each just a fixed standard-time UTC
-// offset plus which (if any) daylight-saving rule applies -- see tz.c's
-// top comment for the two rules implemented (EU, US) and their known
-// simplifications. Selection persists across reboots via the ordinary
-// persistent filesystem (see fs.h) rather than any new storage
-// mechanism -- this is deliberately toy-os's first config file, not a
-// new subsystem.
+// The city list itself lives in /etc/timezones, a plain-text database
+// (one "name,offset_minutes,dst" row per city) auto-seeded on first
+// boot and loaded into memory at startup -- see tz.c's top comment for
+// the /etc/timezones (database) vs /etc/toyos.conf's "timezone=<city>"
+// key (selection) split, and the two DST rules implemented (EU, US)
+// with their known simplifications. The selected city persists across
+// reboots via the shared /etc/toyos.conf config file (see etc_config.h),
+// same as any other setting.
 
-// Call once at boot, after fs_init() -- loads the persisted city choice
-// (see fs.h), or defaults to UTC (index 0) if none was ever set.
+// Call once at boot, after fs_init()/fs_mkdir("/etc") -- loads (seeding
+// if missing) the /etc/timezones database, then loads the persisted
+// city choice, or defaults to whichever city loads at index 0 (UTC,
+// unless /etc/timezones has been hand-edited) if none was ever set.
 void tz_init(void);
 
-// Number of built-in cities (includes UTC at index 0).
+// Number of cities currently loaded from /etc/timezones.
 int tz_city_count(void);
 
 // Lowercase name of the city at `index` (also what `timezone <name>`
