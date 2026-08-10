@@ -17,6 +17,16 @@
 #include <stdint.h>
 #include "syscall_abi.h"
 
+// Own copy of kernel/include/keyboard.h's IS_PRINTABLE_KEY() -- this
+// file is a freestanding ring-3 userland program built against no
+// kernel headers at all (see syscall_abi.h being the only include
+// above), so it can't share that macro directly. Keep the codepoint
+// list in sync with keyboard.h's CHAR_*/IS_NORDIC_CHAR() if it ever
+// changes. See docs/decisions.md's Nordic-keyboard entry.
+#define ECHO_IS_NORDIC_CHAR(k) ((k) == 0xC4 || (k) == 0xD6 || (k) == 0xC5 || \
+                                 (k) == 0xE4 || (k) == 0xF6 || (k) == 0xE5)
+#define ECHO_IS_PRINTABLE_KEY(k) (((k) >= 32 && (k) < 127) || ECHO_IS_NORDIC_CHAR(k))
+
 static inline int64_t syscall2(uint64_t num, uint64_t arg1, uint64_t arg2) {
     int64_t ret;
     __asm__ volatile (
@@ -101,7 +111,7 @@ void _start(void) {
                 // itself -- no separate space+backspace dance needed.
                 sys_write("\b", 1);
             }
-        } else if (key >= 32 && key < 127 && pos < LINE_CAP - 1) {
+        } else if (ECHO_IS_PRINTABLE_KEY(key) && pos < LINE_CAP - 1) {
             line[pos++] = (char)key;
             char c = (char)key;
             sys_write(&c, 1);

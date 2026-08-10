@@ -1,6 +1,6 @@
 // System-info/settings shell commands: help/time/timezone/uptime/
-// about/echo/meminfo/dmesg/reboot/apps/run/fontsize/color/history/
-// lspci. Split out of shell.c once it crossed 900 lines mixing every
+// about/echo/meminfo/dmesg/reboot/apps/run/fontsize/keyboard/color/
+// history/lspci. Split out of shell.c once it crossed 900 lines mixing every
 // command category together -- see shell_internal.h's top comment for
 // the split's own reasoning and CHANGELOG.md for the build this
 // happened in. Shares `shell_fg`/history[]/history_count with shell.c
@@ -114,6 +114,9 @@ static const char *const HELP_LINES[] = {
     "  color <name>  - change shell text color\n",
     "  fontsize <n>  - set font size in points: 8, 10, 12, 14, 16, 18,\n",
     "                  20, or 24 (`fontsize` alone shows the current one)\n",
+    "  keyboard <l>  - set keyboard layout: us or se (Swedish/Finnish --\n",
+    "                  Å/Ä/Ö at their real physical keys); `keyboard`\n",
+    "                  alone shows the current one\n",
 };
 #define HELP_LINE_COUNT (sizeof(HELP_LINES) / sizeof(HELP_LINES[0]))
 
@@ -433,6 +436,36 @@ void cmd_fontsize(const char *args) {
     font_config_save(want); // persist to /etc/fontsize so it survives a reboot
     vga_write("Font size set to ");
     vga_write(gfx_font_size_name(want));
+    vga_write(".\n");
+}
+
+// Changes the active keyboard scancode layout (see keyboard.h/
+// keyboard.c) -- `us` (default, plain QWERTY) or `se` (Swedish/Finnish
+// physical positions for Å/Ä/Ö, everything else stays US QWERTY --
+// see scancode_ascii_se[]'s comment for why it's not a full remap).
+// `keyboard` alone shows the current layout. Persists via
+// keyboard_config_save() so it survives a reboot -- same pattern as
+// `fontsize`/`timezone`.
+void cmd_keyboard(const char *args) {
+    if (!args || k_strlen(args) == 0) {
+        vga_write("usage: keyboard <us|se>  (currently: ");
+        vga_write(keyboard_layout_name(keyboard_get_layout()));
+        vga_write(")\n");
+        return;
+    }
+    enum keyboard_layout want;
+    if (k_strcmp(args, "us") == 0) want = KB_LAYOUT_US;
+    else if (k_strcmp(args, "se") == 0) want = KB_LAYOUT_SE;
+    else {
+        vga_write("keyboard: unknown layout '");
+        vga_write(args);
+        vga_write("' -- try us or se\n");
+        return;
+    }
+    keyboard_set_layout(want);
+    keyboard_config_save(want);
+    vga_write("Keyboard layout set to ");
+    vga_write(keyboard_layout_name(want));
     vga_write(".\n");
 }
 

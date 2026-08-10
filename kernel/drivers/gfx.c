@@ -251,10 +251,29 @@ static inline uint8_t blend_channel(uint8_t bg_c, uint8_t fg_c, uint8_t alpha) {
 // resolution, not synthesized here; this function's whole job is just to
 // alpha-composite the already-antialiased glyph onto whatever fg/bg pair
 // the caller wants.
+// Maps a character to its glyph slot in font_ttf_variants[]: ASCII
+// 32-126 map straight to indices 0..94 (c - 32), and the six baked
+// Nordic letters (font_ttf_extra_codepoints[], font_ttf.h) map to
+// 95..100 by linear scan -- fine at 6 entries, not worth a table for
+// this few. Returns -1 for anything else (falls back to '?' below).
+// `c` comes in as int rather than char specifically so callers can
+// pass an already-widened codepoint (0-255) without the signed-char
+// sign-extension landmine documented in docs/decisions.md -- see that
+// entry for why char is signed in this build and what it broke before
+// callers started passing unsigned char/int through here.
+static int font_ttf_glyph_index(int c) {
+    if (c >= 32 && c <= 126) return c - 32;
+    for (int i = 0; i < FONT_TTF_EXTRA_COUNT; i++) {
+        if (font_ttf_extra_codepoints[i] == (unsigned char)c) return FONT_TTF_ASCII_COUNT + i;
+    }
+    return -1;
+}
+
 void gfx_draw_char(int x, int y, char c, uint32_t fg, uint32_t bg) {
-    if (c < 32 || c > 126) c = '?';
+    int idx = font_ttf_glyph_index((unsigned char)c);
+    if (idx < 0) idx = font_ttf_glyph_index('?');
     const struct font_ttf_variant *fv = &font_ttf_variants[cur_font_size];
-    const unsigned char *glyph = fv->glyphs + (size_t)(c - 32) * (size_t)fv->w * (size_t)fv->h;
+    const unsigned char *glyph = fv->glyphs + (size_t)idx * (size_t)fv->w * (size_t)fv->h;
 
     uint8_t fg_r = unpack_channel(fg, red_pos, red_size);
     uint8_t fg_g = unpack_channel(fg, green_pos, green_size);

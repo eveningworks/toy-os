@@ -5,6 +5,96 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 501 (feature, +10) -- Nordic keyboard layout + Å/Ä/Ö font glyphs
+
+Asked to add Nordic keyboard/character support (Ä/Ö/Å). Researched the
+keyboard driver, font rendering, and character-representation code
+first (no prior "layout"/"locale"/"unicode"/"nordic" anywhere in the
+repo): the keyboard driver was hardcoded US QWERTY (two flat 128-entry
+scancode tables, no layout abstraction at all), the font covered only
+ASCII 32-126, and -- the real landmine -- this build has no
+`-funsigned-char`, so any codepoint >= 0x80 is negative as `char` and
+was silently rejected by `gfx_draw_char()`'s range check and five
+`key >= 32 && key < 127`-shaped "printable char" gates across `apps/`
+and `userland/echo.c`. Presented three choices: encoding (Latin-1
+single bytes vs. UTF-8), how the layout is selected (persisted `/etc`
+setting + shell command vs. build-time-only vs. an AltGr/compose-key
+approach), and whether to fix the signed-char landmine as part of this
+same build. Went with: **Latin-1/ISO-8859-1** (Ä=0xC4, Ö=0xD6, Å=0xC5,
+ä=0xE4, ö=0xF6, å=0xE5 as single bytes -- keeps every "1 char = 1 cell
+= 1 glyph" assumption in `scrollback_cell`, `fs.h`, and the syscall ABI
+intact, unlike UTF-8), **persisted `/etc` setting + shell command**
+(`keyboard <us|se>`, same pattern as `timezone`/`fontsize`), and **yes,
+fix the landmine now** (Nordic letters don't actually work end-to-end
+otherwise).
+
+- **`tools/genttf.py`**: bakes 6 extra glyphs (`EXTRA_CHARS`) after the
+  contiguous ASCII block -- `FONT_TTF_GLYPH_COUNT` 95 -> 101,
+  `font_ttf_extra_codepoints[]` records which Latin-1 codepoint each
+  extra glyph is, in baked order. Re-run against the same
+  `/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Regular.ttf`
+  this script already used (JetBrains Mono includes Nordic letters).
+- **`kernel/drivers/gfx.c`**: new `font_ttf_glyph_index()` maps a
+  codepoint to its glyph slot (ASCII via `c - 32`, the 6 extras via a
+  linear scan of `font_ttf_extra_codepoints[]`) -- `gfx_draw_char()`
+  now takes `c` through `(unsigned char)` before this lookup instead of
+  comparing the signed `char` directly, fixing the signed-char landmine
+  at its root.
+- **`kernel/include/keyboard.h`**: `CHAR_*`/`IS_NORDIC_CHAR()`/
+  `IS_PRINTABLE_KEY()` macros (the shared "is this a printable
+  character, including Nordic letters" gate every app below now uses
+  instead of a bare range check), `enum keyboard_layout`
+  (`KB_LAYOUT_US`/`KB_LAYOUT_SE`), `keyboard_set_layout()`/
+  `keyboard_get_layout()`/`keyboard_layout_name()`.
+- **`kernel/drivers/keyboard.c`**: `scancode_ascii_se[]`/
+  `scancode_ascii_shift_se[]` -- copies of the US tables with only
+  scancodes 0x1A/0x27/0x28 (the physical keys under Å/Ä/Ö on a real
+  Swedish/Finnish keyboard) remapped; `keyboard_feed_byte()` picks the
+  active pair by `current_layout`. `keyboard_read_line()`'s own
+  `c >= 128` skip-special-keys guard widened to let `IS_NORDIC_CHAR()`
+  through (it's in the same codepoint range as the `KEY_*` special
+  codes it's meant to filter, just not the same values).
+- **`kernel/include/keyboard_config.h`** / **`kernel/core/keyboard_config.c`**
+  (new): persistence layer, same split as `tz.c`/`font_config.c` --
+  `keyboard_config_init()` loads `/etc/toyos.conf`'s
+  `keyboard_layout=<us|se>` key at boot, `keyboard_config_save()`
+  writes it. Wired into `kernel_main()` after `font_config_init()`.
+- **`apps/shell_sys.c`**: new `cmd_keyboard()` (`keyboard` alone shows
+  the current layout, `keyboard <us|se>` sets + persists it), help text
+  entry.
+- **`apps/shell.c`**, **`apps/shell_internal.h`**: `keyboard` dispatch
+  entry + declaration.
+- **`kernel/include/kapi.h`**: added `keyboard_config.h` to the apps/
+  boundary.
+- **Signed-char landmine fixed at all six call sites**, not five --
+  `apps/terminal.c`, `apps/notepad.c`, `apps/widgets.c`,
+  `apps/editor.c` now use `IS_PRINTABLE_KEY()`; `userland/echo.c` (a
+  freestanding ring-3 program with no kernel headers) keeps its own
+  copy of the same check. The sixth site, **`apps/shell.c`'s own
+  `shell_read_line()`**, had a *differently-worded* gate
+  (`c < 128`, not `key >= 32 && key < 127`) that grepping for the other
+  five's exact phrasing missed entirely -- found only by QMP-testing
+  actual keystrokes in `se` mode and noticing the console cursor didn't
+  even advance when a Nordic letter was typed at the shell prompt, not
+  by code review. Worth remembering next time a "fixed every instance
+  of X" claim needs verifying: test the behavior, don't just re-grep
+  the pattern already fixed. Also fixed once found.
+
+Verified via QMP: `make clean && make all && make iso` clean,
+`boot_smoke_test.py` PASS. `keyboard se` + typing the 3 remapped
+physical keys unshifted/shifted renders `åöä ÅÖÄ` correctly at the
+shell prompt (screenshot); `keyboard us` afterward regresses correctly
+back to `[;'`. `keyboard se` + `reboot` + `keyboard` (no args) shows
+`se` after the reboot -- persistence confirmed, and `cat
+etc/toyos.conf` shows `keyboard_layout=se`. In GUI mode: typed
+`aåöäÅÖÄ` into Notepad's scrollback body, and a Nordic-lettered
+filename into its text-field widget (`noåtattxt`) -- Saved, then
+`ls`/`cat` from the shell confirm the file exists with that exact name
+and its exact content round-tripped through TFS2 byte-for-byte.
+`filetest`/`sockettest` regression-checked clean (unrelated to this
+change, but touch shared syscall/console paths). Screenshots delivered
+and saved to `screenshots/2026-08-10/`.
+
 ## Build 491 (fix, +1) -- README: what disk-hosted ELF binaries (starting with lspci) would require
 
 Asked how to support running ELF binaries from a `/bin` directory on

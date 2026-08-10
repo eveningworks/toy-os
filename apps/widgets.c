@@ -410,7 +410,7 @@ int widget_textfield_key(struct text_field *tf, int key) {
         tf->cursor = 0;
     } else if (key == KEY_END) {
         tf->cursor = tf->len;
-    } else if (key >= 32 && key < 127) {
+    } else if (IS_PRINTABLE_KEY(key)) {
         textfield_insert(tf, (char)key);
     } else {
         return 0; // notably '\r'/'\n' and everything else -- see this fn's doc comment

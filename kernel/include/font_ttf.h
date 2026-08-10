@@ -26,7 +26,9 @@ enum font_size {
     FONT_SIZE_COUNT
 };
 
-#define FONT_TTF_GLYPH_COUNT 95
+#define FONT_TTF_GLYPH_COUNT 101
+#define FONT_TTF_ASCII_COUNT 95 // ASCII 32-126, indices 0..94
+#define FONT_TTF_EXTRA_COUNT 6 // Nordic letters, indices 95..100
 
 struct font_ttf_variant {
     const unsigned char *glyphs; // FONT_TTF_GLYPH_COUNT * h * w bytes,
@@ -37,5 +39,12 @@ struct font_ttf_variant {
 };
 
 extern const struct font_ttf_variant font_ttf_variants[FONT_SIZE_COUNT];
+
+// Latin-1 codepoints of the FONT_TTF_EXTRA_COUNT glyphs baked after
+// the contiguous ASCII block, in baked order -- e.g.
+// font_ttf_extra_codepoints[0] == 0xC4 ('\xc4', Ä). See
+// font_ttf_glyph_index() (gfx.c) for the codepoint -> glyph-index
+// lookup that uses this.
+extern const unsigned char font_ttf_extra_codepoints[FONT_TTF_EXTRA_COUNT];
 
 #endif

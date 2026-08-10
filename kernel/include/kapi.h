@@ -11,7 +11,8 @@
 
 #include "vga.h"       // console: vga_write, vga_putc, vga_clear, vga_set_color...
 #include "gfx.h"       // framebuffer graphics primitives
-#include "keyboard.h"  // keyboard_getchar, keyboard_try_getchar, KEY_* codes
+#include "keyboard.h"  // keyboard_getchar, keyboard_try_getchar, KEY_* codes, IS_PRINTABLE_KEY, Nordic layout
+#include "keyboard_config.h" // keyboard layout persistence (see kernel/core/keyboard_config.c)
 #include "mouse.h"     // mouse_init, mouse_get_state, mouse_set_bounds
 #include "timer.h"     // pit_ticks, rtc_read
 #include "tz.h"        // rtc_read_local, timezone selection (see kernel/core/tz.c)

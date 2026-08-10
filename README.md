@@ -53,6 +53,13 @@ again once code has grown around them.
   `fontsize <n>` shell command -- see `gfx_set_font_size()`. Used both
   for the
   framebuffer text console and for on-screen labels in graphics mode.
+  Also bakes 6 Nordic letters (Å/Ä/Ö/å/ä/ö, Latin-1 single-byte
+  codepoints) alongside ASCII -- paired with the `keyboard <us|se>`
+  shell command (see below), which remaps the 3 physical keys a real
+  Swedish/Finnish keyboard has Å/Ä/Ö on. Persists across a reboot via
+  `/etc/toyos.conf`, same as `fontsize`/`timezone` -- see
+  `docs/decisions.md`'s Nordic-keyboard entry for why Latin-1 over
+  UTF-8 and why 3 remapped keys, not a full layout.
 - A basic GUI mode: a real (if small) window manager -- movable and
   resizable windows (drag an edge/corner) with minimize/maximize/close
   buttons, a taskbar, and a Start menu for launching apps. Four apps
@@ -112,7 +119,7 @@ below), `clear`, `time`, `uptime`, `echo <text>`, `about`, `meminfo`,
 Home/End/Delete to navigate and edit, F2 to save, F3 to exit; works
 from both the physical shell and the GUI Terminal, see `apps/editor.c`),
 `gui`, `apps`, `run <app>`, `history`,
-`fontsize <8|10|12|14|16|18|20|24>`, and the developer/diagnostic set
+`fontsize <8|10|12|14|16|18|20|24>`, `keyboard <us|se>`, and the developer/diagnostic set
 (`help tests`): `ring3test`, `elftest`, `syscalltest`, `writetest`,
 `ptrtest`, `guitest`, `schedtest`, `echotest`, `wintest`, `filetest`,
 `newsyscalltest`, `crashtest`

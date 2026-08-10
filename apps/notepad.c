@@ -232,7 +232,7 @@ void notepad_key(struct window *win, int key) {
         widget_scrollback_scroll(&st->tb, key == KEY_PAGE_UP ? page : -page);
         window_invalidate(win);
         return; // paging doesn't touch st->status/the text itself
-    } else if (key >= 32 && key < 127) {
+    } else if (IS_PRINTABLE_KEY(key)) {
         widget_scrollback_insert_at_cursor(&st->tb, (char)key);
     } else {
         return; // ignore other control codes for this simple version

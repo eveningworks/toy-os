@@ -13,6 +13,7 @@
 #include "fs.h"
 #include "tz.h"
 #include "font_config.h"
+#include "keyboard_config.h"
 #include "apps.h"
 #include "scheduler.h"
 #include <stdint.h>
@@ -43,6 +44,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
     fs_mkdir("/etc"); // config-file convention (see tz.c) -- a no-op if it already exists
     tz_init(); // loads the persisted timezone choice, if any -- needs fs_init()/"/etc" first
     font_config_init(); // loads the persisted font size, if any -- see kernel/core/font_config.c
+    keyboard_config_init(); // loads the persisted keyboard layout, if any -- see kernel/core/keyboard_config.c
     vga_reflow(); // apply it to the console's cell layout (no-op if nothing was persisted)
 
     scheduler_init();

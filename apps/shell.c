@@ -202,6 +202,8 @@ static void dispatch(char *line) {
         scheduler_demo_run();
     } else if (k_strcmp(cmd, "fontsize") == 0) {
         cmd_fontsize(args ? args : "");
+    } else if (k_strcmp(cmd, "keyboard") == 0) {
+        cmd_keyboard(args ? args : "");
     } else if (k_strcmp(cmd, "echotest") == 0) {
         echo_test_run();
     } else if (k_strcmp(cmd, "wintest") == 0) {
@@ -295,7 +297,7 @@ static void shell_read_line(char *buf, unsigned int len) {
                 k_strcpy(buf, replacement);
                 pos = (unsigned int)k_strlen(buf);
             }
-        } else if (c < 128 && pos < len - 1) {
+        } else if (IS_PRINTABLE_KEY(c) && pos < len - 1) {
             char ch = (char)c;
             buf[pos++] = ch;
             buf[pos] = '\0';

@@ -60,6 +60,7 @@ void cmd_reboot(void);
 void cmd_apps(void);
 void cmd_run(const char *name);
 void cmd_fontsize(const char *args);
+void cmd_keyboard(const char *args);
 void cmd_color(const char *args);
 void cmd_history(void);
 void cmd_lspci(void);

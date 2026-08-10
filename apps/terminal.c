@@ -438,7 +438,7 @@ void terminal_key(struct window *win, int key) {
         widget_scrollback_metrics(&st->tb, text_w, ch, &total_lines, &visible_rows);
         int page = visible_rows > 1 ? visible_rows - 1 : 1;
         widget_scrollback_scroll(&st->tb, key == KEY_PAGE_UP ? page : -page);
-    } else if (key >= 32 && key < 127 && st->line_len < TERM_LINE_MAX - 1) {
+    } else if (IS_PRINTABLE_KEY(key) && st->line_len < TERM_LINE_MAX - 1) {
         widget_scrollback_set_color(&st->tb, VGA_LIGHT_GREY);
         widget_scrollback_putc(&st->tb, (char)key);
         st->line[st->line_len++] = (char)key;

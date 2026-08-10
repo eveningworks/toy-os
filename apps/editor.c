@@ -69,7 +69,7 @@ void editor_handle_key(struct text_scrollback *tb, const char *path, int key,
     else if (key == KEY_ARROW_DOWN) widget_scrollback_cursor_down(tb);
     else if (key == KEY_HOME) widget_scrollback_cursor_home(tb);
     else if (key == KEY_END) widget_scrollback_cursor_end(tb);
-    else if (key >= 32 && key < 127) widget_scrollback_insert_at_cursor(tb, (char)key);
+    else if (IS_PRINTABLE_KEY(key)) widget_scrollback_insert_at_cursor(tb, (char)key);
     // anything else (Page Up/Down, unrecognized codes) -- no-op
 }
 

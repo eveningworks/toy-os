@@ -17,6 +17,63 @@
 #define KEY_F2          0x9A
 #define KEY_F3          0x9B
 
+// The six Latin-1 codepoints this build's font (font_ttf.h,
+// tools/genttf.py) and `se` keyboard layout (keyboard.c) support --
+// uppercase/lowercase Å/Ä/Ö. Comfortably clear of both the ASCII range
+// and the KEY_* codes above (0x91-0x9B), so they can travel through the
+// same uint16_t input stream as everything else with no collision.
+// See docs/decisions.md's Nordic-keyboard entry for why Latin-1 over
+// UTF-8, and why this is 6 specific codepoints rather than the full
+// 0xA0-0xFF Latin-1 Supplement block.
+#define CHAR_A_DIAERESIS      0xC4 // Ä
+#define CHAR_O_DIAERESIS      0xD6 // Ö
+#define CHAR_A_RING           0xC5 // Å
+#define CHAR_A_DIAERESIS_LC   0xE4 // ä
+#define CHAR_O_DIAERESIS_LC   0xF6 // ö
+#define CHAR_A_RING_LC        0xE5 // å
+
+// True if `k` is one of the six Nordic letters above. A plain
+// six-way OR rather than a range check, since these codepoints (0xC4,
+// 0xD6, 0xC5, 0xE4, 0xF6, 0xE5) aren't contiguous.
+#define IS_NORDIC_CHAR(k) ((k) == CHAR_A_DIAERESIS || (k) == CHAR_O_DIAERESIS || \
+                            (k) == CHAR_A_RING || (k) == CHAR_A_DIAERESIS_LC || \
+                            (k) == CHAR_O_DIAERESIS_LC || (k) == CHAR_A_RING_LC)
+
+// True if `k` is a character that should be inserted into typed text --
+// printable ASCII (32-126) or one of the Nordic letters above. Every
+// "is this key a printable char, not a control/arrow/function key"
+// gate across apps/ (terminal, notepad, widgets textfield, editor)
+// should use this instead of a bare `key >= 32 && key < 127`, which
+// silently excludes Nordic letters (and, before this build, would also
+// have gone through `char`'s signedness as a landmine -- see
+// docs/decisions.md). userland/echo.c can't include this header (it's
+// a freestanding ring-3 program with no kernel headers) and keeps its
+// own copy of the same check.
+#define IS_PRINTABLE_KEY(k) (((k) >= 32 && (k) < 127) || IS_NORDIC_CHAR(k))
+
+// Which physical scancode -> character mapping keyboard_feed_byte()
+// uses. KB_LAYOUT_SE is the standard Swedish/Finnish physical layout
+// for the three keys that differ from US QWERTY (see keyboard.c's
+// scancode_ascii_se[]/scancode_ascii_shift_se[]) -- everything else
+// (letters, numbers, punctuation not involving Å/Ä/Ö) stays identical
+// to KB_LAYOUT_US, so this is deliberately not a full from-scratch
+// Nordic layout remap.
+enum keyboard_layout {
+    KB_LAYOUT_US,
+    KB_LAYOUT_SE,
+};
+
+// Switches the active scancode table. Does NOT persist -- see
+// kernel/core/keyboard_config.h for the /etc-backed persistence layer
+// built on top of this, the same split tz_set_index() (selects) vs
+// rtc_read_local() (applies) already uses.
+void keyboard_set_layout(enum keyboard_layout layout);
+enum keyboard_layout keyboard_get_layout(void);
+
+// "us"/"se" -- the exact strings keyboard_config.c persists and the
+// shell's `keyboard` command matches against.
+const char *keyboard_layout_name(enum keyboard_layout layout);
+
 // Called by i8042_poll() with one byte already read from the shared
 // PS/2 data port. Don't call this from an IRQ handler directly.
 void keyboard_feed_byte(uint8_t sc);

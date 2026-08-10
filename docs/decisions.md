@@ -393,3 +393,53 @@ kind separation (`SYS_WRITE`/`SYS_READ` correctly reject a socket fd),
 and cleanup -- without pretending a transport exists. See
 `syscall_abi.h`'s `SYS_SOCKET` doc comment and CHANGELOG.md's
 **Build 420** for the full writeup.
+
+## Nordic keyboard/character support: Latin-1, not UTF-8; 3 remapped keys, not a full layout
+
+Adding Å/Ä/Ö support (build 501) meant three separable choices, made
+the same way each time: keep the codebase's existing "1 char = 1 cell
+= 1 glyph" assumption intact rather than take on the much bigger
+UTF-8 rework it doesn't need yet.
+
+**Encoding: Latin-1/ISO-8859-1 single bytes (Ä=0xC4, Ö=0xD6, Å=0xC5,
+ä=0xE4, ö=0xF6, å=0xE5), not UTF-8.** Every byte-buffer boundary in
+this kernel (`scrollback_cell`, `fs.h`'s file content, the syscall
+ABI's buffer+length `SYS_WRITE`/`SYS_READ`) already assumes one byte
+is one character is one glyph cell; UTF-8 would break that assumption
+everywhere a multi-byte Nordic letter crossed it, for a codebase that
+only needs 6 extra characters right now. `font_ttf.h`'s
+`FONT_TTF_EXTRA_COUNT` bakes exactly these 6 glyphs (see
+`tools/genttf.py`'s `EXTRA_CHARS`), not the full 0xA0-0xFF Latin-1
+Supplement block -- easy to extend later (append to that list and
+re-run the script) if more accented characters are ever needed.
+
+**Keyboard layout: `keyboard <us|se>` remaps 3 scancodes, not a
+from-scratch Nordic layout.** `keyboard.c`'s `scancode_ascii_se[]`/
+`scancode_ascii_shift_se[]` are copies of the US tables with only
+scancodes 0x1A/0x27/0x28 (the physical keys under Å/Ä/Ö on a real
+Nordic keyboard) changed -- everything else, including AltGr-level
+symbols a real Nordic layout also remaps, stays US QWERTY, since this
+driver has no AltGr/dead-key handling at all (see keyboard.h's
+`IS_NORDIC_CHAR()` comment). Persisted the same way `timezone`/
+`fontsize` already are -- a `keyboard_layout=<us|se>` key in
+`/etc/toyos.conf`, loaded once at boot by `keyboard_config_init()`.
+
+**The actual bug that made this hard to verify: `char` is signed, and
+one gate had a differently-shaped filter the others didn't.** No
+`-funsigned-char` in this build's CFLAGS, so a codepoint >= 0x80 is
+negative as `char` -- `gfx_draw_char()`'s old `c < 32 || c > 126`
+range check and five `key >= 32 && key < 127`-shaped "is this a
+printable char" gates across `apps/` (terminal, notepad, widgets
+textfield, editor) and `userland/echo.c` all
+silently rejected Nordic letters before this build. `keyboard.h`'s new
+`IS_PRINTABLE_KEY()` macro (and `font_ttf_glyph_index()` in gfx.c,
+which takes the codepoint as `int`/`unsigned char` rather than relying
+on `char`'s signedness) fixed all of them at once -- except
+`apps/shell.c`'s own `shell_read_line()`, which had a SIXTH,
+differently-worded gate (`c < 128`, not `key >= 32 && key < 127`) that
+a grep for the other five's exact phrasing missed entirely. Found only
+by QMP-testing actual keystrokes end-to-end and noticing the cursor
+didn't even advance -- not by code review -- which is the concrete
+argument for always verifying a "fixed every instance of X" claim by
+testing the behavior, not just re-grepping the pattern you already
+fixed. See CHANGELOG.md's **Build 501** for the full writeup.
