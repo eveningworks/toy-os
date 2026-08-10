@@ -303,6 +303,10 @@ enum vga_color vga_current_fg(void) {
     return cur_fg;
 }
 
+uint32_t vga_color_rgb(enum vga_color c) {
+    return palette_rgb(c);
+}
+
 void vga_putc(char c) {
     if (active_sink) {
         if (c == '\b') {

@@ -5,6 +5,63 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 203 (feature, +10) -- reusable scrollback text widget (terminal-emulator phase 3/4)
+
+Third of four planned phases toward a GUI terminal-emulator app (see
+build 183's entry for the overall plan). Phases 1-2 made the shell's
+real dispatcher safe and reachable from a GUI callback; this phase adds
+the piece needed to actually *show* what it writes inside a window --
+there was no reusable scrollback/text-cell widget anywhere in the
+codebase (apps/notepad.c's ad hoc `char[]` + manual line-wrap loop was
+the closest thing, and it has no scrolling and only ever draws a
+single fixed color).
+
+- `apps/widgets.h` / `apps/widgets.c`: added `struct text_scrollback` --
+  a fixed-capacity (`SCROLLBACK_CAP` = 8192 cells) ring buffer of
+  `{char, vga_color}` cells with `widget_scrollback_init/putc/
+  backspace/clear/set_color/scroll/draw()`. Appending past capacity
+  overwrites the oldest cell in place (O(1), no shifting) rather than
+  growing or shifting the buffer, matching the physical console's own
+  scrolloff behavior. Line wrapping isn't cached -- `draw()` walks the
+  raw character stream twice on every call (once to find the total
+  wrapped-line count and clamp the scroll position, once to render the
+  visible window), the same "recompute from source, don't cache and
+  invalidate" tradeoff notepad_draw() already makes, just with
+  scrolling added. `scroll_offset` (0 = pinned to the newest output,
+  like a normal terminal; >0 = scrolled up that many wrapped lines) is
+  clamped to the buffer's actual current line count inside `draw()`
+  itself, so a caller never needs to know the content size to request a
+  scroll.
+- `kernel/include/vga.h` / `kernel/drivers/vga.c`: added `vga_color_rgb()`,
+  a public wrapper around vga.c's existing (previously file-private)
+  color palette table, so the widget renders each cell in the exact
+  same RGB the physical console would have used for that `vga_color`
+  rather than picking its own colors that would look inconsistent next
+  to it.
+- No existing code changed -- purely additive. `apps/notepad.c` (the
+  only other file touching `widgets.h`) needed no changes; its own
+  `widget_button()` calls are untouched.
+
+Tested in QEMU: temporarily wired a throwaway `widgettest` shell
+command (draws a text_scrollback with 40 lines of wrapped, per-line
+colored sample text straight onto the framebuffer, bypassing the WM --
+stripped back out before this build was finalized, not part of the
+shipped diff) and stepped through three states, screenshotted at each:
+pinned to the bottom with the cursor visible; scrolled up 15 lines with
+the cursor correctly hidden (it's outside the visible window); and
+re-pinned plus 20 characters backspaced, confirming the write position
+moved back correctly. Wrapping, per-cell color, and scrolling all
+matched expectations in every screenshot. Also re-verified
+`apps/notepad.c`'s Save/Load toolbar buttons (the pre-existing
+`widget_button()` consumer) render and open correctly after the
+`widgets.h` changes -- confirms the new addition didn't disturb the
+widget file's existing user.
+
+Screenshots: `screenshots/2026-08-10/phase3_scrollback_wrap_color_cursor.png`,
+`screenshots/2026-08-10/phase3_scrollback_scrolled_no_cursor.png`,
+`screenshots/2026-08-10/phase3_scrollback_backspace_repin.png`,
+`screenshots/2026-08-10/phase3_widget_button_regression_check.png`
+
 ## Build 193 (feature, +10) -- exported shell dispatch + blocking-command isolation (terminal-emulator phase 2/4)
 
 Second of four planned phases toward a GUI terminal-emulator app (see

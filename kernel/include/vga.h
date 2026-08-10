@@ -82,6 +82,15 @@ void vga_backspace(void);
 // relying on this.
 enum vga_color vga_current_fg(void);
 
+// The RGB value vga.c's framebuffer backend draws a given vga_color
+// with (see vga.c's palette_rgb() -- this is a public wrapper around
+// the exact same table, added so other renderers can match the
+// console's palette exactly instead of picking their own colors that
+// would look inconsistent side by side with it. First caller: the
+// scrollback text widget (widgets.h), which renders each cell in
+// whatever vga_color it was written with.
+uint32_t vga_color_rgb(enum vga_color c);
+
 // Recomputes the framebuffer console's column/row count from the
 // current gfx_char_w()/gfx_char_h() and clears the screen -- call after
 // gfx_set_font_size() changes the active font, since console_cols/rows
