@@ -5,6 +5,49 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 306 (fix, +1) -- docs/decisions.md: topic-indexed "why is this built this way" answers
+
+Requested: a docs/ directory with specs/documentation for future
+sessions and contributors. Checked what's already there first --
+README.md/apps/README.md cover architecture, CLAUDE.md covers
+workflow/environment quirks, and README.md already has an actively
+maintained "Ideas for what's next" (forward-looking roadmap, completed
+items struck through and linked to the CHANGELOG build that finished
+them) -- so a new docs/roadmap.md would have just duplicated that.
+What's genuinely missing: CHANGELOG.md records *what* happened and
+*why* per entry, chronologically, but isn't indexed by topic, so
+answering "why is X built this way" means scrolling/searching 150KB+
+of history. Design-scope comments scattered through source files
+("deliberately NOT...", "Honest limitations, not solved here" in
+tfs.c, wm_internal.h, terminal.h, calc_engine.c, theme.h, fs_ops.h)
+have the same problem -- each answers one question, but there's no
+single place listing which questions already have answers.
+
+- `docs/decisions.md` (new): ten short entries (a few sentences each),
+  one per decision that seemed likely to get re-litigated by a future
+  session -- VFS single-backend-not-mount-points, no recursive delete,
+  write-through-not-journaled persistence, `kapi.h` as the only apps/
+  boundary, `widgets.h`/`theme.h` staying minimal until a second real
+  caller, the window manager as one event loop not decoupled
+  components, Terminal wrapping the real shell instead of
+  reimplementing it, why `ring3test`/`elftest` still need a reboot
+  post-teardown, and the build-number tier scheme. Each links to the
+  CHANGELOG.md section or source file with the actual reasoning --
+  deliberately a pointer file, not a second copy of it, so it can't
+  drift the way a restated copy would.
+- `README.md`: linked docs/decisions.md from the intro, and added one
+  new "Ideas for what's next" bullet (VFS mount-point support, if a
+  second filesystem ever needs to coexist with the first rather than
+  replace it) -- the only genuinely new forward-looking item found
+  that wasn't already on that list.
+- `CLAUDE.md`: new `## docs/` section explaining what belongs there
+  (and, just as importantly, what doesn't -- forward-looking items
+  stay in README's existing list, not a second one) and when to add an
+  entry going forward.
+- No code changes -- docs/build-metadata only. `make clean && make
+  all` still clean (sanity-checked; nothing under kernel/ or apps/
+  touched).
+
 ## Build 305 (fix, +1) -- tools/device_git.sh: sweep every stale git lock, not just index.lock
 
 Hit while committing build 304 over the device bridge: the first

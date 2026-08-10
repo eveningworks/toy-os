@@ -262,6 +262,32 @@ something would save a future session real time -- the bar is "does
 this fix a rederive-from-scratch cost," the same reasoning that
 produced `qmp_test.py`.
 
+## docs/
+
+`docs/decisions.md` -- short, topic-indexed answers to "why does
+toy-os work this way?" for the handful of decisions that come up again
+once code has grown around them (e.g. "why is the VFS single-backend,
+not mount points", "why doesn't `fs_delete` recurse"). Deliberately a
+*pointer* file, not a second copy of the reasoning: each entry is a
+couple sentences plus a link into the relevant CHANGELOG.md section or
+source file, not the reasoning itself restated. README.md/
+apps/README.md already cover architecture in depth and CHANGELOG.md is
+the full chronological history with rationale -- `docs/decisions.md`
+exists because CHANGELOG.md isn't indexed by topic, so "why is X built
+this way" otherwise means scrolling/searching the whole history.
+Forward-looking "not built yet" items belong in README.md's existing
+**Ideas for what's next** section instead (already actively
+maintained, with completed items struck through and linked to the
+CHANGELOG build that finished them) -- don't duplicate that list here
+or start a second one.
+
+When you resolve a "wait, why is this built this way" question during
+a session (by reading CHANGELOG.md, a source comment, or by asking the
+user), consider whether it's the kind of question a future session
+would hit again -- if so, add a short entry to `docs/decisions.md`
+pointing at the answer, the same judgment call as `tools/`'s "does
+this fix a rederive-from-scratch cost" bar.
+
 ## Delivering changes
 
 List every file added or edited in the final response (standing

@@ -6,6 +6,9 @@ basic graphical mode.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full history of what's been
 built, in what order, and the bugs found (and fixed) along the way.
+See [docs/decisions.md](docs/decisions.md) for short, topic-indexed
+answers to "why does toy-os work this way?" for choices that come up
+again once code has grown around them.
 
 ## Current features
 
@@ -566,3 +569,12 @@ untouched.
   approach accepts. AHCI/SATA support would be the other direction to
   take this -- real modern hardware increasingly lacks the legacy IDE
   controller `ata.c` currently depends on.
+- The VFS layer (see CHANGELOG.md's build 304, `kernel/include/fs_ops.h`)
+  supports exactly one active filesystem backend at a time, chosen once
+  at boot -- not multiple backends mounted simultaneously at different
+  path prefixes. A real mount-point scheme (`/` on one backend, `/data`
+  on another, say) is the natural next step if a second filesystem ever
+  actually shows up and needs to coexist with the first, rather than
+  replace it; deferred until then since it's meaningfully more code
+  (cross-mount path resolution, boundary conflicts) for a capability
+  nothing needs yet.
