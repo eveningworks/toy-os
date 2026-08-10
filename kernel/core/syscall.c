@@ -9,6 +9,7 @@
 #include "pmm.h"
 #include "fs.h"
 #include "string.h"
+#include "tz.h"
 #include <stddef.h>
 
 extern struct kernel_context g_process_ctx; // defined in process.c
@@ -33,6 +34,26 @@ struct open_file {
 };
 
 static struct open_file fd_table[FD_TABLE_SIZE];
+
+// SYS_LISTDIR scratch state -- fs_list() (fs.c) takes a plain callback
+// with no context/userdata parameter, so there's nowhere to thread "which
+// output array, how much room is left" through it directly. Bounce
+// through these file-scope globals for the duration of a single
+// SYS_LISTDIR call instead: safe because syscalls in this kernel are
+// never reentrant or concurrent (same assumption SYS_WIN_* above already
+// relies on).
+static struct dirent *g_listdir_out = 0;
+static uint32_t g_listdir_max = 0;
+static uint32_t g_listdir_count = 0;
+
+static void listdir_collect(const char *name, uint32_t size, int is_dir) {
+    if (g_listdir_count >= g_listdir_max) return;
+    struct dirent *e = &g_listdir_out[g_listdir_count];
+    k_strcpy(e->name, name);
+    e->size = size;
+    e->is_dir = (uint32_t)is_dir;
+    g_listdir_count++;
+}
 
 // SYS_SBRK state for whichever single process syscall_reset_heap() was
 // last armed for (see syscall.h's comment on why there's only one, same
@@ -474,6 +495,67 @@ void syscall_dispatch(uint64_t *regs) {
             win_present();
             regs[14] = 1;
         }
+    } else if (rax == SYS_UNLINK) {
+        uint64_t pml4 = vmm_current_pml4();
+        if (!vmm_validate_user_range(pml4, rdi, FS_PATH_MAX)) {
+            serial_write("syscall: unlink() rejected -- invalid path pointer\n");
+            regs[14] = 0;
+        } else {
+            const char *upath = (const char *)(uintptr_t)rdi;
+            char name[FS_PATH_MAX];
+            uint32_t n = 0;
+            while (n < FS_PATH_MAX - 1 && upath[n] != '\0') { name[n] = upath[n]; n++; }
+            name[n] = '\0';
+            regs[14] = (uint64_t)fs_delete(name);
+        }
+    } else if (rax == SYS_LISTDIR) {
+        uint64_t pml4 = vmm_current_pml4();
+        uint32_t max = (uint32_t)rdx;
+        if (max > SYS_LISTDIR_MAX) max = SYS_LISTDIR_MAX;
+
+        if (!vmm_validate_user_range(pml4, rdi, FS_PATH_MAX) ||
+            !vmm_validate_user_range(pml4, rsi, (uint64_t)max * sizeof(struct dirent))) {
+            serial_write("syscall: listdir() rejected -- invalid pointer\n");
+            regs[14] = (uint64_t)-1;
+        } else {
+            const char *upath = (const char *)(uintptr_t)rdi;
+            char path[FS_PATH_MAX];
+            uint32_t n = 0;
+            while (n < FS_PATH_MAX - 1 && upath[n] != '\0') { path[n] = upath[n]; n++; }
+            path[n] = '\0';
+
+            g_listdir_out = (struct dirent *)(uintptr_t)rsi;
+            g_listdir_max = max;
+            g_listdir_count = 0;
+            fs_list(path, listdir_collect);
+            regs[14] = g_listdir_count;
+            g_listdir_out = 0; // don't leave a stale user pointer armed
+                                // between calls -- next call re-arms it
+        }
+    } else if (rax == SYS_GETTIME) {
+        uint64_t pml4 = vmm_current_pml4();
+        if (!vmm_validate_user_range(pml4, rdi, sizeof(struct rtc_time))) {
+            serial_write("syscall: gettime() rejected -- invalid pointer\n");
+            regs[14] = 0;
+        } else {
+            struct rtc_time t;
+            rtc_read_local(&t);
+            *(struct rtc_time *)(uintptr_t)rdi = t;
+            regs[14] = 1;
+        }
+    } else if (rax == SYS_YIELD) {
+        // Reuse scheduler_tick()'s exact mechanism (the same one the
+        // 100Hz timer IRQ drives) instead of inventing a second
+        // reschedule path -- `regs` is this process's own trapframe,
+        // laid out identically to what idt.c hands scheduler_tick() on
+        // a real timer interrupt, so calling it here is indistinguishable
+        // from "the timer happened to fire right now." A no-op for
+        // non-scheduler-managed processes (scheduler_current_pid() ==
+        // 0) -- nothing to yield to under the older single-process path.
+        if (scheduler_current_pid()) {
+            scheduler_tick(regs);
+        }
+        regs[14] = 0;
     }
 
     // Unrecognized syscall number: no-op. Falling through here means

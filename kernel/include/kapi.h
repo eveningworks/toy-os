@@ -30,6 +30,7 @@
 #include "echo_test.h"    // echo_test_run: interactive ring-3 program using SYS_READ_KEY + SYS_SBRK
 #include "win_test.h"     // win_test_run: ring-3 process with its own private, kernel-composited window
 #include "file_test.h"    // file_test_run: ring-3 process round-trips a real file through SYS_OPEN/READ/WRITE/CLOSE
+#include "newsyscalls_test.h" // newsyscalls_test_run: ring-3 process exercises SYS_UNLINK/SYS_LISTDIR/SYS_GETTIME/SYS_YIELD
 #include "version.h"   // TOYOS_VERSION -- build number, shown by the shell's `about` and the GUI About window
 #include "string.h"    // k_strlen, k_strcmp, etc -- freestanding, no libc
 

@@ -172,4 +172,62 @@ struct win_request {
                       // processes any more than the heap or window
                       // state above are).
 
+#define SYS_UNLINK 12 // RDI = pointer to a NUL-terminated path (same
+                       // length limit as SYS_OPEN). Wraps fs_delete()
+                       // (fs.c) -- deletes a file, or an empty
+                       // directory. Returns 1 (RAX) on success, 0 on
+                       // failure (bad pointer, doesn't exist, or a
+                       // non-empty directory -- fs_delete() doesn't do
+                       // recursive delete).
+
+// A directory entry as filled in by SYS_LISTDIR below -- deliberately
+// reuses FS_PATH_MAX for `name` even though a single path component is
+// always shorter than a full path, just to avoid a second size constant
+// (fs.c already guarantees every component fits in FS_PATH_MAX, since
+// it's a substring of a path that does).
+struct dirent {
+    char name[64];   // FS_PATH_MAX (fs.h) -- last path component only,
+                      // e.g. "notes.txt", not "/docs/notes.txt"
+    uint32_t size;    // meaningless (0) for directories, same as fs_list()
+    uint32_t is_dir;
+};
+
+#define SYS_LISTDIR_MAX 32 // caps how many entries a single SYS_LISTDIR
+                            // call can fill -- matches FS_MAX_FILES
+                            // (fs.h), since that's the most any
+                            // directory could ever hold anyway. A `max`
+                            // argument above this is silently clamped
+                            // down to it, not rejected.
+
+#define SYS_LISTDIR 13 // RDI = pointer to a NUL-terminated directory
+                        // path (same length limit as SYS_OPEN), RSI =
+                        // pointer to an array of `struct dirent` (out),
+                        // RDX = capacity of that array (clamped to
+                        // SYS_LISTDIR_MAX). Wraps fs_list() (fs.c).
+                        // Returns the number of entries written (RAX,
+                        // 0..max) -- 0 if the directory is empty or
+                        // doesn't exist, same as fs_list()'s own
+                        // no-op-on-missing-dir behavior; -1 only for a
+                        // bad path or output-array pointer. Table
+                        // order, not sorted, same as fs_list().
+
+#define SYS_GETTIME 14 // RDI = pointer to a `struct rtc_time` (out, see
+                        // timer.h). Wraps rtc_read_local() (tz.c) --
+                        // the same timezone-adjusted wall-clock time the
+                        // shell's `time` command and the taskbar clock
+                        // show, not raw UTC hardware time. Returns 1
+                        // (RAX) on success, 0 on a bad pointer.
+
+#define SYS_YIELD 15 // No arguments. Cooperatively gives up the rest of
+                      // this process's timeslice to the next
+                      // scheduler-managed process (scheduler.c), if any
+                      // is ready -- otherwise a plain no-op. Only does
+                      // anything for a process spawned under the
+                      // preemptive scheduler (scheduler_demo_run());
+                      // for the older single-process-at-a-time path
+                      // (process_run_ring3(), used by every *test
+                      // command except the counter_a/counter_b demo)
+                      // there's nothing else to yield to, so it's
+                      // always a no-op there. Always returns 0 (RAX).
+
 #endif

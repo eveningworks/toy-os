@@ -182,6 +182,8 @@ static const char *const HELP_LINES[] = {
     "                  'q'/Esc returns to the shell)\n",
     "  filetest      - ring-3 process writes+reads a real file via\n",
     "                  SYS_OPEN/SYS_READ/SYS_WRITE/SYS_CLOSE (returns)\n",
+    "  newsyscalltest - ring-3 process exercises SYS_UNLINK,\n",
+    "                  SYS_LISTDIR, SYS_GETTIME, SYS_YIELD (returns)\n",
     "(arrows browse history; 'history' lists it)\n",
 };
 #define HELP_LINE_COUNT (sizeof(HELP_LINES) / sizeof(HELP_LINES[0]))
@@ -629,6 +631,8 @@ static void dispatch(char *line) {
         win_test_run();
     } else if (k_strcmp(cmd, "filetest") == 0) {
         file_test_run();
+    } else if (k_strcmp(cmd, "newsyscalltest") == 0) {
+        newsyscalls_test_run();
     } else if (k_strcmp(cmd, "history") == 0) {
         cmd_history();
     } else {
