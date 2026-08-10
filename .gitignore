@@ -16,3 +16,8 @@ serial.log
 # Python bytecode from tools/*.py
 __pycache__/
 *.pyc
+
+# Scratch holding area for files being removed from the device-bridge
+# workflow (see CLAUDE.md's "device bridge can't delete files" note) --
+# never a real repo asset, just a staging spot the user empties by hand.
+/_to_delete/

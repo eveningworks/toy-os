@@ -5,6 +5,19 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 122 (fix, +1) -- gitignore the `_to_delete/` device-bridge scratch folder
+
+`_to_delete/` (see `CLAUDE.md`'s "device bridge can't delete files"
+note -- a holding spot for files `device_bash` moves aside since it
+can't actually `rm` them off the user's machine) had gotten swept up
+into the very first push and ended up sitting in the GitHub repo,
+which isn't where scratch cleanup state belongs.
+
+**Changed (`.gitignore`):** added `/_to_delete/`. Doesn't retroactively
+remove what's already committed on its own -- see this build's
+CHANGELOG-adjacent git commands for the one-time `git rm -r --cached`
+needed to actually drop it from the repo.
+
 ## Build 121 (fix, +1) -- git tag + GitHub Release convention for BUILD_NUMBER bumps
 
 Now that the repo is actually pushed to GitHub (`Drenos/toy-os`, private
