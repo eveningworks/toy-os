@@ -1,0 +1,65 @@
+#ifndef WM_H
+#define WM_H
+
+#include "gfx.h" // WM_TITLEBAR_H depends on gfx_char_h(), which can change
+                 // at runtime now (see gfx_set_font_size()) -- this used
+                 // to be a plain compile-time constant.
+
+// The window manager's public, app-facing API -- everything a GUI app
+// (Notepad, About, Calculator, ...) is allowed to use. Implemented
+// across three files under apps/wm/: wm.c (this header's counterpart --
+// shared state, window lifecycle, wm_run()'s main loop, and the
+// app-facing helpers below), wm_input.c (mouse/keyboard handling), and
+// wm_render.c (all drawing). wm_internal.h is the private glue between
+// those three; nothing outside apps/wm/ should ever include it.
+
+struct gui_app; // full definition in gui_apps.h
+
+#define WIN_TITLE_MAX 32
+
+enum window_state { WIN_NORMAL, WIN_MINIMIZED, WIN_MAXIMIZED };
+
+struct window {
+    char title[WIN_TITLE_MAX];
+    int x, y, w, h;                        // current geometry, screen coords,
+                                            // (x,y) = top-left incl. title bar
+    int saved_x, saved_y, saved_w, saved_h; // geometry to restore to after
+                                            // un-maximizing
+    enum window_state state;
+    const struct gui_app *app;
+    void *app_state;
+    int open; // 1 while this slot is in use
+};
+
+// Height of a window's title bar in pixels (matches the taskbar height).
+// A macro rather than a cached variable so it always reflects whatever
+// font size is currently active -- gfx_char_h() is cheap (just an array
+// lookup), so recomputing this on every use costs nothing.
+#define WM_TITLEBAR_H (gfx_char_h() + 8)
+
+// --- helpers for use inside a gui_app's callbacks ---
+
+// Stashes/retrieves the app's own state pointer on its window. Call
+// window_set_state from on_open; call window_get_state from any other
+// callback to get it back.
+void window_set_state(struct window *win, void *state);
+void *window_get_state(struct window *win);
+
+// The content area is everything below the title bar, inset by the 1px
+// border. All four are in screen coordinates / pixels.
+int window_content_x(const struct window *win);
+int window_content_y(const struct window *win);
+int window_content_w(const struct window *win);
+int window_content_h(const struct window *win);
+
+// Ask the window manager to repaint on its next cycle. Rendering is
+// whole-screen (see wm_render.c) so this doesn't need to know what
+// changed -- call it after any on_key/on_click that changed what should
+// be drawn.
+void window_invalidate(struct window *win);
+
+// The window manager's entry point -- this is what gui_main() calls.
+// Runs until the user presses Esc, then returns.
+void wm_run(void);
+
+#endif

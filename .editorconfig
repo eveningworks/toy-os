@@ -1,0 +1,26 @@
+# EditorConfig (https://editorconfig.org) -- lets any editor that
+# supports it (most do, natively or via plugin) auto-apply this
+# project's existing conventions instead of a contributor's personal
+# defaults silently drifting in. Doesn't touch any source file, doesn't
+# require a build or test pass -- editors just read this on open/save.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# make requires literal tabs in recipe lines -- a space there is a
+# syntax error ("missing separator"), not a style choice. NASM source
+# (*.asm) uses ordinary 4-space indent like the C files, so it needs no
+# override here.
+[Makefile]
+indent_style = tab
+
+# Markdown: trailing whitespace can be a deliberate hard line break;
+# don't strip it.
+[*.md]
+trim_trailing_whitespace = false
