@@ -10,15 +10,19 @@
 // gfx_draw_char() alpha-blends it straight into the framebuffer,
 // no runtime rasterization involved.
 //
-// 4 sizes are baked in; gfx_set_font_size() (gfx.c) picks which
+// 8 sizes are baked in; gfx_set_font_size() (gfx.c) picks which
 // one gfx_draw_char()/gfx_char_w()/gfx_char_h() actually use.
 #include <stddef.h>
 
 enum font_size {
-    FONT_SIZE_TINY,
-    FONT_SIZE_SMALL,
-    FONT_SIZE_MEDIUM,
-    FONT_SIZE_LARGE,
+    FONT_SIZE_8,
+    FONT_SIZE_10,
+    FONT_SIZE_12,
+    FONT_SIZE_14,
+    FONT_SIZE_16,
+    FONT_SIZE_18,
+    FONT_SIZE_20,
+    FONT_SIZE_24,
     FONT_SIZE_COUNT
 };
 

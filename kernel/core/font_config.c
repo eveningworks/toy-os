@@ -4,9 +4,13 @@
 // before either tz_init() or font_config_init()).
 //
 // Unlike /etc/timezone (bare text, just the city name), /etc/fontsize
-// is "font_size=<name>" -- the user asked for a config file that reads
-// like one (`cat /etc/fontsize` showing `font_size=tiny` rather than
-// just `tiny`), anticipating more settings living under /etc someday.
+// is "font_size=<n>" -- the user asked for a config file that reads
+// like one (`cat /etc/fontsize` showing `font_size=12` rather than
+// just `12`), anticipating more settings living under /etc someday.
+// `<n>` is a point size (8/10/12/14/16/18/20/24, see font_ttf.h) as of
+// build 347 -- it used to be a name (tiny/small/medium/large); the file
+// format and this parser didn't need to change for that, only the set
+// of values gfx_font_size_name() can return did (see name_to_size()).
 // This is deliberately still a single-purpose parser, not a shared
 // key=value config format every setting reads/writes through: the
 // smallest change that gets the requested format for this one setting.
@@ -23,11 +27,15 @@
 #define FONT_CONFIG_FILE "/etc/fontsize"
 #define FONT_CONFIG_KEY "font_size"
 
+// Matches against gfx_font_size_name() for every baked size rather than
+// a hand-maintained list of names -- since build 347 those names are
+// just point-size numbers ("8".."24", see font_ttf.h/tools/genttf.py),
+// so this stays correct automatically if a size is ever added/removed
+// without needing a second list kept in sync with font_ttf_variants[].
 static enum font_size name_to_size(const char *name) {
-    if (k_strcmp(name, "tiny") == 0) return FONT_SIZE_TINY;
-    if (k_strcmp(name, "small") == 0) return FONT_SIZE_SMALL;
-    if (k_strcmp(name, "medium") == 0) return FONT_SIZE_MEDIUM;
-    if (k_strcmp(name, "large") == 0) return FONT_SIZE_LARGE;
+    for (enum font_size i = 0; i < FONT_SIZE_COUNT; i++) {
+        if (k_strcmp(name, gfx_font_size_name(i)) == 0) return i;
+    }
     return FONT_SIZE_COUNT; // sentinel: not a recognized size name
 }
 

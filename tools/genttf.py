@@ -8,13 +8,16 @@ rasterizer on-target: this script never runs on toy-os itself, only on a
 developer's machine, and its *output* (plain grayscale-alpha byte arrays)
 is what actually ships in the kernel image.
 
-Bakes FOUR sizes (tiny/small/medium/large) into one font_ttf.c/h, selectable
-at runtime via gfx_set_font_size() (see gfx.c) -- the shell's `fontsize`
-command switches between them. Baking multiple fixed sizes offline is
-the tradeoff that avoids needing a real runtime TrueType rasterizer (see
-CHANGELOG for why that's a much bigger undertaking): you get a choice of
-sizes, not arbitrary ones, but each one is genuinely anti-aliased at its
-native resolution rather than scaled from another baked size.
+Bakes EIGHT sizes (8/10/12/14/16/18/20/24, named and selected by their
+point size -- see CHANGELOG's build 347 entry for why these replaced the
+original four tiny/small/medium/large names) into one font_ttf.c/h,
+selectable at runtime via gfx_set_font_size() (see gfx.c) -- the shell's
+`fontsize` command switches between them by typing the number. Baking
+multiple fixed sizes offline is the tradeoff that avoids needing a real
+runtime TrueType rasterizer (see CHANGELOG for why that's a much bigger
+undertaking): you get a choice of sizes, not arbitrary ones, but each one
+is genuinely anti-aliased at its native resolution rather than scaled
+from another baked size.
 
 Font: JetBrains Mono (Regular), SIL Open Font License 1.1. Chosen for
 being a well-hinted, widely used, freely embeddable monospace face -- see
@@ -32,15 +35,36 @@ from PIL import Image, ImageDraw, ImageFont
 FONT_PATH = "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Regular.ttf"
 
 # name, pixel size passed to FreeType, baked cell size, baseline offset
-# from the cell's top. Each size's PIXEL_SIZE/BASELINE_Y pair was picked
-# empirically (see CHANGELOG) so the font's own ascent/descent land
-# inside CELL_W x CELL_H with only minor, deliberate descender clipping
-# -- the same compromise any fixed-cell terminal font makes.
+# from the cell's top. `name` doubles as the user-facing point size (the
+# shell's `fontsize <n>` command and /etc/fontsize's persisted value are
+# just this string) and PIXEL_SIZE is that same number, passed straight
+# through to FreeType -- unlike the old tiny/small/medium/large naming,
+# there's no separate internal-vs-displayed number to keep in sync.
+#
+# CELL_W/CELL_H/BASELINE_Y are still hand-picked per size rather than
+# read verbatim off the font's own metrics (font.getmetrics()'s raw
+# ascent+descent would fit every glyph with no clipping at all, but
+# produces a visibly taller, more loosely-spaced cell than a terminal
+# font usually has). The formula this table was generated with -- given
+# an installed JetBrainsMono-Regular.ttf and (ascent, descent) from
+# ImageFont.getmetrics() at PIXEL_SIZE -- is:
+#     cell_w      = int(font.getlength("M"))
+#     baseline_y  = round(ascent * 0.89)
+#     cell_h      = baseline_y + round(descent * 0.6)
+# which reproduces the original hand-tuned tiny/small/medium/large
+# values almost exactly (see build 347's CHANGELOG entry) with only the
+# same minor, deliberate descender clipping those already had -- the
+# same compromise any fixed-cell terminal font makes. Re-derive with
+# that formula (or re-tune the constants) if you add another size.
 SIZES = [
-    ("tiny",   16,  9, 18, 15),
-    ("small",  19, 11, 22, 18),
-    ("medium", 27, 16, 32, 25),
-    ("large",  34, 20, 40, 31),
+    ("8",   8,  4, 10,  8),
+    ("10", 10,  6, 12, 10),
+    ("12", 12,  7, 14, 12),
+    ("14", 14,  8, 16, 13),
+    ("16", 16,  9, 18, 15),
+    ("18", 18, 10, 21, 17),
+    ("20", 20, 12, 23, 19),
+    ("24", 24, 14, 27, 22),
 ]
 
 OUT_C = "kernel/drivers/font_ttf.c"

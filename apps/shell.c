@@ -191,7 +191,8 @@ static const char *const HELP_LINES[] = {
     "\n",
     "Appearance:\n",
     "  color <name>  - change shell text color\n",
-    "  fontsize <s>  - set font size: tiny, small, medium, or large\n",
+    "  fontsize <n>  - set font size in points: 8, 10, 12, 14, 16, 18,\n",
+    "                  20, or 24 (`fontsize` alone shows the current one)\n",
 };
 #define HELP_LINE_COUNT (sizeof(HELP_LINES) / sizeof(HELP_LINES[0]))
 
@@ -592,28 +593,42 @@ static enum vga_color color_from_name(const char *s) {
     return VGA_LIGHT_GREY;
 }
 
+// Prints every baked size's name (point size, see font_ttf.h), comma-
+// separated -- shared by cmd_fontsize()'s usage line and its "unknown
+// size" error, so the list shown to the user can't drift out of sync
+// with what font_ttf.c actually has baked in.
+static void print_fontsize_choices(void) {
+    for (enum font_size i = 0; i < FONT_SIZE_COUNT; i++) {
+        if (i > 0) vga_write(", ");
+        vga_write(gfx_font_size_name(i));
+    }
+}
+
 // Changes the console's font size (see gfx_set_font_size() / font_ttf.h
-// -- four sizes baked at build time by tools/genttf.py, not runtime
-// TrueType rendering). Only affects the framebuffer console; the legacy
-// 80x25 text-mode fallback has one fixed cell size and can't resize.
-// Persists the choice to /etc/fontsize (see font_config.h) so it
+// -- eight point sizes baked at build time by tools/genttf.py, not
+// runtime TrueType rendering). Only affects the framebuffer console; the
+// legacy 80x25 text-mode fallback has one fixed cell size and can't
+// resize. Persists the choice to /etc/fontsize (see font_config.h) so it
 // survives a reboot -- same pattern as `timezone` persisting via tz.c.
 static void cmd_fontsize(const char *args) {
     if (!args || k_strlen(args) == 0) {
-        vga_write("usage: fontsize <tiny|small|medium|large>  (currently: ");
+        vga_write("usage: fontsize <n>  (");
+        print_fontsize_choices();
+        vga_write(")  (currently: ");
         vga_write(gfx_font_size_name(gfx_font_size()));
         vga_write(")\n");
         return;
     }
-    enum font_size want;
-    if (k_strcmp(args, "tiny") == 0) want = FONT_SIZE_TINY;
-    else if (k_strcmp(args, "small") == 0) want = FONT_SIZE_SMALL;
-    else if (k_strcmp(args, "medium") == 0) want = FONT_SIZE_MEDIUM;
-    else if (k_strcmp(args, "large") == 0) want = FONT_SIZE_LARGE;
-    else {
+    enum font_size want = FONT_SIZE_COUNT;
+    for (enum font_size i = 0; i < FONT_SIZE_COUNT; i++) {
+        if (k_strcmp(args, gfx_font_size_name(i)) == 0) { want = i; break; }
+    }
+    if (want == FONT_SIZE_COUNT) {
         vga_write("fontsize: unknown size '");
         vga_write(args);
-        vga_write("' -- try tiny, small, medium, or large\n");
+        vga_write("' -- try ");
+        print_fontsize_choices();
+        vga_write("\n");
         return;
     }
     gfx_set_font_size(want);

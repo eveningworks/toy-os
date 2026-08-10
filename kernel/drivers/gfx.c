@@ -10,11 +10,14 @@ static int height = 0;
 static uint8_t bpp = 0;
 static uint8_t red_pos, red_size, green_pos, green_size, blue_pos, blue_size;
 
-// Which of font_ttf.h's three baked sizes gfx_draw_char() currently
-// uses. FONT_SIZE_SMALL is the default -- see CHANGELOG for why (the
-// original 16x32 "medium" size, this project's second font iteration,
-// read as a bit large once real windows/taskbar text was on screen).
-static enum font_size cur_font_size = FONT_SIZE_SMALL;
+// Which of font_ttf.h's eight baked sizes gfx_draw_char() currently
+// uses. FONT_SIZE_18 (10x21 cell) is the default -- closest in on-screen
+// area to the pre-build-347 default (the old named "small" size, 11x22),
+// which itself was picked over the original 16x32 "medium" for reading
+// as a bit large once real windows/taskbar text was on screen (see
+// CHANGELOG). See CHANGELOG's build 347 entry for the tiny/small/medium/
+// large -> numeric point size rename this replaced.
+static enum font_size cur_font_size = FONT_SIZE_18;
 
 int gfx_char_w(void) { return font_ttf_variants[cur_font_size].w; }
 int gfx_char_h(void) { return font_ttf_variants[cur_font_size].h; }

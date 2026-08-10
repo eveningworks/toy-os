@@ -14,7 +14,8 @@
 int gfx_char_w(void);
 int gfx_char_h(void);
 
-// Selects one of FONT_SIZE_TINY/SMALL/MEDIUM/LARGE (font_ttf.h). Returns 1 on
+// Selects one of the point sizes in enum font_size (font_ttf.h --
+// FONT_SIZE_8 .. FONT_SIZE_24 as of build 347). Returns 1 on
 // success, 0 for an out-of-range index. Takes effect on the very next
 // gfx_draw_char()/gfx_draw_string() call -- there's no cached state
 // anywhere in gfx.c itself, but callers that cache pixel layout (vga.c's

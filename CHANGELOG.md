@@ -5,6 +5,82 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 347 (feature, +10) -- numeric `fontsize`, eight point sizes
+
+Two requests: make `fontsize` take numbers "like they usually work"
+instead of tiny/small/medium/large, and think about where `/etc`
+config structure should go from here given a second setting
+(`/etc/fontsize`) now exists alongside `/etc/timezone`. Presented
+choices for both up front. Font sizing: went with expanding to a bigger
+set of granular point sizes (8/10/12/14/16/18/20/24) rather than just
+relabeling the same 4 tiers -- more baked glyph data, but numeric
+selection actually feels like a real font-size picker instead of 4
+coarse aliases. `/etc` structure: left it as-is -- still one
+hand-rolled parser per settings file, no shared key=value layer -- per
+the explicit choice not to generalize yet.
+
+- **`tools/genttf.py`**: `SIZES` replaced -- `("tiny", 16, 9, 18, 15)`
+  etc. is now `("8", 8, 4, 10, 8)` .. `("24", 24, 14, 27, 22)`, 8 entries
+  instead of 4. The `name` field doubles as both the enum suffix and the
+  user-facing point-size string now (previously two independent
+  concepts that happened to be spelled the same way for tiny/small/
+  medium/large), and `PIXEL_SIZE` is that same number passed straight
+  to FreeType -- no more separate "what FreeType size produces this
+  named tier" mapping to keep in sync. CELL_W/CELL_H/BASELINE_Y for the
+  new sizes were derived from a formula fit to the *old* 4 sizes'
+  hand-tuned values (`cell_w = int(font.getlength("M"))`,
+  `baseline_y = round(ascent * 0.89)`,
+  `cell_h = baseline_y + round(descent * 0.6)`, using
+  `ImageFont.getmetrics()`'s ascent/descent at each PIXEL_SIZE) --
+  confirmed against the old table: it reproduces old "tiny" (16px) as
+  exactly (9, 18, 15), and comes within 1-2px of old small/medium/large,
+  which is the same minor descender clipping those already had rather
+  than a new problem. Regenerating requires `fonts-jetbrains-mono`
+  installed locally (see the script's own top comment); ran it in the
+  cloud sandbox after `apt-get install fonts-jetbrains-mono` there.
+- **`kernel/include/font_ttf.h` / `kernel/drivers/font_ttf.c`**
+  (GENERATED): regenerated via `tools/genttf.py`. `enum font_size` is
+  now `FONT_SIZE_8 .. FONT_SIZE_24` (8 entries); `font_ttf_variants[]`'s
+  `name` fields are `"8".."24"`.
+- **`kernel/drivers/gfx.c`**: default `cur_font_size` changed from
+  `FONT_SIZE_SMALL` to `FONT_SIZE_18` -- the old named sizes don't exist
+  anymore, and 18pt (10x21 cell) is the closest by on-screen area to the
+  old default's 11x22.
+- **`kernel/core/font_config.c`**: `name_to_size()` no longer hardcodes
+  a `tiny`/`small`/`medium`/`large` string list -- it loops
+  `gfx_font_size_name(i)` for every baked size and compares against
+  that, so it stays correct automatically if sizes are ever added or
+  removed again without a second hardcoded list to keep in sync. The
+  `/etc/fontsize` file format itself (`font_size=<value>\n`) is
+  unchanged -- only what `<value>` looks like changed, from a name to a
+  number (`font_size=12`, confirmed via `cat /etc/fontsize` in QEMU).
+- **`apps/shell.c`**: `cmd_fontsize()`'s size-name matching gets the
+  same generic-loop treatment as `font_config.c` (no hardcoded string
+  list). New `print_fontsize_choices()` helper prints every baked
+  size's name comma-separated, shared by the usage line and the
+  "unknown size" error, so what's shown to the user can't drift from
+  what's actually baked in. Help text (`help`) updated:
+  `fontsize <n>  - set font size in points: 8, 10, 12, 14, 16, 18, 20,
+  or 24`.
+- **`/etc` structure**: deliberately left alone this round --
+  `font_config.c`'s parser is still single-purpose, not a shared
+  key=value reader `tz.c` also goes through. The generic-loop change
+  above was needed either way (hardcoding 8 numbers instead of 4 names
+  in two places would've been worse, not better), so it's not really
+  "keeping duplication" so much as "not building shared /etc
+  infrastructure neither setting has asked for yet."
+- **Verified in headless QEMU** (`tools/qmp_test.py`): `fontsize` with
+  no args shows the usage line + all 8 choices + current size;
+  `fontsize 24`/`fontsize 8`/`fontsize 12` each resize the console
+  correctly (font readable at all three, including 8pt); `fontsize
+  bogus` gives a clean error listing all 8 valid sizes instead of
+  silently no-op'ing; `cat /etc/fontsize` after a change shows
+  `font_size=12`, confirming persistence; GUI mode (taskbar, Start
+  button) also re-renders correctly at the new size. Also reconfirmed
+  with a full `make clean && make all` and
+  `tools/boot_smoke_test.py`. Screenshots in
+  `screenshots/2026-08-10/fontsize_*.png`.
+
 ## Build 337 (feature, +10) -- dirty-rectangle blitting + cursor sprite
 
 The window manager's own roadmap item (README.md's "Ideas for what's

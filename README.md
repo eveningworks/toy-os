@@ -48,9 +48,10 @@ again once code has grown around them.
   not runtime TrueType rendering (no floating point or heap allocator in
   the kernel yet), but real font hinting + anti-aliasing baked in
   offline, not the blocky nearest-neighbor-scaled pixel art of the
-  original hand-drawn 8x8 font it replaced. Three sizes are baked in
-  (small/medium/large) and switchable at runtime with the `fontsize`
-  shell command -- see `gfx_set_font_size()`. Used both for the
+  original hand-drawn 8x8 font it replaced. Eight point sizes are baked
+  in (8/10/12/14/16/18/20/24) and switchable at runtime with the
+  `fontsize <n>` shell command -- see `gfx_set_font_size()`. Used both
+  for the
   framebuffer text console and for on-screen labels in graphics mode.
 - A basic GUI mode: a real (if small) window manager -- movable and
   resizable windows (drag an edge/corner) with minimize/maximize/close
@@ -107,7 +108,7 @@ again once code has grown around them.
 below), `clear`, `time`, `uptime`, `echo <text>`, `about`, `meminfo`,
 `dmesg`, `color <name>`, `reboot`, `ls`, `cat <f>`, `touch <f>`,
 `write <f> <text>`, `append <f> <text>`, `rm <f>`, `gui`, `apps`,
-`run <app>`, `history`, `fontsize <tiny|small|medium|large>`, and the
+`run <app>`, `history`, `fontsize <8|10|12|14|16|18|20|24>`, and the
 developer/diagnostic set (`help tests`): `ring3test`, `elftest`,
 `syscalltest`, `writetest`, `ptrtest`, `guitest`, `schedtest`,
 `echotest`, `wintest`, `filetest`, `newsyscalltest`, `crashtest`
