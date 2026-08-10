@@ -684,3 +684,70 @@ untouched.
   diagnostic pattern (`echo_test.c` etc.) is a natural fit for early
   loopback/ARP verification -- but this is its own multi-session
   project with its own milestones, not a single build bump.
+- Real disk-hosted ELF binaries -- an executable a user could drop
+  into a `/bin` directory and have `run`/the shell actually load and
+  execute from the persistent filesystem, instead of every `.elf`
+  today being a GRUB Multiboot2 module baked into the ISO at build
+  time (see `apps/README.md` and `multiboot.c`'s `multiboot_get_
+  module()` for how that currently works) and found by a hardcoded
+  module index. `lspci` was the proposed first candidate, since it's
+  a natural "small, self-contained, easy to verify" first real binary
+  -- currently it's a plain kernel-space shell built-in
+  (`cmd_lspci()` in `apps/shell_sys.c`, calling `pci_device_at()`/
+  `pci_class_name()` directly), not a process at all.
+
+  Investigated (no code changes yet -- this is a planning pass, at the
+  user's explicit request, before committing to an implementation).
+  Two genuinely separate capabilities are bundled up in "support ELF
+  binaries from the filesystem," worth landing as two builds rather
+  than one:
+
+  - **(A) A real syscall-based ELF program, launched the existing
+    (GRUB-module) way.** Mechanically this is the easy half --
+    `elf_load()`/`process_run_ring3()` already don't care where the
+    ELF blob came from, and a new `*_test.c`-style harness could load
+    an `lspci.elf` from a Multiboot2 module exactly like `elftest`/
+    `filetest` do today. The real gap: a ring-3 process can only reach
+    the kernel through the `int 0x80` syscall table
+    (`kernel/include/syscall_abi.h`) -- it can't call `pci_device_at()`
+    directly the way kernel-space shell code can, so this needs new
+    syscalls (something like `SYS_PCI_COUNT`/`SYS_PCI_INFO`) added the
+    same way `SYS_LISTDIR`/`SYS_GETTIME` were for `newsyscalltest`
+    (build 420-adjacent). This alone would prove out "a real syscall-
+    driven userland program that does something other than file I/O,"
+    independent of the filesystem-loading question below.
+  - **(B) Loading that binary from `/bin` on the persistent disk at
+    runtime**, once (A) exists. This is the harder half, and has its
+    own real prerequisite: TFS2's on-disk record format
+    (`kernel/drivers/tfs.c`, `docs/tfs2-spec.md`) caps a single file
+    at `FS_DATA_MAX` = 2048 bytes today, and every existing test ELF
+    (1112-3320 bytes) already brushes or exceeds that. Discussed three
+    ways to fix this and settled on **multi-slot chaining for large
+    files only**: an ordinary small file keeps today's exact
+    2048-byte/one-slot footprint (both on disk and in the in-RAM
+    `files[FS_MAX_FILES]` table -- the other two options either bloat
+    every one of the 32 slots' static RAM cost by the same amount
+    regardless of whether that slot is ever used for something big
+    [simply growing `FS_DATA_MAX`], or add an entirely separate
+    fixed-size table just for binaries alongside the existing one [a
+    dedicated "binaries region"]), while a file that needs more spans
+    multiple slots via a chain -- more on-disk format complexity (a
+    "next slot" pointer, `tfs2-spec.md` would need updating and its
+    reference Python parser would need to follow chains), but no
+    wasted RAM or disk for the common case of small text files.
+    Besides the format change, (B) also needs: a `fs_read()`-sourced
+    load path (`elf_load()` already accepts a flat blob, so this is
+    mostly wiring, but the blob would need copying out of TFS2's live
+    in-RAM table into a scratch buffer before executing it, rather
+    than executing in place, since that memory isn't stable the way a
+    GRUB module's reserved region is); a `/bin` + `run` convention
+    (the shell's `run <name>` only checks a small in-kernel function
+    table today -- see `apps/apps.c`); and, since there's no in-guest
+    compiler, some way to actually get a built ELF's bytes onto
+    `disk.img` in the first place (most likely a host-side tool built
+    on the same byte-exact TFS2 writer logic `docs/tfs2-spec.md`'s
+    reference reader already demonstrates reading, or an "install from
+    the GRUB module into `/bin` on first boot" bootstrap step).
+
+  Not started -- this entry is the plan, for whenever (A) and then (B)
+  actually get picked up as their own builds.

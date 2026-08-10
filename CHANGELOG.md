@@ -5,6 +5,56 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 491 (fix, +1) -- README: what disk-hosted ELF binaries (starting with lspci) would require
+
+Asked how to support running ELF binaries from a `/bin` directory on
+the persistent filesystem, starting with `lspci`, and whether anything
+needs to happen first -- as a "plan it, don't build it yet" question.
+First cleared up a terminology mix-up (asked "EFI binaries" -- toy-os
+has always used ELF64, not UEFI/PE; the two are unrelated formats and
+boot models, confirmed with the user before researching further).
+
+Researched the codebase: every existing `.elf` (`hello.elf`,
+`file_test.elf`, etc.) is a GRUB Multiboot2 module baked into the ISO
+and found by a hardcoded module index (`multiboot.c`'s
+`multiboot_get_module()`) -- no code path anywhere reads an ELF's
+bytes via `fs_read()` and executes them. `lspci` itself is a plain
+kernel-space shell built-in (`cmd_lspci()`, `apps/shell_sys.c`), not a
+process. Identified this as two separable capabilities worth landing
+as two builds: (A) a real syscall-based ELF program launched the
+existing GRUB-module way -- mechanically easy (`elf_load()`/
+`process_run_ring3()` already don't care where the blob came from),
+but needs new PCI syscalls added to `syscall_abi.h` since a ring-3
+process can only reach the kernel through `int 0x80`, not by calling
+`pci_device_at()` directly; and (B) actually loading from `/bin` on
+disk at runtime, which needs TFS2 to support files bigger than its
+current 2048-byte (`FS_DATA_MAX`) cap (every existing test ELF already
+brushes or exceeds it), a `fs_read()`-sourced load path, a `/bin` +
+`run` convention, and a way to get a built ELF onto `disk.img` at all
+(no in-guest compiler).
+
+Presented two choices: how far to build this session (plan only vs.
+one build vs. two separate builds), and how TFS2 should store files
+bigger than 2048 bytes. Went with: **plan only** (write up the
+research and phased approach, implement in a future session), and
+**multi-slot chaining for large files only** -- an ordinary small file
+keeps today's exact 2048-byte/one-slot cost (both on disk and in the
+static in-RAM `files[FS_MAX_FILES]` table), a file that needs more
+spans multiple slots via a chain, rather than growing `FS_DATA_MAX`
+for all 32 slots regardless of use (would multiply the table's static
+RAM cost by the same factor for every file, not just big ones) or
+adding a wholly separate fixed-size table just for binaries.
+
+- **`README.md`**: new entry in **Ideas for what's next** capturing
+  the (A)/(B) split, the syscall gap, the TFS2 storage decision and
+  why the other two options were passed over, and everything else (B)
+  would still need (a `fs_read()`-sourced load path with a scratch-
+  buffer copy since TFS2's in-RAM pointers aren't as stable as a GRUB
+  module's reserved region, a `/bin` + `run` convention, and a way to
+  install a built ELF onto `disk.img` with no in-guest compiler).
+
+No code changes -- docs only, no build/QEMU verification needed.
+
 ## Build 490 (feature, +10) -- widgets.h: text field + checkbox, wired into Notepad's filename
 
 Asked to add more reusable widgets so GUI apps stop hand-rolling the
