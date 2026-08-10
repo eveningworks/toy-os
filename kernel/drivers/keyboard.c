@@ -49,6 +49,8 @@ static int ring_pop(uint16_t *out) {
 
 #define SC_ARROW_UP   0x48
 #define SC_ARROW_DOWN 0x50
+#define SC_PAGE_UP    0x49
+#define SC_PAGE_DOWN  0x51
 
 // Processes one byte already read from the 8042 by i8042_poll(). This
 // must NOT read port 0x60 itself -- see i8042.h for why.
@@ -64,6 +66,8 @@ void keyboard_feed_byte(uint8_t sc) {
         if (!(sc & 0x80)) { // key press, not release
             if (sc == SC_ARROW_UP) ring_push(KEY_ARROW_UP);
             else if (sc == SC_ARROW_DOWN) ring_push(KEY_ARROW_DOWN);
+            else if (sc == SC_PAGE_UP) ring_push(KEY_PAGE_UP);
+            else if (sc == SC_PAGE_DOWN) ring_push(KEY_PAGE_DOWN);
         }
         return;
     }

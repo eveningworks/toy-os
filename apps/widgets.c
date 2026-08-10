@@ -65,20 +65,13 @@ void widget_scrollback_scroll(struct text_scrollback *tb, int delta_lines) {
     // just temporary.
 }
 
-void widget_scrollback_draw(struct text_scrollback *tb, int cx, int cy, int cw, int ch,
-                             uint32_t bg, int show_cursor) {
-    int char_w = gfx_char_w(), char_h = gfx_char_h();
-    int max_cols = cw / char_w;
-    if (max_cols < 1) max_cols = 1;
-    int visible_rows = ch / char_h;
-    if (visible_rows < 1) visible_rows = 1;
-
-    gfx_fill_rect(cx, cy, cw, ch, bg);
-
-    // Pass 1: walk the whole buffer to find the wrapped line/column the
-    // write cursor ends up on (cur_line/cur_col), which also gives us
-    // the total wrapped line count (cur_line + 1) needed to clamp
-    // scroll_offset and pick where the visible window starts.
+// Shared pass-1 walk: finds the wrapped line/column the write cursor
+// ends up on (which gives the total wrapped line count) for the given
+// column width, and clamps tb->scroll_offset against it. Used by both
+// widget_scrollback_metrics() and widget_scrollback_draw() so the two
+// can never disagree about where the scroll range's boundaries are.
+static void scrollback_measure(struct text_scrollback *tb, int max_cols,
+                                int visible_rows, int *out_cur_line, int *out_cur_col) {
     int cur_line = 0, cur_col = 0;
     for (int i = 0; i < tb->count; i++) {
         char c = cell_at(tb, i).ch;
@@ -98,6 +91,39 @@ void widget_scrollback_draw(struct text_scrollback *tb, int cx, int cy, int cw, 
     int max_scroll = total_lines > visible_rows ? total_lines - visible_rows : 0;
     if (tb->scroll_offset > max_scroll) tb->scroll_offset = max_scroll;
     if (tb->scroll_offset < 0) tb->scroll_offset = 0;
+
+    *out_cur_line = cur_line;
+    *out_cur_col = cur_col;
+}
+
+void widget_scrollback_metrics(struct text_scrollback *tb, int cw, int ch,
+                                int *out_total_lines, int *out_visible_rows) {
+    int char_w = gfx_char_w(), char_h = gfx_char_h();
+    int max_cols = cw / char_w;
+    if (max_cols < 1) max_cols = 1;
+    int visible_rows = ch / char_h;
+    if (visible_rows < 1) visible_rows = 1;
+
+    int cur_line, cur_col;
+    scrollback_measure(tb, max_cols, visible_rows, &cur_line, &cur_col);
+
+    if (out_total_lines) *out_total_lines = cur_line + 1;
+    if (out_visible_rows) *out_visible_rows = visible_rows;
+}
+
+void widget_scrollback_draw(struct text_scrollback *tb, int cx, int cy, int cw, int ch,
+                             uint32_t bg, int show_cursor) {
+    int char_w = gfx_char_w(), char_h = gfx_char_h();
+    int max_cols = cw / char_w;
+    if (max_cols < 1) max_cols = 1;
+    int visible_rows = ch / char_h;
+    if (visible_rows < 1) visible_rows = 1;
+
+    gfx_fill_rect(cx, cy, cw, ch, bg);
+
+    int cur_line, cur_col;
+    scrollback_measure(tb, max_cols, visible_rows, &cur_line, &cur_col);
+    int total_lines = cur_line + 1;
 
     int first_line = total_lines - visible_rows - tb->scroll_offset;
     if (first_line < 0) first_line = 0;

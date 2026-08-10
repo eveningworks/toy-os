@@ -5,6 +5,42 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 263 (feature, +10) -- keyboard Page Up/Page Down scrolling (scrollbar phase 1/4)
+
+First of a four-phase plan (asked for scrollbars in Terminal and
+Notepad, with keyboard, a visual draggable scrollbar, and mouse wheel
+all wanted): the cheapest, most immediately useful piece first.
+
+- `kernel/include/keyboard.h` / `kernel/drivers/keyboard.c`: added
+  `KEY_PAGE_UP`/`KEY_PAGE_DOWN`, decoded from their `0xE0`-prefixed
+  scancodes (0x49/0x51) exactly like the existing arrow keys.
+- `apps/widgets.h` / `apps/widgets.c`: refactored `text_scrollback`'s
+  internal "how many wrapped lines does this content have, given a
+  column width" pass-1 walk out of `widget_scrollback_draw()` into a
+  shared `scrollback_measure()` helper, and exposed it as
+  `widget_scrollback_metrics(tb, cw, ch, &total_lines, &visible_rows)`
+  -- lets a caller find the scroll range (and get `tb->scroll_offset`
+  clamped to it) without rendering anything. Needed now for computing a
+  sensible page-scroll step size in Terminal; will also be what a
+  future visual scrollbar widget (phase 2) sizes its thumb from,
+  without duplicating this walk a third time.
+- `apps/terminal.c`: `on_key` now handles `KEY_PAGE_UP`/`KEY_PAGE_DOWN`
+  by scrolling one screenful (`visible_rows - 1`, so consecutive pages
+  overlap by a line -- an ordinary terminal-scrolling convention) via
+  the existing `widget_scrollback_scroll()`.
+- Notepad not touched yet -- it doesn't use `text_scrollback` at all
+  today (see build 253's terminal.c entry); that conversion is phase 4.
+
+Tested in QEMU through the real GUI: opened Terminal, ran `help` (long
+enough to scroll), pressed Page Up twice and confirmed the view
+scrolled up and clamped correctly at the very top (further Page Up did
+nothing further), then Page Down and confirmed it returned to the
+expected middle position. Screenshots below.
+
+Screenshots: `screenshots/2026-08-10/scrollbar_p1_help_output.png`,
+`screenshots/2026-08-10/scrollbar_p1_pgup_clamped_at_top.png`,
+`screenshots/2026-08-10/scrollbar_p1_pgdn.png`
+
 ## Build 253 (major, +50) -- GUI terminal-emulator app: `apps/terminal.c` (terminal-emulator phase 4/4)
 
 Last of four planned phases (see builds 183, 193, 203) toward "can we

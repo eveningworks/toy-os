@@ -216,6 +216,17 @@ void terminal_key(struct window *win, int key) {
                                            : st->history[st->hist_index];
             term_set_line(st, replacement);
         }
+    } else if (key == KEY_PAGE_UP || key == KEY_PAGE_DOWN) {
+        // Page size is "one screenful minus a line of overlap" -- a
+        // common terminal-scrolling convention, and it also means
+        // paging down repeatedly can't skip past the bottom in one
+        // jump (widget_scrollback_scroll()'s clamp handles the exact
+        // boundary either way, this just picks a sensible step size).
+        int total_lines, visible_rows;
+        widget_scrollback_metrics(&st->tb, window_content_w(win), window_content_h(win),
+                                   &total_lines, &visible_rows);
+        int page = visible_rows > 1 ? visible_rows - 1 : 1;
+        widget_scrollback_scroll(&st->tb, key == KEY_PAGE_UP ? page : -page);
     } else if (key >= 32 && key < 127 && st->line_len < TERM_LINE_MAX - 1) {
         widget_scrollback_set_color(&st->tb, VGA_LIGHT_GREY);
         widget_scrollback_putc(&st->tb, (char)key);

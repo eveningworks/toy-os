@@ -114,6 +114,18 @@ void widget_scrollback_set_color(struct text_scrollback *tb, enum vga_color fg);
 // positive offset un-pins it.
 void widget_scrollback_scroll(struct text_scrollback *tb, int delta_lines);
 
+// Computes the total wrapped-line count and visible-row count for
+// `cw`/`ch` without drawing anything -- the same pass-1 walk
+// widget_scrollback_draw() does internally, exposed separately so a
+// caller that needs to know the scroll range (a visual scrollbar
+// widget, for instance) doesn't also have to render the text just to
+// find it out. Also clamps `tb->scroll_offset` to
+// [0, total_lines - visible_rows], same as draw() does -- so after
+// calling this, `tb->scroll_offset` (a public field) is the third
+// number such a caller needs, already normalized.
+void widget_scrollback_metrics(struct text_scrollback *tb, int cw, int ch,
+                                int *out_total_lines, int *out_visible_rows);
+
 // Fills (cx, cy, cw, ch) with `bg`, then draws whatever's currently in
 // view given `tb->scroll_offset` and the current font size
 // (gfx_char_w()/gfx_char_h()), wrapping at `cw`'s column count. If
