@@ -16,7 +16,7 @@
 #include "timer.h"     // pit_ticks, rtc_read
 #include "tz.h"        // rtc_read_local, timezone selection (see kernel/core/tz.c)
 #include "font_config.h" // font size persistence (see kernel/core/font_config.c)
-#include "fs.h"        // the in-memory filesystem
+#include "fs.h"        // the filesystem (backend-agnostic API -- see fs.h's top comment)
 #include "multiboot.h" // multiboot_print_meminfo
 #include "pmm.h"       // pmm_total_frames/pmm_free_frames -- physical frame allocator stats
 #include "power.h"     // system_reboot

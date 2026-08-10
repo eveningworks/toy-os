@@ -1,6 +1,6 @@
 // A minimal text editor: type, backspace, enter, and a toolbar with
 // Save/Load buttons that persist to the in-memory filesystem (see
-// kernel/drivers/fs.c) under a fixed filename. No cursor movement (arrow
+// kernel/include/fs.h) under a fixed filename. No cursor movement (arrow
 // keys are ignored) and no filename picker yet -- see apps/README.md if
 // you want to extend it. Also doubles as the WM's keyboard-focus test:
 // open it alongside About and confirm keystrokes always land in whichever

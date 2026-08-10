@@ -5,6 +5,76 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 304 (feature, +10) -- VFS layer: filesystem split into a dispatch layer + swappable backend
+
+Requested in advance of actually needing a second filesystem: refactor
+the filesystem so a future one can be added without touching fs.h,
+kapi.h, or any existing caller. Previously kernel/drivers/fs.c *was*
+the filesystem -- one file mixing the public fs_* entry points with
+the on-disk TFS format, the in-memory table, and path handling, all
+directly. There was no seam to plug a second filesystem into short of
+editing fs.c itself.
+
+- `kernel/include/fs_ops.h` (new): defines `struct fs_ops`, a vtable of
+  9 function pointers (`init`/`touch`/`write`/`mkdir`/`del`/`read`/
+  `is_dir`/`exists`/`list`) mirroring fs.h's public API exactly. This
+  is the seam -- a future filesystem implements this struct and is
+  otherwise free to work however it wants internally. Deliberately
+  *not* a mount-point scheme (no routing by path prefix to multiple
+  simultaneously-active backends) -- there's exactly one active
+  backend at a time, chosen once at boot. Nothing needs multiple
+  filesystems mounted at once yet, and mount-point routing is
+  meaningfully more code (cross-mount path resolution, boundary
+  conflicts) for a capability that would sit unused; see the header's
+  top comment for the full reasoning.
+- `kernel/drivers/fs.c` -> `kernel/drivers/tfs.c` (renamed, not
+  rewritten): this is the exact original flat/directory filesystem
+  ("TFS") logic, unchanged in behavior -- disk format, FS_DISK_VERSION,
+  record layout, path normalization rules, the no-recursive-delete
+  limitation, all identical. Only the public entry points changed
+  shape: `fs_touch`/`fs_write`/etc. became `static tfs_touch`/
+  `tfs_write`/etc., `fs_init` became `tfs_init` and now returns
+  `int` (1 = persisted to real disk, 0 = RAM-only) instead of setting
+  a flag a separate accessor read. The file exposes exactly one public
+  symbol: `const struct fs_ops tfs_ops`, its vtable.
+- `kernel/include/tfs.h` (new): declares `extern const struct fs_ops
+  tfs_ops` -- backend-internal, meant to be included only by vfs.c
+  (and any future backend registration code), never by apps/ or
+  anything going through fs.h.
+- `kernel/drivers/vfs.c` (new): implements every fs.h entry point
+  (`fs_init`/`fs_touch`/`fs_write`/`fs_mkdir`/`fs_delete`/`fs_read`/
+  `fs_is_dir`/`fs_exists`/`fs_list`/`fs_is_persistent`) as a one-line
+  forward to whichever `const struct fs_ops *` is active. `fs_init()`
+  is the one place that decides which backend that is -- today always
+  `&tfs_ops`, since there's only one. Adding a second filesystem later
+  means writing its own tfs.c-shaped file with its own `fs_ops`
+  struct, `#include`-ing its header here, and either swapping which
+  one `fs_init()` assigns or picking between them (e.g. probing a
+  magic number on disk) -- no other file in the kernel or apps/ needs
+  to change.
+- `kernel/include/fs.h`: unchanged in API (every existing caller --
+  kernel.c, syscall.c, tz.c, font_config.c, the shell, Notepad, the
+  `about` screens -- needed zero changes), just updated comments that
+  referenced `fs.c` to point at `tfs.c`/`vfs.c` instead, plus a new
+  top-of-file paragraph explaining the split.
+- `kernel/include/kapi.h`: updated the one-line comment on its `fs.h`
+  include to say "backend-agnostic API" instead of "the in-memory
+  filesystem" (already misleading pre-disk-backing, more so now).
+- Verified: `make clean && make all && make iso` clean, no new
+  warnings. Booted headlessly in QEMU (see CLAUDE.md's QMP testing
+  section) with a fresh `disk.img`: boot log shows `fs: formatted a
+  fresh persistent filesystem on disk` (proves `tfs_init()`'s return
+  value reaches `vfs.c` and back out through `fs_is_persistent()`).
+  From the shell, `mkdir docs`, `write docs/notes.txt hello vfs
+  world`, `ls docs`, `cat docs/notes.txt`, and `ls` all round-tripped
+  correctly through the new dispatch layer, and `about` reported
+  "Storage: disk-backed (files persist across reboots)". Killed QEMU,
+  relaunched against the same `disk.img` (a real reboot, not just a
+  shell restart): boot log now shows `fs: loaded persistent filesystem
+  from disk`, and `cat docs/notes.txt` still returned "hello vfs
+  world" -- the write-through path works unchanged end to end.
+  Screenshots in `screenshots/2026-08-10/`.
+
 ## Build 294 (fix, +1) -- Documented the device-bridge git index.lock quirk
 
 While starting a fresh session in this repo, found that `git` commands

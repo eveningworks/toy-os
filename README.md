@@ -28,8 +28,10 @@ built, in what order, and the bugs found (and fixed) along the way.
   other's input.
 - PIT timer (100 Hz tick count) and CMOS RTC (for `time` and the GUI clock)
 - A persistent filesystem: a legacy PIO ATA/IDE driver (`kernel/drivers/ata.c`,
-  primary bus, polling, no PCI/AHCI needed) backing `fs.c`'s existing
-  16-file table with a real on-disk layout, so files written with
+  primary bus, polling, no PCI/AHCI needed) backing `tfs.c`'s file
+  table with a real on-disk layout (`tfs.c` sits behind a small VFS
+  dispatch layer, `vfs.c`/`fs_ops.h`, so a future filesystem can be
+  added as a second backend -- see CHANGELOG.md), so files written with
   `write`/`touch`/`append` (or through `SYS_OPEN`/`SYS_WRITE`) survive a
   full power-off, not just the in-VM `reboot` command -- see `about` for
   whether the filesystem currently on disk or RAM-only (no disk found).

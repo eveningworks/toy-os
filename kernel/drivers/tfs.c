@@ -1,26 +1,37 @@
-// The in-memory file table this always was, now optionally backed by a
-// real disk via ata.c so files survive a reboot, and now with directory
-// support: every entry (file or directory) is identified by a full
-// normalized absolute path ("/docs/notes.txt") rather than a bare flat
-// name. `files[]` below is still the full, fast, in-memory picture
-// every existing caller (fs_read/fs_list, and everything built on them
-// -- Notepad, the shell's ls/cat/write/mkdir/cd, the SYS_OPEN/READ/
-// WRITE/CLOSE syscalls) reads from directly. Disk I/O only happens at
-// fs_init() (load the whole table once) and at the end of each
-// *mutating* call -- fs_touch/fs_write/fs_mkdir/fs_delete -- which
+// The original flat/directory filesystem this OS has always used --
+// "TFS" (toy filesystem). This used to be fs.c itself, back when it was
+// the only filesystem toy-os could have; it's now just one backend
+// behind the VFS dispatch layer (vfs.c), reachable only through the
+// `tfs_ops` vtable at the bottom of this file (see fs_ops.h for what
+// that interface is and why it exists, and kernel/include/tfs.h for
+// this file's own public surface). Nothing outside vfs.c should
+// #include tfs.h or call anything in this file directly -- go through
+// fs.h's fs_* API instead, same as before this split.
+//
+// In-memory file table, now optionally backed by a real disk via ata.c
+// so files survive a reboot, with directory support: every entry (file
+// or directory) is identified by a full normalized absolute path
+// ("/docs/notes.txt") rather than a bare flat name. `files[]` below is
+// still the full, fast, in-memory picture every existing caller
+// (fs_read/fs_list, and everything built on them -- Notepad, the
+// shell's ls/cat/write/mkdir/cd, the SYS_OPEN/READ/WRITE/CLOSE
+// syscalls) reads from directly, via vfs.c. Disk I/O only happens at
+// tfs_init() (load the whole table once) and at the end of each
+// *mutating* call -- tfs_touch/tfs_write/tfs_mkdir/tfs_delete -- which
 // write straight through to disk immediately after updating `files[]`.
 //
 // Directories are deliberately just another entry with no data, not a
 // separate on-disk structure: an entry's parent/children relationship
 // is entirely derived from its path string at lookup time (see
-// path_parent()/fs_list()), the same "no separate index to keep in
+// path_parent()/tfs_list()), the same "no separate index to keep in
 // sync" reasoning the original flat design already used for files. The
 // implicit root "/" has no entry of its own -- it always exists without
 // needing one, so an empty disk still has a (empty) root directory.
 //
-// On-disk layout (only meaningful if fs_is_persistent() -- see below):
+// On-disk layout (only meaningful if this backend reports persistent --
+// see tfs_init() below):
 //   LBA 0:            a one-sector superblock: magic "TFS1" + a version
-//                      byte. fs_init() only loads a disk whose version
+//                      byte. tfs_init() only loads a disk whose version
 //                      byte matches FS_DISK_VERSION *exactly* -- a disk
 //                      written by the pre-directories kernel (version 1,
 //                      32-byte flat names, no type byte) would otherwise
@@ -43,22 +54,23 @@
 //                      left over even after doubling FS_MAX_FILES.
 //
 // Honest limitations, not solved here:
-//   - Write-through, no journaling: fs_touch()/fs_write()/fs_mkdir()/
-//     fs_delete() write their one record to disk immediately, so a
+//   - Write-through, no journaling: tfs_touch()/tfs_write()/tfs_mkdir()/
+//     tfs_delete() write their one record to disk immediately, so a
 //     clean reboot or `reboot` mid-idle never loses anything already
 //     returned from a call. A crash/power-loss landing exactly between
 //     two of those sector writes could still leave that one record
 //     inconsistent -- a real filesystem would solve this with
 //     journaling or copy-on-write; this one just accepts the (small,
 //     single-record) window.
-//   - No recursive delete: fs_delete() on a non-empty directory fails
+//   - No recursive delete: tfs_delete() on a non-empty directory fails
 //     outright rather than deleting its contents. Deliberate -- see
 //     fs.h.
-//   - fs.c only validates that a path is already *normalized*
+//   - This file only validates that a path is already *normalized*
 //     (path_is_normalized()) -- it doesn't resolve ".."/"." or a
 //     cwd-relative path itself. That's the caller's job (see the
 //     shell's `cd`/`pwd` and its resolve_path() in shell.c).
 #include "fs.h"
+#include "tfs.h"
 #include "string.h"
 #include "ata.h"
 #include "serial.h"
@@ -139,14 +151,16 @@ static int write_superblock(void) {
     return ata_write_sector(FS_SUPERBLOCK_LBA, buf);
 }
 
-void fs_init(void) {
+// Backs tfs_ops.init -- see fs_ops.h for the contract (return 1 if
+// persisted to real storage, 0 if RAM-only).
+static int tfs_init(void) {
     k_memset(files, 0, sizeof(files));
     g_disk_backed = 0;
 
     ata_init();
     if (!ata_present()) {
         serial_write("fs: no disk found -- files are RAM-only, won't survive reboot\n");
-        return;
+        return 0;
     }
 
     uint8_t sb[ATA_SECTOR_SIZE];
@@ -178,15 +192,12 @@ void fs_init(void) {
         for (int i = 0; i < FS_MAX_FILES; i++) persist_record(i);
         serial_write("fs: formatted a fresh persistent filesystem on disk\n");
     }
-}
-
-int fs_is_persistent(void) {
     return g_disk_backed;
 }
 
 // ---- path helpers ----
 //
-// Every fs_* entry point below normalizes its path argument with
+// Every entry point below normalizes its path argument with
 // normalize() before doing anything else, then works only with that
 // normalized form. See fs.h's top comment for exactly what
 // "normalized" means (absolute, no trailing slash except root itself,
@@ -272,9 +283,10 @@ static int parent_is_dir(const char *norm_path) {
     return f && f->type == FS_TYPE_DIR;
 }
 
-// ---- public API ----
+// ---- backend implementation (see fs_ops.h for the interface these
+// satisfy, and tfs_ops at the bottom of this file for the wiring) ----
 
-int fs_is_dir(const char *path) {
+static int tfs_is_dir(const char *path) {
     char norm[FS_PATH_MAX];
     if (!normalize(path, norm)) return 0;
     if (k_strcmp(norm, "/") == 0) return 1;
@@ -282,14 +294,14 @@ int fs_is_dir(const char *path) {
     return f != 0 && f->type == FS_TYPE_DIR;
 }
 
-int fs_exists(const char *path) {
+static int tfs_exists(const char *path) {
     char norm[FS_PATH_MAX];
     if (!normalize(path, norm)) return 0;
     if (k_strcmp(norm, "/") == 0) return 1;
     return find(norm) != 0;
 }
 
-int fs_touch(const char *path) {
+static int tfs_touch(const char *path) {
     char norm[FS_PATH_MAX];
     if (!normalize(path, norm)) return 0;
     if (k_strcmp(norm, "/") == 0) return 0; // can't touch root
@@ -311,7 +323,7 @@ int fs_touch(const char *path) {
     return 1;
 }
 
-int fs_mkdir(const char *path) {
+static int tfs_mkdir(const char *path) {
     char norm[FS_PATH_MAX];
     if (!normalize(path, norm)) return 0;
     if (k_strcmp(norm, "/") == 0) return 0; // root always exists
@@ -331,14 +343,14 @@ int fs_mkdir(const char *path) {
     return 1;
 }
 
-int fs_write(const char *path, const char *data, int append) {
+static int tfs_write(const char *path, const char *data, int append) {
     char norm[FS_PATH_MAX];
     if (!normalize(path, norm)) return 0;
 
     struct file *f = find(norm);
     if (f && f->type == FS_TYPE_DIR) return 0; // can't write to a directory
     if (!f) {
-        if (!fs_touch(norm)) return 0;
+        if (!tfs_touch(norm)) return 0;
         f = find(norm);
     }
 
@@ -356,7 +368,7 @@ int fs_write(const char *path, const char *data, int append) {
     return 1;
 }
 
-int fs_delete(const char *path) {
+static int tfs_delete(const char *path) {
     char norm[FS_PATH_MAX];
     if (!normalize(path, norm)) return 0;
     if (k_strcmp(norm, "/") == 0) return 0; // can't delete root
@@ -382,7 +394,7 @@ int fs_delete(const char *path) {
     return 1;
 }
 
-const char *fs_read(const char *path, uint32_t *out_size) {
+static const char *tfs_read(const char *path, uint32_t *out_size) {
     char norm[FS_PATH_MAX];
     if (!normalize(path, norm)) return 0;
     struct file *f = find(norm);
@@ -391,10 +403,10 @@ const char *fs_read(const char *path, uint32_t *out_size) {
     return f->data;
 }
 
-void fs_list(const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir)) {
+static void tfs_list(const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir)) {
     char norm[FS_PATH_MAX];
     if (!normalize(dir_path, norm)) return;
-    if (!fs_is_dir(dir_path)) return;
+    if (!tfs_is_dir(dir_path)) return;
 
     int root = (norm[0] == '/' && norm[1] == '\0');
     size_t plen = k_strlen(norm);
@@ -420,3 +432,17 @@ void fs_list(const char *dir_path, void (*cb)(const char *name, uint32_t size, i
         cb(rest, files[i].size, files[i].type == FS_TYPE_DIR);
     }
 }
+
+// The vtable vfs.c dispatches through -- see fs_ops.h and tfs.h.
+const struct fs_ops tfs_ops = {
+    .name = "tfs",
+    .init = tfs_init,
+    .touch = tfs_touch,
+    .write = tfs_write,
+    .mkdir = tfs_mkdir,
+    .del = tfs_delete,
+    .read = tfs_read,
+    .is_dir = tfs_is_dir,
+    .exists = tfs_exists,
+    .list = tfs_list,
+};
