@@ -99,6 +99,23 @@ own raw `iretq` instead of `process_run_ring3()`, so there's nowhere
 for the kernel to recover them *to*. See `process.h` and README's
 "Ideas for what's next".
 
+## `/etc` is one shared `toyos.conf` by default, not a file per setting
+
+`kernel/core/etc_config.c`'s `etc_config_get()`/`etc_config_set()` is a
+generic name=value(+`#`comments) reader/writer that takes a `path` on
+every call -- it doesn't hardcode one file. `tz.c` and `font_config.c`
+both default to `/etc/toyos.conf` (see **Build 357**) rather than each
+keeping its own dedicated file (`/etc/timezone`, `/etc/fontsize`,
+which is what they used to be, migrated forward automatically the
+first time either loads). One shared file was the explicit choice for
+today's small, general settings; a setting with enough keys of its own
+to be unwieldy sharing it (a GUI app with a dozen preferences) should
+pass its own `/etc/<name>.conf` path instead -- nothing in
+`etc_config.c` favors one file over many, that choice belongs to each
+caller. See `kernel/core/etc_config.c`'s top comment for the file
+format itself and CHANGELOG.md's **Build 357** for the full writeup
+including the migration logic.
+
 ## Build-number scheme: fix/feature/major tiers, not dates or semver
 
 Replaced an earlier date-plus-same-day-counter scheme

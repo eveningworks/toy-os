@@ -1,19 +1,15 @@
 // Timezone selection and application, on top of the raw UTC time
 // rtc_read() (timer.c) returns from the CMOS/RTC hardware clock.
 //
-// This is toy-os's first config file: the selected city is persisted as
-// plain text in /etc/timezone via the ordinary persistent filesystem
-// (fs.h) -- no new storage mechanism, just fs_write()/fs_read() on a
-// path like any other file `ls`/`cat` can see. /etc is the general
-// config-file convention now (kernel.c's kernel_main() creates it right
-// after fs_init(), before tz_init() runs) -- any future config file
-// should live there too, not invent its own location.
-//
-// tz_init() also migrates a config file from before /etc existed (a
-// bare "timezone" at the filesystem root, from when this was the only
-// config file and directories didn't exist yet) -- see LEGACY_TZ_FILE
-// below -- so an already-chosen city isn't silently lost across the
-// upgrade.
+// This was toy-os's first config file, and its history is a small
+// tour of how /etc has evolved: originally a bare "timezone" at the
+// filesystem root (before /etc existed at all), then its own
+// "/etc/timezone" file holding just the city name as plain text, and
+// now (see CHANGELOG for the build that did this) a "timezone=<city>"
+// key inside the shared /etc/toyos.conf every setting lives in by
+// default -- see etc_config.h for that shared reader/writer. tz_init()
+// migrates forward from EITHER older location if found, so an
+// already-chosen city is never silently lost across an upgrade.
 //
 // DST is real added complexity for what's otherwise a one-line offset
 // add, but was asked for specifically (Finland is UTC+2 in winter, +3
@@ -31,6 +27,7 @@
 #include "tz.h"
 #include "fs.h"
 #include "string.h"
+#include "etc_config.h"
 
 enum dst_rule { TZ_DST_NONE, TZ_DST_EU, TZ_DST_US };
 
@@ -51,8 +48,10 @@ static const struct tz_city TZ_CITIES[] = {
 };
 #define TZ_CITY_COUNT_INTERNAL ((int)(sizeof(TZ_CITIES) / sizeof(TZ_CITIES[0])))
 
-#define TZ_CONFIG_FILE "/etc/timezone"
-#define LEGACY_TZ_FILE "/timezone" // pre-/etc location -- see tz_init()
+#define TZ_CONFIG_FILE "/etc/toyos.conf"
+#define TZ_CONFIG_KEY "timezone"
+#define LEGACY_TZ_ETC_FILE "/etc/timezone" // pre-toyos.conf /etc location (bare city name)
+#define LEGACY_TZ_FILE "/timezone"         // pre-/etc location at all (also bare city name)
 
 static int current_index = 0; // UTC until tz_init() loads/sets otherwise
 
@@ -136,29 +135,36 @@ static void rtc_add_minutes(struct rtc_time *t, int delta_minutes) {
 
 void tz_init(void) {
     current_index = 0; // default: UTC
-    uint32_t size = 0;
-    // fs_write() always NUL-terminates at data[size] (see fs.c), so
-    // `data` below is safe to treat as a plain C string in both branches.
-    const char *data = fs_read(TZ_CONFIG_FILE, &size);
 
-    if (!data || size == 0) {
-        // No /etc/timezone yet -- check for a pre-/etc config file
-        // (see this file's top comment) and migrate it rather than
-        // silently falling back to UTC if the user had already chosen
-        // something.
-        data = fs_read(LEGACY_TZ_FILE, &size);
-        if (!data || size == 0) return;
-
-        int idx = tz_find_by_name(data);
-        if (idx < 0) return;
-        current_index = idx;
-        fs_write(TZ_CONFIG_FILE, TZ_CITIES[idx].name, 0);
-        fs_delete(LEGACY_TZ_FILE);
+    char value[32]; // longest city name today is "losangeles" (10 chars)
+    if (etc_config_get(TZ_CONFIG_FILE, TZ_CONFIG_KEY, value, sizeof(value))) {
+        int idx = tz_find_by_name(value);
+        if (idx >= 0) current_index = idx;
         return;
     }
 
+    // Not in /etc/toyos.conf yet -- check the two older, bare-text
+    // locations in turn (see this file's top comment) and migrate
+    // whichever is found, rather than silently falling back to UTC if
+    // the user had already chosen something. Both are read directly
+    // (not through etc_config_get()) since neither is "key=value" --
+    // they're the pre-toyos.conf/pre-/etc formats, just the city name.
+    uint32_t size = 0;
+    // fs_write() always NUL-terminates at data[size] (see fs.c), so
+    // `data` below is safe to treat as a plain C string.
+    const char *data = fs_read(LEGACY_TZ_ETC_FILE, &size);
+    const char *legacy_path = LEGACY_TZ_ETC_FILE;
+    if (!data || size == 0) {
+        data = fs_read(LEGACY_TZ_FILE, &size);
+        legacy_path = LEGACY_TZ_FILE;
+    }
+    if (!data || size == 0) return;
+
     int idx = tz_find_by_name(data);
-    if (idx >= 0) current_index = idx;
+    if (idx < 0) return;
+    current_index = idx;
+    etc_config_set(TZ_CONFIG_FILE, TZ_CONFIG_KEY, TZ_CITIES[idx].name);
+    fs_delete(legacy_path);
 }
 
 int tz_city_count(void) {
@@ -177,7 +183,7 @@ int tz_current_index(void) {
 int tz_set_index(int index) {
     if (index < 0 || index >= TZ_CITY_COUNT_INTERNAL) return 0;
     current_index = index;
-    fs_write(TZ_CONFIG_FILE, TZ_CITIES[index].name, 0);
+    etc_config_set(TZ_CONFIG_FILE, TZ_CONFIG_KEY, TZ_CITIES[index].name);
     return 1;
 }
 

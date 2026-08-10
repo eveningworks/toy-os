@@ -3,29 +3,31 @@
 // once at boot (see kernel.c's kernel_main(): fs_mkdir("/etc") runs
 // before either tz_init() or font_config_init()).
 //
-// Unlike /etc/timezone (bare text, just the city name), /etc/fontsize
-// is "font_size=<n>" -- the user asked for a config file that reads
-// like one (`cat /etc/fontsize` showing `font_size=12` rather than
-// just `12`), anticipating more settings living under /etc someday.
+// As of the build that added etc_config.h (see CHANGELOG), this reads
+// and writes a "font_size=<n>" key inside the shared /etc/toyos.conf
+// every setting lives in by default, through the shared reader/writer
+// in kernel/core/etc_config.c -- not its own hand-rolled parser
+// against its own dedicated file anymore (that was /etc/fontsize,
+// "font_size=<n>" with the same shape it still has, just its own
+// file). This file used to note that a second setting wanting the
+// same key=value treatment would be the point to factor out a shared
+// parser (tz.c's /etc/timezone was bare text, not key=value, so it
+// didn't count as that second caller by itself) -- that's exactly
+// what happened once tz.c *also* wanted key=value framing to move into
+// the same shared file, so `name_to_size()` is now the only bit of
+// logic left here that isn't generic /etc plumbing.
+//
 // `<n>` is a point size (8/10/12/14/16/18/20/24, see font_ttf.h) as of
-// build 347 -- it used to be a name (tiny/small/medium/large); the file
-// format and this parser didn't need to change for that, only the set
-// of values gfx_font_size_name() can return did (see name_to_size()).
-// This is deliberately still a single-purpose parser, not a shared
-// key=value config format every setting reads/writes through: the
-// smallest change that gets the requested format for this one setting.
-// If a second setting wants the same treatment, that's the point to
-// factor out a real line-based key=value reader shared across files --
-// not before, per this codebase's usual "wait for a second real caller"
-// rule (see apps/widgets.h's/apps/theme.h's top comments for the same
-// reasoning applied elsewhere).
+// build 347 -- it used to be a name (tiny/small/medium/large).
 #include "font_config.h"
 #include "gfx.h"
 #include "fs.h"
 #include "string.h"
+#include "etc_config.h"
 
-#define FONT_CONFIG_FILE "/etc/fontsize"
+#define FONT_CONFIG_FILE "/etc/toyos.conf"
 #define FONT_CONFIG_KEY "font_size"
+#define LEGACY_FONT_CONFIG_FILE "/etc/fontsize" // pre-toyos.conf location -- see font_config_init()
 
 // Matches against gfx_font_size_name() for every baked size rather than
 // a hand-maintained list of names -- since build 347 those names are
@@ -40,40 +42,28 @@ static enum font_size name_to_size(const char *name) {
 }
 
 void font_config_init(void) {
-    uint32_t size = 0;
-    // fs_write() always NUL-terminates at data[size] (see fs.c), so
-    // `data` is safe to scan as a plain C string here, same as tz.c
-    // does with /etc/timezone.
-    const char *data = fs_read(FONT_CONFIG_FILE, &size);
-    if (!data || size == 0) return; // no config yet -- keep the compiled-in default
-
-    const char *eq = 0;
-    for (const char *p = data; *p; p++) {
-        if (*p == '=') { eq = p; break; }
-    }
-    if (!eq) return; // malformed -- ignore rather than guess
-
     char value[16];
-    unsigned i = 0;
-    for (const char *p = eq + 1; *p && *p != '\n' && *p != '\r' && i < sizeof(value) - 1; p++, i++) {
-        value[i] = *p;
+    if (etc_config_get(FONT_CONFIG_FILE, FONT_CONFIG_KEY, value, sizeof(value))) {
+        enum font_size want = name_to_size(value);
+        if (want != FONT_SIZE_COUNT) gfx_set_font_size(want);
+        return;
     }
-    value[i] = '\0';
+
+    // Not in /etc/toyos.conf yet -- the old dedicated /etc/fontsize
+    // file was already "font_size=<n>", the same shape, just its own
+    // file -- so it can be read through the same etc_config_get()
+    // rather than a separate bare-text path like tz.c's legacy
+    // migration needs. Migrate it if present rather than silently
+    // falling back to the compiled-in default.
+    if (!etc_config_get(LEGACY_FONT_CONFIG_FILE, FONT_CONFIG_KEY, value, sizeof(value))) return;
 
     enum font_size want = name_to_size(value);
-    if (want != FONT_SIZE_COUNT) gfx_set_font_size(want);
+    if (want == FONT_SIZE_COUNT) return;
+    gfx_set_font_size(want);
+    etc_config_set(FONT_CONFIG_FILE, FONT_CONFIG_KEY, value);
+    fs_delete(LEGACY_FONT_CONFIG_FILE);
 }
 
 void font_config_save(enum font_size size) {
-    const char *name = gfx_font_size_name(size);
-
-    char buf[32];
-    k_strcpy(buf, FONT_CONFIG_KEY "=");
-    unsigned klen = (unsigned)k_strlen(buf);
-    unsigned i = 0;
-    for (; name[i] && klen + i < sizeof(buf) - 2; i++) buf[klen + i] = name[i];
-    buf[klen + i] = '\n';
-    buf[klen + i + 1] = '\0';
-
-    fs_write(FONT_CONFIG_FILE, buf, 0);
+    etc_config_set(FONT_CONFIG_FILE, FONT_CONFIG_KEY, gfx_font_size_name(size));
 }

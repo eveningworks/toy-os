@@ -69,9 +69,20 @@ work.
   are found by grep, not by reading start to finish.
 - **`/etc` on the persistent filesystem is the config-file convention**
   (`kernel_main()` creates it right after `fs_init()`, before anything
-  that might read a config file runs) -- see `kernel/core/tz.c` for the
-  first example (`/etc/timezone`). Put any future config file there
-  too, not at the filesystem root or somewhere app-specific.
+  that might read a config file runs). Don't hand-roll a parser for a
+  new setting -- read/write it through `kernel/include/etc_config.h`'s
+  `etc_config_get()`/`etc_config_set()` (name=value lines, `#` comments,
+  see `kernel/core/etc_config.c`'s top comment for the exact format).
+  By default, put a new setting's key in the shared `/etc/toyos.conf`
+  every setting lives in today (`timezone`, `font_size` -- see
+  `kernel/core/tz.c`/`font_config.c` for the pattern: a small
+  `*_init()` called from `kernel_main()` that loads via
+  `etc_config_get()`, and a `*_save()`/`*_set_*()` that writes via
+  `etc_config_set()`). `etc_config_*()` takes a `path` on every call,
+  though -- nothing forces one shared file. A setting with enough of
+  its own keys to be unwieldy sharing `toyos.conf` (a GUI app with a
+  dozen preferences, say) should get its own `/etc/<name>.conf` instead
+  of cramming into the shared one just to match convention.
 - Every non-trivial change so far has gotten a `CHANGELOG.md` entry in
   the same style: what changed, why, and what was verified. Keep doing
   that -- it's the project's record of *why* things are the way they

@@ -5,6 +5,67 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 357 (feature, +10) -- shared /etc config engine, consolidated into toyos.conf
+
+Asked for a centrally managed config-file structure: a shared tool any
+setting reads/writes through instead of each hand-rolling its own
+parser, using name=value with `#` comments. Presented choices for file
+layout, API shape, and migration scope up front. Went with: everything
+defaults into one shared `/etc/toyos.conf` today, but the engine takes
+a `path` on every call so a future setting with enough keys of its own
+can still get a dedicated file; stateless get/set calls (no open/close
+handle); and migrated both existing settings (`timezone`, `font_size`)
+onto it right away rather than leaving them on their old parsers next
+to the new shared one.
+
+- **`kernel/include/etc_config.h` / `kernel/core/etc_config.c`** (new):
+  `etc_config_get(path, key, out, out_size)` /
+  `etc_config_set(path, key, value)`. File format: `key=value` per
+  line, `#` starts a comment to end of line (whole-line or trailing),
+  blank lines ignored, whitespace trimmed around key and value. Every
+  call re-reads and re-parses the whole file -- no in-memory handle to
+  manage, which matters given there's no heap allocator to lean on for
+  one. `etc_config_set()` does a read-modify-write into a 512-byte
+  stack buffer (`ETC_CONFIG_MAX`, comfortably under `fs.h`'s 2048-byte
+  `FS_DATA_MAX` per-file ceiling): if the key already exists its line
+  is replaced in place (every other line, including comments, keeps
+  its exact position); otherwise a new line is appended. Replacing a
+  key's own line drops any comment that line itself had -- every other
+  line's comment is untouched since it's copied through verbatim.
+- **`kernel/core/tz.c`**: `/etc/timezone` (bare city-name text) ->
+  `/etc/toyos.conf`'s `timezone=<city>` key. `tz_init()` now checks the
+  new file first via `etc_config_get()`; if not found, it checks BOTH
+  older bare-text locations in turn (`/etc/timezone`, then the
+  pre-`/etc` `/timezone` from before directories existed at all --
+  read directly via `fs_read()`, not `etc_config_get()`, since neither
+  legacy file is actually `key=value`) and migrates whichever is found
+  into the new file via `etc_config_set()`, deleting the old one.
+  `tz_set_index()` now calls `etc_config_set()` instead of writing the
+  bare city name directly.
+- **`kernel/core/font_config.c`**: `/etc/fontsize`'s `font_size=<n>` ->
+  the same key inside `/etc/toyos.conf`. Since the OLD file was already
+  `key=value` (unlike `tz.c`'s bare text), its migration path reuses
+  `etc_config_get()` directly against the old path instead of a
+  separate bare-text read -- one fewer thing to hand-roll. This file's
+  own hand-rolled parser (the one that motivated waiting for "a second
+  real caller" before generalizing, per its old top comment) is gone;
+  `name_to_size()`'s generic loop over `gfx_font_size_name()` (added in
+  **Build 347**) is the only bit of size-specific logic left here.
+- **Verified in headless QEMU**: `fontsize 14` + `timezone helsinki`
+  both land as separate lines in one `cat /etc/toyos.conf`
+  (`font_size=14` / `timezone=helsinki`); hand-writing a non-`key=value`
+  line into the file (`write /etc/toyos.conf`) and then changing
+  `fontsize` confirmed that line is preserved byte-for-byte across the
+  read-modify-write rather than dropped; simulating a pre-upgrade
+  `/etc/timezone` (bare `berlin`) + a deliberately-mismatched legacy
+  `/etc/fontsize` and rebooting confirmed the timezone migrated into
+  `/etc/toyos.conf` (`timezone=berlin`, old file deleted, `timezone`
+  shows `berlin` as the active `*` selection) while the mismatched
+  fontsize file was correctly left untouched rather than silently
+  dropped (no recognized key = ignore, not guess). Also reconfirmed
+  with a full `make clean && make all` and `tools/boot_smoke_test.py`.
+  Screenshots in `screenshots/2026-08-10/etcconfig_*.png`.
+
 ## Build 347 (feature, +10) -- numeric `fontsize`, eight point sizes
 
 Two requests: make `fontsize` take numbers "like they usually work"
