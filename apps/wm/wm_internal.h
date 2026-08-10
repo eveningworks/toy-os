@@ -104,7 +104,11 @@ int wm_find_resize_zone(int mx, int my, int *out_right, int *out_bottom);
 void wm_handle_left_click(int mx, int my);
 void wm_update_drag_resize(int mx, int my, uint8_t buttons);
 
-// wm_render.c's entry point, called from wm.c's wm_run() loop.
+// wm_render.c's entry points, called from wm.c's wm_run() loop: a full
+// scene repaint, and a cheap cursor-only-moved repaint (see
+// wm_render_cursor_move()'s own comment in wm_render.c for why that split
+// exists).
 void wm_render_frame(int mx, int my);
+void wm_render_cursor_move(int mx, int my);
 
 #endif

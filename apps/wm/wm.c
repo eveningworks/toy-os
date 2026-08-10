@@ -12,12 +12,17 @@
 // split changes behavior, it's the same single-threaded event loop as
 // before, just organized into files by concern.
 //
-// Rendering is whole-screen every time (see wm_render.c) rather than
-// tracking dirty rectangles -- much simpler to get right with overlapping
-// movable windows, at the cost of being slower than a "real" compositor.
-// It draws into an off-screen buffer and flips the finished frame in one
-// pass (gfx_set_double_buffered / gfx_present), so the repaint isn't
-// visible as flicker.
+// Rendering draws the whole scene every time a window/taskbar/menu
+// actually changes (see wm_render.c) rather than tracking per-window
+// dirty rectangles -- much simpler to get right with overlapping movable
+// windows, at the cost of being slower than a "real" compositor. It draws
+// into an off-screen buffer and flips the finished frame in one pass
+// (gfx_set_double_buffered / gfx_present), so the repaint isn't visible
+// as flicker. gfx_present() itself only blits the sub-rectangle that
+// actually changed (see its own comment in gfx.c) rather than the whole
+// screen, which is what makes the other common case -- the mouse moving
+// with nothing else changing -- cheap without needing real dirty-rect
+// tracking of the scene: see wm_render_cursor_move() in wm_render.c.
 #include "wm_internal.h"
 #include "kapi.h"
 
@@ -148,13 +153,12 @@ void wm_run(void) {
         __asm__ volatile ("hlt");
 
         mouse_get_state(&mx, &my, &buttons);
+        int mouse_moved = (mx != prev_mx || my != prev_my);
 
         int left_edge_down = (buttons & 0x1) && !(prev_buttons & 0x1);
         if (left_edge_down) wm_handle_left_click(mx, my);
 
         wm_update_drag_resize(mx, my, buttons);
-
-        if (mx != prev_mx || my != prev_my) redraw_pending = 1;
 
         static uint64_t last_second = (uint64_t)-1;
         uint64_t ticks = pit_ticks();
@@ -190,8 +194,21 @@ void wm_run(void) {
 
         // With double buffering there's no flicker to hide, so redraw as
         // soon as anything changes -- throttling here only added cursor lag.
-        if (!redraw_pending) continue;
-        redraw_pending = 0;
-        wm_render_frame(mx, my);
+        //
+        // Two tiers: anything that actually changed the scene (a click,
+        // a drag/resize in progress, a window opening/closing, a key or
+        // wheel event delivered to an app, the once-a-second clock tick)
+        // sets redraw_pending and gets a full repaint. Mouse movement
+        // alone -- by far the most common event this loop sees -- takes
+        // wm_render_cursor_move()'s cheap path instead: it doesn't touch
+        // redraw_pending at all, so a plain full redraw still happens
+        // exactly when it used to. See wm_render.c's dirty-rectangle
+        // comments for why this split is worth having.
+        if (redraw_pending) {
+            redraw_pending = 0;
+            wm_render_frame(mx, my);
+        } else if (mouse_moved) {
+            wm_render_cursor_move(mx, my);
+        }
     }
 }

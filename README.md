@@ -556,10 +556,19 @@ untouched.
 - Reusable UI widgets -- buttons, text fields, scrollbars -- so GUI apps
   don't each hand-roll their own drawing and hit-testing (Notepad's
   Save/Load buttons and its toolbar are hand-rolled right now)
-- Dirty-rectangle rendering instead of the current full-screen repaint.
-  Double buffering removed the flicker, but each frame still redraws
-  everything and blits the whole screen, which is a lot of wasted work
-  when only the cursor moved.
+- ~~Dirty-rectangle rendering instead of the current full-screen repaint.
+  Double buffering removed the flicker, but each frame still redrew
+  everything and blit the whole screen, which was a lot of wasted work
+  when only the cursor moved.~~ -- partially done (see CHANGELOG.md's
+  build 337 entry): `gfx_present()` now blits only the bounding box of
+  what actually changed instead of the whole screen, and mouse-only
+  movement (by far the most common case) takes a cheap cursor-sprite
+  save/restore path that skips the full window/taskbar/menu redraw
+  entirely. Scene redraws (a click, a drag, a resize, a window opening)
+  still repaint the whole back buffer, same as before -- true per-widget
+  dirty tracking of the *scene itself*, not just the blit, is still the
+  "Full dirty-rect compositor" option that was deliberately not taken
+  here (see that build's own reasoning).
 - Notepad's filename is currently fixed (`notepad.txt`) -- a simple text
   input widget would let you save/load under different names
 - The persistent filesystem's on-disk layout (see CHANGELOG.md) is a

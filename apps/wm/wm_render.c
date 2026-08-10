@@ -127,6 +127,79 @@ static void draw_cursor(int x, int y, enum wm_cursor_kind kind) {
     }
 }
 
+// Which cursor shape to show at (mx, my) right now -- shared by the full
+// frame path and the cursor-only-moved path below, so hovering a resize
+// edge shows the right cursor either way. While actively dragging a
+// resize, keep showing the cursor for whichever edge(s) that drag started
+// on (don't re-query by position -- the mouse may have moved past the
+// window's edge mid-drag); otherwise ask the same hit-test the click
+// handler uses (wm_find_resize_zone(), wm_input.c) so hovering shows the
+// cursor before you click, not just while dragging.
+static enum wm_cursor_kind resolve_cursor_kind(int mx, int my) {
+    int cur_right = 0, cur_bottom = 0;
+    if (resizing >= 0) {
+        cur_right = resize_right;
+        cur_bottom = resize_bottom;
+    } else if (wm_find_resize_zone(mx, my, &cur_right, &cur_bottom) < 0) {
+        cur_right = cur_bottom = 0;
+    }
+    if (cur_right && cur_bottom) return WM_CURSOR_DIAG;
+    if (cur_right) return WM_CURSOR_H;
+    if (cur_bottom) return WM_CURSOR_V;
+    return WM_CURSOR_NORMAL;
+}
+
+// ---- cursor sprite save/restore ----
+//
+// Used only by wm_render_cursor_move() (the cheap "mouse moved, nothing
+// else changed" path) to avoid a full-scene redraw for the single most
+// common event this loop sees. Classic sprite trick: before drawing the
+// cursor somewhere, save the back-buffer pixels it's about to overwrite;
+// next time the cursor moves, restore exactly those pixels (undrawing the
+// cursor) before drawing it at the new spot. wm_render_frame() (the full
+// path) also goes through draw_cursor_at() so this stays correct across
+// both paths -- a cursor-only move after a full repaint restores exactly
+// what that repaint actually drew underneath, not stale content.
+//
+// CURSOR_BOX is anchored 2px above/left of the cursor's own (x,y) and
+// sized generously (20x20) to comfortably cover all four hand-drawn
+// cursor shapes above, including draw_cursor_h()/draw_cursor_v()'s
+// asymmetric bounding boxes (they draw up to 1px above/left of their own
+// anchor -- see their own comments) -- getting this too small would leave
+// a stale cursor-colored pixel behind on every move, so it's deliberately
+// oversized rather than tightly fit to each shape.
+#define CURSOR_BOX_MARGIN 2
+#define CURSOR_BOX_SIZE 20
+
+static uint32_t cursor_under[CURSOR_BOX_SIZE][CURSOR_BOX_SIZE];
+static int cursor_under_valid = 0;
+static int cursor_under_x, cursor_under_y;
+
+static void restore_cursor_under(void) {
+    if (!cursor_under_valid) return;
+    for (int j = 0; j < CURSOR_BOX_SIZE; j++)
+        for (int i = 0; i < CURSOR_BOX_SIZE; i++)
+            gfx_put_pixel(cursor_under_x + i, cursor_under_y + j, cursor_under[j][i]);
+    cursor_under_valid = 0;
+}
+
+static void save_cursor_under(int x, int y) {
+    int sx = x - CURSOR_BOX_MARGIN, sy = y - CURSOR_BOX_MARGIN;
+    for (int j = 0; j < CURSOR_BOX_SIZE; j++)
+        for (int i = 0; i < CURSOR_BOX_SIZE; i++)
+            cursor_under[j][i] = gfx_get_pixel(sx + i, sy + j);
+    cursor_under_x = sx;
+    cursor_under_y = sy;
+    cursor_under_valid = 1;
+}
+
+// Saves what's under (x, y) before drawing the cursor there, so a later
+// cursor-only move can restore it. Used by both render paths.
+static void draw_cursor_at(int x, int y) {
+    save_cursor_under(x, y);
+    draw_cursor(x, y, resolve_cursor_kind(x, y));
+}
+
 static void draw_window_chrome(struct window *win, int focused) {
     uint32_t titlebar = focused ? gfx_rgb(50, 90, 160) : gfx_rgb(120, 120, 130);
     uint32_t titletext = THEME_WHITE;
@@ -283,24 +356,25 @@ void wm_render_frame(int mx, int my) {
     draw_taskbar();
     if (start_menu_open) draw_start_menu();
 
-    // Resize cursor: while actively dragging a resize, keep showing the
-    // cursor for whichever edge(s) that drag started on (don't re-query
-    // by position -- the mouse may have moved past the window's edge
-    // mid-drag). Otherwise ask the same hit-test the click handler uses
-    // (wm_find_resize_zone(), wm_input.c) so hovering shows the cursor
-    // before you click, not just while dragging.
-    enum wm_cursor_kind kind = WM_CURSOR_NORMAL;
-    int cur_right = 0, cur_bottom = 0;
-    if (resizing >= 0) {
-        cur_right = resize_right;
-        cur_bottom = resize_bottom;
-    } else if (wm_find_resize_zone(mx, my, &cur_right, &cur_bottom) < 0) {
-        cur_right = cur_bottom = 0;
-    }
-    if (cur_right && cur_bottom) kind = WM_CURSOR_DIAG;
-    else if (cur_right) kind = WM_CURSOR_H;
-    else if (cur_bottom) kind = WM_CURSOR_V;
-    draw_cursor(mx, my, kind);
+    draw_cursor_at(mx, my); // also (re)establishes cursor_under for wm_render_cursor_move()
 
-    gfx_present(); // flip the finished frame to the display in one pass
+    gfx_present(); // blits only what actually got touched -- see gfx_present()'s
+                    // own comment; for a full repaint that's normally still the
+                    // whole screen (gfx_clear() at the top touches every pixel).
+}
+
+// The cheap path for "only the mouse moved, nothing else changed" --
+// wm.c's wm_run() loop takes this instead of wm_render_frame() whenever
+// redraw_pending is clear, which is most ticks most of the time (a mouse
+// that isn't moving or clicking generates no work at all; a mouse that IS
+// moving no longer forces a full window/taskbar/start-menu redraw and
+// full-screen blit just to slide the cursor a few pixels). Undraws the
+// cursor at its old spot, draws it at the new one, and gfx_present() then
+// blits only the union of those two small boxes -- see this file's
+// cursor-sprite comment above and gfx_present()'s own comment for the two
+// halves that make this cheap.
+void wm_render_cursor_move(int mx, int my) {
+    restore_cursor_under();
+    draw_cursor_at(mx, my);
+    gfx_present();
 }

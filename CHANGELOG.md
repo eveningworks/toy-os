@@ -5,6 +5,75 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 337 (feature, +10) -- dirty-rectangle blitting + cursor sprite
+
+The window manager's own roadmap item (README.md's "Ideas for what's
+next"): double buffering (build ~250s) killed the flicker, but
+`gfx_present()` still blitted the entire framebuffer every single
+frame, and `wm_run()` still triggered a full repaint on every mouse
+*move*, not just clicks/drags -- so sliding the mouse across an
+otherwise idle desktop cost a full window/taskbar/menu redraw plus a
+full-screen blit, every tick. Presented three scopes up front
+(blit-only dirty rect / cursor sprite + blit dirty rect / full
+dirty-rect compositor); went with the middle one -- targets the actual
+complaint (cursor movement forcing a full repaint) without touching
+how windows/widgets draw themselves, which keeps the existing
+"whole-screen redraw is simpler with overlapping windows" design
+intact for real scene changes.
+
+- **`kernel/drivers/gfx.c`**: `gfx_present()` no longer blits
+  `width * height` pixels unconditionally. A bounding-box dirty region
+  (`dirty_x0/y0/x1/y1`) is tracked at the one place every drawing
+  primitive in this file bottoms out at -- `gfx_put_pixel()` -- so
+  `gfx_fill_rect()`/`gfx_draw_rect()`/`gfx_draw_char()`/
+  `gfx_draw_string()`/`gfx_clear()` all get dirty-tracked automatically,
+  no per-call-site bookkeeping needed anywhere else. `gfx_present()`
+  now blits only that bounding box and resets it; if nothing was drawn
+  since the last present, it returns immediately. `gfx_scroll_up()`'s
+  double-buffered branch bypasses `gfx_put_pixel()` (a raw row memmove
+  within `back_buffer`), so it marks its region dirty by hand via a new
+  `dirty_mark_rect()` helper -- not currently reachable with double
+  buffering on (the console, `gfx_scroll_up()`'s only caller, leaves it
+  off), but kept correct on its own terms rather than relying on that
+  caller-side invariant holding forever.
+- **`apps/wm/wm_render.c`**: new cursor-sprite save/restore
+  (`save_cursor_under()`/`restore_cursor_under()`, a 20x20 box anchored
+  2px above/left of the cursor's own (x, y) -- oversized on purpose to
+  cover `draw_cursor_h()`/`draw_cursor_v()`'s asymmetric bounding boxes,
+  which draw up to 1px above/left of their anchor point) and a new
+  `wm_render_cursor_move(mx, my)` entry point: restores whatever was
+  under the cursor's old position, draws the cursor at the new one
+  (saving what's newly under it for next time), and presents -- touching
+  only two small boxes instead of redrawing the scene. `resolve_cursor_kind()`
+  factors the H/V/diag/normal cursor-shape decision out of
+  `wm_render_frame()` so both render paths pick the same shape the same
+  way. `wm_render_frame()` (the full path) now goes through the same
+  `draw_cursor_at()` helper the cursor-only path uses, which is what
+  keeps `cursor_under`'s saved pixels correct across a full repaint --
+  without that, a cursor-only move right after a full redraw would
+  restore stale content instead of what the full redraw actually drew
+  underneath.
+- **`apps/wm/wm.c`**: `wm_run()`'s loop no longer sets `redraw_pending`
+  on mouse movement alone. It now takes one of two paths each tick:
+  `redraw_pending` (set by a click, an in-progress drag/resize, a
+  window open/close, a key/wheel event delivered to an app, or the
+  once-a-second clock tick) still gets the full `wm_render_frame()`;
+  mouse movement with nothing else pending gets
+  `wm_render_cursor_move()` instead; neither pending means the tick
+  does no rendering work at all (an improvement over before, which
+  still skipped rendering but is worth stating since the mouse-moved
+  case used to always force a redraw).
+- **Verified in headless QEMU** (`tools/qmp_test.py`): moved the cursor
+  repeatedly with nothing else happening (no ghosting/stale pixels left
+  behind); opened the Start menu and Calculator (full-path redraw);
+  dragged the Calculator's window (full-path redraw across multiple
+  frames, no artifacts at the old position); watched the taskbar clock
+  advance across a tick (periodic full redraw still correct); hovered
+  the resize corner to confirm the diagonal resize cursor still renders
+  correctly through `resolve_cursor_kind()`. Screenshots in
+  `screenshots/2026-08-10/dirtyrect_*.png`. Also reconfirmed with
+  `tools/boot_smoke_test.py` and a full `make clean && make all`.
+
 ## Build 327 (feature, +10) -- `dmesg`, and a categorized/professional `help`
 
 Two requests: a Linux-dmesg-style command, and a cleaner, more

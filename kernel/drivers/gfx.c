@@ -42,6 +42,38 @@ const char *gfx_font_size_name(enum font_size size) {
 static uint32_t back_buffer[GFX_MAX_PIXELS];
 static int double_buffered = 0;
 
+// --- dirty-rectangle tracking ---
+// A single bounding box (not a real dirty-rect list -- see gfx_present()'s
+// comment) of every back-buffer pixel touched since the last gfx_present().
+// [dirty_x0,dirty_x1) x [dirty_y0,dirty_y1); dirty_x1 <= dirty_x0 means
+// "empty" (nothing to blit), which is also the reset state after each
+// present. Tracked at the gfx_put_pixel() level -- the one place every
+// drawing primitive in this file (fill_rect, draw_rect, draw_char,
+// draw_string, clear) bottoms out at -- so callers never need to mark
+// anything dirty themselves; it falls out of whatever they actually drew.
+static int dirty_x0, dirty_y0, dirty_x1, dirty_y1;
+
+static inline void dirty_mark(int x, int y) {
+    if (dirty_x1 <= dirty_x0) { // was empty
+        dirty_x0 = x; dirty_x1 = x + 1;
+        dirty_y0 = y; dirty_y1 = y + 1;
+        return;
+    }
+    if (x < dirty_x0) dirty_x0 = x;
+    if (x + 1 > dirty_x1) dirty_x1 = x + 1;
+    if (y < dirty_y0) dirty_y0 = y;
+    if (y + 1 > dirty_y1) dirty_y1 = y + 1;
+}
+
+// Marks a whole rectangle dirty directly, for the rare code path that
+// writes into the back buffer without going through gfx_put_pixel (see
+// gfx_scroll_up()'s double-buffered branch, which memmoves rows).
+static void dirty_mark_rect(int x, int y, int w, int h) {
+    if (w <= 0 || h <= 0) return;
+    dirty_mark(x, y);
+    dirty_mark(x + w - 1, y + h - 1);
+}
+
 int gfx_init(void) {
     struct framebuffer_info info;
     if (!multiboot_get_framebuffer(&info)) return 0;
@@ -79,6 +111,7 @@ void gfx_put_pixel(int x, int y, uint32_t color) {
     if (x < 0 || y < 0 || x >= width || y >= height) return;
     if (double_buffered) {
         back_buffer[(uint32_t)y * (uint32_t)width + (uint32_t)x] = color;
+        dirty_mark(x, y);
         return;
     }
     uint8_t *p = fb + (uint32_t)y * pitch + (uint32_t)x * (bpp / 8);
@@ -104,23 +137,38 @@ int gfx_set_double_buffered(int enabled) {
     if (width <= 0 || height <= 0) return 0;
     if ((uint32_t)width * (uint32_t)height > GFX_MAX_PIXELS) return 0;
     double_buffered = 1;
+    dirty_x0 = dirty_x1 = dirty_y0 = dirty_y1 = 0; // nothing dirty in a freshly (re)enabled buffer yet
     return 1;
 }
 
+// Copies only the bounding box of what actually changed since the last
+// present -- not the whole screen. This is the actual point of the dirty
+// tracking above: gfx_put_pixel() is cheap-ish already (one bounds check,
+// one write), but this loop touches real/MMIO framebuffer memory, which is
+// the expensive part, and used to do it for all width*height pixels every
+// single frame regardless of how much (if anything) changed. The window
+// manager (apps/wm/) still draws whole windows/widgets into the back
+// buffer when their content actually changes -- this only shrinks the
+// final blit, it doesn't make drawing itself region-aware. The one caller
+// that gets the full benefit of both halves is the cursor-only-moved case
+// (see wm_render_cursor_move() in apps/wm/wm_render.c): a handful of
+// pixels touched, a handful of pixels blitted, instead of a full frame.
 void gfx_present(void) {
     if (!double_buffered) return;
+    if (dirty_x1 <= dirty_x0) return; // nothing touched since the last present
     int bytes = bpp / 8;
-    for (int y = 0; y < height; y++) {
-        const uint32_t *src = back_buffer + (uint32_t)y * (uint32_t)width;
-        uint8_t *dst = fb + (uint32_t)y * pitch;
-        for (int x = 0; x < width; x++) {
-            uint32_t c = src[x];
+    for (int y = dirty_y0; y < dirty_y1; y++) {
+        const uint32_t *src = back_buffer + (uint32_t)y * (uint32_t)width + dirty_x0;
+        uint8_t *dst = fb + (uint32_t)y * pitch + (uint32_t)dirty_x0 * bytes;
+        for (int x = dirty_x0; x < dirty_x1; x++) {
+            uint32_t c = *src++;
             dst[0] = (uint8_t)(c & 0xFF);
             dst[1] = (uint8_t)((c >> 8) & 0xFF);
             dst[2] = (uint8_t)((c >> 16) & 0xFF);
             dst += bytes;
         }
     }
+    dirty_x0 = dirty_x1 = dirty_y0 = dirty_y1 = 0;
 }
 
 void gfx_fill_rect(int x, int y, int w, int h, uint32_t color) {
@@ -151,6 +199,13 @@ void gfx_scroll_up(int pixel_rows, uint32_t bg_color) {
             const uint32_t *src = back_buffer + (uint32_t)(y + pixel_rows) * (uint32_t)width;
             for (int i = 0; i < width; i++) dst[i] = src[i];
         }
+        // The memmove above writes straight into back_buffer, bypassing
+        // gfx_put_pixel() -- mark the shifted region dirty by hand so
+        // gfx_present() still picks it up. (Not currently reachable with
+        // double buffering on -- the console, the only caller, leaves it
+        // off -- but this keeps the function correct on its own terms
+        // rather than relying on that caller-side invariant.)
+        dirty_mark_rect(0, 0, width, height - pixel_rows);
         gfx_fill_rect(0, height - pixel_rows, width, pixel_rows, bg_color);
         return;
     }
