@@ -68,6 +68,25 @@ work.
   Don't bump `BUILD_NUMBER` by hand or skip `bump_build.sh` -- picking
   the right tier and writing it down in the changelog is the whole
   point of this scheme over the fully-automatic one it replaced.
+- **Every commit that lands a `BUILD_NUMBER` bump on GitHub gets a
+  matching git tag, `build-<N>`** (e.g. `build-120`) -- added once the
+  repo went from local-only to actually pushed (see CHANGELOG). Makes
+  "what commit was build 120?" answerable with `git show build-120`
+  instead of digging through commit dates against CHANGELOG.md. Applies
+  to every tier (fix/feature/major), not just the big ones -- tag it as
+  part of the same push:
+  ```
+  git tag build-<N>
+  git push origin main --tags
+  ```
+  **Major (+50) bumps additionally get a GitHub Release**, title =
+  `build-<N>`, body = that bump's CHANGELOG section, with the built
+  `.iso` attached as a downloadable asset (`gh release create build-<N>
+  toy-os.iso --title "build-<N>" --notes-file <path>`, or the GitHub
+  web UI) -- so grabbing a working ISO of a real milestone doesn't
+  require cloning + building. Fix/feature bumps get the tag above but
+  no release; the ISO for those is easy enough to build locally that a
+  standing download isn't worth a release per small bump.
 
 ## Working in the cloud sandbox vs. the user's machine
 

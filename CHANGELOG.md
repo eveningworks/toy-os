@@ -5,6 +5,27 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 121 (fix, +1) -- git tag + GitHub Release convention for BUILD_NUMBER bumps
+
+Now that the repo is actually pushed to GitHub (`Drenos/toy-os`, private
+-- see the last few entries), asked what "correct versioning" looks
+like with a real remote in the loop, since `BUILD_NUMBER` alone doesn't
+say which commit a given build number IS. Offered a couple of choices:
+tag every bump vs. only major ones vs. no tags at all; and GitHub
+Releases (with the built `.iso` attached) for every bump, major bumps
+only, or none. Picked "tag every bump" + "release major bumps only".
+
+**Convention (documented in `CLAUDE.md`, no code changes):** every
+commit that lands a `BUILD_NUMBER` bump gets a matching git tag,
+`build-<N>` (e.g. `build-121`), pushed alongside the commit (`git tag
+build-<N> && git push origin main --tags`) -- makes "what commit was
+build 121?" a `git show build-<N>` away instead of cross-referencing
+commit dates against this file. Major (+50) bumps additionally get a
+GitHub Release (title `build-<N>`, body = that bump's CHANGELOG
+section, `.iso` attached) so a working ISO of a real milestone is
+downloadable without cloning + building; fix/feature bumps get the tag
+but no release -- not worth a standing download for a small change.
+
 ## Build 120 (feature, +10) -- four new syscalls: SYS_UNLINK, SYS_LISTDIR, SYS_GETTIME, SYS_YIELD
 
 Asked for "a couple more syscalls" as a way to try out the new
