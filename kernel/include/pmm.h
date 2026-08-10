@@ -24,7 +24,44 @@ uint64_t pmm_alloc_frame(void);
 // recognize as an allocated frame is a no-op.
 void pmm_free_frame(uint64_t phys_addr);
 
+// Returns the physical address of the first frame of `count` physically
+// CONTIGUOUS free 4KiB frames (marking all of them used), or 0 if no
+// run that long exists. `count == 1` is just pmm_alloc_frame() under
+// the hood. For `count > 1`: a linear scan of the same bitmap
+// pmm_alloc_frame() uses, looking for a run of `count` consecutive
+// free bits instead of just one -- no new data structure, and no
+// fragmentation-avoidance machinery (a buddy allocator, say) beyond
+// that scan. Deliberately minimal: this only gets called rarely (a
+// driver setting up a DMA descriptor ring once at init, not a hot
+// path) and, in this kernel, always early at boot before much of the
+// general pool has been touched -- see this header's top comment and
+// docs/decisions.md for the fuller reasoning, including what a real
+// buddy allocator would buy over this if fragmentation ever became a
+// real problem. First real caller: a future NIC driver's descriptor
+// ring (see README.md's TCP/IP entry).
+uint64_t pmm_alloc_contiguous(uint64_t count);
+
+// Frees `count` frames starting at `phys_addr` (a value previously
+// returned by pmm_alloc_contiguous() with the same `count`) -- mirrors
+// pmm_alloc_contiguous() the way pmm_free_frame() mirrors
+// pmm_alloc_frame(), so a caller frees a DMA buffer as the one block it
+// allocated, not as `count` separate pmm_free_frame() calls it has to
+// remember to make. Frames pmm doesn't recognize as allocated are
+// silently skipped, same as pmm_free_frame().
+void pmm_free_contiguous(uint64_t phys_addr, uint64_t count);
+
 uint64_t pmm_total_frames(void);
 uint64_t pmm_free_frames(void);
+
+// Exercises pmm_alloc_contiguous()/pmm_free_contiguous() once and logs
+// pass/fail via klog_write() -- there's no driver calling these yet (the
+// intended first caller is a future NIC descriptor ring), so without
+// this a regression here would only be caught by reading the code, not
+// by anything a boot actually exercises. Called once from kernel_main()
+// right after pmm_init(); cheap (a handful of frames, once, at boot) and
+// left in permanently rather than treated as throwaway -- same idea as
+// the klog_write() lines around it in kernel.c proving other
+// no-GUI-surface infrastructure initialized correctly.
+void pmm_selftest(void);
 
 #endif

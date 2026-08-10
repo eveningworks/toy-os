@@ -5,6 +5,73 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 410 (feature, +10) -- contiguous/DMA-friendly physical memory
+
+Third milestone toward TCP/IP networking (see build 380's README entry,
+build 390's PCI enumeration, build 400's IRQ registration) -- `pmm.c`'s
+frame allocator only ever handed out one 4KB frame at a time, but NIC
+descriptor rings want a handful of physically contiguous pages. The
+kernel already identity-maps the low 4GB (`vmm.c`), so no address-
+translation headache once contiguous frames exist -- just needed a
+"give me N contiguous frames" allocator, which didn't exist yet.
+Presented two choices: how `pmm` should find N contiguous frames (scan
+the existing bitmap for a run of N free bits; carve out a small
+dedicated always-contiguous region reserved at boot; or replace the
+whole bitmap allocator with a buddy/segregated-free-list allocator),
+and whether freeing a contiguous run should get its own symmetric
+function or be left to the caller looping `pmm_free_frame()`. Went
+with: a linear bitmap scan (no new data structure, and this only runs
+rarely -- a driver setting up a descriptor ring once at init, not a hot
+path); the buddy-allocator option flagged as a future improvement
+instead of built now (see the new README.md entry below) -- nothing in
+this kernel has exercised the bitmap enough yet to know fragmentation
+is a real problem worth that added complexity; and a symmetric
+`pmm_free_contiguous()`, so a caller frees a DMA buffer as the one
+block it allocated instead of remembering to loop `pmm_free_frame()`
+`count` times itself.
+
+- **`kernel/include/pmm.h` / `kernel/core/pmm.c`**:
+  `pmm_alloc_contiguous(count)` -- `count == 1` fast-paths straight to
+  the existing `pmm_alloc_frame()`; for `count > 1`, a linear scan of
+  the same bitmap `pmm_alloc_frame()` uses (always from frame 0, not
+  `pmm_alloc_frame()`'s rolling `alloc_hint`, since this is a rare,
+  not-hot-path call where simplicity wins over skipping already-scanned
+  ground) looking for a run of `count` consecutive free bits, marking
+  all of them used and updating `free_frames`/`alloc_hint` together;
+  returns 0 if no run that long exists anywhere in the managed range.
+  `pmm_free_contiguous(phys_addr, count)` mirrors `pmm_free_frame()`'s
+  per-frame logic across `count` frames starting at `phys_addr` --
+  frames pmm doesn't recognize as allocated are silently skipped, same
+  as `pmm_free_frame()`.
+- **`kernel/core/pmm.c` / `kernel/core/kernel.c`**: `pmm_selftest()`,
+  called once from `kernel_main()` right after `pmm_init()`. No driver
+  calls the new functions yet (the intended first caller is a future
+  NIC descriptor ring), so without an explicit self-test a regression
+  here would only be caught by reading the code, not by anything a boot
+  actually exercises. Allocates a run of 4 frames, checks the returned
+  address is 4KB-aligned and that all 4 underlying bitmap bits actually
+  flipped to used (not just that a plausible-looking address came
+  back), checks `free_frames` dropped by exactly 4, frees the run and
+  checks the bits cleared and the count came back, then allocates a
+  second run of 4 and checks it lands at the *same* address -- proof
+  the free actually cleared those bits rather than the count just
+  happening to be right. Logs a single `klog_write()` pass/fail line;
+  cheap enough (a handful of frames, once) to leave in permanently
+  rather than treat as throwaway.
+- **`README.md`**: struck through the PCI-enumeration, IRQ-registration,
+  and contiguous-memory sub-bullets under "Basic TCP/IP networking" in
+  **Ideas for what's next** as done (all three of this build's
+  predecessors plus this one), and added the buddy/segregated-free-list
+  allocator as its own flagged-not-built future improvement within the
+  contiguous-memory bullet.
+
+Verified: `make clean && make all && make iso` clean, `tools/
+boot_smoke_test.py` PASS, and the self-test's pass line
+(`toy-os: PMM contiguous-allocation self-test passed`) present in the
+serial log right after `toy-os: physical frame allocator initialized`,
+confirming the new allocator actually works end-to-end at boot, not
+just that it compiles.
+
 ## Build 400 (feature, +10) -- generic hardware-IRQ registration mechanism
 
 Second milestone toward TCP/IP networking (see build 380's README

@@ -34,6 +34,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
 
     pmm_init();
     klog_write("toy-os: physical frame allocator initialized\n");
+    pmm_selftest(); // exercises pmm_alloc_contiguous()/pmm_free_contiguous() -- see pmm.h
 
     pci_init(); // brute-force config-space scan -- see pci.h's top comment
     klog_write("toy-os: PCI bus enumerated\n");

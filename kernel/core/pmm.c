@@ -5,6 +5,7 @@
 // easy to reason about, not optimized.
 #include "pmm.h"
 #include "multiboot.h"
+#include "klog.h"
 #include <stddef.h>
 
 // Linker symbol from linker.ld: the first physical address after
@@ -142,5 +143,101 @@ void pmm_free_frame(uint64_t phys_addr) {
     }
 }
 
+// See pmm.h's doc comment -- linear scan for a run of `count`
+// consecutive free bits, the same bitmap pmm_alloc_frame() uses. Always
+// scans from frame 0 (not alloc_hint) since this is a rare, not-hot-path
+// call where simplicity matters more than skipping already-scanned
+// ground -- unlike pmm_alloc_frame()'s hint, which earns its keep by
+// running on every single-frame allocation.
+uint64_t pmm_alloc_contiguous(uint64_t count) {
+    if (count == 0) return 0;
+    if (count == 1) return pmm_alloc_frame(); // fast path, identical to before this existed
+
+    uint64_t run_start = 0;
+    uint64_t run_len = 0;
+    for (uint64_t f = 0; f < PMM_MAX_FRAMES; f++) {
+        if (!bit_is_used(f)) {
+            if (run_len == 0) run_start = f;
+            run_len++;
+            if (run_len == count) {
+                for (uint64_t i = 0; i < count; i++) mark_used_bit(run_start + i);
+                free_frames -= count;
+                alloc_hint = run_start + count; // keep pmm_alloc_frame()'s hint sensible too
+                return run_start * FRAME_SIZE;
+            }
+        } else {
+            run_len = 0;
+        }
+    }
+    return 0; // no run of `count` contiguous free frames anywhere in range
+}
+
+void pmm_free_contiguous(uint64_t phys_addr, uint64_t count) {
+    uint64_t f = phys_addr / FRAME_SIZE;
+    for (uint64_t i = 0; i < count; i++) {
+        if (f + i >= PMM_MAX_FRAMES) break;
+        if (bit_is_used(f + i)) {
+            mark_free_bit(f + i);
+            free_frames++;
+        }
+    }
+}
+
 uint64_t pmm_total_frames(void) { return total_frames; }
 uint64_t pmm_free_frames(void) { return free_frames; }
+
+// See pmm.h's doc comment. Deliberately checks both the returned address
+// and the underlying bitmap/free_frames bookkeeping directly (not just
+// "did it return nonzero") -- a bug that marks the wrong frames used, or
+// gets the free_frames count wrong, would still return a plausible
+// address and pass a shallower check.
+void pmm_selftest(void) {
+    uint64_t before = free_frames;
+
+    uint64_t base = pmm_alloc_contiguous(4);
+    if (base == 0) {
+        klog_write("toy-os: PMM SELFTEST FAILED -- pmm_alloc_contiguous(4) returned 0\n");
+        return;
+    }
+    if (base % FRAME_SIZE != 0) {
+        klog_write("toy-os: PMM SELFTEST FAILED -- unaligned address from pmm_alloc_contiguous\n");
+        return;
+    }
+
+    uint64_t f = base / FRAME_SIZE;
+    for (uint64_t i = 0; i < 4; i++) {
+        if (!bit_is_used(f + i)) {
+            klog_write("toy-os: PMM SELFTEST FAILED -- frame not marked used after alloc\n");
+            return;
+        }
+    }
+    if (free_frames != before - 4) {
+        klog_write("toy-os: PMM SELFTEST FAILED -- free_frames count wrong after alloc\n");
+        return;
+    }
+
+    pmm_free_contiguous(base, 4);
+    for (uint64_t i = 0; i < 4; i++) {
+        if (bit_is_used(f + i)) {
+            klog_write("toy-os: PMM SELFTEST FAILED -- frame still marked used after free\n");
+            return;
+        }
+    }
+    if (free_frames != before) {
+        klog_write("toy-os: PMM SELFTEST FAILED -- free_frames count wrong after free\n");
+        return;
+    }
+
+    // A second alloc of the same size should land back at the same
+    // address -- proof the free above actually cleared those bits,
+    // rather than just leaving the count right by accident.
+    uint64_t base2 = pmm_alloc_contiguous(4);
+    if (base2 != base) {
+        klog_write("toy-os: PMM SELFTEST FAILED -- reuse after free landed at a different address\n");
+        pmm_free_contiguous(base2, 4);
+        return;
+    }
+    pmm_free_contiguous(base2, 4);
+
+    klog_write("toy-os: PMM contiguous-allocation self-test passed\n");
+}

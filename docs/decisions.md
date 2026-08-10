@@ -38,6 +38,28 @@ case, so every hardware IRQ (32-47) goes through one uniform path. See
 writeup, including what got regression-tested (timer/scheduler,
 keyboard, mouse) since this touched all three.
 
+## Contiguous memory: linear bitmap scan, not a buddy allocator
+
+`pmm_alloc_contiguous()` (`kernel/core/pmm.c`) finds a run of N
+physically contiguous free frames by linearly scanning the same
+one-bit-per-frame bitmap `pmm_alloc_frame()` already uses, rather than
+reserving a dedicated always-contiguous region at boot, or replacing
+the bitmap with a fundamentally different structure (a buddy/
+segregated-free-list allocator, the standard answer to "finding
+contiguous runs gets slow/fragmented"). A buddy allocator would win if
+this got called often against a heavily fragmented pool -- it finds
+and frees power-of-two-sized runs without a linear scan -- but nothing
+in this kernel calls `pmm_alloc_contiguous()` on a hot path: today it
+only exists for a future NIC driver to set up its descriptor ring once
+at init, and no allocator changed size class, hot/cold split, or
+scan strategy in a way this could regress. Replacing the whole
+allocator to solve a fragmentation problem no code in this kernel has
+actually hit yet was judged premature; it's flagged in README.md's
+**Ideas for what's next** as the fix if that ever changes, not built
+now. See `pmm.h`'s top comment and CHANGELOG.md's **Build 410** for the
+full writeup, including `pmm_selftest()`'s boot-time verification
+(no consumer exists yet to exercise these functions any other way).
+
 ## PCI enumeration is a brute-force flat scan, not bridge-aware recursion
 
 `kernel/drivers/pci.c`'s `pci_init()` checks every one of the 256 x 32

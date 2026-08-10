@@ -598,22 +598,34 @@ untouched.
   filesystem or window manager -- not a small feature, and it needs
   four pieces of infrastructure that have zero precedent in this
   kernel today, not just a new driver:
-  - **PCI bus enumeration** (`0xCF8`/`0xCFC` config-space scanning) --
-    doesn't exist at all (`ata.h`'s own top comment calls this out --
-    ATA gets away without it by living at fixed legacy ports, which
-    virtually no NIC does).
-  - **A real IRQ-handler registration mechanism** -- `isr_dispatch()`
-    (`kernel/core/idt.c`) is currently a hardcoded if/else chain
-    (timer, keyboard+mouse sharing one poll function, syscalls); ATA
-    doesn't use interrupts at all. A NIC needs its own serviced-
-    promptly IRQ line, which means a proper handler table, not another
-    one-off branch.
-  - **Contiguous/DMA-friendly physical memory** -- `pmm.c`'s frame
-    allocator only hands out one 4KB frame at a time; NIC descriptor
-    rings want a handful of physically contiguous pages. The kernel
-    does identity-map the low 4GB already (see `vmm.c`), so no address
-    translation headache once contiguous frames exist -- just need a
-    "give me N contiguous frames" allocator, which doesn't exist yet.
+  - ~~**PCI bus enumeration**~~ -- done (see CHANGELOG.md's build 390):
+    brute-force `0xCF8`/`0xCFC` config-space scanning (`kernel/drivers/
+    pci.c`, `lspci` shell command), confirmed against QEMU's default
+    topology -- including the e1000 NIC (`8086:100e`, IRQ 11) this
+    whole networking effort is ultimately aimed at.
+  - ~~**A real IRQ-handler registration mechanism**~~ -- done (see
+    CHANGELOG.md's build 400): `isr_dispatch()` (`kernel/core/idt.c`)
+    now dispatches every hardware IRQ through one generic table
+    (`irq_register_handler()`/`irq_dispatch()`, `kernel/core/irq.c`)
+    instead of a hardcoded if/else chain -- timer, keyboard, and mouse
+    all migrated to it, automatic PIC EOI, no chaining/sharing (one
+    handler per line, since QEMU's topology gives every device its own
+    line). A NIC driver registers the same way.
+  - ~~**Contiguous/DMA-friendly physical memory**~~ -- done (see
+    CHANGELOG.md's build 410): `pmm_alloc_contiguous(count)`/
+    `pmm_free_contiguous(phys_addr, count)` (`kernel/core/pmm.c`) hand
+    out/return a run of N physically contiguous 4KB frames via a linear
+    scan of the same bitmap `pmm_alloc_frame()` uses -- no new data
+    structure. The kernel identity-maps the low 4GB already (see
+    `vmm.c`), so no address-translation headache once contiguous frames
+    exist. Deliberately minimal: a linear scan is fine for a rare,
+    not-hot-path call (a driver setting up a descriptor ring once at
+    init); if fragmentation from other allocations ever made long runs
+    hard to find, replacing the whole bitmap allocator with a
+    buddy/segregated-free-list allocator is the standard fix -- flagged
+    here as a future improvement, not built now, since nothing in this
+    kernel has exercised the bitmap enough yet to know fragmentation is
+    a real problem worth that added complexity.
   - **A socket-like fd abstraction + new syscalls** -- today's fd
     table (`syscall.c`) is filesystem-only (`SYS_OPEN`/`READ`/`WRITE`/
     `CLOSE` all go straight to `fs_read`/`fs_write`); no
