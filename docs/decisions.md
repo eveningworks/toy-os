@@ -148,6 +148,33 @@ kernel-context call path needs a static instance, not a local variable.
 See `apps/editor.c`'s `g_editor_tb` for the fix and CHANGELOG.md's
 **Build 377** for the full story.
 
+## The CLI editor's status bar needs its own line-wrapping pass, not a plain dump-and-let-the-console-wrap
+
+`apps/editor.c`'s `editor_render()` looks like it should be able to get
+away with `vga_clear()` + walking the buffer through `vga_putc()` in
+order (which already handles wrap/scroll on its own) -- and the first
+version of it (**Build 377**) did exactly that. It's wrong for a
+full-screen editor specifically because a status bar printed *last*
+inherits wherever the console's auto-scroll happened to leave off, not
+a fixed row: fine for `console_page()`-style output that's read
+top-to-bottom and thrown away, wrong for a status bar meant to stay
+pinned to the bottom row the way real nano's (and this editor's own
+GUI Terminal renderer, `widget_scrollback_draw()`) does. It also left
+the physical console's own blinking cursor (`vga.c`) sitting on a
+spurious blank row below the status bar, since that cursor just
+follows wherever the last `vga_putc()` call left off.
+
+**Build 379**'s fix -- reserve the last row, do a windowed two-pass
+redraw mirroring `widgets.c`'s `scrollback_measure()`/
+`widget_scrollback_draw()` (same windowing algorithm, `vga_rows()`/
+new `vga_cols()` instead of pixels), and print the status line with NO
+trailing `\n` so the physical cursor lands right after it instead of a
+row below -- is the general pattern any future full-screen CLI
+renderer in this codebase should copy, not another one-off dump. See
+`editor.c`'s `editor_render()` top comment and CHANGELOG.md's **Build
+379** for the full story, including a padding-math bug the windowing
+itself caught during testing.
+
 ## Timezone city list is a database file, not a hardcoded array or a config key
 
 `/etc/timezones` (a CSV-style `name,offset_minutes,dst_rule` list,

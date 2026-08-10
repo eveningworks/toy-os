@@ -5,6 +5,73 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 379 (fix, +1) -- pin the CLI editor's status bar to the last row, fix its stray cursor
+
+Reported from testing on their own machine (screenshots of `edit` in
+CLI mode): the status bar wasn't staying put at the bottom of the
+screen the way it does in the GUI Terminal, and there was an odd
+cursor-looking block sitting on its own line right below the status
+bar.
+
+Both traced back to `apps/editor.c`'s `editor_render()`, which (see
+build 377's own comment, since removed) just did `vga_clear()` then
+dumped the whole buffer via `vga_putc()` in order, printing the status
+line last and letting the console's own wrap/scroll handle everything.
+That's exactly why both symptoms showed up:
+
+1. The status line, printed last, landed wherever the content
+   happened to end -- floating right after a short file, or scrolling
+   up out of a fixed position on a long one. Never actually pinned to
+   the last row the way real nano (or this editor's own GUI Terminal
+   renderer, `widget_scrollback_draw()`) does.
+2. The physical console has its own blinking cursor (`vga.c`'s
+   `cursor_show_and_reset_blink()`) that sits wherever the last
+   `vga_putc()` call left it. Since the old code ended by printing the
+   status line WITH a trailing `\n`, that's exactly where the physical
+   cursor ended up -- a spurious blank row below the status bar, right
+   next to the editor's own reverse-video logical cursor. Two
+   cursor-looking things on screen for two unrelated reasons.
+
+Fix: `editor_render()` now does its own line-wrapping pass (mirroring
+`widgets.c`'s `scrollback_measure()`/`widget_scrollback_draw()`
+windowing, just against text rows/columns instead of pixels) --
+reserves the console's last row for the status bar, prints only a
+window of content lines that fits above it (scrolled to keep the
+buffer's cursor inside the window, recomputed fresh on every redraw --
+no persistent scroll state, since the CLI editor has no scrollbar/
+wheel to drive one), pads with blank lines when there's less content
+than room, and prints the status line with NO trailing `\n` so the
+physical cursor lands right after the status text on the last row
+instead of a row below it -- the same place it'd sit after any
+ordinary `vga_write()` that doesn't end in `\n`.
+
+- **`kernel/include/vga.h` / `kernel/drivers/vga.c`**: new
+  `vga_cols()`, peer of the existing `vga_rows()` -- current console
+  width in text columns (80 in legacy text mode, `gfx_width()/
+  gfx_char_w()` in framebuffer mode). `editor_render()`'s wrapping math
+  needs both dimensions; `vga_rows()` alone (all `console_page()`
+  needed) wasn't enough.
+- **`apps/editor.c`**: `editor_render()` rewritten -- two-pass windowed
+  redraw (pass 1 finds the cursor's wrapped line/column and the
+  buffer's total wrapped line count; pass 2 prints only the window,
+  padding down to the status row afterward). Caught one bug of its own
+  during testing: the first version of the padding math double-counted
+  the row when content exactly filled the window (33 lines against a
+  32-row window, say), pushing the status line one row past the bottom
+  of the screen and making it invisible entirely. Fixed by tracking
+  the actual console row the redraw ends on directly (`line -
+  first_line`) instead of a separately-computed "how many lines did I
+  print" count that could disagree with it.
+
+Verified: `make clean && make all && make iso` clean, no new
+warnings; `boot_smoke_test.py` passes; QMP session tested a short file
+(status bar pinned to the bottom row with no floating gap) and a long
+file both under and exactly at the window's row count (the specific
+case that caught the padding bug), confirmed the cursor-follow
+windowing scrolls correctly moving up/down through a 45-line file, and
+confirmed F3 exits cleanly back to a normal shell prompt with no
+leftover artifacts.
+
 ## Build 378 (fix, +1) -- split `apps/shell.c` into shell.c/shell_fs.c/shell_sys.c
 
 Asked, as a forward-looking question (not tied to any specific new

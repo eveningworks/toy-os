@@ -267,6 +267,19 @@ uint32_t vga_rows(void) {
     return (uint32_t)(fb_mode ? console_rows : VGA_HEIGHT);
 }
 
+// Current console width in text columns -- 80 in legacy 80x25 text
+// mode, or gfx_width()/gfx_char_w() in framebuffer mode (varies with
+// the active font size, see vga_reflow()). Peer of vga_rows() above,
+// added for the same reason: a caller doing its own line-wrapping math
+// against the console (see apps/editor.c's windowed redraw) needs both
+// dimensions, not just the row count console_page() already needed.
+// Sinks don't track a column count any more than they track rows (see
+// vga_rows()'s comment) -- 80 is a sane default for the same reason.
+uint32_t vga_cols(void) {
+    if (active_sink) return 80;
+    return (uint32_t)(fb_mode ? console_cols : VGA_WIDTH);
+}
+
 // Called from keyboard_getchar()'s wait loop (see keyboard.c) on every
 // wake-up, which happens on every interrupt including the 100Hz PIT
 // tick -- so this runs roughly every 10ms while idle at a prompt, but

@@ -106,6 +106,13 @@ void vga_reflow(void);
 // lines fit on screen before they'd start scrolling off the top.
 uint32_t vga_rows(void);
 
+// Current console width in text columns -- 80 in legacy 80x25 text
+// mode, or gfx_width()/gfx_char_w() in framebuffer mode. Peer of
+// vga_rows() above; first added for apps/editor.c's windowed CLI
+// redraw, which needs to replicate the console's own line-wrapping math
+// to keep a status bar pinned to the last row.
+uint32_t vga_cols(void);
+
 // Drives the framebuffer console's blinking cursor -- call this
 // periodically while idle (see keyboard_getchar() in keyboard.c, which
 // calls it once per wake-up from its blocking wait loop). No-op in
