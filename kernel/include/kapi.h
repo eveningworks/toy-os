@@ -21,6 +21,7 @@
 #include "multiboot.h" // multiboot_print_meminfo
 #include "pmm.h"       // pmm_total_frames/pmm_free_frames -- physical frame allocator stats
 #include "power.h"     // system_reboot
+#include "pci.h"       // PCI config-space enumeration -- pci_init/pci_device_at/pci_class_name (see pci.c)
 #include "ring3_test.h" // ring3_test_run: paging/GDT/ring-3 isolation demo
 #include "elf_test.h"   // elf_test_run: loads and runs a real ELF64 binary in ring 3
 #include "syscall_test.h" // syscall_test_run: real syscall round-trip -- runs a process and RETURNS

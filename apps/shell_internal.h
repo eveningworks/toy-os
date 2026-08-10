@@ -61,5 +61,6 @@ void cmd_run(const char *name);
 void cmd_fontsize(const char *args);
 void cmd_color(const char *args);
 void cmd_history(void);
+void cmd_lspci(void);
 
 #endif

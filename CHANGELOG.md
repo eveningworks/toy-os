@@ -5,6 +5,68 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 390 (feature, +10) -- PCI bus enumeration + `lspci`
+
+First real milestone toward TCP/IP networking (see build 380's README
+entry on what that would take overall) -- PCI enumeration was called
+out there as the self-contained first piece, since virtually no NIC
+lives at a fixed legacy port the way ATA does. Presented three choices
+on scan method (brute-force flat scan vs bus-0-only vs recursive
+bridge-aware), how much per-device info to collect in this first pass
+(IDs+class only vs full info including BARs/IRQ), and how to expose it
+(diagnostic-only vs a real `lspci` shell command vs both). Went with:
+brute-force flat scan (simplest, no bridge-topology logic needed, same
+code path works on real hardware or QEMU); full info now (IDs, class,
+BARs, IRQ) since the config-space read plumbing is already in hand;
+and a real `lspci` command plus a `kapi.h` capability for future driver
+code to call directly.
+
+- **`kernel/include/io.h`**: new `outl()`/`inl()` (32-bit port I/O) --
+  PCI config-space access (CONFIG_ADDRESS/CONFIG_DATA, ports 0xCF8/
+  0xCFC) is defined in terms of 32-bit reads/writes; only 8-/16-bit
+  variants existed before this (ATA's data register needed 16-bit,
+  nothing needed 32-bit until now).
+- **`kernel/include/pci.h` / `kernel/drivers/pci.c`** (new): `pci_init()`
+  brute-force-scans every bus/device/function (256 x 32 x 8 = 65536
+  config-space reads, each cheap) via legacy CONFIG_ADDRESS/
+  CONFIG_DATA port I/O -- not the newer memory-mapped ECAM mechanism,
+  which needs ACPI/MCFG table parsing just to locate and isn't needed
+  for anything this kernel does. Records up to `PCI_MAX_DEVICES` (32)
+  devices found: vendor/device ID, class/subclass/prog-if/revision,
+  header type, interrupt line, and all 6 BARs (decoded only as far as
+  "I/O or memory, and the base address" -- NOT size-probed, deferred
+  to whichever future driver actually needs to map one). `pci_class_name()`
+  gives a human-readable label for the class/subclass pairs an ordinary
+  PC or QEMU machine actually presents (network/mass-storage/display/
+  bridge/etc.), falling back to "unknown device" rather than trying to
+  cover the full PCI class-code table.
+- **`kernel/core/kernel.c`**: `pci_init()` called once, unconditionally,
+  right after `pmm_init()` -- there's no natural lazy caller the way
+  ATA has `tfs.c`'s `fs_init()`, since PCI enumeration has no dependent
+  yet (the future NIC driver and `lspci` both just read what was
+  already recorded at boot).
+- **`kernel/include/kapi.h`**: new `#include "pci.h"`.
+- **`apps/shell_sys.c`**: new `cmd_lspci()` -- lists every device found
+  at boot in the traditional `bus:dev.func  vendor:device  class name`
+  shape, plus IRQ line and any nonzero BARs. New `print_hex_digits()`
+  helper (fixed-width lowercase hex, unlike `vga_write_hex()`'s
+  arbitrary-width/leading-zero-trimmed output) so the vendor:device
+  columns actually line up. Wired into `shell_internal.h`,
+  `shell.c`'s `dispatch()`, and `HELP_LINES`.
+- **`docs/decisions.md`**: new entry on why brute-force flat scanning
+  (not bridge-aware recursion) was chosen, and why BARs are decoded
+  but not size-probed at this stage.
+
+Verified: `make clean && make all && make iso` clean, no new warnings;
+`boot_smoke_test.py` passes (serial log shows "PCI bus enumerated",
+no panic); QMP session ran `lspci` against QEMU's default PIIX4/i440FX
+topology and got exactly what's expected -- host bridge, ISA bridge,
+IDE controller (matches `ata.c`'s target), an ACPI bridge device, the
+VGA controller, and an Intel e1000 ethernet controller (8086:100e) at
+irq 11 with both a memory and an I/O BAR -- confirming the eventual NIC
+target is already visible and fully decoded. `help`/`help` pagination
+confirmed to show the new `lspci` line correctly.
+
 ## Build 380 (fix, +1) -- README: what basic TCP/IP networking would require
 
 Asked what basic TCP/IP networking support would need, as a "don't

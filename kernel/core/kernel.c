@@ -9,6 +9,7 @@
 #include "gdt.h"
 #include "multiboot.h"
 #include "pmm.h"
+#include "pci.h"
 #include "fs.h"
 #include "tz.h"
 #include "font_config.h"
@@ -33,6 +34,9 @@ void kernel_main(uint64_t multiboot_info_addr) {
 
     pmm_init();
     klog_write("toy-os: physical frame allocator initialized\n");
+
+    pci_init(); // brute-force config-space scan -- see pci.h's top comment
+    klog_write("toy-os: PCI bus enumerated\n");
 
     fs_init();
     fs_mkdir("/etc"); // config-file convention (see tz.c) -- a no-op if it already exists

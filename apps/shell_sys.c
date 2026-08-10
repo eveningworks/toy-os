@@ -1,10 +1,10 @@
 // System-info/settings shell commands: help/time/timezone/uptime/
-// about/echo/meminfo/dmesg/reboot/apps/run/fontsize/color/history.
-// Split out of shell.c once it crossed 900 lines mixing every command
-// category together -- see shell_internal.h's top comment for the
-// split's own reasoning and CHANGELOG.md for the build this happened
-// in. Shares `shell_fg`/history[]/history_count with shell.c (and
-// shell_fs.c) via shell_internal.h.
+// about/echo/meminfo/dmesg/reboot/apps/run/fontsize/color/history/
+// lspci. Split out of shell.c once it crossed 900 lines mixing every
+// command category together -- see shell_internal.h's top comment for
+// the split's own reasoning and CHANGELOG.md for the build this
+// happened in. Shares `shell_fg`/history[]/history_count with shell.c
+// (and shell_fs.c) via shell_internal.h.
 #include "shell_internal.h"
 #include "apps.h"
 
@@ -105,6 +105,8 @@ static const char *const HELP_LINES[] = {
     "  meminfo       - show memory map + physical frame allocator stats\n",
     "  dmesg         - show the kernel log (boot messages, driver/\n",
     "                  syscall diagnostics, timestamped)\n",
+    "  lspci         - list PCI devices found at boot (bus:dev.func,\n",
+    "                  vendor:device ID, class, IRQ, BARs)\n",
     "\n",
     "Appearance:\n",
     "  color <name>  - change shell text color\n",
@@ -448,6 +450,64 @@ void cmd_history(void) {
         vga_write_dec((uint32_t)(i + 1));
         vga_write("  ");
         vga_write(history[i]);
+        vga_putc('\n');
+    }
+}
+
+// Prints exactly `digits` lowercase hex digits of `v`, no "0x" prefix
+// and no digit-trimming -- unlike vga_write_hex() (vga.h), which is
+// meant for arbitrary-width values and trims leading zeros. lspci-style
+// output wants fixed-width fields (e.g. "8086:1237", not "8086:1237"
+// one time and "86:237" the next) so columns actually line up.
+static void print_hex_digits(uint32_t v, int digits) {
+    char buf[9]; // enough for the widest caller here (4 digits) + '\0'
+    for (int i = 0; i < digits; i++) {
+        uint8_t nibble = (v >> ((digits - 1 - i) * 4)) & 0xF;
+        buf[i] = nibble < 10 ? (char)('0' + nibble) : (char)('a' + nibble - 10);
+    }
+    buf[digits] = '\0';
+    vga_write(buf);
+}
+
+// Lists every device pci_init() found at boot (kernel_main() runs it
+// once, unconditionally -- see kernel.c) in the traditional
+// `bus:device.function  vendor:device  class name` shape, plus IRQ
+// line and any nonzero BARs when present. Nothing here re-scans the
+// bus -- this only ever shows what was recorded at boot.
+void cmd_lspci(void) {
+    int count = pci_device_count();
+    if (count == 0) {
+        vga_write("No PCI devices found.\n");
+        return;
+    }
+    for (int i = 0; i < count; i++) {
+        const struct pci_device *d = pci_device_at(i);
+        if (!d) continue;
+
+        print_hex_digits(d->bus, 2);
+        vga_putc(':');
+        print_hex_digits(d->device, 2);
+        vga_putc('.');
+        print_hex_digits(d->function, 1);
+        vga_write("  ");
+        print_hex_digits(d->vendor_id, 4);
+        vga_putc(':');
+        print_hex_digits(d->device_id, 4);
+        vga_write("  ");
+        vga_write(pci_class_name(d->class_code, d->subclass));
+
+        if (d->interrupt_line != 0 && d->interrupt_line != 0xFF) {
+            vga_write("  irq ");
+            vga_write_dec(d->interrupt_line);
+        }
+        for (int b = 0; b < 6; b++) {
+            if (d->bar[b] == 0) continue;
+            vga_write("  bar");
+            vga_write_dec((uint32_t)b);
+            vga_putc('=');
+            vga_write_hex(pci_bar_addr(d->bar[b]));
+            vga_write(pci_bar_is_io(d->bar[b]) ? "(io)" : "(mem)");
+        }
         vga_putc('\n');
     }
 }

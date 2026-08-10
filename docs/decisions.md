@@ -13,6 +13,30 @@ If you're a Claude session or a contributor and about to ask "wait, why
 is this built this way instead of the more obvious way?" -- check here
 first before re-litigating it from scratch.
 
+## PCI enumeration is a brute-force flat scan, not bridge-aware recursion
+
+`kernel/drivers/pci.c`'s `pci_init()` checks every one of the 256 x 32
+x 8 possible bus/device/function combinations directly via legacy
+CONFIG_ADDRESS/CONFIG_DATA (0xCF8/0xCFC) port I/O, rather than the
+"real OS" approach of scanning bus 0 and recursing into any PCI-to-PCI
+bridge's secondary bus. Deliberate: the brute-force version needs no
+bridge detection, no recursion, and no cycle safety, and finds the
+same devices as the recursive version on any topology this kernel
+actually runs on (QEMU's default chipset, or ordinary real hardware
+without a deeply nested bridge topology) -- the only real cost is
+wasted probe reads on buses/slots nothing lives at, which is cheap.
+Also chose legacy CF8/CFC access over the newer memory-mapped ECAM
+mechanism, since ECAM needs ACPI/MCFG table parsing just to find its
+base address and CF8/CFC is universally supported including by QEMU's
+emulated chipset. BARs are decoded (I/O-vs-memory, base address) but
+NOT size-probed (the write-0xFFFFFFFF-and-read-back trick) -- that's
+deferred to whichever future driver actually needs to map a BAR, since
+it means temporarily disabling the device's decode and isn't needed
+just to enumerate/identify what's present. See `pci.h`'s top comment
+and CHANGELOG.md's **Build 390** for the full writeup -- this was the
+first concrete milestone toward the TCP/IP prerequisites README.md's
+**Build 380** entry laid out.
+
 ## Filesystem is one active backend, not mount points
 
 `kernel/drivers/vfs.c` dispatches every `fs_*` call to a single active

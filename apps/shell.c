@@ -212,6 +212,8 @@ static void dispatch(char *line) {
         crash_test_run();
     } else if (k_strcmp(cmd, "history") == 0) {
         cmd_history();
+    } else if (k_strcmp(cmd, "lspci") == 0) {
+        cmd_lspci();
     } else {
         vga_write("Unknown command: ");
         vga_write(cmd);
