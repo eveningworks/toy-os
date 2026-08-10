@@ -114,6 +114,19 @@ static void print_two_digit(uint32_t n) {
 // stops early. General enough for any future command whose output
 // might outgrow one screen -- not just `help`.
 static void console_page(const char *const *lines, uint32_t count) {
+    // A sink means this might be running inside a non-blocking GUI
+    // callback (see apps/terminal.c, phase 4) rather than the
+    // interactive console loop's own blocking read -- keyboard_getchar()
+    // below would hang whatever's driving that callback forever. Just
+    // dump everything unpaginated instead; a GUI caller's own scrollback
+    // widget (phase 3) is what handles "doesn't fit on one screen" in
+    // that context, the same job this pagination does for the physical
+    // console.
+    if (vga_sink_active()) {
+        for (uint32_t i = 0; i < count; i++) vga_write(lines[i]);
+        return;
+    }
+
     uint32_t rows = vga_rows();
     uint32_t page_rows = rows > 1 ? rows - 1 : rows; // reserve the bottom row for the prompt
     uint32_t shown = 0;
@@ -230,6 +243,24 @@ static void cmd_timezone(const char *args) {
         vga_write("Timezone set to ");
         vga_write(tz_city_name(idx));
         vga_write(".\n");
+        return;
+    }
+
+    // The no-args branch below blocks on keyboard_read_line() waiting
+    // for a numbered choice -- fine for the interactive console loop
+    // (shell_main() calls its own keyboard_getchar() in a loop already),
+    // fatal for a non-blocking GUI callback driving this through a sink
+    // (see shell_dispatch()'s comment). Print the list plus a pointer to
+    // the direct-set form instead of blocking.
+    if (vga_sink_active()) {
+        vga_write("Interactive timezone picker isn't available here --\n");
+        vga_write("use `timezone <city>` instead. Cities:\n");
+        int n = tz_city_count();
+        for (int i = 0; i < n; i++) {
+            vga_write("  ");
+            vga_write(tz_city_name(i));
+            vga_putc('\n');
+        }
         return;
     }
 
@@ -645,6 +676,14 @@ static void dispatch(char *line) {
         vga_write(cmd);
         vga_write("\n(type 'help' for a list of commands)\n");
     }
+}
+
+// See shell.h's doc comment -- the public entry point that lets a GUI
+// terminal-emulator app run a command line through the real dispatcher.
+void shell_dispatch(char *line, const struct vga_sink *sink) {
+    const struct vga_sink *prev = vga_set_sink(sink);
+    dispatch(line);
+    vga_set_sink(prev);
 }
 
 static void history_add(const char *line) {

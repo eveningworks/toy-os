@@ -240,6 +240,10 @@ const struct vga_sink *vga_set_sink(const struct vga_sink *sink) {
     return prev;
 }
 
+int vga_sink_active(void) {
+    return active_sink != 0;
+}
+
 void vga_clear(void) {
     if (active_sink) {
         if (active_sink->clear) active_sink->clear(active_sink->ctx);

@@ -5,6 +5,62 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 193 (feature, +10) -- exported shell dispatch + blocking-command isolation (terminal-emulator phase 2/4)
+
+Second of four planned phases toward a GUI terminal-emulator app (see
+build 183's entry for phase 1 and the overall plan). This phase makes
+shell.c's real command dispatcher actually *safe and reachable* to call
+from a non-blocking GUI callback, which phase 1's sink alone didn't
+guarantee -- two commands used to block on keyboard input mid-command,
+which would hang a GUI app calling in.
+
+- `apps/shell.h` / `apps/shell.c`: added `void shell_dispatch(char
+  *line, const struct vga_sink *sink)` -- installs `sink` (via
+  `vga_set_sink()`), runs `line` through the exact same `dispatch()`
+  shell_main()'s REPL uses, then restores whatever sink was active
+  before. This is the reuse path a terminal-emulator app calls into
+  instead of duplicating shell.c's ~40 command handlers.
+- `console_page()` (used by `help`'s pagination) and `cmd_timezone()`'s
+  no-args interactive picker both used to block on `keyboard_getchar()`/
+  `keyboard_read_line()` mid-command -- harmless for the interactive
+  console loop (which already blocks on its own read loop between
+  commands anyway) but fatal for a GUI app's non-blocking `on_key`
+  callback driving `shell_dispatch()`, since there's nowhere for that
+  blocking read to safely happen. Both now check the new
+  `vga_sink_active()` (added to vga.h/vga.c) and skip the blocking part
+  when a sink is installed: `console_page()` just dumps every line
+  unpaginated (a GUI caller's own scrollback widget, phase 3, handles
+  "doesn't fit on one screen" instead), and `cmd_timezone()` prints the
+  city list plus a pointer to `timezone <city>` instead of prompting.
+  Physical-console behavior (no sink installed, the only mode that
+  exists until phase 4) is completely unchanged -- both gates are
+  no-ops when `vga_sink_active()` is false.
+- Known caveat for phase 4 to handle, not fixed here: some commands
+  reachable through `dispatch()` don't return at all (`ring3test`,
+  `elftest`, `reboot`) or take over the whole physical screen directly
+  via `gfx_*` calls rather than going through the sink (`gui`,
+  `guitest`, `wintest`, `schedtest`'s ring-3 processes) -- calling
+  those from inside a terminal app's `on_key` callback would freeze or
+  visually clobber the GUI, not do anything useful. The terminal app
+  itself will need to special-case or block a short list of these
+  rather than handing everything through unfiltered.
+
+Tested in QEMU: temporarily wired a throwaway `sinktest` command (a
+capturing sink, stripped back out before this build was finalized --
+not part of the shipped diff) that ran `meminfo`, `timezone` (no args),
+and `help` through `shell_dispatch()` back to back. All three returned
+without hanging -- proving both blocking-command gates actually engage
+under a sink instead of just compiling -- and the captured text matched
+each command's real output, then flushed cleanly to the physical
+console once the sink was restored afterward. Also re-ran `help`'s
+pagination and `timezone`'s interactive picker on the physical console
+(no sink) after stripping the test code back out, confirming zero
+behavior change there -- both screenshots below.
+
+Screenshots:
+`screenshots/2026-08-10/phase2_sinktest_capture_no_hang.png`,
+`screenshots/2026-08-10/phase2_physical_console_regression_check.png`
+
 ## Build 183 (feature, +10) -- vga.c output-sink redirection (terminal-emulator prerequisite, phase 1/4)
 
 First of four planned phases toward a GUI terminal-emulator app (asked

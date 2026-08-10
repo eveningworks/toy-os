@@ -54,6 +54,14 @@ struct vga_sink {
 // see apps/terminal.c (phase 4) for the pattern.
 const struct vga_sink *vga_set_sink(const struct vga_sink *sink);
 
+// True while any sink is installed. Lets a handful of shell commands
+// that would otherwise block on keyboard input mid-command (see
+// apps/shell.c's console_page() and cmd_timezone()) detect "I might be
+// running inside a non-blocking GUI callback right now, not the
+// blocking-by-design interactive console loop" and skip the blocking
+// part instead of hanging whatever's driving them through a sink.
+int vga_sink_active(void);
+
 // Prints a process_run_ring3() return value the way every *test command
 // wants it shown: a real (non-negative) exit code as a plain decimal
 // number via vga_write_dec(), or -- for PROCESS_CRASHED (process.h),
