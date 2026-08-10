@@ -114,12 +114,40 @@ that aren't obvious until you hit them:
 ```
 make all   # kernel.bin + userland test ELFs
 make iso   # + toy-os.iso (grub-mkrescue)
-make run   # boots in QEMU with a GTK window (not usable headlessly)
+make run   # boots in QEMU with an SDL window (the user's machine, not usable headlessly)
 ```
 `apps/*.c` is picked up by a `wildcard`, but it's non-recursive --
 `apps/wm/*.c` needed its own `WM_C` wildcard, pattern rule, and mkdir
 target when that subfolder was added. If you add another subfolder
 under `apps/`, it'll need the same treatment.
+
+**`make run` uses `-display sdl,grab-mod=rctrl`, no explicit pointer
+device.** Two things worth knowing if you ever touch this line:
+`grab-mod` (the key that captures/releases the mouse once grabbed,
+here right Ctrl) is an SDL-only display option -- QEMU rejects it
+outright on `gtk` ("Parameter 'grab-mod' is unexpected"), which is why
+this isn't `-display gtk,...` even though gtk was tried first. And
+deliberately NO `-device usb-tablet`/`-device usb-mouse` -- this
+kernel's mouse driver only speaks PS/2 (see `kernel/drivers/mouse.c`),
+there's no USB stack at all, and adding an explicit USB pointer device
+makes QEMU route host mouse motion to THAT instead of the emulated
+PS/2 mouse, so the guest receives nothing and the cursor just never
+moves. Bit an actual user session once (see CHANGELOG.md around build
+293's Makefile fix) -- looked exactly like a driver bug, wasn't one.
+
+**Always `make clean && make all` before testing a GUI change, not a
+plain `make all`.** The Makefile doesn't track header dependencies (no
+`-MMD`/`-MP`; see its `version:` target comment) -- editing a shared
+header like `apps/widgets.h` or `apps/gui_apps.h` doesn't trigger a
+rebuild of every `.o` that includes it, only the ones whose `.c` file
+also changed. A stale `.o` still compiled against the OLD struct
+layout, sitting next to freshly-rebuilt ones that see the NEW layout,
+silently desyncs (e.g. an array indexed with the wrong element stride).
+This produced a genuinely bizarre-looking bug once -- the Start menu's
+item labels showed raw function-prologue machine code reinterpreted as
+text -- that a clean rebuild fixed instantly, no code changes needed.
+If a GUI test shows something inexplicable right after touching a
+header, suspect a stale build before suspecting the new code.
 
 ## Testing in QEMU headlessly, via QMP
 
@@ -129,6 +157,7 @@ via QMP commands, `screendump` to prove it visually.
 
 **Use `tools/qmp_test.py` -- don't rederive this from scratch.** It's a
 committed, working helper module (`QMPSession`, with `goto()`/`click()`/
+`drag()`/`wheel()`/`mouse_down()`/`mouse_up()`/`recalibrate()`/
 `send_key()`/`send_text()`/`screenshot()`) built from exactly this kind
 of testing, with the gotchas below already handled. Past sessions each
 independently hand-rolled similar scripts in the cloud sandbox (never
@@ -159,12 +188,39 @@ The gotchas it already gets right, for when you need to know why:
   doesn't need an actual client connected, it just needs to exist as a
   head for input routing to work.
 - **Mouse input:** this kernel's mouse driver is PS/2, not USB HID --
-  don't bother with `-device usb-tablet`/absolute positioning, it's
-  the wrong device for this guest. `QMPSession.goto()`/`click()` use
-  `input-send-event` with `rel` axis events and track cursor position
-  client-side, since there's no absolute cursor query.
+  never add `-device usb-tablet` OR `-device usb-mouse` to a headless
+  test launch (same reasoning as `make run`'s comment above -- it's
+  not just a "wrong device" ergonomics thing, it actively breaks
+  routing). `QMPSession.goto()`/`click()`/`drag()` use
+  `input-send-event` with `rel` axis events against the default
+  emulated PS/2 mouse, tracking cursor position client-side since
+  there's no absolute cursor query. `wheel()` sends synthetic
+  `wheel-up`/`wheel-down` button press/release pairs -- QEMU's
+  IntelliMouse PS/2 emulation reports the scroll wheel that way, there
+  is no separate scroll event type.
+- **Cursor position drifts across separate `QMPSession`s that share an
+  already-open GUI session** (a previous script left GUI mode running
+  instead of pressing Esc back to the shell). Each new session assumes
+  the cursor starts at (640, 360) without querying the guest's real
+  position, so if the real cursor moved since, every `goto()` lands
+  offset from where it should -- looks exactly like a click "not
+  registering." Fix: call `session.recalibrate()`, but ONLY in scripts
+  that are reusing an already-open GUI session rather than entering it
+  fresh -- and if a script does both (enters GUI mode itself, and
+  wants to recalibrate), the recalibrate call must come AFTER "gui" +
+  Enter, never before (the guest's mouse device isn't even enabled
+  until `mouse_init()` runs as part of entering GUI mode, and that
+  same call resets the cursor to screen center deterministically,
+  which is why (640, 360) is the default in the first place). See
+  `recalibrate()`'s own docstring for the full reasoning -- getting
+  this ordering backwards was a real mistake in an earlier session,
+  worth not repeating.
 - **Keyboard:** `send-key` with `{"type":"qcode","data":"<key>"}`,
   one character/qcode at a time (`QMPSession.send_key()`/`send_text()`).
+  `send_text()` only handles lowercase letters/digits -- for space use
+  `send_key('spc')`, for punctuation the matching qcode name, and there
+  is no way to send an uppercase letter distinct from lowercase (no
+  shift handling) as of this writing.
 - **Screenshots:** `screendump` writes a `.ppm`; `QMPSession.screenshot()`
   converts to `.png` via Pillow in one call so it's ready for the Read
   tool / `SendUserFile`.

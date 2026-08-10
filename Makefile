@@ -242,10 +242,22 @@ iso: version $(KERNEL) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_B
 # -vga std: explicit (matches QEMU's own default, but pinned here so the
 #   higher 1280x720 mode boot.asm requests isn't at the mercy of a
 #   per-host/per-distro QEMU default changing underneath us).
-# -display gtk,zoom-to-fit=off: shows the framebuffer at its native
-#   resolution, one real pixel per emulated pixel -- zoom-to-fit would
-#   let GTK scale the window and blur/blend the (deliberately sharp,
-#   nearest-neighbor-scaled) font.
+# -display gtk,zoom-to-fit=off,grab-mod=rctrl: shows the framebuffer at
+#   its native resolution, one real pixel per emulated pixel --
+#   zoom-to-fit would let GTK scale the window and blur/blend the
+#   (deliberately sharp, nearest-neighbor-scaled) font. grab-mod=rctrl
+#   sets the key that captures/releases the mouse once it's grabbed
+#   (right Ctrl) -- only meaningful now that -device usb-mouse (below)
+#   makes the pointer relative and therefore actually need grabbing.
+# -usb -device usb-mouse: without this, recent QEMU defaults to an
+#   absolute USB tablet pointer for the GTK display, which never needs
+#   grabbing but also means host and guest cursor positions are just
+#   two independent mappings onto the same window -- easy for the
+#   cursor to wander outside the window edges and lose sync. A plain
+#   relative mouse also matches what kernel/drivers/mouse.c actually
+#   implements: it's a PS/2-protocol relative-mouse driver only, with
+#   no concept of an absolute/tablet pointer, so this is the more
+#   correct device for this guest regardless of the ergonomics.
 # -drive ...,if=ide: attaches disk.img as the primary IDE bus's master
 # drive -- exactly what kernel/drivers/ata.c's fixed 0x1F0 ports talk to
 # (see ata.h for why legacy PIO IDE, not AHCI/virtio). This ends up on a
@@ -253,7 +265,7 @@ iso: version $(KERNEL) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_B
 # puts -cdrom on the secondary bus), so ata.c's IDENTIFY never sees the
 # boot CD and mistakes it for a plain disk.
 run: iso $(DISK_IMG)
-	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -vga std -display gtk,zoom-to-fit=off -m 256
+	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -vga std -display sdl,grab-mod=rctrl -m 256
 
 run-nographic: iso $(DISK_IMG)
 	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -display none -m 256

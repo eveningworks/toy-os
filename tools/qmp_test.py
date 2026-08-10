@@ -9,10 +9,34 @@ OS -- nothing here ships in the kernel or gets compiled by the Makefile.
 Gotchas this module already gets right for you:
 
 - The mouse driver in this kernel is PS/2 (relative deltas), not USB
-  HID. Don't reach for -device usb-tablet or absolute positioning --
-  it's the wrong device class for this guest. `click()`/`goto()` below
-  use `input-send-event` with `rel` axis events and track the cursor
-  position client-side, since there's no absolute-position query.
+  HID -- there's no USB stack in toy-os at all. Don't reach for
+  -device usb-tablet OR -device usb-mouse, and don't try absolute
+  positioning -- it's the wrong device class for this guest, and worse,
+  adding an explicit USB pointer device makes QEMU route host mouse
+  motion to THAT instead of the emulated PS/2 mouse, so the guest
+  receives nothing at all (looks exactly like "the mouse doesn't work"
+  but is actually a launch-flag mistake -- this bit a real interactive
+  session once, see CHANGELOG.md's build-293-adjacent Makefile fix).
+  Leave the pointer device unspecified; `click()`/`goto()` below use
+  `input-send-event` with `rel` axis events against the default
+  emulated PS/2 mouse, tracking the cursor position client-side since
+  there's no absolute-position query.
+- **Cursor position drifts across separate `QMPSession` instances that
+  share an already-open GUI session.** Each new session assumes the
+  cursor starts at `cursor_start` (default (640, 360)) without ever
+  querying the guest's real position. If a *previous* session already
+  entered GUI mode and left it open (didn't press Esc back to the
+  shell) and moved the mouse since, the real cursor is somewhere else,
+  and every `goto()` in the new session is offset by that error --
+  clicks land on the wrong thing. This looks exactly like a UI bug (a
+  click "not registering") but isn't. Fix: call `session.recalibrate()`
+  right after connecting, in any script that ISN'T entering GUI mode
+  itself via a fresh "gui" + Enter this session -- see
+  `recalibrate()`'s own docstring for why scripts that DO enter GUI
+  mode fresh don't need it (the kernel resets the cursor to screen
+  center deterministically on every GUI entry, matching the default
+  `cursor_start`) and, importantly, why `recalibrate()` must be called
+  AFTER "gui" + Enter if a script does both, never before.
 - Do NOT launch QEMU with `-display none` if you need mouse input to
   work. It disables the display head entirely, and `input-send-event`
   then silently no-ops -- it still returns `{"return": {}}` (looks like
@@ -29,6 +53,16 @@ Gotchas this module already gets right for you:
   equivalent below), not a plain `&` -- a bare background job tied to
   one shell invocation gets killed when that invocation ends. `setsid`
   detaches it so it survives across separate tool/shell calls.
+- **After changing any shared header (`widgets.h`, `gui_apps.h`, etc.),
+  `make clean && make all` before testing, not a plain `make all`.**
+  The Makefile doesn't track header dependencies (see its `version:`
+  target comment), so a stale `.o` compiled against the old struct
+  layout can silently desync from other, freshly-rebuilt `.o`s that
+  see the new one -- e.g. an array indexed with the wrong stride. This
+  produced genuinely bizarre-looking corruption once (Start menu items
+  showing raw function-prologue bytes as text) that a clean rebuild
+  fixed instantly. If a GUI test shows something inexplicable right
+  after a header change, suspect this before suspecting the new code.
 
 Typical usage from a Python REPL or script, once QEMU is already
 running (see `launch_qemu_cmd()` for the command to start it with):
@@ -38,6 +72,11 @@ running (see `launch_qemu_cmd()` for the command to start it with):
     qmp = QMPSession()                  # connects to 127.0.0.1:4445
     qmp.send_text("gui")                # type "gui" + Enter at the shell
     qmp.send_key("ret")
+    time.sleep(1)                       # let wm_run()/mouse_init() actually start
+    # qmp.recalibrate()                 # only needed when REUSING an already-open
+                                         # GUI session from a previous script -- see
+                                         # the cursor-drift gotcha and recalibrate()'s
+                                         # own docstring for the full ordering rule
     qmp.goto(44, 706)                   # move cursor to the Start button
     qmp.click()
     qmp.screenshot("start_menu.png")    # screendump -> ppm -> png in one call
@@ -166,16 +205,85 @@ class QMPSession:
         self.pos[0], self.pos[1] = x, y
         time.sleep(settle)
 
-    def click(self, button="left", settle=0.1):
+    def recalibrate(self, steps=30, step_settle=0.01, settle=0.1):
+        """Fixes the cross-session cursor-drift gotcha (see module
+        docstring): drives the REAL cursor to the top-left screen
+        corner with enough chunked negative movement to guarantee it
+        clamps there regardless of where a previous session left it,
+        then tells this session's client-side tracker the truth (pos =
+        (0, 0)). Call this once, in any script that isn't provably the
+        first QMPSession against a freshly launched QEMU process.
+        `steps` * 100px of guaranteed travel (the default 30 -> 3000px)
+        should clamp from anywhere on any screen resolution this
+        project uses; raise it if you ever use a bigger one.
+
+        ORDERING MATTERS: call this AFTER entering GUI mode (after
+        sending "gui" + Enter and a short settle), never before. The
+        kernel's PS/2 aux mouse device isn't enabled until
+        mouse_init() runs (see mouse.c), which happens inside
+        wm_run() when GUI mode starts -- relative motion sent earlier
+        than that has nothing listening on the other end and is lost.
+        mouse_init() also unconditionally resets the cursor to screen
+        center (bound_w/2, bound_h/2) every time GUI mode is
+        (re-)entered, which is *why* QMPSession's default
+        `cursor_start` is (640, 360) -- that's the exact 1280x720
+        center this kernel boots into. So: if your script enters GUI
+        mode itself via a fresh "gui" + Enter, you don't strictly need
+        recalibrate() at all (the default already matches). You DO
+        need it when connecting to a GUI session a previous script
+        already left open (no fresh mouse_init() to reset anything) --
+        call it right after connecting, before any goto()/click().
+        """
+        for _ in range(steps):
+            self.move_rel(-100, -100)
+            time.sleep(step_settle)
+        self.pos[0], self.pos[1] = 0, 0
+        time.sleep(settle)
+
+    def mouse_down(self, button="left"):
         self._cmd({"execute": "input-send-event",
                     "arguments": {"events": [{"type": "btn", "data": {"down": True, "button": button}}]}})
-        time.sleep(settle)
+
+    def mouse_up(self, button="left"):
         self._cmd({"execute": "input-send-event",
                     "arguments": {"events": [{"type": "btn", "data": {"down": False, "button": button}}]}})
+
+    def click(self, button="left", settle=0.1):
+        self.mouse_down(button)
+        time.sleep(settle)
+        self.mouse_up(button)
 
     def click_at(self, x, y, **kw):
         self.goto(x, y)
         self.click(**kw)
+
+    def drag(self, x, y, hold=0.2, settle=0.2, step_settle=0.02):
+        """Press the left button at the current position, move (via
+        the same chunked goto() every other move uses -- see its
+        docstring for why a raw move_rel() isn't safe here) to (x, y)
+        while held, then release. For dragging a scrollbar thumb, a
+        window titlebar, etc. Call goto() first if the press needs to
+        start somewhere other than the current tracked position.
+        """
+        self.mouse_down()
+        time.sleep(hold)
+        self.goto(x, y, settle=step_settle, step_settle=step_settle)
+        time.sleep(hold)
+        self.mouse_up()
+        time.sleep(settle)
+
+    def wheel(self, direction, notches=1, delay=0.08):
+        """Scrolls the mouse wheel `notches` times. `direction` is
+        'up' or 'down'. QEMU's PS/2 IntelliMouse emulation reports
+        wheel movement as synthetic 'wheel-up'/'wheel-down' button
+        press+release pairs over QMP -- there's no separate scroll
+        event type, this is genuinely how it's done.
+        """
+        button = "wheel-up" if direction == "up" else "wheel-down"
+        for _ in range(notches):
+            self.mouse_down(button)
+            self.mouse_up(button)
+            time.sleep(delay)
 
     # -- screenshots --------------------------------------------------------
 

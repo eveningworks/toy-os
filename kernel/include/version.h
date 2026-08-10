@@ -13,6 +13,6 @@
 // once per real change (fix/feature/major -- see that script), not
 // once per build, so the number reflects "how much has actually
 // changed," not "how many times someone ran make."
-#define TOYOS_VERSION "110"
+#define TOYOS_VERSION "293"
 
 #endif
