@@ -13,6 +13,13 @@
 qemu.log
 serial.log
 
+# tools/boot_smoke_test.py's default log filenames (its own --serial-log/
+# --qemu-log defaults) -- same reasoning as qemu.log/serial.log above,
+# just named differently so a smoke-test run and a QMP-test run left
+# side by side don't clobber each other's logs.
+smoke_serial.log
+smoke_qemu.log
+
 # Python bytecode from tools/*.py
 __pycache__/
 *.pyc
@@ -22,8 +29,12 @@ __pycache__/
 # never a real repo asset, just a staging spot the user empties by hand.
 /_to_delete/
 
-# Delivery workaround for Makefile being a protected file the device
-# bridge won't write to directly (see CLAUDE.md's "Makefile is a
-# protected file" note) -- a transient hand-off artifact the user
-# copies over the real Makefile and discards, not a repo asset either.
+# Delivery workaround for Makefile (and .github/workflows/*.yml) being
+# protected paths the device bridge won't write to directly (see
+# CLAUDE.md's "Makefile and anything under .github/workflows/*.yml are
+# protected files" note) -- transient hand-off artifacts the user
+# copies into place and discards, not repo assets either. The workflow
+# one has no fixed name (whatever avoids the protected path, e.g.
+# build.yml.new) -- *.yml.new covers any of them.
 /Makefile.new
+*.yml.new
