@@ -5,6 +5,38 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 294 (fix, +1) -- Documented the device-bridge git index.lock quirk
+
+While starting a fresh session in this repo, found that `git` commands
+run over the Cowork device bridge (`device_bash`) leave behind a stale
+`.git/index.lock`: git creates the lock, then tries to `unlink()` it
+when the command finishes, but the device bridge blocks `unlink()` on
+mounted files the same way it blocks `rm` (already documented for
+regular files). The command itself still succeeds -- you just see a
+`warning: unable to unlink ... Operation not permitted` -- but the lock
+is left behind, and the *next* git command that needs to write the
+index (`add`, `commit`, ...) fails hard with `fatal: Unable to create
+'.../index.lock': File exists`, which looks exactly like a genuinely
+stuck git process but isn't one. `mv` (rename) is allowed through the
+bridge even though `rm` (unlink) isn't, so the fix is to rename the
+stale lock out of the way rather than delete it.
+
+- `CLAUDE.md`: new bullet under "Working in the cloud sandbox vs. the
+  user's machine" explaining the quirk and pointing at the new script;
+  `tools/` section updated to list it.
+- `tools/device_git.sh`: new wrapper -- clears a stale `.git/index.lock`
+  (via `mv` into `.git/_to_delete/`) if present, then runs the real
+  `git` command. No-op when there's no stale lock, so it's safe to use
+  for every git invocation made over the device bridge, not just the
+  ones expected to write.
+- Verified: reproduced the lock getting left behind after a plain `git
+  status`/`git add -A --dry-run` via `device_bash` in this session,
+  confirmed `mv` (unlike `rm`) succeeds on the lock file through the
+  bridge, and confirmed a subsequent `git add`/`git status` then runs
+  clean. Repo itself was already clean and up to date with
+  `origin/main` at build 293 -- no code changes in this entry, tooling
+  and docs only.
+
 ## Build 293 (feature, +10) -- Notepad converted to the shared scrollback widget (scrollbar phase 4/4)
 
 Last of the four-phase scrollbar plan (builds 263, 273, 283 gave

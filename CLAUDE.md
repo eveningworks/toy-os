@@ -108,6 +108,21 @@ that aren't obvious until you hit them:
 - Build and test in the cloud sandbox first (`make clean && make all
   && make iso`), confirm it's clean, *then* deliver + commit files to
   the user's machine. Don't commit unverified changes.
+- **`git` commands run via `device_bash` leave behind a stale
+  `.git/index.lock`.** Git creates the lock, then tries to delete it
+  when the command finishes -- but that delete is a plain `unlink`,
+  which the device bridge blocks the same way it blocks `rm` (see
+  above). The command itself still succeeds (you'll just see a
+  `warning: unable to unlink ... Operation not permitted`), but the
+  lock file is left sitting in `.git/`, and the *next* `git` command
+  that needs to write the index (`add`, `commit`, ...) fails hard with
+  `fatal: Unable to create '.../index.lock': File exists` --
+  indistinguishable from a genuinely stuck git process. Unlike `rm`,
+  `mv` *is* allowed through the bridge, so the fix is to rename the
+  lock out of the way before the next write, not delete it. Use
+  `tools/device_git.sh` for any `git` command run this way (`add`,
+  `commit`, `push`, `tag`, ...) -- it clears a stale lock first, runs
+  the command, and you're done; don't hand-roll this check inline.
 
 ## Building
 
@@ -240,9 +255,12 @@ Dev/build helper scripts, not compiled or shipped as part of the OS:
 `genfont.py`/`genttf.py` (font generation, pre-existing), `qmp_test.py`
 (QEMU/QMP testing helpers, see above), `gen_version.sh`/
 `bump_build.sh` (build-number versioning, see the `version.h` bullet
-above). Add new tools here freely when something would save a future
-session real time -- the bar is "does this fix a rederive-from-scratch
-cost," the same reasoning that produced `qmp_test.py`.
+above), `device_git.sh` (wraps a `git` command run over the device
+bridge with the stale-`index.lock` workaround, see the "Working in the
+cloud sandbox" section above). Add new tools here freely when
+something would save a future session real time -- the bar is "does
+this fix a rederive-from-scratch cost," the same reasoning that
+produced `qmp_test.py`.
 
 ## Delivering changes
 
