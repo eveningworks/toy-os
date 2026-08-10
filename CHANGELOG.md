@@ -5,6 +5,95 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 273 (feature, +10) -- visual draggable scrollbar widget (scrollbar phase 2/4)
+
+Second of the four-phase scrollbar plan (build 263 did keyboard
+Page Up/Page Down). This one adds an actual scrollbar: a track +
+thumb on Terminal's right edge, click-to-page on the empty track,
+and drag-the-thumb-to-scroll.
+
+- `apps/widgets.h` / `apps/widgets.c`: new generic vertical scrollbar
+  widget -- `widget_scrollbar_draw()`, `widget_scrollbar_hit()`
+  (returns which zone a point is in: thumb / above / below / none),
+  `widget_scrollbar_thumb_rect()`, and
+  `widget_scrollbar_offset_for_drag()` (converts a drag position back
+  into a `scroll_offset`). All four share one internal
+  `scrollbar_geometry()` helper so the drawn thumb, the hit-test, and
+  the drag math can never disagree with each other. Thumb height is
+  clamped to a `SCROLLBAR_MIN_THUMB_H` (16px) floor so it stays
+  grabbable even with a huge scrollback.
+- `apps/gui_apps.h`: extended the `gui_app` callback contract with two
+  new optional callbacks, `on_drag_start`/`on_drag`, so an app can
+  claim a multi-tick drag gesture (like dragging a scrollbar thumb)
+  instead of a single click -- mutually exclusive with `on_click` per
+  button-press.
+- `apps/gui_apps.c`: switched `gui_app_registry[]` from positional to
+  designated initializers, since adding the two new optional fields
+  would otherwise have silently misaligned every existing entry.
+- `apps/wm/wm_internal.h`, `apps/wm/wm.c`, `apps/wm/wm_input.c`: added
+  a `content_dragging` window-index state (parallel to the existing
+  `dragging`/`resizing`) so the window manager can drive an app-owned
+  content-area drag across ticks without knowing anything about
+  scrollbars specifically -- it just calls `on_drag_start` on
+  button-down and `on_drag` every subsequent tick the button stays
+  held.
+- `apps/terminal.h` / `apps/terminal.c`: wired the scrollbar in --
+  reserves a `gfx_char_w()+4`-pixel strip on the content area's right
+  edge (skipped below a minimum window width), draws the scrollbar
+  next to the text, and added `terminal_click()` (track paging),
+  `terminal_drag_start()`/`terminal_drag()` (thumb dragging). Page
+  Up/Page Down from build 263 now measures against the narrowed
+  text width so keyboard and scrollbar scrolling never disagree about
+  how many columns are on screen.
+- Notepad still not touched -- phase 4.
+
+Found and fixed one real bug during QEMU testing: the first version of
+the designated-initializer `gui_app_registry[]` entry for Terminal
+left out `.on_click`, so clicking the scrollbar's empty track (page
+up/down) silently did nothing.
+
+Also hit a testing-only gotcha worth recording: `tools/qmp_test.py`'s
+`QMPSession` tracks the cursor position client-side and assumes a
+fixed starting point, so spawning a fresh session mid-sequence (or
+sending a single very large `move_rel` instead of `goto()`'s chunked
+steps) drifts the tracked position away from the real one and makes
+clicks land on the wrong thing -- looks exactly like a UI bug but
+isn't. Fixed by keeping precision-dependent interaction sequences
+inside one `QMPSession`, and by recalibrating (drive the real cursor
+to a screen corner with plenty of chunked negative movement, then
+tell the tracker `pos = corner`) at the start of any script that
+can't guarantee it's the first one run against a given QEMU instance.
+
+Also ran into the Makefile's documented lack of header-dependency
+tracking (see its `version:` target comment) firsthand: testing right
+after resuming this session showed the Start menu's item labels
+corrupted for every app but the first (`About`/`Calculator` rendered
+as garbage, `Terminal` as what turned out to be raw function-prologue
+bytes reinterpreted as text) -- a stale `wm_render.o` compiled against
+the pre-phase-2 (smaller) `struct gui_app` layout, indexing into an
+array actually built with the new, bigger layout. `make clean && make
+all` fixed it immediately; this wasn't a real code bug, just a reason
+to always clean-rebuild before trusting a GUI test after touching a
+shared header, per CLAUDE.md's existing advice.
+
+Tested in QEMU through the real GUI (after a clean rebuild): opened
+Terminal, ran `help` several times to build up scrollback past one
+screen, confirmed the thumb starts pinned to the bottom; dragged it to
+the top and confirmed the view scrolled to the very start of the
+output with the thumb at the top of the track; dragged it back to the
+bottom and confirmed both view and thumb returned correctly; clicked
+the empty track above the thumb twice and confirmed it paged up by a
+screenful each time. Also re-verified Notepad, Calculator, and About
+still open and work normally, and that ordinary window-titlebar
+dragging is unaffected by the new `content_dragging` state.
+
+Screenshots: `screenshots/2026-08-10/scrollbar_p2_thumb_bottom.png`,
+`screenshots/2026-08-10/scrollbar_p2_dragged_to_top.png`,
+`screenshots/2026-08-10/scrollbar_p2_dragged_to_bottom.png`,
+`screenshots/2026-08-10/scrollbar_p2_track_click_pageup.png`,
+`screenshots/2026-08-10/scrollbar_p2_regression_calculator.png`,
+`screenshots/2026-08-10/scrollbar_p2_regression_normal_drag.png`
+
 ## Build 263 (feature, +10) -- keyboard Page Up/Page Down scrolling (scrollbar phase 1/4)
 
 First of a four-phase plan (asked for scrollbars in Terminal and

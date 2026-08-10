@@ -500,15 +500,15 @@ untouched.
 
 ## Ideas for what's next
 
-- Scrollbars for Terminal and Notepad -- in progress, phase 1/4 done
-  (see CHANGELOG.md's build 263): Page Up/Page Down now scroll
-  Terminal's scrollback a screenful at a time. Remaining phases: a
-  visual draggable scrollbar widget (plus window-manager drag-state
-  plumbing), PS/2 mouse scroll-wheel support (the driver only parses
-  standard 3-byte packets today, not IntelliMouse's 4-byte wheel
-  packets), and converting Notepad to the shared `text_scrollback`
-  widget so it gains scrolling at all (it currently has none -- text
-  past the visible area just isn't drawn).
+- Scrollbars for Terminal and Notepad -- in progress, phase 2/4 done
+  (see CHANGELOG.md's builds 263 and 273): Page Up/Page Down scroll
+  Terminal's scrollback a screenful at a time, and it now has a real
+  visual draggable scrollbar (click the empty track to page, drag the
+  thumb to scroll directly). Remaining phases: PS/2 mouse scroll-wheel
+  support (the driver only parses standard 3-byte packets today, not
+  IntelliMouse's 4-byte wheel packets), and converting Notepad to the
+  shared `text_scrollback` widget so it gains scrolling at all (it
+  currently has none -- text past the visible area just isn't drawn).
 - ~~GUI terminal-emulator app~~ -- done (see CHANGELOG.md's builds 183,
   193, 203, and 253 for the finished `apps/terminal.c`). `Terminal` in
   the Start menu runs the real shell dispatcher inside a resizable

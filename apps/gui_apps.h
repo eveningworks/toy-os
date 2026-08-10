@@ -45,7 +45,30 @@ struct gui_app {
 
     // Called on a left-click inside the content area. (cx, cy) are
     // content-relative (0,0 = top-left of the content area). May be NULL.
+    //
+    // NOT called for a press on_drag_start() claims (see below) -- the
+    // two are mutually exclusive per press: either a click, or a drag,
+    // never both for the same button-down.
     void (*on_click)(struct window *win, int cx, int cy);
+
+    // Called on a left-button-DOWN inside the content area, before
+    // on_click -- lets an app claim a multi-tick drag gesture (e.g.
+    // dragging a scrollbar thumb, see widgets.h's widget_scrollbar_*)
+    // instead of a single click. (cx, cy) are the button-down position,
+    // content-relative like on_click's. Return 1 to start capturing the
+    // drag: on_drag() (below) will then be called every subsequent tick
+    // the button stays held, and on_click is skipped for this press.
+    // Return 0 to fall through to the ordinary on_click contract
+    // instead. May be NULL (equivalent to always returning 0) for any
+    // app that has nothing worth dragging in its content area.
+    int (*on_drag_start)(struct window *win, int cx, int cy);
+
+    // Called every tick a drag this app started via on_drag_start() is
+    // still in progress (left button still held), with the CURRENT
+    // mouse position, content-relative. Never called unless
+    // on_drag_start returned 1 for the press currently in progress; may
+    // be NULL only if on_drag_start is also NULL or always returns 0.
+    void (*on_drag)(struct window *win, int cx, int cy);
 
     // 1 (the common case) if the user can drag-resize and maximize this
     // app's window; 0 to fix it at its default_size() forever -- no

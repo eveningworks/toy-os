@@ -37,6 +37,14 @@
 // widgets.h's comment on why that's cheap enough to just always do).
 #define TERM_COLS 70
 #define TERM_ROWS 20
+// Width of the scrollbar strip reserved along the content area's right
+// edge -- scales with font size like everything else here (see
+// TOOLBAR_H in notepad.c for the same pattern). Below TERM_MIN_W_FOR_SCROLLBAR
+// (an arbitrarily-picked "would leave basically no room for text" content
+// width), the scrollbar is skipped entirely and text uses the full width --
+// see term_layout().
+#define TERM_SCROLLBAR_W (gfx_char_w() + 4)
+#define TERM_MIN_W_FOR_SCROLLBAR (TERM_SCROLLBAR_W * 3)
 
 // Single static instance -- like every other GUI app here, only one
 // window of it can be open at a time (see wm.c's open_app).
@@ -49,6 +57,7 @@ struct terminal_state {
     int hist_index;       // like shell.c's shell_read_line(): one past the
                            // newest = "current blank/in-progress line"
     char saved_current[TERM_LINE_MAX];
+    int scrollbar_grab_offset; // set by terminal_drag_start(), read by terminal_drag() -- see widgets.h's widget_scrollbar_thumb_rect()
 };
 static struct terminal_state g_terminal;
 
@@ -157,6 +166,24 @@ void terminal_default_size(int *w, int *h) {
     *h = TERM_ROWS * gfx_char_h();
 }
 
+// Splits the content area into the text region and (if there's room)
+// the scrollbar strip -- shared by terminal_draw(), terminal_key()'s
+// Page Up/Down handling, and the drag/click handlers below, so all four
+// agree on exactly the same geometry widget_scrollback_draw() actually
+// used to render (a mismatch there would mean scrolling by the wrong
+// page size, or hit-testing against the wrong column count).
+static void term_layout(struct window *win, int *out_text_w, int *out_ch, int *out_show_scrollbar) {
+    int cw = window_content_w(win);
+    *out_ch = window_content_h(win);
+    if (cw > TERM_MIN_W_FOR_SCROLLBAR) {
+        *out_show_scrollbar = 1;
+        *out_text_w = cw - TERM_SCROLLBAR_W;
+    } else {
+        *out_show_scrollbar = 0;
+        *out_text_w = cw;
+    }
+}
+
 void terminal_open(struct window *win) {
     widget_scrollback_init(&g_terminal.tb);
     g_terminal.line_len = 0;
@@ -177,9 +204,73 @@ void terminal_draw(struct window *win) {
     struct terminal_state *st = (struct terminal_state *)window_get_state(win);
     int cx = window_content_x(win);
     int cy = window_content_y(win);
-    int cw = window_content_w(win);
-    int ch = window_content_h(win);
-    widget_scrollback_draw(&st->tb, cx, cy, cw, ch, gfx_rgb(0, 0, 0), 1);
+    int text_w, ch, show_scrollbar;
+    term_layout(win, &text_w, &ch, &show_scrollbar);
+
+    widget_scrollback_draw(&st->tb, cx, cy, text_w, ch, gfx_rgb(0, 0, 0), 1);
+
+    if (show_scrollbar) {
+        int total_lines, visible_rows;
+        widget_scrollback_metrics(&st->tb, text_w, ch, &total_lines, &visible_rows);
+        widget_scrollbar_draw(cx + text_w, cy, TERM_SCROLLBAR_W, ch, total_lines, visible_rows,
+                               st->tb.scroll_offset, gfx_rgb(15, 15, 15), gfx_rgb(90, 90, 90));
+    }
+}
+
+// Scrollbar track clicks that aren't on the thumb (paging up/down) --
+// thumb clicks never reach here, they're claimed by terminal_drag_start()
+// instead (see gui_apps.h's on_click/on_drag_start contract).
+void terminal_click(struct window *win, int cx, int cy) {
+    struct terminal_state *st = (struct terminal_state *)window_get_state(win);
+    int text_w, ch, show_scrollbar;
+    term_layout(win, &text_w, &ch, &show_scrollbar);
+    if (!show_scrollbar) return;
+
+    int total_lines, visible_rows;
+    widget_scrollback_metrics(&st->tb, text_w, ch, &total_lines, &visible_rows);
+    enum scrollbar_zone zone = widget_scrollbar_hit(text_w, 0, TERM_SCROLLBAR_W, ch,
+                                                      total_lines, visible_rows, st->tb.scroll_offset, cx, cy);
+    int page = visible_rows > 1 ? visible_rows - 1 : 1;
+    if (zone == SCROLLBAR_ZONE_ABOVE) {
+        widget_scrollback_scroll(&st->tb, page);
+    } else if (zone == SCROLLBAR_ZONE_BELOW) {
+        widget_scrollback_scroll(&st->tb, -page);
+    } else {
+        return; // click landed in the text area (or the bar isn't shown) -- nothing to do
+    }
+    window_invalidate(win);
+}
+
+int terminal_drag_start(struct window *win, int cx, int cy) {
+    struct terminal_state *st = (struct terminal_state *)window_get_state(win);
+    int text_w, ch, show_scrollbar;
+    term_layout(win, &text_w, &ch, &show_scrollbar);
+    if (!show_scrollbar) return 0;
+
+    int total_lines, visible_rows;
+    widget_scrollback_metrics(&st->tb, text_w, ch, &total_lines, &visible_rows);
+    enum scrollbar_zone zone = widget_scrollbar_hit(text_w, 0, TERM_SCROLLBAR_W, ch,
+                                                      total_lines, visible_rows, st->tb.scroll_offset, cx, cy);
+    if (zone != SCROLLBAR_ZONE_THUMB) return 0;
+
+    int thumb_y, thumb_h;
+    widget_scrollbar_thumb_rect(0, ch, total_lines, visible_rows, st->tb.scroll_offset, &thumb_y, &thumb_h);
+    st->scrollbar_grab_offset = cy - thumb_y;
+    return 1;
+}
+
+void terminal_drag(struct window *win, int cx, int cy) {
+    (void)cx; // this is a purely vertical scrollbar -- only cy matters
+    struct terminal_state *st = (struct terminal_state *)window_get_state(win);
+    int text_w, ch, show_scrollbar;
+    term_layout(win, &text_w, &ch, &show_scrollbar);
+    (void)show_scrollbar; // a drag only ever starts while true; harmless either way if the window shrank mid-drag
+
+    int total_lines, visible_rows;
+    widget_scrollback_metrics(&st->tb, text_w, ch, &total_lines, &visible_rows);
+    st->tb.scroll_offset = widget_scrollbar_offset_for_drag(0, ch, total_lines, visible_rows,
+                                                              cy, st->scrollbar_grab_offset);
+    window_invalidate(win);
 }
 
 void terminal_key(struct window *win, int key) {
@@ -222,9 +313,10 @@ void terminal_key(struct window *win, int key) {
         // paging down repeatedly can't skip past the bottom in one
         // jump (widget_scrollback_scroll()'s clamp handles the exact
         // boundary either way, this just picks a sensible step size).
+        int text_w, ch, show_scrollbar;
+        term_layout(win, &text_w, &ch, &show_scrollbar);
         int total_lines, visible_rows;
-        widget_scrollback_metrics(&st->tb, window_content_w(win), window_content_h(win),
-                                   &total_lines, &visible_rows);
+        widget_scrollback_metrics(&st->tb, text_w, ch, &total_lines, &visible_rows);
         int page = visible_rows > 1 ? visible_rows - 1 : 1;
         widget_scrollback_scroll(&st->tb, key == KEY_PAGE_UP ? page : -page);
     } else if (key >= 32 && key < 127 && st->line_len < TERM_LINE_MAX - 1) {

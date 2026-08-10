@@ -139,9 +139,15 @@ void wm_handle_left_click(int mx, int my) {
 
         bring_to_front(i);
         int fi = window_count - 1;
-        if (windows[fi].app && windows[fi].app->on_click) {
-            int ccx = mx - window_content_x(&windows[fi]);
-            int ccy = my - window_content_y(&windows[fi]);
+        int ccx = mx - window_content_x(&windows[fi]);
+        int ccy = my - window_content_y(&windows[fi]);
+        int claimed_drag = 0;
+        if (windows[fi].app && windows[fi].app->on_drag_start) {
+            claimed_drag = windows[fi].app->on_drag_start(&windows[fi], ccx, ccy);
+        }
+        if (claimed_drag) {
+            content_dragging = fi;
+        } else if (windows[fi].app && windows[fi].app->on_click) {
             windows[fi].app->on_click(&windows[fi], ccx, ccy);
         }
         redraw_pending = 1;
@@ -187,6 +193,20 @@ void wm_update_drag_resize(int mx, int my, uint8_t buttons) {
             redraw_pending = 1;
         } else {
             resizing = -1;
+        }
+    }
+
+    if (content_dragging >= 0) {
+        struct window *w = &windows[content_dragging];
+        if (buttons & 0x1) {
+            if (w->app && w->app->on_drag) {
+                int ccx = mx - window_content_x(w);
+                int ccy = my - window_content_y(w);
+                w->app->on_drag(w, ccx, ccy);
+            }
+            redraw_pending = 1;
+        } else {
+            content_dragging = -1;
         }
     }
 }

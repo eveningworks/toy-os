@@ -37,6 +37,8 @@ int resize_right = 0, resize_bottom = 0;
 int resize_start_mx, resize_start_my;
 int resize_start_w, resize_start_h;
 
+int content_dragging = -1; // index into windows[], or -1 -- see wm_internal.h
+
 int redraw_pending = 1;
 
 // ---- app-facing helpers (declared in wm.h) ----
@@ -133,6 +135,7 @@ void wm_run(void) {
     start_menu_open = 0;
     dragging = -1;
     resizing = -1;
+    content_dragging = -1;
     redraw_pending = 1;
 
     int mx, my;

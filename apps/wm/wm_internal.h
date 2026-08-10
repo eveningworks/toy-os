@@ -59,6 +59,13 @@ extern int resize_right, resize_bottom;
 extern int resize_start_mx, resize_start_my;
 extern int resize_start_w, resize_start_h;
 
+// index into windows[], or -1 if no app is currently capturing a
+// content-area drag via its on_drag_start callback (see gui_apps.h) --
+// same shape as dragging/resizing above, just app-owned instead of
+// WM-owned. First user: Terminal's scrollbar thumb (widgets.h's
+// widget_scrollbar_*).
+extern int content_dragging;
+
 extern int redraw_pending;
 
 // Window lifecycle -- defined in wm.c, used by wm_input.c (opening from
