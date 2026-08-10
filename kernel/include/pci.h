@@ -81,4 +81,17 @@ int pci_bar_is_io(uint32_t bar);
 // driver actually needs to map one.
 uint32_t pci_bar_addr(uint32_t bar);
 
+// Sets the "Bus Master Enable" bit (bit 2) in `dev`'s PCI Command
+// register (config-space offset 0x04) -- required before a device can
+// actually issue memory read/write cycles for DMA, even though its
+// I/O-mapped control registers (a Bus-Master IDE controller's
+// BM_CMD/BM_STATUS/BM_PRDT, say -- see ata.c, build 430) will keep
+// accepting reads/writes and can still report a nominal "transfer
+// complete" status without this set. Read-modify-write, so other
+// Command register bits already set by firmware/QEMU are left alone.
+// No-op if `dev` is NULL. Any future DMA-capable driver (a NIC,
+// chiefly) needs this same call before its own DMA will move real
+// data, not just this file's IDE use.
+void pci_enable_bus_master(const struct pci_device *dev);
+
 #endif

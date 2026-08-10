@@ -41,6 +41,20 @@ static uint8_t config_read8(uint8_t bus, uint8_t device, uint8_t function, uint8
     return (uint8_t)((v >> ((offset & 3) * 8)) & 0xFF);
 }
 
+static void config_write16(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint16_t value) {
+    // CONFIG_DATA only ever accepts a full 32-bit dword write, so a
+    // narrower write (this is the only width any caller needs so far --
+    // see pci_enable_bus_master() below) has to read-modify-write the
+    // dword the target 16 bits live in, same shape config_read16()
+    // already uses to pull a narrower READ back out of one.
+    uint32_t old = config_read32(bus, device, function, offset);
+    uint32_t shift = (offset & 2) * 8;
+    uint32_t mask = 0xFFFFu << shift;
+    uint32_t updated = (old & ~mask) | ((uint32_t)value << shift);
+    outl(PCI_CONFIG_ADDRESS, config_address(bus, device, function, offset));
+    outl(PCI_CONFIG_DATA, updated);
+}
+
 void pci_init(void) {
     g_count = 0;
 
@@ -132,4 +146,21 @@ int pci_bar_is_io(uint32_t bar) {
 uint32_t pci_bar_addr(uint32_t bar) {
     if (pci_bar_is_io(bar)) return bar & 0xFFFFFFFCu;  // low 2 bits are decode-type/reserved
     return bar & 0xFFFFFFF0u;                          // low 4 bits are decode-type/prefetchable
+}
+
+void pci_enable_bus_master(const struct pci_device *dev) {
+    if (!dev) return;
+    // PCI Command register, offset 0x04, bit 2 ("Bus Master Enable") --
+    // without this set, the device won't actually issue memory
+    // read/write cycles for DMA at all, even though its I/O-mapped
+    // control registers (a Bus-Master IDE controller's BM_CMD/BM_STATUS/
+    // BM_PRDT, say) keep accepting reads/writes and can still report a
+    // nominal "transfer complete" status -- the classic, easy-to-miss
+    // reason a DMA engine that looks fully programmed correctly still
+    // silently moves no real data. Read-modify-write (not a blind
+    // overwrite) so the other Command register bits (I/O space enable,
+    // memory space enable, etc. -- already set by firmware/QEMU before
+    // this kernel ever runs) aren't disturbed.
+    uint16_t cmd = config_read16(dev->bus, dev->device, dev->function, 0x04);
+    config_write16(dev->bus, dev->device, dev->function, 0x04, cmd | 0x0004);
 }

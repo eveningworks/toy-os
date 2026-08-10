@@ -638,6 +638,22 @@ untouched.
     scaffolding ahead of the actual driver, not a working socket --
     see `sockettest`, which proves exactly this surface and nothing
     more.
+  - ~~**A real IRQ-driven DMA transfer example**~~ -- done (see
+    CHANGELOG.md's build 470): `ata.c` now does genuine Bus-Master DMA
+    (`pmm_alloc_contiguous()`-backed PRDT + bounce buffer) with
+    IRQ14-signaled completion, falling back to the original PIO path
+    automatically if DMA can't be stood up. This is the reference
+    example a NIC driver's own RX/TX ring would follow, and it also
+    produced two reusable, general-purpose pieces any future
+    DMA-capable driver needs: `pci_enable_bus_master()`
+    (`kernel/drivers/pci.c`/`.h` -- a device's DMA control registers
+    can report success while moving no real data without this bit
+    set, see `docs/decisions.md`) and `isr_in_progress()`/
+    `isr_reset_depth()` (`kernel/include/idt.h` -- lets a driver
+    genuinely `hlt`-block waiting for an IRQ when it's safe to, and
+    fall back to polling the device's own status bit when called from
+    inside a syscall, without reintroducing the `g_next_kernel_rsp`
+    reentrancy bug -- see `docs/decisions.md`).
   - Smaller gap: there's a tick counter (`pit_ticks()`) but no sleep/
     delay primitive -- TCP needs timeouts and retransmission timers.
   Realistic path, if taken: PCI enum -> pick a simple NIC to target
@@ -648,7 +664,8 @@ untouched.
   can reliably get in and out) -> TCP + the socket syscalls. The
   driver-integration pattern itself is in good shape to build on --
   `ata.c`'s probe/init-function/capability-header-through-`kapi.h`
-  structure is a reasonable template, and the existing `*_test.c`
+  structure, now including a working IRQ-driven Bus-Master DMA path
+  (see above), is a reasonable template, and the existing `*_test.c`
   diagnostic pattern (`echo_test.c` etc.) is a natural fit for early
   loopback/ARP verification -- but this is its own multi-session
   project with its own milestones, not a single build bump.

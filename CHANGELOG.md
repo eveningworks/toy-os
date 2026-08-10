@@ -5,6 +5,121 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 470 (major, +50) -- IRQ-driven Bus-Master DMA for ata.c, plus two real bugs it exposed
+
+Asked to improve `ata.c` specifically because it was called out (build
+390's README wording) as a reasonable structural template that still
+didn't cover IRQ- or DMA-driven I/O -- the next disk-side milestone
+alongside the ongoing TCP/IP-prerequisite chain (builds 390/400/410/
+420: PCI enumeration, IRQ registration, contiguous/DMA memory,
+socket-fd syscalls). Presented two choices up front: scope (docs only
+vs. DMA-with-polling vs. IRQ-only vs. both IRQ-driven completion and
+Bus-Master DMA transfer) and DMA-unavailable fallback (fail closed vs.
+fall back to the existing PIO path). Went with: both (a real
+IRQ-driven Bus-Master DMA path, not a polling shortcut), falling back
+to PIO automatically whenever DMA can't be stood up (no PCI IDE
+controller found, BAR4 isn't I/O-space, or the contiguous 2-frame
+allocation fails) -- `ata_read_sector()`/`ata_write_sector()`'s public
+signatures never changed, so `fs.c`/`tfs.c` needed zero edits either
+way.
+
+Implementing this surfaced two real, independent bugs -- both integral
+to actually making the feature work, not separate fixes:
+
+- **The `g_next_kernel_rsp` reentrancy hazard, hit for real.** A naive
+  `hlt`-until-IRQ wait hung forever on every `SYS_WRITE`/`SYS_READ`
+  syscall (`filetest` froze mid-run): `int 0x80` is wired as an
+  interrupt gate (`idt_set_gate(128, isr128, 0, 0xEE)`), which clears
+  IF for the whole syscall, so no interrupt -- not even the timer --
+  could ever fire to wake it. Naively adding `sti` before the wait
+  would have reintroduced the exact reentrancy bug already documented
+  (and previously hit and abandoned) in `syscall.c`'s own
+  `SYS_READ_KEY` comment: `isr_dispatch()`'s epilogue does
+  `mov rsp, [rel g_next_kernel_rsp]` unconditionally before every
+  `iretq`, so a nested interrupt firing mid-syscall would corrupt the
+  outer handler's resume point. Stopped and presented three options
+  rather than picking one silently; went with a context-aware hybrid:
+  a new `g_isr_depth` counter (`kernel/core/idt.c`, exposed as
+  `isr_in_progress()`/`isr_reset_depth()` via `kernel/include/idt.h`)
+  tracks whether the CPU is currently inside any interrupt handler.
+  `ata.c`'s `wait_dma_irq()` genuinely blocks via `hlt` when it's
+  safe (the common case -- most real disk I/O in this OS is `apps/`
+  code calling `fs_write()`/`fs_read()` directly from kernel space,
+  never inside an interrupt), and falls back to bounded polling of the
+  Bus-Master status register's own IRQ bit when called from inside a
+  syscall (the hardware still raises that bit regardless of the CPU's
+  interrupt-enable state -- IF only gates whether the CPU *services*
+  an IRQ, not whether the chipset sets the status bit). The depth
+  counter is forcibly reset to 0 in `process_run_ring3()`'s
+  longjmp-style resume branch (`kernel/core/process.c`) -- the one
+  point in this kernel where "definitely not inside any interrupt" is
+  guaranteed true, since every caller of that function is plain
+  kernel-space code (confirmed via grep), never itself nested in an
+  interrupt -- which is what makes it safe to force the counter back
+  to 0 there instead of trusting now-unreachable decrements on the
+  abandoned call stack.
+- **PCI Bus Master Enable never set -- DMA "succeeded" while moving no
+  real data.** Every transfer reported success (`bm_status` showed the
+  IRQ bit set, no error bit) yet `disk.img` stayed all-zeros even
+  after a clean shutdown. Root-caused by careful isolation: confirmed
+  PIO-only writes DID persist (ruling out a QEMU/methodology issue),
+  then host-side pre-seeded `disk.img` with a valid superblock and
+  traced the DMA read's bounce buffer -- it held stale/garbage memory,
+  not the real on-disk bytes, proving no actual bus cycle ever
+  happened despite the hardware status registers reporting completion.
+  The classic, easy-to-miss cause: the PCI Command register's "Bus
+  Master Enable" bit (config offset 0x04, bit 2) was never set for the
+  IDE controller -- without it, a PCI device's I/O-mapped DMA control
+  registers keep accepting reads/writes and can still report nominal
+  success, but the device never issues real memory read/write cycles.
+  Fixed with a new `pci_enable_bus_master()` (`kernel/drivers/pci.c`/
+  `kernel/include/pci.h`, plus a `config_write16()` read-modify-write
+  helper alongside the existing `config_read16()`), called from
+  `ata_init_dma()` right after the contiguous allocation succeeds.
+  Explicitly noted in `pci.h`'s own doc comment as a call any future
+  DMA-capable driver -- a NIC, chiefly -- will need too.
+
+- **`kernel/include/ata.h`** / **`kernel/drivers/ata.c`**: rewritten
+  around a dual-path design -- `ata_init()` now calls a new
+  `ata_init_dma()` after confirming a drive is present, which looks
+  for the IDE controller on the PCI bus (class 0x01, subclass 0x01),
+  checks BAR4 is a usable I/O BAR, allocates a contiguous 2-frame
+  block via build 410's `pmm_alloc_contiguous(2)` (one frame for a
+  single-entry PRD table, one as a bounce buffer -- every transfer
+  here is exactly one 512-byte sector, so one PRD entry is always
+  enough), calls `pci_enable_bus_master()`, registers `ata_irq_handler`
+  for IRQ14 via build 400's `irq_register_handler()`, and unmasks it.
+  `dma_transfer()` programs the PRDT, issues `CMD_READ_DMA`/
+  `CMD_WRITE_DMA`, starts the bus master, waits via `wait_dma_irq()`,
+  then stops the engine and clears status regardless of outcome. The
+  original PIO implementation is untouched, renamed to
+  `pio_read_sector()`/`pio_write_sector()`, and used automatically
+  whenever `g_dma_available` is 0. New `ata_dma_active()` diagnostic
+  getter. Public API (`ata_present()`/`ata_read_sector()`/
+  `ata_write_sector()`) unchanged.
+- **`kernel/include/idt.h`** / **`kernel/core/idt.c`**: new
+  `isr_in_progress()`/`isr_reset_depth()`, backed by a `g_isr_depth`
+  counter incremented at the top of `isr_dispatch()` and decremented
+  at every normal-return path.
+- **`kernel/core/process.c`**: `process_run_ring3()`'s resume branch
+  calls `isr_reset_depth()` -- see the reentrancy writeup above.
+- **`kernel/drivers/pci.c`** / **`kernel/include/pci.h`**: new
+  `pci_enable_bus_master()` (and a `config_write16()` helper).
+
+Verified: `make clean && make all && make iso` clean, zero warnings
+introduced; `tools/boot_smoke_test.py` passes. Full QMP end-to-end
+persistence test against a real disk image (not just the in-memory
+`tfs.c` cache, which proves nothing about real disk I/O on its own):
+booted with a fresh disk, wrote a file from the kernel-space shell
+path (genuine `hlt`-blocking DMA), clean QMP `"quit"` shutdown,
+rebooted with the *same* disk image, confirmed
+`"fs: loaded persistent filesystem from disk"` (not "formatted a
+fresh...") and that the written file's content read back correctly --
+proof the fix moves real bytes, not just that status registers look
+happy. Also ran `filetest` and `sockettest`/`newsyscalltest` (the
+syscall/polling-DMA path) post-reboot, all passing with no hang and no
+regression. Screenshots in `screenshots/2026-08-10/`.
+
 ## Build 420 (feature, +10) -- socket-fd abstraction + SYS_SOCKET/SYS_SEND/SYS_RECV
 
 Fourth milestone toward TCP/IP networking (see build 380's README

@@ -3,31 +3,51 @@
 
 #include <stdint.h>
 
-// A minimal legacy PIO ATA/IDE driver -- primary bus, master drive only,
-// 28-bit LBA addressing, polling (no interrupts: IRQ14 stays masked in
-// the PIC, see pic_clear_mask() calls in idt.c, so this deliberately
-// never needs an ISR). This is the same "poll a status register in a
-// loop" shape as i8042.c and the PIT, just for a different piece of
-// hardware -- no DMA, no command queueing, one sector at a time.
+// ATA/IDE, primary bus, master drive only, 28-bit LBA addressing. Two
+// transfer paths exist now (as of build 430), chosen automatically at
+// init, with the exact same public API either way:
+//
+//   - Bus-Master IDE DMA, IRQ14-driven completion -- the normal path.
+//     ata_init() looks for the IDE controller on the PCI bus (pci.c,
+//     build 390): if it's there, its Bus-Master DMA registers (found
+//     via BAR4) are usable, and a 2-frame contiguous physical
+//     allocation for the PRDT + a bounce buffer succeeds (pmm.c, build
+//     410), this driver sets up a Physical Region Descriptor Table,
+//     issues READ DMA/WRITE DMA (0xC8/0xCA) instead of the old PIO
+//     commands, and blocks on IRQ14 (irq.c, build 400) instead of
+//     spinning on a status register.
+//   - The original PIO, busy-polled path -- used automatically if
+//     anything about DMA setup fails (no IDE controller found at all,
+//     its BAR4 isn't an I/O-space BAR, or the contiguous-frame
+//     allocation for the PRDT/bounce buffer comes back empty). No
+//     capability this driver already had is lost by falling back --
+//     see ata.c's top comment for the full detection sequence, which
+//     is unchanged from before this build.
+//
+// ata_present()/ata_read_sector()/ata_write_sector() -- and every
+// existing caller (fs.c, tfs.c) -- neither know nor care which path is
+// active; this is purely an ata.c-internal choice.
 //
 // Chosen over AHCI/SATA specifically because it needs nothing this
-// kernel doesn't already have: no PCI enumeration (legacy ATA lives at
-// fixed ports 0x1F0-0x1F7/0x3F6, unlike AHCI which is found via PCI
-// config space and driven through an MMIO BAR), no interrupt handling,
-// no scatter-gather command lists. It's also exactly what QEMU's
-// default `-drive ...,if=ide` presents. The tradeoff: real modern
-// hardware increasingly lacks a legacy IDE controller at all, so this
-// won't find a disk on that class of machine -- see fs.c's graceful
-// "no disk -> RAM-only" fallback for what happens then, and README's
-// "Ideas for what's next" for what AHCI support would additionally
-// require.
+// kernel doesn't already have: PCI enumeration (build 390) and IRQ
+// handling (build 400) are both now in place, which is exactly what
+// unlocked this build -- but AHCI would still additionally need MMIO
+// BAR mapping and scatter-gather command lists this driver has no use
+// for. It's also exactly what QEMU's default `-drive ...,if=ide`
+// presents. The tradeoff: real modern hardware increasingly lacks a
+// legacy IDE controller at all, so this won't find a disk on that
+// class of machine -- see fs.c's graceful "no disk -> RAM-only"
+// fallback for what happens then, and README's "Ideas for what's next"
+// for what AHCI support would additionally require.
 #define ATA_SECTOR_SIZE 512
 
 // Probes the primary bus for a master drive via IDENTIFY DEVICE and
-// records whether one was found. Safe to call even if there's no
-// controller/drive at all (a floating bus reads back 0xFF and this
-// returns immediately) -- every other ata_* function is a no-op after
-// that, not a hang.
+// records whether one was found; if one is, also attempts to set up
+// the Bus-Master DMA path described above (silently falling back to
+// PIO on any failure -- see ata.c's ata_init_dma()). Safe to call even
+// if there's no controller/drive at all (a floating bus reads back
+// 0xFF and this returns immediately) -- every other ata_* function is
+// a no-op after that, not a hang.
 void ata_init(void);
 
 // 1 if ata_init() found a usable drive, 0 otherwise (no controller, no
@@ -37,10 +57,18 @@ void ata_init(void);
 // never conflicts with this).
 int ata_present(void);
 
+// 1 if the Bus-Master DMA path is active (see this header's top
+// comment), 0 if every transfer is going through the PIO fallback --
+// diagnostic only, no caller needs to branch on this (both paths
+// implement the exact same ata_read_sector()/ata_write_sector()
+// contract below).
+int ata_dma_active(void);
+
 // Reads/writes exactly one ATA_SECTOR_SIZE-byte sector at 28-bit LBA
-// `lba`. Returns 1 on success, 0 on failure (no drive present, or the
-// drive reported an error / timed out waiting for it to become ready --
-// this polls with a bounded retry count rather than looping forever).
+// `lba`. Returns 1 on success, 0 on failure (no drive present, the
+// drive reported an error, or -- DMA path only -- the completion IRQ
+// never arrived within a bounded wait; the PIO path's own bounded
+// polling retry covers the equivalent case there).
 int ata_read_sector(uint32_t lba, void *buf);
 int ata_write_sector(uint32_t lba, const void *buf);
 

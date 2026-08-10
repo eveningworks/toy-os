@@ -152,11 +152,30 @@ void idt_init(void) {
     __asm__ volatile ("sti");
 }
 
+// See idt.h's doc comment. Not itself part of the reentrancy hazard --
+// just a plain counter -- but see isr_reset_depth() for the one case
+// (process.c's longjmp-style process teardown) where a decrement below
+// never runs and this needs forcing back to 0 from outside.
+static volatile int g_isr_depth = 0;
+
+int isr_in_progress(void) {
+    return g_isr_depth > 0;
+}
+
+void isr_reset_depth(void) {
+    g_isr_depth = 0;
+}
+
 // Called from isr.asm's common stub with rdi = pointer to saved GP regs.
 // Stack layout above saved regs (low->high addr): vector, error_code, then
 // the CPU-pushed iretq frame (rip, cs, rflags, rsp, ss).
 void isr_dispatch(uint64_t *regs) {
     uint64_t vector = regs[15];
+    g_isr_depth++; // see idt.h's isr_in_progress() -- every normal-return
+                    // path below must decrement this to match; a
+                    // noreturn path (process_context_exit()/recover())
+                    // instead relies on isr_reset_depth() at the one
+                    // point that longjmp lands.
 
     // Default: resume exactly what was interrupted. Only scheduler_tick()
     // below (and scheduler_on_exit(), called from syscall.c) ever
@@ -241,6 +260,7 @@ void isr_dispatch(uint64_t *regs) {
                 // Same "crashed, no real exit code to report" case
                 // scheduler_on_exit()'s own comment already covers --
                 // nothing consumes the code today either way.
+                g_isr_depth--; // matches this call's own increment above -- see isr_in_progress()
                 scheduler_on_exit(-1);
                 return; // g_next_kernel_rsp now points elsewhere; isr_common's epilogue resumes it
             } else {
@@ -250,4 +270,9 @@ void isr_dispatch(uint64_t *regs) {
 
         for (;;) __asm__ volatile ("cli; hlt");
     }
+
+    g_isr_depth--; // matches this call's own increment above -- see
+                    // isr_in_progress(). NOT reached if syscall_dispatch()
+                    // above took the noreturn process_context_exit() path
+                    // (legacy SYS_EXIT) -- isr_reset_depth() covers that.
 }

@@ -38,6 +38,56 @@ case, so every hardware IRQ (32-47) goes through one uniform path. See
 writeup, including what got regression-tested (timer/scheduler,
 keyboard, mouse) since this touched all three.
 
+## Blocking I/O waits: hlt when safe, poll when inside a syscall
+
+Any driver that wants to genuinely block (via `hlt`) until an IRQ
+fires -- rather than busy-poll a status register -- has to know
+whether it's currently running inside an interrupt handler, because
+`int 0x80` is wired as an interrupt gate and clears IF for the whole
+syscall, so `hlt` there would park forever with nothing able to wake
+it, and naively `sti`-then-blocking would reintroduce a real, already-
+documented reentrancy bug: `isr_dispatch()`'s epilogue unconditionally
+overwrites a single global resume pointer (`g_next_kernel_rsp`) before
+every `iretq`, so a nested interrupt firing mid-syscall corrupts the
+outer handler's resume point (this is why `SYS_READ_KEY` abandoned
+blocking-with-interrupts-on previously). `idt.h`'s
+`isr_in_progress()`/`isr_reset_depth()` (a `g_isr_depth` counter,
+incremented/decremented around every `isr_dispatch()` call, force-reset
+to 0 at the one safe point -- `process_run_ring3()`'s longjmp-style
+resume branch) answers "am I inside an interrupt right now?" so a
+driver can genuinely `hlt`-block when it's safe (the common case: boot
+init and `apps/` code calling `fs_write()`/`fs_read()` directly from
+kernel space) and fall back to bounded polling of the *device's own*
+status bit when it isn't (the ring-3 `*_test.c` syscall path) -- the
+hardware still raises that bit regardless of the CPU's IF state, so
+polling it is still real completion detection, just not CPU-interrupt-
+driven. `ata.c`'s `wait_dma_irq()` is the first (and, as of this
+writing, only) caller, but the mechanism itself is general-purpose --
+any future driver wanting to block inside a syscall-reachable code
+path (a NIC's TX/RX ring, say) needs this same check, not a
+driver-specific reinvention. See `idt.h`'s doc comments and
+CHANGELOG.md's **Build 470** for the full writeup.
+
+## DMA needs PCI Bus Master Enable, not just a programmed descriptor
+
+A PCI device's I/O-mapped DMA control registers (a Bus-Master IDE
+controller's BM_CMD/BM_STATUS/BM_PRDT, say) keep accepting reads/
+writes and can report a nominal "transfer complete" status even when
+the PCI Command register's "Bus Master Enable" bit (config offset
+0x04, bit 2) is never set -- without it, the device just never issues
+real memory read/write bus cycles, so DMA "succeeds" while moving no
+actual data. Easy to miss because nothing about the failure looks like
+a failure from software's point of view; only comparing against a
+known-good PIO transfer, or tracing the actual bytes moved, exposes
+it. `pci_enable_bus_master()` (`pci.c`/`pci.h`) sets it via a
+read-modify-write of the Command register, called once from
+`ata_init_dma()`. Any future DMA-capable driver (a NIC) needs this same
+call before its own DMA moves real data -- noted directly in
+`pci.h`'s doc comment, not just here. See CHANGELOG.md's **Build 470**
+for how this was root-caused (PIO-vs-DMA comparison, then a host-side
+pre-seeded disk image to isolate the read path and trace the bounce
+buffer).
+
 ## Contiguous memory: linear bitmap scan, not a buddy allocator
 
 `pmm_alloc_contiguous()` (`kernel/core/pmm.c`) finds a run of N

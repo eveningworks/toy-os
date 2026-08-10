@@ -2,6 +2,7 @@
 #include "context_switch.h"
 #include "vmm.h"
 #include "gdt.h"
+#include "idt.h"
 
 // The currently "in-flight" kernel caller waiting for a ring-3 process
 // to exit. See process.h's note on why there's only one of these.
@@ -42,6 +43,19 @@ int process_run_ring3(uint64_t pml4_phys, uint64_t entry, uint64_t user_rsp) {
         // fault (idt.c, via process_context_recover() above) -- either
         // way this call is no longer in flight.
         g_process_ctx_armed = 0;
+
+        // This longjmp-style resume abandons whatever C call stack was
+        // in flight at the moment of exit/crash -- every isr_dispatch()
+        // frame on it (at minimum, the syscall or fault that triggered
+        // this exit) skipped its own isr_in_progress() depth decrement
+        // as a result. This is the one point in this kernel where
+        // "we're definitely back at a known, non-interrupt call site"
+        // is actually true (every process_run_ring3() caller is plain
+        // kernel-space code, never itself inside an interrupt -- see
+        // idt.h's isr_reset_depth() doc comment), so it's the one safe
+        // place to force that counter back to 0 instead of trusting the
+        // now-unreachable decrements that should have run.
+        isr_reset_depth();
         // Biases the real exit code by +1 so a genuine exit(0) is
         // distinguishable from process_context_save()'s normal 0 return
         // -- see context_switch.h.
