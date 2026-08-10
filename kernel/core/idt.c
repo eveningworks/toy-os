@@ -2,6 +2,7 @@
 #include "vga.h"
 #include "klog.h"
 #include "pic.h"
+#include "irq.h"
 #include "keyboard.h"
 #include "i8042.h"
 #include "timer.h"
@@ -95,6 +96,29 @@ void idt_set_ring3_fault_hook(ring3_fault_hook_fn hook) {
     ring3_hook = hook;
 }
 
+// The three hardware-IRQ handlers this kernel has always had, now
+// registered through irq.c's generic table (see irq.h's top comment)
+// instead of being hardcoded branches in isr_dispatch() below -- one
+// uniform dispatch path for every IRQ, this file just wires up which
+// function handles which line, the same way the pic_clear_mask() calls
+// in idt_init() already wire up which lines are even unmasked.
+static void timer_irq_handler(uint64_t *regs) {
+    pit_handle_irq();
+    scheduler_tick(regs); // no-op unless scheduler_demo_run() armed it
+}
+
+static void keyboard_irq_handler(uint64_t *regs) {
+    (void)regs;
+    // Keyboard and mouse share the 8042 data port, so both IRQs go
+    // through the same routing poll -- see i8042.h.
+    i8042_poll();
+}
+
+static void mouse_irq_handler(uint64_t *regs) {
+    (void)regs;
+    i8042_poll();
+}
+
 void idt_init(void) {
     for (int i = 0; i < 48; i++) {
         idt_set_gate(i, isr_table[i], 0, 0x8E); // present, ring0, 64-bit interrupt gate
@@ -112,6 +136,10 @@ void idt_init(void) {
 
     pic_remap();
     pit_init(100); // 100 Hz tick
+
+    irq_register_handler(0, timer_irq_handler);
+    irq_register_handler(1, keyboard_irq_handler);
+    irq_register_handler(12, mouse_irq_handler);
 
     // unmask timer (IRQ0), keyboard (IRQ1), cascade (IRQ2, needed for
     // any slave-PIC line to reach the CPU), and mouse (IRQ12)
@@ -136,18 +164,17 @@ void isr_dispatch(uint64_t *regs) {
     // scheduler.c's design comment.
     g_next_kernel_rsp = (uint64_t)regs;
 
-    if (vector == 32) {
-        pit_handle_irq();
-        pic_send_eoi(0);
-        scheduler_tick(regs); // no-op unless scheduler_demo_run() armed it
-    } else if (vector == 33) {
-        // Keyboard and mouse share the 8042 data port, so both IRQs go
-        // through the same routing poll -- see i8042.h.
-        i8042_poll();
-        pic_send_eoi(1);
-    } else if (vector == 44) {
-        i8042_poll();
-        pic_send_eoi(12);
+    if (vector >= 32 && vector < 48) {
+        // Every hardware IRQ (timer, keyboard, mouse, and -- once a
+        // driver registers one -- anything else, a NIC chief among
+        // them) goes through the same generic lookup-call-EOI path now,
+        // instead of a hardcoded if/else chain with a special case per
+        // line. See irq.h/irq.c for the registration table, and
+        // idt_init() just above for which function is registered for
+        // which line -- timer_irq_handler() (IRQ0) is the one that
+        // still calls scheduler_tick(), just from inside its own
+        // registered handler now rather than as a separate line here.
+        irq_dispatch((uint8_t)(vector - 32), regs);
     } else if (vector == 128) {
         // Software interrupt from ring 3 (int 0x80) -- not a hardware
         // IRQ, so no PIC EOI. syscall_dispatch() may not return (see
@@ -222,7 +249,5 @@ void isr_dispatch(uint64_t *regs) {
         }
 
         for (;;) __asm__ volatile ("cli; hlt");
-    } else if (vector < 48) {
-        pic_send_eoi((uint8_t)(vector - 32));
     }
 }

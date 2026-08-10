@@ -5,6 +5,64 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 400 (feature, +10) -- generic hardware-IRQ registration mechanism
+
+Second milestone toward TCP/IP networking (see build 380's README
+entry and build 390's PCI enumeration) -- a NIC needs its own promptly-
+serviced IRQ line, and `isr_dispatch()`'s old hardcoded if/else chain
+(timer/keyboard/mouse special-cased, every other IRQ silently EOI'd
+and ignored) had no way for a new driver to plug in without adding yet
+another one-off branch. Presented three choices on migration scope
+(additive-only vs also migrate keyboard+mouse vs full migration
+including the timer), EOI responsibility (framework-automatic vs each
+handler's own), and table shape (single handler per IRQ vs a small
+chain for line-sharing). Went with: full migration -- one uniform
+dispatch path for every hardware IRQ, no special cases left at all;
+automatic EOI (a forgotten EOI on a real IRQ line is a classic bug
+that silently stops all further interrupts on that line, worth
+removing the chance of); and a simple fixed 16-entry array, one
+handler per IRQ, matching every other fixed-capacity table in this
+kernel (`history[]`, `fd_table[]`, PCI's device list) -- QEMU's
+topology gives every relevant device its own dedicated line (confirmed
+by build 390's `lspci`), so IRQ-sharing/chaining isn't a case that
+comes up here.
+
+- **`kernel/include/irq.h` / `kernel/core/irq.c`** (new):
+  `irq_register_handler(irq, handler)` / `irq_dispatch(irq, regs)` --
+  a 16-entry table (`irq_handler_fn`, taking the same saved-register-
+  block pointer `isr_dispatch()` gets, so the timer's handler can still
+  hand off to `scheduler_tick()`). `irq_dispatch()` looks up and calls
+  whatever's registered, then unconditionally sends the PIC EOI itself
+  -- a no-op-but-still-EOIs for any IRQ nothing's registered for, same
+  observable behavior an unhandled IRQ had before this existed.
+- **`kernel/core/idt.c`**: `isr_dispatch()`'s three-branch hardcoded
+  chain (`vector == 32`/`33`/`44`) plus the do-nothing-but-EOI fallback
+  for everything else collapsed into one branch (`vector >= 32 &&
+  vector < 48`) that just calls `irq_dispatch()`. `idt_init()` now
+  registers three small wrapper functions -- `timer_irq_handler()`
+  (still calls `pit_handle_irq()` + `scheduler_tick(regs)`, just from
+  inside its own registered handler instead of a dispatch-level special
+  case), `keyboard_irq_handler()`/`mouse_irq_handler()` (both still
+  just `i8042_poll()`, since keyboard and mouse share the 8042 data
+  port regardless of which IRQ fired) -- right where the existing
+  `pic_clear_mask()` calls already wire up which lines are unmasked, so
+  driver-owning code in `timer.c`/`i8042.c` didn't need to move or
+  change at all.
+- **`docs/decisions.md`**: new entry on why one-handler-per-IRQ (not a
+  chain) and framework-automatic EOI were chosen.
+
+Verified: `make clean && make all && make iso` clean, no new warnings;
+`boot_smoke_test.py` passes, no panic. QMP session exercised all three
+migrated paths end to end -- `uptime` run twice showed the tick counter
+still advancing (timer IRQ), `schedtest` showed clean interleaved
+`ABAB...` preemptive output and a normal exit (timer IRQ driving
+`scheduler_tick()`, the most demanding test of the migration), typing
+commands at the shell worked throughout (keyboard IRQ), and in GUI mode
+the cursor tracked a `goto()` move correctly and a click opened the
+Start menu (mouse IRQ, both motion and button state) -- confirming the
+full migration didn't regress any of the three real subsystems it
+touched.
+
 ## Build 390 (feature, +10) -- PCI bus enumeration + `lspci`
 
 First real milestone toward TCP/IP networking (see build 380's README

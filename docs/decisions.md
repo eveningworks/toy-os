@@ -13,6 +13,31 @@ If you're a Claude session or a contributor and about to ask "wait, why
 is this built this way instead of the more obvious way?" -- check here
 first before re-litigating it from scratch.
 
+## IRQ registration: one handler per line, framework-automatic EOI
+
+`kernel/core/irq.c`'s table (`irq_register_handler()`/`irq_dispatch()`)
+deliberately doesn't support multiple handlers chained on one IRQ line
+-- every IRQ source this kernel has, or is about to add (a NIC), lives
+on its own dedicated line in QEMU's default topology (confirmed by
+build 390's `lspci`), so real IRQ-line sharing (which does happen on
+busier real hardware) isn't a case that comes up here; registering a
+second handler for an IRQ that already has one just replaces it.
+`irq_dispatch()` also sends the PIC end-of-interrupt itself,
+automatically, after calling whatever handler is registered -- not
+left to each handler to remember. A forgotten EOI on a real IRQ line
+silently stops all further interrupts on that line, a classic and
+nasty-to-debug bug; removing the chance of it was judged worth the
+small loss of flexibility (a handler can't EOI early, before doing
+slower work). This replaced `isr_dispatch()`'s old hardcoded if/else
+chain (timer/keyboard/mouse special-cased, everything else silently
+EOI'd and ignored) -- including the timer, which now hands off to
+`scheduler_tick()` from inside its own registered handler
+(`idt.c`'s `timer_irq_handler()`) rather than a dispatch-level special
+case, so every hardware IRQ (32-47) goes through one uniform path. See
+`irq.h`'s top comment and CHANGELOG.md's **Build 400** for the full
+writeup, including what got regression-tested (timer/scheduler,
+keyboard, mouse) since this touched all three.
+
 ## PCI enumeration is a brute-force flat scan, not bridge-aware recursion
 
 `kernel/drivers/pci.c`'s `pci_init()` checks every one of the 256 x 32
