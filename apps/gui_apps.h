@@ -70,6 +70,18 @@ struct gui_app {
     // be NULL only if on_drag_start is also NULL or always returns 0.
     void (*on_drag)(struct window *win, int cx, int cy);
 
+    // Called when this window has keyboard focus (same "frontmost,
+    // non-minimized" rule as on_key) and the mouse wheel moves, with
+    // `delta` in notches -- positive scrolls up (reveals older
+    // content), negative scrolls down, matching mouse.h's
+    // mouse_get_wheel_delta(). Unlike on_click/on_drag_start, this
+    // isn't position-gated to the content area (there's no content-area
+    // wheel target concept yet, and every current wheel user -- a
+    // scrollable widget -- wants the whole window's wheel input
+    // regardless of exact cursor position within it). May be NULL for
+    // any app with nothing scrollable.
+    void (*on_wheel)(struct window *win, int delta);
+
     // 1 (the common case) if the user can drag-resize and maximize this
     // app's window; 0 to fix it at its default_size() forever -- no
     // resize grip, hovering an edge doesn't show a resize cursor, and

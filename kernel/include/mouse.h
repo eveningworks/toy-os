@@ -13,4 +13,14 @@ void mouse_feed_byte(uint8_t data);
 // bit1=right, bit2=middle). Position is clamped to the configured bounds.
 void mouse_get_state(int *x, int *y, uint8_t *buttons);
 
+// Returns the scroll wheel movement accumulated since the last call, in
+// notches (positive = wheel pushed away from the user / "up", negative =
+// pulled toward the user / "down" -- the same sense as a typical desktop:
+// scrolling "up" reveals earlier/older content), and resets the
+// accumulator to 0. Always 0 if mouse_init() didn't find IntelliMouse
+// wheel support on the attached device (see mouse.c's init sequence) --
+// callers don't need to check for that separately, a plain 3-byte mouse
+// just never reports anything here.
+int mouse_get_wheel_delta(void);
+
 #endif

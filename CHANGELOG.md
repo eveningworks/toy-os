@@ -5,6 +5,57 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 283 (feature, +10) -- mouse scroll wheel support (scrollbar phase 3/4)
+
+Third of the four-phase scrollbar plan (build 263: keyboard, build 273:
+visual scrollbar widget). This one adds the mouse wheel, so Terminal
+can now be scrolled with any of the three inputs originally asked for.
+
+- `kernel/include/mouse.h` / `kernel/drivers/mouse.c`: the PS/2 driver
+  only ever parsed plain 3-byte packets before. Added the standard
+  "IntelliMouse" detection handshake to `mouse_init()` -- setting the
+  sample rate to 200, then 100, then 80 in a row (a specific magic
+  sequence real hardware and every PS/2-emulating VM recognizes),
+  then reading the device ID back (0xF2): ID 3 means the device
+  switched into reporting 4-byte packets with a signed wheel-notch
+  count in the 4th byte, ID 0 means it's a plain mouse and nothing
+  changes. `mouse_feed_byte()` now sizes packets dynamically off
+  that (`packet_size`, decided once at init) and, on a 4-byte device,
+  accumulates the wheel byte into a new counter exposed by
+  `mouse_get_wheel_delta()` (returns ticks since last call, resets to
+  0 -- a consume-once accumulator, same shape as `keyboard_try_getchar()`).
+- `apps/gui_apps.h`: added another optional callback, `on_wheel(win,
+  delta)`, called on whichever window currently has keyboard focus
+  (same rule as `on_key`) when the wheel moves.
+- `apps/wm/wm.c`: `wm_run()`'s loop now also polls
+  `mouse_get_wheel_delta()` each tick alongside the existing
+  `keyboard_try_getchar()` poll, and dispatches to the focused
+  window's `on_wheel` the same way keys dispatch to `on_key`.
+- `apps/terminal.h` / `apps/terminal.c`: added `terminal_wheel()`,
+  registered as Terminal's `on_wheel` -- 3 lines per notch (an
+  ordinary desktop-scrolling speed), reusing the same
+  `widget_scrollback_scroll()` PgUp/PgDn and the scrollbar already
+  use, so all three inputs stay in perfect agreement about what a
+  "line" of scrolling means.
+- Notepad still not touched -- phase 4.
+
+Tested in QEMU: QEMU's QMP `input-send-event` supports synthetic
+`wheel-up`/`wheel-down` button presses, which its PS/2 mouse emulation
+turns into real wheel packets once a guest driver has done the
+IntelliMouse handshake -- a genuine end-to-end test of the new driver
+code, not a simulation of one. Opened Terminal, built up scrollback
+past a screenful with repeated `help`, confirmed it starts pinned to
+the bottom; scrolled the wheel up 5 notches and confirmed the view
+moved to earlier content (older commands' output became visible, the
+scrollbar thumb moved up); scrolled down 20 notches and confirmed it
+returned to the bottom-pinned state (clamped there, not past it).
+Also re-verified ordinary window-titlebar dragging and Notepad
+(typing, mouse clicks) are unaffected by the mouse driver changes.
+
+Screenshots: `screenshots/2026-08-10/scrollbar_p3_wheel_start_bottom.png`,
+`screenshots/2026-08-10/scrollbar_p3_wheel_scrolled_up.png`,
+`screenshots/2026-08-10/scrollbar_p3_wheel_back_to_bottom.png`
+
 ## Build 273 (feature, +10) -- visual draggable scrollbar widget (scrollbar phase 2/4)
 
 Second of the four-phase scrollbar plan (build 263 did keyboard

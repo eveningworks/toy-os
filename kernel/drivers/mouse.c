@@ -8,8 +8,16 @@ static int mouse_x = 0, mouse_y = 0;
 static uint8_t mouse_buttons = 0;
 static int bound_w = 80, bound_h = 25;
 
-static uint8_t packet[3];
+// Plain PS/2 mice send 3-byte packets (flags, dx, dy). The "IntelliMouse"
+// extension (now what every real PS/2 -- and every PS/2-emulated USB --
+// mouse speaks) adds a 4th byte carrying signed wheel notches, but only
+// once the driver asks for it via a specific sample-rate "magic knock"
+// (see mouse_init()). packet_size reflects whichever this device turned
+// out to support, decided once at init and constant after.
+static uint8_t packet[4];
 static int packet_index = 0;
+static int packet_size = 3;
+static int wheel_delta = 0;
 
 static void wait_input_clear(void) {
     int timeout = 100000;
@@ -70,6 +78,28 @@ void mouse_init(void) {
     mouse_write(0xF6); // set defaults
     mouse_read();       // ACK
 
+    // IntelliMouse "magic knock": setting the sample rate to 200, then
+    // 100, then 80 in a row (each a set-sample-rate command 0xF3 with no
+    // pause for anything else in between) is a no-op for the mouse's
+    // actual sample rate on a wheel-capable device, but it's the
+    // documented, universally-supported handshake that switches such a
+    // device into reporting 4-byte packets with a wheel delta in the
+    // 4th byte instead of plain 3-byte packets. A non-wheel mouse just
+    // sets its sample rate three times and ignores the significance.
+    // Reading the device ID (0xF2) afterwards tells us which happened:
+    // ID 0 is a plain mouse, ID 3 is a wheel mouse that took the knock.
+    static const uint8_t knock[3] = {200, 100, 80};
+    for (int i = 0; i < 3; i++) {
+        mouse_write(0xF3);
+        mouse_read(); // ACK
+        mouse_write(knock[i]);
+        mouse_read(); // ACK
+    }
+    mouse_write(0xF2); // read device ID
+    mouse_read();       // ACK
+    uint8_t device_id = mouse_read();
+    packet_size = (device_id == 3) ? 4 : 3;
+
     mouse_write(0xF4); // enable data reporting
     mouse_read();       // ACK
 
@@ -78,6 +108,7 @@ void mouse_init(void) {
     mouse_x = bound_w / 2;
     mouse_y = bound_h / 2;
     packet_index = 0;
+    wheel_delta = 0;
 }
 
 // Processes one byte already read from the 8042 by i8042_poll(). This
@@ -89,7 +120,7 @@ void mouse_feed_byte(uint8_t data) {
     }
 
     packet[packet_index++] = data;
-    if (packet_index < 3) return;
+    if (packet_index < packet_size) return;
     packet_index = 0;
 
     uint8_t flags = packet[0];
@@ -108,6 +139,24 @@ void mouse_feed_byte(uint8_t data) {
     if (mouse_y >= bound_h) mouse_y = bound_h - 1;
 
     mouse_buttons = flags & 0x07;
+
+    if (packet_size == 4) {
+        // Wheel byte is a signed 8-bit notch count -- almost always
+        // -1 or +1 per physical click of the wheel, occasionally more
+        // if it's spun fast. Convention (matches every real mouse):
+        // negative raw value = wheel pushed away from the user, which
+        // is the "scroll up / reveal older content" direction, so this
+        // is negated before accumulating into wheel_delta's
+        // positive-means-up sense documented in mouse.h.
+        int8_t raw = (int8_t)packet[3];
+        wheel_delta -= raw;
+    }
+}
+
+int mouse_get_wheel_delta(void) {
+    int d = wheel_delta;
+    wheel_delta = 0;
+    return d;
 }
 
 void mouse_get_state(int *x, int *y, uint8_t *buttons) {

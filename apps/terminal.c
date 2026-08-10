@@ -273,6 +273,17 @@ void terminal_drag(struct window *win, int cx, int cy) {
     window_invalidate(win);
 }
 
+// 3 lines per notch -- an ordinary desktop-scrolling convention (fast
+// enough that scrolling any real distance doesn't take forever, without
+// blowing past a screenful in one notch on a short window).
+#define TERM_WHEEL_LINES 3
+
+void terminal_wheel(struct window *win, int delta) {
+    struct terminal_state *st = (struct terminal_state *)window_get_state(win);
+    widget_scrollback_scroll(&st->tb, delta * TERM_WHEEL_LINES);
+    window_invalidate(win);
+}
+
 void terminal_key(struct window *win, int key) {
     struct terminal_state *st = (struct terminal_state *)window_get_state(win);
 

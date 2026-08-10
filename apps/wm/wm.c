@@ -169,13 +169,19 @@ void wm_run(void) {
             gfx_set_double_buffered(0); // console draws straight to screen
             return;
         }
-        if (key != -1) {
+
+        int wheel = mouse_get_wheel_delta();
+
+        if (key != -1 || wheel != 0) {
             int f = -1;
             for (int i = window_count - 1; i >= 0; i--) {
                 if (windows[i].state != WIN_MINIMIZED) { f = i; break; }
             }
-            if (f >= 0 && windows[f].app && windows[f].app->on_key) {
+            if (f >= 0 && key != -1 && windows[f].app && windows[f].app->on_key) {
                 windows[f].app->on_key(&windows[f], key);
+            }
+            if (f >= 0 && wheel != 0 && windows[f].app && windows[f].app->on_wheel) {
+                windows[f].app->on_wheel(&windows[f], wheel);
             }
             redraw_pending = 1;
         }

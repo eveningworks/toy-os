@@ -31,4 +31,8 @@ void terminal_click(struct window *win, int cx, int cy);
 int terminal_drag_start(struct window *win, int cx, int cy);
 void terminal_drag(struct window *win, int cx, int cy);
 
+// Mouse scroll wheel -- see gui_apps.h's on_wheel contract and
+// mouse.h's mouse_get_wheel_delta().
+void terminal_wheel(struct window *win, int delta);
+
 #endif
