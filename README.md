@@ -49,11 +49,15 @@ built, in what order, and the bugs found (and fixed) along the way.
   framebuffer text console and for on-screen labels in graphics mode.
 - A basic GUI mode: a real (if small) window manager -- movable and
   resizable windows (drag an edge/corner) with minimize/maximize/close
-  buttons, a taskbar, and a Start menu for launching apps. Three apps
+  buttons, a taskbar, and a Start menu for launching apps. Four apps
   included: Notepad (with Save/Load through the in-memory filesystem),
-  About, and Calculator (basic 4-function + %, keyboard or mouse -- see
+  About, Calculator (basic 4-function + %, keyboard or mouse -- see
   `apps/calc_engine.h` for how its fixed-point arithmetic works and how
-  to add a new operator). See `apps/README.md` for how to add more.
+  to add a new operator), and Terminal (runs the real shell dispatcher
+  inside a resizable window -- see `apps/terminal.c` and the CHANGELOG's
+  build 253 entry; a short list of commands that don't return or draw
+  straight to the physical screen aren't available there). See
+  `apps/README.md` for how to add more.
 - A small app registry (`apps/apps.c`) so shell, gui, and future programs
   are self-contained, independently addable modules -- see
   **Project layout** below and `apps/README.md` for the walkthrough
@@ -496,18 +500,14 @@ untouched.
 
 ## Ideas for what's next
 
-- GUI terminal-emulator app -- in progress, phases 1-3/4 done (see
-  CHANGELOG.md's builds 183, 193, 203): console output can be
-  redirected away from the physical screen (`vga_set_sink()`), the real
-  shell dispatcher is reusable and safe to call from a non-blocking GUI
-  callback via `shell_dispatch()`, and there's now a reusable scrolling
-  text widget (`struct text_scrollback`, widgets.h) that renders
-  wrapped, per-line-colored output into any window content rect.
-  Remaining phase: the actual `apps/terminal.c` GUI app wiring a
-  `vga_sink` straight into a `text_scrollback` and driving
-  `shell_dispatch()` from keystrokes -- which will also need to
-  special-case a short list of commands that don't return or draw
-  straight to the screen (see build 193's entry).
+- ~~GUI terminal-emulator app~~ -- done (see CHANGELOG.md's builds 183,
+  193, 203, and 253 for the finished `apps/terminal.c`). `Terminal` in
+  the Start menu runs the real shell dispatcher inside a resizable
+  window -- not a reimplementation of it. A short list of commands that
+  don't return or draw straight to the physical screen (`gui`, `run`,
+  `ring3test`, `elftest`, `guitest`, `wintest`, `schedtest`, `echotest`)
+  print an explanation instead of running; everything else, including
+  the ring-3 test commands, works for real.
 - ~~Process exit/teardown so a faulted or crashed ring-3 process doesn't
   halt the whole kernel~~ -- done (see CHANGELOG.md's "process
   exit/teardown" entry, `crashtest`). `ring3test`/`elftest` still

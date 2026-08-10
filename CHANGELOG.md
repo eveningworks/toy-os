@@ -5,6 +5,68 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 253 (major, +50) -- GUI terminal-emulator app: `apps/terminal.c` (terminal-emulator phase 4/4)
+
+Last of four planned phases (see builds 183, 193, 203) toward "can we
+add a terminal emulator CLI to GUI as an app" -- and the payoff: a real
+`Terminal` entry in the Start menu that runs the actual shell, not a
+reimplementation of it.
+
+- `apps/terminal.h` / `apps/terminal.c` (new): a `gui_app` (registered
+  in `apps/gui_apps.c`) whose window holds a `struct text_scrollback`
+  (widgets.h, build 203) and a `struct vga_sink` (vga.h, build 183)
+  wired to it. `on_key` builds up a line buffer character by character
+  (backspace, printable chars, up/down-arrow history -- same pattern as
+  shell.c's own `shell_read_line()`, just echoing into the widget
+  instead of the physical console), and on Enter hands the finished
+  line to `shell_dispatch()` (shell.h, build 193) with the sink
+  installed, so every `vga_write()`/`vga_putc()` call the real command
+  handlers make lands in this window instead of the physical screen.
+  `on_draw` is a single `widget_scrollback_draw()` call sized to
+  whatever the window's content area currently is -- since the widget
+  reflows from scratch on every draw (see its build-203 entry), making
+  the window resizable (`resizable = 1`) needed no extra code at all.
+- `shell.h` / `shell.c`: added `shell_cwd()`, a read-only accessor for
+  the shell's (single, shared) current-directory string, so the
+  terminal's own prompt ("`/> `" etc) matches whatever the physical
+  shell would show -- there's only one shell "session" in this kernel,
+  so both contexts seeing the same `cd` state is correct, not a bug to
+  work around.
+- A short blocklist (`BLOCKED_CMDS` in terminal.c): `gui`, `run`,
+  `ring3test`, `elftest`, `guitest`, `wintest`, `schedtest`, `echotest`.
+  These either never return, draw straight to the physical framebuffer
+  bypassing the sink entirely (SYS_WIN_*/SYS_GUI_INIT and the window
+  manager's own screen takeover don't route through `vga_putc()` the
+  way `SYS_WRITE` does), or would block the calling context (and thus
+  freeze the whole window manager, not just this window) for their
+  entire run. Typing one prints an explanation instead of calling
+  `shell_dispatch()`. Everything else -- `ls`/`cd`/`cat`/`echo`/etc,
+  and even the other ring-3 test commands (`crashtest`, `filetest`,
+  `newsyscalltest`, `syscalltest`, `writetest`, `ptrtest`) and `reboot`
+  -- runs for real, unmodified, because `SYS_WRITE` already goes
+  through `vga_putc()`, which already respects the active sink (build
+  183) with zero terminal-specific code needed.
+
+Tested in QEMU, all through the real GUI (`gui` -> Start -> Terminal,
+no test scaffolding this time -- the shipped app itself): opened the
+window and confirmed the banner+prompt; ran `about` and `ls` and got
+real kernel/filesystem output back (not a stub); ran `echo hello from
+terminal` and got it echoed correctly; typed `gui` and got the
+blocked-command message instead of a frozen window manager -- and
+confirmed the WM kept responding afterward, proving the real `gui`
+command was never actually invoked; typed `xyzabc`, backspaced it down
+to `xyz`, pressed Enter (got "Unknown command: xyz", the real shell's
+own error message), then pressed Up and confirmed `xyz` came back via
+history; pressed Esc out of the GUI entirely and confirmed the physical
+console shell still works normally afterward (its own `about` output
+matched, unaffected by anything the terminal window did).
+
+Screenshots: `screenshots/2026-08-10/phase4_terminal_open.png`,
+`screenshots/2026-08-10/phase4_real_commands_running.png`,
+`screenshots/2026-08-10/phase4_blocked_command_message.png`,
+`screenshots/2026-08-10/phase4_backspace_and_history.png`,
+`screenshots/2026-08-10/phase4_physical_shell_regression_check.png`
+
 ## Build 203 (feature, +10) -- reusable scrollback text widget (terminal-emulator phase 3/4)
 
 Third of four planned phases toward a GUI terminal-emulator app (see

@@ -686,6 +686,10 @@ void shell_dispatch(char *line, const struct vga_sink *sink) {
     vga_set_sink(prev);
 }
 
+const char *shell_cwd(void) {
+    return cwd;
+}
+
 static void history_add(const char *line) {
     if (k_strlen(line) == 0) return;
     if (history_count < HISTORY_MAX) {

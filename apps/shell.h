@@ -32,4 +32,14 @@ void shell_main(void);
 // one `sink` passed in for the duration of the call.
 void shell_dispatch(char *line, const struct vga_sink *sink);
 
+// The shell's current working directory -- one shared piece of state
+// across every caller (the physical console's own REPL and any
+// shell_dispatch() caller alike; there's only ever one shell "session"
+// in this kernel, same as there's only one of everything else here).
+// Read-only: nothing outside shell.c ever sets this directly -- `cd`
+// (via dispatch()/shell_dispatch()) is the only way it changes. Lets a
+// caller printing its own prompt (see apps/terminal.c) show the same
+// directory the physical shell would.
+const char *shell_cwd(void);
+
 #endif

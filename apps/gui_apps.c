@@ -2,6 +2,7 @@
 #include "notepad.h"
 #include "about.h"
 #include "calculator.h"
+#include "terminal.h"
 
 // To add a new windowed app: write apps/foo.c + apps/foo.h implementing
 // the gui_app callbacks (see apps/notepad.c for the simplest example),
@@ -21,5 +22,6 @@ const struct gui_app gui_app_registry[] = {
     { "Notepad",    notepad_default_size,    notepad_open,    notepad_draw,    notepad_key,    notepad_click,    1 },
     { "About",      about_default_size,      about_open,      about_draw,      0,              0,                1 },
     { "Calculator", calculator_default_size, calculator_open, calculator_draw, calculator_key, calculator_click, 0 },
+    { "Terminal",   terminal_default_size,   terminal_open,   terminal_draw,   terminal_key,   0,                1 },
 };
 const int gui_app_registry_count = sizeof(gui_app_registry) / sizeof(gui_app_registry[0]);
