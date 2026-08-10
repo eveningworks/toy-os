@@ -5,6 +5,29 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 305 (fix, +1) -- tools/device_git.sh: sweep every stale git lock, not just index.lock
+
+Hit while committing build 304 over the device bridge: the first
+version of this script (build 294) only cleared a stale
+`.git/index.lock`. A real `git commit` also creates `.git/HEAD.lock`
+and `.git/objects/maintenance.lock`, which the bridge fails to delete
+the exact same way -- so after one commit, the *next* device_git.sh
+invocation cleared index.lock (as designed) but then still hit `fatal:
+cannot lock ref 'HEAD': Unable to create '.../HEAD.lock': File
+exists`, because that lock was never swept. Had to clear it by hand
+mid-session to get build 304 committed at all.
+
+- `tools/device_git.sh`: now sweeps every `*.lock` file under `.git/`
+  (via `find .git -name '*.lock'`) before running the real command,
+  instead of hardcoding `index.lock` by name. Covers HEAD.lock,
+  objects/maintenance.lock, and any other lock git might leave in a
+  spot not enumerated ahead of time.
+- Verified: reproduced the HEAD.lock failure this session (a `commit`
+  through the old script left both index.lock and HEAD.lock behind;
+  the next invocation only cleared the former and hit the latter).
+  Confirmed the updated script's `find`-based sweep picks up both in
+  one pass.
+
 ## Build 304 (feature, +10) -- VFS layer: filesystem split into a dispatch layer + swappable backend
 
 Requested in advance of actually needing a second filesystem: refactor
