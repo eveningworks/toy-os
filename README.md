@@ -577,14 +577,17 @@ untouched.
 - Notepad's filename is currently fixed (`notepad.txt`) -- a simple text
   input widget would let you save/load under different names
 - The persistent filesystem's on-disk layout (see CHANGELOG.md) is a
-  custom fixed-16-file-slot format, not journaled, and not readable by
-  anything but toy-os itself. A host-tool-compatible format (FAT16, most
-  realistically) would let you inspect/edit the disk image without
-  booting toy-os at all; journaling or copy-on-write would close the
-  "crash mid-write corrupts one record" window the current write-through
-  approach accepts. AHCI/SATA support would be the other direction to
-  take this -- real modern hardware increasingly lacks the legacy IDE
-  controller `ata.c` currently depends on.
+  custom fixed-32-file-slot format ("TFS2" as of build 480 -- see
+  `docs/tfs2-spec.md` for the byte-exact spec, now including a
+  write-ahead journal and created/modified timestamps), and still not
+  a format any *other* OS's tools read natively. `docs/tfs2-spec.md`
+  closes part of that gap -- a host-side tool can now parse a TFS2
+  image directly (a reference read-only Python parser is in that
+  spec) without needing FAT16-or-similar compatibility -- but it's
+  still TFS2-specific, not a real standard like FAT16 an off-the-shelf
+  tool would already understand. AHCI/SATA support would be a
+  different direction entirely -- real modern hardware increasingly
+  lacks the legacy IDE controller `ata.c` currently depends on.
 - The VFS layer (see CHANGELOG.md's build 304, `kernel/include/fs_ops.h`)
   supports exactly one active filesystem backend at a time, chosen once
   at boot -- not multiple backends mounted simultaneously at different

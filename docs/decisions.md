@@ -155,16 +155,50 @@ avoids a whole class of "oops, deleted more than I meant to" mistakes
 in a filesystem with no trash/undo. See `kernel/include/fs.h` and
 `tfs.c`'s top comment ("Honest limitations, not solved here").
 
-## Persistent filesystem is write-through, not journaled
+## Persistent filesystem is write-through with a single-slot journal
 
-Every mutating call (`touch`/`write`/`mkdir`/`delete`) writes its one
-record to disk immediately, so a clean reboot never loses anything
-already returned from a call -- but a crash/power-loss landing exactly
-between two sector writes could leave that one record inconsistent.
-Accepted as a small, single-record risk window rather than solved with
-journaling or copy-on-write, which would be real complexity for a toy
-OS's disk format. See `tfs.c`'s top comment and README.md's "Ideas for
-what's next" (on-disk layout) if that tradeoff ever needs revisiting.
+Every mutating call (`touch`/`write`/`mkdir`/`delete`) still writes its
+one record to disk immediately (write-through, not batched or lazily
+flushed) -- but as of build 480 ("TFS2"), that one record write goes
+through a write-ahead log first rather than straight to its final
+table slot, closing the "crash mid-write corrupts one record" window
+the original ("TFS1") write-through design explicitly accepted. A
+single journal slot is enough -- not a general multi-record
+transaction log -- because every mutating call here only ever changes
+ONE table slot; a real filesystem juggling multi-record transactions
+(renaming across directories, say) would need more than this. Chosen
+over the two alternatives it was weighed against (a shadow/double-
+buffer per record -- simpler logic but doubles every record's on-disk
+size; a minimal commit-flag-only journal -- smaller journal but a torn
+write loses the newest change instead of recovering it) because it
+gives genuine crash recovery, not just torn-write detection, for a
+journal region that only costs one extra record's worth of disk space
+total (not per-record). See `tfs.c`'s top comment ("Journaling") for
+the exact 4-step write-ahead sequence and replay logic, `docs/
+tfs2-spec.md` for the on-disk journal format, and CHANGELOG.md's
+**Build 480** for the full writeup.
+
+## File timestamps are broken-down local time, not a Unix epoch integer
+
+`fs_stat()`'s `created`/`modified` fields (build 480) are `struct
+rtc_time` -- the same hour/minute/second/day/month/year struct
+`SYS_GETTIME` and the shell's `time` already return -- not a Unix
+epoch integer. This kernel has never needed a civil-date<->epoch
+conversion for anything else (no code anywhere computes "days since
+1970" or similar), so storing the same struct everything else already
+uses avoided adding one just for this feature; a host-side tool
+reading a TFS2 image converts to epoch seconds itself if it wants
+that instead (`docs/tfs2-spec.md`'s reference reader shows the
+equivalent conversion via Python's `datetime`). The tradeoff: no
+UTC-offset field is stored alongside a timestamp, so a value only
+means what it looks like -- local wall-clock time at whatever
+timezone was selected (`timezone` shell command) at the moment it was
+written -- not an unambiguous point in time comparable across
+different timezone selections. Acceptable for a toy OS's own files;
+would need revisiting (probably by finally adding an epoch conversion
+helper) if timestamps ever needed to be meaningfully compared against
+a real-world reference. See `fs.h`'s `fs_stat()` doc comment,
+`tfs.c`'s top comment, and CHANGELOG.md's **Build 480**.
 
 ## `kapi.h` is the only header apps/ includes
 

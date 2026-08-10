@@ -167,6 +167,8 @@ static void dispatch(char *line) {
         cmd_write_or_append(args ? args : "", 1);
     } else if (k_strcmp(cmd, "rm") == 0) {
         cmd_rm(args ? args : "");
+    } else if (k_strcmp(cmd, "stat") == 0) {
+        cmd_stat(args ? args : "");
     } else if (k_strcmp(cmd, "edit") == 0 || k_strcmp(cmd, "nano") == 0) {
         cmd_edit(args ? args : "");
     } else if (k_strcmp(cmd, "gui") == 0) {

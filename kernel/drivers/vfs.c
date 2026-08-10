@@ -61,3 +61,7 @@ int fs_exists(const char *path) {
 void fs_list(const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir)) {
     g_fs->list(dir_path, cb);
 }
+
+int fs_stat(const char *path, struct fs_timestamps *out) {
+    return g_fs->stat(path, out);
+}

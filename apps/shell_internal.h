@@ -45,6 +45,7 @@ void cmd_edit(const char *name);
 void cmd_rm(const char *name);
 void cmd_pwd(void);
 void cmd_cd(const char *args);
+void cmd_stat(const char *name);
 
 // System-info/settings commands -- defined in shell_sys.c.
 void cmd_help(const char *args);

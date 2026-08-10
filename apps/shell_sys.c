@@ -91,6 +91,8 @@ static const char *const HELP_LINES[] = {
     "  write <f> <t> - overwrite file f with text t\n",
     "  append <f> <t>- append text t to file f\n",
     "  rm <f>        - delete a file, or an empty directory\n",
+    "  stat <f>      - show a file/directory's type, size, and\n",
+    "                  created/modified timestamps\n",
     "  edit <f>      - full-screen text editor (nano/pico-style); also\n",
     "                  `nano <f>`. Arrows/Home/End/Delete to navigate and\n",
     "                  edit, F2 to save, F3 to exit. Also works inside\n",

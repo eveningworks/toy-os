@@ -2,6 +2,7 @@
 #define FS_OPS_H
 
 #include <stdint.h>
+#include "fs.h" // struct fs_timestamps, for .stat below
 
 // The VFS backend interface -- fs.h's public fs_* API (kapi.h's stable
 // surface, unchanged by any of this) is implemented by vfs.c as a thin
@@ -52,6 +53,7 @@ struct fs_ops {
     int (*is_dir)(const char *path);
     int (*exists)(const char *path);
     void (*list)(const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir));
+    int (*stat)(const char *path, struct fs_timestamps *out); // see fs.h's fs_stat()
 };
 
 #endif

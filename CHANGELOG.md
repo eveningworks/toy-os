@@ -5,6 +5,82 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 480 (feature, +10) -- TFS2: journaling + timestamps for the persistent filesystem
+
+Asked to add journaling and timestamps ("date codes") to the
+persistent filesystem, plus a name for it, and a spec doc so a
+separate Linux app could browse a disk image. Presented three choices
+up front: a name (TFS2 vs. more evocative alternatives), a journaling
+design (write-ahead log vs. shadow/double-buffer vs. minimal
+commit-flag-only), and which timestamp fields to track (created+
+modified vs. modified-only vs. created+modified+accessed). Went with:
+**TFS2** (keeps the existing "TFS" lineage, version-bumped); a
+**write-ahead log with a single journal slot** (real crash recovery,
+not just torn-write detection -- see `docs/decisions.md`, and cheap
+here since every mutating call only ever touches one table slot, so
+one journal slot is always enough); **created + modified** timestamps
+(not accessed -- an access timestamp would mean even `cat`/browsing
+triggers a disk write, which cuts against the toy nature of this
+project). No backward compatibility with "TFS1" (the pre-journal,
+pre-timestamp format) or the flat pre-directories format before that --
+an old disk is detected via the superblock magic/version and
+reformatted fresh, same policy those formats already used against
+each other.
+
+- **`kernel/drivers/tfs.c`**: the bulk of the change. New on-disk
+  layout -- superblock magic bumped `"TFS1"` -> `"TFS2"` (version
+  reset to 1, tracking TFS2's own future revisions); a journal region
+  (LBA 1: header sector -- magic/commit-flag/target-slot/checksum;
+  LBA 2-6: one record's worth of staged data) sits between the
+  superblock and the table, which now starts at LBA 7 instead of LBA
+  1. `persist_record()` is now a 4-step write-ahead sequence (stage in
+  the journal -> commit via a single-sector header write -> apply to
+  the real table slot -> clear the journal) instead of one direct
+  write; a new `replay_journal()`, called from `tfs_init()` before the
+  table load, finishes (or discards, via an FNV-1a checksum) whatever
+  was left pending by an unclean shutdown. Every record grew two new
+  fields, `created`/`modified` (`struct rtc_time`, `timer.h` --
+  set via `tz.c`'s `rtc_read_local()`, the same local-time source
+  `SYS_GETTIME`/`time` use) -- didn't need to grow `FS_RECORD_SECTORS`
+  (still 5 sectors/2560 bytes, there was headroom). `tfs_touch()`/
+  `tfs_mkdir()` set both on a genuinely new entry (touching an
+  existing file stays a no-op, unchanged); `tfs_write()` bumps
+  `modified` on every real content change. New `tfs_stat()` backs the
+  new `fs_stat()` API.
+- **`kernel/include/fs.h`**: new `struct fs_timestamps { struct
+  rtc_time created, modified; }` and `int fs_stat(const char *path,
+  struct fs_timestamps *out)`.
+- **`kernel/include/fs_ops.h`** / **`kernel/drivers/vfs.c`**: new
+  `.stat` vtable entry / `fs_stat()` dispatch wrapper, same shape as
+  every other `fs_*` call.
+- **`apps/shell_fs.c`** / **`apps/shell_internal.h`** / `apps/shell.c`:
+  new `stat <path>` shell command (type, size, created/modified) --
+  registered in `help`'s output too (`apps/shell_sys.c`).
+- **`docs/tfs2-spec.md`** (new): byte-exact on-disk format spec for a
+  host-side reader -- disk layout table, superblock/journal/record
+  field offsets, `rtc_time` encoding, path/directory semantics,
+  explicit guidance for what a *browsing* tool should (and shouldn't)
+  do with the journal region, and a reference read-only Python parser.
+  The reference parser was run against a real TFS2 image produced by
+  this build's own QMP testing and correctly listed every file/
+  directory with matching sizes and timestamps -- not just written
+  against the spec, actually verified byte-accurate.
+
+Verified: `make clean && make all && make iso` clean, zero warnings
+introduced; `tools/boot_smoke_test.py` passes. Full QMP round trip:
+fresh disk -> `mkdir`/`write`/`stat` (timestamps shown correctly) ->
+clean QMP `"quit"` -> reboot with the same disk -> `"fs: loaded
+persistent filesystem from disk"` (no replay message, confirming a
+clean shutdown leaves nothing pending) -> `cat`/`stat`/`ls` all show
+identical content and timestamps to before the reboot. Also re-ran
+`filetest`/`sockettest` (the syscall path, which round-trips through
+the same new `tfs_write()`/`tfs_read()`) post-reboot with no
+regressions. `docs/tfs2-spec.md`'s reference Python parser was
+extracted from the doc itself and run against the same test image,
+correctly listing `/etc`, `/etc/timezones`, `/docs`, `/docs/notes.txt`,
+and `/filetest.txt` with matching sizes/timestamps. Screenshots in
+`screenshots/2026-08-10/` (`tfs2-*`).
+
 ## Build 470 (major, +50) -- IRQ-driven Bus-Master DMA for ata.c, plus two real bugs it exposed
 
 Asked to improve `ata.c` specifically because it was called out (build

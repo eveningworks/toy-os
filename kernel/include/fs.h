@@ -2,6 +2,7 @@
 #define FS_H
 
 #include <stdint.h>
+#include "timer.h" // struct rtc_time, for fs_stat()'s timestamps below
 
 // This is the stable, backend-agnostic filesystem API -- kapi.h's only
 // filesystem include, and the only header apps/ or the rest of the
@@ -73,6 +74,28 @@ int fs_exists(const char *path);
 // Table order, not sorted. Does nothing (no callback calls) if
 // `dir_path` doesn't exist or isn't a directory.
 void fs_list(const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir));
+
+// `created`/`modified` are broken-down local time (via tz.c's
+// rtc_read_local(), same source SYS_GETTIME uses -- see timer.h),
+// not a Unix epoch integer: this kernel has never needed a
+// civil-date<->epoch conversion for anything else, so storing the
+// same struct rtc_time everything else already uses avoids adding
+// one just for this. A host-side tool reading these off an on-disk
+// TFS2 image converts them itself if it wants epoch seconds -- see
+// docs/tfs2-spec.md. Set once at creation (fs_touch()/fs_mkdir()) and
+// bumped on every fs_write() that actually changes a file's data;
+// touching an already-existing file is a no-op today (matches
+// tfs_touch()'s existing behavior) and does NOT bump `modified`.
+struct fs_timestamps {
+    struct rtc_time created;
+    struct rtc_time modified;
+};
+
+// Fills *out with `path`'s created/modified timestamps. Returns 1 on
+// success, 0 if `path` doesn't exist. Meaningless (returns 0) for the
+// implicit root "/", which has no entry of its own -- same as every
+// other per-entry call in this header.
+int fs_stat(const char *path, struct fs_timestamps *out);
 
 // 1 if the active backend found (or formatted) a usable disk via
 // ata.c, so every fs_touch()/fs_write()/fs_mkdir()/fs_delete() above is
