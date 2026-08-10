@@ -5,6 +5,58 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 490 (feature, +10) -- widgets.h: text field + checkbox, wired into Notepad's filename
+
+Asked to add more reusable widgets so GUI apps stop hand-rolling the
+same UI pieces (per the project's own standing instruction to build
+new/old features as widgets when that's the better choice, and to ask
+first). Investigation before proposing choices found the README's
+"Notepad's Save/Load buttons and its toolbar are hand-rolled" note was
+already stale -- `widget_button`/`widget_hit` already back Notepad's
+toolbar, Calculator's grid, and wm.c's title-bar buttons, and the
+scrollback/scrollbar widgets already back Notepad/Terminal's scrolling
+text. The one real, already-identified gap was a text input field
+(README explicitly named Notepad's fixed filename as the reason one's
+needed). Presented two choices: scope (text field alone vs. text field
++ checkbox vs. a full hand-rolled-UI audit across every app first) and
+whether to wire the new field into a real caller immediately. Went
+with: **text field + checkbox** (the checkbox built explicitly ahead
+of any real caller, by direct request -- see `docs/decisions.md`'s new
+entry, an acknowledged one-off exception to this file's normal
+"only once a second caller needs it" rule), and **wire the text field
+into Notepad's filename right away** rather than leave it unused.
+
+- **`apps/widgets.h`** / **`apps/widgets.c`**: new `struct text_field`
+  (`widget_textfield_init/set_active/key/draw`) -- fixed 48-byte
+  buffer, cursor, an explicit `active` flag the widget itself never
+  changes (the owning app decides when to (de)activate it); handles
+  printable-ASCII insert, backspace/delete, left/right/home/end,
+  leaves Enter (and everything else) unhandled/uncommitted so the
+  caller decides what Enter means. New `widget_checkbox_width/draw/hit`
+  -- box + optional label, checked/unchecked, no group/exclusivity
+  logic (that's a radio-button concept, not this).
+- **`apps/notepad.c`**: replaced the fixed `"notepad.txt"` with an
+  editable `struct text_field` in the toolbar -- clicking it activates
+  editing; Enter, or a click anywhere else in the window, deactivates
+  it. Save/Load now read/write whatever's in the field instead of a
+  constant. Save now actually checks `fs_write()`'s return value
+  (previously always reported "Saved." even on failure) and refuses an
+  empty filename outright ("Bad filename.") rather than trying
+  `fs_write("", ...)`.
+
+Verified: `make clean && make all && make iso` clean, zero warnings
+introduced; `tools/boot_smoke_test.py` passes. Full QMP GUI test:
+opened Notepad from the Start menu, clicked the filename field
+(caret appeared), cleared "notepad.txt" and typed "mynote.txt", clicked
+into the text area (field's caret correctly disappeared, confirming
+deactivation-on-click-elsewhere), typed "hello widgets", clicked Save
+(status showed "Saved."), then dropped back to the shell and
+independently confirmed via `cat mynote.txt`/`stat mynote.txt` that
+the file was written under the new name with the right content and a
+fresh timestamp -- not just that the GUI *looked* right, the actual
+disk state was checked through a completely separate code path.
+Screenshots in `screenshots/2026-08-10/` (`widgets-*`).
+
 ## Build 480 (feature, +10) -- TFS2: journaling + timestamps for the persistent filesystem
 
 Asked to add journaling and timestamps ("date codes") to the

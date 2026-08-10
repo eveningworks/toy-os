@@ -1,10 +1,18 @@
 // A minimal text editor: type, backspace, enter, arrow-key/Home/End
-// cursor movement, Delete, and a toolbar with Save/Load buttons that
-// persist to the in-memory filesystem (see kernel/include/fs.h) under a
-// fixed filename. No filename picker yet -- see apps/README.md if you
-// want to extend it. Also doubles as the WM's keyboard-focus test: open
-// it alongside About and confirm keystrokes always land in whichever
-// window is on top.
+// cursor movement, Delete, and a toolbar with an editable filename
+// field plus Save/Load buttons that persist to/from that filename via
+// the in-memory filesystem (see kernel/include/fs.h). Also doubles as
+// the WM's keyboard-focus test: open it alongside About and confirm
+// keystrokes always land in whichever window is on top.
+//
+// The filename field (build 490) rides on widgets.h's new
+// widget_textfield_* -- this was its first real caller (see
+// CHANGELOG.md's build 490), replacing what used to be a fixed
+// "notepad.txt". Clicking the field activates it (widget_textfield_
+// set_active(1)); a click elsewhere in the window, or Enter while it's
+// active, deactivates it -- see notepad_click()/notepad_key() below.
+// There's no separate "commit" step: `st->filename.buf` is always the
+// live filename, Save/Load just read it directly whenever they run.
 //
 // Cursor movement (build 377) rides on widgets.h's text_scrollback
 // gaining a real cursor -- see its own top comment for why: this file
@@ -33,7 +41,7 @@
 #include "theme.h"
 #include "kapi.h"
 
-#define NOTEPAD_FILE "notepad.txt"
+#define NOTEPAD_DEFAULT_FILE "notepad.txt" // widget_textfield_init()'s starting value -- the field is editable from here on, see this file's top comment
 // Macros, not cached constants, so both track gfx_char_w()/gfx_char_h()
 // live if the font size changes at runtime (see gfx_set_font_size()) --
 // same reasoning as WM_TITLEBAR_H in wm.h.
@@ -41,6 +49,8 @@
 #define BTN_W (4 * gfx_char_w() + 16) // fits "Save"/"Load" (4 chars) at any font size
 #define BTN_GAP 8
 #define BTN_MARGIN 4
+#define FIELD_COLS 16 // comfortably fits "notepad.txt"-length names; TEXTFIELD_MAX (widgets.h) allows more, just not all visible at once
+#define FIELD_W (FIELD_COLS * gfx_char_w() + 8)
 // How many text rows/cols the initial window should comfortably fit --
 // text itself always reflows to whatever size the window actually is
 // (see widget_scrollback_draw()'s own reflow), this just picks a
@@ -59,6 +69,7 @@
 // to be a pool.
 struct notepad_state {
     struct text_scrollback tb;
+    struct text_field filename; // editable filename Save/Load read/write -- see this file's top comment
     char status[32]; // brief feedback after Save/Load, shown in the toolbar
     int scrollbar_grab_offset; // set by notepad_drag_start(), read by notepad_drag() -- see widgets.h's widget_scrollbar_thumb_rect()
 };
@@ -79,7 +90,7 @@ static char g_save_buf[SCROLLBACK_CAP];
 // "NOTEPAD_COLS of text" is wider, so the toolbar never feels cramped
 // even though the text area itself is fully dynamic.
 void notepad_default_size(int *w, int *h) {
-    int toolbar_w = 2 * BTN_MARGIN + 2 * BTN_W + BTN_GAP + STATUS_COLS * gfx_char_w();
+    int toolbar_w = 2 * BTN_MARGIN + FIELD_W + BTN_GAP + 2 * BTN_W + BTN_GAP + STATUS_COLS * gfx_char_w();
     int text_w = NOTEPAD_COLS * gfx_char_w();
     *w = toolbar_w > text_w ? toolbar_w : text_w;
     *h = TOOLBAR_H + NOTEPAD_ROWS * gfx_char_h();
@@ -88,6 +99,7 @@ void notepad_default_size(int *w, int *h) {
 void notepad_open(struct window *win) {
     widget_scrollback_init(&g_notepad.tb);
     widget_scrollback_set_color(&g_notepad.tb, VGA_BLACK); // near-black-on-white, not the terminal's light-grey-on-black
+    widget_textfield_init(&g_notepad.filename, NOTEPAD_DEFAULT_FILE);
     g_notepad.status[0] = '\0';
     window_set_state(win, &g_notepad);
 }
@@ -111,6 +123,15 @@ static void notepad_layout(struct window *win, int *out_text_w, int *out_text_h,
     }
 }
 
+// Shared by draw_toolbar() and every toolbar click handler below, so
+// they all agree on exactly the same x positions -- same pattern
+// notepad_layout() already uses for the text area's geometry.
+static void toolbar_geometry(int *out_field_x, int *out_save_x, int *out_load_x) {
+    *out_field_x = BTN_MARGIN;
+    *out_save_x = *out_field_x + FIELD_W + BTN_GAP;
+    *out_load_x = *out_save_x + BTN_W + BTN_GAP;
+}
+
 static void draw_toolbar(struct window *win, struct notepad_state *st,
                           int cx, int cy, int cw, uint32_t fg) {
     uint32_t toolbar_bg = THEME_BUTTON_BG;
@@ -120,10 +141,16 @@ static void draw_toolbar(struct window *win, struct notepad_state *st,
     int by = cy + BTN_MARGIN;
     int bh = TOOLBAR_H - 2 * BTN_MARGIN;
 
-    int save_x = cx + BTN_MARGIN;
+    int field_x0, save_x0, load_x0;
+    toolbar_geometry(&field_x0, &save_x0, &load_x0);
+
+    widget_textfield_draw(cx + field_x0, by, FIELD_W, bh, &st->filename,
+                           THEME_WHITE, fg, THEME_BORDER);
+
+    int save_x = cx + save_x0;
     widget_button(save_x, by, BTN_W, bh, "Save", btn_bg, fg);
 
-    int load_x = save_x + BTN_W + BTN_GAP;
+    int load_x = cx + load_x0;
     widget_button(load_x, by, BTN_W, bh, "Load", btn_bg, fg);
 
     if (st->status[0]) {
@@ -159,6 +186,22 @@ void notepad_draw(struct window *win) {
 
 void notepad_key(struct window *win, int key) {
     struct notepad_state *st = (struct notepad_state *)window_get_state(win);
+
+    if (st->filename.active) {
+        // Enter commits (there's nothing extra to "commit" -- buf is
+        // already live -- this just ends editing) and deactivates;
+        // everything else goes to the field, never the text area, per
+        // widget_textfield_key()'s own contract.
+        if (key == '\r' || key == '\n') {
+            widget_textfield_set_active(&st->filename, 0);
+            window_invalidate(win);
+            return;
+        }
+        if (widget_textfield_key(&st->filename, key)) {
+            window_invalidate(win);
+        }
+        return;
+    }
 
     if (key == '\b') {
         widget_scrollback_backspace_at_cursor(&st->tb);
@@ -236,27 +279,51 @@ void notepad_click(struct window *win, int cx, int cy) {
     struct notepad_state *st = (struct notepad_state *)window_get_state(win);
 
     if (cy < TOOLBAR_H) {
-        int save_x0 = BTN_MARGIN;
-        int load_x0 = save_x0 + BTN_W + BTN_GAP;
+        int field_x0, save_x0, load_x0;
+        toolbar_geometry(&field_x0, &save_x0, &load_x0);
+        int bh = TOOLBAR_H - 2 * BTN_MARGIN;
+
+        if (widget_hit(field_x0, BTN_MARGIN, FIELD_W, bh, cx, cy)) {
+            widget_textfield_set_active(&st->filename, 1);
+            window_invalidate(win);
+            return;
+        }
+
+        // Any other toolbar click (a button, or empty toolbar space)
+        // ends filename editing -- same "click elsewhere deactivates"
+        // contract widget_textfield_* describes.
+        widget_textfield_set_active(&st->filename, 0);
 
         if (widget_hit(save_x0, 0, BTN_W, TOOLBAR_H, cx, cy)) {
-            notepad_serialize(&st->tb, g_save_buf, sizeof(g_save_buf));
-            fs_write(NOTEPAD_FILE, g_save_buf, 0);
-            k_strcpy(st->status, "Saved.");
+            if (st->filename.len == 0) {
+                k_strcpy(st->status, "Bad filename.");
+            } else {
+                notepad_serialize(&st->tb, g_save_buf, sizeof(g_save_buf));
+                if (fs_write(st->filename.buf, g_save_buf, 0)) {
+                    k_strcpy(st->status, "Saved.");
+                } else {
+                    k_strcpy(st->status, "Save failed.");
+                }
+            }
         } else if (widget_hit(load_x0, 0, BTN_W, TOOLBAR_H, cx, cy)) {
             uint32_t size = 0;
-            const char *data = fs_read(NOTEPAD_FILE, &size);
+            const char *data = st->filename.len ? fs_read(st->filename.buf, &size) : 0;
             if (data) {
                 notepad_load_text(&st->tb, data, size);
                 k_strcpy(st->status, "Loaded.");
             } else {
                 k_strcpy(st->status, "No file yet.");
             }
-        } else {
-            return;
         }
         window_invalidate(win);
         return;
+    }
+
+    // A click below the toolbar (the text area or its scrollbar) also
+    // ends filename editing, same reasoning as the toolbar branch above.
+    if (st->filename.active) {
+        widget_textfield_set_active(&st->filename, 0);
+        window_invalidate(win);
     }
 
     int text_w, text_h, show_scrollbar;

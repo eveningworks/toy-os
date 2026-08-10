@@ -558,9 +558,21 @@ untouched.
   every process exits (see the CHANGELOG entry on why this stayed
   modal). Also: mouse input isn't piped to ring 3 at all yet, so
   `wintest`'s close button is drawn but not clickable.
-- Reusable UI widgets -- buttons, text fields, scrollbars -- so GUI apps
-  don't each hand-roll their own drawing and hit-testing (Notepad's
-  Save/Load buttons and its toolbar are hand-rolled right now)
+- ~~Reusable UI widgets -- buttons, text fields, scrollbars -- so GUI
+  apps don't each hand-roll their own drawing and hit-testing~~ -- done
+  (see CHANGELOG.md's builds 263-283/377 for the scrollback/scrollbar
+  widgets and build 490 for the text field/checkbox): `apps/widgets.h`
+  now has `widget_button`, `widget_scrollback_*` (a full scrolling text
+  area, cursor-aware editing included), `widget_scrollbar_*`,
+  `widget_textfield_*` (single-line editable text, first used by
+  Notepad's filename field), and `widget_checkbox_*` (built ahead of a
+  real caller -- see build 490's CHANGELOG entry for why). Notepad's
+  toolbar/Save/Load buttons already went through `widget_button`
+  before this, so this note was stale by the time build 490 landed;
+  what's left unwidgeted is smaller things nothing has needed twice
+  yet (radio-button-style exclusivity, a dropdown/list, a progress
+  bar) -- add the next one only once a second real caller shows up,
+  same philosophy `widgets.h`'s own top comment states.
 - ~~Dirty-rectangle rendering instead of the current full-screen repaint.
   Double buffering removed the flicker, but each frame still redrew
   everything and blit the whole screen, which was a lot of wasted work

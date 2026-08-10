@@ -347,3 +347,118 @@ int widget_scrollbar_offset_for_drag(int y, int h, int total_lines, int visible_
     if (offset > max_scroll) offset = max_scroll;
     return offset;
 }
+
+// ---- single-line text input widget (see widgets.h for the design writeup) ----
+
+void widget_textfield_init(struct text_field *tf, const char *initial) {
+    int i = 0;
+    if (initial) {
+        while (initial[i] != '\0' && i < TEXTFIELD_MAX - 1) {
+            tf->buf[i] = initial[i];
+            i++;
+        }
+    }
+    tf->buf[i] = '\0';
+    tf->len = i;
+    tf->cursor = i;
+    tf->active = 0;
+}
+
+void widget_textfield_set_active(struct text_field *tf, int active) {
+    tf->active = active ? 1 : 0;
+}
+
+// Forward-delete the character at the cursor (like a real editor's
+// Delete key) -- cursor position doesn't change. No-op at the end.
+// Hand-rolled shift rather than a memmove() call: this codebase's
+// k_memcpy() (string.h) makes no overlapping-region guarantee, and
+// TEXTFIELD_MAX is small enough that a plain loop costs nothing.
+static void textfield_delete_at_cursor(struct text_field *tf) {
+    if (tf->cursor >= tf->len) return;
+    for (int i = tf->cursor; i < tf->len - 1; i++) tf->buf[i] = tf->buf[i + 1];
+    tf->len--;
+    tf->buf[tf->len] = '\0';
+}
+
+static void textfield_backspace(struct text_field *tf) {
+    if (tf->cursor <= 0) return;
+    tf->cursor--;
+    textfield_delete_at_cursor(tf);
+}
+
+static void textfield_insert(struct text_field *tf, char c) {
+    if (tf->len >= TEXTFIELD_MAX - 1) return; // full -- refuse rather than truncate/evict
+    for (int i = tf->len; i > tf->cursor; i--) tf->buf[i] = tf->buf[i - 1];
+    tf->buf[tf->cursor] = c;
+    tf->len++;
+    tf->cursor++;
+    tf->buf[tf->len] = '\0';
+}
+
+int widget_textfield_key(struct text_field *tf, int key) {
+    if (!tf->active) return 0;
+
+    if (key == '\b') {
+        textfield_backspace(tf);
+    } else if (key == KEY_DELETE) {
+        textfield_delete_at_cursor(tf);
+    } else if (key == KEY_ARROW_LEFT) {
+        if (tf->cursor > 0) tf->cursor--;
+    } else if (key == KEY_ARROW_RIGHT) {
+        if (tf->cursor < tf->len) tf->cursor++;
+    } else if (key == KEY_HOME) {
+        tf->cursor = 0;
+    } else if (key == KEY_END) {
+        tf->cursor = tf->len;
+    } else if (key >= 32 && key < 127) {
+        textfield_insert(tf, (char)key);
+    } else {
+        return 0; // notably '\r'/'\n' and everything else -- see this fn's doc comment
+    }
+    return 1;
+}
+
+void widget_textfield_draw(int x, int y, int w, int h, const struct text_field *tf,
+                            uint32_t bg, uint32_t fg, uint32_t border) {
+    gfx_fill_rect(x, y, w, h, bg);
+    gfx_draw_rect(x, y, w, h, border);
+
+    int pad = 4;
+    int ty = y + (h - gfx_char_h()) / 2;
+    gfx_draw_string(x + pad, ty, tf->buf, fg, bg);
+
+    if (tf->active) {
+        int caret_x = x + pad + tf->cursor * gfx_char_w();
+        gfx_fill_rect(caret_x, ty, 2, gfx_char_h(), fg);
+    }
+}
+
+// ---- checkbox widget (see widgets.h for the design writeup) ----
+
+#define CHECKBOX_LABEL_GAP 6
+
+int widget_checkbox_width(int size, const char *label) {
+    if (!label) return size;
+    return size + CHECKBOX_LABEL_GAP + (int)k_strlen(label) * gfx_char_w();
+}
+
+void widget_checkbox_draw(int x, int y, int size, int checked, const char *label,
+                           uint32_t bg, uint32_t fg) {
+    gfx_draw_rect(x, y, size, size, fg);
+    if (checked) {
+        int inset = size / 4 > 0 ? size / 4 : 1;
+        gfx_fill_rect(x + inset, y + inset, size - 2 * inset, size - 2 * inset, fg);
+    }
+    if (label) {
+        int row_h = gfx_char_h();
+        int label_y = y + (size - row_h) / 2;
+        gfx_draw_string(x + size + CHECKBOX_LABEL_GAP, label_y, label, fg, bg);
+    }
+}
+
+int widget_checkbox_hit(int x, int y, int size, const char *label, int px, int py) {
+    int w = widget_checkbox_width(size, label);
+    int row_h = gfx_char_h();
+    int h = size > row_h ? size : row_h;
+    return widget_hit(x, y, w, h, px, py);
+}

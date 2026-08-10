@@ -13,6 +13,23 @@ If you're a Claude session or a contributor and about to ask "wait, why
 is this built this way instead of the more obvious way?" -- check here
 first before re-litigating it from scratch.
 
+## Widgets are added once a second real caller needs them -- except the checkbox
+
+`apps/widgets.h`'s standing rule (stated in its own top comment) is:
+add a new widget primitive only once a second independent hand-rolled
+implementation of the same idea turns up, not preemptively. Every
+widget through build 480 followed that -- `widget_button` consolidated
+three existing button implementations (wm.c's title-bar buttons,
+Calculator's grid, Notepad's toolbar), `text_scrollback` and the
+scrollbar widgets grew out of apps/terminal.c and were then reused
+by apps/notepad.c and apps/editor.c. Build 490's `widget_textfield_*`
+kept that pattern (Notepad's fixed filename was the identified real
+need). Its `widget_checkbox_*`, though, was added explicitly ahead of
+any real caller, by direct user request when asked to choose the
+scope -- a deliberate, acknowledged exception to the rule above, not a
+change to it: the rule still applies to whatever gets added *next*.
+See CHANGELOG.md's **Build 490** for the full writeup.
+
 ## IRQ registration: one handler per line, framework-automatic EOI
 
 `kernel/core/irq.c`'s table (`irq_register_handler()`/`irq_dispatch()`)

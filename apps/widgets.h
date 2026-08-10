@@ -262,4 +262,92 @@ void widget_scrollbar_thumb_rect(int y, int h, int total_lines, int visible_rows
 int widget_scrollbar_offset_for_drag(int y, int h, int total_lines, int visible_rows,
                                       int py, int grab_offset_in_thumb);
 
+// ---- single-line text input widget ----
+//
+// A minimal editable text box: fixed-size buffer, a cursor position,
+// and an explicit active/inactive flag the widget itself never changes
+// on its own (see widget_textfield_key()'s own comment for why) -- the
+// owning app decides when to activate/deactivate it (typically: a
+// click on the field's rect activates it, via the app's own on_click
+// and widget_hit(); Enter, or a click elsewhere, deactivates it) and
+// reads `buf` whenever it wants the current text, which is always up
+// to date -- there's no separate "commit" step, every accepted
+// keystroke updates `buf` immediately. First real caller: apps/
+// notepad.c's filename field (see CHANGELOG.md's build 490),
+// previously a fixed `"notepad.txt"`.
+//
+// Deliberately minimal, same philosophy as the rest of this file: no
+// text selection, no copy/paste, no undo, no revert-on-Escape (Escape
+// isn't handled specially at all -- see widget_textfield_key()), no
+// horizontal scroll-within-the-field (see widget_textfield_draw()).
+// Add the next capability only once a real caller needs it.
+
+#define TEXTFIELD_MAX 48
+
+struct text_field {
+    char buf[TEXTFIELD_MAX]; // NUL-terminated, always <= TEXTFIELD_MAX - 1 chars
+    int len;    // k_strlen(buf), kept in sync so callers don't have to recompute it
+    int cursor; // [0, len] -- caret position; insert/backspace/delete operate here
+    int active; // 1 = has focus (draws a caret, accepts keys); 0 = inert, plain text
+};
+
+// Copies `initial` into buf (truncated to fit if longer than
+// TEXTFIELD_MAX - 1), cursor at the end, active = 0. `initial` may be
+// NULL for an empty field.
+void widget_textfield_init(struct text_field *tf, const char *initial);
+
+// Sets `active` directly -- see this section's top comment for who's
+// responsible for calling this and when.
+void widget_textfield_set_active(struct text_field *tf, int active);
+
+// Handles one key while `tf->active`: printable ASCII (32-126) inserts
+// at the cursor, backspace/delete edit around it, left/right/home/end
+// move it. Returns 1 if the key was handled (caller should redraw), 0
+// if it wasn't recognized -- notably, '\r'/'\n' and anything else
+// falls through unhandled, since committing/deactivating on Enter is
+// the caller's decision, not this widget's (some callers might want
+// different behavior). Always returns 0, doing nothing, when
+// `tf->active` is 0 -- callers don't need their own "if active" guard
+// before calling this.
+int widget_textfield_key(struct text_field *tf, int key);
+
+// Fills (x, y, w, h) with `bg`, draws a 1px border in `border`, and
+// draws `tf->buf` in `fg` -- plus a solid caret at `tf->cursor` if
+// `tf->active`. Text longer than fits `w` is simply clipped the same
+// way every other text-drawing call in this codebase already is (see
+// gfx_draw_string()) -- there's no horizontal scroll-within-the-field
+// yet, matching TEXTFIELD_MAX being small enough that this hasn't come
+// up for a real caller.
+void widget_textfield_draw(int x, int y, int w, int h, const struct text_field *tf,
+                            uint32_t bg, uint32_t fg, uint32_t border);
+
+// ---- checkbox widget ----
+//
+// A small square box, checked/unchecked, with an optional label to its
+// right -- e.g. `widget_checkbox_draw(x, y, 14, checked, "Word wrap",
+// bg, fg)`. Unlike every other widget in this file, there was no
+// second hand-rolled implementation to consolidate first when this was
+// added (see CHANGELOG.md's build 490) -- built ahead of an actual
+// caller, by explicit choice, for whenever a future settings-style app
+// needs one. Kept exactly as minimal as everything else here so it's
+// cheap to have sitting unused: draw + hit-test only, no group/
+// mutual-exclusivity logic (that's a radio-button concept, not this).
+
+// Total clickable width for a checkbox at `size` with `label` (or just
+// `size` if `label` is NULL) -- shared by draw()/hit() so they always
+// agree on the same geometry, same pattern as the scrollbar widgets
+// above.
+int widget_checkbox_width(int size, const char *label);
+
+// Draws the box (outlined in `fg`; filled with `fg` too, inset, when
+// `checked`) at (x, y), sized `size` x `size`, then `label` (if any)
+// in `fg` on `bg` to its right, vertically centered against the box.
+void widget_checkbox_draw(int x, int y, int size, int checked, const char *label,
+                           uint32_t bg, uint32_t fg);
+
+// 1 if (px, py) falls inside the box+label's combined clickable area
+// (widget_checkbox_width()'s width, by max(size, a text row's height)
+// tall), 0 otherwise.
+int widget_checkbox_hit(int x, int y, int size, const char *label, int px, int py);
+
 #endif
