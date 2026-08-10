@@ -5,6 +5,50 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 183 (feature, +10) -- vga.c output-sink redirection (terminal-emulator prerequisite, phase 1/4)
+
+First of four planned phases toward a GUI terminal-emulator app (asked
+"can we add a terminal emulator CLI to GUI as an app"). Scoped this out
+with a research pass first: shell.c's ~40 command handlers are all
+hard-wired to the global `vga_*` console singleton, and reusing them
+from a GUI window meant either duplicating them (fast but permanent
+drift from the real shell) or giving the console a pluggable output
+target. Chose the latter -- more upfront work, but the terminal app
+ends up running the *actual* shell dispatcher, not a copy.
+
+- `kernel/include/vga.h` / `kernel/drivers/vga.c`: added `struct
+  vga_sink` (`putc`/`backspace`/`clear`/`set_color`/`rows` callbacks
+  plus a `void *ctx`) and `vga_set_sink()`. When a sink is installed,
+  every `vga_putc`/`vga_write`/`vga_clear`/`vga_backspace`/
+  `vga_set_color`/`vga_rows` call routes to it instead of the physical
+  console (legacy 0xB8000 or framebuffer text backend) -- transparently,
+  with zero changes needed to any of shell.c's existing command
+  handlers, since they only ever call the same `vga_*` functions they
+  already did. `vga_write_dec`/`vga_write_hex`/`vga_write_exit_code`
+  needed no changes at all, since they're built entirely on top of
+  `vga_putc`/`vga_write`. Only one sink can be active at a time (no
+  stack -- nothing needs nesting yet); `vga_set_sink(0)` restores the
+  physical console, and `vga_set_sink()` returns the previously-active
+  sink so a caller can nest safely if a future need arises.
+  `vga_cursor_tick()` is a no-op while a sink is active (a sink owns
+  its own cursor presentation, or has none -- nothing for the physical
+  console's blink logic to do). Also added `vga_current_fg()` (reads
+  the physical console's current color; sinks track their own via
+  `set_color` if they implement it) for phase 4's terminal app to use
+  when initializing its own color state.
+- No behavior change with no sink installed (the only mode that
+  exists until phase 4 wires one up) -- every `vga_*` call takes the
+  exact code path it always did.
+
+Tested in QEMU: `about`/`meminfo` on the physical console produce
+identical output to before (screenshot below) -- confirms the sink
+plumbing adds a branch on an always-null pointer and nothing else
+changes. No sink-active behavior to test yet; that lands with phase 2
+(exporting shell's `dispatch()` with a sink parameter) and phase 4
+(the terminal app that actually installs one).
+
+Screenshot: `screenshots/2026-08-10/phase1_vga_sink_regression_check.png`
+
 ## Build 173 (major, +50) -- process exit/teardown: a crashed ring-3 process no longer halts the kernel
 
 The long-standing "Ideas for what's next" item: `ring3test`/`elftest`

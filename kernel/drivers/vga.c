@@ -35,6 +35,9 @@ static uint16_t *buf = VGA_MEM;
 static enum vga_color cur_fg = VGA_LIGHT_GREY;
 static enum vga_color cur_bg = VGA_BLACK;
 
+// ---- output sink redirection (see vga.h's struct vga_sink comment) ----
+static const struct vga_sink *active_sink = 0;
+
 static uint32_t palette_rgb(enum vga_color c) {
     switch (c) {
         case VGA_BLACK:         return gfx_rgb(0, 0, 0);
@@ -231,7 +234,17 @@ void vga_init(void) {
     }
 }
 
+const struct vga_sink *vga_set_sink(const struct vga_sink *sink) {
+    const struct vga_sink *prev = active_sink;
+    active_sink = sink;
+    return prev;
+}
+
 void vga_clear(void) {
+    if (active_sink) {
+        if (active_sink->clear) active_sink->clear(active_sink->ctx);
+        return;
+    }
     if (fb_mode) fb_clear();
     else legacy_clear();
 }
@@ -244,6 +257,9 @@ void vga_reflow(void) {
 }
 
 uint32_t vga_rows(void) {
+    if (active_sink) {
+        return active_sink->rows ? active_sink->rows(active_sink->ctx) : 24;
+    }
     return (uint32_t)(fb_mode ? console_rows : VGA_HEIGHT);
 }
 
@@ -255,6 +271,9 @@ uint32_t vga_rows(void) {
 // plain no-op in legacy text mode, where the hardware cursor already
 // blinks on its own.
 void vga_cursor_tick(void) {
+    // A sink owns its own cursor presentation (or has none) -- nothing
+    // for the physical console's blink logic to do while one's active.
+    if (active_sink) return;
     if (!fb_mode) return;
     if (pit_ticks() - cursor_last_toggle_tick < CURSOR_BLINK_TICKS) return;
     cursor_last_toggle_tick = pit_ticks();
@@ -267,12 +286,28 @@ void vga_cursor_tick(void) {
 }
 
 void vga_set_color(enum vga_color fg, enum vga_color bg) {
+    if (active_sink) {
+        if (active_sink->set_color) active_sink->set_color(active_sink->ctx, fg, bg);
+        return;
+    }
     cur_fg = fg;
     cur_bg = bg;
     legacy_color = make_color(fg, bg);
 }
 
+enum vga_color vga_current_fg(void) {
+    return cur_fg;
+}
+
 void vga_putc(char c) {
+    if (active_sink) {
+        if (c == '\b') {
+            if (active_sink->backspace) active_sink->backspace(active_sink->ctx);
+        } else {
+            if (active_sink->putc) active_sink->putc(active_sink->ctx, c);
+        }
+        return;
+    }
     // '\b' is a control code, not a printable glyph -- keyboard_read_line()
     // (the kernel's own line reader) never sends it through here, it calls
     // vga_backspace() directly. But SYS_WRITE (syscall.c) forwards
@@ -290,6 +325,10 @@ void vga_putc(char c) {
 }
 
 void vga_backspace(void) {
+    if (active_sink) {
+        if (active_sink->backspace) active_sink->backspace(active_sink->ctx);
+        return;
+    }
     if (fb_mode) fb_backspace();
     else legacy_backspace();
 }

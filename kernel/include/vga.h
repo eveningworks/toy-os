@@ -18,6 +18,42 @@ void vga_write(const char *s);
 void vga_write_dec(uint32_t n);
 void vga_write_hex(uint64_t n);
 
+// ---- output sink redirection ----
+//
+// By default every vga_* call below goes straight to the physical
+// console (legacy 0xB8000 text mode or the framebuffer text backend --
+// see vga.c's top comment). A sink lets a caller redirect all of that
+// output somewhere else instead -- e.g. a GUI app's own scrollback
+// buffer -- WITHOUT touching every individual vga_write()/vga_putc()
+// call site across the kernel (shell.c's ~40 command handlers chief
+// among them). This is what makes shell.c's dispatch() reusable from a
+// terminal-emulator GUI app: push a sink before calling dispatch(), pop
+// it after, and every cmd_* function's existing vga_write() calls just
+// work, unmodified.
+//
+// Only one sink can be active at a time (no stack) -- that's all any
+// current caller needs, and it keeps this simple. vga_set_sink(0)
+// restores the physical console. Whatever installs a sink is
+// responsible for restoring it (typically to 0) when done; leaving a
+// stale sink installed would silently swallow all future console
+// output, including the shell's own prompt.
+struct vga_sink {
+    void *ctx;
+    void (*putc)(void *ctx, char c);
+    void (*backspace)(void *ctx);
+    void (*clear)(void *ctx);
+    void (*set_color)(void *ctx, enum vga_color fg, enum vga_color bg);
+    // May be NULL -- vga_rows() falls back to a sane default (24) for
+    // sinks that don't track a page height (e.g. pure loggers).
+    uint32_t (*rows)(void *ctx);
+};
+
+// Installs `sink` as the active output redirect, or pass NULL to
+// restore the physical console. Returns the PREVIOUSLY active sink (0
+// if none), so callers can nest safely by saving and restoring it --
+// see apps/terminal.c (phase 4) for the pattern.
+const struct vga_sink *vga_set_sink(const struct vga_sink *sink);
+
 // Prints a process_run_ring3() return value the way every *test command
 // wants it shown: a real (non-negative) exit code as a plain decimal
 // number via vga_write_dec(), or -- for PROCESS_CRASHED (process.h),
@@ -29,6 +65,14 @@ void vga_write_hex(uint64_t n);
 void vga_write_exit_code(int code);
 void vga_set_color(enum vga_color fg, enum vga_color bg);
 void vga_backspace(void);
+
+// Current text color the physical console is drawing with. When a sink
+// is active this still reflects the *physical* console's color state
+// (sinks track their own color via their set_color callback, if any) --
+// callers that need to know what color they're "logically" writing in
+// while a sink might be active should track it themselves rather than
+// relying on this.
+enum vga_color vga_current_fg(void);
 
 // Recomputes the framebuffer console's column/row count from the
 // current gfx_char_w()/gfx_char_h() and clears the screen -- call after

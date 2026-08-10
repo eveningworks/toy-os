@@ -496,6 +496,13 @@ untouched.
 
 ## Ideas for what's next
 
+- GUI terminal-emulator app -- in progress, phase 1/4 done (see
+  CHANGELOG.md's "vga.c output-sink redirection" entry, build 183):
+  console output can now be redirected away from the physical screen.
+  Remaining phases: export shell.c's `dispatch()` with an output-sink
+  parameter and isolate its blocking commands (`timezone`'s picker,
+  `help`'s pager); a reusable scrollback/text-cell widget; and the
+  actual `apps/terminal.c` GUI app tying it together.
 - ~~Process exit/teardown so a faulted or crashed ring-3 process doesn't
   halt the whole kernel~~ -- done (see CHANGELOG.md's "process
   exit/teardown" entry, `crashtest`). `ring3test`/`elftest` still
