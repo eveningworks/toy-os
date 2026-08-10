@@ -41,6 +41,32 @@ work.
   it's still one tightly-coupled event loop sharing state through
   `wm_internal.h`'s `extern`s, not decoupled components. See
   `apps/wm/wm.c`'s top comment.
+- **Split a file once it's grown big enough to be genuinely harder to
+  work with, the same call that produced the `apps/wm/` split above --
+  don't wait for it to become unmanageable, but don't split
+  preemptively either.** There's no hard line-count rule; the signal is
+  practical: a file mixing more than one real concern (e.g. event
+  handling + rendering, like `wm.c` before its split), or long enough
+  that finding/editing the right part of it gets slow and error-prone.
+  As a rough reference point, every hand-written file in this repo is
+  currently under 800 lines (`apps/shell.c` is the largest at 777) and
+  that's comfortable -- a hand-written file pushing toward a couple
+  thousand lines is the point to seriously consider it, not a hard
+  trigger. This deliberately excludes *generated* data files like
+  `kernel/drivers/font_ttf.c` (11,800+ lines of baked glyph data) --
+  splitting those for line count alone would miss the point; the
+  concern there is regenerating them correctly (`tools/genttf.py`), not
+  readability. When a split does make sense: follow the `apps/wm/`
+  pattern (split by concern, share state through a `_internal.h` of
+  `extern`s if it's still fundamentally one component, not a real
+  boundary -- see `docs/decisions.md`'s entry on this) rather than
+  inventing a new pattern each time, and record the split's own
+  reasoning in a top-of-file comment the way `apps/wm/wm.c` and
+  `kernel/drivers/tfs.c` do. `CHANGELOG.md` itself is the same
+  instinct applied to docs, not code -- if it ever gets unwieldy to
+  search, split by era (e.g. a `CHANGELOG-2026.md`) rather than letting
+  one file grow forever; not needed yet at ~2,900 lines, since entries
+  are found by grep, not by reading start to finish.
 - **`/etc` on the persistent filesystem is the config-file convention**
   (`kernel_main()` creates it right after `fs_init()`, before anything
   that might read a config file runs) -- see `kernel/core/tz.c` for the

@@ -5,6 +5,30 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 307 (fix, +1) -- CLAUDE.md: when to split a file, generalized from the wm.c precedent
+
+Requested after a conversation about how large this project can grow
+before it gets harder to work with -- the answer was "splitting a file
+once it gets big is already the right instinct (see the `apps/wm/`
+split), keep doing that," but that instinct only lived implicitly in
+one example, not as a stated convention a future session would
+necessarily connect to a new situation.
+
+- `CLAUDE.md`: new bullet in "Conventions worth knowing before
+  editing," right after the existing `apps/wm/` split bullet it
+  generalizes from. No hard line-count rule -- the signal is a file
+  mixing more than one real concern, or long enough that finding the
+  right part of it gets slow -- but gives a concrete reference point
+  (every hand-written file here is currently under 800 lines) and
+  explicitly excludes generated data files like `font_ttf.c` (11,800+
+  lines of baked glyph data, wrong axis to judge by line count).
+  Points at the `apps/wm/` pattern (split by concern, `_internal.h` of
+  `extern`s if still one component) as the template to reuse rather
+  than reinventing one each time, and calls out `CHANGELOG.md` itself
+  as the same instinct applied to docs (split by era if it ever gets
+  unwieldy to search -- not needed yet at ~2,900 lines).
+- No code changes -- docs/build-metadata only.
+
 ## Build 306 (fix, +1) -- docs/decisions.md: topic-indexed "why is this built this way" answers
 
 Requested: a docs/ directory with specs/documentation for future
