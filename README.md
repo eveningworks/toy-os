@@ -626,10 +626,18 @@ untouched.
     here as a future improvement, not built now, since nothing in this
     kernel has exercised the bitmap enough yet to know fragmentation is
     a real problem worth that added complexity.
-  - **A socket-like fd abstraction + new syscalls** -- today's fd
-    table (`syscall.c`) is filesystem-only (`SYS_OPEN`/`READ`/`WRITE`/
-    `CLOSE` all go straight to `fs_read`/`fs_write`); no
-    `SYS_SOCKET`/`SYS_SEND`/`SYS_RECV` equivalent exists.
+  - ~~**A socket-like fd abstraction + new syscalls**~~ -- fd/syscall
+    surface done (see CHANGELOG.md's build 420); real transport still
+    doesn't exist. `syscall.c`'s fd table is now a tagged union
+    (`FD_KIND_FILE`/`FD_KIND_SOCKET`) sharing one namespace, and
+    `SYS_SOCKET`/`SYS_SEND`/`SYS_RECV` exist and are reachable --
+    `SYS_SOCKET` allocates a real socket fd (domain/type reserved for
+    future use, must be 0 for now), `SYS_SEND`/`SYS_RECV` always return
+    -1 ("no transport yet," deliberately, not a bug), and
+    `SYS_WRITE`/`SYS_READ` correctly reject a socket fd. This is
+    scaffolding ahead of the actual driver, not a working socket --
+    see `sockettest`, which proves exactly this surface and nothing
+    more.
   - Smaller gap: there's a tick counter (`pit_ticks()`) but no sleep/
     delay primitive -- TCP needs timeouts and retransmission timers.
   Realistic path, if taken: PCI enum -> pick a simple NIC to target

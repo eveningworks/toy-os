@@ -210,6 +210,8 @@ static void dispatch(char *line) {
         newsyscalls_test_run();
     } else if (k_strcmp(cmd, "crashtest") == 0) {
         crash_test_run();
+    } else if (k_strcmp(cmd, "sockettest") == 0) {
+        socket_test_run();
     } else if (k_strcmp(cmd, "history") == 0) {
         cmd_history();
     } else if (k_strcmp(cmd, "lspci") == 0) {

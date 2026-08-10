@@ -34,6 +34,7 @@
 #include "file_test.h"    // file_test_run: ring-3 process round-trips a real file through SYS_OPEN/READ/WRITE/CLOSE
 #include "newsyscalls_test.h" // newsyscalls_test_run: ring-3 process exercises SYS_UNLINK/SYS_LISTDIR/SYS_GETTIME/SYS_YIELD
 #include "crash_test.h"    // crash_test_run: ring-3 process deliberately faults, proving the kernel recovers instead of halting
+#include "socket_test.h"   // socket_test_run: ring-3 process exercises SYS_SOCKET/SYS_SEND/SYS_RECV (fd/syscall surface, no transport yet)
 #include "version.h"   // TOYOS_VERSION -- build number, shown by the shell's `about` and the GUI About window
 #include "string.h"    // k_strlen, k_strcmp, etc -- freestanding, no libc
 

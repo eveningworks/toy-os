@@ -230,4 +230,40 @@ struct dirent {
                       // there's nothing else to yield to, so it's
                       // always a no-op there. Always returns 0 (RAX).
 
+// Socket-fd scaffolding -- see kernel/core/syscall.c's `struct open_file`
+// and docs/decisions.md for the fuller reasoning. There's no NIC driver
+// or protocol stack yet (see README.md's "Basic TCP/IP networking" --
+// PCI enumeration, IRQ registration, and contiguous memory are done;
+// this is the fd/syscall layer, still ahead of the driver itself), so
+// SYS_SEND/SYS_RECV below always fail with -1 for now -- deliberately,
+// not a bug. What this DOES get you: a real fd namespace shared between
+// files and sockets (SYS_CLOSE, and process exit cleanup, already work
+// on a socket fd for free, since neither ever looked at file-specific
+// state to begin with), and an ABI that's already settled by the time a
+// real transport exists, instead of needing a breaking change then.
+#define SYS_SOCKET 16 // RDI = domain, RSI = type -- both reserved for
+                       // future use (AF_INET/SOCK_STREAM, say) and must
+                       // be passed as 0 for now; a nonzero value is
+                       // rejected (-1) rather than silently ignored, so
+                       // a caller relying on a real value being honored
+                       // later fails loudly today instead of quietly
+                       // once a real domain/type distinction exists.
+                       // On success, allocates a socket-kind fd (same
+                       // table, same fd namespace as SYS_OPEN's file
+                       // fds -- see SYS_SOCKET's kernel-side comment)
+                       // and returns it (RAX); -1 if the fd table is
+                       // full. SYS_READ/SYS_WRITE reject a socket fd
+                       // (-1, "bad fd") -- SYS_SEND/SYS_RECV below are
+                       // the only way to use one.
+#define SYS_SEND   17 // RDI = fd (from SYS_SOCKET), RSI = buffer
+                       // pointer, RDX = length. Always returns -1 for
+                       // now -- there's no transport to send through
+                       // yet (see this section's top comment) -- once a
+                       // NIC driver exists this becomes the real send
+                       // path; the ABI (which register holds what)
+                       // isn't expected to change when that happens.
+#define SYS_RECV   18 // RDI = fd (from SYS_SOCKET), RSI = buffer
+                       // pointer, RDX = length. Always returns -1, same
+                       // reasoning as SYS_SEND above.
+
 #endif

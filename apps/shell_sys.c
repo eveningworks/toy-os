@@ -149,6 +149,9 @@ static const char *const TEST_HELP_LINES[] = {
     "  crashtest     - ring-3 process deliberately faults -- proves the\n",
     "                  kernel recovers (tears it down, returns) instead\n",
     "                  of halting (returns)\n",
+    "  sockettest    - ring-3 process exercises SYS_SOCKET/SYS_SEND/\n",
+    "                  SYS_RECV -- no NIC driver yet, so this proves the\n",
+    "                  fd/syscall surface, not real data transfer (returns)\n",
     "\n",
     "Run `help` (no arguments) for everyday commands.\n",
 };

@@ -273,3 +273,22 @@ number that would be more nuanced but less predictable. See
 CHANGELOG.md's **Build 110** (the switch itself) and **Build 121**
 (the git tag + GitHub Release convention added on top of it), and
 CLAUDE.md's own bullet on this for the day-to-day mechanics.
+
+## Socket fds: scaffolding ahead of the driver, not a working transport
+
+`SYS_SOCKET`/`SYS_SEND`/`SYS_RECV` (build 420) exist and are reachable,
+but `SYS_SEND`/`SYS_RECV` always return -1 -- there's no NIC driver or
+protocol stack for them to move bytes through yet (see README.md's
+"Basic TCP/IP networking": PCI enumeration, IRQ registration, and
+contiguous memory are done; the driver itself isn't). Building even a
+minimal in-kernel loopback transport (two processes exchanging bytes
+through a shared buffer, no real network) was considered and
+deliberately not taken -- it would prove the syscalls can move data,
+but not the actual thing this scaffolding needs to prove: that the fd
+namespace, the syscall ABI, and the tagged fd table (`FD_KIND_FILE`/
+`FD_KIND_SOCKET` in `syscall.c`) are right, ahead of a real driver
+existing. `sockettest` verifies exactly that surface -- fd allocation,
+kind separation (`SYS_WRITE`/`SYS_READ` correctly reject a socket fd),
+and cleanup -- without pretending a transport exists. See
+`syscall_abi.h`'s `SYS_SOCKET` doc comment and CHANGELOG.md's
+**Build 420** for the full writeup.

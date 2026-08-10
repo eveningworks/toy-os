@@ -23,12 +23,32 @@
 
 enum fd_mode { FD_MODE_READ, FD_MODE_WRITE };
 
+// FD_KIND_SOCKET added alongside FD_KIND_FILE (see SYS_SOCKET's doc
+// comment in syscall_abi.h) -- one shared fd namespace/table for both,
+// same as real Unix, rather than a second parallel table: SYS_CLOSE and
+// syscall_process_exit_cleanup() below already only look at `used`/
+// `owner_pml4`, so they work on a socket fd for free with no changes.
+// Socket fds carry no real state yet (no domain/type distinction, no
+// transport) -- the `socket` arm of the union below is deliberately
+// empty; it exists so a socket slot has *some* member to be valid C,
+// and as the obvious place to grow real per-socket state once a NIC
+// driver exists.
+enum fd_kind { FD_KIND_FILE, FD_KIND_SOCKET };
+
 struct open_file {
     int used;
     uint64_t owner_pml4;
-    char name[FS_PATH_MAX];
-    enum fd_mode mode;
-    uint32_t offset; // read position; unused in write mode (always appends)
+    enum fd_kind kind;
+    union {
+        struct {
+            char name[FS_PATH_MAX];
+            enum fd_mode mode;
+            uint32_t offset; // read position; unused in write mode (always appends)
+        } file;
+        struct {
+            int unused_placeholder; // no real socket state yet -- see SYS_SOCKET's doc comment
+        } socket;
+    };
 };
 
 static struct open_file fd_table[FD_TABLE_SIZE];
@@ -265,8 +285,13 @@ void syscall_dispatch(uint64_t *regs) {
             }
         } else { // a real file, opened via SYS_OPEN
             int slot = fd - FD_BASE;
+            // kind check: a socket fd (SYS_SOCKET) reaching here means
+            // the caller used the wrong syscall -- SYS_SEND is the only
+            // way to write to a socket fd -- so it's rejected the same
+            // as any other bad fd, not silently treated as a file.
             if (slot < 0 || slot >= FD_TABLE_SIZE || !fd_table[slot].used ||
-                fd_table[slot].owner_pml4 != pml4 || fd_table[slot].mode != FD_MODE_WRITE) {
+                fd_table[slot].kind != FD_KIND_FILE ||
+                fd_table[slot].owner_pml4 != pml4 || fd_table[slot].file.mode != FD_MODE_WRITE) {
                 klog_write("syscall: write() rejected -- bad fd\n");
                 regs[14] = (uint64_t)-1;
             } else if (!vmm_validate_user_range(pml4, buf_ptr, len)) {
@@ -284,7 +309,7 @@ void syscall_dispatch(uint64_t *regs) {
                 const char *ubuf = (const char *)(uintptr_t)buf_ptr;
                 for (uint64_t i = 0; i < len; i++) tmp[i] = ubuf[i];
                 tmp[len] = '\0';
-                fs_write(fd_table[slot].name, tmp, 1); // 1 = append
+                fs_write(fd_table[slot].file.name, tmp, 1); // 1 = append
                 regs[14] = len;
             }
         }
@@ -296,8 +321,11 @@ void syscall_dispatch(uint64_t *regs) {
 
         uint64_t pml4 = vmm_current_pml4();
         int slot = fd - FD_BASE;
+        // Same kind check as SYS_WRITE above -- SYS_RECV is the only
+        // way to read from a socket fd.
         if (slot < 0 || slot >= FD_TABLE_SIZE || !fd_table[slot].used ||
-            fd_table[slot].owner_pml4 != pml4 || fd_table[slot].mode != FD_MODE_READ) {
+            fd_table[slot].kind != FD_KIND_FILE ||
+            fd_table[slot].owner_pml4 != pml4 || fd_table[slot].file.mode != FD_MODE_READ) {
             klog_write("syscall: read() rejected -- bad fd\n");
             regs[14] = (uint64_t)-1;
         } else if (!vmm_validate_user_range(pml4, buf_ptr, len)) {
@@ -305,18 +333,18 @@ void syscall_dispatch(uint64_t *regs) {
             regs[14] = (uint64_t)-1;
         } else {
             uint32_t file_size = 0;
-            const char *data = fs_read(fd_table[slot].name, &file_size);
+            const char *data = fs_read(fd_table[slot].file.name, &file_size);
             if (!data) {
                 regs[14] = 0; // file vanished (deleted mid-read, e.g. by
                                // the shell's `rm`) -- treat as EOF rather
                                // than crash or fabricate data
             } else {
-                uint32_t off = fd_table[slot].offset;
+                uint32_t off = fd_table[slot].file.offset;
                 uint32_t remaining = off < file_size ? file_size - off : 0;
                 uint64_t n = len < remaining ? len : remaining;
                 char *ubuf = (char *)(uintptr_t)buf_ptr;
                 for (uint64_t i = 0; i < n; i++) ubuf[i] = data[off + i];
-                fd_table[slot].offset += (uint32_t)n;
+                fd_table[slot].file.offset += (uint32_t)n;
                 regs[14] = n;
             }
         }
@@ -364,16 +392,21 @@ void syscall_dispatch(uint64_t *regs) {
                         if (!exists) fs_touch(name);
                         if (want_trunc) fs_write(name, "", 0); // 0 = overwrite, not append
                     }
-                    k_strcpy(fd_table[slot].name, name);
+                    fd_table[slot].kind = FD_KIND_FILE;
+                    k_strcpy(fd_table[slot].file.name, name);
                     fd_table[slot].used = 1;
                     fd_table[slot].owner_pml4 = pml4;
-                    fd_table[slot].mode = want_write ? FD_MODE_WRITE : FD_MODE_READ;
-                    fd_table[slot].offset = 0;
+                    fd_table[slot].file.mode = want_write ? FD_MODE_WRITE : FD_MODE_READ;
+                    fd_table[slot].file.offset = 0;
                     regs[14] = (uint64_t)(FD_BASE + slot);
                 }
             }
         }
     } else if (rax == SYS_CLOSE) {
+        // Kind-agnostic on purpose -- a socket fd (SYS_SOCKET) has no
+        // file-specific state to tear down, so the same "just clear
+        // `used`" logic that's always worked for file fds already works
+        // for socket fds too, with no changes needed here.
         uint64_t pml4 = vmm_current_pml4();
         int fd = (int)rdi;
         int slot = fd - FD_BASE;
@@ -384,6 +417,50 @@ void syscall_dispatch(uint64_t *regs) {
             fd_table[slot].used = 0;
             regs[14] = 0;
         }
+    } else if (rax == SYS_SOCKET) {
+        // See syscall_abi.h's SYS_SOCKET doc comment -- domain/type are
+        // reserved for future use and must be 0 for now, rejected
+        // otherwise so a caller relying on a real value being honored
+        // fails loudly today rather than silently once one exists.
+        uint64_t pml4 = vmm_current_pml4();
+        uint64_t domain = rdi;
+        uint64_t type = rsi;
+        if (domain != 0 || type != 0) {
+            klog_write("syscall: socket() rejected -- nonzero domain/type (not supported yet)\n");
+            regs[14] = (uint64_t)-1;
+        } else {
+            int slot = -1;
+            for (int i = 0; i < FD_TABLE_SIZE; i++) {
+                if (!fd_table[i].used) { slot = i; break; }
+            }
+            if (slot < 0) {
+                klog_write("syscall: socket() rejected -- fd table full\n");
+                regs[14] = (uint64_t)-1;
+            } else {
+                fd_table[slot].kind = FD_KIND_SOCKET;
+                fd_table[slot].used = 1;
+                fd_table[slot].owner_pml4 = pml4;
+                regs[14] = (uint64_t)(FD_BASE + slot);
+            }
+        }
+    } else if (rax == SYS_SEND || rax == SYS_RECV) {
+        // Both share one branch -- same fd validation, same "no
+        // transport yet" outcome (see syscall_abi.h). Doesn't touch the
+        // caller's buffer at all (nothing is actually sent/received),
+        // so unlike SYS_WRITE/SYS_READ there's no buffer pointer to
+        // validate here -- only the fd itself.
+        uint64_t pml4 = vmm_current_pml4();
+        int fd = (int)rdi;
+        int slot = fd - FD_BASE;
+        if (slot < 0 || slot >= FD_TABLE_SIZE || !fd_table[slot].used ||
+            fd_table[slot].kind != FD_KIND_SOCKET || fd_table[slot].owner_pml4 != pml4) {
+            klog_write(rax == SYS_SEND ? "syscall: send() rejected -- bad fd\n"
+                                        : "syscall: recv() rejected -- bad fd\n");
+        } else {
+            klog_write(rax == SYS_SEND ? "syscall: send() -- no transport yet, failing\n"
+                                        : "syscall: recv() -- no transport yet, failing\n");
+        }
+        regs[14] = (uint64_t)-1; // always fails for now -- see syscall_abi.h
     } else if (rax == SYS_GUI_INIT) {
         uint64_t pml4 = vmm_current_pml4();
 

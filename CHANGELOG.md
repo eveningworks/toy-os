@@ -5,6 +5,66 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 420 (feature, +10) -- socket-fd abstraction + SYS_SOCKET/SYS_SEND/SYS_RECV
+
+Fourth milestone toward TCP/IP networking (see build 380's README
+entry, build 390's PCI enumeration, build 400's IRQ registration, build
+410's contiguous memory) -- the last item on that list before an actual
+NIC driver: `syscall.c`'s fd table was filesystem-only, with no way for
+a socket to exist as a first-class fd. Presented three choices: build
+scope (fd/syscall surface only vs. also a real in-kernel loopback
+transport vs. just the fd-table refactor with no new syscalls yet), fd
+table shape (extend into a tagged union vs. a second parallel socket
+table), and syscall API shape (a minimal SYS_SOCKET+SYS_SEND/SYS_RECV
+now vs. the full BSD-style surface including SYS_CONNECT/SYS_BIND/
+SYS_LISTEN/SYS_ACCEPT). Went with: fd/syscall surface only -- there's
+still no NIC driver, so a real transport (even an in-kernel loopback
+one) was judged premature; a tagged union in the existing fd table
+(`FD_KIND_FILE`/`FD_KIND_SOCKET`), one shared fd namespace matching how
+real Unix does it, rather than a second table to keep in sync; and the
+minimal syscall set -- no connection semantics yet, since there's
+nothing to connect to.
+
+- **`kernel/include/syscall_abi.h`**: `SYS_SOCKET` (16, RDI = domain,
+  RSI = type -- both reserved for future use, must be 0 for now,
+  rejected otherwise), `SYS_SEND` (17, RDI = fd, RSI = buffer, RDX =
+  length), `SYS_RECV` (18, same shape). `SYS_SEND`/`SYS_RECV` always
+  return -1 for now -- no transport exists yet -- deliberately, not a
+  bug; the ABI (which register holds what) is meant to not need a
+  breaking change once a real NIC driver lands.
+- **`kernel/core/syscall.c`**: `struct open_file` is now a tagged union
+  -- `enum fd_kind { FD_KIND_FILE, FD_KIND_SOCKET }` plus a union of a
+  `file` arm (the pre-existing name/mode/offset fields, untouched) and
+  an empty `socket` arm (no real per-socket state yet). `SYS_SOCKET`
+  allocates a slot the same way `SYS_OPEN` always has (first free `!used`
+  slot), tagged `FD_KIND_SOCKET`. `SYS_WRITE`/`SYS_READ` now check
+  `kind == FD_KIND_FILE` before touching `.file.*`, rejecting a socket
+  fd with the same "bad fd" outcome as any other invalid fd -- proves
+  the two kinds actually stay separate rather than a socket fd
+  accidentally being treated as a file. `SYS_CLOSE` and
+  `syscall_process_exit_cleanup()` needed zero changes -- both only
+  ever looked at `used`/`owner_pml4`, so a socket fd already closes and
+  gets reclaimed on process exit correctly, for free.
+- **`userland/socket_test.c`** (new) / **`kernel/core/socket_test.c`**
+  (new) / **`kernel/include/socket_test.h`** (new) / `sockettest` shell
+  command (`apps/shell.c`, `apps/shell_sys.c`) / thirteenth GRUB module
+  (`grub.cfg`, `Makefile`): a ring-3 test program proving the surface,
+  not real data transfer -- `SYS_SOCKET(1, 0)` (nonzero domain)
+  correctly rejected, `SYS_SOCKET(0, 0)` returns a real fd,
+  `SYS_SEND`/`SYS_RECV` on it correctly return -1, `SYS_WRITE`/
+  `SYS_READ` on it correctly get rejected, `SYS_CLOSE` succeeds, and
+  reusing the closed fd afterward is correctly rejected. Exits 0 only
+  if every one of those checks matched what's documented.
+
+Verified: `make clean && make all && make iso` clean, `tools/
+boot_smoke_test.py` PASS, and (via QMP, screenshots below) `sockettest`
+itself passes every check with exit code 0 -- plus `filetest` and
+`newsyscalltest` both still pass unchanged, confirming the fd-table
+tagged-union refactor didn't disturb existing file-fd behavior.
+Screenshots: `sockettest_all_checks_pass.png`,
+`sockettest_filetest_regression_ok.png`,
+`sockettest_newsyscalltest_regression_ok.png`.
+
 ## Build 410 (feature, +10) -- contiguous/DMA-friendly physical memory
 
 Third milestone toward TCP/IP networking (see build 380's README entry,
