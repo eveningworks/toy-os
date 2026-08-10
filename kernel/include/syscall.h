@@ -39,4 +39,20 @@ void syscall_dispatch(uint64_t *regs);
 // scheduler-managed processes.
 void syscall_reset_heap(uint64_t pml4_phys, uint64_t heap_base);
 
+// Frees everything a process privately owned once it's gone -- a normal
+// SYS_EXIT, or a ring-3 fault idt.c caught and is recovering from. Two
+// halves: the process's whole address space (vmm_destroy_address_space(),
+// which covers its heap and any SYS_WIN_CREATE buffer too, since both
+// are just pages mapped into that same address space -- nothing extra
+// to free there), and the kernel-side bookkeeping that ISN'T part of any
+// address space and so wouldn't be touched by that alone: open fds
+// (fd_table), and the single-slot heap/window "armed for this pml4"
+// globals.
+//
+// Switches CR3 back to the kernel's own address space FIRST, before
+// freeing anything -- see vmm_destroy_address_space()'s comment for why
+// that ordering matters (freeing the frame CR3 still points at is a
+// use-after-free the instant something else allocates it).
+void syscall_process_exit_cleanup(uint64_t pml4_phys);
+
 #endif

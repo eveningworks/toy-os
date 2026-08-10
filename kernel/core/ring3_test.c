@@ -41,10 +41,12 @@ static void on_ring3_fault(uint64_t vector, uint64_t error_code, uint64_t cs, ui
     vmm_switch_address_space(vmm_kernel_pml4_phys());
     vga_write("(switched CR3 back to the kernel's own address space)\n\n");
 
-    vga_write("This halts here on purpose: recovering after a real fault needs\n");
-    vga_write("process teardown via syscalls, which doesn't exist yet -- that's\n");
-    vga_write("the natural next step. Restart the OS (or the QEMU window) to\n");
-    vga_write("use the shell again.\n");
+    vga_write("This still halts here on purpose -- NOT because recovery doesn't\n");
+    vga_write("exist any more (see `crashtest`, which now recovers cleanly): this\n");
+    vga_write("test drops to ring 3 with its own raw, manual iretq instead of\n");
+    vga_write("going through process_run_ring3(), so there's nowhere for the\n");
+    vga_write("kernel to recover TO -- see process.h. Restart the OS (or the\n");
+    vga_write("QEMU window) to use the shell again.\n");
 
     serial_write("ring3_test: halting after fault diagnostics\n");
 }

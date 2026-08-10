@@ -9,6 +9,8 @@
 #include "mouse.h"
 #include "syscall.h"
 #include "scheduler.h"
+#include "vmm.h"
+#include "process.h"
 
 struct idt_entry {
     uint16_t offset_low;
@@ -162,8 +164,24 @@ void isr_dispatch(uint64_t *regs) {
             __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
         }
 
+        // A ring-3 fault is recoverable -- tear the process down and
+        // hand control to whatever runs next -- only if there's
+        // actually somewhere to hand it TO: a scheduler-managed process
+        // (scheduler_on_exit() already knows how to pick the next one),
+        // or a process_run_ring3() call with its context still armed
+        // (process.h). ring3_test.c/elf_test.c's deliberate faults are
+        // neither -- they drop to ring 3 with their own raw, manual
+        // iretq, not through process_run_ring3() -- so they still fall
+        // through to the unconditional halt below, exactly as before:
+        // there's nowhere for them to recover TO. A ring-0 (kernel-mode)
+        // fault always falls through too -- a kernel bug staying fatal
+        // is correct, not a gap this closes.
+        int recoverable = (cs & 3) == 3 &&
+                           (scheduler_current_pid() || process_context_is_armed());
+
         vga_set_color(VGA_WHITE, VGA_RED);
-        vga_write("\n*** KERNEL PANIC: ");
+        vga_write("\n*** ");
+        vga_write(recoverable ? "RING-3 PROCESS CRASHED: " : "KERNEL PANIC: ");
         vga_write(exception_names[vector]);
         vga_write(" ***\n");
         vga_write("RIP="); vga_write_hex(rip);
@@ -173,12 +191,34 @@ void isr_dispatch(uint64_t *regs) {
         if (vector == 14) { vga_write("  CR2="); vga_write_hex(cr2); }
         vga_putc('\n');
 
-        serial_write("PANIC: ");
+        serial_write(recoverable ? "RING-3 CRASH: " : "PANIC: ");
         serial_write(exception_names[vector]);
         serial_write("\n");
 
         if ((cs & 3) == 3 && ring3_hook) {
             ring3_hook(vector, error_code, cs, cr2);
+        }
+
+        if (recoverable) {
+            vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+            vga_write("Process torn down (address space + fds/heap/window\n");
+            vga_write("state freed) -- ");
+            vga_write(scheduler_current_pid()
+                          ? "handing the CPU to the next ready process.\n\n"
+                          : "returning control to whatever ran it.\n\n");
+            vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+
+            syscall_process_exit_cleanup(vmm_current_pml4());
+
+            if (scheduler_current_pid()) {
+                // Same "crashed, no real exit code to report" case
+                // scheduler_on_exit()'s own comment already covers --
+                // nothing consumes the code today either way.
+                scheduler_on_exit(-1);
+                return; // g_next_kernel_rsp now points elsewhere; isr_common's epilogue resumes it
+            } else {
+                process_context_recover(); // never returns
+            }
         }
 
         for (;;) __asm__ volatile ("cli; hlt");

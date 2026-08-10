@@ -59,7 +59,7 @@ void win_test_run(void) {
     vga_clear();
     vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
     vga_write("Back from the ring-3 window process. Exit code: ");
-    vga_write_dec((uint32_t)exit_code);
+    vga_write_exit_code(exit_code);
     vga_write("\n\nThe process only ever drew into its own private buffer --\n");
     vga_write("it never had the real framebuffer mapped into its address\n");
     vga_write("space at all (see SYS_WIN_CREATE/SYS_WIN_PRESENT in\n");

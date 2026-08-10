@@ -50,6 +50,7 @@ ECHO_ELF = userland/echo.elf
 WIN_TEST_ELF = userland/win_test.elf
 FILE_TEST_ELF = userland/file_test.elf
 NEWSYSCALLS_TEST_ELF = userland/newsyscalls_test.elf
+CRASH_TEST_ELF = userland/crash_test.elf
 
 # Source layout:
 #   kernel/core/boot.asm, isr.asm  -- boot + interrupt stubs (assembly)
@@ -100,7 +101,7 @@ version:
 	@sh tools/gen_version.sh
 	@rm -f $(BUILD)/apps/about.o $(BUILD)/apps/shell.o
 
-all: version $(KERNEL) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF)
+all: version $(KERNEL) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF)
 
 help:
 	@echo "toy-os -- available targets:"
@@ -206,6 +207,12 @@ $(BUILD)/userland/newsyscalls_test.o: userland/newsyscalls_test.c | $(BUILD)/use
 $(NEWSYSCALLS_TEST_ELF): $(BUILD)/userland/newsyscalls_test.o userland/link.ld
 	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/newsyscalls_test.o
 
+$(BUILD)/userland/crash_test.o: userland/crash_test.c | $(BUILD)/userland
+	$(CC) $(USERLAND_CFLAGS) $< -o $@
+
+$(CRASH_TEST_ELF): $(BUILD)/userland/crash_test.o userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/crash_test.o
+
 $(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(ASM_OBJECTS) $(C_OBJECTS)
 
@@ -214,7 +221,7 @@ $(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) linker.ld
 $(DISK_IMG):
 	dd if=/dev/zero of=$@ bs=1M count=1 status=none
 
-iso: version $(KERNEL) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF)
+iso: version $(KERNEL) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF)
 	mkdir -p iso/boot/grub
 	cp $(KERNEL) iso/boot/kernel.bin
 	cp $(HELLO_ELF) iso/boot/hello.elf
@@ -228,6 +235,7 @@ iso: version $(KERNEL) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_B
 	cp $(WIN_TEST_ELF) iso/boot/win_test.elf
 	cp $(FILE_TEST_ELF) iso/boot/file_test.elf
 	cp $(NEWSYSCALLS_TEST_ELF) iso/boot/newsyscalls_test.elf
+	cp $(CRASH_TEST_ELF) iso/boot/crash_test.elf
 	cp grub.cfg iso/boot/grub/grub.cfg
 	grub-mkrescue -o $(ISO) iso
 
@@ -251,7 +259,7 @@ run-nographic: iso $(DISK_IMG)
 	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -display none -m 256
 
 clean:
-	rm -rf $(BUILD) $(ISO) iso/boot/kernel.bin iso/boot/hello.elf iso/boot/exit_test.elf iso/boot/write_test.elf iso/boot/write_bad_test.elf iso/boot/gui_test.elf iso/boot/counter_a.elf iso/boot/counter_b.elf iso/boot/echo.elf iso/boot/win_test.elf iso/boot/file_test.elf iso/boot/newsyscalls_test.elf $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(NEWSYSCALLS_TEST_ELF)
+	rm -rf $(BUILD) $(ISO) iso/boot/kernel.bin iso/boot/hello.elf iso/boot/exit_test.elf iso/boot/write_test.elf iso/boot/write_bad_test.elf iso/boot/gui_test.elf iso/boot/counter_a.elf iso/boot/counter_b.elf iso/boot/echo.elf iso/boot/win_test.elf iso/boot/file_test.elf iso/boot/newsyscalls_test.elf iso/boot/crash_test.elf $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(CRASH_TEST_ELF)
 	# Deliberately NOT touching $(DISK_IMG) here -- see its comment above.
 	# Use `make clean-disk` to explicitly wipe the persistent filesystem.
 

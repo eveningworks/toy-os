@@ -98,8 +98,8 @@ built, in what order, and the bugs found (and fixed) along the way.
 `color <name>`, `reboot`, `ls`, `cat <f>`, `touch <f>`, `write <f> <text>`,
 `append <f> <text>`, `rm <f>`, `gui`, `apps`, `run <app>`, `ring3test`,
 `elftest`, `syscalltest`, `writetest`, `ptrtest`, `guitest`, `history`,
-`schedtest`, `fontsize <small|medium|large>`, `echotest`, `wintest`,
-`filetest`
+`schedtest`, `fontsize <tiny|small|medium|large>`, `echotest`, `wintest`,
+`filetest`, `newsyscalltest`, `crashtest`
 
 ## Building on CachyOS
 
@@ -496,9 +496,13 @@ untouched.
 
 ## Ideas for what's next
 
-- Process exit/teardown so a faulted or crashed ring-3 process doesn't
-  halt the whole kernel -- `ring3test`/`elftest` still require a reboot
-  after their deliberate fault, same as before
+- ~~Process exit/teardown so a faulted or crashed ring-3 process doesn't
+  halt the whole kernel~~ -- done (see CHANGELOG.md's "process
+  exit/teardown" entry, `crashtest`). `ring3test`/`elftest` still
+  require a reboot after their deliberate fault, but on purpose now,
+  not for lack of a recovery path -- they drop to ring 3 with their own
+  raw, manual iretq instead of `process_run_ring3()`, so there's
+  nowhere for the kernel to recover them TO (see `process.h`).
 - `g_next_kernel_rsp`'s reentrancy fixed properly (see the
   `echotest`/`SYS_READ_KEY` entry in CHANGELOG.md) so a genuinely
   blocking read -- or any syscall that wants interrupts on while it

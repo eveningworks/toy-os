@@ -54,7 +54,7 @@ void write_test_run(void) {
     serial_write("write_test: process_run_ring3() returned\n");
     vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
     vga_write("\n(that line above was printed by the ring-3 process itself)\n");
-    vga_write("Process exited cleanly. Exit code: ");
-    vga_write_dec((uint32_t)exit_code);
+    vga_write("Process finished. Exit code: ");
+    vga_write_exit_code(exit_code);
     vga_putc('\n');
 }

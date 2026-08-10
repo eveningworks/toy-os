@@ -34,6 +34,23 @@ int vmm_map_user_page(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr);
 // Loads CR3 with the given address space.
 void vmm_switch_address_space(uint64_t pml4_phys);
 
+// Frees every physical frame this address space privately owns -- every
+// present page-table page at every level (PDPT/PD/PT) AND every leaf
+// page they map -- then frees the PML4 frame itself. Walks entries
+// 1..511 of the PML4 only, deliberately skipping entry 0 (the shared
+// kernel identity map -- every address space's PML4 points at the SAME
+// physical PDPT there, see vmm_create_address_space(); freeing it would
+// corrupt every other process's mapping, not just this one's).
+//
+// Caller's responsibility, not this function's: switch CR3 away from
+// `pml4_phys` BEFORE calling this (e.g. via vmm_switch_address_space()
+// to vmm_kernel_pml4_phys()) -- this frees the PML4 frame CR3 points at,
+// and leaving CR3 pointing at a freed frame that the very next
+// pmm_alloc_frame() could hand out to something else is a use-after-free
+// waiting to happen, even on hardware with no real concurrency to race
+// against. A no-op if `pml4_phys` is 0.
+void vmm_destroy_address_space(uint64_t pml4_phys);
+
 // Reads CR3 -- the address space active right now. Inside a syscall
 // handler (which doesn't switch CR3 on entry -- see the note above),
 // this is the calling process's own address space, which is exactly

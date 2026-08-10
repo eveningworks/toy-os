@@ -51,7 +51,7 @@ void gui_test_run(void) {
     vga_clear();
     vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
     vga_write("Back from the ring-3 GUI process. Exit code: ");
-    vga_write_dec((uint32_t)exit_code);
+    vga_write_exit_code(exit_code);
     vga_write("\n\nThis was modal -- the process had the whole real screen to\n");
     vga_write("itself while it ran. It's not a window inside the kernel-space\n");
     vga_write("window manager (try 'gui'); that's a separate, so-far-untouched\n");

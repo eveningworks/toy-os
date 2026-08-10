@@ -56,8 +56,8 @@ void newsyscalls_test_run(void) {
 
     serial_write("newsyscalls_test: process_run_ring3() returned\n");
     vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
-    vga_write("\nProcess exited cleanly. Exit code: ");
-    vga_write_dec((uint32_t)exit_code);
+    vga_write("\nProcess finished. Exit code: ");
+    vga_write_exit_code(exit_code);
     vga_write("\n\n(exit code 0 means every phase passed -- see\n");
     vga_write("userland/newsyscalls_test.c)\n");
     vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);

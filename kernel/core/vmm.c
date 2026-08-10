@@ -80,6 +80,45 @@ void vmm_switch_address_space(uint64_t pml4_phys) {
     __asm__ volatile ("mov %0, %%cr3" : : "r"(pml4_phys) : "memory");
 }
 
+// The tear-down mirror of ensure_next_level() above: frees every present
+// leaf frame in a PT, then the PT frame itself.
+static void destroy_pt(uint64_t pt_phys) {
+    uint64_t *pt = table_at(pt_phys);
+    for (int i = 0; i < 512; i++) {
+        if (pt[i] & PAGE_PRESENT) pmm_free_frame(pt[i] & ADDR_MASK);
+    }
+    pmm_free_frame(pt_phys);
+}
+
+static void destroy_pd(uint64_t pd_phys) {
+    uint64_t *pd = table_at(pd_phys);
+    for (int i = 0; i < 512; i++) {
+        if (pd[i] & PAGE_PRESENT) destroy_pt(pd[i] & ADDR_MASK);
+    }
+    pmm_free_frame(pd_phys);
+}
+
+static void destroy_pdpt(uint64_t pdpt_phys) {
+    uint64_t *pdpt = table_at(pdpt_phys);
+    for (int i = 0; i < 512; i++) {
+        if (pdpt[i] & PAGE_PRESENT) destroy_pd(pdpt[i] & ADDR_MASK);
+    }
+    pmm_free_frame(pdpt_phys);
+}
+
+void vmm_destroy_address_space(uint64_t pml4_phys) {
+    if (!pml4_phys) return;
+    uint64_t *pml4 = table_at(pml4_phys);
+    // Start at 1, not 0 -- entry 0 is the shared kernel mapping every
+    // address space's PML4 points at the SAME physical PDPT for (see
+    // vmm_create_address_space()); walking into it here would free
+    // memory every other process (and the kernel itself) still needs.
+    for (int i = 1; i < 512; i++) {
+        if (pml4[i] & PAGE_PRESENT) destroy_pdpt(pml4[i] & ADDR_MASK);
+    }
+    pmm_free_frame(pml4_phys);
+}
+
 uint64_t vmm_current_pml4(void) {
     uint64_t cr3;
     __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));

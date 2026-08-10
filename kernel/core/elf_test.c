@@ -43,10 +43,12 @@ static void on_elf_fault(uint64_t vector, uint64_t error_code, uint64_t cs, uint
     vmm_switch_address_space(vmm_kernel_pml4_phys());
     vga_write("(switched CR3 back to the kernel's own address space)\n\n");
 
-    vga_write("This halts here for the same reason ring3test does: there's no\n");
-    vga_write("syscall/exit path yet for the process to hand control back to\n");
-    vga_write("the shell. Restart the OS (or the QEMU window) to use the shell\n");
-    vga_write("again.\n");
+    vga_write("This still halts here for the same reason ring3test does (see its\n");
+    vga_write("comment): this test drops to ring 3 with its own raw, manual iretq\n");
+    vga_write("instead of going through process_run_ring3(), so there's nowhere\n");
+    vga_write("for the kernel to recover TO -- crash recovery does exist now for\n");
+    vga_write("processes that DO go through it (see `crashtest`). Restart the OS\n");
+    vga_write("(or the QEMU window) to use the shell again.\n");
 
     serial_write("elf_test: halting after fault diagnostics\n");
 }

@@ -5,6 +5,103 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 173 (major, +50) -- process exit/teardown: a crashed ring-3 process no longer halts the kernel
+
+The long-standing "Ideas for what's next" item: `ring3test`/`elftest`
+have always required a full reboot after their deliberate fault, since
+there was no way to free a process's resources and hand control back.
+Picked this off the list when asked "what can we add or change now,"
+over a couple of other candidates (reusable GUI widgets, Notepad
+save-as).
+
+**Added (`kernel/core/vmm.c`/`vmm.h`, `vmm_destroy_address_space()`):**
+walks a PML4's entries 1..511 (deliberately skipping entry 0, the
+shared kernel identity map every address space points at the SAME
+physical PDPT for -- see `vmm_create_address_space()`), freeing every
+present page-table page at every level plus every leaf frame they map,
+then frees the PML4 itself. The tear-down mirror of the existing
+`vmm_map_user_page()`/`ensure_next_level()` allocation path. Caller
+must switch CR3 away first (freeing the frame CR3 still points at is a
+use-after-free the instant the next `pmm_alloc_frame()` reuses it).
+
+**Added (`kernel/core/syscall.c`, `syscall_process_exit_cleanup()`):**
+the other half of teardown -- kernel-side bookkeeping that isn't part
+of any address space and so wouldn't be freed by
+`vmm_destroy_address_space()` alone: open fds (`fd_table`), and the
+single-slot heap/window "armed for this pml4" globals (the pages
+themselves ARE part of the address space, since both `SYS_SBRK` and
+`SYS_WIN_CREATE` just map pages into the calling process's own page
+tables -- nothing extra to free there). Switches CR3 back to the
+kernel's own address space first, then calls
+`vmm_destroy_address_space()`.
+
+**Changed (`kernel/core/syscall.c`'s `SYS_EXIT` handler):** now calls
+the cleanup above before handing off to `scheduler_on_exit()` or the
+legacy restore path -- fixes a **pre-existing leak**: a normal
+`exit()` never freed its address space either, before this. Only
+visible before now because nothing ever reused that memory; `meminfo`
+confirms it's fixed (see Tested below).
+
+**Added (`kernel/core/idt.c`'s fault handler):** a ring-3 fault
+(`CS & 3 == 3`) is now recoverable IF there's actually somewhere to
+recover to -- a scheduler-managed process (`scheduler_on_exit()`
+already knows how to pick the next one), or a `process_run_ring3()`
+call with its context still armed (new: `process_context_is_armed()`,
+`kernel/include/process.h`). When recoverable: prints
+`*** RING-3 PROCESS CRASHED: <exception> ***` (was always
+`*** KERNEL PANIC ***` before, even for a plain ring-3 bug) with the
+same RIP/CS/error_code/CR2 dump as before, still calls the existing
+`ring3_hook` diagnostic mechanism unchanged, then runs the cleanup
+above and either `scheduler_on_exit(-1)` or the new
+`process_context_recover()` (process.h/process.c -- same
+`process_context_restore()` mechanism `SYS_EXIT` already used, reached
+from idt.c instead). **`ring3_test.c`/`elf_test.c` are unaffected** --
+both drop to ring 3 with their own raw, manual iretq instead of
+`process_run_ring3()`, so nothing is ever armed during their fault;
+they still halt exactly as before (their on-fault messages were
+updated to explain why, since the old "recovery doesn't exist yet"
+wording became inaccurate). A genuine ring-0 (kernel-mode) fault always
+still halts too -- a kernel bug staying fatal is correct, not a gap
+this closes.
+
+**Added (`process.h`, `#define PROCESS_CRASHED (-2)`):** the sentinel
+`process_run_ring3()` returns when its process was recovered from a
+fault instead of exiting cleanly. Introduced the first negative return
+value that scheme has ever produced, which exposed a real display bug:
+every `*test` command's trailer (`echo_test.c`, `file_test.c`,
+`gui_test.c`, `newsyscalls_test.c`, `syscall_test.c`, `win_test.c`,
+`write_test.c`) printed the exit code via
+`vga_write_dec((uint32_t)exit_code)`, which would have shown
+`4294967294` for -2, not "-2". **Fixed:** new `vga_write_exit_code()`
+(`vga.c`/`vga.h`) prints a real (non-negative) code normally, or
+"CRASHED" for any negative one -- deliberately generic rather than
+importing `process.h`'s exact constant, so a driver-layer file doesn't
+depend on kernel/core. All seven call sites switched over; their
+"exited cleanly" phrasing (no longer always true) changed to the
+neutral "finished."
+
+**Added (`userland/crash_test.c`, `kernel/core/crash_test.c`, new
+files; wired in as the shell's `crashtest` command, the thirteenth
+Multiboot2 module):** deliberately writes through a wild pointer at a
+fixed low address (present in every process's shared kernel identity
+map, but never user-accessible, so this reliably page-faults the same
+way a real null-pointer bug would) to exercise the whole recovery path
+end to end -- this is the first ring-3 fault in the project's history
+that DOESN'T require a reboot to recover from.
+
+**Tested in QEMU:** `crashtest` -- fault caught, banner shows
+"RING-3 PROCESS CRASHED: Page fault", CR2 correctly shows the wild
+address, process torn down, shell resumes immediately, exit code shown
+as "CRASHED." Ran `crashtest` 10 times in a row and compared `meminfo`'s
+free-frame count before and after: identical (63071 free both times) --
+proof every crash's address space is genuinely freed, not leaked.
+Regression: `schedtest` (scheduler-managed exit) and `filetest`/
+`newsyscalltest` (legacy exit) still complete normally with exit code 0
+after a batch of crashes, confirming `fd_table`/heap/window state isn't
+corrupted by the new cleanup path. `ring3test` still halts with the
+unchanged `*** KERNEL PANIC ***` banner, confirming the new recovery
+path correctly stays out of its way.
+
 ## Build 123 (fix, +1) -- gitignore `Makefile.new` too
 
 Same issue as the previous entry's `_to_delete/`, spotted by the user

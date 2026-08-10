@@ -312,6 +312,19 @@ void vga_write_dec(uint32_t n) {
     while (i > 0) vga_putc(tmp[--i]);
 }
 
+void vga_write_exit_code(int code) {
+    // Negative here only ever means PROCESS_CRASHED (process.h) in
+    // practice -- no real exit code produces one (see its comment) --
+    // but this stays generic ("any negative value") rather than
+    // importing process.h and comparing against that exact constant, to
+    // avoid a driver (this file) depending on kernel/core.
+    if (code < 0) {
+        vga_write("CRASHED");
+    } else {
+        vga_write_dec((uint32_t)code);
+    }
+}
+
 void vga_write_hex(uint64_t n) {
     vga_write("0x");
     char buf[17];

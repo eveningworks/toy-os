@@ -1,5 +1,5 @@
 #include "syscall.h"
-#include "context_switch.h"
+#include "process.h"
 #include "serial.h"
 #include "vga.h"
 #include "vmm.h"
@@ -11,8 +11,6 @@
 #include "string.h"
 #include "tz.h"
 #include <stddef.h>
-
-extern struct kernel_context g_process_ctx; // defined in process.c
 
 // SYS_OPEN/SYS_READ/SYS_CLOSE state: a small global table of open files,
 // same single-process-at-a-time scoping as the heap/window state below
@@ -173,6 +171,45 @@ static void win_present(void) {
     }
 }
 
+void syscall_process_exit_cleanup(uint64_t pml4_phys) {
+    // Open fds this process never closed -- not part of any address
+    // space (fs.c is a separate kernel resource, nothing about it is
+    // memory-mapped into the process), so vmm_destroy_address_space()
+    // below wouldn't reclaim these on its own.
+    for (int i = 0; i < FD_TABLE_SIZE; i++) {
+        if (fd_table[i].used && fd_table[i].owner_pml4 == pml4_phys) {
+            fd_table[i].used = 0;
+        }
+    }
+
+    // The single-slot heap/window "armed for this pml4" bookkeeping --
+    // also not part of the address space itself (these are globals
+    // right here in syscall.c), even though the PAGES they describe
+    // (the heap's mapped range, the window's pixel buffer) ARE part of
+    // it and get freed along with everything else below.
+    if (g_heap_pml4 == pml4_phys) {
+        g_heap_pml4 = 0;
+        g_heap_base = 0;
+        g_heap_brk = 0;
+        g_heap_mapped_end = 0;
+    }
+    if (g_win_pml4 == pml4_phys) {
+        g_win_pml4 = 0;
+        g_win_pages = 0;
+        g_win_w = 0;
+        g_win_h = 0;
+        g_win_pitch = 0;
+        g_win_x = 0;
+        g_win_y = 0;
+    }
+
+    // CR3 first -- see vmm_destroy_address_space()'s comment for why
+    // freeing the frame CR3 still points at, before switching away from
+    // it, would be a use-after-free.
+    vmm_switch_address_space(vmm_kernel_pml4_phys());
+    vmm_destroy_address_space(pml4_phys);
+}
+
 void syscall_dispatch(uint64_t *regs) {
     uint64_t rax = regs[14]; // syscall number
     uint64_t rdi = regs[9];  // first argument
@@ -182,6 +219,7 @@ void syscall_dispatch(uint64_t *regs) {
     if (rax == SYS_EXIT) {
         int code = (int)rdi;
         serial_write("syscall: exit() called by ring-3 process\n");
+        syscall_process_exit_cleanup(vmm_current_pml4());
         if (scheduler_current_pid()) {
             // Scheduler-managed process (spawned by scheduler_demo_run(),
             // see scheduler.c) -- hand its CPU slot to the next ready
@@ -191,10 +229,9 @@ void syscall_dispatch(uint64_t *regs) {
             // scheduler_on_exit() picked, via g_next_kernel_rsp.
             scheduler_on_exit(code);
         } else {
-            // Legacy path, unchanged since M12: +1 biases a genuine
-            // exit(0) away from 0, which process_context_save() also
-            // returns on its normal path -- see context_switch.h.
-            process_context_restore(&g_process_ctx, code + 1);
+            // Legacy path (process.c's process_context_exit()) --
+            // doesn't return.
+            process_context_exit(code);
         }
     } else if (rax == SYS_WRITE) {
         // ABI: RDI = fd (was the buffer pointer before SYS_OPEN/SYS_READ

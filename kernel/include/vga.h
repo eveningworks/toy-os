@@ -17,6 +17,16 @@ void vga_putc(char c);
 void vga_write(const char *s);
 void vga_write_dec(uint32_t n);
 void vga_write_hex(uint64_t n);
+
+// Prints a process_run_ring3() return value the way every *test command
+// wants it shown: a real (non-negative) exit code as a plain decimal
+// number via vga_write_dec(), or -- for PROCESS_CRASHED (process.h),
+// the sentinel a caught ring-3 fault returns -- "CRASHED" instead of
+// blindly casting a negative int to vga_write_dec()'s uint32_t (which
+// would print something like 4294967294 for -2, not "-2": exactly the
+// kind of confusing output introducing PROCESS_CRASHED made possible
+// for the first time, since every exit code before it was always >= 0).
+void vga_write_exit_code(int code);
 void vga_set_color(enum vga_color fg, enum vga_color bg);
 void vga_backspace(void);
 

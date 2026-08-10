@@ -58,8 +58,8 @@ void syscall_test_run(void) {
 
     serial_write("syscall_test: process_run_ring3() returned\n");
     vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
-    vga_write("\nThe process exited cleanly via syscall. Exit code: ");
-    vga_write_dec((uint32_t)exit_code);
+    vga_write("\nThe process finished (via exit syscall, or a caught fault). Exit code: ");
+    vga_write_exit_code(exit_code);
     vga_write("\n\nNo fault, no halt -- control came straight back here, same\n");
     vga_write("as an ordinary function call would, and the shell keeps\n");
     vga_write("running normally from this point on.\n");
