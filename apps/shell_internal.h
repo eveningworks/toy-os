@@ -1,0 +1,65 @@
+// Internal, sharing-only header for the shell's split into three files
+// -- shell.c (the REPL loop, dispatch(), and the state everything else
+// here shares), shell_fs.c (filesystem commands), and shell_sys.c
+// (system-info/settings commands). Split out once shell.c crossed 900
+// lines mixing every command category together (see CHANGELOG.md for
+// the build this happened in).
+//
+// Mirrors apps/wm/wm_internal.h's pattern deliberately: this is still
+// fundamentally one component (the shell), split by concern for
+// readability the same way wm.c was split into apps/wm/, not a real
+// boundary the way kapi.h/wm.h are -- see docs/decisions.md's "window
+// manager is one event loop, not decoupled components" entry, which
+// applies here unchanged. State is shared through plain `extern`s, not
+// hidden behind accessor functions, on purpose. Not included by
+// anything outside shell.c/shell_fs.c/shell_sys.c.
+#ifndef SHELL_INTERNAL_H
+#define SHELL_INTERNAL_H
+
+#include "kapi.h"
+
+#define LINE_MAX 128
+#define HISTORY_MAX 8
+
+// Shared shell-wide state -- defined in shell.c, the file that owns
+// the REPL loop and is the only place any of these actually change.
+extern enum vga_color shell_fg;
+extern char cwd[FS_PATH_MAX];
+extern char history[HISTORY_MAX][LINE_MAX];
+extern int history_count;
+
+// Resolves `input` (absolute if it starts with '/', otherwise relative
+// to `cwd`) into a normalized absolute path in `out` -- see shell.c's
+// own doc comment above its definition for the full contract. Defined
+// in shell.c since it's the file that owns `cwd`; every filesystem
+// command in shell_fs.c calls this before touching fs_*.
+int resolve_path(const char *input, char *out);
+
+// Filesystem commands -- defined in shell_fs.c.
+void cmd_ls(const char *args);
+void cmd_cat(const char *name);
+void cmd_touch(const char *name);
+void cmd_mkdir(const char *name);
+void cmd_write_or_append(const char *args, int append);
+void cmd_edit(const char *name);
+void cmd_rm(const char *name);
+void cmd_pwd(void);
+void cmd_cd(const char *args);
+
+// System-info/settings commands -- defined in shell_sys.c.
+void cmd_help(const char *args);
+void cmd_time(void);
+void cmd_timezone(const char *args);
+void cmd_uptime(void);
+void cmd_about(void);
+void cmd_echo(const char *args);
+void cmd_meminfo(void);
+void cmd_dmesg(void);
+void cmd_reboot(void);
+void cmd_apps(void);
+void cmd_run(const char *name);
+void cmd_fontsize(const char *args);
+void cmd_color(const char *args);
+void cmd_history(void);
+
+#endif

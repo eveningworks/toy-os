@@ -5,6 +5,78 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 378 (fix, +1) -- split `apps/shell.c` into shell.c/shell_fs.c/shell_sys.c
+
+Asked, as a forward-looking question (not tied to any specific new
+feature), whether any files should be split for easier future
+development, and whether `apps/` should be reorganized into `cli/`/
+`gui/` subdirectories. Answered with a few options and a
+recommendation for each; went with: split `shell.c` now (by category,
+not one-file-per-command), and leave the `apps/` directory layout
+flat for now.
+
+**Why split now:** `shell.c` had grown to 906 lines and ~24 `cmd_*`
+handlers spanning every command category (filesystem, system info,
+appearance, the REPL loop itself) in one file -- past CLAUDE.md's own
+"every hand-written file is currently under 800 lines... that's
+comfortable" reference point, and the kind of file where finding/
+editing the right handler was starting to mean scrolling past a lot of
+unrelated code, the same signal that drove the original `wm.c` ->
+`apps/wm/` split.
+
+**Why not the `cli/`/`gui/` directory reorg (yet):** `kapi.h`/`wm.h`
+already draw the real CLI-vs-GUI line architecturally (which header an
+app includes), independent of where its file sits on disk -- a
+directory split wouldn't add a boundary that doesn't already exist. It
+would also mostly be bookkeeping right now: several files don't
+cleanly fit one bucket (`editor.c` serves both CLI and the GUI
+Terminal; `apps.c`/`gui_apps.c` are registries used by both the
+launcher and the shell's `apps`/`run` commands), and at only 14 files
+in `apps/` today the churn (new Makefile wildcard/pattern rules per
+subdirectory, every `#include` path fixed) isn't worth it yet.
+Revisit once there are meaningfully more apps in each bucket.
+
+- **`apps/shell_internal.h`** (new): the sharing boundary for the
+  three-file split, mirroring `apps/wm/wm_internal.h`'s pattern
+  exactly (plain `extern`s, not accessor functions -- still one
+  component, not a real boundary; see `docs/decisions.md`). Declares
+  the shared state (`shell_fg`, `cwd`, `history`/`history_count`,
+  `LINE_MAX`/`HISTORY_MAX`) and every `cmd_*`/`resolve_path()`
+  function split across the three files.
+- **`apps/shell_fs.c`** (new): the filesystem commands moved out of
+  `shell.c` unchanged -- `cmd_ls`/`cmd_cat`/`cmd_touch`/`cmd_mkdir`/
+  `cmd_write_or_append`/`cmd_edit`/`cmd_rm`/`cmd_pwd`/`cmd_cd`, plus
+  `list_cb()` (ls's per-entry callback). No logic changes, only made
+  non-`static` and declared in `shell_internal.h` so `dispatch()` (in
+  `shell.c`) can still call them.
+- **`apps/shell_sys.c`** (new): the system-info/settings commands
+  moved out unchanged -- `cmd_help`/`cmd_time`/`cmd_timezone`/
+  `cmd_uptime`/`cmd_about`/`cmd_echo`/`cmd_meminfo`/`cmd_dmesg`/
+  `cmd_reboot`/`cmd_apps`/`cmd_run`/`cmd_fontsize`/`cmd_color`/
+  `cmd_history`, plus their private helpers (`console_page()`,
+  `MONTHS`, `HELP_LINES`/`TEST_HELP_LINES`, the `dmesg_*` pagination
+  statics, `color_from_name()`, `print_fontsize_choices()`,
+  `apps_list_cb()`).
+- **`apps/shell.c`**: trimmed to the REPL loop (`shell_main()`/
+  `shell_read_line()`/`history_add()`/`redraw_line()`), the single
+  dispatcher (`dispatch()`/`shell_dispatch()`), and the state every
+  command shares (`shell_fg`, `cwd`, `history`/`history_count`,
+  `resolve_path()`) -- now ~300 lines, down from 906. `dispatch()`
+  itself is untouched line-for-line except calling into the split
+  files' now-shared functions instead of file-local `static` ones.
+  `#include "editor.h"` dropped (only `cmd_edit`, now in
+  `shell_fs.c`, needed it).
+- No Makefile change needed -- both new files live directly under
+  `apps/`, which the existing non-recursive `apps/*.c` wildcard
+  already picks up (unlike the `apps/wm/` split, which needed its own
+  `WM_C` wildcard/pattern rule for the subdirectory).
+
+Verified: `make clean && make all && make iso` clean, no new
+warnings; `tools/boot_smoke_test.py` passes; QMP session exercised
+commands from both split files against the live shell (`cd`/`pwd`/
+`cat`/`touch`/`ls` from `shell_fs.c`, `time`/`fontsize`/`history` from
+`shell_sys.c`) end to end with no behavior change from build 377.
+
 ## Build 377 (feature, +10) -- a nano/pico-style full-screen text editor (`edit`/`nano`)
 
 Asked for a nano/pico-style editor under CLI mode, and what would need
