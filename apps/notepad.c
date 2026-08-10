@@ -5,13 +5,24 @@
 // you want to extend it. Also doubles as the WM's keyboard-focus test:
 // open it alongside About and confirm keystrokes always land in whichever
 // window is on top.
+//
+// Phase 4/4 of the scrollbar plan (see CHANGELOG.md builds 263, 273,
+// 283 for the first three): converted from a flat char[] + manual
+// col/row draw loop to the same struct text_scrollback (widgets.h)
+// apps/terminal.c uses. That's the whole point of sharing the widget --
+// Page Up/Page Down, the visual draggable scrollbar, and the mouse
+// wheel all come for free from code already written and tested for
+// Terminal, instead of a second, Notepad-specific scrolling
+// implementation. Save/Load now serialize the scrollback's ring buffer
+// to/from a flat byte stream at the filesystem boundary (see
+// notepad_serialize()/notepad_load_text() below) since fs_write()/
+// fs_read() (fs.h) only know about flat buffers, not this widget.
 #include "notepad.h"
 #include "wm/wm.h"
 #include "widgets.h"
 #include "theme.h"
 #include "kapi.h"
 
-#define NOTEPAD_MAX 1024
 #define NOTEPAD_FILE "notepad.txt"
 // Macros, not cached constants, so both track gfx_char_w()/gfx_char_h()
 // live if the font size changes at runtime (see gfx_set_font_size()) --
@@ -22,21 +33,36 @@
 #define BTN_MARGIN 4
 // How many text rows/cols the initial window should comfortably fit --
 // text itself always reflows to whatever size the window actually is
-// (see notepad_draw()'s max_cols/max_rows), this just picks a sensible
-// starting size for the current font.
+// (see widget_scrollback_draw()'s own reflow), this just picks a
+// sensible starting size for the current font.
 #define NOTEPAD_COLS 44
 #define NOTEPAD_ROWS 12
 #define STATUS_COLS 14 // room for the longest status text, "No file yet."
+// Same pattern as TERM_SCROLLBAR_W/TERM_MIN_W_FOR_SCROLLBAR in
+// terminal.c: width of the scrollbar strip reserved along the text
+// area's right edge, skipped entirely below a minimum width.
+#define NOTEPAD_SCROLLBAR_W (gfx_char_w() + 4)
+#define NOTEPAD_MIN_W_FOR_SCROLLBAR (NOTEPAD_SCROLLBAR_W * 3)
 
 // Single static instance -- the window manager only allows one open
 // Notepad window at a time (see wm.c's open_app), so this doesn't need
 // to be a pool.
 struct notepad_state {
-    char text[NOTEPAD_MAX];
-    int len;
+    struct text_scrollback tb;
     char status[32]; // brief feedback after Save/Load, shown in the toolbar
+    int scrollbar_grab_offset; // set by notepad_drag_start(), read by notepad_drag() -- see widgets.h's widget_scrollbar_thumb_rect()
 };
 static struct notepad_state g_notepad;
+
+// Scratch buffer for notepad_serialize() (see notepad_click()'s Save
+// handler) -- static, not a stack-local, deliberately: the WM runs on
+// the kernel's own boot stack (16KB total, see boot.asm), not a process
+// kstack, and putting a SCROLLBACK_CAP-sized (8KB) buffer on it would
+// eat half of that in one local array on top of whatever call depth
+// already got here. A second static instance is fine for the same
+// reason g_notepad itself is: only one Notepad window can ever be open
+// (see wm.c's open_app), so there's nothing to make reentrant.
+static char g_save_buf[SCROLLBACK_CAP];
 
 // Content-area size for the current font -- see gui_apps.h's
 // default_size. Width is whichever of "toolbar + status text" or
@@ -50,10 +76,29 @@ void notepad_default_size(int *w, int *h) {
 }
 
 void notepad_open(struct window *win) {
-    g_notepad.len = 0;
-    g_notepad.text[0] = '\0';
+    widget_scrollback_init(&g_notepad.tb);
+    widget_scrollback_set_color(&g_notepad.tb, VGA_BLACK); // near-black-on-white, not the terminal's light-grey-on-black
     g_notepad.status[0] = '\0';
     window_set_state(win, &g_notepad);
+}
+
+// Splits the text area (below the toolbar) into the text region and (if
+// there's room) the scrollbar strip -- shared by notepad_draw(),
+// notepad_key()'s Page Up/Down handling, and the click/drag handlers
+// below, so all four agree on exactly the same geometry
+// widget_scrollback_draw() actually used to render. Mirrors terminal.c's
+// term_layout(); out_text_h excludes the toolbar row the same way
+// out_ch there is the whole content area (Terminal has no toolbar).
+static void notepad_layout(struct window *win, int *out_text_w, int *out_text_h, int *out_show_scrollbar) {
+    int cw = window_content_w(win);
+    *out_text_h = window_content_h(win) - TOOLBAR_H;
+    if (cw > NOTEPAD_MIN_W_FOR_SCROLLBAR) {
+        *out_show_scrollbar = 1;
+        *out_text_w = cw - NOTEPAD_SCROLLBAR_W;
+    } else {
+        *out_show_scrollbar = 0;
+        *out_text_w = cw;
+    }
 }
 
 static void draw_toolbar(struct window *win, struct notepad_state *st,
@@ -82,7 +127,6 @@ void notepad_draw(struct window *win) {
     int cx = window_content_x(win);
     int cy = window_content_y(win);
     int cw = window_content_w(win);
-    int ch = window_content_h(win);
 
     uint32_t bg = THEME_WHITE;
     uint32_t fg = THEME_TEXT;
@@ -90,35 +134,16 @@ void notepad_draw(struct window *win) {
     draw_toolbar(win, st, cx, cy, cw, fg);
 
     int text_y = cy + TOOLBAR_H;
-    int text_h = ch - TOOLBAR_H;
-    gfx_fill_rect(cx, text_y, cw, text_h, bg);
+    int text_w, text_h, show_scrollbar;
+    notepad_layout(win, &text_w, &text_h, &show_scrollbar);
 
-    int char_w = gfx_char_w(), char_h = gfx_char_h();
-    int max_cols = cw / char_w;
-    int max_rows = text_h / char_h;
-    if (max_cols < 1) max_cols = 1;
+    widget_scrollback_draw(&st->tb, cx, text_y, text_w, text_h, bg, 1);
 
-    int col = 0, row = 0;
-    for (int i = 0; i < st->len && row < max_rows; i++) {
-        char c = st->text[i];
-        if (c == '\n') {
-            row++;
-            col = 0;
-            continue;
-        }
-        if (col >= max_cols) {
-            row++;
-            col = 0;
-            if (row >= max_rows) break;
-        }
-        gfx_draw_char(cx + col * char_w, text_y + row * char_h, c, fg, bg);
-        col++;
-    }
-
-    // Simple end-of-text cursor block (no mid-text editing, so it's
-    // always at the end).
-    if (row < max_rows) {
-        gfx_fill_rect(cx + col * char_w, text_y + row * char_h, 2, char_h, fg);
+    if (show_scrollbar) {
+        int total_lines, visible_rows;
+        widget_scrollback_metrics(&st->tb, text_w, text_h, &total_lines, &visible_rows);
+        widget_scrollbar_draw(cx + text_w, text_y, NOTEPAD_SCROLLBAR_W, text_h, total_lines, visible_rows,
+                               st->tb.scroll_offset, gfx_rgb(225, 225, 230), gfx_rgb(150, 150, 160));
     }
 }
 
@@ -126,45 +151,151 @@ void notepad_key(struct window *win, int key) {
     struct notepad_state *st = (struct notepad_state *)window_get_state(win);
 
     if (key == '\b') {
-        if (st->len > 0) st->len--;
+        widget_scrollback_backspace(&st->tb);
     } else if (key == '\r' || key == '\n') {
-        if (st->len < NOTEPAD_MAX - 1) st->text[st->len++] = '\n';
+        widget_scrollback_putc(&st->tb, '\n');
+    } else if (key == KEY_PAGE_UP || key == KEY_PAGE_DOWN) {
+        // Same "one screenful minus a line of overlap" convention as
+        // terminal.c's KEY_PAGE_UP/KEY_PAGE_DOWN handling.
+        int text_w, text_h, show_scrollbar;
+        notepad_layout(win, &text_w, &text_h, &show_scrollbar);
+        int total_lines, visible_rows;
+        widget_scrollback_metrics(&st->tb, text_w, text_h, &total_lines, &visible_rows);
+        int page = visible_rows > 1 ? visible_rows - 1 : 1;
+        widget_scrollback_scroll(&st->tb, key == KEY_PAGE_UP ? page : -page);
+        window_invalidate(win);
+        return; // paging doesn't touch st->status/the text itself
     } else if (key >= 32 && key < 127) {
-        if (st->len < NOTEPAD_MAX - 1) st->text[st->len++] = (char)key;
+        widget_scrollback_putc(&st->tb, (char)key);
     } else {
         return; // ignore arrows / other control codes for this simple version
     }
 
     st->status[0] = '\0'; // typing invalidates any stale "Saved."/"Loaded."
-    st->text[st->len] = '\0';
     window_invalidate(win);
 }
 
+// Flattens the scrollback's ring buffer into a plain null-terminated
+// byte string -- fs_write() (fs.h) only knows how to persist flat
+// buffers, not this widget, and reaches into tb's buf/start/count
+// fields directly (same as terminal.c's scrollbar code already reads
+// tb.scroll_offset directly -- struct text_scrollback is a plain public
+// struct, not an opaque handle). `max` should leave room for the
+// trailing '\0'; returns the number of characters written (excluding
+// it).
+static int notepad_serialize(struct text_scrollback *tb, char *out, int max) {
+    int n = 0;
+    for (int i = 0; i < tb->count && n < max - 1; i++) {
+        out[n++] = tb->buf[(tb->start + i) % SCROLLBACK_CAP].ch;
+    }
+    out[n] = '\0';
+    return n;
+}
+
+// Inverse of notepad_serialize(): clears the scrollback and re-appends
+// `data` one character at a time via the normal putc path, so loaded
+// text goes through exactly the same code a typed character would
+// (same ring-buffer-full behavior if a saved file somehow exceeds
+// SCROLLBACK_CAP, same coloring).
+static void notepad_load_text(struct text_scrollback *tb, const char *data, uint32_t n) {
+    widget_scrollback_clear(tb);
+    for (uint32_t i = 0; i < n && data[i] != '\0'; i++) {
+        widget_scrollback_putc(tb, data[i]);
+    }
+}
+
+// Toolbar (Save/Load) clicks, and scrollbar track clicks (page up/down)
+// that aren't on the thumb -- thumb clicks never reach here, they're
+// claimed by notepad_drag_start() instead (see gui_apps.h's
+// on_click/on_drag_start contract). Mirrors terminal.c's terminal_click.
 void notepad_click(struct window *win, int cx, int cy) {
     struct notepad_state *st = (struct notepad_state *)window_get_state(win);
-    if (cy < 0 || cy >= TOOLBAR_H) return; // only the toolbar row is clickable
 
-    int save_x0 = BTN_MARGIN;
-    int load_x0 = save_x0 + BTN_W + BTN_GAP;
+    if (cy < TOOLBAR_H) {
+        int save_x0 = BTN_MARGIN;
+        int load_x0 = save_x0 + BTN_W + BTN_GAP;
 
-    if (widget_hit(save_x0, 0, BTN_W, TOOLBAR_H, cx, cy)) {
-        fs_write(NOTEPAD_FILE, st->text, 0);
-        k_strcpy(st->status, "Saved.");
-    } else if (widget_hit(load_x0, 0, BTN_W, TOOLBAR_H, cx, cy)) {
-        uint32_t size = 0;
-        const char *data = fs_read(NOTEPAD_FILE, &size);
-        if (data) {
-            uint32_t n = size < (uint32_t)(NOTEPAD_MAX - 1) ? size : (uint32_t)(NOTEPAD_MAX - 1);
-            k_memcpy(st->text, data, n);
-            st->len = (int)n;
-            st->text[st->len] = '\0';
-            k_strcpy(st->status, "Loaded.");
+        if (widget_hit(save_x0, 0, BTN_W, TOOLBAR_H, cx, cy)) {
+            notepad_serialize(&st->tb, g_save_buf, sizeof(g_save_buf));
+            fs_write(NOTEPAD_FILE, g_save_buf, 0);
+            k_strcpy(st->status, "Saved.");
+        } else if (widget_hit(load_x0, 0, BTN_W, TOOLBAR_H, cx, cy)) {
+            uint32_t size = 0;
+            const char *data = fs_read(NOTEPAD_FILE, &size);
+            if (data) {
+                notepad_load_text(&st->tb, data, size);
+                k_strcpy(st->status, "Loaded.");
+            } else {
+                k_strcpy(st->status, "No file yet.");
+            }
         } else {
-            k_strcpy(st->status, "No file yet.");
+            return;
         }
-    } else {
+        window_invalidate(win);
         return;
     }
 
+    int text_w, text_h, show_scrollbar;
+    notepad_layout(win, &text_w, &text_h, &show_scrollbar);
+    if (!show_scrollbar) return;
+
+    int local_cy = cy - TOOLBAR_H;
+    int total_lines, visible_rows;
+    widget_scrollback_metrics(&st->tb, text_w, text_h, &total_lines, &visible_rows);
+    enum scrollbar_zone zone = widget_scrollbar_hit(text_w, 0, NOTEPAD_SCROLLBAR_W, text_h,
+                                                      total_lines, visible_rows, st->tb.scroll_offset, cx, local_cy);
+    int page = visible_rows > 1 ? visible_rows - 1 : 1;
+    if (zone == SCROLLBAR_ZONE_ABOVE) {
+        widget_scrollback_scroll(&st->tb, page);
+    } else if (zone == SCROLLBAR_ZONE_BELOW) {
+        widget_scrollback_scroll(&st->tb, -page);
+    } else {
+        return; // click landed in the text area (or the bar isn't shown) -- nothing to do
+    }
+    window_invalidate(win);
+}
+
+int notepad_drag_start(struct window *win, int cx, int cy) {
+    struct notepad_state *st = (struct notepad_state *)window_get_state(win);
+    if (cy < TOOLBAR_H) return 0; // toolbar clicks are ordinary clicks, never a drag
+
+    int text_w, text_h, show_scrollbar;
+    notepad_layout(win, &text_w, &text_h, &show_scrollbar);
+    if (!show_scrollbar) return 0;
+
+    int local_cy = cy - TOOLBAR_H;
+    int total_lines, visible_rows;
+    widget_scrollback_metrics(&st->tb, text_w, text_h, &total_lines, &visible_rows);
+    enum scrollbar_zone zone = widget_scrollbar_hit(text_w, 0, NOTEPAD_SCROLLBAR_W, text_h,
+                                                      total_lines, visible_rows, st->tb.scroll_offset, cx, local_cy);
+    if (zone != SCROLLBAR_ZONE_THUMB) return 0;
+
+    int thumb_y, thumb_h;
+    widget_scrollbar_thumb_rect(0, text_h, total_lines, visible_rows, st->tb.scroll_offset, &thumb_y, &thumb_h);
+    st->scrollbar_grab_offset = local_cy - thumb_y;
+    return 1;
+}
+
+void notepad_drag(struct window *win, int cx, int cy) {
+    (void)cx; // this is a purely vertical scrollbar -- only cy matters
+    struct notepad_state *st = (struct notepad_state *)window_get_state(win);
+    int text_w, text_h, show_scrollbar;
+    notepad_layout(win, &text_w, &text_h, &show_scrollbar);
+    (void)show_scrollbar; // a drag only ever starts while true; harmless either way if the window shrank mid-drag
+
+    int local_cy = cy - TOOLBAR_H;
+    int total_lines, visible_rows;
+    widget_scrollback_metrics(&st->tb, text_w, text_h, &total_lines, &visible_rows);
+    st->tb.scroll_offset = widget_scrollbar_offset_for_drag(0, text_h, total_lines, visible_rows,
+                                                              local_cy, st->scrollbar_grab_offset);
+    window_invalidate(win);
+}
+
+// 3 lines per notch -- same convention as terminal.c's terminal_wheel.
+#define NOTEPAD_WHEEL_LINES 3
+
+void notepad_wheel(struct window *win, int delta) {
+    struct notepad_state *st = (struct notepad_state *)window_get_state(win);
+    widget_scrollback_scroll(&st->tb, delta * NOTEPAD_WHEEL_LINES);
     window_invalidate(win);
 }

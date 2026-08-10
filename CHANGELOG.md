@@ -5,6 +5,83 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 293 (feature, +10) -- Notepad converted to the shared scrollback widget (scrollbar phase 4/4)
+
+Last of the four-phase scrollbar plan (builds 263, 273, 283 gave
+Terminal keyboard, visual, and wheel scrolling). This phase converts
+Notepad from its original flat `char[NOTEPAD_MAX]` buffer + manual
+col/row draw loop over to the same `struct text_scrollback` (widgets.h)
+Terminal uses -- which means Page Up/Page Down, the draggable
+scrollbar, and the mouse wheel all now work in Notepad too, for free:
+none of that is new code, it's the exact widget/callback plumbing
+builds 263/273/283 already wrote and tested, just pointed at a second
+app.
+
+- `apps/notepad.c`: `struct notepad_state` now holds a `text_scrollback
+  tb` instead of `char text[NOTEPAD_MAX]; int len;`. `notepad_key()`
+  routes backspace/enter/printable characters through
+  `widget_scrollback_backspace()`/`_putc()` instead of manipulating the
+  flat buffer directly, and gained a `KEY_PAGE_UP`/`KEY_PAGE_DOWN`
+  branch identical in shape to terminal.c's. `notepad_draw()` calls
+  `widget_scrollback_draw()` instead of its own wrapping loop. New
+  `notepad_layout()` (mirrors terminal.c's `term_layout()`) reserves a
+  scrollbar strip along the text area's right edge, below the toolbar
+  row -- skipped entirely on narrow windows, same as Terminal.
+  `notepad_click()` now branches on whether the click landed in the
+  toolbar (existing Save/Load handling) or the text/scrollbar area
+  (new: track-click paging); `notepad_drag_start()`/`notepad_drag()`
+  (thumb dragging) and `notepad_wheel()` are new, and all three are
+  close copies of terminal.c's equivalents adjusted for the toolbar's
+  vertical offset.
+- `apps/notepad.h`: added declarations for the three new callbacks.
+- `apps/gui_apps.c`: registered `on_drag_start`/`on_drag`/`on_wheel`
+  for Notepad's registry entry (it already had `on_click`).
+- Save/Load: `fs_write()`/`fs_read()` (fs.h) only know about flat
+  null-terminated buffers, not this widget, so two small new helpers
+  bridge the boundary -- `notepad_serialize()` flattens the
+  scrollback's ring buffer into a plain byte string for `fs_write()`,
+  and `notepad_load_text()` (the inverse) clears the scrollback and
+  replays a loaded file back through the ordinary `widget_scrollback_putc()`
+  path, same as if it had been typed. `notepad_serialize()`'s output
+  buffer is a new file-scope static (`g_save_buf`, `SCROLLBACK_CAP`/
+  8KB), deliberately not a stack local: the window manager runs on the
+  kernel's 16KB boot stack (see boot.asm), not a per-process kstack,
+  and an 8KB stack array on top of whatever call depth already got to
+  `notepad_click()` would be a real overflow risk.
+
+Notepad's old hard 1024-character cap is gone as a side effect --
+capacity is now `SCROLLBACK_CAP` (8192) like Terminal's, with the same
+"ring buffer drops the oldest character once full" behavior instead of
+a hard stop, which is arguably a nicer failure mode anyway.
+
+Tested in QEMU: opened Notepad, typed 25 lines (more than the default
+window fits), confirmed it starts bottom-pinned and the scrollbar
+thumb tracks that; dragged the thumb to the top and confirmed the
+earliest lines became visible with the thumb at the top of the track;
+scrolled the wheel down and confirmed it returned to the bottom-pinned
+state; Page Up/Page Down produced the same paging Terminal's do. For
+Save/Load, typed 5 lines, clicked Save, typed 3 more (diverging from
+the saved snapshot), then clicked Load and confirmed the 3 extra lines
+were discarded and exactly the original 5-line snapshot came back --
+a real round trip through the filesystem, not just an in-memory check.
+Also re-opened Calculator and About afterward to confirm the registry
+change didn't disturb them, and that build 283's About-reported
+version still matches reality (293 wasn't baked into that particular
+screenshot's build, taken mid-session before this entry's version
+bump, but the same `make clean && make all` discipline from build
+273's incident was followed throughout, and a final clean rebuild
+confirmed no stale-object symptoms before delivery).
+
+Screenshots: `screenshots/2026-08-10/scrollbar_p4_notepad_dragged_top.png`,
+`screenshots/2026-08-10/scrollbar_p4_notepad_wheel_bottom.png`,
+`screenshots/2026-08-10/scrollbar_p4_notepad_saved.png`,
+`screenshots/2026-08-10/scrollbar_p4_notepad_diverged.png`,
+`screenshots/2026-08-10/scrollbar_p4_notepad_loaded_roundtrip.png`
+
+This closes out the scrollbar plan (builds 263, 273, 283, 293): both
+Terminal and Notepad now support keyboard, visual-drag, and
+mouse-wheel scrolling through one shared, twice-reused implementation.
+
 ## Build 283 (feature, +10) -- mouse scroll wheel support (scrollbar phase 3/4)
 
 Third of the four-phase scrollbar plan (build 263: keyboard, build 273:

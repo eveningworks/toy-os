@@ -500,14 +500,12 @@ untouched.
 
 ## Ideas for what's next
 
-- Scrollbars for Terminal and Notepad -- in progress, phase 3/4 done
-  (see CHANGELOG.md's builds 263, 273, 283): Page Up/Page Down scroll
-  Terminal's scrollback a screenful at a time, it has a real visual
+- ~~Scrollbars for Terminal and Notepad~~ -- done (see CHANGELOG.md's
+  builds 263, 273, 283, 293): Page Up/Page Down, a real visual
   draggable scrollbar (click the empty track to page, drag the thumb
-  to scroll directly), and the mouse wheel now scrolls it too. Only
-  remaining phase: converting Notepad to the shared `text_scrollback`
-  widget so it gains all three of these for free (it currently has no
-  scrolling at all -- text past the visible area just isn't drawn).
+  to scroll directly), and the mouse wheel all work in both apps now
+  -- Notepad picked up all three for free once it was converted to
+  the same `text_scrollback` widget Terminal already used.
 - ~~GUI terminal-emulator app~~ -- done (see CHANGELOG.md's builds 183,
   193, 203, and 253 for the finished `apps/terminal.c`). `Terminal` in
   the Start menu runs the real shell dispatcher inside a resizable

@@ -26,7 +26,9 @@
 // use a given callback need to mention it.
 const struct gui_app gui_app_registry[] = {
     { .name = "Notepad", .default_size = notepad_default_size, .on_open = notepad_open,
-      .on_draw = notepad_draw, .on_key = notepad_key, .on_click = notepad_click, .resizable = 1 },
+      .on_draw = notepad_draw, .on_key = notepad_key, .on_click = notepad_click,
+      .on_drag_start = notepad_drag_start, .on_drag = notepad_drag,
+      .on_wheel = notepad_wheel, .resizable = 1 },
     { .name = "About", .default_size = about_default_size, .on_open = about_open,
       .on_draw = about_draw, .resizable = 1 },
     { .name = "Calculator", .default_size = calculator_default_size, .on_open = calculator_open,
