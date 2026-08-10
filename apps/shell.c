@@ -1,6 +1,7 @@
 #include "shell.h"
 #include "kapi.h"
 #include "apps.h"
+#include "editor.h"
 
 #define LINE_MAX 128
 #define HISTORY_MAX 8
@@ -178,6 +179,10 @@ static const char *const HELP_LINES[] = {
     "  write <f> <t> - overwrite file f with text t\n",
     "  append <f> <t>- append text t to file f\n",
     "  rm <f>        - delete a file, or an empty directory\n",
+    "  edit <f>      - full-screen text editor (nano/pico-style); also\n",
+    "                  `nano <f>`. Arrows/Home/End/Delete to navigate and\n",
+    "                  edit, F2 to save, F3 to exit. Also works inside\n",
+    "                  the GUI Terminal (same command).\n",
     "  (paths may be relative to cwd or absolute, e.g. /docs/todo.txt)\n",
     "\n",
     "System info:\n",
@@ -535,6 +540,33 @@ static void cmd_write_or_append(const char *args, int append) {
     }
 }
 
+// editor_run() blocks the calling context in its own keyboard-read
+// loop for the whole editing session -- exactly the class of command
+// shell_dispatch() through a vga_sink can't support (see vga.h's
+// struct vga_sink comment and terminal.c's BLOCKED_CMDS top comment).
+// apps/terminal.c gets `edit`/`nano` working anyway by intercepting the
+// command itself and driving editor_handle_key() through its own
+// non-blocking per-keystroke callback instead of ever calling
+// editor_run() through a sink -- see terminal.c's top comment. This
+// guard is a defensive backstop for the case that path is somehow
+// bypassed, not the normal way GUI Terminal support works.
+static void cmd_edit(const char *name) {
+    if (!name || k_strlen(name) == 0) {
+        vga_write("usage: edit <file>\n");
+        return;
+    }
+    if (vga_sink_active()) {
+        vga_write("edit: not available here -- run it from the physical shell.\n");
+        return;
+    }
+    char path[FS_PATH_MAX];
+    if (!resolve_path(name, path)) {
+        vga_write("edit: path too long\n");
+        return;
+    }
+    editor_run(path);
+}
+
 static void cmd_rm(const char *name) {
     if (!name || k_strlen(name) == 0) {
         vga_write("usage: rm <file>\n");
@@ -723,6 +755,8 @@ static void dispatch(char *line) {
         cmd_write_or_append(args ? args : "", 1);
     } else if (k_strcmp(cmd, "rm") == 0) {
         cmd_rm(args ? args : "");
+    } else if (k_strcmp(cmd, "edit") == 0 || k_strcmp(cmd, "nano") == 0) {
+        cmd_edit(args ? args : "");
     } else if (k_strcmp(cmd, "gui") == 0) {
         app_run("gui"); // shortcut for `run gui`
         vga_clear();

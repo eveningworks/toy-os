@@ -5,10 +5,17 @@
 
 // Special key codes pushed into the input stream alongside normal ASCII.
 // Chosen outside the 0-127 ASCII range so they can't collide with real chars.
-#define KEY_ARROW_UP   0x91
-#define KEY_ARROW_DOWN 0x92
-#define KEY_PAGE_UP    0x93
-#define KEY_PAGE_DOWN  0x94
+#define KEY_ARROW_UP    0x91
+#define KEY_ARROW_DOWN  0x92
+#define KEY_PAGE_UP     0x93
+#define KEY_PAGE_DOWN   0x94
+#define KEY_ARROW_LEFT  0x95
+#define KEY_ARROW_RIGHT 0x96
+#define KEY_HOME        0x97
+#define KEY_END         0x98
+#define KEY_DELETE      0x99
+#define KEY_F2          0x9A
+#define KEY_F3          0x9B
 
 // Called by i8042_poll() with one byte already read from the shared
 // PS/2 data port. Don't call this from an IRQ handler directly.

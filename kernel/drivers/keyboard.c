@@ -47,10 +47,24 @@ static int ring_pop(uint16_t *out) {
     return 1;
 }
 
-#define SC_ARROW_UP   0x48
-#define SC_ARROW_DOWN 0x50
-#define SC_PAGE_UP    0x49
-#define SC_PAGE_DOWN  0x51
+#define SC_ARROW_UP    0x48
+#define SC_ARROW_DOWN  0x50
+#define SC_PAGE_UP     0x49
+#define SC_PAGE_DOWN   0x51
+#define SC_ARROW_LEFT  0x4B
+#define SC_ARROW_RIGHT 0x4D
+#define SC_HOME        0x47
+#define SC_END         0x4F
+#define SC_DELETE      0x53
+
+// F2/F3, unlike the keys above, aren't 0xE0-prefixed extended scancodes
+// -- they're plain scancodes like any letter key, just two this file
+// didn't give a ring_push() before (scancode_ascii[0x3C]/[0x3D] are 0,
+// their default zero-initialized value, so they silently did nothing on
+// press). Checked explicitly, before the ASCII table lookup, same as
+// the shift keys below them.
+#define SC_F2 0x3C
+#define SC_F3 0x3D
 
 // Processes one byte already read from the 8042 by i8042_poll(). This
 // must NOT read port 0x60 itself -- see i8042.h for why.
@@ -68,6 +82,11 @@ void keyboard_feed_byte(uint8_t sc) {
             else if (sc == SC_ARROW_DOWN) ring_push(KEY_ARROW_DOWN);
             else if (sc == SC_PAGE_UP) ring_push(KEY_PAGE_UP);
             else if (sc == SC_PAGE_DOWN) ring_push(KEY_PAGE_DOWN);
+            else if (sc == SC_ARROW_LEFT) ring_push(KEY_ARROW_LEFT);
+            else if (sc == SC_ARROW_RIGHT) ring_push(KEY_ARROW_RIGHT);
+            else if (sc == SC_HOME) ring_push(KEY_HOME);
+            else if (sc == SC_END) ring_push(KEY_END);
+            else if (sc == SC_DELETE) ring_push(KEY_DELETE);
         }
         return;
     }
@@ -81,6 +100,9 @@ void keyboard_feed_byte(uint8_t sc) {
         return;
     }
     if (sc & 0x80) return; // other key releases ignored
+
+    if (sc == SC_F2) { ring_push(KEY_F2); return; }
+    if (sc == SC_F3) { ring_push(KEY_F3); return; }
 
     if (sc >= 128) return;
     char c = shift_pressed ? scancode_ascii_shift[sc] : scancode_ascii[sc];

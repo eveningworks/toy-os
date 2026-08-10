@@ -116,6 +116,38 @@ caller. See `kernel/core/etc_config.c`'s top comment for the file
 format itself and CHANGELOG.md's **Build 357** for the full writeup
 including the migration logic.
 
+## Esc always exits the whole GUI desktop -- never route an app's "close/cancel" to it
+
+`apps/wm/wm.c`'s event loop checks `key == 27` (Esc) and unconditionally
+leaves the window manager BEFORE routing the keypress to whichever
+window is focused -- no GUI app's `on_key` callback ever sees an Esc
+press, no matter what it's focused on. Found the hard way while wiring
+the CLI/GUI text editor's exit key to Esc (**Build 377**): worked fine
+at the physical console (no WM in that path at all) but silently could
+never be received by an editor session running inside the GUI Terminal.
+If a future GUI app wants a per-window "cancel this, don't leave the
+desktop" key, it needs to be something other than Esc -- **Build 377**
+picked F3 for the editor's exit specifically because it doesn't have
+this conflict on either surface. See `wm.c`'s own comment at that check
+and CHANGELOG.md's **Build 377** for the full story.
+
+## Don't put a `text_scrollback` on the stack
+
+`struct text_scrollback` (`widgets.h`) embeds an 8192-cell buffer
+(`SCROLLBACK_CAP`) -- around 16KB, the ENTIRE size of the kernel's boot
+stack (see `boot.asm`), which is what `shell_main()`'s whole call chain
+already runs on (there's no separate kernel stack per "process" the way
+ring-3 processes get one). `apps/notepad.c`'s `g_notepad` was already a
+static instance for exactly this reason, but **Build 377**'s first pass
+at the CLI text editor put a fresh one on the stack inside `editor_run()`
+anyway and it silently corrupted nearby memory several calls deep into
+`shell_main()` -- no crash, just the font size randomly shrinking and
+later keystrokes quietly not registering. Any new caller of
+`text_scrollback` (or anything else sized against `SCROLLBACK_CAP`) on a
+kernel-context call path needs a static instance, not a local variable.
+See `apps/editor.c`'s `g_editor_tb` for the fix and CHANGELOG.md's
+**Build 377** for the full story.
+
 ## Timezone city list is a database file, not a hardcoded array or a config key
 
 `/etc/timezones` (a CSV-style `name,offset_minutes,dst_rule` list,

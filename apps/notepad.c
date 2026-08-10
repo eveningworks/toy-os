@@ -1,10 +1,20 @@
-// A minimal text editor: type, backspace, enter, and a toolbar with
-// Save/Load buttons that persist to the in-memory filesystem (see
-// kernel/include/fs.h) under a fixed filename. No cursor movement (arrow
-// keys are ignored) and no filename picker yet -- see apps/README.md if
-// you want to extend it. Also doubles as the WM's keyboard-focus test:
-// open it alongside About and confirm keystrokes always land in whichever
+// A minimal text editor: type, backspace, enter, arrow-key/Home/End
+// cursor movement, Delete, and a toolbar with Save/Load buttons that
+// persist to the in-memory filesystem (see kernel/include/fs.h) under a
+// fixed filename. No filename picker yet -- see apps/README.md if you
+// want to extend it. Also doubles as the WM's keyboard-focus test: open
+// it alongside About and confirm keystrokes always land in whichever
 // window is on top.
+//
+// Cursor movement (build 377) rides on widgets.h's text_scrollback
+// gaining a real cursor -- see its own top comment for why: this file
+// was exactly the "second real caller" that justified adding it, next
+// to the CLI/GUI-Terminal text editor (apps/editor.c) that motivated
+// the work in the first place. One known gap: moving the cursor
+// off-screen (e.g. pressing Up repeatedly while scrolled) doesn't
+// auto-scroll the view to follow it -- the cursor just becomes
+// invisible until scrolled back into view by hand. Not implemented in
+// this pass; see CHANGELOG.md's build 377 entry.
 //
 // Phase 4/4 of the scrollbar plan (see CHANGELOG.md builds 263, 273,
 // 283 for the first three): converted from a flat char[] + manual
@@ -151,9 +161,23 @@ void notepad_key(struct window *win, int key) {
     struct notepad_state *st = (struct notepad_state *)window_get_state(win);
 
     if (key == '\b') {
-        widget_scrollback_backspace(&st->tb);
+        widget_scrollback_backspace_at_cursor(&st->tb);
+    } else if (key == KEY_DELETE) {
+        widget_scrollback_delete_at_cursor(&st->tb);
     } else if (key == '\r' || key == '\n') {
-        widget_scrollback_putc(&st->tb, '\n');
+        widget_scrollback_insert_at_cursor(&st->tb, '\n');
+    } else if (key == KEY_ARROW_LEFT) {
+        widget_scrollback_cursor_left(&st->tb);
+    } else if (key == KEY_ARROW_RIGHT) {
+        widget_scrollback_cursor_right(&st->tb);
+    } else if (key == KEY_ARROW_UP) {
+        widget_scrollback_cursor_up(&st->tb);
+    } else if (key == KEY_ARROW_DOWN) {
+        widget_scrollback_cursor_down(&st->tb);
+    } else if (key == KEY_HOME) {
+        widget_scrollback_cursor_home(&st->tb);
+    } else if (key == KEY_END) {
+        widget_scrollback_cursor_end(&st->tb);
     } else if (key == KEY_PAGE_UP || key == KEY_PAGE_DOWN) {
         // Same "one screenful minus a line of overlap" convention as
         // terminal.c's KEY_PAGE_UP/KEY_PAGE_DOWN handling.
@@ -166,9 +190,9 @@ void notepad_key(struct window *win, int key) {
         window_invalidate(win);
         return; // paging doesn't touch st->status/the text itself
     } else if (key >= 32 && key < 127) {
-        widget_scrollback_putc(&st->tb, (char)key);
+        widget_scrollback_insert_at_cursor(&st->tb, (char)key);
     } else {
-        return; // ignore arrows / other control codes for this simple version
+        return; // ignore other control codes for this simple version
     }
 
     st->status[0] = '\0'; // typing invalidates any stale "Saved."/"Loaded."

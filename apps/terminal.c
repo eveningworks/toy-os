@@ -22,11 +22,29 @@
 // goes through vga_putc() -- and vga_putc() already respects whatever
 // sink is active (see vga.h's struct vga_sink comment) -- with zero
 // terminal-specific code needed for any of them.
+//
+// `edit`/`nano` (build 377) look like they'd belong in that same
+// blocked list -- apps/editor.c's editor_run() is exactly the kind of
+// blocking, own-keyboard-loop command Terminal excludes everywhere
+// else. They're handled here as a special case instead: entering the
+// command switches this window into a small non-blocking "editor
+// sub-mode" (st->in_editor) that drives editor_handle_key() one
+// keystroke at a time from terminal_key(), same event-driven shape as
+// every other GUI app's on_key callback, rendering with
+// widget_scrollback_draw() instead of editor_run()'s vga_* console
+// redraw. See editor.h's top comment for the full split.
 #include "terminal.h"
 #include "wm/wm.h"
 #include "widgets.h"
+#include "editor.h"
 #include "shell.h"
 #include "kapi.h"
+
+// Height of the editor sub-mode's status bar (path + key hints +
+// last save status) -- same idea as notepad.c's TOOLBAR_H, a macro
+// (not a cached constant) so it tracks gfx_char_h() live across a
+// font-size change.
+#define EDITOR_STATUS_H (gfx_char_h() + 8)
 
 #define TERM_LINE_MAX 128
 #define TERM_HISTORY_MAX 8
@@ -58,6 +76,12 @@ struct terminal_state {
                            // newest = "current blank/in-progress line"
     char saved_current[TERM_LINE_MAX];
     int scrollbar_grab_offset; // set by terminal_drag_start(), read by terminal_drag() -- see widgets.h's widget_scrollbar_thumb_rect()
+
+    // ---- `edit`/`nano` sub-mode (see this file's top comment) ----
+    int in_editor;
+    struct text_scrollback editor_tb;
+    char editor_path[FS_PATH_MAX];
+    char editor_status[32];
 };
 static struct terminal_state g_terminal;
 
@@ -137,11 +161,45 @@ static void term_set_line(struct terminal_state *st, const char *new_line) {
     st->line_len = len;
 }
 
+// Resolves a filename argument the same lightweight way editor_run()'s
+// caller (shell.c's cmd_edit()) would want, but this file has no access
+// to shell.c's own resolve_path() (static to that file, and it does
+// real "."/".." collapsing) -- so this is deliberately simpler: only
+// absolute paths and plain relative names against shell_cwd() are
+// handled, no ".."/"." segments. Good enough for "edit foo.txt" and
+// "edit /notes/todo.txt"; a path with ".." in it just won't resolve the
+// way the physical shell's `cd`-aware commands would.
+static void resolve_editor_path(const char *name, char *out) {
+    if (name[0] == '/') {
+        k_strcpy(out, name);
+        return;
+    }
+    const char *cwd = shell_cwd();
+    k_strcpy(out, cwd);
+    size_t cl = k_strlen(cwd);
+    if (cl > 1) { out[cl] = '/'; out[cl + 1] = '\0'; cl++; }
+    k_strcpy(out + cl, name);
+}
+
 static void term_run_line(struct terminal_state *st, char *line) {
     char cmd[TERM_LINE_MAX];
     int i = 0;
     while (line[i] && line[i] != ' ' && i < (int)sizeof(cmd) - 1) { cmd[i] = line[i]; i++; }
     cmd[i] = '\0';
+
+    if (cmd[0] && (k_strcmp(cmd, "edit") == 0 || k_strcmp(cmd, "nano") == 0)) {
+        const char *name = line[i] ? line + i + 1 : "";
+        if (!name[0]) {
+            term_write(st, "usage: edit <file>\n", VGA_LIGHT_RED);
+            return;
+        }
+        resolve_editor_path(name, st->editor_path);
+        widget_scrollback_init(&st->editor_tb);
+        editor_load(&st->editor_tb, st->editor_path);
+        st->editor_status[0] = '\0';
+        st->in_editor = 1;
+        return;
+    }
 
     if (cmd[0] && is_blocked_command(cmd)) {
         term_write(st,
@@ -190,6 +248,7 @@ void terminal_open(struct window *win) {
     g_terminal.history_count = 0;
     g_terminal.hist_index = 0;
     g_terminal.saved_current[0] = '\0';
+    g_terminal.in_editor = 0;
     window_set_state(win, &g_terminal);
 
     term_write(&g_terminal,
@@ -200,10 +259,40 @@ void terminal_open(struct window *win) {
     term_print_prompt(&g_terminal);
 }
 
+// Editor sub-mode's status bar: path + key hints + last save status --
+// same idea as notepad.c's draw_toolbar(), just anchored at the bottom
+// instead of the top (nano's own status line is conventionally at the
+// bottom too).
+static void draw_editor_status(struct terminal_state *st, int cx, int cy, int cw) {
+    uint32_t bg = gfx_rgb(40, 40, 45);
+    uint32_t fg = gfx_rgb(220, 220, 220);
+    gfx_fill_rect(cx, cy, cw, EDITOR_STATUS_H, bg);
+    // FS_PATH_MAX (path) + "  -- F2 Save  F3 Exit" (22) + "  -- " (5) +
+    // editor_status's own cap (32, see editor.c's status buffer) + NUL,
+    // rounded up generously.
+    char line[FS_PATH_MAX + 96];
+    k_strcpy(line, st->editor_path);
+    k_strcpy(line + k_strlen(line), "  -- F2 Save  F3 Exit");
+    if (st->editor_status[0]) {
+        k_strcpy(line + k_strlen(line), "  -- ");
+        k_strcpy(line + k_strlen(line), st->editor_status);
+    }
+    gfx_draw_string(cx + 4, cy + 4, line, fg, bg);
+}
+
 void terminal_draw(struct window *win) {
     struct terminal_state *st = (struct terminal_state *)window_get_state(win);
     int cx = window_content_x(win);
     int cy = window_content_y(win);
+    int cw = window_content_w(win);
+
+    if (st->in_editor) {
+        int text_h = window_content_h(win) - EDITOR_STATUS_H;
+        widget_scrollback_draw(&st->editor_tb, cx, cy, cw, text_h, gfx_rgb(0, 0, 0), 1);
+        draw_editor_status(st, cx, cy + text_h, cw);
+        return;
+    }
+
     int text_w, ch, show_scrollbar;
     term_layout(win, &text_w, &ch, &show_scrollbar);
 
@@ -222,6 +311,7 @@ void terminal_draw(struct window *win) {
 // instead (see gui_apps.h's on_click/on_drag_start contract).
 void terminal_click(struct window *win, int cx, int cy) {
     struct terminal_state *st = (struct terminal_state *)window_get_state(win);
+    if (st->in_editor) return; // no scrollbar in editor sub-mode this pass -- see this file's top comment
     int text_w, ch, show_scrollbar;
     term_layout(win, &text_w, &ch, &show_scrollbar);
     if (!show_scrollbar) return;
@@ -243,6 +333,7 @@ void terminal_click(struct window *win, int cx, int cy) {
 
 int terminal_drag_start(struct window *win, int cx, int cy) {
     struct terminal_state *st = (struct terminal_state *)window_get_state(win);
+    if (st->in_editor) return 0;
     int text_w, ch, show_scrollbar;
     term_layout(win, &text_w, &ch, &show_scrollbar);
     if (!show_scrollbar) return 0;
@@ -280,12 +371,25 @@ void terminal_drag(struct window *win, int cx, int cy) {
 
 void terminal_wheel(struct window *win, int delta) {
     struct terminal_state *st = (struct terminal_state *)window_get_state(win);
+    if (st->in_editor) return; // no scrolling in editor sub-mode this pass
     widget_scrollback_scroll(&st->tb, delta * TERM_WHEEL_LINES);
     window_invalidate(win);
 }
 
 void terminal_key(struct window *win, int key) {
     struct terminal_state *st = (struct terminal_state *)window_get_state(win);
+
+    if (st->in_editor) {
+        int should_exit = 0;
+        st->editor_status[0] = '\0'; // see editor_handle_key()'s header comment on this clear-before-call convention
+        editor_handle_key(&st->editor_tb, st->editor_path, key, &should_exit, st->editor_status, sizeof(st->editor_status));
+        if (should_exit) {
+            st->in_editor = 0;
+            term_print_prompt(st);
+        }
+        window_invalidate(win);
+        return;
+    }
 
     if (key == '\r' || key == '\n') {
         widget_scrollback_set_color(&st->tb, VGA_LIGHT_GREY);
@@ -295,7 +399,11 @@ void terminal_key(struct window *win, int key) {
         term_run_line(st, st->line);
         st->line_len = 0;
         st->hist_index = st->history_count;
-        term_print_prompt(st);
+        // term_run_line() may have just switched this window into
+        // editor sub-mode (`edit`/`nano`) -- if so, don't print another
+        // shell prompt into st->tb on top of it; terminal_key()'s own
+        // in_editor branch above prints one when the user exits back.
+        if (!st->in_editor) term_print_prompt(st);
     } else if (key == '\b') {
         if (st->line_len > 0) {
             st->line_len--;

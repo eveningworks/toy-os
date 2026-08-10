@@ -44,9 +44,16 @@ void widget_button(int x, int y, int w, int h, const char *label, uint32_t bg, u
 // with a `struct vga_sink` (vga.h) so shell_dispatch() (shell.h) can
 // write straight into one of these instead of the physical console --
 // but nothing here actually depends on vga_sink or the shell; this is
-// just a text buffer + renderer, usable anywhere a scrolling read-only
-// (from the widget's own point of view -- callers append via the
-// putc/backspace API, there's no in-place editing) text area is useful.
+// just a text buffer + renderer, usable anywhere a scrolling text area
+// is useful. Two APIs sit on top of the same storage: the original
+// append-only putc()/backspace() pair (apps/terminal.c's only need --
+// it never sees a cursor anywhere but the end), and a cursor-aware
+// insert/delete/move API added later for real in-place editing
+// (apps/notepad.c, apps/editor.c -- see the `cursor` field's own
+// comment below). The two coexist because putc()/backspace()/clear()
+// keep `cursor` pinned to the append point, so a caller that never
+// touches the cursor API sees the exact same append-only behavior
+// as before it existed.
 //
 // Storage is a fixed-size ring buffer (SCROLLBACK_CAP cells) -- once
 // full, the oldest character is silently dropped for every new one
@@ -83,6 +90,17 @@ struct text_scrollback {
     // Clamped to the valid range every widget_scrollback_draw() call,
     // since "valid range" depends on the current content width.
     int scroll_offset;
+    // Logical index into the buffer, [0, count] -- "the cursor sits
+    // just before buf[cursor]", same convention putc()'s append point
+    // already used implicitly. Kept in sync at `count` (the append
+    // point) automatically by every append-only call below (putc,
+    // backspace, clear, init) -- so apps/terminal.c, the only caller
+    // that never touches the cursor API, sees no behavior change at
+    // all, exactly as before this field existed. A real editor
+    // (apps/notepad.c, apps/editor.c) moves this explicitly via the
+    // cursor_*() calls and edits at it via the *_at_cursor() calls,
+    // both added alongside this field -- see their own comments.
+    int cursor;
 };
 
 // Resets to empty, cursor color VGA_LIGHT_GREY, pinned to bottom.
@@ -129,14 +147,62 @@ void widget_scrollback_metrics(struct text_scrollback *tb, int cw, int ch,
 // Fills (cx, cy, cw, ch) with `bg`, then draws whatever's currently in
 // view given `tb->scroll_offset` and the current font size
 // (gfx_char_w()/gfx_char_h()), wrapping at `cw`'s column count. If
-// `show_cursor` is non-zero and the write position (end of the buffer)
-// is within the visible window, draws a solid end-of-text cursor block
-// there in `tb->cur_fg` -- same idea as notepad_draw()'s cursor, and
-// with the same limitation: this widget has no concept of a cursor
-// anywhere but the end (append-only), so there's nothing to draw when
-// scrolled up past it.
+// `show_cursor` is non-zero and `tb->cursor`'s current position is
+// within the visible window, draws a solid cursor block there in
+// `tb->cur_fg` -- there's nothing to draw when it's scrolled out of
+// view. For an append-only caller (apps/terminal.c) `tb->cursor`
+// always trails the write position, so this is exactly the old
+// "end-of-text cursor" behavior; a cursor-aware caller sees it drawn
+// wherever tb->cursor actually is.
 void widget_scrollback_draw(struct text_scrollback *tb, int cx, int cy, int cw, int ch,
                              uint32_t bg, int show_cursor);
+
+// ---- cursor-aware editing (see the `cursor` field's own comment) ----
+//
+// Everything below operates on `tb->cursor`, moving it and/or
+// inserting/deleting at its current position -- unlike putc()/
+// backspace() above, none of these touch the append point directly.
+// '\n' is an ordinary buffer character here, same as putc() treats it:
+// there's no separate concept of "lines" in storage, cursor_up()/
+// cursor_down()/cursor_home()/cursor_end() just scan for the nearest
+// '\n' boundaries on the fly (see widgets.c) -- cheap enough for
+// SCROLLBACK_CAP's size, same "recompute from source, don't cache"
+// tradeoff as the rest of this widget.
+
+// Moves the cursor one character left/right, clamped to [0, count].
+void widget_scrollback_cursor_left(struct text_scrollback *tb);
+void widget_scrollback_cursor_right(struct text_scrollback *tb);
+
+// Moves the cursor up/down one line, preserving its column within the
+// line where possible (clamped to the target line's length if it's
+// shorter) -- ordinary text-editor up/down behavior. No-op at the
+// first/last line respectively.
+void widget_scrollback_cursor_up(struct text_scrollback *tb);
+void widget_scrollback_cursor_down(struct text_scrollback *tb);
+
+// Moves the cursor to the start/end of its current line (the nearest
+// '\n' boundary, or the buffer's start/end).
+void widget_scrollback_cursor_home(struct text_scrollback *tb);
+void widget_scrollback_cursor_end(struct text_scrollback *tb);
+
+// Inserts `c` at the cursor, shifting everything after it right by one,
+// and advances the cursor past the newly-inserted character (so typing
+// a run of characters reads naturally left to right). No-op if the
+// buffer is already at SCROLLBACK_CAP -- refuses rather than evicting
+// from the head the way putc() does, since shifting the ring's start
+// out from under an in-progress edit would desync `cursor` from the
+// content it's supposed to point into.
+void widget_scrollback_insert_at_cursor(struct text_scrollback *tb, char c);
+
+// Deletes the character the cursor is just before (forward delete, like
+// a real editor's Delete key) -- cursor position doesn't change. No-op
+// if the cursor is already at the end.
+void widget_scrollback_delete_at_cursor(struct text_scrollback *tb);
+
+// Deletes the character just before the cursor (backward delete, like
+// Backspace) and moves the cursor back by one. No-op if the cursor is
+// already at the start.
+void widget_scrollback_backspace_at_cursor(struct text_scrollback *tb);
 
 // ---- vertical scrollbar widget ----
 //

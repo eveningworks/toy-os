@@ -107,11 +107,15 @@ again once code has grown around them.
 `help` (categorized; `help tests` for the developer/diagnostic ones
 below), `clear`, `time`, `uptime`, `echo <text>`, `about`, `meminfo`,
 `dmesg`, `color <name>`, `reboot`, `ls`, `cat <f>`, `touch <f>`,
-`write <f> <text>`, `append <f> <text>`, `rm <f>`, `gui`, `apps`,
-`run <app>`, `history`, `fontsize <8|10|12|14|16|18|20|24>`, and the
-developer/diagnostic set (`help tests`): `ring3test`, `elftest`,
-`syscalltest`, `writetest`, `ptrtest`, `guitest`, `schedtest`,
-`echotest`, `wintest`, `filetest`, `newsyscalltest`, `crashtest`
+`write <f> <text>`, `append <f> <text>`, `rm <f>`,
+`edit <f>`/`nano <f>` (full-screen nano/pico-style editor -- arrows/
+Home/End/Delete to navigate and edit, F2 to save, F3 to exit; works
+from both the physical shell and the GUI Terminal, see `apps/editor.c`),
+`gui`, `apps`, `run <app>`, `history`,
+`fontsize <8|10|12|14|16|18|20|24>`, and the developer/diagnostic set
+(`help tests`): `ring3test`, `elftest`, `syscalltest`, `writetest`,
+`ptrtest`, `guitest`, `schedtest`, `echotest`, `wintest`, `filetest`,
+`newsyscalltest`, `crashtest`
 
 ## Building on CachyOS
 

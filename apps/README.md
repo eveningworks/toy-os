@@ -77,9 +77,11 @@ inside the window manager) -- these are event-driven: they never run
 their own loop, the window manager calls their `on_open`/`on_draw`/
 `on_key`/`on_click` callbacks instead. See "Adding a new GUI app" below.
 - **Notepad** (`notepad.c`) -- a small text editor with a toolbar (Save/
-  Load, using `fs_write`/`fs_read` from kapi.h under a fixed filename).
-  Good example of all four callbacks: on_open, on_draw, on_key, and
-  on_click (the toolbar buttons).
+  Load, using `fs_write`/`fs_read` from kapi.h under a fixed filename),
+  real cursor movement (arrows/Home/End/Delete, since build 377 --
+  `widgets.h`'s `text_scrollback` widget gained a cursor). Good example
+  of all four callbacks: on_open, on_draw, on_key, and on_click (the
+  toolbar buttons).
 - **About** (`about.c`) -- a static info window with no input handling at
   all (on_key/on_click both NULL). Good example of the minimum a GUI app
   can be.
@@ -88,6 +90,16 @@ their own loop, the window manager calls their `on_open`/`on_draw`/
   itself lives in `calc_engine.c`/`.h`, kept free of any gfx/wm
   dependency; `calculator.c` is just the adapter that maps button
   clicks/keypresses onto `calc_input()` calls.
+- **Terminal** (`terminal.c`) -- a GUI terminal emulator that runs the
+  real shell dispatcher (`shell_dispatch()`, see `shell.h`) through a
+  `vga_sink` redirecting into a `text_scrollback` widget, rather than
+  duplicating shell.c's command handlers. Also hosts the `edit`/`nano`
+  full-screen text editor (`editor.c`) as a small non-blocking "sub-mode"
+  of its own -- `editor_run()`'s blocking keyboard loop can't run inside
+  Terminal's event-driven window the way it does at the physical
+  console, so Terminal drives the same `editor_handle_key()` one
+  keystroke at a time from its own `on_key` callback instead. See
+  `terminal.c`'s top comment and `editor.h` for the full split.
 
 ## The window manager (apps/wm/)
 

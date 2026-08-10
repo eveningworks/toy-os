@@ -5,6 +5,101 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 377 (feature, +10) -- a nano/pico-style full-screen text editor (`edit`/`nano`)
+
+Asked for a nano/pico-style editor under CLI mode, and what would need
+to exist first to make it easier -- plus "nice if it also works in the
+GUI Terminal." Presented choices up front on sequencing (build the
+shared abstraction first vs. CLI-only then Terminal later), keybinding
+fidelity (minimal vs. closer to real nano vs. in-between), and whether
+to share the text buffer with Notepad or keep it separate. Went with:
+build the shared cursor-aware core first so both surfaces land in one
+pass; minimal fidelity (arrows/Home/End/Delete navigation and editing,
+F2 save, no Ctrl-key shortcuts, no search/cut/paste); and share via
+`widgets.h`'s `text_scrollback` widget, upgrading it with a real cursor
+rather than writing a second buffer implementation just for this.
+
+- **`kernel/include/keyboard.h` / `kernel/drivers/keyboard.c`**: new
+  special key codes -- `KEY_ARROW_LEFT`/`KEY_ARROW_RIGHT` (extended
+  scancodes 0x4B/0x4D, same 0xE0-prefix pattern Up/Down/PageUp/PageDown
+  already used), `KEY_HOME`/`KEY_END`/`KEY_DELETE` (0x47/0x4F/0x53,
+  same pattern), and `KEY_F2`/`KEY_F3` (0x3C/0x3D, NOT extended --
+  plain scancodes the ASCII table already silently ignored, same shape
+  as the shift-key checks). F2 = save, F3 = exit -- the editor's
+  stand-ins for nano's Ctrl+O/Ctrl+X, since this keyboard driver still
+  has no Ctrl-key chording (scoped out of this pass on purpose).
+- **`apps/widgets.h` / `apps/widgets.c`**: `text_scrollback` gains a
+  `cursor` field (a logical buffer index, distinct from the old
+  append-only write point) plus a cursor-aware API alongside the
+  original append-only `putc()`/`backspace()`: `cursor_left/right/up/
+  down/home/end()` and `insert_at_cursor()`/`delete_at_cursor()`/
+  `backspace_at_cursor()`. The two APIs coexist because `putc()`/
+  `backspace()`/`clear()` keep `cursor` pinned to the append point, so
+  `apps/terminal.c`'s shell-mode scrollback (the original, and until
+  now only, caller) sees zero behavior change. `widget_scrollback_draw()`'s
+  cursor rendering now draws at `tb->cursor` generically instead of
+  assuming "always the end". Up/Down move by scanning for the nearest
+  `'\n'` boundaries on the fly rather than caching line positions --
+  cheap enough at `SCROLLBACK_CAP`'s size (8192), same "recompute, don't
+  cache" tradeoff the rest of this widget already makes.
+- **`apps/editor.h` / `apps/editor.c`** (new): the shared editing core
+  (`editor_load()`/`editor_save()`/`editor_handle_key()`, all thin
+  wrappers over `text_scrollback`'s new cursor API) plus `editor_run()`,
+  the physical-console entry point -- a classic blocking keyboard-read
+  loop, full-screen redraw via `vga_clear()` + `vga_write()` on every
+  keystroke (needs no column-width/row-tracking logic of its own at all
+  -- `vga_putc()` already wraps/scrolls), cursor shown as a single
+  reverse-video character. Registered as the shell's `edit`/`nano`
+  commands (`apps/shell.c`'s new `cmd_edit()`).
+- **`apps/notepad.c`**: gained real cursor movement as a side effect of
+  the `text_scrollback` upgrade -- Notepad was exactly the "second real
+  caller" `widgets.h`'s own "add a primitive once something needs it"
+  rule calls for. Arrow keys, Home/End, and Delete now move/edit at the
+  cursor instead of being ignored/always appending at the end. Known
+  gap: moving the cursor off-screen (e.g. Up repeatedly while scrolled)
+  doesn't auto-scroll the view to follow it.
+- **`apps/terminal.c`**: `edit`/`nano` is intercepted before reaching
+  `shell_dispatch()` (unlike every other command Terminal supports) and
+  switches the window into a small non-blocking "editor sub-mode"
+  (`st->in_editor`) -- `editor_run()`'s own blocking loop is exactly the
+  class of command Terminal excludes everywhere else (see its
+  `BLOCKED_CMDS` list), so this drives the SAME `editor_handle_key()`
+  one keystroke at a time from `terminal_key()`'s existing non-blocking
+  callback instead, rendering with `widget_scrollback_draw()` (now
+  cursor-aware) rather than `editor_run()`'s console redraw. Same edit
+  logic, two renderers -- the same GUI-vs-CLI split every other pair in
+  this codebase already makes.
+- **Two real bugs found only by testing in QEMU, not by code review**:
+  (1) `editor_run()`'s `struct text_scrollback` was originally a stack
+  local -- at ~16KB (`SCROLLBACK_CAP`'s 8192 cells), that silently blew
+  the kernel's 16KB boot stack several calls deep into `shell_main()`'s
+  own call chain, corrupting nearby memory (manifested as the font size
+  randomly shrinking and later keystrokes silently not registering --
+  no crash message, just quietly wrong behavior). Fixed the same way
+  `apps/notepad.c`'s own top comment already warns about: a static
+  instance, not a stack local. (2) The editor's exit key was originally
+  Esc alone -- worked fine at the physical console, but `apps/wm/wm.c`
+  intercepts Esc globally to leave the whole GUI desktop before any
+  window's `on_key` callback ever runs, so a Terminal-embedded editor
+  session could never actually receive it. Fixed by adding F3 as the
+  real, documented exit key (Esc still works, but only at the physical
+  console, and isn't advertised since it's not reliable on both
+  surfaces).
+- **Verified in headless QEMU on both surfaces**: physical console --
+  typed text, moved the cursor with arrows, inserted/backspaced/forward-
+  deleted mid-buffer, saved with F2, exited with F3, `cat`'d the file
+  back to confirm the save landed correctly, confirmed the shell stayed
+  fully responsive afterward (this is what caught bug #1 above). GUI
+  Terminal -- opened via the Start menu, ran `edit` on the same
+  already-saved file, confirmed it loaded correctly, edited and saved
+  with F2, exited with F3 back to Terminal's normal shell mode (not
+  kicked out to the physical console -- this is what caught bug #2
+  above), `cat`'d the file from inside Terminal to confirm the
+  round-trip. Notepad -- confirmed arrow-key cursor movement and
+  mid-buffer insert both work correctly. Screenshots in
+  `screenshots/2026-08-10/editor_*.png` and
+  `notepad_cursor_movement_and_insert.png`.
+
 ## Build 367 (feature, +10) -- `/etc/timezones` city database, separate from the toyos.conf selection
 
 Asked whether the handful of hardcoded timezone cities could become a
