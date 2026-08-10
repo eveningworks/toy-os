@@ -5,6 +5,30 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 380 (fix, +1) -- README: what basic TCP/IP networking would require
+
+Asked what basic TCP/IP networking support would need, as a "don't
+build it yet, just tell me" question. Researched the codebase (no PCI
+enumeration anywhere -- see `ata.h`'s own comment; `isr_dispatch()` in
+`idt.c` is a hardcoded if/else chain with no general IRQ-handler
+registration; `pmm.c`'s frame allocator has no contiguous-multi-frame
+allocation; the fd table in `syscall.c` is filesystem-only, no socket
+concept or `SYS_SOCKET`-style syscalls; `pit_ticks()` exists but no
+sleep/delay primitive) and wrote up the findings plus a realistic
+phased path (PCI enum -> pick `rtl8139` as the easiest first NIC to
+target in QEMU -> IRQ registration -> minimal Ethernet/ARP/IP/UDP
+before ever touching TCP -> TCP + socket syscalls).
+
+- **`README.md`**: new entry in **Ideas for what's next** capturing
+  this -- the four pieces of infrastructure with zero precedent today
+  (PCI enumeration, general IRQ-handler registration, contiguous/DMA
+  physical memory, socket-like fd abstraction + syscalls), the smaller
+  timer-sleep gap, and the phased path, framed as its own multi-session
+  project comparable in scope to the filesystem or window manager, not
+  a single build bump.
+
+No code changes -- docs only, no build/QEMU verification needed.
+
 ## Build 379 (fix, +1) -- pin the CLI editor's status bar to the last row, fix its stray cursor
 
 Reported from testing on their own machine (screenshots of `edit` in

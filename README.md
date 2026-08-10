@@ -594,3 +594,41 @@ untouched.
   replace it; deferred until then since it's meaningfully more code
   (cross-mount path resolution, boundary conflicts) for a capability
   nothing needs yet.
+- Basic TCP/IP networking. A large addition, comparable in scope to the
+  filesystem or window manager -- not a small feature, and it needs
+  four pieces of infrastructure that have zero precedent in this
+  kernel today, not just a new driver:
+  - **PCI bus enumeration** (`0xCF8`/`0xCFC` config-space scanning) --
+    doesn't exist at all (`ata.h`'s own top comment calls this out --
+    ATA gets away without it by living at fixed legacy ports, which
+    virtually no NIC does).
+  - **A real IRQ-handler registration mechanism** -- `isr_dispatch()`
+    (`kernel/core/idt.c`) is currently a hardcoded if/else chain
+    (timer, keyboard+mouse sharing one poll function, syscalls); ATA
+    doesn't use interrupts at all. A NIC needs its own serviced-
+    promptly IRQ line, which means a proper handler table, not another
+    one-off branch.
+  - **Contiguous/DMA-friendly physical memory** -- `pmm.c`'s frame
+    allocator only hands out one 4KB frame at a time; NIC descriptor
+    rings want a handful of physically contiguous pages. The kernel
+    does identity-map the low 4GB already (see `vmm.c`), so no address
+    translation headache once contiguous frames exist -- just need a
+    "give me N contiguous frames" allocator, which doesn't exist yet.
+  - **A socket-like fd abstraction + new syscalls** -- today's fd
+    table (`syscall.c`) is filesystem-only (`SYS_OPEN`/`READ`/`WRITE`/
+    `CLOSE` all go straight to `fs_read`/`fs_write`); no
+    `SYS_SOCKET`/`SYS_SEND`/`SYS_RECV` equivalent exists.
+  - Smaller gap: there's a tick counter (`pit_ticks()`) but no sleep/
+    delay primitive -- TCP needs timeouts and retransmission timers.
+  Realistic path, if taken: PCI enum -> pick a simple NIC to target
+  (QEMU's `rtl8139` emulation is the classic "easy first NIC driver"
+  choice, much simpler than e1000/virtio-net) -> IRQ registration -> a
+  minimal Ethernet/ARP/IP/UDP stack before ever touching TCP (TCP's
+  state machine and retransmission logic only makes sense once packets
+  can reliably get in and out) -> TCP + the socket syscalls. The
+  driver-integration pattern itself is in good shape to build on --
+  `ata.c`'s probe/init-function/capability-header-through-`kapi.h`
+  structure is a reasonable template, and the existing `*_test.c`
+  diagnostic pattern (`echo_test.c` etc.) is a natural fit for early
+  loopback/ARP verification -- but this is its own multi-session
+  project with its own milestones, not a single build bump.
