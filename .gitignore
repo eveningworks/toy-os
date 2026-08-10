@@ -21,3 +21,9 @@ __pycache__/
 # workflow (see CLAUDE.md's "device bridge can't delete files" note) --
 # never a real repo asset, just a staging spot the user empties by hand.
 /_to_delete/
+
+# Delivery workaround for Makefile being a protected file the device
+# bridge won't write to directly (see CLAUDE.md's "Makefile is a
+# protected file" note) -- a transient hand-off artifact the user
+# copies over the real Makefile and discards, not a repo asset either.
+/Makefile.new

@@ -5,6 +5,19 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 123 (fix, +1) -- gitignore `Makefile.new` too
+
+Same issue as the previous entry's `_to_delete/`, spotted by the user
+right after that fix landed: `Makefile.new` (the hand-off artifact used
+because `Makefile` itself is a protected file the device bridge won't
+write to -- see `CLAUDE.md`) had also been swept into the repo by the
+same `git add -A`.
+
+**Changed (`.gitignore`):** added `/Makefile.new`. Same caveat as
+`_to_delete/`'s entry -- doesn't retroactively drop what's already
+committed; see this build's git commands for the one-time
+`git rm --cached`.
+
 ## Build 122 (fix, +1) -- gitignore the `_to_delete/` device-bridge scratch folder
 
 `_to_delete/` (see `CLAUDE.md`'s "device bridge can't delete files"
