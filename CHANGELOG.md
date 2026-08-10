@@ -5,6 +5,40 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 502 (fix, +1) -- CLAUDE.md/qmp_test.py: catch up on QMP keyboard gotchas, prep for a new chat
+
+Asked to start a fresh chat (this one had gotten long) and update
+CLAUDE.md/other docs first so the new session picks up where this one
+left off, without carrying the full conversation history.
+
+Build 501's testing surfaced two QMP-testing gotchas this repo's docs
+hadn't caught up to yet: `CLAUDE.md`'s keyboard bullet still said "no
+shift handling" for QMP keyboard input, which stopped being true the
+moment `combo()` (multiple qcodes in one `send-key` call, pressed and
+released together) got used to test shifted Nordic letters (Å/Ä/Ö);
+and neither `CLAUDE.md` nor `tools/qmp_test.py`'s own docstring
+mentioned that rapid `send_key()` calls with no delay between them can
+silently drop keystrokes (previously only noted in a session's own
+scratch notes -- see build 490's Notepad-textfield testing -- never
+written down anywhere that survives between sessions).
+
+- **`tools/qmp_test.py`**: new `QMPSession.combo()` method -- sends
+  multiple qcodes as one simultaneous press/release, exactly a
+  Shift/Ctrl/Alt combo (no separate "hold key down" primitive existed
+  before this). Module docstring gains three gotchas: rapid
+  `send_key()` keystroke drops, punctuation qcode names (`send_key()`
+  takes qcode names like `bracket_left`/`semicolon`/`dot`, not the
+  literal character), and `combo()`'s existence/use.
+- **`CLAUDE.md`**: keyboard bullet corrected (shift combos work now,
+  via `combo()`) and split out a new bullet for the rapid-keystroke-
+  drop gotcha, so both survive into whatever session reads this file
+  next rather than needing rediscovery.
+
+No kernel/app code changes -- `make all` still builds clean (build 502
+was cut so `version.h`/`about`/`dmesg` reflect the doc-only nature of
+this change same as any other bump), no QEMU/QMP verification needed
+beyond confirming `tools/qmp_test.py` still parses.
+
 ## Build 501 (feature, +10) -- Nordic keyboard layout + Å/Ä/Ö font glyphs
 
 Asked to add Nordic keyboard/character support (Ä/Ö/Å). Researched the

@@ -308,9 +308,21 @@ The gotchas it already gets right, for when you need to know why:
 - **Keyboard:** `send-key` with `{"type":"qcode","data":"<key>"}`,
   one character/qcode at a time (`QMPSession.send_key()`/`send_text()`).
   `send_text()` only handles lowercase letters/digits -- for space use
-  `send_key('spc')`, for punctuation the matching qcode name, and there
-  is no way to send an uppercase letter distinct from lowercase (no
-  shift handling) as of this writing.
+  `send_key('spc')`, for punctuation the matching qcode name (e.g.
+  `bracket_left`, `semicolon`, `apostrophe`, `slash`, `dot` -- not the
+  literal character; `query-qmp-schema`'s `QKeyCode` enum has the full
+  list). For Shift/Ctrl/Alt combos (an uppercase letter, a shifted
+  punctuation key), use `QMPSession.combo(['shift', 'bracket_left'])`
+  -- QMP's `send-key` presses+releases every qcode in `keys` together,
+  which is exactly a held-modifier combo; there's no separate "hold
+  key down" primitive.
+- **Rapid `send_key()` calls with little/no delay between them can
+  silently drop keystrokes** at the guest keyboard-controller level
+  (hit testing Notepad's filename field, build 490 -- 11 back-to-back
+  backspaces dropped most of them). `send_text()`'s built-in per-char
+  delay covers plain typing, but a manual sequence of `send_key()`
+  calls needs its own explicit `time.sleep()` (0.05-0.08s has been
+  reliable) between each one.
 - **Screenshots:** `screendump` writes a `.ppm`; `QMPSession.screenshot()`
   converts to `.png` via Pillow in one call so it's ready for the Read
   tool / `SendUserFile`.

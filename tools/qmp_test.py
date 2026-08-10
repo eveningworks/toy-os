@@ -66,6 +66,31 @@ Gotchas this module already gets right for you:
   *routine*. See also `tools/boot_smoke_test.py` for a much faster,
   non-GUI first check on kernel/driver-level changes -- this module is
   for changes that actually need input/rendering verified.
+- **Rapid `send_key()`/`send_text()` calls with little/no delay between
+  them can silently drop keystrokes** at the guest keyboard-controller
+  level -- discovered testing Notepad's filename text field (build
+  490): 11 back-to-back `send_key('backspace')` calls dropped most of
+  them, and only some got through. `send_text()`'s built-in per-char
+  `delay` (default 0.03s) is usually enough for plain typing, but a
+  manual sequence of `send_key()` calls (backspaces, non-letter qcodes,
+  anything not going through `send_text()`) needs its own explicit
+  `time.sleep()` between each one -- 0.05-0.08s has been reliable.
+- **`send_key()` takes single QMP qcode names, not raw characters** --
+  `send_text()` only covers lowercase letters/digits. For punctuation,
+  use the matching qcode: `bracket_left`/`bracket_right` for `[`/`]`,
+  `semicolon` for `;`, `apostrophe` for `'`, `slash` for `/`, `dot` for
+  `.`, `comma` for `,`, `minus`/`equal` for `-`/`=`, `grave_accent` for
+  `` ` ``, `backslash` for `\`, `spc` for space -- not the literal
+  character itself (`send_key('.')` silently no-ops, it isn't a valid
+  qcode). `query-qmp-schema`'s `QKeyCode` enum has the full list if a
+  qcode name is ever in doubt.
+- **`combo()` (below) sends multiple qcodes as one simultaneous
+  press/release** -- QMP's `send-key` takes a `keys` array; every
+  element in one call is pressed together and released together, which
+  is exactly Shift/Ctrl/Alt-combos (`combo(['shift', 'bracket_left'])`
+  for a shifted punctuation key, used to verify Å/Ä/Ö -- see build
+  501). There's no separate "hold key down" primitive in this module;
+  a combo is the way to get a modifier held across another keypress.
 
 Typical usage from a Python REPL or script, once QEMU is already
 running (see `launch_qemu_cmd()` for the command to start it with):
@@ -168,6 +193,18 @@ class QMPSession:
         for ch in text:
             self.send_key(ch)
             time.sleep(delay)
+
+    def combo(self, qcodes):
+        """Send multiple qcodes as one simultaneous press/release -- QMP's
+        send-key presses and releases every element of `keys` together,
+        which is exactly a modifier combo: combo(['shift', 'bracket_left'])
+        for a shifted punctuation key, combo(['ctrl', 'c']) etc. Used to
+        verify Å/Ä/Ö (shifted Nordic letters) in build 501's keyboard-
+        layout testing."""
+        return self._cmd({
+            "execute": "send-key",
+            "arguments": {"keys": [{"type": "qcode", "data": k} for k in qcodes]},
+        })
 
     # -- mouse ------------------------------------------------------------
 
