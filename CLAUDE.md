@@ -121,10 +121,18 @@ user's real checkout reachable through the device bridge
 (`mcp__remote-devices__*`), not directly. Two things about that setup
 that aren't obvious until you hit them:
 
-- **`Makefile` is a protected file** -- `device_commit_files` will
-  reject writes to it. Edit it in the cloud sandbox as normal, verify
-  the build there, then deliver it to the user as `Makefile.new` via
-  `SendUserFile` and tell them to copy it over `Makefile` themselves.
+- **`Makefile` and anything under `.github/workflows/*.yml` are
+  protected files** -- `device_commit_files` will reject writes to
+  either (confirmed for `.github/workflows/build.yml` when it was
+  first added -- likely a blanket CI-workflow protection, not specific
+  to this repo). Edit them in the cloud sandbox as normal, verify the
+  build there, then deliver as `Makefile.new` / `build.yml.new` (or
+  similar -- any filename that doesn't match the protected path) via
+  `SendUserFile` and tell the user to copy it into place themselves.
+  Check for this rejection generically: `device_commit_files`' response
+  has a `rejected` array with the exact path and reason for anything it
+  refused -- don't assume every file in a batch landed just because the
+  call didn't error outright.
 - **The device bridge can't delete files** -- `device_bash`'s `rm`/
   `rmdir`/`unlink` fail with "Operation not permitted" on mounted
   files, and `device_commit_files` only writes. To remove a
@@ -176,19 +184,49 @@ PS/2 mouse, so the guest receives nothing and the cursor just never
 moves. Bit an actual user session once (see CHANGELOG.md around build
 293's Makefile fix) -- looked exactly like a driver bug, wasn't one.
 
-**Always `make clean && make all` before testing a GUI change, not a
-plain `make all`.** The Makefile doesn't track header dependencies (no
-`-MMD`/`-MP`; see its `version:` target comment) -- editing a shared
-header like `apps/widgets.h` or `apps/gui_apps.h` doesn't trigger a
-rebuild of every `.o` that includes it, only the ones whose `.c` file
-also changed. A stale `.o` still compiled against the OLD struct
-layout, sitting next to freshly-rebuilt ones that see the NEW layout,
-silently desyncs (e.g. an array indexed with the wrong element stride).
-This produced a genuinely bizarre-looking bug once -- the Start menu's
-item labels showed raw function-prologue machine code reinterpreted as
-text -- that a clean rebuild fixed instantly, no code changes needed.
-If a GUI test shows something inexplicable right after touching a
-header, suspect a stale build before suspecting the new code.
+**A plain `make all` is safe after editing a shared header now** (as of
+build 308) -- the Makefile tracks header dependencies (`-MMD`/`-MP`;
+see CFLAGS/USERLAND_CFLAGS and the `-include` line near `$(KERNEL)`'s
+rule), so editing e.g. `apps/widgets.h` correctly rebuilds every `.o`
+that includes it, not just the ones whose own `.c` file changed. This
+used to not be true, and it produced a genuinely bizarre-looking bug
+once -- the Start menu's item labels showed raw function-prologue
+machine code reinterpreted as text -- caused by exactly the failure
+mode dependency tracking now prevents: a stale `.o` compiled against
+an OLD struct layout sitting next to freshly-rebuilt ones that saw the
+NEW layout (e.g. an array indexed with the wrong element stride). A
+`make clean && make all` is still a reasonable "when in doubt" move if
+a GUI test ever shows something inexplicable right after a header
+change (dependency tracking is only as good as the `.d` files being
+correct), but it should no longer be *routine* -- if you find yourself
+needing it regularly, that's a sign the tracking broke somehow, worth
+investigating rather than working around. One subtlety if you ever
+touch `tools/gen_version.sh`: it's deliberately idempotent (only
+rewrites `kernel/include/version.h` when `BUILD_NUMBER`'s value
+actually changed) specifically so this dependency tracking doesn't
+regress -- `kapi.h` includes `version.h`, so an unconditional rewrite
+every build would make every file that includes `kapi.h` (nearly
+everything) look "out of date" and rebuild every single time.
+
+**`tools/boot_smoke_test.py`** -- a fast, non-GUI boot check: boots
+`toy-os.iso` headlessly, watches `serial.log` for the expected kernel
+init sequence (or a `PANIC:`), exits 0/1 in a few seconds. No QMP, no
+mouse/keyboard, no screenshots. Use this as the first check for a
+kernel/driver-level change (a new driver, a filesystem backend, a
+syscall) -- it answers "does it still boot cleanly," which is most of
+what those changes need verified, much faster than the full QMP
+GUI-testing dance below. It does NOT replace QMP testing for anything
+that touches rendering, input, or window behavior -- a clean boot log
+says nothing about whether a button is drawn in the right place; see
+its own module docstring for the same division stated in code.
+
+**GitHub Actions (`.github/workflows/build.yml`)** runs `make clean &&
+make all && make iso` plus `tools/boot_smoke_test.py` on every push/PR
+to `main` -- so a build break or boot regression is caught
+automatically, independent of whether a session (or a human) remembered
+to verify locally first. This doesn't replace verifying locally before
+delivering a change (still do that -- see "Working in the cloud
+sandbox" above), it's a second, automatic check behind it.
 
 ## Testing in QEMU headlessly, via QMP
 
@@ -279,14 +317,15 @@ not instead of it.
 
 Dev/build helper scripts, not compiled or shipped as part of the OS:
 `genfont.py`/`genttf.py` (font generation, pre-existing), `qmp_test.py`
-(QEMU/QMP testing helpers, see above), `gen_version.sh`/
-`bump_build.sh` (build-number versioning, see the `version.h` bullet
-above), `device_git.sh` (wraps a `git` command run over the device
-bridge with the stale-`index.lock` workaround, see the "Working in the
-cloud sandbox" section above). Add new tools here freely when
-something would save a future session real time -- the bar is "does
-this fix a rederive-from-scratch cost," the same reasoning that
-produced `qmp_test.py`.
+(QEMU/QMP GUI testing helpers, see above), `boot_smoke_test.py` (fast
+non-GUI boot check, see above), `gen_version.sh`/`bump_build.sh`
+(build-number versioning, see the `version.h` bullet above),
+`device_git.sh` (wraps a `git` command run over the device bridge with
+the stale-`index.lock` workaround, see the "Working in the cloud
+sandbox" section above). Add new tools here freely when something
+would save a future session real time -- the bar is "does this fix a
+rederive-from-scratch cost," the same reasoning that produced
+`qmp_test.py`.
 
 ## docs/
 

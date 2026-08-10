@@ -6,9 +6,15 @@ ASM = nasm
 # apps are supposed to stick to). apps/ is also on the include path so
 # core code can reach apps.h to call apps_start(), and so apps can
 # include each other's headers if that's ever needed.
+# -MMD -MP: emit a .d dependency file alongside each .o (see the
+# -include line near the bottom of this file) so changing a header
+# rebuilds every .o that includes it, not just files whose own .c
+# changed -- see that -include line's comment for the full reasoning
+# and kernel/include/version.h's generation (tools/gen_version.sh) for
+# the one subtlety this tracking requires upstream of it.
 CFLAGS = -std=gnu11 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
          -mno-red-zone -mcmodel=kernel -mno-mmx -mno-sse -mno-sse2 \
-         -Wall -Wextra -O2 -c -Ikernel/include -Iapps
+         -Wall -Wextra -O2 -c -Ikernel/include -Iapps -MMD -MP
 
 LDFLAGS = -n -T linker.ld -nostdlib
 
@@ -38,7 +44,7 @@ DISK_IMG = disk.img
 # linker fails with "relocation truncated to fit" without this.
 USERLAND_CFLAGS = -std=gnu11 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
                    -mno-red-zone -mcmodel=large -mno-mmx -mno-sse -mno-sse2 \
-                   -Wall -Wextra -O2 -c -Ikernel/include
+                   -Wall -Wextra -O2 -c -Ikernel/include -MMD -MP
 HELLO_ELF = userland/hello.elf
 EXIT_TEST_ELF = userland/exit_test.elf
 WRITE_TEST_ELF = userland/write_test.elf
@@ -86,20 +92,19 @@ ASM_OBJECTS = $(BUILD)/core/boot.o $(BUILD)/core/isr.o $(BUILD)/core/context_swi
 # separate, deliberate step that does (once per real change, not once
 # per build).
 #
-# This Makefile doesn't track header dependencies at all (no -MMD/-MP;
-# see CLAUDE.md's "make clean && make all" testing advice, which exists
-# because of exactly this), so a header changing alone would never
-# normally trigger anything to recompile. That's tolerable for most
-# headers, but not for this one -- a `bump_build.sh` run needs its new
-# number to actually show up next build, so the two .c files that embed
-# TOYOS_VERSION (`about.c`, `shell.c`'s `about` command) are
-# force-deleted here to guarantee they're always recompiled with
-# whatever version.h just got written, rather than showing a stale
-# build number from whenever they last happened to rebuild for an
-# unrelated reason.
+# Used to force-delete build/apps/about.o and build/apps/shell.o here,
+# because this Makefile didn't track header dependencies at all (no
+# -MMD/-MP) and version.h changing alone would never otherwise trigger
+# anything to recompile. Now that -MMD/-MP is on (see CFLAGS above and
+# the -include line near the bottom of this file), that's handled
+# generically -- any .o whose .c (transitively) includes version.h
+# rebuilds automatically once it actually changes. gen_version.sh is
+# deliberately idempotent (only touches version.h's mtime when
+# BUILD_NUMBER's value actually changed) specifically so this doesn't
+# regress into "every file that includes kapi.h rebuilds on every
+# single build" -- see that script's top comment.
 version:
 	@sh tools/gen_version.sh
-	@rm -f $(BUILD)/apps/about.o $(BUILD)/apps/shell.o
 
 all: version $(KERNEL) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF)
 
@@ -215,6 +220,21 @@ $(CRASH_TEST_ELF): $(BUILD)/userland/crash_test.o userland/link.ld
 
 $(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(ASM_OBJECTS) $(C_OBJECTS)
+
+# Pulls in every .d file -MMD/-MP generated alongside its .o (same
+# directory, same basename, e.g. build/apps/notepad.d next to
+# build/apps/notepad.o) -- each one is a make fragment listing that .o's
+# full header dependency chain, so changing a shared header like
+# widgets.h or gui_apps.h now correctly rebuilds every .o that includes
+# it, not just the ones whose own .c file changed. This is what used to
+# require "always make clean && make all before testing a GUI change"
+# (see CLAUDE.md) -- a stale .o compiled against an old struct layout
+# could silently sit next to freshly-rebuilt ones. Wrapped in `wildcard`
+# so this is a no-op (no .d files exist yet) on a completely clean
+# checkout, and `-include` (not `include`) so a missing/deleted .d file
+# is silently ignored rather than a hard error -- both matter for
+# `make clean` followed immediately by `make all` to still work.
+-include $(wildcard $(BUILD)/core/*.d $(BUILD)/drivers/*.d $(BUILD)/apps/*.d $(BUILD)/apps/wm/*.d $(BUILD)/userland/*.d)
 
 # Only created if it doesn't already exist -- see DISK_IMG's comment
 # above for why this must never overwrite an existing image.

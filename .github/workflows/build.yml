@@ -1,0 +1,45 @@
+name: build
+
+# Catches a build break (or a boot regression) automatically on every
+# push/PR, independent of whether a Claude session or a human remembered
+# to verify locally first -- see CLAUDE.md's "Working in the cloud
+# sandbox" section for why local verification has historically been a
+# manual, session-by-session thing up to this point. This is deliberately
+# narrow in scope: build + boot smoke test, not the full QMP GUI-testing
+# dance (tools/qmp_test.py) -- that needs a real display head / VNC and
+# is meant for interactive-ish verification of a specific GUI change, not
+# a fast per-push gate. See tools/boot_smoke_test.py's own docstring for
+# that division.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  build-and-smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same package list installed by hand earlier in this project's
+      # history (see CHANGELOG.md's build-304-era session) -- nasm for
+      # the boot/interrupt/context-switch assembly, grub-pc-bin +
+      # grub-common + xorriso for `make iso` (grub-mkrescue), and
+      # qemu-system-x86 for both `make run` and this workflow's own
+      # smoke test.
+      - name: Install build + QEMU dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq nasm grub-pc-bin grub-common xorriso qemu-system-x86 mtools
+
+      - name: make clean && make all
+        run: make clean && make all
+
+      - name: make iso
+        run: make iso
+
+      - name: Boot smoke test (headless, no GUI)
+        run: python3 tools/boot_smoke_test.py -v

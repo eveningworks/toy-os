@@ -53,16 +53,19 @@ Gotchas this module already gets right for you:
   equivalent below), not a plain `&` -- a bare background job tied to
   one shell invocation gets killed when that invocation ends. `setsid`
   detaches it so it survives across separate tool/shell calls.
-- **After changing any shared header (`widgets.h`, `gui_apps.h`, etc.),
-  `make clean && make all` before testing, not a plain `make all`.**
-  The Makefile doesn't track header dependencies (see its `version:`
-  target comment), so a stale `.o` compiled against the old struct
-  layout can silently desync from other, freshly-rebuilt `.o`s that
-  see the new one -- e.g. an array indexed with the wrong stride. This
-  produced genuinely bizarre-looking corruption once (Start menu items
-  showing raw function-prologue bytes as text) that a clean rebuild
-  fixed instantly. If a GUI test shows something inexplicable right
-  after a header change, suspect this before suspecting the new code.
+- **A plain `make all` is safe after changing a shared header** (as of
+  build 308 -- the Makefile now tracks header dependencies via
+  `-MMD`/`-MP`, see the Makefile's own comments). Used to not be true:
+  a stale `.o` compiled against an old struct layout could silently
+  desync from other, freshly-rebuilt `.o`s that saw a new one -- e.g.
+  an array indexed with the wrong stride -- which produced genuinely
+  bizarre-looking corruption once (Start menu items showing raw
+  function-prologue bytes as text). `make clean && make all` is still
+  a reasonable first move if a GUI test ever shows something
+  inexplicable right after a header change, but it's no longer
+  *routine*. See also `tools/boot_smoke_test.py` for a much faster,
+  non-GUI first check on kernel/driver-level changes -- this module is
+  for changes that actually need input/rendering verified.
 
 Typical usage from a Python REPL or script, once QEMU is already
 running (see `launch_qemu_cmd()` for the command to start it with):

@@ -5,6 +5,66 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+## Build 317 (feature, +10) -- header dependency tracking, a boot smoke test, and CI
+
+Requested after a conversation about what would minimize testing
+effort and make future features easier to add: three build/test
+infrastructure gaps, picked from a shortlist because they're either
+things this project had already been bitten by (the stale-`.o` header
+bug) or things that were entirely manual up to this point (every
+verification depending on a session remembering to run it).
+
+- **Header dependency tracking.** `Makefile`: added `-MMD -MP` to
+  `CFLAGS`/`USERLAND_CFLAGS`, and a `-include $(wildcard .../*.d ...)`
+  line pulling in the generated dependency fragments. Editing a shared
+  header (`apps/widgets.h`, `apps/gui_apps.h`, ...) now correctly
+  rebuilds every `.o` that includes it, not just the ones whose own
+  `.c` changed -- this is the exact failure mode that used to require
+  "always `make clean && make all` before testing a GUI change" (a
+  stale `.o` compiled against an old struct layout silently desyncing
+  from freshly-rebuilt ones -- see the build-293-era Start-menu
+  corruption bug). One real subtlety this surfaced: `kernel/include/
+  kapi.h` includes `version.h`, and `version.h` gets regenerated on
+  literally every `make all`/`make iso`
+  (`tools/gen_version.sh`) -- an unconditional rewrite there would have
+  bumped `version.h`'s mtime every single build and made every file
+  that includes `kapi.h` (nearly everything) look "out of date" and
+  rebuild every time, defeating the entire point. Fixed by making
+  `gen_version.sh` idempotent (only writes when `BUILD_NUMBER`'s value
+  actually changed, via a tmp-file + `cmp -s` compare) -- verified this
+  mattered by testing all three cases: touching a shared header (only
+  its real dependents rebuild), running `bump_build.sh` then building
+  (only files that include `version.h` rebuild, generalizing what used
+  to be a manual force-delete of `about.o`/`shell.o` in the `version:`
+  target -- now removed, no longer needed), and a plain no-op rebuild
+  (nothing recompiles, `version: build N (unchanged)`).
+- **`tools/boot_smoke_test.py`** (new): boots `toy-os.iso` headlessly
+  (no display, no QMP), polls `serial.log` for the expected kernel init
+  sequence or a `PANIC:`, exits 0/1 in a few seconds. Doesn't replace
+  `tools/qmp_test.py` for anything touching rendering/input/window
+  behavior, but most kernel/driver-level changes don't need the full
+  QMP GUI-testing dance to sanity-check -- they need "does it still
+  boot cleanly," which this answers far faster. Verified both the pass
+  path (real boot, `-v` shows all 6 patterns matched in ~1s) and the
+  fail path (`--timeout 0.05` correctly times out and exits 1, listing
+  exactly which patterns were missing).
+- **`.github/workflows/build.yml`** (new): runs `make clean && make all
+  && make iso` plus the new boot smoke test on every push/PR to `main`,
+  so a build break or boot regression is caught automatically instead
+  of depending on a session remembering to verify locally first. Uses
+  the same apt package list (`nasm`, `grub-pc-bin`, `grub-common`,
+  `xorriso`, `qemu-system-x86`, `mtools`) already known to work from
+  setting up this exact toolchain in the cloud sandbox this session.
+- `CLAUDE.md`/`tools/qmp_test.py`: updated the now-outdated "always
+  `make clean`" advice in both places to reflect that a plain `make
+  all` is safe after a header change as of this build, documented the
+  two new tools, and noted CI as a second, automatic check behind
+  local verification (not a replacement for it).
+- Verified: `make clean && make all && make iso` clean, no new
+  warnings; `tools/boot_smoke_test.py -v` passes against the resulting
+  ISO; a no-op `make all` immediately after does nothing (`version:
+  build N (unchanged)`, no recompilation).
+
 ## Build 307 (fix, +1) -- CLAUDE.md: when to split a file, generalized from the wm.c precedent
 
 Requested after a conversation about how large this project can grow

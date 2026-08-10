@@ -12,6 +12,19 @@
 # itself is a separate, deliberate step (tools/bump_build.sh) run once
 # per real change, not once per build -- see that script's top comment
 # for why "every build" and "every change" are different things here.
+#
+# Idempotent by design (only overwrites version.h if the content
+# actually changed): this runs on literally every `make all`/`make
+# iso`, and kernel/include/kapi.h includes version.h, so with the
+# Makefile's -MMD/-MP header dependency tracking (see its top comment),
+# an unconditional overwrite here would bump version.h's mtime on
+# every single build and make every file that (transitively) includes
+# kapi.h -- which is nearly everything -- look "out of date" and
+# rebuild every time, defeating the entire point of that tracking. By
+# only touching the file when BUILD_NUMBER actually changed, a build
+# right after `bump_build.sh` correctly recompiles everything that
+# depends on version.h (same as before), but every other build in
+# between leaves its mtime alone, same as any other untouched header.
 set -e
 cd "$(dirname "$0")/.."
 
@@ -21,7 +34,10 @@ if [ -f "$COUNTER_FILE" ]; then
     BUILD_NUMBER=$(cat "$COUNTER_FILE")
 fi
 
-cat > kernel/include/version.h << EOF
+OUT="kernel/include/version.h"
+TMP="$OUT.tmp.$$"
+
+cat > "$TMP" << EOF
 #ifndef VERSION_H
 #define VERSION_H
 
@@ -42,4 +58,10 @@ cat > kernel/include/version.h << EOF
 #endif
 EOF
 
-echo "version: build $BUILD_NUMBER"
+if [ -f "$OUT" ] && cmp -s "$TMP" "$OUT"; then
+    rm -f "$TMP"
+    echo "version: build $BUILD_NUMBER (unchanged)"
+else
+    mv "$TMP" "$OUT"
+    echo "version: build $BUILD_NUMBER"
+fi
