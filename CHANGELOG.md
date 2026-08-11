@@ -59,6 +59,82 @@ forever.
   border stays intact and visible above/below the text at every size.
 
 ### Added
+- Real disk-hosted ELF64 binaries: `lspci` now exists as a genuine
+  ring-3 process, loaded from `/bin/lspci` on the persistent filesystem
+  and run via `run lspci` -- not a kernel-space shell built-in
+  (`cmd_lspci()`/`pci_device_at()`) and not a GRUB-module test harness
+  either. This is `docs/roadmap.md`'s real-disk-hosted-ELF-binaries
+  item, planned in an earlier session and re-scoped this session before
+  building: re-checking that old plan against the current codebase
+  found its two stated blockers were already gone or smaller than
+  described (see `docs/decisions.md`'s new entry), so both halves
+  shipped together instead of as separate builds.
+  - New syscalls `SYS_PCI_COUNT`/`SYS_PCI_INFO` (`syscall_abi.h`,
+    `kernel/core/syscall.c`) -- the first syscalls added specifically
+    so a real userland ELF can do something other than file I/O.
+    `SYS_PCI_INFO` hands back a `struct pci_device` (`pci.h`) by value,
+    the same struct `pci_device_at()` already returns kernel-side --
+    reused directly rather than declaring a syscall-private copy, the
+    same precedent `SYS_GETTIME` already set for `timer.h`'s
+    `struct rtc_time`.
+  - `userland/lspci.c`: a real freestanding, no-libc ELF64 program
+    (same shape as `newsyscalls_test.c`) that calls the two syscalls
+    above and prints the same `bus:device.function vendor:device class
+    name` format the `lspci` shell command already uses. Carries its
+    own small local copy of `pci_class_name()`'s class/subclass -> name
+    table, since that function lives in kernel/drivers/pci.c and can't
+    be called from ring 3 -- only linked-in code and syscalls are
+    reachable from there.
+  - `kernel/core/elf_run.c`/`elf_run.h`: `elf_run_from_fs(path)`, the
+    disk-hosted counterpart to `file_test.c`/`newsyscalls_test.c`'s
+    GRUB-module-sourced `elf_load()` + `process_run_ring3()` pattern,
+    just with `fs_read()` standing in for `multiboot_get_module()`.
+    Turned out to need no separate scratch-buffer copy of the ELF
+    blob -- `fs_read()`'s `kmalloc()`'d buffer is already in the same
+    identity-mapped low-4GiB physical range a GRUB module lives in
+    (see `heap.c`'s own top comment), so `elf_load()` takes its address
+    directly with just a cast. Exposed through `kapi.h` like every
+    other `*_test.h`-style single-entry-point header.
+  - The shell's `run <name>` (`apps/shell_sys.c`'s `cmd_run()`) now
+    falls through to `/bin/<name>` + `elf_run_from_fs()` when
+    `app_run()` (the kernel-space `shell`/`gui` registry, `apps/apps.c`
+    -- unrelated to this, still only two entries) doesn't recognize the
+    name, instead of immediately reporting "no such app."
+  - `kernel_main()` gains `install_bin_binaries()`
+    (`kernel/core/kernel.c`): a one-time boot bootstrap that copies
+    `lspci.elf`'s GRUB module bytes into `/bin/lspci` via
+    `fs_write_range()` the first time it boots against a given disk
+    image (a no-op on every later boot once the file exists) -- there's
+    no in-guest compiler and no host-side TFS2 writer tool yet (see
+    `docs/roadmap.md`'s new backlog entry -- deliberately deferred,
+    the user's own call), so this is how a binary's bytes get onto
+    `/bin` at all today. Uses `fs_write_range()`, not `fs_write()` --
+    an ELF's bytes contain embedded `0x00` bytes, and `fs_write()`
+    treats its `data` argument as a NUL-terminated C string.
+  - `lspci.elf` added as `grub.cfg`'s 14th `module2` line (index 13)
+    and to the `Makefile`'s userland-ELF build/`iso`/`clean` targets --
+    the same manual per-binary wiring every existing `userland/*.elf`
+    already needs (this directory isn't wildcarded, unlike
+    `kernel/core/*.c`, which is why `elf_run.c` above needed no
+    `Makefile` changes at all).
+  - Corrected three stale comments that cited `fs.h`'s `FS_DATA_MAX`
+    (2048) as a real per-file ceiling (`kernel/core/etc_config.c`,
+    `apps/editor.c`, `apps/editor.h`) -- found while re-verifying the
+    old ELF-binaries plan against the current filesystem. TFS2 v2's
+    block-addressed rework removed that ceiling as a side effect, not
+    as part of this change; `FS_DATA_MAX` itself is now vestigial
+    (kept defined, `fs.h`'s comment says so) since nothing in `tfs.c`
+    references it anymore.
+  Verified in QEMU via QMP: `run lspci` from the physical shell prints
+  the exact same six-device list `dmesg`'s own `pci:` lines show,
+  ending "Process finished. Exit code: 0"; `dmesg` afterward shows
+  `elf_run: calling process_run_ring3() for /bin/lspci` and
+  `syscall: exit() called by ring-3 process`; `run bogus` still
+  correctly reports "no such app: bogus"; a second boot against the
+  same `disk.img` does NOT re-print the `bin: installed` line (the
+  exists-check works). Screenshots:
+  `screenshots/2026-08-11/lspci_bin_first_real_disk_hosted_elf.png`,
+  `screenshots/2026-08-11/lspci_run_dmesg_trail_and_bogus_app.png`.
 - dmesg (`klog_write()`) coverage extended to six areas that had zero
   boot/probe-time logging before this: PCI enumeration
   (`kernel/drivers/pci.c`), the keyboard driver

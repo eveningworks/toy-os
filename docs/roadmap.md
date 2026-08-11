@@ -8,10 +8,11 @@ this list is actively maintained, not a stale wishlist. See `docs/decisions.md` 
 **In progress / up next**
 - [ ] Migrate Notepad's Save/Load buttons to `ui_button_group` (`apps/ui/ui_button.c`/`ui_button_group.c`) -- not blocked on anything (Calculator is already a real second-caller-worthy precedent), deliberately left out of that change because it also tightens Save/Load's click hitbox to match the drawn button exactly, a small behavior change that didn't belong bundled into a no-behavior-change refactor. See `docs/decisions.md`. (Notepad's filename field itself was separately migrated to `ui_textbox` -- see `CHANGELOG.md`'s `[Unreleased]` entry -- this item is only about the Save/Load buttons.)
 - [ ] Multi-architecture support (e.g. RISC-V 64 alongside x86_64) -- assessed, not started: roughly a tenth of the codebase is architecture-specific and it's already well-insulated behind `kapi.h`, but boot/interrupts/paging/port-I/O are a real per-arch project. Full breakdown, proposed `kernel/arch/<arch>/` layout, and a phased plan in `docs/arch-portability.md`
-- [ ] Real disk-hosted ELF binaries -- load from `/bin` at runtime instead of every `.elf` being a GRUB module baked into the ISO (investigated, not started -- see the full A/B breakdown below)
+- [x] ~~Real disk-hosted ELF binaries -- load from `/bin` at runtime instead of every `.elf` being a GRUB module baked into the ISO~~ -- done (see `CHANGELOG.md`'s `[Unreleased]` entry): `lspci` is a real ring-3 process, loaded from `/bin/lspci` on the persistent filesystem via `run lspci`, using two new syscalls (`SYS_PCI_COUNT`/`SYS_PCI_INFO`) to do something other than file I/O. `/bin/lspci` itself is installed once, at boot, by copying the `lspci.elf` GRUB module's bytes in via `fs_write_range()` (`kernel_main()`'s `install_bin_binaries()`) -- not yet a real host-side TFS2 writer tool (still planned separately, see `docs/decisions.md`), so a *second* GRUB-module-installed binary needs its own kernel rebuild + bootstrap-table row for now, same as this one did.
 - [ ] TCP/IP networking -- the infra pieces are done (PCI enumeration, IRQ registration, contiguous/DMA memory, the socket/fd syscall surface, IRQ-driven DMA example); no NIC driver or protocol stack yet
 
 **Backlog**
+- [ ] A real host-side TFS2 writer tool -- write a file directly into `disk.img` without booting toy-os at all, informed by `docs/tfs2-spec.md`'s existing read-only reference parser. Deliberately deferred when disk-hosted ELF binaries shipped (see that entry above): the boot-time bootstrap-install path (`kernel_main()`'s `install_bin_binaries()`) covers "one binary, installed once" with no new tooling, but a *second* binary needs its own kernel rebuild + bootstrap-table row today -- this tool is what removes that requirement, letting any compiled ELF get dropped onto `/bin` from outside the OS.
 - [ ] `wintest` (`SYS_WIN_*`) windows made non-modal, sharing scheduler time with the kernel-space window manager instead of taking the CPU exclusively
 - [ ] `g_next_kernel_rsp` reentrancy fixed properly, so a real blocking syscall doesn't need to spin-poll from ring 3 the way `echotest` does today
 - [x] ~~`fs_write()` offset-based partial writes~~ -- done, see CHANGELOG.md's TFS2 multi-GB rework entry (`Unreleased`): `fs_write_range(path, offset, buf, len)` / `fs_read_range()` now exist alongside the original whole-file `fs_write()`/`fs_read()` (kept as-is for small-file callers like Notepad/shell/editor.c).
@@ -227,70 +228,27 @@ Full detail, reasoning, and CHANGELOG links for every item below.
   diagnostic pattern (`echo_test.c` etc.) is a natural fit for early
   loopback/ARP verification -- but this is its own multi-session
   project with its own milestones, not a single build bump.
-- Real disk-hosted ELF binaries -- an executable a user could drop
+- ~~Real disk-hosted ELF binaries -- an executable a user could drop
   into a `/bin` directory and have `run`/the shell actually load and
   execute from the persistent filesystem, instead of every `.elf`
-  today being a GRUB Multiboot2 module baked into the ISO at build
-  time (see `apps/README.md` and `multiboot.c`'s `multiboot_get_
-  module()` for how that currently works) and found by a hardcoded
-  module index. `lspci` was the proposed first candidate, since it's
-  a natural "small, self-contained, easy to verify" first real binary
-  -- currently it's a plain kernel-space shell built-in
-  (`cmd_lspci()` in `apps/shell_sys.c`, calling `pci_device_at()`/
-  `pci_class_name()` directly), not a process at all.
-
-  Investigated (no code changes yet -- this is a planning pass, at the
-  user's explicit request, before committing to an implementation).
-  Two genuinely separate capabilities are bundled up in "support ELF
-  binaries from the filesystem," worth landing as two builds rather
-  than one:
-
-  - **(A) A real syscall-based ELF program, launched the existing
-    (GRUB-module) way.** Mechanically this is the easy half --
-    `elf_load()`/`process_run_ring3()` already don't care where the
-    ELF blob came from, and a new `*_test.c`-style harness could load
-    an `lspci.elf` from a Multiboot2 module exactly like `elftest`/
-    `filetest` do today. The real gap: a ring-3 process can only reach
-    the kernel through the `int 0x80` syscall table
-    (`kernel/include/syscall_abi.h`) -- it can't call `pci_device_at()`
-    directly the way kernel-space shell code can, so this needs new
-    syscalls (something like `SYS_PCI_COUNT`/`SYS_PCI_INFO`) added the
-    same way `SYS_LISTDIR`/`SYS_GETTIME` were for `newsyscalltest`
-    (build 420-adjacent). This alone would prove out "a real syscall-
-    driven userland program that does something other than file I/O,"
-    independent of the filesystem-loading question below.
-  - **(B) Loading that binary from `/bin` on the persistent disk at
-    runtime**, once (A) exists. This is the harder half, and has its
-    own real prerequisite: TFS2's on-disk record format
-    (`kernel/drivers/tfs.c`, `docs/tfs2-spec.md`) caps a single file
-    at `FS_DATA_MAX` = 2048 bytes today, and every existing test ELF
-    (1112-3320 bytes) already brushes or exceeds that. Discussed three
-    ways to fix this and settled on **multi-slot chaining for large
-    files only**: an ordinary small file keeps today's exact
-    2048-byte/one-slot footprint (both on disk and in the in-RAM
-    `files[FS_MAX_FILES]` table -- the other two options either bloat
-    every one of the 32 slots' static RAM cost by the same amount
-    regardless of whether that slot is ever used for something big
-    [simply growing `FS_DATA_MAX`], or add an entirely separate
-    fixed-size table just for binaries alongside the existing one [a
-    dedicated "binaries region"]), while a file that needs more spans
-    multiple slots via a chain -- more on-disk format complexity (a
-    "next slot" pointer, `tfs2-spec.md` would need updating and its
-    reference Python parser would need to follow chains), but no
-    wasted RAM or disk for the common case of small text files.
-    Besides the format change, (B) also needs: a `fs_read()`-sourced
-    load path (`elf_load()` already accepts a flat blob, so this is
-    mostly wiring, but the blob would need copying out of TFS2's live
-    in-RAM table into a scratch buffer before executing it, rather
-    than executing in place, since that memory isn't stable the way a
-    GRUB module's reserved region is); a `/bin` + `run` convention
-    (the shell's `run <name>` only checks a small in-kernel function
-    table today -- see `apps/apps.c`); and, since there's no in-guest
-    compiler, some way to actually get a built ELF's bytes onto
-    `disk.img` in the first place (most likely a host-side tool built
-    on the same byte-exact TFS2 writer logic `docs/tfs2-spec.md`'s
-    reference reader already demonstrates reading, or an "install from
-    the GRUB module into `/bin` on first boot" bootstrap step).
-
-  Not started -- this entry is the plan, for whenever (A) and then (B)
-  actually get picked up as their own builds.
+  today being a GRUB Multiboot2 module baked into the ISO~~ -- done
+  (see `CHANGELOG.md`'s `[Unreleased]` entry). The planning pass
+  originally recorded here (two builds, (A) syscall-based ELF then (B)
+  loading it from `/bin`) turned out smaller than expected once
+  re-checked against the current codebase: (B)'s stated hard
+  prerequisite -- TFS2 capping a file at `FS_DATA_MAX` = 2048 bytes --
+  was already gone by the time this was picked back up (TFS2 v2's
+  block-addressed rework removed it as a side effect, not this change;
+  see `kernel/include/fs.h`'s corrected `FS_DATA_MAX` comment), and
+  `elf_load()`'s ELF blob turned out to need no separate scratch-buffer
+  copy at all (`fs_read()`'s `kmalloc()` buffer is already in the same
+  identity-mapped low-4GiB range a GRUB module lives in -- see
+  `docs/decisions.md`). Both (A) (`SYS_PCI_COUNT`/`SYS_PCI_INFO`,
+  `userland/lspci.c`) and (B) (`kernel/core/elf_run.c`'s
+  `elf_run_from_fs()`, wired into the shell's `run` command) shipped
+  together as a result. What's still open, deliberately deferred: a
+  real host-side TFS2 writer tool -- `/bin/lspci` is installed once at
+  boot by copying its GRUB module's bytes in (`kernel_main()`'s
+  `install_bin_binaries()`), which means a *second* disk-hosted binary
+  still needs its own kernel rebuild + bootstrap-table row rather than
+  being dropped onto `disk.img` from outside the OS entirely.

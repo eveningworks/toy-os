@@ -33,10 +33,13 @@
 #include "string.h"
 
 // Whole-file working buffer for etc_config_set()'s read-modify-write.
-// Comfortably larger than any config file this codebase writes today
-// (a handful of "key=value" lines), well under fs.h's FS_DATA_MAX
-// (2048, the filesystem's own hard per-file ceiling) so there's room
-// to grow before that becomes the limiting factor instead of this one.
+// Comfortably larger than any config file this codebase writes today (a
+// handful of "key=value" lines). Not sized against any filesystem-side
+// ceiling -- fs.h's FS_DATA_MAX no longer means "hard per-file limit"
+// (TFS2 v2's block-addressed on-disk format long since removed that;
+// see fs.h's own fs_write()/fs_read() doc comments) -- this is purely
+// "bigger than any config file we actually write," a self-imposed
+// working-buffer size, not a filesystem constraint being worked around.
 #define ETC_CONFIG_MAX 512
 
 static int is_space(char c) { return c == ' ' || c == '\t'; }

@@ -266,4 +266,29 @@ struct dirent {
                        // pointer, RDX = length. Always returns -1, same
                        // reasoning as SYS_SEND above.
 
+// The first syscalls added specifically so a real disk-hosted ELF64
+// binary (not just a kernel-space shell built-in) can do something
+// other than file I/O -- see docs/roadmap.md's real-disk-hosted-ELF-
+// binaries entry and userland/lspci.c, the first program to use them.
+// Wrap pci_init()'s already-recorded device table (kernel/drivers/
+// pci.c) -- there's no live rescan here, same as the `lspci` shell
+// command (apps/shell_sys.c) reading the same table kernel-space-side.
+// `struct pci_device` itself lives in pci.h, not duplicated here --
+// same precedent as SYS_GETTIME reusing timer.h's `struct rtc_time`
+// directly rather than declaring a syscall-private copy; userland code
+// just `#include`s "pci.h" for the type (Makefile's USERLAND_CFLAGS
+// already has `-Ikernel/include`), even though it can't call any of
+// that header's functions (those live in kernel/drivers/pci.c, never
+// linked into a userland ELF).
+#define SYS_PCI_COUNT 19 // No arguments. Returns the number of PCI
+                          // devices pci_init() found at boot (RAX) --
+                          // wraps pci_device_count() directly.
+
+#define SYS_PCI_INFO  20 // RDI = device index (0 .. SYS_PCI_COUNT's
+                          // result - 1), RSI = pointer to a
+                          // `struct pci_device` (out, see pci.h).
+                          // Returns 1 (RAX) on success, -1 for an
+                          // out-of-range index or an invalid output
+                          // pointer. Wraps pci_device_at().
+
 #endif

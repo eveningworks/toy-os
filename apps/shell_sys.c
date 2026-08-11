@@ -361,15 +361,41 @@ void cmd_run(const char *name) {
         vga_write("usage: run <app>  (see 'apps' for the list)\n");
         return;
     }
-    if (!app_run(name)) {
+    if (app_run(name)) {
+        // An app may have drawn over the whole screen (e.g. gui) --
+        // refresh the console on return so the shell prompt is clean
+        // either way.
+        vga_clear();
+        vga_set_color(shell_fg, VGA_BLACK);
+        return;
+    }
+
+    // Not a kernel-space app (apps.c's registry) -- fall through to a
+    // real disk-hosted ELF64 binary under /bin (see docs/roadmap.md's
+    // real-disk-hosted-ELF-binaries entry, and elf_run.h). "/bin/" + name,
+    // bounded the same way SYS_LISTDIR/SYS_OPEN's own path copies are.
+    char bin_path[FS_PATH_MAX];
+    k_strcpy(bin_path, "/bin/");
+    size_t prefix_len = k_strlen(bin_path);
+    size_t i = 0;
+    while (name[i] && prefix_len + i < FS_PATH_MAX - 1) {
+        bin_path[prefix_len + i] = name[i];
+        i++;
+    }
+    bin_path[prefix_len + i] = '\0';
+
+    if (!fs_exists(bin_path) || fs_is_dir(bin_path)) {
         vga_write("run: no such app: ");
         vga_write(name);
         vga_putc('\n');
         return;
     }
-    // An app may have drawn over the whole screen (e.g. gui) -- refresh
-    // the console on return so the shell prompt is clean either way.
-    vga_clear();
+
+    int exit_code = elf_run_from_fs(bin_path);
+    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_write("Process finished. Exit code: ");
+    vga_write_exit_code(exit_code);
+    vga_putc('\n');
     vga_set_color(shell_fg, VGA_BLACK);
 }
 

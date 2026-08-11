@@ -10,6 +10,7 @@
 #include "fs.h"
 #include "string.h"
 #include "tz.h"
+#include "pci.h"
 #include <stddef.h>
 
 // SYS_OPEN/SYS_READ/SYS_CLOSE state: a small global table of open files,
@@ -670,6 +671,19 @@ void syscall_dispatch(uint64_t *regs) {
             scheduler_tick(regs);
         }
         regs[14] = 0;
+    } else if (rax == SYS_PCI_COUNT) {
+        regs[14] = (uint64_t)pci_device_count();
+    } else if (rax == SYS_PCI_INFO) {
+        uint64_t pml4 = vmm_current_pml4();
+        int index = (int)rdi;
+        const struct pci_device *dev = pci_device_at(index);
+        if (!dev || !vmm_validate_user_range(pml4, rsi, sizeof(struct pci_device))) {
+            klog_write("syscall: pci_info() rejected -- bad index or invalid pointer\n");
+            regs[14] = (uint64_t)-1;
+        } else {
+            *(struct pci_device *)(uintptr_t)rsi = *dev;
+            regs[14] = 1;
+        }
     }
 
     // Unrecognized syscall number: no-op. Falling through here means

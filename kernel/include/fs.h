@@ -29,6 +29,17 @@
 // (still fits the same 5 sectors -- see FS_RECORD_SECTORS in tfs.c).
 #define FS_PATH_MAX 64
 
+// Vestigial: this was a real hard per-file ceiling under TFS2 v1
+// (inline data, one fixed-size slot). TFS2 v2's block-addressed on-disk
+// format (12 direct + single/double/triple indirect blocks -- see
+// docs/tfs2-spec.md) removed that ceiling entirely; fs_write()/
+// fs_read() now go through the same storage fs_write_range()/
+// fs_read_range() do, limited only by available RAM (for the
+// whole-file fs_read()/fs_write() calls) or disk free space. Kept
+// defined since nothing currently uses it, but not referenced by
+// tfs.c at all anymore -- don't treat it as a real limit when sizing a
+// new buffer against it (see kernel/core/etc_config.c and
+// apps/editor.c/.h for callers that used to and were corrected).
 #define FS_DATA_MAX 2048
 
 void fs_init(void);

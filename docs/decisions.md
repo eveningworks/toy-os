@@ -946,3 +946,76 @@ redraw instead of once. See `CHANGELOG.md`'s `[Unreleased]` entry for
 the full list of areas covered and `klog_write_dec()`/
 `klog_write_hex()` (`kernel/include/klog.h`), added in the same change
 for klog messages that need to include a number.
+
+## Real disk-hosted ELF binaries: an old plan re-verified before building, not built from the doc as written
+
+`docs/roadmap.md` already had a plan for this (split into (A) a real
+syscall-based ELF program, (B) loading it from `/bin`), written in an
+earlier session as a pure planning pass. Before actually building it,
+that plan got re-checked against the current codebase rather than
+implemented as written -- worth recording why, since the two
+differences found are exactly the kind of "the codebase moved out from
+under an old doc" trap a future session could hit again elsewhere:
+
+- The plan's stated hard blocker for (B) was TFS2 capping a file at
+  `FS_DATA_MAX` = 2048 bytes, with a whole discussion of multi-slot
+  chaining to fix it. By the time this was re-checked, `tfs.c` no
+  longer referenced `FS_DATA_MAX` at all -- TFS2 v2's block-addressed
+  on-disk rework (the multi-GB file support entry, `CHANGELOG.md`'s
+  `[Unreleased]`) had already solved this as a side effect, for
+  unrelated reasons, in a different session that had no idea an old
+  ELF-binaries plan was depending on that limit staying in place. Three
+  comments (`kernel/core/etc_config.c`, `apps/editor.c`/`.h`) still
+  cited the old 2048-byte ceiling as real months later -- corrected in
+  the same change that shipped this (see `CHANGELOG.md`).
+- The plan assumed `elf_load()`'s ELF blob would need copying out of
+  TFS2's live in-RAM table into a scratch buffer before executing,
+  since that memory "isn't stable the way a GRUB module's reserved
+  region is." Checking `elf_load()` (`kernel/core/elf.c`) and
+  `heap.c`'s own top comment together showed this wasn't needed:
+  `elf_load()` just casts its `elf_phys_addr` argument straight to a
+  pointer with zero translation, which only works because GRUB modules
+  sit in identity-mapped low physical memory -- and `kmalloc()` is
+  *also* carved out of that same identity-mapped low-4GiB range (see
+  `paging.c`'s top comment, referenced from `heap.c`), so `fs_read()`'s
+  returned buffer address already works there directly. One real
+  constraint this does leave, not present in the GRUB-module path:
+  nothing may call `fs_read()` again until the loaded process finishes,
+  since the backend reuses one static buffer across calls (`fs.h`'s
+  `fs_read()` doc comment already says this; `elf_run.c`'s own comment
+  restates it as a caller-facing constraint).
+
+Net effect: (A) and (B) shipped together in one change instead of two,
+since (B) turned out to be much smaller than the plan estimated. What
+the plan got right and is still true: getting a binary's bytes onto
+`disk.img` at all needs *something* outside the OS, since there's no
+in-guest compiler -- see the next entry for which of the plan's two
+options (`bootstrap-install` vs. a host-side writer tool) was picked,
+and why. See `CHANGELOG.md`'s `[Unreleased]` entry for the full
+implementation (`SYS_PCI_COUNT`/`SYS_PCI_INFO`, `userland/lspci.c`,
+`elf_run.c`, `install_bin_binaries()`).
+
+## `/bin` binaries: boot-time bootstrap-install now, a host-side TFS2 writer tool later
+
+Getting a compiled ELF's bytes onto `disk.img` has no in-guest-compiler
+option -- something outside the OS has to place them there. Two ways
+were on the table (see the previous entry's roadmap plan): a host-side
+tool that writes directly into TFS2's on-disk format (informed by
+`docs/tfs2-spec.md`'s existing read-only reference parser, which would
+need a write-side counterpart built from scratch), or copying a GRUB
+module's bytes into `/bin` once, at boot, via code the kernel already
+has (`fs_write_range()`/`fs_touch()`, both already exercised by other
+callers). The user chose bootstrap-install for `lspci` now, with the
+host-side tool explicitly deferred to a later session (see
+`docs/roadmap.md`'s new backlog entry) rather than skipped -- the
+bootstrap path needs zero new tooling and was demonstrably enough to
+prove the whole `/bin`-loading pipeline end to end, while the
+host-side tool only pays for itself once a *second* binary needs
+installing without a kernel rebuild, which isn't true yet. The
+tradeoff this defers, worth remembering when that second binary shows
+up: `install_bin_binaries()` (`kernel/core/kernel.c`) is a small table
+of `{module_index, bin_path}` pairs specifically so adding one more
+GRUB-module-installed binary is a one-line addition, not a redesign --
+but it's still "add a GRUB module + a table row + rebuild the kernel"
+per binary, not "drop a file onto the disk image," which is exactly
+what the host-side tool is for.
