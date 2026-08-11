@@ -1019,3 +1019,34 @@ GRUB-module-installed binary is a one-line addition, not a redesign --
 but it's still "add a GRUB module + a table row + rebuild the kernel"
 per binary, not "drop a file onto the disk image," which is exactly
 what the host-side tool is for.
+
+## `tools/tfs2_writer.py`: content-hash sync, not mtime comparison; direct+single-indirect write scope, not full indirect support
+
+Two scope calls made building the deferred host-side TFS2 writer (see
+the entry above): how `sync`'s "only rewrite if changed" policy
+detects a change, and how big a file the tool is willing to write at
+all.
+
+**Content hash, not mtime.** TFS2's `created`/`modified` fields are
+toy-os's own RTC-sourced local wall-clock time (see `fs.h`'s
+`fs_stat()` comment) -- there's no epoch, and no defined relationship
+to the *host* machine's clock a comparison could lean on without
+assuming a particular skew. Comparing "is the local file newer" against
+that would be guessing. Hashing the on-disk content and comparing it to
+the local file's content sidesteps the clock question entirely and is
+just as correct for the actual goal ("did this file's bytes change") --
+this is why `sync`'s `sync/` subtree policy reads the existing file
+back and SHA-256-compares it rather than checking timestamps.
+
+**Write scope is direct + single-indirect blocks only (~4.03 MB/file),
+not the full direct+single+double+triple scheme `docs/tfs2-spec.md`
+documents for reading.** The tool refuses cleanly (clear error, no
+silent truncation) rather than write a partial file past that size.
+Everything this tool exists for -- ELF binaries, config/text seed
+files -- fits comfortably under that ceiling; double/triple-indirect
+allocation is real extra code (the same recursive block-tree shape
+`tfs.c`'s own `alloc_block()`-adjacent logic would need) that has no
+current caller. If a future seed file genuinely needs to be larger,
+extend `write_file()`'s allocation loop rather than raising the limit
+silently -- the read path (`block_for_index()`) already walks all four
+levels, so only the write side needs the extra work.

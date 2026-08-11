@@ -59,6 +59,59 @@ forever.
   border stays intact and visible above/below the text at every size.
 
 ### Added
+- `tools/tfs2_writer.py`: a host-side TFS2 v2 read/write tool -- the
+  "option 2" deferred from the real-disk-hosted-ELF-binaries work
+  below, now built. Lets a file get onto `disk.img` (or be read back
+  out) without booting toy-os, a kernel rebuild, or the
+  `BIN_BOOTSTRAP`/GRUB-module bootstrap-install path that approach
+  still relies on. Four subcommands, one script (`write`/`read`/`ls`/
+  `sync`):
+  - `write <disk.img> <tfs-path> <local-file>` and `read <disk.img>
+    <tfs-path>` -- single-file in/out. `write` refuses to overwrite an
+    existing path without `--force`; both support `--dry-run`.
+  - `ls <disk.img> [tfs-path]` -- lists a directory's direct children
+    with full detail (type, size, created/modified), same semantics as
+    the kernel's own `fs_list()`.
+  - `sync <disk.img> <seed-dir> [--dest /]` -- mirrors a whole seed
+    directory tree in at once, split into two policy subtrees:
+    `<seed-dir>/once/...` (copy-once -- written if missing, never
+    touched again once present; for config files a user might edit
+    after first boot) and `<seed-dir>/sync/...` (content-hash-synced --
+    written if missing, rewritten only if the local file's SHA-256
+    differs from what's on the image, otherwise left alone; for
+    binaries/assets rebuilt between runs). Missing parent directories
+    are created automatically (mirrors a chain of `fs_mkdir()` calls).
+  - Change detection deliberately uses a content hash, not local vs.
+    on-disk mtime comparison -- TFS2 timestamps are toy-os's own RTC
+    wall-clock time (see `fs.h`'s `fs_stat()` comment), not something
+    comparable to the host machine's clock without assuming a
+    particular skew; hashing sidesteps that entirely.
+  - Implemented directly against `docs/tfs2-spec.md` (superblock/
+    journal checks, table records, block addressing, the free-block
+    bitmap, the journal's stage-commit-apply-clear write sequence) --
+    the `read`/`ls` code paths are close to the spec's own reference
+    reader, extended with the write-side mirror of `tfs.c`'s
+    `alloc_block()`/`free_tree()`/`persist_record()`.
+  - Scope: writes only allocate direct + single-indirect blocks (12 +
+    1024 blocks, ~4.03 MB max per file) -- plenty for ELF binaries and
+    config/text files, everything this was built for. A file needing
+    double/triple-indirect refuses cleanly with a clear error rather
+    than silently truncating; extending write support to those is
+    listed in `docs/roadmap.md`'s backlog if a real need for
+    multi-megabyte seeded files comes up.
+  - Verified in the cloud sandbox: wrote/overwrote/read back a config
+    file and `lspci.elf` via `write`/`read`/`ls`, ran `sync` against a
+    seed directory (confirmed `once/` skips an already-present file
+    even after its local content changed, `sync/` rewrites only when
+    content actually differs, both create missing parent directories),
+    then booted the resulting `disk.img` for real and confirmed the
+    shell's own `ls`/`cat`/`run` see exactly what the host tool wrote
+    -- including a round-trip check that `sync`'s content-hash compare
+    correctly recognized `/bin/lspci` as already matching what the
+    kernel's own `install_bin_binaries()` had written during that same
+    boot, a real interop check between the two write paths landing
+    byte-identical records. See
+    `screenshots/2026-08-11/tfs2_writer_host_write_verified_in_shell.png`.
 - Real disk-hosted ELF64 binaries: `lspci` now exists as a genuine
   ring-3 process, loaded from `/bin/lspci` on the persistent filesystem
   and run via `run lspci` -- not a kernel-space shell built-in
