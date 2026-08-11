@@ -63,10 +63,12 @@ work.
   inventing a new pattern each time, and record the split's own
   reasoning in a top-of-file comment the way `apps/wm/wm.c` and
   `kernel/drivers/tfs.c` do. `CHANGELOG.md` itself is the same
-  instinct applied to docs, not code -- if it ever gets unwieldy to
-  search, split by era (e.g. a `CHANGELOG-2026.md`) rather than letting
-  one file grow forever; not needed yet at ~2,900 lines, since entries
-  are found by grep, not by reading start to finish.
+  instinct applied to docs, not code -- split by era once it got
+  unwieldy to search: `CHANGELOG-archive.md` holds Milestone 1 through
+  Build 172 (moved out at ~4,200 lines), `CHANGELOG.md` keeps Build 173
+  onward plus `## [Unreleased]`. Both stay grep-able; if this ever
+  needs a second split, follow the same pattern (cut at one heading,
+  straight move, no rewording) rather than inventing a new one.
 - **`/etc` on the persistent filesystem is the config-file convention**
   (`kernel_main()` creates it right after `fs_init()`, before anything
   that might read a config file runs). Don't hand-roll a parser for a
@@ -88,67 +90,21 @@ work.
   that -- it's the project's record of *why* things are the way they
   are, which matters a lot in a codebase this hand-rolled.
 - **`kernel/include/version.h` is GENERATED, not hand-edited** --
-  `tools/gen_version.sh` regenerates it automatically as the first step
-  of `make all`/`make iso`, embedding whatever `VERSION` (repo root,
-  plain semver-ish string, e.g. `0.1.0-dev`) currently holds. Never
-  edit `version.h` directly -- it'll just get overwritten on the next
-  build.
-- **Versioning is semantic-versioning-with-a-`-dev`-suffix, not a
-  per-change build number.** `VERSION` (repo root, one line) holds
-  something like `0.1.0-dev` for the whole time you're doing ordinary
-  dev work -- there is no "bump this before every change" step
-  anymore. `TOYOS_VERSION` (shown by `about` and the GUI About window)
-  is just whatever `VERSION` currently says. This replaced an earlier
-  Windows-build-number-style scheme (`tools/bump_build.sh
-  <fix|feature|major>`, +1/+10/+50 per change, a `build-N` tag per
-  push -- see CHANGELOG.md's `## [Unreleased]` intro and
-  `docs/decisions.md` for why it was retired), which itself replaced a
-  date-plus-same-day-counter scheme (`YYYY.MM.DD.N`), before that a
-  hand-bumped `0.1.0`-style semver -- see CHANGELOG for all three.
-  Only `tools/set_version.sh <version>` changes `VERSION`, and only for
-  one of two deliberate reasons:
-  - **Starting a new dev round** (typically right after a release):
-    `tools/set_version.sh 0.2.0-dev`. Just rewrites `VERSION`.
-  - **Cutting a real release**: `tools/set_version.sh 0.2.0` (no `-dev`
-    suffix). Rewrites `VERSION` AND stamps `CHANGELOG.md` -- see below.
-- **`CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/)
-  from `## [Unreleased]` forward.** Every change, whatever its size,
-  gets appended as an entry under `## [Unreleased]` -- no version
-  number, no tier judgment call, just "what changed, why, what was
-  verified," same content bar as always. Entries above it (`## Build
-  N (tier, +delta)`, from the retired scheme) keep their old headings
-  for reference; that history isn't rewritten. When you cut a release,
-  `tools/set_version.sh <version>` renames the current `## [Unreleased]`
-  heading to `## [<version>] - <date>` and opens a fresh empty
-  `## [Unreleased]` above it, so new entries have somewhere to go
-  immediately.
-- **Git tags move to `v<version>` (e.g. `v0.2.0`), cut only at real
-  releases, not per change** -- replacing the old `build-<N>`-per-push
-  scheme:
-  ```
-  tools/set_version.sh 0.2.0   # rewrites VERSION, stamps CHANGELOG.md
-  git tag v0.2.0
-  git push origin main --tags
-  ```
-  A **GitHub Release** (title = `v<version>`, body = that release's
-  CHANGELOG section, `.iso` attached as a downloadable asset --
-  `gh release create v0.2.0 toy-os.iso --title "v0.2.0" --notes-file
-  <path>`, or the GitHub web UI) is a judgment call per release now
-  rather than tied to a fixed tier, since there's no tier anymore --
-  use one when a release feels milestone-worthy enough that grabbing a
-  working ISO without cloning + building is worth it.
+  `tools/gen_version.sh` regenerates it from `VERSION` (repo root, e.g.
+  `0.1.0-dev`) as the first step of `make all`/`make iso`. Never edit
+  `version.h` directly.
+- **Versioning is semver + a `-dev` suffix, not a per-change build
+  number.** `VERSION` only changes via `tools/set_version.sh
+  <version>`: `0.2.0-dev` starts a new dev round, `0.2.0` (no `-dev`)
+  cuts a release and also stamps `CHANGELOG.md`'s `## [Unreleased]`
+  section with the version + date, opening a fresh one above it. Git
+  tags (`v<version>`) and GitHub Releases happen at real releases only,
+  cut by hand after `set_version.sh` -- see `docs/decisions.md` for the
+  full mechanics, commands, and why this replaced the old
+  `tools/bump_build.sh <fix|feature|major>` scheme.
 - **Commit messages list each changed/added file with a one-line note
-  in the body**, e.g.:
-  ```
-  kernel/drivers/keyboard.c   - added SE layout remap
-  apps/shell.c                - fixed signed-char gate in shell_read_line()
-  CHANGELOG.md                 - Unreleased entry
-  ```
-  so a commit is skimmable on GitHub (under the subject line, on the
-  commit page) without opening the full diff to reverse-engineer what
-  changed where. Subject line stays a short summary as before; this is
-  just the body. No other workflow change -- still a direct push to
-  `main`, same as always.
+  in the body** (subject line stays a short summary) -- see
+  `docs/decisions.md`'s versioning entry for the exact format.
 
 ## Working in the cloud sandbox vs. the user's machine
 
@@ -158,61 +114,27 @@ user's real checkout reachable through the device bridge
 that aren't obvious until you hit them:
 
 - **`Makefile` and anything under `.github/workflows/*.yml` are
-  protected files** -- `device_commit_files` will reject writes to
-  either (confirmed for `.github/workflows/build.yml` when it was
-  first added -- likely a blanket CI-workflow protection, not specific
-  to this repo). Edit them in the cloud sandbox as normal, verify the
-  build there, then deliver as `Makefile.new` / `build.yml.new` (or
-  similar -- any filename that doesn't match the protected path) via
-  `SendUserFile` + `device_commit_files`. Check for this rejection
-  generically: `device_commit_files`' response has a `rejected` array
-  with the exact path and reason for anything it refused -- don't
-  assume every file in a batch landed just because the call didn't
-  error outright.
-  **The protection is specific to `device_commit_files`, not to the
-  device bridge as a whole** -- `device_bash` has ordinary read/write
-  access to the mounted folder and is NOT blocked from writing
-  `Makefile` directly. So once `Makefile.new` has landed next to
-  `Makefile`, finish the job yourself instead of asking the user to
-  copy it by hand: `device_bash`, `cp Makefile.new Makefile`, then
-  `diff` the two to confirm they're now identical before moving
-  `Makefile.new` into `_to_delete/` (can't delete it outright, same as
-  any other file over this bridge -- see below). Same trick applies to
-  `build.yml.new` under `.github/workflows/`. Only fall back to asking
-  the user to copy it themselves if `device_bash` genuinely can't reach
-  the file for some reason.
-- **The device bridge can't delete files** -- `device_bash`'s `rm`/
-  `rmdir`/`unlink` fail with "Operation not permitted" on mounted
-  files, and `device_commit_files` only writes. To remove a
-  now-superseded file from the user's machine, `mv` it (via
-  `device_bash`) into a `_to_delete/` subfolder next to it, then tell
-  the user which folder to delete themselves.
+  protected against `device_commit_files`** (writes get rejected --
+  check its response's `rejected` array, don't assume a batch landed
+  in full). Edit + verify in the cloud sandbox as normal, deliver as
+  `Makefile.new` / `build.yml.new` via `SendUserFile` +
+  `device_commit_files`, then apply it yourself over `device_bash`
+  (`cp Makefile.new Makefile`, `diff` to confirm, move `Makefile.new`
+  into `_to_delete/`) -- `device_bash` is NOT blocked from writing
+  these files directly, only `device_commit_files` is. See
+  `docs/decisions.md` for the full mechanics.
+- **The device bridge can't delete files, and `git` run through it
+  leaves stale `.git/index.lock` files behind** (even a read-only
+  `git status`). Both fixed the same way -- `mv`, not `rm`. To remove a
+  file, `mv` it into a `_to_delete/` subfolder and tell the user to
+  delete that folder themselves. For git, **always use
+  `tools/device_git.sh`**, never run `git` directly via `device_bash`
+  -- it sweeps stale locks both before and after the real command, so
+  the repo comes back lock-free. See `docs/decisions.md` for why this
+  is needed even for reads.
 - Build and test in the cloud sandbox first (`make clean && make all
   && make iso`), confirm it's clean, *then* deliver + commit files to
   the user's machine. Don't commit unverified changes.
-- **`git` commands run via `device_bash` leave behind a stale
-  `.git/index.lock` -- even a read-only `git status`.** Git creates
-  the lock (to refresh its stat cache, in `status`'s case), then tries
-  to delete it when the command finishes -- but that delete is a plain
-  `unlink`, which the device bridge blocks the same way it blocks `rm`
-  (see above). The command itself still succeeds (you'll just see a
-  `warning: unable to unlink ... Operation not permitted`), but the
-  lock file is left sitting in `.git/`, and the *next* `git` command
-  that needs to write the index (`add`, `commit`, ...) fails hard with
-  `fatal: Unable to create '.../index.lock': File exists` --
-  indistinguishable from a genuinely stuck git process, and just as
-  confusing if it's the user's own terminal that hits it after a
-  session leaves one behind. Unlike `rm`, `mv` *is* allowed through
-  the bridge, so the fix is to rename the lock out of the way, not
-  delete it. **Always use `tools/device_git.sh` for any `git` command
-  run this way** (`status` included, not just writes) -- it sweeps
-  stale locks both before AND after the real command (a short
-  `sleep 0.5` first is load-bearing, not padding -- a lock git just
-  created can be briefly invisible to `find` over this mount; see the
-  script's own top comment), so the repo is lock-free again by the
-  time it returns control to you -- don't hand-roll this check inline,
-  and don't run `git` directly via `device_bash` even for a "harmless"
-  read like `status`.
 
 ## Building
 
@@ -402,12 +324,14 @@ toy-os work this way?" for the handful of decisions that come up again
 once code has grown around them (e.g. "why is the VFS single-backend,
 not mount points", "why doesn't `fs_delete` recurse"). Deliberately a
 *pointer* file, not a second copy of the reasoning: each entry is a
-couple sentences plus a link into the relevant CHANGELOG.md section or
+couple sentences plus a link into the relevant `CHANGELOG.md` (or
+`CHANGELOG-archive.md`, for anything before Build 173) section or
 source file, not the reasoning itself restated. README.md/
-apps/README.md already cover architecture in depth and CHANGELOG.md is
-the full chronological history with rationale -- `docs/decisions.md`
-exists because CHANGELOG.md isn't indexed by topic, so "why is X built
-this way" otherwise means scrolling/searching the whole history.
+apps/README.md already cover architecture in depth and CHANGELOG.md +
+CHANGELOG-archive.md together are the full chronological history with
+rationale -- `docs/decisions.md` exists because neither is indexed by
+topic, so "why is X built this way" otherwise means scrolling/
+searching the whole history.
 Forward-looking "not built yet" items belong in README.md's existing
 **Ideas for what's next** section instead (already actively
 maintained, with completed items struck through and linked to the
