@@ -121,9 +121,9 @@ only exists for a future NIC driver to set up its descriptor ring once
 at init, and no allocator changed size class, hot/cold split, or
 scan strategy in a way this could regress. Replacing the whole
 allocator to solve a fragmentation problem no code in this kernel has
-actually hit yet was judged premature; it's flagged in README.md's
-**Ideas for what's next** as the fix if that ever changes, not built
-now. See `pmm.h`'s top comment and CHANGELOG.md's **Build 410** for the
+actually hit yet was judged premature; it's flagged in
+`docs/roadmap.md` as the fix if that ever changes, not built now. See
+`pmm.h`'s top comment and CHANGELOG.md's **Build 410** for the
 full writeup, including `pmm_selftest()`'s boot-time verification
 (no consumer exists yet to exercise these functions any other way).
 
@@ -268,8 +268,8 @@ crashed *scheduled* ring-3 process doesn't halt the kernel, these two
 commands kept requiring a reboot anyway -- not because teardown didn't
 reach them, but because they intentionally drop to ring 3 via their
 own raw `iretq` instead of `process_run_ring3()`, so there's nowhere
-for the kernel to recover them *to*. See `process.h` and README's
-"Ideas for what's next".
+for the kernel to recover them *to*. See `process.h` and
+`docs/roadmap.md`.
 
 ## `/etc` is one shared `toyos.conf` by default, not a file per setting
 

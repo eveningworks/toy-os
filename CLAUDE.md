@@ -332,11 +332,10 @@ CHANGELOG-archive.md together are the full chronological history with
 rationale -- `docs/decisions.md` exists because neither is indexed by
 topic, so "why is X built this way" otherwise means scrolling/
 searching the whole history.
-Forward-looking "not built yet" items belong in README.md's existing
-**Ideas for what's next** section instead (already actively
-maintained, with completed items struck through and linked to the
-CHANGELOG build that finished them) -- don't duplicate that list here
-or start a second one.
+Forward-looking "not built yet" items belong in `docs/roadmap.md`
+instead (already actively maintained, with completed items struck
+through and linked to the CHANGELOG build that finished them) -- don't
+duplicate that list here or start a second one.
 
 When you resolve a "wait, why is this built this way" question during
 a session (by reading CHANGELOG.md, a source comment, or by asking the
