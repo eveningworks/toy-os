@@ -307,23 +307,42 @@ SEED_BINARIES = \
 	$(CRASH_TEST_ELF):crash_test \
 	$(SOCKET_TEST_ELF):socket_test
 
-# Seeds $(DISK_IMG) with every SEED_BINARIES entry via
-# tools/tfs2_writer.py's `sync` (see docs/decisions.md) -- this is what
-# gets each binary onto disk now, replacing both the old boot-time
-# BIN_BOOTSTRAP/GRUB-module install (kernel/core/kernel.c, lspci only)
-# and the older still per-binary GRUB-module test harnesses (kernel/
-# core/*_test.c, all the rest -- see docs/decisions.md for the full
-# migration). Runs every `make iso`, not just when $(DISK_IMG) is first
-# created: `sync`'s content-hash compare makes every call after the
-# first a fast no-op unless a binary actually changed, so this always
-# leaves disk.img current with whatever was just built. PHONY (not a
-# real file target) specifically so it re-runs every time rather than
-# being skipped once its prerequisites look up to date -- the
-# "up to date" check IS the content-hash compare inside sync itself,
-# not something make's own mtime logic should try to shortcut.
+# Seeds $(DISK_IMG) with every SEED_BINARIES entry, plus the /etc/kbs/*
+# keyboard-layout data files, via tools/tfs2_writer.py's `sync` (see
+# docs/decisions.md) -- this is what gets each binary onto disk now,
+# replacing both the old boot-time BIN_BOOTSTRAP/GRUB-module install
+# (kernel/core/kernel.c, lspci only) and the older still per-binary
+# GRUB-module test harnesses (kernel/core/*_test.c, all the rest --
+# see docs/decisions.md for the full migration). Runs every `make iso`,
+# not just when $(DISK_IMG) is first created: `sync`'s content-hash
+# compare makes every call after the first a fast no-op unless
+# something actually changed, so this always leaves disk.img current
+# with whatever was just built. PHONY (not a real file target)
+# specifically so it re-runs every time rather than being skipped once
+# its prerequisites look up to date -- the "up to date" check IS the
+# content-hash compare inside sync itself, not something make's own
+# mtime logic should try to shortcut.
+#
+# The /etc/kbs/us and /etc/kbs/se files are regenerated here (not
+# hand-maintained) via tools/gen_kbs.py -- see that script's top
+# comment. It needs `xkbcli` (Debian/Ubuntu: `apt-get install
+# libxkbcommon-tools`); if that's missing, this prints a warning and
+# skips regenerating them rather than failing the build -- whatever's
+# already in $(SEED_DIR)/sync/etc/kbs (nothing, on a machine that's
+# never had xkbcli, including most CI runners) just doesn't get synced
+# onto disk.img, and the kernel's own compiled-in US fallback
+# (keyboard_layout.c) keeps the keyboard working regardless. Delete
+# $(SEED_DIR)/sync/etc/kbs and re-run `make iso` to force a fresh
+# regenerate once xkbcli is installed.
 seed: $(DISK_IMG) $(LSPCI_ELF) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF)
 	mkdir -p $(SEED_DIR)/sync/bin
 	$(foreach pair,$(SEED_BINARIES),cp $(word 1,$(subst :, ,$(pair))) $(SEED_DIR)/sync/bin/$(word 2,$(subst :, ,$(pair)));)
+	@if command -v xkbcli >/dev/null 2>&1; then \
+		python3 tools/gen_kbs.py us --write; \
+		python3 tools/gen_kbs.py se --write; \
+	else \
+		echo "seed: xkbcli not found -- skipping /etc/kbs regeneration (apt-get install libxkbcommon-tools to enable; kernel falls back to compiled-in US regardless)"; \
+	fi
 	python3 tools/tfs2_writer.py sync $(DISK_IMG) $(SEED_DIR)
 
 iso: version $(KERNEL) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF) seed

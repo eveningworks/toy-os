@@ -1,4 +1,5 @@
 #include "keyboard.h"
+#include "keyboard_layout.h"
 #include "io.h"
 #include "vga.h"
 #include "klog.h"
@@ -11,76 +12,6 @@ static volatile unsigned int ring_head = 0;
 static volatile unsigned int ring_tail = 0;
 static int shift_pressed = 0;
 static int extended_prefix = 0;
-static enum keyboard_layout current_layout = KB_LAYOUT_US;
-
-// US QWERTY scancode set 1, unshifted
-static const char scancode_ascii[128] = {
-    0, 27, '1','2','3','4','5','6','7','8','9','0','-','=', '\b',
-    '\t', 'q','w','e','r','t','y','u','i','o','p','[',']', '\n',
-    0, 'a','s','d','f','g','h','j','k','l',';','\'','`',
-    0, '\\', 'z','x','c','v','b','n','m',',','.','/', 0,
-    '*', 0, ' ', 0,
-};
-
-// Shifted variant
-static const char scancode_ascii_shift[128] = {
-    0, 27, '!','@','#','$','%','^','&','*','(',')','_','+', '\b',
-    '\t', 'Q','W','E','R','T','Y','U','I','O','P','{','}', '\n',
-    0, 'A','S','D','F','G','H','J','K','L',':','"','~',
-    0, '|', 'Z','X','C','V','B','N','M','<','>','?', 0,
-    '*', 0, ' ', 0,
-};
-
-// Swedish/Finnish physical layout -- identical to scancode_ascii[]
-// except at the three scancodes whose physical keycap is Å/Ä/Ö on a
-// real Nordic keyboard: scancode 0x1A (US '['), 0x27 (US ';'), and
-// 0x28 (US '\''). Deliberately NOT a from-scratch remap of every key
-// (AltGr-level symbols like @/{/} live elsewhere on a real Nordic
-// keyboard too, but there's no AltGr handling in this driver at all --
-// see keyboard.h's IS_NORDIC_CHAR() comment) -- this covers exactly
-// the three letters the user asked for (Ä/Ö/Å) at their real physical
-// positions, everything else stays US QWERTY. The values here are
-// Latin-1 codepoints (font_ttf.h bakes glyphs for exactly these, see
-// tools/genttf.py's EXTRA_CHARS) stored as `char` -- note this build
-// has no -funsigned-char, so these bit patterns are negative as `char`
-// but every reader casts through (unsigned char) before use (see
-// keyboard_feed_byte()'s ring_push() call and gfx.c's
-// font_ttf_glyph_index()) rather than relying on char's signedness.
-static const char scancode_ascii_se[128] = {
-    0, 27, '1','2','3','4','5','6','7','8','9','0','-','=', '\b',
-    '\t', 'q','w','e','r','t','y','u','i','o','p', (char)CHAR_A_RING_LC, ']', '\n',
-    0, 'a','s','d','f','g','h','j','k','l', (char)CHAR_O_DIAERESIS_LC, (char)CHAR_A_DIAERESIS_LC, '`',
-    0, '\\', 'z','x','c','v','b','n','m',',','.','/', 0,
-    '*', 0, ' ', 0,
-};
-
-static const char scancode_ascii_shift_se[128] = {
-    0, 27, '!','@','#','$','%','^','&','*','(',')','_','+', '\b',
-    '\t', 'Q','W','E','R','T','Y','U','I','O','P', (char)CHAR_A_RING, '}', '\n',
-    0, 'A','S','D','F','G','H','J','K','L', (char)CHAR_O_DIAERESIS, (char)CHAR_A_DIAERESIS, '~',
-    0, '|', 'Z','X','C','V','B','N','M','<','>','?', 0,
-    '*', 0, ' ', 0,
-};
-
-void keyboard_set_layout(enum keyboard_layout layout) {
-    current_layout = layout;
-    // Called once at boot (keyboard_config_init(), applying whatever
-    // was persisted to /etc/toyos.conf) and again any time the `keyboard`
-    // shell command switches it live -- logging here covers both
-    // call sites for free instead of needing a separate log line at
-    // each caller.
-    klog_write("keyboard: layout set to ");
-    klog_write(keyboard_layout_name(layout));
-    klog_write("\n");
-}
-
-enum keyboard_layout keyboard_get_layout(void) {
-    return current_layout;
-}
-
-const char *keyboard_layout_name(enum keyboard_layout layout) {
-    return layout == KB_LAYOUT_SE ? "se" : "us";
-}
 
 #define LEFT_SHIFT_PRESS   0x2A
 #define LEFT_SHIFT_RELEASE 0xAA
@@ -112,11 +43,10 @@ static int ring_pop(uint16_t *out) {
 #define SC_DELETE      0x53
 
 // F2/F3, unlike the keys above, aren't 0xE0-prefixed extended scancodes
-// -- they're plain scancodes like any letter key, just two this file
-// didn't give a ring_push() before (scancode_ascii[0x3C]/[0x3D] are 0,
-// their default zero-initialized value, so they silently did nothing on
-// press). Checked explicitly, before the ASCII table lookup, same as
-// the shift keys below them.
+// -- they're plain scancodes like any letter key, just two no layout
+// table maps to anything (scancode 0x3C/0x3D are unmapped -- 0, same
+// "nothing happens" as any other unmapped slot). Checked explicitly,
+// before the layout translation, same as the shift keys below them.
 #define SC_F2 0x3C
 #define SC_F3 0x3D
 
@@ -164,13 +94,7 @@ void keyboard_feed_byte(uint8_t sc) {
     if (sc == SC_F3) { ring_push(KEY_F3); return; }
 
     if (sc >= 128) return;
-    const char *table;
-    if (current_layout == KB_LAYOUT_SE) {
-        table = shift_pressed ? scancode_ascii_shift_se : scancode_ascii_se;
-    } else {
-        table = shift_pressed ? scancode_ascii_shift : scancode_ascii;
-    }
-    char c = table[sc];
+    char c = keyboard_layout_translate(sc, shift_pressed);
     if (c) ring_push((uint8_t)c);
 }
 

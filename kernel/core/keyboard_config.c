@@ -5,6 +5,7 @@
 // tz.c/font_config.c) -- this setting was added after toyos.conf
 // already existed, so it never had an earlier standalone-file form.
 #include "keyboard_config.h"
+#include "keyboard_layout.h"
 #include "fs.h"
 #include "string.h"
 #include "etc_config.h"
@@ -13,15 +14,20 @@
 #define KEYBOARD_CONFIG_KEY "keyboard_layout"
 
 void keyboard_config_init(void) {
-    char value[8];
-    if (!etc_config_get(KEYBOARD_CONFIG_FILE, KEYBOARD_CONFIG_KEY, value, sizeof(value))) return;
-
-    if (k_strcmp(value, "se") == 0) keyboard_set_layout(KB_LAYOUT_SE);
-    else if (k_strcmp(value, "us") == 0) keyboard_set_layout(KB_LAYOUT_US);
-    // anything else (typo from hand-editing toyos.conf) -- keep the
-    // compiled-in KB_LAYOUT_US default rather than guessing
+    char value[KB_LAYOUT_NAME_MAX];
+    // Always call keyboard_layout_load() -- even with no persisted
+    // value -- so the layout tables are actually populated by the
+    // time this returns. keyboard_layout_load()'s own fallback chain
+    // (requested name -> /etc/kbs/us -> compiled-in US) means passing
+    // "us" here when nothing's persisted yet does exactly the right
+    // thing either way.
+    if (!etc_config_get(KEYBOARD_CONFIG_FILE, KEYBOARD_CONFIG_KEY, value, sizeof(value))) {
+        keyboard_layout_load("us");
+        return;
+    }
+    keyboard_layout_load(value);
 }
 
-void keyboard_config_save(enum keyboard_layout layout) {
-    etc_config_set(KEYBOARD_CONFIG_FILE, KEYBOARD_CONFIG_KEY, keyboard_layout_name(layout));
+void keyboard_config_save(const char *name) {
+    etc_config_set(KEYBOARD_CONFIG_FILE, KEYBOARD_CONFIG_KEY, name);
 }

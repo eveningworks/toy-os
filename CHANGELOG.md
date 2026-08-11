@@ -876,6 +876,80 @@ forever.
     elsewhere could in principle interleave with the debug console's
     own output. Accepted for a debug-only tool rather than adding new
     synchronization machinery for it.
+- **Data-driven keyboard layouts (`/etc/kbs/<name>`), replacing the
+  compiled-in two-layout enum.** Reported bug: on the Finnish/Swedish
+  physical keyboard, the key next to the right Shift (US legend `/`)
+  should type `-`/`_`, not `/`/`?` -- the old `se` layout only remapped
+  the three Å/Ä/Ö keys, nothing else. User chose, via
+  `AskUserQuestion`: `name=value` files (reusing the shape of
+  `etc_config.h`'s existing format, though not its parser -- see
+  below), scancode translation moved into its own new
+  `kernel/core/keyboard_layout.c` rather than staying in
+  `keyboard.c` (the driver's job is raw scancodes/shift-state, not
+  owning character tables), layout files generated from Linux's own
+  XKB layout data rather than hand-typed, and seeded onto `disk.img`
+  at build time so they ship in the repo/ISO like `/bin/lspci` already
+  does.
+  - New `tools/gen_kbs.py`: runs `xkbcli compile-keymap --layout
+    <name>` (part of `libxkbcommon-tools`, no X server needed) and
+    emits an `/etc/kbs/<name>` file from it. Only translates shift
+    levels 1-2 (base + Shift) -- this driver has no AltGr handling at
+    all, so level 3/4 symbols would be unreachable anyway -- and only
+    characters this kernel's font can render (ASCII + the six Nordic
+    Latin-1 letters). Dead keys (e.g. Swedish's acute/grave accent
+    key) aren't composed, mapped instead to their plain undead glyph,
+    same simplification XKB's own `nodeadkeys` variants make.
+    `python3 tools/gen_kbs.py <xkb-layout> --write` regenerates
+    `seed/sync/etc/kbs/<name>`; adding a third layout later is running
+    this once, not an afternoon with a scancode chart.
+  - New `kernel/include/keyboard_layout.h` / `kernel/core/keyboard_layout.c`:
+    `keyboard_layout_load(name)` reads `/etc/kbs/<name>` (own small
+    parser, not `etc_config_get()` -- that one's `ETC_CONFIG_MAX` write
+    buffer is far too small for a ~130-line layout file, and it strips
+    a trailing `#...` as a comment even on a real data line, which
+    would silently eat the `#` character itself as a mapped value);
+    falls back to `/etc/kbs/us`, then to a small compiled-in US table,
+    if the requested (or even `us`) file can't be read -- so the
+    keyboard is never left producing nothing. Returns whether the
+    requested file was actually found, so the shell's `keyboard`
+    command can tell the user when it silently fell back.
+    `keyboard_layout_translate(scancode, shift)` is the one lookup
+    `keyboard.c`'s `keyboard_feed_byte()` now calls.
+  - `keyboard.c`/`keyboard.h`: removed `enum keyboard_layout`,
+    `scancode_ascii[]`/`scancode_ascii_se[]` and their shifted
+    variants, `keyboard_set_layout()`/`keyboard_get_layout()`/
+    `keyboard_layout_name()` -- the driver now only tracks shift/
+    extended-prefix state and calls `keyboard_layout_translate()`.
+  - `keyboard_config.c`/`.h`: persistence now works from a plain layout
+    name string (`"keyboard_layout=<name>"` in `/etc/toyos.conf`, as
+    before) instead of the enum; always calls
+    `keyboard_layout_load()` at boot (even with nothing persisted yet)
+    so the tables are populated before the first keypress, not left
+    zeroed until something explicitly loads a layout.
+  - `apps/shell_sys.c`'s `keyboard` command: `keyboard <name>` now
+    accepts any name with a matching `/etc/kbs/` file, not just a
+    hardcoded `us`/`se` check; reports "not found ... reverted to us"
+    on an unknown name instead of a fixed error list.
+  - `kapi.h` gained `keyboard_layout.h` (apps/ only ever reach the
+    driver surface through `kapi.h` -- see `CLAUDE.md`).
+  - Real bug caught mid-implementation, not by review: an early cut of
+    `tools/gen_kbs.py`'s key list only covered the printable
+    alphanumeric block and omitted Escape/Backspace/Tab/Enter
+    entirely -- so the moment the shell loaded layouts from these
+    generated files instead of `keyboard.c`'s old compiled-in tables,
+    Enter stopped submitting a command at all (silently swallowed,
+    every keystroke just kept appending to the prompt). Caught by
+    actually testing in QMP (typing `keyboard se` produced
+    `keyboardse` with no newline), not by reading the generator's
+    code. Fixed by adding the four control keys to the generator's key
+    list with their own keysym-name mappings.
+  - Verified via QMP: `keyboard` alone reports the current layout;
+    `keyboard se` switches and the right-Shift-adjacent key now types
+    `-`/`_` (previously `/`/`?`); `keyboard xyz` reports "not found"
+    and reverts to `us`; Å/Ä/Ö still type correctly under `se`;
+    Backspace/Enter both still work after switching layouts; the
+    choice survives a QMP `system_reset` (persisted layout reloads at
+    boot). Screenshots in `screenshots/2026-08-11/`.
 
 ### Changed
 - Versioning switched from a per-change build-number scheme

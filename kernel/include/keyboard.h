@@ -66,28 +66,13 @@
 // own copy of the same check.
 #define IS_PRINTABLE_KEY(k) (((k) >= 32 && (k) < 127) || IS_NORDIC_CHAR(k))
 
-// Which physical scancode -> character mapping keyboard_feed_byte()
-// uses. KB_LAYOUT_SE is the standard Swedish/Finnish physical layout
-// for the three keys that differ from US QWERTY (see keyboard.c's
-// scancode_ascii_se[]/scancode_ascii_shift_se[]) -- everything else
-// (letters, numbers, punctuation not involving Å/Ä/Ö) stays identical
-// to KB_LAYOUT_US, so this is deliberately not a full from-scratch
-// Nordic layout remap.
-enum keyboard_layout {
-    KB_LAYOUT_US,
-    KB_LAYOUT_SE,
-};
-
-// Switches the active scancode table. Does NOT persist -- see
-// kernel/core/keyboard_config.h for the /etc-backed persistence layer
-// built on top of this, the same split tz_set_index() (selects) vs
-// rtc_read_local() (applies) already uses.
-void keyboard_set_layout(enum keyboard_layout layout);
-enum keyboard_layout keyboard_get_layout(void);
-
-// "us"/"se" -- the exact strings keyboard_config.c persists and the
-// shell's `keyboard` command matches against.
-const char *keyboard_layout_name(enum keyboard_layout layout);
+// Scancode->character translation itself lives in
+// kernel/include/keyboard_layout.h / kernel/core/keyboard_layout.c now
+// -- data-driven from /etc/kbs/<name> files rather than a compiled-in
+// enum of two hardcoded layouts. See that header's top comment and
+// docs/decisions.md. keyboard.c (this driver) only owns raw
+// scancode/shift-state/extended-prefix handling; it calls into
+// keyboard_layout_translate() for the actual character.
 
 // Called by i8042_poll() with one byte already read from the shared
 // PS/2 data port. Don't call this from an IRQ handler directly.

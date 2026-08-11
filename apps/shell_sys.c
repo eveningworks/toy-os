@@ -445,33 +445,30 @@ void cmd_fontsize(const char *args) {
     vga_write(".\n");
 }
 
-// Changes the active keyboard scancode layout (see keyboard.h/
-// keyboard.c) -- `us` (default, plain QWERTY) or `se` (Swedish/Finnish
-// physical positions for Å/Ä/Ö, everything else stays US QWERTY --
-// see scancode_ascii_se[]'s comment for why it's not a full remap).
-// `keyboard` alone shows the current layout. Persists via
-// keyboard_config_save() so it survives a reboot -- same pattern as
-// `fontsize`/`timezone`.
+// Changes the active keyboard scancode layout -- any name with a
+// matching /etc/kbs/<name> file (see kernel/core/keyboard_layout.c and
+// tools/gen_kbs.py; `us` and `se`/Finnish ship by default). `keyboard`
+// alone shows the current layout. Persists via keyboard_config_save()
+// so it survives a reboot -- same pattern as `fontsize`/`timezone`.
 void cmd_keyboard(const char *args) {
     if (!args || k_strlen(args) == 0) {
-        vga_write("usage: keyboard <us|se>  (currently: ");
-        vga_write(keyboard_layout_name(keyboard_get_layout()));
+        vga_write("usage: keyboard <name>  (currently: ");
+        vga_write(keyboard_layout_current());
         vga_write(")\n");
         return;
     }
-    enum keyboard_layout want;
-    if (k_strcmp(args, "us") == 0) want = KB_LAYOUT_US;
-    else if (k_strcmp(args, "se") == 0) want = KB_LAYOUT_SE;
-    else {
-        vga_write("keyboard: unknown layout '");
+    int found = keyboard_layout_load(args);
+    keyboard_config_save(keyboard_layout_current());
+    if (!found) {
+        vga_write("keyboard: '");
         vga_write(args);
-        vga_write("' -- try us or se\n");
+        vga_write("' not found in /etc/kbs -- reverted to ");
+        vga_write(keyboard_layout_current());
+        vga_write("\n");
         return;
     }
-    keyboard_set_layout(want);
-    keyboard_config_save(want);
     vga_write("Keyboard layout set to ");
-    vga_write(keyboard_layout_name(want));
+    vga_write(keyboard_layout_current());
     vga_write(".\n");
 }
 
