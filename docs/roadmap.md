@@ -3,6 +3,29 @@
 Forward-looking "not built yet" items, moved out of README.md to keep that file focused on "what toy-os can do today." Completed items are struck through and linked to the CHANGELOG build that finished them --
 this list is actively maintained, not a stale wishlist. See `docs/decisions.md` for *why* existing things are built the way they are, and `CHANGELOG.md`/`CHANGELOG-archive.md` for the full history.
 
+## At a glance
+
+**In progress / up next**
+- [ ] Real disk-hosted ELF binaries -- load from `/bin` at runtime instead of every `.elf` being a GRUB module baked into the ISO (investigated, not started -- see the full A/B breakdown below)
+- [ ] TCP/IP networking -- the infra pieces are done (PCI enumeration, IRQ registration, contiguous/DMA memory, the socket/fd syscall surface, IRQ-driven DMA example); no NIC driver or protocol stack yet
+
+**Backlog**
+- [ ] `wintest` (`SYS_WIN_*`) windows made non-modal, sharing scheduler time with the kernel-space window manager instead of taking the CPU exclusively
+- [ ] `g_next_kernel_rsp` reentrancy fixed properly, so a real blocking syscall doesn't need to spin-poll from ring 3 the way `echotest` does today
+- [ ] `fs_write()` offset-based partial writes (today it's whole-string append/overwrite only)
+- [ ] A real C library on top of `filetest`'s fd-aware syscalls: CRT0 (argc/argv), TLS (FS.base), FPU/SSE context-switch save/restore
+- [ ] Notepad: editable filename (currently fixed to `notepad.txt`)
+- [ ] VFS: multiple filesystem backends mounted at once, not just one chosen at boot
+- [ ] AHCI/SATA driver -- today's `ata.c` depends on the legacy IDE controller real modern hardware increasingly lacks
+
+**Recently done**
+- [x] Reusable UI widgets (`apps/widgets.h`: button, scrollback, scrollbar, text field, checkbox)
+- [x] Dirty-rectangle rendering -- partial: bounding-box blit + a cheap cursor-only fast path, full per-widget scene dirty-tracking still not done
+- [x] GUI terminal-emulator app (`apps/terminal.c`, runs the real shell in a window)
+- [x] Scrollbars for Terminal and Notepad (Page Up/Down, draggable thumb, mouse wheel)
+- [x] Process exit/teardown -- a faulted or crashed ring-3 process no longer halts the whole kernel
+
+Full detail, reasoning, and CHANGELOG links for every item below.
 
 - ~~Scrollbars for Terminal and Notepad~~ -- done (see CHANGELOG.md's
   builds 263, 273, 283, 293): Page Up/Page Down, a real visual
