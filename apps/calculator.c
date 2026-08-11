@@ -13,10 +13,20 @@
 // GRID_ROWS/GRID_COLS if it doesn't fit the existing grid. Nothing else
 // in this file needs to change -- layout, drawing, and click hit-testing
 // are all generic over BUTTONS[].
+//
+// The button grid itself is now a struct ui_button_group (ui_button.h/
+// ui_button_group.h) rather than a hand-rolled `int g_pressed_index` +
+// private button_at() hit-test loop -- this file used to be exactly the
+// "app invents its own buttons" case that motivated pulling that state
+// and hit-testing out into a real, reusable object. See
+// docs/decisions.md for the writeup and why it's modeled on Brutal OS's
+// libs/brutal-ui/button.c.
 #include "calculator.h"
 #include "calc_engine.h"
 #include "wm/wm.h"
 #include "widgets.h"
+#include "ui_button.h"
+#include "ui_button_group.h"
 #include "theme.h"
 #include "kapi.h"
 
@@ -24,17 +34,9 @@
 // the window manager only allows one open Calculator window at a time.
 static struct calc_state g_calc;
 
-// Which BUTTONS[] index is currently held down, or -1 -- purely a GUI
-// concern (which button visibly looks pressed right now), deliberately
-// NOT part of struct calc_state (calc_engine.h), which stays free of
-// any gfx.h/wm.h dependency per this file's own top comment. Driven by
-// calculator_press()/calculator_release() below (gui_apps.h's on_press/
-// on_release), read by calculator_draw() to pass widget_button() its
-// `pressed` flag.
-static int g_pressed_index = -1;
-
 #define GRID_COLS 4
 #define GRID_ROWS 5
+#define BUTTON_COUNT (GRID_ROWS * GRID_COLS)
 
 struct calc_button {
     const char *label; // what's drawn on the button
@@ -42,16 +44,28 @@ struct calc_button {
 };
 
 // Row-major, top-left to bottom-right -- this table IS the layout, both
-// for drawing (calculator_draw walks it in order) and for the keyboard
-// (calculator_key looks a pressed key up in it via code_for_key()), so
-// the two can never drift out of sync with each other.
-static const struct calc_button BUTTONS[GRID_ROWS * GRID_COLS] = {
+// for populating g_buttons[] (calculator_layout() walks it in order) and
+// for the keyboard (calculator_key() looks a pressed key up in it via
+// code_for_key()), so the two can never drift out of sync with each
+// other.
+static const struct calc_button BUTTONS[BUTTON_COUNT] = {
     { "C",   'C' }, { "CE",  'E' }, { "%",   '%' }, { "/",   '/' },
     { "7",   '7' }, { "8",   '8' }, { "9",   '9' }, { "*",   '*' },
     { "4",   '4' }, { "5",   '5' }, { "6",   '6' }, { "-",   '-' },
     { "1",   '1' }, { "2",   '2' }, { "3",   '3' }, { "+",   '+' },
     { "+/-", 's' }, { "0",   '0' }, { ".",   '.' }, { "=",   '=' },
 };
+
+// The live ui_button objects -- BUTTONS[] above stays the static
+// label/code source of truth, these hold the per-instance geometry and
+// (new) `pressed` state ui_button_group drives. Populated once (label/
+// colors/code) by calculator_open() via ui_button_init(), re-positioned
+// every draw/press/click by calculator_layout() via
+// ui_button_set_geometry() -- see ui_button.h for why those are two
+// different calls: re-running ui_button_init() every frame would zero
+// `pressed` right before it could ever be drawn.
+static struct ui_button g_buttons[BUTTON_COUNT];
+static struct ui_button_group g_group;
 
 // Sized off the largest baked font (20x40px, see font_ttf.c) so buttons
 // never clip at any font size -- same reasoning as notepad.c's BTN_W,
@@ -73,11 +87,6 @@ void calculator_default_size(int *w, int *h) {
     *h = MARGIN + DISPLAY_H + DISPLAY_GAP + GRID_ROWS * BTN_H + (GRID_ROWS - 1) * BTN_GAP + MARGIN;
 }
 
-void calculator_open(struct window *win) {
-    calc_reset(&g_calc);
-    window_set_state(win, &g_calc);
-}
-
 static void button_rect(int index, int *bx, int *by, int *bw, int *bh) {
     int row = index / GRID_COLS;
     int col = index % GRID_COLS;
@@ -85,6 +94,36 @@ static void button_rect(int index, int *bx, int *by, int *bw, int *bh) {
     *bh = BTN_H;
     *bx = MARGIN + col * (BTN_W + BTN_GAP);
     *by = MARGIN + DISPLAY_H + DISPLAY_GAP + row * (BTN_H + BTN_GAP);
+}
+
+// Refreshes every button's position from button_rect() -- geometry is
+// font-size-dependent (BTN_W/BTN_H both read gfx_char_w()/gfx_char_h()
+// live) so this needs to re-run before every draw/press/click, not just
+// once at open. Deliberately doesn't touch label/bg/fg/code/pressed --
+// see ui_button_set_geometry()'s own doc comment.
+static void calculator_layout(void) {
+    for (int i = 0; i < BUTTON_COUNT; i++) {
+        int bx, by, bw, bh;
+        button_rect(i, &bx, &by, &bw, &bh);
+        ui_button_set_geometry(&g_buttons[i], bx, by, bw, bh);
+    }
+}
+
+void calculator_open(struct window *win) {
+    calc_reset(&g_calc);
+    window_set_state(win, &g_calc);
+
+    uint32_t fg = THEME_TEXT;
+    uint32_t btn_bg = THEME_BUTTON_BG;
+    uint32_t op_btn_bg = gfx_rgb(210, 218, 235); // operators stand out slightly
+    for (int i = 0; i < BUTTON_COUNT; i++) {
+        char c = BUTTONS[i].code;
+        int is_op = (c == '+' || c == '-' || c == '*' || c == '/' || c == '%' || c == '=');
+        ui_button_init(&g_buttons[i], 0, 0, 0, 0, BUTTONS[i].label,
+                        is_op ? op_btn_bg : btn_bg, fg, (int)(unsigned char)c);
+    }
+    ui_button_group_init(&g_group, g_buttons, BUTTON_COUNT);
+    calculator_layout();
 }
 
 void calculator_draw(struct window *win) {
@@ -97,8 +136,6 @@ void calculator_draw(struct window *win) {
     uint32_t bg = THEME_PANEL_BG;
     uint32_t fg = THEME_TEXT;
     uint32_t display_bg = THEME_WHITE;
-    uint32_t btn_bg = THEME_BUTTON_BG;
-    uint32_t op_btn_bg = gfx_rgb(210, 218, 235); // operators stand out slightly
     gfx_fill_rect(cx, cy, cw, ch, bg);
 
     // Display: right-aligned, like a real calculator.
@@ -110,48 +147,27 @@ void calculator_draw(struct window *win) {
     int text_y = cy + MARGIN + (DISPLAY_H - gfx_char_h()) / 2;
     gfx_draw_string(text_x, text_y, st->display, fg, display_bg);
 
-    for (int i = 0; i < GRID_ROWS * GRID_COLS; i++) {
-        int bx, by, bw, bh;
-        button_rect(i, &bx, &by, &bw, &bh);
-        char c = BUTTONS[i].code;
-        int is_op = (c == '+' || c == '-' || c == '*' || c == '/' || c == '%' || c == '=');
-        uint32_t this_bg = is_op ? op_btn_bg : btn_bg;
-        widget_button(cx + bx, cy + by, bw, bh, BUTTONS[i].label, this_bg, fg, i == g_pressed_index);
-    }
-}
-
-// Which button (if any) is under (cx, cy) -- shared by calculator_click
-// and calculator_press so they can never disagree about hit-testing the
-// same grid.
-static int button_at(int cx, int cy) {
-    for (int i = 0; i < GRID_ROWS * GRID_COLS; i++) {
-        int bx, by, bw, bh;
-        button_rect(i, &bx, &by, &bw, &bh);
-        if (widget_hit(bx, by, bw, bh, cx, cy)) return i;
-    }
-    return -1;
+    calculator_layout();
+    ui_button_group_draw(&g_group, cx, cy);
 }
 
 // gui_apps.h's on_press: called every tick the button's held, starting
 // with the initial button-down. Returns 1 (redraw needed) only when
 // which button is "hot" actually changed -- e.g. moving off every
 // button, or sliding onto a different one without releasing, both
-// un-press/re-press exactly like a real OS button. Deliberately does
-// NOT call calc_input() itself -- that still only happens on the
-// button-UP click (calculator_click()), so holding a button down and
-// dragging off before releasing doesn't accidentally act on it, same
-// as clicking any real button.
+// un-press/re-press exactly like a real OS button (ui_button_group_press()
+// handles this). Deliberately does NOT call calc_input() itself -- that
+// still only happens on the button-UP click (calculator_click()), so
+// holding a button down and dragging off before releasing doesn't
+// accidentally act on it, same as clicking any real button.
 int calculator_press(struct window *win, int cx, int cy) {
     (void)win;
-    int hit = button_at(cx, cy);
-    if (hit == g_pressed_index) return 0;
-    g_pressed_index = hit;
-    return 1;
+    calculator_layout();
+    return ui_button_group_press(&g_group, cx, cy);
 }
 
 void calculator_release(struct window *win) {
-    (void)win;
-    g_pressed_index = -1;
+    ui_button_group_release(&g_group);
     window_invalidate(win);
 }
 
@@ -178,8 +194,9 @@ void calculator_key(struct window *win, int key) {
 
 void calculator_click(struct window *win, int cx, int cy) {
     struct calc_state *st = (struct calc_state *)window_get_state(win);
-    int hit = button_at(cx, cy);
-    if (hit < 0) return;
-    calc_input(st, BUTTONS[hit].code);
+    calculator_layout();
+    int code = ui_button_group_click(&g_group, cx, cy);
+    if (code < 0) return;
+    calc_input(st, (char)code);
     window_invalidate(win);
 }

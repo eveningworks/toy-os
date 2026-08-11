@@ -636,3 +636,49 @@ press-and-repeat spinner) to reinvent it from scratch. See
 (why it fires on the initial button-down tick, why it returns 1 only
 when the "hot" button changes, how drag-off-before-release un-presses
 without triggering the button).
+
+## ui_button/ui_button_group: Brutal-OS-inspired, but not a full retained view system
+
+Asked directly to look at Brutal OS's `libs/brutal-ui/button.c`/`.h` and
+consider whether toy-os should have "own libs for GUI apps" the same
+way. Worth separating two things that question conflates: the
+*insulation boundary* (apps not reaching into WM internals) already
+existed -- every `apps/*.c` file only ever includes `wm/wm.h` (the
+public `window_*` API) and `widgets.h`, never `wm_internal.h` (that's
+`apps/wm/*.c`'s own private `extern` state). What Brutal's button.c
+actually demonstrates is different: a widget as a self-contained
+*object* that owns its state (`press`/`over` flags) and reacts to
+events, versus toy-os's old style of `widgets.h` being pure draw
+functions (`widget_button(x, y, w, h, ...)`) with every app hand-rolling
+its own state next to them (`calculator.c`'s `g_pressed_index`).
+
+Went with a scaled-down version of that idea (`ui_button`/
+`ui_button_group`), not Brutal's full model. Brutal's `UiView` is a
+generic base struct every widget inherits via a cast macro
+(`ui_button$(VIEW)`), composed into a tree (`ui_view_mount()`), laid out
+with a string DSL (`"dock p-8"`), and dispatched a general `UiEvent`
+enum including `UI_EVENT_ENTER`/`UI_EVENT_LEAVE` for hover. toy-os's WM
+doesn't have (or need) most of that: there's no view tree, no
+mouse-enter/leave dispatch, no generic layout engine, and building one
+just to host a button object would be solving a problem this GUI
+doesn't have yet. `ui_button` is a plain struct with geometry, label,
+colors, and a `pressed` flag; `ui_button_group` is the part that owns
+hit-testing and "which one is down" over a caller-owned array. Both
+drop straight into the existing `gui_apps.h` `on_press`/`on_click`/
+`on_release` contract (see the entry above this one) rather than
+inventing a second event model beside it.
+
+**Why `apps/calculator.c` only, not also `apps/notepad.c`'s Save/Load
+buttons in the same change:** they're the obvious second caller, but
+migrating them isn't quite a pure rename -- `notepad_click()`'s
+hit-test for Save/Load currently uses the *full* `TOOLBAR_H` height
+(`widget_hit(save_x0, 0, BTN_W, TOOLBAR_H, cx, cy)`), taller than the
+button `notepad_draw()` actually paints (`by`/`bh`, inset by
+`BTN_MARGIN`) -- a small pre-existing looseness where clicking just
+above/below the visible button still works. Routing that through
+`ui_button_group`, which hit-tests against the button's own drawn
+geometry, would tighten that hitbox and change what currently works --
+a real (if minor) behavior change bundled into what should be a
+no-behavior-change refactor. Left for its own change if wanted; it's
+not blocked on anything (the "second real caller" bar is already met
+by `calculator.c`), see `docs/roadmap.md`.

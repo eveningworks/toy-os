@@ -59,6 +59,30 @@ forever.
   border stays intact and visible above/below the text at every size.
 
 ### Added
+- New `struct ui_button`/`ui_button_group` (`apps/ui_button.c`/`.h`,
+  `apps/ui_button_group.c`/`.h`) -- a self-contained button *object*
+  that owns its own geometry, label, colors, and `pressed` state,
+  modeled on Brutal OS's `libs/brutal-ui/button.c`/`.h` (pointed at
+  directly this session) but sized down for toy-os's immediate-mode,
+  no-allocator GUI: no generic view base class, no view-tree/mounting,
+  no layout DSL, no hover tracking (the WM doesn't dispatch
+  mouse-enter/leave, only press/click/release). `ui_button_group`
+  handles the part every multi-button app used to hand-roll itself --
+  hit-testing a set of buttons and tracking which one is currently
+  down -- over a caller-owned array, so it works for a grid, a row, or
+  a lone pair without knowing anything about layout itself.
+  `apps/calculator.c` is the first real caller: its old
+  `int g_pressed_index` + private `button_at()` hit-test loop are gone,
+  replaced by a `struct ui_button_group` driving the same `on_press`/
+  `on_click`/`on_release` behavior through generic code. Notepad's
+  Save/Load buttons deliberately weren't migrated in this same change
+  -- see `docs/decisions.md`. Verified via QMP: press-and-hold shows
+  the pressed border, releasing in place springs it back, dragging
+  onto a second button re-presses correctly with no phantom input, and
+  dragging off entirely un-presses cleanly -- same three cases the
+  original `on_press`/`on_release` mechanism was verified against,
+  now passing through the new object instead of calculator.c's own
+  bookkeeping.
 - Start menu gains a second group of items below the app list:
   currently just "Exit to shell", separated by a 1px divider. It
   replaces the old hardcoded "Esc always exits the window manager"
