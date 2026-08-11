@@ -307,21 +307,23 @@ headers, not part of `kapi.h`.
 ## GUI in user space (experimental, separate from everything above)
 
 Everything above -- `wm.c`, `notepad.c`, `about.c`, all of it -- runs in
-kernel space at ring 0. `kernel/core/gui_test.c` (shell command
-`guitest`) is a first, deliberately narrow step toward something
-different: a genuinely isolated ring-3 process drawing directly to the
-real screen and reading real input, via two new syscalls
-(`SYS_GUI_INIT` maps the linear framebuffer straight into the process's
-own address space; `SYS_GUI_POLL_KEY` is a non-blocking keyboard read).
-`userland/gui_test.c` is the process -- it fills the screen with a
-color and cycles it on each keypress, entirely from ring 3, with no
-kernel-space drawing code involved once it's running.
+kernel space at ring 0. `userland/gui_test.c` (a real disk-hosted
+binary at `/bin/gui_test`, run via `run gui_test` -- see
+`docs/decisions.md`) is a first, deliberately narrow step toward
+something different: a genuinely isolated ring-3 process drawing
+directly to the real screen and reading real input, via two new
+syscalls (`SYS_GUI_INIT` maps the linear framebuffer straight into the
+process's own address space; `SYS_GUI_POLL_KEY` is a non-blocking
+keyboard read). It fills the screen with a color and cycles it on each
+keypress, entirely from ring 3, with no kernel-space drawing code
+involved once it's running.
 
 **This is not the window manager moved to user space.** It's *modal*:
-since there's no scheduler, the ring-3 process has the real screen
-entirely to itself while it runs, the same way `ring3test`/`elftest`/
-`syscalltest`/`writetest` each run one process at a time with nothing
-else happening concurrently. It doesn't create a window inside `wm.c`,
+since there's no scheduler backing `run <name>`, the ring-3 process has
+the real screen entirely to itself while it runs, the same way
+`ring3test`/`hello`/`exit_test`/`write_test` each run one process at a
+time with nothing else happening concurrently (`schedtest` is the one
+exception -- see `kernel/core/scheduler.c`). It doesn't create a window inside `wm.c`,
 doesn't coexist with Notepad or About, and can't be dragged, minimized,
 or otherwise treated as a window -- there's no `struct window` involved
 at all. `wm.c` doesn't know this exists.

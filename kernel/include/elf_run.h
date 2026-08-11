@@ -2,11 +2,16 @@
 #define ELF_RUN_H
 
 // Loads and runs a real ELF64 binary straight from the persistent
-// filesystem -- the disk-hosted counterpart to file_test.c/
-// newsyscalls_test.c's GRUB-module-sourced ring-3 processes (see those
-// for the exact same elf_load() + process_run_ring3() shape, just with
-// fs_read() standing in for multiboot_get_module()). Prints its own
-// progress/errors to the console the same way those do.
+// filesystem -- the shared, generic path every /bin binary now runs
+// through via the shell's `run <name>` (apps/shell_sys.c's cmd_run()).
+// Used to be one of several near-identical elf_load()+
+// process_run_ring3() wrappers (file_test.c, newsyscalls_test.c, and
+// the rest of the old GRUB-module test harnesses each had their own);
+// those were removed once every test binary moved to /bin and started
+// running through this single function instead -- see
+// docs/decisions.md. Arms SYS_SBRK unconditionally (see this file's
+// own top comment) so any binary can use sbrk()-based allocation, and
+// prints its own progress/errors to the console.
 //
 // Returns the process's real exit code (see process_run_ring3()'s doc
 // comment for what a negative value means -- PROCESS_CRASHED, in

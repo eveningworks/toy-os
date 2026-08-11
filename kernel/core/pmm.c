@@ -82,16 +82,16 @@ void pmm_init(void) {
     // idea a kernel is sitting inside it.
     reserve_range(0, (uint64_t)(uintptr_t)_kernel_end);
 
-    // Also reserve any Multiboot2 module (e.g. userland/hello.elf,
-    // Also reserve any Multiboot2 module(s) -- e.g. userland/hello.elf,
-    // loaded by GRUB via grub.cfg's `module2` line(s) -- it's placed
-    // somewhere in physical memory GRUB picked, which is NOT necessarily
-    // covered by the kernel image's own range above. Missing this would
-    // let pmm_alloc_frame() hand out a module's own memory to whoever
-    // asks first, silently corrupting it out from under anyone still
-    // reading it (see elf.c / elf_test.c, and the changelog entry this
-    // bug is documented under). There can be more than one module (see
-    // syscall_test.c), so reserve all of them, not just the first.
+    // Also reserve any Multiboot2 module -- grub.cfg has none as of the
+    // ELF64-binaries-to-/bin migration (see docs/decisions.md), so this
+    // loop is a no-op today, but kept as real infrastructure rather
+    // than deleted: any `module2` line placed a module somewhere in
+    // physical memory GRUB picked, which is NOT necessarily covered by
+    // the kernel image's own range above, and missing this would let
+    // pmm_alloc_frame() hand out a module's own memory to whoever asks
+    // first, silently corrupting it out from under anyone still reading
+    // it (see elf.c, and the changelog entry this bug is documented
+    // under). Reserves however many modules exist, not just the first.
     for (int i = 0; ; i++) {
         struct multiboot_module_info mod;
         if (!multiboot_get_module(i, &mod)) break;
@@ -100,16 +100,19 @@ void pmm_init(void) {
 
     // Also reserve the Multiboot2 INFO STRUCTURE itself (the tag list
     // multiboot_get_module()/multiboot_mmap_foreach() etc. all read) --
-    // a different region from the modules' own content above, and one
-    // that stays alive for the whole boot (M16's scheduler re-reads
-    // module info via multiboot_get_module() well after boot, to spawn
-    // a second process -- see scheduler.c). Found the hard way: without
-    // this, spawning one ring-3 process could hand out this exact range
-    // via pmm_alloc_frame() (e.g. for that process's user stack), and
-    // the very next multiboot_get_module() call -- looking up a LATER
+    // a different region from any modules' own content above, and one
+    // that stays alive for the whole boot. Found the hard way, back
+    // when M16's scheduler still spawned processes via
+    // multiboot_get_module() (see scheduler.c's spawn_from_fs() now --
+    // it reads from the persistent filesystem instead, see
+    // docs/decisions.md): without reserving this range, spawning one
+    // ring-3 process could hand out this exact range via
+    // pmm_alloc_frame() (e.g. for that process's user stack), and the
+    // very next multiboot_get_module() call -- looking up a LATER
     // module index -- would read corrupted tag data and silently fail,
-    // even though the module was really there. Same root cause as the
-    // module-content bug above, different region.
+    // even though the module was really there. Kept reserved regardless
+    // of whether any modules exist today, same "real infrastructure,
+    // not deleted" reasoning as the loop above.
     uint64_t info_start, info_end;
     if (multiboot_get_info_range(&info_start, &info_end)) {
         reserve_range(info_start, info_end);

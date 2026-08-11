@@ -65,18 +65,22 @@ Full detail, reasoning, and CHANGELOG links for every item below.
 - ~~GUI terminal-emulator app~~ -- done (see CHANGELOG.md's builds 183,
   193, 203, and 253 for the finished `apps/terminal.c`). `Terminal` in
   the Start menu runs the real shell dispatcher inside a resizable
-  window -- not a reimplementation of it. A short list of commands that
-  don't return or draw straight to the physical screen (`gui`, `run`,
-  `ring3test`, `elftest`, `guitest`, `wintest`, `schedtest`, `echotest`)
-  print an explanation instead of running; everything else, including
-  the ring-3 test commands, works for real.
+  window -- not a reimplementation of it. `gui`/`run`/`ring3test`/
+  `schedtest` don't return or draw straight to the physical screen and
+  print an explanation instead of running; every other command,
+  including every `/bin` binary via `run <name>` from the physical
+  shell (they moved off dedicated commands like `elftest`/`guitest`/
+  `wintest`/`echotest` -- see `docs/decisions.md`'s ELF64-to-`/bin`
+  migration entry), works for real.
 - ~~Process exit/teardown so a faulted or crashed ring-3 process doesn't
   halt the whole kernel~~ -- done (see CHANGELOG.md's "process
-  exit/teardown" entry, `crashtest`). `ring3test`/`elftest` still
-  require a reboot after their deliberate fault, but on purpose now,
-  not for lack of a recovery path -- they drop to ring 3 with their own
-  raw, manual iretq instead of `process_run_ring3()`, so there's
-  nowhere for the kernel to recover them TO (see `process.h`).
+  exit/teardown" entry, `crashtest`). `ring3test` still requires a
+  reboot after its deliberate fault, but on purpose now, not for lack
+  of a recovery path -- it drops to ring 3 with its own raw, manual
+  iretq instead of `process_run_ring3()`, so there's nowhere for the
+  kernel to recover it TO (see `process.h`). `elftest`/`hello.elf` used
+  to be the other example here until it folded into the recoverable
+  `run hello` path (see `docs/decisions.md`).
 - `g_next_kernel_rsp`'s reentrancy fixed properly (see the
   `echotest`/`SYS_READ_KEY` entry in CHANGELOG.md) so a genuinely
   blocking read -- or any syscall that wants interrupts on while it

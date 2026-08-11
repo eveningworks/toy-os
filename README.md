@@ -61,7 +61,8 @@ For everything else:
   heap), a real per-window protocol (`SYS_WIN_CREATE`/`SYS_WIN_PRESENT`,
   still modal -- see `docs/roadmap.md`), and file I/O
   (`SYS_OPEN`/`SYS_READ`/`SYS_CLOSE`, `SYS_WRITE` extended to take an
-  fd). See the `echotest`/`wintest`/`filetest` shell commands.
+  fd). See the `echo_test`/`win_test`/`file_test` `/bin` binaries
+  (`run echo_test`, etc).
 - A single version string (`VERSION` at the repo root, semver + a
   `-dev` suffix during development -- see `docs/decisions.md`) shown by
   both `about` and the GUI About window.
@@ -77,9 +78,10 @@ Home/End/Delete to navigate and edit, F2 to save, F3 to exit; works
 from both the physical shell and the GUI Terminal, see `apps/editor.c`),
 `gui`, `apps`, `run <app>`, `history`,
 `fontsize <8|10|12|14|16|18|20|24>`, `keyboard <us|se>`, and the developer/diagnostic set
-(`help tests`): `ring3test`, `elftest`, `syscalltest`, `writetest`,
-`ptrtest`, `guitest`, `schedtest`, `echotest`, `wintest`, `filetest`,
-`newsyscalltest`, `crashtest`
+(`help tests`): `ring3test`, `schedtest`, plus a dozen real disk-hosted
+test binaries under `/bin` run via `run <name>` (e.g. `run write_test`,
+`run crash_test`) -- see `ls /bin` for the full list and
+`docs/decisions.md` for why these moved off dedicated shell commands.
 
 ## Building on CachyOS
 
@@ -161,13 +163,18 @@ apps/            -- programs. Two kinds:
 userland/        -- freestanding ring-3 test programs (no libc, no
                      crt0), compiled and linked as real ELF64
                      executables via userland/link.ld (-mcmodel=large --
-                     see the write syscall bug entry above for why) and
-                     loaded by GRUB as Multiboot2 modules (see
-                     grub.cfg). hello.c deliberately faults (see
-                     ring3test/elftest above); exit_test.c and
-                     write_test.c call real syscalls and return cleanly
-                     instead -- write_test.c is the only one that
-                     produces its own console output. write_bad_test.c
+                     see the write syscall bug entry above for why),
+                     seeded onto disk.img's /bin at build time (see the
+                     Makefile's `seed` target, tools/tfs2_writer.py, and
+                     docs/decisions.md) and run via the shell's
+                     `run <name>` -- not loaded as GRUB modules anymore.
+                     hello.c deliberately executes a privileged
+                     instruction from ring 3 (a fault the kernel
+                     recovers from and reports, same mechanism
+                     crash_test.c also exercises on purpose); exit_test.c
+                     and write_test.c call real syscalls and return
+                     cleanly instead -- write_test.c is the only one
+                     that produces its own console output. write_bad_test.c
                      deliberately passes an invalid pointer to write, to
                      prove the kernel's pointer validation rejects it.
                      gui_test.c draws directly to the real screen and

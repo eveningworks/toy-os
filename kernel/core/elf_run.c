@@ -7,6 +7,7 @@
 #include "pmm.h"
 #include "process.h"
 #include "fs.h"
+#include "syscall.h"
 #include "vga.h"
 #include "klog.h"
 
@@ -14,6 +15,11 @@
 // constants are: well clear of wherever a small ELF's own PT_LOAD
 // segments land near VMM_USER_BASE.
 #define ELF_RUN_STACK_VADDR 0x8000200000ULL
+
+// Same address the old echo_test.c used for its own HEAP_VADDR -- well
+// clear of both the stack above and wherever a small ELF's own PT_LOAD
+// segments land near VMM_USER_BASE.
+#define ELF_RUN_HEAP_VADDR 0x8000100000ULL
 
 int elf_run_from_fs(const char *path) {
     uint32_t size = 0;
@@ -62,6 +68,15 @@ int elf_run_from_fs(const char *path) {
         vga_write("run: failed to map the stack page\n");
         return -1;
     }
+
+    // Arms SYS_SBRK for this process unconditionally -- cheap
+    // bookkeeping (see syscall.c's syscall_reset_heap()), not an
+    // allocation, so it costs nothing for a binary that never calls
+    // sbrk(). This used to be a case-by-case opt-in (only echo_test.c
+    // called it, for the one binary that needed SYS_SBRK) -- made
+    // universal here so any /bin binary can use it, not just the ones
+    // whose bespoke kernel-side loader remembered to arm it.
+    syscall_reset_heap(as, ELF_RUN_HEAP_VADDR);
 
     klog_write("elf_run: calling process_run_ring3() for ");
     klog_write(path);

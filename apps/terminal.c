@@ -6,22 +6,26 @@
 // of duplicating shell.c's ~40 command handlers.
 //
 // NOT supported, on purpose (see BLOCKED_CMDS below): commands that
-// never return (`ring3test`, `elftest`), that take over the whole
-// physical screen by drawing straight to the framebuffer instead of
-// going through the console/sink (`gui`, `guitest`, `wintest`), that
-// block the calling context for their whole run without yielding back
-// to the window manager (`schedtest`, `echotest`), or that would
-// recursively re-enter a blocking loop from inside this window's
-// on_key callback (`run`, which could launch `shell` or `gui` again).
-// Typing one of these prints an explanation instead of running it --
-// see build 193's CHANGELOG entry for the full reasoning. Everything
-// else (including `crashtest`, `filetest`, `newsyscalltest`,
-// `syscalltest`, `writetest`, `ptrtest`, `reboot`, and ordinary
-// commands like `ls`/`cat`/`cd`) runs for real through shell_dispatch(),
-// because SYS_WRITE (the only way those ring-3 processes print) already
-// goes through vga_putc() -- and vga_putc() already respects whatever
-// sink is active (see vga.h's struct vga_sink comment) -- with zero
-// terminal-specific code needed for any of them.
+// never return (`ring3test`), that take over the whole physical screen
+// by drawing straight to the framebuffer instead of going through the
+// console/sink (`gui`), that block the calling context for their whole
+// run without yielding back to the window manager (`schedtest`), or
+// that would recursively re-enter a blocking loop from inside this
+// window's on_key callback (`run` -- which could launch `gui`/`shell`
+// again, or any of a dozen /bin binaries, several of which fall into
+// the same categories above; `run` is blocked wholesale rather than
+// per-target, since none of those per-binary distinctions could be
+// verified safe inside this GUI context in the time available --
+// see docs/decisions.md). Typing one of these prints an explanation
+// instead of running it -- see build 193's CHANGELOG entry for the
+// original reasoning. Every /bin binary (`crash_test`, `file_test`,
+// `write_test`, `hello`, etc.) can still be run from the PHYSICAL
+// shell via `run <name>` -- just not from inside this window. Ordinary
+// commands like `ls`/`cat`/`cd` still run for real through
+// shell_dispatch(), because SYS_WRITE (the only way a ring-3 process
+// prints) already goes through vga_putc() -- and vga_putc() already
+// respects whatever sink is active (see vga.h's struct vga_sink
+// comment) -- with zero terminal-specific code needed for any of them.
 //
 // `edit`/`nano` (build 377) look like they'd belong in that same
 // blocked list -- apps/editor.c's editor_run() is exactly the kind of
@@ -85,8 +89,19 @@ struct terminal_state {
 };
 static struct terminal_state g_terminal;
 
+// `elftest`/`guitest`/`wintest`/`echotest` used to be here too -- they
+// don't exist as shell commands anymore (their binaries moved to /bin,
+// see docs/decisions.md), so blocking them by name would just be dead
+// weight. `run` stays blocked wholesale rather than per-target: several
+// /bin binaries (gui_test, win_test, echo_test) fall into the same
+// categories as `gui`/`ring3test`/`schedtest` below, and a per-target
+// allowlist couldn't be verified safe inside this GUI context in the
+// time available (see docs/decisions.md) -- so `run` is blocked here
+// the same simple way as before this migration. Every /bin binary can
+// still be run from the physical shell via `run <name>`, just not from
+// inside this window.
 static const char *const BLOCKED_CMDS[] = {
-    "gui", "run", "ring3test", "elftest", "guitest", "wintest", "schedtest", "echotest",
+    "gui", "run", "ring3test", "schedtest",
 };
 #define BLOCKED_CMD_COUNT (sizeof(BLOCKED_CMDS) / sizeof(BLOCKED_CMDS[0]))
 

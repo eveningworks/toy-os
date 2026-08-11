@@ -291,15 +291,23 @@ screen or block in ways that don't make sense inside a window (`gui`,
 Built across four phases -- see CHANGELOG.md's **Builds 183, 193,
 203, 253**.
 
-## `ring3test`/`elftest` still require a reboot after their fault, on purpose
+## `ring3test` still requires a reboot after its fault, on purpose
 
 Once process exit/teardown existed (CHANGELOG.md's **Build 173**) so a
-crashed *scheduled* ring-3 process doesn't halt the kernel, these two
-commands kept requiring a reboot anyway -- not because teardown didn't
-reach them, but because they intentionally drop to ring 3 via their
-own raw `iretq` instead of `process_run_ring3()`, so there's nowhere
-for the kernel to recover them *to*. See `process.h` and
-`docs/roadmap.md`.
+crashed *scheduled* ring-3 process doesn't halt the kernel, `ring3test`
+kept requiring a reboot anyway -- not because teardown didn't reach it,
+but because it intentionally drops to ring 3 via its own raw `iretq`
+instead of `process_run_ring3()`, so there's nowhere for the kernel to
+recover it *to*. See `process.h` and `docs/roadmap.md`.
+
+`elftest` used to be this file's other example (same raw-`iretq`
+mechanism, via `hello.elf`) until the ELF64-to-`/bin` migration folded
+it into the generic `run hello` path (see this file's entry on that
+migration, and CHANGELOG.md's `[Unreleased]`) -- `hello.elf`'s fault is
+now caught and recovered by `process_run_ring3()` like any other
+`/bin` binary's crash, at the cost of losing test coverage for the raw
+`iretq` entry path specifically. `ring3test` is the one remaining
+place that path gets exercised.
 
 ## `/etc` is one shared `toyos.conf` by default, not a file per setting
 
@@ -1087,3 +1095,69 @@ own comment in the Makefile -- it's local persistent dev state, not a
 build output) -- if `seed` only ran once, a rebuilt `lspci.elf` with
 real code changes would silently never reach an existing `disk.img`
 again.
+
+## Every ELF64 test binary moved to `/bin`, not just `lspci` -- and why two didn't fold in cleanly
+
+`lspci` was the first ELF64 binary moved off a GRUB module onto
+build-time-seeded `/bin` (see this file's `seed`-target entry above).
+The remaining dozen-ish test binaries followed the same path in one
+pass (CHANGELOG.md's `[Unreleased]` entry has the full list) rather
+than staying GRUB modules indefinitely, once it was clear the seeding
+mechanism generalized cleanly -- there was no longer a reason for
+`lspci` to be the only one.
+
+Almost all of them folded into the existing generic loader
+(`kernel/core/elf_run.c`'s `elf_run_from_fs()`) with zero new code,
+which is the whole point of that function existing: one loader, N
+binaries, no per-binary kernel harness. Two didn't:
+
+- **`schedtest`** (`counter_a`/`counter_b`) needs two processes running
+  *concurrently* under the real preemptive scheduler -- a one-shot
+  `run <name>` inherently can't do that, no matter how generic the
+  loader gets. This got real new code: `scheduler.c`'s
+  `spawn_from_fs(const char *path)`, replacing `spawn_from_module()`
+  outright (its only caller was `scheduler_demo_run()`) -- same
+  no-copy-needed `fs_read()` reasoning `elf_run_from_fs()` already
+  used, just wired into the scheduler's spawn path instead of the
+  one-shot run path.
+- **`elftest`/`hello.elf`** tested toy-os's raw manual-`iretq` ring-3
+  entry specifically, a different (and older) code path than
+  `process_run_ring3()`'s recoverable one. Folding it into `run hello`
+  means that specific raw-entry test coverage is gone -- a real
+  tradeoff, made deliberately (user's call, weighing one narrow bit of
+  coverage against one less special case) rather than accidentally.
+  `ring3test` remains as the one place the raw-`iretq` path is still
+  exercised at all (see this file's entry above).
+
+`ring3test` itself was never a candidate to fold in -- it uses no ELF
+file whatsoever, there's nothing to seed.
+
+Along the way, `elf_run_from_fs()` gained an unconditional
+`syscall_reset_heap()` call it didn't have before -- found by reading
+`echo_test.c`, which called this itself ahead of its old
+dedicated-command loader. Migrating `echo_test` onto the generic path
+without this would have silently broken its `sbrk()`-based heap the
+first time anyone actually exercised it, not at compile time. Making
+it unconditional (rather than a per-binary opt-in flag) costs nothing
+for a binary that never calls `sbrk()` -- it's bookkeeping, not an
+allocation -- so there was no reason to keep it special-cased.
+
+`apps/terminal.c`'s GUI Terminal window still blocks `run` wholesale,
+not per-target. Several of the newly-independent `/bin` binaries
+(`gui_test`, `win_test`, `echo_test`) have the same hazards inside a
+GUI window the old dedicated commands were blocked for (drawing
+straight to the physical framebuffer, blocking forever without
+yielding back to the window manager) -- a per-target allowlist was
+prototyped, but the QMP test written to verify it was invalid: it
+relied on `tools/gui_flow.py`'s `open_app("Terminal")`, which (due to
+a separate, pre-existing bug -- see below) was actually opening
+Calculator. Rather than ship GUI-safety-relevant logic that couldn't
+be verified, the simpler wholesale block was kept. Every `/bin` binary
+can still be run from the physical shell regardless.
+
+That `gui_flow.py` bug was real and unrelated to this migration:
+`ITEM_H` (the assumed Start-menu row height) was `32`, stale against
+the kernel's actual `gfx_char_h() + 6` (`24` at the default font
+size) -- so every `open_app()` call was clicking roughly one row below
+where it meant to. Found and fixed once it was blocking this
+migration's own testing; see CHANGELOG.md's `[Unreleased]` entry.

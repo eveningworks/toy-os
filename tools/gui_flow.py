@@ -45,7 +45,10 @@ from qmp_test import QMPSession  # noqa: E402
 SCREEN_W = 1280
 SCREEN_H = 720
 TASKBAR_H = 32       # WM_TITLEBAR_H -- taskbar strip is the same height as a title bar
-ITEM_H = 32           # Start menu row height (gfx_char_h() + 6 at the default font size)
+ITEM_H = 24           # Start menu row height (gfx_char_h() + 6 at the default font size --
+                       # verified empirically at 18+6=24 against a live boot; this was
+                       # previously (incorrectly) 32, which silently misclicked every
+                       # Start-menu row after the first couple -- see docs/decisions.md)
 START_BTN = (50, 703)  # inside the taskbar's Start button, safely off any edge
 
 # Keep in sync with apps/gui_apps.c's gui_app_registry[] order.

@@ -47,7 +47,7 @@
 //     every process's PML4 shares kernel entry 0, see vmm.h), and
 //     repoint RSP0 for next time.
 //   - Launching a process for the FIRST time: its "saved register
-//     block" is synthesized once, in spawn_from_module() below, instead
+//     block" is synthesized once, in spawn_from_fs() below, instead
 //     of being the product of a real interrupt -- but it's laid out
 //     identically (r15..rax zeroed, rip/cs/rflags/rsp/ss set to the
 //     ELF's entry point and a fresh user stack), so isr_common's
@@ -79,7 +79,7 @@
 #include "vmm.h"
 #include "pmm.h"
 #include "elf.h"
-#include "multiboot.h"
+#include "fs.h"
 #include "gdt.h"
 #include "vga.h"
 #include "klog.h"
@@ -166,25 +166,36 @@ static void switch_to(int idx) {
     current_index = idx;
 }
 
-// Loads the Nth Multiboot2 module as a fresh ring-3 process and marks
-// it READY. Returns the slot index (>= 0) or -1 on any failure (no
-// free slot, missing module, or the same allocation failures
-// elf_test.c/syscall_test.c already handle the same way).
-static int spawn_from_module(int module_index) {
+// Loads a real ELF64 binary from the persistent filesystem as a fresh
+// ring-3 process and marks it READY -- the scheduler's own counterpart
+// to elf_run_from_fs() (elf_run.c), which does the same load but then
+// blocks synchronously via process_run_ring3() instead of handing the
+// process to this scheduler. Used to spawn both `schedtest` counter
+// processes from /bin now that they're disk-hosted binaries rather
+// than GRUB modules (this used to be spawn_from_module(int
+// module_index), sourcing bytes via multiboot_get_module() -- replaced
+// outright rather than kept alongside once nothing needed it anymore,
+// see docs/decisions.md). Returns the slot index (>= 0) or -1 on any
+// failure (no free slot, missing/unreadable file, or the same
+// allocation failures every other ELF-loading path already handles the
+// same way).
+static int spawn_from_fs(const char *path) {
     int slot = -1;
     for (int i = 0; i < MAX_PROCS; i++) {
         if (procs[i].state == SCHED_UNUSED) { slot = i; break; }
     }
     if (slot < 0) return -1;
 
-    struct multiboot_module_info mod;
-    if (!multiboot_get_module(module_index, &mod)) return -1;
+    uint32_t size = 0;
+    const char *data = fs_read(path, &size);
+    if (!data) return -1;
+    uint64_t elf_phys = (uint64_t)(uintptr_t)data; // no copy needed -- see elf_run.c's top comment
 
     uint64_t as = vmm_create_address_space();
     if (!as) return -1;
 
     uint64_t entry = 0;
-    if (!elf_load(mod.start, as, &entry)) return -1;
+    if (!elf_load(elf_phys, as, &entry)) return -1;
 
     uint64_t stack_phys = pmm_alloc_frame();
     if (!stack_phys) return -1;
@@ -257,14 +268,12 @@ int scheduler_current_pid(void) {
 }
 
 void scheduler_demo_run(void) {
-    // module indices, per grub.cfg: hello=0, exit_test=1, write_test=2,
-    // write_bad_test=3, gui_test=4, counter_a=5, counter_b=6.
-    int a = spawn_from_module(5);
-    int b = spawn_from_module(6);
+    int a = spawn_from_fs("/bin/counter_a");
+    int b = spawn_from_fs("/bin/counter_b");
     if (a < 0 || b < 0) {
         vga_write("schedtest: failed to spawn one or both counter processes --\n");
-        vga_write("were userland/counter_a.elf and counter_b.elf added as GRUB\n");
-        vga_write("modules? (see grub.cfg's module2 lines)\n");
+        vga_write("were /bin/counter_a and /bin/counter_b seeded onto disk.img?\n");
+        vga_write("(see the Makefile's `seed` target)\n");
         if (a >= 0) { procs[a].state = SCHED_UNUSED; alive_count--; }
         if (b >= 0) { procs[b].state = SCHED_UNUSED; alive_count--; }
         return;

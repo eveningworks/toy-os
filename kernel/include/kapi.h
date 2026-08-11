@@ -25,20 +25,9 @@
 #include "heap.h"      // kmalloc/kzalloc/kfree -- kernel-space heap (see heap.h's top comment)
 #include "power.h"     // system_reboot
 #include "pci.h"       // PCI config-space enumeration -- pci_init/pci_device_at/pci_class_name (see pci.c)
-#include "ring3_test.h" // ring3_test_run: paging/GDT/ring-3 isolation demo
-#include "elf_test.h"   // elf_test_run: loads and runs a real ELF64 binary in ring 3
-#include "syscall_test.h" // syscall_test_run: real syscall round-trip -- runs a process and RETURNS
-#include "write_test.h"   // write_test_run: real write syscall -- process prints its own output
-#include "ptr_test.h"     // ptr_test_run: proves write's pointer validation actually rejects bad pointers
-#include "gui_test.h"     // gui_test_run: modal ring-3 process draws directly to the real screen
-#include "scheduler.h"    // scheduler_demo_run: preemptive round-robin scheduler demo (M16)
-#include "echo_test.h"    // echo_test_run: interactive ring-3 program using SYS_READ_KEY + SYS_SBRK
-#include "win_test.h"     // win_test_run: ring-3 process with its own private, kernel-composited window
-#include "file_test.h"    // file_test_run: ring-3 process round-trips a real file through SYS_OPEN/READ/WRITE/CLOSE
-#include "newsyscalls_test.h" // newsyscalls_test_run: ring-3 process exercises SYS_UNLINK/SYS_LISTDIR/SYS_GETTIME/SYS_YIELD
-#include "crash_test.h"    // crash_test_run: ring-3 process deliberately faults, proving the kernel recovers instead of halting
-#include "socket_test.h"   // socket_test_run: ring-3 process exercises SYS_SOCKET/SYS_SEND/SYS_RECV (fd/syscall surface, no transport yet)
-#include "elf_run.h"       // elf_run_from_fs: loads and runs a real ELF64 binary straight from the persistent filesystem (see the shell's `run` command)
+#include "ring3_test.h" // ring3_test_run: paging/GDT/ring-3 isolation demo (the one test that predates and doesn't use any ELF file at all)
+#include "scheduler.h"    // scheduler_demo_run: preemptive round-robin scheduler demo (M16), spawns /bin/counter_a and /bin/counter_b from disk
+#include "elf_run.h"       // elf_run_from_fs: loads and runs a real ELF64 binary straight from the persistent filesystem -- what every /bin binary now runs through via the shell's `run <name>` (see docs/decisions.md; this replaced a dozen near-identical per-binary GRUB-module test harnesses)
 #include "version.h"   // TOYOS_VERSION -- build number, shown by the shell's `about` and the GUI About window
 #include "string.h"    // k_strlen, k_strcmp, etc -- freestanding, no libc
 

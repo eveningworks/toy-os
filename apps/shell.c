@@ -185,37 +185,12 @@ static void dispatch(char *line) {
         vga_write("Running ring-3 isolation test. This does NOT return --\n");
         vga_write("see the diagnostic output for what it proves.\n\n");
         ring3_test_run();
-    } else if (k_strcmp(cmd, "elftest") == 0) {
-        vga_write("Loading and running a real ELF64 binary in ring 3. This\n");
-        vga_write("does NOT return -- see the diagnostic output for what it\n");
-        vga_write("proves.\n\n");
-        elf_test_run();
-    } else if (k_strcmp(cmd, "syscalltest") == 0) {
-        syscall_test_run();
-    } else if (k_strcmp(cmd, "writetest") == 0) {
-        write_test_run();
-    } else if (k_strcmp(cmd, "ptrtest") == 0) {
-        ptr_test_run();
-    } else if (k_strcmp(cmd, "guitest") == 0) {
-        gui_test_run();
     } else if (k_strcmp(cmd, "schedtest") == 0) {
         scheduler_demo_run();
     } else if (k_strcmp(cmd, "fontsize") == 0) {
         cmd_fontsize(args ? args : "");
     } else if (k_strcmp(cmd, "keyboard") == 0) {
         cmd_keyboard(args ? args : "");
-    } else if (k_strcmp(cmd, "echotest") == 0) {
-        echo_test_run();
-    } else if (k_strcmp(cmd, "wintest") == 0) {
-        win_test_run();
-    } else if (k_strcmp(cmd, "filetest") == 0) {
-        file_test_run();
-    } else if (k_strcmp(cmd, "newsyscalltest") == 0) {
-        newsyscalls_test_run();
-    } else if (k_strcmp(cmd, "crashtest") == 0) {
-        crash_test_run();
-    } else if (k_strcmp(cmd, "sockettest") == 0) {
-        socket_test_run();
     } else if (k_strcmp(cmd, "history") == 0) {
         cmd_history();
     } else if (k_strcmp(cmd, "lspci") == 0) {

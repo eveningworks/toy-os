@@ -59,6 +59,97 @@ forever.
   border stays intact and visible above/below the text at every size.
 
 ### Added
+- The remaining ~13 GRUB-module-loaded ELF64 test binaries
+  (`elf_test`/`hello.elf`, `syscall_test`, `write_test`,
+  `write_bad_test`, `ptr_test`/(folded away, see below), `gui_test`,
+  `echo_test`, `win_test`, `file_test`, `newsyscalls_test`,
+  `crash_test`, `socket_test`, plus `counter_a`/`counter_b`) moved off
+  GRUB modules onto build-time-seeded `/bin` entries, the same
+  mechanism `lspci` got in the entry below -- prompted by the user
+  asking what happens if these ELF64 binaries are run under real Linux
+  (answer: they'd crash or misbehave -- toy-os's syscall convention
+  rides `int $0x80`, which 64-bit Linux only recognizes as the legacy
+  32-bit compat entry point, so the kernel would dispatch through the
+  wrong syscall table with the wrong register convention; the ELF
+  itself is otherwise structurally valid and loadable). What changed:
+  - `Makefile`'s `SEED_BINARIES` list now has 14 `elf:/bin-name` pairs
+    (`lspci` + the 13 above); `seed:` stages all of them into
+    `seed/sync/bin/` before one `tfs2_writer.py sync` call. `iso:` no
+    longer copies any per-binary `.elf` file into `iso/boot/` --
+    `grub.cfg` is down to just `multiboot2 /boot/kernel.bin` + `boot`,
+    no `module2` lines at all.
+  - `kernel/core/elf_run.c`'s `elf_run_from_fs()` -- the one generic
+    loader `run <name>` already used for `lspci` -- is now what every
+    `/bin` binary runs through. It now also calls
+    `syscall_reset_heap(as, ELF_RUN_HEAP_VADDR)` unconditionally before
+    running (cheap bookkeeping, arms `SYS_SBRK`) -- found by inspecting
+    `echo_test.c`, which called this itself before its old
+    dedicated-command loader ran it; without this, migrating
+    `echo_test` to the generic path would have silently broken its
+    heap-based `sbrk()` use.
+  - `kernel/core/scheduler.c` gained `spawn_from_fs(const char *path)`,
+    replacing `spawn_from_module(int module_index)` outright (its only
+    caller, `scheduler_demo_run()` for `schedtest`, is the only one
+    that needs two processes running concurrently under the real
+    preemptive scheduler -- a one-shot `run <name>` can't do that, so
+    this couldn't just fold into `elf_run_from_fs()` the way the
+    others did). Sources ELF bytes via `fs_read()` instead of
+    `multiboot_get_module()`, same no-copy-needed reasoning
+    `elf_run_from_fs()` already used. `schedtest` now spawns
+    `/bin/counter_a` + `/bin/counter_b`.
+  - The 11 now-redundant kernel-side test harnesses and their headers
+    (`elf_test`, `syscall_test`, `write_test`, `ptr_test`, `gui_test`,
+    `echo_test`, `win_test`, `file_test`, `newsyscalls_test`,
+    `crash_test`, `socket_test` -- `kernel/core/*.c` + `kernel/include/
+    *.h` pairs) are deleted, along with their dedicated shell commands
+    in `apps/shell.c` (`elftest`, `syscalltest`, `writetest`,
+    `ptrtest`, `guitest`, `echotest`, `wintest`, `filetest`,
+    `newsyscalltest`, `crashtest`, `sockettest`) -- each is a real
+    `/bin` binary now, run via `run <name>` (e.g. `run write_test`).
+    `ring3test` (no ELF file at all, tests raw paging/GDT/ring-3
+    isolation) and `schedtest` are the two exceptions, kept as
+    dedicated commands since neither maps onto the generic
+    `elf_run_from_fs()` path. `elftest`/`hello.elf` specifically tested
+    a raw manual-`iretq` ring-3 entry, distinct from the recoverable
+    `process_run_ring3()` path every other binary already used -- user
+    chose to fold it into the generic `run hello` path anyway, trading
+    that one narrow bit of coverage for one less special case; verified
+    the fault (a deliberate privileged instruction from ring 3) is
+    still caught and reported as `Exit code: CRASHED`, not a kernel
+    crash.
+  - `kernel/core/pmm.c`'s module-reservation loop and Multiboot-info
+    reservation are unchanged in code but now dormant (zero modules
+    exist) -- comments updated to say so and to point at
+    `spawn_from_fs()` instead of the old `multiboot_get_module()`-based
+    spawn path they used to reference.
+  - `apps/terminal.c`'s `run` command stays blocked wholesale inside
+    the GUI Terminal window (unchanged from before this migration) --
+    several of the newly-independent `/bin` binaries (`gui_test`,
+    `win_test`, `echo_test`) fall into the same "takes over the
+    physical framebuffer" / "blocks forever without yielding" hazards
+    the old dedicated commands were blocked for, and a per-target
+    allowlist couldn't be verified safe in the GUI context in the time
+    available (see `docs/decisions.md`). Every `/bin` binary can still
+    be run from the physical shell.
+  - `tools/gui_flow.py`'s `ITEM_H` constant (Start-menu row height) was
+    found to be stale -- `32` when the real value is `24`
+    (`gfx_char_h() + 6` at the default font size) -- discovered because
+    it made `open_app()` misclick past the intended row (clicking
+    "Terminal" was actually landing on "Calculator"). Fixed and
+    reverified live (`open_app("Terminal")` now opens Terminal). This
+    was a pre-existing bug in the tool, unrelated to this migration,
+    caught only because this migration's testing leaned on it.
+  - Verified via QMP: all 14 `/bin` binaries present after a clean
+    `make clean && make all && make iso`; `run <name>` for each from
+    the physical shell (`hello` crash-recovers, `exit_test` returns 42,
+    `write_test`/`write_bad_test` exercise real syscalls, `crash_test`
+    crash-recovers, `file_test`/`newsyscalls_test`/`socket_test`
+    self-check, `counter_a` runs solo); `schedtest` produces genuinely
+    interleaved concurrent output; Terminal (GUI) still blocks `run`
+    wholesale while ordinary commands (`ls`, etc.) work normally inside
+    it; `dmesg` trail is clean, no bootstrap-install lines, everything
+    routed through the one `elf_run: calling process_run_ring3() for
+    /bin/...` log line. `boot_smoke_test.py` passes.
 - `/bin/lspci` is now seeded onto `disk.img` at BUILD time (Makefile's
   new `seed` target, wired into `iso:`) instead of installed at BOOT
   time -- the follow-through on `tools/tfs2_writer.py` now that it can
