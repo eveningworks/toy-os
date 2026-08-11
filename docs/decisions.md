@@ -1050,3 +1050,40 @@ current caller. If a future seed file genuinely needs to be larger,
 extend `write_file()`'s allocation loop rather than raising the limit
 silently -- the read path (`block_for_index()`) already walks all four
 levels, so only the write side needs the extra work.
+
+## `/bin/lspci` moved from boot-time bootstrap-install to build-time seeding, once the writer tool existed
+
+The previous entry deferred the host-side TFS2 writer tool and kept
+`install_bin_binaries()`'s boot-time bootstrap-install
+(`kernel/core/kernel.c`, copying a GRUB module's bytes into `/bin` the
+first time toy-os boots against a disk) as the interim way to get
+`lspci` onto disk. Once the writer tool existed and grew a `format`
+subcommand (see the entry above -- needed because `write`/`sync`
+previously required an already-formatted image, which a brand new
+`disk.img` isn't until toy-os boots and formats it once), that
+interim mechanism became fully redundant: `tools/tfs2_writer.py sync`
+can format-and-seed a completely untouched `disk.img` in one call, at
+BUILD time, with no boot cycle needed at all.
+
+`install_bin_binaries()`/`BIN_BOOTSTRAP` and the `lspci.elf` GRUB
+module were removed outright rather than kept as a fallback -- two
+mechanisms solving the same problem is exactly the kind of debt this
+project avoids once the better one exists (see `CLAUDE.md`'s file-split
+guidance for the same instinct applied elsewhere: don't keep unused
+machinery "just in case"). If a future binary genuinely needs
+boot-time-only install for some reason GRUB-module bootstrap-install
+would fit better than build-time seeding, that's a fresh design
+question when it actually comes up, not a reason to have kept the old
+table around empty -- the git history (this entry, and the
+`CHANGELOG.md` sections it points at) has everything needed to bring
+the pattern back if so.
+
+The Makefile's new `seed` target runs on every `make iso` (not just
+when `disk.img` is first created) -- deliberately `.PHONY` so it always
+re-runs, relying on `sync`'s own content-hash compare (not `make`'s
+mtime-based staleness check) to make repeat calls cheap. This matters
+because `disk.img` is explicitly NOT rebuilt by `make clean` (see its
+own comment in the Makefile -- it's local persistent dev state, not a
+build output) -- if `seed` only ran once, a rebuilt `lspci.elf` with
+real code changes would silently never reach an existing `disk.img`
+again.

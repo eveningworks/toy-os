@@ -8,6 +8,13 @@
 # left alone by `make clean`, it's local dev state, not a repo asset.
 /disk.img
 
+# tools/tfs2_writer.py seed staging tree -- the Makefile's `seed` target
+# stages built ELFs (e.g. $(LSPCI_ELF)) under seed/sync/ fresh every
+# build; it's a regenerable copy of a build output, not a source file.
+# A future seed/once/ (hand-authored config seed files) would NOT be
+# ignored -- only add an entry here if once/ ever needs one too.
+/seed/sync/
+
 # QEMU/QMP test scratch, if run from the repo root (see tools/qmp_test.py)
 *.ppm
 qemu.log

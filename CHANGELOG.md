@@ -59,6 +59,47 @@ forever.
   border stays intact and visible above/below the text at every size.
 
 ### Added
+- `/bin/lspci` is now seeded onto `disk.img` at BUILD time (Makefile's
+  new `seed` target, wired into `iso:`) instead of installed at BOOT
+  time -- the follow-through on `tools/tfs2_writer.py` now that it can
+  do it. What changed:
+  - `tools/tfs2_writer.py` gained a `format` subcommand -- initializes
+    a blank/foreign image as an empty TFS2 v2 filesystem, mirroring
+    `tfs.c`'s `tfs_init()` format path byte-for-byte (superblock,
+    cleared journal header, a bitmap with the reserved metadata region
+    pre-marked allocated, `FS_MAX_FILES` blank table records written
+    through the normal journal stage-commit-apply-clear sequence).
+    `write`/`sync` now auto-format a blank image first (a no-op if it's
+    already a valid TFS2 image), so a completely fresh, untouched
+    `disk.img` can be seeded in a single call -- no toy-os boot needed
+    in between anymore.
+  - The Makefile's new `seed` target (`$(DISK_IMG) $(LSPCI_ELF)`
+    prerequisites, `.PHONY`) stages `$(LSPCI_ELF)` into
+    `seed/sync/bin/lspci` and runs `tfs2_writer.py sync $(DISK_IMG)
+    seed`. Wired as an `iso:` prerequisite, so `make iso` alone now
+    produces a `disk.img` with `/bin/lspci` already on it -- `sync`'s
+    content-hash compare makes every call after the first a fast no-op
+    unless `lspci.elf` actually changed, so this stays cheap on every
+    build, not just the first. `seed/sync/` is `.gitignore`d (a
+    build-generated staging copy, not a source file).
+  - `kernel/core/kernel.c`'s `install_bin_binaries()`/`BIN_BOOTSTRAP`
+    table and its GRUB-module-based install (added when disk-hosted
+    ELF binaries first shipped, see this file's earlier `[Unreleased]`
+    entry) are removed -- redundant now that the build-time seed step
+    covers the same job without needing a boot cycle or a kernel
+    rebuild per binary. `grub.cfg`'s `module2 /boot/lspci.elf lspci`
+    line and the `iso:` recipe's `cp $(LSPCI_ELF) iso/boot/lspci.elf`
+    step are removed too -- `lspci.elf` is still built (needed to seed
+    the disk image) but no longer shipped as a GRUB module.
+  - Verified in the cloud sandbox: `make clean && make all && make
+    iso` from scratch produces a `disk.img` with `/bin/lspci` on it
+    without ever booting toy-os (checked directly with `tfs2_writer.py
+    ls`); `boot_smoke_test.py` still passes; booted the result and
+    confirmed `run lspci` works and `dmesg` shows `fs: loaded
+    persistent filesystem from disk` (not `fs: formatted a fresh...`,
+    since the host tool formatted it first) with no `bin: installed
+    ...` line at all (that log line's code is gone). See
+    `screenshots/2026-08-11/lspci_seeded_at_build_time_no_bootstrap.png`.
 - `tools/tfs2_writer.py`: a host-side TFS2 v2 read/write tool -- the
   "option 2" deferred from the real-disk-hosted-ELF-binaries work
   below, now built. Lets a file get onto `disk.img` (or be read back

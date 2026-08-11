@@ -31,55 +31,6 @@ static void klog_write_dec2(uint8_t n) {
     klog_putc((char)('0' + (n % 10)));
 }
 
-// Copies a real ELF64 binary's bytes into /bin the first time this
-// boots against a given disk image -- a no-op on every later boot once
-// the file already exists. This is deliberately the "cheap now" half
-// of docs/roadmap.md's real-disk-hosted-ELF-binaries plan: getting a
-// binary's bytes onto disk.img today means baking it as a GRUB module
-// (like every existing `*_test.elf`, see grub.cfg's `module2` lines)
-// and copying it in here, since there's no in-guest compiler and no
-// host-side TFS2 writer tool yet (planned separately -- see
-// docs/decisions.md for why bootstrap-install was chosen over building
-// one now). A small table rather than one hardcoded copy so a second
-// GRUB-module-installed binary is just one more row, not a redesign.
-struct bin_bootstrap_entry {
-    int module_index;      // GRUB module index -- see grub.cfg's module2 order
-    const char *bin_path;  // where to install it under /bin
-};
-
-static const struct bin_bootstrap_entry BIN_BOOTSTRAP[] = {
-    { 13, "/bin/lspci" }, // lspci.elf is grub.cfg's 14th module2 line (0-indexed 13)
-};
-#define BIN_BOOTSTRAP_COUNT (sizeof(BIN_BOOTSTRAP) / sizeof(BIN_BOOTSTRAP[0]))
-
-static void install_bin_binaries(void) {
-    for (unsigned i = 0; i < BIN_BOOTSTRAP_COUNT; i++) {
-        const struct bin_bootstrap_entry *e = &BIN_BOOTSTRAP[i];
-        if (fs_exists(e->bin_path)) continue; // already installed -- nothing to do
-
-        struct multiboot_module_info mod;
-        if (!multiboot_get_module(e->module_index, &mod)) continue; // module missing -- skip, don't fail boot
-
-        fs_mkdir("/bin"); // no-op if it already exists
-        fs_touch(e->bin_path);
-        // fs_write_range(), NOT fs_write() -- an ELF's bytes contain
-        // embedded 0x00 bytes (every ELF header does), and fs_write()
-        // treats its `data` argument as a NUL-terminated C string (see
-        // fs.h): it would silently truncate the file at the first zero
-        // byte it hit, which for an ELF is almost immediately.
-        uint32_t len = (uint32_t)(mod.end - mod.start);
-        if (fs_write_range(e->bin_path, 0, (const void *)(uintptr_t)mod.start, len)) {
-            klog_write("bin: installed ");
-            klog_write(e->bin_path);
-            klog_write(" from boot module\n");
-        } else {
-            klog_write("bin: failed to install ");
-            klog_write(e->bin_path);
-            klog_write("\n");
-        }
-    }
-}
-
 void kernel_main(uint64_t multiboot_info_addr) {
     serial_init();
     klog_write("toy-os: kernel_main reached, initializing...\n");
@@ -110,7 +61,12 @@ void kernel_main(uint64_t multiboot_info_addr) {
 
     fs_init();
     fs_mkdir("/etc"); // config-file convention (see tz.c) -- a no-op if it already exists
-    install_bin_binaries(); // one-time /bin bootstrap install -- see its own comment above
+    // /bin binaries (e.g. lspci) are no longer bootstrap-installed here
+    // at boot time -- tools/tfs2_writer.py seeds them into disk.img at
+    // BUILD time now (see the Makefile's `seed` step), so by the time
+    // toy-os actually boots they're already on disk. See
+    // docs/decisions.md for why this replaced the old GRUB-module/
+    // BIN_BOOTSTRAP-table approach.
     tz_init(); // loads the persisted timezone choice, if any -- needs fs_init()/"/etc" first
     font_config_init(); // loads the persisted font size, if any -- see kernel/core/font_config.c
     keyboard_config_init(); // loads the persisted keyboard layout, if any -- see kernel/core/keyboard_config.c

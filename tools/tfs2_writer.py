@@ -5,6 +5,7 @@ inspect what's already there. Byte-exact against docs/tfs2-spec.md; the
 `read`/`ls` code paths started as that doc's own reference reader.
 
 Subcommands:
+  format <disk.img> [--force]                 initialize a blank/foreign image as an empty TFS2 v2 image
   write  <disk.img> <tfs-path> <local-file>   write one local file in
   read   <disk.img> <tfs-path> [-o out]       read one file out (stdout by default)
   ls     <disk.img> <tfs-path>                list a directory's direct children
@@ -95,6 +96,15 @@ def fnv1a(data):
         h ^= b
         h = (h * FNV_PRIME) & 0xFFFFFFFF
     return h
+
+
+def build_journal_header(commit, slot, checksum):
+    buf = bytearray(SECTOR)
+    buf[0:4] = b"JRN1"
+    buf[4] = commit
+    struct.pack_into("<I", buf, 5, slot)
+    struct.pack_into("<I", buf, 9, checksum)
+    return bytes(buf)
 
 
 def normalize(path):
@@ -358,12 +368,7 @@ class Image:
         self.records[index] = self._parse_record(raw512)
 
     def _write_journal_header(self, commit, slot, checksum, data):
-        buf = bytearray(SECTOR)
-        buf[0:4] = b"JRN1"
-        buf[4] = commit
-        struct.pack_into("<I", buf, 5, slot)
-        struct.pack_into("<I", buf, 9, checksum)
-        self.write_sector(JOURNAL_HEADER_LBA, bytes(buf))
+        self.write_sector(JOURNAL_HEADER_LBA, build_journal_header(commit, slot, checksum))
         if commit and data is not None:
             self.write_sector(JOURNAL_DATA_LBA, data)
 
@@ -522,6 +527,73 @@ class Image:
         return out
 
 
+# ---- format (initialize a blank/foreign image as an empty TFS2 v2 image) ----
+
+def format_image(path, dry_run=False, force=False, log=None):
+    """Mirrors tfs.c's tfs_init() format-fresh path exactly: superblock,
+    a cleared journal header, a bitmap with every reserved metadata
+    block pre-marked allocated, and FS_MAX_FILES blank (used=0) table
+    records written through the same journal stage-commit-apply-clear
+    sequence real records use. Grows `path` to fit the metadata region
+    if it's smaller (mirrors the Makefile's own $(DISK_IMG) -- a sparse
+    file only costs real disk space for the parts actually written).
+
+    Refuses to touch an image that already has a valid TFS2 v2
+    superblock unless `force` is set -- this is the one operation in
+    this tool capable of discarding a whole filesystem's worth of data
+    at once, so it gets its own explicit guard on top of the general
+    in-place-writes-are-real caution the rest of this file carries.
+    Returns True if it formatted (or would have, under --dry-run),
+    False if it left an already-valid image alone.
+    """
+    with open(path, "r+b") as f:
+        f.seek(0, os.SEEK_END)
+        if f.tell() < DATA_START_LBA_RAW * SECTOR:
+            f.truncate(DATA_START_LBA_RAW * SECTOR)
+
+        f.seek(SUPERBLOCK_LBA * SECTOR)
+        sb = f.read(SECTOR)
+        already_valid = len(sb) >= 5 and sb[0:4] == b"TFS2" and sb[4] == 0x02
+        if already_valid and not force:
+            if log:
+                log(f"{path} is already a valid TFS2 v2 image -- leaving it alone (pass --force to wipe it)")
+            return False
+        if already_valid and force and log:
+            log(f"WARNING: {path} already has a valid TFS2 filesystem -- --force passed, wiping it")
+
+        def write_sector(lba, data):
+            assert len(data) == SECTOR
+            if dry_run:
+                return
+            f.seek(lba * SECTOR)
+            f.write(data)
+
+        sb_buf = bytearray(SECTOR)
+        sb_buf[0:4] = b"TFS2"
+        sb_buf[4] = 0x02
+        write_sector(SUPERBLOCK_LBA, bytes(sb_buf))
+        write_sector(JOURNAL_HEADER_LBA, build_journal_header(0, 0, 0))
+
+        bitmap = bytearray(BITMAP_BYTES)
+        for b in range(DATA_START_BLOCK):
+            bitmap[b // 8] |= 1 << (b % 8)
+        for s in range(BITMAP_SECTORS):
+            off = s * SECTOR
+            write_sector(BITMAP_START_LBA + s, bytes(bitmap[off:off + SECTOR]))
+
+        blank = bytes(RECORD_BYTES)  # all-zero -> used == 0
+        checksum = fnv1a(blank)
+        for i in range(FS_MAX_FILES):
+            write_sector(JOURNAL_HEADER_LBA, build_journal_header(1, i, checksum))
+            write_sector(JOURNAL_DATA_LBA, blank)
+            write_sector(TABLE_START_LBA + i, blank)
+            write_sector(JOURNAL_HEADER_LBA, build_journal_header(0, 0, 0))
+
+    if log:
+        log(f"formatted {path} as an empty TFS2 v2 image ({FS_MAX_FILES} free slots)" + (" (dry run)" if dry_run else ""))
+    return True
+
+
 # ---- content hashing (for sync's change detection) ----
 
 def sha256_bytes(data):
@@ -530,12 +602,18 @@ def sha256_bytes(data):
 
 # ---- subcommands ----
 
+def cmd_format(args):
+    format_image(args.disk, dry_run=args.dry_run, force=args.force, log=print)
+
+
 def cmd_write(args):
+    format_image(args.disk, dry_run=args.dry_run, force=False, log=print)
     with Image(args.disk, dry_run=args.dry_run) as img:
         norm = normalize(args.tfs_path)
         with open(args.local_file, "rb") as f:
             data = f.read()
         now = datetime.now()
+        img.ensure_dir_chain(path_parent(norm), now, log=print)
         img.write_file(norm, data, now, force=args.force, log=print)
         if args.dry_run:
             print("(dry run -- nothing written)")
@@ -594,7 +672,14 @@ def cmd_sync(args):
     Either subdirectory may be absent. A file's TFS destination path is
     --dest joined with its path relative to once/ or sync/ -- e.g.
     <seed-dir>/sync/bin/lspci -> <dest>/bin/lspci (dest defaults to "/").
+
+    Auto-formats `disk.img` first if it isn't already a valid TFS2 v2
+    image (a no-op if it already is) -- this is what lets a completely
+    blank, freshly-truncated disk.img be seeded in one call, e.g. from
+    the Makefile, without a separate `format` step or a toy-os boot in
+    between.
     """
+    format_image(args.disk, dry_run=args.dry_run, force=False, log=print)
     with Image(args.disk, dry_run=args.dry_run) as img:
         now = datetime.now()
         dest_root = normalize(args.dest)
@@ -648,6 +733,12 @@ def cmd_sync(args):
 def main():
     p = argparse.ArgumentParser(description="Host-side TFS2 v2 read/write tool for toy-os disk images")
     sub = p.add_subparsers(dest="command", required=True)
+
+    p_format = sub.add_parser("format", help="initialize a blank/foreign image as an empty TFS2 v2 image")
+    p_format.add_argument("disk")
+    p_format.add_argument("--force", action="store_true", help="wipe an already-valid TFS2 image too")
+    p_format.add_argument("--dry-run", action="store_true", help="preview without writing")
+    p_format.set_defaults(func=cmd_format)
 
     p_write = sub.add_parser("write", help="write one local file into the image")
     p_write.add_argument("disk")

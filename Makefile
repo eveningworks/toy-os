@@ -76,6 +76,14 @@ CRASH_TEST_ELF = userland/crash_test.elf
 SOCKET_TEST_ELF = userland/socket_test.elf
 LSPCI_ELF = userland/lspci.elf
 
+# Seed directory for tools/tfs2_writer.py's `sync` command -- see the
+# `seed` target below and docs/decisions.md. Not committed as a
+# generic directory: SEED_DIR/sync/bin/lspci is a build-generated copy
+# of $(LSPCI_ELF), staged fresh by the `seed` target's own recipe, not
+# a tracked source file.
+SEED_DIR = seed
+LSPCI_SEED_STAGED = $(SEED_DIR)/sync/bin/lspci
+
 # Source layout:
 #   kernel/core/boot.asm, isr.asm  -- boot + interrupt stubs (assembly)
 #   kernel/core/*.c                -- hardware bring-up, IDT/PIC, kernel_main
@@ -104,7 +112,7 @@ C_OBJECTS   = $(CORE_OBJ) $(DRIVERS_OBJ) $(APPS_OBJ) $(WM_OBJ) $(UI_OBJ)
 
 ASM_OBJECTS = $(BUILD)/core/boot.o $(BUILD)/core/isr.o $(BUILD)/core/context_switch.o
 
-.PHONY: all clean clean-disk iso run run-nographic help version
+.PHONY: all clean clean-disk iso run run-nographic help version seed
 
 # Regenerates kernel/include/version.h from VERSION (see
 # tools/gen_version.sh) -- listed first so it always runs before
@@ -279,7 +287,24 @@ $(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) linker.ld
 $(DISK_IMG):
 	truncate -s 9G $@
 
-iso: version $(KERNEL) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF)
+# Seeds $(DISK_IMG) with every /bin binary via tools/tfs2_writer.py's
+# `sync` (see docs/decisions.md) -- this is what gets lspci onto disk
+# now, replacing the old boot-time BIN_BOOTSTRAP/GRUB-module install
+# (see kernel/core/kernel.c's comment where that used to be). Runs
+# every `make iso`, not just when $(DISK_IMG) is first created:
+# `sync`'s content-hash compare makes every call after the first a
+# fast no-op unless $(LSPCI_ELF) actually changed, so this always
+# leaves disk.img current with whatever was just built. PHONY (not a
+# real file target) specifically so it re-runs every time rather than
+# being skipped once its prerequisites look up to date -- the
+# "up to date" check IS the content-hash compare inside sync itself,
+# not something make's own mtime logic should try to shortcut.
+seed: $(DISK_IMG) $(LSPCI_ELF)
+	mkdir -p $(SEED_DIR)/sync/bin
+	cp $(LSPCI_ELF) $(LSPCI_SEED_STAGED)
+	python3 tools/tfs2_writer.py sync $(DISK_IMG) $(SEED_DIR)
+
+iso: version $(KERNEL) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF) seed
 	mkdir -p iso/boot/grub
 	cp $(KERNEL) iso/boot/kernel.bin
 	cp $(HELLO_ELF) iso/boot/hello.elf
@@ -295,7 +320,6 @@ iso: version $(KERNEL) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_B
 	cp $(NEWSYSCALLS_TEST_ELF) iso/boot/newsyscalls_test.elf
 	cp $(CRASH_TEST_ELF) iso/boot/crash_test.elf
 	cp $(SOCKET_TEST_ELF) iso/boot/socket_test.elf
-	cp $(LSPCI_ELF) iso/boot/lspci.elf
 	cp grub.cfg iso/boot/grub/grub.cfg
 	grub-mkrescue -o $(ISO) iso
 
@@ -331,7 +355,7 @@ run-nographic: iso $(DISK_IMG)
 	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -display none -m 256
 
 clean:
-	rm -rf $(BUILD) $(ISO) iso/boot/kernel.bin iso/boot/hello.elf iso/boot/exit_test.elf iso/boot/write_test.elf iso/boot/write_bad_test.elf iso/boot/gui_test.elf iso/boot/counter_a.elf iso/boot/counter_b.elf iso/boot/echo.elf iso/boot/win_test.elf iso/boot/file_test.elf iso/boot/newsyscalls_test.elf iso/boot/crash_test.elf iso/boot/socket_test.elf iso/boot/lspci.elf $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF)
+	rm -rf $(BUILD) $(ISO) iso/boot/kernel.bin iso/boot/hello.elf iso/boot/exit_test.elf iso/boot/write_test.elf iso/boot/write_bad_test.elf iso/boot/gui_test.elf iso/boot/counter_a.elf iso/boot/counter_b.elf iso/boot/echo.elf iso/boot/win_test.elf iso/boot/file_test.elf iso/boot/newsyscalls_test.elf iso/boot/crash_test.elf iso/boot/socket_test.elf $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF) $(LSPCI_SEED_STAGED)
 	# Deliberately NOT touching $(DISK_IMG) here -- see its comment above.
 	# Use `make clean-disk` to explicitly wipe the persistent filesystem.
 

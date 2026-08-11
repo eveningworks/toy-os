@@ -344,13 +344,21 @@ repeated manual steps to be worth automating:
   optional `--out` diff-highlight image, for catching a rendering
   regression manual eyeballing might miss.
 - **`tfs2_writer.py`** -- host-side TFS2 v2 read/write tool: get files
-  onto (or off of) `disk.img` without booting toy-os. `write`/`read`
-  for a single file, `ls` for a directory listing, `sync <seed-dir>` to
+  onto (or off of) `disk.img` without booting toy-os. `format`
+  initializes a blank/foreign image as an empty TFS2 v2 filesystem
+  (mirrors `tfs_init()`'s format path byte-for-byte); `write`/`read`
+  for a single file; `ls` for a directory listing; `sync <seed-dir>` to
   mirror a whole seed tree in (`once/` = copy-once, `sync/` =
   content-hash-synced -- see its own docstring and
-  `docs/decisions.md`). Writes in-place by default; `--dry-run` on
-  `write`/`sync` previews without touching the image. Scoped to
-  direct+single-indirect blocks (~4.03 MB/file) -- see
+  `docs/decisions.md`). `write`/`sync` auto-format a blank image first
+  (no-op if already formatted), so a completely fresh `disk.img` can be
+  seeded in one call with no toy-os boot in between -- this is what the
+  Makefile's `seed` target (runs on every `make iso`) uses to get
+  `/bin/lspci` onto disk at BUILD time now, replacing the old boot-time
+  `BIN_BOOTSTRAP`/GRUB-module install (removed from `kernel.c`/
+  `grub.cfg` -- see `docs/decisions.md`). Writes in-place by default;
+  `--dry-run` on `write`/`sync`/`format` previews without touching the
+  image. Scoped to direct+single-indirect blocks (~4.03 MB/file) -- see
   `docs/decisions.md` for why.
 
 Add new tools here freely when something would save a future session
