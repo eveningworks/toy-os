@@ -44,6 +44,19 @@ forever.
   `gui_app_registry` and `wm_system_actions` for the actual longest
   label. Caught by screenshot, not by re-reading the code -- see this
   file's own testing conventions.
+- Notepad's filename field text sat flush against the field's own
+  top/bottom border with zero vertical margin -- reported from a
+  screenshot as "white background... overflows to the textbox's
+  outline." Not actually drawing outside the field's bounds (`h` and
+  the glyph height matched exactly): the bug was that zero margin
+  meant the glyph's own opaque background painted directly over the
+  border pixels on any row where a character existed, visibly erasing
+  the border line under the text. `apps/notepad.c`'s `bh` (the
+  field/button row height) was being computed as exactly
+  `gfx_char_h()` with no slack -- new `ROW_VPAD` constant adds a few
+  pixels of real vertical breathing room via `TOOLBAR_H`'s formula.
+  Verified via QMP screenshot at font sizes 8, 18 (default), and 24 --
+  border stays intact and visible above/below the text at every size.
 
 ### Added
 - Start menu gains a second group of items below the app list:

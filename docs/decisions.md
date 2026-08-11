@@ -50,6 +50,16 @@ view while the field is active. The lesson for any *future* widget that
 draws text into a fixed box: `gfx_draw_string()` will not save you,
 budget the width yourself. See CHANGELOG.md's `[Unreleased]` entry.
 
+**Same lesson, vertical axis:** a follow-up report caught the field's
+height having the exact same problem one axis over -- `apps/notepad.c`
+sized the field's row height to precisely `gfx_char_h()`, so the
+glyphs' own opaque background painted flush against (and visually
+erased) the border pixels on any row with a character. Budgeting width
+isn't enough on its own; a fixed-box text widget needs real margin on
+*both* axes, not just clipping on the one that happened to get bug
+reports first. Fixed with a small `ROW_VPAD` constant reserving actual
+vertical slack. See CHANGELOG.md's `[Unreleased]` entry.
+
 ## IRQ registration: one handler per line, framework-automatic EOI
 
 `kernel/core/irq.c`'s table (`irq_register_handler()`/`irq_dispatch()`)

@@ -45,7 +45,20 @@
 // Macros, not cached constants, so both track gfx_char_w()/gfx_char_h()
 // live if the font size changes at runtime (see gfx_set_font_size()) --
 // same reasoning as WM_TITLEBAR_H in wm.h.
-#define TOOLBAR_H (gfx_char_h() + 8)
+// ROW_VPAD is the fix for a real bug (reported from a screenshot):
+// widget_textfield_draw()'s vertical centering is `(h - gfx_char_h()) /
+// 2`, which is correctly 0 -- no overflow -- when h == gfx_char_h(), but
+// zero slack also means the glyphs' opaque background paints flush
+// against the field's own top/bottom border pixels, visibly erasing
+// the border wherever a character sits (a filename with any character
+// in column 0 blanks out that column's border pixel). TOOLBAR_H used
+// to be exactly `gfx_char_h() + 2*BTN_MARGIN` once BTN_MARGIN's two
+// margins were subtracted back out in `bh` (see toolbar_geometry()'s
+// callers below) -- this reserves a couple of real pixels beyond the
+// glyph height so there's always a gap between text and border. See
+// docs/decisions.md.
+#define ROW_VPAD 3
+#define TOOLBAR_H (gfx_char_h() + 2 * ROW_VPAD + 2 * BTN_MARGIN)
 #define BTN_W (4 * gfx_char_w() + 16) // fits "Save"/"Load" (4 chars) at any font size
 #define BTN_GAP 8
 #define BTN_MARGIN 4
