@@ -44,30 +44,37 @@ from qmp_test import QMPSession  # noqa: E402
 
 SCREEN_W = 1280
 SCREEN_H = 720
-TASKBAR_H = 32       # WM_TITLEBAR_H -- taskbar strip is the same height as a title bar
-ITEM_H = 24           # Start menu row height (gfx_char_h() + 6 at the default font size --
-                       # verified empirically at 18+6=24 against a live boot; this was
-                       # previously (incorrectly) 32, which silently misclicked every
-                       # Start-menu row after the first couple -- see docs/decisions.md)
+# TASKBAR_H/ITEM_H/MENU_TOP_Y were previously calibrated for
+# gfx_char_h()=18 (TASKBAR_H=32, ITEM_H=24) -- re-measured this session
+# (pixel-scanned a live screenshot's border/divider rows, see the file
+# picker QMP-testing session's notes) and found the ACTUAL running
+# kernel's default font now measures gfx_char_h()=21, not 18: TASKBAR_H
+# (WM_TITLEBAR_H = gfx_char_h()+8) = 29, ITEM_H (gfx_char_h()+6) = 27.
+# Cause not fully tracked down -- no /etc/toyos.conf font_size override
+# was present on the disk.img this was measured against, so this looks
+# like the kernel's actual compiled-in default font metrics differ from
+# what this file assumed, not a per-image runtime setting. If a future
+# session finds the opposite (these constants read too big), re-measure
+# the same way: open the menu, screenshot, pixel-scan for the top
+# border row and the divider row between the app list and system
+# actions (both draw in THEME_BORDER, a solid, distinctive color run
+# unlike the surrounding text glyph rows) rather than trusting either
+# this comment or the formula blindly.
+TASKBAR_H = 29       # WM_TITLEBAR_H -- taskbar strip is the same height as a title bar
+ITEM_H = 27           # Start menu row height (gfx_char_h() + 6 -- see above)
 # Deriving the menu's top Y from SCREEN_H - TASKBAR_H - ITEM_H*total_items
-# (start_menu.c's own geometry() formula) landed within a few px of the
-# real value -- close enough that it worked for rows in the middle of
-# the menu (e.g. row 3) but was too close to the row-0/row-1 boundary
-# for row 0 specifically, misclicking "About" instead of "Notepad".
-# Rather than keep chasing which of SCREEN_H/TASKBAR_H's assumptions is
-# slightly off, this is the menu's real top Y edge as measured directly
-# from a live screenshot (a Start menu with 6 rows at ITEM_H=24 spans
-# y=536-680) -- more robust than re-deriving it from constants that
-# have already been wrong once. If APP_ORDER's length or ITEM_H ever
-# changes, re-measure this the same way (open the menu, screenshot,
-# read off the first row's top pixel) rather than trusting the formula.
-MENU_TOP_Y = 536
+# (start_menu.c's own geometry() formula) matched a live-measured
+# screenshot exactly at these corrected constants (menu top border at
+# y=502 for today's 7-row menu: 720-29-27*7=502) -- if APP_ORDER's
+# length or ITEM_H ever changes again, re-measure directly rather than
+# trusting the formula alone, same caution as above.
+MENU_TOP_Y = 502
 START_BTN = (50, 703)  # inside the taskbar's Start button, safely off any edge
 
 # Keep in sync with apps/gui_apps.c's gui_app_registry[] order.
 APP_ORDER = ["Notepad", "About", "Calculator", "Terminal", "Task Manager"]
 # Keep in sync with apps/wm/start_menu.c's wm_system_actions[] order.
-SYSTEM_ACTIONS = ["Exit to shell"]
+SYSTEM_ACTIONS = ["Exit to shell", "Shutdown"]
 
 
 class GuiFlow:

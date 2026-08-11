@@ -11,13 +11,12 @@
 //
 // First real caller: the Start menu's "Exit to shell" (start_menu.c),
 // per docs/roadmap.md's shutdown item -- that entry's own design notes
-// call for exactly this (a Yes/No confirm, built as a reusable piece,
-// not one-off code in wm.c) even though the item as a whole is about
-// a future Shutdown action that still needs a real poweroff mechanism
-// (ACPI, not built yet) before it can exist. Confirming "Exit to
-// shell" doesn't need that -- it's the first small, real, immediately
-// useful place this dialog can be exercised and proven correct ahead
-// of Shutdown eventually reusing it.
+// called for exactly this (a Yes/No confirm, built as a reusable piece,
+// not one-off code in wm.c). Second caller, same file: "Shutdown",
+// added once system_poweroff() (kernel/core/power.c, the QEMU/Bochs
+// ACPI I/O-port trick -- see power.h) gave it something real to
+// confirm into. A real ACPI-parsed poweroff is still docs/roadmap.md's
+// separate, not-yet-built item.
 //
 // Deliberately minimal, same philosophy as every popup in this
 // codebase: one message, two buttons, click-to-choose,

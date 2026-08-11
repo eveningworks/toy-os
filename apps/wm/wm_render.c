@@ -10,6 +10,7 @@
 #include "start_menu.h"
 #include "context_menu.h"
 #include "confirm_dialog.h"
+#include "file_picker.h"
 #include "desktop.h"
 #include "ui/ui.h"
 #include "theme.h"
@@ -437,6 +438,7 @@ void wm_render_frame(int mx, int my) {
     draw_taskbar();
     if (start_menu_open) start_menu_draw(mx, my);
     context_menu_draw(); // independent of start_menu_open -- the two are mutually exclusive (see wm_input.c)
+    file_picker_draw(); // an app-opened modal (e.g. Notepad's Save As...) -- drawn above ordinary chrome/menus
     confirm_dialog_draw(); // drawn last (topmost, short of the cursor) -- the most modal overlay in the WM
 
     draw_cursor_at(mx, my); // also (re)establishes cursor_under for wm_render_cursor_move()

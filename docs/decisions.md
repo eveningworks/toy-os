@@ -1270,3 +1270,26 @@ carve-out: it shells out to the locally installed `xkbcli` at build/
 seed time and the XKB layout data itself is never embedded or
 committed (`seed/sync/` is gitignored, pure regenerable build output)
 -- more like depending on `gcc` than bundling third-party data.
+
+## The file picker is a WM-level modal overlay (`apps/wm/file_picker.c`), not an `apps/ui/` widget
+
+`apps/ui/` widgets are content-relative: they draw and hit-test
+against coordinates local to the window that owns them, and a widget
+never needs to know about other windows or the desktop. A file picker
+doesn't fit that shape -- it has to draw on top of *every* window
+(including ones that didn't open it), catch clicks before the window
+underneath ever sees them, and stay open across the same kind of
+screen-absolute modal lifecycle `confirm_dialog.c`/`context_menu.c`/
+`start_menu.c` already use (shared open/close state in
+`wm_internal.h`, drawn last in `wm_render_frame()`, given first
+refusal on input in `wm_input.c`/`wm.c`). So it was built the same
+way those three are built, as a fourth WM-level overlay, not shoehorned
+into the widget library just because it looks like "a dialog with
+some UI in it." Any future app-opened dialog that needs to sit above
+arbitrary other windows (a color picker, an "are you sure" variant,
+etc.) should follow this same WM-overlay pattern rather than trying to
+make it work as an `apps/ui/` widget instantiated by the calling app.
+See `CHANGELOG.md`'s `[Unreleased]` entry for the full feature writeup
+(navigation model, Notepad's Open.../Save As... integration, the
+`redraw_pending` bug found via QMP testing on `../` double-click
+navigation).

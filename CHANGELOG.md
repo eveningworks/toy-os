@@ -1138,6 +1138,79 @@ forever.
   still not done; what shipped is the verified-correct tool to run it
   in one command whenever that time is available (see
   `docs/roadmap.md`).
+- Shutdown (Start menu item, alongside "Exit to shell"), closing that
+  half of the roadmap's Shutdown item -- the other half (a real
+  ACPI-parsed poweroff) is still open, see below. `system_poweroff()`
+  (`kernel/core/power.c`/`power.h`) writes QEMU/Bochs's well-known
+  ACPI PM1a_CNT I/O-port shortcut (`outw 0x604, 0x2000`), falling back
+  to a halt loop with an on-screen message if the write doesn't take
+  (real hardware, or an emulator without this legacy behavior) so the
+  machine always ends up in a safe, inert state either way. Reuses
+  `confirm_dialog.h` (`apps/wm/start_menu.c`'s new `action_shutdown()`)
+  -- the same Yes/No popup "Exit to shell" already goes through, per
+  that dialog's own top comment anticipating this as its second
+  caller. Deliberately NOT a real ACPI shutdown: it doesn't parse the
+  FADT/PM1a_CNT address out of the guest's own ACPI tables, just writes
+  the value real hardware would only accept after that parsing -- the
+  ACPI table parsing roadmap item stays open, and a real poweroff on
+  real hardware still needs it. Verified via QMP: "Shutdown" appears
+  below "Exit to shell" in the Start menu; clicking it opens "Shut
+  down? Unsaved changes will be lost." with Yes/No; clicking Yes
+  actually powered the QEMU process off (the QMP socket itself broke
+  with a clean shutdown, no fallback-halt message logged) rather than
+  just returning to the shell.
+- A reusable Open/Save file-picker dialog (`apps/wm/file_picker.c`/
+  `.h`), replacing Notepad's old always-visible inline filename field
+  with real Save As.../Open... buttons, like a real desktop OS. Same
+  screen-absolute WM-overlay pattern as `confirm_dialog.c`/
+  `context_menu.c`/`start_menu.c` (not an `apps/ui/` widget -- those
+  are content-relative to a window's own origin, which doesn't apply
+  to a WM-level popup), backed directly by `fs_list()`/`fs_is_dir()`/
+  `fs_exists()` (GUI apps already call `fs_*` straight from kernel
+  space, no syscall layer needed). Full navigation, not just a flat
+  listing: directories-first alphabetical sort, double-click a folder
+  to enter it, a `../` row to go up, a scrollbar (`ui_scrollbar.h`,
+  click-to-page -- no drag-to-scroll or mouse-wheel yet, the WM doesn't
+  route wheel events to a screen-level modal today) for more entries
+  than fit. Typing an absolute or cwd-relative path directly into the
+  filename field works too, same as a real dialog's field; typing/
+  choosing an existing directory navigates into it instead of erroring.
+  `apps/notepad.c`'s Save/Load buttons became Open.../Save As... that
+  pop this instead -- every Save is now a Save As (no "current file"
+  tracked between saves), per the user's own choice when this was
+  scoped. Deliberately not built this round, same "add once a real
+  need shows up" bar every popup here uses: Esc-to-cancel (the
+  physical Escape key isn't wired to a scancode in
+  `kernel/drivers/keyboard.c` at all yet -- `confirm_dialog.h` hit the
+  same gap first), creating a new directory from inside the dialog,
+  hover highlighting on list rows.
+  - Real bug caught by QMP testing, not by review: the first cut of
+    double-clicking the `../` row correctly updated `g_cwd`/re-listed
+    the parent directory internally, but forgot to set
+    `redraw_pending` on that specific path (the sibling
+    directory-double-click branch did) -- so the navigation "worked"
+    with nothing on screen reflecting it until some unrelated later
+    click forced a repaint. A screenshot taken right after the
+    double-click looked like a dead button; the underlying state had
+    actually moved. Fixed by moving `redraw_pending = 1` into
+    `fp_refresh_listing()` itself (every caller changes what's on
+    screen) instead of relying on each call site to remember it
+    individually.
+  - `tools/gui_flow.py`'s `TASKBAR_H`/`ITEM_H`/`MENU_TOP_Y` Start-menu
+    click-geometry constants turned out stale independent of this
+    change -- pixel-measured against a live screenshot while testing
+    the new "Shutdown" row and found the running kernel's default font
+    metrics are `gfx_char_h()=21` today, not the `18` these constants
+    were calibrated for (`TASKBAR_H` 29 not 32, `ITEM_H` 27 not 24).
+    Corrected in the same pass `SYSTEM_ACTIONS` picked up "Shutdown"
+    (see gui_flow.py's own updated comments for the re-measurement
+    method, and above for the actual Shutdown feature).
+  - Verified via QMP: Save As... on real typed text saves to `/`,
+    reopening via Open... and loading shows "Loaded." with the exact
+    text back; double-clicking `bin/` in the listing enters it and
+    shows its real contents (`/bin`'s seeded binaries) with a working
+    scrollbar; double-clicking `../` returns to `/` showing its
+    original listing. Screenshots in `screenshots/2026-08-11/`.
 
 ## Build 502 (fix, +1) -- CLAUDE.md/qmp_test.py: catch up on QMP keyboard gotchas, prep for a new chat
 

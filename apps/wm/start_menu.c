@@ -21,16 +21,31 @@ int start_menu_open = 0;
 // setting wm_exit_requested directly -- exiting drops every open
 // window's unsaved state (no session restore exists), so a stray
 // Start-menu click landing on this row shouldn't be irreversible. This
-// is the dialog's first real caller; see confirm_dialog.h's top
-// comment for why Shutdown (docs/roadmap.md) is the eventual second
-// one, once a real poweroff mechanism exists to confirm into.
+// was the dialog's first real caller; Shutdown (below) is the second,
+// per docs/roadmap.md's Shutdown item and confirm_dialog.h's own top
+// comment.
 static void do_exit_to_shell(void) { wm_exit_requested = 1; }
 static void action_exit_to_shell(void) {
     confirm_dialog_open_with("Exit to shell? Unsaved changes will be lost.", do_exit_to_shell, 0);
 }
 
+// Shutdown -- docs/roadmap.md's own design notes settled the shape
+// ahead of time: a Yes/No confirm first (confirm_dialog.h, same as
+// Exit to shell above), then a real poweroff. system_poweroff()
+// (kernel/core/power.c) is the QEMU/Bochs ACPI I/O-port trick, not a
+// real parsed-ACPI shutdown (see power.h) -- that's still
+// docs/roadmap.md's ACPI table parsing item, not done. Unlike
+// do_exit_to_shell(), system_poweroff() never returns (it halts either
+// way, see its own comment), so there's no wm_exit_requested-style flag
+// to set here -- the callback just calls it directly.
+static void do_shutdown(void) { system_poweroff(); }
+static void action_shutdown(void) {
+    confirm_dialog_open_with("Shut down? Unsaved changes will be lost.", do_shutdown, 0);
+}
+
 const struct start_action wm_system_actions[] = {
     { "Exit to shell", action_exit_to_shell },
+    { "Shutdown", action_shutdown },
 };
 const int wm_system_action_count = sizeof(wm_system_actions) / sizeof(wm_system_actions[0]);
 

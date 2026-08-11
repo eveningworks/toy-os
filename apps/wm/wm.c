@@ -26,6 +26,7 @@
 #include "wm_internal.h"
 #include "start_menu.h"
 #include "context_menu.h"
+#include "file_picker.h"
 #include "kapi.h"
 
 struct window windows[MAX_WINDOWS];
@@ -288,15 +289,26 @@ void wm_run(void) {
         int wheel = mouse_get_wheel_delta();
 
         if (key != -1 || wheel != 0) {
-            int f = -1;
-            for (int i = window_count - 1; i >= 0; i--) {
-                if (windows[i].state != WIN_MINIMIZED) { f = i; break; }
-            }
-            if (f >= 0 && key != -1 && windows[f].app && windows[f].app->on_key) {
-                windows[f].app->on_key(&windows[f], key);
-            }
-            if (f >= 0 && wheel != 0 && windows[f].app && windows[f].app->on_wheel) {
-                windows[f].app->on_wheel(&windows[f], wheel);
+            // A modal file picker (e.g. Notepad's Save As...) captures
+            // keyboard input first, same "most modal" priority
+            // wm_handle_left_click() already gives confirm_dialog/
+            // file_picker over ordinary window clicks -- see
+            // file_picker.h. It has no wheel handling yet, so a wheel
+            // event while it's open is just dropped rather than
+            // reaching the window behind it.
+            if (key != -1 && file_picker_handle_key(key)) {
+                // consumed by the picker
+            } else {
+                int f = -1;
+                for (int i = window_count - 1; i >= 0; i--) {
+                    if (windows[i].state != WIN_MINIMIZED) { f = i; break; }
+                }
+                if (f >= 0 && key != -1 && !file_picker_open && windows[f].app && windows[f].app->on_key) {
+                    windows[f].app->on_key(&windows[f], key);
+                }
+                if (f >= 0 && wheel != 0 && !file_picker_open && windows[f].app && windows[f].app->on_wheel) {
+                    windows[f].app->on_wheel(&windows[f], wheel);
+                }
             }
             redraw_pending = 1;
         }

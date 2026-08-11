@@ -24,7 +24,7 @@
 #include "multiboot.h" // multiboot_print_meminfo
 #include "pmm.h"       // pmm_total_frames/pmm_free_frames -- physical frame allocator stats
 #include "heap.h"      // kmalloc/kzalloc/kfree -- kernel-space heap (see heap.h's top comment)
-#include "power.h"     // system_reboot
+#include "power.h"     // system_reboot, system_poweroff
 #include "pci.h"       // PCI config-space enumeration -- pci_init/pci_device_at/pci_class_name (see pci.c)
 #include "ring3_test.h" // ring3_test_run: paging/GDT/ring-3 isolation demo (the one test that predates and doesn't use any ELF file at all)
 #include "scheduler.h"    // scheduler_demo_run: preemptive round-robin scheduler demo (M16), spawns /bin/counter_a and /bin/counter_b from disk

@@ -1,21 +1,21 @@
 // A minimal text editor: type, backspace, enter, arrow-key/Home/End
 // cursor movement, Delete, click-to-position and click-drag/shift+arrow
-// text selection, and a toolbar with an editable filename field plus
-// Save/Load buttons that persist to/from that filename via the
-// in-memory filesystem (see kernel/include/fs.h). Also doubles as the
-// WM's keyboard-focus test: open it alongside About and confirm
-// keystrokes always land in whichever window is on top.
+// text selection, and a toolbar with Open.../Save As... buttons that
+// pop apps/wm/file_picker.h's reusable browser dialog instead of an
+// always-visible inline filename field -- see docs/decisions.md. Also
+// doubles as the WM's keyboard-focus test: open it alongside About and
+// confirm keystrokes always land in whichever window is on top.
 //
-// The filename field (build 490) started as a raw widgets.h
-// struct text_field + widget_textfield_*() calls; it's now a struct
-// ui_textbox (apps/ui/ui_textbox.h) instead, the same retained-object
-// wrapper ui_button gave Calculator's buttons -- first real caller of
-// ui_textbox, see docs/decisions.md. Clicking the field activates it
-// (ui_textbox_set_active(1)); a click elsewhere in the window, or Enter
-// while it's active, deactivates it -- see notepad_click()/notepad_key()
-// below. There's no separate "commit" step: `st->filename.field.buf` is
-// always the live filename, Save/Load just read it directly whenever
-// they run.
+// Open.../Save As... replaced the old always-visible ui_textbox
+// filename field + Save/Load pair (build 490-era) -- file_picker.h's
+// first real caller. There's no "current file" tracked between saves
+// the way a real editor's plain "Save" (no dialog) would need: every
+// Save is a Save As, same as every Open goes through the picker, per
+// the user's own choice when this was built (see docs/decisions.md).
+// notepad_picker_save_choice()/notepad_picker_open_choice() below are
+// the callbacks file_picker_open_with() invokes once a path is chosen;
+// the actual fs_write()/fs_read() calls are unchanged from the old
+// inline-field version, just moved into those.
 //
 // Save/Load moved from bare widget_button()/widget_hit() calls to a
 // real struct ui_button_group (apps/ui/ui_button_group.h) -- the same
@@ -55,40 +55,34 @@
 // know about flat buffers, not this widget.
 #include "notepad.h"
 #include "wm/wm.h"
+#include "wm/file_picker.h"
 #include "ui/ui.h"
 #include "theme.h"
 #include "kapi.h"
 
-#define NOTEPAD_DEFAULT_FILE "notepad.txt" // widget_textfield_init()'s starting value -- the field is editable from here on, see this file's top comment
+#define NOTEPAD_DEFAULT_NAME "notepad.txt" // Save As...'s starting suggestion until something's actually been saved/loaded, see this file's top comment
 // Macros, not cached constants, so both track gfx_char_w()/gfx_char_h()
 // live if the font size changes at runtime (see gfx_set_font_size()) --
 // same reasoning as WM_TITLEBAR_H in wm.h.
-// ROW_VPAD is the fix for a real bug (reported from a screenshot):
-// widget_textfield_draw()'s vertical centering is `(h - gfx_char_h()) /
-// 2`, which is correctly 0 -- no overflow -- when h == gfx_char_h(), but
-// zero slack also means the glyphs' opaque background paints flush
-// against the field's own top/bottom border pixels, visibly erasing
-// the border wherever a character sits (a filename with any character
-// in column 0 blanks out that column's border pixel). TOOLBAR_H used
-// to be exactly `gfx_char_h() + 2*BTN_MARGIN` once BTN_MARGIN's two
-// margins were subtracted back out in `bh` (see toolbar_geometry()'s
-// callers below) -- this reserves a couple of real pixels beyond the
-// glyph height so there's always a gap between text and border. See
-// docs/decisions.md.
+// ROW_VPAD leaves a couple of real pixels beyond the glyph height so
+// button/field borders never paint flush against the toolbar's own
+// top/bottom edge. TOOLBAR_H used to be exactly `gfx_char_h() +
+// 2*BTN_MARGIN` once BTN_MARGIN's two margins were subtracted back out
+// in `bh` (see toolbar_geometry()'s callers below) -- this adds the
+// extra gap. See docs/decisions.md.
 #define ROW_VPAD 3
 #define TOOLBAR_H (gfx_char_h() + 2 * ROW_VPAD + 2 * BTN_MARGIN)
-#define BTN_W (4 * gfx_char_w() + 16) // fits "Save"/"Load" (4 chars) at any font size
+#define BTN_W (10 * gfx_char_w() + 16) // fits "Save As..." (10 chars, the longer of the two labels) at any font size
 #define BTN_GAP 8
 #define BTN_MARGIN 4
-#define FIELD_COLS 16 // comfortably fits "notepad.txt"-length names; TEXTFIELD_MAX (widgets.h) allows more, just not all visible at once
-#define FIELD_W (FIELD_COLS * gfx_char_w() + 8)
-// ui_button `code`s for Save/Load -- app-defined, delivered back from
-// ui_button_group_click() (see notepad_click() below), same "arbitrary
-// int the caller assigns meaning to" convention calculator.c's button
-// codes use.
-#define BTN_SAVE_CODE 'S'
-#define BTN_LOAD_CODE 'L'
+// ui_button `code`s for Open.../Save As... -- app-defined, delivered
+// back from ui_button_group_click() (see notepad_click() below), same
+// "arbitrary int the caller assigns meaning to" convention
+// calculator.c's button codes use.
+#define BTN_OPEN_CODE 'O'
+#define BTN_SAVEAS_CODE 'S'
 #define NOTEPAD_BTN_COUNT 2
+#define NOTEPAD_NAME_MAX 64 // FS_PATH_MAX (fs.h) -- the longest path fs_write()/fs_read() will ever hand back
 // How many text rows/cols the initial window should comfortably fit --
 // text itself always reflows to whatever size the window actually is
 // (see widget_scrollback_draw()'s own reflow), this just picks a
@@ -107,9 +101,9 @@
 // to be a pool.
 struct notepad_state {
     struct text_scrollback tb;
-    struct ui_textbox filename; // editable filename Save/Load read/write -- see this file's top comment
-    struct ui_button buttons[NOTEPAD_BTN_COUNT]; // Save, Load -- see this file's top comment on the ui_button_group migration
+    struct ui_button buttons[NOTEPAD_BTN_COUNT]; // Open..., Save As... -- see this file's top comment on the ui_button_group migration
     struct ui_button_group group;
+    char last_name[NOTEPAD_NAME_MAX]; // the last path actually saved/loaded -- Save As...'s starting suggestion (see notepad_click() below); NOTEPAD_DEFAULT_NAME until the first successful Save/Load
     char status[32]; // brief feedback after Save/Load, shown in the toolbar
     int scrollbar_grab_offset; // set by notepad_drag_start(), read by notepad_drag() -- see widgets.h's widget_scrollbar_thumb_rect()
     // Which of the two things a held-down drag is currently doing --
@@ -137,7 +131,7 @@ static char g_save_buf[SCROLLBACK_CAP];
 // "NOTEPAD_COLS of text" is wider, so the toolbar never feels cramped
 // even though the text area itself is fully dynamic.
 void notepad_default_size(int *w, int *h) {
-    int toolbar_w = 2 * BTN_MARGIN + FIELD_W + BTN_GAP + 2 * BTN_W + BTN_GAP + STATUS_COLS * gfx_char_w();
+    int toolbar_w = 2 * BTN_MARGIN + 2 * BTN_W + BTN_GAP + STATUS_COLS * gfx_char_w();
     int text_w = NOTEPAD_COLS * gfx_char_w();
     *w = toolbar_w > text_w ? toolbar_w : text_w;
     *h = TOOLBAR_H + NOTEPAD_ROWS * gfx_char_h();
@@ -146,18 +140,13 @@ void notepad_default_size(int *w, int *h) {
 void notepad_open(struct window *win) {
     widget_scrollback_init(&g_notepad.tb);
     widget_scrollback_set_color(&g_notepad.tb, VGA_BLACK); // near-black-on-white, not the terminal's light-grey-on-black
-    // Geometry (0,0,0,0) is a placeholder -- notepad_layout_filename()
-    // (called from draw_toolbar() every draw, same as calculator.c's
-    // calculator_layout()) refreshes it live since FIELD_W tracks
-    // gfx_char_w() and can change at runtime (fontsize).
-    ui_textbox_init(&g_notepad.filename, 0, 0, 0, 0, NOTEPAD_DEFAULT_FILE,
-                     THEME_WHITE, THEME_TEXT, THEME_BORDER);
 
     uint32_t btn_bg = gfx_rgb(200, 200, 212);
-    ui_button_init(&g_notepad.buttons[0], 0, 0, 0, 0, "Save", btn_bg, THEME_TEXT, BTN_SAVE_CODE);
-    ui_button_init(&g_notepad.buttons[1], 0, 0, 0, 0, "Load", btn_bg, THEME_TEXT, BTN_LOAD_CODE);
+    ui_button_init(&g_notepad.buttons[0], 0, 0, 0, 0, "Open...", btn_bg, THEME_TEXT, BTN_OPEN_CODE);
+    ui_button_init(&g_notepad.buttons[1], 0, 0, 0, 0, "Save As...", btn_bg, THEME_TEXT, BTN_SAVEAS_CODE);
     ui_button_group_init(&g_notepad.group, g_notepad.buttons, NOTEPAD_BTN_COUNT);
 
+    k_strcpy(g_notepad.last_name, NOTEPAD_DEFAULT_NAME);
     g_notepad.status[0] = '\0';
     g_notepad.dragging_selection = 0;
     window_set_state(win, &g_notepad);
@@ -185,33 +174,21 @@ static void notepad_layout(struct window *win, int *out_text_w, int *out_text_h,
 // Shared by draw_toolbar() and every toolbar click handler below, so
 // they all agree on exactly the same x positions -- same pattern
 // notepad_layout() already uses for the text area's geometry.
-static void toolbar_geometry(int *out_field_x, int *out_save_x, int *out_load_x) {
-    *out_field_x = BTN_MARGIN;
-    *out_save_x = *out_field_x + FIELD_W + BTN_GAP;
-    *out_load_x = *out_save_x + BTN_W + BTN_GAP;
+static void toolbar_geometry(int *out_open_x, int *out_saveas_x) {
+    *out_open_x = BTN_MARGIN;
+    *out_saveas_x = *out_open_x + BTN_W + BTN_GAP;
 }
 
-// Refreshes the filename textbox's geometry from toolbar_geometry() --
-// font-size-dependent (FIELD_W reads gfx_char_w() live), so this needs
-// to re-run before every draw, not just once at open. Same reasoning
-// as calculator.c's calculator_layout().
-static void notepad_layout_filename(struct notepad_state *st) {
-    int field_x0, save_x0, load_x0;
-    toolbar_geometry(&field_x0, &save_x0, &load_x0);
-    int bh = TOOLBAR_H - 2 * BTN_MARGIN;
-    ui_textbox_set_geometry(&st->filename, field_x0, BTN_MARGIN, FIELD_W, bh);
-}
-
-// Refreshes Save/Load's geometry from toolbar_geometry() -- same
-// font-size-live-tracking reasoning as notepad_layout_filename() and
-// calculator.c's calculator_layout(), needs to re-run before every
-// draw/press/click, not just once at open.
+// Refreshes Open.../Save As...'s geometry from toolbar_geometry() --
+// font-size-dependent (BTN_W reads gfx_char_w() live), so this needs to
+// re-run before every draw/press/click, not just once at open. Same
+// reasoning as calculator.c's calculator_layout().
 static void notepad_layout_buttons(struct notepad_state *st) {
-    int field_x0, save_x0, load_x0;
-    toolbar_geometry(&field_x0, &save_x0, &load_x0);
+    int open_x0, saveas_x0;
+    toolbar_geometry(&open_x0, &saveas_x0);
     int bh = TOOLBAR_H - 2 * BTN_MARGIN;
-    ui_button_set_geometry(&st->buttons[0], save_x0, BTN_MARGIN, BTN_W, bh);
-    ui_button_set_geometry(&st->buttons[1], load_x0, BTN_MARGIN, BTN_W, bh);
+    ui_button_set_geometry(&st->buttons[0], open_x0, BTN_MARGIN, BTN_W, bh);
+    ui_button_set_geometry(&st->buttons[1], saveas_x0, BTN_MARGIN, BTN_W, bh);
 }
 
 static void draw_toolbar(struct window *win, struct notepad_state *st,
@@ -221,17 +198,14 @@ static void draw_toolbar(struct window *win, struct notepad_state *st,
 
     int by = cy + BTN_MARGIN;
 
-    int field_x0, save_x0, load_x0;
-    toolbar_geometry(&field_x0, &save_x0, &load_x0);
-
-    notepad_layout_filename(st);
-    ui_textbox_draw(&st->filename, cx, cy);
+    int open_x0, saveas_x0;
+    toolbar_geometry(&open_x0, &saveas_x0);
 
     notepad_layout_buttons(st);
     ui_button_group_draw(&st->group, cx, cy);
 
     if (st->status[0]) {
-        gfx_draw_string(cx + load_x0 + BTN_W + 12, by, st->status, fg, toolbar_bg);
+        gfx_draw_string(cx + saveas_x0 + BTN_W + 12, by, st->status, fg, toolbar_bg);
     }
     (void)win;
 }
@@ -274,23 +248,11 @@ static void notepad_extend_selection(struct notepad_state *st) {
 void notepad_key(struct window *win, int key) {
     struct notepad_state *st = (struct notepad_state *)window_get_state(win);
 
-    if (st->filename.field.active) {
-        // Enter commits (there's nothing extra to "commit" -- buf is
-        // already live -- this just ends editing) and deactivates;
-        // everything else goes to the field, never the text area, per
-        // widget_textfield_key()'s own contract (ui_textbox_key() is a
-        // thin passthrough to it).
-        if (key == '\r' || key == '\n') {
-            ui_textbox_set_active(&st->filename, 0);
-            window_invalidate(win);
-            return;
-        }
-        if (ui_textbox_key(&st->filename, key)) {
-            window_invalidate(win);
-        }
-        return;
-    }
-
+    // No filename field to route keys to anymore -- Open.../Save As...
+    // pop file_picker.h's own dialog instead, which captures keyboard
+    // input itself while open (wm.c's main loop routes to it before
+    // this app's on_key ever runs, see file_picker.h). Every key here
+    // is unconditionally text-body input now.
     if (key == '\b') {
         if (widget_scrollback_selection_present(&st->tb)) widget_scrollback_delete_selection(&st->tb);
         else widget_scrollback_backspace_at_cursor(&st->tb);
@@ -387,52 +349,58 @@ static void notepad_load_text(struct text_scrollback *tb, const char *data, uint
     }
 }
 
-// Toolbar (Save/Load) clicks, and scrollbar track clicks (page up/down)
-// that aren't on the thumb -- thumb clicks never reach here, they're
-// claimed by notepad_drag_start() instead (see gui_apps.h's
+// file_picker.h's on_choose/on_cancel callbacks for Open.../Save
+// As... -- see this file's top comment. No ctx parameter needed
+// (file_picker.h's callbacks are plain function pointers) for the same
+// reason g_notepad itself is a bare static struct: only one Notepad
+// window can ever be open (wm.c's open_app), so there's nothing to
+// disambiguate between instances. redraw_pending is already set by the
+// time either of these runs (file_picker.c sets it when the dialog
+// closes, before invoking the callback), so there's no window handle
+// to invalidate here -- the next frame redraws Notepad's toolbar/status
+// along with everything else.
+static void notepad_picker_cancelled(void) {
+    // Nothing to undo -- the dialog already closed itself.
+}
+
+static void notepad_picker_saved(const char *path) {
+    notepad_serialize(&g_notepad.tb, g_save_buf, sizeof(g_save_buf));
+    if (fs_write(path, g_save_buf, 0)) {
+        k_strcpy(g_notepad.status, "Saved.");
+        k_strcpy(g_notepad.last_name, path);
+    } else {
+        k_strcpy(g_notepad.status, "Save failed.");
+    }
+}
+
+static void notepad_picker_opened(const char *path) {
+    uint32_t size = 0;
+    const char *data = fs_read(path, &size);
+    if (data) {
+        notepad_load_text(&g_notepad.tb, data, size);
+        k_strcpy(g_notepad.status, "Loaded.");
+        k_strcpy(g_notepad.last_name, path);
+    } else {
+        k_strcpy(g_notepad.status, "Load failed.");
+    }
+}
+
+// Toolbar (Open.../Save As...) clicks, and scrollbar track clicks (page
+// up/down) that aren't on the thumb -- thumb clicks never reach here,
+// they're claimed by notepad_drag_start() instead (see gui_apps.h's
 // on_click/on_drag_start contract). Mirrors terminal.c's terminal_click.
 void notepad_click(struct window *win, int cx, int cy) {
     struct notepad_state *st = (struct notepad_state *)window_get_state(win);
 
     if (cy < TOOLBAR_H) {
-        int field_x0, save_x0, load_x0;
-        toolbar_geometry(&field_x0, &save_x0, &load_x0);
-        int bh = TOOLBAR_H - 2 * BTN_MARGIN;
-        (void)save_x0; (void)load_x0; // geometry now lives on st->buttons[]; ui_button_group_click() below hit-tests from there
-
-        if (widget_hit(field_x0, BTN_MARGIN, FIELD_W, bh, cx, cy)) {
-            ui_textbox_set_active(&st->filename, 1);
-            window_invalidate(win);
-            return;
-        }
-
-        // Any other toolbar click (a button, or empty toolbar space)
-        // ends filename editing -- same "click elsewhere deactivates"
-        // contract widget_textfield_* describes.
-        ui_textbox_set_active(&st->filename, 0);
-
         notepad_layout_buttons(st);
         int code = ui_button_group_click(&st->group, cx, cy);
-        if (code == BTN_SAVE_CODE) {
-            if (st->filename.field.len == 0) {
-                k_strcpy(st->status, "Bad filename.");
-            } else {
-                notepad_serialize(&st->tb, g_save_buf, sizeof(g_save_buf));
-                if (fs_write(st->filename.field.buf, g_save_buf, 0)) {
-                    k_strcpy(st->status, "Saved.");
-                } else {
-                    k_strcpy(st->status, "Save failed.");
-                }
-            }
-        } else if (code == BTN_LOAD_CODE) {
-            uint32_t size = 0;
-            const char *data = st->filename.field.len ? fs_read(st->filename.field.buf, &size) : 0;
-            if (data) {
-                notepad_load_text(&st->tb, data, size);
-                k_strcpy(st->status, "Loaded.");
-            } else {
-                k_strcpy(st->status, "No file yet.");
-            }
+        if (code == BTN_OPEN_CODE) {
+            file_picker_open_with(FILE_PICKER_OPEN, "Open", "/", "",
+                                   notepad_picker_opened, notepad_picker_cancelled);
+        } else if (code == BTN_SAVEAS_CODE) {
+            file_picker_open_with(FILE_PICKER_SAVE, "Save As", "/", st->last_name,
+                                   notepad_picker_saved, notepad_picker_cancelled);
         }
         window_invalidate(win);
         return;
@@ -443,13 +411,7 @@ void notepad_click(struct window *win, int cx, int cy) {
     // the scrollbar's thumb, is claimed by notepad_drag_start() before
     // on_click ever runs (see gui_apps.h's on_click/on_drag_start
     // contract), so this is only ever SCROLLBAR_ZONE_ABOVE/BELOW in
-    // practice. Still ends filename editing first, same reasoning as
-    // the toolbar branch above.
-    if (st->filename.field.active) {
-        ui_textbox_set_active(&st->filename, 0);
-        window_invalidate(win);
-    }
-
+    // practice.
     int text_w, text_h, show_scrollbar;
     notepad_layout(win, &text_w, &text_h, &show_scrollbar);
     if (!show_scrollbar) return;
@@ -524,7 +486,6 @@ int notepad_drag_start(struct window *win, int cx, int cy) {
     // treats as no selection at all) and "drag to select" for free from
     // the same code path, rather than needing separate on_click handling
     // for the no-movement case.
-    if (st->filename.field.active) ui_textbox_set_active(&st->filename, 0);
     widget_scrollback_selection_clear(&st->tb);
     st->tb.cursor = widget_scrollback_index_at_point(&st->tb, 0, 0, text_w, text_h, cx, local_cy);
     widget_scrollback_selection_start(&st->tb);
