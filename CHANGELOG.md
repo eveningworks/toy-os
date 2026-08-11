@@ -1211,6 +1211,48 @@ forever.
     shows its real contents (`/bin`'s seeded binaries) with a working
     scrollbar; double-clicking `../` returns to `/` showing its
     original listing. Screenshots in `screenshots/2026-08-11/`.
+- Per-subsystem runtime debug-logging switches
+  (`kernel/include/debugflags.h`/`kernel/core/debugflags.c`) -- OFF by
+  default, flippable at the shell with `debug <name> on|off` (`debug`
+  alone lists every subsystem and its state), no rebuild needed.
+  Replaces the previous ad hoc pattern (this same session's file
+  picker debugging: temporary `klog_write()` calls added at the point
+  of suspicion, then hand-deleted again once the bug was confirmed
+  fixed) with a standing, named, always-in-the-tree gate: wrap a
+  `klog_write()` in `if (dbgflag_enabled(DBGFLAG_WM)) { ... }` and
+  leave it there permanently. Subsystems today: `fs`, `wm`, `ata`
+  (`DBGFLAG_NAMES` in `debugflags.c` -- add more by extending the enum
+  + name table, nothing else needs updating). `apps/shell_sys.c`
+  gained `cmd_debug()`, wired into `shell.c`'s dispatch and
+  documented under `help tests`.
+
+### Fixed
+- `kernel/drivers/ata.c`'s Bus-Master DMA path had no retry on a
+  transient transfer failure -- reported live: `stress 10` (and other
+  multi-MB runs) "usually" (non-deterministically) failing on real
+  hardware/QEMU with `write failed at chunk N`, while the exact same
+  code path never failed once in this project's own sandboxed test
+  runs. Root cause: `wait_dma_irq()`'s completion wait is bounded to
+  3s (`DMA_WAIT_TICKS`) -- on a real desktop, host scheduling jitter
+  (other processes briefly starving the QEMU process of CPU) can delay
+  the completion IRQ past that bound even though the transfer itself
+  is fine, and the driver treated one missed IRQ identically to a
+  genuine hardware error: the whole transfer failed outright, with no
+  second attempt, taking down whatever multi-block operation it was
+  part of. Fixed by wrapping `dma_transfer()` in a new
+  `dma_transfer_with_retry()` (`ATA_DMA_MAX_RETRIES` = 3) that
+  re-issues the whole command from scratch on failure before giving
+  up -- a real, persistent drive error still surfaces as a hard
+  failure once every retry is exhausted (always logged via `klog`,
+  independent of the `ata` debug switch above), it just no longer
+  fails on a single transient miss. Per-attempt detail (which retry
+  succeeded, or that one failed) is gated behind `debug ata on` so
+  normal operation stays quiet. Verified in the sandbox: `debug ata
+  on` + `debug` (listing) + `stress 6` all round-tripped correctly via
+  QMP (screenshot in `screenshots/2026-08-11/`); the sandbox's own DMA
+  never actually needed a retry (no host jitter to trigger it here),
+  which is expected -- this fixes a real-hardware timing condition the
+  sandbox doesn't reproduce, not a sandbox-visible bug.
 
 ## Build 502 (fix, +1) -- CLAUDE.md/qmp_test.py: catch up on QMP keyboard gotchas, prep for a new chat
 

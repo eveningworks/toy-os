@@ -32,5 +32,6 @@
 #include "debug_console.h" // debug_console_poll -- apps/wm/wm.c's event loop rides this the same way keyboard_getchar() does, so the serial debug console stays responsive while the GUI desktop is up too (see docs/decisions.md)
 #include "version.h"   // TOYOS_VERSION -- build number, shown by the shell's `about` and the GUI About window
 #include "string.h"    // k_strlen, k_strcmp, etc -- freestanding, no libc
+#include "debugflags.h" // dbgflag_enabled/set/parse -- per-subsystem runtime debug-log toggles (see the shell's `debug` command)
 
 #endif

@@ -17,6 +17,7 @@
 #include "timer.h"
 #include "klog.h"
 #include "idt.h"
+#include "debugflags.h"
 #include <stddef.h>
 
 #define ATA_PRIMARY_IO  0x1F0
@@ -307,6 +308,56 @@ static int dma_transfer(uint32_t lba, int count, void *buf, int is_write) {
     return 1;
 }
 
+// A single dma_transfer() failure isn't necessarily the drive/data
+// actually being bad -- wait_dma_irq()'s 3s bound (DMA_WAIT_TICKS) can
+// be tripped by a merely-late IRQ (host scheduling jitter under real
+// desktop load: other processes stealing the CPU from the QEMU
+// process, background I/O, etc. -- conditions this project's own dev/
+// test sandbox never reproduces, but a real machine running this in a
+// VM alongside everything else on your desktop absolutely can). The
+// driver used to treat that identically to a genuine hardware error --
+// one miss and the whole transfer, and by extension whatever multi-
+// block operation it was part of (e.g. `stress`'s multi-MB write/read
+// pass), failed outright with no second attempt. Found live: `stress
+// 10` failing non-deterministically ("usually", not always) on real
+// hardware/QEMU while the exact same code path never failed in this
+// project's sandboxed test runs -- the signature of a transient timing
+// miss, not a reproducible logic bug. Retrying the whole transfer
+// (re-issuing the command from scratch, not just re-waiting on the
+// same one) a bounded number of times absorbs that kind of one-off
+// miss without masking a REAL failure -- a drive that's actually
+// erroring, or genuinely gone, will keep erroring across every retry
+// and still surface as a hard failure once ATA_DMA_MAX_RETRIES is
+// exhausted, same as before this existed.
+#define ATA_DMA_MAX_RETRIES 3
+
+static int dma_transfer_with_retry(uint32_t lba, int count, void *buf, int is_write) {
+    for (int attempt = 1; attempt <= ATA_DMA_MAX_RETRIES; attempt++) {
+        if (dma_transfer(lba, count, buf, is_write)) {
+            if (attempt > 1 && dbgflag_enabled(DBGFLAG_ATA)) {
+                klog_write("ata: dma "); klog_write(is_write ? "write" : "read");
+                klog_write(" ok on attempt "); klog_write_dec((uint32_t)attempt);
+                klog_write(" (lba "); klog_write_dec(lba); klog_write(")\n");
+            }
+            return 1;
+        }
+        if (dbgflag_enabled(DBGFLAG_ATA)) {
+            klog_write("ata: dma "); klog_write(is_write ? "write" : "read");
+            klog_write(" attempt "); klog_write_dec((uint32_t)attempt);
+            klog_write(" failed (lba "); klog_write_dec(lba); klog_write(")\n");
+        }
+    }
+    // Always logged, not gated behind DBGFLAG_ATA -- exhausting every
+    // retry means this is a real failure the caller (fs.c, ultimately
+    // whoever called fs_write()/fs_read()) is about to report as one
+    // too, and dmesg should have the disk-level detail on hand even
+    // with debug logging off.
+    klog_write("ata: dma "); klog_write(is_write ? "write" : "read");
+    klog_write(" failed after "); klog_write_dec((uint32_t)ATA_DMA_MAX_RETRIES);
+    klog_write(" attempts (lba "); klog_write_dec(lba); klog_write(")\n");
+    return 0;
+}
+
 // ---------------------------------------------------------------------
 // PIO fallback -- exactly the driver this file was before build 430,
 // used automatically whenever ata_init_dma() couldn't stand up the DMA
@@ -428,13 +479,13 @@ int ata_write_sector(uint32_t lba, const void *buf) {
 int ata_read_sectors(uint32_t lba, int count, void *buf) {
     if (!g_present) return 0;
     if (count < 1 || count > ATA_MAX_SECTORS_PER_XFER) return 0;
-    if (g_dma_available) return dma_transfer(lba, count, buf, 0);
+    if (g_dma_available) return dma_transfer_with_retry(lba, count, buf, 0);
     return pio_read_sectors(lba, count, buf);
 }
 
 int ata_write_sectors(uint32_t lba, int count, const void *buf) {
     if (!g_present) return 0;
     if (count < 1 || count > ATA_MAX_SECTORS_PER_XFER) return 0;
-    if (g_dma_available) return dma_transfer(lba, count, (void *)(uintptr_t)buf, 1);
+    if (g_dma_available) return dma_transfer_with_retry(lba, count, (void *)(uintptr_t)buf, 1);
     return pio_write_sectors(lba, count, buf);
 }

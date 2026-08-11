@@ -137,6 +137,10 @@ static const char *const TEST_HELP_LINES[] = {
     "                  megabytes -- exercises direct/single/double/triple-\n",
     "                  indirect blocks with genuine data, not a sparse\n",
     "                  probe. Takes real minutes for multi-GB sizes.\n",
+    "  debug         - list per-subsystem debug-log switches (off by\n",
+    "                  default)\n",
+    "  debug <s> on|off - flip one on/off at runtime, no rebuild --\n",
+    "                  subsystems: fs, wm, ata\n",
     "\n",
     "Every other former *test command (elftest, syscalltest, writetest,\n",
     "ptrtest, guitest, echotest, wintest, filetest, newsyscalltest,\n",
@@ -792,5 +796,50 @@ void cmd_lspci(void) {
             vga_write(pci_bar_is_io(d->bar[b]) ? "(io)" : "(mem)");
         }
         vga_putc('\n');
+    }
+}
+
+// `debug` (no args): lists every subsystem and its current on/off
+// state. `debug <subsys> on|off`: flips one. Backed by
+// kernel/include/debugflags.h's dbgflag_*() -- see its top comment for
+// why this exists (a permanent, named, off-by-default alternative to
+// hand-rolled temporary klog_write() calls added and removed each
+// debugging session).
+void cmd_debug(const char *args) {
+    if (!args || !*args) {
+        vga_write("debug subsystems (off by default -- `debug <name> on|off`):\n");
+        for (int i = 0; i < DBGFLAG_SUBSYS_COUNT; i++) {
+            vga_write("  ");
+            vga_write(DBGFLAG_NAMES[i]);
+            vga_write(" -- ");
+            vga_write(dbgflag_enabled((enum dbgflag_subsys)i) ? "on" : "off");
+            vga_putc('\n');
+        }
+        return;
+    }
+
+    // Split "<name> on|off" the same way shell.c's dispatch() splits
+    // "<cmd> <args>" -- first word vs rest.
+    char name[32];
+    const char *p = args;
+    size_t n = 0;
+    while (*p && *p != ' ' && n + 1 < sizeof(name)) name[n++] = *p++;
+    name[n] = '\0';
+    while (*p == ' ') p++;
+
+    enum dbgflag_subsys s;
+    if (!dbgflag_parse(name, &s)) {
+        vga_write("debug: unknown subsystem '"); vga_write(name);
+        vga_write("' -- run `debug` with no arguments to list them\n");
+        return;
+    }
+    if (k_strcmp(p, "on") == 0) {
+        dbgflag_set(s, 1);
+        vga_write("debug: "); vga_write(name); vga_write(" on\n");
+    } else if (k_strcmp(p, "off") == 0) {
+        dbgflag_set(s, 0);
+        vga_write("debug: "); vga_write(name); vga_write(" off\n");
+    } else {
+        vga_write("usage: debug [<subsystem> on|off]\n");
     }
 }
