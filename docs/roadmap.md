@@ -17,6 +17,17 @@ this list is actively maintained, not a stale wishlist. See `docs/decisions.md` 
 - [ ] Notepad: editable filename (currently fixed to `notepad.txt`)
 - [ ] VFS: multiple filesystem backends mounted at once, not just one chosen at boot
 - [ ] AHCI/SATA driver -- today's `ata.c` depends on the legacy IDE controller real modern hardware increasingly lacks
+- [ ] GPT/MBR partition table parsing -- `disk.img` is one raw TFS2 blob today, not a partitioned disk
+- [ ] A FAT16/FAT32 driver -- real interop with other OSes' tools and USB drives, distinct from the AHCI/SATA item above (that's the controller; this is the on-disk format)
+- [ ] ACPI table parsing (RSDP/MADT/FADT) -- also unlocks a real software poweroff (today's `system_reboot()` only resets via the 8042 controller; there's no poweroff at all)
+- [ ] APIC + HPET timer, replacing the PIT + remapped 8259 PIC toy-os uses today -- a prerequisite for SMP and for timing finer than the PIT's 100 Hz tick
+- [ ] SMP (multi-core) -- large undertaking, and a prerequisite is ACPI/MADT parsing to even discover the other cores
+- [ ] Inter-process IPC (message passing) -- today's ring-3 processes are isolated from each other with no way to communicate
+- [ ] Virtio drivers (disk/net) -- QEMU's paravirtualized devices, as a modern addition alongside the legacy ATA/e1000 paths already used
+- [ ] A benchmarking harness -- so a future change that regresses boot time or a hot path (e.g. `gfx_present()`) gets caught instead of just "feeling" slower
+- [ ] Stretch: port a small classic game (e.g. Doom) as an end-to-end stress test of real disk-hosted ELF binaries + libc, once both exist
+
+The nine items above (partition tables through the benchmarking harness) came out of comparing notes with [brutal-org/brutal](https://github.com/brutal-org/brutal)'s roadmap -- a similar-scope hobby OS that's further along on hardware discovery (ACPI/APIC/SMP) and has already made some of the same "controller vs. on-disk-format" and "infra before protocol" calls toy-os is facing for storage and networking. Deliberately left out as out of scope for toy-os: an own bootloader (GRUB is fine here), a self-hosted C compiler, and additional CPU architectures (toy-os is x86-64-only by design, per the project description) -- brutal's roadmap has all three, but they're not goals here.
 
 **Recently done**
 - [x] Reusable UI widgets (`apps/widgets.h`: button, scrollback, scrollbar, text field, checkbox)
