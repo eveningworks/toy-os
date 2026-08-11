@@ -14,12 +14,13 @@ this list is actively maintained, not a stale wishlist. See `docs/decisions.md` 
 **Backlog**
 - [ ] `wintest` (`SYS_WIN_*`) windows made non-modal, sharing scheduler time with the kernel-space window manager instead of taking the CPU exclusively
 - [ ] `g_next_kernel_rsp` reentrancy fixed properly, so a real blocking syscall doesn't need to spin-poll from ring 3 the way `echotest` does today
-- [ ] `fs_write()` offset-based partial writes (today it's whole-string append/overwrite only)
+- [x] ~~`fs_write()` offset-based partial writes~~ -- done, see CHANGELOG.md's TFS2 multi-GB rework entry (`Unreleased`): `fs_write_range(path, offset, buf, len)` / `fs_read_range()` now exist alongside the original whole-file `fs_write()`/`fs_read()` (kept as-is for small-file callers like Notepad/shell/editor.c).
 - [ ] A real C library on top of `filetest`'s fd-aware syscalls: CRT0 (argc/argv), TLS (FS.base), FPU/SSE context-switch save/restore
 - [ ] Notepad: editable filename (currently fixed to `notepad.txt`)
 - [ ] VFS: multiple filesystem backends mounted at once, not just one chosen at boot
 - [ ] AHCI/SATA driver -- today's `ata.c` depends on the legacy IDE controller real modern hardware increasingly lacks
-- [ ] GPT/MBR partition table parsing -- `disk.img` is one raw TFS2 blob today, not a partitioned disk
+- [ ] GPT/MBR partition table parsing -- `disk.img` is one raw TFS2 blob today, not a partitioned disk. Explicitly re-confirmed as a "build it anyway, later" item when TFS2 was reworked for multi-GB files (this session): not required for large-file support (TFS2 v2's own block addressing handles that), purely for future flexibility (e.g. hosting more than one filesystem image on one disk).
+- [ ] Full end-to-end multi-GB (e.g. 8GB) file write/read stress test over TFS2 v2 -- the new block-addressed on-disk format (12 direct + single/double/triple indirect blocks) was verified via a boot-time self-test that proves triple-indirect pointer construction/traversal at a ~4.6GB offset, plus real small-file read/write/persistence-across-reboot, but a genuine full-size 8GB write/read pass hasn't been run yet (would take a long time over emulated PIO/DMA in a headless sandbox). Worth doing once real multi-GB files (e.g. actual video) are on hand to test with.
 - [ ] A FAT16/FAT32 driver -- real interop with other OSes' tools and USB drives, distinct from the AHCI/SATA item above (that's the controller; this is the on-disk format)
 - [ ] ACPI table parsing (RSDP/MADT/FADT) -- also unlocks a real software poweroff (today's `system_reboot()` only resets via the 8042 controller; there's no poweroff at all)
 - [ ] APIC + HPET timer, replacing the PIT + remapped 8259 PIC toy-os uses today -- a prerequisite for SMP and for timing finer than the PIT's 100 Hz tick

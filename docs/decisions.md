@@ -813,3 +813,58 @@ Window titles for multiple windows of the same app deliberately stay
 identical (no "(2)" suffix) -- an explicit choice when this was built,
 not an oversight; distinguishing same-titled windows in the taskbar is
 left for a future change if it turns out to matter in practice.
+
+## `kfree()`'s coalescing only checked the block being merged in, not the block being merged into
+
+The heap allocator's backward-coalescing call was `if (b->prev)
+try_merge_next(b->prev)` -- correct-looking, since `try_merge_next()`
+already checks its *argument's* `next` pointer is free before merging.
+The bug: it never checked whether `b->prev` *itself* was free. Freeing
+a block whose list-previous neighbor was still allocated silently
+folded the freed block's size into the still-in-use neighbor's `size`
+field (since `try_merge_next(prev)` saw `prev->next` was now free and
+merged it in), with no corresponding adjustment to `g_used_bytes`. A
+later `kfree()` of that neighbor then subtracted more than was ever
+added, underflowing the unsigned `g_used_bytes` counter. This existed
+since the heap allocator was first written and went completely
+undetected -- nothing ever displayed `heap_used_bytes()` until Task
+Manager did, and it showed an impossible ~16 exabyte figure. Fixed
+with a `b->prev->free` guard; `heap_selftest()` now explicitly asserts
+`heap_used_bytes() == 0` after freeing everything, so this class of
+regression is caught at every future boot instead of needing another
+UI to happen to surface it. See `CHANGELOG.md`'s `[Unreleased]` entry
+(the Task Manager bullet).
+
+## TFS2 v2's block pointers go direct + single + double + triple indirect, not just direct + single
+
+TFS2's original 2048-byte inline-file format was replaced with a
+classic Unix-inode-style scheme (12 direct block pointers + single/
+double/triple indirect) specifically to reach multi-gigabyte files
+without keeping the whole file in RAM. Direct + single indirect alone
+tops out at `12 + 1024` blocks (~4MB at the 4096-byte block size) --
+nowhere close to the 8GB target. Direct + single + double gets to
+roughly `12 + 1024 + 1024*1024` blocks (~4GB) -- still short. Triple
+indirect (`1024^3` more blocks reachable through one pointer) is what
+actually clears 8GB with headroom, which is why all three tiers exist
+rather than stopping at double indirect the way a smaller target could
+have. This is also why `tfs_selftest()` deliberately targets a write
+at a ~4.6GB offset -- past double indirect's ceiling -- as the boot-time
+proof that the triple-indirect chain is really being built and walked,
+not just declared. See `CHANGELOG.md`'s `[Unreleased]` entry (the TFS2
+multi-GB bullet) for the full format writeup.
+
+## `fs_read_range()`/`fs_write_range()` were added alongside `fs_read()`/`fs_write()`, not as a replacement
+
+`fs_read()`'s contract has always been "return a pointer to the whole
+file, loaded into RAM in one call" -- fine for small text files, but
+architecturally incapable of handling a file larger than available RAM
+(256MB in the normal QEMU config) no matter how large the on-disk
+format gets, since the call itself has nowhere to put an 8GB result.
+Rather than redesign every existing caller (Notepad, the shell,
+editor.c -- all of which only ever touch small files and are simplest
+written against "give me the whole thing") around a chunked API they
+don't need, `fs_read_range(path, offset, buf, len)`/`fs_write_range()`/
+`fs_size()` were added as a second, parallel API for callers that
+genuinely need bounded-memory access to a large file. `fs_read()`/
+`fs_write()` keep their exact old behavior and signatures. See
+`CHANGELOG.md`'s `[Unreleased]` entry (the TFS2 multi-GB bullet).

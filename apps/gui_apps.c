@@ -3,6 +3,7 @@
 #include "about.h"
 #include "calculator.h"
 #include "terminal.h"
+#include "taskmgr.h"
 
 // To add a new windowed app: write apps/foo.c + apps/foo.h implementing
 // the gui_app callbacks (see apps/notepad.c for the simplest example),
@@ -40,5 +41,7 @@ const struct gui_app gui_app_registry[] = {
       .on_draw = terminal_draw, .on_key = terminal_key, .on_click = terminal_click,
       .on_drag_start = terminal_drag_start, .on_drag = terminal_drag,
       .on_wheel = terminal_wheel, .resizable = 1 },
+    { .name = "Task Manager", .default_size = taskmgr_default_size, .on_open = taskmgr_open,
+      .on_draw = taskmgr_draw, .resizable = 1 },
 };
 const int gui_app_registry_count = sizeof(gui_app_registry) / sizeof(gui_app_registry[0]);

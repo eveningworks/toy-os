@@ -50,6 +50,9 @@ struct fs_ops {
     int (*mkdir)(const char *path);
     int (*del)(const char *path); // backs fs_delete() -- named del, not delete, to read fine if this header is ever pulled into a C++ tool
     const char *(*read)(const char *path, uint32_t *out_size);
+    uint64_t (*size)(const char *path);
+    uint32_t (*read_range)(const char *path, uint64_t offset, void *buf, uint32_t len);
+    int (*write_range)(const char *path, uint64_t offset, const void *buf, uint32_t len);
     int (*is_dir)(const char *path);
     int (*exists)(const char *path);
     void (*list)(const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir));

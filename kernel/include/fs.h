@@ -58,7 +58,55 @@ int fs_delete(const char *path);
 
 // Returns pointer to file data (not null-terminated beyond size) and sets
 // *out_size, or NULL if not found or if `path` names a directory.
+//
+// This loads the WHOLE file into one heap-allocated (kmalloc, see
+// heap.h) buffer and hands back a pointer into it -- fine for the
+// small config/text files every existing caller (Notepad, the shell's
+// cat/write, editor.c) actually uses, but it cannot work at all for a
+// file that doesn't fit in available RAM (this kernel has no virtual
+// memory/swap): a multi-GB file will simply fail here (returns NULL)
+// once the allocation itself fails, no matter how big TFS2's on-disk
+// format can go. For anything that might be large, check fs_size()
+// first and use fs_read_range() to read it in bounded chunks instead
+// -- see those two below. The returned pointer is only valid until the
+// next fs_read()/fs_write() call (the backend reuses one staging
+// buffer rather than leaking a fresh allocation every call -- see
+// tfs.c).
 const char *fs_read(const char *path, uint32_t *out_size);
+
+// Returns a file's size in bytes without reading any of its data, or 0
+// if `path` doesn't exist or names a directory -- the cheap way to
+// find out whether a file is small enough to fs_read() whole, or large
+// enough that it needs fs_read_range() instead.
+uint64_t fs_size(const char *path);
+
+// Streaming read for files too large to load whole (see fs_read()'s
+// updated doc comment above) -- copies up to `len` bytes starting at
+// byte `offset` into caller-owned `buf`. Returns the number of bytes
+// actually copied: less than `len` at/near end-of-file, 0 at or past
+// EOF (or on any error -- this doesn't distinguish the two, same
+// "0 means nothing happened" contract the rest of this header uses).
+// No file-handle/cursor concept -- every call is a fresh, independent
+// range read, same "no open state to leak or get out of sync" spirit
+// as the rest of this API; a caller streaming a whole file just calls
+// this in a loop with an increasing `offset`.
+uint32_t fs_read_range(const char *path, uint64_t offset, void *buf, uint32_t len);
+
+// Streaming write -- writes exactly `len` bytes from `buf` starting at
+// byte `offset`, extending the file (allocating new blocks as needed)
+// if `offset + len` goes past the current end. NOT the same as
+// fs_write(path, data, 1)'s append flag -- pass the file's current
+// fs_size() as `offset` to append; passing an `offset` past the
+// current end zero-fills the gap. Returns 1 on success, 0 on failure
+// (bad path, a directory, or the disk ran out of free blocks -- the
+// file's size/content on partial failure is whatever blocks were
+// successfully allocated and written before the failure, not rolled
+// back). Unlike fs_write(), `buf` is treated as raw bytes, not a
+// NUL-terminated C string -- this is the call a large binary file
+// (e.g. a saved video, per the feature this was built for) actually
+// wants, written a chunk at a time rather than needing the whole file
+// in memory first.
+int fs_write_range(const char *path, uint64_t offset, const void *buf, uint32_t len);
 
 // True if `path` names an existing directory, or is "/" (the implicit
 // root, which always "exists" without needing its own entry).

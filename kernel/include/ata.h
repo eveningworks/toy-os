@@ -72,4 +72,20 @@ int ata_dma_active(void);
 int ata_read_sector(uint32_t lba, void *buf);
 int ata_write_sector(uint32_t lba, const void *buf);
 
+// Multi-sector transfer, `count` consecutive sectors starting at `lba`
+// in one command instead of `count` separate ones -- same
+// success/failure contract as the single-sector calls above. `count`
+// must be in [1, ATA_MAX_SECTORS_PER_XFER]; TFS2's block size (see
+// tfs.c) is chosen to exactly match that limit so a whole filesystem
+// block always transfers in one call. Bounded by the DMA path's
+// existing 4096-byte bounce buffer (see ata.c's ata_init_dma()) --
+// raising the limit would need a bigger buffer, not just a bigger
+// REG_SECCOUNT value (the drive's 8-bit sector-count register alone
+// could go up to 256 in 28-bit mode). Built specifically so TFS2 could
+// stop issuing one ATA command per 512-byte sector for every block of
+// a large file -- see CHANGELOG.md.
+#define ATA_MAX_SECTORS_PER_XFER 8 // 8 * 512B = 4096B, matches the DMA bounce buffer and TFS2's block size
+int ata_read_sectors(uint32_t lba, int count, void *buf);
+int ata_write_sectors(uint32_t lba, int count, const void *buf);
+
 #endif

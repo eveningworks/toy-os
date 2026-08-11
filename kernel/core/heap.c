@@ -165,7 +165,22 @@ void kfree(void *ptr) {
     b->free = 1;
 
     try_merge_next(b);            // pull a free right-neighbor into b
-    if (b->prev) try_merge_next(b->prev); // pull b (now possibly bigger) into a free left-neighbor
+    // Pull b (now possibly bigger) into a free left-neighbor -- but
+    // ONLY if that left-neighbor is itself free. try_merge_next()
+    // only checks whether the *next* pointer's target is free before
+    // merging; it doesn't check whether the block passed in (here,
+    // b->prev) is free. Without this guard, freeing a block whose
+    // list-previous neighbor is still in USE would silently fold this
+    // freed block's size into that in-use block's `size` field --
+    // corrupting its accounting (it would report itself as bigger than
+    // it was ever allocated for) without ever adding the extra bytes
+    // to g_used_bytes. The bug stayed invisible until something first
+    // read heap_used_bytes() for real (Task Manager, see CHANGELOG.md)
+    // and displayed an impossible ~16 exabyte figure -- caused by a
+    // LATER kfree() of that same corrupted block subtracting its
+    // inflated size from g_used_bytes, underflowing the unsigned
+    // counter. See docs/decisions.md for the full story.
+    if (b->prev && b->prev->free) try_merge_next(b->prev);
 }
 
 uint64_t heap_total_bytes(void) { return g_total_bytes; }
@@ -193,12 +208,32 @@ void heap_selftest(void) {
     kfree(a);
     kfree(c);
 
+    // Every block from a/b/c is free again at this point -- g_used_bytes
+    // should be back to whatever it was before this test allocated
+    // anything (0, if this is the only heap user so far at boot). This
+    // check exists specifically because a real bug once slipped past
+    // this self-test entirely: freeing a's still-in-use LEFT neighbor
+    // was silently folded into it by the coalescing logic, corrupting
+    // that neighbor's size without it ever showing up as a crash or a
+    // failed allocation here -- only a later kfree() of the corrupted
+    // block would underflow g_used_bytes, and nothing here used to
+    // check g_used_bytes at all. See docs/decisions.md.
+    if (heap_used_bytes() != 0) {
+        klog_write("heap: selftest FAILED (used_bytes not back to 0 after freeing everything)\n");
+        return;
+    }
+
     void *d = kmalloc(64);
     if (!d) {
         klog_write("heap: selftest FAILED (alloc after free-and-coalesce)\n");
         return;
     }
     kfree(d);
+
+    if (heap_used_bytes() != 0) {
+        klog_write("heap: selftest FAILED (used_bytes not back to 0 after final free)\n");
+        return;
+    }
 
     klog_write("heap: selftest passed\n");
 }

@@ -68,9 +68,13 @@ static int wait_drq(void) {
     return 0;
 }
 
-static void select_lba(uint32_t lba) {
+// `count` sectors, not just 1 -- see ata.h's ATA_MAX_SECTORS_PER_XFER.
+// REG_SECCOUNT is genuinely 8 bits wide (0 there means "256" per the
+// ATA spec), but this driver never asks for more than 8 -- see this
+// file's multi-sector functions for why.
+static void select_lba(uint32_t lba, uint8_t count) {
     outb(REG_DRIVE_HEAD, 0xE0 | ((lba >> 24) & 0x0F)); // 0xE0: LBA mode, master
-    outb(REG_SECCOUNT, 1);
+    outb(REG_SECCOUNT, count);
     outb(REG_LBA_LOW,  (uint8_t)(lba & 0xFF));
     outb(REG_LBA_MID,  (uint8_t)((lba >> 8) & 0xFF));
     outb(REG_LBA_HIGH, (uint8_t)((lba >> 16) & 0xFF));
@@ -250,16 +254,24 @@ static void ata_init_dma(void) {
 // One sector, either direction -- see the field comments above for why
 // this always goes through the bounce buffer rather than the caller's
 // own pointer.
-static int dma_transfer(uint32_t lba, void *buf, int is_write) {
+// `count` sectors (1..ATA_MAX_SECTORS_PER_XFER), either direction --
+// see the field comments above for why this always goes through the
+// bounce buffer rather than the caller's own pointer. One PRD
+// descriptor covering `count * ATA_SECTOR_SIZE` bytes is enough --
+// no scatter-gather needed since the bounce buffer is already one
+// physically contiguous frame (see ata_init_dma()), the same reason a
+// single-sector transfer only ever needed one descriptor.
+static int dma_transfer(uint32_t lba, int count, void *buf, int is_write) {
+    uint32_t bytes = (uint32_t)count * ATA_SECTOR_SIZE;
     g_prd->base = (uint32_t)g_dma_buf_phys;
-    g_prd->count = ATA_SECTOR_SIZE;
+    g_prd->count = (uint16_t)bytes;
     g_prd->flags = PRD_EOT;
 
     if (is_write) {
         // The controller reads FROM memory in this direction -- stage
         // the caller's data into the bounce buffer first.
         const uint8_t *src = (const uint8_t *)buf;
-        for (int i = 0; i < ATA_SECTOR_SIZE; i++) g_dma_buf[i] = src[i];
+        for (uint32_t i = 0; i < bytes; i++) g_dma_buf[i] = src[i];
     }
 
     outl(g_bm_io + BM_PRDT, (uint32_t)g_prd_phys);
@@ -267,7 +279,7 @@ static int dma_transfer(uint32_t lba, void *buf, int is_write) {
     outb(g_bm_io + BM_CMD, is_write ? 0 : BM_CMD_READ); // program direction, not started yet
 
     if (!wait_not_busy()) return 0;
-    select_lba(lba);
+    select_lba(lba, (uint8_t)count);
     outb(REG_COMMAND, is_write ? CMD_WRITE_DMA : CMD_READ_DMA);
 
     g_dma_irq_fired = 0;
@@ -284,7 +296,7 @@ static int dma_transfer(uint32_t lba, void *buf, int is_write) {
 
     if (!is_write) {
         uint8_t *dst = (uint8_t *)buf;
-        for (int i = 0; i < ATA_SECTOR_SIZE; i++) dst[i] = g_dma_buf[i];
+        for (uint32_t i = 0; i < bytes; i++) dst[i] = g_dma_buf[i];
     } else {
         // Best-effort cache flush, same as the PIO write path below.
         if (wait_not_busy()) {
@@ -301,29 +313,39 @@ static int dma_transfer(uint32_t lba, void *buf, int is_write) {
 // path (see its comment for every reason that can happen).
 // ---------------------------------------------------------------------
 
-static int pio_read_sector(uint32_t lba, void *buf) {
+// `count` sectors in one command (CMD_READ_SECTORS/CMD_WRITE_SECTORS
+// both accept a sector count > 1, same opcodes as the single-sector
+// case -- only REG_SECCOUNT and the transfer loop below change). The
+// drive raises DRQ once per sector, not once for the whole command, so
+// the inner transfer loop still runs `count` times -- the saving vs.
+// `count` separate ata_read_sector() calls is the command dispatch/
+// wait_not_busy() overhead for sectors 2..count, not the wire transfer
+// time itself (that's inherent to the hardware either way).
+static int pio_read_sectors(uint32_t lba, int count, void *buf) {
     if (!wait_not_busy()) return 0;
 
-    select_lba(lba);
+    select_lba(lba, (uint8_t)count);
     outb(REG_COMMAND, CMD_READ_SECTORS);
 
-    if (!wait_drq()) return 0;
-
     uint16_t *p = (uint16_t *)buf;
-    for (int i = 0; i < ATA_SECTOR_SIZE / 2; i++) p[i] = inw(REG_DATA);
+    for (int s = 0; s < count; s++) {
+        if (!wait_drq()) return 0;
+        for (int i = 0; i < ATA_SECTOR_SIZE / 2; i++) *p++ = inw(REG_DATA);
+    }
     return 1;
 }
 
-static int pio_write_sector(uint32_t lba, const void *buf) {
+static int pio_write_sectors(uint32_t lba, int count, const void *buf) {
     if (!wait_not_busy()) return 0;
 
-    select_lba(lba);
+    select_lba(lba, (uint8_t)count);
     outb(REG_COMMAND, CMD_WRITE_SECTORS);
 
-    if (!wait_drq()) return 0;
-
     const uint16_t *p = (const uint16_t *)buf;
-    for (int i = 0; i < ATA_SECTOR_SIZE / 2; i++) outw(REG_DATA, p[i]);
+    for (int s = 0; s < count; s++) {
+        if (!wait_drq()) return 0;
+        for (int i = 0; i < ATA_SECTOR_SIZE / 2; i++) outw(REG_DATA, *p++);
+    }
 
     // Best-effort: ask the drive to flush its write cache so the data
     // is actually durable, not just handed off. Failure here doesn't
@@ -396,13 +418,23 @@ int ata_dma_active(void) {
 }
 
 int ata_read_sector(uint32_t lba, void *buf) {
-    if (!g_present) return 0;
-    if (g_dma_available) return dma_transfer(lba, buf, 0);
-    return pio_read_sector(lba, buf);
+    return ata_read_sectors(lba, 1, buf);
 }
 
 int ata_write_sector(uint32_t lba, const void *buf) {
+    return ata_write_sectors(lba, 1, buf);
+}
+
+int ata_read_sectors(uint32_t lba, int count, void *buf) {
     if (!g_present) return 0;
-    if (g_dma_available) return dma_transfer(lba, (void *)(uintptr_t)buf, 1);
-    return pio_write_sector(lba, buf);
+    if (count < 1 || count > ATA_MAX_SECTORS_PER_XFER) return 0;
+    if (g_dma_available) return dma_transfer(lba, count, buf, 0);
+    return pio_read_sectors(lba, count, buf);
+}
+
+int ata_write_sectors(uint32_t lba, int count, const void *buf) {
+    if (!g_present) return 0;
+    if (count < 1 || count > ATA_MAX_SECTORS_PER_XFER) return 0;
+    if (g_dma_available) return dma_transfer(lba, count, (void *)(uintptr_t)buf, 1);
+    return pio_write_sectors(lba, count, buf);
 }

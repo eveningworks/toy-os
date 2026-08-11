@@ -62,4 +62,18 @@ void window_invalidate(struct window *win);
 // Runs until the user presses Esc, then returns.
 void wm_run(void);
 
+// --- read-only window introspection (Task Manager's data source) ---
+//
+// windows[]/window_count themselves live in wm_internal.h, which is
+// deliberately not includable outside apps/wm/ (see that header's top
+// comment) -- these two accessors are the small, safe query surface an
+// app like Task Manager (apps/taskmgr.c) needs instead: how many
+// windows are open, and a read-only snapshot of one by index (in the
+// same z-order windows[] uses, index 0 = back). Returns 0 from
+// wm_get_window() for an out-of-range index rather than a garbage
+// pointer -- callers should always check window_count first anyway,
+// but this makes an off-by-one harmless instead of a fault.
+int wm_window_count(void);
+const struct window *wm_get_window(int index);
+
 #endif

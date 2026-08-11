@@ -50,6 +50,18 @@ const char *fs_read(const char *path, uint32_t *out_size) {
     return g_fs->read(path, out_size);
 }
 
+uint64_t fs_size(const char *path) {
+    return g_fs->size(path);
+}
+
+uint32_t fs_read_range(const char *path, uint64_t offset, void *buf, uint32_t len) {
+    return g_fs->read_range(path, offset, buf, len);
+}
+
+int fs_write_range(const char *path, uint64_t offset, const void *buf, uint32_t len) {
+    return g_fs->write_range(path, offset, buf, len);
+}
+
 int fs_is_dir(const char *path) {
     return g_fs->is_dir(path);
 }

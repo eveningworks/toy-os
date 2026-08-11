@@ -275,6 +275,91 @@ forever.
   menu opens from the taskbar button, hover tracks the mouse live,
   clicking a row shows the gold flash then closes the menu, same as
   before the split.
+- New Task Manager app (`apps/taskmgr.c`/`.h`) -- lists every open
+  window (title + normal/minimized/maximized state) and shows system
+  memory (physical RAM total/used via `pmm_*`, kernel heap total/used
+  via `heap_*` -- both already existed in `kapi.h`, just never had a
+  UI). Redraws every tick along with the taskbar clock, so the numbers
+  stay live without a manual refresh. No CPU column -- GUI apps aren't
+  scheduled processes in this kernel, so there's no real per-app CPU
+  number to show yet (see docs/decisions.md). Needed one small new
+  `apps/wm/wm.h` addition: `wm_window_count()`/`wm_get_window()`, a
+  read-only accessor pair so an app outside `apps/wm/` can list windows
+  without reaching into `wm_internal.h` (which stays WM-private).
+  Verified via QMP: opened Task Manager, confirmed it lists itself,
+  opened two Calculator windows and watched "Heap used" and the window
+  list update live, closed them and confirmed both returned to their
+  prior values.
+- **Fixed a real heap-corruption bug found by the above**: the kernel
+  heap's `kfree()` (`kernel/core/heap.c`) could silently corrupt a
+  still-in-use block's size field when freeing its list-previous
+  neighbor, if that neighbor happened to still be allocated -- the
+  coalescing helper only checked whether the block being merged *in*
+  was free, not whether the block being merged *into* was. This sat
+  completely invisible until Task Manager displayed `heap_used_bytes()`
+  for the first time and showed an impossible ~16 exabyte figure.
+  Root-caused, fixed (added a `b->prev->free` guard before merging),
+  and `heap_selftest()` strengthened to check `heap_used_bytes() == 0`
+  after freeing everything, specifically so this class of bug can't
+  regress silently again. See docs/decisions.md for the full story.
+- New dev tooling in `tools/`, aimed at making the build/test/delivery
+  loop this project's own `CLAUDE.md`/skill describes faster and less
+  error-prone: `preflight.sh` (one command running
+  `make clean && make all && make iso` + the boot smoke test + a git
+  status summary -- "am I safe to deliver?" in one pass instead of
+  three commands run by hand), `deliver.py` (builds the file-list/
+  device-path/protected-file manifest and a commit-message skeleton for
+  the delivery step, catching the `Makefile`/`*.yml` protected-file
+  exception before a real `device_commit_files` call would reject it),
+  `gui_flow.py` (named QMP click-flows -- `open_app("Calculator")`
+  instead of hand-deriving Start-menu row pixel math every session),
+  and `screenshot_diff.py` (pixel-diffs two screenshots with a
+  pass/fail threshold, for catching a rendering regression manual
+  eyeballing might miss).
+- **TFS2's on-disk format now supports multi-gigabyte files.**
+  Previously every file was capped at 2048 bytes, stored inline in one
+  fixed-size table record; now each file record holds a small set of
+  block-number pointers (12 direct + single/double/triple indirect,
+  the same scheme real Unix filesystems have used for decades) into a
+  new block-addressed region of the disk, backed by a free-block
+  bitmap. `disk.img` grew from 1MiB to a sparse 9GiB (`Makefile`) to
+  have room for it -- **this is an incompatible on-disk format change**
+  (version byte bumped 1 -> 2): an old disk.img is detected as foreign
+  and reformatted from scratch, same "no migration, just reformat"
+  policy this project has always used for format bumps, but it means
+  existing saved files are lost the first time this boots against an
+  old image. Run `make clean-disk` once to get a correctly-sized fresh
+  one.
+  New `ata_read_sectors()`/`ata_write_sectors()` (`kernel/drivers/
+  ata.c`/`.h`) transfer up to 8 sectors (one 4096-byte filesystem
+  block) in a single ATA command instead of one command per 512-byte
+  sector, for both the PIO and DMA paths -- the DMA path reuses the
+  bounce buffer that was already a full 4096-byte frame (only 512 of
+  it was ever used before), so no new allocation was needed.
+  Also added the new streaming API this all exists to support:
+  `fs_read_range()`/`fs_write_range()`/`fs_size()` (`fs.h`), for
+  reading/writing a file in bounded chunks instead of needing the
+  whole thing in RAM at once -- because `fs_read()`'s existing "whole
+  file in one buffer" contract literally cannot work for a file bigger
+  than available RAM (256MB in the normal QEMU config), no matter how
+  large the on-disk format gets. `fs_read()`/`fs_write()` themselves
+  are unchanged for every existing caller (Notepad, the shell,
+  editor.c) -- small files still work exactly as before, just
+  reassembled from blocks into one heap-allocated staging buffer
+  instead of being one inline blob already in RAM.
+  Verified via QEMU: a new `fs: selftest passed (triple-indirect
+  addressing verified)` boot-time check (`tfs.c`'s `tfs_selftest()`,
+  same "prove it every boot" pattern as `heap_selftest()`/
+  `pmm_selftest()`) writes/reads/deletes a small chunk at a ~4.6GB
+  offset -- past direct+single+double indirect's combined ~4GB
+  capacity, so it only passes if the triple-indirect chain was built
+  and walked correctly, without needing to actually write gigabytes of
+  data at boot. Also verified interactively: saved a Notepad file,
+  restarted QEMU from cold, reloaded it -- confirming the new format
+  round-trips correctly through a real reboot, not just within one
+  boot's RAM state. A full end-to-end 8GB write/read wasn't run in
+  this session (would take a long time over emulated PIO/DMA) -- see
+  docs/roadmap.md.
 
 ### Changed
 - Versioning switched from a per-change build-number scheme

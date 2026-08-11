@@ -72,6 +72,15 @@ void window_invalidate(struct window *win) {
     redraw_pending = 1;
 }
 
+// --- read-only window introspection (see wm.h's declarations) ---
+
+int wm_window_count(void) { return window_count; }
+
+const struct window *wm_get_window(int index) {
+    if (index < 0 || index >= window_count) return 0;
+    return &windows[index];
+}
+
 // ---- window lifecycle ----
 
 void bring_to_front(int idx) {

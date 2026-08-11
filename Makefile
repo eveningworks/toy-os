@@ -29,9 +29,25 @@ ISO = toy-os.iso
 # GRUB/QEMU only ever mount as a read-only CD-ROM (El Torito). Created
 # once and then left alone by every other target (including `clean` --
 # see below) so files written during one `make run` are still there the
-# next time, exactly the point of it existing. 1MiB comfortably fits the
-# current on-disk layout (1 + 16*5 = 81 sectors, ~40KB -- see fs.c) with
-# room to spare.
+# next time, exactly the point of it existing.
+#
+# 9GiB, sparse -- grown from the original 1MiB when TFS2's on-disk
+# format switched from one fixed-size inline data blob per file to a
+# real block allocator + indirect pointers, specifically to support
+# multi-gigabyte files (see kernel/drivers/tfs.c's FS_DISK_TOTAL_BYTES,
+# which MUST match this). `truncate` makes a sparse file -- the actual
+# bytes on YOUR disk only grow as toy-os actually writes into the
+# image, not upfront, so creating this doesn't eat 9GiB of real space
+# by itself (most filesystems support sparse files; if yours doesn't,
+# this will actually allocate the full 9GiB up front).
+#
+# IMPORTANT: this rule only runs if disk.img doesn't already exist (see
+# below) -- an existing 1MiB disk.img from before this change will NOT
+# be auto-grown by `make`. TFS2's on-disk format also changed
+# incompatibly at the same time (see tfs.c's top-of-file warning), so
+# there's no upgrade path for an old image anyway: run `make clean-disk`
+# once (wipes disk.img -- existing saved files are lost either way) to
+# get a fresh, correctly-sized one.
 DISK_IMG = disk.img
 
 # userland test programs (see userland/README or kernel's "Process
@@ -254,7 +270,7 @@ $(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) linker.ld
 # Only created if it doesn't already exist -- see DISK_IMG's comment
 # above for why this must never overwrite an existing image.
 $(DISK_IMG):
-	dd if=/dev/zero of=$@ bs=1M count=1 status=none
+	truncate -s 9G $@
 
 iso: version $(KERNEL) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF)
 	mkdir -p iso/boot/grub
