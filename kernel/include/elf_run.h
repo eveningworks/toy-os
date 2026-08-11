@@ -13,11 +13,20 @@
 // own top comment) so any binary can use sbrk()-based allocation, and
 // prints its own progress/errors to the console.
 //
+// `args` is an optional, space-separated argument string (NULL or ""
+// for none) -- e.g. "-l /docs" -- passed to the binary as argv[1..],
+// with `path` itself becoming argv[0] (see process_run_ring3_args()'s
+// doc comment in process.h for how argc/argv actually reach ring 3;
+// this function is what builds the argv string/pointer-array layout on
+// the process's stack page before handing off to it). No quoting
+// support -- a run of non-space characters is one argument, same as
+// the shell's own dispatch()/cmd_run() splitting.
+//
 // Returns the process's real exit code (see process_run_ring3()'s doc
 // comment for what a negative value means -- PROCESS_CRASHED, in
 // practice) on success, or -1 if the binary couldn't even be loaded
-// (bad path, corrupt/non-ELF64 file, out of memory) -- nothing ever
-// runs in that case.
-int elf_run_from_fs(const char *path);
+// (bad path, corrupt/non-ELF64 file, out of memory, or `args` too long
+// to fit in the one stack page) -- nothing ever runs in that case.
+int elf_run_from_fs(const char *path, const char *args);
 
 #endif

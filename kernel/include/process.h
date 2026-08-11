@@ -25,6 +25,18 @@
 // needs to nest.
 int process_run_ring3(uint64_t pml4_phys, uint64_t entry, uint64_t user_rsp);
 
+// Same as process_run_ring3() above, but also seeds RDI/RSI before
+// entering ring 3 -- the SysV calling convention's first two integer
+// arguments, so an ELF that declares `void _start(int argc, char
+// **argv)` (see userland/ls.c) receives them exactly like an ordinary
+// function call. process_run_ring3() itself is now a thin wrapper
+// around this with argc=0/argv=0, kept as its own name since every
+// existing caller (and every *test binary) neither needs nor expects
+// arguments -- see elf_run.c's argv-layout comment for how `argv`'s
+// pointed-to data gets built.
+int process_run_ring3_args(uint64_t pml4_phys, uint64_t entry, uint64_t user_rsp,
+                            uint64_t argc, uint64_t argv);
+
 // The sentinel process_run_ring3() returns when its ring-3 code faulted
 // instead of exiting cleanly -- never a real exit code (context_switch.h's
 // +1 exit-code bias means a real exit(N) always returns N, N >= a

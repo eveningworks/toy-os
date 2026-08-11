@@ -64,6 +64,11 @@ static struct open_file fd_table[FD_TABLE_SIZE];
 static struct dirent *g_listdir_out = 0;
 static uint32_t g_listdir_max = 0;
 static uint32_t g_listdir_count = 0;
+// Holds the (already-validated, NUL-terminated) directory path for the
+// call in progress -- needed alongside `name` to build each entry's own
+// full path for the fs_stat() call below (fs_list()'s callback only
+// ever hands back the bare last component, per its own doc comment).
+static char g_listdir_dir_path[FS_PATH_MAX];
 
 static void listdir_collect(const char *name, uint32_t size, int is_dir) {
     if (g_listdir_count >= g_listdir_max) return;
@@ -71,6 +76,30 @@ static void listdir_collect(const char *name, uint32_t size, int is_dir) {
     k_strcpy(e->name, name);
     e->size = size;
     e->is_dir = (uint32_t)is_dir;
+
+    // Build "<dir>/<name>" (or "/<name>" when dir is just "/") to look
+    // up this entry's own timestamps -- see struct dirent's `modified`
+    // field comment (syscall_abi.h) for why this is here at all.
+    // Zeroed rather than left uninitialized on the rare failure path
+    // (shouldn't happen for anything fs_list() itself just reported),
+    // so a bug here shows up as an obviously-wrong 0000-00-00 rather
+    // than reading stale/garbage struct bytes.
+    char full_path[FS_PATH_MAX];
+    size_t dl = k_strlen(g_listdir_dir_path);
+    k_strcpy(full_path, g_listdir_dir_path);
+    if (dl > 1) { // dir isn't just "/" -- needs a separating slash
+        if (dl + 1 < FS_PATH_MAX) { full_path[dl] = '/'; full_path[dl + 1] = '\0'; dl++; }
+    }
+    size_t nl = k_strlen(name);
+    if (dl + nl < FS_PATH_MAX) k_strcpy(full_path + dl, name);
+
+    struct fs_timestamps ts;
+    if (fs_stat(full_path, &ts)) {
+        e->modified = ts.modified;
+    } else {
+        k_memset(&e->modified, 0, sizeof(e->modified));
+    }
+
     g_listdir_count++;
 }
 
@@ -642,6 +671,7 @@ void syscall_dispatch(uint64_t *regs) {
             g_listdir_out = (struct dirent *)(uintptr_t)rsi;
             g_listdir_max = max;
             g_listdir_count = 0;
+            k_strcpy(g_listdir_dir_path, path); // see listdir_collect()'s per-entry fs_stat()
             fs_list(path, listdir_collect);
             regs[14] = g_listdir_count;
             g_listdir_out = 0; // don't leave a stale user pointer armed
@@ -682,6 +712,13 @@ void syscall_dispatch(uint64_t *regs) {
             regs[14] = (uint64_t)-1;
         } else {
             *(struct pci_device *)(uintptr_t)rsi = *dev;
+            regs[14] = 1;
+        }
+    } else if (rax == SYS_SET_COLOR) {
+        if (rdi > VGA_WHITE || rsi > VGA_WHITE) {
+            regs[14] = (uint64_t)-1;
+        } else {
+            vga_set_color((enum vga_color)rdi, (enum vga_color)rsi);
             regs[14] = 1;
         }
     }

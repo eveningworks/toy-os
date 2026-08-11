@@ -1223,3 +1223,28 @@ generator's first cut had (omitting Escape/Backspace/Tab/Enter from
 its key list, which silently broke Enter the moment the shell started
 loading layouts from generated files instead of the old compiled-in
 ones -- found live, not by review).
+
+## A syscall's path-pointer validation checks a full `FS_PATH_MAX` range, not just up to the string's NUL
+
+`elf_run_from_fs()`'s argv-on-stack layout (see `ls`'s migration to a
+real `/bin` binary, `CHANGELOG.md`'s `[Unreleased]` entry) originally
+packed argument strings as tightly as possible against the one stack
+page's literal top address. That broke `SYS_LISTDIR` the moment an
+argv string landed close enough to the page boundary: its handler
+(`kernel/core/syscall.c`) calls `vmm_validate_user_range(pml4, rdi,
+FS_PATH_MAX)` on the incoming path pointer -- a fixed 64-byte range
+from wherever the pointer starts, regardless of the real string's
+length -- so a short string near the page's end still failed
+validation because the *range* ran past the mapped page, even though
+the string itself (with its NUL) fit fine. Every path-taking syscall
+in this kernel follows the same fixed-range-not-string-length
+convention (bounding the read once up front rather than trusting a
+NUL inside untrusted ring-3 memory), so this isn't `SYS_LISTDIR`-
+specific -- any future caller building a buffer a userland path
+pointer will point into needs to leave `FS_PATH_MAX` bytes of margin
+after it, not just after its longest real string. Fixed by reserving
+`FS_PATH_MAX` bytes of never-written padding at the stack page's true
+top before laying out any argv strings, guaranteeing every token's
+start address has a full `FS_PATH_MAX` mapped bytes after it. Found
+live via QMP testing (`ls /` failed with "cannot access '/'"), not by
+review.

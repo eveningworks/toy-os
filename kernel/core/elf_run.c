@@ -10,6 +10,7 @@
 #include "syscall.h"
 #include "vga.h"
 #include "klog.h"
+#include "string.h"
 
 // Chosen the same way file_test.c/newsyscalls_test.c's own STACK_VADDR
 // constants are: well clear of wherever a small ELF's own PT_LOAD
@@ -21,7 +22,98 @@
 // segments land near VMM_USER_BASE.
 #define ELF_RUN_HEAP_VADDR 0x8000100000ULL
 
-int elf_run_from_fs(const char *path) {
+// Max argv entries (including argv[0], the path itself) a single
+// elf_run_from_fs() call can hand off -- plenty for anything this
+// kernel's own /bin binaries take (ls's -a/-l/-al plus one path
+// argument is at most 3), well short of the one stack page's real
+// limit (see build_argv_on_stack()'s own overflow check below, which
+// is what actually enforces the hard limit).
+#define ELF_RUN_MAX_ARGC 16
+
+// Lays argv[0]=path plus each whitespace-separated token of `args`
+// (NULL/"" for none) into the identity-mapped stack page at
+// `stack_phys`/`stack_vaddr`, per this file's own top-of-header
+// layout comment (elf_run.h): argument strings written down from the
+// page's top, followed by the argv pointer array (each pointer a
+// *vaddr*, since that's what ring-3 code will dereference) at a lower
+// address, with `*out_user_rsp` set to that pointer array's own
+// address -- so a subsequent `push` from ring 3 only ever writes to
+// fresh, lower, previously-unused stack space. Returns 1 on success,
+// 0 if `args` has too many tokens (ELF_RUN_MAX_ARGC) or the strings +
+// pointer array don't fit in the one 4096-byte page -- callers must
+// treat that as a hard failure, not silently truncate.
+static int build_argv_on_stack(uint64_t stack_phys, uint64_t stack_vaddr,
+                                const char *path, const char *args,
+                                uint64_t *out_argc, uint64_t *out_argv,
+                                uint64_t *out_user_rsp) {
+    uint8_t *page = (uint8_t *)(uintptr_t)stack_phys;
+
+    // Token boundaries (into `path`/`args`, not copies) -- collected
+    // first so the write-downward-from-the-top pass below can place
+    // argv[0] (path) closest to the top, then each `args` token below
+    // it in order, matching the argv[] index order.
+    const char *tok_start[ELF_RUN_MAX_ARGC];
+    size_t tok_len[ELF_RUN_MAX_ARGC];
+    int argc = 0;
+    tok_start[argc] = path;
+    tok_len[argc] = k_strlen(path);
+    argc++;
+
+    if (args) {
+        const char *p = args;
+        while (*p) {
+            while (*p == ' ') p++;
+            if (!*p) break;
+            const char *start = p;
+            while (*p && *p != ' ') p++;
+            if (argc >= ELF_RUN_MAX_ARGC) return 0; // too many arguments
+            tok_start[argc] = start;
+            tok_len[argc] = (size_t)(p - start);
+            argc++;
+        }
+    }
+
+    // Write each token's bytes downward, starting FS_PATH_MAX bytes
+    // below the page's true top rather than right at it -- reserved,
+    // never-written padding. Several syscalls that take a path argument
+    // (SYS_LISTDIR chief among them, see syscall.c) validate a full
+    // FS_PATH_MAX-byte range starting at whatever pointer userland
+    // passes in, not just up to its NUL -- a real, blocking bug hit
+    // testing this feature: `ls /` crashed vmm_validate_user_range()'s
+    // check because argv[0] ("/bin/ls") landed close enough to the
+    // page's literal end that FS_PATH_MAX bytes past it ran off the
+    // mapped page. Reserving this margin guarantees every token's start
+    // address, no matter which one ends up closest to the top, still
+    // has a full FS_PATH_MAX mapped bytes after it.
+    size_t offset = 4096 - FS_PATH_MAX;
+    uint64_t str_vaddr[ELF_RUN_MAX_ARGC];
+    for (int i = 0; i < argc; i++) {
+        size_t len = tok_len[i] + 1; // include the NUL
+        if (len > offset) return 0; // doesn't fit in the page
+        offset -= len;
+        k_memcpy(page + offset, tok_start[i], tok_len[i]);
+        page[offset + tok_len[i]] = '\0';
+        str_vaddr[i] = stack_vaddr + offset;
+    }
+
+    // Pointer array (argc entries + a trailing NULL), 8-byte aligned,
+    // placed below every string it points at.
+    offset &= ~(size_t)7;
+    size_t ptr_bytes = (size_t)(argc + 1) * 8;
+    if (ptr_bytes > offset) return 0; // doesn't fit in the page
+    offset -= ptr_bytes;
+
+    uint64_t *argv_ptrs = (uint64_t *)(page + offset);
+    for (int i = 0; i < argc; i++) argv_ptrs[i] = str_vaddr[i];
+    argv_ptrs[argc] = 0;
+
+    *out_argc = (uint64_t)argc;
+    *out_argv = stack_vaddr + offset;
+    *out_user_rsp = stack_vaddr + offset;
+    return 1;
+}
+
+int elf_run_from_fs(const char *path, const char *args) {
     uint32_t size = 0;
     const char *data = fs_read(path, &size);
     if (!data) {
@@ -78,12 +170,21 @@ int elf_run_from_fs(const char *path) {
     // whose bespoke kernel-side loader remembered to arm it.
     syscall_reset_heap(as, ELF_RUN_HEAP_VADDR);
 
-    klog_write("elf_run: calling process_run_ring3() for ");
+    uint64_t argc = 0, argv = 0, user_rsp = 0;
+    if (!build_argv_on_stack(stack_phys, ELF_RUN_STACK_VADDR, path, args,
+                              &argc, &argv, &user_rsp)) {
+        vga_write("run: arguments too long for ");
+        vga_write(path);
+        vga_write("\n");
+        return -1;
+    }
+
+    klog_write("elf_run: calling process_run_ring3_args() for ");
     klog_write(path);
     klog_write("\n");
 
-    int exit_code = process_run_ring3(as, entry, ELF_RUN_STACK_VADDR + 4096);
+    int exit_code = process_run_ring3_args(as, entry, user_rsp, argc, argv);
 
-    klog_write("elf_run: process_run_ring3() returned\n");
+    klog_write("elf_run: process_run_ring3_args() returned\n");
     return exit_code;
 }

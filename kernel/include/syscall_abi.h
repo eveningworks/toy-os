@@ -2,6 +2,7 @@
 #define SYSCALL_ABI_H
 
 #include <stdint.h>
+#include "timer.h" // struct rtc_time -- reused by SYS_GETTIME and struct dirent's `modified` below
 
 // Syscall numbers (passed in RAX) and argument conventions for `int
 // 0x80`, shared between the kernel's dispatcher (kernel/core/syscall.c)
@@ -190,6 +191,16 @@ struct dirent {
                       // e.g. "notes.txt", not "/docs/notes.txt"
     uint32_t size;    // meaningless (0) for directories, same as fs_list()
     uint32_t is_dir;
+    // Added for /bin/ls's `-l` (see userland/ls.c) -- SYS_LISTDIR's
+    // kernel-side handler fills this via an extra fs_stat() call per
+    // entry (fs.c/fs.h), same `struct rtc_time` SYS_GETTIME already
+    // hands to ring-3, reused rather than declaring a syscall-private
+    // copy (same precedent as SYS_PCI_INFO reusing struct pci_device).
+    // Zeroed (all-0 rtc_time) for the implicit root's own children if
+    // fs_stat() ever legitimately fails for an entry -- shouldn't
+    // happen for anything fs_list() itself just reported, but the
+    // syscall handler doesn't treat that as fatal for the whole call.
+    struct rtc_time modified;
 };
 
 #define SYS_LISTDIR_MAX 32 // caps how many entries a single SYS_LISTDIR
@@ -290,5 +301,21 @@ struct dirent {
                           // Returns 1 (RAX) on success, -1 for an
                           // out-of-range index or an invalid output
                           // pointer. Wraps pci_device_at().
+
+// Added for /bin/ls's `--color=auto`-by-default output (userland/ls.c)
+// -- the first syscall letting a ring-3 process affect its own console
+// color, mirroring the shell's own `color` command (apps/shell_sys.c's
+// cmd_color(), which just calls vga_set_color() directly from kernel
+// space). RDI/RSI are raw `enum vga_color` values (vga.h -- see the
+// same reuse-the-kernel-struct precedent as SYS_PCI_INFO/SYS_GETTIME;
+// userland code #includes "vga.h" for the enum only, same as ls.c does
+// for `pci.h`'s struct in lspci.c). Out-of-range values (not 0-15) are
+// rejected (-1) rather than clamped or ignored, so a caller passing a
+// bad value finds out immediately instead of drawing in some arbitrary
+// fallback color.
+#define SYS_SET_COLOR 21 // RDI = foreground vga_color, RSI = background
+                          // vga_color. Wraps vga_set_color() directly.
+                          // Returns 1 (RAX) on success, -1 if either
+                          // value is outside 0-15 (VGA_BLACK..VGA_WHITE).
 
 #endif

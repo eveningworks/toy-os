@@ -71,7 +71,10 @@ For everything else:
 
 `help` (categorized; `help tests` for the developer/diagnostic ones
 below), `clear`, `time`, `uptime`, `echo <text>`, `about`, `meminfo`,
-`dmesg`, `color <name>`, `reboot`, `ls`, `cat <f>`, `touch <f>`,
+`dmesg`, `color <name>`, `reboot`, `ls [-al] [dir]` (colored by
+default, `-l` shows type/size/mtime, `-a` accepted as a no-op -- a
+real disk-hosted `/bin/ls` binary, not a shell built-in, see
+`docs/decisions.md`), `cat <f>`, `touch <f>`,
 `write <f> <text>`, `append <f> <text>`, `rm <f>`,
 `edit <f>`/`nano <f>` (full-screen nano/pico-style editor -- arrows/
 Home/End/Delete to navigate and edit, F2 to save, F3 to exit; works

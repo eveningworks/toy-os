@@ -36,7 +36,6 @@ extern int history_count;
 int resolve_path(const char *input, char *out);
 
 // Filesystem commands -- defined in shell_fs.c.
-void cmd_ls(const char *args);
 void cmd_cat(const char *name);
 void cmd_touch(const char *name);
 void cmd_mkdir(const char *name);
@@ -64,5 +63,6 @@ void cmd_keyboard(const char *args);
 void cmd_color(const char *args);
 void cmd_history(void);
 void cmd_lspci(void);
+void cmd_ls_bin(const char *args);
 
 #endif

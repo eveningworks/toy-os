@@ -59,6 +59,93 @@ forever.
   border stays intact and visible above/below the text at every size.
 
 ### Added
+- `ls` migrated off its kernel-space shell built-in onto a real,
+  disk-hosted ELF64 binary (`/bin/ls`, `userland/ls.c`) -- the third
+  binary to run through `elf_run_from_fs()` (after `lspci`/the ~13
+  test binaries), and the first to actually need arguments. User asked
+  for this plus GNU-coreutils-flavored `-l`/`-al` and
+  `--color=auto`-by-default behavior; scoped via `AskUserQuestion` into
+  three real infrastructure additions rather than one-off hacks:
+  - **Real argc/argv at ELF entry.** `process_run_ring3()`
+    (`kernel/core/process.c`/`.h`) is now a thin argc=0/argv=0 wrapper
+    around a new `process_run_ring3_args(pml4_phys, entry, user_rsp,
+    argc, argv)`, which seeds RDI/RSI (SysV's first two integer
+    arguments) before `iretq` -- any `/bin` binary can now declare
+    `void _start(int argc, char **argv)` and receive them like an
+    ordinary function call. `elf_run_from_fs()` (`kernel/core/elf_run.c`/
+    `.h`) gained an `args` parameter (space-separated, no quoting) and a
+    `build_argv_on_stack()` helper that lays argv[0]=path plus each
+    `args` token onto the process's one identity-mapped stack page:
+    strings written downward from the page's top, the argv pointer
+    array below them, `user_rsp` set to the pointer array's own address
+    so a subsequent `push` from ring 3 only ever touches fresh, lower,
+    previously-unused space. Real bug hit and fixed here: several
+    path-taking syscalls (`SYS_LISTDIR` chief among them) validate a
+    full `FS_PATH_MAX` (64) byte range starting at whatever pointer
+    userland passes, not just up to its NUL -- `argv[0]` landing close
+    enough to the stack page's literal top made that validation run off
+    the mapped page and fail. Fixed by reserving `FS_PATH_MAX` bytes of
+    never-written padding at the page's true top before laying out any
+    argv strings.
+  - **`SYS_SET_COLOR` syscall** (`kernel/include/syscall_abi.h`/
+    `kernel/core/syscall.c`) -- RDI/RSI are foreground/background
+    `enum vga_color` values, wraps `vga_set_color()` directly (same
+    thing the shell's own `color` command does from kernel space).
+    Rejects (-1) an out-of-range value rather than clamping it.
+  - **Real per-entry timestamps for `SYS_LISTDIR`** -- `struct dirent`
+    gained a `struct rtc_time modified` field (reusing the same struct
+    `SYS_GETTIME` already hands to ring-3); the kernel-side handler now
+    calls `fs_stat()` once per entry to fill it. No permission-bits or
+    owner concept exists in this filesystem at all, so `ls -l` shows
+    real type/size/mtime only, no invented placeholder columns.
+  - `userland/ls.c` -- no libc, same shape as `lspci.c`. `-a` is
+    accepted but a no-op (no dotfile-hiding convention on this
+    filesystem, so there's nothing for it to additionally reveal;
+    accepted so a habitual `ls -la` doesn't error). Default output
+    colors each name via `SYS_SET_COLOR` (directories vs. files),
+    unconditionally -- matching `--color=auto`'s look without a flag
+    to gate it, per this feature's scope. `-l` shows a type char
+    (`d`/`-`), right-aligned size, `MM/DD/YYYY HH:MM:SS` mtime (same
+    shape `stat`'s own `print_stat_timestamp()` already uses), then
+    the (still-colored) name.
+  - `apps/shell_sys.c` gained `cmd_ls_bin()` -- ls's own dedicated
+    dispatch entry (same precedent as `cmd_lspci()`), splitting
+    `-a`/`-l`/`-al`/`-la` flags from an optional positional directory
+    argument and resolving that argument (or defaulting to `cwd`)
+    through `resolve_path()` before crossing into ring 3 -- `fs.c`/
+    `fs.h` has no cwd concept at all, and neither does `userland/ls.c`,
+    so this is the one place a relative path becomes absolute.
+    `cmd_run()` also gained its own name/args split (previously only
+    ever passed a bare binary name to `elf_run_from_fs()`).
+  - `apps/shell_fs.c`'s old `cmd_ls()`/`list_cb()` (direct `fs_list()`
+    call from kernel space) are deleted, per the user's explicit
+    request -- `ls` has exactly one implementation now, not two.
+  - **Real, documented regression, not an oversight:** `ls` joined
+    `apps/terminal.c`'s `BLOCKED_CMDS` (GUI Terminal) alongside `run`.
+    Every path through `elf_run_from_fs()`/`process_run_ring3_args()`
+    is synchronous and blocking -- it would freeze the Terminal
+    window's whole event loop until the process exits, same hazard
+    `run` was already blocked for. User was shown the real cost of
+    building async/continuously-armed spawn support this session (new
+    public spawn API, scheduler changes, `wm_run()` restructuring,
+    new per-window process-running state) and explicitly chose to ship
+    `ls` now and track that infrastructure on `docs/roadmap.md`
+    instead of building it this round. Directory listing from inside
+    the GUI Terminal is unavailable until that lands.
+  - `Makefile`: `LS_ELF`/build rule pair mirroring `lspci`, `SEED_BINARIES`
+    entry, added to `all`/`seed`/`iso`/`clean`'s prerequisite lists.
+  - Verified via QMP against a clean `make clean && make all && make
+    iso`: `ls`, `ls -l`, `ls -a`, `ls -al /bin` all produce correct,
+    colored output with real sizes/timestamps from the physical shell;
+    `run lspci` (the zero-arg `process_run_ring3()` path) still works
+    unchanged, confirming the argc/argv plumbing didn't regress
+    existing callers; `ls` inside the GUI Terminal shows the expected
+    blocked-command message instead of hanging the window. (Testing
+    aside, unrelated to this feature: the QEMU test VM's disk had a
+    Swedish keyboard layout persisted from earlier keyboard-layout
+    testing this session, which briefly looked like a `-`/`=` key
+    corruption bug before `keyboard us` explained it -- included here
+    only so a future session doesn't rediscover the same red herring.)
 - The remaining ~13 GRUB-module-loaded ELF64 test binaries
   (`elf_test`/`hello.elf`, `syscall_test`, `write_test`,
   `write_bad_test`, `ptr_test`/(folded away, see below), `gui_test`,

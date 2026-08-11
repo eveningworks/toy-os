@@ -101,8 +101,20 @@ static struct terminal_state g_terminal;
 // the same simple way as before this migration. Every /bin binary can
 // still be run from the physical shell via `run <name>`, just not from
 // inside this window.
+//
+// `ls` joined this list once it migrated from a kernel-space built-in
+// to a real /bin binary (see userland/ls.c, CHANGELOG.md): like every
+// path through elf_run_from_fs()/process_run_ring3_args(), it's a
+// synchronous, blocking ring-3 call that would freeze this window's
+// whole event loop until it returns -- same hazard as `run`, just
+// reached through a dedicated dispatch entry instead of `run`'s
+// generic one, so it needs its own line here rather than being covered
+// by `run` already being blocked. A real fix needs the async/
+// continuously-armed spawn infrastructure tracked in docs/roadmap.md,
+// not a per-command workaround. Directory listing from inside the GUI
+// Terminal is unavailable until that lands.
 static const char *const BLOCKED_CMDS[] = {
-    "gui", "run", "ring3test", "schedtest",
+    "gui", "run", "ring3test", "schedtest", "ls",
 };
 #define BLOCKED_CMD_COUNT (sizeof(BLOCKED_CMDS) / sizeof(BLOCKED_CMDS[0]))
 

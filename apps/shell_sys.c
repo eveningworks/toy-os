@@ -82,7 +82,8 @@ static const char *const HELP_LINES[] = {
     "  reboot        - reset the machine\n",
     "\n",
     "Files & filesystem:\n",
-    "  ls [dir]      - list a directory (default: cwd)\n",
+    "  ls [-al] [dir]- list a directory (default: cwd); -l for type/\n",
+    "                  size/mtime, -a accepted (no-op, no dotfiles here)\n",
     "  cd [dir]      - change directory (default: /)\n",
     "  pwd           - print the current directory\n",
     "  mkdir <dir>   - create a directory\n",
@@ -336,11 +337,28 @@ void cmd_apps(void) {
     app_list(apps_list_cb);
 }
 
-void cmd_run(const char *name) {
-    if (!name || k_strlen(name) == 0) {
-        vga_write("usage: run <app>  (see 'apps' for the list)\n");
+void cmd_run(const char *name_and_args) {
+    if (!name_and_args || k_strlen(name_and_args) == 0) {
+        vga_write("usage: run <app> [args...]  (see 'apps' for the list)\n");
         return;
     }
+
+    // Split off the binary's own name from whatever trailing arguments
+    // it should receive -- same first-word/rest split dispatch() itself
+    // does in shell.c, done again here because app_run() below still
+    // wants just the bare name.
+    char name[LINE_MAX];
+    k_strcpy(name, name_and_args);
+    char *bin_args = name;
+    while (*bin_args && *bin_args != ' ') bin_args++;
+    if (*bin_args == ' ') {
+        *bin_args = '\0';
+        bin_args++;
+        while (*bin_args == ' ') bin_args++;
+    } else {
+        bin_args = 0;
+    }
+
     if (app_run(name)) {
         // An app may have drawn over the whole screen (e.g. gui) --
         // refresh the console on return so the shell prompt is clean
@@ -371,12 +389,74 @@ void cmd_run(const char *name) {
         return;
     }
 
-    int exit_code = elf_run_from_fs(bin_path);
+    int exit_code = elf_run_from_fs(bin_path, bin_args);
     vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
     vga_write("Process finished. Exit code: ");
     vga_write_exit_code(exit_code);
     vga_putc('\n');
     vga_set_color(shell_fg, VGA_BLACK);
+}
+
+// The real /bin/ls ELF64 binary's shell-side wrapper (see
+// userland/ls.c) -- gets its own dedicated dispatch entry rather than
+// going through the generic `run` path, same precedent as cmd_lspci()
+// below having its own entry instead of requiring `run lspci`. Splits
+// `-a`/`-l`/`-al`/`-la` flags from an optional trailing positional
+// directory argument, resolves that argument (or defaults to `cwd`)
+// through resolve_path() -- fs.c/fs.h has no cwd concept at all, and
+// neither does userland/ls.c, so this is the one place a relative path
+// gets turned into an absolute one before crossing into ring 3.
+void cmd_ls_bin(const char *args) {
+    char flags[8];
+    size_t flags_len = 0;
+    char positional[FS_PATH_MAX];
+    positional[0] = '\0';
+
+    if (args) {
+        char scratch[LINE_MAX];
+        k_strcpy(scratch, args);
+        char *p = scratch;
+        while (*p) {
+            while (*p == ' ') p++;
+            if (!*p) break;
+            char *start = p;
+            while (*p && *p != ' ') p++;
+            int had_space = (*p == ' ');
+            *p = '\0';
+            if (start[0] == '-') {
+                for (size_t j = 1; start[j] && flags_len + 1 < sizeof(flags); j++) {
+                    flags[flags_len++] = start[j];
+                }
+            } else if (positional[0] == '\0') {
+                k_strcpy(positional, start);
+            }
+            if (had_space) p++;
+        }
+    }
+    flags[flags_len] = '\0';
+
+    char path[FS_PATH_MAX];
+    if (!resolve_path(positional[0] ? positional : 0, path)) {
+        vga_write("ls: path too long\n");
+        return;
+    }
+
+    char run_args[FS_PATH_MAX + 8];
+    run_args[0] = '\0';
+    if (flags_len > 0) {
+        k_strcpy(run_args, "-");
+        k_strcpy(run_args + 1, flags);
+        k_strcpy(run_args + 1 + flags_len, " ");
+    }
+    k_strcpy(run_args + k_strlen(run_args), path);
+
+    int exit_code = elf_run_from_fs("/bin/ls", run_args);
+    vga_set_color(shell_fg, VGA_BLACK);
+    if (exit_code != 0) {
+        vga_write("ls: exited with code ");
+        vga_write_exit_code(exit_code);
+        vga_putc('\n');
+    }
 }
 
 static enum vga_color color_from_name(const char *s) {

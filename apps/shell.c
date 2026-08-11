@@ -150,7 +150,7 @@ static void dispatch(char *line) {
     } else if (k_strcmp(cmd, "color") == 0) {
         cmd_color(args ? args : "");
     } else if (k_strcmp(cmd, "ls") == 0) {
-        cmd_ls(args ? args : "");
+        cmd_ls_bin(args ? args : "");
     } else if (k_strcmp(cmd, "cat") == 0) {
         cmd_cat(args ? args : "");
     } else if (k_strcmp(cmd, "touch") == 0) {

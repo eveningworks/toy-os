@@ -1,38 +1,17 @@
-// Filesystem-related shell commands: ls/cat/touch/mkdir/write/append/
+// Filesystem-related shell commands: cat/touch/mkdir/write/append/
 // rm/pwd/cd/edit. Split out of shell.c once it crossed 900 lines mixing
 // every command category together -- see shell_internal.h's top
 // comment for the split's own reasoning and CHANGELOG.md for the build
 // this happened in. Shares `cwd`/resolve_path() with shell.c and
 // shell_sys.c via shell_internal.h.
+//
+// `ls` used to live here as a kernel-space built-in (fs_list() called
+// directly) -- it migrated to a real /bin binary (userland/ls.c),
+// invoked via cmd_ls_bin() in shell_sys.c, alongside the rest of the
+// disk-hosted-binary commands (cmd_run(), cmd_lspci()'s sibling). See
+// CHANGELOG.md/docs/decisions.md for why.
 #include "shell_internal.h"
 #include "editor.h"
-
-static void list_cb(const char *name, uint32_t size, int is_dir) {
-    vga_write("  ");
-    vga_write(name);
-    if (is_dir) {
-        vga_write("/\n"); // trailing slash marks directories, no size shown
-    } else {
-        vga_write("  (");
-        vga_write_dec(size);
-        vga_write(" bytes)\n");
-    }
-}
-
-void cmd_ls(const char *args) {
-    char path[FS_PATH_MAX];
-    if (!resolve_path(args, path)) {
-        vga_write("ls: path too long\n");
-        return;
-    }
-    if (!fs_is_dir(path)) {
-        vga_write("ls: not a directory: ");
-        vga_write(path);
-        vga_putc('\n');
-        return;
-    }
-    fs_list(path, list_cb);
-}
 
 void cmd_cat(const char *name) {
     if (!name || k_strlen(name) == 0) {

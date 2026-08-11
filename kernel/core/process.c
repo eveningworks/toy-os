@@ -37,6 +37,11 @@ void process_context_recover(void) {
 }
 
 int process_run_ring3(uint64_t pml4_phys, uint64_t entry, uint64_t user_rsp) {
+    return process_run_ring3_args(pml4_phys, entry, user_rsp, 0, 0);
+}
+
+int process_run_ring3_args(uint64_t pml4_phys, uint64_t entry, uint64_t user_rsp,
+                            uint64_t argc, uint64_t argv) {
     int rc = process_context_save(&g_process_ctx);
     if (rc != 0) {
         // Resumed via the exit syscall (syscall.c) or a caught ring-3
@@ -74,10 +79,13 @@ int process_run_ring3(uint64_t pml4_phys, uint64_t entry, uint64_t user_rsp) {
         "mov %2, %%rax\n\t"
         "push %%rax\n\t"          // CS
         "push %3\n\t"             // RIP
+        "mov %4, %%rdi\n\t"       // argc
+        "mov %5, %%rsi\n\t"       // argv
         "iretq\n\t"
         :
-        : "i"(SEL_USER_DATA), "r"(user_rsp), "i"(SEL_USER_CODE), "r"(entry)
-        : "rax", "memory"
+        : "i"(SEL_USER_DATA), "r"(user_rsp), "i"(SEL_USER_CODE), "r"(entry),
+          "r"(argc), "r"(argv)
+        : "rax", "rdi", "rsi", "memory"
     );
 
     __builtin_unreachable(); // iretq transferred control to ring 3
