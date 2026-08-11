@@ -4,7 +4,9 @@
 // wm.c's top comment for why that sharing is fine here.
 #include "wm_internal.h"
 #include "start_menu.h"
-#include "widgets.h"
+#include "context_menu.h"
+#include "desktop.h"
+#include "ui/ui.h"
 #include "kapi.h"
 
 // Which window (if any) has a title-bar button under (mx, my), and
@@ -54,6 +56,7 @@ int wm_find_resize_zone(int mx, int my, int *out_right, int *out_bottom) {
 }
 
 void wm_handle_left_click(int mx, int my) {
+    if (context_menu_handle_click(mx, my)) return;
     if (start_menu_handle_click(mx, my)) return;
 
     if (my >= screen_h - taskbar_h) {
@@ -185,7 +188,123 @@ void wm_handle_left_click(int mx, int my) {
         redraw_pending = 1;
         return;
     }
-    // clicked empty desktop -- nothing to do
+    // Nothing else claimed it -- the click landed on the desktop
+    // background (or one of its icons). See desktop.h.
+    desktop_handle_click(mx, my);
+}
+
+// ---- right-click dispatch (see context_menu.h / wm_internal.h) ----
+
+// Small static scratch used as a context-menu item's `ctx` -- set right
+// before the menu it belongs to opens, read back when a row is later
+// selected. Safe as a single shared static: only one context menu is
+// ever open at a time (opening a new one always closes the last), and
+// nothing else in this single-threaded event loop can touch it in
+// between open and select.
+static int g_ctx_window_target;
+
+static void ctx_close_window(void *ctx) { close_window(*(int *)ctx); }
+
+static void ctx_minimize_window(void *ctx) {
+    int i = *(int *)ctx;
+    windows[i].state = WIN_MINIMIZED;
+    redraw_pending = 1;
+}
+
+static void ctx_toggle_maximize_window(void *ctx) {
+    int i = *(int *)ctx;
+    if (!(windows[i].app && windows[i].app->resizable)) return; // fixed-size app -- same rule the title-bar button follows
+    if (windows[i].state == WIN_MAXIMIZED) {
+        windows[i].x = windows[i].saved_x; windows[i].y = windows[i].saved_y;
+        windows[i].w = windows[i].saved_w; windows[i].h = windows[i].saved_h;
+        windows[i].state = WIN_NORMAL;
+    } else {
+        windows[i].saved_x = windows[i].x; windows[i].saved_y = windows[i].y;
+        windows[i].saved_w = windows[i].w; windows[i].saved_h = windows[i].h;
+        windows[i].x = 0; windows[i].y = 0;
+        windows[i].w = screen_w; windows[i].h = screen_h - taskbar_h;
+        windows[i].state = WIN_MAXIMIZED;
+    }
+    redraw_pending = 1;
+}
+
+static void ctx_open_app(void *ctx) { open_app((const struct gui_app *)ctx); }
+
+void wm_handle_right_click(int mx, int my) {
+    // A right-click always resolves to at most one popup -- close
+    // whatever's already open before deciding what (if anything) the
+    // new click should show, so right-clicks never stack menus.
+    if (start_menu_open) {
+        // Route into the Start menu's own row only if the click actually
+        // landed on one; this duplicates start_menu.c's small geometry()
+        // formula rather than exporting an internal-only helper for the
+        // sake of one caller -- revisit if a third caller ever needs it.
+        int item_h = gfx_char_h() + 6;
+        int menu_w = start_menu_w();
+        int menu_x = 4;
+        int total_items = gui_app_registry_count + wm_system_action_count;
+        int menu_y = (screen_h - taskbar_h) - item_h * total_items;
+        int hit_row = widget_hit(menu_x, menu_y, menu_w, item_h * total_items, mx, my)
+                      ? (my - menu_y) / item_h : -1;
+        start_menu_open = 0;
+        redraw_pending = 1;
+        if (hit_row >= 0 && hit_row < gui_app_registry_count) {
+            static struct context_menu_item item[1];
+            item[0].label = "Open";
+            item[0].on_select = ctx_open_app;
+            item[0].ctx = (void *)&gui_app_registry[hit_row];
+            context_menu_open_at(mx, my, item, 1);
+        }
+        return;
+    }
+
+    if (context_menu_open) context_menu_close();
+
+    if (my >= screen_h - taskbar_h) {
+        int ty = screen_h - taskbar_h;
+        int sbw = start_btn_w(), wbw = win_btn_w();
+        int bx = 4 + sbw + 8;
+        for (int i = 0; i < window_count; i++) {
+            if (widget_hit(bx, ty, wbw, taskbar_h, mx, my)) {
+                g_ctx_window_target = i;
+                static struct context_menu_item item[1];
+                item[0].label = "Close window";
+                item[0].on_select = ctx_close_window;
+                item[0].ctx = &g_ctx_window_target;
+                context_menu_open_at(mx, my, item, 1);
+                return;
+            }
+            bx += wbw + 4;
+        }
+        return; // taskbar area, but not over an app button (or the Start button -- no menu there)
+    }
+
+    for (int i = window_count - 1; i >= 0; i--) {
+        struct window *w = &windows[i];
+        if (w->state == WIN_MINIMIZED) continue;
+        if (!widget_hit(w->x, w->y, w->w, w->h, mx, my)) continue;
+
+        // One menu for the whole window (title bar OR content area) --
+        // mirrors the title-bar buttons' actions rather than requiring
+        // the right-click to land exactly on one of those small
+        // buttons, which is the whole point of offering it as a menu.
+        g_ctx_window_target = i;
+        static struct context_menu_item items[3];
+        int n = 0;
+        items[n].label = "Minimize"; items[n].on_select = ctx_minimize_window; items[n].ctx = &g_ctx_window_target; n++;
+        if (w->app && w->app->resizable) {
+            items[n].label = (w->state == WIN_MAXIMIZED) ? "Restore" : "Maximize";
+            items[n].on_select = ctx_toggle_maximize_window; items[n].ctx = &g_ctx_window_target; n++;
+        }
+        items[n].label = "Close"; items[n].on_select = ctx_close_window; items[n].ctx = &g_ctx_window_target; n++;
+        context_menu_open_at(mx, my, items, n);
+        return;
+    }
+
+    // Nothing else claimed it -- the desktop background (see desktop.h;
+    // it doesn't distinguish an icon from empty space this round, see
+    // its own top comment).
+    desktop_handle_right_click(mx, my);
 }
 
 void wm_update_drag_resize(int mx, int my, uint8_t buttons) {

@@ -1,7 +1,7 @@
 // See ui_button.h for the design writeup (Brutal-OS-inspired owned-state
 // button object, sized down for toy-os's immediate-mode GUI).
 #include "ui_button.h"
-#include "widgets.h"
+#include "ui_primitives.h"
 
 void ui_button_init(struct ui_button *b, int x, int y, int w, int h,
                      const char *label, uint32_t bg, uint32_t fg, int code) {

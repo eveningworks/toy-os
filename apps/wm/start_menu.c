@@ -1,7 +1,7 @@
 // See start_menu.h.
 #include "start_menu.h"
 #include "wm_internal.h"
-#include "widgets.h"
+#include "ui/ui.h"
 #include "theme.h"
 #include "kapi.h"
 

@@ -25,6 +25,7 @@
 // tracking of the scene: see wm_render_cursor_move() in wm_render.c.
 #include "wm_internal.h"
 #include "start_menu.h"
+#include "context_menu.h"
 #include "kapi.h"
 
 struct window windows[MAX_WINDOWS];
@@ -175,6 +176,7 @@ void wm_run(void) {
 
     window_count = 0;
     start_menu_open = 0;
+    context_menu_close();
     dragging = -1;
     resizing = -1;
     content_dragging = -1;
@@ -201,6 +203,12 @@ void wm_run(void) {
 
         int left_edge_down = (buttons & 0x1) && !(prev_buttons & 0x1);
         if (left_edge_down) wm_handle_left_click(mx, my);
+
+        // bit1 = right button (see mouse.h's mouse_get_state()) -- same
+        // edge-triggered pattern as the left button above, dispatching
+        // to context_menu.h's popup instead of a window action.
+        int right_edge_down = (buttons & 0x2) && !(prev_buttons & 0x2);
+        if (right_edge_down) wm_handle_right_click(mx, my);
 
         // A Start-menu action (currently just "Exit to shell") may have
         // just set this -- bail out the same way Esc used to, before

@@ -868,3 +868,57 @@ don't need, `fs_read_range(path, offset, buf, len)`/`fs_write_range()`/
 genuinely need bounded-memory access to a large file. `fs_read()`/
 `fs_write()` keep their exact old behavior and signatures. See
 `CHANGELOG.md`'s `[Unreleased]` entry (the TFS2 multi-GB bullet).
+
+## `apps/widgets.c`/`.h` no longer exist -- and `ui_scrollback`/`ui_scrollbar` didn't get an owned-geometry wrapper
+
+When every widget still in `apps/widgets.c`/`.h` (the base `widget_hit`/
+`widget_button` primitives, `text_scrollback`, the scrollbar, the
+checkbox) moved into `apps/ui/` by explicit request, it was a pure file
+move -- same function names/signatures, no rename, no redesign -- the
+same precedent `ui_button_group.c` had already set when IT moved from
+`apps/` into `apps/ui/` ("same content, no behavior change"). The one
+design question worth recording: `ui_button`/`ui_textbox` own their own
+geometry (`x/y/w/h` fields, a `set_geometry()` call), so why didn't
+`ui_scrollback`/`ui_scrollbar` get the same treatment? Because owning
+geometry only pays for itself when a caller would otherwise have to
+carry that state itself across frames -- and every real
+`text_scrollback`/scrollbar caller (Notepad, Terminal, the editor)
+already recomputes its content rect from the window's live size on
+every single frame (that's what makes resize support work at all), so
+there's no per-frame bookkeeping an owned-geometry wrapper would
+actually remove. `ui_textbox`'s geometry, by contrast, genuinely is
+mostly-static (a fixed-position field that only moves on a font-size
+change), which is exactly the case an owned `set_geometry()` call
+saves real work for. See `CHANGELOG.md`'s `[Unreleased]` entry.
+
+## The desktop's right-click quick-launch menu doesn't distinguish icons from empty space
+
+`apps/wm/desktop.c`'s `desktop_handle_right_click()` always opens the
+same full quick-launch menu (one row per `gui_app_registry` entry)
+regardless of whether the click landed on a specific icon -- a
+per-icon menu (e.g. "Open" / a future "Rename"/"Properties") was
+explicitly scoped out this round, not an oversight: desktop icons
+don't have any per-icon identity or state beyond "which
+`gui_app_registry` index am I" yet (no rename, no repositioning, no
+custom icon), so a per-icon menu would have nothing more useful to
+offer than the quick-launch menu already does. Revisit once icons gain
+real per-icon state worth a dedicated menu for. See `docs/roadmap.md`
+and `CHANGELOG.md`'s `[Unreleased]` entry (the desktop/context-menu
+bullet).
+
+## `context_menu.h`'s items carry a `void *ctx`, but `start_menu.h`'s don't
+
+`struct start_action` (`start_menu.h`) is a fixed, compile-time-known
+array (`wm_system_actions[]`) -- every action's callback is a distinct
+named function with nothing to parameterize, so a bare `void
+(*on_select)(void)` was always enough. `struct context_menu_item`
+(`context_menu.h`), by contrast, is built fresh at open time from
+runtime data (which window, which app) -- "Close window" needs to know
+*which* window, "Open" needs to know *which* app -- so its callback
+signature carries a `void *ctx` the caller stashes that data in (a
+`gui_app` pointer, or a small `static int` holding a window index) and
+gets back unchanged when a row is selected. Not applied retroactively
+to `start_menu.h` since nothing there needs it and the two aren't a
+shared abstraction to begin with (see `apps/wm/start_menu.h`'s own top
+comment on why it isn't a general "menu" type). See `CHANGELOG.md`'s
+`[Unreleased]` entry.

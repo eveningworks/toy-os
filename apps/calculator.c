@@ -36,7 +36,6 @@
 #include "calculator.h"
 #include "calc_engine.h"
 #include "wm/wm.h"
-#include "widgets.h"
 #include "ui/ui.h"
 #include "theme.h"
 #include "kapi.h"

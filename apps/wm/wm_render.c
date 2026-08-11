@@ -8,7 +8,9 @@
 // separate piece of chrome.
 #include "wm_internal.h"
 #include "start_menu.h"
-#include "widgets.h"
+#include "context_menu.h"
+#include "desktop.h"
+#include "ui/ui.h"
 #include "theme.h"
 #include "kapi.h"
 
@@ -422,7 +424,7 @@ static void draw_taskbar(void) {
 }
 
 void wm_render_frame(int mx, int my) {
-    gfx_clear(gfx_rgb(24, 60, 90));
+    desktop_draw(); // background + icon grid -- replaces the old bare gfx_clear() fill, see desktop.h
 
     for (int i = 0; i < window_count; i++) {
         if (windows[i].state == WIN_MINIMIZED) continue;
@@ -433,6 +435,7 @@ void wm_render_frame(int mx, int my) {
 
     draw_taskbar();
     if (start_menu_open) start_menu_draw(mx, my);
+    context_menu_draw(); // independent of start_menu_open -- the two are mutually exclusive (see wm_input.c)
 
     draw_cursor_at(mx, my); // also (re)establishes cursor_under for wm_render_cursor_move()
 

@@ -12,6 +12,7 @@
 #include "heap.h"
 #include "pci.h"
 #include "fs.h"
+#include "json.h"
 #include "tz.h"
 #include "font_config.h"
 #include "keyboard_config.h"
@@ -41,6 +42,8 @@ void kernel_main(uint64_t multiboot_info_addr) {
     heap_init(); // kmalloc()/kfree() -- built on pmm, needs it initialized first
     klog_write("toy-os: kernel heap initialized\n");
     heap_selftest();
+
+    json_selftest(); // parse/accessor/write/round-trip check -- only needs kmalloc, not fs_init() yet
 
     pci_init(); // brute-force config-space scan -- see pci.h's top comment
     klog_write("toy-os: PCI bus enumerated\n");

@@ -360,6 +360,89 @@ forever.
   boot's RAM state. A full end-to-end 8GB write/read wasn't run in
   this session (would take a long time over emulated PIO/DMA) -- see
   docs/roadmap.md.
+- New heap-backed JSON parser/serializer: `kernel/core/json.c`/
+  `kernel/include/json.h` -- full nested objects/arrays, coexisting
+  with `etc_config.h`'s flat name=value format rather than replacing
+  it (existing `/etc/toyos.conf` settings are untouched; JSON is
+  available for a future config file that genuinely needs nesting).
+  No floating point (`JSON_NUMBER` is `int64_t`) -- this kernel is
+  built with `-mno-sse -mno-sse2` and no soft-float, matching
+  `apps/calc_engine.h`'s same reasoning; a fractional literal parses
+  but truncates. The recursive-descent parser caps nesting at
+  `JSON_MAX_DEPTH` (32) specifically because the kernel stack is a
+  fixed 16KB. `json_read_file()`/`json_write_file()` go through the
+  new `fs_size()`/`fs_read_range()`/`fs_write_range()` streaming API
+  (this session's earlier TFS2 entry) rather than the old whole-file
+  `fs_read()`/`fs_write()`, so a large JSON document isn't capped by
+  that. Verified via a `json_selftest()` run at every boot (parse a
+  nested document with strings/numbers/bools/arrays/escapes, check
+  every accessor, round-trip it through `json_write()` and re-parse) --
+  `json: selftest passed` appears in the boot log right after the
+  heap self-test.
+- **`apps/widgets.c`/`.h` no longer exist -- every widget moved into
+  its own file under `apps/ui/`**, by explicit request (previously
+  `ui_button`/`ui_button_group`/`ui_textbox` lived there while
+  scrollback/scrollbar/checkbox/the base `widget_hit`/`widget_button`
+  primitives stayed behind in the older file). New files: `ui_primitives.c`/
+  `.h` (the base `widget_hit()`/`widget_button()`), `ui_scrollback.c`/`.h`
+  (the `text_scrollback` console/text-editing widget), `ui_scrollbar.c`/
+  `.h` (its companion scrollbar), `ui_checkbox.c`/`.h`. `struct text_field`/
+  `widget_textfield_*()` (the single-line text-input implementation)
+  moved directly into `ui_textbox.c`/`.h`, folded into the object that
+  was already its only real caller, instead of staying split across two
+  files. Deliberately a pure file-move, not a rename or redesign --
+  every function keeps its old `widget_*` name and signature, same
+  precedent `ui_button_group.c` already set ("moved here from apps/,
+  same content, no behavior change"). `ui_scrollback`/`ui_scrollbar`
+  stay plain stateful structs/free functions rather than gaining an
+  owned-geometry wrapper like `ui_button`/`ui_textbox` -- every real
+  caller (Notepad, Terminal, the editor) already recomputes its content
+  rect live from the window's current size every frame, so there's
+  nothing an owned-geometry object would save. See `docs/decisions.md`.
+  Verified via QMP across all three affected apps after a clean rebuild:
+  Notepad (filename field + Save/Load buttons + multiline editing +
+  cursor bar all still work), Terminal (scrollback rendering, colors,
+  the real shell running inside it), Calculator (button press/release
+  visual feedback, a real computation via the migrated `widget_button()`
+  chain) -- no behavior differences found.
+- **Preliminary desktop background + icon grid, and a reusable
+  right-click context menu, wired into four surfaces.** New
+  `apps/wm/desktop.c`/`.h`: fills the area below the taskbar (previously
+  a bare color fill inline in `wm_render_frame()`) and draws one icon
+  per `gui_app_registry` entry in a left-edge column -- a hand-drawn
+  filled square with the app name's first letter stands in for a real
+  icon image (no image decoder yet, see `docs/roadmap.md`). Single-click
+  selects (highlight only); a second click on the same icon within
+  `DESKTOP_DOUBLE_CLICK_TICKS` (~300ms) launches it, matching a real
+  desktop's double-click-to-open convention -- previously an idle
+  roadmap item ("Desktop icons"), now built. New `apps/wm/context_menu.c`/
+  `.h`: a generic reusable popup (label + callback + caller-supplied
+  `ctx` pointer per row, same peer-file pattern as `start_menu.c`) --
+  any caller can open one anchored at the cursor position, clamped to
+  stay fully on screen. Wired into all four places requested: right-click
+  the desktop background shows a quick-launch menu (one row per
+  registered app); right-click any window (title bar or content area)
+  shows Minimize/Maximize-or-Restore (only for resizable apps, matching
+  the title-bar button's own rule)/Close, mirroring the title-bar
+  buttons without needing to land exactly on one of them; right-click a
+  taskbar app button shows "Close window"; right-click a Start menu row
+  shows "Open" (closes the Start menu first, same as a left-click would).
+  A right-click always closes whatever popup was already open before
+  deciding what (if anything) the new click should show, so right-clicks
+  never stack menus. `wm.c`'s main loop gained the same edge-triggered
+  detection the left button already had (`buttons & 0x2`, mouse.h's
+  right-button bit, previously read but never dispatched anywhere).
+  Deliberately not included this round (see `docs/roadmap.md`):
+  per-icon context menus (right-clicking an icon shows the same
+  desktop-wide quick-launch menu as empty space), real wallpaper images,
+  and repositioning/dragging icons. Verified via QMP: desktop icons
+  render and launch correctly (single-click selects, double-click
+  opens), all four right-click surfaces show the correct menu with
+  correct items (including Calculator's window menu correctly omitting
+  "Maximize" since it's non-resizable), menu clamping keeps a
+  near-bottom-edge taskbar menu fully on screen, and every action
+  (launch/close/minimize) actually executes and updates the screen
+  correctly afterward.
 
 ### Changed
 - Versioning switched from a per-change build-number scheme

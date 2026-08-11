@@ -151,6 +151,14 @@ int wm_find_resize_zone(int mx, int my, int *out_right, int *out_bottom);
 void wm_handle_left_click(int mx, int my);
 void wm_update_drag_resize(int mx, int my, uint8_t buttons);
 
+// Right-click dispatch (see context_menu.h) -- closes whatever popup is
+// already open, then opens whichever context menu (if any) fits
+// (mx, my)'s target: a Start menu row, a taskbar app button, a window,
+// or the desktop background. A right-click over the taskbar's Start
+// button or empty taskbar space shows nothing (no real action to offer
+// there yet). Defined in wm_input.c.
+void wm_handle_right_click(int mx, int my);
+
 // Drives title_btn_pressed_active while a title-bar button is armed,
 // and fires its action on release if the cursor's still over it -- see
 // title_btn_armed_win's own comment above for the full contract. A

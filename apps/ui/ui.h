@@ -8,11 +8,26 @@
 // widgets automatically the next time one's added, with no per-app
 // change needed.
 //
+// As of the full apps/widgets.c/.h -> apps/ui/ migration (see
+// docs/decisions.md), this is now genuinely every GUI widget toy-os
+// has: ui_primitives (widget_hit/widget_button, the base primitives),
+// ui_scrollback (the scrolling text-buffer widget), ui_scrollbar (its
+// companion scrollbar), ui_checkbox, ui_button/ui_button_group, and
+// ui_textbox. apps/widgets.c/.h no longer exist.
+//
 // This is purely a convenience aggregate -- it adds no declarations of
 // its own. See ui_button.h's top comment for the actual design
 // philosophy shared by everything under apps/ui/ (Brutal-OS-inspired
 // owned-state objects, deliberately scaled down for toy-os's
-// immediate-mode GUI -- no view tree, no layout DSL).
+// immediate-mode GUI -- no view tree, no layout DSL). ui_scrollback/
+// ui_scrollbar are the one exception to "owns its geometry": they stay
+// plain stateful structs/functions the way they always were, since
+// every real caller recomputes their content area live from the
+// window's current size on every frame anyway.
+#include "ui_primitives.h"
+#include "ui_scrollback.h"
+#include "ui_scrollbar.h"
+#include "ui_checkbox.h"
 #include "ui_button.h"
 #include "ui_button_group.h"
 #include "ui_textbox.h"

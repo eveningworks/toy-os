@@ -1,7 +1,7 @@
 #ifndef EDITOR_H
 #define EDITOR_H
 
-#include "widgets.h" // struct text_scrollback
+#include "ui/ui.h" // struct text_scrollback
 
 // A small nano/pico-style full-screen text editor. Two surfaces share
 // the same editing core (load/save/cursor-move/insert/delete, all just

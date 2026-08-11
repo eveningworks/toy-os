@@ -39,7 +39,6 @@
 // fs_read() (fs.h) only know about flat buffers, not this widget.
 #include "notepad.h"
 #include "wm/wm.h"
-#include "widgets.h"
 #include "ui/ui.h"
 #include "theme.h"
 #include "kapi.h"

@@ -35,7 +35,7 @@
 // redraw. See editor.h's top comment for the full split.
 #include "terminal.h"
 #include "wm/wm.h"
-#include "widgets.h"
+#include "ui/ui.h"
 #include "editor.h"
 #include "shell.h"
 #include "kapi.h"
