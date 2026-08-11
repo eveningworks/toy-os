@@ -14,19 +14,19 @@
 // in this file needs to change -- layout, drawing, and click hit-testing
 // are all generic over BUTTONS[].
 //
-// The button grid itself is now a struct ui_button_group (ui_button.h/
-// ui_button_group.h) rather than a hand-rolled `int g_pressed_index` +
-// private button_at() hit-test loop -- this file used to be exactly the
-// "app invents its own buttons" case that motivated pulling that state
-// and hit-testing out into a real, reusable object. See
-// docs/decisions.md for the writeup and why it's modeled on Brutal OS's
-// libs/brutal-ui/button.c.
+// The button grid itself is now a struct ui_button_group (apps/ui/
+// ui_button.h + ui_button_group.h, pulled in together via the "ui/ui.h"
+// umbrella header -- see that file's top comment) rather than a
+// hand-rolled `int g_pressed_index` + private button_at() hit-test loop
+// -- this file used to be exactly the "app invents its own buttons"
+// case that motivated pulling that state and hit-testing out into a
+// real, reusable object. See docs/decisions.md for the writeup and why
+// it's modeled on Brutal OS's libs/brutal-ui/button.c.
 #include "calculator.h"
 #include "calc_engine.h"
 #include "wm/wm.h"
 #include "widgets.h"
-#include "ui_button.h"
-#include "ui_button_group.h"
+#include "ui/ui.h"
 #include "theme.h"
 #include "kapi.h"
 

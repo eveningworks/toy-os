@@ -97,6 +97,34 @@ extern int content_dragging;
 // wm_update_drag_resize() for where it's driven each tick.
 extern int content_pressed;
 
+// Title-bar minimize/maximize/close buttons: Windows/KDE-style delayed
+// commit. Mouse-down on one of these ARMS it (title_btn_armed_win/kind)
+// and shows a pressed visual -- the actual action (minimize/maximize/
+// close) only fires on mouse-up while the cursor is STILL over that
+// same button; dragging off before releasing cancels it with no effect,
+// same as any real desktop's title-bar buttons. See wm_input.c's
+// wm_update_title_btn_press() (drives all of this each tick, mirrors
+// wm_update_drag_resize()'s content_pressed handling) and
+// wm_render.c's draw_window_chrome().
+//
+// -1 for "none armed". title_btn_armed_kind: 0=minimize, 1=maximize,
+// 2=close. title_btn_pressed_active is whether the cursor is currently
+// over the armed button (drives the pressed-vs-unpressed visual while
+// held, same "hot" concept as ui_button_group's `pressed` field).
+extern int title_btn_armed_win;
+extern int title_btn_armed_kind;
+extern int title_btn_pressed_active;
+
+// Hover highlight shown when nothing's armed -- which window/button (if
+// any) is under the cursor right now, recomputed fresh every tick from
+// the live mouse position (wm_update_title_hover()), the same "derive
+// live, don't persist a stale answer" approach as the Start menu's own
+// hover. -1/-1 when the cursor isn't over any title-bar button, or
+// while a button is armed (the press visual takes over then -- see
+// above).
+extern int title_hover_win;
+extern int title_hover_kind;
+
 extern int redraw_pending;
 
 // Window lifecycle -- defined in wm.c, used by wm_input.c (opening from
@@ -138,6 +166,18 @@ void wm_update_drag_resize(int mx, int my, uint8_t buttons);
 // a no-op the rest of the time (start_menu_flash_index == -1). See
 // wm.c's comment on start_menu_flash_index.
 void wm_update_start_menu_flash(void);
+
+// Drives title_btn_pressed_active while a title-bar button is armed,
+// and fires its action on release if the cursor's still over it -- see
+// title_btn_armed_win's own comment above for the full contract. A
+// no-op when nothing's armed (title_btn_armed_win == -1).
+void wm_update_title_btn_press(int mx, int my, uint8_t buttons);
+
+// Recomputes title_hover_win/kind from the live mouse position -- a
+// no-op while a button is armed (title_btn_armed_win >= 0), since the
+// press visual takes priority then. Sets redraw_pending when the hot
+// button actually changes, same contract as ui_button_group_press().
+void wm_update_title_hover(int mx, int my);
 
 // wm_render.c's entry points, called from wm.c's wm_run() loop: a full
 // scene repaint, and a cheap cursor-only-moved repaint (see

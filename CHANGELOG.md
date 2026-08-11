@@ -172,6 +172,46 @@ forever.
   `widget_button()` gained a `pressed` parameter (all 7 existing call
   sites -- notepad.c's 2, wm_render.c's 5 chrome buttons -- pass `0`,
   unaffected).
+- Title-bar minimize/maximize/close buttons (`apps/wm/wm_render.c`/
+  `wm_input.c`/`wm.c`) gain real hover and press feedback, and close
+  moved from act-on-click to Windows/KDE-style delayed commit:
+  mouse-down on any of the three now only ARMS it (a lighter tint plus
+  the same inset `pressed` look `widget_button()` already gives
+  Calculator's buttons), and the actual minimize/maximize/close only
+  fires on mouse-up while the cursor's still over that same button --
+  dragging off before releasing cancels with no effect at all, not
+  even a restack, same as any real desktop's title-bar buttons.
+  Hovering (mouse not held) shows a lighter tint too, recomputed live
+  from the cursor position every tick, same "derive live, don't
+  persist a stale answer" approach as the Start menu's own hover. New
+  `title_btn_armed_win`/`title_btn_armed_kind`/`title_btn_pressed_active`
+  and `title_hover_win`/`title_hover_kind` state (`wm.c`), driven each
+  tick by new `wm_update_title_btn_press()`/`wm_update_title_hover()`
+  (`wm_input.c`, mirroring `content_pressed`'s per-tick handling in
+  `wm_update_drag_resize()`). Verified via QMP: hovering close/minimize
+  shows the tint, pressing close shows the inset pressed look,
+  dragging off before releasing drops back to plain (window stays
+  open), and a clean press-release on close/minimize/maximize each
+  commit correctly.
+- New `apps/ui/` directory holds toy-os's small retained-widget-object
+  library -- `ui_button.c`/`.h` and `ui_button_group.c`/`.h` moved here
+  from `apps/` (same content, no behavior change), plus a new
+  `ui_textbox.c`/`.h` and an umbrella `ui.h` that `#include`s all three
+  so a GUI app writes one `#include "ui/ui.h"` instead of hunting down
+  a header per widget -- picks up future widgets automatically too.
+  `struct ui_textbox` wraps `widgets.h`'s `struct text_field` the same
+  way `ui_button` wraps `widget_button()`: owns its own geometry
+  (repositioned live via `ui_textbox_set_geometry()`, same contract as
+  `ui_button_set_geometry()`) around the existing
+  `widget_textfield_*()` calls, which still do the actual drawing/
+  editing. First real caller: Notepad's filename field, migrated off a
+  raw `struct text_field` -- `st->filename` is now a `struct
+  ui_textbox`, its text/cursor/active state reached through
+  `st->filename.field.*`. `Makefile` gained a `UI_C`/`UI_OBJ` wildcard
+  and pattern rule (same shape as `WM_C`/`WM_OBJ` for `apps/wm/`).
+  Verified via QMP: Notepad's field still activates on click, accepts
+  typing/backspace, and Save/Load still read/write the typed filename
+  correctly -- no regression from the widgets.h migration.
 
 ### Changed
 - Versioning switched from a per-change build-number scheme

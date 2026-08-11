@@ -281,7 +281,7 @@ static void draw_cursor_at(int x, int y) {
     draw_cursor(x, y, resolve_cursor_kind(x, y));
 }
 
-static void draw_window_chrome(struct window *win, int focused) {
+static void draw_window_chrome(struct window *win, int idx, int focused) {
     uint32_t titlebar = focused ? gfx_rgb(50, 90, 160) : gfx_rgb(120, 120, 130);
     uint32_t titletext = THEME_WHITE;
     uint32_t winbg = THEME_WINDOW_BG;
@@ -319,20 +319,44 @@ static void draw_window_chrome(struct window *win, int focused) {
     uint32_t btnbg = gfx_rgb(230, 230, 235);
     uint32_t btnfg = THEME_TEXT;
 
+    // Hover/press feedback for the three title-bar buttons -- see
+    // wm_internal.h's title_btn_armed_win/title_hover_win comments for
+    // the full press-hover-commit-on-release story. Each button gets
+    // one of three looks: plain (nothing armed or hovered), hover (a
+    // lighter tint -- cursor's over it, mouse not held), or pressed
+    // (armed AND the cursor's still over it -- the tint PLUS
+    // widget_button()'s own inset `pressed` look, same visual language
+    // used everywhere else a button can be held in this codebase, e.g.
+    // Calculator). Dragging off an armed button (armed but NOT
+    // pressed_active) drops back to the plain look, not hover -- a
+    // button that's about to be canceled shouldn't look like it's still
+    // being interacted with.
+    uint32_t hover_tint = gfx_rgb(200, 215, 235);       // minimize/maximize's neutral hover tint
+    uint32_t hover_tint_close = gfx_rgb(215, 110, 110);  // close needs a lighter RED, not the neutral tint
+    int is_armed = (title_btn_armed_win == idx);
+    int is_hovered = (title_hover_win == idx);
+
     // Icon-only buttons: widget_button() with label=NULL just fills the
     // background, then each hand-drawn icon goes on top with its own
     // gfx_* calls -- these aren't text, so widgets.h's centered-label
     // path doesn't apply to them (see widgets.h's top comment).
-    widget_button(r.min_x, r.y, r.size, r.size, 0, btnbg, btnfg, 0);
+    int min_pressed = is_armed && title_btn_armed_kind == 0 && title_btn_pressed_active;
+    int min_tint = is_armed ? min_pressed : (is_hovered && title_hover_kind == 0);
+    widget_button(r.min_x, r.y, r.size, r.size, 0, min_tint ? hover_tint : btnbg, btnfg, min_pressed);
     gfx_fill_rect(r.min_x + 4, r.y + r.size - 6, r.size - 8, 2, btnfg); // minimize: short bar
 
     // Maximize/restore: drawn muted and does nothing when the app isn't
     // resizable (Calculator -- see gui_apps.h) -- a visibly "disabled"
     // button rather than removing it, so the title bar layout doesn't
-    // shift between fixed and resizable apps.
-    uint32_t max_bg = can_resize ? btnbg : gfx_rgb(210, 210, 212);
+    // shift between fixed and resizable apps. Still shows hover/press
+    // feedback either way (it still focuses the window on commit even
+    // when disabled -- see wm_update_title_btn_press()), just tinted
+    // from its own muted base color instead of btnbg.
+    uint32_t max_bg_base = can_resize ? btnbg : gfx_rgb(210, 210, 212);
     uint32_t max_fg = can_resize ? btnfg : gfx_rgb(170, 170, 172);
-    widget_button(r.max_x, r.y, r.size, r.size, 0, max_bg, max_fg, 0);
+    int max_pressed = is_armed && title_btn_armed_kind == 1 && title_btn_pressed_active;
+    int max_tint = is_armed ? max_pressed : (is_hovered && title_hover_kind == 1);
+    widget_button(r.max_x, r.y, r.size, r.size, 0, max_tint ? hover_tint : max_bg_base, max_fg, max_pressed);
     gfx_draw_rect(r.max_x + 4, r.y + 4, r.size - 8, r.size - 8, max_fg); // maximize/restore: square outline
 
     // close: red button with a hand-drawn X. This used to draw the font
@@ -341,7 +365,10 @@ static void draw_window_chrome(struct window *win, int focused) {
     // way bigger than this button at most sizes). A hand-drawn diagonal
     // cross scales cleanly with r.size instead, same approach already
     // used for the minimize/maximize icons above.
-    widget_button(r.close_x, r.y, r.size, r.size, 0, gfx_rgb(190, 60, 60), btnfg, 0);
+    int close_pressed = is_armed && title_btn_armed_kind == 2 && title_btn_pressed_active;
+    int close_tint = is_armed ? close_pressed : (is_hovered && title_hover_kind == 2);
+    uint32_t close_bg = close_tint ? hover_tint_close : gfx_rgb(190, 60, 60);
+    widget_button(r.close_x, r.y, r.size, r.size, 0, close_bg, btnfg, close_pressed);
     draw_close_icon(r.close_x, r.y, r.size, THEME_WHITE);
 }
 
@@ -487,7 +514,7 @@ void wm_render_frame(int mx, int my) {
 
     for (int i = 0; i < window_count; i++) {
         if (windows[i].state == WIN_MINIMIZED) continue;
-        draw_window_chrome(&windows[i], i == window_count - 1);
+        draw_window_chrome(&windows[i], i, i == window_count - 1);
         if (windows[i].app && windows[i].app->on_draw) windows[i].app->on_draw(&windows[i]);
         draw_resize_grip(&windows[i]); // after on_draw() -- see its own comment
     }

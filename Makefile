@@ -72,13 +72,18 @@ APPS_C    = $(wildcard apps/*.c)
 # wm_input.c, wm_render.c -- see apps/wm/wm.c's top comment); its own
 # wildcard since APPS_C's is non-recursive and won't see into subdirs.
 WM_C      = $(wildcard apps/wm/*.c)
-C_SOURCES = $(CORE_C) $(DRIVERS_C) $(APPS_C) $(WM_C)
+# apps/ui/ holds the retained-widget-object library (ui_button.c,
+# ui_button_group.c, ui_textbox.c -- see apps/ui/ui.h's top comment);
+# same reasoning as WM_C above -- APPS_C's wildcard is non-recursive.
+UI_C      = $(wildcard apps/ui/*.c)
+C_SOURCES = $(CORE_C) $(DRIVERS_C) $(APPS_C) $(WM_C) $(UI_C)
 
 CORE_OBJ    = $(patsubst kernel/core/%.c,    $(BUILD)/core/%.o,    $(CORE_C))
 DRIVERS_OBJ = $(patsubst kernel/drivers/%.c, $(BUILD)/drivers/%.o, $(DRIVERS_C))
 APPS_OBJ    = $(patsubst apps/%.c,           $(BUILD)/apps/%.o,    $(APPS_C))
 WM_OBJ      = $(patsubst apps/wm/%.c,        $(BUILD)/apps/wm/%.o, $(WM_C))
-C_OBJECTS   = $(CORE_OBJ) $(DRIVERS_OBJ) $(APPS_OBJ) $(WM_OBJ)
+UI_OBJ      = $(patsubst apps/ui/%.c,        $(BUILD)/apps/ui/%.o, $(UI_C))
+C_OBJECTS   = $(CORE_OBJ) $(DRIVERS_OBJ) $(APPS_OBJ) $(WM_OBJ) $(UI_OBJ)
 
 ASM_OBJECTS = $(BUILD)/core/boot.o $(BUILD)/core/isr.o $(BUILD)/core/context_switch.o
 
@@ -120,7 +125,7 @@ help:
 	@echo "  version        Regenerate kernel/include/version.h (runs automatically as part of all/iso)"
 	@echo "  help           Show this message"
 
-$(BUILD)/core $(BUILD)/drivers $(BUILD)/apps $(BUILD)/apps/wm:
+$(BUILD)/core $(BUILD)/drivers $(BUILD)/apps $(BUILD)/apps/wm $(BUILD)/apps/ui:
 	mkdir -p $@
 
 $(BUILD)/core/boot.o: kernel/core/boot.asm | $(BUILD)/core
@@ -142,6 +147,9 @@ $(BUILD)/apps/%.o: apps/%.c | $(BUILD)/apps
 	$(CC) $(CFLAGS) $< -o $@
 
 $(BUILD)/apps/wm/%.o: apps/wm/%.c | $(BUILD)/apps/wm
+	$(CC) $(CFLAGS) $< -o $@
+
+$(BUILD)/apps/ui/%.o: apps/ui/%.c | $(BUILD)/apps/ui
 	$(CC) $(CFLAGS) $< -o $@
 
 $(BUILD)/userland:
@@ -241,7 +249,7 @@ $(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) linker.ld
 # checkout, and `-include` (not `include`) so a missing/deleted .d file
 # is silently ignored rather than a hard error -- both matter for
 # `make clean` followed immediately by `make all` to still work.
--include $(wildcard $(BUILD)/core/*.d $(BUILD)/drivers/*.d $(BUILD)/apps/*.d $(BUILD)/apps/wm/*.d $(BUILD)/userland/*.d)
+-include $(wildcard $(BUILD)/core/*.d $(BUILD)/drivers/*.d $(BUILD)/apps/*.d $(BUILD)/apps/wm/*.d $(BUILD)/apps/ui/*.d $(BUILD)/userland/*.d)
 
 # Only created if it doesn't already exist -- see DISK_IMG's comment
 # above for why this must never overwrite an existing image.

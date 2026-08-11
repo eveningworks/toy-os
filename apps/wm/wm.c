@@ -46,6 +46,15 @@ int start_menu_open = 0;
 int start_menu_flash_index = -1;
 uint64_t start_menu_flash_until = 0;
 
+// Title-bar minimize/maximize/close button state -- see
+// wm_internal.h's comment on title_btn_armed_win for the full
+// press-hover-commit-on-release story.
+int title_btn_armed_win = -1;
+int title_btn_armed_kind = -1;
+int title_btn_pressed_active = 0;
+int title_hover_win = -1;
+int title_hover_kind = -1;
+
 // System actions shown at the bottom of the Start menu, below the app
 // list -- these don't open a window like a real gui_app_registry entry
 // does, they trigger a WM-level action directly (see wm_run()'s
@@ -173,6 +182,11 @@ void wm_run(void) {
     resizing = -1;
     content_dragging = -1;
     content_pressed = -1;
+    title_btn_armed_win = -1;
+    title_btn_armed_kind = -1;
+    title_btn_pressed_active = 0;
+    title_hover_win = -1;
+    title_hover_kind = -1;
     redraw_pending = 1;
     wm_exit_requested = 0;
 
@@ -215,6 +229,15 @@ void wm_run(void) {
         // long enough -- independent of clicks/movement, so it still
         // fires even if the mouse hasn't moved since the click.
         wm_update_start_menu_flash();
+
+        // Title-bar button hover/press feedback -- hover only matters
+        // when the mouse actually moved (same cheap-path reasoning as
+        // everything else in this loop); the press-commit check runs
+        // every tick regardless, same as content_pressed below, since
+        // it also needs to react to the button being released even if
+        // the mouse hasn't moved since.
+        if (mouse_moved) wm_update_title_hover(mx, my);
+        wm_update_title_btn_press(mx, my, buttons);
 
         wm_update_drag_resize(mx, my, buttons);
 

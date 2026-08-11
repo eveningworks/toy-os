@@ -5,14 +5,16 @@
 // the WM's keyboard-focus test: open it alongside About and confirm
 // keystrokes always land in whichever window is on top.
 //
-// The filename field (build 490) rides on widgets.h's new
-// widget_textfield_* -- this was its first real caller (see
-// CHANGELOG.md's build 490), replacing what used to be a fixed
-// "notepad.txt". Clicking the field activates it (widget_textfield_
-// set_active(1)); a click elsewhere in the window, or Enter while it's
-// active, deactivates it -- see notepad_click()/notepad_key() below.
-// There's no separate "commit" step: `st->filename.buf` is always the
-// live filename, Save/Load just read it directly whenever they run.
+// The filename field (build 490) started as a raw widgets.h
+// struct text_field + widget_textfield_*() calls; it's now a struct
+// ui_textbox (apps/ui/ui_textbox.h) instead, the same retained-object
+// wrapper ui_button gave Calculator's buttons -- first real caller of
+// ui_textbox, see docs/decisions.md. Clicking the field activates it
+// (ui_textbox_set_active(1)); a click elsewhere in the window, or Enter
+// while it's active, deactivates it -- see notepad_click()/notepad_key()
+// below. There's no separate "commit" step: `st->filename.field.buf` is
+// always the live filename, Save/Load just read it directly whenever
+// they run.
 //
 // Cursor movement (build 377) rides on widgets.h's text_scrollback
 // gaining a real cursor -- see its own top comment for why: this file
@@ -38,6 +40,7 @@
 #include "notepad.h"
 #include "wm/wm.h"
 #include "widgets.h"
+#include "ui/ui.h"
 #include "theme.h"
 #include "kapi.h"
 
@@ -82,7 +85,7 @@
 // to be a pool.
 struct notepad_state {
     struct text_scrollback tb;
-    struct text_field filename; // editable filename Save/Load read/write -- see this file's top comment
+    struct ui_textbox filename; // editable filename Save/Load read/write -- see this file's top comment
     char status[32]; // brief feedback after Save/Load, shown in the toolbar
     int scrollbar_grab_offset; // set by notepad_drag_start(), read by notepad_drag() -- see widgets.h's widget_scrollbar_thumb_rect()
 };
@@ -112,7 +115,12 @@ void notepad_default_size(int *w, int *h) {
 void notepad_open(struct window *win) {
     widget_scrollback_init(&g_notepad.tb);
     widget_scrollback_set_color(&g_notepad.tb, VGA_BLACK); // near-black-on-white, not the terminal's light-grey-on-black
-    widget_textfield_init(&g_notepad.filename, NOTEPAD_DEFAULT_FILE);
+    // Geometry (0,0,0,0) is a placeholder -- notepad_layout_filename()
+    // (called from draw_toolbar() every draw, same as calculator.c's
+    // calculator_layout()) refreshes it live since FIELD_W tracks
+    // gfx_char_w() and can change at runtime (fontsize).
+    ui_textbox_init(&g_notepad.filename, 0, 0, 0, 0, NOTEPAD_DEFAULT_FILE,
+                     THEME_WHITE, THEME_TEXT, THEME_BORDER);
     g_notepad.status[0] = '\0';
     window_set_state(win, &g_notepad);
 }
@@ -145,6 +153,17 @@ static void toolbar_geometry(int *out_field_x, int *out_save_x, int *out_load_x)
     *out_load_x = *out_save_x + BTN_W + BTN_GAP;
 }
 
+// Refreshes the filename textbox's geometry from toolbar_geometry() --
+// font-size-dependent (FIELD_W reads gfx_char_w() live), so this needs
+// to re-run before every draw, not just once at open. Same reasoning
+// as calculator.c's calculator_layout().
+static void notepad_layout_filename(struct notepad_state *st) {
+    int field_x0, save_x0, load_x0;
+    toolbar_geometry(&field_x0, &save_x0, &load_x0);
+    int bh = TOOLBAR_H - 2 * BTN_MARGIN;
+    ui_textbox_set_geometry(&st->filename, field_x0, BTN_MARGIN, FIELD_W, bh);
+}
+
 static void draw_toolbar(struct window *win, struct notepad_state *st,
                           int cx, int cy, int cw, uint32_t fg) {
     uint32_t toolbar_bg = THEME_BUTTON_BG;
@@ -157,8 +176,8 @@ static void draw_toolbar(struct window *win, struct notepad_state *st,
     int field_x0, save_x0, load_x0;
     toolbar_geometry(&field_x0, &save_x0, &load_x0);
 
-    widget_textfield_draw(cx + field_x0, by, FIELD_W, bh, &st->filename,
-                           THEME_WHITE, fg, THEME_BORDER);
+    notepad_layout_filename(st);
+    ui_textbox_draw(&st->filename, cx, cy);
 
     int save_x = cx + save_x0;
     widget_button(save_x, by, BTN_W, bh, "Save", btn_bg, fg, 0);
@@ -200,17 +219,18 @@ void notepad_draw(struct window *win) {
 void notepad_key(struct window *win, int key) {
     struct notepad_state *st = (struct notepad_state *)window_get_state(win);
 
-    if (st->filename.active) {
+    if (st->filename.field.active) {
         // Enter commits (there's nothing extra to "commit" -- buf is
         // already live -- this just ends editing) and deactivates;
         // everything else goes to the field, never the text area, per
-        // widget_textfield_key()'s own contract.
+        // widget_textfield_key()'s own contract (ui_textbox_key() is a
+        // thin passthrough to it).
         if (key == '\r' || key == '\n') {
-            widget_textfield_set_active(&st->filename, 0);
+            ui_textbox_set_active(&st->filename, 0);
             window_invalidate(win);
             return;
         }
-        if (widget_textfield_key(&st->filename, key)) {
+        if (ui_textbox_key(&st->filename, key)) {
             window_invalidate(win);
         }
         return;
@@ -297,7 +317,7 @@ void notepad_click(struct window *win, int cx, int cy) {
         int bh = TOOLBAR_H - 2 * BTN_MARGIN;
 
         if (widget_hit(field_x0, BTN_MARGIN, FIELD_W, bh, cx, cy)) {
-            widget_textfield_set_active(&st->filename, 1);
+            ui_textbox_set_active(&st->filename, 1);
             window_invalidate(win);
             return;
         }
@@ -305,14 +325,14 @@ void notepad_click(struct window *win, int cx, int cy) {
         // Any other toolbar click (a button, or empty toolbar space)
         // ends filename editing -- same "click elsewhere deactivates"
         // contract widget_textfield_* describes.
-        widget_textfield_set_active(&st->filename, 0);
+        ui_textbox_set_active(&st->filename, 0);
 
         if (widget_hit(save_x0, 0, BTN_W, TOOLBAR_H, cx, cy)) {
-            if (st->filename.len == 0) {
+            if (st->filename.field.len == 0) {
                 k_strcpy(st->status, "Bad filename.");
             } else {
                 notepad_serialize(&st->tb, g_save_buf, sizeof(g_save_buf));
-                if (fs_write(st->filename.buf, g_save_buf, 0)) {
+                if (fs_write(st->filename.field.buf, g_save_buf, 0)) {
                     k_strcpy(st->status, "Saved.");
                 } else {
                     k_strcpy(st->status, "Save failed.");
@@ -320,7 +340,7 @@ void notepad_click(struct window *win, int cx, int cy) {
             }
         } else if (widget_hit(load_x0, 0, BTN_W, TOOLBAR_H, cx, cy)) {
             uint32_t size = 0;
-            const char *data = st->filename.len ? fs_read(st->filename.buf, &size) : 0;
+            const char *data = st->filename.field.len ? fs_read(st->filename.field.buf, &size) : 0;
             if (data) {
                 notepad_load_text(&st->tb, data, size);
                 k_strcpy(st->status, "Loaded.");
@@ -334,8 +354,8 @@ void notepad_click(struct window *win, int cx, int cy) {
 
     // A click below the toolbar (the text area or its scrollbar) also
     // ends filename editing, same reasoning as the toolbar branch above.
-    if (st->filename.active) {
-        widget_textfield_set_active(&st->filename, 0);
+    if (st->filename.field.active) {
+        ui_textbox_set_active(&st->filename, 0);
         window_invalidate(win);
     }
 

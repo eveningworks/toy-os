@@ -13,6 +13,31 @@
 // click is laggy.
 #define START_MENU_FLASH_TICKS 10
 
+// Which window (if any) has a title-bar button under (mx, my), and
+// which one -- mirrors the same top-to-bottom z-order search
+// wm_handle_left_click() already does when hit-testing a window body,
+// kept deliberately in sync with it (both walk windows[] back to front
+// and stop at the first window whose bounding box contains the point).
+// Returns the window index with *out_kind set to 0/1/2
+// (minimize/maximize/close) on a button hit; returns -1 (out_kind
+// untouched) if the point isn't over any window's title-bar button --
+// including when it's over a window's title bar but not a button, or
+// over the window body below the title bar entirely.
+static int title_btn_hit_test(int mx, int my, int *out_kind) {
+    for (int i = window_count - 1; i >= 0; i--) {
+        struct window *w = &windows[i];
+        if (w->state == WIN_MINIMIZED) continue;
+        if (!widget_hit(w->x, w->y, w->w, w->h, mx, my)) continue;
+        if (my >= w->y + WM_TITLEBAR_H) return -1; // topmost window here, but below its title bar
+        struct btn_rects r = title_buttons(w);
+        if (widget_hit(r.min_x, r.y, r.size, r.size, mx, my)) { *out_kind = 0; return i; }
+        if (widget_hit(r.max_x, r.y, r.size, r.size, mx, my)) { *out_kind = 1; return i; }
+        if (widget_hit(r.close_x, r.y, r.size, r.size, mx, my)) { *out_kind = 2; return i; }
+        return -1; // over the title bar, but not a button
+    }
+    return -1;
+}
+
 int wm_find_resize_zone(int mx, int my, int *out_right, int *out_bottom) {
     for (int i = window_count - 1; i >= 0; i--) {
         struct window *w = &windows[i];
@@ -117,34 +142,41 @@ void wm_handle_left_click(int mx, int my) {
 
         if (my < w->y + WM_TITLEBAR_H) {
             struct btn_rects r = title_buttons(w);
+            // Windows/KDE-style delayed commit: mouse-down here only
+            // ARMS the button (shows a pressed visual) -- the actual
+            // minimize/maximize/close only happens on release, and only
+            // if the cursor's still over this same button then (see
+            // wm_update_title_btn_press()). Deliberately doesn't
+            // bring_to_front() here -- that still only happens as part
+            // of the committed action (maximize) or not at all
+            // (minimize/close), same as before this change, so a
+            // press-then-drag-off-then-release cancel has no visible
+            // side effect at all, not even a restack.
             if (widget_hit(r.min_x, r.y, r.size, r.size, mx, my)) {
-                w->state = WIN_MINIMIZED;
+                title_btn_armed_win = i;
+                title_btn_armed_kind = 0;
+                title_btn_pressed_active = 1;
+                title_hover_win = -1;
+                title_hover_kind = -1;
                 redraw_pending = 1;
                 return;
             }
             if (widget_hit(r.max_x, r.y, r.size, r.size, mx, my)) {
-                // Fixed-size apps (Calculator -- see gui_apps.h) get a
-                // disabled maximize button: focus the window like any
-                // other click on it, but don't touch its geometry.
-                if (w->app && w->app->resizable) {
-                    if (w->state == WIN_MAXIMIZED) {
-                        w->x = w->saved_x; w->y = w->saved_y;
-                        w->w = w->saved_w; w->h = w->saved_h;
-                        w->state = WIN_NORMAL;
-                    } else {
-                        w->saved_x = w->x; w->saved_y = w->y;
-                        w->saved_w = w->w; w->saved_h = w->h;
-                        w->x = 0; w->y = 0;
-                        w->w = screen_w; w->h = screen_h - taskbar_h;
-                        w->state = WIN_MAXIMIZED;
-                    }
-                }
-                bring_to_front(i);
+                title_btn_armed_win = i;
+                title_btn_armed_kind = 1;
+                title_btn_pressed_active = 1;
+                title_hover_win = -1;
+                title_hover_kind = -1;
                 redraw_pending = 1;
                 return;
             }
             if (widget_hit(r.close_x, r.y, r.size, r.size, mx, my)) {
-                close_window(i);
+                title_btn_armed_win = i;
+                title_btn_armed_kind = 2;
+                title_btn_pressed_active = 1;
+                title_hover_win = -1;
+                title_hover_kind = -1;
+                redraw_pending = 1;
                 return;
             }
             if (w->state != WIN_MAXIMIZED) {
@@ -271,5 +303,79 @@ void wm_update_drag_resize(int mx, int my, uint8_t buttons) {
             content_pressed = -1;
             redraw_pending = 1;
         }
+    }
+}
+
+// Drives title_btn_pressed_active while a title-bar button is armed
+// (title_btn_armed_win >= 0), and fires its action on release -- see
+// wm_internal.h's comment on title_btn_armed_win for the full contract.
+// Mirrors wm_update_drag_resize()'s content_pressed handling above:
+// every tick while held, recompute whether the cursor is still over the
+// armed button (only redraw when that actually changes); on release,
+// commit the action if it's still over the button, cancel silently if
+// not.
+void wm_update_title_btn_press(int mx, int my, uint8_t buttons) {
+    if (title_btn_armed_win < 0) return;
+    struct window *w = &windows[title_btn_armed_win];
+    struct btn_rects r = title_buttons(w);
+    int bx = (title_btn_armed_kind == 0) ? r.min_x
+           : (title_btn_armed_kind == 1) ? r.max_x
+           : r.close_x;
+    int now_over = widget_hit(bx, r.y, r.size, r.size, mx, my);
+
+    if (buttons & 0x1) {
+        if (now_over != title_btn_pressed_active) {
+            title_btn_pressed_active = now_over;
+            redraw_pending = 1;
+        }
+        return;
+    }
+
+    // Released -- commit if still over the button, otherwise this was a
+    // press-then-drag-off cancel and nothing happens.
+    if (now_over) {
+        int idx = title_btn_armed_win;
+        if (title_btn_armed_kind == 0) {
+            windows[idx].state = WIN_MINIMIZED;
+        } else if (title_btn_armed_kind == 1) {
+            // Fixed-size apps (Calculator -- see gui_apps.h) get a
+            // disabled maximize button: focus the window like any other
+            // click on it, but don't touch its geometry.
+            if (windows[idx].app && windows[idx].app->resizable) {
+                if (windows[idx].state == WIN_MAXIMIZED) {
+                    windows[idx].x = windows[idx].saved_x; windows[idx].y = windows[idx].saved_y;
+                    windows[idx].w = windows[idx].saved_w; windows[idx].h = windows[idx].saved_h;
+                    windows[idx].state = WIN_NORMAL;
+                } else {
+                    windows[idx].saved_x = windows[idx].x; windows[idx].saved_y = windows[idx].y;
+                    windows[idx].saved_w = windows[idx].w; windows[idx].saved_h = windows[idx].h;
+                    windows[idx].x = 0; windows[idx].y = 0;
+                    windows[idx].w = screen_w; windows[idx].h = screen_h - taskbar_h;
+                    windows[idx].state = WIN_MAXIMIZED;
+                }
+            }
+            bring_to_front(idx);
+        } else {
+            close_window(idx); // shifts windows[] -- nothing below may touch windows[idx] again
+        }
+    }
+
+    title_btn_armed_win = -1;
+    title_btn_armed_kind = -1;
+    title_btn_pressed_active = 0;
+    redraw_pending = 1;
+}
+
+// Recomputes title_hover_win/kind from the live mouse position -- see
+// wm_internal.h's comment on title_hover_win. A no-op while a button's
+// armed (the press visual owns the drawing then, not hover).
+void wm_update_title_hover(int mx, int my) {
+    if (title_btn_armed_win >= 0) return;
+    int kind = -1;
+    int win = title_btn_hit_test(mx, my, &kind);
+    if (win != title_hover_win || kind != title_hover_kind) {
+        title_hover_win = win;
+        title_hover_kind = kind;
+        redraw_pending = 1;
     }
 }

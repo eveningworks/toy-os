@@ -707,3 +707,70 @@ notification, a temporary status message), this is the pattern to
 reuse rather than reinventing a delay mechanism -- `pit_ticks()`
 deadline + a per-tick check, never a blocking sleep in the WM loop.
 See `CHANGELOG.md`'s `[Unreleased]` entry for the full mechanism.
+
+## Title-bar buttons: press-then-commit-on-release, reusing the content_pressed shape
+
+Minimize/maximize/close used to act the instant `wm_handle_left_click()`
+saw a mouse-down on them (`left_edge_down`, `wm.c`'s main loop) -- a
+slipped click on close had no recovery, and there was no hover feedback
+at all. Requested to match Windows/KDE: mouse-down only arms the button,
+the action fires on mouse-up *only if the cursor is still over that same
+button*, and dragging off cancels silently.
+
+This is structurally the same problem `content_pressed` already solved
+for app buttons (Calculator's `on_press`/`on_release`, see the
+`ui_button`/`ui_button_group` entry above and `wm_update_drag_resize()`
+in `wm_input.c`): a press starts a "which target is armed" state, every
+tick while held recomputes whether the cursor is still over that target
+(only redrawing when that changes), and release either commits or
+cancels depending on where the cursor ended up. `title_btn_armed_win`/
+`title_btn_armed_kind`/`title_btn_pressed_active` + a new
+`wm_update_title_btn_press()` mirror that shape exactly, just at the WM
+level instead of the app level -- there wasn't an existing WM-level
+"armed target" concept to reuse, so this is a second, parallel instance
+of the same pattern rather than a shared implementation. If a third
+armable-target case shows up, that's the point to consider factoring the
+pattern out.
+
+Hover (cursor over a button, not held) is a separate, simpler piece --
+`title_hover_win`/`title_hover_kind`, recomputed fresh every tick from
+the live mouse position by `wm_update_title_hover()`, same "derive live,
+don't persist a stale answer" approach as the Start menu's own hover
+(see that entry above). It deliberately goes quiet while a button's
+armed (`wm_update_title_hover()` no-ops then) -- the press visual takes
+over, so the two never fight over what to draw.
+
+Deliberately does *not* `bring_to_front()` a window just because its
+title-bar button was pressed -- only the committed action does that
+(maximize already did; minimize/close never did), so a press-then-
+drag-off-then-release cancel has no visible side effect whatsoever, not
+even a restack. See `CHANGELOG.md`'s `[Unreleased]` entry for the full
+mechanism and what was verified.
+
+## apps/ui/: a directory for retained-widget objects, once there were three
+
+`ui_button.c`/`.h` and `ui_button_group.c`/`.h` lived directly in
+`apps/` at first (there was only one pair, no directory felt warranted
+yet -- same "don't split preemptively" judgment call `CLAUDE.md`
+describes for files in general). Adding `ui_textbox.c`/`.h` as a third
+pair made a flat `apps/` start to mix two different kinds of file
+(whole *apps* like `calculator.c`/`notepad.c`, and small *widget*
+building blocks they both depend on) -- the same signal that split
+`apps/wm/` out earlier, applied one level up. `apps/ui/` follows that
+exact precedent: its own `Makefile` wildcard/rule (`UI_C`/`UI_OBJ`,
+mirroring `WM_C`/`WM_OBJ`), files included via a relative path
+(`"ui/ui.h"`) from `apps/`'s own files.
+
+The umbrella `ui.h` is a separate, smaller decision: every GUI app that
+uses more than one widget had to remember one `#include` per widget
+(`calculator.c` needed both `ui_button.h` and `ui_button_group.h`
+already, before textbox existed at all) -- purely a convenience
+aggregate, adds no declarations of its own, just `#include`s every
+`ui_*.h` in the directory so a future widget is picked up by every app
+that already has `#include "ui/ui.h"`, no per-app change needed. Chose
+this over folding `ui_button_group` into `ui_button.h` (the other
+option on the table): a bare `ui_button` used alone (no group) would
+otherwise still pull in group's array/hit-testing logic it doesn't
+need, and umbrella + separate files keeps that single-responsibility
+split while still solving the actual pain (remembering multiple
+`#include` lines).
