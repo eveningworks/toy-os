@@ -60,6 +60,7 @@ int resize_start_mx, resize_start_my;
 int resize_start_w, resize_start_h;
 
 int content_dragging = -1; // index into windows[], or -1 -- see wm_internal.h
+int content_pressed = -1; // index into windows[], or -1 -- see wm_internal.h
 
 int redraw_pending = 1;
 
@@ -158,6 +159,7 @@ void wm_run(void) {
     dragging = -1;
     resizing = -1;
     content_dragging = -1;
+    content_pressed = -1;
     redraw_pending = 1;
     wm_exit_requested = 0;
 

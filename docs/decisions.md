@@ -602,3 +602,27 @@ not just when the next `device_git.sh` call happens to run. Always use
 `tools/device_git.sh` for every `git` command reached this way,
 `status` included -- never hand-roll this check inline, and never run
 `git` directly via `device_bash` even for a "harmless" read.
+
+## Button press/release feedback: a general `on_press`/`on_release` WM mechanism, not a Calculator-only hack
+
+Calculator's buttons already used the shared `widget_button()`
+(`apps/widgets.c`) -- the actual gap was that nothing in the window
+manager ever told an app "the mouse is down and still on this button,"
+so no app could draw a pressed state even if it wanted to. Two ways to
+close that: give Calculator its own private mouse-tracking (poll
+button state directly in `calculator_draw()` somehow), or add a real
+event to the window manager's app-callback contract. Went with the
+latter -- `gui_apps.h` gained `on_press(win, cx, cy)`/`on_release(win)`,
+driven from `apps/wm/wm_input.c`'s `wm_update_drag_resize()` the same
+way `content_dragging`/`on_drag` already work, with a matching
+`content_pressed` index in `wm_internal.h`. Reasoning: this codebase
+already has one precedent for "click vs. hold-and-drag needs its own
+event pair distinct from `on_click`" (`on_drag_start`/`on_drag`), and
+press/release is exactly that same shape -- a private per-app
+workaround would have solved Calculator alone and left the next app
+that wants pressed-button feedback (or a held-scrollbar-thumb, or a
+press-and-repeat spinner) to reinvent it from scratch. See
+`CHANGELOG.md`'s `[Unreleased]` entry for the mechanism's actual shape
+(why it fires on the initial button-down tick, why it returns 1 only
+when the "hot" button changes, how drag-off-before-release un-presses
+without triggering the button).

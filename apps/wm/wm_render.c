@@ -78,14 +78,78 @@ static void draw_close_icon(int x, int y, int size, uint32_t color) {
     }
 }
 
+// Anti-aliased arrow cursor -- two baked 8-bit alpha masks (outline in
+// black, fill in white), the same "baked alpha, blended per-pixel"
+// approach font_ttf.h's glyphs use (see gfx_draw_char()), just for a
+// one-off 13x19 sprite instead of a whole font -- not worth a new
+// tools/gen_*.py baking step for a single asset, so these are pasted
+// literal data, generated once with PIL (supersampled polygon fill +
+// dilate/erode for the outline ring, downsampled to this size) rather
+// than hand-drawn pixel by pixel. Replaces the old hard-edged
+// staircase shape (a capped `row+1` triangle, no anti-aliasing at all)
+// -- see docs/decisions.md and CHANGELOG.md's `[Unreleased]` entry for
+// the "why" and the before/after screenshots.
+#define CURSOR_SPRITE_W 13
+#define CURSOR_SPRITE_H 19
+
+static const unsigned char cursor_outline_alpha[CURSOR_SPRITE_H][CURSOR_SPRITE_W] = {
+    {255,136,0,0,0,0,0,0,0,0,0,0,0},
+    {255,255,126,0,0,0,0,0,0,0,0,0,0},
+    {255,130,255,120,0,0,0,0,0,0,0,0,0},
+    {255,0,136,255,120,0,0,0,0,0,0,0,0},
+    {255,0,0,136,255,105,0,0,0,0,0,0,0},
+    {255,0,0,0,150,254,105,0,0,0,0,0,0},
+    {255,0,0,0,1,150,254,101,0,0,0,0,0},
+    {255,0,0,0,0,1,154,252,91,0,0,0,0},
+    {255,0,0,0,0,0,3,164,252,91,0,0,0},
+    {255,0,0,0,0,0,0,3,164,252,82,0,0},
+    {255,0,0,0,0,9,48,48,51,206,249,72,0},
+    {255,0,0,17,20,46,255,221,207,207,207,116,0},
+    {255,0,59,238,216,3,223,137,0,0,0,0,0},
+    {255,76,245,206,254,64,119,235,8,0,0,0,0},
+    {255,251,179,10,191,164,20,247,96,0,0,0,0},
+    {255,159,4,0,91,247,18,159,203,0,0,0,0},
+    {16,1,0,0,8,237,127,148,255,28,0,0,0},
+    {0,0,0,0,0,143,255,239,140,10,0,0,0},
+    {0,0,0,0,0,24,76,12,0,0,0,0,0},
+};
+
+static const unsigned char cursor_fill_alpha[CURSOR_SPRITE_H][CURSOR_SPRITE_W] = {
+    {0,0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,125,0,0,0,0,0,0,0,0,0,0,0},
+    {0,255,119,0,0,0,0,0,0,0,0,0,0},
+    {0,255,255,119,0,0,0,0,0,0,0,0,0},
+    {0,255,255,255,104,0,0,0,0,0,0,0,0},
+    {0,255,255,255,254,104,0,0,0,0,0,0,0},
+    {0,255,255,255,255,254,100,0,0,0,0,0,0},
+    {0,255,255,255,255,255,252,88,0,0,0,0,0},
+    {0,255,255,255,255,255,255,252,88,0,0,0,0},
+    {0,255,255,255,255,246,207,207,204,43,0,0,0},
+    {0,255,255,238,235,209,0,0,0,0,0,0,0},
+    {0,255,196,0,3,252,0,0,0,0,0,0,0},
+    {0,179,0,0,0,191,136,0,0,0,0,0,0},
+    {0,0,0,0,0,84,235,0,0,0,0,0,0},
+    {0,0,0,0,0,0,237,91,0,0,0,0,0},
+    {0,0,0,0,0,0,128,107,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0,0},
+};
+
 static void draw_cursor_normal(int x, int y) {
-    uint32_t color = THEME_WHITE, outline = gfx_rgb(0, 0, 0);
-    for (int row = 0; row < 14; row++) {
-        int w = row + 1;
-        if (w > 10) w = 10;
-        for (int col = 0; col < w; col++) {
-            uint32_t c = (col == w - 1 || row == 11) ? outline : color;
-            gfx_put_pixel(x + col, y + row, c);
+    uint32_t fill = THEME_WHITE, outline = gfx_rgb(0, 0, 0);
+    // Outline first, fill on top -- matches how the two masks were
+    // baked (the outline ring sits where fill was subtracted out, so
+    // drawing fill second never re-covers outline-only pixels, and
+    // pixels both masks touch get the fill's fully-opaque top coat).
+    for (int row = 0; row < CURSOR_SPRITE_H; row++) {
+        for (int col = 0; col < CURSOR_SPRITE_W; col++) {
+            gfx_blend_pixel(x + col, y + row, outline, cursor_outline_alpha[row][col]);
+        }
+    }
+    for (int row = 0; row < CURSOR_SPRITE_H; row++) {
+        for (int col = 0; col < CURSOR_SPRITE_W; col++) {
+            gfx_blend_pixel(x + col, y + row, fill, cursor_fill_alpha[row][col]);
         }
     }
 }
@@ -177,14 +241,16 @@ static enum wm_cursor_kind resolve_cursor_kind(int mx, int my) {
 // what that repaint actually drew underneath, not stale content.
 //
 // CURSOR_BOX is anchored 2px above/left of the cursor's own (x,y) and
-// sized generously (20x20) to comfortably cover all four hand-drawn
-// cursor shapes above, including draw_cursor_h()/draw_cursor_v()'s
-// asymmetric bounding boxes (they draw up to 1px above/left of their own
-// anchor -- see their own comments) -- getting this too small would leave
-// a stale cursor-colored pixel behind on every move, so it's deliberately
-// oversized rather than tightly fit to each shape.
+// sized generously to comfortably cover all four hand-drawn cursor
+// shapes above, including draw_cursor_h()/draw_cursor_v()'s asymmetric
+// bounding boxes (they draw up to 1px above/left of their own anchor --
+// see their own comments) and draw_cursor_normal()'s sprite (13x19,
+// drawn from the anchor down/right -- the tallest shape here, hence
+// this needing to be taller than it is wide) -- getting this too small
+// would leave a stale cursor-colored pixel behind on every move, so
+// it's deliberately oversized rather than tightly fit to each shape.
 #define CURSOR_BOX_MARGIN 2
-#define CURSOR_BOX_SIZE 20
+#define CURSOR_BOX_SIZE 22
 
 static uint32_t cursor_under[CURSOR_BOX_SIZE][CURSOR_BOX_SIZE];
 static int cursor_under_valid = 0;
@@ -257,7 +323,7 @@ static void draw_window_chrome(struct window *win, int focused) {
     // background, then each hand-drawn icon goes on top with its own
     // gfx_* calls -- these aren't text, so widgets.h's centered-label
     // path doesn't apply to them (see widgets.h's top comment).
-    widget_button(r.min_x, r.y, r.size, r.size, 0, btnbg, btnfg);
+    widget_button(r.min_x, r.y, r.size, r.size, 0, btnbg, btnfg, 0);
     gfx_fill_rect(r.min_x + 4, r.y + r.size - 6, r.size - 8, 2, btnfg); // minimize: short bar
 
     // Maximize/restore: drawn muted and does nothing when the app isn't
@@ -266,7 +332,7 @@ static void draw_window_chrome(struct window *win, int focused) {
     // shift between fixed and resizable apps.
     uint32_t max_bg = can_resize ? btnbg : gfx_rgb(210, 210, 212);
     uint32_t max_fg = can_resize ? btnfg : gfx_rgb(170, 170, 172);
-    widget_button(r.max_x, r.y, r.size, r.size, 0, max_bg, max_fg);
+    widget_button(r.max_x, r.y, r.size, r.size, 0, max_bg, max_fg, 0);
     gfx_draw_rect(r.max_x + 4, r.y + 4, r.size - 8, r.size - 8, max_fg); // maximize/restore: square outline
 
     // close: red button with a hand-drawn X. This used to draw the font
@@ -275,7 +341,7 @@ static void draw_window_chrome(struct window *win, int focused) {
     // way bigger than this button at most sizes). A hand-drawn diagonal
     // cross scales cleanly with r.size instead, same approach already
     // used for the minimize/maximize icons above.
-    widget_button(r.close_x, r.y, r.size, r.size, 0, gfx_rgb(190, 60, 60), btnfg);
+    widget_button(r.close_x, r.y, r.size, r.size, 0, gfx_rgb(190, 60, 60), btnfg, 0);
     draw_close_icon(r.close_x, r.y, r.size, THEME_WHITE);
 }
 
@@ -325,7 +391,7 @@ static void draw_taskbar(void) {
     int sbw = start_btn_w(), wbw = win_btn_w();
 
     uint32_t start_bg = start_menu_open ? gfx_rgb(70, 70, 90) : gfx_rgb(50, 50, 60);
-    widget_button(4, ty + 4, sbw, taskbar_h - 8, START_LABEL, start_bg, fg);
+    widget_button(4, ty + 4, sbw, taskbar_h - 8, START_LABEL, start_bg, fg, 0);
 
     int bx = 4 + sbw + 8;
     for (int i = 0; i < window_count; i++) {
@@ -336,7 +402,7 @@ static void draw_taskbar(void) {
         int n = 0;
         for (; windows[i].title[n] && n < WIN_LABEL_MAX_CHARS; n++) label[n] = windows[i].title[n];
         label[n] = '\0';
-        widget_button(bx, ty + 4, wbw, taskbar_h - 8, label, wbg, fg);
+        widget_button(bx, ty + 4, wbw, taskbar_h - 8, label, wbg, fg, 0);
         bx += wbw + 4;
     }
 

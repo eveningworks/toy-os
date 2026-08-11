@@ -69,6 +69,43 @@ forever.
   `CURSOR_BAR_W` constant in `apps/widgets.h`) instead of the two
   looking like two different cursor styles in the same app.
 
+- The mouse cursor (`draw_cursor_normal()`, `apps/wm/wm_render.c`) is
+  now a proper anti-aliased arrow sprite instead of the old hard-edged
+  blocky staircase shape -- requested as "a bit more modern," same as
+  this round's text-cursor change. Built the same way the font
+  renderer already does anti-aliasing (`font_ttf.c`/`gfx_draw_char()`):
+  a hand-designed arrow polygon rendered at 16x supersample via
+  Python/PIL, downsampled, with a second dilate/erode pass to derive a
+  separate outline-ring alpha mask -- both baked as literal 13x19 byte
+  arrays pasted into the C source (not a new build-time tool; a one-off
+  asset this small isn't worth a `tools/gen_*.py` script). Needed a new
+  public `gfx_blend_pixel(x, y, color, alpha)` (`kernel/drivers/gfx.c`/
+  `gfx.h`) -- the same per-channel blend math `gfx_draw_char()` already
+  used internally, just exposed for a non-glyph caller. `CURSOR_BOX_SIZE`
+  grew from 20 to 22px to fully cover the taller 19px sprite. Verified
+  via QMP screenshot at zoom.
+- Calculator's on-screen buttons now show real press/release visual
+  feedback (a 2px inset border + 1px label nudge while held) --
+  Calculator already used the shared `widget_button()` (`apps/widgets.c`/
+  `.h`), so the actual gap was that nothing anywhere gave visible
+  feedback for a held button. Built as a general window-manager
+  mechanism rather than a Calculator-only hack, since any app with
+  buttons will eventually want this: two new optional `gui_apps.h`
+  callbacks, `on_press(win, cx, cy)` (fired every tick the button's
+  held, including the initial press, returning 1 only when which
+  button is "hot" actually changed) and `on_release(win)`; a new
+  `content_pressed` index in the window manager's state
+  (`apps/wm/wm_internal.h`/`wm.c`), driven each tick in
+  `wm_update_drag_resize()` (`apps/wm/wm_input.c`) alongside the
+  existing `content_dragging` mechanism it deliberately mirrors.
+  Dragging off a held button before releasing correctly un-presses it
+  without triggering the button's action, same as a real OS button --
+  verified via QMP: press-and-hold shows the inset border, release
+  springs it back, drag-off-then-release shows no phantom extra input.
+  `widget_button()` gained a `pressed` parameter (all 7 existing call
+  sites -- notepad.c's 2, wm_render.c's 5 chrome buttons -- pass `0`,
+  unaffected).
+
 ### Changed
 - Versioning switched from a per-change build-number scheme
   (`tools/bump_build.sh <fix|feature|major>`, a git tag `build-N` on

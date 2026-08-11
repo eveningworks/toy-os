@@ -17,4 +17,9 @@ void calculator_draw(struct window *win);
 void calculator_key(struct window *win, int key);
 void calculator_click(struct window *win, int cx, int cy);
 
+// on_press/on_release (gui_apps.h) -- real press/release visual
+// feedback, see calculator.c's g_calc.pressed_index.
+int calculator_press(struct window *win, int cx, int cy);
+void calculator_release(struct window *win);
+
 #endif

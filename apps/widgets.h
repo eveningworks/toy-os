@@ -39,7 +39,18 @@ int widget_hit(int x, int y, int w, int h, int px, int py);
 // in `fg` on `bg` using the current font (gfx_char_w()/gfx_char_h(), so
 // it stays correct across gfx_set_font_size() calls same as everything
 // else that draws text). Pass label=NULL for an icon-only button.
-void widget_button(int x, int y, int w, int h, const char *label, uint32_t bg, uint32_t fg);
+//
+// `pressed` (added for real press/release feedback -- see gui_apps.h's
+// on_press/on_release, first real caller apps/calculator.c) draws a
+// 2px inset border in a fixed dark color and nudges the label 1px
+// down/right -- the classic "this button is currently held down" look.
+// Deliberately doesn't darken `bg` itself: that would need unpacking an
+// arbitrary already-packed pixel color back into r/g/b (gfx.c keeps
+// that math private to its own blending code, see gfx_blend_pixel()),
+// where an inset border needs no color math at all and reads just as
+// clearly as "pressed." Existing callers that don't care about this
+// pass 0 and get the exact same pixels as before.
+void widget_button(int x, int y, int w, int h, const char *label, uint32_t bg, uint32_t fg, int pressed);
 
 // ---- scrollback text widget ----
 //

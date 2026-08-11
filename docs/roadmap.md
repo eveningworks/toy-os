@@ -6,6 +6,7 @@ this list is actively maintained, not a stale wishlist. See `docs/decisions.md` 
 ## At a glance
 
 **In progress / up next**
+- [ ] Multi-architecture support (e.g. RISC-V 64 alongside x86_64) -- assessed, not started: roughly a tenth of the codebase is architecture-specific and it's already well-insulated behind `kapi.h`, but boot/interrupts/paging/port-I/O are a real per-arch project. Full breakdown, proposed `kernel/arch/<arch>/` layout, and a phased plan in `docs/arch-portability.md`
 - [ ] Real disk-hosted ELF binaries -- load from `/bin` at runtime instead of every `.elf` being a GRUB module baked into the ISO (investigated, not started -- see the full A/B breakdown below)
 - [ ] TCP/IP networking -- the infra pieces are done (PCI enumeration, IRQ registration, contiguous/DMA memory, the socket/fd syscall surface, IRQ-driven DMA example); no NIC driver or protocol stack yet
 

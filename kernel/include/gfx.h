@@ -47,6 +47,10 @@ uint32_t gfx_rgb(uint8_t r, uint8_t g, uint8_t b);
 
 void gfx_put_pixel(int x, int y, uint32_t color);
 uint32_t gfx_get_pixel(int x, int y);
+// Alpha-blends `color` over whatever's currently at (x, y) -- see this
+// function's own comment in gfx.c for the per-channel math and its
+// first real caller (the mouse cursor sprite).
+void gfx_blend_pixel(int x, int y, uint32_t color, uint8_t alpha);
 void gfx_fill_rect(int x, int y, int w, int h, uint32_t color);
 void gfx_draw_rect(int x, int y, int w, int h, uint32_t color);
 void gfx_clear(uint32_t color);

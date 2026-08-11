@@ -78,6 +78,16 @@ extern int resize_start_w, resize_start_h;
 // widget_scrollbar_*).
 extern int content_dragging;
 
+// index into windows[], or -1 -- same shape as content_dragging, but
+// for gui_apps.h's on_press/on_release instead of on_drag_start/
+// on_drag. The two are mutually exclusive per press (see on_click's own
+// comment): a content-area button-down either starts a drag (claimed by
+// on_drag_start) or a press sequence (on_press, if the app has one and
+// nothing claimed the drag), never both. See wm_input.c's
+// wm_handle_left_click() for where this gets set and
+// wm_update_drag_resize() for where it's driven each tick.
+extern int content_pressed;
+
 extern int redraw_pending;
 
 // Window lifecycle -- defined in wm.c, used by wm_input.c (opening from

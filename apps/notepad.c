@@ -148,10 +148,10 @@ static void draw_toolbar(struct window *win, struct notepad_state *st,
                            THEME_WHITE, fg, THEME_BORDER);
 
     int save_x = cx + save_x0;
-    widget_button(save_x, by, BTN_W, bh, "Save", btn_bg, fg);
+    widget_button(save_x, by, BTN_W, bh, "Save", btn_bg, fg, 0);
 
     int load_x = cx + load_x0;
-    widget_button(load_x, by, BTN_W, bh, "Load", btn_bg, fg);
+    widget_button(load_x, by, BTN_W, bh, "Load", btn_bg, fg, 0);
 
     if (st->status[0]) {
         gfx_draw_string(load_x + BTN_W + 12, by, st->status, fg, toolbar_bg);

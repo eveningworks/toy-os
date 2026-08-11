@@ -24,6 +24,15 @@
 // the window manager only allows one open Calculator window at a time.
 static struct calc_state g_calc;
 
+// Which BUTTONS[] index is currently held down, or -1 -- purely a GUI
+// concern (which button visibly looks pressed right now), deliberately
+// NOT part of struct calc_state (calc_engine.h), which stays free of
+// any gfx.h/wm.h dependency per this file's own top comment. Driven by
+// calculator_press()/calculator_release() below (gui_apps.h's on_press/
+// on_release), read by calculator_draw() to pass widget_button() its
+// `pressed` flag.
+static int g_pressed_index = -1;
+
 #define GRID_COLS 4
 #define GRID_ROWS 5
 
@@ -107,8 +116,43 @@ void calculator_draw(struct window *win) {
         char c = BUTTONS[i].code;
         int is_op = (c == '+' || c == '-' || c == '*' || c == '/' || c == '%' || c == '=');
         uint32_t this_bg = is_op ? op_btn_bg : btn_bg;
-        widget_button(cx + bx, cy + by, bw, bh, BUTTONS[i].label, this_bg, fg);
+        widget_button(cx + bx, cy + by, bw, bh, BUTTONS[i].label, this_bg, fg, i == g_pressed_index);
     }
+}
+
+// Which button (if any) is under (cx, cy) -- shared by calculator_click
+// and calculator_press so they can never disagree about hit-testing the
+// same grid.
+static int button_at(int cx, int cy) {
+    for (int i = 0; i < GRID_ROWS * GRID_COLS; i++) {
+        int bx, by, bw, bh;
+        button_rect(i, &bx, &by, &bw, &bh);
+        if (widget_hit(bx, by, bw, bh, cx, cy)) return i;
+    }
+    return -1;
+}
+
+// gui_apps.h's on_press: called every tick the button's held, starting
+// with the initial button-down. Returns 1 (redraw needed) only when
+// which button is "hot" actually changed -- e.g. moving off every
+// button, or sliding onto a different one without releasing, both
+// un-press/re-press exactly like a real OS button. Deliberately does
+// NOT call calc_input() itself -- that still only happens on the
+// button-UP click (calculator_click()), so holding a button down and
+// dragging off before releasing doesn't accidentally act on it, same
+// as clicking any real button.
+int calculator_press(struct window *win, int cx, int cy) {
+    (void)win;
+    int hit = button_at(cx, cy);
+    if (hit == g_pressed_index) return 0;
+    g_pressed_index = hit;
+    return 1;
+}
+
+void calculator_release(struct window *win) {
+    (void)win;
+    g_pressed_index = -1;
+    window_invalidate(win);
 }
 
 void calculator_key(struct window *win, int key) {
@@ -134,14 +178,8 @@ void calculator_key(struct window *win, int key) {
 
 void calculator_click(struct window *win, int cx, int cy) {
     struct calc_state *st = (struct calc_state *)window_get_state(win);
-
-    for (int i = 0; i < GRID_ROWS * GRID_COLS; i++) {
-        int bx, by, bw, bh;
-        button_rect(i, &bx, &by, &bw, &bh);
-        if (widget_hit(bx, by, bw, bh, cx, cy)) {
-            calc_input(st, BUTTONS[i].code);
-            window_invalidate(win);
-            return;
-        }
-    }
+    int hit = button_at(cx, cy);
+    if (hit < 0) return;
+    calc_input(st, BUTTONS[hit].code);
+    window_invalidate(win);
 }

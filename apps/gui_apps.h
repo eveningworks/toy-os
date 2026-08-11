@@ -82,6 +82,29 @@ struct gui_app {
     // any app with nothing scrollable.
     void (*on_wheel)(struct window *win, int delta);
 
+    // Called every tick the left mouse button is held down starting
+    // from a content-area press that on_drag_start() did NOT claim as a
+    // drag (same "either a click/press, or a drag, never both" split
+    // on_click has) -- including the initial button-down tick, so a
+    // press shows its visual feedback immediately rather than one tick
+    // late. (cx, cy) are content-relative, updated every tick so an app
+    // can track the button the mouse is CURRENTLY over as it moves
+    // (dragging off before releasing should un-press, like a real OS
+    // button). Return 1 if this call changed which button (if any) is
+    // "hot," so the window manager knows to redraw; return 0 if nothing
+    // changed, so a static hold doesn't force a full-scene repaint every
+    // single tick. May be NULL for any app with nothing that needs
+    // press/release feedback -- first real caller: apps/calculator.c
+    // (see widget_button()'s `pressed` parameter, widgets.h).
+    int (*on_press)(struct window *win, int cx, int cy);
+
+    // Called once when the left button is released after an on_press
+    // sequence (or the window closes/is minimized while one is in
+    // progress) -- the app's cue to clear whatever it marked as
+    // pressed so the next draw shows the button back in its normal
+    // state. May be NULL only if on_press is also NULL.
+    void (*on_release)(struct window *win);
+
     // 1 (the common case) if the user can drag-resize and maximize this
     // app's window; 0 to fix it at its default_size() forever -- no
     // resize grip, hovering an edge doesn't show a resize cursor, and

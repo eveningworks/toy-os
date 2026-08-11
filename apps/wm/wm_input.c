@@ -152,8 +152,19 @@ void wm_handle_left_click(int mx, int my) {
         }
         if (claimed_drag) {
             content_dragging = fi;
-        } else if (windows[fi].app && windows[fi].app->on_click) {
-            windows[fi].app->on_click(&windows[fi], ccx, ccy);
+        } else {
+            if (windows[fi].app && windows[fi].app->on_click) {
+                windows[fi].app->on_click(&windows[fi], ccx, ccy);
+            }
+            // Independent of on_click above -- a press-feedback app
+            // (e.g. calculator.c) wants both: on_click to actually act,
+            // on_press to show which button is currently held. Fired
+            // on this same button-down tick too, not just subsequent
+            // ones, so the pressed look appears immediately.
+            if (windows[fi].app && windows[fi].app->on_press) {
+                content_pressed = fi;
+                windows[fi].app->on_press(&windows[fi], ccx, ccy);
+            }
         }
         redraw_pending = 1;
         return;
@@ -212,6 +223,26 @@ void wm_update_drag_resize(int mx, int my, uint8_t buttons) {
             redraw_pending = 1;
         } else {
             content_dragging = -1;
+        }
+    }
+
+    if (content_pressed >= 0) {
+        struct window *w = &windows[content_pressed];
+        if (buttons & 0x1) {
+            // Every tick, not just on change -- on_press decides for
+            // itself whether the "hot" button moved (e.g. the mouse
+            // slid onto a different button, or off all of them) and
+            // returns 1 only when that changed, so holding still over
+            // the same button doesn't force a redraw every single tick.
+            if (w->app && w->app->on_press) {
+                int ccx = mx - window_content_x(w);
+                int ccy = my - window_content_y(w);
+                if (w->app->on_press(w, ccx, ccy)) redraw_pending = 1;
+            }
+        } else {
+            if (w->app && w->app->on_release) w->app->on_release(w);
+            content_pressed = -1;
+            redraw_pending = 1;
         }
     }
 }

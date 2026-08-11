@@ -242,6 +242,24 @@ static inline uint8_t blend_channel(uint8_t bg_c, uint8_t fg_c, uint8_t alpha) {
     return (uint8_t)(((uint32_t)bg_c * (255 - alpha) + (uint32_t)fg_c * alpha) / 255);
 }
 
+// Alpha-blends `color` over whatever's already at (x, y) -- reads it
+// back via gfx_get_pixel() first, same per-channel math gfx_draw_char()
+// already uses for font anti-aliasing, just exposed as its own function
+// for any caller that wants a soft edge without being a glyph. First
+// real caller: the mouse cursor sprite (apps/wm/wm_render.c), which
+// needed the same "baked alpha mask, blended per-pixel" approach the
+// font already uses -- see docs/decisions.md. `alpha` 0 leaves the
+// pixel untouched, 255 fully replaces it with `color`.
+void gfx_blend_pixel(int x, int y, uint32_t color, uint8_t alpha) {
+    if (alpha == 0) return;
+    if (alpha == 255) { gfx_put_pixel(x, y, color); return; }
+    uint32_t bg = gfx_get_pixel(x, y);
+    uint8_t r = blend_channel(unpack_channel(bg, red_pos, red_size), unpack_channel(color, red_pos, red_size), alpha);
+    uint8_t g = blend_channel(unpack_channel(bg, green_pos, green_size), unpack_channel(color, green_pos, green_size), alpha);
+    uint8_t b = blend_channel(unpack_channel(bg, blue_pos, blue_size), unpack_channel(color, blue_pos, blue_size), alpha);
+    gfx_put_pixel(x, y, pack_channel(r, red_pos, red_size) | pack_channel(g, green_pos, green_size) | pack_channel(b, blue_pos, blue_size));
+}
+
 // Draws one glyph from the baked TrueType-derived font (see font_ttf.h /
 // tools/genttf.py): each pixel is an 8-bit alpha (0 = pure background,
 // 255 = pure foreground, anything between blended per-channel), unlike
