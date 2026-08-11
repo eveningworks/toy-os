@@ -30,5 +30,6 @@
 #define THEME_BUTTON_BG  gfx_rgb(225, 225, 230) // light gray button background (Calculator's number keys, Notepad's toolbar)
 #define THEME_WINDOW_BG  gfx_rgb(235, 235, 235) // default window content background
 #define THEME_PANEL_BG   gfx_rgb(245, 245, 245) // slightly lighter panel background (Calculator's window, the Start menu)
+#define THEME_SELECTION_BG gfx_rgb(51, 144, 255) // text-selection highlight (ui_scrollback.c's click-drag/shift-arrow selection)
 
 #endif

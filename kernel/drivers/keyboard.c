@@ -2,6 +2,7 @@
 #include "io.h"
 #include "vga.h"
 #include "klog.h"
+#include "debug_console.h"
 
 #define KBD_DATA_PORT 0x60
 
@@ -131,14 +132,19 @@ void keyboard_feed_byte(uint8_t sc) {
     if (extended_prefix) {
         extended_prefix = 0;
         if (!(sc & 0x80)) { // key press, not release
-            if (sc == SC_ARROW_UP) ring_push(KEY_ARROW_UP);
-            else if (sc == SC_ARROW_DOWN) ring_push(KEY_ARROW_DOWN);
+            // Shift+arrow/Home/End get their own codes, decided right
+            // here from the live `shift_pressed` state -- same timing
+            // as the ASCII table swap below for ordinary letter keys,
+            // so a shift release racing the arrow keypress resolves the
+            // same way either family of key already does.
+            if (sc == SC_ARROW_UP) ring_push(shift_pressed ? KEY_SHIFT_ARROW_UP : KEY_ARROW_UP);
+            else if (sc == SC_ARROW_DOWN) ring_push(shift_pressed ? KEY_SHIFT_ARROW_DOWN : KEY_ARROW_DOWN);
             else if (sc == SC_PAGE_UP) ring_push(KEY_PAGE_UP);
             else if (sc == SC_PAGE_DOWN) ring_push(KEY_PAGE_DOWN);
-            else if (sc == SC_ARROW_LEFT) ring_push(KEY_ARROW_LEFT);
-            else if (sc == SC_ARROW_RIGHT) ring_push(KEY_ARROW_RIGHT);
-            else if (sc == SC_HOME) ring_push(KEY_HOME);
-            else if (sc == SC_END) ring_push(KEY_END);
+            else if (sc == SC_ARROW_LEFT) ring_push(shift_pressed ? KEY_SHIFT_ARROW_LEFT : KEY_ARROW_LEFT);
+            else if (sc == SC_ARROW_RIGHT) ring_push(shift_pressed ? KEY_SHIFT_ARROW_RIGHT : KEY_ARROW_RIGHT);
+            else if (sc == SC_HOME) ring_push(shift_pressed ? KEY_SHIFT_HOME : KEY_HOME);
+            else if (sc == SC_END) ring_push(shift_pressed ? KEY_SHIFT_END : KEY_END);
             else if (sc == SC_DELETE) ring_push(KEY_DELETE);
         }
         return;
@@ -176,8 +182,16 @@ int keyboard_getchar(void) {
         // place to drive the framebuffer console's blinking cursor while
         // otherwise idle waiting for input. vga_cursor_tick() gates its
         // own actual work internally, so calling it this often costs
-        // nothing on the ticks where it doesn't toggle.
+        // nothing on the ticks where it doesn't toggle. debug_console_poll()
+        // rides the same wakeup for the same reason -- this is the
+        // physical shell's main idle point, so a serial debug session
+        // stays responsive whenever nobody's actively typing at the
+        // physical console (see docs/decisions.md for the honest
+        // limitation: it does NOT get polled while a blocking command,
+        // the GUI's own event loop, or a ring-3 process is running --
+        // apps/wm/wm.c's loop covers the GUI case separately).
         vga_cursor_tick();
+        debug_console_poll();
         __asm__ volatile ("hlt");
     }
     return c;

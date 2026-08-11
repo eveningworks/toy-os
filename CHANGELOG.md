@@ -797,6 +797,85 @@ forever.
   near-bottom-edge taskbar menu fully on screen, and every action
   (launch/close/minimize) actually executes and updates the screen
   correctly afterward.
+- **Click-to-position and text selection in `text_scrollback`, and an
+  interactive serial debug console on COM1.** Two related requests from
+  the same round -- user chose, via `AskUserQuestion`: build the text
+  editing on the *shared* `apps/ui/ui_scrollback.c` widget (used by
+  Notepad, Terminal, and `apps/editor.c`) rather than a Notepad-only
+  one, migrate Notepad's Save/Load buttons to `ui_button_group` (what
+  Calculator already uses) as part of the same pass, do click-to-position
+  and full selection (drag + shift+arrow) in one go rather than phased,
+  and build the debug interface as an interactive command console over
+  serial rather than a one-shot dump or a continuous trace stream.
+  - `ui_scrollback.h`/`.c`: new `widget_scrollback_index_at_point()`
+    (inverts a pixel position back to a buffer index, mirroring the
+    existing measure-pass's wrap/newline capture convention exactly so
+    a click round-trips to the same visual cursor spot); new selection
+    API (`widget_scrollback_selection_start/clear/present/range`,
+    `widget_scrollback_delete_selection()`); `widget_scrollback_draw()`
+    gained a `sel_bg` parameter (widgets stay theme-agnostic -- callers
+    supply the color, same as everywhere else in `apps/ui/`) and now
+    paints a highlight rect behind selected characters.
+    `THEME_SELECTION_BG` added to `apps/theme.h`.
+  - `kernel/include/keyboard.h`/`kernel/drivers/keyboard.c`: new
+    `KEY_SHIFT_ARROW_*`/`KEY_SHIFT_HOME`/`KEY_SHIFT_END` codes, emitted
+    from the extended-scancode handler based on live shift state at
+    scancode-processing time (same timing convention the existing
+    shift table already uses for letters).
+  - `apps/notepad.c`/`.h`: click positions the cursor; drag extends a
+    selection (reusing the existing `on_drag_start`/`on_drag`
+    mutual-exclusivity contract -- claiming every text-body mouse-down
+    unconditionally means a drag that never moves is just a plain
+    click, no separate code path needed); shift+arrow/Home/End extends
+    a selection the same way; Backspace/Delete/typing over an active
+    selection replaces it instead of acting at the cursor. Save/Load
+    buttons migrated from hand-rolled hit-testing to `ui_button_group`,
+    gaining press/release visual feedback (`notepad_press`/
+    `notepad_release`) Calculator already had but the old buttons
+    didn't.
+  - New `kernel/core/debug_console.c`/`.h`: a line-buffered interactive
+    command console over serial -- `help`/`meminfo`/`lsdev`/`lsfs
+    [path]` -- non-blocking `debug_console_poll()` called from
+    `keyboard_getchar()`'s idle hlt-wait (physical shell) and
+    `wm_run()`'s main loop (GUI desktop), so a serial session stays
+    responsive whichever one is active, without new kernel-thread/
+    scheduling machinery. Output goes through `klog_write()`, so
+    console responses also land in `dmesg`. Exposed to `apps/` via
+    `kapi.h` (`debug_console_poll()` only -- `apps/wm/wm.c` doesn't
+    reach into `kernel/core` directly).
+  - `kernel/include/serial.h`/`kernel/core/serial.c`: added RX support
+    -- a ring buffer, `serial_try_getc()`, and a new `serial_irq_init()`
+    (IRQ4 registration + PIC unmask + UART IER enable) called from
+    `kernel_main()` right after `idt_init()`, deliberately split out of
+    `serial_init()` itself (which runs *before* `idt_init()`, so
+    registering/unmasking that early would've been undone by
+    `idt_init()`'s own masking pass). Found live, not by inspection: an
+    early version registered the IRQ and unmasked it at the PIC
+    correctly but still received nothing, because `serial_init()`'s
+    original `outb(COM1+1, 0x00)` leaves the UART's own Interrupt
+    Enable Register at 0 -- disabling interrupt generation at the chip
+    itself, independent of the PIC. `serial_irq_init()` now also sets
+    IER bit 0.
+  - `tools/gui_flow.py`: fixed a second Start-menu click-math bug past
+    the `ITEM_H` fix from a prior round -- the derived top-Y formula
+    (`(SCREEN_H - TASKBAR_H) - ITEM_H * total_items`) was close enough
+    to work for a middle row but landed too close to the row-0/row-1
+    boundary specifically, misclicking "About" when asked for
+    "Notepad". Replaced with `MENU_TOP_Y = 536`, measured directly from
+    a live screenshot rather than re-derived from constants that had
+    already been wrong once.
+  - Verified via QMP: click-to-position (typing exactly where clicked,
+    mid-string); drag-select producing a visible highlight; shift+arrow
+    selection extending correctly from Home; Backspace deleting an
+    active selection (both drag- and shift-arrow-created); Save then
+    Load round-tripping real content through the filesystem; the
+    serial debug console answering `meminfo` with real live data while
+    the GUI desktop was active. Screenshots in `screenshots/2026-08-11/`.
+  - Known limitation, documented rather than solved: no output lock
+    exists anywhere in this kernel, so a concurrent `klog_write()` from
+    elsewhere could in principle interleave with the debug console's
+    own output. Accepted for a debug-only tool rather than adding new
+    synchronization machinery for it.
 
 ### Changed
 - Versioning switched from a per-change build-number scheme

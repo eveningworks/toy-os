@@ -49,6 +49,19 @@ ITEM_H = 24           # Start menu row height (gfx_char_h() + 6 at the default f
                        # verified empirically at 18+6=24 against a live boot; this was
                        # previously (incorrectly) 32, which silently misclicked every
                        # Start-menu row after the first couple -- see docs/decisions.md)
+# Deriving the menu's top Y from SCREEN_H - TASKBAR_H - ITEM_H*total_items
+# (start_menu.c's own geometry() formula) landed within a few px of the
+# real value -- close enough that it worked for rows in the middle of
+# the menu (e.g. row 3) but was too close to the row-0/row-1 boundary
+# for row 0 specifically, misclicking "About" instead of "Notepad".
+# Rather than keep chasing which of SCREEN_H/TASKBAR_H's assumptions is
+# slightly off, this is the menu's real top Y edge as measured directly
+# from a live screenshot (a Start menu with 6 rows at ITEM_H=24 spans
+# y=536-680) -- more robust than re-deriving it from constants that
+# have already been wrong once. If APP_ORDER's length or ITEM_H ever
+# changes, re-measure this the same way (open the menu, screenshot,
+# read off the first row's top pixel) rather than trusting the formula.
+MENU_TOP_Y = 536
 START_BTN = (50, 703)  # inside the taskbar's Start button, safely off any edge
 
 # Keep in sync with apps/gui_apps.c's gui_app_registry[] order.
@@ -79,9 +92,7 @@ class GuiFlow:
         self._menu_open_hint = True
 
     def _menu_row_center(self, row_index):
-        total_items = len(APP_ORDER) + len(SYSTEM_ACTIONS)
-        menu_y = (SCREEN_H - TASKBAR_H) - ITEM_H * total_items
-        return (80, menu_y + ITEM_H * row_index + ITEM_H // 2)
+        return (80, MENU_TOP_Y + ITEM_H * row_index + ITEM_H // 2)
 
     def click_menu_row_by_index(self, row_index, settle=0.5, _menu_already_open=False):
         """0-based row index into APP_ORDER + SYSTEM_ACTIONS, top to

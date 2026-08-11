@@ -16,6 +16,21 @@
 #define KEY_DELETE      0x99
 #define KEY_F2          0x9A
 #define KEY_F3          0x9B
+// Shift+arrow/Home/End -- distinct codes rather than a separate
+// "modifier held" query, so apps that want selection (Notepad) just
+// switch on one more case, and apps that don't (Terminal, the CLI
+// editor) simply never see these and keep working exactly as before.
+// Emitted by keyboard.c at the moment the scancode is processed (same
+// place shift already picks between scancode_ascii/scancode_ascii_shift
+// for a letter key), not derived later from some live "is shift down
+// right now" state an app would have to poll itself -- see
+// docs/decisions.md for why that timing matters.
+#define KEY_SHIFT_ARROW_LEFT  0x9C
+#define KEY_SHIFT_ARROW_RIGHT 0x9D
+#define KEY_SHIFT_ARROW_UP    0x9E
+#define KEY_SHIFT_ARROW_DOWN  0x9F
+#define KEY_SHIFT_HOME        0xA0
+#define KEY_SHIFT_END         0xA1
 
 // The six Latin-1 codepoints this build's font (font_ttf.h,
 // tools/genttf.py) and `se` keyboard layout (keyboard.c) support --

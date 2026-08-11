@@ -1161,3 +1161,43 @@ the kernel's actual `gfx_char_h() + 6` (`24` at the default font
 size) -- so every `open_app()` call was clicking roughly one row below
 where it meant to. Found and fixed once it was blocking this
 migration's own testing; see CHANGELOG.md's `[Unreleased]` entry.
+
+## Click-to-position/selection lives in the shared `text_scrollback` widget, not a Notepad-only one
+
+When asked to add click-to-position and text selection, user chose
+extending the shared `apps/ui/ui_scrollback.c` widget (used by
+Notepad, Terminal, and `apps/editor.c`) over building a new
+Notepad-only widget. Terminal and `editor.c` never call the new
+selection API, so it's inert there -- but any future caller of
+`text_scrollback` gets click-to-position/selection for free, and there
+was no plausible reason for the underlying pixel<->buffer-index math
+(and its correctness) to exist twice. See CHANGELOG.md's
+`[Unreleased]` entry for the full implementation.
+
+## The serial debug console is poll-based from existing idle loops, not a new kernel thread
+
+`debug_console_poll()` is called from `keyboard_getchar()`'s hlt-wait
+loop and `wm_run()`'s main event loop -- both already wake on every
+interrupt and already have a "cheap thing to do while otherwise idle"
+convention (`vga_cursor_tick()`). Piggybacking there means a serial
+debug session over COM1 works without any new scheduling or
+kernel-thread machinery, matching this kernel's existing
+single-threaded-cooperative-with-interrupts model. The honest
+limitation: it does NOT get polled while a blocking command, a
+ring-3 process, or anything else that isn't one of those two loops is
+running -- accepted rather than solved, since fixing it properly would
+mean either real kernel threads or polling from many more places for
+a debug-only feature. See CHANGELOG.md's `[Unreleased]` entry.
+
+Getting serial RX working at all needed two things past "unmask the
+PIC": `serial_irq_init()`'s IRQ registration/unmask has to run *after*
+`idt_init()`, not from `serial_init()` itself, since `serial_init()`
+deliberately runs first in `kernel_main()` (so `klog_write()` has
+somewhere to send its very first byte) -- before `idt_init()`'s own
+"mask everything, then unmask only what's wired up" pass, which would
+otherwise immediately undo an earlier unmask. And unmasking the PIC
+line isn't sufficient by itself: the UART's own Interrupt Enable
+Register also has to be set (`serial_init()`'s original `outb(COM1+1,
+0x00)` leaves it at 0, since nothing needed RX before this). Found
+live -- a fully-correct-looking IRQ handler + PIC unmask produced zero
+bytes, not even local echo, until the IER bit was added.

@@ -43,6 +43,7 @@
 #include "editor.h"
 #include "shell.h"
 #include "kapi.h"
+#include "theme.h"
 
 // Height of the editor sub-mode's status bar (path + key hints +
 // last save status) -- same idea as notepad.c's TOOLBAR_H, a macro
@@ -303,7 +304,7 @@ void terminal_draw(struct window *win) {
 
     if (st->in_editor) {
         int text_h = window_content_h(win) - EDITOR_STATUS_H;
-        widget_scrollback_draw(&st->editor_tb, cx, cy, cw, text_h, gfx_rgb(0, 0, 0), 1);
+        widget_scrollback_draw(&st->editor_tb, cx, cy, cw, text_h, gfx_rgb(0, 0, 0), THEME_SELECTION_BG, 1);
         draw_editor_status(st, cx, cy + text_h, cw);
         return;
     }
@@ -311,7 +312,7 @@ void terminal_draw(struct window *win) {
     int text_w, ch, show_scrollbar;
     term_layout(win, &text_w, &ch, &show_scrollbar);
 
-    widget_scrollback_draw(&st->tb, cx, cy, text_w, ch, gfx_rgb(0, 0, 0), 1);
+    widget_scrollback_draw(&st->tb, cx, cy, text_w, ch, gfx_rgb(0, 0, 0), THEME_SELECTION_BG, 1);
 
     if (show_scrollbar) {
         int total_lines, visible_rows;

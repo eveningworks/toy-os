@@ -19,6 +19,7 @@
 #include "keyboard_config.h"
 #include "apps.h"
 #include "scheduler.h"
+#include "debug_console.h"
 #include <stdint.h>
 
 // Zero-padded 2-digit decimal, for the RTC boot-time log line below --
@@ -45,6 +46,9 @@ void kernel_main(uint64_t multiboot_info_addr) {
 
     idt_init();
     klog_write("toy-os: IDT/PIC/PIT initialized, interrupts enabled\n");
+
+    serial_irq_init(); // COM1 RX -- see serial.c for why this can't run inside serial_init() itself
+    klog_write("toy-os: serial RX enabled (debug console on COM1, see docs/decisions.md)\n");
 
     pmm_init();
     klog_write("toy-os: physical frame allocator initialized\n");
@@ -101,6 +105,8 @@ void kernel_main(uint64_t multiboot_info_addr) {
 
     scheduler_init();
     klog_write("toy-os: scheduler initialized (disarmed; see `schedtest`)\n");
+
+    debug_console_init(); // serial debug console (COM1) -- see docs/decisions.md; polled from keyboard_getchar()'s and wm_run()'s idle-wait loops
 
     apps_start();
 

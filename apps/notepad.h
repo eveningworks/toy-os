@@ -16,8 +16,16 @@ void notepad_key(struct window *win, int key);
 // text_scrollback + scrollbar widgets.
 void notepad_click(struct window *win, int cx, int cy);
 
-// Scrollbar thumb dragging -- see gui_apps.h's on_drag_start/on_drag
-// contract and widgets.h's widget_scrollbar_* functions.
+// Save/Load press-feedback -- see gui_apps.h's on_press/on_release
+// contract and calculator.c's identically-shaped wrappers around the
+// same ui_button_group_press()/_release() calls.
+int notepad_press(struct window *win, int cx, int cy);
+void notepad_release(struct window *win);
+
+// Scrollbar thumb dragging, and (new) click-to-position/drag-select in
+// the text body -- see gui_apps.h's on_drag_start/on_drag contract,
+// widgets.h's widget_scrollbar_* functions, and ui_scrollback.h's
+// selection API.
 int notepad_drag_start(struct window *win, int cx, int cy);
 void notepad_drag(struct window *win, int cx, int cy);
 

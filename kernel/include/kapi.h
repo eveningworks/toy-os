@@ -28,6 +28,7 @@
 #include "ring3_test.h" // ring3_test_run: paging/GDT/ring-3 isolation demo (the one test that predates and doesn't use any ELF file at all)
 #include "scheduler.h"    // scheduler_demo_run: preemptive round-robin scheduler demo (M16), spawns /bin/counter_a and /bin/counter_b from disk
 #include "elf_run.h"       // elf_run_from_fs: loads and runs a real ELF64 binary straight from the persistent filesystem -- what every /bin binary now runs through via the shell's `run <name>` (see docs/decisions.md; this replaced a dozen near-identical per-binary GRUB-module test harnesses)
+#include "debug_console.h" // debug_console_poll -- apps/wm/wm.c's event loop rides this the same way keyboard_getchar() does, so the serial debug console stays responsive while the GUI desktop is up too (see docs/decisions.md)
 #include "version.h"   // TOYOS_VERSION -- build number, shown by the shell's `about` and the GUI About window
 #include "string.h"    // k_strlen, k_strcmp, etc -- freestanding, no libc
 

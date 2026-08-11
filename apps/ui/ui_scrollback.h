@@ -74,6 +74,16 @@ struct text_scrollback {
     // explicitly via the cursor_*() calls and edits at it via the
     // *_at_cursor() calls, both added alongside this field.
     int cursor;
+    // Selection state, added alongside click-to-position/drag-select
+    // support -- see the "selection" section below. `sel_active` is a
+    // separate flag rather than encoding "no selection" as
+    // `sel_anchor == cursor`, because a caller may legitimately want an
+    // active-but-currently-empty selection mid-drag (anchor and cursor
+    // briefly coincide the instant a drag starts, before the mouse has
+    // moved) without that being indistinguishable from "no selection at
+    // all". Both fields are 0 at init/clear, same as `cursor`.
+    int sel_anchor;   // logical index the selection was started from
+    int sel_active;   // 1 while a selection exists (even if empty), 0 otherwise
 };
 
 // Resets to empty, cursor color VGA_LIGHT_GREY, pinned to bottom.
@@ -117,11 +127,17 @@ void widget_scrollback_metrics(struct text_scrollback *tb, int cw, int ch,
 
 // Fills (cx, cy, cw, ch) with `bg`, then draws whatever's currently in
 // view given `tb->scroll_offset` and the current font size, wrapping at
-// `cw`'s column count. If `show_cursor` is non-zero and `tb->cursor`'s
+// `cw`'s column count. Any selected cells (see the "selection" section
+// below) are filled with `sel_bg` first -- pass any color if the caller
+// never uses selection (e.g. apps/terminal.c today), it'll simply never
+// be selected against. If `show_cursor` is non-zero and `tb->cursor`'s
 // current position is within the visible window, draws a thin cursor
-// bar there in `tb->cur_fg`.
+// bar there in `tb->cur_fg`. `sel_bg` is caller-supplied rather than a
+// hardcoded color here, same as every other color this widget draws
+// with -- see ui_primitives.c's own comment on apps/ui/ staying
+// theme-agnostic.
 void widget_scrollback_draw(struct text_scrollback *tb, int cx, int cy, int cw, int ch,
-                             uint32_t bg, int show_cursor);
+                             uint32_t bg, uint32_t sel_bg, int show_cursor);
 
 // ---- cursor-aware editing (see the `cursor` field's own comment) ----
 //
@@ -165,5 +181,61 @@ void widget_scrollback_delete_at_cursor(struct text_scrollback *tb);
 // Backspace) and moves the cursor back by one. No-op if the cursor is
 // already at the start.
 void widget_scrollback_backspace_at_cursor(struct text_scrollback *tb);
+
+// ---- click-to-position + selection ----
+//
+// Added so a caller (apps/notepad.c to start with) can support mouse
+// interaction with the text body, not just keyboard navigation. Both
+// pieces are opt-in -- a caller that never calls any of these (e.g.
+// apps/terminal.c today) sees no behavior change at all, same reasoning
+// as the append-only vs. cursor-aware APIs above coexisting.
+
+// Converts a point in the *same coordinate space* widget_scrollback_draw()
+// takes (cx/cy/cw/ch is the widget's rect; px/py is the point to test,
+// e.g. a click's content-relative coordinates) into a logical buffer
+// index -- the inverse of the pixel math draw() uses to place each
+// cell, using the identical wrapped-line/column accounting so a given
+// index always round-trips to the same screen position draw() would
+// render its cursor at. Clicking past the end of a line lands at that
+// line's end; clicking below the last line lands at the end of the
+// buffer; clicking in the middle of a character cell rounds down to
+// that character (not the nearest edge).
+int widget_scrollback_index_at_point(struct text_scrollback *tb, int cx, int cy, int cw, int ch,
+                                      int px, int py);
+
+// Starts a new selection anchored at the CURRENT cursor position (call
+// this first, e.g. on mouse-down or the first shift+arrow press), then
+// move `tb->cursor` however the caller likes (index_at_point() for a
+// click/drag, or the cursor_*() calls above for shift+arrow) -- the
+// selection always spans [min(anchor,cursor), max(anchor,cursor)) as of
+// whatever `tb->cursor` currently is, computed lazily by
+// widget_scrollback_selection_range() rather than tracked incrementally.
+// Safe to call again to re-anchor (e.g. a fresh mouse-down replaces any
+// selection from a previous drag).
+void widget_scrollback_selection_start(struct text_scrollback *tb);
+
+// Drops the current selection, if any (a plain click or arrow key with
+// no shift held should call this). No-op if none is active.
+void widget_scrollback_selection_clear(struct text_scrollback *tb);
+
+// 1 if a selection is active AND currently non-empty (anchor != cursor),
+// 0 otherwise -- what a caller actually wants to know before acting on
+// "is there a selection to delete/highlight", since an active-but-empty
+// selection (see the `sel_active` field comment) shouldn't visually
+// highlight anything or be deletable.
+int widget_scrollback_selection_present(const struct text_scrollback *tb);
+
+// Fills *out_start/*out_end with the selection's buffer range, sorted
+// low-to-high (a valid [start,end) half-open range even when the drag
+// went right-to-left). Only meaningful when
+// widget_scrollback_selection_present() is true; harmless (both set to
+// tb->cursor) otherwise.
+void widget_scrollback_selection_range(const struct text_scrollback *tb, int *out_start, int *out_end);
+
+// Deletes the selected range (if any), moves the cursor to where the
+// selection started, and clears the selection -- what Backspace/Delete
+// or typing a replacement character should call first when a selection
+// is present. No-op if widget_scrollback_selection_present() is false.
+void widget_scrollback_delete_selection(struct text_scrollback *tb);
 
 #endif

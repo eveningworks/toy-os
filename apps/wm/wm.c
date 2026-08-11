@@ -214,6 +214,12 @@ void wm_run(void) {
     for (;;) {
         __asm__ volatile ("hlt");
 
+        // Same idle-wakeup piggyback keyboard_getchar() does for the
+        // physical shell -- see kapi.h's include comment and
+        // docs/decisions.md. Keeps the serial debug console responsive
+        // while the GUI desktop is up, not just at the physical prompt.
+        debug_console_poll();
+
         mouse_get_state(&mx, &my, &buttons);
         int mouse_moved = (mx != prev_mx || my != prev_my);
 

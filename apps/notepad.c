@@ -1,8 +1,9 @@
 // A minimal text editor: type, backspace, enter, arrow-key/Home/End
-// cursor movement, Delete, and a toolbar with an editable filename
-// field plus Save/Load buttons that persist to/from that filename via
-// the in-memory filesystem (see kernel/include/fs.h). Also doubles as
-// the WM's keyboard-focus test: open it alongside About and confirm
+// cursor movement, Delete, click-to-position and click-drag/shift+arrow
+// text selection, and a toolbar with an editable filename field plus
+// Save/Load buttons that persist to/from that filename via the
+// in-memory filesystem (see kernel/include/fs.h). Also doubles as the
+// WM's keyboard-focus test: open it alongside About and confirm
 // keystrokes always land in whichever window is on top.
 //
 // The filename field (build 490) started as a raw widgets.h
@@ -16,6 +17,11 @@
 // always the live filename, Save/Load just read it directly whenever
 // they run.
 //
+// Save/Load moved from bare widget_button()/widget_hit() calls to a
+// real struct ui_button_group (apps/ui/ui_button_group.h) -- the same
+// migration ui_button_group.h's own top comment said was deliberately
+// left for later when Calculator got it first; see docs/decisions.md.
+//
 // Cursor movement (build 377) rides on widgets.h's text_scrollback
 // gaining a real cursor -- see its own top comment for why: this file
 // was exactly the "second real caller" that justified adding it, next
@@ -26,17 +32,27 @@
 // invisible until scrolled back into view by hand. Not implemented in
 // this pass; see CHANGELOG.md's build 377 entry.
 //
+// Click-to-position and text selection (see this file's docs/decisions.md
+// entry) build directly on ui_scrollback.h's click/selection API, added
+// alongside this: notepad_drag_start() claims every mouse-down in the
+// text body (not just scrollbar-thumb drags) so a plain click and a
+// drag-select both fall out of the same code path (a drag that never
+// moves IS a click-to-position). Shift+arrow/Home/End extends the
+// selection instead of moving a fresh one every keystroke -- see
+// notepad_extend_selection().
+//
 // Phase 4/4 of the scrollbar plan (see CHANGELOG.md builds 263, 273,
 // 283 for the first three): converted from a flat char[] + manual
 // col/row draw loop to the same struct text_scrollback (widgets.h)
 // apps/terminal.c uses. That's the whole point of sharing the widget --
-// Page Up/Page Down, the visual draggable scrollbar, and the mouse
-// wheel all come for free from code already written and tested for
-// Terminal, instead of a second, Notepad-specific scrolling
-// implementation. Save/Load now serialize the scrollback's ring buffer
-// to/from a flat byte stream at the filesystem boundary (see
-// notepad_serialize()/notepad_load_text() below) since fs_write()/
-// fs_read() (fs.h) only know about flat buffers, not this widget.
+// Page Up/Page Down, the visual draggable scrollbar, the mouse wheel,
+// and now click-to-position/selection too all come for free from code
+// already written and tested for Terminal (or, for selection, available
+// to it later), instead of a second, Notepad-specific implementation.
+// Save/Load now serialize the scrollback's ring buffer to/from a flat
+// byte stream at the filesystem boundary (see notepad_serialize()/
+// notepad_load_text() below) since fs_write()/fs_read() (fs.h) only
+// know about flat buffers, not this widget.
 #include "notepad.h"
 #include "wm/wm.h"
 #include "ui/ui.h"
@@ -66,6 +82,13 @@
 #define BTN_MARGIN 4
 #define FIELD_COLS 16 // comfortably fits "notepad.txt"-length names; TEXTFIELD_MAX (widgets.h) allows more, just not all visible at once
 #define FIELD_W (FIELD_COLS * gfx_char_w() + 8)
+// ui_button `code`s for Save/Load -- app-defined, delivered back from
+// ui_button_group_click() (see notepad_click() below), same "arbitrary
+// int the caller assigns meaning to" convention calculator.c's button
+// codes use.
+#define BTN_SAVE_CODE 'S'
+#define BTN_LOAD_CODE 'L'
+#define NOTEPAD_BTN_COUNT 2
 // How many text rows/cols the initial window should comfortably fit --
 // text itself always reflows to whatever size the window actually is
 // (see widget_scrollback_draw()'s own reflow), this just picks a
@@ -85,8 +108,17 @@
 struct notepad_state {
     struct text_scrollback tb;
     struct ui_textbox filename; // editable filename Save/Load read/write -- see this file's top comment
+    struct ui_button buttons[NOTEPAD_BTN_COUNT]; // Save, Load -- see this file's top comment on the ui_button_group migration
+    struct ui_button_group group;
     char status[32]; // brief feedback after Save/Load, shown in the toolbar
     int scrollbar_grab_offset; // set by notepad_drag_start(), read by notepad_drag() -- see widgets.h's widget_scrollbar_thumb_rect()
+    // Which of the two things a held-down drag is currently doing --
+    // notepad_drag_start() claims a mouse-down in either the text body
+    // (click-to-position/drag-select) or the scrollbar thumb, and
+    // notepad_drag() needs to know which so it updates the right state
+    // on every subsequent tick while the button stays held. 1 = dragging
+    // a text selection, 0 = dragging the scrollbar thumb.
+    int dragging_selection;
 };
 static struct notepad_state g_notepad;
 
@@ -120,7 +152,14 @@ void notepad_open(struct window *win) {
     // gfx_char_w() and can change at runtime (fontsize).
     ui_textbox_init(&g_notepad.filename, 0, 0, 0, 0, NOTEPAD_DEFAULT_FILE,
                      THEME_WHITE, THEME_TEXT, THEME_BORDER);
+
+    uint32_t btn_bg = gfx_rgb(200, 200, 212);
+    ui_button_init(&g_notepad.buttons[0], 0, 0, 0, 0, "Save", btn_bg, THEME_TEXT, BTN_SAVE_CODE);
+    ui_button_init(&g_notepad.buttons[1], 0, 0, 0, 0, "Load", btn_bg, THEME_TEXT, BTN_LOAD_CODE);
+    ui_button_group_init(&g_notepad.group, g_notepad.buttons, NOTEPAD_BTN_COUNT);
+
     g_notepad.status[0] = '\0';
+    g_notepad.dragging_selection = 0;
     window_set_state(win, &g_notepad);
 }
 
@@ -163,14 +202,24 @@ static void notepad_layout_filename(struct notepad_state *st) {
     ui_textbox_set_geometry(&st->filename, field_x0, BTN_MARGIN, FIELD_W, bh);
 }
 
+// Refreshes Save/Load's geometry from toolbar_geometry() -- same
+// font-size-live-tracking reasoning as notepad_layout_filename() and
+// calculator.c's calculator_layout(), needs to re-run before every
+// draw/press/click, not just once at open.
+static void notepad_layout_buttons(struct notepad_state *st) {
+    int field_x0, save_x0, load_x0;
+    toolbar_geometry(&field_x0, &save_x0, &load_x0);
+    int bh = TOOLBAR_H - 2 * BTN_MARGIN;
+    ui_button_set_geometry(&st->buttons[0], save_x0, BTN_MARGIN, BTN_W, bh);
+    ui_button_set_geometry(&st->buttons[1], load_x0, BTN_MARGIN, BTN_W, bh);
+}
+
 static void draw_toolbar(struct window *win, struct notepad_state *st,
                           int cx, int cy, int cw, uint32_t fg) {
     uint32_t toolbar_bg = THEME_BUTTON_BG;
-    uint32_t btn_bg = gfx_rgb(200, 200, 212);
     gfx_fill_rect(cx, cy, cw, TOOLBAR_H, toolbar_bg);
 
     int by = cy + BTN_MARGIN;
-    int bh = TOOLBAR_H - 2 * BTN_MARGIN;
 
     int field_x0, save_x0, load_x0;
     toolbar_geometry(&field_x0, &save_x0, &load_x0);
@@ -178,14 +227,11 @@ static void draw_toolbar(struct window *win, struct notepad_state *st,
     notepad_layout_filename(st);
     ui_textbox_draw(&st->filename, cx, cy);
 
-    int save_x = cx + save_x0;
-    widget_button(save_x, by, BTN_W, bh, "Save", btn_bg, fg, 0);
-
-    int load_x = cx + load_x0;
-    widget_button(load_x, by, BTN_W, bh, "Load", btn_bg, fg, 0);
+    notepad_layout_buttons(st);
+    ui_button_group_draw(&st->group, cx, cy);
 
     if (st->status[0]) {
-        gfx_draw_string(load_x + BTN_W + 12, by, st->status, fg, toolbar_bg);
+        gfx_draw_string(cx + load_x0 + BTN_W + 12, by, st->status, fg, toolbar_bg);
     }
     (void)win;
 }
@@ -205,7 +251,7 @@ void notepad_draw(struct window *win) {
     int text_w, text_h, show_scrollbar;
     notepad_layout(win, &text_w, &text_h, &show_scrollbar);
 
-    widget_scrollback_draw(&st->tb, cx, text_y, text_w, text_h, bg, 1);
+    widget_scrollback_draw(&st->tb, cx, text_y, text_w, text_h, bg, THEME_SELECTION_BG, 1);
 
     if (show_scrollbar) {
         int total_lines, visible_rows;
@@ -213,6 +259,16 @@ void notepad_draw(struct window *win) {
         widget_scrollbar_draw(cx + text_w, text_y, NOTEPAD_SCROLLBAR_W, text_h, total_lines, visible_rows,
                                st->tb.scroll_offset, gfx_rgb(225, 225, 230), gfx_rgb(150, 150, 160));
     }
+}
+
+// Called at the start of a shift+arrow/Home/End key so the selection
+// keeps growing from wherever it started, instead of re-anchoring at
+// the cursor's CURRENT position on every single shift+key press (which
+// would make the selection always exactly one character/line, never
+// accumulate). A plain (non-shift) cursor move should call
+// widget_scrollback_selection_clear() instead -- see notepad_key() below.
+static void notepad_extend_selection(struct notepad_state *st) {
+    if (!st->tb.sel_active) widget_scrollback_selection_start(&st->tb);
 }
 
 void notepad_key(struct window *win, int key) {
@@ -236,22 +292,49 @@ void notepad_key(struct window *win, int key) {
     }
 
     if (key == '\b') {
-        widget_scrollback_backspace_at_cursor(&st->tb);
+        if (widget_scrollback_selection_present(&st->tb)) widget_scrollback_delete_selection(&st->tb);
+        else widget_scrollback_backspace_at_cursor(&st->tb);
     } else if (key == KEY_DELETE) {
-        widget_scrollback_delete_at_cursor(&st->tb);
+        if (widget_scrollback_selection_present(&st->tb)) widget_scrollback_delete_selection(&st->tb);
+        else widget_scrollback_delete_at_cursor(&st->tb);
     } else if (key == '\r' || key == '\n') {
+        if (widget_scrollback_selection_present(&st->tb)) widget_scrollback_delete_selection(&st->tb);
         widget_scrollback_insert_at_cursor(&st->tb, '\n');
     } else if (key == KEY_ARROW_LEFT) {
+        widget_scrollback_selection_clear(&st->tb);
         widget_scrollback_cursor_left(&st->tb);
     } else if (key == KEY_ARROW_RIGHT) {
+        widget_scrollback_selection_clear(&st->tb);
         widget_scrollback_cursor_right(&st->tb);
     } else if (key == KEY_ARROW_UP) {
+        widget_scrollback_selection_clear(&st->tb);
         widget_scrollback_cursor_up(&st->tb);
     } else if (key == KEY_ARROW_DOWN) {
+        widget_scrollback_selection_clear(&st->tb);
         widget_scrollback_cursor_down(&st->tb);
     } else if (key == KEY_HOME) {
+        widget_scrollback_selection_clear(&st->tb);
         widget_scrollback_cursor_home(&st->tb);
     } else if (key == KEY_END) {
+        widget_scrollback_selection_clear(&st->tb);
+        widget_scrollback_cursor_end(&st->tb);
+    } else if (key == KEY_SHIFT_ARROW_LEFT) {
+        notepad_extend_selection(st);
+        widget_scrollback_cursor_left(&st->tb);
+    } else if (key == KEY_SHIFT_ARROW_RIGHT) {
+        notepad_extend_selection(st);
+        widget_scrollback_cursor_right(&st->tb);
+    } else if (key == KEY_SHIFT_ARROW_UP) {
+        notepad_extend_selection(st);
+        widget_scrollback_cursor_up(&st->tb);
+    } else if (key == KEY_SHIFT_ARROW_DOWN) {
+        notepad_extend_selection(st);
+        widget_scrollback_cursor_down(&st->tb);
+    } else if (key == KEY_SHIFT_HOME) {
+        notepad_extend_selection(st);
+        widget_scrollback_cursor_home(&st->tb);
+    } else if (key == KEY_SHIFT_END) {
+        notepad_extend_selection(st);
         widget_scrollback_cursor_end(&st->tb);
     } else if (key == KEY_PAGE_UP || key == KEY_PAGE_DOWN) {
         // Same "one screenful minus a line of overlap" convention as
@@ -265,6 +348,7 @@ void notepad_key(struct window *win, int key) {
         window_invalidate(win);
         return; // paging doesn't touch st->status/the text itself
     } else if (IS_PRINTABLE_KEY(key)) {
+        if (widget_scrollback_selection_present(&st->tb)) widget_scrollback_delete_selection(&st->tb);
         widget_scrollback_insert_at_cursor(&st->tb, (char)key);
     } else {
         return; // ignore other control codes for this simple version
@@ -314,6 +398,7 @@ void notepad_click(struct window *win, int cx, int cy) {
         int field_x0, save_x0, load_x0;
         toolbar_geometry(&field_x0, &save_x0, &load_x0);
         int bh = TOOLBAR_H - 2 * BTN_MARGIN;
+        (void)save_x0; (void)load_x0; // geometry now lives on st->buttons[]; ui_button_group_click() below hit-tests from there
 
         if (widget_hit(field_x0, BTN_MARGIN, FIELD_W, bh, cx, cy)) {
             ui_textbox_set_active(&st->filename, 1);
@@ -326,7 +411,9 @@ void notepad_click(struct window *win, int cx, int cy) {
         // contract widget_textfield_* describes.
         ui_textbox_set_active(&st->filename, 0);
 
-        if (widget_hit(save_x0, 0, BTN_W, TOOLBAR_H, cx, cy)) {
+        notepad_layout_buttons(st);
+        int code = ui_button_group_click(&st->group, cx, cy);
+        if (code == BTN_SAVE_CODE) {
             if (st->filename.field.len == 0) {
                 k_strcpy(st->status, "Bad filename.");
             } else {
@@ -337,7 +424,7 @@ void notepad_click(struct window *win, int cx, int cy) {
                     k_strcpy(st->status, "Save failed.");
                 }
             }
-        } else if (widget_hit(load_x0, 0, BTN_W, TOOLBAR_H, cx, cy)) {
+        } else if (code == BTN_LOAD_CODE) {
             uint32_t size = 0;
             const char *data = st->filename.field.len ? fs_read(st->filename.field.buf, &size) : 0;
             if (data) {
@@ -351,8 +438,13 @@ void notepad_click(struct window *win, int cx, int cy) {
         return;
     }
 
-    // A click below the toolbar (the text area or its scrollbar) also
-    // ends filename editing, same reasoning as the toolbar branch above.
+    // A click below the toolbar that lands on the scrollbar's track
+    // (paging) reaches here -- a click in the text body itself, or on
+    // the scrollbar's thumb, is claimed by notepad_drag_start() before
+    // on_click ever runs (see gui_apps.h's on_click/on_drag_start
+    // contract), so this is only ever SCROLLBAR_ZONE_ABOVE/BELOW in
+    // practice. Still ends filename editing first, same reasoning as
+    // the toolbar branch above.
     if (st->filename.field.active) {
         ui_textbox_set_active(&st->filename, 0);
         window_invalidate(win);
@@ -378,35 +470,82 @@ void notepad_click(struct window *win, int cx, int cy) {
     window_invalidate(win);
 }
 
+// gui_apps.h's on_press: called every tick a button is held, starting
+// with the initial button-down -- see calculator_press()'s own comment
+// for the full contract (this is the identical wrapper shape, just over
+// Notepad's 2-button group instead of Calculator's grid). Toolbar
+// clicks never reach notepad_drag_start() (it bails out at `cy <
+// TOOLBAR_H` before any of this), so on_press/on_click still see every
+// Save/Load interaction exactly as before.
+int notepad_press(struct window *win, int cx, int cy) {
+    struct notepad_state *st = (struct notepad_state *)window_get_state(win);
+    if (cy >= TOOLBAR_H) return 0; // only the toolbar's buttons care about press-feedback
+    notepad_layout_buttons(st);
+    return ui_button_group_press(&st->group, cx, cy);
+}
+
+void notepad_release(struct window *win) {
+    struct notepad_state *st = (struct notepad_state *)window_get_state(win);
+    ui_button_group_release(&st->group);
+    window_invalidate(win);
+}
+
 int notepad_drag_start(struct window *win, int cx, int cy) {
     struct notepad_state *st = (struct notepad_state *)window_get_state(win);
     if (cy < TOOLBAR_H) return 0; // toolbar clicks are ordinary clicks, never a drag
 
     int text_w, text_h, show_scrollbar;
     notepad_layout(win, &text_w, &text_h, &show_scrollbar);
-    if (!show_scrollbar) return 0;
-
     int local_cy = cy - TOOLBAR_H;
-    int total_lines, visible_rows;
-    widget_scrollback_metrics(&st->tb, text_w, text_h, &total_lines, &visible_rows);
-    enum scrollbar_zone zone = widget_scrollbar_hit(text_w, 0, NOTEPAD_SCROLLBAR_W, text_h,
-                                                      total_lines, visible_rows, st->tb.scroll_offset, cx, local_cy);
-    if (zone != SCROLLBAR_ZONE_THUMB) return 0;
 
-    int thumb_y, thumb_h;
-    widget_scrollbar_thumb_rect(0, text_h, total_lines, visible_rows, st->tb.scroll_offset, &thumb_y, &thumb_h);
-    st->scrollbar_grab_offset = local_cy - thumb_y;
+    if (show_scrollbar && cx >= text_w) {
+        // The scrollbar strip -- unchanged from before click-to-position/
+        // selection existed: only a thumb hit claims the drag (track
+        // clicks page instantly via notepad_click() instead, no drag
+        // needed for those).
+        int total_lines, visible_rows;
+        widget_scrollback_metrics(&st->tb, text_w, text_h, &total_lines, &visible_rows);
+        enum scrollbar_zone zone = widget_scrollbar_hit(text_w, 0, NOTEPAD_SCROLLBAR_W, text_h,
+                                                          total_lines, visible_rows, st->tb.scroll_offset, cx, local_cy);
+        if (zone != SCROLLBAR_ZONE_THUMB) return 0;
+
+        int thumb_y, thumb_h;
+        widget_scrollbar_thumb_rect(0, text_h, total_lines, visible_rows, st->tb.scroll_offset, &thumb_y, &thumb_h);
+        st->scrollbar_grab_offset = local_cy - thumb_y;
+        st->dragging_selection = 0;
+        return 1;
+    }
+
+    // The text body itself -- claim every mouse-down here as a drag,
+    // not just the ones that turn out to move: this is what gives both
+    // "click to position the cursor" (a drag that never moves is
+    // indistinguishable from a plain click -- the selection anchor and
+    // cursor end up equal, which widget_scrollback_selection_present()
+    // treats as no selection at all) and "drag to select" for free from
+    // the same code path, rather than needing separate on_click handling
+    // for the no-movement case.
+    if (st->filename.field.active) ui_textbox_set_active(&st->filename, 0);
+    widget_scrollback_selection_clear(&st->tb);
+    st->tb.cursor = widget_scrollback_index_at_point(&st->tb, 0, 0, text_w, text_h, cx, local_cy);
+    widget_scrollback_selection_start(&st->tb);
+    st->dragging_selection = 1;
+    window_invalidate(win);
     return 1;
 }
 
 void notepad_drag(struct window *win, int cx, int cy) {
-    (void)cx; // this is a purely vertical scrollbar -- only cy matters
     struct notepad_state *st = (struct notepad_state *)window_get_state(win);
     int text_w, text_h, show_scrollbar;
     notepad_layout(win, &text_w, &text_h, &show_scrollbar);
-    (void)show_scrollbar; // a drag only ever starts while true; harmless either way if the window shrank mid-drag
-
     int local_cy = cy - TOOLBAR_H;
+
+    if (st->dragging_selection) {
+        st->tb.cursor = widget_scrollback_index_at_point(&st->tb, 0, 0, text_w, text_h, cx, local_cy);
+        window_invalidate(win);
+        return;
+    }
+
+    (void)show_scrollbar; // a scrollbar drag only ever starts while true; harmless either way if the window shrank mid-drag
     int total_lines, visible_rows;
     widget_scrollback_metrics(&st->tb, text_w, text_h, &total_lines, &visible_rows);
     st->tb.scroll_offset = widget_scrollbar_offset_for_drag(0, text_h, total_lines, visible_rows,
