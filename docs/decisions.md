@@ -30,6 +30,26 @@ scope -- a deliberate, acknowledged exception to the rule above, not a
 change to it: the rule still applies to whatever gets added *next*.
 See CHANGELOG.md's **Build 490** for the full writeup.
 
+## `gfx_draw_string()` doesn't clip to a width -- callers that need that do their own
+
+`gfx_draw_string()` (`kernel/drivers/gfx.c`) takes no width parameter at
+all -- it draws every character it's given, one `gfx_char_w()` cell at a
+time, and only stops at a real newline or the end of the string.
+Whatever clipping happens is `gfx_put_pixel()`'s ordinary
+screen/window-bounds check, not anything aware of a caller's intended
+box. `widget_textfield_draw()` (`apps/widgets.h`/`.c`) used to have a
+doc comment claiming text longer than the field was "simply clipped the
+same way every other text-drawing call in this codebase already is" --
+that was never true, there's no such clipping to inherit, and a long
+filename actually drew straight past the field's border into whatever
+was next to it (a real user-reported bug, caught from a screenshot).
+Fixed by having `widget_textfield_draw()` compute its own visible
+character count from `w` and slice `tf->buf` before ever calling
+`gfx_draw_string()`, sliding the visible window to keep the cursor in
+view while the field is active. The lesson for any *future* widget that
+draws text into a fixed box: `gfx_draw_string()` will not save you,
+budget the width yourself. See CHANGELOG.md's `[Unreleased]` entry.
+
 ## IRQ registration: one handler per line, framework-automatic EOI
 
 `kernel/core/irq.c`'s table (`irq_register_handler()`/`irq_dispatch()`)
@@ -288,20 +308,42 @@ caller. See `kernel/core/etc_config.c`'s top comment for the file
 format itself and CHANGELOG.md's **Build 357** for the full writeup
 including the migration logic.
 
-## Esc always exits the whole GUI desktop -- never route an app's "close/cancel" to it
+## Esc no longer exits the GUI desktop -- it's unclaimed at the WM level now
 
-`apps/wm/wm.c`'s event loop checks `key == 27` (Esc) and unconditionally
-leaves the window manager BEFORE routing the keypress to whichever
-window is focused -- no GUI app's `on_key` callback ever sees an Esc
-press, no matter what it's focused on. Found the hard way while wiring
-the CLI/GUI text editor's exit key to Esc (**Build 377**): worked fine
-at the physical console (no WM in that path at all) but silently could
-never be received by an editor session running inside the GUI Terminal.
-If a future GUI app wants a per-window "cancel this, don't leave the
-desktop" key, it needs to be something other than Esc -- **Build 377**
-picked F3 for the editor's exit specifically because it doesn't have
-this conflict on either surface. See `wm.c`'s own comment at that check
-and CHANGELOG.md's **Build 377** for the full story.
+**Superseded -- was "Esc always exits the whole GUI desktop," see below
+for what changed and why.**
+
+Through **Build 502**, `apps/wm/wm.c`'s event loop checked `key == 27`
+(Esc) and unconditionally left the window manager BEFORE routing the
+keypress to whichever window was focused -- no GUI app's `on_key`
+callback ever saw an Esc press. That hardcoded shortcut is gone: exiting
+to the shell is now a discoverable Start menu item ("Exit to shell",
+`wm_system_actions[]` in `wm.c`), not a hidden key, and Esc itself is
+deliberately left unclaimed at the WM level -- free for a future
+per-window or modal use (e.g. canceling a confirm dialog) instead of
+double-booking it as "exit everything, no matter what's open or
+focused," which is exactly the conflict this entry used to warn about.
+See CHANGELOG.md's `[Unreleased]` "Exit to shell" entry.
+
+The original reasoning below is preserved because the underlying fact
+(the CLI/GUI editor's exit key had to be F3, not Esc, because of this
+same conflict) is still true today -- Esc STILL isn't safe to hand to a
+per-window "cancel" handler unless/until something adds its own
+WM-level claim on it, which nothing has yet:
+
+`apps/wm/wm.c`'s event loop no longer touches Esc at all -- so no GUI
+app's `on_key` callback receives it any differently than before, it's
+just not a WM-level exit anymore either. Found the hard way while
+wiring the CLI/GUI text editor's exit key to Esc (**Build 377**):
+worked fine at the physical console (no WM in that path at all) but
+silently could never be received by an editor session running inside
+the GUI Terminal, because the old Esc-exits-WM check intercepted it
+first. If a future GUI app wants a per-window "cancel this" key today,
+it still needs to be something other than Esc until a WM-level Esc
+handler (e.g. a confirm dialog's cancel) actually exists -- **Build
+377** picked F3 for the editor's exit specifically to sidestep this.
+See `wm.c`'s own comment at the old check's former location and
+CHANGELOG.md's **Build 377** for the full story.
 
 ## Don't put a `text_scrollback` on the stack
 

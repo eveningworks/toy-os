@@ -16,8 +16,23 @@ int win_btn_w(void) {
     return WIN_LABEL_MAX_CHARS * gfx_char_w() + 24;
 }
 
+// Wide enough for the longest label actually in the menu -- app names
+// AND wm_system_actions (e.g. "Exit to shell", 13 chars, longer than
+// any app name today) both need to fit, so this scans both instead of
+// assuming a fixed char count the way it used to (that assumption broke
+// silently, with no compiler warning, the moment "Exit to shell" was
+// added -- see docs/decisions.md).
 int start_menu_w(void) {
-    return 12 * gfx_char_w() + 20; // room for the longest app name we expect
+    int max_chars = 0;
+    for (int i = 0; i < gui_app_registry_count; i++) {
+        int n = (int)k_strlen(gui_app_registry[i].name);
+        if (n > max_chars) max_chars = n;
+    }
+    for (int i = 0; i < wm_system_action_count; i++) {
+        int n = (int)k_strlen(wm_system_actions[i].label);
+        if (n > max_chars) max_chars = n;
+    }
+    return max_chars * gfx_char_w() + 20;
 }
 
 // The minimize/maximize/close title-bar buttons used to be a fixed
@@ -328,11 +343,18 @@ static void draw_taskbar(void) {
     draw_clock_area(ty, bg, fg);
 }
 
+// App items (gui_app_registry) first, then wm_system_actions ("Exit to
+// shell") below them -- same item_h, same click math (see
+// wm_handle_left_click()'s matching geometry in wm_input.c, which must
+// agree with this exactly). The only visual difference is a 1px divider
+// rule drawn at the boundary between the two groups; it doesn't consume
+// a row of its own.
 static void draw_start_menu(void) {
     int item_h = gfx_char_h() + 6;
     int menu_w = start_menu_w();
     int menu_x = 4;
-    int menu_h = item_h * gui_app_registry_count;
+    int total_items = gui_app_registry_count + wm_system_action_count;
+    int menu_h = item_h * total_items;
     int menu_y = (screen_h - taskbar_h) - menu_h;
 
     uint32_t bg = THEME_PANEL_BG, border = THEME_BORDER, fg = THEME_TEXT;
@@ -340,6 +362,14 @@ static void draw_start_menu(void) {
     gfx_draw_rect(menu_x, menu_y, menu_w, menu_h, border);
     for (int i = 0; i < gui_app_registry_count; i++) {
         gfx_draw_string(menu_x + 8, menu_y + i * item_h + 3, gui_app_registry[i].name, fg, bg);
+    }
+    if (wm_system_action_count > 0) {
+        int divider_y = menu_y + gui_app_registry_count * item_h;
+        gfx_fill_rect(menu_x, divider_y, menu_w, 1, border);
+        for (int i = 0; i < wm_system_action_count; i++) {
+            int y = menu_y + (gui_app_registry_count + i) * item_h;
+            gfx_draw_string(menu_x + 8, y + 3, wm_system_actions[i].label, fg, bg);
+        }
     }
 }
 

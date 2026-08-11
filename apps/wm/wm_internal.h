@@ -51,6 +51,18 @@ extern int taskbar_h;
 
 extern int start_menu_open;
 
+// Start menu items below the app list -- see wm.c's top comment on
+// wm_system_actions for why these are separate from gui_app_registry.
+struct start_action { const char *label; void (*on_select)(void); };
+extern const struct start_action wm_system_actions[];
+extern const int wm_system_action_count;
+
+// Set by a system action (currently just "Exit to shell") to ask
+// wm_run()'s main loop to return to the calling shell -- checked right
+// after click handling, same place Esc used to be checked before it
+// moved to a Start menu item.
+extern int wm_exit_requested;
+
 extern int dragging; // index into windows[], or -1 if not dragging
 extern int drag_off_x, drag_off_y;
 

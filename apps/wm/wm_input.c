@@ -32,10 +32,15 @@ void wm_handle_left_click(int mx, int my) {
         int item_h = gfx_char_h() + 6;
         int menu_w = start_menu_w();
         int menu_x = 4;
-        int menu_y = (screen_h - taskbar_h) - item_h * gui_app_registry_count;
-        if (widget_hit(menu_x, menu_y, menu_w, item_h * gui_app_registry_count, mx, my)) {
+        int total_items = gui_app_registry_count + wm_system_action_count;
+        int menu_y = (screen_h - taskbar_h) - item_h * total_items;
+        if (widget_hit(menu_x, menu_y, menu_w, item_h * total_items, mx, my)) {
             int idx = (my - menu_y) / item_h;
-            if (idx >= 0 && idx < gui_app_registry_count) open_app(&gui_app_registry[idx]);
+            if (idx >= 0 && idx < gui_app_registry_count) {
+                open_app(&gui_app_registry[idx]);
+            } else if (idx >= gui_app_registry_count && idx < total_items) {
+                wm_system_actions[idx - gui_app_registry_count].on_select();
+            }
         }
         start_menu_open = 0;
         redraw_pending = 1;

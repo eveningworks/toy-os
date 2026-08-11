@@ -22,6 +22,53 @@ forever.
 
 ## [Unreleased]
 
+### Fixed
+- Notepad's filename field (`widget_textfield_draw`, `apps/widgets.c`)
+  no longer overflows past its own border when the text is longer than
+  the field -- reported from a screenshot showing "notepad.txt" running
+  into the Save button. Root cause: `gfx_draw_string()` only clips at
+  the screen/window edge, not at an arbitrary width -- it doesn't take
+  one -- so the field's `w` parameter was never actually enforced,
+  despite a doc comment claiming it was ("clipped the same way every
+  other text-drawing call already is"). Fixed by having
+  `widget_textfield_draw()` clip to what fits itself, sliding the
+  visible window just far enough to keep the cursor in view while the
+  field is active (typing past the visible edge now scrolls, like a
+  real text input) -- confirmed by typing a name well past
+  `FIELD_COLS` and watching the border hold. See `docs/decisions.md`.
+- The Start menu's width (`start_menu_w()`, `apps/wm/wm_render.c`) was
+  hardcoded to "12 chars, room for the longest app name" -- true when
+  written, silently wrong the moment this same change added "Exit to
+  shell" (13 chars) below the app list, overflowing past the menu's
+  right border with no compiler warning. Now scans both
+  `gui_app_registry` and `wm_system_actions` for the actual longest
+  label. Caught by screenshot, not by re-reading the code -- see this
+  file's own testing conventions.
+
+### Added
+- Start menu gains a second group of items below the app list:
+  currently just "Exit to shell", separated by a 1px divider. It
+  replaces the old hardcoded "Esc always exits the window manager"
+  shortcut in `wm_run()` (`apps/wm/wm.c`) -- discoverable now instead
+  of a hidden key, and it frees Esc up for a future modal-cancel use
+  (a confirm dialog, say) instead of double-booking it as "exit
+  everything, no matter what's open or focused." These aren't real
+  `gui_app_registry` entries (they don't open a window) -- a new
+  `wm_system_actions[]` array (`struct start_action { label,
+  on_select }`) holds them, rendered and hit-tested by
+  `gui_app_registry_count + wm_system_action_count` total menu rows
+  instead of just the app count. A "Shutdown" item (with a Yes/No
+  confirm dialog) was also requested this session but the actual
+  power-off mechanism was deliberately deferred -- see
+  `docs/roadmap.md`.
+- The text cursor in Notepad/Terminal (`widget_scrollback_draw()`'s
+  cursor, `apps/widgets.c`) is now a thin `CURSOR_BAR_W`-px vertical
+  bar instead of a solid block covering the whole character cell --
+  requested as "a bit more modern," and now matches
+  `widget_textfield_draw()`'s caret (same width, same shared
+  `CURSOR_BAR_W` constant in `apps/widgets.h`) instead of the two
+  looking like two different cursor styles in the same app.
+
 ### Changed
 - Versioning switched from a per-change build-number scheme
   (`tools/bump_build.sh <fix|feature|major>`, a git tag `build-N` on

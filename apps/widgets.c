@@ -182,10 +182,16 @@ void widget_scrollback_draw(struct text_scrollback *tb, int cx, int cy, int cw, 
     // here are exactly the old cur_line/cur_col (end-of-text) -- this
     // is that same behavior, just no longer assuming "the cursor" can
     // only ever be at the end.
+    //
+    // A thin CURSOR_BAR_W-px vertical bar at the cell's left edge, not a
+    // solid full-cell block -- matches widget_textfield_draw()'s caret
+    // (same width) and reads as a modern insert-point indicator instead
+    // of an old-school block cursor that fully obscures whatever
+    // character is underneath it.
     if (show_cursor && cursor_line >= first_line && cursor_line - first_line < visible_rows) {
         int rx = cx + cursor_col * char_w;
         int ry = cy + (cursor_line - first_line) * char_h;
-        gfx_fill_rect(rx, ry, char_w, char_h, vga_color_rgb(tb->cur_fg));
+        gfx_fill_rect(rx, ry, CURSOR_BAR_W, char_h, vga_color_rgb(tb->cur_fg));
     }
 }
 
@@ -425,11 +431,38 @@ void widget_textfield_draw(int x, int y, int w, int h, const struct text_field *
 
     int pad = 4;
     int ty = y + (h - gfx_char_h()) / 2;
-    gfx_draw_string(x + pad, ty, tf->buf, fg, bg);
+    int char_w = gfx_char_w();
+
+    // Clip to what actually fits inside the field, rather than handing
+    // gfx_draw_string() the whole buffer -- it has no idea about `w` and
+    // just keeps drawing past the border into whatever's next to the
+    // field (the bug this comment used to (incorrectly) claim couldn't
+    // happen -- see docs/decisions.md). `visible` is how many
+    // characters fit in the padded interior; when the field is active,
+    // `start` slides right just far enough to keep the cursor inside
+    // that window, so typing past the visible edge scrolls the same way
+    // a real text input does -- an inactive field just shows the first
+    // `visible` characters, plain truncation, no scroll needed since
+    // there's no cursor to keep in view.
+    int visible = (w - 2 * pad) / char_w;
+    if (visible < 0) visible = 0;
+    int start = 0;
+    if (tf->active && tf->len > visible) {
+        start = tf->cursor - visible + 1;
+        if (start < 0) start = 0;
+        int max_start = tf->len - visible;
+        if (start > max_start) start = max_start;
+    }
+
+    char shown[TEXTFIELD_MAX];
+    int n = 0;
+    for (; n < visible && tf->buf[start + n] != '\0'; n++) shown[n] = tf->buf[start + n];
+    shown[n] = '\0';
+    gfx_draw_string(x + pad, ty, shown, fg, bg);
 
     if (tf->active) {
-        int caret_x = x + pad + tf->cursor * gfx_char_w();
-        gfx_fill_rect(caret_x, ty, 2, gfx_char_h(), fg);
+        int caret_x = x + pad + (tf->cursor - start) * char_w;
+        gfx_fill_rect(caret_x, ty, CURSOR_BAR_W, gfx_char_h(), fg);
     }
 }
 

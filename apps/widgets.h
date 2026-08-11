@@ -4,6 +4,12 @@
 #include <stdint.h>
 #include "vga.h"
 
+// Shared text-cursor bar width -- a thin vertical bar, not a solid
+// full-cell block, used by both widget_textfield_draw()'s caret and
+// widget_scrollback_draw()'s cursor so the two read as the same "modern
+// insert-point" shape everywhere text can be edited in the GUI.
+#define CURSOR_BAR_W 2
+
 // Tiny shared "clickable rectangle" primitives, pulled out after three
 // independent reimplementations of the same idea turned up: wm.c's
 // title-bar buttons, Calculator's button grid, and Notepad's toolbar.
@@ -278,9 +284,11 @@ int widget_scrollbar_offset_for_drag(int y, int h, int total_lines, int visible_
 //
 // Deliberately minimal, same philosophy as the rest of this file: no
 // text selection, no copy/paste, no undo, no revert-on-Escape (Escape
-// isn't handled specially at all -- see widget_textfield_key()), no
-// horizontal scroll-within-the-field (see widget_textfield_draw()).
-// Add the next capability only once a real caller needs it.
+// isn't handled specially at all -- see widget_textfield_key()). Text
+// longer than the field is clipped to what fits, scrolling just enough
+// to keep the cursor visible while active (see widget_textfield_draw())
+// -- no smooth/partial-character scrolling beyond that. Add the next
+// capability only once a real caller needs it.
 
 #define TEXTFIELD_MAX 48
 
@@ -312,12 +320,14 @@ void widget_textfield_set_active(struct text_field *tf, int active);
 int widget_textfield_key(struct text_field *tf, int key);
 
 // Fills (x, y, w, h) with `bg`, draws a 1px border in `border`, and
-// draws `tf->buf` in `fg` -- plus a solid caret at `tf->cursor` if
-// `tf->active`. Text longer than fits `w` is simply clipped the same
-// way every other text-drawing call in this codebase already is (see
-// gfx_draw_string()) -- there's no horizontal scroll-within-the-field
-// yet, matching TEXTFIELD_MAX being small enough that this hasn't come
-// up for a real caller.
+// draws whichever slice of `tf->buf` fits inside the padded interior in
+// `fg`, plus a CURSOR_BAR_W-px caret at `tf->cursor` if `tf->active`.
+// Text longer than fits `w` no longer overflows past the border the way
+// it used to (gfx_draw_string() only clips at the screen/window edge,
+// not at an arbitrary `w` -- it doesn't take one) -- this function does
+// its own clipping instead, sliding the visible window just far enough
+// to keep the cursor in view while active. See docs/decisions.md for
+// why this was wrong before and what actually fixed it.
 void widget_textfield_draw(int x, int y, int w, int h, const struct text_field *tf,
                             uint32_t bg, uint32_t fg, uint32_t border);
 

@@ -34,6 +34,23 @@ int taskbar_h;
 
 int start_menu_open = 0;
 
+// System actions shown at the bottom of the Start menu, below the app
+// list -- these don't open a window like a real gui_app_registry entry
+// does, they trigger a WM-level action directly (see wm_run()'s
+// wm_exit_requested check below). "Exit to shell" replaces the old
+// hardcoded "Esc always exits the window manager" shortcut: it's
+// discoverable now instead of a hidden key, and frees Esc up for a
+// future modal-cancel use (a confirm dialog, say) instead of double-
+// booking it as "exit everything, no matter what's open or focused".
+static void action_exit_to_shell(void) { wm_exit_requested = 1; }
+
+const struct start_action wm_system_actions[] = {
+    { "Exit to shell", action_exit_to_shell },
+};
+const int wm_system_action_count = sizeof(wm_system_actions) / sizeof(wm_system_actions[0]);
+
+int wm_exit_requested = 0;
+
 int dragging = -1; // index into windows[], or -1 if not dragging
 int drag_off_x, drag_off_y;
 
@@ -142,6 +159,7 @@ void wm_run(void) {
     resizing = -1;
     content_dragging = -1;
     redraw_pending = 1;
+    wm_exit_requested = 0;
 
     int mx, my;
     uint8_t buttons;
@@ -158,6 +176,15 @@ void wm_run(void) {
         int left_edge_down = (buttons & 0x1) && !(prev_buttons & 0x1);
         if (left_edge_down) wm_handle_left_click(mx, my);
 
+        // A Start-menu action (currently just "Exit to shell") may have
+        // just set this -- bail out the same way Esc used to, before
+        // touching drag/resize state for a click that was never about a
+        // window in the first place.
+        if (wm_exit_requested) {
+            gfx_set_double_buffered(0); // console draws straight to screen
+            return;
+        }
+
         wm_update_drag_resize(mx, my, buttons);
 
         static uint64_t last_second = (uint64_t)-1;
@@ -168,11 +195,13 @@ void wm_run(void) {
             redraw_pending = 1;
         }
 
+        // Esc used to always exit the window manager here -- replaced by
+        // the Start menu's "Exit to shell" (see wm_system_actions above),
+        // which is discoverable instead of a hidden key. Esc itself is
+        // deliberately unclaimed at the WM level now, free for a future
+        // per-window or modal use (e.g. canceling a confirm dialog)
+        // instead of double-booking it as "exit everything".
         int key = keyboard_try_getchar();
-        if (key == 27) { // Esc always exits the window manager
-            gfx_set_double_buffered(0); // console draws straight to screen
-            return;
-        }
 
         int wheel = mouse_get_wheel_delta();
 
