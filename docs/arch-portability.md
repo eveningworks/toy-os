@@ -13,7 +13,8 @@ work is tracked once/if it's picked up.
 
 Roughly **2,200-2,500 lines of C plus 3 assembly files** (`boot.asm`,
 `context_switch.asm`, `isr.asm`) are architecture-specific, out of
-about 28,800 lines of C in the repo -- under 10%. The rest (the
+about 30,000 lines of C in the repo (~24,700 in `kernel/`, ~5,300 in
+`apps/`) -- under 10%. The rest (the
 filesystem, the window manager, every GUI app, the scheduler's actual
 round-robin *policy*, the font renderer, `apps/calc_engine.c`, etc.)
 is already ordinary freestanding C with no CPU-specific content. This
@@ -28,15 +29,21 @@ No asm, no inline asm, no port I/O -- these need zero changes to
 support a second arch, once they're moved (a pure `git mv` plus header
 path fixes, not a rewrite):
 
-- `kernel/drivers/tfs.c` (673 lines) + `vfs.c` (67 lines) -- the whole
+- `kernel/drivers/tfs.c` (1,100 lines) + `vfs.c` (79 lines) -- the whole
   filesystem stack.
-- `apps/wm/*` (969 lines) -- the window manager, aside from one bare
-  `hlt` in `wm.c`'s idle wait (trivially wrapped, see below).
-- `apps/calc_engine.c` (284 lines), `apps/widgets.h`/`.c`, `theme.h`.
+- `apps/wm/*` (1,592 lines, split across `wm.c`/`wm_input.c`/
+  `wm_render.c`/`desktop.c`/`context_menu.c`/`start_menu.c`) -- the
+  window manager, aside from one bare `hlt` in `wm.c`'s idle wait
+  (trivially wrapped, see below).
+- `apps/calc_engine.c` (287 lines), `apps/ui/*` (the widget primitives
+  -- see `apps/README.md`), `theme.h`.
 - `kernel/drivers/font_ttf.c` (16,700+ generated lines) + `gfx.c` (337
   lines) -- font rendering and the framebuffer blit/blend primitives.
 - The scheduler's round-robin *policy* in `scheduler.c` (289 lines) --
   only one `hlt` in the idle path.
+- `kernel/core/heap.c`/`heap.h` (the kernel heap allocator) and
+  `kernel/core/json.c`/`json.h` (the JSON parser/serializer) -- plain
+  freestanding C, no CPU-specific content.
 - Most of `apps/*.c`, `etc_config.c`, `klog.c`, `string.c`.
 - `kernel/core/elf.c` -- aside from one machine-type check
   (`EM_X86_64` at line 90), which just needs an `#ifdef`/table entry
@@ -100,7 +107,7 @@ first.
   no RISC-V PS/2 controller exists on `virt`; would need a different
   input path entirely (e.g. virtio-input), which is a real driver
   project on its own, independent of everything else in this list.
-- `kernel/drivers/ata.c` (408 lines, port-I/O PIO) -- no ATA/IDE on
+- `kernel/drivers/ata.c` (440 lines, port-I/O PIO) -- no ATA/IDE on
   RISC-V `virt`; disk access would go through virtio-blk instead, a
   different driver from the ground up (though it would sit behind the
   same `vfs.c` this repo already has, so nothing above it changes).
@@ -124,11 +131,11 @@ work itself.
 
 ## `kapi.h` as the existing insulation boundary
 
-`kernel/include/kapi.h` (42 lines) is already a clean boundary: it's a
+`kernel/include/kapi.h` (44 lines) is already a clean boundary: it's a
 pure aggregating header with zero asm or port I/O of its own, and
 `apps/` code never includes a driver header directly or calls
 `inb`/`outb`/inline asm -- with exactly one exception (the bare `hlt`
-in `wm.c`'s idle wait, noted above). That means the ~26,000 lines of
+in `wm.c`'s idle wait, noted above). That means the ~27,500 lines of
 `apps/` code and everything reachable only through `kapi.h` needs *no
 changes* to support a second arch -- the boundary this project already
 enforces for unrelated reasons (see `CLAUDE.md`) turns out to double as

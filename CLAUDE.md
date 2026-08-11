@@ -30,12 +30,16 @@ work.
   `kapi.h` -- it's the GUI-specific equivalent, included by GUI apps
   for `window_*` helpers. `kapi.h` never includes `wm/wm.h` or
   `gui_apps.h`.
-- **`apps/widgets.h`** (`widget_hit`/`widget_button`) and
-  **`apps/theme.h`** (`THEME_*` named colors) are small apps-internal
+- **`apps/ui/ui.h`** (the umbrella include for `ui_primitives.h`'s
+  `widget_hit`/`widget_button`, `ui_scrollback.h`, `ui_scrollbar.h`,
+  `ui_checkbox.h`, `ui_button.h`/`ui_button_group.h`, `ui_textbox.h`)
+  and **`apps/theme.h`** (`THEME_*` named colors) are small apps-internal
   helpers, same peer-level pattern as `wm/wm.h`. Both are deliberately
   minimal on purpose -- see their top comments before adding to them.
   Add a new widget primitive or theme color only once a second real
-  caller needs it, not preemptively.
+  caller needs it, not preemptively. (`apps/widgets.h`/`.c` -- the
+  single file all of `apps/ui/` was split out of -- no longer exists;
+  see `docs/decisions.md`.)
 - **The window manager lives in `apps/wm/`** (`wm.c`/`wm_input.c`/
   `wm_render.c`/`wm_internal.h`), split by concern for readability --
   it's still one tightly-coupled event loop sharing state through
@@ -145,8 +149,9 @@ make run   # boots in QEMU with an SDL window (the user's machine, not usable he
 ```
 `apps/*.c` is picked up by a `wildcard`, but it's non-recursive --
 `apps/wm/*.c` needed its own `WM_C` wildcard, pattern rule, and mkdir
-target when that subfolder was added. If you add another subfolder
-under `apps/`, it'll need the same treatment.
+target when that subfolder was added, and `apps/ui/*.c` got the same
+treatment (`UI_C`) when that subfolder was added later. If you add
+another subfolder under `apps/`, it'll need the same treatment.
 
 **`make run` uses `-display sdl,grab-mod=rctrl`, no explicit pointer
 device.** Two things worth knowing if you ever touch this line:
@@ -165,8 +170,9 @@ moves. Bit an actual user session once (see CHANGELOG.md around build
 **A plain `make all` is safe after editing a shared header now** (as of
 build 308) -- the Makefile tracks header dependencies (`-MMD`/`-MP`;
 see CFLAGS/USERLAND_CFLAGS and the `-include` line near `$(KERNEL)`'s
-rule), so editing e.g. `apps/widgets.h` correctly rebuilds every `.o`
-that includes it, not just the ones whose own `.c` file changed. This
+rule), so editing e.g. `apps/ui/ui_scrollback.h` correctly rebuilds
+every `.o` that includes it, not just the ones whose own `.c` file
+changed. This
 used to not be true, and it produced a genuinely bizarre-looking bug
 once -- the Start menu's item labels showed raw function-prologue
 machine code reinterpreted as text -- caused by exactly the failure
@@ -312,10 +318,35 @@ non-GUI boot check, see above), `gen_version.sh`/`set_version.sh`
 (versioning, see the `version.h`/`VERSION` bullets above),
 `device_git.sh` (wraps a `git` command run over the device bridge with
 the stale-`index.lock` workaround, see the "Working in the cloud
-sandbox" section above). Add new tools here freely when something
-would save a future session real time -- the bar is "does this fix a
-rederive-from-scratch cost," the same reasoning that produced
-`qmp_test.py`.
+sandbox" section above).
+
+Four more, added once the build/test/delivery loop above had enough
+repeated manual steps to be worth automating:
+- **`preflight.sh`** -- one command running `make clean && make all &&
+  make iso` + `boot_smoke_test.py` + a `git status --short` summary, so
+  "am I safe to deliver?" is one call instead of three run by hand.
+  `--skip-clean` skips the initial `make clean`.
+- **`deliver.py`** -- builds the delivery file-list/device-path/
+  protected-file manifest and a commit-message skeleton for the
+  shipping step (see "Delivering changes" below), from `git
+  status --short` (or explicit file args) -- flags `Makefile`/
+  `.github/workflows/*.yml` as PROTECTED with the `.new`-suffix
+  workaround instructions before a real `device_commit_files` call
+  would reject them.
+- **`gui_flow.py`** -- named, composable QMP click-flows on top of
+  `qmp_test.py`'s `QMPSession` (`GuiFlow` class: `enter_gui()`,
+  `open_app(name)`, `run_system_action(label)`, `screenshot_named()`),
+  so a testing session doesn't hand-derive Start-menu row pixel math
+  from scratch every time. `APP_ORDER` must stay in sync with
+  `apps/gui_apps.c`'s registry order.
+- **`screenshot_diff.py`** -- Pillow-based pixel diff between two
+  screenshots with a pass/fail `--threshold` (default 0.2%) and an
+  optional `--out` diff-highlight image, for catching a rendering
+  regression manual eyeballing might miss.
+
+Add new tools here freely when something would save a future session
+real time -- the bar is "does this fix a rederive-from-scratch cost,"
+the same reasoning that produced all of the above.
 
 ## docs/
 

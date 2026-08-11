@@ -42,10 +42,17 @@ For everything else:
   plus 6 Nordic letters (Å/Ä/Ö/å/ä/ö) alongside ASCII. See
   `docs/decisions.md` for why Latin-1 over UTF-8.
 - A basic GUI mode: a small window manager (movable/resizable windows,
-  taskbar, Start menu) with four apps -- Notepad, About, Calculator, and
-  Terminal (runs the real shell inside a window). See `apps/README.md`
-  for how to add more, and the app registry (`apps/apps.c`) that makes
-  that a one-line addition.
+  taskbar, Start menu, a desktop background with an icon grid, and a
+  reusable right-click context menu wired into the desktop, window
+  chrome, taskbar, and Start menu) with five apps -- Notepad, About,
+  Calculator, Terminal (runs the real shell inside a window), and Task
+  Manager (lists windows, shows memory usage). See `apps/README.md` for
+  how to add more, and the app registry (`apps/apps.c`) that makes that
+  a one-line addition.
+- A kernel heap allocator (`kmalloc`/`kzalloc`/`kfree`) and a small JSON
+  library (`kernel/core/json.c`, parse/serialize/read-file/write-file --
+  coexists with the flat `etc_config.h` name=value format, see
+  `docs/decisions.md`).
 - The beginnings of real process isolation and a preemptive scheduler
   (up to four ring-3 processes genuinely concurrent) -- see
   [docs/process-isolation.md](docs/process-isolation.md) for the full
@@ -138,17 +145,19 @@ apps/            -- programs. Two kinds:
                      * console apps (shell.c, gui.c) registered in
                        apps.c -- they own the whole screen and run their
                        own loop
-                     * GUI apps (notepad.c, about.c, calculator.c)
-                       registered in gui_apps.c -- event-driven,
-                       launched from the Start menu, drawn into a window
-                       by the window manager (apps/wm/ -- split across
-                       wm.c/wm_input.c/wm_render.c for readability, see
-                       apps/README.md)
+                     * GUI apps (notepad.c, about.c, calculator.c,
+                       taskmgr.c) registered in gui_apps.c --
+                       event-driven, launched from the Start menu or a
+                       desktop icon, drawn into a window by the window
+                       manager (apps/wm/ -- split across wm.c/
+                       wm_input.c/wm_render.c/desktop.c/context_menu.c/
+                       start_menu.c for readability, see apps/README.md)
                      Adding either is "write the file, add one line to
                      the matching registry" -- see apps/README.md.
-                     widgets.h/widgets.c hold small shared button-drawing/
-                     hit-testing helpers used by the window manager,
-                     Calculator, and Notepad.
+                     apps/ui/ holds the shared widget primitives (button,
+                     scrollback, scrollbar, checkbox, textbox) used by
+                     the window manager, Calculator, Notepad, and
+                     Terminal -- one file per widget, see apps/README.md.
 userland/        -- freestanding ring-3 test programs (no libc, no
                      crt0), compiled and linked as real ELF64
                      executables via userland/link.ld (-mcmodel=large --

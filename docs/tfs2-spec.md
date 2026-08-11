@@ -1,43 +1,60 @@
-# TFS2 on-disk format
+# TFS2 on-disk format (v2 -- block-addressed)
 
 This is a byte-exact specification of TFS2, toy-os's persistent
 filesystem, for writing an independent (read-only, ideally) tool on a
 host machine that can open a `disk.img`/`toy-os.iso`-adjacent raw disk
 image and browse its contents without booting toy-os at all.
 
+**This describes on-disk version 2** -- the block-addressed,
+indirect-pointer layout (12 direct block pointers + single/double/
+triple indirect, classic Unix-inode shape) introduced by the
+large-file rework (see `CHANGELOG.md`'s entry for it). Version 1 (the
+original 2026 journaled/timestamped format, with each file's data
+inlined directly in its table record, capped at `FS_DATA_MAX` = 2048
+bytes) is **gone** -- toy-os detects the version mismatch and
+reformats from scratch rather than trying to read an old image; a
+reader built against this document cannot open a v1 image either, and
+shouldn't try to guess.
+
 This document describes the format only -- not why it's shaped this
 way. For that, see `kernel/drivers/tfs.c`'s top comment (the reference
 implementation) and `docs/decisions.md`'s entries on journaling/
-timestamps design choices, and `CHANGELOG.md`'s build 480 entry for the
-full writeup of what changed and why.
+timestamps/indirect-block design choices.
 
-**No backward compatibility** is provided or intended with the earlier
-"TFS1" format (write-through, no timestamps, no journal -- everything
-before build 480) or the flat pre-directories format before that. A
-TFS2-aware reader should check the superblock magic+version (below)
-and refuse/bail on anything else rather than guess.
+**No backward compatibility** is provided or intended between format
+versions. A TFS2-aware reader should check the superblock magic+version
+(below) and refuse/bail on anything else rather than guess.
 
 ## Conventions
 
 - All multi-byte integers are **little-endian**.
 - All sector I/O is in fixed **512-byte sectors** (standard ATA/IDE
-  sector size -- `ATA_SECTOR_SIZE` in `kernel/include/ata.h`), and
-  every region below is sector-aligned. LBA numbers are absolute
-  sector indices from the start of the disk image (LBA 0 = the image's
-  first 512 bytes).
+  sector size -- `ATA_SECTOR_SIZE` in `kernel/include/ata.h`). File
+  *data*, however, is addressed in **4096-byte blocks**
+  (`FS_BLOCK_SIZE`, 8 sectors each) -- see "Block addressing" below.
+  LBA numbers are absolute sector indices from the start of the disk
+  image (LBA 0 = the image's first 512 bytes); block numbers are
+  separate, absolute 4096-byte-block indices, also from the start of
+  the disk image.
 - Fixed-size string fields are C-style: bytes up to (and including) the
   first `\0`, or the field's full width if there's no terminator; only
   bytes before the first `\0` are meaningful. This spec doesn't rely on
   trailing bytes past a string's terminator being any particular
   value -- treat them as unspecified padding, not as data.
-- Every constant below (`FS_MAX_FILES`, `FS_PATH_MAX`, `FS_DATA_MAX`)
-  is a compile-time constant in this kernel (`kernel/include/fs.h`),
-  not something an on-disk header records anywhere -- a reader has to
-  know them ahead of time (they're listed here) rather than discover
-  them from the image itself. A future toy-os build that changes any
-  of them would also bump the superblock version (see below), which is
-  the signal a reader should treat as "this exact spec no longer
-  applies."
+- `FS_MAX_FILES` (32) and `FS_PATH_MAX` (64) are compile-time constants
+  in this kernel (`kernel/include/fs.h`), not something an on-disk
+  header records anywhere -- a reader has to know them ahead of time
+  (they're listed here) rather than discover them from the image
+  itself. A future toy-os build that changes either would also bump
+  the superblock version (see below), which is the signal a reader
+  should treat as "this exact spec no longer applies."
+- The *total disk size* this backend assumes (`FS_DISK_TOTAL_BYTES`,
+  currently 9 GiB) is likewise a compile-time constant, not stored
+  on-disk -- it determines the free-block bitmap's size and therefore
+  where the data region starts (see "Disk layout" below). A reader
+  built against a different total size will compute the wrong
+  bitmap/data offsets; this spec's numbers below assume the current
+  9 GiB constant.
 
 ## Disk layout
 
@@ -45,34 +62,57 @@ and refuse/bail on anything else rather than guess.
 |---|---|---|---|
 | Superblock | 0 | 1 sector (512 B) | magic + version |
 | Journal header | 1 | 1 sector (512 B) | pending-mutation metadata |
-| Journal data | 2 – 6 | 5 sectors (2560 B) | one record's worth of staged data |
-| Table | 7 – 166 | 160 sectors (81920 B) | 32 fixed-size records, 5 sectors each |
+| Journal data | 2 | 1 sector (512 B) | one record's worth of staged metadata |
+| Table | 3 – 34 | 32 sectors (16,384 B) | `FS_MAX_FILES` (32) fixed-size records, 1 sector each |
+| Free-block bitmap | 35 – 610 | 576 sectors (294,912 B) | one bit per 4096-byte block of the whole disk |
+| (padding to block boundary) | 611 – 615 | 5 sectors | unused, rounds the data region up to a block-aligned LBA |
+| File data | 616 onward | rest of the disk | 4096-byte blocks, block-number addressed |
 
-Total: 167 sectors (85,504 bytes / ~83.5 KiB). A `disk.img` is
-typically much larger than this (1 MB+) -- everything past LBA 166 is
-unused by TFS2 and safe to ignore.
+These are the concrete numbers for the current constants
+(`FS_MAX_FILES` = 32, `FS_DISK_TOTAL_BYTES` = 9 GiB); see "Deriving
+these offsets yourself" below if any of those constants change.
 
-`FS_MAX_FILES` = 32 (table slot count), `FS_RECORD_SECTORS` = 5 (per
-slot), `FS_TABLE_START_LBA` = 7 -- these three numbers are what make
-slot `i`'s LBA computable directly:
+Unlike v1, there is **no fixed "everything past here is unused, safe
+to ignore" boundary** -- the entire disk (all the way out to
+`FS_DISK_TOTAL_BYTES`) is potentially file data. `disk.img` is created
+as a *sparse* 9 GiB file (`truncate -s 9G`, see the Makefile's
+`DISK_IMG` rule) specifically so an unwritten disk costs no real space
+on the host -- most of it reads as zeros and occupies no blocks on the
+host filesystem until toy-os actually writes there.
+
+### Deriving these offsets yourself
+
+If `FS_MAX_FILES` or `FS_DISK_TOTAL_BYTES` ever change, recompute from
+`kernel/drivers/tfs.c`'s own macros rather than trusting the table
+above verbatim:
 
 ```
-record_lba(i) = 7 + i * 5
+FS_RECORD_SECTORS   = 1                          (see "Table records" below -- 148 raw bytes, rounds up to 1 sector)
+FS_TABLE_START_LBA  = 3                          (superblock + journal header + journal data)
+FS_BITMAP_START_LBA = FS_TABLE_START_LBA + FS_MAX_FILES * FS_RECORD_SECTORS
+FS_DISK_TOTAL_BLOCKS= FS_DISK_TOTAL_BYTES / 4096
+FS_BITMAP_BYTES     = (FS_DISK_TOTAL_BLOCKS + 7) / 8
+FS_BITMAP_SECTORS   = ceil(FS_BITMAP_BYTES / 512)
+FS_DATA_START_BLOCK = ceil((FS_BITMAP_START_LBA + FS_BITMAP_SECTORS) / 8)   (rounds up to a whole 4096-byte block)
+FS_DATA_START_LBA   = FS_DATA_START_BLOCK * 8
 ```
+
+`record_lba(i) = FS_TABLE_START_LBA + i * FS_RECORD_SECTORS`.
 
 ## Superblock (LBA 0)
 
 | Offset | Size | Field | Value |
 |---|---|---|---|
 | 0 | 4 bytes | magic | ASCII `"TFS2"` (`0x54 0x46 0x53 0x32`) |
-| 4 | 1 byte | version | `0x01` |
+| 4 | 1 byte | version | `0x02` |
 | 5–511 | — | (unused) | zero-filled by this kernel, but a reader shouldn't assume that |
 
 A reader should treat any image whose first 5 bytes don't match
-exactly (`"TFS2"` + version `0x01`) as **not a TFS2 image** -- toy-os
-itself reformats on any mismatch rather than trying to read a
-foreign/old-version layout, and a host-side reader should refuse the
-same way rather than guess at a different layout.
+exactly (`"TFS2"` + version `0x02`) as **not a v2 TFS2 image** --
+toy-os itself reformats on any mismatch (including a v1 image) rather
+than trying to read a foreign/old-version layout, and a host-side
+reader should refuse the same way rather than guess at a different
+layout.
 
 ## Journal header (LBA 1)
 
@@ -88,13 +128,29 @@ boot.**
 | 0 | 4 bytes | magic | ASCII `"JRN1"` (`0x4A 0x52 0x4E 0x31`) -- absent/different if the journal region has never been initialized |
 | 4 | 1 byte | commit | `0x00` = empty/no pending entry, `0x01` = a pending entry is described below |
 | 5 | 4 bytes (uint32 LE) | target slot | which table slot (0–31) this entry is for -- only meaningful if `commit == 1` |
-| 9 | 4 bytes (uint32 LE) | checksum | FNV-1a-32 (see below) of the journal data area's `FS_RECORD_BYTES` (2560) bytes -- only meaningful if `commit == 1` |
+| 9 | 4 bytes (uint32 LE) | checksum | FNV-1a-32 (see below) of the journal data area's `FS_RECORD_BYTES` (512) bytes -- only meaningful if `commit == 1` |
 | 13–511 | — | (unused) | — |
 
 **FNV-1a-32**: `hash = 0x811C9DC5; for each byte b: hash ^= b; hash *=
 0x01000193` (32-bit unsigned, wraps on overflow). Not cryptographic --
 just enough to detect a torn/partial write with overwhelming
 probability, matching `kernel/drivers/tfs.c`'s `fnv1a()`.
+
+**What the journal protects in v2, and what it doesn't**: exactly as
+before, `persist_record()` protects one table-slot *record* (path,
+type, size, timestamps, and the direct/indirect block **pointers**)
+from a torn write. What changed with the block-addressed rework: a
+file's actual *data* no longer lives inside the record at all, so the
+journal no longer covers it. Block and indirect-block writes go
+straight to disk, un-journaled -- a crash mid-write to a large file
+can leave a data or indirect block partially written, or a pointer
+committed before its target block's content was durable. The
+top-level record itself (and therefore a file's size and top block
+pointers) still can't end up torn -- just possibly pointing at a block
+whose content wasn't the last thing written to it. This is a known,
+accepted gap (see `kernel/drivers/tfs.c`'s top comment and
+`docs/decisions.md`), not something a v1-era reader's assumptions
+about journal coverage should be carried over for.
 
 ### Journal semantics for readers
 
@@ -117,11 +173,10 @@ image (recovery means applying bytes to the table) for a purpose
 preference:
 
 1. **Ignore the journal entirely.** Read the table as-is. In the
-   overwhelmingly common case (the image came from a clean shutdown,
-   which is how every build-480-and-later toy-os testing session
-   verifies persistence), `commit` will already be `0` and the table
-   is already fully up to date. This is almost certainly the right
-   default for a browsing tool.
+   overwhelmingly common case (the image came from a clean shutdown),
+   `commit` will already be `0` and the table is already fully up to
+   date. This is almost certainly the right default for a browsing
+   tool.
 2. **Surface it as information, without acting on it.** If `commit ==
    1`, tell the user "there's an unapplied pending change for slot N,
    from an unclean shutdown -- boot toy-os once to let it finish
@@ -133,32 +188,37 @@ Do not write to the image from a browsing tool to "help" -- that's
 squarely toy-os's own job, and a tool that gets the replay logic even
 slightly wrong risks corrupting a slot that was otherwise fine.
 
-## Table records (LBA 7 onward)
+## Table records (LBA 3 onward)
 
-Each of the 32 slots is `FS_RECORD_SECTORS` = 5 sectors = 2560 bytes,
-laid out identically (this exact layout is also what the journal data
-area at LBA 2–6 holds -- one record's worth of staged bytes, same
-field offsets, just not yet in its final table slot).
+Each of the 32 slots is `FS_RECORD_SECTORS` = 1 sector = 512 bytes
+(only 148 bytes are meaningful; the rest is padding). This is much
+smaller than v1's 2560-byte record, because file data is no longer
+stored inline -- a record now holds metadata plus block **pointers**,
+not the data itself.
 
 | Offset | Size | Field | Notes |
 |---|---|---|---|
 | 0 | 64 bytes (`FS_PATH_MAX`) | path | C string, absolute (`"/docs/notes.txt"`), NUL-terminated. Meaningless if `used == 0`. |
 | 64 | 1 byte | type | `0x00` = file, `0x01` = directory |
 | 65 | 1 byte | used | `0x00` = slot is free/deleted, ignore every other field; `0x01` (or, per the C source, any nonzero byte) = slot is in use |
-| 66 | 4 bytes (uint32 LE) | size | Valid file content length in bytes, 0–2047. Only meaningful for `type == file`; always 0 for directories. |
-| 70 | 7 bytes | created | `rtc_time` -- see encoding below |
-| 77 | 7 bytes | modified | `rtc_time` -- see encoding below |
-| 84 | 2048 bytes (`FS_DATA_MAX`) | data | File content. **Only the first `size` bytes are valid** -- bytes from `size` to 2047 are leftover from a previous, longer write to this same slot and must be ignored, not treated as part of the file. Meaningless (typically zero, but not guaranteed) for directories. |
-| 2132–2559 | — | (unused) | Padding to the 5-sector/2560-byte boundary. |
+| 66 | 8 bytes (uint64 LE) | size | File content length in bytes. Only meaningful for `type == file`; always 0 for directories. No longer capped at 2048 -- this is the whole point of the block-addressed rework (multi-gigabyte files). |
+| 74 | 7 bytes | created | `rtc_time` -- see encoding below |
+| 81 | 7 bytes | modified | `rtc_time` -- see encoding below |
+| 88 | 48 bytes (12 × uint32 LE) | direct | 12 direct block pointers (`FS_N_DIRECT`). `0` = no block allocated for this position (sparse/not-yet-written, or past EOF). |
+| 136 | 4 bytes (uint32 LE) | single_indirect | Block number of a single-indirect block (see below), or `0` if none allocated yet. |
+| 140 | 4 bytes (uint32 LE) | double_indirect | Block number of a double-indirect block, or `0`. |
+| 144 | 4 bytes (uint32 LE) | triple_indirect | Block number of a triple-indirect block, or `0`. |
+| 148–511 | — | (unused) | Padding to the 1-sector/512-byte boundary. |
 
 A slot with `used == 0` should be skipped entirely by a reader -- its
-`path`/`type`/`size`/timestamps/`data` are all stale leftovers from
+`path`/`type`/`size`/timestamps/pointers are all stale leftovers from
 whatever last occupied that slot (deleted files/directories reuse
 slots), not a real entry.
 
 ### `rtc_time` encoding (7 bytes)
 
-Matches `struct rtc_time` in `kernel/include/timer.h` field-for-field:
+Unchanged from v1. Matches `struct rtc_time` in
+`kernel/include/timer.h` field-for-field:
 
 | Offset (within the 7 bytes) | Size | Field | Range |
 |---|---|---|---|
@@ -177,49 +237,121 @@ no timezone/UTC-offset field stored anywhere in the record or the
 superblock -- if a browsing tool wants to show these fields
 meaningfully alongside a real-world reference, it should just display
 the six numbers as-is (a wall-clock date/time) rather than assume any
-particular UTC offset. A quick Python conversion to a naive
-(timezone-unaware) `datetime` is enough for most browsing purposes;
-see the reference reader below.
+particular UTC offset.
+
+## Block addressing and the indirect-pointer scheme
+
+File data lives in `FS_BLOCK_SIZE` = 4096-byte blocks, addressed by
+absolute block number (block N starts at LBA `N * 8`, since a block is
+exactly 8 sectors -- chosen to match `ATA_MAX_SECTORS_PER_XFER`
+exactly, one ATA command per block). **Block 0 is reserved** as the
+"no block" null-pointer sentinel -- it's never handed out by the
+allocator and never holds real data; a `0` pointer anywhere in a
+record or an indirect block means "not allocated" (reads as all-zero
+bytes), not "block number 0 literally."
+
+Every block from block 0 up to (but not including) `FS_DATA_START_BLOCK`
+is permanently marked allocated in the free-block bitmap at format
+time, whether or not it's block 0 -- this reserves the LBA range that
+actually holds the superblock/journal/table/bitmap regions so the
+allocator can never hand one of those blocks out as if it were free
+file data.
+
+A file's data blocks are found by *block index* (0-based, "the Nth
+4096-byte chunk of this file's content") using the classic Unix-inode
+scheme:
+
+- **Indices 0–11** (`FS_N_DIRECT` = 12): read straight from the
+  record's own `direct[]` array -- `direct[index]` is the block
+  number.
+- **Indices 12–1035** (12 + `FS_PTRS_PER_BLOCK`, where
+  `FS_PTRS_PER_BLOCK` = 4096 / 4 = 1024 uint32 block numbers per
+  index block): read the `single_indirect` block (itself a
+  4096-byte block holding 1024 packed uint32 block numbers), then
+  index into it at position `(index - 12)`.
+- **Indices 1036–1,049,611** (next 1024×1024 = 1,048,576 indices):
+  read the `double_indirect` block, index into it to find a
+  *single*-indirect block, then index into that to find the leaf
+  data block. Two levels of indirection.
+- **Beyond that**: the `triple_indirect` block, three levels deep.
+  Capacity here is ~1024³ blocks (~4 TB) -- far past this disk's
+  real 9 GiB size, so in practice triple-indirect blocks are rarely
+  if ever populated on a real toy-os image.
+
+A file's total size in blocks is `ceil(size / 4096)`; the last block
+is only partially meaningful (only the first `size % 4096` bytes of
+it, or all 4096 if size is an exact multiple). A reader reconstructing
+file content should stop at `size` bytes regardless of how many blocks
+the pointer chain reaches.
+
+**Reading a byte range**: `fs_read_range(path, offset, length, buf)`
+(the kernel's own API for this, in `fs.h`) walks exactly this same
+pointer chain, one block at a time, copying only the requested slice
+out of each block touched -- a host-side reader doing a partial read
+should do the same rather than materializing the whole file. `about`/
+`fs_read()` (whole-file convenience wrappers) just call the range API
+with `offset = 0, length = size`.
+
+## Free-block bitmap
+
+One bit per 4096-byte block of the *entire* disk (including the
+reserved metadata region below `FS_DATA_START_BLOCK` -- see above),
+starting at `FS_BITMAP_START_LBA`. Bit `b`'s byte is at
+`bitmap[b / 8]`, bit position `b % 8` (LSB-first within the byte); `1`
+= allocated, `0` = free. A reader only needs this to answer "how much
+free space is left," not to browse existing files (every live file's
+blocks are already reachable through its record's pointers) -- it's
+not required reading for a basic directory-listing tool.
 
 ## Path / directory semantics
 
-There is no separate on-disk directory structure. Every slot -- file
-or directory -- is just an entry with a full absolute path string.
-Parent/child relationships are derived purely from path-string prefix
-matching at read time: `/docs/notes.txt`'s parent is `/docs`, and
-`/docs`'s children are every used entry whose path starts with
-`/docs/` and has no further `/` after that prefix. The root directory
-`/` has **no entry of its own** in the table -- it's implicit and
-always "exists."
+Unchanged from v1. There is no separate on-disk directory structure.
+Every slot -- file or directory -- is just an entry with a full
+absolute path string. Parent/child relationships are derived purely
+from path-string prefix matching at read time: `/docs/notes.txt`'s
+parent is `/docs`, and `/docs`'s children are every used entry whose
+path starts with `/docs/` and has no further `/` after that prefix.
+The root directory `/` has **no entry of its own** in the table --
+it's implicit and always "exists."
 
 ## Reference reader (Python, read-only)
 
 ```python
 #!/usr/bin/env python3
-"""Read-only TFS2 disk image reader -- reference implementation for
-docs/tfs2-spec.md. Prints every used entry as a path + metadata line;
-adapt the walk_entries() generator for a real browsing tool's UI.
+"""Read-only TFS2 v2 (block-addressed) disk image reader -- reference
+implementation for docs/tfs2-spec.md. Prints every used entry as a
+path + metadata line, and can dump a file's content by walking its
+direct/indirect block pointers.
 
-Usage: python3 tfs2_reader.py disk.img
+Usage: python3 tfs2_reader.py disk.img [path/to/dump]
 """
 import struct
 import sys
 from datetime import datetime
 
 SECTOR = 512
-FS_PATH_MAX = 64
-FS_DATA_MAX = 2048
-FS_MAX_FILES = 32
-RECORD_SECTORS = 5
-RECORD_BYTES = RECORD_SECTORS * SECTOR
-TABLE_START_LBA = 7
+BLOCK = 4096
+BLOCK_SECTORS = BLOCK // SECTOR          # 8
+PTRS_PER_BLOCK = BLOCK // 4              # 1024 uint32 block numbers per indirect block
 
-REC_OFF_TYPE = FS_PATH_MAX          # 64
-REC_OFF_USED = FS_PATH_MAX + 1      # 65
-REC_OFF_SIZE = FS_PATH_MAX + 2      # 66
-REC_OFF_CREATED = FS_PATH_MAX + 6   # 70
-REC_OFF_MODIFIED = REC_OFF_CREATED + 7  # 77
-REC_OFF_DATA = REC_OFF_MODIFIED + 7     # 84
+FS_PATH_MAX = 64
+FS_MAX_FILES = 32
+FS_N_DIRECT = 12
+
+RECORD_SECTORS = 1
+RECORD_BYTES = RECORD_SECTORS * SECTOR
+TABLE_START_LBA = 3                       # superblock(1) + journal header(1) + journal data(1)
+BITMAP_START_LBA = TABLE_START_LBA + FS_MAX_FILES * RECORD_SECTORS  # 35
+
+REC_OFF_TYPE = FS_PATH_MAX                       # 64
+REC_OFF_USED = FS_PATH_MAX + 1                   # 65
+REC_OFF_SIZE = FS_PATH_MAX + 2                   # 66, 8 bytes (uint64 LE)
+REC_OFF_CREATED = REC_OFF_SIZE + 8               # 74
+REC_OFF_MODIFIED = REC_OFF_CREATED + 7           # 81
+REC_OFF_DIRECT = REC_OFF_MODIFIED + 7            # 88, 12 * uint32
+REC_OFF_SINGLE = REC_OFF_DIRECT + FS_N_DIRECT * 4  # 136
+REC_OFF_DOUBLE = REC_OFF_SINGLE + 4              # 140
+REC_OFF_TRIPLE = REC_OFF_DOUBLE + 4              # 144
 
 
 def read_sector(f, lba):
@@ -227,10 +359,19 @@ def read_sector(f, lba):
     return f.read(SECTOR)
 
 
+def read_block(f, block):
+    if block == 0:
+        return bytes(BLOCK)  # null pointer -- reads as all-zero
+    f.seek(block * BLOCK_SECTORS * SECTOR)
+    data = f.read(BLOCK)
+    return data if len(data) == BLOCK else data + bytes(BLOCK - len(data))
+
+
 def check_superblock(f):
     sb = read_sector(f, 0)
-    if sb[0:4] != b"TFS2" or sb[4] != 0x01:
-        raise ValueError("not a TFS2 image (bad magic/version)")
+    if sb[0:4] != b"TFS2" or sb[4] != 0x02:
+        raise ValueError("not a TFS2 v2 image (bad magic/version) -- "
+                          "a v1 image will fail this check too, on purpose")
 
 
 def check_journal(f):
@@ -259,10 +400,11 @@ def parse_record(buf):
     path = buf[0:FS_PATH_MAX].split(b"\x00", 1)[0].decode("utf-8", "replace")
     entry_type = buf[REC_OFF_TYPE]
     used = buf[REC_OFF_USED]
-    size = struct.unpack_from("<I", buf, REC_OFF_SIZE)[0]
+    size = struct.unpack_from("<Q", buf, REC_OFF_SIZE)[0]
     created = parse_rtc(buf, REC_OFF_CREATED)
     modified = parse_rtc(buf, REC_OFF_MODIFIED)
-    data = buf[REC_OFF_DATA:REC_OFF_DATA + size]
+    direct = list(struct.unpack_from("<12I", buf, REC_OFF_DIRECT))
+    single, double, triple = struct.unpack_from("<3I", buf, REC_OFF_SINGLE)
     return {
         "path": path,
         "is_dir": entry_type == 1,
@@ -270,8 +412,58 @@ def parse_record(buf):
         "size": size,
         "created": created,
         "modified": modified,
-        "data": data,
+        "direct": direct,
+        "single_indirect": single,
+        "double_indirect": double,
+        "triple_indirect": triple,
     }
+
+
+def block_for_index(f, rec, index):
+    """Mirrors tfs.c's block_for_index()/walk_indirect(), read-only
+    (never allocates -- a missing pointer just means a hole/EOF)."""
+    if index < FS_N_DIRECT:
+        return rec["direct"][index]
+    index -= FS_N_DIRECT
+    single_cap = PTRS_PER_BLOCK
+    double_cap = PTRS_PER_BLOCK * PTRS_PER_BLOCK
+
+    def walk(top, depth, idx):
+        if top == 0:
+            return 0
+        cur = top
+        remaining = idx
+        for level in range(depth, 0, -1):
+            child_capacity = PTRS_PER_BLOCK ** (level - 1)
+            slot_i = remaining // child_capacity
+            remaining = remaining % child_capacity
+            ptrs = struct.unpack_from(f"<{PTRS_PER_BLOCK}I", read_block(f, cur))
+            child = ptrs[slot_i]
+            if level == 1:
+                return child
+            if child == 0:
+                return 0
+            cur = child
+        return 0
+
+    if index < single_cap:
+        return walk(rec["single_indirect"], 1, index)
+    index -= single_cap
+    if index < double_cap:
+        return walk(rec["double_indirect"], 2, index)
+    index -= double_cap
+    return walk(rec["triple_indirect"], 3, index)
+
+
+def read_file_data(f, rec):
+    """Reconstructs a file's full content by walking its block chain."""
+    size = rec["size"]
+    out = bytearray()
+    n_blocks = (size + BLOCK - 1) // BLOCK
+    for i in range(n_blocks):
+        blk = block_for_index(f, rec, i)
+        out.extend(read_block(f, blk))
+    return bytes(out[:size])
 
 
 def walk_entries(f):
@@ -285,15 +477,23 @@ def walk_entries(f):
 
 
 def main():
-    if len(sys.argv) != 2:
-        print(f"usage: {sys.argv[0]} disk.img", file=sys.stderr)
+    if len(sys.argv) not in (2, 3):
+        print(f"usage: {sys.argv[0]} disk.img [path/to/dump]", file=sys.stderr)
         sys.exit(1)
     with open(sys.argv[1], "rb") as f:
         check_superblock(f)
         check_journal(f)
-        for rec in sorted(walk_entries(f), key=lambda r: r["path"]):
+        entries = {rec["path"]: rec for rec in walk_entries(f)}
+        if len(sys.argv) == 3:
+            target = sys.argv[2]
+            if target not in entries or entries[target]["is_dir"]:
+                print(f"no such file: {target}", file=sys.stderr)
+                sys.exit(1)
+            sys.stdout.buffer.write(read_file_data(f, entries[target]))
+            return
+        for rec in sorted(entries.values(), key=lambda r: r["path"]):
             kind = "DIR " if rec["is_dir"] else "FILE"
-            size = "" if rec["is_dir"] else f"  {rec['size']:>5} B"
+            size = "" if rec["is_dir"] else f"  {rec['size']:>10} B"
             print(f"{kind}  {rec['path']:<40}{size}  "
                   f"created={rec['created']}  modified={rec['modified']}")
 
@@ -304,17 +504,22 @@ if __name__ == "__main__":
 
 Save this as e.g. `tfs2_reader.py` and run it against a `disk.img`
 copied off toy-os's disk image -- it needs no toy-os build tooling,
-just Python 3's standard library.
+just Python 3's standard library. Run with no third argument to list
+every entry; pass a path as a second argument to dump that file's
+content to stdout.
 
 ## Writing to a TFS2 image from a host tool
 
 Not covered by this spec in detail, and not recommended as a first
 step -- the journal's write-ahead sequence (see above) has to be
-followed exactly (stage -> commit -> apply -> clear) for a write to be
-crash-safe, and getting it wrong risks corrupting the image in a way
-that's hard to distinguish from a real toy-os bug when it's next
-booted. A browsing tool that also wants to *edit* files should
-strongly consider driving toy-os itself (e.g. via the same QMP/serial
-automation `tools/qmp_test.py` uses for testing) rather than
-reimplementing the write path independently, at least until there's a
-concrete need that's worth the risk.
+followed exactly (stage -> commit -> apply -> clear) for the *record*
+to be crash-safe, and getting it wrong risks corrupting the image in a
+way that's hard to distinguish from a real toy-os bug when it's next
+booted. Writing file *data* correctly additionally means allocating
+blocks (updating the bitmap) and threading indirect-block pointers
+through the record -- meaningfully more bookkeeping than v1's single
+inline blob was. A browsing tool that also wants to *edit* files
+should strongly consider driving toy-os itself (e.g. via the same
+QMP/serial automation `tools/qmp_test.py` uses for testing) rather
+than reimplementing the write path independently, at least until
+there's a concrete need that's worth the risk.

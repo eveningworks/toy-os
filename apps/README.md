@@ -79,7 +79,8 @@ their own loop, the window manager calls their `on_open`/`on_draw`/
 - **Notepad** (`notepad.c`) -- a small text editor with a toolbar (Save/
   Load, using `fs_write`/`fs_read` from kapi.h under a fixed filename),
   real cursor movement (arrows/Home/End/Delete, since build 377 --
-  `widgets.h`'s `text_scrollback` widget gained a cursor). Good example
+  `apps/ui/ui_scrollback.h`'s `text_scrollback` widget gained a cursor).
+  Good example
   of all four callbacks: on_open, on_draw, on_key, and on_click (the
   toolbar buttons).
 - **About** (`about.c`) -- a static info window with no input handling at
@@ -100,6 +101,13 @@ their own loop, the window manager calls their `on_open`/`on_draw`/
   console, so Terminal drives the same `editor_handle_key()` one
   keystroke at a time from its own `on_key` callback instead. See
   `terminal.c`'s top comment and `editor.h` for the full split.
+- **Task Manager** (`taskmgr.c`) -- lists every open window (title +
+  normal/minimized/maximized state) and shows system memory (physical
+  RAM and kernel heap, total/used). Redraws every tick alongside the
+  taskbar clock so the numbers stay live. Uses `wm_window_count()`/
+  `wm_get_window()` (`wm/wm.h`) -- a small read-only accessor pair
+  added specifically so an app outside `apps/wm/` can list windows
+  without reaching into `wm_internal.h` (which stays WM-private).
 
 ## The window manager (apps/wm/)
 
@@ -109,24 +117,38 @@ tightly-coupled event loop, not multiple decoupled components (see
 `wm_internal.h`'s comment for why):
 - **`wm.h`** -- the public API other apps include (`#include "wm/wm.h"`):
   `struct window`, `window_set_state`/`window_get_state`,
-  `window_content_x/y/w/h`, `window_invalidate`, `wm_run()`.
+  `window_content_x/y/w/h`, `window_invalidate`, `wm_window_count()`/
+  `wm_get_window()` (read-only window introspection -- Task Manager's
+  data source), `wm_run()`.
 - **`wm.c`** -- shared state, the app-facing helpers behind `wm.h`, window
   lifecycle (`open_app`, `close_window`, `bring_to_front`), and
   `wm_run()`'s main loop. Start reading here.
-- **`wm_input.c`** -- mouse click handling and the per-tick drag/resize
-  update, called from `wm_run()`.
+- **`wm_input.c`** -- mouse click handling (left AND right button) and
+  the per-tick drag/resize update, called from `wm_run()`.
 - **`wm_render.c`** -- everything the window manager draws (window
-  chrome, taskbar, Start menu, cursor), plus the shared layout-metric
-  helpers (`title_buttons()`, `btn_size()`, etc) that `wm_input.c` also
-  needs for hit-testing the exact same regions this file draws.
-- **`wm_internal.h`** -- private glue between the three `.c` files
+  chrome, taskbar, cursor), plus the shared layout-metric helpers
+  (`title_buttons()`, `btn_size()`, etc) that `wm_input.c` also needs
+  for hit-testing the exact same regions this file draws.
+- **`wm_internal.h`** -- private glue between all of the above
   (`extern` state declarations, cross-file prototypes). Never included
   outside `apps/wm/` -- it's not part of the public API in `wm.h`.
+- **`desktop.c`/`.h`** -- the desktop background + icon grid behind
+  every window (one icon per `gui_app_registry` entry; single-click
+  selects, double-click launches).
+- **`start_menu.c`/`.h`** -- the Start menu popup (app list + system
+  actions like "Exit to shell"), with hover/click-flash feedback.
+- **`context_menu.c`/`.h`** -- a small, generic reusable right-click
+  popup (label + callback + caller-supplied context pointer per row),
+  wired into the desktop, window chrome, taskbar app buttons, and Start
+  menu rows -- see its own top comment for the full list and
+  `docs/decisions.md` for why its callback shape differs from
+  `start_menu.h`'s.
 
 `wm_run()` owns the screen: it keeps a small fixed array of windows in
-z-order, and drives everything through one event loop -- mouse clicks,
-dragging by the title bar, minimize/maximize/close buttons, a Start menu
-that lists `gui_app_registry`, and keyboard input routed to whichever
+z-order, and drives everything through one event loop -- mouse clicks
+(left AND right button), dragging by the title bar, minimize/maximize/
+close buttons, a Start menu that lists `gui_app_registry`, right-click
+context menus, desktop icons, and keyboard input routed to whichever
 window is frontmost. Rendering is whole-screen every time rather than
 tracking dirty rectangles -- much simpler to get right with overlapping
 movable windows. It draws into an off-screen buffer and flips finished
@@ -140,24 +162,56 @@ window manager gives you is a real event-driven API boundary (an app
 genuinely can't tell what else is drawn on screen or steal input meant
 for another window), just not memory/privilege isolation.
 
-## Shared widgets (widgets.h/widgets.c)
+## Shared widgets (apps/ui/)
 
-`apps/widgets.h`/`widgets.c` factor out the "clickable rectangle with a
-label" pattern that used to be hand-rolled separately in the window
-manager's title/taskbar buttons, Calculator's button grid, and Notepad's
-toolbar. Two functions, deliberately minimal:
-- `int widget_hit(int x, int y, int w, int h, int px, int py)` -- a plain
-  bounds check, used for click hit-testing.
-- `void widget_button(int x, int y, int w, int h, const char *label, uint32_t bg, uint32_t fg)`
-  -- fills the rect with `bg`; if `label` is non-NULL, centers it in `fg`.
-  Pass `label = NULL` for icon-only buttons (like the window manager's
-  minimize/maximize/close) and draw the icon on top yourself afterward.
+`apps/ui/` holds every reusable GUI primitive, one widget per file, all
+pulled in together via the umbrella include `apps/ui/ui.h`
+(`#include "ui/ui.h"`). This used to be a single flat `apps/widgets.h`/
+`widgets.c` pair; it was split out file-per-widget once the pair grew
+past "two small functions" (see `docs/decisions.md`). `apps/widgets.h`/
+`.c` no longer exist.
 
-This is *not* the start of a general widget toolkit -- no focus
-management, no layout engine, no text fields or scrollbars. Add the next
-primitive here only once a second real caller needs it, the same
-reasoning that produced these two in the first place (three independent
-copies of the same button logic was the signal).
+- **`ui_primitives.h`/`.c`** -- the original two functions, still the
+  base every other widget in this directory builds on:
+  - `int widget_hit(int x, int y, int w, int h, int px, int py)` -- a
+    plain bounds check, used for click hit-testing.
+  - `void widget_button(int x, int y, int w, int h, const char *label, uint32_t bg, uint32_t fg)`
+    -- fills the rect with `bg`; if `label` is non-NULL, centers it in
+    `fg`. Pass `label = NULL` for icon-only buttons (like the window
+    manager's minimize/maximize/close) and draw the icon on top
+    yourself afterward.
+- **`ui_button.h`/`.c`** and **`ui_button_group.h`/`.c`** -- an owned
+  x/y/w/h button object built on `widget_button`/`widget_hit`, plus a
+  small group helper for laying out a row of them (used by the window
+  manager's title-bar buttons and, per the widgets migration, available
+  to any app that wants a row of buttons without hand-rolling the
+  layout math).
+- **`ui_textbox.h`/`.c`** -- `struct text_field` (single-line input,
+  cursor position, `TEXTFIELD_MAX` 48 chars) and
+  `widget_textfield_init/set_active/key/draw`, wrapped in an owned-
+  geometry `struct ui_textbox` (`ui_textbox_init/set_geometry/draw/
+  hit/set_active/key`).
+- **`ui_scrollback.h`/`.c`** -- `struct text_scrollback`
+  (`SCROLLBACK_CAP` 8192 chars), the multi-line scrolling text buffer
+  Notepad, Terminal, and the editor all use, with cursor movement
+  (`widget_scrollback_cursor_left/right/up/down/home/end`) and in-place
+  editing (`insert_at_cursor`/`delete_at_cursor`/`backspace_at_cursor`).
+  Deliberately has no owned-geometry wrapper -- every real caller
+  already recomputes its content rect live each frame for resize
+  support, so a wrapper wouldn't save any work (see
+  `docs/decisions.md`).
+- **`ui_scrollbar.h`/`.c`** -- draws and hit-tests a vertical scrollbar
+  (`widget_scrollbar_draw/hit/thumb_rect/offset_for_drag`) for anything
+  using `ui_scrollback`. Same "no owned-geometry wrapper" reasoning as
+  `ui_scrollback`.
+- **`ui_checkbox.h`/`.c`** -- `widget_checkbox_width/draw/hit`, a small
+  labeled checkbox.
+
+This is *not* a general-purpose widget toolkit -- no focus manager, no
+layout engine beyond `ui_button_group`. Add the next primitive here
+only once a second real caller needs it, the same reasoning that
+produced the original two functions in the first place (three
+independent copies of the same button logic was the signal).
 
 ## Shared theme colors (theme.h)
 
@@ -245,7 +299,7 @@ decoupled from how the hardware side is implemented.
 GUI apps additionally use `wm/wm.h` for the window-manager helpers
 (`window_content_x/y/w/h`, `window_set_state`/`window_get_state`,
 `window_invalidate`) -- that's the GUI-specific equivalent of `kapi.h`.
-Apps that draw buttons can also use `widgets.h` (see "Shared widgets"
+Apps that draw buttons can also use `ui/ui.h` (see "Shared widgets"
 above), and any app can use `theme.h` (see "Shared theme colors" above)
 for the handful of named colors -- both are peer-level apps-internal
 headers, not part of `kapi.h`.

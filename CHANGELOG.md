@@ -59,6 +59,39 @@ forever.
   border stays intact and visible above/below the text at every size.
 
 ### Added
+- Documentation audit: `README.md`, `apps/README.md`, and
+  `docs/arch-portability.md` had all drifted out of date after the
+  recent kernel-heap/JSON, `apps/ui/` widget migration, and desktop/
+  context-menu work -- a research pass found and fixed the stale
+  bits. `README.md`: "four apps" -> five (Task Manager added), the
+  project-layout tree's `apps/widgets.h`/`.c` and `apps/wm/` file
+  list updated, a new bullet for the kernel heap + JSON library.
+  `apps/README.md`: the entire "Shared widgets (widgets.h/widgets.c)"
+  section rewritten to describe `apps/ui/`'s one-file-per-widget
+  layout and its `ui.h` umbrella include; the window-manager file
+  list extended with `desktop.c`/`context_menu.c`/`start_menu.c`; a
+  Task Manager entry added to the app list. `docs/arch-portability.md`:
+  refreshed line counts (`tfs.c`, `apps/wm/*`, `calc_engine.c`,
+  `ata.c`, `kapi.h`, the repo-wide C total), replaced the
+  `apps/widgets.h`/`.c` reference with `apps/ui/*`, and added
+  `heap.c`/`heap.h` and `json.c`/`json.h` to the architecture-neutral
+  inventory. `docs/tfs2-spec.md` was fully rewritten from scratch --
+  it still described the pre-rework TFS2 v1 format (inline 2048-byte
+  file data, no block allocator); it now documents the current v2
+  block-addressed layout (superblock version 2, the 12-direct +
+  single/double/triple-indirect pointer scheme, the free-block
+  bitmap region, the 9 GiB sparse `disk.img`) including a rewritten
+  Python reference reader that can walk the indirect-pointer chain to
+  dump a file's actual content, not just list entries. `CLAUDE.md`
+  was also brought current in the same pass (the `apps/widgets.h`
+  bullet, a header-dependency example, the `WM_C`/`UI_C` Makefile
+  wildcard note, and a `## tools/` listing for `preflight.sh`/
+  `deliver.py`/`gui_flow.py`/`screenshot_diff.py` that was missing
+  entirely). The `toy-os-feature-workflow` skill's own `SKILL.md` was
+  updated to match (the `apps/widgets.h` widget reference, and steps
+  4/6 now mention the four tools above) and delivered as an updated
+  `.skill` file for the user to re-save, since skills can't be edited
+  directly from this session. No code changed in this pass.
 - Start menu (`apps/wm/wm_render.c`/`wm_input.c`/`wm.c`) gains real
   graphical feedback: hovering a row highlights it (recomputed fresh
   from the mouse position every frame -- `wm.c`'s main loop now forces
