@@ -267,7 +267,7 @@ void cmd_uptime(void) {
 }
 
 void cmd_about(void) {
-    vga_write("toy-os build "); vga_write(TOYOS_VERSION);
+    vga_write("toy-os v"); vga_write(TOYOS_VERSION);
     vga_write(" -- a small x86-64 hobby kernel\n");
     vga_write("Boot: GRUB/Multiboot2 | C + ASM | Tested on QEMU\n");
     vga_write("Storage: ");

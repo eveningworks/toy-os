@@ -5,6 +5,39 @@ notes what was added and, where relevant, what broke and how it got
 fixed -- several of the more interesting bugs here were only found by
 actually testing in QEMU rather than assumed to work.
 
+Entries above `## Build 502` (below) keep their old "Build N
+(tier, +delta)" headings for reference -- that history isn't
+rewritten. From here forward, changes accumulate under
+`## [Unreleased]` instead, in the [Keep a Changelog](https://keepachangelog.com/)
+style: no per-change version bump, just entries appended as they
+happen. When a real release is cut, `tools/set_version.sh <version>`
+stamps this section with the version and date and opens a fresh empty
+one above it. See `docs/decisions.md` for the switch and why.
+
+## [Unreleased]
+
+### Changed
+- Versioning switched from a per-change build-number scheme
+  (`tools/bump_build.sh <fix|feature|major>`, a git tag `build-N` on
+  every push) to semantic versioning with a `-dev` suffix during
+  development. `VERSION` (repo root) now holds a plain semver string
+  -- `0.1.0-dev` to start -- read by `tools/gen_version.sh` into
+  `kernel/include/version.h`/`TOYOS_VERSION` exactly like `BUILD_NUMBER`
+  was before. `tools/bump_build.sh` is retired; `tools/set_version.sh
+  <version>` replaces it, used only when starting a new dev round
+  (`0.2.0-dev`) or cutting a real release (`0.2.0`, which also stamps
+  this CHANGELOG section and opens a fresh `## [Unreleased]`). Git tags
+  move from `build-N` per push to `vX.Y.Z` at real releases only.
+  `about`/the GUI About window now show `toy-os v0.1.0-dev` instead of
+  `toy-os build 502`. Requested directly, to stop needing a
+  fix/feature/major judgment call and a tag on every small change --
+  see `docs/decisions.md`'s entry on this for the full reasoning.
+- Commit messages going forward list each changed/added file with a
+  one-line note in the body (e.g. `kernel/drivers/keyboard.c - added
+  SE layout remap`), so a commit is skimmable on GitHub without
+  opening the full diff. No other workflow change -- still a direct
+  push to `main`, same as before.
+
 ## Build 502 (fix, +1) -- CLAUDE.md/qmp_test.py: catch up on QMP keyboard gotchas, prep for a new chat
 
 Asked to start a fresh chat (this one had gotten long) and update

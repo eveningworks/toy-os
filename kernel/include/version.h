@@ -5,14 +5,12 @@
 // step of `make all`/`make iso` (see the Makefile). Don't hand-edit
 // this file, it gets overwritten on the very next build.
 //
-// TOYOS_VERSION is a plain build number (Windows-style, e.g. "22631"
-// -- see CHANGELOG.md for the request this came from), shown by both
-// the shell's `about` and the GUI About window. It's just whatever
-// BUILD_NUMBER (repo root) currently holds -- this script doesn't
-// increment it. BUILD_NUMBER only changes via tools/bump_build.sh, run
-// once per real change (fix/feature/major -- see that script), not
-// once per build, so the number reflects "how much has actually
-// changed," not "how many times someone ran make."
-#define TOYOS_VERSION "502"
+// TOYOS_VERSION is a semver-ish string ("0.1.0-dev" while in
+// development, "0.1.0" once released -- see VERSION at the repo root
+// and tools/set_version.sh), shown by both the shell's `about` and
+// the GUI About window. It's just whatever VERSION currently holds --
+// this script doesn't change it. See docs/decisions.md for why this
+// replaced the earlier per-change build-number scheme.
+#define TOYOS_VERSION "0.1.0-dev"
 
 #endif

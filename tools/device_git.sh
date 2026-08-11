@@ -17,14 +17,19 @@
 # one. First version of this script only swept index.lock; a real
 # `commit` also leaves HEAD.lock and objects/maintenance.lock behind,
 # which bit a session that only cleared index.lock and then hit the
-# HEAD.lock failure on the very next command. This version sweeps
+# HEAD.lock failure on the very next command. A later version swept
 # every *.lock file under .git/ (find -name '*.lock'), not just the
-# well-known ones by name, so a lock in a spot not enumerated above
-# doesn't repeat the same mistake.
+# well-known ones by name, but only *before* running the command --
+# which still left a fresh lock behind afterward for the *next*
+# command (or the user's own terminal) to trip over, since even a
+# read-only `git status` takes .git/index.lock to refresh its stat
+# cache. This version sweeps both before AND after the real command,
+# so a `device_git.sh` call leaves the repo lock-free when it returns
+# instead of just moving the problem to whoever runs git next.
 #
 # Fix: `mv` (rename) is allowed through the bridge even though `rm`
-# (unlink) isn't, so rename every stale lock out of the way before
-# running the real command instead of trying to delete it. See
+# (unlink) isn't, so rename every stale lock out of the way before AND
+# after running the real command instead of trying to delete it. See
 # CLAUDE.md's "Working in the cloud sandbox vs. the user's machine"
 # section for the full writeup.
 #
@@ -39,6 +44,13 @@
 # locks. The leftover .git/objects/<xx>/tmp_obj_* temp files (same root
 # cause, but not locks and not blocking) are harmless clutter, not
 # swept here -- they don't stop any future git command from working.
+#
+# Deliberately does NOT `exec` into git anymore (an earlier version
+# did, which is exactly why it couldn't sweep afterward -- exec
+# replaces this script's process, so there was no "afterward" left to
+# run code in). Runs git as a normal child process and captures its
+# exit code instead, so the trailing sweep -- and this script's own
+# exit code -- both still happen.
 
 set -euo pipefail
 
@@ -48,15 +60,37 @@ if [ -z "$repo_root" ]; then
   exit 1
 fi
 
-trash_dir="$repo_root/.git/_to_delete"
-cleared=0
-while IFS= read -r -d '' lock_file; do
-  mkdir -p "$trash_dir"
-  rel="${lock_file#"$repo_root"/.git/}"
-  stale_name="$(echo "$rel" | tr '/' '_').stale_$$_$RANDOM"
-  mv "$lock_file" "$trash_dir/$stale_name"
-  echo "device_git.sh: cleared stale $rel -> .git/_to_delete/$stale_name" >&2
-  cleared=$((cleared + 1))
-done < <(find "$repo_root/.git" -name '*.lock' -print0 2>/dev/null)
+sweep_locks() {
+  local trash_dir="$repo_root/.git/_to_delete"
+  local lock_file rel stale_name
+  while IFS= read -r -d '' lock_file; do
+    mkdir -p "$trash_dir"
+    rel="${lock_file#"$repo_root"/.git/}"
+    stale_name="$(echo "$rel" | tr '/' '_').stale_$$_$RANDOM"
+    mv "$lock_file" "$trash_dir/$stale_name"
+    echo "device_git.sh: cleared $1 $rel -> .git/_to_delete/$stale_name" >&2
+  done < <(find "$repo_root/.git" -name '*.lock' -print0 2>/dev/null)
+}
 
-exec git "$@"
+sweep_locks "stale"
+
+set +e
+git "$@"
+status=$?
+set -e
+
+# Sweep again: even a read-only command like `status` can leave a
+# fresh lock behind (see the top comment) -- this is what makes the
+# repo actually lock-free when this script returns, not just when the
+# next device_git.sh call happens to run. The short sleep first is
+# deliberate and load-bearing, not padding: over the device bridge's
+# mounted filesystem, a lock file git just created can be genuinely
+# invisible to `find` for a beat (a directory-listing cache lag on the
+# mount, confirmed by testing -- without this delay the trailing sweep
+# below silently sees nothing and the lock survives). Sleeping first
+# consistently avoided that in testing; if this ever regresses, that's
+# the mechanism to suspect.
+sleep 0.5
+sweep_locks "trailing"
+
+exit "$status"

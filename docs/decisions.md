@@ -365,15 +365,46 @@ writeup and what was verified.
 
 ## Build-number scheme: fix/feature/major tiers, not dates or semver
 
-Replaced an earlier date-plus-same-day-counter scheme
-(`YYYY.MM.DD.N`), which itself replaced a hand-bumped `0.1.0`-style
-semver. `tools/bump_build.sh <fix|feature|major>` is a deliberately
+**Superseded -- see the next entry below.** This scheme (`tools/
+bump_build.sh <fix|feature|major>`, retired) replaced an earlier
+date-plus-same-day-counter scheme (`YYYY.MM.DD.N`), which itself
+replaced a hand-bumped `0.1.0`-style semver. It was a deliberately
 coarse, Windows-build-number-style approximation (+1/+10/+50) chosen
 for being consistent and easy to sanity-check later, over a freeform
-number that would be more nuanced but less predictable. See
+number that would be more nuanced but less predictable. Kept here for
+the historical reasoning -- every existing `Build N` CHANGELOG.md
+heading and `build-N` git tag still refers to this scheme. See
 CHANGELOG.md's **Build 110** (the switch itself) and **Build 121**
-(the git tag + GitHub Release convention added on top of it), and
-CLAUDE.md's own bullet on this for the day-to-day mechanics.
+(the git tag + GitHub Release convention added on top of it).
+
+## Versioning: semver + `-dev` suffix, not a per-change build number
+
+Replaced the fix/feature/major build-number scheme above. Requested
+directly: bumping (and picking a fix/feature/major tier for)
+`BUILD_NUMBER` on every single change, however small, had become
+ceremony that didn't earn its keep -- a build number that changes
+constantly isn't meaningfully more informative than one that doesn't
+change until something's actually ready to call a version. `VERSION`
+(repo root) now holds a plain semver-ish string, `0.1.0-dev` to start,
+read into `TOYOS_VERSION` by `tools/gen_version.sh` exactly the way
+`BUILD_NUMBER` was before. It only changes via `tools/set_version.sh
+<version>`, and only for one of two reasons: starting a new dev round
+(`0.2.0-dev`) or cutting a real release (`0.2.0`, no `-dev` suffix).
+`CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/)
+from its `## [Unreleased]` section forward -- every change gets an
+entry there, no version/tier attached, until a release is cut; cutting
+one renames that heading to `## [<version>] - <date>` and opens a
+fresh `## [Unreleased]` above it (`tools/set_version.sh` does both
+steps together). Git tags moved from `build-N` per push to `v<version>`
+at real releases only -- see CLAUDE.md's versioning bullets for the
+day-to-day mechanics and CHANGELOG.md's `## [Unreleased]` intro (added
+the same day this switch happened) for the change itself.
+
+Alongside this, commit messages going forward list each changed/added
+file with a one-line note in the body, so a commit is skimmable on
+GitHub without opening the full diff -- a separate, smaller convention
+adopted at the same time, not tied to the versioning switch itself.
+See CLAUDE.md's own bullet on this.
 
 ## Socket fds: scaffolding ahead of the driver, not a working transport
 

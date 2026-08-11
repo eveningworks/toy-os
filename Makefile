@@ -84,14 +84,14 @@ ASM_OBJECTS = $(BUILD)/core/boot.o $(BUILD)/core/isr.o $(BUILD)/core/context_swi
 
 .PHONY: all clean clean-disk iso run run-nographic help version
 
-# Regenerates kernel/include/version.h from BUILD_NUMBER (see
+# Regenerates kernel/include/version.h from VERSION (see
 # tools/gen_version.sh) -- listed first so it always runs before
 # anything gets compiled. Always considered out of date (.PHONY), so
-# every `make all`/`make iso` re-embeds whatever BUILD_NUMBER currently
-# holds -- but unlike the retired date-based scheme, this step no
-# longer increments anything itself; see tools/bump_build.sh for the
-# separate, deliberate step that does (once per real change, not once
-# per build).
+# every `make all`/`make iso` re-embeds whatever VERSION currently
+# holds -- but this step never changes VERSION itself; see
+# tools/set_version.sh for the separate, deliberate step that does
+# (starting a new dev round or cutting a release, not on every build
+# or even every change -- see docs/decisions.md).
 #
 # Used to force-delete build/apps/about.o and build/apps/shell.o here,
 # because this Makefile didn't track header dependencies at all (no
@@ -101,7 +101,7 @@ ASM_OBJECTS = $(BUILD)/core/boot.o $(BUILD)/core/isr.o $(BUILD)/core/context_swi
 # generically -- any .o whose .c (transitively) includes version.h
 # rebuilds automatically once it actually changes. gen_version.sh is
 # deliberately idempotent (only touches version.h's mtime when
-# BUILD_NUMBER's value actually changed) specifically so this doesn't
+# VERSION's value actually changed) specifically so this doesn't
 # regress into "every file that includes kapi.h rebuilds on every
 # single build" -- see that script's top comment.
 version:

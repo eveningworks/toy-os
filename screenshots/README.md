@@ -4,16 +4,18 @@ QEMU screendumps kept as testing evidence, organized by when they were
 taken -- one subfolder per calendar date a testing pass happened
 (`screenshots/2026-08-09/`, `screenshots/2026-08-10/`, and so on).
 
-Used to be one subfolder per `TOYOS_VERSION` (back when that was a
-hand-bumped `v0.1.0`-style number, changed only for real changes -- see
-CHANGELOG), then briefly a date-plus-build-counter string that changed
-on literally every build regardless of content. `TOYOS_VERSION` is now
-a Windows-style build number (`tools/bump_build.sh`) that only changes
-once per real change again -- but dated folders stayed the convention
-even so, since a single change/testing pass often produces several
-builds (and several screenshots) before the number actually bumps, and
-the date is still the grain that naturally groups "one testing pass"
-together regardless of how the version string itself is generated.
+Used to be one subfolder per `TOYOS_VERSION`: first a hand-bumped
+`v0.1.0`-style number, then briefly a date-plus-build-counter string
+that changed on literally every build, then a Windows-style build
+number (`tools/bump_build.sh`) that changed once per real change.
+`TOYOS_VERSION` is now a semver string with a `-dev` suffix
+(`tools/set_version.sh`, see `docs/decisions.md`) that only changes
+when starting a new dev round or cutting a release -- but dated
+folders stayed the convention throughout all of these, since a single
+change/testing pass often produces several screenshots before the
+version string itself changes at all, and the date is still the grain
+that naturally groups "one testing pass" together regardless of how
+the version string is generated.
 
 Why dated subfolders rather than one flat folder: screenshots are a
 point-in-time record ("this is what the GUI looked like and did on

@@ -11,12 +11,13 @@
 #define ABOUT_MARGIN 8
 #define ABOUT_LINE_GAP 6
 #define ABOUT_ROWS 6 // number of text lines drawn below
-// Widest line is the version line ("toy-os build " TOYOS_VERSION " --
-// graphics mode"); TOYOS_VERSION is a plain build number (see
-// tools/gen_version.sh) that only grows a digit at a time, so this
-// leaves headroom past its current length rather than tracking it
-// exactly.
-#define ABOUT_COLS 38
+// Widest line is the version line ("toy-os v" TOYOS_VERSION " --
+// graphics mode"); TOYOS_VERSION is a semver-ish string (see VERSION,
+// repo root, and tools/gen_version.sh), e.g. "0.1.0-dev" while in
+// development or "0.1.0" once released -- not a plain incrementing
+// number anymore, so this leaves extra headroom past today's length
+// rather than tracking it exactly.
+#define ABOUT_COLS 44
 
 // Content-area size for the current font -- see gui_apps.h's default_size.
 // Kept in sync with about_draw()'s layout below (margins, line count,
@@ -41,7 +42,7 @@ void about_draw(struct window *win) {
     gfx_fill_rect(cx, cy, cw, ch, bg);
 
     int line_h = gfx_char_h() + ABOUT_LINE_GAP;
-    gfx_draw_string(cx + ABOUT_MARGIN, cy + ABOUT_MARGIN + 0 * line_h, "toy-os build " TOYOS_VERSION " -- graphics mode", fg, bg);
+    gfx_draw_string(cx + ABOUT_MARGIN, cy + ABOUT_MARGIN + 0 * line_h, "toy-os v" TOYOS_VERSION " -- graphics mode", fg, bg);
     gfx_draw_string(cx + ABOUT_MARGIN, cy + ABOUT_MARGIN + 1 * line_h, "Windows: drag the title", fg, bg);
     gfx_draw_string(cx + ABOUT_MARGIN, cy + ABOUT_MARGIN + 2 * line_h, "bar to move, use the", fg, bg);
     gfx_draw_string(cx + ABOUT_MARGIN, cy + ABOUT_MARGIN + 3 * line_h, "_ / o / x buttons.", fg, bg);

@@ -1,17 +1,18 @@
 #!/bin/sh
-# Regenerates kernel/include/version.h from BUILD_NUMBER (repo root,
-# plain text, one line -- just the integer), run automatically as the
-# first step of `make all`/`make iso` (see the Makefile). Not meant to
-# be edited by hand -- kernel/include/version.h itself says so too --
-# but harmless to run directly if you just want to see what it'd
-# produce.
+# Regenerates kernel/include/version.h from VERSION (repo root, plain
+# text, one line -- a semver-ish string like "0.1.0-dev" or "0.1.0"),
+# run automatically as the first step of `make all`/`make iso` (see
+# the Makefile). Not meant to be edited by hand -- kernel/include/
+# version.h itself says so too -- but harmless to run directly if you
+# just want to see what it'd produce.
 #
-# Unlike the retired date-plus-build-counter scheme this replaced (see
-# CHANGELOG.md), this script does NOT increment anything -- it just
-# embeds whatever BUILD_NUMBER currently holds. Bumping BUILD_NUMBER
-# itself is a separate, deliberate step (tools/bump_build.sh) run once
-# per real change, not once per build -- see that script's top comment
-# for why "every build" and "every change" are different things here.
+# This script does NOT change VERSION itself -- it just embeds
+# whatever VERSION currently holds. Changing VERSION is a separate,
+# deliberate step (tools/set_version.sh), run only when you're
+# starting a new round of dev work or cutting a real release -- not on
+# every build, and not on every change either (unlike the retired
+# per-change build-number scheme this replaced, see CHANGELOG.md and
+# docs/decisions.md).
 #
 # Idempotent by design (only overwrites version.h if the content
 # actually changed): this runs on literally every `make all`/`make
@@ -21,17 +22,17 @@
 # every single build and make every file that (transitively) includes
 # kapi.h -- which is nearly everything -- look "out of date" and
 # rebuild every time, defeating the entire point of that tracking. By
-# only touching the file when BUILD_NUMBER actually changed, a build
-# right after `bump_build.sh` correctly recompiles everything that
-# depends on version.h (same as before), but every other build in
-# between leaves its mtime alone, same as any other untouched header.
+# only touching the file when VERSION actually changed, a build right
+# after `set_version.sh` correctly recompiles everything that depends
+# on version.h (same as before), but every other build in between
+# leaves its mtime alone, same as any other untouched header.
 set -e
 cd "$(dirname "$0")/.."
 
-COUNTER_FILE="BUILD_NUMBER"
-BUILD_NUMBER=0
-if [ -f "$COUNTER_FILE" ]; then
-    BUILD_NUMBER=$(cat "$COUNTER_FILE")
+VERSION_FILE="VERSION"
+VERSION="0.0.0-dev"
+if [ -f "$VERSION_FILE" ]; then
+    VERSION=$(cat "$VERSION_FILE")
 fi
 
 OUT="kernel/include/version.h"
@@ -45,23 +46,21 @@ cat > "$TMP" << EOF
 // step of \`make all\`/\`make iso\` (see the Makefile). Don't hand-edit
 // this file, it gets overwritten on the very next build.
 //
-// TOYOS_VERSION is a plain build number (Windows-style, e.g. "22631"
-// -- see CHANGELOG.md for the request this came from), shown by both
-// the shell's \`about\` and the GUI About window. It's just whatever
-// BUILD_NUMBER (repo root) currently holds -- this script doesn't
-// increment it. BUILD_NUMBER only changes via tools/bump_build.sh, run
-// once per real change (fix/feature/major -- see that script), not
-// once per build, so the number reflects "how much has actually
-// changed," not "how many times someone ran make."
-#define TOYOS_VERSION "$BUILD_NUMBER"
+// TOYOS_VERSION is a semver-ish string ("0.1.0-dev" while in
+// development, "0.1.0" once released -- see VERSION at the repo root
+// and tools/set_version.sh), shown by both the shell's \`about\` and
+// the GUI About window. It's just whatever VERSION currently holds --
+// this script doesn't change it. See docs/decisions.md for why this
+// replaced the earlier per-change build-number scheme.
+#define TOYOS_VERSION "$VERSION"
 
 #endif
 EOF
 
 if [ -f "$OUT" ] && cmp -s "$TMP" "$OUT"; then
     rm -f "$TMP"
-    echo "version: build $BUILD_NUMBER (unchanged)"
+    echo "version: $VERSION (unchanged)"
 else
     mv "$TMP" "$OUT"
-    echo "version: build $BUILD_NUMBER"
+    echo "version: $VERSION"
 fi
