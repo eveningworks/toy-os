@@ -19,3 +19,15 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+Third-party font
+
+kernel/drivers/font_ttf.c and font_ttf.h contain anti-aliased glyph
+bitmaps baked from JetBrains Mono (Regular), which is licensed under
+the SIL Open Font License, Version 1.1, not the MIT License above.
+The full OFL text is included at tools/OFL.txt and must accompany any
+redistribution of that font data (or substantial rendered derivatives
+of it), per the OFL's own terms. The MIT License above governs the
+rest of this repository (all original toy-os source code).
