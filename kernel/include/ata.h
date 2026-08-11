@@ -88,4 +88,40 @@ int ata_write_sector(uint32_t lba, const void *buf);
 int ata_read_sectors(uint32_t lba, int count, void *buf);
 int ata_write_sectors(uint32_t lba, int count, const void *buf);
 
+// Every ata_write_sector(s) call issues its own CMD_CACHE_FLUSH
+// afterward, by default -- fine (even desirable) for a single
+// standalone write, but ruinous for a loop of many (e.g. one
+// filesystem block per 4KB of a large file write): flush is
+// inherently synchronous, so N writes means N full round trips to the
+// drive, dominating throughput regardless of how fast the underlying
+// DMA transfer itself is. Measured live: `stress 100` (a 100MB write/
+// read/verify pass, apps/shell_sys.c) ran at ~1.4MB/s before this
+// existed -- see docs/decisions.md.
+//
+// ata_flush_begin()/ata_flush_end() bracket a batch of writes that
+// only need to be durable as a whole, not after each individual one:
+// every write still goes to the drive immediately (this only defers
+// the FLUSH command, not the write -- a read-back during the batch
+// still sees correct data), and ata_flush_end() issues exactly one
+// real CMD_CACHE_FLUSH once the OUTERMOST matching call returns,
+// covering everything written since the matching ata_flush_begin().
+// Nestable (a depth counter, not a boolean) so a batched caller can
+// safely be invoked from inside another batch without triggering an
+// early flush. Every begin() MUST be matched by an end() on every
+// exit path (including error returns) -- an unmatched begin() leaves
+// every future write silently unflushed until the next begin/end
+// pair happens to close it out.
+//
+// No caller HAS to use this -- ata_write_sector(s) with no
+// begin()/end() around it behaves exactly as before (flush every
+// write), which is still what every crash-safety-sensitive path
+// (tfs.c's journal/table-slot writes in persist_record()) uses
+// deliberately, unchanged. This is opt-in for genuinely bulk,
+// re-derivable-on-failure data (TFS2's write_range_impl() data-block
+// loop) where losing a bit of durability window in exchange for real
+// throughput is the right tradeoff -- see docs/decisions.md for the
+// full reasoning on where the line is drawn.
+void ata_flush_begin(void);
+void ata_flush_end(void);
+
 #endif

@@ -1293,3 +1293,38 @@ See `CHANGELOG.md`'s `[Unreleased]` entry for the full feature writeup
 (navigation model, Notepad's Open.../Save As... integration, the
 `redraw_pending` bug found via QMP testing on `../` double-click
 navigation).
+
+## TFS2's write batching covers `write_range_impl()`'s data path only -- `persist_record()`'s journaled metadata writes still flush every step
+
+`ata_flush_begin()`/`ata_flush_end()` (`ata.h`) let a caller defer the
+synchronous `CMD_CACHE_FLUSH` that used to follow every single ATA
+write, batching it into one flush at the end of a run of many writes
+instead -- `stress 100` measured ~1.4MB/s before this existed (one
+flush per 4KB filesystem block written, plus a second one per
+newly-allocated block's bitmap-sector update, so a 100MB write was
+tens of thousands of tiny synchronous round trips). `write_range_impl()`
+(`kernel/drivers/tfs.c`) wraps its whole per-file-write loop in one
+batch, and `persist_bitmap_bit()` defers the bitmap sector write
+itself (not just its flush) to the batch's end, coalescing what would
+otherwise be one redundant sector write per allocated block into one
+write per distinct dirty sector.
+
+`persist_record()` -- the write-ahead-journal-protected path that
+persists a file's metadata (size, block pointers) -- deliberately does
+NOT get this treatment, even though it's also "a run of several ATA
+writes." Its writes have to land on disk in a specific order with each
+one durable before the next is issued (journal data, then the commit
+header, then the real table slot, then the header clear) for the
+crash-recovery story (`replay_journal()`) to actually hold: batching
+the flush there would mean a crash mid-batch could leave the drive's
+physical write order different from what the journal protocol assumes,
+silently breaking the exact guarantee it exists for. `write_range_impl()`'s
+data blocks have no such ordering requirement -- a half-written data
+block after a crash is just incomplete file content (`fs_write_range()`
+already documents partial-write behavior on failure), not a corrupted
+recovery structure. The dividing line going forward: batch a run of
+writes only when every write in it is independently safe to lose or
+reorder relative to the others if a crash lands mid-batch; anything
+where write N's crash-safety depends on write N-1 already being
+durable (like a WAL) stays one-flush-per-write. See `CHANGELOG.md`'s
+`[Unreleased]` entry for the full before/after numbers.

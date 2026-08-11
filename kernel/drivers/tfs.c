@@ -118,6 +118,7 @@
 #include "klog.h"
 #include "tz.h"
 #include "heap.h"
+#include "debugflags.h"
 
 enum fs_entry_type { FS_TYPE_FILE = 0, FS_TYPE_DIR = 1 };
 
@@ -231,8 +232,68 @@ static int persist_bitmap_sector(uint32_t sector_index) {
     if (!g_disk_backed) return 1;
     return ata_write_sector(FS_BITMAP_START_LBA + sector_index, g_bitmap + (uint32_t)sector_index * ATA_SECTOR_SIZE);
 }
+
+// Backs write_batch_begin()/write_batch_end() below -- one bit per
+// bitmap SECTOR (not per data block, note: FS_BITMAP_SECTORS is tiny,
+// a few hundred even on a multi-GB disk, since each sector's 512 bytes
+// covers 4096 blocks' worth of bits). During a batch, persist_bitmap_
+// bit() only marks the sector dirty here instead of writing it
+// immediately -- a large sequential write allocates thousands of
+// contiguous blocks that virtually always land in the same handful of
+// bitmap sectors, so without this a bulk write would otherwise issue
+// one redundant sector write per newly-allocated block even after the
+// ata_flush_begin()/end() batching (ata.h) removed the FLUSH after
+// each one. write_batch_end() persists each dirty sector exactly once
+// (still inside the ata.h batch, so those writes are flush-deferred
+// too) before closing the ata-level batch out with one real flush
+// covering everything.
+static uint8_t g_bitmap_dirty[(FS_BITMAP_SECTORS + 7) / 8];
+static int g_write_batch_depth = 0; // nestable, mirrors ata_flush_begin/end's own depth counter
+
 static void persist_bitmap_bit(uint32_t block) {
-    persist_bitmap_sector((block / 8) / ATA_SECTOR_SIZE);
+    uint32_t sector = (block / 8) / ATA_SECTOR_SIZE;
+    if (g_write_batch_depth > 0) {
+        g_bitmap_dirty[sector / 8] |= (uint8_t)(1u << (sector % 8));
+        return;
+    }
+    persist_bitmap_sector(sector);
+}
+
+// Brackets a run of block_for_index()/write_block() calls that only
+// need to be durable as a whole (e.g. one fs_write_range() call's
+// worth of file data) -- see ata_flush_begin()/end()'s doc comment
+// (ata.h) for the underlying mechanism this rides on, and
+// persist_bitmap_bit() above for why bitmap sector writes get the
+// same treatment. EVERY write_batch_begin() must be matched by
+// write_batch_end() on every exit path, including error returns --
+// see write_range_impl() for the pattern (a single cleanup point, not
+// duplicated at each early return).
+static void write_batch_begin(void) {
+    if (!g_disk_backed) return; // RAM-only has no flush/bitmap-sector concept to defer
+    g_write_batch_depth++;
+    ata_flush_begin();
+}
+
+static void write_batch_end(void) {
+    if (!g_disk_backed) return;
+    if (g_write_batch_depth > 0) g_write_batch_depth--;
+    if (g_write_batch_depth == 0) {
+        int flushed_any = 0;
+        for (uint32_t i = 0; i < FS_BITMAP_SECTORS; i++) {
+            if (g_bitmap_dirty[i / 8] & (1u << (i % 8))) {
+                persist_bitmap_sector(i);
+                g_bitmap_dirty[i / 8] &= (uint8_t)~(1u << (i % 8));
+                flushed_any++;
+            }
+        }
+        if (flushed_any && dbgflag_enabled(DBGFLAG_FS)) {
+            klog_write("fs: write_batch_end flushed "); klog_write_dec((uint32_t)flushed_any);
+            klog_write(" dirty bitmap sector(s)\n");
+        }
+    }
+    ata_flush_end(); // must run AFTER the dirty-sector writes above -- see ata.h: the real
+                      // flush only fires once ITS OWN depth reaches 0, and those writes
+                      // need to land while still inside the deferred window to be covered.
 }
 
 // Allocates one free block, disk-backed or RAM-only depending on
@@ -467,6 +528,17 @@ static uint32_t read_range_impl(struct file *f, uint64_t offset, void *buf, uint
 static int write_range_impl(struct file *f, uint64_t offset, const void *buf, uint32_t len) {
     const uint8_t *src = (const uint8_t *)buf;
     uint32_t total = 0;
+    int ok = 1;
+
+    // See write_batch_begin()/end() above -- everything this loop
+    // writes (data blocks AND any newly-allocated blocks' bitmap
+    // sectors) only needs to be durable as a whole once this call
+    // returns, not after each individual 4KB block. `ok` tracks
+    // whether the loop finished cleanly so there's exactly one
+    // write_batch_end() call regardless of which exit path was taken
+    // -- an unmatched begin() would silently leave every future write
+    // unflushed (see ata.h).
+    write_batch_begin();
     while (total < len) {
         uint64_t file_off = offset + total;
         uint32_t block_index = (uint32_t)(file_off / FS_BLOCK_SIZE);
@@ -475,17 +547,20 @@ static int write_range_impl(struct file *f, uint64_t offset, const void *buf, ui
         if (chunk > len - total) chunk = len - total;
 
         uint32_t blk = block_for_index(f, block_index, 1);
-        if (!blk) return 0; // out of space -- whatever was written before this point stays, see fs.h
+        if (!blk) { ok = 0; break; } // out of space -- whatever was written before this point stays, see fs.h
 
         if (within == 0 && chunk == FS_BLOCK_SIZE) {
             k_memcpy(g_io_scratch, src + total, FS_BLOCK_SIZE);
         } else {
-            if (!read_block(blk, g_io_scratch)) return 0;
+            if (!read_block(blk, g_io_scratch)) { ok = 0; break; }
             k_memcpy((uint8_t *)g_io_scratch + within, src + total, chunk);
         }
-        if (!write_block(blk, g_io_scratch)) return 0;
+        if (!write_block(blk, g_io_scratch)) { ok = 0; break; }
         total += chunk;
     }
+    write_batch_end();
+
+    if (!ok) return 0;
     if (offset + total > f->size) f->size = offset + total;
     return 1;
 }

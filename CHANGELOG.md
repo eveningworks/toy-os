@@ -1254,6 +1254,50 @@ forever.
   which is expected -- this fixes a real-hardware timing condition the
   sandbox doesn't reproduce, not a sandbox-visible bug.
 
+### Improved
+- TFS2/ATA write throughput -- `stress 100` was measured at ~1.4MB/s
+  (100MB in 72s) on real hardware, root-caused (see the ATA-retry
+  entry just above, found while investigating the same "why is stress
+  so slow" question) to `kernel/drivers/ata.c`'s DMA write path issuing
+  a full synchronous `CMD_CACHE_FLUSH` after every single write, with
+  TFS2 itself writing in 4KB pieces -- a 100MB write was on the order
+  of 25,600 individual block writes, each paying full flush latency,
+  plus a second write-and-flush per newly-allocated block just to
+  persist one bit of the free-block bitmap. New `ata_flush_begin()`/
+  `ata_flush_end()` (`ata.h`) let a caller batch a run of writes into
+  one flush at the end instead of one per write -- every write still
+  reaches the drive immediately, only the FLUSH command is deferred, so
+  a read-back mid-batch still sees correct data. `write_range_impl()`
+  (`kernel/drivers/tfs.c`) wraps its whole per-call block-writing loop
+  in one such batch (`write_batch_begin()`/`write_batch_end()`), and
+  `persist_bitmap_bit()` now defers the bitmap sector write itself
+  during a batch too (not just its flush), coalescing what used to be
+  one redundant sector write per allocated block into one write per
+  distinct dirty sector (`g_bitmap_dirty[]`, flushed once at
+  `write_batch_end()`). Every begin() is matched by an end() on every
+  exit path, including the out-of-space/read/write-failure early
+  returns (`write_range_impl()` now tracks success via a local `ok`
+  flag through a single cleanup point instead of returning directly
+  mid-loop) -- an unmatched begin() would otherwise leave every future
+  write silently unflushed.
+  - Deliberately NOT applied to `persist_record()`'s journal-protected
+    metadata writes -- those need each write durable before the next is
+    issued for `replay_journal()`'s crash-recovery guarantee to hold;
+    batching the flush there could let the drive's real write order
+    diverge from what the journal protocol assumes. See the new
+    `docs/decisions.md` entry for the full reasoning on where this
+    line is drawn.
+  - Measured in the sandbox (real hardware should see more, since
+    flush latency -- not present at meaningful cost on this sandbox's
+    own fast backing storage -- is what actually dominates the
+    original slowness): `stress 100` 72s -> 53s (~26% faster);
+    `stress 300` (crosses into double-indirect block addressing, still
+    verified byte-for-byte correct) ~124s vs. the old rate's ~216s
+    extrapolation (~43% faster). Screenshot in `screenshots/2026-08-11/`.
+  - Coalescing contiguous block writes into fewer/larger ATA commands,
+    and journal-batched flush for metadata, are still open -- see
+    `docs/roadmap.md`'s follow-up item.
+
 ## Build 502 (fix, +1) -- CLAUDE.md/qmp_test.py: catch up on QMP keyboard gotchas, prep for a new chat
 
 Asked to start a fresh chat (this one had gotten long) and update

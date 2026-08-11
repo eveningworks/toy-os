@@ -122,6 +122,34 @@ struct prd {
 static int g_dma_available = 0;
 static uint16_t g_bm_io = 0;
 
+// Backs ata_flush_begin()/ata_flush_end() (ata.h) -- see that header's
+// doc comment for the full "why". A depth counter, not a boolean, so
+// nested begin/end pairs (a batched caller invoked from inside another
+// batch) don't flush early on the inner end(). maybe_flush() is what
+// dma_transfer()'s write path and pio_write_sectors() call where they
+// used to flush unconditionally; ata_flush_end() calls the same
+// helper once its own depth reaches 0, so there's exactly one place
+// that decides "should a flush happen right now."
+static int g_flush_defer_depth = 0;
+
+static void maybe_flush(void) {
+    if (g_flush_defer_depth != 0) return;
+    if (!g_present) return; // nothing to flush, and REG_COMMAND would be meaningless
+    if (wait_not_busy()) {
+        outb(REG_COMMAND, CMD_CACHE_FLUSH);
+        wait_not_busy();
+    }
+}
+
+void ata_flush_begin(void) {
+    g_flush_defer_depth++;
+}
+
+void ata_flush_end(void) {
+    if (g_flush_defer_depth > 0) g_flush_defer_depth--;
+    maybe_flush();
+}
+
 // One pmm_alloc_contiguous(2) call at init provides both of these --
 // this driver's (and this allocator's) first real caller, see build
 // 410. g_prd/g_prd_phys is the first frame (only 8 bytes of it used,
@@ -299,11 +327,10 @@ static int dma_transfer(uint32_t lba, int count, void *buf, int is_write) {
         uint8_t *dst = (uint8_t *)buf;
         for (uint32_t i = 0; i < bytes; i++) dst[i] = g_dma_buf[i];
     } else {
-        // Best-effort cache flush, same as the PIO write path below.
-        if (wait_not_busy()) {
-            outb(REG_COMMAND, CMD_CACHE_FLUSH);
-            wait_not_busy();
-        }
+        // Best-effort cache flush, same as the PIO write path below --
+        // suppressed while a caller has an ata_flush_begin()/end() batch
+        // open (ata.h), same as pio_write_sectors()'s equivalent call.
+        maybe_flush();
     }
     return 1;
 }
@@ -403,11 +430,9 @@ static int pio_write_sectors(uint32_t lba, int count, const void *buf) {
     // undo the write above (PIO WRITE SECTORS has already transferred
     // the data by this point) -- it just means we can't be as sure it
     // survives a real power loss, which for QEMU's emulated disk backed
-    // by a host file is already close to moot.
-    if (wait_not_busy()) {
-        outb(REG_COMMAND, CMD_CACHE_FLUSH);
-        wait_not_busy();
-    }
+    // by a host file is already close to moot. Suppressed while a
+    // caller has an ata_flush_begin()/end() batch open (ata.h).
+    maybe_flush();
 
     return 1;
 }
