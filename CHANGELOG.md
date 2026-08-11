@@ -1297,6 +1297,13 @@ forever.
   - Coalescing contiguous block writes into fewer/larger ATA commands,
     and journal-batched flush for metadata, are still open -- see
     `docs/roadmap.md`'s follow-up item.
+  - Confirmed on the real hardware that originally hit both the DMA
+    timeout failures and the slow throughput: `stress 100`/`200`/`300`/
+    `400` all PASSED with zero DMA retries needed, scaling linearly at
+    ~3.5MB/s (28s/55s/85s/115s) -- both this fix and the DMA-retry fix
+    above are doing their job together, not just in the sandbox. See
+    `docs/roadmap.md`'s multi-GB stress-test item for the updated
+    full-scale time estimate.
 
 ## Build 502 (fix, +1) -- CLAUDE.md/qmp_test.py: catch up on QMP keyboard gotchas, prep for a new chat
 
