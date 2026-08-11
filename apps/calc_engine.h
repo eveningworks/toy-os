@@ -61,6 +61,16 @@ struct calc_state {
 
 void calc_reset(struct calc_state *st);
 
+// Formats a scaled fixed-point value exactly the way a result shows up
+// in st->display (trims trailing fractional zeros, and the decimal
+// point itself if nothing's left after it) -- exposed so a caller
+// outside this file can render a scaled value (e.g. st->accumulator)
+// without duplicating this formatting. `out` needs CALC_DISPLAY_MAX
+// bytes, same as st->display. First real caller: calculator.c's
+// expression-so-far line, showing the accumulator while an operator is
+// pending.
+void calc_format_scaled(int64_t v, char *out);
+
 // Feeds one logical calculator key. `code` is one of:
 //   '0'-'9'   a digit
 //   '.'       decimal point

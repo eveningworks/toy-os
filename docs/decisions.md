@@ -682,3 +682,28 @@ a real (if minor) behavior change bundled into what should be a
 no-behavior-change refactor. Left for its own change if wanted; it's
 not blocked on anything (the "second real caller" bar is already met
 by `calculator.c`), see `docs/roadmap.md`.
+
+## Start menu click flash: a deferred close via pit_ticks(), not a blocking sleep
+
+A Start menu click used to run the row's action and close the menu in
+the same frame -- no visible confirmation the click landed, just an
+instant jump to whatever opened. Adding a brief "you clicked this" flash
+needed the menu to stay open and visibly highlighted for a short time
+*after* the action already ran, which a single-threaded `hlt`-loop WM
+(see `apps/wm/wm.c`'s top comment) can't do with an actual blocking
+sleep -- that would freeze mouse/keyboard handling for every window,
+not just the menu, for the duration.
+
+Solved the same way the existing once-a-second clock redraw already
+does (`wm_run()`'s `last_second`/`pit_ticks()` check): record a
+`pit_ticks()` deadline (`start_menu_flash_until`) instead of blocking,
+and check it every loop tick (`wm_update_start_menu_flash()`, called
+unconditionally from `wm_run()`'s loop). The row's action still runs
+immediately on click -- only the menu's `start_menu_open = 0` is
+deferred until the deadline passes. This is the first *deliberately
+timed* (not just event-triggered) UI state this codebase has beyond
+that clock tick; if a future feature wants something similar (a toast
+notification, a temporary status message), this is the pattern to
+reuse rather than reinventing a delay mechanism -- `pit_ticks()`
+deadline + a per-tick check, never a blocking sleep in the WM loop.
+See `CHANGELOG.md`'s `[Unreleased]` entry for the full mechanism.

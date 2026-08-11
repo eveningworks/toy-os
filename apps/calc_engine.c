@@ -34,7 +34,7 @@ static void append_uint(char *buf, int *pos, uint64_t v, int min_digits) {
 // Renders the entry currently being typed exactly as typed -- including
 // a trailing "." with no fraction digits yet, and any leading zeros in
 // the fraction the user explicitly typed. This is deliberately NOT the
-// same code path as render_scaled() below: an entry mid-typing ("3.")
+// same code path as calc_format_scaled() below: an entry mid-typing ("3.")
 // and a fixed-point value (3.0000, which would round-trip as "3") need
 // to look different on screen even though calc_entry_value() would
 // return the same thing for both once "3." has any digit after it.
@@ -54,8 +54,11 @@ static void render_entry(const struct calc_entry *e, char *out) {
 // Renders a scaled fixed-point value as a plain decimal string, trimming
 // trailing fractional zeros (and the decimal point itself if nothing's
 // left after it) -- this is what results look like, as opposed to
-// render_entry()'s "show exactly what was typed".
-static void render_scaled(int64_t v, char *out) {
+// render_entry()'s "show exactly what was typed". Not static: exposed
+// via calc_engine.h as calc_format_scaled() so callers outside this file
+// (calculator.c's expression-so-far line, showing st->accumulator) can
+// render a scaled value themselves without duplicating this formatting.
+void calc_format_scaled(int64_t v, char *out) {
     int pos = 0;
     if (v < 0) {
         out[pos++] = '-';
@@ -237,7 +240,7 @@ void calc_input(struct calc_state *st, char code) {
         }
         st->pending_op = code;
         st->fresh = 1;
-        render_scaled(st->accumulator, st->display);
+        calc_format_scaled(st->accumulator, st->display);
     } else if (code == '=') {
         if (!fold_pending(st)) {
             k_strcpy(st->display, "Error");
@@ -247,7 +250,7 @@ void calc_input(struct calc_state *st, char code) {
         }
         st->pending_op = 0;
         st->fresh = 1;
-        render_scaled(st->accumulator, st->display);
+        calc_format_scaled(st->accumulator, st->display);
     } else if (code == 'C') {
         calc_reset(st);
     } else if (code == 'E') {
@@ -274,7 +277,7 @@ void calc_input(struct calc_state *st, char code) {
             int64_t negated;
             if (__builtin_sub_overflow((int64_t)0, st->accumulator, &negated)) return;
             st->accumulator = negated;
-            render_scaled(st->accumulator, st->display);
+            calc_format_scaled(st->accumulator, st->display);
         } else {
             st->entry.negative = !st->entry.negative;
             render_entry(&st->entry, st->display);

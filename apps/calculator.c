@@ -77,6 +77,22 @@ static struct ui_button_group g_group;
 #define MARGIN 8
 #define DISPLAY_H (gfx_char_h() + 16)
 #define DISPLAY_GAP 8
+// A slim status line above the main display showing the expression so
+// far (e.g. "12 +") while an operator is pending -- see
+// calculator_draw()'s own comment on when it's shown/blank. Not its own
+// boxed field like the main display (see EXPR_GAP below), just plain
+// text on the panel background, so it reads as a lighter secondary line
+// rather than a second value. Adds a little to the window's default
+// height (see calculator_default_size()) -- a fixed, non-resizable
+// window, so this only ever affects the size a freshly-opened Calculator
+// starts at, never a live resize.
+#define EXPR_H (gfx_char_h() + 4)
+#define EXPR_GAP 2
+// Everything above the button grid -- the expression line plus the main
+// display, with their own internal gaps -- as one constant so
+// button_rect()/calculator_default_size() can't drift apart from where
+// calculator_draw() actually paints them.
+#define TOP_H (EXPR_H + EXPR_GAP + DISPLAY_H + DISPLAY_GAP)
 
 // Content-area size for the current font -- see gui_apps.h's
 // default_size. Mirrors button_rect()'s layout exactly (same macros),
@@ -84,7 +100,7 @@ static struct ui_button_group g_group;
 // margin at small fonts and no clipping at large ones.
 void calculator_default_size(int *w, int *h) {
     *w = 2 * MARGIN + GRID_COLS * BTN_W + (GRID_COLS - 1) * BTN_GAP;
-    *h = MARGIN + DISPLAY_H + DISPLAY_GAP + GRID_ROWS * BTN_H + (GRID_ROWS - 1) * BTN_GAP + MARGIN;
+    *h = MARGIN + TOP_H + GRID_ROWS * BTN_H + (GRID_ROWS - 1) * BTN_GAP + MARGIN;
 }
 
 static void button_rect(int index, int *bx, int *by, int *bw, int *bh) {
@@ -93,7 +109,7 @@ static void button_rect(int index, int *bx, int *by, int *bw, int *bh) {
     *bw = BTN_W;
     *bh = BTN_H;
     *bx = MARGIN + col * (BTN_W + BTN_GAP);
-    *by = MARGIN + DISPLAY_H + DISPLAY_GAP + row * (BTN_H + BTN_GAP);
+    *by = MARGIN + TOP_H + row * (BTN_H + BTN_GAP);
 }
 
 // Refreshes every button's position from button_rect() -- geometry is
@@ -138,13 +154,40 @@ void calculator_draw(struct window *win) {
     uint32_t display_bg = THEME_WHITE;
     gfx_fill_rect(cx, cy, cw, ch, bg);
 
+    // Expression-so-far line: "<accumulator> <op>" (e.g. "12 +") while
+    // an operator is pending, so it's visible what's already been
+    // committed and what the next number typed will be combined with --
+    // the same information calc_state has always tracked (accumulator/
+    // pending_op), just not shown anywhere before this. Blank the rest
+    // of the time: nothing's pending right after calc_reset() or right
+    // after '=' (pending_op is cleared there too), and there's nothing
+    // useful to show mid-typing the very first operand either.
+    if (st->pending_op != 0) {
+        uint32_t expr_fg = gfx_rgb(90, 100, 115); // muted -- secondary to the main display
+        char num[CALC_DISPLAY_MAX];
+        calc_format_scaled(st->accumulator, num);
+        char expr[CALC_DISPLAY_MAX + 2]; // + ' ' + op + NUL
+        int pos = 0;
+        for (const char *p = num; *p; p++) expr[pos++] = *p;
+        expr[pos++] = ' ';
+        expr[pos++] = st->pending_op;
+        expr[pos] = '\0';
+
+        int expr_len = (int)k_strlen(expr);
+        int expr_w = expr_len * gfx_char_w();
+        int expr_x = cx + cw - MARGIN - 6 - expr_w;
+        if (expr_x < cx + MARGIN + 4) expr_x = cx + MARGIN + 4;
+        gfx_draw_string(expr_x, cy + MARGIN, expr, expr_fg, bg);
+    }
+
     // Display: right-aligned, like a real calculator.
-    gfx_fill_rect(cx + MARGIN, cy + MARGIN, cw - 2 * MARGIN, DISPLAY_H, display_bg);
+    int display_y = cy + MARGIN + EXPR_H + EXPR_GAP;
+    gfx_fill_rect(cx + MARGIN, display_y, cw - 2 * MARGIN, DISPLAY_H, display_bg);
     int text_len = (int)k_strlen(st->display);
     int text_w = text_len * gfx_char_w();
     int text_x = cx + cw - MARGIN - 6 - text_w;
     if (text_x < cx + MARGIN + 4) text_x = cx + MARGIN + 4; // don't overflow past the left edge
-    int text_y = cy + MARGIN + (DISPLAY_H - gfx_char_h()) / 2;
+    int text_y = display_y + (DISPLAY_H - gfx_char_h()) / 2;
     gfx_draw_string(text_x, text_y, st->display, fg, display_bg);
 
     calculator_layout();

@@ -6,6 +6,13 @@
 #include "widgets.h"
 #include "kapi.h"
 
+// How long a clicked Start menu row keeps showing its flash before the
+// menu actually closes -- pit_ticks() increments 100/sec (see wm.c's
+// once-a-second redraw tick), so 10 ticks is ~100ms: long enough to
+// register as a deliberate flash, short enough not to feel like the
+// click is laggy.
+#define START_MENU_FLASH_TICKS 10
+
 int wm_find_resize_zone(int mx, int my, int *out_right, int *out_bottom) {
     for (int i = window_count - 1; i >= 0; i--) {
         struct window *w = &windows[i];
@@ -41,8 +48,19 @@ void wm_handle_left_click(int mx, int my) {
             } else if (idx >= gui_app_registry_count && idx < total_items) {
                 wm_system_actions[idx - gui_app_registry_count].on_select();
             }
+            // The row's action already ran above (same as before) --
+            // only closing the menu is deferred, so the click gets a
+            // brief visible flash instead of vanishing in the same
+            // frame it landed. wm_update_start_menu_flash() (wm.c's
+            // loop) closes the menu once the deadline passes.
+            start_menu_flash_index = idx;
+            start_menu_flash_until = pit_ticks() + START_MENU_FLASH_TICKS;
+        } else {
+            // Clicked elsewhere while the menu was open (the desktop, a
+            // window) -- no row was selected, so there's nothing to
+            // flash; close immediately, same as before.
+            start_menu_open = 0;
         }
-        start_menu_open = 0;
         redraw_pending = 1;
         return;
     }
@@ -170,6 +188,15 @@ void wm_handle_left_click(int mx, int my) {
         return;
     }
     // clicked empty desktop -- nothing to do
+}
+
+void wm_update_start_menu_flash(void) {
+    if (start_menu_flash_index < 0) return;
+    if (pit_ticks() >= start_menu_flash_until) {
+        start_menu_flash_index = -1;
+        start_menu_open = 0;
+        redraw_pending = 1;
+    }
 }
 
 void wm_update_drag_resize(int mx, int my, uint8_t buttons) {

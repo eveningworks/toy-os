@@ -412,10 +412,23 @@ static void draw_taskbar(void) {
 // App items (gui_app_registry) first, then wm_system_actions ("Exit to
 // shell") below them -- same item_h, same click math (see
 // wm_handle_left_click()'s matching geometry in wm_input.c, which must
-// agree with this exactly). The only visual difference is a 1px divider
-// rule drawn at the boundary between the two groups; it doesn't consume
-// a row of its own.
-static void draw_start_menu(void) {
+// agree with this exactly). The only structural visual difference is a
+// 1px divider rule drawn at the boundary between the two groups; it
+// doesn't consume a row of its own.
+//
+// Two distinct row highlights, drawn as a filled background band behind
+// the label (see wm.c's start_menu_flash_index comment for the full
+// click-flash story):
+//   - hover: whichever row (mx, my) is currently over, recomputed fresh
+//     every call -- not persisted anywhere, purely a function of the
+//     current mouse position (wm.c's main loop forces a full redraw on
+//     every mouse move while the menu's open specifically so this stays
+//     live, see its own comment).
+//   - flash: the row that was just clicked, shown in a distinct color
+//     for a few ticks before the menu closes (start_menu_flash_index).
+//     Takes priority over hover -- once a row's been clicked, the flash
+//     is what's showing regardless of where the mouse drifts to next.
+static void draw_start_menu(int mx, int my) {
     int item_h = gfx_char_h() + 6;
     int menu_w = start_menu_w();
     int menu_x = 4;
@@ -424,19 +437,49 @@ static void draw_start_menu(void) {
     int menu_y = (screen_h - taskbar_h) - menu_h;
 
     uint32_t bg = THEME_PANEL_BG, border = THEME_BORDER, fg = THEME_TEXT;
+    uint32_t hover_bg = gfx_rgb(90, 110, 150);
+    uint32_t flash_bg = gfx_rgb(230, 190, 90); // distinct warm color so a click visibly differs from plain hover
+    uint32_t hot_fg = THEME_WHITE;
     gfx_fill_rect(menu_x, menu_y, menu_w, menu_h, bg);
-    gfx_draw_rect(menu_x, menu_y, menu_w, menu_h, border);
+
+    int hot = -1;
+    if (start_menu_flash_index >= 0) {
+        hot = start_menu_flash_index;
+    } else if (widget_hit(menu_x, menu_y, menu_w, menu_h, mx, my)) {
+        hot = (my - menu_y) / item_h;
+    }
+
     for (int i = 0; i < gui_app_registry_count; i++) {
-        gfx_draw_string(menu_x + 8, menu_y + i * item_h + 3, gui_app_registry[i].name, fg, bg);
+        int y = menu_y + i * item_h;
+        if (i == hot) {
+            uint32_t row_bg = (i == start_menu_flash_index) ? flash_bg : hover_bg;
+            gfx_fill_rect(menu_x, y, menu_w, item_h, row_bg);
+            gfx_draw_string(menu_x + 8, y + 3, gui_app_registry[i].name, hot_fg, row_bg);
+        } else {
+            gfx_draw_string(menu_x + 8, y + 3, gui_app_registry[i].name, fg, bg);
+        }
     }
     if (wm_system_action_count > 0) {
         int divider_y = menu_y + gui_app_registry_count * item_h;
         gfx_fill_rect(menu_x, divider_y, menu_w, 1, border);
         for (int i = 0; i < wm_system_action_count; i++) {
-            int y = menu_y + (gui_app_registry_count + i) * item_h;
-            gfx_draw_string(menu_x + 8, y + 3, wm_system_actions[i].label, fg, bg);
+            int idx = gui_app_registry_count + i;
+            int y = menu_y + idx * item_h;
+            if (idx == hot) {
+                uint32_t row_bg = (idx == start_menu_flash_index) ? flash_bg : hover_bg;
+                gfx_fill_rect(menu_x, y, menu_w, item_h, row_bg);
+                gfx_draw_string(menu_x + 8, y + 3, wm_system_actions[i].label, hot_fg, row_bg);
+            } else {
+                gfx_draw_string(menu_x + 8, y + 3, wm_system_actions[i].label, fg, bg);
+            }
         }
     }
+    // Border last, after every row fill -- a hover/flash band spans the
+    // full menu_w, the same columns the border's left/right edges sit
+    // on, so drawing the border first would get overpainted wherever a
+    // highlighted row touches it (same lesson as this session's Notepad
+    // field border fix, see docs/decisions.md).
+    gfx_draw_rect(menu_x, menu_y, menu_w, menu_h, border);
 }
 
 void wm_render_frame(int mx, int my) {
@@ -450,7 +493,7 @@ void wm_render_frame(int mx, int my) {
     }
 
     draw_taskbar();
-    if (start_menu_open) draw_start_menu();
+    if (start_menu_open) draw_start_menu(mx, my);
 
     draw_cursor_at(mx, my); // also (re)establishes cursor_under for wm_render_cursor_move()
 

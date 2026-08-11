@@ -59,6 +59,36 @@ forever.
   border stays intact and visible above/below the text at every size.
 
 ### Added
+- Start menu (`apps/wm/wm_render.c`/`wm_input.c`/`wm.c`) gains real
+  graphical feedback: hovering a row highlights it (recomputed fresh
+  from the mouse position every frame -- `wm.c`'s main loop now forces
+  a full redraw on mouse movement while the menu's open specifically
+  so this stays live, not just on the next unrelated repaint), and
+  clicking a row shows a distinct warm-colored flash for ~100ms
+  (`START_MENU_FLASH_TICKS`, `wm_input.c`) before the menu actually
+  closes -- previously a click ran the row's action and closed the
+  menu in the very same frame, with no visible confirmation the click
+  landed. The row's action still runs immediately on click, same as
+  before; only closing the menu is deferred. New `start_menu_flash_index`/
+  `start_menu_flash_until` state (`wm.c`) and `wm_update_start_menu_flash()`
+  (`wm_input.c`, called every tick from `wm_run()`'s loop) drive the
+  deferred close. Verified via QMP: hover tracks the mouse live across
+  rows, a click shows the gold flash on the clicked row, and the menu
+  closes cleanly afterward.
+- Calculator (`apps/calculator.c`) gains a small expression-so-far
+  line above the main display, e.g. "12 +" while an operator is
+  pending -- built entirely from state `calc_engine.h`'s
+  `struct calc_state` already tracked (`accumulator`/`pending_op`),
+  just not shown anywhere before this. Blank when nothing's pending
+  (right after `calc_reset()` or right after '='). Needed one small
+  `calc_engine.h`/`.c` addition: `render_scaled()` (internal formatting
+  helper) is now the public `calc_format_scaled()`, so `calculator.c`
+  can format the accumulator itself instead of duplicating that logic.
+  Calculator's default window height grew slightly to fit the new line
+  (`EXPR_H`/`TOP_H`, `calculator.c`) -- it's a fixed, non-resizable
+  window, so this only affects the size a freshly-opened Calculator
+  starts at. Verified via QMP: "2 +" appears after `2` then `+`, and
+  clears correctly once `=` computes the result.
 - New `struct ui_button`/`ui_button_group` (`apps/ui_button.c`/`.h`,
   `apps/ui_button_group.c`/`.h`) -- a self-contained button *object*
   that owns its own geometry, label, colors, and `pressed` state,

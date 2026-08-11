@@ -34,6 +34,18 @@ int taskbar_h;
 
 int start_menu_open = 0;
 
+// A click on a Start menu row used to close the menu in the same frame
+// it ran the row's action -- no visible confirmation the click actually
+// landed. start_menu_flash_index (-1 when idle) is which row is showing
+// a brief "you clicked this" flash before the menu actually closes;
+// start_menu_flash_until is the pit_ticks() deadline for that (see
+// wm_input.c's START_MENU_FLASH_TICKS and wm_update_start_menu_flash(),
+// called every wm_run() tick below). The row's action still runs
+// immediately on click, same as before -- only closing the menu is
+// deferred.
+int start_menu_flash_index = -1;
+uint64_t start_menu_flash_until = 0;
+
 // System actions shown at the bottom of the Start menu, below the app
 // list -- these don't open a window like a real gui_app_registry entry
 // does, they trigger a WM-level action directly (see wm_run()'s
@@ -156,6 +168,7 @@ void wm_run(void) {
 
     window_count = 0;
     start_menu_open = 0;
+    start_menu_flash_index = -1;
     dragging = -1;
     resizing = -1;
     content_dragging = -1;
@@ -186,6 +199,22 @@ void wm_run(void) {
             gfx_set_double_buffered(0); // console draws straight to screen
             return;
         }
+
+        // Mouse movement alone normally takes wm_render_cursor_move()'s
+        // cheap path below (cursor sprite only, not a full scene
+        // repaint) -- fine everywhere except an open Start menu, whose
+        // hover highlight is derived fresh from (mx, my) every full
+        // repaint (see wm_render.c's draw_start_menu()). Force the full
+        // path while the menu's open so hovering a different row
+        // actually updates the highlight instead of only refreshing on
+        // the next unrelated redraw.
+        if (mouse_moved && start_menu_open) redraw_pending = 1;
+
+        // Closes the Start menu once a just-clicked row's brief flash
+        // (see start_menu_flash_index's own comment above) has shown
+        // long enough -- independent of clicks/movement, so it still
+        // fires even if the mouse hasn't moved since the click.
+        wm_update_start_menu_flash();
 
         wm_update_drag_resize(mx, my, buttons);
 

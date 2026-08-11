@@ -51,6 +51,15 @@ extern int taskbar_h;
 
 extern int start_menu_open;
 
+// Which Start menu row (if any) is showing its post-click flash, or -1
+// -- see wm.c's own comment on start_menu_flash_index for the full
+// story. Read by wm_render.c's draw_start_menu() (takes visual priority
+// over hover), set by wm_input.c's wm_handle_left_click() on a row hit,
+// cleared by wm_update_start_menu_flash() (below) once it's shown long
+// enough.
+extern int start_menu_flash_index;
+extern uint64_t start_menu_flash_until; // pit_ticks() deadline
+
 // Start menu items below the app list -- see wm.c's top comment on
 // wm_system_actions for why these are separate from gui_app_registry.
 struct start_action { const char *label; void (*on_select)(void); };
@@ -125,6 +134,10 @@ int wm_find_resize_zone(int mx, int my, int *out_right, int *out_bottom);
 // wm_input.c's entry points, called from wm.c's wm_run() loop.
 void wm_handle_left_click(int mx, int my);
 void wm_update_drag_resize(int mx, int my, uint8_t buttons);
+// Closes the Start menu once start_menu_flash_index's deadline passes --
+// a no-op the rest of the time (start_menu_flash_index == -1). See
+// wm.c's comment on start_menu_flash_index.
+void wm_update_start_menu_flash(void);
 
 // wm_render.c's entry points, called from wm.c's wm_run() loop: a full
 // scene repaint, and a cheap cursor-only-moved repaint (see
