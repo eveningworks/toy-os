@@ -27,10 +27,11 @@ For everything else:
   renders through whichever backend is active
 - Serial (COM1) debug logging (`-serial stdio` in QEMU); IDT + remapped
   8259 PIC + exception handler (prints and halts instead of triple-faulting)
-- PS/2 keyboard (US QWERTY + Nordic `keyboard <us|se>`, shift + arrows,
-  command history) and mouse (IRQ12), sharing the 8042 controller
-  through one dispatcher (`i8042.c`) so the two IRQs don't steal each
-  other's bytes
+- PS/2 keyboard (US QWERTY + Nordic `keyboard <us|se>`, shift + AltGr
+  (e.g. `@ # $ { } [ ] \ |` on `se`) + arrows, command history that
+  persists across reboot via `/etc/history`) and mouse (IRQ12), sharing
+  the 8042 controller through one dispatcher (`i8042.c`) so the two
+  IRQs don't steal each other's bytes
 - PIT timer (100 Hz) and CMOS RTC (`time`, the GUI clock)
 - A persistent, disk-backed filesystem ("TFS2" -- `kernel/drivers/tfs.c`,
   behind a small VFS dispatch layer so a second backend could be added
@@ -46,9 +47,11 @@ For everything else:
   reusable right-click context menu wired into the desktop, window
   chrome, taskbar, and Start menu) with five apps -- Notepad, About,
   Calculator, Terminal (runs the real shell inside a window), and Task
-  Manager (lists windows, shows memory usage). See `apps/README.md` for
-  how to add more, and the app registry (`apps/apps.c`) that makes that
-  a one-line addition.
+  Manager (lists windows, shows memory usage). The Start menu's "Exit
+  to shell" asks for confirmation first (`apps/wm/confirm_dialog.c`, a
+  reusable screen-absolute Yes/No modal, same pattern as the context
+  menu). See `apps/README.md` for how to add more apps, and the app
+  registry (`apps/apps.c`) that makes that a one-line addition.
 - A kernel heap allocator (`kmalloc`/`kzalloc`/`kfree`) and a small JSON
   library (`kernel/core/json.c`, parse/serialize/read-file/write-file --
   coexists with the flat `etc_config.h` name=value format, see
@@ -71,7 +74,8 @@ For everything else:
 
 `help` (categorized; `help tests` for the developer/diagnostic ones
 below), `clear`, `time`, `uptime`, `echo <text>`, `about`, `meminfo`,
-`dmesg`, `color <name>`, `reboot`, `ls [-al] [dir]` (colored by
+`df` (disk space: total/used/free, KB-scale), `dmesg`, `color <name>`,
+`reboot`, `ls [-al] [dir]` (colored by
 default, `-l` shows type/size/mtime, `-a` accepted as a no-op -- a
 real disk-hosted `/bin/ls` binary, not a shell built-in, see
 `docs/decisions.md`), `cat <f>`, `touch <f>`,
@@ -79,12 +83,18 @@ real disk-hosted `/bin/ls` binary, not a shell built-in, see
 `edit <f>`/`nano <f>` (full-screen nano/pico-style editor -- arrows/
 Home/End/Delete to navigate and edit, F2 to save, F3 to exit; works
 from both the physical shell and the GUI Terminal, see `apps/editor.c`),
-`gui`, `apps`, `run <app>`, `history`,
-`fontsize <8|10|12|14|16|18|20|24>`, `keyboard <us|se>`, and the developer/diagnostic set
-(`help tests`): `ring3test`, `schedtest`, plus a dozen real disk-hosted
-test binaries under `/bin` run via `run <name>` (e.g. `run write_test`,
-`run crash_test`) -- see `ls /bin` for the full list and
-`docs/decisions.md` for why these moved off dedicated shell commands.
+`gui`, `apps`, `run <app>`, `history` (persists across reboot via
+`/etc/history`),
+`fontsize <8|10|12|14|16|18|20|24>`, `keyboard <us|se>` (base + Shift +
+AltGr), and the developer/diagnostic set
+(`help tests`): `ring3test`, `schedtest`, `stress <mb>` (real
+non-sparse write/read/verify pass over `<mb>` megabytes, exercising
+direct/single/double/triple-indirect blocks with genuine data -- see
+`docs/roadmap.md` for the still-open full-8GB-scale run), plus a dozen
+real disk-hosted test binaries under `/bin` run via `run <name>` (e.g.
+`run write_test`, `run crash_test`) -- see `ls /bin` for the full list
+and `docs/decisions.md` for why these moved off dedicated shell
+commands.
 
 ## Building on CachyOS
 
