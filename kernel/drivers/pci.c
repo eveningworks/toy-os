@@ -2,6 +2,7 @@
 // legacy CONFIG_ADDRESS/CONFIG_DATA port I/O) and why it was chosen.
 #include "pci.h"
 #include "io.h"
+#include "klog.h"
 
 #define PCI_CONFIG_ADDRESS 0xCF8
 #define PCI_CONFIG_DATA    0xCFC
@@ -55,6 +56,22 @@ static void config_write16(uint8_t bus, uint8_t device, uint8_t function, uint8_
     outl(PCI_CONFIG_DATA, updated);
 }
 
+// Fixed-width hex, no "0x" prefix, no leading-zero trim -- so
+// vendor:device/bus:device.function columns line up the same way
+// `lspci`'s own print_hex_digits() (apps/shell_sys.c) formats them.
+// klog_write_hex() (klog.h) trims leading zeros instead, which is
+// right for a one-off value but wrong for a fixed-width field, so this
+// stays a small local helper rather than reusing that one.
+static void klog_hex_digits(uint32_t v, int digits) {
+    char buf[9]; // enough for the widest caller here (4 digits) + '\0'
+    for (int i = 0; i < digits; i++) {
+        uint8_t nibble = (v >> ((digits - 1 - i) * 4)) & 0xF;
+        buf[i] = nibble < 10 ? (char)('0' + nibble) : (char)('a' + nibble - 10);
+    }
+    buf[digits] = '\0';
+    klog_write(buf);
+}
+
 void pci_init(void) {
     g_count = 0;
 
@@ -81,9 +98,27 @@ void pci_init(void) {
                 for (int i = 0; i < 6; i++) {
                     d->bar[i] = config_read32((uint8_t)bus, (uint8_t)device, (uint8_t)function, (uint8_t)(0x10 + i * 4));
                 }
+
+                klog_write("pci: ");
+                klog_hex_digits(d->bus, 2);
+                klog_write(":");
+                klog_hex_digits(d->device, 2);
+                klog_write(".");
+                klog_hex_digits(d->function, 1);
+                klog_write("  ");
+                klog_hex_digits(d->vendor_id, 4);
+                klog_write(":");
+                klog_hex_digits(d->device_id, 4);
+                klog_write("  ");
+                klog_write(pci_class_name(d->class_code, d->subclass));
+                klog_write("\n");
             }
         }
     }
+
+    klog_write("pci: ");
+    klog_write_dec((uint32_t)g_count);
+    klog_write(" device(s) found\n");
 }
 
 int pci_device_count(void) {

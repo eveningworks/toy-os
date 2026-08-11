@@ -10,6 +10,7 @@
 #include "io.h"
 #include "gfx.h"
 #include "timer.h"
+#include "klog.h"
 #include <stddef.h>
 
 #define VGA_WIDTH 80
@@ -228,9 +229,19 @@ void vga_init(void) {
         console_cols = (size_t)gfx_width() / CELL_W;
         console_rows = (size_t)gfx_height() / CELL_H;
         fb_clear();
+        // klog_write(), not vga_write() -- serial_init() has already run
+        // by the time kernel.c calls vga_init() (see kernel.c's ordering),
+        // so this reaches dmesg fine even though the physical console
+        // isn't ready to receive its own "toy-os booting..." line yet.
+        klog_write("vga: linear framebuffer console active (");
+        klog_write_dec((uint32_t)gfx_width());
+        klog_write("x");
+        klog_write_dec((uint32_t)gfx_height());
+        klog_write(")\n");
     } else {
         fb_mode = 0;
         legacy_clear();
+        klog_write("vga: no linear framebuffer from GRUB -- legacy text-mode console\n");
     }
 }
 

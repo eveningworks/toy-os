@@ -59,6 +59,66 @@ forever.
   border stays intact and visible above/below the text at every size.
 
 ### Added
+- dmesg (`klog_write()`) coverage extended to six areas that had zero
+  boot/probe-time logging before this: PCI enumeration
+  (`kernel/drivers/pci.c`), the keyboard driver
+  (`kernel/drivers/keyboard.c`), the mouse driver
+  (`kernel/drivers/mouse.c`), the VGA/framebuffer console driver
+  (`kernel/drivers/vga.c`), the CMOS/RTC hardware clock
+  (`kernel/core/kernel.c`), and the window manager
+  (`apps/wm/wm.c`) -- found via a line-count/coverage audit that also
+  flagged PCI's own `lspci` shell command as an existing precedent for
+  the log line format below. Also added `klog_write_dec()`/
+  `klog_write_hex()` (`kernel/include/klog.h`/`kernel/core/klog.c`),
+  small klog-routed mirrors of `vga_write_dec()`/`vga_write_hex()`
+  (`vga.h`) -- klog messages needing a numeric value had no formatting
+  helper of their own before this, since every existing `klog_write()`
+  call site only ever needed a plain string.
+  - `pci_init()` now logs one line per discovered device (bus:device.
+    function, vendor:device, class name -- the exact
+    `bus:device.function vendor:device class` shape `cmd_lspci()`
+    already prints to the console, reusing its own local
+    fixed-width-hex helper rather than `klog_write_hex()`'s
+    leading-zero-trimmed format, which wouldn't keep columns aligned)
+    plus a final device-count summary.
+  - `mouse_init()` logs whether the connected PS/2 mouse answered the
+    IntelliMouse "magic knock" (wheel support, 4-byte packets) or not
+    (plain 3-byte packets) -- the one thing that handshake actually
+    determines and previously went nowhere but a local variable.
+  - `vga_init()` logs which console backend it ended up on: linear
+    framebuffer (with the resolution) or the legacy text-mode fallback
+    -- runs early enough to log safely (`serial_init()` already ran in
+    `kernel_main()` by the time `vga_init()` is called).
+  - `keyboard_set_layout()` logs the layout it was just set to --
+    covers both call sites for free (boot-time `keyboard_config_init()`
+    applying a persisted layout, and the `keyboard <us|se>` shell
+    command switching it live) without needing a log line at each
+    caller.
+  - `kernel_main()` gains a one-shot CMOS/RTC boot-time readout, logged
+    once right after the persisted config (timezone/font/keyboard) is
+    loaded -- deliberately NOT logged from `rtc_read()` itself
+    (`kernel/core/timer.c`), which the taskbar clock/`tz.c` call
+    continuously on every redraw; logging there would flood the ring
+    buffer. Uses raw `rtc_read()`, not `tz.h`'s `rtc_read_local()` --
+    unadjusted UTC hardware time, matching what a real kernel's own RTC
+    probe logs before any timezone config is even in the picture.
+  - `apps/wm/wm.c` logs entering/exiting GUI mode (with resolution),
+    each app window opening/closing (by name), and the no-framebuffer
+    failure path -- notable window-manager lifecycle events that
+    previously left no trace in `dmesg` at all. Deliberately does NOT
+    log the single-instance re-focus path (clicking an already-open
+    app's Start-menu entry again) -- that happens on every such click,
+    not just once, and isn't a lifecycle event worth the ring-buffer
+    space.
+  Verified in QEMU via QMP: `dmesg` after a fresh boot shows all six
+  new boot-time lines in order (PCI device list + count, VGA mode,
+  RTC reading) with correct ring-buffer timestamps; entering GUI mode,
+  opening and closing a window, and exiting back to the shell each
+  produced the expected `wm:`/`mouse:` lines in real time; running
+  `keyboard se` from the shell produced the `keyboard:` line
+  immediately. Screenshots:
+  `screenshots/2026-08-11/dmesg_new_pci_vga_rtc_wm_mouse_lines.png`,
+  `screenshots/2026-08-11/dmesg_keyboard_layout_switch_line.png`.
 - Documentation audit: `README.md`, `apps/README.md`, and
   `docs/arch-portability.md` had all drifted out of date after the
   recent kernel-heap/JSON, `apps/ui/` widget migration, and desktop/

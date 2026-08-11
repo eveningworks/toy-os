@@ -93,6 +93,33 @@ void klog_write(const char *s) {
     while (*s) klog_putc(*s++);
 }
 
+void klog_write_dec(uint32_t n) {
+    char tmp[11];
+    int i = 0;
+    if (n == 0) {
+        klog_putc('0');
+        return;
+    }
+    while (n > 0) {
+        tmp[i++] = (char)('0' + (n % 10));
+        n /= 10;
+    }
+    while (i > 0) klog_putc(tmp[--i]);
+}
+
+void klog_write_hex(uint64_t n) {
+    klog_write("0x");
+    char buf[17];
+    for (int i = 15; i >= 0; i--) {
+        uint8_t nibble = (n >> (i * 4)) & 0xF;
+        buf[15 - i] = nibble < 10 ? (char)('0' + nibble) : (char)('a' + nibble - 10);
+    }
+    buf[16] = '\0';
+    int start = 0;
+    while (start < 15 && buf[start] == '0') start++;
+    klog_write(buf + start);
+}
+
 void klog_dump(void (*putc_cb)(char c)) {
     uint32_t start = (klog_count < KLOG_BUF_SIZE) ? 0 : klog_head;
     for (uint32_t i = 0; i < klog_count; i++) {

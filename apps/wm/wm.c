@@ -136,6 +136,10 @@ void open_app(const struct gui_app *app) {
     window_count++;
     if (app->on_open) app->on_open(win);
     redraw_pending = 1;
+
+    klog_write("wm: opened ");
+    klog_write(app->name);
+    klog_write("\n");
 }
 
 void close_window(int idx) {
@@ -148,6 +152,11 @@ void close_window(int idx) {
     if (windows[idx].app && windows[idx].app->on_close) {
         windows[idx].app->on_close(&windows[idx]);
     }
+
+    klog_write("wm: closed ");
+    klog_write(windows[idx].app ? windows[idx].app->name : windows[idx].title);
+    klog_write("\n");
+
     for (int i = idx; i < window_count - 1; i++) windows[i] = windows[i + 1];
     window_count--;
     redraw_pending = 1;
@@ -158,12 +167,19 @@ void close_window(int idx) {
 void wm_run(void) {
     if (!gfx_init()) {
         vga_write("gui: no linear RGB framebuffer available from GRUB\n");
+        klog_write("wm: cannot enter GUI mode -- no linear RGB framebuffer from GRUB\n");
         return;
     }
 
     screen_w = gfx_width();
     screen_h = gfx_height();
     taskbar_h = WM_TITLEBAR_H;
+
+    klog_write("wm: entering GUI mode (");
+    klog_write_dec((uint32_t)screen_w);
+    klog_write("x");
+    klog_write_dec((uint32_t)screen_h);
+    klog_write(")\n");
 
     // Draw off-screen and flip completed frames -- without this the
     // full-screen repaint below is visible as flicker while it happens.
@@ -215,6 +231,7 @@ void wm_run(void) {
         // touching drag/resize state for a click that was never about a
         // window in the first place.
         if (wm_exit_requested) {
+            klog_write("wm: exiting GUI mode, returning to shell\n");
             gfx_set_double_buffered(0); // console draws straight to screen
             return;
         }

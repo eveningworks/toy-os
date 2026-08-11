@@ -1,5 +1,6 @@
 #include "mouse.h"
 #include "io.h"
+#include "klog.h"
 
 #define CTRL_PORT 0x64
 #define DATA_PORT 0x60
@@ -99,6 +100,10 @@ void mouse_init(void) {
     mouse_read();       // ACK
     uint8_t device_id = mouse_read();
     packet_size = (device_id == 3) ? 4 : 3;
+
+    klog_write(packet_size == 4
+        ? "mouse: PS/2 wheel mouse detected (4-byte packets)\n"
+        : "mouse: PS/2 mouse detected (3-byte packets, no wheel)\n");
 
     mouse_write(0xF4); // enable data reporting
     mouse_read();       // ACK

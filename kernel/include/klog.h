@@ -1,6 +1,8 @@
 #ifndef KLOG_H
 #define KLOG_H
 
+#include <stdint.h>
+
 // The kernel's in-memory log -- see klog.c's top comment for the full
 // design (a ring buffer, timestamps added once per logical line, and
 // why this is a thin decorator around serial.c rather than a
@@ -13,6 +15,19 @@
 
 void klog_write(const char *s);
 void klog_putc(char c);
+
+// Decimal/hex number formatting for klog messages that need to include
+// a value (a device ID, a resolution, a count) -- mirrors
+// vga_write_dec()/vga_write_hex() (vga.h) exactly (same no-padding
+// decimal, same "0x" + leading-zeros-trimmed hex), just routed through
+// klog_putc() instead of vga_putc() so the digits land in the ring
+// buffer (and physical serial) rather than the screen. Kept here
+// rather than shared with vga.c's copy since vga.c is a driver klog.c
+// doesn't (and shouldn't) depend on, and the two implementations are
+// small enough that duplicating them is cheaper than introducing a
+// shared dependency for it.
+void klog_write_dec(uint32_t n);
+void klog_write_hex(uint64_t n);
 
 // Streams the ring buffer's current contents to putc_cb, one character
 // at a time, oldest first -- what `dmesg` is built on. Safe to call at

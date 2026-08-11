@@ -1,6 +1,7 @@
 #include "keyboard.h"
 #include "io.h"
 #include "vga.h"
+#include "klog.h"
 
 #define KBD_DATA_PORT 0x60
 
@@ -62,6 +63,14 @@ static const char scancode_ascii_shift_se[128] = {
 
 void keyboard_set_layout(enum keyboard_layout layout) {
     current_layout = layout;
+    // Called once at boot (keyboard_config_init(), applying whatever
+    // was persisted to /etc/toyos.conf) and again any time the `keyboard`
+    // shell command switches it live -- logging here covers both
+    // call sites for free instead of needing a separate log line at
+    // each caller.
+    klog_write("keyboard: layout set to ");
+    klog_write(keyboard_layout_name(layout));
+    klog_write("\n");
 }
 
 enum keyboard_layout keyboard_get_layout(void) {

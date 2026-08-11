@@ -922,3 +922,27 @@ to `start_menu.h` since nothing there needs it and the two aren't a
 shared abstraction to begin with (see `apps/wm/start_menu.h`'s own top
 comment on why it isn't a general "menu" type). See `CHANGELOG.md`'s
 `[Unreleased]` entry.
+
+## dmesg coverage: log from the one-shot call site, not the hot function itself
+
+When extending `klog_write()` coverage to the RTC (`kernel/core/
+timer.c`'s `rtc_read()`), the log line went into `kernel_main()`
+(`kernel/core/kernel.c`), which calls `rtc_read()` exactly once at
+boot for this purpose -- not into `rtc_read()` itself, even though
+that's the more obvious place a driver-level log usually lives (see
+every other dmesg addition in the same change: `pci_init()`,
+`mouse_init()`, `vga_init()`, `keyboard_set_layout()` all log from
+inside the driver function). `rtc_read()` is the exception because
+it's not an init function -- it's called continuously by the taskbar
+clock and `tz.c` every time either redraws, so a log line inside it
+would flood the 16KB ring buffer with a new timestamped line every
+second or so, pushing out everything else `dmesg` is actually useful
+for. The general rule this leaves for the next area added to dmesg
+coverage: log from whatever call site is genuinely one-shot (an
+`*_init()` function, a boot-sequence call in `kernel_main()`), not
+from a function just because it's the "natural" owner of the
+information, if that function is actually called on every frame/tick/
+redraw instead of once. See `CHANGELOG.md`'s `[Unreleased]` entry for
+the full list of areas covered and `klog_write_dec()`/
+`klog_write_hex()` (`kernel/include/klog.h`), added in the same change
+for klog messages that need to include a number.
