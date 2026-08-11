@@ -5,6 +5,7 @@
 #include "wm_internal.h"
 #include "start_menu.h"
 #include "context_menu.h"
+#include "confirm_dialog.h"
 #include "desktop.h"
 #include "ui/ui.h"
 #include "kapi.h"
@@ -56,6 +57,7 @@ int wm_find_resize_zone(int mx, int my, int *out_right, int *out_bottom) {
 }
 
 void wm_handle_left_click(int mx, int my) {
+    if (confirm_dialog_handle_click(mx, my)) return; // most modal -- checked first, see confirm_dialog.h
     if (context_menu_handle_click(mx, my)) return;
     if (start_menu_handle_click(mx, my)) return;
 

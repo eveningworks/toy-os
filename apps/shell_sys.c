@@ -106,6 +106,7 @@ static const char *const HELP_LINES[] = {
     "  timezone <c>  - set timezone directly, e.g. `timezone helsinki`\n",
     "  uptime        - show ticks since boot\n",
     "  meminfo       - show memory map + physical frame allocator stats\n",
+    "  df            - show filesystem disk space (total/used/free)\n",
     "  dmesg         - show the kernel log (boot messages, driver/\n",
     "                  syscall diagnostics, timestamped)\n",
     "  lspci         - list PCI devices found at boot (bus:dev.func,\n",
@@ -132,6 +133,10 @@ static const char *const TEST_HELP_LINES[] = {
     "  schedtest     - preemptive round-robin scheduler demo: two\n",
     "                  ring-3 processes run concurrently, neither\n",
     "                  ever yielding (returns once both exit)\n",
+    "  stress <mb>   - real (non-sparse) write/read/verify pass over <mb>\n",
+    "                  megabytes -- exercises direct/single/double/triple-\n",
+    "                  indirect blocks with genuine data, not a sparse\n",
+    "                  probe. Takes real minutes for multi-GB sizes.\n",
     "\n",
     "Every other former *test command (elftest, syscalltest, writetest,\n",
     "ptrtest, guitest, echotest, wintest, filetest, newsyscalltest,\n",
@@ -273,6 +278,163 @@ void cmd_meminfo(void) {
     vga_write(" ("); vga_write_dec((uint32_t)(total * 4 / 1024)); vga_write(" MB)\n");
     vga_write("  used:  "); vga_write_dec((uint32_t)used);
     vga_write("  free:  "); vga_write_dec((uint32_t)free); vga_putc('\n');
+}
+
+// `df` -- disk usage, meminfo's sibling for fs.c's data blocks instead
+// of pmm.c's physical frames. Divides to KB (not MB) before narrowing
+// to uint32_t (vga_write_dec() takes one): a real byte count can exceed
+// 32 bits on a multi-gigabyte disk, but KB doesn't need to -- even
+// FS_DISK_TOTAL_BYTES's full 9GiB is a bit over 9.4 million KB, well
+// under uint32_t's ~4.29 billion ceiling. MB looked tempting (smaller
+// numbers) but rounds everything under 1MB down to a flat, useless "0"
+// -- today's whole seeded /bin + /etc content totals under 1MB, so an
+// MB-only df would always claim 0 used regardless of what's actually
+// on disk. Found live testing this command, not by review.
+void cmd_df(void) {
+    uint64_t used_bytes = 0, total_bytes = 0;
+    fs_disk_usage(&used_bytes, &total_bytes);
+    uint64_t free_bytes = total_bytes - used_bytes;
+
+    vga_write("Filesystem (");
+    vga_write(fs_is_persistent() ? "persistent, on disk" : "RAM-only -- won't survive reboot");
+    vga_write("):\n");
+    vga_write("  total: "); vga_write_dec((uint32_t)(total_bytes / 1024));
+    vga_write(" KB\n");
+    vga_write("  used:  "); vga_write_dec((uint32_t)(used_bytes / 1024));
+    vga_write(" KB\n");
+    vga_write("  free:  "); vga_write_dec((uint32_t)(free_bytes / 1024));
+    vga_write(" KB\n");
+}
+
+// Real (non-sparse) multi-GB write/read/verify stress test over
+// fs_write_range()/fs_read_range() -- built to answer docs/roadmap.md's
+// long-standing "full end-to-end multi-GB write/read pass hasn't been
+// run yet" item. tfs_selftest() (kernel/drivers/tfs.c, runs on every
+// disk-backed boot) already proves triple-indirect *addressing* --
+// that the pointer chain can be built and walked -- but it only writes
+// 64 bytes at a ~4.6GB offset, not real content filling that space.
+// This command actually writes `<mb>` megabytes of a verifiable,
+// per-chunk-varying pattern (so a corrupted or swapped chunk is
+// detectable, not just "did every byte come back nonzero"), reads it
+// all back, and confirms it matches -- exercising direct, single-,
+// double-, AND triple-indirect blocks with genuine data, not a sparse
+// probe. Deliberately a manual/on-demand command, not part of the boot
+// self-test: a real multi-GB pass over this kernel's PIO/DMA ATA path
+// takes real wall-clock time (minutes, not the sub-second boot self-
+// test), unsuitable for every boot.
+//
+// One static 1MB chunk buffer (not a stack array -- see kernel/core's
+// existing convention of static/heap buffers for anything this size,
+// e.g. dmesg's paging state above) reused for every chunk, both
+// directions, keeping this O(1) in RAM regardless of `<mb>`.
+#define STRESS_CHUNK_BYTES (1024u * 1024u)
+static uint8_t g_stress_chunk[STRESS_CHUNK_BYTES];
+#define STRESS_TEST_PATH "/.stress_test_tmp"
+
+// Fills g_stress_chunk with a pattern that varies both by chunk index
+// and byte offset, so two different chunks (or a chunk read back from
+// the wrong offset) don't accidentally look identical.
+static void stress_fill_pattern(uint32_t chunk_index) {
+    for (uint32_t i = 0; i < STRESS_CHUNK_BYTES; i++) {
+        g_stress_chunk[i] = (uint8_t)((chunk_index * 31 + i) ^ 0xA5);
+    }
+}
+
+// Parses a plain decimal string (no sign, no whitespace) into *out.
+// Returns 1 on success, 0 if `s` is empty or has a non-digit -- same
+// "reject rather than guess" spirit as keyboard_layout.c's parse_hex2().
+static int parse_decimal(const char *s, uint32_t *out) {
+    if (!s || !*s) return 0;
+    uint32_t v = 0;
+    for (const char *p = s; *p; p++) {
+        if (*p < '0' || *p > '9') return 0;
+        v = v * 10 + (uint32_t)(*p - '0');
+    }
+    *out = v;
+    return 1;
+}
+
+void cmd_stress(const char *args) {
+    uint32_t mb;
+    if (!parse_decimal(args, &mb) || mb == 0) {
+        vga_write("usage: stress <mb>  -- real write/read/verify pass over\n");
+        vga_write("  <mb> megabytes (e.g. `stress 4200` to cross the ~4004MB\n");
+        vga_write("  triple-indirect boundary, `stress 8192` for the full 8GB\n");
+        vga_write("  target). Takes real minutes for large sizes -- see `help tests`.\n");
+        return;
+    }
+    if (!fs_is_persistent()) {
+        vga_write("stress: filesystem is RAM-only -- this test needs a real disk\n");
+        vga_write("  backend (RAM_ONLY_MAX_BLOCKS is far smaller than any useful\n");
+        vga_write("  stress size). See `df`.\n");
+        return;
+    }
+
+    fs_delete(STRESS_TEST_PATH); // clean slate if a previous run left it behind
+    if (!fs_touch(STRESS_TEST_PATH)) {
+        vga_write("stress: FAILED (couldn't create test file)\n");
+        return;
+    }
+
+    uint32_t chunks = mb; // 1 chunk == 1MB by construction
+    uint32_t start_ticks = pit_ticks();
+
+    vga_write("stress: writing "); vga_write_dec(mb); vga_write(" MB to ");
+    vga_write(STRESS_TEST_PATH); vga_write(" ...\n");
+    for (uint32_t c = 0; c < chunks; c++) {
+        stress_fill_pattern(c);
+        uint64_t offset = (uint64_t)c * STRESS_CHUNK_BYTES;
+        if (!fs_write_range(STRESS_TEST_PATH, offset, g_stress_chunk, STRESS_CHUNK_BYTES)) {
+            vga_write("stress: FAILED (write failed at chunk ");
+            vga_write_dec(c); vga_write(" / offset ");
+            vga_write_dec((uint32_t)(offset / (1024 * 1024))); vga_write(" MB)\n");
+            fs_delete(STRESS_TEST_PATH);
+            return;
+        }
+        if ((c % 256) == 0 && c != 0) { // progress every 256MB -- long-running, not silent
+            vga_write("  ...wrote "); vga_write_dec(c); vga_write(" / ");
+            vga_write_dec(mb); vga_write(" MB\n");
+        }
+    }
+
+    vga_write("stress: reading back and verifying ...\n");
+    static uint8_t readback[STRESS_CHUNK_BYTES];
+    for (uint32_t c = 0; c < chunks; c++) {
+        uint64_t offset = (uint64_t)c * STRESS_CHUNK_BYTES;
+        uint32_t got = fs_read_range(STRESS_TEST_PATH, offset, readback, STRESS_CHUNK_BYTES);
+        if (got != STRESS_CHUNK_BYTES) {
+            vga_write("stress: FAILED (short read at chunk ");
+            vga_write_dec(c); vga_write(", got "); vga_write_dec(got); vga_write(" bytes)\n");
+            fs_delete(STRESS_TEST_PATH);
+            return;
+        }
+        stress_fill_pattern(c); // recompute expected into g_stress_chunk
+        int mismatch = 0;
+        for (uint32_t i = 0; i < STRESS_CHUNK_BYTES; i++) {
+            if (g_stress_chunk[i] != readback[i]) { mismatch = 1; break; }
+        }
+        if (mismatch) {
+            vga_write("stress: FAILED (data mismatch at chunk ");
+            vga_write_dec(c); vga_write(" / offset ");
+            vga_write_dec((uint32_t)(offset / (1024 * 1024))); vga_write(" MB)\n");
+            fs_delete(STRESS_TEST_PATH);
+            return;
+        }
+        if ((c % 256) == 0 && c != 0) {
+            vga_write("  ...verified "); vga_write_dec(c); vga_write(" / ");
+            vga_write_dec(mb); vga_write(" MB\n");
+        }
+    }
+
+    if (!fs_delete(STRESS_TEST_PATH)) {
+        vga_write("stress: WARNING -- test passed but couldn't delete ");
+        vga_write(STRESS_TEST_PATH); vga_write(" (clean up manually)\n");
+    }
+
+    uint32_t elapsed_ticks = pit_ticks() - start_ticks; // 100Hz PIT -- see timer.h
+    vga_write("stress: PASSED -- "); vga_write_dec(mb);
+    vga_write(" MB written, read back, and verified byte-for-byte in ");
+    vga_write_dec(elapsed_ticks / 100); vga_write(" s\n");
 }
 
 // dmesg scratch state -- klog_dump() (klog.h) takes a plain

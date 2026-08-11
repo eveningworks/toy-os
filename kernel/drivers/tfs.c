@@ -1082,6 +1082,34 @@ static void tfs_selftest(void) {
     klog_write("fs: selftest passed (triple-indirect addressing verified)\n");
 }
 
+// Backs fs_disk_usage() -- counts set bits in whichever bitmap is
+// active (disk-backed vs. RAM-only, same split alloc_block()/
+// free_block() already make) and scales to bytes. `total` deliberately
+// excludes FS_DATA_START_BLOCK's reserved metadata blocks (superblock/
+// journal/record-table/bitmap) in disk-backed mode -- those blocks are
+// pre-marked allocated in g_bitmap (see tfs_init()) and would otherwise
+// count as "used" data, which isn't what a `df`-style command means by
+// used/total. No such reservation exists in RAM-only mode (block 0 is
+// just the null sentinel, not reserved metadata), so that branch scans
+// the bitmap's full range starting at block 1.
+static int tfs_disk_usage(uint64_t *out_used_bytes, uint64_t *out_total_bytes) {
+    uint64_t used = 0, total;
+    if (g_disk_backed) {
+        total = FS_DISK_TOTAL_BLOCKS - FS_DATA_START_BLOCK;
+        for (uint32_t b = FS_DATA_START_BLOCK; b < FS_DISK_TOTAL_BLOCKS; b++) {
+            if (bit_test(g_bitmap, b)) used++;
+        }
+    } else {
+        total = RAM_ONLY_MAX_BLOCKS - 1; // block 0 is the null sentinel, not usable
+        for (uint32_t b = 1; b < RAM_ONLY_MAX_BLOCKS; b++) {
+            if (bit_test(g_ram_bitmap, b)) used++;
+        }
+    }
+    if (out_used_bytes) *out_used_bytes = used * FS_BLOCK_SIZE;
+    if (out_total_bytes) *out_total_bytes = total * FS_BLOCK_SIZE;
+    return 1;
+}
+
 const struct fs_ops tfs_ops = {
     .name = "tfs2",
     .init = tfs_init,
@@ -1097,4 +1125,5 @@ const struct fs_ops tfs_ops = {
     .exists = tfs_exists,
     .list = tfs_list,
     .stat = tfs_stat,
+    .disk_usage = tfs_disk_usage,
 };

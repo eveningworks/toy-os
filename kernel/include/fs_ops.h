@@ -57,6 +57,11 @@ struct fs_ops {
     int (*exists)(const char *path);
     void (*list)(const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir));
     int (*stat)(const char *path, struct fs_timestamps *out); // see fs.h's fs_stat()
+
+    // Backs fs_disk_usage() -- see fs.h's doc comment for the
+    // byte-scaled, metadata-excluded contract every backend must
+    // honor here.
+    int (*disk_usage)(uint64_t *out_used_bytes, uint64_t *out_total_bytes);
 };
 
 #endif

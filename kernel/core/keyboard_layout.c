@@ -35,6 +35,16 @@
 
 static char g_table[128];
 static char g_table_shift[128];
+// AltGr level (XKB "level 3") -- see keyboard_layout.h's
+// keyboard_layout_translate() doc comment for the level-4
+// (Shift+AltGr) scope limit. No FALLBACK_US_ALTGR exists: the
+// compiled-in last-resort table (apply_fallback_us() below) never had
+// AltGr characters to begin with (a US layout doesn't use AltGr for
+// anything this kernel's font can render), so there's nothing to add
+// there -- g_table_altgr just stays all-zero (no AltGr chars) when the
+// fallback is active, same "0 means nothing" convention every unmapped
+// slot already has.
+static char g_table_altgr[128];
 static char g_current_name[KB_LAYOUT_NAME_MAX] = "us";
 
 // Compiled-in last-resort US table -- applied only if /etc/kbs/us
@@ -60,6 +70,12 @@ static const char FALLBACK_US_SHIFT[128] = {
 static void apply_fallback_us(void) {
     k_memcpy(g_table, FALLBACK_US, sizeof(g_table));
     k_memcpy(g_table_shift, FALLBACK_US_SHIFT, sizeof(g_table_shift));
+    // No FALLBACK_US_ALTGR -- see g_table_altgr's own declaration
+    // comment. Still needs clearing here (not just at load_from_file()
+    // time) so falling back mid-session doesn't leave a previously
+    // loaded layout's AltGr entries active under what's now supposed
+    // to be the bare compiled-in US table.
+    k_memset(g_table_altgr, 0, sizeof(g_table_altgr));
 }
 
 static int is_hex_digit(char c) {
@@ -114,12 +130,17 @@ static void apply_line(const char *line, uint32_t len) {
     if (!parse_hex2(line + i + 3, &scancode)) return;
     i += 5;
 
-    int shift = 0;
+    enum { LEVEL_BASE, LEVEL_SHIFT, LEVEL_ALTGR } level = LEVEL_BASE;
     static const char SHIFT_SUFFIX[] = "_shift";
-    uint32_t suffix_len = (uint32_t)(sizeof(SHIFT_SUFFIX) - 1);
-    if (i + suffix_len <= len && k_strncmp(line + i, SHIFT_SUFFIX, suffix_len) == 0) {
-        shift = 1;
-        i += suffix_len;
+    static const char ALTGR_SUFFIX[] = "_altgr";
+    uint32_t shift_len = (uint32_t)(sizeof(SHIFT_SUFFIX) - 1);
+    uint32_t altgr_len = (uint32_t)(sizeof(ALTGR_SUFFIX) - 1);
+    if (i + shift_len <= len && k_strncmp(line + i, SHIFT_SUFFIX, shift_len) == 0) {
+        level = LEVEL_SHIFT;
+        i += shift_len;
+    } else if (i + altgr_len <= len && k_strncmp(line + i, ALTGR_SUFFIX, altgr_len) == 0) {
+        level = LEVEL_ALTGR;
+        i += altgr_len;
     }
 
     if (i >= len || line[i] != '=') return;
@@ -140,7 +161,8 @@ static void apply_line(const char *line, uint32_t len) {
     int v = parse_value(value, value_len);
     if (v < 0) return;
 
-    if (shift) g_table_shift[scancode] = (char)v;
+    if (level == LEVEL_SHIFT) g_table_shift[scancode] = (char)v;
+    else if (level == LEVEL_ALTGR) g_table_altgr[scancode] = (char)v;
     else g_table[scancode] = (char)v;
 }
 
@@ -165,6 +187,7 @@ static int load_from_file(const char *name) {
 
     k_memset(g_table, 0, sizeof(g_table));
     k_memset(g_table_shift, 0, sizeof(g_table_shift));
+    k_memset(g_table_altgr, 0, sizeof(g_table_altgr));
 
     uint32_t pos = 0;
     while (pos < size) {
@@ -204,7 +227,14 @@ const char *keyboard_layout_current(void) {
     return g_current_name;
 }
 
-char keyboard_layout_translate(uint8_t scancode, int shift) {
+char keyboard_layout_translate(uint8_t scancode, int shift, int altgr) {
     if (scancode >= 128) return 0;
+    // AltGr takes priority over shift (see this function's doc comment
+    // in keyboard_layout.h) -- but only if this scancode/layout
+    // actually has an AltGr entry; an unmapped AltGr slot (0) falls
+    // through to shift/base, not to producing nothing, so pressing
+    // AltGr over a key with no level-3 symbol still types the ordinary
+    // character instead of silently eating the keystroke.
+    if (altgr && g_table_altgr[scancode]) return g_table_altgr[scancode];
     return shift ? g_table_shift[scancode] : g_table[scancode];
 }

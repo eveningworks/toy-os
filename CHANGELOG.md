@@ -1060,6 +1060,85 @@ forever.
   opening the full diff. No other workflow change -- still a direct
   push to `main`, same as before.
 
+### Added
+- `df` shell command (`cmd_df()`, `apps/shell_sys.c`) -- shows
+  total/used/free space on the persistent filesystem, sourced from a
+  new `fs_disk_usage()` VFS call (`kernel/include/fs.h`/`fs_ops.h`,
+  dispatched through `vfs.c` to `tfs_disk_usage()` in
+  `kernel/drivers/tfs.c`, which walks `g_bitmap`/`g_ram_bitmap` to
+  count free blocks). Displays in KB, not bytes or MB -- MB was tried
+  first but rounds any real usage under 1MB down to a misleading flat
+  "0" (today's whole seeded `/bin` + `/etc` content is under 1MB);
+  bytes would overflow `vga_write_dec()`'s `uint32_t` parameter on a
+  multi-gigabyte disk. Found live-testing this command, not by review
+  -- see the function's own comment. Verified via QMP: shows
+  `total: 9436876 KB / used: 88 KB / free: 9436788 KB` against the
+  real seeded disk.
+- Command history now persists across reboot. `history_save()`/
+  `history_load()` (`apps/shell.c`) write/read a dedicated bare-line
+  `/etc/history` file (one entry per line, most-recent-last), loaded
+  once at the top of `shell_main()`. Deliberately its own file, not a
+  key in the shared `/etc/toyos.conf` -- history entries can
+  legitimately contain `=`, and `etc_config.c`'s parser strips a
+  trailing `#...` as a comment even mid-line, both of which would
+  corrupt real command text; modeled on `tz.c`'s own manual
+  line-splitting for the same reason. Verified via QMP: ran `meminfo`/
+  `ls`/`df`, restarted QEMU against the same `disk.img` (simulating a
+  reboot), confirmed the up arrow recalled `meminfo` from the previous
+  session.
+- Shutdown confirmation dialog -- clicking the Start menu's "Exit to
+  shell" now opens a Yes/No modal ("Exit to shell? Unsaved changes
+  will be lost.") instead of exiting immediately. New
+  `apps/wm/confirm_dialog.c`/`.h`, following `context_menu.c`/
+  `start_menu.c`'s existing screen-absolute WM-overlay pattern (not an
+  `apps/ui/` widget -- those are content-relative to a window's own
+  origin, which doesn't exist for a WM-level popup). Geometry computed
+  once at open time from the message/button label lengths;
+  `confirm_dialog_handle_click()` is checked first in
+  `wm_input.c`'s `wm_handle_left_click()` chain (most modal first) and
+  swallows clicks outside Yes/No without dismissing. Verified via QMP:
+  dialog opens centered with both buttons; clicking No dismisses and
+  stays in the GUI; clicking Yes actually exits to the physical shell
+  ("Back from GUI mode." on serial).
+- AltGr handling in the keyboard driver -- Finnish/Swedish `@ # $ { }
+  [ ] \ |` (XKB level 3) are now reachable, closing the backlog item.
+  `keyboard_layout_translate()` (`kernel/include/keyboard_layout.h`/
+  `kernel/core/keyboard_layout.c`) gained an `altgr` parameter and a
+  third per-layout table (`g_table_altgr[128]`, populated from new
+  `sc_XX_altgr=` lines), taking priority over shift when the pressed
+  scancode has an AltGr entry, falling through to shift/base otherwise
+  (an unmapped AltGr slot doesn't eat the keystroke).
+  `kernel/drivers/keyboard.c` tracks a new `altgr_pressed` flag off the
+  `0xE0`-prefixed Right Alt press/release scancodes (`0x38`/`0xB8`,
+  extended -- Left Alt is the same byte pair *without* the prefix and
+  stays unused). `tools/gen_kbs.py` now reads XKB level 3 (still not
+  level 4/Shift+AltGr -- see its own top comment on why that's a small,
+  known, acceptable gap) and regenerated `seed/sync/etc/kbs/{us,se}`.
+  Verified via QMP: switched to `se`, held AltGr (`alt_r` qcode) with
+  `2`/`4` via `QMPSession.combo()`, got `@`/`$` exactly as the
+  generated table specifies.
+- `stress <mb>` shell command (`apps/shell_sys.c`) -- a real,
+  non-sparse write/read/verify pass over `<mb>` megabytes through
+  `fs_write_range()`/`fs_read_range()`, built to eventually satisfy
+  the roadmap's "full end-to-end multi-GB write/read stress test"
+  item. Unlike the boot-time `tfs_selftest()` (which only proves
+  triple-indirect *addressing* -- 64 bytes written at a ~4.6GB offset),
+  this writes a genuine per-chunk-varying pattern across the whole
+  requested size in 1MB chunks (one static reused buffer, O(1) RAM
+  regardless of `<mb>`), reads it all back, and byte-for-byte verifies
+  every chunk, so a corrupted or misplaced chunk is actually
+  detectable. Deliberately on-demand, not part of the boot self-test --
+  a real multi-GB pass over this kernel's PIO/DMA ATA path takes real
+  wall-clock time. Verified via QMP at `stress 100`: 100MB written,
+  read back, and verified correct in 72s. That measured rate
+  extrapolates to roughly 50 minutes for a 4.2GB pass (just past the
+  ~4004MB triple-indirect boundary) and ~100 minutes for the full 8GB
+  target -- both well beyond what this session's interactive testing
+  loop could run to completion, so the literal multi-GB pass itself is
+  still not done; what shipped is the verified-correct tool to run it
+  in one command whenever that time is available (see
+  `docs/roadmap.md`).
+
 ## Build 502 (fix, +1) -- CLAUDE.md/qmp_test.py: catch up on QMP keyboard gotchas, prep for a new chat
 
 Asked to start a fresh chat (this one had gotten long) and update

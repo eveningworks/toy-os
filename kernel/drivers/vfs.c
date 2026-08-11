@@ -77,3 +77,7 @@ void fs_list(const char *dir_path, void (*cb)(const char *name, uint32_t size, i
 int fs_stat(const char *path, struct fs_timestamps *out) {
     return g_fs->stat(path, out);
 }
+
+int fs_disk_usage(uint64_t *out_used_bytes, uint64_t *out_total_bytes) {
+    return g_fs->disk_usage(out_used_bytes, out_total_bytes);
+}

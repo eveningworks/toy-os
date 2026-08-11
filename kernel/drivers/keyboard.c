@@ -11,12 +11,22 @@ static volatile uint16_t ring_buf[256];
 static volatile unsigned int ring_head = 0;
 static volatile unsigned int ring_tail = 0;
 static int shift_pressed = 0;
+static int altgr_pressed = 0;
 static int extended_prefix = 0;
 
 #define LEFT_SHIFT_PRESS   0x2A
 #define LEFT_SHIFT_RELEASE 0xAA
 #define RIGHT_SHIFT_PRESS  0x36
 #define RIGHT_SHIFT_RELEASE 0xB6
+
+// Right Alt = AltGr on a PS/2 keyboard, sent as an 0xE0-prefixed
+// (extended) scancode -- Left Alt is the same 0x38/0xB8 byte pair
+// WITHOUT the 0xE0 prefix, so it never reaches this pair and is simply
+// ignored (this driver has no other use for either Alt key today).
+// Handled inside the `extended_prefix` block below, same place the
+// arrow/Home/End/Delete extended codes already are.
+#define RIGHT_ALT_PRESS    0x38
+#define RIGHT_ALT_RELEASE  0xB8
 
 static void ring_push(uint16_t c) {
     unsigned int next = (ring_head + 1) % 256;
@@ -61,6 +71,8 @@ void keyboard_feed_byte(uint8_t sc) {
 
     if (extended_prefix) {
         extended_prefix = 0;
+        if (sc == RIGHT_ALT_PRESS) { altgr_pressed = 1; return; }
+        if (sc == RIGHT_ALT_RELEASE) { altgr_pressed = 0; return; }
         if (!(sc & 0x80)) { // key press, not release
             // Shift+arrow/Home/End get their own codes, decided right
             // here from the live `shift_pressed` state -- same timing
@@ -94,7 +106,7 @@ void keyboard_feed_byte(uint8_t sc) {
     if (sc == SC_F3) { ring_push(KEY_F3); return; }
 
     if (sc >= 128) return;
-    char c = keyboard_layout_translate(sc, shift_pressed);
+    char c = keyboard_layout_translate(sc, shift_pressed, altgr_pressed);
     if (c) ring_push((uint8_t)c);
 }
 

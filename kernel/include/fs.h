@@ -166,4 +166,17 @@ int fs_stat(const char *path, struct fs_timestamps *out);
 // fs_* call above works the same either way.
 int fs_is_persistent(void);
 
+// Fills *out_used_bytes/*out_total_bytes with the active backend's data
+// block usage, both already scaled to bytes (not block counts) so
+// callers never need to know the backend's own block size. `total`
+// is usable data space only -- reserved metadata blocks (superblock,
+// journal, record table, bitmap itself) are excluded, same "how much
+// can I actually store" framing `df` gives on a real system, not the
+// raw disk size. In RAM-only mode (see fs_is_persistent()) this
+// reports the much smaller in-memory cap instead of the real disk
+// size, since that's the actual ceiling files are hitting. Returns 1
+// always -- there's no failure mode, this just reads bitmap state
+// that's already resident.
+int fs_disk_usage(uint64_t *out_used_bytes, uint64_t *out_total_bytes);
+
 #endif

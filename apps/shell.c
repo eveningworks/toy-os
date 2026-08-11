@@ -143,6 +143,10 @@ static void dispatch(char *line) {
         cmd_echo(args ? args : "");
     } else if (k_strcmp(cmd, "meminfo") == 0) {
         cmd_meminfo();
+    } else if (k_strcmp(cmd, "df") == 0) {
+        cmd_df();
+    } else if (k_strcmp(cmd, "stress") == 0) {
+        cmd_stress(args ? args : "");
     } else if (k_strcmp(cmd, "dmesg") == 0) {
         cmd_dmesg();
     } else if (k_strcmp(cmd, "reboot") == 0) {
@@ -214,6 +218,61 @@ const char *shell_cwd(void) {
     return cwd;
 }
 
+// Persists across reboot the same way timezone/fontsize/keyboard do --
+// a small file under /etc. Not folded into etc_config.h's shared
+// toyos.conf though: that's a key=value store with one line per
+// setting, and history entries are arbitrary shell input that can
+// itself contain '=' (e.g. `write f.txt a=b`) -- a bare one-command-
+// per-line file (like tz.c's original /etc/timezone, before it moved
+// to key=value) is the only shape that doesn't need to escape the
+// content it's storing. Whole-file rewrite on every history_add() call
+// rather than an incremental append: HISTORY_MAX is only 8 entries, so
+// the full array is always small (well under 1KB), and this avoids
+// needing separate "append one line" vs. "drop the oldest line from an
+// existing file" logic -- fs_write() already provides the same
+// overwrite-the-whole-file primitive every other /etc setting uses.
+#define HISTORY_FILE "/etc/history"
+
+static void history_save(void) {
+    char buf[HISTORY_MAX * LINE_MAX];
+    size_t pos = 0;
+    for (int i = 0; i < history_count; i++) {
+        size_t len = k_strlen(history[i]);
+        if (pos + len + 1 >= sizeof(buf)) break; // shouldn't happen at HISTORY_MAX=8, but don't overrun if it ever grows
+        k_memcpy(buf + pos, history[i], len);
+        pos += len;
+        buf[pos++] = '\n';
+    }
+    buf[pos] = '\0';
+    fs_write(HISTORY_FILE, buf, 0); // overwrite, not append
+}
+
+// Called once from shell_main() before the REPL loop starts. Same
+// line-splitting shape tz.c's tz_load_cities() uses for /etc/timezones
+// -- walk the buffer, one line per iteration, no shared helper (every
+// /etc reader in this kernel rolls its own small split, see that
+// file's precedent).
+static void history_load(void) {
+    uint32_t size = 0;
+    const char *data = fs_read(HISTORY_FILE, &size);
+    if (!data) return; // no history file yet -- fresh boot or RAM-only mode
+
+    uint32_t pos = 0;
+    while (pos < size && history_count < HISTORY_MAX) {
+        const char *ls = data + pos;
+        const char *end = data + size;
+        const char *le = ls;
+        while (le < end && *le != '\n') le++;
+        pos = (uint32_t)((le < end ? le + 1 : le) - data);
+
+        size_t len = (size_t)(le - ls);
+        if (len == 0 || len >= LINE_MAX) continue; // blank line, or too long to have been written by us
+        k_memcpy(history[history_count], ls, len);
+        history[history_count][len] = '\0';
+        history_count++;
+    }
+}
+
 static void history_add(const char *line) {
     if (k_strlen(line) == 0) return;
     if (history_count < HISTORY_MAX) {
@@ -224,6 +283,7 @@ static void history_add(const char *line) {
         for (int i = 1; i < HISTORY_MAX; i++) k_strcpy(history[i - 1], history[i]);
         k_strcpy(history[HISTORY_MAX - 1], line);
     }
+    history_save();
 }
 
 // Redraw the current input line in place (erase old, print new).
@@ -283,6 +343,8 @@ static void shell_read_line(char *buf, unsigned int len) {
 
 void shell_main(void) {
     char line[LINE_MAX];
+
+    history_load(); // once per boot -- shell_main() never returns/re-enters (see its own for(;;) below)
 
     vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
     vga_write("toy-os shell -- type 'help' to get started\n");

@@ -34,12 +34,19 @@ int keyboard_layout_load(const char *name);
 // NUL-terminated string.
 const char *keyboard_layout_current(void);
 
-// Translates one scancode (0-127) under the given shift state to the
-// character the active layout produces, or 0 if that scancode/shift
-// combination doesn't produce a character in this layout (an unmapped
-// key -- same "0 means nothing" convention keyboard.c's own tables
-// always used). Values above ASCII are the same Latin-1 codepoints
-// keyboard.h's CHAR_A_RING/CHAR_A_DIAERESIS/etc already use.
-char keyboard_layout_translate(uint8_t scancode, int shift);
+// Translates one scancode (0-127) under the given shift/AltGr state to
+// the character the active layout produces, or 0 if that combination
+// doesn't produce a character in this layout (an unmapped key -- same
+// "0 means nothing" convention keyboard.c's own tables always used).
+// Values above ASCII are the same Latin-1 codepoints keyboard.h's
+// CHAR_A_RING/CHAR_A_DIAERESIS/etc already use. `altgr` takes priority
+// over `shift` when both are set (this is XKB "level 3" -- AltGr alone
+// -- not "level 4" -- Shift+AltGr, which isn't tracked as a separate
+// combination; a real Shift+AltGr press just reads as AltGr here,
+// same simplification tools/gen_kbs.py's generator makes on the data
+// side by only emitting levels 1-3, not 4). No AltGr entry for the
+// pressed key falls through to whatever shift/base would have
+// produced, exactly like an unmapped scancode always has.
+char keyboard_layout_translate(uint8_t scancode, int shift, int altgr);
 
 #endif

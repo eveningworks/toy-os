@@ -1,6 +1,7 @@
 // See start_menu.h.
 #include "start_menu.h"
 #include "wm_internal.h"
+#include "confirm_dialog.h"
 #include "ui/ui.h"
 #include "theme.h"
 #include "kapi.h"
@@ -15,7 +16,18 @@ int start_menu_open = 0;
 // Esc up for a future modal-cancel use (a confirm dialog, say) instead
 // of double-booking it as "exit everything, no matter what's open or
 // focused".
-static void action_exit_to_shell(void) { wm_exit_requested = 1; }
+//
+// Now goes through confirm_dialog.h's reusable Yes/No popup instead of
+// setting wm_exit_requested directly -- exiting drops every open
+// window's unsaved state (no session restore exists), so a stray
+// Start-menu click landing on this row shouldn't be irreversible. This
+// is the dialog's first real caller; see confirm_dialog.h's top
+// comment for why Shutdown (docs/roadmap.md) is the eventual second
+// one, once a real poweroff mechanism exists to confirm into.
+static void do_exit_to_shell(void) { wm_exit_requested = 1; }
+static void action_exit_to_shell(void) {
+    confirm_dialog_open_with("Exit to shell? Unsaved changes will be lost.", do_exit_to_shell, 0);
+}
 
 const struct start_action wm_system_actions[] = {
     { "Exit to shell", action_exit_to_shell },
