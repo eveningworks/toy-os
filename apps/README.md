@@ -136,25 +136,46 @@ tightly-coupled event loop, not multiple decoupled components (see
   every window (one icon per `gui_app_registry` entry; single-click
   selects, double-click launches).
 - **`start_menu.c`/`.h`** -- the Start menu popup (app list + system
-  actions like "Exit to shell"), with hover/click-flash feedback.
+  actions -- "Exit to shell" and "Shutdown", the latter confirm-gated
+  then `system_poweroff()`, see `kernel/include/power.h`), with hover/
+  click-flash feedback.
 - **`context_menu.c`/`.h`** -- a small, generic reusable right-click
   popup (label + callback + caller-supplied context pointer per row),
   wired into the desktop, window chrome, taskbar app buttons, and Start
   menu rows -- see its own top comment for the full list and
   `docs/decisions.md` for why its callback shape differs from
   `start_menu.h`'s.
+- **`confirm_dialog.c`/`.h`** -- a reusable screen-absolute Yes/No modal
+  (message + confirm callback + optional cancel callback), same
+  overlay pattern as the two above. Callers so far: "Exit to shell"
+  and "Shutdown".
+- **`file_picker.c`/`.h`** -- a reusable Open/Save file-picker dialog,
+  the fourth screen-absolute overlay in this same family: full
+  directory navigation (double-click a row to enter it, `../` to go
+  up, directories sorted first, a scrollbar), backed by `fs_list()`/
+  `fs_is_dir()`/`fs_exists()` directly. First caller: Notepad's
+  Open.../Save As... toolbar buttons, replacing its old always-visible
+  inline filename field. See `docs/decisions.md` for why this is a
+  WM-level overlay rather than an `apps/ui/` widget.
 
 `wm_run()` owns the screen: it keeps a small fixed array of windows in
 z-order, and drives everything through one event loop -- mouse clicks
 (left AND right button), dragging by the title bar, minimize/maximize/
 close buttons, a Start menu that lists `gui_app_registry`, right-click
 context menus, desktop icons, and keyboard input routed to whichever
-window is frontmost. Rendering is whole-screen every time rather than
-tracking dirty rectangles -- much simpler to get right with overlapping
-movable windows. It draws into an off-screen buffer and flips finished
-frames with `gfx_present()`, so the repaint isn't visible as flicker --
-if you add drawing code, do it in `on_draw` and let the window manager
-handle presenting; don't call `gfx_present()` yourself.
+window is frontmost. The CPU-side redraw is still whole-scene every
+frame -- every window/widget gets redrawn into the off-screen buffer
+regardless of what actually changed, much simpler to get right with
+overlapping movable windows than tracking per-widget dirty state.
+What IS tracked is the final blit to the real framebuffer:
+`gfx_present()` (`kernel/drivers/gfx.c`) only copies the single
+bounding box that's actually changed since the last present, not the
+whole screen, plus a cheap cursor-only fast path for plain mouse
+movement -- see `docs/roadmap.md`'s "Dirty-rectangle rendering" entry
+for the exact state (partial: bounding-box blit only, no real
+per-widget dirty-rect list). If you add drawing code, do it in
+`on_draw` and let the window manager handle presenting; don't call
+`gfx_present()` yourself.
 
 There's no process isolation here either -- a GUI app's callbacks run in
 the kernel's own context, same as everything else in `apps/`. What the

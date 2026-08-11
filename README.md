@@ -36,8 +36,12 @@ For everything else:
 - A persistent, disk-backed filesystem ("TFS2" -- `kernel/drivers/tfs.c`,
   behind a small VFS dispatch layer so a second backend could be added
   later) with a write-ahead journal and timestamps -- files survive a
-  full power-off, not just `reboot`. `about` shows whether the current
-  boot found a disk. See `docs/tfs2-spec.md` for the on-disk format.
+  full power-off, not just `reboot`. Large writes batch the ATA cache
+  flush and free-block bitmap persistence instead of one of each per
+  4KB block (`ata_flush_begin()`/`ata_flush_end()`, `kernel/include/ata.h`),
+  journal-protected metadata writes deliberately excepted -- see
+  `docs/decisions.md`. `about` shows whether the current boot found a
+  disk. See `docs/tfs2-spec.md` for the on-disk format.
 - A real anti-aliased font (JetBrains Mono, baked to bitmaps at build
   time -- `tools/genttf.py`), 8 switchable point sizes (`fontsize <n>`),
   plus 6 Nordic letters (Å/Ä/Ö/å/ä/ö) alongside ASCII. See
@@ -48,10 +52,15 @@ For everything else:
   chrome, taskbar, and Start menu) with five apps -- Notepad, About,
   Calculator, Terminal (runs the real shell inside a window), and Task
   Manager (lists windows, shows memory usage). The Start menu's "Exit
-  to shell" asks for confirmation first (`apps/wm/confirm_dialog.c`, a
-  reusable screen-absolute Yes/No modal, same pattern as the context
-  menu). See `apps/README.md` for how to add more apps, and the app
-  registry (`apps/apps.c`) that makes that a one-line addition.
+  to shell" and "Shutdown" both ask for confirmation first
+  (`apps/wm/confirm_dialog.c`, a reusable screen-absolute Yes/No
+  modal); Shutdown itself uses the QEMU/Bochs ACPI I/O-port poweroff
+  trick (`kernel/core/power.c`), with a halt-and-message fallback. A
+  reusable Open/Save file-picker dialog (`apps/wm/file_picker.c`, full
+  directory navigation) backs Notepad's Open.../Save As... toolbar
+  buttons and is meant for any future app that needs one. See
+  `apps/README.md` for how to add more apps, and the app registry
+  (`apps/apps.c`) that makes that a one-line addition.
 - A kernel heap allocator (`kmalloc`/`kzalloc`/`kfree`) and a small JSON
   library (`kernel/core/json.c`, parse/serialize/read-file/write-file --
   coexists with the flat `etc_config.h` name=value format, see
@@ -89,9 +98,12 @@ from both the physical shell and the GUI Terminal, see `apps/editor.c`),
 AltGr), and the developer/diagnostic set
 (`help tests`): `ring3test`, `schedtest`, `stress <mb>` (real
 non-sparse write/read/verify pass over `<mb>` megabytes, exercising
-direct/single/double/triple-indirect blocks with genuine data -- see
-`docs/roadmap.md` for the still-open full-8GB-scale run), plus a dozen
-real disk-hosted test binaries under `/bin` run via `run <name>` (e.g.
+direct/single/double/triple-indirect blocks with genuine data,
+verified on real hardware at 400MB with no failures -- see
+`docs/roadmap.md` for the still-open full-8GB-scale run), `debug`
+(per-subsystem runtime debug-log switches -- `fs`/`wm`/`ata`, off by
+default, `debug <name> on|off` to flip one, no rebuild needed), plus a
+dozen real disk-hosted test binaries under `/bin` run via `run <name>` (e.g.
 `run write_test`, `run crash_test`) -- see `ls /bin` for the full list
 and `docs/decisions.md` for why these moved off dedicated shell
 commands.
@@ -166,7 +178,8 @@ apps/            -- programs. Two kinds:
                        desktop icon, drawn into a window by the window
                        manager (apps/wm/ -- split across wm.c/
                        wm_input.c/wm_render.c/desktop.c/context_menu.c/
-                       start_menu.c for readability, see apps/README.md)
+                       start_menu.c/confirm_dialog.c/file_picker.c for
+                       readability, see apps/README.md)
                      Adding either is "write the file, add one line to
                      the matching registry" -- see apps/README.md.
                      apps/ui/ holds the shared widget primitives (button,
