@@ -212,6 +212,69 @@ forever.
   Verified via QMP: Notepad's field still activates on click, accepts
   typing/backspace, and Save/Load still read/write the typed filename
   correctly -- no regression from the widgets.h migration.
+- New kernel-space heap allocator: `kmalloc()`/`kzalloc()`/`kfree()`
+  (`kernel/core/heap.c`/`kernel/include/heap.h`), first-fit over a
+  doubly-linked, address-ordered free list with real pointer-adjacency
+  coalescing on free (not list-order adjacency -- separate
+  `pmm_alloc_contiguous()` growth regions aren't guaranteed physically
+  adjacent to each other). Built directly on `pmm.c`'s physical frame
+  allocator: since `boot.asm` already identity-maps the whole low 4GiB
+  for kernel/supervisor use, any frame `pmm_alloc_contiguous()` returns
+  is immediately a valid kernel pointer with no separate page-table
+  mapping step needed. Grows in >=64KiB chunks (`HEAP_MIN_GROW_PAGES`)
+  as needed; not exposed to ring-3 (separate from the existing
+  `SYS_SBRK` per-process user heap) and not interrupt-safe/reentrant
+  (matches the kernel's existing single-threaded assumptions -- no ISR
+  calls into it). `heap_init()` + `heap_selftest()` run from
+  `kernel_main()` right after `pmm_init()`; the self-test allocates
+  three different-sized blocks, checks `kzalloc()` actually zeroes,
+  frees in an order that exercises both-direction coalescing, then
+  re-allocates to confirm the coalesced space is reusable. This is the
+  first real kernel-space allocator toy-os has had -- built specifically
+  to unblock multi-instance GUI apps (see below). Verified via
+  `tools/boot_smoke_test.py`: "toy-os: kernel heap initialized" and
+  "heap: selftest passed" both appear in the right spot in the boot
+  sequence.
+- GUI apps can now open more than one window at once. `gui_apps.h`'s
+  `struct gui_app` gained two fields: `multi_instance` (default 0 =
+  old behavior, reopening from the Start menu just focuses/restores
+  the one window that can ever exist; 1 = every open always creates a
+  brand-new window, bounded only by `MAX_WINDOWS`) and `on_close`
+  (optional, called once right before a window's slot is removed from
+  `windows[]`, with `window_get_state()` still valid inside it -- lets
+  a multi-instance app `kfree()` its per-window state).
+  `apps/wm/wm.c`'s `open_app()`/`close_window()` now respect both.
+  Calculator (`apps/calculator.c`) is the first app to opt in: its old
+  single static `g_calc`/`g_buttons`/`g_group` globals are gone,
+  replaced by a `kzalloc()`'d `struct calculator_instance` per window
+  (freed in the new `calculator_close()`), so each open Calculator
+  window has fully independent state. Every other app (Notepad, About,
+  Terminal) is unaffected -- both new fields default to unset/0/NULL.
+  Window titles for multiple windows of the same app stay identical on
+  purpose (no "(2)" suffix) -- explicit choice, not a limitation.
+  Verified via QMP: opened two Calculator windows from the Start menu
+  (cascaded, both titled "Calculator"), typed a digit into the first,
+  confirmed the second still showed a fresh "0", closed the second via
+  its title-bar X and confirmed the first's state and taskbar entry
+  were untouched, with no panic in the serial log.
+- The Start menu popup (app list + system actions, hover/click-flash
+  feedback) is now its own component: `apps/wm/start_menu.c`/
+  `start_menu.h`, factored out of `wm.c`/`wm_input.c`/`wm_render.c`
+  now that it had grown real state and behavior of its own. Not an
+  independent module with a clean boundary -- it still reaches into
+  `wm_internal.h` for shared WM state (`screen_h`/`taskbar_h`/
+  `redraw_pending`/`gui_app_registry`/`open_app()`), same pattern
+  `wm_input.c`/`wm_render.c` already use (see `apps/wm/wm.c`'s top
+  comment). A new `geometry()` static helper inside `start_menu.c`
+  shares the row-layout math between drawing and click-handling, which
+  used to be hand-duplicated between `wm_render.c` and `wm_input.c`.
+  Public entry points: `start_menu_open_now()`, `start_menu_draw()`,
+  `start_menu_handle_click()`, `start_menu_update()`, plus the
+  `start_menu_open`/`wm_system_actions`/`wm_system_action_count`
+  state. Pure refactor, no behavior change -- verified via QMP: Start
+  menu opens from the taskbar button, hover tracks the mouse live,
+  clicking a row shows the gold flash then closes the menu, same as
+  before the split.
 
 ### Changed
 - Versioning switched from a per-change build-number scheme

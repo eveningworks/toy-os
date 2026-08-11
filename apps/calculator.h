@@ -13,12 +13,18 @@ struct window;
 // font (see gui_apps.h's default_size).
 void calculator_default_size(int *w, int *h);
 void calculator_open(struct window *win);
+
+// Releases what calculator_open() kzalloc'd for this window -- see
+// gui_apps.h's `multi_instance`/on_close and calculator.c's top comment
+// for why Calculator's state can't be a single static struct anymore.
+void calculator_close(struct window *win);
+
 void calculator_draw(struct window *win);
 void calculator_key(struct window *win, int key);
 void calculator_click(struct window *win, int cx, int cy);
 
 // on_press/on_release (gui_apps.h) -- real press/release visual
-// feedback, see calculator.c's g_calc.pressed_index.
+// feedback, see calculator.c's struct calculator_instance.
 int calculator_press(struct window *win, int cx, int cy);
 void calculator_release(struct window *win);
 

@@ -24,6 +24,7 @@
 // with nothing else changing -- cheap without needing real dirty-rect
 // tracking of the scene: see wm_render_cursor_move() in wm_render.c.
 #include "wm_internal.h"
+#include "start_menu.h"
 #include "kapi.h"
 
 struct window windows[MAX_WINDOWS];
@@ -31,20 +32,6 @@ int window_count = 0;
 
 int screen_w, screen_h;
 int taskbar_h;
-
-int start_menu_open = 0;
-
-// A click on a Start menu row used to close the menu in the same frame
-// it ran the row's action -- no visible confirmation the click actually
-// landed. start_menu_flash_index (-1 when idle) is which row is showing
-// a brief "you clicked this" flash before the menu actually closes;
-// start_menu_flash_until is the pit_ticks() deadline for that (see
-// wm_input.c's START_MENU_FLASH_TICKS and wm_update_start_menu_flash(),
-// called every wm_run() tick below). The row's action still runs
-// immediately on click, same as before -- only closing the menu is
-// deferred.
-int start_menu_flash_index = -1;
-uint64_t start_menu_flash_until = 0;
 
 // Title-bar minimize/maximize/close button state -- see
 // wm_internal.h's comment on title_btn_armed_win for the full
@@ -54,21 +41,6 @@ int title_btn_armed_kind = -1;
 int title_btn_pressed_active = 0;
 int title_hover_win = -1;
 int title_hover_kind = -1;
-
-// System actions shown at the bottom of the Start menu, below the app
-// list -- these don't open a window like a real gui_app_registry entry
-// does, they trigger a WM-level action directly (see wm_run()'s
-// wm_exit_requested check below). "Exit to shell" replaces the old
-// hardcoded "Esc always exits the window manager" shortcut: it's
-// discoverable now instead of a hidden key, and frees Esc up for a
-// future modal-cancel use (a confirm dialog, say) instead of double-
-// booking it as "exit everything, no matter what's open or focused".
-static void action_exit_to_shell(void) { wm_exit_requested = 1; }
-
-const struct start_action wm_system_actions[] = {
-    { "Exit to shell", action_exit_to_shell },
-};
-const int wm_system_action_count = sizeof(wm_system_actions) / sizeof(wm_system_actions[0]);
 
 int wm_exit_requested = 0;
 
@@ -116,12 +88,20 @@ static int find_window_for_app(const struct gui_app *app) {
 }
 
 void open_app(const struct gui_app *app) {
-    int existing = find_window_for_app(app);
-    if (existing >= 0) {
-        if (windows[existing].state == WIN_MINIMIZED) windows[existing].state = WIN_NORMAL;
-        bring_to_front(existing);
-        redraw_pending = 1;
-        return;
+    // Single-instance apps (the default -- see gui_apps.h's
+    // `multi_instance` flag): reopening from the Start menu just
+    // focuses/restores the one window that can ever exist, same as
+    // always. Multi-instance apps (Calculator) skip this check
+    // entirely and always fall through to opening a brand new window
+    // -- MAX_WINDOWS is still the only cap on how many.
+    if (!app->multi_instance) {
+        int existing = find_window_for_app(app);
+        if (existing >= 0) {
+            if (windows[existing].state == WIN_MINIMIZED) windows[existing].state = WIN_NORMAL;
+            bring_to_front(existing);
+            redraw_pending = 1;
+            return;
+        }
     }
     if (window_count >= MAX_WINDOWS) return; // no room -- silently ignore
 
@@ -149,6 +129,15 @@ void open_app(const struct gui_app *app) {
 }
 
 void close_window(int idx) {
+    // Give the app a chance to release whatever it allocated for this
+    // window (multi-instance apps kmalloc/kzalloc their own per-window
+    // state -- see gui_apps.h's `multi_instance` flag and
+    // apps/calculator.c) BEFORE the slot shifts out of existence.
+    // Single-instance apps generally leave this NULL -- their state is
+    // a static struct with nothing to free.
+    if (windows[idx].app && windows[idx].app->on_close) {
+        windows[idx].app->on_close(&windows[idx]);
+    }
     for (int i = idx; i < window_count - 1; i++) windows[i] = windows[i + 1];
     window_count--;
     redraw_pending = 1;
@@ -177,7 +166,6 @@ void wm_run(void) {
 
     window_count = 0;
     start_menu_open = 0;
-    start_menu_flash_index = -1;
     dragging = -1;
     resizing = -1;
     content_dragging = -1;
@@ -218,17 +206,17 @@ void wm_run(void) {
         // cheap path below (cursor sprite only, not a full scene
         // repaint) -- fine everywhere except an open Start menu, whose
         // hover highlight is derived fresh from (mx, my) every full
-        // repaint (see wm_render.c's draw_start_menu()). Force the full
-        // path while the menu's open so hovering a different row
+        // repaint (see start_menu.c's start_menu_draw()). Force the
+        // full path while the menu's open so hovering a different row
         // actually updates the highlight instead of only refreshing on
         // the next unrelated redraw.
         if (mouse_moved && start_menu_open) redraw_pending = 1;
 
         // Closes the Start menu once a just-clicked row's brief flash
-        // (see start_menu_flash_index's own comment above) has shown
-        // long enough -- independent of clicks/movement, so it still
-        // fires even if the mouse hasn't moved since the click.
-        wm_update_start_menu_flash();
+        // has shown long enough -- independent of clicks/movement, so
+        // it still fires even if the mouse hasn't moved since the
+        // click. See start_menu.c's own comment on this.
+        start_menu_update();
 
         // Title-bar button hover/press feedback -- hover only matters
         // when the mouse actually moved (same cheap-path reasoning as

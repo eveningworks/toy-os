@@ -6,13 +6,14 @@
 #include <stdint.h>
 
 // Private to the window manager's own files (wm.c / wm_input.c /
-// wm_render.c) -- never included from outside apps/wm/, and NOT part of
-// wm.h's public API. This is what makes the wm.c split honest about
-// what it is: wm_input.c and wm_render.c are not independent modules,
+// wm_render.c / start_menu.c) -- never included from outside apps/wm/,
+// and NOT part of wm.h's public API. This is what makes the wm.c split
+// honest about what it is: none of these are independent modules,
 // they're the same tightly-coupled single-threaded event loop as
 // before, just organized into separate files by concern (state +
-// lifecycle + entry point / input handling / rendering) for
-// readability. All three still share the mutable state below directly.
+// lifecycle + entry point / input handling / rendering / the Start
+// menu popup) for readability. All of them still share the mutable
+// state below directly.
 //
 // If you're adding a new file under apps/wm/, this is the header it
 // needs; if you're adding a new *app* (a window's contents), you want
@@ -31,7 +32,6 @@
 
 int start_btn_w(void);
 int win_btn_w(void);
-int start_menu_w(void);
 int btn_size(void);
 
 #define RESIZE_MARGIN 6
@@ -49,22 +49,10 @@ extern int window_count;
 extern int screen_w, screen_h;
 extern int taskbar_h;
 
-extern int start_menu_open;
-
-// Which Start menu row (if any) is showing its post-click flash, or -1
-// -- see wm.c's own comment on start_menu_flash_index for the full
-// story. Read by wm_render.c's draw_start_menu() (takes visual priority
-// over hover), set by wm_input.c's wm_handle_left_click() on a row hit,
-// cleared by wm_update_start_menu_flash() (below) once it's shown long
-// enough.
-extern int start_menu_flash_index;
-extern uint64_t start_menu_flash_until; // pit_ticks() deadline
-
-// Start menu items below the app list -- see wm.c's top comment on
-// wm_system_actions for why these are separate from gui_app_registry.
-struct start_action { const char *label; void (*on_select)(void); };
-extern const struct start_action wm_system_actions[];
-extern const int wm_system_action_count;
+// The Start menu popup itself (open/closed state, hover/flash, the app
+// list + system actions) now lives in its own start_menu.h/.c -- see
+// that header, which every apps/wm/ file that needs it includes
+// directly, same as this one.
 
 // Set by a system action (currently just "Exit to shell") to ask
 // wm_run()'s main loop to return to the calling shell -- checked right
@@ -162,10 +150,6 @@ int wm_find_resize_zone(int mx, int my, int *out_right, int *out_bottom);
 // wm_input.c's entry points, called from wm.c's wm_run() loop.
 void wm_handle_left_click(int mx, int my);
 void wm_update_drag_resize(int mx, int my, uint8_t buttons);
-// Closes the Start menu once start_menu_flash_index's deadline passes --
-// a no-op the rest of the time (start_menu_flash_index == -1). See
-// wm.c's comment on start_menu_flash_index.
-void wm_update_start_menu_flash(void);
 
 // Drives title_btn_pressed_active while a title-bar button is armed,
 // and fires its action on release if the cursor's still over it -- see

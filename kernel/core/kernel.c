@@ -9,6 +9,7 @@
 #include "gdt.h"
 #include "multiboot.h"
 #include "pmm.h"
+#include "heap.h"
 #include "pci.h"
 #include "fs.h"
 #include "tz.h"
@@ -36,6 +37,10 @@ void kernel_main(uint64_t multiboot_info_addr) {
     pmm_init();
     klog_write("toy-os: physical frame allocator initialized\n");
     pmm_selftest(); // exercises pmm_alloc_contiguous()/pmm_free_contiguous() -- see pmm.h
+
+    heap_init(); // kmalloc()/kfree() -- built on pmm, needs it initialized first
+    klog_write("toy-os: kernel heap initialized\n");
+    heap_selftest();
 
     pci_init(); // brute-force config-space scan -- see pci.h's top comment
     klog_write("toy-os: PCI bus enumerated\n");

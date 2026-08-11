@@ -7,9 +7,12 @@ struct window; // full definition in wm.h
 // wm.h). Unlike apps.h apps (which take over the whole screen and run
 // their own blocking loop), GUI apps are event-driven: the window
 // manager keeps control of the main loop at all times and calls these
-// callbacks in response to input. Only one window per app is supported --
-// opening an already-open app from the Start menu just focuses/restores
-// its existing window rather than creating a second one.
+// callbacks in response to input. By default, only one window per app is
+// supported -- opening an already-open app from the Start menu just
+// focuses/restores its existing window rather than creating a second one.
+// Set `multi_instance` (below) to allow more than one window of the same
+// app at once -- see its own comment for what that actually requires
+// from an app's on_open/on_close.
 //
 // See apps/notepad.c for the simplest possible example, or
 // apps/GUI_APPS.md for a full walkthrough of adding a new one.
@@ -27,9 +30,17 @@ struct gui_app {
     // resize-on-fontsize-change plumbing needed.
     void (*default_size)(int *w, int *h);
 
-    // Called once, the first time this app's window is opened. There's
-    // no heap, so app state lives in a static struct inside the app's
-    // .c file -- this is typically just window_set_state(win, &g_state).
+    // Called once EVERY TIME a window of this app is opened -- for a
+    // single-instance app (the common case) that's still just once
+    // ever, since open_app() reuses the existing window on any later
+    // request; for a `multi_instance` app it's once per window. Most
+    // apps have no heap dependency at all: state lives in a static
+    // struct inside the app's .c file, and this is typically just
+    // window_set_state(win, &g_state). A `multi_instance` app can't do
+    // that (a static struct is shared by definition) -- it needs a
+    // fresh kzalloc() per window instead (kapi.h's heap.h) and a
+    // matching on_close() (below) to kfree() it. See apps/calculator.c
+    // for the first real example.
     void (*on_open)(struct window *win);
 
     // Called whenever the window's content area needs (re)painting --
@@ -105,6 +116,17 @@ struct gui_app {
     // state. May be NULL only if on_press is also NULL.
     void (*on_release)(struct window *win);
 
+    // Called once when this specific window closes -- via the title-bar
+    // close button, currently the only way a GUI window closes (see
+    // apps/wm/wm.c's close_window()). May be NULL, and is for most apps:
+    // a single-instance app's state is a static struct with nothing to
+    // release. `multi_instance` apps need this to kfree() whatever
+    // on_open() kzalloc'd for this window -- without it, every open/
+    // close cycle would leak. Called BEFORE the window's slot is
+    // actually removed, so window_get_state(win) is still valid inside
+    // this callback.
+    void (*on_close)(struct window *win);
+
     // 1 (the common case) if the user can drag-resize and maximize this
     // app's window; 0 to fix it at its default_size() forever -- no
     // resize grip, hovering an edge doesn't show a resize cursor, and
@@ -114,6 +136,19 @@ struct gui_app {
     // something the window manager decides on its own, since whether a
     // fixed size makes sense is an app-content question, not a WM one.
     int resizable;
+
+    // 1 to allow more than one window of this app open at once (each
+    // opened fresh from the Start menu, never reusing an existing
+    // window -- see open_app()); 0 (the default) keeps the original
+    // "reopen focuses the one window" behavior every app had before
+    // this flag existed. An app that sets this MUST allocate its state
+    // per-window (kzalloc() in on_open(), kfree() in on_close()) rather
+    // than pointing every window at one shared static struct -- with a
+    // static struct, two windows of the same app would silently share
+    // (and stomp on) the same state. First (and, for now, only) user:
+    // Calculator -- see docs/decisions.md for why it and not every app
+    // got this.
+    int multi_instance;
 };
 
 extern const struct gui_app gui_app_registry[];

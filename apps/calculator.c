@@ -14,7 +14,7 @@
 // in this file needs to change -- layout, drawing, and click hit-testing
 // are all generic over BUTTONS[].
 //
-// The button grid itself is now a struct ui_button_group (apps/ui/
+// The button grid itself is a struct ui_button_group (apps/ui/
 // ui_button.h + ui_button_group.h, pulled in together via the "ui/ui.h"
 // umbrella header -- see that file's top comment) rather than a
 // hand-rolled `int g_pressed_index` + private button_at() hit-test loop
@@ -22,6 +22,17 @@
 // case that motivated pulling that state and hit-testing out into a
 // real, reusable object. See docs/decisions.md for the writeup and why
 // it's modeled on Brutal OS's libs/brutal-ui/button.c.
+//
+// Calculator is toy-os's first `multi_instance` app (gui_apps.h) --
+// opening it from the Start menu more than once now opens a SEPARATE
+// window each time instead of just focusing the first one. That's why
+// there's no single static `g_calc`/`g_buttons`/`g_group` here anymore:
+// every open window needs its OWN copy of all three, or two calculators
+// would silently share (and stomp on) the same state. `struct
+// calculator_instance` bundles them together as one kzalloc()'d block
+// per window (calculator_open()), freed in calculator_close() when that
+// window closes -- see docs/decisions.md for why this needed the kernel
+// heap (kapi.h's heap.h) to exist at all.
 #include "calculator.h"
 #include "calc_engine.h"
 #include "wm/wm.h"
@@ -29,10 +40,6 @@
 #include "ui/ui.h"
 #include "theme.h"
 #include "kapi.h"
-
-// Single static instance -- same reasoning as notepad.c's g_notepad:
-// the window manager only allows one open Calculator window at a time.
-static struct calc_state g_calc;
 
 #define GRID_COLS 4
 #define GRID_ROWS 5
@@ -56,16 +63,19 @@ static const struct calc_button BUTTONS[BUTTON_COUNT] = {
     { "+/-", 's' }, { "0",   '0' }, { ".",   '.' }, { "=",   '=' },
 };
 
-// The live ui_button objects -- BUTTONS[] above stays the static
-// label/code source of truth, these hold the per-instance geometry and
-// (new) `pressed` state ui_button_group drives. Populated once (label/
-// colors/code) by calculator_open() via ui_button_init(), re-positioned
-// every draw/press/click by calculator_layout() via
-// ui_button_set_geometry() -- see ui_button.h for why those are two
-// different calls: re-running ui_button_init() every frame would zero
-// `pressed` right before it could ever be drawn.
-static struct ui_button g_buttons[BUTTON_COUNT];
-static struct ui_button_group g_group;
+// Everything one open Calculator window needs: the arithmetic engine's
+// own state, the live ui_button objects (BUTTONS[] above stays the
+// static label/code source of truth; these hold the per-instance
+// geometry and `pressed` state ui_button_group drives), and the group
+// that ties them together. One of these is kzalloc()'d per window in
+// calculator_open() and kfree()'d in calculator_close() -- see this
+// file's top comment for why a single static struct (the pre-
+// multi_instance shape) no longer works here.
+struct calculator_instance {
+    struct calc_state calc;
+    struct ui_button buttons[BUTTON_COUNT];
+    struct ui_button_group group;
+};
 
 // Sized off the largest baked font (20x40px, see font_ttf.c) so buttons
 // never clip at any font size -- same reasoning as notepad.c's BTN_W,
@@ -117,17 +127,21 @@ static void button_rect(int index, int *bx, int *by, int *bw, int *bh) {
 // live) so this needs to re-run before every draw/press/click, not just
 // once at open. Deliberately doesn't touch label/bg/fg/code/pressed --
 // see ui_button_set_geometry()'s own doc comment.
-static void calculator_layout(void) {
+static void calculator_layout(struct calculator_instance *inst) {
     for (int i = 0; i < BUTTON_COUNT; i++) {
         int bx, by, bw, bh;
         button_rect(i, &bx, &by, &bw, &bh);
-        ui_button_set_geometry(&g_buttons[i], bx, by, bw, bh);
+        ui_button_set_geometry(&inst->buttons[i], bx, by, bw, bh);
     }
 }
 
 void calculator_open(struct window *win) {
-    calc_reset(&g_calc);
-    window_set_state(win, &g_calc);
+    struct calculator_instance *inst = kzalloc(sizeof(struct calculator_instance));
+    if (!inst) return; // out of memory -- window opens with no state; every
+                        // other callback below null-checks window_get_state()
+                        // and bails rather than dereferencing NULL
+    calc_reset(&inst->calc);
+    window_set_state(win, inst);
 
     uint32_t fg = THEME_TEXT;
     uint32_t btn_bg = THEME_BUTTON_BG;
@@ -135,15 +149,24 @@ void calculator_open(struct window *win) {
     for (int i = 0; i < BUTTON_COUNT; i++) {
         char c = BUTTONS[i].code;
         int is_op = (c == '+' || c == '-' || c == '*' || c == '/' || c == '%' || c == '=');
-        ui_button_init(&g_buttons[i], 0, 0, 0, 0, BUTTONS[i].label,
+        ui_button_init(&inst->buttons[i], 0, 0, 0, 0, BUTTONS[i].label,
                         is_op ? op_btn_bg : btn_bg, fg, (int)(unsigned char)c);
     }
-    ui_button_group_init(&g_group, g_buttons, BUTTON_COUNT);
-    calculator_layout();
+    ui_button_group_init(&inst->group, inst->buttons, BUTTON_COUNT);
+    calculator_layout(inst);
+}
+
+// Releases what calculator_open() kzalloc'd for this window -- required
+// because Calculator is `multi_instance` (gui_apps.h): without this,
+// every open/close cycle would leak one struct calculator_instance.
+void calculator_close(struct window *win) {
+    kfree(window_get_state(win));
 }
 
 void calculator_draw(struct window *win) {
-    struct calc_state *st = (struct calc_state *)window_get_state(win);
+    struct calculator_instance *inst = (struct calculator_instance *)window_get_state(win);
+    if (!inst) return;
+    struct calc_state *st = &inst->calc;
     int cx = window_content_x(win);
     int cy = window_content_y(win);
     int cw = window_content_w(win);
@@ -190,8 +213,8 @@ void calculator_draw(struct window *win) {
     int text_y = display_y + (DISPLAY_H - gfx_char_h()) / 2;
     gfx_draw_string(text_x, text_y, st->display, fg, display_bg);
 
-    calculator_layout();
-    ui_button_group_draw(&g_group, cx, cy);
+    calculator_layout(inst);
+    ui_button_group_draw(&inst->group, cx, cy);
 }
 
 // gui_apps.h's on_press: called every tick the button's held, starting
@@ -204,13 +227,16 @@ void calculator_draw(struct window *win) {
 // holding a button down and dragging off before releasing doesn't
 // accidentally act on it, same as clicking any real button.
 int calculator_press(struct window *win, int cx, int cy) {
-    (void)win;
-    calculator_layout();
-    return ui_button_group_press(&g_group, cx, cy);
+    struct calculator_instance *inst = (struct calculator_instance *)window_get_state(win);
+    if (!inst) return 0;
+    calculator_layout(inst);
+    return ui_button_group_press(&inst->group, cx, cy);
 }
 
 void calculator_release(struct window *win) {
-    ui_button_group_release(&g_group);
+    struct calculator_instance *inst = (struct calculator_instance *)window_get_state(win);
+    if (!inst) return;
+    ui_button_group_release(&inst->group);
     window_invalidate(win);
 }
 
@@ -230,16 +256,18 @@ void calculator_key(struct window *win, int key) {
 
     if (code == 0) return; // unrecognized key -- ignored, same as an unknown button code
 
-    struct calc_state *st = (struct calc_state *)window_get_state(win);
-    calc_input(st, code);
+    struct calculator_instance *inst = (struct calculator_instance *)window_get_state(win);
+    if (!inst) return;
+    calc_input(&inst->calc, code);
     window_invalidate(win);
 }
 
 void calculator_click(struct window *win, int cx, int cy) {
-    struct calc_state *st = (struct calc_state *)window_get_state(win);
-    calculator_layout();
-    int code = ui_button_group_click(&g_group, cx, cy);
+    struct calculator_instance *inst = (struct calculator_instance *)window_get_state(win);
+    if (!inst) return;
+    calculator_layout(inst);
+    int code = ui_button_group_click(&inst->group, cx, cy);
     if (code < 0) return;
-    calc_input(st, (char)code);
+    calc_input(&inst->calc, (char)code);
     window_invalidate(win);
 }

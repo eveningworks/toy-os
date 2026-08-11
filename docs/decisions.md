@@ -774,3 +774,42 @@ otherwise still pull in group's array/hit-testing logic it doesn't
 need, and umbrella + separate files keeps that single-responsibility
 split while still solving the actual pain (remembering multiple
 `#include` lines).
+
+## Kernel heap: coalesces by real address adjacency, not list order
+
+`kmalloc()`/`kfree()` (`kernel/core/heap.c`) grow the heap by calling
+`pmm_alloc_contiguous()` again whenever the free list can't satisfy a
+request, appending the new region's block to the end of the list. That
+means list order and physical-address order agree *within* a region,
+but nothing guarantees the next `pmm_alloc_contiguous()` call returns
+frames adjacent to the previous region -- the PMM's bitmap allocator
+is free to hand back frames from anywhere. `kfree()`'s coalescing
+(`try_merge_next()`) checks the real pointer arithmetic
+(`(uint8_t *)(b + 1) + b->size == (uint8_t *)n`) before merging two
+list-adjacent blocks, not just "these are next to each other in the
+list" -- merging on list-order alone would corrupt the heap the first
+time two separately-grown regions happened to sit list-adjacent but
+not address-adjacent (freeing block A would silently absorb block B's
+header into A's payload size, and a later allocation into that
+"merged" space would write past the actual end of A's real memory).
+See `CHANGELOG.md`'s `[Unreleased]` entry for the full design and what
+`heap_selftest()` verifies.
+
+## Calculator is the first `multi_instance` GUI app
+
+`gui_apps.h`'s `multi_instance` flag (see `CHANGELOG.md`) is opt-in
+per app, and Calculator was the one asked for by name when multi-
+window support was requested ("open two or three calculators") -- it's
+also the simplest existing app to convert: no filesystem state, no
+scrollback buffer, just a handful of small structs (`calc_state` +
+button array + button group) that fit cleanly into one `kzalloc()`'d
+`struct calculator_instance` per window. Notepad and Terminal weren't
+converted in the same change -- they're not asked for as multi-window
+yet, and each has more state (Notepad's filename/dirty-flag/scrollback,
+Terminal's shell subprocess plumbing) that would make the conversion a
+bigger, separate decision about what "two Terminals" even means (two
+independent shells? a shared one?) rather than a mechanical port.
+Window titles for multiple windows of the same app deliberately stay
+identical (no "(2)" suffix) -- an explicit choice when this was built,
+not an oversight; distinguishing same-titled windows in the taskbar is
+left for a future change if it turns out to matter in practice.
