@@ -12,7 +12,18 @@ ASM = nasm
 # changed -- see that -include line's comment for the full reasoning
 # and kernel/include/version.h's generation (tools/gen_version.sh) for
 # the one subtlety this tracking requires upstream of it.
-CFLAGS = -std=gnu11 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
+# -fstack-protector-strong + -mstack-protector-guard=global: stack
+# canaries (Milestone 2, docs/roadmap.md), explicitly off before now.
+# `global` (a plain extern uintptr_t __stack_chk_guard, see
+# kernel/core/stack_protector.c) instead of the default `tls` guard --
+# GCC's default reads the canary via %fs:0x28, and this kernel never
+# sets up a per-CPU/per-thread FS/GS base (no TLS infrastructure
+# exists at all, see docs/decisions.md), so the TLS-based default
+# would dereference an unconfigured segment. `strong` (not plain
+# `-fstack-protector`, and not `-all`) instruments any function with a
+# local array or a local whose address is taken -- the same middle
+# ground GCC itself recommends over the two extremes.
+CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-protector-guard=global -fno-pic -fno-pie \
          -mno-red-zone -mcmodel=kernel -mno-mmx -mno-sse -mno-sse2 \
          -Wall -Wextra -O2 -c -Ikernel/include -Iapps -MMD -MP
 
@@ -58,7 +69,12 @@ DISK_IMG = disk.img
 # (512GiB), and the default code model can't reach a global (e.g. a
 # string literal) from that address with a 32-bit relocation -- the
 # linker fails with "relocation truncated to fit" without this.
-USERLAND_CFLAGS = -std=gnu11 -ffreestanding -fno-stack-protector -fno-pic -fno-pie \
+# Same stack-canary flags as CFLAGS above, and the same reasoning --
+# see that comment. Every userland ELF needs userland/stack_chk.c's
+# __stack_chk_guard/__stack_chk_fail linked in now (see SEED_BINARIES
+# below and each $(FOO_ELF) rule) since GCC emits implicit references
+# to both from any protected function in any userland .c file.
+USERLAND_CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-protector-guard=global -fno-pic -fno-pie \
                    -mno-red-zone -mcmodel=large -mno-mmx -mno-sse -mno-sse2 \
                    -Wall -Wextra -O2 -c -Ikernel/include -MMD -MP
 HELLO_ELF = userland/hello.elf
@@ -76,6 +92,7 @@ CRASH_TEST_ELF = userland/crash_test.elf
 SOCKET_TEST_ELF = userland/socket_test.elf
 LSPCI_ELF = userland/lspci.elf
 LS_ELF = userland/ls.elf
+STACK_SMASH_TEST_ELF = userland/stack_smash_test.elf
 
 # Seed directory for tools/tfs2_writer.py's `sync` command -- see the
 # `seed` target below and docs/decisions.md. Not committed as a
@@ -137,7 +154,7 @@ ASM_OBJECTS = $(BUILD)/core/boot.o $(BUILD)/core/isr.o $(BUILD)/core/context_swi
 version:
 	@sh tools/gen_version.sh
 
-all: version $(KERNEL) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF) $(LS_ELF)
+all: version $(KERNEL) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF) $(LS_ELF) $(STACK_SMASH_TEST_ELF)
 
 help:
 	@echo "toy-os -- available targets:"
@@ -180,95 +197,106 @@ $(BUILD)/apps/ui/%.o: apps/ui/%.c | $(BUILD)/apps/ui
 $(BUILD)/userland:
 	mkdir -p $@
 
+# __stack_chk_guard/__stack_chk_fail -- linked into every userland ELF
+# below (see USERLAND_CFLAGS's comment above).
+$(BUILD)/userland/stack_chk.o: userland/stack_chk.c | $(BUILD)/userland
+	$(CC) $(USERLAND_CFLAGS) $< -o $@
+
 $(BUILD)/userland/hello.o: userland/hello.c | $(BUILD)/userland
 	$(CC) $(USERLAND_CFLAGS) $< -o $@
 
-$(HELLO_ELF): $(BUILD)/userland/hello.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/hello.o
+$(HELLO_ELF): $(BUILD)/userland/hello.o $(BUILD)/userland/stack_chk.o userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/hello.o $(BUILD)/userland/stack_chk.o
 
 $(BUILD)/userland/exit_test.o: userland/exit_test.c | $(BUILD)/userland
 	$(CC) $(USERLAND_CFLAGS) $< -o $@
 
-$(EXIT_TEST_ELF): $(BUILD)/userland/exit_test.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/exit_test.o
+$(EXIT_TEST_ELF): $(BUILD)/userland/exit_test.o $(BUILD)/userland/stack_chk.o userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/exit_test.o $(BUILD)/userland/stack_chk.o
 
 $(BUILD)/userland/write_test.o: userland/write_test.c | $(BUILD)/userland
 	$(CC) $(USERLAND_CFLAGS) $< -o $@
 
-$(WRITE_TEST_ELF): $(BUILD)/userland/write_test.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/write_test.o
+$(WRITE_TEST_ELF): $(BUILD)/userland/write_test.o $(BUILD)/userland/stack_chk.o userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/write_test.o $(BUILD)/userland/stack_chk.o
 
 $(BUILD)/userland/write_bad_test.o: userland/write_bad_test.c | $(BUILD)/userland
 	$(CC) $(USERLAND_CFLAGS) $< -o $@
 
-$(WRITE_BAD_TEST_ELF): $(BUILD)/userland/write_bad_test.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/write_bad_test.o
+$(WRITE_BAD_TEST_ELF): $(BUILD)/userland/write_bad_test.o $(BUILD)/userland/stack_chk.o userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/write_bad_test.o $(BUILD)/userland/stack_chk.o
 
 $(BUILD)/userland/gui_test.o: userland/gui_test.c | $(BUILD)/userland
 	$(CC) $(USERLAND_CFLAGS) $< -o $@
 
-$(GUI_TEST_ELF): $(BUILD)/userland/gui_test.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/gui_test.o
+$(GUI_TEST_ELF): $(BUILD)/userland/gui_test.o $(BUILD)/userland/stack_chk.o userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/gui_test.o $(BUILD)/userland/stack_chk.o
 
 $(BUILD)/userland/counter_a.o: userland/counter_a.c | $(BUILD)/userland
 	$(CC) $(USERLAND_CFLAGS) $< -o $@
 
-$(COUNTER_A_ELF): $(BUILD)/userland/counter_a.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/counter_a.o
+$(COUNTER_A_ELF): $(BUILD)/userland/counter_a.o $(BUILD)/userland/stack_chk.o userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/counter_a.o $(BUILD)/userland/stack_chk.o
 
 $(BUILD)/userland/counter_b.o: userland/counter_b.c | $(BUILD)/userland
 	$(CC) $(USERLAND_CFLAGS) $< -o $@
 
-$(COUNTER_B_ELF): $(BUILD)/userland/counter_b.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/counter_b.o
+$(COUNTER_B_ELF): $(BUILD)/userland/counter_b.o $(BUILD)/userland/stack_chk.o userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/counter_b.o $(BUILD)/userland/stack_chk.o
 
 $(BUILD)/userland/echo.o: userland/echo.c | $(BUILD)/userland
 	$(CC) $(USERLAND_CFLAGS) $< -o $@
 
-$(ECHO_ELF): $(BUILD)/userland/echo.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/echo.o
+$(ECHO_ELF): $(BUILD)/userland/echo.o $(BUILD)/userland/stack_chk.o userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/echo.o $(BUILD)/userland/stack_chk.o
 
 $(BUILD)/userland/win_test.o: userland/win_test.c | $(BUILD)/userland
 	$(CC) $(USERLAND_CFLAGS) $< -o $@
 
-$(WIN_TEST_ELF): $(BUILD)/userland/win_test.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/win_test.o
+$(WIN_TEST_ELF): $(BUILD)/userland/win_test.o $(BUILD)/userland/stack_chk.o userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/win_test.o $(BUILD)/userland/stack_chk.o
 
 $(BUILD)/userland/file_test.o: userland/file_test.c | $(BUILD)/userland
 	$(CC) $(USERLAND_CFLAGS) $< -o $@
 
-$(FILE_TEST_ELF): $(BUILD)/userland/file_test.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/file_test.o
+$(FILE_TEST_ELF): $(BUILD)/userland/file_test.o $(BUILD)/userland/stack_chk.o userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/file_test.o $(BUILD)/userland/stack_chk.o
 
 $(BUILD)/userland/newsyscalls_test.o: userland/newsyscalls_test.c | $(BUILD)/userland
 	$(CC) $(USERLAND_CFLAGS) $< -o $@
 
-$(NEWSYSCALLS_TEST_ELF): $(BUILD)/userland/newsyscalls_test.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/newsyscalls_test.o
+$(NEWSYSCALLS_TEST_ELF): $(BUILD)/userland/newsyscalls_test.o $(BUILD)/userland/stack_chk.o userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/newsyscalls_test.o $(BUILD)/userland/stack_chk.o
 
 $(BUILD)/userland/crash_test.o: userland/crash_test.c | $(BUILD)/userland
 	$(CC) $(USERLAND_CFLAGS) $< -o $@
 
-$(CRASH_TEST_ELF): $(BUILD)/userland/crash_test.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/crash_test.o
+$(CRASH_TEST_ELF): $(BUILD)/userland/crash_test.o $(BUILD)/userland/stack_chk.o userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/crash_test.o $(BUILD)/userland/stack_chk.o
 
 $(BUILD)/userland/socket_test.o: userland/socket_test.c | $(BUILD)/userland
 	$(CC) $(USERLAND_CFLAGS) $< -o $@
 
-$(SOCKET_TEST_ELF): $(BUILD)/userland/socket_test.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/socket_test.o
+$(SOCKET_TEST_ELF): $(BUILD)/userland/socket_test.o $(BUILD)/userland/stack_chk.o userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/socket_test.o $(BUILD)/userland/stack_chk.o
 
 $(BUILD)/userland/lspci.o: userland/lspci.c | $(BUILD)/userland
 	$(CC) $(USERLAND_CFLAGS) $< -o $@
 
-$(LSPCI_ELF): $(BUILD)/userland/lspci.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/lspci.o
+$(LSPCI_ELF): $(BUILD)/userland/lspci.o $(BUILD)/userland/stack_chk.o userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/lspci.o $(BUILD)/userland/stack_chk.o
 
 $(BUILD)/userland/ls.o: userland/ls.c | $(BUILD)/userland
 	$(CC) $(USERLAND_CFLAGS) $< -o $@
 
-$(LS_ELF): $(BUILD)/userland/ls.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/ls.o
+$(LS_ELF): $(BUILD)/userland/ls.o $(BUILD)/userland/stack_chk.o userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/ls.o $(BUILD)/userland/stack_chk.o
+
+$(BUILD)/userland/stack_smash_test.o: userland/stack_smash_test.c | $(BUILD)/userland
+	$(CC) $(USERLAND_CFLAGS) $< -o $@
+
+$(STACK_SMASH_TEST_ELF): $(BUILD)/userland/stack_smash_test.o $(BUILD)/userland/stack_chk.o userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/stack_smash_test.o $(BUILD)/userland/stack_chk.o
 
 $(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(ASM_OBJECTS) $(C_OBJECTS)
@@ -313,7 +341,8 @@ SEED_BINARIES = \
 	$(FILE_TEST_ELF):file_test \
 	$(NEWSYSCALLS_TEST_ELF):newsyscalls_test \
 	$(CRASH_TEST_ELF):crash_test \
-	$(SOCKET_TEST_ELF):socket_test
+	$(SOCKET_TEST_ELF):socket_test \
+	$(STACK_SMASH_TEST_ELF):stack_smash_test
 
 # Seeds $(DISK_IMG) with every SEED_BINARIES entry, plus the /etc/kbs/*
 # keyboard-layout data files, via tools/tfs2_writer.py's `sync` (see
@@ -342,7 +371,7 @@ SEED_BINARIES = \
 # (keyboard_layout.c) keeps the keyboard working regardless. Delete
 # $(SEED_DIR)/sync/etc/kbs and re-run `make iso` to force a fresh
 # regenerate once xkbcli is installed.
-seed: $(DISK_IMG) $(LSPCI_ELF) $(LS_ELF) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF)
+seed: $(DISK_IMG) $(LSPCI_ELF) $(LS_ELF) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(STACK_SMASH_TEST_ELF)
 	mkdir -p $(SEED_DIR)/sync/bin
 	$(foreach pair,$(SEED_BINARIES),cp $(word 1,$(subst :, ,$(pair))) $(SEED_DIR)/sync/bin/$(word 2,$(subst :, ,$(pair)));)
 	@if command -v xkbcli >/dev/null 2>&1; then \
@@ -353,7 +382,7 @@ seed: $(DISK_IMG) $(LSPCI_ELF) $(LS_ELF) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_T
 	fi
 	python3 tools/tfs2_writer.py sync $(DISK_IMG) $(SEED_DIR)
 
-iso: version $(KERNEL) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF) $(LS_ELF) seed
+iso: version $(KERNEL) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF) $(LS_ELF) $(STACK_SMASH_TEST_ELF) seed
 	mkdir -p iso/boot/grub
 	cp $(KERNEL) iso/boot/kernel.bin
 	cp grub.cfg iso/boot/grub/grub.cfg
@@ -391,7 +420,7 @@ run-nographic: iso $(DISK_IMG)
 	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -display none -m 256
 
 clean:
-	rm -rf $(BUILD) $(ISO) iso/boot/kernel.bin $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF) $(LS_ELF) $(SEED_DIR)/sync
+	rm -rf $(BUILD) $(ISO) iso/boot/kernel.bin $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF) $(LS_ELF) $(STACK_SMASH_TEST_ELF) $(SEED_DIR)/sync
 	# Deliberately NOT touching $(DISK_IMG) here -- see its comment above.
 	# Use `make clean-disk` to explicitly wipe the persistent filesystem.
 

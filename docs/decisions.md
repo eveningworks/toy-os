@@ -1582,3 +1582,64 @@ entry for the full list of files touched, including the unrelated but
 same-session `tools/qmp_test.py` fix (a QEMU-backgrounding pattern that
 turned out to be unreliable specifically in the sandboxed environment
 this was discovered in).
+
+## Stack canaries: `-mstack-protector-guard=global` and a fixed constant, not GCC's defaults
+
+Milestone 2's stack-canary item (`CHANGELOG.md`'s `[Unreleased]` entry)
+turns `-fstack-protector-strong` on for both `CFLAGS` and
+`USERLAND_CFLAGS` (previously explicit `-fno-stack-protector` in both,
+just a "not built yet" placeholder -- see this file's `docs/roadmap.md`
+excerpt for the original reasoning). Two things about the flags chosen
+are worth knowing if this is ever revisited:
+
+- **`-mstack-protector-guard=global`, not GCC's default `tls`.** The
+  default reads the canary via `%fs:0x28` on x86-64 -- this kernel
+  never sets up a per-CPU/per-thread FS/GS base at all (no `wrmsr` to
+  `IA32_FS_BASE`/`GS_BASE`, no `swapgs`, confirmed by grep across
+  `kernel/core/`), so the TLS-based default would dereference an
+  unconfigured segment. `global` instead reads a plain
+  `extern uintptr_t __stack_chk_guard` (`kernel/core/stack_protector.c`
+  for the kernel, `userland/stack_chk.c` for userland -- two separate
+  symbols, two separate address spaces, no reason to share one).
+  Building real TLS infrastructure just to use GCC's default guard
+  would have been wildly disproportionate to what this milestone item
+  actually needed.
+- **The guard value is a fixed compile-time constant, not random.**
+  There's no entropy source anywhere in this kernel (the same gap
+  blocking the kernel-ASLR item further down this same milestone) --
+  seeding a real random guard at boot needs an RNG that doesn't exist
+  yet. A fixed guard still catches the threat model that actually
+  matters here (an accidental linear buffer overflow corrupting
+  whatever's next on the stack) -- it just can't defend against an
+  attacker who's read this exact binary and crafts an overflow that
+  writes the correct guard bytes back on its way past. Worth
+  revisiting once/if a real RNG exists.
+- **`__stack_chk_fail`, not a synthesized trap.** Neither the kernel
+  nor userland implementation routes through `idt.c`'s existing fault
+  dispatcher -- each is just a small, direct function GCC's generated
+  epilogue calls on a mismatch. The kernel's prints a panic banner and
+  falls into the same unconditional `cli; hlt` loop `idt.c`'s
+  non-recoverable path already ends on (there's no "recoverable"
+  case for a kernel-side canary trip -- nowhere to hand control back
+  to). Userland's is even simpler: `SYS_WRITE` a message then
+  `SYS_EXIT` with a distinct code (2) -- from the kernel's point of
+  view that's just an ordinary process exit, no different from any
+  other `run <name>` finishing, so nothing new was needed to "catch"
+  it.
+- **Verifying it actually works needs `noinline` on the test's overflow
+  function.** `userland/stack_smash_test.c`'s first version called an
+  un-annotated `static void smash(void)` from `_start` -- at `-O2` GCC
+  inlined it straight into `_start`, which moved the canary check to
+  `_start`'s OWN epilogue, after `_start`'s later code (a "survived"
+  message + `SYS_EXIT`) had already run and exited the process. The
+  test printed "UNEXPECTEDLY SURVIVED" and exited normally with the
+  canary silently corrupted underneath -- not because canaries don't
+  work, but because the check was unreachable code by the time control
+  got there (confirmed by disassembling `build/userland/stack_smash_test.o`
+  and finding the compare-and-branch instructions positioned after the
+  exit syscall). `__attribute__((noinline))` on `smash()` fixed it --
+  a real, non-inlined function has its own `ret` and therefore its own
+  canary check firing immediately on return, before `_start` ever
+  reaches the "survived" path. Worth remembering for any future
+  deliberate-crash test: inlining can silently move a compiler-inserted
+  check somewhere your test's control flow never reaches.

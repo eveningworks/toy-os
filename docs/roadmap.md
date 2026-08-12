@@ -39,7 +39,7 @@ later judgment call, not mechanically tied to "20 milestones done."
 
 - [ ] NX bit enforcement (non-executable data pages)
 - [ ] W^X on kernel + userspace mappings
-- [ ] Stack canaries (`-fstack-protector`)
+- [x] ~~Stack canaries (`-fstack-protector`)~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry
 - [ ] Kernel ASLR (randomize load base)
 
 ### Milestone 3 -- Storage hardening (planned v0.3.0)
@@ -355,9 +355,14 @@ has and a hobby kernel this far along is a natural point to start closing:
   "jump into a data page" fault crashes cleanly instead of executing.
 - W^X on kernel + userspace mappings -- no page should ever be both
   writable and executable at once; audit every `vmm_map_*` call site.
-- Stack canaries -- turn `-fstack-protector` back on (it's explicitly off
-  today) and make sure a canary violation is caught and reported instead
-  of silently corrupting the stack.
+- ~~Stack canaries~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry:
+  `-fstack-protector-strong` is on for both the kernel and userland now,
+  with `-mstack-protector-guard=global` (a fixed constant, not random --
+  no entropy source exists yet, see `docs/decisions.md`) since there's
+  no TLS/FS-base infrastructure for GCC's default guard to read. A
+  canary violation is caught and reported, not silently corrupting the
+  stack -- verified for real with a deliberate userland self-test
+  (`run stack_smash_test`), not just "the kernel still boots".
 - Kernel ASLR -- randomize the kernel's load base each boot (needs a real
   entropy source, itself a small gap -- today's kernel has no RNG at all).
   Lowest priority of the four here: real value depends on an attacker

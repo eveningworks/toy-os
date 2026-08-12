@@ -22,6 +22,33 @@ forever.
 
 ## [Unreleased]
 
+### Added
+- Stack canaries (Milestone 2, `docs/roadmap.md`): `-fstack-protector-strong`
+  is on for both the kernel (`CFLAGS`) and userland (`USERLAND_CFLAGS`)
+  now, previously explicit `-fno-stack-protector` in both. Uses
+  `-mstack-protector-guard=global` (a plain extern `__stack_chk_guard`)
+  rather than GCC's TLS-based default, since this kernel has no
+  FS/GS-base infrastructure for that default to read; the guard value
+  is a fixed compile-time constant, not random, since there's no
+  entropy source yet either. New `kernel/core/stack_protector.c`
+  (kernel-side `__stack_chk_guard`/`__stack_chk_fail`, the latter
+  printing a panic banner and halting -- no "recoverable" case for a
+  kernel-side canary trip) and `userland/stack_chk.c` (userland's
+  version, linked into every userland ELF now -- `SYS_WRITE` a message
+  then `SYS_EXIT(2)`, an ordinary process exit from the kernel's point
+  of view). New `userland/stack_smash_test.c` self-test (seeded as
+  `/bin/stack_smash_test`, run via the shell's `run stack_smash_test`)
+  deliberately overflows a local buffer to prove the canary actually
+  catches a real overflow, not just "the kernel still boots" -- see
+  `docs/decisions.md` for a real gotcha hit writing it (the overflow
+  function needs `__attribute__((noinline))`, or GCC inlines it into
+  `_start` and moves the canary check past code that already exited
+  the process). Verified: `make clean && make all && make iso` +
+  `boot_smoke_test.py` pass with the flag on kernel-wide (no
+  false-positive trip during boot's own self-tests), and
+  `run stack_smash_test` from the shell prints "stack smashing
+  detected", exits with code 2, and returns cleanly to the prompt.
+
 ### Changed
 - CLAUDE.md and `tools/` now support a direct local checkout (this
   session ran that way for the first time, not through Cowork's device
