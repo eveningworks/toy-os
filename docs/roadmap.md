@@ -13,13 +13,16 @@ phased test plans, and cross-references for every item are in **Details**
 at the bottom of this file, organized the same way.
 
 **Versioning:** `VERSION` is `0.1.0-dev` right now (see `tools/set_version.sh`
-and `docs/decisions.md` for the semver+`-dev`-suffix mechanics). Milestone 1
-below is what that `0.1.0-dev` becomes `0.1.0` for; each milestone after
-that is pencilled in as the next minor version. Purely a planning aid, not
-a commitment -- a milestone can slip, merge with its neighbor, or get
-reordered, and its planned version moves with it. Whether/when this project
-ever calls something `1.0.0` is a separate, later judgment call, not
-mechanically tied to "20 milestones done."
+and `docs/decisions.md` for the semver+`-dev`-suffix mechanics). `v0.0.9` was
+tagged and released ahead of any milestone -- an early snapshot for testing,
+not milestone-complete (see `docs/decisions.md`'s release-process entry and
+the [v0.0.9 GitHub Release](https://github.com/Drenos/toy-os/releases/tag/v0.0.9)).
+Milestone 1 below is what today's `0.1.0-dev` becomes `0.1.0` for; each
+milestone after that is pencilled in as the next minor version. Purely a
+planning aid, not a commitment -- a milestone can slip, merge with its
+neighbor, or get reordered, and its planned version moves with it.
+Whether/when this project ever calls something `1.0.0` is a separate,
+later judgment call, not mechanically tied to "20 milestones done."
 
 ## Milestones
 

@@ -471,12 +471,61 @@ git tag v0.2.0
 git push origin main --tags
 ```
 A GitHub Release (title = `v<version>`, body = that release's
-CHANGELOG section, `.iso` attached as a downloadable asset) is a
-judgment call per release now rather than tied to a fixed tier, since
-there's no tier anymore -- use one when a release feels
-milestone-worthy enough that grabbing a working ISO without cloning +
-building is worth it: `gh release create v0.2.0 toy-os.iso --title
-"v0.2.0" --notes-file <path>`, or the GitHub web UI.
+CHANGELOG section, assets attached) is a judgment call per release now
+rather than tied to a fixed tier, since there's no tier anymore -- use
+one when a release feels milestone-worthy enough that grabbing a
+working build without cloning + building is worth it.
+
+**v0.0.9 (first real release, cut ahead of any milestone) established
+the actual asset/publish mechanics, corrected below:**
+
+- **Three assets, not just the ISO** -- `toy-os.iso`, `disk.img.gz`,
+  and `tools/run_release.sh`. `disk.img` alone isn't optional: it's
+  where `/bin/ls`/`/bin/lspci`/the seeded test binaries actually live
+  (there's no installer, so the ISO alone boots into a near-empty
+  filesystem). `disk.img` is a large SPARSE file (~9GB apparent size,
+  ~370KB of real data as of v0.0.9) -- gzip it before attaching
+  (`gzip -k -9 disk.img`; shrank to ~9MB) or the raw upload both blows
+  past GitHub's 2GB-per-asset limit and wastes bandwidth transferring
+  mostly zeros. `tools/run_release.sh` ships as a release asset (not
+  just a repo file) because someone with just the ISO/disk image, no
+  checkout, otherwise has no easy way to know the correct QEMU device
+  config (`if=ide` disk bus separate from `-cdrom`'s, no
+  `-device usb-mouse`/`usb-tablet` -- see the Makefile's `run:` target
+  comments and `CLAUDE.md`) -- it's a standalone `sh` script that
+  gunzips `disk.img.gz` itself if needed, then launches with the same
+  flags `make run` uses.
+- **Rebuild `disk.img` fresh (`make clean-disk` first) before
+  packaging a release** -- otherwise whatever's on the working
+  checkout's disk image (test files, session-local state) ships as
+  part of the "clean" release.
+- **The publish step (`git push --tags` and `gh release create`)
+  cannot run from the Cowork cloud sandbox, even with the repo's own
+  token in the remote URL.** Confirmed directly (v0.0.9): the push
+  failed with `remote: access denied by the git proxy: ... is not in
+  this session's authorized repository set` -- the sandbox's outbound
+  git egress goes through an allow-list proxy that blocks this
+  regardless of credentials embedded in the URL. Read-only git
+  (`fetch`, `ls-remote`) works fine through the same proxy -- only
+  writes are blocked. The device bridge to the user's real machine has
+  no network access at all (by design, see `CLAUDE.md`), so it can't
+  publish either. Net effect: the "never push from the session" rule
+  in this skill/`CLAUDE.md` isn't just a caution, it's enforced -- tag
+  and prep everything locally (both checkouts), then hand the user the
+  exact `git push origin main --tags` + `gh release create` commands
+  to run from their own machine's terminal, which has real network
+  access. `gh` isn't preinstalled in the cloud sandbox either
+  (`apt-get install -y gh` if you need it there for anything read-only
+  going forward, e.g. checking release state via `gh api`).
+- **Version-vs-milestone note:** v0.0.9 was cut *ahead of* Milestone 1
+  on purpose (a pre-milestone testing snapshot the user explicitly
+  asked for), not part of the `v0.1.0` = Milestone-1-done mapping
+  `docs/roadmap.md` otherwise uses. `tools/set_version.sh` doesn't
+  care either way -- it'll stamp whatever version string you give it.
+
+See `gh release create v0.2.0 toy-os.iso disk.img.gz run_release.sh
+--title "v0.2.0" --notes-file <path>` (or the GitHub web UI) for the
+actual invocation shape now.
 
 Alongside this, commit messages going forward list each changed/added
 file with a one-line note in the body -- a separate, smaller

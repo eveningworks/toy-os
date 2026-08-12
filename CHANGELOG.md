@@ -22,6 +22,26 @@ forever.
 
 ## [Unreleased]
 
+### Added
+- `tools/run_release.sh` -- standalone QEMU launch script shipped as a
+  GitHub Release asset (v0.0.9 onward), for anyone running from just a
+  release download with no repo checkout. Gunzips `disk.img.gz` if
+  needed, then boots with the same device/display flags the
+  Makefile's `run:` target uses.
+
+### Fixed
+- v0.0.9's release process surfaced two real gotchas, now documented
+  in `docs/decisions.md`'s versioning entry: `disk.img` is a large
+  sparse file (~9GB apparent, ~370KB real data) that must be gzipped
+  before shipping as a release asset (raw upload both exceeds GitHub's
+  2GB-per-asset limit and wastes bandwidth on zeros), and the Cowork
+  cloud sandbox's outbound git proxy blocks `git push`/`gh release
+  create` outright regardless of the repo token embedded in the
+  remote URL (`access denied by the git proxy: ... not in this
+  session's authorized repository set`) -- confirmed by a real failed
+  push attempt, not assumed. Publishing a release now always ends with
+  handing the user exact commands to run from their own machine.
+
 ## [0.0.9] - 2026-08-12
 
 ### Fixed

@@ -112,6 +112,17 @@ dozen real disk-hosted test binaries under `/bin` run via `run <name>` (e.g.
 and `docs/decisions.md` for why these moved off dedicated shell
 commands.
 
+## Releases
+
+Tagged releases live on [GitHub Releases](https://github.com/Drenos/toy-os/releases) --
+each one ships `toy-os.iso`, a gzipped `disk.img.gz` (there's no
+installer yet, so the pre-seeded disk image is what puts `/bin/ls`,
+`/bin/lspci`, etc. on the filesystem -- the ISO alone boots into a
+near-empty one), and `run_release.sh`, a standalone launcher that
+gunzips the disk image and starts QEMU with the exact device/display
+flags this OS expects (no repo checkout needed). See
+`docs/decisions.md`'s versioning entry for how a release gets cut.
+
 ## Building on CachyOS
 
 No cross-compiler is needed -- since the target and host are both x86-64,
@@ -238,6 +249,11 @@ tools/genttf.py  -- font source of truth; regenerate kernel/drivers/font_ttf.c
                      includes its output anymore.
 tools/OFL.txt    -- SIL Open Font License 1.1 text for JetBrains Mono,
                      the baked font's source face
+tools/run_release.sh -- standalone QEMU launcher shipped as a GitHub
+                     Release asset (not run by the build itself) --
+                     gunzips disk.img.gz if needed and boots with the
+                     same device/display flags `make run` uses, for
+                     anyone running from just a release download.
 ```
 
 ## Process isolation
