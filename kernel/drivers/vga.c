@@ -142,8 +142,26 @@ static void legacy_backspace(void) {
 // always painted at the *current* (row, col) -- the cell the next
 // character will land in -- which is guaranteed blank whenever the
 // cursor is shown (nothing else writes there without going through
-// fb_putc()/fb_backspace(), both of which hide the cursor first), so
-// painting over it and erasing it back to cur_bg is always safe.
+// fb_putc()/fb_backspace(), both of which hide the cursor first).
+//
+// cursor_hide() erases using a hardcoded VGA_BLACK, not the live
+// cur_bg -- a blank cell (nothing drawn there yet, only the cursor
+// ever touched it) is always conceptually part of the console's plain
+// page background, which is black, regardless of whatever transient
+// text color happens to be active via vga_set_color() at the moment.
+// Using live cur_bg here looks right for ordinary typing (bg is
+// almost always black anyway) but breaks for a colored diagnostic
+// banner: idt.c's panic handler prints white-on-red, and its trailing
+// newline leaves the cursor auto-painted red on an otherwise-blank
+// line purely because cur_bg happened to be red right then -- no red
+// TEXT was ever actually meant to occupy that cell. Erasing with
+// live cur_bg either leaves that red block behind (if a later
+// vga_set_color() already moved cur_bg on, e.g. to
+// ring3_test.c's own light-green-on-black follow-up) or is a
+// silent no-op (erasing red with still-red cur_bg repaints the same
+// red) -- both were confirmed live via `ring3test`. Hardcoding black
+// sidesteps needing to track "what color was this blank cell really
+// supposed to be" at all: it's always black, full stop.
 static int cursor_on_screen = 0;
 static uint64_t cursor_last_toggle_tick = 0;
 
@@ -158,7 +176,7 @@ static void cursor_paint(uint32_t color) {
 
 static void cursor_hide(void) {
     if (!cursor_on_screen) return;
-    cursor_paint(palette_rgb(cur_bg));
+    cursor_paint(palette_rgb(VGA_BLACK)); // see this section's top comment -- not cur_bg
     cursor_on_screen = 0;
 }
 

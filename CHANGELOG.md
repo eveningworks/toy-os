@@ -104,6 +104,32 @@ forever.
   actually existed.
 
 ### Fixed
+- `kernel/drivers/vga.c`'s framebuffer console cursor left stray
+  wrong-colored blocks around a colored diagnostic banner -- reported
+  live from `ring3test`'s panic screen (white-on-red), which showed a
+  red sliver one row above the panic box and another right below it,
+  both on otherwise-plain-black blank lines with no real panic text.
+  Root cause: `cursor_hide()` erased the cursor's solid block using
+  the *live* `cur_bg`, but a blank cell the cursor merely passed
+  through (nothing actually drawn there) has no real "correct"
+  background of its own -- it just inherits whatever `cur_bg`
+  happened to be active when the cursor auto-painted there. `idt.c`'s
+  panic handler sets white-on-red, and `ring3_test.c`'s `ring3_hook`
+  immediately follows with light-green-on-black -- across that
+  transition, erasing with `cur_bg` either left the stray red block
+  behind (if the color had already moved on by erase time) or was a
+  silent no-op (erasing red with still-red `cur_bg` just repaints the
+  same red). First attempted fix (remembering the `cur_bg` the cursor
+  was actually painted with, and hiding it right before `vga_set_
+  color()` changes anything) turned out to have the same flaw at its
+  root -- a "correctly remembered" red is still red, still doesn't
+  erase a cell that was never meant to be red at all. Real fix:
+  `cursor_hide()` now always erases with a hardcoded `VGA_BLACK`, not
+  `cur_bg` -- a blank untouched cell is always part of this console's
+  plain page background, which is black, independent of whatever
+  transient text color is active. Verified live via QMP: `ring3test`'s
+  panic box now has no stray slivers above or below it, and a normal
+  shell prompt's cursor is unaffected (bg is black there anyway).
 - `kernel/drivers/tfs.c`'s free-block bitmap sector persist had no
   error handling at all -- `write_batch_end()` (the batched-flush path
   a large sequential write like `stress` goes through) and
