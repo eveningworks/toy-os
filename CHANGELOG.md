@@ -184,11 +184,37 @@ forever.
     behavior, unaffected by this phase). `tools/preflight.sh` (build +
     boot smoke test) passed throughout. Screenshots in
     `screenshots/2026-08-12/`.
-  - Not done this round: generalizing to the plain (non-GUI) shell
-    prompt -- deferred, see `docs/roadmap.md`'s Milestone 1 detail entry
-    for why (the shell's REPL has no per-frame poll point the way
-    `wm_run()` does, so this needs its own design pass rather than a
-    direct copy of the wm_run() pattern).
+  - The plain (non-GUI) shell prompt, deferred above, turned out not to
+    need `wm_run()`-style ambient polling at all -- `shell_main()`
+    (`apps/shell.c`) is a REPL with no per-frame tick to hang a pending
+    op off of. The actual gap is narrower and already documented in
+    `keyboard.c`'s own `keyboard_getchar()` comment: a blocking command
+    doesn't get `debug_console_poll()`/`vga_cursor_tick()` serviced at
+    all until it returns, unlike the shell's idle wait at the prompt or
+    the GUI's `wm_run()` loop. Closed by making `cat` (`apps/shell_fs.c`)
+    -- the one shell command with no size cap on how much it blocks
+    reading, unlike Notepad's Open... above which is capped at
+    `SCROLLBACK_CAP` -- use `fs_read_range_begin()`/`fs_read_range_step()`
+    in its own loop instead of a single blocking `fs_read()`, servicing
+    `debug_console_poll()`/`vga_cursor_tick()` between blocks. `cat` now
+    `fs_size()`s the file and `kmalloc()`s a buffer sized to it (a
+    reused static pointer, same pattern as `tfs.c`'s own `g_read_buf`
+    behind `fs_read()`) rather than relying on `fs_read()`'s internal
+    staging buffer, so it can drive the stepped API directly; this
+    preserves `fs_read()`'s existing "up to available RAM" ceiling
+    rather than shrinking it to some fixed cap. No `hlt`/throttling
+    between steps (unlike `wm_run()`'s poll, gated on its own idle wait)
+    -- `cat` has real work to do and wants to finish as fast as the disk
+    allows.
+    - Verified via QMP: seeded a 550,000-byte file and a 14-byte file
+      onto `disk.img` with `tools/tfs2_writer.py`; `cat`'d the small
+      file (exact match), a nonexistent path (`cat: no such file:` as
+      before), and the large one (content correct throughout, shell
+      returned cleanly to the prompt afterward -- no hang).
+      `tools/preflight.sh` passed throughout. Screenshots in
+      `screenshots/2026-08-12/`.
+  - Milestone 1's async-I/O item is now fully closed except the
+    separately-tracked Terminal async-spawn item below.
 
 ## [0.0.9] - 2026-08-12
 

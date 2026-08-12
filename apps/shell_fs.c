@@ -13,6 +13,28 @@
 #include "shell_internal.h"
 #include "editor.h"
 
+// Reused across cmd_cat() calls, same reasoning as tfs.c's own
+// g_read_buf (fs_read()'s staging buffer): a fresh kmalloc() every call
+// with no caller-visible free() would leak.
+static void *g_cat_buf = 0;
+
+// Reads via the stepped fs_read_range_begin()/fs_read_range_step() API
+// instead of a single blocking fs_read() -- Milestone 1 phase 4 (see
+// docs/roadmap.md), the shell-prompt half deferred when Phase 4's read
+// side landed for the GUI (Notepad's Open...). keyboard_getchar()'s own
+// comment (kernel/drivers/keyboard.c) documents the gap this closes: a
+// blocking command doesn't get debug_console_poll()/vga_cursor_tick()
+// serviced at all until it returns, unlike the shell's idle wait at the
+// prompt (which already rides keyboard_getchar()'s hlt loop) or the
+// GUI's wm_run() (which rides its own per-frame poll). `cat` on a large
+// file was the obvious real caller: unlike Notepad's Open..., which is
+// capped at SCROLLBACK_CAP (8KB) and finishes in 1-2 steps regardless,
+// fs_read()'s whole-file load has no such cap -- a multi-MB `cat` is a
+// genuinely long blocking read today. No hlt/throttling between steps
+// (unlike wm_run()'s per-frame poll, which is gated on its own idle
+// wait) -- this loop has real work to do and wants to finish as fast as
+// the disk allows, it just also services the debug console/cursor
+// between blocks instead of not at all.
 void cmd_cat(const char *name) {
     if (!name || k_strlen(name) == 0) {
         vga_write("usage: cat <file>\n");
@@ -23,15 +45,47 @@ void cmd_cat(const char *name) {
         vga_write("cat: path too long\n");
         return;
     }
-    uint32_t size;
-    const char *data = fs_read(path, &size);
-    if (!data) {
+    if (!fs_exists(path) || fs_is_dir(path)) {
         vga_write("cat: no such file: ");
         vga_write(path);
         vga_putc('\n');
         return;
     }
-    vga_write(data);
+
+    uint64_t size64 = fs_size(path);
+    if (size64 > 0xFFFFFFFFu - 1) { // too big for this whole-buffer call, same ceiling fs_read() itself has
+        vga_write("cat: file too big\n");
+        return;
+    }
+    uint32_t size = (uint32_t)size64;
+
+    if (g_cat_buf) { kfree(g_cat_buf); g_cat_buf = 0; }
+    g_cat_buf = kmalloc((size_t)size + 1);
+    if (!g_cat_buf) {
+        vga_write("cat: out of memory\n");
+        return;
+    }
+
+    if (size > 0) {
+        void *h = fs_read_range_begin(path, 0, g_cat_buf, size);
+        enum fs_step_result r = FS_STEP_FAILED;
+        if (h) {
+            do {
+                debug_console_poll();
+                vga_cursor_tick();
+                r = fs_read_range_step(h, 0);
+            } while (r == FS_STEP_PENDING);
+        }
+        if (r != FS_STEP_DONE) {
+            vga_write("cat: read failed\n");
+            kfree(g_cat_buf);
+            g_cat_buf = 0;
+            return;
+        }
+    }
+    ((uint8_t *)g_cat_buf)[size] = 0;
+
+    vga_write((const char *)g_cat_buf);
     vga_putc('\n');
 }
 

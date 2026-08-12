@@ -31,8 +31,7 @@ later judgment call, not mechanically tied to "20 milestones done."
 - [x] Non-blocking DMA start/poll primitive
 - [x] Steppable write API
 - [x] Wire it up: `wm_run()` polls a pending write (Notepad Save first)
-- [x] Generalize to reads (Notepad Open); the plain shell prompt is
-      still open, see Details below
+- [x] Generalize to reads (Notepad Open) and the plain shell prompt (`cat`)
 - [ ] Async process spawning for the GUI Terminal
 
 ### Milestone 2 -- Memory protection hardening (planned v0.2.0)
@@ -233,23 +232,33 @@ testable:
    confirming Save -- caught "Saving..." with the Save button disabled, and
    the desktop successfully switching focus to the other window while the
    write was still in flight, proving it didn't freeze.
-4. [x] ~~Generalize to reads~~ -- done (see `CHANGELOG.md`'s
-   `[Unreleased]` entry): `fs_read_range_begin()`/`fs_read_range_step()`
-   (`fs.h`, dispatched through `fs_ops.h`/`vfs.c` to `tfs.c`'s
-   `tfs_read_range_begin()`/`_step()`), built the same way Phase 2 built
-   the write side, plus a second `wm_run()` poll slot
-   (`pending_read`/`pending_read_win`) mirroring Phase 3's write slot.
-   Notepad's Open... is the first real caller. Still open: the plain
-   (non-GUI) shell prompt. Deliberately not attempted alongside the read
-   API itself -- `wm_run()` has a natural per-frame poll point to hang a
-   pending op off of (the `for(;;) { hlt; ...; }` loop Phase 3 already
-   uses); `shell_main()` (`apps/shell.c`) is a REPL with no equivalent
-   tick between "block on keyboard input" and "dispatch one command" --
-   making it non-blocking needs its own design pass (a poll point
-   somewhere in that loop), not a direct copy of the `wm_run()` pattern.
-   Consider sharing plumbing with the Terminal async-spawn item below
-   once that's tackled, since both need a way to keep a kernel-space
-   event loop responsive around a long-running operation.
+4. [x] ~~Generalize to reads and the plain shell prompt~~ -- done (see
+   `CHANGELOG.md`'s `[Unreleased]` entry). Read side:
+   `fs_read_range_begin()`/`fs_read_range_step()` (`fs.h`, dispatched
+   through `fs_ops.h`/`vfs.c` to `tfs.c`'s `tfs_read_range_begin()`/
+   `_step()`), built the same way Phase 2 built the write side, plus a
+   second `wm_run()` poll slot (`pending_read`/`pending_read_win`)
+   mirroring Phase 3's write slot -- Notepad's Open... is the first
+   real caller.
+   Shell side turned out not to need `wm_run()`-style ambient polling
+   at all: `shell_main()` (`apps/shell.c`) is a REPL with no equivalent
+   per-frame tick between "block on keyboard input" and "dispatch one
+   command", so there's no loop to hang a pending op off of the way
+   `wm_run()`'s `for(;;) { hlt; ...; }` does. The actual gap (see
+   `keyboard.c`'s own `keyboard_getchar()` comment) is narrower: a
+   blocking command doesn't get `debug_console_poll()`/
+   `vga_cursor_tick()` serviced at all until it returns, unlike the
+   shell's idle wait at the prompt (already rides `keyboard_getchar()`'s
+   `hlt` loop) or the GUI (rides `wm_run()`'s poll). Closed by making
+   `cat` (`apps/shell_fs.c`) -- the shell's one command with no size cap
+   on how much it blocks reading, unlike Notepad's Open... which is
+   capped at `SCROLLBACK_CAP` and finishes in 1-2 steps regardless -- use
+   the stepped read API in its own loop, calling
+   `debug_console_poll()`/`vga_cursor_tick()` between blocks instead of
+   not at all. No `hlt`/throttling in that loop (unlike `wm_run()`'s,
+   which is gated on its own idle wait) -- `cat` has real work to do and
+   wants to finish as fast as the disk allows, it just also services the
+   debug console/cursor between blocks now.
 
 Separately, async/continuously-armed process spawning for the GUI Terminal,
 so `run`/`ls`/any future `/bin` binary can execute from inside
