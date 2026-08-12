@@ -21,8 +21,22 @@ struct tray_item {
 static struct tray_item tray_items[TRAY_MAX_ITEMS];
 static int clock_tray_id = -1;
 
+// Deliberately does NOT call wm_damage_rect() to scope this to just the
+// taskbar strip -- two real bugs came from an earlier version that did
+// (see CHANGELOG.md): tray_init() runs before wm_run()'s main loop
+// starts, so a pre-loop wm_damage_rect() call poisoned the very first
+// frame's "no damage reported yet -- unknown, be safe, draw everything"
+// full-screen fallback, narrowing it to just the taskbar and leaving
+// the desktop/icons never drawn at all. And the once-a-second clock
+// tick relying on that same full-screen fallback (as it always had
+// before this file existed) turned out to be load-bearing for the
+// mouse cursor's saved-pixels-underneath snapshot (draw_cursor_at()'s
+// cursor_under, see wm_render.c) staying in sync with the real screen
+// -- scoping the tick to a narrow rect removed that implicit
+// once-a-second full resync. Matches every other still-unscoped piece
+// of WM chrome (menus, dialogs -- see docs/roadmap.md's Milestone 9
+// entry): safe and imprecise, never worse than before.
 static void tray_damage(void) {
-    wm_damage_rect(0, screen_h - taskbar_h, screen_w, taskbar_h);
     redraw_pending = 1;
 }
 

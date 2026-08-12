@@ -335,18 +335,53 @@ forever.
     WM-polls-a-handle shape `window_start_write()` uses (a tray item's
     text only changes when the app itself decides it has, so there's
     nothing for the WM to poll).
-  - Damage scoping: every registration/update/unregister call damages
-    just the taskbar strip (`wm_damage_rect(0, screen_h - taskbar_h,
-    screen_w, taskbar_h)`), not the full screen -- closes part of the
-    Milestone 9 compositor gap for the clock specifically (it used to
-    rely on the full-screen fallback, since the old tick handler only
-    set `redraw_pending` with no damage report at all). Menu/dialog/
-    other taskbar-content-click redraws are still on the full-screen
-    fallback -- unchanged, still tracked in `docs/roadmap.md`.
+  - Damage scoping: every registration/update/unregister call just sets
+    `redraw_pending`, relying on the full-screen fallback -- matches
+    every other still-unscoped piece of WM chrome (menus, dialogs, see
+    `docs/roadmap.md`'s Milestone 9 entry). An earlier version of this
+    entry scoped these to just the taskbar strip via `wm_damage_rect()`;
+    see the "Fixed" entry directly below for the two real bugs that
+    caused, and why it was reverted.
   - Verified via QMP: clock renders at its usual position and keeps
     ticking (`18:49:03` -> `18:49:19` across two screenshots), taskbar
     Start/window buttons unaffected with a window open -- see
     `screenshots/2026-08-12/tray-clock-*.png`.
+
+### Fixed
+- The tray entry above originally scoped every tray registration/
+  update/unregister to just the taskbar strip via `wm_damage_rect()`
+  instead of relying on the full-screen fallback -- shipped, then
+  caught live on the user's own machine (not QMP-testable, since it
+  only shows up once real time passes and the real PS/2 mouse moves
+  around): entering GUI mode showed a black desktop with no icons at
+  all, and the mouse cursor visibly stopped tracking correctly.
+  - Root cause #1 (black desktop): `tray_init()` runs during
+    `wm_run()`'s setup, before the main loop starts. Registering the
+    clock there called `wm_damage_rect()` for the taskbar strip *before
+    the very first frame*, which poisoned `wm_render_frame()`'s "no
+    damage reported yet -- unknown, be safe, draw everything"
+    full-screen fallback into a taskbar-only clip. `desktop_draw()`
+    (icons) and the window-chrome loop still ran, but every pixel they
+    wrote outside that strip was silently clipped away, so the first
+    frame -- the only one that mattered, since nothing else re-damages
+    the whole desktop afterward -- never actually drew the desktop.
+  - Root cause #2 (cursor tracking): the once-a-second clock tick used
+    to report no damage at all, which meant it forced a full-screen
+    fallback redraw every single second -- an implicit, unadvertised
+    safety net that kept `wm_render.c`'s cursor-under-pixels snapshot
+    (`cursor_under`, used by the cheap `wm_render_cursor_move()` path)
+    resynced against the real screen every second. Scoping the tick's
+    damage to just the taskbar strip silently removed that safety net,
+    so any drift in the cheap cursor-move path stopped self-correcting.
+  - Fix: `apps/wm/wm_tray.c`'s `tray_damage()` no longer calls
+    `wm_damage_rect()` at all -- it just sets `redraw_pending`, same as
+    the clock always did before this feature existed. The registration
+    API itself (`tray_register()`/`tray_set_text()`/`tray_unregister()`)
+    is unchanged; only this internal damage-scoping optimization was
+    reverted.
+  - Verified via QMP: entering GUI mode now shows the full desktop
+    (icons + navy background) on the very first frame, no click needed
+    to "unstick" it -- see `screenshots/2026-08-12/tray-fix-*.png`.
 
 ## [0.1.0] - 2026-08-12
 
