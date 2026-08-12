@@ -216,6 +216,96 @@ forever.
   - Milestone 1's async-I/O item is now fully closed except the
     separately-tracked Terminal async-spawn item below.
 
+- Async/continuously-armed process spawning for the GUI Terminal
+  (Milestone 1 phase 4b, docs/roadmap.md) -- `ls` and an explicit
+  allowlist of verified-safe `/bin` binaries via `run` now execute from
+  inside a Terminal window without freezing the desktop, instead of
+  being wholesale-blocked. Same root cause as the async I/O phases above
+  (a blocking call inside `wm_run()`'s single event loop), different
+  mechanism (process scheduling, not I/O completion):
+  - `kernel/core/scheduler.c`/`scheduler.h`: `scheduler_armed` is now set
+    once in `scheduler_init()` and never unset, replacing the old
+    demo-only flag `scheduler_demo_run()` flipped on/off around its own
+    wait loop -- safe because an armed tick over an empty process table
+    is a byte-for-byte no-op (find_next_ready() finds nothing, resumes
+    exactly what was interrupted), the same invariant the old disarmed
+    default relied on. New public API: `scheduler_spawn(path, args)`
+    (thin wrapper over the previously-`static` `spawn_from_fs()`,
+    extended to build a real argv via a newly-exposed
+    `elf_build_argv_on_stack()` instead of always zeroing rdi/rsi) and
+    `scheduler_poll(pid, &exit_code)` (`enum sched_poll_result`:
+    RUNNING/EXITED/INVALID). A process that exits now becomes
+    `SCHED_ZOMBIE` (holding its exit code) instead of being freed
+    straight to `SCHED_UNUSED` -- `scheduler_poll()` is the explicit reap
+    step, same two-phase shape `wait()`/`waitpid()` has.
+  - `kernel/core/elf_run.c`/`elf_run.h`: the static `build_argv_on_stack()`
+    helper promoted to a public `elf_build_argv_on_stack()` so
+    scheduler.c's `spawn_from_fs()` can reuse the exact same argv layout
+    `elf_run_from_fs()`'s legacy blocking path already uses.
+  - `apps/wm/wm.c`/`wm.h`/`wm_internal.h`: a third WM-global poll slot,
+    `pending_proc`/`pending_proc_win`, mirroring `pending_write`/
+    `pending_read`'s exact shape from Milestone 1 phases 3-4 --
+    `window_start_process()`/`window_process_pending()`, a new
+    `gui_apps.h` callback `on_process_exit(win, exit_code)`,
+    `bring_to_front()`/`close_window()` keeping `pending_proc_win`
+    accurate the same way, `close_window()` refusing to close a window
+    with a process pending, and `wm_exit_requested` deferred while one is
+    in flight (a live `vga_sink` would otherwise silently swallow the
+    physical shell's own prompt output on return). Unlike the I/O pair,
+    this poll doesn't make anything appear on screen -- a spawned
+    process's `SYS_WRITE` output already lands in the owning window's
+    scrollback via `vga_putc()`'s active sink the instant each syscall
+    runs, independent of `wm_run()`'s frame rate; the poll only detects
+    completion.
+  - `apps/terminal.c`/`terminal.h`: new per-window state
+    (`st->running_pid`, blocking all keyboard input while set, same as
+    `st->in_editor` does for `edit`/`nano`; `st->saved_sink`). `ls`
+    always spawns async now (mirrors `shell_sys.c`'s `cmd_ls_bin()`
+    flag/path parsing, via `resolve_editor_path()` for the positional
+    argument). `run <name>` does too, but only for names on a new
+    explicit allowlist, `RUN_ALLOWED_BINS` -- the opposite of
+    `BLOCKED_CMDS`'s blocklist approach: `crash_test`, `exit_test`,
+    `file_test`, `hello`, `lspci`, `newsyscalls_test`, `socket_test`,
+    `write_bad_test`, `write_test`, each checked against its own
+    `userland/*.c` source (not assumed safe by name) for the two real
+    hazards -- reading stdin (no stdin routing to a spawned process
+    exists yet, so one blocked on it would hang forever, and
+    `close_window()`'s new refusal above would strand the whole window)
+    or touching the framebuffer/its own window directly. Excluded:
+    `echo` (loops on `SYS_READ_KEY` waiting for an Esc that never
+    arrives), `gui_test`/`win_test` (framebuffer/own-window takeover),
+    `counter_a`/`counter_b` (infinite-loop-by-design `schedtest` demo
+    processes). `crash_test` deliberately faults -- verified safe anyway:
+    `idt.c`'s fault handler was already scheduler-aware from M16 (its
+    `recoverable` branch checks `scheduler_current_pid()`), tearing the
+    process down and reporting "RING-3 PROCESS CRASHED" through whatever
+    sink is active with exit code -1, exactly like a legacy
+    `run crash_test` from the physical shell.
+  - Verified via QMP: `schedtest` still spawns/interleaves/exits its two
+    counter processes correctly with the scheduler now permanently
+    armed, and the physical shell's own legacy `run <name>`/`ls` are
+    unaffected (confirmed `run exit_test` -> exit code 42 and `ls`
+    listing correctly both still work the old blocking way). In the GUI
+    Terminal: `ls` lists a real directory and reports "Process finished.
+    Exit code: 0"; `run exit_test` reports exit code 42; `run crash_test`
+    reports the crash message and "Exit code: CRASHED" without freezing
+    or hanging the window; `run gui_test` (not on the allowlist) and
+    `schedtest`/`gui` (still in `BLOCKED_CMDS`) get their expected
+    refusals; the window closes normally afterward with no stuck state,
+    and exiting the GUI back to the physical shell afterward works
+    cleanly (`ls` there still works too). Also incidentally confirmed a
+    PRE-EXISTING, unrelated quirk while testing: `run hello` from the
+    physical shell page-faults (not the `hlt`-based crash `hello.c`'s own
+    comment describes) because `USERLAND_MARKER_ADDR`
+    (`userland/userland_contract.h`) happens to collide with
+    `ELF_RUN_HEAP_VADDR` (`elf_run.c`), a page `elf_run_from_fs()` never
+    actually maps unless the binary calls `sbrk()` -- confirmed
+    unaffected by this change (reproduced identically via `run exit_test`
+    succeeding normally right after), not investigated further as
+    out-of-scope for this item.
+    `tools/preflight.sh` (build + boot smoke test) passed throughout.
+    Screenshots in `screenshots/2026-08-12/`.
+
 ## [0.0.9] - 2026-08-12
 
 ### Fixed

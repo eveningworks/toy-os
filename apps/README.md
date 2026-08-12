@@ -100,7 +100,15 @@ their own loop, the window manager calls their `on_open`/`on_draw`/
   Terminal's event-driven window the way it does at the physical
   console, so Terminal drives the same `editor_handle_key()` one
   keystroke at a time from its own `on_key` callback instead. See
-  `terminal.c`'s top comment and `editor.h` for the full split.
+  `terminal.c`'s top comment and `editor.h` for the full split. `ls` and
+  `run <name>` (for a small, verified-safe allowlist -- see
+  `RUN_ALLOWED_BINS` in `terminal.c`) run real `/bin` ELF binaries
+  asynchronously via `scheduler.h`'s `scheduler_spawn()`/
+  `scheduler_poll()` and `wm.h`'s `window_start_process()` (Milestone 1
+  phase 4b, see `docs/roadmap.md`) instead of the blocking
+  `elf_run_from_fs()` path the physical shell still uses -- no stdin
+  routing to the spawned process yet, so this only covers short,
+  output-only commands.
 - **Task Manager** (`taskmgr.c`) -- lists every open window (title +
   normal/minimized/maximized state) and shows system memory (physical
   RAM and kernel heap, total/used). Redraws every tick alongside the
@@ -126,7 +134,14 @@ tightly-coupled event loop, not multiple decoupled components (see
   `on_write_complete` callback), `window_start_read()`/
   `window_read_pending()` (same shape, for `fs_read_range_begin()` --
   Milestone 1 phase 4; completion via `gui_apps.h`'s `on_read_complete`
-  callback, which also carries the actual byte count read), `wm_run()`.
+  callback, which also carries the actual byte count read),
+  `window_start_process()`/`window_process_pending()` (same shape again,
+  for a pid from `scheduler.h`'s `scheduler_spawn()` -- Milestone 1
+  phase 4b; completion via `gui_apps.h`'s `on_process_exit` callback,
+  which carries the process's real exit code -- the process's own
+  console output needs no help from this polling at all, since it
+  already streams straight into whatever `vga_sink` is active the
+  instant each `SYS_WRITE` syscall runs), `wm_run()`.
 - **`wm.c`** -- shared state, the app-facing helpers behind `wm.h`, window
   lifecycle (`open_app`, `close_window`, `bring_to_front`), and
   `wm_run()`'s main loop. Start reading here.

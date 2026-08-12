@@ -1503,3 +1503,50 @@ disabled forever. Caught by clicking a second window in front of
 Notepad before Save, not by reading the code -- worth remembering next
 time a change wants to hold a `struct window *` past the callback it
 was handed in.
+
+## The M16 scheduler is permanently armed now -- an empty process table makes that safe
+
+`scheduler_armed` (`kernel/core/scheduler.c`) used to be false by
+default and only ever set true, briefly, inside `scheduler_demo_run()`
+(`schedtest`), set back false before returning even on failure -- see
+that function's own build-172-era comment for the original reasoning.
+Milestone 1 phase 4b (Terminal async spawn, see `CHANGELOG.md`'s
+`[Unreleased]` entry) needed a scheduler available OUTSIDE that one demo
+call, so `scheduler_init()` now sets `scheduler_armed = 1` once, at
+boot, and nothing ever unsets it again.
+
+Why this doesn't reopen the M8-M15 safety argument the disarmed default
+existed for: `scheduler_tick()` being armed only matters once something
+is actually in the process table. `find_next_ready()` scanning an
+all-`SCHED_UNUSED` table always returns -1, so every tick that finds
+nothing ready just re-confirms `g_next_kernel_rsp` at whatever
+`isr_dispatch`'s default already set it to (`regs`, i.e. resume exactly
+what was interrupted) -- byte-for-byte the same outcome the old disarmed
+early-return produced. So every legacy `process_run_ring3()` caller
+(every M8-M15 test command, the physical shell's own `run`/`ls`) is
+still completely unaffected, for the same reason as before, just via a
+different mechanism (an empty table instead of a flag check). See
+`scheduler.c`'s own top comment for the full writeup, and
+`scheduler_poll()`'s `SCHED_ZOMBIE` state for the other real change this
+item made (a process holds its exit code until explicitly reaped,
+instead of being freed back to `SCHED_UNUSED` the instant it exits).
+
+## Terminal's `run <name>` uses an explicit allowlist, not a blocklist
+
+`apps/terminal.c`'s `RUN_ALLOWED_BINS` (Milestone 1 phase 4b) is the
+opposite shape from `BLOCKED_CMDS` right above it in the same file:
+`BLOCKED_CMDS` assumes safe-unless-listed (`gui`/`ring3test`/
+`schedtest`, verified hazardous individually), `RUN_ALLOWED_BINS`
+assumes unsafe-unless-listed. Deliberate, not an inconsistency -- by the
+time this item was built, `run` could reach any `/bin` binary by name,
+including ones nobody had specifically checked yet, so the safe default
+flipped: a real, non-blocking spawn mechanism now exists, so the
+question for each `/bin` binary became "was this specific one actually
+verified safe" (reads no stdin, doesn't touch the framebuffer/its own
+window) rather than "has anyone flagged this specific one as unsafe
+yet." Every entry was checked against its own `userland/*.c` source, not
+added by assumption -- see `CHANGELOG.md`'s `[Unreleased]` entry for
+exactly which binaries and why each excluded one was excluded
+(`echo`'s `SYS_READ_KEY` loop, `gui_test`/`win_test`'s framebuffer/
+window takeover, `counter_a`/`counter_b`'s intentionally-infinite
+`schedtest` demo loop).

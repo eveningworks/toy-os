@@ -8,24 +8,36 @@
 // NOT supported, on purpose (see BLOCKED_CMDS below): commands that
 // never return (`ring3test`), that take over the whole physical screen
 // by drawing straight to the framebuffer instead of going through the
-// console/sink (`gui`), that block the calling context for their whole
-// run without yielding back to the window manager (`schedtest`), or
-// that would recursively re-enter a blocking loop from inside this
-// window's on_key callback (`run` -- which could launch `gui`/`shell`
-// again, or any of a dozen /bin binaries, several of which fall into
-// the same categories above; `run` is blocked wholesale rather than
-// per-target, since none of those per-binary distinctions could be
-// verified safe inside this GUI context in the time available --
-// see docs/decisions.md). Typing one of these prints an explanation
-// instead of running it -- see build 193's CHANGELOG entry for the
-// original reasoning. Every /bin binary (`crash_test`, `file_test`,
-// `write_test`, `hello`, etc.) can still be run from the PHYSICAL
-// shell via `run <name>` -- just not from inside this window. Ordinary
-// commands like `ls`/`cat`/`cd` still run for real through
-// shell_dispatch(), because SYS_WRITE (the only way a ring-3 process
-// prints) already goes through vga_putc() -- and vga_putc() already
-// respects whatever sink is active (see vga.h's struct vga_sink
-// comment) -- with zero terminal-specific code needed for any of them.
+// console/sink (`gui`), or that block the calling context for their
+// whole run without yielding back to the window manager (`schedtest`).
+// Typing one of these prints an explanation instead of running it --
+// see build 193's CHANGELOG entry for the original reasoning.
+//
+// `run`/`ls` used to belong in that same list -- both went through
+// elf_run_from_fs()/process_run_ring3_args() at the physical shell, a
+// synchronous, blocking ring-3 call that would freeze this window's
+// event loop for however long the binary ran, same hazard as `gui`/
+// `schedtest` above. Milestone 1 phase 4b (docs/roadmap.md) built the
+// non-blocking alternative both of these needed: scheduler.h's
+// scheduler_spawn()/scheduler_poll() (a public, non-blocking spawn API
+// on top of the M16 scheduler, now continuously armed rather than
+// demo-only) plus a new wm_run() poll slot (wm.h's
+// window_start_process(), mirroring window_start_write()/
+// window_start_read()'s existing pattern exactly). `ls` always uses it
+// now; `run` uses it only for names on RUN_ALLOWED_BINS below (see its
+// own comment for exactly which binaries were verified safe and why) --
+// term_run_line() special-cases both BEFORE BLOCKED_CMDS is ever
+// consulted. Everything else about `run` (any name not on the
+// allowlist, or a kernel-space app like `gui`/`shell` itself) still
+// gets an explanatory refusal; the physical shell's own `run` is
+// unaffected and can still run anything. No stdin routing to a running
+// process yet -- see term_spawn()'s own comment on why that's still
+// out of scope this phase. Ordinary commands like `cat`/`cd` still run
+// for real through shell_dispatch(), because SYS_WRITE (the only way a
+// ring-3 process prints) already goes through vga_putc() -- and
+// vga_putc() already respects whatever sink is active (see vga.h's
+// struct vga_sink comment) -- with zero terminal-specific code needed
+// for any of them.
 //
 // `edit`/`nano` (build 377) look like they'd belong in that same
 // blocked list -- apps/editor.c's editor_run() is exactly the kind of
@@ -87,40 +99,74 @@ struct terminal_state {
     struct text_scrollback editor_tb;
     char editor_path[FS_PATH_MAX];
     char editor_status[32];
+
+    // ---- async `ls`/`run` (Milestone 1 phase 4b, docs/roadmap.md) ----
+    int running_pid; // 0 if no process running via wm.h's window_start_process(), else its pid
+    const struct vga_sink *saved_sink; // whatever was active before term_spawn() installed term_sink, restored in terminal_process_exit()
 };
 static struct terminal_state g_terminal;
 
 // `elftest`/`guitest`/`wintest`/`echotest` used to be here too -- they
 // don't exist as shell commands anymore (their binaries moved to /bin,
 // see docs/decisions.md), so blocking them by name would just be dead
-// weight. `run` stays blocked wholesale rather than per-target: several
-// /bin binaries (gui_test, win_test, echo_test) fall into the same
-// categories as `gui`/`ring3test`/`schedtest` below, and a per-target
-// allowlist couldn't be verified safe inside this GUI context in the
-// time available (see docs/decisions.md) -- so `run` is blocked here
-// the same simple way as before this migration. Every /bin binary can
-// still be run from the physical shell via `run <name>`, just not from
-// inside this window.
+// weight.
 //
-// `ls` joined this list once it migrated from a kernel-space built-in
-// to a real /bin binary (see userland/ls.c, CHANGELOG.md): like every
-// path through elf_run_from_fs()/process_run_ring3_args(), it's a
+// `run`/`ls` used to be here too -- both go through
+// elf_run_from_fs()/process_run_ring3_args() at the physical shell, a
 // synchronous, blocking ring-3 call that would freeze this window's
-// whole event loop until it returns -- same hazard as `run`, just
-// reached through a dedicated dispatch entry instead of `run`'s
-// generic one, so it needs its own line here rather than being covered
-// by `run` already being blocked. A real fix needs the async/
-// continuously-armed spawn infrastructure tracked in docs/roadmap.md,
-// not a per-command workaround. Directory listing from inside the GUI
-// Terminal is unavailable until that lands.
+// whole event loop until it returns. Milestone 1 phase 4b
+// (docs/roadmap.md) closed that: term_run_line() below now special-cases
+// both BEFORE this list is ever consulted, spawning through
+// scheduler_spawn() (non-blocking) instead and polling via
+// wm.h's window_start_process(), same shape async I/O
+// (fs_write_range_begin()/_step() etc) already uses elsewhere in this
+// codebase. `ls` always goes through this path now (see term_run_line());
+// `run` only does for names on RUN_ALLOWED_BINS below -- everything else
+// still gets an explanatory refusal, same spirit as this list, since a
+// per-target allowlist needed each binary actually verified safe (no
+// stdin read, no framebuffer/window takeover -- see RUN_ALLOWED_BINS's
+// own comment), not assumed so by omission.
 static const char *const BLOCKED_CMDS[] = {
-    "gui", "run", "ring3test", "schedtest", "ls",
+    "gui", "ring3test", "schedtest",
 };
 #define BLOCKED_CMD_COUNT (sizeof(BLOCKED_CMDS) / sizeof(BLOCKED_CMDS[0]))
 
 static int is_blocked_command(const char *cmd) {
     for (unsigned i = 0; i < BLOCKED_CMD_COUNT; i++) {
         if (k_strcmp(cmd, BLOCKED_CMDS[i]) == 0) return 1;
+    }
+    return 0;
+}
+
+// Explicit allowlist for `run <name>`'s async spawn path (Milestone 1
+// phase 4b) -- the opposite of BLOCKED_CMDS's blocklist approach,
+// deliberately: a /bin binary not on this list is refused, not assumed
+// safe by omission. Verified against each binary's own userland/*.c
+// source, not by name alone: none of these read stdin (Terminal
+// doesn't route keystrokes to a running process this phase -- one
+// blocked reading stdin would hang forever, and close_window() refuses
+// to close a window with a process pending, so a hung one would strand
+// the whole window) or touch the framebuffer/their own window directly.
+// Deliberately excluded: `echo` (loops on SYS_READ_KEY waiting for Esc,
+// which never arrives), `gui_test`/`win_test` (framebuffer/own-window
+// takeover, same hazard `gui` above has), `counter_a`/`counter_b`
+// (infinite-loop-by-design demo processes for `schedtest`, not real
+// commands -- see scheduler.c). `crash_test` deliberately faults --
+// verified safe anyway: idt.c's fault handler is already
+// scheduler-aware (its `recoverable` branch checks
+// scheduler_current_pid()), tearing the process down and reporting
+// "RING-3 PROCESS CRASHED" through whatever sink is active (same as any
+// other console output -- see vga.h's struct vga_sink) with exit code
+// -1, same as a legacy `run crash_test` from the physical shell.
+static const char *const RUN_ALLOWED_BINS[] = {
+    "crash_test", "exit_test", "file_test", "hello", "lspci",
+    "newsyscalls_test", "socket_test", "write_bad_test", "write_test",
+};
+#define RUN_ALLOWED_COUNT (sizeof(RUN_ALLOWED_BINS) / sizeof(RUN_ALLOWED_BINS[0]))
+
+static int is_run_allowed(const char *name) {
+    for (unsigned i = 0; i < RUN_ALLOWED_COUNT; i++) {
+        if (k_strcmp(name, RUN_ALLOWED_BINS[i]) == 0) return 1;
     }
     return 0;
 }
@@ -209,7 +255,55 @@ static void resolve_editor_path(const char *name, char *out) {
     k_strcpy(out + cl, name);
 }
 
-static void term_run_line(struct terminal_state *st, char *line) {
+// Shared tail of the `ls`/`run` async-spawn paths in term_run_line()
+// below (Milestone 1 phase 4b, docs/roadmap.md): installs term_sink so
+// the spawned process's SYS_WRITE output lands in this window's
+// scrollback exactly the way shell_dispatch()'s own sink already does
+// for ordinary kernel-space commands, spawns via scheduler_spawn()
+// (non-blocking -- returns immediately with a pid, unlike
+// elf_run_from_fs()), and registers it with wm.h's
+// window_start_process() so wm_run() polls it once per frame. Prints
+// its own error and leaves nothing pending/no sink change on any
+// failure. `args` may be "" for none. No stdin routing to the spawned
+// process -- terminal_key() below refuses all input while
+// st->running_pid is set, same as it does for st->in_editor, so this is
+// only really usable for short output-only commands today (exactly
+// `ls` and RUN_ALLOWED_BINS's members -- see their own comments).
+static void term_spawn(struct window *win, struct terminal_state *st,
+                        const char *bin_path, const char *args) {
+    if (!fs_exists(bin_path) || fs_is_dir(bin_path)) {
+        term_write(st, "run: no such app: ", VGA_LIGHT_RED);
+        term_write(st, bin_path, VGA_LIGHT_RED);
+        term_write(st, "\n", VGA_LIGHT_RED);
+        return;
+    }
+
+    int pid = scheduler_spawn(bin_path, (args && args[0]) ? args : NULL);
+    if (pid == 0) {
+        term_write(st, "run: failed to spawn ", VGA_LIGHT_RED);
+        term_write(st, bin_path, VGA_LIGHT_RED);
+        term_write(st, "\n", VGA_LIGHT_RED);
+        return;
+    }
+    if (!window_start_process(win, pid)) {
+        // Can't happen in practice -- terminal_key() refuses to call
+        // term_run_line() at all while st->running_pid is already set,
+        // and Terminal is the only caller of window_start_process() --
+        // defensive only, same spirit as notepad.c's own
+        // belt-and-suspenders window_write_pending() check.
+        term_write(st, "run: a process is already running in this window\n", VGA_LIGHT_RED);
+        return;
+    }
+
+    static const struct vga_sink term_sink = {
+        .ctx = &g_terminal.tb, .putc = sink_putc, .backspace = sink_backspace,
+        .clear = sink_clear, .set_color = sink_set_color, .rows = sink_rows,
+    };
+    st->saved_sink = vga_set_sink(&term_sink);
+    st->running_pid = pid;
+}
+
+static void term_run_line(struct window *win, struct terminal_state *st, char *line) {
     char cmd[TERM_LINE_MAX];
     int i = 0;
     while (line[i] && line[i] != ' ' && i < (int)sizeof(cmd) - 1) { cmd[i] = line[i]; i++; }
@@ -229,6 +323,104 @@ static void term_run_line(struct terminal_state *st, char *line) {
         return;
     }
 
+    // `ls` -- always async now (Milestone 1 phase 4b). Mirrors
+    // shell_sys.c's cmd_ls_bin() flag/positional-argument parsing
+    // (-a/-l/-al/-la plus an optional trailing directory), but resolves
+    // the positional argument via resolve_editor_path() above instead
+    // of shell.c's own resolve_path() (static to that file, and does
+    // real "."/".." collapsing this simpler version skips) -- same
+    // "deliberately simpler" tradeoff resolve_editor_path() already
+    // documents for `edit`.
+    if (cmd[0] && k_strcmp(cmd, "ls") == 0) {
+        const char *rest = line[i] ? line + i + 1 : "";
+        char flags[8];
+        size_t flags_len = 0;
+        char positional[FS_PATH_MAX];
+        positional[0] = '\0';
+
+        char scratch[TERM_LINE_MAX];
+        k_strcpy(scratch, rest);
+        char *p = scratch;
+        while (*p) {
+            while (*p == ' ') p++;
+            if (!*p) break;
+            char *start = p;
+            while (*p && *p != ' ') p++;
+            int had_space = (*p == ' ');
+            *p = '\0';
+            if (start[0] == '-') {
+                for (size_t j = 1; start[j] && flags_len + 1 < sizeof(flags); j++) flags[flags_len++] = start[j];
+            } else if (positional[0] == '\0') {
+                k_strcpy(positional, start);
+            }
+            if (had_space) p++;
+        }
+        flags[flags_len] = '\0';
+
+        char path[FS_PATH_MAX];
+        if (positional[0]) resolve_editor_path(positional, path);
+        else k_strcpy(path, shell_cwd());
+
+        char args[FS_PATH_MAX + 8];
+        args[0] = '\0';
+        if (flags_len > 0) {
+            k_strcpy(args, "-");
+            k_strcpy(args + 1, flags);
+            k_strcpy(args + 1 + flags_len, " ");
+        }
+        k_strcpy(args + k_strlen(args), path);
+
+        term_spawn(win, st, "/bin/ls", args);
+        return;
+    }
+
+    // `run <name> [args...]` -- async only for RUN_ALLOWED_BINS's
+    // verified-safe binaries (see its own comment); everything else
+    // (an unverified /bin binary, or a kernel-space app name like `gui`/
+    // `shell` from apps.c's registry -- deliberately not even checked
+    // against that registry, since nothing in it is on the allowlist
+    // either way) gets the same explanatory refusal BLOCKED_CMDS's
+    // members do.
+    if (cmd[0] && k_strcmp(cmd, "run") == 0) {
+        const char *rest = line[i] ? line + i + 1 : "";
+        if (!rest[0]) {
+            term_write(st, "usage: run <app> [args...]\n", VGA_LIGHT_RED);
+            return;
+        }
+        char name[TERM_LINE_MAX];
+        k_strcpy(name, rest);
+        char *bin_args = name;
+        while (*bin_args && *bin_args != ' ') bin_args++;
+        if (*bin_args == ' ') {
+            *bin_args = '\0';
+            bin_args++;
+            while (*bin_args == ' ') bin_args++;
+        } else {
+            bin_args = 0;
+        }
+
+        if (!is_run_allowed(name)) {
+            term_write(st,
+                "Not available in the terminal app yet -- only a small,\n"
+                "verified-safe allowlist of /bin binaries can run from\n"
+                "here (none that read stdin or touch the framebuffer\n"
+                "directly). Esc out of the GUI and use the physical\n"
+                "shell's `run` for anything else.\n",
+                VGA_LIGHT_RED);
+            return;
+        }
+
+        char bin_path[FS_PATH_MAX];
+        k_strcpy(bin_path, "/bin/");
+        size_t prefix_len = k_strlen(bin_path);
+        size_t j = 0;
+        while (name[j] && prefix_len + j < FS_PATH_MAX - 1) { bin_path[prefix_len + j] = name[j]; j++; }
+        bin_path[prefix_len + j] = '\0';
+
+        term_spawn(win, st, bin_path, bin_args ? bin_args : "");
+        return;
+    }
+
     if (cmd[0] && is_blocked_command(cmd)) {
         term_write(st,
             "Not available in the terminal app -- it either doesn't\n"
@@ -245,6 +437,30 @@ static void term_run_line(struct terminal_state *st, char *line) {
         .clear = sink_clear, .set_color = sink_set_color, .rows = sink_rows,
     };
     shell_dispatch(line, &term_sink);
+}
+
+// wm.h's window_start_process() callback (via gui_apps.h's
+// on_process_exit) -- fires once wm_run()'s per-frame poll of the
+// process term_spawn() started reaches a terminal result. The
+// process's own output already streamed into st->tb in real time (see
+// term_spawn()'s comment) -- this only needs to restore whatever sink
+// was active before (vga.h's struct vga_sink doc comment on why a
+// stale sink left installed is dangerous), print the exit code the
+// same way the physical shell's own `run` does (vga_write_exit_code(),
+// shell_sys.c's cmd_run()), and re-show the prompt terminal_key() held
+// back while the process was running.
+void terminal_process_exit(struct window *win, int exit_code) {
+    struct terminal_state *st = (struct terminal_state *)window_get_state(win);
+
+    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_write("Process finished. Exit code: ");
+    vga_write_exit_code(exit_code);
+    vga_putc('\n');
+    vga_set_sink(st->saved_sink);
+    st->running_pid = 0;
+
+    term_print_prompt(st);
+    window_invalidate(win);
 }
 
 void terminal_default_size(int *w, int *h) {
@@ -277,6 +493,8 @@ void terminal_open(struct window *win) {
     g_terminal.hist_index = 0;
     g_terminal.saved_current[0] = '\0';
     g_terminal.in_editor = 0;
+    g_terminal.running_pid = 0;
+    g_terminal.saved_sink = 0;
     window_set_state(win, &g_terminal);
 
     term_write(&g_terminal,
@@ -407,6 +625,14 @@ void terminal_wheel(struct window *win, int delta) {
 void terminal_key(struct window *win, int key) {
     struct terminal_state *st = (struct terminal_state *)window_get_state(win);
 
+    // No stdin routing to a running process yet (Milestone 1 phase 4b,
+    // see term_spawn()'s comment) -- ignore all input, the same
+    // "windows still redraw/other windows still work, this one just
+    // doesn't respond to typing" tradeoff notepad.c's disabled Save
+    // As.../Open... buttons make while a write/read is in flight.
+    // terminal_process_exit() re-enables this once the process exits.
+    if (st->running_pid) return;
+
     if (st->in_editor) {
         int should_exit = 0;
         st->editor_status[0] = '\0'; // see editor_handle_key()'s header comment on this clear-before-call convention
@@ -424,14 +650,17 @@ void terminal_key(struct window *win, int key) {
         widget_scrollback_putc(&st->tb, '\n');
         st->line[st->line_len] = '\0';
         term_history_add(st, st->line);
-        term_run_line(st, st->line);
+        term_run_line(win, st, st->line);
         st->line_len = 0;
         st->hist_index = st->history_count;
         // term_run_line() may have just switched this window into
         // editor sub-mode (`edit`/`nano`) -- if so, don't print another
         // shell prompt into st->tb on top of it; terminal_key()'s own
         // in_editor branch above prints one when the user exits back.
-        if (!st->in_editor) term_print_prompt(st);
+        // Same idea for an async ls/run just started (st->running_pid
+        // now set) -- terminal_process_exit() prints the next prompt
+        // once it actually finishes, not here.
+        if (!st->in_editor && !st->running_pid) term_print_prompt(st);
     } else if (key == '\b') {
         if (st->line_len > 0) {
             st->line_len--;

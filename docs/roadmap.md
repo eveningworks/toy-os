@@ -32,7 +32,8 @@ later judgment call, not mechanically tied to "20 milestones done."
 - [x] Steppable write API
 - [x] Wire it up: `wm_run()` polls a pending write (Notepad Save first)
 - [x] Generalize to reads (Notepad Open) and the plain shell prompt (`cat`)
-- [ ] Async process spawning for the GUI Terminal
+- [x] Async process spawning for the GUI Terminal (`ls` and an allowlist
+      of verified-safe `/bin` binaries via `run`)
 
 ### Milestone 2 -- Memory protection hardening (planned v0.2.0)
 
@@ -260,33 +261,85 @@ testable:
    wants to finish as fast as the disk allows, it just also services the
    debug console/cursor between blocks now.
 
-Separately, async/continuously-armed process spawning for the GUI Terminal,
-so `run`/`ls`/any future `/bin` binary can execute from inside
-`apps/terminal.c` instead of being wholesale-blocked (`BLOCKED_CMDS`).
-Deliberately deferred, not started: scoped during `ls`'s migration to a
-real `/bin` binary when the user was shown the real cost and explicitly
-chose to ship `ls` now, blocked in the Terminal same as `run`, rather than
-build this first. The blocker is architectural, not a small fix:
+Separately, async/continuously-armed process spawning for the GUI Terminal
+(Milestone 1 phase 4b) -- [x] done, see `CHANGELOG.md`'s `[Unreleased]`
+entry. Was deliberately deferred, not started, when `ls` migrated to a
+real `/bin` binary (blocked in the Terminal same as `run` at the time,
+see docs/decisions.md) -- the blocker was architectural, not a small fix:
 `elf_run_from_fs()`/`process_run_ring3_args()` (`kernel/core/elf_run.c`,
-`kernel/core/process.c`) is synchronous and blocking by design -- it
-doesn't return to its caller until the ring-3 process exits or faults --
-and `wm_run()` is a plain, uninterrupted kernel-space event loop, never
-itself scheduler-managed. Running a `/bin` binary from inside a Terminal
-window without freezing the whole desktop needs: a new public spawn API
-distinct from today's blocking one, the scheduler continuously armed
-(today it's demo-only, disarmed outside `schedtest`) so a spawned process
-can be polled/stepped rather than run to completion in one call,
-`wm_run()`'s event loop restructured to poll a running background process
-alongside its existing input/redraw work, and new per-window "process
-running" state in `apps/terminal.c` (output streaming into the window's
-scrollback as it arrives, not all at once at exit). Several existing
-`/bin` binaries (`gui_test`, `win_test`, `echo_test`) would still need
-individual hazard fixes on top of this (never-exits, draws straight to
-the framebuffer bypassing the window, wants real concurrency) even once
-the core mechanism exists. Shares its root cause and likely some plumbing
-with the async I/O phases above (both need something steppable instead of
-blocking), but scoped separately since this one's about process
-scheduling, not I/O completion.
+`kernel/core/process.c`) is synchronous and blocking by design, and
+`wm_run()` is a plain, uninterrupted kernel-space event loop, never itself
+scheduler-managed. Built as planned:
+- **A public, non-blocking spawn API**: `scheduler_spawn(path, args)`/
+  `scheduler_poll(pid, &exit_code)` (`kernel/include/scheduler.h`,
+  `kernel/core/scheduler.c`) -- a thin public wrapper over the M16
+  scheduler's existing (previously `static`) `spawn_from_fs()`, extended
+  to build a real argv via a newly-exposed `elf_build_argv_on_stack()`
+  (promoted out of `elf_run.c`, same layout `elf_run_from_fs()` itself
+  uses) instead of the trapframe always zeroing rdi/rsi. A process that
+  exits now becomes a `SCHED_ZOMBIE` (holding its exit code) instead of
+  being freed straight to `SCHED_UNUSED` -- `scheduler_poll()` is the
+  explicit reap step, same two-phase shape a real `wait()`/`waitpid()`
+  has.
+- **The scheduler continuously armed**: `scheduler_armed` is now set once
+  in `scheduler_init()` and never unset (`scheduler_demo_run()`/
+  `schedtest` no longer touches the flag at all) -- safe because an armed
+  tick over an empty process table is a byte-for-byte no-op, the same
+  invariant that made the old demo-only flag safe in the first place, see
+  `scheduler.c`'s updated top comment.
+- **`wm_run()` polling a running process**: a third WM-global slot,
+  `pending_proc`/`pending_proc_win` (`apps/wm/wm_internal.h`), polled
+  once per frame via `scheduler_poll()` -- mirrors `pending_write`/
+  `pending_read`'s exact shape (`wm.h`'s `window_start_process()`/
+  `window_process_pending()`, `gui_apps.h`'s `on_process_exit`
+  callback), including `bring_to_front()`/`close_window()` keeping
+  `pending_proc_win` accurate and `close_window()` refusing to close a
+  window with a process pending. One real difference: this poll doesn't
+  make the process's output appear -- that already streams straight into
+  the window's scrollback via `vga_putc()`'s active sink (`vga.h`) the
+  instant each `SYS_WRITE` syscall runs, independent of `wm_run()`'s
+  frame rate; the poll only detects completion.
+- **Per-window process state in `apps/terminal.c`**: `st->running_pid`
+  (blocks all keyboard input while set, same as `st->in_editor` does for
+  `edit`/`nano`) and `st->saved_sink`. `ls` always spawns async now;
+  `run <name>` does too, but ONLY for names on a new explicit allowlist,
+  `RUN_ALLOWED_BINS` -- the opposite of `BLOCKED_CMDS`'s blocklist
+  approach, deliberately: each entry (`crash_test`, `exit_test`,
+  `file_test`, `hello`, `lspci`, `newsyscalls_test`, `socket_test`,
+  `write_bad_test`, `write_test`) was checked against its own
+  `userland/*.c` source for the two real hazards -- reading stdin (there's
+  no stdin routing to a spawned process yet, so one blocked on it would
+  hang forever, and `close_window()` refuses to close a window with a
+  process pending, stranding the whole window) or touching the
+  framebuffer/its own window directly -- not assumed safe by name alone.
+  Excluded: `echo` (loops on `SYS_READ_KEY` waiting for Esc, which never
+  arrives), `gui_test`/`win_test` (framebuffer/own-window takeover),
+  `counter_a`/`counter_b` (infinite-loop-by-design `schedtest` demo
+  processes, not real commands). `crash_test` deliberately faults --
+  verified safe anyway: `idt.c`'s fault handler was already
+  scheduler-aware from M16 (`recoverable`'s `scheduler_current_pid()`
+  check), tearing the process down and reporting "RING-3 PROCESS
+  CRASHED" through whatever sink is active with exit code -1, exactly
+  like a legacy `run crash_test` from the physical shell -- confirmed by
+  actually running it through the new path in QMP testing, not assumed.
+- Test: QMP -- `schedtest` still spawns/interleaves/exits its two counter
+  processes correctly with the scheduler now permanently armed; the
+  physical shell's legacy `run <name>`/`ls` unaffected; in the GUI
+  Terminal, `ls` lists a real directory and reports "Process finished.
+  Exit code: 0", `run exit_test`/`run crash_test` report the right exit
+  code (42, CRASHED) without freezing or hanging, `run gui_test` and
+  `schedtest`/`gui` still get the expected refusals, and the window
+  closes normally afterward with no stuck state. `tools/preflight.sh`
+  (build + boot smoke test) passed throughout. Screenshots in
+  `screenshots/2026-08-12/`.
+- Not done this round, deliberately out of scope: stdin routing to a
+  running process (needed before more of `RUN_ALLOWED_BINS`'s exclusions
+  could be reconsidered), and any Terminal-side visual indicator that a
+  process is running beyond the missing prompt/blocked input (no
+  spinner/"Running..." status the way Notepad's Save/Load show one --
+  every allowlisted binary finishes in well under a frame in practice, so
+  there was nothing to visually prove was non-blocking the way Notepad's
+  Save As... needed a deliberately large file to demonstrate).
 
 ### Milestone 2 -- Memory protection hardening
 

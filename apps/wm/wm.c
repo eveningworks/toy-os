@@ -63,6 +63,9 @@ int pending_write_win = -1; // index into windows[] the write belongs to, or -1
 void *pending_read = 0; // handle from fs_read_range_begin(), or NULL -- see wm_internal.h
 int pending_read_win = -1; // index into windows[] the read belongs to, or -1
 
+int pending_proc = 0; // pid from scheduler_spawn(), or 0 -- see wm_internal.h
+int pending_proc_win = -1; // index into windows[] the process belongs to, or -1
+
 int redraw_pending = 1;
 
 // ---- app-facing helpers (declared in wm.h) ----
@@ -104,6 +107,18 @@ int window_start_read(struct window *win, void *read_handle) {
     return 1;
 }
 
+int window_process_pending(void) { return pending_proc != 0; }
+
+int window_start_process(struct window *win, int pid) {
+    if (pending_proc) return 0; // a process's already in flight -- WM-global single slot, see wm_internal.h
+    pending_proc = pid;
+    pending_proc_win = -1;
+    for (int i = 0; i < window_count; i++) {
+        if (&windows[i] == win) { pending_proc_win = i; break; }
+    }
+    return 1;
+}
+
 // --- read-only window introspection (see wm.h's declarations) ---
 
 int wm_window_count(void) { return window_count; }
@@ -134,6 +149,11 @@ void bring_to_front(int idx) {
     // pending_read.
     if (pending_read_win == idx) pending_read_win = window_count - 1;
     else if (pending_read_win > idx) pending_read_win--;
+
+    // Same bookkeeping for a pending process -- see wm_internal.h's
+    // pending_proc.
+    if (pending_proc_win == idx) pending_proc_win = window_count - 1;
+    else if (pending_proc_win > idx) pending_proc_win--;
 }
 
 static int find_window_for_app(const struct gui_app *app) {
@@ -201,6 +221,9 @@ void close_window(int idx) {
     // Same refusal for a read in flight -- see wm.h's window_read_pending().
     if (idx == pending_read_win) return;
 
+    // Same refusal for a process in flight -- see wm.h's window_process_pending().
+    if (idx == pending_proc_win) return;
+
     // Give the app a chance to release whatever it allocated for this
     // window (multi-instance apps kmalloc/kzalloc their own per-window
     // state -- see gui_apps.h's `multi_instance` flag and
@@ -223,6 +246,7 @@ void close_window(int idx) {
     // keep pending_write_win pointing at the same window if it moved.
     if (pending_write_win > idx) pending_write_win--;
     if (pending_read_win > idx) pending_read_win--;
+    if (pending_proc_win > idx) pending_proc_win--;
 }
 
 // ---- main loop ----
@@ -271,6 +295,8 @@ void wm_run(void) {
     pending_write_win = -1;
     pending_read = 0;
     pending_read_win = -1;
+    pending_proc = 0;
+    pending_proc_win = -1;
 
     int mx, my;
     uint8_t buttons;
@@ -309,8 +335,14 @@ void wm_run(void) {
         // pending_write's handle owns kernel heap state (see tfs.c's
         // struct tfs_write_step) that only gets freed on a terminal
         // fs_write_range_step() result. Same reasoning for pending_read
-        // (struct tfs_read_step).
-        if (wm_exit_requested && !pending_write && !pending_read) {
+        // (struct tfs_read_step), and for pending_proc: whichever window
+        // started it (apps/terminal.c) has an active vga_sink installed
+        // (vga.h) pointing at ITS scrollback -- exiting GUI mode with
+        // that still installed would silently swallow the physical
+        // shell's own prompt output the moment control returned to it
+        // (see vga.h's struct vga_sink doc comment on why a stale sink
+        // is dangerous), not just abandon the process.
+        if (wm_exit_requested && !pending_write && !pending_read && !pending_proc) {
             klog_write("wm: exiting GUI mode, returning to shell\n");
             gfx_set_double_buffered(0); // console draws straight to screen
             return;
@@ -365,6 +397,36 @@ void wm_run(void) {
                     app->on_read_complete((struct window *)finished_win, r == FS_STEP_DONE, total);
                 }
                 redraw_pending = 1;
+            }
+        }
+
+        // Per-frame poll for a pending process (Milestone 1 phase 4b,
+        // docs/roadmap.md) -- same pending_proc_win accuracy guarantee
+        // from bring_to_front()/close_window() as the two blocks above.
+        // Unlike those, this poll isn't what makes the process's own
+        // output appear -- that already streams straight into the
+        // owning window's scrollback via vga_putc()'s active sink
+        // (vga.h) the instant each SYS_WRITE syscall runs, driven by
+        // scheduler_tick() on every timer interrupt regardless of
+        // whether wm_run() happens to be looping right now. This poll
+        // only detects completion (SCHED_POLL_EXITED) so the window can
+        // be told, and redraws unconditionally while a process is
+        // pending so output that streamed in between two mouse-move
+        // events still shows up promptly instead of waiting for some
+        // unrelated redraw to happen to fire.
+        if (pending_proc) {
+            redraw_pending = 1;
+            int exit_code = -1;
+            enum sched_poll_result r = scheduler_poll(pending_proc, &exit_code);
+            if (r != SCHED_POLL_RUNNING) {
+                void *finished_win = (pending_proc_win >= 0 && pending_proc_win < window_count)
+                                          ? &windows[pending_proc_win] : 0;
+                const struct gui_app *app = finished_win ? windows[pending_proc_win].app : 0;
+                pending_proc = 0;
+                pending_proc_win = -1;
+                if (finished_win && app && app->on_process_exit) {
+                    app->on_process_exit((struct window *)finished_win, exit_code);
+                }
             }
         }
 

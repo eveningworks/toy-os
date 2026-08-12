@@ -95,6 +95,29 @@ int window_start_read(struct window *win, void *read_handle);
 // -- same purpose as window_write_pending() above, for the read slot.
 int window_read_pending(void);
 
+// Registers a pid from scheduler.h's scheduler_spawn() as the window
+// manager's pending process -- wm_run()'s main loop polls it once per
+// frame via scheduler_poll() instead of the caller ever blocking on it,
+// same shape as window_start_write()/window_start_read() above
+// (Milestone 1 phase 4b, see docs/roadmap.md). Returns 1 if accepted, 0
+// if a process is already pending (a separate WM-global single slot
+// from the write/read ones -- see wm_internal.h's pending_proc). Unlike
+// the I/O pair, the spawned process's own output reaches `win`'s
+// scrollback with NO help from this polling at all -- it already goes
+// straight through vga_putc() to whatever apps/wm/terminal.c installed
+// as the active sink (vga.h's struct vga_sink) the moment the process's
+// own SYS_WRITE syscalls run, entirely independent of wm_run()'s frame
+// rate. All this registration is for is knowing when to stop waiting:
+// `win` is notified via gui_apps.h's on_process_exit callback, called
+// once scheduler_poll() reaches SCHED_POLL_EXITED, with the process's
+// real exit code.
+int window_start_process(struct window *win, int pid);
+
+// True while any window has a process in progress via
+// window_start_process() -- same purpose as window_write_pending()/
+// window_read_pending() above, for the process slot.
+int window_process_pending(void);
+
 // The window manager's entry point -- this is what gui_main() calls.
 // Runs until the user presses Esc, then returns.
 void wm_run(void);

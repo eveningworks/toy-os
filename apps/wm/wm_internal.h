@@ -93,6 +93,24 @@ extern int pending_write_win;
 extern void *pending_read;
 extern int pending_read_win;
 
+// pid from scheduler.h's scheduler_spawn() for a process currently in
+// flight, or 0 if none -- Milestone 1 phase 4b (docs/roadmap.md), the
+// Terminal async-spawn item. Same single-WM-global-slot shape as
+// pending_write/pending_read above, but sentinel-typed differently:
+// scheduler_spawn()/scheduler_poll() already use 0 as "no such
+// process" (scheduler.h), so there's no separate NULL-vs-int
+// distinction to make here the way pending_write's `void *` handle
+// needed -- 0 IS the "none" value both this slot and the scheduler
+// agree on. pending_proc_win is the index into windows[] the process
+// belongs to, used to look up which app's on_process_exit callback to
+// invoke; -1 when pending_proc is 0. Unlike pending_write/pending_read,
+// there's no handle to free on a terminal result -- scheduler_poll()
+// itself reaps the process's slot the moment it returns
+// SCHED_POLL_EXITED, so there's nothing left to leak even if a caller
+// never followed up.
+extern int pending_proc;
+extern int pending_proc_win;
+
 extern int resizing; // index into windows[], or -1 if not resizing
 extern int resize_right, resize_bottom;
 extern int resize_start_mx, resize_start_my;

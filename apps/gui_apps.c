@@ -42,7 +42,7 @@ const struct gui_app gui_app_registry[] = {
     { .name = "Terminal", .default_size = terminal_default_size, .on_open = terminal_open,
       .on_draw = terminal_draw, .on_key = terminal_key, .on_click = terminal_click,
       .on_drag_start = terminal_drag_start, .on_drag = terminal_drag,
-      .on_wheel = terminal_wheel, .resizable = 1 },
+      .on_wheel = terminal_wheel, .on_process_exit = terminal_process_exit, .resizable = 1 },
     { .name = "Task Manager", .default_size = taskmgr_default_size, .on_open = taskmgr_open,
       .on_draw = taskmgr_draw, .resizable = 1 },
 };

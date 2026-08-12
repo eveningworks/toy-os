@@ -1,6 +1,8 @@
 #ifndef ELF_RUN_H
 #define ELF_RUN_H
 
+#include <stdint.h>
+
 // Loads and runs a real ELF64 binary straight from the persistent
 // filesystem -- the shared, generic path every /bin binary now runs
 // through via the shell's `run <name>` (apps/shell_sys.c's cmd_run()).
@@ -28,5 +30,25 @@
 // (bad path, corrupt/non-ELF64 file, out of memory, or `args` too long
 // to fit in the one stack page) -- nothing ever runs in that case.
 int elf_run_from_fs(const char *path, const char *args);
+
+// The argv-layout half of elf_run_from_fs() above, exposed on its own
+// for scheduler.c's spawn_from_fs() (the scheduler's non-blocking
+// counterpart) to reuse -- same "argv[0]=path plus each whitespace-
+// separated token of `args`" convention, no quoting support. Writes
+// the layout into the identity-mapped stack page at `stack_phys`/
+// `stack_vaddr` (a single already-allocated+mapped page, `stack_vaddr`
+// being that page's address in the target process's OWN address
+// space), and returns via out-params: `*out_argc`, `*out_argv` (a
+// *vaddr*, since ring-3 code dereferences it), and `*out_user_rsp`
+// (the initial user-mode RSP -- always equal to `*out_argv`, since the
+// argv pointer array sits at the top of what's actually been written,
+// with nothing above it a process would need to `push` over). Returns
+// 1 on success, 0 if `args` has too many tokens or the strings +
+// pointer array don't fit in the one 4096-byte page -- callers must
+// treat that as a hard failure, not silently truncate.
+int elf_build_argv_on_stack(uint64_t stack_phys, uint64_t stack_vaddr,
+                             const char *path, const char *args,
+                             uint64_t *out_argc, uint64_t *out_argv,
+                             uint64_t *out_user_rsp);
 
 #endif

@@ -62,23 +62,35 @@
 //     was actually using when last interrupted (kernel_saved_rsp,
 //     refreshed every tick that finds no process running).
 //
-// SAFETY FOR M8-M15 (disarmed by default)
-// ----------------------------------------
-// scheduler_armed starts false and is only ever set true, briefly,
-// inside scheduler_demo_run(); it's set back to false before that
-// function returns, even on failure. scheduler_tick() returns
-// immediately when disarmed, leaving g_next_kernel_rsp at
-// isr_dispatch's default (`regs`, i.e. no-op). scheduler_on_exit() is
-// only ever reached via syscall.c's `if (scheduler_current_pid())`
-// guard, and scheduler_current_pid() returns 0 whenever current_index
-// is -1 -- which it always is unless scheduler_demo_run() spawned
-// something. So every existing test command's exit path (the old
-// process_context_restore(&g_process_ctx, ...) call in syscall.c) is
-// completely untouched by this file.
+// SAFETY FOR M8-M15, AND EVERYTHING SPAWNED NEITHER BY schedtest NOR
+// Terminal's async run/ls (Milestone 1 phase 4b, docs/roadmap.md)
+// ---------------------------------------------------------------------
+// scheduler_armed is set true once, permanently, in scheduler_init()
+// ("continuously armed" -- the roadmap item this generalizes from
+// demo-only) rather than being flipped on/off around
+// scheduler_demo_run()'s own wait loop the way it used to be. This is
+// still safe for every M8-M15 test command and every legacy
+// elf_run_from_fs() caller (`run`/`ls` from the physical shell) despite
+// being permanently on: scheduler_tick() being armed only matters once
+// something is actually in the process table (alive_count > 0) --
+// find_next_ready() scanning an all-SCHED_UNUSED table always returns
+// -1, so every tick that finds nothing ready just re-confirms
+// g_next_kernel_rsp at whatever isr_dispatch's default already set it
+// to (`regs`, i.e. a genuine no-op, byte-for-byte the same as the old
+// disarmed early-return). scheduler_on_exit() is likewise only ever
+// reached via syscall.c's `if (scheduler_current_pid())` guard, and
+// scheduler_current_pid() returns 0 whenever current_index is -1 --
+// which it always is unless something was actually spawned through
+// this file's spawn_from_fs(). So every existing test command's exit
+// path (the old process_context_restore(&g_process_ctx, ...) call in
+// syscall.c) is completely untouched by this file, exactly as before --
+// only the mechanism that used to keep it that way (a flag flipped
+// off) changed to a different one (an empty table).
 #include "scheduler.h"
 #include "vmm.h"
 #include "pmm.h"
 #include "elf.h"
+#include "elf_run.h"
 #include "fs.h"
 #include "gdt.h"
 #include "vga.h"
@@ -107,6 +119,8 @@ extern uint64_t g_next_kernel_rsp;
 //   11=rdx 12=rcx 13=rbx 14=rax 15=vector 16=error_code 17=rip 18=cs
 //   19=rflags 20=rsp 21=ss
 #define TRAPFRAME_WORDS 22
+#define TF_RDI     9
+#define TF_RSI     10
 #define TF_RAX     14
 #define TF_VECTOR  15
 #define TF_ERRCODE 16
@@ -116,13 +130,25 @@ extern uint64_t g_next_kernel_rsp;
 #define TF_RSP     20
 #define TF_SS      21
 
-enum sched_state { SCHED_UNUSED = 0, SCHED_READY, SCHED_RUNNING };
+// SCHED_ZOMBIE (Milestone 1 phase 4b, docs/roadmap.md): a process that
+// has exited but hasn't been scheduler_poll()'d yet. Previously
+// scheduler_on_exit() freed a slot straight to SCHED_UNUSED and
+// discarded the exit code (nothing consumed it -- schedtest's own wait
+// loop only ever checked alive_count, never a specific process's
+// result). scheduler_spawn()'s callers DO need that result (Terminal
+// reporting `ls`'s exit code the same way the physical shell's `run`
+// already does), so a zombie now holds its slot -- and its exit_code --
+// until scheduler_poll() explicitly reaps it. Same two-step "exit,
+// then a separate reap" shape a real OS's wait()/waitpid() has, scaled
+// down to this kernel's single-poller-per-process use.
+enum sched_state { SCHED_UNUSED = 0, SCHED_READY, SCHED_RUNNING, SCHED_ZOMBIE };
 
 struct sched_process {
     enum sched_state state;
     uint64_t pml4_phys;
     uint64_t kernel_rsp; // this process's saved trapframe pointer --
                           // valid whenever state != SCHED_UNUSED
+    int exit_code;        // valid only once state == SCHED_ZOMBIE
     uint8_t kstack[PROC_KSTACK_SIZE] __attribute__((aligned(16)));
 };
 
@@ -141,7 +167,12 @@ static uint64_t kernel_stack_top(int idx) {
 void scheduler_init(void) {
     for (int i = 0; i < MAX_PROCS; i++) procs[i].state = SCHED_UNUSED;
     current_index = -1;
-    scheduler_armed = 0;
+    // Permanently armed from here on -- see this file's top comment on
+    // why that's safe with an empty process table. Was `= 0` (disarmed,
+    // only scheduler_demo_run() ever flipped it) before Milestone 1
+    // phase 4b generalized this from a one-off demo to a real,
+    // continuously-available spawn mechanism.
+    scheduler_armed = 1;
     kernel_saved_rsp = 0;
     alive_count = 0;
 }
@@ -175,11 +206,18 @@ static void switch_to(int idx) {
 // than GRUB modules (this used to be spawn_from_module(int
 // module_index), sourcing bytes via multiboot_get_module() -- replaced
 // outright rather than kept alongside once nothing needed it anymore,
-// see docs/decisions.md). Returns the slot index (>= 0) or -1 on any
-// failure (no free slot, missing/unreadable file, or the same
-// allocation failures every other ELF-loading path already handles the
-// same way).
-static int spawn_from_fs(const char *path) {
+// see docs/decisions.md). `args` is the same optional, space-separated
+// argument string elf_run_from_fs() takes (NULL/"" for none -- both
+// `schedtest` counters still pass NULL, unaffected by this parameter's
+// addition) -- laid out via elf_build_argv_on_stack() (elf_run.h) into
+// this process's own stack page, the same layout elf_run_from_fs() uses
+// for a legacy-blocking process, so a scheduler-managed one gets a real
+// argv[0]/argc too instead of the rdi=rsi=0/bare-top-of-page RSP this
+// function used to synthesize unconditionally. Returns the slot index
+// (>= 0) or -1 on any failure (no free slot, missing/unreadable file,
+// `args` too long to fit the one stack page, or the same allocation
+// failures every other ELF-loading path already handles the same way).
+static int spawn_from_fs(const char *path, const char *args) {
     int slot = -1;
     for (int i = 0; i < MAX_PROCS; i++) {
         if (procs[i].state == SCHED_UNUSED) { slot = i; break; }
@@ -201,18 +239,26 @@ static int spawn_from_fs(const char *path) {
     if (!stack_phys) return -1;
     if (!vmm_map_user_page(as, PROC_USTACK_VADDR, stack_phys)) return -1;
 
+    uint64_t argc = 0, argv = 0, user_rsp = 0;
+    if (!elf_build_argv_on_stack(stack_phys, PROC_USTACK_VADDR, path, args,
+                                  &argc, &argv, &user_rsp)) {
+        return -1;
+    }
+
     // Synthesize this process's very first trapframe, at the top of its
     // own dedicated kernel stack -- laid out exactly like a real one
     // isr_common would have saved, so the ordinary epilogue can launch
     // it the first time exactly the same way it resumes it later.
     uint64_t *tf = (uint64_t *)(kernel_stack_top(slot) - TRAPFRAME_WORDS * 8);
     for (int i = 0; i < TF_VECTOR; i++) tf[i] = 0; // r15..rax start at 0
+    tf[TF_RDI]     = argc; // argc/argv -- same ABI process_run_ring3_args() uses
+    tf[TF_RSI]     = argv;
     tf[TF_VECTOR]  = 0; // unused -- epilogue discards vector+error_code
     tf[TF_ERRCODE] = 0; //          via `add rsp, 16` without reading them
     tf[TF_RIP]     = entry;
     tf[TF_CS]      = SEL_USER_CODE;
     tf[TF_RFLAGS]  = 0x200; // IF set
-    tf[TF_RSP]     = PROC_USTACK_VADDR + 4096;
+    tf[TF_RSP]     = user_rsp;
     tf[TF_SS]      = SEL_USER_DATA;
 
     procs[slot].pml4_phys  = as;
@@ -247,11 +293,13 @@ void scheduler_tick(uint64_t *regs) {
 }
 
 void scheduler_on_exit(int code) {
-    (void)code; // no exit-code tracking yet -- nothing consumes it;
-                // extend this if a future `ps`-style command wants it.
     if (current_index < 0) return; // defensive; shouldn't happen
 
-    procs[current_index].state = SCHED_UNUSED;
+    // SCHED_ZOMBIE, not SCHED_UNUSED -- see this file's comment on that
+    // enum value. The slot (and its exit_code) stays held until whoever
+    // spawned it calls scheduler_poll().
+    procs[current_index].state = SCHED_ZOMBIE;
+    procs[current_index].exit_code = code;
     alive_count--;
     current_index = -1;
 
@@ -267,9 +315,29 @@ int scheduler_current_pid(void) {
     return current_index < 0 ? 0 : current_index + 1;
 }
 
+int scheduler_spawn(const char *path, const char *args) {
+    int slot = spawn_from_fs(path, args);
+    return slot < 0 ? 0 : slot + 1; // 0 = failure, else 1-based pid (see scheduler.h)
+}
+
+enum sched_poll_result scheduler_poll(int pid, int *out_exit_code) {
+    if (pid < 1 || pid > MAX_PROCS) return SCHED_POLL_INVALID;
+    int slot = pid - 1;
+
+    if (procs[slot].state == SCHED_ZOMBIE) {
+        if (out_exit_code) *out_exit_code = procs[slot].exit_code;
+        procs[slot].state = SCHED_UNUSED; // reap -- see scheduler.h's doc comment
+        return SCHED_POLL_EXITED;
+    }
+    if (procs[slot].state == SCHED_READY || procs[slot].state == SCHED_RUNNING) {
+        return SCHED_POLL_RUNNING;
+    }
+    return SCHED_POLL_INVALID; // SCHED_UNUSED -- bad pid, or already reaped
+}
+
 void scheduler_demo_run(void) {
-    int a = spawn_from_fs("/bin/counter_a");
-    int b = spawn_from_fs("/bin/counter_b");
+    int a = spawn_from_fs("/bin/counter_a", NULL);
+    int b = spawn_from_fs("/bin/counter_b", NULL);
     if (a < 0 || b < 0) {
         vga_write("schedtest: failed to spawn one or both counter processes --\n");
         vga_write("were /bin/counter_a and /bin/counter_b seeded onto disk.img?\n");
@@ -279,20 +347,31 @@ void scheduler_demo_run(void) {
         return;
     }
 
-    vga_write("Spawned two ring-3 counter processes (A and B). Arming the\n");
-    vga_write("scheduler -- the timer (100Hz) will now preemptively switch\n");
-    vga_write("between them without either ever yielding voluntarily. Output\n");
-    vga_write("below is interleaved DIRECTLY by each process's own write\n");
-    vga_write("syscall, not narrated by the kernel:\n\n");
-    klog_write("scheduler: demo armed, waiting for both processes to exit\n");
+    vga_write("Spawned two ring-3 counter processes (A and B). The scheduler\n");
+    vga_write("is continuously armed (Milestone 1 phase 4b) -- the timer\n");
+    vga_write("(100Hz) will now preemptively switch between them without\n");
+    vga_write("either ever yielding voluntarily. Output below is interleaved\n");
+    vga_write("DIRECTLY by each process's own write syscall, not narrated by\n");
+    vga_write("the kernel:\n\n");
+    klog_write("scheduler: demo spawned, waiting for both processes to exit\n");
 
-    scheduler_armed = 1;
-    while (alive_count > 0) {
+    // Just a wait loop now, not an arm/disarm pair -- see this file's
+    // top comment on why permanently-armed is safe. Both processes are
+    // reaped here via scheduler_poll() rather than reaching into procs[]
+    // directly, same public API a real caller (Terminal) uses -- this
+    // demo is otherwise the one place still allowed to busy-wait
+    // (blocking the physical shell for the demo's duration is the
+    // whole point, see scheduler.h's doc comment).
+    int a_code = 0, b_code = 0;
+    int a_done = 0, b_done = 0;
+    while (!a_done || !b_done) {
         __asm__ volatile ("hlt");
+        if (!a_done && scheduler_poll(a + 1, &a_code) == SCHED_POLL_EXITED) a_done = 1;
+        if (!b_done && scheduler_poll(b + 1, &b_code) == SCHED_POLL_EXITED) b_done = 1;
     }
-    scheduler_armed = 0;
 
-    vga_write("\n\nBoth processes exited. Scheduler disarmed -- every other\n");
-    vga_write("command behaves exactly as it did before M16.\n");
-    klog_write("scheduler: demo complete, disarmed\n");
+    vga_write("\n\nBoth processes exited. Scheduler stays armed -- every other\n");
+    vga_write("command behaves exactly as it did before M16 (see this file's\n");
+    vga_write("top comment on why an empty process table makes that safe).\n");
+    klog_write("scheduler: demo complete\n");
 }

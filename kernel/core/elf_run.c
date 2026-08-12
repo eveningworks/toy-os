@@ -42,10 +42,17 @@
 // 0 if `args` has too many tokens (ELF_RUN_MAX_ARGC) or the strings +
 // pointer array don't fit in the one 4096-byte page -- callers must
 // treat that as a hard failure, not silently truncate.
-static int build_argv_on_stack(uint64_t stack_phys, uint64_t stack_vaddr,
-                                const char *path, const char *args,
-                                uint64_t *out_argc, uint64_t *out_argv,
-                                uint64_t *out_user_rsp) {
+//
+// Not static -- exposed via elf_run.h as elf_build_argv_on_stack() so
+// scheduler.c's spawn_from_fs() (the scheduler's own, non-blocking
+// counterpart to elf_run_from_fs() below) can lay out a real argv the
+// same way, instead of the trapframe it synthesizes just zeroing
+// rdi/rsi (see scheduler.c's own comment on this, Milestone 1's
+// Terminal async-spawn item).
+int elf_build_argv_on_stack(uint64_t stack_phys, uint64_t stack_vaddr,
+                             const char *path, const char *args,
+                             uint64_t *out_argc, uint64_t *out_argv,
+                             uint64_t *out_user_rsp) {
     uint8_t *page = (uint8_t *)(uintptr_t)stack_phys;
 
     // Token boundaries (into `path`/`args`, not copies) -- collected
@@ -171,8 +178,8 @@ int elf_run_from_fs(const char *path, const char *args) {
     syscall_reset_heap(as, ELF_RUN_HEAP_VADDR);
 
     uint64_t argc = 0, argv = 0, user_rsp = 0;
-    if (!build_argv_on_stack(stack_phys, ELF_RUN_STACK_VADDR, path, args,
-                              &argc, &argv, &user_rsp)) {
+    if (!elf_build_argv_on_stack(stack_phys, ELF_RUN_STACK_VADDR, path, args,
+                                  &argc, &argv, &user_rsp)) {
         vga_write("run: arguments too long for ");
         vga_write(path);
         vga_write("\n");

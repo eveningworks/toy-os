@@ -104,7 +104,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
     klog_write(" UTC\n");
 
     scheduler_init();
-    klog_write("toy-os: scheduler initialized (disarmed; see `schedtest`)\n");
+    klog_write("toy-os: scheduler initialized (continuously armed; see `schedtest`)\n");
 
     debug_console_init(); // serial debug console (COM1) -- see docs/decisions.md; polled from keyboard_getchar()'s and wm_run()'s idle-wait loops
 

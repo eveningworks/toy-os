@@ -151,6 +151,22 @@ struct gui_app {
     // apps/notepad.c's Open... (Milestone 1 phase 4, docs/roadmap.md).
     void (*on_read_complete)(struct window *win, int success, uint32_t total);
 
+    // Called once a process started via wm.h's window_start_process()
+    // exits -- `exit_code` is the value it passed to the exit syscall
+    // (scheduler.h's scheduler_poll() SCHED_POLL_EXITED result), or -1
+    // if wm_run() got SCHED_POLL_INVALID (shouldn't happen in practice --
+    // defensive only). Same "WM polls purely as a scheduling mechanism,
+    // this is where the app updates its UI" contract as
+    // on_write_complete/on_read_complete above -- the process's actual
+    // OUTPUT already streamed into the window's scrollback in real time
+    // via vga_putc()'s active sink (vga.h), independent of this
+    // callback; this is purely "it's done, show the exit code and the
+    // prompt again." May be NULL for any app that never calls
+    // window_start_process(). First (and currently only) user:
+    // apps/terminal.c's async `ls`/`run` (Milestone 1 phase 4b,
+    // docs/roadmap.md).
+    void (*on_process_exit)(struct window *win, int exit_code);
+
     // 1 (the common case) if the user can drag-resize and maximize this
     // app's window; 0 to fix it at its default_size() forever -- no
     // resize grip, hovering an edge doesn't show a resize cursor, and

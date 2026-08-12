@@ -35,4 +35,9 @@ void terminal_drag(struct window *win, int cx, int cy);
 // mouse.h's mouse_get_wheel_delta().
 void terminal_wheel(struct window *win, int delta);
 
+// Called once an async `ls`/`run` started via wm.h's
+// window_start_process() exits -- see gui_apps.h's on_process_exit
+// contract (Milestone 1 phase 4b, docs/roadmap.md).
+void terminal_process_exit(struct window *win, int exit_code);
+
 #endif
