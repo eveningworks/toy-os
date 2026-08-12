@@ -28,6 +28,7 @@
 #include "context_menu.h"
 #include "file_picker.h"
 #include "desktop.h"
+#include "wm_tray.h"
 #include "kapi.h"
 
 struct window windows[MAX_WINDOWS];
@@ -341,6 +342,8 @@ void wm_run(void) {
     pending_proc = 0;
     pending_proc_win = -1;
 
+    tray_init();
+
     int mx, my;
     uint8_t buttons;
     mouse_get_state(&mx, &my, &buttons);
@@ -506,7 +509,7 @@ void wm_run(void) {
         uint64_t this_second = ticks / 100;
         if (this_second != last_second) {
             last_second = this_second;
-            redraw_pending = 1;
+            tray_update_clock(); // also sets redraw_pending + damages the taskbar strip
         }
 
         // Esc used to always exit the window manager here -- replaced by

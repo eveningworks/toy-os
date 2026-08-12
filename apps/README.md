@@ -141,7 +141,11 @@ tightly-coupled event loop, not multiple decoupled components (see
   which carries the process's real exit code -- the process's own
   console output needs no help from this polling at all, since it
   already streams straight into whatever `vga_sink` is active the
-  instant each `SYS_WRITE` syscall runs), `wm_run()`.
+  instant each `SYS_WRITE` syscall runs), `tray_register()`/
+  `tray_set_text()`/`tray_unregister()` (the taskbar notification area
+  -- register a small text item, update it whenever it changes, no
+  polling needed since a tray item's text is push-only; the taskbar
+  clock is itself tray item 0, see `wm_tray.c`), `wm_run()`.
 - **`wm.c`** -- shared state, the app-facing helpers behind `wm.h`, window
   lifecycle (`open_app`, `close_window`, `bring_to_front`), and
   `wm_run()`'s main loop. Start reading here.
@@ -154,6 +158,14 @@ tightly-coupled event loop, not multiple decoupled components (see
 - **`wm_internal.h`** -- private glue between all of the above
   (`extern` state declarations, cross-file prototypes). Never included
   outside `apps/wm/` -- it's not part of the public API in `wm.h`.
+- **`wm_tray.c`/`.h`** -- the taskbar notification area: a small fixed
+  array of text items drawn right-to-left from the taskbar's right
+  edge. `tray_init()`/`tray_update_clock()` (called from `wm.c`) and
+  `draw_tray()` (called from `wm_render.c`'s `draw_taskbar()`) are the
+  WM-internal half; `tray_register()`/`tray_set_text()`/
+  `tray_unregister()` in `wm.h` are the app-facing half. The clock is
+  tray item 0, registered through this same API rather than drawn as
+  hardcoded chrome.
 - **`desktop.c`/`.h`** -- the desktop background + icon grid behind
   every window (one icon per `gui_app_registry` entry; single-click
   selects, double-click launches, drag repositions to any grid cell --

@@ -311,6 +311,43 @@ forever.
     windows and confirmed no stale pixels or missed redraws -- see
     `screenshots/2026-08-12/compositor-phase3-*.png`.
 
+### Added
+- Taskbar notification area (tray): a small right-to-left strip of
+  text items next to the Start/window buttons, with a dynamic
+  registration API so a GUI app can plug a live-updating item into it
+  at runtime instead of the WM only ever drawing hardcoded chrome. The
+  existing hardcoded taskbar clock (`draw_clock_area()`) is now itself
+  tray item 0, registered through the same API, proving it end-to-end
+  rather than shipping an API with no real caller.
+  - New `apps/wm/wm_tray.c`/`wm_tray.h`: a fixed `TRAY_MAX_ITEMS` (6)
+    array of `{active, text[TRAY_TEXT_MAX]}` slots. `tray_init()`
+    registers the clock as slot 0 from `wm_run()`'s setup;
+    `tray_update_clock()` replaces the old inline `rtc_read_local()`
+    call at the once-a-second tick in `wm.c`; `draw_tray()` (called
+    from `wm_render.c`'s `draw_taskbar()` in place of the removed
+    `draw_clock_area()`) draws every active item right-to-left from
+    the taskbar's right edge, same visual position the clock always
+    had.
+  - `apps/wm/wm.h`: new app-facing API -- `tray_register(initial_text)`
+    (returns a handle or -1 if full), `tray_set_text(id, text)`,
+    `tray_unregister(id)` -- following the same "push, don't poll"
+    shape apps already know from `window_set_state()`, not the
+    WM-polls-a-handle shape `window_start_write()` uses (a tray item's
+    text only changes when the app itself decides it has, so there's
+    nothing for the WM to poll).
+  - Damage scoping: every registration/update/unregister call damages
+    just the taskbar strip (`wm_damage_rect(0, screen_h - taskbar_h,
+    screen_w, taskbar_h)`), not the full screen -- closes part of the
+    Milestone 9 compositor gap for the clock specifically (it used to
+    rely on the full-screen fallback, since the old tick handler only
+    set `redraw_pending` with no damage report at all). Menu/dialog/
+    other taskbar-content-click redraws are still on the full-screen
+    fallback -- unchanged, still tracked in `docs/roadmap.md`.
+  - Verified via QMP: clock renders at its usual position and keeps
+    ticking (`18:49:03` -> `18:49:19` across two screenshots), taskbar
+    Start/window buttons unaffected with a window open -- see
+    `screenshots/2026-08-12/tray-clock-*.png`.
+
 ## [0.1.0] - 2026-08-12
 
 ### Fixed

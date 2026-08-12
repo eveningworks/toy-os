@@ -102,10 +102,19 @@ later judgment call, not mechanically tied to "20 milestones done."
       damage region instead of always touching the full screen, and
       (Phase 3) a window whose rect doesn't intersect the damage region
       is skipped entirely -- its chrome/`on_draw()`/resize-grip calls
-      never run, not just have their pixels clipped away. Still open:
-      menu/taskbar-content-click/dialog redraws still fall back to a
-      full-screen repaint (imprecise but safe, never worse than
-      before)
+      never run, not just have their pixels clipped away. The taskbar
+      clock/tray tick is now also scoped to just the taskbar strip
+      (see the notification-area entry below), not the full screen.
+      Still open: menu/taskbar-content-click/dialog redraws still fall
+      back to a full-screen repaint (imprecise but safe, never worse
+      than before)
+- [x] ~~Taskbar notification area (tray)~~ -- done, see `CHANGELOG.md`'s
+      `[Unreleased]` entry: a dynamic `tray_register()`/
+      `tray_set_text()`/`tray_unregister()` API (`apps/wm/wm.h`), with
+      the taskbar clock as its first item (`apps/wm/wm_tray.c`). No
+      other GUI app registers a tray item yet -- the API is there for
+      one to use next time a feature calls for it (an async job's
+      progress, a background download, etc).
 
 ### Milestone 10 -- Desktop productivity apps (planned v0.10.0)
 

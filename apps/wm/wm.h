@@ -130,6 +130,33 @@ int window_start_process(struct window *win, int pid);
 // window_read_pending() above, for the process slot.
 int window_process_pending(void);
 
+// --- taskbar notification area (tray) ---
+//
+// A small right-to-left strip of text items in the taskbar, next to
+// the clock (which is itself tray item 0 -- see wm_tray.c). An app
+// registers an item once (e.g. from on_open), then updates its text
+// as often as it likes (e.g. once per tick, or in response to its own
+// state changing) -- there's no polling/callback needed on the app's
+// side, unlike window_start_write()'s "WM polls a handle" shape above,
+// since a tray item's text is push-only: the app decides when it has
+// changed. Unregister it (e.g. from on_close) so a closed app doesn't
+// leave a stale item behind.
+#define TRAY_TEXT_MAX 16
+
+// Registers a new tray item with the given initial text (truncated to
+// TRAY_TEXT_MAX - 1 chars). Returns a handle to pass to
+// tray_set_text()/tray_unregister(), or -1 if the tray is full (see
+// TRAY_MAX_ITEMS in wm_tray.c).
+int tray_register(const char *initial_text);
+
+// Updates a tray item's text in place (truncated to TRAY_TEXT_MAX - 1
+// chars) -- damages just the taskbar strip and asks for a redraw. A
+// no-op on an invalid/unregistered id.
+void tray_set_text(int tray_id, const char *text);
+
+// Releases a tray item. A no-op on an invalid/already-unregistered id.
+void tray_unregister(int tray_id);
+
 // The window manager's entry point -- this is what gui_main() calls.
 // Runs until the user presses Esc, then returns.
 void wm_run(void);

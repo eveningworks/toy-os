@@ -12,6 +12,7 @@
 #include "confirm_dialog.h"
 #include "file_picker.h"
 #include "desktop.h"
+#include "wm_tray.h"
 #include "ui/ui.h"
 #include "theme.h"
 #include "kapi.h"
@@ -377,28 +378,6 @@ static void draw_resize_grip(const struct window *win) {
     gfx_fill_rect(win->x + win->w - 3, win->y + win->h - 8, 2, 5, border);
 }
 
-static void draw_clock_area(int taskbar_y, uint32_t bg, uint32_t fg) {
-    struct rtc_time t;
-    rtc_read_local(&t); // local time for the selected `timezone`, not raw UTC
-
-    char buf[9];
-    buf[0] = '0' + (t.hour / 10);
-    buf[1] = '0' + (t.hour % 10);
-    buf[2] = ':';
-    buf[3] = '0' + (t.minute / 10);
-    buf[4] = '0' + (t.minute % 10);
-    buf[5] = ':';
-    buf[6] = '0' + (t.second / 10);
-    buf[7] = '0' + (t.second % 10);
-    buf[8] = '\0';
-
-    int text_w = 8 * gfx_char_w();
-    int cx = screen_w - text_w - 16;
-    int text_y = taskbar_y + (taskbar_h - gfx_char_h()) / 2;
-    gfx_fill_rect(cx - 4, taskbar_y, text_w + 8, taskbar_h, bg);
-    gfx_draw_string(cx, text_y, buf, fg, bg);
-}
-
 static void draw_taskbar(void) {
     uint32_t bg = gfx_rgb(30, 30, 34), fg = gfx_rgb(230, 230, 230);
     int ty = screen_h - taskbar_h;
@@ -422,7 +401,7 @@ static void draw_taskbar(void) {
         bx += wbw + 4;
     }
 
-    draw_clock_area(ty, bg, fg);
+    draw_tray(ty, bg, fg);
 }
 
 // ---- scene damage region (compositor) ----
