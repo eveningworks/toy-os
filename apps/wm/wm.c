@@ -27,6 +27,7 @@
 #include "start_menu.h"
 #include "context_menu.h"
 #include "file_picker.h"
+#include "desktop.h"
 #include "kapi.h"
 
 struct window windows[MAX_WINDOWS];
@@ -456,6 +457,7 @@ void wm_run(void) {
         wm_update_title_btn_press(mx, my, buttons);
 
         wm_update_drag_resize(mx, my, buttons);
+        desktop_update_drag(mx, my, buttons); // desktop icon drag, if one's in progress -- see desktop.h
 
         static uint64_t last_second = (uint64_t)-1;
         uint64_t ticks = pit_ticks();

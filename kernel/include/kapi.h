@@ -18,6 +18,7 @@
 #include "timer.h"     // pit_ticks, rtc_read
 #include "tz.h"        // rtc_read_local, timezone selection (see kernel/core/tz.c)
 #include "font_config.h" // font size persistence (see kernel/core/font_config.c)
+#include "etc_config.h" // shared /etc/*.conf name=value reader/writer (see kernel/core/etc_config.c) -- for an app's own /etc/<name>.conf, not just the kernel-internal settings above that already wrap it
 #include "fs.h"        // the filesystem (backend-agnostic API -- see fs.h's top comment)
 #include "json.h"      // heap-backed JSON parser/serializer -- see json.h's top comment (coexists with etc_config.h's flat name=value format)
 #include "klog.h"      // klog_dump -- the kernel's in-memory log, what `dmesg` reads (see klog.c)

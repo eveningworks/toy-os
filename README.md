@@ -47,7 +47,8 @@ For everything else:
   plus 6 Nordic letters (Å/Ä/Ö/å/ä/ö) alongside ASCII. See
   `docs/decisions.md` for why Latin-1 over UTF-8.
 - A basic GUI mode: a small window manager (movable/resizable windows,
-  taskbar, Start menu, a desktop background with an icon grid, and a
+  taskbar, Start menu, a desktop background with a draggable icon grid
+  (positions persist across reboot), and a
   reusable right-click context menu wired into the desktop, window
   chrome, taskbar, and Start menu) with five apps -- Notepad, About,
   Calculator, Terminal (runs the real shell inside a window; `ls` and an

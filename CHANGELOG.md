@@ -22,6 +22,35 @@ forever.
 
 ## [Unreleased]
 
+### Added
+- Draggable desktop icons (Milestone 9, `docs/roadmap.md`): each desktop
+  icon now has real per-icon grid position state (`apps/wm/desktop.c`'s
+  `icon_col`/`icon_row`, previously a fixed left-edge column derived
+  straight from `gui_app_registry`), draggable to any cell in a real
+  multi-column grid and snapping to the nearest cell on release.
+  Positions persist across reboot in `/etc/desktop.conf`, keyed by app
+  name (so a `gui_app_registry` reorder doesn't scramble saved
+  positions) via `kernel/include/etc_config.h`'s shared reader/writer
+  (newly exposed to apps through `kapi.h`). The grid geometry and
+  drag-to-reposition session are a new reusable widget,
+  `apps/ui/ui_icon_grid.h`/`.c` (`icon_grid_cell_rect`/
+  `icon_grid_nearest_cell`, `struct icon_drag` +
+  `icon_drag_start/update/end`), mirroring `wm_input.c`'s window-drag
+  shape (mouse-down arms it with a grab offset, a per-tick update
+  tracks the cursor, mouse-up commits) -- built as its own widget file
+  rather than desktop.c-local state, by explicit request, ahead of the
+  second real caller a future file manager's icon view (Milestone 10)
+  is expected to be; see `apps/README.md`'s "Shared widgets" section
+  for why that's called out as a deliberate exception. Click/double-
+  click-to-launch behavior is unchanged -- a plain click (no movement
+  before release) just re-commits the icon to the cell it's already
+  in. Two icons dragged onto the same cell simply overlap; no swap/
+  displace logic yet. Verified via QMP: dragged the Notepad icon to a
+  new cell (screenshot), exited to shell and re-entered GUI mode to
+  confirm the position persisted (screenshot), and double-clicked the
+  moved icon to confirm launch still works post-drag (screenshot) --
+  see `screenshots/2026-08-12/desktop-icon-drag-*.png`.
+
 ## [0.1.0] - 2026-08-12
 
 ### Fixed

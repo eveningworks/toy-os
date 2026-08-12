@@ -92,7 +92,7 @@ later judgment call, not mechanically tied to "20 milestones done."
 
 - [ ] Basic image decoder (JPEG or similar)
 - [ ] Real wallpaper images
-- [ ] Desktop icon repositioning/dragging
+- [x] ~~Desktop icon repositioning/dragging~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry
 - [ ] Per-icon context menus (Rename/Properties)
 - [ ] Full dirty-rect compositor
 
@@ -546,9 +546,13 @@ discussion.
 Real wallpaper images for the desktop background (`apps/wm/desktop.c`
 currently fills a plain color) -- blocked on the image decoder above.
 
-Desktop icon repositioning/dragging -- today's icon grid is a fixed
-left-edge column derived straight from `gui_app_registry`, no per-icon
-position state to drag.
+~~Desktop icon repositioning/dragging~~ -- done, see `CHANGELOG.md`'s
+`[Unreleased]` entry: each icon now has real per-icon {col, row} state
+(`apps/wm/desktop.c`'s `icon_col`/`icon_row`), draggable via a reusable
+icon-grid + drag-session widget (`apps/ui/ui_icon_grid.h`) built with a
+future file manager's icon view (Milestone 10) as a second caller in
+mind, not desktop-only. Positions persist across reboot in
+`/etc/desktop.conf`, keyed by app name.
 
 Per-icon desktop context menus (Rename/Properties/etc) -- needs icons to
 have real per-icon identity/state beyond "which registry index" first;
@@ -566,7 +570,9 @@ blit, is still open.
 File manager app -- needs a proper filesystem API surface first
 (list/stat/create/delete as real syscalls or a library layer, not the
 fixed ad hoc calls the shell uses today), then the app built on top of
-that.
+that. Its icon view can reuse `apps/ui/ui_icon_grid.h` (built for exactly
+this, see Milestone 9's entry above) for cell geometry and drag-to-
+reposition instead of re-deriving that math.
 
 Desktop calendar: a small popup panel above the taskbar, opened by
 clicking the clock, showing a month grid (view-only, no events yet) --

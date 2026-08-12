@@ -156,7 +156,9 @@ tightly-coupled event loop, not multiple decoupled components (see
   outside `apps/wm/` -- it's not part of the public API in `wm.h`.
 - **`desktop.c`/`.h`** -- the desktop background + icon grid behind
   every window (one icon per `gui_app_registry` entry; single-click
-  selects, double-click launches).
+  selects, double-click launches, drag repositions to any grid cell --
+  positions persist across reboot in `/etc/desktop.conf`, built on
+  `apps/ui/ui_icon_grid.h`'s reusable geometry/drag-session helper).
 - **`start_menu.c`/`.h`** -- the Start menu popup (app list + system
   actions -- "Exit to shell" and "Shutdown", the latter confirm-gated
   then `system_poweroff()`, see `kernel/include/power.h`), with hover/
@@ -252,6 +254,17 @@ past "two small functions" (see `docs/decisions.md`). `apps/widgets.h`/
   `ui_scrollback`.
 - **`ui_checkbox.h`/`.c`** -- `widget_checkbox_width/draw/hit`, a small
   labeled checkbox.
+- **`ui_icon_grid.h`/`.c`** -- icon-grid cell geometry
+  (`icon_grid_cell_rect`/`icon_grid_nearest_cell`) and a drag-to-
+  reposition session (`struct icon_drag`,
+  `icon_drag_start/update/end`), mirroring `wm_input.c`'s window-drag
+  shape. First (and currently only) user: the desktop icon grid
+  (`apps/wm/desktop.c`) -- built as its own widget rather than
+  desktop.c-local, by explicit request, ahead of the second real
+  caller a future file manager's icon view (`docs/roadmap.md`
+  Milestone 10) is expected to be. Deliberately an exception to this
+  section's own "wait for a second caller" rule below, not a change to
+  it.
 
 This is *not* a general-purpose widget toolkit -- no focus manager, no
 layout engine beyond `ui_button_group`. Add the next primitive here
