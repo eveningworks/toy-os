@@ -1696,3 +1696,37 @@ for any future partition-table work); the throwaway `harness.c`/stub
 same shape (stub `ata_read_sector()`, `#include` the real `.c` file
 being tested) if this pattern is ever needed again for another
 on-disk-format parser.
+
+## GDB debugging: QEMU's built-in stub, not an in-kernel serial protocol implementation
+
+`make debug` (`CLAUDE.md`'s "Debugging with GDB" section) boots toy-os
+frozen at CPU reset (`-s -S`) so a real `gdb` on the host can attach
+via `target remote localhost:1234` -- real breakpoints, single-step,
+register/memory inspection. This is QEMU's own built-in GDB remote
+stub: QEMU emulates the CPU directly, so it can expose full debugger
+control over whatever's running in the guest without the guest OS
+needing to implement anything at all.
+
+Worth stating explicitly because the first framing of this idea (a
+`/btw` suggestion) got it wrong: it proposed toy-os's kernel would need
+to "speak the GDB remote serial protocol" itself -- real, substantial
+protocol work (packet framing, register/memory read-write commands,
+breakpoint handling) on top of `kernel/core/debug_console.c`'s existing
+scope (a handful of if/else-dispatched diagnostic commands). That's
+simply unnecessary: `-s`/`-S` are ordinary QEMU flags, no different in
+kind from `-vnc`/`-serial file:...` already used throughout
+`tools/qmp_test.py`'s testing setup, and they work today with zero
+toy-os code changes. Confirmed directly, not just asserted: `break
+kernel_main` + `continue` over a real `gdb` session correctly ran the
+CPU from reset through GRUB/multiboot2 and stopped exactly at
+`kernel_main`, with a real backtrace showing source file/line.
+
+The one actual gap, now closed: `CFLAGS`/`USERLAND_CFLAGS` never
+carried `-g`, so `kernel.bin` and every userland ELF had zero DWARF
+debug info -- GDB could still technically attach, but would only ever
+see raw addresses, no function names or source lines, making
+`break kernel_main`-style debugging impossible. Added `-g` to both,
+kept at `-O2` rather than dropping to `-Og`/`-O0` for a separate debug
+build -- same binary as always, just now carrying symbols, at the cost
+of some locals showing "optimized out" in GDB. A real, deliberate
+build-config-simplicity tradeoff, not an oversight.

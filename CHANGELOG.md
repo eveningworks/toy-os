@@ -23,6 +23,20 @@ forever.
 ## [Unreleased]
 
 ### Added
+- Real GDB debugging via `make debug` -- boots toy-os frozen at CPU
+  reset (QEMU's `-s -S`) so a host `gdb` can attach
+  (`target remote localhost:1234`) for real breakpoints, single-step,
+  and register/memory inspection. No kernel-side GDB protocol code
+  needed at all -- QEMU's own built-in stub emulates the CPU directly,
+  independent of the guest OS (see `docs/decisions.md` for why an
+  in-kernel serial stub, the first framing of this idea, was
+  unnecessary). `CFLAGS`/`USERLAND_CFLAGS` gain `-g` (kept at `-O2`,
+  not dropped to `-Og`) so `kernel.bin`/every userland ELF carry real
+  DWARF symbols -- function names and source lines, not just raw
+  addresses. Verified end-to-end: `break kernel_main` + `continue` over
+  a real `gdb` session correctly ran the CPU from reset through
+  GRUB/multiboot2 and stopped exactly at `kernel_main`, with a working
+  backtrace showing source file/line.
 - `make run-audio` -- same as `make run`, plus `-audiodev pa,id=snd0
   -machine pcspk-audiodev=snd0` so the PC speaker (`beep`, see below)
   is actually audible -- confirmed working on a real machine.

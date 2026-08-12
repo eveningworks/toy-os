@@ -12,6 +12,17 @@ ASM = nasm
 # changed -- see that -include line's comment for the full reasoning
 # and kernel/include/version.h's generation (tools/gen_version.sh) for
 # the one subtlety this tracking requires upstream of it.
+# -g: DWARF debug info, for `make debug` (see that target below) --
+# GDB can already attach to QEMU's own built-in gdbstub with zero
+# kernel-side code (see docs/decisions.md for why an in-kernel GDB
+# remote-serial-protocol stub is unnecessary: QEMU emulates the CPU
+# directly, so real breakpoints/single-step/register-memory inspection
+# work regardless of what the guest OS does), but without -g GDB only
+# ever sees raw addresses -- no function names, no source lines. Kept
+# at -O2 (not dropped to -Og/-O0) deliberately -- same binary as
+# always, just now carrying symbols; some locals may show "optimized
+# out" in GDB, a tradeoff accepted in favor of not needing a second
+# build config to keep in sync.
 # -fstack-protector-strong + -mstack-protector-guard=global: stack
 # canaries (Milestone 2, docs/roadmap.md), explicitly off before now.
 # `global` (a plain extern uintptr_t __stack_chk_guard, see
@@ -25,7 +36,7 @@ ASM = nasm
 # ground GCC itself recommends over the two extremes.
 CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-protector-guard=global -fno-pic -fno-pie \
          -mno-red-zone -mcmodel=kernel -mno-mmx -mno-sse -mno-sse2 \
-         -Wall -Wextra -O2 -c -Ikernel/include -Iapps -MMD -MP
+         -Wall -Wextra -O2 -g -c -Ikernel/include -Iapps -MMD -MP
 
 LDFLAGS = -n -T linker.ld -nostdlib
 
@@ -76,7 +87,7 @@ DISK_IMG = disk.img
 # to both from any protected function in any userland .c file.
 USERLAND_CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-protector-guard=global -fno-pic -fno-pie \
                    -mno-red-zone -mcmodel=large -mno-mmx -mno-sse -mno-sse2 \
-                   -Wall -Wextra -O2 -c -Ikernel/include -MMD -MP
+                   -Wall -Wextra -O2 -g -c -Ikernel/include -MMD -MP
 HELLO_ELF = userland/hello.elf
 EXIT_TEST_ELF = userland/exit_test.elf
 WRITE_TEST_ELF = userland/write_test.elf
@@ -129,7 +140,7 @@ C_OBJECTS   = $(CORE_OBJ) $(DRIVERS_OBJ) $(APPS_OBJ) $(WM_OBJ) $(UI_OBJ)
 
 ASM_OBJECTS = $(BUILD)/core/boot.o $(BUILD)/core/isr.o $(BUILD)/core/context_switch.o
 
-.PHONY: all clean clean-disk iso run run-audio run-nographic help version seed
+.PHONY: all clean clean-disk iso run run-audio run-nographic debug help version seed
 
 # Regenerates kernel/include/version.h from VERSION (see
 # tools/gen_version.sh) -- listed first so it always runs before
@@ -165,6 +176,9 @@ help:
 	@echo "                 (beep) is actually audible -- see the Makefile for how to"
 	@echo "                 swap the backend if you're not on PulseAudio"
 	@echo "  run-nographic  Boot toy-os.iso in QEMU with no display, serial only (implies iso)"
+	@echo "  debug          Boot toy-os.iso frozen (QEMU's -s -S) for real GDB"
+	@echo "                 debugging -- attach with: gdb build/kernel.bin -ex"
+	@echo "                 'target remote localhost:1234', then continue"
 	@echo "  clean          Remove build outputs (build/, ELFs, toy-os.iso) -- leaves disk.img alone"
 	@echo "  clean-disk     Wipe disk.img, the persistent filesystem -- use with care"
 	@echo "  version        Regenerate kernel/include/version.h (runs automatically as part of all/iso)"
@@ -435,6 +449,22 @@ run: iso $(DISK_IMG)
 # to assume by default.
 run-audio: iso $(DISK_IMG)
 	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -vga std -display sdl,grab-mod=rctrl -m 256 -audiodev pa,id=snd0 -machine pcspk-audiodev=snd0
+
+# -s: shorthand for -gdb tcp::1234 -- QEMU's own built-in GDB remote
+#   stub, exposed on the standard GDB-over-QEMU port. Emulates the CPU
+#   directly, so it can already do real breakpoints/single-stepping/
+#   register+memory inspection on toy-os with ZERO kernel-side GDB
+#   protocol code -- see docs/decisions.md for why an in-kernel stub
+#   isn't needed. -g in CFLAGS/USERLAND_CFLAGS above is what makes this
+#   actually useful (DWARF symbols -- function names/source lines, not
+#   just raw addresses).
+# -S: freeze the CPU at reset instead of booting immediately, so it
+#   doesn't race past GRUB/kernel_main before a debugger attaches.
+# In another terminal once this is running: `gdb build/kernel.bin -ex
+#   "target remote localhost:1234"`, then `continue` (or `break
+#   kernel_main` first if you want to stop right at kernel entry).
+debug: iso $(DISK_IMG)
+	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -vga std -display sdl,grab-mod=rctrl -m 256 -s -S
 
 run-nographic: iso $(DISK_IMG)
 	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -display none -m 256

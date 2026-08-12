@@ -246,6 +246,7 @@ make all   # kernel.bin + userland test ELFs
 make iso   # + toy-os.iso (grub-mkrescue)
 make run   # boots in QEMU with an SDL window (the user's machine, not usable headlessly)
 make run-audio  # same as run, + a PulseAudio backend so the PC speaker (`beep`) is audible
+make debug # boots frozen (-s -S) for real GDB debugging -- see "Debugging with GDB" below
 ```
 `apps/*.c` is picked up by a `wildcard`, but it's non-recursive --
 `apps/wm/*.c` needed its own `WM_C` wildcard, pattern rule, and mkdir
@@ -311,6 +312,35 @@ automatically, independent of whether a session (or a human) remembered
 to verify locally first. This doesn't replace verifying locally before
 delivering a change (still do that -- see "Working in the cloud
 sandbox" above), it's a second, automatic check behind it.
+
+## Debugging with GDB
+
+`make debug` boots toy-os frozen at CPU reset (`-s -S`) instead of
+running immediately, for real breakpoint/single-step/register/memory
+debugging via QEMU's own built-in GDB remote stub -- **no kernel-side
+GDB protocol code needed at all**: QEMU emulates the CPU directly, so
+it can already do all of this regardless of what the guest OS does.
+See `docs/decisions.md` for why an in-kernel serial-based GDB stub
+(the seemingly obvious approach) is unnecessary and was deliberately
+not built.
+
+In another terminal, once `make debug` is sitting frozen:
+```
+gdb build/kernel.bin -ex "target remote localhost:1234"
+```
+then `break kernel_main` (or any other function -- `CFLAGS`/
+`USERLAND_CFLAGS` both carry `-g` now, so `kernel.bin` and every
+userland ELF carry real DWARF symbols: function names, source lines,
+local variables, not just raw addresses) and `continue`. Confirmed
+working end-to-end: `break kernel_main` + `continue` correctly runs
+the CPU from reset through GRUB/multiboot2 and stops exactly at
+`kernel_main`, with a real backtrace showing source file/line.
+
+Kept at `-O2` (not dropped to `-Og`/`-O0` for a separate debug build)
+deliberately -- same binary as every other build, just now carrying
+symbols. Some locals may show as "optimized out" in GDB as a result;
+accepted rather than maintaining a second build config just for
+debugging.
 
 ## Testing in QEMU headlessly, via QMP
 
