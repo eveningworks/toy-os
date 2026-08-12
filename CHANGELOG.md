@@ -23,6 +23,21 @@ forever.
 ## [Unreleased]
 
 ### Added
+- `tools/shell_flow.py`: a `gui_flow.py`-style helper for the physical
+  (pre-`gui`) shell -- `ShellFlow.run_command(cmd, subdir=...)` types a
+  full command (spaces/hyphens/underscores/etc handled automatically)
+  and screenshots the result, instead of a testing session
+  hand-interleaving `send_text()`/`send_key('spc')`/
+  `combo(['shift','minus'])` calls character by character every time.
+  Prompted by two real mistakes in the same session (a dropped space,
+  a hyphen typed where `run nx_test`'s underscore was needed) while
+  testing the NX-enforcement entry below. Deliberately returns a
+  screenshot path, not parsed text -- this kernel's console picks a
+  framebuffer (glyphs-as-pixels) backend whenever GRUB provides one,
+  the normal case here, so there's no legacy-VGA-text-buffer
+  memory-read shortcut to plain text; see the module's own docstring.
+  Verified: `run_command("run nx_test")` typed the full command
+  correctly (including the underscore) in one call.
 - NX bit enforcement + W^X for userspace process pages (Milestone 2,
   docs/roadmap.md). Previously every mapped page anywhere -- kernel or
   user, code or data -- was present+writable(+user), full stop; a

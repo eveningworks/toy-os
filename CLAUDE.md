@@ -500,6 +500,22 @@ repeated manual steps to be worth automating:
   so a testing session doesn't hand-derive Start-menu row pixel math
   from scratch every time. `APP_ORDER` must stay in sync with
   `apps/gui_apps.c`'s registry order.
+- **`shell_flow.py`** -- the same idea as `gui_flow.py`, for the
+  PHYSICAL (pre-`gui`) shell instead of the GUI: `ShellFlow.
+  run_command(cmd, subdir=...)` types a full command -- including
+  spaces/hyphens/underscores/a few other punctuation chars
+  `qmp_test.py`'s `send_text()` can't handle on its own -- presses
+  Enter, waits, and screenshots, instead of hand-interleaving
+  `send_text()`/`send_key('spc')`/`combo(['shift','minus'])` calls
+  character by character every session (a real mistake -- a dropped
+  space, a hyphen typed where an underscore was needed -- happened
+  twice in the session this was built in). Returns a screenshot path,
+  not parsed text: this kernel's console auto-selects a framebuffer
+  backend (glyphs drawn as pixels) whenever GRUB provides one, which
+  is the normal case for this project's QEMU launch flags, so there's
+  no legacy-VGA-text-buffer memory-read shortcut to plain text the way
+  there might be on a kernel that only ever used 0xB8000 -- see the
+  module's own docstring.
 - **`screenshot_diff.py`** -- Pillow-based pixel diff between two
   screenshots with a pass/fail `--threshold` (default 0.2%) and an
   optional `--out` diff-highlight image, for catching a rendering
