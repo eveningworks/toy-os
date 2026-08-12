@@ -22,6 +22,17 @@ forever.
 
 ## [Unreleased]
 
+### Changed
+- Repo history rewritten (`git-filter-repo`, all 91 prior commits) to
+  remove the maintainer's real name and personal email addresses from
+  both commit authorship and `LICENSE`'s copyright line -- requested
+  directly, for privacy. Every commit now carries a generic `toy-os
+  <noreply@toy-os.local>` identity; `LICENSE` reads "toy-os
+  contributors". All commit hashes and the `v0.0.9` tag changed as a
+  result (force-pushed). See `docs/decisions.md` for the full
+  mechanics, the verification method, and the standing convention this
+  sets for every commit going forward.
+
 ### Added
 - `tools/run_release.sh` -- standalone QEMU launch script shipped as a
   GitHub Release asset (v0.0.9 onward), for anyone running from just a

@@ -136,6 +136,20 @@ that aren't obvious until you hit them:
   -- it sweeps stale locks both before and after the real command, so
   the repo comes back lock-free. See `docs/decisions.md` for why this
   is needed even for reads.
+- **The device-bridge session has NO git identity configured, local or
+  global** -- confirmed directly: `git config user.name`/`user.email`
+  and `git config --global --list` all come back empty in a fresh
+  `device_bash` call, because that call runs in its own isolated VM,
+  not the user's actual desktop environment. A plain `device_git.sh
+  commit` will fail outright ("Please tell me who you are") unless the
+  identity is passed explicitly every time:
+  `bash tools/device_git.sh -c user.name="toy-os" -c
+  user.email="noreply@toy-os.local" commit -m "..."`. This is also the
+  standing privacy convention for this repo now, not just a workaround
+  -- **never let a commit here carry the maintainer's real name or
+  personal email**, session-made or otherwise (see `docs/decisions.md`'s
+  entry on the history rewrite that scrubbed a real name out of every
+  prior commit -- don't reintroduce what that fixed).
 - Build and test in the cloud sandbox first (`make clean && make all
   && make iso`), confirm it's clean, *then* deliver + commit files to
   the user's machine. Don't commit unverified changes.

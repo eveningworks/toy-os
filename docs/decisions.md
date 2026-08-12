@@ -1399,3 +1399,69 @@ backend legitimately can't implement these two. If a future backend
 genuinely can't support incremental writes (say, one backed by a
 remote API with no partial-write primitive), that's the point to
 revisit this, not before.
+
+## Repo history scrubbed of the maintainer's real name -- privacy request, not a bug fix
+
+The maintainer's real name and two personal email addresses appeared
+in two places: the `LICENSE` copyright line, and as the commit
+author/email on every one of 91 commits in git history (both a Gmail
+address and a personal domain address). Requested directly, for
+privacy reasons -- not something this project would otherwise flag on
+its own. Fixed with `git-filter-repo` (not `filter-branch` -- the
+maintained, recommended tool), run in an isolated copy of the repo,
+never touching the working sandbox clone or the user's real checkout
+directly:
+- `--mailmap` remapped both old `name <email>` identities to a single
+  generic `toy-os <noreply@toy-os.local>` identity, rewriting every
+  commit's author AND committer fields.
+- `--replace-text` rewrote the literal string in blob content too (the
+  `LICENSE` copyright line existed unchanged across its whole history,
+  so scrubbing only the latest revision would have left it in every
+  earlier commit's tree).
+- Verified clean afterward by grepping the *entire* rewritten
+  history's authors and full patch text (`git log --all -p`) for the
+  name and both emails -- zero hits is the actual proof, not just
+  "the current file looks right."
+
+**Delivery mechanic, because this session can't push (see the git-proxy
+entry above):** `git bundle create --all` packaged the rewritten
+history into one file, delivered via `SendUserFile` +
+`device_commit_files` same as any other file. The user applied it
+themselves: fresh `git clone` from the bundle, fix the `origin` remote
+(cloning from a local bundle auto-sets `origin` to the bundle's own
+path, so `git remote add origin <url>` collides -- use `git remote
+set-url origin <url>` instead, or remove-then-add), then `git push
+--force` both the branch and the tag from their own machine. Verified
+afterward from the session by fetching from GitHub (read-only git
+still works through the proxy) and re-running the same "grep the whole
+history" check against `origin/main` and the tag -- don't trust a
+local check alone since the point is what's actually live on GitHub.
+
+**Pitfall hit during verification, worth knowing about:** `git log
+--all` inside the *session's own sandbox clone* pulled in the sandbox's
+own stale local branch/tag refs (never rewritten, and a leftover local
+tag that fetch doesn't force-overwrite by default) alongside the
+freshly-fetched `origin/main` -- produced a false-positive "still
+finding the name" result on the first check. Check specific refs
+(`origin/main`, the actual tag ref) explicitly rather than `--all` when
+verifying a remote's real state from a local clone that has its own
+unrelated history sitting around.
+
+**One loose end, not urgent:** the rewrite ran against the *session's
+sandbox mirror's* commit graph (the copy this session had, not the
+real checkout's parallel commit with the same content) -- harmless
+content-wise (both had identical diffs), but it means one commit now
+public on GitHub is authored `Claude (sandbox mirror) <claude@sandbox>`
+rather than the generic `toy-os` identity everything else got. Not
+PII, just slightly inconsistent -- worth folding into the identity
+`toy-os <noreply@toy-os.local>` if this repo's history ever gets
+rewritten again for another reason, not worth a whole rewrite on its
+own just for this.
+
+**Standing convention going forward:** every commit in this repo,
+whether made by a session or by the maintainer directly, should use
+the `toy-os <noreply@toy-os.local>` identity -- never a real name or
+personal email. See `CLAUDE.md`'s "Working in the cloud sandbox"
+section for the mechanical detail (the device-bridge session has no
+git identity configured at all by default, so this has to be passed
+explicitly on every commit, not assumed).
