@@ -120,4 +120,14 @@ uint32_t vga_cols(void);
 // blinks without any help.
 void vga_cursor_tick(void);
 
+// Suppresses the cursor block vga_putc()/vga_write() otherwise repaint
+// solid after every character -- for a caller producing its own
+// output on a timer/loop with nothing actually waiting on a keystroke
+// (e.g. stress's in-place progress bar), where that block would
+// otherwise just sit there statically instead of blinking. The next
+// real vga_write()/vga_putc() call shows a fresh cursor again on its
+// own -- no matching "show" call needed. No-op in legacy 80x25 text
+// mode, same as vga_cursor_tick() above.
+void vga_cursor_hide(void);
+
 #endif
