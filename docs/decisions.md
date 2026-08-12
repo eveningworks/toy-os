@@ -315,16 +315,21 @@ place that path gets exercised.
 generic name=value(+`#`comments) reader/writer that takes a `path` on
 every call -- it doesn't hardcode one file. `tz.c` and `font_config.c`
 both default to `/etc/toyos.conf` (see **Build 357**) rather than each
-keeping its own dedicated file (`/etc/timezone`, `/etc/fontsize`,
-which is what they used to be, migrated forward automatically the
-first time either loads). One shared file was the explicit choice for
+keeping its own dedicated file (`/etc/timezone`, `/etc/fontsize`, which
+is what they used to be). One shared file was the explicit choice for
 today's small, general settings; a setting with enough keys of its own
 to be unwieldy sharing it (a GUI app with a dozen preferences) should
 pass its own `/etc/<name>.conf` path instead -- nothing in
 `etc_config.c` favors one file over many, that choice belongs to each
 caller. See `kernel/core/etc_config.c`'s top comment for the file
-format itself and CHANGELOG.md's **Build 357** for the full writeup
-including the migration logic.
+format itself and CHANGELOG.md's **Build 357** for the original
+writeup, including the one-time forward-migration logic each of
+`tz.c`/`font_config.c` briefly carried to move an already-chosen
+setting out of its old dedicated file the first time it loaded --
+removed later (see `CHANGELOG.md`'s `[Unreleased]` entry) once the
+project was comfortable dropping pre-1.0 on-disk/config compatibility
+in favor of just starting fresh (a new `disk.img`/`/etc` state) instead
+of carrying migration code for formats nothing still produces.
 
 ## Esc no longer exits the GUI desktop -- it's unclaimed at the WM level now
 

@@ -10,13 +10,6 @@
 // goes through. Before the database file existed, the city list was a
 // small hardcoded C array; it's now loaded from disk at boot instead,
 // so adding/editing/removing a city is a text edit, not a rebuild.
-// tz.c's own history is a small tour of how /etc has evolved:
-// originally a bare "timezone" at the filesystem root (before /etc
-// existed at all), then its own "/etc/timezone" file holding just the
-// city name as plain text, and now the toyos.conf key above --
-// tz_init() migrates the selection forward from EITHER older location
-// if found, so an already-chosen city is never silently lost across
-// an upgrade.
 //
 // DST is real added complexity for what's otherwise a one-line offset
 // add, but was asked for specifically (Finland is UTC+2 in winter, +3
@@ -77,8 +70,6 @@ static const struct tz_city TZ_DEFAULT_CITIES[] = {
 
 #define TZ_CONFIG_FILE "/etc/toyos.conf"
 #define TZ_CONFIG_KEY "timezone"
-#define LEGACY_TZ_ETC_FILE "/etc/timezone" // pre-toyos.conf /etc location (bare city name)
-#define LEGACY_TZ_FILE "/timezone"         // pre-/etc location at all (also bare city name)
 
 static int current_index = 0; // UTC until tz_init() loads/sets otherwise
 
@@ -337,34 +328,9 @@ void tz_init(void) {
     tz_load_or_seed_db();
 
     char value[TZ_NAME_MAX];
-    if (etc_config_get(TZ_CONFIG_FILE, TZ_CONFIG_KEY, value, sizeof(value))) {
-        int idx = tz_find_by_name(value);
-        if (idx >= 0) current_index = idx;
-        return;
-    }
-
-    // Not in /etc/toyos.conf yet -- check the two older, bare-text
-    // locations in turn (see this file's top comment) and migrate
-    // whichever is found, rather than silently falling back to UTC if
-    // the user had already chosen something. Both are read directly
-    // (not through etc_config_get()) since neither is "key=value" --
-    // they're the pre-toyos.conf/pre-/etc formats, just the city name.
-    uint32_t size = 0;
-    // fs_write() always NUL-terminates at data[size] (see fs.c), so
-    // `data` below is safe to treat as a plain C string.
-    const char *data = fs_read(LEGACY_TZ_ETC_FILE, &size);
-    const char *legacy_path = LEGACY_TZ_ETC_FILE;
-    if (!data || size == 0) {
-        data = fs_read(LEGACY_TZ_FILE, &size);
-        legacy_path = LEGACY_TZ_FILE;
-    }
-    if (!data || size == 0) return;
-
-    int idx = tz_find_by_name(data);
-    if (idx < 0) return;
-    current_index = idx;
-    etc_config_set(TZ_CONFIG_FILE, TZ_CONFIG_KEY, TZ_CITIES[idx].name);
-    fs_delete(legacy_path);
+    if (!etc_config_get(TZ_CONFIG_FILE, TZ_CONFIG_KEY, value, sizeof(value))) return;
+    int idx = tz_find_by_name(value);
+    if (idx >= 0) current_index = idx;
 }
 
 int tz_city_count(void) {

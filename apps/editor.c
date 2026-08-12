@@ -11,10 +11,10 @@
 // flattening tb into a plain string for fs_write(), sized to
 // SCROLLBACK_CAP so it never truncates content the buffer itself could
 // hold. fs_write() itself has no separate size ceiling to worry about
-// here anymore -- fs.h's FS_DATA_MAX stopped being a real per-file
-// limit once TFS2 v2's block-addressed on-disk format landed (fs_write()
-// goes through the same storage as fs_write_range(), limited only by
-// available RAM/disk space) -- SCROLLBACK_CAP (this buffer's own size)
+// here anymore -- TFS2 v2's block-addressed on-disk format has no hard
+// per-file limit (fs_write() goes through the same storage as
+// fs_write_range(), limited only by available RAM/disk space) --
+// SCROLLBACK_CAP (this buffer's own size)
 // is the actual ceiling on what a save can hold today. Static, not
 // a stack local, for the same reason notepad.c's copy is: this can be
 // called from editor_run()'s own loop (running on the kernel's boot

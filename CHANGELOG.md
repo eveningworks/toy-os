@@ -22,6 +22,44 @@ forever.
 
 ## [Unreleased]
 
+### Removed
+- Legacy on-disk-config migration code, by explicit request -- this
+  project is pre-1.0 and the user is fine just recreating a fresh
+  `disk.img`/`/etc` state instead of carrying forward-migration code
+  for formats nothing still produces. A research pass first confirmed
+  `kernel/drivers/tfs.c` (the user's initial suspicion) actually has
+  *no* removable migration code -- an old-version disk is already just
+  reformatted, identical to a blank/foreign one, no special-case logic
+  exists to strip. The two real, removable migrations were elsewhere:
+  - `kernel/core/font_config.c`: the block reading old `/etc/fontsize`
+    and migrating it into `/etc/toyos.conf`'s `font_size` key (then
+    deleting the old file) -- removed; `font_config_init()` now just
+    reads `toyos.conf` directly. `kernel/include/font_config.h`'s
+    stale reference to the old file removed too.
+  - `kernel/core/tz.c`: the block reading either old `/etc/timezone`
+    or `/timezone` (bare-text city name, two different pre-`/etc`-
+    consolidation locations) and migrating into `toyos.conf`'s
+    `timezone` key -- removed; `tz_init()` now just reads
+    `toyos.conf` directly. The file's own top comment's "small tour of
+    how /etc has evolved" narration (describing the now-gone migration
+    path) trimmed to match.
+  - `kernel/include/fs.h`'s `FS_DATA_MAX` -- already marked `Vestigial`
+    in its own comment, a leftover per-file ceiling from TFS2 v1 that
+    nothing referenced anymore (confirmed by grep before removing).
+    Three comments in `kernel/core/etc_config.c`/`apps/editor.c`/
+    `apps/editor.h` that explained "why this isn't bounded by
+    `FS_DATA_MAX`" reworded to not reference the now-gone symbol name.
+  - `docs/decisions.md`'s `/etc` consolidation entry updated -- it
+    referenced "the migration logic" in the past tense pointing at
+    code that no longer exists.
+
+  Verified: `make clean && make all && make iso` + `boot_smoke_test.py`
+  all pass. Live via QMP: set `fontsize 24` and `timezone helsinki`
+  through the shell, rebooted, confirmed both persisted correctly
+  through the simplified (`toyos.conf`-only) init paths -- the font
+  was visibly larger and `timezone`'s picker showed `helsinki` marked
+  as the active selection.
+
 ### Added
 - Real GDB debugging via `make debug` -- boots toy-os frozen at CPU
   reset (QEMU's `-s -S`) so a host `gdb` can attach

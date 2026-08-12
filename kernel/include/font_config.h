@@ -7,9 +7,7 @@
 // (kernel/drivers/gfx.c) -- a "font_size=<n>" key in the shared
 // /etc/toyos.conf every setting lives in by default (see
 // etc_config.h), read/applied once at boot. See
-// kernel/core/font_config.c's top comment for the exact key, the
-// legacy /etc/fontsize file it migrates forward from, and why this
-// isn't its own hand-rolled parser anymore.
+// kernel/core/font_config.c's top comment for the exact key.
 
 // Call once at boot, after fs_init()/fs_mkdir("/etc") (same ordering as
 // tz_init() -- see kernel.c) -- loads the persisted font_size key if

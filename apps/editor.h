@@ -45,9 +45,9 @@ void editor_load(struct text_scrollback *tb, const char *path);
 // Flattens `tb` and writes it to `path` (fs_write(), fs.h) -- silently
 // truncated to SCROLLBACK_CAP (editor.c's own in-RAM buffer size) if
 // longer, the same exposure apps/notepad.c's own Save already has.
-// NOT bounded by fs.h's FS_DATA_MAX -- that stopped being a real
-// per-file limit once TFS2 v2 landed (see fs.h's fs_write() doc
-// comment); SCROLLBACK_CAP is the real ceiling here. Returns 1 on
+// Not bounded by any filesystem per-file limit -- TFS2 v2 has none
+// (see fs.h's fs_write() doc comment); SCROLLBACK_CAP is the real
+// ceiling here. Returns 1 on
 // success, 0 if fs_write() itself failed (bad path, disk full).
 int editor_save(struct text_scrollback *tb, const char *path);
 
