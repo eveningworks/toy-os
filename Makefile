@@ -129,7 +129,7 @@ C_OBJECTS   = $(CORE_OBJ) $(DRIVERS_OBJ) $(APPS_OBJ) $(WM_OBJ) $(UI_OBJ)
 
 ASM_OBJECTS = $(BUILD)/core/boot.o $(BUILD)/core/isr.o $(BUILD)/core/context_switch.o
 
-.PHONY: all clean clean-disk iso run run-nographic help version seed
+.PHONY: all clean clean-disk iso run run-audio run-nographic help version seed
 
 # Regenerates kernel/include/version.h from VERSION (see
 # tools/gen_version.sh) -- listed first so it always runs before
@@ -160,7 +160,10 @@ help:
 	@echo "toy-os -- available targets:"
 	@echo "  all            Build kernel.bin and the userland test ELFs (default)"
 	@echo "  iso            Build toy-os.iso, a bootable GRUB ISO (implies all)"
-	@echo "  run            Boot toy-os.iso in QEMU with a GTK window (implies iso)"
+	@echo "  run            Boot toy-os.iso in QEMU with an SDL window (implies iso)"
+	@echo "  run-audio      Same as run, plus a PulseAudio backend so the PC speaker"
+	@echo "                 (beep) is actually audible -- see the Makefile for how to"
+	@echo "                 swap the backend if you're not on PulseAudio"
 	@echo "  run-nographic  Boot toy-os.iso in QEMU with no display, serial only (implies iso)"
 	@echo "  clean          Remove build outputs (build/, ELFs, toy-os.iso) -- leaves disk.img alone"
 	@echo "  clean-disk     Wipe disk.img, the persistent filesystem -- use with care"
@@ -415,6 +418,23 @@ iso: version $(KERNEL) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_B
 # boot CD and mistakes it for a plain disk.
 run: iso $(DISK_IMG)
 	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -vga std -display sdl,grab-mod=rctrl -m 256
+
+# Same as `run`, plus a PulseAudio backend wired to the PC speaker
+# (kernel/drivers/speaker.c's `beep`, Milestone 19 -- see
+# docs/roadmap.md) -- QEMU needs an explicit -audiodev backend to play
+# anything at all (no default audio backend since QEMU 5.x), and
+# -machine pcspk-audiodev=<id> is what actually routes the emulated
+# i8254 PC speaker's output to it; without both, `beep` still runs
+# correctly (the PIT/port-0x61 programming completes fine) but is
+# silent. `pa` (PulseAudio) is what this was confirmed working with --
+# swap it for whatever backend your host actually has
+# (`qemu-system-x86_64 -audiodev help` lists what's available, e.g.
+# `alsa` on plain ALSA-only Linux, `coreaudio` on macOS) if PulseAudio
+# isn't it. Kept as a separate target rather than folding into `run`
+# itself since the right backend is host-specific, not something safe
+# to assume by default.
+run-audio: iso $(DISK_IMG)
+	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -vga std -display sdl,grab-mod=rctrl -m 256 -audiodev pa,id=snd0 -machine pcspk-audiodev=snd0
 
 run-nographic: iso $(DISK_IMG)
 	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -display none -m 256

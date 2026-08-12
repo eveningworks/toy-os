@@ -23,6 +23,13 @@ forever.
 ## [Unreleased]
 
 ### Added
+- `make run-audio` -- same as `make run`, plus `-audiodev pa,id=snd0
+  -machine pcspk-audiodev=snd0` so the PC speaker (`beep`, see below)
+  is actually audible -- confirmed working on a real machine.
+  `make run` itself is unchanged (no default audio backend assumed --
+  the right one is host-specific). Also fixes a stale `help` target
+  claim that `run` opens a GTK window; it's been SDL for a while
+  (`-display sdl,grab-mod=rctrl`, see `CLAUDE.md`).
 - MBR + GPT partition table parsing (Milestone 3, `docs/roadmap.md`):
   new `kernel/include/partition.h`/`kernel/drivers/partition.c`,
   `partition_read_table()` -- reads LBA 0 via `ata_read_sector()`,

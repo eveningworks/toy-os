@@ -245,6 +245,7 @@ simpler than the Cowork setup in every way that setup works around --
 make all   # kernel.bin + userland test ELFs
 make iso   # + toy-os.iso (grub-mkrescue)
 make run   # boots in QEMU with an SDL window (the user's machine, not usable headlessly)
+make run-audio  # same as run, + a PulseAudio backend so the PC speaker (`beep`) is audible
 ```
 `apps/*.c` is picked up by a `wildcard`, but it's non-recursive --
 `apps/wm/*.c` needed its own `WM_C` wildcard, pattern rule, and mkdir
