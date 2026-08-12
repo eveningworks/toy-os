@@ -365,11 +365,15 @@ keypress, entirely from ring 3, with no kernel-space drawing code
 involved once it's running.
 
 **This is not the window manager moved to user space.** It's *modal*:
-since there's no scheduler backing `run <name>`, the ring-3 process has
-the real screen entirely to itself while it runs, the same way
+the physical shell's `run <name>` is still the legacy blocking
+`elf_run_from_fs()` path with no scheduler backing it, so `gui_test`
+has the real screen entirely to itself while it runs, the same way
 `ring3test`/`hello`/`exit_test`/`write_test` each run one process at a
-time with nothing else happening concurrently (`schedtest` is the one
-exception -- see `kernel/core/scheduler.c`). It doesn't create a window inside `wm.c`,
+time with nothing else happening concurrently (`schedtest`, and now
+Terminal's own async `run`/`ls` for its allowlist -- see this file's
+Terminal entry above -- are scheduler-backed, but `gui_test` is
+deliberately excluded from that allowlist for exactly this
+whole-screen-takeover reason). It doesn't create a window inside `wm.c`,
 doesn't coexist with Notepad or About, and can't be dragged, minimized,
 or otherwise treated as a window -- there's no `struct window` involved
 at all. `wm.c` doesn't know this exists.
@@ -377,8 +381,12 @@ at all. `wm.c` doesn't know this exists.
 Turning this into an actual user-space GUI -- Notepad and About running
 as real, isolated ring-3 processes that are *also* proper windows inside
 `wm.c` -- needs, roughly:
-- A scheduler, so a GUI process can run concurrently with the
-  kernel-space compositor's own event loop instead of blocking it
+- A scheduler letting a GUI process run concurrently with the
+  kernel-space compositor's own event loop instead of blocking it --
+  this part now exists (`scheduler_spawn()`/`scheduler_poll()`,
+  continuously armed, see `docs/decisions.md`), but only Terminal's own
+  async `ls`/`run` uses it so far, not `wm.c`'s own event loop; `gui_test`
+  itself still runs the old blocking way (see above)
 - A real windowing protocol instead of "hand the whole screen to one
   process": syscalls for creating a window (getting back a private
   pixel buffer for just that window's content area, not the whole

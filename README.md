@@ -50,7 +50,10 @@ For everything else:
   taskbar, Start menu, a desktop background with an icon grid, and a
   reusable right-click context menu wired into the desktop, window
   chrome, taskbar, and Start menu) with five apps -- Notepad, About,
-  Calculator, Terminal (runs the real shell inside a window), and Task
+  Calculator, Terminal (runs the real shell inside a window; `ls` and an
+  allowlist of `/bin` binaries via `run` execute asynchronously through
+  the scheduler instead of freezing the window, see `docs/roadmap.md`'s
+  async I/O item), and Task
   Manager (lists windows, shows memory usage). The Start menu's "Exit
   to shell" and "Shutdown" both ask for confirmation first
   (`apps/wm/confirm_dialog.c`, a reusable screen-absolute Yes/No
@@ -265,5 +268,9 @@ real privilege separation: a GDT/TSS, a physical frame allocator, paging
 with per-process address spaces, an ELF64 loader, and a preemptive
 scheduler that runs up to four ring-3 processes genuinely concurrently.
 See [docs/process-isolation.md](docs/process-isolation.md) for the full
-build-up, told as it was built, bugs included.
+build-up, told as it was built, bugs included. The scheduler is now
+continuously armed (not just during the `schedtest` demo) with a public
+non-blocking spawn API (`scheduler_spawn()`/`scheduler_poll()`) --
+`apps/terminal.c`'s async `ls`/`run` is the real caller; see
+`docs/decisions.md` for why permanently-armed is still safe.
 
