@@ -37,8 +37,13 @@ later judgment call, not mechanically tied to "20 milestones done."
 
 ### Milestone 2 -- Memory protection hardening (planned v0.2.0)
 
-- [ ] NX bit enforcement (non-executable data pages)
-- [ ] W^X on kernel + userspace mappings
+- [x] ~~NX bit enforcement (non-executable data pages)~~ -- done for
+      userspace, see `CHANGELOG.md`'s `[Unreleased]` entry
+- [ ] W^X on kernel + userspace mappings -- userspace half done
+      alongside NX above (same entry); the kernel's own identity map
+      (`boot.asm`) is still flat present+writable, no split, see
+      `docs/decisions.md`'s NX entry for why that's a separate, larger
+      change
 - [x] ~~Stack canaries (`-fstack-protector`)~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry
 - [ ] Kernel ASLR (randomize load base)
 

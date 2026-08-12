@@ -104,6 +104,7 @@ SOCKET_TEST_ELF = userland/socket_test.elf
 LSPCI_ELF = userland/lspci.elf
 LS_ELF = userland/ls.elf
 STACK_SMASH_TEST_ELF = userland/stack_smash_test.elf
+NX_TEST_ELF = userland/nx_test.elf
 
 # Seed directory for tools/tfs2_writer.py's `sync` command -- see the
 # `seed` target below and docs/decisions.md. Not committed as a
@@ -165,7 +166,7 @@ ASM_OBJECTS = $(BUILD)/core/boot.o $(BUILD)/core/isr.o $(BUILD)/core/context_swi
 version:
 	@sh tools/gen_version.sh
 
-all: version $(KERNEL) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF) $(LS_ELF) $(STACK_SMASH_TEST_ELF)
+all: version $(KERNEL) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF) $(LS_ELF) $(STACK_SMASH_TEST_ELF) $(NX_TEST_ELF)
 
 help:
 	@echo "toy-os -- available targets:"
@@ -315,6 +316,12 @@ $(BUILD)/userland/stack_smash_test.o: userland/stack_smash_test.c | $(BUILD)/use
 $(STACK_SMASH_TEST_ELF): $(BUILD)/userland/stack_smash_test.o $(BUILD)/userland/stack_chk.o userland/link.ld
 	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/stack_smash_test.o $(BUILD)/userland/stack_chk.o
 
+$(BUILD)/userland/nx_test.o: userland/nx_test.c | $(BUILD)/userland
+	$(CC) $(USERLAND_CFLAGS) $< -o $@
+
+$(NX_TEST_ELF): $(BUILD)/userland/nx_test.o $(BUILD)/userland/stack_chk.o userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/nx_test.o $(BUILD)/userland/stack_chk.o
+
 $(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(ASM_OBJECTS) $(C_OBJECTS)
 
@@ -359,7 +366,8 @@ SEED_BINARIES = \
 	$(NEWSYSCALLS_TEST_ELF):newsyscalls_test \
 	$(CRASH_TEST_ELF):crash_test \
 	$(SOCKET_TEST_ELF):socket_test \
-	$(STACK_SMASH_TEST_ELF):stack_smash_test
+	$(STACK_SMASH_TEST_ELF):stack_smash_test \
+	$(NX_TEST_ELF):nx_test
 
 # Seeds $(DISK_IMG) with every SEED_BINARIES entry, plus the /etc/kbs/*
 # keyboard-layout data files, via tools/tfs2_writer.py's `sync` (see
@@ -388,7 +396,7 @@ SEED_BINARIES = \
 # (keyboard_layout.c) keeps the keyboard working regardless. Delete
 # $(SEED_DIR)/sync/etc/kbs and re-run `make iso` to force a fresh
 # regenerate once xkbcli is installed.
-seed: $(DISK_IMG) $(LSPCI_ELF) $(LS_ELF) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(STACK_SMASH_TEST_ELF)
+seed: $(DISK_IMG) $(LSPCI_ELF) $(LS_ELF) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(STACK_SMASH_TEST_ELF) $(NX_TEST_ELF)
 	mkdir -p $(SEED_DIR)/sync/bin
 	$(foreach pair,$(SEED_BINARIES),cp $(word 1,$(subst :, ,$(pair))) $(SEED_DIR)/sync/bin/$(word 2,$(subst :, ,$(pair)));)
 	@if command -v xkbcli >/dev/null 2>&1; then \
@@ -399,7 +407,7 @@ seed: $(DISK_IMG) $(LSPCI_ELF) $(LS_ELF) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_T
 	fi
 	python3 tools/tfs2_writer.py sync $(DISK_IMG) $(SEED_DIR)
 
-iso: version $(KERNEL) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF) $(LS_ELF) $(STACK_SMASH_TEST_ELF) seed
+iso: version $(KERNEL) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF) $(LS_ELF) $(STACK_SMASH_TEST_ELF) $(NX_TEST_ELF) seed
 	mkdir -p iso/boot/grub
 	cp $(KERNEL) iso/boot/kernel.bin
 	cp grub.cfg iso/boot/grub/grub.cfg
@@ -470,7 +478,7 @@ run-nographic: iso $(DISK_IMG)
 	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -display none -m 256
 
 clean:
-	rm -rf $(BUILD) $(ISO) iso/boot/kernel.bin $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF) $(LS_ELF) $(STACK_SMASH_TEST_ELF) $(SEED_DIR)/sync
+	rm -rf $(BUILD) $(ISO) iso/boot/kernel.bin $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF) $(LS_ELF) $(STACK_SMASH_TEST_ELF) $(NX_TEST_ELF) $(SEED_DIR)/sync
 	# Deliberately NOT touching $(DISK_IMG) here -- see its comment above.
 	# Use `make clean-disk` to explicitly wipe the persistent filesystem.
 

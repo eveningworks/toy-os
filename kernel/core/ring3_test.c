@@ -74,10 +74,14 @@ void ring3_test_run(void) {
     uint64_t data_vaddr  = VMM_USER_BASE + 0x1000;
     uint64_t stack_vaddr = VMM_USER_BASE + 0x2000;
 
-    if (!vmm_map_user_page(as, code_vaddr, code_phys) ||
+    // The code page needs executable=1 explicitly (vmm_map_user_page()'s
+    // plain wrapper defaults to non-executable, correct for data_vaddr/
+    // stack_vaddr below but wrong for actual machine code -- see vmm.h).
+    // Not writable either: nothing here self-modifies its own code.
+    if (!vmm_map_user_page_flags(as, code_vaddr, code_phys, 0, 1) ||
         !vmm_map_user_page(as, data_vaddr, data_phys) ||
         !vmm_map_user_page(as, stack_vaddr, stack_phys)) {
-        vga_write("ring3_test: vmm_map_user_page() failed\n");
+        vga_write("ring3_test: vmm_map_user_page()/vmm_map_user_page_flags() failed\n");
         return;
     }
 

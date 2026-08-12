@@ -151,16 +151,19 @@ static int is_blocked_command(const char *cmd) {
 // which never arrives), `gui_test`/`win_test` (framebuffer/own-window
 // takeover, same hazard `gui` above has), `counter_a`/`counter_b`
 // (infinite-loop-by-design demo processes for `schedtest`, not real
-// commands -- see scheduler.c). `crash_test` deliberately faults --
-// verified safe anyway: idt.c's fault handler is already
+// commands -- see scheduler.c). `crash_test`/`nx_test` both deliberately
+// fault -- verified safe anyway: idt.c's fault handler is already
 // scheduler-aware (its `recoverable` branch checks
 // scheduler_current_pid()), tearing the process down and reporting
 // "RING-3 PROCESS CRASHED" through whatever sink is active (same as any
 // other console output -- see vga.h's struct vga_sink) with exit code
-// -1, same as a legacy `run crash_test` from the physical shell.
+// -1, same as a legacy `run crash_test`/`run nx_test` from the physical
+// shell. `nx_test` specifically proves NX enforcement (Milestone 2,
+// docs/roadmap.md) by jumping into a non-executable data page.
 static const char *const RUN_ALLOWED_BINS[] = {
     "crash_test", "exit_test", "file_test", "hello", "lspci",
-    "newsyscalls_test", "socket_test", "write_bad_test", "write_test",
+    "newsyscalls_test", "nx_test", "socket_test", "write_bad_test",
+    "write_test",
 };
 #define RUN_ALLOWED_COUNT (sizeof(RUN_ALLOWED_BINS) / sizeof(RUN_ALLOWED_BINS[0]))
 

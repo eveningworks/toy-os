@@ -26,10 +26,24 @@
 uint64_t vmm_create_address_space(void);
 
 // Maps one 4KiB page at `vaddr` to physical frame `paddr`, present +
-// writable + user, allocating any intermediate page-table levels needed
-// along the way. Private to whichever address space `pml4_phys`
-// identifies. Returns 1 on success, 0 on allocation failure.
+// user, allocating any intermediate page-table levels needed along the
+// way. Private to whichever address space `pml4_phys` identifies.
+// Writable and NOT executable -- the secure default for the data pages
+// every caller of this particular function maps (stack, heap, GUI
+// framebuffer/window buffers). Returns 1 on success, 0 on allocation
+// failure. See vmm_map_user_page_flags() below for a caller that needs
+// different permissions (the ELF loader's executable .text segment).
 int vmm_map_user_page(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr);
+
+// Same as vmm_map_user_page(), but with explicit control over the
+// writable and executable (NX) bits instead of the secure "writable,
+// not executable" default -- what elf.c's loader uses, deriving both
+// from each PT_LOAD segment's real p_flags (PF_W/PF_X) instead of
+// mapping every segment identically. Requires EFER.NXE to already be
+// set (boot.asm, once at boot) for `executable == 0` to actually be
+// enforced by the CPU rather than silently ignored.
+int vmm_map_user_page_flags(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
+                             int writable, int executable);
 
 // Loads CR3 with the given address space.
 void vmm_switch_address_space(uint64_t pml4_phys);

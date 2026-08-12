@@ -9,6 +9,7 @@ extern uint64_t p4_table[512];
 #define PAGE_PRESENT  (1ULL << 0)
 #define PAGE_WRITABLE (1ULL << 1)
 #define PAGE_USER     (1ULL << 2)
+#define PAGE_NX       (1ULL << 63) // requires EFER.NXE, set once in boot.asm
 #define ADDR_MASK     0x000FFFFFFFFFF000ULL
 
 // All of this runs with the kernel's own page tables still active (CR3
@@ -56,7 +57,8 @@ static uint64_t ensure_next_level(uint64_t *table, int index) {
     return new_phys;
 }
 
-int vmm_map_user_page(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr) {
+int vmm_map_user_page_flags(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
+                             int writable, int executable) {
     int pml4_index = (int)((vaddr >> 39) & 0x1FF);
     int pdpt_index = (int)((vaddr >> 30) & 0x1FF);
     int pd_index   = (int)((vaddr >> 21) & 0x1FF);
@@ -71,9 +73,26 @@ int vmm_map_user_page(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr) {
     uint64_t pt_phys = ensure_next_level(table_at(pd_phys), pd_index);
     if (!pt_phys) return 0;
 
+    uint64_t flags = PAGE_PRESENT | PAGE_USER;
+    if (writable) flags |= PAGE_WRITABLE;
+    if (!executable) flags |= PAGE_NX;
+
     uint64_t *pt = table_at(pt_phys);
-    pt[pt_index] = (paddr & ADDR_MASK) | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER;
+    pt[pt_index] = (paddr & ADDR_MASK) | flags;
     return 1;
+}
+
+// The plain, no-questions-asked mapper -- writable, and deliberately
+// NOT executable. Every call site that predates the NX/W^X work (a
+// process's stack, SYS_SBRK heap growth, the GUI framebuffer, a
+// window's pixel buffer -- see syscall.c/elf_run.c/scheduler.c) is
+// data, never code, so this default is both the secure one and the
+// correct one for all of them with no caller-side changes needed.
+// elf.c's ELF loader is the one caller that DOES need per-segment
+// control (a .text segment has to be executable) -- it calls
+// vmm_map_user_page_flags() directly instead of this wrapper.
+int vmm_map_user_page(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr) {
+    return vmm_map_user_page_flags(pml4_phys, vaddr, paddr, 1, 0);
 }
 
 void vmm_switch_address_space(uint64_t pml4_phys) {

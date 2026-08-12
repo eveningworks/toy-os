@@ -1841,3 +1841,34 @@ opened two non-overlapping windows, swapped focus between them
 repeatedly via taskbar clicks, confirmed both titlebar tints updated
 correctly on every swap
 (`screenshots/2026-08-12/compositor-phase3-focus-tint-fixed.png`).
+
+## NX enforcement scoped to userspace only -- the kernel's own identity map stays RWX
+
+Milestone 2's "NX bit enforcement" and "W^X on kernel + userspace
+mappings" roadmap items were done together for the *userspace* half
+only (`kernel/core/elf.c`/`vmm.c`, `userland/link.ld`) -- deliberately
+not touching `kernel/core/boot.asm`'s own flat 2MiB-huge-page identity
+map, which stays plain present+writable, no NX, no code/data split, on
+purpose. Giving the kernel itself real NX/W^X would need `linker.ld` to
+page-align `.text` away from `.rodata`/`.data`/`.bss` first (it
+currently doesn't, unlike `userland/link.ld` post this change) and
+`pmm.c`'s frame-reservation logic to become section-aware instead of
+treating the whole kernel image as one blob -- a much larger, riskier
+change to a boot-critical path than userspace enforcement, which only
+touches process page tables that already get created fresh per-process
+anyway. Left as the remaining half of the "W^X on kernel... mappings"
+roadmap checkbox.
+
+The default mapper (`vmm_map_user_page()`) was changed to be
+non-executable by default rather than adding a parallel "safe" variant
+-- every pre-existing call site (a process's stack, `SYS_SBRK` heap
+growth, the GUI framebuffer, a window's pixel buffer) is data, never
+code, so this is both the secure default and correct for all of them
+with zero call-site changes; only `kernel/core/elf.c` (needs real
+per-segment control) and `kernel/core/ring3_test.c` (its one
+hand-assembled code page) call the explicit-flags variant instead. See
+CHANGELOG.md's `[Unreleased]` entry for the full mechanics and the QMP
+verification (a purpose-built `userland/nx_test.c` that jumps into a
+non-executable data page and confirms the CPU actually faults --
+`error_code=0x15` decodes to Present+User+Instruction-Fetch, not a
+generic unmapped-page fault).

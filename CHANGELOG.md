@@ -22,6 +22,72 @@ forever.
 
 ## [Unreleased]
 
+### Added
+- NX bit enforcement + W^X for userspace process pages (Milestone 2,
+  docs/roadmap.md). Previously every mapped page anywhere -- kernel or
+  user, code or data -- was present+writable(+user), full stop; a
+  user ELF's `.data`/`.bss`/stack were as executable as its `.text`,
+  and every PT_LOAD segment got mapped identically regardless of its
+  real ELF permission bits (`p_flags` was parsed but never read).
+  Scoped to userspace process pages only, matching this session's
+  choice -- the kernel's own `boot.asm` identity map (flat 2MiB huge
+  pages, no code/data split) is unchanged and stays RWX; that's the
+  separate, larger "W^X on kernel... mappings" roadmap item.
+  - `kernel/core/boot.asm`: `enable_paging` now also sets EFER.NXE
+    (bit 11 of the `0xC0000080` MSR) alongside the existing long-mode
+    bit -- required once, globally, for the CPU to honor PTE bit 63 at
+    all.
+  - `kernel/core/vmm.c`/`vmm.h`: new `PAGE_NX` bit and
+    `vmm_map_user_page_flags(pml4_phys, vaddr, paddr, writable,
+    executable)`. The existing `vmm_map_user_page()` is now a thin
+    wrapper defaulting to writable+NOT executable -- the correct,
+    secure default for every pre-existing call site (a process's
+    stack, SYS_SBRK heap growth, the GUI framebuffer, a window's pixel
+    buffer -- all data, never code), so those all become non-executable
+    for free with no call-site changes. `kernel/core/ring3_test.c`'s
+    hand-assembled code page is the one call site needing
+    executable=1 explicitly, via the new `_flags` variant.
+  - `kernel/core/elf.c`: `load_segment()` now actually reads
+    `ph->p_flags` (new `PF_X`/`PF_W` constants) and maps each PT_LOAD
+    segment's pages with its own real writable/executable bits via
+    `vmm_map_user_page_flags()`, instead of the old blanket
+    present+writable+user every segment used to get.
+  - `userland/link.ld`: this is what makes the above mean anything --
+    an explicit `PHDRS` block now emits three separate, page-aligned
+    (`ALIGN(4096)`) `PT_LOAD` segments (`.text` R+X, `.rodata` R-only,
+    `.data`+`.bss` R+W) instead of one merged segment covering
+    everything. NX/W^X is enforced per 4KiB page, so without this
+    split every userland ELF would still have `.text` and `.data`
+    sharing pages and nothing to differentiate. Confirmed via
+    `readelf -lW`: 3 distinct `PT_LOAD` entries with the expected `R
+    E`/`R`/`RW` flags, each `VirtAddr` exactly 4096-aligned. Also
+    incidentally fixes every userland `.elf`'s `ld: ... has a LOAD
+    segment with RWX permissions` build warning (kernel.bin's own
+    warning is unchanged/expected -- out of scope, see above).
+  - New `userland/nx_test.c` (+ Makefile/`RUN_ALLOWED_BINS` wiring,
+    same pattern as `crash_test.c`): copies a tiny valid instruction
+    (`ret`, 0xC3) into a writable `.bss` buffer and calls it as a
+    function -- exactly the shape of a real exploit's second stage.
+    Verified via QMP (`run nx_test`): the kernel reports `RING-3
+    PROCESS CRASHED: Page fault`, `error_code=0x15` -- decodes to
+    Present + User + Instruction-Fetch, the specific signature of an
+    NX violation, not a generic unmapped-page fault -- and the
+    injected code never executes (no "UNEXPECTEDLY SURVIVED" message).
+    Process torn down, control returned cleanly to the shell, same
+    recoverable-fault path `crash_test` already exercises.
+  - Regression-verified via QMP: `run ls`, `run crash_test` (still
+    faults exactly as before, unrelated kernel-only-page violation),
+    and a GUI-spawned `ls` via Terminal's async `run` (scheduler.c's
+    separate spawn path) all behave identically to before this change.
+  - Found (not caused) during verification: `run hello` page-faults on
+    a write to `USERLAND_MARKER_ADDR` (`kernel/include/
+    userland_contract.h`), an address only ever mapped by a
+    `kernel/core/elf_test.c` that no longer exists in this tree --
+    confirmed by building unmodified `main` and reproducing the
+    identical crash there too. Pre-existing, unrelated to this change;
+    left as-is (either `hello.c`'s marker write or the file's own
+    stale top comment needs updating, a separate small cleanup).
+
 ### Removed
 - Legacy on-disk-config migration code, by explicit request -- this
   project is pre-1.0 and the user is fine just recreating a fresh

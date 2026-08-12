@@ -40,6 +40,9 @@ struct elf64_phdr {
 #define EM_X86_64  62
 #define ELFCLASS64 2
 
+#define PF_X 1 // executable
+#define PF_W 2 // writable
+
 #define PAGE_SIZE 4096ULL
 
 // Loads one PT_LOAD segment, page by page. A segment's file/memory
@@ -48,7 +51,18 @@ struct elf64_phdr {
 // page is handled individually: allocate + zero a fresh frame, copy
 // whichever bytes of *this page* fall within the segment's file-backed
 // range, leave the rest zeroed, then map it.
+//
+// Maps every page in this segment with the SAME writable/executable
+// bits, taken from the segment's own p_flags (PF_W/PF_X) rather than
+// the old blanket present+writable+user every segment used to get --
+// see vmm.c's vmm_map_user_page_flags(). This only does anything real
+// once userland/link.ld actually puts .text/.rodata/.data in separate
+// page-aligned PT_LOAD segments with distinct p_flags; a single merged
+// RWX segment (the old default) would make every page executable
+// regardless of this code.
 static int load_segment(uint8_t *elf_base, const struct elf64_phdr *ph, uint64_t pml4_phys) {
+    int writable = (ph->p_flags & PF_W) != 0;
+    int executable = (ph->p_flags & PF_X) != 0;
     uint64_t vaddr_start = ph->p_vaddr & ~(PAGE_SIZE - 1);
     uint64_t vaddr_end = (ph->p_vaddr + ph->p_memsz + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
 
@@ -73,7 +87,7 @@ static int load_segment(uint8_t *elf_base, const struct elf64_phdr *ph, uint64_t
             for (uint64_t b = 0; b < len; b++) dst[dst_off + b] = elf_base[file_off + b];
         }
 
-        if (!vmm_map_user_page(pml4_phys, page_va, frame)) return 0;
+        if (!vmm_map_user_page_flags(pml4_phys, page_va, frame, writable, executable)) return 0;
     }
 
     return 1;
