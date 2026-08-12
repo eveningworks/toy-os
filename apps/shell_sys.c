@@ -430,7 +430,7 @@ void cmd_stress(const char *args) {
     vga_write("stress: writing "); vga_write_dec(mb); vga_write(" MB to ");
     vga_write(STRESS_TEST_PATH); vga_write(" ...\n");
     uint64_t write_start_ticks = pit_ticks();
-    uint64_t last_progress_ticks = write_start_ticks;
+    uint32_t last_pct_printed = 0;
     for (uint32_t c = 0; c < chunks; c++) {
         stress_fill_pattern(c);
         uint64_t offset = (uint64_t)c * STRESS_CHUNK_BYTES;
@@ -441,10 +441,17 @@ void cmd_stress(const char *args) {
             fs_delete(STRESS_TEST_PATH);
             return;
         }
-        uint64_t now = pit_ticks();
-        if (now - last_progress_ticks >= 100) { // ~1x/sec (100Hz PIT) -- long-running, not silent
-            stress_print_progress("wrote", c + 1, mb, now - write_start_ticks);
-            last_progress_ticks = now;
+        // One line per percentage point crossed -- not time-based
+        // (100 PIT ticks) anymore: after the free_all_blocks() batching
+        // fix sped up a typical run, a 1x/sec cadence was skipping from
+        // ~6% straight to ~13% on a fast disk, never landing on a clean
+        // 1%..100% sequence. Percent-based naturally caps at ~100 lines
+        // total regardless of <mb> or disk speed, so it can't flood for
+        // a huge `mb` either.
+        uint32_t pct = ((c + 1) * 100) / mb;
+        if (pct > last_pct_printed) {
+            stress_print_progress("wrote", c + 1, mb, pit_ticks() - write_start_ticks);
+            last_pct_printed = pct;
         }
     }
     uint64_t write_ticks = pit_ticks() - write_start_ticks;
@@ -452,7 +459,7 @@ void cmd_stress(const char *args) {
     vga_write("stress: reading back and verifying ...\n");
     static uint8_t readback[STRESS_CHUNK_BYTES];
     uint64_t read_start_ticks = pit_ticks();
-    last_progress_ticks = read_start_ticks;
+    last_pct_printed = 0;
     for (uint32_t c = 0; c < chunks; c++) {
         uint64_t offset = (uint64_t)c * STRESS_CHUNK_BYTES;
         uint32_t got = fs_read_range(STRESS_TEST_PATH, offset, readback, STRESS_CHUNK_BYTES);
@@ -474,10 +481,10 @@ void cmd_stress(const char *args) {
             fs_delete(STRESS_TEST_PATH);
             return;
         }
-        uint64_t now = pit_ticks();
-        if (now - last_progress_ticks >= 100) {
-            stress_print_progress("verified", c + 1, mb, now - read_start_ticks);
-            last_progress_ticks = now;
+        uint32_t pct = ((c + 1) * 100) / mb;
+        if (pct > last_pct_printed) {
+            stress_print_progress("verified", c + 1, mb, pit_ticks() - read_start_ticks);
+            last_pct_printed = pct;
         }
     }
     uint64_t read_ticks = pit_ticks() - read_start_ticks;
