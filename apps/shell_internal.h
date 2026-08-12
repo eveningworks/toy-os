@@ -68,6 +68,7 @@ void cmd_keyboard(const char *args);
 void cmd_color(const char *args);
 void cmd_history(void);
 void cmd_lspci(void);
+void cmd_parttable(void);
 void cmd_ls_bin(const char *args);
 void cmd_debug(const char *args);
 

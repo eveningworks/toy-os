@@ -460,6 +460,17 @@ repeated manual steps to be worth automating:
   `--dry-run` on `write`/`sync`/`format` previews without touching the
   image. Scoped to direct+single-indirect blocks (~4.03 MB/file) -- see
   `docs/decisions.md` for why.
+- **`mkpart_test.py`** -- writes a synthetic legacy MBR or GPT partition
+  table onto a disk image, for testing `kernel/drivers/partition.c`'s
+  parser (`parttable` shell command). TFS2-mount-preserving: patches
+  only the partition-table byte ranges TFS2 itself never touches
+  (reads the existing LBA 0 sector first rather than blindly
+  overwriting it), so the real filesystem underneath still mounts
+  normally afterward instead of `tfs_init()` seeing foreign magic and
+  auto-reformatting. `--mbr`/`--gpt`; see its own docstring for the
+  CRC32/GUID-encoding details and `docs/decisions.md` for why GPT
+  verification needed a host-compiled unit test instead of a live
+  boot (TFS2's own journal header collides with the GPT header's LBA).
 
 - **`run_release.sh`** -- standalone QEMU launcher shipped as a GitHub
   Release asset (not part of the build), for running from just a

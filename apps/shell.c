@@ -207,6 +207,8 @@ static void dispatch(char *line) {
         cmd_history();
     } else if (k_strcmp(cmd, "lspci") == 0) {
         cmd_lspci();
+    } else if (k_strcmp(cmd, "parttable") == 0) {
+        cmd_parttable();
     } else {
         vga_write("Unknown command: ");
         vga_write(cmd);

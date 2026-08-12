@@ -47,7 +47,7 @@ later judgment call, not mechanically tied to "20 milestones done."
 - [ ] Full multi-GB stress run (`stress 4200` / `stress 8192`)
 - [ ] Coalesce contiguous block writes into fewer ATA commands
 - [ ] Journal-batched flush
-- [ ] GPT/MBR partition table parsing
+- [x] ~~GPT/MBR partition table parsing~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry
 
 ### Milestone 4 -- AHCI/SATA driver (planned v0.4.0)
 
@@ -400,12 +400,18 @@ touches the crash-safety story directly (see `docs/decisions.md`'s entry
 on why `persist_record()` was deliberately left alone in part 1), worth
 doing last and carefully if ever needed.
 
-GPT/MBR partition table parsing -- `disk.img` is one raw TFS2 blob today,
-not a partitioned disk. Explicitly re-confirmed as a "build it anyway,
-later" item when TFS2 was reworked for multi-GB files: not required for
-large-file support (TFS2 v2's own block addressing handles that), purely
-for future flexibility (e.g. hosting more than one filesystem image on one
-disk).
+~~GPT/MBR partition table parsing~~ -- done, see `CHANGELOG.md`'s
+`[Unreleased]` entry: `kernel/drivers/partition.c`'s
+`partition_read_table()` reads LBA 0 (and LBA 1 + the entry array, for a
+protective-MBR-signaled GPT disk), exposed via a new `parttable` shell
+command. Read-only, parse-only, same as originally scoped here --
+`disk.img` is still one raw TFS2 blob at LBA 0, not a partitioned disk,
+and this never gets consulted by the mount path. See `docs/decisions.md`
+for why the GPT half of this couldn't be verified via a live in-VM boot
+test the way the MBR half was (TFS2's own self-test unconditionally
+overwrites LBA 1, the GPT header's mandated location, on every boot) and
+what verified it instead (a host-compiled unit test including the real
+kernel source unmodified, `tools/mkpart_test.py`).
 
 ### Milestone 4 -- AHCI/SATA driver
 

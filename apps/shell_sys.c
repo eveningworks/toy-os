@@ -112,6 +112,8 @@ static const char *const HELP_LINES[] = {
     "                  syscall diagnostics, timestamped)\n",
     "  lspci         - list PCI devices found at boot (bus:dev.func,\n",
     "                  vendor:device ID, class, IRQ, BARs)\n",
+    "  parttable     - show the attached disk's MBR/GPT partition table,\n",
+    "                  if any (today's disk.img has none -- raw TFS2)\n",
     "\n",
     "Appearance:\n",
     "  color <name>  - change shell text color\n",
@@ -955,6 +957,70 @@ void cmd_lspci(void) {
             vga_write(pci_bar_is_io(d->bar[b]) ? "(io)" : "(mem)");
         }
         vga_putc('\n');
+    }
+}
+
+// Standard 8-4-4-4-12 hex GUID formatting -- the first three fields
+// are little-endian 32/16/16-bit integers (read_le-style, same as
+// partition.c's own parsing), the last two are raw bytes with no
+// endian reinterpretation at all (Microsoft's "mixed-endian" GUID
+// encoding -- see kernel/drivers/partition.c's top comment).
+static void print_guid(const uint8_t *g) {
+    uint32_t d1 = (uint32_t)g[0] | ((uint32_t)g[1] << 8) | ((uint32_t)g[2] << 16) | ((uint32_t)g[3] << 24);
+    print_hex_digits(d1, 8);
+    vga_putc('-');
+    print_hex_digits((uint32_t)g[4] | ((uint32_t)g[5] << 8), 4);
+    vga_putc('-');
+    print_hex_digits((uint32_t)g[6] | ((uint32_t)g[7] << 8), 4);
+    vga_putc('-');
+    print_hex_digits(g[8], 2);
+    print_hex_digits(g[9], 2);
+    vga_putc('-');
+    for (int i = 10; i < 16; i++) print_hex_digits(g[i], 2);
+}
+
+// Reads and prints whatever partition table (if any) is on the
+// attached disk -- MBR, GPT, or neither (today's disk.img: raw TFS2
+// from LBA 0, no partition table at all, see kernel/include/partition.h's
+// top comment). Read-only, diagnostic only, same spirit as `lspci`.
+void cmd_parttable(void) {
+    struct partition_table t;
+    if (!partition_read_table(&t)) {
+        vga_write("parttable: disk read failed (no disk attached?)\n");
+        return;
+    }
+
+    if (t.kind == PART_TABLE_NONE) {
+        vga_write("No partition table found (LBA 0 has no 0x55AA signature).\n");
+        return;
+    }
+
+    if (t.kind == PART_TABLE_MBR) {
+        vga_write("Legacy MBR partition table:\n");
+        if (t.entry_count == 0) { vga_write("  (no non-empty entries)\n"); return; }
+        for (int i = 0; i < t.entry_count; i++) {
+            struct partition_entry *e = &t.entries[i];
+            vga_write("  "); vga_write_dec((uint32_t)(i + 1));
+            vga_write("  type=0x"); print_hex_digits(e->mbr_type, 2);
+            vga_write("  lba="); vga_write_dec(e->mbr_lba_start);
+            vga_write("  sectors="); vga_write_dec(e->mbr_num_sectors);
+            vga_putc('\n');
+        }
+        return;
+    }
+
+    // PART_TABLE_GPT
+    vga_write("GPT partition table (disk GUID ");
+    print_guid(t.disk_guid);
+    vga_write("):\n");
+    if (t.entry_count == 0) { vga_write("  (no non-empty entries)\n"); return; }
+    for (int i = 0; i < t.entry_count; i++) {
+        struct partition_entry *e = &t.entries[i];
+        vga_write("  "); vga_write_dec((uint32_t)(i + 1));
+        vga_write("  type="); print_guid(e->gpt_type_guid);
+        vga_write("\n      lba="); vga_write_hex(e->gpt_lba_start);
+        vga_write("-"); vga_write_hex(e->gpt_lba_end);
+        vga_write("  name=\""); vga_write(e->gpt_name); vga_write("\"\n");
     }
 }
 

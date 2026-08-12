@@ -1643,3 +1643,56 @@ are worth knowing if this is ever revisited:
   reaches the "survived" path. Worth remembering for any future
   deliberate-crash test: inlining can silently move a compiler-inserted
   check somewhere your test's control flow never reaches.
+
+## GPT header verification: a host-compiled unit test, not a live boot -- TFS2's own journal collides with LBA 1
+
+`kernel/drivers/partition.c`'s GPT support (Milestone 3, `CHANGELOG.md`'s
+`[Unreleased]` entry) couldn't be verified the same way its MBR half was
+(a real `disk.img` patched with synthetic data, booted, `parttable` run
+from the shell over QMP) -- a real, unavoidable architectural conflict,
+not a testing inconvenience:
+
+- The GPT header's LBA is fixed by spec at LBA 1.
+- `kernel/drivers/tfs.c`'s `FS_JOURNAL_HEADER_LBA` is *also* LBA 1
+  (`FS_SUPERBLOCK_LBA + 1`).
+- `tfs_init()` calls `tfs_selftest()` **unconditionally** after either
+  mounting or formatting (`if (g_disk_backed) tfs_selftest();`, no
+  bypass/flag), and `tfs_selftest()` creates and writes a real file --
+  which, via `persist_record()`, always ends with `write_journal_header(0,
+  0, 0)`, overwriting LBA 1 with a real `"JRN1"` journal header.
+- This runs synchronously during `kernel_main()`, before the shell
+  prompt is ever reachable -- there is no window, pre-boot or live-patch
+  mid-boot, where a custom GPT header at LBA 1 survives long enough for
+  a shell command to read it. Confirmed two ways during development: a
+  disk patched with a valid GPT header before boot came back showing a
+  fresh `"JRN1"` journal header at LBA 1 after boot (self-test's write
+  landed exactly where the GPT header had been); and patching the file
+  live from the host while QEMU sat idle at the shell prompt was
+  *also* unreliable -- QEMU's own write-back caching raced the external
+  patch and won, restoring the stale in-memory `"JRN1"` copy moments
+  later; a plain host-side read immediately confirmed the external
+  write was never actually left standing.
+- (The MBR half doesn't have this problem: its partition-table region
+  is bytes 446-511 of LBA 0, which TFS2 never touches -- `write_superblock()`
+  only ever writes bytes 0-4. `tools/mkpart_test.py --mbr` reads the
+  existing LBA 0 sector and only patches that region, preserving TFS2's
+  magic so `tfs_init()` mounts normally instead of reformatting.)
+
+Verified instead with a host-compiled unit test
+(`/tmp/.../parttest/harness.c` during development, not committed --
+see below) that `#include`s the real, unmodified
+`kernel/drivers/partition.c`, with a tiny stub `ata_read_sector()`
+reading from a plain file instead of real hardware. Run against a
+synthetic image `tools/mkpart_test.py --gpt` wrote (a scratch file, not
+`disk.img`), it correctly validated the header's CRC32, decoded both
+partitions' type/unique GUIDs, LBA ranges, and UTF-16LE names exactly
+matching what was written. This is real execution-level proof of the
+parsing algorithm (CRC32, field offsets, GUID mixed-endian decoding) --
+compiled from the actual shipped source, not a second reimplementation
+-- just not exercised through `ata.c`'s real hardware I/O path the way
+the MBR case was. `tools/mkpart_test.py` itself is committed (useful
+for any future partition-table work); the throwaway `harness.c`/stub
+`ata.h` were scratch-only and not worth keeping as-is -- recreate the
+same shape (stub `ata_read_sector()`, `#include` the real `.c` file
+being tested) if this pattern is ever needed again for another
+on-disk-format parser.

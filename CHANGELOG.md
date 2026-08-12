@@ -23,6 +23,37 @@ forever.
 ## [Unreleased]
 
 ### Added
+- MBR + GPT partition table parsing (Milestone 3, `docs/roadmap.md`):
+  new `kernel/include/partition.h`/`kernel/drivers/partition.c`,
+  `partition_read_table()` -- reads LBA 0 via `ata_read_sector()`,
+  checks the `0x55AA` signature, and either parses up to 4 legacy MBR
+  entries or (if a protective `0xEE` entry is found) reads LBA 1 as a
+  GPT header, validates its CRC32, and reads its partition entry array
+  (type/unique GUIDs, LBA range, UTF-16LE name). Read-only, parse-only
+  -- `disk.img` is still one raw TFS2 blob at LBA 0 (see
+  `docs/tfs2-spec.md`), never consulted by the mount path. New
+  `parttable` shell command (`apps/shell_sys.c`) prints whatever was
+  found, formatted like `lspci`. New `tools/mkpart_test.py` writes a
+  synthetic MBR or GPT onto a disk image for testing, TFS2-mount-
+  preserving (patches only the partition-table byte ranges TFS2 itself
+  never touches, so the real filesystem underneath still mounts
+  normally instead of being auto-reformatted).
+  Verified two different ways for the two cases -- see
+  `docs/decisions.md` for why they had to differ: the MBR path (and
+  the "no partition table" case) live, via QMP -- patched `disk.img`,
+  booted, ran `parttable` from the shell, confirmed the printed
+  type/LBA/sector fields matched exactly what was written, for both a
+  plain MBR and a protective-MBR-only (GPT-signaling) disk. The GPT
+  header-parsing path itself (CRC32 validation, entry array read) was
+  verified via a host-compiled unit test including the real,
+  unmodified `partition.c` against a synthetic image, instead of a
+  live boot -- `kernel/drivers/tfs.c`'s `tfs_selftest()` unconditionally
+  overwrites LBA 1 (the GPT header's mandated location) with a real
+  journal header on every single boot, before the shell is ever
+  reachable, so a custom GPT header there can never survive to be read
+  by a live `parttable` call. Confirmed correct CRC32, both partitions'
+  type/unique GUIDs, LBA ranges, and names exactly matching what was
+  written.
 - PC speaker beep (Milestone 19, `docs/roadmap.md`): new
   `kernel/drivers/speaker.c`/`speaker.h`, `speaker_beep(freq_hz,
   duration_ms)` -- programs PIT channel 2 (ports `0x42`/`0x43`, same
