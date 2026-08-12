@@ -55,6 +55,45 @@ forever.
   around it -- `docs/roadmap.md` linked to this entry before it
   actually existed.
 
+### Fixed
+- `kernel/drivers/tfs.c`'s free-block bitmap sector persist had no
+  error handling at all -- `write_batch_end()` (the batched-flush path
+  a large sequential write like `stress` goes through) and
+  `persist_bitmap_bit()`'s non-batched fallback both discarded
+  `persist_bitmap_sector()`'s return value outright. Found live while
+  investigating the `stress`-progress work above: a `debug` serial
+  console showed `ata: dma write failed after 3 attempts (lba 47)`
+  (the ATA driver's own retry wrapper, `dma_transfer_with_retry()`,
+  had exhausted all 3 of *its* attempts) right around a `stress 300`
+  run, and LBA 47 traced to `FS_BITMAP_START_LBA` (35) + sector 12 --
+  squarely inside the free-block bitmap, not file data. `stress` still
+  reported PASSED (the actual data blocks it writes/verifies go
+  through a path that does check for failure), but the bitmap sector
+  itself would have silently gone stale on disk with no record of it
+  ever happening -- a real correctness gap, since a stale on-disk
+  bitmap risks double-allocating the ~4096 blocks that one sector's
+  bits cover after a future reboot reloads it.
+  - New `persist_bitmap_sector_with_retry()` wraps `persist_bitmap_
+    sector()` in one more bounded retry round (`FS_BITMAP_PERSIST_MAX_
+    RETRIES` = 3, on top of `dma_transfer_with_retry()`'s own 3) before
+    giving up, and unconditionally `klog_write()`s a warning (sector
+    index, LBA, attempt count) if it still fails -- independent of the
+    `debug fs` switch, matching `ata.c`'s own "always log a real
+    failure" convention for its final retry-exhausted case.
+  - Both callers now check the result: `write_batch_end()` only clears
+    a sector's dirty bit on success, so a failure leaves it flagged and
+    the very next flush (any subsequent disk-backed write) gets another
+    chance instead of the failure being permanent. `persist_bitmap_
+    bit()`'s non-batched path does the same -- marks the sector dirty
+    on failure even outside a batch, for the same later-flush retry.
+  - Verified live: re-ran `stress 300` via QMP and hit the exact same
+    class of failure again (`ata: dma write failed after 3 attempts
+    (lba 46)`), but this time with no `fs: WARNING` -- confirming
+    `persist_bitmap_sector_with_retry()`'s second attempt (a fresh
+    `dma_transfer_with_retry()` call) recovered it that the old code
+    would have silently dropped. `stress 300` still PASSED, byte-for-
+    byte verified, both before and after.
+
 ### Added
 - `tools/shell_flow.py`: a `gui_flow.py`-style helper for the physical
   (pre-`gui`) shell -- `ShellFlow.run_command(cmd, subdir=...)` types a

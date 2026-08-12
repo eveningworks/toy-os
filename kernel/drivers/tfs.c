@@ -233,6 +233,33 @@ static int persist_bitmap_sector(uint32_t sector_index) {
     return ata_write_sector(FS_BITMAP_START_LBA + sector_index, g_bitmap + (uint32_t)sector_index * ATA_SECTOR_SIZE);
 }
 
+// persist_bitmap_sector() already rides on ata_write_sector() ->
+// dma_transfer_with_retry() (ata.c, ATA_DMA_MAX_RETRIES = 3), so this
+// exists for the rare case that ALSO exhausts every one of those --
+// found live: a `stress` run on real hardware hit exactly this on a
+// bitmap sector (a transient DMA/IRQ miss, not a real drive fault --
+// see ata.c's own retry-wrapper comment for why this class of failure
+// happens at all). One more bounded attempt round costs nothing on
+// the (already rare) failure path and catches a slightly-longer-than-
+// usual miss without masking a genuinely dead drive, which still
+// surfaces as a hard failure below. Always logged (independent of
+// `debug fs`) -- a silently-stale on-disk bitmap sector risks a
+// future double-allocation across the ~4096 blocks' worth of
+// free-space bookkeeping one sector covers, which is a correctness
+// bug, not noise.
+#define FS_BITMAP_PERSIST_MAX_RETRIES 3
+
+static int persist_bitmap_sector_with_retry(uint32_t sector_index) {
+    for (int attempt = 1; attempt <= FS_BITMAP_PERSIST_MAX_RETRIES; attempt++) {
+        if (persist_bitmap_sector(sector_index)) return 1;
+    }
+    klog_write("fs: WARNING -- bitmap sector "); klog_write_dec(sector_index);
+    klog_write(" (lba "); klog_write_dec(FS_BITMAP_START_LBA + sector_index);
+    klog_write(") failed to persist after "); klog_write_dec((uint32_t)FS_BITMAP_PERSIST_MAX_RETRIES);
+    klog_write(" attempts -- will retry on next flush\n");
+    return 0;
+}
+
 // Backs write_batch_begin()/write_batch_end() below -- one bit per
 // bitmap SECTOR (not per data block, note: FS_BITMAP_SECTORS is tiny,
 // a few hundred even on a multi-GB disk, since each sector's 512 bytes
@@ -256,7 +283,14 @@ static void persist_bitmap_bit(uint32_t block) {
         g_bitmap_dirty[sector / 8] |= (uint8_t)(1u << (sector % 8));
         return;
     }
-    persist_bitmap_sector(sector);
+    // Outside a batch, still leave it marked dirty on failure (instead
+    // of just discarding the error) -- persist_bitmap_sector_with_retry()
+    // already logs the failure; marking dirty here means the very next
+    // write_batch_begin()/end() (any subsequent write) gets one more
+    // chance to persist it rather than losing it for good.
+    if (!persist_bitmap_sector_with_retry(sector)) {
+        g_bitmap_dirty[sector / 8] |= (uint8_t)(1u << (sector % 8));
+    }
 }
 
 // Brackets a run of block_for_index()/write_block() calls that only
@@ -281,8 +315,15 @@ static void write_batch_end(void) {
         int flushed_any = 0;
         for (uint32_t i = 0; i < FS_BITMAP_SECTORS; i++) {
             if (g_bitmap_dirty[i / 8] & (1u << (i % 8))) {
-                persist_bitmap_sector(i);
-                g_bitmap_dirty[i / 8] &= (uint8_t)~(1u << (i % 8));
+                // Only clear the dirty bit on success -- persist_bitmap_
+                // sector_with_retry() already retried and logged, but
+                // leaving the bit set on failure means the NEXT flush
+                // (the very next disk-backed write) gets another chance
+                // at this sector instead of the bitmap silently going
+                // stale on disk for good.
+                if (persist_bitmap_sector_with_retry(i)) {
+                    g_bitmap_dirty[i / 8] &= (uint8_t)~(1u << (i % 8));
+                }
                 flushed_any++;
             }
         }
