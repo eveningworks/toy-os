@@ -26,6 +26,7 @@
 #include "heap.h"      // kmalloc/kzalloc/kfree -- kernel-space heap (see heap.h's top comment)
 #include "power.h"     // system_reboot, system_poweroff
 #include "pci.h"       // PCI config-space enumeration -- pci_init/pci_device_at/pci_class_name (see pci.c)
+#include "ata.h"       // ata_dma_nonblocking_selftest -- diagnostic only (the shell's `dmatest`); fs.h is the real disk-I/O surface apps should use otherwise
 #include "ring3_test.h" // ring3_test_run: paging/GDT/ring-3 isolation demo (the one test that predates and doesn't use any ELF file at all)
 #include "scheduler.h"    // scheduler_demo_run: preemptive round-robin scheduler demo (M16), spawns /bin/counter_a and /bin/counter_b from disk
 #include "elf_run.h"       // elf_run_from_fs: loads and runs a real ELF64 binary straight from the persistent filesystem -- what every /bin binary now runs through via the shell's `run <name>` (see docs/decisions.md; this replaced a dozen near-identical per-binary GRUB-module test harnesses)

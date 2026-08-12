@@ -280,17 +280,29 @@ static void ata_init_dma(void) {
     klog_write("ata: Bus-Master DMA available, IRQ14-driven\n");
 }
 
-// One sector, either direction -- see the field comments above for why
-// this always goes through the bounce buffer rather than the caller's
-// own pointer.
+// dma_issue()/dma_finish() are dma_transfer()'s old body split at the
+// one point that actually blocks (wait_dma_irq()) -- dma_issue() does
+// everything up through kicking the transfer off, dma_finish() does
+// everything after the wait resolves. dma_transfer() below still calls
+// both back-to-back with a blocking wait in between, so every existing
+// caller (dma_transfer_with_retry(), and everything built on it) is
+// byte-for-byte unchanged. dma_transfer_start()/dma_transfer_poll()
+// (further below) call the same two halves but let the CALLER decide
+// how to wait in between -- see their own comments for why that split
+// is useful on its own, ahead of anything actually using it yet.
+//
 // `count` sectors (1..ATA_MAX_SECTORS_PER_XFER), either direction --
-// see the field comments above for why this always goes through the
-// bounce buffer rather than the caller's own pointer. One PRD
-// descriptor covering `count * ATA_SECTOR_SIZE` bytes is enough --
-// no scatter-gather needed since the bounce buffer is already one
-// physically contiguous frame (see ata_init_dma()), the same reason a
-// single-sector transfer only ever needed one descriptor.
-static int dma_transfer(uint32_t lba, int count, void *buf, int is_write) {
+// see the field comments above g_prd/g_dma_buf for why this always
+// goes through the bounce buffer rather than the caller's own pointer.
+// One PRD descriptor covering `count * ATA_SECTOR_SIZE` bytes is
+// enough -- no scatter-gather needed since the bounce buffer is
+// already one physically contiguous frame (see ata_init_dma()).
+//
+// Returns 0 only on a same-call setup failure (wait_not_busy() timing
+// out before the command even reached the drive) -- at that point
+// nothing was issued, so there's nothing for a poll-style caller to
+// wait on. Returns 1 once the command is genuinely in flight.
+static int dma_issue(uint32_t lba, int count, void *buf, int is_write) {
     uint32_t bytes = (uint32_t)count * ATA_SECTOR_SIZE;
     g_prd->base = (uint32_t)g_dma_buf_phys;
     g_prd->count = (uint16_t)bytes;
@@ -313,8 +325,16 @@ static int dma_transfer(uint32_t lba, int count, void *buf, int is_write) {
 
     g_dma_irq_fired = 0;
     outb(g_bm_io + BM_CMD, (uint8_t)((is_write ? 0 : BM_CMD_READ) | BM_CMD_START)); // go
+    return 1;
+}
 
-    int ok = wait_dma_irq();
+// The other half of dma_issue() -- called once completion (or a
+// timeout) has already been determined by whatever waited (blocking
+// wait_dma_irq(), or a non-blocking poll loop). Stops the bus-master
+// engine, acknowledges the drive's IRQ line, and on success copies a
+// read's data out of the bounce buffer (or flushes, for a write).
+static int dma_finish(int ok, int count, void *buf, int is_write) {
+    uint32_t bytes = (uint32_t)count * ATA_SECTOR_SIZE;
 
     outb(g_bm_io + BM_CMD, 0); // stop the bus-master engine regardless of outcome
     uint8_t bm_status = inb(g_bm_io + BM_STATUS);
@@ -333,6 +353,98 @@ static int dma_transfer(uint32_t lba, int count, void *buf, int is_write) {
         maybe_flush();
     }
     return 1;
+}
+
+static int dma_transfer(uint32_t lba, int count, void *buf, int is_write) {
+    if (!dma_issue(lba, count, buf, is_write)) return 0;
+    int ok = wait_dma_irq();
+    return dma_finish(ok, count, buf, is_write);
+}
+
+// ---------------------------------------------------------------------
+// Non-blocking start/poll pair (Phase 1 of the async-I/O roadmap item,
+// see docs/roadmap.md) -- built from the exact same dma_issue()/
+// dma_finish() halves dma_transfer() uses above, so this doesn't
+// duplicate the register-level protocol, just gives a second way to
+// wait on it. No real caller uses this yet: fs.c/tfs.c still go
+// through the blocking dma_transfer_with_retry() path below unchanged.
+// This exists to prove the primitive works in isolation first (see
+// ata_dma_nonblocking_selftest()) before anything higher up the stack
+// (a steppable fs_write_range(), then wm_run() polling one) is built
+// on top of it.
+//
+// Only one transfer can be "started" at a time -- enforced by
+// g_pending.in_flight, since there's only one PRD/bounce buffer
+// (g_prd/g_dma_buf) to share. A caller MUST poll to either
+// ATA_POLL_DONE or ATA_POLL_FAILED before starting another; there's no
+// queueing here, on purpose -- that's exactly the kind of policy a
+// caller built on top of this (a pending-write-batch tracker, say)
+// should own, not this driver-level primitive. enum ata_poll_result
+// itself is declared in ata.h (dma_transfer_poll()'s return type is
+// part of the public contract), not here.
+
+static struct {
+    int in_flight;
+    int count;
+    void *buf;
+    int is_write;
+    uint64_t start_tick; // only meaningful when NOT called from inside
+                          // a syscall -- see dma_transfer_poll()'s use
+                          // of it, mirroring wait_dma_irq()'s own split.
+} g_pending;
+
+// Kicks off a transfer without waiting for it. Returns 1 once genuinely
+// in flight (poll it from here on), 0 on an immediate setup failure
+// (see dma_issue()) -- in the 0 case nothing is pending, don't poll.
+int dma_transfer_start(uint32_t lba, int count, void *buf, int is_write) {
+    if (g_pending.in_flight) return 0; // caller bug: didn't poll the last one to completion
+    if (!dma_issue(lba, count, buf, is_write)) return 0;
+    g_pending.in_flight = 1;
+    g_pending.count = count;
+    g_pending.buf = buf;
+    g_pending.is_write = is_write;
+    g_pending.start_tick = pit_ticks();
+    return 1;
+}
+
+// Checks the started transfer WITHOUT blocking -- one register read (or
+// one flag check), then returns immediately either way. A caller polls
+// this in its own loop (a wm_run() frame, a diagnostic test's own
+// counted loop, whatever it's driving), doing other work between calls
+// instead of sitting inside this function the way wait_dma_irq() does.
+// Same isr_in_progress() split as wait_dma_irq() for what "has the IRQ
+// happened" actually checks (see that function's comment for the full
+// reasoning) -- the difference here is a single non-blocking check
+// instead of a loop that doesn't return until it's true or timed out.
+enum ata_poll_result dma_transfer_poll(void) {
+    if (!g_pending.in_flight) return ATA_POLL_FAILED; // caller bug: nothing started
+
+    int done;
+    if (isr_in_progress()) {
+        done = (inb(g_bm_io + BM_STATUS) & BM_STATUS_IRQ) != 0;
+        if (done) g_dma_irq_fired = 1; // keep both paths' postcondition identical, same as wait_dma_irq()
+    } else {
+        done = g_dma_irq_fired != 0;
+    }
+
+    if (!done) {
+        uint64_t elapsed = isr_in_progress() ? 0 : pit_ticks() - g_pending.start_tick;
+        // The syscall-context path has no wall-clock bound available
+        // (pit_ticks() is frozen with interrupts off, same reason
+        // wait_dma_irq() uses ATA_POLL_LIMIT there instead) -- a
+        // syscall-context caller is responsible for bounding its own
+        // poll loop, same as wait_dma_irq()'s ATA_POLL_LIMIT does today.
+        if (!isr_in_progress() && elapsed > DMA_WAIT_TICKS) {
+            g_pending.in_flight = 0;
+            dma_finish(0, g_pending.count, g_pending.buf, g_pending.is_write);
+            return ATA_POLL_FAILED;
+        }
+        return ATA_POLL_PENDING;
+    }
+
+    g_pending.in_flight = 0;
+    int ok = dma_finish(1, g_pending.count, g_pending.buf, g_pending.is_write);
+    return ok ? ATA_POLL_DONE : ATA_POLL_FAILED;
 }
 
 // A single dma_transfer() failure isn't necessarily the drive/data
@@ -513,4 +625,43 @@ int ata_write_sectors(uint32_t lba, int count, const void *buf) {
     if (count < 1 || count > ATA_MAX_SECTORS_PER_XFER) return 0;
     if (g_dma_available) return dma_transfer_with_retry(lba, count, (void *)(uintptr_t)buf, 1);
     return pio_write_sectors(lba, count, buf);
+}
+
+// Diagnostic only (the shell's `dmatest`, apps/shell_sys.c) -- proves
+// dma_transfer_start()/dma_transfer_poll() actually work, read-only so
+// it can never touch real filesystem data: reads `lba` once through the
+// existing, already-trusted blocking path (ata_read_sector()) and once
+// through the new non-blocking start/poll pair, byte-compares the two,
+// and reports how many polls the non-blocking read needed. `*out_polls`
+// is always written (0 if this returns early). Requires the DMA path
+// to be active -- there's nothing to prove on a PIO-only machine, this
+// primitive doesn't exist there (see ata.h's top comment).
+int ata_dma_nonblocking_selftest(uint32_t lba, uint32_t *out_polls) {
+    *out_polls = 0;
+    if (!g_present || !g_dma_available) return 0;
+
+    uint8_t via_blocking[ATA_SECTOR_SIZE];
+    if (!ata_read_sector(lba, via_blocking)) return 0;
+
+    uint8_t via_poll[ATA_SECTOR_SIZE];
+    if (!dma_transfer_start(lba, 1, via_poll, 0)) return 0;
+
+    uint32_t polls = 0;
+    enum ata_poll_result r;
+    // ATA_POLL_LIMIT is this driver's existing "don't loop forever"
+    // bound for syscall-context busy-polling (wait_dma_irq() above uses
+    // the same constant) -- reused here as this test's own outer bound
+    // rather than inventing a new one, since it's already sized to be
+    // generous for a single sector.
+    while ((r = dma_transfer_poll()) == ATA_POLL_PENDING) {
+        polls++;
+        if (polls > ATA_POLL_LIMIT) return 0; // driver bug, not a real timeout -- poll() itself already times out via DMA_WAIT_TICKS
+    }
+    *out_polls = polls;
+    if (r != ATA_POLL_DONE) return 0;
+
+    for (uint32_t i = 0; i < ATA_SECTOR_SIZE; i++) {
+        if (via_blocking[i] != via_poll[i]) return 0;
+    }
+    return 1;
 }

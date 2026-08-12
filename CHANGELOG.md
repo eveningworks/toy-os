@@ -1305,6 +1305,52 @@ forever.
     `docs/roadmap.md`'s multi-GB stress-test item for the updated
     full-scale time estimate.
 
+### Added
+- Non-blocking DMA start/poll pair for `kernel/drivers/ata.c` --
+  Phase 1 of the async-I/O roadmap item (see `docs/roadmap.md`), asked
+  for after explaining why disk writes/reads block the whole kernel
+  today: apps run in kernel space, so a write from Notepad's Save, the
+  shell's `stress`, or `wm_run()`'s own event loop all sit inside the
+  exact same call stack that's waiting on the drive -- a slow write
+  freezes the whole desktop, not just the operation. `dma_transfer()`
+  (the existing blocking call every real disk read/write already goes
+  through) is unchanged in behavior, but its body is now two shared
+  halves -- `dma_issue()` (program the PRD, kick the command off) and
+  `dma_finish()` (stop the bus-master engine, ack the drive's IRQ,
+  copy a read's data out of the bounce buffer or flush a write) --
+  with `wait_dma_irq()`'s blocking wait sandwiched in between, same as
+  before. `dma_transfer_start()`/`dma_transfer_poll()` (`ata.h`) call
+  the same two halves but let the CALLER decide how to wait: `start()`
+  kicks a transfer off and returns immediately, `poll()` does one
+  non-blocking check (`ATA_POLL_PENDING`/`ATA_POLL_DONE`/
+  `ATA_POLL_FAILED`) and returns right away either way, with the same
+  bounded-timeout logic `wait_dma_irq()` already had (3s via
+  `DMA_WAIT_TICKS`, or `ATA_POLL_LIMIT` iterations when called from
+  inside a syscall) now living in the poll loop instead of a single
+  blocking call. Only one transfer can be in flight at a time
+  (`g_pending.in_flight`) -- there's one PRD/bounce buffer to share,
+  same constraint the blocking path always had.
+  - No real caller uses this yet -- `fs.c`/`tfs.c` still go through the
+    unchanged blocking `dma_transfer_with_retry()` path. This is
+    deliberately scoped to just the driver-level primitive; a
+    steppable `fs_write_range()` (Phase 2) and wiring `wm_run()` to
+    poll one so the GUI stays responsive during a save (Phase 3) are
+    the next two roadmap steps, not built this round.
+  - Proven via a new diagnostic shell command, `dmatest [lba]` (default
+    lba 0) -- read-only, so it's always safe to run: reads the given
+    sector once through the existing trusted blocking path
+    (`ata_read_sector()`) and once through the new non-blocking
+    start/poll pair, byte-compares the two, and reports how many
+    `dma_transfer_poll()` calls it took. Reports "DMA path not active"
+    rather than failing on a PIO-only machine (this primitive has no
+    PIO equivalent -- see `ata.h`). Verified via QMP: `dmatest` (lba 0)
+    passed with 0 poll calls, `dmatest 9` passed with 1 -- confirming
+    the poll loop genuinely returns PENDING at least once rather than
+    trivially completing on the first check every time. `stress 5`
+    re-verified passing afterward too, confirming the `dma_transfer()`
+    refactor didn't change the existing blocking path's behavior.
+    Screenshots in `screenshots/2026-08-12/`.
+
 ## Build 502 (fix, +1) -- CLAUDE.md/qmp_test.py: catch up on QMP keyboard gotchas, prep for a new chat
 
 Asked to start a fresh chat (this one had gotten long) and update

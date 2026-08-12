@@ -137,6 +137,11 @@ static const char *const TEST_HELP_LINES[] = {
     "                  megabytes -- exercises direct/single/double/triple-\n",
     "                  indirect blocks with genuine data, not a sparse\n",
     "                  probe. Takes real minutes for multi-GB sizes.\n",
+    "  dmatest [lba] - read-only proof of the non-blocking DMA start/poll\n",
+    "                  pair (Phase 1 of the async-I/O roadmap item):\n",
+    "                  reads a sector both the old blocking way and the\n",
+    "                  new poll way, confirms they match, reports poll\n",
+    "                  count. Default lba 0.\n",
     "  debug         - list per-subsystem debug-log switches (off by\n",
     "                  default)\n",
     "  debug <s> on|off - flip one on/off at runtime, no rebuild --\n",
@@ -439,6 +444,43 @@ void cmd_stress(const char *args) {
     vga_write("stress: PASSED -- "); vga_write_dec(mb);
     vga_write(" MB written, read back, and verified byte-for-byte in ");
     vga_write_dec(elapsed_ticks / 100); vga_write(" s\n");
+}
+
+// Proves ata_dma_nonblocking_selftest() (Phase 1 of the async-I/O
+// roadmap item -- see docs/roadmap.md and kernel/drivers/ata.c) from
+// the shell: read-only, so it's always safe to run, and reports how
+// many dma_transfer_poll() calls the non-blocking read needed to
+// complete, not just pass/fail. Defaults to LBA 0 (the very first
+// sector -- always readable if a disk is present at all) if no
+// argument is given.
+void cmd_dmatest(const char *args) {
+    if (!ata_dma_active()) {
+        vga_write("dmatest: DMA path not active on this machine (PIO fallback\n");
+        vga_write("  in use, or no drive present) -- nothing to test. See\n");
+        vga_write("  `lspci` / `dmesg` for why.\n");
+        return;
+    }
+
+    uint32_t lba = 0;
+    if (args && *args && !parse_decimal(args, &lba)) {
+        vga_write("usage: dmatest [lba]  -- read-only proof of the non-blocking\n");
+        vga_write("  DMA start/poll pair against a real sector (default lba 0).\n");
+        return;
+    }
+
+    uint32_t polls = 0;
+    int ok = ata_dma_nonblocking_selftest(lba, &polls);
+    if (!ok) {
+        vga_write("dmatest: FAILED (lba "); vga_write_dec(lba);
+        vga_write(") -- see `debug ata on` + `dmesg` for detail\n");
+        return;
+    }
+
+    vga_write("dmatest: PASSED -- lba "); vga_write_dec(lba);
+    vga_write(" read identically via the blocking path and the new\n");
+    vga_write("  non-blocking start/poll pair ("); vga_write_dec(polls);
+    vga_write(" poll call"); vga_write(polls == 1 ? "" : "s");
+    vga_write(" before completion)\n");
 }
 
 // dmesg scratch state -- klog_dump() (klog.h) takes a plain
