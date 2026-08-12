@@ -62,6 +62,21 @@ int fs_write_range(const char *path, uint64_t offset, const void *buf, uint32_t 
     return g_fs->write_range(path, offset, buf, len);
 }
 
+void *fs_write_range_begin(const char *path, uint64_t offset, const void *buf, uint32_t len) {
+    return g_fs->write_range_begin(path, offset, buf, len);
+}
+
+enum fs_step_result fs_write_range_step(void *handle) {
+    // A NULL handle means fs_write_range_begin() already failed (or the
+    // caller mistakenly stepped a handle twice past its terminal
+    // result, which frees it) -- fail cleanly here rather than handing
+    // NULL to a backend that assumes a valid handle, same "defend at
+    // the dispatch boundary, not in every backend" spirit as the rest
+    // of this file.
+    if (!handle) return FS_STEP_FAILED;
+    return (enum fs_step_result)g_fs->write_range_step(handle);
+}
+
 int fs_is_dir(const char *path) {
     return g_fs->is_dir(path);
 }

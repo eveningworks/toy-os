@@ -525,6 +525,37 @@ static uint32_t read_range_impl(struct file *f, uint64_t offset, void *buf, uint
     return total;
 }
 
+// One block's worth of write_range_impl()'s (old) loop body -- pulled
+// out so the exact same per-block logic backs both the blocking path
+// (write_range_impl() below, which now just calls this in a tight loop
+// same as before) and the steppable path (tfs_write_range_step()
+// further down, which calls it once per external step() call). Neither
+// caller's behavior changed by this split -- see write_range_impl()'s
+// own comment. Returns 1 and advances `*total` by the chunk written on
+// success, 0 on failure (out of space or a real disk error) with
+// `*total` left unchanged.
+static int write_range_one_block(struct file *f, uint64_t offset, const uint8_t *src,
+                                  uint32_t *total, uint32_t len) {
+    uint64_t file_off = offset + *total;
+    uint32_t block_index = (uint32_t)(file_off / FS_BLOCK_SIZE);
+    uint32_t within = (uint32_t)(file_off % FS_BLOCK_SIZE);
+    uint32_t chunk = FS_BLOCK_SIZE - within;
+    if (chunk > len - *total) chunk = len - *total;
+
+    uint32_t blk = block_for_index(f, block_index, 1);
+    if (!blk) return 0; // out of space -- whatever was written before this point stays, see fs.h
+
+    if (within == 0 && chunk == FS_BLOCK_SIZE) {
+        k_memcpy(g_io_scratch, src + *total, FS_BLOCK_SIZE);
+    } else {
+        if (!read_block(blk, g_io_scratch)) return 0;
+        k_memcpy((uint8_t *)g_io_scratch + within, src + *total, chunk);
+    }
+    if (!write_block(blk, g_io_scratch)) return 0;
+    *total += chunk;
+    return 1;
+}
+
 static int write_range_impl(struct file *f, uint64_t offset, const void *buf, uint32_t len) {
     const uint8_t *src = (const uint8_t *)buf;
     uint32_t total = 0;
@@ -540,23 +571,7 @@ static int write_range_impl(struct file *f, uint64_t offset, const void *buf, ui
     // unflushed (see ata.h).
     write_batch_begin();
     while (total < len) {
-        uint64_t file_off = offset + total;
-        uint32_t block_index = (uint32_t)(file_off / FS_BLOCK_SIZE);
-        uint32_t within = (uint32_t)(file_off % FS_BLOCK_SIZE);
-        uint32_t chunk = FS_BLOCK_SIZE - within;
-        if (chunk > len - total) chunk = len - total;
-
-        uint32_t blk = block_for_index(f, block_index, 1);
-        if (!blk) { ok = 0; break; } // out of space -- whatever was written before this point stays, see fs.h
-
-        if (within == 0 && chunk == FS_BLOCK_SIZE) {
-            k_memcpy(g_io_scratch, src + total, FS_BLOCK_SIZE);
-        } else {
-            if (!read_block(blk, g_io_scratch)) { ok = 0; break; }
-            k_memcpy((uint8_t *)g_io_scratch + within, src + total, chunk);
-        }
-        if (!write_block(blk, g_io_scratch)) { ok = 0; break; }
-        total += chunk;
+        if (!write_range_one_block(f, offset, src, &total, len)) { ok = 0; break; }
     }
     write_batch_end();
 
@@ -1023,6 +1038,101 @@ static int tfs_write_range(const char *path, uint64_t offset, const void *buf, u
     return 1;
 }
 
+// ---------------------------------------------------------------------
+// Steppable write (Phase 2 of the async-I/O roadmap item, see
+// docs/roadmap.md) -- fs_write_range_begin()/fs_write_range_step()'s
+// TFS2 backend. Same per-block work as write_range_impl() above (built
+// from the same write_range_one_block() helper), but split so a caller
+// can advance it one block at a time from OUTSIDE this file, instead of
+// this file looping to completion internally. No real caller uses this
+// yet -- fs_write_range() above and everything built on it still go
+// through the unchanged blocking write_range_impl(). Proven standalone
+// via the new `steptest [mb]` shell command (see apps/shell_sys.c), the
+// same "prove the primitive works in isolation first" approach Phase 1
+// took with `dmatest`.
+//
+// Heap-allocated (not a single static like ata.c's g_pending) since
+// there's no hardware register forcing "only one at a time" the way
+// ata.c's shared PRD/bounce buffer does -- a future caller COULD have
+// two steppable writes in flight (e.g. two GUI windows each mid-save).
+// Nothing does yet, but there's no reason to bake in ata.c's tighter
+// constraint here when it isn't actually required.
+struct tfs_write_step {
+    struct file *f;
+    int file_index;        // for the finishing persist_record() call below
+    const uint8_t *src;
+    uint64_t offset;
+    uint32_t len;
+    uint32_t total;
+};
+
+// Mirrors tfs_write_range()'s own path handling (normalize, create the
+// file if it doesn't exist yet, reject a directory) just above. Returns
+// NULL on any of the same failures fs_write_range() already reports
+// via a 0 return: bad/too-long path, the path names a directory, or
+// the file table is full and creation fails. On success, the write
+// batch is already open (write_batch_begin()) -- it closes in
+// fs_write_range_step() once stepping reaches a terminal result,
+// matching write_range_impl()'s single begin/end pair around the whole
+// operation.
+static void *tfs_write_range_begin(const char *path, uint64_t offset, const void *buf, uint32_t len) {
+    char norm[FS_PATH_MAX];
+    if (!normalize(path, norm)) return NULL;
+    struct file *f = find(norm);
+    if (f && f->type == FS_TYPE_DIR) return NULL;
+    if (!f) {
+        if (!tfs_touch(norm)) return NULL;
+        f = find(norm);
+    }
+
+    struct tfs_write_step *st = kmalloc(sizeof(struct tfs_write_step));
+    if (!st) return NULL;
+    st->f = f;
+    st->file_index = (int)(f - files);
+    st->src = (const uint8_t *)buf;
+    st->offset = offset;
+    st->len = len;
+    st->total = 0;
+    write_batch_begin();
+    return st;
+}
+
+// Advances one block's worth of work (or, if `len` is 0 or already
+// fully written, resolves immediately) and returns FS_STEP_PENDING
+// (call again), FS_STEP_DONE, or FS_STEP_FAILED. On either terminal
+// result the handle is already freed and the write batch already
+// closed -- same "caller doesn't need to clean up separately" contract
+// dma_transfer_poll() (ata.c) established in Phase 1. On FS_STEP_DONE,
+// f->size/modified/the on-disk directory record are all updated first,
+// exactly matching what tfs_write_range() does above after its own
+// write_range_impl() call returns success -- a caller can't tell from
+// the file's own state afterward whether it was written steppably or
+// in one blocking call.
+static int tfs_write_range_step(void *handle) {
+    struct tfs_write_step *st = (struct tfs_write_step *)handle;
+
+    if (st->total < st->len) {
+        if (!write_range_one_block(st->f, st->offset, st->src, &st->total, st->len)) {
+            write_batch_end();
+            kfree(st);
+            return 2 /* FS_STEP_FAILED, see fs.h */;
+        }
+        if (st->total < st->len) return 0 /* FS_STEP_PENDING */;
+    }
+
+    // Finished (either the loop above just wrote the last block, or
+    // len was 0 to begin with) -- same tail tfs_write_range() above
+    // runs after a successful blocking write: close the batch, grow
+    // f->size if needed, stamp modified time, persist the directory
+    // record.
+    write_batch_end();
+    if (st->offset + st->total > st->f->size) st->f->size = st->offset + st->total;
+    rtc_read_local(&st->f->modified);
+    persist_record(st->file_index);
+    kfree(st);
+    return 1 /* FS_STEP_DONE */;
+}
+
 static int tfs_stat(const char *path, struct fs_timestamps *out) {
     char norm[FS_PATH_MAX];
     if (!normalize(path, norm)) return 0;
@@ -1196,6 +1306,8 @@ const struct fs_ops tfs_ops = {
     .size = tfs_size,
     .read_range = tfs_read_range,
     .write_range = tfs_write_range,
+    .write_range_begin = tfs_write_range_begin,
+    .write_range_step = tfs_write_range_step,
     .is_dir = tfs_is_dir,
     .exists = tfs_exists,
     .list = tfs_list,

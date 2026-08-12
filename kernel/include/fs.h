@@ -119,6 +119,36 @@ uint32_t fs_read_range(const char *path, uint64_t offset, void *buf, uint32_t le
 // in memory first.
 int fs_write_range(const char *path, uint64_t offset, const void *buf, uint32_t len);
 
+// Steppable write -- Phase 2 of the async-I/O roadmap item (see
+// docs/roadmap.md), built on top of the same per-block work
+// fs_write_range() does, but split so a caller can advance it one
+// block at a time instead of blocking until the whole write finishes.
+// No real caller uses this yet (fs_write_range()/fs_write() are
+// unchanged, still fully blocking) -- this exists so the next step
+// (Phase 3: wm_run() polling one so the GUI stays responsive during a
+// save) has something to build on, and is proven standalone today via
+// the shell's `steptest [mb]` diagnostic command.
+//
+// fs_write_range_begin() starts the operation and returns an opaque
+// handle, or NULL on any of the same setup failures fs_write_range()
+// already reports via a 0 return (bad path, a directory, file-table
+// full) -- on NULL, nothing is pending, don't call step(). `buf` must
+// stay valid and unchanged by the caller until stepping reaches a
+// terminal result.
+//
+// fs_write_range_step() advances one block's worth of work and
+// returns FS_STEP_PENDING (call again), FS_STEP_DONE, or
+// FS_STEP_FAILED. On either terminal result the handle is already
+// cleaned up internally -- don't call step() again or free anything.
+// On FS_STEP_DONE the file's size/modified-time/on-disk directory
+// record are already updated, identical to what a successful
+// fs_write_range() call leaves behind -- nothing about the file's
+// resulting state reveals whether it was written steppably or in one
+// blocking call.
+void *fs_write_range_begin(const char *path, uint64_t offset, const void *buf, uint32_t len);
+enum fs_step_result { FS_STEP_PENDING = 0, FS_STEP_DONE = 1, FS_STEP_FAILED = 2 };
+enum fs_step_result fs_write_range_step(void *handle);
+
 // True if `path` names an existing directory, or is "/" (the implicit
 // root, which always "exists" without needing its own entry).
 int fs_is_dir(const char *path);

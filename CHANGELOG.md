@@ -1350,6 +1350,47 @@ forever.
     re-verified passing afterward too, confirming the `dma_transfer()`
     refactor didn't change the existing blocking path's behavior.
     Screenshots in `screenshots/2026-08-12/`.
+- Steppable write API -- Phase 2 of the async-I/O roadmap item (see
+  `docs/roadmap.md`), continuing straight on from Phase 1 above.
+  `write_range_impl()` (`kernel/drivers/tfs.c`, the shared engine
+  behind `fs_write_range()`/`fs_write()`) had its per-block loop body
+  pulled out into `write_range_one_block()`; `write_range_impl()`
+  itself just calls it in a tight loop same as before (unchanged
+  behavior for every existing caller), and a new
+  `tfs_write_range_begin()`/`tfs_write_range_step()` pair calls the
+  same helper but lets a caller advance it one block at a time from
+  OUTSIDE this file instead. Threaded all the way up the existing VFS
+  dispatch layer so it's a real, reusable API, not a TFS2-only
+  shortcut: two new `struct fs_ops` function pointers
+  (`kernel/include/fs_ops.h`), `vfs.c` dispatch wrappers, and two new
+  public entry points in `fs.h` -- `fs_write_range_begin()` (returns an
+  opaque handle, or NULL on the same setup failures `fs_write_range()`
+  already reports via 0) and `fs_write_range_step()` (returns
+  `FS_STEP_PENDING`/`FS_STEP_DONE`/`FS_STEP_FAILED`, cleaning the
+  handle up automatically on either terminal result). On
+  `FS_STEP_DONE` the file's size/modified-time/on-disk directory
+  record are all updated, identical to a successful blocking
+  `fs_write_range()` call -- nothing about the file afterward reveals
+  which API wrote it.
+  - No real caller uses this yet -- `fs_write_range()`/`fs_write()` and
+    everything built on either are still fully blocking, unchanged.
+    Phase 3 (wiring `wm_run()` to poll one so the GUI stays responsive
+    during a save) is next.
+  - Proven via a new diagnostic shell command, `steptest <mb>` -- write
+    `<mb>` megabytes through an explicit `begin()`/`step()` loop this
+    command drives itself (standing in for what `wm_run()` would
+    eventually do once per frame), read it back through the ordinary
+    `fs_read_range()`, verify byte-for-byte, report total step count.
+    Verified via QMP: `steptest 3` passed, 768 `step()` calls for 3MB
+    (exactly 3MB / 4KB-per-block, confirming one step per block as
+    intended). `stress 5` and `dmatest` re-verified passing afterward
+    too, confirming the `write_range_impl()` refactor didn't change
+    the existing blocking path's behavior -- `dmatest` needed 658 poll
+    calls this run (vs. 0 the first time in Phase 1's own testing),
+    which is expected variance (disk busier right after a write-heavy
+    `stress`/`steptest` run), not a regression -- the poll loop
+    correctly kept waiting rather than timing out.
+    Screenshots in `screenshots/2026-08-12/`.
 
 ## Build 502 (fix, +1) -- CLAUDE.md/qmp_test.py: catch up on QMP keyboard gotchas, prep for a new chat
 
