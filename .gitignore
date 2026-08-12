@@ -7,6 +7,11 @@
 # Persistent disk image (see Makefile's DISK_IMG comment) -- deliberately
 # left alone by `make clean`, it's local dev state, not a repo asset.
 /disk.img
+# Pre-Btrfs-+C-fix backup of a real disk.img, left behind by the
+# no-COW swap described in CHANGELOG.md -- same "not a repo asset"
+# reasoning as disk.img itself, just not matched by the exact pattern
+# above. Safe to delete by hand once the swap's confirmed good.
+/disk.img.cow.bak
 
 # tools/tfs2_writer.py seed staging tree -- the Makefile's `seed` target
 # stages built ELFs (e.g. $(LSPCI_ELF)) under seed/sync/ fresh every
