@@ -17,11 +17,17 @@
 #   3. tools/boot_smoke_test.py -- confirms the built ISO boots cleanly.
 #   4. git status --short -- just informational: lists what's dirty so
 #      you can eyeball it against the file list you're about to
-#      deliver. This does NOT touch the device bridge or run git
-#      through it (that's tools/device_git.sh's job over the bridge,
-#      and this script may run in the cloud sandbox where plain `git`
-#      is fine) -- it only inspects the sandbox checkout you're
-#      building in.
+#      deliver. This does NOT run git through the device bridge (that's
+#      tools/device_git.sh's job) -- it only inspects whatever checkout
+#      this script is actually running in, local or sandbox.
+#
+# The closing message differs depending on whether `git config
+# user.name` is already set: unset means this is very likely a Cowork
+# device-bridge sandbox clone (see CLAUDE.md's "Working in the cloud
+# sandbox vs. directly on the user's machine" section -- that's the
+# documented, deterministic tell), so it prints the SendUserFile/
+# device_commit_files reminder; set means a direct local checkout, so
+# it just confirms you're clear to commit (and push, if asked).
 #
 # Usage:
 #   tools/preflight.sh              # full check
@@ -68,6 +74,13 @@ git status --short || true
 
 echo
 echo "preflight: PASS -- build, iso, and boot smoke test all clean."
-echo "preflight: remember this only checked the SANDBOX checkout -- still"
-echo "preflight: deliver via SendUserFile + device_commit_files, then"
-echo "preflight: tools/device_git.sh commit on the device checkout."
+if [ -z "$(git config user.name 2>/dev/null)" ]; then
+  echo "preflight: no git identity configured -- this looks like a Cowork"
+  echo "preflight: device-bridge sandbox clone. Deliver via SendUserFile +"
+  echo "preflight: device_commit_files, then tools/device_git.sh commit on"
+  echo "preflight: the device checkout (see CLAUDE.md)."
+else
+  echo "preflight: git identity is configured -- this looks like a direct"
+  echo "preflight: local checkout. Safe to commit directly; push only if"
+  echo "preflight: asked (see CLAUDE.md)."
+fi

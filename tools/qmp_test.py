@@ -49,10 +49,22 @@ Gotchas this module already gets right for you:
   from the serial port when it's a bare file with nothing on the other
   end -- that's this testing setup's limitation, not a kernel bug, if
   a test hangs at "calling process_run_ring3()" with no further output.
-- Background QEMU with `setsid` (see `launch_qemu()` / the shell
-  equivalent below), not a plain `&` -- a bare background job tied to
-  one shell invocation gets killed when that invocation ends. `setsid`
-  detaches it so it survives across separate tool/shell calls.
+- **Launch QEMU with `-daemonize -pidfile <path>` (what `launch_qemu_cmd()`
+  below returns), not a plain `&` or a `setsid nohup ... &`-style shell
+  background job.** A bare `&` tied to one shell invocation gets killed
+  when that invocation ends, which is why earlier sessions reached for
+  `setsid nohup ... & ); disown -a` to detach it -- but that pattern
+  turned out to be unreliable in at least one sandboxed environment
+  this project has been driven from (spurious non-zero exit codes on
+  the launching call, and the process silently not surviving to the
+  next tool call, leaving a *stale* `serial.log`/QMP port from an
+  earlier launch that was easy to mistake for a fresh boot). QEMU's own
+  `-daemonize` avoids all of that -- it forks, detaches, and returns
+  control immediately, with no shell job-control subtlety to get wrong.
+  `tools/boot_smoke_test.py` sidesteps this differently (a Python
+  `subprocess.Popen()` call, not a shell-backgrounded string), which is
+  also fine if you're driving QEMU from a Python script rather than a
+  shell command.
 - **A plain `make all` is safe after changing a shared header** (as of
   build 308 -- the Makefile now tracks header dependencies via
   `-MMD`/`-MP`, see the Makefile's own comments). Used to not be true:
@@ -120,12 +132,15 @@ import time
 
 
 def launch_qemu_cmd(iso="toy-os.iso", disk="disk.img", serial_log="serial.log",
-                     qmp_port=4445, vnc_display=5):
+                     qmp_port=4445, vnc_display=5, pidfile="qemu.pid"):
     """Return the shell command to launch toy-os headlessly with QMP + a
-    working input head. Run this with setsid so it survives across
-    separate tool calls, e.g.:
-
-        (setsid nohup <this string> > qemu.log 2>&1 < /dev/null &) ; sleep 1
+    working input head. Run it as a plain foreground shell command --
+    `-daemonize` makes QEMU fork/detach/return on its own, so it
+    survives across separate tool calls with no `setsid`/`nohup`/`&`
+    wrapping needed (see the module docstring's backgrounding gotcha
+    for why that used to be the recommendation here, and why it was
+    replaced). `pidfile` lets a script `kill $(cat qemu.pid)` for
+    cleanup instead of pattern-matching `ps` output.
 
     Deliberately no -display none (see module docstring) -- -vnc gives
     a display head without needing an actual VNC client to connect.
@@ -133,7 +148,8 @@ def launch_qemu_cmd(iso="toy-os.iso", disk="disk.img", serial_log="serial.log",
     return (
         f"qemu-system-x86_64 -cdrom {iso} -drive file={disk},format=raw,if=ide "
         f"-vga std -m 256 -serial file:{serial_log} "
-        f"-qmp tcp:127.0.0.1:{qmp_port},server,nowait -vnc :{vnc_display}"
+        f"-qmp tcp:127.0.0.1:{qmp_port},server,nowait -vnc :{vnc_display} "
+        f"-daemonize -pidfile {pidfile}"
     )
 
 

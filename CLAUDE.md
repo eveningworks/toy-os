@@ -133,12 +133,31 @@ technical conventions below:
   in the body** (subject line stays a short summary) -- see
   `docs/decisions.md`'s versioning entry for the exact format.
 
-## Working in the cloud sandbox vs. the user's machine
+## Working in the cloud sandbox vs. directly on the user's machine
 
-This repo is normally edited from a Cowork cloud session with the
-user's real checkout reachable through the device bridge
-(`mcp__remote-devices__*`), not directly. Two things about that setup
-that aren't obvious until you hit them:
+This repo gets worked on both ways: from a Cowork cloud session with
+the user's real checkout reachable only through the device bridge
+(`mcp__remote-devices__*`), and directly on the user's own machine
+(e.g. a local Claude Code session) with normal file/Bash tools against
+the real checkout. The mechanics below differ a lot between the two,
+so **figure out which one you're in before following either half**:
+
+- **Deterministic tell: run `git config user.name`.** A device-bridge
+  session has NO git identity configured at all, local or global (it's
+  its own isolated VM) -- empty output means Cowork/device-bridge.
+  Non-empty (this repo's convention sets it to `toy-os`, see below)
+  means a direct local checkout.
+- Corroborating signal: are `mcp__remote-devices__*` tools (or
+  equivalent device-bridge tools) actually available to call this
+  session? Present means Cowork; absent means direct.
+- If those disagree, or it's still unclear, just ask the user directly
+  rather than guessing -- getting this wrong means either trying to
+  push from a session where it's actually blocked, or going through
+  the whole SendUserFile/device_commit_files dance unnecessarily.
+
+### Cowork cloud sandbox (device bridge)
+
+Four things about that setup that aren't obvious until you hit them:
 
 - **`Makefile` and anything under `.github/workflows/*.yml` are
   protected against `device_commit_files`** (writes get rejected --
@@ -189,6 +208,36 @@ that aren't obvious until you hit them:
   give the user the exact commands to run from their own machine's
   terminal. `gh` isn't preinstalled in the sandbox (`apt-get install
   -y gh` if needed there for read-only checks).
+
+### Direct local checkout
+
+Confirmed directly in a real local session (2026-08-12): this is
+simpler than the Cowork setup in every way that setup works around --
+
+- Git identity is already configured (`toy-os` /
+  `noreply@toy-os.local`, matching this repo's standing privacy
+  convention -- see above), so plain `git commit` just works with no
+  `-c user.name=...`/`-c user.email=...` needed on every call. Still
+  worth double-checking `git config user.name` if it's ever in doubt
+  rather than assuming.
+- Plain `git` works throughout -- no stale-`index.lock` issue, no
+  `tools/device_git.sh` wrapper needed, no `mv`-instead-of-`rm`
+  workaround for deleting a file.
+- No protected-file restriction -- `Makefile` and
+  `.github/workflows/*.yml` can be edited and committed directly, no
+  `.new`-suffix relay needed.
+- `git push origin main` and `gh release create` both work directly
+  from the session -- confirmed by actually doing both (pushing
+  ordinary commits repeatedly, and cutting the `v0.1.0` GitHub Release
+  end-to-end with `gh release create` + `gh release upload`). Still
+  treat both as actions to confirm with the user first per this file's
+  general "Executing actions with care" guidance (pushing/publishing is
+  visible to others), just don't tell the user it's *impossible* the
+  way the Cowork section above correctly says it is there.
+- `tools/preflight.sh`'s closing message and the QMP-launch pattern in
+  `tools/qmp_test.py` are both mode-aware/updated for this case now --
+  see their own comments if either looks like it's giving Cowork-only
+  advice.
 
 ## Building
 
@@ -366,9 +415,10 @@ Dev/build helper scripts, not compiled or shipped as part of the OS:
 (QEMU/QMP GUI testing helpers, see above), `boot_smoke_test.py` (fast
 non-GUI boot check, see above), `gen_version.sh`/`set_version.sh`
 (versioning, see the `version.h`/`VERSION` bullets above),
-`device_git.sh` (wraps a `git` command run over the device bridge with
-the stale-`index.lock` workaround, see the "Working in the cloud
-sandbox" section above).
+`device_git.sh` (Cowork-only: wraps a `git` command run over the device
+bridge with the stale-`index.lock` workaround, see "Working in the
+cloud sandbox vs. directly on the user's machine" above -- not needed,
+and not applicable, on a direct local checkout).
 
 Four more, added once the build/test/delivery loop above had enough
 repeated manual steps to be worth automating:
@@ -454,8 +504,27 @@ this fix a rederive-from-scratch cost" bar.
 
 ## Delivering changes
 
-List every file added or edited in the final response (standing
-project instruction). Deliver files via `SendUserFile` +
-`mcp__remote-devices__device_commit_files` to the user's real checkout
--- editing only the cloud sandbox copy doesn't reach the user's
-machine on its own.
+List every file added or edited in the final response, as a compact
+list (standing project instruction) -- always, regardless of mode.
+
+Never write personal information (PII) into any file being edited or
+added. If a change genuinely seems to need some, ask first, or
+anonymize it and say so plainly.
+
+Any genuinely reusable tooling built or used during a session (a
+helper script, a test harness) belongs in `tools/`, not left as a
+scratch/one-off -- see `## tools/` above for the bar ("does this fix a
+rederive-from-scratch cost"). Update the files that describe `tools/`
+(this file at minimum) to match when something's added there.
+
+How the change actually reaches the user depends on which mode this
+session is in (see "Working in the cloud sandbox vs. directly on the
+user's machine" above for how to tell):
+
+- **Cowork/device-bridge:** deliver files via `SendUserFile` +
+  `mcp__remote-devices__device_commit_files` to the user's real
+  checkout -- editing only the cloud sandbox copy doesn't reach the
+  user's machine on its own.
+- **Direct local checkout:** the files are already on the user's real
+  checkout -- there's nothing to "deliver," just commit (and push, if
+  asked) directly with plain `git`.
