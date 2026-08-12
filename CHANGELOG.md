@@ -24,6 +24,14 @@ forever.
 
 ## [0.1.0] - 2026-08-12
 
+### Fixed
+- The initial `v0.1.0` GitHub Release was published missing `toy-os.iso`
+  -- `tools/run_release.sh` requires it next to `disk.img`/`disk.img.gz`
+  (it errors out immediately if absent), and v0.0.9's release included
+  it, but it was left off this time. Uploaded to the existing release
+  as a follow-up (`gh release upload v0.1.0 toy-os.iso`), no retag
+  needed.
+
 ### Changed
 - Repo history rewritten (`git-filter-repo`, all 91 prior commits) to
   remove the maintainer's real name and personal email addresses from
