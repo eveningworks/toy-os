@@ -1328,3 +1328,25 @@ reorder relative to the others if a crash lands mid-batch; anything
 where write N's crash-safety depends on write N-1 already being
 durable (like a WAL) stays one-flush-per-write. See `CHANGELOG.md`'s
 `[Unreleased]` entry for the full before/after numbers.
+
+## `fs_ops`'s new steppable-write function pointers are required, not optional/NULLable
+
+The async-I/O roadmap item's Phase 2 (`fs_write_range_begin()`/
+`fs_write_range_step()`, see `docs/roadmap.md`) added two new function
+pointers to `struct fs_ops` (`kernel/include/fs_ops.h`) rather than a
+separate, optional side-interface a backend could leave unset. Every
+other entry in that struct is unconditionally required -- `vfs.c`'s
+dispatch wrappers call straight through (`g_fs->touch(...)`, etc.) with
+no NULL check on the function pointer itself, only on the *arguments*
+(see `fs_write_range_step()`'s handle guard, added the same session).
+Making the two new ones optional would have meant either a NULL check
+on every dispatch call (real overhead on the hot path for something
+today's single backend always implements) or a silent fallback to
+non-stepped behavior a caller couldn't easily detect it got. Since
+`fs_ops.h`'s own top comment is explicit that this struct isn't a
+mount-point/capability-negotiation scheme -- there's exactly one active
+backend, chosen once at boot -- there's no scenario today where a
+backend legitimately can't implement these two. If a future backend
+genuinely can't support incremental writes (say, one backed by a
+remote API with no partial-write primitive), that's the point to
+revisit this, not before.

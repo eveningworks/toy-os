@@ -142,6 +142,12 @@ static const char *const TEST_HELP_LINES[] = {
     "                  reads a sector both the old blocking way and the\n",
     "                  new poll way, confirms they match, reports poll\n",
     "                  count. Default lba 0.\n",
+    "  steptest <mb> - proof of the stepped write API (Phase 2 of the\n",
+    "                  async-I/O roadmap item): writes <mb> megabytes one\n",
+    "                  block at a time via fs_write_range_begin/_step\n",
+    "                  instead of fs_write_range(), verifies byte-for-byte\n",
+    "                  against readback, reports step count. Keep small\n",
+    "                  (1-5) -- see `stress` for a throughput test.\n",
     "  debug         - list per-subsystem debug-log switches (off by\n",
     "                  default)\n",
     "  debug <s> on|off - flip one on/off at runtime, no rebuild --\n",
@@ -481,6 +487,93 @@ void cmd_dmatest(const char *args) {
     vga_write("  non-blocking start/poll pair ("); vga_write_dec(polls);
     vga_write(" poll call"); vga_write(polls == 1 ? "" : "s");
     vga_write(" before completion)\n");
+}
+
+#define STEPTEST_TEST_PATH "/.steptest_tmp"
+
+// Proves fs_write_range_begin()/fs_write_range_step() (Phase 2 of the
+// async-I/O roadmap item, kernel/drivers/tfs.c) -- writes <mb> megabytes
+// through the stepped API instead of fs_write_range(), one block at a
+// time via an explicit step loop this command drives itself (standing
+// in for what wm_run() would eventually do once per frame in Phase 3),
+// then reads it back through the ordinary fs_read_range() and verifies
+// byte-for-byte, same pattern/verification `stress` already uses.
+// Reports total step count so a genuinely multi-block write is visibly
+// proven, not just a trivial single-block case.
+void cmd_steptest(const char *args) {
+    uint32_t mb;
+    if (!parse_decimal(args, &mb) || mb == 0) {
+        vga_write("usage: steptest <mb>  -- write/read/verify <mb> megabytes\n");
+        vga_write("  through the new stepped write API (fs_write_range_begin/\n");
+        vga_write("  _step) instead of fs_write_range(), reporting step count.\n");
+        vga_write("  Keep this small (1-5) -- it's a primitive proof, not a\n");
+        vga_write("  throughput test (see `stress` for that).\n");
+        return;
+    }
+    if (!fs_is_persistent()) {
+        vga_write("steptest: filesystem is RAM-only -- this test needs a real\n");
+        vga_write("  disk backend. See `df`.\n");
+        return;
+    }
+
+    fs_delete(STEPTEST_TEST_PATH); // clean slate if a previous run left it behind
+    if (!fs_touch(STEPTEST_TEST_PATH)) {
+        vga_write("steptest: FAILED (couldn't create test file)\n");
+        return;
+    }
+
+    uint32_t total_steps = 0;
+    vga_write("steptest: writing "); vga_write_dec(mb); vga_write(" MB to ");
+    vga_write(STEPTEST_TEST_PATH); vga_write(" via the stepped API ...\n");
+    for (uint32_t c = 0; c < mb; c++) {
+        stress_fill_pattern(c);
+        uint64_t offset = (uint64_t)c * STRESS_CHUNK_BYTES;
+        void *step = fs_write_range_begin(STEPTEST_TEST_PATH, offset, g_stress_chunk, STRESS_CHUNK_BYTES);
+        if (!step) {
+            vga_write("steptest: FAILED (begin() failed at chunk "); vga_write_dec(c); vga_write(")\n");
+            fs_delete(STEPTEST_TEST_PATH);
+            return;
+        }
+        enum fs_step_result r;
+        while ((r = fs_write_range_step(step)) == FS_STEP_PENDING) total_steps++;
+        total_steps++; // the terminal step() call itself
+        if (r != FS_STEP_DONE) {
+            vga_write("steptest: FAILED (step() failed at chunk "); vga_write_dec(c); vga_write(")\n");
+            fs_delete(STEPTEST_TEST_PATH);
+            return;
+        }
+    }
+
+    vga_write("steptest: reading back and verifying ...\n");
+    static uint8_t readback[STRESS_CHUNK_BYTES];
+    for (uint32_t c = 0; c < mb; c++) {
+        uint64_t offset = (uint64_t)c * STRESS_CHUNK_BYTES;
+        uint32_t got = fs_read_range(STEPTEST_TEST_PATH, offset, readback, STRESS_CHUNK_BYTES);
+        if (got != STRESS_CHUNK_BYTES) {
+            vga_write("steptest: FAILED (short read at chunk "); vga_write_dec(c); vga_write(")\n");
+            fs_delete(STEPTEST_TEST_PATH);
+            return;
+        }
+        stress_fill_pattern(c);
+        int mismatch = 0;
+        for (uint32_t i = 0; i < STRESS_CHUNK_BYTES; i++) {
+            if (g_stress_chunk[i] != readback[i]) { mismatch = 1; break; }
+        }
+        if (mismatch) {
+            vga_write("steptest: FAILED (data mismatch at chunk "); vga_write_dec(c); vga_write(")\n");
+            fs_delete(STEPTEST_TEST_PATH);
+            return;
+        }
+    }
+
+    if (!fs_delete(STEPTEST_TEST_PATH)) {
+        vga_write("steptest: WARNING -- test passed but couldn't delete ");
+        vga_write(STEPTEST_TEST_PATH); vga_write(" (clean up manually)\n");
+    }
+
+    vga_write("steptest: PASSED -- "); vga_write_dec(mb);
+    vga_write(" MB written via "); vga_write_dec(total_steps);
+    vga_write(" step() calls, read back and verified byte-for-byte\n");
 }
 
 // dmesg scratch state -- klog_dump() (klog.h) takes a plain

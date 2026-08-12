@@ -149,6 +149,8 @@ static void dispatch(char *line) {
         cmd_stress(args ? args : "");
     } else if (k_strcmp(cmd, "dmatest") == 0) {
         cmd_dmatest(args ? args : "");
+    } else if (k_strcmp(cmd, "steptest") == 0) {
+        cmd_steptest(args ? args : "");
     } else if (k_strcmp(cmd, "dmesg") == 0) {
         cmd_dmesg();
     } else if (k_strcmp(cmd, "debug") == 0) {

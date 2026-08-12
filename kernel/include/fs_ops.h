@@ -53,6 +53,23 @@ struct fs_ops {
     uint64_t (*size)(const char *path);
     uint32_t (*read_range)(const char *path, uint64_t offset, void *buf, uint32_t len);
     int (*write_range)(const char *path, uint64_t offset, const void *buf, uint32_t len);
+
+    // Steppable write -- Phase 2 of the async-I/O roadmap item (see
+    // docs/roadmap.md). Same effect as write_range above, but split so
+    // a caller can advance it one block at a time instead of blocking
+    // to completion in one call. `void *` here (not fs.h's own opaque
+    // handle type) since this header is backend-agnostic and doesn't
+    // need to know the handle's real shape any more than every other
+    // function pointer here does -- see fs.h's fs_write_range_begin()/
+    // fs_write_range_step() for the full contract every backend
+    // implementing these two must honor. Both required (not optional/
+    // NULLable) since there's exactly one backend today (tfs.c) and it
+    // implements them -- see this header's top comment on why a
+    // mount-point scheme (which might want optional capabilities per
+    // backend) isn't what this struct is for.
+    void *(*write_range_begin)(const char *path, uint64_t offset, const void *buf, uint32_t len);
+    int (*write_range_step)(void *handle); // returns an fs_step_result (fs.h) as a plain int -- see that header for why
+
     int (*is_dir)(const char *path);
     int (*exists)(const char *path);
     void (*list)(const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir));

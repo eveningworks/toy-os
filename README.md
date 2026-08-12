@@ -100,7 +100,11 @@ AltGr), and the developer/diagnostic set
 non-sparse write/read/verify pass over `<mb>` megabytes, exercising
 direct/single/double/triple-indirect blocks with genuine data,
 verified on real hardware at 400MB with no failures -- see
-`docs/roadmap.md` for the still-open full-8GB-scale run), `debug`
+`docs/roadmap.md` for the still-open full-8GB-scale run), `dmatest
+[lba]` and `steptest <mb>` (read-only/small-write proofs of the
+async-I/O work's non-blocking DMA primitive and steppable write API,
+respectively -- see `docs/roadmap.md`'s async I/O item for the phased
+plan neither is wired into a real caller yet), `debug`
 (per-subsystem runtime debug-log switches -- `fs`/`wm`/`ata`, off by
 default, `debug <name> on|off` to flip one, no rebuild needed), plus a
 dozen real disk-hosted test binaries under `/bin` run via `run <name>` (e.g.
