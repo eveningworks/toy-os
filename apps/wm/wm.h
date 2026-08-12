@@ -29,6 +29,18 @@ struct window {
     const struct gui_app *app;
     void *app_state;
     int open; // 1 while this slot is in use
+
+    // Rendering-internal bookkeeping for wm_render.c's damage-region
+    // compositor (see docs/decisions.md) -- not for app callbacks to
+    // touch, same "peer-level, not part of the app-facing API" spirit
+    // as saved_x/y/w/h above. Tracks this window's rect + visibility
+    // as of the last actual repaint, so wm_render_frame() can tell
+    // whether (and where) its contribution to the scene changed since
+    // then. last_w == 0 means "never rendered yet" (a real window's w
+    // is always > 0) -- the sentinel for "just opened, nothing to
+    // diff against".
+    int last_x, last_y, last_w, last_h;
+    int last_visible;
 };
 
 // Height of a window's title bar in pixels (matches the taskbar height).

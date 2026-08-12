@@ -246,6 +246,42 @@ forever.
     `screenshots/2026-08-12/desktop-icon-drag-tight-grid-fix.png` and
     `desktop-icon-drag-no-stack-fix.png`.
 
+### Added
+- Real per-window damage-region compositor (Milestone 9, Phase 1+2 of
+  the plan -- Phase 3, skipping `on_draw()` for unaffected windows, is
+  a deliberate follow-up, not done here). The window manager used to
+  redraw the entire screen on any scene change at all, down to a
+  once-a-second clock tick; it now tracks a single scene-wide damage
+  bounding box per frame and clips the repaint to it.
+  - `kernel/drivers/gfx.c`/`gfx.h`: new `gfx_set_clip_rect()`/
+    `gfx_clear_clip_rect()`, gating `gfx_put_pixel()` (not
+    `gfx_get_pixel()`, deliberately -- see the code comment) on top of
+    the existing dirty-pixel-bbox blit optimization, which is
+    unchanged and still does its own job one layer lower.
+  - `apps/wm/wm_render.c`: `wm_damage_rect()` accumulates the
+    per-frame damage bbox; `compute_window_damage()` diffs each
+    window's position/size/visibility against new `last_x/y/w/h/
+    last_visible` fields on `struct window` (`apps/wm/wm.h`) to catch
+    drags/resizes/minimize/restore automatically. `wm_render_frame()`
+    applies the accumulated region as the active clip, redraws
+    everything within it back-to-front (desktop, windows in z-order,
+    taskbar, menus), then resets it.
+  - `apps/wm/wm.c`/`desktop.c`: explicit damage reports for changes
+    the automatic geometry diff can't see on its own --
+    `bring_to_front()` (z-order swap), `open_app()`/`close_window()`
+    (taskbar layout change), `window_invalidate()` (now does something,
+    was a no-op stub before), focused-window key/wheel delivery, and
+    desktop icon drag.
+  - Why redraw-in-region instead of computing exact exposed
+    sub-rectangles, and the two real bugs QMP testing caught (taskbar
+    staleness on close/open/reorder; a stale highlight sliver during
+    icon drag) -- see `docs/decisions.md`.
+  - Verified via QMP: two overlapping windows, dragging one off the
+    other with the revealed area redrawing correctly, closing a window
+    with the taskbar updating correctly, and a desktop icon drag with
+    no stale-pixel artifact -- screenshots in
+    `screenshots/2026-08-12/compositor-*.png`.
+
 ## [0.1.0] - 2026-08-12
 
 ### Fixed

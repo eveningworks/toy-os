@@ -77,6 +77,30 @@ static void dirty_mark_rect(int x, int y, int w, int h) {
     dirty_mark(x + w - 1, y + h - 1);
 }
 
+// --- clip rect ---
+// Separate from the dirty-rect tracking above -- that tracks what WAS
+// touched, after the fact, purely for gfx_present()'s own blit; this
+// restricts what CAN be touched, before drawing happens. Not active by
+// default (clip_active == 0 means the full screen, same as no clip
+// rect ever having been set). See gfx_set_clip_rect()'s doc comment in
+// gfx.h for the first real caller (apps/wm/wm_render.c's damage-region
+// compositor) -- clipping writes this way means the dirty-rect box
+// above only ever grows to cover the active clip, not whatever a full
+// unclipped repaint would have touched, which is the whole point.
+static int clip_x0, clip_y0, clip_x1, clip_y1;
+static int clip_active = 0;
+
+void gfx_set_clip_rect(int x, int y, int w, int h) {
+    if (w <= 0 || h <= 0) { clip_active = 0; return; }
+    clip_x0 = x; clip_y0 = y;
+    clip_x1 = x + w; clip_y1 = y + h;
+    clip_active = 1;
+}
+
+void gfx_clear_clip_rect(void) {
+    clip_active = 0;
+}
+
 int gfx_init(void) {
     struct framebuffer_info info;
     if (!multiboot_get_framebuffer(&info)) return 0;
@@ -112,6 +136,7 @@ uint32_t gfx_rgb(uint8_t r, uint8_t g, uint8_t b) {
 
 void gfx_put_pixel(int x, int y, uint32_t color) {
     if (x < 0 || y < 0 || x >= width || y >= height) return;
+    if (clip_active && (x < clip_x0 || x >= clip_x1 || y < clip_y0 || y >= clip_y1)) return;
     if (double_buffered) {
         back_buffer[(uint32_t)y * (uint32_t)width + (uint32_t)x] = color;
         dirty_mark(x, y);

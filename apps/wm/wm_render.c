@@ -425,7 +425,120 @@ static void draw_taskbar(void) {
     draw_clock_area(ty, bg, fg);
 }
 
+// ---- scene damage region (compositor) ----
+//
+// Separate from gfx.c's own dirty-PIXEL tracking (which operates on the
+// framebuffer, after drawing, purely to shrink gfx_present()'s blit) --
+// this tracks, at the SCENE level, which screen region actually needs
+// repainting BEFORE drawing happens, so wm_render_frame() can clip the
+// whole pass to it instead of always touching the full screen (every
+// draw call bottoms out at gfx_put_pixel(), which silently skips
+// anything outside the active clip -- see gfx_set_clip_rect()). See
+// docs/decisions.md for the overall design and why window geometry
+// changes are handled precisely here (comparing each window's
+// last-rendered rect to its current one, below) while most other
+// redraw_pending sources (menus, taskbar, dialogs, the once-a-second
+// clock) still fall back to a full-screen repaint for now -- a
+// deliberately scoped first cut, not the final word; see the roadmap's
+// Milestone 9 entry for what's still open.
+static int damage_x0, damage_y0, damage_x1, damage_y1;
+
+void wm_damage_rect(int x, int y, int w, int h) {
+    if (w <= 0 || h <= 0) return;
+    int x1 = x + w, y1 = y + h;
+    if (damage_x1 <= damage_x0) { // was empty
+        damage_x0 = x; damage_x1 = x1;
+        damage_y0 = y; damage_y1 = y1;
+        return;
+    }
+    if (x < damage_x0) damage_x0 = x;
+    if (x1 > damage_x1) damage_x1 = x1;
+    if (y < damage_y0) damage_y0 = y;
+    if (y1 > damage_y1) damage_y1 = y1;
+}
+
+static void damage_reset(void) {
+    damage_x0 = damage_y0 = damage_x1 = damage_y1 = 0;
+}
+
+// Compares every window's rect/visibility against what it was as of
+// the last repaint and reports whatever changed as damage, before this
+// frame draws anything -- see wm_damage_rect()'s comment above.
+// Handles the three cases that don't need a caller elsewhere to
+// explicitly report anything:
+//   - a window just opened (last_w == 0, the "never rendered" sentinel)
+//     -- damage its own (now-visible) rect; nothing to reveal from an
+//     "old" position since there wasn't one.
+//   - visibility flipped (minimized <-> restored) -- damage whichever
+//     rect is relevant (current if now visible, last-known if not).
+//     Sufficient on its own even though other windows may now be
+//     revealed/covered underneath: redrawing everything within that
+//     rect, back-to-front, naturally repaints whatever's really there
+//     now, the same reason a plain move/resize's union rect below is
+//     sufficient too.
+//   - geometry changed (move/resize) -- damage the union of its old
+//     and new rect.
+// bring_to_front()/close_window() (wm.c) report their own precise
+// damage directly via wm_damage_rect() at the point they mutate
+// windows[], since by the time this runs a closed window is already
+// gone from the array and a reordered window's geometry didn't change
+// (nothing here would notice either on its own).
+static void compute_window_damage(void) {
+    for (int i = 0; i < window_count; i++) {
+        struct window *w = &windows[i];
+        int visible_now = (w->state != WIN_MINIMIZED);
+
+        if (w->last_w == 0) {
+            if (visible_now) wm_damage_rect(w->x, w->y, w->w, w->h);
+        } else if (visible_now != w->last_visible) {
+            wm_damage_rect(visible_now ? w->x : w->last_x,
+                            visible_now ? w->y : w->last_y,
+                            visible_now ? w->w : w->last_w,
+                            visible_now ? w->h : w->last_h);
+            // draw_taskbar()'s per-button tint depends on whether the
+            // FRONTMOST window is visible (see wm.c's bring_to_front()
+            // comment on the same point) -- minimizing/restoring it
+            // changes that button's look even though no window's
+            // geometry or z-order changed. Only actually matters when
+            // i == window_count - 1, but damaging the strip either way
+            // is cheap and simpler than special-casing which index.
+            wm_damage_rect(0, screen_h - taskbar_h, screen_w, taskbar_h);
+        } else if (visible_now && (w->x != w->last_x || w->y != w->last_y ||
+                                    w->w != w->last_w || w->h != w->last_h)) {
+            int ux0 = w->x < w->last_x ? w->x : w->last_x;
+            int uy0 = w->y < w->last_y ? w->y : w->last_y;
+            int ux1_a = w->x + w->w, ux1_b = w->last_x + w->last_w;
+            int uy1_a = w->y + w->h, uy1_b = w->last_y + w->last_h;
+            int ux1 = ux1_a > ux1_b ? ux1_a : ux1_b;
+            int uy1 = uy1_a > uy1_b ? uy1_a : uy1_b;
+            wm_damage_rect(ux0, uy0, ux1 - ux0, uy1 - uy0);
+        }
+
+        w->last_x = w->x; w->last_y = w->y; w->last_w = w->w; w->last_h = w->h;
+        w->last_visible = visible_now;
+    }
+}
+
 void wm_render_frame(int mx, int my) {
+    compute_window_damage();
+
+    // Clip this whole pass to the accumulated damage region, if any was
+    // reported -- everything below (desktop, windows, taskbar, menus)
+    // still gets CALLED unconditionally (this doesn't yet skip the work
+    // of running an unaffected window's on_draw(), just the pixels it
+    // would touch outside the damaged area -- see this file's damage
+    // comment above), but gfx_put_pixel() silently drops anything
+    // outside, so gfx_present()'s eventual blit only ever covers what
+    // actually needed it. No damage reported this frame (menus, taskbar,
+    // dialogs, the clock tick, or the very first frame) means "unknown,
+    // be safe" -- fall back to the full screen, same as every frame
+    // before this change.
+    if (damage_x1 > damage_x0) {
+        gfx_set_clip_rect(damage_x0, damage_y0, damage_x1 - damage_x0, damage_y1 - damage_y0);
+    } else {
+        gfx_clear_clip_rect();
+    }
+
     desktop_draw(); // background + icon grid -- replaces the old bare gfx_clear() fill, see desktop.h
 
     for (int i = 0; i < window_count; i++) {
@@ -441,11 +554,19 @@ void wm_render_frame(int mx, int my) {
     file_picker_draw(); // an app-opened modal (e.g. Notepad's Save As...) -- drawn above ordinary chrome/menus
     confirm_dialog_draw(); // drawn last (topmost, short of the cursor) -- the most modal overlay in the WM
 
+    // The cursor is always drawn full/unclipped, regardless of the scene
+    // damage rect above -- it doesn't track its own screen position
+    // against damage the way windows do, and it's cheap enough (a
+    // single small sprite) that there's no real cost to always letting
+    // it through.
+    gfx_clear_clip_rect();
     draw_cursor_at(mx, my); // also (re)establishes cursor_under for wm_render_cursor_move()
 
     gfx_present(); // blits only what actually got touched -- see gfx_present()'s
-                    // own comment; for a full repaint that's normally still the
-                    // whole screen (gfx_clear() at the top touches every pixel).
+                    // own comment; bounded by the damage clip above instead of
+                    // always being the whole screen, when damage was reported.
+
+    damage_reset();
 }
 
 // The cheap path for "only the mouse moved, nothing else changed" --

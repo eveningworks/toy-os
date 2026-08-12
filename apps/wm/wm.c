@@ -80,7 +80,7 @@ int window_content_w(const struct window *win) { return win->w - 2; }
 int window_content_h(const struct window *win) { return win->h - WM_TITLEBAR_H - 2; }
 
 void window_invalidate(struct window *win) {
-    (void)win; // whole-screen redraw, so which window doesn't matter yet
+    wm_damage_rect(win->x, win->y, win->w, win->h);
     redraw_pending = 1;
 }
 
@@ -133,6 +133,23 @@ const struct window *wm_get_window(int index) {
 
 void bring_to_front(int idx) {
     if (idx == window_count - 1) return;
+
+    // A real reorder -- this window's own footprint is now drawn on
+    // top of whatever it overlaps instead of wherever it was in
+    // z-order before, so it needs repainting even though its geometry
+    // isn't changing (compute_window_damage()'s geometry diff,
+    // wm_render.c, wouldn't notice this on its own). This alone is
+    // sufficient for the floating windows: bring_to_front() only ever
+    // promotes ONE window to the front, shifting others down a slot
+    // without changing their relative order to each OTHER, so no other
+    // window's own occlusion relationships change. The taskbar strip
+    // is a separate matter, though -- draw_taskbar()'s per-button tint
+    // depends on which window is frontmost (`i == window_count - 1`,
+    // wm_render.c), so both the newly- and previously-frontmost
+    // buttons need a repaint too, not just the floating window itself.
+    wm_damage_rect(windows[idx].x, windows[idx].y, windows[idx].w, windows[idx].h);
+    wm_damage_rect(0, screen_h - taskbar_h, screen_w, taskbar_h);
+
     struct window tmp = windows[idx];
     for (int i = idx; i < window_count - 1; i++) windows[i] = windows[i + 1];
     windows[window_count - 1] = tmp;
@@ -202,6 +219,10 @@ void open_app(const struct gui_app *app) {
     window_count++;
     if (app->on_open) app->on_open(win);
     redraw_pending = 1;
+    // A new taskbar button appears -- compute_window_damage()
+    // (wm_render.c) will damage the new window's own rect (its
+    // last_w == 0 sentinel), but the taskbar strip is a separate area.
+    wm_damage_rect(0, screen_h - taskbar_h, screen_w, taskbar_h);
 
     klog_write("wm: opened ");
     klog_write(app->name);
@@ -234,6 +255,17 @@ void close_window(int idx) {
     if (windows[idx].app && windows[idx].app->on_close) {
         windows[idx].app->on_close(&windows[idx]);
     }
+
+    // Report the closing window's own rect as damage BEFORE the array
+    // shift below removes it -- whatever's now revealed there (desktop
+    // or another window) needs repainting. Skipped if it was minimized
+    // (not drawn there in the first place, so nothing to reveal). The
+    // taskbar strip always needs it too, regardless of minimized state
+    // -- its button disappears and every later button shifts left.
+    if (windows[idx].state != WIN_MINIMIZED) {
+        wm_damage_rect(windows[idx].x, windows[idx].y, windows[idx].w, windows[idx].h);
+    }
+    wm_damage_rect(0, screen_h - taskbar_h, screen_w, taskbar_h);
 
     klog_write("wm: closed ");
     klog_write(windows[idx].app ? windows[idx].app->name : windows[idx].title);
@@ -486,7 +518,10 @@ void wm_run(void) {
             // event while it's open is just dropped rather than
             // reaching the window behind it.
             if (key != -1 && file_picker_handle_key(key)) {
-                // consumed by the picker
+                // consumed by the picker -- modal, its own rect isn't
+                // reported as damage yet, falls back to a full-screen
+                // repaint same as other dialogs (see wm_render.c's
+                // damage-region comment)
             } else {
                 int f = -1;
                 for (int i = window_count - 1; i >= 0; i--) {
@@ -498,6 +533,11 @@ void wm_run(void) {
                 if (f >= 0 && wheel != 0 && !file_picker_open && windows[f].app && windows[f].app->on_wheel) {
                     windows[f].app->on_wheel(&windows[f], wheel);
                 }
+                // Typing/scrolling is the single most common redraw
+                // trigger this loop sees besides mouse movement -- worth
+                // reporting precisely rather than falling back to a full
+                // repaint for every keystroke.
+                if (f >= 0) wm_damage_rect(windows[f].x, windows[f].y, windows[f].w, windows[f].h);
             }
             redraw_pending = 1;
         }

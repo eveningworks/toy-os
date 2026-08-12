@@ -256,12 +256,39 @@ static void nearest_free_cell(const struct icon_grid *g, int col, int row,
     *out_col = col; *out_row = row; // unreachable in practice -- see comment above
 }
 
+// Extra top margin damage_icon_row()/desktop_update_drag() pad their
+// strip by -- desktop_draw()'s selection-highlight rect
+// (icon_selected_bg) draws 4px ABOVE an icon's own y (`y - 4`, see
+// desktop_draw()), which a strip anchored exactly at y wouldn't
+// otherwise cover, leaving a thin stale sliver of highlight behind
+// mid-drag (found by actually dragging an icon and looking, not by
+// inspection -- see docs/decisions.md).
+#define DESKTOP_DRAG_DAMAGE_MARGIN 4
+
+// Reports a dragged icon's footprint as scene damage -- a full-width
+// horizontal strip covering [top, top+cell_h) rather than a tight box
+// around the icon square itself, deliberately: a label can visually
+// run past its own cell into a neighboring column (desktop.h's own
+// top comment covers why that's an accepted quirk, not a bug), and a
+// tight box would leave stale label pixels behind as it drags through
+// that overflow. Cheap enough at this scale (a handful of icon rows,
+// not the whole screen) not to matter.
+static void damage_icon_row(const struct icon_grid *g, int y) {
+    wm_damage_rect(0, y - DESKTOP_DRAG_DAMAGE_MARGIN, screen_w,
+                   g->cell_h + DESKTOP_DRAG_DAMAGE_MARGIN);
+}
+
 void desktop_update_drag(int mx, int my, uint8_t buttons) {
     if (!drag.active) return;
 
     if (buttons & 0x1) {
+        int old_py = drag_py;
         drag_px = mx - drag.grab_off_x;
         drag_py = my - drag.grab_off_y;
+        struct icon_grid g = current_grid();
+        int top = (old_py < drag_py ? old_py : drag_py) - DESKTOP_DRAG_DAMAGE_MARGIN;
+        int bottom = (old_py > drag_py ? old_py : drag_py) + g.cell_h;
+        wm_damage_rect(0, top, screen_w, bottom - top);
         redraw_pending = 1;
         return;
     }
@@ -270,11 +297,15 @@ void desktop_update_drag(int mx, int my, uint8_t buttons) {
     int col, row;
     icon_drag_update(&drag, &g, mx, my, &col, &row);
     nearest_free_cell(&g, col, row, drag.index, &col, &row);
+    damage_icon_row(&g, drag_py); // wherever it was last dragged to...
     if (col != icon_col[drag.index] || row != icon_row[drag.index]) {
         icon_col[drag.index] = col;
         icon_row[drag.index] = row;
         save_position(drag.index);
     }
+    int fx, fy;
+    icon_grid_cell_rect(&g, icon_col[drag.index], icon_row[drag.index], &fx, &fy);
+    damage_icon_row(&g, fy); // ...and wherever it actually settled (the snap itself)
     icon_drag_end(&drag);
     redraw_pending = 1;
 }

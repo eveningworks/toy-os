@@ -96,7 +96,14 @@ later judgment call, not mechanically tied to "20 milestones done."
 - [ ] Real wallpaper images
 - [x] ~~Desktop icon repositioning/dragging~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry
 - [ ] Per-icon context menus (Rename/Properties)
-- [ ] Full dirty-rect compositor
+- [ ] Full dirty-rect compositor -- partially done, see `CHANGELOG.md`'s
+      `[Unreleased]` entry: window move/resize/open/close/minimize/
+      z-order and desktop icon drag now clip repaints to a computed
+      damage region instead of always touching the full screen; still
+      open: menu/taskbar-content-click/dialog redraws still fall back
+      to full-screen, and every visible window's `on_draw()` still runs
+      regardless of whether it intersects the damage region (only the
+      pixels it'd touch outside get clipped away, not the call itself)
 
 ### Milestone 10 -- Desktop productivity apps (planned v0.10.0)
 
@@ -593,12 +600,37 @@ Per-icon desktop context menus (Rename/Properties/etc) -- needs icons to
 have real per-icon identity/state beyond "which registry index" first;
 see `docs/decisions.md`.
 
-More compositor work beyond today's partial dirty-rect blit: `gfx_present()`
-blits only the bounding box of what actually changed and mouse-only
-movement takes a cheap cursor-sprite save/restore path, but a scene redraw
-(click, drag, resize, window opening) still repaints the whole back
-buffer -- true per-widget dirty tracking of the scene itself, not just the
-blit, is still open.
+More compositor work beyond `gfx_present()`'s dirty-pixel blit and the
+cursor-sprite save/restore path -- partially done now, see
+`CHANGELOG.md`'s `[Unreleased]` entry: `apps/wm/wm_render.c` computes a
+SCENE-level damage region each frame (comparing each window's last-
+rendered rect/visibility to its current one, plus explicit reports from
+`bring_to_front()`/`close_window()`/desktop icon drag/keyboard input to
+the focused window) and clips the whole repaint pass to it via a new
+`gfx_set_clip_rect()` (`kernel/drivers/gfx.c`) -- a window move, resize,
+open, close, minimize, restore, or z-order change no longer touches the
+full screen. Redrawing everything within the damaged region, back-to-
+front, is what makes this correct for overlapping windows without
+needing separate "what got exposed" tracking -- confirmed directly via
+QMP (dragged one window off another, the revealed area repainted
+correctly with no stale pixels; see
+`screenshots/2026-08-12/compositor-exposure-after-drag.png`). Two real
+bugs found and fixed during that testing, not just inspection -- see
+`docs/decisions.md`: the taskbar strip wasn't included in a window's
+own damage (a stale taskbar button survived a close until the next
+unrelated full repaint), and a thin sliver of a desktop icon's
+selection-highlight (which draws 4px above the icon's own y) was left
+behind mid-drag by a damage strip anchored exactly at that y with no
+margin.
+
+Still open: menu/taskbar-content-click/dialog redraws still fall back
+to a full-screen repaint (no damage reported for those yet); and every
+visible window's `on_draw()` still runs every full-repaint frame
+regardless of whether it intersects the damage region -- only the
+pixels it'd draw outside get clipped away by `gfx_put_pixel()`, not the
+call itself, so the CPU cost of running an unaffected window's draw
+routine isn't eliminated yet, only the pixel-write/blit cost is. Both
+are natural next steps, not attempted this round.
 
 ### Milestone 10 -- Desktop productivity apps
 

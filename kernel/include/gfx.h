@@ -45,6 +45,24 @@ uint32_t gfx_framebuffer_bpp(void);
 // Pack 8-bit r/g/b into whatever pixel format the framebuffer actually uses.
 uint32_t gfx_rgb(uint8_t r, uint8_t g, uint8_t b);
 
+// Restricts gfx_put_pixel() (and therefore every drawing primitive
+// below, all of which bottom out at it) to writing only within
+// [x, x+w) x [y, y+h) -- on top of the plain screen-bounds check it
+// already does. gfx_get_pixel() is deliberately NOT clipped (see
+// gfx.c's comment) -- a caller reading existing content, e.g. to save
+// pixels before drawing over them, still wants the real content
+// regardless of the active clip. w/h <= 0 is treated the same as
+// gfx_clear_clip_rect() (nothing draws). First real caller: the window
+// manager's damage-region compositor (apps/wm/wm_render.c, see
+// docs/decisions.md) -- restricts a repaint to the screen region that
+// actually needs it instead of always touching everything.
+void gfx_set_clip_rect(int x, int y, int w, int h);
+
+// Removes any active clip -- drawing reaches the full screen again
+// (still gated by the ordinary screen-bounds check). The default state
+// before any gfx_set_clip_rect() call.
+void gfx_clear_clip_rect(void);
+
 void gfx_put_pixel(int x, int y, uint32_t color);
 uint32_t gfx_get_pixel(int x, int y);
 // Alpha-blends `color` over whatever's currently at (x, y) -- see this

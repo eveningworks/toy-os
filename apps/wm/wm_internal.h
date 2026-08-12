@@ -163,6 +163,20 @@ extern int title_hover_kind;
 
 extern int redraw_pending;
 
+// Accumulates (x, y, w, h) into the pending scene-damage region
+// wm_render_frame() will clip its next repaint to -- see wm_render.c's
+// damage-region compositor (docs/decisions.md) and gfx_set_clip_rect()
+// (gfx.h), which is what actually enforces it once wm_render_frame()
+// applies the accumulated region as the active clip. Safe to call from
+// anywhere in apps/wm/ any number of times before the next
+// wm_render_frame() -- rects just accumulate into a single bounding
+// box, the same "good enough, not a real rect list" tradeoff gfx.c's
+// own dirty-pixel tracking already makes. Does NOT set redraw_pending
+// itself -- callers still need to do that separately (or already do,
+// for the same event); this only narrows WHERE the next repaint
+// touches, not WHETHER one happens. Defined in wm_render.c.
+void wm_damage_rect(int x, int y, int w, int h);
+
 // Window lifecycle -- defined in wm.c, used by wm_input.c (opening from
 // the Start menu, closing via the title-bar X).
 void bring_to_front(int idx);

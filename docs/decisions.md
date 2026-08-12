@@ -1735,3 +1735,87 @@ kept at `-O2` rather than dropping to `-Og`/`-O0` for a separate debug
 build -- same binary as always, just now carrying symbols, at the cost
 of some locals showing "optimized out" in GDB. A real, deliberate
 build-config-simplicity tradeoff, not an oversight.
+
+## Why the compositor uses one scene-wide damage region, not per-window exposure tracking
+
+The window manager used to redraw everything -- `desktop_draw()`'s full
+clear plus every window/taskbar/menu -- on any scene change at all,
+including a once-a-second clock tick. Milestone 9's "real" dirty-rect
+compositor replaces that with a scene-level damage-region accumulator
+(`wm_damage_rect()`, `apps/wm/wm_render.c`) that's deliberately
+separate from `gfx.c`'s existing pixel-level dirty-rect tracking
+(`dirty_mark()`/`gfx_present()`'s blit-only-the-touched-bbox
+optimization) -- that layer already existed and still does its job one
+level lower, blitting only the touched region to the real framebuffer
+after software rendering finishes. The new layer sits above it,
+deciding what even gets *drawn* in software in the first place, via a
+new `gfx_set_clip_rect()` primitive that gates `gfx_put_pixel()` (not
+`gfx_get_pixel()` -- a caller reading existing pixels, e.g. to save
+content before drawing over it, still wants the real framebuffer
+regardless of the active clip).
+
+The core design choice: when something in the damaged region needs
+repainting, redraw *everything* within that region, back-to-front
+(desktop, then windows in z-order, then taskbar/menus), rather than
+computing which specific sub-rectangles got newly exposed by a move/
+close/reorder. Explicitly tracking exposure would mean, for every
+window-geometry change, diffing the old rect against every
+window/desktop area now underneath it -- a real polygon-clipping
+problem. Redraw-by-z-order-within-the-damaged-bbox sidesteps that
+entirely: whatever should be visible in that region gets drawn last in
+the correct order, so occlusion just falls out of the existing paint
+order for free. The tradeoff is redrawing a few more pixels than the
+minimal exposure set would require (anything already-correct inside
+the damaged bbox gets repainted too) -- deliberately accepted as
+"simple and correct" over "minimal and fragile," consistent with the
+gfx.c dirty-rect layer's own bounding-box-not-rect-list tradeoff.
+Verified directly via QMP: dragging Calculator off of Notepad and
+confirming Notepad's revealed area redraws correctly and only the
+damaged bbox is touched (`screenshots/2026-08-12/
+compositor-exposure-after-drag.png`).
+
+Damage sources are a mix of one automatic path and several explicit
+ones, because not every scene change is a pure geometry diff:
+`compute_window_damage()` (`wm_render.c`) diffs each window's
+position/size/visibility against fields stored directly on
+`struct window` (`last_x/y/w/h/last_visible`) every frame, which
+catches drags/resizes/minimize/restore automatically. But z-order
+swaps (`bring_to_front()`), open/close (`open_app()`/`close_window()`),
+and interaction-driven redraws that don't change any window's rect at
+all (desktop icon drag, `window_invalidate()`, focused-window key/wheel
+delivery) all report their own damage explicitly, since there's no
+before/after rect diff to detect them from.
+
+Two real bugs surfaced only by interactive QMP testing, not by
+re-reading the code:
+
+- **Taskbar staleness on close.** Closing Calculator via its title-bar
+  X left its taskbar button drawn (confirmed by screenshot -- code
+  review alone missed it because the closing window's own rect *was*
+  correctly damaged, just not the taskbar strip). The taskbar's button
+  list/layout/tint depends on state outside any single window's rect,
+  so `close_window()`, `open_app()`, `bring_to_front()`, and the
+  visibility-flip branch of `compute_window_damage()` (minimize/
+  restore of the frontmost window changes its own tint) all now also
+  damage the taskbar strip explicitly
+  (`screenshots/2026-08-12/compositor-close-taskbar-fixed.png`).
+- **Desktop icon drag highlight sliver.** Dragging a desktop icon left
+  a thin stale highlight-colored line on screen along the drag path.
+  `desktop_draw()`'s selection-highlight rect draws 4px *above* the
+  icon's own y (`y - 4`, to include the highlight border), but the
+  drag's damage strip in `desktop.c` was anchored exactly at the icon's
+  y with no top margin, so that top 4px escaped the damaged region and
+  was never repainted over. Fixed with a
+  `DESKTOP_DRAG_DAMAGE_MARGIN` applied to the damage strip's top edge,
+  matching the highlight rect's own offset
+  (`screenshots/2026-08-12/compositor-icon-drag-no-artifact.png`).
+
+Deliberately out of scope this round (falls back to the old
+full-screen repaint on any menu/taskbar-content-click/dialog change,
+which is safe -- never worse than before, just not optimized): precise
+damage reporting for those interactions, and skipping `on_draw()`
+entirely for windows outside the damaged region (still called for
+every visible window regardless of intersection -- only the pixel
+writes it makes are clipped away). Both are `docs/roadmap.md`'s
+Milestone 9 "Phase 3," deferred by explicit user scope choice, not an
+oversight.
