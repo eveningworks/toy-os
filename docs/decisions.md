@@ -1550,3 +1550,35 @@ exactly which binaries and why each excluded one was excluded
 (`echo`'s `SYS_READ_KEY` loop, `gui_test`/`win_test`'s framebuffer/
 window takeover, `counter_a`/`counter_b`'s intentionally-infinite
 `schedtest` demo loop).
+
+## Cowork device-bridge vs. direct local checkout: detected via `git config user.name`, not assumed
+
+Every session on this repo used to be a Cowork cloud session reaching
+the user's real checkout only through the device bridge
+(`mcp__remote-devices__*`) -- `CLAUDE.md`'s whole "Working in the cloud
+sandbox" section, this skill's delivery steps, and `tools/preflight.sh`/
+`tools/qmp_test.py` were all written assuming that, unconditionally.
+That stopped being true the first time a session ran directly on the
+user's own machine (a local Claude Code session, normal file/Bash tools
+straight against the real checkout, no device bridge involved) --
+CLAUDE.md's Cowork-only claims (git push/`gh release create` "blocked",
+no git identity configured, `Makefile`/workflow files "protected",
+stale `.git/index.lock`) turned out to just be false in that mode: a
+real `v0.1.0` release was cut and later patched with plain `git push`
+and `gh release create`/`gh release upload`, no proxy blocking anything.
+
+Rather than rewrite the docs assuming *only* local from here on
+(Cowork sessions still happen too), both modes are now supported, with
+a deterministic way to tell which one applies instead of guessing:
+`git config user.name` -- empty means Cowork/device-bridge (that
+session has no git identity configured at all, local or global, since
+it's its own isolated VM), non-empty means a direct local checkout
+(this repo's convention pre-configures it to `toy-os
+<noreply@toy-os.local>`). `CLAUDE.md`'s "Working in the cloud sandbox
+vs. directly on the user's machine" section, `tools/preflight.sh`'s
+closing message, and `~/.claude/skills/toy-os-feature-workflow/`'s
+step 0 all use this same check. See `CHANGELOG.md`'s `[Unreleased]`
+entry for the full list of files touched, including the unrelated but
+same-session `tools/qmp_test.py` fix (a QEMU-backgrounding pattern that
+turned out to be unreliable specifically in the sandboxed environment
+this was discovered in).

@@ -22,6 +22,39 @@ forever.
 
 ## [Unreleased]
 
+### Changed
+- CLAUDE.md and `tools/` now support a direct local checkout (this
+  session ran that way for the first time, not through Cowork's device
+  bridge) as a first-class mode alongside the existing Cowork one,
+  instead of assuming Cowork throughout. Detected via `git config
+  user.name` (empty = Cowork device-bridge session, which has no git
+  identity configured at all; set = direct local checkout). Confirmed
+  directly: `git push`/`gh release create`/`gh release upload` all
+  work fine from a local checkout (used them repeatedly this session,
+  including cutting and then patching the `v0.1.0` release), unlike
+  Cowork's sandbox where they're genuinely blocked by an egress proxy.
+  See `docs/decisions.md` for the full writeup.
+  - `CLAUDE.md`: splits "Working in the cloud sandbox vs. the user's
+    machine" into a detection bit + two subsections; "Delivering
+    changes" branches by mode and gains explicit PII and
+    tooling-belongs-in-`tools/` standing instructions.
+  - `tools/preflight.sh`: closing message is now mode-aware (checks
+    git identity) instead of unconditionally pointing at
+    SendUserFile/`device_commit_files`.
+  - `tools/qmp_test.py`: `launch_qemu_cmd()` now returns a `qemu-system-x86_64
+    ... -daemonize -pidfile <path>` command instead of one meant to be
+    backgrounded with `setsid nohup ... &`/`disown -a` -- the old
+    pattern turned out to be unreliable in this sandboxed environment
+    specifically (spurious non-zero exit codes on the launching call,
+    and the process not reliably surviving to the next tool call,
+    which left a stale `serial.log`/QMP port from an earlier run
+    looking like a fresh boot and caused real confusion mid-session
+    chasing a phantom bug). Verified the new command launches,
+    daemonizes, and accepts a QMP connection.
+  - Companion update to `~/.claude/skills/toy-os-feature-workflow/`
+    (outside this repo, not tracked here) doing the same mode-split for
+    the workflow steps.
+
 ### Added
 - Draggable desktop icons (Milestone 9, `docs/roadmap.md`): each desktop
   icon now has real per-icon grid position state (`apps/wm/desktop.c`'s
