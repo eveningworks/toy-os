@@ -368,6 +368,26 @@ static void stress_fill_pattern(uint32_t chunk_index) {
     }
 }
 
+// Prints "  ...<verb> <done> / <total> MB (<pct>%) at <speed> MB/s\n",
+// speed as a running average (bytes done so far / time since the phase
+// -- write or read -- started, not just since the last progress line).
+// One decimal place, computed in tenths to avoid needing float on a
+// freestanding kernel target: MB/s*10 == done_mb * 1000 / phase_ticks
+// (PIT runs at 100Hz -- ticks/100 == seconds -- see timer.h).
+// phase_ticks is clamped to at least 1 so a sub-tick-resolution phase
+// (only possible for a tiny `mb`) can't divide by zero.
+static void stress_print_progress(const char *verb, uint32_t done_mb,
+                                   uint32_t total_mb, uint64_t phase_ticks) {
+    uint32_t pct = (done_mb * 100) / total_mb;
+    if (phase_ticks == 0) phase_ticks = 1;
+    uint32_t speed_x10 = (uint32_t)((uint64_t)done_mb * 1000 / phase_ticks);
+    vga_write("  ..."); vga_write(verb); vga_write(" "); vga_write_dec(done_mb);
+    vga_write(" / "); vga_write_dec(total_mb); vga_write(" MB (");
+    vga_write_dec(pct); vga_write("%) at ");
+    vga_write_dec(speed_x10 / 10); vga_write(".");
+    vga_write_dec(speed_x10 % 10); vga_write(" MB/s\n");
+}
+
 // Parses a plain decimal string (no sign, no whitespace) into *out.
 // Returns 1 on success, 0 if `s` is empty or has a non-digit -- same
 // "reject rather than guess" spirit as keyboard_layout.c's parse_hex2().
@@ -405,10 +425,12 @@ void cmd_stress(const char *args) {
     }
 
     uint32_t chunks = mb; // 1 chunk == 1MB by construction
-    uint32_t start_ticks = pit_ticks();
+    uint64_t start_ticks = pit_ticks();
 
     vga_write("stress: writing "); vga_write_dec(mb); vga_write(" MB to ");
     vga_write(STRESS_TEST_PATH); vga_write(" ...\n");
+    uint64_t write_start_ticks = pit_ticks();
+    uint64_t last_progress_ticks = write_start_ticks;
     for (uint32_t c = 0; c < chunks; c++) {
         stress_fill_pattern(c);
         uint64_t offset = (uint64_t)c * STRESS_CHUNK_BYTES;
@@ -419,14 +441,18 @@ void cmd_stress(const char *args) {
             fs_delete(STRESS_TEST_PATH);
             return;
         }
-        if ((c % 256) == 0 && c != 0) { // progress every 256MB -- long-running, not silent
-            vga_write("  ...wrote "); vga_write_dec(c); vga_write(" / ");
-            vga_write_dec(mb); vga_write(" MB\n");
+        uint64_t now = pit_ticks();
+        if (now - last_progress_ticks >= 100) { // ~1x/sec (100Hz PIT) -- long-running, not silent
+            stress_print_progress("wrote", c + 1, mb, now - write_start_ticks);
+            last_progress_ticks = now;
         }
     }
+    uint64_t write_ticks = pit_ticks() - write_start_ticks;
 
     vga_write("stress: reading back and verifying ...\n");
     static uint8_t readback[STRESS_CHUNK_BYTES];
+    uint64_t read_start_ticks = pit_ticks();
+    last_progress_ticks = read_start_ticks;
     for (uint32_t c = 0; c < chunks; c++) {
         uint64_t offset = (uint64_t)c * STRESS_CHUNK_BYTES;
         uint32_t got = fs_read_range(STRESS_TEST_PATH, offset, readback, STRESS_CHUNK_BYTES);
@@ -448,21 +474,29 @@ void cmd_stress(const char *args) {
             fs_delete(STRESS_TEST_PATH);
             return;
         }
-        if ((c % 256) == 0 && c != 0) {
-            vga_write("  ...verified "); vga_write_dec(c); vga_write(" / ");
-            vga_write_dec(mb); vga_write(" MB\n");
+        uint64_t now = pit_ticks();
+        if (now - last_progress_ticks >= 100) {
+            stress_print_progress("verified", c + 1, mb, now - read_start_ticks);
+            last_progress_ticks = now;
         }
     }
+    uint64_t read_ticks = pit_ticks() - read_start_ticks;
 
     if (!fs_delete(STRESS_TEST_PATH)) {
         vga_write("stress: WARNING -- test passed but couldn't delete ");
         vga_write(STRESS_TEST_PATH); vga_write(" (clean up manually)\n");
     }
 
-    uint32_t elapsed_ticks = pit_ticks() - start_ticks; // 100Hz PIT -- see timer.h
+    uint64_t elapsed_ticks = pit_ticks() - start_ticks; // 100Hz PIT -- see timer.h
+    uint32_t write_speed_x10 = (uint32_t)((uint64_t)mb * 1000 / (write_ticks ? write_ticks : 1));
+    uint32_t read_speed_x10 = (uint32_t)((uint64_t)mb * 1000 / (read_ticks ? read_ticks : 1));
     vga_write("stress: PASSED -- "); vga_write_dec(mb);
     vga_write(" MB written, read back, and verified byte-for-byte in ");
-    vga_write_dec(elapsed_ticks / 100); vga_write(" s\n");
+    vga_write_dec((uint32_t)(elapsed_ticks / 100)); vga_write(" s (");
+    vga_write_dec(write_speed_x10 / 10); vga_write(".");
+    vga_write_dec(write_speed_x10 % 10); vga_write(" MB/s write, ");
+    vga_write_dec(read_speed_x10 / 10); vga_write(".");
+    vga_write_dec(read_speed_x10 % 10); vga_write(" MB/s read)\n");
 }
 
 // Proves ata_dma_nonblocking_selftest() (Phase 1 of the async-I/O
