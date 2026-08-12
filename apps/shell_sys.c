@@ -368,24 +368,45 @@ static void stress_fill_pattern(uint32_t chunk_index) {
     }
 }
 
-// Prints "  ...<verb> <done> / <total> MB (<pct>%) at <speed> MB/s\n",
+// Redraws "<verb> [####----] <pct>% <done>/<total>MB <speed>MB/s" IN
+// PLACE on one line, `\r`-style, instead of scrolling a new line per
+// update -- both console backends (kernel/drivers/vga.c's legacy
+// 0xB8000 path and the framebuffer path) already treat '\r' as "column
+// 0, same row, no scroll" and draw characters in-place, so this needed
+// no kernel/driver changes, just not using '\n' between updates.
+// Trailing PAD_SPACES blanks out whatever a longer previous line left
+// behind -- total_mb's width is fixed for a whole run, but done_mb's/
+// pct's grow monotonically and speed's tenths digit can occasionally
+// shrink by one as the running average settles, so the line's total
+// length isn't perfectly monotonic even though it's close. A real '\n'
+// only gets emitted once the bar reaches 100% (the caller relies on
+// this -- the next thing printed, e.g. "reading back...", must start
+// on its own fresh line, not overwrite the finished bar).
 // speed as a running average (bytes done so far / time since the phase
-// -- write or read -- started, not just since the last progress line).
-// One decimal place, computed in tenths to avoid needing float on a
-// freestanding kernel target: MB/s*10 == done_mb * 1000 / phase_ticks
-// (PIT runs at 100Hz -- ticks/100 == seconds -- see timer.h).
-// phase_ticks is clamped to at least 1 so a sub-tick-resolution phase
-// (only possible for a tiny `mb`) can't divide by zero.
+// -- write or read -- started, not just since the last update). One
+// decimal place, computed in tenths to avoid needing float on this
+// freestanding target: MB/s*10 == done_mb * 1000 / phase_ticks (PIT
+// runs at 100Hz -- ticks/100 == seconds -- see timer.h). phase_ticks
+// is clamped to at least 1 so a sub-tick-resolution phase (only
+// possible for a tiny `mb`) can't divide by zero.
+#define STRESS_BAR_WIDTH 20
+#define STRESS_BAR_PAD_SPACES 6
+
 static void stress_print_progress(const char *verb, uint32_t done_mb,
                                    uint32_t total_mb, uint64_t phase_ticks) {
     uint32_t pct = (done_mb * 100) / total_mb;
     if (phase_ticks == 0) phase_ticks = 1;
     uint32_t speed_x10 = (uint32_t)((uint64_t)done_mb * 1000 / phase_ticks);
-    vga_write("  ..."); vga_write(verb); vga_write(" "); vga_write_dec(done_mb);
-    vga_write(" / "); vga_write_dec(total_mb); vga_write(" MB (");
-    vga_write_dec(pct); vga_write("%) at ");
-    vga_write_dec(speed_x10 / 10); vga_write(".");
-    vga_write_dec(speed_x10 % 10); vga_write(" MB/s\n");
+    uint32_t filled = (pct * STRESS_BAR_WIDTH) / 100;
+
+    vga_putc('\r');
+    vga_write("  "); vga_write(verb); vga_write(" [");
+    for (uint32_t i = 0; i < STRESS_BAR_WIDTH; i++) vga_putc(i < filled ? '#' : '-');
+    vga_write("] "); vga_write_dec(pct); vga_write("% ");
+    vga_write_dec(done_mb); vga_write("/"); vga_write_dec(total_mb); vga_write("MB ");
+    vga_write_dec(speed_x10 / 10); vga_write("."); vga_write_dec(speed_x10 % 10); vga_write("MB/s");
+    for (uint32_t i = 0; i < STRESS_BAR_PAD_SPACES; i++) vga_putc(' ');
+    if (pct >= 100) vga_putc('\n');
 }
 
 // Parses a plain decimal string (no sign, no whitespace) into *out.

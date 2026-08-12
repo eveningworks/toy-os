@@ -48,6 +48,25 @@ forever.
     (no flooding risk for a huge `<mb>`). Verified live: `stress 300`
     now prints ...69%, 70%, 71%... straight through to 100% before
     `PASSED`.
+  - Follow-up #2, asked for by name: an in-place ASCII progress bar
+    (`[####----] 68% 204/300MB 18.1MB/s`) redrawn on one line instead
+    of scrolling a new line per percent, "the way programs usually do
+    in Linux." Needed no kernel/driver changes -- both console
+    backends in `kernel/drivers/vga.c` (legacy 0xB8000 text mode and
+    the framebuffer text console) already treat `'\r'` as "column 0,
+    same row, no scroll" and draw characters in place, so
+    `stress_print_progress()` just prepends `'\r'` instead of
+    appending `'\n'` on every update, padding the line with a few
+    trailing spaces so a shorter new line fully overwrites a longer
+    old one (`done_mb`/`pct` grow monotonically so the line only ever
+    gets longer in practice, but the running-average speed's digit
+    count can occasionally shrink by one). A real `'\n'` only fires
+    once a phase's bar reaches 100%, so the next line printed (e.g.
+    "reading back...", or the final `PASSED` summary) starts fresh
+    instead of overwriting the finished bar. Verified live via QMP,
+    mid-run and at completion: the bar redraws in place with no
+    scrolling, and hands off cleanly to `PASSED` with no leftover
+    characters.
 - Docs catch-up after the tray/NX/shell_flow work above: `CLAUDE.md`'s
   QMP-testing gotcha list now points at `shell_flow.py` from the
   `send_text()` keyboard gotcha it directly solves, and adds a gotcha
