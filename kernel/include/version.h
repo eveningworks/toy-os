@@ -11,6 +11,6 @@
 // the GUI About window. It's just whatever VERSION currently holds --
 // this script doesn't change it. See docs/decisions.md for why this
 // replaced the earlier per-change build-number scheme.
-#define TOYOS_VERSION "0.1.0"
+#define TOYOS_VERSION "0.2.0-dev"
 
 #endif
