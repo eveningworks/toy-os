@@ -519,21 +519,32 @@ static void compute_window_damage(void) {
     }
 }
 
+// Does this window's current rect overlap the accumulated damage box at
+// all? Used by wm_render_frame() (Phase 3, see docs/decisions.md) to
+// skip a whole window's chrome/on_draw()/resize-grip work, not just the
+// pixels it would have touched -- gfx_set_clip_rect() already drops
+// those pixel writes for free, but the CALLS themselves (an app's
+// on_draw() walking its own widgets/content) still cost real CPU even
+// when every write they make gets clipped away. Only meaningful when a
+// damage box was actually reported this frame (see the has_damage check
+// at the call site) -- with no damage, every window is "unaffected" by
+// this definition too, which would wrongly skip everyone.
+static int window_intersects_damage(const struct window *w) {
+    return w->x < damage_x1 && w->x + w->w > damage_x0 &&
+           w->y < damage_y1 && w->y + w->h > damage_y0;
+}
+
 void wm_render_frame(int mx, int my) {
     compute_window_damage();
 
     // Clip this whole pass to the accumulated damage region, if any was
-    // reported -- everything below (desktop, windows, taskbar, menus)
-    // still gets CALLED unconditionally (this doesn't yet skip the work
-    // of running an unaffected window's on_draw(), just the pixels it
-    // would touch outside the damaged area -- see this file's damage
-    // comment above), but gfx_put_pixel() silently drops anything
-    // outside, so gfx_present()'s eventual blit only ever covers what
-    // actually needed it. No damage reported this frame (menus, taskbar,
-    // dialogs, the clock tick, or the very first frame) means "unknown,
-    // be safe" -- fall back to the full screen, same as every frame
-    // before this change.
-    if (damage_x1 > damage_x0) {
+    // reported. No damage reported this frame (menus, taskbar, dialogs,
+    // the clock tick, or the very first frame) means "unknown, be
+    // safe" -- fall back to the full screen, same as every frame before
+    // Phase 1+2, and every window is drawn (has_damage below is false,
+    // so window_intersects_damage() is never even consulted).
+    int has_damage = damage_x1 > damage_x0;
+    if (has_damage) {
         gfx_set_clip_rect(damage_x0, damage_y0, damage_x1 - damage_x0, damage_y1 - damage_y0);
     } else {
         gfx_clear_clip_rect();
@@ -541,8 +552,19 @@ void wm_render_frame(int mx, int my) {
 
     desktop_draw(); // background + icon grid -- replaces the old bare gfx_clear() fill, see desktop.h
 
+    // Phase 3: a window whose rect doesn't overlap this frame's damage
+    // box gets skipped entirely -- not just clipped. Its chrome and
+    // on_draw() would write nothing visible anyway (every write lands
+    // outside the active clip and gfx_put_pixel() drops it), so calling
+    // them is pure wasted CPU once the damage region is known to be
+    // precise. See docs/decisions.md for why this needed
+    // bring_to_front() (wm.c) to start damaging the previously-frontmost
+    // window's rect too, not just the newly-promoted one -- that gap
+    // was harmless before this skip existed (the call still happened,
+    // just clipped away) and became a real visible bug once it didn't.
     for (int i = 0; i < window_count; i++) {
         if (windows[i].state == WIN_MINIMIZED) continue;
+        if (has_damage && !window_intersects_damage(&windows[i])) continue;
         draw_window_chrome(&windows[i], i, i == window_count - 1);
         if (windows[i].app && windows[i].app->on_draw) windows[i].app->on_draw(&windows[i]);
         draw_resize_grip(&windows[i]); // after on_draw() -- see its own comment

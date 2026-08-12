@@ -139,14 +139,24 @@ void bring_to_front(int idx) {
     // z-order before, so it needs repainting even though its geometry
     // isn't changing (compute_window_damage()'s geometry diff,
     // wm_render.c, wouldn't notice this on its own). This alone is
-    // sufficient for the floating windows: bring_to_front() only ever
-    // promotes ONE window to the front, shifting others down a slot
-    // without changing their relative order to each OTHER, so no other
-    // window's own occlusion relationships change. The taskbar strip
-    // is a separate matter, though -- draw_taskbar()'s per-button tint
-    // depends on which window is frontmost (`i == window_count - 1`,
-    // wm_render.c), so both the newly- and previously-frontmost
-    // buttons need a repaint too, not just the floating window itself.
+    // sufficient for the floating windows' OCCLUSION: bring_to_front()
+    // only ever promotes ONE window to the front, shifting others down
+    // a slot without changing their relative order to each OTHER, so
+    // no other window's stacking relative to another changes. But the
+    // previously-frontmost window's own titlebar tint (focused blue vs.
+    // unfocused gray, draw_window_chrome()'s `focused` param) DOES
+    // change even though its geometry doesn't -- it needs its own rect
+    // damaged too, not just the newly-promoted window's. (Was missed
+    // when this file's damage reporting first shipped -- harmless back
+    // then since every window's chrome still got *drawn*, just clipped
+    // away outside the damage rect; became a real visible bug once
+    // wm_render.c's Phase 3 started skipping the draw call entirely for
+    // undamaged windows -- see docs/decisions.md.) The taskbar strip is
+    // a separate matter too -- draw_taskbar()'s per-button tint depends
+    // on which window is frontmost, so both the newly- and
+    // previously-frontmost buttons need a repaint.
+    struct window *prev_front = &windows[window_count - 1];
+    wm_damage_rect(prev_front->x, prev_front->y, prev_front->w, prev_front->h);
     wm_damage_rect(windows[idx].x, windows[idx].y, windows[idx].w, windows[idx].h);
     wm_damage_rect(0, screen_h - taskbar_h, screen_w, taskbar_h);
 

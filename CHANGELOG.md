@@ -282,6 +282,35 @@ forever.
     no stale-pixel artifact -- screenshots in
     `screenshots/2026-08-12/compositor-*.png`.
 
+### Added
+- Compositor Phase 3: skip a window's `on_draw()` (and chrome/resize-
+  grip) entirely when it doesn't intersect the frame's damage region,
+  instead of calling it and letting `gfx_set_clip_rect()` clip its
+  writes away for free. Completes the Milestone 9 dirty-rect compositor
+  plan the Phase 1+2 entry above started.
+  - `apps/wm/wm_render.c`: new `window_intersects_damage()`;
+    `wm_render_frame()`'s per-window loop now skips
+    `draw_window_chrome()`/`on_draw()`/`draw_resize_grip()` for any
+    visible window whose rect doesn't overlap the accumulated damage
+    box (only when a damage box was actually reported this frame -- no
+    damage still means "unknown, be safe," draw everyone, same
+    full-screen fallback as before).
+  - `apps/wm/wm.c`: fixed a latent bug in `bring_to_front()`'s damage
+    reporting, surfaced by actually skipping draw calls -- it only
+    damaged the newly-promoted window's rect, never the
+    previously-frontmost window's, even though that window's titlebar
+    tint (focused blue vs. unfocused gray) changes too on every z-order
+    swap. Harmless under Phase 1+2 (the call still ran, just had its
+    pixels clipped away, and they happened to land inside the damaged
+    box in every case tested so far); became a real visible stale-tint
+    bug the moment the call itself started being skipped. Fixed by
+    damaging the previously-frontmost window's rect too.
+  - Verified via QMP: opened two non-overlapping windows, swapped focus
+    between them repeatedly via taskbar clicks with both titlebar tints
+    confirmed correct after every swap; dragged, minimized, and closed
+    windows and confirmed no stale pixels or missed redraws -- see
+    `screenshots/2026-08-12/compositor-phase3-*.png`.
+
 ## [0.1.0] - 2026-08-12
 
 ### Fixed

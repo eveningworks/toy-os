@@ -1810,12 +1810,34 @@ re-reading the code:
   matching the highlight rect's own offset
   (`screenshots/2026-08-12/compositor-icon-drag-no-artifact.png`).
 
-Deliberately out of scope this round (falls back to the old
-full-screen repaint on any menu/taskbar-content-click/dialog change,
-which is safe -- never worse than before, just not optimized): precise
-damage reporting for those interactions, and skipping `on_draw()`
-entirely for windows outside the damaged region (still called for
-every visible window regardless of intersection -- only the pixel
-writes it makes are clipped away). Both are `docs/roadmap.md`'s
-Milestone 9 "Phase 3," deferred by explicit user scope choice, not an
-oversight.
+Deliberately out of scope in the Phase 1+2 round above (falls back to
+the old full-screen repaint on any menu/taskbar-content-click/dialog
+change, which is safe -- never worse than before, just not optimized):
+precise damage reporting for those interactions. That's still open.
+
+**Phase 3** (a later round): skip `draw_window_chrome()`/`on_draw()`/
+`draw_resize_grip()` entirely for a window whose rect doesn't
+intersect the frame's damage box, rather than calling them and letting
+`gfx_set_clip_rect()` drop their writes -- `wm_render.c`'s
+`window_intersects_damage()`, consulted in `wm_render_frame()`'s
+per-window loop only when a damage box was actually reported that
+frame. This is exactly the kind of change that turns a latent bug into
+a visible one: `bring_to_front()` (`apps/wm/wm.c`) had only ever
+damaged the newly-promoted window's rect, never the
+previously-frontmost window's -- but that window's titlebar tint
+(focused blue vs. unfocused gray) changes on every z-order swap too.
+Under Phase 1+2 this was silently harmless: the previously-frontmost
+window's chrome still got *called* every frame regardless, and its
+tint pixels happened to fall inside whatever damage box was active in
+every scenario tested at the time, so the missing damage report never
+actually produced a wrong pixel. Once Phase 3 started skipping the
+call itself for windows outside the damage box, that same gap became a
+real bug -- a window that had just lost focus would keep showing its
+old blue titlebar indefinitely, since nothing would ever call its
+chrome-drawing code again until some other damage happened to cover
+it. Fixed by having `bring_to_front()` damage the previously-frontmost
+window's rect alongside the newly-promoted one. Verified via QMP:
+opened two non-overlapping windows, swapped focus between them
+repeatedly via taskbar clicks, confirmed both titlebar tints updated
+correctly on every swap
+(`screenshots/2026-08-12/compositor-phase3-focus-tint-fixed.png`).

@@ -96,14 +96,16 @@ later judgment call, not mechanically tied to "20 milestones done."
 - [ ] Real wallpaper images
 - [x] ~~Desktop icon repositioning/dragging~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry
 - [ ] Per-icon context menus (Rename/Properties)
-- [ ] Full dirty-rect compositor -- partially done, see `CHANGELOG.md`'s
+- [ ] Full dirty-rect compositor -- mostly done, see `CHANGELOG.md`'s
       `[Unreleased]` entry: window move/resize/open/close/minimize/
       z-order and desktop icon drag now clip repaints to a computed
-      damage region instead of always touching the full screen; still
-      open: menu/taskbar-content-click/dialog redraws still fall back
-      to full-screen, and every visible window's `on_draw()` still runs
-      regardless of whether it intersects the damage region (only the
-      pixels it'd touch outside get clipped away, not the call itself)
+      damage region instead of always touching the full screen, and
+      (Phase 3) a window whose rect doesn't intersect the damage region
+      is skipped entirely -- its chrome/`on_draw()`/resize-grip calls
+      never run, not just have their pixels clipped away. Still open:
+      menu/taskbar-content-click/dialog redraws still fall back to a
+      full-screen repaint (imprecise but safe, never worse than
+      before)
 
 ### Milestone 10 -- Desktop productivity apps (planned v0.10.0)
 
@@ -623,14 +625,32 @@ selection-highlight (which draws 4px above the icon's own y) was left
 behind mid-drag by a damage strip anchored exactly at that y with no
 margin.
 
+Phase 3 (skipping a window's draw call entirely, not just its pixel
+writes, when it doesn't intersect the damage region) is done now too --
+see `CHANGELOG.md`'s `[Unreleased]` entry: `wm_render_frame()`
+(`apps/wm/wm_render.c`) tests each visible window's rect against the
+frame's damage box and skips `draw_window_chrome()`/`on_draw()`/
+`draw_resize_grip()` entirely for one that doesn't overlap, rather than
+calling them and letting `gfx_put_pixel()` clip their writes away.
+Doing this precisely enough to matter surfaced one real latent bug in
+Phase 1+2's own damage reporting -- `bring_to_front()` (`apps/wm/wm.c`)
+was only damaging the newly-promoted window's rect, not the
+previously-frontmost window's, even though that window's titlebar tint
+(focused blue vs. unfocused gray) changes too. Harmless before Phase 3
+(that window's chrome still got called, just clipped away outside the
+old damage box, and its tint pixels happened to be inside it anyway in
+every case tested), it became a real visible bug the moment the call
+itself started getting skipped -- fixed by damaging the
+previously-frontmost window's rect too. Verified via QMP: opened two
+non-overlapping windows, swapped focus between them via taskbar clicks
+and confirmed both titlebar tints update correctly every time; dragged,
+minimized, and closed windows and confirmed no stale pixels or missed
+redraws anywhere -- screenshots in
+`screenshots/2026-08-12/compositor-phase3-*.png`.
+
 Still open: menu/taskbar-content-click/dialog redraws still fall back
-to a full-screen repaint (no damage reported for those yet); and every
-visible window's `on_draw()` still runs every full-repaint frame
-regardless of whether it intersects the damage region -- only the
-pixels it'd draw outside get clipped away by `gfx_put_pixel()`, not the
-call itself, so the CPU cost of running an unaffected window's draw
-routine isn't eliminated yet, only the pixel-write/blit cost is. Both
-are natural next steps, not attempted this round.
+to a full-screen repaint (no damage reported for those yet) -- a
+natural next step, not attempted this round.
 
 ### Milestone 10 -- Desktop productivity apps
 
