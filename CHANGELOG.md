@@ -23,6 +23,20 @@ forever.
 ## [Unreleased]
 
 ### Changed
+- `stress <mb>` (apps/shell_sys.c) now reports live progress and
+  transfer speed instead of a flat "wrote N / M MB" line every 256MB
+  (silent for anything smaller than that) and a single total-elapsed-
+  time summary at the end. Progress lines now print roughly once per
+  second (100 PIT ticks) regardless of `<mb>`, each showing percent
+  done and a running-average MB/s for the current phase (write or
+  read) computed in tenths via integer math (`done_mb * 1000 /
+  phase_ticks`) since there's no float on this freestanding target.
+  The final summary now reports write and read speeds separately
+  (previously just total elapsed seconds) since they're consistently
+  different -- verified live in QEMU (`stress 300`): ~18 MB/s write,
+  ~27 MB/s read on this PIO/DMA ATA path. Verified end-to-end via
+  `tools/qmp_test.py`/`tools/shell_flow.py` (screenshot in
+  `screenshots/2026-08-13/`).
 - Docs catch-up after the tray/NX/shell_flow work above: `CLAUDE.md`'s
   QMP-testing gotcha list now points at `shell_flow.py` from the
   `send_text()` keyboard gotcha it directly solves, and adds a gotcha
