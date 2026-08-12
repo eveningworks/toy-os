@@ -28,9 +28,16 @@
 // -- see desktop.c's desktop_load_positions()/desktop_save_position().
 // A hand-drawn filled square with the app name's first letter stands
 // in for a real icon glyph (no image decoder yet -- see above), with
-// the label below it. Two icons dragged onto the same cell simply
-// overlap -- no swap/displace logic, a future refinement if it ever
-// matters in practice.
+// the label below it. Grid cells are a fixed size (icon box + label +
+// gap, both directions), NOT sized to fit the longest current label --
+// see desktop.c's current_grid() for why a label-driven column width
+// was tried and reverted (a single long label anywhere in the registry
+// was blowing out every column's pitch). A label longer than its cell
+// may run visually past it into a neighboring column that has an icon
+// in the same row -- an accepted quirk of freeform placement, not a
+// bug. Dropping an icon onto an already-occupied cell settles it into
+// the nearest free cell instead (desktop.c's nearest_free_cell()) --
+// icons never silently overlap.
 
 // Fills the area below the taskbar with the desktop background and
 // draws the icon grid + hover/select highlight -- called from

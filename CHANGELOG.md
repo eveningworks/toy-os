@@ -51,6 +51,33 @@ forever.
   moved icon to confirm launch still works post-drag (screenshot) --
   see `screenshots/2026-08-12/desktop-icon-drag-*.png`.
 
+### Fixed
+- Draggable desktop icons (see the Added entry above), two issues found
+  in real use right after landing:
+  - Grid columns were sized to the single longest label across the
+    WHOLE registry ("Task Manager"), so even a column with only short
+    labels next to it (e.g. "Notepad"/"About") got that label's full
+    pitch -- a much bigger gap than any actual adjacent pair of icons
+    needed. `apps/wm/desktop.c`'s `current_grid()` now uses a fixed
+    icon-size-driven column width (`DESKTOP_ICON_COL_W`, matching the
+    existing row height for square cells) instead of a label-driven
+    one -- the standard real-desktop tradeoff (fixed grid pitch
+    regardless of label length; an unusually long label may run past
+    its cell into a neighboring column's icon in the same row, an
+    accepted quirk of freeform placement, not a bug).
+  - Dropping an icon onto a cell another icon already occupied made
+    them silently overlap (the `apps/ui/ui_icon_grid.h` version 1
+    entry above called this out as a known "future refinement," but it
+    turned out to matter immediately in practice). `desktop.c` now
+    searches outward from the drop cell for the nearest free one
+    (`nearest_free_cell()`, ring by ring) instead of overlapping.
+  - Verified via QMP: dragged two icons into a second column (screenshot
+    confirms the tight grid pitch), then dropped a third icon directly
+    onto an already-occupied cell (screenshot confirms it settled into
+    an adjacent free cell instead of stacking) -- see
+    `screenshots/2026-08-12/desktop-icon-drag-tight-grid-fix.png` and
+    `desktop-icon-drag-no-stack-fix.png`.
+
 ## [0.1.0] - 2026-08-12
 
 ### Fixed

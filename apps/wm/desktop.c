@@ -10,7 +10,8 @@
 #define DESKTOP_ICON_X 16
 #define DESKTOP_ICON_START_Y 16
 #define DESKTOP_ICON_ROW_H (DESKTOP_ICON_SIZE + 28) // icon + label + gap to the next row
-#define DESKTOP_COL_GAP 24 // gap between a label's right edge and the next column
+#define DESKTOP_ICON_COL_W DESKTOP_ICON_ROW_H // square cells -- see current_grid()'s comment on why this
+                                                // is fixed rather than sized to the longest label
 #define DESKTOP_DOUBLE_CLICK_TICKS 30 // ~300ms at the PIT's 100Hz -- same order of magnitude as start_menu.c's flash
 #define DESKTOP_MAX_ICONS 32 // sanity cap on gui_app_registry_count -- registry is currently 5 entries
 #define DESKTOP_CONF_PATH "/etc/desktop.conf"
@@ -37,24 +38,31 @@ static int drag_px, drag_py;
 
 // The grid geometry, recomputed live (cheap -- a handful of registry
 // entries) rather than cached, same "derive fresh, don't persist a
-// stale answer" idiom wm_input.c's title-bar hover uses. Column width
-// is sized to the longest current label so labels never overlap their
-// neighboring column, using the live font size the same way title-bar
-// button sizing does (see wm_internal.h's START_LABEL comment).
+// stale answer" idiom wm_input.c's title-bar hover uses.
+//
+// Column width is a fixed DESKTOP_ICON_COL_W, NOT sized to the longest
+// current label -- an earlier version did that (label_w-driven cell_w),
+// but that means a single long label anywhere in the registry (e.g.
+// "Task Manager") widens EVERY column's pitch, even ones nowhere near
+// it, producing a much bigger gap than any actual pair of adjacent
+// icons needs (reported directly against a real 2-column layout: a
+// ~144px pitch driven solely by "Task Manager" sitting in column 0,
+// row 2, while columns 0/1's actual row-0 occupants -- "Notepad"/
+// "About" -- only needed ~94px). A fixed pitch is the standard
+// real-desktop tradeoff instead (Windows/GNOME/etc: a fixed icon-grid
+// cell size regardless of label length) -- a label longer than the
+// cell may run visually past its column into a neighboring one that
+// has an icon in the same row, which is an accepted quirk of freeform
+// (non-auto-arranged) icon placement, not a bug; wrapping/truncating
+// long labels would avoid it but is a separate future refinement, not
+// needed for the reported gap issue.
 static struct icon_grid current_grid(void) {
-    int cell_w = DESKTOP_ICON_SIZE;
-    for (int i = 0; i < gui_app_registry_count; i++) {
-        int label_w = (int)k_strlen(gui_app_registry[i].name) * gfx_char_w();
-        if (label_w > cell_w) cell_w = label_w;
-    }
-    cell_w += DESKTOP_COL_GAP;
-
     struct icon_grid g;
     g.origin_x = DESKTOP_ICON_X;
     g.origin_y = DESKTOP_ICON_START_Y;
-    g.cell_w = cell_w;
+    g.cell_w = DESKTOP_ICON_COL_W;
     g.cell_h = DESKTOP_ICON_ROW_H;
-    g.cols = screen_w / cell_w;
+    g.cols = screen_w / DESKTOP_ICON_COL_W;
     if (g.cols < 1) g.cols = 1;
     return g;
 }
@@ -210,6 +218,44 @@ void desktop_handle_click(int mx, int my) {
     redraw_pending = 1;
 }
 
+// Whether (col, row) already belongs to some OTHER icon (not `exclude`,
+// the one currently being dropped) -- O(gui_app_registry_count), fine
+// at this scale (a handful of icons).
+static int cell_taken(int col, int row, int exclude) {
+    for (int i = 0; i < gui_app_registry_count; i++) {
+        if (i == exclude) continue;
+        if (icon_col[i] == col && icon_row[i] == row) return 1;
+    }
+    return 0;
+}
+
+// Nearest cell to (col, row) not already occupied by another icon --
+// searches outward ring by ring (Chebyshev distance) so dropping an
+// icon onto an already-occupied cell settles it into an adjacent free
+// one instead of the two silently overlapping. Ties within a ring
+// resolve to whichever cell the scan order (top row of the ring,
+// left to right) hits first -- not a strict Euclidean-nearest
+// tiebreak, but close enough at icon-grid scale. Always terminates:
+// DESKTOP_MAX_ICONS icons can occupy at most DESKTOP_MAX_ICONS cells,
+// so a search out to that many rings is guaranteed to find a free one.
+static void nearest_free_cell(const struct icon_grid *g, int col, int row,
+                               int exclude, int *out_col, int *out_row) {
+    if (!cell_taken(col, row, exclude)) { *out_col = col; *out_row = row; return; }
+
+    for (int radius = 1; radius <= DESKTOP_MAX_ICONS; radius++) {
+        for (int dr = -radius; dr <= radius; dr++) {
+            for (int dc = -radius; dc <= radius; dc++) {
+                // Skip the interior -- already checked at a smaller radius.
+                if (dc > -radius && dc < radius && dr > -radius && dr < radius) continue;
+                int c = col + dc, r = row + dr;
+                if (c < 0 || c >= g->cols || r < 0) continue;
+                if (!cell_taken(c, r, exclude)) { *out_col = c; *out_row = r; return; }
+            }
+        }
+    }
+    *out_col = col; *out_row = row; // unreachable in practice -- see comment above
+}
+
 void desktop_update_drag(int mx, int my, uint8_t buttons) {
     if (!drag.active) return;
 
@@ -223,6 +269,7 @@ void desktop_update_drag(int mx, int my, uint8_t buttons) {
     struct icon_grid g = current_grid();
     int col, row;
     icon_drag_update(&drag, &g, mx, my, &col, &row);
+    nearest_free_cell(&g, col, row, drag.index, &col, &row);
     if (col != icon_col[drag.index] || row != icon_row[drag.index]) {
         icon_col[drag.index] = col;
         icon_row[drag.index] = row;
