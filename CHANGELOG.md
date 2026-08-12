@@ -37,6 +37,17 @@ forever.
   ~27 MB/s read on this PIO/DMA ATA path. Verified end-to-end via
   `tools/qmp_test.py`/`tools/shell_flow.py` (screenshot in
   `screenshots/2026-08-13/`).
+  - Follow-up: the 1x/sec cadence above stopped landing on clean
+    percentages once `stress` got faster (the `free_all_blocks()`
+    batching fix a few entries down took a `stress 300` run from
+    71-85s to 27s) -- e.g. jumping straight from 6% to 13%. Switched
+    to percent-based cadence instead (`stress_print_progress()` fires
+    whenever the whole-number percentage crosses a new value, not on a
+    tick interval), so it always steps cleanly 1%..100% regardless of
+    `<mb>` or disk speed, and still naturally caps at ~100 lines total
+    (no flooding risk for a huge `<mb>`). Verified live: `stress 300`
+    now prints ...69%, 70%, 71%... straight through to 100% before
+    `PASSED`.
 - Docs catch-up after the tray/NX/shell_flow work above: `CLAUDE.md`'s
   QMP-testing gotcha list now points at `shell_flow.py` from the
   `send_text()` keyboard gotcha it directly solves, and adds a gotcha
