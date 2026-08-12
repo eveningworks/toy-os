@@ -22,6 +22,25 @@ forever.
 
 ## [Unreleased]
 
+### Changed
+- Docs catch-up after the tray/NX/shell_flow work above: `CLAUDE.md`'s
+  QMP-testing gotcha list now points at `shell_flow.py` from the
+  `send_text()` keyboard gotcha it directly solves, and adds a gotcha
+  of its own -- don't `pkill`/kill-by-pattern across every
+  `qemu-system-x86_64` process, since that can't distinguish a
+  QMP-headless test instance from the user's own interactive `make
+  run` window; only kill the PID your own launch's `-pidfile` wrote.
+  `docs/roadmap.md`'s Milestone 9 entry no longer claims the tray/
+  clock tick is damage-scoped (it was, briefly, then reverted -- see
+  below) and its Milestone 2 "Details" prose (NX/W^X bullets) was
+  still describing them as not-yet-done despite both being checked off
+  further up the same file. New `docs/decisions.md` entry ("The
+  taskbar/tray falls back to full-screen repaint on purpose, not as an
+  oversight") for the two real bugs an earlier scoped-damage attempt
+  caused and why the fix was reverting the optimization, not patching
+  around it -- `docs/roadmap.md` linked to this entry before it
+  actually existed.
+
 ### Added
 - `tools/shell_flow.py`: a `gui_flow.py`-style helper for the physical
   (pre-`gui`) shell -- `ShellFlow.run_command(cmd, subdir=...)` types a

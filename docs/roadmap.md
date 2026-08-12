@@ -107,12 +107,16 @@ later judgment call, not mechanically tied to "20 milestones done."
       damage region instead of always touching the full screen, and
       (Phase 3) a window whose rect doesn't intersect the damage region
       is skipped entirely -- its chrome/`on_draw()`/resize-grip calls
-      never run, not just have their pixels clipped away. The taskbar
-      clock/tray tick is now also scoped to just the taskbar strip
-      (see the notification-area entry below), not the full screen.
-      Still open: menu/taskbar-content-click/dialog redraws still fall
-      back to a full-screen repaint (imprecise but safe, never worse
-      than before)
+      never run, not just have their pixels clipped away. Still open:
+      menu/taskbar-content-click/dialog redraws -- and the taskbar/tray
+      (including the clock tick) itself -- still fall back to a
+      full-screen repaint (imprecise but safe, never worse than
+      before). An initial attempt at scoping the tray/clock tick to
+      just the taskbar strip shipped and was reverted the same day --
+      see `docs/decisions.md`'s notification-area entry for the two
+      real bugs that caused (a poisoned first frame, and losing an
+      implicit once-a-second full-repaint safety net the mouse cursor
+      turned out to depend on)
 - [x] ~~Taskbar notification area (tray)~~ -- done, see `CHANGELOG.md`'s
       `[Unreleased]` entry: a dynamic `tray_register()`/
       `tray_set_text()`/`tray_unregister()` API (`apps/wm/wm.h`), with
@@ -387,11 +391,30 @@ has a LOAD segment with RWX permissions`, and `CFLAGS` explicitly passes
 correctness), but they're exactly the kind of baseline hardening a real OS
 has and a hobby kernel this far along is a natural point to start closing:
 
-- NX bit enforcement -- mark data/stack pages non-executable in the page
-  tables (`vmm.c`), closing the RWX gap above. Test: a deliberate
-  "jump into a data page" fault crashes cleanly instead of executing.
-- W^X on kernel + userspace mappings -- no page should ever be both
-  writable and executable at once; audit every `vmm_map_*` call site.
+- ~~NX bit enforcement~~ (userspace) -- done, see `CHANGELOG.md`'s
+  `[Unreleased]` entry: EFER.NXE set at boot, `vmm_map_user_page()`
+  now defaults to non-executable (correct for the stack/heap/
+  framebuffer/window-buffer pages that were its only pre-existing
+  callers), and `elf.c`'s loader reads each PT_LOAD segment's real
+  `p_flags` instead of mapping everything RWX -- which only means
+  anything because `userland/link.ld` now emits separate page-aligned
+  segments per permission class instead of one merged one. Verified
+  with exactly the deliberate "jump into a data page" test this bullet
+  originally called for (`userland/nx_test.c`, `run nx_test`): the
+  kernel reports a Present+User+Instruction-Fetch page fault and tears
+  the process down instead of executing the injected code. The
+  kernel's own identity map (`boot.asm`) is unchanged/still RWX --
+  that's the userspace-vs-kernel split the W^X bullet below still
+  tracks the kernel half of.
+- W^X on kernel + userspace mappings -- userspace half done alongside
+  NX above (same `vmm_map_user_page()`/`elf.c` change: a segment's
+  writable bit now comes from its real `PF_W` flag too, not a blanket
+  1). Kernel half still open -- `boot.asm`'s flat 2MiB-huge-page
+  identity map has no code/data split at all yet; would need
+  `linker.ld` to page-align `.text` away from `.rodata`/`.data`/`.bss`
+  first and `pmm.c`'s frame reservation to become section-aware, a
+  bigger and riskier change to a boot-critical path than the userspace
+  half was -- see `docs/decisions.md`'s NX entry.
 - ~~Stack canaries~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry:
   `-fstack-protector-strong` is on for both the kernel and userland now,
   with `-mstack-protector-guard=global` (a fixed constant, not random --

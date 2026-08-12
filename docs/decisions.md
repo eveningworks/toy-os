@@ -1842,6 +1842,44 @@ repeatedly via taskbar clicks, confirmed both titlebar tints updated
 correctly on every swap
 (`screenshots/2026-08-12/compositor-phase3-focus-tint-fixed.png`).
 
+## The taskbar/tray falls back to full-screen repaint on purpose, not as an oversight
+
+`apps/wm/wm_tray.c`'s `tray_damage()` deliberately does NOT call
+`wm_damage_rect()` -- it just sets `redraw_pending`, relying on
+`wm_render_frame()`'s full-screen fallback, the same as menus/dialogs
+(see the compositor entry above). This looks like it's leaving an easy
+optimization on the table (the tray API shipped the same day as
+Milestone 9's damage-region work), but an earlier version DID scope
+tray/clock updates to just the taskbar strip via `wm_damage_rect()`,
+and it caused two real bugs, both caught live on the user's own
+machine rather than in QMP testing:
+
+1. **Black desktop on GUI entry.** `tray_init()` (which registers the
+   clock as tray item 0) runs during `wm_run()`'s setup, before the
+   main loop starts. Its `wm_damage_rect()` call poisoned the very
+   first frame's "no damage reported yet -- unknown, be safe, draw
+   everything" full-screen fallback into a taskbar-only clip, so
+   `desktop_draw()`/window chrome ran but had every pixel outside that
+   strip clipped away -- the desktop was simply never drawn.
+2. **Mouse cursor drift.** The once-a-second clock tick used to report
+   no damage at all, which forced a full-screen fallback redraw every
+   second -- an implicit, never-designed-as-such safety net that kept
+   `wm_render.c`'s cursor-under-pixels snapshot (`cursor_under`, used
+   by the cheap `wm_render_cursor_move()` path) resynced against the
+   real screen. Scoping the tick's damage to just the taskbar strip
+   silently removed that safety net, and the cursor stopped tracking
+   correctly.
+
+Both are root-caused and fixed in the same CHANGELOG.md `[Unreleased]`
+entry (search "tray damage-scoping regression"). The fix was simply to
+stop scoping tray damage at all, matching every other still-unscoped
+piece of WM chrome -- not to fix the two bugs while keeping the
+optimization. Scoping the tray/taskbar precisely is still a real,
+open piece of the Milestone 9 compositor plan (`docs/roadmap.md`), but
+it needs the pre-loop-damage and once-a-second-safety-net issues above
+solved properly first, not just reverted -- a future attempt should
+budget for both, not assume the first bug found is the only one.
+
 ## NX enforcement scoped to userspace only -- the kernel's own identity map stays RWX
 
 Milestone 2's "NX bit enforcement" and "W^X on kernel + userspace

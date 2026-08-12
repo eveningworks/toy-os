@@ -448,7 +448,27 @@ The gotchas it already gets right, for when you need to know why:
   punctuation key), use `QMPSession.combo(['shift', 'bracket_left'])`
   -- QMP's `send-key` presses+releases every qcode in `keys` together,
   which is exactly a held-modifier combo; there's no separate "hold
-  key down" primitive.
+  key down" primitive. **Typing a real physical-shell command** (e.g.
+  `run nx_test`) means hitting this gotcha repeatedly in one line --
+  `tools/shell_flow.py`'s `ShellFlow.run_command()` does the
+  character-by-character `send_text()`/`send_key('spc')`/
+  `combo(['shift','minus'])` mapping for you (space, hyphen,
+  underscore, and a few other punctuation chars); use it instead of
+  hand-rolling the dance inline. Two real mistakes from doing it by
+  hand (a dropped space, a hyphen typed where an underscore was
+  needed) are what prompted building it.
+- **Don't `pkill`/kill-by-pattern across ALL `qemu-system-x86_64`
+  processes** if there's any chance the user has their own `make run`
+  QEMU open (an interactive SDL window, not a QMP-headless one) --
+  matching by process name alone can't tell the two apart, and killing
+  the user's real window is a genuinely bad surprise, not just a
+  failed test. Track and kill only the PID your own launch wrote to
+  its `-pidfile` (`cat qemu.pid; kill <pid>`), and if you ever do need
+  to sweep stale instances, `ps aux | grep qemu-system-x86_64` first
+  and eyeball which ones are actually yours (a QMP-headless launch has
+  `-qmp tcp:...` and `-vnc :N` in its command line; the user's
+  interactive one has `-display sdl` instead) rather than a blind
+  `pkill -f qemu-system-x86_64`.
 - **Rapid `send_key()` calls with little/no delay between them can
   silently drop keystrokes** at the guest keyboard-controller level
   (hit testing Notepad's filename field, build 490 -- 11 back-to-back
