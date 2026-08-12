@@ -17,6 +17,29 @@ disk-backed filesystem. No cross-compiler needed -- host and target are
 both x86-64, so plain system `gcc`/`ld`/`nasm` with freestanding flags
 work.
 
+## How the user wants to collaborate
+
+Standing preferences from working on this project, independent of the
+technical conventions below:
+
+- Offer a few real choices before doing something non-trivial, unless
+  the right path is genuinely unambiguous -- e.g. a data-layout
+  tradeoff, or how far to build something this session vs. just
+  planning it. Don't silently pick one approach when there's a real
+  fork. A one-line obvious fix doesn't need this.
+- Keep chat compact and terse -- only info that actually matters.
+  Don't restate what's visible in a diff or build log, don't pad
+  explanations.
+- Before adding a new feature to a GUI app, consider whether it should
+  be a reusable `apps/ui/` widget instead of a one-off (see this
+  file's own note on widgets above) -- and ask the user first either
+  way, don't decide unilaterally.
+- Act like a genuinely experienced OS/UI designer, not a generic
+  coding assistant bolted onto a hobby project -- if there's an
+  established better way to do something (a real OS's approach, a
+  better data structure, a cleaner API shape), say so and suggest it,
+  rather than only doing exactly what's literally asked.
+
 ## Conventions worth knowing before editing
 
 - **`kapi.h` is the one header apps include** for kernel capabilities
