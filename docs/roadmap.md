@@ -165,7 +165,7 @@ later judgment call, not mechanically tied to "20 milestones done."
 
 ### Milestone 19 -- Sound (planned v0.19.0)
 
-- [ ] PC speaker beep (simplest possible output)
+- [x] ~~PC speaker beep (simplest possible output)~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry
 - [ ] AC97 or HDA PCI audio device driver
 - [ ] A basic mixer/volume syscall surface
 - [ ] A sound-producing test app
@@ -797,10 +797,15 @@ first rough breakdown:
 New milestone, lightly scoped. No audio subsystem exists today. A first
 rough breakdown, cheapest-to-hardest:
 
-- PC speaker beep -- the simplest possible output (a single
-  square-wave-driving port, `0x61`/the PIT channel 2), good for a first
-  "does audio output work at all" proof with none of a real device's
-  complexity.
+- ~~PC speaker beep~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry:
+  `kernel/drivers/speaker.c`'s `speaker_beep(freq_hz, duration_ms)`
+  drives PIT channel 2 + port `0x61`'s gate/data bits, exposed via a
+  new `beep` shell command (a fixed 800Hz/200ms tone, "simplest
+  possible output" by explicit request, not a freq/duration-adjustable
+  command). Blocks for the tone's duration -- no scheduler-aware
+  sleep/delay primitive exists yet (same gap as Milestone 15's own
+  item), so this busy-waits on `pit_ticks()` like everything else in
+  this codebase that needs to wait a while.
 - AC97 or HDA PCI audio device driver -- QEMU emulates AC97
   (`-device AC97`), the simpler of the two to target first; HDA is
   QEMU's more modern default and closer to real hardware.

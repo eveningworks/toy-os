@@ -74,6 +74,7 @@ static const char *const HELP_LINES[] = {
     "                  diagnostic test commands)\n",
     "  clear         - clear the screen\n",
     "  about         - show OS info\n",
+    "  beep          - a short test tone via the PC speaker\n",
     "  apps          - list all registered apps\n",
     "  run <app>     - launch an app by name\n",
     "  gui           - graphics mode (Esc returns here)\n",
@@ -275,6 +276,15 @@ void cmd_about(void) {
     vga_write("Storage: ");
     vga_write(fs_is_persistent() ? "disk-backed (files persist across reboots)\n"
                                   : "RAM only (no disk found -- files won't survive a reboot)\n");
+}
+
+// Milestone 19 (docs/roadmap.md): "the simplest possible output" -- a
+// fixed tone, not a freq/duration-adjustable command, by explicit
+// request. 800Hz/200ms is just an audible, unremarkable beep, no
+// particular significance to the exact numbers.
+void cmd_beep(void) {
+    vga_write("beep!\n");
+    speaker_beep(800, 200);
 }
 
 void cmd_echo(const char *args) {

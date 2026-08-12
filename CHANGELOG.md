@@ -23,6 +23,24 @@ forever.
 ## [Unreleased]
 
 ### Added
+- PC speaker beep (Milestone 19, `docs/roadmap.md`): new
+  `kernel/drivers/speaker.c`/`speaker.h`, `speaker_beep(freq_hz,
+  duration_ms)` -- programs PIT channel 2 (ports `0x42`/`0x43`, same
+  square-wave mode 3 channel 0 already uses for the system timer) and
+  gates it through to the physical speaker via port `0x61` bits 0-1,
+  restoring the port's prior value afterward rather than just clearing
+  those bits. Exposed via a new `beep` shell command (`apps/shell_sys.c`)
+  -- a fixed 800Hz/200ms tone, "simplest possible output" by explicit
+  request rather than a freq/duration-adjustable command. Blocks for
+  the tone's duration by busy-waiting on `pit_ticks()` (10ms
+  resolution) -- no scheduler-aware sleep/delay primitive exists in
+  this kernel yet, same gap noted under Milestone 15. Verified:
+  `boot_smoke_test.py` passes, and `beep` from the shell prints "beep!"
+  and returns control to the prompt promptly (headless QEMU has no
+  audio device attached, so the tone itself can't be verified
+  programmatically -- the PIT/port-0x61 programming completing cleanly
+  and the busy-wait duration behaving as expected is what's testable
+  here).
 - Stack canaries (Milestone 2, `docs/roadmap.md`): `-fstack-protector-strong`
   is on for both the kernel (`CFLAGS`) and userland (`USERLAND_CFLAGS`)
   now, previously explicit `-fno-stack-protector` in both. Uses

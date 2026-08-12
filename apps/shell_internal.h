@@ -52,6 +52,7 @@ void cmd_time(void);
 void cmd_timezone(const char *args);
 void cmd_uptime(void);
 void cmd_about(void);
+void cmd_beep(void);
 void cmd_echo(const char *args);
 void cmd_meminfo(void);
 void cmd_df(void);

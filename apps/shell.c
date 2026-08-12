@@ -139,6 +139,8 @@ static void dispatch(char *line) {
         cmd_uptime();
     } else if (k_strcmp(cmd, "about") == 0) {
         cmd_about();
+    } else if (k_strcmp(cmd, "beep") == 0) {
+        cmd_beep();
     } else if (k_strcmp(cmd, "echo") == 0) {
         cmd_echo(args ? args : "");
     } else if (k_strcmp(cmd, "meminfo") == 0) {
