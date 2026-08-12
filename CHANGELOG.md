@@ -93,6 +93,36 @@ forever.
     `dma_transfer_with_retry()` call) recovered it that the old code
     would have silently dropped. `stress 300` still PASSED, byte-for-
     byte verified, both before and after.
+- Root-caused *why* the DMA retries above happen at all -- the user
+  noticed their host disk activity monitor spike to ~175-200 MB/s WRITE
+  right when a `stress 300` run hit the retry-exhausted case. First
+  hypothesis was QEMU's disk-cache mode (none of the Makefile's
+  `qemu-system-x86_64` targets, nor `tools/qmp_test.py`'s headless
+  launcher, passed an explicit `cache=` for `disk.img`, so QEMU
+  defaults to `writeback` -- host-page-cache-buffered, flushed back to
+  disk later in bursts on the host OS's own schedule). Tried
+  `cache=writethrough` (every write acknowledged only once it actually
+  reaches the physical disk) on both -- it did NOT fix it: the same
+  class of DMA failure still occurred, and write throughput dropped
+  ~12x (1.5 MB/s vs. ~18 MB/s, `stress 300` 265s vs. ~85s) for no
+  actual gain, so that change was reverted rather than merged. The
+  real cause: the host filesystem `disk.img` lives on is Btrfs, which
+  is copy-on-write -- every write allocates new blocks elsewhere and
+  updates Btrfs's own B-tree metadata, batching that metadata into a
+  periodic transaction commit (every ~30s by default, or once enough
+  dirty data accumulates) completely independent of QEMU's own
+  disk-cache setting, which is exactly why changing that setting had
+  no effect. Fixed at the host level (not in this repo, but noted here
+  since it explains a class of failure this repo's own retry-and-log
+  code exists to absorb): `disk.img` given Btrfs's `+C` (no-COW)
+  attribute via a copy-into-a-fresh-`chattr`ed-file-then-swap (`chattr`
+  can't be applied retroactively to an existing file's already-written
+  extents), verified byte-identical via `sha256sum` before swapping,
+  original kept as `disk.img.cow.bak`. Also widened
+  `kernel/drivers/ata.c`'s `DMA_WAIT_TICKS` 3s -> 5s as cheap extra
+  headroom against whatever comparable host-side stall shows up next
+  -- costs nothing on the success path, a genuinely dead/hung drive
+  still surfaces as a hard failure, just up to ~2s later.
 
 ### Added
 - `tools/shell_flow.py`: a `gui_flow.py`-style helper for the physical

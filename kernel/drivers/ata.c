@@ -113,11 +113,24 @@ struct prd {
 
 #define PRD_EOT 0x8000
 
-// ~3s at the 100Hz PIT tick rate -- bounded, same "never hang forever"
+// ~5s at the 100Hz PIT tick rate -- bounded, same "never hang forever"
 // philosophy as ATA_POLL_LIMIT above, in case the completion IRQ never
 // arrives (a genuine driver bug, or a hardware/emulation quirk) rather
-// than trusting it unconditionally.
-#define DMA_WAIT_TICKS 300
+// than trusting it unconditionally. Was 3s; widened after a `stress`
+// run on real hardware traced a "dma write failed after 3 attempts"
+// (dma_transfer_with_retry() below, exhausting all 3 of ITS attempts)
+// to the host's disk activity monitor showing a burst write right at
+// that moment -- root-caused to the host filesystem (Btrfs) batching
+// up copy-on-write metadata into a periodic transaction commit,
+// independent of QEMU's own disk-cache mode (tried cache=writethrough
+// first; it didn't help, since the bottleneck was never in QEMU's
+// caching layer -- see CHANGELOG.md). `disk.img` itself now carries
+// Btrfs's `+C` (no-COW) attribute as the real fix for that burst, but
+// widening this bound too costs nothing on the success path and adds
+// a little more headroom against whatever comparable host-side stall
+// shows up next -- a genuinely dead/hung drive still surfaces as a
+// hard failure, just up to ~2s later than before.
+#define DMA_WAIT_TICKS 500
 
 static int g_dma_available = 0;
 static uint16_t g_bm_io = 0;
