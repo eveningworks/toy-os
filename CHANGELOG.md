@@ -67,6 +67,24 @@ forever.
     mid-run and at completion: the bar redraws in place with no
     scrolling, and hands off cleanly to `PASSED` with no leftover
     characters.
+  - Follow-up #3: the framebuffer console's block cursor (every
+    `vga_putc()` repaints it solid at the new (row, col) after
+    drawing -- see `fb_putc()`'s own comment) was sitting visibly at
+    the end of the bar's trailing padding the whole time the loop ran,
+    since `cmd_stress()` never calls `vga_cursor_tick()` (the
+    idle-blink driver, normally serviced by `keyboard_getchar()`'s
+    wait loop) between updates -- it just stayed solid instead of
+    blinking, looking like a stray block past the bar's real content.
+    New `vga_cursor_hide()` (`vga.c`/`vga.h`) -- a public wrapper
+    around the existing (till now file-static) `cursor_hide()` --
+    lets a caller producing its own timed/looped output suppress the
+    cursor explicitly; the next real `vga_write()`/`vga_putc()` (e.g.
+    the next shell prompt) shows a fresh one again on its own, no
+    matching "show" call needed. `stress_print_progress()` calls it
+    once at the end of every redraw. No-op outside framebuffer mode,
+    matching `vga_cursor_tick()`'s existing legacy-text-mode no-op.
+    Verified live via QMP: mid-run screenshot shows no cursor block
+    anywhere near the bar.
 - Docs catch-up after the tray/NX/shell_flow work above: `CLAUDE.md`'s
   QMP-testing gotcha list now points at `shell_flow.py` from the
   `send_text()` keyboard gotcha it directly solves, and adds a gotcha

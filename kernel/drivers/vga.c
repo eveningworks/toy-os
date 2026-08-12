@@ -313,6 +313,27 @@ void vga_cursor_tick(void) {
     }
 }
 
+// Public wrapper around cursor_hide() -- every vga_putc()/fb_putc()
+// call unconditionally repaints the cursor solid at the new (row, col)
+// after drawing (see fb_putc()'s own comment), which is exactly the
+// interactive-typing behavior wanted at a shell prompt but looks like
+// a stray block hovering past a program's own output when nothing is
+// actually waiting for a keystroke -- e.g. `stress`'s progress bar,
+// which redraws in place (see stress_print_progress() in
+// apps/shell_sys.c) and never calls vga_cursor_tick() during its tight
+// write/read loop, so the cursor painted by its own trailing pad
+// spaces just sits there solid instead of blinking. A caller doing
+// exactly that can call this once after its own output to suppress it
+// -- the next real vga_write()/vga_putc() (e.g. the next prompt) shows
+// a fresh one again automatically, no explicit "show" call needed.
+// No-op outside framebuffer mode, same as vga_cursor_tick() above --
+// legacy text mode's hardware cursor isn't under this kind of
+// per-character software control.
+void vga_cursor_hide(void) {
+    if (!fb_mode) return;
+    cursor_hide();
+}
+
 void vga_set_color(enum vga_color fg, enum vga_color bg) {
     if (active_sink) {
         if (active_sink->set_color) active_sink->set_color(active_sink->ctx, fg, bg);

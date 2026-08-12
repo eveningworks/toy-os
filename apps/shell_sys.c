@@ -406,6 +406,12 @@ static void stress_print_progress(const char *verb, uint32_t done_mb,
     vga_write_dec(done_mb); vga_write("/"); vga_write_dec(total_mb); vga_write("MB ");
     vga_write_dec(speed_x10 / 10); vga_write("."); vga_write_dec(speed_x10 % 10); vga_write("MB/s");
     for (uint32_t i = 0; i < STRESS_BAR_PAD_SPACES; i++) vga_putc(' ');
+    // Suppress the cursor block vga_putc() just repainted at end-of-
+    // line -- this loop never calls vga_cursor_tick() between updates,
+    // so left alone it would sit there solid (not blinking) instead of
+    // reappearing where a real prompt cursor belongs. See
+    // vga_cursor_hide()'s own comment (vga.h) for the full reasoning.
+    vga_cursor_hide();
     if (pct >= 100) vga_putc('\n');
 }
 
