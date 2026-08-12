@@ -503,6 +503,34 @@ static void free_all_blocks(struct file *f) {
 
 static uint32_t g_io_scratch[FS_BLOCK_SIZE / 4]; // one block, reused for every partial-block copy below
 
+// One block's worth of read_range_impl()'s (old) loop body -- pulled
+// out the same way write_range_one_block() was above, so the exact
+// same per-block logic backs both the blocking path (read_range_impl()
+// below, which now just calls this in a tight loop same as before) and
+// the steppable path (tfs_read_range_step() further down, which calls
+// it once per external step() call). Neither caller's behavior changed
+// by this split. Returns 1 and advances `*total` by the chunk read on
+// success, 0 on failure (a bad block) with `*total` left unchanged.
+// Unlike write_range_one_block(), there's no "out of space" case here
+// (`block_for_index(..., 0)` never allocates), and the EOF clamp
+// (`len` never exceeding what's actually in the file) is the caller's
+// job -- see read_range_impl()/tfs_read_range_begin() below, both of
+// which do it once, up front, before any block is read.
+static int read_range_one_block(struct file *f, uint64_t offset, uint8_t *dst,
+                                 uint32_t *total, uint32_t len) {
+    uint64_t file_off = offset + *total;
+    uint32_t block_index = (uint32_t)(file_off / FS_BLOCK_SIZE);
+    uint32_t within = (uint32_t)(file_off % FS_BLOCK_SIZE);
+    uint32_t chunk = FS_BLOCK_SIZE - within;
+    if (chunk > len - *total) chunk = len - *total;
+
+    uint32_t blk = block_for_index(f, block_index, 0);
+    if (!read_block(blk, g_io_scratch)) return 0;
+    k_memcpy(dst + *total, (uint8_t *)g_io_scratch + within, chunk);
+    *total += chunk;
+    return 1;
+}
+
 static uint32_t read_range_impl(struct file *f, uint64_t offset, void *buf, uint32_t len) {
     if (offset >= f->size) return 0;
     uint64_t avail = f->size - offset;
@@ -511,16 +539,7 @@ static uint32_t read_range_impl(struct file *f, uint64_t offset, void *buf, uint
     uint32_t total = 0;
     uint8_t *dst = (uint8_t *)buf;
     while (total < len) {
-        uint64_t file_off = offset + total;
-        uint32_t block_index = (uint32_t)(file_off / FS_BLOCK_SIZE);
-        uint32_t within = (uint32_t)(file_off % FS_BLOCK_SIZE);
-        uint32_t chunk = FS_BLOCK_SIZE - within;
-        if (chunk > len - total) chunk = len - total;
-
-        uint32_t blk = block_for_index(f, block_index, 0);
-        if (!read_block(blk, g_io_scratch)) break;
-        k_memcpy(dst + total, (uint8_t *)g_io_scratch + within, chunk);
-        total += chunk;
+        if (!read_range_one_block(f, offset, dst, &total, len)) break;
     }
     return total;
 }
@@ -1133,6 +1152,81 @@ static int tfs_write_range_step(void *handle) {
     return 1 /* FS_STEP_DONE */;
 }
 
+// ---------------------------------------------------------------------
+// Steppable read (Phase 4 of the async-I/O roadmap item, see
+// docs/roadmap.md) -- fs_read_range_begin()/fs_read_range_step()'s
+// TFS2 backend. Same per-block work as read_range_impl() above (built
+// from the same read_range_one_block() helper), split the same way the
+// write side was for Phase 2. Simpler than the write struct/step pair:
+// no write batch to open/close, and nothing on disk to update on
+// success (a read never changes size/modified/the directory record).
+// First real caller: apps/notepad.c's Open... (Milestone 1 phase 4).
+struct tfs_read_step {
+    struct file *f;
+    uint8_t *dst;
+    uint64_t offset;
+    uint32_t len; // already EOF-clamped by tfs_read_range_begin(), same as read_range_impl() clamps up front
+    uint32_t total;
+};
+
+// Mirrors tfs_read_range()'s own path handling (normalize, must
+// already exist, reject a directory) just above -- unlike the write
+// side, never creates the file. Returns NULL on any of the same
+// failures fs_read_range() already reports via a 0 return: bad/
+// too-long path, the path names a directory, or the file doesn't
+// exist. `len` is clamped against the file's actual size here, once,
+// the same EOF handling read_range_impl() does up front -- so a caller
+// that steps to FS_STEP_DONE always gets exactly the same byte count
+// fs_read_range() would have returned for the same call.
+static void *tfs_read_range_begin(const char *path, uint64_t offset, void *buf, uint32_t len) {
+    char norm[FS_PATH_MAX];
+    if (!normalize(path, norm)) return NULL;
+    struct file *f = find(norm);
+    if (!f || f->type != FS_TYPE_FILE) return NULL;
+
+    if (offset >= f->size) len = 0;
+    else {
+        uint64_t avail = f->size - offset;
+        if ((uint64_t)len > avail) len = (uint32_t)avail;
+    }
+
+    struct tfs_read_step *st = kmalloc(sizeof(struct tfs_read_step));
+    if (!st) return NULL;
+    st->f = f;
+    st->dst = (uint8_t *)buf;
+    st->offset = offset;
+    st->len = len;
+    st->total = 0;
+    return st;
+}
+
+// Advances one block's worth of work (or, if `len` was already clamped
+// to 0 by begin(), resolves immediately) and returns FS_STEP_PENDING
+// (call again), FS_STEP_DONE, or FS_STEP_FAILED. `out_total` is
+// written every call with the bytes copied into `buf` so far -- see
+// fs.h's fs_read_range_step() for why the read side needs this and the
+// write side doesn't. On either terminal result the handle is already
+// freed -- don't call step() again or free anything.
+static int tfs_read_range_step(void *handle, uint32_t *out_total) {
+    struct tfs_read_step *st = (struct tfs_read_step *)handle;
+
+    if (st->total < st->len) {
+        if (!read_range_one_block(st->f, st->offset, st->dst, &st->total, st->len)) {
+            if (out_total) *out_total = st->total;
+            kfree(st);
+            return 2 /* FS_STEP_FAILED, see fs.h */;
+        }
+        if (st->total < st->len) {
+            if (out_total) *out_total = st->total;
+            return 0 /* FS_STEP_PENDING */;
+        }
+    }
+
+    if (out_total) *out_total = st->total;
+    kfree(st);
+    return 1 /* FS_STEP_DONE */;
+}
+
 static int tfs_stat(const char *path, struct fs_timestamps *out) {
     char norm[FS_PATH_MAX];
     if (!normalize(path, norm)) return 0;
@@ -1308,6 +1402,8 @@ const struct fs_ops tfs_ops = {
     .write_range = tfs_write_range,
     .write_range_begin = tfs_write_range_begin,
     .write_range_step = tfs_write_range_step,
+    .read_range_begin = tfs_read_range_begin,
+    .read_range_step = tfs_read_range_step,
     .is_dir = tfs_is_dir,
     .exists = tfs_exists,
     .list = tfs_list,

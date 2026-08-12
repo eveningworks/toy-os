@@ -128,6 +128,68 @@ forever.
   - Not done this round (Phase 4, next): generalizing to reads and the
     plain (non-GUI) shell prompt.
 
+- Steppable read API + wired it into `wm_run()`'s poll -- Phase 4 of the
+  async-I/O roadmap item (see `docs/roadmap.md`), the read counterpart
+  to Phase 2/3 above. `fs.h` gained `fs_read_range_begin()`/
+  `fs_read_range_step()`, dispatched through `fs_ops.h`/`vfs.c` to a new
+  `tfs.c` backend (`tfs_read_range_begin()`/`_step()`, built from a
+  `read_range_one_block()` helper split out of the existing blocking
+  `read_range_impl()` the same way Phase 2 split `write_range_impl()`).
+  One real difference from the write side: a read can legitimately
+  finish having copied fewer bytes than requested (the EOF clamp), so
+  `fs_read_range_step()` takes an extra `uint32_t *out_total` out-param
+  the write side doesn't need.
+  - `wm_run()` (`apps/wm/wm.c`) gained a second WM-global single slot,
+    `pending_read`/`pending_read_win` (`wm_internal.h`), polled once per
+    frame right after the existing `pending_write` poll -- same
+    bounded-per-frame-cost reasoning as Phase 3, a separate slot (not
+    shared with `pending_write`) since nothing stops a read and a write
+    being in flight for two different windows at once, even though
+    nothing exercises that yet. Two new `wm.h` entry points mirroring
+    `window_start_write()`/`window_write_pending()`: `window_start_read()`
+    and `window_read_pending()`. Completion delivers via a new
+    `gui_apps.h` callback, `on_read_complete(win, success, total)` --
+    the extra `total` argument (vs. `on_write_complete`'s bare
+    `success`) is how an app learns the actual byte count once the
+    handle's already freed. `bring_to_front()`/`close_window()` keep
+    `pending_read_win` accurate the same way they already did for
+    `pending_write_win`.
+  - Notepad's Open... (`apps/notepad.c`) is the first real caller:
+    `notepad_picker_opened()` now checks the file exists (`fs_exists()`/
+    `fs_is_dir()` -- unlike Save As..., Open never creates), clamps the
+    read length against `fs_size()` and a new `g_load_buf[SCROLLBACK_CAP]`
+    scratch buffer (mirroring Save's `g_save_buf`), then calls
+    `fs_read_range_begin()` + `window_start_read()` and shows
+    "Loading..." with the Open... button disabled until
+    `notepad_read_complete()` fires and hands the loaded bytes to the
+    existing `notepad_load_text()`. A 0-byte file short-circuits to an
+    instant load (nothing to step).
+  - `steptest <mb>`'s existing readback-verification pass (proven
+    standalone since Phase 2, `apps/shell_sys.c`) now goes through the
+    new `fs_read_range_begin()`/`_step()` instead of blocking
+    `fs_read_range()`, reporting both write- and read-step counts --
+    reused rather than adding a second diagnostic command, since it
+    already had the large multi-block file and readback loop this
+    primitive needed to prove itself against.
+  - Verified via QMP: `steptest 3` passed (768 write `step()` calls, 768
+    read `step()` calls, byte-for-byte verified) at the physical shell
+    prompt; in the GUI, seeded a 6000-byte file directly onto `disk.img`
+    with `tools/tfs2_writer.py`, opened it in Notepad via Open... (typed
+    the path into the picker's filename field, since punctuation needs
+    explicit QMP qcodes rather than `send_text()`'s letters/digits-only
+    helper), confirmed the loaded text matched byte-for-byte and the
+    status line read "Loaded.". Also confirmed the file picker's
+    existing "must already exist" validation in Open mode correctly
+    refuses a nonexistent filename (pre-existing `file_picker.c`
+    behavior, unaffected by this phase). `tools/preflight.sh` (build +
+    boot smoke test) passed throughout. Screenshots in
+    `screenshots/2026-08-12/`.
+  - Not done this round: generalizing to the plain (non-GUI) shell
+    prompt -- deferred, see `docs/roadmap.md`'s Milestone 1 detail entry
+    for why (the shell's REPL has no per-frame poll point the way
+    `wm_run()` does, so this needs its own design pass rather than a
+    direct copy of the wm_run() pattern).
+
 ## [0.0.9] - 2026-08-12
 
 ### Fixed

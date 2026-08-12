@@ -70,6 +70,17 @@ struct fs_ops {
     void *(*write_range_begin)(const char *path, uint64_t offset, const void *buf, uint32_t len);
     int (*write_range_step)(void *handle); // returns an fs_step_result (fs.h) as a plain int -- see that header for why
 
+    // Steppable read -- Phase 4 of the async-I/O roadmap item, the read
+    // counterpart to write_range_begin/_step above. Same reasoning for
+    // being required (not optional/NULLable): exactly one backend
+    // today, and it implements both. See fs.h's fs_read_range_begin()/
+    // fs_read_range_step() for the full contract every backend
+    // implementing these two must honor -- note read_range_step takes
+    // an extra `out_total` out-param write_range_step doesn't need (a
+    // read can finish short at EOF; a write can't).
+    void *(*read_range_begin)(const char *path, uint64_t offset, void *buf, uint32_t len);
+    int (*read_range_step)(void *handle, uint32_t *out_total); // returns an fs_step_result (fs.h) as a plain int
+
     int (*is_dir)(const char *path);
     int (*exists)(const char *path);
     void (*list)(const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir));

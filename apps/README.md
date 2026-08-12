@@ -123,7 +123,10 @@ tightly-coupled event loop, not multiple decoupled components (see
   (registers a `fs_write_range_begin()` handle for `wm_run()` to poll
   once per frame instead of blocking -- Milestone 1 phase 3, see
   `docs/roadmap.md`; completion is delivered via `gui_apps.h`'s
-  `on_write_complete` callback), `wm_run()`.
+  `on_write_complete` callback), `window_start_read()`/
+  `window_read_pending()` (same shape, for `fs_read_range_begin()` --
+  Milestone 1 phase 4; completion via `gui_apps.h`'s `on_read_complete`
+  callback, which also carries the actual byte count read), `wm_run()`.
 - **`wm.c`** -- shared state, the app-facing helpers behind `wm.h`, window
   lifecycle (`open_app`, `close_window`, `bring_to_front`), and
   `wm_run()`'s main loop. Start reading here.

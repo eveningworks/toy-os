@@ -77,6 +77,20 @@ enum fs_step_result fs_write_range_step(void *handle) {
     return (enum fs_step_result)g_fs->write_range_step(handle);
 }
 
+void *fs_read_range_begin(const char *path, uint64_t offset, void *buf, uint32_t len) {
+    return g_fs->read_range_begin(path, offset, buf, len);
+}
+
+enum fs_step_result fs_read_range_step(void *handle, uint32_t *out_total) {
+    // Same "defend at the dispatch boundary" reasoning as
+    // fs_write_range_step() above.
+    if (!handle) {
+        if (out_total) *out_total = 0;
+        return FS_STEP_FAILED;
+    }
+    return (enum fs_step_result)g_fs->read_range_step(handle, out_total);
+}
+
 int fs_is_dir(const char *path) {
     return g_fs->is_dir(path);
 }

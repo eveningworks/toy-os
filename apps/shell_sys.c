@@ -142,11 +142,12 @@ static const char *const TEST_HELP_LINES[] = {
     "                  reads a sector both the old blocking way and the\n",
     "                  new poll way, confirms they match, reports poll\n",
     "                  count. Default lba 0.\n",
-    "  steptest <mb> - proof of the stepped write API (Phase 2 of the\n",
-    "                  async-I/O roadmap item): writes <mb> megabytes one\n",
-    "                  block at a time via fs_write_range_begin/_step\n",
-    "                  instead of fs_write_range(), verifies byte-for-byte\n",
-    "                  against readback, reports step count. Keep small\n",
+    "  steptest <mb> - proof of the stepped write+read APIs (Phases 2\n",
+    "                  and 4 of the async-I/O roadmap item): writes <mb>\n",
+    "                  megabytes one block at a time via\n",
+    "                  fs_write_range_begin/_step, reads it back the same\n",
+    "                  way via fs_read_range_begin/_step, verifies\n",
+    "                  byte-for-byte, reports both step counts. Keep small\n",
     "                  (1-5) -- see `stress` for a throughput test.\n",
     "  debug         - list per-subsystem debug-log switches (off by\n",
     "                  default)\n",
@@ -491,15 +492,17 @@ void cmd_dmatest(const char *args) {
 
 #define STEPTEST_TEST_PATH "/.steptest_tmp"
 
-// Proves fs_write_range_begin()/fs_write_range_step() (Phase 2 of the
-// async-I/O roadmap item, kernel/drivers/tfs.c) -- writes <mb> megabytes
-// through the stepped API instead of fs_write_range(), one block at a
+// Proves fs_write_range_begin()/fs_write_range_step() (Phase 2) AND
+// fs_read_range_begin()/fs_read_range_step() (Phase 4) of the async-I/O
+// roadmap item (kernel/drivers/tfs.c) -- writes <mb> megabytes through
+// the stepped write API instead of fs_write_range(), one block at a
 // time via an explicit step loop this command drives itself (standing
-// in for what wm_run() would eventually do once per frame in Phase 3),
-// then reads it back through the ordinary fs_read_range() and verifies
-// byte-for-byte, same pattern/verification `stress` already uses.
-// Reports total step count so a genuinely multi-block write is visibly
-// proven, not just a trivial single-block case.
+// in for what wm_run() would eventually do once per frame, which Phase
+// 3 wired up for real), then reads it back through the stepped read
+// API the same way and verifies byte-for-byte, same pattern/
+// verification `stress` already uses. Reports both step counts so a
+// genuinely multi-block operation is visibly proven, not just a
+// trivial single-block case.
 void cmd_steptest(const char *args) {
     uint32_t mb;
     if (!parse_decimal(args, &mb) || mb == 0) {
@@ -544,13 +547,23 @@ void cmd_steptest(const char *args) {
         }
     }
 
-    vga_write("steptest: reading back and verifying ...\n");
+    uint32_t total_read_steps = 0;
+    vga_write("steptest: reading back via the stepped read API and verifying ...\n");
     static uint8_t readback[STRESS_CHUNK_BYTES];
     for (uint32_t c = 0; c < mb; c++) {
         uint64_t offset = (uint64_t)c * STRESS_CHUNK_BYTES;
-        uint32_t got = fs_read_range(STEPTEST_TEST_PATH, offset, readback, STRESS_CHUNK_BYTES);
-        if (got != STRESS_CHUNK_BYTES) {
-            vga_write("steptest: FAILED (short read at chunk "); vga_write_dec(c); vga_write(")\n");
+        void *step = fs_read_range_begin(STEPTEST_TEST_PATH, offset, readback, STRESS_CHUNK_BYTES);
+        if (!step) {
+            vga_write("steptest: FAILED (read begin() failed at chunk "); vga_write_dec(c); vga_write(")\n");
+            fs_delete(STEPTEST_TEST_PATH);
+            return;
+        }
+        enum fs_step_result r;
+        uint32_t got = 0;
+        while ((r = fs_read_range_step(step, &got)) == FS_STEP_PENDING) total_read_steps++;
+        total_read_steps++; // the terminal step() call itself
+        if (r != FS_STEP_DONE || got != STRESS_CHUNK_BYTES) {
+            vga_write("steptest: FAILED (short/failed read at chunk "); vga_write_dec(c); vga_write(")\n");
             fs_delete(STEPTEST_TEST_PATH);
             return;
         }
@@ -573,7 +586,8 @@ void cmd_steptest(const char *args) {
 
     vga_write("steptest: PASSED -- "); vga_write_dec(mb);
     vga_write(" MB written via "); vga_write_dec(total_steps);
-    vga_write(" step() calls, read back and verified byte-for-byte\n");
+    vga_write(" step() calls, read back via "); vga_write_dec(total_read_steps);
+    vga_write(" step() calls and verified byte-for-byte\n");
 }
 
 // dmesg scratch state -- klog_dump() (klog.h) takes a plain

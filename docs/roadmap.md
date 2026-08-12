@@ -31,7 +31,8 @@ later judgment call, not mechanically tied to "20 milestones done."
 - [x] Non-blocking DMA start/poll primitive
 - [x] Steppable write API
 - [x] Wire it up: `wm_run()` polls a pending write (Notepad Save first)
-- [ ] Generalize to reads + the plain shell prompt
+- [x] Generalize to reads (Notepad Open); the plain shell prompt is
+      still open, see Details below
 - [ ] Async process spawning for the GUI Terminal
 
 ### Milestone 2 -- Memory protection hardening (planned v0.2.0)
@@ -232,8 +233,23 @@ testable:
    confirming Save -- caught "Saving..." with the Save button disabled, and
    the desktop successfully switching focus to the other window while the
    write was still in flight, proving it didn't freeze.
-4. Generalize to reads and to the plain (non-GUI) shell prompt; consider
-   sharing plumbing with the Terminal async-spawn item below.
+4. [x] ~~Generalize to reads~~ -- done (see `CHANGELOG.md`'s
+   `[Unreleased]` entry): `fs_read_range_begin()`/`fs_read_range_step()`
+   (`fs.h`, dispatched through `fs_ops.h`/`vfs.c` to `tfs.c`'s
+   `tfs_read_range_begin()`/`_step()`), built the same way Phase 2 built
+   the write side, plus a second `wm_run()` poll slot
+   (`pending_read`/`pending_read_win`) mirroring Phase 3's write slot.
+   Notepad's Open... is the first real caller. Still open: the plain
+   (non-GUI) shell prompt. Deliberately not attempted alongside the read
+   API itself -- `wm_run()` has a natural per-frame poll point to hang a
+   pending op off of (the `for(;;) { hlt; ...; }` loop Phase 3 already
+   uses); `shell_main()` (`apps/shell.c`) is a REPL with no equivalent
+   tick between "block on keyboard input" and "dispatch one command" --
+   making it non-blocking needs its own design pass (a poll point
+   somewhere in that loop), not a direct copy of the `wm_run()` pattern.
+   Consider sharing plumbing with the Terminal async-spawn item below
+   once that's tackled, since both need a way to keep a kernel-space
+   event loop responsive around a long-running operation.
 
 Separately, async/continuously-armed process spawning for the GUI Terminal,
 so `run`/`ls`/any future `/bin` binary can execute from inside

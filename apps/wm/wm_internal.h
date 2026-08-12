@@ -77,6 +77,22 @@ extern int drag_off_x, drag_off_y;
 extern void *pending_write;
 extern int pending_write_win;
 
+// Handle from fs.h's fs_read_range_begin() for a steppable read
+// currently in flight, or NULL if none -- mirrors pending_write/
+// pending_write_win above exactly (Milestone 1 phase 4,
+// docs/roadmap.md): a second WM-global single slot, polled once per
+// frame via fs_read_range_step() in wm_run(), maintained across
+// bring_to_front()/close_window() reordering the same way. A separate
+// slot from pending_write, not a shared one, since a read and a write
+// could in principle be in flight at the same time for two different
+// windows -- nothing does that yet, but there's no reason to force
+// "only one steppable I/O op at all" when the underlying fs.h API
+// doesn't require it either. pending_read_win is the index into
+// windows[] the read belongs to, used to look up which app's
+// on_read_complete callback to invoke; -1 when pending_read is NULL.
+extern void *pending_read;
+extern int pending_read_win;
+
 extern int resizing; // index into windows[], or -1 if not resizing
 extern int resize_right, resize_bottom;
 extern int resize_start_mx, resize_start_my;

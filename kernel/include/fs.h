@@ -149,6 +149,37 @@ void *fs_write_range_begin(const char *path, uint64_t offset, const void *buf, u
 enum fs_step_result { FS_STEP_PENDING = 0, FS_STEP_DONE = 1, FS_STEP_FAILED = 2 };
 enum fs_step_result fs_write_range_step(void *handle);
 
+// Steppable read -- Phase 4 of the async-I/O roadmap item (see
+// docs/roadmap.md), mirroring the steppable write pair above exactly:
+// same opaque-handle/begin-then-step shape, same one-block-per-step
+// contract, same "handle already cleaned up on any terminal result"
+// rule. fs_read_range()/fs_read() are unchanged, still fully blocking.
+//
+// fs_read_range_begin() starts the operation and returns an opaque
+// handle, or NULL on any of the same setup failures fs_read_range()
+// silently treats as "0 bytes" (bad path, a directory, `path` doesn't
+// exist) -- on NULL, nothing is pending, don't call step(). `buf` must
+// stay valid and unchanged by the caller until stepping reaches a
+// terminal result. Like fs_read_range(), reading past end-of-file is
+// clamped, not an error -- begin() clamps `len` against the file's
+// actual size once, up front, exactly like fs_read_range() does.
+//
+// fs_read_range_step() advances one block's worth of work and returns
+// FS_STEP_PENDING (call again), FS_STEP_DONE, or FS_STEP_FAILED. On
+// either terminal result the handle is already cleaned up internally --
+// don't call step() again or free anything. Unlike the write side,
+// step() also takes `out_total`: written on every call (including
+// FS_STEP_PENDING, so a caller could show progress), holding the
+// number of bytes copied into `buf` so far -- definitive once step()
+// returns FS_STEP_DONE, and the same number fs_read_range() itself
+// would have returned for the same call. Needed because a read (unlike
+// a write) can legitimately finish having copied fewer bytes than
+// requested (the EOF clamp above) -- there's no other way for the
+// caller to learn that count once the handle is gone. May be NULL if
+// the caller doesn't care.
+void *fs_read_range_begin(const char *path, uint64_t offset, void *buf, uint32_t len);
+enum fs_step_result fs_read_range_step(void *handle, uint32_t *out_total);
+
 // True if `path` names an existing directory, or is "/" (the implicit
 // root, which always "exists" without needing its own entry).
 int fs_is_dir(const char *path);

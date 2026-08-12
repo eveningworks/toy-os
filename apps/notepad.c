@@ -14,13 +14,13 @@
 // the user's own choice when this was built (see docs/decisions.md).
 // notepad_picker_save_choice()/notepad_picker_open_choice() below are
 // the callbacks file_picker_open_with() invokes once a path is chosen.
-// Load still calls fs_read(), unchanged from the old inline-field
-// version, just moved into notepad_picker_opened(). Save no longer
-// calls fs_write() directly -- notepad_picker_saved() now writes
-// steppably via wm.h's window_start_write(), polled once per frame by
-// wm_run() instead of blocking the whole desktop (Milestone 1 phase 3,
-// docs/roadmap.md); see notepad_picker_saved()/notepad_write_complete()
-// below.
+// Neither Save nor Load calls fs_write()/fs_read() directly anymore --
+// notepad_picker_saved()/notepad_picker_opened() write/read steppably
+// via wm.h's window_start_write()/window_start_read(), polled once per
+// frame by wm_run() instead of blocking the whole desktop (Milestone 1
+// phases 3-4, docs/roadmap.md); see notepad_picker_saved()/
+// notepad_write_complete() and notepad_picker_opened()/
+// notepad_read_complete() below.
 //
 // Save/Load moved from bare widget_button()/widget_hit() calls to a
 // real struct ui_button_group (apps/ui/ui_button_group.h) -- the same
@@ -120,6 +120,8 @@ struct notepad_state {
     int dragging_selection;
     int saving; // 1 while a steppable write started via wm.h's window_start_write() is in flight -- see notepad_picker_saved()/notepad_write_complete() (Milestone 1 phase 3, docs/roadmap.md)
     char pending_save_path[NOTEPAD_NAME_MAX]; // path passed to fs_write_range_begin() -- stashed here because file_picker's `path` argument isn't guaranteed to outlive notepad_picker_saved()'s single call, but notepad_write_complete() (running frames later) still needs it for last_name
+    int loading; // 1 while a steppable read started via wm.h's window_start_read() is in flight -- see notepad_picker_opened()/notepad_read_complete() (Milestone 1 phase 4, docs/roadmap.md)
+    char pending_load_path[NOTEPAD_NAME_MAX]; // same stashing reason as pending_save_path above, for Open... instead of Save As...
 };
 static struct notepad_state g_notepad;
 
@@ -142,6 +144,12 @@ static struct notepad_state g_notepad;
 // needs a `struct window *` to register the pending write against.
 static struct window *g_notepad_save_win;
 
+// Same reasoning as g_notepad_save_win above, for Open... instead of
+// Save As... -- captured fresh in notepad_click() when Open... is
+// pressed, needed by notepad_picker_opened() to call wm.h's
+// window_start_read().
+static struct window *g_notepad_open_win;
+
 // Scratch buffer for notepad_serialize() (see notepad_click()'s Save
 // handler) -- static, not a stack-local, deliberately: the WM runs on
 // the kernel's own boot stack (16KB total, see boot.asm), not a process
@@ -156,6 +164,15 @@ static struct window *g_notepad_save_win;
 // terminal result (the Save As... button is disabled meanwhile, see
 // notepad_picker_saved()).
 static char g_save_buf[SCROLLBACK_CAP];
+
+// Scratch buffer for notepad_picker_opened()/notepad_read_complete()'s
+// steppable Open... (Milestone 1 phase 4, docs/roadmap.md) -- same
+// static-not-stack reasoning as g_save_buf above. Must stay unchanged
+// for the whole duration of a load, same as g_save_buf must during a
+// save: safe because nothing re-reads into it until the previous read
+// reaches a terminal result (the Open... button is disabled meanwhile,
+// see notepad_picker_opened()).
+static char g_load_buf[SCROLLBACK_CAP];
 
 // Content-area size for the current font -- see gui_apps.h's
 // default_size. Width is whichever of "toolbar + status text" or
@@ -182,6 +199,8 @@ void notepad_open(struct window *win) {
     g_notepad.dragging_selection = 0;
     g_notepad.saving = 0;
     g_notepad.pending_save_path[0] = '\0';
+    g_notepad.loading = 0;
+    g_notepad.pending_load_path[0] = '\0';
     window_set_state(win, &g_notepad);
 }
 
@@ -350,9 +369,10 @@ void notepad_key(struct window *win, int key) {
     }
 
     // Typing invalidates any stale "Saved."/"Loaded." -- but not
-    // "Saving..." itself: a save in progress keeps showing that (it's
-    // still true) rather than going blank until the write completes.
-    if (!st->saving) st->status[0] = '\0';
+    // "Saving..."/"Loading..." itself: an operation in progress keeps
+    // showing that (it's still true) rather than going blank until it
+    // completes.
+    if (!st->saving && !st->loading) st->status[0] = '\0';
     window_invalidate(win);
 }
 
@@ -451,16 +471,69 @@ void notepad_write_complete(struct window *win, int success) {
     window_invalidate(win);
 }
 
+// Open... -- Milestone 1 phase 4 (docs/roadmap.md): reads steppably via
+// wm.h's window_start_read() instead of blocking on fs_read(), same
+// reasoning as notepad_picker_saved()'s Save As... below. The Open...
+// button is disabled the whole time (see notepad_read_complete()
+// re-enabling it) so this can't be re-entered -- guarded here too
+// (window_read_pending()) as cheap insurance, same spirit as
+// notepad_picker_saved()'s own guard.
 static void notepad_picker_opened(const char *path) {
-    uint32_t size = 0;
-    const char *data = fs_read(path, &size);
-    if (data) {
-        notepad_load_text(&g_notepad.tb, data, size);
+    if (window_read_pending()) {
+        k_strcpy(g_notepad.status, "Load failed.");
+        return;
+    }
+    if (!fs_exists(path) || fs_is_dir(path)) {
+        k_strcpy(g_notepad.status, "Load failed.");
+        return;
+    }
+
+    uint64_t size64 = fs_size(path);
+    uint32_t size = (size64 > sizeof(g_load_buf)) ? (uint32_t)sizeof(g_load_buf) : (uint32_t)size64;
+
+    if (size == 0) {
+        // Nothing to step -- an empty file is a valid, instant load,
+        // same as fs_read() handing back a 0-byte buffer used to be.
+        notepad_load_text(&g_notepad.tb, g_load_buf, 0);
         k_strcpy(g_notepad.status, "Loaded.");
         k_strcpy(g_notepad.last_name, path);
-    } else {
-        k_strcpy(g_notepad.status, "Load failed.");
+        return;
     }
+
+    void *h = fs_read_range_begin(path, 0, g_load_buf, size);
+    if (!h || !window_start_read(g_notepad_open_win, h)) {
+        k_strcpy(g_notepad.status, "Load failed.");
+        return;
+    }
+
+    k_strcpy(g_notepad.pending_load_path, path);
+    g_notepad.loading = 1;
+    ui_button_set_disabled(&g_notepad.buttons[0], 1);
+    k_strcpy(g_notepad.status, "Loading...");
+}
+
+// wm.h's window_start_read() callback (via gui_apps.h's
+// on_read_complete) -- fires once wm_run()'s per-frame poll of the
+// read started above reaches FS_STEP_DONE or FS_STEP_FAILED. `total`
+// is how many bytes actually landed in g_load_buf -- see
+// fs.h's fs_read_range_step() for why this can't just be `size` from
+// notepad_picker_opened() above (an implicit contract here: nothing
+// changes the target file's size between begin() and this callback, so
+// in practice `total` always equals that `size`, but reading it back
+// from the callback rather than re-deriving it is the honest contract
+// fs_read_range_step() actually offers).
+void notepad_read_complete(struct window *win, int success, uint32_t total) {
+    struct notepad_state *st = (struct notepad_state *)window_get_state(win);
+    st->loading = 0;
+    ui_button_set_disabled(&st->buttons[0], 0);
+    if (success) {
+        notepad_load_text(&st->tb, g_load_buf, total);
+        k_strcpy(st->status, "Loaded.");
+        k_strcpy(st->last_name, st->pending_load_path);
+    } else {
+        k_strcpy(st->status, "Load failed.");
+    }
+    window_invalidate(win);
 }
 
 // Toolbar (Open.../Save As...) clicks, and scrollbar track clicks (page
@@ -474,6 +547,7 @@ void notepad_click(struct window *win, int cx, int cy) {
         notepad_layout_buttons(st);
         int code = ui_button_group_click(&st->group, cx, cy);
         if (code == BTN_OPEN_CODE) {
+            g_notepad_open_win = win; // fresh, live pointer -- see its own comment on why this can't be cached earlier
             file_picker_open_with(FILE_PICKER_OPEN, "Open", "/", "",
                                    notepad_picker_opened, notepad_picker_cancelled);
         } else if (code == BTN_SAVEAS_CODE) {

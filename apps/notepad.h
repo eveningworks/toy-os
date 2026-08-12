@@ -1,6 +1,8 @@
 #ifndef NOTEPAD_H
 #define NOTEPAD_H
 
+#include <stdint.h> // uint32_t, for notepad_read_complete() below
+
 struct window;
 
 // Computes Notepad's content-area size in pixels from the current font
@@ -37,5 +39,10 @@ void notepad_wheel(struct window *win, int delta);
 // see gui_apps.h's on_write_complete contract and wm.h's
 // window_start_write().
 void notepad_write_complete(struct window *win, int success);
+
+// Called once Open...'s steppable read reaches a terminal result --
+// see gui_apps.h's on_read_complete contract and wm.h's
+// window_start_read().
+void notepad_read_complete(struct window *win, int success, uint32_t total);
 
 #endif

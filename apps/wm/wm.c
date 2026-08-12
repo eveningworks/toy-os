@@ -60,6 +60,9 @@ int content_pressed = -1; // index into windows[], or -1 -- see wm_internal.h
 void *pending_write = 0; // handle from fs_write_range_begin(), or NULL -- see wm_internal.h
 int pending_write_win = -1; // index into windows[] the write belongs to, or -1
 
+void *pending_read = 0; // handle from fs_read_range_begin(), or NULL -- see wm_internal.h
+int pending_read_win = -1; // index into windows[] the read belongs to, or -1
+
 int redraw_pending = 1;
 
 // ---- app-facing helpers (declared in wm.h) ----
@@ -89,6 +92,18 @@ int window_start_write(struct window *win, void *write_handle) {
     return 1;
 }
 
+int window_read_pending(void) { return pending_read != 0; }
+
+int window_start_read(struct window *win, void *read_handle) {
+    if (pending_read) return 0; // a read's already in flight -- WM-global single slot, see wm_internal.h
+    pending_read = read_handle;
+    pending_read_win = -1;
+    for (int i = 0; i < window_count; i++) {
+        if (&windows[i] == win) { pending_read_win = i; break; }
+    }
+    return 1;
+}
+
 // --- read-only window introspection (see wm.h's declarations) ---
 
 int wm_window_count(void) { return window_count; }
@@ -114,6 +129,11 @@ void bring_to_front(int idx) {
     // exactly here).
     if (pending_write_win == idx) pending_write_win = window_count - 1;
     else if (pending_write_win > idx) pending_write_win--;
+
+    // Same bookkeeping for a pending read -- see wm_internal.h's
+    // pending_read.
+    if (pending_read_win == idx) pending_read_win = window_count - 1;
+    else if (pending_read_win > idx) pending_read_win--;
 }
 
 static int find_window_for_app(const struct gui_app *app) {
@@ -178,6 +198,9 @@ void close_window(int idx) {
     // second concurrent write. See wm.h's window_write_pending().
     if (idx == pending_write_win) return;
 
+    // Same refusal for a read in flight -- see wm.h's window_read_pending().
+    if (idx == pending_read_win) return;
+
     // Give the app a chance to release whatever it allocated for this
     // window (multi-instance apps kmalloc/kzalloc their own per-window
     // state -- see gui_apps.h's `multi_instance` flag and
@@ -199,6 +222,7 @@ void close_window(int idx) {
     // A different window closing shifts every later slot down by one --
     // keep pending_write_win pointing at the same window if it moved.
     if (pending_write_win > idx) pending_write_win--;
+    if (pending_read_win > idx) pending_read_win--;
 }
 
 // ---- main loop ----
@@ -245,6 +269,8 @@ void wm_run(void) {
     wm_exit_requested = 0;
     pending_write = 0;
     pending_write_win = -1;
+    pending_read = 0;
+    pending_read_win = -1;
 
     int mx, my;
     uint8_t buttons;
@@ -282,8 +308,9 @@ void wm_run(void) {
         // tick after it finishes) rather than abandoning it mid-write:
         // pending_write's handle owns kernel heap state (see tfs.c's
         // struct tfs_write_step) that only gets freed on a terminal
-        // fs_write_range_step() result.
-        if (wm_exit_requested && !pending_write) {
+        // fs_write_range_step() result. Same reasoning for pending_read
+        // (struct tfs_read_step).
+        if (wm_exit_requested && !pending_write && !pending_read) {
             klog_write("wm: exiting GUI mode, returning to shell\n");
             gfx_set_double_buffered(0); // console draws straight to screen
             return;
@@ -312,6 +339,30 @@ void wm_run(void) {
                 pending_write_win = -1;
                 if (finished_win && app && app->on_write_complete) {
                     app->on_write_complete((struct window *)finished_win, r == FS_STEP_DONE);
+                }
+                redraw_pending = 1;
+            }
+        }
+
+        // Same per-frame polling for a pending read (Milestone 1 phase
+        // 4, docs/roadmap.md) -- mirrors the pending_write block just
+        // above exactly, including the pending_read_win accuracy
+        // guarantee from bring_to_front()/close_window(). The extra
+        // `total` out-param (fs_read_range_step()'s only difference
+        // from fs_write_range_step()) is handed to on_read_complete
+        // alongside success/failure so the app knows how many bytes it
+        // actually got.
+        if (pending_read) {
+            uint32_t total = 0;
+            enum fs_step_result r = fs_read_range_step(pending_read, &total);
+            if (r != FS_STEP_PENDING) {
+                void *finished_win = (pending_read_win >= 0 && pending_read_win < window_count)
+                                          ? &windows[pending_read_win] : 0;
+                const struct gui_app *app = finished_win ? windows[pending_read_win].app : 0;
+                pending_read = 0;
+                pending_read_win = -1;
+                if (finished_win && app && app->on_read_complete) {
+                    app->on_read_complete((struct window *)finished_win, r == FS_STEP_DONE, total);
                 }
                 redraw_pending = 1;
             }

@@ -79,6 +79,22 @@ int window_start_write(struct window *win, void *write_handle);
 // alone.
 int window_write_pending(void);
 
+// Registers a steppable read (a handle from fs.h's fs_read_range_begin())
+// as the window manager's pending read -- wm_run()'s main loop polls it
+// once per frame via fs_read_range_step() instead of blocking, mirroring
+// window_start_write()/window_write_pending() above exactly (Milestone 1
+// phase 4, see docs/roadmap.md). Returns 1 if accepted, 0 if a read is
+// already pending (a separate WM-global single slot from the write one --
+// see wm_internal.h's pending_read). `win` is notified of the outcome via
+// gui_apps.h's on_read_complete callback, called once the read reaches
+// FS_STEP_DONE or FS_STEP_FAILED, with the final byte count -- the caller
+// does NOT need to (and must not) call fs_read_range_step() itself.
+int window_start_read(struct window *win, void *read_handle);
+
+// True while any window has a read in progress via window_start_read()
+// -- same purpose as window_write_pending() above, for the read slot.
+int window_read_pending(void);
+
 // The window manager's entry point -- this is what gui_main() calls.
 // Runs until the user presses Esc, then returns.
 void wm_run(void);

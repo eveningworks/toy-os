@@ -1,6 +1,8 @@
 #ifndef GUI_APPS_H
 #define GUI_APPS_H
 
+#include <stdint.h> // uint32_t, for on_read_complete's byte count below
+
 struct window; // full definition in wm.h
 
 // A GUI app is launched into its own window by the window manager (see
@@ -136,6 +138,18 @@ struct gui_app {
     // window_start_write(). First (and currently only) user:
     // apps/notepad.c's Save As... (Milestone 1 phase 3, docs/roadmap.md).
     void (*on_write_complete)(struct window *win, int success);
+
+    // Called once a read started via wm.h's window_start_read() reaches
+    // a terminal result -- `success` is 1 for FS_STEP_DONE, 0 for
+    // FS_STEP_FAILED (fs.h), `total` is the number of bytes actually
+    // copied into the buffer passed to fs_read_range_begin() (may be
+    // less than requested, at/near end-of-file -- see fs.h's
+    // fs_read_range_step()). Same "WM polls purely as a scheduling
+    // mechanism, this is where the app updates its UI" contract as
+    // on_write_complete above. May be NULL for any app that never calls
+    // window_start_read(). First (and currently only) user:
+    // apps/notepad.c's Open... (Milestone 1 phase 4, docs/roadmap.md).
+    void (*on_read_complete)(struct window *win, int success, uint32_t total);
 
     // 1 (the common case) if the user can drag-resize and maximize this
     // app's window; 0 to fix it at its default_size() forever -- no
