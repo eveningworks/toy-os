@@ -123,6 +123,29 @@ forever.
   headroom against whatever comparable host-side stall shows up next
   -- costs nothing on the success path, a genuinely dead/hung drive
   still surfaces as a hard failure, just up to ~2s later.
+- `tfs.c`'s `free_all_blocks()` (backing both `fs_delete()` and
+  overwriting an existing file via `fs_write()`) called `free_block()`
+  -> `persist_bitmap_bit()` once per freed block with no batching --
+  unlike the write path (`write_range_impl()`), which wraps its own
+  block allocation in `write_batch_begin()/write_batch_end()` so all
+  the bitmap sectors a run of allocations touches get flushed once
+  each instead of once per block (see the TFS2/ATA-throughput entry in
+  this file's history). Found live: the user noticed `stress <mb>`
+  visibly pausing between "reading back and verifying ... 100%" and
+  the final `PASSED` line, correctly guessing it was the temp file's
+  cleanup delete. It was -- a 300MB `stress` run's ~76,800 freed 4KB
+  blocks cover only ~19 distinct bitmap sectors, but unbatched, each
+  of those sectors got rewritten to disk once per block landing in it
+  (thousands of redundant synchronous ATA writes to the same handful
+  of sectors) instead of once, total. Fixed by wrapping both
+  `free_all_blocks()` call sites (`tfs_delete()`, and `tfs_write()`'s
+  reclaim-before-overwrite path) in `write_batch_begin()/end()`,
+  matching the write path's existing pattern -- nestable, so this is
+  safe even where `write_range_impl()` right after it opens its own
+  batch too. Verified live via QMP: `stress 300`'s total time dropped
+  from 71-85s (write+read math alone only needs ~27s at the
+  18/27 MB/s measured that run) to `27s` flat -- the delete phase's
+  contribution went from 45-60+ seconds to effectively zero.
 
 ### Added
 - `tools/shell_flow.py`: a `gui_flow.py`-style helper for the physical

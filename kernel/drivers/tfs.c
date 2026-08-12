@@ -1002,7 +1002,16 @@ static int tfs_write(const char *path, const char *data, int append) {
     if (append) {
         start = f->size;
     } else {
+        // write_batch_begin()/end(): free_all_blocks() calls persist_
+        // bitmap_bit() once per freed block -- unbatched, that's one
+        // synchronous ATA write per block, rewriting the same handful
+        // of bitmap sectors over and over (see write_batch_end()'s own
+        // comment for why this coalescing exists at all). Nestable, so
+        // this is safe even though write_range_impl() below opens its
+        // own batch too.
+        write_batch_begin();
         free_all_blocks(f); // reclaim whatever the old content used before writing fresh
+        write_batch_end();
         f->size = 0;
         start = 0;
     }
@@ -1029,7 +1038,17 @@ static int tfs_delete(const char *path) {
             if (k_strncmp(files[i].path, norm, plen) == 0 && files[i].path[plen] == '/') return 0;
         }
     } else {
+        // See tfs_write()'s matching comment above -- unbatched,
+        // free_all_blocks() is one synchronous ATA write per freed
+        // block instead of one per distinct dirty bitmap sector.
+        // Found live: `stress <mb>`'s own cleanup delete of its test
+        // file (tens of thousands of blocks for a multi-hundred-MB
+        // run) made "reading back and verifying" reach 100% and then
+        // visibly sit there before the final PASSED line -- this batch
+        // is what that pause was actually spent on.
+        write_batch_begin();
         free_all_blocks(f); // reclaim the file's data blocks -- previously a no-op since data was inline
+        write_batch_end();
     }
 
     f->used = 0;
