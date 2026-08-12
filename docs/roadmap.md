@@ -5,16 +5,25 @@ Forward-looking "not built yet" items only -- what's already built lives in
 toy-os can do today), not here. See `docs/decisions.md` for *why* existing
 things are built the way they are. This list is always subject to change --
 milestones get reordered/reshaped as work actually happens, they're a plan,
-not a promise.
+not a promise, and the planned versions below are the same kind of estimate.
 
 Style note (inspired by [brutal-org/brutal](https://github.com/brutal-org/brutal)'s
 roadmap): each milestone is just checkboxes and a few words. Full reasoning,
 phased test plans, and cross-references for every item are in **Details**
 at the bottom of this file, organized the same way.
 
+**Versioning:** `VERSION` is `0.1.0-dev` right now (see `tools/set_version.sh`
+and `docs/decisions.md` for the semver+`-dev`-suffix mechanics). Milestone 1
+below is what that `0.1.0-dev` becomes `0.1.0` for; each milestone after
+that is pencilled in as the next minor version. Purely a planning aid, not
+a commitment -- a milestone can slip, merge with its neighbor, or get
+reordered, and its planned version moves with it. Whether/when this project
+ever calls something `1.0.0` is a separate, later judgment call, not
+mechanically tied to "20 milestones done."
+
 ## Milestones
 
-### Milestone 1 -- Async I/O to the desktop
+### Milestone 1 -- Async I/O to the desktop (planned v0.1.0)
 
 - [x] Non-blocking DMA start/poll primitive
 - [x] Steppable write API
@@ -22,14 +31,21 @@ at the bottom of this file, organized the same way.
 - [ ] Generalize to reads + the plain shell prompt
 - [ ] Async process spawning for the GUI Terminal
 
-### Milestone 2 -- Storage hardening
+### Milestone 2 -- Memory protection hardening (planned v0.2.0)
+
+- [ ] NX bit enforcement (non-executable data pages)
+- [ ] W^X on kernel + userspace mappings
+- [ ] Stack canaries (`-fstack-protector`)
+- [ ] Kernel ASLR (randomize load base)
+
+### Milestone 3 -- Storage hardening (planned v0.3.0)
 
 - [ ] Full multi-GB stress run (`stress 4200` / `stress 8192`)
 - [ ] Coalesce contiguous block writes into fewer ATA commands
 - [ ] Journal-batched flush
 - [ ] GPT/MBR partition table parsing
 
-### Milestone 3 -- AHCI/SATA driver
+### Milestone 4 -- AHCI/SATA driver (planned v0.4.0)
 
 - [ ] PCI discovery + ABAR mapping
 - [ ] Port detection
@@ -40,7 +56,35 @@ at the bottom of this file, organized the same way.
 - [ ] Multi-sector transfers (PRDT scatter-gather)
 - [ ] Backend selection + fallback
 
-### Milestone 4 -- Desktop visual polish
+### Milestone 5 -- `fork()`/`exec()`-style process model (planned v0.5.0)
+
+- [ ] `fork()`-style address-space duplication (copy-on-write)
+- [ ] `exec()`-style in-place process replacement
+- [ ] `wait()`/exit-status reporting for a parent process
+- [ ] Real PID allocation beyond the scheduler's fixed 4-slot table
+
+### Milestone 6 -- Signals & process control (planned v0.6.0)
+
+- [ ] Basic signal delivery (kill-equivalent)
+- [ ] Default dispositions (terminate, ignore)
+- [ ] A `kill`/`ps`-style shell command
+- [ ] Exit-status visible to a waiting parent
+
+### Milestone 7 -- Shell pipes & job control (planned v0.7.0)
+
+- [ ] `|` pipes between two commands
+- [ ] `>`/`<`/`>>` redirection
+- [ ] Background jobs (`&`)
+- [ ] `fg`/`bg`/`jobs`
+
+### Milestone 8 -- Multi-user & file permissions (planned v0.8.0)
+
+- [ ] A minimal user/group model
+- [ ] Per-file owner + permission bits on TFS2
+- [ ] Permission checks in `fs_ops` calls
+- [ ] A login prompt (even single-user-by-default)
+
+### Milestone 9 -- Desktop visual polish (planned v0.9.0)
 
 - [ ] Basic image decoder (JPEG or similar)
 - [ ] Real wallpaper images
@@ -48,27 +92,34 @@ at the bottom of this file, organized the same way.
 - [ ] Per-icon context menus (Rename/Properties)
 - [ ] Full dirty-rect compositor
 
-### Milestone 5 -- Desktop productivity apps
+### Milestone 10 -- Desktop productivity apps (planned v0.10.0)
 
 - [ ] Real filesystem API surface (list/stat/create/delete)
 - [ ] File manager app
 - [ ] Desktop calendar widget
 - [ ] Control panel with pluggable applets
 
-### Milestone 6 -- ACPI + real power/timer
+### Milestone 11 -- GUI clipboard + drag-and-drop (planned v0.11.0)
+
+- [ ] System clipboard (copy/paste text)
+- [ ] Paste into Notepad/Terminal
+- [ ] Drag-and-drop between windows
+- [ ] Drag a file from the file manager (Milestone 10) into Notepad
+
+### Milestone 12 -- ACPI + real power/timer (planned v0.12.0)
 
 - [ ] ACPI table parsing (RSDP/MADT/FADT)
 - [ ] Real ACPI-based poweroff
 - [ ] APIC + HPET timer (replacing PIT + 8259 PIC)
 
-### Milestone 7 -- SMP (multi-core)
+### Milestone 13 -- SMP (multi-core) (planned v0.13.0)
 
 - [ ] Discover other cores via MADT
 - [ ] Bring up application processors (INIT-SIPI-SIPI)
 - [ ] Per-core GDT/IDT/stack
 - [ ] Scheduler aware of multiple cores
 
-### Milestone 8 -- USB (keyboard/mouse)
+### Milestone 14 -- USB (keyboard/mouse) (planned v0.14.0)
 
 - [ ] Host controller discovery
 - [ ] Bring up xHCI
@@ -79,20 +130,48 @@ at the bottom of this file, organized the same way.
 - [ ] Mouse integration
 - [ ] Legacy PS/2 handoff
 
-### Milestone 9 -- Networking
+### Milestone 15 -- Networking (planned v0.15.0)
 
 - [ ] NIC driver (rtl8139 first)
 - [ ] Sleep/delay primitive (timeouts, retransmission)
 - [ ] Ethernet/ARP/IP/UDP stack
 - [ ] TCP + wire up the existing socket syscalls
 
-### Milestone 10 -- Runtime + interop
+### Milestone 16 -- Runtime + interop (planned v0.16.0)
 
 - [ ] Inter-process IPC (message passing)
 - [ ] Real C library (CRT0, TLS, FPU/SSE)
 - [ ] FAT16/FAT32 driver
 - [ ] `g_next_kernel_rsp` reentrancy fixed properly
 - [ ] `wintest` made non-modal
+
+### Milestone 17 -- NVMe / modern storage (planned v0.17.0)
+
+- [ ] PCIe NVMe controller discovery
+- [ ] Admin queue + identify command
+- [ ] I/O submission/completion queues
+- [ ] Backend parity with `ata.c`/AHCI (Milestone 4)
+
+### Milestone 18 -- Dynamic linking / shared libraries (planned v0.18.0)
+
+- [ ] A shared-object (`.so`-style) file format
+- [ ] A userspace dynamic linker
+- [ ] Shared libc (once Milestone 16's real C library exists)
+- [ ] Lazy symbol binding (PLT/GOT-style)
+
+### Milestone 19 -- Sound (planned v0.19.0)
+
+- [ ] PC speaker beep (simplest possible output)
+- [ ] AC97 or HDA PCI audio device driver
+- [ ] A basic mixer/volume syscall surface
+- [ ] A sound-producing test app
+
+### Milestone 20 -- Swap / paging to disk (planned v0.20.0)
+
+- [ ] A swap-backed page reclaim path
+- [ ] Page-out under memory pressure
+- [ ] Page-in on fault
+- [ ] A swap file on TFS2 (or a raw disk region)
 
 ## Backlog
 
@@ -171,7 +250,30 @@ with the async I/O phases above (both need something steppable instead of
 blocking), but scoped separately since this one's about process
 scheduling, not I/O completion.
 
-### Milestone 2 -- Storage hardening
+### Milestone 2 -- Memory protection hardening
+
+New milestone, lightly scoped -- added because the build already surfaces
+the gap today: `make all` currently emits `ld: warning: build/kernel.bin
+has a LOAD segment with RWX permissions`, and `CFLAGS` explicitly passes
+`-fno-stack-protector`. Neither is a bug (nothing about them breaks
+correctness), but they're exactly the kind of baseline hardening a real OS
+has and a hobby kernel this far along is a natural point to start closing:
+
+- NX bit enforcement -- mark data/stack pages non-executable in the page
+  tables (`vmm.c`), closing the RWX gap above. Test: a deliberate
+  "jump into a data page" fault crashes cleanly instead of executing.
+- W^X on kernel + userspace mappings -- no page should ever be both
+  writable and executable at once; audit every `vmm_map_*` call site.
+- Stack canaries -- turn `-fstack-protector` back on (it's explicitly off
+  today) and make sure a canary violation is caught and reported instead
+  of silently corrupting the stack.
+- Kernel ASLR -- randomize the kernel's load base each boot (needs a real
+  entropy source, itself a small gap -- today's kernel has no RNG at all).
+  Lowest priority of the four here: real value depends on an attacker
+  model this toy OS doesn't really have yet, but worth having the
+  mechanism.
+
+### Milestone 3 -- Storage hardening
 
 Full end-to-end multi-GB (e.g. 8GB) file write/read stress test over TFS2
 v2 -- the on-disk format itself is no longer the blocker: a real,
@@ -209,7 +311,7 @@ large-file support (TFS2 v2's own block addressing handles that), purely
 for future flexibility (e.g. hosting more than one filesystem image on one
 disk).
 
-### Milestone 3 -- AHCI/SATA driver
+### Milestone 4 -- AHCI/SATA driver
 
 Today's `ata.c` depends on the legacy IDE controller real modern hardware
 increasingly lacks. Moderate step up from `ata.c`, not a new paradigm:
@@ -250,7 +352,7 @@ can stop at any boundary with something real proven:
 7. Multi-sector transfers + PRDT scatter-gather sized to a whole 4KB TFS2
    block in one command (matching `FS_BLOCK_SECTORS`). Test: `stress <mb>`
    passes end-to-end over the AHCI path, including the write-batching from
-   Milestone 2 -- confirms the new driver behaves correctly under real
+   Milestone 3 -- confirms the new driver behaves correctly under real
    sustained load, not just a handful of manual reads.
 8. Backend selection + fallback -- `fs.c` prefers AHCI when a controller's
    found at boot, falls back to legacy IDE, then RAM-only, same fallback
@@ -258,7 +360,92 @@ can stop at any boundary with something real proven:
    QEMU invocation and once against an AHCI one, confirm `dmesg` shows the
    correct backend chosen each time.
 
-### Milestone 4 -- Desktop visual polish
+### Milestone 5 -- `fork()`/`exec()`-style process model
+
+New milestone, lightly scoped. Today's only way to start a ring-3 process
+is `spawn_from_fs()`/`elf_run_from_fs()` -- load a fresh ELF from disk and
+jump straight to its entry point; there's no way for a running process to
+duplicate itself or replace its own image. A real Unix-style shell (job
+control in Milestone 7, `run` as it exists today) eventually wants the
+`fork()`+`exec()` split instead: a first rough breakdown --
+
+- `fork()`-style address-space duplication -- copy a process's page tables
+  (copy-on-write to avoid a full physical copy up front; `vmm.c`'s
+  per-process PML4 model already gives each process an isolated address
+  space, so this is "duplicate and mark pages read-only + a fault handler
+  that copies on write," not a new isolation mechanism).
+- `exec()`-style in-place replacement -- tear down a process's current
+  address space and load a new ELF into it without allocating a fresh
+  scheduler slot, unlike `spawn_from_fs()` today.
+- `wait()`/exit-status reporting -- a parent process needs to learn its
+  child exited and with what code; `scheduler_on_exit()` today discards
+  the exit code entirely (see its own comment: "no exit-code tracking
+  yet").
+- Real PID allocation -- `scheduler.c`'s `MAX_PROCS = 4` fixed-slot table
+  reuses slot indices as "PIDs" today; a real fork/exec model wants PIDs
+  that don't get reused the instant a slot frees up, so a parent's
+  `wait(pid)` can't accidentally match the wrong process.
+
+### Milestone 6 -- Signals & process control
+
+New milestone, lightly scoped, paired with Milestone 5 above (a real
+process model wants a way to influence a process besides "let it exit on
+its own"). A first rough breakdown:
+
+- Basic signal delivery -- a `kill(pid, sig)`-equivalent syscall that
+  interrupts a running ring-3 process; needs a per-process pending-signal
+  flag `scheduler_tick()` can check.
+- Default dispositions -- at minimum "terminate" (the common case) and
+  "ignore," without requiring a process to install a handler first.
+- A `kill`/`ps`-style shell command -- list running processes
+  (`scheduler.c`'s `procs[]` table has this info already, just not
+  exposed) and send them a signal.
+- Exit-status visible to a waiting parent -- shares its underlying gap
+  with Milestone 5's `wait()` item (today's `scheduler_on_exit()` doesn't
+  track the exit code at all).
+
+### Milestone 7 -- Shell pipes & job control
+
+New milestone, lightly scoped. Today's shell (`apps/shell.c`) dispatches
+one command at a time to completion -- no `|`, no redirection, no
+backgrounding. A first rough breakdown, and why it comes after Milestones
+5-6 above: piping needs two processes running with a connected fd, and
+backgrounding needs a process that isn't blocking the shell's own prompt --
+both want a real process model first, not just today's "one blocking
+`run`."
+
+- `|` pipes -- connect one command's stdout fd to the next command's stdin
+  fd; needs an in-kernel pipe buffer (a new fd kind, similar in spirit to
+  `syscall.c`'s existing `FD_KIND_FILE`/`FD_KIND_SOCKET` tagged union).
+- `>`/`<`/`>>` redirection -- reopen a command's stdin/stdout against a
+  real file before it runs, reusing the existing `fs_*` calls.
+- Background jobs (`&`) -- run a command via Milestone 5's non-blocking
+  spawn instead of `process_run_ring3()`'s synchronous one, returning
+  control to the prompt immediately.
+- `fg`/`bg`/`jobs` -- track backgrounded processes (extends the `ps`-style
+  listing from Milestone 6) and let the shell wait on one explicitly.
+
+### Milestone 8 -- Multi-user & file permissions
+
+New milestone, lightly scoped. toy-os is single-user with no concept of
+"who owns this file" today -- `struct file` (`tfs.c`) has no owner/mode
+fields at all. A first rough breakdown:
+
+- A minimal user/group model -- a small, probably `/etc`-config-backed
+  (see `etc_config.h`'s existing pattern) table of users, not a full
+  `/etc/passwd`-equivalent to start.
+- Per-file owner + permission bits on TFS2 -- extends `struct file`'s
+  on-disk record (`docs/tfs2-spec.md` would need a version bump to add
+  the new fields, same kind of migration the v1-to-v2 rework already did
+  once).
+- Permission checks in `fs_ops` calls -- `vfs.c`'s dispatch layer is the
+  natural enforcement point (one place, every backend benefits), rather
+  than duplicating checks in `tfs.c`.
+- A login prompt -- even if the default (and only) account needs no
+  password yet, having the concept in place makes every later step of
+  this milestone meaningful instead of theoretical.
+
+### Milestone 9 -- Desktop visual polish
 
 Basic image support (a JPEG or similar decoder, plus a way to blit a
 decoded image into the framebuffer) -- the prerequisite for real wallpaper
@@ -283,7 +470,7 @@ movement takes a cheap cursor-sprite save/restore path, but a scene redraw
 buffer -- true per-widget dirty tracking of the scene itself, not just the
 blit, is still open.
 
-### Milestone 5 -- Desktop productivity apps
+### Milestone 10 -- Desktop productivity apps
 
 File manager app -- needs a proper filesystem API surface first
 (list/stat/create/delete as real syscalls or a library layer, not the
@@ -301,27 +488,45 @@ applet: display settings (font size + color theme), since both already
 exist as the `fontsize`/`color` shell commands, so the applet is mostly a
 GUI wrapper around logic that's already implemented and tested.
 
-### Milestone 6 -- ACPI + real power/timer
+### Milestone 11 -- GUI clipboard + drag-and-drop
+
+New milestone, lightly scoped. Placed after Milestone 10 since a file
+manager gives drag-and-drop its most natural first real use (dragging a
+file onto Notepad). A first rough breakdown:
+
+- System clipboard -- a small kernel-space buffer (`apps/wm/`-level, not
+  per-app) plain text lives in until something pastes it; Ctrl+C/Ctrl+V
+  wired into whichever widget currently has focus.
+- Paste into Notepad/Terminal -- the first two real consumers, both
+  already text-input-capable via `ui_textbox`/`text_scrollback`.
+- Drag-and-drop between windows -- extends `wm_input.c`'s existing
+  mouse-drag handling (already used for window moves/resizes) with a
+  "carrying a payload" state.
+- Drag a file from the file manager into Notepad -- the first real
+  cross-app use of the mechanism above, once Milestone 10's file manager
+  exists.
+
+### Milestone 12 -- ACPI + real power/timer
 
 ACPI table parsing (RSDP/MADT/FADT) -- also unlocks a real software
 poweroff (today's `system_poweroff()` only does the QEMU/Bochs
 `outw(0x604, 0x2000)` I/O-port trick with a halt-and-message fallback,
 deliberately the "works today in this exact dev/test setup" option, not a
 real ACPI-based one) and is the prerequisite for discovering other CPU
-cores (Milestone 7).
+cores (Milestone 13).
 
 APIC + HPET timer, replacing the PIT + remapped 8259 PIC toy-os uses
 today -- also a prerequisite for SMP and for timing finer than the PIT's
 100 Hz tick.
 
-### Milestone 7 -- SMP (multi-core)
+### Milestone 13 -- SMP (multi-core)
 
-Large undertaking, and a prerequisite is ACPI/MADT parsing (Milestone 6)
+Large undertaking, and a prerequisite is ACPI/MADT parsing (Milestone 12)
 to even discover the other cores. Lightly sketched, not yet scoped to the
 AHCI/USB level of rigor -- a reasonable first breakdown once picked up:
 
 1. Discover other cores via the MADT's local APIC entries (needs
-   Milestone 6 done first).
+   Milestone 12 done first).
 2. Bring up application processors via the INIT-SIPI-SIPI sequence,
    starting each one in a small real-mode trampoline that gets it into
    long mode.
@@ -330,7 +535,7 @@ AHCI/USB level of rigor -- a reasonable first breakdown once picked up:
 4. Make the scheduler aware of more than one core (today's
    `scheduler_tick()`/`switch_to()` assume a single running context).
 
-### Milestone 8 -- USB (keyboard/mouse)
+### Milestone 14 -- USB (keyboard/mouse)
 
 Needs a USB host controller driver (UHCI/EHCI/xHCI, found the same way the
 e1000 NIC already is, via the existing PCI enumeration) before any device
@@ -392,7 +597,7 @@ behind a hub, not a root port), multiple simultaneous devices, anything
 beyond the boot protocol (full HID report-descriptor parsing for
 non-standard devices).
 
-### Milestone 9 -- Networking
+### Milestone 15 -- Networking
 
 A large addition, comparable in scope to the filesystem or window manager.
 Most of the infrastructure it needs has zero precedent-free work left --
@@ -418,7 +623,7 @@ reasonable template, and the existing `*_test.c` diagnostic pattern is a
 natural fit for early loopback/ARP verification -- but this is its own
 multi-session project with its own milestones, not a single build bump.
 
-### Milestone 10 -- Runtime + interop
+### Milestone 16 -- Runtime + interop
 
 Inter-process IPC (message passing) -- today's ring-3 processes are
 isolated from each other with no way to communicate.
@@ -445,6 +650,81 @@ resumes kernel-space code when nothing is `READY`, and once any process is
 armed, kernel-space code doesn't get scheduled again until every process
 exits. Also: mouse input isn't piped to ring 3 at all yet, so `wintest`'s
 close button is drawn but not clickable.
+
+### Milestone 17 -- NVMe / modern storage
+
+New milestone, lightly scoped. AHCI (Milestone 4) covers SATA; NVMe is
+PCIe-attached and the actual default storage interface on most real
+hardware sold today, so it's the natural step past AHCI rather than an
+alternative to it. A first rough breakdown:
+
+- PCIe NVMe controller discovery -- class 0x01, subclass 0x08, similar
+  shape to AHCI's own PCI discovery step.
+- Admin queue + identify command -- NVMe's equivalent of ATA IDENTIFY,
+  but queue-based (a circular submission/completion queue pair) rather
+  than a single register-poll command.
+- I/O submission/completion queues -- the actual read/write path, one or
+  more queue pairs (NVMe is designed for many parallel queues, though a
+  first driver only needs one).
+- Backend parity with `ata.c`/AHCI (Milestone 4) -- same
+  `ata_read_sector()`/`ata_write_sector()`-shaped contract so `tfs.c`
+  doesn't care which backend is active, matching the pattern AHCI itself
+  follows.
+
+### Milestone 18 -- Dynamic linking / shared libraries
+
+New milestone, lightly scoped, deliberately placed after Milestone 16's
+real C library (a shared libc is the main reason to want this at all). A
+first rough breakdown:
+
+- A shared-object (`.so`-style) file format -- an ELF variant
+  (`ET_DYN`), position-independent, distinct from today's fixed-load-
+  address `ET_EXEC` binaries `elf_load()` handles.
+- A userspace dynamic linker -- resolves a binary's needed libraries and
+  maps them in before jumping to the real entry point; today's
+  `elf_run_from_fs()` has no equivalent step at all.
+- Shared libc -- the actual payoff: one mapped copy of libc instead of
+  every binary statically linking its own.
+- Lazy symbol binding (PLT/GOT-style) -- resolve a symbol on first call
+  rather than at load time; the standard technique, not required for a
+  first working version (eager binding at load time is a valid simpler
+  first cut).
+
+### Milestone 19 -- Sound
+
+New milestone, lightly scoped. No audio subsystem exists today. A first
+rough breakdown, cheapest-to-hardest:
+
+- PC speaker beep -- the simplest possible output (a single
+  square-wave-driving port, `0x61`/the PIT channel 2), good for a first
+  "does audio output work at all" proof with none of a real device's
+  complexity.
+- AC97 or HDA PCI audio device driver -- QEMU emulates AC97
+  (`-device AC97`), the simpler of the two to target first; HDA is
+  QEMU's more modern default and closer to real hardware.
+- A basic mixer/volume syscall surface -- the app-facing API once a real
+  device is playing samples.
+- A sound-producing test app -- proves the whole path end to end, same
+  `*_test.c` diagnostic-app pattern used elsewhere.
+
+### Milestone 20 -- Swap / paging to disk
+
+New milestone, lightly scoped. Today's virtual memory is identity-mapped
+physical RAM with no reclaim path at all -- running out of physical frames
+is just a hard allocation failure (`pmm_alloc_frame()` returning 0), not
+something a swap file could relieve. A first rough breakdown:
+
+- A swap-backed page reclaim path -- pick a reclaim policy (even a simple
+  one, e.g. clock/second-chance) for choosing which page to evict under
+  pressure.
+- Page-out under memory pressure -- write an evicted page's contents to
+  the swap area, free its physical frame.
+- Page-in on fault -- a page fault on a swapped-out page's now-invalid
+  PTE reads it back in from swap instead of the fault being fatal.
+- A swap file on TFS2 (or a raw disk region) -- needs contiguous,
+  reliably-addressable disk space; a raw reserved region (like TFS2's own
+  bitmap/journal areas) is simpler to start than a real swap *file*
+  routed through the filesystem.
 
 ### Backlog
 
