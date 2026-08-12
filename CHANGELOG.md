@@ -22,6 +22,8 @@ forever.
 
 ## [Unreleased]
 
+## [0.0.9] - 2026-08-12
+
 ### Fixed
 - Notepad's filename field (`widget_textfield_draw`, `apps/widgets.c`)
   no longer overflows past its own border when the text is longer than
