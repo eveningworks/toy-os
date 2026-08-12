@@ -33,4 +33,9 @@ void notepad_drag(struct window *win, int cx, int cy);
 // mouse.h's mouse_get_wheel_delta().
 void notepad_wheel(struct window *win, int delta);
 
+// Called once Save As...'s steppable write reaches a terminal result --
+// see gui_apps.h's on_write_complete contract and wm.h's
+// window_start_write().
+void notepad_write_complete(struct window *win, int success);
+
 #endif

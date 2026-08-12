@@ -30,7 +30,7 @@ later judgment call, not mechanically tied to "20 milestones done."
 
 - [x] Non-blocking DMA start/poll primitive
 - [x] Steppable write API
-- [ ] Wire it up: `wm_run()` polls a pending write (Notepad Save first)
+- [x] Wire it up: `wm_run()` polls a pending write (Notepad Save first)
 - [ ] Generalize to reads + the plain shell prompt
 - [ ] Async process spawning for the GUI Terminal
 
@@ -217,11 +217,21 @@ testable:
    standalone via the `steptest <mb>` shell command (writes via an explicit
    step loop the command drives itself, verifies byte-for-byte against
    readback, reports step count).
-3. Wire up one real caller -- `wm_run()` polls a pending write once per
-   frame instead of calling `fs_write_range()` and blocking; Notepad's Save
-   becomes the first non-blocking caller. Test: QMP -- start a large Save,
-   move the mouse/click another window mid-save, screenshot proving the
-   desktop kept redrawing instead of freezing.
+3. [x] ~~Wire up one real caller~~ -- done (see `CHANGELOG.md`'s
+   `[Unreleased]` entry): `wm_run()` polls a pending write once per frame
+   (`apps/wm/wm.c`, a new WM-global `pending_write` slot) instead of
+   calling `fs_write_range()`/`fs_write()` and blocking; Notepad's Save As...
+   (`apps/notepad.c`) is the first non-blocking caller, via two new public
+   entry points (`wm.h`'s `window_start_write()`/`window_write_pending()`)
+   and a completion callback (`gui_apps.h`'s `on_write_complete`). A real
+   bug (a stale cached `struct window *`, not safe to hold across frames in
+   this WM -- see `docs/decisions.md`) was caught and fixed during QMP
+   testing, not by code review alone. Test: QMP -- seeded a large file
+   directly onto `disk.img` (`tools/tfs2_writer.py`, no boot needed),
+   Notepad Save As... over it, clicked a second window immediately after
+   confirming Save -- caught "Saving..." with the Save button disabled, and
+   the desktop successfully switching focus to the other window while the
+   write was still in flight, proving it didn't freeze.
 4. Generalize to reads and to the plain (non-GUI) shell prompt; consider
    sharing plumbing with the Terminal async-spawn item below.
 

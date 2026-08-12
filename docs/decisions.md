@@ -1465,3 +1465,41 @@ personal email. See `CLAUDE.md`'s "Working in the cloud sandbox"
 section for the mechanical detail (the device-bridge session has no
 git identity configured at all by default, so this has to be passed
 explicitly on every commit, not assumed).
+
+## `struct window *` isn't a stable per-window identity across frames -- don't cache one
+
+Caught live during Milestone 1 phase 3's QMP testing (wiring `wm_run()`
+to poll a pending write, `apps/wm/wm.c`/`wm.h` -- see `CHANGELOG.md`'s
+`[Unreleased]` entry): `apps/notepad.c` originally cached the `struct
+window *` passed to `notepad_open()` once, in a static, and reused it
+later (across many frames) to register a steppable write against.
+Wrong -- `bring_to_front()` (`wm.c`) reorders `windows[]` (a fixed
+`struct window windows[MAX_WINDOWS]` array) by copying window
+*contents* between slots (`windows[i] = windows[i + 1]`, etc.), not by
+moving pointers/identity. A `struct window *` captured once can end up,
+after any later reorder, pointing at a completely different window's
+data -- same memory address, different window. Every existing WM
+callback (`on_click`, `on_key`, ...) was already safe from this because
+it always receives a freshly-resolved pointer for the CURRENT frame
+(`wm_input.c`'s hit-testing loop looks the window up by its live index
+every time) and never holds onto it past that one call.
+
+Anything that needs a window handle to survive across MULTIPLE frames
+(the new case here: a write polled once per frame until it completes)
+can't reuse that pattern -- either capture the pointer fresh at a point
+where it's provably still valid (`window_start_write()`'s caller in
+notepad.c now does this: captured in `notepad_click()` when Save As...
+is pressed, valid because the file picker it opens next is modal, so no
+other window can be reordered while it's open -- see
+`wm_handle_left_click()`'s dispatch order in `wm_input.c`), or track it
+by an index the WM itself keeps accurate across reorders (which
+`pending_write_win` does, fixed up inside `bring_to_front()`/
+`close_window()` -- see those functions' own comments). The bug was
+silent and easy to miss by code review alone: the underlying write
+still completed correctly on disk every time (verified via
+`tools/tfs2_writer.py ls`), only the UI-facing completion callback fired
+against the wrong window, so Notepad's Save As... button just stayed
+disabled forever. Caught by clicking a second window in front of
+Notepad before Save, not by reading the code -- worth remembering next
+time a change wants to hold a `struct window *` past the callback it
+was handed in.

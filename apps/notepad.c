@@ -13,9 +13,14 @@
 // Save is a Save As, same as every Open goes through the picker, per
 // the user's own choice when this was built (see docs/decisions.md).
 // notepad_picker_save_choice()/notepad_picker_open_choice() below are
-// the callbacks file_picker_open_with() invokes once a path is chosen;
-// the actual fs_write()/fs_read() calls are unchanged from the old
-// inline-field version, just moved into those.
+// the callbacks file_picker_open_with() invokes once a path is chosen.
+// Load still calls fs_read(), unchanged from the old inline-field
+// version, just moved into notepad_picker_opened(). Save no longer
+// calls fs_write() directly -- notepad_picker_saved() now writes
+// steppably via wm.h's window_start_write(), polled once per frame by
+// wm_run() instead of blocking the whole desktop (Milestone 1 phase 3,
+// docs/roadmap.md); see notepad_picker_saved()/notepad_write_complete()
+// below.
 //
 // Save/Load moved from bare widget_button()/widget_hit() calls to a
 // real struct ui_button_group (apps/ui/ui_button_group.h) -- the same
@@ -113,8 +118,29 @@ struct notepad_state {
     // on every subsequent tick while the button stays held. 1 = dragging
     // a text selection, 0 = dragging the scrollbar thumb.
     int dragging_selection;
+    int saving; // 1 while a steppable write started via wm.h's window_start_write() is in flight -- see notepad_picker_saved()/notepad_write_complete() (Milestone 1 phase 3, docs/roadmap.md)
+    char pending_save_path[NOTEPAD_NAME_MAX]; // path passed to fs_write_range_begin() -- stashed here because file_picker's `path` argument isn't guaranteed to outlive notepad_picker_saved()'s single call, but notepad_write_complete() (running frames later) still needs it for last_name
 };
 static struct notepad_state g_notepad;
+
+// The window to register the pending write against -- captured FRESH in
+// notepad_click() when Save As... is pressed (see notepad_click() below),
+// NOT once in notepad_open() and reused: `struct window *` isn't a
+// stable per-window identity in this WM -- bring_to_front() (wm.c)
+// reorders by copying window CONTENTS between fixed array slots, not by
+// moving pointers, so a pointer cached once at open time can silently
+// end up pointing at a DIFFERENT window after any later reorder (About
+// getting clicked in front of Notepad, say). Safe to capture in
+// notepad_click() and still be accurate by the time
+// notepad_picker_saved() runs frames later: the file picker it opens is
+// modal (file_picker_handle_click() is checked before any taskbar/
+// window click in wm_input.c's wm_handle_left_click()), so no other
+// window can be reordered while it's open. Needed at all because
+// notepad_picker_saved() (file_picker.h's on_choose callback) takes no
+// window/ctx parameter of its own (see this file's top comment on why:
+// only one Notepad window can ever exist) but wm.h's window_start_write()
+// needs a `struct window *` to register the pending write against.
+static struct window *g_notepad_save_win;
 
 // Scratch buffer for notepad_serialize() (see notepad_click()'s Save
 // handler) -- static, not a stack-local, deliberately: the WM runs on
@@ -123,7 +149,12 @@ static struct notepad_state g_notepad;
 // eat half of that in one local array on top of whatever call depth
 // already got here. A second static instance is fine for the same
 // reason g_notepad itself is: only one Notepad window can ever be open
-// (see wm.c's open_app), so there's nothing to make reentrant.
+// (see wm.c's open_app), so there's nothing to make reentrant. Must stay
+// unchanged for the whole duration of a save now that Save As... writes
+// steppably (fs_write_range_begin()'s own contract) -- safe because
+// nothing re-serializes into it until the previous write reaches a
+// terminal result (the Save As... button is disabled meanwhile, see
+// notepad_picker_saved()).
 static char g_save_buf[SCROLLBACK_CAP];
 
 // Content-area size for the current font -- see gui_apps.h's
@@ -149,6 +180,8 @@ void notepad_open(struct window *win) {
     k_strcpy(g_notepad.last_name, NOTEPAD_DEFAULT_NAME);
     g_notepad.status[0] = '\0';
     g_notepad.dragging_selection = 0;
+    g_notepad.saving = 0;
+    g_notepad.pending_save_path[0] = '\0';
     window_set_state(win, &g_notepad);
 }
 
@@ -316,7 +349,10 @@ void notepad_key(struct window *win, int key) {
         return; // ignore other control codes for this simple version
     }
 
-    st->status[0] = '\0'; // typing invalidates any stale "Saved."/"Loaded."
+    // Typing invalidates any stale "Saved."/"Loaded." -- but not
+    // "Saving..." itself: a save in progress keeps showing that (it's
+    // still true) rather than going blank until the write completes.
+    if (!st->saving) st->status[0] = '\0';
     window_invalidate(win);
 }
 
@@ -363,14 +399,56 @@ static void notepad_picker_cancelled(void) {
     // Nothing to undo -- the dialog already closed itself.
 }
 
+// Save As... -- Milestone 1 phase 3 (docs/roadmap.md): writes steppably
+// via wm.h's window_start_write() instead of blocking on fs_write(), so
+// wm_run() keeps the desktop responsive (redrawing, routing input to
+// OTHER windows) while a large save is still in progress. The Save
+// As... button is disabled the whole time (see notepad_write_complete()
+// re-enabling it) so this can't be re-entered -- guarded here too
+// (window_write_pending()) as cheap insurance against that invariant
+// ever slipping, not because it's expected to trigger.
 static void notepad_picker_saved(const char *path) {
-    notepad_serialize(&g_notepad.tb, g_save_buf, sizeof(g_save_buf));
-    if (fs_write(path, g_save_buf, 0)) {
-        k_strcpy(g_notepad.status, "Saved.");
-        k_strcpy(g_notepad.last_name, path);
-    } else {
+    if (window_write_pending()) {
         k_strcpy(g_notepad.status, "Save failed.");
+        return;
     }
+
+    int n = notepad_serialize(&g_notepad.tb, g_save_buf, sizeof(g_save_buf));
+
+    // fs_write_range_begin()/step() extend a file but never shrink it
+    // (unlike fs_write()'s own free_all_blocks()-then-write truncation --
+    // see tfs.c's tfs_write()), so overwriting an existing longer file
+    // with shorter text would otherwise leave its old trailing bytes on
+    // disk. Delete first to reclaim it -- fails harmlessly (return value
+    // ignored) the first time `path` is saved, when it doesn't exist yet.
+    fs_delete(path);
+
+    void *h = fs_write_range_begin(path, 0, g_save_buf, (uint32_t)n);
+    if (!h || !window_start_write(g_notepad_save_win, h)) {
+        k_strcpy(g_notepad.status, "Save failed.");
+        return;
+    }
+
+    k_strcpy(g_notepad.pending_save_path, path);
+    g_notepad.saving = 1;
+    ui_button_set_disabled(&g_notepad.buttons[1], 1);
+    k_strcpy(g_notepad.status, "Saving...");
+}
+
+// wm.h's window_start_write() callback (via gui_apps.h's
+// on_write_complete) -- fires once wm_run()'s per-frame poll of the
+// write started above reaches FS_STEP_DONE or FS_STEP_FAILED.
+void notepad_write_complete(struct window *win, int success) {
+    struct notepad_state *st = (struct notepad_state *)window_get_state(win);
+    st->saving = 0;
+    ui_button_set_disabled(&st->buttons[1], 0);
+    if (success) {
+        k_strcpy(st->status, "Saved.");
+        k_strcpy(st->last_name, st->pending_save_path);
+    } else {
+        k_strcpy(st->status, "Save failed.");
+    }
+    window_invalidate(win);
 }
 
 static void notepad_picker_opened(const char *path) {
@@ -399,6 +477,7 @@ void notepad_click(struct window *win, int cx, int cy) {
             file_picker_open_with(FILE_PICKER_OPEN, "Open", "/", "",
                                    notepad_picker_opened, notepad_picker_cancelled);
         } else if (code == BTN_SAVEAS_CODE) {
+            g_notepad_save_win = win; // fresh, live pointer -- see its own comment on why this can't be cached earlier
             file_picker_open_with(FILE_PICKER_SAVE, "Save As", "/", st->last_name,
                                    notepad_picker_saved, notepad_picker_cancelled);
         }

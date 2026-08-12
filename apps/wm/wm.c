@@ -57,6 +57,9 @@ int resize_start_w, resize_start_h;
 int content_dragging = -1; // index into windows[], or -1 -- see wm_internal.h
 int content_pressed = -1; // index into windows[], or -1 -- see wm_internal.h
 
+void *pending_write = 0; // handle from fs_write_range_begin(), or NULL -- see wm_internal.h
+int pending_write_win = -1; // index into windows[] the write belongs to, or -1
+
 int redraw_pending = 1;
 
 // ---- app-facing helpers (declared in wm.h) ----
@@ -72,6 +75,18 @@ int window_content_h(const struct window *win) { return win->h - WM_TITLEBAR_H -
 void window_invalidate(struct window *win) {
     (void)win; // whole-screen redraw, so which window doesn't matter yet
     redraw_pending = 1;
+}
+
+int window_write_pending(void) { return pending_write != 0; }
+
+int window_start_write(struct window *win, void *write_handle) {
+    if (pending_write) return 0; // a write's already in flight -- WM-global single slot, see wm_internal.h
+    pending_write = write_handle;
+    pending_write_win = -1;
+    for (int i = 0; i < window_count; i++) {
+        if (&windows[i] == win) { pending_write_win = i; break; }
+    }
+    return 1;
 }
 
 // --- read-only window introspection (see wm.h's declarations) ---
@@ -90,6 +105,15 @@ void bring_to_front(int idx) {
     struct window tmp = windows[idx];
     for (int i = idx; i < window_count - 1; i++) windows[i] = windows[i + 1];
     windows[window_count - 1] = tmp;
+
+    // Reordering shifts every slot between idx and the old last slot
+    // down by one, and moves idx's own window to the end -- keep
+    // pending_write_win pointing at the same window (see close_window()
+    // for why this has to stay accurate: the QMP test this phase ships
+    // with explicitly clicks a DIFFERENT window mid-save, which lands
+    // exactly here).
+    if (pending_write_win == idx) pending_write_win = window_count - 1;
+    else if (pending_write_win > idx) pending_write_win--;
 }
 
 static int find_window_for_app(const struct gui_app *app) {
@@ -144,6 +168,16 @@ void open_app(const struct gui_app *app) {
 }
 
 void close_window(int idx) {
+    // Refuse to close a window with a write in flight -- pending_write's
+    // handle is polled by index (pending_write_win), and the callback it
+    // eventually fires (gui_apps.h's on_write_complete) is delivered to
+    // &windows[pending_write_win]; closing mid-write would either shift
+    // that slot to point at a DIFFERENT window by the time the write
+    // finishes, or (if this is the last window) leave it dangling. Same
+    // "block while pending" choice as window_start_write() refusing a
+    // second concurrent write. See wm.h's window_write_pending().
+    if (idx == pending_write_win) return;
+
     // Give the app a chance to release whatever it allocated for this
     // window (multi-instance apps kmalloc/kzalloc their own per-window
     // state -- see gui_apps.h's `multi_instance` flag and
@@ -161,6 +195,10 @@ void close_window(int idx) {
     for (int i = idx; i < window_count - 1; i++) windows[i] = windows[i + 1];
     window_count--;
     redraw_pending = 1;
+
+    // A different window closing shifts every later slot down by one --
+    // keep pending_write_win pointing at the same window if it moved.
+    if (pending_write_win > idx) pending_write_win--;
 }
 
 // ---- main loop ----
@@ -205,6 +243,8 @@ void wm_run(void) {
     title_hover_kind = -1;
     redraw_pending = 1;
     wm_exit_requested = 0;
+    pending_write = 0;
+    pending_write_win = -1;
 
     int mx, my;
     uint8_t buttons;
@@ -236,11 +276,45 @@ void wm_run(void) {
         // A Start-menu action (currently just "Exit to shell") may have
         // just set this -- bail out the same way Esc used to, before
         // touching drag/resize state for a click that was never about a
-        // window in the first place.
-        if (wm_exit_requested) {
+        // window in the first place. Deferred while a write is pending
+        // (below still runs, so the write keeps stepping to completion
+        // -- wm_exit_requested stays set and this fires on the very next
+        // tick after it finishes) rather than abandoning it mid-write:
+        // pending_write's handle owns kernel heap state (see tfs.c's
+        // struct tfs_write_step) that only gets freed on a terminal
+        // fs_write_range_step() result.
+        if (wm_exit_requested && !pending_write) {
             klog_write("wm: exiting GUI mode, returning to shell\n");
             gfx_set_double_buffered(0); // console draws straight to screen
             return;
+        }
+
+        // Poll one step of a pending write, once per frame, instead of
+        // wm_run() ever calling fs_write_range() and blocking (Milestone
+        // 1 phase 3, docs/roadmap.md) -- Notepad's Save is the first
+        // caller (see wm.h's window_start_write()). One step is one
+        // filesystem block's worth of work (see fs.h's
+        // fs_write_range_step() contract), so this bounds each frame's
+        // extra blocking time to a single block write, not the whole
+        // file. On a terminal result the handle is already freed by
+        // fs_write_range_step() itself -- clear the slot and hand the
+        // outcome to whichever window started it, if it's still open
+        // (see close_window()/bring_to_front() for why pending_write_win
+        // is guaranteed to still be accurate here even if other windows
+        // closed or reordered while this write was in flight).
+        if (pending_write) {
+            enum fs_step_result r = fs_write_range_step(pending_write);
+            if (r != FS_STEP_PENDING) {
+                void *finished_win = (pending_write_win >= 0 && pending_write_win < window_count)
+                                          ? &windows[pending_write_win] : 0;
+                const struct gui_app *app = finished_win ? windows[pending_write_win].app : 0;
+                pending_write = 0;
+                pending_write_win = -1;
+                if (finished_win && app && app->on_write_complete) {
+                    app->on_write_complete((struct window *)finished_win, r == FS_STEP_DONE);
+                }
+                redraw_pending = 1;
+            }
         }
 
         // Mouse movement alone normally takes wm_render_cursor_move()'s

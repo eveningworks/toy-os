@@ -32,6 +32,7 @@ struct ui_button {
     uint32_t bg, fg;
     int code;    // app-defined id delivered back on a completed click -- calculator.c uses calc_input()'s char codes, cast to/from int
     int pressed; // OWNED state, driven by ui_button_group_press()/_release() -- treat as read-only from app code
+    int disabled; // 1 to make this button non-interactive and drawn dimmed -- see ui_button_set_disabled(). First user: apps/notepad.c's Save As... button while a steppable write is in flight (see wm.h's window_start_write()).
 };
 
 // Sets every field including `pressed` (cleared to 0) -- call once when
@@ -48,6 +49,13 @@ void ui_button_init(struct ui_button *b, int x, int y, int w, int h,
 // This is what a per-frame relayout (font size changed, window resized)
 // should call, not ui_button_init().
 void ui_button_set_geometry(struct ui_button *b, int x, int y, int w, int h);
+
+// Marks the button non-interactive: ui_button_group_press()/_click()
+// skip it (same as never being hit), and ui_button_draw() renders it
+// dimmed regardless of the caller's own bg/fg. Independent of `pressed`
+// -- disabling a currently-pressed button just stops drawing the press
+// border, it doesn't need a separate release.
+void ui_button_set_disabled(struct ui_button *b, int disabled);
 
 void ui_button_draw(const struct ui_button *b, int origin_x, int origin_y);
 int ui_button_hit(const struct ui_button *b, int cx, int cy);

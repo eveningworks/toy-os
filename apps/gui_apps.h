@@ -127,6 +127,16 @@ struct gui_app {
     // this callback.
     void (*on_close)(struct window *win);
 
+    // Called once a write started via wm.h's window_start_write() reaches
+    // a terminal result -- `success` is 1 for FS_STEP_DONE, 0 for
+    // FS_STEP_FAILED (fs.h). The window manager polls the write itself
+    // (wm_run(), once per frame) purely as a scheduling mechanism; this
+    // is where the app updates whatever UI told the user a save/write
+    // was in progress. May be NULL for any app that never calls
+    // window_start_write(). First (and currently only) user:
+    // apps/notepad.c's Save As... (Milestone 1 phase 3, docs/roadmap.md).
+    void (*on_write_complete)(struct window *win, int success);
+
     // 1 (the common case) if the user can drag-resize and maximize this
     // app's window; 0 to fix it at its default_size() forever -- no
     // resize grip, hovering an edge doesn't show a resize cursor, and

@@ -58,6 +58,27 @@ int window_content_h(const struct window *win);
 // be drawn.
 void window_invalidate(struct window *win);
 
+// Registers a steppable write (a handle from fs.h's
+// fs_write_range_begin()) as the window manager's pending write --
+// wm_run()'s main loop polls it once per frame via
+// fs_write_range_step() instead of blocking, so a slow disk write no
+// longer freezes the whole desktop (Milestone 1 phase 3, see
+// docs/roadmap.md). Returns 1 if accepted, 0 if a write is already
+// pending (WM-global single slot -- see wm_internal.h's pending_write;
+// the caller should treat 0 the same as window_write_pending()
+// returning true and not start a second write). `win` is notified of
+// the outcome via gui_apps.h's on_write_complete callback, called once
+// the write reaches FS_STEP_DONE or FS_STEP_FAILED -- the caller does
+// NOT need to (and must not) call fs_write_range_step() itself.
+int window_start_write(struct window *win, void *write_handle);
+
+// True while any window has a write in progress via window_start_write()
+// -- an app can check this before starting a new Save to avoid a
+// re-entrant second write (e.g. ignore the click / leave the button
+// disabled) instead of relying on window_start_write()'s return value
+// alone.
+int window_write_pending(void);
+
 // The window manager's entry point -- this is what gui_main() calls.
 // Runs until the user presses Esc, then returns.
 void wm_run(void);

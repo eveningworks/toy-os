@@ -119,7 +119,11 @@ tightly-coupled event loop, not multiple decoupled components (see
   `struct window`, `window_set_state`/`window_get_state`,
   `window_content_x/y/w/h`, `window_invalidate`, `wm_window_count()`/
   `wm_get_window()` (read-only window introspection -- Task Manager's
-  data source), `wm_run()`.
+  data source), `window_start_write()`/`window_write_pending()`
+  (registers a `fs_write_range_begin()` handle for `wm_run()` to poll
+  once per frame instead of blocking -- Milestone 1 phase 3, see
+  `docs/roadmap.md`; completion is delivered via `gui_apps.h`'s
+  `on_write_complete` callback), `wm_run()`.
 - **`wm.c`** -- shared state, the app-facing helpers behind `wm.h`, window
   lifecycle (`open_app`, `close_window`, `bring_to_front`), and
   `wm_run()`'s main loop. Start reading here.
@@ -206,7 +210,10 @@ past "two small functions" (see `docs/decisions.md`). `apps/widgets.h`/
   small group helper for laying out a row of them (used by the window
   manager's title-bar buttons and, per the widgets migration, available
   to any app that wants a row of buttons without hand-rolling the
-  layout math).
+  layout math). `ui_button_set_disabled()` marks one non-interactive and
+  drawn dimmed -- `ui_button_group_press()`/`_click()` skip it. First
+  user: Notepad's Save As... button while a steppable write is in
+  flight (Milestone 1 phase 3, see `docs/roadmap.md`).
 - **`ui_textbox.h`/`.c`** -- `struct text_field` (single-line input,
   cursor position, `TEXTFIELD_MAX` 48 chars) and
   `widget_textfield_init/set_active/key/draw`, wrapped in an owned-

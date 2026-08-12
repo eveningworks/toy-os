@@ -53,6 +53,81 @@ forever.
   push attempt, not assumed. Publishing a release now always ends with
   handing the user exact commands to run from their own machine.
 
+### Added
+- Wired `wm_run()` to poll a pending write instead of blocking -- Phase 3
+  of the async-I/O roadmap item (see `docs/roadmap.md`). Phases 1
+  (non-blocking DMA start/poll primitive) and 2 (steppable write API)
+  landed earlier as `ata.c`/`fs.h` primitives with no real caller yet
+  (proven standalone via the `dmatest`/`steptest` shell commands -- see
+  their own CHANGELOG entries); this phase is the first real caller of
+  Phase 2's `fs_write_range_begin()`/`fs_write_range_step()`. A new
+  WM-global single slot (`pending_write`/`pending_write_win`,
+  `apps/wm/wm_internal.h` -- same "-1/NULL means none" idiom as
+  `dragging`/`resizing`) holds the handle; `wm_run()`'s main loop
+  (`apps/wm/wm.c`) calls `fs_write_range_step()` once per frame instead
+  of ever calling `fs_write_range()`/`fs_write()` and blocking, so one
+  frame's extra cost is bounded to a single filesystem block's write
+  latency, not the whole file. Two new public entry points in `wm.h`:
+  `window_start_write()` (registers a handle, refuses a second
+  concurrent one) and `window_write_pending()` (lets an app check before
+  starting a new write); completion is delivered back via a new
+  `gui_apps.h` callback, `on_write_complete(win, success)`, called once
+  polling reaches `FS_STEP_DONE`/`FS_STEP_FAILED`.
+  - Notepad's Save As... (`apps/notepad.c`) is the first real caller:
+    `notepad_picker_saved()` now calls `fs_delete()` (reclaim any
+    existing file's blocks -- `fs_write_range_begin()`/`step()` extend a
+    file but never shrink it, unlike `fs_write()`'s own
+    truncate-then-write, so this avoids stale trailing bytes on an
+    overwrite with shorter text) then `fs_write_range_begin()` +
+    `window_start_write()`, and shows "Saving..." with the Save As...
+    button disabled until `notepad_write_complete()` fires.
+  - `ui_button` (`apps/ui/ui_button.h`/`.c`, `ui_button_group.c`) gained
+    a `disabled` field/`ui_button_set_disabled()` for this -- asked
+    first, per the project's own "add as a widget" preference, since a
+    disabled/dimmed button is a generic, reusable capability, not a
+    Notepad-only concern. `ui_button_group_press()`/`_click()` skip a
+    disabled button entirely (same as never being hit).
+  - `bring_to_front()`/`close_window()` (`wm.c`) both keep
+    `pending_write_win` accurate across window reordering/closing (they
+    already shuffle `windows[]` by copying struct contents between fixed
+    slots, not by moving identity) -- `close_window()` also refuses to
+    close the window a write belongs to, and `wm_exit_requested` is
+    deferred (not abandoned) until a pending write reaches a terminal
+    result, since its handle owns kernel heap state that only gets freed
+    then.
+  - A real bug caught by QMP testing, not code review: `apps/notepad.c`
+    originally cached the window pointer passed to `window_start_write()`
+    once, in `notepad_open()`. That's unsound in this WM -- `struct
+    window *` isn't a stable per-window identity here, since
+    `bring_to_front()` reorders by copying window *contents* between
+    fixed `windows[]` slots rather than moving pointers. After clicking
+    a second window in front of Notepad and then Save As..., the stale
+    cached pointer silently resolved to the WRONG window by the time the
+    write was registered: the write itself still completed correctly on
+    disk (verified via `tools/tfs2_writer.py ls`), but
+    `on_write_complete()` never fired for the right window, leaving
+    Notepad's Save As... button permanently disabled. Fixed by capturing
+    the window pointer fresh in `notepad_click()` when Save As... is
+    pressed instead (safe because the file picker it opens is modal --
+    no other window can be reordered while it's open, per
+    `wm_handle_left_click()`'s own dispatch order).
+  - Verified via QMP: seeded an 8191-byte file directly onto `disk.img`
+    with `tools/tfs2_writer.py` (host-side, no boot needed) to get
+    content Notepad could Open instantly rather than needing to type it
+    through the emulated keyboard; opened it in Notepad, opened a second
+    window (About), clicked Save As... to overwrite the same file, and
+    clicked About's taskbar button immediately after confirming Save --
+    caught "Saving..." with the Save As... button visibly disabled, and
+    separately caught the desktop successfully switching focus to About
+    while the write was still in flight (exercising the
+    `bring_to_front()`/`pending_write_win` reindexing path live, not
+    just by inspection). Confirmed the finished file's size/modified
+    timestamp matched via `tools/tfs2_writer.py ls` after each run.
+    `tools/preflight.sh` (build + boot smoke test) passed throughout.
+    Screenshots in `screenshots/2026-08-12/`.
+  - Not done this round (Phase 4, next): generalizing to reads and the
+    plain (non-GUI) shell prompt.
+
 ## [0.0.9] - 2026-08-12
 
 ### Fixed

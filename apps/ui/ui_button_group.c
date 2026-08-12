@@ -14,6 +14,7 @@ void ui_button_group_draw(const struct ui_button_group *g, int origin_x, int ori
 
 static int hit_index(const struct ui_button_group *g, int cx, int cy) {
     for (int i = 0; i < g->count; i++) {
+        if (g->buttons[i].disabled) continue; // non-interactive -- see ui_button_set_disabled()
         if (ui_button_hit(&g->buttons[i], cx, cy)) return i;
     }
     return -1;

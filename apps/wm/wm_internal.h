@@ -63,6 +63,20 @@ extern int wm_exit_requested;
 extern int dragging; // index into windows[], or -1 if not dragging
 extern int drag_off_x, drag_off_y;
 
+// Handle from fs.h's fs_write_range_begin() for a steppable write
+// currently in flight, or NULL if none -- see wm.c's wm_run() loop,
+// which polls it once per frame via fs_write_range_step() instead of
+// blocking (Milestone 1 phase 3, docs/roadmap.md). Same "-1/NULL means
+// none" idiom as dragging/resizing above: a WM-global single slot, not
+// per-window, since only one steppable write is in flight at a time
+// today (window_start_write() refuses a second one while one's already
+// pending -- see wm.h). pending_write_win is the index into windows[]
+// the write belongs to, used to look up which app's on_write_complete
+// callback to invoke once polling reaches a terminal result; -1 when
+// pending_write is NULL.
+extern void *pending_write;
+extern int pending_write_win;
+
 extern int resizing; // index into windows[], or -1 if not resizing
 extern int resize_right, resize_bottom;
 extern int resize_start_mx, resize_start_my;
