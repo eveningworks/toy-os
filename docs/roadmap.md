@@ -66,6 +66,8 @@ later judgment call, not mechanically tied to "20 milestones done."
 - [ ] `exec()`-style in-place process replacement
 - [ ] `wait()`/exit-status reporting for a parent process
 - [ ] Real PID allocation beyond the scheduler's fixed 4-slot table
+- [ ] Larger/growable user stack (today: a single fixed 4KB page, no
+      growth mechanism)
 
 ### Milestone 6 -- Signals & process control (planned v0.6.0)
 
@@ -98,7 +100,9 @@ later judgment call, not mechanically tied to "20 milestones done."
 
 ### Milestone 10 -- Desktop productivity apps (planned v0.10.0)
 
-- [ ] Real filesystem API surface (list/stat/create/delete)
+- [ ] Real filesystem API surface (list/stat/create/delete/seek --
+      today's `SYS_OPEN`/`SYS_READ`/`SYS_CLOSE` is sequential-read-only,
+      no `SYS_SEEK`/lseek-equivalent exists at all)
 - [ ] File manager app
 - [ ] Desktop calendar widget
 - [ ] Control panel with pluggable applets
@@ -137,14 +141,22 @@ later judgment call, not mechanically tied to "20 milestones done."
 ### Milestone 15 -- Networking (planned v0.15.0)
 
 - [ ] NIC driver (rtl8139 first)
-- [ ] Sleep/delay primitive (timeouts, retransmission)
+- [ ] Ring-3-readable millisecond-ish clock (a tick counter exposed via
+      syscall -- today's only ring-3 time source, `SYS_GETTIME`, is
+      wall-clock/second-resolution only)
+- [ ] Sleep/delay primitive (timeouts, retransmission -- a general
+      kernel gap, not networking-specific: also why the PC speaker's
+      `beep` busy-waits on a shared tick counter instead of sleeping,
+      see `docs/decisions.md`)
 - [ ] Ethernet/ARP/IP/UDP stack
 - [ ] TCP + wire up the existing socket syscalls
 
 ### Milestone 16 -- Runtime + interop (planned v0.16.0)
 
 - [ ] Inter-process IPC (message passing)
-- [ ] Real C library (CRT0, TLS, FPU/SSE)
+- [ ] Real C library (CRT0, TLS, FPU/SSE, malloc/free -- today's only
+      ring-3 allocator, `SYS_SBRK`, is bump-only/grow-only with no
+      free-list allocator built on top of it anywhere)
 - [ ] FAT16/FAT32 driver
 - [ ] `g_next_kernel_rsp` reentrancy fixed properly
 - [ ] `wintest` made non-modal
@@ -185,7 +197,9 @@ Smaller or lower-priority items not yet slotted into a milestone above.
 - [ ] Virtio drivers (disk/net)
 - [ ] A benchmarking harness
 - [ ] Multi-architecture support (RISC-V) -- see `docs/arch-portability.md`
-- [ ] Stretch: port a small classic game (e.g. Doom) once disk-hosted ELF + libc exist
+- [ ] Stretch: port a small classic game (e.g. Doom, `doomgeneric`-style)
+      -- see the Details section below for the real prerequisite
+      breakdown across milestones (mostly already satisfied)
 
 ---
 
@@ -487,6 +501,16 @@ control in Milestone 7, `run` as it exists today) eventually wants the
   reuses slot indices as "PIDs" today; a real fork/exec model wants PIDs
   that don't get reused the instant a slot frees up, so a parent's
   `wait(pid)` can't accidentally match the wrong process.
+- Larger/growable user stack -- every ring-3 process gets exactly one
+  fixed 4KB page at a hardcoded `STACK_VADDR`
+  (`kernel/core/elf_run.c`/`scheduler.c`), mapped once at process start
+  with no growth mechanism (no stack-fault-triggered auto-growth
+  anywhere in the codebase). Fine for today's small test binaries;
+  flagged directly by scoping out what a real C program (e.g. a
+  `doomgeneric`-style port, see the Backlog's Doom entry) would need --
+  untested whether 4KB is actually tight enough to matter for that
+  specific case, but worth having a real answer (a bigger fixed stack,
+  or real growth) rather than an unverified assumption either way.
 
 ### Milestone 6 -- Signals & process control
 
@@ -584,6 +608,15 @@ fixed ad hoc calls the shell uses today), then the app built on top of
 that. Its icon view can reuse `apps/ui/ui_icon_grid.h` (built for exactly
 this, see Milestone 9's entry above) for cell geometry and drag-to-
 reposition instead of re-deriving that math.
+
+That filesystem API surface also needs seek: today's ring-3 file I/O
+(`SYS_OPEN`/`SYS_READ`/`SYS_WRITE`/`SYS_CLOSE`, `kernel/include/syscall_abi.h`)
+is open-then-sequential-read-only -- no `SYS_SEEK`/lseek-equivalent
+exists anywhere, and a file fd's `SYS_WRITE` always appends rather than
+writing at a caller-chosen offset. Random access matters for more than
+just a file manager -- e.g. reading a WAD file's lump directory (see the
+Backlog's Doom entry) needs seeking to arbitrary offsets, not just
+reading a file start-to-finish.
 
 Desktop calendar: a small popup panel above the taskbar, opened by
 clicking the clock, showing a month grid (view-only, no events yet) --
@@ -721,9 +754,19 @@ the classic "easy first NIC driver" choice, much simpler than
 e1000/virtio-net) -> IRQ registration (mechanism already exists) -> a
 minimal Ethernet/ARP/IP/UDP stack before ever touching TCP (TCP's state
 machine and retransmission logic only makes sense once packets can
-reliably get in and out) -> TCP + the existing socket syscalls. One
-smaller gap along the way: there's a tick counter (`pit_ticks()`) but no
-sleep/delay primitive -- TCP needs timeouts and retransmission timers. The
+reliably get in and out) -> TCP + the existing socket syscalls. Two
+smaller gaps along the way, both confirmed to matter beyond just
+networking (not scoped to TCP specifically, even though that's where
+they were first identified): there's a kernel-internal tick counter
+(`pit_ticks()`, `kernel/core/timer.c`) but nothing exposes it to ring 3
+-- `SYS_GETTIME` is wall-clock/second-resolution only -- so a
+millisecond-ish clock needs its own syscall before TCP's timers (or
+anything else timing-sensitive in ring 3) can measure elapsed time at
+all; and there's still no actual sleep/delay primitive once something
+*can* measure time, needed for TCP's retransmission timeouts here and
+already hit directly by `kernel/drivers/speaker.c`'s `beep` command,
+which busy-waits on the tick counter instead of sleeping for exactly
+this reason (see `docs/decisions.md`). The
 driver-integration pattern itself is in good shape to build on --
 `ata.c`'s probe/init-function/capability-header-through-`kapi.h`
 structure, including its working IRQ-driven Bus-Master DMA path, is a
@@ -737,8 +780,18 @@ Inter-process IPC (message passing) -- today's ring-3 processes are
 isolated from each other with no way to communicate.
 
 A real C library on top of `filetest`'s fd-aware syscalls: CRT0
-(argc/argv from the initial stack), TLS (FS.base), FPU/SSE context-switch
-save/restore -- none of which exist yet.
+(argc/argv from the initial stack -- partially there already,
+`elf_build_argv_on_stack()`/`process_run_ring3_args()`, `userland/ls.c`
+is the one existing caller), TLS (FS.base), FPU/SSE context-switch
+save/restore, and malloc/free -- none of which exist yet. `SYS_SBRK`
+(`kernel/include/syscall_abi.h`) is the only allocator-adjacent syscall
+today, and it's grow-only (no shrink/free) and explicitly documented as
+"legacy-single-process-only" (`kernel/core/syscall.c`) -- no userland
+code anywhere builds real malloc/free semantics on top of it. TLS in
+particular is also why `kernel/core/stack_protector.c`'s stack-canary
+guard uses `-mstack-protector-guard=global` instead of GCC's normal
+TLS-based default -- confirmed directly, not theoretical, see
+`docs/decisions.md`.
 
 A FAT16/FAT32 driver -- real interop with other OSes' tools and USB
 drives, distinct from the AHCI/SATA item (that's the controller; this is
@@ -864,7 +917,56 @@ port-I/O are a real per-arch project. Full breakdown, proposed
 `docs/arch-portability.md`.
 
 Stretch: port a small classic game (e.g. Doom) as an end-to-end stress
-test of real disk-hosted ELF binaries + libc, once both exist.
+test of real disk-hosted ELF binaries + libc, once both exist. Real
+prerequisite breakdown below, from a research pass through the actual
+ring-3 syscall surface (`kernel/include/syscall_abi.h`, every
+`userland/*.c`) rather than assumption -- the realistic target is a
+`doomgeneric` (github.com/ozkl/doomgeneric)-style port, which reduces
+the porting surface to implementing a handful of platform functions
+(`DG_Init`, `DG_DrawFrame`, `DG_SleepMs`, `DG_GetKey`, `DG_GetTicksMs`)
+around the original portable Doom source, not a from-scratch renderer.
+
+**Already there today, confirmed directly -- no roadmap work needed:**
+- Disk-hosted ELF execution (`run <name>`, Milestone 1, done) and
+  static `ET_EXEC` loading with argc/argv delivery.
+- Non-blocking keyboard input (`SYS_READ_KEY`, translated ASCII/`KEY_*`
+  codes) -- covers `DG_GetKey` as-is.
+- A private pixel buffer + present (`SYS_WIN_CREATE`/`SYS_WIN_PRESENT`)
+  -- 32bpp direct RGB, up to 640x480, comfortably over Doom's 320x200.
+  No indexed/paletted mode exists, but that's not a toy-os gap:
+  converting Doom's internal 8-bit palette to RGB per frame is the
+  port's own job, the same thing every real `doomgeneric` backend
+  already does. Covers `DG_DrawFrame`.
+- Basic file read (`SYS_OPEN`/`SYS_READ`/`SYS_CLOSE`) -- enough to read
+  a WAD file's bytes, just not to seek within it (see below).
+
+**Needed, maps to existing milestones (see each milestone's own entry
+above for the full writeup):**
+- malloc/free -- Milestone 16 (Real C library). `SYS_SBRK` exists but
+  is bump-only/single-process-only; nothing builds real allocator
+  semantics on top of it yet, and Doom's zone allocator needs a real
+  heap (the shareware WAD alone is a few MB).
+- A ring-3-readable millisecond clock + a real sleep/delay primitive --
+  Milestone 15 (currently filed under Networking, but confirmed general
+  -- see that milestone's own entry). Covers `DG_GetTicksMs`/`DG_SleepMs`.
+- `SYS_SEEK`/lseek -- Milestone 10 (Real filesystem API surface). A WAD
+  file is a directory of lumps at arbitrary offsets; today's file I/O
+  is open-then-sequential-read only.
+- A larger/growable user stack -- Milestone 5 (process model). Real,
+  call-heavy C code against a single fixed 4KB page is a genuine risk,
+  though untested whether Doom's actual stack depth would exceed it --
+  flagged as "verify with a real answer" rather than an assumed blocker.
+
+**Explicitly NOT required, despite sounding related:**
+- Dynamic linking / shared libc (Milestone 18) -- Doom can ship as one
+  statically-linked ELF, same as every userland binary today.
+- A real audio device (Milestone 19's AC97/HDA item) -- a first port
+  can ship silent, or use the already-done PC speaker `beep` for
+  simple cues; digital sound is optional, not a blocker.
+- `wintest` non-modal support (Milestone 16) -- Doom can run in
+  exclusive/fullscreen mode the same way `gui` mode already takes over
+  the screen; not needing to coexist with other windows for a first
+  version.
 
 ---
 
