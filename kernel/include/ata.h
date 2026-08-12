@@ -124,4 +124,32 @@ int ata_write_sectors(uint32_t lba, int count, const void *buf);
 void ata_flush_begin(void);
 void ata_flush_end(void);
 
+// Phase 1 of the async-I/O roadmap item (docs/roadmap.md): a
+// non-blocking start/poll pair for the DMA path, built alongside the
+// existing blocking ata_read_sectors()/ata_write_sectors() rather than
+// replacing them -- nothing in fs.c/tfs.c uses this yet. Only usable
+// when ata_dma_active() is true (the PIO fallback has no equivalent;
+// polling a busy-wait loop non-blockingly isn't meaningfully
+// different from just blocking on it).
+//
+// One transfer at a time: dma_transfer_start() returns 0 immediately
+// if a previous one hasn't been polled to completion yet (ATA_POLL_DONE
+// or ATA_POLL_FAILED), or if the command couldn't even be issued (see
+// ata.c's dma_issue()). Once started, call dma_transfer_poll()
+// repeatedly -- from a loop, a per-frame callback, wherever -- until it
+// stops returning ATA_POLL_PENDING. `buf` must stay valid and
+// unmodified by the caller until polling reaches a terminal result.
+enum ata_poll_result { ATA_POLL_PENDING = 0, ATA_POLL_DONE = 1, ATA_POLL_FAILED = 2 };
+int dma_transfer_start(uint32_t lba, int count, void *buf, int is_write);
+enum ata_poll_result dma_transfer_poll(void);
+
+// Diagnostic only -- see ata.c's doc comment. Proves the pair above
+// against a real read (never a write, so it's always safe to run),
+// comparing its result against the existing blocking path and
+// reporting how many dma_transfer_poll() calls it took in *out_polls.
+// Returns 1 on a verified match, 0 on any failure (including "DMA
+// isn't active on this machine" -- check ata_dma_active() first if the
+// caller wants a more specific message than this test's own 0/1).
+int ata_dma_nonblocking_selftest(uint32_t lba, uint32_t *out_polls);
+
 #endif
