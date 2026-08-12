@@ -12,13 +12,13 @@ roadmap): each milestone is just checkboxes and a few words. Full reasoning,
 phased test plans, and cross-references for every item are in **Details**
 at the bottom of this file, organized the same way.
 
-**Versioning:** `VERSION` is `0.1.0-dev` right now (see `tools/set_version.sh`
-and `docs/decisions.md` for the semver+`-dev`-suffix mechanics). `v0.0.9` was
-tagged and released ahead of any milestone -- an early snapshot for testing,
-not milestone-complete (see `docs/decisions.md`'s release-process entry and
-the [v0.0.9 GitHub Release](https://github.com/Drenos/toy-os/releases/tag/v0.0.9)).
-Milestone 1 below is what today's `0.1.0-dev` becomes `0.1.0` for; each
-milestone after that is pencilled in as the next minor version. Purely a
+**Versioning:** `v0.0.9` was tagged and released ahead of any milestone -- an
+early snapshot for testing, not milestone-complete (see `docs/decisions.md`'s
+release-process entry and the
+[v0.0.9 GitHub Release](https://github.com/Drenos/toy-os/releases/tag/v0.0.9)).
+`v0.1.0` is Milestone 1 (async I/O to the desktop) done -- see
+`CHANGELOG.md`'s `[0.1.0]` section. Each milestone after that is pencilled in
+as the next minor version. Purely a
 planning aid, not a commitment -- a milestone can slip, merge with its
 neighbor, or get reordered, and its planned version moves with it.
 Whether/when this project ever calls something `1.0.0` is a separate,
@@ -26,7 +26,7 @@ later judgment call, not mechanically tied to "20 milestones done."
 
 ## Milestones
 
-### Milestone 1 -- Async I/O to the desktop (planned v0.1.0)
+### ~~Milestone 1 -- Async I/O to the desktop~~ (v0.1.0, released 2026-08-12)
 
 - [x] Non-blocking DMA start/poll primitive
 - [x] Steppable write API
@@ -203,13 +203,13 @@ desktop, not just the operation. Broken into phases, each independently
 testable:
 
 1. [x] ~~Non-blocking DMA start/poll primitive~~ -- done (see `CHANGELOG.md`'s
-   `[Unreleased]` entry): `dma_transfer_start()`/`dma_transfer_poll()`
+   `[0.1.0]` entry): `dma_transfer_start()`/`dma_transfer_poll()`
    (`kernel/drivers/ata.c`/`ata.h`), built from the same `dma_issue()`/
    `dma_finish()` halves the existing blocking `dma_transfer()` uses, so the
    blocking path is unchanged. No real caller yet -- proven standalone via
    the `dmatest [lba]` shell command (read-only, byte-compares a blocking
    read against the non-blocking one, reports poll count).
-2. [x] ~~Steppable write API~~ -- done (see `CHANGELOG.md`'s `[Unreleased]`
+2. [x] ~~Steppable write API~~ -- done (see `CHANGELOG.md`'s `[0.1.0]`
    entry): `fs_write_range_begin()`/`fs_write_range_step()` (`fs.h`,
    dispatched through `fs_ops.h`/`vfs.c` to `tfs.c`'s
    `tfs_write_range_begin()`/`_step()`), built from the same
@@ -219,7 +219,7 @@ testable:
    step loop the command drives itself, verifies byte-for-byte against
    readback, reports step count).
 3. [x] ~~Wire up one real caller~~ -- done (see `CHANGELOG.md`'s
-   `[Unreleased]` entry): `wm_run()` polls a pending write once per frame
+   `[0.1.0]` entry): `wm_run()` polls a pending write once per frame
    (`apps/wm/wm.c`, a new WM-global `pending_write` slot) instead of
    calling `fs_write_range()`/`fs_write()` and blocking; Notepad's Save As...
    (`apps/notepad.c`) is the first non-blocking caller, via two new public
@@ -234,7 +234,7 @@ testable:
    the desktop successfully switching focus to the other window while the
    write was still in flight, proving it didn't freeze.
 4. [x] ~~Generalize to reads and the plain shell prompt~~ -- done (see
-   `CHANGELOG.md`'s `[Unreleased]` entry). Read side:
+   `CHANGELOG.md`'s `[0.1.0]` entry). Read side:
    `fs_read_range_begin()`/`fs_read_range_step()` (`fs.h`, dispatched
    through `fs_ops.h`/`vfs.c` to `tfs.c`'s `tfs_read_range_begin()`/
    `_step()`), built the same way Phase 2 built the write side, plus a
@@ -262,7 +262,7 @@ testable:
    debug console/cursor between blocks now.
 
 Separately, async/continuously-armed process spawning for the GUI Terminal
-(Milestone 1 phase 4b) -- [x] done, see `CHANGELOG.md`'s `[Unreleased]`
+(Milestone 1 phase 4b) -- [x] done, see `CHANGELOG.md`'s `[0.1.0]`
 entry. Was deliberately deferred, not started, when `ls` migrated to a
 real `/bin` binary (blocked in the Terminal same as `run` at the time,
 see docs/decisions.md) -- the blocker was architectural, not a small fix:

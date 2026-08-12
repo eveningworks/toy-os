@@ -22,6 +22,8 @@ forever.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-12
+
 ### Changed
 - Repo history rewritten (`git-filter-repo`, all 91 prior commits) to
   remove the maintainer's real name and personal email addresses from
