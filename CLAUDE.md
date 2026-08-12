@@ -362,11 +362,41 @@ writing a one-off script) if you need a capability it doesn't have yet.
 
 The gotchas it already gets right, for when you need to know why:
 
-- **Launch with `setsid nohup ... & ); disown -a`**, not a plain `&` --
-  a bare background job tied to one Bash tool call's shell gets killed
-  when that call returns. `setsid` detaches it so it survives across
-  tool calls. (`tools/qmp_test.py`'s `launch_qemu_cmd()` returns the
-  command to background this way.)
+- **Launch via `tools/qmp_test.py`'s `launch_qemu_cmd()` -- call it (or
+  copy its returned command verbatim), don't hand-roll a
+  `qemu-system-x86_64` invocation from scratch.** It returns a command
+  backgrounded with `-daemonize -pidfile <path>`, not a plain `&` or a
+  `setsid nohup ... & ); disown -a` -- a bare `&` tied to one Bash tool
+  call's shell gets killed when that call returns, and `setsid
+  nohup`-style detaching (an earlier approach, superseded) turned out
+  to be unreliable in at least one sandboxed environment (spurious
+  non-zero exit codes on the launching call, the process not actually
+  surviving to the next tool call). QEMU's own `-daemonize` avoids all
+  of that -- it forks, detaches, and returns control immediately, no
+  shell job-control subtlety to get wrong. Hand-rolling the command
+  instead of using `launch_qemu_cmd()` is also how a QMP port mismatch
+  happens silently: `launch_qemu_cmd()`/`QMPSession()`/`GuiFlow()` all
+  default to port 4445, but nothing stops a hand-typed `-qmp
+  tcp:127.0.0.1:4444,...` from picking a different one -- the failure
+  mode is a flat `Connection refused` when the session tries to
+  connect, not an obviously-QEMU-related error.
+- **`GuiFlow(qmp_port=4445)` constructs its own internal `QMPSession` --
+  don't create a `QMPSession` yourself and pass it in.** `GuiFlow.
+  __init__` takes a port number (or other `QMPSession` kwargs), not a
+  session instance; passing one positionally fails with a confusing
+  `TypeError` inside `QMPSession.__init__` rather than an obvious
+  "wrong argument" message. Access the session it already made via
+  `flow.session` (e.g. `flow.session.screenshot(...)`,
+  `flow.session.recalibrate()`) instead of holding a separate one.
+- **Don't chain a `pkill` with further commands in the same shell
+  invocation** (e.g. `pkill -f qemu-system-x86_64; rm -f qemu.pid; ...`
+  or piping its result into a launch command) -- `pkill` exits 1 when
+  nothing matched (nothing to kill is the common case, not an error),
+  which trips `errexit` and aborts the rest of the chain with a
+  spurious-looking `exit code 144`, even though every individual
+  command in it would have worked fine run separately. Run `pkill` (or
+  skip it entirely and check `ps aux | grep qemu` first) as its own
+  Bash call, then launch fresh in a separate call.
 - **Use `-serial file:/path/to/serial.log`, not `-serial stdio`** for
   most testing (kernel boot/test output is easy to `tail`). But note
   some userland tests (`echotest`) block forever reading from the

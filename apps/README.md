@@ -187,19 +187,27 @@ z-order, and drives everything through one event loop -- mouse clicks
 (left AND right button), dragging by the title bar, minimize/maximize/
 close buttons, a Start menu that lists `gui_app_registry`, right-click
 context menus, desktop icons, and keyboard input routed to whichever
-window is frontmost. The CPU-side redraw is still whole-scene every
-frame -- every window/widget gets redrawn into the off-screen buffer
-regardless of what actually changed, much simpler to get right with
-overlapping movable windows than tracking per-widget dirty state.
-What IS tracked is the final blit to the real framebuffer:
-`gfx_present()` (`kernel/drivers/gfx.c`) only copies the single
-bounding box that's actually changed since the last present, not the
-whole screen, plus a cheap cursor-only fast path for plain mouse
-movement -- see `docs/roadmap.md`'s "Dirty-rectangle rendering" entry
-for the exact state (partial: bounding-box blit only, no real
-per-widget dirty-rect list). If you add drawing code, do it in
-`on_draw` and let the window manager handle presenting; don't call
-`gfx_present()` yourself.
+window is frontmost. `wm_render.c` now tracks a SCENE-level damage
+region each frame -- a computed bounding box of what actually needs
+repainting (window move/resize/open/close/minimize/restore/z-order,
+desktop icon drag) -- and clips a `draw_window_chrome()`/`on_draw()`
+call to it, or skips the call entirely for a window whose rect doesn't
+intersect it at all; everything within the damaged box still redraws
+back-to-front (desktop, then windows in z-order, then taskbar/menus)
+rather than computing exact exposed sub-rectangles, which is what
+makes this correct for overlapping windows without separate occlusion
+tracking. Menu/taskbar-content-click/dialog redraws still fall back to
+a full-screen repaint (imprecise but safe) -- see `docs/decisions.md`'s
+compositor entry for the full design and `docs/roadmap.md`'s
+Milestone 9 entry for what's still open. Below that scene-level layer,
+`gfx_present()` (`kernel/drivers/gfx.c`) still separately tracks
+dirty PIXELS for the final blit to the real framebuffer -- only the
+touched bounding box gets copied out, not the whole screen, plus a
+cheap cursor-only fast path for plain mouse movement. If you add
+drawing code, do it in `on_draw` and let the window manager handle
+presenting; don't call `gfx_present()` yourself, and don't call
+`gfx_set_clip_rect()` from app code either -- that's the compositor's
+own mechanism, not a per-app one.
 
 There's no process isolation here either -- a GUI app's callbacks run in
 the kernel's own context, same as everything else in `apps/`. What the
