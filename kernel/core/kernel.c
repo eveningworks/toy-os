@@ -52,13 +52,14 @@ void kernel_main(uint64_t multiboot_info_addr) {
 
     pmm_init();
     klog_write("toy-os: physical frame allocator initialized\n");
-    pmm_selftest(); // exercises pmm_alloc_contiguous()/pmm_free_contiguous() -- see pmm.h
 
     heap_init(); // kmalloc()/kfree() -- built on pmm, needs it initialized first
     klog_write("toy-os: kernel heap initialized\n");
-    heap_selftest();
 
-    json_selftest(); // parse/accessor/write/round-trip check -- only needs kmalloc, not fs_init() yet
+    // No self-tests run here any more. pmm/heap/json/tfs each used to be
+    // checked on every single boot -- see kernel/include/kernel/ktest.h
+    // for why that stopped being a good idea and `ktest` for how to run
+    // them now.
 
     pci_init(); // brute-force config-space scan -- see pci.h's top comment
     klog_write("toy-os: PCI bus enumerated\n");

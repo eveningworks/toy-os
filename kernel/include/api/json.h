@@ -103,6 +103,6 @@ int json_write_file(const char *path, const struct json_value *root, int pretty)
 // Parses/serializes/round-trips a handful of small fixed documents and
 // checks the results -- run once at boot the same way heap_selftest()/
 // tfs_selftest() are.
-void json_selftest(void);
+int json_selftest(void); // 1 = passed, 0 = failed (details logged) -- wrapped by a KTEST
 
 #endif

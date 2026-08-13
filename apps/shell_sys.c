@@ -347,6 +347,16 @@ void cmd_df(void) {
     vga_write(" KB\n");
 }
 
+// `ktest [suite]` -- runs the in-kernel test suite (kernel/test/ktest.c)
+// and reports. Note the tests run inside the live, booted kernel with
+// full access to the real heap, allocator and filesystem, which is the
+// point of them existing here rather than as host-side unit tests --
+// but it also means a test that corrupts something corrupts the running
+// system, not a sandbox. See kernel/include/kernel/ktest.h.
+void cmd_ktest(const char *args) {
+    ktest_run_all(args && k_strlen(args) > 0 ? args : 0);
+}
+
 // `fsck` / `fsck repair` -- filesystem consistency check, and the
 // reclaim half of it. See fs.h's fs_check() for what a repair pass will
 // and won't fix; the interesting asymmetry is that leaked blocks are

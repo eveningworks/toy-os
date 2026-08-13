@@ -25,6 +25,8 @@
 #include "heap.h"
 #include "pci.h"
 #include "fs.h"
+#include "ktest_run.h"
+#include "vga.h"
 
 #define DBG_LINE_MAX 128
 #define DBG_PROMPT "\r\ndbg> "
@@ -38,6 +40,57 @@ static void dbg_cmd_help(void) {
     klog_write("  meminfo     - physical frame + kernel heap usage\r\n");
     klog_write("  lsdev       - enumerated PCI devices\r\n");
     klog_write("  lsfs [path] - list a filesystem directory (default /)\r\n");
+    klog_write("  ktest [suite] - run the in-kernel test suite\r\n");
+}
+
+// The one command here that isn't read-only inspection. This console's
+// scope note (debug_console.h) says no filesystem mutation and no
+// process control, and the filesystem tests do write -- they create and
+// delete /.ktest_tmp. It's here anyway because this is the only input
+// path that works with no display, no QMP and no keyboard emulation,
+// which is exactly what `make test` and CI need (tools/ktest_run.py
+// drives this). Running tests is the deliberate exception, not the
+// start of a general-purpose serial shell.
+//
+// ktest_run_all() prints through vga_write(), which on this path is the
+// console's own output -- the report comes back down the same wire the
+// command arrived on.
+// ktest_run_all() reports through vga_write(), which by default paints
+// the physical screen -- so run it behind a sink that redirects that
+// output down this wire instead. Without this the tests genuinely run
+// over serial but their report is invisible here (only the klog_write()
+// lines from inside individual tests come through), which is exactly
+// how the first version of tools/ktest_run.py managed to time out
+// waiting for a verdict that was being printed to a screen nobody was
+// looking at.
+//
+// The sink interface (vga.h) is the same one apps/terminal.c uses to
+// put shell output into a window; only putc is meaningful here, since a
+// serial line has no cursor to back over, no page to clear and no
+// colours.
+static void dbg_sink_putc(void *ctx, char c) {
+    (void)ctx;
+    if (c == '\n') serial_putc('\r'); // serial terminals want CRLF
+    serial_putc(c);
+}
+static void dbg_sink_backspace(void *ctx) { (void)ctx; }
+static void dbg_sink_clear(void *ctx) { (void)ctx; }
+static void dbg_sink_set_color(void *ctx, enum vga_color fg, enum vga_color bg) {
+    (void)ctx; (void)fg; (void)bg;
+}
+
+static void dbg_cmd_ktest(const char *suite) {
+    const struct vga_sink serial_sink = {
+        .ctx = 0,
+        .putc = dbg_sink_putc,
+        .backspace = dbg_sink_backspace,
+        .clear = dbg_sink_clear,
+        .set_color = dbg_sink_set_color,
+        .rows = 0, // no page height -- vga_rows() falls back to a default
+    };
+    const struct vga_sink *prev = vga_set_sink(&serial_sink);
+    ktest_run_all(suite && suite[0] ? suite : 0);
+    vga_set_sink(prev);
 }
 
 static void dbg_cmd_meminfo(void) {
@@ -122,6 +175,7 @@ static void dbg_dispatch(char *line) {
     else if (k_strcmp(line, "meminfo") == 0) dbg_cmd_meminfo();
     else if (k_strcmp(line, "lsdev") == 0) dbg_cmd_lsdev();
     else if (k_strcmp(line, "lsfs") == 0) dbg_cmd_lsfs(arg);
+    else if (k_strcmp(line, "ktest") == 0) dbg_cmd_ktest(arg);
     else {
         klog_write("unknown command: ");
         klog_write(line);

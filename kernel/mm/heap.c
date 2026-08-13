@@ -33,6 +33,7 @@
 // handler or a genuinely preemptible kernel thread, this needs a lock
 // first.
 #include "heap.h"
+#include "fault_inject.h"
 #include "pmm.h"
 #include "klog.h"
 #include "string.h"
@@ -115,6 +116,9 @@ static void split_block(struct heap_block *b, uint64_t size) {
 }
 
 void *kmalloc(size_t size) {
+    // See fault_inject.h -- inert unless a test armed it. Returning
+    // NULL here is exactly what a genuinely exhausted heap does.
+    if (fault_should_fail_alloc()) return 0;
     if (size == 0) return 0;
     uint64_t need = align_up(size, HEAP_ALIGN);
 
@@ -186,20 +190,32 @@ void kfree(void *ptr) {
 uint64_t heap_total_bytes(void) { return g_total_bytes; }
 uint64_t heap_used_bytes(void) { return g_used_bytes; }
 
-void heap_selftest(void) {
+int heap_selftest(void) {
+    // Baseline rather than an absolute 0. This used to check
+    // heap_used_bytes() == 0 after freeing everything it allocated,
+    // which was true only because it ran from kernel_main() immediately
+    // after heap_init(), before anything else existed. Run from `ktest`
+    // in a booted system -- shell, filesystem buffers, GUI state all
+    // holding allocations -- that check fails on a perfectly healthy
+    // heap. Comparing against the level on entry keeps exactly the
+    // property this test exists for (see the comment below: a
+    // coalescing bug that corrupts a neighbour shows up as an
+    // accounting mismatch) without assuming it owns the machine.
+    uint64_t used_before = heap_used_bytes();
+
     void *a = kmalloc(64);
     void *b = kmalloc(128);
     void *c = kzalloc(32);
     if (!a || !b || !c) {
         klog_write("heap: selftest FAILED (allocation returned 0)\n");
-        return;
+        return 0; // failure -- see the message above
     }
 
     uint8_t *cz = (uint8_t *)c;
     for (int i = 0; i < 32; i++) {
         if (cz[i] != 0) {
             klog_write("heap: selftest FAILED (kzalloc didn't zero)\n");
-            return;
+            return 0; // failure -- see the message above
         }
     }
 
@@ -210,7 +226,7 @@ void heap_selftest(void) {
 
     // Every block from a/b/c is free again at this point -- g_used_bytes
     // should be back to whatever it was before this test allocated
-    // anything (0, if this is the only heap user so far at boot). This
+    // anything. This
     // check exists specifically because a real bug once slipped past
     // this self-test entirely: freeing a's still-in-use LEFT neighbor
     // was silently folded into it by the coalescing logic, corrupting
@@ -218,22 +234,23 @@ void heap_selftest(void) {
     // failed allocation here -- only a later kfree() of the corrupted
     // block would underflow g_used_bytes, and nothing here used to
     // check g_used_bytes at all. See docs/decisions.md.
-    if (heap_used_bytes() != 0) {
-        klog_write("heap: selftest FAILED (used_bytes not back to 0 after freeing everything)\n");
-        return;
+    if (heap_used_bytes() != used_before) {
+        klog_write("heap: selftest FAILED (used_bytes not back to its starting level after freeing everything)\n");
+        return 0; // failure -- see the message above
     }
 
     void *d = kmalloc(64);
     if (!d) {
         klog_write("heap: selftest FAILED (alloc after free-and-coalesce)\n");
-        return;
+        return 0; // failure -- see the message above
     }
     kfree(d);
 
-    if (heap_used_bytes() != 0) {
-        klog_write("heap: selftest FAILED (used_bytes not back to 0 after final free)\n");
-        return;
+    if (heap_used_bytes() != used_before) {
+        klog_write("heap: selftest FAILED (used_bytes not back to its starting level after final free)\n");
+        return 0; // failure -- see the message above
     }
 
     klog_write("heap: selftest passed\n");
+    return 1;
 }

@@ -18,6 +18,7 @@
 #include "klog.h"
 #include "idt.h"
 #include "debugflags.h"
+#include "fault_inject.h"
 #include <stddef.h>
 
 #define ATA_PRIMARY_IO  0x1F0
@@ -745,6 +746,11 @@ int ata_write_sector(uint32_t lba, const void *buf) {
 }
 
 int ata_read_sectors(uint32_t lba, int count, void *buf) {
+    // Deliberate failure injection for tests (fault_inject.h) -- inert
+    // unless a test armed it. Placed at the public entry point, before
+    // any hardware is touched, so an injected failure looks exactly
+    // like the drive refusing: same return value, no side effects.
+    if (fault_should_fail_ata_read()) return 0;
     if (!g_present) return 0;
     if (count < 1 || count > ata_max_sectors_per_xfer()) return 0;
     if (!lba_range_ok(lba, count)) return 0;
@@ -753,6 +759,11 @@ int ata_read_sectors(uint32_t lba, int count, void *buf) {
 }
 
 int ata_write_sectors(uint32_t lba, int count, const void *buf) {
+    // Deliberate failure injection for tests (fault_inject.h) -- inert
+    // unless a test armed it. Placed at the public entry point, before
+    // any hardware is touched, so an injected failure looks exactly
+    // like the drive refusing: same return value, no side effects.
+    if (fault_should_fail_ata_write()) return 0;
     if (!g_present) return 0;
     if (count < 1 || count > ata_max_sectors_per_xfer()) return 0;
     if (!lba_range_ok(lba, count)) return 0;

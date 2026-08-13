@@ -322,6 +322,20 @@ changed) specifically so this dependency tracking doesn't regress --
 would make every file that includes `kapi.h` (nearly everything) look
 "out of date" and rebuild every single time.
 
+**`make test` / `tools/ktest_run.py`** -- the in-kernel test suite.
+Tests are `KTEST("suite", "name") { ... }` blocks living next to the
+code they exercise (`kernel/mm/mm_test.c`, `kernel/fs/fs_test.c`, ...);
+they register themselves through a `.ktests` linker section, so a new
+test file needs no registry entry and no Makefile edit. `make test`
+boots headless, drives `ktest` over the serial debug console and exits
+non-zero on failure; `ktest` / `ktest <suite>` runs them interactively.
+Two things worth knowing before writing one: tests run inside the LIVE
+booted kernel (so don't assume a pristine heap or an empty filesystem --
+that assumption is exactly what broke `heap_selftest()` when it moved
+off the boot path), and `kernel/include/kernel/fault_inject.h` can fail
+the next N ATA writes/reads or kmalloc calls, which is how the error
+paths get tested at all. Nothing runs tests at boot any more.
+
 **`tools/boot_smoke_test.py`** -- a fast, non-GUI boot check: boots
 `toy-os.iso` headlessly, watches `serial.log` for the expected kernel
 init sequence (or a `PANIC:`), exits 0/1 in a few seconds. No QMP, no
@@ -533,6 +547,8 @@ data files, not a compiled-in enum), `qmp_test.py`
 (QEMU/QMP GUI testing helpers, see above), `boot_smoke_test.py` (fast
 non-GUI boot check, see above), `gen_version.sh`/`set_version.sh`
 (versioning, see the `version.h`/`VERSION` bullets above),
+`ktest_run.py` (drives the in-kernel test suite over serial and turns
+it into an exit code -- what `make test` and CI run),
 `device_git.sh` (Cowork-only: wraps a `git` command run over the device
 bridge with the stale-`index.lock` workaround, see "Working in the
 cloud sandbox vs. directly on the user's machine" above -- not needed,

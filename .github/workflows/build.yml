@@ -43,3 +43,11 @@ jobs:
 
       - name: Boot smoke test (headless, no GUI)
         run: python3 tools/boot_smoke_test.py -v
+
+      # The in-kernel test suite (kernel/include/kernel/ktest.h). The
+      # smoke test above answers "does it still boot"; this answers "does
+      # it still work" -- and unlike the pre-2026-08-13 boot-time
+      # self-tests it actually fails the build when something is wrong,
+      # instead of printing FAILED into a log nobody reads.
+      - name: Kernel test suite (ktest)
+        run: python3 tools/ktest_run.py -v

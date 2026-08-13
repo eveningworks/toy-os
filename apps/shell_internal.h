@@ -66,6 +66,7 @@ void cmd_echo(const char *args);
 void cmd_meminfo(void);
 void cmd_df(void);
 void cmd_fsck(const char *args);
+void cmd_ktest(const char *args);
 void cmd_stress(const char *args);
 void cmd_dmatest(const char *args);
 void cmd_steptest(const char *args);

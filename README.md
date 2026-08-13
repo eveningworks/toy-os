@@ -207,6 +207,15 @@ If `make run` doesn't show a window (e.g. over SSH), use:
 make run-nographic   # serial console only, no VGA window
 ```
 
+`make test` runs the in-kernel test suite: it boots headless, drives the
+`ktest` command over the serial debug console, and exits non-zero if any
+test failed (CI runs the same thing). Interactively, `ktest` runs
+everything and `ktest fs` runs one suite. Tests live next to the code
+they exercise (`kernel/mm/mm_test.c`, `kernel/fs/fs_test.c`, ...) and
+register themselves through a linker section, so a new test file needs
+no registry entry and no Makefile edit -- see
+`kernel/include/kernel/ktest.h`.
+
 For real breakpoint/single-step debugging, `make debug` boots frozen at
 CPU reset against QEMU's own GDB stub -- no kernel-side GDB code
 involved. In another terminal:

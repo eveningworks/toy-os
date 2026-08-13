@@ -130,16 +130,20 @@ this file.)
 
 ### Milestone 4 -- Kernel test harness (planned v0.4.0)
 
-- [ ] A registration mechanism for in-kernel tests, replacing the ad-hoc
-      `heap_selftest()`/`tfs_selftest()`/`pmm` self-tests scattered
-      through boot
-- [ ] A `make test` target that boots, runs every registered test, and
-      exits non-zero on failure
-- [ ] Wire it into CI alongside `boot_smoke_test.py`
-- [ ] Fault injection as a first-class facility (the ATA/TFS2 error paths
-      are currently only reachable via `tools/tfs2_writer.py corrupt`)
-- [ ] Move the existing boot self-tests behind it, so a normal boot stops
-      paying for them
+- [x] ~~A registration mechanism for in-kernel tests~~ -- done, see
+      `CHANGELOG.md`'s `[Unreleased]` entry (KTEST() + a `.ktests`
+      linker section: tests register by existing)
+- [x] ~~A `make test` target that boots, runs every registered test, and
+      exits non-zero on failure~~ -- done (`tools/ktest_run.py` drives
+      `ktest` over the serial debug console)
+- [x] ~~Wire it into CI alongside `boot_smoke_test.py`~~ -- done
+- [x] ~~Fault injection as a first-class facility~~ -- done, see
+      `kernel/include/kernel/fault_inject.h` (fail the next N ATA
+      writes/reads or kmalloc calls; 5 of the 14 tests use it)
+- [x] ~~Move the existing boot self-tests behind it, so a normal boot
+      stops paying for them~~ -- done; `kernel_main()` runs no tests at
+      all now, and `tfs_init()` no longer writes at a 4.6GB offset on
+      every disk-backed boot
 
 ### Milestone 5 -- Benchmark suite (planned v0.5.0)
 

@@ -62,6 +62,6 @@ uint64_t pmm_free_frames(void);
 // left in permanently rather than treated as throwaway -- same idea as
 // the klog_write() lines around it in kernel.c proving other
 // no-GUI-surface infrastructure initialized correctly.
-void pmm_selftest(void);
+int pmm_selftest(void); // 1 = passed, 0 = failed (details logged) -- wrapped by a KTEST
 
 #endif

@@ -19,6 +19,21 @@ SECTIONS
         *(.rodata*)
     }
 
+    /* In-kernel test descriptors. KTEST() (kernel/include/kernel/ktest.h)
+       drops one struct ktest_case per test into .ktests, and the runner
+       walks the array between these two symbols -- so tests register
+       themselves by existing, with no list to maintain by hand.
+       ALIGN(8) matters: the entries are structs of pointers and the
+       runner indexes them as an array, so any padding the linker
+       inserted between input sections would be read as a bogus entry. */
+    . = ALIGN(8);
+    .ktests :
+    {
+        __ktests_start = .;
+        KEEP(*(.ktests))
+        __ktests_end = .;
+    }
+
     .data :
     {
         *(.data)

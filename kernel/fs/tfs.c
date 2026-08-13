@@ -1089,7 +1089,7 @@ static void read_full_bitmap(void) {
 // Defined near the bottom of this file (after the touch/write_range/
 // read_range/delete helpers it uses) -- forward-declared here so
 // tfs_init() can call it once, right after a disk is confirmed usable.
-static void tfs_selftest(void);
+int tfs_selftest(void); // no longer run at boot -- see kernel/fs/fs_test.c
 
 static int tfs_init(void) {
     k_memset(files, 0, sizeof(files));
@@ -1197,7 +1197,6 @@ static int tfs_init(void) {
         }
         klog_write("fs: formatted a fresh persistent filesystem on disk\n");
     }
-    if (g_disk_backed) tfs_selftest();
     return g_disk_backed;
 }
 
@@ -1742,7 +1741,7 @@ static void tfs_list(const char *dir_path, void (*cb)(const char *name, uint32_t
 // walked correctly.
 #define TFS_SELFTEST_OFFSET (4600ULL * 1024 * 1024)
 
-static void tfs_selftest(void) {
+int tfs_selftest(void) {
     uint8_t pattern[64];
     for (int i = 0; i < 64; i++) pattern[i] = (uint8_t)(i * 7 + 3);
 
@@ -1755,22 +1754,22 @@ static void tfs_selftest(void) {
     uint64_t capacity = (uint64_t)g_total_blocks * FS_BLOCK_SIZE;
     if (TFS_SELFTEST_OFFSET + sizeof(pattern) > capacity) {
         klog_write("fs: selftest skipped -- disk is too small for the triple-indirect offset\n");
-        return;
+        return 0; // failure -- see the message above
     }
 
     if (!tfs_touch(TFS_SELFTEST_PATH)) {
         klog_write("fs: selftest FAILED (couldn't create test file)\n");
-        return;
+        return 0; // failure -- see the message above
     }
     if (!tfs_write_range(TFS_SELFTEST_PATH, TFS_SELFTEST_OFFSET, pattern, sizeof(pattern))) {
         klog_write("fs: selftest FAILED (triple-indirect write failed)\n");
         tfs_delete(TFS_SELFTEST_PATH);
-        return;
+        return 0; // failure -- see the message above
     }
     if (tfs_size(TFS_SELFTEST_PATH) != TFS_SELFTEST_OFFSET + sizeof(pattern)) {
         klog_write("fs: selftest FAILED (size wrong after triple-indirect write)\n");
         tfs_delete(TFS_SELFTEST_PATH);
-        return;
+        return 0; // failure -- see the message above
     }
 
     uint8_t readback[64];
@@ -1779,13 +1778,13 @@ static void tfs_selftest(void) {
     if (got != sizeof(readback)) {
         klog_write("fs: selftest FAILED (short read back from triple-indirect region)\n");
         tfs_delete(TFS_SELFTEST_PATH);
-        return;
+        return 0; // failure -- see the message above
     }
     for (int i = 0; i < 64; i++) {
         if (readback[i] != pattern[i]) {
             klog_write("fs: selftest FAILED (data mismatch reading back triple-indirect region)\n");
             tfs_delete(TFS_SELFTEST_PATH);
-            return;
+            return 0; // failure -- see the message above
         }
     }
 
@@ -1797,26 +1796,27 @@ static void tfs_selftest(void) {
     if (got != sizeof(gap)) {
         klog_write("fs: selftest FAILED (couldn't read the zero-filled gap)\n");
         tfs_delete(TFS_SELFTEST_PATH);
-        return;
+        return 0; // failure -- see the message above
     }
     for (int i = 0; i < 16; i++) {
         if (gap[i] != 0) {
             klog_write("fs: selftest FAILED (gap wasn't zero-filled)\n");
             tfs_delete(TFS_SELFTEST_PATH);
-            return;
+            return 0; // failure -- see the message above
         }
     }
 
     if (!tfs_delete(TFS_SELFTEST_PATH)) {
         klog_write("fs: selftest FAILED (couldn't delete test file / free its blocks)\n");
-        return;
+        return 0; // failure -- see the message above
     }
     if (tfs_exists(TFS_SELFTEST_PATH)) {
         klog_write("fs: selftest FAILED (test file still exists after delete)\n");
-        return;
+        return 0; // failure -- see the message above
     }
 
     klog_write("fs: selftest passed (triple-indirect addressing verified)\n");
+    return 1;
 }
 
 // Backs fs_disk_usage() -- counts set bits in whichever bitmap is

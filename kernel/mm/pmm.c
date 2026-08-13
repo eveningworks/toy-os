@@ -194,41 +194,41 @@ uint64_t pmm_free_frames(void) { return free_frames; }
 // "did it return nonzero") -- a bug that marks the wrong frames used, or
 // gets the free_frames count wrong, would still return a plausible
 // address and pass a shallower check.
-void pmm_selftest(void) {
+int pmm_selftest(void) {
     uint64_t before = free_frames;
 
     uint64_t base = pmm_alloc_contiguous(4);
     if (base == 0) {
         klog_write("toy-os: PMM SELFTEST FAILED -- pmm_alloc_contiguous(4) returned 0\n");
-        return;
+        return 0; // failure -- see the message above
     }
     if (base % FRAME_SIZE != 0) {
         klog_write("toy-os: PMM SELFTEST FAILED -- unaligned address from pmm_alloc_contiguous\n");
-        return;
+        return 0; // failure -- see the message above
     }
 
     uint64_t f = base / FRAME_SIZE;
     for (uint64_t i = 0; i < 4; i++) {
         if (!bit_is_used(f + i)) {
             klog_write("toy-os: PMM SELFTEST FAILED -- frame not marked used after alloc\n");
-            return;
+            return 0; // failure -- see the message above
         }
     }
     if (free_frames != before - 4) {
         klog_write("toy-os: PMM SELFTEST FAILED -- free_frames count wrong after alloc\n");
-        return;
+        return 0; // failure -- see the message above
     }
 
     pmm_free_contiguous(base, 4);
     for (uint64_t i = 0; i < 4; i++) {
         if (bit_is_used(f + i)) {
             klog_write("toy-os: PMM SELFTEST FAILED -- frame still marked used after free\n");
-            return;
+            return 0; // failure -- see the message above
         }
     }
     if (free_frames != before) {
         klog_write("toy-os: PMM SELFTEST FAILED -- free_frames count wrong after free\n");
-        return;
+        return 0; // failure -- see the message above
     }
 
     // A second alloc of the same size should land back at the same
@@ -238,9 +238,10 @@ void pmm_selftest(void) {
     if (base2 != base) {
         klog_write("toy-os: PMM SELFTEST FAILED -- reuse after free landed at a different address\n");
         pmm_free_contiguous(base2, 4);
-        return;
+        return 0; // failure -- see the message above
     }
     pmm_free_contiguous(base2, 4);
 
     klog_write("toy-os: PMM contiguous-allocation self-test passed\n");
+    return 1;
 }

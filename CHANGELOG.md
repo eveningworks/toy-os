@@ -31,6 +31,64 @@ using `## [x.y.z] - date` headings is here.
 ## [Unreleased]
 
 ### Added
+- **In-kernel test harness (`ktest`), Milestone 4.** Tests are
+  `KTEST("suite", "name") { ... }` blocks that live next to the code
+  they exercise and register themselves by existing -- the macro drops a
+  descriptor into a `.ktests` linker section and the runner walks it, so
+  there's no registry to update and (with the recursive Makefile) no
+  build edit either. 14 tests today across `mm`, `fs` and `lib`.
+  - **Nothing runs tests at boot any more.** `kernel_main()` called
+    `pmm_selftest()`/`heap_selftest()`/`json_selftest()` on every boot
+    and `tfs_init()` called `tfs_selftest()`, which wrote 64 bytes at a
+    4.6GB offset on every disk-backed boot to re-verify something that
+    can only break when `tfs.c` changes. All four now report pass/fail
+    (they returned `void`) and run when asked.
+  - **`make test` exits non-zero on failure**, which the old arrangement
+    could not do at all -- a failing self-test printed a line and the
+    kernel booted on regardless. `tools/ktest_run.py` boots headless,
+    drives `ktest` over the serial debug console and turns the report
+    into an exit code; CI runs it next to the boot smoke test. Verified
+    by deliberately breaking an assertion: exit 1 with the failing
+    test's file:line, exit 0 once reverted.
+  - **Fault injection** (`kernel/include/kernel/fault_inject.h`): fail
+    the next N ATA writes, ATA reads, or kmalloc calls. This is what
+    makes the error paths added during the storage work testable at all
+    -- previously the only way to reach them was corrupting a disk image
+    from the host with `tools/tfs2_writer.py corrupt`. Five of the 14
+    tests use it (a failed metadata write must be reported not
+    swallowed; a failed data write must fail; a failed read must come
+    back short; a failed kmalloc must be reported and leave the heap
+    usable; the injector must disarm itself).
+  - `ktest_run_all()` is exposed through `kapi.h` while the KTEST macro
+    and assertions stay in `kernel/include/kernel/` -- the shell needs
+    to *run* tests, but writing one is kernel work. The header split
+    from the restructure caught this immediately: `apps/shell_sys.c`
+    including `ktest.h` simply didn't compile.
+
+  Three things this turned up, all now fixed and commented:
+  - **`.ktests` entries need forced alignment.** The 24-byte descriptors
+    had natural alignment 8, the linker aligned each object file's
+    contribution to 16, and the resulting 8 bytes of padding made the
+    section 440 bytes for 18 entries. Walking that as an array read
+    padding as a test -- and because pointer subtraction on a
+    non-multiple of the element size is undefined behaviour, GCC's
+    divide-by-24 reciprocal reported `2863311549` tests before panicking
+    on a garbage function pointer. `aligned(32)` on the struct plus
+    counting in bytes fixes it.
+  - **`heap_selftest()` assumed it owned the machine.** It asserted
+    `heap_used_bytes() == 0` after freeing its allocations, which held
+    only because it ran immediately after `heap_init()`. Run from a
+    booted system it failed on a perfectly healthy heap. Now it compares
+    against the level on entry, which keeps exactly the property it
+    exists for (a coalescing bug corrupting a neighbour shows up as an
+    accounting mismatch). The harness earned its keep on its first run.
+  - **The serial debug console needed an output sink.** `ktest_run_all()`
+    reports through `vga_write()`; the debug console writes via
+    `klog_write()` and installs no sink, so over serial the tests ran but
+    their report went to a screen nobody was watching -- `ktest_run.py`
+    timed out waiting for a verdict that was being printed elsewhere.
+    `dbg_cmd_ktest()` now installs a serial sink for the duration.
+
 - **Executables run by name, with a configurable `PATH`**
   (`apps/shell_path.c`, new). Typing `nx_test` now runs `/bin/nx_test`;
   the `run` prefix is optional. `PATH` is a key in `/etc/toyos.conf`

@@ -53,6 +53,6 @@ uint64_t heap_used_bytes(void);
 // logs pass/fail via klog_write() -- same "prove it at boot" pattern as
 // pmm_selftest(). Called once from kernel_main() right after
 // heap_init().
-void heap_selftest(void);
+int heap_selftest(void); // 1 = passed, 0 = failed (details logged) -- wrapped by a KTEST
 
 #endif
