@@ -78,6 +78,19 @@ def cmd_start(args):
         "-cdrom", args.iso,
         "-drive", f"file={args.disk},format=raw,if=ide",
         "-m", "256",
+    ]
+    if args.kvm:
+        # Matches `make run-kvm`'s flags, so what this measures is what
+        # that target actually does. Off by default because /dev/kvm
+        # isn't guaranteed to be readable (CI runners typically have no
+        # nested virt at all) and every existing caller expects TCG.
+        #
+        # Not interchangeable with the default for timing work: KVM runs
+        # guest instructions natively but turns every port-I/O access
+        # into a hardware VM exit, so `inb`/`outb`-heavy paths can come
+        # out SLOWER here. Say which mode a number came from.
+        cmd += ["-enable-kvm", "-cpu", "host"]
+    cmd += [
         # A VNC head rather than -display none: input routing needs a
         # display head to exist even when nothing connects to it (see
         # qmp_test.py's docstring), and `vm.py shot` uses QMP.
@@ -222,6 +235,10 @@ def main():
     ap.add_argument("--qmp-port", type=int, default=QMP_PORT)
     ap.add_argument("--vnc", type=int, default=5)
     ap.add_argument("--timeout", type=float, default=30.0)
+    ap.add_argument("--kvm", action="store_true",
+                    help="use KVM acceleration (like `make run-kvm`) instead of TCG "
+                         "emulation; needs /dev/kvm. Timing numbers from the two modes "
+                         "are not comparable -- see cmd_start().")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("start").set_defaults(func=cmd_start)

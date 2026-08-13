@@ -159,6 +159,7 @@ make            # build kernel.bin + the userland ELF binaries
 make iso        # + toy-os.iso (bootable GRUB image), seeding disk.img
 make run        # build + boot in QEMU with a graphical window
 make run-audio  # same, with a PulseAudio backend so `beep` is audible
+make run-kvm    # same, KVM-accelerated instead of emulated (needs /dev/kvm)
 make run-menu   # same, but with the GRUB boot menu visible (5s timeout)
 make run-nographic  # serial console only -- use this over SSH
 make debug      # boot frozen (-s -S) for GDB, see below
@@ -176,7 +177,7 @@ make clean      # remove build artifacts (leaves disk.img alone)
 | ISO builds but QEMU shows *"no bootable device"* | The BIOS modules package is missing -- `grub-pc-bin` (Debian), `grub2-pc-modules` (Fedora), `grub2-i386-pc` (openSUSE), `grub-bios` (Alpine). |
 | No window appears (e.g. over SSH) | `make run-nographic` -- serial console only, no display needed. |
 | The mouse doesn't move in QEMU | Don't add `-device usb-tablet`/`usb-mouse`. This kernel's mouse driver is PS/2 only, and an explicit USB pointer device makes QEMU route motion there instead. |
-| Everything is very slow | Expected without KVM. The build and tests don't need it; `make run` is usable either way. |
+| Everything is very slow | `make run` emulates the CPU in software. `make run-kvm` runs it natively if you have `/dev/kvm` -- but note that only helps compute-bound code: disk I/O measures about 1.9x *slower* under KVM, because each port-I/O instruction becomes a VM exit. The build and tests don't need either. |
 | `disk.img` is 9 GB | It's a *sparse* file -- it costs only what's actually written. `make clean-disk` wipes it. |
 
 For real breakpoint/single-step debugging, `make debug` boots frozen at

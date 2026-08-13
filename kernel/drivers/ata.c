@@ -117,11 +117,54 @@ static int wait_not_busy(void) {
     return 0;
 }
 
-static int wait_drq(void) {
+// ~1s, same bound and same reasoning as BUSY_WAIT_TICKS above. Kept as
+// its own name rather than shared, because the two answer different
+// questions ("may I send a command?" vs "is a sector's data ready?")
+// and there's no reason they'd have to move together.
+#define DRQ_WAIT_TICKS 100
+
+static int spin_drq(void) {
     for (int i = 0; i < ATA_POLL_LIMIT; i++) {
         uint8_t status = inb(REG_STATUS);
         if (status & STATUS_ERR) return 0;
         if (status & STATUS_DRQ) return 1;
+        io_wait();
+    }
+    return 0;
+}
+
+// "Is a sector's worth of data ready to move?" -- the PIO path's wait,
+// where the CPU shovels every word through REG_DATA itself instead of
+// the controller doing it. The drive raises DRQ once per SECTOR, not
+// once per command, so unlike wait_not_busy() this sits inside the
+// transfer loop and runs `count` times per request.
+//
+// Same fixed-spin problem wait_not_busy() had, so it gets the same
+// isr_in_progress() split -- see that function's comment for the full
+// reasoning about why a spin count isn't a duration, and why the
+// wall-clock half can't simply be used everywhere.
+//
+// Being a per-sector hot loop, the ordering here matters in a way it
+// doesn't up there: status is read and both exits are taken BEFORE the
+// clock is consulted, so the overwhelmingly common case (DRQ already
+// set on the first look) costs one extra `pit_ticks()` per sector and
+// nothing else. That's a volatile counter read next to a port-I/O read
+// that dominates it -- measured throughput was unchanged.
+//
+// Returns 0 for BOTH "the drive reported an error" and "gave up
+// waiting", which are genuinely different things a caller might want to
+// tell apart -- the same conflation g_dma_fail_reason exists to undo on
+// the DMA side. Left as-is because no caller distinguishes them today;
+// worth splitting if one ever does.
+static int wait_drq(void) {
+    if (isr_in_progress()) return spin_drq();
+
+    uint64_t start = pit_ticks();
+    for (uint64_t guard = 0; guard < (uint64_t)ATA_POLL_LIMIT * 200; guard++) {
+        uint8_t status = inb(REG_STATUS);
+        if (status & STATUS_ERR) return 0;
+        if (status & STATUS_DRQ) return 1;
+        if (pit_ticks() - start > DRQ_WAIT_TICKS) return 0;
         io_wait();
     }
     return 0;

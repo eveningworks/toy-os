@@ -30,6 +30,33 @@ using `## [x.y.z] - date` headings is here.
 
 ## [Unreleased]
 
+### Added
+- **`make run-kvm`, and `tools/vm.py --kvm` to go with it.** Same flags
+  as `make run` plus `-enable-kvm -cpu host`, so guest code runs
+  natively on the host CPU instead of through QEMU's TCG translator.
+  `make run` stays the portable default: `/dev/kvm` isn't readable
+  everywhere, and CI runners generally have no virtualization to nest
+  into at all.
+  - `-cpu host` is what makes it worth having (QEMU otherwise masks the
+    guest down to a conservative model) and is safe here: this kernel
+    reads no CPUID feature bits and enables nothing past long mode + NX.
+    Verified by booting it headlessly -- full init sequence, DMA
+    detected, filesystem mounted, shell up.
+  - **Measured, because it's not the win it sounds like.** Same disk
+    image, same host, `stress 150`: **TCG 22.8 MB/s write / 29.2 MB/s
+    read in 11 s, KVM 12.1 / 18.7 in 20 s.** KVM is roughly 1.9x
+    *slower* for disk I/O. Compute-bound guest code does get much
+    faster, but every port-I/O instruction becomes a hardware VM exit
+    costing on the order of a microsecond, where TCG services one
+    in-process in tens of nanoseconds -- and this kernel's disk path is
+    dense with `inb`/`outb`. So it's a genuinely useful second mode to
+    test in, not a replacement, and **a throughput number is meaningless
+    without saying which mode produced it.** Noted in the Makefile
+    target, `vm.py`'s `--kvm` help, and `cmd_start()`'s comment.
+  - `vm.py --kvm` exists so the new target can actually be tested
+    headlessly -- without it, `make run-kvm` needs a display and can
+    only be exercised by hand.
+
 ### Fixed
 - **The ATA driver gave a busy drive ~37ms to become ready, while
   giving the same transfer 5 seconds once its command was in flight.**
@@ -73,20 +100,44 @@ using `## [x.y.z] - date` headings is here.
     `docs/decisions.md`'s standing rule for blocking waits), because
     retrying instantly is the one thing guaranteed not to help when the
     cause is a stall.
-  - **Not changed: `wait_drq()`**, the PIO fallback's per-sector wait.
-    Same fixed-spin shape, but it sits in a hot per-sector loop on a
-    path this failure didn't involve, so it was left alone rather than
-    changed unmeasured.
+  - **`wait_drq()` got the same treatment in a follow-up** (it was left
+    alone in the first pass as a path this failure didn't involve).
+    It's the PIO fallback's "is a sector's data ready?" wait, and it had
+    the identical fixed-spin bound. Two differences shaped the fix:
+    it runs once per SECTOR rather than once per transfer, so the status
+    read and both of its exits now happen BEFORE the clock is consulted
+    -- the common case (DRQ already set on the first look) costs one
+    extra `pit_ticks()` per sector, a volatile counter read next to the
+    port I/O that dominates it. And it has a real error exit (the drive
+    setting ERR) as well as a timeout, which it still collapses into the
+    same `0` return; that conflation is left as-is and noted in the
+    source, since no caller distinguishes them today.
+  - Coverage note for that one: `ata_init()`'s IDENTIFY call exercises
+    `wait_drq()` on every boot, so the change is covered there, but the
+    per-sector PIO transfer loop is **not reachable while DMA is
+    available** -- which it is on every machine this runs on today
+    (`ata: Bus-Master DMA available` at boot). There is no switch to
+    force the PIO path, so that half is unexercised by construction
+    rather than untested by omission.
   - Verified: `make verify` clean (58 KTESTs, boot smoke). `stress 150`
     PASSED byte-for-byte at 24.0 MB/s and `fsck` reported clean;
     `stress 400` wrote at 23.1 MB/s, both unchanged from before the
     change, confirming the new bounds cost nothing on the success path
-    (they only ever elapse when the drive is actually busy). **Honestly
-    not verified: that this survives a real stall.** The original
-    failure is host-timing-dependent and did not reproduce in-session
-    across 600MB+400MB+150MB of writing, so the fix rests on the
-    measured 12ms-vs-5000ms asymmetry and the reason string naming that
-    exact wait, not on a caught-and-then-fixed reproduction.
+    (they only ever elapse when the drive is actually busy).
+  - **Then the real check, from the user's own machine: `stress 4200` --
+    the exact command that failed -- PASSED, and so did `stress 8192`.**
+    4200 MB in 326 s and 8192 MB in 692 s, each written, read back and
+    verified byte-for-byte, with no `ata:` or `fs:` warnings. This
+    entry originally recorded that surviving a genuine stall was NOT
+    verified, since the failure is host-timing-dependent and hadn't
+    reproduced in-session; that caveat is now much weaker. It isn't
+    gone, and the distinction is worth keeping straight: what's shown
+    is that the failing case now succeeds at nearly 20x the data
+    volume, not a controlled stall reproduced and observed to be
+    absorbed. Nothing here forced a stall to occur on demand.
+  - Also settled `docs/roadmap.md`'s long-standing "full multi-GB stress
+    run" item (Milestone 3) as a side effect -- see that entry for why
+    its own time estimate had been putting sessions off attempting it.
 
 ### Changed
 - **Roadmap: two new milestones, and a second renumbering to make room

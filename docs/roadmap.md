@@ -112,7 +112,9 @@ column) -> today: 1-10 unchanged, 11-30 each shift up by one.
 
 ### Milestone 3 -- Storage hardening (planned v0.3.0)
 
-- [ ] Full multi-GB stress run (`stress 4200` / `stress 8192`)
+- [x] ~~Full multi-GB stress run (`stress 4200` / `stress 8192`)~~ -- done,
+      both PASSED byte-for-byte on 2026-08-13 (4200 MB in 326 s, 8192 MB
+      in 692 s), see `CHANGELOG.md`'s `[Unreleased]` entry
 - [x] ~~Coalesce contiguous block writes into fewer ATA commands~~ -- done,
       see `CHANGELOG.md`'s `[Unreleased]` entry (64KB DMA buffer + run
       coalescing + skipping the redundant zero-fill: 18 -> 25.1 MB/s write)
@@ -783,17 +785,23 @@ has and a hobby kernel this far along is a natural point to start closing:
 
 ### Milestone 3 -- Storage hardening
 
-Full end-to-end multi-GB (e.g. 8GB) file write/read stress test over TFS2
-v2 -- the on-disk format itself is no longer the blocker: a real,
-on-demand `stress <mb>` shell command exists (`apps/shell_sys.c`) that
-writes/reads/byte-for-byte-verifies genuine (non-sparse) data, and was
-verified correct at `stress 400` on real hardware with zero DMA retries
-needed, scaling linearly at ~3.5MB/s (28s/55s/85s/115s for 100/200/300/400
-MB). At that rate `stress 4200` is roughly 20 minutes and the full
-`stress 8192` roughly 40 minutes -- both plausible for a single session to
-let finish, not attempted at that scale yet. Run either whenever a session
-has the wall-clock time; `debug ata on` first if it's ever worth
-double-checking retries stay at zero.
+~~Full end-to-end multi-GB file write/read stress test over TFS2~~ --
+**done, 2026-08-13.** Both `stress 4200` (326 s) and `stress 8192`
+(692 s) PASSED, each written, read back and verified byte-for-byte,
+at 23.2 and 21.7 MB/s write. 8192 MB is the whole point of the 9 GiB
+image: it exercises the block allocator, the indirect-pointer chains and
+the journal at a scale nothing else here reaches.
+
+Two things worth keeping from how this finally happened. It had been
+sitting unattempted because the estimate was wrong in a discouraging
+direction -- this entry predicted ~20 and ~40 minutes from a
+then-current ~3.5 MB/s, but the write-batching work landed in between
+and the real runs came in at 5.5 and 11.5 minutes. An estimate written
+against an old measurement is worth re-deriving before letting it decide
+what's too expensive to try. And the first `stress 4200` attempt did NOT
+pass: it died at 11% on an ATA timeout that turned out to be a real
+driver bug (see `CHANGELOG.md`'s `[Unreleased]` entry on the pre-issue
+busy wait). The scale test earned its keep by failing first.
 
 ~~TFS2/ATA write performance, part 2~~ -- done, see `CHANGELOG.md`'s
 `[Unreleased]` entry. Went exactly the way this item predicted (raise the

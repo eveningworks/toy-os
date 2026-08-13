@@ -200,7 +200,7 @@ ASM_SOURCES = $(shell find kernel -name '*.asm' | sort)
 C_OBJECTS   = $(patsubst %.c,   $(BUILD)/%.o, $(C_SOURCES))
 ASM_OBJECTS = $(patsubst %.asm, $(BUILD)/%.o, $(ASM_SOURCES))
 
-.PHONY: all clean clean-disk iso run run-menu run-audio run-nographic debug help version seed test verify
+.PHONY: all clean clean-disk iso run run-menu run-audio run-kvm run-nographic debug help version seed test verify
 
 # Regenerates kernel/include/api/version.h from VERSION (see
 # tools/gen_version.sh) -- listed first so it always runs before
@@ -236,6 +236,9 @@ help:
 	@echo "  run-audio      Same as run, plus a PulseAudio backend so the PC speaker"
 	@echo "                 (beep) is actually audible -- see the Makefile for how to"
 	@echo "                 swap the backend if you're not on PulseAudio"
+	@echo "  run-kvm        Same as run, but KVM-accelerated instead of TCG emulation --"
+	@echo "                 needs /dev/kvm; port-I/O-heavy paths can get slower, so"
+	@echo "                 don't compare its throughput numbers against run's"
 	@echo "  run-nographic  Boot toy-os.iso in QEMU with no display, serial only (implies iso)"
 	@echo "  debug          Boot toy-os.iso frozen (QEMU's -s -S) for real GDB"
 	@echo "                 debugging -- attach with: gdb build/kernel.bin -ex"
@@ -392,6 +395,27 @@ run-menu:
 
 run: iso $(DISK_IMG)
 	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -vga std -display sdl,grab-mod=rctrl -m 256
+
+# Same as `run`, but with KVM hardware virtualization instead of QEMU's
+# TCG software emulation -- guest instructions run natively on the host
+# CPU. Needs /dev/kvm to be readable (usually membership of the `kvm`
+# group, or a world-accessible node); `make run` remains the portable
+# default precisely because that isn't guaranteed anywhere.
+#
+# `-cpu host` is what makes the acceleration worth having: without it
+# QEMU still masks the guest down to a conservative CPU model. Safe for
+# this kernel, which reads no CPUID feature bits and enables nothing
+# beyond long mode + NX (see boot.asm).
+#
+# Worth knowing before comparing numbers across the two: this is NOT a
+# uniform speedup. Compute-bound guest code gets much faster, but every
+# port-I/O instruction becomes a hardware VM exit costing on the order
+# of a microsecond, where TCG services one in-process for tens of
+# nanoseconds -- so the PIO disk path and other `inb`/`outb`-heavy loops
+# can get SLOWER here. Any throughput figure recorded in CHANGELOG.md
+# should say which of the two it came from; they aren't comparable.
+run-kvm: iso $(DISK_IMG)
+	qemu-system-x86_64 -enable-kvm -cpu host -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -vga std -display sdl,grab-mod=rctrl -m 256
 
 # Same as `run`, plus a PulseAudio backend wired to the PC speaker
 # (kernel/drivers/speaker.c's `beep`, Milestone 19 -- see

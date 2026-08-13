@@ -306,8 +306,21 @@ make verify # the full pre-delivery gate: clean build + iso + boot test + ktest
             # (same as tools/preflight.sh, which also summarises `git status`)
 make run   # boots in QEMU with an SDL window (the user's machine, not usable headlessly)
 make run-audio  # same as run, + a PulseAudio backend so the PC speaker (`beep`) is audible
+make run-kvm    # same as run, but KVM-accelerated (-enable-kvm -cpu host) instead of
+                # TCG emulation -- needs /dev/kvm readable
 make debug # boots frozen (-s -S) for real GDB debugging -- see "Debugging with GDB" below
 ```
+
+**`make run-kvm` is not a straight speedup, and throughput numbers from
+the two modes are not comparable.** Measured on the same disk image,
+same host, `stress 150`: TCG 22.8 MB/s write / 29.2 MB/s read, KVM
+12.1 / 18.7 -- KVM about 1.9x *slower* for disk I/O. Guest code that's
+actually computing gets much faster, but every port-I/O instruction
+becomes a hardware VM exit (~1us) where TCG services one in-process
+(~tens of ns), and this kernel's disk path is dense with `inb`/`outb`.
+So: useful as a second mode to test in, and useful for anything
+CPU-bound, but always say which mode a benchmark came from --
+`tools/vm.py --kvm` runs the same configuration headlessly.
 **Source discovery is recursive now** -- every `.c` under `kernel/` or
 `apps/` is compiled and every `.asm` under `kernel/` assembled, with
 `build/` mirroring the source tree, so a new directory needs no Makefile
@@ -379,6 +392,7 @@ python3 tools/vm.py exec "fsck" "df"     # real shell output, as text
 python3 tools/vm.py shot look.png        # pixels when you want them
 python3 tools/vm.py stop
 python3 tools/vm.py run "ktest"          # start+exec+stop in one
+python3 tools/vm.py --kvm run "stress 150"   # same, KVM-accelerated (see `make run-kvm`)
 ```
 
 It drives the serial debug console's `sh <command>` rather than
