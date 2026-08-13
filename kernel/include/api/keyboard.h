@@ -32,6 +32,44 @@
 #define KEY_SHIFT_HOME        0xA0
 #define KEY_SHIFT_END         0xA1
 
+// Ctrl+Left/Right -- word motion in any readline-style line editor
+// (kernel/lib/klineedit.c). Distinct codes for the same reason the
+// Shift+arrow family above has them.
+#define KEY_CTRL_ARROW_LEFT   0xA2
+#define KEY_CTRL_ARROW_RIGHT  0xA3
+
+// ---- Ctrl and Alt ----
+//
+// These do NOT get KEY_* codes of their own. They're encoded the way a
+// real terminal encodes them, which is what bash and every other
+// readline program already expect:
+//
+//   Ctrl-<letter>  ->  the control code, 0x01-0x1A. Ctrl-A is 0x01,
+//                      Ctrl-E is 0x05, Ctrl-W is 0x17.
+//   Alt-<key>      ->  ESC (0x1B) followed by the key itself, so
+//                      Alt-B arrives as the two-byte sequence 0x1B 'b'.
+//                      This is readline's "meta prefix".
+//
+// Two consequences worth knowing before adding a binding:
+//
+// 1. Ctrl-H, Ctrl-I, Ctrl-J and Ctrl-M are indistinguishable from
+//    backspace, Tab, newline and Return -- because in this encoding
+//    they ARE those keys. That's correct, not a collision to work
+//    around: it's exactly how they behave in a terminal, so
+//    Ctrl-H-as-backspace and Ctrl-I-as-completion come out right with
+//    no code at all.
+// 2. A lone Esc and the start of an Alt sequence look identical at
+//    this layer, which is a real ambiguity a physical terminal has
+//    too. The line editor resolves it by holding the ESC and deciding
+//    on the NEXT key (see klineedit.h); anything that needs a bare Esc
+//    -- leaving GUI mode, exiting the editor -- sees it unchanged
+//    because those consumers never sit inside a line edit.
+//
+// Ctrl with a non-letter is dropped rather than assigned a made-up
+// code, and AltGr is deliberately NOT Meta: it stays a layout modifier
+// so a Nordic layout's third-level characters keep working (see
+// keyboard.c's comment where the two Alt keys are told apart).
+
 // The six Latin-1 codepoints this build's font (font_ttf.h,
 // tools/genttf.py) and `se` keyboard layout (keyboard.c) support --
 // uppercase/lowercase Å/Ä/Ö. Comfortably clear of both the ASCII range

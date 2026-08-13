@@ -166,6 +166,18 @@ static void legacy_backspace(void) {
 static int cursor_on_screen = 0;
 static uint64_t cursor_last_toggle_tick = 0;
 
+// Set by vga_cursor_move() while the insertion point has been parked
+// somewhere other than the append point -- i.e. a line editor is
+// editing mid-line (kernel/lib/klineedit.c). While parked the cursor
+// stays SOLID instead of blinking, and that is a correctness
+// requirement, not a style choice: cursor_hide() erases its cell to
+// black on the assumption that the cell is blank, which holds at the
+// append point and does not hold on top of a character. A blink
+// toggling off mid-line would silently eat the glyph underneath it.
+// Cleared by the next ordinary putc/backspace/clear, all of which
+// return the cursor to the append point where blinking is safe again.
+static int cursor_parked = 0;
+
 // 100 Hz PIT (see idt.c's pit_init(100) call) -- 50 ticks is 500ms, so
 // a full on/off blink cycle is about a second, a fairly ordinary
 // terminal cursor rate.
@@ -182,6 +194,10 @@ static void cursor_hide(void) {
 }
 
 static void cursor_show_and_reset_blink(void) {
+    // Every ordinary putc/backspace/clear routes through here, and all
+    // of them leave the cursor at the append point -- so this is the
+    // one place that needs to clear the parked state.
+    cursor_parked = 0;
     if (!fb_mode) return;
     cursor_paint(palette_rgb(cur_fg));
     cursor_on_screen = 1;
@@ -506,6 +522,8 @@ void vga_cursor_tick(void) {
     // for the physical console's blink logic to do while one's active.
     if (active_sink) return;
     if (!fb_mode) return;
+    if (cursor_parked) return; // see cursor_parked's comment -- blinking
+                                // here would erase the character under it
     if (pit_ticks() - cursor_last_toggle_tick < CURSOR_BLINK_TICKS) return;
     cursor_last_toggle_tick = pit_ticks();
     if (cursor_on_screen) {
@@ -513,6 +531,42 @@ void vga_cursor_tick(void) {
     } else {
         cursor_paint(palette_rgb(cur_fg));
         cursor_on_screen = 1;
+    }
+}
+
+// Repositions the insertion point without erasing anything -- see
+// vga.h for the contract and why a line editor needs it.
+//
+// Works in text-cell space (one flat index over rows*cols) rather than
+// per-row bookkeeping, so wrapping across a row boundary is just
+// division and there's no separate "am I at column 0" case to get
+// wrong.
+void vga_cursor_move(int delta) {
+    if (active_sink) return; // a sink owns its own cursor -- see vga_cursor_tick()
+    if (delta == 0) return;
+    sb_snap_to_live(); // moving the cursor is an edit; don't do it while scrolled back
+
+    uint32_t cols = fb_mode ? console_cols : VGA_WIDTH;
+    uint32_t rows = fb_mode ? console_rows : VGA_HEIGHT;
+    if (cols == 0 || rows == 0) return;
+
+    if (fb_mode) cursor_hide(); // safe here: about to repaint at the new spot,
+                                 // and the caller repaints the line text itself
+
+    long target = (long)row * (long)cols + (long)col + delta;
+    if (target < 0) target = 0;
+    long last = (long)rows * (long)cols - 1;
+    if (target > last) target = last;
+
+    row = (size_t)(target / (long)cols);
+    col = (size_t)(target % (long)cols);
+
+    if (fb_mode) {
+        cursor_paint(palette_rgb(cur_fg));
+        cursor_on_screen = 1;
+        cursor_parked = 1; // solid, not blinking -- see cursor_parked
+    } else {
+        legacy_update_cursor(); // real hardware cursor; nothing to erase
     }
 }
 

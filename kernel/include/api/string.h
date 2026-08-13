@@ -40,6 +40,13 @@ size_t k_strlcpy(char *dst, const char *src, size_t n);
 char *k_strchr(const char *s, char c);
 char *k_strrchr(const char *s, char c);
 
+// First occurrence of `needle` in `haystack`, or NULL. An empty needle
+// matches at the start, same as C's strstr. Its caller is the shell's
+// Ctrl-R reverse history search -- this was written and then deleted
+// again for having none, so if that search ever goes, check whether
+// this should follow it.
+char *k_strstr(const char *haystack, const char *needle);
+
 // Byte comparison, same sign convention as k_strcmp.
 int k_memcmp(const void *a, const void *b, size_t n);
 
@@ -55,15 +62,16 @@ void k_memmove(void *dst, const void *src, size_t n);
 // ASCII character classes.
 //
 // Only these two, deliberately. The batch that added them also had
-// k_strstr, k_memcmp-style k_strcasecmp, k_isalpha/k_isalnum and
-// k_tolower/k_toupper written and building -- and then nothing in the
-// tree turned out to call them, so they were removed again before
-// landing rather than shipped as a standing invitation. This project's
-// rule is a second real caller, not a plausible future one (see
-// CLAUDE.md on apps/ui/ widgets, same instinct); a case-folding helper
-// in particular would need a decision about the non-ASCII range this
-// kernel's own Å/Ä/Ö layouts live in, which is worth making when
-// something actually needs it rather than in advance.
+// k_strcasecmp, k_isalpha/k_isalnum and k_tolower/k_toupper written and
+// building -- and then nothing in the tree turned out to call them, so
+// they were removed again before landing rather than shipped as a
+// standing invitation. This project's rule is a second real caller, not
+// a plausible future one (see CLAUDE.md on apps/ui/ widgets, same
+// instinct); a case-folding helper in particular would need a decision
+// about the non-ASCII range this kernel's own Å/Ä/Ö layouts live in,
+// which is worth making when something actually needs it rather than in
+// advance. (Case-changing a WORD -- Alt-U/L/C -- is in
+// kernel/lib/klineedit.c, which needs no general helper for it.)
 int k_isdigit(char c);
 int k_isspace(char c); // space, tab, newline, carriage return, form feed, vertical tab
 

@@ -39,7 +39,7 @@ KTEST("string", "k_strlcpy always terminates and reports truncation") {
     KTEST_ASSERT_EQ(buf[0], '\0');
 }
 
-KTEST("string", "strchr and strrchr") {
+KTEST("string", "strchr, strrchr and strstr") {
     const char *path = "/docs/notes/todo.txt";
 
     KTEST_ASSERT(k_strchr(path, '/') == path);          // first
@@ -47,6 +47,13 @@ KTEST("string", "strchr and strrchr") {
     KTEST_ASSERT(k_strchr(path, 'Z') == 0);
     // A NUL search finds the terminator, matching C's strchr.
     KTEST_ASSERT(k_strchr(path, '\0') == path + k_strlen(path));
+
+    KTEST_ASSERT(eq(k_strstr(path, "notes"), "notes/todo.txt"));
+    KTEST_ASSERT(k_strstr(path, "nope") == 0);
+    KTEST_ASSERT(k_strstr(path, "") == path); // empty needle matches at 0
+    // A partial match that then diverges must not stop the search --
+    // the bug a naive single-pass scan has.
+    KTEST_ASSERT(eq(k_strstr("aab", "ab"), "ab"));
 }
 
 KTEST("string", "memcmp and overlapping memmove") {

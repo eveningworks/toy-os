@@ -91,6 +91,7 @@ there when you add an entry, or the index quietly stops being one.
 
 - [Terminal wraps the real shell, it doesn't reimplement it](#terminal-wraps-the-real-shell-it-doesnt-reimplement-it)
 - [Tab completion is a shared candidate generator, not a shared line editor](#tab-completion-is-a-shared-candidate-generator-not-a-shared-line-editor)
+- [Ctrl/Alt are encoded as control codes and an ESC prefix, not as new key codes](#ctrlalt-are-encoded-as-control-codes-and-an-esc-prefix-not-as-new-key-codes)
 - [PATH lives in the shell, not the kernel -- and builtins win over it](#path-lives-in-the-shell-not-the-kernel----and-builtins-win-over-it)
 - [The CLI editor's status bar needs its own line-wrapping pass, not a plain dump-and-let-the-console-wrap](#the-cli-editors-status-bar-needs-its-own-line-wrapping-pass-not-a-plain-dump-and-let-the-console-wrap)
 - [Timezone city list is a database file, not a hardcoded array or a config key](#timezone-city-list-is-a-database-file-not-a-hardcoded-array-or-a-config-key)
@@ -383,6 +384,44 @@ just spread across files. Deliberate: this is one component's internal
 organization, not a boundary between independently-reasoned-about
 components the way `kapi.h`/`wm.h` are. See `wm_internal.h`'s top
 comment.
+
+## Ctrl/Alt are encoded as control codes and an ESC prefix, not as new key codes
+
+The keyboard driver tracked Shift and AltGr and nothing else -- left
+Alt was explicitly dropped, with a comment saying the driver had no use
+for it. Adding readline-style line editing meant deciding how Ctrl and
+Alt should reach an app, and the codebase already had a precedent
+pointing the other way: `KEY_SHIFT_ARROW_*` gave Shift+arrow its own
+distinct key codes rather than exposing "is shift down" (deliberately --
+see the entry above on why that timing matters).
+
+Ctrl/Alt went the other way, to what a real terminal does:
+`Ctrl-<letter>` is that letter's control code (`Ctrl-A` = 0x01), and
+`Alt-<key>` is ESC followed by the key. Reasons, in order of weight:
+
+1. **The collisions it creates are the correct behavior.** `Ctrl-H` is
+   backspace, `Ctrl-I` is Tab, `Ctrl-M` is Return -- in this encoding
+   they *are* those keys, with no special-casing, exactly as in bash.
+   Distinct key codes would have needed explicit aliases for all three
+   to behave the way users expect.
+2. **No new code space, no truncation audit.** The existing `KEY_*`
+   codes occupy 0x91-0xA3 and the Nordic letters 0xC4-0xF6; a
+   `KEY_CTRL_*`/`KEY_ALT_*` block would have had to go above 0xFF,
+   which means auditing every `(char)key` cast in the tree -- a bug
+   class this project has been bitten by before.
+3. **The decoder is one a serial terminal would need anyway**, so the
+   line editor's ESC handling isn't throwaway.
+
+The cost is real and worth knowing: a lone Esc and the start of a Meta
+sequence are indistinguishable at the driver layer, which is a genuine
+ambiguity physical terminals have too. The line editor resolves it by
+holding the ESC and deciding on the next key; nothing that needs a bare
+Esc (leaving GUI mode, exiting the editor) sits inside a line edit, so
+none of them are affected. AltGr is deliberately NOT Meta -- it stays a
+layout modifier so Nordic third-level characters keep working.
+
+See `kernel/include/api/keyboard.h`'s "Ctrl and Alt" comment,
+`kernel/lib/klineedit.c`, and CHANGELOG.md's `[Unreleased]`.
 
 ## Terminal wraps the real shell, it doesn't reimplement it
 

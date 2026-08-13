@@ -31,6 +31,71 @@ using `## [x.y.z] - date` headings is here.
 ## [Unreleased]
 
 ### Added
+- **Readline-style command-line editing, in both the shell and the GUI
+  Terminal.** Asked for as "can you make the current line editable, so
+  you can move back and forth ... use arrow keys and bash convention for
+  CTRL and ALT".
+  - Both line editors were **append-only** before this: one position
+    that only grew at the end, so fixing a typo meant holding backspace.
+    Left/Right did nothing; only Up/Down (history) were handled.
+  - **The driver had no Ctrl or left Alt at all.** `keyboard.c` tracked
+    Shift and AltGr, and left Alt was explicitly discarded with a
+    comment saying the driver had no use for it. That was the
+    foundation the rest depended on.
+  - **Encoding: control codes and an ESC prefix, the way a real
+    terminal does it** -- `Ctrl-A` is 0x01, `Alt-B` is ESC then 'b'.
+    Chosen over a `KEY_CTRL_*`/`KEY_ALT_*` block because the collisions
+    it creates are the *correct* behavior (`Ctrl-H` is backspace,
+    `Ctrl-I` is Tab, `Ctrl-M` is Return -- in this encoding they are
+    those keys, with no aliases needed), and because a new code block
+    would have to live above 0xFF, requiring an audit of every
+    `(char)key` cast in the tree. AltGr stays a layout modifier rather
+    than becoming Meta, so Nordic third-level characters keep working.
+    See `docs/decisions.md`.
+  - **One shared editor: `kernel/lib/klineedit.c`**, pure logic with no
+    rendering -- buffer, cursor, kill ring, undo stack, and the whole
+    keymap. Two front ends, one behavior, for the reason the three path
+    resolvers taught earlier today. Being render-free is also what makes
+    it testable: "Alt-B from mid-word lands at that word's start" is an
+    assertion here and a screenshot to squint at in either front end.
+  - **The full bash keymap**: arrows/Home/End and Ctrl+Left/Right;
+    `Ctrl-A`/`E`/`B`/`F`, `Alt-B`/`Alt-F`; `Ctrl-D` (delete forward, or
+    end-of-input on an empty line), `Ctrl-K`/`Ctrl-U`, `Ctrl-W` and
+    `Alt-Backspace`, `Alt-D`; `Ctrl-Y` yank and `Alt-Y` yank-pop through
+    a real kill ring; `Ctrl-T` transpose and `Alt-T` transpose-words;
+    `Alt-U`/`Alt-L`/`Alt-C` case-change; `Ctrl-_` and `Ctrl-X Ctrl-U`
+    undo; `Ctrl-R` reverse history search; `Alt-.` last argument;
+    `Ctrl-L`, `Ctrl-C`, `Ctrl-P`/`Ctrl-N`.
+  - Fidelity details that a reimplementation gets wrong, each with its
+    own test: **`Ctrl-W` and `Alt-Backspace` use different word
+    definitions** (whitespace vs alphanumeric -- over `/bin/ls`, one
+    kills the whole path and the other just `ls`); **`Ctrl-U` kills
+    backwards only**, not the whole line; **`Alt-Y` is legal only
+    directly after a yank**.
+  - **`vga_cursor_move()`** -- the console could only append or
+    backspace, with no way to position the cursor. Framebuffer mode
+    additionally stops blinking while the cursor sits anywhere but the
+    append point, and that's a correctness requirement rather than
+    styling: the blink's off-phase erases its cell to black, which is
+    right over the blank append cell and would silently eat the
+    character underneath anywhere else.
+  - The kill ring is deliberately **shared across both front ends** --
+    kill a word in the physical shell, `Ctrl-Y` it in the GUI Terminal.
+  - Tab completion now completes the word **under the cursor**;
+    `completion_run()` always took a position, it had simply never been
+    given one that wasn't the end of the line.
+  - `k_strstr()` came back (it was written, found callerless and deleted
+    earlier today): `Ctrl-R`'s history search is the real caller it was
+    missing.
+  - Verified: `make verify` clean, 52 KTESTs (13 new for the editor
+    core), and both front ends driven through QMP -- mid-line typo fix,
+    `Ctrl-A`/`Ctrl-K`, `Alt-B`/`Alt-U`, and a full `Ctrl-R` search that
+    finds and runs an older command. One real bug caught by that
+    testing and fixed: accepting a line while the cursor sat mid-line
+    left a black hole where the character under the block cursor had
+    been (`cat /etc/toyos.conf` ran correctly but echoed back as
+    `cat /etc/toyos conf`), because moving the cursor away erases its
+    cell. Screenshots in `screenshots/2026-08-13/lineedit_*.png`.
 - **A shared toolkit in `kernel/lib/`: `knum` (numbers <-> strings),
   `kfmt` (`k_snprintf` + printf-style sinks), `kpath` (paths), and a
   grown `string.h`.** Asked for as "do we need some toolkit c libraries

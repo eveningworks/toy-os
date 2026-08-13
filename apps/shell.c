@@ -12,6 +12,11 @@
 #include "apps.h"
 #include "completion.h"
 
+// Ctrl-<letter> arrives as that letter's control code -- see keyboard.h
+// on the encoding. Only reverse_search() below has to name one
+// directly; every other binding goes through klineedit.c's keymap.
+#define CTRL_KEY(c) ((c) - 'a' + 1)
+
 // Shell-wide state -- declared `extern` in shell_internal.h for
 // shell_fs.c/shell_sys.c, defined here since this is the file that owns
 // the REPL loop and is the only place any of these actually change
@@ -281,39 +286,111 @@ static void history_add(const char *line) {
     history_save();
 }
 
-// Redraw the current input line in place (erase old, print new).
-static void redraw_line(const char *old, const char *new_line) {
-    unsigned int old_len = (unsigned int)k_strlen(old);
-    for (unsigned int i = 0; i < old_len; i++) vga_backspace();
-    vga_write(new_line);
+// ---- the input line ----
+//
+// WHAT the line looks like after a keystroke lives in
+// kernel/lib/klineedit.c, shared with the GUI Terminal so the two can't
+// drift (see klineedit.h -- the three path resolvers that disagreed are
+// the cautionary tale). Everything here is this front end's own job:
+// painting the line on the physical console, plus the three things the
+// core deliberately doesn't own -- history, completion, and the screen.
+//
+// `g_ed` is file-scope rather than a local because struct kline_edit
+// carries an undo stack and runs ~1.2KB, more than belongs on the
+// shell's modest stack. shell_read_line() isn't reentrant anyway --
+// there is exactly one physical console.
+static struct kline_edit g_ed;
+
+// What is currently PAINTED after the prompt, which is not the same as
+// what's in the editor until repaint_line() runs. Both are needed to
+// erase correctly: the console cursor may be sitting mid-line, and
+// vga_backspace() erases relative to wherever it actually is.
+static int shown_len = 0;
+static int shown_cursor = 0;
+
+static void print_prompt(void) {
+    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_write(cwd);
+    vga_write("> ");
+    vga_set_color(shell_fg, VGA_BLACK);
 }
 
-// Applies one Tab press to `buf` and echoes whatever changed. Returns
-// the new cursor position. The candidate generation lives in
+// Repaints the input line, leaving the console cursor on the editor's
+// cursor cell.
+//
+// Deliberately a whole-line repaint rather than a minimal diff: the
+// line is at most 128 characters, the framebuffer console draws that
+// well inside a frame, and every clever partial-update scheme has to
+// know about wrapping across rows -- which vga_backspace() and
+// vga_cursor_move() already handle, correctly and identically, so
+// leaning on them is both shorter and less likely to be wrong. Typing
+// at the end of the line skips this entirely (see the fast path in
+// shell_read_line()).
+static void repaint_line(void) {
+    // Erase from wherever the cursor actually is: forward to the end of
+    // the painted text first, then backspace over all of it.
+    if (shown_len > shown_cursor) vga_cursor_move(shown_len - shown_cursor);
+    for (int i = 0; i < shown_len; i++) vga_backspace();
+
+    vga_write(g_ed.buf);
+    if (g_ed.len > g_ed.cursor) vga_cursor_move(-(g_ed.len - g_ed.cursor));
+
+    shown_len = g_ed.len;
+    shown_cursor = g_ed.cursor;
+}
+
+// Reprints prompt + line from scratch, for the cases that have just
+// written something else to the console (Ctrl-L, an ambiguous
+// completion's candidate list, leaving reverse search).
+static void reprint_prompt_and_line(void) {
+    print_prompt();
+    shown_len = 0;
+    shown_cursor = 0;
+    repaint_line();
+}
+
+// Moves the cursor to the end of the painted line, for the cases about
+// to print something on a new line.
+//
+// Repaints rather than just moving, and that is load-bearing: the
+// framebuffer cursor is a solid block drawn OVER the character it sits
+// on, and moving away erases that cell to black (see vga.h's
+// vga_cursor_move()). Simply moving would leave a hole where the
+// character under the cursor used to be -- which is exactly what
+// happened the first time this was tested: `cat /etc/toyos.conf` ran
+// correctly but echoed back as `cat /etc/toyos conf`, because the '.'
+// had been sitting under the cursor. Repainting rewrites the whole line
+// with nothing covered.
+static void park_at_end(void) {
+    if (shown_cursor == shown_len) return;
+    g_ed.cursor = g_ed.len;
+    repaint_line();
+}
+
+// Applies one Tab press. Candidate generation lives in
 // apps/completion.c (shared with the GUI Terminal); everything here is
 // this shell's own idea of how to show the result -- insert the agreed
 // text inline, and on a genuine ambiguity print the candidates in
 // columns and redraw the prompt underneath, the way zsh does.
-static unsigned int shell_complete_line(char *buf, unsigned int pos, unsigned int len) {
+//
+// completion_run() already took a cursor position, so completing the
+// word UNDER the cursor rather than at the end of the line needed no
+// change -- it simply never got a cursor that wasn't at the end before.
+static void shell_complete_line(void) {
     static struct completion_result r; // ~3KB -- static, not stack: this runs on the shell's own modest stack
-    if (completion_run(buf, (int)pos, &r) == 0) return pos;
+    if (completion_run(g_ed.buf, g_ed.cursor, &r) == 0) return;
 
-    // Insert the part every candidate agrees on, if any.
-    for (int i = 0; r.insert[i] && pos < len - 1; i++) {
-        buf[pos++] = r.insert[i];
-        vga_putc(r.insert[i]);
-    }
-    if (r.add_space && pos < len - 1) {
-        buf[pos++] = ' ';
-        vga_putc(' ');
-    }
-    buf[pos] = '\0';
+    if (r.insert[0]) kline_insert_str(&g_ed, r.insert);
+    if (r.add_space) kline_insert_str(&g_ed, " ");
 
-    // One candidate needs no list -- it's already been completed above.
-    if (r.count <= 1) return pos;
+    if (r.count <= 1) { // a single candidate needs no list
+        repaint_line();
+        return;
+    }
 
     // Ambiguous: list what's available, then reprint the prompt and the
     // line so the user is back where they were with more information.
+    park_at_end();
     vga_putc('\n');
     int col = 0;
     for (int i = 0; i < r.count; i++) {
@@ -329,17 +406,97 @@ static unsigned int shell_complete_line(char *buf, unsigned int pos, unsigned in
     if (col != 0) vga_putc('\n');
     if (r.truncated) vga_write("... (more matches not shown)\n");
 
-    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
-    vga_write(cwd);
-    vga_write("> ");
-    vga_set_color(shell_fg, VGA_BLACK);
-    vga_write(buf);
-    return pos;
+    reprint_prompt_and_line();
+}
+
+// Ctrl-R: incremental reverse history search, with bash's own prompt
+// shape. Runs its own key loop rather than becoming another mode inside
+// the editor core, because it genuinely IS a different editor -- the
+// keys build a search pattern, not the command line.
+//
+// Leaves the matched line (or the original, on cancel) in g_ed.
+// Returns 1 if the user pressed Enter, which in bash runs the match
+// immediately rather than just recalling it.
+static int reverse_search(void) {
+    char pattern[LINE_MAX];
+    int plen = 0;
+    pattern[0] = '\0';
+
+    char original[LINE_MAX];
+    k_strlcpy(original, g_ed.buf, sizeof(original));
+
+    int match = -1;               // index into history[], or -1 for none
+    int from = history_count - 1; // where the next search starts
+
+    for (;;) {
+        // Redraw the whole search line each time: both the pattern and
+        // the match change length unpredictably, so there's nothing
+        // worth updating incrementally. '\r' + spaces + '\r' clears the
+        // row without needing a cursor-addressing primitive.
+        vga_putc('\r');
+        for (uint32_t i = 0; i + 1 < vga_cols(); i++) vga_putc(' ');
+        vga_putc('\r');
+        vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+        vga_write("(reverse-i-search)`");
+        vga_write(pattern);
+        vga_write("': ");
+        vga_set_color(shell_fg, VGA_BLACK);
+        if (match >= 0) vga_write(history[match]);
+
+        int key = keyboard_getchar();
+
+        if (key == '\r' || key == '\n') {
+            if (match >= 0) kline_set(&g_ed, history[match]);
+            vga_putc('\n');
+            return 1; // bash runs it straight away
+        }
+        if (key == 0x1B) { // Esc -- keep the match, but edit it instead of running
+            if (match >= 0) kline_set(&g_ed, history[match]);
+            vga_putc('\n');
+            return 0;
+        }
+        if (key == CTRL_KEY('c') || key == CTRL_KEY('g')) { // abandon the search
+            kline_set(&g_ed, original);
+            vga_putc('\n');
+            return 0;
+        }
+
+        if (key == CTRL_KEY('r')) {
+            from = (match >= 0) ? match - 1 : history_count - 1; // next older match
+        } else if (key == '\b' || key == 0x7F) {
+            if (plen > 0) pattern[--plen] = '\0';
+            from = history_count - 1; // a shorter pattern can match later entries again
+        } else if (IS_PRINTABLE_KEY(key) && plen < LINE_MAX - 1) {
+            pattern[plen++] = (char)key;
+            pattern[plen] = '\0';
+            from = history_count - 1;
+        } else {
+            continue; // anything else doesn't affect the search
+        }
+
+        match = -1;
+        for (int i = from; i >= 0; i--) {
+            if (k_strstr(history[i], pattern)) { match = i; break; }
+        }
+    }
+}
+
+// Alt-.: insert the last word of the previous command, like bash's
+// yank-last-arg. Repeating it doesn't walk further back through history
+// here -- one level is what the shortcut actually gets used for (re-use
+// the path you just typed).
+static void insert_last_arg(void) {
+    if (history_count == 0) return;
+    const char *prev = history[history_count - 1];
+    const char *last = k_strrchr(prev, ' ');
+    kline_insert_str(&g_ed, last ? last + 1 : prev);
 }
 
 static void shell_read_line(char *buf, unsigned int len) {
-    unsigned int pos = 0;
-    buf[0] = '\0';
+    kline_init(&g_ed);
+    shown_len = 0;
+    shown_cursor = 0;
+
     int hist_index = history_count; // one past the newest = "current blank line"
     char saved_current[LINE_MAX];
     saved_current[0] = '\0';
@@ -347,43 +504,96 @@ static void shell_read_line(char *buf, unsigned int len) {
     for (;;) {
         int c = keyboard_getchar();
 
-        if (c == '\n') {
-            vga_putc('\n');
-            buf[pos] = '\0';
+        // Fast path for the overwhelmingly common case: a printable
+        // character typed at the end of the line. Skips repaint_line()
+        // entirely and just echoes it, so ordinary typing costs exactly
+        // what it always did before any of this existed.
+        if (IS_PRINTABLE_KEY(c) && g_ed.cursor == g_ed.len &&
+            shown_cursor == shown_len && g_ed.len < KLINE_MAX - 1) {
+            kline_key(&g_ed, c);
+            vga_putc((char)c);
+            shown_len = g_ed.len;
+            shown_cursor = g_ed.cursor;
+            continue;
+        }
+
+        switch (kline_key(&g_ed, c)) {
+        case KLINE_REDRAW:
+            repaint_line();
             break;
-        } else if (c == '\b') {
-            if (pos > 0) {
-                pos--;
-                vga_backspace();
-            }
-        } else if (c == KEY_ARROW_UP) {
+
+        case KLINE_ACCEPT:
+            park_at_end();
+            vga_putc('\n');
+            k_strlcpy(buf, g_ed.buf, len);
+            return;
+
+        case KLINE_CANCEL: // Ctrl-C -- abandon this line, fresh prompt
+            park_at_end();
+            vga_write("^C\n");
+            kline_init(&g_ed);
+            hist_index = history_count;
+            print_prompt();
+            shown_len = 0;
+            shown_cursor = 0;
+            break;
+
+        case KLINE_EOF:
+            // Ctrl-D on an empty line ends input in bash. There is
+            // nothing to exit TO here -- this shell is the top of the
+            // stack, not a process with a parent -- so it's ignored
+            // rather than pretending to be an exit.
+            break;
+
+        case KLINE_COMPLETE:
+            shell_complete_line();
+            break;
+
+        case KLINE_CLEAR_SCREEN:
+            vga_clear();
+            reprint_prompt_and_line();
+            break;
+
+        case KLINE_HISTORY_PREV:
             if (hist_index > 0) {
                 if (hist_index == history_count) {
-                    buf[pos] = '\0';
-                    k_strcpy(saved_current, buf);
+                    k_strlcpy(saved_current, g_ed.buf, sizeof(saved_current));
                 }
                 hist_index--;
-                redraw_line(buf, history[hist_index]);
-                k_strcpy(buf, history[hist_index]);
-                pos = (unsigned int)k_strlen(buf);
+                kline_set(&g_ed, history[hist_index]);
+                repaint_line();
             }
-        } else if (c == KEY_ARROW_DOWN) {
+            break;
+
+        case KLINE_HISTORY_NEXT:
             if (hist_index < history_count) {
                 hist_index++;
-                const char *replacement = (hist_index == history_count) ? saved_current : history[hist_index];
-                buf[pos] = '\0';
-                redraw_line(buf, replacement);
-                k_strcpy(buf, replacement);
-                pos = (unsigned int)k_strlen(buf);
+                kline_set(&g_ed, (hist_index == history_count) ? saved_current
+                                                                : history[hist_index]);
+                repaint_line();
             }
-        } else if (c == '\t') {
-            buf[pos] = '\0';
-            pos = shell_complete_line(buf, pos, len);
-        } else if (IS_PRINTABLE_KEY(c) && pos < len - 1) {
-            char ch = (char)c;
-            buf[pos++] = ch;
-            buf[pos] = '\0';
-            vga_putc(ch);
+            break;
+
+        case KLINE_SEARCH: {
+            park_at_end();
+            vga_putc('\n');
+            int run_it = reverse_search();
+            if (run_it) {
+                k_strlcpy(buf, g_ed.buf, len);
+                return;
+            }
+            hist_index = history_count;
+            reprint_prompt_and_line();
+            break;
+        }
+
+        case KLINE_LAST_ARG:
+            insert_last_arg();
+            repaint_line();
+            break;
+
+        case KLINE_IGNORED:
+            break;
         }
     }
 }

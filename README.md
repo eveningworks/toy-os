@@ -223,6 +223,12 @@ shell and the GUI Terminal.
   navigate and edit, F2 to save, F3 to exit; works from both the
   physical shell and the GUI Terminal, see `apps/editor.c`). Paths may
   be relative to the cwd or absolute.
+- **Command-line editing:** the shell and the GUI Terminal share one
+  readline-style line editor (`kernel/lib/klineedit.c`) -- arrows and
+  Home/End to move, Ctrl/Alt bindings following bash (`Ctrl-A`/`Ctrl-E`,
+  `Alt-B`/`Alt-F`, `Ctrl-K`/`Ctrl-U`/`Ctrl-W`, `Ctrl-Y` yank, `Ctrl-T`
+  transpose, `Alt-U`/`Alt-L`/`Alt-C` case, `Ctrl-_` undo, `Ctrl-R`
+  reverse history search, `Alt-.` last argument). `help` lists them all.
 - **System info:** `time`, `timezone [city]`, `uptime`, `meminfo`,
   `df` (disk space: total/used/free, KB-scale), `dmesg`, `lspci`,
   `parttable`

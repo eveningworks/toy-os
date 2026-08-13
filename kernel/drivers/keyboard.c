@@ -12,6 +12,8 @@ static volatile unsigned int ring_head = 0;
 static volatile unsigned int ring_tail = 0;
 static int shift_pressed = 0;
 static int altgr_pressed = 0;
+static int ctrl_pressed = 0;
+static int alt_pressed = 0;   // LEFT Alt only -- right Alt is AltGr, see below
 static int extended_prefix = 0;
 
 #define LEFT_SHIFT_PRESS   0x2A
@@ -20,13 +22,23 @@ static int extended_prefix = 0;
 #define RIGHT_SHIFT_RELEASE 0xB6
 
 // Right Alt = AltGr on a PS/2 keyboard, sent as an 0xE0-prefixed
-// (extended) scancode -- Left Alt is the same 0x38/0xB8 byte pair
-// WITHOUT the 0xE0 prefix, so it never reaches this pair and is simply
-// ignored (this driver has no other use for either Alt key today).
-// Handled inside the `extended_prefix` block below, same place the
-// arrow/Home/End/Delete extended codes already are.
+// (extended) scancode. Left Alt is the SAME 0x38/0xB8 byte pair
+// without the prefix, which is what makes telling them apart free:
+// the extended block below sees only AltGr, the plain path below sees
+// only left Alt. That split matters here -- AltGr is a layout modifier
+// (it picks a third character from the keyboard layout tables), while
+// left Alt is readline's Meta. Conflating them would make `AltGr-b`
+// try to be Meta-b on a Nordic layout.
 #define RIGHT_ALT_PRESS    0x38
 #define RIGHT_ALT_RELEASE  0xB8
+#define LEFT_ALT_PRESS     0x38
+#define LEFT_ALT_RELEASE   0xB8
+
+// Left Ctrl is plain 0x1D/0x9D; right Ctrl is the same pair with an
+// 0xE0 prefix. Both set the same state -- nothing here distinguishes
+// them, same as the two Shift keys.
+#define CTRL_PRESS         0x1D
+#define CTRL_RELEASE       0x9D
 
 static void ring_push(uint16_t c) {
     unsigned int next = (ring_head + 1) % 256;
@@ -73,7 +85,16 @@ void keyboard_feed_byte(uint8_t sc) {
         extended_prefix = 0;
         if (sc == RIGHT_ALT_PRESS) { altgr_pressed = 1; return; }
         if (sc == RIGHT_ALT_RELEASE) { altgr_pressed = 0; return; }
+        if (sc == CTRL_PRESS) { ctrl_pressed = 1; return; }   // right Ctrl
+        if (sc == CTRL_RELEASE) { ctrl_pressed = 0; return; }
         if (!(sc & 0x80)) { // key press, not release
+            // Ctrl+Left/Right are word motion in every readline-ish
+            // line editor, so they get their own codes -- exactly the
+            // KEY_SHIFT_ARROW_* precedent right below, resolved here
+            // from live modifier state at keypress time for the same
+            // reason (see docs/decisions.md).
+            if (ctrl_pressed && sc == SC_ARROW_LEFT) { ring_push(KEY_CTRL_ARROW_LEFT); return; }
+            if (ctrl_pressed && sc == SC_ARROW_RIGHT) { ring_push(KEY_CTRL_ARROW_RIGHT); return; }
             // Shift+arrow/Home/End get their own codes, decided right
             // here from the live `shift_pressed` state -- same timing
             // as the ASCII table swap below for ordinary letter keys,
@@ -100,6 +121,10 @@ void keyboard_feed_byte(uint8_t sc) {
         shift_pressed = 0;
         return;
     }
+    if (sc == CTRL_PRESS) { ctrl_pressed = 1; return; }       // left Ctrl
+    if (sc == CTRL_RELEASE) { ctrl_pressed = 0; return; }
+    if (sc == LEFT_ALT_PRESS) { alt_pressed = 1; return; }    // Meta -- not AltGr, see above
+    if (sc == LEFT_ALT_RELEASE) { alt_pressed = 0; return; }
     if (sc & 0x80) return; // other key releases ignored
 
     if (sc == SC_F2) { ring_push(KEY_F2); return; }
@@ -107,7 +132,32 @@ void keyboard_feed_byte(uint8_t sc) {
 
     if (sc >= 128) return;
     char c = keyboard_layout_translate(sc, shift_pressed, altgr_pressed);
-    if (c) ring_push((uint8_t)c);
+    if (!c) return;
+
+    // Ctrl and Alt are encoded the way a real terminal encodes them --
+    // see keyboard.h's "Ctrl and Alt" comment for the full reasoning.
+    //
+    // Ctrl folds a letter to its control code (Ctrl-A -> 0x01), which
+    // is why Ctrl-H/I/J/M come out as backspace/tab/newline/return with
+    // no special cases: in this encoding they ARE those keys, exactly as
+    // in bash. Ctrl with anything that isn't a letter is dropped rather
+    // than guessed at -- Ctrl-[ really is Esc on a physical terminal,
+    // but nothing here wants that, and inventing codes for the rest
+    // would be making up an encoding instead of following one.
+    if (ctrl_pressed) {
+        char lower = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+        if (lower >= 'a' && lower <= 'z') ring_push((uint16_t)(lower - 'a' + 1));
+        return;
+    }
+
+    // Alt (Meta) prefixes the key with ESC, so Alt-B arrives as the two
+    // bytes 0x1B 'b'. Two pushes rather than one combined code: this is
+    // what every terminal emulator sends, so the line editor's decoder
+    // is the same one it would need for a real serial terminal anyway.
+    if (alt_pressed) {
+        ring_push(0x1B);
+    }
+    ring_push((uint8_t)c);
 }
 
 int keyboard_getchar(void) {

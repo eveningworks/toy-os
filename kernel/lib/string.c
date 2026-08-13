@@ -65,6 +65,16 @@ char *k_strrchr(const char *s, char c) {
     }
 }
 
+char *k_strstr(const char *haystack, const char *needle) {
+    if (!*needle) return (char *)haystack;
+    for (; *haystack; haystack++) {
+        const char *h = haystack, *n = needle;
+        while (*h && *n && *h == *n) { h++; n++; }
+        if (!*n) return (char *)haystack;
+    }
+    return 0;
+}
+
 int k_memcmp(const void *a, const void *b, size_t n) {
     const uint8_t *x = (const uint8_t *)a, *y = (const uint8_t *)b;
     for (size_t i = 0; i < n; i++) {

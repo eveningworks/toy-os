@@ -69,6 +69,13 @@ technical conventions below:
   batch that introduced it had `k_strstr`/`k_strcasecmp`/`k_toupper`
   written and building, found no caller for them, and deleted them
   again before landing.
+- **Line editing is `kernel/lib/klineedit.c`'s, in both front ends.**
+  The physical shell and the GUI Terminal share one readline-style
+  editor (buffer/cursor/kill ring/undo/keymap); each front end only
+  paints the result. Don't add an editing key to one of them -- add it
+  to the core's keymap and both get it. Ctrl/Alt reach apps as control
+  codes and an ESC prefix, terminal-style, NOT as `KEY_*` codes (see
+  `keyboard.h`'s "Ctrl and Alt" comment and `docs/decisions.md`).
 - **`apps/wm/wm.h` is a second, peer-level boundary**, not part of
   `kapi.h` -- it's the GUI-specific equivalent, included by GUI apps
   for `window_*` helpers. `kapi.h` never includes `wm/wm.h` or

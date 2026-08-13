@@ -65,6 +65,10 @@
 #define EDITOR_STATUS_H (gfx_char_h() + 8)
 
 #define TERM_LINE_MAX 128
+// Ctrl-<letter> arrives as that letter's control code (see keyboard.h).
+// Only the reverse-search mode below names one directly; every other
+// binding goes through klineedit.c's keymap.
+#define TERM_CTRL(c) ((c) - 'a' + 1)
 #define TERM_HISTORY_MAX 8
 // How many text rows/cols the initial window should comfortably fit --
 // same idea as notepad.c's NOTEPAD_COLS/ROWS: just a starting size for
@@ -86,8 +90,26 @@
 // window of it can be open at a time (see wm.c's open_app).
 struct terminal_state {
     struct text_scrollback tb;
-    char line[TERM_LINE_MAX];
-    int line_len;
+
+    // The line being edited. All the editing logic (motion, kill ring,
+    // undo, the whole bash keymap) is kernel/lib/klineedit.c's, shared
+    // with the physical shell so the two can't drift -- this file only
+    // paints the result into `tb`. `line` survives as the scratch copy
+    // handed to term_run_line(), which mutates what it's given.
+    struct kline_edit ed;
+    int shown_len;    // what's currently PAINTED after the prompt...
+    int shown_cursor; // ...and where the painted cursor sits in it
+
+    // Ctrl-R reverse history search. Unlike the physical shell's, which
+    // can run its own blocking key loop, this window is event-driven --
+    // so the search is a mode flag consulted at the top of
+    // terminal_key(), the same shape the `edit` sub-mode below uses.
+    int in_search;
+    char search_pattern[TERM_LINE_MAX];
+    int search_len;
+    int search_match; // index into history[], or -1
+
+    char line[TERM_LINE_MAX]; // scratch copy of ed.buf handed to term_run_line(), which mutates it
     char history[TERM_HISTORY_MAX][TERM_LINE_MAX];
     int history_count;
     int hist_index;       // like shell.c's shell_read_line(): one past the
@@ -185,6 +207,12 @@ static void term_write(struct terminal_state *st, const char *s, enum vga_color 
     for (const char *p = s; *p; p++) widget_scrollback_putc(&st->tb, *p);
 }
 
+// Defined further down, next to the rest of the line-painting; needed
+// up here by term_complete_line().
+static void term_repaint_line(struct terminal_state *st);
+static void term_park_at_end(struct terminal_state *st);
+static void term_run_line(struct window *win, struct terminal_state *st, char *line);
+
 static void term_print_prompt(struct terminal_state *st) {
     widget_scrollback_set_color(&st->tb, VGA_LIGHT_GREEN);
     for (const char *p = shell_cwd(); *p; p++) widget_scrollback_putc(&st->tb, *p);
@@ -240,21 +268,18 @@ static void term_history_add(struct terminal_state *st, const char *line) {
 // that split is the whole reason completion.c has no drawing in it.
 static void term_complete_line(struct terminal_state *st) {
     static struct completion_result r;
-    st->line[st->line_len] = '\0';
-    if (completion_run(st->line, st->line_len, &r) == 0) return;
+    // Completes the word under the cursor now, not just at the end --
+    // completion_run() always took a position, it simply never got one
+    // that wasn't the end of the line before.
+    if (completion_run(st->ed.buf, st->ed.cursor, &r) == 0) return;
 
-    for (int i = 0; r.insert[i] && st->line_len < TERM_LINE_MAX - 1; i++) {
-        st->line[st->line_len++] = r.insert[i];
-        widget_scrollback_putc(&st->tb, r.insert[i]);
-    }
-    if (r.add_space && st->line_len < TERM_LINE_MAX - 1) {
-        st->line[st->line_len++] = ' ';
-        widget_scrollback_putc(&st->tb, ' ');
-    }
-    st->line[st->line_len] = '\0';
+    if (r.insert[0]) kline_insert_str(&st->ed, r.insert);
+    if (r.add_space) kline_insert_str(&st->ed, " ");
+    term_repaint_line(st);
 
     if (r.count <= 1) return;
 
+    term_park_at_end(st);
     widget_scrollback_putc(&st->tb, '\n');
     int col = 0;
     for (int i = 0; i < r.count; i++) {
@@ -270,19 +295,136 @@ static void term_complete_line(struct terminal_state *st) {
     }
 
     term_print_prompt(st);
-    for (int i = 0; i < st->line_len; i++) widget_scrollback_putc(&st->tb, st->line[i]);
+    st->shown_len = 0;
+    st->shown_cursor = 0;
+    term_repaint_line(st);
+}
+
+// Repaints the input line into the scrollback and leaves the widget's
+// cursor on the editor's cursor cell, so widget_scrollback_draw()'s
+// show_cursor flag renders it in the right place.
+//
+// Same whole-line repaint the physical shell does, and for the same
+// reason (see shell.c's repaint_line()): the line is short, and
+// putc/backspace already handle wrapping, so leaning on them beats a
+// partial-update scheme that has to re-derive it.
+static void term_repaint_line(struct terminal_state *st) {
+    // Back to the append point first -- backspace works there.
+    for (int i = st->shown_cursor; i < st->shown_len; i++) {
+        widget_scrollback_cursor_right(&st->tb);
+    }
+    for (int i = 0; i < st->shown_len; i++) widget_scrollback_backspace(&st->tb);
+
+    widget_scrollback_set_color(&st->tb, VGA_LIGHT_GREY);
+    for (int i = 0; i < st->ed.len; i++) widget_scrollback_putc(&st->tb, st->ed.buf[i]);
+    for (int i = st->ed.cursor; i < st->ed.len; i++) widget_scrollback_cursor_left(&st->tb);
+
+    st->shown_len = st->ed.len;
+    st->shown_cursor = st->ed.cursor;
+}
+
+// Moves the painted cursor to the end of the line, for the cases about
+// to print something after it. Unlike the physical console's version
+// this needs no repaint -- the scrollback widget draws its cursor as a
+// separate mark rather than a block painted over the character, so
+// moving away can't erase anything.
+static void term_park_at_end(struct terminal_state *st) {
+    for (int i = st->shown_cursor; i < st->shown_len; i++) {
+        widget_scrollback_cursor_right(&st->tb);
+    }
+    st->shown_cursor = st->shown_len;
 }
 
 static void term_set_line(struct terminal_state *st, const char *new_line) {
-    for (int i = 0; i < st->line_len; i++) widget_scrollback_backspace(&st->tb);
-    widget_scrollback_set_color(&st->tb, VGA_LIGHT_GREY);
-    int len = 0;
-    while (new_line[len] && len < TERM_LINE_MAX - 1) {
-        widget_scrollback_putc(&st->tb, new_line[len]);
-        st->line[len] = new_line[len];
-        len++;
+    kline_set(&st->ed, new_line);
+    term_repaint_line(st);
+}
+
+// ---- Ctrl-R reverse history search ----
+//
+// The physical shell runs this as its own blocking key loop
+// (shell.c's reverse_search()); this window can't block, so the same
+// behavior becomes a mode flag plus a key handler. What it looks like
+// is identical either way: bash's `(reverse-i-search)`pat': match`
+// line, Ctrl-R for the next older match, Enter to run it, Esc to edit
+// it, Ctrl-C/Ctrl-G to abandon.
+//
+// The search line is painted as the input line itself (via st->ed),
+// which is why no extra rendering is needed -- term_repaint_line()
+// already knows how to draw whatever is in there.
+static void term_search_render(struct terminal_state *st) {
+    char shown[TERM_LINE_MAX];
+    k_snprintf(shown, sizeof(shown), "(reverse-i-search)`%s': %s",
+                st->search_pattern,
+                st->search_match >= 0 ? st->history[st->search_match] : "");
+    kline_set(&st->ed, shown);
+    term_repaint_line(st);
+}
+
+static void term_search_find(struct terminal_state *st, int from) {
+    st->search_match = -1;
+    for (int i = from; i >= 0; i--) {
+        if (k_strstr(st->history[i], st->search_pattern)) { st->search_match = i; break; }
     }
-    st->line_len = len;
+}
+
+static void term_search_begin(struct terminal_state *st) {
+    st->in_search = 1;
+    st->search_len = 0;
+    st->search_pattern[0] = '\0';
+    st->search_match = -1;
+    term_search_render(st);
+}
+
+// Leaves search mode, putting `line` in the editor as the new input.
+static void term_search_end(struct terminal_state *st, const char *line) {
+    st->in_search = 0;
+    kline_set(&st->ed, line ? line : "");
+    term_repaint_line(st);
+}
+
+static void term_search_key(struct window *win, struct terminal_state *st, int key) {
+    if (key == '\r' || key == '\n') {
+        // Enter runs the match immediately, as bash does. Handing it to
+        // term_run_line() here rather than falling back into
+        // terminal_key()'s KLINE_ACCEPT keeps the "search owns every
+        // key while active" rule intact.
+        const char *match = st->search_match >= 0 ? st->history[st->search_match] : "";
+        term_search_end(st, match);
+        term_park_at_end(st);
+        widget_scrollback_putc(&st->tb, '\n');
+        k_strlcpy(st->line, st->ed.buf, sizeof(st->line));
+        term_history_add(st, st->line);
+        term_run_line(win, st, st->line);
+        kline_init(&st->ed);
+        st->shown_len = 0;
+        st->shown_cursor = 0;
+        st->hist_index = st->history_count;
+        if (!st->in_editor && !st->running_pid) term_print_prompt(st);
+        return;
+    }
+    if (key == 0x1B) { // Esc -- keep the match, edit it instead of running
+        term_search_end(st, st->search_match >= 0 ? st->history[st->search_match] : "");
+        return;
+    }
+    if (key == TERM_CTRL('c') || key == TERM_CTRL('g')) { // abandon
+        term_search_end(st, "");
+        return;
+    }
+    if (key == TERM_CTRL('r')) {
+        term_search_find(st, st->search_match >= 0 ? st->search_match - 1
+                                                    : st->history_count - 1);
+    } else if (key == '\b' || key == 0x7F) {
+        if (st->search_len > 0) st->search_pattern[--st->search_len] = '\0';
+        term_search_find(st, st->history_count - 1); // a shorter pattern can match later entries again
+    } else if (IS_PRINTABLE_KEY(key) && st->search_len < TERM_LINE_MAX - 1) {
+        st->search_pattern[st->search_len++] = (char)key;
+        st->search_pattern[st->search_len] = '\0';
+        term_search_find(st, st->history_count - 1);
+    } else {
+        return; // anything else doesn't affect the search
+    }
+    term_search_render(st);
 }
 
 // Resolves a filename argument against the shell's cwd.
@@ -539,7 +681,10 @@ static void term_layout(struct window *win, int *out_text_w, int *out_ch, int *o
 
 void terminal_open(struct window *win) {
     widget_scrollback_init(&g_terminal.tb);
-    g_terminal.line_len = 0;
+    kline_init(&g_terminal.ed);
+    g_terminal.shown_len = 0;
+    g_terminal.shown_cursor = 0;
+    g_terminal.in_search = 0;
     g_terminal.history_count = 0;
     g_terminal.hist_index = 0;
     g_terminal.saved_current[0] = '\0';
@@ -696,13 +841,31 @@ void terminal_key(struct window *win, int key) {
         return;
     }
 
-    if (key == '\r' || key == '\n') {
+    // Ctrl-R search mode owns every key while it's active -- same
+    // shape as the editor sub-mode above, for the same reason: this
+    // window is event-driven, so a "mode" is a flag consulted here, not
+    // a nested key loop the way the physical shell can afford.
+    if (st->in_search) {
+        term_search_key(win, st, key);
+        window_invalidate(win);
+        return;
+    }
+
+    switch (kline_key(&st->ed, key)) {
+    case KLINE_REDRAW:
+        term_repaint_line(st);
+        break;
+
+    case KLINE_ACCEPT:
+        term_park_at_end(st);
         widget_scrollback_set_color(&st->tb, VGA_LIGHT_GREY);
         widget_scrollback_putc(&st->tb, '\n');
-        st->line[st->line_len] = '\0';
+        k_strlcpy(st->line, st->ed.buf, sizeof(st->line));
         term_history_add(st, st->line);
-        term_run_line(win, st, st->line);
-        st->line_len = 0;
+        term_run_line(win, st, st->line); // may mutate st->line, hence the copy
+        kline_init(&st->ed);
+        st->shown_len = 0;
+        st->shown_cursor = 0;
         st->hist_index = st->history_count;
         // term_run_line() may have just switched this window into
         // editor sub-mode (`edit`/`nano`) -- if so, don't print another
@@ -712,48 +875,96 @@ void terminal_key(struct window *win, int key) {
         // now set) -- terminal_process_exit() prints the next prompt
         // once it actually finishes, not here.
         if (!st->in_editor && !st->running_pid) term_print_prompt(st);
-    } else if (key == '\t') {
+        break;
+
+    case KLINE_CANCEL: // Ctrl-C
+        term_park_at_end(st);
+        for (const char *p = "^C\n"; *p; p++) widget_scrollback_putc(&st->tb, *p);
+        kline_init(&st->ed);
+        st->shown_len = 0;
+        st->shown_cursor = 0;
+        st->hist_index = st->history_count;
+        term_print_prompt(st);
+        break;
+
+    case KLINE_EOF:
+        break; // nothing to exit to -- see shell.c's identical note
+
+    case KLINE_COMPLETE:
         term_complete_line(st);
-    } else if (key == '\b') {
-        if (st->line_len > 0) {
-            st->line_len--;
-            widget_scrollback_backspace(&st->tb);
-        }
-    } else if (key == KEY_ARROW_UP) {
+        break;
+
+    case KLINE_CLEAR_SCREEN: {
+        // Ctrl-L clears this window's scrollback, not the physical
+        // console -- the same key doing the locally-correct thing in
+        // each front end.
+        char keep[TERM_LINE_MAX];
+        k_strlcpy(keep, st->ed.buf, sizeof(keep));
+        int cursor = st->ed.cursor;
+        widget_scrollback_clear(&st->tb);
+        term_print_prompt(st);
+        st->shown_len = 0;
+        st->shown_cursor = 0;
+        kline_set(&st->ed, keep);
+        st->ed.cursor = cursor;
+        term_repaint_line(st);
+        break;
+    }
+
+    case KLINE_HISTORY_PREV:
         if (st->hist_index > 0) {
             if (st->hist_index == st->history_count) {
-                st->line[st->line_len] = '\0';
-                k_strcpy(st->saved_current, st->line);
+                k_strlcpy(st->saved_current, st->ed.buf, sizeof(st->saved_current));
             }
             st->hist_index--;
             term_set_line(st, st->history[st->hist_index]);
         }
-    } else if (key == KEY_ARROW_DOWN) {
+        break;
+
+    case KLINE_HISTORY_NEXT:
         if (st->hist_index < st->history_count) {
             st->hist_index++;
-            const char *replacement = (st->hist_index == st->history_count)
-                                           ? st->saved_current
-                                           : st->history[st->hist_index];
-            term_set_line(st, replacement);
+            term_set_line(st, (st->hist_index == st->history_count)
+                                   ? st->saved_current
+                                   : st->history[st->hist_index]);
         }
-    } else if (key == KEY_PAGE_UP || key == KEY_PAGE_DOWN) {
-        // Page size is "one screenful minus a line of overlap" -- a
-        // common terminal-scrolling convention, and it also means
-        // paging down repeatedly can't skip past the bottom in one
-        // jump (widget_scrollback_scroll()'s clamp handles the exact
-        // boundary either way, this just picks a sensible step size).
-        int text_w, ch, show_scrollbar;
-        term_layout(win, &text_w, &ch, &show_scrollbar);
-        int total_lines, visible_rows;
-        widget_scrollback_metrics(&st->tb, text_w, ch, &total_lines, &visible_rows);
-        int page = visible_rows > 1 ? visible_rows - 1 : 1;
-        widget_scrollback_scroll(&st->tb, key == KEY_PAGE_UP ? page : -page);
-    } else if (IS_PRINTABLE_KEY(key) && st->line_len < TERM_LINE_MAX - 1) {
-        widget_scrollback_set_color(&st->tb, VGA_LIGHT_GREY);
-        widget_scrollback_putc(&st->tb, (char)key);
-        st->line[st->line_len++] = (char)key;
-    } else {
-        return; // unhandled key -- nothing changed, no need to invalidate
+        break;
+
+    case KLINE_SEARCH:
+        term_search_begin(st);
+        break;
+
+    case KLINE_LAST_ARG: { // Alt-. -- last word of the previous command
+        if (st->history_count > 0) {
+            const char *prev = st->history[st->history_count - 1];
+            const char *last = k_strrchr(prev, ' ');
+            kline_insert_str(&st->ed, last ? last + 1 : prev);
+            term_repaint_line(st);
+        }
+        break;
+    }
+
+    case KLINE_IGNORED:
+        if (key == KEY_PAGE_UP || key == KEY_PAGE_DOWN) {
+            // Scrolling the window is this front end's own key, not the
+            // line editor's -- the editor doesn't know the window has a
+            // scrollback at all, so it correctly reports these as
+            // unhandled and they're picked up here.
+            //
+            // Page size is "one screenful minus a line of overlap" -- a
+            // common terminal-scrolling convention, and it also means
+            // paging down repeatedly can't skip past the bottom in one
+            // jump (widget_scrollback_scroll()'s clamp handles the exact
+            // boundary either way, this just picks a sensible step size).
+            int text_w, ch, show_scrollbar;
+            term_layout(win, &text_w, &ch, &show_scrollbar);
+            int total_lines, visible_rows;
+            widget_scrollback_metrics(&st->tb, text_w, ch, &total_lines, &visible_rows);
+            int page = visible_rows > 1 ? visible_rows - 1 : 1;
+            widget_scrollback_scroll(&st->tb, key == KEY_PAGE_UP ? page : -page);
+            break;
+        }
+        return; // genuinely unhandled -- nothing changed, no need to invalidate
     }
 
     window_invalidate(win);

@@ -41,6 +41,7 @@
 #include "knum.h"      // numbers <-> strings: k_utoa/k_itoa/k_htoa, k_parse_* (see knum.h's top comment on the nine copies it replaced)
 #include "kfmt.h"      // k_snprintf + vga_printf/klog_printf -- one bounded formatter instead of six calls per line
 #include "kpath.h"     // path join/normalize/resolve/basename/dirname -- one implementation, shared by the shell and the Terminal
+#include "klineedit.h" // readline-style line editing (buffer/cursor/kill ring/undo), shared by the shell and the GUI Terminal
 #include "debugflags.h" // dbgflag_enabled/set/parse -- per-subsystem runtime debug-log toggles (see the shell's `debug` command)
 
 #endif

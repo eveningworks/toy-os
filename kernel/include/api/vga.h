@@ -120,6 +120,30 @@ uint32_t vga_cols(void);
 // blinks without any help.
 void vga_cursor_tick(void);
 
+// Moves the console's insertion point by `delta` cells (negative =
+// left) WITHOUT erasing anything, wrapping across row boundaries and
+// clamping at the first/last cell. Subsequent vga_putc() writes at the
+// new position, and vga_backspace() erases relative to it.
+//
+// Added for the shell's readline-style line editing
+// (kernel/lib/klineedit.c): every other console primitive here only
+// ever appends or removes at the end, which is precisely why the shell
+// could not edit mid-line before.
+//
+// Two things a caller has to know:
+//   - It does not repaint text. A caller that moves back over
+//     characters and then wants them redrawn must redraw them itself
+//     (the shell repaints the whole input line each keystroke).
+//   - In framebuffer mode the cursor stops blinking while it sits
+//     anywhere but the append point, staying solid instead. That is
+//     deliberate: the blink's "off" phase erases its cell to black,
+//     which is correct over the blank cell at the append point and
+//     would silently eat the character underneath anywhere else. The
+//     next ordinary putc/backspace/clear restores blinking.
+// No-op while an output sink is active (a sink owns its own cursor --
+// the GUI Terminal renders one through its scrollback widget instead).
+void vga_cursor_move(int delta);
+
 // Suppresses the cursor block vga_putc()/vga_write() otherwise repaint
 // solid after every character -- for a caller producing its own
 // output on a timer/loop with nothing actually waiting on a keystroke
