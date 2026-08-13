@@ -25,12 +25,13 @@ void widget_textfield_set_active(struct text_field *tf, int active) {
 
 // Forward-delete the character at the cursor (like a real editor's
 // Delete key) -- cursor position doesn't change. No-op at the end.
-// Hand-rolled shift rather than a memmove() call: this codebase's
-// k_memcpy() (string.h) makes no overlapping-region guarantee, and
-// TEXTFIELD_MAX is small enough that a plain loop costs nothing.
+// This used to be a hand-rolled shift, with a comment explaining that
+// k_memcpy() makes no overlapping-region guarantee and there was
+// nothing else to call. k_memmove() (string.h) is that something else.
 static void textfield_delete_at_cursor(struct text_field *tf) {
     if (tf->cursor >= tf->len) return;
-    for (int i = tf->cursor; i < tf->len - 1; i++) tf->buf[i] = tf->buf[i + 1];
+    k_memmove(tf->buf + tf->cursor, tf->buf + tf->cursor + 1,
+               (size_t)(tf->len - 1 - tf->cursor));
     tf->len--;
     tf->buf[tf->len] = '\0';
 }
@@ -43,7 +44,10 @@ static void textfield_backspace(struct text_field *tf) {
 
 static void textfield_insert(struct text_field *tf, char c) {
     if (tf->len >= TEXTFIELD_MAX - 1) return; // full -- refuse rather than truncate/evict
-    for (int i = tf->len; i > tf->cursor; i--) tf->buf[i] = tf->buf[i - 1];
+    // Overlapping shift right to open a gap -- k_memmove, not k_memcpy
+    // (string.h): the regions overlap by everything but one byte.
+    k_memmove(tf->buf + tf->cursor + 1, tf->buf + tf->cursor,
+               (size_t)(tf->len - tf->cursor));
     tf->buf[tf->cursor] = c;
     tf->len++;
     tf->cursor++;

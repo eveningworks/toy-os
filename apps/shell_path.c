@@ -84,20 +84,12 @@ const char *shell_path_dir(int index) {
 // "/bin/ls"). Returns 0 if the result wouldn't fit, which is treated as
 // "not found here" rather than an error worth reporting -- a name that
 // long can't name a real file on this filesystem either.
+//
+// kpath.h's k_path_join() does the work; this stays as a named wrapper
+// because "doesn't fit means not found here" is a PATH-search decision,
+// not something the string helper should imply.
 static int join_path(const char *dir, const char *name, char *out) {
-    int pos = 0;
-    for (const char *p = dir; *p; p++) {
-        if (pos >= FS_PATH_MAX - 2) return 0;
-        out[pos++] = *p;
-    }
-    if (pos >= FS_PATH_MAX - 2) return 0;
-    out[pos++] = '/';
-    for (const char *p = name; *p; p++) {
-        if (pos >= FS_PATH_MAX - 1) return 0;
-        out[pos++] = *p;
-    }
-    out[pos] = '\0';
-    return 1;
+    return k_path_join(dir, name, out, FS_PATH_MAX);
 }
 
 int shell_path_find(const char *name, char *out) {

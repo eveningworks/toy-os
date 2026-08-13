@@ -11,6 +11,7 @@
 #include "gfx.h"
 #include "timer.h"
 #include "klog.h"
+#include "knum.h"
 #include <stddef.h>
 
 #define VGA_WIDTH 80
@@ -596,18 +597,17 @@ void vga_write(const char *s) {
     while (*s) vga_putc(*s++);
 }
 
+// These two are now three lines each over knum.h's converters. They
+// used to be a full digit loop apiece -- and klog.c had its own
+// identical pair, with a comment explaining that duplicating them was
+// cheaper than the dependency. knum.c is that dependency, deliberately
+// depending on nothing itself, so both sinks can share one
+// implementation (and one set of tests) without either pulling in the
+// other.
 void vga_write_dec(uint32_t n) {
-    char tmp[11];
-    int i = 0;
-    if (n == 0) {
-        vga_putc('0');
-        return;
-    }
-    while (n > 0) {
-        tmp[i++] = '0' + (n % 10);
-        n /= 10;
-    }
-    while (i > 0) vga_putc(tmp[--i]);
+    char buf[21];
+    k_utoa(n, buf, sizeof buf);
+    vga_write(buf);
 }
 
 void vga_write_exit_code(int code) {
@@ -624,14 +624,8 @@ void vga_write_exit_code(int code) {
 }
 
 void vga_write_hex(uint64_t n) {
-    vga_write("0x");
     char buf[17];
-    for (int i = 15; i >= 0; i--) {
-        uint8_t nibble = (n >> (i * 4)) & 0xF;
-        buf[15 - i] = nibble < 10 ? (char)('0' + nibble) : (char)('a' + nibble - 10);
-    }
-    buf[16] = '\0';
-    int start = 0;
-    while (start < 15 && buf[start] == '0') start++;
-    vga_write(buf + start);
+    k_htoa(n, buf, sizeof buf, 0); // 0 = shortest form, no leading zeros
+    vga_write("0x");
+    vga_write(buf);
 }

@@ -30,6 +30,7 @@
 #include "keyboard_layout.h"
 #include "fs.h"
 #include "string.h"
+#include "knum.h"
 
 #define KB_LAYOUT_DIR "/etc/kbs/"
 
@@ -78,21 +79,14 @@ static void apply_fallback_us(void) {
     k_memset(g_table_altgr, 0, sizeof(g_table_altgr));
 }
 
-static int is_hex_digit(char c) {
-    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
-}
-
-static int hex_val(char c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    return c - 'A' + 10;
-}
-
 // Parses exactly 2 hex digits at s[0..1] into *out. Returns 1 on
-// success, 0 if either isn't a hex digit.
+// success, 0 if either isn't a hex digit. The digit-value lookup this
+// used to carry (plus its is_hex_digit() companion) is knum.h's
+// k_hex_digit() now -- three files had written that same function.
 static int parse_hex2(const char *s, uint8_t *out) {
-    if (!is_hex_digit(s[0]) || !is_hex_digit(s[1])) return 0;
-    *out = (uint8_t)((hex_val(s[0]) << 4) | hex_val(s[1]));
+    int hi = k_hex_digit(s[0]), lo = k_hex_digit(s[1]);
+    if (hi < 0 || lo < 0) return 0;
+    *out = (uint8_t)((hi << 4) | lo);
     return 1;
 }
 
@@ -104,8 +98,9 @@ static int parse_value(const char *value, uint32_t len) {
     if (len >= 3 && value[0] == '0' && (value[1] == 'x' || value[1] == 'X')) {
         int v = 0;
         for (uint32_t i = 2; i < len; i++) {
-            if (!is_hex_digit(value[i])) return -1;
-            v = (v << 4) | hex_val(value[i]);
+            int d = k_hex_digit(value[i]);
+            if (d < 0) return -1;
+            v = (v << 4) | d;
         }
         return v & 0xFF;
     }

@@ -19,13 +19,17 @@ void klog_putc(char c);
 // Decimal/hex number formatting for klog messages that need to include
 // a value (a device ID, a resolution, a count) -- mirrors
 // vga_write_dec()/vga_write_hex() (vga.h) exactly (same no-padding
-// decimal, same "0x" + leading-zeros-trimmed hex), just routed through
-// klog_putc() instead of vga_putc() so the digits land in the ring
-// buffer (and physical serial) rather than the screen. Kept here
-// rather than shared with vga.c's copy since vga.c is a driver klog.c
-// doesn't (and shouldn't) depend on, and the two implementations are
-// small enough that duplicating them is cheaper than introducing a
-// shared dependency for it.
+// decimal, same "0x" + leading-zeros-trimmed hex), just routed to the
+// ring buffer (and physical serial) rather than the screen.
+//
+// These two and vga.c's pair used to be four separate digit loops, and
+// this comment used to explain why: sharing them would have meant klog
+// depending on a driver. They all go through knum.h now, which is that
+// dependency done right -- a converter into a caller-owned buffer,
+// depending on nothing itself, so both sinks share one implementation
+// and one set of tests. If you're writing a whole formatted LINE rather
+// than one value, reach for kfmt.h's klog_printf() instead of chaining
+// these.
 void klog_write_dec(uint32_t n);
 void klog_write_hex(uint64_t n);
 

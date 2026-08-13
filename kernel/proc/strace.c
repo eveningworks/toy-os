@@ -48,6 +48,7 @@
 #include "vga.h"
 #include "klog.h"
 #include "fs.h"
+#include "knum.h"
 
 // One traced address space at a time (decision 1 above). 0 = none;
 // a real CR3 is never 0, same assumption g_heap_pml4 makes.
@@ -102,41 +103,36 @@ static void ap_str(char *out, size_t cap, size_t *len, const char *s) {
     while (*s) ap_ch(out, cap, len, *s++);
 }
 
+// These four were this file's own digit loops when it was written --
+// and they were the ninth copy in the tree, which is what prompted
+// building knum.h. Now they're four thin adapters: knum converts into a
+// scratch buffer, ap_str() appends it. The conversion logic lives in
+// exactly one place, and is tested there.
 static void ap_udec(char *out, size_t cap, size_t *len, uint64_t v) {
     char tmp[24];
-    int n = 0;
-    if (v == 0) { ap_ch(out, cap, len, '0'); return; }
-    while (v && n < (int)sizeof(tmp)) { tmp[n++] = (char)('0' + (v % 10)); v /= 10; }
-    while (n--) ap_ch(out, cap, len, tmp[n]);
+    k_utoa(v, tmp, sizeof tmp);
+    ap_str(out, cap, len, tmp);
 }
 
 static void ap_sdec(char *out, size_t cap, size_t *len, uint64_t raw) {
-    int64_t v = (int64_t)raw;
-    if (v < 0) {
-        ap_ch(out, cap, len, '-');
-        ap_udec(out, cap, len, (uint64_t)(-v));
-    } else {
-        ap_udec(out, cap, len, (uint64_t)v);
-    }
+    char tmp[24];
+    k_itoa((int64_t)raw, tmp, sizeof tmp);
+    ap_str(out, cap, len, tmp);
 }
 
 static void ap_hex(char *out, size_t cap, size_t *len, uint64_t v) {
-    static const char digits[] = "0123456789abcdef";
+    char tmp[17];
+    k_htoa(v, tmp, sizeof tmp, 0);
     ap_str(out, cap, len, "0x");
-    if (v == 0) { ap_ch(out, cap, len, '0'); return; }
-    int started = 0;
-    for (int shift = 60; shift >= 0; shift -= 4) {
-        int nibble = (int)((v >> shift) & 0xf);
-        if (!nibble && !started) continue;
-        started = 1;
-        ap_ch(out, cap, len, digits[nibble]);
-    }
+    ap_str(out, cap, len, tmp);
 }
 
+// Exactly two digits, zero-padded -- for \xNN escapes, where a
+// variable-width value would be ambiguous.
 static void ap_hex2(char *out, size_t cap, size_t *len, uint8_t v) {
-    static const char digits[] = "0123456789abcdef";
-    ap_ch(out, cap, len, digits[(v >> 4) & 0xf]);
-    ap_ch(out, cap, len, digits[v & 0xf]);
+    char tmp[4];
+    k_htoa(v, tmp, sizeof tmp, 2);
+    ap_str(out, cap, len, tmp);
 }
 
 // C-style escaping, same shapes real strace prints: the four common

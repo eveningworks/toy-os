@@ -285,24 +285,25 @@ static void term_set_line(struct terminal_state *st, const char *new_line) {
     st->line_len = len;
 }
 
-// Resolves a filename argument the same lightweight way editor_run()'s
-// caller (shell.c's cmd_edit()) would want, but this file has no access
-// to shell.c's own resolve_path() (static to that file, and it does
-// real "."/".." collapsing) -- so this is deliberately simpler: only
-// absolute paths and plain relative names against shell_cwd() are
-// handled, no ".."/"." segments. Good enough for "edit foo.txt" and
-// "edit /notes/todo.txt"; a path with ".." in it just won't resolve the
-// way the physical shell's `cd`-aware commands would.
+// Resolves a filename argument against the shell's cwd.
+//
+// This used to be a deliberately simpler copy of shell.c's
+// resolve_path(), because that one was `static` and out of reach from
+// here -- it handled absolute paths and plain relative names but not
+// "."/".." at all, so `edit ../notes.txt` in this window resolved to
+// something different than the identical command at the physical
+// shell. Both go through kpath.h's k_path_resolve() now, so they agree
+// by construction rather than by two implementations happening to
+// match. See kpath.h.
+//
+// On failure (too deep, or too long for FS_PATH_MAX) this falls back to
+// the raw name, which then fails a normal "no such file" check
+// downstream -- the same outcome the old version produced for a path it
+// couldn't represent, and better than leaving `out` uninitialized.
 static void resolve_editor_path(const char *name, char *out) {
-    if (name[0] == '/') {
-        k_strcpy(out, name);
-        return;
+    if (!k_path_resolve(shell_cwd(), name, out, FS_PATH_MAX)) {
+        k_strlcpy(out, name, FS_PATH_MAX);
     }
-    const char *cwd = shell_cwd();
-    k_strcpy(out, cwd);
-    size_t cl = k_strlen(cwd);
-    if (cl > 1) { out[cl] = '/'; out[cl + 1] = '\0'; cl++; }
-    k_strcpy(out + cl, name);
 }
 
 // Shared tail of the `ls`/`run` async-spawn paths in term_run_line()

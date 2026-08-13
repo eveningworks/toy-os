@@ -1,6 +1,7 @@
 #include "idt.h"
 #include "vga.h"
 #include "klog.h"
+#include "kfmt.h"
 #include "pic.h"
 #include "irq.h"
 #include "keyboard.h"
@@ -225,21 +226,23 @@ void isr_dispatch(uint64_t *regs) {
         int recoverable = (cs & 3) == 3 &&
                            (scheduler_current_pid() || process_context_is_armed());
 
+        // This block was eleven calls to print three lines before
+        // kfmt.h existed. It formats into a stack buffer, which is fine
+        // in an exception handler -- KFMT_LINE_MAX is 256 bytes and this
+        // is the deepest the fault path ever goes.
         vga_set_color(VGA_WHITE, VGA_RED);
-        vga_write("\n*** ");
-        vga_write(recoverable ? "RING-3 PROCESS CRASHED: " : "KERNEL PANIC: ");
-        vga_write(exception_names[vector]);
-        vga_write(" ***\n");
-        vga_write("RIP="); vga_write_hex(rip);
-        vga_write("  CS="); vga_write_hex(cs);
-        vga_write(" (ring "); vga_write_dec((uint32_t)(cs & 3)); vga_write(")\n");
-        vga_write("error_code="); vga_write_hex(error_code);
-        if (vector == 14) { vga_write("  CR2="); vga_write_hex(cr2); }
-        vga_putc('\n');
+        vga_printf("\n*** %s%s ***\n",
+                    recoverable ? "RING-3 PROCESS CRASHED: " : "KERNEL PANIC: ",
+                    exception_names[vector]);
+        vga_printf("RIP=0x%lx  CS=0x%lx (ring %lu)\n", rip, cs, cs & 3);
+        if (vector == 14) {
+            vga_printf("error_code=0x%lx  CR2=0x%lx\n", error_code, cr2);
+        } else {
+            vga_printf("error_code=0x%lx\n", error_code);
+        }
 
-        klog_write(recoverable ? "RING-3 CRASH: " : "PANIC: ");
-        klog_write(exception_names[vector]);
-        klog_write("\n");
+        klog_printf("%s%s\n", recoverable ? "RING-3 CRASH: " : "PANIC: ",
+                     exception_names[vector]);
 
         if ((cs & 3) == 3 && ring3_hook) {
             ring3_hook(vector, error_code, cs, cr2);

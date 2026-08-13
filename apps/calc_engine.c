@@ -1,5 +1,6 @@
 #include "calc_engine.h"
 #include "string.h"
+#include "knum.h"
 
 // Max digits accepted for the integer part of an entry -- enough for any
 // result this calculator can usefully display (CALC_DISPLAY_MAX has
@@ -18,17 +19,8 @@ static const int64_t POW10[CALC_FRAC_DIGITS + 1] = { 1, 10, 100, 1000, 10000 };
 // and for plain results (min_digits=0).
 static void append_uint(char *buf, int *pos, uint64_t v, int min_digits) {
     char tmp[24];
-    int n = 0;
-    if (v == 0) {
-        tmp[n++] = '0';
-    } else {
-        while (v > 0) {
-            tmp[n++] = (char)('0' + (v % 10));
-            v /= 10;
-        }
-    }
-    while (n < min_digits) tmp[n++] = '0';
-    for (int i = n - 1; i >= 0; i--) buf[(*pos)++] = tmp[i];
+    size_t n = k_utoa_pad(v, tmp, sizeof tmp, (unsigned)min_digits);
+    for (size_t i = 0; i < n; i++) buf[(*pos)++] = tmp[i];
 }
 
 // Renders the entry currently being typed exactly as typed -- including

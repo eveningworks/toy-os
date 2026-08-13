@@ -49,6 +49,26 @@ technical conventions below:
   that's a sign it belongs behind a new function in `kernel/core` or
   `kernel/drivers`, exposed through `kapi.h` -- not a reason to reach
   around the boundary.
+- **There is a shared toolkit in `kernel/lib/` -- check it before
+  hand-rolling a digit loop, a formatter, or a path join.** Four
+  headers, all reachable through `kapi.h` and all with KTESTs:
+  `string.h` (strings/memory/char classes), `knum.h` (numbers <->
+  strings: `k_utoa`/`k_itoa`/`k_htoa`, `k_parse_u32`/`k_parse_hex`,
+  ...), `kfmt.h` (`k_snprintf`, plus `vga_printf`/`klog_printf` for a
+  whole line in one call), `kpath.h` (`k_path_join`/`_normalize`/
+  `_resolve`/`_basename`/`_dirname`). This exists because a survey
+  found the same twenty lines written nine times for int->string, ten
+  for hex, six for parsing and three for path resolution -- and the
+  path one wasn't just duplication, the copies disagreed (`edit
+  ../x` meant different things in the GUI Terminal and the physical
+  shell). Two conventions everything there follows, worth matching in
+  anything added to it: a formatter that doesn't fit its buffer writes
+  NOTHING rather than a truncated (i.e. wrong) value, and a parser
+  REJECTS rather than guesses. Adding to the toolkit follows this
+  file's usual bar -- a second real caller, not a plausible one; the
+  batch that introduced it had `k_strstr`/`k_strcasecmp`/`k_toupper`
+  written and building, found no caller for them, and deleted them
+  again before landing.
 - **`apps/wm/wm.h` is a second, peer-level boundary**, not part of
   `kapi.h` -- it's the GUI-specific equivalent, included by GUI apps
   for `window_*` helpers. `kapi.h` never includes `wm/wm.h` or

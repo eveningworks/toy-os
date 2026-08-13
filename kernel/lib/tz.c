@@ -27,6 +27,7 @@
 #include "tz.h"
 #include "fs.h"
 #include "string.h"
+#include "knum.h"
 #include "etc_config.h"
 
 enum dst_rule { TZ_DST_NONE, TZ_DST_EU, TZ_DST_US };
@@ -172,11 +173,15 @@ static uint32_t tz_trim(const char **start, const char *end) {
 // digits are just ignored -- callers already trimmed whitespace, and
 // there's nothing else valid that could follow a number in this file.
 static int tz_parse_int(const char *s, const char *end) {
-    int neg = 0;
-    if (s < end && *s == '-') { neg = 1; s++; }
-    int v = 0;
-    for (; s < end && *s >= '0' && *s <= '9'; s++) v = v * 10 + (*s - '0');
-    return neg ? -v : v;
+    // knum.h's bounded parser does the digit loop (and rejects junk,
+    // which the hand-rolled version silently ignored). A malformed
+    // field yields 0 here rather than a load error, matching this
+    // file's existing "don't guess, but don't refuse the row either"
+    // handling of a bad dst_rule -- see the comment below.
+    int64_t v = 0;
+    if (end <= s) return 0;
+    if (!k_parse_i64_n(s, (size_t)(end - s), &v)) return 0;
+    return (int)v;
 }
 
 // "eu"/"us" (case-sensitive, matching how city names are matched) ->

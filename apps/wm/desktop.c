@@ -116,16 +116,20 @@ static void desktop_load_positions(void) {
         char value[16];
         if (!etc_config_get(DESKTOP_CONF_PATH, gui_app_registry[i].name, value, sizeof(value))) continue;
 
-        const char *p = value;
-        int col = 0;
-        while (*p >= '0' && *p <= '9') { col = col * 10 + (*p - '0'); p++; }
-        if (*p != ',') continue; // malformed -- keep the default set above
-        p++;
-        int row = 0;
-        while (*p >= '0' && *p <= '9') { row = row * 10 + (*p - '0'); p++; }
+        // "<col>,<row>" -- split on the comma, then let knum.h's bounded
+        // parser handle each half. Stricter than the digit loops this
+        // replaced: those accepted trailing junk ("3,4x" parsed as 3,4),
+        // where this treats the whole field as malformed and keeps the
+        // default, matching how every other config value here behaves.
+        const char *comma = k_strchr(value, ',');
+        if (!comma) continue; // malformed -- keep the default set above
 
-        icon_col[i] = col;
-        icon_row[i] = row;
+        uint64_t col = 0, row = 0;
+        if (!k_parse_u64_n(value, (size_t)(comma - value), &col)) continue;
+        if (!k_parse_u64(comma + 1, &row)) continue;
+
+        icon_col[i] = (int)col;
+        icon_row[i] = (int)row;
     }
 }
 

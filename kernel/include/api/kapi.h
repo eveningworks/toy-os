@@ -37,7 +37,10 @@
 #include "debug_console.h" // debug_console_poll -- apps/wm/wm.c's event loop rides this the same way keyboard_getchar() does, so the serial debug console stays responsive while the GUI desktop is up too (see docs/decisions.md)
 #include "ktest_run.h" // ktest_run_all -- the shell's `ktest` command; writing tests needs kernel/ktest.h, see that header
 #include "version.h"   // TOYOS_VERSION -- build number, shown by the shell's `about` and the GUI About window
-#include "string.h"    // k_strlen, k_strcmp, etc -- freestanding, no libc
+#include "string.h"    // k_strlen, k_strcmp, k_strchr/strstr/strlcpy, char classes -- freestanding, no libc
+#include "knum.h"      // numbers <-> strings: k_utoa/k_itoa/k_htoa, k_parse_* (see knum.h's top comment on the nine copies it replaced)
+#include "kfmt.h"      // k_snprintf + vga_printf/klog_printf -- one bounded formatter instead of six calls per line
+#include "kpath.h"     // path join/normalize/resolve/basename/dirname -- one implementation, shared by the shell and the Terminal
 #include "debugflags.h" // dbgflag_enabled/set/parse -- per-subsystem runtime debug-log toggles (see the shell's `debug` command)
 
 #endif

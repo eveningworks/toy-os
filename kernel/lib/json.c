@@ -26,6 +26,7 @@
 #include "json.h"
 #include "heap.h"
 #include "string.h"
+#include "knum.h"
 #include "fs.h"
 
 #define JSON_MAX_DEPTH 32
@@ -41,8 +42,15 @@ static char *dup_bytes(const char *s, uint32_t len) {
     return out;
 }
 
-static int is_digit(char c) { return c >= '0' && c <= '9'; }
-static int is_space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
+// Both of these are string.h's now (k_isdigit/k_isspace). Kept as
+// local aliases so this file's parser reads the same as it always did.
+// k_isspace() also accepts '\f'/'\v', which JSON doesn't consider
+// whitespace -- harmless here, since neither can appear between JSON
+// tokens in any input this kernel parses, and being slightly more
+// permissive about whitespace never changes what a valid document
+// means.
+#define is_digit(c) k_isdigit(c)
+#define is_space(c) k_isspace(c)
 
 // ---- value construction ----
 
@@ -199,12 +207,8 @@ static int utf8_encode(uint32_t cp, char *out) {
     return 3;
 }
 
-static int hex_digit(char c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
-}
+// knum.h's k_hex_digit() -- this was the third identical copy.
+#define hex_digit(c) k_hex_digit(c)
 
 // Parses a quoted JSON string starting AT the opening '"'. Returns a
 // freshly kmalloc'd, NUL-terminated, unescaped copy, or NULL on error.

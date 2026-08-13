@@ -34,83 +34,23 @@ char history[HISTORY_MAX][LINE_MAX];
 int history_count = 0; // number of entries stored (caps at HISTORY_MAX)
 
 // Resolves `input` (absolute if it starts with '/', otherwise relative
-// to `cwd`) into a normalized absolute path in `out`, collapsing "."
-// and ".." components along the way (so `cd ..`, `cat ../notes.txt`
-// etc. work). A blank/NULL `input` resolves to `cwd` itself. Returns 1
-// on success, 0 if the result would be empty, too deep, or too long
-// for `out` (size FS_PATH_MAX).
+// to `cwd`) into a normalized absolute path in `out` (size
+// FS_PATH_MAX), collapsing "." and ".." along the way. A blank/NULL
+// `input` resolves to `cwd` itself. Returns 1 on success, 0 if the
+// result would be too deep or too long.
 //
-// This is deliberately shell-side, hand-rolled logic, not something
-// fs.c does -- fs.c only ever sees already-normalized absolute paths
-// (see its own top comment), the same boundary the rest of the kernel
-// draws between "the shell's job" and "the filesystem's job".
+// The segment-stack implementation this used to carry is kpath.c's
+// k_path_resolve() now. That move wasn't about size -- it's that this
+// function was `static` to this file, so apps/terminal.c couldn't
+// reach it and grew a "deliberately simpler" copy that didn't handle
+// ".." at all. Same command, two answers, depending on which window
+// you typed it in. One implementation now, with tests.
+//
+// It stays shell-side in the sense that matters: `cwd` is the shell's
+// state, and fs.c still only ever sees already-normalized absolute
+// paths (see its own top comment). kpath just does the string work.
 int resolve_path(const char *input, char *out) {
-    char combined[3 * FS_PATH_MAX];
-
-    if (!input || k_strlen(input) == 0) {
-        k_strcpy(out, cwd);
-        return 1;
-    }
-
-    if (input[0] == '/') {
-        if (k_strlen(input) >= sizeof(combined)) return 0;
-        k_strcpy(combined, input);
-    } else {
-        size_t cl = k_strlen(cwd);
-        if (cl >= sizeof(combined)) return 0;
-        k_strcpy(combined, cwd);
-        if (cl > 1) { // cwd isn't just "/" -- needs a separating slash
-            if (cl + 1 >= sizeof(combined)) return 0;
-            combined[cl] = '/';
-            combined[cl + 1] = '\0';
-            cl++;
-        }
-        if (cl + k_strlen(input) >= sizeof(combined)) return 0;
-        k_strcpy(combined + cl, input);
-    }
-
-    // Split on '/', processing "." (skip) and ".." (pop) as we go, into
-    // a stack of pointers back into `combined` (mutated in place with
-    // '\0's at each separator so each stack entry is its own C string).
-    char *stack[16];
-    int depth = 0;
-    char *p = combined;
-    while (*p) {
-        while (*p == '/') p++;
-        if (!*p) break;
-        char *start = p;
-        while (*p && *p != '/') p++;
-        int seglen = (int)(p - start);
-        int had_slash = (*p == '/');
-        if (had_slash) *p = '\0';
-
-        if (seglen == 1 && start[0] == '.') {
-            // no-op
-        } else if (seglen == 2 && start[0] == '.' && start[1] == '.') {
-            if (depth > 0) depth--;
-        } else if (seglen > 0) {
-            if (depth >= 16) return 0; // too deep
-            stack[depth++] = start;
-        }
-
-        if (had_slash) p++;
-    }
-
-    size_t pos = 1;
-    out[0] = '/';
-    out[1] = '\0';
-    for (int i = 0; i < depth; i++) {
-        size_t seglen = k_strlen(stack[i]);
-        if (i > 0) {
-            if (pos + 1 >= FS_PATH_MAX) return 0;
-            out[pos++] = '/';
-        }
-        if (pos + seglen >= FS_PATH_MAX) return 0;
-        k_memcpy(out + pos, stack[i], seglen);
-        pos += seglen;
-        out[pos] = '\0';
-    }
-    return 1;
+    return k_path_resolve(cwd, input, out, FS_PATH_MAX);
 }
 
 static void dispatch(char *line) {

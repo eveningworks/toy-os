@@ -53,18 +53,11 @@ static const char *mmap_type_name(uint32_t type) {
     }
 }
 
+// Was a local hex digit loop -- the fourth copy of vga_write_hex()'s
+// body in the tree. vga_write_hex() itself does exactly this now (both
+// go through knum.h), so the local one is gone.
 static void write_hex64(uint64_t v) {
-    vga_write("0x");
-    char buf[17];
-    for (int i = 15; i >= 0; i--) {
-        uint8_t nibble = (v >> (i * 4)) & 0xF;
-        buf[15 - i] = nibble < 10 ? ('0' + nibble) : ('a' + nibble - 10);
-    }
-    buf[16] = '\0';
-    // skip leading zeros but keep at least one digit
-    int start = 0;
-    while (start < 15 && buf[start] == '0') start++;
-    vga_write(buf + start);
+    vga_write_hex(v);
 }
 
 struct mb_tag_framebuffer {

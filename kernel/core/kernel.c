@@ -20,16 +20,19 @@
 #include "apps.h"
 #include "scheduler.h"
 #include "debug_console.h"
+#include "knum.h"
 #include <stdint.h>
 
-// Zero-padded 2-digit decimal, for the RTC boot-time log line below --
-// klog_write_dec() (klog.h) deliberately doesn't pad (matches
-// vga_write_dec()'s no-padding behavior), so a real clock display needs
-// its own small helper the same way klog_write_timestamp() (klog.c)
-// does internally for the "[secs.hh]" prefix.
+// Zero-padded 2-digit decimal, for the RTC boot-time log line below.
+// klog_write_dec() (klog.h) deliberately doesn't pad, so this used to
+// be a hand-rolled two-character helper; knum.h has the padded
+// converter now, and klog.c's own "[secs.hh]" prefix -- which this
+// helper's comment used to point at as the other copy -- goes through
+// the same one.
 static void klog_write_dec2(uint8_t n) {
-    klog_putc((char)('0' + (n / 10) % 10));
-    klog_putc((char)('0' + (n % 10)));
+    char buf[8];
+    k_utoa_pad(n % 100, buf, sizeof buf, 2);
+    klog_write(buf);
 }
 
 void kernel_main(uint64_t multiboot_info_addr) {

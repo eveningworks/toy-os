@@ -20,6 +20,7 @@
 #include "debug_console.h"
 #include "serial.h"
 #include "klog.h"
+#include "kfmt.h"
 #include "string.h"
 #include "pmm.h"
 #include "heap.h"
@@ -160,42 +161,22 @@ static void dbg_cmd_ktest(const char *suite) {
 static void dbg_cmd_meminfo(void) {
     uint64_t total = pmm_total_frames(), free = pmm_free_frames();
     uint64_t used = total - free;
-    klog_write("phys: ");
-    klog_write_dec((uint32_t)(used * 4));
-    klog_write("K used / ");
-    klog_write_dec((uint32_t)(total * 4));
-    klog_write("K total (");
-    klog_write_dec((uint32_t)(free * 4));
-    klog_write("K free)\r\n");
-
-    klog_write("heap: ");
-    klog_write_dec((uint32_t)heap_used_bytes());
-    klog_write(" bytes used / ");
-    klog_write_dec((uint32_t)heap_total_bytes());
-    klog_write(" bytes claimed from pmm\r\n");
+    klog_printf("phys: %luK used / %luK total (%luK free)\r\n",
+                 used * 4, total * 4, free * 4);
+    klog_printf("heap: %lu bytes used / %lu bytes claimed from pmm\r\n",
+                 (unsigned long)heap_used_bytes(), (unsigned long)heap_total_bytes());
 }
 
 static void dbg_cmd_lsdev(void) {
     int n = pci_device_count();
-    klog_write("PCI devices (");
-    klog_write_dec((uint32_t)n);
-    klog_write("):\r\n");
+    klog_printf("PCI devices (%d):\r\n", n);
     for (int i = 0; i < n; i++) {
         const struct pci_device *d = pci_device_at(i);
         if (!d) continue;
-        klog_write("  ");
-        klog_write_dec(d->bus);
-        klog_write(":");
-        klog_write_dec(d->device);
-        klog_write(".");
-        klog_write_dec(d->function);
-        klog_write("  ");
-        klog_write_hex(d->vendor_id);
-        klog_write(":");
-        klog_write_hex(d->device_id);
-        klog_write("  ");
-        klog_write(pci_class_name(d->class_code, d->subclass));
-        klog_write("\r\n");
+        klog_printf("  %u:%u.%u  0x%x:0x%x  %s\r\n",
+                     d->bus, d->device, d->function,
+                     d->vendor_id, d->device_id,
+                     pci_class_name(d->class_code, d->subclass));
     }
 }
 
@@ -203,15 +184,8 @@ static void dbg_cmd_lsdev(void) {
 // comment on that convention) -- nothing here needs cross-call state,
 // so a plain static function is enough.
 static void dbg_lsfs_cb(const char *name, uint32_t size, int is_dir) {
-    klog_write("  ");
-    klog_write(name);
-    if (is_dir) {
-        klog_write("/\r\n");
-    } else {
-        klog_write("  (");
-        klog_write_dec(size);
-        klog_write(" bytes)\r\n");
-    }
+    if (is_dir) klog_printf("  %s/\r\n", name);
+    else        klog_printf("  %s  (%u bytes)\r\n", name, size);
 }
 
 static void dbg_cmd_lsfs(const char *arg) {

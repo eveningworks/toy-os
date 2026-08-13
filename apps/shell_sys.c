@@ -269,11 +269,8 @@ void cmd_timezone(const char *args) {
         return;
     }
 
-    int choice = 0;
-    for (const char *p = buf; *p; p++) {
-        if (*p < '0' || *p > '9') { choice = -1; break; }
-        choice = choice * 10 + (*p - '0');
-    }
+    uint32_t parsed = 0;
+    int choice = k_parse_u32(buf, &parsed) ? (int)parsed : -1;
     if (choice < 1 || choice > count) {
         vga_write("Not a valid choice.\n");
         return;
@@ -502,19 +499,12 @@ static void stress_print_progress(const char *verb, uint32_t done_mb,
     if (pct >= 100) vga_putc('\n');
 }
 
-// Parses a plain decimal string (no sign, no whitespace) into *out.
-// Returns 1 on success, 0 if `s` is empty or has a non-digit -- same
-// "reject rather than guess" spirit as keyboard_layout.c's parse_hex2().
-static int parse_decimal(const char *s, uint32_t *out) {
-    if (!s || !*s) return 0;
-    uint32_t v = 0;
-    for (const char *p = s; *p; p++) {
-        if (*p < '0' || *p > '9') return 0;
-        v = v * 10 + (uint32_t)(*p - '0');
-    }
-    *out = v;
-    return 1;
-}
+// This file's own parse_decimal() became knum.h's k_parse_u32() -- the
+// "reject rather than guess" contract it established is the whole
+// toolkit's parsing rule now, and it gained overflow checking the
+// hand-rolled version didn't have. Kept as a one-line alias rather than
+// renaming three call sites for no behavioral reason.
+#define parse_decimal(s, out) k_parse_u32((s), (out))
 
 void cmd_stress(const char *args) {
     uint32_t mb;
@@ -1097,12 +1087,8 @@ void cmd_history(void) {
 // output wants fixed-width fields (e.g. "8086:1237", not "8086:1237"
 // one time and "86:237" the next) so columns actually line up.
 static void print_hex_digits(uint32_t v, int digits) {
-    char buf[9]; // enough for the widest caller here (4 digits) + '\0'
-    for (int i = 0; i < digits; i++) {
-        uint8_t nibble = (v >> ((digits - 1 - i) * 4)) & 0xF;
-        buf[i] = nibble < 10 ? (char)('0' + nibble) : (char)('a' + nibble - 10);
-    }
-    buf[digits] = '\0';
+    char buf[17];
+    k_htoa(v, buf, sizeof buf, (unsigned)digits); // fixed width -- see knum.h
     vga_write(buf);
 }
 

@@ -30,6 +30,83 @@ using `## [x.y.z] - date` headings is here.
 
 ## [Unreleased]
 
+### Added
+- **A shared toolkit in `kernel/lib/`: `knum` (numbers <-> strings),
+  `kfmt` (`k_snprintf` + printf-style sinks), `kpath` (paths), and a
+  grown `string.h`.** Asked for as "do we need some toolkit c libraries
+  so kernel mode apps and code won't have to invent the wheel again".
+  - A survey first, rather than guessing at what was missing. The same
+    code had been written: **9 times** for int->decimal, **10 times**
+    for int->hex, **6 times** for digit parsing, **3 times** for path
+    resolution. Four of those hex/decimal copies were `vga_write_dec`/
+    `vga_write_hex` and `klog_write_dec`/`klog_write_hex` -- byte-for-
+    byte identical pairs, with a comment in `klog.h` explaining that
+    duplicating them was cheaper than the dependency. The most recent
+    copy was four appenders in `strace.c`, added in the commit before
+    this one.
+  - **Why they were duplicated, and what actually fixes it:** each
+    formatter printed somewhere different (screen, kernel log, a
+    buffer, a window), so there was no shared *printer* to extract. The
+    shared thing had to be a **converter that fills a caller-owned
+    buffer** and lets the caller decide where it goes. That's what
+    `knum` is; it depends on nothing, so any sink can use it without
+    pulling in a driver, and -- unlike code that writes straight to a
+    screen -- it can be tested. None of the nine originals had a test.
+  - **Two rules across the whole toolkit.** A formatter that doesn't
+    fit its buffer writes *nothing* rather than a truncated value (a
+    truncated number or path is a wrong one, not a partial one); a
+    parser rejects rather than guesses, leaving the caller's output
+    untouched. The second was already `shell_sys.c`'s local convention
+    -- now it's the project's, with overflow checking the hand-rolled
+    versions didn't have.
+  - **`kfmt`** turns the write-a-line-in-six-calls pattern into one
+    call: `idt.c`'s panic block was 11 calls for 3 lines. C99
+    `snprintf` semantics (returns the length it *wanted*, so truncation
+    is detectable), standard printf argument rules so GCC's `-Wformat`
+    stays meaningful at every call site, and deliberately no `%f`
+    (no FPU here), `%p`, precision or `*` width. An unrecognised
+    conversion prints literally and consumes no argument, so a typo
+    can't desynchronise every argument after it.
+  - **`kpath` fixed a real behavior difference, not just duplication.**
+    `shell.c`'s `resolve_path()` was `static`, so `terminal.c` couldn't
+    reach it and carried its own copy that didn't handle "."/".." at
+    all -- `edit ../notes.txt` resolved differently in the GUI Terminal
+    than at the physical shell. Both call `k_path_resolve()` now.
+  - **`string.h`** grew `k_strlcpy` (BSD semantics: always terminates,
+    returns the length it wanted -- chosen deliberately over
+    `strncpy`'s), `k_strchr`/`k_strrchr`, `k_memcmp`, `k_memmove`, and
+    `k_isdigit`/`k_isspace`. It also *lost* six functions before
+    landing: `k_strstr`, `k_strcasecmp`, `k_isalpha`, `k_isalnum`,
+    `k_tolower`, `k_toupper` were written and building, then found to
+    have no caller anywhere in the tree, so they were deleted rather
+    than shipped speculatively -- the same "second real caller, not a
+    plausible one" bar this project applies to `apps/ui/` widgets.
+  - **Migrated, not just added** -- the copies are gone, not joined by
+    a tenth alternative: `vga.c`, `klog.c` (including its own
+    `[secs.hh]` timestamp builder), `multiboot.c`, `kernel.c`, `pci.c`,
+    `strace.c`, `calc_engine.c`, `shell_sys.c` (both its
+    `parse_decimal` and its `print_hex_digits`), `tz.c`,
+    `keyboard_layout.c`, `json.c`, `desktop.c`, `idt.c`,
+    `debug_console.c`, `ata.c`, `tfs.c`, `ui_textbox.c`, `shell.c`,
+    `shell_path.c`, `terminal.c`. Two migrations tightened behavior
+    slightly, both deliberate: `desktop.c`'s icon-position parser now
+    rejects trailing junk ("3,4x" used to parse as 3,4) and keeps the
+    default, and `tz.c`'s offset parser rejects a malformed field
+    instead of silently ignoring the tail.
+  - **21 new KTESTs** (19 -> 40 total), covering the extremes the
+    hand-rolled versions got wrong or never considered: `INT64_MIN`
+    (negating it in signed arithmetic overflows), `UINT64_MAX`,
+    overflow rejection, "doesn't fit produces nothing", zero-padding
+    that never truncates, ".." clamping at the root, and the
+    unrecognised-conversion case.
+  - Verified: `make verify` clean; `cd ..`/`cat ../x` at the physical
+    shell, `lspci`'s fixed-width hex columns, `dmesg` timestamps,
+    `meminfo`, and a real `run crash_test` panic block (byte-identical
+    output through `vga_printf`) in QEMU; plus a GUI Terminal
+    screenshot of `edit ../docs/note.txt` resolving to `/docs/note.txt`
+    and loading the file -- the exact command that used to fail there.
+    Screenshots in `screenshots/2026-08-13/kpath_terminal_*.png`.
+
 ### Fixed
 - **`run hello` page-faulted -- a deliberate fault that had quietly
   become an accidental one.** Found while testing `strace` (above);

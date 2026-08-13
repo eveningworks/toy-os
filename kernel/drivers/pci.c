@@ -3,6 +3,7 @@
 #include "pci.h"
 #include "io.h"
 #include "klog.h"
+#include "knum.h"
 
 #define PCI_CONFIG_ADDRESS 0xCF8
 #define PCI_CONFIG_DATA    0xCFC
@@ -59,16 +60,13 @@ static void config_write16(uint8_t bus, uint8_t device, uint8_t function, uint8_
 // Fixed-width hex, no "0x" prefix, no leading-zero trim -- so
 // vendor:device/bus:device.function columns line up the same way
 // `lspci`'s own print_hex_digits() (apps/shell_sys.c) formats them.
-// klog_write_hex() (klog.h) trims leading zeros instead, which is
-// right for a one-off value but wrong for a fixed-width field, so this
-// stays a small local helper rather than reusing that one.
+// klog_write_hex() trims leading zeros instead, which is right for a
+// one-off value but wrong for a fixed-width field -- which is exactly
+// the split k_htoa()'s min_digits argument exists for (see knum.h,
+// where this call site is the worked example).
 static void klog_hex_digits(uint32_t v, int digits) {
-    char buf[9]; // enough for the widest caller here (4 digits) + '\0'
-    for (int i = 0; i < digits; i++) {
-        uint8_t nibble = (v >> ((digits - 1 - i) * 4)) & 0xF;
-        buf[i] = nibble < 10 ? (char)('0' + nibble) : (char)('a' + nibble - 10);
-    }
-    buf[digits] = '\0';
+    char buf[17];
+    k_htoa(v, buf, sizeof buf, (unsigned)digits);
     klog_write(buf);
 }
 

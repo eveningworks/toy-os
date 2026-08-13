@@ -12,7 +12,7 @@ question to answer when adding one.
 | `proc/` | ELF loading, syscalls, processes, the scheduler | Is it about *running* something? |
 | `fs/` | VFS dispatch + the TFS2 backend | Is it about files? |
 | `drivers/` | Console, graphics, PS/2, ATA, PCI, partitions, speaker | Does it talk to a specific piece of hardware? |
-| `lib/` | strings, JSON, klog, debug flags, `/etc` config, timezone/font/keyboard settings | Is it a service with no hardware and no policy of its own? |
+| `lib/` | the toolkit (`string.c`, `knum.c`, `kfmt.c`, `kpath.c`), JSON, klog, debug flags, `/etc` config, timezone/font/keyboard settings | Is it a service with no hardware and no policy of its own? |
 | `include/` | Headers, split by audience | See `include/README.md` |
 
 ## Why this shape
@@ -35,6 +35,17 @@ Three specific things the split buys:
 - **`lib/` names the leftovers honestly.** `string.c`, `json.c`,
   `klog.c` and the `/etc` config readers aren't hardware bring-up and
   never were -- they were in `core/` because there was nowhere else.
+
+  It has since become the place the shared toolkit lives:
+  `string.c` (strings/memory), `knum.c` (numbers <-> strings),
+  `kfmt.c` (`k_snprintf` + `vga_printf`/`klog_printf`) and `kpath.c`
+  (path join/normalize/resolve). **Check these before writing a digit
+  loop, a hex formatter, a digit-parsing loop, or a path-joining
+  loop** -- there were nine, ten, six and three copies of those
+  respectively before the toolkit landed, and every one was written by
+  someone who reasonably didn't know the others existed. Each depends
+  on nothing but the others, deliberately, so any sink (screen, log,
+  buffer, window) can use them without pulling in a driver.
 
 ## Adding a file
 

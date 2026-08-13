@@ -98,6 +98,7 @@ there when you add an entry, or the index quietly stops being one.
 - [dmesg coverage: log from the one-shot call site, not the hot function itself](#dmesg-coverage-log-from-the-one-shot-call-site-not-the-hot-function-itself)
 - [Terminal's `run <name>` uses an explicit allowlist, not a blocklist](#terminals-run-name-uses-an-explicit-allowlist-not-a-blocklist)
 - [`kapi.h` is the only header apps/ includes](#kapih-is-the-only-header-apps-includes)
+- [The kernel/lib/ toolkit: converters that fill a buffer, not printers](#the-kernellib-toolkit-converters-that-fill-a-buffer-not-printers)
 - [`strace` traces an address space, and prints each line after the handler returns](#strace-traces-an-address-space-and-prints-each-line-after-the-handler-returns)
 
 **Build, versioning & project docs**
@@ -1730,6 +1731,47 @@ See `kernel/proc/strace.c`'s top comment and `CHANGELOG.md`'s
 `[Unreleased]` entry for the full writeup, including why `strace`
 resolves binaries through `shell_path_find()` instead of the usual
 `shell_exec_name()`.
+
+## The kernel/lib/ toolkit: converters that fill a buffer, not printers
+
+`string.h`/`knum.h`/`kfmt.h`/`kpath.h` were added together after a
+survey counted the same code written over and over: nine
+implementations of int->decimal, ten of int->hex, six digit-parsing
+loops, three path resolvers.
+
+**Why they were duplicated in the first place, and what fixed it.** The
+number formatters weren't copied out of laziness -- each one printed to
+a different place (the screen via `vga_putc`, the kernel log via
+`klog_putc`, a `char` buffer, a window). `klog.h` even carried a
+comment explaining that duplicating `vga.c`'s digit loop was cheaper
+than making the log depend on a driver, which was a fair call given the
+options. The fix is the third option that comment didn't have: **the
+shared thing is a converter that fills a caller-owned buffer, not a
+printer.** `k_utoa(v, buf, sizeof buf)` has no opinion about where the
+digits go, so every sink can use it, it depends on nothing itself, and
+-- unlike anything that writes straight to a screen -- it can be unit
+tested. None of the nine originals had a single test.
+
+**Two rules everything there follows.** A formatter that doesn't fit
+its buffer writes NOTHING (just a NUL) rather than a truncated value,
+because a truncated number or path is a *wrong* number or path, not a
+partial one. And a parser rejects rather than guesses -- empty input, a
+stray character, an overflow are all failures, with the caller's output
+left untouched. `shell_sys.c`'s `parse_decimal()` had already
+established the second rule locally; the toolkit made it the project's.
+
+**The path case is the one that was a real bug, not just duplication.**
+`shell.c`'s `resolve_path()` was `static`, so `terminal.c` couldn't
+call it and grew its own "deliberately simpler" version that skipped
+"." and ".." entirely. `edit ../notes.txt` therefore meant different
+things in the GUI Terminal and at the physical shell -- the kind of
+divergence that only appears once someone types the command in the
+other window. `k_path_resolve()` is one implementation with tests, so
+they agree by construction.
+
+See `CHANGELOG.md`'s `[Unreleased]` entry for the full migration and
+the count of copies removed, and CLAUDE.md for the "check the toolkit
+first" convention.
 
 ## Terminal's `run <name>` uses an explicit allowlist, not a blocklist
 

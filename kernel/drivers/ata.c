@@ -16,6 +16,7 @@
 #include "pic.h"
 #include "timer.h"
 #include "klog.h"
+#include "string.h"
 #include "idt.h"
 #include "debugflags.h"
 #include "fault_inject.h"
@@ -823,8 +824,6 @@ int ata_dma_nonblocking_selftest(uint32_t lba, uint32_t *out_polls) {
     *out_polls = polls;
     if (r != ATA_POLL_DONE) return 0;
 
-    for (uint32_t i = 0; i < ATA_SECTOR_SIZE; i++) {
-        if (via_blocking[i] != via_poll[i]) return 0;
-    }
+    if (k_memcmp(via_blocking, via_poll, ATA_SECTOR_SIZE) != 0) return 0;
     return 1;
 }

@@ -43,6 +43,8 @@
 #include "vga.h"
 #include "serial.h"
 #include "timer.h"
+#include "knum.h"
+#include "kfmt.h"
 
 #define KLOG_BUF_SIZE 16384
 
@@ -66,21 +68,15 @@ static void klog_write_timestamp(void) {
     uint32_t secs = (uint32_t)(ticks / 100);
     uint32_t hund = (uint32_t)(ticks % 100);
 
-    klog_buf_putc('[');
-    char tmp[10];
-    int n = 0;
-    if (secs == 0) {
-        tmp[n++] = '0';
-    } else {
-        uint32_t v = secs;
-        while (v > 0) { tmp[n++] = (char)('0' + (v % 10)); v /= 10; }
-    }
-    while (n > 0) klog_buf_putc(tmp[--n]);
-    klog_buf_putc('.');
-    klog_buf_putc((char)('0' + (hund / 10)));
-    klog_buf_putc((char)('0' + (hund % 10)));
-    klog_buf_putc(']');
-    klog_buf_putc(' ');
+    // Formatted through knum rather than a digit loop of its own (this
+    // file had two more of those until the toolkit landed). It can't go
+    // through klog_printf(), which would recurse straight back into
+    // klog_putc() and back into here -- buffer-only content, written
+    // with klog_buf_putc() directly, is the whole point of this
+    // function.
+    char stamp[24];
+    k_snprintf(stamp, sizeof stamp, "[%u.%02u] ", secs, hund);
+    for (const char *p = stamp; *p; p++) klog_buf_putc(*p);
 }
 
 // See klog_set_console_echo() -- 0 until boot switches it on, and off
@@ -110,31 +106,23 @@ void klog_write(const char *s) {
     while (*s) klog_putc(*s++);
 }
 
+// Both of these used to be full digit loops, byte-for-byte identical to
+// vga.c's pair -- this header's own comment used to explain that
+// duplicating them was cheaper than making klog.c depend on a driver
+// for them. knum.c is the third option that comment didn't have: a
+// converter that depends on nothing, fills a caller's buffer, and lets
+// each sink print it however it likes.
 void klog_write_dec(uint32_t n) {
-    char tmp[11];
-    int i = 0;
-    if (n == 0) {
-        klog_putc('0');
-        return;
-    }
-    while (n > 0) {
-        tmp[i++] = (char)('0' + (n % 10));
-        n /= 10;
-    }
-    while (i > 0) klog_putc(tmp[--i]);
+    char buf[21];
+    k_utoa(n, buf, sizeof buf);
+    klog_write(buf);
 }
 
 void klog_write_hex(uint64_t n) {
-    klog_write("0x");
     char buf[17];
-    for (int i = 15; i >= 0; i--) {
-        uint8_t nibble = (n >> (i * 4)) & 0xF;
-        buf[15 - i] = nibble < 10 ? (char)('0' + nibble) : (char)('a' + nibble - 10);
-    }
-    buf[16] = '\0';
-    int start = 0;
-    while (start < 15 && buf[start] == '0') start++;
-    klog_write(buf + start);
+    k_htoa(n, buf, sizeof buf, 0); // 0 = shortest form, no leading zeros
+    klog_write("0x");
+    klog_write(buf);
 }
 
 void klog_dump(void (*putc_cb)(char c)) {

@@ -1780,12 +1780,10 @@ int tfs_selftest(void) {
         tfs_delete(TFS_SELFTEST_PATH);
         return 0; // failure -- see the message above
     }
-    for (int i = 0; i < 64; i++) {
-        if (readback[i] != pattern[i]) {
-            klog_write("fs: selftest FAILED (data mismatch reading back triple-indirect region)\n");
-            tfs_delete(TFS_SELFTEST_PATH);
-            return 0; // failure -- see the message above
-        }
+    if (k_memcmp(readback, pattern, sizeof(readback)) != 0) {
+        klog_write("fs: selftest FAILED (data mismatch reading back triple-indirect region)\n");
+        tfs_delete(TFS_SELFTEST_PATH);
+        return 0; // failure -- see the message above
     }
 
     // Also prove a lower, ordinary offset still reads back as zero
