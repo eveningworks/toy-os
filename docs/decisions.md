@@ -79,6 +79,7 @@ there when you add an entry, or the index quietly stops being one.
 - [Console scrollback is a character ring in vga.c, and the boot log is echoed to it](#console-scrollback-is-a-character-ring-in-vgac-and-the-boot-log-is-echoed-to-it)
 - [Button press/release feedback: a general `on_press`/`on_release` WM mechanism, not a Calculator-only hack](#button-pressrelease-feedback-a-general-on_presson_release-wm-mechanism-not-a-calculator-only-hack)
 - [ui_button/ui_button_group: Brutal-OS-inspired, but not a full retained view system](#ui_buttonui_button_group-brutal-os-inspired-but-not-a-full-retained-view-system)
+- [GUI testing asks the kernel, rather than measuring a screenshot](#gui-testing-asks-the-kernel-rather-than-measuring-a-screenshot)
 - [The WM clips each app's on_draw() to its window -- containment, not optimisation](#the-wm-clips-each-apps-on_draw-to-its-window----containment-not-optimisation)
 - [CPU info: one syscall, because "supported" and "enabled" sit on opposite sides of a privilege boundary](#cpu-info-one-syscall-because-supported-and-enabled-sit-on-opposite-sides-of-a-privilege-boundary)
 - [Floating point is ring-3 only, and eager -- the same call Linux and Windows made](#floating-point-is-ring-3-only-and-eager----the-same-call-linux-and-windows-made)
@@ -1200,6 +1201,45 @@ mouse-enter/leave dispatch" stopped being true when `gui_apps.h`'s
 `on_hover` landed with the GUI guidelines: `ui_button` carries a
 `hovered` flag beside `pressed` now, driven by
 `ui_button_group_hover()`. See the entry below.
+
+## GUI testing asks the kernel, rather than measuring a screenshot
+
+The serial debug console gained a `gui` command family
+(`apps/wm/wm_debug.c`) that reports window rects, Start-menu geometry,
+hit-test results and the WM's own state, and can open windows and inject
+clicks/drags/keys. It works while the desktop is up because
+`debug_console_poll()` is already called from `wm_run()`'s idle loop.
+
+The reason it exists: every GUI test before it derived its coordinates
+from a screenshot by hand and then hardcoded them. `tools/gui_flow.py`
+still carries `MENU_TOP_Y = 475` and `ITEM_H = 27` with a comment
+recording that they had drifted once and been re-measured off a live
+screenshot. The kernel computes those numbers; asking it removes the
+whole category. (They were right, as it happens -- `gui menu` reports
+475 and 27 -- but now that's checkable instead of assumed.)
+
+Three properties worth knowing before using or extending it.
+
+**Injected input enters below the PS/2 driver.** It goes into
+`wm_run()`'s loop as a synthetic (x, y, buttons) triple, so it exercises
+WM and app logic and proves nothing about the mouse driver or keyboard
+layout. QMP remains the tool for "does input arrive at all", and for
+anything whose answer is genuinely a picture.
+
+**It has to be asynchronous.** The commands are dispatched from inside
+`wm_run()` (that's where `debug_console_poll()` runs), so a `gui click`
+that waited for its own events to drain would be blocking the very loop
+that drains them. Enqueue-and-return is the only safe shape -- the same
+trap that made a lazy CPU-clock calibration hang inside a syscall.
+
+**A click is four events, not one.** Move, press, a held tick, release,
+consumed one per frame. Every control in this GUI arms on press and
+commits on release (`docs/gui-guidelines.md`), which only behaves
+normally if press and release land on different frames.
+
+It lives in `apps/wm/` because it reads the window table;
+`kernel/core/debug_console.c` only recognises the word `gui` and routes
+it, the same direction that file already reaches `apps/` for `sh`.
 
 ## The WM clips each app's on_draw() to its window -- containment, not optimisation
 

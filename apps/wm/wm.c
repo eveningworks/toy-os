@@ -24,6 +24,7 @@
 // with nothing else changing -- cheap without needing real dirty-rect
 // tracking of the scene: see wm_render_cursor_move() in wm_render.c.
 #include "wm_internal.h"
+#include "wm_debug.h"
 #include "start_menu.h"
 #include "context_menu.h"
 #include "file_picker.h"
@@ -360,6 +361,25 @@ void wm_run(void) {
         debug_console_poll();
 
         mouse_get_state(&mx, &my, &buttons);
+
+        // Synthetic input from the serial debug console's `gui click` /
+        // `gui drag` (apps/wm/wm_debug.c), consumed at most one event
+        // per iteration so each becomes its own tick -- which is what
+        // puts a press and its release on separate frames, as every
+        // arm-on-press/commit-on-release control here requires.
+        //
+        // Overrides the real mouse for this iteration only; it does not
+        // move the actual cursor, so once the queue drains the pointer
+        // is wherever the user left it. Fine for the scripted-test use
+        // this exists for, and worth knowing before reading a `gui
+        // state` cursor position mid-sequence.
+        {
+            int ix, iy;
+            uint8_t ib;
+            if (wm_debug_next_input(&ix, &iy, &ib)) {
+                mx = ix; my = iy; buttons = ib;
+            }
+        }
         int mouse_moved = (mx != prev_mx || my != prev_my);
 
         int left_edge_down = (buttons & 0x1) && !(prev_buttons & 0x1);
@@ -526,6 +546,13 @@ void wm_run(void) {
         // per-window or modal use (e.g. canceling a confirm dialog)
         // instead of double-booking it as "exit everything".
         int key = keyboard_try_getchar();
+        // A `gui key` from the debug console, if the real keyboard had
+        // nothing -- deliberately second, so a human at the keyboard is
+        // never pre-empted by a queued test keystroke.
+        if (key == -1) {
+            int injected = wm_debug_next_key();
+            if (injected) key = injected;
+        }
 
         int wheel = mouse_get_wheel_delta();
 

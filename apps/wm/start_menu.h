@@ -31,6 +31,17 @@ int start_menu_w(void);
 // Opens the popup -- called from wm_input.c when the taskbar Start
 // button is clicked. Named with the `_now` suffix so it doesn't collide
 // with the `start_menu_open` state variable above.
+// The menu's own layout maths, exposed so nothing has to re-derive it.
+// Rows run top to bottom: gui_app_registry_count app rows, then
+// wm_system_action_count action rows. Row i spans
+// [menu_y + i*item_h, menu_y + (i+1)*item_h).
+//
+// Public because apps/wm/wm_debug.c reports it over the debug console
+// -- tools/gui_flow.py used to hardcode these numbers and they drifted.
+// Valid whether or not the menu is currently open.
+void start_menu_geometry(int *out_menu_x, int *out_menu_y, int *out_menu_w,
+                          int *out_item_h, int *out_total_items);
+
 void start_menu_open_now(void);
 
 // Draws the popup at its fixed taskbar-anchored position, using the

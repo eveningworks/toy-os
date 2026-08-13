@@ -11,6 +11,17 @@ bakes that math in once, from the same geometry the kernel itself uses
 6px, menu_y = (screen_h - taskbar_h) - item_h * total_items, rows
 stacked top to bottom, apps first then system actions below a divider.
 
+**These constants are now a fallback, not the source of truth.** The
+kernel will tell you the real numbers: `gui menu --json` over the serial
+debug console returns the menu rect, item height and every row's centre
+exactly as the WM computes them, and `gui windows --json` does the same
+for window rects. See tools/gui_debug.py -- DebugConsole.menu_row(label)
+replaces all of the arithmetic below. Prefer that for new tests; this
+module stays for flows that only have a QMP connection, and because a
+hardcoded number that has been checked against the kernel is still
+useful as a cross-check. (Verified 2026-08-13: the kernel reports
+menu_y=475 and item_h=27, matching the values below exactly.)
+
 Known-good constants below (SCREEN_W/H, TASKBAR_H, ITEM_H) match the
 project's fixed 1280x720 QEMU boot resolution and default font -- if a
 future session changes the default font size or boot resolution, these
@@ -71,7 +82,9 @@ ITEM_H = 27           # Start menu row height (gfx_char_h() + 6 -- see above)
 MENU_TOP_Y = 475
 START_BTN = (50, 703)  # inside the taskbar's Start button, safely off any edge
 
-# Keep in sync with apps/gui_apps.c's gui_app_registry[] order.
+# Keep in sync with apps/gui_apps.c's gui_app_registry[] order -- or
+# don't, and ask the kernel instead: `gui apps` / `gui menu --json` list
+# the registry live, in order (tools/gui_debug.py).
 APP_ORDER = ["Notepad", "About", "Calculator", "Terminal", "Task Manager", "Control Panel"]
 # Keep in sync with apps/wm/start_menu.c's wm_system_actions[] order.
 SYSTEM_ACTIONS = ["Exit to shell", "Shutdown"]

@@ -117,6 +117,54 @@ using `## [x.y.z] - date` headings is here.
     unmoved throughout, and the highlight clearing both on moving off a
     button inside the window and on leaving the window entirely.
 
+- **A `gui` command family for the serial debug console -- inspect and
+  drive the window manager without a single pixel.** Asked for after
+  noticing that opening an app for a test meant clicking a Start menu
+  row whose coordinates were hand-derived from a screenshot.
+  - Works while the desktop is up because `debug_console_poll()` is
+    already called from `wm_run()`'s idle loop -- the same piggyback
+    `keyboard_getchar()` does for the physical shell. (The CLI half
+    needed nothing: `sh <command>` has always run shell commands over
+    this wire, which is what `tools/vm.py exec` drives.)
+  - **Introspection**: `gui windows` (rects, content rects, z-order,
+    focus), `gui probe X Y` (which window and which region -- title bar,
+    close button, content, resize edge -- plus any overlay that would
+    swallow the click), `gui menu` / `gui taskbar` (row and button
+    geometry as the kernel computes it), `gui state` (overlays, cursor,
+    armed drag/resize/press, and the damage rect, which is otherwise
+    completely invisible), `gui apps`. Each takes `--json`.
+  - **Driving**: `gui open <App>` / `gui close <n>` for setup, and
+    `gui click` / `gui drag` / `gui key` injecting synthetic events into
+    the WM loop. A click queues four events (move, press, held, release)
+    consumed one per frame, so press and release land on separate
+    frames -- which is what every arm-on-press/commit-on-release control
+    here needs to behave normally. A drag interpolates, so the per-tick
+    "is the cursor still over the armed control" tracking actually runs.
+  - **Asynchronous by necessity, not by choice**: these commands are
+    dispatched from inside `wm_run()`, so a `gui click` that waited for
+    its own events to drain would be blocking the loop that drains them.
+    Enqueue-and-return is the only safe shape. (Same trap that made a
+    lazy CPU-clock calibration hang inside a syscall.)
+  - `start_menu_geometry()` is public now, and `wm_debug_damage()`
+    exposes the damage rect. `tools/gui_debug.py` is the client:
+    `DebugConsole.menu_row("Terminal")` returns the real centre point,
+    replacing `gui_flow.py`'s hardcoded `MENU_TOP_Y`/`ITEM_H` -- which
+    its own comments record having drifted once already. The kernel
+    reports 475/27; the hardcoded values were 475/27, so they were right,
+    and now they're checkable.
+  - Injected input enters BELOW the PS/2 driver, so it tests WM and app
+    logic, not the mouse driver -- QMP stays the tool for that and for
+    anything whose answer is genuinely a picture. Said plainly in
+    `wm_debug.h` so the split doesn't have to be rediscovered.
+  - Two formatting traps found by running it. `kfmt`'s printf supports a
+    zero-pad width (`%04x`) but NOT left-justify (`%-4d`) -- passing one
+    prints the specifier literally AND desyncs every later argument,
+    which produced rows of `y=%-4d centre=%-4d app <garbage>`. And
+    `klog_printf()` formats into a 256-byte buffer and silently drops
+    the overflow, so a whole JSON object in one call came back as valid
+    JSON up to a severed string. Both are now called out in comments
+    where someone would hit them again.
+
 - **`lscpu`, and a CPU-identification library behind it.** Asked for a
   CLI showing CPU info -- features supported *and enabled*, MHz, cache
   sizes, model name, stepping, vendor -- reusable by other kernel apps

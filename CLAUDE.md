@@ -432,6 +432,29 @@ run` window is never at risk. GUI/rendering work still needs
 `qmp_test.py`/`gui_flow.py` -- a text transcript says nothing about
 whether a button is drawn in the right place.
 
+**`tools/gui_debug.py` -- ask the WM what it's doing, instead of
+measuring a screenshot.** The serial debug console has a `gui` command
+family now (`apps/wm/wm_debug.c`), live while the desktop is up:
+
+```
+gui windows [--json]     rects, content rects, z-order, focus
+gui probe X Y [--json]   which window/region is at a point, and what overlay would take the click
+gui menu | gui taskbar    row + button geometry, as the kernel computes it
+gui state [--json]       overlays, cursor, armed drag/resize/press, damage rect
+gui open <App>           open a window directly -- no Start-menu clicking
+gui click X Y | gui drag X1 Y1 X2 Y2 | gui key <c>   synthetic input
+```
+
+Reach for this BEFORE QMP for anything that isn't literally about
+pixels: it returns facts you can assert on rather than an image to read,
+and `DebugConsole.menu_row("Terminal")` gives the real row centre
+instead of `gui_flow.py`'s hardcoded menu arithmetic. Two things to
+know: injected input enters at the WM loop **below the PS/2 driver**, so
+it exercises WM/app logic and proves nothing about the mouse driver; and
+it is **asynchronous** (events drain one per frame -- call
+`DebugConsole.settle()` before asserting), because a command dispatched
+from inside `wm_run()` cannot block waiting on `wm_run()`.
+
 **`tools/boot_smoke_test.py`** -- a fast, non-GUI boot check: boots
 `toy-os.iso` headlessly, watches `serial.log` for the expected kernel
 init sequence (or a `PANIC:`), exits 0/1 in a few seconds. No QMP, no

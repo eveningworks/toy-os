@@ -190,6 +190,10 @@ void bring_to_front(int idx);
 void open_app(const struct gui_app *app);
 void close_window(int idx);
 
+// Last frame's damage rect, for wm_debug.c's `gui state`. w/h <= 0
+// means "no damage reported -- full-screen repaint".
+void wm_debug_damage(int *out_x, int *out_y, int *out_w, int *out_h);
+
 // The title-bar button layout (minimize/maximize/close rects) -- needed
 // by wm_input.c to hit-test clicks against and by wm_render.c to draw
 // them, so it can't be static to either file. Defined in wm_render.c

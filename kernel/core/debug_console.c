@@ -20,6 +20,7 @@
 #include "debug_console.h"
 #include "serial.h"
 #include "klog.h"
+#include "wm/wm_debug.h"
 #include "kfmt.h"
 #include "string.h"
 #include "pmm.h"
@@ -44,6 +45,7 @@ static void dbg_cmd_help(void) {
     klog_write("  lsfs [path] - list a filesystem directory (default /)\r\n");
     klog_write("  ktest [suite] - run the in-kernel test suite\r\n");
     klog_write("  sh <command>  - run any shell command, output back here\r\n");
+    klog_write("  gui <sub>     - inspect/drive the window manager (`gui help`)\r\n");
 }
 
 // The one command here that isn't read-only inspection. This console's
@@ -209,6 +211,22 @@ static void dbg_dispatch(char *line) {
     line[i] = '\0';
     const char *arg = had_space ? line + i + 1 : "";
 
+    if (k_strcmp(line, "gui") == 0) {
+        // Routed straight into apps/wm/, which owns the window table --
+        // this file only recognises the word. Same direction kernel/core
+        // already reaches apps/ for `sh` and apps_start(); the Makefile
+        // puts -Iapps on the kernel include path for exactly this.
+        //
+        // NOT the same as `sh gui`, which is blocked: that would try to
+        // ENTER GUI mode from inside the console and never return. These
+        // subcommands inspect and drive a desktop that is already up.
+        // `arg` points into `line`, which dbg_dispatch() owns and may
+        // modify -- wm_debug_dispatch() tokenises it in place.
+        if (!wm_debug_dispatch(had_space ? line + i + 1 : line + i)) {
+            klog_write("unknown gui subcommand -- try `gui help`\r\n");
+        }
+        return;
+    }
     if (k_strcmp(line, "help") == 0) dbg_cmd_help();
     else if (k_strcmp(line, "meminfo") == 0) dbg_cmd_meminfo();
     else if (k_strcmp(line, "lsdev") == 0) dbg_cmd_lsdev();

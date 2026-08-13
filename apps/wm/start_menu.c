@@ -84,7 +84,7 @@ int start_menu_w(void) {
 // previously this formula was duplicated by hand between wm_render.c
 // and wm_input.c; now that both live in the same file, there's no
 // reason not to share it outright.
-static void geometry(int *out_menu_x, int *out_menu_y, int *out_menu_w,
+void start_menu_geometry(int *out_menu_x, int *out_menu_y, int *out_menu_w,
                       int *out_item_h, int *out_total_items) {
     *out_item_h = gfx_char_h() + 6;
     *out_menu_w = start_menu_w();
@@ -117,7 +117,7 @@ void start_menu_open_now(void) {
 //     what's showing regardless of where the mouse drifts to next.
 void start_menu_draw(int mx, int my) {
     int menu_x, menu_y, menu_w, item_h, total_items;
-    geometry(&menu_x, &menu_y, &menu_w, &item_h, &total_items);
+    start_menu_geometry(&menu_x, &menu_y, &menu_w, &item_h, &total_items);
     int menu_h = item_h * total_items;
 
     uint32_t bg = THEME_PANEL_BG, border = THEME_BORDER, fg = THEME_TEXT;
@@ -170,7 +170,7 @@ int start_menu_handle_click(int mx, int my) {
     if (!start_menu_open) return 0;
 
     int menu_x, menu_y, menu_w, item_h, total_items;
-    geometry(&menu_x, &menu_y, &menu_w, &item_h, &total_items);
+    start_menu_geometry(&menu_x, &menu_y, &menu_w, &item_h, &total_items);
 
     if (widget_hit(menu_x, menu_y, menu_w, item_h * total_items, mx, my)) {
         int idx = (my - menu_y) / item_h;

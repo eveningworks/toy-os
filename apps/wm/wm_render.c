@@ -513,6 +513,17 @@ static void compute_window_damage(void) {
     }
 }
 
+// The damage box as it stood at the end of the last frame, for
+// apps/wm/wm_debug.c's `gui state`. Reports w/h <= 0 when nothing was
+// damaged (a full-screen repaint) rather than pretending to a rect --
+// that distinction is exactly what someone debugging a repaint wants.
+void wm_debug_damage(int *out_x, int *out_y, int *out_w, int *out_h) {
+    *out_x = damage_x0;
+    *out_y = damage_y0;
+    *out_w = damage_x1 - damage_x0;
+    *out_h = damage_y1 - damage_y0;
+}
+
 // Re-applies whatever clip the current frame's scene should be drawn
 // under -- the accumulated damage box, or none. Paired with
 // clip_to_window_content() below, which narrows it temporarily.
