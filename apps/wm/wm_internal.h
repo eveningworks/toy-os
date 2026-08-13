@@ -194,6 +194,16 @@ void close_window(int idx);
 // means "no damage reported -- full-screen repaint".
 void wm_debug_damage(int *out_x, int *out_y, int *out_w, int *out_h);
 
+// Damage verification (debug): render every frame twice and report any
+// pixel the damage-limited pass got wrong. See wm_render.c's own
+// comment for the bug class it exists to catch. Off by default.
+// Call when a GUI session starts: forces the next frame to be a full
+// repaint rather than damage-limited. See wm_render.c.
+void wm_render_reset(void);
+
+void wm_damage_verify_set(int on);
+int  wm_damage_verify_enabled(void);
+
 // The title-bar button layout (minimize/maximize/close rects) -- needed
 // by wm_input.c to hit-test clicks against and by wm_render.c to draw
 // them, so it can't be static to either file. Defined in wm_render.c

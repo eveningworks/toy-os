@@ -79,6 +79,8 @@ there when you add an entry, or the index quietly stops being one.
 - [Console scrollback is a character ring in vga.c, and the boot log is echoed to it](#console-scrollback-is-a-character-ring-in-vgac-and-the-boot-log-is-echoed-to-it)
 - [Button press/release feedback: a general `on_press`/`on_release` WM mechanism, not a Calculator-only hack](#button-pressrelease-feedback-a-general-on_presson_release-wm-mechanism-not-a-calculator-only-hack)
 - [ui_button/ui_button_group: Brutal-OS-inspired, but not a full retained view system](#ui_buttonui_button_group-brutal-os-inspired-but-not-a-full-retained-view-system)
+- [The display layer: cards are drivers, and capabilities must not lie](#the-display-layer-cards-are-drivers-and-capabilities-must-not-lie)
+- [Damage verification: the invariant nothing enforced](#damage-verification-the-invariant-nothing-enforced)
 - [GUI testing asks the kernel, rather than measuring a screenshot](#gui-testing-asks-the-kernel-rather-than-measuring-a-screenshot)
 - [The WM clips each app's on_draw() to its window -- containment, not optimisation](#the-wm-clips-each-apps-on_draw-to-its-window----containment-not-optimisation)
 - [CPU info: one syscall, because "supported" and "enabled" sit on opposite sides of a privilege boundary](#cpu-info-one-syscall-because-supported-and-enabled-sit-on-opposite-sides-of-a-privilege-boundary)
@@ -1201,6 +1203,49 @@ mouse-enter/leave dispatch" stopped being true when `gui_apps.h`'s
 `on_hover` landed with the GUI guidelines: `ui_button` carries a
 `hovered` flag beside `pressed` now, driven by
 `ui_button_group_hover()`. See the entry below.
+
+## The display layer: cards are drivers, and capabilities must not lie
+
+`gfx.c` used to be a rasteriser AND the framebuffer's owner, and the
+moment a second card existed it grew `#include "vmsvga.h"` plus seven
+hardcoded calls to that device. `kernel/include/kernel/display.h` is
+the interface that replaced it: required `probe`/`get_surface`, optional
+`flush`/cursor/accel/modeset behind capability bits, with the registry
+in `kernel/drivers/display/`.
+
+Two decisions worth keeping. **GRUB's framebuffer is a driver**
+(`vesafb`), registering last as the fallback that always claims -- which
+removes the old default-path-vs-driver-path asymmetry AND is the second
+implementation that makes the interface a design rather than a guess.
+It's deliberately the opposite kind of device from `vmsvga`: passive,
+scanned, no cursor, no accel, no modeset, so every optional part of the
+interface is exercised by exactly one of the two.
+
+And **`display_probe()` refuses a driver whose caps and function
+pointers disagree.** That looks like paranoia and isn't: a card that
+needs a flush and doesn't get one renders perfectly into memory and
+shows a frozen screen. This project paid for that bug twice in one
+session before the check existed.
+
+## Damage verification: the invariant nothing enforced
+
+The WM repaints only the declared damage region, which is correct only
+if everything that changes is declared -- from eight sites across three
+files, by hand. A miss is stale pixels with no crash and no failing
+assertion, and every rendering bug here has been that shape.
+
+`gui damage verify on` renders each frame twice, damage-limited then
+unrestricted, and reports any differing pixel. It found four real bugs
+in its first minute: a window losing focus repainting its title bar
+undeclared, the taskbar clock relying on a full-repaint fallback that
+other damage cancels, the alpha-blended cursor compositing over its own
+previous frame, and the first frame of a session being narrowed by an
+event that arrived before it.
+
+The general lesson, which is why this is written down rather than just
+built: when a subsystem's correctness rests on a convention every caller
+must remember, the fix is not more care -- it's making the convention
+checkable. See `CHANGELOG.md`.
 
 ## GUI testing asks the kernel, rather than measuring a screenshot
 

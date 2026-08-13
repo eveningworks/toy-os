@@ -216,6 +216,23 @@ void open_app(const struct gui_app *app) {
     int cascade = (window_count % 5) * 24;
     win->x = 60 + cascade;
     win->y = 40 + cascade;
+    // The window that is ABOUT to stop being frontmost repaints its
+    // title bar (focused blue -> unfocused grey), so it has to be
+    // damaged too -- exactly what bring_to_front() below already does
+    // for the same reason. Opening a window used to damage only the new
+    // one, leaving the old title bar showing the focused colour until
+    // something else happened to repaint it.
+    //
+    // Found by `gui damage verify on` (wm_render.c), seconds after that
+    // mode first ran: "4350 px changed outside the damage rect, first at
+    // (61,41)" -- (61,41) being the previously-focused window's title
+    // bar. Nothing else had noticed it.
+    if (window_count > 0) {
+        struct window *losing_focus = &windows[window_count - 1];
+        wm_damage_rect(losing_focus->x, losing_focus->y,
+                        losing_focus->w, losing_focus->h);
+    }
+
     int content_w, content_h;
     app->default_size(&content_w, &content_h);
     win->w = content_w + 2;
@@ -343,6 +360,7 @@ void wm_run(void) {
     pending_proc = 0;
     pending_proc_win = -1;
 
+    wm_render_reset(); // first frame must be a full repaint -- see wm_render.c
     tray_init();
 
     int mx, my;

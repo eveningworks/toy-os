@@ -164,6 +164,18 @@ technical conventions below:
   `docs/decisions.md`'s `Build N` pointers name whichever file that
   build actually lives in -- keep them accurate when a split moves
   entries.
+- **A graphics card is a `display_driver`, not a special case.**
+  `kernel/include/kernel/display.h` defines the interface (required
+  probe/get_surface; optional flush, cursor, accel, modeset, each behind
+  a capability bit) and `kernel/drivers/display/` holds the registry plus
+  the drivers -- `vesafb` (GRUB's framebuffer, registers last, always
+  claims) and `vmsvga`. Adding a card is one file and one
+  `display_register()` line; `gfx.c` is a rasteriser that never learns
+  which card it's on. `display_probe()` REFUSES a driver whose
+  capability bits and function pointers disagree, because a card that
+  needs a flush and doesn't get one shows a frozen screen while memory
+  holds the right pixels -- a genuinely hard bug to read, and one this
+  project has already paid for twice.
 - **`kernel/` directories are subsystems, not filing cabinets** --
   `arch/x86_64/` (anything a different CPU would need rewritten),
   `core/` (bring-up and whole-machine concerns), `mm/`, `proc/`, `fs/`,
@@ -460,9 +472,19 @@ gui windows [--json]     rects, content rects, z-order, focus
 gui probe X Y [--json]   which window/region is at a point, and what overlay would take the click
 gui menu | gui taskbar    row + button geometry, as the kernel computes it
 gui state [--json]       overlays, cursor, armed drag/resize/press, damage rect
+gui damage [verify on|off]  the damage rect; verify catches missed damage
 gui open <App>           open a window directly -- no Start-menu clicking
 gui click X Y | gui drag X1 Y1 X2 Y2 | gui key <c>   synthetic input
 ```
+
+**`gui damage verify on` catches the WM's worst bug class.** The
+compositor only repaints declared damage, so anything that changes on
+screen without being declared leaves stale pixels -- no crash, no
+assertion, often visible in one interaction only. Verify mode renders
+every frame twice (damage-limited, then unrestricted) and reports any
+differing pixel with coordinates. It found four real bugs in its first
+minute. Turn it on whenever you touch drawing, damage, focus or
+chrome; `docs/gui-guidelines.md` has the invariant it enforces.
 
 Reach for this BEFORE QMP for anything that isn't literally about
 pixels: it returns facts you can assert on rather than an image to read,

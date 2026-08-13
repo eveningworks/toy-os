@@ -646,6 +646,21 @@ guess.*
 - [ ] `strace` extended to follow a process's children once `fork()`
       exists
 
+### Known bugs, reproducible today (unscheduled)
+
+- [ ] **One damage bug survives**, found by the verifier and left
+      recorded rather than rushed at the end of a long session:
+      `gui damage verify on`, then open a few windows, click their
+      taskbar buttons and drag one -- reports "559 px changed outside
+      the damage rect, first at (497,67)" during a drag/close, which is
+      a title bar above the reported rect. Four others of the same
+      family were fixed the same day (see `CHANGELOG.md`); this is the
+      fifth and the tool names it precisely.
+- [ ] The vmsvga HARDWARE cursor is off by default because it fights the
+      relative PS/2 mouse (QEMU warps the host pointer). The display
+      driver itself works. The configuration where a hardware cursor
+      genuinely works is virtio-gpu + virtio-input below.
+
 ### Milestone 27a -- virtio, and a real GPU driver (unscheduled)
 
 **Why virtio first, and why the GPU is the prize.** One transport layer

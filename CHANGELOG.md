@@ -117,6 +117,54 @@ using `## [x.y.z] - date` headings is here.
     unmoved throughout, and the highlight clearing both on moving off a
     button inside the window and on leaving the window entirely.
 
+- **Damage verification: the WM's worst bug class is now machine-caught,
+  and it found four real bugs on its first run.** Asked to make
+  `wm_render.c` less bug-prone -- it has produced more real bugs than
+  anything else here.
+  - **The root cause was never complexity, it was an unchecked
+    invariant.** The compositor is correct only if everything that
+    changes on screen lies inside the damage rect, and nothing enforced
+    that: damage is declared by hand from eight sites across three
+    files, and a missed declaration produces stale pixels with no crash,
+    no wrong return value and no failing assertion.
+  - `gui damage verify on` renders every frame TWICE -- once
+    damage-limited as normal, once unrestricted -- and reports any pixel
+    that differs, with coordinates. A difference is by definition a
+    pixel the damage-limited path got wrong. Off by default; the
+    unrestricted render is left in the back buffer, so verification also
+    repairs what it catches.
+  - **Four real bugs, found within seconds of switching it on:**
+    - `open_app()` damaged only the new window, but the window LOSING
+      focus repaints its title bar (blue to grey). "4350 px ... first at
+      (61,41)" -- the old window's title bar. `bring_to_front()` had
+      always handled this; opening never did.
+    - The taskbar clock relied on the "no damage = full repaint"
+      fallback, so on any frame where something else reported damage its
+      repaint fell outside the rect. Its comment gave two reasons for
+      staying unscoped, and **one had expired**: the implicit
+      once-a-second full resync it depended on for the cursor snapshot
+      stopped being needed when the cursor restore moved to the top of
+      the frame. The lifted-constraint pattern again.
+    - **The cursor was compositing over itself.** It's alpha-blended, so
+      when the scene beneath isn't redrawn it blends over the previous
+      frame's sprite and the anti-aliased edges creep darker every
+      frame. Folding the cursor into damage -- rather than leaving it a
+      parallel save-the-pixels-underneath path -- fixes that and removes
+      the special case that produced the resize trail earlier today.
+    - The FIRST frame of a GUI session could be damage-limited, because
+      `wm_run()` polls the debug console before its first render: an
+      event arriving that early narrows the one frame that has to
+      establish the whole back buffer. "51200 px ... first at (0,0)",
+      which is exactly the 1280x40 strip above a freshly-opened window.
+  - **One known damage bug remains, deliberately left recorded rather
+    than rushed**: "559 px changed outside the damage rect, first at
+    (497,67)" during a window drag/close, a title bar above the reported
+    rect. Reproduce with `gui damage verify on`. That the tool keeps
+    finding these is the point of it.
+  - Also folded in: all damage now goes through `wm_damage_rect()` (no
+    direct writes to the globals), and the invariant is stated at the
+    compositor with each declaring site saying what it owns.
+
 - **A display-driver layer: adding a graphics card is now one file and
   one line.** Asked for a proper graphics API with modular driver
   support, refactoring where needed.

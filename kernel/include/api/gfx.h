@@ -39,6 +39,33 @@ int gfx_init(void);
 // framebuffer outside both should call it when finished.
 void gfx_flush(void);
 
+// --- damage verification (debug) --------------------------------------
+//
+// Support for catching the one bug class the WM's damage compositor can
+// produce: something changed on screen that was never declared as
+// damage, so it is drawn once and then never corrected. There is no
+// crash and no wrong return value -- just stale pixels, often only in
+// one specific interaction. Every rendering bug this project has had
+// was of that shape.
+//
+// The check is: render a frame the normal (damage-limited) way, snapshot
+// it, render the SAME frame with no damage limit, and compare. Any
+// difference is a pixel the damage-limited path got wrong. See
+// wm_render.c's verify mode, which drives these.
+//
+// Snapshots the back buffer. Returns 0 if double buffering is off (there
+// is nothing to compare) or the scratch buffer can't be allocated.
+int gfx_verify_snapshot(void);
+
+// Compares the current back buffer against the last snapshot. Returns
+// the number of differing pixels, and writes the first one's
+// coordinates to *out_x/*out_y when non-NULL. 0 means the two renders
+// agreed -- i.e. the damage rect covered everything that changed.
+int gfx_verify_diff(int *out_x, int *out_y);
+
+// Frees the scratch buffer.
+void gfx_verify_release(void);
+
 // --- hardware cursor -------------------------------------------------
 //
 // A cursor the DISPLAY ADAPTER composites, not something drawn into the

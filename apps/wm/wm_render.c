@@ -623,35 +623,11 @@ static int window_intersects_damage(const struct window *w) {
            w->y < damage_y1 && w->y + w->h > damage_y0;
 }
 
-void wm_render_frame(int mx, int my) {
-    // Undraw the cursor FIRST, before anything else repaints.
-    //
-    // Without this, the old cursor sprite is erased only where the scene
-    // happens to repaint over it -- and during a resize that isn't
-    // everywhere. Shrinking a window damages union(old, new), whose
-    // bottom-right edge is exactly the old corner, which is exactly
-    // where the grip (and therefore the cursor) is; the sprite extends
-    // down-right PAST that edge, so the overhang was never repainted
-    // and every frame of the drag left one behind. Growing hid the same
-    // bug, because the window expands over the old position.
-    //
-    // Deliberately before apply_scene_clip() below: this write must not
-    // be confined to the damage rect, since the whole point is that the
-    // stale pixels are outside it. The pixels it restores are the real
-    // pre-cursor scene content, so anywhere the repaint doesn't cover
-    // they are already correct, and anywhere it does they're overwritten
-    // a moment later.
-    restore_cursor_under();
-
-    compute_window_damage();
-
-    // Clip this whole pass to the accumulated damage region, if any was
-    // reported. No damage reported this frame (menus, taskbar, dialogs,
-    // the clock tick, or the very first frame) means "unknown, be
-    // safe" -- fall back to the full screen, same as every frame before
-    // Phase 1+2, and every window is drawn (has_damage below is false,
-    // so window_intersects_damage() is never even consulted).
-    int has_damage = damage_x1 > damage_x0;
+// Draws the whole scene for this frame. Split out of wm_render_frame()
+// so it can be run TWICE: once damage-limited as normal, and once
+// unrestricted for the verify mode below, which is only meaningful if
+// both renders go through identical code.
+static void render_scene(int mx, int my, int has_damage) {
     apply_scene_clip(has_damage);
 
     desktop_draw(); // background + icon grid -- replaces the old bare gfx_clear() fill, see desktop.h
@@ -695,23 +671,123 @@ void wm_render_frame(int mx, int my) {
     gfx_clear_clip_rect();
     draw_cursor_at(mx, my); // also (re)establishes cursor_under for wm_render_cursor_move()
 
-    gfx_present(); // blits only what actually got touched -- see gfx_present()'s
-                    // own comment; bounded by the damage clip above instead of
-                    // always being the whole screen, when damage was reported.
+}
 
+// ---- damage verification (debug) --------------------------------------
+//
+// **The bug class this exists for.** The compositor is correct only if
+// everything that changes on screen is inside the damage rect, and
+// nothing enforces that: damage is declared by hand from eight sites
+// across three files, and a missed declaration produces stale pixels
+// with no crash, no wrong return value and no failing assertion. Every
+// rendering bug this project has had was that shape -- a window revealed
+// by a raise, a cursor sprite overhanging its rect, an app drawing
+// outside its own window.
+//
+// The check turns it into a loud one: render the frame the normal way,
+// snapshot it, render the SAME frame with no damage limit, and compare.
+// Any differing pixel is one the damage-limited path got wrong, and its
+// coordinates say where to look. Off by default (it renders every frame
+// twice and costs a full-screen buffer); `gui damage verify on` enables
+// it -- see apps/wm/wm_debug.c.
+static int first_frame = 1;
+static int prev_cursor_x = -1, prev_cursor_y = -1;
+static int verify_enabled;
+static int verify_reported; // report each distinct failure once, not per frame
+
+// Called by wm_run() when a GUI session begins, so the next frame is a
+// full repaint even if the previous session left state behind.
+void wm_render_reset(void) {
+    first_frame = 1;
+    prev_cursor_x = prev_cursor_y = -1;
+}
+
+void wm_damage_verify_set(int on) {
+    verify_enabled = on ? 1 : 0;
+    verify_reported = 0;
+    if (!on) gfx_verify_release();
+    klog_printf("wm: damage verification %s\n", on ? "ON (every frame rendered twice)" : "off");
+}
+
+int wm_damage_verify_enabled(void) { return verify_enabled; }
+
+// The cursor's own damage. It is alpha-BLENDED, so it must always be
+// composited over a freshly-drawn scene: if the pixels underneath
+// aren't redrawn first, each frame blends the sprite over the previous
+// frame's sprite and the anti-aliased edges creep steadily more opaque.
+//
+// That is why the cursor is a damage source like anything else rather
+// than having its own save-the-pixels-underneath path beside the damage
+// system. That parallel path is what produced the resize trail, and
+// `gui damage verify on` then caught the self-compositing too --
+// "80 px changed outside the damage rect, first at (641,360)" on frames
+// where only the clock ticked, (641,360) being where the cursor sat.
+static void damage_cursor(int mx, int my) {
+    // Generous: the sprite is 13x19 and the resize variants differ, so
+    // a box comfortably covering any of them costs nothing meaningful
+    // and removes a whole family of off-by-a-few-pixels questions.
+    const int pad = CURSOR_BOX_SIZE;
+    if (prev_cursor_x >= 0) {
+        wm_damage_rect(prev_cursor_x - 1, prev_cursor_y - 1, pad + 2, pad + 2);
+    }
+    wm_damage_rect(mx - 1, my - 1, pad + 2, pad + 2);
+    prev_cursor_x = mx;
+    prev_cursor_y = my;
+}
+
+void wm_render_frame(int mx, int my) {
+    compute_window_damage();
+
+    // The FIRST frame of a GUI session is always a full repaint, never
+    // damage-limited. wm_run() polls the debug console (and anything
+    // else) before its first render, so an event arriving that early
+    // reports damage and narrows the one frame that has to establish
+    // the whole back buffer -- leaving everything outside it never
+    // drawn at all. Caught by `gui damage verify on`: "51200 px changed
+    // outside the damage rect, first at (0,0)", 51200 being exactly the
+    // 1280x40 strip above a freshly-opened window.
+    if (first_frame) {
+        first_frame = 0;
+        damage_reset();
+    }
+    // Only when something else already reported damage: with no damage
+    // the frame is a full repaint anyway, and adding a rect here would
+    // narrow it -- the same trap tray_init() hit (see wm_tray.c).
+    if (damage_x1 > damage_x0) damage_cursor(mx, my);
+
+    // Clip this pass to the accumulated damage region, if any was
+    // reported. No damage this frame (menus, dialogs, the clock tick,
+    // the first frame) means "unknown, be safe" -- full screen.
+    int has_damage = damage_x1 > damage_x0;
+    render_scene(mx, my, has_damage);
+
+    if (verify_enabled && has_damage) {
+        // Compare against an unrestricted render of the same frame.
+        // Only meaningful when damage WAS reported -- an unrestricted
+        // frame is trivially equal to itself.
+        if (gfx_verify_snapshot()) {
+            render_scene(mx, my, 0);
+            int bx = -1, by = -1;
+            int diff = gfx_verify_diff(&bx, &by);
+            if (diff && !verify_reported) {
+                verify_reported = 1;
+                klog_printf("wm: DAMAGE BUG -- %d px changed outside the damage rect, "
+                             "first at (%d,%d); damage was (%d,%d %dx%d)\n",
+                             diff, bx, by, damage_x0, damage_y0,
+                             damage_x1 - damage_x0, damage_y1 - damage_y0);
+            } else if (!diff) {
+                verify_reported = 0; // armed again for the next distinct failure
+            }
+            // The unrestricted render is left in the back buffer on
+            // purpose: it is the CORRECT frame, so verification also
+            // repairs what it caught rather than presenting the bug.
+        }
+    }
+
+    gfx_present();
     damage_reset();
 }
 
-// The cheap path for "only the mouse moved, nothing else changed" --
-// wm.c's wm_run() loop takes this instead of wm_render_frame() whenever
-// redraw_pending is clear, which is most ticks most of the time (a mouse
-// that isn't moving or clicking generates no work at all; a mouse that IS
-// moving no longer forces a full window/taskbar/start-menu redraw and
-// full-screen blit just to slide the cursor a few pixels). Undraws the
-// cursor at its old spot, draws it at the new one, and gfx_present() then
-// blits only the union of those two small boxes -- see this file's
-// cursor-sprite comment above and gfx_present()'s own comment for the two
-// halves that make this cheap.
 void wm_render_cursor_move(int mx, int my) {
     if (gfx_hw_cursor_available() && hw_cursor_ready) {
         // The entire cheap path collapses to this: the adapter composites

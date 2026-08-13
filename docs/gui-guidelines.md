@@ -218,6 +218,35 @@ directory (see `apps/README.md`).
 Semantic colour is separate from decoration: the close button is red
 because closing is destructive, not because it looks nice.
 
+## The damage invariant, and how to check it
+
+The WM only repaints the region declared as damage. That makes it
+correct **only if everything that changes on screen is inside that
+region** -- and nothing enforces it: damage is declared by hand from
+eight sites across three files. A missed declaration is stale pixels:
+no crash, no wrong return value, no failing assertion, and often
+visible only in one specific interaction. Every rendering bug this
+project has had is that shape.
+
+So when you change anything that draws:
+
+- **Whatever you change, damage it.** Moving, resizing, opening,
+  closing, focusing, a menu opening, a clock ticking -- if it alters
+  pixels, it declares them via `wm_damage_rect()`.
+- **Remember the things that change without moving.** A window losing
+  focus repaints its title bar. A taskbar button changes tint when the
+  frontmost window changes. Those bit us; both were "nothing moved, so
+  nothing was damaged".
+- **Anything alpha-blended must have the scene under it redrawn.** The
+  cursor blends, so compositing it over a region that wasn't repainted
+  blends it over its own previous frame and the edges darken. It is a
+  damage source for exactly this reason.
+- **Then check it, don't reason about it:** `gui damage verify on`
+  (see `apps/wm/wm_debug.c`) renders every frame twice, once
+  damage-limited and once unrestricted, and reports any pixel that
+  differs. Run it while exercising whatever you changed. It found four
+  real bugs in its first minute.
+
 ## Verifying a GUI change
 
 A screenshot proves it drew *something*. It does not prove it drew the

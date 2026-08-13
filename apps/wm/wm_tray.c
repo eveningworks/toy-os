@@ -21,23 +21,34 @@ struct tray_item {
 static struct tray_item tray_items[TRAY_MAX_ITEMS];
 static int clock_tray_id = -1;
 
-// Deliberately does NOT call wm_damage_rect() to scope this to just the
-// taskbar strip -- two real bugs came from an earlier version that did
-// (see CHANGELOG.md): tray_init() runs before wm_run()'s main loop
-// starts, so a pre-loop wm_damage_rect() call poisoned the very first
-// frame's "no damage reported yet -- unknown, be safe, draw everything"
-// full-screen fallback, narrowing it to just the taskbar and leaving
-// the desktop/icons never drawn at all. And the once-a-second clock
-// tick relying on that same full-screen fallback (as it always had
-// before this file existed) turned out to be load-bearing for the
-// mouse cursor's saved-pixels-underneath snapshot (draw_cursor_at()'s
-// cursor_under, see wm_render.c) staying in sync with the real screen
-// -- scoping the tick to a narrow rect removed that implicit
-// once-a-second full resync. Matches every other still-unscoped piece
-// of WM chrome (menus, dialogs -- see docs/roadmap.md's Milestone 12
-// entry): safe and imprecise, never worse than before.
+// This DOES damage the taskbar strip now. It deliberately didn't, for
+// two stated reasons, and both have since stopped applying -- the
+// lifted-constraint pattern this project keeps hitting.
+//
+// Reason one was real and still is: tray_init() runs before wm_run()'s
+// loop, and damaging from there poisoned the very first frame's "no
+// damage reported yet -- draw everything" fallback, narrowing it to the
+// taskbar and leaving the desktop never drawn. That's handled by
+// `tray_ready` below rather than by refusing to damage at all.
+//
+// Reason two has expired. It said the once-a-second full-screen repaint
+// was load-bearing for the cursor's saved-pixels-underneath snapshot
+// staying in sync -- an implicit resync. wm_render_frame() restores the
+// cursor before repainting now (see wm_render.c), so nothing depends on
+// that accidental resync any more.
+//
+// And leaving it unscoped had a cost that only became visible once
+// there was a way to see it: on any frame where something ELSE reported
+// damage, the clock's repaint landed outside that rect. `gui damage
+// verify on` reported it immediately -- "93 px changed outside the
+// damage rect, first at (1255,699)" -- which is the clock.
+static int tray_ready;
+
 static void tray_damage(void) {
     redraw_pending = 1;
+    // Before the main loop exists there is nothing to scope, and
+    // damaging here would narrow the first frame -- see above.
+    if (tray_ready) wm_damage_rect(0, screen_h - taskbar_h, screen_w, taskbar_h);
 }
 
 static void tray_copy_text(char *dst, const char *src) {
@@ -72,7 +83,9 @@ void tray_unregister(int tray_id) {
 }
 
 void tray_init(void) {
+    tray_ready = 0;
     clock_tray_id = tray_register("00:00:00");
+    tray_ready = 1; // from here on, scope the clock tick to the taskbar
 }
 
 void tray_update_clock(void) {

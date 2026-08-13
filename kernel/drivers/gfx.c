@@ -1,5 +1,6 @@
 #include "gfx.h"
 #include "display.h"
+#include "heap.h"
 #include "multiboot.h"
 #include "font_ttf.h"
 #include <stddef.h>
@@ -114,6 +115,43 @@ void gfx_flush(void) {
     // capability itself, so this file never asks which card it's on.
     display_flush(dirty_x0, dirty_y0, dirty_x1 - dirty_x0, dirty_y1 - dirty_y0);
     dirty_x0 = dirty_y0 = dirty_x1 = dirty_y1 = 0;
+}
+
+// Heap-allocated rather than another 8MB static: this is debug-only and
+// most boots never enable it. Kept across frames so verification costs
+// one allocation, not one per frame.
+static uint32_t *verify_scratch;
+
+int gfx_verify_snapshot(void) {
+    if (!double_buffered) return 0;
+    uint32_t n = (uint32_t)width * (uint32_t)height;
+    if (!verify_scratch) {
+        verify_scratch = (uint32_t *)kmalloc(n * sizeof(uint32_t));
+        if (!verify_scratch) return 0;
+    }
+    for (uint32_t i = 0; i < n; i++) verify_scratch[i] = back_buffer[i];
+    return 1;
+}
+
+int gfx_verify_diff(int *out_x, int *out_y) {
+    if (!double_buffered || !verify_scratch) return 0;
+    int count = 0;
+    int fx = -1, fy = -1;
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            uint32_t i = (uint32_t)y * (uint32_t)width + (uint32_t)x;
+            if (back_buffer[i] == verify_scratch[i]) continue;
+            if (fx < 0) { fx = x; fy = y; }
+            count++;
+        }
+    }
+    if (out_x) *out_x = fx;
+    if (out_y) *out_y = fy;
+    return count;
+}
+
+void gfx_verify_release(void) {
+    if (verify_scratch) { kfree(verify_scratch); verify_scratch = 0; }
 }
 
 int gfx_hw_cursor_available(void) { return display_has(DISPLAY_CAP_CURSOR); }

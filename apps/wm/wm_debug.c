@@ -456,6 +456,8 @@ static void usage(void) {
     klog_write("  menu [--json]         start menu row geometry, as the kernel computes it\r\n");
     klog_write("  taskbar [--json]      start button + per-window button rects\r\n");
     klog_write("  state [--json]        overlays, cursor, armed state, damage rect\r\n");
+    klog_write("  damage [verify on|off]  the damage rect; verify renders every frame\r\n");
+    klog_write("                        twice and reports pixels the damage rect missed\r\n");
     klog_write("  apps                  the gui_app registry\r\n");
     klog_write("  open <AppName>        open a window directly (no menu clicking)\r\n");
     klog_write("  close <index>         close window <index> from `gui windows`\r\n");
@@ -479,6 +481,25 @@ int wm_debug_dispatch(char *line) {
     if (k_strcmp(sub, "menu") == 0)         { cmd_menu(wants_json(p)); return 1; }
     if (k_strcmp(sub, "taskbar") == 0)      { cmd_taskbar(wants_json(p)); return 1; }
     if (k_strcmp(sub, "state") == 0)        { cmd_state(wants_json(p)); return 1; }
+
+    if (k_strcmp(sub, "damage") == 0) {
+        char *arg = next_tok(&p);
+        if (arg && k_strcmp(arg, "verify") == 0) {
+            char *onoff = next_tok(&p);
+            if (!onoff) {
+                klog_printf("damage verification is %s\r\n",
+                             wm_damage_verify_enabled() ? "on" : "off");
+                return 1;
+            }
+            wm_damage_verify_set(k_strcmp(onoff, "on") == 0);
+            return 1;
+        }
+        int dx, dy, dw, dh;
+        wm_debug_damage(&dx, &dy, &dw, &dh);
+        klog_printf("damage: x=%d y=%d w=%d h=%d  verify=%s\r\n", dx, dy, dw, dh,
+                     wm_damage_verify_enabled() ? "on" : "off");
+        return 1;
+    }
     if (k_strcmp(sub, "help") == 0)         { usage(); return 1; }
 
     if (k_strcmp(sub, "apps") == 0) {
