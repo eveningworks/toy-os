@@ -318,4 +318,23 @@ struct dirent {
                           // Returns 1 (RAX) on success, -1 if either
                           // value is outside 0-15 (VGA_BLACK..VGA_WHITE).
 
+#define SYS_CPU_INFO 22 // RDI = pointer to a `struct cpu_info` (out, see
+                         // api/cpuinfo.h). Returns 1 (RAX), or -1 if the
+                         // pointer isn't a writable user range.
+                         //
+                         // Note what this syscall is FOR, because half
+                         // of what it returns needs no kernel at all:
+                         // CPUID is unprivileged, so a ring-3 program
+                         // can identify the CPU by itself. What it
+                         // cannot do is read CR0/CR4/EFER to find out
+                         // which of those capabilities the OS actually
+                         // switched ON -- that's privileged, and it's
+                         // the `enabled` field here. Returning the whole
+                         // struct rather than only the privileged half
+                         // keeps one decoder (family/model combining,
+                         // leaf-4 cache maths) in one place instead of
+                         // duplicating it into every ring-3 caller --
+                         // the mistake userland/lspci.c's own copy of
+                         // the PCI class table already demonstrates.
+
 #endif

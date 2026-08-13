@@ -6,7 +6,7 @@ question to answer when adding one.
 
 | Directory | Holds | The test for "does it belong here?" |
 |---|---|---|
-| `arch/x86_64/` | Multiboot entry, GDT/TSS, IDT, PIC, IRQ dispatch, page tables, the ring switch, FPU/SSE enable + FXSAVE | Would this be rewritten wholesale on a different CPU architecture? |
+| `arch/x86_64/` | Multiboot entry, GDT/TSS, IDT, PIC, IRQ dispatch, page tables, the ring switch, FPU/SSE enable + FXSAVE, CPUID | Would this be rewritten wholesale on a different CPU architecture? |
 | `core/` | `kernel_main`, multiboot parsing, timer, serial + the debug console, power | Does it own the machine as a whole, rather than one resource? |
 | `mm/` | Physical frames, address spaces, the kernel heap | Is it about memory? |
 | `proc/` | ELF loading, syscalls, processes, the scheduler | Is it about *running* something? |

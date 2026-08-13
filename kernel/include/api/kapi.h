@@ -29,6 +29,9 @@
 #include "power.h"     // system_reboot, system_poweroff
 #include "speaker.h"   // speaker_beep -- PC speaker (PIT channel 2 + port 0x61), see kernel/drivers/speaker.c
 #include "pci.h"       // PCI config-space enumeration -- pci_init/pci_device_at/pci_class_name (see pci.c)
+#include "cpuinfo.h"   // CPU identity/features, and which of them this kernel enabled (see cpuid.c).
+                        // NOT api/cpu_features.h -- that's the ~90-entry name table, included only by
+                        // the two files that print it; see its own top comment.
 #include "partition.h" // MBR/GPT partition table parsing -- partition_read_table (see kernel/drivers/partition.c)
 #include "ata.h"       // ata_dma_nonblocking_selftest -- diagnostic only (the shell's `dmatest`); fs.h is the real disk-I/O surface apps should use otherwise
 #include "ring3_test.h" // ring3_test_run: paging/GDT/ring-3 isolation demo (the one test that predates and doesn't use any ELF file at all)

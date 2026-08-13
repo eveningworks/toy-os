@@ -233,7 +233,8 @@ shell and the GUI Terminal.
   reverse history search, `Alt-.` last argument). `help` lists them all.
 - **System info:** `time`, `timezone [city]`, `uptime`, `meminfo`,
   `df` (disk space: total/used/free, KB-scale), `dmesg`, `lspci`,
-  `parttable`
+  `parttable`. CPU identification is `/bin/lscpu` (see below), not a
+  builtin.
 - **Appearance:** `color <name>`, `cursor <translucent|underline|beam|reverse>`
   (the console's cursor style -- the default tints its cell so the
   character underneath stays readable), `fontsize <8|10|12|14|16|18|20|24>`,
@@ -331,6 +332,14 @@ Useful tools in `tools/` (all documented in their own docstrings):
   timezone via `timezone`), and the PC speaker (`beep`)
 - PCI bus enumeration (`lspci`, also a real `/bin/lspci` binary) and
   MBR/GPT partition-table parsing (`parttable`)
+- CPU identification (`/bin/lscpu`): vendor, brand string,
+  family/model/stepping, calibrated MHz, the cache hierarchy, and every
+  CPUID feature flag -- each marked **supported** and, separately,
+  whether this kernel has actually **enabled** it. That second column is
+  the part Linux's own `lscpu` doesn't have, and it's a real audit of
+  what the OS switches on: SSE2 is supported by every x86-64 chip but
+  needs `CR4.OSFXSR`, and `CPUID` can't tell you whether that happened.
+  Also shown in the Control Panel's System Info applet.
 - Baseline memory hardening (Milestone 2): NX enforced for userspace
   pages with W^X from each ELF segment's real `p_flags`, and
   `-fstack-protector-strong` canaries on both the kernel and userland.

@@ -117,6 +117,54 @@ using `## [x.y.z] - date` headings is here.
     unmoved throughout, and the highlight clearing both on moving off a
     button inside the window and on leaving the window entirely.
 
+- **`lscpu`, and a CPU-identification library behind it.** Asked for a
+  CLI showing CPU info -- features supported *and enabled*, MHz, cache
+  sizes, model name, stepping, vendor -- reusable by other kernel apps
+  and by userland.
+  - **The supported/enabled split is the thing, and it falls out of a
+    privilege boundary.** `CPUID` is unprivileged, so ring 3 can
+    identify the CPU by itself. `CR0`/`CR4`/`EFER` are not, so only the
+    kernel can say which of those capabilities the OS actually switched
+    ON. Those are genuinely different questions: SSE2 is supported by
+    every x86-64 chip ever made and was not *enabled* here until
+    `CR4.OSFXSR` got set earlier the same day. `lscpu` prints a
+    supported flag that's waiting on an OS opt-in as `sse2*`, and lists
+    each control-register bit by name and source underneath.
+  - **`kernel/arch/x86_64/cpuid.c`** decodes vendor, brand string,
+    family/model/stepping (with the SDM's extended-field combining
+    rules, not the simplified version), cache hierarchy, and the
+    control-register state. `api/cpuinfo.h` exposes it to `apps/`
+    through `kapi.h`; `SYS_CPU_INFO` fills the same struct for ring 3.
+  - **One syscall rather than none.** Ring 3 could execute `CPUID`
+    itself, but it can't read the control registers, so the `enabled`
+    half needs the kernel regardless -- and given that, returning the
+    whole struct keeps the decoding in one place instead of duplicating
+    it, which is the mistake `userland/lspci.c`'s private copy of the
+    PCI class table already demonstrates.
+  - **Cache reporting needed both vendors' leaves.** Leaf 4 is the
+    modern path, but the default `qemu64` model reports as AuthenticAMD
+    and populates neither leaf 4 nor AMD's newer `8000001DH` -- so the
+    first run showed an empty cache section. AMD's `80000005H`/
+    `80000006H` are implemented as the fallback (including their 4-bit
+    associativity *encoding*, where 5 means 6-way). Both paths are
+    exercised: Intel models take leaf 4, AMD models the fallback.
+  - `tools/vm.py` gained **`--cpu MODEL`**, because testing
+    CPU-model-dependent code needs it and there was no way to ask for
+    one. `--cpu Skylake-Client` is how the leaf-4 path got tested at
+    all; it also confirms the extended-model decoding (family 6, model
+    94 = 14 + (5 << 4)).
+  - The Control Panel's System Info applet grew the CPU section, and
+    `control_panel_default_size()` now counts that page's width as well
+    as the timezone list's -- adding it without that made every CPU line
+    clip to nothing in the default window. The clipping itself was
+    correct (`gfx_draw_string_clipped()`, per the guidelines), so the
+    failure was silent truncation -- "L3 16" with the unit cut off --
+    rather than the overdraw that rule usually catches.
+  - Verified across three CPU models (`qemu64`, `Skylake-Client`,
+    `max`), with 7 KTESTs asserting invariants rather than values, since
+    the same kernel image boots on all three. Pixel-checked that no text
+    crosses the window border. Screenshots in `screenshots/2026-08-13/`.
+
 - **Hardware floating point and SSE, for ring-3 processes.** Asked
   whether the kernel could have FPU/SSE enabled, and specifically
   whether to do it kernel-wide "if Linux and Windows do." They don't,

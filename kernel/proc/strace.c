@@ -215,6 +215,7 @@ static const struct sc_desc SC_TABLE[] = {
     [SYS_PCI_COUNT]     = { "pci_count",     { A_END } },
     [SYS_PCI_INFO]      = { "pci_info",      { A_INT, A_HEX } },
     [SYS_SET_COLOR]     = { "set_color",     { A_INT, A_INT } },
+    [SYS_CPU_INFO]      = { "cpu_info",      { A_HEX } },
 };
 
 #define SC_TABLE_COUNT (sizeof(SC_TABLE) / sizeof(SC_TABLE[0]))

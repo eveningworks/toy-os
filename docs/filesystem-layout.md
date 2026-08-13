@@ -34,7 +34,7 @@ won't exist until the OS has run once.
 
 | Path | Holds | Created by | Status |
 |---|---|---|---|
-| `/bin` | Real user-facing programs (`ls`, `lspci`, `hello`) | build | present |
+| `/bin` | Real user-facing programs (`ls`, `lspci`, `lscpu`, `hello`) | build | present |
 | `/etc` | Config: `toyos.conf`, `timezones`, `history` | boot | present |
 | `/etc/kbs` | Generated keyboard layout data (`us`, `se`) | build | optional |
 | `/tests` | Test/demo binaries -- one kernel mechanism each | build | present |
@@ -151,7 +151,7 @@ complete path**. Both are far more binding on layout than any standard:
   40+ records -- a sixth of the table -- which is worth knowing before
   designing that, not after.
 
-Current usage is 36 of 256 (count it with `tools/tfs2_writer.py ls` per
+Current usage is 37 of 256 (count it with `tools/tfs2_writer.py ls` per
 directory rather than trusting this number -- it has been stale before). Milestone 15 (TFS3) is where both
 limits are due to be raised; until then, prefer flatter over deeper, and
 prefer one file with structure inside it over many small files.

@@ -412,7 +412,16 @@ python3 tools/vm.py shot look.png        # pixels when you want them
 python3 tools/vm.py stop
 python3 tools/vm.py run "ktest"          # start+exec+stop in one
 python3 tools/vm.py --kvm run "stress 150"   # same, KVM-accelerated (see `make run-kvm`)
+python3 tools/vm.py --cpu Skylake-Client run "lscpu"  # a specific QEMU CPU model
 ```
+
+**`--cpu MODEL` matters more than it sounds** for anything reading
+CPUID: the default `qemu64` reports as **AuthenticAMD** with no CPUID
+leaf 4, so cache-topology code takes the AMD `80000005H`/`80000006H`
+fallback there and the leaf-4 path never runs at all. `--cpu
+Skylake-Client` is GenuineIntel with leaf 4 populated; `--cpu max`
+gives the widest feature set. Test CPU-dependent code against more than
+one, or half of it is unexercised.
 
 It drives the serial debug console's `sh <command>` rather than
 emulating keystrokes, so there's no keyboard-layout dependence (a `se`

@@ -90,6 +90,15 @@ def cmd_start(args):
         # into a hardware VM exit, so `inb`/`outb`-heavy paths can come
         # out SLOWER here. Say which mode a number came from.
         cmd += ["-enable-kvm", "-cpu", "host"]
+    elif args.cpu:
+        # An explicit QEMU CPU model, for testing code whose behaviour
+        # DEPENDS on which CPU is presented. The default (`qemu64`)
+        # reports as AuthenticAMD and populates neither CPUID leaf 4 nor
+        # 8000001DH, so anything reading cache topology takes the AMD
+        # 80000005H/6H fallback there and the leaf-4 path never runs.
+        # `--cpu max` or `--cpu Skylake-Client` exercises the other side.
+        # Ignored under --kvm, which pins -cpu host by definition.
+        cmd += ["-cpu", args.cpu]
     cmd += [
         # A VNC head rather than -display none: input routing needs a
         # display head to exist even when nothing connects to it (see
@@ -235,6 +244,10 @@ def main():
     ap.add_argument("--qmp-port", type=int, default=QMP_PORT)
     ap.add_argument("--vnc", type=int, default=5)
     ap.add_argument("--timeout", type=float, default=30.0)
+    ap.add_argument("--cpu", default=None,
+                     help="QEMU -cpu model (e.g. max, Skylake-Client). The default "
+                          "qemu64 reports as AMD and has no CPUID leaf 4, so this is "
+                          "how you exercise CPU-model-dependent paths. Ignored with --kvm.")
     ap.add_argument("--kvm", action="store_true",
                     help="use KVM acceleration (like `make run-kvm`) instead of TCG "
                          "emulation; needs /dev/kvm. Timing numbers from the two modes "

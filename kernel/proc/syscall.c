@@ -11,6 +11,7 @@
 #include "string.h"
 #include "tz.h"
 #include "pci.h"
+#include "cpuinfo.h"
 #include "strace_internal.h"
 #include <stddef.h>
 
@@ -742,6 +743,15 @@ void syscall_dispatch(uint64_t *regs) {
             regs[14] = (uint64_t)-1;
         } else {
             *(struct pci_device *)(uintptr_t)rsi = *dev;
+            regs[14] = 1;
+        }
+    } else if (rax == SYS_CPU_INFO) {
+        uint64_t pml4 = vmm_current_pml4();
+        if (!vmm_validate_user_range(pml4, rdi, sizeof(struct cpu_info))) {
+            klog_write("syscall: cpu_info() rejected -- invalid user pointer\n");
+            regs[14] = (uint64_t)-1;
+        } else {
+            cpu_info_get((struct cpu_info *)(uintptr_t)rdi);
             regs[14] = 1;
         }
     } else if (rax == SYS_SET_COLOR) {

@@ -151,6 +151,7 @@ STACK_SMASH_TEST_ELF = userland/stack_smash_test.elf
 NX_TEST_ELF = userland/nx_test.elf
 FPU_TEST_ELF = userland/fpu_test.elf
 FPU_RACE_ELF = userland/fpu_race.elf
+LSCPU_ELF = userland/lscpu.elf
 
 # Which userland ELFs get seeded onto disk.img's /bin, and under what
 # name. The mapping is explicit because it isn't always mechanical --
@@ -166,6 +167,7 @@ FPU_RACE_ELF = userland/fpu_race.elf
 # first. See docs/filesystem-layout.md.
 SEED_PROGRAMS = \
 	$(LSPCI_ELF):lspci \
+	$(LSCPU_ELF):lscpu \
 	$(LS_ELF):ls \
 	$(HELLO_ELF):hello
 
@@ -517,7 +519,7 @@ verify:
 	@bash tools/preflight.sh
 
 clean:
-	rm -rf $(BUILD) $(ISO) iso/boot/kernel.bin $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF) $(LS_ELF) $(STACK_SMASH_TEST_ELF) $(NX_TEST_ELF) $(FPU_TEST_ELF) $(FPU_RACE_ELF) $(SEED_DIR)/sync
+	rm -rf $(BUILD) $(ISO) iso/boot/kernel.bin $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF) $(LS_ELF) $(STACK_SMASH_TEST_ELF) $(NX_TEST_ELF) $(FPU_TEST_ELF) $(FPU_RACE_ELF) $(LSCPU_ELF) $(SEED_DIR)/sync
 	# Deliberately NOT touching $(DISK_IMG) here -- see its comment above.
 	# Use `make clean-disk` to explicitly wipe the persistent filesystem.
 

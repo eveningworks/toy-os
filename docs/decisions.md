@@ -79,6 +79,7 @@ there when you add an entry, or the index quietly stops being one.
 - [Console scrollback is a character ring in vga.c, and the boot log is echoed to it](#console-scrollback-is-a-character-ring-in-vgac-and-the-boot-log-is-echoed-to-it)
 - [Button press/release feedback: a general `on_press`/`on_release` WM mechanism, not a Calculator-only hack](#button-pressrelease-feedback-a-general-on_presson_release-wm-mechanism-not-a-calculator-only-hack)
 - [ui_button/ui_button_group: Brutal-OS-inspired, but not a full retained view system](#ui_buttonui_button_group-brutal-os-inspired-but-not-a-full-retained-view-system)
+- [CPU info: one syscall, because "supported" and "enabled" sit on opposite sides of a privilege boundary](#cpu-info-one-syscall-because-supported-and-enabled-sit-on-opposite-sides-of-a-privilege-boundary)
 - [Floating point is ring-3 only, and eager -- the same call Linux and Windows made](#floating-point-is-ring-3-only-and-eager----the-same-call-linux-and-windows-made)
 - [Button groups commit on RELEASE, and there is no ui_button_group_click()](#button-groups-commit-on-release-and-there-is-no-ui_button_group_click)
 - [Start menu click flash: a deferred close via pit_ticks(), not a blocking sleep](#start-menu-click-flash-a-deferred-close-via-pit_ticks-not-a-blocking-sleep)
@@ -1198,6 +1199,49 @@ mouse-enter/leave dispatch" stopped being true when `gui_apps.h`'s
 `on_hover` landed with the GUI guidelines: `ui_button` carries a
 `hovered` flag beside `pressed` now, driven by
 `ui_button_group_hover()`. See the entry below.
+
+## CPU info: one syscall, because "supported" and "enabled" sit on opposite sides of a privilege boundary
+
+`lscpu` could have needed no kernel help at all -- `CPUID` is an
+unprivileged instruction, so a ring-3 program can read the vendor,
+brand string, family/model/stepping, feature bits and cache topology
+entirely by itself. That's the opposite of `lspci`, which needs
+`SYS_PCI_COUNT`/`SYS_PCI_INFO` because PCI config space is port I/O.
+
+What ring 3 *cannot* do is read `CR0`/`CR4`/`EFER`. So the question
+"does this CPU support SSE2" and the question "did the OS turn SSE2 on"
+have different answers, from different places, with different privilege
+requirements. The second one is the interesting half here -- SSE2 is
+supported by every x86-64 CPU ever built, and this kernel didn't enable
+it until `CR4.OSFXSR` was set (see the FP entry below). A `cpuinfo`
+that collapsed the two would be strictly less informative than one that
+keeps them apart.
+
+Given the `enabled` half needs a syscall regardless, `SYS_CPU_INFO`
+returns the whole `struct cpu_info` rather than only the privileged
+part. The alternative -- ring 3 doing its own `CPUID` and asking the
+kernel only for the control-register bits -- is architecturally tidier
+but means two mechanisms and, worse, a second copy of the decoding
+(the extended family/model combining rules, leaf 4's `(value - 1)`
+encodings). This codebase already has that mistake on display:
+`userland/lspci.c` carries "its own class/subclass -> name table"
+because `pci_class_name()` is kernel code, and that copy can drift.
+The feature *name* table is shared instead, via `api/cpu_features.h` --
+a header both sides include, deliberately kept out of `kapi.h` so the
+~40 files that don't print CPU flags don't each carry a 90-entry array.
+
+Two implementation notes worth having written down. **Cache topology
+needs both vendors' leaves**: leaf 4 is the modern path, but the
+default `qemu64` model reports as AuthenticAMD and populates neither
+leaf 4 nor AMD's `8000001DH`, so AMD's older `80000005H`/`80000006H`
+are a real fallback rather than legacy completeness -- without them the
+default VM shows no caches at all. And **the clock calibration has to
+happen at boot, not on first use**: it spins waiting for `pit_ticks()`
+to advance, and every interrupt gate here (including `int 0x80`) clears
+IF, so a lazy calibration reached through the syscall waits forever for
+a tick that cannot arrive. That was found as `/bin/lscpu` hanging with
+no output and no fault. `tools/vm.py --cpu MODEL` exists so the
+model-dependent paths can actually be tested.
 
 ## Floating point is ring-3 only, and eager -- the same call Linux and Windows made
 

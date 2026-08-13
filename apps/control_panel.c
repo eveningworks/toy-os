@@ -132,17 +132,106 @@ static int tz_applet_click(int x, int y, int w, int h, int px, int py) {
 // grid, the drill-in and the Back button meaningful rather than an
 // elaborate way to show one page.
 
-static void sysinfo_applet_draw(int x, int y, int w, int h) {
-    (void)w; (void)h;
-    int line_h = gfx_char_h() + 6;
-    char line[64];
-    uint64_t used = 0, total = 0;
+// The System Info page's budget, in characters and rows. Both feed
+// control_panel_default_size() so the window opens big enough for this
+// page as well as the timezone list -- keep them in step with what
+// sysinfo_applet_draw() actually emits below. Every line there is
+// written to fit SYSINFO_COLS; the widest is the "Ident:" row.
+// 50 columns fits a real hardware brand string behind the 9-character
+// "CPU:     " label -- "Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz" is 40
+// characters, and QEMU's own are shorter. The field can be up to 48, so
+// the very longest possible brand still clips; that's deliberate rather
+// than sizing every window for a worst case nothing real hits, and the
+// window is resizable.
+#define SYSINFO_COLS 50
+#define SYSINFO_ROWS 11
 
-    gfx_draw_string(x, y, "toy-os v" TOYOS_VERSION, THEME_TEXT, THEME_WINDOW_BG);
+// Filled once, on first draw. Nothing in it can change while the
+// machine is running, and re-running ~10 CPUID instructions on every
+// repaint of a window that repaints on every hover tick would be waste.
+static struct cpu_info g_cpu;
+static int g_cpu_loaded = 0;
+
+// Total size of the caches at one level, summed across types -- "L1: 64
+// KiB" reads better in a fixed-width panel than two lines for L1d/L1i.
+// Returns 0 if the CPU reported nothing at that level.
+static uint32_t cache_kb_at_level(int level) {
+    uint32_t kb = 0;
+    for (int i = 0; i < g_cpu.cache_count; i++) {
+        if (g_cpu.cache[i].level == level) kb += g_cpu.cache[i].size_kb;
+    }
+    return kb;
+}
+
+static void sysinfo_applet_draw(int x, int y, int w, int h) {
+    (void)h;
+    int line_h = gfx_char_h() + 6;
+    char line[96];
+    uint64_t used = 0, total = 0;
+    int row = 0;
+
+    if (!g_cpu_loaded) { cpu_info_get(&g_cpu); g_cpu_loaded = 1; }
+
+    // Every line here goes through gfx_draw_string_clipped() with the
+    // applet's own width, not gfx_draw_string() -- the CPU brand string
+    // is up to 48 characters and would happily draw straight off the
+    // page otherwise. See docs/gui-guidelines.md; this is the rule that
+    // has already been broken twice in this codebase.
+    #define SYSINFO_LINE(fmt_done) \
+        gfx_draw_string_clipped(x, y + (row++) * line_h, w, (fmt_done), \
+                                 THEME_TEXT, THEME_WINDOW_BG)
+
+    SYSINFO_LINE("toy-os v" TOYOS_VERSION);
+
+    // The brand string is a fixed 48-byte field, space-padded on both
+    // sides by most CPUs -- trim before showing it.
+    const char *brand = g_cpu.brand;
+    while (*brand == ' ') brand++;
+    if (!*brand) brand = g_cpu.vendor; // no brand-string leaves on very old parts
+    k_snprintf(line, sizeof line, "CPU:     %s", brand);
+    SYSINFO_LINE(line);
+
+    k_snprintf(line, sizeof line, "Vendor:  %s", g_cpu.vendor);
+    SYSINFO_LINE(line);
+
+    k_snprintf(line, sizeof line, "Ident:   family %u, model %u, stepping %u",
+               (unsigned)g_cpu.family, (unsigned)g_cpu.model, (unsigned)g_cpu.stepping);
+    SYSINFO_LINE(line);
+
+    if (g_cpu.mhz) {
+        k_snprintf(line, sizeof line, "Speed:   ~%u MHz (%s)", (unsigned)g_cpu.mhz,
+                   g_cpu.mhz_source == CPU_MHZ_CPUID_16H ? "CPUID" : "measured");
+    } else {
+        k_snprintf(line, sizeof line, "Speed:   unknown");
+    }
+    SYSINFO_LINE(line);
+
+    uint32_t l1 = cache_kb_at_level(1), l2 = cache_kb_at_level(2), l3 = cache_kb_at_level(3);
+    if (l1 || l2 || l3) {
+        // L3 is routinely tens of megabytes, and "16384 KB" both reads
+        // badly and costs the columns this line doesn't have.
+        char l3buf[16];
+        if (l3 >= 1024) k_snprintf(l3buf, sizeof l3buf, "%u MB", (unsigned)(l3 / 1024));
+        else            k_snprintf(l3buf, sizeof l3buf, "%u KB", (unsigned)l3);
+        k_snprintf(line, sizeof line, "Cache:   L1 %u KB  L2 %u KB  L3 %s",
+                   (unsigned)l1, (unsigned)l2, l3buf);
+    } else {
+        k_snprintf(line, sizeof line, "Cache:   not reported by this CPU");
+    }
+    SYSINFO_LINE(line);
+
+    // The supported-vs-enabled distinction, compressed to one line. See
+    // /bin/lscpu for the full picture -- this is the summary that fits.
+    k_snprintf(line, sizeof line, "Enabled: SSE %s  NX %s  SMEP %s  SMAP %s",
+               (g_cpu.enabled & CPU_EN_SSE) ? "on" : "off",
+               (g_cpu.enabled & CPU_EN_NX) ? "on" : "off",
+               (g_cpu.enabled & CPU_EN_SMEP) ? "on" : "off",
+               (g_cpu.enabled & CPU_EN_SMAP) ? "on" : "off");
+    SYSINFO_LINE(line);
 
     k_snprintf(line, sizeof line, "Memory:  %u KB free of %u KB",
                (unsigned)(pmm_free_frames() * 4), (unsigned)(pmm_total_frames() * 4));
-    gfx_draw_string(x, y + 1 * line_h, line, THEME_TEXT, THEME_WINDOW_BG);
+    SYSINFO_LINE(line);
 
     if (fs_disk_usage(&used, &total)) {
         k_snprintf(line, sizeof line, "Disk:    %u MB used of %u MB",
@@ -150,13 +239,15 @@ static void sysinfo_applet_draw(int x, int y, int w, int h) {
     } else {
         k_snprintf(line, sizeof line, "Disk:    unavailable");
     }
-    gfx_draw_string(x, y + 2 * line_h, line, THEME_TEXT, THEME_WINDOW_BG);
+    SYSINFO_LINE(line);
 
     k_snprintf(line, sizeof line, "PCI:     %u device(s)", (unsigned)pci_device_count());
-    gfx_draw_string(x, y + 3 * line_h, line, THEME_TEXT, THEME_WINDOW_BG);
+    SYSINFO_LINE(line);
 
     k_snprintf(line, sizeof line, "Uptime:  %u s", (unsigned)(pit_ticks() / 100));
-    gfx_draw_string(x, y + 4 * line_h, line, THEME_TEXT, THEME_WINDOW_BG);
+    SYSINFO_LINE(line);
+
+    #undef SYSINFO_LINE
 }
 
 static int sysinfo_applet_click(int x, int y, int w, int h, int px, int py) {
@@ -219,9 +310,23 @@ void control_panel_default_size(int *w, int *h) {
     // the same constants both layouts use rather than guessed, so a
     // larger font doesn't crop either one.
     int grid_w = 2 * CP_MARGIN + CP_GRID_COLS * CP_CELL_W;
-    int page_w = 2 * CP_MARGIN + 2 * (14 * gfx_char_w() + 30);
-    *w = grid_w > page_w ? grid_w : page_w;
-    *h = 2 * CP_MARGIN + gfx_char_h() + CP_HEADER_GAP + 8 * (gfx_char_h() + 10);
+    int tz_w   = 2 * CP_MARGIN + 2 * (14 * gfx_char_w() + 30);
+    // System Info is a third layout with its own demands, and it has to
+    // be counted here or its lines get clipped to nothing in the default
+    // window -- which is exactly what happened when the CPU section was
+    // added and only the two widths above were considered. The page
+    // clips correctly (gfx_draw_string_clipped, per the guidelines), so
+    // the failure was silent truncation rather than overdraw: "L3 16"
+    // with the unit cut off.
+    int info_w = 2 * CP_MARGIN + SYSINFO_COLS * gfx_char_w();
+
+    *w = grid_w;
+    if (tz_w > *w) *w = tz_w;
+    if (info_w > *w) *w = info_w;
+
+    int tz_h   = 8 * (gfx_char_h() + 10);
+    int info_h = SYSINFO_ROWS * (gfx_char_h() + 6);
+    *h = 2 * CP_MARGIN + gfx_char_h() + CP_HEADER_GAP + (tz_h > info_h ? tz_h : info_h);
 }
 
 void control_panel_open(struct window *win) {

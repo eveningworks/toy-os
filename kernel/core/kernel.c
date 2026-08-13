@@ -8,6 +8,7 @@
 #include "idt.h"
 #include "gdt.h"
 #include "fpu.h"
+#include "cpuinfo.h"
 #include "multiboot.h"
 #include "pmm.h"
 #include "heap.h"
@@ -68,6 +69,12 @@ void kernel_main(uint64_t multiboot_info_addr) {
     } else {
         klog_write("toy-os: WARNING -- no FXSR/SSE2 reported; ring-3 float unavailable\n");
     }
+
+    // Needs the PIT already ticking (idt_init above) -- it calibrates
+    // RDTSC against it. Deliberately here and not on first use: see
+    // cpuinfo.h, a lazy calibration inside a syscall can't ever finish.
+    cpu_info_init();
+    klog_write("toy-os: CPU identified, clock calibrated\n");
 
     serial_irq_init(); // COM1 RX -- see serial.c for why this can't run inside serial_init() itself
     klog_write("toy-os: serial RX enabled (debug console on COM1, see docs/decisions.md)\n");
