@@ -82,3 +82,52 @@ KTEST("string", "character classes") {
     KTEST_ASSERT(!k_isspace('x'));
     KTEST_ASSERT(!k_isspace('\0'));
 }
+
+KTEST("string", "ASCII case folding") {
+    KTEST_ASSERT_EQ(k_tolower('A'), 'a');
+    KTEST_ASSERT_EQ(k_tolower('z'), 'z'); // already folded
+    KTEST_ASSERT_EQ(k_toupper('a'), 'A');
+    KTEST_ASSERT_EQ(k_toupper('Z'), 'Z');
+
+    // The bytes bracketing each range, where an off-by-one would land.
+    // '@'/'[' sit either side of A-Z, '`'/'{' either side of a-z.
+    KTEST_ASSERT_EQ(k_tolower('@'), '@');
+    KTEST_ASSERT_EQ(k_tolower('['), '[');
+    KTEST_ASSERT_EQ(k_toupper('`'), '`');
+    KTEST_ASSERT_EQ(k_toupper('{'), '{');
+    KTEST_ASSERT_EQ(k_tolower('5'), '5');
+
+    // Latin-1 is deliberately NOT folded -- Ä (0xC4) stays Ä, and the
+    // signed-char hazard is why these take an int: passing the byte in
+    // as a plain char would arrive as -60, and the range checks must
+    // leave that alone too rather than wrapping it into a letter.
+    KTEST_ASSERT_EQ(k_tolower(0xC4), 0xC4);
+    KTEST_ASSERT_EQ(k_toupper(0xE4), 0xE4);
+    KTEST_ASSERT_EQ(k_tolower((char)0xC4), (char)0xC4);
+}
+
+KTEST("string", "strcasecmp") {
+    KTEST_ASSERT_EQ(k_strcasecmp("helsinki", "Helsinki"), 0);
+    KTEST_ASSERT_EQ(k_strcasecmp("LOSANGELES", "losangeles"), 0);
+    KTEST_ASSERT_EQ(k_strcasecmp("", ""), 0);
+    KTEST_ASSERT(k_strcasecmp("abc", "abd") < 0);
+    KTEST_ASSERT(k_strcasecmp("ABD", "abc") > 0);
+
+    // A prefix is still shorter, not equal.
+    KTEST_ASSERT(k_strcasecmp("abc", "ABCD") < 0);
+    KTEST_ASSERT(k_strcasecmp("ABCD", "abc") > 0);
+
+    // Ordering comes from the FOLDED bytes: raw ASCII puts every
+    // uppercase letter below every lowercase one, so a raw comparison
+    // would call 'Z' < 'a'. Folded, 'z' > 'a'.
+    KTEST_ASSERT(k_strcasecmp("Z", "a") > 0);
+
+    // Non-letters aren't folded, so they still compare by raw value --
+    // '_' (0x5F) sits between the two letter ranges.
+    KTEST_ASSERT(k_strcasecmp("a_b", "a_B") == 0);
+    KTEST_ASSERT(k_strcasecmp("_", "a") < 0);
+
+    // Latin-1 compares as an unsigned byte, not a negative signed char,
+    // so å (0xE5) sorts after 'a' rather than before everything.
+    KTEST_ASSERT(k_strcasecmp("\xE5", "a") > 0);
+}

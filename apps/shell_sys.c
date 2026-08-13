@@ -242,9 +242,11 @@ void cmd_time(void) {
 }
 
 // `timezone` alone: numbered list, prompts for a choice.
-// `timezone <name>`: sets directly, matching tz_city_name() exactly
-// (lowercase, e.g. `timezone losangeles`) -- same case-sensitive,
-// exact-match convention `color <name>` already uses.
+// `timezone <name>`: sets directly, matching tz_city_name() as a whole
+// but ignoring ASCII case, so `timezone losangeles` and `timezone
+// LosAngeles` both work. Still an exact match otherwise -- no prefixes,
+// no fuzzy matching. `color <name>` remains case-sensitive; nothing has
+// asked for it, and its names are typed lowercase.
 void cmd_timezone(const char *args) {
     if (args && k_strlen(args) > 0) {
         int idx = tz_find_by_name(args);

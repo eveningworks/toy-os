@@ -359,8 +359,12 @@ int tz_set_index(int index) {
 }
 
 int tz_find_by_name(const char *name) {
+    // Case-insensitive: every city in the database is spelled lowercase,
+    // but `timezone Helsinki` is what someone actually types. The names
+    // are ASCII throughout, which is what makes k_strcasecmp's
+    // ASCII-only folding sufficient here.
     for (int i = 0; i < tz_city_count_loaded; i++) {
-        if (k_strcmp(TZ_CITIES[i].name, name) == 0) return i;
+        if (k_strcasecmp(TZ_CITIES[i].name, name) == 0) return i;
     }
     return -1;
 }

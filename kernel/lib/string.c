@@ -101,3 +101,19 @@ int k_isdigit(char c) { return c >= '0' && c <= '9'; }
 int k_isspace(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
 }
+
+int k_tolower(int c) { return (c >= 'A' && c <= 'Z') ? c + ('a' - 'A') : c; }
+int k_toupper(int c) { return (c >= 'a' && c <= 'z') ? c - ('a' - 'A') : c; }
+
+int k_strcasecmp(const char *a, const char *b) {
+    // Fold through unsigned char, not char: a Latin-1 byte is negative
+    // as a signed char here, and comparing those raw would order Å
+    // before 'a' instead of after it.
+    int x, y;
+    do {
+        x = k_tolower((unsigned char)*a++);
+        y = k_tolower((unsigned char)*b++);
+        if (x != y) return x - y;
+    } while (x);
+    return 0;
+}

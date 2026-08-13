@@ -100,6 +100,7 @@ there when you add an entry, or the index quietly stops being one.
 - [Terminal's `run <name>` uses an explicit allowlist, not a blocklist](#terminals-run-name-uses-an-explicit-allowlist-not-a-blocklist)
 - [`kapi.h` is the only header apps/ includes](#kapih-is-the-only-header-apps-includes)
 - [The kernel/lib/ toolkit: converters that fill a buffer, not printers](#the-kernellib-toolkit-converters-that-fill-a-buffer-not-printers)
+- [Case folding is ASCII-only, even though this kernel's layouts have Å/Ä/Ö](#case-folding-is-ascii-only-even-though-this-kernels-layouts-have-åäö)
 - [The console cursor saves the pixels it covers](#the-console-cursor-saves-the-pixels-it-covers)
 - [`strace` traces an address space, and prints each line after the handler returns](#strace-traces-an-address-space-and-prints-each-line-after-the-handler-returns)
 
@@ -1845,6 +1846,30 @@ they agree by construction.
 See `CHANGELOG.md`'s `[Unreleased]` entry for the full migration and
 the count of copies removed, and CLAUDE.md for the "check the toolkit
 first" convention.
+
+## Case folding is ASCII-only, even though this kernel's layouts have Å/Ä/Ö
+
+`k_tolower`/`k_toupper`/`k_strcasecmp` fold A-Z <-> a-z and leave every
+other byte alone -- including the Latin-1 Å/Ä/Ö (0xC4/0xC5/0xD6 and
+their lowercase forms) the `se` keyboard layout produces. That looks
+like an oversight in a kernel that went to the trouble of supporting
+those characters, and isn't one: the only caller is
+`tz_find_by_name()`, and nothing in the timezone database -- or any
+other name compared case-insensitively today -- is non-ASCII, so
+Latin-1 folding would be range added ahead of a caller, which is the
+thing these helpers were deleted once already for. It also isn't free
+to get right: `char` is signed in this build, so every byte >= 0x80
+arrives negative, and 0xD7/0xF7 (multiplication and division signs)
+sit inside the Latin-1 letter block without being letters. `string.h`'s
+comment states what widening later would involve.
+
+These same three helpers were written and deleted once before, for
+having no caller (see the toolkit entry above); they came back the way
+`k_strstr` did, when something real needed them. That's the "second
+real caller" rule working, not an argument against it.
+
+See `kernel/include/api/string.h`, `kernel/lib/tz_test.c`, and
+CHANGELOG.md's `[Unreleased]`.
 
 ## Terminal's `run <name>` uses an explicit allowlist, not a blocklist
 

@@ -31,6 +31,45 @@ using `## [x.y.z] - date` headings is here.
 ## [Unreleased]
 
 ### Added
+- **ASCII case folding in `string.h`, and `timezone Helsinki` now
+  works.** The helpers came back with a caller this time: `k_tolower`/
+  `k_toupper`/`k_strcasecmp` were written, found to have nobody calling
+  them and deleted before landing when the `kernel/lib/` toolkit went
+  in -- the same thing that happened to `k_strstr`, which returned one
+  feature later for the shell's Ctrl-R search. `tz_find_by_name()` is
+  the equivalent here.
+  - Every city in the timezone database is spelled lowercase, so
+    `timezone Helsinki` -- the capitalization anyone would actually
+    type -- got "Unknown timezone" and a pointer to a list where the
+    name plainly appears. It matches now; still an exact match
+    otherwise, no prefixes (`timezone helsink` is still unknown).
+  - The same lookup runs on the boot path, so a hand-edited
+    `/etc/toyos.conf` carrying `timezone=LosAngeles` is now honoured
+    instead of silently falling back to whichever city loads at index
+    0. Verified by writing exactly that with
+    `tools/tfs2_writer.py write --force` and booting: `time` reported
+    `(losangeles)`.
+  - **ASCII-only, deliberately** -- A-Z <-> a-z and nothing else. The
+    Latin-1 Å/Ä/Ö this kernel's `se` layout produces pass through
+    unchanged, because nothing compared this way is non-ASCII and
+    folding that range would be range added ahead of a caller. It isn't
+    free either: `char` is signed here, so every byte >= 0x80 arrives
+    negative, and 0xD7/0xF7 sit inside the Latin-1 letter block without
+    being letters. `k_tolower`/`k_toupper` take and return `int`, and
+    `k_strcasecmp` folds through `unsigned char`, so a caller passing a
+    signed `char` straight in can't fold the wrong thing -- see
+    `string.h`'s comment for what widening later would involve.
+  - Tab completion and `color <name>` stay case-sensitive; nothing has
+    asked otherwise, and bash's completion is case-sensitive too.
+  - Verified: 58 KTESTs, 3 new (`kernel/lib/tz_test.c` is a new file --
+    recursive source discovery means it needed no Makefile edit). The
+    folding tests pin the bytes bracketing each range (`@`/`[`,
+    `` ` ``/`{`), that Ä (0xC4) is left alone through both an `int` and
+    a signed-`char` path, and that ordering comes from the folded bytes
+    (`k_strcasecmp("Z", "a") > 0`, where a raw comparison would say the
+    opposite). End to end through `tools/vm.py`: `timezone Helsinki`,
+    `HELSINKI` and `helsinki` all set it, `Nonesuch` and `helsink`
+    both correctly don't.
 - **The console cursor no longer hides the character it sits on --
   four selectable styles, persisted in `/etc`.** Reported with a
   screenshot of `Hello Wo█ld`: "text cursor is blocking the character.

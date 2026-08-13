@@ -62,17 +62,41 @@ void k_memmove(void *dst, const void *src, size_t n);
 // ASCII character classes.
 //
 // Only these two, deliberately. The batch that added them also had
-// k_strcasecmp, k_isalpha/k_isalnum and k_tolower/k_toupper written and
-// building -- and then nothing in the tree turned out to call them, so
-// they were removed again before landing rather than shipped as a
-// standing invitation. This project's rule is a second real caller, not
-// a plausible future one (see CLAUDE.md on apps/ui/ widgets, same
-// instinct); a case-folding helper in particular would need a decision
-// about the non-ASCII range this kernel's own Å/Ä/Ö layouts live in,
-// which is worth making when something actually needs it rather than in
-// advance. (Case-changing a WORD -- Alt-U/L/C -- is in
-// kernel/lib/klineedit.c, which needs no general helper for it.)
+// k_isalpha/k_isalnum written and building -- and then nothing in the
+// tree turned out to call them, so they were removed again before
+// landing rather than shipped as a standing invitation. This project's
+// rule is a second real caller, not a plausible future one (see
+// CLAUDE.md on apps/ui/ widgets, same instinct).
 int k_isdigit(char c);
 int k_isspace(char c); // space, tab, newline, carriage return, form feed, vertical tab
+
+// ASCII case folding. A-Z <-> a-z and nothing else: every byte outside
+// that range, including the Latin-1 Å/Ä/Ö (0xC4/0xC5/0xD6 and their
+// lowercase forms) this kernel's `se` layout produces, is returned
+// unchanged.
+//
+// That limit is the deliberate part. These were written once before,
+// found to have no caller and deleted; they came back for
+// tz_find_by_name(), so `timezone Helsinki` works -- and nothing in the
+// timezone database, or any other name compared this way, is non-ASCII.
+// Folding Latin-1 as well would have been range added ahead of a
+// caller, and it isn't free to get right: `char` is signed here, so
+// every byte >= 0x80 arrives negative. Widening later means folding
+// 0xC0-0xDE <-> 0xE0-0xFE with 0xD7/0xF7 (the multiplication and
+// division signs, which sit inside that block and are not letters)
+// excluded.
+//
+// Both take and return `int`, holding an unsigned char value or EOF-ish
+// negatives untouched, so a caller passing a signed `char` straight in
+// can't silently fold the wrong thing. (Case-changing a WORD --
+// Alt-U/L/C -- is in kernel/lib/klineedit.c, which predates these and
+// needs no general helper for it.)
+int k_tolower(int c);
+int k_toupper(int c);
+
+// Like k_strcmp, but ASCII-case-insensitive, with the same sign
+// convention. Comparison is on the folded bytes, so the sign of a
+// mismatch is the folded difference, not the raw one.
+int k_strcasecmp(const char *a, const char *b);
 
 #endif
