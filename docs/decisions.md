@@ -40,7 +40,7 @@ there when you add an entry, or the index quietly stops being one.
 - [File timestamps are broken-down local time, not a Unix epoch integer](#file-timestamps-are-broken-down-local-time-not-a-unix-epoch-integer)
 - [TFS2 v2's block pointers go direct + single + double + triple indirect, not just direct + single](#tfs2-v2s-block-pointers-go-direct-single-double-triple-indirect-not-just-direct-single)
 - [`fs_read_range()`/`fs_write_range()` were added alongside `fs_read()`/`fs_write()`, not as a replacement](#fs_read_rangefs_write_range-were-added-alongside-fs_readfs_write-not-as-a-replacement)
-- [TFS2's write batching covers `write_range_impl()`'s data path only -- `persist_record()`'s journaled metadata writes still flush every step](#tfs2s-write-batching-covers-write_range_impls-data-path-only----persist_records-journaled-metadata-writes-still-flush-every-step)
+- [TFS2's write batching: `write_range_impl()`'s data path in bulk, `persist_record()`'s journal down to two barriers](#tfs2s-write-batching-write_range_impls-data-path-in-bulk-persist_records-journal-down-to-two-barriers)
 - [`fs_ops`'s new steppable-write function pointers are required, not optional/NULLable](#fs_opss-new-steppable-write-function-pointers-are-required-not-optionalnullable)
 - [`tools/tfs2_writer.py`: content-hash sync, not mtime comparison; direct+single-indirect write scope, not full indirect support](#toolstfs2_writerpy-content-hash-sync-not-mtime-comparison-directsingle-indirect-write-scope-not-full-indirect-support)
 - [`/bin` binaries: boot-time bootstrap-install now, a host-side TFS2 writer tool later](#bin-binaries-boot-time-bootstrap-install-now-a-host-side-tfs2-writer-tool-later)
@@ -1444,7 +1444,7 @@ See `CHANGELOG.md`'s `[Unreleased]` entry for the full feature writeup
 `redraw_pending` bug found via QMP testing on `../` double-click
 navigation).
 
-## TFS2's write batching covers `write_range_impl()`'s data path only -- `persist_record()`'s journaled metadata writes still flush every step
+## TFS2's write batching: `write_range_impl()`'s data path in bulk, `persist_record()`'s journal down to two barriers
 
 `ata_flush_begin()`/`ata_flush_end()` (`ata.h`) let a caller defer the
 synchronous `CMD_CACHE_FLUSH` that used to follow every single ATA
@@ -1460,24 +1460,48 @@ otherwise be one redundant sector write per allocated block into one
 write per distinct dirty sector.
 
 `persist_record()` -- the write-ahead-journal-protected path that
-persists a file's metadata (size, block pointers) -- deliberately does
-NOT get this treatment, even though it's also "a run of several ATA
-writes." Its writes have to land on disk in a specific order with each
-one durable before the next is issued (journal data, then the commit
-header, then the real table slot, then the header clear) for the
-crash-recovery story (`replay_journal()`) to actually hold: batching
-the flush there would mean a crash mid-batch could leave the drive's
-physical write order different from what the journal protocol assumes,
-silently breaking the exact guarantee it exists for. `write_range_impl()`'s
-data blocks have no such ordering requirement -- a half-written data
-block after a crash is just incomplete file content (`fs_write_range()`
-already documents partial-write behavior on failure), not a corrupted
-recovery structure. The dividing line going forward: batch a run of
-writes only when every write in it is independently safe to lose or
-reorder relative to the others if a crash lands mid-batch; anything
-where write N's crash-safety depends on write N-1 already being
-durable (like a WAL) stays one-flush-per-write. See `CHANGELOG.md`'s
-`[Unreleased]` entry for the full before/after numbers.
+persists a file's metadata -- can't use that same treatment, because
+its four writes (journal data, commit header, real table slot, header
+clear) do have ordering requirements: `ata_flush_begin()`/`end()`
+suppresses ALL flushes in the region, which is exactly what a WAL can't
+tolerate. For a long time it therefore flushed after every one of the
+four, on the reasoning that a journal needs each write durable before
+the next.
+
+Two of those four barriers turn out to carry no weight, and the
+reasoning is worth keeping because it's the general shape of the
+question "does this write need a barrier?":
+
+- **After journal data: not needed.** A torn write there fails the
+  FNV-1a checksum stored in the commit header, so replay discards the
+  entry. "The operation didn't happen" is a legitimate crash outcome.
+- **After the commit header: REQUIRED.** Once the table slot is being
+  overwritten, the journal entry is the only surviving copy of a record
+  that can be torn.
+- **After the table slot: REQUIRED.** Retiring the journal entry before
+  the real slot is durable leaves a torn slot with nothing to replay.
+- **After the header clear: not needed.** Losing it costs one redundant
+  replay next boot, which rewrites the same bytes to the same slot.
+
+So the rule isn't "a WAL flushes every write" -- it's "a barrier is
+required where losing write N-1 would make write N unrecoverable." Two
+of four qualify, which halved the cost of every metadata operation (a
+256-record disk format went 0.73s -> 0.34s).
+
+The two barriers use `ata_flush_now()` (ata.h), not `ata_flush_end()`,
+and that distinction is load-bearing: `end()` only flushes once its own
+depth reaches 0, so a journal sequence running inside an OUTER batch
+would silently get no barrier at all. `tfs_check()`'s repair pass calls
+`persist_record()` inside exactly such a batch -- which meant, between
+the `fsck` commit and this one, the journal briefly had every one of its
+flushes suppressed there.
+
+`write_range_impl()`'s data blocks still have no ordering requirement at
+all -- a half-written data block after a crash is just incomplete file
+content (`fs_write_range()` documents partial-write behavior), not a
+corrupted recovery structure -- so that path stays one flush per batch.
+See `CHANGELOG.md`'s `[Unreleased]` entry for the numbers and for how
+replay/discard were verified without an actual power loss.
 
 ## `fs_ops`'s new steppable-write function pointers are required, not optional/NULLable
 

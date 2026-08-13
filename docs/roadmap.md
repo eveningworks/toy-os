@@ -53,7 +53,9 @@ later judgment call, not mechanically tied to "20 milestones done."
 - [x] ~~Coalesce contiguous block writes into fewer ATA commands~~ -- done,
       see `CHANGELOG.md`'s `[Unreleased]` entry (64KB DMA buffer + run
       coalescing + skipping the redundant zero-fill: 18 -> 25.1 MB/s write)
-- [ ] Journal-batched flush
+- [x] ~~Journal-batched flush~~ -- done, see `CHANGELOG.md`'s
+      `[Unreleased]` entry (4 flushes per metadata op -> the 2 the
+      recovery protocol actually depends on; format 0.73s -> 0.34s)
 - [x] ~~Detect the drive's real capacity instead of assuming 9 GiB~~ --
       done, see `CHANGELOG.md`'s `[Unreleased]` entry (`ata_sector_count()`)
 - [x] ~~Stop treating an unreadable superblock as a foreign disk~~ --
@@ -467,13 +469,17 @@ sequential-read benchmark that isn't dominated by `stress`'s own
 byte-for-byte verify loop, which is why the read-side gain (27 -> 30.5
 MB/s) is measured less precisely than the write side.
 
-Also: journal-batched flush -- rely on the existing journal
-(`FS_JOURNAL_HEADER_LBA`/`FS_JOURNAL_DATA_LBA`) as the actual durability
-boundary for metadata and flush once per logical operation it protects
-rather than once per physical block -- the most invasive option since it
-touches the crash-safety story directly (see `docs/decisions.md`'s entry
-on why `persist_record()` was deliberately left alone in part 1), worth
-doing last and carefully if ever needed.
+~~Also: journal-batched flush~~ -- done, and it landed differently
+from how this item framed it. The framing here was "flush once per
+logical operation rather than once per physical block", which would have
+weakened the per-record guarantee to a per-operation one. What the
+protocol actually needs is narrower and costs nothing: of
+`persist_record()`'s four flushes, only two are barriers the recovery
+path depends on (after the commit header, after the table slot); a torn
+journal-data write is caught by the checksum, and a lost header-clear
+costs one idempotent replay. Dropping the other two halved metadata cost
+with the crash-safety argument unchanged -- a 256-record format went
+0.73s to 0.34s. See `docs/decisions.md`.
 
 ~~GPT/MBR partition table parsing~~ -- done, see `CHANGELOG.md`'s
 `[Unreleased]` entry: `kernel/drivers/partition.c`'s

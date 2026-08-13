@@ -576,7 +576,10 @@ repeated manual steps to be worth automating:
   `docs/decisions.md` for why. `corrupt` injects a KNOWN inconsistency
   (`--leak N`, `--free-referenced N`, `--bad-pointer PATH`) so the
   kernel's `fsck` can be tested against damage whose exact shape is
-  known in advance -- the inconsistencies `fsck` repairs are ones the
+  known in advance, and `--stage-journal PATH` (+ `--stage-journal-torn`)
+  leaves an image in the state a crash mid-`persist_record()` produces,
+  which is the only way to exercise `replay_journal()` without an actual
+  power loss -- the inconsistencies `fsck` repairs are ones the
   kernel deliberately avoids producing, so without this it could only
   ever be tested against a clean disk and proven to report "clean".
 - **`mkpart_test.py`** -- writes a synthetic legacy MBR or GPT partition

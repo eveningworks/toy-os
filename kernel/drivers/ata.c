@@ -174,6 +174,38 @@ void ata_flush_end(void) {
     maybe_flush();
 }
 
+// Flushes RIGHT NOW, whatever the deferral depth. Everything above is
+// about removing flushes a caller doesn't need; this is for the caller
+// that needs one at a specific point and can't express that with
+// begin/end -- a write-ahead journal, where "write N must be durable
+// before write N+1 is issued" is the entire point of the structure.
+//
+// ata_flush_end() can't serve as that barrier: it only flushes once its
+// own depth reaches 0, so a journal sequence running inside an outer
+// batch would silently get no barrier at all. That's not hypothetical
+// -- tfs.c's fsck repair pass calls persist_record() inside a
+// write_batch_begin()/end() pair, which suppressed every one of the
+// journal's own flushes.
+void ata_flush_now(void) {
+    if (!g_present) return;
+    if (wait_not_busy()) {
+        outb(REG_COMMAND, CMD_CACHE_FLUSH);
+        wait_not_busy();
+    }
+}
+
+// Closes a deferral region WITHOUT the flush ata_flush_end() would
+// issue. Only correct for a caller that has already placed its own
+// ata_flush_now() barriers where durability actually matters AND whose
+// remaining trailing writes are safe to lose in a crash. persist_record()
+// (tfs.c) is the motivating case: its last write clears the journal
+// header, and losing that write costs one redundant (idempotent) replay
+// on the next boot, nothing more. Anything less clear-cut should use
+// ata_flush_end().
+void ata_flush_end_no_flush(void) {
+    if (g_flush_defer_depth > 0) g_flush_defer_depth--;
+}
+
 // One pmm_alloc_contiguous() call at init provides both of these --
 // this driver's (and this allocator's) first real caller, see build
 // 410. g_prd/g_prd_phys is the first frame (only 8 bytes of it used,

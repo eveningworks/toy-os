@@ -155,6 +155,16 @@ int ata_write_sectors(uint32_t lba, int count, const void *buf);
 void ata_flush_begin(void);
 void ata_flush_end(void);
 
+// An explicit flush barrier, independent of the deferral depth above,
+// and a way to close a deferral region without one. Both exist for
+// write-ahead-journal-shaped callers, where a specific write must be
+// durable before the next is issued and the begin/end pair can't say
+// that -- see ata.c's own comments on each, and tfs.c's
+// persist_record() for the real caller. Don't reach for either just to
+// "flush a bit less"; ata_flush_begin()/end() is the tool for that.
+void ata_flush_now(void);
+void ata_flush_end_no_flush(void);
+
 // Phase 1 of the async-I/O roadmap item (docs/roadmap.md): a
 // non-blocking start/poll pair for the DMA path, built alongside the
 // existing blocking ata_read_sectors()/ata_write_sectors() rather than

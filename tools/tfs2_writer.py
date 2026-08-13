@@ -800,6 +800,34 @@ def cmd_corrupt(args):
                 img._persist_bitmap_bit(blk)
             print(f"marked {len(refs)} referenced block(s) free: {refs}")
 
+        if args.stage_journal:
+            # Leaves the image in the exact state a crash between "journal
+            # entry committed" and "table slot written" produces: a
+            # commit=1 header describing a record that is NOT yet in its
+            # table slot. A correct kernel replays it on the next mount;
+            # `--stage-journal-torn` corrupts the staged bytes afterward so
+            # the checksum fails and the entry must be DISCARDED instead.
+            # This is the only way to exercise replay_journal() without an
+            # actual power loss mid-write.
+            norm = normalize(args.stage_journal)
+            slot = img.find_free_index()
+            if slot is None:
+                raise SystemExit("no free table slot to stage into")
+            now = datetime.now()
+            rec = img.build_record_bytes(norm, False, 0, [], 0, 0, 0, now, now)
+            checksum = fnv1a(rec)
+            staged = rec
+            if args.stage_journal_torn:
+                torn = bytearray(rec)
+                torn[0] ^= 0xFF  # same length, different bytes -> checksum must fail
+                staged = bytes(torn)
+            img.write_sector(JOURNAL_DATA_LBA, staged)
+            img.write_sector(JOURNAL_HEADER_LBA, build_journal_header(1, slot, checksum))
+            kind = "TORN (checksum will not match)" if args.stage_journal_torn else "valid"
+            print(f"staged a {kind} journal entry for {norm} into slot {slot}, "
+                  f"table slot left unwritten -- boot toy-os to see it "
+                  f"{'discarded' if args.stage_journal_torn else 'replayed'}")
+
         if args.bad_pointer:
             norm = normalize(args.bad_pointer)
             idx, rec = img.find(norm)
@@ -858,6 +886,12 @@ def main():
                             help="clear the bitmap bit of N blocks a file actually references")
     p_corrupt.add_argument("--bad-pointer", metavar="PATH",
                             help="point PATH's first direct pointer past the end of the disk")
+    p_corrupt.add_argument("--stage-journal", metavar="PATH",
+                            help="leave a committed journal entry for PATH with its table slot "
+                                 "unwritten (the state a crash mid-persist_record() produces)")
+    p_corrupt.add_argument("--stage-journal-torn", action="store_true",
+                            help="with --stage-journal: corrupt the staged bytes so replay must "
+                                 "discard the entry instead of applying it")
     p_corrupt.add_argument("--dry-run", action="store_true")
     p_corrupt.set_defaults(func=cmd_corrupt)
 

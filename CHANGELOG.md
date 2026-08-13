@@ -31,6 +31,57 @@ using `## [x.y.z] - date` headings is here.
 ## [Unreleased]
 
 ### Added
+- **Journal-batched flush** -- the last open performance item in
+  Milestone 3, and it landed narrower than the roadmap framed it.
+  `persist_record()` (`kernel/drivers/tfs.c`) took a synchronous
+  `CMD_CACHE_FLUSH` after each of its four writes, on the reasoning
+  that a write-ahead journal needs every write durable before the next
+  is issued. Only two of those barriers actually carry weight:
+  - After the **journal data**: not needed. A torn write there fails
+    the FNV-1a checksum stored in the commit header, so replay discards
+    the entry -- "the operation didn't happen" is a legitimate crash
+    outcome.
+  - After the **commit header**: required. Once the table slot is being
+    overwritten, the journal entry is the only surviving copy of a
+    record that can be torn.
+  - After the **table slot**: required. Retiring the entry before the
+    real slot is durable leaves a torn slot with nothing to replay.
+  - After the **header clear**: not needed. Losing it costs one
+    redundant replay on the next boot, rewriting the same bytes to the
+    same slot.
+
+  So the rule isn't "a WAL flushes every write", it's "a barrier is
+  required where losing write N-1 makes write N unrecoverable". Four
+  flushes become two, the recovery argument is unchanged, and every
+  metadata operation gets ~2x cheaper. Measured on the path that does
+  256 of them back to back -- formatting a fresh disk -- via `dmesg`
+  timestamps: **0.73s -> 0.34s** (screenshot
+  `journal_batched_format_dmesg.png`).
+  - New `ata_flush_now()` and `ata_flush_end_no_flush()` (`ata.c`/
+    `ata.h`). The barriers have to be `ata_flush_now()` rather than
+    `ata_flush_end()`, and that distinction is load-bearing:
+    `ata_flush_end()` only flushes once its own depth reaches 0, so a
+    journal sequence running inside an outer batch gets no barrier at
+    all. **That was a live bug for one commit**: `tfs_check()`'s repair
+    pass (added in the `fsck` change) calls `persist_record()` inside a
+    `write_batch_begin()`/`end()` pair, which silently suppressed every
+    one of the journal's flushes. This fixes it properly rather than by
+    moving the call.
+  - **The recovery paths are now actually tested**, which they never
+    were before -- `replay_journal()` could only run after a real
+    power loss mid-write. `tools/tfs2_writer.py corrupt
+    --stage-journal PATH` leaves an image in exactly the state a crash
+    between "entry committed" and "table slot written" produces, and
+    `--stage-journal-torn` additionally corrupts the staged bytes so
+    the checksum must fail. Both verified end-to-end: the valid entry
+    logs `replayed a pending journal entry` and the file exists
+    afterward (confirmed host-side); the torn one logs `discarded a
+    torn journal entry` and the file does not. Note this exercises
+    replay, not durability itself -- whether a flush really reached the
+    platter can't be tested without pulling power.
+  - Regression pass unchanged: `stress 50` at 24.7 MB/s write / 30.3
+    MB/s read, `fsck` clean, `mkdir`/`write`/`cat` surviving a reboot,
+    `rm` cleaning up (screenshot `journal_batched_regression.png`).
 - **`fsck` / `fsck repair`** -- a filesystem consistency check and the
   leak-reclaiming pass behind it (`fs_check()` in `kernel/include/fs.h`,
   `tfs_check()` in `kernel/drivers/tfs.c`, `cmd_fsck()` in

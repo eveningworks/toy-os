@@ -970,16 +970,53 @@ static int persist_record(int index) {
     serialize_record(&files[index], buf);
     uint32_t checksum = fnv1a(buf, FS_RECORD_BYTES);
 
+    // Journal-batched flush: this sequence used to take a synchronous
+    // CMD_CACHE_FLUSH after every one of its four writes, on the
+    // reasoning that a write-ahead journal needs each write durable
+    // before the next is issued. Two of those four barriers turn out to
+    // carry no weight, and dropping them halves the cost of every
+    // metadata operation without changing what replay_journal()
+    // guarantees:
+    //
+    //   1. journal data   -- NO barrier needed. A torn write here is
+    //      caught by the FNV-1a checksum in the header below, and
+    //      replay discards the entry. "The operation didn't happen" is
+    //      a valid crash outcome; a silently-wrong one wouldn't be.
+    //   2. commit header  -- BARRIER REQUIRED. Once the table slot is
+    //      being overwritten, the journal entry is the only copy of the
+    //      old-or-new record that can survive a tear. It has to be on
+    //      the platter before that write is issued.
+    //   3. table slot     -- BARRIER REQUIRED. The journal entry can't
+    //      be retired until the real slot is durable, or a crash
+    //      between the two leaves a torn slot with nothing to replay.
+    //   4. clear header   -- NO barrier needed. Losing this write costs
+    //      exactly one redundant replay on the next boot, which rewrites
+    //      the same bytes to the same slot. Idempotent.
+    //
+    // ata_flush_now() rather than ata_flush_end() for the two real
+    // barriers, because persist_record() can be called from inside an
+    // outer write batch (tfs_check()'s repair pass does exactly this) --
+    // where end() wouldn't flush at all, since its depth never reaches
+    // 0, and the journal would silently lose every barrier it has. See
+    // ata.h.
+    ata_flush_begin();
+
     int ok = 1;
     for (int s = 0; s < FS_RECORD_SECTORS && ok; s++) {
         ok = ata_write_sector(FS_JOURNAL_DATA_LBA + s, buf + (uint32_t)s * ATA_SECTOR_SIZE);
     }
     if (ok) ok = write_journal_header(1, (uint32_t)index, checksum);
+    if (ok) ata_flush_now(); // barrier: commit header (and the data it describes) durable
+
     if (ok) ok = write_table_slot(index, buf);
+    if (ok) ata_flush_now(); // barrier: real table slot durable before the entry is retired
+
     if (ok) {
         write_journal_header(0, 0, 0);
+        ata_flush_end_no_flush(); // trailing clear is safe to lose -- see above
         return 1;
     }
+    ata_flush_end_no_flush();
 
     klog_write("fs: WARNING -- record slot "); klog_write_dec((uint32_t)index);
     klog_write(" (lba "); klog_write_dec(record_lba(index));
