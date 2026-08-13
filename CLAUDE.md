@@ -268,8 +268,11 @@ simpler than the Cowork setup in every way that setup works around --
 ## Building
 
 ```
-make all   # kernel.bin + userland test ELFs
-make iso   # + toy-os.iso (grub-mkrescue)
+make all    # kernel.bin + userland test ELFs
+make iso    # + toy-os.iso (grub-mkrescue)
+make test   # boot headless, run the in-kernel test suite, exit non-zero on failure
+make verify # the full pre-delivery gate: clean build + iso + boot test + ktest
+            # (same as tools/preflight.sh, which also summarises `git status`)
 make run   # boots in QEMU with an SDL window (the user's machine, not usable headlessly)
 make run-audio  # same as run, + a PulseAudio backend so the PC speaker (`beep`) is audible
 make debug # boots frozen (-s -S) for real GDB debugging -- see "Debugging with GDB" below
@@ -406,6 +409,15 @@ accepted rather than maintaining a second build config just for
 debugging.
 
 ## Testing in QEMU headlessly, via QMP
+
+**First: is this actually a GUI change?** If not, `tools/vm.py` (above)
+is faster and gives you text you can assert on instead of a screenshot
+you have to read. The order of cheapness is
+`boot_smoke_test.py` (does it boot) -> `make test` / `vm.py exec` (does
+it work) -> QMP (does it look right). Reach for this section when the
+answer genuinely depends on pixels -- widget layout, rendering, mouse
+behaviour, window chrome -- because a text transcript says nothing
+about any of those.
 
 There's no interactive display in this environment, so GUI testing
 goes through QEMU's QMP socket: launch headless, drive keyboard/mouse

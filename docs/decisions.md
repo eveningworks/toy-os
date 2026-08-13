@@ -373,8 +373,8 @@ header's own top comment before adding to it.
 `apps/wm/` is split into `wm.c`/`wm_input.c`/`wm_render.c` by concern
 for *readability*, but shares state through `wm_internal.h`'s
 `extern`s rather than hiding it behind accessor functions -- it's
-still one tightly-coupled event loop, the same thing `apps/wm.c` was
-before the split (CHANGELOG.md's **"Splitting wm.c into apps/wm/..."**),
+still one tightly-coupled event loop, the same thing the single
+pre-split `wm.c` was (CHANGELOG.md's **"Splitting wm.c into apps/wm/..."**),
 just spread across files. Deliberate: this is one component's internal
 organization, not a boundary between independently-reasoned-about
 components the way `kapi.h`/`wm.h` are. See `wm_internal.h`'s top

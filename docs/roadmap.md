@@ -763,25 +763,44 @@ kernel source unmodified, `tools/mkpart_test.py`).
 
 ### Milestone 4 -- Kernel test harness
 
-There are real tests in this kernel already -- `heap_selftest()`,
-`tfs_selftest()`, the PMM contiguous-allocation check -- and they've each
-caught real bugs. But they're hand-called from `kernel_main()`, they run
-on every boot whether you want them or not, they can't be run
-individually, and a failure prints a line and carries on.
+**Done** (2026-08-13) -- see `CHANGELOG.md`'s `[Unreleased]` entry. Kept
+here because the reasoning is still the reference for adding tests.
 
-Turn that into a facility: a registration mechanism, a `make test` target
-that boots and exits non-zero if anything failed, and CI wiring next to
-`boot_smoke_test.py`. The immediate payoff is that the existing self-tests
-move *off* the boot path -- `tfs_selftest()` writes at a 4.6GB offset on
-every single disk-backed boot today, which is a real cost paid for a
-check that only needs to run when the filesystem changed.
+The problem it solved: `heap_selftest()`, `tfs_selftest()`, the PMM
+check and `json_selftest()` were real tests that had each caught real
+bugs, but they were hand-called from `kernel_main()`, ran on every boot
+whether you wanted them or not (`tfs_selftest()` wrote at a 4.6GB offset
+on every disk-backed boot to re-verify something that only breaks when
+`tfs.c` changes), couldn't be run individually, and a failure printed a
+line and carried on booting -- so nothing failed and CI never noticed.
 
-The other half is fault injection as a first-class thing. The error paths
-added during the storage work (a failed `persist_record()`, a failed
-`zero_block()`, an unreadable superblock) are all reachable only via
-`tools/tfs2_writer.py corrupt` from the host. An in-kernel "fail the next
-N ATA writes" switch would make those paths testable from inside, which
-is the difference between "reasoned about" and "verified".
+What exists now:
+
+- `KTEST("suite", "name") { ... }` blocks living next to the code they
+  exercise, registering themselves through a `.ktests` linker section --
+  no registry to update, and with recursive source discovery no build
+  edit either. `kernel/include/kernel/ktest.h` is the reference.
+- `ktest` / `ktest <suite>` from the shell or the serial console;
+  `make test` boots headless, drives it over serial and **exits
+  non-zero**, which the old arrangement could not do at all. CI runs it
+  beside `boot_smoke_test.py`, and `tools/preflight.sh` includes it.
+- Fault injection (`kernel/include/kernel/fault_inject.h`): fail the
+  next N ATA writes, ATA reads or `kmalloc` calls -- what made the
+  storage error paths testable from inside rather than only by
+  corrupting a disk image from the host.
+- Nothing runs tests at boot any more.
+
+Two things worth carrying forward to any test you add: they run inside
+the **live** kernel, so don't assume a pristine heap or an empty
+filesystem (that exact assumption is what made `heap_selftest()` fail on
+its first run under the harness -- it asserted `heap_used_bytes() == 0`,
+true only immediately after `heap_init()`); and a test that arms a fault
+injector must disarm it, since there's no automatic teardown.
+
+Still open in this area, and deliberately not done: no per-test
+isolation or setup/teardown, no way to run tests before the filesystem
+exists, and nothing catches a leaked fault injector between tests beyond
+`fault_any_armed()` existing.
 
 ### Milestone 5 -- Benchmark suite
 

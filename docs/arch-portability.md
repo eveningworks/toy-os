@@ -5,9 +5,15 @@ second CPU architecture (RISC-V 64 is used as the running example
 throughout, since it's the most common "second arch" hobby-OS choice
 and has an active QEMU `virt` machine target), and a phased plan for
 getting there -- written up because it was asked for directly, not
-because a second arch is being built now. No files move as part of
-this document; see `docs/roadmap.md` for where the actual restructuring
-work is tracked once/if it's picked up.
+because a second arch is being built now.
+
+**Status: Phase 1 below is DONE** (2026-08-13). `kernel/arch/x86_64/`
+exists and holds the unambiguously architecture-specific files; it
+happened as part of a general directory restructure rather than as
+portability work, but it's the same move this document proposed. The
+remaining phases are still unscheduled. See `docs/roadmap.md` for where
+that work would be tracked and `kernel/README.md` for what each
+directory means today.
 
 ## tl;dr
 
@@ -141,41 +147,49 @@ changes* to support a second arch -- the boundary this project already
 enforces for unrelated reasons (see `CLAUDE.md`) turns out to double as
 the portability boundary almost for free.
 
-## Proposed directory layout
+## Directory layout
 
-Following the pattern the user pointed at (an `arch/` subdirectory
-under `kernel/`, one folder per architecture):
+This section described a proposal; most of it is now simply the layout.
+What actually exists (see `kernel/README.md`):
 
 ```
 kernel/
-  arch/
-    x86_64/
-      boot.asm
-      context_switch.asm
-      isr.asm
-      gdt.c / gdt.h
-      idt.c / idt.h
-      paging.c          (entry-format part only -- see "moderate" above)
-      pic.c
-      timer.c
-      power.c
-      pci.c             (port-I/O access part only)
-      serial.c          (port-I/O access part only)
-    riscv64/
-      (mirror image, once/if that port starts)
-  core/
-    (whatever's left once the arch/ split above happens -- pmm.c,
-    scheduler.c, elf.c, process.c, vmm.c's portable logic, etc.)
-  drivers/
-    (unchanged -- already portable: tfs.c, vfs.c, font_ttf.c, gfx.c)
-apps/
-  (unchanged -- already fully insulated via kapi.h/wm.h)
+  arch/x86_64/   boot.asm context_switch.asm isr.asm       <- exists
+                 gdt.c idt.c pic.c irq.c paging.c
+    riscv64/     (mirror image, once/if that port starts)  <- doesn't
+  mm/            pmm.c vmm.c heap.c                        <- exists
+  proc/          process.c scheduler.c elf.c elf_run.c
+                 syscall.c ring3_test.c
+  fs/            vfs.c tfs.c
+  lib/           string.c json.c klog.c etc_config.c ...
+  core/          kernel.c multiboot.c timer.c serial.c
+                 power.c debug_console.c
+  drivers/       vga.c gfx.c ata.c pci.c mouse.c ...
+  test/          ktest.c fault_inject.c
+apps/            (unchanged -- already insulated via kapi.h/wm.h)
 ```
 
-`vmm.c`, `paging.c`, and `pci.c`/`serial.c` are split between "portable
-logic" and "arch-specific mechanism" rather than moving wholesale --
-the plan below treats extracting that split as its own phase, since
-it's real work (defining the interface), not just a file move.
+Three differences from what this document originally proposed, worth
+knowing before planning the next phase:
+
+- The split went further than `arch/` + `core/`: `mm/`, `proc/`, `fs/`,
+  `lib/` and `test/` exist too, so "whatever's left" is now itself
+  organised by concern rather than being a bucket.
+- **`timer.c`, `power.c`, `serial.c` and `pci.c` did NOT move to
+  `arch/`**, though this document listed them. Each is a mix of port-I/O
+  mechanism and portable logic, and moving them wholesale would put
+  portable code in an arch directory -- extracting the split is Phase 2
+  below, and it hasn't happened.
+- `paging.c` moved wholesale despite the same mixed character, because
+  its portable part (the walk) is small relative to the x86 page-table
+  entry encoding that dominates it. `vmm.c` stayed in `mm/` for the
+  mirror-image reason.
+
+The line to hold, now that the directory exists: **nothing outside
+`arch/` should contain `inb`/`outb`, inline assembly, or a
+control-register access.** That's checkable with a grep, and it's what
+keeps the boundary from eroding between now and whenever a second arch
+starts.
 
 ## Phased plan
 
@@ -184,15 +198,17 @@ here is scheduled. Phases are ordered so each one leaves the tree in a
 working, still-boots-on-x86_64 state; none of them require the second
 arch to actually exist yet.
 
-1. **Mechanical move, zero behavior change.** Create
-   `kernel/arch/x86_64/`, `git mv` the unambiguous files there
-   (`boot.asm`, `context_switch.asm`, `isr.asm`, `gdt.c`/`.h`,
-   `idt.c`/`.h`, `pic.c`, `timer.c`, `power.c`), fix `#include` paths
-   and the `Makefile`'s wildcards/pattern rules (see `CLAUDE.md`'s note
-   on `apps/wm/*.c` needing its own wildcard when that subfolder was
-   added -- same treatment needed here). Verify with a full
-   `boot_smoke_test.py` pass; this phase should be invisible from
-   outside the build system.
+1. ~~**Mechanical move, zero behavior change.**~~ **DONE** (2026-08-13,
+   as part of a general restructure -- see `CHANGELOG.md`).
+   `kernel/arch/x86_64/` holds `boot.asm`, `context_switch.asm`,
+   `isr.asm`, `gdt.c`, `idt.c`, `pic.c`, `irq.c` and `paging.c`.
+   `timer.c`/`power.c` did not move, for the reason given above.
+   Two notes for whoever does Phase 2: the Makefile no longer needs a
+   wildcard per directory (source discovery is recursive now, so a new
+   `arch/riscv64/` would be picked up automatically), and headers are
+   split by audience under `kernel/include/{api,abi,kernel}/` with the
+   boundary enforced by include paths -- an arch header belongs in
+   `kernel/`.
 2. **Split the mixed files.** Pull the port-I/O access functions out of
    `pci.c` and `serial.c` into `kernel/arch/x86_64/`, leaving the
    config-space/protocol logic in `kernel/drivers/`/`kernel/core/`

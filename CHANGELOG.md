@@ -676,6 +676,46 @@ using `## [x.y.z] - date` headings is here.
     `screenshots/2026-08-12/tray-clock-*.png`.
 
 ### Changed
+- **Documentation catch-up after this session's work.** Audited every
+  `.md` against the tree rather than by memory; five real gaps:
+  - **`docs/arch-portability.md` was describing its own Phase 1 as
+    future work** -- creating `kernel/arch/x86_64/` and moving the
+    unambiguously x86 files there. That happened this session (as a
+    general restructure rather than as portability work, but it's the
+    same move). Marked done, and the "proposed directory layout" is now
+    the actual one, with the three places reality differs from the
+    proposal called out: the split went further than `arch/` + `core/`;
+    `timer.c`/`power.c`/`serial.c`/`pci.c` deliberately did NOT move
+    (each mixes port-I/O with portable logic -- extracting that is
+    Phase 2); and `paging.c` did move despite being mixed, because the
+    x86 page-table encoding dominates it. Also records the line to hold
+    now that the directory exists: nothing outside `arch/` should
+    contain `inb`/`outb`, inline asm, or a control-register access --
+    which is greppable.
+  - `README.md` still called the serial console read-only. It has `sh`
+    and `ktest` now.
+  - The shell's own `help tests` didn't list `ktest`, so the feature was
+    invisible from inside the OS.
+  - `docs/roadmap.md`'s Milestone 4 detail was still written as a
+    proposal; rewritten as done, keeping the reasoning (it's the
+    reference for adding a test) and listing what's deliberately still
+    missing: no per-test isolation, no setup/teardown, no way to run
+    tests before the filesystem exists.
+  - `CLAUDE.md`'s QMP-testing section read as though QMP were the only
+    way to test. It now opens with the routing rule -- boot smoke test
+    (does it boot) -> `make test`/`vm.py exec` (does it work) -> QMP
+    (does it look right) -- so the expensive path is chosen
+    deliberately rather than by default. `make test`/`make verify` added
+    to both build-target lists.
+
+  Checked and deliberately NOT changed: `CHANGELOG.md`'s historical
+  entries reference paths as they were when written (`kernel/core/pmm.c`
+  and friends) and are a record, not an index; `apps/README.md`'s
+  `calc.c`/`clock.c` are hypothetical examples in a tutorial, not stale
+  references; and several "this file no longer exists" notes name
+  removed files on purpose. A link/anchor check across all 13 `.md`
+  files passes.
+
 - **Directory restructure: the tree now describes the OS rather than
   its history.** Asked for as "restructure so it better represents the
   OS we are building and have modularity built in". Five staged steps,

@@ -32,10 +32,13 @@ For everything else:
 - Linear RGB framebuffer (1280x720 default), falling back to 80x25 VGA
   text mode automatically if none is available -- one console (`vga.c`)
   renders through whichever backend is active
-- Serial (COM1) debug logging (`-serial stdio` in QEMU) plus a small
-  read-only serial *console* (`kernel/core/debug_console.c` --
-  `meminfo`/`lsfs`/`lsdev` over a second connection, usable while the
-  screen is showing the GUI or a ring-3 process is running); IDT +
+- Serial (COM1) debug logging (`-serial stdio` in QEMU) plus a serial
+  *console* (`kernel/core/debug_console.c`) usable while the screen is
+  showing the GUI or a ring-3 process is running: `meminfo`/`lsfs`/
+  `lsdev` for inspection, `ktest` to run the test suite, and `sh
+  <command>` to run any shell command with its output coming back over
+  the wire -- which is what makes headless verification a text
+  assertion rather than a screenshot (`tools/vm.py`); IDT +
   remapped 8259 PIC + exception handler (prints and halts instead of
   triple-faulting)
 - PS/2 keyboard and mouse (IRQ12), sharing the 8042 controller through
@@ -160,7 +163,8 @@ shell and the GUI Terminal.
   `docs/roadmap.md`'s async I/O item; Notepad's Save As.../Open... are
   the real callers), `debug [<subsystem> on|off]` (per-subsystem
   runtime debug-log switches -- `fs`/`wm`/`ata`, off by default, no
-  rebuild needed), `fsck [repair]` (filesystem consistency check:
+  rebuild needed), `ktest [suite]` (run the in-kernel test suite --
+  see `make test`), `fsck [repair]` (filesystem consistency check:
   walks every file's block tree and compares it against the free-block
   bitmap; read-only unless `repair` is passed)
 
@@ -198,6 +202,8 @@ make iso        # build toy-os.iso (bootable GRUB image), seeding disk.img
 make run        # build + boot in QEMU with a graphical window
 make run-audio  # same, with a PulseAudio backend so `beep` is audible
 make debug      # boot frozen (-s -S) for GDB: see below
+make test       # run the in-kernel test suite, exit non-zero on failure
+make verify     # full check: clean build + iso + boot test + test suite
 make clean      # remove build artifacts
 ```
 
