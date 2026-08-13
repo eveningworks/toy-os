@@ -115,6 +115,7 @@ there when you add an entry, or the index quietly stops being one.
 - [Build-number scheme: fix/feature/major tiers, not dates or semver](#build-number-scheme-fixfeaturemajor-tiers-not-dates-or-semver)
 - [Versioning: semver + `-dev` suffix, not a per-change build number](#versioning-semver--dev-suffix-not-a-per-change-build-number)
 - [Repo is MIT; the baked JetBrains Mono glyph data is separately SIL OFL 1.1](#repo-is-mit-the-baked-jetbrains-mono-glyph-data-is-separately-sil-ofl-11)
+- [CI is kept for the environment, not the checks -- they duplicate `make verify` exactly](#ci-is-kept-for-the-environment-not-the-checks----they-duplicate-make-verify-exactly)
 - [Repo history scrubbed of the maintainer's real name -- privacy request, not a bug fix](#repo-history-scrubbed-of-the-maintainers-real-name----privacy-request-not-a-bug-fix)
 - [Socket fds: scaffolding ahead of the driver, not a working transport](#socket-fds-scaffolding-ahead-of-the-driver-not-a-working-transport)
 
@@ -1750,6 +1751,41 @@ top before laying out any argv strings, guaranteeing every token's
 start address has a full `FS_PATH_MAX` mapped bytes after it. Found
 live via QMP testing (`ls /` failed with "cannot access '/'"), not by
 review.
+
+## CI is kept for the environment, not the checks -- they duplicate `make verify` exactly
+
+Asked directly, and worth answering once: on a solo hobby project where
+`make verify` runs before every push, is a GitHub Actions workflow
+earning anything?
+
+Every step `.github/workflows/build.yml` runs -- clean build, iso,
+`check_layout.py`, `boot_smoke_test.py`, `ktest_run.py` -- is a step
+`make verify` already runs locally. If the value were "run the checks",
+it would be pure duplication and should go.
+
+**The value is the machine, not the checks.** CI builds from a fresh
+clone on a host that isn't the maintainer's, and that difference catches
+a class of bug local verification structurally cannot:
+
+- `tools/gen_kbs.py` needs `xkbcli`, and the `seed` target skips it with
+  a message when absent. CI didn't install it, so CI had been building
+  images with **no keyboard layouts at all**, silently, for as long as
+  that step existed. No amount of care running `make verify` on a
+  machine that has `xkbcli` can find that.
+- A file that exists locally but was never committed builds fine
+  forever locally. `seed/sync/pci.ids` was exactly that (see the
+  filesystem-layout entry). Fresh-clone builds catch that class by
+  construction -- though not universally: in that specific case nothing
+  in the build referenced the file, so CI would have gone green with a
+  degraded image anyway. A partial net, not a complete one.
+- Ubuntu vs the maintainer's Arch-family host is what the Makefile's
+  `grub2-mkrescue` fallback exists for.
+
+**What CI explicitly does NOT cover:** it has no display and no QMP, so
+every GUI regression is invisible to it -- a mis-clipped label, a click
+handler testing the wrong coordinate space. Those need local screenshot
+testing regardless, and a green CI badge must not be read as "the
+desktop is fine".
 
 ## Repo is MIT; the baked JetBrains Mono glyph data is separately SIL OFL 1.1
 
