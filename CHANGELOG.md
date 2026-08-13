@@ -30,6 +30,47 @@ using `## [x.y.z] - date` headings is here.
 
 ## [Unreleased]
 
+### Changed
+- **Roadmap: eight new milestones, twelve existing ones deepened, and a
+  third renumbering.** Asked for "more steps and maybe 5 new milestones,
+  add plenty". The list went from 32 milestones and roughly 250 items to
+  **40 and 398**, with no milestone below 7 items.
+  - **New, each placed where its prerequisites put it** rather than
+    appended: **6 Fuzzing & property-based testing** (right after the
+    test harness it builds on), **11 Crash reporting & postmortem
+    debugging** (after signals, since a core dump hangs off SIGSEGV),
+    **13 Init & service supervision** (the milestone that finally *uses*
+    TTY + fork/exec + signals + job control together), **14 In-OS
+    documentation** (`man`), **16 Block integrity: checksums &
+    scrubbing** (while TFS3's format is still open -- a checksum field
+    wants designing in, not bolting on), **18 Encryption at rest**
+    (after multi-user, which brings the same key-derivation machinery),
+    **20 A layout engine for the GUI** (before the apps that would use
+    it), **21 Runtime font loading & text metrics** (immediately after
+    it, since layout is what needs to ask how wide a string really is).
+  - The thin milestones -- 4, 5, 7, 8, 25, 26, 28, 29, 35, 37, 38, 39 --
+    were filled out with real steps rather than padding. A few carry
+    decisions the project would otherwise discover late: UTF-8's real
+    work is auditing every `char`-sized assumption; a benchmark number
+    is meaningless without recording TCG-vs-KVM; NVMe's 4KB sectors have
+    never been tested against TFS2's assumptions.
+  - **Milestones 11-32 became 15-40** (a piecewise shift, since the
+    insertions are scattered). Every cross-reference was re-checked
+    against its target's *title* afterward rather than trusted to the
+    shift -- which is how the first attempt at the previous renumbering
+    was caught double-shifting headings and colliding two milestones.
+  - **This is the pass that ends the convention.** The roadmap now says
+    so explicitly: insertion-with-renumbering is worth it for one or two
+    milestones with a real prerequisite argument, and beyond that,
+    append. Eight at once meant rewriting cross-references across four
+    files and a third translation table.
+  - Fixed three references in `docs/decisions.md` that went stale in
+    *this morning's* renumbering and weren't caught then -- the
+    compositor entries pointing at "Milestone 12". They were missed
+    because that check's output was truncated at 20 lines, which is a
+    good argument for verifying by resolving every reference to its
+    target's title (as done here) rather than by reading a list.
+
 ### Added
 - **`make run-kvm`, and `tools/vm.py --kvm` to go with it.** Same flags
   as `make run` plus `-enable-kvm -cpu host`, so guest code runs
@@ -146,14 +187,16 @@ using `## [x.y.z] - date` headings is here.
   "enough POSIX to build and run real ported C programs" -- and that
   most of it is already scheduled under other names. Written up rather
   than left in a session.
-  - **New Milestone 11, "TFS3: an inode layer."** The survey turned up
+  - **New "TFS3: an inode layer" milestone** (numbered 11 when added,
+    15 today). The survey turned up
     one structural gap nothing on the roadmap owned: TFS2 stores a flat
     table of records keyed by a full path string, with no object
     representing a file separately from the name pointing at it. Hard
     links, atomic `rename()`, unlink-while-open and `st_ino`/`st_nlink`
     can't be expressed against that, and it's independently worth
     fixing regardless of POSIX.
-  - **New Milestone 32, "POSIX compatibility."** Deliberately a
+  - **New "POSIX compatibility" milestone** (32 when added, 40 today).
+    Deliberately a
     capstone: it names the target (our own libc vs Linux syscall-ABI
     emulation -- a real fork, to decide before writing code), owns the
     handful of items nothing else covers, and records what is *not*
@@ -164,7 +207,7 @@ using `## [x.y.z] - date` headings is here.
     switch -- so the first stock-compiled binary would fault, since
     every real libc's `memcpy` uses SSE2 unconditionally on x86-64.
   - **Milestones 11-30 became 12-31**, since the inode layer belongs
-    before permissions (Milestone 12) -- mode bits want to live on an
+    before permissions -- mode bits want to live on an
     inode, and the other order means building them twice. The roadmap's
     own rule is that reading order is build order, so the alternative
     was a milestone that documents a prerequisite while sitting after

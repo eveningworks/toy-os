@@ -231,7 +231,7 @@ makes this correct for overlapping windows without separate occlusion
 tracking. Menu/taskbar-content-click/dialog redraws still fall back to
 a full-screen repaint (imprecise but safe) -- see `docs/decisions.md`'s
 compositor entry for the full design and `docs/roadmap.md`'s
-Milestone 13 entry for what's still open. Below that scene-level layer,
+Milestone 19 entry for what's still open. Below that scene-level layer,
 `gfx_present()` (`kernel/drivers/gfx.c`) still separately tracks
 dirty PIXELS for the final blit to the real framebuffer -- only the
 touched bounding box gets copied out, not the whole screen, plus a
@@ -308,7 +308,7 @@ nothing but the idea. See `docs/decisions.md`.)
   (`apps/wm/desktop.c`) -- built as its own widget rather than
   desktop.c-local, by explicit request, ahead of the second real
   caller a future file manager's icon view (`docs/roadmap.md`
-  Milestone 14) is expected to be. Deliberately an exception to this
+  Milestone 22) is expected to be. Deliberately an exception to this
   section's own "wait for a second caller" rule below, not a change to
   it.
 

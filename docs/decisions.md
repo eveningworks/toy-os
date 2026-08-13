@@ -2107,7 +2107,7 @@ build-config-simplicity tradeoff, not an oversight.
 
 The window manager used to redraw everything -- `desktop_draw()`'s full
 clear plus every window/taskbar/menu -- on any scene change at all,
-including a once-a-second clock tick. Milestone 12's "real" dirty-rect
+including a once-a-second clock tick. Milestone 19's "real" dirty-rect
 compositor replaces that with a scene-level damage-region accumulator
 (`wm_damage_rect()`, `apps/wm/wm_render.c`) that's deliberately
 separate from `gfx.c`'s existing pixel-level dirty-rect tracking
@@ -2216,7 +2216,7 @@ correctly on every swap
 `wm_render_frame()`'s full-screen fallback, the same as menus/dialogs
 (see the compositor entry above). This looks like it's leaving an easy
 optimization on the table (the tray API shipped the same day as
-Milestone 12's damage-region work), but an earlier version DID scope
+Milestone 19's damage-region work), but an earlier version DID scope
 tray/clock updates to just the taskbar strip via `wm_damage_rect()`,
 and it caused two real bugs, both caught live on the user's own
 machine rather than in QMP testing:
@@ -2242,7 +2242,7 @@ entry (search "tray damage-scoping regression"). The fix was simply to
 stop scoping tray damage at all, matching every other still-unscoped
 piece of WM chrome -- not to fix the two bugs while keeping the
 optimization. Scoping the tray/taskbar precisely is still a real,
-open piece of the Milestone 12 compositor plan (`docs/roadmap.md`), but
+open piece of the Milestone 19 compositor plan (`docs/roadmap.md`), but
 it needs the pre-loop-damage and once-a-second-safety-net issues above
 solved properly first, not just reverted -- a future attempt should
 budget for both, not assume the first bug found is the only one.

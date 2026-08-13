@@ -31,7 +31,7 @@ Three specific things the split buys:
 - **A filesystem is not a device driver.** `tfs.c`/`vfs.c` sat in
   `drivers/` next to `ata.c`. The block device is a driver; the
   filesystem on top of it is a subsystem. Mount points (roadmap
-  Milestone 17) will add backends here, not there.
+  Milestone 25) will add backends here, not there.
 - **`lib/` names the leftovers honestly.** `string.c`, `json.c`,
   `klog.c` and the `/etc` config readers aren't hardware bring-up and
   never were -- they were in `core/` because there was nowhere else.
