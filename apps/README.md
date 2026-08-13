@@ -72,7 +72,14 @@ run their own blocking loop:
   generates candidates only -- it does no input handling and no drawing,
   because the two shells have completely separate input loops and only
   the candidate logic is genuinely common. See `completion.h`'s top
-  comment. The shell itself is four files (`shell.c` + `shell_fs.c` +
+  comment. *Line editing*, by contrast, IS shared and lives outside
+  `apps/` entirely: `kernel/lib/klineedit.c` owns the buffer, cursor,
+  kill ring, undo and the whole bash keymap, and each front end only
+  paints the result (`repaint_line()` here, `term_repaint_line()` in
+  `terminal.c`). The split is deliberate and the opposite of
+  completion's for a reason -- candidate generation has no state to
+  keep, whereas two copies of an editor drift, and a drifted editor
+  means the same keystroke doing different things in the two windows. The shell itself is four files (`shell.c` + `shell_fs.c` +
   `shell_sys.c` + `shell_path.c`, sharing state through
   `shell_internal.h`); `shell_path.c` owns PATH lookup and the single
   "run this name" resolver behind both a bare typed name and `run`.
@@ -108,7 +115,12 @@ their own loop, the window manager calls their `on_open`/`on_draw`/
   Terminal's event-driven window the way it does at the physical
   console, so Terminal drives the same `editor_handle_key()` one
   keystroke at a time from its own `on_key` callback instead. See
-  `terminal.c`'s top comment and `editor.h` for the full split. `ls` and
+  `terminal.c`'s top comment and `editor.h` for the full split.
+  `strace` joined `gui`/`ring3test`/`schedtest` on `BLOCKED_CMDS` for
+  the original reason `run` used to be there: it runs its target
+  through the blocking `elf_run_from_fs()` (deliberately -- the trace
+  has to interleave with the traced process's output in real time), so
+  it would freeze this window's event loop. `ls` and
   `run <name>` (for a small, verified-safe allowlist -- see
   `RUN_ALLOWED_BINS` in `terminal.c`) run real `/bin` ELF binaries
   asynchronously via `scheduler.h`'s `scheduler_spawn()`/

@@ -158,9 +158,20 @@ this file.)
 ### Milestone 6 -- TTY / virtual terminals (planned v0.6.0)
 
 - [ ] A line discipline (line editing, echo control) separate from the
-      shell's own input loop
+      shell's own input loop. **Partly built ahead of this milestone**:
+      `kernel/lib/klineedit.c` is a real, shared line editor (readline
+      keymap, kill ring, undo) that the physical shell and the GUI
+      Terminal both drive, so "two clients of the same editing layer"
+      already holds. What's still missing is the *discipline* half --
+      it's a library each front end calls, not something they read
+      through, and it has no echo control or raw/cooked distinction.
+      See CHANGELOG.md's `[Unreleased]`.
 - [ ] `Ctrl+C`/`Ctrl+D`/`Ctrl+Z` as terminal signals, not keystrokes an
-      app happens to notice
+      app happens to notice. The *encoding* groundwork is done -- the
+      keyboard driver emits Ctrl as control codes and Alt as an ESC
+      prefix, so these keys now reach an app at all (they didn't
+      before); today `Ctrl+C` abandons the input line and `Ctrl+D` on an
+      empty line is recognised but has nothing to exit to.
 - [ ] The concept of a foreground process for a terminal
 - [ ] Multiple virtual terminals on `Ctrl+Alt+F1..F4`
 - [ ] The GUI Terminal app and the physical console as two clients of the
@@ -838,8 +849,10 @@ process" has no meaning without a foreground process. Milestone 10's job
 control (`fg`/`bg`) is the same problem wearing a different hat. Doing
 those first means inventing a partial answer twice.
 
-Scope it as: a line discipline (echo, line editing, raw vs. cooked) that
-the shell reads through instead of touching the keyboard driver; a
+Scope it as: a line discipline (echo, raw vs. cooked) that
+the shell reads through instead of touching the keyboard driver -- the
+line-*editing* part of that now exists as `kernel/lib/klineedit.c` and
+should be moved behind the discipline rather than rewritten; a
 per-terminal notion of the foreground process; and then multiple virtual
 terminals as the payoff, since once a terminal is a *thing* rather than
 the only thing, having four of them on `Ctrl+Alt+F1..F4` is mostly

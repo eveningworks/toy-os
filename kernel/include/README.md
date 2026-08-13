@@ -16,7 +16,10 @@ Makefile's `API_INCLUDES`/`KERNEL_INCLUDES`/`APPS_CFLAGS`).
 `kapi.h` and everything it aggregates. This is the one header `apps/`
 is supposed to include (see CLAUDE.md), and everything reachable from it
 is a promise: console, graphics, keyboard/mouse, timer/RTC, filesystem,
-heap, PCI, version. Adding a header here means committing to it.
+heap, PCI, version, and the shared toolkit (`string.h`, `knum.h`,
+`kfmt.h`, `kpath.h`, `klineedit.h` -- see CLAUDE.md's note to check
+these before hand-rolling a digit loop, a formatter or a path join).
+Adding a header here means committing to it.
 
 ## abi/ -- the kernel<->userland contract
 

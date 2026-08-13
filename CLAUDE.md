@@ -408,6 +408,26 @@ to verify locally first. This doesn't replace verifying locally before
 delivering a change (still do that -- see "Working in the cloud
 sandbox" above), it's a second, automatic check behind it.
 
+**Test against a COPY of `disk.img` if the user might have their own
+QEMU open.** Two separate hazards, both hit for real: QEMU takes a
+write lock on the image, so a headless launch dies with `Failed to get
+"write" lock` while an interactive `make run` holds it; and `make iso`
+re-seeds `disk.img` every time, which rewrites the filesystem
+underneath a VM already booted from it. `cp --reflink=auto disk.img
+/tmp/test.img` and then `vm.py --disk /tmp/test.img` (or
+`launch_qemu_cmd(disk=...)`) avoids both -- and is the right move
+anyway whenever a test needs particular files on disk, since it leaves
+the real image alone. Both also take `--qmp-port`/`--vnc`
+(`qmp_port=`/`vnc_display=`) for running a second instance alongside
+an existing one.
+
+**`strace <binary>` is often the fastest way to see what a `/bin`
+binary is doing** -- one decoded line per syscall
+(`open("notes.txt", O_WRITE|O_CREAT) = 3`), and the same lines land in
+`dmesg`, so `python3 tools/vm.py exec "strace file_test"` returns text
+you can assert on. Reach for it before adding temporary `klog_write()`
+calls inside a syscall handler; see `kernel/proc/strace.c`.
+
 ## Debugging with GDB
 
 `make debug` boots toy-os frozen at CPU reset (`-s -S`) instead of

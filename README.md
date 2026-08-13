@@ -423,7 +423,11 @@ kernel/fs/       -- the filesystem: TFS2 (tfs.c) behind the VFS dispatch
                      so it doesn't live in drivers/ -- the block device
                      it sits on (ata.c) does.
 kernel/lib/      -- cross-cutting services with no hardware of their
-                     own: freestanding string routines (string.c), a
+                     own. The shared toolkit lives here -- strings
+                     (string.c), numbers<->strings (knum.c), a bounded
+                     formatter (kfmt.c), path manipulation (kpath.c) and
+                     the readline-style line editor both command lines
+                     share (klineedit.c) -- plus a
                      JSON library (json.c), the kernel log ring buffer
                      behind dmesg (klog.c), runtime debug switches
                      (debugflags.c), /etc config reading (etc_config.c)
