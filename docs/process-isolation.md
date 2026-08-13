@@ -78,6 +78,12 @@ version of
   the faulting RIP -- a virtual address like `0x8000000010`, visibly
   different from the physical frame backing it, proof this is real
   address translation and not an identity-mapping shortcut.
+  (Told as it happened, per this document's framing: `elf_test.c` and
+  its marker-plus-`hlt` mechanism are both gone now, and today's
+  `userland/hello.c` is a plain greet-and-exit program -- see
+  `docs/decisions.md`'s entry on why, and on the fault it left behind
+  when the harness was removed from under it. `ring3_test.c` is
+  unchanged and still does exactly what's described above.)
 
 **Four real bugs this caught:**
 1. The very first ring-3 attempt faulted with a *page fault* trying to

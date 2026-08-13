@@ -24,6 +24,7 @@ there when you add an entry, or the index quietly stops being one.
 - [Blocking I/O waits: hlt when safe, poll when inside a syscall](#blocking-io-waits-hlt-when-safe-poll-when-inside-a-syscall)
 - [Contiguous memory: linear bitmap scan, not a buddy allocator](#contiguous-memory-linear-bitmap-scan-not-a-buddy-allocator)
 - [`ring3test` still requires a reboot after its fault, on purpose](#ring3test-still-requires-a-reboot-after-its-fault-on-purpose)
+- [`hello.c` stopped faulting on purpose and started faulting by accident](#helloc-stopped-faulting-on-purpose-and-started-faulting-by-accident)
 - [Kernel heap: coalesces by real address adjacency, not list order](#kernel-heap-coalesces-by-real-address-adjacency-not-list-order)
 - [`kfree()`'s coalescing only checked the block being merged in, not the block being merged into](#kfrees-coalescing-only-checked-the-block-being-merged-in-not-the-block-being-merged-into)
 - [A syscall's path-pointer validation checks a full `FS_PATH_MAX` range, not just up to the string's NUL](#a-syscalls-path-pointer-validation-checks-a-full-fs_path_max-range-not-just-up-to-the-strings-nul)
@@ -405,11 +406,45 @@ recover it *to*. See `process.h` and `docs/roadmap.md`.
 `elftest` used to be this file's other example (same raw-`iretq`
 mechanism, via `hello.elf`) until the ELF64-to-`/bin` migration folded
 it into the generic `run hello` path (see this file's entry on that
-migration, and CHANGELOG.md's `[Unreleased]`) -- `hello.elf`'s fault is
-now caught and recovered by `process_run_ring3()` like any other
-`/bin` binary's crash, at the cost of losing test coverage for the raw
-`iretq` entry path specifically. `ring3test` is the one remaining
-place that path gets exercised.
+migration, and CHANGELOG.md's `[Unreleased]`), at the cost of losing
+test coverage for the raw `iretq` entry path specifically. `ring3test`
+is the one remaining place that path gets exercised. `hello.elf` no
+longer faults at all -- it's a plain greet-and-exit program now; see
+[hello.c stopped faulting on purpose and started faulting by
+accident](#helloc-stopped-faulting-on-purpose-and-started-faulting-by-accident)
+for what happened in between.
+
+## `hello.c` stopped faulting on purpose and started faulting by accident
+
+`run hello` page-faulted (`CR2=0x8000100000`, `RIP=0x800000000a`) for
+some time before anyone chased it, and it read like a broken or stale
+binary. It wasn't: `hello.c` predated syscalls, so with no way to
+print, it proved it had run by writing a marker to a fixed address the
+kernel would read back (`USERLAND_MARKER_ADDR`) and then executing
+`hlt` to fault deliberately. The `elftest` command mapped a page at
+that address specially. When the ELF64-to-`/bin` migration folded
+`elftest` into the generic `run hello` path, the harness went away and
+the assumption didn't -- so the binary faulted on the marker write, one
+instruction *before* the `hlt` it existed to demonstrate. A deliberate
+fault had quietly become an accidental one, at a different address, for
+a different reason, while still looking like the expected outcome.
+
+Fixed by making `hello.c` a real program (greet via `SYS_WRITE`, exit
+0) rather than restoring the harness: `ring3test` still covers the
+raw-`iretq` entry path, `crash_test`/`nx_test` still cover deliberate
+faults and their recovery, and the binary named `hello` now does what
+its name says. `USERLAND_MARKER_ADDR` was deleted along with it -- it
+had no other user, and it aliased `ELF_RUN_HEAP_VADDR` (`elf_run.c`)
+exactly, two constants picked independently at the same address, so a
+future read-back test wanting the mechanism back needs its own address
+clear of the heap and stack rather than that one.
+
+Worth generalising: **a test binary whose harness is removed doesn't
+report that it lost its harness -- it reports whatever failure the
+missing harness causes.** The migration's own writeup listed exactly
+what coverage was being traded away and still missed this, because the
+lost piece wasn't the test, it was a page mapping the test depended on.
+See CHANGELOG.md's `[Unreleased]`.
 
 ## `/etc` is one shared `toyos.conf` by default, not a file per setting
 
@@ -1283,7 +1318,12 @@ binaries, no per-binary kernel harness. Two didn't:
   tradeoff, made deliberately (user's call, weighing one narrow bit of
   coverage against one less special case) rather than accidentally.
   `ring3test` remains as the one place the raw-`iretq` path is still
-  exercised at all (see this file's entry above).
+  exercised at all (see this file's entry above). What this migration
+  did *not* notice: `elftest` had also been mapping a page at
+  `USERLAND_MARKER_ADDR` for `hello.elf` to write to, and the generic
+  path doesn't -- see [hello.c stopped faulting on purpose and started
+  faulting by
+  accident](#helloc-stopped-faulting-on-purpose-and-started-faulting-by-accident).
 
 `ring3test` itself was never a candidate to fold in -- it uses no ELF
 file whatsoever, there's nothing to seed.

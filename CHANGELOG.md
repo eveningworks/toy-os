@@ -30,6 +30,38 @@ using `## [x.y.z] - date` headings is here.
 
 ## [Unreleased]
 
+### Fixed
+- **`run hello` page-faulted -- a deliberate fault that had quietly
+  become an accidental one.** Found while testing `strace` (above);
+  fixed on request afterwards.
+  - `userland/hello.c` predates syscalls. With no way to print, it
+    proved it had run by writing a marker to a fixed address the kernel
+    read back (`USERLAND_MARKER_ADDR`) and then executing `hlt` to fault
+    on purpose. The old `elftest` command mapped a page at that address
+    specially. The ELF64-to-`/bin` migration folded `elftest` into the
+    generic `run hello` path -- which maps no such page -- so the binary
+    faulted on the marker write, one instruction *before* the `hlt` it
+    existed to demonstrate. Confirmed by disassembly: `RIP=0x800000000a`
+    is exactly `movl $0xc0ffee,(%rax)`, `CR2=0x8000100000` is the
+    marker. It looked like a crashing binary; it was a binary whose
+    harness had been removed from under it.
+  - `USERLAND_MARKER_ADDR` was also `ELF_RUN_HEAP_VADDR` -- the same
+    address, picked independently in two files -- so restoring the
+    mapping would have put it straight on top of `sbrk`'s first page.
+  - Fixed by making `hello.c` a real program (greet via `SYS_WRITE`,
+    exit 0) instead of restoring the harness: `ring3test` still covers
+    the raw-`iretq` entry path and `crash_test`/`nx_test` still cover
+    deliberate faults and their recovery, so nothing was lost, and the
+    binary named `hello` now does what its name says. It's also the
+    smallest complete example of what a `/bin` binary is.
+    `USERLAND_MARKER_ADDR` was deleted (no other user);
+    `userland_contract.h` stays, with a comment recording why the
+    constant went and why a future read-back test needs a different
+    address.
+  - Verified: `run hello` prints and exits 0, and `strace hello` shows
+    exactly `write(1, ..., 42) = 42` then `exit(0) = ?` -- two
+    syscalls, which is the whole program.
+
 ### Added
 - **`strace <binary>` -- Linux-style syscall tracing.** Asked for as
   "can we implement strace like in linux".

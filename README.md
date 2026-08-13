@@ -475,10 +475,10 @@ userland/        -- freestanding ring-3 test programs (no libc, no
                      Makefile's `seed` target, tools/tfs2_writer.py, and
                      docs/decisions.md) and run via the shell's
                      `run <name>` -- not loaded as GRUB modules anymore.
-                     hello.c deliberately executes a privileged
-                     instruction from ring 3 (a fault the kernel
-                     recovers from and reports, same mechanism
-                     crash_test.c also exercises on purpose); exit_test.c
+                     hello.c is the smallest one -- greet via SYS_WRITE,
+                     exit(0) -- and the one to read first; crash_test.c
+                     and nx_test.c are the ones that deliberately fault,
+                     to show the kernel recovering; exit_test.c
                      and write_test.c call real syscalls and return
                      cleanly instead -- write_test.c is the only one
                      that produces its own console output. write_bad_test.c
