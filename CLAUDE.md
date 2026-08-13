@@ -110,7 +110,16 @@ technical conventions below:
   helpers, same peer-level pattern as `wm/wm.h`. Both are deliberately
   minimal on purpose -- see their top comments before adding to them.
   Add a new widget primitive or theme color only once a second real
-  caller needs it, not preemptively. (`apps/widgets.h`/`.c` -- the
+  caller needs it, not preemptively. **And once a widget exists, its
+  BEHAVIOUR belongs to it, not to the apps** -- input handling,
+  hit-testing and geometry live in `apps/ui/`, and an app configures
+  (colours, visibility policy, step sizes, who owns an ambiguous event)
+  and forwards events rather than reimplementing them. That's a standing
+  rule with an escape hatch, not an absolute: see
+  `docs/gui-guidelines.md`'s "Behaviour belongs to the component"
+  section for when not to, and `apps/ui/ui_textview.h` for the worked
+  example -- scrolling used to be copy-pasted into three apps, and the
+  third copy shipped a scrollbar that drew and did nothing. (`apps/widgets.h`/`.c` -- the
   single file all of `apps/ui/` was split out of -- no longer exists;
   see `docs/decisions.md`.)
 - **The window manager lives in `apps/wm/`** -- the core event

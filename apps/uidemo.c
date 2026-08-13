@@ -85,6 +85,7 @@ static int row_status(void)  { return row_scroll() + scroll_h() + ROW_GAP; }
 #define TBX_W (24 * gfx_char_w())
 #define SCROLL_W (34 * gfx_char_w())
 #define SCROLLBAR_W 12
+#define VIEW_W (SCROLL_W + SCROLLBAR_W)
 
 static const char *const BTN_LABELS[BTN_COUNT] = { "One", "Two", "Three" };
 static const char *const RADIO_LABELS[] = { "Red", "Green", "Blue", "Grey" };
@@ -95,7 +96,7 @@ struct uidemo_state {
     struct ui_button_group group;
     struct ui_radio_list radio;
     struct ui_textbox textbox;
-    struct text_scrollback log;
+    struct ui_textview view;   // scrollback + scrollbar + all its input handling
     int checked[2];
     int radio_sel;
     int hover_name;      // index into WIDGET_NAMES, or -1
@@ -106,11 +107,6 @@ struct uidemo_state {
     // "cancel btn", which is exactly the sort of noise a log-asserting
     // test trips over.
     int armed;
-    // Set by uidemo_drag_start() when the press grabbed the scrollbar
-    // thumb; the offset within the thumb that was grabbed, so the drag
-    // moves the thumb WITH the cursor rather than snapping its top to
-    // it. Same shape as notepad.c's scrollbar_grab_offset.
-    int thumb_grab;
     char status[64];
 };
 
@@ -136,14 +132,9 @@ static void set_status(const char *s) {
     k_strcpy(g_state.status, s);
 }
 
-static void scroll_metrics(struct window *win, int *total, int *visible) {
-    (void)win;
-    widget_scrollback_metrics(&g_state.log, SCROLL_W, scroll_h(), total, visible);
-}
-
 static void log_scroll(const char *how) {
     char msg[48];
-    k_snprintf(msg, sizeof msg, "scroll %d %s", g_state.log.scroll_offset, how);
+    k_snprintf(msg, sizeof msg, "scroll %d %s", g_state.view.tb.scroll_offset, how);
     logline(msg);
     set_status(msg);
 }
@@ -162,8 +153,7 @@ static enum widget_id widget_at(int cx, int cy) {
     if (ui_radio_list_hit(&g_state.radio, PAD, row_radio(), cx, cy) >= 0) return W_RADIO;
     if (ui_textbox_hit(&g_state.textbox, cx, cy)) return W_TEXTBOX;
 
-    if (cx >= PAD && cx < PAD + SCROLL_W + SCROLLBAR_W &&
-        cy >= row_scroll() && cy < row_scroll() + scroll_h()) return W_SCROLLBACK;
+    if (ui_textview_hit(&g_state.view, cx, cy)) return W_SCROLLBACK;
     return W_NONE;
 }
 
@@ -182,6 +172,7 @@ static void layout(void) {
                                 BTN_W, btn_h());
     }
     ui_textbox_set_geometry(&g_state.textbox, PAD, row_textbox(), TBX_W, tbx_h());
+    ui_textview_set_geometry(&g_state.view, PAD, row_scroll(), VIEW_W, scroll_h());
 }
 
 void uidemo_open(struct window *win) {
@@ -202,15 +193,21 @@ void uidemo_open(struct window *win) {
     ui_textbox_init(&g_state.textbox, 0, 0, 0, 0, "type here",
                      THEME_WHITE, THEME_TEXT, THEME_BORDER);
 
-    widget_scrollback_init(&g_state.log);
-    widget_scrollback_set_color(&g_state.log, VGA_BLACK);
+    ui_textview_init(&g_state.view, PAD, row_scroll(), VIEW_W, scroll_h(),
+                      THEME_WHITE, THEME_PANEL_BG, THEME_BORDER, THEME_SELECTION_BG);
+    // Body drags pan this view: UI Demo has no cursor or selection of
+    // its own, so there is nothing for a body press to conflict with,
+    // and it makes the third input route demonstrable. Notepad and
+    // Terminal keep the default (body presses belong to the app).
+    g_state.view.body = UI_TEXTVIEW_BODY_PAN;
+    widget_scrollback_set_color(&g_state.view.tb, VGA_BLACK);
     // Numbered lines so a test can read the scroll offset straight off
     // a screenshot, and so scrolling is visibly doing something.
     for (int i = 1; i <= 20; i++) {
         char line[32];
         k_snprintf(line, sizeof line, "line %u of 20", (unsigned)i);
-        for (const char *c = line; *c; c++) widget_scrollback_putc(&g_state.log, *c);
-        widget_scrollback_putc(&g_state.log, '\n');
+        for (const char *c = line; *c; c++) widget_scrollback_putc(&g_state.view.tb, *c);
+        widget_scrollback_putc(&g_state.view.tb, '\n');
     }
 
     g_state.checked[0] = g_state.checked[1] = 0;
@@ -242,15 +239,7 @@ void uidemo_draw(struct window *win) {
 
     ui_textbox_draw(&g_state.textbox, cx, cy);
 
-    int sx = cx + PAD, sy = cy + row_scroll();
-    gfx_fill_rect(sx, sy, SCROLL_W, scroll_h(), THEME_WHITE);
-    widget_scrollback_draw(&g_state.log, sx, sy, SCROLL_W, scroll_h(),
-                            THEME_WHITE, THEME_SELECTION_BG, 0);
-    int total = 0, visible = 0;
-    widget_scrollback_metrics(&g_state.log, SCROLL_W, scroll_h(), &total, &visible);
-    widget_scrollbar_draw(sx + SCROLL_W, sy, SCROLLBAR_W, scroll_h(),
-                           total, visible, g_state.log.scroll_offset,
-                           THEME_PANEL_BG, THEME_BORDER);
+    ui_textview_draw(&g_state.view, cx, cy);
 
     // Clipped, like everything else in a fixed box -- the status string
     // is short but the rule is the rule (docs/gui-guidelines.md).
@@ -299,6 +288,7 @@ void uidemo_release(struct window *win) {
         set_status("press cancelled");
     }
     g_state.armed = 0;
+    ui_textview_drag_end(&g_state.view);
     window_invalidate(win);
 }
 
@@ -326,18 +316,9 @@ void uidemo_click(struct window *win, int cx, int cy) {
             set_status(msg);
         }
     } else if (w == W_SCROLLBACK) {
-        // Reached only for a track click: a thumb press was claimed by
-        // uidemo_drag_start() and never becomes an on_click.
-        int total, visible;
-        scroll_metrics(win, &total, &visible);
-        enum scrollbar_zone zone =
-            widget_scrollbar_hit(PAD + SCROLL_W, 0, SCROLLBAR_W, scroll_h(),
-                                  total, visible, g_state.log.scroll_offset,
-                                  cx, cy - row_scroll());
-        int page = visible > 1 ? visible - 1 : 1;
-        if (zone == SCROLLBAR_ZONE_ABOVE)      widget_scrollback_scroll(&g_state.log, page);
-        else if (zone == SCROLLBAR_ZONE_BELOW) widget_scrollback_scroll(&g_state.log, -page);
-        if (zone == SCROLLBAR_ZONE_ABOVE || zone == SCROLLBAR_ZONE_BELOW) log_scroll("page");
+        // Track paging. A thumb press was claimed by drag_start() and
+        // never reaches on_click; a body press pans, likewise.
+        if (ui_textview_click(&g_state.view, cx, cy)) log_scroll("page");
     } else if (w == W_TEXTBOX) {
         ui_textbox_set_active(&g_state.textbox, 1);
         logline("focus textbox");
@@ -356,10 +337,8 @@ void uidemo_click(struct window *win, int cx, int cy) {
 // it drew the bar and left it inert, while this file's own log grammar
 // advertised a `scroll` event it never emitted.
 
-#define WHEEL_LINES 3
-
 void uidemo_wheel(struct window *win, int delta) {
-    widget_scrollback_scroll(&g_state.log, delta * WHEEL_LINES);
+    if (!ui_textview_wheel(&g_state.view, delta)) return;
     log_scroll("wheel");
     window_invalidate(win);
 }
@@ -370,32 +349,13 @@ void uidemo_wheel(struct window *win, int delta) {
 int uidemo_drag_start(struct window *win, int cx, int cy) {
     (void)win;
     layout();
-    if (widget_at(cx, cy) != W_SCROLLBACK) return 0;
-
-    int total, visible;
-    scroll_metrics(win, &total, &visible);
-    int local_y = cy - row_scroll();
-    enum scrollbar_zone zone =
-        widget_scrollbar_hit(PAD + SCROLL_W, 0, SCROLLBAR_W, scroll_h(),
-                              total, visible, g_state.log.scroll_offset, cx, local_y);
-    if (zone != SCROLLBAR_ZONE_THUMB) return 0;
-
-    int thumb_y, thumb_h;
-    widget_scrollbar_thumb_rect(0, scroll_h(), total, visible,
-                                 g_state.log.scroll_offset, &thumb_y, &thumb_h);
-    g_state.thumb_grab = local_y - thumb_y;
-    return 1;
+    return ui_textview_drag_start(&g_state.view, cx, cy);
 }
 
 void uidemo_drag(struct window *win, int cx, int cy) {
-    (void)cx;
     layout();
-    int total, visible;
-    scroll_metrics(win, &total, &visible);
-    g_state.log.scroll_offset =
-        widget_scrollbar_offset_for_drag(0, scroll_h(), total, visible,
-                                          cy - row_scroll(), g_state.thumb_grab);
-    log_scroll("thumb");
+    ui_textview_drag(&g_state.view, cx, cy);
+    log_scroll(g_state.view.thumb_grab >= 0 ? "thumb" : "pan");
     window_invalidate(win);
 }
 

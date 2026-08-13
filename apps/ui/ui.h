@@ -28,6 +28,7 @@
 #include "ui_primitives.h"
 #include "ui_scrollback.h"
 #include "ui_scrollbar.h"
+#include "ui_textview.h"
 #include "ui_checkbox.h"
 #include "ui_button.h"
 #include "ui_button_group.h"

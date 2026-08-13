@@ -256,6 +256,17 @@ pulled in together via the umbrella include `apps/ui/ui.h`
 past "two small functions" (see `docs/decisions.md`). `apps/widgets.h`/
 `.c` no longer exist.
 
+**The standing rule for anything here: the WIDGET owns behaviour, the
+APP owns configuration.** Input handling, hit-testing, geometry and
+state transitions belong in `apps/ui/`; what an app gets to decide is
+exposed as fields or setters (visibility policy, colours, step sizes,
+who owns an ambiguous event). An app forwarding
+`if (ui_thing_click(&t, cx, cy)) window_invalidate(win);` is the shape
+to aim for. Where two apps want different behaviour, add a flag to the
+widget rather than a second copy. `apps/ui/ui_textview.h` is the worked
+example and `docs/gui-guidelines.md` has the full rule, including the
+cases where not following it is the right call.
+
 - **`ui_primitives.h`/`.c`** -- the original two functions, still the
   base every other widget in this directory builds on:
   - `int widget_hit(int x, int y, int w, int h, int px, int py)` -- a

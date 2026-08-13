@@ -77,19 +77,16 @@
 // widgets.h's comment on why that's cheap enough to just always do).
 #define TERM_COLS 70
 #define TERM_ROWS 20
-// Width of the scrollbar strip reserved along the content area's right
-// edge -- scales with font size like everything else here (see
-// TOOLBAR_H in notepad.c for the same pattern). Below TERM_MIN_W_FOR_SCROLLBAR
-// (an arbitrarily-picked "would leave basically no room for text" content
-// width), the scrollbar is skipped entirely and text uses the full width --
-// see term_layout().
-#define TERM_SCROLLBAR_W (gfx_char_w() + 4)
-#define TERM_MIN_W_FOR_SCROLLBAR (TERM_SCROLLBAR_W * 3)
+// The scrollbar strip's width, and the content width below which it's
+// hidden entirely, used to be defined here (and identically in
+// notepad.c). Both belong to the control now -- apps/ui/ui_textview.h,
+// whose defaults are exactly the values this file used, so nothing
+// moved on screen. Override tv.bar_w / tv.min_text_w to change them.
 
 // Single static instance -- like every other GUI app here, only one
 // window of it can be open at a time (see wm.c's open_app).
 struct terminal_state {
-    struct text_scrollback tb;
+    struct ui_textview view;   // text + scrollbar + scrolling, see apps/ui/ui_textview.h
 
     // The line being edited. All the editing logic (motion, kill ring,
     // undo, the whole bash keymap) is kernel/lib/klineedit.c's, shared
@@ -115,7 +112,6 @@ struct terminal_state {
     int hist_index;       // like shell.c's shell_read_line(): one past the
                            // newest = "current blank/in-progress line"
     char saved_current[TERM_LINE_MAX];
-    int scrollbar_grab_offset; // set by terminal_drag_start(), read by terminal_drag() -- see widgets.h's widget_scrollbar_thumb_rect()
 
     // ---- `edit`/`nano` sub-mode (see this file's top comment) ----
     int in_editor;
@@ -203,8 +199,8 @@ static int is_run_allowed(const char *name) {
 }
 
 static void term_write(struct terminal_state *st, const char *s, enum vga_color fg) {
-    widget_scrollback_set_color(&st->tb, fg);
-    for (const char *p = s; *p; p++) widget_scrollback_putc(&st->tb, *p);
+    widget_scrollback_set_color(&st->view.tb, fg);
+    for (const char *p = s; *p; p++) widget_scrollback_putc(&st->view.tb, *p);
 }
 
 // Defined further down, next to the rest of the line-painting; needed
@@ -214,17 +210,17 @@ static void term_park_at_end(struct terminal_state *st);
 static void term_run_line(struct window *win, struct terminal_state *st, char *line);
 
 static void term_print_prompt(struct terminal_state *st) {
-    widget_scrollback_set_color(&st->tb, VGA_LIGHT_GREEN);
-    for (const char *p = shell_cwd(); *p; p++) widget_scrollback_putc(&st->tb, *p);
-    widget_scrollback_putc(&st->tb, '>');
-    widget_scrollback_putc(&st->tb, ' ');
-    widget_scrollback_set_color(&st->tb, VGA_LIGHT_GREY);
+    widget_scrollback_set_color(&st->view.tb, VGA_LIGHT_GREEN);
+    for (const char *p = shell_cwd(); *p; p++) widget_scrollback_putc(&st->view.tb, *p);
+    widget_scrollback_putc(&st->view.tb, '>');
+    widget_scrollback_putc(&st->view.tb, ' ');
+    widget_scrollback_set_color(&st->view.tb, VGA_LIGHT_GREY);
 }
 
 // ---- vga_sink glue: lets shell_dispatch()'s vga_write()/vga_putc()/
 // etc calls land in this window's scrollback widget instead of the
 // physical console (see vga.h's struct vga_sink comment for the
-// mechanism). `ctx` is always &g_terminal.tb.
+// mechanism). `ctx` is always &g_terminal.view.tb.
 static void sink_putc(void *ctx, char c) { widget_scrollback_putc((struct text_scrollback *)ctx, c); }
 static void sink_backspace(void *ctx) { widget_scrollback_backspace((struct text_scrollback *)ctx); }
 static void sink_clear(void *ctx) { widget_scrollback_clear((struct text_scrollback *)ctx); }
@@ -280,18 +276,18 @@ static void term_complete_line(struct terminal_state *st) {
     if (r.count <= 1) return;
 
     term_park_at_end(st);
-    widget_scrollback_putc(&st->tb, '\n');
+    widget_scrollback_putc(&st->view.tb, '\n');
     int col = 0;
     for (int i = 0; i < r.count; i++) {
-        for (const char *p = r.candidates[i]; *p; p++) widget_scrollback_putc(&st->tb, *p);
+        for (const char *p = r.candidates[i]; *p; p++) widget_scrollback_putc(&st->view.tb, *p);
         int clen = (int)k_strlen(r.candidates[i]);
         int pad = clen >= 15 ? 1 : 16 - clen;
-        for (int p = 0; p < pad; p++) widget_scrollback_putc(&st->tb, ' ');
-        if (++col == 4) { widget_scrollback_putc(&st->tb, '\n'); col = 0; }
+        for (int p = 0; p < pad; p++) widget_scrollback_putc(&st->view.tb, ' ');
+        if (++col == 4) { widget_scrollback_putc(&st->view.tb, '\n'); col = 0; }
     }
-    if (col != 0) widget_scrollback_putc(&st->tb, '\n');
+    if (col != 0) widget_scrollback_putc(&st->view.tb, '\n');
     if (r.truncated) {
-        for (const char *p = "... (more matches not shown)\n"; *p; p++) widget_scrollback_putc(&st->tb, *p);
+        for (const char *p = "... (more matches not shown)\n"; *p; p++) widget_scrollback_putc(&st->view.tb, *p);
     }
 
     term_print_prompt(st);
@@ -311,13 +307,13 @@ static void term_complete_line(struct terminal_state *st) {
 static void term_repaint_line(struct terminal_state *st) {
     // Back to the append point first -- backspace works there.
     for (int i = st->shown_cursor; i < st->shown_len; i++) {
-        widget_scrollback_cursor_right(&st->tb);
+        widget_scrollback_cursor_right(&st->view.tb);
     }
-    for (int i = 0; i < st->shown_len; i++) widget_scrollback_backspace(&st->tb);
+    for (int i = 0; i < st->shown_len; i++) widget_scrollback_backspace(&st->view.tb);
 
-    widget_scrollback_set_color(&st->tb, VGA_LIGHT_GREY);
-    for (int i = 0; i < st->ed.len; i++) widget_scrollback_putc(&st->tb, st->ed.buf[i]);
-    for (int i = st->ed.cursor; i < st->ed.len; i++) widget_scrollback_cursor_left(&st->tb);
+    widget_scrollback_set_color(&st->view.tb, VGA_LIGHT_GREY);
+    for (int i = 0; i < st->ed.len; i++) widget_scrollback_putc(&st->view.tb, st->ed.buf[i]);
+    for (int i = st->ed.cursor; i < st->ed.len; i++) widget_scrollback_cursor_left(&st->view.tb);
 
     st->shown_len = st->ed.len;
     st->shown_cursor = st->ed.cursor;
@@ -330,7 +326,7 @@ static void term_repaint_line(struct terminal_state *st) {
 // moving away can't erase anything.
 static void term_park_at_end(struct terminal_state *st) {
     for (int i = st->shown_cursor; i < st->shown_len; i++) {
-        widget_scrollback_cursor_right(&st->tb);
+        widget_scrollback_cursor_right(&st->view.tb);
     }
     st->shown_cursor = st->shown_len;
 }
@@ -392,7 +388,7 @@ static void term_search_key(struct window *win, struct terminal_state *st, int k
         const char *match = st->search_match >= 0 ? st->history[st->search_match] : "";
         term_search_end(st, match);
         term_park_at_end(st);
-        widget_scrollback_putc(&st->tb, '\n');
+        widget_scrollback_putc(&st->view.tb, '\n');
         k_strlcpy(st->line, st->ed.buf, sizeof(st->line));
         term_history_add(st, st->line);
         term_run_line(win, st, st->line);
@@ -489,7 +485,7 @@ static void term_spawn(struct window *win, struct terminal_state *st,
     }
 
     static const struct vga_sink term_sink = {
-        .ctx = &g_terminal.tb, .putc = sink_putc, .backspace = sink_backspace,
+        .ctx = &g_terminal.view.tb, .putc = sink_putc, .backspace = sink_backspace,
         .clear = sink_clear, .set_color = sink_set_color, .rows = sink_rows,
     };
     st->saved_sink = vga_set_sink(&term_sink);
@@ -639,7 +635,7 @@ static void term_run_line(struct window *win, struct terminal_state *st, char *l
     }
 
     static const struct vga_sink term_sink = {
-        .ctx = &g_terminal.tb, .putc = sink_putc, .backspace = sink_backspace,
+        .ctx = &g_terminal.view.tb, .putc = sink_putc, .backspace = sink_backspace,
         .clear = sink_clear, .set_color = sink_set_color, .rows = sink_rows,
     };
     shell_dispatch(line, &term_sink);
@@ -648,7 +644,7 @@ static void term_run_line(struct window *win, struct terminal_state *st, char *l
 // wm.h's window_start_process() callback (via gui_apps.h's
 // on_process_exit) -- fires once wm_run()'s per-frame poll of the
 // process term_spawn() started reaches a terminal result. The
-// process's own output already streamed into st->tb in real time (see
+// process's own output already streamed into st->view.tb in real time (see
 // term_spawn()'s comment) -- this only needs to restore whatever sink
 // was active before (vga.h's struct vga_sink doc comment on why a
 // stale sink left installed is dangerous), print the exit code the
@@ -680,20 +676,25 @@ void terminal_default_size(int *w, int *h) {
 // agree on exactly the same geometry widget_scrollback_draw() actually
 // used to render (a mismatch there would mean scrolling by the wrong
 // page size, or hit-testing against the wrong column count).
+// Positions the view over the whole content area and reports the TEXT
+// width its callers measure against. The reserve-a-strip-if-needed rule
+// moved into the control (ui_textview.h's UI_SCROLLBAR_AUTO); this asks
+// rather than recomputing, so there is one answer instead of two.
 static void term_layout(struct window *win, int *out_text_w, int *out_ch, int *out_show_scrollbar) {
+    struct terminal_state *st = (struct terminal_state *)window_get_state(win);
     int cw = window_content_w(win);
     *out_ch = window_content_h(win);
-    if (cw > TERM_MIN_W_FOR_SCROLLBAR) {
-        *out_show_scrollbar = 1;
-        *out_text_w = cw - TERM_SCROLLBAR_W;
-    } else {
-        *out_show_scrollbar = 0;
-        *out_text_w = cw;
-    }
+    ui_textview_set_geometry(&st->view, 0, 0, cw, *out_ch);
+    *out_text_w = ui_textview_text_w(&st->view);
+    *out_show_scrollbar = ui_textview_scrollbar_visible(&st->view);
 }
 
 void terminal_open(struct window *win) {
-    widget_scrollback_init(&g_terminal.tb);
+    // Colours are the app's business; scrolling is the control's.
+    ui_textview_init(&g_terminal.view, 0, 0, 0, 0,
+                      gfx_rgb(0, 0, 0), gfx_rgb(15, 15, 15), gfx_rgb(90, 90, 90),
+                      THEME_SELECTION_BG);
+    g_terminal.view.show_caret = 1;
     kline_init(&g_terminal.ed);
     g_terminal.shown_len = 0;
     g_terminal.shown_cursor = 0;
@@ -751,14 +752,8 @@ void terminal_draw(struct window *win) {
     int text_w, ch, show_scrollbar;
     term_layout(win, &text_w, &ch, &show_scrollbar);
 
-    widget_scrollback_draw(&st->tb, cx, cy, text_w, ch, gfx_rgb(0, 0, 0), THEME_SELECTION_BG, 1);
-
-    if (show_scrollbar) {
-        int total_lines, visible_rows;
-        widget_scrollback_metrics(&st->tb, text_w, ch, &total_lines, &visible_rows);
-        widget_scrollbar_draw(cx + text_w, cy, TERM_SCROLLBAR_W, ch, total_lines, visible_rows,
-                               st->tb.scroll_offset, gfx_rgb(15, 15, 15), gfx_rgb(90, 90, 90));
-    }
+    (void)text_w; (void)ch; (void)show_scrollbar;
+    ui_textview_draw(&st->view, cx, cy);
 }
 
 // Scrollbar track clicks that aren't on the thumb (paging up/down) --
@@ -769,20 +764,7 @@ void terminal_click(struct window *win, int cx, int cy) {
     if (st->in_editor) return; // no scrollbar in editor sub-mode this pass -- see this file's top comment
     int text_w, ch, show_scrollbar;
     term_layout(win, &text_w, &ch, &show_scrollbar);
-    if (!show_scrollbar) return;
-
-    int total_lines, visible_rows;
-    widget_scrollback_metrics(&st->tb, text_w, ch, &total_lines, &visible_rows);
-    enum scrollbar_zone zone = widget_scrollbar_hit(text_w, 0, TERM_SCROLLBAR_W, ch,
-                                                      total_lines, visible_rows, st->tb.scroll_offset, cx, cy);
-    int page = visible_rows > 1 ? visible_rows - 1 : 1;
-    if (zone == SCROLLBAR_ZONE_ABOVE) {
-        widget_scrollback_scroll(&st->tb, page);
-    } else if (zone == SCROLLBAR_ZONE_BELOW) {
-        widget_scrollback_scroll(&st->tb, -page);
-    } else {
-        return; // click landed in the text area (or the bar isn't shown) -- nothing to do
-    }
+    if (!ui_textview_click(&st->view, cx, cy)) return; // not the track
     window_invalidate(win);
 }
 
@@ -791,18 +773,7 @@ int terminal_drag_start(struct window *win, int cx, int cy) {
     if (st->in_editor) return 0;
     int text_w, ch, show_scrollbar;
     term_layout(win, &text_w, &ch, &show_scrollbar);
-    if (!show_scrollbar) return 0;
-
-    int total_lines, visible_rows;
-    widget_scrollback_metrics(&st->tb, text_w, ch, &total_lines, &visible_rows);
-    enum scrollbar_zone zone = widget_scrollbar_hit(text_w, 0, TERM_SCROLLBAR_W, ch,
-                                                      total_lines, visible_rows, st->tb.scroll_offset, cx, cy);
-    if (zone != SCROLLBAR_ZONE_THUMB) return 0;
-
-    int thumb_y, thumb_h;
-    widget_scrollbar_thumb_rect(0, ch, total_lines, visible_rows, st->tb.scroll_offset, &thumb_y, &thumb_h);
-    st->scrollbar_grab_offset = cy - thumb_y;
-    return 1;
+    return ui_textview_drag_start(&st->view, cx, cy);
 }
 
 void terminal_drag(struct window *win, int cx, int cy) {
@@ -810,24 +781,17 @@ void terminal_drag(struct window *win, int cx, int cy) {
     struct terminal_state *st = (struct terminal_state *)window_get_state(win);
     int text_w, ch, show_scrollbar;
     term_layout(win, &text_w, &ch, &show_scrollbar);
-    (void)show_scrollbar; // a drag only ever starts while true; harmless either way if the window shrank mid-drag
-
-    int total_lines, visible_rows;
-    widget_scrollback_metrics(&st->tb, text_w, ch, &total_lines, &visible_rows);
-    st->tb.scroll_offset = widget_scrollbar_offset_for_drag(0, ch, total_lines, visible_rows,
-                                                              cy, st->scrollbar_grab_offset);
+    ui_textview_drag(&st->view, cx, cy);
     window_invalidate(win);
 }
 
-// 3 lines per notch -- an ordinary desktop-scrolling convention (fast
-// enough that scrolling any real distance doesn't take forever, without
-// blowing past a screenful in one notch on a short window).
-#define TERM_WHEEL_LINES 3
-
+// Wheel step is the control's setting now (ui_textview.h's wheel_lines,
+// 3 by default -- the same desktop convention this file's own constant
+// encoded, and Notepad's, and UI Demo's).
 void terminal_wheel(struct window *win, int delta) {
     struct terminal_state *st = (struct terminal_state *)window_get_state(win);
     if (st->in_editor) return; // no scrolling in editor sub-mode this pass
-    widget_scrollback_scroll(&st->tb, delta * TERM_WHEEL_LINES);
+    if (!ui_textview_wheel(&st->view, delta)) return;
     window_invalidate(win);
 }
 
@@ -871,8 +835,8 @@ void terminal_key(struct window *win, int key) {
 
     case KLINE_ACCEPT:
         term_park_at_end(st);
-        widget_scrollback_set_color(&st->tb, VGA_LIGHT_GREY);
-        widget_scrollback_putc(&st->tb, '\n');
+        widget_scrollback_set_color(&st->view.tb, VGA_LIGHT_GREY);
+        widget_scrollback_putc(&st->view.tb, '\n');
         k_strlcpy(st->line, st->ed.buf, sizeof(st->line));
         term_history_add(st, st->line);
         term_run_line(win, st, st->line); // may mutate st->line, hence the copy
@@ -882,7 +846,7 @@ void terminal_key(struct window *win, int key) {
         st->hist_index = st->history_count;
         // term_run_line() may have just switched this window into
         // editor sub-mode (`edit`/`nano`) -- if so, don't print another
-        // shell prompt into st->tb on top of it; terminal_key()'s own
+        // shell prompt into st->view.tb on top of it; terminal_key()'s own
         // in_editor branch above prints one when the user exits back.
         // Same idea for an async ls/run just started (st->running_pid
         // now set) -- terminal_process_exit() prints the next prompt
@@ -892,7 +856,7 @@ void terminal_key(struct window *win, int key) {
 
     case KLINE_CANCEL: // Ctrl-C
         term_park_at_end(st);
-        for (const char *p = "^C\n"; *p; p++) widget_scrollback_putc(&st->tb, *p);
+        for (const char *p = "^C\n"; *p; p++) widget_scrollback_putc(&st->view.tb, *p);
         kline_init(&st->ed);
         st->shown_len = 0;
         st->shown_cursor = 0;
@@ -914,7 +878,7 @@ void terminal_key(struct window *win, int key) {
         char keep[TERM_LINE_MAX];
         k_strlcpy(keep, st->ed.buf, sizeof(keep));
         int cursor = st->ed.cursor;
-        widget_scrollback_clear(&st->tb);
+        widget_scrollback_clear(&st->view.tb);
         term_print_prompt(st);
         st->shown_len = 0;
         st->shown_cursor = 0;
@@ -972,9 +936,9 @@ void terminal_key(struct window *win, int key) {
             int text_w, ch, show_scrollbar;
             term_layout(win, &text_w, &ch, &show_scrollbar);
             int total_lines, visible_rows;
-            widget_scrollback_metrics(&st->tb, text_w, ch, &total_lines, &visible_rows);
+            widget_scrollback_metrics(&st->view.tb, text_w, ch, &total_lines, &visible_rows);
             int page = visible_rows > 1 ? visible_rows - 1 : 1;
-            widget_scrollback_scroll(&st->tb, key == KEY_PAGE_UP ? page : -page);
+            widget_scrollback_scroll(&st->view.tb, key == KEY_PAGE_UP ? page : -page);
             break;
         }
         return; // genuinely unhandled -- nothing changed, no need to invalidate

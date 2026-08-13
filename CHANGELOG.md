@@ -117,6 +117,50 @@ using `## [x.y.z] - date` headings is here.
     unmoved throughout, and the highlight clearing both on moving off a
     button inside the window and on leaving the window entirely.
 
+- **`ui_textview`: scrolling belongs to the control, not to every app.**
+  Asked for after spotting scroll logic sitting in UI Demo and Notepad
+  -- a text view with scrollbars should behave like a real OS control,
+  where the app configures it rather than reimplementing it.
+  - Notepad, Terminal and UI Demo each carried the same ~20 lines:
+    decide whether the content overflows, reserve a strip on the right
+    if it does and there's room, page on a track click, remember a grab
+    offset and follow the thumb, multiply wheel notches by 3. Three
+    copies of one behaviour. **All three now call zero
+    `widget_scrollbar_*` functions between them.**
+  - The new control owns a `text_scrollback`, its scrollbar, the
+    geometry that splits them, and all the input handling.
+    `text_scrollback` stays the data structure and `ui_scrollbar` stays
+    the stateless primitive -- this composes them, the same way
+    `ui_button_group` composes `ui_button`.
+  - **What the app still decides**, as fields: scrollbar policy
+    (`AUTO`/`ALWAYS`/`NEVER`, where AUTO also hides the bar when the
+    view is too narrow -- Terminal's long-standing rule, now one
+    number instead of two copies), colours, bar width, wheel lines,
+    page overlap, whether a caret is drawn, and who owns a press in the
+    text body.
+  - That last one is the flag that made the migration possible at all:
+    `UI_TEXTVIEW_BODY_APP` declines body presses so Notepad keeps
+    click-to-position and drag-select, while `UI_TEXTVIEW_BODY_PAN`
+    lets UI Demo pan. Different behaviour as a flag on the widget, not
+    a second copy of the widget.
+  - Defaults are font-derived (`gfx_char_w() + 4`), exactly what
+    `TERM_SCROLLBAR_W`/`NOTEPAD_SCROLLBAR_W` were, so adopting the
+    control moved no pixels. A fixed constant would have silently
+    resized both bars and been wrong at every font size but one.
+  - **Testing caught a precedence bug in it**: with panning enabled, a
+    press on the scrollbar *track* fell through to the pan branch and
+    was swallowed, so the bar stopped paging the moment panning was
+    switched on. The bar outranks the body now, checked before it
+    rather than after.
+  - Verified all four routes on UI Demo (wheel, track paging, thumb
+    drag, pan) over the debug console, plus Terminal (`help` output,
+    scrollbar with a proportional thumb, wheel) and Notepad (30 typed
+    lines, caret, scrollbar, wheel).
+  - `docs/gui-guidelines.md` gained a standing rule this generalises:
+    **behaviour belongs to the component, configuration to the app** --
+    with the cases where not following it is right, since the request
+    was explicitly "unless there's a better reason".
+
 - **"UI Demo" -- a GUI app that exists to be tested against.** Asked
   for a well-documented calibration target with every UI component.
   - One of each `apps/ui/` widget -- a `ui_button_group`, two

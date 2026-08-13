@@ -8,6 +8,51 @@ This is a working document for writing apps and widgets, not a style
 manifesto. Where a rule exists because something went wrong, that's
 said, because the reason is the useful part.
 
+## Behaviour belongs to the component, not to the app
+
+**A widget owns how it behaves. An app owns whether and how it looks.**
+Unless there's a concrete reason otherwise, new interaction logic goes
+in `apps/ui/`, and the app configures it and forwards events -- it does
+not reimplement it.
+
+Concretely, when you add a control:
+
+- Input handling, hit-testing, geometry and state transitions live in
+  the widget. The app's callback should read like
+  `if (ui_thing_click(&t, cx, cy)) window_invalidate(win);`
+- What the app gets to decide is exposed as **fields or setters**:
+  visibility policy, colours, step sizes, and who owns an ambiguous
+  event. Never by copying the widget's internals into the app.
+- Colours come *from* the caller, so `apps/ui/` stays theme-agnostic
+  (see `ui_primitives.c`). "Configurable" does not mean the widget
+  reaches into `theme.h`.
+- If two apps need slightly different behaviour, that's a **flag on the
+  widget**, not a second copy. `ui_textview`'s `UI_TEXTVIEW_BODY_APP`
+  exists exactly so Notepad can keep click-to-position while UI Demo
+  pans.
+
+The worked example is `ui_textview` (`apps/ui/ui_textview.h`). Scrolling
+used to be every app's own job: Notepad, Terminal and UI Demo each
+carried the same ~20 lines of overflow check, strip reservation, track
+paging, thumb-grab bookkeeping and wheel arithmetic. Three copies meant
+three chances to get it wrong, and the newest of them shipped a
+scrollbar that drew perfectly and did nothing at all, because it had
+been given the layout half and not the input half. After the migration
+those three apps call zero `widget_scrollbar_*` functions between them.
+
+**The reason this is a rule and not a preference:** duplicated
+behaviour doesn't fail loudly. It rots one copy at a time, and the copy
+that rots is the one nobody is looking at. A control that owns its own
+behaviour cannot be half-implemented by its next caller.
+
+When NOT to follow it -- state the reason in a comment if you don't:
+behaviour genuinely specific to one app (Calculator's key-to-operator
+mapping isn't a widget), a single caller where the abstraction would be
+invented rather than extracted (this codebase's standing rule is that a
+mechanism arrives with its second real caller), or a case where hiding
+the logic would make the app's own code harder to follow than the
+duplication.
+
 ## The three interaction states
 
 Every clickable control has them, and `enum ui_state`
