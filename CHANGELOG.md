@@ -31,6 +31,35 @@ using `## [x.y.z] - date` headings is here.
 ## [Unreleased]
 
 ### Added
+- **`docs/roadmap.md` expanded: 10 new milestones and ~70 new steps**
+  across the existing ones, asked for as "add plenty now so we have more
+  things to implement and maybe fix". The file went 1,066 -> 1,541 lines;
+  the checkbox count went 81 -> 231 (16 done, 215 open).
+  - New milestones, each with both a checkbox list and a prose Details
+    section in the existing style: **21** TTY/virtual terminals, **22**
+    real mount points, **23** UTF-8 migration, **24** observability,
+    **25** kernel test harness, **26** demand paging & shared memory,
+    **27** UEFI boot, **28** data journaling & snapshots, **29**
+    benchmark suite, **30** a scripting language.
+  - Most of the new steps came out of things noticed while working in
+    the code rather than invented for the list: `find()` being a linear
+    `k_strcmp()` scan over 256 slots on every path lookup, the absence
+    of `fs_rename()`/`fs_truncate()`, 28-bit LBA capping the disk at
+    128 GiB, the shell parser having no quoting (so no argument can
+    contain a space), window resize only working from the bottom-right
+    grip, and the pile of single-threaded assumptions SMP would have to
+    audit (`tfs.c`'s static scratch buffers, `heap.c`'s free list,
+    `vga.c`'s cursor state).
+  - Two Backlog items were promoted out into real milestones -- VFS
+    mount points (22) and a benchmarking harness (29) -- and the Backlog
+    gained six smaller ones in their place.
+  - New intro note: **numbering is identity, not priority.** Milestones
+    keep their numbers because `CHANGELOG.md` and `docs/decisions.md`
+    refer to them by number, so renumbering would silently break those
+    references; the list is therefore roughly ordered but not strictly,
+    and several later milestones are worth pulling forward when they
+    unblock something (21's TTY layer gates half of 6's signal work;
+    25's test harness pays for itself before any driver milestone).
 - **Journal-batched flush** -- the last open performance item in
   Milestone 3, and it landed narrower than the roadmap framed it.
   `persist_record()` (`kernel/drivers/tfs.c`) took a synchronous
