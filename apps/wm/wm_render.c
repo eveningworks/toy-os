@@ -419,7 +419,7 @@ static void draw_taskbar(void) {
 // redraw_pending sources (menus, taskbar, dialogs, the once-a-second
 // clock) still fall back to a full-screen repaint for now -- a
 // deliberately scoped first cut, not the final word; see the roadmap's
-// Milestone 9 entry for what's still open.
+// Milestone 12 entry for what's still open.
 static int damage_x0, damage_y0, damage_x1, damage_y1;
 
 void wm_damage_rect(int x, int y, int w, int h) {

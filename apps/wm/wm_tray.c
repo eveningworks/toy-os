@@ -34,7 +34,7 @@ static int clock_tray_id = -1;
 // cursor_under, see wm_render.c) staying in sync with the real screen
 // -- scoping the tick to a narrow rect removed that implicit
 // once-a-second full resync. Matches every other still-unscoped piece
-// of WM chrome (menus, dialogs -- see docs/roadmap.md's Milestone 9
+// of WM chrome (menus, dialogs -- see docs/roadmap.md's Milestone 12
 // entry): safe and imprecise, never worse than before.
 static void tray_damage(void) {
     redraw_pending = 1;

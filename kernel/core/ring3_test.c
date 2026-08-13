@@ -92,7 +92,7 @@ void ring3_test_run(void) {
     vga_write("  stack: phys "); vga_write_hex(stack_phys);
     vga_write("  -> virt "); vga_write_hex(stack_vaddr); vga_putc('\n');
     vga_write("(phys and virt differ -- this is real address translation,\n");
-    vga_write(" not the identity-mapping shortcut Milestone 8 relied on)\n\n");
+    vga_write(" not the identity-mapping shortcut the original Milestone 8 relied on)\n\n");
 
     // Write the code bytes and patch in the address the ring-3 code will
     // actually use -- the VIRTUAL address, since that's all it can see

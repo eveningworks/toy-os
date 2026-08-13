@@ -1,4 +1,6 @@
-// Milestone 16: preemptive round-robin scheduler for ring-3 processes.
+// Preemptive round-robin scheduler for ring-3 processes -- built as the
+// ORIGINAL Milestone 16 (the old numbering in CHANGELOG-archive.md, not
+// docs/roadmap.md's current Milestone 16).
 //
 // DESIGN
 // ------

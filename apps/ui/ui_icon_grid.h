@@ -4,7 +4,7 @@
 // A small reusable icon-grid geometry + drag-to-reposition helper.
 // First caller: the desktop icon grid (apps/wm/desktop.c); built as a
 // standalone widget (not desktop.c-local) so a future file manager's
-// icon view (docs/roadmap.md Milestone 10) can reuse the same cell
+// icon view (docs/roadmap.md Milestone 13) can reuse the same cell
 // math and drag session instead of re-deriving it. Same split as the
 // rest of apps/ui/ (see ui_button.h's top comment): this module only
 // knows grid geometry (cell <-> pixel) and a drag session (which item,

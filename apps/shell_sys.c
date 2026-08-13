@@ -293,7 +293,7 @@ void cmd_about(void) {
                                   : "RAM only (no disk found -- files won't survive a reboot)\n");
 }
 
-// Milestone 19 (docs/roadmap.md): "the simplest possible output" -- a
+// Milestone 25 (docs/roadmap.md): "the simplest possible output" -- a
 // fixed tone, not a freq/duration-adjustable command, by explicit
 // request. 800Hz/200ms is just an audible, unremarkable beep, no
 // particular significance to the exact numbers.

@@ -77,7 +77,7 @@ using `## [x.y.z] - date` headings is here.
     and `only<TAB>` completes a PATH binary
     (`path_builtin_and_completion.png`).
 - **Tab completion in both shells** (`apps/completion.c`/`completion.h`,
-  Milestone 7's first item), asked for as "auto completion like in zsh".
+  Milestone 10's first item), asked for as "auto completion like in zsh".
   Behaviour follows zsh's default rather than bash's: one Tab extends
   the word as far as every candidate agrees, and if more than one
   candidate remains they're listed in columns and the prompt is redrawn
@@ -562,7 +562,7 @@ using `## [x.y.z] - date` headings is here.
   - Damage scoping: every registration/update/unregister call just sets
     `redraw_pending`, relying on the full-screen fallback -- matches
     every other still-unscoped piece of WM chrome (menus, dialogs, see
-    `docs/roadmap.md`'s Milestone 9 entry). An earlier version of this
+    `docs/roadmap.md`'s Milestone 12 entry). An earlier version of this
     entry scoped these to just the taskbar strip via `wm_damage_rect()`;
     see the "Fixed" entry directly below for the two real bugs that
     caused, and why it was reverted.
@@ -572,6 +572,39 @@ using `## [x.y.z] - date` headings is here.
     `screenshots/2026-08-12/tray-clock-*.png`.
 
 ### Changed
+- **`docs/roadmap.md` reordered so prerequisites come before the things
+  that need them**, asked for directly. Reading top to bottom is now a
+  workable build order: nothing depends on something further down.
+  - Milestones 4-30 were **renumbered in place** so position and number
+    agree again -- the file previously said "numbering is identity, not
+    priority" and let the order drift from the dependencies, which meant
+    the list read in an order you couldn't actually build in.
+    Milestones 1-3 kept their numbers (1 is released, 2-3 are in
+    progress with completed items this changelog already refers to by
+    number). A `Was -> Now` mapping table is in the roadmap's header.
+  - **Prerequisites were pulled forward, not dependents pushed back.**
+    Both satisfy the ordering; only one puts the fundamentals early. So
+    the test harness (was 25, now 4), benchmark suite (29 -> 5), TTY
+    layer (21 -> 6) and demand paging (26 -> 7) lead, and the process
+    work that needs them -- `fork()`/`exec()` (5 -> 8), signals
+    (6 -> 9), pipes and job control (7 -> 10) -- follows immediately
+    rather than landing near the end.
+  - Planned versions follow position, so releases would come out in the
+    order the work happens.
+  - Steps *within* Milestone 2 were reordered the same way: the
+    `linker.ld` section split now precedes the kernel W^X item it
+    unblocks, and the entropy source precedes kernel ASLR.
+  - Forward-looking `Milestone N` references in source comments and docs
+    were remapped (`wm_render.c`, `wm_tray.c`, `ui_icon_grid.h`,
+    `shell_sys.c`, `speaker.h`, `apps/README.md`, `docs/decisions.md`).
+    References in this file's *released* sections and in the
+    `CHANGELOG-archive*.md` files were deliberately left alone: they
+    record what was true when written. Those archives also use
+    "Milestone N" for a separate, much older numbering of their own, so
+    the three source comments citing *that* scheme (`scheduler.c`,
+    `scheduler.h`, `ring3_test.c`) now say "the original Milestone N"
+    to keep the two apart.
+
 - **`FS_MAX_FILES` 32 -> 256, an on-disk layout change (TFS2 v2 -> v3).**
   32 wasn't a comfortable margin any more, it was nearly gone: the
   shipped `disk.img` already used 25 slots (17 `/bin` binaries plus

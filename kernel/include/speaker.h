@@ -4,10 +4,10 @@
 #include <stdint.h>
 
 // Drives the PC speaker via PIT channel 2 + port 0x61's gate/data bits
-// (Milestone 19, docs/roadmap.md: "the simplest possible output").
+// (Milestone 25, docs/roadmap.md: "the simplest possible output").
 // Blocks for duration_ms, busy-waiting on pit_ticks() -- there's no
 // scheduler-aware sleep/delay primitive in this kernel yet (see
-// docs/roadmap.md's Milestone 15 item), so this can't yield to
+// docs/roadmap.md's Milestone 24 item), so this can't yield to
 // anything else while the tone plays, same as every other "wait a
 // while" spot in this codebase (kernel/drivers/ata.c's DMA wait,
 // apps/wm/start_menu.c's flash timing, etc -- all the same

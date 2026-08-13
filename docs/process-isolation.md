@@ -1,5 +1,10 @@
 # Process isolation
 
+> **Note on milestone numbers:** this document predates the current
+> `docs/roadmap.md` numbering and every "Milestone N" below refers to
+> the original pre-v0.1.0 scheme recorded in `CHANGELOG-archive.md`.
+> They are not the milestones in today's roadmap.
+
 The build-up of real ring0/ring3 privilege separation in toy-os, told
 as it happened -- what got added, what broke, and how each bug was
 found and fixed. Moved out of README.md (which now keeps just a short
@@ -36,7 +41,8 @@ any of it, and no privilege boundary. `kernel/core/gdt.c`,
   user-accessible in the kernel's own (shared) page tables, splitting the
   2MiB huge page that covers it into individual 4KiB pages first
   (everything else in that 2MiB region keeps its original
-  supervisor-only mapping, unchanged). Used by Milestone 8's version of
+  supervisor-only mapping, unchanged). Used by the original Milestone 8's
+version of
   the ring-3 test; superseded for that purpose by `vmm.c` below, but left
   in place as a general "punch a hole in kernel space" primitive.
 - `vmm.c` -- real per-process address spaces. Every process gets its own
@@ -199,7 +205,8 @@ longer trusts its buffer pointer -- `vmm_validate_user_range()` (new in
 which a syscall doesn't change) and confirms every page in
 `[buf, buf+len)` is present *and* user-accessible at every level of the
 walk, not just the leaf -- the same "check every level" lesson from
-Milestone 8's bug, applied here from the start rather than rediscovered.
+the original Milestone 8's bug, applied here from the start rather than
+rediscovered.
 Without this, kernel-only memory is still *present* in every process's
 page tables (`PML4` entry 0 is shared -- see above), just not
 user-accessible, so a process could hand the kernel an address it could
@@ -253,7 +260,8 @@ adds honest preemptive multitasking on top, without touching that
 mechanism: the two coexist, chosen per-syscall by whether the exiting
 process is scheduler-managed. The core trick: `isr_common` (`isr.asm`)
 already saved a process's full register state onto whatever stack was
-active when an interrupt fired, and -- unmodified since Milestone 8 --
+active when an interrupt fired, and -- unmodified since the original
+Milestone 8 --
 just popped those same registers back off *that same* stack and
 `iretq`'d, resuming exactly what was interrupted. The scheduler
 generalizes that last step: `isr_common` now reloads `rsp` from a global,
