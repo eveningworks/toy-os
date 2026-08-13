@@ -129,6 +129,39 @@ LS_ELF = userland/ls.elf
 STACK_SMASH_TEST_ELF = userland/stack_smash_test.elf
 NX_TEST_ELF = userland/nx_test.elf
 
+# Which userland ELFs get seeded onto disk.img's /bin, and under what
+# name. The mapping is explicit because it isn't always mechanical --
+# echo.c is seeded as `echo_test`.
+#
+# MUST be defined above `all:`: make expands a rule's prerequisite list
+# when it READS the rule, not when it runs it, so USERLAND_ELVES below
+# would expand to nothing if this lived further down the file (which is
+# exactly what happened while writing this -- `make all` silently built
+# no ELFs at all and still exited 0).
+SEED_BINARIES = \
+	$(LSPCI_ELF):lspci \
+	$(LS_ELF):ls \
+	$(HELLO_ELF):hello \
+	$(EXIT_TEST_ELF):exit_test \
+	$(WRITE_TEST_ELF):write_test \
+	$(WRITE_BAD_TEST_ELF):write_bad_test \
+	$(GUI_TEST_ELF):gui_test \
+	$(COUNTER_A_ELF):counter_a \
+	$(COUNTER_B_ELF):counter_b \
+	$(ECHO_ELF):echo_test \
+	$(WIN_TEST_ELF):win_test \
+	$(FILE_TEST_ELF):file_test \
+	$(NEWSYSCALLS_TEST_ELF):newsyscalls_test \
+	$(CRASH_TEST_ELF):crash_test \
+	$(SOCKET_TEST_ELF):socket_test \
+	$(STACK_SMASH_TEST_ELF):stack_smash_test \
+	$(NX_TEST_ELF):nx_test
+
+# Every ELF named in SEED_BINARIES, without the :diskname suffix -- what
+# `all` and `iso` actually have to build. Derived rather than listed
+# again, so the two can't drift.
+USERLAND_ELVES = $(foreach pair,$(SEED_BINARIES),$(firstword $(subst :, ,$(pair))))
+
 # Seed directory for tools/tfs2_writer.py's `sync` command -- see the
 # `seed` target below and docs/decisions.md. Not committed as a
 # generic directory: SEED_DIR/sync/bin/* are build-generated copies of
@@ -136,33 +169,26 @@ NX_TEST_ELF = userland/nx_test.elf
 # recipe every build, not tracked source files.
 SEED_DIR = seed
 
-# Source layout:
-#   kernel/core/boot.asm, isr.asm  -- boot + interrupt stubs (assembly)
-#   kernel/core/*.c                -- hardware bring-up, IDT/PIC, kernel_main
-#   kernel/drivers/*.c             -- device drivers (console, gfx, keyboard, mouse, fs)
-#   kernel/include/*.h             -- all headers, incl. kapi.h (the apps-facing API)
-#   apps/*.c                       -- programs (shell, gui, ...) + the app registry
-CORE_C    = $(wildcard kernel/core/*.c)
-DRIVERS_C = $(wildcard kernel/drivers/*.c)
-APPS_C    = $(wildcard apps/*.c)
-# apps/wm/ holds the window manager split across a few files (wm.c,
-# wm_input.c, wm_render.c -- see apps/wm/wm.c's top comment); its own
-# wildcard since APPS_C's is non-recursive and won't see into subdirs.
-WM_C      = $(wildcard apps/wm/*.c)
-# apps/ui/ holds the retained-widget-object library (ui_button.c,
-# ui_button_group.c, ui_textbox.c -- see apps/ui/ui.h's top comment);
-# same reasoning as WM_C above -- APPS_C's wildcard is non-recursive.
-UI_C      = $(wildcard apps/ui/*.c)
-C_SOURCES = $(CORE_C) $(DRIVERS_C) $(APPS_C) $(WM_C) $(UI_C)
+# Source discovery is RECURSIVE and automatic: every .c under kernel/
+# or apps/ is compiled, and every .asm under kernel/ is assembled, with
+# build/ mirroring the source tree. Adding a directory needs no Makefile
+# edit at all.
+#
+# It used to be one hand-written wildcard + pattern rule + mkdir target
+# per directory, which is a tax paid every time the tree grows -- both
+# apps/wm/ and apps/ui/ needed that treatment when they appeared, and
+# the reshape into kernel/arch, kernel/mm, kernel/proc, kernel/fs and
+# kernel/lib would have needed five more. `find` costs one subprocess
+# per build and removes the whole category.
+#
+# The one thing to know: a .c file anywhere under kernel/ or apps/ is
+# now IN the kernel image. There's no "scratch file in the source tree"
+# that the build ignores -- put throwaway code somewhere else.
+C_SOURCES   = $(shell find kernel apps -name '*.c' | sort)
+ASM_SOURCES = $(shell find kernel -name '*.asm' | sort)
 
-CORE_OBJ    = $(patsubst kernel/core/%.c,    $(BUILD)/core/%.o,    $(CORE_C))
-DRIVERS_OBJ = $(patsubst kernel/drivers/%.c, $(BUILD)/drivers/%.o, $(DRIVERS_C))
-APPS_OBJ    = $(patsubst apps/%.c,           $(BUILD)/apps/%.o,    $(APPS_C))
-WM_OBJ      = $(patsubst apps/wm/%.c,        $(BUILD)/apps/wm/%.o, $(WM_C))
-UI_OBJ      = $(patsubst apps/ui/%.c,        $(BUILD)/apps/ui/%.o, $(UI_C))
-C_OBJECTS   = $(CORE_OBJ) $(DRIVERS_OBJ) $(APPS_OBJ) $(WM_OBJ) $(UI_OBJ)
-
-ASM_OBJECTS = $(BUILD)/core/boot.o $(BUILD)/core/isr.o $(BUILD)/core/context_switch.o
+C_OBJECTS   = $(patsubst %.c,   $(BUILD)/%.o, $(C_SOURCES))
+ASM_OBJECTS = $(patsubst %.asm, $(BUILD)/%.o, $(ASM_SOURCES))
 
 .PHONY: all clean clean-disk iso run run-audio run-nographic debug help version seed
 
@@ -189,7 +215,7 @@ ASM_OBJECTS = $(BUILD)/core/boot.o $(BUILD)/core/isr.o $(BUILD)/core/context_swi
 version:
 	@sh tools/gen_version.sh
 
-all: version $(KERNEL) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF) $(LS_ELF) $(STACK_SMASH_TEST_ELF) $(NX_TEST_ELF)
+all: version $(KERNEL) $(USERLAND_ELVES)
 
 help:
 	@echo "toy-os -- available targets:"
@@ -208,145 +234,36 @@ help:
 	@echo "  version        Regenerate kernel/include/api/version.h (runs automatically as part of all/iso)"
 	@echo "  help           Show this message"
 
-$(BUILD)/core $(BUILD)/drivers $(BUILD)/apps $(BUILD)/apps/wm $(BUILD)/apps/ui:
-	mkdir -p $@
+# Two generic rules, mirroring the source tree into build/. The mkdir
+# is per-target (the object's own directory) rather than a set of
+# order-only prerequisites naming every directory, so a new source
+# directory needs nothing here either.
+$(BUILD)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(if $(filter apps/%,$<),$(APPS_CFLAGS),$(CFLAGS)) $< -o $@
 
-$(BUILD)/core/boot.o: kernel/core/boot.asm | $(BUILD)/core
+$(BUILD)/%.o: %.asm
+	@mkdir -p $(dir $@)
 	$(ASM) $(ASMFLAGS) $< -o $@
 
-$(BUILD)/core/isr.o: kernel/core/isr.asm | $(BUILD)/core
-	$(ASM) $(ASMFLAGS) $< -o $@
-
-$(BUILD)/core/context_switch.o: kernel/core/context_switch.asm | $(BUILD)/core
-	$(ASM) $(ASMFLAGS) $< -o $@
-
-$(BUILD)/core/%.o: kernel/core/%.c | $(BUILD)/core
-	$(CC) $(CFLAGS) $< -o $@
-
-$(BUILD)/drivers/%.o: kernel/drivers/%.c | $(BUILD)/drivers
-	$(CC) $(CFLAGS) $< -o $@
-
-# apps/ compiles with APPS_CFLAGS, not CFLAGS: same flags minus
-# -Ikernel/include/kernel, so an app that reaches for a kernel-internal
-# header fails to compile. See KERNEL_INCLUDES above.
-$(BUILD)/apps/%.o: apps/%.c | $(BUILD)/apps
-	$(CC) $(APPS_CFLAGS) $< -o $@
-
-$(BUILD)/apps/wm/%.o: apps/wm/%.c | $(BUILD)/apps/wm
-	$(CC) $(APPS_CFLAGS) $< -o $@
-
-$(BUILD)/apps/ui/%.o: apps/ui/%.c | $(BUILD)/apps/ui
-	$(CC) $(APPS_CFLAGS) $< -o $@
-
-$(BUILD)/userland:
-	mkdir -p $@
-
-# __stack_chk_guard/__stack_chk_fail -- linked into every userland ELF
-# below (see USERLAND_CFLAGS's comment above).
-$(BUILD)/userland/stack_chk.o: userland/stack_chk.c | $(BUILD)/userland
+# Userland ELFs: two generic rules instead of three hand-written lines
+# per binary (17 binaries = ~55 lines before this). A new /bin program is
+# now a .c file plus one SEED_BINARIES entry -- and that entry is needed
+# only because the on-disk name isn't always the file name (echo.c is
+# seeded as `echo_test`).
+$(BUILD)/userland/%.o: userland/%.c
+	@mkdir -p $(dir $@)
 	$(CC) $(USERLAND_CFLAGS) $< -o $@
 
-$(BUILD)/userland/hello.o: userland/hello.c | $(BUILD)/userland
-	$(CC) $(USERLAND_CFLAGS) $< -o $@
+# stack_chk.o carries __stack_chk_guard/__stack_chk_fail and is linked
+# into every userland ELF -- see USERLAND_CFLAGS's comment above.
+# .SECONDARY keeps the per-binary .o files: without it make treats them
+# as intermediates of the pattern-rule chain and deletes them after
+# linking, so every build recompiles all 17 userland programs.
+.SECONDARY:
 
-$(HELLO_ELF): $(BUILD)/userland/hello.o $(BUILD)/userland/stack_chk.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/hello.o $(BUILD)/userland/stack_chk.o
-
-$(BUILD)/userland/exit_test.o: userland/exit_test.c | $(BUILD)/userland
-	$(CC) $(USERLAND_CFLAGS) $< -o $@
-
-$(EXIT_TEST_ELF): $(BUILD)/userland/exit_test.o $(BUILD)/userland/stack_chk.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/exit_test.o $(BUILD)/userland/stack_chk.o
-
-$(BUILD)/userland/write_test.o: userland/write_test.c | $(BUILD)/userland
-	$(CC) $(USERLAND_CFLAGS) $< -o $@
-
-$(WRITE_TEST_ELF): $(BUILD)/userland/write_test.o $(BUILD)/userland/stack_chk.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/write_test.o $(BUILD)/userland/stack_chk.o
-
-$(BUILD)/userland/write_bad_test.o: userland/write_bad_test.c | $(BUILD)/userland
-	$(CC) $(USERLAND_CFLAGS) $< -o $@
-
-$(WRITE_BAD_TEST_ELF): $(BUILD)/userland/write_bad_test.o $(BUILD)/userland/stack_chk.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/write_bad_test.o $(BUILD)/userland/stack_chk.o
-
-$(BUILD)/userland/gui_test.o: userland/gui_test.c | $(BUILD)/userland
-	$(CC) $(USERLAND_CFLAGS) $< -o $@
-
-$(GUI_TEST_ELF): $(BUILD)/userland/gui_test.o $(BUILD)/userland/stack_chk.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/gui_test.o $(BUILD)/userland/stack_chk.o
-
-$(BUILD)/userland/counter_a.o: userland/counter_a.c | $(BUILD)/userland
-	$(CC) $(USERLAND_CFLAGS) $< -o $@
-
-$(COUNTER_A_ELF): $(BUILD)/userland/counter_a.o $(BUILD)/userland/stack_chk.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/counter_a.o $(BUILD)/userland/stack_chk.o
-
-$(BUILD)/userland/counter_b.o: userland/counter_b.c | $(BUILD)/userland
-	$(CC) $(USERLAND_CFLAGS) $< -o $@
-
-$(COUNTER_B_ELF): $(BUILD)/userland/counter_b.o $(BUILD)/userland/stack_chk.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/counter_b.o $(BUILD)/userland/stack_chk.o
-
-$(BUILD)/userland/echo.o: userland/echo.c | $(BUILD)/userland
-	$(CC) $(USERLAND_CFLAGS) $< -o $@
-
-$(ECHO_ELF): $(BUILD)/userland/echo.o $(BUILD)/userland/stack_chk.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/echo.o $(BUILD)/userland/stack_chk.o
-
-$(BUILD)/userland/win_test.o: userland/win_test.c | $(BUILD)/userland
-	$(CC) $(USERLAND_CFLAGS) $< -o $@
-
-$(WIN_TEST_ELF): $(BUILD)/userland/win_test.o $(BUILD)/userland/stack_chk.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/win_test.o $(BUILD)/userland/stack_chk.o
-
-$(BUILD)/userland/file_test.o: userland/file_test.c | $(BUILD)/userland
-	$(CC) $(USERLAND_CFLAGS) $< -o $@
-
-$(FILE_TEST_ELF): $(BUILD)/userland/file_test.o $(BUILD)/userland/stack_chk.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/file_test.o $(BUILD)/userland/stack_chk.o
-
-$(BUILD)/userland/newsyscalls_test.o: userland/newsyscalls_test.c | $(BUILD)/userland
-	$(CC) $(USERLAND_CFLAGS) $< -o $@
-
-$(NEWSYSCALLS_TEST_ELF): $(BUILD)/userland/newsyscalls_test.o $(BUILD)/userland/stack_chk.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/newsyscalls_test.o $(BUILD)/userland/stack_chk.o
-
-$(BUILD)/userland/crash_test.o: userland/crash_test.c | $(BUILD)/userland
-	$(CC) $(USERLAND_CFLAGS) $< -o $@
-
-$(CRASH_TEST_ELF): $(BUILD)/userland/crash_test.o $(BUILD)/userland/stack_chk.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/crash_test.o $(BUILD)/userland/stack_chk.o
-
-$(BUILD)/userland/socket_test.o: userland/socket_test.c | $(BUILD)/userland
-	$(CC) $(USERLAND_CFLAGS) $< -o $@
-
-$(SOCKET_TEST_ELF): $(BUILD)/userland/socket_test.o $(BUILD)/userland/stack_chk.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/socket_test.o $(BUILD)/userland/stack_chk.o
-
-$(BUILD)/userland/lspci.o: userland/lspci.c | $(BUILD)/userland
-	$(CC) $(USERLAND_CFLAGS) $< -o $@
-
-$(LSPCI_ELF): $(BUILD)/userland/lspci.o $(BUILD)/userland/stack_chk.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/lspci.o $(BUILD)/userland/stack_chk.o
-
-$(BUILD)/userland/ls.o: userland/ls.c | $(BUILD)/userland
-	$(CC) $(USERLAND_CFLAGS) $< -o $@
-
-$(LS_ELF): $(BUILD)/userland/ls.o $(BUILD)/userland/stack_chk.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/ls.o $(BUILD)/userland/stack_chk.o
-
-$(BUILD)/userland/stack_smash_test.o: userland/stack_smash_test.c | $(BUILD)/userland
-	$(CC) $(USERLAND_CFLAGS) $< -o $@
-
-$(STACK_SMASH_TEST_ELF): $(BUILD)/userland/stack_smash_test.o $(BUILD)/userland/stack_chk.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/stack_smash_test.o $(BUILD)/userland/stack_chk.o
-
-$(BUILD)/userland/nx_test.o: userland/nx_test.c | $(BUILD)/userland
-	$(CC) $(USERLAND_CFLAGS) $< -o $@
-
-$(NX_TEST_ELF): $(BUILD)/userland/nx_test.o $(BUILD)/userland/stack_chk.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/nx_test.o $(BUILD)/userland/stack_chk.o
+userland/%.elf: $(BUILD)/userland/%.o $(BUILD)/userland/stack_chk.o userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $< $(BUILD)/userland/stack_chk.o
 
 $(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(ASM_OBJECTS) $(C_OBJECTS)
@@ -376,24 +293,6 @@ $(DISK_IMG):
 # Add a row here (and nowhere else) to get a new binary onto disk at
 # build time; no grub.cfg/iso recipe changes needed anymore, unlike
 # when these were GRUB modules (see docs/decisions.md).
-SEED_BINARIES = \
-	$(LSPCI_ELF):lspci \
-	$(LS_ELF):ls \
-	$(HELLO_ELF):hello \
-	$(EXIT_TEST_ELF):exit_test \
-	$(WRITE_TEST_ELF):write_test \
-	$(WRITE_BAD_TEST_ELF):write_bad_test \
-	$(GUI_TEST_ELF):gui_test \
-	$(COUNTER_A_ELF):counter_a \
-	$(COUNTER_B_ELF):counter_b \
-	$(ECHO_ELF):echo_test \
-	$(WIN_TEST_ELF):win_test \
-	$(FILE_TEST_ELF):file_test \
-	$(NEWSYSCALLS_TEST_ELF):newsyscalls_test \
-	$(CRASH_TEST_ELF):crash_test \
-	$(SOCKET_TEST_ELF):socket_test \
-	$(STACK_SMASH_TEST_ELF):stack_smash_test \
-	$(NX_TEST_ELF):nx_test
 
 # Seeds $(DISK_IMG) with every SEED_BINARIES entry, plus the /etc/kbs/*
 # keyboard-layout data files, via tools/tfs2_writer.py's `sync` (see
@@ -422,7 +321,7 @@ SEED_BINARIES = \
 # (keyboard_layout.c) keeps the keyboard working regardless. Delete
 # $(SEED_DIR)/sync/etc/kbs and re-run `make iso` to force a fresh
 # regenerate once xkbcli is installed.
-seed: $(DISK_IMG) $(LSPCI_ELF) $(LS_ELF) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(STACK_SMASH_TEST_ELF) $(NX_TEST_ELF)
+seed: $(DISK_IMG) $(USERLAND_ELVES)
 	mkdir -p $(SEED_DIR)/sync/bin
 	$(foreach pair,$(SEED_BINARIES),cp $(word 1,$(subst :, ,$(pair))) $(SEED_DIR)/sync/bin/$(word 2,$(subst :, ,$(pair)));)
 	@if command -v xkbcli >/dev/null 2>&1; then \
@@ -433,7 +332,7 @@ seed: $(DISK_IMG) $(LSPCI_ELF) $(LS_ELF) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_T
 	fi
 	python3 tools/tfs2_writer.py sync $(DISK_IMG) $(SEED_DIR)
 
-iso: version $(KERNEL) $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF) $(LS_ELF) $(STACK_SMASH_TEST_ELF) $(NX_TEST_ELF) seed
+iso: version $(KERNEL) $(USERLAND_ELVES) seed
 	mkdir -p iso/boot/grub
 	cp $(KERNEL) iso/boot/kernel.bin
 	cp grub.cfg iso/boot/grub/grub.cfg
