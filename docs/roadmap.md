@@ -646,6 +646,63 @@ guess.*
 - [ ] `strace` extended to follow a process's children once `fork()`
       exists
 
+### Milestone 27a -- virtio, and a real GPU driver (unscheduled)
+
+**Why virtio first, and why the GPU is the prize.** One transport layer
+(virtqueues + the PCI capability/config negotiation) unlocks every
+virtio device at once, which is a better return than any single
+hand-written driver. `virtio-gpu` in particular has a proper cursor
+plane and a resource/scanout model -- i.e. a hardware cursor that works
+where the VMware SVGA one does, but through an interface that is
+actually specified rather than reverse-engineered from a vendor header,
+and that real hardware drivers resemble far more closely.
+
+Measured 2026-08-13: `-vga virtio` boots this kernel fine at 1280x720
+(GRUB sets a VBE mode and we use it), so the device is available to
+develop against today with no bring-up risk.
+
+- [ ] virtio transport: PCI capability parsing, virtqueue (descriptor
+      table / avail / used rings), notification + ISR handling. Every
+      item below depends only on this.
+- [ ] `virtio-gpu`: resource create/attach, set_scanout, transfer +
+      flush, and the CURSOR queue -- a hardware cursor on a specified
+      interface, replacing the vendor-specific vmsvga path as the
+      preferred one where both exist
+- [ ] `virtio-net`: a NIC on the same transport, likely easier than
+      e1000 once virtqueues exist
+- [ ] `virtio-blk`: a block device that isn't ATA -- would exercise the
+      VFS's backend seam (see docs/decisions.md on the single-backend
+      VFS) without writing AHCI first
+- [ ] `virtio-rng`: entropy. Tiny, and the natural first consumer of the
+      transport -- a good bring-up target precisely because it's boring
+- [ ] `virtio-input`: keyboard/mouse that isn't PS/2, which would also
+      remove the "no USB pointer device" trap in the QEMU flags (see
+      CLAUDE.md)
+
+### Milestone 27b -- other emulated hardware worth claiming (unscheduled)
+
+Devices QEMU already presents to this machine that nothing drives yet.
+Listed with the honest reason each is or isn't attractive.
+
+- [ ] **e1000 ethernet** (`8086:100e`) -- ALREADY on our PCI bus and
+      visible in `lspci` today, sitting unused. Descriptor rings, no
+      firmware blob, thoroughly documented. The single biggest
+      capability jump available, and the prerequisite for anything
+      networked
+- [ ] **RTL8139** -- a simpler NIC than e1000 if a gentler on-ramp to
+      networking is wanted; less realistic, less code
+- [ ] **AC97 audio** -- real sound instead of the PC speaker; markedly
+      simpler than Intel HDA
+- [ ] **Intel HDA** -- the modern audio path; more capable, more spec
+- [ ] **UHCI/EHCI/XHCI USB** -- real USB input instead of PS/2. UHCI is
+      the tractable entry point; XHCI is a large spec
+- [ ] **QXL** -- another cursor-capable adapter; SPICE-oriented and more
+      complex than either vmsvga or virtio-gpu, so low priority
+- [ ] **Cirrus** -- has a hardware cursor and is the simplest register
+      interface of any of them, but measured at only 640x480 here
+      against 1280x720 for the others. Recorded so the option isn't
+      re-investigated from scratch; the resolution cost rules it out
+
 ### Milestone 27 -- AHCI/SATA driver (planned v0.27.0)
 
 - [ ] PCI discovery + ABAR mapping

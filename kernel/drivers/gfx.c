@@ -120,6 +120,13 @@ int gfx_adopt_framebuffer(uint64_t addr, uint32_t new_pitch, uint32_t w, uint32_
     return 1;
 }
 
+void gfx_flush(void) {
+    if (!vmsvga_active()) return;      // an ordinary scanned framebuffer
+    if (dirty_x1 <= dirty_x0) return;  // nothing drawn since last time
+    vmsvga_update(dirty_x0, dirty_y0, dirty_x1 - dirty_x0, dirty_y1 - dirty_y0);
+    dirty_x0 = dirty_y0 = dirty_x1 = dirty_y1 = 0;
+}
+
 int gfx_hw_cursor_available(void) { return vmsvga_cursor_available(); }
 
 int gfx_hw_cursor_define(const uint32_t *argb, int w, int h, int hot_x, int hot_y) {
@@ -271,6 +278,9 @@ void gfx_present(void) {
             dst += bytes;
         }
     }
+    // Publish before clearing the box -- on a driver-owned mode the
+    // adapter shows nothing until told, see gfx_flush().
+    gfx_flush();
     dirty_x0 = dirty_x1 = dirty_y0 = dirty_y1 = 0;
 }
 

@@ -70,6 +70,7 @@
 
 #define SVGA_FIFO_CAP_CURSOR_BYPASS_3 (1u << 4)
 
+#define SVGA_CMD_UPDATE               1
 #define SVGA_CMD_DEFINE_ALPHA_CURSOR 22
 
 #define CURSOR_MAX_PIXELS (64 * 64)
@@ -212,6 +213,25 @@ int vmsvga_init(uint32_t want_w, uint32_t want_h) {
                  g_cursor_ok && g_bypass3 ? " (bypass3)" : "");
     return 1;
 }
+
+// **In SVGA mode the adapter does not scan the framebuffer.** Writing
+// pixels changes nothing on screen until the guest names the rectangle
+// that changed. Missing this is not a subtle bug: after the takeover
+// the console drew normally and the display simply stopped changing,
+// frozen on whatever QEMU happened to refresh at mode-set time.
+//
+// Cheap by design -- one 5-word FIFO command, no sync. QEMU consumes
+// the FIFO on its own refresh tick, so there's nothing to wait for.
+void vmsvga_update(int x, int y, int w, int h) {
+    if (!g_active || !g_fifo || w <= 0 || h <= 0) return;
+    fifo_write(SVGA_CMD_UPDATE);
+    fifo_write((uint32_t)(x < 0 ? 0 : x));
+    fifo_write((uint32_t)(y < 0 ? 0 : y));
+    fifo_write((uint32_t)w);
+    fifo_write((uint32_t)h);
+}
+
+int vmsvga_active(void) { return g_active; }
 
 int vmsvga_cursor_available(void) { return g_active && g_cursor_ok; }
 

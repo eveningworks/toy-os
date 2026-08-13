@@ -42,8 +42,15 @@
 // everything carries on with GRUB's framebuffer.
 int vmsvga_init(uint32_t want_w, uint32_t want_h);
 
-// 1 once vmsvga_init() has succeeded AND the adapter reports a usable
-// alpha cursor.
+// 1 once the driver is actually driving the display.
+int vmsvga_active(void);
+
+// Tells the adapter a rectangle of the framebuffer changed. REQUIRED:
+// in SVGA mode nothing drawn appears until it is announced this way.
+// gfx.c calls this from gfx_flush(); drivers/apps shouldn't need to.
+void vmsvga_update(int x, int y, int w, int h);
+
+// 1 once the display is ours AND the adapter has a usable cursor.
 int vmsvga_cursor_available(void);
 
 // Uploads a 32-bit ARGB cursor image (premultiplied is not required;

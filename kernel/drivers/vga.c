@@ -334,6 +334,7 @@ static void fb_clear(void) {
     row = 0;
     col = 0;
     cursor_on_screen = 0; // whatever was drawn is gone along with everything else
+    gfx_flush(); // see gfx.h -- a driver-owned mode shows nothing until told
 }
 
 static void fb_scroll_if_needed(void) {
@@ -603,6 +604,7 @@ void vga_clear(void) {
     }
     if (fb_mode) fb_clear();
     else legacy_clear();
+    gfx_flush(); // see gfx.h -- a driver-owned mode shows nothing until told
 }
 
 void vga_reflow(void) {
@@ -651,6 +653,7 @@ void vga_cursor_tick(void) {
     // erase-to-black hide would have eaten the character underneath.
     if (cursor_on_screen) cursor_hide();
     else cursor_draw();
+    gfx_flush(); // see gfx.h -- a driver-owned mode shows nothing until told
 }
 
 // Repositions the insertion point without erasing anything -- see
@@ -751,6 +754,7 @@ void vga_putc(char c) {
     sb_record(c);
     if (fb_mode) fb_putc(c);
     else legacy_putc(c);
+    gfx_flush(); // see gfx.h -- a driver-owned mode shows nothing until told
 }
 
 void vga_backspace(void) {
@@ -766,6 +770,7 @@ void vga_backspace(void) {
 
 void vga_write(const char *s) {
     while (*s) vga_putc(*s++);
+    gfx_flush(); // see gfx.h -- a driver-owned mode shows nothing until told
 }
 
 // These two are now three lines each over knum.h's converters. They

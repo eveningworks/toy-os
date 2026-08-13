@@ -38,6 +38,17 @@ int gfx_init(void);
 // contents, and the console's cell grid needs vga_reflow().
 int gfx_adopt_framebuffer(uint64_t addr, uint32_t pitch, uint32_t w, uint32_t h, uint8_t bpp);
 
+// Publishes everything drawn since the last flush to the display.
+//
+// A no-op on an ordinary framebuffer, where the adapter scans memory
+// continuously and drawing IS showing. It exists because that is NOT
+// universally true: a driver-owned mode (see kernel/drivers/vmsvga.c)
+// only shows a region once the guest names it, so without this the
+// screen simply stops updating. Called for you by gfx_present() and by
+// the console's own draw paths; a caller drawing straight to the
+// framebuffer outside both should call it when finished.
+void gfx_flush(void);
+
 // --- hardware cursor -------------------------------------------------
 //
 // A cursor the DISPLAY ADAPTER composites, not something drawn into the

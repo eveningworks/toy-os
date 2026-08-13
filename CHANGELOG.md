@@ -156,10 +156,24 @@ using `## [x.y.z] - date` headings is here.
     unaffected: the software cursor still renders (139 pixels at the
     probe point) and the driver doesn't even log, since the device
     isn't there.
-  - **Honest status: the cursor itself is not visually verified.**
+  - **The first version left the display frozen, and the reporter's
+    screenshot is what showed it.** In SVGA mode the adapter does NOT
+    scan the framebuffer: writing pixels changes nothing until the guest
+    names the changed rectangle with `SVGA_CMD_UPDATE`. So the console
+    drew normally into memory and the screen stayed stuck on whatever
+    QEMU happened to refresh at mode-set time -- two log lines and then
+    nothing, no shell prompt at all. `gfx_flush()` publishes the dirty
+    box gfx.c was already tracking, called from `gfx_present()` and the
+    console's own draw paths. Console and GUI both verified correct
+    afterwards.
+  - That is the sort of thing automation here structurally cannot catch:
+    the framebuffer contained the right pixels the whole time, so a
+    memory-side check would have passed. `screendump` doesn't see it
+    either, since it captures the same surface.
+  - **Honest status: the cursor itself is still not visually verified.**
     `screendump` cannot capture a hardware cursor by definition, so
-    automation can confirm the driver initialises, takes the display
-    over, reports `cursor hardware` and renders the desktop correctly --
+    automation confirms the driver initialises, takes the display over,
+    reports `cursor hardware` and renders console + desktop correctly --
     but not that the pointer appears. That needs a real display.
 
 - **`ui_textview`: scrolling belongs to the control, not to every app.**
