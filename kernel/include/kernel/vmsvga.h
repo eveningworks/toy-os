@@ -50,8 +50,18 @@ int vmsvga_active(void);
 // gfx.c calls this from gfx_flush(); drivers/apps shouldn't need to.
 void vmsvga_update(int x, int y, int w, int h);
 
-// 1 once the display is ours AND the adapter has a usable cursor.
+// 1 once the display is ours, the adapter has a usable cursor, AND the
+// cursor has been switched on. It is OFF by default -- see vmsvga.c for
+// why (it fights this kernel's relative PS/2 mouse).
 int vmsvga_cursor_available(void);
+
+// 1 if the hardware has one at all, regardless of whether it's enabled.
+int vmsvga_cursor_supported(void);
+
+// Opt in to the hardware cursor. Expect the pointer to fight the mouse
+// (see vmsvga.c); this exists so the behaviour can be experimented with
+// rather than only read about.
+void vmsvga_cursor_set_enabled(int on);
 
 // Uploads a 32-bit ARGB cursor image (premultiplied is not required;
 // QEMU blends straight ARGB) and makes it the current cursor.

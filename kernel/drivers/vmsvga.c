@@ -83,6 +83,27 @@ static int g_cursor_ok;
 static int g_bypass3;              // cursor position via FIFO regs, no command
 static int g_alpha_ok;             // adapter advertises a 32-bit alpha cursor
 static int g_cursor_on = 1;
+// The hardware cursor is OFF by default, and that is a considered
+// default rather than caution.
+//
+// Positioning it writes SVGA_REG_CURSOR_X/Y/ON, and QEMU responds by
+// calling dpy_mouse_set(), which warps the HOST pointer. This kernel's
+// mouse is PS/2 -- a RELATIVE device with no absolute pointing
+// alternative (see CLAUDE.md on why a usb-tablet can't just be added:
+// there's no USB stack, and adding one silently breaks PS/2 input
+// entirely). A warp against a relative device feeds motion straight
+// back to the guest, and the reported symptom matches: the pointer
+// jumps around and a window drag is nearly impossible.
+//
+// Stated as the hypothesis it is -- it has not been instrumented -- but
+// the behaviour is reproducible and the default should not be the
+// broken one. The display takeover itself is unaffected and stays on:
+// that part works, and it's a real modesetting driver.
+//
+// The path where a hardware cursor genuinely works here is virtio-gpu
+// plus virtio-input (an absolute device), which is Milestone 27a --
+// see docs/roadmap.md.
+static int g_cursor_enabled = 0;
 
 static void reg_write(uint32_t index, uint32_t value) {
     outl(g_io + PORT_INDEX, index);
@@ -209,7 +230,8 @@ int vmsvga_init(uint32_t want_w, uint32_t want_h) {
                  g_fifo ? g_fifo[SVGA_FIFO_CAPABILITIES] : 0);
     klog_printf("vmsvga: SVGA II active, %ux%u x32 pitch %u, cursor %s%s\n",
                  want_w, want_h, pitch,
-                 g_cursor_ok ? "hardware" : "unavailable",
+                 g_cursor_ok ? (g_cursor_enabled ? "hardware" : "hardware (disabled by default -- see vmsvga.c)")
+                             : "unavailable",
                  g_cursor_ok && g_bypass3 ? " (bypass3)" : "");
     return 1;
 }
@@ -233,7 +255,10 @@ void vmsvga_update(int x, int y, int w, int h) {
 
 int vmsvga_active(void) { return g_active; }
 
-int vmsvga_cursor_available(void) { return g_active && g_cursor_ok; }
+int vmsvga_cursor_available(void) { return g_active && g_cursor_ok && g_cursor_enabled; }
+
+void vmsvga_cursor_set_enabled(int on) { g_cursor_enabled = on ? 1 : 0; }
+int vmsvga_cursor_supported(void) { return g_active && g_cursor_ok; }
 
 int vmsvga_cursor_define(const uint32_t *argb, int w, int h, int hot_x, int hot_y) {
     if (!vmsvga_cursor_available() || !argb) return 0;

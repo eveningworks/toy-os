@@ -185,6 +185,18 @@ using `## [x.y.z] - date` headings is here.
     the framebuffer contained the right pixels the whole time, so a
     memory-side check would have passed. `screendump` doesn't see it
     either, since it captures the same surface.
+  - **The hardware cursor is OFF by default; the display takeover is
+    not.** Reported: with the cursor on, the pointer jumps around and
+    dragging a window is nearly impossible. Positioning it writes
+    SVGA_REG_CURSOR_X/Y/ON, and QEMU answers by calling
+    `dpy_mouse_set()`, which warps the HOST pointer -- against this
+    kernel's RELATIVE PS/2 mouse that feeds motion straight back to the
+    guest. Stated as a hypothesis (it hasn't been instrumented), but the
+    behaviour reproduces and the default shouldn't be the broken one.
+    `-vga vmware` now gives a working modesetting driver with the
+    ordinary software cursor; `vmsvga_cursor_set_enabled(1)` opts in.
+    The configuration where a hardware cursor genuinely works here is
+    virtio-gpu plus virtio-input's absolute pointer -- Milestone 27a.
   - **Honest status: the cursor itself is still not visually verified.**
     `screendump` cannot capture a hardware cursor by definition, so
     automation confirms the driver initialises, takes the display over,
