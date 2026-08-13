@@ -1150,12 +1150,50 @@ static void print_hex_digits(uint32_t v, int digits) {
     vga_write(buf);
 }
 
-// Lists every device pci_init() found at boot (kernel_main() runs it
-// once, unconditionally -- see kernel.c) in the traditional
-// `bus:device.function  vendor:device  class name` shape, plus IRQ
-// line and any nonzero BARs when present. Nothing here re-scans the
-// bus -- this only ever shows what was recorded at boot.
+// Runs /bin/lspci rather than listing the devices itself -- same
+// precedent (and same one-line implementation) as cmd_ls_bin() above
+// running /bin/ls.
+//
+// It used to print the list directly from pci_device_at(), which meant
+// two implementations of the same command: this one, and the userland
+// ELF. They already carried duplicate copies of the class-name table,
+// and userland/lspci.c's top comment flagged the drift risk that
+// creates. Deferring collapses them to one, and the one that survives
+// is the userland program -- which is also where a real OS puts lspci,
+// since resolving a vendor id to a name is a database lookup in a file,
+// not something a kernel should know how to do.
+//
+// The device list itself still comes from the kernel, through
+// SYS_PCI_COUNT/SYS_PCI_INFO; only the formatting and the pci.ids
+// lookup moved out.
+static void cmd_lspci_builtin(void);
+
 void cmd_lspci(void) {
+    // Checked with fs_exists() rather than by looking at
+    // elf_run_from_fs()'s return value: that returns -1 for "couldn't
+    // read it", which is indistinguishable from a process that really
+    // did exit -1. Asking first is unambiguous.
+    if (!fs_exists("/bin/lspci")) {
+        cmd_lspci_builtin();
+        return;
+    }
+
+    int exit_code = elf_run_from_fs("/bin/lspci", "");
+    vga_set_color(shell_fg, VGA_BLACK);
+    if (exit_code != 0) {
+        vga_write("lspci: exited with code ");
+        vga_write_exit_code(exit_code);
+        vga_putc('\n');
+    }
+}
+
+// The old kernel-space implementation, now only the fallback for a disk
+// with no /bin/lspci on it -- a hand-built image, or one seeded before
+// that binary existed. Reachable only through the check above. It prints
+// numeric ids with no vendor/device names, since looking those up means
+// reading /usr/share/hwdata/pci.ids, which is exactly the work that
+// belongs in the userland program rather than in here.
+static void cmd_lspci_builtin(void) {
     int count = pci_device_count();
     if (count == 0) {
         vga_write("No PCI devices found.\n");

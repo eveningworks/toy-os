@@ -567,6 +567,19 @@ static void term_run_line(struct window *win, struct terminal_state *st, char *l
         return;
     }
 
+    // `lspci`, same reasoning as `ls` above. shell_sys.c's cmd_lspci()
+    // now runs /bin/lspci through the blocking elf_run_from_fs(), which
+    // is fine at the physical console but would freeze the whole desktop
+    // here for as long as the spawn takes -- and this one reads a 1.6MB
+    // database, so that pause is real rather than theoretical. Routing
+    // it through term_spawn() keeps the WM event loop turning, exactly
+    // what Milestone 1's async spawning exists for. No arguments to
+    // parse: lspci takes none.
+    if (cmd[0] && k_strcmp(cmd, "lspci") == 0) {
+        term_spawn(win, st, "/bin/lspci", "");
+        return;
+    }
+
     // `run <name> [args...]` -- async only for RUN_ALLOWED_BINS's
     // verified-safe binaries (see its own comment); everything else
     // (an unverified /bin binary, or a kernel-space app name like `gui`/

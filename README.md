@@ -507,10 +507,26 @@ userland/        -- freestanding ring-3 test programs (no libc, no
 seed/            -- the files mirrored onto disk.img at build time by
                      the Makefile's `seed` target via
                      tools/tfs2_writer.py: seed/sync/bin/ (every
-                     userland ELF) and seed/sync/etc/kbs/ (the generated
-                     keyboard layout data files). `sync/` is
+                     userland ELF), seed/sync/etc/kbs/ (the generated
+                     keyboard layout data files) and
+                     seed/sync/usr/share/hwdata/ (the PCI ID database,
+                     staged from data/ below). `sync/` is
                      content-hash-synced on every build; a `once/`
                      subtree would be copy-once. See docs/decisions.md.
+                     NOTE: seed/sync/ is a build STAGING tree -- `make
+                     clean` deletes it and .gitignore excludes it, so
+                     nothing hand-authored belongs there. Anything that
+                     needs to ship lives elsewhere and gets copied in by
+                     the `seed` target.
+data/            -- bundled third-party data files, tracked in git and
+                     staged into seed/sync/ at build time. Currently
+                     just pci.ids, the PCI ID Database from
+                     pci-ids.ucw.cz, read by /bin/lspci to turn
+                     8086:7010 into "Intel Corporation 82371SB PIIX3
+                     IDE". Bundled rather than downloaded or read from
+                     the build host so builds are reproducible and work
+                     offline. NOT MIT -- see LICENSE's "Third-party
+                     data" section.
 ```
 
 `kernel_main()` (in `kernel/core/kernel.c`) does hardware bring-up --

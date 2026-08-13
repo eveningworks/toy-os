@@ -387,21 +387,26 @@ void syscall_dispatch(uint64_t *regs) {
             klog_write("syscall: read() rejected -- invalid buffer pointer\n");
             regs[14] = (uint64_t)-1;
         } else {
-            uint32_t file_size = 0;
-            const char *data = fs_read(fd_table[slot].file.name, &file_size);
-            if (!data) {
-                regs[14] = 0; // file vanished (deleted mid-read, e.g. by
-                               // the shell's `rm`) -- treat as EOF rather
-                               // than crash or fabricate data
-            } else {
-                uint32_t off = fd_table[slot].file.offset;
-                uint32_t remaining = off < file_size ? file_size - off : 0;
-                uint64_t n = len < remaining ? len : remaining;
-                char *ubuf = (char *)(uintptr_t)buf_ptr;
-                for (uint64_t i = 0; i < n; i++) ubuf[i] = data[off + i];
-                fd_table[slot].file.offset += (uint32_t)n;
-                regs[14] = n;
-            }
+            // fs_read_range(), NOT fs_read(). This used to call
+            // fs_read(), which reads the WHOLE file into a kmalloc'd
+            // buffer, and then copied out just the `len` bytes at the
+            // fd's offset -- so streaming a file cost (file size) of
+            // disk reads per call. Fine while the only things ring 3
+            // ever opened were a few hundred bytes; quadratic the
+            // moment anything real showed up. /bin/lspci reading the
+            // 1.6MB pci.ids in 1KB chunks turned that into ~2.6GB of
+            // reads and took 35 seconds. With a range read it's ~0.6s.
+            //
+            // fs_read_range() reports 0 both at EOF and on any error
+            // (fs.h says so explicitly), which happens to be exactly
+            // the behaviour wanted here -- a file deleted mid-read by
+            // another shell should read as EOF, not fabricate data or
+            // fault.
+            uint32_t off = fd_table[slot].file.offset;
+            char *ubuf = (char *)(uintptr_t)buf_ptr;
+            uint32_t n = fs_read_range(fd_table[slot].file.name, off, ubuf, (uint32_t)len);
+            fd_table[slot].file.offset += n;
+            regs[14] = n;
         }
     } else if (rax == SYS_OPEN) {
         uint64_t pml4 = vmm_current_pml4();

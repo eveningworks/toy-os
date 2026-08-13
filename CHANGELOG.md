@@ -30,6 +30,81 @@ using `## [x.y.z] - date` headings is here.
 
 ## [Unreleased]
 
+### Added
+- **`lspci` shows real vendor and device names, from the PCI ID
+  Database.** `8086:7010` now also reads "Intel Corporation 82371SB
+  PIIX3 IDE [Natoma/Triton II]". Asked for directly, with the choice of
+  bundling a copy vs reading the host's vs downloading it.
+  - **Bundled**, at `data/pci.ids` (1.6MB, version 2026.07.30), staged
+    onto the image at `/usr/share/hwdata/pci.ids` -- the same path a
+    Linux distribution uses. Reading the build host's copy would make
+    the build depend on host layout and produce different images on
+    different machines; downloading would put a network fetch in the
+    build and break offline/sandboxed builds. See `docs/decisions.md`.
+  - **Licensing:** upstream offers it under GPL-2.0-or-later *or*
+    3-clause BSD. toy-os takes the BSD option (MIT-compatible), with the
+    full text in `LICENSE`'s new "Third-party data" section -- the same
+    pattern already used for the baked JetBrains Mono glyphs.
+  - **Not in `seed/`, which is where it obviously belongs and doesn't.**
+    `seed/sync/` is a build staging tree: `make clean` does `rm -rf` on
+    it and `.gitignore` excludes it, because the Makefile repopulates it
+    with built ELFs every build. A file placed there works perfectly for
+    whoever created it and silently doesn't exist for anyone who clones.
+    Caught exactly that way -- it survived local testing, vanished
+    during a `make verify`, and the feature kept working anyway because
+    the copy already written to `disk.img` was still there. The tracked
+    master lives in the new `data/`, and the `seed` target stages it.
+  - **Parsed as a single streaming pass in `/bin/lspci`**, never held in
+    memory: 1KB at a time, keeping only the current line and copying out
+    just the names matching a device actually present. Peak memory is a
+    few KB no matter how large the database grows, which matters because
+    a userland process's heap here is a bump allocator with no free.
+  - **One lspci, not two.** The kernel-space `cmd_lspci()` and the
+    userland ELF were two implementations of the same command carrying
+    duplicate class-name tables -- `lspci.c`'s own comment flagged the
+    drift risk. The builtin now runs `/bin/lspci`, exactly as
+    `cmd_ls_bin()` already runs `/bin/ls`, and the surviving
+    implementation is the userland one -- which is where a real OS puts
+    lspci, since resolving an id to a name is a file lookup, not
+    something a kernel should know how to do. The old kernel version is
+    kept as a real (not dead) fallback for a disk with no `/bin/lspci`,
+    reached via an `fs_exists()` check -- `elf_run_from_fs()` returns -1
+    for "couldn't read it", which is indistinguishable from a process
+    that genuinely exited -1.
+  - `/bin/lspci` also gained the IRQ/BAR output the builtin had, so
+    collapsing to one implementation didn't quietly drop anything. Its
+    `put_udec()` helper is back too -- the file's top comment had cited
+    it as an example for some time while the function itself was gone.
+  - The GUI Terminal routes `lspci` through `term_spawn()` like it
+    already does `ls`, so the 1.6MB parse can't block the WM event loop.
+    Verified on screen, not just in text -- see
+    `screenshots/2026-08-13/`.
+  - `1234:1111` (QEMU's emulated VGA) correctly shows no name: `1234`
+    isn't a vendor id upstream lists. That's the database being right,
+    not the lookup failing.
+
+### Fixed
+- **`SYS_READ` read the entire file on every call, making any real
+  streaming read quadratic.** Found immediately by the feature above:
+  `/bin/lspci` reading 1.6MB in 1KB chunks did ~1,615 calls x 1.6MB =
+  **~2.6GB of disk reads and took 35 seconds**.
+  - The handler called `fs_read()` (whole file into a `kmalloc()`'d
+    buffer) and then copied out just the bytes at the fd's offset.
+    Harmless for as long as nothing in ring 3 opened a file bigger than
+    a few hundred bytes -- at that size the whole file *is* one read --
+    which is why it sat unnoticed since `SYS_OPEN`/`SYS_READ` were
+    added.
+  - Fixed by using `fs_read_range()`, which already existed for exactly
+    this and whose doc comment describes streaming a file as its
+    intended use. **35s -> 0.9s**, including boot. Its "0 means EOF or
+    error, indistinguishable" contract happens to be precisely the
+    wanted behaviour for a file deleted mid-read.
+  - Worth recording as a class of bug: a wrong complexity class can sit
+    for a long time when inputs stay small, and it fails by being *slow*
+    rather than wrong, so no test catches it. See `docs/decisions.md`.
+  - Verified: `make verify` clean (58 KTESTs), `lspci` correct at the
+    physical console and in the GUI Terminal.
+
 ### Changed
 - **Roadmap: eight new milestones, twelve existing ones deepened, and a
   third renumbering.** Asked for "more steps and maybe 5 new milestones,

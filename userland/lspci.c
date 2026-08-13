@@ -82,6 +82,20 @@ static void put(const char *s) {
     sys_write(s, my_strlen(s));
 }
 
+// Unsigned decimal. This file's top comment has always cited put_udec()
+// as an example of a small local helper duplicated rather than shared
+// with the kernel -- but it had been removed at some point, leaving the
+// comment describing a function that wasn't here. Reinstated by the IRQ
+// number the name/BAR output below needed.
+static void put_udec(uint32_t v) {
+    char buf[11];
+    int i = 10;
+    buf[i] = '\0';
+    if (v == 0) buf[--i] = '0';
+    while (v > 0) { buf[--i] = (char)('0' + (v % 10)); v /= 10; }
+    put(buf + i);
+}
+
 static void put_hex_digits(uint32_t v, int digits) {
     char buf[9]; // enough for the widest caller here (4 digits) + '\0'
     for (int i = 0; i < digits; i++) {
@@ -136,29 +150,230 @@ static const char *class_name(uint8_t class_code, uint8_t subclass) {
     }
 }
 
+// ---------------------------------------------------------------------
+// Vendor/device names, from the PCI ID Database
+// ---------------------------------------------------------------------
+//
+// /usr/share/hwdata/pci.ids is a verbatim copy of the file the PCI ID
+// Project publishes (pci-ids.ucw.cz), seeded onto the disk image from
+// seed/ at build time -- the same path real Linux distributions use, and
+// the same file `lspci` reads there. See LICENSE's "Third-party data"
+// section: it's redistributed under its 3-clause BSD option, not MIT.
+//
+// The format is two significant levels, tab-indented, sorted by id:
+//
+//     8086  Intel Corporation
+//     <TAB>7010  82371SB PIIX3 IDE [Natoma/Triton II]
+//     <TAB><TAB>1af4 1100  Subsystem name        <- ignored here
+//
+// **Parsed as a single streaming pass, never held in memory.** The file
+// is ~1.6MB and this process's heap is a bump allocator (SYS_SBRK) with
+// no free -- so the loop below reads 1KB at a time, keeps only the
+// current line, and copies out just the handful of names that match a
+// device actually present. Peak memory is a few KB regardless of how
+// large the database grows. It also means no seeking, which matters:
+// SYS_READ advances a per-fd offset and there is no lseek yet.
+#define PCI_IDS_PATH "/usr/share/hwdata/pci.ids"
+#define MAX_DEVS         32
+#define VENDOR_NAME_MAX  40
+#define DEVICE_NAME_MAX  64
+#define LINE_MAX        256
+#define CHUNK           1024 // SYS_WRITE_MAX -- the per-call cap on SYS_READ too
+
+static struct pci_device g_dev[MAX_DEVS];
+static char g_vendor_name[MAX_DEVS][VENDOR_NAME_MAX];
+static char g_device_name[MAX_DEVS][DEVICE_NAME_MAX];
+static int  g_count;
+
+static inline int64_t sys_open(const char *path, uint64_t flags) {
+    return syscall2(SYS_OPEN, (uint64_t)(uintptr_t)path, flags);
+}
+
+static inline int64_t sys_read(int fd, void *buf, uint64_t len) {
+    return syscall3(SYS_READ, (uint64_t)fd, (uint64_t)(uintptr_t)buf, len);
+}
+
+static inline int64_t sys_close(int fd) {
+    return syscall2(SYS_CLOSE, (uint64_t)fd, 0);
+}
+
+static void put_err(const char *s) {
+    syscall3(SYS_WRITE, 2, (uint64_t)(uintptr_t)s, my_strlen(s));
+}
+
+static void copy_trunc(char *dst, const char *src, uint64_t cap) {
+    uint64_t i = 0;
+    while (src[i] && i + 1 < cap) { dst[i] = src[i]; i++; }
+    dst[i] = '\0';
+}
+
+// Exactly `digits` lowercase-or-uppercase hex characters, or -1. Strict
+// on purpose: a malformed line should be skipped, not half-parsed into
+// a plausible wrong id (the toolkit's "a parser rejects rather than
+// guesses" rule, see CLAUDE.md).
+static int32_t parse_hex(const char *s, int digits) {
+    int32_t v = 0;
+    for (int i = 0; i < digits; i++) {
+        char c = s[i];
+        int d;
+        if (c >= '0' && c <= '9') d = c - '0';
+        else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+        else return -1;
+        v = (v << 4) | d;
+    }
+    return v;
+}
+
+// True once every device has both names, so the scan can stop early
+// rather than always reading all 1.6MB. Devices missing from the
+// database never resolve, so this is an optimization for the common
+// case, not something the loop's correctness depends on.
+static int all_resolved(void) {
+    for (int i = 0; i < g_count; i++) {
+        if (!g_vendor_name[i][0] || !g_device_name[i][0]) return 0;
+    }
+    return 1;
+}
+
+static void handle_line(char *line, int32_t *cur_vendor) {
+    if (line[0] == '#' || line[0] == '\0') return;
+
+    if (line[0] != '\t') {                       // vendor: "8086  Intel Corporation"
+        int32_t id = parse_hex(line, 4);
+        if (id < 0) return;
+        *cur_vendor = id;
+        const char *name = line + 4;
+        while (*name == ' ') name++;
+        for (int i = 0; i < g_count; i++) {
+            if (g_dev[i].vendor_id == (uint16_t)id && !g_vendor_name[i][0]) {
+                copy_trunc(g_vendor_name[i], name, VENDOR_NAME_MAX);
+            }
+        }
+        return;
+    }
+
+    if (line[1] == '\t') return;                 // subsystem line -- not used here
+    if (*cur_vendor < 0) return;                 // device line before any vendor: malformed
+
+    int32_t id = parse_hex(line + 1, 4);         // device: "\t7010  82371SB PIIX3 IDE"
+    if (id < 0) return;
+    const char *name = line + 5;
+    while (*name == ' ') name++;
+    for (int i = 0; i < g_count; i++) {
+        if (g_dev[i].vendor_id == (uint16_t)*cur_vendor &&
+            g_dev[i].device_id == (uint16_t)id && !g_device_name[i][0]) {
+            copy_trunc(g_device_name[i], name, DEVICE_NAME_MAX);
+        }
+    }
+}
+
+// Fills in whatever names the database has. Silent no-op if the file
+// isn't there -- the numeric output below still works, which is the
+// point of keeping the two separable.
+static void load_names(void) {
+    int64_t fd = sys_open(PCI_IDS_PATH, 0);
+    if (fd < 0) {
+        put_err("lspci: " PCI_IDS_PATH " not found -- showing numeric ids only\n");
+        return;
+    }
+
+    char chunk[CHUNK];
+    char line[LINE_MAX];
+    uint64_t line_len = 0;
+    int32_t cur_vendor = -1;
+    int overlong = 0; // dropping the tail of a too-long line, not restarting mid-way
+
+    for (;;) {
+        int64_t n = sys_read((int)fd, chunk, CHUNK);
+        if (n <= 0) break;
+        for (int64_t i = 0; i < n; i++) {
+            char c = chunk[i];
+            if (c != '\n') {
+                if (line_len + 1 < LINE_MAX) line[line_len++] = c;
+                else overlong = 1;
+                continue;
+            }
+            line[line_len] = '\0';
+            if (!overlong) handle_line(line, &cur_vendor);
+            line_len = 0;
+            overlong = 0;
+        }
+        if (all_resolved()) break;
+    }
+
+    if (line_len > 0 && !overlong) {  // last line without a trailing newline
+        line[line_len] = '\0';
+        handle_line(line, &cur_vendor);
+    }
+    sys_close((int)fd);
+}
+
 void _start(void) {
     int64_t count = sys_pci_count();
     if (count <= 0) {
         put("No PCI devices found.\n");
         sys_exit(0);
     }
+    if (count > MAX_DEVS) count = MAX_DEVS; // more than this and names are the least of it
 
     for (int64_t i = 0; i < count; i++) {
-        struct pci_device dev;
-        if (sys_pci_info((int)i, &dev) != 1) continue; // shouldn't happen -- index is in range
+        if (sys_pci_info((int)i, &g_dev[g_count]) == 1) g_count++;
+    }
 
-        put_hex_digits(dev.bus, 2);
+    load_names();
+
+    for (int i = 0; i < g_count; i++) {
+        const struct pci_device *dev = &g_dev[i];
+
+        put_hex_digits(dev->bus, 2);
         put(":");
-        put_hex_digits(dev.device, 2);
+        put_hex_digits(dev->device, 2);
         put(".");
-        put_hex_digits(dev.function, 1);
+        put_hex_digits(dev->function, 1);
         put("  ");
-        put_hex_digits(dev.vendor_id, 4);
+        put_hex_digits(dev->vendor_id, 4);
         put(":");
-        put_hex_digits(dev.device_id, 4);
+        put_hex_digits(dev->device_id, 4);
         put("  ");
-        put(class_name(dev.class_code, dev.subclass));
+        put(class_name(dev->class_code, dev->subclass));
+
+        // IRQ line and nonzero BARs, matching what the kernel-side
+        // cmd_lspci() printed before it started deferring to this
+        // binary -- otherwise moving to one implementation would have
+        // quietly dropped output that already existed. Same two-line
+        // decode as pci.c's pci_bar_is_io()/pci_bar_addr(), which is
+        // kernel-space and can't be called from ring 3 (see this file's
+        // top comment); it's three bits of masking, not worth a syscall.
+        if (dev->interrupt_line != 0 && dev->interrupt_line != 0xFF) {
+            put("  irq ");
+            put_udec(dev->interrupt_line);
+        }
+        for (int b = 0; b < 6; b++) {
+            uint32_t bar = dev->bar[b];
+            if (bar == 0) continue;
+            int is_io = (bar & 0x1) != 0;
+            put("  bar");
+            put_udec((uint32_t)b);
+            put("=0x");
+            put_hex_digits(is_io ? (bar & 0xFFFFFFFCu) : (bar & 0xFFFFFFF0u), 8);
+            put(is_io ? "(io)" : "(mem)");
+        }
         put("\n");
+
+        // Names on their own indented line rather than appended: a
+        // device name alone can be 60+ characters, and keeping the
+        // first line's columns fixed means the numeric output still
+        // lines up exactly as it did before this existed.
+        if (g_vendor_name[i][0] || g_device_name[i][0]) {
+            put("           ");
+            put(g_vendor_name[i][0] ? g_vendor_name[i] : "(unknown vendor)");
+            if (g_device_name[i][0]) {
+                put("  ");
+                put(g_device_name[i]);
+            }
+            put("\n");
+        }
     }
 
     sys_exit(0);

@@ -41,6 +41,8 @@ there when you add an entry, or the index quietly stops being one.
 - [File timestamps are broken-down local time, not a Unix epoch integer](#file-timestamps-are-broken-down-local-time-not-a-unix-epoch-integer)
 - [TFS2 v2's block pointers go direct + single + double + triple indirect, not just direct + single](#tfs2-v2s-block-pointers-go-direct-single-double-triple-indirect-not-just-direct-single)
 - [`fs_read_range()`/`fs_write_range()` were added alongside `fs_read()`/`fs_write()`, not as a replacement](#fs_read_rangefs_write_range-were-added-alongside-fs_readfs_write-not-as-a-replacement)
+- [`SYS_READ` read the whole file on every call, which made streaming quadratic](#sys_read-read-the-whole-file-on-every-call-which-made-streaming-quadratic)
+- [pci.ids is bundled in `data/`, not downloaded or read from the build host](#pciids-is-bundled-in-data-not-downloaded-or-read-from-the-build-host)
 - [TFS2's write batching: `write_range_impl()`'s data path in bulk, `persist_record()`'s journal down to two barriers](#tfs2s-write-batching-write_range_impls-data-path-in-bulk-persist_records-journal-down-to-two-barriers)
 - [`fs_ops`'s new steppable-write function pointers are required, not optional/NULLable](#fs_opss-new-steppable-write-function-pointers-are-required-not-optionalnullable)
 - [`tools/tfs2_writer.py`: content-hash sync, not mtime comparison; direct+single-indirect write scope, not full indirect support](#toolstfs2_writerpy-content-hash-sync-not-mtime-comparison-directsingle-indirect-write-scope-not-full-indirect-support)
@@ -317,6 +319,71 @@ just to enumerate/identify what's present. See `pci.h`'s top comment
 and CHANGELOG-archive-2.md's **Build 390** for the full writeup -- this was the
 first concrete milestone toward the TCP/IP prerequisites README.md's
 **Build 380** entry laid out.
+
+## `SYS_READ` read the whole file on every call, which made streaming quadratic
+
+`SYS_READ`'s handler (`kernel/proc/syscall.c`) used to call `fs_read()`
+-- which loads an ENTIRE file into a `kmalloc()`'d buffer -- and then
+copy out just the `len` bytes sitting at the fd's current offset. Every
+call. So the cost of streaming a file was (file size) x (number of
+reads), and `SYS_WRITE_MAX` caps a read at 1KB.
+
+Nothing noticed for a long time because nothing in ring 3 had ever
+opened a file bigger than a few hundred bytes; at that size the whole
+file *is* one read. `/bin/lspci` reading the 1.6MB `pci.ids` was the
+first real caller, and it turned into roughly 1,615 calls x 1.6MB =
+**~2.6GB of disk reads, taking 35 seconds** for what should be a
+sub-second command. Switching the handler to `fs_read_range()` -- which
+exists precisely for this, and whose own doc comment describes "a caller
+streaming a whole file just calls this in a loop with an increasing
+offset" -- took the same command to **0.9 seconds including boot**.
+
+Two things worth carrying from it. **A wrong complexity class can sit
+undisturbed for as long as the inputs stay small**, and it fails by
+being slow rather than by being wrong, so no test catches it -- this one
+was found by a feature that happened to need a bigger file, not by
+review. And the correct API already existed and was already documented
+for exactly this use; the bug was a call site that predated it and was
+never revisited. When a range-based API gets added next to a
+whole-object one (see the entry above on why both exist), the existing
+callers are the thing to check.
+
+See `syscall.c`'s `SYS_READ` branch and CHANGELOG.md's `[Unreleased]`.
+
+## pci.ids is bundled in `data/`, not downloaded or read from the build host
+
+`/bin/lspci` resolves `8086:7010` into "Intel Corporation 82371SB PIIX3
+IDE" by reading `/usr/share/hwdata/pci.ids` -- the same file, at the
+same path, that a real Linux distribution's `lspci` reads. The copy is
+committed at `data/pci.ids` (1.6MB) and staged onto the disk image by
+the Makefile's `seed` target.
+
+Bundling was chosen over the two alternatives. **Reading the build
+host's `/usr/share/hwdata/pci.ids`** costs nothing in the repo but makes
+the build depend on host layout -- absent on macOS and minimal
+containers -- and makes two machines produce different images.
+**Downloading from pci-ids.ucw.cz at build time** is always current, but
+puts a network fetch in the build, which breaks offline builds and the
+sandboxed environments CLAUDE.md documents, and adds a supply-chain
+input. A committed copy is reproducible, offline, identical everywhere,
+and refreshing it is a deliberate commit rather than a silent change.
+
+**It does not live in `seed/`.** `seed/sync/` looks like the obvious
+home -- it's the tree that gets mirrored onto the disk image -- but it's
+a build *staging* area: `make clean` does `rm -rf seed/sync`, and
+`.gitignore` excludes it, because the Makefile repopulates it with built
+ELFs every build. A file placed there works perfectly on the machine
+that created it and silently doesn't exist for anyone who clones. (This
+was caught exactly that way: the file survived local testing, then
+vanished during a `make verify`, while the copy already written to
+`disk.img` kept the feature working.) Hand-authored content belongs in a
+tracked directory that the `seed` target copies in.
+
+Licensing: upstream offers the database under GPL-2.0-or-later **or**
+3-clause BSD. toy-os takes the BSD option, which is compatible with the
+MIT repo; `LICENSE` carries the full text in a "Third-party data"
+section, following the same pattern as the baked JetBrains Mono glyph
+data (see the entry on that).
 
 ## Filesystem is one active backend, not mount points
 

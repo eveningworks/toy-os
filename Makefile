@@ -179,6 +179,16 @@ USERLAND_ELVES = $(foreach pair,$(SEED_BINARIES),$(firstword $(subst :, ,$(pair)
 # recipe every build, not tracked source files.
 SEED_DIR = seed
 
+# The PCI ID Database (pci-ids.ucw.cz), bundled rather than fetched or
+# read from the build host, so a build is reproducible and works
+# offline. Read at runtime by /bin/lspci to turn 8086:7010 into "Intel
+# Corporation 82371SB PIIX3 IDE"; the `seed` target below stages it to
+# /usr/share/hwdata/pci.ids on the disk image, the same path Linux
+# distributions use. NOT MIT -- redistributed under its 3-clause BSD
+# option, see LICENSE. Refreshing it is a deliberate commit: download a
+# new copy from https://pci-ids.ucw.cz/v2.2/pci.ids over data/pci.ids.
+PCI_IDS = data/pci.ids
+
 # Source discovery is RECURSIVE and automatic: every .c under kernel/
 # or apps/ is compiled, and every .asm under kernel/ is assembled, with
 # build/ mirroring the source tree. Adding a directory needs no Makefile
@@ -340,6 +350,14 @@ $(DISK_IMG):
 seed: $(DISK_IMG) $(USERLAND_ELVES)
 	mkdir -p $(SEED_DIR)/sync/bin
 	$(foreach pair,$(SEED_BINARIES),cp $(word 1,$(subst :, ,$(pair))) $(SEED_DIR)/sync/bin/$(word 2,$(subst :, ,$(pair)));)
+	# The PCI ID database, staged the same way the ELFs above are, and
+	# for the same reason: $(SEED_DIR)/sync is a build-staging tree that
+	# `make clean` deletes wholesale and .gitignore excludes, so nothing
+	# hand-authored can live there. The tracked master copy is
+	# data/pci.ids -- see that directory's entry in README.md, and
+	# LICENSE's "Third-party data" section for what governs it.
+	mkdir -p $(SEED_DIR)/sync/usr/share/hwdata
+	cp $(PCI_IDS) $(SEED_DIR)/sync/usr/share/hwdata/pci.ids
 	@if command -v xkbcli >/dev/null 2>&1; then \
 		python3 tools/gen_kbs.py us --write; \
 		python3 tools/gen_kbs.py se --write; \
