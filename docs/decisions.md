@@ -79,6 +79,7 @@ there when you add an entry, or the index quietly stops being one.
 - [Console scrollback is a character ring in vga.c, and the boot log is echoed to it](#console-scrollback-is-a-character-ring-in-vgac-and-the-boot-log-is-echoed-to-it)
 - [Button press/release feedback: a general `on_press`/`on_release` WM mechanism, not a Calculator-only hack](#button-pressrelease-feedback-a-general-on_presson_release-wm-mechanism-not-a-calculator-only-hack)
 - [ui_button/ui_button_group: Brutal-OS-inspired, but not a full retained view system](#ui_buttonui_button_group-brutal-os-inspired-but-not-a-full-retained-view-system)
+- [The WM clips each app's on_draw() to its window -- containment, not optimisation](#the-wm-clips-each-apps-on_draw-to-its-window----containment-not-optimisation)
 - [CPU info: one syscall, because "supported" and "enabled" sit on opposite sides of a privilege boundary](#cpu-info-one-syscall-because-supported-and-enabled-sit-on-opposite-sides-of-a-privilege-boundary)
 - [Floating point is ring-3 only, and eager -- the same call Linux and Windows made](#floating-point-is-ring-3-only-and-eager----the-same-call-linux-and-windows-made)
 - [Button groups commit on RELEASE, and there is no ui_button_group_click()](#button-groups-commit-on-release-and-there-is-no-ui_button_group_click)
@@ -1199,6 +1200,34 @@ mouse-enter/leave dispatch" stopped being true when `gui_apps.h`'s
 `on_hover` landed with the GUI guidelines: `ui_button` carries a
 `hovered` flag beside `pressed` now, driven by
 `ui_button_group_hover()`. See the entry below.
+
+## The WM clips each app's on_draw() to its window -- containment, not optimisation
+
+`wm_render_frame()` narrows the clip rect to a window's content area
+around its `on_draw()` call, then restores the scene clip. That looks
+like a compositor optimisation and isn't: the damage-region clip already
+handles that. It's there because nothing else stopped an app from
+drawing outside its own window, and one of them did -- shrinking the
+Control Panel sent System Info's lower rows down the desktop, perfectly
+legible, outside any frame.
+
+Two things had to be true at once for that. `gfx_draw_string_clipped()`
+bounds **width only** -- it takes a `max_w` and has no row budget, so
+the name promises more than it delivers, and the horizontal edge clipped
+correctly while the bottom didn't exist as a concept. And the only clip
+active while apps drew was the damage box, which by construction covers
+the desktop under a window.
+
+The intersection is computed by hand in `wm_render.c` because
+`gfx_set_clip_rect()` **replaces** the active rect rather than
+intersecting it. Setting the content rect naively would have widened the
+damage clip back out and quietly undone Phase 1+2's whole point -- worth
+knowing before adding a second nested clip anywhere.
+
+Apps should still budget their own height (`docs/gui-guidelines.md` says
+so): clipped-away drawing still costs the CPU that produced it, and a
+page that stops at the last row that fits looks better than one sliced
+through its glyphs. The WM clip is the backstop, not the plan.
 
 ## CPU info: one syscall, because "supported" and "enabled" sit on opposite sides of a privilege boundary
 

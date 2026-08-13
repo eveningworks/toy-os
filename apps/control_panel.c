@@ -164,7 +164,6 @@ static uint32_t cache_kb_at_level(int level) {
 }
 
 static void sysinfo_applet_draw(int x, int y, int w, int h) {
-    (void)h;
     int line_h = gfx_char_h() + 6;
     char line[96];
     uint64_t used = 0, total = 0;
@@ -172,14 +171,29 @@ static void sysinfo_applet_draw(int x, int y, int w, int h) {
 
     if (!g_cpu_loaded) { cpu_info_get(&g_cpu); g_cpu_loaded = 1; }
 
-    // Every line here goes through gfx_draw_string_clipped() with the
-    // applet's own width, not gfx_draw_string() -- the CPU brand string
-    // is up to 48 characters and would happily draw straight off the
-    // page otherwise. See docs/gui-guidelines.md; this is the rule that
-    // has already been broken twice in this codebase.
+    // Two axes, two separate budgets, and the second one is easy to
+    // forget because the helper's name suggests it's covered.
+    //
+    // WIDTH: gfx_draw_string_clipped(), not gfx_draw_string() -- the CPU
+    // brand string runs to 48 characters and would draw straight off the
+    // page. See docs/gui-guidelines.md.
+    //
+    // HEIGHT: that helper bounds width ONLY -- it has no row budget at
+    // all -- so a row past the bottom of the page is simply drawn
+    // wherever it lands. Shrinking this window used to send the lower
+    // half of this page marching down the desktop, fully legible,
+    // outside any window. The WM clips app drawing to its content
+    // rect now (apps/wm/wm_render.c) so that can't reach the screen
+    // any more, but stopping here as well means the page ends on a
+    // whole line rather than one sliced through the middle of its
+    // glyphs.
     #define SYSINFO_LINE(fmt_done) \
-        gfx_draw_string_clipped(x, y + (row++) * line_h, w, (fmt_done), \
-                                 THEME_TEXT, THEME_WINDOW_BG)
+        do { \
+            int ly = y + row * line_h; \
+            if (ly + gfx_char_h() > y + h) break; \
+            gfx_draw_string_clipped(x, ly, w, (fmt_done), THEME_TEXT, THEME_WINDOW_BG); \
+            row++; \
+        } while (0)
 
     SYSINFO_LINE("toy-os v" TOYOS_VERSION);
 

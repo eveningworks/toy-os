@@ -513,6 +513,48 @@ static void compute_window_damage(void) {
     }
 }
 
+// Re-applies whatever clip the current frame's scene should be drawn
+// under -- the accumulated damage box, or none. Paired with
+// clip_to_window_content() below, which narrows it temporarily.
+static void apply_scene_clip(int has_damage) {
+    if (has_damage) {
+        gfx_set_clip_rect(damage_x0, damage_y0, damage_x1 - damage_x0, damage_y1 - damage_y0);
+    } else {
+        gfx_clear_clip_rect();
+    }
+}
+
+// Narrows the clip to a window's CONTENT area for the duration of its
+// on_draw(), so nothing an app draws can land outside its own window.
+//
+// **This is a containment boundary, not an optimisation.** Nothing else
+// enforced it: an app whose content didn't fit painted straight over the
+// desktop and any window behind it. Shrinking the Control Panel is how
+// it turned up -- System Info's lower rows carried on down the desktop,
+// perfectly legible, well outside the frame. gfx_draw_string_clipped()
+// doesn't help there: it bounds a string's WIDTH and has no notion of a
+// row budget, so the horizontal edge was clipped correctly while the
+// bottom had nothing stopping it at all.
+//
+// Intersects with the scene clip by hand because gfx_set_clip_rect()
+// REPLACES the active rect rather than intersecting -- setting the
+// content rect naively would have widened the damage clip back out and
+// quietly undone the compositor's whole point.
+static void clip_to_window_content(const struct window *w, int has_damage) {
+    int x0 = window_content_x(w), y0 = window_content_y(w);
+    int x1 = x0 + window_content_w(w), y1 = y0 + window_content_h(w);
+
+    if (has_damage) {
+        if (damage_x0 > x0) x0 = damage_x0;
+        if (damage_y0 > y0) y0 = damage_y0;
+        if (damage_x1 < x1) x1 = damage_x1;
+        if (damage_y1 < y1) y1 = damage_y1;
+    }
+    // A non-positive w/h is gfx_set_clip_rect()'s "nothing draws", which
+    // is exactly right for a window with no visible content this frame.
+    gfx_set_clip_rect(x0, y0, x1 - x0, y1 - y0);
+}
+
 // Does this window's current rect overlap the accumulated damage box at
 // all? Used by wm_render_frame() (Phase 3, see docs/decisions.md) to
 // skip a whole window's chrome/on_draw()/resize-grip work, not just the
@@ -538,11 +580,7 @@ void wm_render_frame(int mx, int my) {
     // Phase 1+2, and every window is drawn (has_damage below is false,
     // so window_intersects_damage() is never even consulted).
     int has_damage = damage_x1 > damage_x0;
-    if (has_damage) {
-        gfx_set_clip_rect(damage_x0, damage_y0, damage_x1 - damage_x0, damage_y1 - damage_y0);
-    } else {
-        gfx_clear_clip_rect();
-    }
+    apply_scene_clip(has_damage);
 
     desktop_draw(); // background + icon grid -- replaces the old bare gfx_clear() fill, see desktop.h
 
@@ -560,7 +598,14 @@ void wm_render_frame(int mx, int my) {
         if (windows[i].state == WIN_MINIMIZED) continue;
         if (has_damage && !window_intersects_damage(&windows[i])) continue;
         draw_window_chrome(&windows[i], i, i == window_count - 1);
-        if (windows[i].app && windows[i].app->on_draw) windows[i].app->on_draw(&windows[i]);
+        if (windows[i].app && windows[i].app->on_draw) {
+            // Only the app's own draw is confined to its content area.
+            // The chrome above and the grip below are the WM's own
+            // pixels and deliberately live at/outside that boundary.
+            clip_to_window_content(&windows[i], has_damage);
+            windows[i].app->on_draw(&windows[i]);
+            apply_scene_clip(has_damage);
+        }
         draw_resize_grip(&windows[i]); // after on_draw() -- see its own comment
     }
 

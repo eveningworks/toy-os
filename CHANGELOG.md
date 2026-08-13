@@ -209,6 +209,37 @@ using `## [x.y.z] - date` headings is here.
   - `fputest` from the shell runs both halves.
 
 ### Fixed
+- **An app could draw outside its own window, straight onto the desktop.**
+  Reported from a screenshot: shrinking the Control Panel left System
+  Info's lower rows marching down the desktop, fully legible, well
+  outside the frame.
+  - Two gaps, one visible. **`gfx_draw_string_clipped()` bounds width
+    only** -- it takes a `max_w` and has no row budget at all -- so the
+    right-hand edge clipped correctly while the bottom had nothing
+    stopping it. And **the WM never clipped `on_draw()` to a window's
+    content rect**: the only clip active during a frame is the damage
+    region, which covers the desktop below a window too.
+  - So this was never really a System Info bug. Any app drawing more
+    than fits would paint over the desktop and over other windows;
+    System Info was just the first page with enough rows to show it.
+  - `wm_render_frame()` now narrows the clip to each window's content
+    rect around its `on_draw()`, and restores the scene clip after.
+    Intersected by hand, because `gfx_set_clip_rect()` REPLACES the
+    active rect rather than intersecting -- setting the content rect
+    naively would have widened the damage clip back out and undone the
+    compositor's whole point.
+  - The System Info page also stops at the last row that fully fits, so
+    it ends on a whole line instead of one sliced through its glyphs.
+  - **Verified both halves independently**: with the applet's row budget
+    temporarily removed, the WM clip alone still contained everything
+    (zero non-desktop pixels below a window shrunk to 163px tall), and
+    with it restored the page ends cleanly. Also re-checked Notepad,
+    Calculator, Terminal and Task Manager still render.
+  - Worth noting the near-miss in testing: the first repro dragged from
+    one pixel above the resize grip's hotspot (`RESIZE_MARGIN` is 6), so
+    only the width changed, the content still fit, and the "negative
+    control" proved nothing. A test that can't fail isn't evidence.
+
 - **Ring-3 stack alignment was wrong for SSE, in two different ways.**
   `elf_run.c` aligned the initial user RSP to 8 bytes, which was
   invisible while userland was built `-mno-sse` and nothing could emit

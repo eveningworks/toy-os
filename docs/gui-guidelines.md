@@ -135,6 +135,24 @@ isn't a button group.
   `gfx_draw_string_clipped()`, and `gfx_text_width()` to measure. This
   has caused the same bug twice in different files -- see
   `docs/decisions.md`.
+- **`gfx_draw_string_clipped()` bounds WIDTH ONLY. Budget the height
+  yourself.** The name reads like it handles both; it takes a `max_w`
+  and has no notion of a row limit, so a line drawn below the bottom of
+  its box lands wherever the caller put it. A panel that emits rows in a
+  loop must stop at the last one that fully fits (`if (ly +
+  gfx_char_h() > y + h) break;`) -- otherwise it keeps drawing into
+  whatever is underneath. This is the *other* half of the rule above and
+  it went unnoticed until the Control Panel was resized small: System
+  Info's lower rows carried on down the desktop, outside any window.
+  Nothing reaches the screen now (the WM clips app drawing to its
+  window, below), but stopping cleanly still beats a final row sliced
+  through the middle of its glyphs.
+- **An app cannot draw outside its own window, and must not rely on
+  that.** `wm_render_frame()` narrows the clip to each window's content
+  rect for the duration of its `on_draw()`. That's a containment
+  boundary, not a licence to overdraw: clipped-away drawing still costs
+  the CPU that produced it, and a control the user can't see is still a
+  control that mis-reports its layout to hit-testing.
 - **Size boxes from font metrics, not constants.** `gfx_char_w()`/
   `gfx_char_h()` change with the font size setting; a hardcoded cell
   width is correct at exactly one font.
