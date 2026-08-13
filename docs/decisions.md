@@ -62,6 +62,7 @@ there when you add an entry, or the index quietly stops being one.
 - [Nordic keyboard/character support: Latin-1, not UTF-8; 3 remapped keys, not a full layout](#nordic-keyboardcharacter-support-latin-1-not-utf-8-3-remapped-keys-not-a-full-layout)
 - [Keyboard layouts are data files (`/etc/kbs/<name>`) generated from Linux's own XKB data, not a compiled-in enum](#keyboard-layouts-are-data-files-etckbsname-generated-from-linuxs-own-xkb-data-not-a-compiled-in-enum)
 - [GDB debugging: QEMU's built-in stub, not an in-kernel serial protocol implementation](#gdb-debugging-qemus-built-in-stub-not-an-in-kernel-serial-protocol-implementation)
+- [ATA's waits are bounded by wall-clock in one context and a spin count in the other](#atas-waits-are-bounded-by-wall-clock-in-one-context-and-a-spin-count-in-the-other)
 
 **GUI: window manager, compositor & widgets**
 
@@ -239,6 +240,37 @@ call before its own DMA moves real data -- noted directly in
 for how this was root-caused (PIO-vs-DMA comparison, then a host-side
 pre-seeded disk image to isolate the read path and trace the bounce
 buffer).
+
+## ATA's waits are bounded by wall-clock in one context and a spin count in the other
+
+Every wait in `kernel/drivers/ata.c` that can block looks like it's
+written twice, and the duplication is deliberate. A wall-clock budget
+needs `pit_ticks()` to advance, and it doesn't inside a syscall: `int
+0x80` is wired as an interrupt gate, so IF stays clear for the whole
+handler and no timer IRQ ever increments the counter. A wall-clock loop
+reached from there wouldn't time out, it would hang the machine. So
+`wait_dma_irq()` and `wait_not_busy()` both branch on
+`isr_in_progress()` (`idt.h`) -- real elapsed time when it's safe, a
+fixed `ATA_POLL_LIMIT` spin when it isn't. Same split, same reason, as
+the `hlt`-when-safe/poll-when-inside-a-syscall rule in the entry on
+blocking I/O waits above.
+
+**Why this is worth an entry rather than just a comment:** the two
+bounds were written years apart in project time, and for a long stretch
+only the completion wait had the wall-clock half. `DMA_WAIT_TICKS` was
+deliberately *widened* to 5s to absorb host-side I/O stalls, while
+`wait_not_busy()` sat at a fixed 100000-iteration spin -- which measures
+out to ~12ms, giving three retries ~37ms in total. The driver was
+therefore 135x more patient about a command in flight than about a
+drive still finishing the previous one, and a host stall (a Btrfs
+commit, an ISO being written to the same disk) hit the impatient half.
+The general lesson is the one worth carrying: **a spin count is not a
+duration.** It measures the guest CPU, which keeps running at full
+speed during exactly the host-side stalls it's supposed to absorb, so
+any timeout that must survive one has to be denominated in real time.
+
+See `ata.c`'s `wait_not_busy()`/`DMA_WAIT_TICKS` comments and
+CHANGELOG.md's `[Unreleased]`.
 
 ## Contiguous memory: linear bitmap scan, not a buddy allocator
 

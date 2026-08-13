@@ -30,6 +30,64 @@ using `## [x.y.z] - date` headings is here.
 
 ## [Unreleased]
 
+### Fixed
+- **The ATA driver gave a busy drive ~37ms to become ready, while
+  giving the same transfer 5 seconds once its command was in flight.**
+  Reported from a live `stress 4200` run that died at 11% with `ata: dma
+  write failed after 3 attempts (lba 2, last reason: drive stayed busy,
+  command never issued)` and `fs: WARNING -- record slot 26 (lba 29)
+  failed to persist`.
+  - Read the LBA, not the progress bar: `lba 2` is the journal header
+    `persist_record()` writes *first*, so this was a metadata write
+    failing, not the 473MB of file data the message sits next to. The
+    473MB is where `stress` happened to be, not where anything went
+    wrong -- a later `stress 600` wrote straight past that offset.
+  - The driver bounds its two waits differently. `wait_dma_irq()`
+    (command already in flight) uses a wall-clock budget --
+    `DMA_WAIT_TICKS`, 500 ticks at 100Hz, 5 seconds.
+    `wait_not_busy()` (the pre-issue wait, the one that failed) used
+    `ATA_POLL_LIMIT` alone: a fixed 100000-iteration spin. **A spin
+    count is not a duration.** Measured in the guest, those 100000
+    iterations take ~12ms, and `dma_transfer_with_retry()` ran its three
+    attempts back-to-back with no delay -- so the driver's total
+    patience was ~37ms against the completion path's 5000ms, a ~135x
+    asymmetry in the wrong direction. Any host-side I/O stall longer
+    than 37ms takes out all three attempts at once, and the failing run
+    started seconds after `grub-mkrescue` wrote a 746MB ISO to the same
+    Btrfs disk.
+  - `DMA_WAIT_TICKS`'s own comment records it being *widened* against
+    this exact class of host stall. That widening only fixed the
+    completion half; nothing revisited the pre-issue half, which is how
+    a bound the project had already reasoned about carefully stayed
+    135x too small next to it.
+  - **Fixed** by giving `wait_not_busy()` the same context split
+    `wait_dma_irq()` already had: a wall-clock budget
+    (`BUSY_WAIT_TICKS`, ~1s) when it's safe, and the original fixed spin
+    (`spin_not_busy()`) when inside a syscall -- where `int 0x80`'s
+    interrupt gate leaves IF clear, so `pit_ticks()` never advances and
+    a wall-clock loop would hang instead of time out. The wall-clock
+    path also carries a very generous iteration cap as belt-and-braces,
+    since being wrong about that assumption should fail a write, not
+    the machine. Plus `retry_backoff()` between attempts (~250ms x the
+    attempt number, `hlt` when safe and a spin inside a syscall, per
+    `docs/decisions.md`'s standing rule for blocking waits), because
+    retrying instantly is the one thing guaranteed not to help when the
+    cause is a stall.
+  - **Not changed: `wait_drq()`**, the PIO fallback's per-sector wait.
+    Same fixed-spin shape, but it sits in a hot per-sector loop on a
+    path this failure didn't involve, so it was left alone rather than
+    changed unmeasured.
+  - Verified: `make verify` clean (58 KTESTs, boot smoke). `stress 150`
+    PASSED byte-for-byte at 24.0 MB/s and `fsck` reported clean;
+    `stress 400` wrote at 23.1 MB/s, both unchanged from before the
+    change, confirming the new bounds cost nothing on the success path
+    (they only ever elapse when the drive is actually busy). **Honestly
+    not verified: that this survives a real stall.** The original
+    failure is host-timing-dependent and did not reproduce in-session
+    across 600MB+400MB+150MB of writing, so the fix rests on the
+    measured 12ms-vs-5000ms asymmetry and the reason string naming that
+    exact wait, not on a caught-and-then-fixed reproduction.
+
 ### Changed
 - **Roadmap: two new milestones, and a second renumbering to make room
   for one of them.** Asked what it would take to make toy-os POSIX

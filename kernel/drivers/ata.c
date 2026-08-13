@@ -63,9 +63,55 @@ static int g_present = 0;
 // tfs.c's own clamp).
 static uint32_t g_sector_count = 0;
 
-static int wait_not_busy(void) {
+// ~1s at the 100Hz PIT tick rate. See wait_not_busy() below for why a
+// wall-clock bound, rather than ATA_POLL_LIMIT alone, is what this wait
+// needs.
+#define BUSY_WAIT_TICKS 100
+
+static int spin_not_busy(void) {
     for (int i = 0; i < ATA_POLL_LIMIT; i++) {
         if (!(inb(REG_STATUS) & STATUS_BSY)) return 1;
+        io_wait();
+    }
+    return 0;
+}
+
+// "Is the drive ready to accept a new command?" -- the wait that runs
+// BEFORE anything is issued, as opposed to wait_dma_irq()'s wait for a
+// command already in flight.
+//
+// Bounded two different ways for the same reason wait_dma_irq() is: a
+// wall-clock budget needs pit_ticks() to advance, and it doesn't inside
+// a syscall, because `int 0x80` is an interrupt gate so IF stays clear
+// for the whole handler (see idt.h's isr_in_progress()). So this spends
+// real time when it can and falls back to the fixed spin when it can't.
+//
+// Why it needs a wall-clock bound at all: ATA_POLL_LIMIT's 100000
+// iterations measure out to ~12ms on this emulated hardware, and
+// dma_transfer_with_retry()'s three attempts gave the drive ~37ms in
+// total to stop being busy -- while DMA_WAIT_TICKS granted the very
+// same transfer 5 SECONDS once its command was in flight. A host-side
+// I/O stall falls straight through that asymmetry: the guest CPU keeps
+// running at full speed while the emulated drive doesn't, so a fixed
+// spin count elapses long before the drive comes back, and all three
+// retries burn inside one stall. That surfaced as `dma write failed
+// after 3 attempts (lba 2, last reason: drive stayed busy, command
+// never issued)` during a `stress` run started seconds after
+// grub-mkrescue had written a 746MB ISO to the same host disk.
+// DMA_WAIT_TICKS's own comment records widening the completion half
+// against exactly this class of stall; this half was missed then.
+static int wait_not_busy(void) {
+    if (isr_in_progress()) return spin_not_busy();
+
+    uint64_t start = pit_ticks();
+    // The iteration cap is belt-and-braces, not the real bound: this
+    // path assumes ticks advance whenever isr_in_progress() is false,
+    // which holds today, but a wall-clock loop that's WRONG about that
+    // hangs the machine instead of failing one write. Sized well past
+    // BUSY_WAIT_TICKS so it never fires first in normal operation.
+    for (uint64_t guard = 0; guard < (uint64_t)ATA_POLL_LIMIT * 200; guard++) {
+        if (!(inb(REG_STATUS) & STATUS_BSY)) return 1;
+        if (pit_ticks() - start > BUSY_WAIT_TICKS) return 0;
         io_wait();
     }
     return 0;
@@ -143,6 +189,12 @@ struct prd {
 // a little more headroom against whatever comparable host-side stall
 // shows up next -- a genuinely dead/hung drive still surfaces as a
 // hard failure, just up to ~2s later than before.
+//
+// wait_not_busy() above is the OTHER half of this, and only got the
+// same treatment much later: widening the completion bound here while
+// leaving the pre-issue bound at a fixed spin count meant the driver
+// waited 5s for a command in flight and ~12ms for a drive that hadn't
+// finished the previous one. Keep the two in mind together.
 #define DMA_WAIT_TICKS 500
 
 static int g_dma_available = 0;
@@ -581,6 +633,28 @@ enum ata_poll_result dma_transfer_poll(void) {
 // exhausted, same as before this existed.
 #define ATA_DMA_MAX_RETRIES 3
 
+// ~250ms at the 100Hz PIT tick rate, multiplied by the attempt number
+// so three attempts span roughly 0.25s + 0.5s of waiting rather than
+// retrying instantly.
+#define RETRY_BACKOFF_TICKS 25
+
+// Pause between retry attempts. Retrying a transfer immediately after
+// it failed is the one thing guaranteed not to help when the cause is
+// a host-side stall: without this, all three attempts finish inside the
+// same stall and the retry budget buys nothing. Same context split as
+// wait_not_busy() above, and the `hlt` follows the project's standing
+// rule for blocking waits -- hlt when it's safe, poll when inside a
+// syscall (see docs/decisions.md).
+static void retry_backoff(int attempt) {
+    if (isr_in_progress()) {
+        for (int i = 0; i < ATA_POLL_LIMIT * attempt; i++) io_wait();
+        return;
+    }
+    uint64_t start = pit_ticks();
+    uint64_t want = (uint64_t)attempt * RETRY_BACKOFF_TICKS;
+    while (pit_ticks() - start < want) __asm__ volatile ("hlt");
+}
+
 static int dma_transfer_with_retry(uint32_t lba, int count, void *buf, int is_write) {
     for (int attempt = 1; attempt <= ATA_DMA_MAX_RETRIES; attempt++) {
         if (dma_transfer(lba, count, buf, is_write)) {
@@ -596,6 +670,7 @@ static int dma_transfer_with_retry(uint32_t lba, int count, void *buf, int is_wr
             klog_write(" attempt "); klog_write_dec((uint32_t)attempt);
             klog_write(" failed (lba "); klog_write_dec(lba); klog_write(")\n");
         }
+        if (attempt < ATA_DMA_MAX_RETRIES) retry_backoff(attempt);
     }
     // Always logged, not gated behind DBGFLAG_ATA -- exhausting every
     // retry means this is a real failure the caller (fs.c, ultimately
