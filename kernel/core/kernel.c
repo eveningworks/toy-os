@@ -3,6 +3,7 @@
 // app-level code again. Compare with apps/apps.c, which knows nothing
 // about hardware.
 #include "vga.h"
+#include "gfx.h"
 #include "serial.h"
 #include "klog.h"
 #include "idt.h"
@@ -13,6 +14,7 @@
 #include "pmm.h"
 #include "heap.h"
 #include "pci.h"
+#include "vmsvga.h"
 #include "fs.h"
 #include "json.h"
 #include "tz.h"
@@ -92,6 +94,19 @@ void kernel_main(uint64_t multiboot_info_addr) {
 
     pci_init(); // brute-force config-space scan -- see pci.h's top comment
     klog_write("toy-os: PCI bus enumerated\n");
+
+    // If we're on a VMware SVGA II adapter (QEMU's `-vga vmware`), take
+    // the display over from GRUB's VBE mode so we get its HARDWARE
+    // CURSOR. A no-op on every other adapter, which keeps GRUB's
+    // framebuffer -- see kernel/include/kernel/vmsvga.h.
+    //
+    // After pci_init() (it needs the BARs) and after vga_init() (which
+    // established the mode this replaces); the console is re-flowed to
+    // the new geometry below.
+    if (vmsvga_init((uint32_t)gfx_width(), (uint32_t)gfx_height())) {
+        vga_reflow();
+        klog_write("toy-os: display driven by vmsvga (hardware cursor)\n");
+    }
 
     fs_init();
     fs_mkdir("/etc"); // config-file convention (see tz.c) -- a no-op if it already exists

@@ -448,6 +448,22 @@ run-menu:
 run: iso $(DISK_IMG)
 	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -vga std -display sdl,grab-mod=rctrl -m 256
 
+# Same as `run`, but on the VMware SVGA II adapter, which has a HARDWARE
+# MOUSE CURSOR -- kernel/drivers/vmsvga.c detects it, takes the display
+# over from GRUB's VBE mode and hands the cursor to the adapter, so the
+# WM stops drawing one. `-vga std` above has no cursor hardware at all
+# (plain VGA's only cursor is the text-mode underline), which is why
+# this is a separate target rather than the default.
+#
+# Not the default for two reasons: it's emulator-only (a real machine
+# needs a real GPU driver), and a hardware cursor is composited by the
+# display frontend rather than living in the framebuffer -- so QEMU's
+# `screendump` does NOT capture it, and every screenshot-based test
+# would stop seeing the pointer. Use `run` for anything you intend to
+# screenshot; use this to see the cursor the adapter draws.
+run-vmware: iso $(DISK_IMG)
+	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -vga vmware -display sdl,grab-mod=rctrl -m 256
+
 # Same as `run`, but with KVM hardware virtualization instead of QEMU's
 # TCG software emulation -- guest instructions run natively on the host
 # CPU. Needs /dev/kvm to be readable (usually membership of the `kvm`

@@ -117,6 +117,51 @@ using `## [x.y.z] - date` headings is here.
     unmoved throughout, and the highlight clearing both on moving off a
     button inside the window and on leaving the window entirely.
 
+- **A hardware mouse cursor, via a VMware SVGA II display driver
+  (`make run-vmware`).** Asked whether we could get one.
+  - **Plain VGA has no cursor to get working.** `-vga std` -- the
+    default, and what every real machine without a GPU driver looks
+    like -- has no cursor sprite for a linear framebuffer at all; VGA's
+    only hardware cursor is the text-mode underline. This was never
+    missing code, it was a missing capability, so the answer had to be
+    "talk to a device that has one".
+  - Measured which QEMU adapters boot here first: `vmware`, `qxl` and
+    `virtio` all keep 1280x720; `cirrus` has a hardware cursor but drops
+    to 640x480, which is too high a price. `lspci` (built earlier the
+    same day) found the VMware adapter at `00:02.0 15ad:0405` with its
+    I/O, framebuffer and FIFO BARs, all under 4GiB and therefore already
+    identity-mapped -- no new mapping code needed.
+  - **It's a display driver, not just a cursor.** The adapter composites
+    its cursor only while it is driving the display, so
+    `kernel/drivers/vmsvga.c` does the version handshake, sets the mode
+    through the device's own registers, enables SVGA, and re-points
+    `gfx.c` at the adapter's framebuffer (new
+    `gfx_adopt_framebuffer()`). Then the cursor is the adapter's job:
+    the WM uploads the sprite once and thereafter only says where it is.
+  - Cursor motion now costs **nothing**: no sprite blit, no saving the
+    pixels underneath, no damage rect, no repaint. It also makes the
+    trail bug fixed earlier today structurally impossible on this path
+    -- a stale sprite can't be left behind when nothing was ever painted.
+  - **Capabilities had to be measured, not assumed.** The first version
+    required `SVGA_CAP_ALPHA_CURSOR` and reported "cursor unavailable"
+    on the one adapter it was written for: QEMU advertises `caps=0xe3`
+    (CURSOR, CURSOR_BYPASS, BYPASS_2) and no alpha cap, with
+    `fifo_caps=0` so no bypass-3 either. So positioning goes through the
+    register path, and `SVGA_CAP_CURSOR` alone is the right gate.
+  - **Not the default, deliberately.** `-vga std` stays what `make run`
+    uses: this is emulator-only, and a hardware cursor is composited by
+    the display frontend rather than living in the framebuffer, so
+    QEMU's `screendump` does not capture it -- every screenshot-based
+    test would stop seeing the pointer. Verified `-vga std` is entirely
+    unaffected: the software cursor still renders (139 pixels at the
+    probe point) and the driver doesn't even log, since the device
+    isn't there.
+  - **Honest status: the cursor itself is not visually verified.**
+    `screendump` cannot capture a hardware cursor by definition, so
+    automation can confirm the driver initialises, takes the display
+    over, reports `cursor hardware` and renders the desktop correctly --
+    but not that the pointer appears. That needs a real display.
+
 - **`ui_textview`: scrolling belongs to the control, not to every app.**
   Asked for after spotting scroll logic sitting in UI Demo and Notepad
   -- a text view with scrollbars should behave like a real OS control,

@@ -27,6 +27,37 @@ const char *gfx_font_size_name(enum font_size size);
 // Returns 1 on success (a usable RGB framebuffer was found), 0 otherwise.
 int gfx_init(void);
 
+// Replaces the surface gfx_init() found with a different one -- used by
+// a display driver that takes the adapter over after boot (see
+// kernel/drivers/vmsvga.c). `addr` must already be mapped; QEMU's
+// display BARs sit under 4GiB, which this kernel identity-maps.
+// Returns 1 if accepted, 0 if the geometry/depth is unusable, in which
+// case the previous surface is left untouched.
+//
+// Callers must repaint afterwards -- nothing here preserves the old
+// contents, and the console's cell grid needs vga_reflow().
+int gfx_adopt_framebuffer(uint64_t addr, uint32_t pitch, uint32_t w, uint32_t h, uint8_t bpp);
+
+// --- hardware cursor -------------------------------------------------
+//
+// A cursor the DISPLAY ADAPTER composites, not something drawn into the
+// framebuffer. When available it makes cursor motion free: no sprite
+// blit, no save/restore of the pixels underneath, no damage rect, no
+// repaint of any kind -- the WM just tells it where to be.
+//
+// Only some adapters have one. Plain VGA (`-vga std`, and any real
+// machine without a GPU driver) has none at all, so the WM keeps its
+// software sprite and uses this only when gfx_hw_cursor_available()
+// says so. Check first; the rest are no-ops otherwise.
+int gfx_hw_cursor_available(void);
+
+// Uploads a 32-bit ARGB image, with the click point at (hot_x, hot_y).
+// Returns 1 on success.
+int gfx_hw_cursor_define(const uint32_t *argb, int w, int h, int hot_x, int hot_y);
+
+void gfx_hw_cursor_move(int x, int y);
+void gfx_hw_cursor_show(int on);
+
 int gfx_width(void);
 int gfx_height(void);
 

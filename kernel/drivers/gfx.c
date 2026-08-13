@@ -1,4 +1,5 @@
 #include "gfx.h"
+#include "vmsvga.h"
 #include "multiboot.h"
 #include "font_ttf.h"
 #include <stddef.h>
@@ -100,6 +101,33 @@ void gfx_set_clip_rect(int x, int y, int w, int h) {
 void gfx_clear_clip_rect(void) {
     clip_active = 0;
 }
+
+int gfx_adopt_framebuffer(uint64_t addr, uint32_t new_pitch, uint32_t w, uint32_t h,
+                           uint8_t new_bpp) {
+    if (!addr || !new_pitch || !w || !h) return 0;
+    if (new_bpp != 32 && new_bpp != 24) return 0;
+
+    fb = (uint8_t *)(uintptr_t)addr;
+    pitch = new_pitch;
+    width = (int)w;
+    height = (int)h;
+    bpp = new_bpp;
+    // A driver-set mode is plain little-endian ARGB/XRGB; the masks
+    // multiboot reported for GRUB's mode don't describe it.
+    red_pos = 16; red_size = 8;
+    green_pos = 8; green_size = 8;
+    blue_pos = 0; blue_size = 8;
+    return 1;
+}
+
+int gfx_hw_cursor_available(void) { return vmsvga_cursor_available(); }
+
+int gfx_hw_cursor_define(const uint32_t *argb, int w, int h, int hot_x, int hot_y) {
+    return vmsvga_cursor_define(argb, w, h, hot_x, hot_y);
+}
+
+void gfx_hw_cursor_move(int x, int y) { vmsvga_cursor_move(x, y); }
+void gfx_hw_cursor_show(int on) { vmsvga_cursor_show(on); }
 
 int gfx_init(void) {
     struct framebuffer_info info;

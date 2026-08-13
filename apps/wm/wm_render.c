@@ -278,9 +278,51 @@ static void save_cursor_under(int x, int y) {
     cursor_under_valid = 1;
 }
 
+// --- hardware cursor ---------------------------------------------------
+//
+// When the display adapter has a cursor of its own (see gfx.h's
+// gfx_hw_cursor_*() and kernel/drivers/vmsvga.c), the WM stops drawing
+// one entirely: no sprite blit, no saving the pixels underneath, no
+// damage. Moving it is a handful of register writes. That also removes
+// the whole class of bug the software path has -- a stale sprite left
+// behind is not expressible when nothing was ever painted into the
+// framebuffer.
+//
+// Nothing here is conditional on WHICH adapter: gfx answers whether a
+// hardware cursor exists, and on plain VGA (and any real machine) it
+// says no and the software path below runs exactly as before.
+static int hw_cursor_ready = 0;
+
+// The sprite's two baked alpha masks, flattened into the 32-bit ARGB an
+// adapter wants. Composited the same way draw_cursor_normal() does:
+// outline first, fill over it, so a pixel both masks touch ends up the
+// fill's colour.
+static void hw_cursor_upload(void) {
+    static uint32_t argb[CURSOR_SPRITE_H * CURSOR_SPRITE_W];
+    for (int row = 0; row < CURSOR_SPRITE_H; row++) {
+        for (int col = 0; col < CURSOR_SPRITE_W; col++) {
+            uint8_t o = cursor_outline_alpha[row][col];
+            uint8_t f = cursor_fill_alpha[row][col];
+            uint8_t a = o > f ? o : f;
+            // Fill wins where both are present, matching the software
+            // draw order; the colour is white for fill, black outline.
+            uint32_t rgb = f ? 0x00FFFFFFu : 0x00000000u;
+            argb[row * CURSOR_SPRITE_W + col] = ((uint32_t)a << 24) | rgb;
+        }
+    }
+    hw_cursor_ready = gfx_hw_cursor_define(argb, CURSOR_SPRITE_W, CURSOR_SPRITE_H, 0, 0);
+}
+
 // Saves what's under (x, y) before drawing the cursor there, so a later
 // cursor-only move can restore it. Used by both render paths.
 static void draw_cursor_at(int x, int y) {
+    if (gfx_hw_cursor_available()) {
+        if (!hw_cursor_ready) hw_cursor_upload();
+        if (hw_cursor_ready) {
+            gfx_hw_cursor_move(x, y);
+            return; // nothing painted, so nothing to save or restore
+        }
+    }
     save_cursor_under(x, y);
     draw_cursor(x, y, resolve_cursor_kind(x, y));
 }
@@ -671,6 +713,12 @@ void wm_render_frame(int mx, int my) {
 // cursor-sprite comment above and gfx_present()'s own comment for the two
 // halves that make this cheap.
 void wm_render_cursor_move(int mx, int my) {
+    if (gfx_hw_cursor_available() && hw_cursor_ready) {
+        // The entire cheap path collapses to this: the adapter composites
+        // the cursor, so a mouse move touches no pixels and needs no blit.
+        gfx_hw_cursor_move(mx, my);
+        return;
+    }
     restore_cursor_under();
     draw_cursor_at(mx, my);
     gfx_present();
