@@ -2,7 +2,7 @@
 # tools/preflight.sh -- "am I safe to deliver?" in one command.
 #
 # Every session's delivery step is supposed to end with a clean
-# `make clean && make all && make iso` + `boot_smoke_test.py` run
+# `make clean && make all && make iso` + `boot_smoke_test.py` + `ktest_run.py` run
 # against the FINAL state (see CLAUDE.md's "Delivering changes"
 # section) -- but that's three separate commands run by hand, and it's
 # easy to deliver after only re-running one of them, or after a stray
@@ -15,6 +15,9 @@
 #      files hiding a real error.
 #   2. make iso -- confirms the ISO actually assembles.
 #   3. tools/boot_smoke_test.py -- confirms the built ISO boots cleanly.
+#   3b. tools/ktest_run.py -- runs the in-kernel test suite and fails
+#       the whole preflight if any test failed. "Does it boot" and
+#       "does it work" are different questions; this asks the second.
 #   4. git status --short -- just informational: lists what's dirty so
 #      you can eyeball it against the file list you're about to
 #      deliver. This does NOT run git through the device bridge (that's
@@ -69,11 +72,14 @@ make iso >/tmp/preflight_iso.log 2>&1 || fail "make iso (see /tmp/preflight_iso.
 step "boot_smoke_test.py"
 python3 tools/boot_smoke_test.py || fail "boot smoke test"
 
+step "ktest (in-kernel test suite)"
+python3 tools/ktest_run.py || fail "kernel test suite"
+
 step "git status --short (informational -- compare against your delivery file list)"
 git status --short || true
 
 echo
-echo "preflight: PASS -- build, iso, and boot smoke test all clean."
+echo "preflight: PASS -- build, iso, boot smoke test and ktest all clean."
 if [ -z "$(git config user.name 2>/dev/null)" ]; then
   echo "preflight: no git identity configured -- this looks like a Cowork"
   echo "preflight: device-bridge sandbox clone. Deliver via SendUserFile +"

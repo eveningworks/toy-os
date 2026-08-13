@@ -11,10 +11,20 @@
 // docs/decisions.md for the full design writeup, including the honest
 // limitation on when this actually gets polled.
 //
-// Not a shell replacement and not trying to be one: no filesystem
-// mutation commands, no process control, just read-only inspection
-// (`meminfo`, `lsfs`, `lsdev`, `help`) -- see debug_console.c's own top
-// comment for why the command set stops there for now.
+// It WAS read-only inspection only (`meminfo`, `lsfs`, `lsdev`, `help`).
+// It isn't any more: `sh <command>` runs any shell command through the
+// real shell_dispatch() and sends the output back down the wire, and
+// `ktest` runs the in-kernel test suite. See docs/decisions.md for why
+// that trade was made -- in short, verifying kernel behaviour from a
+// host script previously meant emulating keystrokes over QMP and
+// reading the answer out of a screenshot, which is layout-dependent,
+// drops keys, and can't be asserted on.
+//
+// A few commands are still refused (`gui`, `ring3test`, `schedtest`,
+// `edit`/`nano`) because they take over the screen, never return, or
+// need keyboard input this console can't deliver -- see
+// debug_console.c's DBG_BLOCKED_CMDS, which mirrors apps/terminal.c's
+// list for the same reasons.
 
 void debug_console_init(void);
 

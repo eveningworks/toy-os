@@ -1,2 +1,2 @@
 qemu-system-x86_64: -serial tcp:127.0.0.1:4555,server: info: QEMU waiting for connection on: disconnected:tcp:127.0.0.1:4555,server=on
-qemu-system-x86_64: terminating on signal 15 from pid 32806 (python3)
+qemu-system-x86_64: terminating on signal 15 from pid 35381 (python3)

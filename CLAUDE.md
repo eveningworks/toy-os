@@ -336,6 +336,26 @@ off the boot path), and `kernel/include/kernel/fault_inject.h` can fail
 the next N ATA writes/reads or kmalloc calls, which is how the error
 paths get tested at all. Nothing runs tests at boot any more.
 
+**`tools/vm.py` -- start a VM once, then talk to it in TEXT.** This is
+the fastest path for anything that isn't about pixels:
+
+```
+python3 tools/vm.py start
+python3 tools/vm.py exec "fsck" "df"     # real shell output, as text
+python3 tools/vm.py shot look.png        # pixels when you want them
+python3 tools/vm.py stop
+python3 tools/vm.py run "ktest"          # start+exec+stop in one
+```
+
+It drives the serial debug console's `sh <command>` rather than
+emulating keystrokes, so there's no keyboard-layout dependence (a `se`
+layout turns `write_test` into `write?test`), no dropped keys, and the
+result is assertable instead of a screenshot to read. It only ever kills
+a QEMU it started itself (its own `.vm.pid`), so an interactive `make
+run` window is never at risk. GUI/rendering work still needs
+`qmp_test.py`/`gui_flow.py` -- a text transcript says nothing about
+whether a button is drawn in the right place.
+
 **`tools/boot_smoke_test.py`** -- a fast, non-GUI boot check: boots
 `toy-os.iso` headlessly, watches `serial.log` for the expected kernel
 init sequence (or a `PANIC:`), exits 0/1 in a few seconds. No QMP, no
@@ -548,7 +568,9 @@ data files, not a compiled-in enum), `qmp_test.py`
 non-GUI boot check, see above), `gen_version.sh`/`set_version.sh`
 (versioning, see the `version.h`/`VERSION` bullets above),
 `ktest_run.py` (drives the in-kernel test suite over serial and turns
-it into an exit code -- what `make test` and CI run),
+it into an exit code -- what `make test` and CI run), `vm.py` (start a
+headless VM and run shell commands against it, getting text back -- see
+above),
 `device_git.sh` (Cowork-only: wraps a `git` command run over the device
 bridge with the stale-`index.lock` workaround, see "Working in the
 cloud sandbox vs. directly on the user's machine" above -- not needed,
@@ -608,7 +630,9 @@ repeated manual steps to be worth automating:
   `BIN_BOOTSTRAP`/GRUB-module install (removed from `kernel.c`/
   `grub.cfg` -- see `docs/decisions.md`). Writes in-place by default;
   `--dry-run` on `write`/`sync`/`format` previews without touching the
-  image. Scoped to direct+single-indirect blocks (~4.03 MB/file) -- see
+  image. `delete`/`mkdir`/`cp` manage paths inside the image, so test
+  state can be set up and cleaned up entirely from the host rather than
+  booting toy-os to type `rm`. Scoped to direct+single-indirect blocks (~4.03 MB/file) -- see
   `docs/decisions.md` for why. `corrupt` injects a KNOWN inconsistency
   (`--leak N`, `--free-referenced N`, `--bad-pointer PATH`) so the
   kernel's `fsck` can be tested against damage whose exact shape is

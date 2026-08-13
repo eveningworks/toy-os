@@ -840,6 +840,63 @@ def cmd_corrupt(args):
             print(f"pointed {norm}'s first direct pointer at block {bogus} (past end of disk)")
 
 
+def cmd_delete(args):
+    """Removes a file, or an empty directory -- mirroring tfs_delete()'s
+    rules (no recursive delete, see docs/decisions.md).
+
+    Exists because preparing and cleaning up disk state used to require
+    booting toy-os just to type `rm`: this tool could create files but
+    never remove them.
+    """
+    with Image(args.disk, dry_run=args.dry_run) as img:
+        norm = normalize(args.tfs_path)
+        idx, rec = img.find(norm)
+        if rec is None:
+            raise ValueError(f"{norm} doesn't exist")
+        if rec["type"] == FS_TYPE_DIR:
+            for other in img.records:
+                if other["used"] and other["path"].startswith(norm + "/"):
+                    raise ValueError(f"{norm} is not empty (contains {other['path']})")
+        else:
+            img.free_all_blocks(rec)
+        img.delete_record(idx)
+        print(f"deleted {norm}" + (" (dry run)" if args.dry_run else ""))
+
+
+def cmd_mkdir(args):
+    """Creates a directory, and any missing parents (mirrors a chain of
+    fs_mkdir() calls -- see ensure_dir_chain())."""
+    with Image(args.disk, dry_run=args.dry_run) as img:
+        norm = normalize(args.tfs_path)
+        if img.find(norm)[1] is not None:
+            raise ValueError(f"{norm} already exists")
+        img.ensure_dir_chain(norm, datetime.now(), log=print)
+        if args.dry_run:
+            print("(dry run -- nothing written)")
+
+
+def cmd_cp(args):
+    """Copies one file to another path INSIDE the image -- no host
+    filesystem involved (that's `write`/`read`).
+
+    Useful for the kind of setup a test needs: putting a known binary at
+    a second PATH location to prove lookup order, say."""
+    with Image(args.disk, dry_run=args.dry_run) as img:
+        src = normalize(args.src)
+        dst = normalize(args.dst)
+        _, rec = img.find(src)
+        if rec is None:
+            raise ValueError(f"{src} doesn't exist")
+        if rec["type"] != FS_TYPE_FILE:
+            raise ValueError(f"{src} is a directory")
+        data = img.read_file_data(rec)
+        now = datetime.now()
+        img.ensure_dir_chain(path_parent(dst), now, log=print)
+        img.write_file(dst, data, now, force=args.force, log=print)
+        if args.dry_run:
+            print("(dry run -- nothing written)")
+
+
 def main():
     p = argparse.ArgumentParser(description="Host-side TFS2 v3 read/write tool for toy-os disk images")
     sub = p.add_subparsers(dest="command", required=True)
@@ -875,6 +932,26 @@ def main():
     p_sync.add_argument("--dest", default="/", help="TFS destination root (default: /)")
     p_sync.add_argument("--dry-run", action="store_true", help="preview without writing")
     p_sync.set_defaults(func=cmd_sync)
+
+    p_delete = sub.add_parser("delete", help="remove a file, or an empty directory")
+    p_delete.add_argument("disk")
+    p_delete.add_argument("tfs_path")
+    p_delete.add_argument("--dry-run", action="store_true")
+    p_delete.set_defaults(func=cmd_delete)
+
+    p_mkdir = sub.add_parser("mkdir", help="create a directory (and any missing parents)")
+    p_mkdir.add_argument("disk")
+    p_mkdir.add_argument("tfs_path")
+    p_mkdir.add_argument("--dry-run", action="store_true")
+    p_mkdir.set_defaults(func=cmd_mkdir)
+
+    p_cp = sub.add_parser("cp", help="copy a file to another path inside the image")
+    p_cp.add_argument("disk")
+    p_cp.add_argument("src")
+    p_cp.add_argument("dst")
+    p_cp.add_argument("--force", action="store_true", help="overwrite dst if it exists")
+    p_cp.add_argument("--dry-run", action="store_true")
+    p_cp.set_defaults(func=cmd_cp)
 
     p_corrupt = sub.add_parser(
         "corrupt", help="inject a known inconsistency (for testing the kernel's `fsck`)"

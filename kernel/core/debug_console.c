@@ -26,6 +26,7 @@
 #include "pci.h"
 #include "fs.h"
 #include "ktest_run.h"
+#include "shell.h" // shell_dispatch -- `sh` runs the real shell, it doesn't reimplement one
 #include "vga.h"
 
 #define DBG_LINE_MAX 128
@@ -41,6 +42,7 @@ static void dbg_cmd_help(void) {
     klog_write("  lsdev       - enumerated PCI devices\r\n");
     klog_write("  lsfs [path] - list a filesystem directory (default /)\r\n");
     klog_write("  ktest [suite] - run the in-kernel test suite\r\n");
+    klog_write("  sh <command>  - run any shell command, output back here\r\n");
 }
 
 // The one command here that isn't read-only inspection. This console's
@@ -79,16 +81,78 @@ static void dbg_sink_set_color(void *ctx, enum vga_color fg, enum vga_color bg) 
     (void)ctx; (void)fg; (void)bg;
 }
 
+// Shared by dbg_cmd_ktest() and dbg_cmd_sh() -- both need vga_write()
+// output to come back down this wire instead of painting the screen.
+static const struct vga_sink g_serial_sink = {
+    .ctx = 0,
+    .putc = dbg_sink_putc,
+    .backspace = dbg_sink_backspace,
+    .clear = dbg_sink_clear,
+    .set_color = dbg_sink_set_color,
+    .rows = 0, // no page height -- vga_rows() falls back to a default
+};
+
+// Commands that must not run from here. Same list and same reasoning as
+// apps/terminal.c's BLOCKED_CMDS: `gui` takes over the framebuffer and
+// this console's caller (a poll from an idle loop) never returns from
+// it, `ring3test` deliberately never returns at all, and `schedtest`
+// blocks the calling context until both demo processes exit. `edit`/
+// `nano` are additionally blocked here (but not in Terminal, which can
+// render them) because a full-screen editor over a serial line has no
+// way to read keys back -- it would hang waiting for input this console
+// can't deliver.
+static const char *const DBG_BLOCKED_CMDS[] = {
+    "gui", "ring3test", "schedtest", "edit", "nano",
+};
+
+static int dbg_is_blocked(const char *cmd) {
+    for (unsigned i = 0; i < sizeof(DBG_BLOCKED_CMDS) / sizeof(DBG_BLOCKED_CMDS[0]); i++) {
+        if (k_strcmp(cmd, DBG_BLOCKED_CMDS[i]) == 0) return 1;
+    }
+    return 0;
+}
+
+// `sh <command>` -- runs a real shell command line and sends its output
+// back down this wire.
+//
+// This is what made the console stop being read-only, and it's a
+// deliberate trade: verifying kernel behaviour used to mean emulating
+// keystrokes over QMP and reading the result out of a screenshot, which
+// depends on the guest's keyboard layout, drops keys under load, and
+// can't be asserted on programmatically. With this, a host script gets
+// TEXT back (tools/shell_serial.py). See docs/decisions.md.
+//
+// It runs through shell_dispatch() rather than reimplementing anything,
+// exactly as apps/terminal.c does -- one dispatcher, one set of
+// commands, no drift.
+static void dbg_cmd_sh(char *line) {
+    if (!line || line[0] == '\0') {
+        klog_write("usage: sh <command>  (any shell command; try 'sh help')\r\n");
+        return;
+    }
+
+    // First word only, for the block check.
+    char cmd[32];
+    int i = 0;
+    while (line[i] && line[i] != ' ' && i < (int)sizeof(cmd) - 1) { cmd[i] = line[i]; i++; }
+    cmd[i] = '\0';
+    if (dbg_is_blocked(cmd)) {
+        klog_write("sh: '");
+        klog_write(cmd);
+        klog_write("' can't run from the serial console (it takes over the\r\n");
+        klog_write("screen, never returns, or needs keyboard input this console\r\n");
+        klog_write("can't provide). See debug_console.c's DBG_BLOCKED_CMDS.\r\n");
+        return;
+    }
+
+    const struct vga_sink *prev = vga_set_sink(&g_serial_sink);
+    shell_dispatch(line, &g_serial_sink);
+    vga_set_sink(prev);
+}
+
+
 static void dbg_cmd_ktest(const char *suite) {
-    const struct vga_sink serial_sink = {
-        .ctx = 0,
-        .putc = dbg_sink_putc,
-        .backspace = dbg_sink_backspace,
-        .clear = dbg_sink_clear,
-        .set_color = dbg_sink_set_color,
-        .rows = 0, // no page height -- vga_rows() falls back to a default
-    };
-    const struct vga_sink *prev = vga_set_sink(&serial_sink);
+    const struct vga_sink *prev = vga_set_sink(&g_serial_sink);
     ktest_run_all(suite && suite[0] ? suite : 0);
     vga_set_sink(prev);
 }
@@ -176,6 +240,7 @@ static void dbg_dispatch(char *line) {
     else if (k_strcmp(line, "lsdev") == 0) dbg_cmd_lsdev();
     else if (k_strcmp(line, "lsfs") == 0) dbg_cmd_lsfs(arg);
     else if (k_strcmp(line, "ktest") == 0) dbg_cmd_ktest(arg);
+    else if (k_strcmp(line, "sh") == 0) dbg_cmd_sh((char *)arg);
     else {
         klog_write("unknown command: ");
         klog_write(line);

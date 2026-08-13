@@ -50,3 +50,8 @@ __pycache__/
 # build.yml.new) -- *.yml.new covers any of them.
 /Makefile.new
 *.yml.new
+
+# tools/vm.py's managed VM: pidfile + COM1 unix socket
+.vm.pid
+.vm.serial
+ktest_qemu.log

@@ -31,6 +31,52 @@ using `## [x.y.z] - date` headings is here.
 ## [Unreleased]
 
 ### Added
+- **Tooling pass, from friction hit while doing the last few changes.**
+  - **`sh <command>` on the serial debug console** + **`tools/vm.py`**:
+    shell output comes back as TEXT instead of a screenshot to read by
+    eye. `vm.py start` / `exec "fsck" "df"` / `shot x.png` / `stop`,
+    plus `run` for one-shot use. This replaces the loop that dominated
+    verification all session -- hand-write a `qemu-system-x86_64
+    -daemonize -pidfile` line, sleep, open QMP, emulate the command one
+    qcode at a time, screendump, read the PNG. That loop is
+    layout-dependent (a `se` keyboard layout turned `write_test` into
+    `write?test` and cost half an hour of debugging a non-bug), drops
+    keys under load, and produces a picture rather than something a test
+    can assert on.
+  - The console was documented as deliberately read-only inspection and
+    now isn't. `docs/decisions.md` records why that trade is acceptable
+    *here specifically* -- no users, no permissions, no network, and
+    serial is already a physical-access channel that could halt the
+    machine and read every file via `lsfs`. `gui`/`ring3test`/
+    `schedtest`/`edit`/`nano` are still refused (they take over the
+    screen, never return, or need keys this console can't deliver),
+    mirroring `apps/terminal.c`'s existing `BLOCKED_CMDS` -- the GUI
+    Terminal solved the same problem first, and `sh` runs through the
+    same `shell_dispatch()` rather than reimplementing anything.
+  - `vm.py` only ever kills a QEMU it started itself (its own
+    `.vm.pid`), so an interactive `make run` window is never at risk --
+    the mistake CLAUDE.md warns about with `pkill -f
+    qemu-system-x86_64`. It also clears a stale pidfile rather than
+    failing with QEMU's "cannot create PID file", which happened once
+    this session.
+  - **`tools/tfs2_writer.py` gained `delete`, `mkdir` and `cp`**, so
+    disk state can be prepared and cleaned up entirely from the host.
+    Removing two test binaries previously meant booting toy-os to type
+    `rm`, because the tool could create files but never remove them.
+    Verified the block accounting agrees with the kernel's: after a
+    host-side `delete`, the guest's `fsck` reports clean with no leaked
+    blocks.
+  - **`tools/preflight.sh` now runs `ktest`**, and `make verify` runs
+    the whole pre-delivery check (clean build + iso + boot smoke test +
+    test suite). "Does it boot" and "does it work" are different
+    questions and preflight only asked the first.
+
+  One thing that turned out NOT to be a bug: `tfs2_writer.py` was
+  suspected of silently ignoring a refused overwrite. It exits 1
+  correctly -- the earlier evidence was a `2>&1 | tail -1` in the
+  invocation swallowing the error message. Checked before changing
+  anything; no fix needed.
+
 - **In-kernel test harness (`ktest`), Milestone 4.** Tests are
   `KTEST("suite", "name") { ... }` blocks that live next to the code
   they exercise and register themselves by existing -- the macro drops a

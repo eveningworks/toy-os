@@ -190,7 +190,7 @@ ASM_SOURCES = $(shell find kernel -name '*.asm' | sort)
 C_OBJECTS   = $(patsubst %.c,   $(BUILD)/%.o, $(C_SOURCES))
 ASM_OBJECTS = $(patsubst %.asm, $(BUILD)/%.o, $(ASM_SOURCES))
 
-.PHONY: all clean clean-disk iso run run-audio run-nographic debug help version seed test
+.PHONY: all clean clean-disk iso run run-audio run-nographic debug help version seed test verify
 
 # Regenerates kernel/include/api/version.h from VERSION (see
 # tools/gen_version.sh) -- listed first so it always runs before
@@ -230,6 +230,7 @@ help:
 	@echo "                 debugging -- attach with: gdb build/kernel.bin -ex"
 	@echo "                 'target remote localhost:1234', then continue"
 	@echo "  test           Run the in-kernel test suite (ktest) and exit non-zero on failure"
+	@echo "  verify         Full pre-delivery check: clean build + iso + boot test + ktest"
 	@echo "  clean          Remove build outputs (build/, ELFs, toy-os.iso) -- leaves disk.img alone"
 	@echo "  clean-disk     Wipe disk.img, the persistent filesystem -- use with care"
 	@echo "  version        Regenerate kernel/include/api/version.h (runs automatically as part of all/iso)"
@@ -409,6 +410,12 @@ run-nographic: iso $(DISK_IMG)
 # kernel/include/kernel/ktest.h.
 test: iso
 	@python3 tools/ktest_run.py
+
+# Everything: clean build, ISO, boot smoke test, and the in-kernel test
+# suite. What to run before delivering a change -- tools/preflight.sh
+# does exactly this plus a `git status` summary.
+verify:
+	@bash tools/preflight.sh
 
 clean:
 	rm -rf $(BUILD) $(ISO) iso/boot/kernel.bin $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF) $(LS_ELF) $(STACK_SMASH_TEST_ELF) $(NX_TEST_ELF) $(SEED_DIR)/sync
