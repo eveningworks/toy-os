@@ -76,7 +76,13 @@ static const char *const HELP_LINES[] = {
     "  about         - show OS info\n",
     "  beep          - a short test tone via the PC speaker\n",
     "  apps          - list all registered apps\n",
-    "  run <app>     - launch an app by name\n",
+    "  <name> [args] - run an executable: a console app, or a binary\n",
+    "                  found by searching PATH (see `path`). The `run`\n",
+    "                  prefix below is optional -- `nx_test` and\n",
+    "                  `run nx_test` do exactly the same thing.\n",
+    "  run <app>     - launch an app by name (explicit form of the above)\n",
+    "  path          - show the directories executables are searched in,\n",
+    "                  in order (set PATH in /etc/toyos.conf)\n",
     "  gui           - graphics mode (Esc returns here)\n",
     "  history       - list past commands (arrows browse history)\n",
     "  echo <text>   - print the given text back\n",
@@ -798,13 +804,14 @@ void cmd_apps(void) {
 void cmd_run(const char *name_and_args) {
     if (!name_and_args || k_strlen(name_and_args) == 0) {
         vga_write("usage: run <app> [args...]  (see 'apps' for the list)\n");
+        vga_write("note: the `run` prefix is optional -- typing the name alone\n");
+        vga_write("works too, searching PATH (see `path`).\n");
         return;
     }
 
-    // Split off the binary's own name from whatever trailing arguments
-    // it should receive -- same first-word/rest split dispatch() itself
-    // does in shell.c, done again here because app_run() below still
-    // wants just the bare name.
+    // Split the binary's own name from whatever trailing arguments it
+    // should receive -- the same first-word/rest split dispatch() does,
+    // needed again here because `run`'s argument arrives as one string.
     char name[LINE_MAX];
     k_strcpy(name, name_and_args);
     char *bin_args = name;
@@ -817,42 +824,14 @@ void cmd_run(const char *name_and_args) {
         bin_args = 0;
     }
 
-    if (app_run(name)) {
-        // An app may have drawn over the whole screen (e.g. gui) --
-        // refresh the console on return so the shell prompt is clean
-        // either way.
-        vga_clear();
-        vga_set_color(shell_fg, VGA_BLACK);
-        return;
-    }
-
-    // Not a kernel-space app (apps.c's registry) -- fall through to a
-    // real disk-hosted ELF64 binary under /bin (see docs/roadmap.md's
-    // real-disk-hosted-ELF-binaries entry, and elf_run.h). "/bin/" + name,
-    // bounded the same way SYS_LISTDIR/SYS_OPEN's own path copies are.
-    char bin_path[FS_PATH_MAX];
-    k_strcpy(bin_path, "/bin/");
-    size_t prefix_len = k_strlen(bin_path);
-    size_t i = 0;
-    while (name[i] && prefix_len + i < FS_PATH_MAX - 1) {
-        bin_path[prefix_len + i] = name[i];
-        i++;
-    }
-    bin_path[prefix_len + i] = '\0';
-
-    if (!fs_exists(bin_path) || fs_is_dir(bin_path)) {
-        vga_write("run: no such app: ");
+    // Everything past this point is shell_path.c's shell_exec_name() --
+    // the same resolver a bare typed name goes through, so `run foo` and
+    // `foo` can never resolve differently.
+    if (!shell_exec_name(name, bin_args)) {
+        vga_write("run: no such app or executable: ");
         vga_write(name);
-        vga_putc('\n');
-        return;
+        vga_write("\n(`path` shows where executables are searched for)\n");
     }
-
-    int exit_code = elf_run_from_fs(bin_path, bin_args);
-    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
-    vga_write("Process finished. Exit code: ");
-    vga_write_exit_code(exit_code);
-    vga_putc('\n');
-    vga_set_color(shell_fg, VGA_BLACK);
 }
 
 // The real /bin/ls ELF64 binary's shell-side wrapper (see

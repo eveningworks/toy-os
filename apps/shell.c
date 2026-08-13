@@ -187,6 +187,8 @@ static void dispatch(char *line) {
         cmd_cd(args ? args : "");
     } else if (k_strcmp(cmd, "pwd") == 0) {
         cmd_pwd();
+    } else if (k_strcmp(cmd, "path") == 0) {
+        cmd_path();
     } else if (k_strcmp(cmd, "write") == 0) {
         cmd_write_or_append(args ? args : "", 0);
     } else if (k_strcmp(cmd, "append") == 0) {
@@ -223,6 +225,13 @@ static void dispatch(char *line) {
         cmd_lspci();
     } else if (k_strcmp(cmd, "parttable") == 0) {
         cmd_parttable();
+    } else if (shell_exec_name(cmd, args)) {
+        // Not a builtin -- a console app from apps.c's registry, or an
+        // executable found by searching PATH (shell_path.c). This is
+        // what makes `nx_test` work with no `run` prefix; `run` itself
+        // is still a command, and goes through the same resolver so the
+        // two can't diverge. Builtins are checked first (every branch
+        // above this one) -- see docs/decisions.md for why.
     } else if (completion_is_known_command(cmd)) {
         // Listed in apps/completion.c's table but not handled above --
         // the two lists have drifted. Say so specifically rather than
@@ -234,7 +243,8 @@ static void dispatch(char *line) {
     } else {
         vga_write("Unknown command: ");
         vga_write(cmd);
-        vga_write("\n(type 'help' for a list of commands)\n");
+        vga_write("\n(type 'help' for commands, or `path` for where\n");
+        vga_write("executables are searched for)\n");
     }
 }
 
@@ -438,6 +448,7 @@ void shell_main(void) {
     char line[LINE_MAX];
 
     history_load(); // once per boot -- shell_main() never returns/re-enters (see its own for(;;) below)
+    shell_path_init(); // same: read PATH from /etc/toyos.conf once, see shell_path.c
 
     vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
     vga_write("toy-os shell -- type 'help' to get started\n");

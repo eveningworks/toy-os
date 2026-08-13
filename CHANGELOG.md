@@ -31,6 +31,51 @@ using `## [x.y.z] - date` headings is here.
 ## [Unreleased]
 
 ### Added
+- **Executables run by name, with a configurable `PATH`**
+  (`apps/shell_path.c`, new). Typing `nx_test` now runs `/bin/nx_test`;
+  the `run` prefix is optional. `PATH` is a key in `/etc/toyos.conf`
+  (default `/bin;/usr/bin`), semicolon-separated -- a colon is accepted
+  too -- searched **left to right with the first match winning**.
+  - **Resolution order: builtins, then `apps.c`'s console-app registry,
+    then each PATH directory.** Letting disk binaries outrank builtins
+    would silently break `ls`: it's a builtin *wrapper* that resolves
+    its positional argument against the cwd before handing `/bin/ls` an
+    absolute path, and a PATH-executed binary gets raw arguments with no
+    cwd of its own. See `docs/decisions.md`.
+  - `run` is kept as the explicit form. Both it and a bare name go
+    through one resolver (`shell_exec_name()`), so they can't diverge --
+    `cmd_run()` is now a name/args split followed by that call.
+  - A name containing `/` is treated as a path, not a PATH lookup, so
+    `/bin/foo` and `docs/foo` mean what they say. Entries in PATH that
+    don't exist are skipped silently: the default names `/usr/bin`,
+    which isn't on a stock disk, and warning about that every boot would
+    be noise.
+  - **PATH is shell state, not kernel state** -- `timezone`/`font_size`
+    have kernel-side modules because the kernel reads them; nothing in
+    the kernel has any use for PATH, so this reads the shared config
+    file through kapi.h's `etc_config_get()` and keeps the result to
+    itself. The dividing line is "does the kernel read it", not "is it
+    in toyos.conf".
+  - New `path` command prints the search order, marking entries that
+    don't exist yet, since otherwise the only way to see it is to read
+    the config file.
+  - Tab completion follows: the first word of a line now completes
+    builtins *and* registry apps *and* every executable in every PATH
+    directory, and `run <TAB>` enumerates PATH rather than a hardcoded
+    `/bin`.
+  - The shell is four files now (`shell.c`/`shell_fs.c`/`shell_sys.c`/
+    `shell_path.c`); `shell_internal.h`'s top comment updated to match.
+  - Verified live, including the ordering the feature is really about:
+    with `PATH=/bin;/usr/bin`, `write_test` ran `/bin/write_test` and
+    `only_here` (present only in `/usr/bin`) resolved from the second
+    directory; with the order reversed to `PATH=/usr/bin;/bin` and a
+    deliberately different binary planted at `/usr/bin/write_test`, the
+    same typed name ran *that* one instead -- config-driven, first match
+    wins (screenshots `path_order_bin_first.png`,
+    `path_order_usr_first.png`). Builtins still win and still resolve
+    cwd-relative arguments (`cd /etc` then `ls kbs`), `run` still works,
+    and `only<TAB>` completes a PATH binary
+    (`path_builtin_and_completion.png`).
 - **Tab completion in both shells** (`apps/completion.c`/`completion.h`,
   Milestone 7's first item), asked for as "auto completion like in zsh".
   Behaviour follows zsh's default rather than bash's: one Tab extends

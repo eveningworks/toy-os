@@ -53,4 +53,21 @@ const char *shell_cwd(void);
 // into a directory fs_list() will accept.
 int shell_resolve_path(const char *input, char *out);
 
+// ---- PATH (apps/shell_path.c) ----
+
+// Loads PATH from /etc/toyos.conf (default "/bin;/usr/bin"), once, at
+// shell startup. Exposed so apps/completion.c can enumerate the same
+// directories the shell would actually search when completing the first
+// word of a line.
+void shell_path_init(void);
+int shell_path_count(void);
+const char *shell_path_dir(int index);
+
+// Finds `name` in PATH, filling `out` (size FS_PATH_MAX) with the
+// absolute path of the FIRST match, searching the directories left to
+// right. A `name` containing '/' is treated as a path rather than a
+// PATH lookup and is only resolved (against the cwd) and existence-
+// checked. Returns 1 if found.
+int shell_path_find(const char *name, char *out);
+
 #endif

@@ -118,6 +118,14 @@ For everything else:
 Grouped the same way `help` itself groups them (`help tests` for the
 developer/diagnostic set):
 
+Executables run by name, with no prefix: typing `nx_test` searches
+`PATH` (set in `/etc/toyos.conf`, default `/bin;/usr/bin`, searched left
+to right with the first match winning) and runs what it finds. `run
+<name>` still works as the explicit form, going through the same
+resolver. `path` shows the search order. Shell builtins win over both,
+which is what keeps `ls` able to resolve a cwd-relative argument before
+handing `/bin/ls` an absolute path.
+
 Tab completes commands, paths, and known argument sets (`run`, `color`,
 `debug`, `keyboard`, `timezone`, `fontsize`, `fsck`, `help`) -- one Tab
 extends as far as the candidates agree, and lists them in columns if

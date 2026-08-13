@@ -72,7 +72,10 @@ run their own blocking loop:
   generates candidates only -- it does no input handling and no drawing,
   because the two shells have completely separate input loops and only
   the candidate logic is genuinely common. See `completion.h`'s top
-  comment.
+  comment. The shell itself is four files (`shell.c` + `shell_fs.c` +
+  `shell_sys.c` + `shell_path.c`, sharing state through
+  `shell_internal.h`); `shell_path.c` owns PATH lookup and the single
+  "run this name" resolver behind both a bare typed name and `run`.
 - **gui** (`gui.c`) -- a one-line wrapper that hands off to the window
   manager (`wm.c`). Launched via `run gui` or the `gui` shortcut command;
   returns to the shell on Esc.

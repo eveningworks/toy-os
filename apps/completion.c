@@ -24,7 +24,7 @@ const char *const COMPLETION_COMMANDS[] = {
     "fsck", "gui", "help", "history", "keyboard", "lspci", "ls",
     "meminfo", "mkdir", "nano", "parttable", "pwd", "reboot",
     "ring3test", "rm", "run", "schedtest", "stat", "steptest", "stress",
-    "time", "timezone", "touch", "uptime", "write",
+    "path", "time", "timezone", "touch", "uptime", "write",
     0
 };
 
@@ -221,19 +221,27 @@ static void complete_from_list(struct collector *c, const char *const *names) {
     for (int i = 0; names[i]; i++) add_candidate(c, names[i]);
 }
 
-// `run <name>`: both the console app registry (apps.c) and the real
-// disk-hosted binaries under /bin, since `run` accepts either.
-static void complete_run_target(struct collector *c, const char *word) {
+// Everything a bare name can resolve to: console apps from apps.c's
+// registry, then every executable in every PATH directory. Used both for
+// `run <name>` and -- since the `run` prefix became optional -- for the
+// first word of a line, alongside the builtin command names.
+//
+// Directories inside a PATH entry are listed too (fs_list_cb appends
+// '/'), which is harmless: they simply won't resolve, and filtering them
+// out would mean a second fs_is_dir() call per entry for no real gain.
+static void complete_executables(struct collector *c) {
     for (int i = 0; i < app_registry_count; i++) add_candidate(c, app_registry[i].name);
 
     static char empty[1] = "";
     struct collector inner = *c;
     g_active_collector = &inner;
     g_dir_prefix = empty;
-    if (fs_is_dir("/bin")) fs_list("/bin", fs_list_cb);
+    for (int i = 0; i < shell_path_count(); i++) {
+        const char *dir = shell_path_dir(i);
+        if (dir && fs_is_dir(dir)) fs_list(dir, fs_list_cb);
+    }
     g_active_collector = 0;
     *c = inner;
-    (void)word;
 }
 
 // `keyboard <layout>`: whatever layout files are actually on disk, not
@@ -252,11 +260,11 @@ static void complete_keyboard_layout(struct collector *c) {
 // Returns 1 if `cmd` has a known argument set (and fills the collector),
 // 0 if its arguments are paths (or anything else) and the caller should
 // fall through to path completion.
-static int complete_argument(struct collector *c, const char *cmd, const char *word, int arg_index) {
+static int complete_argument(struct collector *c, const char *cmd, int arg_index) {
     if (k_strcmp(cmd, "color") == 0) { complete_from_list(c, COLOR_NAMES); return 1; }
     if (k_strcmp(cmd, "fontsize") == 0) { complete_from_list(c, FONT_SIZES); return 1; }
     if (k_strcmp(cmd, "keyboard") == 0) { complete_keyboard_layout(c); return 1; }
-    if (k_strcmp(cmd, "run") == 0) { complete_run_target(c, word); return 1; }
+    if (k_strcmp(cmd, "run") == 0) { complete_executables(c); return 1; }
 
     if (k_strcmp(cmd, "help") == 0) {
         add_candidate(c, "tests");
@@ -338,8 +346,12 @@ int completion_run(const char *line, int cursor, struct completion_result *out) 
     collector_init(&c, out, word);
 
     if (arg_index == 0) {
+        // Builtins first, then everything a bare name can also resolve
+        // to now that `run` is optional -- registry apps and PATH
+        // executables. Same order dispatch() actually tries them in.
         complete_from_list(&c, COMPLETION_COMMANDS);
-    } else if (!complete_argument(&c, cmd, word, arg_index)) {
+        complete_executables(&c);
+    } else if (!complete_argument(&c, cmd, arg_index)) {
         complete_path(&c, word);
     }
 

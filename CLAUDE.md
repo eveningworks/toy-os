@@ -112,7 +112,7 @@ technical conventions below:
   `etc_config_get()`/`etc_config_set()` (name=value lines, `#` comments,
   see `kernel/core/etc_config.c`'s top comment for the exact format).
   By default, put a new setting's key in the shared `/etc/toyos.conf`
-  every setting lives in today (`timezone`, `font_size` -- see
+  every setting lives in today (`timezone`, `font_size`, `PATH` -- see
   `kernel/core/tz.c`/`font_config.c` for the pattern: a small
   `*_init()` called from `kernel_main()` that loads via
   `etc_config_get()`, and a `*_save()`/`*_set_*()` that writes via

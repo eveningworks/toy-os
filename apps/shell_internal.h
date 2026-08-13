@@ -1,7 +1,8 @@
-// Internal, sharing-only header for the shell's split into three files
+// Internal, sharing-only header for the shell's split into four files
 // -- shell.c (the REPL loop, dispatch(), and the state everything else
-// here shares), shell_fs.c (filesystem commands), and shell_sys.c
-// (system-info/settings commands). Split out once shell.c crossed 900
+// here shares), shell_fs.c (filesystem commands), shell_sys.c
+// (system-info/settings commands), and shell_path.c (PATH lookup and
+// the shared "run this name" resolver). Split out once shell.c crossed 900
 // lines mixing every command category together (see CHANGELOG.md for
 // the build this happened in).
 //
@@ -12,7 +13,7 @@
 // manager is one event loop, not decoupled components" entry, which
 // applies here unchanged. State is shared through plain `extern`s, not
 // hidden behind accessor functions, on purpose. Not included by
-// anything outside shell.c/shell_fs.c/shell_sys.c.
+// anything outside shell.c/shell_fs.c/shell_sys.c/shell_path.c.
 #ifndef SHELL_INTERNAL_H
 #define SHELL_INTERNAL_H
 
@@ -34,6 +35,14 @@ extern int history_count;
 // in shell.c since it's the file that owns `cwd`; every filesystem
 // command in shell_fs.c calls this before touching fs_*.
 int resolve_path(const char *input, char *out);
+
+// Runs `name` as a console app (apps.c's registry) or a PATH binary,
+// with `args` passed through verbatim -- the single resolver behind
+// both a bare typed name (dispatch()) and an explicit `run <name>`.
+// Returns 1 if something was found and run, 0 if the name resolved to
+// nothing. Defined in shell_path.c.
+int shell_exec_name(const char *name, const char *args);
+void cmd_path(void);
 
 // Filesystem commands -- defined in shell_fs.c.
 void cmd_cat(const char *name);

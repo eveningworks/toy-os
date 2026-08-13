@@ -89,6 +89,7 @@ there when you add an entry, or the index quietly stops being one.
 
 - [Terminal wraps the real shell, it doesn't reimplement it](#terminal-wraps-the-real-shell-it-doesnt-reimplement-it)
 - [Tab completion is a shared candidate generator, not a shared line editor](#tab-completion-is-a-shared-candidate-generator-not-a-shared-line-editor)
+- [PATH lives in the shell, not the kernel -- and builtins win over it](#path-lives-in-the-shell-not-the-kernel----and-builtins-win-over-it)
 - [The CLI editor's status bar needs its own line-wrapping pass, not a plain dump-and-let-the-console-wrap](#the-cli-editors-status-bar-needs-its-own-line-wrapping-pass-not-a-plain-dump-and-let-the-console-wrap)
 - [Timezone city list is a database file, not a hardcoded array or a config key](#timezone-city-list-is-a-database-file-not-a-hardcoded-array-or-a-config-key)
 - [`/etc` is one shared `toyos.conf` by default, not a file per setting](#etc-is-one-shared-toyosconf-by-default-not-a-file-per-setting)
@@ -2193,3 +2194,41 @@ Two consequences worth knowing:
 See `CHANGELOG.md`'s `[Unreleased]` entry, including the pre-existing
 `dispatch()` bug completion exposed (a trailing space in `args` made
 `cat /etc/timezones ` fail as "no such file").
+
+## PATH lives in the shell, not the kernel -- and builtins win over it
+
+Typing a bare `nx_test` runs `/bin/nx_test`; the `run` prefix is
+optional now. Three decisions in that, each with a real alternative:
+
+**PATH is shell state.** `timezone` and `font_size` live in
+`/etc/toyos.conf` behind small kernel-side modules (`tz.c`,
+`font_config.c`) because the kernel itself consults them. Nothing in the
+kernel has any use for PATH -- it's a question about how a command line
+is interpreted, which is entirely the shell's business. So
+`apps/shell_path.c` reads the same shared config file through kapi.h's
+`etc_config_get()` and keeps the parsed result to itself, rather than
+adding a `path_config.c` next to the other two. The dividing line worth
+remembering: a setting goes kernel-side when the KERNEL reads it, not
+merely because it lives in the shared config file.
+
+**Builtins beat PATH, not the other way round.** A real Unix shell lets
+a `/bin/ls` shadow nothing (builtins generally win) but the instinct to
+let disk binaries take precedence is common enough to name why it would
+be wrong here: `ls` is a builtin *wrapper* that resolves its positional
+argument against the shell's cwd before handing `/bin/ls` an absolute
+path, because a PATH-executed binary receives raw arguments and has no
+cwd of its own. Letting `/bin/ls` win would silently break `ls docs`.
+The order is builtins, then `apps.c`'s console-app registry, then each
+PATH directory left to right, first match winning.
+
+**`run` stays.** It costs nothing, keeps every existing doc and habit
+valid, and is the explicit form when you'd rather not wonder whether a
+name collides with a builtin. Both it and a bare name go through one
+resolver (`shell_exec_name()`), so they can't diverge.
+
+Two smaller notes: a name containing `/` is treated as a path rather
+than a PATH lookup (so `/bin/foo` and `docs/foo` mean what they say),
+and entries in PATH that don't exist are skipped silently -- the default
+`/bin;/usr/bin` names a directory that isn't on a stock disk, and
+warning about it on every boot would be noise. See `CHANGELOG.md`'s
+`[Unreleased]` entry.

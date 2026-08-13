@@ -159,7 +159,10 @@ rather than swapping numbers.
       `CHANGELOG.md`'s `[Unreleased]` entry (commands, paths, and
       per-command argument sets, shared by both shells)
 - [ ] Globbing (`*`, `?`) expanded by the shell, not each command
-- [ ] Environment variables + `export`
+- [ ] Environment variables + `export` -- note `PATH` already exists as
+      a config key read at shell startup (`/etc/toyos.conf`, see
+      `apps/shell_path.c`); this item is the general mechanism, of which
+      PATH would become one instance
 - [ ] `&&`, `||`, `;` command sequencing
 - [ ] Quoting/escaping (`"..."`, `'...'`, `\`) -- the parser splits on
       spaces today, so no argument can contain one
