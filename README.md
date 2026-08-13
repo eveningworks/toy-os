@@ -291,7 +291,9 @@ Useful tools in `tools/` (all documented in their own docstrings):
   long mode itself (`kernel/arch/x86_64/boot.asm`)
 - Linear RGB framebuffer (1280x720 default), falling back to 80x25 VGA
   text mode automatically if none is available -- one console (`vga.c`)
-  renders through whichever backend is active
+  renders through whichever backend is active, with scrollback
+  (PageUp/PageDown) over the last few hundred lines. The kernel's init
+  sequence is printed to it during boot and stays readable afterwards
 - Serial (COM1) debug logging (`-serial stdio` in QEMU) plus a serial
   *console* (`kernel/core/debug_console.c`) usable while the screen is
   showing the GUI or a ring-3 process is running: `meminfo`/`lsfs`/
@@ -377,10 +379,6 @@ Useful tools in `tools/` (all documented in their own docstrings):
   both `about` and the GUI About window.
 
 ## Project layout
-
-toy-os is split by concern, from the hardware up. Directories are
-subsystems, not filing cabinets -- where a file lives says what kind of
-thing it is:
 
 toy-os is split by concern, from the hardware up. Directories are
 subsystems, not filing cabinets -- where a file lives says what kind of

@@ -267,6 +267,12 @@ past "two small functions" (see `docs/decisions.md`). `apps/widgets.h`/
   `widget_textfield_init/set_active/key/draw`, wrapped in an owned-
   geometry `struct ui_textbox` (`ui_textbox_init/set_geometry/draw/
   hit/set_active/key`).
+(Note the *physical* console has its own, unrelated scrollback now --
+a character ring inside `kernel/drivers/vga.c`, scrolled with
+PageUp/PageDown, covering the boot log and any command's output. The
+widget below is the in-window one, used by GUI apps; the two share
+nothing but the idea. See `docs/decisions.md`.)
+
 - **`ui_scrollback.h`/`.c`** -- `struct text_scrollback`
   (`SCROLLBACK_CAP` 8192 chars), the multi-line scrolling text buffer
   Notepad, Terminal, and the editor all use, with cursor movement

@@ -707,6 +707,12 @@ using `## [x.y.z] - date` headings is here.
     `screenshots/2026-08-12/tray-clock-*.png`.
 
 ### Changed
+- Docs catch-up for the console work: `README.md`'s framebuffer bullet
+  now mentions scrollback and the on-screen boot log, and
+  `apps/README.md` distinguishes the *physical* console's new scrollback
+  (a character ring in `vga.c`) from `ui_scrollback`'s in-window widget,
+  since "scrollback" now means two unrelated things in this codebase.
+
 - **README rewritten as a project front page**, with per-distribution
   build instructions.
   - Opens with two screenshots taken deliberately for it (the window
@@ -1119,6 +1125,12 @@ using `## [x.y.z] - date` headings is here.
   as the active selection.
 
 ### Fixed
+- `README.md`'s Project layout section had its intro paragraph twice --
+  introduced by the README rewrite, which wrote the sentence into the
+  new section while the block it pasted in already started with it. A
+  scan for repeated paragraphs across all 13 `.md` files found no
+  others.
+
 - **`qmp_test.py`'s `drag()` took a destination only, and silently
   accepted a second point as a sleep duration.** `drag(360, 55, 700,
   300)` -- which reads as two coordinates to anyone -- bound `hold=700`
