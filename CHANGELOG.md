@@ -288,9 +288,9 @@ using `## [x.y.z] - date` headings is here.
   - `fputest` from the shell runs both halves.
 
 ### Fixed
-- **Cursor trail when shrinking a window (reported; fix NOT reproduced
-  under QMP -- see below).** Resizing a window smaller left a line of
-  stale cursor sprites behind; growing one didn't.
+- **Cursor trail when shrinking a window.** Resizing a window smaller
+  left a line of stale cursor sprites behind; growing one didn't.
+  Confirmed fixed on real hardware by the reporter.
   - Mechanism: `wm_render_frame()` never undrew the cursor before
     repainting -- it only re-saved the pixels underneath at the end, via
     `draw_cursor_at()`. So the old sprite was erased only where the
@@ -307,15 +307,19 @@ using `## [x.y.z] - date` headings is here.
     damage rect -- the whole point being that the stale pixels are
     outside it. This also makes the two render paths symmetric; the
     cheap one has always restored first.
-  - **Honest status: the symptom was not reproducible under QMP.** Both
-    a stepped drag and a fast continuous one (30 back-to-back `move_rel`
-    calls with no settle) left no trail on a deliberately-rebuilt buggy
-    build, so QEMU's PS/2 emulation is evidently coalescing the motion
-    into far fewer frames than a real mouse generates. The fix is
-    reasoned from the code, is strictly more correct than not doing it,
-    and was confirmed to change nothing else (a pixel diff against the
-    unfixed build differs only in the taskbar clock) -- but it has not
-    been proven against the actual symptom, which needs a real mouse.
+  - **The symptom was not reproducible under QMP, and that's worth
+    recording.** Both a stepped drag and a fast continuous one (30
+    back-to-back `move_rel` calls with no settle) left no trail even on
+    a deliberately-rebuilt buggy binary: QEMU's PS/2 emulation coalesces
+    the motion into far fewer frames than a real mouse generates, so the
+    resize simply never produced enough repaints to strand a sprite.
+    What automation could establish was that the fix changed nothing
+    else (a pixel diff against the unfixed build differs only in the
+    taskbar clock); the fix itself was shipped on the strength of the
+    mechanism above, and the reporter then confirmed the trail is gone
+    with a real mouse. A reminder that the harness's fidelity is itself
+    a variable -- "I couldn't reproduce it" was a fact about QEMU here,
+    not about the bug.
 
 - **An app could draw outside its own window, straight onto the desktop.**
   Reported from a screenshot: shrinking the Control Panel left System
