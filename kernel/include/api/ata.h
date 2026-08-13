@@ -64,6 +64,28 @@ int ata_present(void);
 // contract below).
 int ata_dma_active(void);
 
+// 1 if this machine's hardware HAS working Bus-Master DMA, regardless of
+// whether it's currently in use. Differs from ata_dma_active() above
+// only while DMA has been forced off -- which is exactly what a caller
+// wanting to restore the previous mode (or to skip a PIO-vs-DMA
+// comparison on a machine that has no DMA to compare against) needs to
+// know.
+int ata_dma_hardware_available(void);
+
+// Forces every transfer down the PIO fallback (`off` non-zero), or
+// allows DMA again (0). The `ata nodma` shell command and
+// kernel/drivers/ata_test.c's PIO round-trip are the callers.
+//
+// Exists because the PIO path is otherwise unreachable on any machine
+// where DMA works, i.e. all of them -- see ata.c's g_dma_forced_off
+// comment for both reasons that matters.
+//
+// Returns 1 if applied, 0 if refused because a non-blocking transfer is
+// currently in flight (dma_transfer_start()/poll()) -- switching modes
+// underneath one would strand its poller. Callers must report a 0
+// rather than assume the mode changed.
+int ata_set_dma_forced_off(int off);
+
 // Total addressable 512-byte sectors on the attached drive, from
 // IDENTIFY's 28-bit LBA capacity field (words 60-61), or 0 if no drive
 // is present or it didn't report one. Multiply by ATA_SECTOR_SIZE for

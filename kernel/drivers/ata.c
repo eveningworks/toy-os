@@ -123,13 +123,23 @@ static int wait_not_busy(void) {
 // and there's no reason they'd have to move together.
 #define DRQ_WAIT_TICKS 100
 
+// Why the last PIO wait failed. Same idea, and the same one-static-
+// pointer cost, as g_dma_fail_reason further down: wait_drq() returns 0
+// both when the drive actively reported an error and when it simply
+// never raised DRQ, and those have completely different causes -- a bad
+// sector versus a drive that isn't responding. Collapsing them cost
+// real detective work on the DMA side once (see that variable's
+// comment); this is the same fix on the path that never got it.
+static const char *g_pio_fail_reason = "unknown";
+
 static int spin_drq(void) {
     for (int i = 0; i < ATA_POLL_LIMIT; i++) {
         uint8_t status = inb(REG_STATUS);
-        if (status & STATUS_ERR) return 0;
+        if (status & STATUS_ERR) { g_pio_fail_reason = "drive reported ERR"; return 0; }
         if (status & STATUS_DRQ) return 1;
         io_wait();
     }
+    g_pio_fail_reason = "DRQ never asserted (spin limit, syscall context)";
     return 0;
 }
 
@@ -151,22 +161,28 @@ static int spin_drq(void) {
 // nothing else. That's a volatile counter read next to a port-I/O read
 // that dominates it -- measured throughput was unchanged.
 //
-// Returns 0 for BOTH "the drive reported an error" and "gave up
-// waiting", which are genuinely different things a caller might want to
-// tell apart -- the same conflation g_dma_fail_reason exists to undo on
-// the DMA side. Left as-is because no caller distinguishes them today;
-// worth splitting if one ever does.
+// Still returns 0 for BOTH "the drive reported an error" and "gave up
+// waiting" -- callers only need pass/fail -- but it now records WHICH in
+// g_pio_fail_reason above, so the log says which happened. That's the
+// same shape g_dma_fail_reason settled on: a pass/fail return for
+// control flow, a reason string for the human reading dmesg. A caller
+// that genuinely needs to branch on the difference would want an enum
+// return; nothing does yet.
 static int wait_drq(void) {
     if (isr_in_progress()) return spin_drq();
 
     uint64_t start = pit_ticks();
     for (uint64_t guard = 0; guard < (uint64_t)ATA_POLL_LIMIT * 200; guard++) {
         uint8_t status = inb(REG_STATUS);
-        if (status & STATUS_ERR) return 0;
+        if (status & STATUS_ERR) { g_pio_fail_reason = "drive reported ERR"; return 0; }
         if (status & STATUS_DRQ) return 1;
-        if (pit_ticks() - start > DRQ_WAIT_TICKS) return 0;
+        if (pit_ticks() - start > DRQ_WAIT_TICKS) {
+            g_pio_fail_reason = "DRQ never asserted within the wall-clock bound";
+            return 0;
+        }
         io_wait();
     }
+    g_pio_fail_reason = "DRQ wait hit its iteration guard";
     return 0;
 }
 
@@ -241,6 +257,28 @@ struct prd {
 #define DMA_WAIT_TICKS 500
 
 static int g_dma_available = 0;
+
+// Forces transfers down the PIO path even when the hardware has working
+// DMA. Exists because the PIO path was otherwise UNREACHABLE on every
+// machine this OS boots: ata_init_dma() succeeds under QEMU and on
+// ordinary PC hardware, so ~100 lines of fallback driver never ran, and
+// could not be tested at all. Untested fallback code that only executes
+// in an emergency is the worst kind to be wrong.
+//
+// Second use, which is not hypothetical: comparing a known-good PIO
+// transfer against DMA is how an earlier session root-caused a DMA
+// failure to a host-side stall rather than a driver bug (see
+// CHANGELOG.md). That comparison had to be done by hand-editing the
+// driver; now it's `ata nodma on`.
+static int g_dma_forced_off = 0;
+
+// The single question every dispatch site asks. Deliberately one
+// helper rather than `g_dma_available && !g_dma_forced_off` repeated at
+// each site: ata_max_sectors_per_xfer() reports a SMALLER cap for PIO,
+// so a site that checked the flags differently from the site that sets
+// the cap would let a caller batch 128 sectors into a path that can't
+// take them.
+static int dma_in_use(void);
 static uint16_t g_bm_io = 0;
 
 // Backs ata_flush_begin()/ata_flush_end() (ata.h) -- see that header's
@@ -742,29 +780,47 @@ static int dma_transfer_with_retry(uint32_t lba, int count, void *buf, int is_wr
 // `count` separate ata_read_sector() calls is the command dispatch/
 // wait_not_busy() overhead for sectors 2..count, not the wire transfer
 // time itself (that's inherent to the hardware either way).
+// Always logged, not gated behind DBGFLAG_ATA -- same reasoning as
+// dma_transfer_with_retry()'s final message: a PIO transfer that failed
+// is a failure the caller is about to report as one too, and dmesg
+// should carry the disk-level detail even with debug logging off.
+static int pio_fail(uint32_t lba, int is_write) {
+    klog_write("ata: pio "); klog_write(is_write ? "write" : "read");
+    klog_write(" failed (lba "); klog_write_dec(lba);
+    klog_write(", reason: "); klog_write(g_pio_fail_reason);
+    klog_write(")\n");
+    return 0;
+}
+
 static int pio_read_sectors(uint32_t lba, int count, void *buf) {
-    if (!wait_not_busy()) return 0;
+    if (!wait_not_busy()) {
+        g_pio_fail_reason = "drive stayed busy, command never issued";
+        return pio_fail(lba, 0);
+    }
 
     select_lba(lba, (uint8_t)count);
     outb(REG_COMMAND, CMD_READ_SECTORS);
 
     uint16_t *p = (uint16_t *)buf;
     for (int s = 0; s < count; s++) {
-        if (!wait_drq()) return 0;
+        if (!wait_drq()) return pio_fail(lba, 0);
         for (int i = 0; i < ATA_SECTOR_SIZE / 2; i++) *p++ = inw(REG_DATA);
     }
     return 1;
 }
 
 static int pio_write_sectors(uint32_t lba, int count, const void *buf) {
-    if (!wait_not_busy()) return 0;
+    if (!wait_not_busy()) {
+        g_pio_fail_reason = "drive stayed busy, command never issued";
+        return pio_fail(lba, 1);
+    }
 
     select_lba(lba, (uint8_t)count);
     outb(REG_COMMAND, CMD_WRITE_SECTORS);
 
     const uint16_t *p = (const uint16_t *)buf;
     for (int s = 0; s < count; s++) {
-        if (!wait_drq()) return 0;
+        if (!wait_drq()) return pio_fail(lba, 1);
         for (int i = 0; i < ATA_SECTOR_SIZE / 2; i++) outw(REG_DATA, *p++);
     }
 
@@ -858,8 +914,27 @@ static int lba_range_ok(uint32_t lba, int count) {
     return 1;
 }
 
+// Definition sits here, after g_pending below is in scope for
+// ata_set_dma_forced_off().
+static int dma_in_use(void) { return g_dma_available && !g_dma_forced_off; }
+
 int ata_dma_active(void) {
+    return dma_in_use();
+}
+
+int ata_dma_hardware_available(void) {
     return g_dma_available;
+}
+
+// Refuses while a non-blocking transfer is in flight: dma_transfer_
+// poll() would otherwise be left waiting on an engine the dispatch
+// sites have stopped considering active, and the caller (a stepped
+// Notepad save) has no way to hear about that. Returns 1 if the mode
+// was applied, 0 if it was refused -- callers report the difference.
+int ata_set_dma_forced_off(int off) {
+    if (g_pending.in_flight) return 0;
+    g_dma_forced_off = off ? 1 : 0;
+    return 1;
 }
 
 // The real per-transfer sector cap for THIS boot. ATA_MAX_SECTORS_PER_
@@ -870,7 +945,7 @@ int ata_dma_active(void) {
 // batch work into transfers (tfs.c's block coalescing) ask this rather
 // than assuming the maximum.
 int ata_max_sectors_per_xfer(void) {
-    if (!g_dma_available) return ATA_PIO_MAX_SECTORS_PER_XFER;
+    if (!dma_in_use()) return ATA_PIO_MAX_SECTORS_PER_XFER;
     uint32_t sectors = g_dma_buf_frames * (4096 / ATA_SECTOR_SIZE);
     return sectors > ATA_MAX_SECTORS_PER_XFER ? ATA_MAX_SECTORS_PER_XFER : (int)sectors;
 }
@@ -892,7 +967,7 @@ int ata_read_sectors(uint32_t lba, int count, void *buf) {
     if (!g_present) return 0;
     if (count < 1 || count > ata_max_sectors_per_xfer()) return 0;
     if (!lba_range_ok(lba, count)) return 0;
-    if (g_dma_available) return dma_transfer_with_retry(lba, count, buf, 0);
+    if (dma_in_use()) return dma_transfer_with_retry(lba, count, buf, 0);
     return pio_read_sectors(lba, count, buf);
 }
 
@@ -905,7 +980,7 @@ int ata_write_sectors(uint32_t lba, int count, const void *buf) {
     if (!g_present) return 0;
     if (count < 1 || count > ata_max_sectors_per_xfer()) return 0;
     if (!lba_range_ok(lba, count)) return 0;
-    if (g_dma_available) return dma_transfer_with_retry(lba, count, (void *)(uintptr_t)buf, 1);
+    if (dma_in_use()) return dma_transfer_with_retry(lba, count, (void *)(uintptr_t)buf, 1);
     return pio_write_sectors(lba, count, buf);
 }
 
@@ -920,7 +995,7 @@ int ata_write_sectors(uint32_t lba, int count, const void *buf) {
 // primitive doesn't exist there (see ata.h's top comment).
 int ata_dma_nonblocking_selftest(uint32_t lba, uint32_t *out_polls) {
     *out_polls = 0;
-    if (!g_present || !g_dma_available) return 0;
+    if (!g_present || !dma_in_use()) return 0;
 
     uint8_t via_blocking[ATA_SECTOR_SIZE];
     if (!ata_read_sector(lba, via_blocking)) return 0;

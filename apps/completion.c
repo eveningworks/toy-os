@@ -19,7 +19,7 @@
 #include "theme.h"
 
 const char *const COMPLETION_COMMANDS[] = {
-    "about", "append", "apps", "beep", "cat", "cd", "clear", "color",
+    "about", "append", "apps", "ata", "beep", "cat", "cd", "clear", "color",
     "cursor", "debug", "df", "dmatest", "dmesg", "echo", "edit", "fontsize",
     "fsck", "gui", "help", "ktest", "history", "keyboard", "lspci", "ls",
     "meminfo", "mkdir", "nano", "parttable", "pwd", "reboot",
@@ -280,6 +280,12 @@ static int complete_argument(struct collector *c, const char *cmd, int arg_index
     if (k_strcmp(cmd, "timezone") == 0) {
         int n = tz_city_count();
         for (int i = 0; i < n; i++) add_candidate(c, tz_city_name(i));
+        return 1;
+    }
+    if (k_strcmp(cmd, "ata") == 0) {
+        // `ata nodma on|off` -- the only subcommand.
+        if (arg_index == 1) { add_candidate(c, "nodma"); }
+        else { add_candidate(c, "off"); add_candidate(c, "on"); }
         return 1;
     }
     if (k_strcmp(cmd, "debug") == 0) {

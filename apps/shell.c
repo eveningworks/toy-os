@@ -118,6 +118,8 @@ static void dispatch(char *line) {
         cmd_dmesg();
     } else if (k_strcmp(cmd, "debug") == 0) {
         cmd_debug(args ? args : "");
+    } else if (k_strcmp(cmd, "ata") == 0) {
+        cmd_ata(args ? args : "");
     } else if (k_strcmp(cmd, "reboot") == 0) {
         cmd_reboot();
     } else if (k_strcmp(cmd, "color") == 0) {

@@ -30,6 +30,52 @@ using `## [x.y.z] - date` headings is here.
 
 ## [Unreleased]
 
+### Fixed
+- **The two ATA loose ends this session had been carrying: the PIO
+  path's failure reporting, and the fact that it never ran at all.**
+  - **`wait_drq()` conflated "the drive reported ERR" with "I gave up
+    waiting"** -- both returned 0, so a PIO failure said nothing about
+    which. Now recorded in a `g_pio_fail_reason` string and logged,
+    exactly mirroring `g_dma_fail_reason` on the DMA side, whose own
+    comment notes that collapsing these cost real detective work once.
+    `pio_read_sectors()`/`pio_write_sectors()` log it unconditionally on
+    failure, same as `dma_transfer_with_retry()` does -- they previously
+    returned 0 silently. The return stays pass/fail (nothing needs to
+    branch on the difference); it's the human reading `dmesg` who does.
+  - **`ata nodma on|off` forces the PIO fallback**, because it was
+    otherwise *unreachable*: `ata_init_dma()` succeeds on every machine
+    this OS boots, so ~100 lines of fallback driver had never executed
+    and could not be tested. Fallback code that only runs in an
+    emergency and has never been seen running isn't a fallback, it's a
+    guess. The switch is also the PIO-vs-DMA comparison that root-caused
+    a DMA failure to a host stall in an earlier session -- which at the
+    time meant hand-editing the driver.
+  - **Every DMA gate now routes through one `dma_in_use()` helper.**
+    That's the part worth getting right: `ata_max_sectors_per_xfer()`
+    reports a *smaller* cap for PIO, so a dispatch site checking the
+    flags differently from the site setting the cap would let a caller
+    batch 128 sectors into a path that tops out at 8. Confirmed live --
+    the reported cap goes 128 -> 8 with the toggle and back.
+  - `ata_set_dma_forced_off()` **refuses** while a non-blocking transfer
+    is in flight (a stepped Notepad save) rather than stranding its
+    poller, and returns 0 so the caller reports the refusal instead of
+    assuming the switch happened.
+  - **Three KTESTs in the new `kernel/drivers/ata_test.c`** (suite: 58
+    -> 61), driving the same switch: a file written and read back
+    through the PIO path and compared byte-for-byte, the sector cap
+    following the active path, and the restore-to-DMA case. They restore
+    the previous mode *before* asserting, so a failing assertion can't
+    leak forced-PIO into every test after it -- the same cascade the
+    runner's `fault_any_armed()` check exists to prevent.
+  - Verified beyond the suite: a `stress 3` write/read/verify round trip
+    run **entirely through PIO**, byte-for-byte clean with `fsck` clean
+    after, at 5.0 MB/s write / 7.5 MB/s read against DMA's 24/29 -- the
+    first time that code has demonstrably moved real data under load.
+    **Not covered:** the failure-reason strings themselves, which need
+    an actual drive error to surface; and the mid-transfer refusal
+    branch, which needs a stepped write held open across a test body.
+    Both are noted in the test file rather than left looking covered.
+
 ### Added
 - **A Control Panel GUI app with pluggable applets, and two applets to
   start.** Asked for a Windows-style applet chooser plus one easy but

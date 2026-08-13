@@ -188,6 +188,10 @@ static const char *const TEST_HELP_LINES[] = {
     "                  decoded line per syscall (`write(1, \"hi\\n\", 3)\n",
     "                  = 3`), plus a count when it exits. Also captured\n",
     "                  in `dmesg`. Ring-3 binaries only.\n",
+    "  ata           - show whether disk transfers use DMA or PIO\n",
+    "  ata nodma on|off - force the PIO fallback / restore DMA --\n",
+    "                  makes the fallback path reachable, and lets a\n",
+    "                  suspect DMA transfer be compared against PIO\n",
     "  debug         - list per-subsystem debug-log switches (off by\n",
     "                  default)\n",
     "  debug <s> on|off - flip one on/off at runtime, no rebuild --\n",
@@ -1233,6 +1237,59 @@ static void cmd_lspci_builtin(void) {
         }
         vga_putc('\n');
     }
+}
+
+// `ata` -- report which transfer path is in use; `ata nodma on|off`
+// forces the PIO fallback or releases it.
+//
+// The toggle exists because the PIO path is otherwise unreachable: DMA
+// comes up on every machine this OS boots, so the fallback driver never
+// runs and cannot be tested (see ata.c's g_dma_forced_off comment, and
+// kernel/drivers/ata_test.c, which drives this same switch). It's also
+// the PIO-vs-DMA comparison that root-caused a real DMA failure once,
+// which previously meant hand-editing the driver.
+void cmd_ata(const char *args) {
+    while (*args == ' ') args++;
+
+    if (*args == '\0') {
+        vga_write("ata: transfers are going through ");
+        vga_write(ata_dma_active() ? "DMA" : "PIO");
+        if (!ata_dma_hardware_available()) {
+            vga_write(" (this machine has no Bus-Master DMA)");
+        } else if (!ata_dma_active()) {
+            vga_write(" (forced -- `ata nodma off` to restore DMA)");
+        }
+        vga_write("\n  max sectors/transfer: ");
+        vga_write_dec((uint32_t)ata_max_sectors_per_xfer());
+        vga_putc('\n');
+        return;
+    }
+
+    if (k_strncmp(args, "nodma", 5) != 0) {
+        vga_write("usage: ata [nodma on|off]\n");
+        return;
+    }
+    args += 5;
+    while (*args == ' ') args++;
+
+    int off;
+    if (k_strcmp(args, "on") == 0) off = 1;
+    else if (k_strcmp(args, "off") == 0) off = 0;
+    else { vga_write("usage: ata [nodma on|off]\n"); return; }
+
+    if (off && !ata_dma_hardware_available()) {
+        vga_write("ata: this machine has no DMA to turn off -- already on PIO.\n");
+        return;
+    }
+    if (!ata_set_dma_forced_off(off)) {
+        // Refused rather than applied -- reported, not swallowed, since
+        // the caller would otherwise believe the mode changed.
+        vga_write("ata: refused -- a transfer is in flight, try again.\n");
+        return;
+    }
+    vga_write("ata: now using ");
+    vga_write(ata_dma_active() ? "DMA" : "PIO");
+    vga_write(off ? " (forced)\n" : "\n");
 }
 
 // Standard 8-4-4-4-12 hex GUID formatting -- the first three fields

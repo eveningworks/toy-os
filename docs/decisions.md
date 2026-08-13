@@ -65,6 +65,7 @@ there when you add an entry, or the index quietly stops being one.
 - [Keyboard layouts are data files (`/etc/kbs/<name>`) generated from Linux's own XKB data, not a compiled-in enum](#keyboard-layouts-are-data-files-etckbsname-generated-from-linuxs-own-xkb-data-not-a-compiled-in-enum)
 - [GDB debugging: QEMU's built-in stub, not an in-kernel serial protocol implementation](#gdb-debugging-qemus-built-in-stub-not-an-in-kernel-serial-protocol-implementation)
 - [ATA's waits are bounded by wall-clock in one context and a spin count in the other](#atas-waits-are-bounded-by-wall-clock-in-one-context-and-a-spin-count-in-the-other)
+- [The PIO fallback is reachable on purpose (`ata nodma`), because unreachable fallback code is a guess](#the-pio-fallback-is-reachable-on-purpose-ata-nodma-because-unreachable-fallback-code-is-a-guess)
 
 **GUI: window manager, compositor & widgets**
 
@@ -286,6 +287,40 @@ call before its own DMA moves real data -- noted directly in
 for how this was root-caused (PIO-vs-DMA comparison, then a host-side
 pre-seeded disk image to isolate the read path and trace the bounce
 buffer).
+
+## The PIO fallback is reachable on purpose (`ata nodma`), because unreachable fallback code is a guess
+
+`kernel/drivers/ata.c` has two transfer paths: Bus-Master DMA, and a PIO
+fallback for machines where DMA can't be brought up. `ata_init_dma()`
+succeeds under QEMU and on ordinary PC hardware -- so the fallback had
+never executed on any machine this OS boots, and there was no way to
+make it. Roughly a hundred lines of driver that only run in an
+emergency, and had never been observed running at all.
+
+`ata_set_dma_forced_off()` (the `ata nodma on|off` command) exists to
+close that. It is not a debugging convenience bolted on: it's what makes
+the path testable, and `kernel/drivers/ata_test.c` drives the same
+switch so PIO executes on every `make test`. The first time it ran, it
+worked -- which is the outcome that was *hoped for* before and merely
+assumed.
+
+It has a second use that isn't hypothetical. Comparing a known-good PIO
+transfer against a suspect DMA one is how an earlier session root-caused
+a DMA failure to a host-side filesystem stall rather than a driver bug;
+at the time that comparison required hand-editing the driver.
+
+**The implementation detail worth keeping:** every place that asks "DMA
+or PIO?" goes through a single `dma_in_use()` helper rather than testing
+the flags itself. `ata_max_sectors_per_xfer()` reports a smaller cap on
+PIO (8 sectors vs 128), and `tfs.c` batches block writes against that
+number -- so a dispatch site that disagreed with the cap site by even
+one condition would hand the PIO path a transfer it cannot carry. One
+helper makes that disagreement unexpressible.
+
+Related, same file, same session: `wait_drq()` now records *why* it
+failed in `g_pio_fail_reason`, mirroring `g_dma_fail_reason` -- a
+pass/fail return for control flow, a reason string for whoever reads
+`dmesg`. See `ata.c` and CHANGELOG.md's `[Unreleased]`.
 
 ## ATA's waits are bounded by wall-clock in one context and a spin count in the other
 
