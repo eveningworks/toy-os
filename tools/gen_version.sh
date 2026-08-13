@@ -16,7 +16,7 @@
 #
 # Idempotent by design (only overwrites version.h if the content
 # actually changed): this runs on literally every `make all`/`make
-# iso`, and kernel/include/kapi.h includes version.h, so with the
+# iso`, and kernel/include/api/kapi.h includes version.h, so with the
 # Makefile's -MMD/-MP header dependency tracking (see its top comment),
 # an unconditional overwrite here would bump version.h's mtime on
 # every single build and make every file that (transitively) includes

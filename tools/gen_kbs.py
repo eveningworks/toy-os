@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """tools/gen_kbs.py -- generates /etc/kbs/<layout> keyboard-layout data
-files (kernel/core/keyboard_layout.c's on-disk format) from the Linux
+files (kernel/lib/keyboard_layout.c's on-disk format) from the Linux
 side's own XKB layout data, via `xkbcli compile-keymap` (part of
 libxkbcommon-tools -- `apt-get install libxkbcommon-tools` if missing;
 no X server needed, it's a pure keymap compiler).
@@ -82,7 +82,7 @@ KEYSYM_TABLE = {
     "greater": ">", "slash": "/", "question": "?", "grave": "`",
     "asciitilde": "~", "space": " ",
     # Nordic letters -- Latin-1 codepoints, matching
-    # kernel/include/keyboard.h's CHAR_A_RING/CHAR_A_DIAERESIS/etc.
+    # kernel/include/api/keyboard.h's CHAR_A_RING/CHAR_A_DIAERESIS/etc.
     "aring": "å", "Aring": "Å",
     "adiaeresis": "ä", "Adiaeresis": "Ä",
     "odiaeresis": "ö", "Odiaeresis": "Ö",
@@ -166,7 +166,7 @@ def generate(layout):
         "# Format: name=value, one 'sc_<hex scancode>=<char>' /",
         "# 'sc_<hex scancode>_shift=<char>' / 'sc_<hex scancode>_altgr=<char>' pair",
         "# per key; <char> is a literal single character, or 0xNN for a codepoint",
-        "# above ASCII (the Nordic letters). See kernel/core/keyboard_layout.c.",
+        "# above ASCII (the Nordic letters). See kernel/lib/keyboard_layout.c.",
         "",
     ]
 

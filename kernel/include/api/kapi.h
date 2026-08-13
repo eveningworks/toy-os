@@ -12,13 +12,13 @@
 #include "vga.h"       // console: vga_write, vga_putc, vga_clear, vga_set_color...
 #include "gfx.h"       // framebuffer graphics primitives
 #include "keyboard.h"  // keyboard_getchar, keyboard_try_getchar, KEY_* codes, IS_PRINTABLE_KEY, Nordic chars
-#include "keyboard_layout.h" // keyboard_layout_load/current/translate -- data-driven /etc/kbs/<name> layouts (see kernel/core/keyboard_layout.c)
-#include "keyboard_config.h" // keyboard layout persistence (see kernel/core/keyboard_config.c)
+#include "keyboard_layout.h" // keyboard_layout_load/current/translate -- data-driven /etc/kbs/<name> layouts (see kernel/lib/keyboard_layout.c)
+#include "keyboard_config.h" // keyboard layout persistence (see kernel/lib/keyboard_config.c)
 #include "mouse.h"     // mouse_init, mouse_get_state, mouse_set_bounds
 #include "timer.h"     // pit_ticks, rtc_read
-#include "tz.h"        // rtc_read_local, timezone selection (see kernel/core/tz.c)
-#include "font_config.h" // font size persistence (see kernel/core/font_config.c)
-#include "etc_config.h" // shared /etc/*.conf name=value reader/writer (see kernel/core/etc_config.c) -- for an app's own /etc/<name>.conf, not just the kernel-internal settings above that already wrap it
+#include "tz.h"        // rtc_read_local, timezone selection (see kernel/lib/tz.c)
+#include "font_config.h" // font size persistence (see kernel/lib/font_config.c)
+#include "etc_config.h" // shared /etc/*.conf name=value reader/writer (see kernel/lib/etc_config.c) -- for an app's own /etc/<name>.conf, not just the kernel-internal settings above that already wrap it
 #include "fs.h"        // the filesystem (backend-agnostic API -- see fs.h's top comment)
 #include "json.h"      // heap-backed JSON parser/serializer -- see json.h's top comment (coexists with etc_config.h's flat name=value format)
 #include "klog.h"      // klog_dump -- the kernel's in-memory log, what `dmesg` reads (see klog.c)

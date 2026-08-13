@@ -67,7 +67,7 @@
 #define IS_PRINTABLE_KEY(k) (((k) >= 32 && (k) < 127) || IS_NORDIC_CHAR(k))
 
 // Scancode->character translation itself lives in
-// kernel/include/keyboard_layout.h / kernel/core/keyboard_layout.c now
+// kernel/include/api/keyboard_layout.h / kernel/lib/keyboard_layout.c now
 // -- data-driven from /etc/kbs/<name> files rather than a compiled-in
 // enum of two hardcoded layouts. See that header's top comment and
 // docs/decisions.md. keyboard.c (this driver) only owns raw

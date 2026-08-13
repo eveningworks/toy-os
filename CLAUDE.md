@@ -80,7 +80,7 @@ technical conventions below:
   that finding/editing the right part of it gets slow and error-prone.
   Don't calibrate this against a line count quoted in a doc -- those
   rot (this bullet claimed "every hand-written file is under 800 lines"
-  well after `kernel/drivers/tfs.c` and `apps/shell_sys.c` had both
+  well after `kernel/fs/tfs.c` and `apps/shell_sys.c` had both
   passed 1,000). Run `wc -l` on the actual tree if you want today's
   numbers. A hand-written file pushing toward a couple thousand lines
   is the point to seriously consider a split, not a hard
@@ -94,7 +94,7 @@ technical conventions below:
   boundary -- see `docs/decisions.md`'s entry on this) rather than
   inventing a new pattern each time, and record the split's own
   reasoning in a top-of-file comment the way `apps/wm/wm.c` and
-  `kernel/drivers/tfs.c` do. The changelog is the same
+  `kernel/fs/tfs.c` do. The changelog is the same
   instinct applied to docs, not code -- split by era each time it
   passed ~4,200 lines, cutting at one heading with a straight move and
   no rewording: `CHANGELOG-archive.md` holds Milestone 1 through Build
@@ -105,15 +105,32 @@ technical conventions below:
   `docs/decisions.md`'s `Build N` pointers name whichever file that
   build actually lives in -- keep them accurate when a split moves
   entries.
+- **`kernel/` directories are subsystems, not filing cabinets** --
+  `arch/x86_64/` (anything a different CPU would need rewritten),
+  `core/` (bring-up and whole-machine concerns), `mm/`, `proc/`, `fs/`,
+  `drivers/` (one piece of hardware each), `lib/` (services with no
+  hardware of their own). `kernel/README.md` has the "does it belong
+  here?" test per directory. Two lines worth holding: nothing outside
+  `arch/` should contain `inb`/`outb`, inline assembly or a
+  control-register access; and a filesystem backend goes in `fs/`, not
+  `drivers/` -- the block device is the driver, the filesystem on top
+  of it isn't.
+- **`kernel/include/` is split by audience and the build enforces it**
+  -- `api/` (what `apps/` may use), `abi/` (the kernel<->userland
+  contract `userland/` shares), `kernel/` (internal, and NOT on
+  `apps/`'s include path, so reaching for one is a compile error rather
+  than a review catch). See `kernel/include/README.md`, including where
+  a new header starts life (`kernel/`, moving to `api/` only when an app
+  genuinely needs it).
 - **`/etc` on the persistent filesystem is the config-file convention**
   (`kernel_main()` creates it right after `fs_init()`, before anything
   that might read a config file runs). Don't hand-roll a parser for a
-  new setting -- read/write it through `kernel/include/etc_config.h`'s
+  new setting -- read/write it through `kernel/include/api/etc_config.h`'s
   `etc_config_get()`/`etc_config_set()` (name=value lines, `#` comments,
-  see `kernel/core/etc_config.c`'s top comment for the exact format).
+  see `kernel/lib/etc_config.c`'s top comment for the exact format).
   By default, put a new setting's key in the shared `/etc/toyos.conf`
   every setting lives in today (`timezone`, `font_size`, `PATH` -- see
-  `kernel/core/tz.c`/`font_config.c` for the pattern: a small
+  `kernel/lib/tz.c`/`font_config.c` for the pattern: a small
   `*_init()` called from `kernel_main()` that loads via
   `etc_config_get()`, and a `*_save()`/`*_set_*()` that writes via
   `etc_config_set()`). `etc_config_*()` takes a `path` on every call,
@@ -257,11 +274,14 @@ make run   # boots in QEMU with an SDL window (the user's machine, not usable he
 make run-audio  # same as run, + a PulseAudio backend so the PC speaker (`beep`) is audible
 make debug # boots frozen (-s -S) for real GDB debugging -- see "Debugging with GDB" below
 ```
-`apps/*.c` is picked up by a `wildcard`, but it's non-recursive --
-`apps/wm/*.c` needed its own `WM_C` wildcard, pattern rule, and mkdir
-target when that subfolder was added, and `apps/ui/*.c` got the same
-treatment (`UI_C`) when that subfolder was added later. If you add
-another subfolder under `apps/`, it'll need the same treatment.
+**Source discovery is recursive now** -- every `.c` under `kernel/` or
+`apps/` is compiled and every `.asm` under `kernel/` assembled, with
+`build/` mirroring the source tree, so a new directory needs no Makefile
+edit at all. (It used to be one hand-written wildcard + pattern rule +
+mkdir target per directory; `apps/wm/` and `apps/ui/` each paid that tax
+when they appeared.) The flip side: a `.c` file anywhere under
+`kernel/` or `apps/` IS in the kernel image -- there's no scratch file
+the build ignores, so throwaway code goes somewhere else.
 
 **`make run` uses `-display sdl,grab-mod=rctrl`, no explicit pointer
 device.** Two things worth knowing if you ever touch this line:

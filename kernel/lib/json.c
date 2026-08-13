@@ -10,7 +10,7 @@
 // json_read_file()), so a one-pass recursive descent is the simplest
 // thing that works. JSON_MAX_DEPTH caps how deep object/array nesting
 // can recurse, specifically because this kernel's stack is a fixed
-// 16KB (see kernel/core/boot.asm) -- an attacker-or-typo-supplied
+// 16KB (see kernel/arch/x86_64/boot.asm) -- an attacker-or-typo-supplied
 // document with thousands of nested "[[[[..." would otherwise recurse
 // the parser straight through the stack with no guard rail at all.
 //

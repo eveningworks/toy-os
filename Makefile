@@ -26,7 +26,7 @@ ASM = nasm
 # -fstack-protector-strong + -mstack-protector-guard=global: stack
 # canaries (Milestone 2, docs/roadmap.md), explicitly off before now.
 # `global` (a plain extern uintptr_t __stack_chk_guard, see
-# kernel/core/stack_protector.c) instead of the default `tls` guard --
+# kernel/lib/stack_protector.c) instead of the default `tls` guard --
 # GCC's default reads the canary via %fs:0x28, and this kernel never
 # sets up a per-CPU/per-thread FS/GS base (no TLS infrastructure
 # exists at all, see docs/decisions.md), so the TLS-based default
@@ -79,7 +79,7 @@ ISO = toy-os.iso
 # 9GiB, sparse -- grown from the original 1MiB when TFS2's on-disk
 # format switched from one fixed-size inline data blob per file to a
 # real block allocator + indirect pointers, specifically to support
-# multi-gigabyte files (see kernel/drivers/tfs.c's FS_DISK_TOTAL_BYTES,
+# multi-gigabyte files (see kernel/fs/tfs.c's FS_DISK_TOTAL_BYTES,
 # which MUST match this). `truncate` makes a sparse file -- the actual
 # bytes on YOUR disk only grow as toy-os actually writes into the
 # image, not upfront, so creating this doesn't eat 9GiB of real space

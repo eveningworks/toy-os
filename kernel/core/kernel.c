@@ -72,8 +72,8 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // docs/decisions.md for why this replaced the old GRUB-module/
     // BIN_BOOTSTRAP-table approach.
     tz_init(); // loads the persisted timezone choice, if any -- needs fs_init()/"/etc" first
-    font_config_init(); // loads the persisted font size, if any -- see kernel/core/font_config.c
-    keyboard_config_init(); // loads the persisted keyboard layout, if any -- see kernel/core/keyboard_config.c
+    font_config_init(); // loads the persisted font size, if any -- see kernel/lib/font_config.c
+    keyboard_config_init(); // loads the persisted keyboard layout, if any -- see kernel/lib/keyboard_config.c
     vga_reflow(); // apply it to the console's cell layout (no-op if nothing was persisted)
 
     // One-shot boot-time CMOS/RTC readout, logged for the same reason a

@@ -160,7 +160,7 @@ vertical slack. See CHANGELOG.md's `[Unreleased]` entry.
 
 ## IRQ registration: one handler per line, framework-automatic EOI
 
-`kernel/core/irq.c`'s table (`irq_register_handler()`/`irq_dispatch()`)
+`kernel/arch/x86_64/irq.c`'s table (`irq_register_handler()`/`irq_dispatch()`)
 deliberately doesn't support multiple handlers chained on one IRQ line
 -- every IRQ source this kernel has, or is about to add (a NIC), lives
 on its own dedicated line in QEMU's default topology (confirmed by
@@ -235,7 +235,7 @@ buffer).
 
 ## Contiguous memory: linear bitmap scan, not a buddy allocator
 
-`pmm_alloc_contiguous()` (`kernel/core/pmm.c`) finds a run of N
+`pmm_alloc_contiguous()` (`kernel/mm/pmm.c`) finds a run of N
 physically contiguous free frames by linearly scanning the same
 one-bit-per-frame bitmap `pmm_alloc_frame()` already uses, rather than
 reserving a dedicated always-contiguous region at boot, or replacing
@@ -281,9 +281,9 @@ first concrete milestone toward the TCP/IP prerequisites README.md's
 
 ## Filesystem is one active backend, not mount points
 
-`kernel/drivers/vfs.c` dispatches every `fs_*` call to a single active
+`kernel/fs/vfs.c` dispatches every `fs_*` call to a single active
 `struct fs_ops` backend (today, always `tfs_ops` -- see
-`kernel/include/fs_ops.h`). Adding a second filesystem means writing a
+`kernel/include/kernel/fs_ops.h`). Adding a second filesystem means writing a
 new backend and pointing `fs_init()` at it, not routing different path
 prefixes to different backends simultaneously -- nothing needs the
 latter yet, and it's meaningfully more code (cross-mount path
@@ -297,7 +297,7 @@ points later if that ever changes.
 `fs_delete()` refuses to delete a non-empty directory outright, rather
 than deleting its contents. Deliberate, not a missing feature --
 avoids a whole class of "oops, deleted more than I meant to" mistakes
-in a filesystem with no trash/undo. See `kernel/include/fs.h` and
+in a filesystem with no trash/undo. See `kernel/include/api/fs.h` and
 `tfs.c`'s top comment ("Honest limitations, not solved here").
 
 ## Persistent filesystem is write-through with a single-slot journal
@@ -411,7 +411,7 @@ place that path gets exercised.
 
 ## `/etc` is one shared `toyos.conf` by default, not a file per setting
 
-`kernel/core/etc_config.c`'s `etc_config_get()`/`etc_config_set()` is a
+`kernel/lib/etc_config.c`'s `etc_config_get()`/`etc_config_set()` is a
 generic name=value(+`#`comments) reader/writer that takes a `path` on
 every call -- it doesn't hardcode one file. `tz.c` and `font_config.c`
 both default to `/etc/toyos.conf` (see **Build 357**) rather than each
@@ -421,7 +421,7 @@ today's small, general settings; a setting with enough keys of its own
 to be unwieldy sharing it (a GUI app with a dozen preferences) should
 pass its own `/etc/<name>.conf` path instead -- nothing in
 `etc_config.c` favors one file over many, that choice belongs to each
-caller. See `kernel/core/etc_config.c`'s top comment for the file
+caller. See `kernel/lib/etc_config.c`'s top comment for the file
 format itself and CHANGELOG-archive-2.md's **Build 357** for the original
 writeup, including the one-time forward-migration logic each of
 `tz.c`/`font_config.c` briefly carried to move an already-chosen
@@ -939,7 +939,7 @@ split while still solving the actual pain (remembering multiple
 
 ## Kernel heap: coalesces by real address adjacency, not list order
 
-`kmalloc()`/`kfree()` (`kernel/core/heap.c`) grow the heap by calling
+`kmalloc()`/`kfree()` (`kernel/mm/heap.c`) grow the heap by calling
 `pmm_alloc_contiguous()` again whenever the free list can't satisfy a
 request, appending the new region's block to the end of the list. That
 means list order and physical-address order agree *within* a region,
@@ -1106,7 +1106,7 @@ from a function just because it's the "natural" owner of the
 information, if that function is actually called on every frame/tick/
 redraw instead of once. See `CHANGELOG.md`'s `[Unreleased]` entry for
 the full list of areas covered and `klog_write_dec()`/
-`klog_write_hex()` (`kernel/include/klog.h`), added in the same change
+`klog_write_hex()` (`kernel/include/api/klog.h`), added in the same change
 for klog messages that need to include a number.
 
 ## Real disk-hosted ELF binaries: an old plan re-verified before building, not built from the doc as written
@@ -1127,13 +1127,13 @@ under an old doc" trap a future session could hit again elsewhere:
   `[Unreleased]`) had already solved this as a side effect, for
   unrelated reasons, in a different session that had no idea an old
   ELF-binaries plan was depending on that limit staying in place. Three
-  comments (`kernel/core/etc_config.c`, `apps/editor.c`/`.h`) still
+  comments (`kernel/lib/etc_config.c`, `apps/editor.c`/`.h`) still
   cited the old 2048-byte ceiling as real months later -- corrected in
   the same change that shipped this (see `CHANGELOG.md`).
 - The plan assumed `elf_load()`'s ELF blob would need copying out of
   TFS2's live in-RAM table into a scratch buffer before executing,
   since that memory "isn't stable the way a GRUB module's reserved
-  region is." Checking `elf_load()` (`kernel/core/elf.c`) and
+  region is." Checking `elf_load()` (`kernel/proc/elf.c`) and
   `heap.c`'s own top comment together showed this wasn't needed:
   `elf_load()` just casts its `elf_phys_addr` argument straight to a
   pointer with zero translation, which only works because GRUB modules
@@ -1261,7 +1261,7 @@ mechanism generalized cleanly -- there was no longer a reason for
 `lspci` to be the only one.
 
 Almost all of them folded into the existing generic loader
-(`kernel/core/elf_run.c`'s `elf_run_from_fs()`) with zero new code,
+(`kernel/proc/elf_run.c`'s `elf_run_from_fs()`) with zero new code,
 which is the whole point of that function existing: one loader, N
 binaries, no per-binary kernel harness. Two didn't:
 
@@ -1367,7 +1367,7 @@ than hand-fix scancodes one bug report at a time, layouts moved to
 `xkbcli compile-keymap` (Linux's own, already-correct XKB layout
 compiler -- no X server needed) instead of anyone re-deriving a
 scancode chart by hand. Translation logic itself moved out of
-`keyboard.c` into a new `kernel/core/keyboard_layout.c`, since owning
+`keyboard.c` into a new `kernel/lib/keyboard_layout.c`, since owning
 per-region character tables was never really the driver's job (raw
 scancode/shift-state handling is). See CHANGELOG.md's `[Unreleased]`
 entry for the full implementation, including the AltGr/dead-key scope
@@ -1385,7 +1385,7 @@ real `/bin` binary, `CHANGELOG.md`'s `[Unreleased]` entry) originally
 packed argument strings as tightly as possible against the one stack
 page's literal top address. That broke `SYS_LISTDIR` the moment an
 argv string landed close enough to the page boundary: its handler
-(`kernel/core/syscall.c`) calls `vmm_validate_user_range(pml4, rdi,
+(`kernel/proc/syscall.c`) calls `vmm_validate_user_range(pml4, rdi,
 FS_PATH_MAX)` on the incoming path pointer -- a fixed 64-byte range
 from wherever the pointer starts, regardless of the real string's
 length -- so a short string near the page's end still failed
@@ -1457,7 +1457,7 @@ instead -- `stress 100` measured ~1.4MB/s before this existed (one
 flush per 4KB filesystem block written, plus a second one per
 newly-allocated block's bitmap-sector update, so a 100MB write was
 tens of thousands of tiny synchronous round trips). `write_range_impl()`
-(`kernel/drivers/tfs.c`) wraps its whole per-file-write loop in one
+(`kernel/fs/tfs.c`) wraps its whole per-file-write loop in one
 batch, and `persist_bitmap_bit()` defers the bitmap sector write
 itself (not just its flush) to the batch's end, coalescing what would
 otherwise be one redundant sector write per allocated block into one
@@ -1511,7 +1511,7 @@ replay/discard were verified without an actual power loss.
 
 The async-I/O roadmap item's Phase 2 (`fs_write_range_begin()`/
 `fs_write_range_step()`, see `docs/roadmap.md`) added two new function
-pointers to `struct fs_ops` (`kernel/include/fs_ops.h`) rather than a
+pointers to `struct fs_ops` (`kernel/include/kernel/fs_ops.h`) rather than a
 separate, optional side-interface a backend could leave unset. Every
 other entry in that struct is unconditionally required -- `vfs.c`'s
 dispatch wrappers call straight through (`g_fs->touch(...)`, etc.) with
@@ -1635,7 +1635,7 @@ was handed in.
 
 ## The M16 scheduler is permanently armed now -- an empty process table makes that safe
 
-`scheduler_armed` (`kernel/core/scheduler.c`) used to be false by
+`scheduler_armed` (`kernel/proc/scheduler.c`) used to be false by
 default and only ever set true, briefly, inside `scheduler_demo_run()`
 (`schedtest`), set back false before returning even on failure -- see
 that function's own build-172-era comment for the original reasoning.
@@ -1727,7 +1727,7 @@ are worth knowing if this is ever revisited:
   `IA32_FS_BASE`/`GS_BASE`, no `swapgs`, confirmed by grep across
   `kernel/core/`), so the TLS-based default would dereference an
   unconfigured segment. `global` instead reads a plain
-  `extern uintptr_t __stack_chk_guard` (`kernel/core/stack_protector.c`
+  `extern uintptr_t __stack_chk_guard` (`kernel/lib/stack_protector.c`
   for the kernel, `userland/stack_chk.c` for userland -- two separate
   symbols, two separate address spaces, no reason to share one).
   Building real TLS infrastructure just to use GCC's default guard
@@ -1782,7 +1782,7 @@ from the shell over QMP) -- a real, unavoidable architectural conflict,
 not a testing inconvenience:
 
 - The GPT header's LBA is fixed by spec at LBA 1.
-- `kernel/drivers/tfs.c`'s `FS_JOURNAL_HEADER_LBA` is *also* LBA 1
+- `kernel/fs/tfs.c`'s `FS_JOURNAL_HEADER_LBA` is *also* LBA 1
   (`FS_SUPERBLOCK_LBA + 1`).
 - `tfs_init()` calls `tfs_selftest()` **unconditionally** after either
   mounting or formatting (`if (g_disk_backed) tfs_selftest();`, no
@@ -2008,8 +2008,8 @@ budget for both, not assume the first bug found is the only one.
 
 Milestone 2's "NX bit enforcement" and "W^X on kernel + userspace
 mappings" roadmap items were done together for the *userspace* half
-only (`kernel/core/elf.c`/`vmm.c`, `userland/link.ld`) -- deliberately
-not touching `kernel/core/boot.asm`'s own flat 2MiB-huge-page identity
+only (`kernel/proc/elf.c`/`vmm.c`, `userland/link.ld`) -- deliberately
+not touching `kernel/arch/x86_64/boot.asm`'s own flat 2MiB-huge-page identity
 map, which stays plain present+writable, no NX, no code/data split, on
 purpose. Giving the kernel itself real NX/W^X would need `linker.ld` to
 page-align `.text` away from `.rodata`/`.data`/`.bss` first (it
@@ -2026,8 +2026,8 @@ non-executable by default rather than adding a parallel "safe" variant
 -- every pre-existing call site (a process's stack, `SYS_SBRK` heap
 growth, the GUI framebuffer, a window's pixel buffer) is data, never
 code, so this is both the secure default and correct for all of them
-with zero call-site changes; only `kernel/core/elf.c` (needs real
-per-segment control) and `kernel/core/ring3_test.c` (its one
+with zero call-site changes; only `kernel/proc/elf.c` (needs real
+per-segment control) and `kernel/proc/ring3_test.c` (its one
 hand-assembled code page) call the explicit-flags variant instead. See
 CHANGELOG.md's `[Unreleased]` entry for the full mechanics and the QMP
 verification (a purpose-built `userland/nx_test.c` that jumps into a

@@ -1,6 +1,6 @@
 // A freestanding userland test program that deliberately jumps into a
 // writable data page and tries to execute it, to prove NX enforcement
-// (Milestone 2, docs/roadmap.md; kernel/core/vmm.c's PAGE_NX, boot.asm's
+// (Milestone 2, docs/roadmap.md; kernel/mm/vmm.c's PAGE_NX, boot.asm's
 // EFER.NXE) is actually real, not just present in the code -- same
 // "prove it, don't just read the code and assume" shape as
 // crash_test.c's deliberate-fault self-test, run the same way: an

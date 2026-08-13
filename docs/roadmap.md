@@ -582,13 +582,13 @@ Separately, async/continuously-armed process spawning for the GUI Terminal
 entry. Was deliberately deferred, not started, when `ls` migrated to a
 real `/bin` binary (blocked in the Terminal same as `run` at the time,
 see docs/decisions.md) -- the blocker was architectural, not a small fix:
-`elf_run_from_fs()`/`process_run_ring3_args()` (`kernel/core/elf_run.c`,
-`kernel/core/process.c`) is synchronous and blocking by design, and
+`elf_run_from_fs()`/`process_run_ring3_args()` (`kernel/proc/elf_run.c`,
+`kernel/proc/process.c`) is synchronous and blocking by design, and
 `wm_run()` is a plain, uninterrupted kernel-space event loop, never itself
 scheduler-managed. Built as planned:
 - **A public, non-blocking spawn API**: `scheduler_spawn(path, args)`/
-  `scheduler_poll(pid, &exit_code)` (`kernel/include/scheduler.h`,
-  `kernel/core/scheduler.c`) -- a thin public wrapper over the M16
+  `scheduler_poll(pid, &exit_code)` (`kernel/include/api/scheduler.h`,
+  `kernel/proc/scheduler.c`) -- a thin public wrapper over the M16
   scheduler's existing (previously `static`) `spawn_from_fs()`, extended
   to build a real argv via a newly-exposed `elf_build_argv_on_stack()`
   (promoted out of `elf_run.c`, same layout `elf_run_from_fs()` itself
@@ -871,7 +871,7 @@ control in Milestone 10, `run` as it exists today) eventually wants the
   `wait(pid)` can't accidentally match the wrong process.
 - Larger/growable user stack -- every ring-3 process gets exactly one
   fixed 4KB page at a hardcoded `STACK_VADDR`
-  (`kernel/core/elf_run.c`/`scheduler.c`), mapped once at process start
+  (`kernel/proc/elf_run.c`/`scheduler.c`), mapped once at process start
   with no growth mechanism (no stack-fault-triggered auto-growth
   anywhere in the codebase). Fine for today's small test binaries;
   flagged directly by scoping out what a real C program (e.g. a
@@ -1021,7 +1021,7 @@ this, see Milestone 12's entry above) for cell geometry and drag-to-
 reposition instead of re-deriving that math.
 
 That filesystem API surface also needs seek: today's ring-3 file I/O
-(`SYS_OPEN`/`SYS_READ`/`SYS_WRITE`/`SYS_CLOSE`, `kernel/include/syscall_abi.h`)
+(`SYS_OPEN`/`SYS_READ`/`SYS_WRITE`/`SYS_CLOSE`, `kernel/include/abi/syscall_abi.h`)
 is open-then-sequential-read-only -- no `SYS_SEEK`/lseek-equivalent
 exists anywhere, and a file fd's `SYS_WRITE` always appends rather than
 writing at a caller-chosen offset. Random access matters for more than
@@ -1068,11 +1068,11 @@ A real C library on top of `filetest`'s fd-aware syscalls: CRT0
 `elf_build_argv_on_stack()`/`process_run_ring3_args()`, `userland/ls.c`
 is the one existing caller), TLS (FS.base), FPU/SSE context-switch
 save/restore, and malloc/free -- none of which exist yet. `SYS_SBRK`
-(`kernel/include/syscall_abi.h`) is the only allocator-adjacent syscall
+(`kernel/include/abi/syscall_abi.h`) is the only allocator-adjacent syscall
 today, and it's grow-only (no shrink/free) and explicitly documented as
-"legacy-single-process-only" (`kernel/core/syscall.c`) -- no userland
+"legacy-single-process-only" (`kernel/proc/syscall.c`) -- no userland
 code anywhere builds real malloc/free semantics on top of it. TLS in
-particular is also why `kernel/core/stack_protector.c`'s stack-canary
+particular is also why `kernel/lib/stack_protector.c`'s stack-canary
 guard uses `-mstack-protector-guard=global` instead of GCC's normal
 TLS-based default -- confirmed directly, not theoretical, see
 `docs/decisions.md`.
@@ -1513,7 +1513,7 @@ port-I/O are a real per-arch project. Full breakdown, proposed
 Stretch: port a small classic game (e.g. Doom) as an end-to-end stress
 test of real disk-hosted ELF binaries + libc, once both exist. Real
 prerequisite breakdown below, from a research pass through the actual
-ring-3 syscall surface (`kernel/include/syscall_abi.h`, every
+ring-3 syscall surface (`kernel/include/abi/syscall_abi.h`, every
 `userland/*.c`) rather than assumption -- the realistic target is a
 `doomgeneric` (github.com/ozkl/doomgeneric)-style port, which reduces
 the porting surface to implementing a handful of platform functions

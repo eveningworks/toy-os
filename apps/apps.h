@@ -5,7 +5,7 @@
 // point, registered here. There's no process isolation yet (everything
 // still runs in kernel space, one address space) -- this is a *source*
 // boundary, not a security one. It exists so:
-//   - apps only ever depend on kernel/include/kapi.h, never on driver
+//   - apps only ever depend on kernel/include/api/kapi.h, never on driver
 //     internals directly, so drivers can be refactored without touching
 //     app code
 //   - adding a new app is "write apps/foo.c + foo_main(), add one line to

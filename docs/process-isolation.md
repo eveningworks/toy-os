@@ -16,9 +16,9 @@ was assembled from.
 
 By default, the kernel, drivers, shell, and GUI apps all run in one
 shared address space at ring 0 -- there's no memory protection between
-any of it, and no privilege boundary. `kernel/core/gdt.c`,
-`kernel/core/pmm.c`, `kernel/core/paging.c`, `kernel/core/vmm.c`,
-`kernel/core/elf.c`, and the two test drivers (`ring3_test.c`,
+any of it, and no privilege boundary. `kernel/arch/x86_64/gdt.c`,
+`kernel/mm/pmm.c`, `kernel/arch/x86_64/paging.c`, `kernel/mm/vmm.c`,
+`kernel/proc/elf.c`, and the two test drivers (`ring3_test.c`,
 `elf_test.c`) are the start of changing that.
 
 **What's actually in place:**
@@ -118,20 +118,20 @@ version of
    `pmm_init()` also reserve whatever `multiboot_get_module()` reports.
 
 **What's actually in place beyond the four items above:** a real syscall
-path. `kernel/core/syscall.c` handles `int 0x80` (the gate needs `DPL=3`
+path. `kernel/proc/syscall.c` handles `int 0x80` (the gate needs `DPL=3`
 in its IDT entry -- 0xEE, not the usual 0x8E -- otherwise ring 3 gets a
 `#GP` just trying to invoke it). The only syscall implemented is `exit`
 (number `SYS_EXIT`, code in `RDI`), but it's a real one: calling it
-doesn't fault or halt -- `kernel/core/process.c`'s `process_run_ring3()`
+doesn't fault or halt -- `kernel/proc/process.c`'s `process_run_ring3()`
 returns normally with the exit code, exactly as if it were an ordinary
 (if unusual) function call. Since there's no scheduler to hand control
 back through yet, this works via a small hand-written
-setjmp/longjmp-style pair (`kernel/core/context_switch.asm`):
+setjmp/longjmp-style pair (`kernel/arch/x86_64/context_switch.asm`):
 `process_run_ring3()` saves the current kernel execution context before
 dropping to ring 3, and the exit syscall jumps straight back into it
 from deep inside the interrupt handler -- a completely different call
 stack (the TSS's kernel stack, switched to automatically on any
-ring3-to-ring0 transition). `kernel/core/syscall_test.c` (shell command
+ring3-to-ring0 transition). `syscall_test.c` -- long since replaced by a real /bin binary (shell command
 `syscalltest`) demonstrates the whole thing: it loads a second real ELF
 binary (`userland/exit_test.c`, GRUB's second `module2` line) that calls
 `exit(42)` instead of deliberately faulting, and prints the exit code it
@@ -255,7 +255,7 @@ same boot and both worked correctly.
 ring-3 process at a time -- `process_run_ring3()` drops to ring 3 and
 only gets control back when that process calls `exit`, via a
 setjmp/longjmp-style save/restore of the caller's kernel context. Useful,
-but fundamentally a function call, not scheduling. `kernel/core/scheduler.c`
+but fundamentally a function call, not scheduling. `kernel/proc/scheduler.c`
 adds honest preemptive multitasking on top, without touching that
 mechanism: the two coexist, chosen per-syscall by whether the exiting
 process is scheduler-managed. The core trick: `isr_common` (`isr.asm`)

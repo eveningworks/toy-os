@@ -21,7 +21,7 @@ than trying to read an old image; a reader built against this document
 cannot open a v1 or v2 image either, and shouldn't try to guess.
 
 This document describes the format only -- not why it's shaped this
-way. For that, see `kernel/drivers/tfs.c`'s top comment (the reference
+way. For that, see `kernel/fs/tfs.c`'s top comment (the reference
 implementation) and `docs/decisions.md`'s entries on journaling/
 timestamps/indirect-block design choices.
 
@@ -33,7 +33,7 @@ versions. A TFS2-aware reader should check the superblock magic+version
 
 - All multi-byte integers are **little-endian**.
 - All sector I/O is in fixed **512-byte sectors** (standard ATA/IDE
-  sector size -- `ATA_SECTOR_SIZE` in `kernel/include/ata.h`). File
+  sector size -- `ATA_SECTOR_SIZE` in `kernel/include/api/ata.h`). File
   *data*, however, is addressed in **4096-byte blocks**
   (`FS_BLOCK_SIZE`, 8 sectors each) -- see "Block addressing" below.
   LBA numbers are absolute sector indices from the start of the disk
@@ -46,7 +46,7 @@ versions. A TFS2-aware reader should check the superblock magic+version
   trailing bytes past a string's terminator being any particular
   value -- treat them as unspecified padding, not as data.
 - `FS_MAX_FILES` (256) and `FS_PATH_MAX` (64) are compile-time constants
-  in this kernel (`kernel/include/fs.h`), not something an on-disk
+  in this kernel (`kernel/include/api/fs.h`), not something an on-disk
   header records anywhere -- a reader has to know them ahead of time
   (they're listed here) rather than discover them from the image
   itself. A future toy-os build that changes either would also bump
@@ -96,7 +96,7 @@ host filesystem until toy-os actually writes there.
 ### Deriving these offsets yourself
 
 If `FS_MAX_FILES` or `FS_DISK_TOTAL_BYTES` ever change, recompute from
-`kernel/drivers/tfs.c`'s own macros rather than trusting the table
+`kernel/fs/tfs.c`'s own macros rather than trusting the table
 above verbatim:
 
 ```
@@ -147,7 +147,7 @@ boot.**
 **FNV-1a-32**: `hash = 0x811C9DC5; for each byte b: hash ^= b; hash *=
 0x01000193` (32-bit unsigned, wraps on overflow). Not cryptographic --
 just enough to detect a torn/partial write with overwhelming
-probability, matching `kernel/drivers/tfs.c`'s `fnv1a()`.
+probability, matching `kernel/fs/tfs.c`'s `fnv1a()`.
 
 **What the journal protects, and what it doesn't**: exactly as
 before, `persist_record()` protects one table-slot *record* (path,
@@ -161,7 +161,7 @@ committed before its target block's content was durable. The
 top-level record itself (and therefore a file's size and top block
 pointers) still can't end up torn -- just possibly pointing at a block
 whose content wasn't the last thing written to it. This is a known,
-accepted gap (see `kernel/drivers/tfs.c`'s top comment and
+accepted gap (see `kernel/fs/tfs.c`'s top comment and
 `docs/decisions.md`), not something a v1-era reader's assumptions
 about journal coverage should be carried over for.
 
@@ -231,7 +231,7 @@ slots), not a real entry.
 ### `rtc_time` encoding (7 bytes)
 
 Unchanged from v1. Matches `struct rtc_time` in
-`kernel/include/timer.h` field-for-field:
+`kernel/include/api/timer.h` field-for-field:
 
 | Offset (within the 7 bytes) | Size | Field | Range |
 |---|---|---|---|
@@ -243,7 +243,7 @@ Unchanged from v1. Matches `struct rtc_time` in
 | 5 | 2 bytes (uint16 LE) | year | full year, e.g. `2026` |
 
 **This is broken-down local time, not a Unix epoch integer** -- read
-via `rtc_read_local()` (`kernel/core/tz.c`), which applies the
+via `rtc_read_local()` (`kernel/lib/tz.c`), which applies the
 timezone/DST offset the toy-os user had selected (via the shell's
 `timezone` command) at the moment the timestamp was written. There's
 no timezone/UTC-offset field stored anywhere in the record or the

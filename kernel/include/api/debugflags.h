@@ -25,7 +25,7 @@
 // `debug` (no args) and `debug <name>` both already read the names
 // table generically, nothing else needs updating.
 enum dbgflag_subsys {
-    DBGFLAG_FS = 0,   // kernel/drivers/tfs.c and fs.h callers
+    DBGFLAG_FS = 0,   // kernel/fs/tfs.c and fs.h callers
     DBGFLAG_WM,       // apps/wm/* -- window manager, dialogs, widgets
     DBGFLAG_ATA,      // kernel/drivers/ata.c -- disk I/O, DMA/PIO, retries
     DBGFLAG_SUBSYS_COUNT

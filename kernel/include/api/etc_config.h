@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 // A small shared name=value config-file reader/writer for anything
-// under /etc -- see kernel/core/etc_config.c's top comment for the
+// under /etc -- see kernel/lib/etc_config.c's top comment for the
 // exact file format, and CLAUDE.md's `/etc` bullet for the convention
 // this is part of. Replaces the hand-rolled single-purpose parsers
 // tz.c and font_config.c each used to have (see CHANGELOG's build

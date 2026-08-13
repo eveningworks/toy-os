@@ -1,5 +1,5 @@
 // A freestanding userland test program that exercises the write syscall
-// (see kernel/core/syscall.c) -- the first userland program in this
+// (see kernel/proc/syscall.c) -- the first userland program in this
 // project that produces console output *itself*, via a real syscall,
 // rather than the kernel narrating on its behalf. Then exits normally.
 #include <stdint.h>

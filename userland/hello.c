@@ -1,7 +1,7 @@
 // A minimal freestanding "userland" test program: no libc, no crt0, no
 // syscalls -- this is the smallest thing that can be a real, separately
-// compiled and linked ELF64 executable. Loaded by kernel/core/elf.c and
-// run in ring 3 by kernel/core/elf_test.c, replacing the 17 hand-encoded
+// compiled and linked ELF64 executable. Loaded by kernel/proc/elf.c and
+// run in ring 3 by the ELF loader (kernel/proc/elf.c), replacing the 17 hand-encoded
 // machine-code bytes the earlier ring3_test.c used.
 //
 // Same proof pattern as ring3_test.c: write a marker value somewhere the

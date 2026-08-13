@@ -6,7 +6,7 @@
 // just one backend behind the VFS dispatch layer (vfs.c), reachable
 // only through the `tfs_ops` vtable at the bottom of this file (see
 // fs_ops.h for what that interface is and why it exists, and
-// kernel/include/tfs.h for this file's own public surface). Nothing
+// kernel/include/kernel/tfs.h for this file's own public surface). Nothing
 // outside vfs.c should #include tfs.h or call anything in this file
 // directly -- go through fs.h's fs_* API instead, same as before this
 // split.

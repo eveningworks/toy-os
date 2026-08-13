@@ -2,7 +2,7 @@
 #define KEYBOARD_CONFIG_H
 
 // Keyboard layout persistence, layered on top of
-// keyboard_layout_load() (kernel/core/keyboard_layout.c) -- a
+// keyboard_layout_load() (kernel/lib/keyboard_layout.c) -- a
 // "keyboard_layout=<name>" key in the shared /etc/toyos.conf every
 // setting lives in by default (see etc_config.h), read/applied once at
 // boot. Same split as font_config.c/tz.c: this file only selects +

@@ -406,7 +406,7 @@ void cmd_fsck(const char *args) {
 // Real (non-sparse) multi-GB write/read/verify stress test over
 // fs_write_range()/fs_read_range() -- built to answer docs/roadmap.md's
 // long-standing "full end-to-end multi-GB write/read pass hasn't been
-// run yet" item. tfs_selftest() (kernel/drivers/tfs.c, runs on every
+// run yet" item. tfs_selftest() (kernel/fs/tfs.c, runs on every
 // disk-backed boot) already proves triple-indirect *addressing* --
 // that the pointer chain can be built and walked -- but it only writes
 // 64 bytes at a ~4.6GB offset, not real content filling that space.
@@ -643,7 +643,7 @@ void cmd_dmatest(const char *args) {
 
 // Proves fs_write_range_begin()/fs_write_range_step() (Phase 2) AND
 // fs_read_range_begin()/fs_read_range_step() (Phase 4) of the async-I/O
-// roadmap item (kernel/drivers/tfs.c) -- writes <mb> megabytes through
+// roadmap item (kernel/fs/tfs.c) -- writes <mb> megabytes through
 // the stepped write API instead of fs_write_range(), one block at a
 // time via an explicit step loop this command drives itself (standing
 // in for what wm_run() would eventually do once per frame, which Phase
@@ -963,7 +963,7 @@ void cmd_fontsize(const char *args) {
 }
 
 // Changes the active keyboard scancode layout -- any name with a
-// matching /etc/kbs/<name> file (see kernel/core/keyboard_layout.c and
+// matching /etc/kbs/<name> file (see kernel/lib/keyboard_layout.c and
 // tools/gen_kbs.py; `us` and `se`/Finnish ship by default). `keyboard`
 // alone shows the current layout. Persists via keyboard_config_save()
 // so it survives a reboot -- same pattern as `fontsize`/`timezone`.
@@ -1091,7 +1091,7 @@ static void print_guid(const uint8_t *g) {
 
 // Reads and prints whatever partition table (if any) is on the
 // attached disk -- MBR, GPT, or neither (today's disk.img: raw TFS2
-// from LBA 0, no partition table at all, see kernel/include/partition.h's
+// from LBA 0, no partition table at all, see kernel/include/api/partition.h's
 // top comment). Read-only, diagnostic only, same spirit as `lspci`.
 void cmd_parttable(void) {
     struct partition_table t;
@@ -1136,7 +1136,7 @@ void cmd_parttable(void) {
 
 // `debug` (no args): lists every subsystem and its current on/off
 // state. `debug <subsys> on|off`: flips one. Backed by
-// kernel/include/debugflags.h's dbgflag_*() -- see its top comment for
+// kernel/include/api/debugflags.h's dbgflag_*() -- see its top comment for
 // why this exists (a permanent, named, off-by-default alternative to
 // hand-rolled temporary klog_write() calls added and removed each
 // debugging session).

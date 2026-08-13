@@ -1,6 +1,6 @@
 // __stack_chk_guard/__stack_chk_fail for every userland ELF -- linked
 // into each one (see the Makefile's $(FOO_ELF) rules and
-// USERLAND_CFLAGS's comment). Same deal as kernel/core/stack_protector.c:
+// USERLAND_CFLAGS's comment). Same deal as kernel/lib/stack_protector.c:
 // neither symbol is ever called by name from this codebase, GCC's own
 // generated prologue/epilogue code for any -fstack-protector-strong
 // -instrumented function references both implicitly. No header --
@@ -9,7 +9,7 @@
 // A fixed guard value, not random -- same reasoning as the kernel's
 // (no entropy source exists yet, see docs/roadmap.md's kernel ASLR
 // item) -- deliberately a DIFFERENT constant from the kernel's own
-// __stack_chk_guard (kernel/core/stack_protector.c) since these are
+// __stack_chk_guard (kernel/lib/stack_protector.c) since these are
 // two entirely separate address spaces/binaries with no reason to
 // share a bit pattern.
 //

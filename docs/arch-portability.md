@@ -29,7 +29,7 @@ No asm, no inline asm, no port I/O -- these need zero changes to
 support a second arch, once they're moved (a pure `git mv` plus header
 path fixes, not a rewrite):
 
-- `kernel/drivers/tfs.c` (1,100 lines) + `vfs.c` (79 lines) -- the whole
+- `kernel/fs/tfs.c` (1,100 lines) + `vfs.c` (79 lines) -- the whole
   filesystem stack.
 - `apps/wm/*` (1,592 lines, split across `wm.c`/`wm_input.c`/
   `wm_render.c`/`desktop.c`/`context_menu.c`/`start_menu.c`) -- the
@@ -41,11 +41,11 @@ path fixes, not a rewrite):
   lines) -- font rendering and the framebuffer blit/blend primitives.
 - The scheduler's round-robin *policy* in `scheduler.c` (289 lines) --
   only one `hlt` in the idle path.
-- `kernel/core/heap.c`/`heap.h` (the kernel heap allocator) and
-  `kernel/core/json.c`/`json.h` (the JSON parser/serializer) -- plain
+- `kernel/mm/heap.c`/`heap.h` (the kernel heap allocator) and
+  `kernel/lib/json.c`/`json.h` (the JSON parser/serializer) -- plain
   freestanding C, no CPU-specific content.
 - Most of `apps/*.c`, `etc_config.c`, `klog.c`, `string.c`.
-- `kernel/core/elf.c` -- aside from one machine-type check
+- `kernel/proc/elf.c` -- aside from one machine-type check
   (`EM_X86_64` at line 90), which just needs an `#ifdef`/table entry
   per arch, not a rewrite.
 
@@ -55,14 +55,14 @@ Ordered roughly by how much work a RISC-V port of each would be, easiest
 first.
 
 **Trivial (config/constant swap, hours not days):**
-- `kernel/core/elf.c`'s `EM_X86_64` check -- one more machine-type
+- `kernel/proc/elf.c`'s `EM_X86_64` check -- one more machine-type
   constant.
 - The one bare `hlt` in `apps/wm/wm.c` and `scheduler.c` -- both just
   need a `cpu_idle()` wrapper (`hlt` on x86, `wfi` on RISC-V) behind a
   header, same insulation `kapi.h` already does for everything else.
 
 **Moderate (logic ports directly, encoding/mechanism differs):**
-- `kernel/core/paging.c` (68 lines) + `vmm.c` (168 lines) -- the actual
+- `kernel/arch/x86_64/paging.c` (68 lines) + `vmm.c` (168 lines) -- the actual
   page-table-walking *logic* (allocate, map, unmap, walk) is portable;
   the page table *entry format* isn't (x86 PML4, 4 levels, vs RISC-V
   Sv39/Sv48, 3-4 levels, different flag bit layout). Needs an
@@ -71,25 +71,25 @@ first.
 - `context_switch.asm` (47 lines) -- register save/restore is
   conceptually identical across archs (save callee-saved regs + stack
   pointer, swap, restore); it's already isolated behind
-  `kernel/include/context_switch.h`'s C-callable interface, so this is
+  `kernel/include/kernel/context_switch.h`'s C-callable interface, so this is
   "write a RISC-V version with the same signature," not "redesign the
   calling code."
-- `kernel/core/pci.c` (166 lines) -- x86 uses port I/O
+- `kernel/drivers/pci.c` (166 lines) -- x86 uses port I/O
   (`CONFIG_ADDRESS`/`CONFIG_DATA`, ports 0xCF8/0xCFC); RISC-V PCI is
   MMIO/ECAM-based. Same protocol semantics, different access mechanism
   -- the PCI *logic* (config space layout, capability walking) carries
   over, the low-level read/write doesn't.
-- `kernel/drivers/serial.c` (COM1, ports 0x3F8+) -- the UART chip
+- `kernel/core/serial.c` (COM1, ports 0x3F8+) -- the UART chip
   itself (16550-compatible) is the same one RISC-V's QEMU `virt`
   machine exposes, just via MMIO instead of port I/O. Register-level
   protocol is portable; the access mechanism isn't.
 
 **Substantial (no direct analog, needs its own subsystem):**
-- `kernel/core/gdt.c` (111 lines) -- segmentation and the TSS are pure
+- `kernel/arch/x86_64/gdt.c` (111 lines) -- segmentation and the TSS are pure
   x86 concepts. RISC-V has neither; a RISC-V port doesn't port this
   file at all, it just doesn't exist on that arch (privilege level
   switching is handled entirely differently, via `mstatus`/`sstatus`).
-- `kernel/core/idt.c` (278 lines) + `isr.asm` (126 lines, 48 stub
+- `kernel/arch/x86_64/idt.c` (278 lines) + `isr.asm` (126 lines, 48 stub
   macros + the `int 0x80` syscall vector) -- x86's IDT gate-table
   format and per-vector stub-per-interrupt model has no RISC-V analog;
   RISC-V uses a single trap vector (`mtvec`/`stvec`) with software
@@ -97,7 +97,7 @@ first.
   sees (`isr_dispatch(regs)` gets called with a normalized register
   frame) generalizes fine -- it's the mechanism that gets to that call
   that's a full rewrite per arch.
-- `kernel/core/pic.c` (8259 PIC, port I/O) -- no RISC-V equivalent at
+- `kernel/arch/x86_64/pic.c` (8259 PIC, port I/O) -- no RISC-V equivalent at
   all; needs a PLIC (Platform-Level Interrupt Controller, MMIO-based)
   driver instead, not a port of this file.
 - `kernel/core/timer.c` (PIT + CMOS/RTC, port I/O) -- RISC-V has
@@ -111,7 +111,7 @@ first.
   RISC-V `virt`; disk access would go through virtio-blk instead, a
   different driver from the ground up (though it would sit behind the
   same `vfs.c` this repo already has, so nothing above it changes).
-- `kernel/drivers/power.c` -- the QEMU-reset-via-port-0x64 trick is
+- `kernel/core/power.c` -- the QEMU-reset-via-port-0x64 trick is
   x86-only; RISC-V shutdown/reset goes through an SBI call instead.
 - `boot.asm` (208 lines) -- Multiboot2 + GRUB, CPUID checks, hand-built
   identity-mapped page tables, the 32-to-64-bit long-mode transition:
@@ -124,14 +124,14 @@ first.
 test binary independently hand-rolls its own `int $0x80` syscall
 trampoline -- there's no shared userland syscall wrapper today. A
 RISC-V port would need an `ecall`-based twin of
-`kernel/include/syscall_abi.h`'s contract, and this is also a good
+`kernel/include/abi/syscall_abi.h`'s contract, and this is also a good
 moment to stop the duplication and give userland one shared trampoline
 function instead of ~11 copies of it, independent of the portability
 work itself.
 
 ## `kapi.h` as the existing insulation boundary
 
-`kernel/include/kapi.h` (44 lines) is already a clean boundary: it's a
+`kernel/include/api/kapi.h` (44 lines) is already a clean boundary: it's a
 pure aggregating header with zero asm or port I/O of its own, and
 `apps/` code never includes a driver header directly or calls
 `inb`/`outb`/inline asm -- with exactly one exception (the bare `hlt`

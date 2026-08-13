@@ -52,7 +52,7 @@ PASS_PATTERNS = [
 # Any of these appearing anywhere in the serial log fails the test
 # immediately, even before the timeout -- no point waiting the full
 # window out if the kernel already panicked. "PANIC: " is
-# kernel/core/idt.c's unrecoverable-fault message (see
+# kernel/arch/x86_64/idt.c's unrecoverable-fault message (see
 # idt.c's serial_write(recoverable ? "RING-3 CRASH: " : "PANIC: ", ...)
 # -- deliberately NOT matching "RING-3 CRASH:" here, since that's the
 # *recoverable* per-process fault path (ring3test/elftest trigger it on

@@ -14,7 +14,7 @@
 // Linux's own XKB layout data rather than anyone hand-typing 256 lines
 // per layout.
 //
-// This is deliberately its own small parser, NOT kernel/core/etc_config.c's
+// This is deliberately its own small parser, NOT kernel/lib/etc_config.c's
 // etc_config_get()/etc_config_set() -- two reasons: etc_config_set()'s
 // read-modify-write goes through a fixed 512-byte working buffer (see
 // its own comment), nowhere near enough for a ~130-line layout file,

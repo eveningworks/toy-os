@@ -68,7 +68,7 @@ SIZES = [
 ]
 
 OUT_C = "kernel/drivers/font_ttf.c"
-OUT_H = "kernel/include/font_ttf.h"
+OUT_H = "kernel/include/api/font_ttf.h"
 PREVIEW = "font_ttf_preview.png"
 
 ASCII_GLYPH_COUNT = 95  # ASCII 32-126
@@ -234,7 +234,7 @@ def main():
     emit_h()
     emit_c(all_glyphs)
     render_preview()
-    print("ok: preview + kernel/drivers/font_ttf.c + kernel/include/font_ttf.h written")
+    print("ok: preview + kernel/drivers/font_ttf.c + kernel/include/api/font_ttf.h written")
 
 
 if __name__ == "__main__":

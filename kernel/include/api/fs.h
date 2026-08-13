@@ -7,9 +7,9 @@
 // This is the stable, backend-agnostic filesystem API -- kapi.h's only
 // filesystem include, and the only header apps/ or the rest of the
 // kernel should ever call into for file/directory access. As of the
-// VFS split, it's implemented by kernel/drivers/vfs.c, which dispatches
+// VFS split, it's implemented by kernel/fs/vfs.c, which dispatches
 // every call below to whichever `struct fs_ops` backend is active (see
-// kernel/include/fs_ops.h) -- today that's always tfs.c, the original
+// kernel/include/kernel/fs_ops.h) -- today that's always tfs.c, the original
 // flat/directory filesystem. Nothing in this header changed shape when
 // that split happened, on purpose: adding a future filesystem means
 // writing a new backend and pointing vfs.c's fs_init() at it, not

@@ -1,4 +1,4 @@
-// M16 scheduler demo (see kernel/core/scheduler.c). A tiny freestanding
+// M16 scheduler demo (see kernel/proc/scheduler.c). A tiny freestanding
 // ring-3 program that proves preemptive, non-cooperative scheduling:
 // prints 'A' a fixed number of times, each followed by a long busy-spin
 // (spanning several 100Hz timer ticks), then exits. Run alongside

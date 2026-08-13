@@ -2,7 +2,8 @@
 #define USERLAND_CONTRACT_H
 
 // Constants shared between userland test programs (userland/*.c) and the
-// kernel code that loads and inspects them (kernel/core/elf_test.c).
+// kernel code that loads and inspects them (kernel/proc/elf.c and
+// kernel/proc/elf_run.c).
 //
 // elf.c only ever handles PT_LOAD segments -- there's no ELF symbol-table
 // parsing (no .symtab/.strtab handling), so the kernel can't look up a

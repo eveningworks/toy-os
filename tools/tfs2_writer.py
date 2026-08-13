@@ -45,7 +45,7 @@ import struct
 import sys
 from datetime import datetime
 
-# ---- constants (mirror kernel/drivers/tfs.c exactly -- see
+# ---- constants (mirror kernel/fs/tfs.c exactly -- see
 # docs/tfs2-spec.md for the byte-level derivation of every one of these) ----
 
 SECTOR = 512

@@ -118,7 +118,7 @@ setup_page_tables:
     ; a missing USER bit at any parent level blocks ring-3 access no
     ; matter what the leaf PDE/PTE says. Actual access is still
     ; determined by the leaf entries: the 2MiB PDEs below stay
-    ; supervisor-only (no USER bit), and only kernel/core/paging.c's
+    ; supervisor-only (no USER bit), and only kernel/arch/x86_64/paging.c's
     ; paging_make_user_page() ever adds USER, to specific 4KiB pages.
     mov eax, p3_table
     or eax, 0b111        ; present + writable + user

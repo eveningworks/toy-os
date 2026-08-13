@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 // MBR/GPT partition table parsing (Milestone 3, docs/roadmap.md) --
-// read-only, diagnostic-only. TFS2 (kernel/drivers/tfs.c) occupies the
+// read-only, diagnostic-only. TFS2 (kernel/fs/tfs.c) occupies the
 // whole disk starting at LBA 0 today, no partition table at all, so
 // this never gets consulted by the boot/mount path -- it exists purely
 // so `disk.img` (or any other attached disk) CAN be inspected, same

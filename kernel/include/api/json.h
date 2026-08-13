@@ -8,7 +8,7 @@
 // deliberately separate and coexist: etc_config.c keeps handling today's
 // simple /etc/toyos.conf settings unchanged, this is for a future config
 // file (or anything else) that genuinely needs nesting or arrays.
-// See kernel/core/json.c's top comment for the parser/serializer design
+// See kernel/lib/json.c's top comment for the parser/serializer design
 // and the one real limitation worth knowing before using this: no
 // floating point (matches apps/calc_engine.h's own reasoning -- this
 // kernel is built with -mno-sse -mno-sse2 and no soft-float, so `double`

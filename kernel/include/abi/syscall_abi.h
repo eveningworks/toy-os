@@ -5,7 +5,7 @@
 #include "timer.h" // struct rtc_time -- reused by SYS_GETTIME and struct dirent's `modified` below
 
 // Syscall numbers (passed in RAX) and argument conventions for `int
-// 0x80`, shared between the kernel's dispatcher (kernel/core/syscall.c)
+// 0x80`, shared between the kernel's dispatcher (kernel/proc/syscall.c)
 // and userland test programs (userland/*.c) so both sides agree on the
 // numbers without duplicating them -- kernel/include is on both build's
 // include path (see the Makefile), so both just include this file.
@@ -54,7 +54,7 @@ struct gui_info {
 };
 
 // General-purpose syscalls, usable by any ring-3 process (not just the
-// experimental GUI ones above) -- see kernel/core/syscall.c for the
+// experimental GUI ones above) -- see kernel/proc/syscall.c for the
 // implementation and userland/echo.c for a program that uses both.
 #define SYS_READ_KEY 5 // No arguments. Non-blocking, same contract (and
                         // for the same reason) as SYS_GUI_POLL_KEY above
@@ -241,7 +241,7 @@ struct dirent {
                       // there's nothing else to yield to, so it's
                       // always a no-op there. Always returns 0 (RAX).
 
-// Socket-fd scaffolding -- see kernel/core/syscall.c's `struct open_file`
+// Socket-fd scaffolding -- see kernel/proc/syscall.c's `struct open_file`
 // and docs/decisions.md for the fuller reasoning. There's no NIC driver
 // or protocol stack yet (see README.md's "Basic TCP/IP networking" --
 // PCI enumeration, IRQ registration, and contiguous memory are done;

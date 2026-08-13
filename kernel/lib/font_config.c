@@ -3,7 +3,7 @@
 // inside the shared /etc/toyos.conf every setting lives in by default,
 // read/applied once at boot (see kernel.c's kernel_main():
 // fs_mkdir("/etc") runs before either tz_init() or font_config_init()),
-// through the shared reader/writer in kernel/core/etc_config.c.
+// through the shared reader/writer in kernel/lib/etc_config.c.
 // `name_to_size()` is the only bit of logic here that isn't generic
 // /etc plumbing.
 //

@@ -17,7 +17,7 @@
 #include <stdint.h>
 #include "syscall_abi.h"
 
-// Own copy of kernel/include/keyboard.h's IS_PRINTABLE_KEY() -- this
+// Own copy of kernel/include/api/keyboard.h's IS_PRINTABLE_KEY() -- this
 // file is a freestanding ring-3 userland program built against no
 // kernel headers at all (see syscall_abi.h being the only include
 // above), so it can't share that macro directly. Keep the codepoint

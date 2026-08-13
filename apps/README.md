@@ -181,7 +181,7 @@ tightly-coupled event loop, not multiple decoupled components (see
   `apps/ui/ui_icon_grid.h`'s reusable geometry/drag-session helper).
 - **`start_menu.c`/`.h`** -- the Start menu popup (app list + system
   actions -- "Exit to shell" and "Shutdown", the latter confirm-gated
-  then `system_poweroff()`, see `kernel/include/power.h`), with hover/
+  then `system_poweroff()`, see `kernel/include/api/power.h`), with hover/
   click-flash feedback.
 - **`context_menu.c`/`.h`** -- a small, generic reusable right-click
   popup (label + callback + caller-supplied context pointer per row),
@@ -375,7 +375,7 @@ that one, so there's no example yet -- the signature is
 
 ## What's available via kapi.h
 
-See `kernel/include/kapi.h` for the exact list -- it just aggregates the
+See `kernel/include/api/kapi.h` for the exact list -- it just aggregates the
 driver headers apps are allowed to use (console output, keyboard, mouse,
 timer/RTC, filesystem, graphics primitives, `system_reboot()`). If you're
 tempted to `#include` something from `kernel/drivers` or `kernel/core`

@@ -572,6 +572,45 @@ using `## [x.y.z] - date` headings is here.
     `screenshots/2026-08-12/tray-clock-*.png`.
 
 ### Changed
+- **Directory restructure: the tree now describes the OS rather than
+  its history.** Asked for as "restructure so it better represents the
+  OS we are building and have modularity built in". Five staged steps,
+  each building and boot-testing clean; no logic changed anywhere.
+  - **`kernel/include/` split by audience, enforced by the build.** It
+    was 47 headers in one flat directory: 30 app-facing, 2 the
+    kernel<->userland ABI, 15 kernel internals. CLAUDE.md has always
+    said `apps/` includes `kapi.h` and nothing else, but nothing
+    enforced it. Now `api/`, `abi/` and `kernel/` get different `-I`
+    flags per build target, so an app reaching for `vmm.h` fails to
+    compile rather than failing review -- verified by deliberately
+    adding the include and watching the build stop. Nothing had to
+    change in any source file: the boundary was already being
+    respected, it just wasn't checkable.
+  - **Recursive source discovery.** Every `.c` under `kernel/`/`apps/`
+    is compiled with `build/` mirroring the tree, so a new directory
+    needs no Makefile edit -- previously one wildcard + pattern rule +
+    mkdir target each, which `apps/wm/` and `apps/ui/` both paid and
+    this restructure would have paid five more times. The 17 userland
+    binaries' ~55 lines of near-identical rules became two pattern
+    rules.
+  - **`kernel/core/` (33 files, five concerns) split into subsystems**:
+    `arch/x86_64/` (Multiboot entry, GDT/IDT/PIC/IRQ, page tables, the
+    ring switch -- everything a different CPU would need rewritten),
+    `mm/`, `proc/`, `lib/` (strings/JSON/klog/`/etc` config -- services
+    with no hardware, which were only in `core/` because there was
+    nowhere else), leaving `core/` as bring-up and whole-machine
+    concerns.
+  - **`tfs.c`/`vfs.c` moved out of `drivers/` into `fs/`.** A
+    filesystem isn't a device driver; the block device under it is.
+    Mount points (Milestone 16) add backends there, not next to
+    `ata.c`.
+  - `kernel/README.md` and `kernel/include/README.md` are new, each
+    with a "does it belong here?" test per directory; `README.md`'s
+    project layout and CLAUDE.md's conventions updated to match.
+  - Two pre-existing bits of rot fixed in passing: three comments
+    pointed at `kernel/core/elf_test.c`/`syscall_test.c`, files deleted
+    long ago when those tests became `/bin` binaries.
+
 - **`docs/roadmap.md` reordered so prerequisites come before the things
   that need them**, asked for directly. Reading top to bottom is now a
   workable build order: nothing depends on something further down.
