@@ -34,9 +34,32 @@ ASM = nasm
 # `-fstack-protector`, and not `-all`) instruments any function with a
 # local array or a local whose address is taken -- the same middle
 # ground GCC itself recommends over the two extremes.
+# ---- header surfaces (see kernel/include/README.md) ----
+#
+# Three include directories, three audiences, enforced by which -I flags
+# each thing is compiled with rather than by convention:
+#
+#   include/api/     what apps/ may use -- kapi.h and everything it
+#                    aggregates. Anything in here is a promise.
+#   include/abi/     the kernel<->userland contract (syscall numbers,
+#                    the ELF entry contract). Shared by the kernel and
+#                    the freestanding userland/ programs, nobody else.
+#   include/kernel/  kernel internals -- paging, the syscall
+#                    implementation, driver-private headers, the
+#                    filesystem backend vtable. NOT on apps/'s or
+#                    userland/'s include path, so reaching for one is a
+#                    compile error rather than a code-review catch.
+#
+# This is the boundary CLAUDE.md has always described; before the split
+# every header sat in one flat directory and nothing enforced it.
+API_INCLUDES    = -Ikernel/include/api -Ikernel/include/abi
+KERNEL_INCLUDES = $(API_INCLUDES) -Ikernel/include/kernel
+
 CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-protector-guard=global -fno-pic -fno-pie \
          -mno-red-zone -mcmodel=kernel -mno-mmx -mno-sse -mno-sse2 \
-         -Wall -Wextra -O2 -g -c -Ikernel/include -Iapps -MMD -MP
+         -Wall -Wextra -O2 -g -c $(KERNEL_INCLUDES) -Iapps -MMD -MP
+
+APPS_CFLAGS = $(subst -Ikernel/include/kernel,,$(CFLAGS))
 
 LDFLAGS = -n -T linker.ld -nostdlib
 
@@ -87,7 +110,7 @@ DISK_IMG = disk.img
 # to both from any protected function in any userland .c file.
 USERLAND_CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-protector-guard=global -fno-pic -fno-pie \
                    -mno-red-zone -mcmodel=large -mno-mmx -mno-sse -mno-sse2 \
-                   -Wall -Wextra -O2 -g -c -Ikernel/include -MMD -MP
+                   -Wall -Wextra -O2 -g -c $(API_INCLUDES) -MMD -MP
 HELLO_ELF = userland/hello.elf
 EXIT_TEST_ELF = userland/exit_test.elf
 WRITE_TEST_ELF = userland/write_test.elf
@@ -203,14 +226,17 @@ $(BUILD)/core/%.o: kernel/core/%.c | $(BUILD)/core
 $(BUILD)/drivers/%.o: kernel/drivers/%.c | $(BUILD)/drivers
 	$(CC) $(CFLAGS) $< -o $@
 
+# apps/ compiles with APPS_CFLAGS, not CFLAGS: same flags minus
+# -Ikernel/include/kernel, so an app that reaches for a kernel-internal
+# header fails to compile. See KERNEL_INCLUDES above.
 $(BUILD)/apps/%.o: apps/%.c | $(BUILD)/apps
-	$(CC) $(CFLAGS) $< -o $@
+	$(CC) $(APPS_CFLAGS) $< -o $@
 
 $(BUILD)/apps/wm/%.o: apps/wm/%.c | $(BUILD)/apps/wm
-	$(CC) $(CFLAGS) $< -o $@
+	$(CC) $(APPS_CFLAGS) $< -o $@
 
 $(BUILD)/apps/ui/%.o: apps/ui/%.c | $(BUILD)/apps/ui
-	$(CC) $(CFLAGS) $< -o $@
+	$(CC) $(APPS_CFLAGS) $< -o $@
 
 $(BUILD)/userland:
 	mkdir -p $@
