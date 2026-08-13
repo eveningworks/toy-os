@@ -432,6 +432,16 @@ run` window is never at risk. GUI/rendering work still needs
 `qmp_test.py`/`gui_flow.py` -- a text transcript says nothing about
 whether a button is drawn in the right place.
 
+**There is a GUI app built to be tested against: "UI Demo"**
+(`apps/uidemo.c`). One of every `apps/ui/` widget at documented,
+font-derived, content-relative offsets, and every interaction logged as
+one parseable line (`uidemo: button 2`, `uidemo: check alpha on`,
+`uidemo: cancel btn`). Combined with the `gui` commands below, a GUI
+test becomes drive-and-assert over a single serial wire with no
+screenshot in the loop -- and when a click lands on the wrong thing, the
+log says which widget it actually hit. Read its top comment for the
+layout table and the log grammar before writing coordinates by hand.
+
 **`tools/gui_debug.py` -- ask the WM what it's doing, instead of
 measuring a screenshot.** The serial debug console has a `gui` command
 family now (`apps/wm/wm_debug.c`), live while the desktop is up:

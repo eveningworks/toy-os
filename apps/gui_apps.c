@@ -5,6 +5,7 @@
 #include "terminal.h"
 #include "taskmgr.h"
 #include "control_panel.h"
+#include "uidemo.h"
 
 // To add a new windowed app: write apps/foo.c + apps/foo.h implementing
 // the gui_app callbacks (see apps/notepad.c for the simplest example),
@@ -53,5 +54,12 @@ const struct gui_app gui_app_registry[] = {
       .on_hover = control_panel_hover,
       .on_press = control_panel_press, .on_release = control_panel_release,
       .resizable = 1 },
+    // Last on purpose: it's a testing target, not something a user of
+    // the OS is looking for, and keeping it at the end means every
+    // other app's Start-menu row index stays put.
+    { .name = "UI Demo", .default_size = uidemo_default_size, .on_open = uidemo_open,
+      .on_draw = uidemo_draw, .on_key = uidemo_key, .on_click = uidemo_click,
+      .on_press = uidemo_press, .on_release = uidemo_release,
+      .on_hover = uidemo_hover, .resizable = 1 },
 };
 const int gui_app_registry_count = sizeof(gui_app_registry) / sizeof(gui_app_registry[0]);

@@ -117,6 +117,37 @@ using `## [x.y.z] - date` headings is here.
     unmoved throughout, and the highlight clearing both on moving off a
     button inside the window and on leaving the window entirely.
 
+- **"UI Demo" -- a GUI app that exists to be tested against.** Asked
+  for a well-documented calibration target with every UI component.
+  - One of each `apps/ui/` widget -- a `ui_button_group`, two
+    checkboxes, a `ui_radio_list`, a `ui_textbox`, a `ui_scrollback`
+    with its scrollbar -- at documented content-relative offsets, all
+    derived from the font rather than hardcoded, so a `fontsize` change
+    doesn't invalidate them. The layout table and the offsets live in
+    the file's top comment.
+  - **Every interaction is logged as one parseable line** (`uidemo:
+    button 2`, `uidemo: check alpha on`, `uidemo: focus textbox`,
+    `uidemo: cancel btn`). Combined with the `gui` commands below, that
+    makes a GUI test drive-and-assert over one serial wire with no
+    screenshot in the loop -- and when a click lands on the wrong
+    control, the log says which one it actually hit, which is the
+    calibration half.
+  - Widget names in the log are stable identifiers (`btn1`,
+    `chk_alpha`), deliberately not the display labels, so a test doesn't
+    break when a label is reworded.
+  - One hit-testing subtlety it immediately exposed in itself:
+    `ui_button_group_release()` returns -1 both for "nothing was armed"
+    and "armed then dragged off", so the first version logged
+    `cancel btn` on every checkbox click too. It tracks whether the
+    press actually armed something now -- exactly the kind of noise a
+    log-asserting test trips over, found by asserting on the log.
+  - Verified by driving all six widgets through `gui click` and
+    checking the log: three buttons commit on release, the checkbox and
+    radio act on contact, the textbox focuses and receives keys
+    (`key 100 text="type hereabc"`), and press-drag-off produces
+    `cancel btn` with no `button N`. Screenshot in
+    `screenshots/2026-08-13/`.
+
 - **A `gui` command family for the serial debug console -- inspect and
   drive the window manager without a single pixel.** Asked for after
   noticing that opening an app for a test meant clicking a Start menu

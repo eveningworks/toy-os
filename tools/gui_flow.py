@@ -85,7 +85,8 @@ START_BTN = (50, 703)  # inside the taskbar's Start button, safely off any edge
 # Keep in sync with apps/gui_apps.c's gui_app_registry[] order -- or
 # don't, and ask the kernel instead: `gui apps` / `gui menu --json` list
 # the registry live, in order (tools/gui_debug.py).
-APP_ORDER = ["Notepad", "About", "Calculator", "Terminal", "Task Manager", "Control Panel"]
+APP_ORDER = ["Notepad", "About", "Calculator", "Terminal", "Task Manager",
+             "Control Panel", "UI Demo"]
 # Keep in sync with apps/wm/start_menu.c's wm_system_actions[] order.
 SYSTEM_ACTIONS = ["Exit to shell", "Shutdown"]
 

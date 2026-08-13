@@ -109,6 +109,17 @@ class DebugConsole:
 
     # -- conveniences over the raw commands ------------------------------
 
+    def events(self, prefix="uidemo:"):
+        """Kernel log lines emitted since the last command, as a list.
+
+        klog output and command output share this wire, and injected
+        input is asynchronous -- so the lines an event produces arrive
+        AFTER the command that queued it returns, and land in the next
+        read. Sending an empty line collects them. click()/drag()/key()
+        below already do this and return the result, which is usually
+        what you want; call this directly to sweep up anything else."""
+        return [l for l in self.send("").splitlines() if l.startswith(prefix)]
+
     def settle(self, seconds=SETTLE_S):
         """Wait for queued synthetic input to drain. Call after click/drag
         /key before asserting on the result."""
@@ -142,22 +153,27 @@ class DebugConsole:
         return self.send(f"gui open {name}")
 
     def click(self, x, y, settle=True):
-        out = self.send(f"gui click {x} {y}")
-        if settle:
-            self.settle()
-        return out
+        """Click, wait for it to drain, and return the log lines it
+        produced -- the assertion a GUI test actually wants."""
+        self.send(f"gui click {x} {y}")
+        if not settle:
+            return []
+        self.settle()
+        return self.events()
 
     def drag(self, x0, y0, x1, y1, settle=True):
-        out = self.send(f"gui drag {x0} {y0} {x1} {y1}")
-        if settle:
-            self.settle(SETTLE_S * 2)  # a drag queues ~11 events, not 4
-        return out
+        self.send(f"gui drag {x0} {y0} {x1} {y1}")
+        if not settle:
+            return []
+        self.settle(SETTLE_S * 2)  # a drag queues ~11 events, not 4
+        return self.events()
 
     def key(self, k, settle=True):
-        out = self.send(f"gui key {k}")
-        if settle:
-            self.settle()
-        return out
+        self.send(f"gui key {k}")
+        if not settle:
+            return []
+        self.settle()
+        return self.events()
 
     def menu_row(self, label):
         """Centre point of the Start menu row with this label, straight
