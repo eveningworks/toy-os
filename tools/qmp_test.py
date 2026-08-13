@@ -314,17 +314,25 @@ class QMPSession:
         self.goto(x, y)
         self.click(**kw)
 
-    def drag(self, x, y, hold=0.2, settle=0.2, step_settle=0.02):
-        """Press the left button at the current position, move (via
-        the same chunked goto() every other move uses -- see its
-        docstring for why a raw move_rel() isn't safe here) to (x, y)
-        while held, then release. For dragging a scrollbar thumb, a
-        window titlebar, etc. Call goto() first if the press needs to
-        start somewhere other than the current tracked position.
+    def drag(self, from_x, from_y, to_x, to_y, *,
+             hold=0.2, settle=0.2, step_settle=0.02):
+        """Drag from (from_x, from_y) to (to_x, to_y): move there, press
+        the left button, move while held (via the same chunked goto()
+        every other move uses -- see its docstring for why a raw
+        move_rel() isn't safe here), release. For a window titlebar, a
+        scrollbar thumb, a desktop icon.
+
+        The timing arguments are KEYWORD-ONLY on purpose. This used to
+        be drag(x, y, hold, settle) -- destination only -- and a caller
+        who reasonably read it as (x1, y1, x2, y2) got hold=700 and
+        settle=300 SECONDS instead of a second point. It didn't fail;
+        it slept for sixteen minutes exactly as instructed. With `*`,
+        that same call is a TypeError before anything moves.
         """
+        self.goto(from_x, from_y)
         self.mouse_down()
         time.sleep(hold)
-        self.goto(x, y, settle=step_settle, step_settle=step_settle)
+        self.goto(to_x, to_y, settle=step_settle, step_settle=step_settle)
         time.sleep(hold)
         self.mouse_up()
         time.sleep(settle)

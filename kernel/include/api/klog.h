@@ -39,4 +39,15 @@ void klog_write_hex(uint64_t n);
 // for it, not a userdata pointer.
 void klog_dump(void (*putc_cb)(char c));
 
+// Mirrors every klog_write()/klog_putc() byte to the physical console
+// as well as the serial port, while enabled.
+//
+// kernel_main() turns this on early and off again just before
+// apps_start(), so the boot sequence is visible on screen the way a
+// real kernel's is -- and then stays out of the way. Everything the
+// kernel logs after that is still in `dmesg` and on the serial line.
+// The console keeps scrollback (see vga.h), so the boot messages remain
+// readable with PageUp once the shell is up.
+void klog_set_console_echo(int on);
+
 #endif

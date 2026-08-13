@@ -39,6 +39,13 @@ void kernel_main(uint64_t multiboot_info_addr) {
     multiboot_set_info(multiboot_info_addr);
 
     vga_init();
+    // Mirror the kernel log to the screen for the rest of boot, the way
+    // a real kernel shows its init sequence. Switched off again just
+    // before apps_start() below -- and the console's scrollback (see
+    // vga.h) keeps these lines readable with PageUp once the shell is
+    // up, which is the whole point: they used to go past far too fast
+    // to read and only existed on the serial line afterwards.
+    klog_set_console_echo(1);
     vga_write("toy-os booting...\n");
 
     gdt_init();
@@ -108,6 +115,11 @@ void kernel_main(uint64_t multiboot_info_addr) {
     klog_write("toy-os: scheduler initialized (continuously armed; see `schedtest`)\n");
 
     debug_console_init(); // serial debug console (COM1) -- see docs/decisions.md; polled from keyboard_getchar()'s and wm_run()'s idle-wait loops
+
+    // Boot is over; stop putting kernel log lines on top of whatever the
+    // shell or the GUI draws. `dmesg`, the serial port and the console's
+    // own scrollback all still have them.
+    klog_set_console_echo(0);
 
     apps_start();
 

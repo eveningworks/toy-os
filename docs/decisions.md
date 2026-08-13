@@ -70,6 +70,7 @@ there when you add an entry, or the index quietly stops being one.
 - [The window manager is one event loop, not decoupled components](#the-window-manager-is-one-event-loop-not-decoupled-components)
 - [Esc no longer exits the GUI desktop -- it's unclaimed at the WM level now](#esc-no-longer-exits-the-gui-desktop----its-unclaimed-at-the-wm-level-now)
 - [Don't put a `text_scrollback` on the stack](#dont-put-a-text_scrollback-on-the-stack)
+- [Console scrollback is a character ring in vga.c, and the boot log is echoed to it](#console-scrollback-is-a-character-ring-in-vgac-and-the-boot-log-is-echoed-to-it)
 - [Button press/release feedback: a general `on_press`/`on_release` WM mechanism, not a Calculator-only hack](#button-pressrelease-feedback-a-general-on_presson_release-wm-mechanism-not-a-calculator-only-hack)
 - [ui_button/ui_button_group: Brutal-OS-inspired, but not a full retained view system](#ui_buttonui_button_group-brutal-os-inspired-but-not-a-full-retained-view-system)
 - [Start menu click flash: a deferred close via pit_ticks(), not a blocking sleep](#start-menu-click-flash-a-deferred-close-via-pit_ticks-not-a-blocking-sleep)
@@ -2234,3 +2235,46 @@ and entries in PATH that don't exist are skipped silently -- the default
 `/bin;/usr/bin` names a directory that isn't on a stock disk, and
 warning about it on every boot would be noise. See `CHANGELOG.md`'s
 `[Unreleased]` entry.
+
+## Console scrollback is a character ring in vga.c, and the boot log is echoed to it
+
+Two changes that only make sense together: the kernel now mirrors its
+log to the physical console while booting, and the console keeps a
+scrollback ring so what scrolled past is still readable.
+
+Neither works alone. `klog_write()` went to the serial port and the
+`dmesg` ring only, so the screen showed "toy-os booting..." and then the
+shell -- scrollback would have had nothing of the boot to scroll back
+to. And echoing the log without scrollback just moves text past too fast
+to read. `kernel_main()` turns the echo on early and off again just
+before `apps_start()`, so it covers boot and nothing else: leaving it on
+would put every ATA retry and filesystem warning on top of whatever the
+shell or the GUI is drawing.
+
+Design points worth keeping:
+
+- **The ring stores a colour per CELL, not per line.** Output here is
+  routinely multi-coloured within a line (a green prompt then grey
+  input, `ls`'s per-type colouring), and replaying it in one colour
+  would be a visibly worse copy of what you saw. 256 lines x 256 cols x
+  2 bytes = 128KB of `.bss`, sized like `g_bitmap` for the same reason:
+  it must work before `heap_init()`.
+- **Wrapping is recorded as a line break**, so the ring reproduces the
+  *screen* rather than the logical text. The alternative reproduces text
+  better but can't redraw what you actually saw after a `fontsize`
+  change.
+- **PageUp/PageDown are swallowed by `keyboard_getchar()`, the blocking
+  reader -- deliberately not by `keyboard_try_getchar()`**, which is
+  what the window manager polls. The GUI Terminal and Notepad have their
+  own PageUp/PageDown scrolling of their own widgets; swallowing the
+  keys at the driver level would break both.
+- **New output snaps the view back to live** before writing, so the
+  history and the live console can't interleave into nonsense on screen.
+- **`vga_clear()` does not discard history**, which is what a terminal
+  does -- and it's load-bearing here: boot itself clears the screen (via
+  `vga_reflow()` when the persisted font size loads), so a scroll-back
+  limit computed as "only if there's more history than fits a screen"
+  concluded there was nothing to scroll to. The limit has an explicit
+  one-step case for exactly that.
+
+See `CHANGELOG.md`'s `[Unreleased]` entry.

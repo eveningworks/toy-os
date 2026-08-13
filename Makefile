@@ -1,6 +1,11 @@
 # grub-mkrescue is named grub2-mkrescue on Fedora/RHEL and openSUSE.
 # Resolved here rather than documented as a "symlink it yourself" step,
 # so `make iso` just works on those distributions.
+# Seconds GRUB waits on its menu before booting the default entry. 0
+# (the default) draws no menu at all and boots instantly, which is what
+# every automated path wants -- `make run-menu` overrides it.
+GRUB_TIMEOUT ?= 0
+
 GRUB_MKRESCUE := $(shell command -v grub-mkrescue 2>/dev/null || command -v grub2-mkrescue 2>/dev/null)
 
 CC = gcc
@@ -195,7 +200,7 @@ ASM_SOURCES = $(shell find kernel -name '*.asm' | sort)
 C_OBJECTS   = $(patsubst %.c,   $(BUILD)/%.o, $(C_SOURCES))
 ASM_OBJECTS = $(patsubst %.asm, $(BUILD)/%.o, $(ASM_SOURCES))
 
-.PHONY: all clean clean-disk iso run run-audio run-nographic debug help version seed test verify
+.PHONY: all clean clean-disk iso run run-menu run-audio run-nographic debug help version seed test verify
 
 # Regenerates kernel/include/api/version.h from VERSION (see
 # tools/gen_version.sh) -- listed first so it always runs before
@@ -227,6 +232,7 @@ help:
 	@echo "  all            Build kernel.bin and the userland test ELFs (default)"
 	@echo "  iso            Build toy-os.iso, a bootable GRUB ISO (implies all)"
 	@echo "  run            Boot toy-os.iso in QEMU with an SDL window (implies iso)"
+	@echo "  run-menu       Same, but with the GRUB boot menu visible (5s timeout)"
 	@echo "  run-audio      Same as run, plus a PulseAudio backend so the PC speaker"
 	@echo "                 (beep) is actually audible -- see the Makefile for how to"
 	@echo "                 swap the backend if you're not on PulseAudio"
@@ -342,7 +348,7 @@ seed: $(DISK_IMG) $(USERLAND_ELVES)
 iso: version $(KERNEL) $(USERLAND_ELVES) seed
 	mkdir -p iso/boot/grub
 	cp $(KERNEL) iso/boot/kernel.bin
-	cp grub.cfg iso/boot/grub/grub.cfg
+	sed 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' grub.cfg > iso/boot/grub/grub.cfg
 	@if [ -z "$(GRUB_MKRESCUE)" ]; then \
 		echo "make: grub-mkrescue not found (looked for grub-mkrescue and grub2-mkrescue)."; \
 		echo "      Install GRUB's rescue tools + xorriso + mtools -- see README.md's"; \
@@ -376,6 +382,14 @@ iso: version $(KERNEL) $(USERLAND_ELVES) seed
 # DIFFERENT bus than -cdrom's ATAPI drive (QEMU's default piix3-ide
 # puts -cdrom on the secondary bus), so ata.c's IDENTIFY never sees the
 # boot CD and mistakes it for a plain disk.
+# Boots with the GRUB menu visible (5s to choose), for when you want to
+# see it. Rebuilds the ISO because the timeout is baked into grub.cfg at
+# ISO build time -- so switching between `make run` and `make run-menu`
+# re-runs grub-mkrescue, which is a couple of seconds.
+run-menu:
+	@$(MAKE) --no-print-directory GRUB_TIMEOUT=5 iso
+	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -vga std -display sdl,grab-mod=rctrl -m 256
+
 run: iso $(DISK_IMG)
 	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -vga std -display sdl,grab-mod=rctrl -m 256
 

@@ -112,6 +112,7 @@ void keyboard_feed_byte(uint8_t sc) {
 
 int keyboard_getchar(void) {
     uint16_t c;
+    for (;;) {
     while (!ring_pop(&c)) {
         // hlt wakes on every interrupt, not just a real keypress -- most
         // commonly the 100Hz PIT tick -- so this is a convenient, cheap
@@ -130,7 +131,23 @@ int keyboard_getchar(void) {
         debug_console_poll();
         __asm__ volatile ("hlt");
     }
+
+    // PageUp/PageDown scroll the console's history rather than reaching
+    // the caller (see vga.h's scrollback section). Handled here, in the
+    // BLOCKING reader, so it works at the shell prompt, in the CLI
+    // editor, anywhere the kernel waits for a key -- and deliberately
+    // NOT in keyboard_try_getchar(), which is what the window manager
+    // polls: the GUI Terminal and Notepad have their own PageUp/PageDown
+    // scrolling of their own widgets, and swallowing the keys here would
+    // break both.
+    if (c == KEY_PAGE_UP || c == KEY_PAGE_DOWN) {
+        uint32_t page = vga_rows() > 2 ? vga_rows() - 2 : 1; // keep two lines of overlap
+        if (c == KEY_PAGE_UP) vga_scroll_back((int)page);
+        else vga_scroll_forward((int)page);
+        continue; // keep waiting for a key the caller actually wants
+    }
     return c;
+    }
 }
 
 int keyboard_try_getchar(void) {

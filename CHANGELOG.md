@@ -31,6 +31,37 @@ using `## [x.y.z] - date` headings is here.
 ## [Unreleased]
 
 ### Added
+- **Console scrollback (PageUp/PageDown), and the kernel's boot log on
+  screen.** Asked for as "some easy way to see the GRUB boot menu and
+  the boot messages -- now they go too fast".
+  - The framebuffer console drew glyphs straight into the framebuffer
+    and scrolled by blitting pixels upward, keeping nothing. It now
+    records a ring of output lines (256 x 256 cells, colour per cell, in
+    `.bss`), and PageUp/PageDown repaint a window of it. The GUI
+    Terminal has had scrollback since its widget existed; the physical
+    console never did.
+  - **`klog_write()` never reached the screen at all** -- it went to the
+    serial port and the `dmesg` ring, so the console showed "toy-os
+    booting..." and then the shell. Scrollback alone would have had no
+    boot messages to scroll back to. `kernel_main()` now mirrors the log
+    to the console for the duration of boot and switches it off just
+    before `apps_start()`, so the init sequence is visible the way a
+    real kernel's is without every later ATA retry landing on top of the
+    shell.
+  - Keys are swallowed by `keyboard_getchar()` (the blocking reader) and
+    deliberately *not* by `keyboard_try_getchar()`, which the window
+    manager polls -- the GUI Terminal and Notepad have their own
+    PageUp/PageDown and would have broken.
+  - Verified live: one PageUp from a fresh boot shows the whole init
+    sequence with its colours intact; PageDown returns; typing anything
+    snaps back to live; two screens of output page back correctly; the
+    GUI Terminal's own scrollback still works.
+- **`make run-menu`** boots with the GRUB menu visible (5s timeout).
+  `grub.cfg`'s timeout is now substituted at ISO build time from
+  `GRUB_TIMEOUT` (default 0), so `make run`, the boot smoke test, ktest
+  and CI all stay instant -- a few seconds per boot adds up across a
+  test cycle, which is why this is opt-in rather than global.
+
 - **Tooling pass, from friction hit while doing the last few changes.**
   - **`sh <command>` on the serial debug console** + **`tools/vm.py`**:
     shell output comes back as TEXT instead of a screenshot to read by
@@ -1088,6 +1119,18 @@ using `## [x.y.z] - date` headings is here.
   as the active selection.
 
 ### Fixed
+- **`qmp_test.py`'s `drag()` took a destination only, and silently
+  accepted a second point as a sleep duration.** `drag(360, 55, 700,
+  300)` -- which reads as two coordinates to anyone -- bound `hold=700`
+  and `settle=300` SECONDS. It didn't fail; it slept for sixteen minutes
+  exactly as instructed, which is how it cost a session's screenshot
+  attempt. Now `drag(from_x, from_y, to_x, to_y)` with keyword-only
+  timings, so that call does what it looks like and a stray positional
+  argument is an immediate `TypeError`. No other caller existed.
+- The serial debug console's ready banner had no trailing newline, so on
+  the physical console (now that boot output is echoed there) it ran
+  straight into the shell's banner.
+
 - **A flaky CI failure in the new test suite, and the test-quality bug
   underneath it.** One run failed with four filesystem tests down and
   `ata: dma write failed after 3 attempts (lba 2)` in the log; the same

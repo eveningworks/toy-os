@@ -237,6 +237,190 @@ static void fb_backspace(void) {
     cursor_show_and_reset_blink();
 }
 
+
+// ---------------------------------------------------------------------
+// Scrollback
+//
+// The framebuffer console draws glyphs straight into the framebuffer and
+// scrolls by blitting pixels upward (fb_scroll_if_needed() ->
+// gfx_scroll_up()). Nothing keeps what scrolled off, which is why the
+// boot messages -- and the output of anything longer than a screen --
+// used to be simply gone. The GUI Terminal has had scrollback since its
+// text_scrollback widget existed; the physical console never did.
+//
+// This is a ring of logical output LINES, recorded at vga_putc() level
+// so it works the same for both backends. It stores the character and
+// its colour per cell (one byte each), because output here is routinely
+// multi-coloured within a line -- a green prompt then grey input, `ls`'s
+// per-type colouring -- and replaying it in a single colour would be a
+// visibly worse copy of what you saw.
+//
+// Sized as a fixed .bss array rather than a heap allocation for the same
+// reason the free-block bitmap is: it must work before heap_init(), and
+// its size is a compile-time constant either way. 256 lines x 256 cols
+// x 2 bytes = 128KB. 256 columns covers the widest this console gets
+// (1280px / the 8pt font's cell width); a narrower font just leaves the
+// tail of each row unused.
+#define SB_LINES 256
+#define SB_COLS  256
+
+static char sb_char[SB_LINES][SB_COLS];
+static uint8_t sb_attr[SB_LINES][SB_COLS];
+static uint16_t sb_len[SB_LINES];      // used columns per line
+static uint32_t sb_total;              // lines ever completed (monotonic)
+static uint32_t sb_cur_len;            // columns used in the line being written
+static uint32_t sb_view;               // 0 = live; N = showing N lines further back
+static int sb_recording = 1;           // suppressed while redrawing, so a redraw can't record itself
+
+static char *sb_line_chars(uint32_t line) { return sb_char[line % SB_LINES]; }
+static uint8_t *sb_line_attrs(uint32_t line) { return sb_attr[line % SB_LINES]; }
+
+// Oldest line still retained. Everything before it has been overwritten.
+static uint32_t sb_oldest(void) {
+    return sb_total >= SB_LINES ? sb_total - SB_LINES + 1 : 0;
+}
+
+static void sb_start_line(void) {
+    sb_total++;
+    sb_cur_len = 0;
+    uint32_t idx = sb_total % SB_LINES;
+    sb_len[idx] = 0;
+}
+
+// Records one character into the current scrollback line. Wrapping is
+// recorded as a line break, matching what the screen actually showed --
+// the alternative (unbounded logical lines re-wrapped at display time)
+// would be more faithful to the text but would not reproduce the screen
+// after a `fontsize` change, and reproducing the screen is the point.
+static void sb_record(char c) {
+    if (!sb_recording) return;
+    if (c == '\n') { sb_start_line(); return; }
+    if (c == '\r') { sb_cur_len = 0; return; }
+
+    if (sb_cur_len >= SB_COLS) return; // beyond what's retained; the screen wraps and starts a new line
+    uint32_t idx = sb_total % SB_LINES;
+    sb_line_chars(sb_total)[sb_cur_len] = c;
+    sb_line_attrs(sb_total)[sb_cur_len] = make_color(cur_fg, cur_bg);
+    sb_cur_len++;
+    if (sb_cur_len > sb_len[idx]) sb_len[idx] = (uint16_t)sb_cur_len;
+}
+
+static void sb_record_backspace(void) {
+    if (!sb_recording || sb_cur_len == 0) return;
+    sb_cur_len--;
+    uint32_t idx = sb_total % SB_LINES;
+    if (sb_len[idx] > sb_cur_len) sb_len[idx] = (uint16_t)sb_cur_len;
+}
+
+// Repaints the whole screen from the ring, ending `back` lines above the
+// newest. Used for both directions of scrolling and for returning to
+// live.
+static void sb_repaint(uint32_t back) {
+    uint32_t rows = (uint32_t)console_rows;
+    if (rows == 0) return;
+
+    enum vga_color saved_fg = cur_fg, saved_bg = cur_bg;
+    sb_recording = 0;
+    cursor_hide();
+
+    // The window is `rows` lines ENDING at (total - back), clamped so it
+    // never starts before the oldest retained line -- and then filled
+    // DOWNWARD from that start, so scrolling to the very top shows a
+    // full screen of history rather than one line stranded at the top
+    // with blankness under it.
+    uint32_t oldest = sb_oldest();
+    uint32_t newest = sb_total - back;
+    uint32_t first = (newest + 1 >= rows) ? newest + 1 - rows : 0;
+    if (first < oldest) first = oldest;
+    uint32_t last_possible = first + rows - 1;
+    if (newest < last_possible) newest = last_possible > sb_total ? sb_total : last_possible;
+
+    if (fb_mode) gfx_clear(palette_rgb(saved_bg));
+    else legacy_clear();
+    row = 0;
+    col = 0;
+
+    for (uint32_t line = first; line <= newest && row < rows; line++) {
+        uint32_t idx = line % SB_LINES;
+        uint32_t len = sb_len[idx];
+        for (uint32_t i = 0; i < len && i < (uint32_t)console_cols; i++) {
+            uint8_t attr = sb_line_attrs(line)[i];
+            cur_fg = (enum vga_color)(attr & 0x0F);
+            cur_bg = (enum vga_color)((attr >> 4) & 0x0F);
+            if (fb_mode) {
+                gfx_draw_char((int)(i * CELL_W), (int)(row * CELL_H), sb_line_chars(line)[i],
+                              palette_rgb(cur_fg), palette_rgb(cur_bg));
+            } else {
+                buf[row * console_cols + i] = make_entry(sb_line_chars(line)[i], attr);
+            }
+        }
+        row++;
+        col = 0;
+    }
+
+    cur_fg = saved_fg;
+    cur_bg = saved_bg;
+    sb_recording = 1;
+
+    if (back == 0) {
+        // Back to live: the cursor belongs where output will continue.
+        if (row > 0) row--;
+        col = sb_len[sb_total % SB_LINES] < console_cols ? sb_len[sb_total % SB_LINES] : 0;
+        cursor_show_and_reset_blink();
+    }
+}
+
+void vga_scroll_back(int lines) {
+    if (lines <= 0 || console_rows == 0) return;
+    uint32_t available = sb_total - sb_oldest();
+    // How far back the view may go: to the oldest line still retained.
+    //
+    // This deliberately does NOT subtract console_rows. The obvious
+    // formula ("only scroll if there's more history than fits a screen")
+    // is wrong here because vga_clear() wipes the screen without
+    // discarding history -- and boot does exactly that, via
+    // vga_reflow() when the persisted font size loads. After a clear the
+    // screen shows three lines while the ring holds thirty, and the
+    // subtracting version concluded there was nothing to scroll to.
+    // How far back the view may go. When there's more history than fits,
+    // that's "until the oldest line reaches the top of the screen".
+    //
+    // The `: 1` case matters and is easy to miss: vga_clear() wipes the
+    // screen WITHOUT discarding history, and boot does exactly that via
+    // vga_reflow() when the persisted font size loads. Afterwards the
+    // screen shows three lines while the ring holds thirty -- all of
+    // which "fit", so a formula based only on counting would conclude
+    // there was nothing to scroll to. One step back is what reveals
+    // them.
+    uint32_t limit = available > (uint32_t)console_rows
+                         ? available - (uint32_t)console_rows + 1
+                         : 1;
+    uint32_t want = sb_view + (uint32_t)lines;
+    if (want > limit) want = limit;
+    if (want == sb_view) return;
+    sb_view = want;
+    sb_repaint(sb_view);
+}
+
+void vga_scroll_forward(int lines) {
+    if (lines <= 0 || sb_view == 0) return;
+    sb_view = (uint32_t)lines >= sb_view ? 0 : sb_view - (uint32_t)lines;
+    sb_repaint(sb_view);
+}
+
+int vga_scrolled_back(void) {
+    return sb_view != 0;
+}
+
+// Any new output snaps the view back to the bottom first -- otherwise
+// writes would land on a screen showing history, and the two would
+// interleave into nonsense.
+static void sb_snap_to_live(void) {
+    if (sb_view == 0) return;
+    sb_view = 0;
+    sb_repaint(0);
+}
+
 // ---- public API ----
 
 void vga_init(void) {
@@ -391,6 +575,8 @@ void vga_putc(char c) {
         vga_backspace();
         return;
     }
+    sb_snap_to_live();
+    sb_record(c);
     if (fb_mode) fb_putc(c);
     else legacy_putc(c);
 }
@@ -400,6 +586,8 @@ void vga_backspace(void) {
         if (active_sink->backspace) active_sink->backspace(active_sink->ctx);
         return;
     }
+    sb_snap_to_live();
+    sb_record_backspace();
     if (fb_mode) fb_backspace();
     else legacy_backspace();
 }

@@ -40,6 +40,7 @@
 // makes. A toy OS session producing more than 16KB of log output in
 // one boot isn't a case worth handling specially.
 #include "klog.h"
+#include "vga.h"
 #include "serial.h"
 #include "timer.h"
 
@@ -82,11 +83,27 @@ static void klog_write_timestamp(void) {
     klog_buf_putc(' ');
 }
 
+// See klog_set_console_echo() -- 0 until boot switches it on, and off
+// again before the shell starts.
+static int g_console_echo = 0;
+
+void klog_set_console_echo(int on) {
+    g_console_echo = on ? 1 : 0;
+}
+
 void klog_putc(char c) {
     serial_putc(c); // raw wire byte, unchanged -- see top comment
     if (at_line_start) klog_write_timestamp();
     klog_buf_putc(c);
     at_line_start = (c == '\n');
+    // Echo to the physical console too, while enabled. Off by default
+    // and switched off for good just before apps_start() (kernel.c), so
+    // this only ever covers boot: the messages a real kernel prints on
+    // screen while coming up, which until now went exclusively to the
+    // serial port and dmesg. Leaving it on afterwards would put every
+    // ATA retry and filesystem warning on top of whatever the shell or
+    // the GUI is drawing.
+    if (g_console_echo) vga_putc(c);
 }
 
 void klog_write(const char *s) {

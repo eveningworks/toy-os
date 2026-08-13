@@ -251,6 +251,9 @@ static void dbg_dispatch(char *line) {
 void debug_console_init(void) {
     line_len = 0;
     klog_write("dbg: serial debug console ready (COM1) -- type 'help'");
+    klog_write("\n"); // terminate the line: on the physical console this is
+                        // followed by the shell banner, and the serial side
+                        // prints its own prompt below anyway
     serial_write(DBG_PROMPT);
 }
 

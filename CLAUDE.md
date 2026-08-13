@@ -551,6 +551,14 @@ The gotchas it already gets right, for when you need to know why:
   delay covers plain typing, but a manual sequence of `send_key()`
   calls needs its own explicit `time.sleep()` (0.05-0.08s has been
   reliable) between each one.
+- **`drag()` takes BOTH points and its timings are keyword-only** --
+  `drag(from_x, from_y, to_x, to_y)`. It used to take a destination
+  only (`drag(x, y, hold, settle)`), and a call that reasonably read as
+  four coordinates silently bound `hold=700`/`settle=300` SECONDS: it
+  didn't fail, it slept for sixteen minutes. The `*` in the signature
+  makes that a `TypeError` now, but the lesson generalises -- a helper
+  whose positional arguments can absorb a mistake as a plausible value
+  is worth reshaping rather than documenting.
 - **Screenshots:** `screendump` writes a `.ppm`; `QMPSession.screenshot()`
   converts to `.png` via Pillow in one call so it's ready for the Read
   tool / `SendUserFile`. It hands QEMU an ABSOLUTE path on purpose --

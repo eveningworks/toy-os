@@ -148,6 +148,10 @@ That builds the kernel, seeds a disk image, produces `toy-os.iso`, and
 boots it in QEMU. Type `help` at the `/>` prompt; type `gui` for the
 window manager and press the Start menu's *Exit to shell* to come back.
 
+The kernel prints its init sequence to the screen while booting, and the
+console keeps scrollback -- **PageUp/PageDown** scrolls through anything
+that went past, including the boot messages, from any prompt.
+
 Other targets:
 
 ```bash
@@ -155,6 +159,7 @@ make            # build kernel.bin + the userland ELF binaries
 make iso        # + toy-os.iso (bootable GRUB image), seeding disk.img
 make run        # build + boot in QEMU with a graphical window
 make run-audio  # same, with a PulseAudio backend so `beep` is audible
+make run-menu   # same, but with the GRUB boot menu visible (5s timeout)
 make run-nographic  # serial console only -- use this over SSH
 make debug      # boot frozen (-s -S) for GDB, see below
 make test       # boot headless, run the in-kernel test suite

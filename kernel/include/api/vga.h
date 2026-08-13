@@ -130,4 +130,19 @@ void vga_cursor_tick(void);
 // mode, same as vga_cursor_tick() above.
 void vga_cursor_hide(void);
 
+// ---- scrollback ----
+//
+// The console keeps the last few hundred output lines (see vga.c's
+// scrollback section) so anything that scrolled off -- the boot
+// messages, the tail of a long command -- can be read back.
+// keyboard_getchar() drives these from PageUp/PageDown, so they work
+// wherever the kernel is waiting for a keypress; nothing else needs to
+// call them.
+//
+// Any new output snaps the view back to the bottom first, so the live
+// console and the history can't interleave on screen.
+void vga_scroll_back(int lines);     // toward older output
+void vga_scroll_forward(int lines);  // back toward live
+int vga_scrolled_back(void);         // 1 while showing history
+
 #endif
