@@ -15,6 +15,8 @@
 #include "heap.h"
 #include "pci.h"
 #include "vmsvga.h"
+#include "vesafb.h"
+#include "display.h"
 #include "fs.h"
 #include "json.h"
 #include "tz.h"
@@ -45,6 +47,23 @@ void kernel_main(uint64_t multiboot_info_addr) {
     klog_write("toy-os: kernel_main reached, initializing...\n");
 
     multiboot_set_info(multiboot_info_addr);
+
+    // Before any device driver: PCI enumeration is what a driver probes
+    // against. Safe this early -- pci.c is a port-I/O scan into a static
+    // table, needing neither the heap nor interrupts. It used to sit
+    // after heap_init() purely because nothing before that point cared.
+    pci_init();
+    klog_write("toy-os: PCI bus enumerated\n");
+
+    // Display drivers register, then probe -- specific cards first, the
+    // generic GRUB framebuffer last as the fallback that always claims.
+    // Must happen before vga_init(), which calls gfx_init() and needs a
+    // surface to exist. vmsvga's probe does its own PCI config-space
+    // read rather than waiting for pci_init(), because the console has
+    // to come up before that.
+    vmsvga_register();
+    vesafb_register();
+    display_probe();
 
     vga_init();
     // Mirror the kernel log to the screen for the rest of boot, the way
@@ -92,21 +111,6 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // for why that stopped being a good idea and `ktest` for how to run
     // them now.
 
-    pci_init(); // brute-force config-space scan -- see pci.h's top comment
-    klog_write("toy-os: PCI bus enumerated\n");
-
-    // If we're on a VMware SVGA II adapter (QEMU's `-vga vmware`), take
-    // the display over from GRUB's VBE mode so we get its HARDWARE
-    // CURSOR. A no-op on every other adapter, which keeps GRUB's
-    // framebuffer -- see kernel/include/kernel/vmsvga.h.
-    //
-    // After pci_init() (it needs the BARs) and after vga_init() (which
-    // established the mode this replaces); the console is re-flowed to
-    // the new geometry below.
-    if (vmsvga_init((uint32_t)gfx_width(), (uint32_t)gfx_height())) {
-        vga_reflow();
-        klog_write("toy-os: display driven by vmsvga (hardware cursor)\n");
-    }
 
     fs_init();
     fs_mkdir("/etc"); // config-file convention (see tz.c) -- a no-op if it already exists

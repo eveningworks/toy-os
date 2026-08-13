@@ -4,8 +4,8 @@
 // Register/command numbers below are from VMware's published svga_reg.h,
 // which is what QEMU's hw/display/vmware_vga.c implements.
 #include "vmsvga.h"
+#include "display.h"
 #include "pci.h"
-#include "gfx.h"
 #include "klog.h"
 #include "kfmt.h"
 #include "io.h"
@@ -82,6 +82,7 @@ static int g_active;               // display taken over
 static int g_cursor_ok;
 static int g_bypass3;              // cursor position via FIFO regs, no command
 static int g_alpha_ok;             // adapter advertises a 32-bit alpha cursor
+static struct display_surface g_surface;
 static int g_cursor_on = 1;
 // The hardware cursor is OFF by default, and that is a considered
 // default rather than caution.
@@ -192,13 +193,14 @@ int vmsvga_init(uint32_t want_w, uint32_t want_h) {
         return 0;
     }
 
-    // Hand the new surface to gfx.c. No mapping needed: QEMU puts these
-    // BARs under 4GiB and this kernel identity-maps that whole range.
-    if (!gfx_adopt_framebuffer((uint64_t)fb_base + fb_off, pitch, want_w, want_h, 32)) {
-        klog_write("vmsvga: gfx refused the new framebuffer -- reverting\n");
-        reg_write(SVGA_REG_ENABLE, 0);
-        return 0;
-    }
+    // Record the surface for get_surface(). No mapping needed: QEMU
+    // puts these BARs under 4GiB and this kernel identity-maps that
+    // whole range.
+    g_surface.addr = (uint64_t)fb_base + fb_off;
+    g_surface.pitch = pitch;
+    g_surface.width = want_w;
+    g_surface.height = want_h;
+    g_surface.bpp = 32;
     g_active = 1;
 
     // The FIFO lives in BAR2. Its first words are registers; commands
@@ -309,4 +311,60 @@ void vmsvga_cursor_show(int on) {
         reg_write(SVGA_REG_CURSOR_ID, 0);
         reg_write(SVGA_REG_CURSOR_ON, (uint32_t)g_cursor_on);
     }
+}
+
+
+// ---------------------------------------------------------------------
+// The display_driver interface (see kernel/include/kernel/display.h)
+// ---------------------------------------------------------------------
+//
+// vmsvga_init() above does the real work; these are the thin adapters
+// the display layer calls. Note which capabilities are advertised and
+// which are not: NEEDS_FLUSH always (this adapter shows nothing until
+// told), CURSOR only when the hardware has one AND it's been enabled
+// (it's off by default -- see g_cursor_enabled's comment), and neither
+// acceleration bit despite the hardware advertising RECT_FILL/RECT_COPY
+// in its caps, because nothing here implements them yet. Advertising a
+// capability without the function is refused by display_probe(), which
+// is the point of stating both.
+
+static int vmsvga_drv_probe(void) {
+    struct display_surface cur;
+    // Match GRUB's current geometry so the takeover is invisible.
+    // vesafb has not been activated at this point, so ask multiboot's
+    // own record through the surface the previous driver would report.
+    extern void vesafb_get_probe_surface(struct display_surface *out);
+    vesafb_get_probe_surface(&cur);
+    if (!cur.width || !cur.height) return 0;
+    return vmsvga_init(cur.width, cur.height);
+}
+
+static void vmsvga_drv_get_surface(struct display_surface *out) { *out = g_surface; }
+static void vmsvga_drv_flush(int x, int y, int w, int h) { vmsvga_update(x, y, w, h); }
+
+static int vmsvga_drv_cursor_define(const uint32_t *argb, int w, int h, int hx, int hy) {
+    return vmsvga_cursor_define(argb, w, h, hx, hy);
+}
+static void vmsvga_drv_cursor_move(int x, int y) { vmsvga_cursor_move(x, y); }
+static void vmsvga_drv_cursor_show(int on) { vmsvga_cursor_show(on); }
+
+static struct display_driver vmsvga_driver = {
+    .name = "vmsvga",
+    .probe = vmsvga_drv_probe,
+    .get_surface = vmsvga_drv_get_surface,
+    .caps = DISPLAY_CAP_NEEDS_FLUSH,
+    .flush = vmsvga_drv_flush,
+};
+
+void vmsvga_register(void) {
+    // Caps are decided at registration, not baked in: the cursor is
+    // only advertised if this build/config actually enables it, so
+    // display_probe()'s honesty check stays satisfied either way.
+    if (g_cursor_enabled) {
+        vmsvga_driver.caps |= DISPLAY_CAP_CURSOR;
+        vmsvga_driver.cursor_define = vmsvga_drv_cursor_define;
+        vmsvga_driver.cursor_move = vmsvga_drv_cursor_move;
+        vmsvga_driver.cursor_show = vmsvga_drv_cursor_show;
+    }
+    display_register(&vmsvga_driver);
 }

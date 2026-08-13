@@ -1,5 +1,5 @@
 #include "gfx.h"
-#include "vmsvga.h"
+#include "display.h"
 #include "multiboot.h"
 #include "font_ttf.h"
 #include <stddef.h>
@@ -102,58 +102,52 @@ void gfx_clear_clip_rect(void) {
     clip_active = 0;
 }
 
-int gfx_adopt_framebuffer(uint64_t addr, uint32_t new_pitch, uint32_t w, uint32_t h,
-                           uint8_t new_bpp) {
-    if (!addr || !new_pitch || !w || !h) return 0;
-    if (new_bpp != 32 && new_bpp != 24) return 0;
+// (gfx_adopt_framebuffer() is gone. A driver taking the display over
+// no longer reaches into gfx to re-point it; it reports its surface
+// through display_get_surface() and gfx_init() reads it like any
+// other. That back-channel was the shape of the old special case.)
 
-    fb = (uint8_t *)(uintptr_t)addr;
-    pitch = new_pitch;
-    width = (int)w;
-    height = (int)h;
-    bpp = new_bpp;
-    // A driver-set mode is plain little-endian ARGB/XRGB; the masks
-    // multiboot reported for GRUB's mode don't describe it.
-    red_pos = 16; red_size = 8;
-    green_pos = 8; green_size = 8;
-    blue_pos = 0; blue_size = 8;
-    return 1;
-}
 
 void gfx_flush(void) {
-    if (!vmsvga_active()) return;      // an ordinary scanned framebuffer
-    if (dirty_x1 <= dirty_x0) return;  // nothing drawn since last time
-    vmsvga_update(dirty_x0, dirty_y0, dirty_x1 - dirty_x0, dirty_y1 - dirty_y0);
+    if (dirty_x1 <= dirty_x0) return;   // nothing drawn since last time
+    // A no-op on a scanned framebuffer: display_flush() checks the
+    // capability itself, so this file never asks which card it's on.
+    display_flush(dirty_x0, dirty_y0, dirty_x1 - dirty_x0, dirty_y1 - dirty_y0);
     dirty_x0 = dirty_y0 = dirty_x1 = dirty_y1 = 0;
 }
 
-int gfx_hw_cursor_available(void) { return vmsvga_cursor_available(); }
+int gfx_hw_cursor_available(void) { return display_has(DISPLAY_CAP_CURSOR); }
 
 int gfx_hw_cursor_define(const uint32_t *argb, int w, int h, int hot_x, int hot_y) {
-    return vmsvga_cursor_define(argb, w, h, hot_x, hot_y);
+    return display_cursor_define(argb, w, h, hot_x, hot_y);
 }
 
-void gfx_hw_cursor_move(int x, int y) { vmsvga_cursor_move(x, y); }
-void gfx_hw_cursor_show(int on) { vmsvga_cursor_show(on); }
+void gfx_hw_cursor_move(int x, int y) { display_cursor_move(x, y); }
+void gfx_hw_cursor_show(int on) { display_cursor_show(on); }
 
 int gfx_init(void) {
-    struct framebuffer_info info;
-    if (!multiboot_get_framebuffer(&info)) return 0;
-    if (info.type != 1) return 0; // only direct RGB framebuffers supported
-    if (info.bpp != 32 && info.bpp != 24) return 0;
+    // The display layer decides WHICH card; this only asks where the
+    // pixels are. gfx.c used to read multiboot itself and later grew a
+    // second, bolted-on path for a real driver -- one path now, and
+    // adding a card touches nothing in this file.
+    struct display_surface surf;
+    display_get_surface(&surf);
+    if (!surf.addr || !surf.width || !surf.height) return 0;
+    if (surf.bpp != 32 && surf.bpp != 24) return 0;
 
-    fb = (uint8_t *)(uintptr_t)info.addr;
-    pitch = info.pitch;
-    width = (int)info.width;
-    height = (int)info.height;
-    bpp = info.bpp;
+    fb = (uint8_t *)(uintptr_t)surf.addr;
+    pitch = surf.pitch;
+    width = (int)surf.width;
+    height = (int)surf.height;
+    bpp = surf.bpp;
+    red_pos = 16; red_size = 8;
+    green_pos = 8; green_size = 8;
+    blue_pos = 0; blue_size = 8;
     double_buffered = 0;
-    red_pos = info.red_pos; red_size = info.red_size;
-    green_pos = info.green_pos; green_size = info.green_size;
-    blue_pos = info.blue_pos; blue_size = info.blue_size;
-
+    dirty_x0 = dirty_y0 = dirty_x1 = dirty_y1 = 0;
     return 1;
 }
+
 
 int gfx_width(void) { return width; }
 int gfx_height(void) { return height; }

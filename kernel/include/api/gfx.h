@@ -27,16 +27,6 @@ const char *gfx_font_size_name(enum font_size size);
 // Returns 1 on success (a usable RGB framebuffer was found), 0 otherwise.
 int gfx_init(void);
 
-// Replaces the surface gfx_init() found with a different one -- used by
-// a display driver that takes the adapter over after boot (see
-// kernel/drivers/vmsvga.c). `addr` must already be mapped; QEMU's
-// display BARs sit under 4GiB, which this kernel identity-maps.
-// Returns 1 if accepted, 0 if the geometry/depth is unusable, in which
-// case the previous surface is left untouched.
-//
-// Callers must repaint afterwards -- nothing here preserves the old
-// contents, and the console's cell grid needs vga_reflow().
-int gfx_adopt_framebuffer(uint64_t addr, uint32_t pitch, uint32_t w, uint32_t h, uint8_t bpp);
 
 // Publishes everything drawn since the last flush to the display.
 //

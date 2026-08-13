@@ -42,6 +42,11 @@
 // everything carries on with GRUB's framebuffer.
 int vmsvga_init(uint32_t want_w, uint32_t want_h);
 
+// Registers this driver with the display layer. Call before
+// display_probe(); registration order is priority order, so this goes
+// before vesafb_register() (see display.h).
+void vmsvga_register(void);
+
 // 1 once the driver is actually driving the display.
 int vmsvga_active(void);
 

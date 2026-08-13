@@ -117,6 +117,45 @@ using `## [x.y.z] - date` headings is here.
     unmoved throughout, and the highlight clearing both on moving off a
     button inside the window and on leaving the window entirely.
 
+- **A display-driver layer: adding a graphics card is now one file and
+  one line.** Asked for a proper graphics API with modular driver
+  support, refactoring where needed.
+  - The problem was concrete: `gfx.c` was a rasteriser AND the
+    framebuffer's owner, and once a second card existed it carried
+    `#include "vmsvga.h"` plus seven hardcoded calls to that one device.
+    A third card meant another include and another if/else in each.
+  - **`struct display_driver`** (`kernel/include/kernel/display.h`):
+    required `probe`/`get_surface`, plus optional `flush`, cursor,
+    accelerated fill/copy and mode setting, each gated by an explicit
+    capability bit. `kernel/drivers/display/display.c` holds the
+    registry and probe -- registration order is priority order, first
+    to claim wins.
+  - **Capabilities and function pointers must agree**, and
+    `display_probe()` refuses a driver where they don't. That check is
+    aimed squarely at the bug this session already produced twice: a
+    card that needs a flush but doesn't get one renders perfectly into
+    memory and shows a frozen screen, which reads as a rendering fault
+    anywhere except where it is.
+  - **The GRUB framebuffer became a driver too** (`vesafb`), registering
+    last as the fallback that always claims. That removes the old
+    "default path vs driver path" asymmetry -- one path now -- and, more
+    importantly, it's the second implementation that makes the interface
+    a design rather than a guess. It's deliberately the OPPOSITE kind of
+    device from vmsvga: passive, scanned continuously, no cursor, no
+    accel, no modeset. Every optional thing in the interface is
+    exercised by exactly one of the two.
+  - `gfx.c` is a rasteriser again: it asks `display_get_surface()` where
+    the pixels are and never learns which card it's on.
+    `gfx_adopt_framebuffer()` -- the back-channel a driver used to
+    re-point gfx through -- is gone.
+  - `pci_init()` moved ahead of `vga_init()`, since PCI enumeration is
+    what a driver probes against. Safe that early: it's a port-I/O scan
+    into a static table, needing neither heap nor interrupts, and only
+    sat after `heap_init()` because nothing before then had cared.
+  - Verified both drivers render identically -- 139 cursor pixels and
+    2300 window-chrome pixels on each -- and that each reports honest
+    caps (`vesafb` none, `vmsvga` flush).
+
 - **A hardware mouse cursor, via a VMware SVGA II display driver
   (`make run-vmware`).** Asked whether we could get one.
   - **Plain VGA has no cursor to get working.** `-vga std` -- the
