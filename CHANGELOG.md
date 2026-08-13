@@ -1060,6 +1060,39 @@ using `## [x.y.z] - date` headings is here.
   as the active selection.
 
 ### Fixed
+- **A flaky CI failure in the new test suite, and the test-quality bug
+  underneath it.** One run failed with four filesystem tests down and
+  `ata: dma write failed after 3 attempts (lba 2)` in the log; the same
+  commit range passed before and after, so it was timing-dependent on a
+  contended runner. The cascade:
+  1. A real transient DMA write failed (the runner is fully emulated,
+     no KVM).
+  2. That made one test's cleanup `fs_delete()` silently not happen --
+     its result was ignored.
+  3. The next test called `fs_touch()` on a path that therefore still
+     existed. **`tfs_touch()` returns success immediately for an
+     existing file without writing anything**, so the fault injector it
+     had just armed never fired, and the test failed asserting
+     `created == 0` -- three steps from the actual cause.
+
+  The environment triggered it; the tests made it confusing. Fixed by
+  making them isolated and self-checking:
+  - Every filesystem test now uses **its own path** instead of one
+    shared `/.ktest_tmp`, so one test's leftovers can't become another's
+    starting state.
+  - New `FRESH(path)` deletes *and asserts the file is gone*, so a test
+    that can't establish its precondition says exactly that rather than
+    failing later for an unrelated-looking reason.
+  - The runner now checks `fault_any_armed()` after every test, names
+    the test that leaked an injector, and disarms it. A test that
+    returns early through a failed assertion leaves its injector armed,
+    which would poison everything after it -- the same shape of cascade.
+  - `ata.c`'s retry-exhausted log line now says **why**: "drive stayed
+    busy, command never issued" / "completion IRQ never arrived" /
+    "controller reported a bus-master error". Narrowing this one took
+    real detective work purely because the message didn't distinguish
+    them.
+
 - **`dispatch()` didn't trim trailing whitespace from a command's
   arguments** (`apps/shell.c`), so `cat /etc/timezones ` looked up a
   filename with a space on the end and failed with "no such file".

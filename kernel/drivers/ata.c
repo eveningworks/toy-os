@@ -448,10 +448,27 @@ static int dma_finish(int ok, int count, void *buf, int is_write) {
     return 1;
 }
 
+// Why the last dma_transfer() failed. A bare "dma write failed after 3
+// attempts" doesn't say whether the drive never accepted the command,
+// the completion interrupt never arrived, or the controller reported an
+// error -- and those have completely different causes. CI hit a
+// transient failure that took real detective work to narrow down purely
+// because the log didn't distinguish them; it costs one static pointer
+// not to have that problem again.
+static const char *g_dma_fail_reason = "unknown";
+
 static int dma_transfer(uint32_t lba, int count, void *buf, int is_write) {
-    if (!dma_issue(lba, count, buf, is_write)) return 0;
+    if (!dma_issue(lba, count, buf, is_write)) {
+        g_dma_fail_reason = "drive stayed busy, command never issued";
+        return 0;
+    }
     int ok = wait_dma_irq();
-    return dma_finish(ok, count, buf, is_write);
+    if (!ok) g_dma_fail_reason = isr_in_progress()
+                 ? "completion IRQ never arrived (polled, syscall context)"
+                 : "completion IRQ never arrived within the wall-clock bound";
+    int done = dma_finish(ok, count, buf, is_write);
+    if (ok && !done) g_dma_fail_reason = "controller reported a bus-master error";
+    return done;
 }
 
 // ---------------------------------------------------------------------
@@ -586,7 +603,9 @@ static int dma_transfer_with_retry(uint32_t lba, int count, void *buf, int is_wr
     // with debug logging off.
     klog_write("ata: dma "); klog_write(is_write ? "write" : "read");
     klog_write(" failed after "); klog_write_dec((uint32_t)ATA_DMA_MAX_RETRIES);
-    klog_write(" attempts (lba "); klog_write_dec(lba); klog_write(")\n");
+    klog_write(" attempts (lba "); klog_write_dec(lba);
+    klog_write(", last reason: "); klog_write(g_dma_fail_reason);
+    klog_write(")\n");
     return 0;
 }
 

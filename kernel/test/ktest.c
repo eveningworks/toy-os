@@ -10,6 +10,7 @@
 // always go to the serial log and never to the window the user typed in.
 #include "ktest.h"
 #include "kapi.h"
+#include "fault_inject.h"
 
 struct ktest_ctx {
     int failed;
@@ -115,6 +116,18 @@ int ktest_run_all(const char *suite_filter) {
         struct ktest_ctx ctx = { .failed = 0, .skipped = 0, .skip_reason = 0 };
         t->fn(&ctx);
         ran++;
+
+        // A test that arms a fault injector and returns early (an
+        // assertion fires) leaves it armed, and every later test then
+        // fails for reasons that have nothing to do with what it's
+        // testing. Catch it here, name the test that did it, and
+        // disarm -- one confusing cascade is enough.
+        if (fault_any_armed()) {
+            fault_fail_next_ata_writes(0);
+            fault_fail_next_ata_reads(0);
+            fault_fail_next_allocs(0);
+            vga_write("\n    WARNING: this test left a fault injector armed; disarmed it\n");
+        }
 
         if (ctx.failed) {
             failed++;
