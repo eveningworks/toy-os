@@ -31,6 +31,71 @@ using `## [x.y.z] - date` headings is here.
 ## [Unreleased]
 
 ### Added
+- **`strace <binary>` -- Linux-style syscall tracing.** Asked for as
+  "can we implement strace like in linux".
+  - Every ring-3 syscall in this kernel already funnelled through one
+    function (`syscall_dispatch()`, `kernel/proc/syscall.c`), so this
+    needed no per-syscall instrumentation at all: three hooks in that
+    one function cover all 21 of them, and a syscall added later is
+    traced as soon as its number appears in the descriptor table.
+  - **Traced by address space, not by a global switch.** `strace` arms
+    tracing (`strace_arm()`), and the next process created claims it --
+    `strace_claim()` is one line in `elf_run_from_fs()` and one in the
+    scheduler's `spawn_from_fs()`, so the mechanism isn't tied to the
+    blocking loader. `syscall_process_exit_cleanup()` releases it, so a
+    later process running under a recycled CR3 can't inherit the trace.
+    Same single-slot compare-CR3 pattern `SYS_SBRK`'s heap arming and
+    `SYS_WIN_CREATE`'s window state already use. Untraced code pays one
+    global read and a compare per syscall.
+  - **Arguments are decoded, not dumped.** A per-syscall table of
+    argument kinds (int / hex pointer / fd / NUL-terminated path / byte
+    buffer with an explicit length / `SYS_O_*` bitmask) drives the
+    formatting, so a line reads `open("filetest.txt",
+    O_WRITE|O_CREAT|O_TRUNC) = 3`, not three hex registers. Strings are
+    read only through `vmm_validate_user_range()` -- the same gate the
+    real handlers use -- capped at 32 characters with `"..."`, and
+    C-escaped (`\n`, `\xNN`) so a trace line can never contain a control
+    character that moves the console cursor. A pointer that fails
+    validation prints as hex rather than being skipped, so a bad pointer
+    is visible in the trace instead of invisible. An unknown syscall
+    number still traces, as `syscall_999(0x1, 0x2, 0x3)`.
+  - **The line is formatted on entry but emitted on exit.** The
+    arguments have to be read before the handler can overwrite what they
+    point at, but printing them then would leave the entry half sitting
+    across a `SYS_WRITE`'s own output. Emitting the whole line after the
+    handler returns means a traced program's output lands above its
+    trace line instead of spliced into the middle of it. Cost: a handler
+    that faults mid-call prints nothing, and `SYS_EXIT` (which may never
+    return) has to close out its own line -- hence `exit(0) = ?`.
+  - Output goes to the console *and* `klog`, so a trace is both
+    strace-like on screen and readable afterwards with `dmesg` --
+    which is also what makes it assertable from `tools/vm.py` with no
+    screenshot. `sbrk` is the one syscall whose return prints as hex (it
+    returns a pointer); its `-1` failure stays decimal so an error can't
+    read as an address.
+  - Deliberately *not* routed through `shell_exec_name()` the way `run`
+    is, breaking that file's usual one-resolver rule on purpose:
+    `shell_exec_name()` tries kernel-space console apps first, and a
+    kernel-space app makes no syscalls at all, so tracing one would
+    print an empty trace instead of an error. `strace` resolves through
+    `shell_path_find()` only, so `strace gui` says so.
+    Added to the GUI Terminal's `BLOCKED_CMDS` for the same reason
+    `run` used to be there -- it runs its target through the blocking
+    `elf_run_from_fs()`, which would freeze that window's event loop.
+  - Verified: `make test` (5 new `KTEST("strace", ...)` cases covering
+    the argument table, flag decoding, unknown numbers, return
+    conventions, and buffer truncation -- `strace_format_call()` takes
+    the address space as a parameter, and passing 0 means "don't
+    dereference", which is what makes the decoder testable with no live
+    process). Then really traced in QEMU: `strace file_test` (10
+    syscalls, full open/write/read/close round trip), `strace ls -l
+    /etc` (107 syscalls -- `/bin/ls` writes a character at a time), and
+    `strace write_test`; confirmed the same lines come back out of
+    `dmesg`, and that `strace`, `strace nosuchthing` and `strace gui`
+    each give the right refusal. Screenshots in
+    `screenshots/2026-08-13/strace_*.png`. Unrelated pre-existing
+    finding: `/bin/hello` on the seeded disk page-faults at its heap
+    base with or without tracing -- not touched here.
 - **Console scrollback (PageUp/PageDown), and the kernel's boot log on
   screen.** Asked for as "some easy way to see the GRUB boot menu and
   the boot messages -- now they go too fast".

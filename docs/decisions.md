@@ -97,6 +97,7 @@ there when you add an entry, or the index quietly stops being one.
 - [dmesg coverage: log from the one-shot call site, not the hot function itself](#dmesg-coverage-log-from-the-one-shot-call-site-not-the-hot-function-itself)
 - [Terminal's `run <name>` uses an explicit allowlist, not a blocklist](#terminals-run-name-uses-an-explicit-allowlist-not-a-blocklist)
 - [`kapi.h` is the only header apps/ includes](#kapih-is-the-only-header-apps-includes)
+- [`strace` traces an address space, and prints each line after the handler returns](#strace-traces-an-address-space-and-prints-each-line-after-the-handler-returns)
 
 **Build, versioning & project docs**
 
@@ -1660,6 +1661,35 @@ different mechanism (an empty table instead of a flag check). See
 `scheduler_poll()`'s `SCHED_ZOMBIE` state for the other real change this
 item made (a process holds its exit code until explicitly reaped,
 instead of being freed back to `SCHED_UNUSED` the instant it exits).
+
+## `strace` traces an address space, and prints each line after the handler returns
+
+Two questions the design answers, both easy to get backwards.
+
+*Why not a global on/off switch?* Because "trace this program" is the
+actual request, and a global switch would also catch whatever else runs
+next. `strace_arm()` marks intent, the next process created claims it
+(`strace_claim()`, one line in `elf_run_from_fs()` and one in the
+scheduler's `spawn_from_fs()`), and `syscall_process_exit_cleanup()`
+releases it -- so a recycled CR3 can't inherit a stale trace. This is
+the same single-slot compare-CR3 pattern `SYS_SBRK`'s heap arming and
+`SYS_WIN_CREATE`'s window state already use in `syscall.c`.
+
+*Why format on entry but print on exit?* The arguments must be READ
+before the handler runs (a `SYS_READ` fills the buffer its pointer
+names), but printing them then would leave `write(1, "hi", 2)` half
+on screen while the traced process's own "hi" prints into the middle of
+it. Formatting into a buffer at entry and emitting the whole line after
+the handler returns keeps trace lines intact and puts the program's
+output above its own trace line. The cost is real and accepted: a
+handler that faults mid-call prints no line at all, and `SYS_EXIT` --
+which may never return -- has to close out its own line, which is why a
+trace ends with `exit(0) = ?` rather than a return value.
+
+See `kernel/proc/strace.c`'s top comment and `CHANGELOG.md`'s
+`[Unreleased]` entry for the full writeup, including why `strace`
+resolves binaries through `shell_path_find()` instead of the usual
+`shell_exec_name()`.
 
 ## Terminal's `run <name>` uses an explicit allowlist, not a blocklist
 

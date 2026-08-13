@@ -128,7 +128,12 @@ static struct terminal_state g_terminal;
 // stdin read, no framebuffer/window takeover -- see RUN_ALLOWED_BINS's
 // own comment), not assumed so by omission.
 static const char *const BLOCKED_CMDS[] = {
-    "gui", "ring3test", "schedtest",
+    // `strace` runs its target through the physical shell's own
+    // blocking elf_run_from_fs() -- deliberately, since the trace has
+    // to interleave with the traced process's output in real time --
+    // so it freezes this window's event loop exactly the way `run`
+    // used to before its async path existed. Same refusal, same reason.
+    "gui", "ring3test", "schedtest", "strace",
 };
 #define BLOCKED_CMD_COUNT (sizeof(BLOCKED_CMDS) / sizeof(BLOCKED_CMDS[0]))
 

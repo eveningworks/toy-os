@@ -23,7 +23,7 @@ const char *const COMPLETION_COMMANDS[] = {
     "debug", "df", "dmatest", "dmesg", "echo", "edit", "fontsize",
     "fsck", "gui", "help", "ktest", "history", "keyboard", "lspci", "ls",
     "meminfo", "mkdir", "nano", "parttable", "pwd", "reboot",
-    "ring3test", "rm", "run", "schedtest", "stat", "steptest", "stress",
+    "ring3test", "rm", "run", "schedtest", "stat", "steptest", "strace", "stress",
     "path", "time", "timezone", "touch", "uptime", "write",
     0
 };
@@ -265,6 +265,9 @@ static int complete_argument(struct collector *c, const char *cmd, int arg_index
     if (k_strcmp(cmd, "fontsize") == 0) { complete_from_list(c, FONT_SIZES); return 1; }
     if (k_strcmp(cmd, "keyboard") == 0) { complete_keyboard_layout(c); return 1; }
     if (k_strcmp(cmd, "run") == 0) { complete_executables(c); return 1; }
+    // `strace <binary>`'s first argument is an executable, same as
+    // `run`'s -- only its own arguments after that are free text.
+    if (k_strcmp(cmd, "strace") == 0 && arg_index == 1) { complete_executables(c); return 1; }
 
     if (k_strcmp(cmd, "help") == 0) {
         add_candidate(c, "tests");

@@ -11,6 +11,7 @@
 #include "string.h"
 #include "tz.h"
 #include "pci.h"
+#include "strace_internal.h"
 #include <stddef.h>
 
 // SYS_OPEN/SYS_READ/SYS_CLOSE state: a small global table of open files,
@@ -222,6 +223,11 @@ static void win_present(void) {
 }
 
 void syscall_process_exit_cleanup(uint64_t pml4_phys) {
+    // Stop tracing before anything else -- this address space is about
+    // to be destroyed, and a recycled CR3 landing on the same value
+    // later must not silently inherit the trace (see strace.c).
+    strace_release(pml4_phys);
+
     // Open fds this process never closed -- not part of any address
     // space (fs.c is a separate kernel resource, nothing about it is
     // memory-mapped into the process), so vmm_destroy_address_space()
@@ -265,6 +271,25 @@ void syscall_dispatch(uint64_t *regs) {
     uint64_t rdi = regs[9];  // first argument
     uint64_t rsi = regs[10]; // second argument
     uint64_t rdx = regs[11]; // third argument (SYS_WRITE/SYS_READ's length)
+
+    // `strace` (apps/shell_sys.c) hooks in here, and only here -- every
+    // ring-3 syscall goes through this one dispatcher, so nothing
+    // per-syscall is needed. An untraced process pays strace_active()'s
+    // single global compare. The line is formatted now (the arguments
+    // must be read before a handler can overwrite what they point at)
+    // but emitted after the handler returns, once the return value is
+    // known -- see kernel/proc/strace.c's top comment.
+    int traced = strace_active();
+    if (traced) {
+        strace_begin(rax, rdi, rsi, rdx);
+        if (rax == SYS_EXIT) {
+            // The one handler that may never return (the legacy
+            // process_context_exit() path doesn't), so its line has to
+            // be closed out before dispatching rather than after.
+            strace_end_noreturn();
+            traced = 0;
+        }
+    }
 
     if (rax == SYS_EXIT) {
         int code = (int)rdi;
@@ -722,6 +747,8 @@ void syscall_dispatch(uint64_t *regs) {
             regs[14] = 1;
         }
     }
+
+    if (traced) strace_end(rax, regs[14]);
 
     // Unrecognized syscall number: no-op. Falling through here means
     // isr_dispatch returns normally, isr_common's usual epilogue runs,

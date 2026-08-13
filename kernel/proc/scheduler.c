@@ -97,6 +97,7 @@
 #include "gdt.h"
 #include "vga.h"
 #include "klog.h"
+#include "strace_internal.h"
 #include <stddef.h>
 
 // Defined in idt.c; isr.asm's isr_common epilogue reloads rsp from this
@@ -233,6 +234,12 @@ static int spawn_from_fs(const char *path, const char *args) {
 
     uint64_t as = vmm_create_address_space();
     if (!as) return -1;
+
+    // Same one-line hook elf_run_from_fs() has -- a no-op unless the
+    // shell's `strace` armed tracing, which keeps the mechanism
+    // process-creation-path-agnostic rather than tied to the blocking
+    // loader (see kernel/proc/strace.c).
+    strace_claim(as);
 
     uint64_t entry = 0;
     if (!elf_load(elf_phys, as, &entry)) return -1;

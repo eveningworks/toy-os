@@ -228,7 +228,11 @@ shell and the GUI Terminal.
   `parttable`
 - **Appearance:** `color <name>`, `fontsize <8|10|12|14|16|18|20|24>`,
   `keyboard <us|se>` (base + Shift + AltGr)
-- **Developer/diagnostic (`help tests`):** `ring3test`, `schedtest`,
+- **Developer/diagnostic (`help tests`):** `strace <binary> [args]`
+  (Linux-style syscall tracing of a `/bin` binary -- one decoded line
+  per syscall, e.g. `open("notes.txt", O_WRITE|O_CREAT) = 3`, plus a
+  count when it exits; also captured in `dmesg`), `ring3test`,
+  `schedtest`,
   `stress <mb>` (real non-sparse write/read/verify pass over `<mb>`
   megabytes with a live progress bar, exercising direct/single/double/
   triple-indirect blocks with genuine data, verified on real hardware

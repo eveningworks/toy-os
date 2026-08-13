@@ -11,6 +11,7 @@
 #include "vga.h"
 #include "klog.h"
 #include "string.h"
+#include "strace_internal.h"
 
 // Chosen the same way file_test.c/newsyscalls_test.c's own STACK_VADDR
 // constants are: well clear of wherever a small ELF's own PT_LOAD
@@ -151,6 +152,12 @@ int elf_run_from_fs(const char *path, const char *args) {
         vga_write("run: vmm_create_address_space() failed\n");
         return -1;
     }
+
+    // If the shell's `strace` armed tracing, this is the address space
+    // it attaches to (a no-op otherwise) -- claimed here rather than
+    // after elf_load() so the trace covers the process from its very
+    // first syscall. See kernel/proc/strace.c.
+    strace_claim(as);
 
     uint64_t entry = 0;
     if (!elf_load(elf_phys, as, &entry)) {
