@@ -79,6 +79,7 @@ there when you add an entry, or the index quietly stops being one.
 - [Console scrollback is a character ring in vga.c, and the boot log is echoed to it](#console-scrollback-is-a-character-ring-in-vgac-and-the-boot-log-is-echoed-to-it)
 - [Button press/release feedback: a general `on_press`/`on_release` WM mechanism, not a Calculator-only hack](#button-pressrelease-feedback-a-general-on_presson_release-wm-mechanism-not-a-calculator-only-hack)
 - [ui_button/ui_button_group: Brutal-OS-inspired, but not a full retained view system](#ui_buttonui_button_group-brutal-os-inspired-but-not-a-full-retained-view-system)
+- [Floating point is ring-3 only, and eager -- the same call Linux and Windows made](#floating-point-is-ring-3-only-and-eager----the-same-call-linux-and-windows-made)
 - [Button groups commit on RELEASE, and there is no ui_button_group_click()](#button-groups-commit-on-release-and-there-is-no-ui_button_group_click)
 - [Start menu click flash: a deferred close via pit_ticks(), not a blocking sleep](#start-menu-click-flash-a-deferred-close-via-pit_ticks-not-a-blocking-sleep)
 - [Title-bar buttons: press-then-commit-on-release, reusing the content_pressed shape](#title-bar-buttons-press-then-commit-on-release-reusing-the-content_pressed-shape)
@@ -1197,6 +1198,55 @@ mouse-enter/leave dispatch" stopped being true when `gui_apps.h`'s
 `on_hover` landed with the GUI guidelines: `ui_button` carries a
 `hovered` flag beside `pressed` now, driven by
 `ui_button_group_hover()`. See the entry below.
+
+## Floating point is ring-3 only, and eager -- the same call Linux and Windows made
+
+Asked whether SSE/SSE2/FPU could be enabled, and whether to do it
+kernel-wide "if Linux and Windows have it kernel-wide." They don't.
+Linux compiles its own kernel with `-mno-sse -mno-sse2 -mno-mmx
+-mno-80387` (the same flags this project's `CFLAGS` already carried) and
+makes kernel-side SIMD an explicitly bracketed
+`kernel_fpu_begin()`/`kernel_fpu_end()` region used by a handful of
+subsystems (AES-NI, RAID6); Windows requires
+`KeSaveExtendedProcessorState()`/`KeRestoreExtendedProcessorState()`
+around any kernel-mode FP. So here: `userland/`'s ring-3 ELFs are built
+without those flags and get real hardware `double`/`float`, while
+`kernel/` and `apps/` keep them.
+
+The reason it's the right split rather than merely the conservative one:
+with SSE enabled, GCC emits XMM registers in ordinary code -- struct
+copies and inlined `memcpy` included, not just code that mentions a
+float. An interrupt can land on any instruction, so an FP-enabled kernel
+needs an FXSAVE on the interrupt path itself, on every vector. Keeping
+the kernel FP-free confines state movement to where the scheduler
+actually swaps ring-3 processes, which already exists
+(`scheduler.c`'s `switch_to()`).
+
+Note the toy-os-specific wrinkle, because it's a real difference from
+the systems being copied: `apps/` here is ring 0, compiled into the
+kernel image. So "userland only" is narrower than it sounds -- Calculator
+and the WM don't get float, only `userland/`'s ELFs do. If a GUI app
+ever genuinely needs it, the answer is the `kernel_fpu_begin()` bracket,
+not flipping the whole kernel.
+
+Save/restore is **eager**, not the classic lazy `CR0.TS` + `#NM` scheme.
+Lazy is what CVE-2018-3665 (Lazy FP State Restore) exploited to read
+another task's registers, and Linux removed its lazy path entirely in
+4.14; `FXRSTOR` costs on the order of 100 cycles against a 100 Hz tick,
+so the trade isn't close. A KTEST asserts `CR0.TS` stays clear so this
+can't be quietly undone.
+
+Two things found by testing rather than reasoning, both worth knowing
+before touching this code. **FXSAVE does not write all 512 bytes** --
+the tail from offset 464 is "available for software" and left as-is,
+which is why `fpu_init_state()` copies a full template instead of
+FXSAVE-ing into each new area, and why a round-trip test has to zero its
+buffers first. And **a freestanding `_start` wants `RSP % 16 == 8` at
+entry, not 0**: the SysV process-entry convention describes what a real
+crt0 sees, and a real crt0 realigns before calling `main`, but these
+`_start`s are plain C functions GCC compiles as if a return address were
+pushed. Handing one a 16-aligned RSP puts every aligned local off by
+eight; it took a `#GP` in ring 3 to find that. See `CHANGELOG.md`.
 
 ## Button groups commit on RELEASE, and there is no ui_button_group_click()
 

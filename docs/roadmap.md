@@ -274,6 +274,23 @@ once this exists.*
 
 ### Milestone 9 -- `fork()`/`exec()`-style process model (planned v0.9.0)
 
+- [x] ~~Hardware floating point / SSE for ring-3 processes~~ -- done
+      (unplanned, asked for directly mid-session), see `CHANGELOG.md`'s
+      `[Unreleased]` entry: `CR4.OSFXSR` enabled at boot, a 512-byte
+      FXSAVE area per process saved/restored eagerly across a scheduler
+      switch, `userland/` built without `-mno-sse`. Kernel and `apps/`
+      stay FP-free, matching what Linux and Windows both actually do --
+      see `docs/decisions.md`. `fputest` proves it, including a
+      concurrent two-process XMM race.
+- [ ] A `kernel_fpu_begin()`/`kernel_fpu_end()` bracket, if kernel-side
+      or `apps/`-side SIMD is ever genuinely wanted (that's how both
+      Linux and Windows allow it). Deliberately not built yet -- no
+      caller, and the standing rule is a mechanism arrives with its
+      first real one.
+- [ ] AVX/XSAVE support -- FXSAVE covers x87+SSE only, so an AVX-using
+      process would silently lose its upper YMM halves across a switch.
+      Nothing emits AVX today (userland is built for baseline x86-64),
+      but enabling `-mavx` without this would be a real bug.
 - [ ] `fork()`-style address-space duplication (copy-on-write)
 - [ ] `exec()`-style in-place process replacement
 - [ ] `wait()`/exit-status reporting for a parent process

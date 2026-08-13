@@ -7,6 +7,7 @@
 #include "klog.h"
 #include "idt.h"
 #include "gdt.h"
+#include "fpu.h"
 #include "multiboot.h"
 #include "pmm.h"
 #include "heap.h"
@@ -57,6 +58,16 @@ void kernel_main(uint64_t multiboot_info_addr) {
 
     idt_init();
     klog_write("toy-os: IDT/PIC/PIT initialized, interrupts enabled\n");
+
+    // Before anything can reach ring 3. The kernel itself never uses FP
+    // (see fpu.h on why it's ring-3-only), so nothing above this line
+    // cares -- but a process starting without it would #UD on its first
+    // SSE instruction.
+    if (fpu_init()) {
+        klog_write("toy-os: FPU/SSE enabled (ring-3 only, eager FXSAVE per switch)\n");
+    } else {
+        klog_write("toy-os: WARNING -- no FXSR/SSE2 reported; ring-3 float unavailable\n");
+    }
 
     serial_irq_init(); // COM1 RX -- see serial.c for why this can't run inside serial_init() itself
     klog_write("toy-os: serial RX enabled (debug console on COM1, see docs/decisions.md)\n");

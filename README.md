@@ -45,8 +45,9 @@ the kernel":
 
 - **Real memory management** -- a physical frame allocator, per-process
   page tables, a kernel heap, NX/W^X enforcement and stack canaries.
-- **Real processes** -- an ELF64 loader, ring-3 user mode, syscalls, and
-  a preemptive round-robin scheduler.
+- **Real processes** -- an ELF64 loader, ring-3 user mode, syscalls, a
+  preemptive round-robin scheduler, and hardware floating point for
+  ring-3 code with per-process FPU state across context switches.
 - **A real filesystem** -- TFS2, journaled and disk-backed, with
   indirect block pointers, an `fsck`, and files that survive a power
   cut.
@@ -241,7 +242,10 @@ shell and the GUI Terminal.
   (Linux-style syscall tracing of a `/bin` binary -- one decoded line
   per syscall, e.g. `open("notes.txt", O_WRITE|O_CREAT) = 3`, plus a
   count when it exits; also captured in `dmesg`), `ring3test`,
-  `schedtest`,
+  `schedtest`, `fputest` (ring-3 hardware floating point: a value check,
+  then two processes racing with live XMM accumulators to prove the
+  context switch saves FP state -- see `docs/decisions.md` for why FP is
+  ring-3 only),
   `stress <mb>` (real non-sparse write/read/verify pass over `<mb>`
   megabytes with a live progress bar, exercising direct/single/double/
   triple-indirect blocks with genuine data, verified on real hardware

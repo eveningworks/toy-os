@@ -118,8 +118,19 @@ DISK_IMG = disk.img
 # __stack_chk_guard/__stack_chk_fail linked in now (see SEED_BINARIES
 # below and each $(FOO_ELF) rule) since GCC emits implicit references
 # to both from any protected function in any userland .c file.
+# NOTE the deliberate asymmetry with CFLAGS above: userland ELFs are
+# built WITHOUT -mno-mmx/-mno-sse/-mno-sse2, so ring-3 code gets real
+# hardware floating point and SSE. The kernel (and apps/, which is ring
+# 0 here) keeps them, and that split is the whole design -- Linux builds
+# its own kernel with these same flags and brackets the rare kernel-side
+# SIMD in kernel_fpu_begin()/kernel_fpu_end(); Windows requires
+# KeSaveExtendedProcessorState() for the same reason. See
+# kernel/include/kernel/fpu.h for why copying that split matters here:
+# with SSE on, GCC emits XMM in ordinary code (struct copies, inlined
+# memcpy), so an FP-enabled kernel would need an FXSAVE on every
+# interrupt vector rather than only where the scheduler swaps processes.
 USERLAND_CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-protector-guard=global -fno-pic -fno-pie \
-                   -mno-red-zone -mcmodel=large -mno-mmx -mno-sse -mno-sse2 \
+                   -mno-red-zone -mcmodel=large \
                    -Wall -Wextra -O2 -g -c $(API_INCLUDES) -MMD -MP
 HELLO_ELF = userland/hello.elf
 EXIT_TEST_ELF = userland/exit_test.elf
@@ -138,6 +149,8 @@ LSPCI_ELF = userland/lspci.elf
 LS_ELF = userland/ls.elf
 STACK_SMASH_TEST_ELF = userland/stack_smash_test.elf
 NX_TEST_ELF = userland/nx_test.elf
+FPU_TEST_ELF = userland/fpu_test.elf
+FPU_RACE_ELF = userland/fpu_race.elf
 
 # Which userland ELFs get seeded onto disk.img's /bin, and under what
 # name. The mapping is explicit because it isn't always mechanical --
@@ -177,7 +190,9 @@ SEED_TESTS = \
 	$(CRASH_TEST_ELF):crash_test \
 	$(SOCKET_TEST_ELF):socket_test \
 	$(STACK_SMASH_TEST_ELF):stack_smash_test \
-	$(NX_TEST_ELF):nx_test
+	$(NX_TEST_ELF):nx_test \
+	$(FPU_TEST_ELF):fpu_test \
+	$(FPU_RACE_ELF):fpu_race
 
 # Both lists together -- only USERLAND_ELVES below needs the union, so
 # it's derived rather than maintained as a third list.
@@ -502,7 +517,7 @@ verify:
 	@bash tools/preflight.sh
 
 clean:
-	rm -rf $(BUILD) $(ISO) iso/boot/kernel.bin $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF) $(LS_ELF) $(STACK_SMASH_TEST_ELF) $(NX_TEST_ELF) $(SEED_DIR)/sync
+	rm -rf $(BUILD) $(ISO) iso/boot/kernel.bin $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF) $(LS_ELF) $(STACK_SMASH_TEST_ELF) $(NX_TEST_ELF) $(FPU_TEST_ELF) $(FPU_RACE_ELF) $(SEED_DIR)/sync
 	# Deliberately NOT touching $(DISK_IMG) here -- see its comment above.
 	# Use `make clean-disk` to explicitly wipe the persistent filesystem.
 

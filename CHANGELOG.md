@@ -117,7 +117,68 @@ using `## [x.y.z] - date` headings is here.
     unmoved throughout, and the highlight clearing both on moving off a
     button inside the window and on leaving the window entirely.
 
+- **Hardware floating point and SSE, for ring-3 processes.** Asked
+  whether the kernel could have FPU/SSE enabled, and specifically
+  whether to do it kernel-wide "if Linux and Windows do." They don't,
+  so this doesn't either.
+  - **Both mainstream kernels are FP-free and bracket the exceptions.**
+    Linux builds its own kernel with the same `-mno-sse -mno-sse2
+    -mno-mmx -mno-80387` this project already used, and requires
+    `kernel_fpu_begin()`/`kernel_fpu_end()` around the rare kernel-side
+    SIMD (AES-NI, RAID6); Windows requires
+    `KeSaveExtendedProcessorState()` for the same. So `userland/`'s
+    ring-3 ELFs drop those flags and get real `double`/`float`;
+    `kernel/` and `apps/` keep them.
+  - **Why that split is worth copying rather than just cautious:** with
+    SSE on, GCC emits XMM in ORDINARY code -- struct copies and inlined
+    `memcpy`, not only code mentioning a float. An FP-enabled kernel
+    would therefore need an FXSAVE on the interrupt path, on every
+    vector, since an IRQ can land anywhere. Keeping the kernel FP-free
+    means state moves only where the scheduler actually swaps ring-3
+    processes.
+  - **New `kernel/arch/x86_64/fpu.c`**: clears `CR0.EM`, sets `CR0.MP`/
+    `CR0.NE` and `CR4.OSFXSR`/`CR4.OSXMMEXCPT`, and captures a pristine
+    post-`FNINIT` state that each new process starts from. `CPUID` is
+    checked even though both bits are architecturally mandatory in long
+    mode -- it's four instructions once at boot.
+  - **Eager, never lazy.** No `CR0.TS` + `#NM` trick: that's what
+    CVE-2018-3665 (Lazy FP State Restore) exploited to read another
+    task's registers, and Linux deleted its lazy path outright in 4.14.
+    `FXRSTOR` is ~100 cycles against a 100 Hz tick. A KTEST asserts
+    `CR0.TS` stays clear so nobody reintroduces it quietly.
+  - `scheduler.c` gained a 16-byte-aligned 512-byte area per process,
+    `FXSAVE`d on the way out of `scheduler_tick()` and `FXRSTOR`d in
+    `switch_to()`, and initialized to the pristine template at spawn so
+    a reused slot can't inherit the previous tenant's registers.
+  - **The test can fail, which was checked rather than assumed.** Two
+    `/tests/fpu_race` processes run concurrently with eight live
+    accumulators each -- GCC auto-vectorizes them into `addpd` across
+    xmm1-xmm4, held in registers for 20M iterations, so preemption
+    lands mid-computation hundreds of times. With the FXSAVE/FXRSTOR
+    pair temporarily removed, both processes report corruption; with it
+    restored, both report intact. A single-process float test can't
+    prove any of this, which is why there are two.
+  - `fputest` from the shell runs both halves.
+
 ### Fixed
+- **Ring-3 stack alignment was wrong for SSE, in two different ways.**
+  `elf_run.c` aligned the initial user RSP to 8 bytes, which was
+  invisible while userland was built `-mno-sse` and nothing could emit
+  an alignment-sensitive instruction at all.
+  - First fix was to 16, reasoning from the SysV process-entry
+    convention. That crashed: `movapd %xmm0,(%rsp)` took a `#GP` at ring
+    3. The convention describes what a real crt0 `_start` sees, and a
+    real crt0 realigns before calling main -- but every `_start` here is
+    a plain C function, which GCC compiles assuming a pushed return
+    address (`RSP % 16 == 8`) and sizes its prologue from there. Hand it
+    a 16-aligned RSP and every aligned local is off by exactly 8.
+  - Correct answer is `RSP % 16 == 8` at entry, and it was established
+    by running the thing, not by reading the ABI.
+  - `userland/fpu_test.c` now forces an aligned SSE store to a stack
+    local specifically so this stays covered -- no other userland
+    program currently emits one, so the fix would otherwise have sat
+    untested until something tripped over it.
+
 - **Calculator's keys and Notepad's toolbar committed on button-DOWN,
   so neither could be cancelled.** Found by running the cancel test on
   the hover work above rather than only the happy path: pressing

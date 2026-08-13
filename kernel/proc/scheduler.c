@@ -95,6 +95,7 @@
 #include "elf_run.h"
 #include "fs.h"
 #include "gdt.h"
+#include "fpu.h"
 #include "vga.h"
 #include "klog.h"
 #include "strace_internal.h"
@@ -152,6 +153,10 @@ struct sched_process {
     uint64_t kernel_rsp; // this process's saved trapframe pointer --
                           // valid whenever state != SCHED_UNUSED
     int exit_code;        // valid only once state == SCHED_ZOMBIE
+    // This process's x87/SSE registers while it isn't the one running.
+    // 16-byte aligned because FXSAVE/FXRSTOR #GP otherwise -- see fpu.h,
+    // including why only ring-3 processes need one of these at all.
+    uint8_t fpu[FPU_STATE_SIZE] __attribute__((aligned(FPU_STATE_ALIGN)));
     uint8_t kstack[PROC_KSTACK_SIZE] __attribute__((aligned(16)));
 };
 
@@ -192,7 +197,20 @@ static int find_next_ready(int start) {
     return -1;
 }
 
+// Hands the CPU to `idx`, including its floating-point registers.
+//
+// The FXRSTOR is unconditional and has no matching "was it dirty?"
+// check -- that's the eager model fpu.h argues for. It also means a
+// process can never observe another process's XMM/x87 contents, which
+// the lazy alternative got wrong badly enough to become a CVE.
+//
+// Note there's no restore for the kernel side (current_index == -1):
+// the kernel and apps/ are built `-mno-sse` and have no FP state to
+// preserve. If that ever stops being true, this is one of the two
+// places that has to grow a save (the other is scheduler_tick()'s
+// outgoing branch), and the ISR path becomes a third -- see fpu.h.
 static void switch_to(int idx) {
+    fpu_restore(procs[idx].fpu);
     g_next_kernel_rsp = procs[idx].kernel_rsp;
     vmm_switch_address_space(procs[idx].pml4_phys);
     gdt_set_kernel_stack(kernel_stack_top(idx));
@@ -272,6 +290,11 @@ static int spawn_from_fs(const char *path, const char *args) {
 
     procs[slot].pml4_phys  = as;
     procs[slot].kernel_rsp = (uint64_t)tf;
+    // A pristine FP state, not whatever the previous tenant of this
+    // slot left behind -- slots get reused (scheduler_poll() reaps back
+    // to SCHED_UNUSED), and inheriting the last process's registers
+    // would be both wrong and an information leak between processes.
+    fpu_init_state(procs[slot].fpu);
     procs[slot].state      = SCHED_READY;
     alive_count++;
     return slot;
@@ -282,6 +305,12 @@ void scheduler_tick(uint64_t *regs) {
 
     if (current_index >= 0) {
         procs[current_index].kernel_rsp = (uint64_t)regs;
+        // Paired with switch_to()'s FXRSTOR. Saved on the way out
+        // whether or not the process has touched FP: "has it?" is
+        // exactly the question the lazy scheme answered with CR0.TS,
+        // and exactly the question that turned out to be dangerous to
+        // answer (see fpu.h).
+        fpu_save(procs[current_index].fpu);
         procs[current_index].state = SCHED_READY;
     } else {
         kernel_saved_rsp = (uint64_t)regs;

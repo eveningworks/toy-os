@@ -104,12 +104,39 @@ int elf_build_argv_on_stack(uint64_t stack_phys, uint64_t stack_vaddr,
         str_vaddr[i] = stack_vaddr + offset;
     }
 
-    // Pointer array (argc entries + a trailing NULL), 8-byte aligned,
-    // placed below every string it points at.
-    offset &= ~(size_t)7;
+    // Pointer array (argc entries + a trailing NULL), placed below
+    // every string it points at, and positioned so the resulting RSP is
+    // **16-byte aligned** rather than merely 8.
+    //
+    // This used to align to 8, which was fine while every userland ELF
+    // was built `-mno-sse`. It stopped being fine the moment ring-3 code
+    // could use SSE: GCC assumes a 16-byte-aligned stack and emits
+    // `movaps`/`movdqa` against stack slots on that assumption, and
+    // those #GP -- not silently mis-store, actually fault -- if RSP is
+    // off by 8. The failure would surface as a process crashing
+    // somewhere with no visible connection to its stack layout.
+    //
+    // **RSP % 16 == 8 at entry, not 0**, and that 8 is load-bearing.
+    //
+    // The SysV process-entry convention says a real _start sees a
+    // 16-aligned RSP -- but a real _start is hand-written assembly in a
+    // crt0 that realigns before calling main. Every _start here is a
+    // plain C function, and GCC compiles it like any other function:
+    // assuming a return address was pushed, i.e. RSP % 16 == 8 on
+    // entry, and sizing its prologue's `sub` to land 16-byte-aligned
+    // locals from there. Hand it a 16-aligned RSP and every aligned
+    // stack slot in the function is off by exactly 8.
+    //
+    // Established by testing, not by reading the ABI: with a 16-aligned
+    // entry RSP, userland/fpu_test.c's `movapd %xmm0,(%rsp)` took a #GP
+    // at ring 3. Both this and the plain 8-alignment it replaced were
+    // invisible while userland was built -mno-sse, since nothing could
+    // emit an alignment-sensitive instruction at all.
     size_t ptr_bytes = (size_t)(argc + 1) * 8;
-    if (ptr_bytes > offset) return 0; // doesn't fit in the page
+    if (ptr_bytes + 16 > offset) return 0; // no room for the array plus alignment slack
     offset -= ptr_bytes;
+    offset &= ~(size_t)15; // 16-aligned...
+    offset -= 8;            // ...then 8 below it, which is what GCC expects
 
     uint64_t *argv_ptrs = (uint64_t *)(page + offset);
     for (int i = 0; i < argc; i++) argv_ptrs[i] = str_vaddr[i];

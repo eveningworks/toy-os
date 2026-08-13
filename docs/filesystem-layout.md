@@ -151,7 +151,8 @@ complete path**. Both are far more binding on layout than any standard:
   40+ records -- a sixth of the table -- which is worth knowing before
   designing that, not after.
 
-Current usage is roughly 25 of 256. Milestone 15 (TFS3) is where both
+Current usage is 36 of 256 (count it with `tools/tfs2_writer.py ls` per
+directory rather than trusting this number -- it has been stale before). Milestone 15 (TFS3) is where both
 limits are due to be raised; until then, prefer flatter over deeper, and
 prefer one file with structure inside it over many small files.
 

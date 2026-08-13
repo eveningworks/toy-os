@@ -168,6 +168,9 @@ static const char *const TEST_HELP_LINES[] = {
     "  schedtest     - preemptive round-robin scheduler demo: two\n",
     "                  ring-3 processes run concurrently, neither\n",
     "                  ever yielding (returns once both exit)\n",
+    "  fputest       - ring-3 floating point: a value check, then two\n",
+    "                  processes racing with live XMM accumulators to\n",
+    "                  prove the context switch saves FP state\n",
     "  stress <mb>   - real (non-sparse) write/read/verify pass over <mb>\n",
     "                  megabytes -- exercises direct/single/double/triple-\n",
     "                  indirect blocks with genuine data, not a sparse\n",
@@ -391,6 +394,60 @@ void cmd_df(void) {
 // system, not a sandbox. See kernel/include/kernel/ktest.h.
 void cmd_ktest(const char *args) {
     ktest_run_all(args && k_strlen(args) > 0 ? args : 0);
+}
+
+// `fputest` -- proves ring-3 floating point is not just enabled but
+// SAFE under preemption.
+//
+// Two things get checked, and the second is the one that matters.
+// /tests/fpu_test is a single process doing double/float arithmetic
+// with exactly-representable values: that only proves CR4.OSFXSR is
+// set. /tests/fpu_race runs TWICE, CONCURRENTLY, with different seeds,
+// each holding eight live accumulators in XMM registers across
+// thousands of 100Hz preemptions. Without the FXSAVE/FXRSTOR pair in
+// scheduler.c the two share one physical register file and both come
+// back with the other's numbers.
+//
+// Deliberately spawned through the public scheduler_spawn()/
+// scheduler_poll() API rather than reaching into the scheduler, so this
+// exercises the same path Terminal's async spawn uses. Busy-waits on
+// `hlt` like `schedtest` does -- blocking the shell for the duration is
+// fine (and necessary) for a test command.
+void cmd_fputest(void) {
+    vga_write("Single-process float check (/tests/fpu_test):\n");
+    if (!shell_exec_name("fpu_test", 0)) {
+        vga_write("  could not run /tests/fpu_test -- is it seeded onto\n");
+        vga_write("  disk.img? (see the Makefile's `seed` target)\n");
+        return;
+    }
+    vga_write("\n");
+
+    vga_write("Concurrent FP state check: two /tests/fpu_race processes,\n");
+    vga_write("preempted against each other with eight live XMM accumulators\n");
+    vga_write("each. This is what proves the context switch saves FP state.\n");
+
+    int a = scheduler_spawn("/tests/fpu_race", "1");
+    int b = scheduler_spawn("/tests/fpu_race", "2");
+    if (a <= 0 || b <= 0) {
+        vga_write("fputest: failed to spawn both racers -- is /tests/fpu_race\n");
+        vga_write("seeded onto disk.img? (see the Makefile's `seed` target)\n");
+        return;
+    }
+
+    int a_code = 0, b_code = 0, a_done = 0, b_done = 0;
+    while (!a_done || !b_done) {
+        __asm__ volatile ("hlt");
+        if (!a_done && scheduler_poll(a, &a_code) == SCHED_POLL_EXITED) a_done = 1;
+        if (!b_done && scheduler_poll(b, &b_code) == SCHED_POLL_EXITED) b_done = 1;
+    }
+
+    if (a_code == 0 && b_code == 0) {
+        vga_write("\n  ok -- both processes' accumulators survived intact.\n");
+    } else {
+        vga_printf("\n  FAILED -- exit codes %d and %d (a non-zero code is the\n",
+                    a_code, b_code);
+        vga_write("  1-based index of the first corrupted accumulator).\n");
+    }
 }
 
 // `fsck` / `fsck repair` -- filesystem consistency check, and the
