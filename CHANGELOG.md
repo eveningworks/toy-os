@@ -676,6 +676,34 @@ using `## [x.y.z] - date` headings is here.
     `screenshots/2026-08-12/tray-clock-*.png`.
 
 ### Changed
+- **README rewritten as a project front page**, with per-distribution
+  build instructions.
+  - Opens with two screenshots taken deliberately for it (the window
+    manager running the Terminal app; the shell running `about`/`ls`/
+    `df`/`ktest`) rather than reusing debugging artifacts, plus a CI
+    badge, a table of contents, and a "what this is" section that says
+    what's actually built rather than listing every feature first.
+  - **Dependency install commands for six distribution families**
+    (Debian/Ubuntu, Arch, Fedora, openSUSE, Alpine, Void), plus a table
+    explaining what each package is *for* so a distribution not listed
+    can be worked out. Honest about provenance: Arch is verified
+    firsthand, the Debian/Ubuntu list is what CI installs on every push,
+    and the rest are package-name translations of the same
+    requirements.
+  - **A troubleshooting table** for the failures that actually bite
+    here: the missing GRUB BIOS-modules package (an ISO that builds but
+    won't boot), `grub-mkrescue` needing `xorriso` *and* `mtools`, no
+    window over SSH, the PS/2-only mouse, and `disk.img` looking like
+    9 GB when it's sparse.
+  - A Development section covering `make verify`/`make test`, how to
+    write a `KTEST`, and what each tool in `tools/` is for.
+- **`make iso` now finds `grub2-mkrescue` as well as `grub-mkrescue`.**
+  Fedora/RHEL and openSUSE use the `grub2-` prefix, so the build
+  previously failed there on a correctly-installed system. Resolving it
+  in the Makefile beats documenting a "symlink it yourself" step -- and
+  when neither binary exists the error now names both and points at the
+  README's dependency table instead of `command not found`.
+
 - **Documentation catch-up after this session's work.** Audited every
   `.md` against the tree rather than by memory; five real gaps:
   - **`docs/arch-portability.md` was describing its own Phase 1 as

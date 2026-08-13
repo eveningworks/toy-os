@@ -1,3 +1,8 @@
+# grub-mkrescue is named grub2-mkrescue on Fedora/RHEL and openSUSE.
+# Resolved here rather than documented as a "symlink it yourself" step,
+# so `make iso` just works on those distributions.
+GRUB_MKRESCUE := $(shell command -v grub-mkrescue 2>/dev/null || command -v grub2-mkrescue 2>/dev/null)
+
 CC = gcc
 LD = ld
 ASM = nasm
@@ -338,7 +343,13 @@ iso: version $(KERNEL) $(USERLAND_ELVES) seed
 	mkdir -p iso/boot/grub
 	cp $(KERNEL) iso/boot/kernel.bin
 	cp grub.cfg iso/boot/grub/grub.cfg
-	grub-mkrescue -o $(ISO) iso
+	@if [ -z "$(GRUB_MKRESCUE)" ]; then \
+		echo "make: grub-mkrescue not found (looked for grub-mkrescue and grub2-mkrescue)."; \
+		echo "      Install GRUB's rescue tools + xorriso + mtools -- see README.md's"; \
+		echo "      dependency table for your distribution's package names."; \
+		exit 1; \
+	fi
+	$(GRUB_MKRESCUE) -o $(ISO) iso
 
 # -vga std: explicit (matches QEMU's own default, but pinned here so the
 #   higher 1280x720 mode boot.asm requests isn't at the mercy of a
