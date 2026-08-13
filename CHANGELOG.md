@@ -31,6 +31,32 @@ using `## [x.y.z] - date` headings is here.
 ## [Unreleased]
 
 ### Added
+- **Storage stack audit, and the four changes that came out of it.**
+  Asked to read the filesystem/ATA code through (`fs`/`tfs`/`vfs`/`ata`)
+  and propose fixes; the audit found one data-loss bug, one silent
+  error-swallowing class, one nearly-exhausted limit, and one
+  self-imposed throughput ceiling. All four were then asked for. Each
+  is described in its own section below (`### Fixed` for the durability
+  work, `### Changed` for the rest); this entry is the index:
+  - **`ata_sector_count()`** (`kernel/drivers/ata.c`/`ata.h`) -- the
+    drive's real capacity from IDENTIFY words 60-61, which this driver
+    had always read and discarded. `ata_read_sectors()`/
+    `ata_write_sectors()` now range-check against it (a transfer past
+    the end of the drive fails loudly instead of being handed to the
+    hardware), and TFS2 clamps its block count to it at mount instead
+    of trusting a hardcoded 9 GiB. Verified on a deliberately small
+    image: a 512MB `disk.img` logs `using 131072 of 2359296 blocks`,
+    and `df` reports 523868 KB rather than the built-in maximum
+    (screenshot `df_small_disk.png`).
+  - **`ata_max_sectors_per_xfer()`** -- the per-transfer sector cap
+    actually available this boot, as opposed to the compile-time
+    `ATA_MAX_SECTORS_PER_XFER`. Callers that batch work into transfers
+    (TFS2's new block coalescing) ask this; it reports the smaller
+    number when the 64KB DMA buffer couldn't be allocated or when the
+    PIO fallback is in use.
+  - **`BLK_ALLOC_NOZERO`** (`kernel/drivers/tfs.c`) -- an allocation
+    mode for a block the caller is about to overwrite in full, skipping
+    the zero-fill write that every freshly allocated block used to get.
 - `tools/shell_flow.py`: a `gui_flow.py`-style helper for the physical
   (pre-`gui`) shell -- `ShellFlow.run_command(cmd, subdir=...)` types a
   full command (spaces/hyphens/underscores/etc handled automatically)
@@ -334,6 +360,80 @@ using `## [x.y.z] - date` headings is here.
     `screenshots/2026-08-12/tray-clock-*.png`.
 
 ### Changed
+- **`FS_MAX_FILES` 32 -> 256, an on-disk layout change (TFS2 v2 -> v3).**
+  32 wasn't a comfortable margin any more, it was nearly gone: the
+  shipped `disk.img` already used 25 slots (17 `/bin` binaries plus
+  `/bin`, `/etc`, `/etc/kbs` and four `/etc` files), `/etc/toyos.conf`
+  makes 26 as soon as any setting is saved, and the boot selftest takes
+  a 27th while it runs. The next few seeded binaries would have hit
+  "table full", which surfaces as a bare 0 return from `fs_touch()`.
+  The record table sits between the journal and the free-block bitmap,
+  so changing its size moves `FS_BITMAP_START_LBA` and every LBA after
+  it -- hence the version-byte bump, and the standing "no migration,
+  just reformat" policy applies: a v2 disk is detected as foreign and
+  reformatted. `make iso` re-seeds `/bin` and `/etc/kbs` automatically,
+  so the practical loss is `/etc/history`, `/etc/desktop.conf` and
+  `/etc/timezones`, once. Cost of 256 slots: ~44KB of `.bss` and 256
+  one-sector records on a gigabyte-class disk. `tools/tfs2_writer.py`
+  mirrors the layout host-side and was updated in lockstep (it now
+  writes/expects version 3, and says plainly when it reformats an older
+  image rather than silently discarding its files). Verified with a
+  512MB image seeded with 60 files: all 60 present, and
+  `/many/f57.txt` -- slot 58, well past the old ceiling -- reads back
+  correctly (screenshot `cat_60th_file.png`).
+- **Sequential filesystem throughput: ~18 -> 25.1 MB/s write, ~27 ->
+  30.5 MB/s read** (`stress 300`, 27s -> 21s; screenshot
+  `stress300_nozero.png`). Two changes, both in the "stop issuing one
+  ATA command per 4KB" direction:
+  - The DMA bounce buffer went from 1 frame to 16 (`ata.c`'s
+    `DMA_BUF_FRAMES`), raising `ATA_MAX_SECTORS_PER_XFER` from 8 to
+    128. 64KB is the ceiling on purpose: a PRD's byte count is 16-bit
+    with 0 meaning 64KB, so a full-size transfer relies on that
+    encoding and anything larger would truncate to a genuinely wrong
+    value. `ata.h` had already identified this buffer as the blocker.
+    If `pmm_alloc_contiguous(17)` fails on a fragmented pool, init
+    retries for the original 2 frames and everything behaves exactly as
+    before, just at the smaller limit -- the driver never falls back to
+    PIO over this.
+  - TFS2 now coalesces contiguous blocks into one transfer
+    (`contiguous_run()`, used by both `write_range_impl()` and
+    `read_range_impl()`). Deliberately conservative: only whole blocks,
+    only block-aligned, only physically consecutive, only disk-backed.
+    An unaligned head, a partial tail, a hole, or a fragmented region
+    all drop through to the original per-block path, which is the one
+    every previous `stress` run has exercised.
+  - The first measurement after coalescing was only 20.3 MB/s, which
+    didn't match "16x fewer commands" -- the reason turned out to be
+    worth its own fix: every freshly allocated block was zero-filled
+    with its own 4KB write before the real data write, so allocation
+    doubled the command count and split the coalesced runs apart. A
+    full-block overwrite doesn't need that zeroing (`BLK_ALLOC_NOZERO`
+    above), and skipping it is what took write throughput from 20.3 to
+    25.1 MB/s. Zero-filling still happens everywhere it carries meaning:
+    indirect index blocks always (their unwritten entries are read as
+    block pointers and must be the 0 sentinel), and any partially
+    written block (so a read-modify-write can't leak a deleted file's
+    contents).
+  - Read gained less than write (+13% vs +39%) because `stress`'s read
+    phase includes its own byte-for-byte verification loop over every
+    megabyte, which is now a meaningful share of that phase's time --
+    the coalescing itself is active on the read path (that's where the
+    27 -> 30.5 came from), the benchmark just measures more than disk
+    I/O. A pure sequential-read benchmark would show a larger gap; one
+    doesn't exist yet.
+- The boot selftest now **skips** (rather than reporting FAILED) when
+  the disk is too small for its 4.6GB triple-indirect probe offset --
+  which is exactly what the new capacity clamp makes possible to
+  detect. On a 512MB image it logs `selftest skipped -- disk is too
+  small for the triple-indirect offset` instead of a data-mismatch
+  failure that reads like a filesystem bug.
+- `tools/qmp_test.py`'s `screenshot()` now passes QEMU an **absolute**
+  path for the `.ppm`. QEMU resolves `screendump`'s filename against
+  its own working directory, and `launch_qemu_cmd()` passes
+  `-daemonize`, so a relative path returned `{"return": {}}` (success)
+  while writing the file somewhere else entirely -- the only symptom
+  being Pillow raising `FileNotFoundError` on a path that looks
+  obviously correct. Hit for real during this session's testing.
 - Documentation audit and refactor, asked for as "are the .md files up
   to date, and do they need refactoring/additions/deletions". Four
   areas, none of them code changes:
@@ -532,6 +632,87 @@ using `## [x.y.z] - date` headings is here.
   as the active selection.
 
 ### Fixed
+- **A transient read failure at boot reformatted the whole disk.**
+  `tfs_init()` was one condition -- `if (ata_read_sector(superblock) &&
+  magic ok && version ok) { load } else { format }` -- so a *failed
+  read* took the same branch as a genuinely foreign disk and formatted
+  over a perfectly good filesystem. Not hypothetical: `ata_read_sector()`
+  gives up after `ATA_DMA_MAX_RETRIES` (3) exhausted attempts, and
+  transient 3-in-a-row DMA misses are precisely what this project has
+  already seen on real hardware (see `ata.c`'s retry-wrapper comment and
+  the bitmap-persist retry added a few entries above -- same class of
+  event, on a different sector). One unlucky burst on LBA 0 during boot
+  and every file was gone, with nothing logged to say why.
+  Reading the superblock and judging it are now two separate steps: the
+  read gets its own bounded retry round
+  (`FS_SUPERBLOCK_READ_MAX_RETRIES`), and if it still can't be read the
+  kernel **refuses to touch the disk at all** -- it degrades to
+  RAM-only for that boot with a three-line explanation in `dmesg`,
+  rather than destroying what is probably a fine filesystem. A blank or
+  foreign disk still formats normally, because that path is only
+  reachable when the read genuinely succeeded and the bytes just aren't
+  ours.
+  - Related, found while testing this with deliberately broken images:
+    a disk too small to hold even the reserved metadata region now
+    degrades to RAM-only too, instead of "successfully" formatting a
+    filesystem whose every write lands somewhere the drive discards.
+    A 100-byte image now logs `too small to hold the filesystem
+    metadata region (0 blocks, need more than 105)` and boots to a
+    usable shell. A 0-length image is the one case still not caught --
+    QEMU answers its reads with zeros rather than erroring, so it is
+    genuinely indistinguishable from a blank disk at the driver level;
+    the boot selftest is what catches that, loudly.
+- **`persist_record()`'s return value was discarded at every call
+  site.** `touch`/`mkdir`/`write`/`delete`/`write_range` and the
+  steppable-write completion all reported success to the caller when
+  the journal-protected metadata write had failed -- the file "existed"
+  until the next reboot and then didn't, with nothing logged. Exactly
+  the class of bug the bitmap-sector persist fix (a few entries down)
+  addressed for free-space bookkeeping, never applied to records. Every
+  call site now checks it, the failure is always logged (independent of
+  `debug fs`, matching the bitmap convention), and each caller undoes
+  its in-memory change so memory can't claim something disk disagrees
+  with: `touch`/`mkdir` roll the new slot back, `delete` restores the
+  entry, truncation restores its block pointers and size.
+- **Truncate and delete freed a file's blocks before persisting the
+  record that referenced them.** A crash (or a failed record write) in
+  that window left an on-disk record still pointing at blocks the
+  bitmap had already marked free -- the next allocation hands one of
+  them to a different file, and two files silently share a block. The
+  order is now inverted via `detach_blocks()`/`reattach_blocks()`: the
+  record is written referencing nothing first, and only then are the
+  blocks returned to the bitmap. The worst case becomes the harmless
+  opposite -- blocks marked allocated that nothing references, a space
+  leak a future fsck-style pass could reclaim, rather than corruption.
+- **A failed `zero_block()` could hand a file another file's data.**
+  Its return value was ignored, so an indirect index block that failed
+  to zero kept whatever a previously deleted file left there -- and
+  `walk_indirect()` reads those stale bytes as real block pointers.
+  Now checked at every allocation site, with the block freed again and
+  the allocation reported as failed.
+- **A partially failed `fs_write_range()` leaked its allocated blocks.**
+  The record was never persisted on the failure path, so the blocks
+  were marked allocated in the bitmap and referenced by nothing after a
+  reboot. `fs.h` documents the file's state on partial failure as
+  "whatever was written before the failure", so the record is now
+  persisted on that path too, keeping those blocks reachable.
+- `replay_journal()` ignored whether writing the replayed entry to its
+  table slot actually succeeded, and cleared the journal header either
+  way -- dropping a recovered entry permanently if that one write
+  failed. It now leaves the header committed so the next boot retries.
+- The disk format path ignored `persist_record()` for all of its blank
+  slots; it now counts and reports any that didn't land, instead of
+  claiming a clean format.
+- **Verified end-to-end**, not just by reading the code: `stress 300`,
+  `dmatest` and `steptest 3` all pass on the 64KB DMA path
+  (`dmatest_64k.png`, `steptest3_64k.png`); `df` shows 204 KB used
+  after a 300MB file is written and deleted, proving the reordered
+  free path still reclaims everything (`df_64k.png`); a `mkdir` +
+  `write` survives a real reboot (`persist_after_reboot.png`); and
+  Notepad's Save As... -- which goes through the steppable write path
+  whose completion now depends on `persist_record()` -- writes a file
+  the shell and the host-side `tfs2_writer.py` both read back correctly
+  (`notepad_saved_via_step_api.png`).
 - `kernel/drivers/vga.c`'s framebuffer console cursor left stray
   wrong-colored blocks around a colored diagnostic banner -- reported
   live from `ring3test`'s panic screen (white-on-red), which showed a

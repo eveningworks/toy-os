@@ -50,8 +50,18 @@ later judgment call, not mechanically tied to "20 milestones done."
 ### Milestone 3 -- Storage hardening (planned v0.3.0)
 
 - [ ] Full multi-GB stress run (`stress 4200` / `stress 8192`)
-- [ ] Coalesce contiguous block writes into fewer ATA commands
+- [x] ~~Coalesce contiguous block writes into fewer ATA commands~~ -- done,
+      see `CHANGELOG.md`'s `[Unreleased]` entry (64KB DMA buffer + run
+      coalescing + skipping the redundant zero-fill: 18 -> 25.1 MB/s write)
 - [ ] Journal-batched flush
+- [x] ~~Detect the drive's real capacity instead of assuming 9 GiB~~ --
+      done, see `CHANGELOG.md`'s `[Unreleased]` entry (`ata_sector_count()`)
+- [x] ~~Stop treating an unreadable superblock as a foreign disk~~ --
+      done, see `CHANGELOG.md`'s `[Unreleased]` entry (this was a
+      data-loss bug, not just hardening)
+- [ ] An fsck-style pass to reclaim leaked blocks -- newly relevant now
+      that the truncate/delete ordering deliberately prefers leaking a
+      block over double-allocating one (see `docs/decisions.md`)
 - [x] ~~GPT/MBR partition table parsing~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry
 
 ### Milestone 4 -- AHCI/SATA driver (planned v0.4.0)
@@ -443,15 +453,20 @@ let finish, not attempted at that scale yet. Run either whenever a session
 has the wall-clock time; `debug ata on` first if it's ever worth
 double-checking retries stay at zero.
 
-TFS2/ATA write performance, part 2 (part 1 -- flush batching + deferred
-bitmap persistence -- already shipped, see `CHANGELOG.md`): coalesce
-contiguous block writes into fewer, larger ATA commands -- `write_block()`
-(`kernel/drivers/tfs.c`) issues one 8-sector (4KB) command per call even
-when consecutive blocks in a range are contiguous on disk (the common case
-for a freshly-allocated file); batching contiguous runs into one larger
-`ata_write_sectors()` call (up to `ATA_MAX_SECTORS_PER_XFER`, or raising
-that cap -- a PRD can cover up to 64KB/128 sectors, well above today's 8)
-would cut per-command overhead on top of the flush-batching already done.
+~~TFS2/ATA write performance, part 2~~ -- done, see `CHANGELOG.md`'s
+`[Unreleased]` entry. Went exactly the way this item predicted (raise the
+per-command cap, then batch contiguous runs into it): the DMA bounce
+buffer grew from 1 frame to 16, `ATA_MAX_SECTORS_PER_XFER` went 8 -> 128
+(one full PRD), and `contiguous_run()` merges consecutive blocks into a
+single `ata_write_sectors()`/`ata_read_sectors()` call. One thing this
+item didn't predict and the measurement did: the zero-fill write every
+freshly allocated block used to get was doubling the command count and
+splitting the coalesced runs apart, which is why the first cut only
+reached 20.3 MB/s of the eventual 25.1. Still open in this area: a
+sequential-read benchmark that isn't dominated by `stress`'s own
+byte-for-byte verify loop, which is why the read-side gain (27 -> 30.5
+MB/s) is measured less precisely than the write side.
+
 Also: journal-batched flush -- rely on the existing journal
 (`FS_JOURNAL_HEADER_LBA`/`FS_JOURNAL_DATA_LBA`) as the actual durability
 boundary for metadata and flush once per logical operation it protects

@@ -1,20 +1,24 @@
-# TFS2 on-disk format (v2 -- block-addressed)
+# TFS2 on-disk format (v3 -- block-addressed)
 
 This is a byte-exact specification of TFS2, toy-os's persistent
 filesystem, for writing an independent (read-only, ideally) tool on a
 host machine that can open a `disk.img`/`toy-os.iso`-adjacent raw disk
 image and browse its contents without booting toy-os at all.
 
-**This describes on-disk version 2** -- the block-addressed,
+**This describes on-disk version 3.** The block-addressed,
 indirect-pointer layout (12 direct block pointers + single/double/
-triple indirect, classic Unix-inode shape) introduced by the
-large-file rework (see `CHANGELOG.md`'s entry for it). Version 1 (the
-original 2026 journaled/timestamped format, with each file's data
-inlined directly in its table record, capped at `FS_DATA_MAX` = 2048
-bytes) is **gone** -- toy-os detects the version mismatch and
-reformats from scratch rather than trying to read an old image; a
-reader built against this document cannot open a v1 image either, and
-shouldn't try to guess.
+triple indirect, classic Unix-inode shape) is unchanged from version 2;
+what v3 changes is `FS_MAX_FILES`, 32 -> 256, which moves the free-block
+bitmap and everything after it. Every byte-level record/journal/bitmap
+structure below is identical between v2 and v3 -- only the region
+offsets differ, and only because that one constant did.
+
+Older versions are **gone**: v1 (the original journaled/timestamped
+format, with each file's data inlined in its table record, capped at
+`FS_DATA_MAX` = 2048 bytes) and v2 (same layout as here, 32 slots).
+toy-os detects any version mismatch and reformats from scratch rather
+than trying to read an old image; a reader built against this document
+cannot open a v1 or v2 image either, and shouldn't try to guess.
 
 This document describes the format only -- not why it's shaped this
 way. For that, see `kernel/drivers/tfs.c`'s top comment (the reference
@@ -41,7 +45,7 @@ versions. A TFS2-aware reader should check the superblock magic+version
   bytes before the first `\0` are meaningful. This spec doesn't rely on
   trailing bytes past a string's terminator being any particular
   value -- treat them as unspecified padding, not as data.
-- `FS_MAX_FILES` (32) and `FS_PATH_MAX` (64) are compile-time constants
+- `FS_MAX_FILES` (256) and `FS_PATH_MAX` (64) are compile-time constants
   in this kernel (`kernel/include/fs.h`), not something an on-disk
   header records anywhere -- a reader has to know them ahead of time
   (they're listed here) rather than discover them from the image
@@ -63,14 +67,23 @@ versions. A TFS2-aware reader should check the superblock magic+version
 | Superblock | 0 | 1 sector (512 B) | magic + version |
 | Journal header | 1 | 1 sector (512 B) | pending-mutation metadata |
 | Journal data | 2 | 1 sector (512 B) | one record's worth of staged metadata |
-| Table | 3 – 34 | 32 sectors (16,384 B) | `FS_MAX_FILES` (32) fixed-size records, 1 sector each |
-| Free-block bitmap | 35 – 610 | 576 sectors (294,912 B) | one bit per 4096-byte block of the whole disk |
-| (padding to block boundary) | 611 – 615 | 5 sectors | unused, rounds the data region up to a block-aligned LBA |
-| File data | 616 onward | rest of the disk | 4096-byte blocks, block-number addressed |
+| Table | 3 – 258 | 256 sectors (131,072 B) | `FS_MAX_FILES` (256) fixed-size records, 1 sector each |
+| Free-block bitmap | 259 – 834 | 576 sectors (294,912 B) | one bit per 4096-byte block of the whole disk |
+| (padding to block boundary) | 835 – 839 | 5 sectors | unused, rounds the data region up to a block-aligned LBA |
+| File data | 840 onward | rest of the disk | 4096-byte blocks, block-number addressed |
 
 These are the concrete numbers for the current constants
-(`FS_MAX_FILES` = 32, `FS_DISK_TOTAL_BYTES` = 9 GiB); see "Deriving
-these offsets yourself" below if any of those constants change.
+(`FS_MAX_FILES` = 256, `FS_DISK_TOTAL_BYTES` = 9 GiB); see "Deriving
+these offsets yourself" below if any of those constants change. The v2
+numbers, for comparison, were table 3–34, bitmap 35–610, data from LBA
+616 -- the same structures, 224 sectors earlier.
+
+`FS_DISK_TOTAL_BYTES` is a compile-time *maximum*, not a claim about
+the image: since the capacity-detection change, toy-os clamps its
+usable block count to what the drive actually reports (IDENTIFY words
+60-61) at mount. A reader should size the bitmap region from the
+constant above (it's a fixed on-disk region either way) but shouldn't
+assume the image is 9 GiB.
 
 Unlike v1, there is **no fixed "everything past here is unused, safe
 to ignore" boundary** -- the entire disk (all the way out to
@@ -104,11 +117,11 @@ FS_DATA_START_LBA   = FS_DATA_START_BLOCK * 8
 | Offset | Size | Field | Value |
 |---|---|---|---|
 | 0 | 4 bytes | magic | ASCII `"TFS2"` (`0x54 0x46 0x53 0x32`) |
-| 4 | 1 byte | version | `0x02` |
+| 4 | 1 byte | version | `0x03` |
 | 5–511 | — | (unused) | zero-filled by this kernel, but a reader shouldn't assume that |
 
 A reader should treat any image whose first 5 bytes don't match
-exactly (`"TFS2"` + version `0x02`) as **not a v2 TFS2 image** --
+exactly (`"TFS2"` + version `0x03`) as **not a v3 TFS2 image** --
 toy-os itself reformats on any mismatch (including a v1 image) rather
 than trying to read a foreign/old-version layout, and a host-side
 reader should refuse the same way rather than guess at a different
@@ -127,7 +140,7 @@ boot.**
 |---|---|---|---|
 | 0 | 4 bytes | magic | ASCII `"JRN1"` (`0x4A 0x52 0x4E 0x31`) -- absent/different if the journal region has never been initialized |
 | 4 | 1 byte | commit | `0x00` = empty/no pending entry, `0x01` = a pending entry is described below |
-| 5 | 4 bytes (uint32 LE) | target slot | which table slot (0–31) this entry is for -- only meaningful if `commit == 1` |
+| 5 | 4 bytes (uint32 LE) | target slot | which table slot (0–255) this entry is for -- only meaningful if `commit == 1` |
 | 9 | 4 bytes (uint32 LE) | checksum | FNV-1a-32 (see below) of the journal data area's `FS_RECORD_BYTES` (512) bytes -- only meaningful if `commit == 1` |
 | 13–511 | — | (unused) | — |
 
@@ -136,7 +149,7 @@ boot.**
 just enough to detect a torn/partial write with overwhelming
 probability, matching `kernel/drivers/tfs.c`'s `fnv1a()`.
 
-**What the journal protects in v2, and what it doesn't**: exactly as
+**What the journal protects, and what it doesn't**: exactly as
 before, `persist_record()` protects one table-slot *record* (path,
 type, size, timestamps, and the direct/indirect block **pointers**)
 from a torn write. What changed with the block-addressed rework: a
@@ -190,7 +203,7 @@ slightly wrong risks corrupting a slot that was otherwise fine.
 
 ## Table records (LBA 3 onward)
 
-Each of the 32 slots is `FS_RECORD_SECTORS` = 1 sector = 512 bytes
+Each of the 256 slots is `FS_RECORD_SECTORS` = 1 sector = 512 bytes
 (only 148 bytes are meaningful; the rest is padding). This is much
 smaller than v1's 2560-byte record, because file data is no longer
 stored inline -- a record now holds metadata plus block **pointers**,
@@ -318,7 +331,7 @@ it's implicit and always "exists."
 
 ```python
 #!/usr/bin/env python3
-"""Read-only TFS2 v2 (block-addressed) disk image reader -- reference
+"""Read-only TFS2 v3 (block-addressed) disk image reader -- reference
 implementation for docs/tfs2-spec.md. Prints every used entry as a
 path + metadata line, and can dump a file's content by walking its
 direct/indirect block pointers.
@@ -335,13 +348,13 @@ BLOCK_SECTORS = BLOCK // SECTOR          # 8
 PTRS_PER_BLOCK = BLOCK // 4              # 1024 uint32 block numbers per indirect block
 
 FS_PATH_MAX = 64
-FS_MAX_FILES = 32
+FS_MAX_FILES = 256
 FS_N_DIRECT = 12
 
 RECORD_SECTORS = 1
 RECORD_BYTES = RECORD_SECTORS * SECTOR
 TABLE_START_LBA = 3                       # superblock(1) + journal header(1) + journal data(1)
-BITMAP_START_LBA = TABLE_START_LBA + FS_MAX_FILES * RECORD_SECTORS  # 35
+BITMAP_START_LBA = TABLE_START_LBA + FS_MAX_FILES * RECORD_SECTORS  # 259
 
 REC_OFF_TYPE = FS_PATH_MAX                       # 64
 REC_OFF_USED = FS_PATH_MAX + 1                   # 65
@@ -369,9 +382,9 @@ def read_block(f, block):
 
 def check_superblock(f):
     sb = read_sector(f, 0)
-    if sb[0:4] != b"TFS2" or sb[4] != 0x02:
-        raise ValueError("not a TFS2 v2 image (bad magic/version) -- "
-                          "a v1 image will fail this check too, on purpose")
+    if sb[0:4] != b"TFS2" or sb[4] != 0x03:
+        raise ValueError("not a TFS2 v3 image (bad magic/version) -- "
+                          "a v1 or v2 image fails this check too, on purpose")
 
 
 def check_journal(f):

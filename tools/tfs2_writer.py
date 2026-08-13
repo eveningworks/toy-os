@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Host-side read/write tool for TFS2 v2 (block-addressed) disk images
+"""Host-side read/write tool for TFS2 v3 (block-addressed) disk images
 -- lets you get files onto disk.img without booting toy-os at all, and
 inspect what's already there. Byte-exact against docs/tfs2-spec.md; the
 `read`/`ls` code paths started as that doc's own reference reader.
 
 Subcommands:
-  format <disk.img> [--force]                 initialize a blank/foreign image as an empty TFS2 v2 image
+  format <disk.img> [--force]                 initialize a blank/foreign image as an empty TFS2 v3 image
   write  <disk.img> <tfs-path> <local-file>   write one local file in
   read   <disk.img> <tfs-path> [-o out]       read one file out (stdout by default)
   ls     <disk.img> <tfs-path>                list a directory's direct children
@@ -50,8 +50,10 @@ BLOCK = 4096
 BLOCK_SECTORS = BLOCK // SECTOR  # 8
 PTRS_PER_BLOCK = BLOCK // 4  # 1024 uint32 block numbers per indirect block
 
+FS_DISK_VERSION = 3  # tfs.c's FS_DISK_VERSION -- v3 = FS_MAX_FILES 256 (was 32 in v2)
+
 FS_PATH_MAX = 64
-FS_MAX_FILES = 32
+FS_MAX_FILES = 256  # tfs.c/fs.h -- raised from 32 in the v3 layout
 FS_N_DIRECT = 12
 
 FS_DISK_TOTAL_BYTES = 9 * 1024 * 1024 * 1024  # 9 GiB, tfs.c's FS_DISK_TOTAL_BYTES
@@ -168,9 +170,11 @@ class Image:
     def check_superblock(self):
         self.f.seek(SUPERBLOCK_LBA * SECTOR)
         sb = self.f.read(SECTOR)
-        if sb[0:4] != b"TFS2" or sb[4] != 0x02:
+        if sb[0:4] != b"TFS2" or sb[4] != FS_DISK_VERSION:
             raise ValueError(
-                f"{self.path} is not a TFS2 v2 image (bad magic/version) -- "
+                f"{self.path} is not a TFS2 v{FS_DISK_VERSION} image "
+                f"(bad magic/version; a v2 image from before the FS_MAX_FILES "
+                f"bump reads as foreign here, same as the kernel treats it) -- "
                 "refusing to touch it"
             )
 
@@ -527,7 +531,7 @@ class Image:
         return out
 
 
-# ---- format (initialize a blank/foreign image as an empty TFS2 v2 image) ----
+# ---- format (initialize a blank/foreign image as an empty TFS2 v3 image) ----
 
 def format_image(path, dry_run=False, force=False, log=None):
     """Mirrors tfs.c's tfs_init() format-fresh path exactly: superblock,
@@ -538,7 +542,7 @@ def format_image(path, dry_run=False, force=False, log=None):
     if it's smaller (mirrors the Makefile's own $(DISK_IMG) -- a sparse
     file only costs real disk space for the parts actually written).
 
-    Refuses to touch an image that already has a valid TFS2 v2
+    Refuses to touch an image that already has a valid TFS2 v3
     superblock unless `force` is set -- this is the one operation in
     this tool capable of discarding a whole filesystem's worth of data
     at once, so it gets its own explicit guard on top of the general
@@ -553,13 +557,22 @@ def format_image(path, dry_run=False, force=False, log=None):
 
         f.seek(SUPERBLOCK_LBA * SECTOR)
         sb = f.read(SECTOR)
-        already_valid = len(sb) >= 5 and sb[0:4] == b"TFS2" and sb[4] == 0x02
+        already_valid = len(sb) >= 5 and sb[0:4] == b"TFS2" and sb[4] == FS_DISK_VERSION
         if already_valid and not force:
             if log:
-                log(f"{path} is already a valid TFS2 v2 image -- leaving it alone (pass --force to wipe it)")
+                log(f"{path} is already a valid TFS2 v3 image -- leaving it alone (pass --force to wipe it)")
             return False
         if already_valid and force and log:
             log(f"WARNING: {path} already has a valid TFS2 filesystem -- --force passed, wiping it")
+        # An image carrying an OLDER TFS2 version is "foreign" by the
+        # same rule the kernel applies, so it gets reformatted here
+        # without --force -- but say so plainly rather than silently
+        # discarding someone's files. This is the expected path exactly
+        # once per format change (v2 -> v3 moved the record table).
+        if not already_valid and len(sb) >= 5 and sb[0:4] == b"TFS2" and sb[4] != FS_DISK_VERSION and log:
+            log(f"WARNING: {path} is a TFS2 v{sb[4]} image and this tool writes "
+                f"v{FS_DISK_VERSION} -- reformatting it (its files are lost; the kernel "
+                f"would do the same on next boot)")
 
         def write_sector(lba, data):
             assert len(data) == SECTOR
@@ -570,7 +583,7 @@ def format_image(path, dry_run=False, force=False, log=None):
 
         sb_buf = bytearray(SECTOR)
         sb_buf[0:4] = b"TFS2"
-        sb_buf[4] = 0x02
+        sb_buf[4] = FS_DISK_VERSION
         write_sector(SUPERBLOCK_LBA, bytes(sb_buf))
         write_sector(JOURNAL_HEADER_LBA, build_journal_header(0, 0, 0))
 
@@ -590,7 +603,7 @@ def format_image(path, dry_run=False, force=False, log=None):
             write_sector(JOURNAL_HEADER_LBA, build_journal_header(0, 0, 0))
 
     if log:
-        log(f"formatted {path} as an empty TFS2 v2 image ({FS_MAX_FILES} free slots)" + (" (dry run)" if dry_run else ""))
+        log(f"formatted {path} as an empty TFS2 v3 image ({FS_MAX_FILES} free slots)" + (" (dry run)" if dry_run else ""))
     return True
 
 
@@ -673,7 +686,7 @@ def cmd_sync(args):
     --dest joined with its path relative to once/ or sync/ -- e.g.
     <seed-dir>/sync/bin/lspci -> <dest>/bin/lspci (dest defaults to "/").
 
-    Auto-formats `disk.img` first if it isn't already a valid TFS2 v2
+    Auto-formats `disk.img` first if it isn't already a valid TFS2 v3
     image (a no-op if it already is) -- this is what lets a completely
     blank, freshly-truncated disk.img be seeded in one call, e.g. from
     the Makefile, without a separate `format` step or a toy-os boot in
@@ -731,10 +744,10 @@ def cmd_sync(args):
 
 
 def main():
-    p = argparse.ArgumentParser(description="Host-side TFS2 v2 read/write tool for toy-os disk images")
+    p = argparse.ArgumentParser(description="Host-side TFS2 v3 read/write tool for toy-os disk images")
     sub = p.add_subparsers(dest="command", required=True)
 
-    p_format = sub.add_parser("format", help="initialize a blank/foreign image as an empty TFS2 v2 image")
+    p_format = sub.add_parser("format", help="initialize a blank/foreign image as an empty TFS2 v3 image")
     p_format.add_argument("disk")
     p_format.add_argument("--force", action="store_true", help="wipe an already-valid TFS2 image too")
     p_format.add_argument("--dry-run", action="store_true", help="preview without writing")

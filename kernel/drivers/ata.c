@@ -51,6 +51,16 @@
 
 static int g_present = 0;
 
+// Total addressable sectors, from IDENTIFY words 60-61 (the 28-bit LBA
+// capacity field) -- 0 if unknown, which is what every caller treats as
+// "no bound available, don't range-check". Every one of IDENTIFY's 256
+// words has always been read and discarded here; keeping two of them
+// costs nothing and gives the filesystem a real answer to "how big is
+// this disk" instead of tfs.c's hardcoded FS_DISK_TOTAL_BYTES guess
+// (which silently allocates past the end of a smaller image -- see
+// tfs.c's own clamp).
+static uint32_t g_sector_count = 0;
+
 static int wait_not_busy(void) {
     for (int i = 0; i < ATA_POLL_LIMIT; i++) {
         if (!(inb(REG_STATUS) & STATUS_BSY)) return 1;
@@ -71,8 +81,9 @@ static int wait_drq(void) {
 
 // `count` sectors, not just 1 -- see ata.h's ATA_MAX_SECTORS_PER_XFER.
 // REG_SECCOUNT is genuinely 8 bits wide (0 there means "256" per the
-// ATA spec), but this driver never asks for more than 8 -- see this
-// file's multi-sector functions for why.
+// ATA spec); this driver never asks for more than 128 (one PRD's worth,
+// see ata_max_sectors_per_xfer()), so the 0-means-256 encoding never
+// comes up.
 static void select_lba(uint32_t lba, uint8_t count) {
     outb(REG_DRIVE_HEAD, 0xE0 | ((lba >> 24) & 0x0F)); // 0xE0: LBA mode, master
     outb(REG_SECCOUNT, count);
@@ -163,19 +174,36 @@ void ata_flush_end(void) {
     maybe_flush();
 }
 
-// One pmm_alloc_contiguous(2) call at init provides both of these --
+// One pmm_alloc_contiguous() call at init provides both of these --
 // this driver's (and this allocator's) first real caller, see build
 // 410. g_prd/g_prd_phys is the first frame (only 8 bytes of it used,
-// for exactly one struct prd); g_dma_buf/g_dma_buf_phys is the second,
-// used as a bounce buffer for the actual sector data rather than
-// DMA'ing directly to/from a caller-supplied pointer -- guarantees the
-// DMA target never crosses a 64KB boundary (a PRD requirement) or
+// for exactly one struct prd); g_dma_buf/g_dma_buf_phys is the frames
+// after it, used as a bounce buffer for the actual sector data rather
+// than DMA'ing directly to/from a caller-supplied pointer -- guarantees
+// the DMA target never crosses a 64KB boundary (a PRD requirement) or
 // turns out to be some address this driver hasn't verified is safe to
-// hand a device, at the cost of one extra 512-byte copy per transfer.
+// hand a device, at the cost of one extra copy per transfer.
+//
+// The bounce buffer is DMA_BUF_FRAMES frames, not one: its size is
+// what caps ATA_MAX_SECTORS_PER_XFER, and that cap used to be the
+// filesystem's real throughput ceiling -- 4KB per buffer meant one ATA
+// command + one completion IRQ per 4KB of file data, no matter how
+// sequential the write was. 64KB is the most a single PRD entry can
+// describe (its byte count is 16-bit, with 0 meaning 64KB), so it's
+// the natural stopping point without adding scatter-gather.
+//
+// g_dma_buf_frames records what was ACTUALLY allocated: if the
+// contiguous allocation for the big buffer fails (a fragmented pool),
+// ata_init_dma() retries for the original 2 frames and the driver runs
+// exactly as it did before this existed, just at the smaller limit --
+// see ata_max_sectors_per_xfer().
+#define DMA_BUF_FRAMES 16 // 16 * 4096 = 65536 bytes = 128 sectors, one full PRD entry's worth
+
 static volatile struct prd *g_prd = NULL;
 static uint64_t g_prd_phys = 0;
 static uint8_t *g_dma_buf = NULL;
 static uint64_t g_dma_buf_phys = 0;
+static uint32_t g_dma_buf_frames = 0; // 0 until ata_init_dma() succeeds
 
 static volatile int g_dma_irq_fired = 0;
 
@@ -269,10 +297,20 @@ static void ata_init_dma(void) {
         return;
     }
 
-    uint64_t frames = pmm_alloc_contiguous(2);
+    // One frame for the PRD table plus the bounce buffer's frames. Try
+    // for the full 64KB buffer first; fall back to the original 4KB one
+    // if the pool can't produce that many contiguous frames, since a
+    // smaller DMA window is still far better than dropping to PIO.
+    uint32_t buf_frames = DMA_BUF_FRAMES;
+    uint64_t frames = pmm_alloc_contiguous(1 + buf_frames);
     if (!frames) {
-        klog_write("ata: out of contiguous memory for the PRDT/DMA buffer -- staying on PIO\n");
-        return;
+        buf_frames = 1;
+        frames = pmm_alloc_contiguous(1 + buf_frames);
+        if (!frames) {
+            klog_write("ata: out of contiguous memory for the PRDT/DMA buffer -- staying on PIO\n");
+            return;
+        }
+        klog_write("ata: only got a 4KB DMA bounce buffer (contiguous pool too fragmented for 64KB)\n");
     }
 
     // Without this, the controller's BM_CMD/BM_STATUS/BM_PRDT registers
@@ -285,12 +323,14 @@ static void ata_init_dma(void) {
     g_prd = (volatile struct prd *)(uintptr_t)frames; // identity-mapped low 4GB, see vmm.c
     g_dma_buf_phys = frames + 4096;
     g_dma_buf = (uint8_t *)(uintptr_t)g_dma_buf_phys;
+    g_dma_buf_frames = buf_frames;
 
     irq_register_handler(ATA_PRIMARY_IRQ, ata_irq_handler);
     pic_clear_mask(ATA_PRIMARY_IRQ);
 
     g_dma_available = 1;
-    klog_write("ata: Bus-Master DMA available, IRQ14-driven\n");
+    klog_write("ata: Bus-Master DMA available, IRQ14-driven, ");
+    klog_write_dec(ata_max_sectors_per_xfer()); klog_write(" sectors/transfer\n");
 }
 
 // dma_issue()/dma_finish() are dma_transfer()'s old body split at the
@@ -318,6 +358,13 @@ static void ata_init_dma(void) {
 static int dma_issue(uint32_t lba, int count, void *buf, int is_write) {
     uint32_t bytes = (uint32_t)count * ATA_SECTOR_SIZE;
     g_prd->base = (uint32_t)g_dma_buf_phys;
+    // A PRD's byte count is 16-bit, and the truncation at the maximum
+    // is deliberate rather than a bug: a full 64KB transfer (128
+    // sectors, ATA_MAX_SECTORS_PER_XFER) gives bytes == 65536, which
+    // narrows to 0 here -- and 0 is exactly how the Bus Master IDE spec
+    // encodes "64KB" in this field. Any smaller count stores its real
+    // value. This is why 128 sectors is the hard ceiling: 129 would
+    // truncate to a genuinely wrong small number instead.
     g_prd->count = (uint16_t)bytes;
     g_prd->flags = PRD_EOT;
 
@@ -569,6 +616,7 @@ static int pio_write_sectors(uint32_t lba, int count, const void *buf) {
 void ata_init(void) {
     g_present = 0;
     g_dma_available = 0;
+    g_sector_count = 0;
 
     // Select primary master (0xA0; slave would be 0xB0 -- this driver
     // never touches the slave, only ever the one drive most setups
@@ -597,11 +645,13 @@ void ata_init(void) {
 
     if (!wait_drq()) return;
 
-    // Must still read all 256 words even though nothing here is
-    // inspected yet (no capacity/feature checks -- see the header) --
-    // leaving them unread would desync the controller for the next
-    // command.
-    for (int i = 0; i < 256; i++) (void)inw(REG_DATA);
+    // Every one of the 256 words must be read regardless of how many
+    // are actually inspected -- leaving any unread would desync the
+    // controller for the next command. Words 60-61 are the 28-bit LBA
+    // sector count (low word first); everything else is still discarded.
+    uint16_t identify[256];
+    for (int i = 0; i < 256; i++) identify[i] = inw(REG_DATA);
+    g_sector_count = (uint32_t)identify[60] | ((uint32_t)identify[61] << 16);
 
     g_present = 1;
 
@@ -614,8 +664,44 @@ int ata_present(void) {
     return g_present;
 }
 
+uint32_t ata_sector_count(void) {
+    return g_present ? g_sector_count : 0;
+}
+
+// Shared by ata_read_sectors()/ata_write_sectors(). A transfer that
+// runs past the end of the drive is a caller bug (or a filesystem
+// configured for a bigger disk than it actually has), and catching it
+// here turns "the drive quietly errors, or worse, wraps" into a clean
+// failure with a log line naming the LBA. Skipped entirely when the
+// capacity is unknown (g_sector_count == 0), so a drive whose IDENTIFY
+// didn't report one behaves exactly as it did before this existed.
+static int lba_range_ok(uint32_t lba, int count) {
+    if (g_sector_count == 0) return 1;
+    if (lba > g_sector_count || (uint32_t)count > g_sector_count - lba) {
+        klog_write("ata: refusing transfer past end of drive (lba ");
+        klog_write_dec(lba); klog_write(", count "); klog_write_dec((uint32_t)count);
+        klog_write(", drive has "); klog_write_dec(g_sector_count);
+        klog_write(" sectors)\n");
+        return 0;
+    }
+    return 1;
+}
+
 int ata_dma_active(void) {
     return g_dma_available;
+}
+
+// The real per-transfer sector cap for THIS boot. ATA_MAX_SECTORS_PER_
+// XFER (ata.h) is the compile-time maximum callers size their buffers
+// against; this is what the DMA bounce buffer actually turned out to
+// be, which is smaller if the big contiguous allocation failed, and is
+// the PIO path's own limit when DMA never came up at all. Callers that
+// batch work into transfers (tfs.c's block coalescing) ask this rather
+// than assuming the maximum.
+int ata_max_sectors_per_xfer(void) {
+    if (!g_dma_available) return ATA_PIO_MAX_SECTORS_PER_XFER;
+    uint32_t sectors = g_dma_buf_frames * (4096 / ATA_SECTOR_SIZE);
+    return sectors > ATA_MAX_SECTORS_PER_XFER ? ATA_MAX_SECTORS_PER_XFER : (int)sectors;
 }
 
 int ata_read_sector(uint32_t lba, void *buf) {
@@ -628,14 +714,16 @@ int ata_write_sector(uint32_t lba, const void *buf) {
 
 int ata_read_sectors(uint32_t lba, int count, void *buf) {
     if (!g_present) return 0;
-    if (count < 1 || count > ATA_MAX_SECTORS_PER_XFER) return 0;
+    if (count < 1 || count > ata_max_sectors_per_xfer()) return 0;
+    if (!lba_range_ok(lba, count)) return 0;
     if (g_dma_available) return dma_transfer_with_retry(lba, count, buf, 0);
     return pio_read_sectors(lba, count, buf);
 }
 
 int ata_write_sectors(uint32_t lba, int count, const void *buf) {
     if (!g_present) return 0;
-    if (count < 1 || count > ATA_MAX_SECTORS_PER_XFER) return 0;
+    if (count < 1 || count > ata_max_sectors_per_xfer()) return 0;
+    if (!lba_range_ok(lba, count)) return 0;
     if (g_dma_available) return dma_transfer_with_retry(lba, count, (void *)(uintptr_t)buf, 1);
     return pio_write_sectors(lba, count, buf);
 }

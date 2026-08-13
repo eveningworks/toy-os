@@ -127,6 +127,7 @@ No third-party dependencies beyond Pillow (only needed for
 """
 
 import json
+import os
 import socket
 import time
 
@@ -348,6 +349,15 @@ class QMPSession:
         so the result can go straight to SendUserFile / an image viewer.
         """
         ppm_path = ppm_path or (png_path.rsplit(".", 1)[0] + ".ppm")
+        # QEMU resolves `filename` relative to ITS OWN working directory,
+        # and launch_qemu_cmd() passes -daemonize, which leaves the
+        # daemonized process with a cwd that is NOT this script's. A
+        # relative path therefore succeeds at the QMP level ({"return":
+        # {}}) while writing the .ppm somewhere else entirely, and the
+        # only symptom is Pillow raising FileNotFoundError on a path
+        # that looks obviously correct. Always hand QEMU an absolute
+        # path; the .png is still written wherever the caller asked.
+        ppm_path = os.path.abspath(ppm_path)
         self._cmd({"execute": "screendump", "arguments": {"filename": ppm_path}})
         time.sleep(settle)
         try:

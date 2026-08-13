@@ -487,7 +487,12 @@ The gotchas it already gets right, for when you need to know why:
   reliable) between each one.
 - **Screenshots:** `screendump` writes a `.ppm`; `QMPSession.screenshot()`
   converts to `.png` via Pillow in one call so it's ready for the Read
-  tool / `SendUserFile`.
+  tool / `SendUserFile`. It hands QEMU an ABSOLUTE path on purpose --
+  QEMU resolves `screendump`'s filename against its own working
+  directory, and `-daemonize` leaves that somewhere other than the repo,
+  so a relative path reports `{"return": {}}` (success) and writes the
+  file somewhere else; the only symptom is Pillow raising
+  `FileNotFoundError` on a path that looks obviously correct.
 
 The project's standing instruction is to include screenshots as proof
 whenever testing happens this way -- send them with `SendUserFile`,
@@ -552,9 +557,9 @@ repeated manual steps to be worth automating:
   screenshots with a pass/fail `--threshold` (default 0.2%) and an
   optional `--out` diff-highlight image, for catching a rendering
   regression manual eyeballing might miss.
-- **`tfs2_writer.py`** -- host-side TFS2 v2 read/write tool: get files
+- **`tfs2_writer.py`** -- host-side TFS2 v3 read/write tool: get files
   onto (or off of) `disk.img` without booting toy-os. `format`
-  initializes a blank/foreign image as an empty TFS2 v2 filesystem
+  initializes a blank/foreign image as an empty TFS2 v3 filesystem
   (mirrors `tfs_init()`'s format path byte-for-byte); `write`/`read`
   for a single file; `ls` for a directory listing; `sync <seed-dir>` to
   mirror a whole seed tree in (`once/` = copy-once, `sync/` =

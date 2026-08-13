@@ -11,16 +11,20 @@
 // directly -- go through fs.h's fs_* API instead, same as before this
 // split.
 //
-// *** IMPORTANT: this format is NOT compatible with the previous TFS2
-// *** layout (inline 2048-byte-per-file data, no block allocator).
-// *** The on-disk version byte was bumped specifically so an old disk
-// *** is detected as foreign and reformatted from scratch, same "no
-// *** migration, just reformat" policy this project has always used
-// *** for format changes (see the superblock comment below) --
-// *** existing files WILL be lost the first time this boots against
-// *** an old disk.img. This also needs a much bigger disk.img than
-// *** before (the old 1MB image can't hold the new bitmap region) --
-// *** see the Makefile and docs/decisions.md.
+// *** IMPORTANT: each TFS2 version byte is incompatible with the ones
+// *** before it, and an old disk is detected as foreign and reformatted
+// *** from scratch -- the standing "no migration, just reformat" policy
+// *** for format changes here (see the superblock comment below).
+// *** Existing files WILL be lost the first time a newer kernel boots
+// *** against an older disk.img.
+// ***   v1 -> v2: inline 2048-byte-per-file data replaced by the block
+// ***             allocator + indirect pointers below. Also needed a
+// ***             much bigger disk.img (the old 1MB image can't hold
+// ***             the bitmap region) -- see the Makefile.
+// ***   v2 -> v3: FS_MAX_FILES 32 -> 256 (fs.h), which moves
+// ***             FS_BITMAP_START_LBA and every LBA after it.
+// *** tools/tfs2_writer.py mirrors this layout host-side and must be
+// *** updated in lockstep with any of these constants.
 //
 // In-memory file table (`files[]`) still holds every file/directory's
 // METADATA (path, type, size, timestamps) for every existing caller
@@ -161,6 +165,46 @@ static int g_disk_backed = 0;
 #define FS_DISK_TOTAL_SECTORS (FS_DISK_TOTAL_BYTES / ATA_SECTOR_SIZE)
 #define FS_DISK_TOTAL_BLOCKS ((uint32_t)(FS_DISK_TOTAL_SECTORS / FS_BLOCK_SECTORS))
 
+// FS_DISK_TOTAL_BLOCKS above is the compile-time MAXIMUM (it sizes
+// g_bitmap, which has to be a fixed array). This is the number actually
+// in play, clamped at mount to what the drive really reports via
+// ata_sector_count() -- so a disk.img smaller than 9 GiB (someone
+// running from a release download, a hand-made image, a real machine's
+// small disk) is used correctly instead of the allocator cheerfully
+// handing out blocks past the end of it. Only ever <= the compile-time
+// value: a BIGGER disk still uses 9 GiB, because the bitmap can't
+// address more without a rebuild.
+static uint32_t g_total_blocks = FS_DISK_TOTAL_BLOCKS;
+
+// Sets g_total_blocks from the drive's real capacity. Called once, from
+// tfs_init(), after ata_init() has run. A drive that doesn't report a
+// capacity (ata_sector_count() == 0) leaves the compile-time value
+// alone -- same "no bound available" convention ata.c's own range check
+// uses.
+static void clamp_total_blocks_to_disk(void) {
+    uint32_t sectors = ata_sector_count();
+    if (sectors == 0) {
+        // Ambiguous on purpose: a drive that genuinely doesn't report
+        // an LBA28 capacity is indistinguishable here from one with no
+        // capacity, so this keeps the compile-time maximum rather than
+        // refusing to mount something that might be fine. The one case
+        // that slips through is a 0-length disk image (QEMU answers
+        // reads with zeros instead of erroring, so it looks like a
+        // blank disk and gets formatted -- writes then go nowhere, and
+        // the boot selftest is what catches it, loudly). Say why the
+        // clamp didn't happen so `dmesg` explains the difference.
+        klog_write("fs: drive reports no LBA28 capacity -- using the built-in maximum unclamped\n");
+        return;
+    }
+    uint32_t blocks = sectors / FS_BLOCK_SECTORS;
+    if (blocks < g_total_blocks) {
+        klog_write("fs: disk is smaller than the built-in maximum -- using ");
+        klog_write_dec(blocks); klog_write(" of "); klog_write_dec(FS_DISK_TOTAL_BLOCKS);
+        klog_write(" blocks\n");
+        g_total_blocks = blocks;
+    }
+}
+
 // ---- RAM-only fallback geometry (see tfs_init()'s "no disk" path) ----
 #define RAM_ONLY_MAX_BLOCKS 4096 // 16MB total -- degrade mode only, see top comment
 
@@ -175,7 +219,12 @@ static uint32_t g_ram_scan_hint = 1; // block 0 reserved as the null sentinel, s
 #define FS_DISK_MAGIC1 'F'
 #define FS_DISK_MAGIC2 'S'
 #define FS_DISK_MAGIC3 '2'
-#define FS_DISK_VERSION 2
+// Version 3: FS_MAX_FILES went 32 -> 256 (see fs.h), which moves
+// FS_BITMAP_START_LBA and every LBA after it. A version-2 disk is
+// therefore detected as foreign and reformatted, same "no migration,
+// just reformat" policy every previous format change used -- see this
+// file's top-of-file warning.
+#define FS_DISK_VERSION 3
 #define FS_SUPERBLOCK_LBA 0
 
 #define FS_RTC_BYTES 7 // hour, minute, second, day, month (1 byte each) + year (uint16 LE)
@@ -193,6 +242,12 @@ static uint32_t g_ram_scan_hint = 1; // block 0 reserved as the null sentinel, s
 #define REC_OFF_SINGLE    (REC_OFF_DIRECT + FS_N_DIRECT * 4)
 #define REC_OFF_DOUBLE    (REC_OFF_SINGLE + 4)
 #define REC_OFF_TRIPLE    (REC_OFF_DOUBLE + 4)
+
+// How many times tfs_init() re-attempts the superblock read before
+// concluding the disk is genuinely unreadable -- on top of
+// ata_read_sector()'s own ATA_DMA_MAX_RETRIES. See tfs_init() for why
+// "couldn't read it" must never be treated as "it isn't ours".
+#define FS_SUPERBLOCK_READ_MAX_RETRIES 3
 
 #define FS_JOURNAL_HEADER_LBA (FS_SUPERBLOCK_LBA + 1)
 #define FS_JOURNAL_DATA_LBA   (FS_JOURNAL_HEADER_LBA + 1)
@@ -347,7 +402,7 @@ static uint32_t alloc_block(void) {
     if (g_disk_backed) {
         for (uint32_t pass = 0; pass < 2; pass++) {
             uint32_t start = pass == 0 ? g_bitmap_scan_hint : FS_DATA_START_BLOCK;
-            uint32_t end = pass == 0 ? FS_DISK_TOTAL_BLOCKS : g_bitmap_scan_hint;
+            uint32_t end = pass == 0 ? g_total_blocks : g_bitmap_scan_hint;
             for (uint32_t b = start; b < end; b++) {
                 if (!bit_test(g_bitmap, b)) {
                     bit_set(g_bitmap, b, 1);
@@ -415,9 +470,15 @@ static int write_block(uint32_t block, const void *buf) {
     return 1;
 }
 
-static void zero_block(uint32_t block) {
+// Returns 1 if the block is genuinely zeroed on disk. Checking this
+// matters more than it looks: a freshly allocated INDIRECT block that
+// silently failed to zero keeps whatever a previously deleted file left
+// there, and walk_indirect() would then read those stale bytes as real
+// block pointers -- handing a file blocks that belong to something else.
+// Every caller treats a failure here as "the allocation failed".
+static int zero_block(uint32_t block) {
     static uint8_t zero[FS_BLOCK_SIZE]; // .bss, already zero -- never written to, just a source buffer
-    write_block(block, zero);
+    return write_block(block, zero);
 }
 
 // ---- indirect-pointer walk ----
@@ -432,14 +493,39 @@ static void zero_block(uint32_t block) {
 // read-modify-write in write_range_impl() always safe (no stale disk
 // content from a previously deleted file can leak into a new one) and
 // gives "write past the old end of the file" free zero-fill of the gap.
-static uint32_t g_walk_scratch[FS_PTRS_PER_BLOCK]; // one block's worth of pointers -- 4KB, static (not stack) since this isn't reentrant, see heap.c's own precedent
+static uint32_t g_walk_scratch[FS_PTRS_PER_BLOCK];
+
+// block_for_index()/walk_indirect()'s `allocate` argument. It used to
+// be a plain 0/1 flag, with 1 always meaning "allocate AND zero-fill".
+// Zero-filling a freshly allocated block is what makes a partial-block
+// read-modify-write safe and gives sparse gaps free zero-fill -- but it
+// costs a full block write, and for the common case (a sequential write
+// that immediately overwrites the whole block) that write is pure
+// waste: it doubled the commands issued per block of a large file, and
+// defeated the multi-block coalescing below entirely, since the zeroing
+// happened one block at a time between the coalesced runs.
+//
+// BLK_ALLOC_NOZERO says "the caller is about to overwrite this entire
+// block right now, don't bother". Only ever valid for a LEAF data block
+// being written in full -- indirect index blocks are always zeroed
+// regardless of this flag (walk_indirect() ignores it for them), since
+// their unwritten entries are read back as block pointers and must be
+// the 0 sentinel, not whatever a deleted file left behind.
+//
+// If the caller's write then fails, the block keeps that stale content
+// -- but it's past the file's size (which only advances for bytes
+// actually written), so no read can reach it, and the next write to
+// that offset overwrites it in full anyway.
+#define BLK_NO_ALLOC     0
+#define BLK_ALLOC        1
+#define BLK_ALLOC_NOZERO 2 // one block's worth of pointers -- 4KB, static (not stack) since this isn't reentrant, see heap.c's own precedent
 
 static uint32_t walk_indirect(uint32_t *top_slot, int depth, uint32_t index, int allocate) {
     if (*top_slot == 0) {
         if (!allocate) return 0;
         uint32_t nb = alloc_block();
         if (!nb) return 0;
-        zero_block(nb);
+        if (!zero_block(nb)) { free_block(nb); return 0; }
         *top_slot = nb;
     }
     uint32_t cur_block = *top_slot;
@@ -459,9 +545,10 @@ static uint32_t walk_indirect(uint32_t *top_slot, int depth, uint32_t index, int
                 if (!allocate) return 0;
                 child = alloc_block();
                 if (!child) return 0;
-                zero_block(child);
+                // Leaf data block -- the only place BLK_ALLOC_NOZERO applies.
+                if (allocate != BLK_ALLOC_NOZERO && !zero_block(child)) { free_block(child); return 0; }
                 g_walk_scratch[slot_i] = child;
-                if (!write_block(cur_block, g_walk_scratch)) return 0;
+                if (!write_block(cur_block, g_walk_scratch)) { free_block(child); return 0; }
             }
             return child;
         }
@@ -470,9 +557,9 @@ static uint32_t walk_indirect(uint32_t *top_slot, int depth, uint32_t index, int
             if (!allocate) return 0;
             child = alloc_block();
             if (!child) return 0;
-            zero_block(child);
+            if (!zero_block(child)) { free_block(child); return 0; }
             g_walk_scratch[slot_i] = child;
-            if (!write_block(cur_block, g_walk_scratch)) return 0;
+            if (!write_block(cur_block, g_walk_scratch)) { free_block(child); return 0; }
         }
         cur_block = child;
     }
@@ -486,7 +573,7 @@ static uint32_t block_for_index(struct file *f, uint32_t index, int allocate) {
             if (!allocate) return 0;
             uint32_t nb = alloc_block();
             if (!nb) return 0;
-            zero_block(nb);
+            if (allocate != BLK_ALLOC_NOZERO && !zero_block(nb)) { free_block(nb); return 0; }
             *slot = nb;
         }
         return *slot;
@@ -529,6 +616,40 @@ static void free_tree(uint32_t block, int depth) {
     free_block(block);
 }
 
+// Moves `f`'s block pointers into `snapshot` and clears them in `f`,
+// without touching the bitmap at all. This is what lets the truncate
+// (tfs_write with append=0) and delete paths persist a record that
+// references NOTHING *before* the blocks are actually returned to the
+// free bitmap.
+//
+// Order matters here and used to be backwards: free_all_blocks() ran
+// first, so a crash (or a failed persist_record()) between the bitmap
+// update and the record write left an on-disk record still pointing at
+// blocks the bitmap had already marked free -- the next allocation
+// hands one of them to a different file, and now two files share a
+// block. Freeing last means the worst case is the opposite and
+// harmless: blocks marked allocated that nothing references, which is
+// a space leak recoverable by a future fsck-style pass, not corruption.
+static void detach_blocks(struct file *f, struct file *snapshot) {
+    for (int i = 0; i < FS_N_DIRECT; i++) {
+        snapshot->direct[i] = f->direct[i];
+        f->direct[i] = 0;
+    }
+    snapshot->single_indirect = f->single_indirect; f->single_indirect = 0;
+    snapshot->double_indirect = f->double_indirect; f->double_indirect = 0;
+    snapshot->triple_indirect = f->triple_indirect; f->triple_indirect = 0;
+}
+
+// Puts a detach_blocks() snapshot back, for the error path where the
+// record couldn't be persisted and nothing was freed after all -- so
+// the in-memory file still describes exactly what's on disk.
+static void reattach_blocks(struct file *f, const struct file *snapshot) {
+    for (int i = 0; i < FS_N_DIRECT; i++) f->direct[i] = snapshot->direct[i];
+    f->single_indirect = snapshot->single_indirect;
+    f->double_indirect = snapshot->double_indirect;
+    f->triple_indirect = snapshot->triple_indirect;
+}
+
 static void free_all_blocks(struct file *f) {
     for (int i = 0; i < FS_N_DIRECT; i++) {
         if (f->direct[i]) free_block(f->direct[i]);
@@ -541,6 +662,64 @@ static void free_all_blocks(struct file *f) {
 
 // ---- range read/write (fs_read_range/fs_write_range's backend, and
 // the shared core tfs_read()/tfs_write() build on too) ----
+
+// ---- multi-block coalescing (the fast path for a large sequential
+// range) ----
+//
+// One ATA command per FS_BLOCK_SIZE block is correct but slow: it's one
+// command dispatch and one completion IRQ per 4KB regardless of how
+// contiguous the blocks are, which was this filesystem's real
+// throughput ceiling (~18 MB/s write on the PIO/DMA ATA path). The
+// allocator hands out blocks by scanning forward from a hint, so a
+// sequential write's blocks are almost always physically contiguous --
+// which means they can go out as ONE command covering up to
+// ata_max_sectors_per_xfer() sectors (64KB, 16 blocks, when the big DMA
+// bounce buffer came up -- see ata.h).
+//
+// The run detection below is deliberately conservative: it only merges
+// blocks that are (a) already allocated or allocatable in order, (b)
+// physically consecutive, and (c) fully covered by the caller's range
+// (no partial first/last block -- those still go through the
+// read-modify-write single-block path, which is where correctness is
+// subtle). Anything that doesn't fit falls back to exactly the
+// pre-existing per-block code, so the slow path is still the one that's
+// been exercised by every `stress` run to date.
+#define FS_MAX_BLOCKS_PER_RUN (ATA_MAX_SECTORS_PER_XFER / FS_BLOCK_SECTORS) // 16
+
+// How many whole blocks starting at `first_index` are contiguous on
+// disk AND wholly inside [*total, len)? Fills `out_first_block` with
+// the run's starting block number. Returns 0 if the run isn't worth
+// coalescing (fewer than 2 blocks), in which case the caller uses the
+// single-block path unchanged. `allocate` is passed through to
+// block_for_index(), so a write can build a fresh contiguous run and a
+// read only ever reports blocks that already exist (a hole ends the
+// run, since a hole has no block number to be contiguous with).
+static uint32_t contiguous_run(struct file *f, uint32_t first_index, uint32_t max_blocks,
+                                int allocate, uint32_t *out_first_block) {
+    if (!g_disk_backed) return 0; // RAM-only blocks are separate kmalloc'd chunks, never contiguous
+    if (max_blocks < 2) return 0;
+    uint32_t limit = (uint32_t)ata_max_sectors_per_xfer() / FS_BLOCK_SECTORS;
+    if (limit < 2) return 0; // no room to merge anything this boot
+    if (max_blocks > limit) max_blocks = limit;
+    if (max_blocks > FS_MAX_BLOCKS_PER_RUN) max_blocks = FS_MAX_BLOCKS_PER_RUN;
+
+    uint32_t first = block_for_index(f, first_index, allocate);
+    if (!first) return 0;
+    *out_first_block = first;
+
+    uint32_t n = 1;
+    while (n < max_blocks) {
+        uint32_t b = block_for_index(f, first_index + n, allocate);
+        if (b != first + n) break; // a hole, an allocation failure, or a non-contiguous block
+        n++;
+    }
+    return n >= 2 ? n : 0;
+}
+
+// One block's worth of scratch per block in a run -- 64KB of .bss, the
+// same "static, not stack, this file is single-threaded" reasoning
+// g_io_scratch/g_walk_scratch already use (and see heap.c's precedent).
+static uint8_t g_run_scratch[FS_MAX_BLOCKS_PER_RUN * FS_BLOCK_SIZE];
 
 static uint32_t g_io_scratch[FS_BLOCK_SIZE / 4]; // one block, reused for every partial-block copy below
 
@@ -565,7 +744,7 @@ static int read_range_one_block(struct file *f, uint64_t offset, uint8_t *dst,
     uint32_t chunk = FS_BLOCK_SIZE - within;
     if (chunk > len - *total) chunk = len - *total;
 
-    uint32_t blk = block_for_index(f, block_index, 0);
+    uint32_t blk = block_for_index(f, block_index, BLK_NO_ALLOC);
     if (!read_block(blk, g_io_scratch)) return 0;
     k_memcpy(dst + *total, (uint8_t *)g_io_scratch + within, chunk);
     *total += chunk;
@@ -580,6 +759,26 @@ static uint32_t read_range_impl(struct file *f, uint64_t offset, void *buf, uint
     uint32_t total = 0;
     uint8_t *dst = (uint8_t *)buf;
     while (total < len) {
+        // Mirror of write_range_impl()'s coalescing, same conditions
+        // (block-aligned, >= 2 whole contiguous blocks, disk-backed) --
+        // see contiguous_run(). A hole ends a run, so a sparse file
+        // still reads correctly through the per-block path below.
+        uint64_t file_off = offset + total;
+        uint32_t within = (uint32_t)(file_off % FS_BLOCK_SIZE);
+        uint32_t whole_blocks = (len - total) / FS_BLOCK_SIZE;
+        if (within == 0 && whole_blocks >= 2) {
+            uint32_t first_block = 0;
+            uint32_t run = contiguous_run(f, (uint32_t)(file_off / FS_BLOCK_SIZE),
+                                          whole_blocks, BLK_NO_ALLOC, &first_block);
+            if (run >= 2) {
+                uint32_t bytes = run * FS_BLOCK_SIZE;
+                if (!ata_read_sectors(first_block * FS_BLOCK_SECTORS,
+                                      (int)(run * FS_BLOCK_SECTORS), g_run_scratch)) break;
+                k_memcpy(dst + total, g_run_scratch, bytes);
+                total += bytes;
+                continue;
+            }
+        }
         if (!read_range_one_block(f, offset, dst, &total, len)) break;
     }
     return total;
@@ -602,10 +801,11 @@ static int write_range_one_block(struct file *f, uint64_t offset, const uint8_t 
     uint32_t chunk = FS_BLOCK_SIZE - within;
     if (chunk > len - *total) chunk = len - *total;
 
-    uint32_t blk = block_for_index(f, block_index, 1);
+    int full_block = (within == 0 && chunk == FS_BLOCK_SIZE);
+    uint32_t blk = block_for_index(f, block_index, full_block ? BLK_ALLOC_NOZERO : BLK_ALLOC);
     if (!blk) return 0; // out of space -- whatever was written before this point stays, see fs.h
 
-    if (within == 0 && chunk == FS_BLOCK_SIZE) {
+    if (full_block) {
         k_memcpy(g_io_scratch, src + *total, FS_BLOCK_SIZE);
     } else {
         if (!read_block(blk, g_io_scratch)) return 0;
@@ -631,6 +831,27 @@ static int write_range_impl(struct file *f, uint64_t offset, const void *buf, ui
     // unflushed (see ata.h).
     write_batch_begin();
     while (total < len) {
+        // Try the coalesced path first: it applies only when the
+        // remaining range starts exactly on a block boundary and covers
+        // at least two whole contiguous blocks. Everything else (the
+        // unaligned head, the partial tail, a fragmented region) drops
+        // straight through to the original one-block-at-a-time code.
+        uint64_t file_off = offset + total;
+        uint32_t within = (uint32_t)(file_off % FS_BLOCK_SIZE);
+        uint32_t whole_blocks = (len - total) / FS_BLOCK_SIZE;
+        if (g_disk_backed && within == 0 && whole_blocks >= 2) {
+            uint32_t first_block = 0;
+            uint32_t run = contiguous_run(f, (uint32_t)(file_off / FS_BLOCK_SIZE),
+                                          whole_blocks, BLK_ALLOC_NOZERO, &first_block);
+            if (run >= 2) {
+                uint32_t bytes = run * FS_BLOCK_SIZE;
+                k_memcpy(g_run_scratch, src + total, bytes);
+                if (!ata_write_sectors(first_block * FS_BLOCK_SECTORS,
+                                       (int)(run * FS_BLOCK_SECTORS), g_run_scratch)) { ok = 0; break; }
+                total += bytes;
+                continue;
+            }
+        }
         if (!write_range_one_block(f, offset, src, &total, len)) { ok = 0; break; }
     }
     write_batch_end();
@@ -728,19 +949,42 @@ static int read_journal_header(int *out_commit, uint32_t *out_slot, uint32_t *ou
     return 1;
 }
 
+// Returns 1 if the record is genuinely on disk, 0 if any step of the
+// journal-protected write failed. That return used to be discarded at
+// every call site, which meant a failed metadata write was reported to
+// the caller as a successful touch/write/delete -- the file "existed"
+// until the next reboot and then didn't, with nothing logged. Now every
+// caller checks it (see tfs_touch()/tfs_mkdir()/tfs_write()/
+// tfs_delete()/tfs_write_range()), and the failure is always logged
+// here regardless of `debug fs`, matching persist_bitmap_sector_with_
+// retry()'s convention for the same class of problem: silently diverging
+// from what's on disk is a correctness bug, not noise.
+//
+// A failure partway through is still safe against corruption -- that's
+// what the journal is for. Either the commit header never landed (the
+// table slot keeps its old contents) or it did and replay_journal()
+// finishes the job on the next boot.
 static int persist_record(int index) {
     if (!g_disk_backed) return 1;
     uint8_t buf[FS_RECORD_BYTES];
     serialize_record(&files[index], buf);
     uint32_t checksum = fnv1a(buf, FS_RECORD_BYTES);
 
-    for (int s = 0; s < FS_RECORD_SECTORS; s++) {
-        if (!ata_write_sector(FS_JOURNAL_DATA_LBA + s, buf + (uint32_t)s * ATA_SECTOR_SIZE)) return 0;
+    int ok = 1;
+    for (int s = 0; s < FS_RECORD_SECTORS && ok; s++) {
+        ok = ata_write_sector(FS_JOURNAL_DATA_LBA + s, buf + (uint32_t)s * ATA_SECTOR_SIZE);
     }
-    if (!write_journal_header(1, (uint32_t)index, checksum)) return 0;
-    if (!write_table_slot(index, buf)) return 0;
-    write_journal_header(0, 0, 0);
-    return 1;
+    if (ok) ok = write_journal_header(1, (uint32_t)index, checksum);
+    if (ok) ok = write_table_slot(index, buf);
+    if (ok) {
+        write_journal_header(0, 0, 0);
+        return 1;
+    }
+
+    klog_write("fs: WARNING -- record slot "); klog_write_dec((uint32_t)index);
+    klog_write(" (lba "); klog_write_dec(record_lba(index));
+    klog_write(") failed to persist -- in-memory state may not match disk\n");
+    return 0;
 }
 
 static void replay_journal(void) {
@@ -756,8 +1000,15 @@ static void replay_journal(void) {
         ok = ata_read_sector(FS_JOURNAL_DATA_LBA + s, buf + (uint32_t)s * ATA_SECTOR_SIZE);
     }
     if (ok && fnv1a(buf, FS_RECORD_BYTES) == checksum) {
-        write_table_slot((int)slot, buf);
-        klog_write("fs: replayed a pending journal entry from an unclean shutdown\n");
+        if (write_table_slot((int)slot, buf)) {
+            klog_write("fs: replayed a pending journal entry from an unclean shutdown\n");
+        } else {
+            // Leave the journal header COMMITTED so the next boot tries
+            // again -- clearing it here would drop the entry for good.
+            klog_write("fs: WARNING -- couldn't write the replayed journal entry to its table slot;\n");
+            klog_write("fs: leaving it pending for the next boot\n");
+            return;
+        }
     } else {
         klog_write("fs: discarded a torn journal entry from an unclean shutdown\n");
     }
@@ -816,9 +1067,54 @@ static int tfs_init(void) {
         return 0;
     }
 
+    // Reading the superblock and JUDGING the superblock are two
+    // different questions, and conflating them used to be a data-loss
+    // bug: this was one `if (ata_read_sector(...) && magic ok) {load}
+    // else {format}`, so a *failed read* took the same branch as a
+    // genuinely foreign disk and reformatted a perfectly good
+    // filesystem. Not hypothetical -- ata_read_sector() gives up after
+    // ATA_DMA_MAX_RETRIES (3) exhausted attempts, and transient
+    // 3-in-a-row DMA misses are exactly what this project has already
+    // seen on real hardware (see ata.c's dma_transfer_with_retry()
+    // comment and the bitmap-persist retry above). So: retry the read
+    // itself a few more times, and if it STILL can't be read, refuse to
+    // touch the disk at all -- degrade to RAM-only for this boot rather
+    // than destroying what might be a fine filesystem. A blank/foreign
+    // disk still formats normally, because that path is only reached
+    // when the read genuinely SUCCEEDED and the bytes just aren't ours.
+    g_total_blocks = FS_DISK_TOTAL_BLOCKS;
+    clamp_total_blocks_to_disk();
+
+    // A drive that can't even hold the reserved metadata region (
+    // superblock + journal + record table + bitmap) can't host this
+    // filesystem at all. Formatting it would "succeed" -- every write
+    // lands somewhere the drive silently discards -- and the first real
+    // symptom would be data that reads back as zeros, which is exactly
+    // what a 0-length disk image produced before this check existed.
+    // Degrade to RAM-only instead, same as an unreadable superblock.
+    if (g_total_blocks <= FS_DATA_START_BLOCK) {
+        klog_write("fs: disk is too small to hold the filesystem metadata region (");
+        klog_write_dec(g_total_blocks); klog_write(" blocks, need more than ");
+        klog_write_dec(FS_DATA_START_BLOCK);
+        klog_write(") -- running RAM-only this boot\n");
+        return 0;
+    }
+
     uint8_t sb[ATA_SECTOR_SIZE];
-    if (ata_read_sector(FS_SUPERBLOCK_LBA, sb) &&
-        sb[0] == FS_DISK_MAGIC0 && sb[1] == FS_DISK_MAGIC1 &&
+    int sb_read = 0;
+    for (int attempt = 1; attempt <= FS_SUPERBLOCK_READ_MAX_RETRIES; attempt++) {
+        if (ata_read_sector(FS_SUPERBLOCK_LBA, sb)) { sb_read = 1; break; }
+    }
+    if (!sb_read) {
+        klog_write("fs: disk present but the superblock could not be read after ");
+        klog_write_dec((uint32_t)FS_SUPERBLOCK_READ_MAX_RETRIES);
+        klog_write(" attempts\n");
+        klog_write("fs: NOT formatting -- refusing to destroy a possibly-good disk\n");
+        klog_write("fs: running RAM-only this boot; files will not persist\n");
+        return 0; // g_disk_backed stays 0 -- same degrade path as "no disk found"
+    }
+
+    if (sb[0] == FS_DISK_MAGIC0 && sb[1] == FS_DISK_MAGIC1 &&
         sb[2] == FS_DISK_MAGIC2 && sb[3] == FS_DISK_MAGIC3 &&
         sb[4] == FS_DISK_VERSION) {
         g_disk_backed = 1;
@@ -847,7 +1143,21 @@ static int tfs_init(void) {
         for (uint32_t b = 0; b < FS_DATA_START_BLOCK; b++) bit_set(g_bitmap, b, 1);
         write_full_bitmap();
         g_bitmap_scan_hint = FS_DATA_START_BLOCK;
-        for (int i = 0; i < FS_MAX_FILES; i++) persist_record(i);
+        int slots_failed = 0;
+        for (int i = 0; i < FS_MAX_FILES; i++) {
+            if (!persist_record(i)) slots_failed++;
+        }
+        if (slots_failed) {
+            // Each failure already logged its own slot/LBA in
+            // persist_record(). A blank record that didn't land isn't
+            // corruption (the slot's `used` byte is whatever was there
+            // before, and tfs_init() will read it back as-is next boot),
+            // but it does mean this format didn't fully take -- say so
+            // rather than claiming a clean format.
+            klog_write("fs: WARNING -- format left "); klog_write_dec((uint32_t)slots_failed);
+            klog_write(" of "); klog_write_dec((uint32_t)FS_MAX_FILES);
+            klog_write(" record slots unwritten\n");
+        }
         klog_write("fs: formatted a fresh persistent filesystem on disk\n");
     }
     if (g_disk_backed) tfs_selftest();
@@ -959,7 +1269,11 @@ static int tfs_touch(const char *path) {
     f->used = 1;
     rtc_read_local(&f->created);
     f->modified = f->created;
-    persist_record(idx);
+    // Roll the slot back on a failed persist rather than reporting a
+    // success the disk doesn't agree with -- an in-memory-only file
+    // that vanishes at reboot is worse than a clean "couldn't create
+    // it", and the caller (fs_touch()) already has a 0 return for it.
+    if (!persist_record(idx)) { k_memset(f, 0, sizeof(*f)); return 0; }
     return 1;
 }
 
@@ -982,7 +1296,7 @@ static int tfs_mkdir(const char *path) {
     f->used = 1;
     rtc_read_local(&f->created);
     f->modified = f->created;
-    persist_record(idx);
+    if (!persist_record(idx)) { k_memset(f, 0, sizeof(*f)); return 0; } // same rollback as tfs_touch()
     return 1;
 }
 
@@ -998,29 +1312,47 @@ static int tfs_write(const char *path, const char *data, int append) {
     }
 
     uint32_t data_len = (uint32_t)k_strlen(data);
+    int idx = (int)(f - files);
     uint64_t start;
     if (append) {
         start = f->size;
     } else {
-        // write_batch_begin()/end(): free_all_blocks() calls persist_
-        // bitmap_bit() once per freed block -- unbatched, that's one
-        // synchronous ATA write per block, rewriting the same handful
-        // of bitmap sectors over and over (see write_batch_end()'s own
-        // comment for why this coalescing exists at all). Nestable, so
-        // this is safe even though write_range_impl() below opens its
-        // own batch too.
-        write_batch_begin();
-        free_all_blocks(f); // reclaim whatever the old content used before writing fresh
-        write_batch_end();
+        // Truncate. Detach the old blocks and persist the now-empty
+        // record BEFORE returning them to the bitmap -- see
+        // detach_blocks()'s comment for the double-allocation window
+        // that ordering closes. The write_batch_begin()/end() pair
+        // around the actual freeing is what keeps free_all_blocks()
+        // from issuing one synchronous bitmap-sector write per freed
+        // block (see write_batch_end()); it nests safely with the one
+        // write_range_impl() opens below.
+        struct file old_blocks;
+        detach_blocks(f, &old_blocks);
+        uint64_t old_size = f->size;
         f->size = 0;
+        if (!persist_record(idx)) {
+            reattach_blocks(f, &old_blocks);
+            f->size = old_size;
+            return 0;
+        }
+        write_batch_begin();
+        free_all_blocks(&old_blocks);
+        write_batch_end();
         start = 0;
     }
 
-    if (data_len > 0 && !write_range_impl(f, start, data, data_len)) return 0;
+    if (data_len > 0 && !write_range_impl(f, start, data, data_len)) {
+        // Partial data may have landed and blocks may have been
+        // allocated -- persist so the record actually references them
+        // (fs.h documents the file's state on partial failure as "what
+        // was written before the failure", and an unpersisted record
+        // would instead leak those blocks: allocated in the bitmap,
+        // referenced by nothing after a reboot).
+        persist_record(idx);
+        return 0;
+    }
 
     rtc_read_local(&f->modified);
-    persist_record((int)(f - files));
-    return 1;
+    return persist_record(idx);
 }
 
 static int tfs_delete(const char *path) {
@@ -1037,23 +1369,35 @@ static int tfs_delete(const char *path) {
             if (!files[i].used) continue;
             if (k_strncmp(files[i].path, norm, plen) == 0 && files[i].path[plen] == '/') return 0;
         }
-    } else {
-        // See tfs_write()'s matching comment above -- unbatched,
-        // free_all_blocks() is one synchronous ATA write per freed
-        // block instead of one per distinct dirty bitmap sector.
-        // Found live: `stress <mb>`'s own cleanup delete of its test
-        // file (tens of thousands of blocks for a multi-hundred-MB
-        // run) made "reading back and verifying" reach 100% and then
-        // visibly sit there before the final PASSED line -- this batch
-        // is what that pause was actually spent on.
-        write_batch_begin();
-        free_all_blocks(f); // reclaim the file's data blocks -- previously a no-op since data was inline
-        write_batch_end();
     }
 
+    int idx = (int)(f - files);
+    struct file old_blocks;
+    k_memset(&old_blocks, 0, sizeof(old_blocks));
+    detach_blocks(f, &old_blocks); // no-op for a directory -- it has no blocks
+
+    struct file saved = *f;
     f->used = 0;
     f->size = 0;
-    persist_record((int)(f - files));
+    // Record first, blocks second -- see detach_blocks(). If the record
+    // can't be persisted, nothing has been freed yet, so restoring the
+    // in-memory entry leaves memory and disk agreeing again.
+    if (!persist_record(idx)) { *f = saved; return 0; }
+
+    if (saved.type == FS_TYPE_FILE) {
+        // Batched: free_all_blocks() calls persist_bitmap_bit() once per
+        // freed block, and unbatched that's one synchronous ATA write
+        // per block, rewriting the same handful of bitmap sectors over
+        // and over (see write_batch_end()). Found live: `stress <mb>`'s
+        // own cleanup delete of its test file (tens of thousands of
+        // blocks for a multi-hundred-MB run) made "reading back and
+        // verifying" reach 100% and then visibly sit there before the
+        // final PASSED line -- this batch is what that pause was
+        // actually spent on.
+        write_batch_begin();
+        free_all_blocks(&old_blocks);
+        write_batch_end();
+    }
     return 1;
 }
 
@@ -1111,10 +1455,13 @@ static int tfs_write_range(const char *path, uint64_t offset, const void *buf, u
         if (!tfs_touch(norm)) return 0;
         f = find(norm);
     }
-    if (!write_range_impl(f, offset, buf, len)) return 0;
+    int idx = (int)(f - files);
+    if (!write_range_impl(f, offset, buf, len)) {
+        persist_record(idx); // keep any partially-written blocks referenced, see tfs_write()
+        return 0;
+    }
     rtc_read_local(&f->modified);
-    persist_record((int)(f - files));
-    return 1;
+    return persist_record(idx);
 }
 
 // ---------------------------------------------------------------------
@@ -1207,9 +1554,11 @@ static int tfs_write_range_step(void *handle) {
     write_batch_end();
     if (st->offset + st->total > st->f->size) st->f->size = st->offset + st->total;
     rtc_read_local(&st->f->modified);
-    persist_record(st->file_index);
+    int persisted = persist_record(st->file_index);
     kfree(st);
-    return 1 /* FS_STEP_DONE */;
+    // Same contract as the blocking path: a write whose directory
+    // record didn't reach disk is a failed write, not a successful one.
+    return persisted ? 1 /* FS_STEP_DONE */ : 2 /* FS_STEP_FAILED */;
 }
 
 // ---------------------------------------------------------------------
@@ -1360,6 +1709,18 @@ static void tfs_selftest(void) {
     uint8_t pattern[64];
     for (int i = 0; i < 64; i++) pattern[i] = (uint8_t)(i * 7 + 3);
 
+    // A disk smaller than the selftest's own offset can't run this at
+    // all -- and since the allocator is now clamped to the drive's real
+    // capacity (see clamp_total_blocks_to_disk()), attempting it would
+    // fail legitimately and print a FAILED line that reads like a
+    // filesystem bug rather than "this disk is 512MB". Skip explicitly
+    // instead, and say which it was.
+    uint64_t capacity = (uint64_t)g_total_blocks * FS_BLOCK_SIZE;
+    if (TFS_SELFTEST_OFFSET + sizeof(pattern) > capacity) {
+        klog_write("fs: selftest skipped -- disk is too small for the triple-indirect offset\n");
+        return;
+    }
+
     if (!tfs_touch(TFS_SELFTEST_PATH)) {
         klog_write("fs: selftest FAILED (couldn't create test file)\n");
         return;
@@ -1434,8 +1795,8 @@ static void tfs_selftest(void) {
 static int tfs_disk_usage(uint64_t *out_used_bytes, uint64_t *out_total_bytes) {
     uint64_t used = 0, total;
     if (g_disk_backed) {
-        total = FS_DISK_TOTAL_BLOCKS - FS_DATA_START_BLOCK;
-        for (uint32_t b = FS_DATA_START_BLOCK; b < FS_DISK_TOTAL_BLOCKS; b++) {
+        total = g_total_blocks - FS_DATA_START_BLOCK;
+        for (uint32_t b = FS_DATA_START_BLOCK; b < g_total_blocks; b++) {
             if (bit_test(g_bitmap, b)) used++;
         }
     } else {

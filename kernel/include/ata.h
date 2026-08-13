@@ -64,6 +64,20 @@ int ata_present(void);
 // contract below).
 int ata_dma_active(void);
 
+// Total addressable 512-byte sectors on the attached drive, from
+// IDENTIFY's 28-bit LBA capacity field (words 60-61), or 0 if no drive
+// is present or it didn't report one. Multiply by ATA_SECTOR_SIZE for
+// bytes; note the 28-bit LBA ceiling means this can never exceed 2^28
+// sectors (128 GiB) regardless of the real drive's size.
+//
+// Added so the filesystem can size itself to the disk it actually has
+// instead of a compile-time guess (see tfs.c's FS_DISK_TOTAL_BYTES and
+// its runtime clamp). ata_read_sectors()/ata_write_sectors() also
+// range-check against this themselves, so a transfer past the end of
+// the drive fails cleanly and loudly rather than being handed to the
+// hardware.
+uint32_t ata_sector_count(void);
+
 // Reads/writes exactly one ATA_SECTOR_SIZE-byte sector at 28-bit LBA
 // `lba`. Returns 1 on success, 0 on failure (no drive present, the
 // drive reported an error, or -- DMA path only -- the completion IRQ
@@ -75,16 +89,33 @@ int ata_write_sector(uint32_t lba, const void *buf);
 // Multi-sector transfer, `count` consecutive sectors starting at `lba`
 // in one command instead of `count` separate ones -- same
 // success/failure contract as the single-sector calls above. `count`
-// must be in [1, ATA_MAX_SECTORS_PER_XFER]; TFS2's block size (see
-// tfs.c) is chosen to exactly match that limit so a whole filesystem
-// block always transfers in one call. Bounded by the DMA path's
-// existing 4096-byte bounce buffer (see ata.c's ata_init_dma()) --
-// raising the limit would need a bigger buffer, not just a bigger
-// REG_SECCOUNT value (the drive's 8-bit sector-count register alone
-// could go up to 256 in 28-bit mode). Built specifically so TFS2 could
-// stop issuing one ATA command per 512-byte sector for every block of
-// a large file -- see CHANGELOG.md.
-#define ATA_MAX_SECTORS_PER_XFER 8 // 8 * 512B = 4096B, matches the DMA bounce buffer and TFS2's block size
+// must be in [1, ata_max_sectors_per_xfer()] -- note the RUNTIME limit,
+// not the compile-time one below.
+//
+// ATA_MAX_SECTORS_PER_XFER is the compile-time ceiling: 128 sectors =
+// 65536 bytes, which is exactly what one Physical Region Descriptor can
+// describe (its byte count field is 16-bit, 0 meaning 64KB), so it's
+// the most a single-PRD driver like this one can move per command
+// without adding scatter-gather. Size any buffer you intend to fill in
+// one call against this.
+//
+// This was 8 (4096 bytes, one TFS2 block) until the DMA bounce buffer
+// grew from 1 frame to 16 -- and that 4KB buffer, not the drive or the
+// controller, was the filesystem's actual throughput ceiling: one ATA
+// command plus one completion IRQ per 4KB of file data no matter how
+// sequential the write was. The drive's own 8-bit REG_SECCOUNT was
+// never the constraint (it reaches 256 in 28-bit mode).
+//
+// ata_max_sectors_per_xfer() reports what's usable THIS boot, which is
+// smaller when the 64KB contiguous allocation failed and the driver
+// fell back to a 4KB buffer, or when DMA never came up at all and every
+// transfer is going through the PIO path. Callers that batch work into
+// transfers should ask it rather than assuming the maximum; callers
+// that just want one block (the common case) can keep passing a fixed
+// small count and never think about either number.
+#define ATA_MAX_SECTORS_PER_XFER 128 // 128 * 512B = 65536B, one full PRD entry
+#define ATA_PIO_MAX_SECTORS_PER_XFER 8 // PIO fallback stays at TFS2's block size, unchanged
+int ata_max_sectors_per_xfer(void);
 int ata_read_sectors(uint32_t lba, int count, void *buf);
 int ata_write_sectors(uint32_t lba, int count, const void *buf);
 

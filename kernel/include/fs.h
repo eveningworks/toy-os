@@ -15,13 +15,26 @@
 // writing a new backend and pointing vfs.c's fs_init() at it, not
 // touching this file or any of its callers.
 
-// Doubled from the original flat filesystem's 16 -- directories now
-// consume a slot each too (an empty directory is just an entry with no
-// data), and disk.img has ample room either way (see tfs.c's top
-// comment for the math). Backend-specific (tfs.c's own limit), but
-// lives here since callers may reasonably want to size buffers against
-// it regardless of which backend is active.
-#define FS_MAX_FILES 32
+// Raised from 32 to 256, which is an ON-DISK LAYOUT change (the record
+// table sits between the journal and the free-block bitmap, so a
+// different file count moves FS_BITMAP_START_LBA and everything after
+// it) -- hence the FS_DISK_VERSION bump in tfs.c and the one-time
+// reformat that comes with it.
+//
+// 32 was not a comfortable margin any more, it was nearly exhausted:
+// the shipped disk.img already used 25 of them (17 /bin binaries plus
+// /bin, /etc, /etc/kbs and four /etc files), and /etc/toyos.conf makes
+// 26 the moment any setting is saved. The next handful of seeded
+// binaries would have hit "table full" -- which surfaces as a bare 0
+// return from fs_touch(), not an obvious out-of-slots message.
+//
+// The cost of 256 is small and bounded: 256 in-memory `struct file`
+// entries (~44KB of .bss) and 256 one-sector records on disk, against
+// a disk that's gigabytes. Directories consume a slot each too (an
+// empty directory is just an entry with no data). Backend-specific
+// (tfs.c's own limit), but lives here since callers may reasonably want
+// to size buffers against it regardless of which backend is active.
+#define FS_MAX_FILES 256
 
 // Was FS_NAME_MAX (a single flat name, 32 bytes) before directory
 // support -- now holds a full absolute path like "/docs/notes.txt", so

@@ -58,12 +58,19 @@ For everything else:
 - A persistent, disk-backed filesystem ("TFS2" -- `kernel/drivers/tfs.c`,
   behind a small VFS dispatch layer so a second backend could be added
   later) with a write-ahead journal and timestamps -- files survive a
-  full power-off, not just `reboot`. Large writes batch the ATA cache
-  flush and free-block bitmap persistence instead of one of each per
-  4KB block (`ata_flush_begin()`/`ata_flush_end()`, `kernel/include/ata.h`),
-  journal-protected metadata writes deliberately excepted -- see
-  `docs/decisions.md`. `about` shows whether the current boot found a
-  disk. See `docs/tfs2-spec.md` for the on-disk format.
+  full power-off, not just `reboot`. Up to 256 files/directories;
+  individual files scale to gigabytes via direct + single/double/triple
+  indirect block pointers. Sequential I/O runs ~25 MB/s write / ~30 MB/s
+  read on the emulated ATA path: large writes batch the ATA cache flush
+  and free-block bitmap persistence rather than doing one of each per
+  4KB block (`ata_flush_begin()`/`ata_flush_end()`), and contiguous
+  blocks are coalesced into single 64KB ATA commands. The filesystem
+  sizes itself to the drive's real capacity (IDENTIFY words 60-61)
+  rather than a compile-time guess, and refuses to format a disk whose
+  superblock it couldn't read -- degrading to RAM-only instead of
+  destroying a possibly-good filesystem. `about` shows whether the
+  current boot found a disk. See `docs/tfs2-spec.md` for the on-disk
+  format and `docs/decisions.md` for the durability tradeoffs.
 - A real anti-aliased font (JetBrains Mono, baked to bitmaps at build
   time -- `tools/genttf.py`), 8 switchable point sizes (`fontsize <n>`),
   plus 6 Nordic letters (Å/Ä/Ö/å/ä/ö) alongside ASCII. See

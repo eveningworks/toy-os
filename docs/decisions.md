@@ -48,10 +48,14 @@ there when you add an entry, or the index quietly stops being one.
 - [Real disk-hosted ELF binaries: an old plan re-verified before building, not built from the doc as written](#real-disk-hosted-elf-binaries-an-old-plan-re-verified-before-building-not-built-from-the-doc-as-written)
 - [Every ELF64 test binary moved to `/bin`, not just `lspci` -- and why two didn't fold in cleanly](#every-elf64-test-binary-moved-to-bin-not-just-lspci----and-why-two-didnt-fold-in-cleanly)
 - [GPT header verification: a host-compiled unit test, not a live boot -- TFS2's own journal collides with LBA 1](#gpt-header-verification-a-host-compiled-unit-test-not-a-live-boot----tfs2s-own-journal-collides-with-lba-1)
+- [An unreadable superblock is not a foreign disk -- refuse to format, don't guess](#an-unreadable-superblock-is-not-a-foreign-disk----refuse-to-format-dont-guess)
+- [Metadata ordering: persist the record first, free the blocks second -- prefer a leak to a double-allocation](#metadata-ordering-persist-the-record-first-free-the-blocks-second----prefer-a-leak-to-a-double-allocation)
+- [Zero-filling a freshly allocated block is skipped only when the caller overwrites it whole](#zero-filling-a-freshly-allocated-block-is-skipped-only-when-the-caller-overwrites-it-whole)
 
 **Drivers & hardware**
 
 - [DMA needs PCI Bus Master Enable, not just a programmed descriptor](#dma-needs-pci-bus-master-enable-not-just-a-programmed-descriptor)
+- [The DMA bounce buffer is 64KB because that's one PRD, not because 64KB benchmarked well](#the-dma-bounce-buffer-is-64kb-because-thats-one-prd-not-because-64kb-benchmarked-well)
 - [PCI enumeration is a brute-force flat scan, not bridge-aware recursion](#pci-enumeration-is-a-brute-force-flat-scan-not-bridge-aware-recursion)
 - [Nordic keyboard/character support: Latin-1, not UTF-8; 3 remapped keys, not a full layout](#nordic-keyboardcharacter-support-latin-1-not-utf-8-3-remapped-keys-not-a-full-layout)
 - [Keyboard layouts are data files (`/etc/kbs/<name>`) generated from Linux's own XKB data, not a compiled-in enum](#keyboard-layouts-are-data-files-etckbsname-generated-from-linuxs-own-xkb-data-not-a-compiled-in-enum)
@@ -2001,3 +2005,89 @@ verification (a purpose-built `userland/nx_test.c` that jumps into a
 non-executable data page and confirms the CPU actually faults --
 `error_code=0x15` decodes to Present+User+Instruction-Fetch, not a
 generic unmapped-page fault).
+
+## An unreadable superblock is not a foreign disk -- refuse to format, don't guess
+
+`tfs_init()` distinguishes "the superblock read failed" from "the
+superblock read fine and isn't ours", and only the second one formats.
+The first degrades to RAM-only for that boot and leaves the disk
+untouched. This looks like defensive over-engineering until you notice
+the failure it replaced was silent total data loss: the two cases used
+to share one `if`, and `ata_read_sector()` genuinely does give up after
+three exhausted DMA attempts, which this project has observed happening
+on real hardware for transient reasons (host filesystem stalls, not a
+sick drive -- see `ata.c`'s `dma_transfer_with_retry()` comment).
+
+The asymmetry is the point: formatting a disk that was actually fine is
+unrecoverable, while refusing to format a disk that really is blank
+costs one boot and a clear `dmesg` line telling you to check it. When
+the two error paths have wildly different costs, the cheap-to-recover
+one is the correct default. A blank/foreign disk still auto-formats,
+because that path is only reached on a *successful* read.
+
+See `CHANGELOG.md`'s `[Unreleased]` entry for the full writeup,
+including the related "disk too small to hold the metadata region" case
+and the one case still not detectable (a 0-length image, which QEMU
+answers with zeros rather than an error).
+
+## Metadata ordering: persist the record first, free the blocks second -- prefer a leak to a double-allocation
+
+`tfs_delete()` and `tfs_write()`'s truncate path both detach a file's
+block pointers, write the record that now references nothing, and only
+then return the blocks to the free bitmap (`detach_blocks()`/
+`reattach_blocks()` in `tfs.c`). The reverse order is the obvious one
+and was what the code did first, but it opens a window where the bitmap
+says a block is free while an on-disk record still points at it -- the
+next allocation hands that block to a different file and two files
+silently share it.
+
+Inverting the order makes the worst case the *opposite* failure: blocks
+marked allocated that nothing references. That's a space leak, it's
+detectable by walking every record's pointers, and it costs disk space
+rather than data. There's no fsck-style pass to reclaim them yet (see
+`docs/roadmap.md`'s Milestone 3) -- the ordering is chosen so that when
+something does go wrong, the recoverable failure is the one that
+happens.
+
+## Zero-filling a freshly allocated block is skipped only when the caller overwrites it whole
+
+`block_for_index()`'s allocation modes (`BLK_ALLOC` vs.
+`BLK_ALLOC_NOZERO`, `tfs.c`) exist because zero-filling every newly
+allocated block costs a full block write, and for a sequential write
+that immediately overwrites the whole block that write is pure waste --
+it doubled the ATA commands per block and split the multi-block
+coalescing apart, which measurement caught (the first coalescing pass
+only reached 20.3 MB/s of the eventual 25.1).
+
+Where zero-filling still always happens, and why:
+- **Indirect index blocks, unconditionally.** Their unwritten entries
+  are read back as block pointers, so they must be the 0 sentinel and
+  not whatever a deleted file left there -- `walk_indirect()` ignores
+  the NOZERO flag for them on purpose.
+- **Any partially written block.** Otherwise the read-modify-write in
+  `write_range_one_block()` would leak a deleted file's contents into
+  the untouched part of the block.
+- **Sparse gaps**, implicitly: a hole has no block at all and reads as
+  zero via `read_block(0)`.
+
+The one visible consequence: if the write that was supposed to overwrite
+a NOZERO block fails, the block keeps stale content. It's past the
+file's size (which only advances for bytes actually written), so no read
+can reach it. See `CHANGELOG.md`'s `[Unreleased]` entry.
+
+## The DMA bounce buffer is 64KB because that's one PRD, not because 64KB benchmarked well
+
+`ata.c`'s `DMA_BUF_FRAMES` is 16 (65536 bytes), which sets
+`ATA_MAX_SECTORS_PER_XFER` to 128. The number comes from the hardware
+interface, not tuning: a Physical Region Descriptor's byte-count field
+is 16 bits, with 0 encoding 64KB, so 64KB is the largest single-PRD
+transfer possible and 129 sectors would truncate to a genuinely wrong
+value rather than a clamped one. Going bigger means scatter-gather --
+multiple PRD entries -- which is a real feature, not a constant change.
+
+Two related choices: the allocation failure path retries for the
+original 2 frames rather than dropping to PIO (a smaller DMA window is
+still far better than no DMA), and `ata_max_sectors_per_xfer()` reports
+the runtime value separately from the compile-time maximum so callers
+that batch (TFS2's coalescing) adapt instead of assuming. See
+`CHANGELOG.md`'s `[Unreleased]` entry.
