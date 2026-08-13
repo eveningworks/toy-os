@@ -68,7 +68,9 @@ technical conventions below:
   file's usual bar -- a second real caller, not a plausible one; the
   batch that introduced it had `k_strstr`/`k_strcasecmp`/`k_toupper`
   written and building, found no caller for them, and deleted them
-  again before landing.
+  again before landing. (`k_strstr` came back one feature later, when
+  the shell's `Ctrl-R` history search needed it -- which is the rule
+  working, not an argument against it.)
 - **Line editing is `kernel/lib/klineedit.c`'s, in both front ends.**
   The physical shell and the GUI Terminal share one readline-style
   editor (buffer/cursor/kill ring/undo/keymap); each front end only
