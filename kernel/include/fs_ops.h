@@ -90,6 +90,12 @@ struct fs_ops {
     // byte-scaled, metadata-excluded contract every backend must
     // honor here.
     int (*disk_usage)(uint64_t *out_used_bytes, uint64_t *out_total_bytes);
+
+    // Backs fs_check() -- see fs.h for the full contract (what a
+    // repair pass will and won't fix, and why double-allocation is
+    // deliberately report-only). Required, not optional/NULLable, same
+    // reasoning as the steppable pairs above.
+    int (*check)(int repair, struct fs_check_result *out);
 };
 
 #endif

@@ -146,7 +146,9 @@ developer/diagnostic set):
   `docs/roadmap.md`'s async I/O item; Notepad's Save As.../Open... are
   the real callers), `debug [<subsystem> on|off]` (per-subsystem
   runtime debug-log switches -- `fs`/`wm`/`ata`, off by default, no
-  rebuild needed)
+  rebuild needed), `fsck [repair]` (filesystem consistency check:
+  walks every file's block tree and compares it against the free-block
+  bitmap; read-only unless `repair` is passed)
 
 Plus roughly a dozen real disk-hosted test binaries under `/bin`, run
 via `run <name>` (e.g. `run write_test`, `run nx_test`,

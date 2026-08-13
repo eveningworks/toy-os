@@ -31,6 +31,52 @@ using `## [x.y.z] - date` headings is here.
 ## [Unreleased]
 
 ### Added
+- **`fsck` / `fsck repair`** -- a filesystem consistency check and the
+  leak-reclaiming pass behind it (`fs_check()` in `kernel/include/fs.h`,
+  `tfs_check()` in `kernel/drivers/tfs.c`, `cmd_fsck()` in
+  `apps/shell_sys.c`). This is the other half of a trade made a few
+  entries down: the truncate/delete paths now persist a record
+  referencing nothing *before* returning its blocks to the bitmap, so an
+  interrupted operation leaks blocks rather than double-allocating them
+  -- correct only if something can eventually reclaim the leak.
+  - Classic mark-and-compare: walk every in-use record's block tree
+    (direct + all three indirect depths) marking a "referenced" bitmap,
+    then compare it against the real free-block bitmap in both
+    directions. Reports leaked blocks, referenced-but-free blocks,
+    blocks claimed by more than one record, and pointers naming a block
+    outside the usable range.
+  - `fsck` alone is **read-only** and safe to run any time; `fsck
+    repair` frees leaked blocks, marks referenced-but-free blocks
+    allocated, and zeroes out-of-range pointers. A double-allocated
+    block is always reported and never repaired -- both records are
+    internally plausible and picking a winner silently destroys the
+    other file's data. See `docs/decisions.md`.
+  - The scratch bitmap is a static 288KB array, not `kmalloc()`'d: that
+    allocation would need 72 contiguous frames from pmm, and failing to
+    get them would mean "can't check the disk" exactly when something is
+    already wrong.
+  - **`tools/tfs2_writer.py corrupt`** -- host-side fault injection
+    (`--leak N`, `--free-referenced N`, `--bad-pointer PATH`), because
+    the inconsistencies `fsck` repairs are ones the kernel deliberately
+    avoids producing; without a way to manufacture them, `fsck` could
+    only ever be proven to report "clean".
+  - Verified against damage of known shape rather than by inspection:
+    48 injected leaked blocks were reported as exactly 48, `fsck repair`
+    reclaimed 192 KB (`df` used 396 KB -> 204 KB), a re-check reported
+    clean, and it was **still** clean after a reboot, proving the bitmap
+    writes actually landed. A second image injected with all three
+    repairable classes came back leaked 1 -> 0, referenced-but-free
+    2 -> 0, out-of-range 1 -> 0. Screenshots
+    `fsck_report_48_leaked.png`, `fsck_repair_and_df.png`,
+    `fsck_clean_after_reboot.png`, `fsck_repairs_all_three_classes.png`.
+  - That second test also produced an unplanned demonstration of why the
+    referenced-but-free repair matters at all. Three blocks belonging to
+    real files were marked free; on the very next boot, the shell's
+    append to `/etc/history` allocated one of them -- block 105, which
+    `/bin/counter_a` still owned. A genuine double-allocation, created
+    by that corruption within seconds of booting, then correctly
+    detected and correctly *not* auto-repaired. Confirmed independently
+    host-side: `{105: ['/bin/counter_a', '/etc/history']}`.
 - **Storage stack audit, and the four changes that came out of it.**
   Asked to read the filesystem/ATA code through (`fs`/`tfs`/`vfs`/`ata`)
   and propose fixes; the audit found one data-loss bug, one silent

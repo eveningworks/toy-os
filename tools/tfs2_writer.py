@@ -10,6 +10,9 @@ Subcommands:
   read   <disk.img> <tfs-path> [-o out]       read one file out (stdout by default)
   ls     <disk.img> <tfs-path>                list a directory's direct children
   sync   <disk.img> <seed-dir> [--dest /]     mirror a seed directory in
+  corrupt <disk.img> --leak N | --free-referenced N | --bad-pointer PATH
+                                              inject a known inconsistency, for
+                                              testing the kernel's `fsck`
 
 See `sync`'s docstring below for the seed-directory convention
 (once/ vs sync/). Run any subcommand with -h for its own options.
@@ -743,6 +746,72 @@ def cmd_sync(args):
         )
 
 
+# ---- corrupt (fault injection, for testing the kernel's `fsck`) ----
+
+
+def cmd_corrupt(args):
+    """Injects a specific, known inconsistency into an image so the
+    kernel's `fsck` can be tested against a disk whose exact damage is
+    known in advance.
+
+    This exists because the inconsistencies `fsck` repairs are ones the
+    kernel goes out of its way NOT to produce -- a leaked block needs an
+    operation interrupted between persisting a record and updating the
+    bitmap, which can't be triggered on demand from inside a running
+    toy-os. Without a way to manufacture them, `fsck` could only ever be
+    tested against a clean disk, which proves it reports "clean" and
+    nothing else.
+
+    Modes (mirroring fs_check()'s three repairable classes):
+      --leak N              mark N currently-free data blocks as
+                            allocated, referenced by nothing
+      --free-referenced N   clear the bitmap bit of N blocks that ARE
+                            referenced by a file (the dangerous
+                            direction -- the allocator would hand them
+                            out a second time)
+      --bad-pointer PATH    point PATH's first direct block pointer at a
+                            block number past the end of the disk
+
+    Every mode prints exactly what it changed, so a test can assert the
+    kernel's own counts match.
+    """
+    with Image(args.disk, dry_run=args.dry_run) as img:
+        if args.leak:
+            made = []
+            b = DATA_START_BLOCK
+            while len(made) < args.leak and b < FS_DISK_TOTAL_BLOCKS:
+                if not img._bit(b):
+                    img._set_bit(b, 1)
+                    img._persist_bitmap_bit(b)
+                    made.append(b)
+                b += 1
+            print(f"leaked {len(made)} block(s): {made[:8]}{' ...' if len(made) > 8 else ''}")
+
+        if args.free_referenced:
+            refs = []
+            for r in img.records:
+                if not r["used"]:
+                    continue
+                for blk in r["direct"]:
+                    if blk and len(refs) < args.free_referenced:
+                        refs.append((r["path"], blk))
+            for path, blk in refs:
+                img._set_bit(blk, 0)
+                img._persist_bitmap_bit(blk)
+            print(f"marked {len(refs)} referenced block(s) free: {refs}")
+
+        if args.bad_pointer:
+            norm = normalize(args.bad_pointer)
+            idx, rec = img.find(norm)
+            if idx is None:
+                raise SystemExit(f"{norm} not found in {args.disk}")
+            buf = bytearray(img.read_sector(TABLE_START_LBA + idx))
+            bogus = FS_DISK_TOTAL_BLOCKS + 1234
+            struct.pack_into("<I", buf, REC_OFF_DIRECT, bogus)
+            img.persist_record(idx, bytes(buf))
+            print(f"pointed {norm}'s first direct pointer at block {bogus} (past end of disk)")
+
+
 def main():
     p = argparse.ArgumentParser(description="Host-side TFS2 v3 read/write tool for toy-os disk images")
     sub = p.add_subparsers(dest="command", required=True)
@@ -778,6 +847,19 @@ def main():
     p_sync.add_argument("--dest", default="/", help="TFS destination root (default: /)")
     p_sync.add_argument("--dry-run", action="store_true", help="preview without writing")
     p_sync.set_defaults(func=cmd_sync)
+
+    p_corrupt = sub.add_parser(
+        "corrupt", help="inject a known inconsistency (for testing the kernel's `fsck`)"
+    )
+    p_corrupt.add_argument("disk")
+    p_corrupt.add_argument("--leak", type=int, default=0,
+                            help="mark N free data blocks as allocated, referenced by nothing")
+    p_corrupt.add_argument("--free-referenced", type=int, default=0,
+                            help="clear the bitmap bit of N blocks a file actually references")
+    p_corrupt.add_argument("--bad-pointer", metavar="PATH",
+                            help="point PATH's first direct pointer past the end of the disk")
+    p_corrupt.add_argument("--dry-run", action="store_true")
+    p_corrupt.set_defaults(func=cmd_corrupt)
 
     args = p.parse_args()
     try:

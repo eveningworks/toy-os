@@ -59,9 +59,9 @@ later judgment call, not mechanically tied to "20 milestones done."
 - [x] ~~Stop treating an unreadable superblock as a foreign disk~~ --
       done, see `CHANGELOG.md`'s `[Unreleased]` entry (this was a
       data-loss bug, not just hardening)
-- [ ] An fsck-style pass to reclaim leaked blocks -- newly relevant now
-      that the truncate/delete ordering deliberately prefers leaking a
-      block over double-allocating one (see `docs/decisions.md`)
+- [x] ~~An fsck-style pass to reclaim leaked blocks~~ -- done, see
+      `CHANGELOG.md`'s `[Unreleased]` entry (`fsck`/`fsck repair`, plus
+      `tools/tfs2_writer.py corrupt` to test it against known damage)
 - [x] ~~GPT/MBR partition table parsing~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry
 
 ### Milestone 4 -- AHCI/SATA driver (planned v0.4.0)

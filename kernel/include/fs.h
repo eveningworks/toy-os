@@ -240,4 +240,42 @@ int fs_is_persistent(void);
 // that's already resident.
 int fs_disk_usage(uint64_t *out_used_bytes, uint64_t *out_total_bytes);
 
+// ---- consistency check / repair (`fsck`) ----
+
+// What one pass over the filesystem found, and (if it was a repair
+// pass) what it changed. Counts are of BLOCKS unless noted.
+struct fs_check_result {
+    uint32_t records_used;        // in-use table slots walked
+    uint32_t blocks_referenced;   // distinct blocks reachable from those records
+    uint32_t leaked;              // marked allocated, referenced by nothing
+    uint32_t referenced_but_free; // referenced by a record, marked free
+    uint32_t double_allocated;    // referenced from more than one place
+    uint32_t out_of_range;        // pointers naming a block outside the usable range
+    // Only nonzero on a repair pass -- what was actually changed.
+    uint32_t reclaimed;           // leaked blocks returned to the free bitmap
+    uint32_t marked_allocated;    // referenced-but-free blocks marked allocated
+    uint32_t pointers_cleared;    // out-of-range pointers zeroed
+};
+
+// Walks every in-use record's block tree (direct + indirect), compares
+// what's reachable against the free-block bitmap, and fills *out.
+//
+// `repair` == 0 is a pure read: it touches nothing on disk, so it's
+// always safe to run. `repair` != 0 additionally fixes what can be
+// fixed WITHOUT guessing:
+//   - a leaked block (allocated, unreferenced) is returned to the free
+//     bitmap -- the case the truncate/delete ordering deliberately
+//     trades for, see docs/decisions.md;
+//   - a referenced-but-free block is marked allocated, closing the
+//     window where the allocator would hand it to a second file;
+//   - an out-of-range pointer is zeroed, turning it into a hole.
+// Double-allocated blocks are always REPORTED, never repaired: two
+// records genuinely claim the same block, and choosing which one keeps
+// it is a data-destroying guess this can't make for you. Sort those out
+// by deleting one of the files named in the log.
+//
+// Returns 1 on a completed pass, 0 if the filesystem isn't disk-backed
+// (nothing to check -- RAM-only mode has no persistent bitmap).
+int fs_check(int repair, struct fs_check_result *out);
+
 #endif

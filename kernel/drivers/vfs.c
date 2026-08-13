@@ -110,3 +110,7 @@ int fs_stat(const char *path, struct fs_timestamps *out) {
 int fs_disk_usage(uint64_t *out_used_bytes, uint64_t *out_total_bytes) {
     return g_fs->disk_usage(out_used_bytes, out_total_bytes);
 }
+
+int fs_check(int repair, struct fs_check_result *out) {
+    return g_fs->check(repair, out);
+}

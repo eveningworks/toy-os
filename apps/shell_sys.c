@@ -156,6 +156,13 @@ static const char *const TEST_HELP_LINES[] = {
     "                  default)\n",
     "  debug <s> on|off - flip one on/off at runtime, no rebuild --\n",
     "                  subsystems: fs, wm, ata\n",
+    "  fsck          - filesystem consistency check: walks every file's\n",
+    "                  block tree and compares it against the free-block\n",
+    "                  bitmap. Read-only, safe to run any time.\n",
+    "  fsck repair   - the same pass, but also reclaims leaked blocks and\n",
+    "                  fixes what can be fixed without guessing. Blocks\n",
+    "                  claimed by two files are always reported, never\n",
+    "                  repaired -- see fs.h's fs_check().\n",
     "\n",
     "Every other former *test command (elftest, syscalltest, writetest,\n",
     "ptrtest, guitest, echotest, wintest, filetest, newsyscalltest,\n",
@@ -332,6 +339,62 @@ void cmd_df(void) {
     vga_write(" KB\n");
     vga_write("  free:  "); vga_write_dec((uint32_t)(free_bytes / 1024));
     vga_write(" KB\n");
+}
+
+// `fsck` / `fsck repair` -- filesystem consistency check, and the
+// reclaim half of it. See fs.h's fs_check() for what a repair pass will
+// and won't fix; the interesting asymmetry is that leaked blocks are
+// reclaimed automatically while double-allocated ones are only ever
+// reported (picking which of two files keeps a shared block is a
+// data-destroying guess). Report-only by default on purpose: this walks
+// every record's block tree and, in repair mode, writes to the bitmap,
+// so "see what it would do" should not require committing to it.
+void cmd_fsck(const char *args) {
+    int repair = (args && k_strcmp(args, "repair") == 0);
+    if (args && k_strlen(args) > 0 && !repair) {
+        vga_write("usage: fsck [repair]\n");
+        vga_write("  fsck         check and report only, touches nothing\n");
+        vga_write("  fsck repair  also reclaim leaked blocks and fix what's safely fixable\n");
+        return;
+    }
+
+    struct fs_check_result r;
+    vga_write(repair ? "fsck: checking and repairing ...\n" : "fsck: checking (read-only) ...\n");
+    if (!fs_check(repair, &r)) {
+        vga_write("fsck: filesystem is RAM-only -- nothing on disk to check.\n");
+        return;
+    }
+
+    vga_write("  records in use:        "); vga_write_dec(r.records_used); vga_putc('\n');
+    vga_write("  blocks referenced:     "); vga_write_dec(r.blocks_referenced); vga_putc('\n');
+    vga_write("  leaked (unreferenced): "); vga_write_dec(r.leaked); vga_putc('\n');
+    vga_write("  referenced but free:   "); vga_write_dec(r.referenced_but_free); vga_putc('\n');
+    vga_write("  double-allocated:      "); vga_write_dec(r.double_allocated); vga_putc('\n');
+    vga_write("  out-of-range pointers: "); vga_write_dec(r.out_of_range); vga_putc('\n');
+
+    if (repair) {
+        vga_write("  -- repaired --\n");
+        vga_write("  blocks reclaimed:      "); vga_write_dec(r.reclaimed);
+        vga_write(" ("); vga_write_dec(r.reclaimed * 4); vga_write(" KB)\n");
+        vga_write("  marked allocated:      "); vga_write_dec(r.marked_allocated); vga_putc('\n');
+        vga_write("  pointers cleared:      "); vga_write_dec(r.pointers_cleared); vga_putc('\n');
+    } else if (r.leaked || r.referenced_but_free || r.out_of_range) {
+        vga_write("Run `fsck repair` to reclaim ");
+        vga_write_dec(r.leaked); vga_write(" leaked block(s) (");
+        vga_write_dec(r.leaked * 4); vga_write(" KB) and fix the rest.\n");
+    }
+
+    if (r.double_allocated) {
+        // Deliberately not repaired -- see fs.h. Say what to do instead
+        // of leaving the number sitting there unexplained.
+        vga_write("WARNING: blocks claimed by more than one file. `fsck repair` will NOT\n");
+        vga_write("fix this -- choosing which file keeps a shared block would destroy the\n");
+        vga_write("other's data. Delete one of the affected files to resolve it.\n");
+    }
+
+    if (!r.leaked && !r.referenced_but_free && !r.double_allocated && !r.out_of_range) {
+        vga_write("fsck: clean.\n");
+    }
 }
 
 // Real (non-sparse) multi-GB write/read/verify stress test over

@@ -153,6 +153,8 @@ static void dispatch(char *line) {
         cmd_dmatest(args ? args : "");
     } else if (k_strcmp(cmd, "steptest") == 0) {
         cmd_steptest(args ? args : "");
+    } else if (k_strcmp(cmd, "fsck") == 0) {
+        cmd_fsck(args ? args : "");
     } else if (k_strcmp(cmd, "dmesg") == 0) {
         cmd_dmesg();
     } else if (k_strcmp(cmd, "debug") == 0) {

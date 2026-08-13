@@ -573,7 +573,12 @@ repeated manual steps to be worth automating:
   `grub.cfg` -- see `docs/decisions.md`). Writes in-place by default;
   `--dry-run` on `write`/`sync`/`format` previews without touching the
   image. Scoped to direct+single-indirect blocks (~4.03 MB/file) -- see
-  `docs/decisions.md` for why.
+  `docs/decisions.md` for why. `corrupt` injects a KNOWN inconsistency
+  (`--leak N`, `--free-referenced N`, `--bad-pointer PATH`) so the
+  kernel's `fsck` can be tested against damage whose exact shape is
+  known in advance -- the inconsistencies `fsck` repairs are ones the
+  kernel deliberately avoids producing, so without this it could only
+  ever be tested against a clean disk and proven to report "clean".
 - **`mkpart_test.py`** -- writes a synthetic legacy MBR or GPT partition
   table onto a disk image, for testing `kernel/drivers/partition.c`'s
   parser (`parttable` shell command). TFS2-mount-preserving: patches

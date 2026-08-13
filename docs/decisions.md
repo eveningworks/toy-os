@@ -50,6 +50,7 @@ there when you add an entry, or the index quietly stops being one.
 - [GPT header verification: a host-compiled unit test, not a live boot -- TFS2's own journal collides with LBA 1](#gpt-header-verification-a-host-compiled-unit-test-not-a-live-boot----tfs2s-own-journal-collides-with-lba-1)
 - [An unreadable superblock is not a foreign disk -- refuse to format, don't guess](#an-unreadable-superblock-is-not-a-foreign-disk----refuse-to-format-dont-guess)
 - [Metadata ordering: persist the record first, free the blocks second -- prefer a leak to a double-allocation](#metadata-ordering-persist-the-record-first-free-the-blocks-second----prefer-a-leak-to-a-double-allocation)
+- [`fsck` reclaims leaks and marks stragglers, but never resolves a double-allocation](#fsck-reclaims-leaks-and-marks-stragglers-but-never-resolves-a-double-allocation)
 - [Zero-filling a freshly allocated block is skipped only when the caller overwrites it whole](#zero-filling-a-freshly-allocated-block-is-skipped-only-when-the-caller-overwrites-it-whole)
 
 **Drivers & hardware**
@@ -2091,3 +2092,40 @@ still far better than no DMA), and `ata_max_sectors_per_xfer()` reports
 the runtime value separately from the compile-time maximum so callers
 that batch (TFS2's coalescing) adapt instead of assuming. See
 `CHANGELOG.md`'s `[Unreleased]` entry.
+
+## `fsck` reclaims leaks and marks stragglers, but never resolves a double-allocation
+
+`fs_check()`/`tfs_check()` (`tfs.c`) repairs exactly three things and
+deliberately refuses a fourth:
+
+| Finding | Repaired? | Why |
+|---|---|---|
+| Leaked block (allocated, unreferenced) | yes -- freed | Costs only space; the free bitmap is provably wrong and the record tree is the authority. |
+| Referenced but marked free | yes -- marked allocated | The dangerous direction: leaving it lets the allocator hand the block to a second file. |
+| Out-of-range pointer | yes -- zeroed | It can't name real data; zeroing turns it into a hole that reads as zeros. |
+| Block claimed by two records | **no** -- reported only | Both records are internally plausible. Choosing which keeps the block silently destroys the other file's data, and no amount of on-disk information says which one is right. |
+
+That last row is the whole design stance: a repair tool that guesses
+turns a recoverable disk into a confidently-wrong one. It reports the
+count and tells you to delete one of the affected files.
+
+The scratch "referenced" bitmap is a static 288KB array (`g_fsck_seen`),
+not `kmalloc()`'d, because a 288KB allocation needs 72 contiguous frames
+from pmm and failing to get them would mean "can't check the disk"
+precisely when something is already wrong. Same reasoning `g_bitmap`
+itself uses one bullet up, with a repair-tool-specific edge.
+
+This exists because the truncate/delete ordering deliberately prefers a
+leak to a double-allocation (see the entry above) -- that trade is only
+correct if something can reclaim the leak afterwards.
+
+Testing it needed fault injection: the inconsistencies it repairs are
+ones the kernel goes out of its way not to produce, so
+`tools/tfs2_writer.py corrupt` manufactures them host-side
+(`--leak N`, `--free-referenced N`, `--bad-pointer PATH`). Doing that
+turned up a live demonstration of why the referenced-but-free repair
+matters: with three referenced blocks marked free, the very next boot's
+shell-history append allocated one of them to `/etc/history`, which
+already belonged to `/bin/counter_a` -- a real double-allocation,
+created by the corruption in seconds. See `CHANGELOG.md`'s
+`[Unreleased]` entry.

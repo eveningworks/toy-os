@@ -1810,6 +1810,159 @@ static int tfs_disk_usage(uint64_t *out_used_bytes, uint64_t *out_total_bytes) {
     return 1;
 }
 
+// ---------------------------------------------------------------------
+// Consistency check / repair -- fs_check()'s TFS2 backend (`fsck`).
+//
+// The reason this exists: the truncate/delete paths deliberately
+// persist a record referencing nothing BEFORE returning its blocks to
+// the bitmap (see detach_blocks()), which means an interrupted
+// operation leaks blocks rather than double-allocating them. That's the
+// right trade -- a leak costs space, a double-allocation costs data --
+// but it's only the right trade if something can eventually reclaim the
+// leak. This is that something. See docs/decisions.md.
+//
+// The check is the classic mark-and-compare: walk every in-use record's
+// block tree marking a "referenced" bitmap, then compare that bitmap
+// against the real free-block bitmap. Blocks set in one and not the
+// other are the two interesting disagreements, in both directions.
+//
+// g_fsck_seen is a static array, not a kmalloc()'d one, for the same
+// reason g_bitmap right above it is (its size is a compile-time
+// constant either way) plus one specific to a repair tool: a 288KB
+// allocation needs 72 contiguous frames from pmm, and failing to get
+// them would mean "can't check the disk" exactly when something is
+// already wrong. A repair tool that can fail for lack of memory is a
+// repair tool you can't rely on.
+static uint8_t g_fsck_seen[FS_BITMAP_BYTES];
+
+// A block number is usable only if it's inside the data region -- below
+// FS_DATA_START_BLOCK is reserved metadata (superblock/journal/table/
+// bitmap), at or above g_total_blocks is past the end of the drive.
+// Block 0 is the "no block" sentinel and is never a pointer to check.
+static int block_in_range(uint32_t b) {
+    return b >= FS_DATA_START_BLOCK && b < g_total_blocks;
+}
+
+// Marks one block as referenced, counting a double-allocation if it was
+// already marked. Returns 1 if this was the first reference (so the
+// caller knows whether to descend into it).
+static int fsck_mark(uint32_t b, struct fs_check_result *r) {
+    if (bit_test(g_fsck_seen, b)) { r->double_allocated++; return 0; }
+    bit_set(g_fsck_seen, b, 1);
+    r->blocks_referenced++;
+    if (!bit_test(g_bitmap, b)) {
+        r->referenced_but_free++;
+        return 2; // caller repairs; still a first reference, so descend
+    }
+    return 1;
+}
+
+// Walks one indirect subtree, marking every block it references.
+// `depth` follows walk_indirect()'s convention (1 = this block's
+// entries are data pointers, 2/3 = one/two more levels below). Reuses
+// g_free_scratch the same way free_tree() does -- each active frame in
+// one call chain has a distinct depth, so frames never alias, and this
+// file is single-threaded (no free_tree() can be running concurrently).
+static void fsck_walk_tree(uint32_t block, int depth, int repair, struct fs_check_result *r) {
+    if (!read_block(block, g_free_scratch[depth])) return;
+    int dirty = 0;
+    for (int i = 0; i < FS_PTRS_PER_BLOCK; i++) {
+        uint32_t child = g_free_scratch[depth][i];
+        if (child == 0) continue;
+        if (!block_in_range(child)) {
+            r->out_of_range++;
+            if (repair) {
+                g_free_scratch[depth][i] = 0; // becomes a hole -- reads as zero
+                r->pointers_cleared++;
+                dirty = 1;
+            }
+            continue;
+        }
+        int first = fsck_mark(child, r);
+        if (first == 2 && repair) {
+            bit_set(g_bitmap, child, 1);
+            persist_bitmap_bit(child);
+            r->marked_allocated++;
+        }
+        if (first && depth > 1) fsck_walk_tree(child, depth - 1, repair, r);
+    }
+    if (dirty) write_block(block, g_free_scratch[depth]);
+}
+
+// One record's whole block tree: the direct pointers, then each
+// indirect root. Returns 1 if the record itself was modified (an
+// out-of-range direct pointer cleared), so the caller can persist it.
+static int fsck_walk_record(struct file *f, int repair, struct fs_check_result *r) {
+    int record_dirty = 0;
+    uint32_t *roots[3] = { &f->single_indirect, &f->double_indirect, &f->triple_indirect };
+
+    for (int i = 0; i < FS_N_DIRECT + 3; i++) {
+        int is_direct = i < FS_N_DIRECT;
+        uint32_t *slot = is_direct ? &f->direct[i] : roots[i - FS_N_DIRECT];
+        uint32_t b = *slot;
+        if (b == 0) continue;
+        if (!block_in_range(b)) {
+            r->out_of_range++;
+            if (repair) { *slot = 0; r->pointers_cleared++; record_dirty = 1; }
+            continue;
+        }
+        int first = fsck_mark(b, r);
+        if (first == 2 && repair) {
+            bit_set(g_bitmap, b, 1);
+            persist_bitmap_bit(b);
+            r->marked_allocated++;
+        }
+        // An indirect root's depth is its position: single = 1, double
+        // = 2, triple = 3. Direct pointers have no subtree.
+        if (first && !is_direct) fsck_walk_tree(b, i - FS_N_DIRECT + 1, repair, r);
+    }
+    return record_dirty;
+}
+
+static int tfs_check(int repair, struct fs_check_result *out) {
+    struct fs_check_result r;
+    k_memset(&r, 0, sizeof(r));
+    if (!g_disk_backed) {
+        if (out) *out = r;
+        return 0; // RAM-only: no persistent bitmap, nothing to reconcile
+    }
+
+    k_memset(g_fsck_seen, 0, sizeof(g_fsck_seen));
+
+    // One batch around the whole pass so a repair that touches many
+    // bitmap sectors writes each one once at the end, not once per
+    // block -- same reasoning as free_all_blocks()'s batch.
+    write_batch_begin();
+
+    for (int i = 0; i < FS_MAX_FILES; i++) {
+        if (!files[i].used) continue;
+        r.records_used++;
+        if (fsck_walk_record(&files[i], repair, &r) && repair) persist_record(i);
+    }
+
+    // Everything allocated but unreferenced is a leak. Only the data
+    // region is in scope: blocks below FS_DATA_START_BLOCK are the
+    // permanently-allocated metadata region and must stay that way.
+    for (uint32_t b = FS_DATA_START_BLOCK; b < g_total_blocks; b++) {
+        if (!bit_test(g_bitmap, b)) continue;
+        if (bit_test(g_fsck_seen, b)) continue;
+        r.leaked++;
+        if (repair) {
+            free_block(b); // clears the bit and marks its sector dirty
+            r.reclaimed++;
+        }
+    }
+
+    write_batch_end();
+
+    // Freed blocks are almost certainly below the current scan hint;
+    // reset it so the next allocation actually finds them.
+    if (r.reclaimed) g_bitmap_scan_hint = FS_DATA_START_BLOCK;
+
+    if (out) *out = r;
+    return 1;
+}
+
 const struct fs_ops tfs_ops = {
     .name = "tfs2",
     .init = tfs_init,
@@ -1830,4 +1983,5 @@ const struct fs_ops tfs_ops = {
     .list = tfs_list,
     .stat = tfs_stat,
     .disk_usage = tfs_disk_usage,
+    .check = tfs_check,
 };
