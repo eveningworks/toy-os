@@ -48,6 +48,8 @@ const struct gui_app gui_app_registry[] = {
       .on_draw = taskmgr_draw, .resizable = 1 },
     { .name = "Control Panel", .default_size = control_panel_default_size,
       .on_open = control_panel_open, .on_draw = control_panel_draw,
-      .on_click = control_panel_click, .resizable = 1 },
+      .on_hover = control_panel_hover,
+      .on_press = control_panel_press, .on_release = control_panel_release,
+      .resizable = 1 },
 };
 const int gui_app_registry_count = sizeof(gui_app_registry) / sizeof(gui_app_registry[0]);

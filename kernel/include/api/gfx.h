@@ -52,6 +52,12 @@ uint32_t gfx_rgb(uint8_t r, uint8_t g, uint8_t b);
 // tints the cell it sits on instead of covering the character.
 uint32_t gfx_blend(uint32_t under, uint32_t over, uint8_t alpha);
 
+// Perceived brightness of a packed pixel, 0..255. For callers deciding
+// whether to shift a colour lighter or darker -- see apps/ui/'s
+// ui_state_bg(), which cannot lighten an already-light control and has
+// to know which way to go.
+uint8_t gfx_luminance(uint32_t color);
+
 // Restricts gfx_put_pixel() (and therefore every drawing primitive
 // below, all of which bottom out at it) to writing only within
 // [x, x+w) x [y, y+h) -- on top of the plain screen-bounds check it

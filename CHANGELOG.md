@@ -30,6 +30,52 @@ using `## [x.y.z] - date` headings is here.
 
 ## [Unreleased]
 
+### Added
+- **Hover and press feedback across the GUI, commit-on-release
+  semantics, and `docs/gui-guidelines.md` to say what the rules are.**
+  Asked for hover + pressed states on the Control Panel's applet icons,
+  release-on-target clicking like the title-bar buttons, and design
+  guidelines: modern but simple, minimalist, with feedback for actions.
+  - **`enum ui_state` + `ui_state_bg()`** (`apps/ui/ui_primitives.h`)
+    are the shared vocabulary: rest / hover / pressed / disabled, with
+    the wash derived from each control's **own** colour. The title bar
+    dropped two hand-picked tint constants as a result -- one of them
+    existed purely because a caller had no way to shift an arbitrary
+    packed colour, which stopped being true when `gfx_blend()` went
+    public for the console cursor and nobody revisited it.
+  - **Flat, not bevelled.** `widget_button()`'s pressed look changes
+    from a 2px inset border to a darker fill plus the existing 1px
+    nudge -- applied everywhere at once (title bar, Start button,
+    Calculator, Notepad) so there's one language rather than two.
+  - **New `on_hover` app callback.** Delivered every tick while the
+    cursor is over a window's content with no button held, and once
+    with `(-1,-1)` on leave so an app can clear its highlight. Returns 1
+    only when the hovered item changed, copying `on_press`'s existing
+    contract. It reaches **unfocused** windows -- the only callback that
+    does -- because a control that stays inert until you've clicked its
+    window first is dead in exactly the moment hover exists to prevent.
+  - **Commit on release, not on press.** The Control Panel arms an
+    applet on press, tracks whether the cursor is still on it every
+    tick, and opens it only if the button comes up there. Press, drag
+    away, release: nothing happens.
+  - **`on_click` fires on button-DOWN, despite its name and its doc
+    comment** -- found by building the release semantics on it and
+    watching drag-away-then-release open the applet anyway. Nothing
+    armed by `on_press` exists yet when it runs, so a control that
+    commits there can never be cancelled. The header now says so, and
+    says what to use instead.
+  - **The hover wash was invisible and pixel-measurement caught it.**
+    Lightening is the textbook hover treatment and is wrong on this
+    theme: the window background is already 235/255, so hover moved the
+    pixels by **two**. New `gfx_luminance()` picks the direction from
+    the control's brightness -- light controls darken, dark ones
+    lighten, which also readies this for Milestone 19's dark theme.
+    Measured rest 235 / hover 214 / pressed 192, with the neighbouring
+    cell unchanged at 235.
+  - Verified on screen and by pixel value: hover, pressed,
+    press-drag-off-release doing nothing, and press-release opening.
+    Screenshots in `screenshots/2026-08-13/`.
+
 ### Fixed
 - **CI had been red for three commits, and the reason was a real bug it
   found rather than a bad check.** `tools/check_layout.py` (added in the

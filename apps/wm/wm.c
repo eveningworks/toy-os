@@ -501,6 +501,13 @@ void wm_run(void) {
         if (mouse_moved) wm_update_title_hover(mx, my);
         wm_update_title_btn_press(mx, my, buttons);
 
+        // Content hover, on the same only-when-the-mouse-moved cheap
+        // path as the title-bar hover above. It also has to run once
+        // after a button is RELEASED (the suppression inside it lifts
+        // then, and the control under the cursor should light up again
+        // without needing a further wiggle) -- hence the `|| !buttons`.
+        if (mouse_moved || !(buttons & 0x1)) wm_update_content_hover(mx, my, buttons);
+
         wm_update_drag_resize(mx, my, buttons);
         desktop_update_drag(mx, my, buttons); // desktop icon drag, if one's in progress -- see desktop.h
 

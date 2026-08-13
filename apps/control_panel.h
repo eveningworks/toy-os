@@ -7,6 +7,8 @@
 void control_panel_default_size(int *w, int *h);
 void control_panel_open(struct window *win);
 void control_panel_draw(struct window *win);
-void control_panel_click(struct window *win, int cx, int cy);
+int  control_panel_hover(struct window *win, int cx, int cy);
+int  control_panel_press(struct window *win, int cx, int cy);
+void control_panel_release(struct window *win);
 
 #endif

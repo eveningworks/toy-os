@@ -156,6 +156,31 @@ uint32_t gfx_blend(uint32_t under, uint32_t over, uint8_t alpha) {
     return out;
 }
 
+// Perceived brightness of a packed pixel, 0 (black) to 255 (white).
+// Lives here for the same reason gfx_blend() does: the channel
+// positions and widths are this file's private business, so a caller
+// holding a packed colour has no portable way to take it apart.
+//
+// The weights are the standard luma coefficients (~0.299R + 0.587G +
+// 0.114B) -- green dominates perceived brightness, which matters here
+// because the alternative (a plain average) calls a saturated red and a
+// mid grey equally bright and would pick the wrong direction for the
+// title bar's close button.
+uint8_t gfx_luminance(uint32_t color) {
+    const uint8_t pos[3] = { red_pos, green_pos, blue_pos };
+    const uint8_t size[3] = { red_size, green_size, blue_size };
+    const uint32_t weight[3] = { 77, 150, 29 }; // /256
+    uint32_t total = 0;
+    for (int i = 0; i < 3; i++) {
+        uint32_t mask = (size[i] >= 32) ? 0xFFFFFFFFu : ((1u << size[i]) - 1u);
+        uint32_t v = (color >> pos[i]) & mask;
+        // Scale the channel up to 0..255 whatever its native width is.
+        uint32_t v8 = (mask == 0) ? 0 : (v * 255u) / mask;
+        total += v8 * weight[i];
+    }
+    return (uint8_t)(total >> 8);
+}
+
 void gfx_put_pixel(int x, int y, uint32_t color) {
     if (x < 0 || y < 0 || x >= width || y >= height) return;
     if (clip_active && (x < clip_x0 || x >= clip_x1 || y < clip_y0 || y >= clip_y1)) return;

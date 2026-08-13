@@ -38,6 +38,20 @@ int btn_size(void) {
     return s < 14 ? 14 : s;
 }
 
+// Which visual state a title-bar button is in. Encodes the rule
+// docs/gui-guidelines.md states for every armed control: a button that
+// has been pressed and then dragged off falls back to REST, NOT hover
+// -- something about to be cancelled must not look like it is still
+// being interacted with, even though the cursor is elsewhere and the
+// button is technically still armed.
+static enum ui_state title_btn_state(int kind, int is_armed, int is_hovered) {
+    if (is_armed && title_btn_armed_kind == kind) {
+        return title_btn_pressed_active ? UI_STATE_PRESSED : UI_STATE_REST;
+    }
+    if (is_armed) return UI_STATE_REST; // a different button on this window is armed
+    return (is_hovered && title_hover_kind == kind) ? UI_STATE_HOVER : UI_STATE_REST;
+}
+
 struct btn_rects title_buttons(const struct window *win) {
     struct btn_rects r;
     r.size = btn_size();
@@ -321,8 +335,13 @@ static void draw_window_chrome(struct window *win, int idx, int focused) {
     // pressed_active) drops back to the plain look, not hover -- a
     // button that's about to be canceled shouldn't look like it's still
     // being interacted with.
-    uint32_t hover_tint = gfx_rgb(200, 215, 235);       // minimize/maximize's neutral hover tint
-    uint32_t hover_tint_close = gfx_rgb(215, 110, 110);  // close needs a lighter RED, not the neutral tint
+    // No hand-picked tints any more: ui_state_bg() derives hover and
+    // pressed from each button's OWN base colour, so the red close
+    // button gets a lighter red and a darker red for free. The pair of
+    // constants that used to live here -- one neutral, one a
+    // specially-chosen lighter red -- existed only because a caller had
+    // no way to shift an arbitrary packed colour. See
+    // docs/gui-guidelines.md.
     int is_armed = (title_btn_armed_win == idx);
     int is_hovered = (title_hover_win == idx);
 
@@ -330,9 +349,8 @@ static void draw_window_chrome(struct window *win, int idx, int focused) {
     // background, then each hand-drawn icon goes on top with its own
     // gfx_* calls -- these aren't text, so widgets.h's centered-label
     // path doesn't apply to them (see widgets.h's top comment).
-    int min_pressed = is_armed && title_btn_armed_kind == 0 && title_btn_pressed_active;
-    int min_tint = is_armed ? min_pressed : (is_hovered && title_hover_kind == 0);
-    widget_button(r.min_x, r.y, r.size, r.size, 0, min_tint ? hover_tint : btnbg, btnfg, min_pressed);
+    widget_button_state(r.min_x, r.y, r.size, r.size, 0, btnbg, btnfg,
+                         title_btn_state(0, is_armed, is_hovered));
     gfx_fill_rect(r.min_x + 4, r.y + r.size - 6, r.size - 8, 2, btnfg); // minimize: short bar
 
     // Maximize/restore: drawn muted and does nothing when the app isn't
@@ -344,9 +362,8 @@ static void draw_window_chrome(struct window *win, int idx, int focused) {
     // from its own muted base color instead of btnbg.
     uint32_t max_bg_base = can_resize ? btnbg : gfx_rgb(210, 210, 212);
     uint32_t max_fg = can_resize ? btnfg : gfx_rgb(170, 170, 172);
-    int max_pressed = is_armed && title_btn_armed_kind == 1 && title_btn_pressed_active;
-    int max_tint = is_armed ? max_pressed : (is_hovered && title_hover_kind == 1);
-    widget_button(r.max_x, r.y, r.size, r.size, 0, max_tint ? hover_tint : max_bg_base, max_fg, max_pressed);
+    widget_button_state(r.max_x, r.y, r.size, r.size, 0, max_bg_base, max_fg,
+                         title_btn_state(1, is_armed, is_hovered));
     gfx_draw_rect(r.max_x + 4, r.y + 4, r.size - 8, r.size - 8, max_fg); // maximize/restore: square outline
 
     // close: red button with a hand-drawn X. This used to draw the font
@@ -355,10 +372,8 @@ static void draw_window_chrome(struct window *win, int idx, int focused) {
     // way bigger than this button at most sizes). A hand-drawn diagonal
     // cross scales cleanly with r.size instead, same approach already
     // used for the minimize/maximize icons above.
-    int close_pressed = is_armed && title_btn_armed_kind == 2 && title_btn_pressed_active;
-    int close_tint = is_armed ? close_pressed : (is_hovered && title_hover_kind == 2);
-    uint32_t close_bg = close_tint ? hover_tint_close : gfx_rgb(190, 60, 60);
-    widget_button(r.close_x, r.y, r.size, r.size, 0, close_bg, btnfg, close_pressed);
+    widget_button_state(r.close_x, r.y, r.size, r.size, 0, gfx_rgb(190, 60, 60), btnfg,
+                         title_btn_state(2, is_armed, is_hovered));
     draw_close_icon(r.close_x, r.y, r.size, THEME_WHITE);
 }
 

@@ -56,13 +56,41 @@ struct gui_app {
     // a KEY_* code from keyboard.h. May be NULL if the app takes no input.
     void (*on_key)(struct window *win, int key);
 
-    // Called on a left-click inside the content area. (cx, cy) are
-    // content-relative (0,0 = top-left of the content area). May be NULL.
+    // Called on left-button-DOWN inside the content area -- NOT on
+    // release, despite the name. (cx, cy) are content-relative (0,0 =
+    // top-left of the content area). May be NULL.
+    //
+    // **Do not commit an action here if the control should be
+    // cancellable.** Nothing armed by on_press exists yet when this
+    // runs, so a control acting here fires the instant the button goes
+    // down and can never be cancelled by dragging away before release.
+    // For press-then-commit-on-release behaviour -- what every button
+    // in this GUI is supposed to have -- arm in on_press and act in
+    // on_release (see apps/control_panel.c, and the title bar's own
+    // wm_update_title_btn_press()). This callback suits things that
+    // genuinely act on contact: placing a text cursor, focusing a
+    // field. See docs/gui-guidelines.md.
     //
     // NOT called for a press on_drag_start() claims (see below) -- the
     // two are mutually exclusive per press: either a click, or a drag,
     // never both for the same button-down.
     void (*on_click)(struct window *win, int cx, int cy);
+
+    // Called every tick while the cursor is over this window's content
+    // area and NO button is held, with content-relative coordinates --
+    // and once more, with (-1, -1), when the cursor leaves. May be NULL.
+    //
+    // Return 1 only when the hovered item actually CHANGED, so holding
+    // still doesn't force a repaint every tick. That contract is copied
+    // verbatim from on_press above, which has the same shape for the
+    // same reason; an app implementing both usually shares one
+    // "which item is under this point" helper between them.
+    //
+    // Delivered to whichever window is under the cursor, focused or
+    // not: a control that only lights up once its window has focus
+    // feels dead in exactly the moment hover exists to serve. This is
+    // the only app callback that reaches an unfocused window.
+    int (*on_hover)(struct window *win, int cx, int cy);
 
     // Called on a left-button-DOWN inside the content area, before
     // on_click -- lets an app claim a multi-tick drag gesture (e.g.

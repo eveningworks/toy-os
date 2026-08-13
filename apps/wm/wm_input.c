@@ -446,6 +446,56 @@ void wm_update_title_btn_press(int mx, int my, uint8_t buttons) {
     redraw_pending = 1;
 }
 
+int content_hover_win = -1;
+
+// Tells the window under the cursor that it's hovered, and the one the
+// cursor just left that it isn't. See gui_apps.h's on_hover contract.
+//
+// Deliberately delivered to the topmost window under the cursor whether
+// or not it has focus -- the only app callback that reaches an
+// unfocused window. A control that stays inert until you've clicked its
+// window first is exactly the deadness hover exists to remove.
+void wm_update_content_hover(int mx, int my, uint8_t buttons) {
+    // While anything is held or armed, the press visual owns the
+    // feedback and hover must not fight it -- same deference
+    // wm_update_title_hover() shows title_btn_armed_win.
+    int suppressed = (buttons & 0x1) || content_pressed >= 0 ||
+                      content_dragging >= 0 || dragging >= 0 || resizing >= 0 ||
+                      title_btn_armed_win >= 0;
+
+    int now = -1;
+    if (!suppressed) {
+        for (int i = window_count - 1; i >= 0; i--) {
+            struct window *w = &windows[i];
+            if (w->state == WIN_MINIMIZED) continue;
+            if (!widget_hit(w->x, w->y, w->w, w->h, mx, my)) continue;
+            // Over this window, but the title bar isn't app content.
+            if (my >= w->y + WM_TITLEBAR_H) now = i;
+            break; // topmost hit wins either way -- windows below are covered
+        }
+    }
+
+    if (now != content_hover_win) {
+        // The window being left hears (-1,-1) so it can clear its own
+        // hover state; without this a control stays lit after the
+        // cursor has moved on, which looks like a stuck highlight.
+        if (content_hover_win >= 0 && content_hover_win < window_count) {
+            struct window *prev = &windows[content_hover_win];
+            if (prev->app && prev->app->on_hover) {
+                if (prev->app->on_hover(prev, -1, -1)) redraw_pending = 1;
+            }
+        }
+        content_hover_win = now;
+    }
+
+    if (now < 0) return;
+    struct window *w = &windows[now];
+    if (!w->app || !w->app->on_hover) return;
+    int ccx = mx - window_content_x(w);
+    int ccy = my - window_content_y(w);
+    if (w->app->on_hover(w, ccx, ccy)) redraw_pending = 1;
+}
+
 // Recomputes title_hover_win/kind from the live mouse position -- see
 // wm_internal.h's comment on title_hover_win. A no-op while a button's
 // armed (the press visual owns the drawing then, not hover).

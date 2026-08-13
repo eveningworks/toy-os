@@ -158,6 +158,13 @@ extern int title_btn_pressed_active;
 // hover. -1/-1 when the cursor isn't over any title-bar button, or
 // while a button is armed (the press visual takes over then -- see
 // above).
+// Index into windows[] of the window whose CONTENT area the cursor is
+// currently over, or -1. Distinct from title_hover_win above (that one
+// tracks the title BAR's own buttons, which the WM draws itself): this
+// exists only so the WM knows which app to tell when the cursor leaves,
+// since an app can't notice that on its own. See wm_update_content_hover().
+extern int content_hover_win;
+
 extern int title_hover_win;
 extern int title_hover_kind;
 
@@ -226,6 +233,13 @@ void wm_handle_right_click(int mx, int my);
 // title_btn_armed_win's own comment above for the full contract. A
 // no-op when nothing's armed (title_btn_armed_win == -1).
 void wm_update_title_btn_press(int mx, int my, uint8_t buttons);
+
+// Delivers gui_app's on_hover() to whichever window's content area the
+// cursor is over, and (-1,-1) to the one it just left. No-op while any
+// button is held or a press/drag is armed -- the press visual owns the
+// drawing then, exactly as wm_update_title_hover() steps aside for
+// title_btn_armed_win.
+void wm_update_content_hover(int mx, int my, uint8_t buttons);
 
 // Recomputes title_hover_win/kind from the live mouse position -- a
 // no-op while a button is armed (title_btn_armed_win >= 0), since the

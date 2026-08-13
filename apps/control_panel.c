@@ -175,7 +175,14 @@ static const struct applet g_applets[] = {
 #define APPLET_COUNT ((int)(sizeof(g_applets) / sizeof(g_applets[0])))
 
 struct control_panel_state {
-    int open_applet; // -1 = showing the chooser grid
+    int open_applet;   // -1 = showing the chooser grid
+    int hover_icon;    // applet index under the cursor, or -1
+    int armed_icon;    // applet index pressed but not yet released, or -1
+    int armed_active;  // 1 while the cursor is still over armed_icon
+    int hover_back;    // 1 when the cursor is over the Back button
+    int armed_back;    // 1 while Back is held
+    int last_px, last_py; // last position on_press saw, in absolute coords --
+                          // on_release gets no coordinates of its own
 };
 
 static struct control_panel_state g_state;
@@ -188,6 +195,22 @@ static struct icon_grid chooser_grid(int cx, int cy) {
     g.cell_h = CP_CELL_H;
     g.cols = CP_GRID_COLS;
     return g;
+}
+
+// The applet cell under a point, or -1. ONE hit-test shared by drawing,
+// hover, press and click: the Control Panel's first version had the
+// press path and the draw path computing cell geometry separately, and
+// the click path testing it in the wrong coordinate space entirely,
+// which is how it shipped a grid that rendered perfectly and opened
+// nothing. See docs/gui-guidelines.md.
+static int applet_at(struct window *win, int px, int py) {
+    struct icon_grid grid = chooser_grid(window_content_x(win), window_content_y(win));
+    for (int i = 0; i < APPLET_COUNT; i++) {
+        int ix, iy;
+        icon_grid_cell_rect(&grid, i % CP_GRID_COLS, i / CP_GRID_COLS, &ix, &iy);
+        if (widget_hit(ix, iy, CP_CELL_W, CP_CELL_H, px, py)) return i;
+    }
+    return -1;
 }
 
 void control_panel_default_size(int *w, int *h) {
@@ -203,6 +226,8 @@ void control_panel_default_size(int *w, int *h) {
 
 void control_panel_open(struct window *win) {
     g_state.open_applet = -1; // always opens on the chooser
+    g_state.hover_icon = g_state.armed_icon = -1;
+    g_state.armed_active = g_state.hover_back = g_state.armed_back = 0;
     window_set_state(win, &g_state);
 }
 
@@ -230,13 +255,34 @@ void control_panel_draw(struct window *win) {
             int ix, iy;
             icon_grid_cell_rect(&grid, i % CP_GRID_COLS, i / CP_GRID_COLS, &ix, &iy);
 
+            // Interaction state for this cell. Armed-but-dragged-off
+            // falls back to REST, not hover -- see
+            // docs/gui-guidelines.md; a control about to be cancelled
+            // must not look like it is still being interacted with.
+            enum ui_state st = UI_STATE_REST;
+            if (g_state.armed_icon == i) {
+                st = g_state.armed_active ? UI_STATE_PRESSED : UI_STATE_REST;
+            } else if (g_state.armed_icon < 0 && g_state.hover_icon == i) {
+                st = UI_STATE_HOVER;
+            }
+
+            // The WHOLE CELL carries the state wash (icon box + label),
+            // which is what makes a grid read as a grid rather than as
+            // loose boxes with text under them.
+            if (st != UI_STATE_REST) {
+                gfx_fill_rect(ix, iy, CP_CELL_W, CP_CELL_H,
+                               ui_state_bg(THEME_WINDOW_BG, st));
+            }
+
             // A plain framed box for the icon, centred in its cell.
             // There's no image decoder yet (Milestone 19), so every
             // "icon" in this OS is drawn geometry -- same as the
             // desktop's.
-            int icon_x = ix + (CP_CELL_W - CP_ICON_SIZE) / 2;
-            gfx_fill_rect(icon_x, iy, CP_ICON_SIZE, CP_ICON_SIZE, THEME_BUTTON_BG);
-            gfx_draw_rect(icon_x, iy, CP_ICON_SIZE, CP_ICON_SIZE, THEME_BORDER);
+            int nudge = (st == UI_STATE_PRESSED) ? 1 : 0;
+            int icon_x = ix + (CP_CELL_W - CP_ICON_SIZE) / 2 + nudge;
+            int icon_y = iy + nudge;
+            gfx_fill_rect(icon_x, icon_y, CP_ICON_SIZE, CP_ICON_SIZE, THEME_BUTTON_BG);
+            gfx_draw_rect(icon_x, icon_y, CP_ICON_SIZE, CP_ICON_SIZE, THEME_BORDER);
 
             // Label centred under the cell and clipped to it. The first
             // version of this hand-rolled the budgeting and got it
@@ -245,16 +291,19 @@ void control_panel_draw(struct window *win) {
             const char *label = g_applets[i].name;
             int label_w = gfx_text_width(label);
             if (label_w > CP_CELL_W) label_w = CP_CELL_W;
-            int label_x = ix + (CP_CELL_W - label_w) / 2;
-            gfx_draw_string_clipped(label_x, iy + CP_ICON_SIZE + 6, CP_CELL_W,
-                                     label, THEME_TEXT, THEME_WINDOW_BG);
+            int label_x = ix + (CP_CELL_W - label_w) / 2 + nudge;
+            gfx_draw_string_clipped(label_x, iy + CP_ICON_SIZE + 6 + nudge, CP_CELL_W,
+                                     label, THEME_TEXT, ui_state_bg(THEME_WINDOW_BG, st));
         }
         return;
     }
 
     int bx, by, bw, bh;
     back_button_rect(win, &bx, &by, &bw, &bh);
-    widget_button(bx, by, bw, bh, "< Back", THEME_BUTTON_BG, THEME_TEXT, 0 /* not pressed */);
+    enum ui_state back_st = g_state.armed_back
+                           ? (g_state.hover_back ? UI_STATE_PRESSED : UI_STATE_REST)
+                           : (g_state.hover_back ? UI_STATE_HOVER : UI_STATE_REST);
+    widget_button_state(bx, by, bw, bh, "< Back", THEME_BUTTON_BG, THEME_TEXT, back_st);
     gfx_draw_string(bx + bw + 14, by + 4, g_applets[g_state.open_applet].name,
                      THEME_TEXT, THEME_WINDOW_BG);
 
@@ -263,53 +312,115 @@ void control_panel_draw(struct window *win) {
                                          cw - 2 * CP_MARGIN, ch - (page_y - cy) - CP_MARGIN);
 }
 
-void control_panel_click(struct window *win, int rel_x, int rel_y) {
+// Cursor moved over the window with no button held. Returns 1 only when
+// the hovered item CHANGED -- gui_apps.h's on_hover contract, and what
+// keeps this from repainting the window every single tick.
+int control_panel_hover(struct window *win, int rel_x, int rel_y) {
     int cx = window_content_x(win);
     int cy = window_content_y(win);
-    int cw = window_content_w(win);
-    int ch = window_content_h(win);
-
-    // on_click hands CONTENT-RELATIVE coordinates (gui_apps.h: "0,0 =
-    // top-left of the content area"), while everything drawn above --
-    // and therefore every rectangle hit-tested below -- is in absolute
-    // screen coordinates. Converting once here keeps a single
-    // coordinate space through the rest of this file. Getting this
-    // wrong doesn't fail loudly: clicks just silently do nothing, which
-    // is exactly how it presented the first time (the icon grid drew
-    // perfectly and refused to open anything).
-    int px = cx + rel_x;
-    int py = cy + rel_y;
+    int left = (rel_x < 0 || rel_y < 0); // the cursor left this window
+    int px = cx + rel_x, py = cy + rel_y;
 
     if (g_state.open_applet < 0) {
-        struct icon_grid grid = chooser_grid(cx, cy);
-        for (int i = 0; i < APPLET_COUNT; i++) {
-            int ix, iy;
-            icon_grid_cell_rect(&grid, i % CP_GRID_COLS, i / CP_GRID_COLS, &ix, &iy);
-            // The icon box plus its label row, so the text is clickable
-            // too -- icon_grid_nearest_cell() deliberately isn't used
-            // here: it always returns a cell, which would make a click
-            // anywhere in the window open whatever applet was closest.
-            if (widget_hit(ix, iy, CP_CELL_W, CP_CELL_H, px, py) && i < APPLET_COUNT) {
-                g_state.open_applet = i;
-                window_invalidate(win);
-                return;
-            }
+        int now = left ? -1 : applet_at(win, px, py);
+        if (now == g_state.hover_icon) return 0;
+        g_state.hover_icon = now;
+        return 1;
+    }
+
+    int bx, by, bw, bh;
+    back_button_rect(win, &bx, &by, &bw, &bh);
+    int now = left ? 0 : widget_hit(bx, by, bw, bh, px, py);
+    if (now == g_state.hover_back) return 0;
+    g_state.hover_back = now;
+    return 1;
+}
+
+// Button held. Called every tick with live coordinates (see gui_apps.h),
+// which is what lets "still over the armed control?" track the cursor
+// rather than being decided once at press time.
+int control_panel_press(struct window *win, int rel_x, int rel_y) {
+    int px = window_content_x(win) + rel_x;
+    int py = window_content_y(win) + rel_y;
+    g_state.last_px = px;
+    g_state.last_py = py;
+
+    if (g_state.open_applet < 0) {
+        int hit = applet_at(win, px, py);
+        if (g_state.armed_icon < 0) {           // first tick of this press
+            if (hit < 0) return 0;
+            g_state.armed_icon = hit;
+            g_state.armed_active = 1;
+            g_state.hover_icon = -1;            // press visual owns it now
+            return 1;
         }
+        int active = (hit == g_state.armed_icon);
+        if (active == g_state.armed_active) return 0;
+        g_state.armed_active = active;
+        return 1;
+    }
+
+    int bx, by, bw, bh;
+    back_button_rect(win, &bx, &by, &bw, &bh);
+    int over = widget_hit(bx, by, bw, bh, px, py);
+    if (!g_state.armed_back) {
+        if (!over) return 0;
+        g_state.armed_back = 1;
+        return 1;
+    }
+    if (over == g_state.hover_back) return 0;
+    g_state.hover_back = over;
+    return 1;
+}
+
+// Where the action actually happens.
+//
+// NOT in on_click: despite its name and its doc comment, the WM fires
+// on_click on button-DOWN (wm_input.c), so nothing armed by on_press
+// exists yet when it runs -- a control that committed there would fire
+// on press and could never be cancelled by dragging away. on_release is
+// the only callback that means "the user let go", which is what
+// commit-on-target requires. Same structure as the title-bar buttons'
+// wm_update_title_btn_press(). See docs/gui-guidelines.md.
+void control_panel_release(struct window *win) {
+    int armed_icon = g_state.armed_icon;
+    int armed_active = g_state.armed_active;
+    int armed_back = g_state.armed_back;
+    g_state.armed_icon = -1;
+    g_state.armed_active = 0;
+    g_state.armed_back = 0;
+
+    if (g_state.open_applet < 0) {
+        // Commit only if the release landed on the same cell the press
+        // armed. Press, drag away, release: nothing happens.
+        if (armed_icon >= 0 && armed_active) {
+            g_state.open_applet = armed_icon;
+            g_state.hover_icon = -1;
+            window_invalidate(win);
+            return;
+        }
+        window_invalidate(win); // clear the pressed look
         return;
     }
 
     int bx, by, bw, bh;
     back_button_rect(win, &bx, &by, &bw, &bh);
-    if (widget_hit(bx, by, bw, bh, px, py)) {
+    if (armed_back && widget_hit(bx, by, bw, bh, g_state.last_px, g_state.last_py)) {
         g_state.open_applet = -1;
+        g_state.hover_back = 0;
         window_invalidate(win);
         return;
     }
 
+    // Inside an applet page: hand the release to the applet, so its own
+    // controls follow the same press-then-release-on-target rule.
+    int cw = window_content_w(win), ch = window_content_h(win);
+    int cy = window_content_y(win);
     int page_y = by + bh + CP_HEADER_GAP;
-    if (g_applets[g_state.open_applet].click(cx + CP_MARGIN, page_y,
+    if (g_applets[g_state.open_applet].click(window_content_x(win) + CP_MARGIN, page_y,
                                               cw - 2 * CP_MARGIN,
-                                              ch - (page_y - cy) - CP_MARGIN, px, py)) {
+                                              ch - (page_y - cy) - CP_MARGIN,
+                                              g_state.last_px, g_state.last_py)) {
         window_invalidate(win);
     }
 }

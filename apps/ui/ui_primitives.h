@@ -36,14 +36,46 @@ int widget_hit(int x, int y, int w, int h, int px, int py);
 // it stays correct across gfx_set_font_size() calls same as everything
 // else that draws text). Pass label=NULL for an icon-only button.
 //
-// `pressed` draws a 2px inset border in a fixed dark color and nudges
-// the label 1px down/right -- the classic "this button is currently
-// held down" look. Deliberately doesn't darken `bg` itself: that would
-// need unpacking an arbitrary already-packed pixel color back into
-// r/g/b (gfx.c keeps that math private to its own blending code, see
-// gfx_blend_pixel()), where an inset border needs no color math at all
-// and reads just as clearly as "pressed." Callers that don't care pass
-// 0 and get the exact same pixels either way.
+// The interaction states every clickable control in this GUI has. See
+// docs/gui-guidelines.md for what each one means and when a control is
+// required to show them; this enum is that document's vocabulary in
+// code, so the two can't drift into describing different things.
+enum ui_state {
+    UI_STATE_REST = 0,  // idle -- the control's own colours, no decoration
+    UI_STATE_HOVER,     // cursor is over it, no button held
+    UI_STATE_PRESSED,   // held down AND the cursor is still over it
+    UI_STATE_DISABLED,  // visible, explained by its context, does nothing
+};
+
+// `base` shifted for `state`: a light wash for hover, a darker one for
+// pressed, muted for disabled, and `base` itself at rest.
+//
+// Derived from the caller's own colour rather than read from a fixed
+// palette, so it works for any control -- the title bar's red close
+// button gets a lighter red on hover and a darker red pressed, with no
+// special case, where the old code carried a hand-picked
+// `hover_tint_close` constant precisely because it couldn't do this.
+uint32_t ui_state_bg(uint32_t base, enum ui_state state);
+
+// Fills the rect with `bg` shifted for `state`, then -- if `label` is
+// non-NULL -- centers it in `fg` using the current font. Pass
+// label=NULL for an icon-only button.
+//
+// Pressed shows as a DARKER FILL plus a 1px down-right nudge of the
+// label, not the 2px inset border this used to draw. The inset border
+// existed for a concrete reason that has since expired: darkening an
+// arbitrary packed pixel needed colour maths this file couldn't reach,
+// as the previous version of this comment explained at length.
+// gfx_blend() became public for the console cursor's translucent style
+// and lifted that constraint; nothing revisited this until the GUI
+// guidelines asked for one flat, modern language across every control.
+void widget_button_state(int x, int y, int w, int h, const char *label,
+                          uint32_t bg, uint32_t fg, enum ui_state state);
+
+// widget_button_state() with REST/PRESSED only. Kept because most
+// callers genuinely have no hover state to report (nothing delivers
+// them mouse motion), and `pressed ? PRESSED : REST` at every one of
+// those call sites would be noise.
 void widget_button(int x, int y, int w, int h, const char *label, uint32_t bg, uint32_t fg, int pressed);
 
 #endif
