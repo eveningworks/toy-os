@@ -17,4 +17,10 @@ int  uidemo_hover(struct window *win, int cx, int cy);
 void uidemo_click(struct window *win, int cx, int cy);
 void uidemo_key(struct window *win, int key);
 
+// Scrolling: the wheel, plus thumb dragging via on_drag_start/on_drag.
+// Track clicks page from uidemo_click(), the same split notepad.c uses.
+void uidemo_wheel(struct window *win, int delta);
+int  uidemo_drag_start(struct window *win, int cx, int cy);
+void uidemo_drag(struct window *win, int cx, int cy);
+
 #endif

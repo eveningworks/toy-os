@@ -49,7 +49,7 @@
 //   uidemo: radio <name>
 //   uidemo: focus textbox
 //   uidemo: key <code> text="<contents>"
-//   uidemo: scroll <offset>
+//   uidemo: scroll <offset> <wheel|page|thumb>
 //
 // Widget names are stable identifiers, not display labels: btn1, btn2,
 // btn3, chk_alpha, chk_beta, radio, textbox, scrollback, none.
@@ -106,6 +106,11 @@ struct uidemo_state {
     // "cancel btn", which is exactly the sort of noise a log-asserting
     // test trips over.
     int armed;
+    // Set by uidemo_drag_start() when the press grabbed the scrollbar
+    // thumb; the offset within the thumb that was grabbed, so the drag
+    // moves the thumb WITH the cursor rather than snapping its top to
+    // it. Same shape as notepad.c's scrollbar_grab_offset.
+    int thumb_grab;
     char status[64];
 };
 
@@ -129,6 +134,18 @@ static void logline(const char *fmt_done) {
 
 static void set_status(const char *s) {
     k_strcpy(g_state.status, s);
+}
+
+static void scroll_metrics(struct window *win, int *total, int *visible) {
+    (void)win;
+    widget_scrollback_metrics(&g_state.log, SCROLL_W, scroll_h(), total, visible);
+}
+
+static void log_scroll(const char *how) {
+    char msg[48];
+    k_snprintf(msg, sizeof msg, "scroll %d %s", g_state.log.scroll_offset, how);
+    logline(msg);
+    set_status(msg);
 }
 
 // Which widget is at this content-relative point? One function, used by
@@ -308,6 +325,19 @@ void uidemo_click(struct window *win, int cx, int cy) {
             logline(msg);
             set_status(msg);
         }
+    } else if (w == W_SCROLLBACK) {
+        // Reached only for a track click: a thumb press was claimed by
+        // uidemo_drag_start() and never becomes an on_click.
+        int total, visible;
+        scroll_metrics(win, &total, &visible);
+        enum scrollbar_zone zone =
+            widget_scrollbar_hit(PAD + SCROLL_W, 0, SCROLLBAR_W, scroll_h(),
+                                  total, visible, g_state.log.scroll_offset,
+                                  cx, cy - row_scroll());
+        int page = visible > 1 ? visible - 1 : 1;
+        if (zone == SCROLLBAR_ZONE_ABOVE)      widget_scrollback_scroll(&g_state.log, page);
+        else if (zone == SCROLLBAR_ZONE_BELOW) widget_scrollback_scroll(&g_state.log, -page);
+        if (zone == SCROLLBAR_ZONE_ABOVE || zone == SCROLLBAR_ZONE_BELOW) log_scroll("page");
     } else if (w == W_TEXTBOX) {
         ui_textbox_set_active(&g_state.textbox, 1);
         logline("focus textbox");
@@ -315,6 +345,57 @@ void uidemo_click(struct window *win, int cx, int cy) {
     } else {
         ui_textbox_set_active(&g_state.textbox, 0);
     }
+    window_invalidate(win);
+}
+
+// --- scrolling -------------------------------------------------------
+//
+// All three routes a real scrollbar has, because a scrollbar that only
+// draws is a decoration: the wheel, clicking the track to page, and
+// dragging the thumb. The first version of this app had none of them --
+// it drew the bar and left it inert, while this file's own log grammar
+// advertised a `scroll` event it never emitted.
+
+#define WHEEL_LINES 3
+
+void uidemo_wheel(struct window *win, int delta) {
+    widget_scrollback_scroll(&g_state.log, delta * WHEEL_LINES);
+    log_scroll("wheel");
+    window_invalidate(win);
+}
+
+// Only a thumb hit claims the drag. A track click is act-on-contact
+// paging and is handled in uidemo_click() instead -- the same split
+// notepad.c uses, and the reason on_drag_start returns 0 there.
+int uidemo_drag_start(struct window *win, int cx, int cy) {
+    (void)win;
+    layout();
+    if (widget_at(cx, cy) != W_SCROLLBACK) return 0;
+
+    int total, visible;
+    scroll_metrics(win, &total, &visible);
+    int local_y = cy - row_scroll();
+    enum scrollbar_zone zone =
+        widget_scrollbar_hit(PAD + SCROLL_W, 0, SCROLLBAR_W, scroll_h(),
+                              total, visible, g_state.log.scroll_offset, cx, local_y);
+    if (zone != SCROLLBAR_ZONE_THUMB) return 0;
+
+    int thumb_y, thumb_h;
+    widget_scrollbar_thumb_rect(0, scroll_h(), total, visible,
+                                 g_state.log.scroll_offset, &thumb_y, &thumb_h);
+    g_state.thumb_grab = local_y - thumb_y;
+    return 1;
+}
+
+void uidemo_drag(struct window *win, int cx, int cy) {
+    (void)cx;
+    layout();
+    int total, visible;
+    scroll_metrics(win, &total, &visible);
+    g_state.log.scroll_offset =
+        widget_scrollbar_offset_for_drag(0, scroll_h(), total, visible,
+                                          cy - row_scroll(), g_state.thumb_grab);
+    log_scroll("thumb");
     window_invalidate(win);
 }
 

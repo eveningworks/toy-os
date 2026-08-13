@@ -147,6 +147,19 @@ using `## [x.y.z] - date` headings is here.
     (`key 100 text="type hereabc"`), and press-drag-off produces
     `cancel btn` with no `button N`. Screenshot in
     `screenshots/2026-08-13/`.
+  - **The scrollbar shipped inert, and the reporter found it.** It drew
+    correctly and did nothing: no `on_wheel`, no track-click paging, no
+    thumb drag. The tell was there to be noticed and wasn't -- this
+    file's own log grammar documented a `scroll` event that no code path
+    emitted. Testing had exercised click and key on six widgets and
+    simply never tried to scroll, which is the failure mode of testing
+    what you built rather than what the thing is supposed to do.
+    All three routes work now (wheel, track paging, thumb drag), each
+    logging `scroll <offset> <how>`.
+  - That in turn exposed a gap in the debug console: there was no
+    `gui wheel`, so the wheel path couldn't be driven from a test at
+    all. Added, since apps genuinely handle the wheel and an injection
+    set missing it is quietly incomplete.
 
 - **A `gui` command family for the serial debug console -- inspect and
   drive the window manager without a single pixel.** Asked for after
@@ -165,7 +178,7 @@ using `## [x.y.z] - date` headings is here.
     armed drag/resize/press, and the damage rect, which is otherwise
     completely invisible), `gui apps`. Each takes `--json`.
   - **Driving**: `gui open <App>` / `gui close <n>` for setup, and
-    `gui click` / `gui drag` / `gui key` injecting synthetic events into
+    `gui click` / `gui drag` / `gui key` / `gui wheel` injecting events into
     the WM loop. A click queues four events (move, press, held, release)
     consumed one per frame, so press and release land on separate
     frames -- which is what every arm-on-press/commit-on-release control

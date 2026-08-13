@@ -60,4 +60,11 @@ int wm_debug_next_input(int *out_x, int *out_y, uint8_t *out_buttons);
 // Same idea for keys: returns the next injected key code, or 0 if none.
 int wm_debug_next_key(void);
 
+// ...and for the wheel: returns the next injected notch delta, or 0.
+// Present because apps DO handle the wheel (a scrollback's scrollbar
+// is not fully exercised without it), so leaving it out would make the
+// injection set quietly incomplete -- which is how UI Demo's scrolling
+// shipped untested the first time.
+int wm_debug_next_wheel(void);
+
 #endif

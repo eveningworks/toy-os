@@ -60,6 +60,8 @@ const struct gui_app gui_app_registry[] = {
     { .name = "UI Demo", .default_size = uidemo_default_size, .on_open = uidemo_open,
       .on_draw = uidemo_draw, .on_key = uidemo_key, .on_click = uidemo_click,
       .on_press = uidemo_press, .on_release = uidemo_release,
-      .on_hover = uidemo_hover, .resizable = 1 },
+      .on_hover = uidemo_hover, .on_wheel = uidemo_wheel,
+      .on_drag_start = uidemo_drag_start, .on_drag = uidemo_drag,
+      .resizable = 1 },
 };
 const int gui_app_registry_count = sizeof(gui_app_registry) / sizeof(gui_app_registry[0]);

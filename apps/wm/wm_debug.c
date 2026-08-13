@@ -26,6 +26,9 @@ static int g_inject_head = 0, g_inject_tail = 0;
 static int g_keys[KEY_INJECT_MAX];
 static int g_keys_head = 0, g_keys_tail = 0;
 
+static int g_wheel[KEY_INJECT_MAX];
+static int g_wheel_head = 0, g_wheel_tail = 0;
+
 static int inject_push(int x, int y, uint8_t buttons) {
     int next = (g_inject_tail + 1) % INJECT_MAX;
     if (next == g_inject_head) return 0; // full
@@ -43,6 +46,13 @@ int wm_debug_next_input(int *out_x, int *out_y, uint8_t *out_buttons) {
     *out_buttons = g_inject[g_inject_head].buttons;
     g_inject_head = (g_inject_head + 1) % INJECT_MAX;
     return 1;
+}
+
+int wm_debug_next_wheel(void) {
+    if (g_wheel_head == g_wheel_tail) return 0;
+    int d = g_wheel[g_wheel_head];
+    g_wheel_head = (g_wheel_head + 1) % KEY_INJECT_MAX;
+    return d;
 }
 
 int wm_debug_next_key(void) {
@@ -429,6 +439,16 @@ static int cmd_key(const char *s) {
     return 1;
 }
 
+static int cmd_wheel(const char *s) {
+    int delta;
+    if (!parse_int(s, &delta) || delta == 0) return 0;
+    int next = (g_wheel_tail + 1) % KEY_INJECT_MAX;
+    if (next == g_wheel_head) return 0;
+    g_wheel[g_wheel_tail] = delta;
+    g_wheel_tail = next;
+    return 1;
+}
+
 static void usage(void) {
     klog_write("gui subcommands (all of these work while the desktop is up):\r\n");
     klog_write("  windows [--json]      open windows: rects, content rects, z-order, focus\r\n");
@@ -442,6 +462,7 @@ static void usage(void) {
     klog_write("  click X Y             synthetic press+release at a point\r\n");
     klog_write("  drag X1 Y1 X2 Y2      synthetic press, interpolated move, release\r\n");
     klog_write("  key <c|0xNN>          synthetic keypress to the focused window\r\n");
+    klog_write("  wheel <n>             synthetic wheel notches (+up / -down)\r\n");
     klog_write("Injected input enters at the WM loop, below the PS/2 driver -- it tests\r\n");
     klog_write("WM/app logic, not the mouse driver. It is also asynchronous: the events\r\n");
     klog_write("drain one per frame, so allow ~100ms before reading the result back.\r\n");
@@ -529,6 +550,12 @@ int wm_debug_dispatch(char *line) {
                      ? "gui: queued drag (%d,%d) -> (%d,%d)\r\n"
                      : "gui: input queue full, drag (%d,%d) -> (%d,%d) DROPPED\r\n",
                      x0, y0, x1, y1);
+        return 1;
+    }
+
+    if (k_strcmp(sub, "wheel") == 0) {
+        klog_write(cmd_wheel(next_tok(&p)) ? "gui: queued wheel\r\n"
+                                            : "gui: bad or dropped wheel delta\r\n");
         return 1;
     }
 

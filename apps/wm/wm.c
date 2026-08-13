@@ -555,6 +555,9 @@ void wm_run(void) {
         }
 
         int wheel = mouse_get_wheel_delta();
+        if (wheel == 0) wheel = wm_debug_next_wheel(); // `gui wheel`, same
+                                                        // second-place rule as
+                                                        // the injected key above
 
         if (key != -1 || wheel != 0) {
             // A modal file picker (e.g. Notepad's Save As...) captures

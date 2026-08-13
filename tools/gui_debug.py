@@ -175,6 +175,15 @@ class DebugConsole:
         self.settle()
         return self.events()
 
+    def wheel(self, notches, settle=True):
+        """Positive scrolls up (reveals older content), matching
+        mouse.h's mouse_get_wheel_delta()."""
+        self.send(f"gui wheel {notches}")
+        if not settle:
+            return []
+        self.settle()
+        return self.events()
+
     def menu_row(self, label):
         """Centre point of the Start menu row with this label, straight
         from the kernel's own geometry -- the thing gui_flow.py's
