@@ -209,6 +209,35 @@ using `## [x.y.z] - date` headings is here.
   - `fputest` from the shell runs both halves.
 
 ### Fixed
+- **Cursor trail when shrinking a window (reported; fix NOT reproduced
+  under QMP -- see below).** Resizing a window smaller left a line of
+  stale cursor sprites behind; growing one didn't.
+  - Mechanism: `wm_render_frame()` never undrew the cursor before
+    repainting -- it only re-saved the pixels underneath at the end, via
+    `draw_cursor_at()`. So the old sprite was erased only where the
+    scene happened to repaint over it. A resize damages `union(old,
+    new)`, whose bottom-right edge is exactly the old corner -- which is
+    where the grip, and therefore the cursor, is -- and the sprite
+    extends down-right PAST that edge. Growing hides the same bug
+    because the window expands over the old position. A resize also
+    keeps `redraw_pending` set every frame, so the cheap
+    `wm_render_cursor_move()` path (which *does* restore first) is never
+    taken for the duration of the drag.
+  - Fix: `restore_cursor_under()` at the top of `wm_render_frame()`,
+    before the scene clip is applied, so the write isn't confined to the
+    damage rect -- the whole point being that the stale pixels are
+    outside it. This also makes the two render paths symmetric; the
+    cheap one has always restored first.
+  - **Honest status: the symptom was not reproducible under QMP.** Both
+    a stepped drag and a fast continuous one (30 back-to-back `move_rel`
+    calls with no settle) left no trail on a deliberately-rebuilt buggy
+    build, so QEMU's PS/2 emulation is evidently coalescing the motion
+    into far fewer frames than a real mouse generates. The fix is
+    reasoned from the code, is strictly more correct than not doing it,
+    and was confirmed to change nothing else (a pixel diff against the
+    unfixed build differs only in the taskbar clock) -- but it has not
+    been proven against the actual symptom, which needs a real mouse.
+
 - **An app could draw outside its own window, straight onto the desktop.**
   Reported from a screenshot: shrinking the Control Panel left System
   Info's lower rows marching down the desktop, fully legible, well

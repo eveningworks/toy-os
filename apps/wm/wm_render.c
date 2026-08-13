@@ -571,6 +571,25 @@ static int window_intersects_damage(const struct window *w) {
 }
 
 void wm_render_frame(int mx, int my) {
+    // Undraw the cursor FIRST, before anything else repaints.
+    //
+    // Without this, the old cursor sprite is erased only where the scene
+    // happens to repaint over it -- and during a resize that isn't
+    // everywhere. Shrinking a window damages union(old, new), whose
+    // bottom-right edge is exactly the old corner, which is exactly
+    // where the grip (and therefore the cursor) is; the sprite extends
+    // down-right PAST that edge, so the overhang was never repainted
+    // and every frame of the drag left one behind. Growing hid the same
+    // bug, because the window expands over the old position.
+    //
+    // Deliberately before apply_scene_clip() below: this write must not
+    // be confined to the damage rect, since the whole point is that the
+    // stale pixels are outside it. The pixels it restores are the real
+    // pre-cursor scene content, so anywhere the repaint doesn't cover
+    // they are already correct, and anywhere it does they're overwritten
+    // a moment later.
+    restore_cursor_under();
+
     compute_window_damage();
 
     // Clip this whole pass to the accumulated damage region, if any was
