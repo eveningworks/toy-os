@@ -54,6 +54,7 @@
 #include "ui/ui.h"
 #include "editor.h"
 #include "shell.h"
+#include "completion.h"
 #include "kapi.h"
 #include "theme.h"
 
@@ -226,6 +227,47 @@ static void term_history_add(struct terminal_state *st, const char *line) {
 // redraw_line(), just via the widget instead of vga_backspace()) and
 // replaces it with `new_line`, used by the up/down history browsing
 // below.
+// One Tab press, GUI Terminal flavour. Candidate generation is shared
+// with the physical shell (apps/completion.c); what differs is purely
+// presentation -- everything here goes through the text_scrollback
+// widget instead of vga_putc(), and the prompt is reprinted via
+// term_print_prompt() rather than by writing cwd out by hand. Keeping
+// that split is the whole reason completion.c has no drawing in it.
+static void term_complete_line(struct terminal_state *st) {
+    static struct completion_result r;
+    st->line[st->line_len] = '\0';
+    if (completion_run(st->line, st->line_len, &r) == 0) return;
+
+    for (int i = 0; r.insert[i] && st->line_len < TERM_LINE_MAX - 1; i++) {
+        st->line[st->line_len++] = r.insert[i];
+        widget_scrollback_putc(&st->tb, r.insert[i]);
+    }
+    if (r.add_space && st->line_len < TERM_LINE_MAX - 1) {
+        st->line[st->line_len++] = ' ';
+        widget_scrollback_putc(&st->tb, ' ');
+    }
+    st->line[st->line_len] = '\0';
+
+    if (r.count <= 1) return;
+
+    widget_scrollback_putc(&st->tb, '\n');
+    int col = 0;
+    for (int i = 0; i < r.count; i++) {
+        for (const char *p = r.candidates[i]; *p; p++) widget_scrollback_putc(&st->tb, *p);
+        int clen = (int)k_strlen(r.candidates[i]);
+        int pad = clen >= 15 ? 1 : 16 - clen;
+        for (int p = 0; p < pad; p++) widget_scrollback_putc(&st->tb, ' ');
+        if (++col == 4) { widget_scrollback_putc(&st->tb, '\n'); col = 0; }
+    }
+    if (col != 0) widget_scrollback_putc(&st->tb, '\n');
+    if (r.truncated) {
+        for (const char *p = "... (more matches not shown)\n"; *p; p++) widget_scrollback_putc(&st->tb, *p);
+    }
+
+    term_print_prompt(st);
+    for (int i = 0; i < st->line_len; i++) widget_scrollback_putc(&st->tb, st->line[i]);
+}
+
 static void term_set_line(struct terminal_state *st, const char *new_line) {
     for (int i = 0; i < st->line_len; i++) widget_scrollback_backspace(&st->tb);
     widget_scrollback_set_color(&st->tb, VGA_LIGHT_GREY);
@@ -664,6 +706,8 @@ void terminal_key(struct window *win, int key) {
         // now set) -- terminal_process_exit() prints the next prompt
         // once it actually finishes, not here.
         if (!st->in_editor && !st->running_pid) term_print_prompt(st);
+    } else if (key == '\t') {
+        term_complete_line(st);
     } else if (key == '\b') {
         if (st->line_len > 0) {
             st->line_len--;

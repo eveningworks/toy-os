@@ -155,7 +155,9 @@ rather than swapping numbers.
 - [ ] `>`/`<`/`>>` redirection
 - [ ] Background jobs (`&`)
 - [ ] `fg`/`bg`/`jobs`
-- [ ] Tab completion (commands, then paths)
+- [x] ~~Tab completion (commands, then paths)~~ -- done, see
+      `CHANGELOG.md`'s `[Unreleased]` entry (commands, paths, and
+      per-command argument sets, shared by both shells)
 - [ ] Globbing (`*`, `?`) expanded by the shell, not each command
 - [ ] Environment variables + `export`
 - [ ] `&&`, `||`, `;` command sequencing

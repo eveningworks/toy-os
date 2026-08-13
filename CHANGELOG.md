@@ -31,6 +31,47 @@ using `## [x.y.z] - date` headings is here.
 ## [Unreleased]
 
 ### Added
+- **Tab completion in both shells** (`apps/completion.c`/`completion.h`,
+  Milestone 7's first item), asked for as "auto completion like in zsh".
+  Behaviour follows zsh's default rather than bash's: one Tab extends
+  the word as far as every candidate agrees, and if more than one
+  candidate remains they're listed in columns and the prompt is redrawn
+  underneath (zsh's AUTO_LIST). No menu cycling, so there's no state
+  between keystrokes.
+  - **Three domains.** The first word completes command names. An
+    argument of a command with a known argument set completes from that
+    set -- `run` (the console app registry *and* the real `/bin`
+    binaries, since `run` accepts either), `color`, `debug` (subsystem,
+    then on/off), `keyboard` (whatever layout files are actually in
+    `/etc/kbs`, not a hardcoded us/se -- the point of layouts being data
+    files), `timezone` (the city database), `fontsize`, `fsck`, `help`.
+    Everything else completes filesystem paths, resolved against the
+    shell's cwd, with directories getting a trailing `/` so the next Tab
+    descends.
+  - **Candidate generation only.** `completion.c` does no input handling
+    and no drawing. That's because there are two shells with completely
+    separate input loops -- `shell_read_line()` driving
+    `keyboard_getchar()`/`vga_putc()`, and `terminal.c`'s `on_key`
+    drawing through a `text_scrollback` widget -- and only the candidate
+    logic is genuinely common. A shared *line editor* would be the
+    better end state and is still worth doing, but it means rewriting
+    two working input paths; see `docs/decisions.md`.
+  - New `shell_resolve_path()` (`shell.h`) exposes the shell's existing
+    cwd-relative path resolution, which completion needs to turn a
+    half-typed path into a directory `fs_list()` accepts.
+  - Verified live in both shells: `ca<TAB>` -> `cat `, `c<TAB>` lists
+    cat/cd/clear/color, `cat /etc/ti<TAB>` -> `/etc/timezones` (and the
+    file actually reads), `color li<TAB>` extends to `light` and lists
+    the six, `debug <TAB>` lists fs/wm/ata, `run <TAB>` lists the
+    registry apps alongside all 17 `/bin` binaries. Screenshots
+    `completion_paths.png`, `completion_args.png`,
+    `completion_run_targets.png`, `completion_gui_terminal.png`.
+  - Two bugs found by testing rather than by reading, both fixed here:
+    candidates were matched against the wrong string on the path
+    branch (the full `/etc/timezones` was compared against the `ti`
+    prefix, so path completion silently found nothing), and the
+    trailing space added after a unique completion broke every command
+    that treats its argument as a single value -- see Fixed below.
 - **`docs/roadmap.md` expanded: 10 new milestones and ~70 new steps**
   across the existing ones, asked for as "add plenty now so we have more
   things to implement and maybe fix". The file went 1,066 -> 1,541 lines;
@@ -758,6 +799,14 @@ using `## [x.y.z] - date` headings is here.
   as the active selection.
 
 ### Fixed
+- **`dispatch()` didn't trim trailing whitespace from a command's
+  arguments** (`apps/shell.c`), so `cat /etc/timezones ` looked up a
+  filename with a space on the end and failed with "no such file".
+  Always true for a hand-typed trailing space; tab completion made it
+  easy to hit, since completing a unique match appends one. Most
+  commands here treat `args` as a single value (a path, a colour name, a
+  number) rather than splitting it further, so the trim belongs in the
+  one place that produces `args`.
 - **A transient read failure at boot reformatted the whole disk.**
   `tfs_init()` was one condition -- `if (ata_read_sector(superblock) &&
   magic ok && version ok) { load } else { format }` -- so a *failed

@@ -10,6 +10,7 @@
 #include "shell.h"
 #include "shell_internal.h"
 #include "apps.h"
+#include "completion.h"
 
 // Shell-wide state -- declared `extern` in shell_internal.h for
 // shell_fs.c/shell_sys.c, defined here since this is the file that owns
@@ -121,6 +122,17 @@ static void dispatch(char *line) {
         *args = '\0';
         args++;
         while (*args == ' ') args++;
+        // Trim TRAILING spaces too. Most commands here treat `args` as
+        // a single value (a path, a colour name, a number) rather than
+        // splitting it further, so "cat /etc/timezones " would look up a
+        // filename with a space on the end and fail with "no such file".
+        // That was always true for a hand-typed trailing space; tab
+        // completion made it easy to hit, since completing a unique
+        // match appends one.
+        char *end = args;
+        while (*end) end++;
+        while (end > args && end[-1] == ' ') { end--; *end = '\0'; }
+        if (*args == '\0') args = 0;
     } else {
         args = 0;
     }
@@ -211,6 +223,14 @@ static void dispatch(char *line) {
         cmd_lspci();
     } else if (k_strcmp(cmd, "parttable") == 0) {
         cmd_parttable();
+    } else if (completion_is_known_command(cmd)) {
+        // Listed in apps/completion.c's table but not handled above --
+        // the two lists have drifted. Say so specifically rather than
+        // claiming the command doesn't exist, since tab-completion just
+        // offered it. See completion.h on why the table is separate.
+        vga_write("Internal error: '");
+        vga_write(cmd);
+        vga_write("' is tab-completable but has no dispatch case.\n");
     } else {
         vga_write("Unknown command: ");
         vga_write(cmd);
@@ -228,6 +248,15 @@ void shell_dispatch(char *line, const struct vga_sink *sink) {
 
 const char *shell_cwd(void) {
     return cwd;
+}
+
+// Public wrapper around resolve_path() (shell_internal.h) for callers
+// outside the shell's own three files -- apps/completion.c needs to turn
+// a partially-typed path into something fs_list() will accept, and that
+// resolution is genuinely shell state (it's relative to `cwd`), not
+// something fs.h should grow a notion of.
+int shell_resolve_path(const char *input, char *out) {
+    return resolve_path(input, out);
 }
 
 // Persists across reboot the same way timezone/fontsize/keyboard do --
@@ -305,6 +334,55 @@ static void redraw_line(const char *old, const char *new_line) {
     vga_write(new_line);
 }
 
+// Applies one Tab press to `buf` and echoes whatever changed. Returns
+// the new cursor position. The candidate generation lives in
+// apps/completion.c (shared with the GUI Terminal); everything here is
+// this shell's own idea of how to show the result -- insert the agreed
+// text inline, and on a genuine ambiguity print the candidates in
+// columns and redraw the prompt underneath, the way zsh does.
+static unsigned int shell_complete_line(char *buf, unsigned int pos, unsigned int len) {
+    static struct completion_result r; // ~3KB -- static, not stack: this runs on the shell's own modest stack
+    if (completion_run(buf, (int)pos, &r) == 0) return pos;
+
+    // Insert the part every candidate agrees on, if any.
+    for (int i = 0; r.insert[i] && pos < len - 1; i++) {
+        buf[pos++] = r.insert[i];
+        vga_putc(r.insert[i]);
+    }
+    if (r.add_space && pos < len - 1) {
+        buf[pos++] = ' ';
+        vga_putc(' ');
+    }
+    buf[pos] = '\0';
+
+    // One candidate needs no list -- it's already been completed above.
+    if (r.count <= 1) return pos;
+
+    // Ambiguous: list what's available, then reprint the prompt and the
+    // line so the user is back where they were with more information.
+    vga_putc('\n');
+    int col = 0;
+    for (int i = 0; i < r.count; i++) {
+        vga_write(r.candidates[i]);
+        unsigned int clen = (unsigned int)k_strlen(r.candidates[i]);
+        // Pad to a 16-column grid, wrapping at 4 columns -- wide enough
+        // for most command and file names without assuming a console
+        // width this code can't actually query.
+        unsigned int pad = clen >= 15 ? 1 : 16 - clen;
+        for (unsigned int p = 0; p < pad; p++) vga_putc(' ');
+        if (++col == 4) { vga_putc('\n'); col = 0; }
+    }
+    if (col != 0) vga_putc('\n');
+    if (r.truncated) vga_write("... (more matches not shown)\n");
+
+    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    vga_write(cwd);
+    vga_write("> ");
+    vga_set_color(shell_fg, VGA_BLACK);
+    vga_write(buf);
+    return pos;
+}
+
 static void shell_read_line(char *buf, unsigned int len) {
     unsigned int pos = 0;
     buf[0] = '\0';
@@ -344,6 +422,9 @@ static void shell_read_line(char *buf, unsigned int len) {
                 k_strcpy(buf, replacement);
                 pos = (unsigned int)k_strlen(buf);
             }
+        } else if (c == '\t') {
+            buf[pos] = '\0';
+            pos = shell_complete_line(buf, pos, len);
         } else if (IS_PRINTABLE_KEY(c) && pos < len - 1) {
             char ch = (char)c;
             buf[pos++] = ch;

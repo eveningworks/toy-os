@@ -118,6 +118,12 @@ For everything else:
 Grouped the same way `help` itself groups them (`help tests` for the
 developer/diagnostic set):
 
+Tab completes commands, paths, and known argument sets (`run`, `color`,
+`debug`, `keyboard`, `timezone`, `fontsize`, `fsck`, `help`) -- one Tab
+extends as far as the candidates agree, and lists them in columns if
+more than one remains, zsh-style. Works identically in the physical
+shell and the GUI Terminal.
+
 - **General:** `help`, `clear`, `about`, `beep`, `apps`, `run <app>`,
   `gui`, `history` (persists across reboot via `/etc/history`),
   `echo <text>`, `reboot`

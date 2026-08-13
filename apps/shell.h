@@ -42,4 +42,15 @@ void shell_dispatch(char *line, const struct vga_sink *sink);
 // directory the physical shell would.
 const char *shell_cwd(void);
 
+// Resolves `input` (absolute, or relative to the shell's current
+// directory) into a normalized absolute path in `out` (size
+// FS_PATH_MAX), collapsing "." and ".." -- the same resolution every
+// shell command does before calling fs_*. A NULL/empty `input` resolves
+// to the current directory itself. Returns 1 on success, 0 if the
+// result would be empty, too deep, or too long.
+//
+// Exposed for apps/completion.c, which has to turn a half-typed path
+// into a directory fs_list() will accept.
+int shell_resolve_path(const char *input, char *out);
+
 #endif

@@ -67,7 +67,12 @@ Two kinds of app live here now:
 command or a dedicated shortcut) -- these take over the whole screen and
 run their own blocking loop:
 - **shell** (`shell.c`) -- the command-line shell, also what the kernel
-  launches first (see `apps_start()` in `apps.c`).
+  launches first (see `apps_start()` in `apps.c`). Tab completion is
+  shared with the GUI Terminal via `completion.c`/`completion.h`, which
+  generates candidates only -- it does no input handling and no drawing,
+  because the two shells have completely separate input loops and only
+  the candidate logic is genuinely common. See `completion.h`'s top
+  comment.
 - **gui** (`gui.c`) -- a one-line wrapper that hands off to the window
   manager (`wm.c`). Launched via `run gui` or the `gui` shortcut command;
   returns to the shell on Esc.

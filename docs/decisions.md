@@ -88,6 +88,7 @@ there when you add an entry, or the index quietly stops being one.
 **Shell, apps & console**
 
 - [Terminal wraps the real shell, it doesn't reimplement it](#terminal-wraps-the-real-shell-it-doesnt-reimplement-it)
+- [Tab completion is a shared candidate generator, not a shared line editor](#tab-completion-is-a-shared-candidate-generator-not-a-shared-line-editor)
 - [The CLI editor's status bar needs its own line-wrapping pass, not a plain dump-and-let-the-console-wrap](#the-cli-editors-status-bar-needs-its-own-line-wrapping-pass-not-a-plain-dump-and-let-the-console-wrap)
 - [Timezone city list is a database file, not a hardcoded array or a config key](#timezone-city-list-is-a-database-file-not-a-hardcoded-array-or-a-config-key)
 - [`/etc` is one shared `toyos.conf` by default, not a file per setting](#etc-is-one-shared-toyosconf-by-default-not-a-file-per-setting)
@@ -2153,3 +2154,42 @@ shell-history append allocated one of them to `/etc/history`, which
 already belonged to `/bin/counter_a` -- a real double-allocation,
 created by the corruption in seconds. See `CHANGELOG.md`'s
 `[Unreleased]` entry.
+
+## Tab completion is a shared candidate generator, not a shared line editor
+
+`apps/completion.c` answers one question -- "given this line and cursor,
+what could this word become?" -- and does no input handling and no
+drawing at all. Both shells call it from their own input loops and
+present the result their own way: `shell.c` with `vga_putc()`/
+`vga_backspace()`, `terminal.c` through its `text_scrollback` widget.
+
+The tempting alternative was a shared line editor owning the buffer,
+history, editing keys and completion, with both shells as thin adapters.
+That's the better end state -- history and line editing genuinely are
+implemented twice today and can drift -- but it means rewriting two
+working input paths in the same change as adding a feature. Splitting at
+"candidates" instead put the new, interesting logic in one place without
+touching either loop's structure. The line editor consolidation is still
+worth doing; it's just its own change.
+
+Two consequences worth knowing:
+
+- **The command list is duplicated.** `dispatch()` is a hand-written
+  if/else chain over ~39 commands whose handlers have genuinely
+  different signatures, so completion keeps its own
+  `COMPLETION_COMMANDS[]` table rather than driving dispatch from it
+  (that would need ~40 wrapper functions in a core file). One drift
+  direction is self-reporting: `dispatch()`'s unknown-command branch
+  checks the table and says "tab-completable but has no dispatch case"
+  instead of "unknown command". The other direction shows up as "tab
+  doesn't complete my new command", which announces itself.
+- **Behaviour is zsh's default, deliberately**: one Tab extends to the
+  common prefix, and lists candidates when more than one remains
+  (zsh's AUTO_LIST). Not menu-completion, which would need state across
+  keystrokes and a rule for what any other key does to the pending
+  selection -- state that both input loops would have to hold
+  identically.
+
+See `CHANGELOG.md`'s `[Unreleased]` entry, including the pre-existing
+`dispatch()` bug completion exposed (a trailing space in `args` made
+`cat /etc/timezones ` fail as "no such file").
