@@ -346,7 +346,7 @@ Makefile     -- build / iso / run / debug / seed targets. Globs
                 dependencies are tracked (-MMD/-MP), so editing a shared
                 header rebuilds everything that includes it.
 VERSION      -- the single version string (semver + a -dev suffix);
-                kernel/include/version.h is GENERATED from it by
+                kernel/include/api/version.h is GENERATED from it by
                 tools/gen_version.sh, never hand-edited
 tools/genttf.py  -- font source of truth; regenerate kernel/drivers/font_ttf.c
                      from the .ttf here, don't edit that file by hand. Only

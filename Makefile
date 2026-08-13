@@ -10,7 +10,7 @@ ASM = nasm
 # -include line near the bottom of this file) so changing a header
 # rebuilds every .o that includes it, not just files whose own .c
 # changed -- see that -include line's comment for the full reasoning
-# and kernel/include/version.h's generation (tools/gen_version.sh) for
+# and kernel/include/api/version.h's generation (tools/gen_version.sh) for
 # the one subtlety this tracking requires upstream of it.
 # -g: DWARF debug info, for `make debug` (see that target below) --
 # GDB can already attach to QEMU's own built-in gdbstub with zero
@@ -166,7 +166,7 @@ ASM_OBJECTS = $(BUILD)/core/boot.o $(BUILD)/core/isr.o $(BUILD)/core/context_swi
 
 .PHONY: all clean clean-disk iso run run-audio run-nographic debug help version seed
 
-# Regenerates kernel/include/version.h from VERSION (see
+# Regenerates kernel/include/api/version.h from VERSION (see
 # tools/gen_version.sh) -- listed first so it always runs before
 # anything gets compiled. Always considered out of date (.PHONY), so
 # every `make all`/`make iso` re-embeds whatever VERSION currently
@@ -205,7 +205,7 @@ help:
 	@echo "                 'target remote localhost:1234', then continue"
 	@echo "  clean          Remove build outputs (build/, ELFs, toy-os.iso) -- leaves disk.img alone"
 	@echo "  clean-disk     Wipe disk.img, the persistent filesystem -- use with care"
-	@echo "  version        Regenerate kernel/include/version.h (runs automatically as part of all/iso)"
+	@echo "  version        Regenerate kernel/include/api/version.h (runs automatically as part of all/iso)"
 	@echo "  help           Show this message"
 
 $(BUILD)/core $(BUILD)/drivers $(BUILD)/apps $(BUILD)/apps/wm $(BUILD)/apps/ui:

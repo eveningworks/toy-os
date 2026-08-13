@@ -26,7 +26,7 @@
 #       same as before.
 #
 # Run this once, by hand, as part of finishing a change or cutting a
-# release -- not on every build. kernel/include/version.h itself is
+# release -- not on every build. kernel/include/api/version.h itself is
 # NOT touched here -- it's still regenerated automatically from
 # whatever VERSION currently holds by tools/gen_version.sh, which the
 # Makefile's `version` target runs on every `make all`/`make iso`. Run

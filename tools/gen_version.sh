@@ -1,5 +1,5 @@
 #!/bin/sh
-# Regenerates kernel/include/version.h from VERSION (repo root, plain
+# Regenerates kernel/include/api/version.h from VERSION (repo root, plain
 # text, one line -- a semver-ish string like "0.1.0-dev" or "0.1.0"),
 # run automatically as the first step of `make all`/`make iso` (see
 # the Makefile). Not meant to be edited by hand -- kernel/include/
@@ -35,7 +35,7 @@ if [ -f "$VERSION_FILE" ]; then
     VERSION=$(cat "$VERSION_FILE")
 fi
 
-OUT="kernel/include/version.h"
+OUT="kernel/include/api/version.h"
 TMP="$OUT.tmp.$$"
 
 cat > "$TMP" << EOF

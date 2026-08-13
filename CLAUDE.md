@@ -125,7 +125,7 @@ technical conventions below:
   the same style: what changed, why, and what was verified. Keep doing
   that -- it's the project's record of *why* things are the way they
   are, which matters a lot in a codebase this hand-rolled.
-- **`kernel/include/version.h` is GENERATED, not hand-edited** --
+- **`kernel/include/api/version.h` is GENERATED, not hand-edited** --
   `tools/gen_version.sh` regenerates it from `VERSION` (repo root, e.g.
   `0.1.0-dev`) as the first step of `make all`/`make iso`. Never edit
   `version.h` directly.
@@ -296,7 +296,7 @@ correct), but it should no longer be *routine* -- if you find yourself
 needing it regularly, that's a sign the tracking broke somehow, worth
 investigating rather than working around. One subtlety if you ever
 touch `tools/gen_version.sh`: it's deliberately idempotent (only
-rewrites `kernel/include/version.h` when `VERSION`'s value actually
+rewrites `kernel/include/api/version.h` when `VERSION`'s value actually
 changed) specifically so this dependency tracking doesn't regress --
 `kapi.h` includes `version.h`, so an unconditional rewrite every build
 would make every file that includes `kapi.h` (nearly everything) look
