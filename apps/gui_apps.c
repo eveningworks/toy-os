@@ -4,6 +4,7 @@
 #include "calculator.h"
 #include "terminal.h"
 #include "taskmgr.h"
+#include "control_panel.h"
 
 // To add a new windowed app: write apps/foo.c + apps/foo.h implementing
 // the gui_app callbacks (see apps/notepad.c for the simplest example),
@@ -45,5 +46,8 @@ const struct gui_app gui_app_registry[] = {
       .on_wheel = terminal_wheel, .on_process_exit = terminal_process_exit, .resizable = 1 },
     { .name = "Task Manager", .default_size = taskmgr_default_size, .on_open = taskmgr_open,
       .on_draw = taskmgr_draw, .resizable = 1 },
+    { .name = "Control Panel", .default_size = control_panel_default_size,
+      .on_open = control_panel_open, .on_draw = control_panel_draw,
+      .on_click = control_panel_click, .resizable = 1 },
 };
 const int gui_app_registry_count = sizeof(gui_app_registry) / sizeof(gui_app_registry[0]);

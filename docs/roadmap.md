@@ -551,7 +551,9 @@ guess.*
       no `SYS_SEEK`/lseek-equivalent exists at all)
 - [ ] File manager app
 - [ ] Desktop calendar widget
-- [ ] Control panel with pluggable applets
+- [x] ~~Control panel with pluggable applets~~ -- done, see
+      `CHANGELOG.md`'s `[Unreleased]` entry (icon-grid chooser +
+      drill-in, with Date & Time and System Info applets)
 - [ ] Find/replace in Notepad
 - [ ] An image viewer (needs Milestone 19's decoder)
 - [ ] Scientific mode for Calculator

@@ -65,14 +65,14 @@ ITEM_H = 27           # Start menu row height (gfx_char_h() + 6 -- see above)
 # Deriving the menu's top Y from SCREEN_H - TASKBAR_H - ITEM_H*total_items
 # (start_menu.c's own geometry() formula) matched a live-measured
 # screenshot exactly at these corrected constants (menu top border at
-# y=502 for today's 7-row menu: 720-29-27*7=502) -- if APP_ORDER's
+# y=475 for today's 8-row menu: 720-29-27*8=475) -- if APP_ORDER's
 # length or ITEM_H ever changes again, re-measure directly rather than
 # trusting the formula alone, same caution as above.
-MENU_TOP_Y = 502
+MENU_TOP_Y = 475
 START_BTN = (50, 703)  # inside the taskbar's Start button, safely off any edge
 
 # Keep in sync with apps/gui_apps.c's gui_app_registry[] order.
-APP_ORDER = ["Notepad", "About", "Calculator", "Terminal", "Task Manager"]
+APP_ORDER = ["Notepad", "About", "Calculator", "Terminal", "Task Manager", "Control Panel"]
 # Keep in sync with apps/wm/start_menu.c's wm_system_actions[] order.
 SYSTEM_ACTIONS = ["Exit to shell", "Shutdown"]
 

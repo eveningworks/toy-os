@@ -310,7 +310,20 @@ nothing but the idea. See `docs/decisions.md`.)
   caller a future file manager's icon view (`docs/roadmap.md`
   Milestone 22) is expected to be. Deliberately an exception to this
   section's own "wait for a second caller" rule below, not a change to
-  it.
+  it. **That second caller has since arrived** -- the Control Panel's
+  applet chooser (`apps/control_panel.c`) uses the same cell geometry,
+  though not the drag session (applet icons don't move).
+- **`ui_radio_list.h`/`.c`** -- a single-select list: one row per
+  option, the active one marked, laid out in one or more columns
+  (`ui_radio_list_size/draw/hit`). The mutual exclusivity
+  `ui_checkbox.h` deliberately leaves out. Caller-owned selection and
+  labels -- this module knows geometry, drawing and hit-testing only,
+  so the selection can live where it actually belongs (for the timezone
+  applet, that's `tz.c`'s own current index rather than a copy needing
+  to be kept in sync). Hit areas are the full row, not just the marker.
+  Added ahead of a second caller by explicit request, the same
+  acknowledged exception `ui_checkbox` and `ui_icon_grid` above are --
+  see `docs/decisions.md`.
 
 This is *not* a general-purpose widget toolkit -- no focus manager, no
 layout engine beyond `ui_button_group`. Add the next primitive here

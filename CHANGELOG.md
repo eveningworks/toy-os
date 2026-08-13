@@ -30,6 +30,60 @@ using `## [x.y.z] - date` headings is here.
 
 ## [Unreleased]
 
+### Added
+- **A Control Panel GUI app with pluggable applets, and two applets to
+  start.** Asked for a Windows-style applet chooser plus one easy but
+  still useful first applet. Completes `docs/roadmap.md`'s Milestone 22
+  "Control panel with pluggable applets" item.
+  - **Icon grid + drill-in**: a grid of applet icons; clicking one
+    replaces it with that applet's page and a `< Back` button. The
+    chooser reuses `apps/ui/ui_icon_grid.c`, whose header was written
+    anticipating exactly this ("built as a standalone widget so a
+    future file manager's icon view can reuse the same cell math") --
+    this is the second caller it was waiting for, minus the drag
+    session, since applet icons don't move.
+  - **The applet registry deliberately mirrors `gui_apps.h`'s app
+    registry** -- a static table of name + function pointers, where
+    adding one is adding a row. An applet is explicitly not a
+    `gui_app`: no window of its own, draws into a rectangle it's given,
+    not openable from the Start menu. See `docs/decisions.md`.
+  - **Date & Time applet**: a timezone picker over whatever
+    `/etc/timezones` holds (7 cities today), plus the current local
+    time. Picking one calls `tz_set_index()`, which persists to
+    `/etc/toyos.conf` itself -- the applet caches nothing, so the
+    `timezone` shell command changing the same setting behind its back
+    can't desync it.
+  - **System Info applet** (read-only: version, memory, disk, PCI
+    count, uptime) shipped alongside deliberately. A plug-in mechanism
+    with exactly one plug-in proves nothing about being pluggable; the
+    second entry is what makes the grid, the drill-in and the Back
+    button mean anything.
+  - **New widget `apps/ui/ui_radio_list.h`/`.c`** -- single-select
+    list, one row per option, columns supported, caller-owned
+    selection, full-row hit areas. The mutual exclusivity
+    `ui_checkbox.h` deliberately doesn't have. Added ahead of a second
+    caller **by explicit request**, the same acknowledged exception
+    `ui_checkbox` and `ui_icon_grid` already are -- recorded rather than
+    left to look like drift.
+  - **Two bugs caught on screen, not in review**, both of the "draws
+    perfectly, does nothing" kind. `on_click`'s coordinates are
+    *content-relative* while everything drawn is absolute, so the first
+    version hit-tested in the wrong space and every click silently did
+    nothing. And the icon labels used a hardcoded 104px cell that "Date
+    & Time" overflows -- `gfx_draw_string()` does no clipping, so it
+    drew straight over the neighbouring label ("Date & TSystem Info").
+    That second one is `docs/decisions.md`'s existing
+    "`gfx_draw_string()` doesn't clip" lesson recurring in a new file
+    days after being written down; the fix derives the cell from font
+    metrics and truncates.
+  - `tools/gui_flow.py`'s `APP_ORDER` and `MENU_TOP_Y` updated for the
+    sixth app (the Start menu grows upward, so the row geometry moves).
+  - Verified on screen: chooser, drill-in, Back, both applets, and the
+    payoff -- picking `helsinki` moved the applet's clock from 15:18 to
+    18:18 (+3, correct for EU DST) **and the taskbar clock with it**,
+    then `timezone=helsinki` was confirmed in `/etc/toyos.conf` on the
+    image afterwards. Screenshots in `screenshots/2026-08-13/`.
+
 ### Changed
 - **A documented, checked on-disk filesystem layout -- and the test
   binaries moved out of `/bin`.** Asked for a future-proof directory

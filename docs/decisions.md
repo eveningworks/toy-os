@@ -69,6 +69,7 @@ there when you add an entry, or the index quietly stops being one.
 **GUI: window manager, compositor & widgets**
 
 - [Widgets are added once a second real caller needs them -- except the checkbox](#widgets-are-added-once-a-second-real-caller-needs-them----except-the-checkbox)
+- [The Control Panel's applets are a registry table, not gui_apps](#the-control-panels-applets-are-a-registry-table-not-gui_apps)
 - [`gfx_draw_string()` doesn't clip to a width -- callers that need that do their own](#gfx_draw_string-doesnt-clip-to-a-width----callers-that-need-that-do-their-own)
 - [`widgets.h`/`theme.h` stay minimal on purpose](#widgetshthemeh-stay-minimal-on-purpose)
 - [The window manager is one event loop, not decoupled components](#the-window-manager-is-one-event-loop-not-decoupled-components)
@@ -138,6 +139,48 @@ any real caller, by direct user request when asked to choose the
 scope -- a deliberate, acknowledged exception to the rule above, not a
 change to it: the rule still applies to whatever gets added *next*.
 See CHANGELOG-archive-2.md's **Build 490** for the full writeup.
+
+## The Control Panel's applets are a registry table, not gui_apps
+
+`apps/control_panel.c` holds a static `struct applet` table -- name,
+`draw(x,y,w,h)`, `click(...)` -- deliberately mirroring
+`gui_apps.h`'s `gui_app_registry[]` rather than inventing a second
+plug-in convention. Adding an applet is adding a row, the same property
+the app registry has, and a reader who knows one knows the other.
+
+An applet is explicitly *not* a `gui_app`: no window of its own, it
+draws into a rectangle the Control Panel gives it, and it can't be
+opened from the Start menu. That was the alternative considered
+(applets as ordinary apps, Control Panel as a launcher) and it was
+rejected for making "Control Panel" a menu rather than a panel, and for
+putting one Start-menu entry per setting.
+
+Two things shipped with it worth keeping:
+
+**Two applets from the start, not one.** Date & Time is the real one;
+System Info is read-only and trivial. A plug-in mechanism with exactly
+one plug-in demonstrates nothing about being pluggable -- the second
+entry is what makes the icon grid, the drill-in and the Back button
+meaningful instead of an elaborate way to show a single page.
+
+**The applet doesn't cache its setting.** The timezone applet reads
+`tz_current_index()` at draw time and writes `tz_set_index()`, which
+persists to `/etc/toyos.conf` itself. A local copy would be a second
+source of truth, and the `timezone` shell command can change the same
+setting behind the window's back.
+
+Two bugs caught by QMP testing rather than review, both of the "draws
+perfectly, does nothing" kind: `on_click`'s coordinates are
+**content-relative** while everything drawn is absolute, so the first
+version hit-tested in the wrong space and clicks silently did nothing;
+and the icon labels were laid out in a hardcoded 104px cell that "Date
+& Time" overflows, which `gfx_draw_string()` cheerfully drew straight
+over the neighbouring label (see the entry below on that function not
+clipping -- this is that lesson recurring, in a new file, four days
+after it was written down).
+
+See `apps/control_panel.c`'s top comment and CHANGELOG.md's
+`[Unreleased]`.
 
 ## `gfx_draw_string()` doesn't clip to a width -- callers that need that do their own
 

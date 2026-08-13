@@ -33,5 +33,6 @@
 #include "ui_button_group.h"
 #include "ui_textbox.h"
 #include "ui_icon_grid.h"
+#include "ui_radio_list.h"
 
 #endif
