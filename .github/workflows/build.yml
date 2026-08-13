@@ -41,6 +41,14 @@ jobs:
       - name: make iso
         run: make iso
 
+      # Structural, not behavioural: does the seeded image's directory
+      # layout still match docs/filesystem-layout.md? Cheap (no boot),
+      # and it catches a directory added without being documented --
+      # the kind of drift that is invisible until someone relies on the
+      # doc being true.
+      - name: Filesystem layout matches its doc
+        run: python3 tools/check_layout.py
+
       - name: Boot smoke test (headless, no GUI)
         run: python3 tools/boot_smoke_test.py -v
 

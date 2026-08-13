@@ -99,6 +99,7 @@ there when you add an entry, or the index quietly stops being one.
 - [The CLI editor's status bar needs its own line-wrapping pass, not a plain dump-and-let-the-console-wrap](#the-cli-editors-status-bar-needs-its-own-line-wrapping-pass-not-a-plain-dump-and-let-the-console-wrap)
 - [Timezone city list is a database file, not a hardcoded array or a config key](#timezone-city-list-is-a-database-file-not-a-hardcoded-array-or-a-config-key)
 - [`/etc` is one shared `toyos.conf` by default, not a file per setting](#etc-is-one-shared-toyosconf-by-default-not-a-file-per-setting)
+- [The on-disk layout is a trimmed FHS, not POSIX -- and `/tests` is a deliberate exception](#the-on-disk-layout-is-a-trimmed-fhs-not-posix----and-tests-is-a-deliberate-exception)
 - [dmesg coverage: log from the one-shot call site, not the hot function itself](#dmesg-coverage-log-from-the-one-shot-call-site-not-the-hot-function-itself)
 - [Terminal's `run <name>` uses an explicit allowlist, not a blocklist](#terminals-run-name-uses-an-explicit-allowlist-not-a-blocklist)
 - [`kapi.h` is the only header apps/ includes](#kapih-is-the-only-header-apps-includes)
@@ -619,6 +620,41 @@ missing harness causes.** The migration's own writeup listed exactly
 what coverage was being traded away and still missed this, because the
 lost piece wasn't the test, it was a page mapping the test depended on.
 See CHANGELOG.md's `[Unreleased]`.
+
+## The on-disk layout is a trimmed FHS, not POSIX -- and `/tests` is a deliberate exception
+
+Asked whether toy-os's own filesystem should follow "something POSIX
+likes". The premise is worth correcting, because it comes up again:
+**POSIX barely specifies filesystem layout at all.** POSIX.1 mandates
+`/`, `/tmp` and a few device paths (`/dev/null`, `/dev/tty`,
+`/dev/console`) and says nothing about `/bin`, `/usr`, `/etc` or `/var`.
+The document that defines those is the Filesystem Hierarchy Standard, a
+Linux Foundation spec with no POSIX standing. So layout is almost
+entirely a free choice here.
+
+The choice made was a **trimmed FHS subset** -- familiar, and where
+ported software will look -- with the full table, the reserved-but-not-
+yet-created names, and the rules for adding to it in
+`docs/filesystem-layout.md` (which `tools/check_layout.py` enforces
+against the built image, in `preflight.sh` and CI).
+
+Two decisions inside it are worth having recorded here rather than only
+there. **`/tests` is not an FHS directory**: the FHS answer for
+"executables not meant to be invoked directly" is `/usr/libexec`, and
+that was the alternative. `/tests` won for being unmissable, for keeping
+paths short under a 64-byte `FS_PATH_MAX`, and because these binaries
+aren't internal helpers -- they're exercises a person runs deliberately.
+It exists because `/bin` had reached fourteen test binaries against
+three real programs, so every `ls /bin` and every tab completion led
+with noise. And **there is no merged `/usr`**: modern distributions make
+`/bin` a symlink into `/usr/bin`, which this filesystem cannot express,
+having no symlinks at all.
+
+The constraint that actually drives layout here isn't a standard, it's
+the record budget: `FS_MAX_FILES` is 256 records with directories
+counting against it, and a full path is capped at 64 bytes. That makes
+"flatter, and fewer files with more structure inside them" the operative
+rule until Milestone 15 (TFS3) raises both.
 
 ## `/etc` is one shared `toyos.conf` by default, not a file per setting
 

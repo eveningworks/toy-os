@@ -30,6 +30,63 @@ using `## [x.y.z] - date` headings is here.
 
 ## [Unreleased]
 
+### Changed
+- **A documented, checked on-disk filesystem layout -- and the test
+  binaries moved out of `/bin`.** Asked for a future-proof directory
+  structure now that there are binaries, config files and data files,
+  with a doc to follow, and whether it should be "something POSIX
+  likes".
+  - **The premise needed correcting first: POSIX barely specifies
+    layout.** POSIX.1 mandates `/`, `/tmp` and a few device paths, and
+    says nothing about `/bin`, `/usr`, `/etc` or `/var`. The document
+    defining those is the FHS, which is a Linux Foundation spec with no
+    POSIX standing. So this was almost entirely a free choice.
+  - **`docs/filesystem-layout.md`** is the new source of truth: a table
+    of every directory, what it holds, whether the build or the boot
+    creates it, and whether it exists yet or is reserved for a named
+    milestone. Plus the rules for adding one, and the divergences.
+  - **`/tests`, holding the 14 test binaries that used to live in
+    `/bin`.** `/bin` had three real programs (`ls`, `lspci`, `hello`)
+    against fourteen mechanism exercises, so every `ls /bin` and every
+    tab completion led with noise. `/tests` is deliberately not an FHS
+    directory -- `/usr/libexec` was the alternative and lost on being
+    less obvious, longer (paths are capped at 64 bytes), and implying
+    "internal helper" when these are things a person runs on purpose.
+    `PATH` gains `/tests` **last**, so `run nx_test` and `strace
+    file_test` keep working -- rewriting every reference across the
+    changelog and `docs/decisions.md` would invalidate accurate history
+    for no functional gain.
+  - **`/tmp` now exists**, created at boot, and `stress` writes its
+    multi-gigabyte scratch file there instead of to `/.stress_test_tmp`
+    in the root. It is deliberately *not* emptied at boot: `fs_delete()`
+    refuses non-empty directories and there's no recursive delete, so
+    clearing it needs a directory walk nothing has needed yet.
+  - **`tools/check_layout.py` enforces the doc** against the built
+    image, in `preflight.sh` and CI. It fails in both directions -- an
+    undocumented directory on the image, or a documented-as-present one
+    missing -- and it caught three real discrepancies the moment it
+    first ran. It understands the table's "Created by" column, so a
+    boot-created directory isn't demanded of a never-booted image; that
+    distinction is the difference between a check people trust and one
+    they learn to ignore.
+  - **The trap this move hit, now documented:** `tfs2_writer.py sync` is
+    *additive*, so moving the binaries left a full set of stale copies
+    in `/bin` on every existing image -- which `PATH` would have
+    preferred over `/tests`, forever, with no future build updating
+    them. Pruning isn't the fix (a `sync` that deleted anything absent
+    from the seed tree would delete `/etc/toyos.conf` and
+    `/etc/history`), so a move needs a deliberate `tfs2_writer.py
+    delete` or `make clean-disk`. Both are written down now.
+  - The doc also records the constraint that actually drives layout
+    here, which is not any standard: `FS_MAX_FILES` is 256 records with
+    directories counting against it, and a full path is 64 bytes. That
+    makes "flatter, and fewer files with more structure inside" the
+    operative rule until Milestone 15 raises both -- worth knowing
+    before Milestone 14 designs one man page per command.
+  - Verified: `check_layout` passes, `ls /bin` shows exactly the three
+    real programs, `run nx_test` still resolves and still demonstrates
+    NX enforcement, `lspci` unaffected.
+
 ### Added
 - **`lspci` shows real vendor and device names, from the PCI ID
   Database.** `8086:7010` now also reads "Intel Corporation 82371SB

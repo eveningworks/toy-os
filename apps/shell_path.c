@@ -33,7 +33,17 @@
 #define SHELL_PATH_CONF     "/etc/toyos.conf"
 #define SHELL_PATH_KEY      "PATH"
 #define SHELL_PATH_MAX_DIRS 8
-#define SHELL_PATH_DEFAULT  "/bin;/usr/bin"
+// /tests comes LAST on purpose. The test binaries moved out of /bin
+// into /tests (see docs/filesystem-layout.md) so that `ls /bin` and tab
+// completion lead with the three real programs instead of fourteen
+// mechanism exercises -- but `run nx_test`, `strace file_test` and
+// friends are referenced throughout the changelog, docs/decisions.md
+// and apps/terminal.c's allowlist, and rewriting all of those to carry
+// an explicit /tests/ prefix would invalidate a lot of accurate
+// history for no functional gain. Keeping /tests searchable, but after
+// the real directories, preserves every one of those while still
+// putting real programs first when a name appears in both.
+#define SHELL_PATH_DEFAULT  "/bin;/usr/bin;/tests"
 
 static char g_dirs[SHELL_PATH_MAX_DIRS][FS_PATH_MAX];
 static int g_dir_count = 0;

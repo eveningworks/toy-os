@@ -518,6 +518,10 @@ seed/            -- the files mirrored onto disk.img at build time by
                      nothing hand-authored belongs there. Anything that
                      needs to ship lives elsewhere and gets copied in by
                      the `seed` target.
+                     NOTE: what goes WHERE on the running OS's own
+                     filesystem (/bin vs /tests vs /usr/share vs /etc)
+                     is docs/filesystem-layout.md, which is checked
+                     against the built image by tools/check_layout.py.
 data/            -- bundled third-party data files, tracked in git and
                      staged into seed/sync/ at build time. Currently
                      just pci.ids, the PCI ID Database from

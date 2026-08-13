@@ -148,10 +148,22 @@ NX_TEST_ELF = userland/nx_test.elf
 # would expand to nothing if this lived further down the file (which is
 # exactly what happened while writing this -- `make all` silently built
 # no ELFs at all and still exited 0).
-SEED_BINARIES = \
+# Real user-facing programs -> /bin. Kept deliberately short: /bin is
+# what a person sees when they type `ls /bin`, and what PATH offers
+# first. See docs/filesystem-layout.md.
+SEED_PROGRAMS = \
 	$(LSPCI_ELF):lspci \
 	$(LS_ELF):ls \
-	$(HELLO_ELF):hello \
+	$(HELLO_ELF):hello
+
+# Test/demo binaries -> /tests. These are exercises of one kernel
+# mechanism each (a deliberate fault, a syscall round-trip, a window),
+# not things a user of the OS wants offered to them. They used to sit in
+# /bin alongside the three above, where they outnumbered real programs
+# 14 to 3. /tests is deliberately NOT an FHS directory -- see
+# docs/filesystem-layout.md for why that exception was made rather than
+# using /usr/libexec.
+SEED_TESTS = \
 	$(EXIT_TEST_ELF):exit_test \
 	$(WRITE_TEST_ELF):write_test \
 	$(WRITE_BAD_TEST_ELF):write_bad_test \
@@ -166,6 +178,10 @@ SEED_BINARIES = \
 	$(SOCKET_TEST_ELF):socket_test \
 	$(STACK_SMASH_TEST_ELF):stack_smash_test \
 	$(NX_TEST_ELF):nx_test
+
+# Both lists together -- only USERLAND_ELVES below needs the union, so
+# it's derived rather than maintained as a third list.
+SEED_BINARIES = $(SEED_PROGRAMS) $(SEED_TESTS)
 
 # Every ELF named in SEED_BINARIES, without the :diskname suffix -- what
 # `all` and `iso` actually have to build. Derived rather than listed
@@ -348,8 +364,9 @@ $(DISK_IMG):
 # $(SEED_DIR)/sync/etc/kbs and re-run `make iso` to force a fresh
 # regenerate once xkbcli is installed.
 seed: $(DISK_IMG) $(USERLAND_ELVES)
-	mkdir -p $(SEED_DIR)/sync/bin
-	$(foreach pair,$(SEED_BINARIES),cp $(word 1,$(subst :, ,$(pair))) $(SEED_DIR)/sync/bin/$(word 2,$(subst :, ,$(pair)));)
+	mkdir -p $(SEED_DIR)/sync/bin $(SEED_DIR)/sync/tests
+	$(foreach pair,$(SEED_PROGRAMS),cp $(word 1,$(subst :, ,$(pair))) $(SEED_DIR)/sync/bin/$(word 2,$(subst :, ,$(pair)));)
+	$(foreach pair,$(SEED_TESTS),cp $(word 1,$(subst :, ,$(pair))) $(SEED_DIR)/sync/tests/$(word 2,$(subst :, ,$(pair)));)
 	# The PCI ID database, staged the same way the ELFs above are, and
 	# for the same reason: $(SEED_DIR)/sync is a build-staging tree that
 	# `make clean` deletes wholesale and .gitignore excludes, so nothing

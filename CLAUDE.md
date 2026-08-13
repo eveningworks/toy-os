@@ -709,6 +709,18 @@ repeated manual steps to be worth automating:
   no legacy-VGA-text-buffer memory-read shortcut to plain text the way
   there might be on a kernel that only ever used 0xB8000 -- see the
   module's own docstring.
+- **`check_layout.py`** -- verifies `disk.img`'s directory structure
+  matches `docs/filesystem-layout.md`'s table, which is the source of
+  truth for where things live on the OS's own filesystem. Runs in
+  `preflight.sh` and CI. Fails in both directions (an undocumented
+  directory on the image, or a documented-as-present one missing), and
+  understands the table's "Created by" column -- a `build`-created
+  directory must exist on a freshly built image, a `boot`-created one
+  needn't until the OS has run. **Read that doc before adding a
+  directory, a config file, or any new seeded data**: it also records
+  the record/path budget (256 records total, directories included; 64
+  bytes per full path) and the `sync`-never-deletes trap that makes
+  moving a seeded file need an explicit cleanup.
 - **`screenshot_diff.py`** -- Pillow-based pixel diff between two
   screenshots with a pass/fail `--threshold` (default 0.2%) and an
   optional `--out` diff-highlight image, for catching a rendering

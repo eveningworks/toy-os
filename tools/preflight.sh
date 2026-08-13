@@ -69,6 +69,9 @@ fi
 step "make iso"
 make iso >/tmp/preflight_iso.log 2>&1 || fail "make iso (see /tmp/preflight_iso.log)"
 
+step "check_layout.py (disk layout vs docs/filesystem-layout.md)"
+python3 tools/check_layout.py || fail "filesystem layout check"
+
 step "boot_smoke_test.py"
 python3 tools/boot_smoke_test.py || fail "boot smoke test"
 

@@ -468,7 +468,11 @@ void cmd_fsck(const char *args) {
 // directions, keeping this O(1) in RAM regardless of `<mb>`.
 #define STRESS_CHUNK_BYTES (1024u * 1024u)
 static uint8_t g_stress_chunk[STRESS_CHUNK_BYTES];
-#define STRESS_TEST_PATH "/.stress_test_tmp"
+// In /tmp rather than a dotfile at the root of the filesystem, which
+// is where it used to live -- scratch space is exactly what /tmp is
+// for, and a multi-gigabyte temp file sitting in / was the single
+// biggest argument for having the directory at all.
+#define STRESS_TEST_PATH "/tmp/stress_test"
 
 // Fills g_stress_chunk with a pattern that varies both by chunk index
 // and byte offset, so two different chunks (or a chunk read back from

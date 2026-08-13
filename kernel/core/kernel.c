@@ -77,6 +77,15 @@ void kernel_main(uint64_t multiboot_info_addr) {
 
     fs_init();
     fs_mkdir("/etc"); // config-file convention (see tz.c) -- a no-op if it already exists
+    // /tmp, the one directory POSIX actually mandates by name (it says
+    // almost nothing else about layout -- see docs/filesystem-layout.md).
+    // Created here rather than seeded, because scratch space has to
+    // exist on any disk, including one this build never seeded.
+    // Deliberately NOT emptied at boot: fs_delete() refuses non-empty
+    // directories on purpose and there's no recursive delete (see
+    // docs/decisions.md), so clearing it needs a real directory walk
+    // that nothing has needed yet.
+    fs_mkdir("/tmp");
     // /bin binaries (e.g. lspci) are no longer bootstrap-installed here
     // at boot time -- tools/tfs2_writer.py seeds them into disk.img at
     // BUILD time now (see the Makefile's `seed` step), so by the time
