@@ -368,6 +368,54 @@ void gfx_draw_char(int x, int y, char c, uint32_t fg, uint32_t bg) {
     }
 }
 
+// Pixel width of `s` at the current font. A multiplication today
+// (every glyph is one fixed cell wide), a real measurement once
+// Milestone 21 lands proportional metrics -- which is exactly why
+// callers should ask this rather than writing `k_strlen(s) *
+// gfx_char_w()` themselves. Stops at a newline: a multi-line string has
+// no single width, and every caller of this is measuring one row.
+int gfx_text_width(const char *s) {
+    int n = 0;
+    while (s[n] && s[n] != '\n') n++;
+    return n * gfx_char_w();
+}
+
+// How many leading characters of `s` fit within `max_w` pixels --
+// whole glyphs only, never a partial one. The measurement half of
+// gfx_draw_string_clipped(), separated because callers that do their
+// own windowing (a text field scrolling to follow its cursor, see
+// apps/ui/ui_textbox.c) need the count without the drawing.
+int gfx_text_fit_chars(const char *s, int max_w) {
+    int cw = gfx_char_w();
+    if (cw <= 0 || max_w < cw) return 0;
+    int n = 0;
+    int used = 0;
+    while (s[n] && s[n] != '\n' && used + cw <= max_w) { used += cw; n++; }
+    return n;
+}
+
+// gfx_draw_string(), but stopping at `max_w` pixels.
+//
+// **This exists because the unclipped version is a repeat offender.**
+// gfx_draw_string() draws every character it is handed, past any border
+// its caller imagined -- documented in docs/decisions.md after a long
+// filename drew straight through a text field's edge. That entry told
+// callers to budget the width themselves, and the very next fixed-box
+// caller (the Control Panel's applet labels) hit the identical bug
+// anyway, rendering "Date & TSystem Info". A lesson that gets re-learned
+// is a missing function, not a missing reader.
+//
+// Returns 1 if the whole string fitted, 0 if it was cut -- so a caller
+// that wants to show an ellipsis, widen itself, or log can, without
+// measuring a second time.
+int gfx_draw_string_clipped(int x, int y, int max_w, const char *s,
+                             uint32_t fg, uint32_t bg) {
+    int n = gfx_text_fit_chars(s, max_w);
+    int cw = gfx_char_w();
+    for (int i = 0; i < n; i++) gfx_draw_char(x + i * cw, y, s[i], fg, bg);
+    return s[n] == '\0' || s[n] == '\n';
+}
+
 void gfx_draw_string(int x, int y, const char *s, uint32_t fg, uint32_t bg) {
     int cx = x;
     int cw = gfx_char_w(), ch = gfx_char_h();

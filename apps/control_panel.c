@@ -238,15 +238,16 @@ void control_panel_draw(struct window *win) {
             gfx_fill_rect(icon_x, iy, CP_ICON_SIZE, CP_ICON_SIZE, THEME_BUTTON_BG);
             gfx_draw_rect(icon_x, iy, CP_ICON_SIZE, CP_ICON_SIZE, THEME_BORDER);
 
-            // Label centred under the cell, truncated to what the cell
-            // can hold. gfx_draw_string() will happily draw past any
-            // boundary it's given, so the budgeting happens here.
-            char label[CP_LABEL_MAX_CHARS + 1];
-            k_strlcpy(label, g_applets[i].name, sizeof label);
-            int label_w = (int)k_strlen(label) * gfx_char_w();
+            // Label centred under the cell and clipped to it. The first
+            // version of this hand-rolled the budgeting and got it
+            // wrong ("Date & TSystem Info"); gfx_draw_string_clipped()
+            // is the helper that mistake produced.
+            const char *label = g_applets[i].name;
+            int label_w = gfx_text_width(label);
+            if (label_w > CP_CELL_W) label_w = CP_CELL_W;
             int label_x = ix + (CP_CELL_W - label_w) / 2;
-            gfx_draw_string(label_x, iy + CP_ICON_SIZE + 6, label,
-                             THEME_TEXT, THEME_WINDOW_BG);
+            gfx_draw_string_clipped(label_x, iy + CP_ICON_SIZE + 6, CP_CELL_W,
+                                     label, THEME_TEXT, THEME_WINDOW_BG);
         }
         return;
     }

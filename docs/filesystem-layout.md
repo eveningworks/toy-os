@@ -35,8 +35,8 @@ won't exist until the OS has run once.
 | Path | Holds | Created by | Status |
 |---|---|---|---|
 | `/bin` | Real user-facing programs (`ls`, `lspci`, `hello`) | build | present |
-| `/etc` | Config: `toyos.conf`, `timezones`, `history` | build + boot | present |
-| `/etc/kbs` | Generated keyboard layout data (`us`, `se`) | build | present |
+| `/etc` | Config: `toyos.conf`, `timezones`, `history` | boot | present |
+| `/etc/kbs` | Generated keyboard layout data (`us`, `se`) | build | optional |
 | `/tests` | Test/demo binaries -- one kernel mechanism each | build | present |
 | `/tmp` | Scratch space | boot | present |
 | `/usr` | Container only -- holds `share/`, nothing of its own | build | present |
@@ -47,6 +47,15 @@ won't exist until the OS has run once.
 | `/usr/share/fonts` | Runtime-loadable fonts | Milestone 21 | reserved |
 | `/var` | Mutable state: logs, crash dumps | Milestone 11 | reserved |
 | `/dev` | Device nodes | unscheduled | reserved |
+
+"Optional" means the build produces it only under some condition, so
+it must not be *required* -- but it's still documented, or an
+undocumented directory could hide behind the same name. `/etc/kbs` is
+the case: `tools/gen_kbs.py` needs `xkbcli` (`libxkbcommon-tools`), and
+the `seed` target skips it with a message when that isn't installed.
+Worth knowing that this was found the hard way -- CI had no `xkbcli`, so
+it had been building images with **no keyboard layouts at all**, silently,
+until this check compared an image against this table. CI installs it now.
 
 "Reserved" means: the name is spoken for, nothing creates it yet, and
 the milestone that will is named. Don't create one early just to have

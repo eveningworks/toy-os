@@ -33,7 +33,12 @@ jobs:
       - name: Install build + QEMU dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq nasm grub-pc-bin grub-common xorriso qemu-system-x86 mtools
+          # libxkbcommon-tools provides xkbcli, which the Makefile's `seed`
+          # target uses to generate /etc/kbs/<layout> from XKB's own data.
+          # Without it that step SKIPS SILENTLY, so CI was building images
+          # with no keyboard layouts at all -- which nothing noticed until
+          # check_layout.py started comparing the image against its doc.
+          sudo apt-get install -y -qq nasm grub-pc-bin grub-common xorriso qemu-system-x86 mtools libxkbcommon-tools
 
       - name: make clean && make all
         run: make clean && make all

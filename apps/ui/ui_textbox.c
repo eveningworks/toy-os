@@ -93,6 +93,11 @@ void widget_textfield_draw(int x, int y, int w, int h, const struct text_field *
     // interior; when the field is active, `start` slides right just far
     // enough to keep the cursor inside that window, so typing past the
     // visible edge scrolls the same way a real text input does.
+    // Field CAPACITY, which is content-independent -- deliberately not
+    // gfx_text_fit_chars(), which measures a particular string. The two
+    // coincide only while every glyph is one cell wide; when Milestone
+    // 21 makes them differ, this windowing needs real rework, not a
+    // helper swap.
     int visible = (w - 2 * pad) / char_w;
     if (visible < 0) visible = 0;
     int start = 0;
@@ -107,7 +112,11 @@ void widget_textfield_draw(int x, int y, int w, int h, const struct text_field *
     int n = 0;
     for (; n < visible && tf->buf[start + n] != '\0'; n++) shown[n] = tf->buf[start + n];
     shown[n] = '\0';
-    gfx_draw_string(x + pad, ty, shown, fg, bg);
+    // Clipped as a safety net, not because the slice above is expected
+    // to be wrong: if that windowing ever miscomputes, the text stops
+    // at the field's edge instead of drawing through its border, which
+    // is the bug docs/decisions.md records this widget having had.
+    gfx_draw_string_clipped(x + pad, ty, w - 2 * pad, shown, fg, bg);
 
     if (tf->active) {
         int caret_x = x + pad + (tf->cursor - start) * char_w;

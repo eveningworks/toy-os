@@ -199,9 +199,27 @@ was next to it (a real user-reported bug, caught from a screenshot).
 Fixed by having `widget_textfield_draw()` compute its own visible
 character count from `w` and slice `tf->buf` before ever calling
 `gfx_draw_string()`, sliding the visible window to keep the cursor in
-view while the field is active. The lesson for any *future* widget that
-draws text into a fixed box: `gfx_draw_string()` will not save you,
-budget the width yourself. See CHANGELOG.md's `[Unreleased]` entry.
+view while the field is active. The lesson recorded at the time was:
+`gfx_draw_string()` will not save you, budget the width yourself.
+
+**That lesson did not hold, and the fix is now a function.** The very
+next caller to draw text into a fixed box -- the Control Panel's applet
+labels -- hit the identical bug, rendering `Date & TSystem Info`, in a
+file written days after this entry existed. A rule that has to be
+remembered at every call site is one that will be forgotten at some call
+site, so the budgeting now has somewhere to live:
+`gfx_draw_string_clipped(x, y, max_w, ...)` draws bounded and returns
+whether the string fitted, and `gfx_text_width()`/`gfx_text_fit_chars()`
+are the measurement half for callers doing their own windowing.
+`gfx_draw_string()` itself is unchanged -- clipping it would alter every
+existing caller -- so the guidance is now "use the clipped variant for a
+fixed box" rather than "remember to do this by hand".
+
+`gfx_text_width()` also pays a later debt: Milestone 21 (proportional
+font metrics) lists exactly that function as something it needs, and
+every `k_strlen(s) * gfx_char_w()` open-coded at a call site is a place
+that silently breaks when a glyph stops being one cell wide. See
+CHANGELOG.md's `[Unreleased]` entries.
 
 **Same lesson, vertical axis:** a follow-up report caught the field's
 height having the exact same problem one axis over -- `apps/notepad.c`

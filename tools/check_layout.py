@@ -9,6 +9,14 @@ against a built image, failing on drift in EITHER direction:
   - a row marked `present` with nothing on the image (the doc describes
     something that isn't there any more)
 
+Three statuses: `present` (must exist), `optional` (may or may not --
+documented so it isn't flagged as undocumented, but never required), and
+`reserved` (a name spoken for by a future milestone, nothing creates it
+yet). `optional` exists for /etc/kbs, which the build only produces when
+xkbcli is installed -- requiring it would fail the check on any machine
+without that tool, and dropping the row would let a genuinely
+undocumented directory hide behind the same name.
+
 Both matter. This project has repeatedly found docs that quietly stopped
 matching reality -- stale milestone numbers, a comment citing a function
 that had been deleted, a README claiming a widget existed. A layout
@@ -58,9 +66,9 @@ def parse_doc(path):
             if not m:
                 continue  # header row, separator row, or prose table
             status = cells[-1].lower()
-            if status not in ("present", "reserved"):
+            if status not in ("present", "reserved", "optional"):
                 sys.exit(f"check_layout: row for {m.group(1)} has unknown status "
-                         f"{cells[-1]!r} (expected 'present' or 'reserved')")
+                         f"{cells[-1]!r} (expected 'present', 'optional' or 'reserved')")
             creator = cells[-2].lower()
             rows[m.group(1)] = (status, creator)
     if not rows:
@@ -132,10 +140,12 @@ def main():
 
     if not args.quiet:
         present = sum(1 for st, _ in documented.values() if st == "present")
-        reserved = len(documented) - present
+        optional = sum(1 for st, _ in documented.values() if st == "optional")
+        reserved = len(documented) - present - optional
         print(f"check_layout: PASS -- {present} documented director"
               f"{'y' if present == 1 else 'ies'} all present, "
-              f"{reserved} reserved, nothing undocumented on the image")
+              f"{optional} optional, {reserved} reserved, "
+              f"nothing undocumented on the image")
     return 0
 
 

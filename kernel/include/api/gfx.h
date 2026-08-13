@@ -82,6 +82,32 @@ void gfx_clear(uint32_t color);
 void gfx_draw_char(int x, int y, char c, uint32_t fg, uint32_t bg);
 void gfx_draw_string(int x, int y, const char *s, uint32_t fg, uint32_t bg);
 
+// --- measuring and clipping text ------------------------------------
+//
+// gfx_draw_string() above deliberately draws every character it is
+// given, past any boundary the caller had in mind (see
+// docs/decisions.md). These are what a caller drawing into a fixed box
+// should use instead of budgeting the width by hand -- which two
+// separate callers got wrong, the second of them AFTER the first was
+// written up as a lesson.
+
+// Pixel width of one row of `s` (stops at a newline). Ask this instead
+// of `k_strlen(s) * gfx_char_w()`: that identity holds only while every
+// glyph is one fixed cell wide, and Milestone 21's proportional metrics
+// are where it stops holding.
+int gfx_text_width(const char *s);
+
+// How many leading characters of `s` fit within `max_w` pixels, whole
+// glyphs only. For callers doing their own windowing (a text field
+// scrolling to follow its cursor) that need the count, not the drawing.
+int gfx_text_fit_chars(const char *s, int max_w);
+
+// gfx_draw_string() bounded to `max_w` pixels. Returns 1 if the whole
+// string fitted, 0 if it was cut -- so a caller can add an ellipsis or
+// widen itself without measuring twice.
+int gfx_draw_string_clipped(int x, int y, int max_w, const char *s,
+                             uint32_t fg, uint32_t bg);
+
 // Shifts the whole framebuffer content up by `pixel_rows` pixels (for a
 // scrolling text console) and fills the newly exposed bottom strip with
 // bg_color.

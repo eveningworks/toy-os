@@ -31,6 +31,62 @@ using `## [x.y.z] - date` headings is here.
 ## [Unreleased]
 
 ### Fixed
+- **CI had been red for three commits, and the reason was a real bug it
+  found rather than a bad check.** `tools/check_layout.py` (added in the
+  filesystem-layout commit) failed on `/etc` and `/etc/kbs` missing from
+  CI-built images.
+  - Root cause: `tools/gen_kbs.py` needs `xkbcli`
+    (`libxkbcommon-tools`), the `seed` target **skips it with a message**
+    when that's absent, and CI never installed it. So **CI had been
+    building images with no keyboard layouts at all**, silently, for as
+    long as that step has existed -- nothing noticed until a check
+    compared an image against a written description of what should be on
+    it. That is the check earning its keep on its first run.
+  - CI installs `libxkbcommon-tools` now, so the layouts are actually
+    generated and `gen_kbs.py` gets exercised there.
+  - The doc was also wrong in a smaller way: `/etc` was listed as
+    build-created, when the thing that reliably creates it is
+    `kernel_main()` at boot -- the build only made it incidentally, as a
+    side effect of seeding `/etc/kbs`. It's `boot` now.
+  - `check_layout.py` gained a third status, **`optional`**, for
+    `/etc/kbs`: documented so an undocumented directory can't hide
+    behind the name, but never required, since a machine without
+    `xkbcli` legitimately won't have it. Verified by building an image
+    with no `/etc` at all and confirming the check passes -- i.e. the
+    CI case reproduced locally rather than fixed by pushing and hoping.
+
+- **`gfx_draw_string()`'s missing clipping is now a function instead of
+  a rule.** It draws every character it's handed, past any boundary the
+  caller had in mind. `docs/decisions.md` recorded that after a long
+  filename drew through a text field's border, and told callers to
+  budget the width themselves -- and then the very next fixed-box
+  caller, the Control Panel's applet labels, hit the identical bug
+  (`Date & TSystem Info`) in a file written days later. A rule that must
+  be remembered at every call site will be forgotten at some call site.
+  - **`gfx_draw_string_clipped(x, y, max_w, ...)`** draws bounded and
+    returns whether the whole string fitted, so a caller can add an
+    ellipsis or widen itself without measuring twice.
+  - **`gfx_text_width()`** and **`gfx_text_fit_chars()`** are the
+    measurement half, for callers doing their own windowing.
+    `gfx_text_width()` also pays a debt forward: Milestone 21 lists
+    exactly that function as something proportional font metrics need,
+    and every open-coded `k_strlen(s) * gfx_char_w()` is a site that
+    silently breaks when a glyph stops being one cell wide.
+  - `gfx_draw_string()` itself is deliberately unchanged -- clipping it
+    would alter every existing caller.
+  - Converted: the Control Panel's labels (replacing the hand-rolled
+    truncation) and `ui_textbox`'s field text, the latter as a safety
+    net rather than a rewrite -- its windowing logic is correct, but if
+    it ever miscomputes, the text now stops at the field's edge instead
+    of drawing through the border, which is the exact bug that widget
+    already had once.
+  - Two KTESTs (suite: 61 -> 63) assert the measurement directly:
+    widths stop at a newline, and `fit_chars` never returns a partial
+    glyph (one pixel short of the fourth character is three, not "three
+    and a bit") including the degenerate zero/negative widths. The
+    measurement is pure arithmetic over font metrics, so unlike the
+    drawing it can be asserted rather than eyeballed in a screenshot.
+
 - **The two ATA loose ends this session had been carrying: the PIO
   path's failure reporting, and the fact that it never ran at all.**
   - **`wait_drq()` conflated "the drive reported ERR" with "I gave up
