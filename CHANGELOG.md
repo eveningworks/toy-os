@@ -164,8 +164,23 @@ using `## [x.y.z] - date` headings is here.
     QEMU happened to refresh at mode-set time -- two log lines and then
     nothing, no shell prompt at all. `gfx_flush()` publishes the dirty
     box gfx.c was already tracking, called from `gfx_present()` and the
-    console's own draw paths. Console and GUI both verified correct
-    afterwards.
+    console's own draw paths.
+  - **That first flush fix did nothing, and the reporter's second
+    screenshot is what showed it.** `gfx_put_pixel()` only marked the
+    dirty box on its DOUBLE-BUFFERED path; drawing straight to the
+    framebuffer -- what the console does at boot -- marked nothing. So
+    every flush found an empty box and published nothing. Dirty
+    tracking had existed purely to bound `gfx_present()`'s blit, where
+    "not double-buffered" genuinely means "nothing to blit"; the moment
+    a display could need to be TOLD what changed, that assumption
+    became wrong. The box now means "what was touched", regardless of
+    where it was written.
+  - Worth noting why the GUI looked fine in testing while the console
+    was frozen: GUI mode IS double-buffered, so its dirty box was real
+    and its flushes worked. Testing the GUI and concluding the display
+    layer was healthy is exactly the wrong inference to have drawn.
+  - Verified after the real fix: full boot log, shell prompt, and a
+    typed `lscpu` rendering its whole scrolling output live.
   - That is the sort of thing automation here structurally cannot catch:
     the framebuffer contained the right pixels the whole time, so a
     memory-side check would have passed. `screendump` doesn't see it

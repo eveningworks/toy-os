@@ -228,6 +228,16 @@ void gfx_put_pixel(int x, int y, uint32_t color) {
     p[0] = (uint8_t)(color & 0xFF);
     p[1] = (uint8_t)((color >> 8) & 0xFF);
     p[2] = (uint8_t)((color >> 16) & 0xFF);
+    // Marked here too, not only on the double-buffered path above.
+    // Dirty tracking used to exist purely for gfx_present()'s blit, so
+    // it was pointless when drawing straight to the framebuffer and was
+    // skipped. That stopped being true the moment a display could need
+    // to be TOLD what changed (gfx_flush()): with this missing, every
+    // flush from the console found an empty box, published nothing, and
+    // the screen froze on a driver-owned mode while memory held the
+    // right pixels the whole time. The box means "what was touched",
+    // regardless of where it was written.
+    dirty_mark(x, y);
 }
 
 uint32_t gfx_get_pixel(int x, int y) {
