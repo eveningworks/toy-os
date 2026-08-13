@@ -63,11 +63,14 @@ technical conventions below:
   caller needs it, not preemptively. (`apps/widgets.h`/`.c` -- the
   single file all of `apps/ui/` was split out of -- no longer exists;
   see `docs/decisions.md`.)
-- **The window manager lives in `apps/wm/`** (`wm.c`/`wm_input.c`/
-  `wm_render.c`/`wm_internal.h`), split by concern for readability --
-  it's still one tightly-coupled event loop sharing state through
-  `wm_internal.h`'s `extern`s, not decoupled components. See
-  `apps/wm/wm.c`'s top comment.
+- **The window manager lives in `apps/wm/`** -- the core event
+  loop/input/render split (`wm.c`/`wm_input.c`/`wm_render.c`, sharing
+  state through `wm_internal.h`'s `extern`s) plus the pieces that grew
+  their own files as they appeared: `desktop.c`, `start_menu.c`,
+  `context_menu.c`, `confirm_dialog.c`, `file_picker.c`, `wm_tray.c`.
+  Split by concern for readability -- it's still one tightly-coupled
+  event loop, not decoupled components. See `apps/wm/wm.c`'s top
+  comment.
 - **Split a file once it's grown big enough to be genuinely harder to
   work with, the same call that produced the `apps/wm/` split above --
   don't wait for it to become unmanageable, but don't split
@@ -75,10 +78,12 @@ technical conventions below:
   practical: a file mixing more than one real concern (e.g. event
   handling + rendering, like `wm.c` before its split), or long enough
   that finding/editing the right part of it gets slow and error-prone.
-  As a rough reference point, every hand-written file in this repo is
-  currently under 800 lines (`apps/shell.c` is the largest at 777) and
-  that's comfortable -- a hand-written file pushing toward a couple
-  thousand lines is the point to seriously consider it, not a hard
+  Don't calibrate this against a line count quoted in a doc -- those
+  rot (this bullet claimed "every hand-written file is under 800 lines"
+  well after `kernel/drivers/tfs.c` and `apps/shell_sys.c` had both
+  passed 1,000). Run `wc -l` on the actual tree if you want today's
+  numbers. A hand-written file pushing toward a couple thousand lines
+  is the point to seriously consider a split, not a hard
   trigger. This deliberately excludes *generated* data files like
   `kernel/drivers/font_ttf.c` (11,800+ lines of baked glyph data) --
   splitting those for line count alone would miss the point; the
@@ -89,13 +94,17 @@ technical conventions below:
   boundary -- see `docs/decisions.md`'s entry on this) rather than
   inventing a new pattern each time, and record the split's own
   reasoning in a top-of-file comment the way `apps/wm/wm.c` and
-  `kernel/drivers/tfs.c` do. `CHANGELOG.md` itself is the same
-  instinct applied to docs, not code -- split by era once it got
-  unwieldy to search: `CHANGELOG-archive.md` holds Milestone 1 through
-  Build 172 (moved out at ~4,200 lines), `CHANGELOG.md` keeps Build 173
-  onward plus `## [Unreleased]`. Both stay grep-able; if this ever
-  needs a second split, follow the same pattern (cut at one heading,
-  straight move, no rewording) rather than inventing a new one.
+  `kernel/drivers/tfs.c` do. The changelog is the same
+  instinct applied to docs, not code -- split by era each time it
+  passed ~4,200 lines, cutting at one heading with a straight move and
+  no rewording: `CHANGELOG-archive.md` holds Milestone 1 through Build
+  173, `CHANGELOG-archive-2.md` holds Build 183 through Build 502 (the
+  whole `## Build N` heading era), and `CHANGELOG.md` keeps the semver
+  era plus `## [Unreleased]`. All three stay grep-able; a future split
+  follows the same pattern rather than inventing a new one. Note
+  `docs/decisions.md`'s `Build N` pointers name whichever file that
+  build actually lives in -- keep them accurate when a split moves
+  entries.
 - **`/etc` on the persistent filesystem is the config-file convention**
   (`kernel_main()` creates it right after `fs_init()`, before anything
   that might read a config file runs). Don't hand-roll a parser for a
@@ -265,7 +274,7 @@ kernel's mouse driver only speaks PS/2 (see `kernel/drivers/mouse.c`),
 there's no USB stack at all, and adding an explicit USB pointer device
 makes QEMU route host mouse motion to THAT instead of the emulated
 PS/2 mouse, so the guest receives nothing and the cursor just never
-moves. Bit an actual user session once (see CHANGELOG.md around build
+moves. Bit an actual user session once (see CHANGELOG-archive-2.md around build
 293's Makefile fix) -- looked exactly like a driver bug, wasn't one.
 
 **A plain `make all` is safe after editing a shared header now** (as of
@@ -492,7 +501,10 @@ not instead of it.
 ## tools/
 
 Dev/build helper scripts, not compiled or shipped as part of the OS:
-`genfont.py`/`genttf.py` (font generation, pre-existing), `qmp_test.py`
+`genfont.py`/`genttf.py` (font generation, pre-existing), `gen_kbs.py`
+(generates the `seed/sync/etc/kbs/<layout>` keyboard-layout data files
+from Linux's own XKB data -- see `docs/decisions.md` on layouts being
+data files, not a compiled-in enum), `qmp_test.py`
 (QEMU/QMP GUI testing helpers, see above), `boot_smoke_test.py` (fast
 non-GUI boot check, see above), `gen_version.sh`/`set_version.sh`
 (versioning, see the `version.h`/`VERSION` bullets above),
@@ -501,7 +513,7 @@ bridge with the stale-`index.lock` workaround, see "Working in the
 cloud sandbox vs. directly on the user's machine" above -- not needed,
 and not applicable, on a direct local checkout).
 
-Four more, added once the build/test/delivery loop above had enough
+The rest, added once the build/test/delivery loop above had enough
 repeated manual steps to be worth automating:
 - **`preflight.sh`** -- one command running `make clean && make all &&
   make iso` + `boot_smoke_test.py` + a `git status --short` summary, so
@@ -590,11 +602,14 @@ toy-os work this way?" for the handful of decisions that come up again
 once code has grown around them (e.g. "why is the VFS single-backend,
 not mount points", "why doesn't `fs_delete` recurse"). Deliberately a
 *pointer* file, not a second copy of the reasoning: each entry is a
-couple sentences plus a link into the relevant `CHANGELOG.md` (or
-`CHANGELOG-archive.md`, for anything before Build 173) section or
-source file, not the reasoning itself restated. README.md/
-apps/README.md already cover architecture in depth and CHANGELOG.md +
-CHANGELOG-archive.md together are the full chronological history with
+couple sentences plus a link into the relevant changelog section
+(`CHANGELOG.md` for the semver era, `CHANGELOG-archive-2.md` for Build
+183-502, `CHANGELOG-archive.md` for anything older) or
+source file, not the reasoning itself restated. It opens with a
+grouped index of every entry -- add a line there when adding an entry,
+or the index silently stops being one. README.md/
+apps/README.md already cover architecture in depth and the three
+changelog files together are the full chronological history with
 rationale -- `docs/decisions.md` exists because neither is indexed by
 topic, so "why is X built this way" otherwise means scrolling/
 searching the whole history.

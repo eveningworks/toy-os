@@ -1,14 +1,29 @@
-# Changelog archive (Milestone 1 through Build 172)
+# Changelog archive (Milestone 1 through Build 173)
 
-Older history split out of `CHANGELOG.md` once that file passed
+The oldest history, split out of `CHANGELOG.md` once that file passed
 ~4,200 lines -- see `CLAUDE.md`'s note on splitting a file once it's
 grown big enough to be genuinely harder to work with, the same
 instinct applied to docs here rather than code. Nothing is reworded or
 summarized; this is a straight, unedited continuation of
 `CHANGELOG.md`'s history, just in a separate file so the current one
-stays a manageable size. `docs/decisions.md` links into specific
-`Build N` sections below the same way it always did -- if a link ever
-points at the wrong file after this split, that's the file to check.
+stays a manageable size.
+
+(This file's title said "through Build 172" for a while, but Build 173
+is the newest entry actually in it -- the cut landed one heading later
+than the title claimed. Fixed here rather than moving the entry, since
+the file boundary itself was never wrong.)
+
+There are three changelog files now, one per era, in chronological
+order:
+
+- `CHANGELOG-archive.md` (this file) -- Milestone 1 through Build 173
+- `CHANGELOG-archive-2.md` -- Build 183 through Build 502
+- `CHANGELOG.md` -- the semver era (`[0.0.9]` onward) plus
+  `## [Unreleased]`
+
+`docs/decisions.md` links into specific `Build N` sections across both
+archives -- if a link ever points at the wrong file, those are the two
+to check.
 
 For current/recent history, see `CHANGELOG.md`.
 

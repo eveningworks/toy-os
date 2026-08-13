@@ -6,7 +6,7 @@ found and fixed. Moved out of README.md (which now keeps just a short
 summary + a link here) because this is a full implementation
 walkthrough, not a feature list entry. See `docs/decisions.md` for
 shorter topic-indexed "why" answers, and `CHANGELOG.md`/
-`CHANGELOG-archive.md` for the complete build-by-build history this
+`CHANGELOG-archive-2.md`/`CHANGELOG-archive.md` for the complete history this
 was assembled from.
 
 By default, the kernel, drivers, shell, and GUI apps all run in one

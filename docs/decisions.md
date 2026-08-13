@@ -13,6 +13,97 @@ If you're a Claude session or a contributor and about to ask "wait, why
 is this built this way instead of the more obvious way?" -- check here
 first before re-litigating it from scratch.
 
+Every entry is listed in the index below, grouped by area -- add a line
+there when you add an entry, or the index quietly stops being one.
+
+## Index
+
+**Kernel, memory & processes**
+
+- [IRQ registration: one handler per line, framework-automatic EOI](#irq-registration-one-handler-per-line-framework-automatic-eoi)
+- [Blocking I/O waits: hlt when safe, poll when inside a syscall](#blocking-io-waits-hlt-when-safe-poll-when-inside-a-syscall)
+- [Contiguous memory: linear bitmap scan, not a buddy allocator](#contiguous-memory-linear-bitmap-scan-not-a-buddy-allocator)
+- [`ring3test` still requires a reboot after its fault, on purpose](#ring3test-still-requires-a-reboot-after-its-fault-on-purpose)
+- [Kernel heap: coalesces by real address adjacency, not list order](#kernel-heap-coalesces-by-real-address-adjacency-not-list-order)
+- [`kfree()`'s coalescing only checked the block being merged in, not the block being merged into](#kfrees-coalescing-only-checked-the-block-being-merged-in-not-the-block-being-merged-into)
+- [A syscall's path-pointer validation checks a full `FS_PATH_MAX` range, not just up to the string's NUL](#a-syscalls-path-pointer-validation-checks-a-full-fs_path_max-range-not-just-up-to-the-strings-nul)
+- [The M16 scheduler is permanently armed now -- an empty process table makes that safe](#the-m16-scheduler-is-permanently-armed-now----an-empty-process-table-makes-that-safe)
+- [Stack canaries: `-mstack-protector-guard=global` and a fixed constant, not GCC's defaults](#stack-canaries--mstack-protector-guardglobal-and-a-fixed-constant-not-gccs-defaults)
+- [NX enforcement scoped to userspace only -- the kernel's own identity map stays RWX](#nx-enforcement-scoped-to-userspace-only----the-kernels-own-identity-map-stays-rwx)
+- [The serial debug console is poll-based from existing idle loops, not a new kernel thread](#the-serial-debug-console-is-poll-based-from-existing-idle-loops-not-a-new-kernel-thread)
+
+**Filesystem & storage**
+
+- [Filesystem is one active backend, not mount points](#filesystem-is-one-active-backend-not-mount-points)
+- [No recursive delete](#no-recursive-delete)
+- [Persistent filesystem is write-through with a single-slot journal](#persistent-filesystem-is-write-through-with-a-single-slot-journal)
+- [File timestamps are broken-down local time, not a Unix epoch integer](#file-timestamps-are-broken-down-local-time-not-a-unix-epoch-integer)
+- [TFS2 v2's block pointers go direct + single + double + triple indirect, not just direct + single](#tfs2-v2s-block-pointers-go-direct-single-double-triple-indirect-not-just-direct-single)
+- [`fs_read_range()`/`fs_write_range()` were added alongside `fs_read()`/`fs_write()`, not as a replacement](#fs_read_rangefs_write_range-were-added-alongside-fs_readfs_write-not-as-a-replacement)
+- [TFS2's write batching covers `write_range_impl()`'s data path only -- `persist_record()`'s journaled metadata writes still flush every step](#tfs2s-write-batching-covers-write_range_impls-data-path-only----persist_records-journaled-metadata-writes-still-flush-every-step)
+- [`fs_ops`'s new steppable-write function pointers are required, not optional/NULLable](#fs_opss-new-steppable-write-function-pointers-are-required-not-optionalnullable)
+- [`tools/tfs2_writer.py`: content-hash sync, not mtime comparison; direct+single-indirect write scope, not full indirect support](#toolstfs2_writerpy-content-hash-sync-not-mtime-comparison-directsingle-indirect-write-scope-not-full-indirect-support)
+- [`/bin` binaries: boot-time bootstrap-install now, a host-side TFS2 writer tool later](#bin-binaries-boot-time-bootstrap-install-now-a-host-side-tfs2-writer-tool-later)
+- [`/bin/lspci` moved from boot-time bootstrap-install to build-time seeding, once the writer tool existed](#binlspci-moved-from-boot-time-bootstrap-install-to-build-time-seeding-once-the-writer-tool-existed)
+- [Real disk-hosted ELF binaries: an old plan re-verified before building, not built from the doc as written](#real-disk-hosted-elf-binaries-an-old-plan-re-verified-before-building-not-built-from-the-doc-as-written)
+- [Every ELF64 test binary moved to `/bin`, not just `lspci` -- and why two didn't fold in cleanly](#every-elf64-test-binary-moved-to-bin-not-just-lspci----and-why-two-didnt-fold-in-cleanly)
+- [GPT header verification: a host-compiled unit test, not a live boot -- TFS2's own journal collides with LBA 1](#gpt-header-verification-a-host-compiled-unit-test-not-a-live-boot----tfs2s-own-journal-collides-with-lba-1)
+
+**Drivers & hardware**
+
+- [DMA needs PCI Bus Master Enable, not just a programmed descriptor](#dma-needs-pci-bus-master-enable-not-just-a-programmed-descriptor)
+- [PCI enumeration is a brute-force flat scan, not bridge-aware recursion](#pci-enumeration-is-a-brute-force-flat-scan-not-bridge-aware-recursion)
+- [Nordic keyboard/character support: Latin-1, not UTF-8; 3 remapped keys, not a full layout](#nordic-keyboardcharacter-support-latin-1-not-utf-8-3-remapped-keys-not-a-full-layout)
+- [Keyboard layouts are data files (`/etc/kbs/<name>`) generated from Linux's own XKB data, not a compiled-in enum](#keyboard-layouts-are-data-files-etckbsname-generated-from-linuxs-own-xkb-data-not-a-compiled-in-enum)
+- [GDB debugging: QEMU's built-in stub, not an in-kernel serial protocol implementation](#gdb-debugging-qemus-built-in-stub-not-an-in-kernel-serial-protocol-implementation)
+
+**GUI: window manager, compositor & widgets**
+
+- [Widgets are added once a second real caller needs them -- except the checkbox](#widgets-are-added-once-a-second-real-caller-needs-them----except-the-checkbox)
+- [`gfx_draw_string()` doesn't clip to a width -- callers that need that do their own](#gfx_draw_string-doesnt-clip-to-a-width----callers-that-need-that-do-their-own)
+- [`widgets.h`/`theme.h` stay minimal on purpose](#widgetshthemeh-stay-minimal-on-purpose)
+- [The window manager is one event loop, not decoupled components](#the-window-manager-is-one-event-loop-not-decoupled-components)
+- [Esc no longer exits the GUI desktop -- it's unclaimed at the WM level now](#esc-no-longer-exits-the-gui-desktop----its-unclaimed-at-the-wm-level-now)
+- [Don't put a `text_scrollback` on the stack](#dont-put-a-text_scrollback-on-the-stack)
+- [Button press/release feedback: a general `on_press`/`on_release` WM mechanism, not a Calculator-only hack](#button-pressrelease-feedback-a-general-on_presson_release-wm-mechanism-not-a-calculator-only-hack)
+- [ui_button/ui_button_group: Brutal-OS-inspired, but not a full retained view system](#ui_buttonui_button_group-brutal-os-inspired-but-not-a-full-retained-view-system)
+- [Start menu click flash: a deferred close via pit_ticks(), not a blocking sleep](#start-menu-click-flash-a-deferred-close-via-pit_ticks-not-a-blocking-sleep)
+- [Title-bar buttons: press-then-commit-on-release, reusing the content_pressed shape](#title-bar-buttons-press-then-commit-on-release-reusing-the-content_pressed-shape)
+- [apps/ui/: a directory for retained-widget objects, once there were three](#appsui-a-directory-for-retained-widget-objects-once-there-were-three)
+- [Calculator is the first `multi_instance` GUI app](#calculator-is-the-first-multi_instance-gui-app)
+- [`apps/widgets.c`/`.h` no longer exist -- and `ui_scrollback`/`ui_scrollbar` didn't get an owned-geometry wrapper](#appswidgetsch-no-longer-exist----and-ui_scrollbackui_scrollbar-didnt-get-an-owned-geometry-wrapper)
+- [The desktop's right-click quick-launch menu doesn't distinguish icons from empty space](#the-desktops-right-click-quick-launch-menu-doesnt-distinguish-icons-from-empty-space)
+- [`context_menu.h`'s items carry a `void *ctx`, but `start_menu.h`'s don't](#context_menuhs-items-carry-a-void-ctx-but-start_menuhs-dont)
+- [Click-to-position/selection lives in the shared `text_scrollback` widget, not a Notepad-only one](#click-to-positionselection-lives-in-the-shared-text_scrollback-widget-not-a-notepad-only-one)
+- [The file picker is a WM-level modal overlay (`apps/wm/file_picker.c`), not an `apps/ui/` widget](#the-file-picker-is-a-wm-level-modal-overlay-appswmfile_pickerc-not-an-appsui-widget)
+- [`struct window *` isn't a stable per-window identity across frames -- don't cache one](#struct-window-isnt-a-stable-per-window-identity-across-frames----dont-cache-one)
+- [Why the compositor uses one scene-wide damage region, not per-window exposure tracking](#why-the-compositor-uses-one-scene-wide-damage-region-not-per-window-exposure-tracking)
+- [The taskbar/tray falls back to full-screen repaint on purpose, not as an oversight](#the-taskbartray-falls-back-to-full-screen-repaint-on-purpose-not-as-an-oversight)
+
+**Shell, apps & console**
+
+- [Terminal wraps the real shell, it doesn't reimplement it](#terminal-wraps-the-real-shell-it-doesnt-reimplement-it)
+- [The CLI editor's status bar needs its own line-wrapping pass, not a plain dump-and-let-the-console-wrap](#the-cli-editors-status-bar-needs-its-own-line-wrapping-pass-not-a-plain-dump-and-let-the-console-wrap)
+- [Timezone city list is a database file, not a hardcoded array or a config key](#timezone-city-list-is-a-database-file-not-a-hardcoded-array-or-a-config-key)
+- [`/etc` is one shared `toyos.conf` by default, not a file per setting](#etc-is-one-shared-toyosconf-by-default-not-a-file-per-setting)
+- [dmesg coverage: log from the one-shot call site, not the hot function itself](#dmesg-coverage-log-from-the-one-shot-call-site-not-the-hot-function-itself)
+- [Terminal's `run <name>` uses an explicit allowlist, not a blocklist](#terminals-run-name-uses-an-explicit-allowlist-not-a-blocklist)
+- [`kapi.h` is the only header apps/ includes](#kapih-is-the-only-header-apps-includes)
+
+**Build, versioning & project docs**
+
+- [Build-number scheme: fix/feature/major tiers, not dates or semver](#build-number-scheme-fixfeaturemajor-tiers-not-dates-or-semver)
+- [Versioning: semver + `-dev` suffix, not a per-change build number](#versioning-semver--dev-suffix-not-a-per-change-build-number)
+- [Repo is MIT; the baked JetBrains Mono glyph data is separately SIL OFL 1.1](#repo-is-mit-the-baked-jetbrains-mono-glyph-data-is-separately-sil-ofl-11)
+- [Repo history scrubbed of the maintainer's real name -- privacy request, not a bug fix](#repo-history-scrubbed-of-the-maintainers-real-name----privacy-request-not-a-bug-fix)
+- [Socket fds: scaffolding ahead of the driver, not a working transport](#socket-fds-scaffolding-ahead-of-the-driver-not-a-working-transport)
+
+**Session workflow & environment**
+
+- [Protected files: `device_commit_files` blocks writes, `device_bash` doesn't](#protected-files-device_commit_files-blocks-writes-device_bash-doesnt)
+- [The device bridge can't delete files, and `git` leaves stale locks behind on it](#the-device-bridge-cant-delete-files-and-git-leaves-stale-locks-behind-on-it)
+- [Cowork device-bridge vs. direct local checkout: detected via `git config user.name`, not assumed](#cowork-device-bridge-vs-direct-local-checkout-detected-via-git-config-username-not-assumed)
+
 ## Widgets are added once a second real caller needs them -- except the checkbox
 
 `apps/widgets.h`'s standing rule (stated in its own top comment) is:
@@ -28,7 +119,7 @@ need). Its `widget_checkbox_*`, though, was added explicitly ahead of
 any real caller, by direct user request when asked to choose the
 scope -- a deliberate, acknowledged exception to the rule above, not a
 change to it: the rule still applies to whatever gets added *next*.
-See CHANGELOG.md's **Build 490** for the full writeup.
+See CHANGELOG-archive-2.md's **Build 490** for the full writeup.
 
 ## `gfx_draw_string()` doesn't clip to a width -- callers that need that do their own
 
@@ -81,7 +172,7 @@ EOI'd and ignored) -- including the timer, which now hands off to
 `scheduler_tick()` from inside its own registered handler
 (`idt.c`'s `timer_irq_handler()`) rather than a dispatch-level special
 case, so every hardware IRQ (32-47) goes through one uniform path. See
-`irq.h`'s top comment and CHANGELOG.md's **Build 400** for the full
+`irq.h`'s top comment and CHANGELOG-archive-2.md's **Build 400** for the full
 writeup, including what got regression-tested (timer/scheduler,
 keyboard, mouse) since this touched all three.
 
@@ -113,7 +204,7 @@ writing, only) caller, but the mechanism itself is general-purpose --
 any future driver wanting to block inside a syscall-reachable code
 path (a NIC's TX/RX ring, say) needs this same check, not a
 driver-specific reinvention. See `idt.h`'s doc comments and
-CHANGELOG.md's **Build 470** for the full writeup.
+CHANGELOG-archive-2.md's **Build 470** for the full writeup.
 
 ## DMA needs PCI Bus Master Enable, not just a programmed descriptor
 
@@ -130,7 +221,7 @@ it. `pci_enable_bus_master()` (`pci.c`/`pci.h`) sets it via a
 read-modify-write of the Command register, called once from
 `ata_init_dma()`. Any future DMA-capable driver (a NIC) needs this same
 call before its own DMA moves real data -- noted directly in
-`pci.h`'s doc comment, not just here. See CHANGELOG.md's **Build 470**
+`pci.h`'s doc comment, not just here. See CHANGELOG-archive-2.md's **Build 470**
 for how this was root-caused (PIO-vs-DMA comparison, then a host-side
 pre-seeded disk image to isolate the read path and trace the bounce
 buffer).
@@ -153,7 +244,7 @@ scan strategy in a way this could regress. Replacing the whole
 allocator to solve a fragmentation problem no code in this kernel has
 actually hit yet was judged premature; it's flagged in
 `docs/roadmap.md` as the fix if that ever changes, not built now. See
-`pmm.h`'s top comment and CHANGELOG.md's **Build 410** for the
+`pmm.h`'s top comment and CHANGELOG-archive-2.md's **Build 410** for the
 full writeup, including `pmm_selftest()`'s boot-time verification
 (no consumer exists yet to exercise these functions any other way).
 
@@ -177,7 +268,7 @@ NOT size-probed (the write-0xFFFFFFFF-and-read-back trick) -- that's
 deferred to whichever future driver actually needs to map a BAR, since
 it means temporarily disabling the device's decode and isn't needed
 just to enumerate/identify what's present. See `pci.h`'s top comment
-and CHANGELOG.md's **Build 390** for the full writeup -- this was the
+and CHANGELOG-archive-2.md's **Build 390** for the full writeup -- this was the
 first concrete milestone toward the TCP/IP prerequisites README.md's
 **Build 380** entry laid out.
 
@@ -190,7 +281,7 @@ new backend and pointing `fs_init()` at it, not routing different path
 prefixes to different backends simultaneously -- nothing needs the
 latter yet, and it's meaningfully more code (cross-mount path
 resolution, boundary conflicts) for a capability that would sit
-unused. See `fs_ops.h`'s top comment and CHANGELOG.md's **Build 304**
+unused. See `fs_ops.h`'s top comment and CHANGELOG-archive-2.md's **Build 304**
 for the full reasoning, including what it would take to add mount
 points later if that ever changes.
 
@@ -222,7 +313,7 @@ gives genuine crash recovery, not just torn-write detection, for a
 journal region that only costs one extra record's worth of disk space
 total (not per-record). See `tfs.c`'s top comment ("Journaling") for
 the exact 4-step write-ahead sequence and replay logic, `docs/
-tfs2-spec.md` for the on-disk journal format, and CHANGELOG.md's
+tfs2-spec.md` for the on-disk journal format, and CHANGELOG-archive-2.md's
 **Build 480** for the full writeup.
 
 ## File timestamps are broken-down local time, not a Unix epoch integer
@@ -245,7 +336,7 @@ different timezone selections. Acceptable for a toy OS's own files;
 would need revisiting (probably by finally adding an epoch conversion
 helper) if timestamps ever needed to be meaningfully compared against
 a real-world reference. See `fs.h`'s `fs_stat()` doc comment,
-`tfs.c`'s top comment, and CHANGELOG.md's **Build 480**.
+`tfs.c`'s top comment, and CHANGELOG-archive-2.md's **Build 480**.
 
 ## `kapi.h` is the only header apps/ includes
 
@@ -288,12 +379,12 @@ shell" command handler that could drift out of sync with the real one.
 A short, explicit list of commands that draw straight to the physical
 screen or block in ways that don't make sense inside a window (`gui`,
 `ring3test`, `elftest`, ...) print an explanation instead of running.
-Built across four phases -- see CHANGELOG.md's **Builds 183, 193,
-203, 253**.
+Built across four phases -- see CHANGELOG-archive-2.md's
+**Builds 183, 193, 203, 253**.
 
 ## `ring3test` still requires a reboot after its fault, on purpose
 
-Once process exit/teardown existed (CHANGELOG.md's **Build 173**) so a
+Once process exit/teardown existed (CHANGELOG-archive.md's **Build 173**) so a
 crashed *scheduled* ring-3 process doesn't halt the kernel, `ring3test`
 kept requiring a reboot anyway -- not because teardown didn't reach it,
 but because it intentionally drops to ring 3 via its own raw `iretq`
@@ -322,7 +413,7 @@ to be unwieldy sharing it (a GUI app with a dozen preferences) should
 pass its own `/etc/<name>.conf` path instead -- nothing in
 `etc_config.c` favors one file over many, that choice belongs to each
 caller. See `kernel/core/etc_config.c`'s top comment for the file
-format itself and CHANGELOG.md's **Build 357** for the original
+format itself and CHANGELOG-archive-2.md's **Build 357** for the original
 writeup, including the one-time forward-migration logic each of
 `tz.c`/`font_config.c` briefly carried to move an already-chosen
 setting out of its old dedicated file the first time it loaded --
@@ -366,7 +457,7 @@ it still needs to be something other than Esc until a WM-level Esc
 handler (e.g. a confirm dialog's cancel) actually exists -- **Build
 377** picked F3 for the editor's exit specifically to sidestep this.
 See `wm.c`'s own comment at the old check's former location and
-CHANGELOG.md's **Build 377** for the full story.
+CHANGELOG-archive-2.md's **Build 377** for the full story.
 
 ## Don't put a `text_scrollback` on the stack
 
@@ -382,7 +473,7 @@ anyway and it silently corrupted nearby memory several calls deep into
 later keystrokes quietly not registering. Any new caller of
 `text_scrollback` (or anything else sized against `SCROLLBACK_CAP`) on a
 kernel-context call path needs a static instance, not a local variable.
-See `apps/editor.c`'s `g_editor_tb` for the fix and CHANGELOG.md's
+See `apps/editor.c`'s `g_editor_tb` for the fix and CHANGELOG-archive-2.md's
 **Build 377** for the full story.
 
 ## The CLI editor's status bar needs its own line-wrapping pass, not a plain dump-and-let-the-console-wrap
@@ -408,8 +499,8 @@ new `vga_cols()` instead of pixels), and print the status line with NO
 trailing `\n` so the physical cursor lands right after it instead of a
 row below -- is the general pattern any future full-screen CLI
 renderer in this codebase should copy, not another one-off dump. See
-`editor.c`'s `editor_render()` top comment and CHANGELOG.md's **Build
-379** for the full story, including a padding-math bug the windowing
+`editor.c`'s `editor_render()` top comment and
+CHANGELOG-archive-2.md's **Build 379** for the full story, including a padding-math bug the windowing
 itself caught during testing.
 
 ## Timezone city list is a database file, not a hardcoded array or a config key
@@ -425,7 +516,7 @@ both into `toyos.conf`. This is also the concrete case **Build 357**'s
 "a setting with enough keys of its own gets its own file" escape hatch
 was written for -- a city list doesn't fit `key=value` shape at all.
 Editing the database only takes effect on the next boot (no live-
-reload command yet); see CHANGELOG.md's **Build 367** for the full
+reload command yet); see CHANGELOG-archive-2.md's **Build 367** for the full
 writeup and what was verified.
 
 ## Build-number scheme: fix/feature/major tiers, not dates or semver
@@ -437,12 +528,12 @@ replaced a hand-bumped `0.1.0`-style semver. It was a deliberately
 coarse, Windows-build-number-style approximation (+1/+10/+50) chosen
 for being consistent and easy to sanity-check later, over a freeform
 number that would be more nuanced but less predictable. Kept here for
-the historical reasoning -- every existing `Build N` CHANGELOG.md
+the historical reasoning -- every existing `Build N` changelog
 heading and `build-N` git tag still refers to this scheme. See
 CHANGELOG-archive.md's **Build 110** (the switch itself) and
 **Build 121** (the git tag + GitHub Release convention added on top of
-it) -- both predate the CHANGELOG.md/CHANGELOG-archive.md split, so
-they're in the archive file now, not CHANGELOG.md.
+it) -- both predate the changelog's split into eras, so they're in the
+oldest archive file now, not CHANGELOG.md.
 
 ## Versioning: semver + `-dev` suffix, not a per-change build number
 
@@ -561,7 +652,7 @@ namespace, the syscall ABI, and the tagged fd table (`FD_KIND_FILE`/
 existing. `sockettest` verifies exactly that surface -- fd allocation,
 kind separation (`SYS_WRITE`/`SYS_READ` correctly reject a socket fd),
 and cleanup -- without pretending a transport exists. See
-`syscall_abi.h`'s `SYS_SOCKET` doc comment and CHANGELOG.md's
+`syscall_abi.h`'s `SYS_SOCKET` doc comment and CHANGELOG-archive-2.md's
 **Build 420** for the full writeup.
 
 ## Nordic keyboard/character support: Latin-1, not UTF-8; 3 remapped keys, not a full layout
@@ -612,7 +703,7 @@ by QMP-testing actual keystrokes end-to-end and noticing the cursor
 didn't even advance -- not by code review -- which is the concrete
 argument for always verifying a "fixed every instance of X" claim by
 testing the behavior, not just re-grepping the pattern you already
-fixed. See CHANGELOG.md's **Build 501** for the full writeup.
+fixed. See CHANGELOG-archive-2.md's **Build 501** for the full writeup.
 
 ## Protected files: `device_commit_files` blocks writes, `device_bash` doesn't
 

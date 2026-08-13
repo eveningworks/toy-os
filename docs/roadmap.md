@@ -1,7 +1,7 @@
 # Roadmap
 
 Forward-looking "not built yet" items only -- what's already built lives in
-`CHANGELOG.md`/`CHANGELOG-archive.md` (full history) and `README.md` (what
+the `CHANGELOG.md` files (full history) and `README.md` (what
 toy-os can do today), not here. See `docs/decisions.md` for *why* existing
 things are built the way they are. This list is always subject to change --
 milestones get reordered/reshaped as work actually happens, they're a plan,

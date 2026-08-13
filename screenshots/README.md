@@ -24,6 +24,13 @@ Keeping each date's screenshots together makes it possible to look back
 at what changed visually over time, the same way `CHANGELOG.md` records
 what changed functionally.
 
+The `v0.2.0/` ... `v0.7.0/` folders still here are from that first
+hand-bumped-version scheme, kept frozen as historical record: nothing
+new goes into them, and they're deliberately not renamed into dated
+folders (the date each was taken isn't recoverable from the files, so
+a rename would be inventing one). Read them as "somewhere in that
+version's development"; everything since is dated.
+
 Convention for adding to this during a testing pass:
 - Name files for what they show, not the order they were taken in --
   `calculator_7_plus_3.png`, not `shot16.png`. The generic `shot*.png`/
@@ -39,3 +46,12 @@ Convention for adding to this during a testing pass:
   not exhaustive coverage -- a handful of representative screenshots
   per pass (one per feature/area touched) is the right amount, not
   every intermediate screendump from the session.
+- That last rule has drifted in practice: a day with several unrelated
+  features lands several passes in one folder, and `2026-08-10/` ended
+  up over a hundred files. The rule is per *pass*, not per folder, so a
+  busy day's folder being large is fine -- but if you're adding to a
+  folder that's already big, that's the moment to check your own pass
+  is contributing representatives and not a full session dump. Pruning
+  an old folder is a judgment call for the maintainer, not something a
+  session should do on its own: these are a point-in-time record, and
+  deleting one is not recoverable from the repo alone once committed.
