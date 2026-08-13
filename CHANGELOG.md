@@ -30,6 +30,43 @@ using `## [x.y.z] - date` headings is here.
 
 ## [Unreleased]
 
+### Changed
+- **Roadmap: two new milestones, and a second renumbering to make room
+  for one of them.** Asked what it would take to make toy-os POSIX
+  compatible, and whether that's feasible. The short answer is yes, as
+  "enough POSIX to build and run real ported C programs" -- and that
+  most of it is already scheduled under other names. Written up rather
+  than left in a session.
+  - **New Milestone 11, "TFS3: an inode layer."** The survey turned up
+    one structural gap nothing on the roadmap owned: TFS2 stores a flat
+    table of records keyed by a full path string, with no object
+    representing a file separately from the name pointing at it. Hard
+    links, atomic `rename()`, unlink-while-open and `st_ino`/`st_nlink`
+    can't be expressed against that, and it's independently worth
+    fixing regardless of POSIX.
+  - **New Milestone 32, "POSIX compatibility."** Deliberately a
+    capstone: it names the target (our own libc vs Linux syscall-ABI
+    emulation -- a real fork, to decide before writing code), owns the
+    handful of items nothing else covers, and records what is *not*
+    being pursued (conformance, locales, pthreads, `select`/`poll`).
+    The one easy-to-miss blocker it surfaces: SSE is never enabled
+    (`boot.asm` sets PAE/LME/NXE but not CR4.OSFXSR), userland builds
+    `-mno-sse -mno-sse2`, and nothing saves FPU state across a context
+    switch -- so the first stock-compiled binary would fault, since
+    every real libc's `memcpy` uses SSE2 unconditionally on x86-64.
+  - **Milestones 11-30 became 12-31**, since the inode layer belongs
+    before permissions (Milestone 12) -- mode bits want to live on an
+    inode, and the other order means building them twice. The roadmap's
+    own rule is that reading order is build order, so the alternative
+    was a milestone that documents a prerequisite while sitting after
+    the thing that needs it. Every cross-reference in the file was
+    checked against its target's title afterward, not just shifted;
+    three references outside it (`apps/README.md` x2,
+    `kernel/README.md`) were updated too, and one backlog line that had
+    been stale since the *first* renumbering got corrected.
+  - The translation table now covers both passes, and the note above it
+    says when appending is the better choice than inserting.
+
 ### Added
 - **ASCII case folding in `string.h`, and `timezone Helsinki` now
   works.** The helpers came back with a caller this time: `k_tolower`/
