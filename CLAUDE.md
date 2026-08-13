@@ -437,6 +437,19 @@ the real image alone. Both also take `--qmp-port`/`--vnc`
 (`qmp_port=`/`vnc_display=`) for running a second instance alongside
 an existing one.
 
+**A copy is not enough for `make iso`/`make verify`/`preflight.sh` --
+ASK the user to close their QEMU first (standing request).** Working
+against a copy dodges the write lock, but those three targets re-seed
+the real `disk.img` regardless of what any test is pointed at, so
+they rewrite the filesystem underneath a VM the user has open and
+leave it running on a stale in-memory view. This is easy to miss
+because nothing fails loudly at the time. What does NOT need them to
+close anything: editing, `make all` (kernel only, never touches the
+image), and `vm.py --disk <copy>`. So check whether a QEMU is running
+(`ps aux | grep qemu-system`) before the verify gate rather than
+after, and ask -- don't just work around it silently, and don't ask
+for the cases in the previous sentence either.
+
 **`strace <binary>` is often the fastest way to see what a `/bin`
 binary is doing** -- one decoded line per syscall
 (`open("notes.txt", O_WRITE|O_CREAT) = 3`), and the same lines land in
