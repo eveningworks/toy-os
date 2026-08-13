@@ -31,6 +31,17 @@ using `## [x.y.z] - date` headings is here.
 ## [Unreleased]
 
 ### Added
+- **`tools/pixel_probe.py`** -- reads exact pixel values from
+  screenshots and tabulates the same points across several
+  (`--compare rest.png hover.png pressed.png --at 85,100 --at 215,100`),
+  reporting which moved and which didn't. Written after doing the same
+  thing with inline one-off scripts four times in one session, and
+  because `docs/gui-guidelines.md` now *requires* pixel-value
+  verification: the invisible hover state that prompted that rule was
+  two units from the background and looked fine in a PNG. `--box N`
+  averages a square, for anti-aliased edges where one pixel is a coin
+  toss.
+
 - **Hover and press feedback across the GUI, commit-on-release
   semantics, and `docs/gui-guidelines.md` to say what the rules are.**
   Asked for hover + pressed states on the Control Panel's applet icons,

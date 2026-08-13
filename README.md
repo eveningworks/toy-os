@@ -583,6 +583,8 @@ tools/run_release.sh -- standalone QEMU launcher shipped as a GitHub
 |---|---|
 | [docs/decisions.md](docs/decisions.md) | Topic-indexed answers to "why is this built this way?" -- ~70 entries. Start here when something looks odd. |
 | [docs/roadmap.md](docs/roadmap.md) | What's planned, ordered so prerequisites come before the work that needs them. |
+| [docs/filesystem-layout.md](docs/filesystem-layout.md) | What lives where on the OS's own disk, the rules for adding to it, and the record/path budget. Checked against the built image by `tools/check_layout.py`. |
+| [docs/gui-guidelines.md](docs/gui-guidelines.md) | How the GUI should look and behave: interaction states, press-then-commit-on-release, when feedback is and isn't wanted. |
 | [docs/process-isolation.md](docs/process-isolation.md) | The full ring0/ring3 build-up: GDT/TSS, paging, per-process address spaces, the ELF loader, the scheduler -- told as it was built, bugs included. |
 | [docs/tfs2-spec.md](docs/tfs2-spec.md) | Byte-level on-disk filesystem format, spec-style. |
 | [docs/arch-portability.md](docs/arch-portability.md) | What is and isn't x86-64-specific, and what a second architecture would take. |

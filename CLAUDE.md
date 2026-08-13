@@ -73,6 +73,25 @@ technical conventions below:
   search, the case-folding pair for `timezone Helsinki`'s lookup, which
   is also why that folding is ASCII-only; see `docs/decisions.md`.
   That's the rule working, not an argument against it.)
+- **Anything drawn follows `docs/gui-guidelines.md`.** Three things
+  bite most often. (1) **`gfx_draw_string()` does not clip** -- use
+  `gfx_draw_string_clipped()` and `gfx_text_width()` for anything in a
+  fixed box; this caused the identical overlap bug in two different
+  files, the second one written days after the first was documented.
+  (2) **`on_click` fires on button-DOWN despite its name**, so a
+  control that commits there can never be cancelled -- arm in
+  `on_press`, act in `on_release`, which is what the title bar has
+  always done. (3) **Interaction states come from `enum ui_state` /
+  `ui_state_bg()`**, which derives hover/pressed from the control's own
+  colour; don't hand-pick tints, and don't assume hover means "lighter"
+  (on this near-white theme it has to darken -- `gfx_luminance()`
+  decides).
+- **Verify GUI changes by reading PIXEL VALUES, not by looking at the
+  screenshot** (`tools/pixel_probe.py`). A hover state that moved the
+  background by two units out of 255 looked perfectly plausible in a
+  PNG and was invisible in practice; the number is what caught it.
+  Always sample a control that should NOT have changed as well -- half
+  the assertion is the neighbour staying put.
 - **Line editing is `kernel/lib/klineedit.c`'s, in both front ends.**
   The physical shell and the GUI Terminal share one readline-style
   editor (buffer/cursor/kill ring/undo/keymap); each front end only
@@ -721,6 +740,18 @@ repeated manual steps to be worth automating:
   the record/path budget (256 records total, directories included; 64
   bytes per full path) and the `sync`-never-deletes trap that makes
   moving a seeded file need an explicit cleanup.
+- **`pixel_probe.py`** -- reads exact pixel values out of screenshots,
+  and tabulates the same points across several (`--compare a.png b.png
+  --at 85,100 --at 215,100`), flagging which moved and which didn't.
+  This is how `docs/gui-guidelines.md` says to verify a GUI change, and
+  the rule exists because a hover state that shifted the background by
+  TWO units out of 255 looked entirely plausible in a PNG. Always
+  include a point that should NOT change -- half the assertion is the
+  neighbour staying put. `--box N` averages a square, for anti-aliased
+  edges where a single pixel is a coin toss.
+- **`check_layout.py`** -- see the `docs/` section: verifies the built
+  image's directories against `docs/filesystem-layout.md`. Runs in
+  `preflight.sh` and CI.
 - **`screenshot_diff.py`** -- Pillow-based pixel diff between two
   screenshots with a pass/fail `--threshold` (default 0.2%) and an
   optional `--out` diff-highlight image, for catching a rendering
@@ -796,6 +827,21 @@ changelog files together are the full chronological history with
 rationale -- `docs/decisions.md` exists because neither is indexed by
 topic, so "why is X built this way" otherwise means scrolling/
 searching the whole history.
+`docs/filesystem-layout.md` -- what lives where on the OS's own disk
+(`/bin` vs `/tests` vs `/usr/share` vs `/etc`), the rules for adding to
+it, the deliberate divergences from the FHS, and the record/path budget
+that actually constrains it (256 records INCLUDING directories, 64-byte
+paths). Not advisory: `tools/check_layout.py` reads its table and fails
+`preflight`/CI if the built image disagrees, in either direction. Read
+it before adding a directory, a config file or any seeded data.
+
+`docs/gui-guidelines.md` -- how the GUI is supposed to look and behave:
+the four `enum ui_state` interaction states and their flat (non-bevelled)
+rendering, the press-then-commit-on-release rule every control follows,
+when feedback IS and ISN'T wanted, the `on_hover` contract, text/layout
+budgeting, and how to verify a GUI change properly. Read it before
+touching anything drawn.
+
 Forward-looking "not built yet" items belong in `docs/roadmap.md`
 instead (already actively maintained, with completed items struck
 through and linked to the CHANGELOG build that finished them) -- don't
