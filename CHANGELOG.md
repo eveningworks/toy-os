@@ -87,7 +87,71 @@ using `## [x.y.z] - date` headings is here.
     press-drag-off-release doing nothing, and press-release opening.
     Screenshots in `screenshots/2026-08-13/`.
 
+- **Calculator and Notepad have hover states now, and it lives in
+  `ui_button` rather than in each app.** The mechanism above shipped
+  without them: `on_hover` existed, the Control Panel used it, and the
+  two apps whose buttons are real `ui_button_group`s were left with a
+  pressed look and nothing on hover.
+  - **`struct ui_button` gained `hovered`, and the group gained
+    `ui_button_group_hover()`** -- the same shape as the `pressed`/
+    `ui_button_group_press()` pair it sits beside, returning 1 only
+    when which button is hovered actually changed. `calculator_hover()`
+    and `notepad_hover()` are three-line forwards into it, so the next
+    app with a button group gets hover with no new state to hand-roll.
+  - **`ui_button_draw()` now calls `widget_button_state()`** instead of
+    `widget_button()`, which only ever spoke rest/pressed. This is the
+    lifted-constraint pattern again: the full four-state call arrived
+    with the guidelines and nothing came back to adopt it here.
+    `ui_button.h`'s own comment still claimed the WM didn't dispatch
+    hover -- true when written, false since `on_hover` landed.
+  - A press clears `hovered`, so the press visual owns the feedback
+    while anything is held, and dragging off an armed button drops it
+    to REST rather than back to hover.
+  - Disabled buttons deliberately keep their existing flat gray rather
+    than switching to `UI_STATE_DISABLED`: that muting derives from the
+    caller's own colour, which this path has already replaced, so
+    adopting it would have quietly restyled every disabled button.
+  - Measured, not eyeballed, with a neighbour sampled every time:
+    Calculator rest 225 / hover 205 / pressed 184, Notepad's toolbar
+    rest 200 / hover 182 / pressed 163, the neighbouring button
+    unmoved throughout, and the highlight clearing both on moving off a
+    button inside the window and on leaving the window entirely.
+
 ### Fixed
+- **Calculator's keys and Notepad's toolbar committed on button-DOWN,
+  so neither could be cancelled.** Found by running the cancel test on
+  the hover work above rather than only the happy path: pressing
+  Notepad's `Open...`, dragging into the text body and releasing opened
+  the file picker anyway, and pressing a Calculator key and dragging
+  away still entered the digit.
+  - Cause is the trap `docs/gui-guidelines.md` already documents by
+    name -- both apps acted in `on_click`, which `wm_input.c` fires on
+    button-down. The Control Panel was fixed for this when the rule was
+    written; these two, the only other content-area controls, were not.
+  - **`ui_button_group_release()` returns the released button's `code`
+    now** (-1 if none was armed). Because `ui_button_group_press()`
+    re-hit-tests every tick, a button that's been dragged off is
+    already unpressed, so releasing there returns -1 and the action is
+    cancelled with no extra bookkeeping in either app.
+    `calculator_release()` and `notepad_release()` commit from that;
+    `calculator_click()` is gone entirely and `notepad_click()` keeps
+    only its scrollbar paging, which genuinely does act on contact.
+  - **`ui_button_group_click()` is gone**, having lost both callers --
+    it had no way to know about a press to cancel, so any `on_click`
+    caller of it commits on button-down by construction. The header
+    says what to bring it back for if a real act-on-contact control
+    ever wants one.
+  - **`notepad_press()`'s `cy >= TOOLBAR_H` early return also went.**
+    It meant a toolbar button dragged off into the text body stayed
+    drawn pressed until release -- something about to be cancelled
+    looking live, the exact thing the guidelines call out. A point
+    below the toolbar hits no button, which is already the right
+    answer. Measured: 163 (pressed) before, 200 (rest) after.
+  - Verified by behaviour, not just by pixels: the Calculator display
+    stays `0` through press-drag-off-release and changes on a real
+    press-release; Notepad's picker stays shut on the first and opens
+    on the second. Screenshots in `screenshots/2026-08-13/`.
+
 - **CI had been red for three commits, and the reason was a real bug it
   found rather than a bad check.** `tools/check_layout.py` (added in the
   filesystem-layout commit) failed on `/etc` and `/etc/kbs` missing from

@@ -21,11 +21,16 @@ void calculator_close(struct window *win);
 
 void calculator_draw(struct window *win);
 void calculator_key(struct window *win, int key);
-void calculator_click(struct window *win, int cx, int cy);
 
-// on_press/on_release (gui_apps.h) -- real press/release visual
-// feedback, see calculator.c's struct calculator_instance.
+// on_press/on_release (gui_apps.h) -- the press/hover visual feedback
+// AND where a button actually acts. There's deliberately no on_click
+// here: that fires on button-DOWN (see gui_apps.h), which made every
+// key uncancellable until calculator_release() took the commit over.
 int calculator_press(struct window *win, int cx, int cy);
 void calculator_release(struct window *win);
+
+// on_hover (gui_apps.h) -- lights the button under the cursor before
+// it's clicked. Returns 1 only when which button that is changed.
+int calculator_hover(struct window *win, int cx, int cy);
 
 #endif

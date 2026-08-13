@@ -222,9 +222,9 @@ void calculator_draw(struct window *win) {
 // button, or sliding onto a different one without releasing, both
 // un-press/re-press exactly like a real OS button (ui_button_group_press()
 // handles this). Deliberately does NOT call calc_input() itself -- that
-// still only happens on the button-UP click (calculator_click()), so
-// holding a button down and dragging off before releasing doesn't
-// accidentally act on it, same as clicking any real button.
+// only happens on release, in calculator_release(), so holding a button
+// down and dragging off before releasing doesn't act on it, same as
+// clicking any real button.
 int calculator_press(struct window *win, int cx, int cy) {
     struct calculator_instance *inst = (struct calculator_instance *)window_get_state(win);
     if (!inst) return 0;
@@ -232,10 +232,29 @@ int calculator_press(struct window *win, int cx, int cy) {
     return ui_button_group_press(&inst->group, cx, cy);
 }
 
+// gui_apps.h's on_hover: cursor over the content area with nothing
+// held, plus one final (-1, -1) when it leaves. Forwards straight into
+// the group, which already answers "which button is under this point"
+// for on_press -- returning 1 only when that answer changed, so holding
+// the cursor still doesn't repaint the window every tick.
+int calculator_hover(struct window *win, int cx, int cy) {
+    struct calculator_instance *inst = (struct calculator_instance *)window_get_state(win);
+    if (!inst) return 0;
+    calculator_layout(inst);
+    return ui_button_group_hover(&inst->group, cx, cy);
+}
+
+// Where a button press actually ACTS -- see gui_apps.h's on_click for
+// why this can't be calculator_click(): that fires on button-DOWN, so
+// the digit was entered the instant the mouse went down and pressing a
+// key and dragging away could never take it back. The group's release
+// only reports a code if the cursor was still over the armed button
+// (docs/gui-guidelines.md's press-then-commit-on-release rule).
 void calculator_release(struct window *win) {
     struct calculator_instance *inst = (struct calculator_instance *)window_get_state(win);
     if (!inst) return;
-    ui_button_group_release(&inst->group);
+    int code = ui_button_group_release(&inst->group);
+    if (code >= 0) calc_input(&inst->calc, (char)code);
     window_invalidate(win);
 }
 
@@ -261,12 +280,6 @@ void calculator_key(struct window *win, int key) {
     window_invalidate(win);
 }
 
-void calculator_click(struct window *win, int cx, int cy) {
-    struct calculator_instance *inst = (struct calculator_instance *)window_get_state(win);
-    if (!inst) return;
-    calculator_layout(inst);
-    int code = ui_button_group_click(&inst->group, cx, cy);
-    if (code < 0) return;
-    calc_input(&inst->calc, (char)code);
-    window_invalidate(win);
-}
+// (There is deliberately no calculator_click()/on_click any more --
+// calculator_release() above is where a button acts now. The on_click
+// version committed on button-down; see that function's comment.)

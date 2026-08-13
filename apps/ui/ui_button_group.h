@@ -12,10 +12,9 @@
 // row of two buttons) without knowing anything about rows/columns
 // itself.
 //
-// First real caller: apps/calculator.c's button grid. Notepad's
-// Save/Load pair still uses the plain widgets.h path for now -- see
-// docs/decisions.md for why that migration was deliberately left for a
-// later, separate change rather than folded into this one.
+// First real caller: apps/calculator.c's button grid; apps/notepad.c's
+// Open.../Save As... toolbar followed in the separate, later change
+// this comment used to describe as still pending.
 struct ui_button_group {
     struct ui_button *buttons; // not owned -- caller's array; positions are usually font-size-dependent and get refreshed via ui_button_set_geometry() before most calls here (see calculator.c)
     int count;
@@ -36,14 +35,41 @@ void ui_button_group_draw(const struct ui_button_group *g, int origin_x, int ori
 // same contract gui_apps.h's on_press documents.
 int ui_button_group_press(struct ui_button_group *g, int cx, int cy);
 
-// Clears whichever button was pressed, if any. Safe to call even when
-// none was -- gui_apps.h's on_release fires unconditionally whenever a
-// press sequence ends.
-void ui_button_group_release(struct ui_button_group *g);
+// Re-hit-tests (cx, cy) with NO button held and updates every button's
+// `hovered` flag to match. Returns 1 if which button is hovered changed
+// (redraw needed), 0 otherwise -- exactly gui_apps.h's on_hover
+// contract, so an app's on_hover can be a one-line forward into this
+// (see calculator.c/notepad.c). Pass the (-1, -1) the WM sends when the
+// cursor leaves the window straight through: nothing is hit there, so
+// the highlight clears on its own with no special case.
+int ui_button_group_hover(struct ui_button_group *g, int cx, int cy);
 
-// Hit-tests (cx, cy) and returns the matching button's `code`, or -1 if
-// none hit -- the caller still decides what a `code` means (calculator.c
-// feeds it straight to calc_input()).
-int ui_button_group_click(struct ui_button_group *g, int cx, int cy);
+// Clears whichever button was pressed, if any, and returns that
+// button's `code` -- or -1 if none was pressed. Safe to call even when
+// none was: gui_apps.h's on_release fires unconditionally whenever a
+// press sequence ends.
+//
+// **That return value is how a button is supposed to commit.** A press
+// that has been dragged off its button has already cleared the
+// `pressed` flag (ui_button_group_press() re-hit-tests every tick), so
+// releasing there returns -1 and the action is silently cancelled --
+// which is the whole point of press-then-commit-on-release
+// (docs/gui-guidelines.md). Committing from on_click instead fires on
+// button-DOWN and can never be cancelled; both Calculator and Notepad
+// did exactly that until this return value existed.
+int ui_button_group_release(struct ui_button_group *g);
+
+// There is deliberately NO ui_button_group_click() (hit-test a point,
+// return that button's code). There was, and both its callers were
+// wired to gui_apps.h's on_click -- which fires on button-DOWN, so both
+// Calculator and Notepad committed on press and could never be
+// cancelled by dragging away. Both moved to the release path above and
+// it was left with no callers, so it went, per this directory's
+// standing rule that a mechanism needs a real caller.
+//
+// If an act-on-contact control ever genuinely wants one back (the
+// narrow case gui_apps.h's on_click describes -- placing a text cursor,
+// focusing a field), bring it back then, and make sure that's really
+// what it is: "the button should light up when clicked" is not it.
 
 #endif

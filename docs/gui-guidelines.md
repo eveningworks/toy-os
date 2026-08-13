@@ -68,6 +68,15 @@ The reference implementation is the title bar
 (`wm_update_title_btn_press()`), which has worked this way all along;
 `apps/control_panel.c` is the app-side version of the same shape.
 
+For a control in a `ui_button_group`, all of that is already done:
+**`ui_button_group_release()` returns the released button's code, or
+-1 if the press had been dragged off it**, so committing correctly is
+`if (code >= 0) act(code)` in `on_release` and nothing else. Calculator
+and Notepad both acted from `on_click` until that return value existed,
+and both were uncancellable the whole time -- which is also why there
+is deliberately no `ui_button_group_click()` any more (see
+`docs/decisions.md`).
+
 ## When feedback is required -- and when it isn't
 
 Feedback is required when the user **did something and the result isn't
@@ -109,6 +118,15 @@ Two rules that keep it cheap and honest:
 
 Hover is suppressed entirely while anything is held, armed or being
 dragged: the press visual owns the feedback then.
+
+**A control built on `ui_button_group` gets all of this without
+writing any of it.** `ui_button_group_hover()` maintains each button's
+`hovered` flag and returns the changed/not-changed answer this contract
+wants, so the app's `on_hover` is a forward into it -- exactly as its
+`on_press` already forwards into `ui_button_group_press()`. Hand-rolling
+a `hover_index` next to a group is a sign of not knowing the function
+exists; the Control Panel tracks its own only because its applet grid
+isn't a button group.
 
 ## Layout and text
 

@@ -15,6 +15,7 @@ void ui_button_init(struct ui_button *b, int x, int y, int w, int h,
     b->fg = fg;
     b->code = code;
     b->pressed = 0;
+    b->hovered = 0;
     b->disabled = 0;
 }
 
@@ -31,6 +32,13 @@ void ui_button_set_disabled(struct ui_button *b, int disabled) {
 
 void ui_button_draw(const struct ui_button *b, int origin_x, int origin_y) {
     uint32_t bg = b->bg, fg = b->fg;
+    // Pressed outranks hovered, and a press clears `hovered` anyway
+    // (ui_button_group_press()) -- the belt-and-braces order here is so
+    // a caller driving the flags by hand can't produce a button that's
+    // held down and drawn as merely hovered.
+    enum ui_state state = b->pressed ? UI_STATE_PRESSED
+                        : b->hovered ? UI_STATE_HOVER
+                                     : UI_STATE_REST;
     if (b->disabled) {
         // Flat gray regardless of the caller's own bg/fg -- same
         // hardcoded, theme-agnostic precedent as widget_button()'s own
@@ -38,8 +46,15 @@ void ui_button_draw(const struct ui_button *b, int origin_x, int origin_y) {
         // independent of apps/theme.h same as that one does.
         bg = gfx_rgb(210, 210, 210);
         fg = gfx_rgb(140, 140, 140);
+        // Already its own flat gray -- no wash on top, and neither
+        // press nor hover should read on a control that does nothing.
+        // (This is deliberately NOT UI_STATE_DISABLED: that muting is
+        // derived from the caller's own colour, and this branch has
+        // already replaced it. Switching to it would change how every
+        // disabled button looks, which isn't what this change is.)
+        state = UI_STATE_REST;
     }
-    widget_button(origin_x + b->x, origin_y + b->y, b->w, b->h, b->label, bg, fg, b->disabled ? 0 : b->pressed);
+    widget_button_state(origin_x + b->x, origin_y + b->y, b->w, b->h, b->label, bg, fg, state);
 }
 
 int ui_button_hit(const struct ui_button *b, int cx, int cy) {

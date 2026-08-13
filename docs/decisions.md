@@ -79,6 +79,7 @@ there when you add an entry, or the index quietly stops being one.
 - [Console scrollback is a character ring in vga.c, and the boot log is echoed to it](#console-scrollback-is-a-character-ring-in-vgac-and-the-boot-log-is-echoed-to-it)
 - [Button press/release feedback: a general `on_press`/`on_release` WM mechanism, not a Calculator-only hack](#button-pressrelease-feedback-a-general-on_presson_release-wm-mechanism-not-a-calculator-only-hack)
 - [ui_button/ui_button_group: Brutal-OS-inspired, but not a full retained view system](#ui_buttonui_button_group-brutal-os-inspired-but-not-a-full-retained-view-system)
+- [Button groups commit on RELEASE, and there is no ui_button_group_click()](#button-groups-commit-on-release-and-there-is-no-ui_button_group_click)
 - [Start menu click flash: a deferred close via pit_ticks(), not a blocking sleep](#start-menu-click-flash-a-deferred-close-via-pit_ticks-not-a-blocking-sleep)
 - [Title-bar buttons: press-then-commit-on-release, reusing the content_pressed shape](#title-bar-buttons-press-then-commit-on-release-reusing-the-content_pressed-shape)
 - [apps/ui/: a directory for retained-widget objects, once there were three](#appsui-a-directory-for-retained-widget-objects-once-there-were-three)
@@ -1188,6 +1189,44 @@ a real (if minor) behavior change bundled into what should be a
 no-behavior-change refactor. Left for its own change if wanted; it's
 not blocked on anything (the "second real caller" bar is already met
 by `calculator.c`), see `docs/roadmap.md`.
+
+**Two things above have since changed and are worth reading in the
+past tense.** Notepad's toolbar did get migrated to `ui_button_group`
+(so the tightened hitbox happened, deliberately). And "no
+mouse-enter/leave dispatch" stopped being true when `gui_apps.h`'s
+`on_hover` landed with the GUI guidelines: `ui_button` carries a
+`hovered` flag beside `pressed` now, driven by
+`ui_button_group_hover()`. See the entry below.
+
+## Button groups commit on RELEASE, and there is no ui_button_group_click()
+
+Both apps built on `ui_button_group` used to act from `gui_apps.h`'s
+`on_click`, via a `ui_button_group_click()` that hit-tested a point and
+returned that button's code. `on_click` fires on button-**DOWN** (see
+`apps/wm/wm_input.c`'s dispatch, and `gui_apps.h`'s own warning), so
+both Calculator's keys and Notepad's `Open...`/`Save As...` committed
+the instant the mouse went down: press, drag away, release, and the
+digit was still entered and the file picker still opened. Confirmed by
+running that exact gesture under QMP, not by reading the code -- see
+`CHANGELOG.md`.
+
+`ui_button_group_release()` returns the released button's code now
+(`-1` if none). That works because `ui_button_group_press()`
+re-hit-tests every tick, so a button the cursor has left is already
+unpressed and releasing there returns `-1` -- the cancel falls out of
+state the group was maintaining anyway, with no "armed control" field
+in either app. `ui_button_group_click()` was deleted rather than kept
+alongside: it has no notion of a press to cancel, so any control
+acting on it is uncancellable by construction, and it had no callers
+left. The narrow act-on-contact cases `on_click` is genuinely for
+(placing a text cursor, focusing a field) can bring one back if one
+ever actually needs it.
+
+Worth noting how this was found, because it generalises: it surfaced
+while testing an unrelated change (hover wiring) *because the cancel
+path was tested at all*. `docs/gui-guidelines.md` asks for that
+explicitly -- press-drag-off-release is a separate test from
+press-release, and only the second one had ever been run on these two.
 
 ## Start menu click flash: a deferred close via pit_ticks(), not a blocking sleep
 

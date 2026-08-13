@@ -81,7 +81,7 @@
 #define BTN_GAP 8
 #define BTN_MARGIN 4
 // ui_button `code`s for Open.../Save As... -- app-defined, delivered
-// back from ui_button_group_click() (see notepad_click() below), same
+// back from ui_button_group_release() (see notepad_release() below), same
 // "arbitrary int the caller assigns meaning to" convention
 // calculator.c's button codes use.
 #define BTN_OPEN_CODE 'O'
@@ -536,28 +536,21 @@ void notepad_read_complete(struct window *win, int success, uint32_t total) {
     window_invalidate(win);
 }
 
-// Toolbar (Open.../Save As...) clicks, and scrollbar track clicks (page
-// up/down) that aren't on the thumb -- thumb clicks never reach here,
-// they're claimed by notepad_drag_start() instead (see gui_apps.h's
-// on_click/on_drag_start contract). Mirrors terminal.c's terminal_click.
+// Scrollbar track clicks (page up/down) that aren't on the thumb --
+// thumb clicks never reach here, they're claimed by
+// notepad_drag_start() instead (see gui_apps.h's on_click/
+// on_drag_start contract). Mirrors terminal.c's terminal_click.
+//
+// Paging genuinely acts on contact, which is what on_click is for, so
+// it stays here. The Open.../Save As... buttons used to as well, and
+// that was a bug: on_click fires on button-DOWN, so pressing Open...
+// and dragging away before releasing opened the file picker anyway.
+// They commit in notepad_release() now (docs/gui-guidelines.md).
 void notepad_click(struct window *win, int cx, int cy) {
     struct notepad_state *st = (struct notepad_state *)window_get_state(win);
 
-    if (cy < TOOLBAR_H) {
-        notepad_layout_buttons(st);
-        int code = ui_button_group_click(&st->group, cx, cy);
-        if (code == BTN_OPEN_CODE) {
-            g_notepad_open_win = win; // fresh, live pointer -- see its own comment on why this can't be cached earlier
-            file_picker_open_with(FILE_PICKER_OPEN, "Open", "/", "",
-                                   notepad_picker_opened, notepad_picker_cancelled);
-        } else if (code == BTN_SAVEAS_CODE) {
-            g_notepad_save_win = win; // fresh, live pointer -- see its own comment on why this can't be cached earlier
-            file_picker_open_with(FILE_PICKER_SAVE, "Save As", "/", st->last_name,
-                                   notepad_picker_saved, notepad_picker_cancelled);
-        }
-        window_invalidate(win);
-        return;
-    }
+    // Toolbar presses are NOT handled here -- see notepad_release().
+    if (cy < TOOLBAR_H) return;
 
     // A click below the toolbar that lands on the scrollbar's track
     // (paging) reaches here -- a click in the text body itself, or on
@@ -592,16 +585,49 @@ void notepad_click(struct window *win, int cx, int cy) {
 // clicks never reach notepad_drag_start() (it bails out at `cy <
 // TOOLBAR_H` before any of this), so on_press/on_click still see every
 // Save/Load interaction exactly as before.
+// No `cy >= TOOLBAR_H` early return: this is called every tick while
+// held, including after the cursor has been dragged OFF the toolbar
+// into the text body, and that is exactly when the armed button has to
+// drop back to REST. Returning early there left it drawn pressed all
+// the way to release -- something about to be cancelled looking like
+// it's still live, which docs/gui-guidelines.md calls out by name. A
+// point below the toolbar simply hits no button, which is the right
+// answer. (A press that STARTS in the text body never reaches here at
+// all: notepad_drag_start() claims it first.)
 int notepad_press(struct window *win, int cx, int cy) {
     struct notepad_state *st = (struct notepad_state *)window_get_state(win);
-    if (cy >= TOOLBAR_H) return 0; // only the toolbar's buttons care about press-feedback
     notepad_layout_buttons(st);
     return ui_button_group_press(&st->group, cx, cy);
 }
 
+// gui_apps.h's on_hover -- see calculator_hover() for the shape. No
+// `cy >= TOOLBAR_H` guard, unlike notepad_press() above: that guard is
+// there so a press in the TEXT area isn't stolen by the toolbar, and a
+// hover steals nothing. A point below the toolbar simply hits no
+// button, which is exactly the "clear the highlight" answer wanted when
+// the cursor moves off a button into the text body.
+int notepad_hover(struct window *win, int cx, int cy) {
+    struct notepad_state *st = (struct notepad_state *)window_get_state(win);
+    notepad_layout_buttons(st);
+    return ui_button_group_hover(&st->group, cx, cy);
+}
+
+// Where Open.../Save As... actually act. ui_button_group_release()
+// reports a code only if the cursor was still over the armed button, so
+// press-drag-away-release opens nothing -- see notepad_click()'s
+// comment for the on_click version this replaced.
 void notepad_release(struct window *win) {
     struct notepad_state *st = (struct notepad_state *)window_get_state(win);
-    ui_button_group_release(&st->group);
+    int code = ui_button_group_release(&st->group);
+    if (code == BTN_OPEN_CODE) {
+        g_notepad_open_win = win; // fresh, live pointer -- see its own comment on why this can't be cached earlier
+        file_picker_open_with(FILE_PICKER_OPEN, "Open", "/", "",
+                               notepad_picker_opened, notepad_picker_cancelled);
+    } else if (code == BTN_SAVEAS_CODE) {
+        g_notepad_save_win = win; // fresh, live pointer -- see its own comment on why this can't be cached earlier
+        file_picker_open_with(FILE_PICKER_SAVE, "Save As", "/", st->last_name,
+                               notepad_picker_saved, notepad_picker_cancelled);
+    }
     window_invalidate(win);
 }
 

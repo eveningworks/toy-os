@@ -24,6 +24,10 @@ void notepad_click(struct window *win, int cx, int cy);
 int notepad_press(struct window *win, int cx, int cy);
 void notepad_release(struct window *win);
 
+// on_hover (gui_apps.h) -- lights the toolbar button under the cursor
+// before it's clicked. Returns 1 only when which button that is changed.
+int notepad_hover(struct window *win, int cx, int cy);
+
 // Scrollbar thumb dragging, and (new) click-to-position/drag-select in
 // the text body -- see gui_apps.h's on_drag_start/on_drag contract,
 // widgets.h's widget_scrollbar_* functions, and ui_scrollback.h's
