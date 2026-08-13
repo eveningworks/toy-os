@@ -354,15 +354,15 @@ static void reprint_prompt_and_line(void) {
 // Moves the cursor to the end of the painted line, for the cases about
 // to print something on a new line.
 //
-// Repaints rather than just moving, and that is load-bearing: the
-// framebuffer cursor is a solid block drawn OVER the character it sits
-// on, and moving away erases that cell to black (see vga.h's
-// vga_cursor_move()). Simply moving would leave a hole where the
-// character under the cursor used to be -- which is exactly what
-// happened the first time this was tested: `cat /etc/toyos.conf` ran
-// correctly but echoed back as `cat /etc/toyos conf`, because the '.'
-// had been sitting under the cursor. Repainting rewrites the whole line
-// with nothing covered.
+// Repaints rather than just moving the cursor. That was originally
+// load-bearing: the cursor erased its cell to black when it moved
+// away, so parking from mid-line left a hole where the character under
+// it had been (`cat /etc/toyos.conf` ran correctly but echoed back as
+// `cat /etc/toyos conf` -- the '.' had been under the cursor). The
+// cursor saves and restores its pixels now, so a plain move would be
+// correct too; the repaint stays because it also normalises
+// shown_cursor/shown_len against the editor in one place, and a
+// once-per-command repaint of a 128-character line costs nothing.
 static void park_at_end(void) {
     if (shown_cursor == shown_len) return;
     g_ed.cursor = g_ed.len;

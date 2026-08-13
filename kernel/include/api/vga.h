@@ -168,12 +168,14 @@ void vga_cursor_tick(void);
 //   - It does not repaint text. A caller that moves back over
 //     characters and then wants them redrawn must redraw them itself
 //     (the shell repaints the whole input line each keystroke).
-//   - In framebuffer mode the cursor stops blinking while it sits
-//     anywhere but the append point, staying solid instead. That is
-//     deliberate: the blink's "off" phase erases its cell to black,
-//     which is correct over the blank cell at the append point and
-//     would silently eat the character underneath anywhere else. The
-//     next ordinary putc/backspace/clear restores blinking.
+//   - The cursor keeps blinking wherever it lands, including on top of
+//     a character. That's safe because the cursor saves and restores
+//     the pixels it covers (see vga.c) -- it was NOT safe in the first
+//     version of this function, where the blink's "off" phase erased
+//     its cell to black and ate the glyph underneath, so the cursor had
+//     to be pinned solid off the append point. If you're reading this
+//     because something is eating characters, that mechanism is where
+//     to look.
 // No-op while an output sink is active (a sink owns its own cursor --
 // the GUI Terminal renders one through its scrollback widget instead).
 void vga_cursor_move(int delta);
