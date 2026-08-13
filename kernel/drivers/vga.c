@@ -12,6 +12,7 @@
 #include "timer.h"
 #include "klog.h"
 #include "knum.h"
+#include "string.h"
 #include <stddef.h>
 
 #define VGA_WIDTH 80
@@ -166,43 +167,164 @@ static void legacy_backspace(void) {
 static int cursor_on_screen = 0;
 static uint64_t cursor_last_toggle_tick = 0;
 
-// Set by vga_cursor_move() while the insertion point has been parked
-// somewhere other than the append point -- i.e. a line editor is
-// editing mid-line (kernel/lib/klineedit.c). While parked the cursor
-// stays SOLID instead of blinking, and that is a correctness
-// requirement, not a style choice: cursor_hide() erases its cell to
-// black on the assumption that the cell is blank, which holds at the
-// append point and does not hold on top of a character. A blink
-// toggling off mid-line would silently eat the glyph underneath it.
-// Cleared by the next ordinary putc/backspace/clear, all of which
-// return the cursor to the append point where blinking is safe again.
-static int cursor_parked = 0;
+// The cursor SAVES THE PIXELS IT COVERS and puts them back when it
+// hides, rather than erasing its cell to a colour and hoping that was
+// what used to be there.
+//
+// That older approach erased to black, which was right at the append
+// point (always a blank cell) and quietly wrong anywhere else -- a
+// cursor sitting on a character ate the character when it moved or
+// blinked off. Line editing made "anywhere else" the common case: the
+// first mid-line edit shipped a visible hole where a '.' had been.
+// Saving and restoring is exact regardless of what's underneath, which
+// also means the cursor can blink mid-line again (it had to be pinned
+// solid to stay safe) and that any cursor SHAPE works, since nothing
+// has to reconstruct the cell.
+//
+// Sized for the largest glyph cell the biggest baked font produces,
+// with a runtime guard below rather than a silent overflow if that ever
+// stops being true.
+#define CURSOR_SAVE_W 32
+#define CURSOR_SAVE_H 64
+static uint32_t cursor_save[CURSOR_SAVE_W * CURSOR_SAVE_H];
+static int cursor_save_w = 0, cursor_save_h = 0; // what's actually stored
+
+// How strongly the translucent style tints the cell it covers. High
+// enough to read as a cursor at a glance, low enough that the character
+// underneath stays legible -- the whole point of the style.
+// Two strengths, because a cell is mostly glyph at these font sizes.
+// The background has to move enough for the cell to read as a block at
+// a glance; the glyph has to move FURTHER, or it sinks into its own
+// cursor. Tinting both by the same amount was tried and left the
+// character washed out (contrast against the block dropped from 170 to
+// 89); tinting only the background was also tried and produced a block
+// two pixels wide, because a glyph like 'r' fills most of its cell.
+#define CURSOR_TINT_ALPHA_BG 130
+#define CURSOR_TINT_ALPHA_FG 205
+
+static enum vga_cursor_style cursor_style = VGA_CURSOR_TRANSLUCENT;
+
+// Kept in lockstep with enum vga_cursor_style (vga.h), same convention
+// as debugflags.c's DBGFLAG_NAMES -- `cursor` (no args) and
+// `cursor <name>` both read this generically.
+const char *const VGA_CURSOR_STYLE_NAMES[VGA_CURSOR_STYLE_COUNT] = {
+    "translucent", "underline", "beam", "reverse",
+};
 
 // 100 Hz PIT (see idt.c's pit_init(100) call) -- 50 ticks is 500ms, so
 // a full on/off blink cycle is about a second, a fairly ordinary
 // terminal cursor rate.
 #define CURSOR_BLINK_TICKS 50
 
-static void cursor_paint(uint32_t color) {
-    gfx_fill_rect((int)(col * CELL_W), (int)(row * CELL_H), (int)CELL_W, (int)CELL_H, color);
+// Paints the cursor at (row, col) in the active style, saving whatever
+// it covers first. A no-op if the cursor is already on screen -- saving
+// then would capture the cursor's own pixels and "restore" them later.
+static void cursor_draw(void) {
+    if (cursor_on_screen) return;
+
+    int w = (int)CELL_W, h = (int)CELL_H;
+    if (w > CURSOR_SAVE_W || h > CURSOR_SAVE_H || w <= 0 || h <= 0) {
+        return; // can't save it, so don't paint it -- see CURSOR_SAVE_W
+    }
+    int x0 = (int)(col * CELL_W), y0 = (int)(row * CELL_H);
+
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            cursor_save[y * CURSOR_SAVE_W + x] = gfx_get_pixel(x0 + x, y0 + y);
+        }
+    }
+    cursor_save_w = w;
+    cursor_save_h = h;
+
+    uint32_t color = palette_rgb(cur_fg);
+    switch (cursor_style) {
+    case VGA_CURSOR_UNDERLINE: {
+        int thick = h >= 20 ? 3 : 2;
+        gfx_fill_rect(x0, y0 + h - thick, w, thick, color);
+        break;
+    }
+    case VGA_CURSOR_BEAM: {
+        int thick = w >= 12 ? 2 : 1;
+        gfx_fill_rect(x0, y0, thick, h, color);
+        break;
+    }
+    case VGA_CURSOR_REVERSE:
+        // Inverting the saved pixels needs no knowledge of which of them
+        // are glyph and which are background -- the character comes out
+        // dark-on-light either way.
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                uint32_t under = cursor_save[y * CURSOR_SAVE_W + x];
+                gfx_put_pixel(x0 + x, y0 + y, ~under);
+            }
+        }
+        break;
+    case VGA_CURSOR_TRANSLUCENT:
+    default: {
+        // Tint every pixel in the cell instead of replacing it, so the
+        // glyph shows through.
+        //
+        // Tint the whole cell, but the glyph harder than the
+        // background (see the two alphas above) -- the background rises
+        // enough to read as a block, the character rises further and
+        // stays legible on top of it.
+        //
+        // "Background" is whatever matches the cell's own background
+        // colour exactly. Antialiased glyph edges don't, so they get
+        // the glyph treatment, which is the right side to err on: it
+        // keeps the character's outline crisp.
+        uint32_t bg_pixel = palette_rgb(cur_bg);
+        uint32_t tint = (cur_bg <= VGA_DARK_GREY) ? palette_rgb(VGA_WHITE)
+                                                   : palette_rgb(VGA_BLACK);
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                uint32_t under = cursor_save[y * CURSOR_SAVE_W + x];
+                uint8_t alpha = (under == bg_pixel) ? CURSOR_TINT_ALPHA_BG
+                                                     : CURSOR_TINT_ALPHA_FG;
+                gfx_put_pixel(x0 + x, y0 + y, gfx_blend(under, tint, alpha));
+            }
+        }
+        break;
+    }
+    }
+    cursor_on_screen = 1;
 }
 
 static void cursor_hide(void) {
     if (!cursor_on_screen) return;
-    cursor_paint(palette_rgb(VGA_BLACK)); // see this section's top comment -- not cur_bg
+    int x0 = (int)(col * CELL_W), y0 = (int)(row * CELL_H);
+    for (int y = 0; y < cursor_save_h; y++) {
+        for (int x = 0; x < cursor_save_w; x++) {
+            gfx_put_pixel(x0 + x, y0 + y, cursor_save[y * CURSOR_SAVE_W + x]);
+        }
+    }
     cursor_on_screen = 0;
 }
 
 static void cursor_show_and_reset_blink(void) {
-    // Every ordinary putc/backspace/clear routes through here, and all
-    // of them leave the cursor at the append point -- so this is the
-    // one place that needs to clear the parked state.
-    cursor_parked = 0;
     if (!fb_mode) return;
-    cursor_paint(palette_rgb(cur_fg));
-    cursor_on_screen = 1;
+    cursor_draw();
     cursor_last_toggle_tick = pit_ticks(); // full interval before the next auto-toggle,
                                             // so it doesn't flicker right after typing
+}
+
+enum vga_cursor_style vga_cursor_style(void) { return cursor_style; }
+
+void vga_set_cursor_style(enum vga_cursor_style style) {
+    if (style >= VGA_CURSOR_STYLE_COUNT) return;
+    if (fb_mode) cursor_hide(); // repaint in the new shape, not on top of the old one
+    cursor_style = style;
+    if (fb_mode) cursor_draw();
+}
+
+int vga_cursor_style_parse(const char *name, enum vga_cursor_style *out) {
+    for (int i = 0; i < VGA_CURSOR_STYLE_COUNT; i++) {
+        if (k_strcmp(name, VGA_CURSOR_STYLE_NAMES[i]) == 0) {
+            *out = (enum vga_cursor_style)i;
+            return 1;
+        }
+    }
+    return 0;
 }
 
 // ---- framebuffer text-console backend ----
@@ -522,16 +644,13 @@ void vga_cursor_tick(void) {
     // for the physical console's blink logic to do while one's active.
     if (active_sink) return;
     if (!fb_mode) return;
-    if (cursor_parked) return; // see cursor_parked's comment -- blinking
-                                // here would erase the character under it
     if (pit_ticks() - cursor_last_toggle_tick < CURSOR_BLINK_TICKS) return;
     cursor_last_toggle_tick = pit_ticks();
-    if (cursor_on_screen) {
-        cursor_hide();
-    } else {
-        cursor_paint(palette_rgb(cur_fg));
-        cursor_on_screen = 1;
-    }
+    // Safe mid-line now that hiding restores the pixels it saved -- this
+    // used to be suppressed off the append point, because the old
+    // erase-to-black hide would have eaten the character underneath.
+    if (cursor_on_screen) cursor_hide();
+    else cursor_draw();
 }
 
 // Repositions the insertion point without erasing anything -- see
@@ -550,8 +669,8 @@ void vga_cursor_move(int delta) {
     uint32_t rows = fb_mode ? console_rows : VGA_HEIGHT;
     if (cols == 0 || rows == 0) return;
 
-    if (fb_mode) cursor_hide(); // safe here: about to repaint at the new spot,
-                                 // and the caller repaints the line text itself
+    if (fb_mode) cursor_hide(); // restores whatever it covered, so moving
+                                 // off a character no longer eats it
 
     long target = (long)row * (long)cols + (long)col + delta;
     if (target < 0) target = 0;
@@ -562,9 +681,7 @@ void vga_cursor_move(int delta) {
     col = (size_t)(target % (long)cols);
 
     if (fb_mode) {
-        cursor_paint(palette_rgb(cur_fg));
-        cursor_on_screen = 1;
-        cursor_parked = 1; // solid, not blinking -- see cursor_parked
+        cursor_draw();
     } else {
         legacy_update_cursor(); // real hardware cursor; nothing to erase
     }

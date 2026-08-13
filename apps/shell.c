@@ -164,6 +164,8 @@ static void dispatch(char *line) {
         ring3_test_run();
     } else if (k_strcmp(cmd, "schedtest") == 0) {
         scheduler_demo_run();
+    } else if (k_strcmp(cmd, "cursor") == 0) {
+        cmd_cursor(args ? args : "");
     } else if (k_strcmp(cmd, "fontsize") == 0) {
         cmd_fontsize(args ? args : "");
     } else if (k_strcmp(cmd, "keyboard") == 0) {

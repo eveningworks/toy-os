@@ -100,6 +100,7 @@ there when you add an entry, or the index quietly stops being one.
 - [Terminal's `run <name>` uses an explicit allowlist, not a blocklist](#terminals-run-name-uses-an-explicit-allowlist-not-a-blocklist)
 - [`kapi.h` is the only header apps/ includes](#kapih-is-the-only-header-apps-includes)
 - [The kernel/lib/ toolkit: converters that fill a buffer, not printers](#the-kernellib-toolkit-converters-that-fill-a-buffer-not-printers)
+- [The console cursor saves the pixels it covers](#the-console-cursor-saves-the-pixels-it-covers)
 - [`strace` traces an address space, and prints each line after the handler returns](#strace-traces-an-address-space-and-prints-each-line-after-the-handler-returns)
 
 **Build, versioning & project docs**
@@ -422,6 +423,39 @@ layout modifier so Nordic third-level characters keep working.
 
 See `kernel/include/api/keyboard.h`'s "Ctrl and Alt" comment,
 `kernel/lib/klineedit.c`, and CHANGELOG.md's `[Unreleased]`.
+
+## The console cursor saves the pixels it covers
+
+The framebuffer console's cursor used to be a filled rectangle, erased
+by filling the same rectangle with black. That works exactly as long as
+the cursor only ever sits at the append point, where the cell is
+guaranteed blank -- which was true until the shell could put the cursor
+in the middle of a line. Then it started eating characters: the first
+mid-line edit shipped with a visible hole where a '.' had been, and the
+blink had to be suppressed off the append point to stop it doing the
+same thing once a second.
+
+The fix is to stop reconstructing the cell and just remember it:
+`cursor_draw()` reads the cell's pixels with `gfx_get_pixel()` into a
+small static buffer before painting, and `cursor_hide()` puts them
+back. Exact regardless of what was underneath, so the blink is safe
+again -- and, because nothing has to reconstruct anything, **any cursor
+shape becomes possible for free**. That's what made four styles
+(translucent/underline/beam/reverse) a config choice rather than four
+special cases.
+
+Worth recording about the translucent style specifically, since it took
+three attempts and each failure was instructive: tinting the whole cell
+toward the *text* colour changed the glyph not at all (grey over grey)
+and left a cursor you had to hunt for; tinting the whole cell toward
+white lit the cell up but moved the glyph with it, dropping
+glyph-vs-block contrast from 170 to 89; tinting *only* the background
+produced a block two pixels wide, because a glyph like `r` fills most
+of its cell. What works is tinting both, with the glyph tinted harder
+than the background.
+
+See `kernel/drivers/vga.c`'s cursor section, `vga.h`'s cursor-style
+enum, and CHANGELOG.md's `[Unreleased]`.
 
 ## Terminal wraps the real shell, it doesn't reimplement it
 

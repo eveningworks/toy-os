@@ -134,6 +134,28 @@ uint32_t gfx_rgb(uint8_t r, uint8_t g, uint8_t b) {
     return rr | gg | bb;
 }
 
+// Blends `over` onto `under` at `alpha`/255 and returns the result.
+//
+// Lives here rather than in a caller because the channel positions and
+// widths are this file's private business (see gfx_rgb() above) -- a
+// caller holding a packed pixel has no portable way to take it apart.
+// Each channel is extracted, mixed, and repacked at its own width, so
+// this is correct on a 16-bit framebuffer as well as the usual 32-bit
+// one.
+uint32_t gfx_blend(uint32_t under, uint32_t over, uint8_t alpha) {
+    uint32_t out = 0;
+    const uint8_t pos[3] = { red_pos, green_pos, blue_pos };
+    const uint8_t size[3] = { red_size, green_size, blue_size };
+    for (int i = 0; i < 3; i++) {
+        uint32_t mask = (size[i] >= 32) ? 0xFFFFFFFFu : ((1u << size[i]) - 1u);
+        uint32_t u = (under >> pos[i]) & mask;
+        uint32_t o = (over >> pos[i]) & mask;
+        uint32_t v = (u * (255u - alpha) + o * alpha) / 255u;
+        out |= (v & mask) << pos[i];
+    }
+    return out;
+}
+
 void gfx_put_pixel(int x, int y, uint32_t color) {
     if (x < 0 || y < 0 || x >= width || y >= height) return;
     if (clip_active && (x < clip_x0 || x >= clip_x1 || y < clip_y0 || y >= clip_y1)) return;

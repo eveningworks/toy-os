@@ -145,6 +145,10 @@ static const char *const HELP_LINES[] = {
     "\n",
     "Appearance:\n",
     "  color <name>  - change shell text color\n",
+    "  cursor <s>    - console cursor style: translucent (the default --\n",
+    "                  tints the cell so the character shows through),\n",
+    "                  underline, beam, or reverse. `cursor` alone shows\n",
+    "                  the current one. Persists across reboot.\n",
     "  fontsize <n>  - set font size in points: 8, 10, 12, 14, 16, 18,\n",
     "                  20, or 24 (`fontsize` alone shows the current one)\n",
     "  keyboard <l>  - set keyboard layout: us or se (Swedish/Finnish --\n",
@@ -876,6 +880,37 @@ void cmd_run(const char *name_and_args) {
 // print an empty trace -- a confusing non-answer rather than an error.
 // Resolving through shell_path_find() instead means only a real ring-3
 // binary can be traced, and anything else says so.
+// `cursor` / `cursor <style>` -- how the console draws its cursor.
+// Reads VGA_CURSOR_STYLE_NAMES generically (vga.h), so adding a style
+// there needs no change here, same as `debug` and its subsystem list.
+void cmd_cursor(const char *args) {
+    if (!args || k_strlen(args) == 0) {
+        vga_write("cursor style: ");
+        vga_write(VGA_CURSOR_STYLE_NAMES[vga_cursor_style()]);
+        vga_write("\navailable: ");
+        for (int i = 0; i < VGA_CURSOR_STYLE_COUNT; i++) {
+            if (i) vga_write(", ");
+            vga_write(VGA_CURSOR_STYLE_NAMES[i]);
+        }
+        vga_write("\n(set with `cursor <style>`; persists across reboot)\n");
+        return;
+    }
+
+    enum vga_cursor_style want;
+    if (!vga_cursor_style_parse(args, &want)) {
+        vga_write("cursor: not a style: ");
+        vga_write(args);
+        vga_write("\n(`cursor` alone lists them)\n");
+        return;
+    }
+
+    vga_set_cursor_style(want);
+    cursor_config_save(want);
+    vga_write("cursor style set to ");
+    vga_write(VGA_CURSOR_STYLE_NAMES[want]);
+    vga_write("\n");
+}
+
 void cmd_strace(const char *name_and_args) {
     if (!name_and_args || k_strlen(name_and_args) == 0) {
         vga_write("usage: strace <binary> [args...]\n");

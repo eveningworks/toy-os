@@ -20,7 +20,7 @@
 
 const char *const COMPLETION_COMMANDS[] = {
     "about", "append", "apps", "beep", "cat", "cd", "clear", "color",
-    "debug", "df", "dmatest", "dmesg", "echo", "edit", "fontsize",
+    "cursor", "debug", "df", "dmatest", "dmesg", "echo", "edit", "fontsize",
     "fsck", "gui", "help", "ktest", "history", "keyboard", "lspci", "ls",
     "meminfo", "mkdir", "nano", "parttable", "pwd", "reboot",
     "ring3test", "rm", "run", "schedtest", "stat", "steptest", "strace", "stress",
@@ -263,6 +263,10 @@ static void complete_keyboard_layout(struct collector *c) {
 static int complete_argument(struct collector *c, const char *cmd, int arg_index) {
     if (k_strcmp(cmd, "color") == 0) { complete_from_list(c, COLOR_NAMES); return 1; }
     if (k_strcmp(cmd, "fontsize") == 0) { complete_from_list(c, FONT_SIZES); return 1; }
+    if (k_strcmp(cmd, "cursor") == 0) {
+        for (int i = 0; i < VGA_CURSOR_STYLE_COUNT; i++) add_candidate(c, VGA_CURSOR_STYLE_NAMES[i]);
+        return 1;
+    }
     if (k_strcmp(cmd, "keyboard") == 0) { complete_keyboard_layout(c); return 1; }
     if (k_strcmp(cmd, "run") == 0) { complete_executables(c); return 1; }
     // `strace <binary>`'s first argument is an executable, same as

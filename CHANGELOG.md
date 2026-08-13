@@ -31,6 +31,49 @@ using `## [x.y.z] - date` headings is here.
 ## [Unreleased]
 
 ### Added
+- **The console cursor no longer hides the character it sits on --
+  four selectable styles, persisted in `/etc`.** Reported with a
+  screenshot of `Hello Wo█ld`: "text cursor is blocking the character.
+  Would it be possible to make it underline cursor or transparent".
+  - The cursor was a filled rectangle, erased by filling the same
+    rectangle black. That's correct only at the append point, where the
+    cell is blank -- which was the only place it ever sat until line
+    editing landed the same day.
+  - **Fixed at the root: the cursor now saves the pixels it covers**
+    (`gfx_get_pixel()` into a small static buffer) and restores them on
+    hide. Exact regardless of what's underneath, which also let the
+    blink come back mid-line -- it had to be pinned solid to stop it
+    eating the character once a second -- and made any cursor *shape*
+    free, since nothing has to reconstruct the cell.
+  - **Four styles**: `translucent` (the new default -- tints the cell
+    so the glyph shows through), `underline`, `beam`, `reverse`.
+    Selected with a new `cursor [style]` command and persisted as
+    `cursor_style` in the shared `/etc/toyos.conf`, following exactly
+    the pattern `timezone`/`fontsize`/`keyboard` already use
+    (`cursor_config_init()` from `kernel_main()`, `cursor_config_save()`
+    on change). Legacy 80x25 text mode ignores all of it -- the
+    hardware draws its own cursor there.
+  - **`gfx_blend()`** -- packed-pixel alpha blending, added to `gfx.c`
+    because the channel positions and widths are that file's private
+    business; a caller holding a packed pixel has no portable way to
+    take it apart.
+  - The translucent style took three attempts, each worth recording:
+    tinting the cell toward the *text* colour changed the glyph not at
+    all (grey over grey) and gave a cursor you had to hunt for; tinting
+    toward white moved the glyph too, dropping glyph-vs-block contrast
+    from 170 to 89; tinting only the background gave a block two pixels
+    wide, because a glyph like `r` fills most of its cell. Tinting both,
+    with the glyph harder than the background, is what works. See
+    `docs/decisions.md`.
+  - The GUI Terminal needed no change -- its scrollback widget already
+    draws a thin bar cursor rather than a block.
+  - Verified: 55 KTESTs (3 new, covering the style-name table staying in
+    lockstep with the enum and the parser rejecting rather than
+    guessing), all four styles captured at 5x zoom
+    (`screenshots/2026-08-13/cursor_styles_zoom.png`), and the setting
+    confirmed surviving a full VM restart.
+
+### Added
 - **Readline-style command-line editing, in both the shell and the GUI
   Terminal.** Asked for as "can you make the current line editable, so
   you can move back and forth ... use arrow keys and bash convention for

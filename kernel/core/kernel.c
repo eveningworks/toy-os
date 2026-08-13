@@ -16,6 +16,7 @@
 #include "tz.h"
 #include "timer.h"
 #include "font_config.h"
+#include "cursor_config.h"
 #include "keyboard_config.h"
 #include "apps.h"
 #include "scheduler.h"
@@ -84,6 +85,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // BIN_BOOTSTRAP-table approach.
     tz_init(); // loads the persisted timezone choice, if any -- needs fs_init()/"/etc" first
     font_config_init(); // loads the persisted font size, if any -- see kernel/lib/font_config.c
+    cursor_config_init(); // console cursor style, same /etc plumbing as the font size
     keyboard_config_init(); // loads the persisted keyboard layout, if any -- see kernel/lib/keyboard_config.c
     vga_reflow(); // apply it to the console's cell layout (no-op if nothing was persisted)
 

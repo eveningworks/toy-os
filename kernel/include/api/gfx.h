@@ -45,6 +45,13 @@ uint32_t gfx_framebuffer_bpp(void);
 // Pack 8-bit r/g/b into whatever pixel format the framebuffer actually uses.
 uint32_t gfx_rgb(uint8_t r, uint8_t g, uint8_t b);
 
+// Blends `over` onto `under` at `alpha`/255 (0 = all under, 255 = all
+// over). Packed-pixel in, packed-pixel out -- the channel layout is
+// gfx.c's private business, which is exactly why this can't live in a
+// caller. Added for the console's translucent cursor (vga.c), which
+// tints the cell it sits on instead of covering the character.
+uint32_t gfx_blend(uint32_t under, uint32_t over, uint8_t alpha);
+
 // Restricts gfx_put_pixel() (and therefore every drawing primitive
 // below, all of which bottom out at it) to writing only within
 // [x, x+w) x [y, y+h) -- on top of the plain screen-bounds check it

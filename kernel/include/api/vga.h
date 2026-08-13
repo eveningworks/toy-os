@@ -113,6 +113,40 @@ uint32_t vga_rows(void);
 // to keep a status bar pinned to the last row.
 uint32_t vga_cols(void);
 
+// ---- cursor style ----
+//
+// How the framebuffer console draws its cursor. The default is
+// TRANSLUCENT: the block tints the cell rather than covering it, so the
+// character underneath stays readable -- a solid block hides whatever
+// it sits on, which stopped being acceptable once the shell could put
+// the cursor in the middle of a line.
+//
+// Every style works by saving the pixels it covers and restoring them
+// on hide (see vga.c), so none of them destroy what's underneath and
+// adding another needs no new bookkeeping. Persisted across reboot via
+// cursor_config.h; changed at runtime with the shell's `cursor`
+// command. Legacy 80x25 text mode ignores all of this -- there the
+// hardware draws its own cursor and there is nothing to choose.
+enum vga_cursor_style {
+    VGA_CURSOR_TRANSLUCENT = 0, // tinted block; the glyph shows through
+    VGA_CURSOR_UNDERLINE,       // bar along the bottom of the cell
+    VGA_CURSOR_BEAM,            // thin bar at the left edge (an insertion point)
+    VGA_CURSOR_REVERSE,         // inverted cell: dark glyph on a light block
+    VGA_CURSOR_STYLE_COUNT
+};
+
+// Kept in lockstep with the enum above, same convention as
+// debugflags.c's DBGFLAG_NAMES -- the `cursor` command reads it
+// generically, so a new style needs no changes there.
+extern const char *const VGA_CURSOR_STYLE_NAMES[VGA_CURSOR_STYLE_COUNT];
+
+enum vga_cursor_style vga_cursor_style(void);
+void vga_set_cursor_style(enum vga_cursor_style style);
+
+// Exact match against VGA_CURSOR_STYLE_NAMES ("reject rather than
+// guess", same as dbgflag_parse()). Returns 1 and sets *out on a match.
+int vga_cursor_style_parse(const char *name, enum vga_cursor_style *out);
+
 // Drives the framebuffer console's blinking cursor -- call this
 // periodically while idle (see keyboard_getchar() in keyboard.c, which
 // calls it once per wake-up from its blocking wait loop). No-op in

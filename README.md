@@ -232,7 +232,9 @@ shell and the GUI Terminal.
 - **System info:** `time`, `timezone [city]`, `uptime`, `meminfo`,
   `df` (disk space: total/used/free, KB-scale), `dmesg`, `lspci`,
   `parttable`
-- **Appearance:** `color <name>`, `fontsize <8|10|12|14|16|18|20|24>`,
+- **Appearance:** `color <name>`, `cursor <translucent|underline|beam|reverse>`
+  (the console's cursor style -- the default tints its cell so the
+  character underneath stays readable), `fontsize <8|10|12|14|16|18|20|24>`,
   `keyboard <us|se>` (base + Shift + AltGr)
 - **Developer/diagnostic (`help tests`):** `strace <binary> [args]`
   (Linux-style syscall tracing of a `/bin` binary -- one decoded line
