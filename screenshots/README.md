@@ -31,6 +31,13 @@ folders (the date each was taken isn't recoverable from the files, so
 a rename would be inventing one). Read them as "somewhere in that
 version's development"; everything since is dated.
 
+`readme/` is the one non-dated folder, and deliberately so: those two
+images are embedded in `README.md` and are a *maintained asset* rather
+than a point-in-time record -- when the desktop or the shell changes
+enough that they misrepresent it, retake them in place. Everything else
+here is evidence of what was true on a given day and is never updated
+after the fact.
+
 Convention for adding to this during a testing pass:
 - Name files for what they show, not the order they were taken in --
   `calculator_7_plus_3.png`, not `shot16.png`. The generic `shot*.png`/
