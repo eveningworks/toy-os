@@ -94,6 +94,7 @@
 #include "elf.h"
 #include "elf_run.h"
 #include "process.h" // process_context_is_armed() -- see kernel_slot_runnable()
+#include "win_events.h" // win_events_reset() at spawn -- see scheduler_spawn()
 #include "fs.h"
 #include "gdt.h"
 #include "fpu.h"
@@ -146,10 +147,18 @@ extern uint64_t g_next_kernel_rsp;
 // until scheduler_poll() explicitly reaps it. Same two-step "exit,
 // then a separate reap" shape a real OS's wait()/waitpid() has, scaled
 // down to this kernel's single-poller-per-process use.
-enum sched_state { SCHED_UNUSED = 0, SCHED_READY, SCHED_RUNNING, SCHED_ZOMBIE };
+// SCHED_BLOCKED: parked in a syscall, waiting for something to happen,
+// and NOT runnable until scheduler_wake() says so. See
+// scheduler_block_current() below for why a blocking syscall in this
+// kernel has to deschedule rather than wait in place.
+enum sched_state { SCHED_UNUSED = 0, SCHED_READY, SCHED_RUNNING, SCHED_ZOMBIE, SCHED_BLOCKED };
 
 struct sched_process {
     enum sched_state state;
+    // What this process is parked on while SCHED_BLOCKED (one of
+    // scheduler.h's SCHED_WAIT_*), and the value its blocking syscall
+    // will return once woken. Both meaningless in any other state.
+    int wait_reason;
     uint64_t pml4_phys;
     uint64_t kernel_rsp; // this process's saved trapframe pointer --
                           // valid whenever state != SCHED_UNUSED
@@ -379,6 +388,7 @@ static int spawn_from_fs(const char *path, const char *args) {
     // to SCHED_UNUSED), and inheriting the last process's registers
     // would be both wrong and an information leak between processes.
     fpu_init_state(procs[slot].fpu);
+    procs[slot].wait_reason = 0;
     procs[slot].state      = SCHED_READY;
     alive_count++;
     return slot;
@@ -418,6 +428,85 @@ void scheduler_tick(uint64_t *regs) {
     switch_to(next);
 }
 
+// BLOCKING SYSCALLS, AND WHY THEY DESCHEDULE RATHER THAN WAIT
+// -----------------------------------------------------------
+// Parks the calling process on `reason` and hands the CPU to whatever
+// is next in the rotation. `regs` is the syscall's own trapframe --
+// the same pointer isr_dispatch was handed -- so the process resumes
+// from the instruction after its `int 0x80` when woken, with
+// scheduler_wake()'s value already in RAX.
+//
+// The obvious implementation of a blocking syscall -- `sti`, then spin
+// or `hlt` inside the handler until the thing you're waiting for
+// arrives -- was tried in this kernel and is genuinely unsafe here, not
+// merely slow. syscall.c's SYS_READ_KEY comment has the full autopsy:
+// it worked for exactly one keystroke and then hung, because
+// g_next_kernel_rsp (idt.c) is a single global "where to resume"
+// pointer. It is correct for the scheduler's own use but was never
+// meant to be reentrant, so a nested IRQ handler overwrites it while
+// the outer int-0x80 handler is still on the stack, and that outer
+// handler's epilogue then resumes into a stale frame.
+//
+// Descheduling sidesteps that entirely instead of trying to make the
+// global reentrant. Nothing nests: the handler does not wait, it
+// RETURNS, through the ordinary isr_common epilogue, into a different
+// entity -- exactly the switch scheduler_tick() and scheduler_on_exit()
+// already perform, using machinery that is already proven. Interrupts
+// stay off for the whole handler, as they always were.
+//
+// Returns 1 if the caller was parked (its syscall must then return
+// WITHOUT touching regs[TF_RAX] -- the wake writes it), or 0 if the
+// caller isn't a scheduler-managed process and therefore has no slot to
+// park in (the legacy process_run_ring3() path, or kernel code). A 0
+// return is not an error the caller may ignore: it means "you must fall
+// back to non-blocking behaviour", because there is nowhere to put this
+// process to sleep.
+int scheduler_block_current(uint64_t *regs, int reason) {
+    if (current_index < 0) return 0;
+
+    int idx = current_index;
+    procs[idx].kernel_rsp = (uint64_t)regs;
+    fpu_save(procs[idx].fpu);
+    procs[idx].state = SCHED_BLOCKED;
+    procs[idx].wait_reason = reason;
+    current_index = -1;
+
+    int next = find_next_runnable(rotation_pos);
+    if (next == ROT_KERNEL) switch_to_kernel();
+    else switch_to(next);
+    return 1;
+}
+
+// Wakes every process blocked on `reason`, giving each `value` as its
+// blocking syscall's return value. Returns how many were woken (0 is
+// perfectly normal -- an event with nobody waiting on it).
+//
+// Safe to call from an interrupt handler, which is the point: this only
+// flips state and writes into an already-saved trapframe. It never
+// touches g_next_kernel_rsp, so it cannot disturb whatever the
+// interrupted context was going to resume into -- the woken process
+// simply becomes eligible again and the next ordinary scheduler_tick()
+// picks it up. That restraint is deliberate: an IRQ handler that tried
+// to switch directly to the woken process is exactly the reentrancy
+// this design exists to avoid.
+int scheduler_wake(int reason, int64_t value) {
+    int woken = 0;
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (procs[i].state != SCHED_BLOCKED) continue;
+        if (procs[i].wait_reason != reason) continue;
+
+        // The saved trapframe's RAX slot IS the syscall's return value:
+        // isr_common's epilogue pops it straight into the register the
+        // ring-3 caller reads. Writing it here is what makes waking a
+        // process and answering its syscall the same act.
+        uint64_t *tf = (uint64_t *)(uintptr_t)procs[i].kernel_rsp;
+        tf[TF_RAX] = (uint64_t)value;
+        procs[i].state = SCHED_READY;
+        woken++;
+    }
+    return woken;
+}
+
 void scheduler_on_exit(int code) {
     if (current_index < 0) return; // defensive; shouldn't happen
 
@@ -447,7 +536,15 @@ int scheduler_current_pid(void) {
 
 int scheduler_spawn(const char *path, const char *args) {
     int slot = spawn_from_fs(path, args);
-    return slot < 0 ? 0 : slot + 1; // 0 = failure, else 1-based pid (see scheduler.h)
+    if (slot < 0) return 0;
+
+    // Clear any events left over from the previous tenant of this slot.
+    // Doing it at spawn rather than at reap is what makes this the only
+    // lifecycle call the scheduler owes the windowing layer: a recycled
+    // pid can't inherit stale events if the queue is emptied before the
+    // new process can ever look at it.
+    win_events_reset(slot + 1);
+    return slot + 1; // 1-based pid (see scheduler.h)
 }
 
 enum sched_poll_result scheduler_poll(int pid, int *out_exit_code) {
@@ -459,7 +556,12 @@ enum sched_poll_result scheduler_poll(int pid, int *out_exit_code) {
         procs[slot].state = SCHED_UNUSED; // reap -- see scheduler.h's doc comment
         return SCHED_POLL_EXITED;
     }
-    if (procs[slot].state == SCHED_READY || procs[slot].state == SCHED_RUNNING) {
+    // SCHED_BLOCKED counts as RUNNING: a process parked in a blocking
+    // syscall is very much alive, and a poller (wm_run()'s per-frame
+    // check) that saw anything else would conclude it had died and
+    // release the window slot out from under it.
+    if (procs[slot].state == SCHED_READY || procs[slot].state == SCHED_RUNNING ||
+        procs[slot].state == SCHED_BLOCKED) {
         return SCHED_POLL_RUNNING;
     }
     return SCHED_POLL_INVALID; // SCHED_UNUSED -- bad pid, or already reaped

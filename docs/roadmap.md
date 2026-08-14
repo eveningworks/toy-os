@@ -1096,15 +1096,22 @@ Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
       keeps drawing while a ring-3 process runs~~ -- done, see
       `CHANGELOG.md`'s `[Unreleased]` entry. Step zero: nothing else
       here works until this does.
-- [ ] Mouse + window events deliverable to a ring-3 process (there is
-      no mouse syscall at all today, and no routing to a focused window)
-- [ ] A blocking wait, so a GUI client doesn't spin-poll its whole
-      timeslice -- `SYS_READ_KEY` is non-blocking by necessity today
-      (see `syscall.c`'s comment on why blocking inside the dispatcher
-      breaks after one key). Under round-robin, a spinning client now
-      steals from the WM rather than merely wasting its own slice.
+- [x] ~~A blocking wait, so a GUI client doesn't spin-poll its whole
+      timeslice~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry.
+      Blocking syscalls DESCHEDULE rather than wait in place; the
+      naive version hangs after one event and the reason is now in
+      `docs/decisions.md`.
+- [x] ~~An event message format, and delivery to a ring-3 process~~ --
+      done: `abi/win_proto.h`'s `struct win_event` plus per-process
+      queues and `SYS_POLL_EVENT`/`SYS_WAIT_EVENT`.
+- [ ] Event SOURCES: route real keyboard and mouse input to the client
+      that owns the focused window. The format and the delivery path
+      exist; what doesn't yet is window ownership to route BY, which is
+      the next item. There is still no mouse syscall of any kind.
 - [ ] Multiple windows per process over a shared-memory ring, replacing
-      `SYS_WIN_CREATE`'s single fixed-vaddr 640x480 buffer
+      `SYS_WIN_CREATE`'s single fixed-vaddr 640x480 buffer -- and with
+      it, the client-side window ids `struct win_event.window` already
+      carries
 - [ ] An abstract transport behind that protocol, so the server side can
       move to ring 3 later without rewriting every call site -- the same
       "one struct of function pointers" pattern `display_driver` and the
@@ -2546,12 +2553,10 @@ comment.
 - **No mouse syscall at all.** The numbers stop at `SYS_CPU_INFO` (22);
   ring 3 can poll a key and nothing else. No event routing to a focused
   window either.
-- **No blocking wait**, and this one gets worse rather than better with
-  step zero done. `SYS_READ_KEY` is non-blocking by necessity (see
-  `syscall.c` on why blocking with interrupts on inside the dispatcher
-  breaks after exactly one key), so a GUI client spin-polls -- which
-  now steals timeslices from the WM it is competing with, instead of
-  merely wasting its own.
+- ~~**No blocking wait**~~ -- done. A client parks in `SYS_WAIT_EVENT`
+  and uses no timeslices at all. `SYS_READ_KEY` stays non-blocking (its
+  contract is published and `echo.c` depends on it); new code should
+  use the event API instead.
 - **One window per process at a fixed vaddr**, capped 640x480, position
   fixed at creation (`SYS_WIN_CREATE`/`SYS_WIN_PRESENT`). It is a
   genuine client/server split already -- just single-window,

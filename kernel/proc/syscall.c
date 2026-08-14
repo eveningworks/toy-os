@@ -6,6 +6,7 @@
 #include "gfx.h"
 #include "keyboard.h"
 #include "scheduler.h"
+#include "win_events.h"
 #include "pmm.h"
 #include "fs.h"
 #include "string.h"
@@ -285,6 +286,10 @@ void syscall_dispatch(uint64_t *regs) {
     // but emitted after the handler returns, once the return value is
     // known -- see kernel/proc/strace.c's top comment.
     int traced = strace_active();
+    // Set by a handler that parked the caller instead of returning a
+    // value (SYS_WAIT_EVENT) -- see its own comment, and the
+    // strace_end() call at the bottom.
+    int blocked = 0;
     if (traced) {
         strace_begin(rax, rdi, rsi, rdx);
         if (rax == SYS_EXIT) {
@@ -765,9 +770,65 @@ void syscall_dispatch(uint64_t *regs) {
             vga_set_color((enum vga_color)rdi, (enum vga_color)rsi);
             regs[14] = 1;
         }
+    } else if (rax == SYS_POLL_EVENT || rax == SYS_WAIT_EVENT) {
+        // Both share everything except what happens when the queue is
+        // empty, so they share a handler rather than duplicating the
+        // validation and the copy-out.
+        uint64_t pml4 = vmm_current_pml4();
+        int pid = scheduler_current_pid();
+
+        if (!vmm_validate_user_range(pml4, rdi, sizeof(struct win_event))) {
+            klog_write("syscall: event() rejected -- invalid user pointer\n");
+            regs[14] = (uint64_t)-1;
+        } else if (pid == 0) {
+            // No scheduler slot, so no event queue and nowhere to park.
+            // Refused rather than silently degraded to a never-blocking
+            // call, which would turn the documented `while (... != 1)`
+            // client loop into a busy spin.
+            klog_write("syscall: event() rejected -- caller has no event queue\n");
+            regs[14] = (uint64_t)-1;
+        } else {
+            struct win_event ev;
+            if (win_events_pop(pid, &ev)) {
+                *(struct win_event *)(uintptr_t)rdi = ev;
+                regs[14] = 1;
+            } else if (rax == SYS_POLL_EVENT) {
+                regs[14] = 0; // empty, and this one never blocks
+            } else {
+                // Park until something is queued. Interrupts are OFF
+                // for this whole handler, so the "queue was empty" test
+                // above and this park are atomic with respect to an IRQ
+                // pushing an event -- there is no window in which an
+                // event arrives after the check and is missed by the
+                // block, which is the classic lost-wakeup bug.
+                //
+                // On success this MUST NOT set regs[14]: the process is
+                // no longer the one running, and scheduler_wake() will
+                // write the return value (0, "ask again") straight into
+                // the trapframe saved here. Writing it now would
+                // clobber that.
+                if (!scheduler_block_current(regs, SCHED_WAIT_EVENT)) {
+                    regs[14] = (uint64_t)-1; // couldn't park -- see above
+                } else {
+                    // Parked. regs[14] is NOT this call's return value
+                    // (it still holds the syscall number), so the
+                    // normal strace_end() below would print a bogus
+                    // one. Close the line as "= ?" instead, the same
+                    // way SYS_EXIT does -- this handler isn't returning
+                    // a value either. When the process is woken it
+                    // re-enters the syscall and gets its own trace
+                    // line, so a blocking wait reads as a "= ?" per
+                    // park followed by the real result.
+                    blocked = 1;
+                }
+            }
+        }
     }
 
-    if (traced) strace_end(rax, regs[14]);
+    if (traced) {
+        if (blocked) strace_end_noreturn(); // "= ?" -- no value yet, see above
+        else         strace_end(rax, regs[14]);
+    }
 
     // Unrecognized syscall number: no-op. Falling through here means
     // isr_dispatch returns normally, isr_common's usual epilogue runs,

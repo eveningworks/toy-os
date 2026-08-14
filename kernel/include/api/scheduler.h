@@ -102,4 +102,36 @@ enum sched_poll_result {
 // reaped.
 enum sched_poll_result scheduler_poll(int pid, int *out_exit_code);
 
+// What a blocked process is waiting for. One flat namespace rather than
+// a per-subsystem one, so a wake site never has to know which flavour
+// of waiter it is answering -- it names the EVENT that happened and
+// every process parked on it wakes.
+#define SCHED_WAIT_EVENT 1 // a window/input event for this process
+
+// Parks the calling process until scheduler_wake() names its `reason`,
+// and hands the CPU to whatever is next. `regs` must be the syscall
+// handler's own trapframe pointer.
+//
+// A blocking syscall in this kernel MUST go through this rather than
+// waiting in place with interrupts on -- that was tried, and hangs
+// after one event because g_next_kernel_rsp isn't reentrant (see
+// syscall.c's SYS_READ_KEY comment and scheduler.c's own writeup here).
+//
+// Returns 1 if the caller was parked, in which case the syscall handler
+// must return WITHOUT setting a return value: the wake writes it into
+// the saved trapframe. Returns 0 if the caller has no slot to park in
+// (kernel code, or the legacy process_run_ring3() path) -- callers must
+// treat that as "fall back to non-blocking", not as an error to ignore.
+int scheduler_block_current(uint64_t *regs, int reason);
+
+// Wakes every process blocked on `reason`, handing each `value` as its
+// blocking syscall's return value. Returns the number woken; 0 just
+// means nobody was waiting.
+//
+// Safe from an interrupt handler, and deliberately limited to make that
+// true: it only flips state and writes an already-saved trapframe, and
+// never touches g_next_kernel_rsp, so the woken process runs at the
+// next ordinary tick rather than being switched to from inside an IRQ.
+int scheduler_wake(int reason, int64_t value);
+
 #endif

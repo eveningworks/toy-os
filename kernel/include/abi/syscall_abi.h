@@ -337,4 +337,59 @@ struct dirent {
                          // the mistake userland/lspci.c's own copy of
                          // the PCI class table already demonstrates.
 
+// The windowing protocol's delivery syscalls -- see abi/win_proto.h for
+// the message format, which is the part meant to outlive this transport
+// (a shared-memory ring is the intended successor; the event bytes
+// don't change when it lands).
+#include "win_proto.h" // struct win_event
+
+#define SYS_POLL_EVENT 23 // RDI = pointer to a `struct win_event` (out).
+                           // Never blocks. Returns 1 if an event was
+                           // written, 0 if the queue is empty, -1 on a
+                           // bad pointer or from a process that has no
+                           // event queue (kernel code, or the legacy
+                           // process_run_ring3() path -- neither has a
+                           // scheduler slot to own one).
+
+#define SYS_WAIT_EVENT 24 // RDI = pointer to a `struct win_event` (out).
+                           // Returns 1 with an event written, or 0
+                           // meaning "you were woken, ask again" -- see
+                           // below. -1 on a bad pointer, or from a
+                           // process with no queue (same cases as
+                           // SYS_POLL_EVENT), which is also what a
+                           // caller that cannot be parked gets, so a
+                           // non-schedulable caller fails loudly rather
+                           // than spinning forever on a syscall that
+                           // silently never blocks.
+                           //
+                           // CALLERS MUST LOOP. A 0 return does not
+                           // mean "no event" -- it means the process
+                           // was woken and should call again:
+                           //
+                           //   while (sys_wait_event(&ev) != 1) { }
+                           //
+                           // This is the same spurious-wakeup contract
+                           // a condition variable has, and it is here
+                           // for a concrete reason rather than
+                           // sloppiness: the wake happens inside an
+                           // interrupt handler, under whatever address
+                           // space happened to be current, so the
+                           // kernel CANNOT copy the event into the
+                           // waiting process's buffer at that moment.
+                           // The copy has to happen back inside the
+                           // client's own syscall, which means the
+                           // client has to re-enter it. (Linux's
+                           // alternative is to rewind RIP over the
+                           // trapping instruction and let the syscall
+                           // restart itself -- ERESTARTSYS. Not used
+                           // here: it hides a hard assumption about the
+                           // syscall instruction's length inside the
+                           // scheduler, and the explicit loop costs a
+                           // client three lines.)
+                           //
+                           // The loop does NOT spin the CPU: each pass
+                           // that finds nothing parks the process again
+                           // via scheduler_block_current(), so a
+                           // waiting client uses no timeslices at all.
+
 #endif

@@ -30,6 +30,8 @@ there when you add an entry, or the index quietly stops being one.
 - [A syscall's path-pointer validation checks a full `FS_PATH_MAX` range, not just up to the string's NUL](#a-syscalls-path-pointer-validation-checks-a-full-fs_path_max-range-not-just-up-to-the-strings-nul)
 - [The M16 scheduler is permanently armed now -- an empty process table makes that safe](#the-m16-scheduler-is-permanently-armed-now----an-empty-process-table-makes-that-safe)
 - [The kernel context is a rotation participant, not a kernel thread](#the-kernel-context-is-a-rotation-participant-not-a-kernel-thread)
+- [Blocking syscalls deschedule; they never wait in place](#blocking-syscalls-deschedule-they-never-wait-in-place)
+- [`SYS_WAIT_EVENT` makes clients loop instead of restarting the syscall](#sys_wait_event-makes-clients-loop-instead-of-restarting-the-syscall)
 - [Stack canaries: `-mstack-protector-guard=global` and a fixed constant, not GCC's defaults](#stack-canaries--mstack-protector-guardglobal-and-a-fixed-constant-not-gccs-defaults)
 - [NX enforcement scoped to userspace only -- the kernel's own identity map stays RWX](#nx-enforcement-scoped-to-userspace-only----the-kernels-own-identity-map-stays-rwx)
 - [The serial debug console is poll-based from existing idle loops, not a new kernel thread](#the-serial-debug-console-is-poll-based-from-existing-idle-loops-not-a-new-kernel-thread)
@@ -2448,6 +2450,59 @@ that could drift out of agreement with it.
 See `CHANGELOG.md`'s `[Unreleased]` entry for the full writeup and how
 both directions were verified, `scheduler.c`'s `ROT_KERNEL` comment for
 the design, and `docs/roadmap.md`'s Milestone 41 for what this unblocks.
+
+## Blocking syscalls deschedule; they never wait in place
+
+The obvious way to write a blocking syscall here -- `sti`, then spin or
+`hlt` inside the handler until the awaited thing arrives -- is not
+merely slow in this kernel, it is broken, and it was tried before being
+ruled out. It worked for exactly one keystroke and then hung.
+`g_next_kernel_rsp` (`idt.c`) is a single global "where to resume"
+pointer: correct for the scheduler's own use, never meant to be
+reentrant. A nested IRQ handler overwrites it while the outer
+`int 0x80` handler is still on the stack, so that outer handler's
+epilogue resumes into a stale frame. `syscall.c`'s `SYS_READ_KEY`
+comment is the original autopsy, and is why that syscall is
+non-blocking by hard requirement rather than by preference.
+
+`scheduler_block_current()` (`kernel/proc/scheduler.c`) sidesteps the
+problem instead of trying to make the global reentrant. The handler
+does not wait -- it RETURNS, through the ordinary `isr_common`
+epilogue, into a different entity, which is exactly the switch
+`scheduler_tick()` and `scheduler_on_exit()` already perform with
+already-proven machinery. Nothing nests, and interrupts stay off for
+the whole handler as they always were.
+
+`scheduler_wake()` is deliberately limited so it is safe to call from
+an interrupt handler: it only flips scheduler state and writes an
+already-saved trapframe, and never touches `g_next_kernel_rsp`. A woken
+process becomes eligible and runs at the next ordinary tick. An IRQ
+handler that tried to switch directly to the woken process would be
+re-creating exactly the reentrancy this design exists to avoid.
+
+Full writeup in `CHANGELOG.md`'s `[Unreleased]` entry.
+
+## `SYS_WAIT_EVENT` makes clients loop instead of restarting the syscall
+
+`SYS_WAIT_EVENT` returns 0 meaning "you were woken, ask again", so every
+client wraps it in `while (sys_wait_event(&ev) != 1) { }`. That looks
+like a missing feature and isn't.
+
+The wake happens inside an interrupt handler, running under whatever
+address space happened to be current -- which is not necessarily the
+waiting process's. So the kernel physically cannot copy the event into
+that process's buffer at wake time; the copy has to happen back inside
+the client's own syscall, which means the client has to re-enter it.
+This is the same spurious-wakeup contract a condition variable has, and
+the loop does not spin the CPU: each pass that finds nothing parks the
+process again, using no timeslices.
+
+The alternative, which Linux uses, is to rewind RIP over the trapping
+instruction so the syscall restarts itself (`ERESTARTSYS`). Rejected
+here: it buries a hard assumption about the syscall instruction's
+length inside the scheduler, and would have to be revisited if the
+syscall entry ever moved off `int 0x80`. The explicit loop costs a
+client three lines and hides nothing.
 
 ## `strace` traces an address space, and prints each line after the handler returns
 
