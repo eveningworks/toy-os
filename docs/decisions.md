@@ -38,6 +38,8 @@ there when you add an entry, or the index quietly stops being one.
 - [Calculator's engine is shared source compiled twice, not copied](#calculators-engine-is-shared-source-compiled-twice-not-copied)
 - [The process entry ABI is SysV, and crt0 owns the stack alignment](#the-process-entry-abi-is-sysv-and-crt0-owns-the-stack-alignment)
 - [A legacy ring-3 process needs its own RSP0 and must not be descheduled](#a-legacy-ring-3-process-needs-its-own-rsp0-and-must-not-be-descheduled)
+- [The retry sentinel is -2 because 0 is a real answer](#the-retry-sentinel-is--2-because-0-is-a-real-answer)
+- [The ring-3 terminal runs its own shell, not the kernel's](#the-ring-3-terminal-runs-its-own-shell-not-the-kernels)
 - [Stack canaries: `-mstack-protector-guard=global` and a fixed constant, not GCC's defaults](#stack-canaries--mstack-protector-guardglobal-and-a-fixed-constant-not-gccs-defaults)
 - [NX enforcement scoped to userspace only -- the kernel's own identity map stays RWX](#nx-enforcement-scoped-to-userspace-only----the-kernels-own-identity-map-stays-rwx)
 - [The serial debug console is poll-based from existing idle loops, not a new kernel thread](#the-serial-debug-console-is-poll-based-from-existing-idle-loops-not-a-new-kernel-thread)
@@ -3642,3 +3644,47 @@ schedulable, and "the kernel context" was quietly serving as a
 dumping ground for two very different things. Both are covered by a
 KTEST in `kernel/proc/sched_test.c` that runs a legacy process
 alongside a scheduled one; see `CHANGELOG.md` for the full writeup.
+
+## The retry sentinel is -2 because 0 is a real answer
+
+Every blocking syscall here shares one contract: the kernel cannot hand
+over a result at wake time (the wake runs in an interrupt, under an
+address space where the caller's buffer may not be mapped), so it wakes
+the caller with "ask again" and the real work happens back inside the
+caller's own syscall. See `SYS_WAIT_EVENT` in `abi/syscall_abi.h`.
+
+That sentinel is `SYS_RETRY`, defined as **-2**. It started as 0, which
+was fine while the only blocking call was `SYS_WAIT_EVENT` -- but 0 is
+a LEGITIMATE result for `SYS_READ`: end of file. The moment pipes made
+`read` blocking, a reader woken by a write treated the wake as EOF and
+reported that the program had finished producing output at the exact
+instant it produced some.
+
+The general rule, which is worth more than the specific fix: a sentinel
+must be a value the call can never otherwise return. "0 means nothing
+happened" is only safe when nothing can legitimately be zero.
+
+## The ring-3 terminal runs its own shell, not the kernel's
+
+`userland/terminal.c` links `userland/ush.c` -- a shell implemented over
+syscalls -- rather than calling the kernel's `shell_dispatch()` through
+some new "run this command line" syscall.
+
+The syscall version would have been much less work and is a defensible
+thing to build. It was rejected because it moves the WINDOW to ring 3
+while leaving the shell in the kernel, which is the part that actually
+matters: the kernel shell's builtins (`fsck`, `ktest`, `fsformat`,
+`timezone`) reach directly into the filesystem, the test harness and
+driver state. Exposing them through one syscall would re-export the
+kernel's internals under a new name and call it a migration.
+
+So `ush` has the builtins a shell can honestly implement over the file
+API, and spawns everything else through `SYS_SPAWN` with its output
+piped back. The kernel shell is still reachable -- `Esc` leaves the
+desktop for the physical one -- which is the honest division: the
+ring-3 terminal does what a terminal does, and kernel-only operations
+stay in a kernel-only shell.
+
+The cost is real and worth stating: `ush` is less capable than the
+kernel Terminal today. That is a consequence of the boundary being
+drawn honestly rather than a defect to paper over.

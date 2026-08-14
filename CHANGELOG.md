@@ -32,6 +32,80 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
 ## [Unreleased]
 
 ### Added
+- **Terminal runs in ring 3, with a shell that runs there too.** The
+  last and hardest app migration, and the one that needed new kernel
+  machinery rather than a port.
+
+  The kernel Terminal is not really an app: it is a front-end to the
+  kernel's shell. It calls `shell_dispatch()` directly, installs a
+  `vga_sink` so kernel `vga_write()` output lands in its scrollback, and
+  uses `scheduler_spawn()` for `/bin` binaries. A ring-3 process can do
+  none of those. So this migration is really three things:
+
+  - **`userland/ush.c`** -- a shell that runs in ring 3. Deliberately
+    NOT a front-end to the kernel's: its builtins (`ls`, `cat`, `cd`,
+    `pwd`, `echo`) are implemented over the file syscalls, and anything
+    else is looked up on PATH and SPAWNED. Wrapping the kernel shell's
+    `fsck`/`ktest`/`fsformat` would have been re-exporting kernel
+    internals under a new name; `Esc` still drops to the physical shell
+    for those.
+  - **`userland/terminal.c`** -- the window, the transcript, the prompt.
+    It BLOCKS while a command runs, which the kernel Terminal cannot
+    (it lives inside `wm_run()`, hence its async spawn, its WM-global
+    `pending_proc` slot and its per-frame poll). Here it is a function
+    call, because the desktop keeps running regardless.
+  - The kernel side below, without which none of it is possible.
+
+- **Pipes, `SYS_SPAWN` and `SYS_WAITPID`.** Before these, no process
+  here could see another's output at all -- which is the one thing a
+  terminal has to be able to do.
+
+  `kernel/proc/pipe.c` is a bounded byte buffer with reference-counted
+  ends. Blocking reuses the existing wait machinery rather than
+  inventing a second one: an empty read with a live writer parks via
+  `scheduler_block_current()`, and `pipe_write()` or the last
+  `pipe_close_writer()` wakes it.
+
+  **`SYS_RETRY` is -2, not 0, and that distinction is a bug this
+  found.** The "you were woken, ask again" sentinel originally reused 0
+  -- which is a *legitimate* result for `read` (end of file). So a pipe
+  read returned empty the instant its writer produced something, and
+  the end-to-end test failed with "read nothing" while spawn and wait
+  both worked perfectly. A retry sentinel has to be a value the call
+  can never otherwise return.
+
+  Also in `syscall.c`: `alloc_fd()`/`fd_lookup()`, which the file had
+  open-coded at half a dozen sites. `fd_lookup()` carries the ownership
+  check that stops one process touching another's fds -- worth having
+  written once.
+
+- **The rest of `apps/ui/` ported to ring 3** (`userland/uwidgets.c`):
+  scrollbar, single-line text field, checkbox, radio list, listbox,
+  dropdown, and the keyboard focus ring. Same two rules as the
+  originals, both of which are the reason they read the way they do:
+  one geometry calculation shared by draw/hit-test/drag (so a scrollbar
+  thumb cannot be in two places), and commit-on-release.
+
+### Changed
+- **`docs/roadmap.md` now has actionable requirements for Ctrl-C and
+  for a real C library**, both of which were mentioned but not
+  specified.
+
+  The Ctrl-C entry CORRECTS a standing claim in that file. It said
+  SIGINT needs Milestone 7's TTY layer, because "deliver SIGINT to the
+  foreground process" is meaningless without a foreground process. That
+  is true for the physical shell and for job control -- but not once
+  the terminal is a ring-3 process that spawns its own children, since
+  then the terminal knows its child's pid because it asked for it.
+  What Ctrl-C actually needs is a `kill` syscall, a pending-signal flag
+  the scheduler checks, a TERMINATE default routed through the normal
+  exit path, and nothing at all in the keyboard driver (Ctrl already
+  arrives as a control code).
+
+  The libc entry marks crt0/libsys done, and orders what remains:
+  malloc first, then the standard names over the already-portable
+  `kernel/lib/string.c`, then stdio, errno, TLS.
+
 - **Notepad runs in ring 3**, with the text-editing widgets ported to
   userland alongside it. The second real app out of the kernel, and the
   one that needed the whole toolkit rather than a button grid.
@@ -2673,7 +2747,6 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   Verified: 81/81 KTESTs after the string changes; a final grep for
   the stale phrases returns only deliberate historical records.
 
-### Changed
 - **A documented, checked on-disk filesystem layout -- and the test
   binaries moved out of `/bin`.** Asked for a future-proof directory
   structure now that there are binaries, config files and data files,

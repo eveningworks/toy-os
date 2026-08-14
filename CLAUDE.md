@@ -177,6 +177,16 @@ technical conventions below:
   objects can't be shared, but the source can, which is why the ring-3
   and kernel Calculators cannot disagree about arithmetic. Only
   freestanding files qualify.
+- **One process can run another and read its output**: `SYS_PIPE` +
+  `SYS_SPAWN` + `SYS_WAITPID`, wrapped by libsys. `userland/ush.c` is a
+  shell built on them and `userland/terminal.c` the ring-3 Terminal
+  around it. Two rules to know. **The retry sentinel is `SYS_RETRY`
+  (-2), never 0** -- 0 is a real answer for `read` (EOF), and using it
+  as "ask again" made a pipe read report end-of-file the instant its
+  writer produced something; see `docs/decisions.md`. And **a client
+  that spawns must close its own copy of the pipe's write end**, or the
+  read never sees EOF even after the child exits, because a live writer
+  (itself) still exists.
 - **The window manager lives in `apps/wm/`** -- the core event
   loop/input/render split (`wm.c`/`wm_input.c`/`wm_render.c`, sharing
   state through `wm_internal.h`'s `extern`s) plus the pieces that grew
@@ -929,6 +939,13 @@ repeated manual steps to be worth automating:
   acting on button-down passes every other check and fails only that.
   Geometry is derived from the window's reported content size, not
   hardcoded, so it survives a font-size change.
+- **`uterm_test.py`** -- drives the RING-3 Terminal. Its key check is
+  worth copying elsewhere: it distinguishes a BUILTIN (`echo hi`,
+  handled inside the shell with no spawn) from an EXTERNAL program
+  (`lscpu`, dozens of lines that can only appear if it was spawned and
+  its stdout piped back) by INK VOLUME. A terminal that echoed commands
+  but never captured output passes every other check and fails that
+  one.
 - **`notepad_client_test.py`** -- drives the RING-3 Notepad and asserts
   a full round trip: type, save, verify the bytes on disk via `cat` (a
   completely independent path -- the editor claiming success proves

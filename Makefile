@@ -159,6 +159,7 @@ UICLIENT_ELF = userland/uiclient.elf
 CALCULATOR_ELF = userland/calculator.elf
 NOTEPAD_ELF = userland/notepad.elf
 PIPE_TEST_ELF = userland/pipe_test.elf
+UTERM_ELF = userland/terminal.elf
 
 # Which userland ELFs get seeded onto disk.img's /bin, and under what
 # name. The mapping is explicit because it isn't always mechanical --
@@ -208,7 +209,8 @@ SEED_TESTS = \
 	$(WINCLIENT_ELF):winclient \
 	$(UICLIENT_ELF):uiclient \
 	$(CALCULATOR_ELF):calculator \
-	$(NOTEPAD_ELF):notepad
+	$(NOTEPAD_ELF):notepad \
+	$(UTERM_ELF):uterm
 
 # Both lists together -- only USERLAND_ELVES below needs the union, so
 # it's derived rather than maintained as a third list.
@@ -427,6 +429,21 @@ NOTEPAD_OBJS = $(BUILD)/userland/crt0.o \
 
 userland/notepad.elf: $(NOTEPAD_OBJS) userland/link.ld
 	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(NOTEPAD_OBJS)
+
+# The ring-3 Terminal: the text widget, the shell it links against, and
+# the runtime. Seeded as `uterm` so it doesn't collide with the
+# kernel-space Terminal in the Start menu while both exist.
+UTERM_OBJS = $(BUILD)/userland/crt0.o \
+             $(BUILD)/userland/terminal.o \
+             $(BUILD)/userland/ush.o \
+             $(BUILD)/userland/uui.o \
+             $(BUILD)/userland/utext.o \
+             $(BUILD)/userland/ugfx.o \
+             $(BUILD)/userland/sys.o \
+             $(BUILD)/userland/stack_chk.o
+
+userland/terminal.elf: $(UTERM_OBJS) userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(UTERM_OBJS)
 
 $(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(ASM_OBJECTS) $(C_OBJECTS)
