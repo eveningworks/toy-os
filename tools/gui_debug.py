@@ -233,6 +233,48 @@ class DebugConsole:
     def state(self):
         return self.json("gui state --json")
 
+    def cursor(self):
+        """Where the kernel thinks the REAL cursor is, as (x, y).
+
+        The one authoritative answer. QMPSession tracks the cursor
+        client-side by accumulating the relative deltas it sent, which is
+        all it can do -- there is no absolute-position query in the PS/2
+        path -- and that estimate drifts whenever the guest doesn't apply
+        a delta in full.
+        """
+        c = self.state()["cursor"]
+        return (c["x"], c["y"])
+
+    def warp_cursor(self, qmp, x, y, tries=8, tol=1):
+        """Move the REAL cursor to (x, y) and confirm it arrived.
+
+        Needed because QMPSession.goto() is open-loop: it sends chunked
+        relative deltas and then ASSUMES the cursor is where it aimed.
+        Measured, a large jump lands roughly a third of the way -- asking
+        for (611, 378) from (640, 150) ended up at (630, 226) -- and
+        because the client-side estimate was updated anyway, a second
+        goto() then sends a zero delta and never corrects. The failure
+        mode is a hover test that reports no hover on a control the
+        cursor never reached.
+        
+        So: aim, ask the kernel where it actually got to, and re-aim at
+        the remaining error until it's there. Returns the final position.
+
+        Use this for anything that needs the cursor PARKED (hover states,
+        pixel probes). `gui move` cannot do that job -- injected input
+        overrides the mouse for one WM iteration only, after which the
+        real pointer takes over again and the hover is recomputed away.
+        """
+        for _ in range(tries):
+            qmp.goto(x, y)
+            self.settle()
+            cx, cy = self.cursor()
+            if abs(cx - x) <= tol and abs(cy - y) <= tol:
+                return (cx, cy)
+            # Correct against the truth, not against the estimate.
+            qmp.pos[0], qmp.pos[1] = cx, cy
+        return self.cursor()
+
     def open_app(self, name):
         return self.send(f"gui open {name}")
 
@@ -247,6 +289,19 @@ class DebugConsole:
         matter to a test's timing.
         """
         return self.send(f"gui damage verify {'on' if on else 'off'}")
+
+    def move(self, x, y, settle=True):
+        """Move the cursor with nothing held, for hover testing.
+
+        click() moves the cursor too, but also presses and releases, so
+        the hover state is gone by the time you can look at it. Verifying
+        hover by pixel value is what docs/gui-guidelines.md asks for, and
+        it needs the cursor parked with no button down.
+        """
+        self.send(f"gui move {x} {y}")
+        if settle:
+            self.settle()
+        return []
 
     def click(self, x, y, settle=True):
         """Click, wait for it to drain, and return the log lines it

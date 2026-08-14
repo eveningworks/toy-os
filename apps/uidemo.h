@@ -1,6 +1,8 @@
 #ifndef UIDEMO_H
 #define UIDEMO_H
 
+#include <stdint.h>
+
 struct window;
 
 // UI Demo -- a reference app whose entire purpose is to be TESTED
@@ -15,7 +17,7 @@ int  uidemo_press(struct window *win, int cx, int cy);
 void uidemo_release(struct window *win);
 int  uidemo_hover(struct window *win, int cx, int cy);
 void uidemo_click(struct window *win, int cx, int cy);
-void uidemo_key(struct window *win, int key);
+void uidemo_key(struct window *win, int key, uint8_t mods);
 
 // Scrolling: the wheel, plus thumb dragging via on_drag_start/on_drag.
 // Track clicks page from uidemo_click(), the same split notepad.c uses.

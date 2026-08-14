@@ -10,7 +10,7 @@ struct window;
 void notepad_default_size(int *w, int *h);
 void notepad_open(struct window *win);
 void notepad_draw(struct window *win);
-void notepad_key(struct window *win, int key);
+void notepad_key(struct window *win, int key, uint8_t mods);
 
 // Toolbar (Save/Load) clicks, and scrollbar track clicks (page up/down)
 // that aren't on the thumb -- see terminal.h's terminal_click for the

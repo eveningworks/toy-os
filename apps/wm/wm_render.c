@@ -659,7 +659,7 @@ static void render_scene(int mx, int my, int has_damage) {
 
     draw_taskbar();
     if (start_menu_open) start_menu_draw(mx, my);
-    context_menu_draw(); // independent of start_menu_open -- the two are mutually exclusive (see wm_input.c)
+    context_menu_draw(mx, my); // independent of start_menu_open -- the two are mutually exclusive (see wm_input.c)
     file_picker_draw(); // an app-opened modal (e.g. Notepad's Save As...) -- drawn above ordinary chrome/menus
     confirm_dialog_draw(); // drawn last (topmost, short of the cursor) -- the most modal overlay in the WM
 

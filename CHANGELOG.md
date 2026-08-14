@@ -30,125 +30,63 @@ using `## [x.y.z] - date` headings is here.
 
 ## [Unreleased]
 
-### Fixed
-- **`gui key 0x1b` was rejected, despite being the documented way to
-  send an unprintable key.** `wm_debug.c`'s `cmd_key()` has always said
-  `"0x1b"-style for anything unprintable` and every `KEY_*` code in
-  `api/keyboard.h` is written in hex -- but its `parse_int()` used
-  `k_parse_u32()`, which takes plain decimal only ("no prefix", per its
-  own contract). So every hex key command answered "bad or dropped key"
-  while the help text advertised it, and any keyboard test had to
-  convert codes to decimal by hand without knowing why. `parse_int()`
-  accepts an explicit `0x`/`0X` prefix now. Found by a test that typed
-  the arrow-key codes exactly as the file's own comment said to.
-- **Five damage-invariant bugs, and the harness that was hiding them.**
-  The compositor repaints only the region declared as damage, so it is
-  correct only if everything that changes on screen is inside that
-  region (`docs/gui-guidelines.md`). `gui damage verify on` turns a
-  violation into a report; the four below are what a systematic sweep
-  found once the sweep itself was trustworthy.
-
-  **The harness came first, because it was lying.** The one damage bug
-  left open from the previous session (`docs/roadmap.md` recorded it as
-  "559 px ... first at (497,67)") would not reproduce. Two reasons, both
-  in the tooling rather than the kernel:
-
-  1. `DebugConsole.click()`/`drag()` return `events()`, which filters
-     the wire to the `uidemo:` prefix. A `wm: DAMAGE BUG` line does not
-     match that prefix and was silently dropped, so the first repro
-     script reported a clean run against a kernel that was actively
-     failing. `send()` now accumulates every line into `log_lines`, and
-     `logs()`/`damage_bugs()` read them back -- a question asked on this
-     wire can no longer destroy the answer to a different one.
-  2. `settle()` slept a fixed 250ms, reasoning that injected events
-     drain one per WM frame at 100Hz. Measured: a drag takes ~800ms with
-     verification on (which renders every frame twice and diffs the full
-     screen). Every test was racing that sleep -- windows moved between
-     a `gui windows` read and the command using those coordinates, so
-     drags grabbed the wrong thing and the sweep reported a *different*
-     bug on each run of the same script. `gui state` now reports
-     `pending` (`wm_debug_input_pending()`) and `settle()` polls it to
-     zero. See `docs/decisions.md`.
-
-  Both were confirmed by a **positive control** -- deliberately deleting
-  `bring_to_front()`'s taskbar `wm_damage_rect()` and checking the sweep
-  reports it -- so "0 violations" is distinguishable from "the harness
-  isn't checking anything". That control is now a flag on the tool
-  (`--positive-control`) rather than a thing to redo by hand.
-
-  The bugs themselves, each found by `tools/damage_sweep.py` and each
-  fixed and re-verified. Three of the five were only reachable through
-  the random walk, and two of those needed one specific window
-  arrangement -- worth noting before trusting any fixed test sequence
-  on this invariant:
-
-  - **`close_window()` didn't damage the window inheriting focus**
-    (`apps/wm/wm.c`). Closing the frontmost window promotes the one
-    below it, whose title bar changes from unfocused gray to focused
-    blue without its geometry changing -- so `compute_window_damage()`
-    can't see it, and the closing window's rect only covers it where the
-    two overlapped. This is `bring_to_front()`'s `prev_front` gap seen
-    from the other end, with the same consequence now that Phase 3 skips
-    an undamaged window's chrome entirely. Reported as "11038 px changed
-    outside the damage rect, first at (109,89)".
-  - **Overlays were clipped away when another source declared damage**
-    (`apps/wm/wm_render.c`). The Start menu, context menu, file picker
-    and confirm dialog draw outside any window's rect and declare no
-    damage; the design note called that a full-screen-repaint fallback,
-    but it held only by coincidence. A click that both raised a window
-    and opened Notepad's file picker made the frame damage-limited and
-    left the picker unpainted: "114932 px changed outside the damage
-    rect, first at (590,173)". The frame now discards its damage box
-    while any overlay is open. See `docs/decisions.md`.
-  - **...and for one frame after an overlay closes**, because the frame
-    that dismisses one has already cleared its `_open` flag by the time
-    the renderer runs, so nothing damages the region it just vacated.
-    Hidden behind a second coincidence: the damage box on such a frame
-    is usually the full-width taskbar strip unioned with the cursor,
-    which covers most of a Start menu sitting just above the taskbar.
-    Dismissing it with a click low on the screen left the rows above
-    that union stale -- "300 px changed outside the damage rect, first
-    at (4,448)", (4,448) being the menu's own top-left corner and 300
-    being exactly its top two rows.
-  - **The cursor's drawn position was recorded only on damaged frames.**
-    `prev_cursor_*` was updated inside `damage_cursor()`, which runs
-    only when the frame is damage-limited, so a full-repaint frame moved
-    the sprite without recording where it went and the next damaged
-    frame erased a position the cursor had already left. Latent while
-    full-repaint frames were rare; the overlay fix above made them
-    common and it surfaced immediately ("139 px ... first at (928,336)",
-    a cursor sprite exactly where the previous click had left it).
-    Recorded on every frame now.
-  - **`damage_cursor()` and `save_cursor_under()` disagreed on the box
-    anchor.** The sprite box is anchored at `(x - CURSOR_BOX_MARGIN,
-    y - CURSOR_BOX_MARGIN)`; damage was declared from `(x-1, y-1)`, so
-    the box's top row and left column sat outside the damage rect and
-    every cursor move left a two-sided sliver behind ("247 px ... first
-    at (251,166)" -- 247 being one 13x19 sprite). Damage is derived from
-    `CURSOR_BOX_MARGIN` now rather than from a separately-chosen
-    constant, so the two can't drift apart again.
-
-  Verified: `tools/damage_sweep.py` clean on the fixed sequence three
-  runs running, and on random walks at seeds 1-12 and 21 (each 50-60
-  interactions) apart from the one issue below. The `close_window()`
-  fix is also confirmed by pixel value rather than by eye: the
-  inheriting window's title bar goes (120,120,130) -> (50,90,160),
-  exactly `draw_window_chrome()`'s unfocused/focused constants, while
-  the window behind it and the desktop stay put (`screenshots/
-  2026-08-14/damage-close-focus-{before,after}.png`).
-
-  **Not verified, and left recorded rather than rushed** (see
-  `docs/roadmap.md`'s known-issues list): a 20px violation inside the
-  Terminal's content on clock-tick frames survives, reproducible at
-  `--random 50 --seed 1` step 0. It is characterised but not
-  root-caused, and the two candidate causes -- a caret moved without
-  damage on some earlier frame, versus a non-idempotent `on_draw()`
-  making it a verifier artifact -- need opposite fixes, so guessing
-  would be worse than recording it. More broadly: a sweep can only
-  report what its interactions reach, and injected input enters below
-  the PS/2 driver, so none of this exercises the real mouse path.
-
 ### Added
+- **Keyboard focus (`apps/ui/ui_focus.h`)** -- one ring per window, Tab
+  and Shift-Tab to cycle it, a focus ring to show it, and keys routed to
+  the focused widget. A widget joins by exporting a single
+  `const struct ui_focus_ops`; `ui_textbox`, `ui_dropdown`, `ui_listbox`
+  and `ui_button_group` all do. Nothing central lists them, so adding a
+  widget doesn't mean editing the focus manager -- the same "adding one
+  is adding a row" property `gui_app_registry[]` has. See
+  `docs/decisions.md` for why that beat a switch over a widget-kind enum,
+  and why focus is app-level rather than a WM concept.
+
+  It exists because routing keys by trying each widget in turn breaks the
+  moment two of them take the keyboard: the first one tried swallows
+  everything it recognises. UI Demo hit this the day `ui_dropdown`
+  landed -- a dropdown handles arrows even while CLOSED, so the listbox
+  below it could never be arrowed at all.
+
+  A `ui_button_group` is ONE focus stop with arrows moving between its
+  buttons, and Space/Enter activate the focused one -- reported through
+  `ui_button_group_take_activated()`, so a keyboard activation reaches the
+  app on the same path a mouse release already does rather than through a
+  parallel callback.
+- **Modifier bits on every key** (`KEY_MOD_SHIFT`/`_CTRL`/`_ALT`/`_ALTGR`,
+  `keyboard_getchar_mods()`, `keyboard_try_getchar_mods()`). The input
+  ring is now `(mods << 16) | key`; the KEY half is unchanged and still
+  terminal-encoded, so `keyboard_getchar()` returns exactly what it
+  always did and **every CLI consumer is untouched**.
+
+  The motivating case is Shift-Tab: Shift only swaps the layout's
+  character table and Tab has no shifted variant, so both arrive as 0x09
+  and a focus ring cannot cycle backwards. Another discrete `KEY_*` code
+  (as `KEY_SHIFT_ARROW_*` got) was the alternative and doesn't scale --
+  ~32 free codes remain before the Nordic block. Sampled at
+  scancode-processing time, not queryable as live state afterwards, which
+  is the same timing rule those families already follow. `gui_apps.h`'s
+  `on_key` grew a `mods` parameter (four apps implement it);
+  `gui key <c> [shift|ctrl|alt|altgr]` sends them. See
+  `docs/decisions.md`.
+- **`gui move X Y`** -- move the cursor with nothing held. Hover was
+  otherwise untestable through the debug console: `gui click` moves the
+  cursor but also presses and releases, so the hover state is gone before
+  anything can look at it.
+- **`DebugConsole.cursor()` / `.warp_cursor()`** (`tools/gui_debug.py`) --
+  where the kernel thinks the real cursor is, and a move that CONFIRMS it
+  got there. `QMPSession.goto()` is open-loop: it sends chunked relative
+  deltas and assumes it arrived. Measured, a large jump lands about a
+  third of the way -- asking for (611,378) from (640,150) ended at
+  (630,226) -- and since the client-side estimate updates anyway, a second
+  `goto()` sends a zero delta and never corrects. The symptom is a hover
+  test reporting no hover on a control the cursor never reached, which is
+  exactly how it was found.
+- **`tools/dialog_test.py`** -- verifies the confirm dialog's Yes/No by
+  pixel value: hover moves the hovered button, leaves its neighbour
+  alone, press-dragged-off does not commit, and No closes it. Uses "Exit
+  to shell" rather than "Shutdown" on purpose, since both open the
+  identical dialog and committing Yes on the latter powers the machine
+  off mid-test.
 - **`ui_listbox` and `ui_dropdown`** (`apps/ui/`) -- a scrollable
   single-select list, and a combo box built on it. Behaviour modelled on
   Windows', by request, but following this project's own interaction
@@ -717,226 +655,6 @@ using `## [x.y.z] - date` headings is here.
     restored, both report intact. A single-process float test can't
     prove any of this, which is why there are two.
   - `fputest` from the shell runs both halves.
-
-### Fixed
-- **Cursor trail when shrinking a window.** Resizing a window smaller
-  left a line of stale cursor sprites behind; growing one didn't.
-  Confirmed fixed on real hardware by the reporter.
-  - Mechanism: `wm_render_frame()` never undrew the cursor before
-    repainting -- it only re-saved the pixels underneath at the end, via
-    `draw_cursor_at()`. So the old sprite was erased only where the
-    scene happened to repaint over it. A resize damages `union(old,
-    new)`, whose bottom-right edge is exactly the old corner -- which is
-    where the grip, and therefore the cursor, is -- and the sprite
-    extends down-right PAST that edge. Growing hides the same bug
-    because the window expands over the old position. A resize also
-    keeps `redraw_pending` set every frame, so the cheap
-    `wm_render_cursor_move()` path (which *does* restore first) is never
-    taken for the duration of the drag.
-  - Fix: `restore_cursor_under()` at the top of `wm_render_frame()`,
-    before the scene clip is applied, so the write isn't confined to the
-    damage rect -- the whole point being that the stale pixels are
-    outside it. This also makes the two render paths symmetric; the
-    cheap one has always restored first.
-  - **The symptom was not reproducible under QMP, and that's worth
-    recording.** Both a stepped drag and a fast continuous one (30
-    back-to-back `move_rel` calls with no settle) left no trail even on
-    a deliberately-rebuilt buggy binary: QEMU's PS/2 emulation coalesces
-    the motion into far fewer frames than a real mouse generates, so the
-    resize simply never produced enough repaints to strand a sprite.
-    What automation could establish was that the fix changed nothing
-    else (a pixel diff against the unfixed build differs only in the
-    taskbar clock); the fix itself was shipped on the strength of the
-    mechanism above, and the reporter then confirmed the trail is gone
-    with a real mouse. A reminder that the harness's fidelity is itself
-    a variable -- "I couldn't reproduce it" was a fact about QEMU here,
-    not about the bug.
-
-- **An app could draw outside its own window, straight onto the desktop.**
-  Reported from a screenshot: shrinking the Control Panel left System
-  Info's lower rows marching down the desktop, fully legible, well
-  outside the frame.
-  - Two gaps, one visible. **`gfx_draw_string_clipped()` bounds width
-    only** -- it takes a `max_w` and has no row budget at all -- so the
-    right-hand edge clipped correctly while the bottom had nothing
-    stopping it. And **the WM never clipped `on_draw()` to a window's
-    content rect**: the only clip active during a frame is the damage
-    region, which covers the desktop below a window too.
-  - So this was never really a System Info bug. Any app drawing more
-    than fits would paint over the desktop and over other windows;
-    System Info was just the first page with enough rows to show it.
-  - `wm_render_frame()` now narrows the clip to each window's content
-    rect around its `on_draw()`, and restores the scene clip after.
-    Intersected by hand, because `gfx_set_clip_rect()` REPLACES the
-    active rect rather than intersecting -- setting the content rect
-    naively would have widened the damage clip back out and undone the
-    compositor's whole point.
-  - The System Info page also stops at the last row that fully fits, so
-    it ends on a whole line instead of one sliced through its glyphs.
-  - **Verified both halves independently**: with the applet's row budget
-    temporarily removed, the WM clip alone still contained everything
-    (zero non-desktop pixels below a window shrunk to 163px tall), and
-    with it restored the page ends cleanly. Also re-checked Notepad,
-    Calculator, Terminal and Task Manager still render.
-  - Worth noting the near-miss in testing: the first repro dragged from
-    one pixel above the resize grip's hotspot (`RESIZE_MARGIN` is 6), so
-    only the width changed, the content still fit, and the "negative
-    control" proved nothing. A test that can't fail isn't evidence.
-
-- **Ring-3 stack alignment was wrong for SSE, in two different ways.**
-  `elf_run.c` aligned the initial user RSP to 8 bytes, which was
-  invisible while userland was built `-mno-sse` and nothing could emit
-  an alignment-sensitive instruction at all.
-  - First fix was to 16, reasoning from the SysV process-entry
-    convention. That crashed: `movapd %xmm0,(%rsp)` took a `#GP` at ring
-    3. The convention describes what a real crt0 `_start` sees, and a
-    real crt0 realigns before calling main -- but every `_start` here is
-    a plain C function, which GCC compiles assuming a pushed return
-    address (`RSP % 16 == 8`) and sizes its prologue from there. Hand it
-    a 16-aligned RSP and every aligned local is off by exactly 8.
-  - Correct answer is `RSP % 16 == 8` at entry, and it was established
-    by running the thing, not by reading the ABI.
-  - `userland/fpu_test.c` now forces an aligned SSE store to a stack
-    local specifically so this stays covered -- no other userland
-    program currently emits one, so the fix would otherwise have sat
-    untested until something tripped over it.
-
-- **Calculator's keys and Notepad's toolbar committed on button-DOWN,
-  so neither could be cancelled.** Found by running the cancel test on
-  the hover work above rather than only the happy path: pressing
-  Notepad's `Open...`, dragging into the text body and releasing opened
-  the file picker anyway, and pressing a Calculator key and dragging
-  away still entered the digit.
-  - Cause is the trap `docs/gui-guidelines.md` already documents by
-    name -- both apps acted in `on_click`, which `wm_input.c` fires on
-    button-down. The Control Panel was fixed for this when the rule was
-    written; these two, the only other content-area controls, were not.
-  - **`ui_button_group_release()` returns the released button's `code`
-    now** (-1 if none was armed). Because `ui_button_group_press()`
-    re-hit-tests every tick, a button that's been dragged off is
-    already unpressed, so releasing there returns -1 and the action is
-    cancelled with no extra bookkeeping in either app.
-    `calculator_release()` and `notepad_release()` commit from that;
-    `calculator_click()` is gone entirely and `notepad_click()` keeps
-    only its scrollbar paging, which genuinely does act on contact.
-  - **`ui_button_group_click()` is gone**, having lost both callers --
-    it had no way to know about a press to cancel, so any `on_click`
-    caller of it commits on button-down by construction. The header
-    says what to bring it back for if a real act-on-contact control
-    ever wants one.
-  - **`notepad_press()`'s `cy >= TOOLBAR_H` early return also went.**
-    It meant a toolbar button dragged off into the text body stayed
-    drawn pressed until release -- something about to be cancelled
-    looking live, the exact thing the guidelines call out. A point
-    below the toolbar hits no button, which is already the right
-    answer. Measured: 163 (pressed) before, 200 (rest) after.
-  - Verified by behaviour, not just by pixels: the Calculator display
-    stays `0` through press-drag-off-release and changes on a real
-    press-release; Notepad's picker stays shut on the first and opens
-    on the second. Screenshots in `screenshots/2026-08-13/`.
-
-- **CI had been red for three commits, and the reason was a real bug it
-  found rather than a bad check.** `tools/check_layout.py` (added in the
-  filesystem-layout commit) failed on `/etc` and `/etc/kbs` missing from
-  CI-built images.
-  - Root cause: `tools/gen_kbs.py` needs `xkbcli`
-    (`libxkbcommon-tools`), the `seed` target **skips it with a message**
-    when that's absent, and CI never installed it. So **CI had been
-    building images with no keyboard layouts at all**, silently, for as
-    long as that step has existed -- nothing noticed until a check
-    compared an image against a written description of what should be on
-    it. That is the check earning its keep on its first run.
-  - CI installs `libxkbcommon-tools` now, so the layouts are actually
-    generated and `gen_kbs.py` gets exercised there.
-  - The doc was also wrong in a smaller way: `/etc` was listed as
-    build-created, when the thing that reliably creates it is
-    `kernel_main()` at boot -- the build only made it incidentally, as a
-    side effect of seeding `/etc/kbs`. It's `boot` now.
-  - `check_layout.py` gained a third status, **`optional`**, for
-    `/etc/kbs`: documented so an undocumented directory can't hide
-    behind the name, but never required, since a machine without
-    `xkbcli` legitimately won't have it. Verified by building an image
-    with no `/etc` at all and confirming the check passes -- i.e. the
-    CI case reproduced locally rather than fixed by pushing and hoping.
-
-- **`gfx_draw_string()`'s missing clipping is now a function instead of
-  a rule.** It draws every character it's handed, past any boundary the
-  caller had in mind. `docs/decisions.md` recorded that after a long
-  filename drew through a text field's border, and told callers to
-  budget the width themselves -- and then the very next fixed-box
-  caller, the Control Panel's applet labels, hit the identical bug
-  (`Date & TSystem Info`) in a file written days later. A rule that must
-  be remembered at every call site will be forgotten at some call site.
-  - **`gfx_draw_string_clipped(x, y, max_w, ...)`** draws bounded and
-    returns whether the whole string fitted, so a caller can add an
-    ellipsis or widen itself without measuring twice.
-  - **`gfx_text_width()`** and **`gfx_text_fit_chars()`** are the
-    measurement half, for callers doing their own windowing.
-    `gfx_text_width()` also pays a debt forward: Milestone 21 lists
-    exactly that function as something proportional font metrics need,
-    and every open-coded `k_strlen(s) * gfx_char_w()` is a site that
-    silently breaks when a glyph stops being one cell wide.
-  - `gfx_draw_string()` itself is deliberately unchanged -- clipping it
-    would alter every existing caller.
-  - Converted: the Control Panel's labels (replacing the hand-rolled
-    truncation) and `ui_textbox`'s field text, the latter as a safety
-    net rather than a rewrite -- its windowing logic is correct, but if
-    it ever miscomputes, the text now stops at the field's edge instead
-    of drawing through the border, which is the exact bug that widget
-    already had once.
-  - Two KTESTs (suite: 61 -> 63) assert the measurement directly:
-    widths stop at a newline, and `fit_chars` never returns a partial
-    glyph (one pixel short of the fourth character is three, not "three
-    and a bit") including the degenerate zero/negative widths. The
-    measurement is pure arithmetic over font metrics, so unlike the
-    drawing it can be asserted rather than eyeballed in a screenshot.
-
-- **The two ATA loose ends this session had been carrying: the PIO
-  path's failure reporting, and the fact that it never ran at all.**
-  - **`wait_drq()` conflated "the drive reported ERR" with "I gave up
-    waiting"** -- both returned 0, so a PIO failure said nothing about
-    which. Now recorded in a `g_pio_fail_reason` string and logged,
-    exactly mirroring `g_dma_fail_reason` on the DMA side, whose own
-    comment notes that collapsing these cost real detective work once.
-    `pio_read_sectors()`/`pio_write_sectors()` log it unconditionally on
-    failure, same as `dma_transfer_with_retry()` does -- they previously
-    returned 0 silently. The return stays pass/fail (nothing needs to
-    branch on the difference); it's the human reading `dmesg` who does.
-  - **`ata nodma on|off` forces the PIO fallback**, because it was
-    otherwise *unreachable*: `ata_init_dma()` succeeds on every machine
-    this OS boots, so ~100 lines of fallback driver had never executed
-    and could not be tested. Fallback code that only runs in an
-    emergency and has never been seen running isn't a fallback, it's a
-    guess. The switch is also the PIO-vs-DMA comparison that root-caused
-    a DMA failure to a host stall in an earlier session -- which at the
-    time meant hand-editing the driver.
-  - **Every DMA gate now routes through one `dma_in_use()` helper.**
-    That's the part worth getting right: `ata_max_sectors_per_xfer()`
-    reports a *smaller* cap for PIO, so a dispatch site checking the
-    flags differently from the site setting the cap would let a caller
-    batch 128 sectors into a path that tops out at 8. Confirmed live --
-    the reported cap goes 128 -> 8 with the toggle and back.
-  - `ata_set_dma_forced_off()` **refuses** while a non-blocking transfer
-    is in flight (a stepped Notepad save) rather than stranding its
-    poller, and returns 0 so the caller reports the refusal instead of
-    assuming the switch happened.
-  - **Three KTESTs in the new `kernel/drivers/ata_test.c`** (suite: 58
-    -> 61), driving the same switch: a file written and read back
-    through the PIO path and compared byte-for-byte, the sector cap
-    following the active path, and the restore-to-DMA case. They restore
-    the previous mode *before* asserting, so a failing assertion can't
-    leak forced-PIO into every test after it -- the same cascade the
-    runner's `fault_any_armed()` check exists to prevent.
-  - Verified beyond the suite: a `stress 3` write/read/verify round trip
-    run **entirely through PIO**, byte-for-byte clean with `fsck` clean
-    after, at 5.0 MB/s write / 7.5 MB/s read against DMA's 24/29 -- the
-    first time that code has demonstrably moved real data under load.
-    **Not covered:** the failure-reason strings themselves, which need
-    an actual drive error to surface; and the mid-transfer refusal
-    branch, which needs a stepped write held open across a test body.
-    Both are noted in the test file rather than left looking covered.
-
-### Added
 - **A Control Panel GUI app with pluggable applets, and two applets to
   start.** Asked for a Windows-style applet chooser plus one easy but
   still useful first applet. Completes `docs/roadmap.md`'s Milestone 22
@@ -989,65 +707,6 @@ using `## [x.y.z] - date` headings is here.
     18:18 (+3, correct for EU DST) **and the taskbar clock with it**,
     then `timezone=helsinki` was confirmed in `/etc/toyos.conf` on the
     image afterwards. Screenshots in `screenshots/2026-08-13/`.
-
-### Changed
-- **A documented, checked on-disk filesystem layout -- and the test
-  binaries moved out of `/bin`.** Asked for a future-proof directory
-  structure now that there are binaries, config files and data files,
-  with a doc to follow, and whether it should be "something POSIX
-  likes".
-  - **The premise needed correcting first: POSIX barely specifies
-    layout.** POSIX.1 mandates `/`, `/tmp` and a few device paths, and
-    says nothing about `/bin`, `/usr`, `/etc` or `/var`. The document
-    defining those is the FHS, which is a Linux Foundation spec with no
-    POSIX standing. So this was almost entirely a free choice.
-  - **`docs/filesystem-layout.md`** is the new source of truth: a table
-    of every directory, what it holds, whether the build or the boot
-    creates it, and whether it exists yet or is reserved for a named
-    milestone. Plus the rules for adding one, and the divergences.
-  - **`/tests`, holding the 14 test binaries that used to live in
-    `/bin`.** `/bin` had three real programs (`ls`, `lspci`, `hello`)
-    against fourteen mechanism exercises, so every `ls /bin` and every
-    tab completion led with noise. `/tests` is deliberately not an FHS
-    directory -- `/usr/libexec` was the alternative and lost on being
-    less obvious, longer (paths are capped at 64 bytes), and implying
-    "internal helper" when these are things a person runs on purpose.
-    `PATH` gains `/tests` **last**, so `run nx_test` and `strace
-    file_test` keep working -- rewriting every reference across the
-    changelog and `docs/decisions.md` would invalidate accurate history
-    for no functional gain.
-  - **`/tmp` now exists**, created at boot, and `stress` writes its
-    multi-gigabyte scratch file there instead of to `/.stress_test_tmp`
-    in the root. It is deliberately *not* emptied at boot: `fs_delete()`
-    refuses non-empty directories and there's no recursive delete, so
-    clearing it needs a directory walk nothing has needed yet.
-  - **`tools/check_layout.py` enforces the doc** against the built
-    image, in `preflight.sh` and CI. It fails in both directions -- an
-    undocumented directory on the image, or a documented-as-present one
-    missing -- and it caught three real discrepancies the moment it
-    first ran. It understands the table's "Created by" column, so a
-    boot-created directory isn't demanded of a never-booted image; that
-    distinction is the difference between a check people trust and one
-    they learn to ignore.
-  - **The trap this move hit, now documented:** `tfs2_writer.py sync` is
-    *additive*, so moving the binaries left a full set of stale copies
-    in `/bin` on every existing image -- which `PATH` would have
-    preferred over `/tests`, forever, with no future build updating
-    them. Pruning isn't the fix (a `sync` that deleted anything absent
-    from the seed tree would delete `/etc/toyos.conf` and
-    `/etc/history`), so a move needs a deliberate `tfs2_writer.py
-    delete` or `make clean-disk`. Both are written down now.
-  - The doc also records the constraint that actually drives layout
-    here, which is not any standard: `FS_MAX_FILES` is 256 records with
-    directories counting against it, and a full path is 64 bytes. That
-    makes "flatter, and fewer files with more structure inside" the
-    operative rule until Milestone 15 raises both -- worth knowing
-    before Milestone 14 designs one man page per command.
-  - Verified: `check_layout` passes, `ls /bin` shows exactly the three
-    real programs, `run nx_test` still resolves and still demonstrates
-    NX enforcement, `lspci` unaffected.
-
-### Added
 - **`lspci` shows real vendor and device names, from the PCI ID
   Database.** `8086:7010` now also reads "Intel Corporation 82371SB
   PIIX3 IDE [Natoma/Triton II]". Asked for directly, with the choice of
@@ -1099,71 +758,6 @@ using `## [x.y.z] - date` headings is here.
   - `1234:1111` (QEMU's emulated VGA) correctly shows no name: `1234`
     isn't a vendor id upstream lists. That's the database being right,
     not the lookup failing.
-
-### Fixed
-- **`SYS_READ` read the entire file on every call, making any real
-  streaming read quadratic.** Found immediately by the feature above:
-  `/bin/lspci` reading 1.6MB in 1KB chunks did ~1,615 calls x 1.6MB =
-  **~2.6GB of disk reads and took 35 seconds**.
-  - The handler called `fs_read()` (whole file into a `kmalloc()`'d
-    buffer) and then copied out just the bytes at the fd's offset.
-    Harmless for as long as nothing in ring 3 opened a file bigger than
-    a few hundred bytes -- at that size the whole file *is* one read --
-    which is why it sat unnoticed since `SYS_OPEN`/`SYS_READ` were
-    added.
-  - Fixed by using `fs_read_range()`, which already existed for exactly
-    this and whose doc comment describes streaming a file as its
-    intended use. **35s -> 0.9s**, including boot. Its "0 means EOF or
-    error, indistinguishable" contract happens to be precisely the
-    wanted behaviour for a file deleted mid-read.
-  - Worth recording as a class of bug: a wrong complexity class can sit
-    for a long time when inputs stay small, and it fails by being *slow*
-    rather than wrong, so no test catches it. See `docs/decisions.md`.
-  - Verified: `make verify` clean (58 KTESTs), `lspci` correct at the
-    physical console and in the GUI Terminal.
-
-### Changed
-- **Roadmap: eight new milestones, twelve existing ones deepened, and a
-  third renumbering.** Asked for "more steps and maybe 5 new milestones,
-  add plenty". The list went from 32 milestones and roughly 250 items to
-  **40 and 398**, with no milestone below 7 items.
-  - **New, each placed where its prerequisites put it** rather than
-    appended: **6 Fuzzing & property-based testing** (right after the
-    test harness it builds on), **11 Crash reporting & postmortem
-    debugging** (after signals, since a core dump hangs off SIGSEGV),
-    **13 Init & service supervision** (the milestone that finally *uses*
-    TTY + fork/exec + signals + job control together), **14 In-OS
-    documentation** (`man`), **16 Block integrity: checksums &
-    scrubbing** (while TFS3's format is still open -- a checksum field
-    wants designing in, not bolting on), **18 Encryption at rest**
-    (after multi-user, which brings the same key-derivation machinery),
-    **20 A layout engine for the GUI** (before the apps that would use
-    it), **21 Runtime font loading & text metrics** (immediately after
-    it, since layout is what needs to ask how wide a string really is).
-  - The thin milestones -- 4, 5, 7, 8, 25, 26, 28, 29, 35, 37, 38, 39 --
-    were filled out with real steps rather than padding. A few carry
-    decisions the project would otherwise discover late: UTF-8's real
-    work is auditing every `char`-sized assumption; a benchmark number
-    is meaningless without recording TCG-vs-KVM; NVMe's 4KB sectors have
-    never been tested against TFS2's assumptions.
-  - **Milestones 11-32 became 15-40** (a piecewise shift, since the
-    insertions are scattered). Every cross-reference was re-checked
-    against its target's *title* afterward rather than trusted to the
-    shift -- which is how the first attempt at the previous renumbering
-    was caught double-shifting headings and colliding two milestones.
-  - **This is the pass that ends the convention.** The roadmap now says
-    so explicitly: insertion-with-renumbering is worth it for one or two
-    milestones with a real prerequisite argument, and beyond that,
-    append. Eight at once meant rewriting cross-references across four
-    files and a third translation table.
-  - Fixed three references in `docs/decisions.md` that went stale in
-    *this morning's* renumbering and weren't caught then -- the
-    compositor entries pointing at "Milestone 12". They were missed
-    because that check's output was truncated at 20 lines, which is a
-    good argument for verifying by resolving every reference to its
-    target's title (as done here) rather than by reading a list.
-
-### Added
 - **`make run-kvm`, and `tools/vm.py --kvm` to go with it.** Same flags
   as `make run` plus `-enable-kvm -cpu host`, so guest code runs
   natively on the host CPU instead of through QEMU's TCG translator.
@@ -1189,129 +783,6 @@ using `## [x.y.z] - date` headings is here.
   - `vm.py --kvm` exists so the new target can actually be tested
     headlessly -- without it, `make run-kvm` needs a display and can
     only be exercised by hand.
-
-### Fixed
-- **The ATA driver gave a busy drive ~37ms to become ready, while
-  giving the same transfer 5 seconds once its command was in flight.**
-  Reported from a live `stress 4200` run that died at 11% with `ata: dma
-  write failed after 3 attempts (lba 2, last reason: drive stayed busy,
-  command never issued)` and `fs: WARNING -- record slot 26 (lba 29)
-  failed to persist`.
-  - Read the LBA, not the progress bar: `lba 2` is the journal header
-    `persist_record()` writes *first*, so this was a metadata write
-    failing, not the 473MB of file data the message sits next to. The
-    473MB is where `stress` happened to be, not where anything went
-    wrong -- a later `stress 600` wrote straight past that offset.
-  - The driver bounds its two waits differently. `wait_dma_irq()`
-    (command already in flight) uses a wall-clock budget --
-    `DMA_WAIT_TICKS`, 500 ticks at 100Hz, 5 seconds.
-    `wait_not_busy()` (the pre-issue wait, the one that failed) used
-    `ATA_POLL_LIMIT` alone: a fixed 100000-iteration spin. **A spin
-    count is not a duration.** Measured in the guest, those 100000
-    iterations take ~12ms, and `dma_transfer_with_retry()` ran its three
-    attempts back-to-back with no delay -- so the driver's total
-    patience was ~37ms against the completion path's 5000ms, a ~135x
-    asymmetry in the wrong direction. Any host-side I/O stall longer
-    than 37ms takes out all three attempts at once, and the failing run
-    started seconds after `grub-mkrescue` wrote a 746MB ISO to the same
-    Btrfs disk.
-  - `DMA_WAIT_TICKS`'s own comment records it being *widened* against
-    this exact class of host stall. That widening only fixed the
-    completion half; nothing revisited the pre-issue half, which is how
-    a bound the project had already reasoned about carefully stayed
-    135x too small next to it.
-  - **Fixed** by giving `wait_not_busy()` the same context split
-    `wait_dma_irq()` already had: a wall-clock budget
-    (`BUSY_WAIT_TICKS`, ~1s) when it's safe, and the original fixed spin
-    (`spin_not_busy()`) when inside a syscall -- where `int 0x80`'s
-    interrupt gate leaves IF clear, so `pit_ticks()` never advances and
-    a wall-clock loop would hang instead of time out. The wall-clock
-    path also carries a very generous iteration cap as belt-and-braces,
-    since being wrong about that assumption should fail a write, not
-    the machine. Plus `retry_backoff()` between attempts (~250ms x the
-    attempt number, `hlt` when safe and a spin inside a syscall, per
-    `docs/decisions.md`'s standing rule for blocking waits), because
-    retrying instantly is the one thing guaranteed not to help when the
-    cause is a stall.
-  - **`wait_drq()` got the same treatment in a follow-up** (it was left
-    alone in the first pass as a path this failure didn't involve).
-    It's the PIO fallback's "is a sector's data ready?" wait, and it had
-    the identical fixed-spin bound. Two differences shaped the fix:
-    it runs once per SECTOR rather than once per transfer, so the status
-    read and both of its exits now happen BEFORE the clock is consulted
-    -- the common case (DRQ already set on the first look) costs one
-    extra `pit_ticks()` per sector, a volatile counter read next to the
-    port I/O that dominates it. And it has a real error exit (the drive
-    setting ERR) as well as a timeout, which it still collapses into the
-    same `0` return; that conflation is left as-is and noted in the
-    source, since no caller distinguishes them today.
-  - Coverage note for that one: `ata_init()`'s IDENTIFY call exercises
-    `wait_drq()` on every boot, so the change is covered there, but the
-    per-sector PIO transfer loop is **not reachable while DMA is
-    available** -- which it is on every machine this runs on today
-    (`ata: Bus-Master DMA available` at boot). There is no switch to
-    force the PIO path, so that half is unexercised by construction
-    rather than untested by omission.
-  - Verified: `make verify` clean (58 KTESTs, boot smoke). `stress 150`
-    PASSED byte-for-byte at 24.0 MB/s and `fsck` reported clean;
-    `stress 400` wrote at 23.1 MB/s, both unchanged from before the
-    change, confirming the new bounds cost nothing on the success path
-    (they only ever elapse when the drive is actually busy).
-  - **Then the real check, from the user's own machine: `stress 4200` --
-    the exact command that failed -- PASSED, and so did `stress 8192`.**
-    4200 MB in 326 s and 8192 MB in 692 s, each written, read back and
-    verified byte-for-byte, with no `ata:` or `fs:` warnings. This
-    entry originally recorded that surviving a genuine stall was NOT
-    verified, since the failure is host-timing-dependent and hadn't
-    reproduced in-session; that caveat is now much weaker. It isn't
-    gone, and the distinction is worth keeping straight: what's shown
-    is that the failing case now succeeds at nearly 20x the data
-    volume, not a controlled stall reproduced and observed to be
-    absorbed. Nothing here forced a stall to occur on demand.
-  - Also settled `docs/roadmap.md`'s long-standing "full multi-GB stress
-    run" item (Milestone 3) as a side effect -- see that entry for why
-    its own time estimate had been putting sessions off attempting it.
-
-### Changed
-- **Roadmap: two new milestones, and a second renumbering to make room
-  for one of them.** Asked what it would take to make toy-os POSIX
-  compatible, and whether that's feasible. The short answer is yes, as
-  "enough POSIX to build and run real ported C programs" -- and that
-  most of it is already scheduled under other names. Written up rather
-  than left in a session.
-  - **New "TFS3: an inode layer" milestone** (numbered 11 when added,
-    15 today). The survey turned up
-    one structural gap nothing on the roadmap owned: TFS2 stores a flat
-    table of records keyed by a full path string, with no object
-    representing a file separately from the name pointing at it. Hard
-    links, atomic `rename()`, unlink-while-open and `st_ino`/`st_nlink`
-    can't be expressed against that, and it's independently worth
-    fixing regardless of POSIX.
-  - **New "POSIX compatibility" milestone** (32 when added, 40 today).
-    Deliberately a
-    capstone: it names the target (our own libc vs Linux syscall-ABI
-    emulation -- a real fork, to decide before writing code), owns the
-    handful of items nothing else covers, and records what is *not*
-    being pursued (conformance, locales, pthreads, `select`/`poll`).
-    The one easy-to-miss blocker it surfaces: SSE is never enabled
-    (`boot.asm` sets PAE/LME/NXE but not CR4.OSFXSR), userland builds
-    `-mno-sse -mno-sse2`, and nothing saves FPU state across a context
-    switch -- so the first stock-compiled binary would fault, since
-    every real libc's `memcpy` uses SSE2 unconditionally on x86-64.
-  - **Milestones 11-30 became 12-31**, since the inode layer belongs
-    before permissions -- mode bits want to live on an
-    inode, and the other order means building them twice. The roadmap's
-    own rule is that reading order is build order, so the alternative
-    was a milestone that documents a prerequisite while sitting after
-    the thing that needs it. Every cross-reference in the file was
-    checked against its target's title afterward, not just shifted;
-    three references outside it (`apps/README.md` x2,
-    `kernel/README.md`) were updated too, and one backlog line that had
-    been stale since the *first* renumbering got corrected.
-  - The translation table now covers both passes, and the note above it
-    says when appending is the better choice than inserting.
-
-### Added
 - **ASCII case folding in `string.h`, and `timezone Helsinki` now
   works.** The helpers came back with a caller this time: `k_tolower`/
   `k_toupper`/`k_strcasecmp` were written, found to have nobody calling
@@ -1392,8 +863,6 @@ using `## [x.y.z] - date` headings is here.
     guessing), all four styles captured at 5x zoom
     (`screenshots/2026-08-13/cursor_styles_zoom.png`), and the setting
     confirmed surviving a full VM restart.
-
-### Added
 - **Readline-style command-line editing, in both the shell and the GUI
   Terminal.** Asked for as "can you make the current line editable, so
   you can move back and forth ... use arrow keys and bash convention for
@@ -1534,40 +1003,6 @@ using `## [x.y.z] - date` headings is here.
     screenshot of `edit ../docs/note.txt` resolving to `/docs/note.txt`
     and loading the file -- the exact command that used to fail there.
     Screenshots in `screenshots/2026-08-13/kpath_terminal_*.png`.
-
-### Fixed
-- **`run hello` page-faulted -- a deliberate fault that had quietly
-  become an accidental one.** Found while testing `strace` (above);
-  fixed on request afterwards.
-  - `userland/hello.c` predates syscalls. With no way to print, it
-    proved it had run by writing a marker to a fixed address the kernel
-    read back (`USERLAND_MARKER_ADDR`) and then executing `hlt` to fault
-    on purpose. The old `elftest` command mapped a page at that address
-    specially. The ELF64-to-`/bin` migration folded `elftest` into the
-    generic `run hello` path -- which maps no such page -- so the binary
-    faulted on the marker write, one instruction *before* the `hlt` it
-    existed to demonstrate. Confirmed by disassembly: `RIP=0x800000000a`
-    is exactly `movl $0xc0ffee,(%rax)`, `CR2=0x8000100000` is the
-    marker. It looked like a crashing binary; it was a binary whose
-    harness had been removed from under it.
-  - `USERLAND_MARKER_ADDR` was also `ELF_RUN_HEAP_VADDR` -- the same
-    address, picked independently in two files -- so restoring the
-    mapping would have put it straight on top of `sbrk`'s first page.
-  - Fixed by making `hello.c` a real program (greet via `SYS_WRITE`,
-    exit 0) instead of restoring the harness: `ring3test` still covers
-    the raw-`iretq` entry path and `crash_test`/`nx_test` still cover
-    deliberate faults and their recovery, so nothing was lost, and the
-    binary named `hello` now does what its name says. It's also the
-    smallest complete example of what a `/bin` binary is.
-    `USERLAND_MARKER_ADDR` was deleted (no other user);
-    `userland_contract.h` stays, with a comment recording why the
-    constant went and why a future read-back test needs a different
-    address.
-  - Verified: `run hello` prints and exits 0, and `strace hello` shows
-    exactly `write(1, ..., 42) = 42` then `exit(0) = ?` -- two
-    syscalls, which is the whole program.
-
-### Added
 - **`strace <binary>` -- Linux-style syscall tracing.** Asked for as
   "can we implement strace like in linux".
   - Every ring-3 syscall in this kernel already funnelled through one
@@ -2309,6 +1744,137 @@ using `## [x.y.z] - date` headings is here.
     `screenshots/2026-08-12/tray-clock-*.png`.
 
 ### Changed
+- **A documented, checked on-disk filesystem layout -- and the test
+  binaries moved out of `/bin`.** Asked for a future-proof directory
+  structure now that there are binaries, config files and data files,
+  with a doc to follow, and whether it should be "something POSIX
+  likes".
+  - **The premise needed correcting first: POSIX barely specifies
+    layout.** POSIX.1 mandates `/`, `/tmp` and a few device paths, and
+    says nothing about `/bin`, `/usr`, `/etc` or `/var`. The document
+    defining those is the FHS, which is a Linux Foundation spec with no
+    POSIX standing. So this was almost entirely a free choice.
+  - **`docs/filesystem-layout.md`** is the new source of truth: a table
+    of every directory, what it holds, whether the build or the boot
+    creates it, and whether it exists yet or is reserved for a named
+    milestone. Plus the rules for adding one, and the divergences.
+  - **`/tests`, holding the 14 test binaries that used to live in
+    `/bin`.** `/bin` had three real programs (`ls`, `lspci`, `hello`)
+    against fourteen mechanism exercises, so every `ls /bin` and every
+    tab completion led with noise. `/tests` is deliberately not an FHS
+    directory -- `/usr/libexec` was the alternative and lost on being
+    less obvious, longer (paths are capped at 64 bytes), and implying
+    "internal helper" when these are things a person runs on purpose.
+    `PATH` gains `/tests` **last**, so `run nx_test` and `strace
+    file_test` keep working -- rewriting every reference across the
+    changelog and `docs/decisions.md` would invalidate accurate history
+    for no functional gain.
+  - **`/tmp` now exists**, created at boot, and `stress` writes its
+    multi-gigabyte scratch file there instead of to `/.stress_test_tmp`
+    in the root. It is deliberately *not* emptied at boot: `fs_delete()`
+    refuses non-empty directories and there's no recursive delete, so
+    clearing it needs a directory walk nothing has needed yet.
+  - **`tools/check_layout.py` enforces the doc** against the built
+    image, in `preflight.sh` and CI. It fails in both directions -- an
+    undocumented directory on the image, or a documented-as-present one
+    missing -- and it caught three real discrepancies the moment it
+    first ran. It understands the table's "Created by" column, so a
+    boot-created directory isn't demanded of a never-booted image; that
+    distinction is the difference between a check people trust and one
+    they learn to ignore.
+  - **The trap this move hit, now documented:** `tfs2_writer.py sync` is
+    *additive*, so moving the binaries left a full set of stale copies
+    in `/bin` on every existing image -- which `PATH` would have
+    preferred over `/tests`, forever, with no future build updating
+    them. Pruning isn't the fix (a `sync` that deleted anything absent
+    from the seed tree would delete `/etc/toyos.conf` and
+    `/etc/history`), so a move needs a deliberate `tfs2_writer.py
+    delete` or `make clean-disk`. Both are written down now.
+  - The doc also records the constraint that actually drives layout
+    here, which is not any standard: `FS_MAX_FILES` is 256 records with
+    directories counting against it, and a full path is 64 bytes. That
+    makes "flatter, and fewer files with more structure inside" the
+    operative rule until Milestone 15 raises both -- worth knowing
+    before Milestone 14 designs one man page per command.
+  - Verified: `check_layout` passes, `ls /bin` shows exactly the three
+    real programs, `run nx_test` still resolves and still demonstrates
+    NX enforcement, `lspci` unaffected.
+- **Roadmap: eight new milestones, twelve existing ones deepened, and a
+  third renumbering.** Asked for "more steps and maybe 5 new milestones,
+  add plenty". The list went from 32 milestones and roughly 250 items to
+  **40 and 398**, with no milestone below 7 items.
+  - **New, each placed where its prerequisites put it** rather than
+    appended: **6 Fuzzing & property-based testing** (right after the
+    test harness it builds on), **11 Crash reporting & postmortem
+    debugging** (after signals, since a core dump hangs off SIGSEGV),
+    **13 Init & service supervision** (the milestone that finally *uses*
+    TTY + fork/exec + signals + job control together), **14 In-OS
+    documentation** (`man`), **16 Block integrity: checksums &
+    scrubbing** (while TFS3's format is still open -- a checksum field
+    wants designing in, not bolting on), **18 Encryption at rest**
+    (after multi-user, which brings the same key-derivation machinery),
+    **20 A layout engine for the GUI** (before the apps that would use
+    it), **21 Runtime font loading & text metrics** (immediately after
+    it, since layout is what needs to ask how wide a string really is).
+  - The thin milestones -- 4, 5, 7, 8, 25, 26, 28, 29, 35, 37, 38, 39 --
+    were filled out with real steps rather than padding. A few carry
+    decisions the project would otherwise discover late: UTF-8's real
+    work is auditing every `char`-sized assumption; a benchmark number
+    is meaningless without recording TCG-vs-KVM; NVMe's 4KB sectors have
+    never been tested against TFS2's assumptions.
+  - **Milestones 11-32 became 15-40** (a piecewise shift, since the
+    insertions are scattered). Every cross-reference was re-checked
+    against its target's *title* afterward rather than trusted to the
+    shift -- which is how the first attempt at the previous renumbering
+    was caught double-shifting headings and colliding two milestones.
+  - **This is the pass that ends the convention.** The roadmap now says
+    so explicitly: insertion-with-renumbering is worth it for one or two
+    milestones with a real prerequisite argument, and beyond that,
+    append. Eight at once meant rewriting cross-references across four
+    files and a third translation table.
+  - Fixed three references in `docs/decisions.md` that went stale in
+    *this morning's* renumbering and weren't caught then -- the
+    compositor entries pointing at "Milestone 12". They were missed
+    because that check's output was truncated at 20 lines, which is a
+    good argument for verifying by resolving every reference to its
+    target's title (as done here) rather than by reading a list.
+- **Roadmap: two new milestones, and a second renumbering to make room
+  for one of them.** Asked what it would take to make toy-os POSIX
+  compatible, and whether that's feasible. The short answer is yes, as
+  "enough POSIX to build and run real ported C programs" -- and that
+  most of it is already scheduled under other names. Written up rather
+  than left in a session.
+  - **New "TFS3: an inode layer" milestone** (numbered 11 when added,
+    15 today). The survey turned up
+    one structural gap nothing on the roadmap owned: TFS2 stores a flat
+    table of records keyed by a full path string, with no object
+    representing a file separately from the name pointing at it. Hard
+    links, atomic `rename()`, unlink-while-open and `st_ino`/`st_nlink`
+    can't be expressed against that, and it's independently worth
+    fixing regardless of POSIX.
+  - **New "POSIX compatibility" milestone** (32 when added, 40 today).
+    Deliberately a
+    capstone: it names the target (our own libc vs Linux syscall-ABI
+    emulation -- a real fork, to decide before writing code), owns the
+    handful of items nothing else covers, and records what is *not*
+    being pursued (conformance, locales, pthreads, `select`/`poll`).
+    The one easy-to-miss blocker it surfaces: SSE is never enabled
+    (`boot.asm` sets PAE/LME/NXE but not CR4.OSFXSR), userland builds
+    `-mno-sse -mno-sse2`, and nothing saves FPU state across a context
+    switch -- so the first stock-compiled binary would fault, since
+    every real libc's `memcpy` uses SSE2 unconditionally on x86-64.
+  - **Milestones 11-30 became 12-31**, since the inode layer belongs
+    before permissions -- mode bits want to live on an
+    inode, and the other order means building them twice. The roadmap's
+    own rule is that reading order is build order, so the alternative
+    was a milestone that documents a prerequisite while sitting after
+    the thing that needs it. Every cross-reference in the file was
+    checked against its target's title afterward, not just shifted;
+    three references outside it (`apps/README.md` x2,
+    `kernel/README.md`) were updated too, and one backlog line that had
+    been stale since the *first* renumbering got corrected.
+  - The translation table now covers both passes, and the note above it
+    says when appending is the better choice than inserting.
 - Docs catch-up for the console work: `README.md`'s framebuffer bullet
   now mentions scrollback and the on-screen boot log, and
   `apps/README.md` distinguishes the *physical* console's new scrollback
@@ -2727,6 +2293,503 @@ using `## [x.y.z] - date` headings is here.
   as the active selection.
 
 ### Fixed
+- **Every remaining control that didn't follow `docs/gui-guidelines.md`.**
+  An audit prompted by a report that the Shutdown dialog's Yes/No
+  "won't react anyway graphically" -- which was true, and less cosmetic
+  than it sounded:
+  - **`confirm_dialog`** (the reported one) had no hover state, no
+    pressed state, and acted from `handle_click`, which the WM fires on
+    button-DOWN -- so the Shutdown confirmation could not be cancelled by
+    pressing Yes and dragging off. Rebuilt on `ui_button_group`, which
+    supplies all three and deleted the hand-rolled geometry. Verified by
+    pixel value: the hovered button moves (225,225,230) -> (205,205,210)
+    while its neighbour stays put (`screenshots/2026-08-14/
+    confirm-dialog-{rest,hover-yes}.png`).
+  - **`file_picker`'s Open/Save and Cancel** had the identical three
+    problems and got the identical fix.
+  - **`context_menu`** had no hover at all -- its `draw()` was never given
+    the cursor, so rows could not highlight. It takes `(mx, my)` now, the
+    same way `start_menu_draw()` always has.
+  - **`ui_checkbox` and `ui_radio_list`** gained a hover parameter. Both
+    are act-on-contact, which is about WHEN they commit, not about whether
+    they admit to being clickable. Callers that don't track hover pass
+    0/-1 and are unchanged.
+  - **`start_menu`** had hover, but via a hand-picked `gfx_rgb(90,110,150)`
+    that also forced a second text colour nobody else used. It derives
+    from `ui_state_bg()` now. The click FLASH deliberately stays a
+    distinct warm colour -- it's a confirmation, not an interaction state.
+
+  Also swept up along the way: `gfx_text_width()` instead of
+  `k_strlen() * gfx_char_w()` (that identity only holds for a fixed-cell
+  font), and `gfx_draw_string_clipped()` instead of `gfx_draw_string()`
+  in every fixed box touched -- dialog messages, menu rows and radio
+  labels could all be drawn straight through their own borders.
+
+  Verified by `tools/dialog_test.py` (all checks), `tools/uidemo_test.py`
+  (27/27, now covering Tab/Shift-Tab, focus-follows-click, and Space
+  activating a focused button) and `tools/damage_sweep.py` (clean).
+- **`gui key 0x1b` was rejected, despite being the documented way to
+  send an unprintable key.** `wm_debug.c`'s `cmd_key()` has always said
+  `"0x1b"-style for anything unprintable` and every `KEY_*` code in
+  `api/keyboard.h` is written in hex -- but its `parse_int()` used
+  `k_parse_u32()`, which takes plain decimal only ("no prefix", per its
+  own contract). So every hex key command answered "bad or dropped key"
+  while the help text advertised it, and any keyboard test had to
+  convert codes to decimal by hand without knowing why. `parse_int()`
+  accepts an explicit `0x`/`0X` prefix now. Found by a test that typed
+  the arrow-key codes exactly as the file's own comment said to.
+- **Five damage-invariant bugs, and the harness that was hiding them.**
+  The compositor repaints only the region declared as damage, so it is
+  correct only if everything that changes on screen is inside that
+  region (`docs/gui-guidelines.md`). `gui damage verify on` turns a
+  violation into a report; the four below are what a systematic sweep
+  found once the sweep itself was trustworthy.
+
+  **The harness came first, because it was lying.** The one damage bug
+  left open from the previous session (`docs/roadmap.md` recorded it as
+  "559 px ... first at (497,67)") would not reproduce. Two reasons, both
+  in the tooling rather than the kernel:
+
+  1. `DebugConsole.click()`/`drag()` return `events()`, which filters
+     the wire to the `uidemo:` prefix. A `wm: DAMAGE BUG` line does not
+     match that prefix and was silently dropped, so the first repro
+     script reported a clean run against a kernel that was actively
+     failing. `send()` now accumulates every line into `log_lines`, and
+     `logs()`/`damage_bugs()` read them back -- a question asked on this
+     wire can no longer destroy the answer to a different one.
+  2. `settle()` slept a fixed 250ms, reasoning that injected events
+     drain one per WM frame at 100Hz. Measured: a drag takes ~800ms with
+     verification on (which renders every frame twice and diffs the full
+     screen). Every test was racing that sleep -- windows moved between
+     a `gui windows` read and the command using those coordinates, so
+     drags grabbed the wrong thing and the sweep reported a *different*
+     bug on each run of the same script. `gui state` now reports
+     `pending` (`wm_debug_input_pending()`) and `settle()` polls it to
+     zero. See `docs/decisions.md`.
+
+  Both were confirmed by a **positive control** -- deliberately deleting
+  `bring_to_front()`'s taskbar `wm_damage_rect()` and checking the sweep
+  reports it -- so "0 violations" is distinguishable from "the harness
+  isn't checking anything". That control is now a flag on the tool
+  (`--positive-control`) rather than a thing to redo by hand.
+
+  The bugs themselves, each found by `tools/damage_sweep.py` and each
+  fixed and re-verified. Three of the five were only reachable through
+  the random walk, and two of those needed one specific window
+  arrangement -- worth noting before trusting any fixed test sequence
+  on this invariant:
+
+  - **`close_window()` didn't damage the window inheriting focus**
+    (`apps/wm/wm.c`). Closing the frontmost window promotes the one
+    below it, whose title bar changes from unfocused gray to focused
+    blue without its geometry changing -- so `compute_window_damage()`
+    can't see it, and the closing window's rect only covers it where the
+    two overlapped. This is `bring_to_front()`'s `prev_front` gap seen
+    from the other end, with the same consequence now that Phase 3 skips
+    an undamaged window's chrome entirely. Reported as "11038 px changed
+    outside the damage rect, first at (109,89)".
+  - **Overlays were clipped away when another source declared damage**
+    (`apps/wm/wm_render.c`). The Start menu, context menu, file picker
+    and confirm dialog draw outside any window's rect and declare no
+    damage; the design note called that a full-screen-repaint fallback,
+    but it held only by coincidence. A click that both raised a window
+    and opened Notepad's file picker made the frame damage-limited and
+    left the picker unpainted: "114932 px changed outside the damage
+    rect, first at (590,173)". The frame now discards its damage box
+    while any overlay is open. See `docs/decisions.md`.
+  - **...and for one frame after an overlay closes**, because the frame
+    that dismisses one has already cleared its `_open` flag by the time
+    the renderer runs, so nothing damages the region it just vacated.
+    Hidden behind a second coincidence: the damage box on such a frame
+    is usually the full-width taskbar strip unioned with the cursor,
+    which covers most of a Start menu sitting just above the taskbar.
+    Dismissing it with a click low on the screen left the rows above
+    that union stale -- "300 px changed outside the damage rect, first
+    at (4,448)", (4,448) being the menu's own top-left corner and 300
+    being exactly its top two rows.
+  - **The cursor's drawn position was recorded only on damaged frames.**
+    `prev_cursor_*` was updated inside `damage_cursor()`, which runs
+    only when the frame is damage-limited, so a full-repaint frame moved
+    the sprite without recording where it went and the next damaged
+    frame erased a position the cursor had already left. Latent while
+    full-repaint frames were rare; the overlay fix above made them
+    common and it surfaced immediately ("139 px ... first at (928,336)",
+    a cursor sprite exactly where the previous click had left it).
+    Recorded on every frame now.
+  - **`damage_cursor()` and `save_cursor_under()` disagreed on the box
+    anchor.** The sprite box is anchored at `(x - CURSOR_BOX_MARGIN,
+    y - CURSOR_BOX_MARGIN)`; damage was declared from `(x-1, y-1)`, so
+    the box's top row and left column sat outside the damage rect and
+    every cursor move left a two-sided sliver behind ("247 px ... first
+    at (251,166)" -- 247 being one 13x19 sprite). Damage is derived from
+    `CURSOR_BOX_MARGIN` now rather than from a separately-chosen
+    constant, so the two can't drift apart again.
+
+  Verified: `tools/damage_sweep.py` clean on the fixed sequence three
+  runs running, and on random walks at seeds 1-12 and 21 (each 50-60
+  interactions) apart from the one issue below. The `close_window()`
+  fix is also confirmed by pixel value rather than by eye: the
+  inheriting window's title bar goes (120,120,130) -> (50,90,160),
+  exactly `draw_window_chrome()`'s unfocused/focused constants, while
+  the window behind it and the desktop stay put (`screenshots/
+  2026-08-14/damage-close-focus-{before,after}.png`).
+
+  **Not verified, and left recorded rather than rushed** (see
+  `docs/roadmap.md`'s known-issues list): a 20px violation inside the
+  Terminal's content on clock-tick frames survives, reproducible at
+  `--random 50 --seed 1` step 0. It is characterised but not
+  root-caused, and the two candidate causes -- a caret moved without
+  damage on some earlier frame, versus a non-idempotent `on_draw()`
+  making it a verifier artifact -- need opposite fixes, so guessing
+  would be worse than recording it. More broadly: a sweep can only
+  report what its interactions reach, and injected input enters below
+  the PS/2 driver, so none of this exercises the real mouse path.
+- **Cursor trail when shrinking a window.** Resizing a window smaller
+  left a line of stale cursor sprites behind; growing one didn't.
+  Confirmed fixed on real hardware by the reporter.
+  - Mechanism: `wm_render_frame()` never undrew the cursor before
+    repainting -- it only re-saved the pixels underneath at the end, via
+    `draw_cursor_at()`. So the old sprite was erased only where the
+    scene happened to repaint over it. A resize damages `union(old,
+    new)`, whose bottom-right edge is exactly the old corner -- which is
+    where the grip, and therefore the cursor, is -- and the sprite
+    extends down-right PAST that edge. Growing hides the same bug
+    because the window expands over the old position. A resize also
+    keeps `redraw_pending` set every frame, so the cheap
+    `wm_render_cursor_move()` path (which *does* restore first) is never
+    taken for the duration of the drag.
+  - Fix: `restore_cursor_under()` at the top of `wm_render_frame()`,
+    before the scene clip is applied, so the write isn't confined to the
+    damage rect -- the whole point being that the stale pixels are
+    outside it. This also makes the two render paths symmetric; the
+    cheap one has always restored first.
+  - **The symptom was not reproducible under QMP, and that's worth
+    recording.** Both a stepped drag and a fast continuous one (30
+    back-to-back `move_rel` calls with no settle) left no trail even on
+    a deliberately-rebuilt buggy binary: QEMU's PS/2 emulation coalesces
+    the motion into far fewer frames than a real mouse generates, so the
+    resize simply never produced enough repaints to strand a sprite.
+    What automation could establish was that the fix changed nothing
+    else (a pixel diff against the unfixed build differs only in the
+    taskbar clock); the fix itself was shipped on the strength of the
+    mechanism above, and the reporter then confirmed the trail is gone
+    with a real mouse. A reminder that the harness's fidelity is itself
+    a variable -- "I couldn't reproduce it" was a fact about QEMU here,
+    not about the bug.
+
+- **An app could draw outside its own window, straight onto the desktop.**
+  Reported from a screenshot: shrinking the Control Panel left System
+  Info's lower rows marching down the desktop, fully legible, well
+  outside the frame.
+  - Two gaps, one visible. **`gfx_draw_string_clipped()` bounds width
+    only** -- it takes a `max_w` and has no row budget at all -- so the
+    right-hand edge clipped correctly while the bottom had nothing
+    stopping it. And **the WM never clipped `on_draw()` to a window's
+    content rect**: the only clip active during a frame is the damage
+    region, which covers the desktop below a window too.
+  - So this was never really a System Info bug. Any app drawing more
+    than fits would paint over the desktop and over other windows;
+    System Info was just the first page with enough rows to show it.
+  - `wm_render_frame()` now narrows the clip to each window's content
+    rect around its `on_draw()`, and restores the scene clip after.
+    Intersected by hand, because `gfx_set_clip_rect()` REPLACES the
+    active rect rather than intersecting -- setting the content rect
+    naively would have widened the damage clip back out and undone the
+    compositor's whole point.
+  - The System Info page also stops at the last row that fully fits, so
+    it ends on a whole line instead of one sliced through its glyphs.
+  - **Verified both halves independently**: with the applet's row budget
+    temporarily removed, the WM clip alone still contained everything
+    (zero non-desktop pixels below a window shrunk to 163px tall), and
+    with it restored the page ends cleanly. Also re-checked Notepad,
+    Calculator, Terminal and Task Manager still render.
+  - Worth noting the near-miss in testing: the first repro dragged from
+    one pixel above the resize grip's hotspot (`RESIZE_MARGIN` is 6), so
+    only the width changed, the content still fit, and the "negative
+    control" proved nothing. A test that can't fail isn't evidence.
+
+- **Ring-3 stack alignment was wrong for SSE, in two different ways.**
+  `elf_run.c` aligned the initial user RSP to 8 bytes, which was
+  invisible while userland was built `-mno-sse` and nothing could emit
+  an alignment-sensitive instruction at all.
+  - First fix was to 16, reasoning from the SysV process-entry
+    convention. That crashed: `movapd %xmm0,(%rsp)` took a `#GP` at ring
+    3. The convention describes what a real crt0 `_start` sees, and a
+    real crt0 realigns before calling main -- but every `_start` here is
+    a plain C function, which GCC compiles assuming a pushed return
+    address (`RSP % 16 == 8`) and sizes its prologue from there. Hand it
+    a 16-aligned RSP and every aligned local is off by exactly 8.
+  - Correct answer is `RSP % 16 == 8` at entry, and it was established
+    by running the thing, not by reading the ABI.
+  - `userland/fpu_test.c` now forces an aligned SSE store to a stack
+    local specifically so this stays covered -- no other userland
+    program currently emits one, so the fix would otherwise have sat
+    untested until something tripped over it.
+
+- **Calculator's keys and Notepad's toolbar committed on button-DOWN,
+  so neither could be cancelled.** Found by running the cancel test on
+  the hover work above rather than only the happy path: pressing
+  Notepad's `Open...`, dragging into the text body and releasing opened
+  the file picker anyway, and pressing a Calculator key and dragging
+  away still entered the digit.
+  - Cause is the trap `docs/gui-guidelines.md` already documents by
+    name -- both apps acted in `on_click`, which `wm_input.c` fires on
+    button-down. The Control Panel was fixed for this when the rule was
+    written; these two, the only other content-area controls, were not.
+  - **`ui_button_group_release()` returns the released button's `code`
+    now** (-1 if none was armed). Because `ui_button_group_press()`
+    re-hit-tests every tick, a button that's been dragged off is
+    already unpressed, so releasing there returns -1 and the action is
+    cancelled with no extra bookkeeping in either app.
+    `calculator_release()` and `notepad_release()` commit from that;
+    `calculator_click()` is gone entirely and `notepad_click()` keeps
+    only its scrollbar paging, which genuinely does act on contact.
+  - **`ui_button_group_click()` is gone**, having lost both callers --
+    it had no way to know about a press to cancel, so any `on_click`
+    caller of it commits on button-down by construction. The header
+    says what to bring it back for if a real act-on-contact control
+    ever wants one.
+  - **`notepad_press()`'s `cy >= TOOLBAR_H` early return also went.**
+    It meant a toolbar button dragged off into the text body stayed
+    drawn pressed until release -- something about to be cancelled
+    looking live, the exact thing the guidelines call out. A point
+    below the toolbar hits no button, which is already the right
+    answer. Measured: 163 (pressed) before, 200 (rest) after.
+  - Verified by behaviour, not just by pixels: the Calculator display
+    stays `0` through press-drag-off-release and changes on a real
+    press-release; Notepad's picker stays shut on the first and opens
+    on the second. Screenshots in `screenshots/2026-08-13/`.
+
+- **CI had been red for three commits, and the reason was a real bug it
+  found rather than a bad check.** `tools/check_layout.py` (added in the
+  filesystem-layout commit) failed on `/etc` and `/etc/kbs` missing from
+  CI-built images.
+  - Root cause: `tools/gen_kbs.py` needs `xkbcli`
+    (`libxkbcommon-tools`), the `seed` target **skips it with a message**
+    when that's absent, and CI never installed it. So **CI had been
+    building images with no keyboard layouts at all**, silently, for as
+    long as that step has existed -- nothing noticed until a check
+    compared an image against a written description of what should be on
+    it. That is the check earning its keep on its first run.
+  - CI installs `libxkbcommon-tools` now, so the layouts are actually
+    generated and `gen_kbs.py` gets exercised there.
+  - The doc was also wrong in a smaller way: `/etc` was listed as
+    build-created, when the thing that reliably creates it is
+    `kernel_main()` at boot -- the build only made it incidentally, as a
+    side effect of seeding `/etc/kbs`. It's `boot` now.
+  - `check_layout.py` gained a third status, **`optional`**, for
+    `/etc/kbs`: documented so an undocumented directory can't hide
+    behind the name, but never required, since a machine without
+    `xkbcli` legitimately won't have it. Verified by building an image
+    with no `/etc` at all and confirming the check passes -- i.e. the
+    CI case reproduced locally rather than fixed by pushing and hoping.
+
+- **`gfx_draw_string()`'s missing clipping is now a function instead of
+  a rule.** It draws every character it's handed, past any boundary the
+  caller had in mind. `docs/decisions.md` recorded that after a long
+  filename drew through a text field's border, and told callers to
+  budget the width themselves -- and then the very next fixed-box
+  caller, the Control Panel's applet labels, hit the identical bug
+  (`Date & TSystem Info`) in a file written days later. A rule that must
+  be remembered at every call site will be forgotten at some call site.
+  - **`gfx_draw_string_clipped(x, y, max_w, ...)`** draws bounded and
+    returns whether the whole string fitted, so a caller can add an
+    ellipsis or widen itself without measuring twice.
+  - **`gfx_text_width()`** and **`gfx_text_fit_chars()`** are the
+    measurement half, for callers doing their own windowing.
+    `gfx_text_width()` also pays a debt forward: Milestone 21 lists
+    exactly that function as something proportional font metrics need,
+    and every open-coded `k_strlen(s) * gfx_char_w()` is a site that
+    silently breaks when a glyph stops being one cell wide.
+  - `gfx_draw_string()` itself is deliberately unchanged -- clipping it
+    would alter every existing caller.
+  - Converted: the Control Panel's labels (replacing the hand-rolled
+    truncation) and `ui_textbox`'s field text, the latter as a safety
+    net rather than a rewrite -- its windowing logic is correct, but if
+    it ever miscomputes, the text now stops at the field's edge instead
+    of drawing through the border, which is the exact bug that widget
+    already had once.
+  - Two KTESTs (suite: 61 -> 63) assert the measurement directly:
+    widths stop at a newline, and `fit_chars` never returns a partial
+    glyph (one pixel short of the fourth character is three, not "three
+    and a bit") including the degenerate zero/negative widths. The
+    measurement is pure arithmetic over font metrics, so unlike the
+    drawing it can be asserted rather than eyeballed in a screenshot.
+
+- **The two ATA loose ends this session had been carrying: the PIO
+  path's failure reporting, and the fact that it never ran at all.**
+  - **`wait_drq()` conflated "the drive reported ERR" with "I gave up
+    waiting"** -- both returned 0, so a PIO failure said nothing about
+    which. Now recorded in a `g_pio_fail_reason` string and logged,
+    exactly mirroring `g_dma_fail_reason` on the DMA side, whose own
+    comment notes that collapsing these cost real detective work once.
+    `pio_read_sectors()`/`pio_write_sectors()` log it unconditionally on
+    failure, same as `dma_transfer_with_retry()` does -- they previously
+    returned 0 silently. The return stays pass/fail (nothing needs to
+    branch on the difference); it's the human reading `dmesg` who does.
+  - **`ata nodma on|off` forces the PIO fallback**, because it was
+    otherwise *unreachable*: `ata_init_dma()` succeeds on every machine
+    this OS boots, so ~100 lines of fallback driver had never executed
+    and could not be tested. Fallback code that only runs in an
+    emergency and has never been seen running isn't a fallback, it's a
+    guess. The switch is also the PIO-vs-DMA comparison that root-caused
+    a DMA failure to a host stall in an earlier session -- which at the
+    time meant hand-editing the driver.
+  - **Every DMA gate now routes through one `dma_in_use()` helper.**
+    That's the part worth getting right: `ata_max_sectors_per_xfer()`
+    reports a *smaller* cap for PIO, so a dispatch site checking the
+    flags differently from the site setting the cap would let a caller
+    batch 128 sectors into a path that tops out at 8. Confirmed live --
+    the reported cap goes 128 -> 8 with the toggle and back.
+  - `ata_set_dma_forced_off()` **refuses** while a non-blocking transfer
+    is in flight (a stepped Notepad save) rather than stranding its
+    poller, and returns 0 so the caller reports the refusal instead of
+    assuming the switch happened.
+  - **Three KTESTs in the new `kernel/drivers/ata_test.c`** (suite: 58
+    -> 61), driving the same switch: a file written and read back
+    through the PIO path and compared byte-for-byte, the sector cap
+    following the active path, and the restore-to-DMA case. They restore
+    the previous mode *before* asserting, so a failing assertion can't
+    leak forced-PIO into every test after it -- the same cascade the
+    runner's `fault_any_armed()` check exists to prevent.
+  - Verified beyond the suite: a `stress 3` write/read/verify round trip
+    run **entirely through PIO**, byte-for-byte clean with `fsck` clean
+    after, at 5.0 MB/s write / 7.5 MB/s read against DMA's 24/29 -- the
+    first time that code has demonstrably moved real data under load.
+    **Not covered:** the failure-reason strings themselves, which need
+    an actual drive error to surface; and the mid-transfer refusal
+    branch, which needs a stepped write held open across a test body.
+    Both are noted in the test file rather than left looking covered.
+- **`SYS_READ` read the entire file on every call, making any real
+  streaming read quadratic.** Found immediately by the feature above:
+  `/bin/lspci` reading 1.6MB in 1KB chunks did ~1,615 calls x 1.6MB =
+  **~2.6GB of disk reads and took 35 seconds**.
+  - The handler called `fs_read()` (whole file into a `kmalloc()`'d
+    buffer) and then copied out just the bytes at the fd's offset.
+    Harmless for as long as nothing in ring 3 opened a file bigger than
+    a few hundred bytes -- at that size the whole file *is* one read --
+    which is why it sat unnoticed since `SYS_OPEN`/`SYS_READ` were
+    added.
+  - Fixed by using `fs_read_range()`, which already existed for exactly
+    this and whose doc comment describes streaming a file as its
+    intended use. **35s -> 0.9s**, including boot. Its "0 means EOF or
+    error, indistinguishable" contract happens to be precisely the
+    wanted behaviour for a file deleted mid-read.
+  - Worth recording as a class of bug: a wrong complexity class can sit
+    for a long time when inputs stay small, and it fails by being *slow*
+    rather than wrong, so no test catches it. See `docs/decisions.md`.
+  - Verified: `make verify` clean (58 KTESTs), `lspci` correct at the
+    physical console and in the GUI Terminal.
+- **The ATA driver gave a busy drive ~37ms to become ready, while
+  giving the same transfer 5 seconds once its command was in flight.**
+  Reported from a live `stress 4200` run that died at 11% with `ata: dma
+  write failed after 3 attempts (lba 2, last reason: drive stayed busy,
+  command never issued)` and `fs: WARNING -- record slot 26 (lba 29)
+  failed to persist`.
+  - Read the LBA, not the progress bar: `lba 2` is the journal header
+    `persist_record()` writes *first*, so this was a metadata write
+    failing, not the 473MB of file data the message sits next to. The
+    473MB is where `stress` happened to be, not where anything went
+    wrong -- a later `stress 600` wrote straight past that offset.
+  - The driver bounds its two waits differently. `wait_dma_irq()`
+    (command already in flight) uses a wall-clock budget --
+    `DMA_WAIT_TICKS`, 500 ticks at 100Hz, 5 seconds.
+    `wait_not_busy()` (the pre-issue wait, the one that failed) used
+    `ATA_POLL_LIMIT` alone: a fixed 100000-iteration spin. **A spin
+    count is not a duration.** Measured in the guest, those 100000
+    iterations take ~12ms, and `dma_transfer_with_retry()` ran its three
+    attempts back-to-back with no delay -- so the driver's total
+    patience was ~37ms against the completion path's 5000ms, a ~135x
+    asymmetry in the wrong direction. Any host-side I/O stall longer
+    than 37ms takes out all three attempts at once, and the failing run
+    started seconds after `grub-mkrescue` wrote a 746MB ISO to the same
+    Btrfs disk.
+  - `DMA_WAIT_TICKS`'s own comment records it being *widened* against
+    this exact class of host stall. That widening only fixed the
+    completion half; nothing revisited the pre-issue half, which is how
+    a bound the project had already reasoned about carefully stayed
+    135x too small next to it.
+  - **Fixed** by giving `wait_not_busy()` the same context split
+    `wait_dma_irq()` already had: a wall-clock budget
+    (`BUSY_WAIT_TICKS`, ~1s) when it's safe, and the original fixed spin
+    (`spin_not_busy()`) when inside a syscall -- where `int 0x80`'s
+    interrupt gate leaves IF clear, so `pit_ticks()` never advances and
+    a wall-clock loop would hang instead of time out. The wall-clock
+    path also carries a very generous iteration cap as belt-and-braces,
+    since being wrong about that assumption should fail a write, not
+    the machine. Plus `retry_backoff()` between attempts (~250ms x the
+    attempt number, `hlt` when safe and a spin inside a syscall, per
+    `docs/decisions.md`'s standing rule for blocking waits), because
+    retrying instantly is the one thing guaranteed not to help when the
+    cause is a stall.
+  - **`wait_drq()` got the same treatment in a follow-up** (it was left
+    alone in the first pass as a path this failure didn't involve).
+    It's the PIO fallback's "is a sector's data ready?" wait, and it had
+    the identical fixed-spin bound. Two differences shaped the fix:
+    it runs once per SECTOR rather than once per transfer, so the status
+    read and both of its exits now happen BEFORE the clock is consulted
+    -- the common case (DRQ already set on the first look) costs one
+    extra `pit_ticks()` per sector, a volatile counter read next to the
+    port I/O that dominates it. And it has a real error exit (the drive
+    setting ERR) as well as a timeout, which it still collapses into the
+    same `0` return; that conflation is left as-is and noted in the
+    source, since no caller distinguishes them today.
+  - Coverage note for that one: `ata_init()`'s IDENTIFY call exercises
+    `wait_drq()` on every boot, so the change is covered there, but the
+    per-sector PIO transfer loop is **not reachable while DMA is
+    available** -- which it is on every machine this runs on today
+    (`ata: Bus-Master DMA available` at boot). There is no switch to
+    force the PIO path, so that half is unexercised by construction
+    rather than untested by omission.
+  - Verified: `make verify` clean (58 KTESTs, boot smoke). `stress 150`
+    PASSED byte-for-byte at 24.0 MB/s and `fsck` reported clean;
+    `stress 400` wrote at 23.1 MB/s, both unchanged from before the
+    change, confirming the new bounds cost nothing on the success path
+    (they only ever elapse when the drive is actually busy).
+  - **Then the real check, from the user's own machine: `stress 4200` --
+    the exact command that failed -- PASSED, and so did `stress 8192`.**
+    4200 MB in 326 s and 8192 MB in 692 s, each written, read back and
+    verified byte-for-byte, with no `ata:` or `fs:` warnings. This
+    entry originally recorded that surviving a genuine stall was NOT
+    verified, since the failure is host-timing-dependent and hadn't
+    reproduced in-session; that caveat is now much weaker. It isn't
+    gone, and the distinction is worth keeping straight: what's shown
+    is that the failing case now succeeds at nearly 20x the data
+    volume, not a controlled stall reproduced and observed to be
+    absorbed. Nothing here forced a stall to occur on demand.
+  - Also settled `docs/roadmap.md`'s long-standing "full multi-GB stress
+    run" item (Milestone 3) as a side effect -- see that entry for why
+    its own time estimate had been putting sessions off attempting it.
+- **`run hello` page-faulted -- a deliberate fault that had quietly
+  become an accidental one.** Found while testing `strace` (above);
+  fixed on request afterwards.
+  - `userland/hello.c` predates syscalls. With no way to print, it
+    proved it had run by writing a marker to a fixed address the kernel
+    read back (`USERLAND_MARKER_ADDR`) and then executing `hlt` to fault
+    on purpose. The old `elftest` command mapped a page at that address
+    specially. The ELF64-to-`/bin` migration folded `elftest` into the
+    generic `run hello` path -- which maps no such page -- so the binary
+    faulted on the marker write, one instruction *before* the `hlt` it
+    existed to demonstrate. Confirmed by disassembly: `RIP=0x800000000a`
+    is exactly `movl $0xc0ffee,(%rax)`, `CR2=0x8000100000` is the
+    marker. It looked like a crashing binary; it was a binary whose
+    harness had been removed from under it.
+  - `USERLAND_MARKER_ADDR` was also `ELF_RUN_HEAP_VADDR` -- the same
+    address, picked independently in two files -- so restoring the
+    mapping would have put it straight on top of `sbrk`'s first page.
+  - Fixed by making `hello.c` a real program (greet via `SYS_WRITE`,
+    exit 0) instead of restoring the harness: `ring3test` still covers
+    the raw-`iretq` entry path and `crash_test`/`nx_test` still cover
+    deliberate faults and their recovery, so nothing was lost, and the
+    binary named `hello` now does what its name says. It's also the
+    smallest complete example of what a `/bin` binary is.
+    `USERLAND_MARKER_ADDR` was deleted (no other user);
+    `userland_contract.h` stays, with a comment recording why the
+    constant went and why a future read-back test needs a different
+    address.
+  - Verified: `run hello` prints and exits 0, and `strace hello` shows
+    exactly `write(1, ..., 42) = 42` then `exit(0) = ?` -- two
+    syscalls, which is the whole program.
 - `README.md`'s Project layout section had its intro paragraph twice --
   introduced by the README rewrite, which wrote the sentence into the
   new section while the block it pasted in already started with it. A

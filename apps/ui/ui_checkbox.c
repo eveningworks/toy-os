@@ -10,8 +10,17 @@ int widget_checkbox_width(int size, const char *label) {
     return size + CHECKBOX_LABEL_GAP + (int)k_strlen(label) * gfx_char_w();
 }
 
-void widget_checkbox_draw(int x, int y, int size, int checked, const char *label,
-                           uint32_t bg, uint32_t fg) {
+void widget_checkbox_draw(int x, int y, int size, int checked, int hovered,
+                           const char *label, uint32_t bg, uint32_t fg) {
+    if (hovered) {
+        // The whole clickable area, not just the box -- the hit test is
+        // box+label (see widget_checkbox_hit), and a highlight smaller
+        // than the target it describes is a lie about where to click.
+        int hw = widget_checkbox_width(size, label);
+        int hh = size > gfx_char_h() ? size : gfx_char_h();
+        bg = ui_state_bg(bg, UI_STATE_HOVER);
+        gfx_fill_rect(x, y, hw, hh, bg);
+    }
     gfx_draw_rect(x, y, size, size, fg);
     if (checked) {
         int inset = size / 4 > 0 ? size / 4 : 1;

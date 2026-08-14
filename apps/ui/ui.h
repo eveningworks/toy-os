@@ -35,6 +35,7 @@
 #include "ui_textbox.h"
 #include "ui_icon_grid.h"
 #include "ui_radio_list.h"
+#include "ui_focus.h"
 #include "ui_listbox.h"
 #include "ui_dropdown.h"
 

@@ -2,6 +2,8 @@
 #define UI_BUTTON_GROUP_H
 #include "ui_button.h"
 
+struct ui_focus_ops;
+
 // Owns the "which button (if any) is currently pressed" state and the
 // hit-testing loop for a fixed set of ui_buttons -- the part every app
 // with more than one button used to hand-roll itself (calculator.c's
@@ -18,6 +20,20 @@
 struct ui_button_group {
     struct ui_button *buttons; // not owned -- caller's array; positions are usually font-size-dependent and get refreshed via ui_button_set_geometry() before most calls here (see calculator.c)
     int count;
+
+    // Keyboard state, both OWNED -- read-only from app code, and both
+    // meaningless unless the group is in a ui_focus ring (ui_focus.h).
+    //
+    // `focus_index` is which button the arrows are on, or -1. It lives
+    // here rather than as a third flag on struct ui_button because it is
+    // a property of the GROUP's navigation: exactly one button can hold
+    // it, which a per-button flag would let callers violate.
+    int focus_index;
+    // Code of a button activated by Space/Enter, or -1. Collected via
+    // ui_button_group_take_activated() rather than acted on inside the
+    // key handler, so a keyboard activation reaches the app through the
+    // same path a mouse release does instead of a second callback.
+    int activated;
 };
 
 void ui_button_group_init(struct ui_button_group *g, struct ui_button *buttons, int count);
@@ -58,6 +74,19 @@ int ui_button_group_hover(struct ui_button_group *g, int cx, int cy);
 // button-DOWN and can never be cancelled; both Calculator and Notepad
 // did exactly that until this return value existed.
 int ui_button_group_release(struct ui_button_group *g);
+
+// The code of a button activated by Space/Enter since the last call, or
+// -1. Call it right next to ui_button_group_release() in on_release and
+// act on either -- a keyboard activation then reaches the app through
+// exactly the path a mouse click already does, instead of needing a
+// parallel callback that apps would inevitably implement differently.
+int ui_button_group_take_activated(struct ui_button_group *g);
+
+// Joins a ui_focus ring (see ui_focus.h). The whole group is ONE focus
+// stop with arrows moving between its buttons -- a row of related
+// controls is one stop in every real toolkit, and it keeps the tab ring
+// as short as the app's structure actually is.
+extern const struct ui_focus_ops ui_button_group_focus_ops;
 
 // There is deliberately NO ui_button_group_click() (hit-test a point,
 // return that button's code). There was, and both its callers were

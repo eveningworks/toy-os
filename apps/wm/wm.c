@@ -27,6 +27,7 @@
 #include "wm_debug.h"
 #include "start_menu.h"
 #include "context_menu.h"
+#include "confirm_dialog.h"
 #include "file_picker.h"
 #include "desktop.h"
 #include "wm_tray.h"
@@ -564,6 +565,18 @@ void wm_run(void) {
         if (mouse_moved) wm_update_title_hover(mx, my);
         wm_update_title_btn_press(mx, my, buttons);
 
+        // Modal overlays track their own press/hover the same way, and
+        // for the same reason: their buttons arm on press and commit on
+        // release, so they need the live cursor every tick, not just the
+        // button-down edge wm_handle_left_click() sees. Both are no-ops
+        // while their dialog is closed.
+        confirm_dialog_update_press(mx, my, buttons);
+        file_picker_update_press(mx, my, buttons);
+        if (!(buttons & 0x1)) {
+            if (confirm_dialog_update_hover(mx, my)) redraw_pending = 1;
+            if (file_picker_update_hover(mx, my)) redraw_pending = 1;
+        }
+
         // Content hover, on the same only-when-the-mouse-moved cheap
         // path as the title-bar hover above. It also has to run once
         // after a button is RELEASED (the suppression inside it lifts
@@ -588,12 +601,13 @@ void wm_run(void) {
         // deliberately unclaimed at the WM level now, free for a future
         // per-window or modal use (e.g. canceling a confirm dialog)
         // instead of double-booking it as "exit everything".
-        int key = keyboard_try_getchar();
+        uint8_t key_mods = 0;
+        int key = keyboard_try_getchar_mods(&key_mods);
         // A `gui key` from the debug console, if the real keyboard had
         // nothing -- deliberately second, so a human at the keyboard is
         // never pre-empted by a queued test keystroke.
         if (key == -1) {
-            int injected = wm_debug_next_key();
+            int injected = wm_debug_next_key_mods(&key_mods);
             if (injected) key = injected;
         }
 
@@ -621,7 +635,7 @@ void wm_run(void) {
                     if (windows[i].state != WIN_MINIMIZED) { f = i; break; }
                 }
                 if (f >= 0 && key != -1 && !file_picker_open && windows[f].app && windows[f].app->on_key) {
-                    windows[f].app->on_key(&windows[f], key);
+                    windows[f].app->on_key(&windows[f], key, key_mods);
                 }
                 if (f >= 0 && wheel != 0 && !file_picker_open && windows[f].app && windows[f].app->on_wheel) {
                     windows[f].app->on_wheel(&windows[f], wheel);

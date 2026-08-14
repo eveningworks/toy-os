@@ -1,6 +1,8 @@
 #ifndef TERMINAL_H
 #define TERMINAL_H
 
+#include <stdint.h>
+
 struct window; // full definition in wm/wm.h
 
 // A GUI terminal-emulator app -- runs the real shell dispatcher
@@ -19,7 +21,7 @@ struct window; // full definition in wm/wm.h
 void terminal_default_size(int *w, int *h);
 void terminal_open(struct window *win);
 void terminal_draw(struct window *win);
-void terminal_key(struct window *win, int key);
+void terminal_key(struct window *win, int key, uint8_t mods);
 
 // Handles clicks on the scrollbar's empty track (page up/down) -- see
 // gui_apps.h's on_click. Clicks on the thumb itself never reach this;

@@ -299,7 +299,8 @@ static void notepad_extend_selection(struct notepad_state *st) {
     if (!st->view.tb.sel_active) widget_scrollback_selection_start(&st->view.tb);
 }
 
-void notepad_key(struct window *win, int key) {
+void notepad_key(struct window *win, int key, uint8_t mods) {
+    (void)mods; // Ctrl and Alt are already folded into `key` here (keyboard.h)
     struct notepad_state *st = (struct notepad_state *)window_get_state(win);
 
     // No filename field to route keys to anymore -- Open.../Save As...

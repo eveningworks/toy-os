@@ -24,6 +24,7 @@ static int g_inject_head = 0, g_inject_tail = 0;
 
 #define KEY_INJECT_MAX 32
 static int g_keys[KEY_INJECT_MAX];
+static uint8_t g_key_mods[KEY_INJECT_MAX]; // KEY_MOD_* bits, parallel to g_keys
 static int g_keys_head = 0, g_keys_tail = 0;
 
 static int g_wheel[KEY_INJECT_MAX];
@@ -73,9 +74,12 @@ int wm_debug_next_wheel(void) {
     return d;
 }
 
-int wm_debug_next_key(void) {
+int wm_debug_next_key(void) { return wm_debug_next_key_mods(0); }
+
+int wm_debug_next_key_mods(uint8_t *out_mods) {
     if (g_keys_head == g_keys_tail) return 0;
     int k = g_keys[g_keys_head];
+    if (out_mods) *out_mods = g_key_mods[g_keys_head];
     g_keys_head = (g_keys_head + 1) % KEY_INJECT_MAX;
     return k;
 }
@@ -436,6 +440,16 @@ static void cmd_close(int index) {
     close_window(index);
 }
 
+// A bare cursor MOVE, no buttons. Exists because hover was otherwise
+// untestable: `gui click` moves the cursor too, but it also presses and
+// releases, so by the time a test can screenshot the result the click has
+// already been acted on -- and docs/gui-guidelines.md requires hover
+// states to be verified by pixel value, which needs the cursor parked
+// somewhere with nothing held.
+static int cmd_move(int x, int y) {
+    return inject_push(x, y, 0);
+}
+
 // A click is four queued events, not one: move, press, a held tick, and
 // release. Each is consumed on its own wm_run() iteration, which is
 // what makes press and release land on different frames -- a control
@@ -464,15 +478,35 @@ static int cmd_drag(int x0, int y0, int x1, int y1) {
     return inject_push(x1, y1, 0);
 }
 
-static int cmd_key(const char *s) {
+// `gui key <c> [shift|ctrl|alt|altgr]...`
+//
+// The modifier words set the KEY_MOD_* bits the WM delivers alongside
+// the key -- they do NOT re-encode it. So `gui key 0x09 shift` is
+// Shift-Tab (key 0x09, KEY_MOD_SHIFT), which is the only way to express
+// it: Tab has no shifted character, so shift alone changes nothing about
+// the key itself. For Ctrl-A, send the control code (`gui key 0x01`)
+// rather than `gui key a ctrl` -- that is what a real keyboard produces,
+// and what every consumer matches on (see keyboard.h).
+static int cmd_key(const char *s, char *rest) {
     if (!s || !*s) return 0;
     int code;
     // A bare character, or "0x1b"-style for anything unprintable.
     if (s[1] == '\0') code = (unsigned char)s[0];
     else if (!parse_int(s, &code)) return 0;
+
+    uint8_t mods = 0;
+    for (char *p = rest, *t; (t = next_tok(&p)) != 0; ) {
+        if (k_strcmp(t, "shift") == 0) mods |= KEY_MOD_SHIFT;
+        else if (k_strcmp(t, "ctrl") == 0) mods |= KEY_MOD_CTRL;
+        else if (k_strcmp(t, "alt") == 0) mods |= KEY_MOD_ALT;
+        else if (k_strcmp(t, "altgr") == 0) mods |= KEY_MOD_ALTGR;
+        else return 0; // an unrecognised word is a typo, not a modifier
+    }
+
     int next = (g_keys_tail + 1) % KEY_INJECT_MAX;
     if (next == g_keys_head) return 0;
     g_keys[g_keys_tail] = code;
+    g_key_mods[g_keys_tail] = mods;
     g_keys_tail = next;
     return 1;
 }
@@ -499,6 +533,7 @@ static void usage(void) {
     klog_write("  apps                  the gui_app registry\r\n");
     klog_write("  open <AppName>        open a window directly (no menu clicking)\r\n");
     klog_write("  close <index>         close window <index> from `gui windows`\r\n");
+    klog_write("  move X Y              move the cursor, nothing held (for hover)\r\n");
     klog_write("  click X Y             synthetic press+release at a point\r\n");
     klog_write("  drag X1 Y1 X2 Y2      synthetic press, interpolated move, release\r\n");
     klog_write("  key <c|0xNN>          synthetic keypress to the focused window\r\n");
@@ -618,9 +653,21 @@ int wm_debug_dispatch(char *line) {
         return 1;
     }
 
+    if (k_strcmp(sub, "move") == 0) {
+        char *xs = next_tok(&p), *ys = next_tok(&p);
+        int x, y;
+        if (!xs || !ys || !parse_int(xs, &x) || !parse_int(ys, &y)) {
+            klog_write("usage: gui move X Y\r\n");
+            return 1;
+        }
+        klog_printf(cmd_move(x, y) ? "gui: queued move to (%d,%d)\r\n"
+                                    : "gui: move queue full\r\n", x, y);
+        return 1;
+    }
+
     if (k_strcmp(sub, "key") == 0) {
         char *k = next_tok(&p);
-        klog_write(cmd_key(k) ? "gui: queued key\r\n" : "gui: bad or dropped key\r\n");
+        klog_write(cmd_key(k, p) ? "gui: queued key\r\n" : "gui: bad or dropped key\r\n");
         return 1;
     }
 

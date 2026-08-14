@@ -54,7 +54,14 @@ struct gui_app {
     // Called when this window has keyboard focus (it's the frontmost,
     // non-minimized window) and a key arrives. `key` is an ASCII char or
     // a KEY_* code from keyboard.h. May be NULL if the app takes no input.
-    void (*on_key)(struct window *win, int key);
+    //
+    // `mods` is the KEY_MOD_* bits held when the key was produced. Most
+    // apps ignore it: Ctrl and Alt are already folded into `key` by the
+    // terminal encoding (Ctrl-A IS 0x01), so the bit that actually earns
+    // its place is KEY_MOD_SHIFT, which the encoding cannot express for
+    // a key with no shifted variant. Shift-Tab is the case that made
+    // this necessary -- see keyboard.h's "Modifier bits".
+    void (*on_key)(struct window *win, int key, uint8_t mods);
 
     // Called on left-button-DOWN inside the content area -- NOT on
     // release, despite the name. (cx, cy) are content-relative (0,0 =

@@ -359,17 +359,20 @@ nothing but the idea. See `docs/decisions.md`.)
   content rect), so it flips above the box when there's no room below.
   See `docs/decisions.md` for why it isn't a WM overlay.
 
-This is *not* a general-purpose widget toolkit -- no focus manager, no
-layout engine beyond `ui_button_group`. The missing focus manager now
-has a visible cost worth knowing about before you write an app with two
-keyboard-taking widgets: whichever one the app tries first swallows
-every key. `ui_dropdown` handles arrows even while closed, so a
-try-each-in-turn chain leaves a `ui_listbox` next to it unreachable
-from the keyboard. UI Demo solves it the way a real toolkit would, with
-a single `kbd_focus` field set by clicking (`apps/uidemo.c`) -- copy
-that shape rather than reordering the chain and hoping. If a third app
-needs it, that's the second real caller, and a shared focus helper
-becomes the right thing to build.
+- **`ui_focus.h`/`.c`** -- keyboard focus for a window's widgets: which
+  one gets keys, Tab/Shift-Tab to cycle, and the focus ring. A widget
+  joins by exporting one `const struct ui_focus_ops`
+  (`key`/`hit`/`draw_ring`/`accepts_focus`/`set_focused`), so nothing
+  central lists them -- the same "adding one is adding a row" property
+  `gui_app_registry[]` has, and the reason this is a small vtable rather
+  than a switch over a widget-kind enum. `ui_textbox`, `ui_dropdown`,
+  `ui_listbox` and `ui_button_group` all export one; a group is ONE stop
+  with arrows moving between its buttons. Tab order is array order.
+  Built because routing keys by trying each widget in turn breaks with
+  two keyboard-taking widgets -- see `docs/decisions.md`.
+
+This is *not* a general-purpose widget toolkit -- there's a focus ring
+now, but no layout engine beyond `ui_button_group`, and no view tree.
 
 Add the next primitive here
 only once a second real caller needs it, the same reasoning that

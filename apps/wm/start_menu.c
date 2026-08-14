@@ -121,9 +121,22 @@ void start_menu_draw(int mx, int my) {
     int menu_h = item_h * total_items;
 
     uint32_t bg = THEME_PANEL_BG, border = THEME_BORDER, fg = THEME_TEXT;
-    uint32_t hover_bg = gfx_rgb(90, 110, 150);
-    uint32_t flash_bg = gfx_rgb(230, 190, 90); // distinct warm color so a click visibly differs from plain hover
-    uint32_t hot_fg = THEME_WHITE;
+    // Hover comes from ui_state_bg() now, derived from the row's OWN
+    // colour, rather than the hand-picked gfx_rgb(90, 110, 150) this used
+    // to carry. Two reasons: docs/gui-guidelines.md says not to hand-pick
+    // tints (a fixed "lighter" wash is what made hover invisible on this
+    // near-white theme once), and a fixed dark blue also forced the label
+    // to white, so the menu had a second text colour nothing else used.
+    // Derived, it darkens a light row and the ordinary text colour still
+    // reads against it.
+    uint32_t hover_bg = ui_state_bg(bg, UI_STATE_HOVER);
+    // The click flash stays a deliberately DISTINCT warm colour, not a
+    // ui_state derivation: it is not an interaction state, it is a
+    // momentary confirmation that a row was chosen (see the flash_index
+    // comment above), and it has to be obviously different from hover
+    // rather than one step further along the same axis.
+    uint32_t flash_bg = gfx_rgb(230, 190, 90);
+    uint32_t flash_fg = THEME_WHITE;
     gfx_fill_rect(menu_x, menu_y, menu_w, menu_h, bg);
 
     int hot = -1;
@@ -135,13 +148,16 @@ void start_menu_draw(int mx, int my) {
 
     for (int i = 0; i < gui_app_registry_count; i++) {
         int y = menu_y + i * item_h;
+        uint32_t row_bg = bg, row_fg = fg;
         if (i == hot) {
-            uint32_t row_bg = (i == flash_index) ? flash_bg : hover_bg;
+            row_bg = (i == flash_index) ? flash_bg : hover_bg;
+            row_fg = (i == flash_index) ? flash_fg : fg;
             gfx_fill_rect(menu_x, y, menu_w, item_h, row_bg);
-            gfx_draw_string(menu_x + 8, y + 3, gui_app_registry[i].name, hot_fg, row_bg);
-        } else {
-            gfx_draw_string(menu_x + 8, y + 3, gui_app_registry[i].name, fg, bg);
         }
+        // Clipped: an app name longer than the menu is wide would
+        // otherwise be drawn through the border (docs/gui-guidelines.md).
+        gfx_draw_string_clipped(menu_x + 8, y + 3, menu_w - 16,
+                                 gui_app_registry[i].name, row_fg, row_bg);
     }
     if (wm_system_action_count > 0) {
         int divider_y = menu_y + gui_app_registry_count * item_h;
@@ -149,13 +165,14 @@ void start_menu_draw(int mx, int my) {
         for (int i = 0; i < wm_system_action_count; i++) {
             int idx = gui_app_registry_count + i;
             int y = menu_y + idx * item_h;
+            uint32_t row_bg = bg, row_fg = fg;
             if (idx == hot) {
-                uint32_t row_bg = (idx == flash_index) ? flash_bg : hover_bg;
+                row_bg = (idx == flash_index) ? flash_bg : hover_bg;
+                row_fg = (idx == flash_index) ? flash_fg : fg;
                 gfx_fill_rect(menu_x, y, menu_w, item_h, row_bg);
-                gfx_draw_string(menu_x + 8, y + 3, wm_system_actions[i].label, hot_fg, row_bg);
-            } else {
-                gfx_draw_string(menu_x + 8, y + 3, wm_system_actions[i].label, fg, bg);
             }
+            gfx_draw_string_clipped(menu_x + 8, y + 3, menu_w - 16,
+                                     wm_system_actions[i].label, row_fg, row_bg);
         }
     }
     // Border last, after every row fill -- a hover/flash band spans the

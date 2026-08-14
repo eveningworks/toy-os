@@ -2,6 +2,8 @@
 #define UI_TEXTBOX_H
 #include <stdint.h>
 
+struct ui_focus_ops;
+
 // A retained textbox object -- owns its own geometry plus a text_field
 // (buf/len/cursor/active), the same "object owns its state, positioned
 // separately from its identity" shape ui_button.h already established
@@ -89,5 +91,10 @@ int ui_textbox_hit(const struct ui_textbox *tbx, int cx, int cy);
 // exposes widget_button() itself).
 void ui_textbox_set_active(struct ui_textbox *tbx, int active);
 int ui_textbox_key(struct ui_textbox *tbx, int key);
+
+// Joins a ui_focus ring (see ui_focus.h). Focus drives `active` here, so
+// a focused textbox shows its caret and takes keys without the app
+// having to keep the two in step by hand.
+extern const struct ui_focus_ops ui_textbox_focus_ops;
 
 #endif

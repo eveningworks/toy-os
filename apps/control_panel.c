@@ -97,7 +97,12 @@ static void tz_applet_draw(int x, int y, int w, int h) {
 
     gfx_draw_string(x, y, "Timezone:", THEME_TEXT, THEME_WINDOW_BG);
     int list_y = y + gfx_char_h() + 8;
-    ui_radio_list_draw(&g_tz_list, x, list_y, tz_current_index(),
+    // hovered = -1: the applet interface (struct applet's draw/click)
+    // doesn't carry the cursor position, so an applet cannot know what is
+    // hovered. Passing -1 is honest rather than wrong -- the row hover
+    // simply doesn't show here yet. Forwarding hover into applets is
+    // recorded in docs/roadmap.md's known-issues list.
+    ui_radio_list_draw(&g_tz_list, x, list_y, tz_current_index(), -1,
                         THEME_WINDOW_BG, THEME_TEXT, THEME_SELECTION_BG);
 
     // The current local time, so the effect of a change is visible

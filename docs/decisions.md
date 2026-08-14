@@ -102,6 +102,8 @@ there when you add an entry, or the index quietly stops being one.
 - [A dropdown's popup is a second draw call the app makes last, not a WM overlay](#a-dropdowns-popup-is-a-second-draw-call-the-app-makes-last-not-a-wm-overlay)
 - [ui_listbox counts scroll from the top; ui_scrollbar counts from the bottom](#ui_listbox-counts-scroll-from-the-top-ui_scrollbar-counts-from-the-bottom)
 - [GUI tests wait on the WM's queue depth, not on a sleep derived from frame rate](#gui-tests-wait-on-the-wms-queue-depth-not-on-a-sleep-derived-from-frame-rate)
+- [Modifier keys ride alongside the key, they don't re-encode it](#modifier-keys-ride-alongside-the-key-they-dont-re-encode-it)
+- [Keyboard focus is an app-level ring with a per-widget ops table, not a WM concept](#keyboard-focus-is-an-app-level-ring-with-a-per-widget-ops-table-not-a-wm-concept)
 
 **Shell, apps & console**
 
@@ -2836,6 +2838,71 @@ derived from frame rate is a guess; the queue depth is a fact. The
 commands themselves stay asynchronous and non-blocking -- they are
 dispatched from inside the very loop that drains them, so waiting has
 to happen on the host side (see `apps/wm/wm_debug.h`).
+
+## Modifier keys ride alongside the key, they don't re-encode it
+
+The input ring carries `(mods << 16) | key`. The KEY half is unchanged
+and still terminal-encoded -- Ctrl-A is 0x01, Alt-B is ESC then 'b', as
+the "Ctrl and Alt" section of `api/keyboard.h` has always described --
+so `keyboard_getchar()` returns exactly what it always did and every CLI
+consumer is untouched. The mods half is *additional*, read through
+`keyboard_getchar_mods()` / `keyboard_try_getchar_mods()`.
+
+**The motivating case is Shift-Tab.** Shift only swaps the layout's
+character table, and Tab has no shifted variant, so Shift-Tab and Tab
+are both 0x09 and a focus ring cannot cycle backwards. There is no way
+to express it in the terminal encoding at all.
+
+The alternative considered was another discrete `KEY_*` code, as the
+`KEY_SHIFT_ARROW_*` and `KEY_CTRL_ARROW_*` families got. That was right
+once and doesn't scale: each new GUI combination needs another constant
+and another line in `keyboard.c`, and there are only ~32 free codes
+before the Nordic block at 0xC4. A live "what is held now?" query was
+rejected for the reason those families exist in the first place -- state
+read after the fact can disagree with the keypress it describes. The
+mods are sampled inside `ring_push()`, at scancode-processing time, the
+same instant the layout table picks between 'a' and 'A'.
+
+Consequence worth knowing: `KEY_MOD_CTRL` is reported but a GUI should
+rarely match on it, because Ctrl has *already* folded the letter away.
+`key == 'a' && (mods & KEY_MOD_CTRL)` is never true; match 0x01. Shift
+is the useful bit precisely because it doesn't fold the key.
+
+`gui key <c> [shift|ctrl|alt|altgr]` sends them, and
+`gui_apps.h`'s `on_key` grew a `mods` parameter -- four apps implement
+it, so extending the signature beat a hidden accessor valid only during
+the callback.
+
+## Keyboard focus is an app-level ring with a per-widget ops table, not a WM concept
+
+`apps/ui/ui_focus.h` owns "which widget gets keys", Tab/Shift-Tab
+cycling, and the focus ring. It exists because routing keys by trying
+each widget in turn breaks as soon as two of them take the keyboard:
+whichever is tried first swallows everything it recognises. UI Demo hit
+this the day `ui_dropdown` landed -- a dropdown handles arrows even
+while CLOSED, so the listbox below it could never be arrowed at all.
+
+**Per-widget ops table, not a switch.** A widget joins by exporting one
+`const struct ui_focus_ops` (key/hit/draw_ring/accepts_focus/
+set_focused). The alternative -- a `ui_widget_kind` enum and a switch
+inside `ui_focus.c` -- would put every widget's name in that file, and a
+widget that forgot its case would fail silently at runtime rather than
+at the call site. Exporting a table is the same "adding one is adding a
+row" property `gui_app_registry[]` and the Control Panel's applet table
+already have.
+
+**App-level, not WM-level.** The WM already decides which WINDOW has the
+keyboard; a second global focus would have to be kept in agreement with
+it. Tab order is array order -- the caller writing the array already
+controls it, and every alternative (positional sorting, explicit
+indices) is more machinery for a list nobody has found too long to
+reorder by hand.
+
+Two smaller calls inside it: a `ui_button_group` is ONE focus stop with
+arrows moving between its buttons, because a row of related controls is
+one stop in every real toolkit; and the ring WRAPS while `ui_listbox`
+CLAMPS, which is not an inconsistency -- a tab ring is a cycle with no
+ends, a list has a first and last item whose boundaries mean something.
 
 ## NX enforcement scoped to userspace only -- the kernel's own identity map stays RWX
 

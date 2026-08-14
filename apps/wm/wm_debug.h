@@ -60,6 +60,12 @@ int wm_debug_next_input(int *out_x, int *out_y, uint8_t *out_buttons);
 // Same idea for keys: returns the next injected key code, or 0 if none.
 int wm_debug_next_key(void);
 
+// ...and the KEY_MOD_* bits `gui key <c> [shift|ctrl|alt]` attached to
+// it, so a test can send Shift-Tab -- which is not expressible any other
+// way, since Tab has no shifted character (see api/keyboard.h).
+// `out_mods` may be NULL, which makes this exactly wm_debug_next_key().
+int wm_debug_next_key_mods(uint8_t *out_mods);
+
 // ...and for the wheel: returns the next injected notch delta, or 0.
 // Present because apps DO handle the wheel (a scrollback's scrollbar
 // is not fully exercised without it), so leaving it out would make the

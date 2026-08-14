@@ -1,6 +1,8 @@
 #ifndef CALCULATOR_H
 #define CALCULATOR_H
 
+#include <stdint.h>
+
 struct window;
 
 // calculator_open/draw/key/click: the gui_app callbacks (see
@@ -20,7 +22,7 @@ void calculator_open(struct window *win);
 void calculator_close(struct window *win);
 
 void calculator_draw(struct window *win);
-void calculator_key(struct window *win, int key);
+void calculator_key(struct window *win, int key, uint8_t mods);
 
 // on_press/on_release (gui_apps.h) -- the press/hover visual feedback
 // AND where a button actually acts. There's deliberately no on_click

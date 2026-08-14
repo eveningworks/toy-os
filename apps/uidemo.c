@@ -148,14 +148,17 @@ struct uidemo_state {
     int checked[2];
     int radio_sel;
     int hover_name;      // index into WIDGET_NAMES, or -1
-    // Which widget keys go to. Three widgets here take the keyboard
-    // (textbox, dropdown, listbox) and this GUI has no focus concept of
-    // its own, so without this the first one in the dispatch chain
-    // swallows every key -- which is exactly what happened: the
-    // dropdown handles arrows even while closed, so the listbox could
-    // never be arrowed at all. Clicking a widget focuses it, the way
-    // every real toolkit does.
-    int kbd_focus;       // a widget_id: W_TEXTBOX, W_DROPDOWN, W_LISTBOX, or W_NONE
+    int hover_x, hover_y; // last hover point, for widgets whose hover is per-ROW rather than per-widget
+    // Keyboard focus, via the shared manager (apps/ui/ui_focus.h).
+    // Four widgets here take keys, and without a focus concept the first
+    // one in a try-each-in-turn chain swallows every key it recognises
+    // -- the dropdown handles arrows even while CLOSED, so the listbox
+    // under it could never be arrowed at all. Tab and Shift-Tab cycle;
+    // clicking focuses.
+    struct ui_focus focus;
+    struct ui_focusable focus_items[4];
+    int focus_was;       // last focus index logged, so only changes are reported
+    int pressing;        // a press is in progress; on_press fires every tick, focus must move only on the first
     // Whether the press currently in progress actually armed a button.
     // ui_button_group_release() returns -1 for BOTH "nothing was ever
     // armed" and "armed then dragged off", and only the second is a
@@ -193,16 +196,19 @@ static void set_status(const char *s) {
     k_strcpy(g_state.status, s);
 }
 
-// Moves keyboard focus, logging only real changes -- a `focus` line per
-// tick would drown the log a test is asserting on.
-static void set_focus(int widget_id) {
-    if (g_state.kbd_focus == widget_id) return;
-    g_state.kbd_focus = widget_id;
-    // The textbox owns a caret, so its focus is also visible state and
-    // has to be kept in step with this.
-    ui_textbox_set_active(&g_state.textbox, widget_id == W_TEXTBOX);
+// Names matching focus_items[]'s order, for the log.
+static const char *const FOCUS_NAMES[] = { "buttons", "textbox", "dropdown", "listbox" };
+
+// Logs a focus change if one happened. The manager owns the focus state
+// itself (including telling the textbox to show its caret), so this only
+// reports -- a `focus` line per tick would drown the log a test asserts
+// on.
+static void log_focus(void) {
+    int now = ui_focus_index(&g_state.focus);
+    if (now == g_state.focus_was) return;
+    g_state.focus_was = now;
     klog_write("uidemo: focus ");
-    klog_write(WIDGET_NAMES[widget_id]);
+    klog_write(now < 0 ? "none" : FOCUS_NAMES[now]);
     klog_write("\n");
 }
 
@@ -350,7 +356,16 @@ void uidemo_open(struct window *win) {
     g_state.checked[0] = g_state.checked[1] = 0;
     g_state.hover_name = W_NONE;
     g_state.armed = 0;
-    g_state.kbd_focus = W_NONE;
+    // Tab order is array order -- see ui_focus.h on why that's the whole
+    // ordering mechanism. The checkbox and radio list are absent on
+    // purpose: both are act-on-contact and have no keyboard behaviour of
+    // their own, so a tab stop there would be a stop that does nothing.
+    g_state.focus_items[0] = (struct ui_focusable){ &g_state.group,    &ui_button_group_focus_ops };
+    g_state.focus_items[1] = (struct ui_focusable){ &g_state.textbox,  &ui_textbox_focus_ops };
+    g_state.focus_items[2] = (struct ui_focusable){ &g_state.dropdown, &ui_dropdown_focus_ops };
+    g_state.focus_items[3] = (struct ui_focusable){ &g_state.list,     &ui_listbox_focus_ops };
+    ui_focus_init(&g_state.focus, g_state.focus_items, 4, THEME_SELECTION_BG);
+    g_state.focus_was = -1;
     set_status("ready");
     layout();
     window_set_state(win, &g_state);
@@ -367,14 +382,22 @@ void uidemo_draw(struct window *win) {
     ui_button_group_draw(&g_state.group, cx, cy);
 
     int chk_y = cy + row_checks();
-    widget_checkbox_draw(cx + PAD, chk_y, CHK_SIZE, g_state.checked[0], "Alpha",
+    widget_checkbox_draw(cx + PAD, chk_y, CHK_SIZE, g_state.checked[0],
+                          g_state.hover_name == W_CHK_ALPHA, "Alpha",
                           THEME_WINDOW_BG, THEME_TEXT);
     int beta_x = cx + PAD + widget_checkbox_width(CHK_SIZE, "Alpha") + 20;
-    widget_checkbox_draw(beta_x, chk_y, CHK_SIZE, g_state.checked[1], "Beta",
+    widget_checkbox_draw(beta_x, chk_y, CHK_SIZE, g_state.checked[1],
+                          g_state.hover_name == W_CHK_BETA, "Beta",
                           THEME_WINDOW_BG, THEME_TEXT);
 
+    // The hovered ROW, not just "is the list hovered" -- widget_at()
+    // reports the widget, so ask the list itself which row that is.
+    int radio_hot = (g_state.hover_name == W_RADIO)
+        ? ui_radio_list_hit(&g_state.radio, PAD, row_radio(),
+                             g_state.hover_x, g_state.hover_y)
+        : -1;
     ui_radio_list_draw(&g_state.radio, cx + PAD, cy + row_radio(), g_state.radio_sel,
-                        THEME_WINDOW_BG, THEME_TEXT, THEME_SELECTION_BG);
+                        radio_hot, THEME_WINDOW_BG, THEME_TEXT, THEME_SELECTION_BG);
 
     ui_textbox_draw(&g_state.textbox, cx, cy);
 
@@ -393,19 +416,31 @@ void uidemo_draw(struct window *win) {
     // painted over by the listbox and scrollback below it. A no-op while
     // the dropdown is closed -- see ui_dropdown.h.
     ui_dropdown_draw_popup(&g_state.dropdown, cx, cy);
+
+    // The focus ring goes last for the same reason the popup does --
+    // anything drawn after it would paint over it.
+    ui_focus_draw_ring(&g_state.focus, cx, cy);
 }
 
 int uidemo_hover(struct window *win, int cx, int cy) {
     (void)win;
     layout();
     int now = (cx < 0 || cy < 0) ? W_NONE : (int)widget_at(cx, cy);
+    // Kept for the radio list, whose hover is per-row: widget_at() only
+    // answers WHICH widget, and the row has to be asked of the list.
+    int moved = (cx != g_state.hover_x || cy != g_state.hover_y);
+    g_state.hover_x = cx; g_state.hover_y = cy;
     int group_changed = ui_button_group_hover(&g_state.group, cx, cy);
     // Row-level hover inside these two is theirs to track -- the name
     // logged below only says WHICH widget, and a listbox highlighting a
     // different row is a repaint the app would otherwise miss.
     if (ui_dropdown_hover(&g_state.dropdown, cx, cy)) group_changed = 1;
     if (ui_listbox_hover(&g_state.list, cx, cy)) group_changed = 1;
-    if (now == g_state.hover_name) return group_changed;
+    // A move WITHIN the radio list can change the hovered row without
+    // changing the hovered widget, so that has to repaint too.
+    if (now == g_state.hover_name) {
+        return group_changed || (moved && now == W_RADIO);
+    }
     g_state.hover_name = now;
     klog_write("uidemo: hover ");
     klog_write(WIDGET_NAMES[now]);
@@ -422,17 +457,22 @@ int uidemo_press(struct window *win, int cx, int cy) {
     // deliberately does NOT consume a press that merely dismisses an
     // open popup, so that click still reaches whatever it landed on;
     // the repaint is still needed either way, hence `was_open`.
-    int was_open = g_state.dropdown.open;
-    if (ui_dropdown_press(&g_state.dropdown, cx, cy)) {
-        set_focus(W_DROPDOWN);
-        return 1;
+    // Focus first, so a widget that acts on this very press already has
+    // it -- ui_focus_click() only moves focus, it never consumes the
+    // press (see ui_focus.h). Only on the FIRST tick of a press: it is
+    // called every tick while held, and re-running it mid-drag would
+    // move focus to whatever the cursor had wandered over.
+    int changed = 0;
+    if (!g_state.pressing) {
+        g_state.pressing = 1;
+        if (ui_focus_click(&g_state.focus, cx, cy)) { changed = 1; log_focus(); }
     }
-    int changed = (was_open != g_state.dropdown.open);
 
-    if (ui_listbox_press(&g_state.list, cx, cy)) {
-        set_focus(W_LISTBOX);
-        return 1;
-    }
+    int was_open = g_state.dropdown.open;
+    if (ui_dropdown_press(&g_state.dropdown, cx, cy)) return 1;
+    if (was_open != g_state.dropdown.open) changed = 1;
+
+    if (ui_listbox_press(&g_state.list, cx, cy)) return 1;
 
     if (ui_button_group_press(&g_state.group, cx, cy)) changed = 1;
     for (int i = 0; i < BTN_COUNT; i++) {
@@ -472,7 +512,12 @@ void uidemo_release(struct window *win) {
         set_status(m);
     }
 
+    // A keyboard activation (Space/Enter on the focused button) arrives
+    // through the same path as a mouse release, so the logging below
+    // handles both with no second branch -- see ui_button_group.h.
+    g_state.pressing = 0;
     int code = ui_button_group_release(&g_state.group);
+    if (code < 0) code = ui_button_group_take_activated(&g_state.group);
     if (code > 0) {
         char msg[32];
         k_snprintf(msg, sizeof msg, "button %u", (unsigned)code);
@@ -517,12 +562,10 @@ void uidemo_click(struct window *win, int cx, int cy) {
         // never reaches on_click; a body press pans, likewise.
         if (ui_textview_click(&g_state.view, cx, cy)) log_scroll("page");
     } else if (w == W_TEXTBOX) {
-        set_focus(W_TEXTBOX);
+        // Focus itself was already moved by ui_focus_click() in on_press
+        // (which also activated the caret via the textbox's set_focused);
+        // this only reports it.
         set_status("textbox focused");
-    } else if (w != W_DROPDOWN && w != W_LISTBOX) {
-        // Those two take focus in on_press (they act on release, so
-        // waiting until then would leave the first arrow key homeless).
-        set_focus(W_NONE);
     }
     window_invalidate(win);
 }
@@ -563,33 +606,50 @@ void uidemo_drag(struct window *win, int cx, int cy) {
     window_invalidate(win);
 }
 
-void uidemo_key(struct window *win, int key) {
+void uidemo_key(struct window *win, int key, uint8_t mods) {
     char msg[96];
     layout();
-    // Dispatch by FOCUS, not by trying each widget in turn: the dropdown
-    // handles arrows even while closed, so a try-in-order chain means
-    // the listbox never receives one. See kbd_focus's comment.
-    if (g_state.kbd_focus == W_TEXTBOX && g_state.textbox.field.active) {
-        ui_textbox_key(&g_state.textbox, key);
-        k_snprintf(msg, sizeof msg, "key %u text=\"%s\"",
-                   (unsigned)key, g_state.textbox.field.buf);
-        logline(msg);
-        set_status(msg);
-    } else if (g_state.kbd_focus == W_DROPDOWN &&
-                ui_dropdown_key(&g_state.dropdown, key)) {
-        int sel = ui_dropdown_selected(&g_state.dropdown);
-        if (sel >= 0) {
-            k_snprintf(msg, sizeof msg, "dropdown %u %s", (unsigned)sel, DD_ITEMS[sel]);
+    // ONE call: the focus manager handles Tab/Shift-Tab itself and routes
+    // everything else to the focused widget. Dispatching by trying each
+    // widget in turn is what this replaced -- the dropdown handles arrows
+    // even while closed, so the listbox never saw one.
+    int before = ui_focus_index(&g_state.focus);
+    if (ui_focus_key(&g_state.focus, key, mods)) {
+        log_focus();
+        // A keyboard activation (Space/Enter on the focused button) is
+        // RECORDED by the group rather than acted on inside its key
+        // handler, so it has to be collected here too -- on_release only
+        // fires for a mouse press, and a key path that never collected it
+        // meant Space lit nothing at all. Same call, same handling as the
+        // mouse path in on_release; see ui_button_group.h.
+        int act = ui_button_group_take_activated(&g_state.group);
+        if (act > 0) {
+            k_snprintf(msg, sizeof msg, "button %u", (unsigned)act);
             logline(msg);
             set_status(msg);
         }
-    } else if (g_state.kbd_focus == W_LISTBOX &&
-                ui_listbox_key(&g_state.list, key)) {
-        int sel = g_state.list.selected;
-        if (sel >= 0) {
-            k_snprintf(msg, sizeof msg, "list %u %s", (unsigned)sel, LIST_ITEMS[sel]);
+        int now = ui_focus_index(&g_state.focus);
+        if (now != before) {
+            // A Tab: the focus line above already said what happened.
+        } else if (now == 1) {
+            k_snprintf(msg, sizeof msg, "key %u text=\"%s\"",
+                       (unsigned)key, g_state.textbox.field.buf);
             logline(msg);
             set_status(msg);
+        } else if (now == 2) {
+            int sel = ui_dropdown_selected(&g_state.dropdown);
+            if (sel >= 0) {
+                k_snprintf(msg, sizeof msg, "dropdown %u %s", (unsigned)sel, DD_ITEMS[sel]);
+                logline(msg);
+                set_status(msg);
+            }
+        } else if (now == 3) {
+            int sel = g_state.list.selected;
+            if (sel >= 0) {
+                k_snprintf(msg, sizeof msg, "list %u %s", (unsigned)sel, LIST_ITEMS[sel]);
+                logline(msg);
+                set_status(msg);
+            }
         }
     } else {
         k_snprintf(msg, sizeof msg, "key %u (no focus)", (unsigned)key);

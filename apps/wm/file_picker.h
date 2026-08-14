@@ -1,6 +1,8 @@
 #ifndef FILE_PICKER_H
 #define FILE_PICKER_H
 
+#include <stdint.h>
+
 // A reusable Open/Save file-browser dialog -- same peer-file pattern as
 // confirm_dialog.h/context_menu.h/start_menu.h (screen-absolute, drawn
 // directly over everything, own state shared with the rest of the
@@ -81,6 +83,17 @@ void file_picker_draw(void);
 // stray click is swallowed, not passed through. Returns 0 if the
 // picker wasn't open at all.
 int file_picker_handle_click(int mx, int my);
+
+// Called every tick while the picker is open, with the live cursor and
+// button state -- the same shape wm_update_title_btn_press() and
+// confirm_dialog_update_press() have. Its Open/Save and Cancel buttons
+// arm on press and COMMIT on release over the button they armed, so a
+// press dragged off and released does nothing (docs/gui-guidelines.md).
+void file_picker_update_press(int mx, int my, uint8_t buttons);
+
+// Hover for those buttons, while nothing is held. Returns 1 if the
+// highlight changed and a repaint is needed.
+int file_picker_update_hover(int mx, int my);
 
 // Handles one key while the picker is open: routed to the filename
 // field if it's active (typing, backspace, arrow keys -- same

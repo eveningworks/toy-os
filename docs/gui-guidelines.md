@@ -122,6 +122,42 @@ and both were uncancellable the whole time -- which is also why there
 is deliberately no `ui_button_group_click()` any more (see
 `docs/decisions.md`).
 
+## Keyboard: focus, and what a control owes it
+
+A window's widgets share one `ui_focus` ring (`apps/ui/ui_focus.h`).
+Tab and Shift-Tab cycle it, clicking a widget focuses it, and the
+focused widget gets every key that isn't Tab. **Route keys by focus, not
+by trying each widget in turn** -- the second arrangement works with one
+keyboard-taking widget and silently breaks with two, because the first
+one tried swallows everything it recognises. That is not hypothetical:
+`ui_dropdown` handles arrows even while closed, which left a `ui_listbox`
+beside it completely unreachable from the keyboard.
+
+A widget joins the ring by exporting a `ui_focus_ops` table. What it
+owes:
+
+- **Draw a focus ring** (`ui_focus_ring_rect()` for the standard one), or
+  show focus some other way it can justify -- `ui_textbox` shows a caret
+  instead, so its `draw_ring` still draws the ring but its `set_focused`
+  is what turns the caret on.
+- **Decline focus when it can't use it.** `accepts_focus` returning 0
+  makes Tab skip straight over it. A disabled control that can still be
+  tabbed to is a dead stop the user has to press Tab twice to escape.
+- **Not check focus itself.** By the time `ops->key` is called the
+  manager has already decided; a widget re-checking is a second source
+  of truth.
+
+Two bindings every focusable control should honour, because every
+toolkit has them: **Space and Enter activate**, and arrows navigate
+*within* a control (a button group's buttons, a list's rows) rather than
+between controls.
+
+**Shift-Tab needs the modifier bits.** Tab is 0x09 with or without
+Shift, so `on_key`'s `mods` parameter is the only thing separating them
+(see `api/keyboard.h`). Most other bindings should ignore `mods`
+entirely: Ctrl and Alt are already folded into the key itself, so
+`key == 'a' && (mods & KEY_MOD_CTRL)` is never true -- match 0x01.
+
 ## When feedback is required -- and when it isn't
 
 Feedback is required when the user **did something and the result isn't
@@ -282,3 +318,18 @@ right thing:
   release must do nothing; that's a separate test from press-release.
 - **Check the neighbour.** A hovered control changing is half the
   assertion; the one next to it *not* changing is the other half.
+- **Park the REAL cursor to test hover, and confirm it arrived.** `gui
+  move` holds for one WM iteration only -- injected input overrides the
+  mouse for that tick and then the real pointer takes over, so the hover
+  is recomputed away before a screenshot can see it. Use
+  `DebugConsole.warp_cursor()`, which drives the real PS/2 cursor and
+  checks `gui state` for where it actually landed; `QMPSession.goto()`
+  alone is open-loop and a large jump was measured landing about a third
+  of the way.
+- **Don't sample the pixel under the cursor.** The sprite draws
+  down-and-right from its hotspot with a black outline, so probing the
+  hover point measures the cursor, not the control. A hover check
+  written that way "passed" by reading pure black.
+- `tools/dialog_test.py` and `tools/uidemo_test.py` do all of the above
+  for the confirm dialog and for UI Demo's widgets; extend those rather
+  than starting a fresh script.

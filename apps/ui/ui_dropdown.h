@@ -165,4 +165,11 @@ int ui_dropdown_wheel(struct ui_dropdown *dd, int delta);
 // and close) while open. Returns 1 if the key was consumed.
 int ui_dropdown_key(struct ui_dropdown *dd, int key);
 
+// Joins a ui_focus ring (see ui_focus.h). Its hit test covers the OPEN
+// POPUP too, so clicking a popup row keeps focus here rather than moving
+// it to whatever widget the popup is covering; and losing focus closes
+// the popup, since a list left hanging over other widgets would keep
+// swallowing clicks aimed at them.
+extern const struct ui_focus_ops ui_dropdown_focus_ops;
+
 #endif

@@ -1,6 +1,8 @@
 #ifndef CONFIRM_DIALOG_H
 #define CONFIRM_DIALOG_H
 
+#include <stdint.h>
+
 // A reusable Yes/No modal popup -- same peer-file pattern as
 // start_menu.h/.c and context_menu.h/.c (screen-absolute, drawn
 // directly over everything, own small hit-testing, state shared with
@@ -19,12 +21,21 @@
 // separate, not-yet-built item.
 //
 // Deliberately minimal, same philosophy as every popup in this
-// codebase: one message, two buttons, click-to-choose,
-// click-elsewhere-does-nothing (unlike a context menu, an open confirm
-// dialog is modal -- it stays open until Yes or No is actually
-// clicked, since silently discarding "are you sure?" on a stray click
-// would defeat the point). No keyboard shortcuts (Enter/Esc) yet --
-// add only once a real need shows up, same bar every widget here uses.
+// codebase: one message, two buttons, and modal -- unlike a context
+// menu it stays open until Yes or No is actually chosen, since silently
+// discarding "are you sure?" on a stray click would defeat the point.
+//
+// Its buttons are a real ui_button_group (apps/ui/), not hand-drawn
+// rectangles. They were hand-drawn until an audit against
+// docs/gui-guidelines.md: they had no hover state, no pressed state, and
+// acted on `handle_click`, which the WM fires on button-DOWN -- so the
+// Shutdown confirmation could not be cancelled by pressing Yes and
+// dragging off, and gave no feedback that it had heard the press at
+// all. Adopting the group fixed all three at once and deleted the
+// geometry, which is the argument for the group existing.
+//
+// No keyboard shortcuts (Enter/Esc) yet -- add only once a real need
+// shows up, same bar every widget here uses.
 
 // Whether a confirm dialog is currently open -- read by wm_render.c
 // (draw or not) and wm_input.c (route a left-click here first, before
@@ -54,5 +65,18 @@ void confirm_dialog_draw(void);
 // start_menu_handle_click() already have); returns 0 if it wasn't open
 // at all, so the caller keeps routing the click normally.
 int confirm_dialog_handle_click(int mx, int my);
+
+// Called every tick while the dialog is open, with the live cursor
+// position and button state -- the same shape (and the same reason)
+// wm_update_title_btn_press() has. This is where a press is tracked and
+// where it COMMITS, on release over the button it armed; handle_click()
+// above only swallows the click, so that a press dragged off and
+// released does nothing at all (docs/gui-guidelines.md).
+void confirm_dialog_update_press(int mx, int my, uint8_t buttons);
+
+// Hover, delivered while nothing is held. Returns 1 if the highlight
+// changed and a repaint is needed -- the same contract gui_apps.h's
+// on_hover has, for the same "don't repaint every tick" reason.
+int confirm_dialog_update_hover(int mx, int my);
 
 #endif

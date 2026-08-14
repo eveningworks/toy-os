@@ -50,7 +50,10 @@ void context_menu_close(void);
 // Draws the popup at its open position -- a no-op if context_menu_open
 // is 0 (same "caller still checks, this just draws" contract as
 // start_menu_draw()).
-void context_menu_draw(void);
+// (mx, my) is the live cursor, for the hover highlight -- derived fresh
+// every frame rather than stored, the same way start_menu_draw() takes
+// it. A no-op if the menu isn't open.
+void context_menu_draw(int mx, int my);
 
 // Handles a left-click at (mx, my) while the menu is open: runs the
 // clicked row's on_select() and closes, or just closes if the click

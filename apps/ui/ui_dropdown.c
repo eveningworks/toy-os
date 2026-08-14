@@ -2,6 +2,7 @@
 // popup is a separate draw call, and why it composes ui_listbox rather
 // than carrying a list of its own.
 #include "ui_dropdown.h"
+#include "ui_focus.h"
 #include "kapi.h"
 
 #define DEFAULT_MAX_ROWS 8
@@ -303,3 +304,46 @@ int ui_dropdown_key(struct ui_dropdown *dd, int key) {
     }
     return 0;
 }
+
+// ---- focus integration ----------------------------------------------
+//
+// See ui_focus.h. `hit` covers the OPEN POPUP as well as the closed box,
+// so clicking a popup row keeps focus on the dropdown that owns it
+// rather than moving focus to whatever widget the popup happens to be
+// covering -- the popup is drawn over other widgets by design, and
+// focus has to follow what the user sees, not what is underneath.
+static int focus_key(void *w, int key, uint8_t mods) {
+    (void)mods;
+    return ui_dropdown_key((struct ui_dropdown *)w, key);
+}
+
+static int focus_hit(const void *w, int cx, int cy) {
+    const struct ui_dropdown *dd = (const struct ui_dropdown *)w;
+    return ui_dropdown_hit(dd, cx, cy) || ui_dropdown_popup_hit(dd, cx, cy);
+}
+
+static void focus_ring(const void *w, int ox, int oy, uint32_t color) {
+    const struct ui_dropdown *dd = (const struct ui_dropdown *)w;
+    // Always the CLOSED box, even while the popup is open: the ring says
+    // where the keyboard is, and that is this control either way.
+    ui_focus_ring_rect(dd->x, dd->y, dd->w, dd->h, ox, oy, color);
+}
+
+static int focus_accepts(const void *w) {
+    return !((const struct ui_dropdown *)w)->disabled;
+}
+
+// Losing focus closes an open popup. A list left hanging over other
+// widgets after the keyboard has moved elsewhere is a stale overlay, and
+// it would still be swallowing clicks aimed at what it covers.
+static void focus_set(void *w, int focused) {
+    if (!focused) ui_dropdown_close((struct ui_dropdown *)w);
+}
+
+const struct ui_focus_ops ui_dropdown_focus_ops = {
+    .key = focus_key,
+    .hit = focus_hit,
+    .draw_ring = focus_ring,
+    .accepts_focus = focus_accepts,
+    .set_focused = focus_set,
+};

@@ -795,7 +795,8 @@ void terminal_wheel(struct window *win, int delta) {
     window_invalidate(win);
 }
 
-void terminal_key(struct window *win, int key) {
+void terminal_key(struct window *win, int key, uint8_t mods) {
+    (void)mods; // Ctrl and Alt are already folded into `key` here (keyboard.h)
     struct terminal_state *st = (struct terminal_state *)window_get_state(win);
 
     // No stdin routing to a running process yet (Milestone 1 phase 4b,

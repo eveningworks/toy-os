@@ -2,6 +2,7 @@
 // scrolling, hit-testing and selection all belong to this control
 // rather than to each app that shows a list.
 #include "ui_listbox.h"
+#include "ui_focus.h"
 #include "kapi.h"
 
 #define DEFAULT_WHEEL_ROWS 3
@@ -363,3 +364,36 @@ int ui_listbox_key(struct ui_listbox *lb, int key) {
     scroll_into_view(lb, next);
     return 1;
 }
+
+// ---- focus integration ----------------------------------------------
+//
+// One const table, so this widget joins a ui_focus ring without
+// ui_focus.c knowing it exists (see ui_focus.h). The wrappers exist
+// only to adapt signatures -- there is deliberately no behaviour here
+// that ui_listbox_key()/_hit() don't already have.
+static int focus_key(void *w, int key, uint8_t mods) {
+    (void)mods; // no listbox binding needs a modifier yet
+    return ui_listbox_key((struct ui_listbox *)w, key);
+}
+
+static int focus_hit(const void *w, int cx, int cy) {
+    return ui_listbox_hit((const struct ui_listbox *)w, cx, cy);
+}
+
+static void focus_ring(const void *w, int ox, int oy, uint32_t color) {
+    const struct ui_listbox *lb = (const struct ui_listbox *)w;
+    ui_focus_ring_rect(lb->x, lb->y, lb->w, lb->h, ox, oy, color);
+}
+
+static int focus_accepts(const void *w) {
+    const struct ui_listbox *lb = (const struct ui_listbox *)w;
+    return !lb->disabled && lb->count > 0;
+}
+
+const struct ui_focus_ops ui_listbox_focus_ops = {
+    .key = focus_key,
+    .hit = focus_hit,
+    .draw_ring = focus_ring,
+    .accepts_focus = focus_accepts,
+    .set_focused = 0, // no focus-only visual of its own; the ring is enough
+};

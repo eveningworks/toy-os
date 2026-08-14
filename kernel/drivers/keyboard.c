@@ -7,7 +7,14 @@
 
 #define KBD_DATA_PORT 0x60
 
-static volatile uint16_t ring_buf[256];
+// Each slot is (mods << 16) | key -- see keyboard.h's "Modifier bits"
+// comment. The KEY is unchanged from what this driver has always
+// pushed (terminal-encoded: Ctrl-A is 0x01, Alt-B is ESC then 'b'), so
+// every existing consumer that calls keyboard_getchar() and gets the
+// low half back behaves exactly as before. The mods half is additional
+// information for callers that need to tell Shift-Tab from Tab, which
+// the terminal encoding genuinely cannot express.
+static volatile uint32_t ring_buf[256];
 static volatile unsigned int ring_head = 0;
 static volatile unsigned int ring_tail = 0;
 static int shift_pressed = 0;
@@ -40,14 +47,34 @@ static int extended_prefix = 0;
 #define CTRL_PRESS         0x1D
 #define CTRL_RELEASE       0x9D
 
+// The modifiers physically held RIGHT NOW. Sampled by ring_push() at
+// the moment a key is pushed -- i.e. at scancode-processing time, the
+// same instant the layout table decides between 'a' and 'A'.
+//
+// That timing is the whole point, and is why this is captured here
+// rather than exposed as a "what is held now?" query an app polls
+// later: a modifier release racing a keypress then resolves the same
+// way for the mods as it already does for the character itself. See
+// docs/decisions.md -- the Shift+arrow family was given discrete codes
+// for exactly this reason, and this generalises that decision rather
+// than reversing it.
+static uint8_t current_mods(void) {
+    uint8_t m = 0;
+    if (shift_pressed) m |= KEY_MOD_SHIFT;
+    if (ctrl_pressed) m |= KEY_MOD_CTRL;
+    if (alt_pressed) m |= KEY_MOD_ALT;
+    if (altgr_pressed) m |= KEY_MOD_ALTGR;
+    return m;
+}
+
 static void ring_push(uint16_t c) {
     unsigned int next = (ring_head + 1) % 256;
     if (next == ring_tail) return; // full, drop
-    ring_buf[ring_head] = c;
+    ring_buf[ring_head] = ((uint32_t)current_mods() << 16) | c;
     ring_head = next;
 }
 
-static int ring_pop(uint16_t *out) {
+static int ring_pop(uint32_t *out) {
     if (ring_tail == ring_head) return 0; // empty
     *out = ring_buf[ring_tail];
     ring_tail = (ring_tail + 1) % 256;
@@ -160,10 +187,12 @@ void keyboard_feed_byte(uint8_t sc) {
     ring_push((uint8_t)c);
 }
 
-int keyboard_getchar(void) {
-    uint16_t c;
+int keyboard_getchar(void) { return keyboard_getchar_mods(0); }
+
+int keyboard_getchar_mods(uint8_t *out_mods) {
+    uint32_t ev;
     for (;;) {
-    while (!ring_pop(&c)) {
+    while (!ring_pop(&ev)) {
         // hlt wakes on every interrupt, not just a real keypress -- most
         // commonly the 100Hz PIT tick -- so this is a convenient, cheap
         // place to drive the framebuffer console's blinking cursor while
@@ -190,20 +219,25 @@ int keyboard_getchar(void) {
     // polls: the GUI Terminal and Notepad have their own PageUp/PageDown
     // scrolling of their own widgets, and swallowing the keys here would
     // break both.
+    int c = (int)(ev & 0xFFFF);
     if (c == KEY_PAGE_UP || c == KEY_PAGE_DOWN) {
         uint32_t page = vga_rows() > 2 ? vga_rows() - 2 : 1; // keep two lines of overlap
         if (c == KEY_PAGE_UP) vga_scroll_back((int)page);
         else vga_scroll_forward((int)page);
         continue; // keep waiting for a key the caller actually wants
     }
+    if (out_mods) *out_mods = (uint8_t)(ev >> 16);
     return c;
     }
 }
 
-int keyboard_try_getchar(void) {
-    uint16_t c;
-    if (!ring_pop(&c)) return -1;
-    return c;
+int keyboard_try_getchar(void) { return keyboard_try_getchar_mods(0); }
+
+int keyboard_try_getchar_mods(uint8_t *out_mods) {
+    uint32_t ev;
+    if (!ring_pop(&ev)) return -1;
+    if (out_mods) *out_mods = (uint8_t)(ev >> 16);
+    return (int)(ev & 0xFFFF);
 }
 
 void keyboard_read_line(char *buf, unsigned int len) {

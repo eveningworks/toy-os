@@ -703,6 +703,21 @@ history is worth reading, but a fixed papercut is just noise.
       the unrestricted one. Deliberately left recorded rather than
       rushed at the end of a long session, the same call the previous
       session made about its own last one.
+- [ ] **Control Panel applets can't show hover.** `struct applet`'s
+      `draw(x, y, w, h)` doesn't carry the cursor position, so the
+      timezone applet passes `hovered = -1` to `ui_radio_list_draw()`
+      and its rows never highlight. The Control Panel tracks hover for
+      its applet GRID, just not inside an applet. Fixing it means adding
+      a cursor to the applet draw signature (or a `hover` callback
+      beside `click`).
+- [ ] **`ui_checkbox` and `ui_radio_list` aren't in the focus ring.**
+      Both are act-on-contact with no keyboard behaviour, so a tab stop
+      there would be a stop that does nothing -- but that also means a
+      keyboard-only user cannot toggle a checkbox at all. Giving them
+      Space-to-toggle and a `ui_focus_ops` table is the fix; it needs a
+      decision about whether an act-on-contact control should also
+      commit on Space (it should) and what that does to the
+      press-then-commit rule (nothing -- a key has no drag).
 - [ ] `tools/damage_sweep.py`'s random walk sometimes drives Notepad's
       file picker open by clicking where its content happens to be
       (seed 1, step 22 did exactly that). Harmless -- the picker is a

@@ -48,15 +48,37 @@ void context_menu_close(void) {
     redraw_pending = 1;
 }
 
-void context_menu_draw(void) {
+// Which row the cursor is over, or -1. Recomputed from the live cursor
+// on every draw rather than stored, exactly as start_menu.c does it --
+// one geometry, used by drawing and hit-testing alike, so the two cannot
+// disagree about which row is which (docs/gui-guidelines.md).
+static int hot_row(int mx, int my) {
+    if (!widget_hit(g_x, g_y, g_w, g_item_h * g_count, mx, my)) return -1;
+    int idx = (my - g_y) / g_item_h;
+    return (idx >= 0 && idx < g_count) ? idx : -1;
+}
+
+void context_menu_draw(int mx, int my) {
     if (!context_menu_open) return;
     int h = g_item_h * g_count;
 
     uint32_t bg = THEME_PANEL_BG, border = THEME_BORDER, fg = THEME_TEXT;
     gfx_fill_rect(g_x, g_y, g_w, h, bg);
+
+    // Hover had to be added: this menu's rows never highlighted at all,
+    // because draw() was never given the cursor. A menu whose rows don't
+    // react reads as inert -- "any control that can be pressed shows
+    // hover", docs/gui-guidelines.md. The wash comes from ui_state_bg()
+    // rather than a hand-picked tint, so it darkens on this near-white
+    // theme instead of lightening into invisibility.
+    int hot = hot_row(mx, my);
     for (int i = 0; i < g_count; i++) {
         int y = g_y + i * g_item_h;
-        gfx_draw_string(g_x + 8, y + 3, g_items[i].label, fg, bg);
+        uint32_t row_bg = (i == hot) ? ui_state_bg(bg, UI_STATE_HOVER) : bg;
+        if (i == hot) gfx_fill_rect(g_x, y, g_w, g_item_h, row_bg);
+        // Clipped: a label longer than the menu is wide would otherwise
+        // be drawn straight through the border.
+        gfx_draw_string_clipped(g_x + 8, y + 3, g_w - 16, g_items[i].label, fg, row_bg);
     }
     gfx_draw_rect(g_x, g_y, g_w, h, border);
 }

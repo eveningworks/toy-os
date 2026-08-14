@@ -68,7 +68,15 @@ static int g_path_y;
 static int g_list_x, g_list_y, g_list_w, g_list_h, g_row_h;
 static int g_field_y, g_field_h;
 static int g_btn_y, g_btn_h;
-static int g_ok_x, g_ok_w, g_cancel_x, g_cancel_w;
+// OK/Cancel as a real ui_button_group -- hover, pressed and
+// commit-on-release come from it. They were hand-drawn rectangles acting
+// on button-DOWN until an audit against docs/gui-guidelines.md; see
+// confirm_dialog.c, which had the identical three problems and the
+// identical fix.
+#define FP_BTN_OK     0
+#define FP_BTN_CANCEL 1
+static struct ui_button g_btns[2];
+static struct ui_button_group g_group;
 
 // ---- path helpers ----
 
@@ -213,11 +221,18 @@ static void fp_compute_geometry(void) {
     y += g_field_h + 8;
 
     g_btn_y = y;
+    // gfx_text_width(), not k_strlen() * cw -- see api/gfx.h on why that
+    // identity is only true for a fixed-cell font.
     const char *ok_label = (g_mode == FILE_PICKER_SAVE) ? "Save" : "Open";
-    g_ok_w = (int)k_strlen(ok_label) * cw + 24;
-    g_cancel_w = 6 * cw + 24; // "Cancel"
-    g_ok_x = g_x + g_w - FP_PAD - g_cancel_w - 8 - g_ok_w;
-    g_cancel_x = g_x + g_w - FP_PAD - g_cancel_w;
+    int ok_w = gfx_text_width(ok_label) + 24;
+    int cancel_w = gfx_text_width("Cancel") + 24;
+    int ok_x = g_x + g_w - FP_PAD - cancel_w - 8 - ok_w;
+    int cancel_x = g_x + g_w - FP_PAD - cancel_w;
+    ui_button_init(&g_btns[FP_BTN_OK], ok_x, g_btn_y, ok_w, g_btn_h, ok_label,
+                    THEME_BUTTON_BG, THEME_TEXT, FP_BTN_OK);
+    ui_button_init(&g_btns[FP_BTN_CANCEL], cancel_x, g_btn_y, cancel_w, g_btn_h,
+                    "Cancel", THEME_BUTTON_BG, THEME_TEXT, FP_BTN_CANCEL);
+    ui_button_group_init(&g_group, g_btns, 2);
 }
 
 void file_picker_open_with(enum file_picker_mode mode, const char *title,
@@ -351,16 +366,7 @@ void file_picker_draw(void) {
 
     ui_textbox_draw(&g_name_box, 0, 0); // screen-absolute geometry (like the rest of this dialog), so origin is (0,0)
 
-    const char *ok_label = (g_mode == FILE_PICKER_SAVE) ? "Save" : "Open";
-    gfx_fill_rect(g_ok_x, g_btn_y, g_ok_w, g_btn_h, THEME_BUTTON_BG);
-    gfx_draw_rect(g_ok_x, g_btn_y, g_ok_w, g_btn_h, border);
-    gfx_draw_string(g_ok_x + (g_ok_w - (int)k_strlen(ok_label) * gfx_char_w()) / 2,
-                     g_btn_y + (g_btn_h - gfx_char_h()) / 2, ok_label, fg, THEME_BUTTON_BG);
-
-    gfx_fill_rect(g_cancel_x, g_btn_y, g_cancel_w, g_btn_h, THEME_BUTTON_BG);
-    gfx_draw_rect(g_cancel_x, g_btn_y, g_cancel_w, g_btn_h, border);
-    gfx_draw_string(g_cancel_x + (g_cancel_w - 6 * gfx_char_w()) / 2,
-                     g_btn_y + (g_btn_h - gfx_char_h()) / 2, "Cancel", fg, THEME_BUTTON_BG);
+    ui_button_group_draw(&g_group, 0, 0); // screen-absolute, so no origin
 
     gfx_draw_rect(g_x, g_y, g_w, g_h, border); // last, so no row/field fill overpaints it -- same ordering lesson start_menu.c's own comment documents
 }
@@ -431,8 +437,12 @@ static void fp_handle_row_click(int mx, int my) {
 int file_picker_handle_click(int mx, int my) {
     if (!file_picker_open) return 0;
 
-    if (widget_hit(g_ok_x, g_btn_y, g_ok_w, g_btn_h, mx, my)) { fp_confirm(); return 1; }
-    if (widget_hit(g_cancel_x, g_btn_y, g_cancel_w, g_btn_h, mx, my)) { fp_cancel(); return 1; }
+    // The buttons deliberately do NOT act here: this runs on
+    // button-DOWN, and a control that commits here can never be
+    // cancelled. Arming and committing are in
+    // file_picker_update_press() below. Still swallowed, since the
+    // picker is modal.
+    if (ui_button_group_press(&g_group, mx, my)) { redraw_pending = 1; return 1; }
 
     if (ui_textbox_hit(&g_name_box, mx, my)) {
         ui_textbox_set_active(&g_name_box, 1);
@@ -489,4 +499,25 @@ int file_picker_handle_key(int key) {
         if (ui_textbox_key(&g_name_box, key)) redraw_pending = 1;
     }
     return 1;
+}
+
+void file_picker_update_press(int mx, int my, uint8_t buttons) {
+    if (!file_picker_open) return;
+
+    if (buttons & 0x1) {
+        // Re-hit-tested every tick, so dragging off a button un-presses
+        // it visibly and dragging back re-presses.
+        if (ui_button_group_press(&g_group, mx, my)) redraw_pending = 1;
+        return;
+    }
+
+    int code = ui_button_group_release(&g_group);
+    if (code < 0) return; // nothing armed, or the press was dragged off
+    if (code == FP_BTN_OK) fp_confirm();
+    else fp_cancel();
+}
+
+int file_picker_update_hover(int mx, int my) {
+    if (!file_picker_open) return 0;
+    return ui_button_group_hover(&g_group, mx, my);
 }

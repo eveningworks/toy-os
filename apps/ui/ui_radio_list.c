@@ -29,13 +29,23 @@ void ui_radio_list_size(const struct ui_radio_list *list, int *out_w, int *out_h
 }
 
 void ui_radio_list_draw(const struct ui_radio_list *list, int x, int y, int selected,
-                         uint32_t bg, uint32_t fg, uint32_t accent) {
+                         int hovered, uint32_t bg, uint32_t fg, uint32_t accent) {
     int text_h = gfx_char_h();
     for (int i = 0; i < list->count; i++) {
         int col, row;
         item_cell(list, i, &col, &row);
         int ix = x + col * list->col_w;
         int iy = y + row * list->row_h;
+
+        // The whole row washes, because the whole row is the hit area
+        // (ui_radio_list_hit below). Through ui_state_bg() rather than a
+        // hand-picked tint, so it darkens on a light theme instead of
+        // lightening into invisibility -- docs/gui-guidelines.md.
+        uint32_t row_bg = bg;
+        if (i == hovered) {
+            row_bg = ui_state_bg(bg, UI_STATE_HOVER);
+            gfx_fill_rect(ix, iy, list->col_w, list->row_h, row_bg);
+        }
 
         // Marker: an outlined box, filled with `accent` when active.
         // A square rather than a circle because gfx has no circle
@@ -50,7 +60,11 @@ void ui_radio_list_draw(const struct ui_radio_list *list, int x, int y, int sele
         }
 
         if (list->options && list->options[i]) {
-            gfx_draw_string(ix + m + RADIO_LABEL_GAP, iy, list->options[i], fg, bg);
+            // Clipped to what's left of the column: a long option label
+            // would otherwise be drawn straight over the next column.
+            gfx_draw_string_clipped(ix + m + RADIO_LABEL_GAP, iy,
+                                     list->col_w - m - RADIO_LABEL_GAP,
+                                     list->options[i], fg, row_bg);
         }
     }
 }

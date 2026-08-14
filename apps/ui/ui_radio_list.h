@@ -43,8 +43,18 @@ void ui_radio_list_size(const struct ui_radio_list *list, int *out_w, int *out_h
 // setting isn't in the list (an /etc file naming a city this build
 // doesn't have, say) gets a list with no marker rather than a wrong one
 // marked or an out-of-bounds read.
+// `hovered` is the row under the cursor, or -1 for none -- washed one
+// step via ui_state_bg(), the same vocabulary every other control uses.
+// Pass -1 when the caller doesn't track hover, which is what every
+// caller did before this parameter existed.
+//
+// Added because docs/gui-guidelines.md requires a hover state on
+// anything clickable and this had none. The hit area is the whole row
+// (see ui_radio_list_hit below), so the wash covers the whole row too --
+// a highlight smaller than the target it describes misreports where to
+// click.
 void ui_radio_list_draw(const struct ui_radio_list *list, int x, int y, int selected,
-                         uint32_t bg, uint32_t fg, uint32_t accent);
+                         int hovered, uint32_t bg, uint32_t fg, uint32_t accent);
 
 // Index of the option at (px, py), or -1 if the point isn't on one.
 // Hit areas are the full row rectangle (marker + label + the gap

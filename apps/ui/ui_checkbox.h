@@ -24,8 +24,17 @@ int widget_checkbox_width(int size, const char *label);
 // Draws the box (outlined in `fg`; filled with `fg` too, inset, when
 // `checked`) at (x, y), sized `size` x `size`, then `label` (if any)
 // in `fg` on `bg` to its right, vertically centered against the box.
-void widget_checkbox_draw(int x, int y, int size, int checked, const char *label,
-                           uint32_t bg, uint32_t fg);
+// `hovered` washes the box+label area one step via ui_state_bg(), the
+// same vocabulary every other control uses. Pass 0 when the caller
+// doesn't track hover -- which is what every caller did before this
+// parameter existed, so behaviour is unchanged unless you opt in.
+//
+// Added because docs/gui-guidelines.md requires a hover state on
+// anything clickable and this had none: it is act-on-contact (correct
+// for a toggle) but that is about WHEN it commits, not about whether it
+// admits to being clickable.
+void widget_checkbox_draw(int x, int y, int size, int checked, int hovered,
+                           const char *label, uint32_t bg, uint32_t fg);
 
 // 1 if (px, py) falls inside the box+label's combined clickable area
 // (widget_checkbox_width()'s width, by max(size, a text row's height)

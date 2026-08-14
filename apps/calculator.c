@@ -258,7 +258,8 @@ void calculator_release(struct window *win) {
     window_invalidate(win);
 }
 
-void calculator_key(struct window *win, int key) {
+void calculator_key(struct window *win, int key, uint8_t mods) {
+    (void)mods; // Ctrl and Alt are already folded into `key` here (keyboard.h)
     // Direct passthrough for anything calc_input() understands -- the
     // keyboard driver already delivers shifted symbols ('*', '%', '+',
     // etc) as the right ASCII char (see keyboard.c), so no translation

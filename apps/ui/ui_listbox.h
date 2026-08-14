@@ -5,6 +5,8 @@
 #include "ui_primitives.h"
 #include "ui_scrollbar.h"
 
+struct ui_focus_ops;
+
 // A scrollable single-select list of text items -- rows, selection,
 // hover, keyboard navigation, and a scrollbar that appears only when the
 // items overflow, as ONE control.
@@ -207,5 +209,9 @@ int ui_listbox_wheel(struct ui_listbox *lb, int delta);
 // the caller's decision (ui_dropdown treats them as commit and cancel;
 // a plain listbox in a dialog may want them for the dialog's buttons).
 int ui_listbox_key(struct ui_listbox *lb, int key);
+
+// Joins a ui_focus ring (see ui_focus.h). Tab order is the app's array
+// order; a disabled or empty listbox declines focus and is skipped.
+extern const struct ui_focus_ops ui_listbox_focus_ops;
 
 #endif

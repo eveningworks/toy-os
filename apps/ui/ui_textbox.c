@@ -1,4 +1,5 @@
 // See ui_textbox.h for the design writeup.
+#include "ui_focus.h"
 #include "ui_textbox.h"
 #include "ui_primitives.h" // widget_hit(), CURSOR_BAR_W
 #include "kapi.h"
@@ -161,3 +162,37 @@ void ui_textbox_set_active(struct ui_textbox *tbx, int active) {
 int ui_textbox_key(struct ui_textbox *tbx, int key) {
     return widget_textfield_key(&tbx->field, key);
 }
+
+// ---- focus integration ----------------------------------------------
+//
+// See ui_focus.h. This is the widget whose focus is genuinely VISIBLE
+// without a ring -- the caret only blinks into existence when the field
+// is active -- so `set_focused` drives that, and an app no longer has to
+// remember to call ui_textbox_set_active() alongside focusing it. That
+// pairing was previously the app's job and is exactly the sort of
+// two-things-kept-in-sync-by-hand this directory exists to remove.
+static int focus_key(void *w, int key, uint8_t mods) {
+    (void)mods; // Ctrl/Alt are already folded into `key` (api/keyboard.h)
+    return ui_textbox_key((struct ui_textbox *)w, key);
+}
+
+static int focus_hit(const void *w, int cx, int cy) {
+    return ui_textbox_hit((const struct ui_textbox *)w, cx, cy);
+}
+
+static void focus_ring(const void *w, int ox, int oy, uint32_t color) {
+    const struct ui_textbox *tbx = (const struct ui_textbox *)w;
+    ui_focus_ring_rect(tbx->x, tbx->y, tbx->w, tbx->h, ox, oy, color);
+}
+
+static void focus_set(void *w, int focused) {
+    ui_textbox_set_active((struct ui_textbox *)w, focused);
+}
+
+const struct ui_focus_ops ui_textbox_focus_ops = {
+    .key = focus_key,
+    .hit = focus_hit,
+    .draw_ring = focus_ring,
+    .accepts_focus = 0, // a textbox is always focusable; it has no disabled state yet
+    .set_focused = focus_set,
+};

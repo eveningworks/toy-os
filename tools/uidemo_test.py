@@ -57,7 +57,14 @@ DEFAULT_SOCK = ".vm.serial"
 K_UP, K_DOWN = "0x91", "0x92"
 K_PGUP, K_PGDN = "0x93", "0x94"
 K_HOME, K_END = "0x97", "0x98"
+K_LEFT, K_RIGHT = "0x95", "0x96"
 K_ESC = "0x1b"
+# Tab is 0x09 with OR without Shift -- the modifier word is the only
+# thing that distinguishes them. See api/keyboard.h's "Modifier bits".
+K_TAB = "0x09"
+# Space has to go in as hex: `gui key` splits its arguments on
+# whitespace, so a literal " " arrives as no argument at all.
+K_SPACE = "0x20"
 
 
 class Demo:
@@ -92,8 +99,9 @@ class Demo:
         self.dbg.settle()
         return self.events()
 
-    def key(self, k):
-        self.dbg.send(f"gui key {k}")
+    def key(self, k, mods=""):
+        """`mods` is a space-separated list of shift/ctrl/alt/altgr."""
+        self.dbg.send(f"gui key {k} {mods}".rstrip())
         self.dbg.settle()
         return self.events()
 
@@ -209,7 +217,9 @@ def run(d):
     bx, by, bw, bh = d.layout["btn1"]
     got = d.click(bx + bw // 2, by + bh // 2)
     d.check_absent("outside click changes no value", got, "dropdown 0")
-    d.check("outside click dismissed the popup", got, "focus none")
+    # Clicking the buttons row moves focus THERE -- the button group is in
+    # the focus ring, so this is "focus buttons", not "focus none".
+    d.check("outside click moved focus to the buttons", got, "focus buttons")
 
     print("\n== keyboard focus follows the click ==")
     d.check("clicking the listbox focuses it", d.click(*d.list_row(0)), "focus listbox")
@@ -230,6 +240,26 @@ def run(d):
     d.key(K_ESC)
     d.events()
     d.check("Esc restored the opening value", d.key(K_DOWN), "dropdown 2 Capybara")
+
+    print("\n== Tab / Shift-Tab move focus ==")
+    # Tab order is the app's array order: buttons, textbox, dropdown,
+    # listbox. Focus is on the dropdown (index 2) here.
+    d.check("Tab moves forward", d.key(K_TAB), "focus listbox")
+    d.check("Tab wraps", d.key(K_TAB), "focus buttons")
+    # Shift-Tab is the case modifier bits exist for at all: Tab has no
+    # shifted character, so without them this is indistinguishable from
+    # plain Tab and a ring can only ever cycle one way.
+    d.check("Shift-Tab moves backward", d.key(K_TAB, "shift"), "focus listbox")
+    d.check("Shift-Tab again", d.key(K_TAB, "shift"), "focus dropdown")
+
+    print("\n== focused buttons take arrows and Space ==")
+    d.key(K_TAB)  # -> listbox
+    d.key(K_TAB)  # -> buttons (wrap)
+    d.events()
+    d.check("Space activates the focused button", d.key(K_SPACE), "button 1")
+    d.key(K_RIGHT)
+    d.check("right arrow moves within the group, Space commits it",
+            d.key(K_SPACE), "button 2")
 
 
 def main():

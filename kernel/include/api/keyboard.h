@@ -116,6 +116,39 @@
 // PS/2 data port. Don't call this from an IRQ handler directly.
 void keyboard_feed_byte(uint8_t sc);
 
+// ---- Modifier bits ----
+//
+// Which modifiers were physically held when a key was produced. These
+// ride ALONGSIDE the key, they don't replace its encoding: Ctrl-A is
+// still 0x01 and Alt-B is still ESC then 'b', exactly as the section
+// above describes, so every CLI consumer is unaffected and the terminal
+// encoding stays canonical.
+//
+// They exist because that encoding genuinely cannot express some things
+// a GUI needs. **Shift-Tab is the motivating case**: Shift only swaps
+// the layout's character table, and Tab has no shifted variant, so
+// Shift-Tab and Tab arrive as the same 0x09 and a focus ring has no way
+// to cycle backwards. The alternative was another discrete KEY_* code,
+// as the KEY_SHIFT_ARROW_* family got -- fine once, but it doesn't
+// scale, and there are only ~32 free codes before the Nordic block at
+// 0xC4.
+//
+// Sampled at scancode-processing time, the same instant the layout
+// table picks between 'a' and 'A' -- NOT queryable as live state
+// afterwards. That is the same timing rule the Shift+arrow codes
+// follow, and for the same reason: a modifier release racing a keypress
+// must resolve one way, not two. See docs/decisions.md.
+//
+// Note KEY_MOD_CTRL and KEY_MOD_ALT are reported for completeness, but a
+// GUI generally should NOT act on them for letter keys -- by the time
+// the key arrives, Ctrl-A has already become 0x01, so `key=='a' &&
+// (mods & KEY_MOD_CTRL)` is never true. Match the control code itself.
+// Shift is the useful one, because it does not fold the key away.
+#define KEY_MOD_SHIFT 0x01
+#define KEY_MOD_CTRL  0x02
+#define KEY_MOD_ALT   0x04 // LEFT Alt (Meta) only -- AltGr is separate, see above
+#define KEY_MOD_ALTGR 0x08
+
 // Blocking read of a single byte from the input stream: either an ASCII
 // char or one of the KEY_* codes above.
 int keyboard_getchar(void);
@@ -123,6 +156,12 @@ int keyboard_getchar(void);
 // Same as keyboard_getchar but returns -1 immediately if nothing is
 // waiting, instead of blocking. Used by the GUI event loop.
 int keyboard_try_getchar(void);
+
+// The same two reads, but also reporting the KEY_MOD_* bits held when
+// the key was produced. `out_mods` may be NULL, in which case these are
+// exactly the two functions above -- which is how those are implemented.
+int keyboard_getchar_mods(uint8_t *out_mods);
+int keyboard_try_getchar_mods(uint8_t *out_mods);
 
 // Blocking read of one line into buf (max len-1 chars + null terminator).
 // Echoes typed characters to the VGA console and handles backspace.
