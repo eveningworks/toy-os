@@ -45,6 +45,67 @@ struct win_event {
                         // and leaves room to grow without a size change
 };
 
+// ---------------------------------------------------------------------
+// Client -> server requests
+// ---------------------------------------------------------------------
+//
+// The other direction of the protocol, and deliberately the same shape:
+// one typed message, not one syscall per operation. That is what keeps
+// the client/server boundary a protocol rather than an API -- add an
+// operation and it is a new message type, carried by the same
+// transport, with no new kernel entry point and nothing for a future
+// userspace server to re-plumb.
+
+#define WIN_REQ_CREATE  1 // a: width, b: height, c: x, d: y (screen).
+                           // On success `window` is filled in with the
+                           // new window's id and the client's buffer is
+                           // mapped at win_buffer_vaddr(id).
+#define WIN_REQ_PRESENT 2 // `window`: which one. The client has finished
+                           // drawing into its buffer; composite it.
+#define WIN_REQ_DESTROY 3 // `window`: which one. Closes it and unmaps
+                           // the buffer.
+#define WIN_REQ_TITLE   4 // `window`: which one; the title comes from
+                           // the request's `text` field.
+
+// Longest window title a client may set, including the NUL. Matches the
+// window manager's own WIN_TITLE_MAX -- a client that sends more gets
+// it truncated at this boundary rather than refused, since a too-long
+// title is a cosmetic problem and not worth failing a request over.
+#define WIN_TITLE_LEN 32
+
+// Largest client window, in pixels. Bounded because the server
+// allocates and maps the whole buffer up front: at 4 bytes per pixel
+// this is 300 pages, which is the most this kernel is willing to hand
+// one window without a growable-mapping story.
+#define WIN_CLIENT_MAX_W 640
+#define WIN_CLIENT_MAX_H 480
+
+// Same fixed-layout discipline as struct win_event: no pointers, so the
+// identical bytes work whether copied by a syscall or read out of a
+// shared ring.
+struct win_request_msg {
+    uint32_t type;   // WIN_REQ_*
+    uint32_t window; // in for PRESENT/DESTROY/TITLE, out for CREATE
+    int32_t  a, b, c, d;
+    char     text[WIN_TITLE_LEN]; // WIN_REQ_TITLE only; NUL-terminated
+};
+
+// A client's window buffers are mapped at fixed, per-window addresses
+// so a client never has to be told where its buffer landed -- it can
+// compute the address from the window id the server handed back.
+//
+// Spaced WIN_BUFFER_STRIDE apart, which is comfortably more than the
+// largest buffer WIN_CLIENT_MAX_W * WIN_CLIENT_MAX_H * 4 can need
+// (1.17 MiB), so two windows' mappings can never overlap regardless of
+// their sizes.
+#define WIN_CLIENT_BASE   0x8001000000ULL
+#define WIN_BUFFER_STRIDE 0x0000200000ULL // 2 MiB per window slot
+#define WIN_CLIENT_MAX    4 // windows one client may hold at once
+
+static inline uint64_t win_buffer_vaddr(uint32_t window) {
+    return WIN_CLIENT_BASE + (uint64_t)window * WIN_BUFFER_STRIDE;
+}
+
 // How many events the server will hold for one client before it starts
 // dropping the OLDEST. Dropping the oldest rather than the newest is
 // deliberate: for input, the most recent state is the one that matters,

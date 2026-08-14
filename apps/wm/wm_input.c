@@ -188,6 +188,12 @@ void wm_handle_left_click(int mx, int my) {
                 content_pressed = fi;
                 windows[fi].app->on_press(&windows[fi], ccx, ccy);
             }
+            // A ring-3 client gets the same event as a message instead
+            // of a callback. It has no on_click/on_press distinction --
+            // that split exists so a kernel app can paint press
+            // feedback synchronously, which a client does for itself by
+            // drawing into its own buffer and presenting.
+            wm_client_send_mouse(&windows[fi], WIN_EV_MOUSE_DOWN, mx, my, 1);
         }
         redraw_pending = 1;
         return;
@@ -435,6 +441,21 @@ void wm_update_title_btn_press(int mx, int my, uint8_t buttons) {
                 }
             }
             bring_to_front(idx);
+        } else if (wm_client_is_client_window(&windows[idx])) {
+            // A client's window is the CLIENT's to close: it may have
+            // unsaved state, and the WM tearing it down behind the
+            // process's back would leave that process drawing into a
+            // buffer that is no longer on screen. So the X is a
+            // request (WIN_EV_CLOSE), and the client answers with
+            // WIN_REQ_DESTROY -- the same polite-close handshake every
+            // real windowing system uses.
+            //
+            // A client that ignores it keeps its window, which is the
+            // honest consequence of the handshake. Force-closing an
+            // unresponsive client needs a "not responding" timeout and
+            // a way to kill the process, neither of which exists yet --
+            // see docs/roadmap.md's Milestone 41.
+            wm_client_send_close(&windows[idx]);
         } else {
             close_window(idx); // shifts windows[] -- nothing below may touch windows[idx] again
         }

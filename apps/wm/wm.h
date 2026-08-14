@@ -41,6 +41,28 @@ struct window {
     // diff against".
     int last_x, last_y, last_w, last_h;
     int last_visible;
+
+    // A CLIENT window: one owned by a ring-3 process rather than by a
+    // kernel-space `struct gui_app`. `client_pid` is 0 for an ordinary
+    // app window, and the two are mutually exclusive -- a window has
+    // either an `app` or a client, never both.
+    //
+    // The WM's job for one of these is narrower than for an app window:
+    // it owns the chrome, the geometry and the z-order exactly as
+    // always, but the content is simply the client's pixels, blitted.
+    // There is no on_draw() to call and no app state to keep, because
+    // the client is a separate process that draws on its own schedule
+    // and tells the WM when it's done (WIN_REQ_PRESENT).
+    //
+    // `client_buf` is a kernel-visible pointer to client_w * client_h
+    // 32bpp pixels -- the same memory the client itself sees mapped at
+    // win_buffer_vaddr(client_win). It stays valid until
+    // window_destroyed() returns; see kernel/proc/win_server.c, which
+    // owns the frames behind it.
+    int client_pid;
+    uint32_t client_win;
+    uint32_t *client_buf;
+    int client_w, client_h;
 };
 
 // Height of a window's title bar in pixels (matches the taskbar height).

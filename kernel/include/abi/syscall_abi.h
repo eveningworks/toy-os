@@ -392,4 +392,28 @@ struct dirent {
                            // via scheduler_block_current(), so a
                            // waiting client uses no timeslices at all.
 
+#define SYS_WIN_REQUEST 25 // RDI = pointer to a `struct win_request_msg`
+                            // (in/out -- WIN_REQ_CREATE writes the new
+                            // window id back into `window`). Returns 1
+                            // on success, 0 if the server refused the
+                            // request, -1 on a bad pointer, an unknown
+                            // request type, a caller with no scheduler
+                            // slot, or no window server registered
+                            // (i.e. the desktop isn't running).
+                            //
+                            // ONE syscall for every windowing
+                            // operation, dispatched on the message's
+                            // own `type`, rather than a syscall per
+                            // operation. That is the whole point: the
+                            // client/server boundary stays a protocol,
+                            // so adding an operation is a new message
+                            // type and moving the server to ring 3 is a
+                            // transport swap. See abi/win_proto.h.
+                            //
+                            // This supersedes SYS_WIN_CREATE/
+                            // SYS_WIN_PRESENT (7/8) above, which stay
+                            // for userland/win_test.c: those are modal
+                            // and single-window, and their window never
+                            // enters the WM's window list at all.
+
 #endif

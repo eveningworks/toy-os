@@ -95,6 +95,7 @@
 #include "elf_run.h"
 #include "process.h" // process_context_is_armed() -- see kernel_slot_runnable()
 #include "win_events.h" // win_events_reset() at spawn -- see scheduler_spawn()
+#include "win_server.h" // win_server_client_gone() -- see scheduler_on_exit()
 #include "fs.h"
 #include "gdt.h"
 #include "fpu.h"
@@ -516,6 +517,15 @@ void scheduler_on_exit(int code) {
     procs[current_index].state = SCHED_ZOMBIE;
     procs[current_index].exit_code = code;
     alive_count--;
+
+    // Tell the window server to drop anything this client still owned.
+    // Here rather than at reap: a zombie's windows must come off the
+    // screen the moment it dies, not whenever someone gets round to
+    // polling it -- otherwise a crashed client leaves a window that
+    // draws stale pixels and answers no input. A no-op when no server
+    // is registered, which is every non-GUI boot.
+    win_server_client_gone(current_index + 1);
+
     current_index = -1;
 
     // Continue the rotation from the slot that just exited (which is

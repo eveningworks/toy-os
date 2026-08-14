@@ -148,6 +148,14 @@ uint32_t gfx_get_pixel(int x, int y);
 // first real caller (the mouse cursor sprite).
 void gfx_blend_pixel(int x, int y, uint32_t color, uint8_t alpha);
 void gfx_fill_rect(int x, int y, int w, int h, uint32_t color);
+
+// Copies a w*h block of 32bpp pixels to (x, y). `src_pitch_px` is the
+// source's row stride in PIXELS (not bytes), so a caller can blit a
+// sub-rectangle out of a wider buffer. Goes through gfx_put_pixel(), so
+// it honours the clip rect and damage tracking like every other
+// primitive here. Used to composite a ring-3 client's window buffer --
+// see kernel/proc/win_server.c.
+void gfx_blit(int x, int y, int w, int h, const uint32_t *src, int src_pitch_px);
 void gfx_draw_rect(int x, int y, int w, int h, uint32_t color);
 void gfx_clear(uint32_t color);
 void gfx_draw_char(int x, int y, char c, uint32_t fg, uint32_t bg);

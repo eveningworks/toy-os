@@ -346,6 +346,26 @@ void gfx_fill_rect(int x, int y, int w, int h, uint32_t color) {
             gfx_put_pixel(x + i, y + j, color);
 }
 
+// Copies a w*h block of 32bpp pixels to (x, y). `src_pitch_px` is the
+// source's row stride IN PIXELS, which is not always `w` -- a caller
+// blitting a sub-rectangle out of a larger buffer passes the larger
+// buffer's width.
+//
+// Deliberately a gfx_put_pixel() loop rather than a row-wise memcpy
+// into the back buffer, exactly like gfx_fill_rect() above: that is
+// what makes it honour the active clip rect, the damage region and the
+// dirty-row tracking gfx_present() depends on, with no second copy of
+// any of that logic to keep in sync. gfx_fill_rect() already sets the
+// precedent that per-pixel cost is acceptable here -- it paints the
+// whole desktop background the same way.
+void gfx_blit(int x, int y, int w, int h, const uint32_t *src, int src_pitch_px) {
+    if (!src || w <= 0 || h <= 0) return;
+    for (int j = 0; j < h; j++) {
+        const uint32_t *row = src + (uint32_t)j * (uint32_t)src_pitch_px;
+        for (int i = 0; i < w; i++) gfx_put_pixel(x + i, y + j, row[i]);
+    }
+}
+
 void gfx_draw_rect(int x, int y, int w, int h, uint32_t color) {
     gfx_fill_rect(x, y, w, 1, color);
     gfx_fill_rect(x, y + h - 1, w, 1, color);

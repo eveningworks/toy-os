@@ -12,6 +12,7 @@
 // thing that can only be true if every link worked: the exit code.
 #include "ktest.h"
 #include "win_events.h"
+#include "win_server.h"
 #include "scheduler.h"
 #include "timer.h"
 #include "fs.h"
@@ -128,4 +129,34 @@ KTEST("win_events", "a ring-3 process blocks in SYS_WAIT_EVENT and is woken") {
 
     KTEST_ASSERT(exited);
     KTEST_ASSERT_EQ(exit_code, WANT); // it received every event, and only those
+}
+
+// win_server.c's refusal paths, which are its access-control story and
+// are worth pinning down independently of anything drawing.
+//
+// Narrow ON PURPOSE: the interesting cases (create, present, ownership
+// isolation between two clients) need a registered presentation layer,
+// and registering a stub here would clobber the real window manager if
+// this suite is ever run while the desktop is up. Those paths are
+// covered end-to-end by tools/winclient_test.py instead, which drives a
+// real ring-3 client against the real WM -- stronger evidence than a
+// stub would give, and with nothing to clobber.
+KTEST("win_server", "requests are refused when no server is registered") {
+    if (win_server_active()) KTEST_SKIP("a window server is registered (desktop is up)");
+
+    struct win_request_msg req = {0};
+    req.type = WIN_REQ_CREATE;
+    req.a = 100;
+    req.b = 100;
+    // -1, not 0: "there is no server" is a different answer from "the
+    // server said no", and a client needs to be able to tell them apart
+    // -- the first means "you are not in a desktop session", the second
+    // means "try something smaller".
+    KTEST_ASSERT_EQ(win_server_request(1, &req), -1);
+}
+
+KTEST("win_server", "a bad pid owns nothing") {
+    KTEST_ASSERT_EQ(win_server_window_count(0), 0);
+    KTEST_ASSERT_EQ(win_server_window_count(-1), 0);
+    KTEST_ASSERT_EQ(win_server_window_count(99), 0);
 }

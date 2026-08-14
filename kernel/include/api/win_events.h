@@ -8,8 +8,10 @@
 // protocol's delivery path (abi/win_proto.h has the message format and
 // the reasoning behind separating the two).
 //
-// Kernel-internal on purpose: `apps/` reaches this through the window
-// manager, and ring 3 reaches it through SYS_WAIT_EVENT/SYS_POLL_EVENT.
+// Ring 3 reaches these queues through SYS_WAIT_EVENT/SYS_POLL_EVENT and
+// never touches this header. The one thing that does is the window
+// server (apps/wm/wm_client.c), which is why this lives in api/ rather
+// than kernel/ -- see win_server.h's note on the same promotion.
 // Nothing else should be pushing events at a client.
 
 // Drops anything queued for `pid` and resets its queue. Called when a

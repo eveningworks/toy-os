@@ -1104,14 +1104,30 @@ Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
 - [x] ~~An event message format, and delivery to a ring-3 process~~ --
       done: `abi/win_proto.h`'s `struct win_event` plus per-process
       queues and `SYS_POLL_EVENT`/`SYS_WAIT_EVENT`.
-- [ ] Event SOURCES: route real keyboard and mouse input to the client
-      that owns the focused window. The format and the delivery path
-      exist; what doesn't yet is window ownership to route BY, which is
-      the next item. There is still no mouse syscall of any kind.
-- [ ] Multiple windows per process over a shared-memory ring, replacing
-      `SYS_WIN_CREATE`'s single fixed-vaddr 640x480 buffer -- and with
-      it, the client-side window ids `struct win_event.window` already
-      carries
+- [x] ~~Event SOURCES: route real keyboard and mouse input to the
+      client that owns the focused window~~ -- done. The WM decides WHO
+      an event belongs to (focus, hit-testing, z-order, all unchanged);
+      the protocol decides what it says.
+- [x] ~~Client windows in the WM's own window list, with real chrome,
+      focus, z-order and a taskbar button~~ -- done, see `CHANGELOG.md`.
+      `SYS_WIN_REQUEST` carries typed messages; `win_server.c` owns the
+      memory half and `wm_client.c` the presentation half.
+- [ ] Multiple windows per process: the protocol already carries window
+      ids and `win_server.c` already tracks WIN_CLIENT_MAX per client,
+      but `userland/winclient.c` only ever opens one, so the path is
+      untested with more.
+- [ ] Move the transport from one-message-per-syscall to a
+      shared-memory ring the client maps once. The message formats are
+      already designed for it (no pointers, fixed layout) -- this is
+      the step that makes the syscall count stop scaling with event
+      rate.
+- [ ] Force-close an unresponsive client. Today the X is a polite
+      `WIN_EV_CLOSE` the client answers with `WIN_REQ_DESTROY`; a
+      client that ignores it keeps its window. Needs a "not responding"
+      timeout and a way to kill a process, neither of which exists.
+- [ ] Client-side window resize. The WM can resize a client's window
+      frame, but `WIN_EV_RESIZE` is defined and never sent, and the
+      buffer is allocated once at its creation size.
 - [ ] An abstract transport behind that protocol, so the server side can
       move to ring 3 later without rewriting every call site -- the same
       "one struct of function pointers" pattern `display_driver` and the
@@ -2557,10 +2573,9 @@ comment.
   and uses no timeslices at all. `SYS_READ_KEY` stays non-blocking (its
   contract is published and `echo.c` depends on it); new code should
   use the event API instead.
-- **One window per process at a fixed vaddr**, capped 640x480, position
-  fixed at creation (`SYS_WIN_CREATE`/`SYS_WIN_PRESENT`). It is a
-  genuine client/server split already -- just single-window,
-  single-process, modal, and outside `wm.c`'s window list.
+- ~~**One window per process at a fixed vaddr**~~ -- superseded.
+  `SYS_WIN_CREATE`/`SYS_WIN_PRESENT` remain for `userland/win_test.c`
+  (modal, outside the window list); new clients use `SYS_WIN_REQUEST`.
 - **4-process table, one 4KB stack page, no growth, no IPC, no
   `fork`/`exec`.**
 - **Drawing lives in the kernel** -- `gfx.c`, `apps/ui/` and the

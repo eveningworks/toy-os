@@ -46,6 +46,14 @@ int vmm_map_user_page_flags(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
                              int writable, int executable);
 
 // Loads CR3 with the given address space.
+// Clears one user page's mapping. Does NOT free the frame it pointed
+// at, nor the page tables above it -- the caller owns the frame (only
+// it knows whether that means pmm_free_frame() or
+// pmm_free_contiguous()), and the tables belong to the address space,
+// freed wholesale by vmm_destroy_address_space(). Returns 1 if a
+// mapping was removed, 0 if nothing was mapped there (not an error).
+int vmm_unmap_user_page(uint64_t pml4_phys, uint64_t vaddr);
+
 void vmm_switch_address_space(uint64_t pml4_phys);
 
 // Frees every physical frame this address space privately owns -- every
