@@ -1791,6 +1791,70 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
     ticking (`18:49:03` -> `18:49:19` across two screenshots), taskbar
     Start/window buttons unaffected with a window open -- see
     `screenshots/2026-08-12/tray-clock-*.png`.
+- **`docs/tfs3-design.md` -- the Milestone 15 (TFS3 inode layer)
+  starting spec, revised from an earlier design discussion and checked
+  against the real tree.** Design only; no filesystem code changed.
+  What changed versus the discussion draft, and why:
+  - **Inode padded from 90 to 128 bytes** (4 per sector -- no inode
+    straddles a sector boundary, torn-sector and read-modify-write
+    behavior stay clean) with the padding earmarked for Milestone 17's
+    owner/mode; the redundant `used` byte dropped (the inode bitmap is
+    the single allocation authority, with the fsck arbitration rules
+    written down).
+  - **Timestamps become uint64 epoch seconds** -- a new incompatible
+    format is the free moment to retire the 7-byte `rtc_time`
+    serialization and its no-offset ambiguity; costs one civil<->epoch
+    helper at implementation time (none exists in the kernel today).
+  - **Journal scope decided** (the draft's one open fork): a
+    fixed-size intent-log transaction of up to 4 metadata blocks,
+    generalizing `persist_record()`'s two-barrier discipline --
+    inode-only journaling would have been *weaker* than TFS2, whose
+    single record write was the whole mutation.
+  - **Everything starts at LBA 64**: TFS2 parks its superblock at
+    LBA 0 and journal at LBA 1, colliding with an MBR and the GPT
+    header (a collision already paid for once -- see
+    `docs/decisions.md`'s GPT entry); 32 KiB of reserved space fixes
+    that for free in a new format.
+  - **Superblock and group descriptors got checksums** (FNV-1a, the
+    hash TFS2 already has kernel- and host-side) -- the "unreadable
+    superblock is not a foreign disk" lesson, applied at design time.
+  - **`.`/`..` and link-count rules specified**, including the
+    empty-directory test the no-recursive-delete policy needs, and
+    hardlinks-to-directories refused outright.
+  - **Symlinks are first-class in the format** (fast symlinks inline
+    in the 60-byte pointer area, data-block fallback past that) with
+    implementation deferred -- an explicit user requirement: symlinks
+    are wanted eventually and must not need a format bump. The doc
+    records where resolution has to live (a backend-internal resolve
+    loop with a hop cap -- `kpath.c` is purely lexical and `vfs.c`
+    does no path work, so neither can host it).
+  - **Group descriptors slimmed** to the two genuinely-stateful cache
+    fields (free counts); the draft's per-group `*_start` fields were
+    all derivable from the fixed group layout, i.e. state that could
+    only agree with a formula or be corrupt.
+  - **Performance policies recorded, none in the format**:
+    try-adjacent-first allocation (so sequential files stay contiguous
+    and the existing ATA run-coalescing actually fires), a per-group
+    allocation rotor, a small in-RAM name-lookup cache, and an
+    explicit rule that TFS3 sits *behind* Milestone 3's block cache
+    rather than growing its own.
+  - **Capacity table baked into the doc** so it isn't rederived:
+    ~590k inodes on today's 9 GiB image at the default 16 KiB/inode
+    ratio (vs. 256 files total today), ~4 TiB format ceiling on file
+    size (disk-capped at 9 GiB today / 128 GiB under LBA28), uncapped
+    directory sizes, 255-byte names, no on-disk path-length limit.
+  - The per-data-block checksum feature bit stays format-reserved but
+    its algorithm is explicitly deferred to Milestone 16 (the kernel's
+    only CRC today is plain CRC-32, `static` in the GPT parser, so
+    M16's CRC32c is new code either way -- the doc records the
+    divergence instead of silently having two answers).
+  - `docs/roadmap.md`'s Milestone 15 now points at the doc and carries
+    the two symlink line items (format now, implementation later).
+  - Verified: doc-only change (nothing under `kernel/`/`apps/`
+    touched); offset tables self-checked (inode fields sum to 128,
+    superblock/journal headers to 48 with checksums last); claims
+    about the tree spot-checked against `tfs.c`, `fs_ops.h`,
+    `kpath.h`, `partition.c`, `tfs2_writer.py`.
 
 ### Changed
 - **A documented, checked on-disk filesystem layout -- and the test

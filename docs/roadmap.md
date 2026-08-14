@@ -399,6 +399,11 @@ it serves. Small, and it makes everything above it discoverable.*
 
 ### Milestone 15 -- TFS3: an inode layer (planned v0.15.0)
 
+*Starting spec: `docs/tfs3-design.md` (design settled 2026-08-14 --
+block groups, 128-byte checksummed inodes, epoch timestamps, a
+4-block journal transaction, symlinks carried in the format from day
+one; see that doc for every decision and its reasoning).*
+
 - [ ] Split each record into a directory entry (name -> inode number)
       and an inode (metadata + block pointers)
 - [ ] Link count, and `unlink` that frees blocks only at zero
@@ -411,7 +416,16 @@ it serves. Small, and it makes everything above it discoverable.*
 - [ ] Raise `FS_PATH_MAX` (64) and `FS_MAX_FILES` (256), both below what
       ported code assumes
 - [ ] Room in the inode for owner/mode (Milestone 17) and `time_t`
-      (Milestone 40), even if nothing fills them yet
+      (Milestone 40), even if nothing fills them yet -- the design
+      doc's 128-byte inode reserves both, and stores timestamps as
+      epoch seconds outright
+- [ ] Symlink FORMAT support (fast symlinks inline in the pointer
+      area) -- carried from day one per the design doc, so adding
+      symlinks later needs no format bump
+- [ ] Symlink IMPLEMENTATION (create/read, backend-internal resolve
+      loop with an ELOOP-style hop cap) -- deliberately deferred past
+      the initial TFS3 landing; see the design doc's Symlinks section
+      for where resolution has to live and why
 - [ ] `fsck` taught to check link counts, not just block ownership
 - [ ] A migration path (or an explicit "reformat, no migration"
       decision) from TFS2 v3 images
