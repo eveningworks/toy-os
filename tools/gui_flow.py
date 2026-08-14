@@ -19,8 +19,11 @@ for window rects. See tools/gui_debug.py -- DebugConsole.menu_row(label)
 replaces all of the arithmetic below. Prefer that for new tests; this
 module stays for flows that only have a QMP connection, and because a
 hardcoded number that has been checked against the kernel is still
-useful as a cross-check. (Verified 2026-08-13: the kernel reports
-menu_y=475 and item_h=27, matching the values below exactly.)
+useful as a cross-check. (Re-verified 2026-08-14 after the default font
+dropped from FONT_SIZE_18 to FONT_SIZE_14: the kernel reports
+menu_y=410, item_h=22 and taskbar h=24, matching the values below.
+Note how many of these numbers moved for a one-line font change --
+that is the argument for asking the kernel rather than hardcoding.)
 
 Known-good constants below (SCREEN_W/H, TASKBAR_H, ITEM_H) match the
 project's fixed 1280x720 QEMU boot resolution and default font -- if a
@@ -55,40 +58,51 @@ from qmp_test import QMPSession  # noqa: E402
 
 SCREEN_W = 1280
 SCREEN_H = 720
-# TASKBAR_H/ITEM_H/MENU_TOP_Y were previously calibrated for
-# gfx_char_h()=18 (TASKBAR_H=32, ITEM_H=24) -- re-measured this session
-# (pixel-scanned a live screenshot's border/divider rows, see the file
-# picker QMP-testing session's notes) and found the ACTUAL running
-# kernel's default font now measures gfx_char_h()=21, not 18: TASKBAR_H
-# (WM_TITLEBAR_H = gfx_char_h()+8) = 29, ITEM_H (gfx_char_h()+6) = 27.
-# Cause not fully tracked down -- no /etc/toyos.conf font_size override
-# was present on the disk.img this was measured against, so this looks
-# like the kernel's actual compiled-in default font metrics differ from
-# what this file assumed, not a per-image runtime setting. If a future
-# session finds the opposite (these constants read too big), re-measure
-# the same way: open the menu, screenshot, pixel-scan for the top
-# border row and the divider row between the app list and system
-# actions (both draw in THEME_BORDER, a solid, distinctive color run
-# unlike the surrounding text glyph rows) rather than trusting either
-# this comment or the formula blindly.
-TASKBAR_H = 29       # WM_TITLEBAR_H -- taskbar strip is the same height as a title bar
-ITEM_H = 27           # Start menu row height (gfx_char_h() + 6 -- see above)
-# Deriving the menu's top Y from SCREEN_H - TASKBAR_H - ITEM_H*total_items
-# (start_menu.c's own geometry() formula) matched a live-measured
-# screenshot exactly at these corrected constants (menu top border at
-# y=475 for today's 8-row menu: 720-29-27*8=475) -- if APP_ORDER's
-# length or ITEM_H ever changes again, re-measure directly rather than
-# trusting the formula alone, same caution as above.
-MENU_TOP_Y = 475
+# These track the DEFAULT FONT and have been re-measured three times
+# now, once per change to it: gfx_char_h()=18 (TASKBAR_H 32, ITEM_H 24),
+# then 21 (29, 27), and now 16 at the FONT_SIZE_14 default (24, 22).
+# TASKBAR_H is WM_TITLEBAR_H = gfx_char_h()+8; ITEM_H is gfx_char_h()+6.
+#
+# The lesson those three re-measurements teach is not "keep them
+# updated" -- it is don't depend on them. `gui menu --json` /
+# `gui taskbar --json` report the live numbers, and
+# DebugConsole.menu_row(label) turns a label straight into a click
+# point. If you do need to re-measure by hand: open the menu, screenshot,
+# and pixel-scan for the top border row and the divider row between the
+# app list and the system actions -- both draw in THEME_BORDER, a solid
+# distinctive colour run, unlike the surrounding text glyph rows.
+TASKBAR_H = 24       # WM_TITLEBAR_H -- taskbar strip is the same height as a title bar
+ITEM_H = 22           # Start menu row height (gfx_char_h() + 6 -- see above)
 START_BTN = (50, 703)  # inside the taskbar's Start button, safely off any edge
 
 # Keep in sync with apps/gui_apps.c's gui_app_registry[] order -- or
 # don't, and ask the kernel instead: `gui apps` / `gui menu --json` list
 # the registry live, in order (tools/gui_debug.py).
 APP_ORDER = ["Notepad", "About", "Calculator", "Terminal", "Task Manager",
-             "Control Panel", "UI Demo"]
+             "Control Panel", "UI Demo",
+             # Launcher entries: these spawn a ring-3 program from /bin
+             # rather than opening a kernel-space window, so open_app()
+             # here returns before any window exists -- a caller that
+             # wants the window must wait for the client to create it
+             # (poll `gui windows`), not assume it is up on return.
+             "Shapes", "Calculator (ring 3)", "Notepad (ring 3)",
+             "Terminal (ring 3)"]
 # Keep in sync with apps/wm/start_menu.c's wm_system_actions[] order.
 SYSTEM_ACTIONS = ["Exit to shell", "Shutdown"]
+
+# Deriving the menu's top Y from SCREEN_H - TASKBAR_H - ITEM_H*total_items
+# (start_menu.c's own geometry() formula) matched a live-measured
+# screenshot exactly at these corrected constants -- menu top border at
+# y=475, back when the menu had 8 rows at the old 18pt default.
+#
+# It is COMPUTED from the lists above now rather than hardcoded, because
+# the menu grows UPWARD from the taskbar: every app added to the registry
+# moves this number, and a stale constant doesn't fail loudly -- it just
+# clicks the wrong row. Adding the four ring-3 launchers moved it by 108
+# pixels; dropping the default font to 14pt moved it again. Better
+# still, don't rely on it at all: DebugConsole.menu_row
+# (tools/gui_debug.py) asks the kernel where a row actually is, by label.
+MENU_TOP_Y = SCREEN_H - TASKBAR_H - ITEM_H * (len(APP_ORDER) + len(SYSTEM_ACTIONS))
 
 
 class GuiFlow:

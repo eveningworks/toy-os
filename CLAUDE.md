@@ -103,7 +103,17 @@ technical conventions below:
   clip -- nothing draws -- and only `gfx_clear_clip_rect()` removes a
   clip**; conflating the two once handed an app's whole `on_draw()` an
   unclipped screen (the damage sweep's long-standing "20px"
-  violation). (4) **Interaction states come from `enum ui_state` /
+  violation). (4) **Layout is FONT-DERIVED, never in fixed pixels** --
+  window sizes come from each app's `default_size()` at open time,
+  chrome from `gfx_char_h()`, the desktop's column pitch from
+  `gfx_char_w()`. That is what makes the default font size
+  (`kernel/drivers/gfx.c`, 14pt since 2026-08-14, down from 18) a
+  genuine one-line change: the whole UI reflows and all 82 GUI
+  regression checks pass unchanged. What does NOT reflow is a hardcoded
+  pixel constant in a test tool -- prefer `DebugConsole.menu_row(label)`
+  over `gui_flow.py`'s calibrated numbers, which have needed
+  re-measuring three times now.
+  (5) **Interaction states come from `enum ui_state` /
   `ui_state_bg()`**, which derives hover/pressed from the control's own
   colour; don't hand-pick tints, and don't assume hover means "lighter"
   (on this near-white theme it has to darken -- `gfx_luminance()`
@@ -204,6 +214,18 @@ technical conventions below:
   that spawns must close its own copy of the pipe's write end**, or the
   read never sees EOF even after the child exits, because a live writer
   (itself) still exists.
+- **A Start-menu entry can launch a RING-3 program, not just a
+  kernel-space app.** `apps/gui_apps.c`'s registry entries normally
+  carry callbacks; one carrying `exec_path` instead (see
+  `apps/gui_apps.h`) names a `/bin` binary, and `open_app()` spawns it
+  rather than creating a window -- the process makes its own through
+  the windowing protocol. Shapes, Calculator (ring 3), Notepad (ring 3)
+  and Terminal (ring 3) are the current four. Two consequences worth
+  knowing before adding one: a launcher always SPAWNS (it never focuses
+  an existing window -- the WM can't enforce single-instance on a ring-3
+  program, and shouldn't), and **a real ring-3 app is seeded to `/bin`,
+  not `/tests`** -- see `docs/filesystem-layout.md`, and note that
+  moving a seeded file needs an explicit delete since `sync` is additive.
 - **The window manager lives in `apps/wm/`** -- the core event
   loop/input/render split (`wm.c`/`wm_input.c`/`wm_render.c`, sharing
   state through `wm_internal.h`'s `extern`s) plus the pieces that grew

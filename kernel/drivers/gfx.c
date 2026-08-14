@@ -13,13 +13,31 @@ static uint8_t bpp = 0;
 static uint8_t red_pos, red_size, green_pos, green_size, blue_pos, blue_size;
 
 // Which of font_ttf.h's eight baked sizes gfx_draw_char() currently
-// uses. FONT_SIZE_18 (10x21 cell) is the default -- closest in on-screen
-// area to the pre-build-347 default (the old named "small" size, 11x22),
-// which itself was picked over the original 16x32 "medium" for reading
-// as a bit large once real windows/taskbar text was on screen (see
-// CHANGELOG). See CHANGELOG's build 347 entry for the tiny/small/medium/
-// large -> numeric point size rename this replaced.
-static enum font_size cur_font_size = FONT_SIZE_18;
+// uses. FONT_SIZE_14 (8x17 cell) is the default.
+//
+// It has come down twice, each time for the same reason: more real UI
+// on screen than the previous default was chosen against. The original
+// was 16x32 ("medium"), then 11x22 ("small"), then FONT_SIZE_18
+// (10x21, closest in area to that "small") at build 347's numeric
+// rename. 14 is this step -- with the desktop now carrying eleven icons
+// and a Start menu of thirteen rows, 18 spent a lot of vertical space
+// on chrome, and the menu grows upward from the taskbar so every row
+// added pushes it closer to the top of the screen.
+//
+// Everything here is font-DERIVED (window sizes come from each app's
+// default_size(), the taskbar and title bars from gfx_char_h(), the
+// desktop's column pitch from gfx_char_w()), so changing this reflows
+// the whole UI rather than clipping it -- that is the property that
+// makes a default change a one-liner. What it does NOT reflow is a
+// hardcoded pixel constant in a test tool: tools/gui_flow.py's
+// TASKBAR_H/ITEM_H are calibrated numbers and need re-measuring, which
+// is exactly why DebugConsole.menu_row() (which asks the kernel) is the
+// preferred way to locate anything now.
+//
+// A user can still override this per-machine: `fontsize` in the shell,
+// or Control Panel, persisted as font_size in /etc/toyos.conf
+// (kernel/lib/font_config.c).
+static enum font_size cur_font_size = FONT_SIZE_14;
 
 int gfx_char_w(void) { return font_ttf_variants[cur_font_size].w; }
 int gfx_char_h(void) { return font_ttf_variants[cur_font_size].h; }

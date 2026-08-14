@@ -194,6 +194,33 @@ static int find_window_for_app(const struct gui_app *app) {
 }
 
 void open_app(const struct gui_app *app) {
+    // A launcher entry (gui_apps.h's `exec_path`) is a ring-3 PROGRAM,
+    // not a kernel-space app: spawn it and get out of the way. It
+    // builds its own window through the windowing protocol, which
+    // wm_client.c turns into a real one once the process gets that far,
+    // so there is nothing to create here and nothing to wait for.
+    //
+    // Note this does NOT go through window_start_process(): that slot
+    // exists to route an exit back to a specific window's
+    // on_process_exit callback, and it is WM-global (one at a time).
+    // A launched client has no such callback, and its window is torn
+    // down by the window server when the process dies -- so tracking it
+    // here would cap the desktop at one ring-3 app for no benefit.
+    if (app->exec_path) {
+        int pid = scheduler_spawn(app->exec_path, 0);
+        klog_printf("wm: launched %s (%s) as pid %d\n",
+                     app->name, app->exec_path, pid);
+        // pid 0 means no free process slot, or the binary is missing
+        // from /bin. Say so in the log rather than failing silently --
+        // from the desktop the only symptom is a menu item that does
+        // nothing, which is indistinguishable from a missed click.
+        if (pid == 0) {
+            klog_printf("wm: launch FAILED -- no process slot, or no %s\n",
+                         app->exec_path);
+        }
+        return;
+    }
+
     // Single-instance apps (the default -- see gui_apps.h's
     // `multi_instance` flag): reopening from the Start menu just
     // focuses/restores the one window that can ever exist, same as

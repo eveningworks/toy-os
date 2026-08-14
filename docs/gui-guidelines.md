@@ -254,6 +254,33 @@ directory (see `apps/README.md`).
 Semantic colour is separate from decoration: the close button is red
 because closing is destructive, not because it looks nice.
 
+## Size everything from the font, never in fixed pixels
+
+Window sizes come from each app's `default_size()`, called at open time
+with whatever font is active. Chrome heights come from `gfx_char_h()`,
+the desktop's column pitch from `gfx_char_w()`, the Start menu's row
+height and origin from both. Nothing lays itself out in absolute pixels.
+
+That is not style, it is what makes the default font size a one-line
+change: it dropped from 18pt to 14pt in 2026-08-14 and the whole UI
+reflowed correctly, with all 82 GUI regression checks passing unchanged.
+A single hardcoded height would have been a visible break at that
+moment and nowhere else.
+
+Two corollaries:
+
+- **A label in a fixed box must be clipped**, because the box is
+  font-sized and the text may not fit at every font. Use
+  `gfx_draw_string_clipped()` and mark the cut (the desktop appends
+  ".."), so a truncated label reads as truncated rather than as a
+  different, shorter name.
+- **A test tool's pixel constants are the exception that doesn't
+  reflow.** `tools/gui_flow.py`'s calibrated numbers have needed
+  re-measuring three times, once per font change, and a stale one fails
+  silently by clicking the wrong row. Ask the kernel instead:
+  `DebugConsole.menu_row(label)`, `gui menu --json`, `gui windows
+  --json`.
+
 ## Shapes: use the wrappers, and pick anti-aliasing deliberately
 
 Lines, curves and rotation come from `kernel/lib/geom.c` (see

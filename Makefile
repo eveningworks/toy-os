@@ -174,17 +174,30 @@ GFXDEMO_ELF = userland/gfxdemo.elf
 # Real user-facing programs -> /bin. Kept deliberately short: /bin is
 # what a person sees when they type `ls /bin`, and what PATH offers
 # first. See docs/filesystem-layout.md.
+# Real user-facing programs -> /bin. The four ring-3 GUI apps here
+# (calculator, notepad, uterm, shapes) sat in /tests until the Start
+# menu learned to launch them: every client written during the ring-3
+# migration landed in /tests because that is where the first one went,
+# and nobody moved them once they stopped being experiments. A program
+# offered in the Start menu is user-facing by definition, and /tests is
+# explicitly "not things a user of the OS wants offered to them" --
+# see docs/filesystem-layout.md, including the note on cleaning up the
+# stale copies a move leaves behind on existing images.
 SEED_PROGRAMS = \
 	$(LSPCI_ELF):lspci \
 	$(LSCPU_ELF):lscpu \
 	$(LS_ELF):ls \
-	$(HELLO_ELF):hello
+	$(HELLO_ELF):hello \
+	$(CALCULATOR_ELF):calculator \
+	$(NOTEPAD_ELF):notepad \
+	$(UTERM_ELF):uterm \
+	$(GFXDEMO_ELF):shapes
 
 # Test/demo binaries -> /tests. These are exercises of one kernel
 # mechanism each (a deliberate fault, a syscall round-trip, a window),
 # not things a user of the OS wants offered to them. They used to sit in
-# /bin alongside the three above, where they outnumbered real programs
-# 14 to 3. /tests is deliberately NOT an FHS directory -- see
+# /bin alongside the real programs, where they outnumbered them 14 to 3.
+# /tests is deliberately NOT an FHS directory -- see
 # docs/filesystem-layout.md for why that exception was made rather than
 # using /usr/libexec.
 SEED_TESTS = \
@@ -208,11 +221,7 @@ SEED_TESTS = \
 	$(PIPE_TEST_ELF):pipe_test \
 	$(EVENT_TEST_ELF):event_test \
 	$(WINCLIENT_ELF):winclient \
-	$(UICLIENT_ELF):uiclient \
-	$(CALCULATOR_ELF):calculator \
-	$(NOTEPAD_ELF):notepad \
-	$(UTERM_ELF):uterm \
-	$(GFXDEMO_ELF):shapes
+	$(UICLIENT_ELF):uiclient
 
 # Both lists together -- only USERLAND_ELVES below needs the union, so
 # it's derived rather than maintained as a third list.

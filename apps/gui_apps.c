@@ -63,5 +63,34 @@ const struct gui_app gui_app_registry[] = {
       .on_hover = uidemo_hover, .on_wheel = uidemo_wheel,
       .on_drag_start = uidemo_drag_start, .on_drag = uidemo_drag,
       .resizable = 1 },
+
+    // --- ring-3 programs (gui_apps.h's `exec_path`) ------------------
+    //
+    // These are LAUNCHERS, not apps: opening one spawns a process from
+    // /bin, and that process builds its own window over the windowing
+    // protocol. No callbacks, no default_size -- see `exec_path`.
+    //
+    // Why the "(ring 3)" suffix on three of them: Calculator, Notepad
+    // and Terminal exist BOTH ways right now. The kernel-space ones are
+    // deliberately still here (keeping both is what made the migration
+    // verifiable -- Calculator's arithmetic engine is compiled into
+    // both, so the two cannot disagree), which leaves two menu entries
+    // that would otherwise be identically labelled and open completely
+    // different programs. The suffix goes away when the kernel-space
+    // versions retire; the Task Manager makes the same distinction with
+    // its [r0]/[r3] column. Shapes needs no suffix -- it only ever
+    // existed in ring 3.
+    //
+    // Appended at the END on purpose, after UI Demo. Registry order is
+    // both the Start-menu row order and the desktop icon order, so
+    // inserting anywhere above would renumber every row index that
+    // tools/ has written down. (Saved desktop icon positions survive
+    // either way -- desktop.c keys those by app NAME precisely so a
+    // reorder can't scramble them.) Same reasoning as UI Demo's own
+    // "last on purpose" note above.
+    { .name = "Shapes", .exec_path = "/bin/shapes" },
+    { .name = "Calculator (ring 3)", .exec_path = "/bin/calculator" },
+    { .name = "Notepad (ring 3)", .exec_path = "/bin/notepad" },
+    { .name = "Terminal (ring 3)", .exec_path = "/bin/uterm" },
 };
 const int gui_app_registry_count = sizeof(gui_app_registry) / sizeof(gui_app_registry[0]);

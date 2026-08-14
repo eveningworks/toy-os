@@ -37,7 +37,7 @@ in check_layout.py changes with it.)
 
 | Path | Holds | Created by | Status |
 |---|---|---|---|
-| `/bin` | Real user-facing programs (`ls`, `lspci`, `lscpu`, `hello`) | build | present |
+| `/bin` | Real user-facing programs (`ls`, `lspci`, `lscpu`, `hello`, and the ring-3 GUI apps `calculator`, `notepad`, `uterm`, `shapes`) | build | present |
 | `/etc` | Config: `toyos.conf`, `timezones`, `history` | boot | present |
 | `/etc/kbs` | Generated keyboard layout data (`us`, `se`) | build | optional |
 | `/tests` | Test/demo binaries -- one kernel mechanism each | build | present |
@@ -68,6 +68,17 @@ budget section below), and this project's standing rule is that a
 mechanism arrives with its first real caller.
 
 ## Deliberate divergences from the FHS
+
+**A ring-3 GUI app belongs in `/bin`, not `/tests`.** Calculator,
+Notepad, Terminal (`uterm`) and Shapes spent most of the ring-3
+migration in `/tests`, purely because that is where the first client
+landed. They moved once the Start menu learned to launch them
+(`gui_apps.h`'s `exec_path`): a program offered in the Start menu is
+user-facing by definition, which is the exact thing `/tests` says it
+does not hold. The mechanism tests that stayed -- `winclient`,
+`uiclient`, `pipe_test`, `spin_test` and friends -- are still precisely
+what that directory describes. If a future ring-3 app is a real app,
+seed it to `/bin` from the start.
 
 **`/tests` is not an FHS directory.** The FHS answer for "executables
 not meant to be invoked directly by users" is `/usr/libexec`, and that

@@ -224,6 +224,32 @@ struct gui_app {
     // Calculator -- see docs/decisions.md for why it and not every app
     // got this.
     int multi_instance;
+
+    // Non-NULL turns this entry into a LAUNCHER for a ring-3 program
+    // rather than a kernel-space app: the absolute path of a binary
+    // (e.g. "/bin/shapes"). Opening it spawns that process and returns
+    // immediately -- no `struct window` is created here, and none of
+    // the callbacks above are ever called (they must all be NULL, and
+    // `default_size` is unused). The process creates its own window by
+    // talking the windowing protocol (abi/win_proto.h), which
+    // apps/wm/wm_client.c turns into a real window a moment later.
+    //
+    // This field exists because the registry was the ONLY way into the
+    // Start menu and the desktop, and it could only describe apps that
+    // live in the kernel. Once Calculator, Notepad and Terminal moved
+    // to ring 3, the desktop had no way to launch any of them -- they
+    // were reachable solely by typing `run calculator` in a Terminal,
+    // while the Start menu kept opening the kernel-space versions. The
+    // menu was quietly telling the truth and it looked like a bug.
+    //
+    // A launcher entry always SPAWNS; it never focuses an existing
+    // window the way `multi_instance == 0` does. That is deliberate:
+    // the WM cannot enforce single-instance on a ring-3 program
+    // (a client window carries no `gui_app` pointer -- see
+    // wm_client.c), and more to the point it shouldn't. Whether a
+    // second copy of a program may run is the PROGRAM's decision, the
+    // way it is on a real system; a launcher launches.
+    const char *exec_path;
 };
 
 extern const struct gui_app gui_app_registry[];

@@ -10,10 +10,13 @@
 #define DESKTOP_ICON_X 16
 #define DESKTOP_ICON_START_Y 16
 #define DESKTOP_ICON_ROW_H (DESKTOP_ICON_SIZE + 28) // icon + label + gap to the next row
-#define DESKTOP_ICON_COL_W DESKTOP_ICON_ROW_H // square cells -- see current_grid()'s comment on why this
-                                                // is fixed rather than sized to the longest label
+// Column pitch, in CHARACTERS of the active font -- see icon_col_w().
+// 13 is "Control Panel"/"Task Manager", the longest labels that should
+// never be truncated; anything longer (the "(ring 3)" launchers) is cut
+// with a ".." marker rather than widening every column to fit it.
+#define DESKTOP_ICON_LABEL_CHARS 13
 #define DESKTOP_DOUBLE_CLICK_TICKS 30 // ~300ms at the PIT's 100Hz -- same order of magnitude as start_menu.c's flash
-#define DESKTOP_MAX_ICONS 32 // sanity cap on gui_app_registry_count -- registry is currently 5 entries
+#define DESKTOP_MAX_ICONS 32 // sanity cap on gui_app_registry_count -- registry currently holds 11 entries
 #define DESKTOP_CONF_PATH "/etc/desktop.conf"
 
 static int selected_index = -1; // -1 = nothing selected
@@ -40,29 +43,39 @@ static int drag_px, drag_py;
 // entries) rather than cached, same "derive fresh, don't persist a
 // stale answer" idiom wm_input.c's title-bar hover uses.
 //
-// Column width is a fixed DESKTOP_ICON_COL_W, NOT sized to the longest
-// current label -- an earlier version did that (label_w-driven cell_w),
-// but that means a single long label anywhere in the registry (e.g.
-// "Task Manager") widens EVERY column's pitch, even ones nowhere near
-// it, producing a much bigger gap than any actual pair of adjacent
-// icons needs (reported directly against a real 2-column layout: a
-// ~144px pitch driven solely by "Task Manager" sitting in column 0,
-// row 2, while columns 0/1's actual row-0 occupants -- "Notepad"/
-// "About" -- only needed ~94px). A fixed pitch is the standard
-// real-desktop tradeoff instead (Windows/GNOME/etc: a fixed icon-grid
-// cell size regardless of label length) -- a label longer than the
-// cell may run visually past its column into a neighboring one that
-// has an icon in the same row, which is an accepted quirk of freeform
-// (non-auto-arranged) icon placement, not a bug; wrapping/truncating
-// long labels would avoid it but is a separate future refinement, not
-// needed for the reported gap issue.
+// Column width: wide enough for a DESKTOP_ICON_LABEL_CHARS label at the
+// active font, never narrower than the icon box itself.
+//
+// It is a FIXED pitch, NOT sized to the longest label actually present.
+// An earlier version did that (label_w-driven cell_w) and it meant a
+// single long name anywhere in the registry widened EVERY column, even
+// ones nowhere near it -- measured against a real 2-column layout, a
+// ~144px pitch driven solely by "Task Manager" in column 0 row 2, while
+// the row-0 icons that were actually adjacent needed ~94px. A fixed
+// pitch is the standard real-desktop tradeoff (Windows/GNOME both do
+// it), and it is what desktop_draw() clips labels against.
+//
+// The value used to be DESKTOP_ICON_ROW_H -- square 76px cells. That
+// was survivable only while the desktop was one column deep: a long
+// label ran off to the right over empty background and stayed readable,
+// which desktop_draw()'s comment recorded as an accepted quirk. Adding
+// a second column ended that -- the overflow landed on the neighbouring
+// column's labels and both became unreadable. Clipping alone was not
+// the fix either: at 76px only ~7 characters fit, turning "Control
+// Panel" and "Calculator" into "Contr.." and "Calcu..". So the pitch
+// widened to fit a real label, and clipping handles what still doesn't.
+static int icon_col_w(void) {
+    int w = DESKTOP_ICON_LABEL_CHARS * gfx_char_w() + 8;
+    return w < DESKTOP_ICON_SIZE + 8 ? DESKTOP_ICON_SIZE + 8 : w;
+}
+
 static struct icon_grid current_grid(void) {
     struct icon_grid g;
     g.origin_x = DESKTOP_ICON_X;
     g.origin_y = DESKTOP_ICON_START_Y;
-    g.cell_w = DESKTOP_ICON_COL_W;
+    g.cell_w = icon_col_w();
     g.cell_h = DESKTOP_ICON_ROW_H;
-    g.cols = screen_w / DESKTOP_ICON_COL_W;
+    g.cols = screen_w / icon_col_w();
     if (g.cols < 1) g.cols = 1;
     return g;
 }
@@ -97,10 +110,10 @@ static void save_position(int i) {
 }
 
 // Loads every icon's position from DESKTOP_CONF_PATH, defaulting to
-// the pre-dragging layout (a single left-edge column, row = registry
-// index) for any app with no saved entry yet -- keyed by app name
-// (not registry index) so a registry reorder doesn't scramble saved
-// positions. Runs once per boot; positions don't change except via a
+// the default layout (top-to-bottom, wrapping into a new column at the
+// bottom edge -- see below) for any app with no saved entry yet --
+// keyed by app name (not registry index), so a registry reorder
+// doesn't scramble saved positions. Runs once per boot; positions don't change except via a
 // drag, which updates icon_col/icon_row directly, so there's nothing
 // to invalidate this cache.
 static void desktop_load_positions(void) {
@@ -109,9 +122,22 @@ static void desktop_load_positions(void) {
 
     int n = gui_app_registry_count;
     if (n > DESKTOP_MAX_ICONS) n = DESKTOP_MAX_ICONS;
+
+    // How many icons fit in one column before running off the bottom.
+    // The default layout WRAPS into a second column rather than being a
+    // single unbounded one: that used to be `icon_row[i] = i`, which was
+    // fine while the registry held seven apps and silently walked icons
+    // off the screen the moment it held eleven (the four ring-3
+    // launchers). Icons past the edge are not just invisible -- they are
+    // unclickable, so an app can be in the registry and unreachable from
+    // the desktop with nothing to indicate why.
+    int usable_h = (screen_h - taskbar_h) - DESKTOP_ICON_START_Y;
+    int per_col = usable_h / DESKTOP_ICON_ROW_H;
+    if (per_col < 1) per_col = 1;   // a tiny screen still gets one per column
+
     for (int i = 0; i < n; i++) {
-        icon_col[i] = 0;
-        icon_row[i] = i;
+        icon_col[i] = i / per_col;
+        icon_row[i] = i % per_col;
 
         char value[16];
         if (!etc_config_get(DESKTOP_CONF_PATH, gui_app_registry[i].name, value, sizeof(value))) continue;
@@ -170,7 +196,41 @@ void desktop_draw(void) {
         int gy = y + (DESKTOP_ICON_SIZE - gfx_char_h()) / 2;
         gfx_draw_string(gx, gy, initial, icon_fg, gfx_rgb(60, 90, 130));
 
-        gfx_draw_string(x, y + DESKTOP_ICON_SIZE + 4, gui_app_registry[i].name, label_fg, gfx_rgb(24, 60, 90));
+        // CLIPPED to the cell pitch, not drawn free-hand. current_grid()
+        // deliberately uses a fixed column width rather than sizing to
+        // the longest label (see its comment), and the consequence used
+        // to be accepted as a cosmetic quirk because the desktop was one
+        // column deep -- there was nothing to the right to run into.
+        // With a second column it stops being cosmetic: "Calculator
+        // (ring 3)" printed straight over its neighbour's label and both
+        // became unreadable. This is the bug class
+        // docs/gui-guidelines.md names first -- gfx_draw_string() does
+        // not clip, so anything in a fixed box needs the _clipped()
+        // form.
+        int label_y = y + DESKTOP_ICON_SIZE + 4;
+        int label_max_w = icon_col_w() - 4; // -4: a gap, so adjacent labels never touch
+        uint32_t label_bg = gfx_rgb(24, 60, 90);
+        const char *label = gui_app_registry[i].name;
+
+        if (gfx_text_width(label) <= label_max_w) {
+            gfx_draw_string_clipped(x, label_y, label_max_w, label, label_fg, label_bg);
+        } else {
+            // Too long: cut it two characters short and mark the cut, so
+            // a truncated label reads AS truncated rather than as a
+            // differently-named app -- "Calculator" and "Calculator
+            // (ring 3)" both cut to "Calculat" otherwise, which is worse
+            // than useless on a desktop that now shows both.
+            //
+            // ".." rather than a single ellipsis character: the font is
+            // indexed from ASCII 32 (kernel/drivers/font_ttf.c), so
+            // U+2026 -- and Latin-1 0x85 -- have no glyph and would draw
+            // as nothing at all.
+            int cut_w = label_max_w - 2 * gfx_char_w();
+            if (cut_w < gfx_char_w()) cut_w = gfx_char_w(); // always show at least one char
+            gfx_draw_string_clipped(x, label_y, cut_w, label, label_fg, label_bg);
+            gfx_draw_string_clipped(x + cut_w, label_y, 2 * gfx_char_w(), "..",
+                                     label_fg, label_bg);
+        }
     }
 }
 

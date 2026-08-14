@@ -34,13 +34,20 @@ The buttons are located by scanning for THEME_BUTTON_BG rather than by
 hardcoded offsets, because the dialog sizes itself to its message and any
 reword would move them.
 """
-import sys, os, time
+import sys, os, tempfile, time
 sys.path.insert(0, "tools")
 from qmp_test import QMPSession
 from gui_debug import DebugConsole
 from PIL import Image
 
-OUT = sys.argv[1] if len(sys.argv) > 1 else "."
+# Scratch screenshots go to a temp directory, NOT the working tree.
+# This used to default to "." and so rewrote dlg-rest.png /
+# dlg-hover-yes.png in the repo root on every run -- which meant a
+# routine test showed up as a dirty git status, and (worse) those two
+# stale PNGs had been committed once and were silently re-committed
+# whenever someone ran the tool before staging. Pass a directory as
+# argv[1] to keep them somewhere.
+OUT = sys.argv[1] if len(sys.argv) > 1 else tempfile.gettempdir()
 fails = []
 
 

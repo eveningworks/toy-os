@@ -1319,8 +1319,20 @@ Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
       the precedent for the answer (share one copy, no drift) -- but
       sharing CODE needs the dynamic-linking work in Milestone 35,
       which is why this is a note and not a task yet.
+- [x] ~~Make the ring-3 apps reachable from the desktop~~ -- done:
+      `gui_apps.h`'s `exec_path` turns a registry entry into a launcher
+      for a `/bin` binary, so Shapes, Calculator (ring 3), Notepad
+      (ring 3) and Terminal (ring 3) are in the Start menu and on the
+      desktop. The apps also moved `/tests` -> `/bin`, where a
+      user-facing program belongs.
 - [ ] Remove the kernel-space Calculator once the ring-3 one is the
-      default. Deliberately NOT done in the same change: keeping both
+      default. **This is the next step, and it now has a second reason:**
+      the Start menu carries both, distinguished only by a "(ring 3)"
+      suffix on the label. Retiring the kernel-space Calculator, Notepad
+      and Terminal drops the suffix and halves those menu rows. What it
+      costs is the side-by-side comparison that made the migration
+      verifiable, so the ring-3 versions should get a round of testing
+      as the ONLY implementation first. Deliberately NOT done in the same change: keeping both
       is what made the migration verifiable (the two were compared
       side by side, and the shared engine means they cannot disagree
       on arithmetic). Retiring the old one is its own decision.

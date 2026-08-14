@@ -41,6 +41,7 @@ there when you add an entry, or the index quietly stops being one.
 - [The retry sentinel is -2 because 0 is a real answer](#the-retry-sentinel-is--2-because-0-is-a-real-answer)
 - [The ring-3 terminal runs its own shell, not the kernel's](#the-ring-3-terminal-runs-its-own-shell-not-the-kernels)
 - [The geometry module is shared source compiled twice, like the calculator engine](#the-geometry-module-is-shared-source-compiled-twice-like-the-calculator-engine)
+- [Ring-3 GUI apps live in /bin, not /tests](#ring-3-gui-apps-live-in-bin-not-tests)
 - [stderr goes to the kernel log, and is never redirected into a pipe](#stderr-goes-to-the-kernel-log-and-is-never-redirected-into-a-pipe)
 - [Stack canaries: `-mstack-protector-guard=global` and a fixed constant, not GCC's defaults](#stack-canaries--mstack-protector-guardglobal-and-a-fixed-constant-not-gccs-defaults)
 - [NX enforcement scoped to userspace only -- the kernel's own identity map stays RWX](#nx-enforcement-scoped-to-userspace-only----the-kernels-own-identity-map-stays-rwx)
@@ -90,6 +91,9 @@ there when you add an entry, or the index quietly stops being one.
 - [Angles are measured in turns, not radians](#angles-are-measured-in-turns-not-radians)
 - [The geometry rasteriser draws through a callback, not into a framebuffer](#the-geometry-rasteriser-draws-through-a-callback-not-into-a-framebuffer)
 - [The canvas widget clips in the plot callback, not by trimming geometry](#the-canvas-widget-clips-in-the-plot-callback-not-by-trimming-geometry)
+- [A Start-menu entry can be a launcher for a ring-3 program](#a-start-menu-entry-can-be-a-launcher-for-a-ring-3-program)
+- [The default font size is a one-line change, and that is the point](#the-default-font-size-is-a-one-line-change-and-that-is-the-point)
+- [The desktop icon grid wraps, and clips its labels](#the-desktop-icon-grid-wraps-and-clips-its-labels)
 - [The Control Panel's applets are a registry table, not gui_apps](#the-control-panels-applets-are-a-registry-table-not-gui_apps)
 - [`gfx_draw_string()` doesn't clip to a width -- callers that need that do their own](#gfx_draw_string-doesnt-clip-to-a-width----callers-that-need-that-do-their-own)
 - [`widgets.h`/`theme.h` stay minimal on purpose](#widgetshthemeh-stay-minimal-on-purpose)
@@ -3801,3 +3805,106 @@ The practical rule for app code: `sys_print()` for output, `sys_eprint()`
 for anything diagnostic. The second is readable regardless of who
 spawned the process or where its stdout went, which also makes it the
 channel a test tool asserts on -- the same path `strace` output takes.
+
+## A Start-menu entry can be a launcher for a ring-3 program
+
+`struct gui_app` (apps/gui_apps.h) grew one field, `exec_path`. When
+it is non-NULL the entry is not an app at all -- it names a binary in
+`/bin`, and `open_app()` spawns it instead of creating a window.
+
+The registry was the only way into the Start menu and the desktop, and
+it could only describe apps implemented as kernel callbacks. That was
+fine until Calculator, Notepad and Terminal moved to ring 3, at which
+point the desktop could not launch any of them: they were reachable
+only by typing `run calculator` in a Terminal, while the Start menu
+went on opening the kernel-space versions. Nothing was broken and the
+Task Manager was correctly reporting `[r0]` -- it just looked exactly
+like a bug, which is its own kind of defect.
+
+Two things about the design worth keeping:
+
+**A launcher always spawns; it never focuses an existing window.**
+Single-instance behaviour (`multi_instance == 0`) works by finding a
+window whose `app` pointer matches, and a ring-3 client window has no
+`gui_app` at all (wm_client.c sets it to 0) -- so the WM *cannot*
+enforce it here without matching on titles, which is guesswork. More
+importantly it shouldn't: whether a second copy of a program may run
+is the program's own decision on any real system, and a launcher
+launches.
+
+**It deliberately does not use `window_start_process()`.** That slot
+exists to deliver a process's exit to a specific window's
+`on_process_exit` callback, and it is WM-global -- one tracked process
+at a time. A launched client has no such callback, and the window
+server already tears its window down when it dies, so routing launches
+through it would cap the desktop at one ring-3 app for no benefit.
+
+## Ring-3 GUI apps live in /bin, not /tests
+
+Calculator, Notepad, Terminal (`uterm`) and Shapes are seeded to
+`/bin`. They were in `/tests` for most of the ring-3 migration, purely
+because that is where the first client landed and nobody moved them
+once they stopped being experiments.
+
+`docs/filesystem-layout.md` draws the line clearly -- `/tests` holds
+"test/demo binaries, one kernel mechanism each... not things a user of
+the OS wants offered to them" -- and a program offered in the Start
+menu is user-facing by definition. The mechanism tests that remain in
+`/tests` (`winclient`, `uiclient`, `pipe_test`, `spin_test`, ...) are
+still exactly what that directory describes.
+
+Moving them needed the cleanup that doc mandates: `sync` is additive
+and never deletes, so the old `/tests` copies had to be removed from
+the existing image explicitly (`tools/tfs3_writer.py delete`). Skipping
+that leaves stale binaries frozen at their last-synced content forever.
+
+## The default font size is a one-line change, and that is the point
+
+`kernel/drivers/gfx.c`'s `cur_font_size` has moved three times now
+(16x32 -> 11x22 -> FONT_SIZE_18 -> FONT_SIZE_14), each time because
+there was more real UI on screen than the previous default had been
+chosen against.
+
+It stays a one-liner because every layout in the system is
+font-DERIVED, not font-assuming: window sizes come from each app's
+`default_size()` (called at open time with the active font), chrome
+heights from `gfx_char_h()`, the desktop's column pitch from
+`gfx_char_w()`, the Start menu's row height and origin from both. The
+14pt change was verified by running the full GUI regression suite --
+82 checks across 7 tools -- unchanged, and all of it passed.
+
+The exception is worth knowing, because it has now cost three
+re-measurements: HARDCODED PIXEL CONSTANTS IN TEST TOOLS do not
+reflow. `tools/gui_flow.py`'s `TASKBAR_H`/`ITEM_H` are calibrated
+numbers, and a stale one doesn't fail loudly -- it clicks the wrong
+row. That is the standing argument for
+`DebugConsole.menu_row(label)`/`gui menu --json`, which ask the kernel
+where things actually are, over any constant a tool writes down.
+
+## The desktop icon grid wraps, and clips its labels
+
+Two related decisions, both forced by the registry growing from seven
+entries to eleven.
+
+**The default layout wraps into a new column at the bottom edge**
+rather than being one unbounded column (`icon_row[i] = i`). An icon
+past the bottom of the screen is not just invisible, it is
+unclickable -- an app can be in the registry and unreachable from the
+desktop, with nothing on screen to indicate why.
+
+**Labels are clipped to the column pitch, with a ".." marker.** The
+pitch is fixed (not sized to the longest label present -- one long
+name would otherwise widen every column on the desktop, a tradeoff
+already rejected once), and it is sized for a 13-character label:
+"Control Panel" and "Task Manager", the longest that should never be
+cut. Longer ones are truncated rather than allowed to overflow.
+
+Overflow used to be an accepted cosmetic quirk, and honestly was one:
+with a single column, a long label ran off to the right over empty
+background and stayed perfectly readable. The moment a second column
+existed it landed on that column's labels instead and made both
+unreadable. Note that clipping ALONE would not have fixed it -- at the
+old 76px square-cell pitch only about seven characters fit, so
+"Calculator" and "Calculator (ring 3)" both became "Calcu..". The
+pitch had to widen too. `gfx_draw_string_clipped()` is what does the
+cutting, per `docs/gui-guidelines.md`'s first rule.

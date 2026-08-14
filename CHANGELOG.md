@@ -32,6 +32,43 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
 ## [Unreleased]
 
 ### Added
+- **The Start menu can launch ring-3 apps.** Until now the registry
+  (`apps/gui_apps.c`) was the only way into the Start menu and the
+  desktop, and it could only describe apps living IN the kernel. So
+  once Calculator, Notepad and Terminal moved to ring 3, the desktop
+  had no way to launch any of them -- they were reachable only by
+  typing `run calculator` in a Terminal, while the Start menu kept
+  opening the kernel-space versions. Nothing was broken; the menu was
+  quietly telling the truth, and it looked exactly like a bug.
+
+  A registry entry can now carry an `exec_path` instead of callbacks.
+  Opening one spawns that binary and returns -- no kernel window is
+  created; the process builds its own through the windowing protocol a
+  moment later. Four entries use it: **Shapes**, **Calculator (ring
+  3)**, **Notepad (ring 3)**, **Terminal (ring 3)**.
+
+  A launcher always SPAWNS rather than focusing an existing window, the
+  way `multi_instance == 0` does. The WM cannot enforce single-instance
+  on a ring-3 program (a client window carries no `gui_app` pointer),
+  and it shouldn't: whether a second copy may run is the program's
+  decision on any real system. A launcher launches.
+
+  The "(ring 3)" suffix is temporary -- it exists because Calculator,
+  Notepad and Terminal are currently in the menu BOTH ways, and two
+  identically-labelled rows opening different programs would be worse
+  than a clumsy label. It goes away when the kernel-space versions
+  retire (see `docs/roadmap.md`).
+
+- **The ring-3 GUI apps moved from `/tests` to `/bin`**, which is where
+  the launchers point. They were in `/tests` only because that is where
+  the first ring-3 client landed during the migration and nobody moved
+  them once they stopped being experiments. `docs/filesystem-layout.md`
+  is explicit that `/tests` is "not things a user of the OS wants
+  offered to them" -- and a program offered in the Start menu is
+  user-facing by definition. The stale `/tests` copies were deleted
+  from the existing image per that doc's own instructions (`sync` is
+  additive and never removes).
+
 - **Geometry primitives: pixels, lines, ellipses, circles -- shared by
   the kernel and by ring 3.** Until now `gfx.c` could fill rectangles
   and draw glyphs, and that was the whole vocabulary. Anything curved,
@@ -209,6 +246,41 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   thumb cannot be in two places), and commit-on-release.
 
 ### Changed
+- **Default font size is 14, down from 18** (`kernel/drivers/gfx.c`).
+  It has come down twice before for the same reason: more real UI on
+  screen than the previous default was chosen against. With eleven
+  desktop icons and a thirteen-row Start menu, 18 spent a lot of
+  vertical space on chrome, and the menu grows upward from the taskbar
+  so every row added pushes it toward the top of the screen.
+
+  Worth recording what this change demonstrates rather than just what
+  it does: it is a ONE-LINE change and the entire UI reflowed
+  correctly -- all 82 GUI regression checks passed unchanged, because
+  window sizes come from each app's `default_size()`, chrome from
+  `gfx_char_h()` and the desktop's column pitch from `gfx_char_w()`.
+  What did NOT reflow was the hardcoded pixel constants in
+  `tools/gui_flow.py`, which needed re-measuring for the third time.
+  That is the argument for `DebugConsole.menu_row()` (which asks the
+  kernel) over any constant.
+
+- **The desktop icon grid wraps into columns**, and its labels are
+  clipped. The default layout was `icon_row[i] = i` -- a single
+  unbounded column, fine at seven apps and silently walking icons off
+  the bottom of the screen at eleven. Off-screen icons are not merely
+  invisible, they are unclickable, so an app could be in the registry
+  and unreachable from the desktop with nothing to indicate why.
+
+  Wrapping then exposed a second problem that a single column had been
+  hiding: the column pitch was 76px (square cells), and labels longer
+  than that had always overflowed harmlessly to the right over empty
+  background. With a neighbouring column there, they landed on top of
+  its labels instead. The pitch is now sized for a 13-character label
+  ("Control Panel", "Task Manager") and anything longer is cut with a
+  ".." marker -- `gfx_draw_string_clipped()`, per
+  `docs/gui-guidelines.md`'s first rule. Clipping alone would not have
+  done: at 76px only ~7 characters fit, which turns "Calculator" into
+  "Calcu..".
+
 - **`docs/roadmap.md` now has actionable requirements for Ctrl-C and
   for a real C library**, both of which were mentioned but not
   specified.
