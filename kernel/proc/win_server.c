@@ -1,0 +1,210 @@
+// Client windows, kernel side: ids, pixel buffers, per-process
+// mappings, ownership and teardown. See win_server.h for why the split
+// between this and the registered presentation layer falls where it
+// does.
+#include "win_server.h"
+#include "vmm.h"
+#include "pmm.h"
+#include "klog.h"
+#include "string.h"
+#include <stddef.h>
+
+#define WIN_SERVER_MAX_PIDS 4 // MAX_PROCS (scheduler.c)
+
+struct client_window {
+    int used;
+    int pid;
+    uint32_t id;      // index into the owner's slots, so
+                       // win_buffer_vaddr(id) is stable per window
+    uint64_t pml4;    // the owner's address space, needed to unmap
+    uint32_t *buf;    // kernel-visible (identity-mapped) pixels
+    uint64_t vaddr;   // where the client sees it
+    uint32_t pages;   // how many frames `buf` spans
+    int w, h;
+};
+
+// [pid - 1][window id]. A flat table rather than a list: WIN_CLIENT_MAX
+// windows across MAX_PROCS processes is 16 entries, and a fixed table
+// makes "is this window really that client's?" a bounds check instead
+// of a walk -- which matters, because that question is the entire
+// access-control story for this protocol.
+static struct client_window windows[WIN_SERVER_MAX_PIDS][WIN_CLIENT_MAX];
+
+static const struct win_server_ops *g_ops = NULL;
+
+void win_server_register(const struct win_server_ops *ops) {
+    g_ops = ops;
+}
+
+int win_server_active(void) {
+    return g_ops != NULL;
+}
+
+// The one place that answers "does `pid` own `id`?". Everything that
+// acts on a client-named window goes through this, so a client cannot
+// present, retitle or destroy a window belonging to another process by
+// guessing an id.
+static struct client_window *lookup(int pid, uint32_t id) {
+    if (pid < 1 || pid > WIN_SERVER_MAX_PIDS) return NULL;
+    if (id >= WIN_CLIENT_MAX) return NULL;
+    struct client_window *cw = &windows[pid - 1][id];
+    if (!cw->used || cw->pid != pid) return NULL;
+    return cw;
+}
+
+// Frees a window's frames and unmaps them from its owner's address
+// space. The presentation layer is told FIRST (while `buf` is still
+// valid), so it can drop the window from its list before the memory
+// behind it goes away.
+static void destroy_window(struct client_window *cw) {
+    if (!cw->used) return;
+
+    if (g_ops && g_ops->window_destroyed) g_ops->window_destroyed(cw->pid, cw->id);
+
+    for (uint32_t i = 0; i < cw->pages; i++) {
+        vmm_unmap_user_page(cw->pml4, cw->vaddr + (uint64_t)i * 4096);
+    }
+    // pmm_free_contiguous(), not a pmm_free_frame() loop -- the buffer
+    // came from pmm_alloc_contiguous() and the two allocators are not
+    // interchangeable (see api/pmm.h).
+    pmm_free_contiguous((uint64_t)(uintptr_t)cw->buf, cw->pages);
+    cw->used = 0;
+    cw->buf = NULL;
+    cw->pages = 0;
+}
+
+static int create_window(int pid, const struct win_request_msg *req, uint32_t *out_id) {
+    if (pid < 1 || pid > WIN_SERVER_MAX_PIDS) return 0;
+
+    int w = req->a, h = req->b;
+    if (w <= 0 || h <= 0 || w > WIN_CLIENT_MAX_W || h > WIN_CLIENT_MAX_H) {
+        klog_write("win_server: create refused -- bad size\n");
+        return 0;
+    }
+
+    int slot = -1;
+    for (int i = 0; i < WIN_CLIENT_MAX; i++) {
+        if (!windows[pid - 1][i].used) { slot = i; break; }
+    }
+    if (slot < 0) {
+        klog_write("win_server: create refused -- client already holds WIN_CLIENT_MAX windows\n");
+        return 0;
+    }
+
+    struct client_window *cw = &windows[pid - 1][slot];
+    uint64_t pml4 = vmm_current_pml4();
+    uint64_t vaddr = win_buffer_vaddr((uint32_t)slot);
+    uint32_t bytes = (uint32_t)w * (uint32_t)h * 4;
+    uint32_t pages = (bytes + 4095) / 4096;
+
+    // Contiguous frames, so the kernel-visible pointer can be a plain
+    // uint32_t* over the whole buffer instead of a per-page walk on
+    // every composite. pmm_alloc_contiguous() already exists for the
+    // same reason drivers need it.
+    uint64_t phys = pmm_alloc_contiguous(pages);
+    if (!phys) {
+        klog_write("win_server: create refused -- out of contiguous memory\n");
+        return 0;
+    }
+
+    // Zero it before the client ever sees it: a fresh window must not
+    // show whatever the previous owner of these frames left behind.
+    uint8_t *bytes_p = (uint8_t *)(uintptr_t)phys;
+    for (uint32_t i = 0; i < pages * 4096; i++) bytes_p[i] = 0;
+
+    for (uint32_t i = 0; i < pages; i++) {
+        if (!vmm_map_user_page(pml4, vaddr + (uint64_t)i * 4096, phys + (uint64_t)i * 4096)) {
+            // Unwind the pages already mapped, then the frames.
+            for (uint32_t j = 0; j < i; j++) vmm_unmap_user_page(pml4, vaddr + (uint64_t)j * 4096);
+            pmm_free_contiguous(phys, pages);
+            klog_write("win_server: create refused -- mapping failed\n");
+            return 0;
+        }
+    }
+
+    cw->used = 1;
+    cw->pid = pid;
+    cw->id = (uint32_t)slot;
+    cw->pml4 = pml4;
+    cw->buf = (uint32_t *)(uintptr_t)phys;
+    cw->vaddr = vaddr;
+    cw->pages = pages;
+    cw->w = w;
+    cw->h = h;
+
+    // The presentation layer gets the last word: if it has no room in
+    // its window list, the whole create fails and the memory goes back
+    // rather than leaving a buffer nothing will ever draw.
+    if (g_ops && g_ops->window_created) {
+        if (!g_ops->window_created(pid, cw->id, cw->buf, w, h, req->c, req->d)) {
+            // Not destroy_window() -- that would call window_destroyed()
+            // for a window the presentation layer just refused and never
+            // recorded.
+            for (uint32_t i = 0; i < pages; i++) {
+                vmm_unmap_user_page(pml4, vaddr + (uint64_t)i * 4096);
+            }
+            pmm_free_contiguous(phys, pages);
+            cw->used = 0;
+            klog_write("win_server: create refused -- no room in the window list\n");
+            return 0;
+        }
+    }
+
+    *out_id = cw->id;
+    return 1;
+}
+
+int win_server_request(int pid, struct win_request_msg *req) {
+    if (!g_ops || !req) return -1;
+
+    switch (req->type) {
+    case WIN_REQ_CREATE: {
+        uint32_t id = 0;
+        if (!create_window(pid, req, &id)) return 0;
+        req->window = id;
+        return 1;
+    }
+    case WIN_REQ_PRESENT: {
+        struct client_window *cw = lookup(pid, req->window);
+        if (!cw) return 0;
+        if (g_ops->window_present) g_ops->window_present(pid, cw->id);
+        return 1;
+    }
+    case WIN_REQ_DESTROY: {
+        struct client_window *cw = lookup(pid, req->window);
+        if (!cw) return 0;
+        destroy_window(cw);
+        return 1;
+    }
+    case WIN_REQ_TITLE: {
+        struct client_window *cw = lookup(pid, req->window);
+        if (!cw) return 0;
+        // Truncate rather than refuse -- a too-long title is cosmetic.
+        char title[WIN_TITLE_LEN];
+        size_t i = 0;
+        for (; i < WIN_TITLE_LEN - 1 && req->text[i]; i++) title[i] = req->text[i];
+        title[i] = '\0';
+        if (g_ops->window_title) g_ops->window_title(pid, cw->id, title);
+        return 1;
+    }
+    default:
+        return -1;
+    }
+}
+
+void win_server_client_gone(int pid) {
+    if (pid < 1 || pid > WIN_SERVER_MAX_PIDS) return;
+    for (int i = 0; i < WIN_CLIENT_MAX; i++) {
+        struct client_window *cw = &windows[pid - 1][i];
+        if (cw->used) destroy_window(cw);
+    }
+}
+
+int win_server_window_count(int pid) {
+    if (pid < 1 || pid > WIN_SERVER_MAX_PIDS) return 0;
+    int n = 0;
+    for (int i = 0; i < WIN_CLIENT_MAX; i++) {
+        if (windows[pid - 1][i].used) n++;
+    }
+    return n;
+}

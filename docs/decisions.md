@@ -32,6 +32,8 @@ there when you add an entry, or the index quietly stops being one.
 - [The kernel context is a rotation participant, not a kernel thread](#the-kernel-context-is-a-rotation-participant-not-a-kernel-thread)
 - [Blocking syscalls deschedule; they never wait in place](#blocking-syscalls-deschedule-they-never-wait-in-place)
 - [`SYS_WAIT_EVENT` makes clients loop instead of restarting the syscall](#sys_wait_event-makes-clients-loop-instead-of-restarting-the-syscall)
+- [The windowing protocol is one syscall carrying typed messages, not a syscall per operation](#the-windowing-protocol-is-one-syscall-carrying-typed-messages-not-a-syscall-per-operation)
+- [A client window's close button is a handshake, not a seizure](#a-client-windows-close-button-is-a-handshake-not-a-seizure)
 - [Stack canaries: `-mstack-protector-guard=global` and a fixed constant, not GCC's defaults](#stack-canaries--mstack-protector-guardglobal-and-a-fixed-constant-not-gccs-defaults)
 - [NX enforcement scoped to userspace only -- the kernel's own identity map stays RWX](#nx-enforcement-scoped-to-userspace-only----the-kernels-own-identity-map-stays-rwx)
 - [The serial debug console is poll-based from existing idle loops, not a new kernel thread](#the-serial-debug-console-is-poll-based-from-existing-idle-loops-not-a-new-kernel-thread)
@@ -2503,6 +2505,60 @@ here: it buries a hard assumption about the syscall instruction's
 length inside the scheduler, and would have to be revisited if the
 syscall entry ever moved off `int 0x80`. The explicit loop costs a
 client three lines and hides nothing.
+
+## The windowing protocol is one syscall carrying typed messages, not a syscall per operation
+
+Every windowing operation a ring-3 client can perform -- create,
+present, destroy, retitle -- goes through the single `SYS_WIN_REQUEST`,
+which dispatches on the `type` field of a `struct win_request_msg`
+(`kernel/include/abi/win_proto.h`). The obvious alternative, a syscall
+each, was rejected deliberately.
+
+The reason is Milestone 41's whole architectural bet. toy-os is
+building toward a GUI where apps are ring-3 processes, and the open
+question was whether the window manager itself should move to ring 3
+too (the Linux answer) or stay in the kernel (the Windows NT answer).
+The chosen path is "kernel compositor now, movable later", and what
+makes "later" cheap is that clients and the window server only ever
+talk in messages -- never by calling into each other. With a message
+protocol, moving the server out is a transport swap and the message
+handling is untouched. With one syscall per operation, the syscall
+signature IS the protocol, and moving the server means rewriting every
+call site.
+
+The same reasoning shapes two smaller choices. Neither
+`struct win_request_msg` nor `struct win_event` contains a pointer, and
+both have fixed layouts, so the identical bytes work whether copied by
+a syscall today or read out of a shared-memory ring later. And a
+client's buffer address is DERIVED from its window id
+(`win_buffer_vaddr()`) rather than returned by the server, so there is
+no address to re-negotiate when the transport changes.
+
+The kernel/WM split follows the same line: `kernel/proc/win_server.c`
+owns the memory (ids, buffers, mappings, teardown -- things `apps/`
+cannot reach, since `kernel/include/kernel` is off its include path),
+`apps/wm/wm_client.c` owns presentation (window list, chrome, z-order,
+input routing), and they meet at a registered `struct win_server_ops`
+-- the same registry pattern as `display.h`'s `display_driver`.
+
+## A client window's close button is a handshake, not a seizure
+
+Clicking the X on a ring-3 client's window does not close it. The
+window manager sends `WIN_EV_CLOSE` and waits for the client to answer
+with `WIN_REQ_DESTROY`.
+
+Two reasons. The client may have unsaved state and is the only thing
+that knows it. And the WM tearing the window down behind the process's
+back would leave that process drawing into a buffer that is no longer
+on screen -- with the frames behind it freed and possibly reissued to
+something else.
+
+The honest consequence is that a client which ignores the request keeps
+its window. Force-closing an unresponsive one needs a "not responding"
+timeout and a way to kill a process, neither of which exists yet -- see
+`docs/roadmap.md`'s Milestone 41. Every real windowing system has the
+same handshake and the same escape hatch; toy-os has the handshake so
+far.
 
 ## `strace` traces an address space, and prints each line after the handler returns
 

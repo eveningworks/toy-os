@@ -3,6 +3,7 @@
 
 #include "wm.h"
 #include "gui_apps.h"
+#include "win_proto.h" // WIN_EV_*/struct win_event -- client windows, see wm_client.c
 #include <stdint.h>
 
 // Private to the window manager's own files (wm.c / wm_input.c /
@@ -267,5 +268,29 @@ void wm_update_title_hover(int mx, int my);
 // exists).
 void wm_render_frame(int mx, int my);
 void wm_render_cursor_move(int mx, int my);
+
+// wm_client.c -- the WM acting as the window server for ring-3 clients.
+// Registers/unregisters itself with kernel/proc/win_server.c around
+// wm_run(), so a client request outside GUI mode is refused rather than
+// dispatched into a desktop that isn't running.
+void wm_client_init(void);
+void wm_client_shutdown(void);
+
+// 1 if this window's content is a ring-3 client's pixel buffer rather
+// than a gui_app's on_draw(). The two are mutually exclusive (wm.h).
+int wm_client_is_client_window(const struct window *win);
+
+// Composites a client window's buffer into its content area. Called
+// from wm_render_frame() in place of the app->on_draw() it doesn't
+// have, and under the same content clip.
+void wm_client_draw(const struct window *win);
+
+// Deliver input to a client. No-ops for a non-client window, so call
+// sites can stay branch-free where that reads better. `type` for the
+// mouse one is a WIN_EV_MOUSE_* value; coordinates are screen
+// coordinates and get converted to window-relative inside.
+void wm_client_send_key(struct window *win, int key, unsigned mods);
+void wm_client_send_mouse(struct window *win, int type, int x, int y, unsigned buttons);
+void wm_client_send_close(struct window *win);
 
 #endif

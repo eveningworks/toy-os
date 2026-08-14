@@ -660,6 +660,15 @@ static void render_scene(int mx, int my, int has_damage) {
             clip_to_window_content(&windows[i], has_damage);
             windows[i].app->on_draw(&windows[i]);
             apply_scene_clip(has_damage);
+        } else if (wm_client_is_client_window(&windows[i])) {
+            // A ring-3 client's window: its content is just the pixels
+            // it has already drawn into its shared buffer, blitted.
+            // Same content clip an app's on_draw() gets, for the same
+            // reason -- a client that reports a size larger than its
+            // window must not be able to paint over the chrome.
+            clip_to_window_content(&windows[i], has_damage);
+            wm_client_draw(&windows[i]);
+            apply_scene_clip(has_damage);
         }
         draw_resize_grip(&windows[i]); // after on_draw() -- see its own comment
     }

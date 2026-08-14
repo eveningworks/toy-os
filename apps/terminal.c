@@ -179,7 +179,15 @@ static int is_blocked_command(const char *cmd) {
 // which never arrives), `gui_test`/`win_test` (framebuffer/own-window
 // takeover, same hazard `gui` above has), `counter_a`/`counter_b`
 // (infinite-loop-by-design demo processes for `schedtest`, not real
-// commands -- see scheduler.c). `spin_test` IS included despite being
+// commands -- see scheduler.c). `winclient` is a deliberate exception
+// to the "must return on its own" rule: it opens a real client window
+// on the desktop and runs until that window is closed, which is the
+// whole point of it -- it is the demonstration that a ring-3 process
+// can own a window in the WM's own window list (Milestone 41). It is
+// safe here for the reason the rule exists: it never reads stdin and
+// never touches the framebuffer, only its own shared buffer, and it
+// always has a user-reachable way to exit (its close button, Esc, or
+// 'q'). `spin_test` IS included despite being
 // the same kind of long busy-spin, because unlike those two it
 // terminates on its own and prints nothing; it's what
 // tools/sched_gui_test.py runs to prove the desktop keeps drawing while
@@ -195,7 +203,7 @@ static int is_blocked_command(const char *cmd) {
 static const char *const RUN_ALLOWED_BINS[] = {
     "crash_test", "exit_test", "file_test", "hello", "lspci",
     "newsyscalls_test", "nx_test", "socket_test", "spin_test",
-    "write_bad_test", "write_test",
+    "winclient", "write_bad_test", "write_test",
 };
 #define RUN_ALLOWED_COUNT (sizeof(RUN_ALLOWED_BINS) / sizeof(RUN_ALLOWED_BINS[0]))
 

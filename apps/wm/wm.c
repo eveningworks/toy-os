@@ -365,6 +365,12 @@ void wm_run(void) {
     mouse_set_bounds(screen_w, screen_h);
     mouse_init();
 
+    // Start accepting client windows. Registered here rather than at
+    // boot so a ring-3 client that runs outside GUI mode is refused
+    // (SYS_WIN_REQUEST returns -1) instead of drawing into a buffer
+    // nothing will ever composite -- see wm_client.c.
+    wm_client_init();
+
     window_count = 0;
     start_menu_open = 0;
     context_menu_close();
@@ -454,6 +460,11 @@ void wm_run(void) {
         // is dangerous), not just abandon the process.
         if (wm_exit_requested && !pending_write && !pending_read && !pending_proc) {
             klog_write("wm: exiting GUI mode, returning to shell\n");
+            // Stop accepting client windows before the desktop stops
+            // drawing them -- same reasoning as the pending_* guards
+            // above, one layer down: a request serviced after this
+            // point would attach a window to a list nobody repaints.
+            wm_client_shutdown();
             gfx_set_double_buffered(0); // console draws straight to screen
             return;
         }
@@ -634,7 +645,15 @@ void wm_run(void) {
                 for (int i = window_count - 1; i >= 0; i--) {
                     if (windows[i].state != WIN_MINIMIZED) { f = i; break; }
                 }
-                if (f >= 0 && key != -1 && !file_picker_open && windows[f].app && windows[f].app->on_key) {
+                if (f >= 0 && key != -1 && !file_picker_open && wm_client_is_client_window(&windows[f])) {
+                    // Focused window belongs to a ring-3 client: the
+                    // key becomes a protocol message rather than a
+                    // callback. Same focus rule either way -- who gets
+                    // the key is the WM's decision, and it doesn't
+                    // change because the recipient is a process.
+                    wm_client_send_key(&windows[f], key, key_mods);
+                    redraw_pending = 1;
+                } else if (f >= 0 && key != -1 && !file_picker_open && windows[f].app && windows[f].app->on_key) {
                     windows[f].app->on_key(&windows[f], key, key_mods);
                 }
                 if (f >= 0 && wheel != 0 && !file_picker_open && windows[f].app && windows[f].app->on_wheel) {

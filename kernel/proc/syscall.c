@@ -7,6 +7,7 @@
 #include "keyboard.h"
 #include "scheduler.h"
 #include "win_events.h"
+#include "win_server.h"
 #include "pmm.h"
 #include "fs.h"
 #include "string.h"
@@ -769,6 +770,38 @@ void syscall_dispatch(uint64_t *regs) {
         } else {
             vga_set_color((enum vga_color)rdi, (enum vga_color)rsi);
             regs[14] = 1;
+        }
+    } else if (rax == SYS_WIN_REQUEST) {
+        uint64_t pml4 = vmm_current_pml4();
+        int pid = scheduler_current_pid();
+
+        if (!vmm_validate_user_range(pml4, rdi, sizeof(struct win_request_msg))) {
+            klog_write("syscall: win_request() rejected -- invalid user pointer\n");
+            regs[14] = (uint64_t)-1;
+        } else if (pid == 0) {
+            klog_write("syscall: win_request() rejected -- caller isn't a scheduled process\n");
+            regs[14] = (uint64_t)-1;
+        } else if (!win_server_active()) {
+            // No desktop running. Refused rather than silently
+            // succeeding, so a client started outside GUI mode finds
+            // out immediately instead of drawing into a buffer nothing
+            // will ever composite.
+            klog_write("syscall: win_request() rejected -- no window server registered\n");
+            regs[14] = (uint64_t)-1;
+        } else {
+            // Copy in, act, copy back: the request is handled against a
+            // KERNEL copy, never against the user page directly. The
+            // client shares that page and could otherwise change a
+            // field after it was validated but before it was used --
+            // and `window` in particular is used to index the server's
+            // own tables.
+            struct win_request_msg req = *(struct win_request_msg *)(uintptr_t)rdi;
+            int rc = win_server_request(pid, &req);
+
+            // Only copy back a request the server actually looked at --
+            // a malformed one leaves the client's buffer as it was sent.
+            if (rc >= 0) *(struct win_request_msg *)(uintptr_t)rdi = req;
+            regs[14] = (uint64_t)(int64_t)rc;
         }
     } else if (rax == SYS_POLL_EVENT || rax == SYS_WAIT_EVENT) {
         // Both share everything except what happens when the queue is
