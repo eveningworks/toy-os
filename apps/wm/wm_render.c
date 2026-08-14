@@ -605,6 +605,13 @@ static void clip_to_window_content(const struct window *w, int has_damage) {
     }
     // A non-positive w/h is gfx_set_clip_rect()'s "nothing draws", which
     // is exactly right for a window with no visible content this frame.
+    // (This sentence used to be a lie -- gfx_set_clip_rect() CLEARED the
+    // clip on non-positive sizes, so exactly this case handed the app an
+    // unclipped full-screen on_draw(). That was the damage sweep's
+    // standing 20px violation: a tick frame's damage strip grazing only
+    // a window's bottom border row emptied this intersection, the
+    // content repaint escaped, and the resize grip under it was buried.
+    // The contract in gfx.c matches the words now.)
     gfx_set_clip_rect(x0, y0, x1 - x0, y1 - y0);
 }
 

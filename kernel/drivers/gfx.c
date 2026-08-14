@@ -93,7 +93,21 @@ static int clip_x0, clip_y0, clip_x1, clip_y1;
 static int clip_active = 0;
 
 void gfx_set_clip_rect(int x, int y, int w, int h) {
-    if (w <= 0 || h <= 0) { clip_active = 0; return; }
+    // A non-positive w/h is an EMPTY clip -- every pixel write is
+    // rejected -- not "no clip". It used to clear the clip instead
+    // (full screen drawable), the exact opposite, while gfx.h described
+    // it as "nothing draws": a caller that computed an empty
+    // intersection got an app's whole on_draw() painted UNCLIPPED. The
+    // way that surfaced: on a clock-tick frame whose damage strip
+    // grazed only a window's bottom border row, the window's content
+    // repaint escaped the damage clip and buried the resize grip drawn
+    // the frame before (tools/damage_sweep.py's standing 20px
+    // violation). Clearing is what gfx_clear_clip_rect() is for.
+    if (w <= 0 || h <= 0) {
+        clip_x0 = clip_y0 = clip_x1 = clip_y1 = 0;
+        clip_active = 1;
+        return;
+    }
     clip_x0 = x; clip_y0 = y;
     clip_x1 = x + w; clip_y1 = y + h;
     clip_active = 1;

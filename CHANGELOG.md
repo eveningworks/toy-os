@@ -3164,3 +3164,56 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   - Verified via QMP: entering GUI mode now shows the full desktop
     (icons + navy background) on the very first frame, no click needed
     to "unstick" it -- see `screenshots/2026-08-12/tray-fix-*.png`.
+- **An empty clip rect now clips everything out -- it used to silently
+  turn clipping OFF, and that was the damage sweep's standing "20 px"
+  violation.** `gfx_set_clip_rect()` treated a non-positive w/h as
+  `gfx_clear_clip_rect()` -- full screen drawable -- while its own doc
+  comment in `gfx.h` glossed that as "(nothing draws)", and
+  `apps/wm/wm_render.c`'s `clip_to_window_content()` was written
+  against the gloss: when a window's content∩damage intersection came
+  out empty, it expected the app's `on_draw()` to be fully suppressed
+  and instead got it painted with NO clip at all. That is both a
+  damage-invariant violation and a breach of the containment boundary
+  `clip_to_window_content()` exists to enforce (on such a frame an app
+  could paint anywhere on screen).
+  - How it surfaced: `tools/damage_sweep.py --random 50 --seed 1` (and
+    seed 5), random step 0 -- "20 px changed outside the damage rect,
+    first at (499,350)". The failing frame is a once-a-second clock
+    tick: its damage box (taskbar strip ∪ cursor box at (640,360),
+    y >= 357) grazes a default-position Notepad's *bottom border row*
+    (window ends at y=358) without reaching its content (ends at
+    y=357) -- so the window isn't Phase-3-skipped, the content clip
+    intersection is empty, and Notepad's unclipped content repaint
+    buries the resize grip drawn the frame before. The 20 px are
+    exactly the grip's two strokes (`draw_resize_grip()`'s 5x2 + 2x5),
+    turned content-white; visibly, **the grip vanished from a freshly
+    opened Notepad after one second** and stayed gone.
+  - The roadmap's known-issue entry for this recorded two candidate
+    causes ("an earlier frame moved the caret undamaged" vs "on_draw
+    isn't idempotent") -- it was neither, and the entry's `gui probe`
+    detail ("inside Terminal's content") was wrong: seed 1 step 0
+    opens *Notepad*, and (499,350) is Notepad's grip corner. Settled
+    empirically with verify OFF: replicate the sweep to step 0,
+    screenshot, force a full repaint, screenshot again --
+    `screenshot_diff` shows exactly the 20 grip pixels
+    (white vs the border grey), i.e. the screen was genuinely wrong,
+    not a verifier artifact
+    (`screenshots/2026-08-14/notepad-grip-*.png`).
+  - Fix: `gfx_set_clip_rect()` with w/h <= 0 now sets an *empty* clip
+    (clip_active with a zero-area box, so `gfx_put_pixel()` rejects
+    every write) instead of clearing. `gfx_clear_clip_rect()` remains
+    the one way to remove the clip. Only one call site in the tree can
+    pass a non-positive size -- `clip_to_window_content()` -- and it
+    wanted exactly this. `gfx.h`'s contradictory doc rewritten.
+  - Also fixed by the same change, unasked: the fixed sequence's
+    intermittent "resize-shrink Notepad: 76626 px" violation -- same
+    mechanism through a mid-resize frame, gone on every run since.
+  - Verified: 77/77 KTESTs; `damage_sweep.py --random 50 --seed 1`
+    now 88 interactions / 0 violations; seed 5 drops from 3 violations
+    to 1 (the survivor is a *pre-existing, unrelated* 205px drag bug,
+    reproduced identically on the pre-fix kernel and now recorded
+    with its repro in `docs/roadmap.md`'s known issues);
+    `uidemo_test.py` 27/27; `dialog_test.py` all pass; and the direct
+    repro -- Notepad open, cursor parked at (640,360), four clock
+    ticks -- keeps the grip's pixels at border-grey where they used to
+    flip to white on the first tick.

@@ -123,8 +123,14 @@ uint8_t gfx_luminance(uint32_t color);
 // already does. gfx_get_pixel() is deliberately NOT clipped (see
 // gfx.c's comment) -- a caller reading existing content, e.g. to save
 // pixels before drawing over them, still wants the real content
-// regardless of the active clip. w/h <= 0 is treated the same as
-// gfx_clear_clip_rect() (nothing draws). First real caller: the window
+// regardless of the active clip. w/h <= 0 sets an EMPTY clip: nothing
+// draws at all until the clip is changed or cleared. (It is NOT the
+// same as gfx_clear_clip_rect(), which makes the whole screen drawable
+// -- this doc used to conflate the two, the implementation followed
+// the wrong half, and a compositor caller that computed an empty
+// window-content/damage intersection got that window's entire
+// on_draw() painted unclipped. See gfx.c's comment in
+// gfx_set_clip_rect() itself.) First real caller: the window
 // manager's damage-region compositor (apps/wm/wm_render.c, see
 // docs/decisions.md) -- restricts a repaint to the screen region that
 // actually needs it instead of always touching everything.

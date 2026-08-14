@@ -106,6 +106,7 @@ there when you add an entry, or the index quietly stops being one.
 - [GUI tests wait on the WM's queue depth, not on a sleep derived from frame rate](#gui-tests-wait-on-the-wms-queue-depth-not-on-a-sleep-derived-from-frame-rate)
 - [Modifier keys ride alongside the key, they don't re-encode it](#modifier-keys-ride-alongside-the-key-they-dont-re-encode-it)
 - [Keyboard focus is an app-level ring with a per-widget ops table, not a WM concept](#keyboard-focus-is-an-app-level-ring-with-a-per-widget-ops-table-not-a-wm-concept)
+- [An empty clip rect draws nothing -- it is not gfx_clear_clip_rect()](#an-empty-clip-rect-draws-nothing----it-is-not-gfx_clear_clip_rect)
 
 **Shell, apps & console**
 
@@ -3252,3 +3253,24 @@ Design points worth keeping:
   one-step case for exactly that.
 
 See `CHANGELOG.md`'s `[Unreleased]` entry.
+
+## An empty clip rect draws nothing -- it is not gfx_clear_clip_rect()
+
+`gfx_set_clip_rect()` with a non-positive w/h sets an EMPTY clip: every
+pixel write is rejected until the clip is changed or cleared. It used to
+do the opposite -- treat non-positive as "clear the clip", full screen
+drawable -- while `gfx.h` described that same case as "(nothing draws)".
+The one caller that can produce an empty rect
+(`apps/wm/wm_render.c`'s `clip_to_window_content()`, intersecting a
+window's content with the frame's damage box) was written against the
+words, not the behaviour, so a frame whose damage grazed a window's
+border without reaching its content handed that app's `on_draw()` an
+UNCLIPPED screen. That was the damage sweep's long-standing "20 px"
+violation (the resize grip buried by a clock-tick frame) and the
+intermittent 76k-px resize one; the recorded known-issue's own probe
+detail turned out to be wrong, a fresh reminder to measure before
+fixing. The rule worth keeping: the two states are different operations
+on purpose -- `gfx_clear_clip_rect()` is the only way to remove the
+clip, and a computed rectangle with nothing in it must clip everything
+out, for the same reason a formatter that can't fit writes nothing.
+See `CHANGELOG.md`'s `[Unreleased]` entry for the full diagnosis.
