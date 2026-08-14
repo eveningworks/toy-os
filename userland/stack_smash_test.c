@@ -8,22 +8,11 @@
 // "the kernel/runtime catches this and control returns cleanly to the
 // shell", not "the machine survives via halt".
 #include <stdint.h>
-#include "syscall_abi.h"
+#include "sys.h"
 
-static inline int64_t syscall3(uint64_t num, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
-    int64_t ret;
-    __asm__ volatile (
-        "int $0x80"
-        : "=a"(ret)
-        : "a"(num), "D"(arg1), "S"(arg2), "d"(arg3)
-        : "memory"
-    );
-    return ret;
-}
 
-static inline int64_t sys_write(int fd, const char *buf, uint64_t len) {
-    return syscall3(SYS_WRITE, (uint64_t)fd, (uint64_t)(uintptr_t)buf, len);
-}
+
+
 
 static uint64_t my_strlen(const char *s) {
     uint64_t n = 0;
@@ -45,7 +34,7 @@ static void put(const char *s) {
 // noinline is load-bearing, not just documentation: at -O2 GCC inlines
 // this one-call-site function straight into _start, which moves the
 // canary check to _start's OWN epilogue -- after _start's later code
-// (the "survived" message + syscall3(SYS_EXIT, ...)) already ran and
+// (the "survived" message + sys_call(SYS_EXIT, ...)) already ran and
 // exited the process, so the check never gets a chance to fire at all.
 // Confirmed by disassembly the first time this test was written: the
 // process printed "UNEXPECTEDLY SURVIVED" and exited normally with the
@@ -60,7 +49,7 @@ static void __attribute__((noinline)) smash(void) {
     for (int i = 0; i < 64; i++) p[i] = 0x41;
 }
 
-void _start(void) {
+int main(void) {
     put("stack_smash_test: about to overflow a local stack buffer\n");
     put("stack_smash_test: __stack_chk_fail should catch this on return\n");
 
@@ -70,5 +59,5 @@ void _start(void) {
     // something about the test itself is wrong, not proof the
     // protection works.
     put("stack_smash_test: UNEXPECTEDLY SURVIVED -- canary didn't fire, test is broken\n");
-    syscall3(SYS_EXIT, 1, 0, 0);
+    sys_call(SYS_EXIT, 1, 0, 0);
 }

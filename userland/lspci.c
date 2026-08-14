@@ -23,54 +23,22 @@
 // tradeoff every other userland test's small local helpers already
 // make (e.g. put_udec() below existing separately from vga_write_dec()).
 #include <stdint.h>
-#include "syscall_abi.h"
+#include "sys.h"
 #include "pci.h" // struct pci_device only -- see this file's top comment
 
-static inline int64_t syscall0(uint64_t num) {
-    int64_t ret;
-    __asm__ volatile ("int $0x80" : "=a"(ret) : "a"(num) : "memory");
-    return ret;
-}
 
-static inline int64_t syscall2(uint64_t num, uint64_t arg1, uint64_t arg2) {
-    int64_t ret;
-    __asm__ volatile (
-        "int $0x80"
-        : "=a"(ret)
-        : "a"(num), "D"(arg1), "S"(arg2)
-        : "memory"
-    );
-    return ret;
-}
 
-static inline int64_t syscall3(uint64_t num, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
-    int64_t ret;
-    __asm__ volatile (
-        "int $0x80"
-        : "=a"(ret)
-        : "a"(num), "D"(arg1), "S"(arg2), "d"(arg3)
-        : "memory"
-    );
-    return ret;
-}
 
-static inline int64_t sys_write(const char *buf, uint64_t len) {
-    return syscall3(SYS_WRITE, 1, (uint64_t)(uintptr_t)buf, len);
-}
 
-static inline int64_t sys_pci_count(void) {
-    return syscall0(SYS_PCI_COUNT);
-}
 
-static inline int64_t sys_pci_info(int index, struct pci_device *out) {
-    return syscall2(SYS_PCI_INFO, (uint64_t)index, (uint64_t)(uintptr_t)out);
-}
 
-static inline void sys_exit(int code) __attribute__((noreturn));
-static inline void sys_exit(int code) {
-    syscall2(SYS_EXIT, (uint64_t)(int64_t)code, 0);
-    for (;;) { }
-}
+
+
+
+
+
+
+
 
 static uint64_t my_strlen(const char *s) {
     uint64_t n = 0;
@@ -79,7 +47,7 @@ static uint64_t my_strlen(const char *s) {
 }
 
 static void put(const char *s) {
-    sys_write(s, my_strlen(s));
+    sys_write(1, s, my_strlen(s));
 }
 
 // Unsigned decimal. This file's top comment has always cited put_udec()
@@ -185,20 +153,14 @@ static char g_vendor_name[MAX_DEVS][VENDOR_NAME_MAX];
 static char g_device_name[MAX_DEVS][DEVICE_NAME_MAX];
 static int  g_count;
 
-static inline int64_t sys_open(const char *path, uint64_t flags) {
-    return syscall2(SYS_OPEN, (uint64_t)(uintptr_t)path, flags);
-}
 
-static inline int64_t sys_read(int fd, void *buf, uint64_t len) {
-    return syscall3(SYS_READ, (uint64_t)fd, (uint64_t)(uintptr_t)buf, len);
-}
 
-static inline int64_t sys_close(int fd) {
-    return syscall2(SYS_CLOSE, (uint64_t)fd, 0);
-}
+
+
+
 
 static void put_err(const char *s) {
-    syscall3(SYS_WRITE, 2, (uint64_t)(uintptr_t)s, my_strlen(s));
+    sys_call(SYS_WRITE, 2, (uint64_t)(uintptr_t)s, my_strlen(s));
 }
 
 static void copy_trunc(char *dst, const char *src, uint64_t cap) {
@@ -309,7 +271,7 @@ static void load_names(void) {
     sys_close((int)fd);
 }
 
-void _start(void) {
+int main(void) {
     int64_t count = sys_pci_count();
     if (count <= 0) {
         put("No PCI devices found.\n");

@@ -19,27 +19,14 @@
 // button all make it exit cleanly, destroying its window on the way
 // out.
 #include <stdint.h>
-#include "syscall_abi.h"
+#include "sys.h"
 
-static inline int64_t syscall2(uint64_t num, uint64_t arg1, uint64_t arg2) {
-    int64_t ret;
-    __asm__ volatile (
-        "int $0x80"
-        : "=a"(ret)
-        : "a"(num), "D"(arg1), "S"(arg2)
-        : "memory"
-    );
-    return ret;
-}
 
-static inline void sys_exit(int code) __attribute__((noreturn));
-static inline void sys_exit(int code) {
-    syscall2(SYS_EXIT, (uint64_t)(int64_t)code, 0);
-    for (;;) { } // unreachable
-}
+
+
 
 static int win_request(struct win_request_msg *req) {
-    return (int)syscall2(SYS_WIN_REQUEST, (uint64_t)(uintptr_t)req, 0);
+    return (int)sys_call(SYS_WIN_REQUEST, (uint64_t)(uintptr_t)req, 0, 0);
 }
 
 // The documented SYS_WAIT_EVENT loop -- a 0 return means "woken, ask
@@ -49,7 +36,7 @@ static int win_request(struct win_request_msg *req) {
 static int wait_event(struct win_event *ev) {
     int64_t r;
     do {
-        r = syscall2(SYS_WAIT_EVENT, (uint64_t)(uintptr_t)ev, 0);
+        r = sys_call(SYS_WAIT_EVENT, (uint64_t)(uintptr_t)ev, 0, 0);
     } while (r == 0);
     return (int)r;
 }
@@ -78,7 +65,7 @@ static void paint(volatile uint32_t *buf, uint32_t color) {
     }
 }
 
-void _start(void) {
+int main(void) {
     struct win_request_msg req;
     for (unsigned i = 0; i < sizeof(req); i++) ((uint8_t *)&req)[i] = 0;
 

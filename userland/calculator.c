@@ -40,27 +40,19 @@
 //      "font changed" event to do the same, and there isn't one yet
 //      (see docs/roadmap.md's Milestone 41).
 #include <stdint.h>
-#include "syscall_abi.h"
+#include "sys.h"
 #include "ugfx.h"
 #include "uui.h"
 #include "utheme.h"
 #include "calc_engine.h"
 #include "string.h"
 
-static inline int64_t syscall2(uint64_t num, uint64_t a1, uint64_t a2) {
-    int64_t ret;
-    __asm__ volatile ("int $0x80" : "=a"(ret) : "a"(num), "D"(a1), "S"(a2) : "memory");
-    return ret;
-}
 
-static inline void sys_exit(int code) __attribute__((noreturn));
-static inline void sys_exit(int code) {
-    syscall2(SYS_EXIT, (uint64_t)(int64_t)code, 0);
-    for (;;) { }
-}
+
+
 
 static int win_request(struct win_request_msg *req) {
-    return (int)syscall2(SYS_WIN_REQUEST, (uint64_t)(uintptr_t)req, 0);
+    return (int)sys_call(SYS_WIN_REQUEST, (uint64_t)(uintptr_t)req, 0, 0);
 }
 
 static void clear_req(struct win_request_msg *req) {
@@ -70,7 +62,7 @@ static void clear_req(struct win_request_msg *req) {
 static int wait_event(struct win_event *ev) {
     int64_t r;
     do { // 0 = "woken, ask again"; parks again rather than spinning
-        r = syscall2(SYS_WAIT_EVENT, (uint64_t)(uintptr_t)ev, 0);
+        r = sys_call(SYS_WAIT_EVENT, (uint64_t)(uintptr_t)ev, 0, 0);
     } while (r == 0);
     return (int)r;
 }
@@ -190,7 +182,7 @@ static void present(uint32_t id) {
     win_request(&req);
 }
 
-void _start(void) {
+int main(void) {
     struct win_request_msg req;
 
     // The font has to arrive before the layout can be computed -- every

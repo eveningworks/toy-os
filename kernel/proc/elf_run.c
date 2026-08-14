@@ -104,47 +104,53 @@ int elf_build_argv_on_stack(uint64_t stack_phys, uint64_t stack_vaddr,
         str_vaddr[i] = stack_vaddr + offset;
     }
 
-    // Pointer array (argc entries + a trailing NULL), placed below
-    // every string it points at, and positioned so the resulting RSP is
-    // **16-byte aligned** rather than merely 8.
+    // The SysV process-entry block, laid out below every string it
+    // points at. From RSP upward:
     //
-    // This used to align to 8, which was fine while every userland ELF
-    // was built `-mno-sse`. It stopped being fine the moment ring-3 code
-    // could use SSE: GCC assumes a 16-byte-aligned stack and emits
-    // `movaps`/`movdqa` against stack slots on that assumption, and
-    // those #GP -- not silently mis-store, actually fault -- if RSP is
-    // off by 8. The failure would surface as a process crashing
-    // somewhere with no visible connection to its stack layout.
+    //     (%rsp)          argc
+    //     8(%rsp)         argv[0] .. argv[argc-1]
+    //                     NULL              (argv terminator)
+    //                     NULL              (envp, empty for now)
     //
-    // **RSP % 16 == 8 at entry, not 0**, and that 8 is load-bearing.
+    // This is the standard layout a real crt0 expects, and userland/
+    // crt0.asm is what reads it. There is deliberately no auxv after
+    // the envp terminator: nothing here consumes one, and inventing
+    // entries nobody reads is how an ABI accumulates fiction.
     //
-    // The SysV process-entry convention says a real _start sees a
-    // 16-aligned RSP -- but a real _start is hand-written assembly in a
-    // crt0 that realigns before calling main. Every _start here is a
-    // plain C function, and GCC compiles it like any other function:
-    // assuming a return address was pushed, i.e. RSP % 16 == 8 on
-    // entry, and sizing its prologue's `sub` to land 16-byte-aligned
-    // locals from there. Hand it a 16-aligned RSP and every aligned
-    // stack slot in the function is off by exactly 8.
+    // **RSP is 16-byte ALIGNED at entry**, per SysV. That is a change,
+    // and the previous convention is worth recording because it looked
+    // wrong and wasn't: this used to hand over RSP % 16 == 8, because
+    // every _start was a plain C function. GCC compiles such a function
+    // like any other -- assuming a return address was pushed, i.e.
+    // RSP % 16 == 8 on entry -- and sizes its prologue to land
+    // 16-aligned locals from there. Handing THAT a 16-aligned RSP put
+    // every aligned stack slot off by exactly 8, which surfaced as
+    // userland/fpu_test.c's `movapd %xmm0,(%rsp)` taking a #GP at ring
+    // 3 (established by testing, not by reading the ABI; both this and
+    // the plain 8-alignment before it were invisible while userland was
+    // built -mno-sse and nothing could emit an alignment-sensitive
+    // instruction at all).
     //
-    // Established by testing, not by reading the ABI: with a 16-aligned
-    // entry RSP, userland/fpu_test.c's `movapd %xmm0,(%rsp)` took a #GP
-    // at ring 3. Both this and the plain 8-alignment it replaced were
-    // invisible while userland was built -mno-sse, since nothing could
-    // emit an alignment-sensitive instruction at all.
-    size_t ptr_bytes = (size_t)(argc + 1) * 8;
-    if (ptr_bytes + 16 > offset) return 0; // no room for the array plus alignment slack
-    offset -= ptr_bytes;
-    offset &= ~(size_t)15; // 16-aligned...
-    offset -= 8;            // ...then 8 below it, which is what GCC expects
+    // A hand-written assembly _start does not have that problem -- it
+    // makes no assumption about a pushed return address and realigns
+    // before calling main. So the entry point moving into crt0.asm is
+    // exactly what makes the standard 16-alignment correct here.
+    size_t block_bytes = 8                              // argc
+                        + (size_t)(argc + 1) * 8        // argv[] + NULL
+                        + 8;                            // envp NULL
+    if (block_bytes + 16 > offset) return 0; // no room for the block plus alignment slack
+    offset -= block_bytes;
+    offset &= ~(size_t)15; // SysV: 16-aligned AT ENTRY
 
-    uint64_t *argv_ptrs = (uint64_t *)(page + offset);
-    for (int i = 0; i < argc; i++) argv_ptrs[i] = str_vaddr[i];
-    argv_ptrs[argc] = 0;
+    uint64_t *blk = (uint64_t *)(page + offset);
+    blk[0] = (uint64_t)argc;
+    for (int i = 0; i < argc; i++) blk[1 + i] = str_vaddr[i];
+    blk[1 + argc] = 0; // argv terminator
+    blk[2 + argc] = 0; // envp terminator -- no environment yet
 
     *out_argc = (uint64_t)argc;
-    *out_argv = stack_vaddr + offset;
-    *out_user_rsp = stack_vaddr + offset;
+    *out_argv = stack_vaddr + offset + 8; // &argv[0], for callers that want it
+    *out_user_rsp = stack_vaddr + offset; // &argc -- what RSP must be at entry
     return 1;
 }
 
@@ -220,12 +226,19 @@ int elf_run_from_fs(const char *path, const char *args) {
         return -1;
     }
 
-    klog_write("elf_run: calling process_run_ring3_args() for ");
+    klog_write("elf_run: calling process_run_ring3() for ");
     klog_write(path);
     klog_write("\n");
 
-    int exit_code = process_run_ring3_args(as, entry, user_rsp, argc, argv);
+    // argc/argv are NOT passed in registers any more -- they live on
+    // the stack this call hands over, in the SysV layout
+    // elf_build_argv_on_stack() built and userland/crt0.asm reads. The
+    // register variant that used to exist here is gone rather than kept
+    // "just in case": two live conventions for the same thing is how an
+    // ABI rots.
+    (void)argc; (void)argv; // consumed via user_rsp, see above
+    int exit_code = process_run_ring3(as, entry, user_rsp);
 
-    klog_write("elf_run: process_run_ring3_args() returned\n");
+    klog_write("elf_run: process_run_ring3() returned\n");
     return exit_code;
 }

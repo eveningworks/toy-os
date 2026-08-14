@@ -32,6 +32,62 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
 ## [Unreleased]
 
 ### Added
+- **A real crt0 and a syscall library, and the process entry ABI is now
+  standard SysV.** Every ring-3 program used to open with its own
+  hand-written `void _start(void)` and its own copy of
+  ```c
+  static inline int64_t syscall2(uint64_t n, uint64_t a, uint64_t b) {
+      int64_t r; __asm__ volatile ("int $0x80" : ...); return r;
+  }
+  ```
+  -- the same eight lines duplicated across more than twenty files,
+  each copy free to get the clobber list or the argument registers
+  subtly wrong. The syscall ABI is a contract with the kernel; it is
+  written down once now.
+
+  - **`userland/crt0.asm`** provides `_start` for every binary: it
+    reads argc/argv/envp off the stack, aligns, calls `main()`, and
+    passes the return value to `sys_exit()`. Programs are now just
+    their own `main()`.
+  - **`userland/sys.c`/`sys.h`** is libsys: one typed wrapper per
+    syscall (`sys_write`, `sys_open`, `sys_wait_event`, ...), plus
+    `sys_call()` as an explicit raw escape hatch for the diagnostic
+    binaries in `/tests` that exist to poke the raw interface
+    (`write_bad_test.c` hands the kernel a bad pointer on purpose;
+    `newsyscalls_test.c` asserts on `SYS_YIELD`'s return value, which
+    the typed wrapper discards). Ordinary programs should never call
+    it -- if a syscall has no wrapper, the fix is to add one.
+  - **The entry ABI moved to the SysV layout**: `argc` at `(%rsp)`,
+    then `argv[]`, a NULL, then `envp` (empty). Previously argc/argv
+    arrived in RDI/RSI, which was toy-os's own convention and a wall
+    for Milestone 40's "run stock musl binaries". The register path is
+    deleted rather than kept alongside -- two live conventions for the
+    same thing is how an ABI rots.
+
+  **The stack alignment inverted, and getting it backwards was a real
+  bug caught in testing.** The kernel used to hand over
+  `RSP % 16 == 8`, deliberately, because every `_start` was a plain C
+  function that GCC compiled assuming a pushed return address. With a
+  hand-written entry point the standard applies instead: SysV specifies
+  the rule at the CALLEE's entry (`%rsp + 8` a multiple of 16), so
+  `%rsp` must be 16-aligned *before* `call main`. A `sub rsp, 8` in
+  crt0 -- which looks like the obvious way to "restore" the old
+  convention -- leaves `main()` entered 16-aligned instead of 8, and
+  GCC then emits `movaps` against stack slots it believes are aligned
+  and aren't. That FAULTS rather than mis-storing: every GUI client
+  took a #GP a few instructions into `main()`, while the plain non-SSE
+  programs were completely unaffected, which is what makes the symptom
+  look like anything other than an alignment problem.
+
+  Verified: all 25 userland programs converted and building; `ktest`
+  89/89 (including the end-to-end test that spawns `event_test` with an
+  argv, which exercises the new layout through the kernel);
+  `ls -al /tests` and `run spin_test 2` confirm multi-flag and numeric
+  argv; `exit_test` still returns 42, now through `main()`'s return
+  value; `fpu_test` (the alignment-sensitive one) and
+  `newsyscalls_test` both exit 0. GUI regressions all clean:
+  `calculator_client_test` 8/8, `winclient_test` 8/8,
+  `uiclient_test` 8/8, `uidemo_test` 27/27, `damage_sweep` 35/0.
 - **Calculator runs in ring 3.** The final step of Milestone 41: a real
   application, moved out of the kernel and running as an ordinary
   ring-3 process that talks to the window server over the protocol.

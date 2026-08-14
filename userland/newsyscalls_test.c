@@ -13,76 +13,32 @@
 // context switch -- see that phase's comment for why that's still a
 // meaningful thing to verify.
 #include <stdint.h>
-#include "syscall_abi.h"
+#include "sys.h"
 #include "timer.h" // struct rtc_time, shared with the kernel's SYS_GETTIME handler
 
-static inline int64_t syscall0(uint64_t num) {
-    int64_t ret;
-    __asm__ volatile ("int $0x80" : "=a"(ret) : "a"(num) : "memory");
-    return ret;
-}
 
-static inline int64_t syscall1(uint64_t num, uint64_t arg1) {
-    int64_t ret;
-    __asm__ volatile ("int $0x80" : "=a"(ret) : "a"(num), "D"(arg1) : "memory");
-    return ret;
-}
 
-static inline int64_t syscall2(uint64_t num, uint64_t arg1, uint64_t arg2) {
-    int64_t ret;
-    __asm__ volatile (
-        "int $0x80"
-        : "=a"(ret)
-        : "a"(num), "D"(arg1), "S"(arg2)
-        : "memory"
-    );
-    return ret;
-}
 
-static inline int64_t syscall3(uint64_t num, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
-    int64_t ret;
-    __asm__ volatile (
-        "int $0x80"
-        : "=a"(ret)
-        : "a"(num), "D"(arg1), "S"(arg2), "d"(arg3)
-        : "memory"
-    );
-    return ret;
-}
 
-static inline int64_t sys_write(int fd, const char *buf, uint64_t len) {
-    return syscall3(SYS_WRITE, (uint64_t)fd, (uint64_t)(uintptr_t)buf, len);
-}
 
-static inline int64_t sys_open(const char *path, uint64_t flags) {
-    return syscall2(SYS_OPEN, (uint64_t)(uintptr_t)path, flags);
-}
 
-static inline int64_t sys_close(int fd) {
-    return syscall1(SYS_CLOSE, (uint64_t)fd);
-}
 
-static inline int64_t sys_unlink(const char *path) {
-    return syscall1(SYS_UNLINK, (uint64_t)(uintptr_t)path);
-}
 
-static inline int64_t sys_listdir(const char *path, struct dirent *out, uint64_t max) {
-    return syscall3(SYS_LISTDIR, (uint64_t)(uintptr_t)path, (uint64_t)(uintptr_t)out, max);
-}
 
-static inline int64_t sys_gettime(struct rtc_time *out) {
-    return syscall1(SYS_GETTIME, (uint64_t)(uintptr_t)out);
-}
 
-static inline int64_t sys_yield(void) {
-    return syscall0(SYS_YIELD);
-}
 
-static inline void sys_exit(int code) __attribute__((noreturn));
-static inline void sys_exit(int code) {
-    syscall2(SYS_EXIT, (uint64_t)(int64_t)code, 0);
-    for (;;) { }
-}
+
+
+
+
+
+
+
+
+
+
+
+
 
 static uint64_t my_strlen(const char *s) {
     uint64_t n = 0;
@@ -117,7 +73,7 @@ static void put_udec(uint32_t v, int min_digits) {
 
 #define TESTFILE "/newsyscalls_test.txt"
 
-void _start(void) {
+int main(void) {
     int all_ok = 1;
 
     // --- Phase 1: SYS_UNLINK -----------------------------------------
@@ -206,7 +162,11 @@ void _start(void) {
         // counter_b.c's preemptive demo, see scheduler.c) -- this is the
         // syscall-ABI-level check that a yield with no other process
         // ready behaves exactly like scheduler_tick() already promises.
-        int64_t ret = sys_yield();
+        // The raw hatch, not sys_yield(): this test asserts on the
+        // syscall's RETURN VALUE, which the typed wrapper discards
+        // because no ordinary caller has any use for it. Poking the raw
+        // ABI is what this binary is for -- see sys.h.
+        int64_t ret = sys_call(SYS_YIELD, 0, 0, 0);
         int ok = (ret == 0);
         put("  after yield, still running -- return value: ");
         put_udec(ret < 0 ? (uint32_t)(-ret) : (uint32_t)ret, 0);

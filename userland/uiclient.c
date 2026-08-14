@@ -20,34 +20,19 @@
 // behaviour rather than on pixels alone -- the same idea as
 // apps/uidemo.c's log grammar, which exists for exactly this reason.
 #include <stdint.h>
-#include "syscall_abi.h"
+#include "sys.h"
 #include "ugfx.h"
 
-static inline int64_t syscall3(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3) {
-    int64_t ret;
-    __asm__ volatile (
-        "int $0x80"
-        : "=a"(ret)
-        : "a"(num), "D"(a1), "S"(a2), "d"(a3)
-        : "memory"
-    );
-    return ret;
-}
 
-static inline int64_t syscall2(uint64_t num, uint64_t a1, uint64_t a2) {
-    return syscall3(num, a1, a2, 0);
-}
 
-static inline void sys_exit(int code) __attribute__((noreturn));
-static inline void sys_exit(int code) {
-    syscall2(SYS_EXIT, (uint64_t)(int64_t)code, 0);
-    for (;;) { }
-}
+
+
+
 
 static int str_len(const char *s) { int n = 0; while (s[n]) n++; return n; }
 
 static void log_line(const char *s) {
-    syscall3(SYS_WRITE, 1, (uint64_t)(uintptr_t)s, (uint64_t)str_len(s));
+    sys_call(SYS_WRITE, 1, (uint64_t)(uintptr_t)s, (uint64_t)str_len(s));
 }
 
 // Small fixed-buffer int formatter -- there is no libc here.
@@ -68,7 +53,7 @@ static void log_count(int n) {
 }
 
 static int win_request(struct win_request_msg *req) {
-    return (int)syscall2(SYS_WIN_REQUEST, (uint64_t)(uintptr_t)req, 0);
+    return (int)sys_call(SYS_WIN_REQUEST, (uint64_t)(uintptr_t)req, 0, 0);
 }
 
 static void clear_req(struct win_request_msg *req) {
@@ -78,7 +63,7 @@ static void clear_req(struct win_request_msg *req) {
 static int wait_event(struct win_event *ev) {
     int64_t r;
     do { // see syscall_abi.h: 0 means "woken, ask again", and parks again
-        r = syscall2(SYS_WAIT_EVENT, (uint64_t)(uintptr_t)ev, 0);
+        r = sys_call(SYS_WAIT_EVENT, (uint64_t)(uintptr_t)ev, 0, 0);
     } while (r == 0);
     return (int)r;
 }
@@ -131,7 +116,7 @@ static void draw(struct ugfx_surface *s, int count, int pressed) {
     ugfx_draw_rect(s, 0, 0, s->w, s->h, 0xD5D8DC);
 }
 
-void _start(void) {
+int main(void) {
     struct win_request_msg req;
 
     clear_req(&req);

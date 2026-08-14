@@ -17,24 +17,11 @@
 // question is whether the kernel gets a turn against a process that
 // never yields.
 #include <stdint.h>
-#include "syscall_abi.h"
+#include "sys.h"
 
-static inline int64_t syscall2(uint64_t num, uint64_t arg1, uint64_t arg2) {
-    int64_t ret;
-    __asm__ volatile (
-        "int $0x80"
-        : "=a"(ret)
-        : "a"(num), "D"(arg1), "S"(arg2)
-        : "memory"
-    );
-    return ret;
-}
 
-static inline void sys_exit(int code) __attribute__((noreturn));
-static inline void sys_exit(int code) {
-    syscall2(SYS_EXIT, (uint64_t)(int64_t)code, 0);
-    for (;;) { } // unreachable
-}
+
+
 
 // Default outer rounds: enough to span comfortably more timer slices
 // than sched_test.c's minimum observation count needs, while still
@@ -71,7 +58,7 @@ static int parse_rounds(const char *s) {
 // argc/argv per the kernel's process ABI (elf_build_argv_on_stack(),
 // kernel/proc/elf_run.c) -- argv[0] is the path, so the optional round
 // count is argv[1].
-void _start(int argc, char **argv) {
+int main(int argc, char **argv) {
     int rounds = argc > 1 ? parse_rounds(argv[1]) : OUTER_DEFAULT;
     for (int i = 0; i < rounds; i++) {
         for (volatile uint32_t j = 0; j < SPIN_ITERS; j++) { }

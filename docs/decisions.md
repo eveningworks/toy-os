@@ -36,6 +36,7 @@ there when you add an entry, or the index quietly stops being one.
 - [A client window's close button is a handshake, not a seizure](#a-client-windows-close-button-is-a-handshake-not-a-seizure)
 - [Ring-3 clients draw for themselves, and the font is shared read-only](#ring-3-clients-draw-for-themselves-and-the-font-is-shared-read-only)
 - [Calculator's engine is shared source compiled twice, not copied](#calculators-engine-is-shared-source-compiled-twice-not-copied)
+- [The process entry ABI is SysV, and crt0 owns the stack alignment](#the-process-entry-abi-is-sysv-and-crt0-owns-the-stack-alignment)
 - [Stack canaries: `-mstack-protector-guard=global` and a fixed constant, not GCC's defaults](#stack-canaries--mstack-protector-guardglobal-and-a-fixed-constant-not-gccs-defaults)
 - [NX enforcement scoped to userspace only -- the kernel's own identity map stays RWX](#nx-enforcement-scoped-to-userspace-only----the-kernels-own-identity-map-stays-rwx)
 - [The serial debug console is poll-based from existing idle loops, not a new kernel thread](#the-serial-debug-console-is-poll-based-from-existing-idle-loops-not-a-new-kernel-thread)
@@ -3567,3 +3568,40 @@ directory growth runs as its own empty-block-first transaction
 name visible one transaction before the child's inode existed). See
 `docs/tfs3-spec.md`'s journal section and CHANGELOG.md's Stage C
 entry.
+
+## The process entry ABI is SysV, and crt0 owns the stack alignment
+
+A new process starts with the standard SysV layout on its stack --
+`argc` at `(%rsp)`, then `argv[]`, a NULL, then `envp` (empty; there is
+no environment yet, and no auxv, because nothing consumes one and
+inventing entries nobody reads is how an ABI accumulates fiction).
+`userland/crt0.asm` reads it and calls `main()`.
+
+It used to arrive in RDI/RSI instead. That was toy-os's own convention,
+fine while every `_start` was a C function taking two parameters, and a
+wall for Milestone 40's "run stock musl binaries". The register path was
+deleted rather than kept alongside the stack one: two live conventions
+for the same thing is exactly how an ABI rots.
+
+**The alignment inverted with that change, and the direction is
+counter-intuitive.** The kernel used to hand over `RSP % 16 == 8` on
+purpose. That looked wrong and wasn't: GCC compiles a plain C `_start`
+like any other function -- assuming a `call` has just pushed a return
+address -- and sizes its prologue from there, so a "correctly"
+16-aligned RSP put every aligned stack slot off by 8.
+
+With a hand-written entry point, the standard applies. SysV states the
+rule at the CALLEE's entry (`%rsp + 8` is a multiple of 16 there), which
+means `%rsp` must be **16-aligned immediately before `call main`**. The
+tempting `sub rsp, 8` in crt0 -- reasoning "the old convention was 8, so
+restore it" -- produces the opposite and is a real bug: `main()` is then
+entered 16-aligned, GCC emits `movaps` against stack slots it believes
+are aligned, and those FAULT rather than mis-store.
+
+The failure mode is worth remembering because it disguises itself: every
+GUI client took a #GP a few instructions into `main()`, while every
+plain non-SSE program worked perfectly. Nothing about that symptom
+points at stack alignment until you notice which binaries are affected.
+
+See `CHANGELOG.md`'s `[Unreleased]` entry, `userland/crt0.asm`, and
+`kernel/proc/elf_run.c`'s `elf_build_argv_on_stack()`.

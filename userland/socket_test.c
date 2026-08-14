@@ -20,59 +20,25 @@
 //
 // Exits 0 if every step behaved as documented, 1 otherwise.
 #include <stdint.h>
-#include "syscall_abi.h"
+#include "sys.h"
 
-static inline int64_t syscall2(uint64_t num, uint64_t arg1, uint64_t arg2) {
-    int64_t ret;
-    __asm__ volatile (
-        "int $0x80"
-        : "=a"(ret)
-        : "a"(num), "D"(arg1), "S"(arg2)
-        : "memory"
-    );
-    return ret;
-}
 
-static inline int64_t syscall3(uint64_t num, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
-    int64_t ret;
-    __asm__ volatile (
-        "int $0x80"
-        : "=a"(ret)
-        : "a"(num), "D"(arg1), "S"(arg2), "d"(arg3)
-        : "memory"
-    );
-    return ret;
-}
 
-static inline int64_t sys_write(int fd, const char *buf, uint64_t len) {
-    return syscall3(SYS_WRITE, (uint64_t)fd, (uint64_t)(uintptr_t)buf, len);
-}
 
-static inline int64_t sys_read(int fd, char *buf, uint64_t len) {
-    return syscall3(SYS_READ, (uint64_t)fd, (uint64_t)(uintptr_t)buf, len);
-}
 
-static inline int64_t sys_socket(uint64_t domain, uint64_t type) {
-    return syscall2(SYS_SOCKET, domain, type);
-}
 
-static inline int64_t sys_send(int fd, const char *buf, uint64_t len) {
-    return syscall3(SYS_SEND, (uint64_t)fd, (uint64_t)(uintptr_t)buf, len);
-}
 
-static inline int64_t sys_recv(int fd, char *buf, uint64_t len) {
-    return syscall3(SYS_RECV, (uint64_t)fd, (uint64_t)(uintptr_t)buf, len);
-}
 
-static inline int64_t sys_close(int fd) {
-    return syscall2(SYS_CLOSE, (uint64_t)fd, 0);
-}
 
-static inline void sys_exit(int code) __attribute__((noreturn));
-static inline void sys_exit(int code) {
-    syscall2(SYS_EXIT, (uint64_t)(int64_t)code, 0);
-    for (;;) { } // unreachable
-}
+
+
+
+
+
+
+
+
+
 
 static uint64_t my_strlen(const char *s) {
     uint64_t n = 0;
@@ -89,7 +55,7 @@ static int fail(const char *msg) {
     return 0;
 }
 
-void _start(void) {
+int main(void) {
     int ok = 1;
 
     // Step 4 first (a rejected socket() call shouldn't leave anything

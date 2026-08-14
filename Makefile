@@ -332,8 +332,24 @@ $(BUILD)/userland/%.o: userland/%.c
 # linking, so every build recompiles all 17 userland programs.
 .SECONDARY:
 
-userland/%.elf: $(BUILD)/userland/%.o $(BUILD)/userland/stack_chk.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $< $(BUILD)/userland/stack_chk.o
+# The C runtime every ring-3 program now starts through. crt0.o must be
+# FIRST on the link line so _start lands at the lowest address in .text
+# -- userland/link.ld has no ENTRY() override, and the loader jumps to
+# the ELF header's e_entry, which ld takes from the _start symbol; being
+# first also keeps the entry point where a disassembly expects it.
+#
+# sys.o carries the syscall wrappers (userland/sys.c) and stack_chk.o
+# the canary symbols GCC emits references to. All three are linked into
+# every userland ELF, which is what lets a program be nothing but its
+# own main().
+$(BUILD)/userland/crt0.o: userland/crt0.asm
+	@mkdir -p $(dir $@)
+	$(ASM) $(ASMFLAGS) $< -o $@
+
+USERLAND_RT = $(BUILD)/userland/crt0.o $(BUILD)/userland/sys.o $(BUILD)/userland/stack_chk.o
+
+userland/%.elf: $(BUILD)/userland/%.o $(USERLAND_RT) userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/crt0.o $< $(BUILD)/userland/sys.o $(BUILD)/userland/stack_chk.o
 
 # Window clients that draw with the userland graphics runtime
 # (userland/ugfx.c) link it in explicitly, via a rule that overrides the
@@ -345,8 +361,8 @@ userland/%.elf: $(BUILD)/userland/%.o $(BUILD)/userland/stack_chk.o userland/lin
 # wanted only by window clients -- and with no --gc-sections here, adding
 # it globally would link the whole font-rendering path into programs
 # like `hello` that never draw anything.
-userland/uiclient.elf: $(BUILD)/userland/uiclient.o $(BUILD)/userland/ugfx.o $(BUILD)/userland/stack_chk.o userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/uiclient.o $(BUILD)/userland/ugfx.o $(BUILD)/userland/stack_chk.o
+userland/uiclient.elf: $(BUILD)/userland/uiclient.o $(BUILD)/userland/ugfx.o $(USERLAND_RT) userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/crt0.o $(BUILD)/userland/uiclient.o $(BUILD)/userland/ugfx.o $(BUILD)/userland/sys.o $(BUILD)/userland/stack_chk.o
 
 # Sources SHARED between the kernel image and userland ELFs, compiled a
 # second time with USERLAND_CFLAGS into build/userland/shared/.
@@ -383,12 +399,14 @@ $(BUILD)/userland/calculator.o: USERLAND_CFLAGS += -Iapps
 
 # The ported Calculator: its own code, the userland widget toolkit, and
 # the shared arithmetic engine.
-CALC_OBJS = $(BUILD)/userland/calculator.o \
+CALC_OBJS = $(BUILD)/userland/crt0.o \
+            $(BUILD)/userland/calculator.o \
             $(BUILD)/userland/uui.o \
             $(BUILD)/userland/ugfx.o \
             $(BUILD)/userland/shared/calc_engine.o \
             $(BUILD)/userland/shared/string.o \
             $(BUILD)/userland/shared/knum.o \
+            $(BUILD)/userland/sys.o \
             $(BUILD)/userland/stack_chk.o
 
 userland/calculator.elf: $(CALC_OBJS) userland/link.ld
