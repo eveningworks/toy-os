@@ -32,6 +32,93 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
 ## [Unreleased]
 
 ### Added
+- **Ring-3 processes can block, and there is a windowing event protocol
+  to block on.** Stage 2 of Milestone 41. Two things landed together
+  because neither is useful alone: a client that can receive events but
+  not sleep would spin-poll, and with the kernel context now in the
+  scheduler rotation (previous entry) a spinning client steals
+  timeslices from the very desktop it is talking to.
+
+  **Blocking syscalls deschedule rather than wait.** The obvious
+  implementation -- `sti`, then spin or `hlt` inside the handler --
+  was tried in this kernel and hangs after exactly one event:
+  `g_next_kernel_rsp` is a single global "where to resume" pointer and
+  was never meant to be reentrant, so a nested IRQ handler overwrites
+  it while the outer `int 0x80` handler is still on the stack (see
+  `syscall.c`'s `SYS_READ_KEY` comment, which has the original
+  autopsy). `scheduler_block_current()` sidesteps that instead of
+  trying to make the global reentrant: the handler does not wait, it
+  RETURNS, through the ordinary `isr_common` epilogue, into a different
+  entity -- exactly the switch `scheduler_tick()` already performs.
+  Nothing nests, and interrupts stay off for the whole handler as
+  before. `scheduler_wake()` is correspondingly restrained so it is
+  safe from an IRQ: it only flips state and writes an already-saved
+  trapframe, never `g_next_kernel_rsp`, so a woken process runs at the
+  next ordinary tick rather than being switched to from inside an
+  interrupt.
+
+  The wake writes its value straight into the saved trapframe's RAX
+  slot, which `isr_common`'s epilogue pops into the register the ring-3
+  caller reads -- so waking a process and answering its syscall are the
+  same act.
+
+  **`SYS_WAIT_EVENT` callers must loop**, and the reason is worth
+  stating because it looks like sloppiness and isn't: a 0 return means
+  "you were woken, ask again", not "no event". The wake happens inside
+  an interrupt handler under whatever address space was current, so the
+  kernel cannot copy the event into the waiting process's buffer at
+  that moment; the copy has to happen back inside the client's own
+  syscall. Same spurious-wakeup contract a condition variable has.
+  (Linux's alternative is rewinding RIP over the trapping instruction
+  so the syscall restarts itself -- `ERESTARTSYS`. Not used here: it
+  buries a hard assumption about the syscall instruction's length in
+  the scheduler, and the explicit loop costs a client three lines.) The
+  loop does not spin the CPU -- each pass that finds nothing parks the
+  process again.
+
+  Check-then-block is atomic against a concurrent push, because
+  interrupts are off for the whole handler. There is no window in which
+  an event arrives after the "is the queue empty?" test and is missed
+  by the block -- the classic lost-wakeup bug.
+
+  **The protocol, not the transport, is the durable part.**
+  `kernel/include/abi/win_proto.h` defines `struct win_event` (fixed
+  24 bytes, no pointers) and the `WIN_EV_*` types; `win_events.c` holds
+  one fixed-size queue per process. Today those bytes are carried by
+  `SYS_POLL_EVENT`/`SYS_WAIT_EVENT` copying one struct at a time; the
+  intended successor is a shared-memory ring the client maps once, and
+  nothing in the message format needs to change for that. That split is
+  the architectural bet of Milestone 41's chosen option -- keep clients
+  and the window server talking in messages rather than calls, and
+  moving the server out of the kernel later is a transport swap instead
+  of a rewrite of every call site.
+
+  On queue overflow the OLDEST event is dropped, not the newest: for
+  input the most recent state is what matters, and a client far enough
+  behind to overflow is better served by current events than by a
+  backlog it will never catch up on. Drops are counted rather than
+  silently swallowed (`win_events_dropped()`).
+
+  Verified:
+  - 4 new KTESTs (`kernel/proc/win_events_test.c`) -- FIFO order,
+    overflow dropping the oldest and counting it, bad pids refused, and
+    the end-to-end one: a real ring-3 process (`userland/event_test.c`,
+    the first program here that blocks rather than polls) parks in
+    `SYS_WAIT_EVENT`, is woken by events pushed one at a time from
+    kernel code, and exits with the count it received. Nothing short of
+    the whole chain working produces the right exit code.
+  - POSITIVE CONTROL: with `scheduler_wake()` stubbed out the process
+    blocks forever and that test fails on `exited` (the run takes 8.8s
+    instead of 3.8s -- the timeout), while the pure-queue tests still
+    pass. The right discrimination, not a blanket failure.
+  - A caller with no scheduler slot (the legacy `process_run_ring3()`
+    path, kernel code) is refused with -1 rather than silently degraded
+    to a never-blocking call, which would have turned the documented
+    client loop into a busy spin. Confirmed live: `run event_test`
+    exits 0 promptly instead of hanging.
+  - `strace` decodes both new syscalls, and a parked handler closes its
+    line as `= ?` via `strace_end_noreturn()` rather than printing
+    `regs[14]`, which at that point still holds the syscall number.
 - **The kernel context is a scheduler participant now, so the desktop
   keeps running while a ring-3 process does.** First step toward
   running the GUI in ring 3 (see `docs/roadmap.md`'s Milestone 41);

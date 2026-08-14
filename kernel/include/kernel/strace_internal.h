@@ -31,8 +31,14 @@ int strace_active(void);
 // the handler left them); strace_end() appends " = <ret>" and emits
 // the whole line at once, after the handler is done -- which is why a
 // traced write()'s own output appears above its trace line rather than
-// spliced into the middle of it. strace_end_noreturn() is for
-// SYS_EXIT, the one handler that may never come back.
+// spliced into the middle of it. strace_end_noreturn() closes the line
+// as " = ?" for a handler that produces no return value to print: it
+// was written for SYS_EXIT (which may never come back at all) and is
+// also what a handler that PARKS its caller uses (SYS_WAIT_EVENT --
+// the value is written into the saved trapframe by the eventual wake,
+// long after this line would have been emitted). A blocking wait
+// therefore reads as one " = ?" per park, followed by a fresh call
+// line with the real result once the client re-enters the syscall.
 void strace_begin(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2);
 void strace_end(uint64_t nr, uint64_t rax);
 void strace_end_noreturn(void);
