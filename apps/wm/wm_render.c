@@ -691,6 +691,7 @@ static void render_scene(int mx, int my, int has_damage) {
 // twice and costs a full-screen buffer); `gui damage verify on` enables
 // it -- see apps/wm/wm_debug.c.
 static int first_frame = 1;
+static int overlay_was_open;  // an overlay was up last frame -- see wm_render_frame()
 static int prev_cursor_x = -1, prev_cursor_y = -1;
 static int verify_enabled;
 static int verify_reported; // report each distinct failure once, not per frame
@@ -699,6 +700,7 @@ static int verify_reported; // report each distinct failure once, not per frame
 // full repaint even if the previous session left state behind.
 void wm_render_reset(void) {
     first_frame = 1;
+    overlay_was_open = 0;
     prev_cursor_x = prev_cursor_y = -1;
 }
 
@@ -722,17 +724,40 @@ int wm_damage_verify_enabled(void) { return verify_enabled; }
 // `gui damage verify on` then caught the self-compositing too --
 // "80 px changed outside the damage rect, first at (641,360)" on frames
 // where only the clock ticked, (641,360) being where the cursor sat.
+//
+// prev_cursor_* is "where the cursor was last actually DRAWN", and is
+// recorded at the end of wm_render_frame() on every frame that draws the
+// scene -- NOT here. It used to be updated in this function, which
+// only runs on damage-limited frames, so a full-repaint frame moved the
+// sprite without recording where it went; the next damage-limited frame
+// then damaged a position the cursor had already left, and the pixels it
+// was actually sitting on were never repainted. The residue is a second
+// cursor left behind on screen.
+//
+// That stayed hidden while full-repaint frames were rare. Making the
+// overlay fallback real (above) made them common and
+// tools/damage_sweep.py found it immediately: "139 px changed outside
+// the damage rect, first at (928,336)" -- 139 px being roughly a cursor
+// sprite, and (928,336) exactly where the previous injected click had
+// left it.
 static void damage_cursor(int mx, int my) {
     // Generous: the sprite is 13x19 and the resize variants differ, so
     // a box comfortably covering any of them costs nothing meaningful
     // and removes a whole family of off-by-a-few-pixels questions.
-    const int pad = CURSOR_BOX_SIZE;
+    // Derived from the box save_cursor_under() actually uses, not from a
+    // separately-chosen constant. It used to damage (x-1, y-1) sized
+    // CURSOR_BOX_SIZE+2 while the sprite box is anchored at
+    // (x-CURSOR_BOX_MARGIN, y-CURSOR_BOX_MARGIN) -- so the box's top row
+    // and left column sat one pixel OUTSIDE the damage rect, and every
+    // cursor move left a two-sided sliver behind. The extra 1px here is
+    // slack, not the anchor: the anchor has to be the margin, or the two
+    // drift apart again the moment either constant is retuned.
+    const int m = CURSOR_BOX_MARGIN + 1;
+    const int span = CURSOR_BOX_SIZE + 2;
     if (prev_cursor_x >= 0) {
-        wm_damage_rect(prev_cursor_x - 1, prev_cursor_y - 1, pad + 2, pad + 2);
+        wm_damage_rect(prev_cursor_x - m, prev_cursor_y - m, span, span);
     }
-    wm_damage_rect(mx - 1, my - 1, pad + 2, pad + 2);
-    prev_cursor_x = mx;
-    prev_cursor_y = my;
+    wm_damage_rect(mx - m, my - m, span, span);
 }
 
 void wm_render_frame(int mx, int my) {
@@ -754,6 +779,47 @@ void wm_render_frame(int mx, int my) {
     // the frame is a full repaint anyway, and adding a rect here would
     // narrow it -- the same trap tray_init() hit (see wm_tray.c).
     if (damage_x1 > damage_x0) damage_cursor(mx, my);
+
+    // Overlays (Start menu, context menu, file picker, confirm dialog)
+    // draw OUTSIDE any window's rect and declare no damage of their own
+    // -- the design note above calls that "falls back to a full-screen
+    // repaint", and for a long time it was true by accident: an overlay
+    // frame usually had nothing else reporting damage, so the frame was
+    // unrestricted anyway.
+    //
+    // It stops being true the moment something else declares damage in
+    // the SAME frame, and then the fallback silently inverts: the frame
+    // becomes damage-limited, the overlay is clipped away, and whatever
+    // was on screen before it stays there. Found by
+    // tools/damage_sweep.py's random walk (seed 1, step 22): a click
+    // that both raised a window and opened Notepad's file picker
+    // reported "114932 px changed outside the damage rect, first at
+    // (590,173)" -- the damage box was exactly the raised window's rect
+    // and the picker was wholly outside it.
+    //
+    // So make the documented fallback actually hold: while an overlay is
+    // up, discard the damage box and repaint the frame in full. That is
+    // the correct-by-construction option rather than the fast one, and
+    // it is what the compositor's scoped first cut always intended.
+    // Giving each overlay a real damage rect of its own is the better
+    // end state and needs geometry each of them doesn't expose yet --
+    // see docs/roadmap.md's Milestone 12 entry.
+    // ...and for one frame AFTER it closes, because the frame that
+    // dismisses an overlay has already cleared its `_open` flag by the
+    // time this runs, and nothing damages the region the overlay just
+    // vacated. That one hid behind a coincidence too: the damage box on
+    // such a frame is usually the full-width taskbar strip unioned with
+    // the cursor, which covers most of a Start menu sitting just above
+    // the taskbar. Dismissing it with a click low on the screen left
+    // exactly the rows above that union stale -- "300 px changed
+    // outside the damage rect, first at (4,448)", (4,448) being the
+    // menu's own top-left corner and 300 being its top two rows.
+    int overlay_now = start_menu_open || context_menu_open ||
+                      file_picker_open || confirm_dialog_open;
+    if (overlay_now || overlay_was_open) {
+        damage_reset();
+    }
+    overlay_was_open = overlay_now;
 
     // Clip this pass to the accumulated damage region, if any was
     // reported. No damage this frame (menus, dialogs, the clock tick,
@@ -783,6 +849,14 @@ void wm_render_frame(int mx, int my) {
             // repairs what it caught rather than presenting the bug.
         }
     }
+
+    // Record where the cursor was drawn, on EVERY frame -- damaged or
+    // not. See damage_cursor()'s comment: this is the bookkeeping that
+    // lets the next damage-limited frame erase the sprite from the place
+    // it is genuinely sitting, and doing it only on damaged frames is
+    // what left a second cursor behind.
+    prev_cursor_x = mx;
+    prev_cursor_y = my;
 
     gfx_present();
     damage_reset();

@@ -48,6 +48,24 @@ int wm_debug_next_input(int *out_x, int *out_y, uint8_t *out_buttons) {
     return 1;
 }
 
+// How many injected events (of any kind) are still undelivered.
+//
+// Exists so a test can WAIT for its input to drain instead of sleeping a
+// guessed interval. The guess was wrong: gui_debug.py's settle() assumed
+// one event per WM frame at 100Hz, i.e. ~110ms for a drag's eleven, and
+// a drag measured at ~800ms -- because `gui damage verify on` renders
+// every frame twice and diffs the whole screen, so the loop runs nowhere
+// near 100Hz while it's on. A fixed sleep therefore raced: windows moved
+// between a test's `gui windows` and its next command, and the damage
+// exerciser reported a different bug on each run of the same script.
+// Anything derived from frame rate is a guess; the queue depth is a fact.
+int wm_debug_input_pending(void) {
+    int mouse = (g_inject_tail - g_inject_head + INJECT_MAX) % INJECT_MAX;
+    int keys = (g_keys_tail - g_keys_head + KEY_INJECT_MAX) % KEY_INJECT_MAX;
+    int wheel = (g_wheel_tail - g_wheel_head + KEY_INJECT_MAX) % KEY_INJECT_MAX;
+    return mouse + keys + wheel;
+}
+
 int wm_debug_next_wheel(void) {
     if (g_wheel_head == g_wheel_tail) return 0;
     int d = g_wheel[g_wheel_head];
@@ -355,7 +373,8 @@ static void cmd_state(int json) {
                      confirm_dialog_open ? "true" : "false");
         klog_printf("\"dragging\":%d,\"resizing\":%d,\"content_pressed\":%d,",
                      dragging, resizing, content_pressed);
-        klog_printf("\"redraw_pending\":%s,", redraw_pending ? "true" : "false");
+        klog_printf("\"redraw_pending\":%s,\"pending\":%d,",
+                     redraw_pending ? "true" : "false", wm_debug_input_pending());
         klog_printf("\"damage\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d}}\r\n",
                      dx, dy, dw, dh);
         return;
@@ -367,6 +386,7 @@ static void cmd_state(int json) {
                  start_menu_open, context_menu_open, file_picker_open, confirm_dialog_open);
     klog_printf("dragging=%d resizing=%d content_pressed=%d redraw_pending=%d\r\n",
                  dragging, resizing, content_pressed, redraw_pending);
+    klog_printf("injected events pending: %d\r\n", wm_debug_input_pending());
     klog_printf("damage rect: x=%d y=%d w=%d h=%d%s\r\n", dx, dy, dw, dh,
                  dw <= 0 ? "  (none this frame -- full-screen repaint)" : "");
 }

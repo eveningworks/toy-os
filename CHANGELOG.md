@@ -30,7 +30,131 @@ using `## [x.y.z] - date` headings is here.
 
 ## [Unreleased]
 
+### Fixed
+- **Five damage-invariant bugs, and the harness that was hiding them.**
+  The compositor repaints only the region declared as damage, so it is
+  correct only if everything that changes on screen is inside that
+  region (`docs/gui-guidelines.md`). `gui damage verify on` turns a
+  violation into a report; the four below are what a systematic sweep
+  found once the sweep itself was trustworthy.
+
+  **The harness came first, because it was lying.** The one damage bug
+  left open from the previous session (`docs/roadmap.md` recorded it as
+  "559 px ... first at (497,67)") would not reproduce. Two reasons, both
+  in the tooling rather than the kernel:
+
+  1. `DebugConsole.click()`/`drag()` return `events()`, which filters
+     the wire to the `uidemo:` prefix. A `wm: DAMAGE BUG` line does not
+     match that prefix and was silently dropped, so the first repro
+     script reported a clean run against a kernel that was actively
+     failing. `send()` now accumulates every line into `log_lines`, and
+     `logs()`/`damage_bugs()` read them back -- a question asked on this
+     wire can no longer destroy the answer to a different one.
+  2. `settle()` slept a fixed 250ms, reasoning that injected events
+     drain one per WM frame at 100Hz. Measured: a drag takes ~800ms with
+     verification on (which renders every frame twice and diffs the full
+     screen). Every test was racing that sleep -- windows moved between
+     a `gui windows` read and the command using those coordinates, so
+     drags grabbed the wrong thing and the sweep reported a *different*
+     bug on each run of the same script. `gui state` now reports
+     `pending` (`wm_debug_input_pending()`) and `settle()` polls it to
+     zero. See `docs/decisions.md`.
+
+  Both were confirmed by a **positive control** -- deliberately deleting
+  `bring_to_front()`'s taskbar `wm_damage_rect()` and checking the sweep
+  reports it -- so "0 violations" is distinguishable from "the harness
+  isn't checking anything". That control is now a flag on the tool
+  (`--positive-control`) rather than a thing to redo by hand.
+
+  The bugs themselves, each found by `tools/damage_sweep.py` and each
+  fixed and re-verified. Three of the five were only reachable through
+  the random walk, and two of those needed one specific window
+  arrangement -- worth noting before trusting any fixed test sequence
+  on this invariant:
+
+  - **`close_window()` didn't damage the window inheriting focus**
+    (`apps/wm/wm.c`). Closing the frontmost window promotes the one
+    below it, whose title bar changes from unfocused gray to focused
+    blue without its geometry changing -- so `compute_window_damage()`
+    can't see it, and the closing window's rect only covers it where the
+    two overlapped. This is `bring_to_front()`'s `prev_front` gap seen
+    from the other end, with the same consequence now that Phase 3 skips
+    an undamaged window's chrome entirely. Reported as "11038 px changed
+    outside the damage rect, first at (109,89)".
+  - **Overlays were clipped away when another source declared damage**
+    (`apps/wm/wm_render.c`). The Start menu, context menu, file picker
+    and confirm dialog draw outside any window's rect and declare no
+    damage; the design note called that a full-screen-repaint fallback,
+    but it held only by coincidence. A click that both raised a window
+    and opened Notepad's file picker made the frame damage-limited and
+    left the picker unpainted: "114932 px changed outside the damage
+    rect, first at (590,173)". The frame now discards its damage box
+    while any overlay is open. See `docs/decisions.md`.
+  - **...and for one frame after an overlay closes**, because the frame
+    that dismisses one has already cleared its `_open` flag by the time
+    the renderer runs, so nothing damages the region it just vacated.
+    Hidden behind a second coincidence: the damage box on such a frame
+    is usually the full-width taskbar strip unioned with the cursor,
+    which covers most of a Start menu sitting just above the taskbar.
+    Dismissing it with a click low on the screen left the rows above
+    that union stale -- "300 px changed outside the damage rect, first
+    at (4,448)", (4,448) being the menu's own top-left corner and 300
+    being exactly its top two rows.
+  - **The cursor's drawn position was recorded only on damaged frames.**
+    `prev_cursor_*` was updated inside `damage_cursor()`, which runs
+    only when the frame is damage-limited, so a full-repaint frame moved
+    the sprite without recording where it went and the next damaged
+    frame erased a position the cursor had already left. Latent while
+    full-repaint frames were rare; the overlay fix above made them
+    common and it surfaced immediately ("139 px ... first at (928,336)",
+    a cursor sprite exactly where the previous click had left it).
+    Recorded on every frame now.
+  - **`damage_cursor()` and `save_cursor_under()` disagreed on the box
+    anchor.** The sprite box is anchored at `(x - CURSOR_BOX_MARGIN,
+    y - CURSOR_BOX_MARGIN)`; damage was declared from `(x-1, y-1)`, so
+    the box's top row and left column sat outside the damage rect and
+    every cursor move left a two-sided sliver behind ("247 px ... first
+    at (251,166)" -- 247 being one 13x19 sprite). Damage is derived from
+    `CURSOR_BOX_MARGIN` now rather than from a separately-chosen
+    constant, so the two can't drift apart again.
+
+  Verified: `tools/damage_sweep.py` clean on the fixed sequence three
+  runs running, and on random walks at seeds 1-12 and 21 (each 50-60
+  interactions) apart from the one issue below. The `close_window()`
+  fix is also confirmed by pixel value rather than by eye: the
+  inheriting window's title bar goes (120,120,130) -> (50,90,160),
+  exactly `draw_window_chrome()`'s unfocused/focused constants, while
+  the window behind it and the desktop stay put (`screenshots/
+  2026-08-14/damage-close-focus-{before,after}.png`).
+
+  **Not verified, and left recorded rather than rushed** (see
+  `docs/roadmap.md`'s known-issues list): a 20px violation inside the
+  Terminal's content on clock-tick frames survives, reproducible at
+  `--random 50 --seed 1` step 0. It is characterised but not
+  root-caused, and the two candidate causes -- a caret moved without
+  damage on some earlier frame, versus a non-idempotent `on_draw()`
+  making it a verifier artifact -- need opposite fixes, so guessing
+  would be worse than recording it. More broadly: a sweep can only
+  report what its interactions reach, and injected input enters below
+  the PS/2 driver, so none of this exercises the real mouse path.
+
 ### Added
+- **`tools/damage_sweep.py`** -- exercises the WM against its damage
+  invariant and exits non-zero on a violation. A fixed sequence of the
+  interactions that historically break it (raise, drag, minimize,
+  restore, resize, overlay, close-from-the-top) plus `--random N
+  --seed S`, a seeded random walk that covers the *orders* nobody
+  thought to list. The seed is printed on every run, so a failure
+  replays exactly: three of the four bugs above were found by the
+  random walk, not the fixed sequence, and the largest needed one
+  specific window arrangement at step 22 of seed 1. `--positive-control`
+  inverts the exit code, for proving the harness detects a real
+  violation before trusting a clean run.
+- `gui state` reports `pending`, the number of injected events the WM
+  has not delivered yet (`wm_debug_input_pending()`,
+  `apps/wm/wm_debug.c`), so a test can wait on a fact instead of a
+  guess. `DebugConsole.settle()` polls it; `damage_verify()`,
+  `damage_bugs()` and `logs()` round out `tools/gui_debug.py`.
 - **`tools/pixel_probe.py`** -- reads exact pixel values from
   screenshots and tabulates the same points across several
   (`--compare rest.png hover.png pressed.png --at 85,100 --at 215,100`),

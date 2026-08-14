@@ -98,6 +98,8 @@ there when you add an entry, or the index quietly stops being one.
 - [`struct window *` isn't a stable per-window identity across frames -- don't cache one](#struct-window-isnt-a-stable-per-window-identity-across-frames----dont-cache-one)
 - [Why the compositor uses one scene-wide damage region, not per-window exposure tracking](#why-the-compositor-uses-one-scene-wide-damage-region-not-per-window-exposure-tracking)
 - [The taskbar/tray falls back to full-screen repaint on purpose, not as an oversight](#the-taskbartray-falls-back-to-full-screen-repaint-on-purpose-not-as-an-oversight)
+- [An overlay forces a full repaint, because "declares no damage" is not the same as "is drawn unrestricted"](#an-overlay-forces-a-full-repaint-because-declares-no-damage-is-not-the-same-as-is-drawn-unrestricted)
+- [GUI tests wait on the WM's queue depth, not on a sleep derived from frame rate](#gui-tests-wait-on-the-wms-queue-depth-not-on-a-sleep-derived-from-frame-rate)
 
 **Shell, apps & console**
 
@@ -2728,6 +2730,52 @@ open piece of the Milestone 19 compositor plan (`docs/roadmap.md`), but
 it needs the pre-loop-damage and once-a-second-safety-net issues above
 solved properly first, not just reverted -- a future attempt should
 budget for both, not assume the first bug found is the only one.
+
+## An overlay forces a full repaint, because "declares no damage" is not the same as "is drawn unrestricted"
+
+The Start menu, context menu, file picker and confirm dialog draw
+outside any window's rect and declare no damage of their own. The
+compositor's design note called that "falls back to a full-screen
+repaint" -- and for a long time it was true, but only by accident: an
+overlay frame usually had nothing *else* reporting damage either, so
+the frame went unrestricted for that reason rather than because anyone
+arranged it.
+
+The moment something else declares damage in the same frame, the
+fallback inverts. The frame becomes damage-limited, the overlay is
+clipped away, and whatever was on screen before it stays there.
+`wm_render_frame()` (`apps/wm/wm_render.c`) now discards the damage box
+outright while any overlay is open, which makes the documented
+behaviour actually hold instead of depending on a coincidence.
+
+Blunt on purpose: giving each overlay a real damage rect is the better
+end state and needs geometry that only `start_menu` exposes today (see
+`docs/roadmap.md`'s Milestone 12 entry). Correct-by-construction first,
+precise later -- the same order the compositor's other phases took. See
+`CHANGELOG.md`'s `[Unreleased]` damage-sweep entry for the reproducer
+and the two further bugs the change uncovered underneath it.
+
+## GUI tests wait on the WM's queue depth, not on a sleep derived from frame rate
+
+`tools/gui_debug.py`'s `settle()` used to sleep a fixed 250ms after
+injecting synthetic input, reasoning that events drain one per WM frame
+at 100Hz, so a click's four need ~40ms and a drag's eleven ~110ms.
+
+The premise is false: the WM loop is not a metronome. A drag measured
+at ~800ms with `gui damage verify on`, which renders every frame twice
+and diffs the whole screen -- roughly 70ms per event, seven times the
+assumed rate -- and it moves again with the font size, the window count
+or the display driver. The fixed sleep therefore raced. Windows moved
+between a test's `gui windows` and the command using those coordinates,
+so a drag grabbed the wrong thing, and `tools/damage_sweep.py`'s
+ancestor reported a *different* bug on each run of the same script.
+
+`gui state` reports `pending` (undelivered injected events,
+`wm_debug_input_pending()`) and `settle()` polls it to zero. Anything
+derived from frame rate is a guess; the queue depth is a fact. The
+commands themselves stay asynchronous and non-blocking -- they are
+dispatched from inside the very loop that drains them, so waiting has
+to happen on the host side (see `apps/wm/wm_debug.h`).
 
 ## NX enforcement scoped to userspace only -- the kernel's own identity map stays RWX
 

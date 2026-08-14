@@ -67,4 +67,12 @@ int wm_debug_next_key(void);
 // shipped untested the first time.
 int wm_debug_next_wheel(void);
 
+// Undelivered injected events of every kind, so a test can wait for its
+// own input to drain rather than sleep a guessed interval -- reported by
+// `gui state` as `pending`. See the function's comment in wm_debug.c for
+// why a fixed sleep was the wrong shape (the WM loop's frame rate is not
+// a constant, and `gui damage verify on` in particular slows it by
+// roughly an order of magnitude).
+int wm_debug_input_pending(void);
+
 #endif

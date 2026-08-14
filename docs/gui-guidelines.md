@@ -241,11 +241,33 @@ So when you change anything that draws:
   cursor blends, so compositing it over a region that wasn't repainted
   blends it over its own previous frame and the edges darken. It is a
   damage source for exactly this reason.
+- **Remember the overlays.** A menu, a picker or a dialog draws outside
+  every window's rect. They declare no damage and rely on the frame
+  being a full repaint -- which is now *enforced* (`wm_render_frame()`
+  discards the damage box while one is open) rather than assumed. It
+  used to be assumed, and the assumption held only while nothing else
+  declared damage in the same frame.
 - **Then check it, don't reason about it:** `gui damage verify on`
   (see `apps/wm/wm_debug.c`) renders every frame twice, once
   damage-limited and once unrestricted, and reports any pixel that
   differs. Run it while exercising whatever you changed. It found four
-  real bugs in its first minute.
+  real bugs in its first minute, and four more once a systematic sweep
+  drove it.
+
+  `python3 tools/damage_sweep.py` is that sweep: it turns the checker on,
+  walks the interactions that historically break the invariant, and
+  exits non-zero on a violation. Run it after touching anything that
+  draws, damages, focuses or changes window chrome. Add `--random 60`
+  to cover interaction *orders* the fixed walk doesn't -- three of the
+  four bugs it has found needed one specific window arrangement that no
+  scripted sequence would have visited.
+
+  **A clean run only means the interactions it ran found nothing.**
+  When you change drawing code, add the interaction you changed to its
+  sequence rather than trusting the existing walk to cover it -- and if
+  you are ever unsure the checker is really running, `--positive-control`
+  expects a violation, so you can prove it against a deliberately broken
+  build instead of trusting a green result.
 
 ## Verifying a GUI change
 

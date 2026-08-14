@@ -500,7 +500,16 @@ this needs is the same machinery, and building it twice would be silly.*
       see `docs/decisions.md`'s notification-area entry for the two
       real bugs that caused (a poisoned first frame, and losing an
       implicit once-a-second full-repaint safety net the mouse cursor
-      turned out to depend on)
+      turned out to depend on). Also still open: **giving each overlay
+      (Start menu, context menu, file picker, confirm dialog) a real
+      damage rect of its own.** They currently force the whole frame to
+      a full repaint while open, which is correct but blunt -- and is
+      now enforced rather than assumed, because "these fall back to a
+      full-screen repaint" used to be true only by accident and
+      inverted the moment anything else declared damage in the same
+      frame (see `CHANGELOG.md`'s `[Unreleased]` damage-sweep entry).
+      Doing it properly needs each overlay to expose its own geometry,
+      which only `start_menu` does today.
 - [x] ~~Taskbar notification area (tray)~~ -- done, see `CHANGELOG.md`'s
       `[Unreleased]` entry: a dynamic `tray_register()`/
       `tray_set_text()`/`tray_unregister()` API (`apps/wm/wm.h`), with
@@ -646,16 +655,74 @@ guess.*
 - [ ] `strace` extended to follow a process's children once `fork()`
       exists
 
-### Known bugs, reproducible today (unscheduled)
+### Known issues and papercuts (unscheduled)
 
-- [ ] **One damage bug survives**, found by the verifier and left
-      recorded rather than rushed at the end of a long session:
-      `gui damage verify on`, then open a few windows, click their
-      taskbar buttons and drag one -- reports "559 px changed outside
-      the damage rect, first at (497,67)" during a drag/close, which is
-      a title bar above the reported rect. Four others of the same
-      family were fixed the same day (see `CHANGELOG.md`); this is the
-      fifth and the tool names it precisely.
+Small things that are real, reproducible, and not worth their own
+milestone -- bugs too minor to schedule, rough edges, and behaviour
+that's defensible but surprising. This is the ONE list for them: don't
+start a second one in a `known-issues.md` or in `CLAUDE.md`, for the
+same reason this file asks not to duplicate the roadmap itself.
+
+Two rules keep it useful rather than a graveyard. **Say how to
+reproduce it**, precisely enough that a future session doesn't have to
+rediscover the setup -- a seed, a command, a click sequence. And
+**delete the entry when it's fixed** rather than striking it through;
+completed *features* stay struck through above because the milestone
+history is worth reading, but a fixed papercut is just noise.
+
+- [ ] **A 20px damage violation survives, inside the Terminal's
+      content.** Reproduce: `python3 tools/damage_sweep.py --random 50
+      --seed 1` -- it fires on random step 0, as does seed 5. Always the
+      same report: "20 px changed
+      outside the damage rect, first at (499,350); damage was (0,357
+      1280x363)". Four things are already known about it, so a future
+      session doesn't start from zero:
+      - The damage box is exactly the taskbar strip plus the cursor box
+        at (640,360), which is what a **clock-tick frame** declares. So
+        the failing frame is a once-a-second tick, not the interaction
+        the sweep labels it with.
+      - `gui probe 499 350` puts it inside Terminal's *content*,
+        content-relative (438,280) -- not on chrome.
+      - 20 px is consistent with the scrollback's caret (a
+        `CURSOR_BAR_W`=2px vertical bar, `ui_scrollback.c`), though that
+        wasn't confirmed against the actual `gfx_char_h()` at the
+        current font size.
+      - On a tick frame, Phase 3 skips Terminal entirely (its rect
+        doesn't intersect the damage box), so the damage-limited pass
+        never calls its `on_draw()` while the unrestricted pass does.
+      That last point means this might not be a damage bug at all: it
+      could be the verifier legitimately reporting that a *skipped*
+      window's buffer content had already drifted (i.e. some earlier
+      frame moved the caret and didn't damage it, which IS a real bug,
+      just not on the frame that reports it), or an `on_draw()` that
+      isn't idempotent (which would make it a verifier artifact).
+      Settle which before fixing anything -- they need opposite fixes.
+      It got *more* frequent once overlays started forcing full
+      repaints, which fits: more full-repaint frames means more frames
+      where Terminal is skipped in the damage-limited pass and drawn in
+      the unrestricted one. Deliberately left recorded rather than
+      rushed at the end of a long session, the same call the previous
+      session made about its own last one.
+- [ ] `tools/damage_sweep.py`'s random walk sometimes drives Notepad's
+      file picker open by clicking where its content happens to be
+      (seed 1, step 22 did exactly that). Harmless -- the picker is a
+      legitimate thing to have open, and the sweep now covers it -- but
+      worth knowing when reading a failure label that says "raise" and
+      finding a modal in the state dump.
+- [ ] `wm_render_cursor_move()`'s cheap path draws the cursor without
+      recording it in `prev_cursor_*`, unlike `wm_render_frame()`, which
+      does so on every frame. It's currently harmless: that path also
+      calls `restore_cursor_under()`, so it cleans up after itself. But
+      the two paths disagreeing about who tracks the cursor's drawn
+      position is precisely the shape of the bug fixed in the semver-era
+      CHANGELOG entry for the damage sweep, and it will bite if the save
+      /restore path is ever removed in favour of pure damage tracking.
+- [ ] Resizing a window by its grip sometimes doesn't take on the first
+      drag (visible in `damage_sweep.py -v`: a `resize-grow` followed by
+      a `resize-shrink` starting from the *same* coordinates, meaning
+      the grow moved nothing). Not diagnosed. Possibly a minimum/maximum
+      size clamp doing its job, possibly a grip hit-test that needs the
+      press to land more precisely than a test does.
 - [ ] The vmsvga HARDWARE cursor is off by default because it fights the
       relative PS/2 mouse (QEMU warps the host pointer). The display
       driver itself works. The configuration where a hardware cursor

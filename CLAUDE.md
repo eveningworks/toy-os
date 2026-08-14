@@ -492,9 +492,22 @@ and `DebugConsole.menu_row("Terminal")` gives the real row centre
 instead of `gui_flow.py`'s hardcoded menu arithmetic. Two things to
 know: injected input enters at the WM loop **below the PS/2 driver**, so
 it exercises WM/app logic and proves nothing about the mouse driver; and
-it is **asynchronous** (events drain one per frame -- call
-`DebugConsole.settle()` before asserting), because a command dispatched
-from inside `wm_run()` cannot block waiting on `wm_run()`.
+it is **asynchronous** -- call `DebugConsole.settle()` before asserting,
+because a command dispatched from inside `wm_run()` cannot block waiting
+on `wm_run()`.
+
+**`settle()` POLLS, and don't replace it with a sleep.** It waits on
+`gui state`'s `pending` (the WM's own undelivered-event count) rather
+than sleeping a fixed interval, because the loop is not a metronome: a
+drag takes ~110ms normally and ~800ms under `gui damage verify on`, and
+the number moves again with font size, window count and display driver.
+The fixed sleep this replaced didn't fail loudly -- it let windows move
+between a `gui windows` read and the command using those coordinates, so
+drags grabbed the wrong thing and a damage test reported a different bug
+on each run of the same script. **Also: `click()`/`drag()` return
+`events()`, which filters to the `uidemo:` prefix and will silently drop
+a `wm:` line** -- use `logs()`/`damage_bugs()` for anything the kernel
+logs. Both traps cost a session real time; see `docs/decisions.md`.
 
 **`tools/boot_smoke_test.py`** -- a fast, non-GUI boot check: boots
 `toy-os.iso` headlessly, watches `serial.log` for the expected kernel
@@ -825,6 +838,16 @@ repeated manual steps to be worth automating:
 - **`check_layout.py`** -- see the `docs/` section: verifies the built
   image's directories against `docs/filesystem-layout.md`. Runs in
   `preflight.sh` and CI.
+- **`damage_sweep.py`** -- drives the WM through the interactions that
+  historically break the damage invariant with `gui damage verify on`,
+  and exits non-zero on a violation. Run it after touching anything
+  that draws, damages, focuses or changes window chrome. `--random N
+  --seed S` adds a seeded random walk (the seed prints on every run, so
+  a failure replays exactly); `--positive-control` inverts the exit
+  code, for proving the harness detects a real violation before
+  trusting a clean run -- a clean sweep otherwise can't be told apart
+  from a sweep that isn't checking anything, which has happened here
+  for real.
 - **`screenshot_diff.py`** -- Pillow-based pixel diff between two
   screenshots with a pass/fail `--threshold` (default 0.2%) and an
   optional `--out` diff-highlight image, for catching a rendering

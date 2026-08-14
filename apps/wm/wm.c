@@ -296,6 +296,31 @@ void close_window(int idx) {
     }
     wm_damage_rect(0, screen_h - taskbar_h, screen_w, taskbar_h);
 
+    // Closing the FRONTMOST window hands focus to the one below it, and
+    // that window's title bar changes (focused blue vs. unfocused gray,
+    // draw_window_chrome()'s `focused` param) without its geometry
+    // changing at all -- so compute_window_damage() (wm_render.c) can't
+    // notice it, and the rect damaged above only covers it where the
+    // two happened to overlap. This is bring_to_front()'s prev_front gap
+    // seen from the other end, and it has the same consequence now that
+    // wm_render.c's Phase 3 skips an undamaged window's chrome entirely:
+    // the inheriting window keeps drawing as unfocused until something
+    // else repaints it. Found by `gui damage verify on` (via
+    // tools/damage_sweep.py): "11038 px changed outside the damage rect,
+    // first at (109,89)" on closing the front window, (109,89) being the
+    // title bar of the one underneath.
+    //
+    // Only the last slot matters -- closing any other window shifts
+    // slots down without changing which one is frontmost. A minimized
+    // inheritor isn't drawn, so it needs nothing beyond the taskbar
+    // strip already damaged above.
+    if (idx == window_count - 1 && window_count >= 2) {
+        struct window *inheritor = &windows[window_count - 2];
+        if (inheritor->state != WIN_MINIMIZED) {
+            wm_damage_rect(inheritor->x, inheritor->y, inheritor->w, inheritor->h);
+        }
+    }
+
     klog_write("wm: closed ");
     klog_write(windows[idx].app ? windows[idx].app->name : windows[idx].title);
     klog_write("\n");

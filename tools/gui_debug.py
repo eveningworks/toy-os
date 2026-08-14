@@ -34,7 +34,17 @@ USAGE
     wins = dbg.json("gui windows --json")   # parsed dict
     calc = dbg.window("Calculator")         # one window by title
     dbg.send("gui click %d %d" % (x, y))
-    dbg.settle()                            # let queued input drain
+    dbg.settle()                            # polls until queued input drains
+
+    dbg.damage_verify(True)                 # check the damage invariant
+    ... exercise whatever you changed ...
+    assert dbg.damage_bugs() == []          # the assertion that matters
+
+settle() POLLS the WM's own queue depth rather than sleeping a guessed
+interval -- see the SETTLE_S comment below; the fixed sleep it replaced
+raced badly enough to make a damage test report a different bug on each
+run. Anything reading the wire keeps what it saw (self.log_lines), so a
+kernel log line is never lost to an intervening command.
 
 The VM must already be in GUI mode: `gui` is blocked from `sh` on
 purpose (it would try to enter GUI mode from inside the console and
@@ -48,12 +58,26 @@ import time
 
 PROMPT = "dbg> "
 
-# Injected events drain one per WM frame at 100Hz, so a click (4 events)
-# needs ~40ms and a drag (11) ~110ms. 250ms covers either with room to
-# spare; the commands are asynchronous BY DESIGN -- they cannot block,
+# settle() POLLS the WM's own injected-event queue (`gui state`'s
+# `pending`) rather than sleeping a fixed interval.
+#
+# It used to sleep 0.25s, reasoning that events drain one per WM frame at
+# 100Hz so a click's four need ~40ms and a drag's eleven ~110ms. That
+# reasoning has a false premise: the loop is not a 100Hz metronome. A
+# drag measured at ~800ms with `gui damage verify on` (which renders
+# every frame twice and diffs the whole screen), i.e. ~70ms per event,
+# and it will change again with the font size, the window count or the
+# display driver. The fixed sleep therefore RACED -- windows moved
+# between a test's `gui windows` and the command using those
+# coordinates, and the damage exerciser reported a different bug on each
+# run of the same script. Anything derived from frame rate is a guess;
+# the queue depth is a fact.
+#
+# The commands remain asynchronous BY DESIGN -- they cannot block,
 # because they are dispatched from inside the very loop that drains
-# them (see wm_debug.h).
-SETTLE_S = 0.25
+# them (see wm_debug.h). Polling from the host side is the way to wait.
+SETTLE_S = 0.25       # post-drain grace, and the fallback when polling can't run
+SETTLE_TIMEOUT_S = 15.0  # give up rather than hang if the queue never empties
 
 
 class DebugConsole:
@@ -63,6 +87,14 @@ class DebugConsole:
         self._s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._s.settimeout(timeout)
         self._s.connect(sock_path)
+        # Every line the console has emitted, kept because the kernel's
+        # own klog shares this wire with command output and a caller
+        # asking a question must not destroy an answer to a different
+        # one. `wm: DAMAGE BUG` lines were being lost exactly this way:
+        # events() filters to the `uidemo:` prefix and dropped them, and
+        # settle()'s polling now issues reads of its own that would
+        # otherwise consume them. See logs() / damage_bugs().
+        self.log_lines = []
         self._sync()
 
     def _read_to_prompt(self):
@@ -89,7 +121,9 @@ class DebugConsole:
             buf = buf[len(command):]
         if buf.endswith(PROMPT):
             buf = buf[: -len(PROMPT)]
-        return buf.strip("\n")
+        out = buf.strip("\n")
+        self.log_lines.extend(l for l in out.splitlines() if l.strip())
+        return out
 
     def json(self, command):
         """Run a `--json` command and return the parsed object.
@@ -120,9 +154,59 @@ class DebugConsole:
         what you want; call this directly to sweep up anything else."""
         return [l for l in self.send("").splitlines() if l.startswith(prefix)]
 
+    def logs(self, match="", clear=True):
+        """Every console line seen so far containing `match`, newest last.
+
+        Unlike events(), this does NOT filter to a prefix and does not
+        lose lines to an intervening command -- send() accumulates
+        everything into self.log_lines. Sweeps the wire first, so a
+        message the kernel emitted since the last command is included.
+        """
+        self.send("")
+        hits = [l for l in self.log_lines if match in l]
+        if clear:
+            self.log_lines = [l for l in self.log_lines if match not in l]
+        return hits
+
+    def damage_bugs(self, clear=True):
+        """`wm: DAMAGE BUG` reports seen so far -- the assertion for any
+        test run under `gui damage verify on`.
+
+        Assert this is empty after exercising whatever you changed. The
+        WM reports each distinct failure once (see wm_render.c), so a
+        long exercise yields one line per distinct bug, not per frame.
+        """
+        return self.logs("DAMAGE BUG", clear=clear)
+
     def settle(self, seconds=SETTLE_S):
-        """Wait for queued synthetic input to drain. Call after click/drag
-        /key before asserting on the result."""
+        """Wait for queued synthetic input to actually drain, then pause
+        `seconds` for the frame it caused to finish.
+
+        Polls `gui state`'s `pending` count -- the number of injected
+        events the WM has not delivered yet -- instead of sleeping a
+        guessed interval. See this module's SETTLE_S comment for why the
+        guess was wrong and what it broke.
+
+        Falls back to a plain sleep against an older kernel whose `gui
+        state --json` predates the `pending` field, so a mismatched
+        checkout degrades to the old behaviour rather than erroring.
+        """
+        deadline = time.time() + SETTLE_TIMEOUT_S
+        while time.time() < deadline:
+            try:
+                pending = self.state().get("pending")
+            except (ValueError, KeyError):
+                pending = None
+            if pending is None:      # kernel without the field -- old behaviour
+                time.sleep(seconds)
+                return
+            if pending == 0:
+                break
+            time.sleep(0.02)
+        else:
+            raise TimeoutError(
+                f"injected input still pending after {SETTLE_TIMEOUT_S}s -- "
+                "is the WM loop still running?")
         time.sleep(seconds)
 
     def windows(self):
@@ -151,6 +235,18 @@ class DebugConsole:
 
     def open_app(self, name):
         return self.send(f"gui open {name}")
+
+    def damage_verify(self, on=True):
+        """Turn the damage-invariant checker on/off. Pair with
+        damage_bugs() after exercising whatever you changed -- see
+        docs/gui-guidelines.md's damage-invariant section.
+
+        Costs a second full render plus a full-screen diff per frame, so
+        the WM loop slows by roughly an order of magnitude while it's on.
+        settle() polls rather than sleeps precisely so that doesn't
+        matter to a test's timing.
+        """
+        return self.send(f"gui damage verify {'on' if on else 'off'}")
 
     def click(self, x, y, settle=True):
         """Click, wait for it to drain, and return the log lines it
