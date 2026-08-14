@@ -7,6 +7,8 @@
 #include "pmm.h"
 #include "klog.h"
 #include "string.h"
+#include "font_ttf.h" // the glyph tables WIN_REQ_FONT shares out
+#include "gfx.h"      // gfx_font_size() -- which variant is active
 #include <stddef.h>
 
 #define WIN_SERVER_MAX_PIDS 4 // MAX_PROCS (scheduler.c)
@@ -154,6 +156,55 @@ static int create_window(int pid, const struct win_request_msg *req, uint32_t *o
     return 1;
 }
 
+// Maps the desktop's active font read-only into the caller and reports
+// its metrics. See WIN_REQ_FONT in abi/win_proto.h for why the server
+// hands the font over rather than every client carrying a copy.
+//
+// Idempotent by construction: re-mapping the same pages over an
+// existing identical mapping is a no-op in effect, so a client may ask
+// again (after a font-size change, say) without unmapping first.
+static int map_font(int pid, struct win_request_msg *req) {
+    (void)pid;
+
+    const struct font_ttf_variant *fv = &font_ttf_variants[gfx_font_size()];
+    uint64_t phys = (uint64_t)(uintptr_t)fv->glyphs;
+    uint64_t bytes = (uint64_t)FONT_TTF_GLYPH_COUNT * (uint64_t)fv->w * (uint64_t)fv->h;
+
+    // The glyph tables are ordinary kernel .rodata, which this kernel
+    // identity-maps -- so their physical address IS the pointer we
+    // already hold, and mapping them to a user vaddr is just pointing
+    // more PTEs at the same frames. No copy, one instance in memory
+    // however many clients ask.
+    uint64_t page_base = phys & ~0xFFFULL;
+    uint64_t offset_in_page = phys - page_base;
+    uint64_t pages = (offset_in_page + bytes + 4095) / 4096;
+
+    uint64_t pml4 = vmm_current_pml4();
+    for (uint64_t i = 0; i < pages; i++) {
+        // writable = 0: these are pages of the kernel image, and a
+        // writable mapping would let any client scribble on kernel
+        // .rodata. executable = 0 for the same no-surprises reason
+        // every other user mapping here is NX.
+        if (!vmm_map_user_page_flags(pml4, WIN_FONT_VADDR + i * 4096,
+                                      page_base + i * 4096, 0, 0)) {
+            for (uint64_t j = 0; j < i; j++) {
+                vmm_unmap_user_page(pml4, WIN_FONT_VADDR + j * 4096);
+            }
+            klog_write("win_server: font refused -- mapping failed\n");
+            return 0;
+        }
+    }
+
+    // The client sees the mapping at WIN_FONT_VADDR + the same offset
+    // the data has within its first page, so glyph 0 starts exactly
+    // there. Reported as `d`'s companion rather than assumed.
+    req->a = fv->w;
+    req->b = fv->h;
+    req->c = FONT_TTF_GLYPH_COUNT;
+    req->d = (int32_t)offset_in_page;
+    return 1;
+}
+
 int win_server_request(int pid, struct win_request_msg *req) {
     if (!g_ops || !req) return -1;
 
@@ -187,6 +238,8 @@ int win_server_request(int pid, struct win_request_msg *req) {
         if (g_ops->window_title) g_ops->window_title(pid, cw->id, title);
         return 1;
     }
+    case WIN_REQ_FONT:
+        return map_font(pid, req);
     default:
         return -1;
     }

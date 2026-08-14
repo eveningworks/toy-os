@@ -66,6 +66,34 @@ struct win_event {
                            // the buffer.
 #define WIN_REQ_TITLE   4 // `window`: which one; the title comes from
                            // the request's `text` field.
+#define WIN_REQ_FONT    5 // No inputs. Maps the desktop's ACTIVE font
+                           // read-only into the client at
+                           // WIN_FONT_VADDR and fills in the metrics:
+                           // a = glyph width, b = glyph height,
+                           // c = glyph count, d = the byte offset of
+                           // glyph 0 within the mapping (the data does
+                           // not necessarily start on a page boundary,
+                           // so glyph 0 lives at WIN_FONT_VADDR + d,
+                           // not at WIN_FONT_VADDR).
+                           // `window` is ignored -- a font belongs to
+                           // the session, not to one window.
+                           //
+                           // WHY THE SERVER HANDS OVER THE FONT rather
+                           // than each client carrying its own: the
+                           // baked glyph data is ~11,800 lines of
+                           // tables (kernel/drivers/font_ttf.c), so a
+                           // copy per client is both large and, worse,
+                           // free to drift from the desktop's -- a
+                           // client would keep rendering at the old
+                           // size after `font_size` changed. One
+                           // read-only mapping of the kernel's own
+                           // data keeps every client's text identical
+                           // to the desktop's by construction.
+                           //
+                           // READ-ONLY is load-bearing: this maps
+                           // pages out of the kernel image itself, so
+                           // a writable mapping would let any client
+                           // scribble on kernel .rodata.
 
 // Longest window title a client may set, including the NUL. Matches the
 // window manager's own WIN_TITLE_MAX -- a client that sends more gets
@@ -104,6 +132,22 @@ struct win_request_msg {
 
 static inline uint64_t win_buffer_vaddr(uint32_t window) {
     return WIN_CLIENT_BASE + (uint64_t)window * WIN_BUFFER_STRIDE;
+}
+
+// Where WIN_REQ_FONT maps the shared glyph data. Placed above every
+// window's buffer slot so the two regions can never collide however
+// many windows a client opens.
+#define WIN_FONT_VADDR (WIN_CLIENT_BASE + (uint64_t)WIN_CLIENT_MAX * WIN_BUFFER_STRIDE)
+
+// Glyph layout in that mapping, so a client can index it without being
+// told anything beyond the metrics WIN_REQ_FONT returns: glyphs are
+// stored back to back, each `h` rows of `w` bytes, row-major, one byte
+// of coverage per pixel (0 = background, 255 = fully ink). Glyph 0 is
+// ASCII 32 (space) and they run contiguously from there.
+#define WIN_FONT_FIRST_CHAR 32
+
+static inline uint64_t win_glyph_offset(uint32_t index, int w, int h) {
+    return (uint64_t)index * (uint64_t)w * (uint64_t)h;
 }
 
 // How many events the server will hold for one client before it starts

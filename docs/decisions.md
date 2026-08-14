@@ -34,6 +34,7 @@ there when you add an entry, or the index quietly stops being one.
 - [`SYS_WAIT_EVENT` makes clients loop instead of restarting the syscall](#sys_wait_event-makes-clients-loop-instead-of-restarting-the-syscall)
 - [The windowing protocol is one syscall carrying typed messages, not a syscall per operation](#the-windowing-protocol-is-one-syscall-carrying-typed-messages-not-a-syscall-per-operation)
 - [A client window's close button is a handshake, not a seizure](#a-client-windows-close-button-is-a-handshake-not-a-seizure)
+- [Ring-3 clients draw for themselves, and the font is shared read-only](#ring-3-clients-draw-for-themselves-and-the-font-is-shared-read-only)
 - [Stack canaries: `-mstack-protector-guard=global` and a fixed constant, not GCC's defaults](#stack-canaries--mstack-protector-guardglobal-and-a-fixed-constant-not-gccs-defaults)
 - [NX enforcement scoped to userspace only -- the kernel's own identity map stays RWX](#nx-enforcement-scoped-to-userspace-only----the-kernels-own-identity-map-stays-rwx)
 - [The serial debug console is poll-based from existing idle loops, not a new kernel thread](#the-serial-debug-console-is-poll-based-from-existing-idle-loops-not-a-new-kernel-thread)
@@ -2559,6 +2560,48 @@ timeout and a way to kill a process, neither of which exists yet -- see
 `docs/roadmap.md`'s Milestone 41. Every real windowing system has the
 same handshake and the same escape hatch; toy-os has the handshake so
 far.
+
+## Ring-3 clients draw for themselves, and the font is shared read-only
+
+Two decisions that go together, both in `userland/ugfx.c`.
+
+**No drawing syscalls.** A client renders into its own window buffer
+with plain arithmetic -- there is no "draw text" or "fill rect" syscall,
+and the drawing path crosses into the kernel exactly zero times. The
+client only calls `WIN_REQ_PRESENT` when it has finished a frame. The
+alternative would have put every client's rendering back inside the
+kernel, which is what Milestone 41 is moving away from; drawing is not
+a privileged operation, only the framebuffer is.
+
+**The font is mapped, not copied.** `WIN_REQ_FONT` maps the kernel's
+baked glyph tables (`kernel/drivers/font_ttf.c`) read-only into the
+client. Those tables are ~11,800 lines and are ordinary kernel
+`.rodata`, which this kernel already identity-maps, so sharing them is
+just pointing more PTEs at the same frames -- no copy, one instance in
+memory however many clients ask.
+
+The size saving is the lesser reason. The real one is DRIFT: link a
+copy of the font into each binary and a client keeps rendering at the
+old size after the desktop's `font_size` setting changes, so client
+text and desktop text quietly disagree. Sharing the kernel's own data
+makes them identical by construction.
+
+Read-only is load-bearing rather than tidiness -- these are pages of
+the kernel image, and a writable mapping would let any client scribble
+on kernel `.rodata`. `vmm_map_user_page_flags(..., writable=0,
+executable=0)` is what enforces it.
+
+Two details in the ABI exist because getting them wrong renders
+convincing-looking garbage rather than failing: the glyph data does not
+start on a page boundary, so the request returns glyph 0's offset
+within the mapping; and the tables are coverage maps, not bitmasks, so
+`ugfx` alpha-blends per pixel (a `> 128` threshold would render the
+same letters visibly jagged).
+
+The boundary this stops at: `ugfx` is a drawing runtime, not a widget
+toolkit. `apps/ui/`'s widgets are still ring-0-only, which is what a
+real app like Calculator is built from -- see `docs/roadmap.md`'s
+Milestone 41.
 
 ## `strace` traces an address space, and prints each line after the handler returns
 
