@@ -29,10 +29,21 @@
 //                 click (act-on-contact is correct for these).
 //   ROW_RADIO     a ui_radio_list, 2 columns: "Red" "Green" "Blue" "Grey".
 //   ROW_TEXTBOX   a ui_textbox. Click to focus, then keys go to it.
+//   ROW_DROPDOWN  a ui_dropdown, 10 items. Click to open the popup;
+//                 arrows work while closed too. Its popup deliberately
+//                 opens OVER the listbox below it -- that overlap is the
+//                 point, it's what proves the popup is drawn last.
+//   ROW_LIST      a ui_listbox, 12 items in a 4-row box, so it always
+//                 has a scrollbar to exercise.
 //   ROW_SCROLL    a ui_scrollback with a scrollbar beside it, prefilled
 //                 with numbered lines so scroll position is readable.
 //   ROW_STATUS    a live readout of the last event, so a screenshot is
 //                 also self-describing.
+//
+// Keyboard focus is deliberately simple here: while the textbox is
+// active it takes every key, and otherwise keys go to the dropdown and
+// then the listbox. Click the textbox to focus it, click anywhere else
+// to release it.
 //
 // ---------------------------------------------------------------------
 // LOG GRAMMAR -- one line per event, prefix "uidemo: ".
@@ -50,9 +61,16 @@
 //   uidemo: focus textbox
 //   uidemo: key <code> text="<contents>"
 //   uidemo: scroll <offset> <wheel|page|thumb>
+//   uidemo: list <n> <label>        -- listbox selection committed
+//   uidemo: dropdown open
+//   uidemo: dropdown close          -- closed with the value unchanged
+//   uidemo: dropdown <n> <label>    -- dropdown value CHANGED
+//   uidemo: layout <widget> <x> <y> <w> <h>   -- emitted once on open
+//   uidemo: layout listbox_row_h <px>
 //
 // Widget names are stable identifiers, not display labels: btn1, btn2,
-// btn3, chk_alpha, chk_beta, radio, textbox, scrollback, none.
+// btn3, chk_alpha, chk_beta, radio, textbox, scrollback, dropdown,
+// listbox, none.
 //
 // These go through klog_write(), so they land on the serial console
 // alongside the `gui` debug commands (apps/wm/wm_debug.c) and in
@@ -77,7 +95,16 @@ static int row_radio(void)   { return row_checks() + gfx_char_h() + 6 + ROW_GAP;
 static int radio_row_h(void) { return gfx_char_h() + 8; }
 static int row_textbox(void) { return row_radio() + 2 * radio_row_h() + ROW_GAP; }
 static int tbx_h(void)       { return gfx_char_h() + 10; }
-static int row_scroll(void)  { return row_textbox() + tbx_h() + ROW_GAP; }
+static int row_dropdown(void) { return row_textbox() + tbx_h() + ROW_GAP; }
+static int dd_h(void)        { return gfx_char_h() + 10; }
+static int row_list(void)    { return row_dropdown() + dd_h() + ROW_GAP; }
+// Row height comes from the widget, not from a local constant -- asking
+// it is the only way the box height and its rows can't disagree. Safe
+// before uidemo_open(): g_state is static, so `row_h` is 0 there and
+// ui_listbox_row_h() falls back to the same font-derived default it
+// will use after init.
+static int list_h(void);
+static int row_scroll(void)  { return row_list() + list_h() + ROW_GAP; }
 static int scroll_h(void)    { return 5 * gfx_char_h(); }
 static int row_status(void)  { return row_scroll() + scroll_h() + ROW_GAP; }
 
@@ -86,10 +113,29 @@ static int row_status(void)  { return row_scroll() + scroll_h() + ROW_GAP; }
 #define SCROLL_W (34 * gfx_char_w())
 #define SCROLLBAR_W 12
 #define VIEW_W (SCROLL_W + SCROLLBAR_W)
+#define DD_W (22 * gfx_char_w())
+#define LIST_W (22 * gfx_char_w())
+#define LIST_ROWS 4
 
 static const char *const BTN_LABELS[BTN_COUNT] = { "One", "Two", "Three" };
 static const char *const RADIO_LABELS[] = { "Red", "Green", "Blue", "Grey" };
 #define RADIO_COUNT 4
+
+// Deliberately longer than what fits, so both controls always have a
+// live scrollbar to exercise -- a scrollbar that never appears is a
+// scrollbar that never gets tested (see ui_textview.h on the last time
+// that happened in this very app).
+static const char *const DD_ITEMS[] = {
+    "Aardvark", "Badger", "Capybara", "Dormouse", "Echidna",
+    "Ferret", "Gerbil", "Hedgehog", "Ibex", "Jackal",
+};
+#define DD_COUNT 10
+
+static const char *const LIST_ITEMS[] = {
+    "alpha", "bravo", "charlie", "delta", "echo", "foxtrot",
+    "golf", "hotel", "india", "juliet", "kilo", "lima",
+};
+#define LIST_COUNT 12
 
 struct uidemo_state {
     struct ui_button buttons[BTN_COUNT];
@@ -97,9 +143,19 @@ struct uidemo_state {
     struct ui_radio_list radio;
     struct ui_textbox textbox;
     struct ui_textview view;   // scrollback + scrollbar + all its input handling
+    struct ui_dropdown dropdown;
+    struct ui_listbox list;
     int checked[2];
     int radio_sel;
     int hover_name;      // index into WIDGET_NAMES, or -1
+    // Which widget keys go to. Three widgets here take the keyboard
+    // (textbox, dropdown, listbox) and this GUI has no focus concept of
+    // its own, so without this the first one in the dispatch chain
+    // swallows every key -- which is exactly what happened: the
+    // dropdown handles arrows even while closed, so the listbox could
+    // never be arrowed at all. Clicking a widget focuses it, the way
+    // every real toolkit does.
+    int kbd_focus;       // a widget_id: W_TEXTBOX, W_DROPDOWN, W_LISTBOX, or W_NONE
     // Whether the press currently in progress actually armed a button.
     // ui_button_group_release() returns -1 for BOTH "nothing was ever
     // armed" and "armed then dragged off", and only the second is a
@@ -112,14 +168,19 @@ struct uidemo_state {
 
 static struct uidemo_state g_state;
 
+static int list_h(void) {
+    return ui_listbox_height_for_rows(&g_state.list, LIST_ROWS);
+}
+
 // Stable identifiers -- deliberately NOT the display labels, so a test
 // asserting on the log doesn't break when a label is reworded.
 enum widget_id { W_NONE = 0, W_BTN1, W_BTN2, W_BTN3, W_CHK_ALPHA,
-                  W_CHK_BETA, W_RADIO, W_TEXTBOX, W_SCROLLBACK };
+                  W_CHK_BETA, W_RADIO, W_TEXTBOX, W_SCROLLBACK,
+                  W_DROPDOWN, W_LISTBOX };
 
 static const char *const WIDGET_NAMES[] = {
     "none", "btn1", "btn2", "btn3", "chk_alpha", "chk_beta",
-    "radio", "textbox", "scrollback",
+    "radio", "textbox", "scrollback", "dropdown", "listbox",
 };
 
 static void logline(const char *fmt_done) {
@@ -132,6 +193,19 @@ static void set_status(const char *s) {
     k_strcpy(g_state.status, s);
 }
 
+// Moves keyboard focus, logging only real changes -- a `focus` line per
+// tick would drown the log a test is asserting on.
+static void set_focus(int widget_id) {
+    if (g_state.kbd_focus == widget_id) return;
+    g_state.kbd_focus = widget_id;
+    // The textbox owns a caret, so its focus is also visible state and
+    // has to be kept in step with this.
+    ui_textbox_set_active(&g_state.textbox, widget_id == W_TEXTBOX);
+    klog_write("uidemo: focus ");
+    klog_write(WIDGET_NAMES[widget_id]);
+    klog_write("\n");
+}
+
 static void log_scroll(const char *how) {
     char msg[48];
     k_snprintf(msg, sizeof msg, "scroll %d %s", g_state.view.tb.scroll_offset, how);
@@ -142,6 +216,14 @@ static void log_scroll(const char *how) {
 // Which widget is at this content-relative point? One function, used by
 // press, click and hover alike, so all three agree by construction.
 static enum widget_id widget_at(int cx, int cy) {
+    // An OPEN dropdown popup is drawn on top of everything, so it is
+    // tested first -- hit-testing has to be the reverse of draw order or
+    // the widget underneath claims a click that visibly landed on the
+    // list.
+    if (ui_dropdown_popup_hit(&g_state.dropdown, cx, cy)) return W_DROPDOWN;
+    if (ui_dropdown_hit(&g_state.dropdown, cx, cy)) return W_DROPDOWN;
+    if (ui_listbox_hit(&g_state.list, cx, cy)) return W_LISTBOX;
+
     for (int i = 0; i < BTN_COUNT; i++) {
         if (ui_button_hit(&g_state.buttons[i], cx, cy)) return (enum widget_id)(W_BTN1 + i);
     }
@@ -155,6 +237,46 @@ static enum widget_id widget_at(int cx, int cy) {
 
     if (ui_textview_hit(&g_state.view, cx, cy)) return W_SCROLLBACK;
     return W_NONE;
+}
+
+// Reports every widget's content-relative rect, one line each.
+//
+// This app's whole job is to be a KNOWN TARGET, and a test that has to
+// re-derive these offsets from the font metrics is re-implementing
+// layout() in Python -- which drifts silently the moment a row is
+// added, exactly as happened when the dropdown and listbox rows went in
+// between the textbox and the scrollback. Emitted on open (and by
+// `layout` below on demand), so a test asks rather than assumes, the
+// same reason `gui windows` exists instead of measuring a screenshot.
+//
+//   uidemo: layout <widget> <x> <y> <w> <h>
+static void log_layout(void) {
+    char m[80];
+    struct { const char *name; int x, y, w, h; } rows[] = {
+        { "btn1",      g_state.buttons[0].x, g_state.buttons[0].y,
+                       g_state.buttons[0].w, g_state.buttons[0].h },
+        { "chk_alpha", PAD, row_checks(),
+                       widget_checkbox_width(CHK_SIZE, "Alpha"), CHK_SIZE },
+        { "radio",     PAD, row_radio(), 2 * g_state.radio.col_w,
+                       2 * radio_row_h() },
+        { "textbox",   g_state.textbox.x, g_state.textbox.y,
+                       g_state.textbox.w, g_state.textbox.h },
+        { "dropdown",  g_state.dropdown.x, g_state.dropdown.y,
+                       g_state.dropdown.w, g_state.dropdown.h },
+        { "listbox",   g_state.list.x, g_state.list.y,
+                       g_state.list.w, g_state.list.h },
+        { "scrollback", g_state.view.x, g_state.view.y,
+                        g_state.view.w, g_state.view.h },
+    };
+    for (unsigned i = 0; i < sizeof rows / sizeof rows[0]; i++) {
+        k_snprintf(m, sizeof m, "layout %s %d %d %d %d",
+                   rows[i].name, rows[i].x, rows[i].y, rows[i].w, rows[i].h);
+        logline(m);
+    }
+    // The listbox's row height is what a test needs to click row N, and
+    // it is the widget's to report, not the app's to assume.
+    k_snprintf(m, sizeof m, "layout listbox_row_h %d", ui_listbox_row_h(&g_state.list));
+    logline(m);
 }
 
 void uidemo_default_size(int *w, int *h) {
@@ -172,6 +294,8 @@ static void layout(void) {
                                 BTN_W, btn_h());
     }
     ui_textbox_set_geometry(&g_state.textbox, PAD, row_textbox(), TBX_W, tbx_h());
+    ui_dropdown_set_geometry(&g_state.dropdown, PAD, row_dropdown(), DD_W, dd_h());
+    ui_listbox_set_geometry(&g_state.list, PAD, row_list(), LIST_W, list_h());
     ui_textview_set_geometry(&g_state.view, PAD, row_scroll(), VIEW_W, scroll_h());
 }
 
@@ -193,6 +317,19 @@ void uidemo_open(struct window *win) {
     ui_textbox_init(&g_state.textbox, 0, 0, 0, 0, "type here",
                      THEME_WHITE, THEME_TEXT, THEME_BORDER);
 
+    ui_dropdown_init(&g_state.dropdown, 0, 0, 0, 0, DD_ITEMS, DD_COUNT, 0,
+                      THEME_BUTTON_BG, THEME_TEXT, THEME_BORDER,
+                      THEME_SELECTION_BG, THEME_WHITE,
+                      THEME_PANEL_BG, THEME_BORDER);
+    // Fewer rows than the popup would otherwise want, so the popup has a
+    // scrollbar too rather than just showing all ten at once.
+    g_state.dropdown.max_rows = 5;
+
+    ui_listbox_init(&g_state.list, 0, 0, 0, 0, LIST_ITEMS, LIST_COUNT,
+                     THEME_WHITE, THEME_TEXT, THEME_SELECTION_BG, THEME_WHITE,
+                     THEME_PANEL_BG, THEME_BORDER);
+    ui_listbox_set_selected(&g_state.list, 0);
+
     ui_textview_init(&g_state.view, PAD, row_scroll(), VIEW_W, scroll_h(),
                       THEME_WHITE, THEME_PANEL_BG, THEME_BORDER, THEME_SELECTION_BG);
     // Body drags pan this view: UI Demo has no cursor or selection of
@@ -213,10 +350,12 @@ void uidemo_open(struct window *win) {
     g_state.checked[0] = g_state.checked[1] = 0;
     g_state.hover_name = W_NONE;
     g_state.armed = 0;
+    g_state.kbd_focus = W_NONE;
     set_status("ready");
     layout();
     window_set_state(win, &g_state);
     logline("open");
+    log_layout();
 }
 
 void uidemo_draw(struct window *win) {
@@ -239,12 +378,21 @@ void uidemo_draw(struct window *win) {
 
     ui_textbox_draw(&g_state.textbox, cx, cy);
 
+    ui_dropdown_draw(&g_state.dropdown, cx, cy);   // the closed box only
+    ui_listbox_draw(&g_state.list, cx, cy);
+
     ui_textview_draw(&g_state.view, cx, cy);
 
     // Clipped, like everything else in a fixed box -- the status string
     // is short but the rule is the rule (docs/gui-guidelines.md).
     gfx_draw_string_clipped(cx + PAD, cy + row_status(), cw - 2 * PAD,
                              g_state.status, THEME_TEXT, THEME_WINDOW_BG);
+
+    // LAST, after every other widget. Drawing here is immediate-mode, so
+    // z-order is call order and a popup drawn any earlier would be
+    // painted over by the listbox and scrollback below it. A no-op while
+    // the dropdown is closed -- see ui_dropdown.h.
+    ui_dropdown_draw_popup(&g_state.dropdown, cx, cy);
 }
 
 int uidemo_hover(struct window *win, int cx, int cy) {
@@ -252,6 +400,11 @@ int uidemo_hover(struct window *win, int cx, int cy) {
     layout();
     int now = (cx < 0 || cy < 0) ? W_NONE : (int)widget_at(cx, cy);
     int group_changed = ui_button_group_hover(&g_state.group, cx, cy);
+    // Row-level hover inside these two is theirs to track -- the name
+    // logged below only says WHICH widget, and a listbox highlighting a
+    // different row is a repaint the app would otherwise miss.
+    if (ui_dropdown_hover(&g_state.dropdown, cx, cy)) group_changed = 1;
+    if (ui_listbox_hover(&g_state.list, cx, cy)) group_changed = 1;
     if (now == g_state.hover_name) return group_changed;
     g_state.hover_name = now;
     klog_write("uidemo: hover ");
@@ -263,7 +416,25 @@ int uidemo_hover(struct window *win, int cx, int cy) {
 int uidemo_press(struct window *win, int cx, int cy) {
     (void)win;
     layout();
-    int changed = ui_button_group_press(&g_state.group, cx, cy);
+
+    // The dropdown gets first refusal, because its popup is drawn on top
+    // of everything -- input order is the reverse of draw order. Note it
+    // deliberately does NOT consume a press that merely dismisses an
+    // open popup, so that click still reaches whatever it landed on;
+    // the repaint is still needed either way, hence `was_open`.
+    int was_open = g_state.dropdown.open;
+    if (ui_dropdown_press(&g_state.dropdown, cx, cy)) {
+        set_focus(W_DROPDOWN);
+        return 1;
+    }
+    int changed = (was_open != g_state.dropdown.open);
+
+    if (ui_listbox_press(&g_state.list, cx, cy)) {
+        set_focus(W_LISTBOX);
+        return 1;
+    }
+
+    if (ui_button_group_press(&g_state.group, cx, cy)) changed = 1;
     for (int i = 0; i < BTN_COUNT; i++) {
         if (g_state.buttons[i].pressed) { g_state.armed = 1; break; }
     }
@@ -275,6 +446,32 @@ int uidemo_press(struct window *win, int cx, int cy) {
 // distinction a cancel-path test needs to see.
 void uidemo_release(struct window *win) {
     layout();
+    char m[64];
+
+    // Both of these are safe to call unconditionally -- each returns -1
+    // when it had nothing armed, which is exactly the "did the user pick
+    // something" question an app wants answered.
+    int was_open = g_state.dropdown.open;
+    int picked = ui_dropdown_release(&g_state.dropdown);
+    if (picked >= 0) {
+        k_snprintf(m, sizeof m, "dropdown %u %s", (unsigned)picked, DD_ITEMS[picked]);
+        logline(m);
+        set_status(m);
+    } else if (!was_open && g_state.dropdown.open) {
+        logline("dropdown open");
+        set_status("dropdown open");
+    } else if (was_open && !g_state.dropdown.open) {
+        logline("dropdown close");
+        set_status("dropdown closed");
+    }
+
+    int row = ui_listbox_release(&g_state.list);
+    if (row >= 0) {
+        k_snprintf(m, sizeof m, "list %u %s", (unsigned)row, LIST_ITEMS[row]);
+        logline(m);
+        set_status(m);
+    }
+
     int code = ui_button_group_release(&g_state.group);
     if (code > 0) {
         char msg[32];
@@ -320,11 +517,12 @@ void uidemo_click(struct window *win, int cx, int cy) {
         // never reaches on_click; a body press pans, likewise.
         if (ui_textview_click(&g_state.view, cx, cy)) log_scroll("page");
     } else if (w == W_TEXTBOX) {
-        ui_textbox_set_active(&g_state.textbox, 1);
-        logline("focus textbox");
+        set_focus(W_TEXTBOX);
         set_status("textbox focused");
-    } else {
-        ui_textbox_set_active(&g_state.textbox, 0);
+    } else if (w != W_DROPDOWN && w != W_LISTBOX) {
+        // Those two take focus in on_press (they act on release, so
+        // waiting until then would leave the first arrow key homeless).
+        set_focus(W_NONE);
     }
     window_invalidate(win);
 }
@@ -338,6 +536,12 @@ void uidemo_click(struct window *win, int cx, int cy) {
 // advertised a `scroll` event it never emitted.
 
 void uidemo_wheel(struct window *win, int delta) {
+    layout();
+    // Same top-down order as press: an open popup is on top, so it takes
+    // the wheel first. A CLOSED dropdown ignores it on purpose (see
+    // ui_dropdown.h), so this falls through to the listbox as it should.
+    if (ui_dropdown_wheel(&g_state.dropdown, delta)) { window_invalidate(win); return; }
+    if (ui_listbox_wheel(&g_state.list, delta)) { window_invalidate(win); return; }
     if (!ui_textview_wheel(&g_state.view, delta)) return;
     log_scroll("wheel");
     window_invalidate(win);
@@ -361,12 +565,32 @@ void uidemo_drag(struct window *win, int cx, int cy) {
 
 void uidemo_key(struct window *win, int key) {
     char msg[96];
-    if (g_state.textbox.field.active) {
+    layout();
+    // Dispatch by FOCUS, not by trying each widget in turn: the dropdown
+    // handles arrows even while closed, so a try-in-order chain means
+    // the listbox never receives one. See kbd_focus's comment.
+    if (g_state.kbd_focus == W_TEXTBOX && g_state.textbox.field.active) {
         ui_textbox_key(&g_state.textbox, key);
         k_snprintf(msg, sizeof msg, "key %u text=\"%s\"",
                    (unsigned)key, g_state.textbox.field.buf);
         logline(msg);
         set_status(msg);
+    } else if (g_state.kbd_focus == W_DROPDOWN &&
+                ui_dropdown_key(&g_state.dropdown, key)) {
+        int sel = ui_dropdown_selected(&g_state.dropdown);
+        if (sel >= 0) {
+            k_snprintf(msg, sizeof msg, "dropdown %u %s", (unsigned)sel, DD_ITEMS[sel]);
+            logline(msg);
+            set_status(msg);
+        }
+    } else if (g_state.kbd_focus == W_LISTBOX &&
+                ui_listbox_key(&g_state.list, key)) {
+        int sel = g_state.list.selected;
+        if (sel >= 0) {
+            k_snprintf(msg, sizeof msg, "list %u %s", (unsigned)sel, LIST_ITEMS[sel]);
+            logline(msg);
+            set_status(msg);
+        }
     } else {
         k_snprintf(msg, sizeof msg, "key %u (no focus)", (unsigned)key);
         logline(msg);

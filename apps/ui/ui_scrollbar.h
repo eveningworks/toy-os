@@ -26,6 +26,24 @@
 // oldest/top (thumb at the top of the track).
 #define SCROLLBAR_MIN_THUMB_H 16
 
+// When a control that OWNS a scrollbar should show one. Lives here
+// rather than with any one such control, because it is shared
+// vocabulary: ui_textview and ui_listbox both have this exact policy
+// and must mean the same thing by it. (It started in ui_textview.h,
+// which was fine while that was the only owner; ui_listbox arriving
+// made a listbox's scrollbar policy an enum from the *text view's*
+// header, which reads like a dependency that isn't there.)
+enum ui_scrollbar_policy {
+    // Show the bar only when the content actually overflows AND the
+    // control is wide enough to spare the strip. The second half is not
+    // decoration: Terminal has always hidden its bar below a minimum
+    // width, because a scrollbar eating a third of a narrow window is
+    // worse than no scrollbar.
+    UI_SCROLLBAR_AUTO = 0,
+    UI_SCROLLBAR_ALWAYS, // reserve the strip even when it can't scroll
+    UI_SCROLLBAR_NEVER,  // no bar; the wheel still scrolls
+};
+
 enum scrollbar_zone {
     SCROLLBAR_ZONE_NONE,  // (px, py) isn't inside the track rect at all
     SCROLLBAR_ZONE_THUMB, // landed on the thumb -- caller should start a drag

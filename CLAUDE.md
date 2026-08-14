@@ -105,7 +105,12 @@ technical conventions below:
   `gui_apps.h`.
 - **`apps/ui/ui.h`** (the umbrella include for `ui_primitives.h`'s
   `widget_hit`/`widget_button`, `ui_scrollback.h`, `ui_scrollbar.h`,
-  `ui_checkbox.h`, `ui_button.h`/`ui_button_group.h`, `ui_textbox.h`)
+  `ui_checkbox.h`, `ui_button.h`/`ui_button_group.h`, `ui_textbox.h`,
+  `ui_radio_list.h`, `ui_icon_grid.h`, `ui_textview.h`, and
+  `ui_listbox.h`/`ui_dropdown.h` -- the dropdown composes the listbox,
+  and its popup needs `ui_dropdown_draw_popup()` called AFTER every
+  other widget, since drawing is immediate-mode and z-order is call
+  order; see its header)
   and **`apps/theme.h`** (`THEME_*` named colors) are small apps-internal
   helpers, same peer-level pattern as `wm/wm.h`. Both are deliberately
   minimal on purpose -- see their top comments before adding to them.
@@ -838,6 +843,15 @@ repeated manual steps to be worth automating:
 - **`check_layout.py`** -- see the `docs/` section: verifies the built
   image's directories against `docs/filesystem-layout.md`. Runs in
   `preflight.sh` and CI.
+- **`uidemo_test.py`** -- drives UI Demo's widgets and asserts on its
+  log (21 checks: click selection, cancel paths, keyboard navigation,
+  wheel-scrolls-without-selecting, the dropdown popup's open/commit/
+  dismiss/Esc, and keyboard focus). Exits non-zero on a failed check.
+  Run it after touching anything in `apps/ui/`. Geometry comes from the
+  app's own `uidemo: layout ...` lines rather than from re-deriving row
+  offsets in Python -- the Python copy drifts silently the moment a row
+  is added to the app, which is exactly what happened when the dropdown
+  and listbox rows landed mid-file.
 - **`damage_sweep.py`** -- drives the WM through the interactions that
   historically break the damage invariant with `gui damage verify on`,
   and exits non-zero on a violation. Run it after touching anything

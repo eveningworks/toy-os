@@ -101,10 +101,28 @@ static char *next_tok(char **p) {
 // kernel/lib's parser convention (see CLAUDE.md) -- a bad coordinate
 // silently becoming 0 would put a click in the top-left corner and look
 // like a hit-testing bug.
+// Decimal, optionally signed -- or hex with an explicit "0x"/"0X"
+// prefix.
+//
+// The hex half is not decoration: cmd_key() below has always documented
+// `gui key 0x1b` as the way to send an unprintable key, and every KEY_*
+// code in api/keyboard.h is written in hex, but k_parse_u32() takes
+// plain decimal only ("no prefix", per its own contract) -- so every
+// such command was answered with "bad or dropped key" while the help
+// text advertised it. Found by a test that typed the arrow-key codes
+// exactly as this file's own comment said to.
 static int parse_int(const char *s, int *out) {
     if (!s || !*s) return 0;
     int sign = 1;
     if (*s == '-') { sign = -1; s++; if (!*s) return 0; }
+
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        uint64_t hv = 0;
+        if (!k_parse_hex(s, &hv)) return 0;
+        *out = sign * (int)hv;
+        return 1;
+    }
+
     uint32_t v = 0;
     if (!k_parse_u32(s, &v)) return 0;
     *out = sign * (int)v;

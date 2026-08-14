@@ -47,16 +47,12 @@
 // Each input function returns 1 if it consumed the event, so an app
 // with other widgets can fall through to them.
 
-enum ui_scrollbar_policy {
-    // Show the bar only when the content actually overflows AND the
-    // view is wide enough to spare the strip. The second half is not
-    // decoration: Terminal has always hidden its bar below a minimum
-    // width, because a scrollbar eating a third of a narrow window is
-    // worse than no scrollbar.
-    UI_SCROLLBAR_AUTO = 0,
-    UI_SCROLLBAR_ALWAYS, // reserve the strip even when it can't scroll
-    UI_SCROLLBAR_NEVER,  // no bar; the wheel still scrolls
-};
+// enum ui_scrollbar_policy (UI_SCROLLBAR_AUTO/_ALWAYS/_NEVER) used to
+// be declared here. It moved to ui_scrollbar.h -- which this file
+// already includes, so nothing about using it from here changed -- once
+// ui_listbox became a second control with the same policy: a listbox
+// taking its scrollbar policy from the *text view's* header reads like a
+// dependency that isn't there.
 
 // Who owns a press that lands in the text BODY (not on the scrollbar).
 enum ui_textview_body {

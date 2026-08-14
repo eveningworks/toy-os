@@ -31,6 +31,16 @@ using `## [x.y.z] - date` headings is here.
 ## [Unreleased]
 
 ### Fixed
+- **`gui key 0x1b` was rejected, despite being the documented way to
+  send an unprintable key.** `wm_debug.c`'s `cmd_key()` has always said
+  `"0x1b"-style for anything unprintable` and every `KEY_*` code in
+  `api/keyboard.h` is written in hex -- but its `parse_int()` used
+  `k_parse_u32()`, which takes plain decimal only ("no prefix", per its
+  own contract). So every hex key command answered "bad or dropped key"
+  while the help text advertised it, and any keyboard test had to
+  convert codes to decimal by hand without knowing why. `parse_int()`
+  accepts an explicit `0x`/`0X` prefix now. Found by a test that typed
+  the arrow-key codes exactly as the file's own comment said to.
 - **Five damage-invariant bugs, and the harness that was hiding them.**
   The compositor repaints only the region declared as damage, so it is
   correct only if everything that changes on screen is inside that
@@ -139,6 +149,73 @@ using `## [x.y.z] - date` headings is here.
   the PS/2 driver, so none of this exercises the real mouse path.
 
 ### Added
+- **`ui_listbox` and `ui_dropdown`** (`apps/ui/`) -- a scrollable
+  single-select list, and a combo box built on it. Behaviour modelled on
+  Windows', by request, but following this project's own interaction
+  rules where the two differ.
+
+  `ui_listbox` owns rows, selection, hover, keyboard navigation
+  (arrows/Home/End/PageUp/PageDown, scrolling the selection into view)
+  and a scrollbar that appears only when the items overflow. Where
+  `ui_radio_list` stops -- it has no viewport, so no scrolling, hover or
+  keys -- this begins, because all four arrive together the moment a
+  list is longer than its box. Two behaviours are deliberate and were
+  chosen explicitly: the wheel scrolls the view WITHOUT moving the
+  selection (a user looking further down a list has not changed the
+  value they picked), and the armed row follows the cursor while held
+  but commits only on release, so a press dragged off is cancellable.
+
+  `ui_dropdown` **composes** `ui_listbox` for its popup rather than
+  reimplementing a list -- the same layering `ui_textview` uses over
+  scrollback + scrollbar. It therefore got scrolling, keyboard
+  navigation and hover for free, which is the argument for the layering
+  rather than a happy accident. Click-outside dismisses without
+  changing the value, Esc restores the value the popup opened with,
+  arrows work while closed, and the wheel is ignored while closed on
+  purpose (scrolling past a combo must not silently change a setting).
+
+  Two things about the popup are worth knowing before writing a caller,
+  both in `ui_dropdown.h` and `docs/decisions.md`. Drawing is
+  immediate-mode, so **`ui_dropdown_draw_popup()` is a separate call the
+  app makes after every other widget** -- z-order is call order, and
+  input is forwarded in the reverse order for the same reason. And the
+  popup **cannot leave the window**, because `wm_render_frame()` clips
+  each app's `on_draw()` to its content rect; it flips above the box
+  when there's no room below, and its inherited scrollbar is what makes
+  that acceptable rather than a truncation.
+
+  `enum ui_scrollbar_policy` moved from `ui_textview.h` to
+  `ui_scrollbar.h` -- shared vocabulary now that two controls own a
+  scrollbar, and a listbox taking its policy from the *text view's*
+  header read like a dependency that wasn't there. `ui_textview.h`
+  already includes `ui_scrollbar.h`, so no caller changed.
+
+  Both are in UI Demo (`apps/uidemo.c`), with the dropdown positioned so
+  its popup deliberately opens over the listbox -- that overlap is what
+  proves the popup is drawn last. Verified by driving them over the
+  debug console and asserting on the log: 22 checks covering click
+  selection, the press-dragged-off cancel path, all five navigation
+  keys, wheel-scrolls-without-selecting, popup open/commit/dismiss, Esc
+  restore, and keyboard focus following the click -- now committed as
+  **`tools/uidemo_test.py`**, so the next change to `apps/ui/` gets the
+  same check for free. `gui damage verify on` clean across eight
+  popup/listbox interactions.
+  (`screenshots/2026-08-14/uidemo-{dropdown-popup-open,listbox-scrolled}.png`)
+- **UI Demo reports its own layout** -- `uidemo: layout <widget> <x> <y>
+  <w> <h>` on open, plus `layout listbox_row_h <px>`. The app exists to
+  be a known target, and a test re-deriving those offsets from font
+  metrics is reimplementing `layout()` in Python -- which drifts
+  silently the moment a row is added, exactly as it did when the
+  dropdown and listbox rows went in between the textbox and the
+  scrollback. Ask, don't assume: the same reason `gui windows` exists
+  instead of measuring a screenshot.
+- **UI Demo has keyboard focus** (`kbd_focus`, set by clicking, logged
+  as `uidemo: focus <widget>`). Three widgets there take the keyboard
+  now, and this GUI has no focus manager, so the first one in a
+  try-each-in-turn chain swallows every key -- the dropdown handles
+  arrows even while closed, which left the listbox unreachable from the
+  keyboard entirely. Found by the widget tests above; see
+  `apps/README.md` for the shape a future app should copy.
 - **`tools/damage_sweep.py`** -- exercises the WM against its damage
   invariant and exits non-zero on a violation. A fixed sequence of the
   interactions that historically break it (raise, drag, minimize,

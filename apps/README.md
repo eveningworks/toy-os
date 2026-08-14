@@ -335,9 +335,43 @@ nothing but the idea. See `docs/decisions.md`.)
   Added ahead of a second caller by explicit request, the same
   acknowledged exception `ui_checkbox` and `ui_icon_grid` above are --
   see `docs/decisions.md`.
+- **`ui_listbox.h`/`.c`** -- a scrollable single-select list of text
+  items: rows, selection, hover, keyboard navigation (arrows/Home/End/
+  PageUp/PageDown) and a scrollbar that appears only when the items
+  overflow, as one control. Where `ui_radio_list` above stops -- it has
+  no viewport, so no scrolling, hover or keys -- this begins; all four
+  arrive together the moment a list is longer than its box. Windows'
+  listbox is the behaviour model: the wheel scrolls the view without
+  moving the selection, and the armed row follows the cursor while
+  held, but nothing commits until release, so a press dragged off is
+  still cancellable. **Scroll offset here is 0 = top**, the opposite of
+  `ui_scrollbar`'s convention; the conversion happens in two helpers in
+  the `.c` and nowhere else (see `docs/decisions.md`).
+- **`ui_dropdown.h`/`.c`** -- a combo box: a closed box showing the
+  current value, which opens a popup list to change it. **Composes
+  `ui_listbox`** for that popup rather than reimplementing a list, the
+  same layering `ui_textview` uses over scrollback + scrollbar. The one
+  rule an app must follow is that `ui_dropdown_draw_popup()` is a
+  SEPARATE call made after every other widget -- drawing is
+  immediate-mode, so z-order is call order -- and input is forwarded to
+  the dropdown *before* the widgets underneath, since the popup is on
+  top. The popup cannot leave the window (the WM clips `on_draw` to the
+  content rect), so it flips above the box when there's no room below.
+  See `docs/decisions.md` for why it isn't a WM overlay.
 
 This is *not* a general-purpose widget toolkit -- no focus manager, no
-layout engine beyond `ui_button_group`. Add the next primitive here
+layout engine beyond `ui_button_group`. The missing focus manager now
+has a visible cost worth knowing about before you write an app with two
+keyboard-taking widgets: whichever one the app tries first swallows
+every key. `ui_dropdown` handles arrows even while closed, so a
+try-each-in-turn chain leaves a `ui_listbox` next to it unreachable
+from the keyboard. UI Demo solves it the way a real toolkit would, with
+a single `kbd_focus` field set by clicking (`apps/uidemo.c`) -- copy
+that shape rather than reordering the chain and hoping. If a third app
+needs it, that's the second real caller, and a shared focus helper
+becomes the right thing to build.
+
+Add the next primitive here
 only once a second real caller needs it, the same reasoning that
 produced the original two functions in the first place (three
 independent copies of the same button logic was the signal).

@@ -1,0 +1,279 @@
+#!/usr/bin/env python3
+"""tools/uidemo_test.py -- drive UI Demo's widgets and assert on its log.
+
+WHAT THIS IS
+------------
+UI Demo (`apps/uidemo.c`) exists to be a known target: one of every
+`apps/ui/` widget, and every interaction reported as a single parseable
+line. This is the other half of that -- the thing that drives it and
+checks the lines came out right. A widget regression shows up here as a
+named failing check rather than as something subtly wrong in a
+screenshot nobody looks at closely.
+
+    python3 tools/vm.py start          # or --disk a copy
+    python3 tools/uidemo_test.py       # enters GUI mode itself
+    echo $?                            # 0 = every check passed
+
+WHY IT IS A TOOL AND NOT A SCRIPT
+---------------------------------
+It encodes three things that cost real time to rediscover:
+
+  1. **Geometry comes from the app**, via its `uidemo: layout <widget>
+     <x> <y> <w> <h>` lines, not from re-deriving row offsets from font
+     metrics in Python. The Python copy drifts silently the moment a row
+     is added to the app -- which is exactly what happened when the
+     dropdown and listbox rows landed between the textbox and the
+     scrollback.
+  2. **Coordinates must be inside the window.** A click outside the
+     content rect never reaches the app at all, so it proves nothing --
+     and reads as a failing widget rather than a bad test. The
+     dismiss-the-popup check hit this for real: at `x + 400` it was
+     past the right edge of a ~406px-wide content area.
+  3. **Key codes go in as hex** (`gui key 0x92`), matching
+     `api/keyboard.h`. That only works as of the `parse_int()` fix in
+     the same change as this file; against an older kernel every key
+     command comes back "bad or dropped key".
+
+CAVEAT
+------
+Injected input enters below the PS/2 driver (see tools/gui_debug.py), so
+a clean run says nothing about the real mouse or keyboard path, and
+nothing here looks at pixels -- use tools/pixel_probe.py for anything
+whose answer is a colour.
+"""
+
+import argparse
+import os
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from gui_debug import DebugConsole          # noqa: E402
+from qmp_test import QMPSession             # noqa: E402
+
+DEFAULT_SOCK = ".vm.serial"
+
+# api/keyboard.h. Sent as hex, which is how that header writes them.
+K_UP, K_DOWN = "0x91", "0x92"
+K_PGUP, K_PGDN = "0x93", "0x94"
+K_HOME, K_END = "0x97", "0x98"
+K_ESC = "0x1b"
+
+
+class Demo:
+    """UI Demo, plus the geometry it reported about itself."""
+
+    def __init__(self, dbg, verbose=False):
+        self.dbg = dbg
+        self.verbose = verbose
+        self.fails, self.passes = [], []
+        self.layout = {}
+        self.row_h = 0
+        self.win = None
+
+    # -- plumbing ------------------------------------------------------
+
+    def events(self):
+        return self.dbg.logs("uidemo:", clear=True)
+
+    def _abs(self, cx, cy):
+        return self.win["content"]["x"] + cx, self.win["content"]["y"] + cy
+
+    def click(self, cx, cy):
+        x, y = self._abs(cx, cy)
+        self.dbg.send(f"gui click {x} {y}")
+        self.dbg.settle()
+        return self.events()
+
+    def drag(self, cx0, cy0, cx1, cy1):
+        x0, y0 = self._abs(cx0, cy0)
+        x1, y1 = self._abs(cx1, cy1)
+        self.dbg.send(f"gui drag {x0} {y0} {x1} {y1}")
+        self.dbg.settle()
+        return self.events()
+
+    def key(self, k):
+        self.dbg.send(f"gui key {k}")
+        self.dbg.settle()
+        return self.events()
+
+    def wheel(self, notches):
+        self.dbg.send(f"gui wheel {notches}")
+        self.dbg.settle()
+        return self.events()
+
+    # -- assertions ----------------------------------------------------
+
+    def check(self, name, got, want):
+        self._record(name, any(want in l for l in got), got, f"wanted {want!r}")
+
+    def check_absent(self, name, got, unwanted):
+        self._record(name, not any(unwanted in l for l in got), got,
+                     f"did NOT want {unwanted!r}")
+
+    def _record(self, name, ok, got, why):
+        print(f"  {'PASS' if ok else 'FAIL'}  {name}")
+        if ok:
+            self.passes.append(name)
+            if self.verbose:
+                print(f"        {got}")
+        else:
+            print(f"        {why}")
+            print(f"        got    {got}")
+            self.fails.append(name)
+
+    # -- setup ---------------------------------------------------------
+
+    def open(self):
+        """Open a FRESH UI Demo window and read its self-reported layout.
+
+        UI Demo is single-instance: re-opening an existing window just
+        focuses it and never calls on_open, so no layout lines are
+        emitted. Close everything first or the layout dict comes back
+        empty and every coordinate below is zero.
+        """
+        while True:
+            ws = self.dbg.json("gui windows --json")["windows"]
+            if not ws:
+                break
+            self.dbg.send(f"gui close {len(ws) - 1}")
+            self.dbg.settle()
+        self.dbg.logs("", clear=True)
+
+        self.dbg.send("gui open UI Demo")
+        self.dbg.settle()
+        for line in self.events():
+            p = line.split()
+            if len(p) >= 7 and p[1] == "layout":
+                self.layout[p[2]] = tuple(int(v) for v in p[3:7])
+            elif len(p) == 4 and p[2] == "listbox_row_h":
+                self.row_h = int(p[3])
+
+        self.win = [w for w in self.dbg.json("gui windows --json")["windows"]
+                    if w["title"] == "UI Demo"][-1]
+        if not self.layout or not self.row_h:
+            raise RuntimeError("UI Demo reported no layout -- is this an older kernel?")
+
+    # -- geometry helpers ---------------------------------------------
+
+    def list_row(self, n):
+        """Centre of VISIBLE row n of the listbox (0 = topmost shown)."""
+        x, y, w, h = self.layout["listbox"]
+        return x + 10, y + n * self.row_h + self.row_h // 2
+
+    def dropdown_center(self):
+        x, y, w, h = self.layout["dropdown"]
+        return x + w // 2, y + h // 2
+
+    def popup_row(self, n):
+        """Centre of row n of the OPEN popup (it hangs below the box)."""
+        x, y, w, h = self.layout["dropdown"]
+        return x + 10, y + h + 1 + n * self.row_h + self.row_h // 2
+
+
+def run(d):
+    lx, ly, lw, lh = d.layout["listbox"]
+    ddc = d.dropdown_center()
+
+    print("\n== listbox: mouse ==")
+    d.check("click row 1 selects it", d.click(*d.list_row(1)), "list 1 bravo")
+    d.check("click row 3 selects it", d.click(*d.list_row(3)), "list 3 delta")
+    # The cancel path is a separate test from the happy path
+    # (docs/gui-guidelines.md): press a row, drag off, release.
+    d.check_absent("press dragged off commits nothing",
+                   d.drag(lx + 10, ly + d.row_h // 2, lx - 60, ly - 60),
+                   "list 0 alpha")
+
+    print("\n== listbox: keyboard ==")
+    d.check("down arrow moves selection", d.key(K_DOWN), "list 4 echo")
+    d.check("up arrow moves selection", d.key(K_UP), "list 3 delta")
+    d.check("End jumps to last", d.key(K_END), "list 11 lima")
+    d.check("Home jumps to first", d.key(K_HOME), "list 0 alpha")
+    d.check("PageDown pages", d.key(K_PGDN), "list 4 echo")
+
+    print("\n== listbox: wheel scrolls the view, not the selection ==")
+    d.key(K_HOME)
+    d.events()
+    # 3 notches x wheel_rows(3) = 9 rows; with 12 items and 4 visible,
+    # max_top is 8, so the top visible row becomes item 8.
+    d.check_absent("wheel changes no selection", d.wheel(-3), "list ")
+    d.check("view actually scrolled", d.click(*d.list_row(0)), "list 8 india")
+
+    print("\n== dropdown ==")
+    d.check("click opens popup", d.click(*ddc), "dropdown open")
+    d.check("click popup row commits value", d.click(*d.popup_row(2)),
+            "dropdown 2 Capybara")
+    d.check("click reopens", d.click(*ddc), "dropdown open")
+    # Dismiss from INSIDE the window but outside the popup. A point past
+    # the content rect never reaches the app -- see the module docstring.
+    bx, by, bw, bh = d.layout["btn1"]
+    got = d.click(bx + bw // 2, by + bh // 2)
+    d.check_absent("outside click changes no value", got, "dropdown 0")
+    d.check("outside click dismissed the popup", got, "focus none")
+
+    print("\n== keyboard focus follows the click ==")
+    d.check("clicking the listbox focuses it", d.click(*d.list_row(0)), "focus listbox")
+    d.check("...and arrows now reach the listbox", d.key(K_DOWN), "list ")
+    d.check("clicking the dropdown focuses it back", d.click(*ddc), "focus dropdown")
+    d.key(K_ESC)
+    d.events()
+
+    print("\n== dropdown: keyboard while closed ==")
+    d.check("Home while closed", d.key(K_HOME), "dropdown 0 Aardvark")
+    d.check("down arrow changes value while closed", d.key(K_DOWN), "dropdown 1 Badger")
+
+    print("\n== dropdown: Esc restores the opening value ==")
+    # Value is Badger (1). Open, arrow to 2, Esc -- then arrow again
+    # while closed: a correct restore means the next Down goes 1 -> 2.
+    d.click(*ddc)
+    d.key(K_DOWN)
+    d.key(K_ESC)
+    d.events()
+    d.check("Esc restored the opening value", d.key(K_DOWN), "dropdown 2 Capybara")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--sock", default=DEFAULT_SOCK,
+                    help=f"serial unix socket (default {DEFAULT_SOCK}, what tools/vm.py creates)")
+    ap.add_argument("--qmp-port", type=int, default=4445)
+    ap.add_argument("--in-gui", action="store_true",
+                    help="the VM already shows the desktop; don't type `gui` first")
+    ap.add_argument("--shot", metavar="DIR",
+                    help="also write uidemo-widgets.png / uidemo-dropdown-open.png here")
+    ap.add_argument("-v", "--verbose", action="store_true")
+    args = ap.parse_args()
+
+    qmp = None
+    if not args.in_gui:
+        qmp = QMPSession(port=args.qmp_port)
+        qmp.send_text("gui")
+        qmp.send_key("ret")
+        time.sleep(2.0)
+
+    dbg = DebugConsole(args.sock)
+    d = Demo(dbg, verbose=args.verbose)
+    d.open()
+    print(f"uidemo_test: layout {d.layout}, row_h {d.row_h}")
+    run(d)
+
+    if args.shot:
+        if qmp is None:
+            qmp = QMPSession(port=args.qmp_port)
+        d.click(*d.dropdown_center())  # leave the popup open for the shot
+        d.events()
+        qmp.screenshot(os.path.abspath(os.path.join(args.shot, "uidemo-dropdown-open.png")))
+        d.key(K_ESC)
+        d.events()
+        qmp.screenshot(os.path.abspath(os.path.join(args.shot, "uidemo-widgets.png")))
+
+    print(f"\nuidemo_test: {len(d.passes)} passed, {len(d.fails)} failed")
+    for f in d.fails:
+        print("  FAILED:", f)
+    dbg.close()
+    return 1 if d.fails else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

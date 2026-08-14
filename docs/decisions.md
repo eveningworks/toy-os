@@ -99,6 +99,8 @@ there when you add an entry, or the index quietly stops being one.
 - [Why the compositor uses one scene-wide damage region, not per-window exposure tracking](#why-the-compositor-uses-one-scene-wide-damage-region-not-per-window-exposure-tracking)
 - [The taskbar/tray falls back to full-screen repaint on purpose, not as an oversight](#the-taskbartray-falls-back-to-full-screen-repaint-on-purpose-not-as-an-oversight)
 - [An overlay forces a full repaint, because "declares no damage" is not the same as "is drawn unrestricted"](#an-overlay-forces-a-full-repaint-because-declares-no-damage-is-not-the-same-as-is-drawn-unrestricted)
+- [A dropdown's popup is a second draw call the app makes last, not a WM overlay](#a-dropdowns-popup-is-a-second-draw-call-the-app-makes-last-not-a-wm-overlay)
+- [ui_listbox counts scroll from the top; ui_scrollbar counts from the bottom](#ui_listbox-counts-scroll-from-the-top-ui_scrollbar-counts-from-the-bottom)
 - [GUI tests wait on the WM's queue depth, not on a sleep derived from frame rate](#gui-tests-wait-on-the-wms-queue-depth-not-on-a-sleep-derived-from-frame-rate)
 
 **Shell, apps & console**
@@ -150,6 +152,18 @@ any real caller, by direct user request when asked to choose the
 scope -- a deliberate, acknowledged exception to the rule above, not a
 change to it: the rule still applies to whatever gets added *next*.
 See CHANGELOG-archive-2.md's **Build 490** for the full writeup.
+
+`ui_radio_list`, and later `ui_listbox`/`ui_dropdown`, were added the
+same way -- ahead of a second caller, by explicit user request. Worth
+being honest that this is now the majority of the recent additions
+rather than a one-off exception, so the rule is doing less work than
+its wording suggests. What it still buys is the *shape*: each of these
+arrived as a real widget with its behaviour inside it rather than as
+a helper an app calls, which is the part that actually prevents the
+half-implemented second copy (see `docs/gui-guidelines.md`'s
+"Behaviour belongs to the component"). `ui_dropdown` is a data point
+for that: it needed a scrolling, keyboard-navigable, hover-tracking
+list, and composing `ui_listbox` meant writing none of it twice.
 
 ## The Control Panel's applets are a registry table, not gui_apps
 
@@ -2754,6 +2768,52 @@ end state and needs geometry that only `start_menu` exposes today (see
 precise later -- the same order the compositor's other phases took. See
 `CHANGELOG.md`'s `[Unreleased]` damage-sweep entry for the reproducer
 and the two further bugs the change uncovered underneath it.
+
+## A dropdown's popup is a second draw call the app makes last, not a WM overlay
+
+`ui_dropdown`'s popup list is drawn by `ui_dropdown_draw_popup()`, which
+the app calls **after every other widget** -- not by `ui_dropdown_draw()`
+itself, and not through the WM's overlay machinery that the file picker,
+context menu and confirm dialog use.
+
+Drawing here is immediate-mode: z-order is call order, and there is no
+retained view tree to sort. A popup drawn from `ui_dropdown_draw()`
+would sit at whatever position the dropdown occupies in the app's draw
+sequence, and anything drawn after it would paint over the list. Hiding
+that inside one call would need a deferred-draw list this GUI doesn't
+have and doesn't otherwise want.
+
+Making it a WM overlay was the other candidate, and is what a real combo
+box does -- Windows' popup escapes its window entirely. It was rejected
+because those overlays are `apps/wm/` internals with WM-level modality,
+and a widget in `apps/ui/` reaching into them would invert the layering
+this directory is built on (see `apps/ui/ui_button.h`). The cost is
+real and is stated in the header: `wm_render_frame()` clips each app's
+`on_draw()` to its content rect, so the popup **cannot leave the
+window**. It flips above the box when there is no room below and shrinks
+to what is available otherwise; the scrollbar it inherits from
+`ui_listbox` is what keeps that acceptable rather than a truncation.
+
+Input is the mirror rule -- the popup is on top, so it gets first
+refusal, and an app forwards to the dropdown *before* the widgets
+underneath it. See `CHANGELOG.md`'s `[Unreleased]` entry for the
+worked example in UI Demo.
+
+## ui_listbox counts scroll from the top; ui_scrollbar counts from the bottom
+
+`ui_scrollbar.h`'s `scroll_offset` is 0 at the **bottom** (pinned to the
+newest line), increasing toward the oldest. That convention is right for
+the terminal scrollback it grew up alongside, and three callers depend
+on it. A list is the other way round: 0 is the first item.
+
+`ui_listbox` therefore works entirely in list coordinates and converts
+at the boundary, in two one-line helpers (`listbox_bar_offset()` /
+`listbox_top_from_bar()`) that are the only place the two conventions
+meet. Changing `ui_scrollbar` to a neutral orientation was the
+alternative; it was rejected because it would have touched Terminal,
+Notepad and `ui_textview` for the benefit of one new caller, and a
+silently-inverted scrollbar is a bug that looks like a rendering
+glitch rather than a logic error.
 
 ## GUI tests wait on the WM's queue depth, not on a sleep derived from frame rate
 
