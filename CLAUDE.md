@@ -148,7 +148,13 @@ technical conventions below:
   the frame allocator, which `apps/` can't reach), `wm_client.c` owns
   the window list, chrome, z-order and input routing, and they meet at
   a registered `struct win_server_ops` -- the same registry pattern as
-  `display_driver`.
+  `display_driver`. **A client draws with `userland/ugfx.c`**, not with
+  syscalls -- there is no drawing syscall and there shouldn't be, since
+  only the framebuffer is privileged, not drawing. The one thing a
+  client can't produce for itself is the font, which
+  `WIN_REQ_FONT` maps READ-ONLY out of the kernel's own tables rather
+  than copying (one instance in memory, and client text can't drift
+  from the desktop's when `font_size` changes).
 - **The window manager lives in `apps/wm/`** -- the core event
   loop/input/render split (`wm.c`/`wm_input.c`/`wm_render.c`, sharing
   state through `wm_internal.h`'s `extern`s) plus the pieces that grew
@@ -890,6 +896,19 @@ repeated manual steps to be worth automating:
   offsets in Python -- the Python copy drifts silently the moment a row
   is added to the app, which is exactly what happened when the dropdown
   and listbox rows landed mid-file.
+- **`uiclient_test.py`** -- drives `userland/uiclient.c`, the ring-3
+  client that renders real text with `userland/ugfx.c`, and asserts on
+  it (8 checks: text actually rendered, the button drew, a click and a
+  key each repaint, the unchanged label comes back identical, the close
+  handshake works). Two things it encodes: "text was rendered" is
+  asserted as INK COVERAGE in a band rather than a single-pixel sample
+  (a glyph run puts a countable number of non-background pixels in its
+  rows; a blank window and a solid fill are both distinguishable that
+  way), and **a client's `stdout` goes to the owning Terminal's
+  scrollback, not the serial console** -- so `DebugConsole.logs()`
+  can't see a client's own log lines even though a shell-spawned
+  process's are visible. Run it after touching `userland/ugfx.c` or
+  the font-sharing path.
 - **`winclient_test.py`** -- drives `userland/winclient.c`, the ring-3
   client that owns a real window on the desktop, and asserts the
   windowing protocol end to end (8 checks: the window appears in the

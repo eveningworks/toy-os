@@ -155,6 +155,7 @@ LSCPU_ELF = userland/lscpu.elf
 SPIN_TEST_ELF = userland/spin_test.elf
 EVENT_TEST_ELF = userland/event_test.elf
 WINCLIENT_ELF = userland/winclient.elf
+UICLIENT_ELF = userland/uiclient.elf
 
 # Which userland ELFs get seeded onto disk.img's /bin, and under what
 # name. The mapping is explicit because it isn't always mechanical --
@@ -200,7 +201,8 @@ SEED_TESTS = \
 	$(FPU_RACE_ELF):fpu_race \
 	$(SPIN_TEST_ELF):spin_test \
 	$(EVENT_TEST_ELF):event_test \
-	$(WINCLIENT_ELF):winclient
+	$(WINCLIENT_ELF):winclient \
+	$(UICLIENT_ELF):uiclient
 
 # Both lists together -- only USERLAND_ELVES below needs the union, so
 # it's derived rather than maintained as a third list.
@@ -330,6 +332,19 @@ $(BUILD)/userland/%.o: userland/%.c
 
 userland/%.elf: $(BUILD)/userland/%.o $(BUILD)/userland/stack_chk.o userland/link.ld
 	$(LD) -n -T userland/link.ld -nostdlib -o $@ $< $(BUILD)/userland/stack_chk.o
+
+# Window clients that draw with the userland graphics runtime
+# (userland/ugfx.c) link it in explicitly, via a rule that overrides the
+# pattern above for just those binaries.
+#
+# Deliberately NOT added to the pattern rule's common objects the way
+# stack_chk.o is: stack_chk.o is needed by every userland binary (GCC
+# emits references to it from any protected function), whereas ugfx.o is
+# wanted only by window clients -- and with no --gc-sections here, adding
+# it globally would link the whole font-rendering path into programs
+# like `hello` that never draw anything.
+userland/uiclient.elf: $(BUILD)/userland/uiclient.o $(BUILD)/userland/ugfx.o $(BUILD)/userland/stack_chk.o userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/uiclient.o $(BUILD)/userland/ugfx.o $(BUILD)/userland/stack_chk.o
 
 $(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(ASM_OBJECTS) $(C_OBJECTS)
