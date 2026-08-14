@@ -26,6 +26,7 @@
 #define ATA_PRIMARY_IRQ 14 // the primary IDE channel's fixed legacy IRQ line
 
 #define REG_DATA        (ATA_PRIMARY_IO + 0)
+#define REG_FEATURES    (ATA_PRIMARY_IO + 1)
 #define REG_SECCOUNT    (ATA_PRIMARY_IO + 2)
 #define REG_LBA_LOW     (ATA_PRIMARY_IO + 3)
 #define REG_LBA_MID     (ATA_PRIMARY_IO + 4)
@@ -44,6 +45,11 @@
 #define CMD_WRITE_DMA     0xCA
 #define CMD_CACHE_FLUSH   0xE7
 #define CMD_IDENTIFY      0xEC
+// DATA SET MANAGEMENT. With the TRIM bit set in the Features register it
+// tells the drive "these LBA ranges no longer hold data you need to
+// keep" -- see ata_trim() below.
+#define CMD_DATA_SET_MGMT 0x06
+#define DSM_FEATURE_TRIM  0x01
 
 // Bounded retry counts, not infinite loops -- if there's genuinely no
 // drive attached (very possible: this is a hobby OS, most runs won't
@@ -52,6 +58,8 @@
 #define ATA_POLL_LIMIT 100000
 
 static int g_present = 0;
+// IDENTIFY word 169 bit 0 -- see ata_trim() at the end of this file.
+static int g_trim_supported = 0;
 
 // Total addressable sectors, from IDENTIFY words 60-61 (the 28-bit LBA
 // capacity field) -- 0 if unknown, which is what every caller treats as
@@ -879,6 +887,10 @@ void ata_init(void) {
     uint16_t identify[256];
     for (int i = 0; i < 256; i++) identify[i] = inw(REG_DATA);
     g_sector_count = (uint32_t)identify[60] | ((uint32_t)identify[61] << 16);
+    // Word 169 bit 0: the drive supports DATA SET MANAGEMENT's TRIM bit.
+    // Asked rather than assumed -- issuing an unsupported command gets
+    // an ABRT and, on some real controllers, a wedged channel.
+    g_trim_supported = (identify[169] & 0x0001) != 0;
 
     g_present = 1;
 
@@ -889,6 +901,10 @@ void ata_init(void) {
 
 int ata_present(void) {
     return g_present;
+}
+
+int ata_trim_supported(void) {
+    return g_present && g_trim_supported;
 }
 
 uint32_t ata_sector_count(void) {
@@ -1018,5 +1034,111 @@ int ata_dma_nonblocking_selftest(uint32_t lba, uint32_t *out_polls) {
     if (r != ATA_POLL_DONE) return 0;
 
     if (k_memcmp(via_blocking, via_poll, ATA_SECTOR_SIZE) != 0) return 0;
+    return 1;
+}
+
+// ---------------------------------------------------------------------
+// TRIM (DATA SET MANAGEMENT)
+// ---------------------------------------------------------------------
+//
+// Tells the drive that an LBA range no longer holds data worth keeping.
+// On real SSDs that's what keeps write amplification down; here the
+// drive is QEMU backed by a host file, and with `discard=unmap` on the
+// -drive line QEMU turns it into a hole punch -- so a toy-os `rm` gives
+// the space back to the host filesystem instead of the image growing
+// forever.
+//
+// **Why this matters here.** The image is created sparse (`truncate -s
+// 9G`) and costs nothing at first, but sparseness is only ever LOST: a
+// block written once stays allocated on the host even after the file
+// that owned it is deleted. Measured before this existed: 8.1 GiB
+// actually allocated against 2.3 MiB the filesystem considered in use.
+// tools/tfs2_writer.py's `trim` is the host-side reclaim for images in
+// that state; this is the half that stops them getting there.
+//
+// **It must go out over DMA, not PIO.** DATA SET MANAGEMENT looks like
+// an ordinary PIO data-out command in the spec, and the first version
+// here sent it that way: the drive accepted the command, returned no
+// error, and nothing whatsoever was discarded. QEMU implements DSM as a
+// DMA command (hw/ide/core.c dispatches it through
+// ide_sector_start_dma() with IDE_DMA_TRIM), so the range list has to
+// arrive by bus-master transfer. Over PIO it never arrives at all, and
+// the "success" is the drive acknowledging a command whose payload it
+// is still waiting for. That failure is completely silent from the
+// guest side -- worth knowing before trusting any DSM return value.
+//
+// The payload is a 512-byte block of 8-byte range entries: a 48-bit
+// starting LBA in the low 6 bytes, then a 16-bit sector count. A zero
+// count terminates the list, which is why the buffer is zeroed first.
+#define DSM_ENTRIES_PER_BLOCK (ATA_SECTOR_SIZE / 8)
+#define DSM_MAX_RANGE 0xFFFF // a single entry's 16-bit sector count
+
+// Issues one already-built descriptor block. Mirrors dma_issue()/
+// dma_finish() rather than calling them, because those hardcode
+// READ/WRITE DMA and their own LBA/count semantics -- DSM's Sector
+// Count register means "how many 512-byte DESCRIPTOR blocks follow",
+// and its LBA registers are unused.
+static int dsm_send_block(const uint8_t *block) {
+    if (!g_dma_buf || !g_prd) return 0; // DMA never came up; no PIO fallback exists for DSM
+
+    for (uint32_t i = 0; i < ATA_SECTOR_SIZE; i++) g_dma_buf[i] = block[i];
+
+    g_prd->base = (uint32_t)g_dma_buf_phys;
+    g_prd->count = (uint16_t)ATA_SECTOR_SIZE;
+    g_prd->flags = PRD_EOT;
+
+    outl(g_bm_io + BM_PRDT, (uint32_t)g_prd_phys);
+    outb(g_bm_io + BM_STATUS, BM_STATUS_ERROR | BM_STATUS_IRQ); // W1C stale bits
+    outb(g_bm_io + BM_CMD, 0); // direction: memory -> device, same as a write
+
+    if (!wait_not_busy()) return 0;
+    outb(REG_FEATURES, DSM_FEATURE_TRIM);
+    outb(REG_SECCOUNT, 1); // one 512-byte descriptor block
+    outb(REG_LBA_LOW, 0);  // unused by DSM, and required to be zero
+    outb(REG_LBA_MID, 0);
+    outb(REG_LBA_HIGH, 0);
+    outb(REG_DRIVE_HEAD, 0xE0); // LBA mode, master
+    outb(REG_COMMAND, CMD_DATA_SET_MGMT);
+
+    g_dma_irq_fired = 0;
+    outb(g_bm_io + BM_CMD, BM_CMD_START);
+
+    int ok = wait_dma_irq();
+    outb(g_bm_io + BM_CMD, 0);
+    uint8_t bm_status = inb(g_bm_io + BM_STATUS);
+    outb(g_bm_io + BM_STATUS, BM_STATUS_ERROR | BM_STATUS_IRQ);
+    uint8_t st = inb(REG_STATUS); // also acknowledges the drive's IRQ line
+
+    if (!ok || (bm_status & BM_STATUS_ERROR) || (st & STATUS_ERR)) return 0;
+    return 1;
+}
+
+int ata_trim(uint32_t lba, uint32_t count) {
+    if (!ata_trim_supported() || count == 0) return 0;
+    if (!lba_range_ok(lba, (int)count)) return 0;
+
+    uint8_t block[ATA_SECTOR_SIZE];
+    while (count > 0) {
+        for (int i = 0; i < ATA_SECTOR_SIZE; i++) block[i] = 0;
+
+        int n = 0;
+        while (count > 0 && n < DSM_ENTRIES_PER_BLOCK) {
+            uint32_t chunk = count > DSM_MAX_RANGE ? DSM_MAX_RANGE : count;
+            uint8_t *e = &block[n * 8];
+            e[0] = (uint8_t)(lba & 0xFF);
+            e[1] = (uint8_t)((lba >> 8) & 0xFF);
+            e[2] = (uint8_t)((lba >> 16) & 0xFF);
+            e[3] = (uint8_t)((lba >> 24) & 0xFF);
+            e[4] = 0; // this driver is 28-bit LBA throughout; the top
+            e[5] = 0; // 16 bits of the 48-bit field are always zero
+            e[6] = (uint8_t)(chunk & 0xFF);
+            e[7] = (uint8_t)((chunk >> 8) & 0xFF);
+            lba += chunk;
+            count -= chunk;
+            n++;
+        }
+
+        if (!dsm_send_block(block)) return 0;
+    }
     return 1;
 }

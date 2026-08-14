@@ -749,6 +749,86 @@ def cmd_sync(args):
 # ---- corrupt (fault injection, for testing the kernel's `fsck`) ----
 
 
+def cmd_trim(args):
+    """Return every free block's disk space to the host.
+
+    THE PROBLEM THIS SOLVES. The image is created with `truncate -s 9G`,
+    so it starts as a sparse file costing nothing. But sparseness is only
+    ever LOST: a block written once stays allocated on the host forever,
+    even after toy-os deletes the file that owned it. TFS2's bitmap says
+    the block is free; the host has never been told. Measured on the
+    development image: 8.1 GiB actually allocated, against 581 blocks
+    (2.3 MiB) that TFS2 considered in use -- 99.97% of it was the
+    leftovers of one past `stress` run.
+
+    That is exactly the gap TRIM/discard closes on real hardware, and
+    this is the host-side half of it: read the filesystem's own
+    allocation bitmap, and punch a hole (FALLOC_FL_PUNCH_HOLE) through
+    every run of free blocks. Nothing the filesystem considers live is
+    touched, so it is safe to run on an image with real files on it.
+
+    The guest-side half -- TFS2 issuing ATA TRIM as it frees blocks, so
+    space comes back without any host tool -- is the kernel's job; see
+    kernel/drivers/ata.c's ata_trim(). This tool stays useful regardless:
+    it reclaims images written before that existed, and images grown by
+    the host-side seeding path which never goes through the kernel.
+    """
+    import ctypes
+
+    FALLOC_FL_KEEP_SIZE = 0x01
+    FALLOC_FL_PUNCH_HOLE = 0x02
+
+    with Image(args.disk, dry_run=True) as img:
+        bitmap = img.bitmap
+        total = FS_DISK_TOTAL_BLOCKS
+        used = sum(bin(b).count("1") for b in bitmap)
+
+        # Coalesce free blocks into runs before punching: one syscall per
+        # run instead of per block, which for a mostly-empty 9 GiB image
+        # is a handful of calls rather than 2.3 million.
+        runs, start = [], None
+        for b in range(DATA_START_BLOCK, total):
+            if not (bitmap[b // 8] >> (b % 8)) & 1:
+                if start is None:
+                    start = b
+            elif start is not None:
+                runs.append((start, b))
+                start = None
+        if start is not None:
+            runs.append((start, total))
+
+    before = os.stat(args.disk).st_blocks * 512
+    freeable = sum(e - s for s, e in runs) * BLOCK
+    print(f"{args.disk}: {total:,} blocks total, {used:,} in use "
+          f"({used * BLOCK / 2**20:.2f} MiB)")
+    print(f"  allocated on host now : {before / 2**30:.3f} GiB")
+    print(f"  free blocks in {len(runs)} run(s): {freeable / 2**30:.3f} GiB reclaimable")
+
+    if args.dry_run:
+        print("  (dry run -- nothing punched)")
+        return
+
+    libc = ctypes.CDLL("libc.so.6", use_errno=True)
+    fd = os.open(args.disk, os.O_RDWR)
+    try:
+        for s_blk, e_blk in runs:
+            off = s_blk * BLOCK
+            length = (e_blk - s_blk) * BLOCK
+            rc = libc.fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
+                                 ctypes.c_longlong(off), ctypes.c_longlong(length))
+            if rc != 0:
+                err = ctypes.get_errno()
+                raise RuntimeError(
+                    f"fallocate(PUNCH_HOLE) failed at block {s_blk} with errno {err} "
+                    "-- the host filesystem may not support hole punching")
+    finally:
+        os.close(fd)
+
+    after = os.stat(args.disk).st_blocks * 512
+    print(f"  allocated on host after: {after / 2**30:.3f} GiB "
+          f"(reclaimed {(before - after) / 2**30:.3f} GiB)")
+
+
 def cmd_corrupt(args):
     """Injects a specific, known inconsistency into an image so the
     kernel's `fsck` can be tested against a disk whose exact damage is
@@ -952,6 +1032,13 @@ def main():
     p_cp.add_argument("--force", action="store_true", help="overwrite dst if it exists")
     p_cp.add_argument("--dry-run", action="store_true")
     p_cp.set_defaults(func=cmd_cp)
+
+    p_trim = sub.add_parser(
+        "trim", help="punch holes for every free block, returning the space to the host")
+    p_trim.add_argument("disk")
+    p_trim.add_argument("--dry-run", action="store_true",
+                         help="report what would be reclaimed, punch nothing")
+    p_trim.set_defaults(func=cmd_trim)
 
     p_corrupt = sub.add_parser(
         "corrupt", help="inject a known inconsistency (for testing the kernel's `fsck`)"

@@ -38,7 +38,8 @@ def launch(iso, disk, qemu_log):
     cmd = [
         "qemu-system-x86_64",
         "-cdrom", iso,
-        "-drive", f"file={disk},format=raw,if=ide",
+        # discard=unmap -- see kernel/drivers/ata.c's ata_trim().
+        "-drive", f"file={disk},format=raw,if=ide,discard=unmap",
         "-m", "256",
         "-display", "none",
         # COM1 as a listening socket instead of a file: this script has

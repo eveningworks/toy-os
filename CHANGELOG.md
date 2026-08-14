@@ -31,6 +31,40 @@ using `## [x.y.z] - date` headings is here.
 ## [Unreleased]
 
 ### Added
+- **Thin provisioning that actually holds: ATA TRIM, and a host-side
+  reclaim tool.** `disk.img` is created with `truncate -s 9G` and costs
+  nothing up front, but sparseness is only ever LOST -- a block written
+  once stays allocated on the host even after toy-os deletes the file
+  that owned it. Measured on the development image: **8.1 GiB actually
+  allocated against 581 blocks (2.3 MiB) the filesystem considered in
+  use**, with `fsck` reporting completely clean, because it was. Nothing
+  had leaked inside the filesystem; the space simply never went back.
+
+  Both halves now exist:
+  - **`ata_trim()`** (`kernel/drivers/ata.c`), issued from
+    `free_block()` as blocks are freed, plus `discard=unmap` on every
+    QEMU `-drive` line in the Makefile and all five launchers. QEMU
+    turns the guest's TRIM into a hole punch, so an `rm` inside toy-os
+    gives space back with no host tool involved. Support is read from
+    IDENTIFY word 169 rather than assumed, and the result is
+    deliberately ignored by the filesystem: TRIM is an optimisation, and
+    a drive that refuses one must not turn a successful delete into a
+    failed one.
+  - **`tools/tfs2_writer.py trim`** reads the allocation bitmap and
+    punches holes through every run of free blocks, for images already
+    in that state and for the host-side seeding path that never boots
+    the kernel. Non-destructive -- only blocks the filesystem already
+    considers free are touched.
+
+  Measured after: `stress 150` writes 150 MB, verifies it, deletes it,
+  and the image is **unchanged at 2.3 MiB**, `fsck` clean. That run used
+  to cost 150 MB of host disk permanently. The repository's own image
+  went from 8.1 GiB to 2.3 MiB in one `trim`, with fsck, `check_layout`
+  and every file on it identical afterwards.
+
+  `ata` reports TRIM support alongside DMA, since whether the drive
+  takes it decides whether deleting a file gives space back to the host
+  or only to the filesystem.
 - **Keyboard focus (`apps/ui/ui_focus.h`)** -- one ring per window, Tab
   and Shift-Tab to cycle it, a focus ring to show it, and keys routed to
   the focused widget. A widget joins by exporting a single
@@ -2293,6 +2327,14 @@ using `## [x.y.z] - date` headings is here.
   as the active selection.
 
 ### Fixed
+- **`free_block()` now bounds-checks against the end of the disk.**
+  `bit_set()` indexes `g_bitmap[b / 8]` with no bound of its own, so an
+  out-of-range block number would be a wild write into the kernel heap
+  rather than a wrong bit. Defensive rather than a fix for an observed
+  bug -- no caller is known to pass one, and the out-of-range values
+  seen while this change was being made turned out to be a broken TRIM
+  desyncing the drive, not a real bad pointer. Kept because the cost is
+  one compare and the failure mode is silent heap corruption.
 - **Every remaining control that didn't follow `docs/gui-guidelines.md`.**
   An audit prompted by a report that the Shutdown dialog's Yes/No
   "won't react anyway graphically" -- which was true, and less cosmetic

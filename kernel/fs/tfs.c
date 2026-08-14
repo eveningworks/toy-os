@@ -433,9 +433,36 @@ static void free_block(uint32_t b) {
     if (b == 0) return; // null sentinel, never a real allocation
     if (g_disk_backed) {
         if (b < FS_DATA_START_BLOCK) return; // never free reserved metadata blocks
+        // ...and never past the end of the disk. bit_set() indexes
+        // g_bitmap[b / 8] with no bound of its own, so an out-of-range
+        // block number here would be a WILD WRITE into the kernel heap
+        // rather than merely a wrong bit -- a value of 352,979,720 lands
+        // ~44 MB past a bitmap only ~288 KB long.
+        //
+        // Defensive, not a fix for an observed bug: no caller is known
+        // to pass one. Values like that DID appear while this file was
+        // being changed, but the cause turned out to be a broken TRIM
+        // implementation desyncing the drive (see ata.c's note on DSM
+        // needing DMA), not a real bad pointer -- and with that fixed
+        // they stopped. Kept anyway, because the cost is one compare and
+        // the failure mode it prevents is silent heap corruption.
+        // fsck's "out-of-range pointers" check covers the same class of
+        // garbage but only runs when asked.
+        if (b >= g_total_blocks) return;
         bit_set(g_bitmap, b, 0);
         persist_bitmap_bit(b);
         if (b < g_bitmap_scan_hint) g_bitmap_scan_hint = b;
+        // Tell the drive the block is dead, so the space can actually
+        // come back. Without this an image is sparse only until
+        // something writes to it once: the bitmap bit clears, the host
+        // never hears, and the file only ever grows. Measured before
+        // this existed -- 8.1 GiB allocated against 2.3 MiB in use.
+        //
+        // Deliberately ignoring the result. TRIM is an optimisation:
+        // the block IS free either way, and a drive that refuses (or
+        // doesn't support it at all -- ata_trim() answers 0 then) must
+        // not turn a successful delete into a failed one.
+        (void)ata_trim(b * FS_BLOCK_SECTORS, FS_BLOCK_SECTORS);
     } else {
         if (b >= RAM_ONLY_MAX_BLOCKS) return;
         bit_set(g_ram_bitmap, b, 0);

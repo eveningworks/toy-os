@@ -879,7 +879,18 @@ repeated manual steps to be worth automating:
   optional `--out` diff-highlight image, for catching a rendering
   regression manual eyeballing might miss.
 - **`tfs2_writer.py`** -- host-side TFS2 v3 read/write tool: get files
-  onto (or off of) `disk.img` without booting toy-os. `format`
+  onto (or off of) `disk.img` without booting toy-os. **`trim` returns
+  every free block's space to the host** by punching holes through them
+  -- run it if `du disk.img` ever looks large. The image is sparse when
+  created and only ever loses that: a block written once stays allocated
+  on the host even after toy-os deletes the file that owned it, and the
+  dev image had reached 8.1 GiB actually allocated against 2.3 MiB in
+  use before this existed. The kernel issues ATA TRIM as it frees blocks
+  now (`ata_trim()`, plus `discard=unmap` on every `-drive` line), which
+  stops new images getting there; `trim` is for images already in that
+  state, and for the host-side seeding path, which never boots the
+  kernel. Non-destructive: only blocks the filesystem already considers
+  free are touched. `format`
   initializes a blank/foreign image as an empty TFS2 v3 filesystem
   (mirrors `tfs_init()`'s format path byte-for-byte); `write`/`read`
   for a single file; `ls` for a directory listing; `sync <seed-dir>` to
@@ -923,8 +934,11 @@ repeated manual steps to be worth automating:
   boots with `make run`'s same device/display flags. When cutting a
   release: rebuild `disk.img` fresh (`make clean-disk` first), then
   `gzip -k -9 disk.img` before attaching it -- it's a large SPARSE file
-  (~9GB apparent, actual data much smaller), and GitHub's 2GB-per-asset
-  limit plus plain bandwidth sense both rule out the raw file. See
+  (9GB apparent, ~2MB of real data on a freshly-trimmed image), and
+  GitHub's 2GB-per-asset limit plus plain bandwidth sense both rule out
+  the raw file. Run `tools/tfs2_writer.py trim disk.img` before gzipping
+  -- sparseness is only ever lost, and an untrimmed image compresses
+  whatever stale data it is still carrying. See
   `docs/decisions.md`'s versioning entry for the full v0.0.9 writeup.
 
 Add new tools here freely when something would save a future session

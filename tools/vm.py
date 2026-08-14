@@ -76,7 +76,9 @@ def cmd_start(args):
     cmd = [
         "qemu-system-x86_64",
         "-cdrom", args.iso,
-        "-drive", f"file={args.disk},format=raw,if=ide",
+        # discard=unmap turns the guest's ATA TRIM into a hole punch in the
+        # backing file -- see kernel/drivers/ata.c's ata_trim().
+        "-drive", f"file={args.disk},format=raw,if=ide,discard=unmap",
         "-m", "256",
     ]
     if args.kvm:

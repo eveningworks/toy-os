@@ -443,10 +443,10 @@ iso: version $(KERNEL) $(USERLAND_ELVES) seed
 # re-runs grub-mkrescue, which is a couple of seconds.
 run-menu:
 	@$(MAKE) --no-print-directory GRUB_TIMEOUT=5 iso
-	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -vga std -display sdl,grab-mod=rctrl -m 256
+	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide,discard=unmap -serial stdio -vga std -display sdl,grab-mod=rctrl -m 256
 
 run: iso $(DISK_IMG)
-	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -vga std -display sdl,grab-mod=rctrl -m 256
+	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide,discard=unmap -serial stdio -vga std -display sdl,grab-mod=rctrl -m 256
 
 # Same as `run`, but on the VMware SVGA II adapter, which has a HARDWARE
 # MOUSE CURSOR -- kernel/drivers/vmsvga.c detects it, takes the display
@@ -462,7 +462,7 @@ run: iso $(DISK_IMG)
 # would stop seeing the pointer. Use `run` for anything you intend to
 # screenshot; use this to see the cursor the adapter draws.
 run-vmware: iso $(DISK_IMG)
-	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -vga vmware -display sdl,grab-mod=rctrl -m 256
+	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide,discard=unmap -serial stdio -vga vmware -display sdl,grab-mod=rctrl -m 256
 
 # Same as `run`, but with KVM hardware virtualization instead of QEMU's
 # TCG software emulation -- guest instructions run natively on the host
@@ -483,7 +483,7 @@ run-vmware: iso $(DISK_IMG)
 # can get SLOWER here. Any throughput figure recorded in CHANGELOG.md
 # should say which of the two it came from; they aren't comparable.
 run-kvm: iso $(DISK_IMG)
-	qemu-system-x86_64 -enable-kvm -cpu host -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -vga std -display sdl,grab-mod=rctrl -m 256
+	qemu-system-x86_64 -enable-kvm -cpu host -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide,discard=unmap -serial stdio -vga std -display sdl,grab-mod=rctrl -m 256
 
 # Same as `run`, plus a PulseAudio backend wired to the PC speaker
 # (kernel/drivers/speaker.c's `beep`, Milestone 19 -- see
@@ -500,7 +500,7 @@ run-kvm: iso $(DISK_IMG)
 # itself since the right backend is host-specific, not something safe
 # to assume by default.
 run-audio: iso $(DISK_IMG)
-	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -vga std -display sdl,grab-mod=rctrl -m 256 -audiodev pa,id=snd0 -machine pcspk-audiodev=snd0
+	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide,discard=unmap -serial stdio -vga std -display sdl,grab-mod=rctrl -m 256 -audiodev pa,id=snd0 -machine pcspk-audiodev=snd0
 
 # -s: shorthand for -gdb tcp::1234 -- QEMU's own built-in GDB remote
 #   stub, exposed on the standard GDB-over-QEMU port. Emulates the CPU
@@ -516,10 +516,10 @@ run-audio: iso $(DISK_IMG)
 #   "target remote localhost:1234"`, then `continue` (or `break
 #   kernel_main` first if you want to stop right at kernel entry).
 debug: iso $(DISK_IMG)
-	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -vga std -display sdl,grab-mod=rctrl -m 256 -s -S
+	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide,discard=unmap -serial stdio -vga std -display sdl,grab-mod=rctrl -m 256 -s -S
 
 run-nographic: iso $(DISK_IMG)
-	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide -serial stdio -display none -m 256
+	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide,discard=unmap -serial stdio -display none -m 256
 
 # Runs the in-kernel test suite and turns it into an exit code: boots
 # headless, drives `ktest` over the serial debug console, exits non-zero

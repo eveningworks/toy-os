@@ -53,7 +53,7 @@ fi
 echo "starting toy-os (right Ctrl releases the mouse once grabbed)..."
 exec qemu-system-x86_64 \
     -cdrom "$ISO" \
-    -drive file="$DISK",format=raw,if=ide \
+    -drive file="$DISK",format=raw,if=ide,discard=unmap \
     -serial stdio \
     -vga std \
     -display sdl,grab-mod=rctrl \

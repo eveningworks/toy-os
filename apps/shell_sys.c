@@ -1318,6 +1318,12 @@ void cmd_ata(const char *args) {
         }
         vga_write("\n  max sectors/transfer: ");
         vga_write_dec((uint32_t)ata_max_sectors_per_xfer());
+        // Whether the drive accepts TRIM decides whether deleting a file
+        // gives space back to the host image or only to this filesystem
+        // (see ata.h's ata_trim()), so it belongs in the same one-glance
+        // status as DMA.
+        vga_write("\n  TRIM (DATA SET MANAGEMENT): ");
+        vga_write(ata_trim_supported() ? "supported" : "not advertised by this drive");
         vga_putc('\n');
         return;
     }

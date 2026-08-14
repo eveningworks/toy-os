@@ -147,7 +147,10 @@ def launch_qemu_cmd(iso="toy-os.iso", disk="disk.img", serial_log="serial.log",
     a display head without needing an actual VNC client to connect.
     """
     return (
-        f"qemu-system-x86_64 -cdrom {iso} -drive file={disk},format=raw,if=ide "
+        f"qemu-system-x86_64 -cdrom {iso} "
+        # discard=unmap: the guest's ATA TRIM becomes a hole punch in the
+        # backing file, so a test that writes and deletes doesn't grow it.
+        f"-drive file={disk},format=raw,if=ide,discard=unmap "
         f"-vga std -m 256 -serial file:{serial_log} "
         f"-qmp tcp:127.0.0.1:{qmp_port},server,nowait -vnc :{vnc_display} "
         f"-daemonize -pidfile {pidfile}"

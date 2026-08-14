@@ -93,3 +93,27 @@ KTEST("ata", "forcing PIO is refused mid-transfer, and reported") {
     KTEST_ASSERT(ata_set_dma_forced_off(0) == 1);
     KTEST_ASSERT(ata_dma_active() == ata_dma_hardware_available());
 }
+
+KTEST("ata", "TRIM refuses what it cannot safely discard") {
+    // Deliberately only the REFUSAL paths. A test that actually trimmed
+    // a range would be discarding real blocks of the live filesystem
+    // this kernel is running from -- the tests run inside the booted
+    // system (see CLAUDE.md), so there is no scratch region to aim at.
+    // What can be asserted safely is that ata_trim() rejects the inputs
+    // that would do damage, which is the part with branches in it.
+    KTEST_ASSERT_EQ(ata_trim(0, 0), 0);           // empty range: nothing to do
+
+    uint32_t sectors = ata_sector_count();
+    if (sectors) {
+        // Past the end of the drive, and straddling the end. Both must
+        // be refused rather than clamped: a clamped discard would silently
+        // trim a different range than the caller asked for.
+        KTEST_ASSERT_EQ(ata_trim(sectors, 8), 0);
+        KTEST_ASSERT_EQ(ata_trim(sectors - 4, 8), 0);
+    }
+
+    // And the capability answer is consistent with the drive being there
+    // at all -- ata_trim_supported() must never claim support with no
+    // drive, since every caller uses it to decide whether to bother.
+    if (!ata_present()) KTEST_ASSERT_EQ(ata_trim_supported(), 0);
+}

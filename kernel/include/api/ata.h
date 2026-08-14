@@ -57,6 +57,25 @@ void ata_init(void);
 // never conflicts with this).
 int ata_present(void);
 
+// Does this drive accept DATA SET MANAGEMENT with the TRIM bit
+// (IDENTIFY word 169 bit 0)? Asked rather than assumed, because issuing
+// an unsupported command earns an ABRT and, on some real controllers, a
+// wedged channel.
+int ata_trim_supported(void);
+
+// Tell the drive that `count` sectors from `lba` no longer hold data
+// worth keeping. Returns 1 on success, 0 if unsupported, out of range,
+// or the drive reported an error -- and a 0 is never fatal to the
+// caller: TRIM is an optimisation, and a filesystem that couldn't issue
+// one has still freed the block perfectly well.
+//
+// Why a hobby OS wants this: with `discard=unmap` on QEMU's -drive line
+// this becomes a hole punch in the backing file, so deleting a file
+// inside toy-os gives the space back to the host instead of the image
+// growing forever. Without it, an image is sparse only until something
+// writes to it once. See ata.c's own comment for the measured numbers.
+int ata_trim(uint32_t lba, uint32_t count);
+
 // 1 if the Bus-Master DMA path is active (see this header's top
 // comment), 0 if every transfer is going through the PIO fallback --
 // diagnostic only, no caller needs to branch on this (both paths

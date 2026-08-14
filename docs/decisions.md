@@ -54,6 +54,8 @@ there when you add an entry, or the index quietly stops being one.
 - [An unreadable superblock is not a foreign disk -- refuse to format, don't guess](#an-unreadable-superblock-is-not-a-foreign-disk----refuse-to-format-dont-guess)
 - [Metadata ordering: persist the record first, free the blocks second -- prefer a leak to a double-allocation](#metadata-ordering-persist-the-record-first-free-the-blocks-second----prefer-a-leak-to-a-double-allocation)
 - [`fsck` reclaims leaks and marks stragglers, but never resolves a double-allocation](#fsck-reclaims-leaks-and-marks-stragglers-but-never-resolves-a-double-allocation)
+- [Thin provisioning: the image is sparse at birth, and TRIM is what keeps it that way](#thin-provisioning-the-image-is-sparse-at-birth-and-trim-is-what-keeps-it-that-way)
+- [ATA DATA SET MANAGEMENT must be issued over DMA, not PIO](#ata-data-set-management-must-be-issued-over-dma-not-pio)
 - [Zero-filling a freshly allocated block is skipped only when the caller overwrites it whole](#zero-filling-a-freshly-allocated-block-is-skipped-only-when-the-caller-overwrites-it-whole)
 
 **Drivers & hardware**
@@ -311,6 +313,66 @@ any future driver wanting to block inside a syscall-reachable code
 path (a NIC's TX/RX ring, say) needs this same check, not a
 driver-specific reinvention. See `idt.h`'s doc comments and
 CHANGELOG-archive-2.md's **Build 470** for the full writeup.
+
+## Thin provisioning: the image is sparse at birth, and TRIM is what keeps it that way
+
+`disk.img` is created with `truncate -s 9G`, so it costs nothing up
+front. But sparseness is only ever LOST: a block written once stays
+allocated on the host forever, even after toy-os deletes the file that
+owned it. The bitmap bit clears, the host is never told, and the file
+only grows.
+
+Measured on the development image before any of this existed: **8.1 GiB
+actually allocated against 581 blocks (2.3 MiB) that TFS2 considered in
+use** -- 99.97% of it the leftovers of past `stress` runs. `fsck`
+reported the filesystem completely clean, because it was: nothing had
+leaked *inside* the filesystem, the space simply never went back to the
+host. That is the whole problem in one sentence, and it is why "the
+image is sparse" was true and useless at the same time.
+
+Both halves of the fix exist, deliberately:
+
+- **`tools/tfs2_writer.py trim`** reads the allocation bitmap and
+  punches holes (`FALLOC_FL_PUNCH_HOLE`) through every run of free
+  blocks. It reclaims images that are already in that state, and covers
+  the host-side seeding path, which never goes through the kernel at
+  all. Non-destructive: only blocks the filesystem already considers
+  free are touched.
+- **`ata_trim()`**, issued from `free_block()` (`kernel/fs/tfs.c`) as
+  blocks are freed, with `discard=unmap` on every QEMU `-drive` line.
+  QEMU turns the guest's TRIM into a hole punch, so an `rm` inside
+  toy-os gives the space back with no host tool involved.
+
+The result is measurable: `stress 150` writes 150 MB, verifies it,
+deletes it, and the image is unchanged at 2.3 MiB. Before, that run cost
+150 MB of host disk permanently.
+
+The kernel deliberately ignores `ata_trim()`'s result. TRIM is an
+optimisation -- the block is free either way, and a drive that refuses
+it (or doesn't support it, which `ata_trim_supported()` answers from
+IDENTIFY word 169) must not turn a successful delete into a failed one.
+
+## ATA DATA SET MANAGEMENT must be issued over DMA, not PIO
+
+DSM (the TRIM command) reads like an ordinary PIO data-out command in
+the spec: set the TRIM bit in Features, put the descriptor-block count
+in Sector Count, write 512 bytes of LBA ranges. The first implementation
+here did exactly that, and it **silently did nothing** -- the drive
+accepted the command, raised no error, returned success, and not one
+byte was discarded.
+
+QEMU dispatches DSM through `ide_sector_start_dma()` with
+`IDE_DMA_TRIM` (`hw/ide/core.c`), so the range list has to arrive by
+bus-master transfer. Over PIO it never arrives; the "success" is the
+drive acknowledging a command whose payload it is still waiting for.
+
+Worse, the half-issued command leaves the channel desynced, and the
+next few ATA commands return garbage. That is what produced a burst of
+`ata: refusing transfer past end of drive` complaints with absurd LBAs
+and a `stress` run that leaked all 10,237 of its blocks -- neither of
+which was a filesystem bug at all. Worth knowing before trusting any
+DSM return value, and a good reminder that "the command succeeded" and
+"the command did something" are different claims.
 
 ## DMA needs PCI Bus Master Enable, not just a programmed descriptor
 

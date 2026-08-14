@@ -80,7 +80,9 @@ def launch_qemu(iso, disk, serial_log, qemu_log):
     cmd = [
         "qemu-system-x86_64",
         "-cdrom", iso,
-        "-drive", f"file={disk},format=raw,if=ide",
+        # discard=unmap: the guest's ATA TRIM (kernel/drivers/ata.c) becomes a
+        # hole punch in the backing file, so the image stops growing forever.
+        "-drive", f"file={disk},format=raw,if=ide,discard=unmap",
         "-m", "256",
         "-display", "none",
         "-serial", f"file:{serial_log}",
