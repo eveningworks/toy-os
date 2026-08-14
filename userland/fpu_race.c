@@ -25,30 +25,18 @@
 //
 // Usage: fpu_race <seed>   (seed 1 and seed 2 are what `fputest` runs)
 #include <stdint.h>
-#include "syscall_abi.h"
+#include "sys.h"
 
-static inline int64_t syscall2(uint64_t num, uint64_t arg1, uint64_t arg2) {
-    int64_t ret;
-    __asm__ volatile ("int $0x80" : "=a"(ret) : "a"(num), "D"(arg1), "S"(arg2) : "memory");
-    return ret;
-}
 
-static inline int64_t syscall3(uint64_t num, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
-    int64_t ret;
-    __asm__ volatile ("int $0x80" : "=a"(ret) : "a"(num), "D"(arg1), "S"(arg2), "d"(arg3) : "memory");
-    return ret;
-}
 
-static inline void sys_exit(int code) __attribute__((noreturn));
-static inline void sys_exit(int code) {
-    syscall2(SYS_EXIT, (uint64_t)(int64_t)code, 0);
-    for (;;) { }
-}
+
+
+
 
 static void puts_(const char *s) {
     uint64_t n = 0;
     while (s[n]) n++;
-    syscall3(SYS_WRITE, 1, (uint64_t)(uintptr_t)s, n);
+    sys_call(SYS_WRITE, 1, (uint64_t)(uintptr_t)s, n);
 }
 
 #define ACCS 8
@@ -73,7 +61,7 @@ static double expected[ACCS];
 // across real preemptions, not to compute the answer quickly.
 static volatile double step = 0.5;
 
-void _start(int argc, char **argv) {
+int main(int argc, char **argv) {
     int seed = 1;
     if (argc > 1 && argv[1] && argv[1][0] >= '0' && argv[1][0] <= '9') {
         seed = argv[1][0] - '0';

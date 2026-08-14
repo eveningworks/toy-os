@@ -15,22 +15,11 @@
 // (a supervisor-only protection violation, not "unmapped entirely") the
 // same way a real null/wild pointer bug would in any ring-3 program.
 #include <stdint.h>
-#include "syscall_abi.h"
+#include "sys.h"
 
-static inline int64_t syscall3(uint64_t num, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
-    int64_t ret;
-    __asm__ volatile (
-        "int $0x80"
-        : "=a"(ret)
-        : "a"(num), "D"(arg1), "S"(arg2), "d"(arg3)
-        : "memory"
-    );
-    return ret;
-}
 
-static inline int64_t sys_write(int fd, const char *buf, uint64_t len) {
-    return syscall3(SYS_WRITE, (uint64_t)fd, (uint64_t)(uintptr_t)buf, len);
-}
+
+
 
 static uint64_t my_strlen(const char *s) {
     uint64_t n = 0;
@@ -42,7 +31,7 @@ static void put(const char *s) {
     sys_write(1, s, my_strlen(s));
 }
 
-void _start(void) {
+int main(void) {
     put("crash_test: about to write through a wild pointer at 0x1000\n");
     put("crash_test: (this address is kernel-only, not user-accessible --\n");
     put("crash_test: see syscall_abi.h / vmm.h for why every process's\n");
@@ -57,5 +46,5 @@ void _start(void) {
     // Unreachable -- if this ever prints, the fault didn't happen and
     // something about the test itself is wrong, not the recovery path.
     put("crash_test: UNEXPECTEDLY SURVIVED THE WRITE -- test is broken\n");
-    syscall3(SYS_EXIT, 1, 0, 0);
+    sys_call(SYS_EXIT, 1, 0, 0);
 }

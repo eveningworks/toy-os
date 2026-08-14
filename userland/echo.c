@@ -15,7 +15,7 @@
 // doing something -- a fixed-size static array would work just as well
 // functionally.
 #include <stdint.h>
-#include "syscall_abi.h"
+#include "sys.h"
 
 // Own copy of kernel/include/api/keyboard.h's IS_PRINTABLE_KEY() -- this
 // file is a freestanding ring-3 userland program built against no
@@ -27,45 +27,17 @@
                                  (k) == 0xE4 || (k) == 0xF6 || (k) == 0xE5)
 #define ECHO_IS_PRINTABLE_KEY(k) (((k) >= 32 && (k) < 127) || ECHO_IS_NORDIC_CHAR(k))
 
-static inline int64_t syscall2(uint64_t num, uint64_t arg1, uint64_t arg2) {
-    int64_t ret;
-    __asm__ volatile (
-        "int $0x80"
-        : "=a"(ret)
-        : "a"(num), "D"(arg1), "S"(arg2)
-        : "memory"
-    );
-    return ret;
-}
 
-static inline int64_t syscall3(uint64_t num, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
-    int64_t ret;
-    __asm__ volatile (
-        "int $0x80"
-        : "=a"(ret)
-        : "a"(num), "D"(arg1), "S"(arg2), "d"(arg3)
-        : "memory"
-    );
-    return ret;
-}
 
-static inline int64_t sys_write(const char *buf, uint64_t len) {
-    return syscall3(SYS_WRITE, 1, (uint64_t)(uintptr_t)buf, len);
-}
 
-static inline int64_t sys_read_key(void) {
-    return syscall2(SYS_READ_KEY, 0, 0);
-}
 
-static inline void *sys_sbrk(int64_t inc) {
-    return (void *)(uintptr_t)syscall2(SYS_SBRK, (uint64_t)inc, 0);
-}
 
-static inline void sys_exit(int code) __attribute__((noreturn));
-static inline void sys_exit(int code) {
-    syscall2(SYS_EXIT, (uint64_t)(int64_t)code, 0);
-    for (;;) { } // unreachable
-}
+
+
+
+
+
+
 
 static uint64_t my_strlen(const char *s) {
     uint64_t n = 0;
@@ -75,16 +47,16 @@ static uint64_t my_strlen(const char *s) {
 
 #define LINE_CAP 256
 
-void _start(void) {
+int main(void) {
     const char *banner =
         "echo: type to see it echoed back by this ring-3 process itself\n"
         "(via SYS_READ_KEY + SYS_WRITE). Backspace works. Esc quits.\n\n";
-    sys_write(banner, my_strlen(banner));
+    sys_write(1, banner, my_strlen(banner));
 
     char *line = (char *)sys_sbrk(LINE_CAP);
     if ((int64_t)(uintptr_t)line == -1) {
         const char *err = "echo: sbrk() failed -- no heap armed, or out of memory\n";
-        sys_write(err, my_strlen(err));
+        sys_write(1, err, my_strlen(err));
         sys_exit(1);
     }
     uint64_t pos = 0;
@@ -97,10 +69,10 @@ void _start(void) {
 
         if (key == 27) { // Esc
             const char *bye = "\n[echo: exiting]\n";
-            sys_write(bye, my_strlen(bye));
+            sys_write(1, bye, my_strlen(bye));
             break;
         } else if (key == '\n') {
-            sys_write("\n", 1);
+            sys_write(1, "\n", 1);
             pos = 0; // start the next line fresh
         } else if (key == '\b') {
             if (pos > 0) {
@@ -109,12 +81,12 @@ void _start(void) {
                 // by vga_putc() (see vga.c) to call vga_backspace(),
                 // which both moves the cursor back AND blanks that cell
                 // itself -- no separate space+backspace dance needed.
-                sys_write("\b", 1);
+                sys_write(1, "\b", 1);
             }
         } else if (ECHO_IS_PRINTABLE_KEY(key) && pos < LINE_CAP - 1) {
             line[pos++] = (char)key;
             char c = (char)key;
-            sys_write(&c, 1);
+            sys_write(1, &c, 1);
         }
         // anything else (arrow keys, etc.) is silently ignored
     }

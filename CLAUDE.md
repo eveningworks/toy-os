@@ -136,6 +136,19 @@ technical conventions below:
   third copy shipped a scrollbar that drew and did nothing. (`apps/widgets.h`/`.c` -- the
   single file all of `apps/ui/` was split out of -- no longer exists;
   see `docs/decisions.md`.)
+- **Every ring-3 program is just a `main()`.** `userland/crt0.asm`
+  provides `_start` (reads argc/argv off the stack per SysV, calls
+  `main`, passes its return to `sys_exit`) and `userland/sys.c` is
+  libsys -- one typed wrapper per syscall. **Never hand-roll an
+  `int $0x80` stub in a new program**; that duplication across twenty
+  files is exactly what libsys replaced. `sys_call()` is the raw escape
+  hatch and is for the `/tests` diagnostics that poke the raw ABI on
+  purpose, not for ordinary code. Two things to know before touching
+  `crt0.asm`: the entry ABI is the STANDARD SysV stack layout (argc at
+  `(%rsp)`), and `%rsp` must be **16-aligned before `call main`** -- a
+  `sub rsp, 8` there looks like it restores the old convention and
+  instead faults every SSE-using binary while leaving plain ones
+  working, see `docs/decisions.md`.
 - **A ring-3 process can own a real window** (`apps/wm/wm_client.c` +
   `kernel/proc/win_server.c`, protocol in
   `kernel/include/abi/win_proto.h`). Two rules matter before touching

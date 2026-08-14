@@ -372,8 +372,11 @@ static int spawn_from_fs(const char *path, const char *args) {
     // it the first time exactly the same way it resumes it later.
     uint64_t *tf = (uint64_t *)(kernel_stack_top(slot) - TRAPFRAME_WORDS * 8);
     for (int i = 0; i < TF_VECTOR; i++) tf[i] = 0; // r15..rax start at 0
-    tf[TF_RDI]     = argc; // argc/argv -- same ABI process_run_ring3_args() uses
-    tf[TF_RSI]     = argv;
+    // rdi/rsi stay 0: argc/argv reach the process on its STACK now, in
+    // the SysV layout elf_build_argv_on_stack() built and
+    // userland/crt0.asm reads (user_rsp below points at argc). They used
+    // to be seeded here for a C _start that took them as parameters.
+    (void)argc; (void)argv;
     tf[TF_VECTOR]  = 0; // unused -- epilogue discards vector+error_code
     tf[TF_ERRCODE] = 0; //          via `add rsp, 16` without reading them
     tf[TF_RIP]     = entry;
