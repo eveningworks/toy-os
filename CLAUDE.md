@@ -876,6 +876,20 @@ repeated manual steps to be worth automating:
   offsets in Python -- the Python copy drifts silently the moment a row
   is added to the app, which is exactly what happened when the dropdown
   and listbox rows landed mid-file.
+- **`sched_gui_test.py`** -- proves the desktop stays ALIVE while a
+  ring-3 process runs, the end-to-end counterpart to
+  `kernel/proc/sched_test.c`'s KTESTs. The trick it encodes: the `gui`
+  debug commands are dispatched from inside `wm_run()`, so a frozen WM
+  cannot answer one -- which makes "did the WM answer?" a direct
+  liveness test with no screenshot to interpret. Every sample is paired
+  with the WM's own `proc_pid` (`gui state --json`) so only samples
+  overlapping a genuinely live process count; OVERLAP is the claim, not
+  speed. Run it after touching the scheduler, `wm_run()`'s loop, or
+  anything about process spawning. Both it and the KTESTs were checked
+  as positive controls with the change disabled (0 overlapping samples
+  there, versus a continuously responsive desktop) -- do that again
+  before trusting a clean run, same reasoning as `damage_sweep.py`'s
+  `--positive-control`.
 - **`damage_sweep.py`** -- drives the WM through the interactions that
   historically break the damage invariant with `gui damage verify on`,
   and exits non-zero on a violation. Run it after touching anything
