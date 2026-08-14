@@ -29,6 +29,7 @@ there when you add an entry, or the index quietly stops being one.
 - [`kfree()`'s coalescing only checked the block being merged in, not the block being merged into](#kfrees-coalescing-only-checked-the-block-being-merged-in-not-the-block-being-merged-into)
 - [A syscall's path-pointer validation checks a full `FS_PATH_MAX` range, not just up to the string's NUL](#a-syscalls-path-pointer-validation-checks-a-full-fs_path_max-range-not-just-up-to-the-strings-nul)
 - [The M16 scheduler is permanently armed now -- an empty process table makes that safe](#the-m16-scheduler-is-permanently-armed-now----an-empty-process-table-makes-that-safe)
+- [The kernel context is a rotation participant, not a kernel thread](#the-kernel-context-is-a-rotation-participant-not-a-kernel-thread)
 - [Stack canaries: `-mstack-protector-guard=global` and a fixed constant, not GCC's defaults](#stack-canaries--mstack-protector-guardglobal-and-a-fixed-constant-not-gccs-defaults)
 - [NX enforcement scoped to userspace only -- the kernel's own identity map stays RWX](#nx-enforcement-scoped-to-userspace-only----the-kernels-own-identity-map-stays-rwx)
 - [The serial debug console is poll-based from existing idle loops, not a new kernel thread](#the-serial-debug-console-is-poll-based-from-existing-idle-loops-not-a-new-kernel-thread)
@@ -2414,6 +2415,39 @@ different mechanism (an empty table instead of a flag check). See
 `scheduler_poll()`'s `SCHED_ZOMBIE` state for the other real change this
 item made (a process holds its exit code until explicitly reaped,
 instead of being freed back to `SCHED_UNUSED` the instant it exits).
+
+## The kernel context is a rotation participant, not a kernel thread
+
+Making `wm_run()` keep drawing while a ring-3 process runs sounds like
+it needs a kernel thread -- a stack, a context, a slot in the process
+table. It doesn't, and deliberately didn't get one.
+
+The kernel context already had everything a scheduler entity needs
+except a turn. It needs no address space of its own (kernel code is
+correct under any process's CR3, since every PML4 shares kernel entry
+0), no FP state (kernel and `apps/` are built `-mno-sse`), and no
+kernel stack of its own (ring 0 interrupting ring 0 doesn't switch
+stacks, so its trapframe lands on whatever stack it was already using).
+`scheduler.c` was already saving its trapframe pointer in
+`kernel_saved_rsp`. So it takes a POSITION in the round-robin cycle
+(`ROT_KERNEL`, `rotation_pos`) rather than a `struct sched_process`,
+and `current_index` keeps meaning exactly what it always did -- -1 when
+the kernel is running -- because `syscall.c` depends on that through
+`scheduler_current_pid()`.
+
+The one deliberate exception is worth knowing before touching this: the
+legacy blocking path (`process_run_ring3()`) runs a ring-3 process
+WITHOUT a scheduler slot, so from `scheduler.c`'s point of view that
+process's trapframe *is* the kernel context. Rotating away from it and
+back would resume it under whatever CR3 and RSP0 the scheduler process
+left behind. `kernel_slot_runnable()` therefore drops the kernel
+position out of the rotation entirely while one is in flight, keyed on
+the pre-existing `process_context_is_armed()` rather than a second flag
+that could drift out of agreement with it.
+
+See `CHANGELOG.md`'s `[Unreleased]` entry for the full writeup and how
+both directions were verified, `scheduler.c`'s `ROT_KERNEL` comment for
+the design, and `docs/roadmap.md`'s Milestone 41 for what this unblocks.
 
 ## `strace` traces an address space, and prints each line after the handler returns
 

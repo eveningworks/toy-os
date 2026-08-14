@@ -32,6 +32,73 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
 ## [Unreleased]
 
 ### Added
+- **The kernel context is a scheduler participant now, so the desktop
+  keeps running while a ring-3 process does.** First step toward
+  running the GUI in ring 3 (see `docs/roadmap.md`'s Milestone 41);
+  nothing else on that path works until this does.
+
+  The problem, stated exactly: `scheduler_tick()` restored the kernel
+  context only on a tick that found NOTHING `SCHED_READY`, so any ready
+  ring-3 process starved kernel code completely until every process
+  exited. `wm_run()` is kernel code. The desktop was therefore frozen
+  for the entire lifetime of every spawned process -- no repaint, no
+  input routing, no per-frame poll. This was easy to miss because the
+  Terminal's async spawn still *looked* alive: a process's output
+  reaches the screen from inside its own `SYS_WRITE` handler, running
+  in the process's own context, not because the WM drew a frame.
+  `apps/wm/wm.c`'s per-frame poll comment already said so out loud.
+
+  The fix is small and deliberately does NOT add a kernel thread. The
+  kernel context takes a position in the same round-robin cycle a
+  process does (`ROT_KERNEL`, `rotation_pos`), but stays a pseudo-slot
+  with no `struct sched_process`: it needs no address space of its own
+  (every PML4 shares kernel entry 0), no FP state (kernel and `apps/`
+  are `-mno-sse`), and no kernel stack of its own (ring 0 interrupting
+  ring 0 doesn't switch stacks). All it ever needed was a turn.
+
+  One case is deliberately excluded. The legacy blocking path
+  (`process_run_ring3()`) runs a ring-3 process WITHOUT a scheduler
+  slot, so from the scheduler's point of view that process's trapframe
+  *is* "the kernel context". Rotating away from it and back would
+  resume it under whatever CR3 and RSP0 the scheduler process left
+  behind -- a foreign address space and a shared kernel stack. While
+  one is in flight the kernel position drops out of the rotation
+  entirely, keyed on the existing `process_context_is_armed()` rather
+  than a second flag that could drift from it. So every M8-M15 test
+  command and every `elf_run_from_fs()` caller (`run`/`ls` from the
+  physical shell) behaves exactly as before.
+
+  Verified both directions, which is the part worth keeping:
+  - `kernel/proc/sched_test.c` (new, 2 KTESTs) counts how many DISTINCT
+    timer ticks kernel code observes while a process is still running.
+    A tick count, not a loop-iteration count -- an iteration only proves
+    the loop ran, while a change in the tick counter proves time passed
+    with the process still alive, which is the actual claim.
+  - `tools/sched_gui_test.py` (new) proves the user-visible half: the
+    `gui` debug commands are dispatched from inside `wm_run()`, so a
+    frozen WM cannot answer one. Every sample is paired with the WM's
+    own `proc_pid` so only samples overlapping a genuinely live process
+    count. Overlap is the claim, not speed.
+  - Both were run as POSITIVE CONTROLS with the change disabled, and
+    both fail there: the KTEST fails on `observed_ticks`, and the GUI
+    test overlaps **exactly 0** samples versus a continuously
+    responsive desktop with it. A clean run of either otherwise can't
+    be told apart from a test that isn't checking anything.
+  - `userland/spin_test.c` (new) is the silent, finite, argv-tunable
+    spinner both drive. Silent because `ktest`'s report is parsed off
+    the same serial console `counter_a` would print into; argv-tunable
+    because the KTEST samples in a tight kernel loop and wants the
+    suite fast, while the GUI test samples over serial round trips and
+    needs seconds of process lifetime (it overlapped exactly 3 samples
+    against a required 6 before the argument existed).
+  - `gui state` gained `proc_pid` -- the WM's `pending_proc`. Same
+    "ask the WM, don't measure a screenshot" principle as the rest of
+    `wm_debug.c`, and the only host-observable way to know a client
+    process and the desktop are alive at the same moment.
+
+  Full gate clean afterwards: `preflight.sh` PASS (83 KTESTs, boot
+  smoke, layout check), `damage_sweep.py` 27 interactions / 0
+  violations.
 - **Thin provisioning that actually holds: ATA TRIM, and a host-side
   reclaim tool.** `disk.img` is created with `truncate -s 9G` and costs
   nothing up front, but sparseness is only ever LOST -- a block written
@@ -2705,6 +2772,21 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   as the active selection.
 
 ### Fixed
+- **The GUI Terminal's `run` resolves through PATH instead of a
+  hardcoded `/bin/` prefix -- eight of its ten allowlisted binaries had
+  been broken since the /bin -> /tests split.** `apps/terminal.c` built
+  `"/bin/" + name` by hand, but `crash_test`, `exit_test`, `file_test`,
+  `newsyscalls_test`, `nx_test`, `socket_test`, `write_bad_test` and
+  `write_test` all moved to `/tests` when the test binaries left `/bin`
+  (see `docs/filesystem-layout.md`); only `hello` and `lspci`, the two
+  genuinely in `/bin`, still worked. It now calls `shell_path_find()`
+  (`apps/shell_path.c`) -- the same resolution the physical shell's
+  `run` uses, whose default PATH is `/bin;/usr/bin;/tests` -- so all
+  eight work again and the two front ends can't drift a second time.
+  Found while wiring up `tools/sched_gui_test.py`, which needed to
+  spawn a `/tests` binary from the desktop. Verified in QEMU: `run
+  write_test` from the Terminal prints its output and `Exit code: 0`
+  (`screenshots/2026-08-14/terminal-run-path-resolution-fixed.png`).
 - **`free_block()` now bounds-checks against the end of the disk.**
   `bit_set()` indexes `g_bitmap[b / 8]` with no bound of its own, so an
   out-of-range block number would be a wild write into the kernel heap

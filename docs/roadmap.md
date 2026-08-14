@@ -1085,6 +1085,40 @@ that nothing else owns.
 - [ ] Decide, in writing, what is deliberately NOT pursued (conformance
       testing, locales, pthreads, `select`/`poll`, terminal `ioctl`)
 
+### Milestone 41 -- The GUI in ring 3 (planned v0.41.0)
+
+Run the desktop the way a real OS does: apps as ring-3 processes talking
+a windowing protocol, not kernel-space C compiled into `kernel.bin`.
+Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
+-- see the Details entry for the three options weighed and why this one.
+
+- [x] ~~The kernel context is a scheduler participant, so `wm_run()`
+      keeps drawing while a ring-3 process runs~~ -- done, see
+      `CHANGELOG.md`'s `[Unreleased]` entry. Step zero: nothing else
+      here works until this does.
+- [ ] Mouse + window events deliverable to a ring-3 process (there is
+      no mouse syscall at all today, and no routing to a focused window)
+- [ ] A blocking wait, so a GUI client doesn't spin-poll its whole
+      timeslice -- `SYS_READ_KEY` is non-blocking by necessity today
+      (see `syscall.c`'s comment on why blocking inside the dispatcher
+      breaks after one key). Under round-robin, a spinning client now
+      steals from the WM rather than merely wasting its own slice.
+- [ ] Multiple windows per process over a shared-memory ring, replacing
+      `SYS_WIN_CREATE`'s single fixed-vaddr 640x480 buffer
+- [ ] An abstract transport behind that protocol, so the server side can
+      move to ring 3 later without rewriting every call site -- the same
+      "one struct of function pointers" pattern `display_driver` and the
+      VFS backend probe already use here
+- [ ] A bigger process table and a growable user stack (4 slots and a
+      single 4KB page today -- both bind immediately once apps are
+      processes)
+- [ ] Migrate one real app (Calculator first: self-contained, no fs) to
+      `userland/` as the proof
+- [ ] ELF loader hardening -- `elf_load()` isn't told the file's size,
+      so `p_offset`/`p_filesz` are unbounded and `p_vaddr` unchecked.
+      Tolerable while every binary is one we built; not once loading
+      ring-3 apps is the normal path. See the Details entry.
+
 ## Backlog
 
 Smaller or lower-priority items not yet slotted into a milestone above.
@@ -2464,6 +2498,83 @@ test suite -- irrelevant to a hobby OS), locales, pthreads,
 `select`/`poll`, terminal `ioctl` beyond what Milestone 7 needs, and
 shared file `mmap`. "Enough POSIX to build and run real ported C
 programs" is the goal; conformance is not.
+
+### Milestone 41 -- The GUI in ring 3
+
+**The goal**: apps as ring-3 processes talking a windowing protocol,
+the way a real OS does it, instead of kernel-space C compiled straight
+into `kernel.bin`.
+
+**Three shapes were weighed. All three give ring-3 APPS** -- that is not
+what separates them. The only real difference is whether the window
+manager ITSELF also runs in ring 3:
+
+- **A -- WM stays in the kernel.** Smallest change by far: the WM keeps
+  calling `gfx.c`, `fs` and the keyboard driver directly, window
+  syscalls get added, apps move out one at a time, every step ships.
+  But ~5,000 lines of WM stay ring-0 forever (a WM bug is a panic, not
+  a crashed app), and because the boundary is a pile of syscalls,
+  moving the WM out later means rewriting every call site. A one-way
+  door.
+- **B -- WM moves to ring 3 now.** Real isolation, and what Linux does.
+  But the WM currently *is* a kernel program: in ring 3 every one of
+  those direct calls becomes a syscall or an IPC round trip, and it
+  needs IPC, a userland C library, and a userland `gfx.c` + font before
+  anything boots to a desktop again. A big-bang migration with nothing
+  runnable in the middle -- the wrong shape for this project.
+- **C -- build A, with B's boundary. CHOSEN.** The modularity actually
+  wanted here comes from the PROTOCOL, not from the privilege level. If
+  the WM and its clients only ever talk through a defined message
+  protocol over a shared buffer -- never by calling into each other --
+  the modules are already clean and swappable whether the server sits
+  in ring 0 or ring 3. Every increment ships like A's; moving the
+  server to ring 3 later becomes "swap the transport, port the gfx
+  library" rather than a redesign. The extra up-front cost is one
+  struct of function pointers, which is the same pattern
+  `kernel/include/kernel/display.h`'s `display_driver` and the VFS
+  backend probe already use here -- an applied pattern, not a new one.
+
+**Step zero, and why it blocked everything**: `scheduler_tick()` used
+to restore the kernel context only on a tick that found nothing
+`SCHED_READY`, so a ready ring-3 process starved kernel code -- and
+`wm_run()` is kernel code -- until every process exited. Done; see
+`CHANGELOG.md`'s `[Unreleased]` entry and `scheduler.c`'s `ROT_KERNEL`
+comment.
+
+**What the current syscall surface is missing**, beyond that:
+
+- **No mouse syscall at all.** The numbers stop at `SYS_CPU_INFO` (22);
+  ring 3 can poll a key and nothing else. No event routing to a focused
+  window either.
+- **No blocking wait**, and this one gets worse rather than better with
+  step zero done. `SYS_READ_KEY` is non-blocking by necessity (see
+  `syscall.c` on why blocking with interrupts on inside the dispatcher
+  breaks after exactly one key), so a GUI client spin-polls -- which
+  now steals timeslices from the WM it is competing with, instead of
+  merely wasting its own.
+- **One window per process at a fixed vaddr**, capped 640x480, position
+  fixed at creation (`SYS_WIN_CREATE`/`SYS_WIN_PRESENT`). It is a
+  genuine client/server split already -- just single-window,
+  single-process, modal, and outside `wm.c`'s window list.
+- **4-process table, one 4KB stack page, no growth, no IPC, no
+  `fork`/`exec`.**
+- **Drawing lives in the kernel** -- `gfx.c`, `apps/ui/` and the
+  11,800-line baked font are all ring-0. A ring-3 app has no way to
+  draw text today short of doing it itself, byte by byte. This is the
+  single biggest item in moving the server out later, which is exactly
+  why C keeps that option open rather than pretending it's cheap.
+
+**ELF loader hardening belongs here**, not to a security milestone:
+`elf_load()` is never told the file's size (`elf_run_from_fs()` has it
+from `fs_read()` and discards it), so `p_offset + p_filesz` is
+unbounded and `load_segment()` will copy out of identity-mapped
+physical memory past the buffer into a page it then maps into
+userland. `p_vaddr` is unrange-checked too, so a segment can claim the
+stack or heap vaddr the runner maps afterwards. `PT_INTERP` is silently
+ignored, and frames already mapped leak when a later segment fails.
+There are no KTESTs for the loader at all. All of that is tolerable
+while every ELF is one this build produced; it stops being tolerable
+the moment loading ring-3 apps is the ordinary path.
 
 ### Backlog
 

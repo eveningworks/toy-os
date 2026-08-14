@@ -397,6 +397,15 @@ static void cmd_state(int json) {
                      dragging, resizing, content_pressed);
         klog_printf("\"redraw_pending\":%s,\"pending\":%d,",
                      redraw_pending ? "true" : "false", wm_debug_input_pending());
+        // The pid of the ring-3 process this desktop is currently
+        // running (0 = none) -- wm.c's pending_proc. Exposed because it
+        // is the only host-observable way to tell that a client process
+        // and the WM are alive AT THE SAME TIME: a test that wants to
+        // prove the desktop stays responsive while a process runs has
+        // to know the process is still running, and asking the WM is
+        // the same "ask, don't measure a screenshot" principle the rest
+        // of this file is built on. See tools/sched_gui_test.py.
+        klog_printf("\"proc_pid\":%d,", pending_proc);
         klog_printf("\"damage\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d}}\r\n",
                      dx, dy, dw, dh);
         return;
@@ -409,6 +418,8 @@ static void cmd_state(int json) {
     klog_printf("dragging=%d resizing=%d content_pressed=%d redraw_pending=%d\r\n",
                  dragging, resizing, content_pressed, redraw_pending);
     klog_printf("injected events pending: %d\r\n", wm_debug_input_pending());
+    if (pending_proc) klog_printf("ring-3 process: pid %d\r\n", pending_proc);
+    else              klog_write("ring-3 process: none\r\n");
     klog_printf("damage rect: x=%d y=%d w=%d h=%d%s\r\n", dx, dy, dw, dh,
                  dw <= 0 ? "  (none this frame -- full-screen repaint)" : "");
 }
