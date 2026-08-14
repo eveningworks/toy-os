@@ -44,7 +44,7 @@ struct fs_ops {
     // pointer), with the probe loop in vfs.c refusing a backend whose
     // two statements disagree. Today every op below is required, so
     // the honesty check has nothing optional to cross-check yet; it
-    // starts biting with the first optional op (planned: link()).
+    // started biting with the first optional op, link() below.
     uint32_t caps;
 
     // Detection only -- read this backend's superblock location and

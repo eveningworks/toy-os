@@ -30,7 +30,10 @@ file says so and diverges deliberately.
 The **Created by** column is load-bearing, not decoration:
 `tools/check_layout.py` requires a `build`-created directory to be
 present on a freshly built image, while a `boot`-created one legitimately
-won't exist until the OS has run once.
+won't exist until the OS has run once. (check_layout is format-aware:
+it probes the image's magic and parses whichever writer tool's `ls`
+output matches -- if either tool's listing shape changes, its parser
+in check_layout.py changes with it.)
 
 | Path | Holds | Created by | Status |
 |---|---|---|---|
@@ -59,7 +62,8 @@ until this check compared an image against this table. CI installs it now.
 
 "Reserved" means: the name is spoken for, nothing creates it yet, and
 the milestone that will is named. Don't create one early just to have
-it -- an empty directory is a record consumed for nothing (see the
+it -- an empty directory is a name that exists for nothing (and on a
+TFS2 image, a record consumed against the 256 -- see the
 budget section below), and this project's standing rule is that a
 mechanism arrives with its first real caller.
 
@@ -69,8 +73,9 @@ mechanism arrives with its first real caller.
 not meant to be invoked directly by users" is `/usr/libexec`, and that
 was the alternative considered. `/tests` won on three grounds: it is
 unmissable (nobody wonders whether `/tests/nx_test` is part of the real
-OS), it keeps paths short in a filesystem where a full path is capped at
-64 bytes, and `/usr/libexec` carries an implication these binaries don't
+OS), it keeps paths short under the 64-byte caller-side path buffers
+(`FS_PATH_MAX` -- a format limit only on TFS2 now, but every caller
+still holds buffers that size), and `/usr/libexec` carries an implication these binaries don't
 match -- they aren't internal helpers invoked by other programs, they're
 exercises a person runs on purpose. The cost is one name a
 newcomer-from-Linux won't recognise, which this table answers.
@@ -113,7 +118,9 @@ means a real directory walk that nothing has needed yet.
 
 ## Moving or renaming a seeded file: `sync` never deletes
 
-`tools/tfs2_writer.py sync` is **additive**. It copies the seed tree
+The writer tools' `sync` (both of them -- the Makefile reaches
+whichever matches the image via `tools/seed_disk.py`) is
+**additive**. It copies the seed tree
 onto the image and updates anything whose content changed; it does not
 remove files that have left the seed tree. So moving a seeded file
 leaves the old copy behind, frozen at its last-synced content, on every
@@ -133,8 +140,9 @@ deliberate cleanup.
 
 **So when you move or rename a seeded file, do one of:**
 
-- `python3 tools/tfs2_writer.py delete disk.img /old/path` for each one
-  (what the `/bin` -> `/tests` move used), or
+- `python3 tools/tfs3_writer.py delete disk.img /old/path` for each
+  one (`tfs2_writer.py delete` on an old TFS2 image -- match the
+  image's format; the `/bin` -> `/tests` move used exactly this), or
 - `make clean-disk` to start from an empty image, if losing everything
   else on it is acceptable.
 

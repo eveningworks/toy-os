@@ -2129,6 +2129,32 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
     a TFS3 root with the Terminal writing and reading through it
     (`screenshots/2026-08-14/desktop-on-tfs3-root-terminal-write.png`).
 
+- **A staleness sweep of every doc, after the TFS3 landing.** An
+  audit of all non-CHANGELOG `.md` files against the day's changes
+  turned up ~78 stale claims; all fixed. The recurring shapes:
+  "TFS2 is THE filesystem" (README's feature list and fs deep-dive,
+  kernel/README's `fs/` row, tfs2-spec's framing -- all now describe
+  two probe-selected backends with TFS3 the default); "the 256-record
+  /64-byte budget" (scoped to TFS2-legacy everywhere; the 64-byte
+  `FS_PATH_MAX` survives as a caller-side limit only); `tfs2_writer`
+  named as the one host tool (now format-aware wording, with
+  `seed_disk.py` as the build's entry point); and roadmap items
+  describing things Milestone 15 shipped (TRIM-on-delete struck for
+  both backends, M16/M22/M25/M40 reworded around what now exists,
+  epoch conversion "this kernel has never had" corrected). Also:
+  decisions.md's superseded entries got dated update notes in the
+  established style (single-backend VFS, single-slot journal,
+  timestamps retitled, steppable-ops caps note), three GitHub-slug
+  index anchors fixed, the two remaining live `widgets.h` references
+  pointed at `apps/ui/`, gui-guidelines' damage-verify section now
+  tells the clip-rect-contract story, and four stale strings in
+  code/build files corrected (`disk` help's "raw TFS2", fsformat's
+  "lands with the TFS3 backend", the Makefile's seed comments,
+  fs_ops.h's "planned: link()"). README's docs table gained
+  tfs3-spec/tfs3-design rows and the fourth changelog archive.
+  Verified: 81/81 KTESTs after the string changes; a final grep for
+  the stale phrases returns only deliberate historical records.
+
 ### Changed
 - **A documented, checked on-disk filesystem layout -- and the test
   binaries moved out of `/bin`.** Asked for a future-proof directory

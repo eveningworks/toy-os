@@ -48,9 +48,11 @@ the kernel":
 - **Real processes** -- an ELF64 loader, ring-3 user mode, syscalls, a
   preemptive round-robin scheduler, and hardware floating point for
   ring-3 code with per-process FPU state across context switches.
-- **A real filesystem** -- TFS2, journaled and disk-backed, with
-  indirect block pointers, an `fsck`, and files that survive a power
-  cut.
+- **Two real filesystems** -- TFS3 (the default: block groups, real
+  inodes, hardlinks, journal transactions, superblock backups) and
+  TFS2 (the original, kept as a second backend), both journaled and
+  disk-backed with an `fsck` and files that survive a power cut. The
+  VFS picks by superblock probe, and `fsformat` switches live.
 - **A real GUI** -- a window manager with movable/resizable windows, a
   taskbar, a Start menu, a draggable desktop, and five apps including a
   terminal emulator that runs the actual shell.
@@ -208,7 +210,8 @@ which is what keeps `ls` able to resolve a cwd-relative argument before
 handing `/bin/ls` an absolute path.
 
 Tab completes commands, paths, and known argument sets (`run`, `color`,
-`debug`, `keyboard`, `timezone`, `fontsize`, `fsck`, `help`) -- one Tab
+`debug`, `keyboard`, `timezone`, `fontsize`, `fsck`, `fsformat`,
+`cursor`, `help`) -- one Tab
 extends as far as the candidates agree, and lists them in columns if
 more than one remains, zsh-style. Works identically in the physical
 shell and the GUI Terminal.
@@ -220,7 +223,10 @@ shell and the GUI Terminal.
   shows type/size/mtime, `-a` a no-op -- a real disk-hosted `/bin/ls`
   binary, not a shell built-in, see `docs/decisions.md`), `cd [dir]`,
   `pwd`, `mkdir <dir>`, `cat <f>`, `touch <f>`, `write <f> <text>`,
-  `append <f> <text>`, `rm <f>`, `stat <f>`, `edit <f>`/`nano <f>`
+  `append <f> <text>`, `rm <f>`, `stat <f>` (type, size, inode
+  number, created/modified), `ln <file> <new>` (hardlink -- TFS3
+  only; on TFS2 it explains that the format has no link counts),
+  `edit <f>`/`nano <f>`
   (full-screen nano/pico-style editor -- arrows/Home/End/Delete to
   navigate and edit, F2 to save, F3 to exit; works from both the
   physical shell and the GUI Terminal, see `apps/editor.c`). Paths may
@@ -232,7 +238,8 @@ shell and the GUI Terminal.
   transpose, `Alt-U`/`Alt-L`/`Alt-C` case, `Ctrl-_` undo, `Ctrl-R`
   reverse history search, `Alt-.` last argument). `help` lists them all.
 - **System info:** `time`, `timezone [city]`, `uptime`, `meminfo`,
-  `df` (disk space: total/used/free, KB-scale), `dmesg`, `lspci`,
+  `df` (disk space: total/used/free, KB-scale -- also names the
+  active filesystem backend), `dmesg`, `lspci`,
   `parttable`. CPU identification is `/bin/lscpu` (see below), not a
   builtin.
 - **Appearance:** `color <name>`, `cursor <translucent|underline|beam|reverse>`
@@ -260,7 +267,12 @@ shell and the GUI Terminal.
   rebuild needed), `ktest [suite]` (run the in-kernel test suite --
   see `make test`), `fsck [repair]` (filesystem consistency check:
   walks every file's block tree and compares it against the free-block
-  bitmap; read-only unless `repair` is passed)
+  bitmap; on TFS3 it also verifies inode checksums, link counts and
+  `.`/`..`, reclaims orphans, and -- on `repair` -- restores a
+  damaged primary superblock from its backups; read-only unless
+  `repair` is passed), `fsformat <tfs2|tfs3> confirm` (DESTROYS the
+  disk's contents and reformats with the named filesystem, then
+  remounts it live -- physical shell only)
 
 Plus roughly a dozen real disk-hosted test binaries under `/bin`, run
 via `run <name>` (e.g. `run write_test`, `run nx_test`,
@@ -298,7 +310,9 @@ Useful tools in `tools/` (all documented in their own docstrings):
 | `ktest_run.py` | Drives the in-kernel test suite over serial and turns it into an exit code. What `make test` and CI run. |
 | `boot_smoke_test.py` | Fast "does it still boot cleanly" check, no GUI. |
 | `qmp_test.py`, `gui_flow.py`, `shell_flow.py` | Drive the GUI over QEMU's QMP socket for rendering/input work, with the mouse/keyboard gotchas already handled. |
-| `tfs2_writer.py` | Read, write, delete and inspect files inside `disk.img` from the host, without booting. |
+| `tfs3_writer.py`, `tfs2_writer.py` | Read, write, delete, inspect and corrupt-for-testing files inside a TFS3 / TFS2 `disk.img` from the host, without booting. Each refuses the other's images. |
+| `seed_disk.py` | Format-aware seeding front-end the Makefile uses: probes the image's magic, delegates to the matching writer, formats a blank image with the default (TFS3). |
+| `fs_switch_test.py` | Boots a disk copy and proves probe, wipefs, live `fsformat` switching both ways, and reboot persistence -- run after touching `kernel/fs/`. |
 | `screenshot_diff.py` | Pixel-diff two screenshots with a pass/fail threshold. |
 
 `CLAUDE.md` documents the conventions and environment quirks in depth.
@@ -346,22 +360,31 @@ Useful tools in `tools/` (all documented in their own docstrings):
   The kernel's own identity map is still RWX -- see
   `docs/decisions.md`. `run nx_test` / `run stack_smash_test` prove
   both for real, not by assertion.
-- A persistent, disk-backed filesystem ("TFS2" -- `kernel/fs/tfs.c`,
-  behind a small VFS dispatch layer so a second backend could be added
-  later) with a write-ahead journal and timestamps -- files survive a
-  full power-off, not just `reboot`. Up to 256 files/directories;
-  individual files scale to gigabytes via direct + single/double/triple
-  indirect block pointers. Sequential I/O runs ~25 MB/s write / ~30 MB/s
-  read on the emulated ATA path: large writes batch the ATA cache flush
-  and free-block bitmap persistence rather than doing one of each per
-  4KB block (`ata_flush_begin()`/`ata_flush_end()`), and contiguous
-  blocks are coalesced into single 64KB ATA commands. The filesystem
-  sizes itself to the drive's real capacity (IDENTIFY words 60-61)
-  rather than a compile-time guess, and refuses to format a disk whose
-  superblock it couldn't read -- degrading to RAM-only instead of
-  destroying a possibly-good filesystem. `about` shows whether the
-  current boot found a disk. See `docs/tfs2-spec.md` for the on-disk
-  format and `docs/decisions.md` for the durability tradeoffs.
+- Two persistent, disk-backed filesystems behind a probe-selecting
+  VFS (`kernel/fs/vfs.c` -- one ACTIVE backend at a time, chosen by
+  superblock magic; a blank disk gets the default). **TFS3**
+  (`kernel/fs/tfs3.c`, the default for fresh images -- see
+  `docs/tfs3-spec.md`): block groups, 128-byte checksummed inodes,
+  hardlinks (`ln`), `.`/`..`, multi-block journal transactions,
+  ext-style superblock backups, ~590k files on a 9 GiB volume with
+  255-byte names, ~28 MB/s write / ~27 MB/s read. **TFS2**
+  (`kernel/fs/tfs.c`, the original, format unchanged -- see
+  `docs/tfs2-spec.md`): 256-record table, single-slot journal,
+  ~25 MB/s write / ~30 MB/s read. Both journal metadata (files
+  survive a full power-off, not just `reboot`), scale individual
+  files to gigabytes via direct + single/double/triple indirect
+  pointers, batch ATA flushes and coalesce contiguous blocks into
+  multi-sector commands, TRIM freed blocks back to the host, size
+  themselves to the drive's real capacity, and refuse to touch a
+  disk whose superblock couldn't be read -- degrading to RAM-only
+  instead of destroying a possibly-good filesystem. Backends declare
+  capabilities (`FS_CAP_*`) the way display drivers do, `stat`
+  reports real (TFS3) or synthetic (TFS2) inode numbers with
+  epoch-second timestamps, and `fsformat <fs> confirm` switches
+  filesystems live. `about`/`df` show which backend the
+  current boot mounted. See `docs/tfs3-spec.md` (and
+  `docs/tfs2-spec.md` for the legacy format), plus
+  `docs/decisions.md` for the durability tradeoffs.
 - A real anti-aliased font (JetBrains Mono, baked to bitmaps at build
   time -- `tools/genttf.py`), 8 switchable point sizes (`fontsize <n>`),
   plus 6 Nordic letters (Å/Ä/Ö/å/ä/ö) alongside ASCII. See
@@ -434,10 +457,12 @@ kernel/proc/     -- processes: the ELF64 loader (elf.c/elf_run.c), the
                      scheduler (scheduler.c), and the one remaining
                      in-kernel ring-3 demo (ring3_test.c -- the rest
                      became real /bin ELF binaries, see userland/).
-kernel/fs/       -- the filesystem: TFS2 (tfs.c) behind the VFS dispatch
-                     layer (vfs.c). A filesystem isn't a device driver,
-                     so it doesn't live in drivers/ -- the block device
-                     it sits on (ata.c) does.
+kernel/fs/       -- the filesystems: TFS3 (tfs3.c, the default) and
+                     TFS2 (tfs.c) behind the probe-selecting VFS
+                     (vfs.c), plus their KTESTs (fs_test.c). A
+                     filesystem isn't a device driver, so it doesn't
+                     live in drivers/ -- the block device it sits on
+                     (ata.c) does.
 kernel/lib/      -- cross-cutting services with no hardware of their
                      own. The shared toolkit lives here -- strings
                      (string.c), numbers<->strings (knum.c), a bounded
@@ -498,7 +523,7 @@ userland/        -- freestanding ring-3 test programs (no libc, no
                      docs/process-isolation.md and the Makefile's own
                      USERLAND_CFLAGS comment),
                      seeded onto disk.img's /bin at build time (see the
-                     Makefile's `seed` target, tools/tfs2_writer.py, and
+                     Makefile's `seed` target, tools/seed_disk.py, and
                      docs/decisions.md) and run via the shell's
                      `run <name>` -- not loaded as GRUB modules anymore.
                      hello.c is the smallest one -- greet via SYS_WRITE,
@@ -519,7 +544,9 @@ userland/        -- freestanding ring-3 test programs (no libc, no
                      and are how both are actually verified.
 seed/            -- the files mirrored onto disk.img at build time by
                      the Makefile's `seed` target via
-                     tools/tfs2_writer.py: seed/sync/bin/ (every
+                     tools/seed_disk.py (which probes the image's
+                     format and delegates to the matching writer
+                     tool): seed/sync/bin/ (every
                      userland ELF), seed/sync/etc/kbs/ (the generated
                      keyboard layout data files) and
                      seed/sync/usr/share/hwdata/ (the PCI ID database,
@@ -596,12 +623,14 @@ tools/run_release.sh -- standalone QEMU launcher shipped as a GitHub
 |---|---|
 | [docs/decisions.md](docs/decisions.md) | Topic-indexed answers to "why is this built this way?" -- ~70 entries. Start here when something looks odd. |
 | [docs/roadmap.md](docs/roadmap.md) | What's planned, ordered so prerequisites come before the work that needs them. |
-| [docs/filesystem-layout.md](docs/filesystem-layout.md) | What lives where on the OS's own disk, the rules for adding to it, and the record/path budget. Checked against the built image by `tools/check_layout.py`. |
+| [docs/filesystem-layout.md](docs/filesystem-layout.md) | What lives where on the OS's own disk, the rules for adding to it, the caller-side path budget and the retired TFS2 record budget. Checked against the built image by `tools/check_layout.py`. |
 | [docs/gui-guidelines.md](docs/gui-guidelines.md) | How the GUI should look and behave: interaction states, press-then-commit-on-release, when feedback is and isn't wanted. |
 | [docs/process-isolation.md](docs/process-isolation.md) | The full ring0/ring3 build-up: GDT/TSS, paging, per-process address spaces, the ELF loader, the scheduler -- told as it was built, bugs included. |
-| [docs/tfs2-spec.md](docs/tfs2-spec.md) | Byte-level on-disk filesystem format, spec-style. |
+| [docs/tfs3-spec.md](docs/tfs3-spec.md) | Byte-level on-disk format of TFS3, the default filesystem, spec-style. |
+| [docs/tfs3-design.md](docs/tfs3-design.md) | The design record behind TFS3 -- every decision and its reasoning, kept after implementation. |
+| [docs/tfs2-spec.md](docs/tfs2-spec.md) | Byte-level on-disk format of TFS2, the legacy second backend. |
 | [docs/arch-portability.md](docs/arch-portability.md) | What is and isn't x86-64-specific, and what a second architecture would take. |
-| [CHANGELOG.md](CHANGELOG.md) | The full history with rationale, split into three eras ([archive-2](CHANGELOG-archive-2.md), [archive](CHANGELOG-archive.md)). |
+| [CHANGELOG.md](CHANGELOG.md) | The full history with rationale, split into four eras ([archive-3](CHANGELOG-archive-3.md), [archive-2](CHANGELOG-archive-2.md), [archive](CHANGELOG-archive.md)). |
 | [kernel/README.md](kernel/README.md) | What each kernel subsystem holds, and the test for where a new file goes. |
 | [apps/README.md](apps/README.md) | How to add a console app or a GUI app. |
 

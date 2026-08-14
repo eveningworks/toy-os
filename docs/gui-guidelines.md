@@ -287,8 +287,14 @@ So when you change anything that draws:
   (see `apps/wm/wm_debug.c`) renders every frame twice, once
   damage-limited and once unrestricted, and reports any pixel that
   differs. Run it while exercising whatever you changed. It found four
-  real bugs in its first minute, and four more once a systematic sweep
-  drove it.
+  real bugs in its first minute, four more once a systematic sweep
+  (`tools/damage_sweep.py`) drove it -- and then a whole different
+  CLASS of bug: its long-standing "20 px" violation turned out to be
+  `gfx_set_clip_rect()` treating an empty rectangle as NO clip, which
+  handed an app's entire `on_draw()` an unclipped screen on frames
+  whose damage grazed only the window's border. The contract since:
+  a non-positive w/h is an EMPTY clip (nothing draws);
+  `gfx_clear_clip_rect()` is the only way to remove one.
 
   `python3 tools/damage_sweep.py` is that sweep: it turns the checker on,
   walks the interactions that historically break the invariant, and

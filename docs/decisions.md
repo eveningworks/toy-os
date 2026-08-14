@@ -38,8 +38,8 @@ there when you add an entry, or the index quietly stops being one.
 - [Filesystem is one active backend, not mount points](#filesystem-is-one-active-backend-not-mount-points)
 - [No recursive delete](#no-recursive-delete)
 - [Persistent filesystem is write-through with a single-slot journal](#persistent-filesystem-is-write-through-with-a-single-slot-journal)
-- [File timestamps are broken-down local time, not a Unix epoch integer](#file-timestamps-are-broken-down-local-time-not-a-unix-epoch-integer)
-- [TFS2 v2's block pointers go direct + single + double + triple indirect, not just direct + single](#tfs2-v2s-block-pointers-go-direct-single-double-triple-indirect-not-just-direct-single)
+- [File timestamps: broken-down local time on disk (TFS2), epoch seconds at the API since M15](#file-timestamps-broken-down-local-time-on-disk-tfs2-epoch-seconds-at-the-api-since-m15)
+- [TFS2 v2's block pointers go direct + single + double + triple indirect, not just direct + single](#tfs2-v2s-block-pointers-go-direct--single--double--triple-indirect-not-just-direct--single)
 - [`fs_read_range()`/`fs_write_range()` were added alongside `fs_read()`/`fs_write()`, not as a replacement](#fs_read_rangefs_write_range-were-added-alongside-fs_readfs_write-not-as-a-replacement)
 - [`SYS_READ` read the whole file on every call, which made streaming quadratic](#sys_read-read-the-whole-file-on-every-call-which-made-streaming-quadratic)
 - [pci.ids is bundled in `data/`, not downloaded or read from the build host](#pciids-is-bundled-in-data-not-downloaded-or-read-from-the-build-host)
@@ -99,7 +99,7 @@ there when you add an entry, or the index quietly stops being one.
 - [`context_menu.h`'s items carry a `void *ctx`, but `start_menu.h`'s don't](#context_menuhs-items-carry-a-void-ctx-but-start_menuhs-dont)
 - [Click-to-position/selection lives in the shared `text_scrollback` widget, not a Notepad-only one](#click-to-positionselection-lives-in-the-shared-text_scrollback-widget-not-a-notepad-only-one)
 - [The file picker is a WM-level modal overlay (`apps/wm/file_picker.c`), not an `apps/ui/` widget](#the-file-picker-is-a-wm-level-modal-overlay-appswmfile_pickerc-not-an-appsui-widget)
-- [`struct window *` isn't a stable per-window identity across frames -- don't cache one](#struct-window-isnt-a-stable-per-window-identity-across-frames----dont-cache-one)
+- [`struct window *` isn't a stable per-window identity across frames -- don't cache one](#struct-window--isnt-a-stable-per-window-identity-across-frames----dont-cache-one)
 - [Why the compositor uses one scene-wide damage region, not per-window exposure tracking](#why-the-compositor-uses-one-scene-wide-damage-region-not-per-window-exposure-tracking)
 - [The taskbar/tray falls back to full-screen repaint on purpose, not as an oversight](#the-taskbartray-falls-back-to-full-screen-repaint-on-purpose-not-as-an-oversight)
 - [An overlay forces a full repaint, because "declares no damage" is not the same as "is drawn unrestricted"](#an-overlay-forces-a-full-repaint-because-declares-no-damage-is-not-the-same-as-is-drawn-unrestricted)
@@ -131,7 +131,7 @@ there when you add an entry, or the index quietly stops being one.
 **Build, versioning & project docs**
 
 - [Build-number scheme: fix/feature/major tiers, not dates or semver](#build-number-scheme-fixfeaturemajor-tiers-not-dates-or-semver)
-- [Versioning: semver + `-dev` suffix, not a per-change build number](#versioning-semver--dev-suffix-not-a-per-change-build-number)
+- [Versioning: semver + `-dev` suffix, not a per-change build number](#versioning-semver---dev-suffix-not-a-per-change-build-number)
 - [Repo is MIT; the baked JetBrains Mono glyph data is separately SIL OFL 1.1](#repo-is-mit-the-baked-jetbrains-mono-glyph-data-is-separately-sil-ofl-11)
 - [CI is kept for the environment, not the checks -- they duplicate `make verify` exactly](#ci-is-kept-for-the-environment-not-the-checks----they-duplicate-make-verify-exactly)
 - [Repo history scrubbed of the maintainer's real name -- privacy request, not a bug fix](#repo-history-scrubbed-of-the-maintainers-real-name----privacy-request-not-a-bug-fix)
@@ -585,14 +585,19 @@ data (see the entry on that).
 ## Filesystem is one active backend, not mount points
 
 `kernel/fs/vfs.c` dispatches every `fs_*` call to a single active
-`struct fs_ops` backend (today, always `tfs_ops` -- see
-`kernel/include/kernel/fs_ops.h`). Adding a second filesystem means writing a
-new backend and pointing `fs_init()` at it, not routing different path
-prefixes to different backends simultaneously -- nothing needs the
-latter yet, and it's meaningfully more code (cross-mount path
-resolution, boundary conflicts) for a capability that would sit
-unused. See `fs_ops.h`'s top comment and CHANGELOG-archive-2.md's **Build 304**
-for the full reasoning, including what it would take to add mount
+`struct fs_ops` backend. **Updated at Milestone 15:** there are two
+backends now (`tfs3_ops` and `tfs_ops`), and selection is a
+boot-time superblock probe rather than a compile-time constant --
+see the entry below on TFS2 staying as a second filesystem. What has
+NOT changed is this entry's actual decision: exactly one backend is
+ACTIVE at a time, and adding a filesystem means registering it in
+vfs.c's priority list with `probe()`/`wipe()`/`format()`/`init()` +
+a caps bitmask -- not routing different path prefixes to different
+backends simultaneously. Mount points remain meaningfully more code
+(cross-mount path resolution, boundary conflicts) for a capability
+nothing needs yet. See `fs_ops.h`'s top comment and
+CHANGELOG-archive-2.md's **Build 304**
+for the original reasoning, including what it would take to add mount
 points later if that ever changes.
 
 ## No recursive delete
@@ -624,9 +629,13 @@ journal region that only costs one extra record's worth of disk space
 total (not per-record). See `tfs.c`'s top comment ("Journaling") for
 the exact 4-step write-ahead sequence and replay logic, `docs/
 tfs2-spec.md` for the on-disk journal format, and CHANGELOG-archive-2.md's
-**Build 480** for the full writeup.
+**Build 480** for the full writeup. **This is TFS2's rule.** The
+"would need more than this" prediction came true at Milestone 15:
+TFS3's mutations touch several metadata blocks, and it ships the
+4-slot transaction journal this entry anticipated -- see the entry
+below on TFS3's journal scope.
 
-## File timestamps are broken-down local time, not a Unix epoch integer
+## File timestamps: broken-down local time on disk (TFS2), epoch seconds at the API since M15
 
 `fs_stat()`'s `created`/`modified` fields (build 480) are `struct
 rtc_time` -- the same hour/minute/second/day/month/year struct
@@ -854,10 +863,12 @@ with noise. And **there is no merged `/usr`**: modern distributions make
 having no symlinks at all.
 
 The constraint that actually drives layout here isn't a standard, it's
-the record budget: `FS_MAX_FILES` is 256 records with directories
-counting against it, and a full path is capped at 64 bytes. That makes
-"flatter, and fewer files with more structure inside them" the operative
-rule until Milestone 15 (TFS3) raises both.
+the record budget -- which Milestone 15 has since split in two: on a
+TFS2 image, `FS_MAX_FILES` is 256 records with directories counting
+against it; on TFS3 (the default for fresh images) the on-disk budget
+is effectively gone (~590k inodes), and only the caller-side
+`FS_PATH_MAX` = 64 path buffers still bind. See
+`docs/filesystem-layout.md`'s budget section for the current rules.
 
 ## `/etc` is one shared `toyos.conf` by default, not a file per setting
 
@@ -920,7 +931,8 @@ CHANGELOG-archive-2.md's **Build 377** for the full story.
 
 ## Don't put a `text_scrollback` on the stack
 
-`struct text_scrollback` (`widgets.h`) embeds an 8192-cell buffer
+`struct text_scrollback` (`apps/ui/ui_scrollback.h` today; `widgets.h`
+when this was written) embeds an 8192-cell buffer
 (`SCROLLBACK_CAP`) -- around 16KB, the ENTIRE size of the kernel's boot
 stack (see `boot.asm`), which is what `shell_main()`'s whole call chain
 already runs on (there's no separate kernel stack per "process" the way
@@ -1260,7 +1272,7 @@ consider whether toy-os should have "own libs for GUI apps" the same
 way. Worth separating two things that question conflates: the
 *insulation boundary* (apps not reaching into WM internals) already
 existed -- every `apps/*.c` file only ever includes `wm/wm.h` (the
-public `window_*` API) and `widgets.h`, never `wm_internal.h` (that's
+public `window_*` API) and `apps/ui/ui.h` (was `widgets.h`), never `wm_internal.h` (that's
 `apps/wm/*.c`'s own private `extern` state). What Brutal's button.c
 actually demonstrates is different: a widget as a self-contained
 *object* that owns its state (`press`/`over` flags) and reacts to
@@ -1881,7 +1893,9 @@ what the host-side tool is for.
 Two scope calls made building the deferred host-side TFS2 writer (see
 the entry above): how `sync`'s "only rewrite if changed" policy
 detects a change, and how big a file the tool is willing to write at
-all.
+all. Both calls carried unchanged into `tools/tfs3_writer.py` when
+TFS3 landed -- same content-hash sync, same ~4.03 MB
+direct+single-indirect cap.
 
 **Content hash, not mtime.** TFS2's `created`/`modified` fields are
 toy-os's own RTC-sourced local wall-clock time (see `fs.h`'s
@@ -1917,9 +1931,13 @@ first time toy-os boots against a disk) as the interim way to get
 subcommand (see the entry above -- needed because `write`/`sync`
 previously required an already-formatted image, which a brand new
 `disk.img` isn't until toy-os boots and formats it once), that
-interim mechanism became fully redundant: `tools/tfs2_writer.py sync`
+interim mechanism became fully redundant: the writer tools'
+`sync`
 can format-and-seed a completely untouched `disk.img` in one call, at
-BUILD time, with no boot cycle needed at all.
+BUILD time, with no boot cycle needed at all. (Since Milestone 15 the
+Makefile's entry point is `tools/seed_disk.py`, which probes the
+image's magic and delegates to `tfs2_writer.py` or `tfs3_writer.py`;
+a blank image gets the default format, TFS3.)
 
 `install_bin_binaries()`/`BIN_BOOTSTRAP` and the `lspci.elf` GRUB
 module were removed outright rather than kept as a fallback -- two
@@ -2253,12 +2271,15 @@ no NULL check on the function pointer itself, only on the *arguments*
 (see `fs_write_range_step()`'s handle guard, added the same session).
 Making the two new ones optional would have meant either a NULL check
 on every dispatch call (real overhead on the hot path for something
-today's single backend always implements) or a silent fallback to
-non-stepped behavior a caller couldn't easily detect it got. Since
-`fs_ops.h`'s own top comment is explicit that this struct isn't a
-mount-point/capability-negotiation scheme -- there's exactly one active
-backend, chosen once at boot -- there's no scenario today where a
-backend legitimately can't implement these two. If a future backend
+every backend implements) or a silent fallback to
+non-stepped behavior a caller couldn't easily detect it got.
+**Updated at Milestone 15:** `fs_ops` DOES carry a capability
+bitmask and one optional op now (`link()`, gated by
+FS_CAP_HARDLINKS, with the honesty check refusing a backend whose
+bit and pointer disagree) -- but the required-not-optional call made
+here still stands for the range/steppable ops: both backends (tfs2
+and tfs3) implement them, and there's still no scenario where a
+backend legitimately can't. If a future backend
 genuinely can't support incremental writes (say, one backed by a
 remote API with no partial-write primitive), that's the point to
 revisit this, not before.

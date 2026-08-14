@@ -142,15 +142,23 @@ adds 4; 12 adds 5; 13 adds 6; 14 and up add 8.
       ceiling on `FS_DISK_TOTAL_BYTES` growing past today's 9 GiB
 - [ ] A block/buffer cache with write-back -- every read today goes to the
       drive, including the record table on every `find()`
-- [ ] Directory index -- `find()` is a linear scan doing `k_strcmp()` per
-      slot, now over 256 slots on every single path lookup
+- [ ] Directory index -- lookups scan linearly on both backends
+      (TFS2: `find()` over 256 record slots; TFS3: a dirent-chain scan
+      per component, softened by its in-RAM name cache). The on-disk
+      index remains open.
 - [ ] `fs_rename()` -- there's no way to rename a file without
-      read + write + delete
+      read + write + delete. (Owned jointly with Milestone 15's
+      leftover: on TFS3 it's a journalled directory op that fits the
+      4-slot transaction; implement it there, this item then closes.)
 - [ ] `fs_truncate()` -- shrinking a file is only possible by rewriting it
-- [ ] TRIM/discard on delete, so freed blocks are reported to the device
+- [x] ~~TRIM/discard on delete, so freed blocks are reported to the
+      device~~ -- done on both backends (`ata_trim()` from tfs.c's
+      `free_block()` and tfs3.c's `trim_run()`, plus `discard=unmap`
+      on every `-drive` line); see CHANGELOG.md's `[Unreleased]`
 - [ ] Boot-time `fsck` report (check, never repair) behind a config key
-- [ ] Per-record checksums in the table itself -- the journal checksums a
-      record in flight, but a record at rest has no integrity check
+- [ ] Per-record checksums in the table itself -- TFS2-only now: TFS3
+      checksums every inode at rest (verified on each read); TFS2's
+      records still have no at-rest integrity check
 
 ### Milestone 4 -- Kernel test harness (planned v0.4.0)
 
@@ -392,7 +400,7 @@ it serves. Small, and it makes everything above it discoverable.*
 - [ ] Pages for each `/bin` binary
 - [ ] `apropos`/`man -k` keyword search across page titles
 - [ ] Paging through the existing `console_page()` helper
-- [ ] Seed the pages at build time via `tools/tfs2_writer.py`, like
+- [ ] Seed the pages at build time via `tools/seed_disk.py`, like
       `/bin` already is
 - [ ] A GUI documentation viewer reusing the scrollback widget
 - [ ] A check that every builtin actually has a page, run in CI
@@ -452,14 +460,22 @@ open -- a checksum field wants to be designed in, not bolted on.*
 - [ ] A checksum per data block, stored in the inode's pointer entries
 - [ ] A checksum per metadata block (inodes, directory blocks, the
       bitmap)
-- [ ] Pick and justify one algorithm -- CRC32C is the obvious answer,
-      and the GPT parser already needs a CRC32
+- [ ] Pick and justify one algorithm for DATA blocks -- CRC32C is the
+      classic answer, but TFS3's metadata checksums shipped as
+      FNV-1a-32 (docs/tfs3-spec.md), so this item now includes
+      deciding whether two hashes are acceptable or FNV wins by
+      reuse. Note the kernel's only CRC32 today is plain CRC-32,
+      static inside the GPT parser. TFS3 already RESERVES the
+      per-group checksum table behind superblock flags bit 0, and
+      the kernel refuses to mount unknown flag bits -- so this
+      milestone fills a slot that exists, it doesn't redesign the
+      format
 - [ ] Verify on read; report a mismatch as a distinct error from a read
       failure, since they mean different things
 - [ ] `fsck` extended to check checksums, not just structure -- today it
       catches a wrong *shape*, never wrong *contents*
 - [ ] A `scrub` command that walks every block and reports rot
-- [ ] `tools/tfs2_writer.py --corrupt --flip-bit` to inject exactly the
+- [ ] `corrupt --flip-bit` in the writer tools (tfs2/tfs3) to inject exactly the
       damage this detects, the way the existing corruption modes work
 - [ ] Decide what happens on mismatch: refuse, or return the data with a
       loud warning -- there's no redundancy to repair from
@@ -472,7 +488,8 @@ open -- a checksum field wants to be designed in, not bolted on.*
 belong on an inode, not on a path-keyed record.*
 
 - [ ] A minimal user/group model
-- [ ] Per-file owner + permission bits on TFS2
+- [ ] Per-file owner + permission bits (TFS3's inode already reserves
+      the room -- bytes 92-95; TFS2 is the awkward case, see Details)
 - [ ] Permission checks in `fs_ops` calls
 - [ ] A login prompt (even single-user-by-default)
 - [ ] Password hashing + an `/etc/passwd`-shaped file
@@ -499,7 +516,7 @@ this needs is the same machinery, and building it twice would be silly.*
       plaintext blocks don't produce identical ciphertext
 - [ ] A passphrase prompt at boot, before `fs_init()` can mount
 - [ ] An unencrypted header holding the salt and parameters
-- [ ] `tools/tfs2_writer.py` taught the same scheme, or an explicit
+- [ ] The host writer tools (tfs2/tfs3) taught the same scheme, or an explicit
       decision that host-side tooling only works on plaintext images
 - [ ] Measure the throughput cost -- AES in software on every block is
       not free, and `stress` will show it plainly
@@ -599,9 +616,11 @@ guess.*
 
 ### Milestone 22 -- Desktop productivity apps (planned v0.22.0)
 
-- [ ] Real filesystem API surface (list/stat/create/delete/seek --
-      today's `SYS_OPEN`/`SYS_READ`/`SYS_CLOSE` is sequential-read-only,
-      no `SYS_SEEK`/lseek-equivalent exists at all)
+- [ ] Real RING-3 filesystem API surface (list/stat/create/delete/
+      seek -- the KERNEL-side fs API grew stat-with-ino, hardlinks and
+      capability queries at Milestone 15, but the syscall surface is
+      still `SYS_OPEN`/`SYS_READ`/`SYS_CLOSE` sequential-read-only; no
+      `SYS_SEEK`/lseek-equivalent exists at all)
 - [ ] File manager app
 - [ ] Desktop calendar widget
 - [x] ~~Control panel with pluggable applets~~ -- done, see
@@ -646,7 +665,7 @@ guess.*
       `g_fs`
 - [ ] Path resolution that picks a backend per-path
 - [ ] `mount`/`umount` shell commands
-- [ ] Mount a second TFS2 image alongside the first, as the simplest
+- [ ] Mount a second TFS3 image alongside the first, as the simplest
       possible proof
 - [ ] Mount a FAT volume (needs Milestone 24's FAT driver) read-only
 - [ ] Decide the lookup rule up front: longest-prefix wins, and what
@@ -797,8 +816,9 @@ develop against today with no bring-up risk.
 - [ ] `virtio-net`: a NIC on the same transport, likely easier than
       e1000 once virtqueues exist
 - [ ] `virtio-blk`: a block device that isn't ATA -- would exercise the
-      VFS's backend seam (see docs/decisions.md on the single-backend
-      VFS) without writing AHCI first
+      VFS's backend seam (already exercised once by TFS3 -- see
+      docs/decisions.md's probe-selected-backends entry) without
+      writing AHCI first
 - [ ] `virtio-rng`: entropy. Tiny, and the natural first consumer of the
       transport -- a good bring-up target precisely because it's boring
 - [ ] `virtio-input`: keyboard/mouse that isn't PS/2, which would also
@@ -855,7 +875,8 @@ Listed with the honest reason each is or isn't attractive.
 - [ ] Namespace enumeration (an NVMe disk can present several)
 - [ ] Multiple queue pairs, and whether to bother before SMP exists
 - [ ] The 4KB-sector question: NVMe devices commonly aren't 512-byte,
-      which TFS2's on-disk assumptions have never been tested against
+      which neither TFS2's nor TFS3's on-disk assumptions (both
+      512-byte-sector based) have ever been tested against
 - [ ] A PRP list for transfers past one page, the equivalent of the PRD
       table `ata.c` already builds
 
@@ -863,7 +884,8 @@ Listed with the honest reason each is or isn't attractive.
 
 - [ ] Journal file *data*, not just metadata -- the gap `tfs.c`'s top
       comment documents honestly today
-- [ ] A multi-slot journal (today's is one record wide)
+- [ ] A multi-slot journal (TFS2's is one record wide; TFS3 already
+      has a 4-slot metadata transaction -- this item is about DATA)
 - [ ] Copy-on-write block updates
 - [ ] Point-in-time snapshots built on that COW
 - [ ] `fsck` awareness of snapshot-shared blocks (a block referenced
@@ -876,7 +898,7 @@ Listed with the honest reason each is or isn't attractive.
       since blocks may be shared with other snapshots
 - [ ] Reference-counted blocks, and where that count lives
 - [ ] Rollback to a snapshot, including what happens to open files
-- [ ] `tools/tfs2_writer.py` able to read a snapshot from the host
+- [ ] `tools/tfs3_writer.py` able to read a snapshot from the host
 - [ ] Measure the write amplification this introduces, honestly
 
 ### Milestone 30 -- ACPI + real power/timer (planned v0.30.0)
@@ -972,7 +994,7 @@ Listed with the honest reason each is or isn't attractive.
 - [ ] A swap-backed page reclaim path
 - [ ] Page-out under memory pressure
 - [ ] Page-in on fault
-- [ ] A swap file on TFS2 (or a raw disk region)
+- [ ] A swap file on the active filesystem (or a raw disk region)
 - [ ] LRU-ish page aging to choose victims
 - [ ] Dirty-page writeback before eviction
 - [ ] Swap usage reported in `meminfo` and Task Manager
@@ -983,7 +1005,8 @@ Listed with the honest reason each is or isn't attractive.
 - [ ] Console + `gfx_draw_string()` decoding multi-byte sequences
 - [ ] A font atlas keyed by codepoint rather than by byte
 - [ ] Keyboard layout files emitting codepoints, not Latin-1 bytes
-- [ ] TFS2 path handling audited for multi-byte names (`FS_PATH_MAX`
+- [ ] Filesystem path handling (both backends) audited for
+      multi-byte names (`FS_PATH_MAX`
       becomes a byte budget, not a character count)
 - [ ] A migration story for existing Latin-1 content on disk
 - [ ] Audit every `char`-sized assumption first -- this codebase has
@@ -1073,7 +1096,8 @@ Smaller or lower-priority items not yet slotted into a milestone above.
 - [ ] `ls` colour/format options beyond `-l`/`-a`
 - [ ] Serial debug console: make it writable (it's read-only inspection
       today, deliberately -- see `docs/decisions.md`)
-- [ ] Replace the fixed `MAX_WINDOWS`/`FS_MAX_FILES`-style compile-time
+- [ ] Replace the fixed `MAX_WINDOWS`-style compile-time (and TFS2's
+      `FS_MAX_FILES`)
       caps with growable structures, once the heap is trusted enough
 - [ ] Stretch: port a small classic game (e.g. Doom, `doomgeneric`-style)
       -- see the Details section below for the real prerequisite
@@ -1126,7 +1150,7 @@ testable:
    bug (a stale cached `struct window *`, not safe to hold across frames in
    this WM -- see `docs/decisions.md`) was caught and fixed during QMP
    testing, not by code review alone. Test: QMP -- seeded a large file
-   directly onto `disk.img` (`tools/tfs2_writer.py`, no boot needed),
+   directly onto `disk.img` (the writer tools via `tools/seed_disk.py`, no boot needed),
    Notepad Save As... over it, clicked a second window immediately after
    confirming Save -- caught "Saving..." with the Save button disabled, and
    the desktop successfully switching focus to the other window while the
@@ -1337,7 +1361,9 @@ with the crash-safety argument unchanged -- a 256-record format went
 `partition_read_table()` reads LBA 0 (and LBA 1 + the entry array, for a
 protective-MBR-signaled GPT disk), exposed via a new `parttable` shell
 command. Read-only, parse-only, same as originally scoped here --
-`disk.img` is still one raw TFS2 blob at LBA 0, not a partitioned disk,
+a fresh `disk.img` is one raw TFS3 volume (which deliberately
+reserves its first 32 KiB for an MBR/GPT -- see docs/tfs3-design.md's
+"Volumes and partitions"), not a partitioned disk,
 and this never gets consulted by the mount path. See `docs/decisions.md`
 for why the GPT half of this couldn't be verified via a live in-VM boot
 test the way the MBR half was (TFS2's own self-test unconditionally
@@ -1619,10 +1645,16 @@ no page, or worse, two descriptions that disagree. The CI check in the
 item list exists to enforce exactly that.
 
 Pages get seeded onto the image at build time through
-`tools/tfs2_writer.py`, the same path `/bin` already takes, so no
+the host writer tools, the same path `/bin` already takes, so no
 boot-time install step is needed.
 
 ### Milestone 15 -- TFS3: an inode layer
+
+**LANDED 2026-08-14** -- `docs/tfs3-spec.md` is the format as shipped,
+`docs/tfs3-design.md` the decision record. The prose below is kept as
+the design-time motivation (written in future tense; the forks it
+poses were all decided -- no migration, `FS_MAX_FILES` retired to
+TFS2's table size, `FS_PATH_MAX` still binding callers only).
 
 TFS2 stores a flat table of up to 256 records, each keyed by a full
 `char path[FS_PATH_MAX]` string (`struct file`, `tfs.c`). Directories
@@ -1674,7 +1706,8 @@ kernel, simply the file's contents.
 
 Placed immediately after the inode layer for a practical reason: a
 per-block checksum wants to live next to the block pointer that
-references it, and that structure is being designed in Milestone 15. Add
+references it, and Milestone 15 shipped that structure with the room
+already reserved (inode bytes 92-95). Add
 it then and it's a field; add it later and it's a second format change
 with another migration.
 
@@ -1688,7 +1721,7 @@ data" -- which still beats silently returning corruption, and is what
 makes a `scrub` command worth having (finding rot while a good copy may
 still exist somewhere off-machine is the entire value).
 
-Testing this is unusually tractable: `tools/tfs2_writer.py` already
+Testing this is unusually tractable: the writer tools already
 injects deliberate, precisely-known corruption for `fsck`. A
 `--flip-bit` mode is the same idea one layer down.
 
@@ -1702,10 +1735,11 @@ first rough breakdown:
 - A minimal user/group model -- a small, probably `/etc`-config-backed
   (see `etc_config.h`'s existing pattern) table of users, not a full
   `/etc/passwd`-equivalent to start.
-- Per-file owner + permission bits on TFS2 -- extends `struct file`'s
-  on-disk record (`docs/tfs2-spec.md` would need a version bump to add
-  the new fields, same kind of migration the v1-to-v2 rework already did
-  once).
+- Per-file owner + permission bits -- on TFS3 the inode already
+  RESERVES the room (bytes 92-95, earmarked uid u16 + mode u16 at
+  Milestone 15), so filling it is not even a format bump; TFS2 would
+  need a record-layout version bump and is the awkward case, probably
+  answered with "permissions are a TFS3 feature" + a caps bit.
 - Permission checks in `fs_ops` calls -- `vfs.c`'s dispatch layer is the
   natural enforcement point (one place, every backend benefits), rather
   than duplicating checks in `tfs.c`.
@@ -1963,16 +1997,23 @@ close button is drawn but not clickable.
 
 ### Milestone 25 -- Real mount points
 
-`vfs.c` dispatches every call to one active backend (`g_fs`), and
-`docs/decisions.md` explains why: with exactly one filesystem, a mount
-table would have been ceremony around a constant. That reasoning has an
-expiry date built into it, and two other milestones set it off -- FAT
-(Milestone 24) and USB mass storage (Milestone 32) both produce a second
-filesystem worth reading at the same time as the first.
+`vfs.c` dispatches every call to one ACTIVE backend (`g_fs`) -- since
+Milestone 15 selected at boot by a superblock probe over two compiled-in
+backends (TFS3 and TFS2), not a compile-time constant, but still one at
+a time; `docs/decisions.md` explains why a mount table stayed out of
+scope. What sets this milestone off is wanting two filesystems READABLE
+at once -- FAT (Milestone 24) and USB mass storage (Milestone 32) both
+produce that need. Two head starts already exist: the probe loop is the
+natural place a per-partition iteration slots in, and TFS3 is fully
+volume-relative behind a `{base_lba, sector_count}` seam
+(`docs/tfs3-design.md`'s "Volumes and partitions"), so mounting it from
+a partition needs no backend change. (TFS2 stays absolute/flat-only.)
+The per-backend-statics warning below applies to `tfs3.c` exactly as it
+does to `tfs.c`.
 
 The work is a mount table (longest-matching path prefix -> backend), path
 resolution that consults it, and `mount`/`umount` commands. The honest
-first proof isn't FAT: it's mounting a *second TFS2 image* at `/mnt`,
+first proof isn't FAT: it's mounting a *second TFS3 image* at `/mnt`,
 because that isolates "does dispatch-by-prefix work" from "does the new
 filesystem driver work". Only then is FAT read-only mounting a
 meaningful test.
@@ -2376,7 +2417,8 @@ it probably belongs in one of them instead.
   and they lead to different kernels:
   - *Our own libc over our own syscalls* -- POSIX-*shaped*, ports get
     recompiled against it. Every syscall stays honest to this codebase's
-    own design decisions (broken-down time, a single-backend VFS, the
+    own design decisions (broken-down time at the ABI boundary, the
+    one-active-backend probe-selected VFS, the
     fd table as it is). More work per ported program, no surprises.
   - *Linux x86-64 syscall-ABI emulation*, good enough to run statically
     linked musl binaries unmodified. A complete, real libc arrives for
@@ -2396,10 +2438,11 @@ it probably belongs in one of them instead.
   code" story -- worth doing early even if the rest of this slips.
 - **`time_t`.** Timestamps are broken-down local `struct rtc_time` with
   no stored UTC offset, on purpose (`docs/decisions.md`), which is
-  exactly the field needed to convert an existing one. Adding epoch
-  seconds means a civil-date conversion this kernel has never had, and
-  the offset wants to land in Milestone 15's inode while that format is
-  already being opened.
+  exactly the field needed to convert an existing one. The conversion
+  exists since Milestone 15 (`tz_rtc_to_epoch()`/`tz_epoch_to_rtc()`,
+  tz.c), `fs_stat()` reports epochs on both backends, and TFS3 stores
+  them natively with inode room reserved -- what this item still owns
+  is the STORED UTC offset and true-UTC semantics.
 - **The unglamorous syscall surface**: `lseek` (file I/O is
   open-then-sequential-read today), `dup`/`dup2` (which Milestone 12's
   redirection wants anyway), `stat`/`fstat`, `getpid`, `pipe`,

@@ -352,6 +352,6 @@ void cmd_fsformat(const char *args) {
         vga_putc('\n');
     } else {
         vga_write("fsformat: failed (unknown filesystem name, or the format itself failed -- see dmesg)\n");
-        vga_write("fsformat: known names: tfs2, tfs3 (tfs3 lands with the TFS3 backend)\n");
+        vga_write("fsformat: known names: tfs2, tfs3\n");
     }
 }

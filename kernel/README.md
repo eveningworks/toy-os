@@ -10,7 +10,7 @@ question to answer when adding one.
 | `core/` | `kernel_main`, multiboot parsing, timer, serial + the debug console, power | Does it own the machine as a whole, rather than one resource? |
 | `mm/` | Physical frames, address spaces, the kernel heap | Is it about memory? |
 | `proc/` | ELF loading, syscalls, processes, the scheduler | Is it about *running* something? |
-| `fs/` | VFS dispatch + the TFS2 backend | Is it about files? |
+| `fs/` | The probe-selecting VFS + two backends (TFS3 default, TFS2 legacy) | Is it about files? |
 | `drivers/` | Console, graphics, PS/2, ATA, PCI, partitions, speaker | Does it talk to a specific piece of hardware? |
 | `lib/` | the toolkit (`string.c`, `knum.c`, `kfmt.c`, `kpath.c`), JSON, klog, debug flags, `/etc` config, timezone/font/keyboard settings | Is it a service with no hardware and no policy of its own? |
 | `include/` | Headers, split by audience | See `include/README.md` |
@@ -30,18 +30,22 @@ Three specific things the split buys:
   `outb`, inline assembly, or a control-register access.
 - **A filesystem is not a device driver.** `tfs.c`/`vfs.c` sat in
   `drivers/` next to `ata.c`. The block device is a driver; the
-  filesystem on top of it is a subsystem. Mount points (roadmap
-  Milestone 25) will add backends here, not there.
+  filesystem on top of it is a subsystem. TFS3 (`tfs3.c`) already
+  proved the seam by arriving here as a second probe-selected
+  backend; mount points (roadmap Milestone 25) will add more, still
+  here, not there.
 - **`lib/` names the leftovers honestly.** `string.c`, `json.c`,
   `klog.c` and the `/etc` config readers aren't hardware bring-up and
   never were -- they were in `core/` because there was nowhere else.
 
   It has since become the place the shared toolkit lives:
-  `string.c` (strings/memory), `knum.c` (numbers <-> strings),
+  `string.c` (strings/memory, plus `k_fnv1a()` -- the project's one
+  non-cryptographic checksum, promoted out of tfs.c when tfs3.c
+  became its second caller), `knum.c` (numbers <-> strings),
   `kfmt.c` (`k_snprintf` + `vga_printf`/`klog_printf`) and `kpath.c`
   (path join/normalize/resolve). **Check these before writing a digit
-  loop, a hex formatter, a digit-parsing loop, or a path-joining
-  loop** -- there were nine, ten, six and three copies of those
+  loop, a hex formatter, a digit-parsing loop, a path-joining
+  loop, or a checksum** -- there were nine, ten, six and three copies of those
   respectively before the toolkit landed, and every one was written by
   someone who reasonably didn't know the others existed. Each depends
   on nothing but the others, deliberately, so any sink (screen, log,

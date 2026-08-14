@@ -577,7 +577,8 @@ Unchanged from the original draft:
 - `fsck` for the new format: bitmap-vs-checksum arbitration rules
   (see Inode), link-count verification, free-count cache recompute,
   checksum-mismatch = recompute-and-rewrite for data blocks.
-- A host-side `tools/tfs3_writer.py` (or a tfs2_writer.py mode)
+- A host-side `tools/tfs3_writer.py` (built as its own tool, not a
+  tfs2_writer.py mode -- that fork resolved at Stage B)
   mirroring the format, including the superblock magic+version
   refusal behavior tfs2_writer already has, `trim` awareness of
   the new bitmap locations, and writing the backup regions at format

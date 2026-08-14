@@ -15,7 +15,10 @@ Makefile's `API_INCLUDES`/`KERNEL_INCLUDES`/`APPS_CFLAGS`).
 
 `kapi.h` and everything it aggregates. This is the one header `apps/`
 is supposed to include (see CLAUDE.md), and everything reachable from it
-is a promise: console, graphics, keyboard/mouse, timer/RTC, filesystem,
+is a promise: console, graphics, keyboard/mouse, timer/RTC, filesystem
+(incl. the backend-capability surface -- `FS_CAP_*`, `fs_has()`,
+`fs_backend_name()`, `fs_link()`, and `fs_stat()`'s ino+epoch
+`struct fs_stat_info`),
 heap, PCI, version, and the shared toolkit (`string.h`, `knum.h`,
 `kfmt.h`, `kpath.h`, `klineedit.h` -- see CLAUDE.md's note to check
 these before hand-rolling a digit loop, a formatter or a path join).
@@ -38,7 +41,9 @@ way you'd treat a published ABI.
 
 Paging, the physical/virtual memory managers, the syscall
 implementation, process/scheduler internals, driver-private headers
-(`i8042.h`, `io.h`), and the filesystem backend vtable (`fs_ops.h`).
+(`i8042.h`, `io.h`), and the filesystem backend layer -- the vtable
+(`fs_ops.h`) plus each backend's registration header (`tfs.h`,
+`tfs3.h`), which is where a new filesystem starts.
 
 These are deliberately *not* on `apps/`'s include path. Before this
 split every header sat in one flat directory and the boundary CLAUDE.md

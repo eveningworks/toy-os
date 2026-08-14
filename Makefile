@@ -205,7 +205,8 @@ SEED_BINARIES = $(SEED_PROGRAMS) $(SEED_TESTS)
 # again, so the two can't drift.
 USERLAND_ELVES = $(foreach pair,$(SEED_BINARIES),$(firstword $(subst :, ,$(pair))))
 
-# Seed directory for tools/tfs2_writer.py's `sync` command -- see the
+# Seed directory for the writer tools' `sync` (reached through
+# tools/seed_disk.py, which probes the image's format) -- see the
 # `seed` target below and docs/decisions.md. Not committed as a
 # generic directory: SEED_DIR/sync/bin/* are build-generated copies of
 # each SEED_BINARIES entry, staged fresh by the `seed` target's own
@@ -354,7 +355,7 @@ $(DISK_IMG):
 # when these were GRUB modules (see docs/decisions.md).
 
 # Seeds $(DISK_IMG) with every SEED_BINARIES entry, plus the /etc/kbs/*
-# keyboard-layout data files, via tools/tfs2_writer.py's `sync` (see
+# keyboard-layout data files, via tools/seed_disk.py (see
 # docs/decisions.md) -- this is what gets each binary onto disk now,
 # replacing both the old boot-time BIN_BOOTSTRAP/GRUB-module install
 # (kernel/core/kernel.c, lspci only) and the older still per-binary

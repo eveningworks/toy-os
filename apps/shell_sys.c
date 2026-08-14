@@ -141,7 +141,8 @@ static const char *const HELP_LINES[] = {
     "  lspci         - list PCI devices found at boot (bus:dev.func,\n",
     "                  vendor:device ID, class, IRQ, BARs)\n",
     "  parttable     - show the attached disk's MBR/GPT partition table,\n",
-    "                  if any (today's disk.img has none -- raw TFS2)\n",
+    "                  if any (today's disk.img has none -- one raw\n",
+    "                  filesystem volume, TFS3 by default)\n",
     "\n",
     "Appearance:\n",
     "  color <name>  - change shell text color\n",
@@ -1401,7 +1402,9 @@ static void print_guid(const uint8_t *g) {
 }
 
 // Reads and prints whatever partition table (if any) is on the
-// attached disk -- MBR, GPT, or neither (today's disk.img: raw TFS2
+// attached disk -- MBR, GPT, or neither (today's disk.img: one raw
+// filesystem volume, TFS3 by default, which deliberately leaves
+// LBA 0-63 untouched for exactly this
 // from LBA 0, no partition table at all, see kernel/include/api/partition.h's
 // top comment). Read-only, diagnostic only, same spirit as `lspci`.
 void cmd_parttable(void) {

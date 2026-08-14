@@ -12,8 +12,9 @@ conventions that are easy to violate by accident.
 
 A small x86-64 OS (Multiboot2/GRUB-booted, freestanding C + NASM) with
 ring0/ring3 separation, per-process paging, an ELF64 loader, syscalls,
-a preemptive scheduler, a kernel-space window manager, and a
-disk-backed filesystem. No cross-compiler needed -- host and target are
+a preemptive scheduler, a kernel-space window manager, and two
+disk-backed filesystems (TFS3 the default, TFS2 kept as a
+probe-selected second backend). No cross-compiler needed -- host and target are
 both x86-64, so plain system `gcc`/`ld`/`nasm` with freestanding flags
 work.
 
@@ -81,7 +82,11 @@ technical conventions below:
   (2) **`on_click` fires on button-DOWN despite its name**, so a
   control that commits there can never be cancelled -- arm in
   `on_press`, act in `on_release`, which is what the title bar has
-  always done. (3) **Interaction states come from `enum ui_state` /
+  always done. (3) **`gfx_set_clip_rect()` with a non-positive w/h sets an EMPTY
+  clip -- nothing draws -- and only `gfx_clear_clip_rect()` removes a
+  clip**; conflating the two once handed an app's whole `on_draw()` an
+  unclipped screen (the damage sweep's long-standing "20px"
+  violation). (4) **Interaction states come from `enum ui_state` /
   `ui_state_bg()`**, which derives hover/pressed from the control's own
   colour; don't hand-pick tints, and don't assume hover means "lighter"
   (on this near-white theme it has to darken -- `gfx_luminance()`
@@ -794,7 +799,10 @@ and not applicable, on a direct local checkout).
 The rest, added once the build/test/delivery loop above had enough
 repeated manual steps to be worth automating:
 - **`preflight.sh`** -- one command running `make clean && make all &&
-  make iso` + `boot_smoke_test.py` + a `git status --short` summary, so
+  make iso` + `check_layout.py` + `boot_smoke_test.py` + `ktest_run.py`
+  + a `git status --short` summary (`fs_switch_test.py` is NOT in it --
+  that one needs a disk copy and a longer boot cycle, run it yourself
+  after `kernel/fs/` changes), so
   "am I safe to deliver?" is one call instead of three run by hand.
   `--skip-clean` skips the initial `make clean`.
 - **`deliver.py`** -- builds the delivery file-list/device-path/
@@ -835,9 +843,10 @@ repeated manual steps to be worth automating:
   directory must exist on a freshly built image, a `boot`-created one
   needn't until the OS has run. **Read that doc before adding a
   directory, a config file, or any new seeded data**: it also records
-  the record/path budget (256 records total, directories included; 64
-  bytes per full path) and the `sync`-never-deletes trap that makes
-  moving a seeded file need an explicit cleanup.
+  the budgets (64-byte caller-side path buffers everywhere; the
+  256-record table on TFS2-legacy images only -- TFS3, the default
+  since Milestone 15, has ~590k inodes) and the `sync`-never-deletes
+  trap that makes moving a seeded file need an explicit cleanup.
 - **`pixel_probe.py`** -- reads exact pixel values out of screenshots,
   and tabulates the same points across several (`--compare a.png b.png
   --at 85,100 --at 215,100`), flagging which moved and which didn't.
@@ -894,8 +903,10 @@ repeated manual steps to be worth automating:
   state, and for the host-side seeding path, which never boots the
   kernel. Non-destructive: only blocks the filesystem already considers
   free are touched. `format`
-  initializes a blank/foreign image as an empty TFS2 v3 filesystem
-  (mirrors `tfs_init()`'s format path byte-for-byte); `write`/`read`
+  initializes a blank/foreign image as an empty TFS2 v3 filesystem --
+  note that running it on a BLANK image opts that image out of the
+  TFS3 default; that's `seed_disk.py`'s job to decide, not a thing to
+  do casually; `write`/`read`
   for a single file; `ls` for a directory listing; `sync <seed-dir>` to
   mirror a whole seed tree in (`once/` = copy-once, `sync/` =
   content-hash-synced -- see its own docstring and
@@ -952,7 +963,11 @@ repeated manual steps to be worth automating:
   inside one booted kernel).
 - **`mkpart_test.py`** -- writes a synthetic legacy MBR or GPT partition
   table onto a disk image, for testing `kernel/drivers/partition.c`'s
-  parser (`parttable` shell command). TFS2-mount-preserving: patches
+  parser (`parttable` shell command). Its mount-preserving guarantee
+  was designed for (and verified against) TFS2 images; a TFS3 image
+  deliberately leaves its first 32 KiB untouched for exactly this, so
+  coexistence is by-design there, but the tool hasn't been re-verified
+  against one -- check before trusting it on TFS3. TFS2-mount-preserving: patches
   only the partition-table byte ranges TFS2 itself never touches
   (reads the existing LBA 0 sector first rather than blindly
   overwriting it), so the real filesystem underneath still mounts
@@ -985,8 +1000,9 @@ the same reasoning that produced all of the above.
 
 `docs/decisions.md` -- short, topic-indexed answers to "why does
 toy-os work this way?" for the handful of decisions that come up again
-once code has grown around them (e.g. "why is the VFS single-backend,
-not mount points", "why doesn't `fs_delete` recurse"). Deliberately a
+once code has grown around them (e.g. "why does the VFS run one
+ACTIVE backend (probe-selected), not mount points", "why doesn't
+`fs_delete` recurse"). Deliberately a
 *pointer* file, not a second copy of the reasoning: each entry is a
 couple sentences plus a link into the relevant changelog section
 (`CHANGELOG.md` for the semver era, `CHANGELOG-archive-2.md` for Build
@@ -1001,9 +1017,9 @@ topic, so "why is X built this way" otherwise means scrolling/
 searching the whole history.
 `docs/filesystem-layout.md` -- what lives where on the OS's own disk
 (`/bin` vs `/tests` vs `/usr/share` vs `/etc`), the rules for adding to
-it, the deliberate divergences from the FHS, and the record/path budget
-that actually constrains it (256 records INCLUDING directories, 64-byte
-paths). Not advisory: `tools/check_layout.py` reads its table and fails
+it, the deliberate divergences from the FHS, and the budgets that constrain it
+(64-byte caller-side paths everywhere; the 256-record table on
+TFS2-legacy images only). Not advisory: `tools/check_layout.py` reads its table and fails
 `preflight`/CI if the built image disagrees, in either direction. Read
 it before adding a directory, a config file or any seeded data.
 

@@ -239,7 +239,11 @@ cheap cursor-only fast path for plain mouse movement. If you add
 drawing code, do it in `on_draw` and let the window manager handle
 presenting; don't call `gfx_present()` yourself, and don't call
 `gfx_set_clip_rect()` from app code either -- that's the compositor's
-own mechanism, not a per-app one.
+own mechanism, not a per-app one. (Its contract, for the record: a
+non-positive w/h sets an EMPTY clip -- nothing draws -- and only
+`gfx_clear_clip_rect()` removes a clip. The two used to be conflated,
+and the compositor painting an app's whole `on_draw()` unclipped was
+the result.)
 
 There's no process isolation here either -- a GUI app's callbacks run in
 the kernel's own context, same as everything else in `apps/`. What the
@@ -456,7 +460,11 @@ that one, so there's no example yet -- the signature is
 
 See `kernel/include/api/kapi.h` for the exact list -- it just aggregates the
 driver headers apps are allowed to use (console output, keyboard, mouse,
-timer/RTC, filesystem, graphics primitives, `system_reboot()`). If you're
+timer/RTC, filesystem -- including the backend-capability surface:
+`fs_has(FS_CAP_*)` to ask what the active filesystem supports,
+`fs_backend_name()` for display, `fs_link()` for hardlinks, and
+`fs_stat()`'s `struct fs_stat_info` with an inode number and
+epoch-second timestamps -- graphics primitives, `system_reboot()`). If you're
 tempted to `#include` something from `kernel/drivers` or `kernel/core`
 directly, or to call `inb`/`outb` yourself, stop -- add the capability to
 a driver and expose it through `kapi.h` instead. That's what keeps apps

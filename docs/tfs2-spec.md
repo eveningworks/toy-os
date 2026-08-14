@@ -1,7 +1,15 @@
 # TFS2 on-disk format (v3 -- block-addressed)
 
-This is a byte-exact specification of TFS2, toy-os's persistent
-filesystem, for writing an independent (read-only, ideally) tool on a
+**Status: the LEGACY of toy-os's two filesystems.** Since Milestone 15
+(2026-08-14), TFS3 (`docs/tfs3-spec.md`) is the default for
+fresh/blank images; TFS2 remains fully supported as a second backend
+-- the kernel probes both magics and mounts whatever a disk actually
+carries, and `fsformat tfs2 confirm` creates a fresh TFS2 on purpose.
+This spec is unchanged by any of that: the format itself did not move
+a byte.
+
+This is a byte-exact specification of TFS2 for writing an independent
+(read-only, ideally) tool on a
 host machine that can open a `disk.img`/`toy-os.iso`-adjacent raw disk
 image and browse its contents without booting toy-os at all.
 
@@ -16,8 +24,11 @@ offsets differ, and only because that one constant did.
 Older versions are **gone**: v1 (the original journaled/timestamped
 format, with each file's data inlined in its table record, capped at
 `FS_DATA_MAX` = 2048 bytes) and v2 (same layout as here, 32 slots).
-toy-os detects any version mismatch and reformats from scratch rather
-than trying to read an old image; a reader built against this document
+toy-os detects any version mismatch and treats the disk as unclaimed;
+since the multi-backend VFS landed, an unclaimed-but-readable disk is
+formatted with the DEFAULT filesystem (TFS3, not TFS2 -- see
+`kernel/fs/vfs.c`'s probe loop), and an unreadable superblock is
+refused outright. A reader built against this document
 cannot open a v1 or v2 image either, and shouldn't try to guess.
 
 This document describes the format only -- not why it's shaped this
@@ -47,7 +58,9 @@ versions. A TFS2-aware reader should check the superblock magic+version
   value -- treat them as unspecified padding, not as data.
 - `FS_MAX_FILES` (256) and `FS_PATH_MAX` (64) are compile-time constants
   in this kernel (`kernel/include/api/fs.h`), not something an on-disk
-  header records anywhere -- a reader has to know them ahead of time
+  header records anywhere. (Since TFS3 landed, `FS_MAX_FILES` is
+  TFS2's table size only; `FS_PATH_MAX` remains the caller-side path
+  buffer limit shared by both backends.) A reader has to know them ahead of time
   (they're listed here) rather than discover them from the image
   itself. A future toy-os build that changes either would also bump
   the superblock version (see below), which is the signal a reader
@@ -147,7 +160,9 @@ boot.**
 **FNV-1a-32**: `hash = 0x811C9DC5; for each byte b: hash ^= b; hash *=
 0x01000193` (32-bit unsigned, wraps on overflow). Not cryptographic --
 just enough to detect a torn/partial write with overwhelming
-probability, matching `kernel/fs/tfs.c`'s `fnv1a()`.
+probability, matching `kernel/fs/tfs.c`'s `fnv1a()` (a thin wrapper
+over the shared `k_fnv1a()` in `kernel/include/api/string.h` since
+TFS3 became the hash's second caller).
 
 **What the journal protects, and what it doesn't**: exactly as
 before, `persist_record()` protects one table-slot *record* (path,
@@ -523,7 +538,10 @@ content to stdout.
 
 ## Writing to a TFS2 image from a host tool
 
-Not covered by this spec in detail, and not recommended as a first
+The tool exists: `tools/tfs2_writer.py` (TFS2 images only -- the TFS3
+equivalent is `tools/tfs3_writer.py`, and `tools/seed_disk.py` picks
+between them by magic at build time). Hand-rolling a second writer is
+not covered by this spec in detail, and not recommended as a first
 step -- the journal's write-ahead sequence (see above) has to be
 followed exactly (stage -> commit -> apply -> clear) for the *record*
 to be crash-safe, and getting it wrong risks corrupting the image in a

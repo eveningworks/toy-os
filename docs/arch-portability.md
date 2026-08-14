@@ -35,8 +35,9 @@ No asm, no inline asm, no port I/O -- these need zero changes to
 support a second arch, once they're moved (a pure `git mv` plus header
 path fixes, not a rewrite):
 
-- `kernel/fs/tfs.c` (1,100 lines) + `vfs.c` (79 lines) -- the whole
-  filesystem stack.
+- `kernel/fs/` -- the whole filesystem stack: `tfs3.c` + `tfs.c` (the
+  two backends) + `vfs.c` (the probe/dispatch layer) + `fs_test.c`.
+  (Line counts rot -- run `wc -l` for today's numbers.)
 - `apps/wm/*` (1,592 lines, split across `wm.c`/`wm_input.c`/
   `wm_render.c`/`desktop.c`/`context_menu.c`/`start_menu.c`) -- the
   window manager, aside from one bare `hlt` in `wm.c`'s idle wait
@@ -160,7 +161,7 @@ kernel/
   mm/            pmm.c vmm.c heap.c                        <- exists
   proc/          process.c scheduler.c elf.c elf_run.c
                  syscall.c ring3_test.c
-  fs/            vfs.c tfs.c
+  fs/            vfs.c tfs3.c tfs.c fs_test.c
   lib/           string.c json.c klog.c etc_config.c ...
   core/          kernel.c multiboot.c timer.c serial.c
                  power.c debug_console.c
