@@ -117,6 +117,28 @@ int sys_gui_poll_key(void);
 int sys_win_create(struct win_request *req);
 int sys_win_present(void);
 
+// --- processes and pipes ----------------------------------------------
+
+// Creates a pipe. fds[0] is the read end, fds[1] the write end.
+// Returns 1, or -1.
+int sys_pipe(int fds[2]);
+
+// Runs `path` as a new process. `args` is whitespace-separated
+// (NULL for none). `stdout_fd` is a pipe WRITE end from sys_pipe() to
+// capture the child's output, or -1 to let it write to the console.
+// Returns the child's pid, or -1.
+//
+// This plus sys_read() on the pipe's read end is how one program runs
+// another and reads what it printed -- the thing a terminal does.
+int sys_spawn(const char *path, const char *args, int stdout_fd);
+
+// BLOCKS until `pid` exits, then reaps it. Writes the exit code to
+// `*out_code` if non-NULL. Returns the pid, or -1.
+//
+// Wraps the kernel's "0 means woken, ask again" retry contract, like
+// sys_wait_event() -- the loop lives here rather than in every caller.
+int sys_waitpid(int pid, int *out_code);
+
 // --- windowing -------------------------------------------------------
 
 // One typed message in, one out. See abi/win_proto.h.

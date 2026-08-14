@@ -78,6 +78,25 @@ void scheduler_demo_run(void);
 // phase 4b) for the first real caller.
 int scheduler_spawn(const char *path, const char *args);
 
+// Same, but the child's stdout (fd 1) is redirected into `pipe_idx`
+// (pipe.h) instead of the console. -1 means "the console", i.e.
+// identical to scheduler_spawn().
+//
+// This is what lets one process read another's output -- the thing a
+// terminal fundamentally does and that nothing here could do before.
+// The redirection is per-process state rather than an fd-table entry
+// because fd 1 has always been a hardcoded console in SYS_WRITE; see
+// syscall.c.
+int scheduler_spawn_piped(const char *path, const char *args, int pipe_idx);
+
+// The pipe `pid`'s stdout is redirected into, or -1 for the console.
+// Called from SYS_WRITE to decide where fd 1 goes.
+int scheduler_stdout_pipe(int pid);
+
+// Whether `pid` names a live or reaped-pending process started by
+// scheduler_spawn*(). For SYS_WAITPID's validation.
+int scheduler_pid_valid(int pid);
+
 // FS_STEP_*-shaped result for scheduler_poll() below (fs.h's enum
 // fs_step_result was the direct precedent -- same "PENDING/DONE-ish,
 // call again" shape, renamed since this isn't actually that type and a
@@ -107,6 +126,8 @@ enum sched_poll_result scheduler_poll(int pid, int *out_exit_code);
 // of waiter it is answering -- it names the EVENT that happened and
 // every process parked on it wakes.
 #define SCHED_WAIT_EVENT 1 // a window/input event for this process
+#define SCHED_WAIT_PIPE  2 // data (or EOF) on a pipe this process reads
+#define SCHED_WAIT_CHILD 3 // a spawned child of this process exited
 
 // Parks the calling process until scheduler_wake() names its `reason`,
 // and hands the CPU to whatever is next. `regs` must be the syscall
