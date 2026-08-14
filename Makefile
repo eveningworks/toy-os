@@ -398,7 +398,7 @@ seed: $(DISK_IMG) $(USERLAND_ELVES)
 	else \
 		echo "seed: xkbcli not found -- skipping /etc/kbs regeneration (apt-get install libxkbcommon-tools to enable; kernel falls back to compiled-in US regardless)"; \
 	fi
-	python3 tools/tfs2_writer.py sync $(DISK_IMG) $(SEED_DIR)
+	python3 tools/seed_disk.py $(DISK_IMG) $(SEED_DIR)
 
 iso: version $(KERNEL) $(USERLAND_ELVES) seed
 	mkdir -p iso/boot/grub

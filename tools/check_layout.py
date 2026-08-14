@@ -77,8 +77,26 @@ def parse_doc(path):
     return rows
 
 
-def dirs_on_image(disk, writer):
-    """Every directory on the image, walked breadth-first from /."""
+def image_format(disk):
+    """'tfs2' or 'tfs3' by magic -- same probe rule as the kernel and
+    tools/seed_disk.py."""
+    with open(disk, "rb") as f:
+        lba0 = f.read(5)
+        f.seek(8 * 4096)
+        blk8 = f.read(5)
+    if blk8[:4] == b"TFS3":
+        return "tfs3"
+    if lba0[:4] == b"TFS2":
+        return "tfs2"
+    sys.exit(f"check_layout: {disk} carries neither filesystem magic")
+
+
+def dirs_on_image(disk, writer_dir):
+    """Every directory on the image, walked breadth-first from /.
+    Format-aware: tfs2_writer prints `DIR /full/path`, tfs3_writer
+    prints `d <size> ino=N <name>` (names, not paths)."""
+    fmt = image_format(disk)
+    writer = os.path.join(writer_dir, f"{fmt}_writer.py")
     found = set()
     queue = ["/"]
     while queue:
@@ -89,9 +107,18 @@ def dirs_on_image(disk, writer):
             sys.exit(f"check_layout: couldn't list {cur} on {disk}:\n{r.stderr.strip()}")
         for line in r.stdout.splitlines():
             parts = line.split()
-            if len(parts) >= 2 and parts[0] == "DIR":
-                found.add(parts[1])
-                queue.append(parts[1])
+            if fmt == "tfs2":
+                if len(parts) >= 2 and parts[0] == "DIR":
+                    found.add(parts[1])
+                    queue.append(parts[1])
+            else:
+                if len(parts) >= 4 and parts[0] == "d":
+                    name = parts[3]
+                    if name in (".", ".."):
+                        continue
+                    full = (cur.rstrip("/") + "/" + name) if cur != "/" else "/" + name
+                    found.add(full)
+                    queue.append(full)
     return found
 
 
@@ -109,9 +136,8 @@ def main():
         print(f"check_layout: {args.doc} not found", file=sys.stderr)
         return 2
 
-    writer = os.path.join(REPO, "tools/tfs2_writer.py")
     documented = parse_doc(args.doc)
-    on_disk = dirs_on_image(args.disk, writer)
+    on_disk = dirs_on_image(args.disk, os.path.join(REPO, "tools"))
 
     problems = []
 

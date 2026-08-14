@@ -2067,6 +2067,68 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
     81/81 KTESTs on tfs2; the full fs suite (fsck test now live
     again) passes 10/10 on a tfs3 disk.
 
+- **TFS3 is the default filesystem now -- Stage E: the flip, the
+  end-to-end switch test, the spec, and one honesty fix `make
+  verify` forced.** Milestone 15 complete (rename, unlink-while-open,
+  the FS_PATH_MAX caller audit and symlink IMPLEMENTATION stay open
+  as their own roadmap items).
+  - **The flip, without surprises**: `vfs.c`'s blank-disk default is
+    tfs3, and the Makefile's seed goes through the new
+    `tools/seed_disk.py`, which probes the image's magic -- an
+    existing TFS2 disk.img keeps mounting as TFS2 untouched; only a
+    blank image (or `make clean-disk && make iso`, the deliberate
+    move) becomes TFS3. `tools/check_layout.py` reads both formats
+    the same way.
+  - **Fresh TFS3 images stay sparse**: the host format skips writing
+    its ~73 MB of zeroed inode tables on a freshly truncated image
+    and hole-punches them on a reformat, so the built disk.img costs
+    **2.7 MB** on the host (vs 73 MB when the tables were written as
+    literal zeros). The kernel-side `fsformat tfs3` still writes real
+    zeros -- recorded as a papercut with the TRIM-based fix sketch.
+  - **`tools/fs_switch_test.py`**: boots a copy and proves the whole
+    multi-backend story in 12 checks -- probe mounts the image's own
+    format, `fsformat` live-switches both ways (wipefs included),
+    writes work on each side, files survive two reboots, fsck ends
+    clean. This is the filesystem-switching test the whole effort was
+    partly for, and it runs green.
+  - **The honesty fix `make verify` demanded**: the fault-injection
+    KTESTs make a tfs3 write FAIL mid-operation, and the first write
+    path leaked its freshly allocated blocks on such runtime failures
+    ("crash = leak" wrongly applied to non-crashes; TFS2's failure
+    paths clean up after themselves, and the fsck KTEST enforces it).
+    Every blocking mutation now runs under an allocation rollback log
+    -- runtime failure frees everything the operation took, only a
+    real crash leaks (and fsck reclaims that). The subtle part,
+    caught in review: directory growth COMMITS mid-operation, so its
+    blocks are removed from the log (`alog_forget`) -- rolling them
+    back would free blocks a committed parent inode references. The
+    steppable write path arms the log per STEP (other fs ops
+    interleave between steps); an abandoned stream's earlier steps
+    still leak by design. Also learned: `make verify` re-seeds by
+    sync, not reformat, so pre-fix leak damage persisted on disk.img
+    across runs and briefly looked like the fix not working --
+    measure before fixing, again.
+  - **Docs**: `docs/tfs3-spec.md` (byte-exact format as shipped,
+    tfs2-spec conventions, `tfs3_writer.py` named as the reference
+    implementation rather than embedding a second reader);
+    `docs/tfs3-design.md` marked implemented with the journal-scope
+    revision noted; `docs/filesystem-layout.md`'s record-budget
+    section rewritten (the 256-record budget is TFS2-only now; the
+    64-byte `FS_PATH_MAX` still binds CALLERS); two new
+    `docs/decisions.md` entries (TFS2-as-second-backend/probe-by-
+    magic, journal-scope narrowing) plus an update to the timestamps
+    entry; roadmap Milestone 15 checked off with the honest
+    remainders; two new known-issue papercuts (`fsformat` leaves
+    boot-created dirs absent until reboot; kernel-side format's 73 MB
+    zero-write).
+  - Verified: **`make verify` green end-to-end on the TFS3 disk.img**
+    (clean build, iso, boot smoke, 81/81 KTESTs incl. fsck-clean and
+    the fault tests, check_layout format-aware); fsck clean AFTER the
+    fault tests on a copy (the rollback proof the suite's own
+    ordering doesn't give); `fs_switch_test.py` 12/12; GUI desktop on
+    a TFS3 root with the Terminal writing and reading through it
+    (`screenshots/2026-08-14/desktop-on-tfs3-root-terminal-write.png`).
+
 ### Changed
 - **A documented, checked on-disk filesystem layout -- and the test
   binaries moved out of `/bin`.** Asked for a future-proof directory

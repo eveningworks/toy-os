@@ -457,6 +457,8 @@ static void ibm_set(uint32_t g, uint32_t i, int v) {
     mark_dirty(g_ibm_dirty, g);
 }
 
+static void alog_push(uint32_t blk); // rollback log, defined below with its story
+
 // Highest usable data offset within group g (backup regions excluded).
 static uint32_t group_data_end(uint32_t g) {
     uint32_t groups[2];
@@ -477,6 +479,7 @@ static int alloc_block_at(uint32_t blk) {
     bbm_set(g, i, 1);
     g_gd[g].free_blocks--;
     mark_dirty(g_gdt_dirty, g);
+    alog_push(blk);
     return 1;
 }
 
@@ -500,6 +503,7 @@ static uint32_t alloc_block(uint32_t prefer_group, uint32_t adjacent_to) {
                 g_gd[g].free_blocks--;
                 mark_dirty(g_gdt_dirty, g);
                 g_rotor[g] = i + 1;
+                alog_push(group_base(g) + i);
                 return group_base(g) + i;
             }
         }
@@ -585,6 +589,68 @@ static int flush_alloc_state(void) {
         if (!write_block(T3_GDT_BLOCK + tb, g_blk)) ok = 0;
     }
     return ok;
+}
+
+// ---- allocation rollback log ---------------------------------------------
+//
+// "Crash = leak, fsck reclaims" is the CRASH story; a runtime failure
+// (a refused write, out of space midway) is not allowed to leak --
+// TFS2's failure paths reattach/free what they took, and the fault-
+// injection KTESTs enforce exactly that by running fsck after the
+// failure tests. So every blocking mutation logs what it allocates
+// and frees it all if the operation fails. Single-threaded kernel:
+// one active log, armed around one operation at a time. The steppable
+// write path arms it PER STEP only (other fs ops interleave between
+// steps, and a global log would swallow their allocations); blocks
+// from earlier, completed steps of an abandoned stepped write do
+// still leak -- that path is crash-shaped by nature, and fsck's
+// reclaim is the designed answer there.
+static struct {
+    uint32_t *v;
+    uint32_t n, cap;
+    int active;
+    int overflow;
+} g_alog;
+
+static void alog_begin(void) { g_alog.n = 0; g_alog.active = 1; g_alog.overflow = 0; }
+
+static void alog_push(uint32_t blk) {
+    if (!g_alog.active || g_alog.overflow) return;
+    if (g_alog.n == g_alog.cap) {
+        uint32_t ncap = g_alog.cap ? g_alog.cap * 2 : 64;
+        uint32_t *nv = kmalloc(ncap * sizeof(uint32_t));
+        if (!nv) { g_alog.overflow = 1; return; }
+        if (g_alog.v) { k_memcpy(nv, g_alog.v, g_alog.n * sizeof(uint32_t)); kfree(g_alog.v); }
+        g_alog.v = nv;
+        g_alog.cap = ncap;
+    }
+    g_alog.v[g_alog.n++] = blk;
+}
+
+static void alog_commit(void) { g_alog.active = 0; }
+
+// Remove one block from the log: it just became referenced by a
+// COMMITTED transaction (directory growth commits mid-operation), so
+// an outer rollback must not free it out from under that reference.
+static void alog_forget(uint32_t blk) {
+    for (uint32_t i = 0; i < g_alog.n; i++) {
+        if (g_alog.v[i] == blk) {
+            g_alog.v[i] = g_alog.v[--g_alog.n];
+            return;
+        }
+    }
+}
+
+static void alog_rollback(void) {
+    if (g_alog.overflow) {
+        // Couldn't track everything -- leak honestly rather than free
+        // a partial (possibly wrong) set. fsck reclaims.
+        klog_write("tfs3: rollback log overflowed -- leaked blocks left for fsck\n");
+    } else {
+        for (uint32_t i = 0; i < g_alog.n; i++) free_block_bit(g_alog.v[i]);
+        flush_alloc_state();
+    }
+    g_alog.active = 0;
 }
 
 // TRIM freed blocks in runs, best-effort -- parity with tfs.c's
@@ -863,8 +929,8 @@ static void map_set_block(struct t3_inode *node, uint32_t leaf_blk,
 // inode through the journal. The order is the leak-safe one: bitmap
 // state flushes BEFORE the inode transaction makes anything
 // reachable. Returns 1/0.
-static int do_write(uint64_t ino, struct t3_inode *node, uint64_t offset,
-                    const void *buf, uint32_t len) {
+static int do_write_inner(uint64_t ino, struct t3_inode *node, uint64_t offset,
+                          const void *buf, uint32_t len) {
     const uint8_t *src = (const uint8_t *)buf;
     uint32_t prefer_group = (uint32_t)(ino / g_sb.ipg);
     uint32_t last_alloc = 0;
@@ -946,6 +1012,22 @@ static int do_write(uint64_t ino, struct t3_inode *node, uint64_t offset,
     if (!flush_alloc_state()) return 0;       // set-before-use
     if (!txn_stage_inode(ino, node)) { txn_reset(); return 0; }
     return txn_commit();                       // the commit point: file grows atomically
+}
+
+// The rollback shell: a runtime failure (refused write, out of space
+// midway) frees everything this call allocated -- see the alloc-log
+// comment. Only a CRASH is allowed to cost a leak.
+static int do_write(uint64_t ino, struct t3_inode *node, uint64_t offset,
+                    const void *buf, uint32_t len) {
+    alog_begin();
+    int ok = do_write_inner(ino, node, offset, buf, len);
+    if (ok) {
+        alog_commit();
+    } else {
+        pcache_drop();
+        alog_rollback();
+    }
+    return ok;
 }
 
 // Free every data + pointer block behind *node (for truncate/delete),
@@ -1076,6 +1158,11 @@ static int dirent_insert(uint64_t dir_ino, struct t3_inode *dir,
     if (!flush_alloc_state()) return 0;
     if (!txn_stage_inode(dir_ino, dir)) { txn_reset(); return 0; }
     if (!txn_commit()) return 0;
+    // The grow just COMMITTED: its blocks are referenced by the
+    // parent inode now, so they must survive any rollback of the
+    // caller's still-pending transaction.
+    alog_forget(newblk);
+    if (dir->ptrs[12]) alog_forget(dir->ptrs[12]);
 
     // Now stage the actual insertion into the fresh block, in the
     // caller's transaction.
@@ -1647,7 +1734,16 @@ static int tfs3_disk_usage(uint64_t *out_used, uint64_t *out_total) {
 // at it) + parent inode block for mkdir's link-count bump. <= 3
 // slots; directory growth runs as its own transaction inside
 // dirent_insert() (see its comment).
+static int create_entry_inner(const char *path, uint8_t type, uint64_t *out_ino);
+
 static int create_entry(const char *path, uint8_t type, uint64_t *out_ino) {
+    alog_begin();
+    int ok = create_entry_inner(path, type, out_ino);
+    if (ok) alog_commit(); else alog_rollback();
+    return ok;
+}
+
+static int create_entry_inner(const char *path, uint8_t type, uint64_t *out_ino) {
     char norm[T3_PATH_BUF];
     if (!g_mounted || !normalize(path, norm)) return 0;
     uint64_t existing;
@@ -1661,6 +1757,9 @@ static int create_entry(const char *path, uint8_t type, uint64_t *out_ino) {
     uint32_t prefer_group = (uint32_t)(parent_ino / g_sb.ipg);
     uint64_t ino = alloc_inode(prefer_group);
     if (!ino) return 0;
+    // Block allocations below roll back via the alloc log (armed by
+    // the create_entry() shell); the inode bit is freed by hand on
+    // each failure path since the log only tracks blocks.
 
     struct t3_inode node;
     k_memset(&node, 0, sizeof(node));
@@ -1682,18 +1781,18 @@ static int create_entry(const char *path, uint8_t type, uint64_t *out_ino) {
         node.size = T3_BLOCK;
     }
 
-    if (!flush_alloc_state()) return 0; // set-before-use
+    if (!flush_alloc_state()) { free_inode_bit(ino); flush_alloc_state(); return 0; } // set-before-use
 
     txn_reset();
     int ins = dirent_insert(parent_ino, &parent, name, name_len, ino);
-    if (!ins) { txn_reset(); return 0; }
-    if (!txn_stage_inode(ino, &node)) { txn_reset(); return 0; }
+    if (!ins) { txn_reset(); free_inode_bit(ino); flush_alloc_state(); return 0; }
+    if (!txn_stage_inode(ino, &node)) { txn_reset(); free_inode_bit(ino); flush_alloc_state(); return 0; }
     if (type == T3_TYPE_DIR) {
         parent.links++;
         parent.modified = node.created;
-        if (!txn_stage_inode(parent_ino, &parent)) { txn_reset(); return 0; }
+        if (!txn_stage_inode(parent_ino, &parent)) { txn_reset(); free_inode_bit(ino); flush_alloc_state(); return 0; }
     }
-    if (!txn_commit()) return 0;
+    if (!txn_commit()) { free_inode_bit(ino); flush_alloc_state(); return 0; }
     ncache_flush();
     if (out_ino) *out_ino = ino;
     return 1;
@@ -1857,11 +1956,13 @@ static int tfs3_link(const char *existing, const char *newpath) {
     struct t3_inode parent;
     if (!read_inode(parent_ino, &parent) || parent.type != T3_TYPE_DIR) return 0;
 
+    alog_begin(); // dir growth inside dirent_insert can allocate
     txn_reset();
-    if (!dirent_insert(parent_ino, &parent, name, name_len, ino)) { txn_reset(); return 0; }
+    if (!dirent_insert(parent_ino, &parent, name, name_len, ino)) { txn_reset(); alog_rollback(); return 0; }
     node.links++;
-    if (!txn_stage_inode(ino, &node)) { txn_reset(); return 0; }
-    if (!txn_commit()) return 0;
+    if (!txn_stage_inode(ino, &node)) { txn_reset(); alog_rollback(); return 0; }
+    if (!txn_commit()) { alog_rollback(); return 0; }
+    alog_commit();
     ncache_flush();
     return 1;
 }
@@ -1901,6 +2002,11 @@ static void *tfs3_write_range_begin(const char *path, uint64_t offset, const voi
 
 static int tfs3_write_range_step(void *handle) {
     struct t3_write_step *st = (struct t3_write_step *)handle;
+    // Rollback scope is THIS STEP only -- other fs operations
+    // interleave between steps of an async write, so a whole-stream
+    // log can't be kept armed. Earlier completed steps of an
+    // abandoned stream leak by design (crash-shaped); fsck reclaims.
+    alog_begin();
     if (st->total < st->len) {
         uint64_t file_off = st->offset + st->total;
         uint32_t bi = (uint32_t)(file_off / T3_BLOCK);
@@ -1911,13 +2017,13 @@ static int tfs3_write_range_step(void *handle) {
         uint32_t prefer_group = (uint32_t)(st->ino / g_sb.ipg);
         uint32_t leaf_blk, leaf_slot, existing;
         if (!map_get_or_alloc_tables(&st->node, bi, prefer_group, &leaf_blk, &leaf_slot, &existing)) {
-            pcache_drop(); kfree(st); return 2 /* FS_STEP_FAILED */;
+            pcache_drop(); alog_rollback(); kfree(st); return 2 /* FS_STEP_FAILED */;
         }
         uint32_t blk = existing;
         int fresh = 0;
         if (!blk) {
             blk = alloc_block(prefer_group, st->last_alloc);
-            if (!blk) { pcache_drop(); kfree(st); return 2; }
+            if (!blk) { pcache_drop(); alog_rollback(); kfree(st); return 2; }
             map_set_block(&st->node, leaf_blk, leaf_slot, blk);
             fresh = 1;
         }
@@ -1930,19 +2036,19 @@ static int tfs3_write_range_step(void *handle) {
             if (fresh || file_off >= st->node.size) {
                 k_memset(g_blk, 0, T3_BLOCK);
             } else if (!read_block(blk, g_blk)) {
-                pcache_drop(); kfree(st); return 2;
+                pcache_drop(); alog_rollback(); kfree(st); return 2;
             }
             k_memcpy(g_blk + within, st->src + st->total, chunk);
             ok = write_block(blk, g_blk);
         }
-        if (!ok) { pcache_drop(); kfree(st); return 2; }
+        if (!ok) { pcache_drop(); alog_rollback(); kfree(st); return 2; }
         st->total += chunk;
         if (st->total < st->len) return 0 /* FS_STEP_PENDING */;
     }
 
     // Final step: land the pointer cache, the allocation state, and
     // the inode -- the same commit point do_write() has.
-    if (!pcache_flush()) { pcache_drop(); kfree(st); return 2; }
+    if (!pcache_flush()) { pcache_drop(); alog_rollback(); kfree(st); return 2; }
     pcache_drop();
     if (st->offset + st->len > st->node.size) st->node.size = st->offset + st->len;
     st->node.modified = now_epoch();
@@ -1951,6 +2057,7 @@ static int tfs3_write_range_step(void *handle) {
         txn_reset();
         ok = txn_stage_inode(st->ino, &st->node) && txn_commit();
     }
+    if (ok) alog_commit(); else alog_rollback();
     kfree(st);
     return ok ? 1 /* FS_STEP_DONE */ : 2;
 }

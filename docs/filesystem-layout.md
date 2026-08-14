@@ -138,23 +138,29 @@ deliberate cleanup.
 - `make clean-disk` to start from an empty image, if losing everything
   else on it is acceptable.
 
-## The record budget, which is the real constraint
+## The record budget -- a TFS2 constraint, mostly retired
 
-TFS2 has a fixed table of **`FS_MAX_FILES` = 256 records, and
-directories consume one each**, plus **`FS_PATH_MAX` = 64 bytes for a
-complete path**. Both are far more binding on layout than any standard:
+**On TFS3 (the default format for fresh images since Milestone 15
+landed), the old budget is gone**: ~590,000 inodes on a 9 GiB volume
+shared by files and directories, 255-byte names, and no on-disk path
+length limit (`docs/tfs3-spec.md`'s Limits table). Two ceilings do
+remain and are worth knowing:
 
-- A deep hierarchy costs records for the directories themselves.
-- `/usr/share/man/man1/` plus a filename is already half the path budget;
-  another level below that would be tight.
-- Milestone 14's man pages at one file per command could plausibly want
-  40+ records -- a sixth of the table -- which is worth knowing before
-  designing that, not after.
+- **`FS_PATH_MAX` = 64 still binds every CALLER**: the shell, apps
+  and syscall surface all hold 64-byte path buffers, so a path deeper
+  than that can exist on disk (via the host tool) but can't be typed
+  or resolved inside toy-os yet. Raising the API constant is its own
+  audit, tracked under Milestone 15's remaining items.
+- The host writer tools cap a single written file at
+  direct+single-indirect (~4.03 MB) -- a seeding-path bound, not a
+  format one.
 
-Current usage is 37 of 256 (count it with `tools/tfs2_writer.py ls` per
-directory rather than trusting this number -- it has been stale before). Milestone 15 (TFS3) is where both
-limits are due to be raised; until then, prefer flatter over deeper, and
-prefer one file with structure inside it over many small files.
+A checkout still carrying a TFS2 `disk.img` (the probe keeps mounting
+it -- nothing reformats by surprise) keeps the old budget: **256
+records including directories, 64-byte full paths**. `make clean-disk
+&& make iso` is the deliberate move to TFS3. Until then, on such an
+image, prefer flatter over deeper and one structured file over many
+small ones.
 
 ## Checking it
 

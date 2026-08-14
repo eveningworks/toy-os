@@ -901,9 +901,11 @@ repeated manual steps to be worth automating:
   content-hash-synced -- see its own docstring and
   `docs/decisions.md`). `write`/`sync` auto-format a blank image first
   (no-op if already formatted), so a completely fresh `disk.img` can be
-  seeded in one call with no toy-os boot in between -- this is what the
-  Makefile's `seed` target (runs on every `make iso`) uses to get
-  `/bin/lspci` onto disk at BUILD time now, replacing the old boot-time
+  seeded in one call with no toy-os boot in between -- the Makefile's
+  `seed` target (runs on every `make iso`) goes through
+  `tools/seed_disk.py` now, which delegates here only when the image's
+  magic says TFS2 (a fresh/blank image gets TFS3 -- see
+  `tfs3_writer.py` below). This replaced the old boot-time
   `BIN_BOOTSTRAP`/GRUB-module install (removed from `kernel.c`/
   `grub.cfg` -- see `docs/decisions.md`). Writes in-place by default;
   `--dry-run` on `write`/`sync`/`format` previews without touching the
@@ -921,12 +923,33 @@ repeated manual steps to be worth automating:
   ever be tested against a clean disk and proven to report "clean".
 - **`tfs3_writer.py`** -- the TFS3 sibling of `tfs2_writer.py`: format
   (writes superblock backups + GDT snapshots, wipes a stale TFS2
-  signature per the wipefs rule) / ls / read / write / mkdir / delete /
-  sync (`once/` + `sync/` convention) / trim / info, all against a
-  TFS3 v1 image, no toy-os boot needed. Spec: `docs/tfs3-design.md`;
-  the kernel backend (`kernel/fs/tfs3.c`) is kept in lockstep and the
-  same bar applies as tfs2_writer's: direct+single-indirect write
-  scope only.
+  signature per the wipefs rule, keeps images sparse by skipping/
+  hole-punching the zeroed inode tables) / ls / read / write / mkdir /
+  delete / sync (`once/` + `sync/` convention) / trim / info /
+  corrupt (`--leak`, `--free-referenced`, `--bad-link-count`,
+  `--smash-superblock`, `--stage-journal[-torn]` -- known damage for
+  fsck/backup/journal-replay testing, same reasoning as
+  tfs2_writer's). Spec: `docs/tfs3-spec.md`; the kernel backend
+  (`kernel/fs/tfs3.c`) is kept in lockstep and the same bar applies
+  as tfs2_writer's: direct+single-indirect write scope only.
+  **TFS3 is the default format for FRESH images** (blank-disk policy
+  in `vfs.c` and `seed_disk.py`); an existing TFS2 disk.img keeps
+  mounting as TFS2 -- `make clean-disk && make iso` is the deliberate
+  move. Use whichever writer matches the image's magic (both refuse
+  the other's images; `trim` before gzipping a release image means
+  the MATCHING tool's trim).
+- **`seed_disk.py`** -- the format-aware seeding front-end the
+  Makefile's `seed` target calls: probes the image's magic, delegates
+  `sync` to the matching writer, and formats a blank image with the
+  default (tfs3) -- the same policy the kernel's blank-disk path
+  applies at boot.
+- **`fs_switch_test.py`** -- boots a COPY of disk.img and proves the
+  multi-backend story end-to-end: probe mounts the image's own
+  format, `fsformat` live-switches both ways (wipefs rule included),
+  writes work on each side, files survive reboots, fsck ends clean.
+  Run it after touching anything in `kernel/fs/`; it exercises the
+  probe/format/remount/reboot cycle no KTEST can (the suite runs
+  inside one booted kernel).
 - **`mkpart_test.py`** -- writes a synthetic legacy MBR or GPT partition
   table onto a disk image, for testing `kernel/drivers/partition.c`'s
   parser (`parttable` shell command). TFS2-mount-preserving: patches
@@ -947,7 +970,9 @@ repeated manual steps to be worth automating:
   `gzip -k -9 disk.img` before attaching it -- it's a large SPARSE file
   (9GB apparent, ~2MB of real data on a freshly-trimmed image), and
   GitHub's 2GB-per-asset limit plus plain bandwidth sense both rule out
-  the raw file. Run `tools/tfs2_writer.py trim disk.img` before gzipping
+  the raw file. Run the matching writer tool's trim
+  (`tools/tfs3_writer.py trim disk.img` for a fresh-built image,
+  `tfs2_writer.py` for an old TFS2 one) before gzipping
   -- sparseness is only ever lost, and an untrimmed image compresses
   whatever stale data it is still carrying. See
   `docs/decisions.md`'s versioning entry for the full v0.0.9 writeup.

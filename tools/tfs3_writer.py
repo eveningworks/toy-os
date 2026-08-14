@@ -511,6 +511,28 @@ def cmd_format(args):
         for i in range(GDT_BLOCKS):
             wblk(GDT_BLOCK + i, bytes(gdt[i * BLOCK:(i + 1) * BLOCK]))
 
+        # Inode tables must read as zeros (a zero inode fails its
+        # checksum on purpose; stale valid inodes from a previous
+        # format must not survive). Writing ~73 MB of literal zeros
+        # (71 groups x 256 blocks on 9 GiB) would cost exactly that
+        # much host disk on a sparse image, so: a freshly truncated
+        # image already reads as zeros -- skip; an existing image
+        # gets holes punched instead, which is byte-equivalent and
+        # keeps the image sparse. The kernel's own format
+        # (fsformat) still writes zeros -- it has no hole-punch, and
+        # its ~3 s cost is accepted there.
+        punch = None
+        if exists:
+            import ctypes
+            libc = ctypes.CDLL(None, use_errno=True)
+            fd = f.fileno()
+            def punch(off, length):
+                rc = libc.fallocate(fd, 0x03,  # PUNCH_HOLE | KEEP_SIZE
+                                    ctypes.c_long(off), ctypes.c_long(length))
+                if rc != 0:  # fall back to literal zeros
+                    f.seek(off)
+                    f.write(b"\x00" * length)
+
         for g in range(gc):
             base = GROUP0_START + g * BLOCKS_PER_GROUP
             bbm = bytearray(BLOCK)
@@ -528,11 +550,9 @@ def cmd_format(args):
                 setbit(ibm, INO_ROOT)
             wblk(base, bytes(bbm))
             wblk(base + 1, bytes(ibm))
-            # Inode table: zeroed. A zero inode fails its checksum on
-            # purpose -- the bitmap is the allocation authority and a
-            # read of an unallocated inode is a caller bug.
-            for i in range(itb):
-                wblk(base + 2 + i, b"\x00" * BLOCK)
+            if punch:
+                punch((base + 2) * BLOCK, itb * BLOCK)
+            # fresh image: region is already zeros, write nothing
 
         # Root inode + its dirent block (. and .. both point at root).
         ptrs = [0] * 15

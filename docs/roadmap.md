@@ -397,39 +397,52 @@ it serves. Small, and it makes everything above it discoverable.*
 - [ ] A GUI documentation viewer reusing the scrollback widget
 - [ ] A check that every builtin actually has a page, run in CI
 
-### Milestone 15 -- TFS3: an inode layer (planned v0.15.0)
+### Milestone 15 -- TFS3: an inode layer (LANDED 2026-08-14, unreleased)
 
-*Starting spec: `docs/tfs3-design.md` (design settled 2026-08-14 --
-block groups, 128-byte checksummed inodes, epoch timestamps, a
-4-block journal transaction, symlinks carried in the format from day
-one; see that doc for every decision and its reasoning).*
+*Spec as shipped: `docs/tfs3-spec.md`; design record:
+`docs/tfs3-design.md`; built in five staged commits (see
+CHANGELOG.md's `[Unreleased]`). TFS2 stays in the kernel as a second
+probe-selected backend, with live switching via `fsformat` -- see
+`docs/decisions.md`.*
 
-- [ ] Split each record into a directory entry (name -> inode number)
-      and an inode (metadata + block pointers)
-- [ ] Link count, and `unlink` that frees blocks only at zero
-- [ ] Hard links (`link()`), and the `.`/`..` entries that fall out of
-      having them
+- [x] ~~Split each record into a directory entry (name -> inode
+      number) and an inode (metadata + block pointers)~~ -- done
+- [x] ~~Link count, and `unlink` that frees blocks only at zero~~ -- done
+- [x] ~~Hard links (`link()`), and the `.`/`..` entries that fall out
+      of having them~~ -- done (`ln` shell command; first optional
+      fs_ops op, gated by FS_CAP_HARDLINKS)
 - [ ] Unlink-while-open -- an fd keeps its inode alive after the name
-      is gone
-- [ ] `rename()` as a directory operation, atomic through the existing
-      journal
-- [ ] Raise `FS_PATH_MAX` (64) and `FS_MAX_FILES` (256), both below what
-      ported code assumes
-- [ ] Room in the inode for owner/mode (Milestone 17) and `time_t`
-      (Milestone 40), even if nothing fills them yet -- the design
-      doc's 128-byte inode reserves both, and stores timestamps as
-      epoch seconds outright
-- [ ] Symlink FORMAT support (fast symlinks inline in the pointer
-      area) -- carried from day one per the design doc, so adding
-      symlinks later needs no format bump
+      is gone (needs fd-level state the VFS doesn't hold yet)
+- [ ] `rename()` as a directory operation, atomic through the journal
+      -- fits the 4-slot transaction (two dirent blocks + inode)
+- [ ] Raise `FS_PATH_MAX` (64) -- the FORMAT no longer caps anything
+      (255-byte names, unlimited depth, ~590k inodes on 9 GiB), but
+      every caller still holds 64-byte buffers; raising the API
+      constant is its own audit. `FS_MAX_FILES` stays as TFS2's table
+      size only.
+- [x] ~~Room in the inode for owner/mode (Milestone 17) and `time_t`
+      (Milestone 40)~~ -- done: 128-byte inode reserves uid/mode,
+      timestamps are epoch seconds outright
+- [x] ~~Symlink FORMAT support (fast symlinks inline in the pointer
+      area)~~ -- done (type 2 carried; adding the implementation needs
+      no format bump)
 - [ ] Symlink IMPLEMENTATION (create/read, backend-internal resolve
-      loop with an ELOOP-style hop cap) -- deliberately deferred past
-      the initial TFS3 landing; see the design doc's Symlinks section
-      for where resolution has to live and why
-- [ ] `fsck` taught to check link counts, not just block ownership
-- [ ] A migration path (or an explicit "reformat, no migration"
-      decision) from TFS2 v3 images
-- [ ] `tools/tfs2_writer.py` updated to read and write the new format
+      loop with an ELOOP-style hop cap) -- deliberately deferred; see
+      the design doc's Symlinks section for where resolution has to
+      live and why
+- [x] ~~`fsck` taught to check link counts, not just block
+      ownership~~ -- done (+ inode checksums, `.`/`..` targets,
+      orphan reclaim, free-count recompute, backup-superblock
+      restore on repair)
+- [x] ~~A migration path (or an explicit "reformat, no migration"
+      decision) from TFS2 v3 images~~ -- decided: no migration, and
+      no forced reformat either -- TFS2 images keep mounting as TFS2;
+      `make clean-disk && make iso` (or `fsformat tfs3 confirm`) is
+      the deliberate move
+- [x] ~~Host tooling for the new format~~ -- done as
+      `tools/tfs3_writer.py` (tfs2_writer.py untouched; format
+      chosen by magic probe everywhere -- kernel, `seed_disk.py`,
+      `check_layout.py`)
 
 ### Milestone 16 -- Block integrity: checksums & scrubbing (planned v0.16.0)
 
@@ -737,6 +750,23 @@ history is worth reading, but a fixed papercut is just noise.
       the grow moved nothing). Not diagnosed. Possibly a minimum/maximum
       size clamp doing its job, possibly a grip hit-test that needs the
       press to land more precisely than a test does.
+- [ ] **`fsformat` leaves boot-created directories absent until the
+      next boot.** `kernel_main()` creates `/etc` (and friends) right
+      after `fs_init()`; a live `fsformat <fs> confirm` wipes them and
+      nothing re-runs that bring-up until reboot -- so e.g. `stress`
+      fails with "couldn't create test file" until `mkdir /tmp` or a
+      reboot. Repro: `fsformat tfs3 confirm` then `stress 10`. Fix
+      candidates: have `fs_format_backend()` call the same
+      post-mount bring-up hook boot uses, or teach `fsformat` to
+      recreate the layout table's boot-created rows.
+- [ ] **Kernel-side `fsformat tfs3` writes ~73 MB of zeroed inode
+      tables (~3 s, and the host image loses that sparseness).** The
+      host tool avoids it (skips fresh-image zeros, hole-punches on
+      reformat); the kernel writes real zeros because it can't punch
+      holes. Candidate fix: `ata_trim()` the table region instead,
+      IF the drive guarantees deterministic-read-zero after TRIM
+      (QEMU with discard=unmap does; IDENTIFY word 69 bit 5 is the
+      honest gate). Until then it's a papercut, not a bug.
 - [ ] The vmsvga HARDWARE cursor is off by default because it fights the
       relative PS/2 mouse (QEMU warps the host pointer). The display
       driver itself works. The configuration where a hardware cursor

@@ -1,15 +1,12 @@
 # TFS3 design (block groups + inodes)
 
-**Status: design, not implemented.** This is the starting spec for
-Milestone 15 (`docs/roadmap.md`), revised from an earlier design
-discussion and checked against the real kernel source (`kernel/fs/
-tfs.c`, `kernel/include/kernel/fs_ops.h`, `docs/tfs2-spec.md`) as of
-v0.2.0-dev. Nothing here is built. It records every decision made so
-far and the reasoning; the implementation may still revise it, and the
-document that describes what actually shipped will be a `docs/
-tfs3-spec.md` written the way `docs/tfs2-spec.md` was -- from the
-code, after the fact. Until then, this is the contract to implement
-against.
+**Status: IMPLEMENTED (2026-08-14) -- see `docs/tfs3-spec.md` for the
+byte-exact format as shipped.** This file remains the record of the
+design decisions and their reasoning; where the implementation
+deliberately revised the design mid-build, the section carries a note
+(the journal's scope is the significant one). The build was staged
+A-E, one commit each -- see CHANGELOG.md's `[Unreleased]` entries
+starting at "The VFS selects filesystems by probe now".
 
 Decisions settled deliberately rather than defaulted (each has its own
 section below): journal scope (a small fixed multi-block transaction,
@@ -457,6 +454,16 @@ leave a stale checksum on valid data. `fsck`'s repair for a mismatch
 is therefore recompute-and-rewrite, never assume-data-loss.
 
 ## Journal: one fixed-size multi-block transaction
+
+**Implementation note (Stage C revision):** the shipped journal is
+NARROWER than the sketch below -- transactions carry dirent blocks and
+inode-table blocks only. Bitmaps are write-through and unjournaled
+under the set-before-use / clear-after-persist ordering (crash =
+leak, fsck reclaims -- TFS2's rule), which keeps every operation at
+<= 3 of the 4 slots and halves the journaled bytes for the same crash
+guarantees. Directory growth runs as its own empty-block-first
+transaction. `docs/tfs3-spec.md` documents what shipped; the sketch
+below is kept as the design-time record.
 
 The decision the original draft left open, now made: **generalize
 TFS2's single-slot journal to a single-transaction intent log of up to

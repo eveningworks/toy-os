@@ -55,6 +55,8 @@ there when you add an entry, or the index quietly stops being one.
 - [Metadata ordering: persist the record first, free the blocks second -- prefer a leak to a double-allocation](#metadata-ordering-persist-the-record-first-free-the-blocks-second----prefer-a-leak-to-a-double-allocation)
 - [`fsck` reclaims leaks and marks stragglers, but never resolves a double-allocation](#fsck-reclaims-leaks-and-marks-stragglers-but-never-resolves-a-double-allocation)
 - [Thin provisioning: the image is sparse at birth, and TRIM is what keeps it that way](#thin-provisioning-the-image-is-sparse-at-birth-and-trim-is-what-keeps-it-that-way)
+- [TFS2 stays in the kernel as a second filesystem -- the VFS probes by superblock magic](#tfs2-stays-in-the-kernel-as-a-second-filesystem----the-vfs-probes-by-superblock-magic)
+- [TFS3's journal covers dirent + inode blocks; bitmaps stay leak-safe write-through](#tfs3s-journal-covers-dirent--inode-blocks-bitmaps-stay-leak-safe-write-through)
 - [ATA DATA SET MANAGEMENT must be issued over DMA, not PIO](#ata-data-set-management-must-be-issued-over-dma-not-pio)
 - [Zero-filling a freshly allocated block is skipped only when the caller overwrites it whole](#zero-filling-a-freshly-allocated-block-is-skipped-only-when-the-caller-overwrites-it-whole)
 
@@ -635,7 +637,14 @@ conversion for anything else (no code anywhere computes "days since
 uses avoided adding one just for this feature; a host-side tool
 reading a TFS2 image converts to epoch seconds itself if it wants
 that instead (`docs/tfs2-spec.md`'s reference reader shows the
-equivalent conversion via Python's `datetime`). The tradeoff: no
+equivalent conversion via Python's `datetime`). **Updated at
+Milestone 15:** the "never needed a conversion" premise expired --
+`tz_rtc_to_epoch()`/`tz_epoch_to_rtc()` exist now (tz.c), the
+`fs_stat()` API reports epoch seconds on every backend, and TFS3
+stores epochs natively; TFS2's 7-byte on-disk civil fields are
+unchanged and converted at stat time. The no-zone-recorded caveat
+below still applies to both formats -- these are LOCAL-derived
+epochs. The tradeoff: no
 UTC-offset field is stored alongside a timestamp, so a value only
 means what it looks like -- local wall-clock time at whatever
 timezone was selected (`timezone` shell command) at the moment it was
@@ -3274,3 +3283,40 @@ on purpose -- `gfx_clear_clip_rect()` is the only way to remove the
 clip, and a computed rectangle with nothing in it must clip everything
 out, for the same reason a formatter that can't fit writes nothing.
 See `CHANGELOG.md`'s `[Unreleased]` entry for the full diagnosis.
+
+## TFS2 stays in the kernel as a second filesystem -- the VFS probes by superblock magic
+
+Milestone 15 (TFS3) did not replace TFS2: both backends are compiled
+in, `vfs.c`'s `fs_init()` walks them in priority order (tfs3 first)
+asking each one's side-effect-free `probe()`, and the first valid
+superblock wins -- so an existing TFS2 disk keeps mounting untouched
+while fresh/blank disks get the default (TFS3). Kept deliberately, at
+the user's request, to make filesystem switching a testable, living
+path: `fsformat <tfs2|tfs3> confirm` reformats and remounts live
+(wiping the OTHER format's signatures first -- the wipefs rule, see
+`fs_ops.h`'s `wipe()` contract for the mounted-a-corpse story), and
+`tools/fs_switch_test.py` proves the whole cycle including reboot
+persistence. Capabilities differences are declared, not discovered:
+`fs_ops.caps` mirrors `display_driver`'s honesty rule (bit and
+optional op are one fact stated twice, refused when they disagree),
+`fs_stat()` is one canonical shape (epoch times + an ino that TFS2
+synthesizes from its table slot, Linux's FAT trick), and the ring-3
+ABI never changed (epochs convert back to `rtc_time` at the syscall
+boundary). See CHANGELOG.md's `[Unreleased]` Stage A/B entries.
+
+## TFS3's journal covers dirent + inode blocks; bitmaps stay leak-safe write-through
+
+The design doc sketched journaling "dirent + inode + bitmaps"; the
+shipped journal (Stage C) deliberately narrowed to dirent blocks and
+inode-table blocks only -- the structures whose torn write is
+namespace corruption. Allocation bitmaps and group descriptors are
+write-through and unjournaled under set-before-use /
+clear-after-persist ordering, so a crash costs a leaked block that
+`fsck` reclaims and never a double allocation -- the exact rule TFS2
+established ("prefer a leak to a double-allocation") applied to the
+new format. Every operation fits <= 3 of the journal's 4 slots, and
+directory growth runs as its own empty-block-first transaction
+(inserting the child's name into the grow block would have made the
+name visible one transaction before the child's inode existed). See
+`docs/tfs3-spec.md`'s journal section and CHANGELOG.md's Stage C
+entry.

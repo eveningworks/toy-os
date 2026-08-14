@@ -45,14 +45,17 @@ static const struct fs_ops *const g_backends[] = {
 
 // The default backend: what a blank/foreign disk gets formatted with,
 // and what serves RAM-only boots (no disk at all). Index into
-// g_backends -- and NOT index 0: tfs3 probes first, but tfs2 stays
-// the default until Stage E flips it once the write path has soaked.
-// (Stage B briefly had this at 0 by accident after tfs3 was prepended
-// to the list -- combined with a stale-object skew that made the
-// honesty check refuse tfs2, one boot quietly reformatted the dev
-// image as tfs3. Two constants that must move together are now one
-// comment apart on purpose.)
-#define FS_DEFAULT_BACKEND 1
+// g_backends. TFS3 since Stage E of the TFS3 plan -- the write path,
+// fsck and crash recovery are all live and verified, and
+// tools/seed_disk.py applies the same blank-disk policy at build
+// time. An existing TFS2 disk keeps mounting as TFS2 via its probe;
+// only genuinely blank disks get the new format. (Stage B briefly
+// pointed this at tfs3 by ACCIDENT while the write path didn't exist
+// -- combined with a stale-object skew that made the honesty check
+// refuse tfs2, one boot quietly reformatted the dev image. The
+// lesson kept: this constant and the list order above must be read
+// together, which is why they sit one comment apart.)
+#define FS_DEFAULT_BACKEND 0
 
 static const struct fs_ops *g_fs = 0;
 static int g_persistent = 0;
