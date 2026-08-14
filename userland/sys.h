@@ -69,6 +69,17 @@ int     sys_listdir(const char *path, struct dirent *out, int max);
 // hand-rolling a strlen at each call site is noise.
 int64_t sys_print(const char *s);
 
+// The same, to STDERR -- which the kernel routes to the kernel log
+// (serial console + `dmesg`), never into a parent's stdout pipe.
+//
+// Use this for anything diagnostic. Two reasons it is not just
+// sys_print(): a program whose stdout has been redirected would
+// otherwise corrupt the parent's data with its own chatter, and a GUI
+// client has no terminal attached at all, so sys_print() from one goes
+// to whatever sink the console happens to have. Diagnostics on stderr
+// are readable either way.
+int64_t sys_eprint(const char *s);
+
 // --- input and time --------------------------------------------------
 
 // Non-blocking: returns the next queued key, or -1 if none. See

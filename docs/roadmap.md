@@ -1281,6 +1281,37 @@ Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
       kernel machinery rather than a port: see the pipes/spawn entry in
       `CHANGELOG.md`. Its shell (`userland/ush.c`) runs in ring 3 too
       rather than proxying the kernel's.
+- [x] ~~Geometry primitives, so a client can draw more than rectangles
+      and text~~ -- done: `kernel/lib/geom.c` + `fixed.c` (lines,
+      polylines, ellipses, circles, filled ellipses, rotation, both
+      aliased and anti-aliased), wrapped as `gfx_draw_*()` in the
+      kernel and as the `uui_canvas` widget in ring 3. Shared source
+      compiled twice, the same pattern as `calc_engine.c`.
+      `userland/gfxdemo.c` ("Shapes") is the ring-3 demo;
+      `tools/gfxdemo_test.py` and `kernel/lib/geom_test.c` test it.
+- [ ] Fill a POLYGON, not just an ellipse. `geom_fill_ellipse()` is a
+      scanline fill of one specific shape; the general version is an
+      edge-list/active-edge-table scanline fill taking arbitrary
+      points, which is what a filled triangle (and therefore any real
+      2D drawing) needs. Deliberately not built yet -- there is one
+      caller's worth of demand (the demo's vertex dots), and the bar
+      here is a second real caller.
+- [ ] Clipping RECTANGLES as a first-class concept in `ugfx`, rather
+      than each widget wrapping the plot callback itself.
+      `uui_canvas` clips because it owns its callback; a text widget
+      drawing into a scrolled viewport would want the same thing and
+      would currently have to reimplement it. The right shape is
+      probably a clip rect on `struct ugfx_surface` that every draw
+      call honours -- but see `docs/gui-guidelines.md` on
+      `gfx_draw_string()` not clipping, which is the kernel-side
+      version of the same unfinished decision.
+- [ ] An animation/timer event, so a client does not have to poll.
+      Shapes spins by looping and calling `sys_yield()`, because there
+      is no "wake me in 16ms" event -- which means it burns its
+      timeslice whenever it is open, and its frame rate is whatever
+      the scheduler happens to give it. A `WIN_EV_TIMER` delivered on
+      a client-requested interval is the fix, and it is a prerequisite
+      for anything animated that should also be well-behaved.
 - [ ] Decide whether the userland widget/graphics code becomes a real
       shared library rather than being statically linked into each
       client. Right now `ugfx.o` + `uui.o` are linked per binary, which

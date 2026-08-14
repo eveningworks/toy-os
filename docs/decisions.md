@@ -40,6 +40,8 @@ there when you add an entry, or the index quietly stops being one.
 - [A legacy ring-3 process needs its own RSP0 and must not be descheduled](#a-legacy-ring-3-process-needs-its-own-rsp0-and-must-not-be-descheduled)
 - [The retry sentinel is -2 because 0 is a real answer](#the-retry-sentinel-is--2-because-0-is-a-real-answer)
 - [The ring-3 terminal runs its own shell, not the kernel's](#the-ring-3-terminal-runs-its-own-shell-not-the-kernels)
+- [The geometry module is shared source compiled twice, like the calculator engine](#the-geometry-module-is-shared-source-compiled-twice-like-the-calculator-engine)
+- [stderr goes to the kernel log, and is never redirected into a pipe](#stderr-goes-to-the-kernel-log-and-is-never-redirected-into-a-pipe)
 - [Stack canaries: `-mstack-protector-guard=global` and a fixed constant, not GCC's defaults](#stack-canaries--mstack-protector-guardglobal-and-a-fixed-constant-not-gccs-defaults)
 - [NX enforcement scoped to userspace only -- the kernel's own identity map stays RWX](#nx-enforcement-scoped-to-userspace-only----the-kernels-own-identity-map-stays-rwx)
 - [The serial debug console is poll-based from existing idle loops, not a new kernel thread](#the-serial-debug-console-is-poll-based-from-existing-idle-loops-not-a-new-kernel-thread)
@@ -85,6 +87,9 @@ there when you add an entry, or the index quietly stops being one.
 **GUI: window manager, compositor & widgets**
 
 - [Widgets are added once a second real caller needs them -- except the checkbox](#widgets-are-added-once-a-second-real-caller-needs-them----except-the-checkbox)
+- [Angles are measured in turns, not radians](#angles-are-measured-in-turns-not-radians)
+- [The geometry rasteriser draws through a callback, not into a framebuffer](#the-geometry-rasteriser-draws-through-a-callback-not-into-a-framebuffer)
+- [The canvas widget clips in the plot callback, not by trimming geometry](#the-canvas-widget-clips-in-the-plot-callback-not-by-trimming-geometry)
 - [The Control Panel's applets are a registry table, not gui_apps](#the-control-panels-applets-are-a-registry-table-not-gui_apps)
 - [`gfx_draw_string()` doesn't clip to a width -- callers that need that do their own](#gfx_draw_string-doesnt-clip-to-a-width----callers-that-need-that-do-their-own)
 - [`widgets.h`/`theme.h` stay minimal on purpose](#widgetshthemeh-stay-minimal-on-purpose)
@@ -3688,3 +3693,111 @@ stay in a kernel-only shell.
 The cost is real and worth stating: `ush` is less capable than the
 kernel Terminal today. That is a consequence of the boundary being
 drawn honestly rather than a defect to paper over.
+
+## Angles are measured in turns, not radians
+
+`kernel/lib/fixed.c`'s `fx_sin()`/`fx_cos()` take an angle where
+`FX_ONE` is one FULL rotation, not `2*pi` radians and not 360 degrees.
+
+Three reasons, in order of how much they matter here:
+
+- **Wrapping is free.** A rotation counter that just increments forever
+  wraps correctly on its own, because the units and the fixed-point
+  representation agree. In radians, wrapping means a modulo against an
+  irrational constant, done in fixed point, every frame.
+- **The quarter angles are EXACT.** `fx_sin(FX_ONE/4)` is exactly
+  `FX_ONE`. A radian API cannot promise that -- `pi/2` is not
+  representable, so the answer is 0.9999-something, and every test of
+  the trig has to carry a tolerance instead of an equality.
+- **Pi never enters the code.** In a fixed-point path its only possible
+  contribution is rounding error.
+
+The cost is that a caller thinking in degrees converts (`deg * FX_ONE /
+360`), which is one multiply and reads fine. Callers here think in
+rotations anyway -- "a quarter turn per second" is the natural way to
+say what an animation does.
+
+See `kernel/lib/geom_test.c`'s first three tests, which are equalities
+rather than tolerances precisely because of this choice.
+
+## The geometry rasteriser draws through a callback, not into a framebuffer
+
+`kernel/lib/geom.c` never touches memory that looks like a screen. Its
+entire output interface is:
+
+    struct geom_target { void (*plot)(void*, int, int, uint32_t, uint8_t); void *ctx; };
+
+The obvious alternative -- take a surface pointer, a stride and a format
+-- would be faster (no indirect call per pixel) and is what a real
+graphics stack does at the bottom. It was rejected because it forces the
+module to know about pixel formats, clipping and address spaces, and
+each of those has more than one answer here:
+
+- `gfx.c` plots into the kernel's framebuffer, routing opaque pixels to
+  `gfx_put_pixel()` and partial ones to `gfx_blend_pixel()`.
+- A ring-3 app plots into its own window surface, in a different address
+  space, through `userland/ugfx.c`.
+- `uui_canvas` wraps that again to CLIP -- which is the case that
+  justifies the design on its own, see the next entry.
+- `kernel/lib/geom_test.c` plots into an array and asserts on
+  coordinates, with no framebuffer, no window and no display driver
+  involved at all. That test file could not exist against a
+  surface-pointer API without faking a surface.
+
+The per-pixel indirect call is a real cost. At the sizes this OS draws
+-- a few thousand pixels per shape per frame -- it is not a measurable
+one, and it buys four callers that would otherwise be four copies.
+
+## The canvas widget clips in the plot callback, not by trimming geometry
+
+`uui_canvas_line()`/`_ellipse()`/`_polyline()` do not compute the
+intersection of the shape with the canvas rect. They install a plot
+callback that drops any pixel outside it.
+
+Trimming the geometry is the textbook approach and is faster: a line
+clipped by Cohen-Sutherland rasterises only the pixels it will keep,
+where this rasterises every pixel and discards some. It was rejected
+because it needs a DIFFERENT correct implementation per shape -- line,
+polyline, ellipse, filled ellipse -- and the curved cases are exactly
+where clipping maths goes subtly wrong. Four implementations that must
+agree with each other is the shape of bug this project has paid for
+before (see the `kpath` entry: three path resolvers that disagreed).
+
+One bounds test, at the bottom, cannot disagree with itself across
+shapes. The wasted work is bounded by how far outside the box the caller
+drew, which for a widget whose whole job is to hold a drawing is small.
+
+## The geometry module is shared source compiled twice, like the calculator engine
+
+`build/userland/shared/geom.o` and `fixed.o` are `kernel/lib/geom.c` and
+`fixed.c` built a second time with the userland flags. Same reasoning as
+[Calculator's engine](#calculators-engine-is-shared-source-compiled-twice-not-copied),
+and worth restating because this is now the established pattern rather
+than a one-off: the objects genuinely cannot be shared (`-mcmodel=kernel`
+vs `-mcmodel=large`), but the SOURCE can, and a second hand-written copy
+of a rasteriser would drift from the first. When it drifted, the symptom
+would be a ring-3 app drawing a slightly different circle from the
+kernel -- a rendering difference with no obvious cause and no failing
+test.
+
+## stderr goes to the kernel log, and is never redirected into a pipe
+
+`SYS_WRITE` treats fd 1 and fd 2 differently: fd 1 honours
+`SYS_SPAWN`'s stdout redirection (into a pipe, so a parent can read a
+child's output), fd 2 always goes to `klog_putc()` -- the serial console
+and `dmesg`.
+
+They used to be identical, which was a bug with two faces. Redirecting
+stdout is a request to capture a program's OUTPUT; folding its
+diagnostics into the same stream corrupts whatever the parent was
+parsing, which is the precise problem Unix has two descriptors to
+avoid. And a GUI client has no terminal at all, so its `sys_print()`
+went to whatever sink the console happened to have -- which is how this
+was found: `tools/gfxdemo_test.py` could not see a single line the demo
+logged, because there was nowhere for a windowed ring-3 process to say
+anything.
+
+The practical rule for app code: `sys_print()` for output, `sys_eprint()`
+for anything diagnostic. The second is readable regardless of who
+spawned the process or where its stdout went, which also makes it the
+channel a test tool asserts on -- the same path `strace` output takes.

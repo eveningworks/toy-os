@@ -51,13 +51,30 @@ technical conventions below:
   `kernel/drivers`, exposed through `kapi.h` -- not a reason to reach
   around the boundary.
 - **There is a shared toolkit in `kernel/lib/` -- check it before
-  hand-rolling a digit loop, a formatter, or a path join.** Four
-  headers, all reachable through `kapi.h` and all with KTESTs:
+  hand-rolling a digit loop, a formatter, a path join, or a
+  rasteriser.** Six headers, all reachable through `kapi.h` and all
+  with KTESTs. The four original ones:
   `string.h` (strings/memory/char classes), `knum.h` (numbers <->
   strings: `k_utoa`/`k_itoa`/`k_htoa`, `k_parse_u32`/`k_parse_hex`,
   ...), `kfmt.h` (`k_snprintf`, plus `vga_printf`/`klog_printf` for a
   whole line in one call), `kpath.h` (`k_path_join`/`_normalize`/
-  `_resolve`/`_basename`/`_dirname`). This exists because a survey
+  `_resolve`/`_basename`/`_dirname`). Plus two for drawing:
+  `fixed.h` (Q16.16 fixed point and trig -- **angles are in TURNS, not
+  radians**, so `FX_ONE` is a full rotation and `fx_sin(FX_ONE/4)` is
+  exactly 1; there is no floating point in this kernel, the build
+  passes `-mno-sse`) and `geom.h` (`geom_line`/`_polyline`/`_ellipse`/
+  `_circle`/`_fill_ellipse`/`_rotate`/`_transform`, each taking a
+  `GEOM_ALIASED` or `GEOM_AA` flag). Reach for the `gfx_draw_line()`/
+  `gfx_draw_circle()`/`gfx_fill_ellipse()` wrappers in the kernel and
+  `uui_canvas` in ring 3 rather than `geom_*` directly -- both handle
+  the plot callback, and the canvas handles clipping. Two things about
+  `geom.h` worth knowing before extending it: it draws through a
+  **callback**, never into a framebuffer (which is what lets the same
+  code serve the kernel, a ring-3 app and a test with no display at
+  all), and it is compiled TWICE from one source, once for the kernel
+  and once for userland -- so it must not reference anything
+  kernel-only. See `docs/decisions.md` for all three.
+  This exists because a survey
   found the same twenty lines written nine times for int->string, ten
   for hex, six for parsing and three for path resolution -- and the
   path one wasn't just duplication, the copies disagreed (`edit
@@ -532,6 +549,18 @@ screenshot in the loop -- and when a click lands on the wrong thing, the
 log says which widget it actually hit. Read its top comment for the
 layout table and the log grammar before writing coordinates by hand.
 
+**Its ring-3 counterpart is "Shapes"** (`userland/gfxdemo.c`, `run
+shapes` from a Terminal) -- a rotating wireframe triangle and ellipse
+drawn with the shared geometry module, with the same one-line-per-state
+log grammar (`gfxdemo: aa off`) and a self-reported `gfxdemo: layout
+canvas <x> <y> <w> <h>`. Use it as the known target when testing
+`kernel/lib/geom.c`, `uui_canvas`, or ring-3 drawing generally;
+`tools/gfxdemo_test.py` drives it. **A ring-3 app's diagnostics go to
+`sys_eprint()` (stderr), not `sys_print()`** -- stderr reaches the
+kernel log and `dmesg`, where a test can read it, while a GUI client's
+stdout goes nowhere useful (it has no terminal attached) and a spawned
+process's stdout goes into its parent's pipe.
+
 **`tools/gui_debug.py` -- ask the WM what it's doing, instead of
 measuring a screenshot.** The serial debug console has a `gui` command
 family now (`apps/wm/wm_debug.c`), live while the desktop is up:
@@ -992,6 +1021,29 @@ repeated manual steps to be worth automating:
   there, versus a continuously responsive desktop) -- do that again
   before trusting a clean run, same reasoning as `damage_sweep.py`'s
   `--positive-control`.
+- **`gfxdemo_test.py`** -- drives the Shapes demo (`userland/gfxdemo.c`)
+  and asserts on its log + its pixels, 13 checks. Run it after touching
+  `kernel/lib/geom.c`/`fixed.c`, `uui_canvas`, or anything a ring-3
+  client draws with. Three of its checks encode reasoning worth
+  reusing: the window is proved to be a ring-3 client from `gui windows
+  --json`'s `client_pid` rather than from how it looks; "it rotates" is
+  paired with "it stops dead at speed 0", because either half alone
+  proves almost nothing; and the AA toggle is checked by COUNTING
+  DISTINCT COLOURS in the canvas (468 with, 5 without) rather than by
+  sampling a point, since a curve moves and a fixed sample point
+  doesn't follow it.
+- **`gui_regress.py`** -- runs every GUI test tool in turn, each against
+  its own freshly-copied disk image and its own VM, and prints one
+  pass/fail table (~2 minutes, ~82 checks). This is the standard check
+  after touching `apps/ui/`, `userland/`, or anything the WM draws.
+  `-k NAME` for a subset, `--logs DIR` to keep each tool's full output,
+  `--list` to see what's in it. The per-tool fresh image and fresh VM
+  are the parts that matter: several tools write files, and every one
+  of them expects an empty desktop -- a tool inheriting the previous
+  one's state fails in ways that look exactly like real widget bugs.
+  `damage_sweep.py` is deliberately NOT in it (much slower under
+  `gui damage verify on`, and it has its own `--positive-control`
+  protocol) -- run that separately.
 - **`damage_sweep.py`** -- drives the WM through the interactions that
   historically break the damage invariant with `gui damage verify on`,
   and exits non-zero on a violation. Run it after touching anything

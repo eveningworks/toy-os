@@ -194,3 +194,65 @@ uint8_t ugfx_luminance(uint32_t color) {
     uint32_t r = (color >> 16) & 0xFF, g = (color >> 8) & 0xFF, b = color & 0xFF;
     return (uint8_t)((r * 77 + g * 150 + b * 29) / 256);
 }
+
+// --- geometry bindings ------------------------------------------------
+//
+// The client-side half of the shared geometry module. The only thing
+// that differs from the kernel's binding (gfx.c) is where a pixel
+// lands: a client's own window buffer rather than the framebuffer.
+
+void ugfx_blend_pixel(struct ugfx_surface *s, int x, int y, uint32_t color, uint8_t alpha) {
+    if (!s || !s->pixels) return;
+    if (x < 0 || y < 0 || x >= s->w || y >= s->h) return;
+    uint32_t *p = &s->pixels[(uint32_t)y * (uint32_t)s->w + (uint32_t)x];
+    *p = (alpha >= 255) ? color : blend(color, *p, alpha);
+}
+
+static void ugfx_geom_plot(void *ctx, int x, int y, uint32_t color, uint8_t alpha) {
+    ugfx_blend_pixel((struct ugfx_surface *)ctx, x, y, color, alpha);
+}
+
+// Built per call rather than kept as a global: a client can have more
+// than one surface (several windows), and a cached target would quietly
+// draw into whichever one was used last.
+static struct geom_target target_for(struct ugfx_surface *s) {
+    struct geom_target t;
+    t.plot = ugfx_geom_plot;
+    t.ctx = s;
+    return t;
+}
+
+void ugfx_draw_line(struct ugfx_surface *s, int x0, int y0, int x1, int y1,
+                     uint32_t color, enum geom_aa aa) {
+    struct geom_target t = target_for(s);
+    geom_line(&t, x0, y0, x1, y1, color, aa);
+}
+
+void ugfx_draw_polyline(struct ugfx_surface *s, const int *xs, const int *ys,
+                         int count, int closed, uint32_t color, enum geom_aa aa) {
+    struct geom_target t = target_for(s);
+    geom_polyline(&t, xs, ys, count, closed, color, aa);
+}
+
+void ugfx_draw_circle(struct ugfx_surface *s, int cx, int cy, int r,
+                       uint32_t color, enum geom_aa aa) {
+    struct geom_target t = target_for(s);
+    geom_circle(&t, cx, cy, r, color, aa);
+}
+
+void ugfx_draw_ellipse(struct ugfx_surface *s, int cx, int cy, int rx, int ry,
+                        uint32_t color, enum geom_aa aa) {
+    struct geom_target t = target_for(s);
+    geom_ellipse(&t, cx, cy, rx, ry, color, aa);
+}
+
+void ugfx_fill_circle(struct ugfx_surface *s, int cx, int cy, int r, uint32_t color) {
+    struct geom_target t = target_for(s);
+    geom_fill_circle(&t, cx, cy, r, color);
+}
+
+void ugfx_fill_ellipse(struct ugfx_surface *s, int cx, int cy, int rx, int ry,
+                        uint32_t color) {
+    struct geom_target t = target_for(s);
+    geom_fill_ellipse(&t, cx, cy, rx, ry, color);
+}

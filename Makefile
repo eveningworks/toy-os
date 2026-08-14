@@ -160,6 +160,7 @@ CALCULATOR_ELF = userland/calculator.elf
 NOTEPAD_ELF = userland/notepad.elf
 PIPE_TEST_ELF = userland/pipe_test.elf
 UTERM_ELF = userland/terminal.elf
+GFXDEMO_ELF = userland/gfxdemo.elf
 
 # Which userland ELFs get seeded onto disk.img's /bin, and under what
 # name. The mapping is explicit because it isn't always mechanical --
@@ -210,7 +211,8 @@ SEED_TESTS = \
 	$(UICLIENT_ELF):uiclient \
 	$(CALCULATOR_ELF):calculator \
 	$(NOTEPAD_ELF):notepad \
-	$(UTERM_ELF):uterm
+	$(UTERM_ELF):uterm \
+	$(GFXDEMO_ELF):shapes
 
 # Both lists together -- only USERLAND_ELVES below needs the union, so
 # it's derived rather than maintained as a third list.
@@ -367,8 +369,8 @@ userland/%.elf: $(BUILD)/userland/%.o $(USERLAND_RT) userland/link.ld
 # wanted only by window clients -- and with no --gc-sections here, adding
 # it globally would link the whole font-rendering path into programs
 # like `hello` that never draw anything.
-userland/uiclient.elf: $(BUILD)/userland/uiclient.o $(BUILD)/userland/ugfx.o $(USERLAND_RT) userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/crt0.o $(BUILD)/userland/uiclient.o $(BUILD)/userland/ugfx.o $(BUILD)/userland/sys.o $(BUILD)/userland/stack_chk.o
+userland/uiclient.elf: $(BUILD)/userland/uiclient.o $(BUILD)/userland/ugfx.o $(BUILD)/userland/shared/geom.o $(BUILD)/userland/shared/fixed.o $(USERLAND_RT) userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/crt0.o $(BUILD)/userland/uiclient.o $(BUILD)/userland/ugfx.o $(BUILD)/userland/shared/geom.o $(BUILD)/userland/shared/fixed.o $(BUILD)/userland/sys.o $(BUILD)/userland/stack_chk.o
 
 # Sources SHARED between the kernel image and userland ELFs, compiled a
 # second time with USERLAND_CFLAGS into build/userland/shared/.
@@ -409,6 +411,8 @@ CALC_OBJS = $(BUILD)/userland/crt0.o \
             $(BUILD)/userland/calculator.o \
             $(BUILD)/userland/uui.o \
             $(BUILD)/userland/ugfx.o \
+            $(BUILD)/userland/shared/geom.o \
+            $(BUILD)/userland/shared/fixed.o \
             $(BUILD)/userland/shared/calc_engine.o \
             $(BUILD)/userland/shared/string.o \
             $(BUILD)/userland/shared/knum.o \
@@ -424,6 +428,8 @@ NOTEPAD_OBJS = $(BUILD)/userland/crt0.o \
                $(BUILD)/userland/uui.o \
                $(BUILD)/userland/utext.o \
                $(BUILD)/userland/ugfx.o \
+               $(BUILD)/userland/shared/geom.o \
+               $(BUILD)/userland/shared/fixed.o \
                $(BUILD)/userland/sys.o \
                $(BUILD)/userland/stack_chk.o
 
@@ -439,11 +445,29 @@ UTERM_OBJS = $(BUILD)/userland/crt0.o \
              $(BUILD)/userland/uui.o \
              $(BUILD)/userland/utext.o \
              $(BUILD)/userland/ugfx.o \
+             $(BUILD)/userland/shared/geom.o \
+             $(BUILD)/userland/shared/fixed.o \
              $(BUILD)/userland/sys.o \
              $(BUILD)/userland/stack_chk.o
 
 userland/terminal.elf: $(UTERM_OBJS) userland/link.ld
 	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(UTERM_OBJS)
+
+# The shapes demo: the widget toolkit plus the SHARED geometry module
+# (kernel/lib/geom.c and fixed.c, compiled a second time for ring 3 --
+# the same code the kernel's gfx_draw_line()/gfx_draw_ellipse() use).
+GFXDEMO_OBJS = $(BUILD)/userland/crt0.o \
+               $(BUILD)/userland/gfxdemo.o \
+               $(BUILD)/userland/uui.o \
+               $(BUILD)/userland/uwidgets.o \
+               $(BUILD)/userland/ugfx.o \
+               $(BUILD)/userland/shared/geom.o \
+               $(BUILD)/userland/shared/fixed.o \
+               $(BUILD)/userland/sys.o \
+               $(BUILD)/userland/stack_chk.o
+
+userland/gfxdemo.elf: $(GFXDEMO_OBJS) userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(GFXDEMO_OBJS)
 
 $(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(ASM_OBJECTS) $(C_OBJECTS)

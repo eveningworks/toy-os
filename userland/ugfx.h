@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "win_proto.h"
+#include "geom.h" // enum geom_aa -- the geometry module is SHARED with the kernel
 
 // ugfx -- the userland drawing runtime for ring-3 window clients.
 //
@@ -108,5 +109,33 @@ uint32_t ugfx_blend(uint32_t under, uint32_t over, uint8_t alpha);
 // colour for a hover/pressed state -- see uui.h, where getting this
 // backwards produced a hover nobody could see.
 uint8_t ugfx_luminance(uint32_t color);
+
+// --- geometry ---------------------------------------------------------
+//
+// One line each over kernel/lib/geom.c, which is compiled a second time
+// for userland (build/userland/shared/). The kernel's gfx.h has the
+// same set backed by the same code -- there is exactly one Bresenham
+// and one ellipse rasteriser in the tree.
+//
+// `aa` is per call, not a mode: a wireframe's diagonals want
+// anti-aliasing (jaggies crawl as a shape rotates) and a 1px border
+// does not.
+
+void ugfx_draw_line(struct ugfx_surface *s, int x0, int y0, int x1, int y1,
+                     uint32_t color, enum geom_aa aa);
+void ugfx_draw_polyline(struct ugfx_surface *s, const int *xs, const int *ys,
+                         int count, int closed, uint32_t color, enum geom_aa aa);
+void ugfx_draw_circle(struct ugfx_surface *s, int cx, int cy, int r,
+                       uint32_t color, enum geom_aa aa);
+void ugfx_draw_ellipse(struct ugfx_surface *s, int cx, int cy, int rx, int ry,
+                        uint32_t color, enum geom_aa aa);
+void ugfx_fill_circle(struct ugfx_surface *s, int cx, int cy, int r, uint32_t color);
+void ugfx_fill_ellipse(struct ugfx_surface *s, int cx, int cy, int rx, int ry,
+                        uint32_t color);
+
+// Alpha-blends one pixel into the surface. The geometry above uses it
+// for partial coverage; exposed because a client drawing its own
+// gradients or shadows wants the same thing.
+void ugfx_blend_pixel(struct ugfx_surface *s, int x, int y, uint32_t color, uint8_t alpha);
 
 #endif

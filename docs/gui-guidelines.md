@@ -254,6 +254,36 @@ directory (see `apps/README.md`).
 Semantic colour is separate from decoration: the close button is red
 because closing is destructive, not because it looks nice.
 
+## Shapes: use the wrappers, and pick anti-aliasing deliberately
+
+Lines, curves and rotation come from `kernel/lib/geom.c` (see
+`api/geom.h`). Don't call it directly if a wrapper fits:
+
+- **In the kernel**, use `gfx_draw_line()`, `gfx_draw_polyline()`,
+  `gfx_draw_circle()`, `gfx_draw_ellipse()`, `gfx_fill_circle()`,
+  `gfx_fill_ellipse()`. They install the plot callback that routes
+  opaque pixels to `gfx_put_pixel()` and partial ones to
+  `gfx_blend_pixel()` -- get that wrong by hand and anti-aliased edges
+  come out as hard pixels against the wrong background.
+- **In a ring-3 app**, use `uui_canvas` (`userland/uwidgets.h`). It
+  owns the drawing rect, converts local to surface coordinates, and
+  CLIPS. A shape drawn without clipping does not fail visibly at first
+  -- it fails the day the shape grows, by painting over the app's own
+  controls.
+
+**Anti-aliasing is a choice per call, and neither answer is the
+default.** `GEOM_AA` costs roughly 2-3x the pixels of `GEOM_ALIASED`
+and is what curves and diagonals should use in anything a person looks
+at closely. `GEOM_ALIASED` is right for large, fast-changing or
+throwaway drawing, and for anything axis-aligned, where AA does nothing
+but cost. If a shape ROTATES, use AA: aliased edges crawl visibly as
+the angle changes, which is the one artefact a still screenshot will
+never show you. ("Shapes" toggles between them live, for exactly this
+reason -- `run shapes`, press `A`.)
+
+**Angles are in TURNS**, not radians -- `FX_ONE` is a full rotation.
+See `docs/decisions.md`.
+
 ## The damage invariant, and how to check it
 
 The WM only repaints the region declared as damage. That makes it
@@ -336,6 +366,15 @@ right thing:
   down-and-right from its hotspot with a black outline, so probing the
   hover point measures the cursor, not the control. A hover check
   written that way "passed" by reading pure black.
-- `tools/dialog_test.py` and `tools/uidemo_test.py` do all of the above
-  for the confirm dialog and for UI Demo's widgets; extend those rather
-  than starting a fresh script.
+- **A moving shape needs a different assertion than a static control.**
+  A fixed sample point says nothing about a curve, because the curve
+  moves off it. Two that do work: compare whole regions between frames
+  (and always pair "it changed" with a case that must NOT change --
+  `tools/gfxdemo_test.py` pairs "it rotates" with "it stops dead at
+  speed 0", since either alone is satisfied by a bug), and COUNT
+  DISTINCT COLOURS to tell anti-aliased drawing from aliased -- 468 vs
+  5 in the canvas, because partial coverage is exactly what AA emits.
+- `tools/dialog_test.py`, `tools/uidemo_test.py` and
+  `tools/gfxdemo_test.py` do all of the above for the confirm dialog,
+  UI Demo's widgets and the geometry; extend those rather than starting
+  a fresh script. `tools/gui_regress.py` runs the whole set in one go.

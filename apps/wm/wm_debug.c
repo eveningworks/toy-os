@@ -198,6 +198,12 @@ static void cmd_windows(int json) {
             klog_printf("\"content\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d},",
                          window_content_x(w), window_content_y(w),
                          window_content_w(w), window_content_h(w));
+            // client_pid is 0 for a kernel-space window and the owning
+            // process for a ring-3 one -- which ring a window belongs to
+            // is otherwise only visible in the Task Manager's own text,
+            // so a test asserting "this really is a ring-3 client" would
+            // have nothing to read.
+            klog_printf("\"client_pid\":%d,", w->client_pid);
             klog_printf("\"state\":\"%s\",\"focused\":%s,\"resizable\":%s}",
                          state_name(w->state),
                          (i == window_count - 1) ? "true" : "false",

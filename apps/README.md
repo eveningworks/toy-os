@@ -506,26 +506,31 @@ doesn't coexist with Notepad or About, and can't be dragged, minimized,
 or otherwise treated as a window -- there's no `struct window` involved
 at all. `wm.c` doesn't know this exists.
 
-Turning this into an actual user-space GUI -- Notepad and About running
-as real, isolated ring-3 processes that are *also* proper windows inside
-`wm.c` -- needs, roughly:
-- A scheduler letting a GUI process run concurrently with the
-  kernel-space compositor's own event loop instead of blocking it --
-  this part now exists (`scheduler_spawn()`/`scheduler_poll()`,
-  continuously armed, see `docs/decisions.md`), but only Terminal's own
-  async `ls`/`run` uses it so far, not `wm.c`'s own event loop; `gui_test`
-  itself still runs the old blocking way (see above)
-- A real windowing protocol instead of "hand the whole screen to one
-  process": syscalls for creating a window (getting back a private
-  pixel buffer for just that window's content area, not the whole
-  screen), submitting a redraw, and receiving input events scoped to
-  that window
-- Porting `notepad.c`/`about.c` (or new equivalents) to be freestanding
-  userland programs using that protocol, the way `gui_test.c` uses
-  `SYS_GUI_INIT`/`SYS_GUI_POLL_KEY` now
+**That real user-space GUI has since been built** -- `gui_test.c` is
+kept as the foundational proof it always was, not as the current state
+of the art. Everything the list below used to describe as missing now
+exists:
 
-`gui_test.c` proves the foundational piece -- a ring-3 process can
-genuinely own real pixels and real input -- without yet solving the
-concurrency and protocol design that a real multi-window user-space GUI
-needs.
+- The scheduler lets a ring-3 process run concurrently with the
+  compositor's event loop (the kernel context is itself a rotation
+  participant, and blocking syscalls deschedule rather than spin --
+  see `docs/decisions.md`).
+- There is a real windowing protocol: one syscall carrying typed
+  messages (`SYS_WIN_REQUEST` / `struct win_request_msg`), giving a
+  client a private surface for its own content area, a present call,
+  and input events scoped to its window. `apps/wm/wm_client.c` is the
+  WM side.
+- Real apps run on it. Calculator, Notepad and Terminal are ring-3
+  processes in `userland/`, indistinguishable from the kernel-space
+  windows beside them -- which is why the Task Manager labels every row
+  `[r0]` or `[r3]`.
+- Ring 3 has a drawing runtime and the widget toolkit: `userland/ugfx.c`
+  (surfaces, text, the desktop font mapped read-only), `uui.c` /
+  `uwidgets.c` / `utext.c` (the `apps/ui/` widgets, ported), and
+  `uui_canvas` for shapes.
+
+So the honest current division is: `apps/` holds the window manager,
+the desktop and the kernel-space apps; `userland/` holds the ring-3
+ones. New GUI apps belong in `userland/` unless they need something
+only the kernel can reach.
 

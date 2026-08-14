@@ -93,6 +93,13 @@ int64_t sys_print(const char *s) {
     return sys_write(1, s, n);
 }
 
+int64_t sys_eprint(const char *s) {
+    if (!s) return 0;
+    size_t n = 0;
+    while (s[n]) n++;
+    return sys_write(2, s, n);
+}
+
 // --- input and time --------------------------------------------------
 
 int sys_read_key(void) { return (int)syscall0(SYS_READ_KEY); }

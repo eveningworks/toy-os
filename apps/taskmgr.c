@@ -92,7 +92,7 @@ void taskmgr_draw(struct window *win) {
     int x = cx + TM_MARGIN;
     int y = cy + TM_MARGIN;
 
-    gfx_draw_string(x, y + (row++) * line_h, "Windows:", fg, bg);
+    gfx_draw_string(x, y + (row++) * line_h, "Windows:  [r0] kernel-space  [r3] ring-3 process", fg, bg);
 
     int count = wm_window_count();
     for (int i = 0; i < TM_MAX_WINDOW_ROWS; i++) {
@@ -103,11 +103,37 @@ void taskmgr_draw(struct window *win) {
         char line[80];
         int p = 0;
         line[p++] = ' '; line[p++] = ' ';
+
+        // Which side of the privilege boundary this window's code runs
+        // on. Worth showing now that both kinds are ordinary desktop
+        // windows and look identical: a ring-3 window is a separate
+        // PROCESS the WM composites, a ring-0 one is a gui_app compiled
+        // into the kernel. `client_pid` is exactly that distinction
+        // (wm.h -- a window has an `app` or a client, never both), so
+        // this reads the real state rather than a label anyone has to
+        // remember to keep in step.
+        const char *ring = w->client_pid ? "[r3] " : "[r0] ";
+        for (int k = 0; ring[k] && p < 60; k++) line[p++] = ring[k];
+
         const char *title = w->title[0] ? w->title : "(untitled)";
         for (int k = 0; title[k] && p < 60; k++) line[p++] = title[k];
         line[p++] = ' '; line[p++] = '-'; line[p++] = ' ';
         const char *state = window_state_label(w->state);
         for (int k = 0; state[k] && p < 78; k++) line[p++] = state[k];
+
+        // A ring-3 window's owning pid, so two clients of the same app
+        // are tellable apart -- which a title alone cannot do.
+        if (w->client_pid && p < 72) {
+            line[p++] = ' '; line[p++] = '(';
+            line[p++] = 'p'; line[p++] = 'i'; line[p++] = 'd'; line[p++] = ' ';
+            int v = w->client_pid;
+            char d[8];
+            int dn = 0;
+            if (v == 0) d[dn++] = '0';
+            while (v > 0 && dn < 7) { d[dn++] = (char)('0' + v % 10); v /= 10; }
+            while (dn > 0 && p < 77) line[p++] = d[--dn];
+            line[p++] = ')';
+        }
         line[p] = '\0';
 
         gfx_draw_string(x, y + (row++) * line_h, line, fg, bg);

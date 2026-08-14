@@ -2,6 +2,7 @@
 #define GFX_H
 
 #include <stdint.h>
+#include "geom.h" // enum geom_aa, shared with the userland side
 #include "font_ttf.h"
 
 // On-screen size of one character cell -- of WHICHEVER of the four
@@ -157,6 +158,23 @@ void gfx_fill_rect(int x, int y, int w, int h, uint32_t color);
 // see kernel/proc/win_server.c.
 void gfx_blit(int x, int y, int w, int h, const uint32_t *src, int src_pitch_px);
 void gfx_draw_rect(int x, int y, int w, int h, uint32_t color);
+
+// --- geometry ---------------------------------------------------------
+//
+// Thin bindings over kernel/lib/geom.c, which is SHARED with ring-3
+// clients (userland/ugfx.h has the same set) -- one Bresenham and one
+// ellipse rasteriser in the tree, not two. See geom.h.
+//
+// `aa` picks anti-aliased or hard-edged per call, because the right
+// answer differs within one drawing: a wireframe's diagonals want AA,
+// a 1px window border does not.
+void gfx_draw_line(int x0, int y0, int x1, int y1, uint32_t color, enum geom_aa aa);
+void gfx_draw_polyline(const int *xs, const int *ys, int count, int closed,
+                        uint32_t color, enum geom_aa aa);
+void gfx_draw_circle(int cx, int cy, int r, uint32_t color, enum geom_aa aa);
+void gfx_draw_ellipse(int cx, int cy, int rx, int ry, uint32_t color, enum geom_aa aa);
+void gfx_fill_circle(int cx, int cy, int r, uint32_t color);
+void gfx_fill_ellipse(int cx, int cy, int rx, int ry, uint32_t color);
 void gfx_clear(uint32_t color);
 void gfx_draw_char(int x, int y, char c, uint32_t fg, uint32_t bg);
 void gfx_draw_string(int x, int y, const char *s, uint32_t fg, uint32_t bg);

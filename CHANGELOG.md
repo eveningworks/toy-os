@@ -32,6 +32,128 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
 ## [Unreleased]
 
 ### Added
+- **Geometry primitives: pixels, lines, ellipses, circles -- shared by
+  the kernel and by ring 3.** Until now `gfx.c` could fill rectangles
+  and draw glyphs, and that was the whole vocabulary. Anything curved,
+  diagonal or rotated was not expressible at all.
+
+  The new module is `kernel/lib/geom.c` (+ `api/geom.h`), sitting on
+  `kernel/lib/fixed.c` (+ `api/fixed.h`) for Q16.16 fixed-point maths
+  and trigonometry. There is no floating point in this kernel -- the
+  build passes `-mno-sse`, and enabling FPU state in an interrupt path
+  to draw a circle would be a genuinely bad trade -- so the trig is a
+  generated 257-entry quarter-turn sine table with quadrant mirroring
+  and linear interpolation between entries.
+
+  Three decisions inside it worth naming:
+
+  - **Angles are measured in TURNS, not radians.** One full rotation is
+    `FX_ONE`. This makes wrapping free (a rotation counter just
+    overflows correctly), makes the quarter angles exact rather than
+    approximate -- `fx_sin(FX_ONE/4)` is exactly 1, which a radian API
+    cannot promise -- and removes pi from a fixed-point path where it
+    would only ever be a rounding error waiting to happen.
+  - **Everything draws through a `plot` callback**, not into a
+    framebuffer. `struct geom_target { void (*plot)(void*, int, int,
+    uint32_t, uint8_t); void *ctx; }` is the entire interface. That is
+    what lets the same code serve the kernel's `gfx_draw_line()`, a
+    ring-3 app's clipped canvas, and a unit test that records
+    coordinates and never touches a display at all -- `geom_test.c`
+    runs with no framebuffer, no window and no display driver.
+  - **Anti-aliasing is a per-call flag, not a build mode.**
+    `GEOM_ALIASED` takes the Bresenham/integer path and always emits
+    alpha 255; `GEOM_AA` takes Wu-style coverage for lines and a
+    bilinear splat for curves. Callers that want speed keep it, callers
+    that want smooth edges ask for it, and the demo below toggles
+    between them live, which is the clearest possible illustration of
+    what the difference actually buys.
+
+  `gfx.c` gains `gfx_draw_line()`, `gfx_draw_polyline()`,
+  `gfx_draw_circle()`, `gfx_draw_ellipse()`, `gfx_fill_circle()` and
+  `gfx_fill_ellipse()` on top of it, through a `gfx_geom_plot()` that
+  routes opaque pixels to `gfx_put_pixel()` and partial ones to
+  `gfx_blend_pixel()`.
+
+- **The geometry is compiled TWICE -- once for the kernel, once for
+  ring 3 -- from one source file.** `build/userland/shared/geom.o` and
+  `fixed.o` are the same `.c` files built with the userland flags.
+  Sharing the objects is impossible (the kernel builds
+  `-mcmodel=kernel`, userland `-mcmodel=large`), but sharing the source
+  is not, and a second hand-written copy of a rasteriser is exactly the
+  kind of duplication this project has been bitten by before -- the two
+  copies disagree eventually, and the disagreement is a rendering bug
+  nobody can reproduce. A ring-3 app and the kernel now draw an
+  identical circle because it is literally the same code.
+
+- **`uui_canvas` -- a drawing-area widget for ring-3 apps**
+  (`userland/uwidgets.c`/`.h`). A rectangle with its own local
+  coordinate system, a background, an optional border, and shape calls
+  that mirror the geometry API. It exists rather than apps calling
+  `geom_*` directly because every drawing app otherwise re-derives the
+  same three things: where its drawing area sits inside the window, how
+  to convert a local coordinate to a surface one, and how to stop a
+  shape escaping its box.
+
+  The third is the one that matters, and the reason clipping happens in
+  the **plot callback** rather than by trimming each shape's geometry:
+  a canvas-clipped line, ellipse and polyline would otherwise each need
+  their own intersection maths, and the curved cases are exactly where
+  that gets subtly wrong. One bounds test at the bottom cannot disagree
+  with itself across shapes.
+
+- **"Shapes" -- a ring-3 GUI demo** (`userland/gfxdemo.c`, `run shapes`
+  from a Terminal). A wireframe triangle and an ellipse rotating in
+  opposite directions over two static reference rings, with filled dots
+  at the triangle's vertices, Slower/Faster/Reset buttons, a live
+  anti-aliasing toggle and a speed readout. Every pixel is drawn by a
+  ring-3 process using the same rasteriser the kernel uses.
+
+  The AA toggle is the point of the demo rather than a setting: aliased
+  edges CRAWL as a shape turns, and smoothed ones do not, which is
+  something no static screenshot of either mode conveys on its own.
+
+  It follows `apps/uidemo.c`'s log grammar -- one parseable line per
+  state change (`gfxdemo: aa off`, `gfxdemo: speed 2`), plus a
+  self-reported `gfxdemo: layout canvas <x> <y> <w> <h>` so a test reads
+  the geometry from the app instead of re-deriving it in Python.
+
+- **Task Manager says which RING each window belongs to.** Every row is
+  now prefixed `[r0]` (kernel-space) or `[r3]` (a ring-3 client), with
+  the owning pid after the ring-3 ones, under a header explaining the
+  two. With the migration finished, "is this window drawn by the kernel
+  or by a process?" became a question with a non-obvious answer and no
+  way to ask it -- the windows look identical by design.
+
+  `gui windows --json` gained the same fact as `client_pid` (0 for
+  kernel-space), so a test can assert a window really is a ring-3
+  client rather than a screenshot that merely looks like one.
+
+- **`tools/gfxdemo_test.py`** -- drives Shapes and asserts on it, 13
+  checks. Three of them are the ones a screenshot cannot settle: that
+  the window is genuinely a ring-3 client (`client_pid > 0`), that the
+  shapes actually rotate AND stop dead at speed 0 (either half alone
+  proves almost nothing -- a blinking caret satisfies "the frame
+  changed", and a dead app satisfies "the frame didn't"), and that the
+  AA toggle reaches the rasteriser rather than just the checkbox,
+  measured as distinct colours in the canvas: 468 with AA, 5 without.
+
+- **13 KTESTs for the geometry** (`kernel/lib/geom_test.c`), against a
+  recording target rather than a screen. They cover the cases that
+  still LOOK like a shape when they are wrong: a circle one pixel
+  off-centre, an ellipse using one radius for both axes, a curve with
+  gaps in it because the step count was miscomputed, a line that misses
+  its endpoint, a filled ellipse that quietly became a rectangle, and a
+  sine table with a sign error in one quadrant. Verified by positive
+  control -- injecting the wrong-second-radius bug and a too-few-steps
+  bug each failed exactly the test written for it.
+
+- **`tools/gui_regress.py`** -- runs every GUI test tool in turn, each
+  against its own freshly-copied disk image, and reports one pass/fail
+  table. The sequence had been retyped by hand in three sessions now;
+  the per-tool fresh image is the part that is easy to get wrong, since
+  a tool inheriting the previous one's desktop state fails in ways that
+  look like real bugs.
+
 - **Terminal runs in ring 3, with a shell that runs there too.** The
   last and hardest app migration, and the one that needed new kernel
   machinery rather than a port.
@@ -141,6 +263,21 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   starting point.
 
 ### Fixed
+- **stderr was being swallowed into the parent's stdout pipe.** A
+  process spawned with `SYS_SPAWN`'s stdout redirection had fd 1 AND
+  fd 2 routed into the same pipe, so a child's diagnostics landed
+  inline in whatever data the parent was trying to read -- which is the
+  precise problem Unix has two descriptors to avoid. fd 2 now goes to
+  the kernel log (serial console + `dmesg`) and never to the pipe.
+
+  This also gives a GUI client somewhere to talk. A ring-3 window has
+  no terminal attached, so `sys_print()` from one went to whatever sink
+  the console happened to have; `sys_eprint()` (new, in
+  `userland/sys.c`) reaches a readable place regardless of who spawned
+  the process, which is the same path `strace` output takes. Found
+  while writing `tools/gfxdemo_test.py`, which could not see a single
+  line the demo logged.
+
 - **Two kernel bugs that corrupted a ring-3 client whenever a legacy
   `run` happened alongside it.** Both surfaced as a bare
   `RING-3 CRASH: Page fault` in the *client*, at a syscall unrelated to

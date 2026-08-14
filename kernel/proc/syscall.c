@@ -380,17 +380,34 @@ void syscall_dispatch(uint64_t *regs) {
                 regs[14] = (uint64_t)-1; // simplified error indicator (no errno yet)
             } else {
                 const char *buf = (const char *)(uintptr_t)buf_ptr;
-                // A process spawned with SYS_SPAWN's stdout redirection
-                // writes into a pipe instead of the console. That is
-                // what lets a parent READ this output; without it every
-                // child's stdout goes to whatever sink the console has
-                // installed and the parent never sees it.
-                int out_pipe = scheduler_stdout_pipe(scheduler_current_pid());
-                if (out_pipe >= 0) {
-                    regs[14] = (uint64_t)pipe_write(out_pipe, buf, (uint32_t)len);
+                // stderr goes to the KERNEL LOG, never to the pipe.
+                //
+                // Redirecting stdout is a request to capture a program's
+                // OUTPUT; folding its diagnostics into the same stream
+                // corrupts whatever the parent was trying to read, which
+                // is exactly why Unix has two descriptors rather than
+                // one. The kernel log is the right sink for the second:
+                // it reaches the serial console and `dmesg` no matter
+                // who spawned the process or where its stdout went, so a
+                // GUI client with no terminal attached can still say
+                // something a test (or a person) can read -- the same
+                // path strace's lines take.
+                if (fd == 2) {
+                    for (uint64_t i = 0; i < len; i++) klog_putc(buf[i]);
+                    regs[14] = len;
                 } else {
-                    for (uint64_t i = 0; i < len; i++) vga_putc(buf[i]);
-                    regs[14] = len; // bytes written, back via RAX
+                    // A process spawned with SYS_SPAWN's stdout redirection
+                    // writes into a pipe instead of the console. That is
+                    // what lets a parent READ this output; without it every
+                    // child's stdout goes to whatever sink the console has
+                    // installed and the parent never sees it.
+                    int out_pipe = scheduler_stdout_pipe(scheduler_current_pid());
+                    if (out_pipe >= 0) {
+                        regs[14] = (uint64_t)pipe_write(out_pipe, buf, (uint32_t)len);
+                    } else {
+                        for (uint64_t i = 0; i < len; i++) vga_putc(buf[i]);
+                        regs[14] = len; // bytes written, back via RAX
+                    }
                 }
             }
         } else { // a real file, opened via SYS_OPEN
