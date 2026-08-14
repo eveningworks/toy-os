@@ -62,7 +62,17 @@ void calc_format_scaled(int64_t v, char *out) {
     append_uint(out, &pos, (uint64_t)int_part, 0);
 
     if (frac_part != 0) {
-        char frac_buf[CALC_FRAC_DIGITS + 1];
+        // Sized to append_uint()'s own worst case rather than to the
+        // CALC_FRAC_DIGITS + 1 this actually needs. frac_part is
+        // v % CALC_SCALE with v >= 0, so it is always <= 4 digits and
+        // the tight size was correct -- but that bound is invisible to
+        // the compiler, which sees only append_uint()'s 24-byte tmp and
+        // warns about a 16-byte write into a 5-byte object
+        // (-Wstringop-overflow, surfaced when this file started being
+        // compiled for userland too). Nineteen bytes of stack is a
+        // better answer than an invariant the reader has to reconstruct
+        // to convince themselves the code is safe.
+        char frac_buf[24];
         int fpos = 0;
         append_uint(frac_buf, &fpos, (uint64_t)frac_part, CALC_FRAC_DIGITS);
         frac_buf[fpos] = '\0';

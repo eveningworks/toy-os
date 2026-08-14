@@ -156,6 +156,7 @@ SPIN_TEST_ELF = userland/spin_test.elf
 EVENT_TEST_ELF = userland/event_test.elf
 WINCLIENT_ELF = userland/winclient.elf
 UICLIENT_ELF = userland/uiclient.elf
+CALCULATOR_ELF = userland/calculator.elf
 
 # Which userland ELFs get seeded onto disk.img's /bin, and under what
 # name. The mapping is explicit because it isn't always mechanical --
@@ -202,7 +203,8 @@ SEED_TESTS = \
 	$(SPIN_TEST_ELF):spin_test \
 	$(EVENT_TEST_ELF):event_test \
 	$(WINCLIENT_ELF):winclient \
-	$(UICLIENT_ELF):uiclient
+	$(UICLIENT_ELF):uiclient \
+	$(CALCULATOR_ELF):calculator
 
 # Both lists together -- only USERLAND_ELVES below needs the union, so
 # it's derived rather than maintained as a third list.
@@ -345,6 +347,52 @@ userland/%.elf: $(BUILD)/userland/%.o $(BUILD)/userland/stack_chk.o userland/lin
 # like `hello` that never draw anything.
 userland/uiclient.elf: $(BUILD)/userland/uiclient.o $(BUILD)/userland/ugfx.o $(BUILD)/userland/stack_chk.o userland/link.ld
 	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/uiclient.o $(BUILD)/userland/ugfx.o $(BUILD)/userland/stack_chk.o
+
+# Sources SHARED between the kernel image and userland ELFs, compiled a
+# second time with USERLAND_CFLAGS into build/userland/shared/.
+#
+# This is not duplicated code -- it is the same .c file built for a
+# different target. The kernel objects are -mcmodel=kernel and cannot be
+# linked into a ring-3 ELF (which is -mcmodel=large and links at
+# VMM_USER_BASE), so a second compile is the only way to share the
+# SOURCE. That matters most for apps/calc_engine.c: the ring-3
+# Calculator runs the identical arithmetic as the kernel-space one
+# because there is exactly one engine, not two that have to be kept in
+# step.
+#
+# Everything listed here must be freestanding -- kernel/lib/string.c and
+# knum.c include only <stddef.h>/<stdint.h>, and calc_engine.c only
+# those two headers. A file that reaches for kernel state does not
+# belong on this path.
+#
+# -Iapps is needed for calc_engine.h and is scoped to this rule alone,
+# so an ordinary userland program still cannot include apps/ headers.
+$(BUILD)/userland/shared/%.o: kernel/lib/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(USERLAND_CFLAGS) -Iapps $< -o $@
+
+$(BUILD)/userland/shared/%.o: apps/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(USERLAND_CFLAGS) -Iapps $< -o $@
+
+# calculator.c is the one ordinary userland program that includes an
+# apps/ header (calc_engine.h). Scoped to this object with a
+# target-specific variable rather than added to the pattern rule above,
+# so no OTHER userland program gains the ability to reach into apps/.
+$(BUILD)/userland/calculator.o: USERLAND_CFLAGS += -Iapps
+
+# The ported Calculator: its own code, the userland widget toolkit, and
+# the shared arithmetic engine.
+CALC_OBJS = $(BUILD)/userland/calculator.o \
+            $(BUILD)/userland/uui.o \
+            $(BUILD)/userland/ugfx.o \
+            $(BUILD)/userland/shared/calc_engine.o \
+            $(BUILD)/userland/shared/string.o \
+            $(BUILD)/userland/shared/knum.o \
+            $(BUILD)/userland/stack_chk.o
+
+userland/calculator.elf: $(CALC_OBJS) userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(CALC_OBJS)
 
 $(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(ASM_OBJECTS) $(C_OBJECTS)
