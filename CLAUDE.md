@@ -167,9 +167,12 @@ technical conventions below:
   passed ~4,200 lines, cutting at one heading with a straight move and
   no rewording: `CHANGELOG-archive.md` holds Milestone 1 through Build
   173, `CHANGELOG-archive-2.md` holds Build 183 through Build 502 (the
-  whole `## Build N` heading era), and `CHANGELOG.md` keeps the semver
-  era plus `## [Unreleased]`. All three stay grep-able; a future split
-  follows the same pattern rather than inventing a new one. Note
+  whole `## Build N` heading era), `CHANGELOG-archive-3.md` holds
+  releases `[0.0.9]` and `[0.1.0]`, and `CHANGELOG.md` keeps
+  `## [Unreleased]` plus every release after `[0.1.0]`. All four stay
+  grep-able; a future split follows the same pattern rather than
+  inventing a new one -- cut at a release heading, straight move, no
+  rewording. Note
   `docs/decisions.md`'s `Build N` pointers name whichever file that
   build actually lives in -- keep them accurate when a split moves
   entries.

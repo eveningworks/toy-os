@@ -1032,7 +1032,11 @@ the actual asset/publish mechanics, corrected below:**
   ~370KB of real data as of v0.0.9) -- gzip it before attaching
   (`gzip -k -9 disk.img`; shrank to ~9MB) or the raw upload both blows
   past GitHub's 2GB-per-asset limit and wastes bandwidth transferring
-  mostly zeros. `tools/run_release.sh` ships as a release asset (not
+  mostly zeros. **Run `tools/tfs2_writer.py trim disk.img` first**:
+  sparseness is only ever lost, so an image that has been used at all
+  is carrying stale blocks it will happily compress. The dev image had
+  reached 8.1 GiB of real data before TRIM existed -- see this file's
+  thin-provisioning entry. `tools/run_release.sh` ships as a release asset (not
   just a repo file) because someone with just the ISO/disk image, no
   checkout, otherwise has no easy way to know the correct QEMU device
   config (`if=ide` disk bus separate from `-cdrom`'s, no
