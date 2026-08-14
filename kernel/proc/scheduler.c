@@ -93,6 +93,7 @@
 #include "pmm.h"
 #include "elf.h"
 #include "elf_run.h"
+#include "process.h" // process_context_is_armed() -- see kernel_slot_runnable()
 #include "fs.h"
 #include "gdt.h"
 #include "fpu.h"
@@ -168,6 +169,38 @@ static uint64_t kernel_saved_rsp = 0; // refreshed every tick that finds
                                         // current_index == -1
 static volatile int alive_count = 0;
 
+// THE KERNEL CONTEXT AS A ROTATION PARTICIPANT
+// --------------------------------------------
+// Through Milestone 1 phase 4b the kernel context was not scheduled at
+// all: it resumed only on a tick that found NOTHING ready, so any ready
+// ring-3 process starved it completely until every one of them exited.
+// That is what froze wm_run() for the whole lifetime of a spawned
+// process -- the Terminal's async spawn only looked live because a
+// process's output reaches the screen from inside its own SYS_WRITE
+// handler (see apps/wm/wm.c's per-frame poll comment), not because the
+// WM was drawing.
+//
+// The kernel now takes a position in the same round-robin cycle a
+// process does, so wm_run() keeps drawing, routing input and polling
+// while ring-3 processes run. It deliberately does NOT become a
+// struct sched_process: it has no address space of its own (kernel code
+// is correct under any process's CR3 -- every PML4 shares kernel entry
+// 0, see vmm.h), no FP state worth saving (kernel and apps/ are built
+// -mno-sse, see switch_to()'s comment), no kstack of its own (ring 0
+// interrupting ring 0 doesn't switch stacks, so its trapframe lands on
+// whatever kernel stack it was already using), and no slot to reap.
+// All it needs is a position in the cycle and the saved trapframe
+// pointer this file already kept for it.
+#define ROT_KERNEL MAX_PROCS
+
+// Where the rotation last stopped: 0..MAX_PROCS-1 for a process slot,
+// ROT_KERNEL for the kernel context. Deliberately separate from
+// current_index, which still means exactly what it always did (-1
+// whenever a scheduler-managed process is NOT the thing running) --
+// syscall.c depends on that through scheduler_current_pid(), and
+// conflating the two would change every M8-M15 exit path.
+static int rotation_pos = ROT_KERNEL;
+
 static uint64_t kernel_stack_top(int idx) {
     return (uint64_t)&procs[idx].kstack[PROC_KSTACK_SIZE];
 }
@@ -175,6 +208,7 @@ static uint64_t kernel_stack_top(int idx) {
 void scheduler_init(void) {
     for (int i = 0; i < MAX_PROCS; i++) procs[i].state = SCHED_UNUSED;
     current_index = -1;
+    rotation_pos = ROT_KERNEL;
     // Permanently armed from here on -- see this file's top comment on
     // why that's safe with an empty process table. Was `= 0` (disarmed,
     // only scheduler_demo_run() ever flipped it) before Milestone 1
@@ -185,16 +219,54 @@ void scheduler_init(void) {
     alive_count = 0;
 }
 
-// Scans all MAX_PROCS slots starting just after `start` (wrapping),
-// returns the first READY one, or -1 if none. `start` being -1 (no
-// current process) is handled correctly by the modular arithmetic --
-// it just starts the scan at slot 0.
-static int find_next_ready(int start) {
-    for (int i = 1; i <= MAX_PROCS; i++) {
-        int idx = (start + i + MAX_PROCS) % MAX_PROCS;
+// Whether the kernel context is a runnable participant right now.
+//
+// Normally it is -- that's the whole point of ROT_KERNEL. The one
+// exception is the LEGACY BLOCKING PATH (process_run_ring3(),
+// process.c), which runs a ring-3 process WITHOUT giving it a procs[]
+// slot: from this file's point of view that process's trapframe simply
+// IS "the kernel context" (current_index stays -1, so every tick stores
+// its regs into kernel_saved_rsp). Rotating away from it and back would
+// resume a ring-3 process under whatever CR3 and RSP0 the scheduler
+// process left behind -- a foreign address space and a shared kernel
+// stack -- so while one is in flight the kernel position drops out of
+// the rotation entirely and this file behaves exactly as it did before,
+// preserving every M8-M15 test command and every elf_run_from_fs()
+// caller (`run`/`ls` from the physical shell) unchanged.
+//
+// process_context_is_armed() (process.h) is precisely the predicate "a
+// blocking ring-3 process is in flight", so it is reused directly
+// rather than tracking a second flag here that could drift out of
+// agreement with it.
+static int kernel_slot_runnable(void) {
+    if (process_context_is_armed()) return 0;
+    // Never select the kernel before a tick has captured a real
+    // trapframe for it -- g_next_kernel_rsp = 0 would iretq into
+    // nothing. Unreachable in practice (the kernel is always what's
+    // running when the first spawn happens, so the very next tick saves
+    // it before any switch away can occur), but this is a boot-critical
+    // path and the check is one compare.
+    return kernel_saved_rsp != 0;
+}
+
+// Scans the whole rotation -- all MAX_PROCS process slots PLUS the
+// kernel's own position -- starting just after `start` (wrapping), and
+// returns the first runnable one. Falls back to ROT_KERNEL when nothing
+// else is runnable, which is the pre-rotation behaviour: a tick that
+// finds no ready process resumes the kernel, exactly as before.
+//
+// `start` may be -1 (nothing was running); the +MAX_PROCS+1 term keeps
+// the modulo positive for it.
+static int find_next_runnable(int start) {
+    for (int i = 1; i <= MAX_PROCS + 1; i++) {
+        int idx = (start + i + MAX_PROCS + 1) % (MAX_PROCS + 1);
+        if (idx == ROT_KERNEL) {
+            if (kernel_slot_runnable()) return ROT_KERNEL;
+            continue;
+        }
         if (procs[idx].state == SCHED_READY) return idx;
     }
-    return -1;
+    return ROT_KERNEL;
 }
 
 // Hands the CPU to `idx`, including its floating-point registers.
@@ -216,6 +288,18 @@ static void switch_to(int idx) {
     gdt_set_kernel_stack(kernel_stack_top(idx));
     procs[idx].state = SCHED_RUNNING;
     current_index = idx;
+    rotation_pos = idx;
+}
+
+// The ROT_KERNEL counterpart to switch_to(): hand the CPU back to the
+// kernel context. No CR3 switch, no RSP0 repoint and no FP restore --
+// see the ROT_KERNEL comment above for why the kernel needs none of the
+// three. Kept as its own function purely so both callers (the tick and
+// the exit path) state the same thing once.
+static void switch_to_kernel(void) {
+    current_index = -1;
+    rotation_pos = ROT_KERNEL;
+    g_next_kernel_rsp = kernel_saved_rsp;
 }
 
 // Loads a real ELF64 binary from the persistent filesystem as a fresh
@@ -316,14 +400,18 @@ void scheduler_tick(uint64_t *regs) {
         kernel_saved_rsp = (uint64_t)regs;
     }
 
-    int next = find_next_ready(current_index);
-    if (next < 0) {
-        // Nothing ready -- resume the kernel/shell context. In the
-        // overwhelmingly common case (scheduler disarmed, or armed but
-        // nothing has been spawned yet) kernel_saved_rsp already equals
-        // `regs`, so this is a genuine no-op.
-        current_index = -1;
-        g_next_kernel_rsp = kernel_saved_rsp;
+    // Rotate from wherever the cycle last stopped, not from
+    // current_index -- those differ precisely when the kernel is the
+    // thing running (current_index -1, rotation_pos ROT_KERNEL), which
+    // is exactly the case that has to advance past the kernel's own
+    // position instead of restarting the scan at slot 0 every tick.
+    int next = find_next_runnable(rotation_pos);
+    if (next == ROT_KERNEL) {
+        // Either nothing else is runnable, or the kernel's turn came up
+        // in the rotation. In the overwhelmingly common case (nothing
+        // has been spawned at all) kernel_saved_rsp was just set to
+        // `regs` above, so this stays the genuine no-op it always was.
+        switch_to_kernel();
         return;
     }
 
@@ -341,9 +429,13 @@ void scheduler_on_exit(int code) {
     alive_count--;
     current_index = -1;
 
-    int next = find_next_ready(-1);
-    if (next < 0) {
-        g_next_kernel_rsp = kernel_saved_rsp;
+    // Continue the rotation from the slot that just exited (which is
+    // still what rotation_pos holds), rather than restarting at slot 0
+    // -- same fairness the tick above gets, and it means the kernel's
+    // position is reached normally instead of being skipped on an exit.
+    int next = find_next_runnable(rotation_pos);
+    if (next == ROT_KERNEL) {
+        switch_to_kernel();
         return;
     }
     switch_to(next);

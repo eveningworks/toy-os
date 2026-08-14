@@ -179,7 +179,11 @@ static int is_blocked_command(const char *cmd) {
 // which never arrives), `gui_test`/`win_test` (framebuffer/own-window
 // takeover, same hazard `gui` above has), `counter_a`/`counter_b`
 // (infinite-loop-by-design demo processes for `schedtest`, not real
-// commands -- see scheduler.c). `crash_test`/`nx_test` both deliberately
+// commands -- see scheduler.c). `spin_test` IS included despite being
+// the same kind of long busy-spin, because unlike those two it
+// terminates on its own and prints nothing; it's what
+// tools/sched_gui_test.py runs to prove the desktop keeps drawing while
+// a ring-3 process holds the CPU. `crash_test`/`nx_test` both deliberately
 // fault -- verified safe anyway: idt.c's fault handler is already
 // scheduler-aware (its `recoverable` branch checks
 // scheduler_current_pid()), tearing the process down and reporting
@@ -190,8 +194,8 @@ static int is_blocked_command(const char *cmd) {
 // docs/roadmap.md) by jumping into a non-executable data page.
 static const char *const RUN_ALLOWED_BINS[] = {
     "crash_test", "exit_test", "file_test", "hello", "lspci",
-    "newsyscalls_test", "nx_test", "socket_test", "write_bad_test",
-    "write_test",
+    "newsyscalls_test", "nx_test", "socket_test", "spin_test",
+    "write_bad_test", "write_test",
 };
 #define RUN_ALLOWED_COUNT (sizeof(RUN_ALLOWED_BINS) / sizeof(RUN_ALLOWED_BINS[0]))
 
@@ -608,7 +612,7 @@ static void term_run_line(struct window *win, struct terminal_state *st, char *l
         if (!is_run_allowed(name)) {
             term_write(st,
                 "Not available in the terminal app yet -- only a small,\n"
-                "verified-safe allowlist of /bin binaries can run from\n"
+                "verified-safe allowlist of binaries can run from\n"
                 "here (none that read stdin or touch the framebuffer\n"
                 "directly). Esc out of the GUI and use the physical\n"
                 "shell's `run` for anything else.\n",
@@ -616,12 +620,26 @@ static void term_run_line(struct window *win, struct terminal_state *st, char *l
             return;
         }
 
+        // Resolve through PATH, exactly as the physical shell's `run`
+        // does (shell_path_find(), apps/shell_path.c), rather than
+        // hardcoding a "/bin/" prefix.
+        //
+        // The hardcoded prefix was silently wrong: when the test
+        // binaries moved out of /bin into /tests (see
+        // docs/filesystem-layout.md) EIGHT of this allowlist's ten
+        // members moved with them, so `run crash_test` and friends had
+        // been building a "/bin/crash_test" that doesn't exist and
+        // failing here ever since -- only `hello` and `lspci`, the two
+        // that really are in /bin, still worked. PATH already covers
+        // both directories (its default is "/bin;/usr/bin;/tests", with
+        // /tests last on purpose), so going through it fixes all eight
+        // and keeps this front end from drifting from the physical
+        // shell's resolution rules a second time.
         char bin_path[FS_PATH_MAX];
-        k_strcpy(bin_path, "/bin/");
-        size_t prefix_len = k_strlen(bin_path);
-        size_t j = 0;
-        while (name[j] && prefix_len + j < FS_PATH_MAX - 1) { bin_path[prefix_len + j] = name[j]; j++; }
-        bin_path[prefix_len + j] = '\0';
+        if (!shell_path_find(name, bin_path)) {
+            term_write(st, "run: not found on PATH\n", VGA_LIGHT_RED);
+            return;
+        }
 
         term_spawn(win, st, bin_path, bin_args ? bin_args : "");
         return;
