@@ -14,6 +14,7 @@
 #include "ktest.h"
 #include "scheduler.h"
 #include "timer.h"
+#include "elf_run.h" // elf_run_from_fs() -- the legacy blocking path
 #include "fs.h"
 
 // The silent long-running spinner this test drives -- see
@@ -99,4 +100,52 @@ KTEST("sched", "a slot is reusable after the process is reaped") {
         // not a second EXITED, or a caller could reap one exit twice.
         KTEST_ASSERT(scheduler_poll(pid, &exit_code) == SCHED_POLL_INVALID);
     }
+}
+
+// A scheduler-managed process must survive a LEGACY blocking process
+// running alongside it. Two distinct bugs made it not, and both
+// presented as an unrelated page fault in the scheduled process at some
+// later syscall -- which is why this is a test rather than a comment:
+//
+//   * scheduler_tick() would switch away from the legacy process and
+//     back, resuming it under whatever CR3 the other process left
+//     loaded. process_run_ring3() keeps no procs[] entry, so there is
+//     nowhere to record its address space.
+//   * process_run_ring3() never set RSP0, inheriting whatever the last
+//     switch_to() left there -- so the legacy process's traps landed on
+//     a SCHEDULED process's kernel stack and overwrote the trapframe it
+//     was suspended on.
+//
+// Neither was reachable before ring-3 GUI clients could stay alive
+// across a shell command; both are now one `run` away.
+KTEST("sched", "a scheduled process survives a legacy process running alongside") {
+    if (!fs_exists(SPIN_PATH)) KTEST_SKIP("no " SPIN_PATH " on this boot");
+    if (!fs_exists("/tests/exit_test")) KTEST_SKIP("no /tests/exit_test on this boot");
+
+    int pid = scheduler_spawn(SPIN_PATH, "8");
+    KTEST_ASSERT(pid != 0);
+
+    // Let it get going, so it is genuinely mid-flight rather than not
+    // yet started when the legacy process runs.
+    uint64_t start = pit_ticks();
+    while (pit_ticks() - start < 20) { }
+    int code = -1;
+    KTEST_ASSERT(scheduler_poll(pid, &code) == SCHED_POLL_RUNNING);
+
+    // The legacy path, start to finish, while the above is suspended.
+    // exit_test returns 42, which also confirms the legacy process
+    // itself still works.
+    int legacy = elf_run_from_fs("/tests/exit_test", 0);
+    KTEST_ASSERT_EQ(legacy, 42);
+
+    // The scheduled process must now run to a CLEAN exit. Before the
+    // fixes it faulted instead, and its exit code came back as the
+    // crash sentinel.
+    int exited = 0;
+    start = pit_ticks();
+    while (pit_ticks() - start < TIMEOUT_TICKS) {
+        if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
+    }
+    KTEST_ASSERT(exited);
+    KTEST_ASSERT_EQ(code, 0);
 }

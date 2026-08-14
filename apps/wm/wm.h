@@ -63,6 +63,12 @@ struct window {
     uint32_t client_win;
     uint32_t *client_buf;
     int client_w, client_h;
+    // Last cursor position delivered to this client, so a stationary
+    // cursor doesn't generate a WIN_EV_MOUSE_MOVE every single frame.
+    // Without this the WM wakes the client once per frame forever, and
+    // a client that is doing nothing still burns half the CPU under the
+    // scheduler's rotation. INT32_MIN means "nothing sent yet".
+    int client_last_mx, client_last_my;
 };
 
 // Height of a window's title bar in pixels (matches the taskbar height).

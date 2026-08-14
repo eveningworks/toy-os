@@ -1132,9 +1132,13 @@ Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
       move to ring 3 later without rewriting every call site -- the same
       "one struct of function pointers" pattern `display_driver` and the
       VFS backend probe already use here
-- [ ] A bigger process table and a growable user stack (4 slots and a
-      single 4KB page today -- both bind immediately once apps are
-      processes)
+- [ ] A bigger process table (4 slots) -- binds as soon as more than a
+      couple of clients are open at once.
+- [ ] A GROWABLE user stack. Raised from 1 page to 4 after the ring-3
+      Notepad page-faulted opening its file dialog; the real answer is
+      a page-fault handler that maps another page when the faulting
+      address is just below the stack (Milestone 9), not a bigger
+      constant.
 - [x] ~~A userland drawing runtime, so a client can render more than
       flat colour~~ -- done: `userland/ugfx.c` (rects, anti-aliased
       text, metrics), with the desktop's font mapped READ-ONLY via
@@ -1149,11 +1153,16 @@ Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
       `CHANGELOG.md`. `apps/calc_engine.c` is SHARED (compiled twice,
       once per code model) rather than copied, so there is only ever
       one arithmetic implementation.
+- [x] ~~Port `ui_scrollback` (the wrapped, editable text buffer)~~ --
+      done as `userland/utext.c`, pulled in by the ring-3 Notepad.
+- [x] ~~Migrate Notepad to `userland/`~~ -- done, see `CHANGELOG.md`.
+      Its file dialog is drawn by the APP, not the window server, which
+      is what GTK/Qt do; `apps/wm/file_picker.c` is a WM modal and was
+      not portable.
 - [ ] Port the remaining `apps/ui/` widgets as clients need them --
-      `ui_scrollback`, `ui_textbox`, `ui_listbox`/`ui_dropdown`,
-      `ui_textview`, `ui_focus`. Deliberately not done up front: the
-      same "second real caller" bar `apps/ui/` itself is held to.
-      Notepad is the natural next app and would pull most of them.
+      `ui_textbox`, `ui_listbox`/`ui_dropdown`, `ui_focus`.
+      Deliberately not done up front: the same "second real caller" bar
+      `apps/ui/` itself is held to.
 - [ ] Decide whether the userland widget/graphics code becomes a real
       shared library rather than being statically linked into each
       client. Right now `ugfx.o` + `uui.o` are linked per binary, which

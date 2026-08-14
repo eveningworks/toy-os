@@ -63,6 +63,8 @@ static int on_window_created(int pid, uint32_t id, uint32_t *buf,
     win->client_buf = buf;
     win->client_w = w;
     win->client_h = h;
+    win->client_last_mx = INT32_MIN; // nothing delivered yet
+    win->client_last_my = INT32_MIN;
 
     // A placeholder until the client sends WIN_REQ_TITLE. Deliberately
     // not left blank: an untitled window is indistinguishable from a
@@ -166,6 +168,19 @@ void wm_client_send_key(struct window *win, int key, unsigned mods) {
 
 void wm_client_send_mouse(struct window *win, int type, int x, int y, unsigned buttons) {
     if (!wm_client_is_client_window(win)) return;
+
+    // A move to where the cursor already is carries no information.
+    // Dropping it matters more than it sounds: wm_update_content_hover()
+    // runs every frame, so without this a motionless cursor wakes the
+    // client at frame rate forever -- and under the scheduler's
+    // rotation a client woken every frame takes half the CPU to decide
+    // nothing changed. Presses and releases are never suppressed; only
+    // redundant motion is.
+    if (type == WIN_EV_MOUSE_MOVE) {
+        if (x == win->client_last_mx && y == win->client_last_my) return;
+        win->client_last_mx = x;
+        win->client_last_my = y;
+    }
     struct win_event ev = {0};
     ev.type = (uint32_t)type;
     ev.window = win->client_win;

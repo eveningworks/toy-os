@@ -37,6 +37,7 @@ there when you add an entry, or the index quietly stops being one.
 - [Ring-3 clients draw for themselves, and the font is shared read-only](#ring-3-clients-draw-for-themselves-and-the-font-is-shared-read-only)
 - [Calculator's engine is shared source compiled twice, not copied](#calculators-engine-is-shared-source-compiled-twice-not-copied)
 - [The process entry ABI is SysV, and crt0 owns the stack alignment](#the-process-entry-abi-is-sysv-and-crt0-owns-the-stack-alignment)
+- [A legacy ring-3 process needs its own RSP0 and must not be descheduled](#a-legacy-ring-3-process-needs-its-own-rsp0-and-must-not-be-descheduled)
 - [Stack canaries: `-mstack-protector-guard=global` and a fixed constant, not GCC's defaults](#stack-canaries--mstack-protector-guardglobal-and-a-fixed-constant-not-gccs-defaults)
 - [NX enforcement scoped to userspace only -- the kernel's own identity map stays RWX](#nx-enforcement-scoped-to-userspace-only----the-kernels-own-identity-map-stays-rwx)
 - [The serial debug console is poll-based from existing idle loops, not a new kernel thread](#the-serial-debug-console-is-poll-based-from-existing-idle-loops-not-a-new-kernel-thread)
@@ -3605,3 +3606,39 @@ points at stack alignment until you notice which binaries are affected.
 
 See `CHANGELOG.md`'s `[Unreleased]` entry, `userland/crt0.asm`, and
 `kernel/proc/elf_run.c`'s `elf_build_argv_on_stack()`.
+
+## A legacy ring-3 process needs its own RSP0 and must not be descheduled
+
+`process_run_ring3()` (the M8-M15 blocking path, still used by the
+physical shell's `run`) runs a ring-3 process with NO `procs[]` entry.
+From the scheduler's point of view that process simply IS "the kernel
+context": its trapframe lands in `kernel_saved_rsp`, and there is
+nowhere to record its CR3 or its RSP0.
+
+Two consequences, both of which were live bugs the moment ring-3 GUI
+clients could stay alive across a shell command, and both of which
+presented as a bare `RING-3 CRASH: Page fault` **in the client** at a
+syscall unrelated to the cause:
+
+1. **It must not be switched away from.** `kernel_slot_runnable()`
+   refuses to select the kernel position while one is armed -- but
+   `find_next_runnable()`'s fallback returned `ROT_KERNEL` anyway when
+   nothing else was runnable, which reintroduced exactly the case the
+   guard existed to prevent. `scheduler_tick()` now returns early while
+   `process_context_is_armed()`, so the rotation never starts.
+
+2. **It needs its own ring-0 stack.** This path never set RSP0, and got
+   away with it while a legacy process could never coexist with a
+   scheduled one: RSP0 was still the boot stack. But `switch_to()`
+   points RSP0 at the running process's kstack and leaves it there, so
+   a later `run` took its traps onto a CLIENT's kernel stack and
+   overwrote the trapframe that client was suspended on. It now uses a
+   dedicated `g_legacy_kstack` (one is enough -- these calls cannot
+   nest, which is what `process_context_is_armed()` guarantees).
+
+The general lesson is worth more than either fix: an execution context
+the scheduler does not own an entry for cannot be treated as
+schedulable, and "the kernel context" was quietly serving as a
+dumping ground for two very different things. Both are covered by a
+KTEST in `kernel/proc/sched_test.c` that runs a legacy process
+alongside a scheduled one; see `CHANGELOG.md` for the full writeup.
