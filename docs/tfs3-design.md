@@ -52,21 +52,29 @@ Same rules as `docs/tfs2-spec.md`'s Conventions section:
   this reason.)
 - Disk I/O is in 512-byte sectors; filesystem addressing is in
   4096-byte blocks (`FS_BLOCK_SIZE`, 8 sectors). A "block number" is
-  global and absolute: block `b` starts at LBA `b * 8`. Block 0
-  contains LBA 0.
+  global within the volume and VOLUME-relative: block `b` starts at
+  sector `volume_base_lba + b * 8` (see "Volumes and partitions").
+  Block 0 contains the volume's first sector; on today's flat disk
+  `volume_base_lba` is 0.
 - Bytes marked reserved are written as zero and ignored on read.
 
 ## Disk layout
 
+All positions below are **volume-relative** (see "Volumes and
+partitions"): block `b` occupies the 8 sectors starting at
+`volume_base_lba + b * 8`. On today's flat disk `volume_base_lba` is
+0, so volume block == absolute block.
+
 ```
-LBA 0-63     reserved, never touched by TFS3 (32 KiB)
-             -- room for an MBR (LBA 0) and a primary GPT
-             (header LBA 1, entries through LBA 33)
-block 8      superblock            (LBA 64; first sector meaningful)
-block 9      journal header        (first sector meaningful)
-block 10-13  journal block images  (4 blocks, one per transaction slot)
-block 14-..  group descriptor table (ceil(group_count * 16 / 4096) blocks)
-next block   block group 0, then group 1, ... to end of disk
+blocks 0-7    reserved, never touched by TFS3 (32 KiB)
+              -- on a flat disk this is room for an MBR (LBA 0) and a
+              primary GPT (header LBA 1, entries through LBA 33);
+              inside a partition it is harmless slack
+block 8       superblock            (first sector meaningful)
+block 9       journal header        (first sector meaningful)
+block 10-13   journal block images  (4 blocks, one per transaction slot)
+block 14-29   group descriptor table (16 blocks, fixed -- see below)
+block 30      block group 0, then group 1, ... to end of volume
 ```
 
 **Why the 32 KiB reservation:** TFS2 puts its superblock at LBA 0 and
@@ -74,20 +82,29 @@ its journal header at LBA 1, which collides with both an MBR and the
 GPT header -- a real cost already paid once (`docs/decisions.md`, "GPT
 header verification: a host-compiled unit test, not a live boot").
 A new format gets out of the way for free. TFS3 never reads or writes
-LBA 0-63; `tools/mkpart_test.py`-style partition tables and the
-filesystem can coexist with no byte-range carve-outs.
+volume blocks 0-7; `tools/mkpart_test.py`-style partition tables and a
+flat-disk filesystem coexist with no byte-range carve-outs.
 
-`group0_start` (the block number where group 0 begins) is stored in
-the superblock rather than derived, because the descriptor table's
-size varies with disk capacity. Everything else about the layout is
-derivable, in the spirit of tfs2-spec's "deriving these offsets
-yourself":
+**Why the descriptor table is a fixed 16 blocks** rather than sized to
+`group_count`: 16 blocks hold 4096 descriptors, which at 128 MiB per
+group covers a 512 GiB volume -- four times the LBA28 ceiling this
+kernel can address at all, so the size never binds. What the constant
+buys is that **every structural position in the format is derivable
+with no superblock in hand**: group 0 starts at block 30, period, and
+the superblock-backup locations (see "Superblock backups") fall out of
+the volume size alone. A descriptor table sized to fit would save at
+most 15 blocks (60 KiB) and cost exactly that recoverability. Unused
+descriptor slots are zeroed.
+
+So the whole layout derives, in the spirit of tfs2-spec's "deriving
+these offsets yourself":
 
 ```
-groups            = usable blocks after the fixed region, in
-                    blocks_per_group-sized runs (last partial run unused)
-desc_table_blocks = ceil(group_count * 16 / 4096)
-group0_start      = 14 + desc_table_blocks
+group0_start = 30                          (constant)
+group_count  = (total_blocks - 30) / blocks_per_group   (floor;
+               a trailing partial group is unused)
+group g      = blocks [30 + g * blocks_per_group,
+                       30 + (g+1) * blocks_per_group)
 ```
 
 Group size and inode density are computed at **format time** from the
@@ -103,11 +120,11 @@ means more inodes automatically. This is what removes the fixed
 | 4 | 1 | version | 1; incompatible bump = foreign disk, reformat |
 | 5 | 1 | flags | bit 0 = `TFS3_FEATURE_BLOCK_CKSUM` (see Checksums) |
 | 6 | 2 | reserved | |
-| 8 | 4 | total_blocks | whole-disk size in blocks, clamped to the drive's real capacity at format time (TFS2's `clamp_total_blocks_to_disk()` lesson) |
+| 8 | 4 | total_blocks | VOLUME size in blocks, clamped to the real device/partition extent at format time (TFS2's `clamp_total_blocks_to_disk()` lesson) |
 | 12 | 4 | blocks_per_group | 32768 (one 4 KiB bitmap's worth) |
 | 16 | 4 | inodes_per_group | from the bytes-per-inode ratio; <= 32768 |
 | 20 | 4 | group_count | |
-| 24 | 4 | group0_start | block number of group 0 (see layout) |
+| 24 | 4 | group0_start | always 30; stored as a cross-check, a mismatch fails validation (see layout) |
 | 28 | 16 | reserved | future additive fields, zeroed today |
 | 44 | 4 | checksum | FNV-1a-32 over bytes 0-43 with this field zeroed |
 
@@ -116,7 +133,49 @@ lesson this project has ("an unreadable superblock is not a foreign
 disk", `docs/decisions.md`) is about exactly this structure: validate
 before trusting, refuse rather than guess.
 
-## Group descriptor (16 bytes each, table at block 14)
+## Superblock backups (ext-style)
+
+The superblock is effectively **write-once**: after format, nothing
+in normal operation modifies it (free counts live in the group
+descriptors, the feature flags are format-time). That makes backups
+nearly free -- they never need resyncing.
+
+Each backup region is the **trailing 17 blocks of its group**: a
+16-block snapshot of the group descriptor table, then one superblock
+copy in the group's final block. Regions live in **group 1 and the
+last group** (`group_count - 1`); with `group_count == 1` a single
+region sits at the end of group 0, and with `group_count == 2` the
+two coincide. Their blocks are marked allocated in the owning group's
+block bitmap at format time, so the allocator never has to know they
+exist.
+
+Backup locations are derivable from the volume size alone -- no
+superblock needed, which is the entire point (`group0_start` is the
+constant 30, `blocks_per_group` is the constant 32768):
+
+```
+backup_sb(g)  = 30 + (g + 1) * 32768 - 1      (the group's last block)
+backup_gdt(g) = backup_sb(g) - 16 .. backup_sb(g) - 1
+```
+
+Rules, in the spirit of the refuse-don't-guess policy:
+
+- **Mount fallback:** a primary that fails its read or checksum makes
+  mount try the backups (group 1 first, then last group). Mounting
+  from a backup is loud (klog) and does NOT rewrite the primary --
+  an automatic write to the one block that just failed is how a
+  transient read error becomes permanent damage.
+- **Repair is explicit:** `fsck repair` rewrites the primary (and any
+  bad backup) from a copy that validates.
+- **Backup GDT free-counts are stale by design** (they are format-time
+  snapshots, like ext2's backup GDTs between resizes). They are for
+  recovering the *shape* of the volume; `fsck` recomputes the counts
+  from the bitmaps afterwards, which it already must know how to do.
+- A backup superblock copy is byte-identical to the primary
+  (including the checksum field), so validation is one shared code
+  path.
+
+## Group descriptor (16 bytes each, table at blocks 14-29)
 
 | Offset | Size | Field | Notes |
 |---|---|---|---|
@@ -281,7 +340,7 @@ on `type == 2`):
 
 ## Block addressing
 
-Block numbers are global u32s, counted straight through the disk --
+Block numbers are global u32s, counted straight through the VOLUME --
 locality is an allocation policy, not something the pointer format
 encodes (same as TFS2 and ext2). The indirect scheme is TFS2's,
 unchanged: 12 direct + single + double + triple indirect, 1024
@@ -295,6 +354,33 @@ offset = (b - group0_start) % blocks_per_group
 (the subtraction is the one difference from the original draft, which
 divided raw block numbers -- correct only if groups started at block
 0, which they don't).
+
+## Volumes and partitions (format-proof now, mounting later)
+
+Every block number on disk is relative to a **volume**: a contiguous
+sector extent `{ base_lba, sector_count }`. Today the only volume is
+the flat disk (`{0, whole drive}`), and partition MOUNTING is
+explicitly not being built yet -- but the format and the
+implementation shape are partition-proof from day one, by an explicit
+user requirement (toy-os should eventually boot from a TFS3
+partition):
+
+- Nothing on disk ever stores an absolute LBA. `total_blocks` is the
+  volume's size. An image is bit-identical whether it lives at LBA 0
+  or inside a partition -- which also means host tools can build a
+  filesystem image and `dd` it into a partition unchanged.
+- The implementation does all I/O through the volume view handed to
+  `probe()`/`init()` -- one `volume_read/write(vol, block, ...)` seam,
+  never raw absolute ATA calls. On the flat disk this is a zero-cost
+  base of 0.
+- When partition mounting arrives, the change is confined to the
+  VFS's probe loop: iterate `kernel/drivers/partition.c`'s
+  already-parsed MBR/GPT entries, offer each extent to each backend,
+  plus the flat-disk extent as the fallback. No format change, no
+  backend change.
+- The 32 KiB front reserve is volume-relative and kept in all cases:
+  essential on a flat disk (MBR/GPT live there), harmless slack
+  inside a partition.
 
 ## Allocation policy (not format) and performance
 
@@ -432,7 +518,7 @@ disk at 128 GiB until roadmap M3's LBA48):
 | ...+ double indirect | ~4.00 GiB |
 | Block group | 32768 blocks = 128 MiB; 72 groups on 9 GiB |
 | Inodes (= files + dirs) | format-time ratio; at the 16 KiB/inode default: 8192/group, **~590,000 on 9 GiB** (vs. 256 total today), scaling with disk |
-| Per-group metadata overhead | 258 blocks (~0.8%); +32 blocks with the block-checksum feature |
+| Per-group metadata overhead | 258 blocks (~0.8%); +32 blocks with the block-checksum feature; +17 in the two backup-region groups |
 | Entries per directory | uncapped; ~250-340/block, ~3-4K in direct blocks, ~350K with one indirect |
 | Dirs | no separate cap -- same inode pool as files |
 
@@ -474,8 +560,13 @@ Unchanged from the original draft:
   checksum-mismatch = recompute-and-rewrite for data blocks.
 - A host-side `tools/tfs3_writer.py` (or a tfs2_writer.py mode)
   mirroring the format, including the superblock magic+version
-  refusal behavior tfs2_writer already has, and `trim` awareness of
-  the new bitmap locations.
+  refusal behavior tfs2_writer already has, `trim` awareness of
+  the new bitmap locations, and writing the backup regions at format
+  time.
+- Partition mounting (later, deliberately): the VFS probe loop
+  iterating `partition.c`'s MBR/GPT entries and handing each volume
+  extent to the backends -- see "Volumes and partitions". Nothing in
+  the format waits on it.
 - KTESTs following `kernel/fs/fs_test.c`'s patterns: `FRESH()`-style
   state setup, `fs_is_persistent()` skips, `fault_inject.h` brackets
   for the error paths -- plus new ones this format makes possible

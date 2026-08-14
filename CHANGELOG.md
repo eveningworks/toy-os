@@ -1855,6 +1855,24 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
     superblock/journal headers to 48 with checksums last); claims
     about the tree spot-checked against `tfs.c`, `fs_ops.h`,
     `kpath.h`, `partition.c`, `tfs2_writer.py`.
+  - **Revised same-day with two user requirements** before
+    implementation started: (1) **ext-style superblock backups** --
+    trailing 17 blocks of group 1 and the last group hold a
+    superblock copy + a format-time GDT snapshot; nearly free because
+    the TFS3 superblock is write-once after format; mount falls back
+    loudly, only `fsck repair` rewrites a primary. To make backups
+    findable with NO superblock in hand, the group-descriptor table
+    became a fixed 16 blocks (covers 512 GiB, four times the LBA28
+    ceiling -- the 60 KiB worst-case waste buys every structural
+    position being a constant or derivable from volume size alone;
+    `group0_start` is now the constant 30, stored only as a
+    cross-check). (2) **Partition-proofing**: all on-disk block
+    numbers are now defined as VOLUME-relative, and the
+    implementation contract is a `{base_lba, sector_count}` volume
+    view seam rather than absolute ATA LBAs -- so mounting from an
+    MBR/GPT partition later is a VFS probe-loop change with zero
+    format change. Partition mounting itself stays deliberately
+    unbuilt (new "Volumes and partitions" section).
 
 ### Changed
 - **A documented, checked on-disk filesystem layout -- and the test
