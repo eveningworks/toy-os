@@ -116,4 +116,28 @@ KTEST("ata", "TRIM refuses what it cannot safely discard") {
     // at all -- ata_trim_supported() must never claim support with no
     // drive, since every caller uses it to decide whether to bother.
     if (!ata_present()) KTEST_ASSERT_EQ(ata_trim_supported(), 0);
+
+    // ...nor with no Bus-Master DMA, because DSM only works as a DMA
+    // command and there is no PIO fallback. Reporting "supported" there
+    // meant every TRIM failed silently while `ata` said otherwise.
+    if (!ata_dma_hardware_available()) KTEST_ASSERT_EQ(ata_trim_supported(), 0);
+}
+
+KTEST("ata", "forcing PIO does not disable TRIM") {
+    // `ata nodma` forces DATA transfers down the PIO path. TRIM is
+    // deliberately NOT affected: DSM has no working PIO form (QEMU
+    // dispatches it through the DMA path -- see ata.c), so this driver
+    // issues it over the bus master regardless of where reads and writes
+    // are going.
+    //
+    // Pinned by a test because it is surprising in both directions. The
+    // roadmap briefly recorded the opposite as a known papercut, from
+    // reasoning rather than measurement; forcing PIO and running
+    // `stress 30` showed the image still didn't grow. This is that
+    // measurement, made cheap enough to re-run.
+    int before = ata_trim_supported();
+    WITH_PIO_FORCED({
+        KTEST_ASSERT_EQ(ata_trim_supported(), before);
+    });
+    KTEST_ASSERT_EQ(ata_trim_supported(), before); // restored
 }

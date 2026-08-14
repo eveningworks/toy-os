@@ -1318,12 +1318,28 @@ void cmd_ata(const char *args) {
         }
         vga_write("\n  max sectors/transfer: ");
         vga_write_dec((uint32_t)ata_max_sectors_per_xfer());
-        // Whether the drive accepts TRIM decides whether deleting a file
-        // gives space back to the host image or only to this filesystem
-        // (see ata.h's ata_trim()), so it belongs in the same one-glance
-        // status as DMA.
+        // Whether TRIM actually reaches the drive decides whether
+        // deleting a file gives space back to the HOST image or only to
+        // this filesystem (see ata.h's ata_trim()), so it belongs in the
+        // same one-glance status as DMA.
+        //
+        // Reported as three distinguishable states rather than a bare
+        // yes/no, because "no" has two completely different causes with
+        // different answers -- and because the DMA interaction is
+        // genuinely surprising: TRIM keeps working while `nodma` is on,
+        // since DSM has no PIO form and this driver issues it over the
+        // bus master regardless of where data transfers are going.
         vga_write("\n  TRIM (DATA SET MANAGEMENT): ");
-        vga_write(ata_trim_supported() ? "supported" : "not advertised by this drive");
+        if (ata_trim_supported()) {
+            vga_write("in use -- freed blocks are discarded to the host image");
+            if (!ata_dma_active()) {
+                vga_write("\n    (still over DMA: DSM has no PIO form, so `nodma` doesn't stop it)");
+            }
+        } else if (!ata_dma_hardware_available()) {
+            vga_write("unavailable -- needs Bus-Master DMA, which this machine lacks");
+        } else {
+            vga_write("not advertised by this drive");
+        }
         vga_putc('\n');
         return;
     }

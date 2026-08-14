@@ -703,14 +703,6 @@ history is worth reading, but a fixed papercut is just noise.
       the unrestricted one. Deliberately left recorded rather than
       rushed at the end of a long session, the same call the previous
       session made about its own last one.
-- [ ] **TRIM only reaches the drive over DMA.** `ata_trim()` needs the
-      bus-master path, so `ata nodma` (or a machine with no Bus-Master
-      IDE) silently disables reclamation -- blocks still free correctly
-      inside the filesystem, the space just stops coming back. Not
-      wrong, but undocumented in the `ata` command's own output, which
-      reports TRIM as "supported" based on IDENTIFY alone. A PIO
-      fallback is not the fix (QEMU only implements DSM as DMA); saying
-      so in `ata`'s output is.
 - [ ] **Control Panel applets can't show hover.** `struct applet`'s
       `draw(x, y, w, h)` doesn't carry the cursor position, so the
       timezone applet passes `hovered = -1` to `ui_radio_list_draw()`

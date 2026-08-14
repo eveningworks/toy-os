@@ -57,10 +57,21 @@ void ata_init(void);
 // never conflicts with this).
 int ata_present(void);
 
-// Does this drive accept DATA SET MANAGEMENT with the TRIM bit
-// (IDENTIFY word 169 bit 0)? Asked rather than assumed, because issuing
-// an unsupported command earns an ABRT and, on some real controllers, a
-// wedged channel.
+// Would a TRIM issued right now actually go out? That means all three
+// of: a drive is present, it advertises DATA SET MANAGEMENT with the
+// TRIM bit (IDENTIFY word 169 bit 0), and Bus-Master DMA came up --
+// because DSM only works as a DMA command and there is no PIO fallback
+// (see ata.c's dsm_send_block()).
+//
+// The IDENTIFY bit is asked rather than assumed because issuing an
+// unsupported command earns an ABRT and, on some real controllers, a
+// wedged channel. The DMA half is included because leaving it out made
+// this a lie on any machine without Bus-Master DMA: every TRIM failed
+// silently while `ata` reported "supported".
+//
+// NOT affected by `ata nodma`, which forces DATA transfers down the PIO
+// path. TRIM keeps going out over DMA there, and still works -- measured,
+// not assumed.
 int ata_trim_supported(void);
 
 // Tell the drive that `count` sectors from `lba` no longer hold data

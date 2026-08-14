@@ -903,8 +903,23 @@ int ata_present(void) {
     return g_present;
 }
 
+// "Would a TRIM issued right now actually go out?" -- not merely "does
+// the drive advertise it". Both callers want the former: ata_trim()
+// bails on it, and the `ata` command reports it, and answering the
+// IDENTIFY question alone made that report a lie on any machine whose
+// Bus-Master DMA never came up (dsm_send_block() has no PIO fallback to
+// fall back TO, so every TRIM there fails silently while `ata` said
+// "supported").
+//
+// g_dma_available is the right gate rather than dma_in_use(): it is set
+// only on ata_init_dma()'s full-success path, so it implies g_prd and
+// g_dma_buf both exist. Deliberately NOT dma_in_use() -- `ata nodma`
+// forces DATA transfers down the PIO path, and TRIM keeps using DMA
+// regardless because there is no PIO form of DSM that works (see
+// dsm_send_block()). Verified by measurement, not assumed: with PIO
+// forced, `stress 30` still leaves the image at its pre-run size.
 int ata_trim_supported(void) {
-    return g_present && g_trim_supported;
+    return g_present && g_trim_supported && g_dma_available;
 }
 
 uint32_t ata_sector_count(void) {
@@ -1079,7 +1094,10 @@ int ata_dma_nonblocking_selftest(uint32_t lba, uint32_t *out_polls) {
 // Count register means "how many 512-byte DESCRIPTOR blocks follow",
 // and its LBA registers are unused.
 static int dsm_send_block(const uint8_t *block) {
-    if (!g_dma_buf || !g_prd) return 0; // DMA never came up; no PIO fallback exists for DSM
+    // Belt and braces -- ata_trim_supported() already gated on
+    // g_dma_available, which implies both of these. There is no PIO
+    // fallback to reach for: DSM only works as a DMA command.
+    if (!g_dma_buf || !g_prd) return 0;
 
     for (uint32_t i = 0; i < ATA_SECTOR_SIZE; i++) g_dma_buf[i] = block[i];
 

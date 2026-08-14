@@ -62,9 +62,23 @@ using `## [x.y.z] - date` headings is here.
   went from 8.1 GiB to 2.3 MiB in one `trim`, with fsck, `check_layout`
   and every file on it identical afterwards.
 
-  `ata` reports TRIM support alongside DMA, since whether the drive
-  takes it decides whether deleting a file gives space back to the host
-  or only to the filesystem.
+  `ata` reports TRIM alongside DMA, since whether it reaches the drive
+  decides whether deleting a file gives space back to the host or only
+  to the filesystem. Three distinguishable states, because "no" has two
+  different causes with different answers: in use, unavailable for want
+  of Bus-Master DMA, or not advertised by the drive.
+  `ata_trim_supported()` answers "would a TRIM issued right now actually
+  go out", not just "does IDENTIFY claim it" -- without the DMA half it
+  reported "supported" on a machine where every TRIM would fail
+  silently, since DSM has no PIO fallback.
+
+  **`ata nodma` does not disable TRIM**, which reads like it should:
+  that switch forces DATA transfers to PIO and TRIM keeps using the bus
+  master, because there is nowhere else for it to go. The roadmap
+  briefly carried the opposite as a known papercut, recorded from
+  reasoning rather than measurement; forcing PIO and running `stress 30`
+  showed the image still didn't grow. A ktest pins it now, and `ata`
+  says so explicitly when PIO is forced.
 - **Keyboard focus (`apps/ui/ui_focus.h`)** -- one ring per window, Tab
   and Shift-Tab to cycle it, a focus ring to show it, and keys routed to
   the focused widget. A widget joins by exporting a single

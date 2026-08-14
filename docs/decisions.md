@@ -366,6 +366,15 @@ QEMU dispatches DSM through `ide_sector_start_dma()` with
 bus-master transfer. Over PIO it never arrives; the "success" is the
 drive acknowledging a command whose payload it is still waiting for.
 
+`ata nodma` does NOT stop it, which is worth knowing because it reads
+like it should: that switch forces DATA transfers down the PIO path,
+and TRIM keeps going out over the bus master regardless, because there
+is nowhere else for it to go. Measured rather than assumed -- with PIO
+forced, `stress 30` still leaves the image at its pre-run size. What
+DOES disable TRIM is Bus-Master DMA never coming up at all, and
+`ata_trim_supported()` accounts for that so the `ata` command can't
+report "supported" on a machine where every TRIM would fail silently.
+
 Worse, the half-issued command leaves the channel desynced, and the
 next few ATA commands return garbage. That is what produced a burst of
 `ata: refusing transfer past end of drive` complaints with absurd LBAs
