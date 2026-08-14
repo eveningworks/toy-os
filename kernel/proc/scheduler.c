@@ -112,7 +112,25 @@ extern uint64_t g_next_kernel_rsp;
 
 #define MAX_PROCS        4
 #define PROC_KSTACK_SIZE 8192
-#define PROC_USTACK_VADDR 0x8000200000ULL // same fixed vaddr in every
+// How many pages of user stack a process gets.
+//
+// It was ONE, and that was a real, hit-in-practice limit rather than a
+// theoretical one: userland/notepad.c page-faulted the moment it opened
+// its file dialog, because its draw path (dialog -> clipped string ->
+// per-glyph blend) plus two 512-byte I/O buffers does not fit in 4KB.
+// The symptom was a bare "RING-3 CRASH: Page fault" with nothing
+// pointing at the stack.
+//
+// Four pages is not a considered maximum, just comfortably past the
+// point where an ordinary GUI client fails. The real answer is a
+// growable stack -- a page-fault handler that maps another page when
+// the faulting address is just below the current bottom -- which is
+// still a roadmap item (docs/roadmap.md, Milestone 9). Until then this
+// is a bigger fixed allocation, and it should be replaced rather than
+// raised again when a client outgrows it.
+#define PROC_USTACK_PAGES 4
+
+#define PROC_USTACK_VADDR 0x8000200000ULL // TOP page; the stack grows DOWN from here. Same fixed vaddr in every
                                             // process's OWN address
                                             // space -- no collision,
                                             // since each is private.
@@ -356,9 +374,16 @@ static int spawn_from_fs(const char *path, const char *args) {
     uint64_t entry = 0;
     if (!elf_load(elf_phys, as, &entry)) return -1;
 
-    uint64_t stack_phys = pmm_alloc_frame();
-    if (!stack_phys) return -1;
-    if (!vmm_map_user_page(as, PROC_USTACK_VADDR, stack_phys)) return -1;
+    // The TOP page is where argv is laid out and where RSP starts; the
+    // rest are mapped below it so the stack has somewhere to grow.
+    uint64_t stack_phys = 0;
+    for (int pg = 0; pg < PROC_USTACK_PAGES; pg++) {
+        uint64_t frame = pmm_alloc_frame();
+        if (!frame) return -1;
+        uint64_t va = PROC_USTACK_VADDR - (uint64_t)pg * 4096;
+        if (!vmm_map_user_page(as, va, frame)) return -1;
+        if (pg == 0) stack_phys = frame;
+    }
 
     uint64_t argc = 0, argv = 0, user_rsp = 0;
     if (!elf_build_argv_on_stack(stack_phys, PROC_USTACK_VADDR, path, args,
@@ -400,6 +425,35 @@ static int spawn_from_fs(const char *path, const char *args) {
 
 void scheduler_tick(uint64_t *regs) {
     if (!scheduler_armed) return;
+
+    // A LEGACY BLOCKING PROCESS CANNOT BE PARKED, so while one is in
+    // flight this file does not switch at all -- it resumes exactly
+    // what was interrupted, which is what it did before the kernel
+    // joined the rotation.
+    //
+    // process_run_ring3() runs a ring-3 process with NO procs[] entry:
+    // from here it simply *is* "the kernel context", and its trapframe
+    // lands in kernel_saved_rsp. There is nowhere to record its CR3 or
+    // its RSP0, so switching away and back resumes it under whatever
+    // address space the other process left loaded.
+    //
+    // kernel_slot_runnable() already refused to SELECT the kernel
+    // position for that reason -- but find_next_runnable()'s fallback
+    // returns ROT_KERNEL anyway when nothing else is runnable, which
+    // reintroduced the exact case the guard existed to prevent. The
+    // real fix is here: don't start the rotation at all.
+    //
+    // Found the hard way. Running `ls` from the debug console (the
+    // legacy path) while a ring-3 GUI client was alive scheduled the
+    // client, then resumed `ls` under the CLIENT's page tables --
+    // reported as a bare "RING-3 CRASH: Page fault" in the client,
+    // which is about as far from the actual cause as a symptom gets.
+    // The window is narrow but entirely reachable: any `run` from the
+    // physical shell while a client has a window open.
+    if (process_context_is_armed()) {
+        if (current_index < 0) kernel_saved_rsp = (uint64_t)regs;
+        return;
+    }
 
     if (current_index >= 0) {
         procs[current_index].kernel_rsp = (uint64_t)regs;

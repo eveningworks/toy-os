@@ -16,7 +16,9 @@
 // Chosen the same way file_test.c/newsyscalls_test.c's own STACK_VADDR
 // constants are: well clear of wherever a small ELF's own PT_LOAD
 // segments land near VMM_USER_BASE.
-#define ELF_RUN_STACK_VADDR 0x8000200000ULL
+// See scheduler.c's PROC_USTACK_PAGES for why this is not 1.
+#define ELF_RUN_STACK_PAGES 4
+#define ELF_RUN_STACK_VADDR 0x8000200000ULL // TOP page; grows down
 
 // Same address the old echo_test.c used for its own HEAP_VADDR -- well
 // clear of both the stack above and wherever a small ELF's own PT_LOAD
@@ -198,14 +200,20 @@ int elf_run_from_fs(const char *path, const char *args) {
         return -1;
     }
 
-    uint64_t stack_phys = pmm_alloc_frame();
-    if (!stack_phys) {
-        vga_write("run: out of physical memory for the stack\n");
-        return -1;
-    }
-    if (!vmm_map_user_page(as, ELF_RUN_STACK_VADDR, stack_phys)) {
-        vga_write("run: failed to map the stack page\n");
-        return -1;
+    // The TOP page holds argv and is where RSP starts; the rest are
+    // mapped below it so the stack has room to grow into.
+    uint64_t stack_phys = 0;
+    for (int pg = 0; pg < ELF_RUN_STACK_PAGES; pg++) {
+        uint64_t frame = pmm_alloc_frame();
+        if (!frame) {
+            vga_write("run: out of physical memory for the stack\n");
+            return -1;
+        }
+        if (!vmm_map_user_page(as, ELF_RUN_STACK_VADDR - (uint64_t)pg * 4096, frame)) {
+            vga_write("run: failed to map a stack page\n");
+            return -1;
+        }
+        if (pg == 0) stack_phys = frame;
     }
 
     // Arms SYS_SBRK for this process unconditionally -- cheap

@@ -111,31 +111,36 @@ static uint32_t blend(uint32_t fg, uint32_t bg, unsigned alpha) {
     return (r << 16) | (g << 8) | b;
 }
 
+void ugfx_draw_char(struct ugfx_surface *s, int x, int y, char c,
+                     uint32_t color, uint32_t bg) {
+    if (!s || !s->pixels || !g_glyphs) return;
+    if (x >= s->w || y >= s->h || x + g_char_w <= 0 || y + g_char_h <= 0) return;
+
+    const unsigned char *glyph =
+        g_glyphs + win_glyph_offset((uint32_t)glyph_index((unsigned char)c),
+                                     g_char_w, g_char_h);
+
+    for (int row = 0; row < g_char_h; row++) {
+        int py = y + row;
+        if (py < 0 || py >= s->h) continue;
+        for (int col = 0; col < g_char_w; col++) {
+            int px = x + col;
+            if (px < 0 || px >= s->w) continue;
+            unsigned a = glyph[row * g_char_w + col];
+            if (!a) continue; // fully background -- leave it alone
+            uint32_t *p = &s->pixels[(uint32_t)py * (uint32_t)s->w + (uint32_t)px];
+            *p = (a == 255) ? color : blend(color, bg, a);
+        }
+    }
+}
+
 void ugfx_draw_string(struct ugfx_surface *s, int x, int y,
                        const char *str, uint32_t color, uint32_t bg) {
-    if (!s || !s->pixels || !str || !g_glyphs) return;
-
+    if (!s || !str) return;
     for (int n = 0; str[n]; n++) {
         int gx = x + n * g_char_w;
-        if (gx >= s->w) break;      // the rest is off the right edge
-        if (gx + g_char_w <= 0) continue;
-
-        const unsigned char *glyph =
-            g_glyphs + win_glyph_offset((uint32_t)glyph_index((unsigned char)str[n]),
-                                         g_char_w, g_char_h);
-
-        for (int row = 0; row < g_char_h; row++) {
-            int py = y + row;
-            if (py < 0 || py >= s->h) continue;
-            for (int col = 0; col < g_char_w; col++) {
-                int px = gx + col;
-                if (px < 0 || px >= s->w) continue;
-                unsigned a = glyph[row * g_char_w + col];
-                if (!a) continue; // fully background -- leave it alone
-                uint32_t *p = &s->pixels[(uint32_t)py * (uint32_t)s->w + (uint32_t)px];
-                *p = (a == 255) ? color : blend(color, bg, a);
-            }
-        }
+        if (gx >= s->w) break; // the rest is off the right edge
+        ugfx_draw_char(s, gx, y, str[n], color, bg);
     }
 }
 

@@ -157,6 +157,7 @@ EVENT_TEST_ELF = userland/event_test.elf
 WINCLIENT_ELF = userland/winclient.elf
 UICLIENT_ELF = userland/uiclient.elf
 CALCULATOR_ELF = userland/calculator.elf
+NOTEPAD_ELF = userland/notepad.elf
 
 # Which userland ELFs get seeded onto disk.img's /bin, and under what
 # name. The mapping is explicit because it isn't always mechanical --
@@ -204,7 +205,8 @@ SEED_TESTS = \
 	$(EVENT_TEST_ELF):event_test \
 	$(WINCLIENT_ELF):winclient \
 	$(UICLIENT_ELF):uiclient \
-	$(CALCULATOR_ELF):calculator
+	$(CALCULATOR_ELF):calculator \
+	$(NOTEPAD_ELF):notepad
 
 # Both lists together -- only USERLAND_ELVES below needs the union, so
 # it's derived rather than maintained as a third list.
@@ -411,6 +413,18 @@ CALC_OBJS = $(BUILD)/userland/crt0.o \
 
 userland/calculator.elf: $(CALC_OBJS) userland/link.ld
 	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(CALC_OBJS)
+
+# Notepad: the userland widget toolkit plus the text buffer.
+NOTEPAD_OBJS = $(BUILD)/userland/crt0.o \
+               $(BUILD)/userland/notepad.o \
+               $(BUILD)/userland/uui.o \
+               $(BUILD)/userland/utext.o \
+               $(BUILD)/userland/ugfx.o \
+               $(BUILD)/userland/sys.o \
+               $(BUILD)/userland/stack_chk.o
+
+userland/notepad.elf: $(NOTEPAD_OBJS) userland/link.ld
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(NOTEPAD_OBJS)
 
 $(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(ASM_OBJECTS) $(C_OBJECTS)

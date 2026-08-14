@@ -32,6 +32,90 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
 ## [Unreleased]
 
 ### Added
+- **Notepad runs in ring 3**, with the text-editing widgets ported to
+  userland alongside it. The second real app out of the kernel, and the
+  one that needed the whole toolkit rather than a button grid.
+
+  - **`userland/utext.c`** is the port of `apps/ui/ui_scrollback.c`: a
+    wrapped, scrollable, editable buffer with a cursor and selection.
+    Three properties were carried over deliberately because each is
+    load-bearing and easy to lose in a rewrite -- wrapping is recomputed
+    every draw rather than cached (so it stays correct across resizes
+    with no invalidation bookkeeping), measure/draw/index_at_point share
+    ONE wrap accounting (so a click can't land a character off), and
+    there is no "lines" concept in storage. One deliberate reduction:
+    no per-character colour, since the only ring-3 client is an editor
+    whose text is one colour. A userland terminal would add it back.
+  - **`userland/notepad.c`** -- toolbar, editor, status line, and its
+    own file dialog with directory navigation.
+
+  **The migration made this app SIMPLER, which is the interesting
+  part.** The kernel-space Notepad cannot block: it runs inside
+  `wm_run()`, so a blocking disk read would freeze the desktop. That is
+  why `apps/notepad.c` carries `window_start_read()`/`window_start_write()`,
+  why the WM has pending_read/pending_write slots polled per frame, why
+  loading a file is a state machine with completion callbacks, and why
+  `close_window()` must refuse while I/O is in flight. None of it is
+  needed here -- the ring-3 version just calls `sys_read()` and blocks,
+  and the desktop keeps running. That whole apparatus collapses into an
+  ordinary read-into-a-buffer loop.
+
+  **The file dialog is drawn by the application, not the window
+  server.** `apps/wm/file_picker.c` is a WM modal built on
+  `wm_internal.h` and could not be ported -- and shouldn't be. GTK and
+  Qt each draw their own; a portal is a later refinement, not the
+  starting point.
+
+### Fixed
+- **Two kernel bugs that corrupted a ring-3 client whenever a legacy
+  `run` happened alongside it.** Both surfaced as a bare
+  `RING-3 CRASH: Page fault` in the *client*, at a syscall unrelated to
+  the actual cause -- about as misleading as a symptom gets. Found by
+  running `ls` from the debug console while Notepad had a window open,
+  which is one keystroke away from something a user would do.
+
+  - **`process_run_ring3()` never set RSP0.** It got away with that
+    while a legacy process could never coexist with a scheduler-managed
+    one: RSP0 was still the boot stack and nothing else used it. Once
+    GUI clients stay alive across a shell command, `switch_to()` leaves
+    RSP0 pointing at the *running client's* kernel stack -- so the
+    legacy process's traps landed there and overwrote the trapframe the
+    client was suspended on. It now has its own ring-0 stack.
+  - **`scheduler_tick()` would switch away from a legacy process and
+    back.** `kernel_slot_runnable()` already refused to SELECT the
+    kernel position while one was in flight (it has no `procs[]` entry,
+    so its CR3 and RSP0 are recorded nowhere) -- but
+    `find_next_runnable()`'s fallback returned `ROT_KERNEL` anyway when
+    nothing else was runnable, reintroducing exactly the case the guard
+    existed to prevent. The tick now returns early instead of starting
+    the rotation at all.
+
+  Covered by a new KTEST (`kernel/proc/sched_test.c`) that spawns a
+  scheduled process, runs a legacy one to completion alongside it, and
+  requires the first to still exit cleanly. Verified as a POSITIVE
+  CONTROL: reverting the RSP0 fix makes exactly that test fail.
+- **A spawned process gets 4 stack pages instead of 1.** Notepad
+  page-faulted opening its file dialog -- its draw path plus two
+  512-byte I/O buffers does not fit in 4KB. Not the growable stack the
+  roadmap still wants (Milestone 9); just a bigger fixed allocation,
+  and it should be replaced rather than raised again.
+- **Notepad normalises a typed save path to absolute.** Saving as
+  `notes.txt` and opening `/notes.txt` described the same file two
+  ways, and a later Save wrote through a relative path whose meaning
+  depended on the kernel's cwd rather than the dialog's directory.
+- **The WM no longer sends a client a `WIN_EV_MOUSE_MOVE` per frame
+  when the cursor hasn't moved.** `wm_update_content_hover()` runs
+  every frame, so a motionless cursor woke the client at frame rate --
+  and under the scheduler's rotation a client woken every frame takes
+  half the CPU to decide nothing changed.
+
+  Verified: `notepad_client_test.py` 11/11, including a full round trip
+  -- type, save, verify the bytes on disk via `cat` (a completely
+  independent path), clear, reopen, and require the rendered text to
+  match pixel for pixel. `ktest` 90/90, `calculator_client_test` 8/8,
+  `winclient_test` 8/8, `uiclient_test` 8/8, `uidemo_test` 27/27,
+  `damage_sweep` 35/0, `preflight.sh` PASS.
+
 - **A real crt0 and a syscall library, and the process entry ABI is now
   standard SysV.** Every ring-3 program used to open with its own
   hand-written `void _start(void)` and its own copy of
@@ -3138,7 +3222,6 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   was visibly larger and `timezone`'s picker showed `helsinki` marked
   as the active selection.
 
-### Fixed
 - **`calc_engine.c`'s fraction buffer is sized to its callee's worst
   case.** `-Wstringop-overflow` fired once that file started being
   compiled for userland too (the ring-3 Calculator shares it):
