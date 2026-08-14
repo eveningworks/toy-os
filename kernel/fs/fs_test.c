@@ -10,6 +10,7 @@
 #include "ktest.h"
 #include "fault_inject.h"
 #include "kapi.h"
+#include "tfs3.h" // the caps-declaration test below reads tfs3_ops directly
 
 int tfs_selftest(void); // kernel/fs/tfs.c -- needs its file-static state
 
@@ -35,6 +36,17 @@ int tfs_selftest(void); // kernel/fs/tfs.c -- needs its file-static state
 KTEST("fs", "triple-indirect addressing (legacy selftest)") {
     if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
     KTEST_ASSERT(tfs_selftest() == 1);
+}
+
+KTEST("fs", "tfs3 declares its format capabilities") {
+    // Static declaration check -- runs regardless of which backend is
+    // mounted. The live tfs3 read/mount/switch behavior is covered by
+    // the vm.py-driven tests (tools/fs_switch_test.py, Stage E).
+    KTEST_ASSERT(k_strcmp(tfs3_ops.name, "tfs3") == 0);
+    KTEST_ASSERT((tfs3_ops.caps & FS_CAP_INODES) != 0);
+    KTEST_ASSERT((tfs3_ops.caps & FS_CAP_EPOCH_TIME) != 0);
+    KTEST_ASSERT((tfs3_ops.caps & FS_CAP_HARDLINKS) != 0);
+    KTEST_ASSERT((tfs3_ops.caps & FS_CAP_SYMLINKS) != 0);
 }
 
 KTEST("fs", "backend reports a name and honest capabilities") {

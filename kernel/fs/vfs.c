@@ -27,6 +27,7 @@
 #include "fs.h"
 #include "fs_ops.h"
 #include "tfs.h"
+#include "tfs3.h"
 #include "ata.h"
 #include "klog.h"
 #include "string.h"
@@ -37,6 +38,7 @@
 // decides which backend gets asked first, not which one wins a
 // contested disk. There is no contested disk.
 static const struct fs_ops *const g_backends[] = {
+    &tfs3_ops,
     &tfs_ops,
 };
 #define FS_BACKEND_COUNT ((int)(sizeof(g_backends) / sizeof(g_backends[0])))
@@ -58,7 +60,7 @@ static int g_persistent = 0;
 // gated by FS_CAP_HARDLINKS) extends an enforced rule instead of
 // introducing an unenforced one.
 static int caps_are_honest(const struct fs_ops *fs) {
-    if (!fs->name || !fs->probe || !fs->format || !fs->init) return 0;
+    if (!fs->name || !fs->probe || !fs->wipe || !fs->format || !fs->init) return 0;
     return 1;
 }
 
@@ -155,6 +157,15 @@ int fs_format_backend(const char *name) {
     }
     if (!target) return 0;
     if (!ata_present()) return 0;
+    // The wipefs rule (fs_ops.h's wipe contract): erase every OTHER
+    // backend's signatures first, so nothing stale -- a primary the
+    // new format doesn't happen to overwrite, or a far-away backup
+    // superblock -- can outclaim the freshly written filesystem at
+    // the next probe. Found live: formatting a TFS3 disk as TFS2
+    // left TFS3's backups intact, and the probe mounted the corpse.
+    for (int i = 0; i < FS_BACKEND_COUNT; i++) {
+        if (g_backends[i] != target) g_backends[i]->wipe();
+    }
     if (!target->format()) return 0;
     // Remount through the same probe path a boot takes -- the freshly
     // written superblock is what should claim the disk. No formatting

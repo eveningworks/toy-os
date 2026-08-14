@@ -919,6 +919,14 @@ repeated manual steps to be worth automating:
   power loss -- the inconsistencies `fsck` repairs are ones the
   kernel deliberately avoids producing, so without this it could only
   ever be tested against a clean disk and proven to report "clean".
+- **`tfs3_writer.py`** -- the TFS3 sibling of `tfs2_writer.py`: format
+  (writes superblock backups + GDT snapshots, wipes a stale TFS2
+  signature per the wipefs rule) / ls / read / write / mkdir / delete /
+  sync (`once/` + `sync/` convention) / trim / info, all against a
+  TFS3 v1 image, no toy-os boot needed. Spec: `docs/tfs3-design.md`;
+  the kernel backend (`kernel/fs/tfs3.c`) is kept in lockstep and the
+  same bar applies as tfs2_writer's: direct+single-indirect write
+  scope only.
 - **`mkpart_test.py`** -- writes a synthetic legacy MBR or GPT partition
   table onto a disk image, for testing `kernel/drivers/partition.c`'s
   parser (`parttable` shell command). TFS2-mount-preserving: patches

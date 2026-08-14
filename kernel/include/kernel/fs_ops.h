@@ -58,6 +58,18 @@ struct fs_ops {
     //      tfs.c's init comment), never as "blank, go format"
     int (*probe)(void);
 
+    // Erase every signature by which probe() would recognize this
+    // backend's filesystem on the disk -- the primary superblock AND
+    // any backups. The wipefs rule, learned the hard way: formatting
+    // a TFS3 disk as TFS2 overwrote TFS3's primary (it sits inside
+    // TFS2's record-table region) but not its far-away backups, so
+    // the TFS3 probe kept claiming the disk via backup and "mounted"
+    // a corpse. fs_format_backend() calls every OTHER backend's
+    // wipe() before formatting with the chosen one, so a reformat is
+    // a clean identity change, not a seance. Idempotent; returns 1
+    // on success (nothing to wipe counts as success).
+    int (*wipe)(void);
+
     // Write a fresh, empty filesystem to the disk. Does NOT mount it
     // (fs_init()/fs_format_backend() call init() after). Returns 1 on
     // success, 0 on failure (too-small disk, write errors). Only

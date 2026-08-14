@@ -50,6 +50,14 @@ char *k_strstr(const char *haystack, const char *needle);
 // Byte comparison, same sign convention as k_strcmp.
 int k_memcmp(const void *a, const void *b, size_t n);
 
+// FNV-1a 32-bit hash (offset basis 0x811C9DC5, prime 0x01000193) --
+// the project's one non-cryptographic checksum, mirrored host-side in
+// tools/tfs2_writer.py and tools/tfs3_writer.py. Promoted here from a
+// tfs.c static once tfs3.c became the second real caller (the
+// toolkit's usual bar). Torn-write/bit-rot detection strength only;
+// never treat it as tamper-proof.
+uint32_t k_fnv1a(const void *buf, size_t len);
+
 // Like k_memcpy, but correct when the regions overlap. apps/ui/
 // ui_textbox.c's insert/delete shifts are the callers, and one of them
 // carried a comment explaining it was hand-rolled precisely because

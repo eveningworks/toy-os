@@ -174,6 +174,18 @@ Rules, in the spirit of the refuse-don't-guess policy:
 - A backup superblock copy is byte-identical to the primary
   (including the checksum field), so validation is one shared code
   path.
+- **The wipefs rule** (learned live, not designed in advance):
+  reformatting a disk with a DIFFERENT filesystem must erase this
+  filesystem's primary AND backup superblocks first, or the stale
+  backups keep claiming the disk at probe time -- formatting a TFS3
+  disk as TFS2 overwrote the primary (it sits inside TFS2's
+  record-table region) but not the far-away backups, and the probe
+  mounted the corpse. Each backend owns a `wipe()` op
+  (`fs_ops.h`) that erases exactly its own signatures;
+  `fs_format_backend()` wipes every other backend before formatting,
+  and the host tools apply the same rule (`tfs3_writer.py format`
+  clears a `TFS2` magic at LBA 0 -- and only that, an MBR/GPT there
+  is left alone).
 
 ## Group descriptor (16 bytes each, table at blocks 14-29)
 

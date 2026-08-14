@@ -75,6 +75,13 @@ char *k_strstr(const char *haystack, const char *needle) {
     return 0;
 }
 
+uint32_t k_fnv1a(const void *buf, size_t len) {
+    const uint8_t *p = (const uint8_t *)buf;
+    uint32_t hash = 0x811C9DC5u;
+    for (size_t i = 0; i < len; i++) { hash ^= p[i]; hash *= 0x01000193u; }
+    return hash;
+}
+
 int k_memcmp(const void *a, const void *b, size_t n) {
     const uint8_t *x = (const uint8_t *)a, *y = (const uint8_t *)b;
     for (size_t i = 0; i < n; i++) {

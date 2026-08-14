@@ -942,10 +942,11 @@ static void deserialize_record(struct file *f, const uint8_t *buf) {
     f->triple_indirect = get_u32(buf + REC_OFF_TRIPLE);
 }
 
+// fnv1a() lived here as a static until tfs3.c needed the same hash --
+// promoted to k_fnv1a() (string.h) per the toolkit's second-caller
+// rule; this thin alias keeps the two existing call sites unchanged.
 static uint32_t fnv1a(const uint8_t *buf, int len) {
-    uint32_t hash = 0x811C9DC5u;
-    for (int i = 0; i < len; i++) { hash ^= buf[i]; hash *= 0x01000193u; }
-    return hash;
+    return k_fnv1a(buf, (size_t)len);
 }
 
 static int write_table_slot(int index, const uint8_t *buf) {
@@ -1134,6 +1135,16 @@ static int tfs_probe(void) {
         sb[2] == FS_DISK_MAGIC2 && sb[3] == FS_DISK_MAGIC3 &&
         sb[4] == FS_DISK_VERSION) return 1;
     return 0;
+}
+
+// Erase TFS2's one signature: the superblock sector at LBA 0. See
+// fs_ops.h's wipe contract -- called before another backend formats,
+// so a stale "TFS2" magic can't claim a disk that stopped being one.
+static int tfs_wipe(void) {
+    if (!ata_present()) return 1;
+    uint8_t zero[ATA_SECTOR_SIZE];
+    k_memset(zero, 0, sizeof(zero));
+    return ata_write_sector(FS_SUPERBLOCK_LBA, zero) ? 1 : 0;
 }
 
 // Writes a fresh, empty TFS2 filesystem: superblock, empty journal, a
@@ -2090,6 +2101,7 @@ const struct fs_ops tfs_ops = {
     .name = "tfs2",
     .caps = 0, // no on-disk inodes/hardlinks/symlinks, timestamps stored civil -- see fs.h's FS_CAP_* comment
     .probe = tfs_probe,
+    .wipe = tfs_wipe,
     .format = tfs_format,
     .init = tfs_init,
     .touch = tfs_touch,

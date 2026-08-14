@@ -1928,6 +1928,52 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
     writes, and the file survives a VM reboot; `fsck` clean and
     named. All against a disk copy.
 
+- **TFS3 exists on disk now -- Stage B: the whole read side, the host
+  tool, and live filesystem switching in both directions.**
+  - **`tools/tfs3_writer.py`**: format (superblock backups + GDT
+    snapshots included) / ls / read / write / mkdir / delete / sync /
+    trim / info against a TFS3 v1 image, mirroring the design doc's
+    offset tables exactly; verified by host-side round-trips (write/
+    read/cmp on a 100 KB file through the single-indirect path,
+    delete restoring free counts to the byte, trim shrinking a
+    formatted 256 MiB image to 1.3 MB on disk).
+  - **`kernel/fs/tfs3.c` + `kernel/include/kernel/tfs3.h`**: probe
+    (primary, then backups -- derived from the volume size alone,
+    which is what the fixed 16-block GDT bought), kernel-side format,
+    mount with checksum verification and loud backup fallback, and
+    every read op: whole-file read, read_range with hole-as-zeros,
+    steppable reads, list (`.`/`..` filtered per fs_list()'s
+    direct-children contract), stat (real inos, native epoch), and
+    disk_usage off the free-count caches (a descriptor failing its
+    checksum degrades to "trust nothing, fsck recomputes", capped
+    logging). All I/O through the volume-view seam
+    (`{base_lba, sector_count}`), so partition mounting later is a
+    probe-loop change. Mutating ops refuse with one honest klog until
+    Stage C; caps declare the format truths
+    (INODES|HARDLINKS|SYMLINKS|EPOCH_TIME).
+  - **The wipefs rule, learned live.** The first switching test
+    failed beautifully: `fsformat tfs2 confirm` on a TFS3 disk
+    overwrote TFS3's primary superblock (block 8 sits inside TFS2's
+    record table) but not its far-away BACKUPS -- so the next probe
+    mounted the TFS3 corpse via backup and stranded the boot
+    RAM-only. A stale backup must never resurrect a dead filesystem:
+    every backend now implements `wipe()` (erase exactly its own
+    signatures, primary and backups), `fs_format_backend()` wipes
+    every other backend before formatting, and `tfs3_writer.py
+    format` clears a `TFS2` magic at LBA 0 host-side (only on a
+    magic match -- an MBR/GPT there is untouched). Recorded in the
+    design doc's Superblock backups section.
+  - `k_fnv1a()` promoted to `kernel/lib` (string.h) -- tfs3.c was the
+    second real caller of tfs.c's private fnv1a, the toolkit's usual
+    bar.
+  - Verified: 81/81 KTESTs (new: tfs3 caps declaration); host-seeded
+    9 GiB TFS3 image boots and mounts ("Filesystem: tfs3", real ino
+    in `stat`, `cat` works, writes refuse honestly); full live cycle
+    tfs3 -> tfs2 -> tfs3 via `fsformat`, with files written on the
+    tfs2 leg; zeroing the primary superblock with dd and rebooting
+    mounts loudly from the group-1 backup with the filesystem fully
+    readable. All against disk copies.
+
 ### Changed
 - **A documented, checked on-disk filesystem layout -- and the test
   binaries moved out of `/bin`.** Asked for a future-proof directory
