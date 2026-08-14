@@ -154,7 +154,16 @@ technical conventions below:
   client can't produce for itself is the font, which
   `WIN_REQ_FONT` maps READ-ONLY out of the kernel's own tables rather
   than copying (one instance in memory, and client text can't drift
-  from the desktop's when `font_size` changes).
+  from the desktop's when `font_size` changes). Widgets for a client
+  live in **`userland/uui.c`** (the ported `ui_button_group` and
+  friends) with colours in `userland/utheme.h` -- port more from
+  `apps/ui/` only when a client actually needs them, the same bar
+  `apps/ui/` holds itself to. **A file needed by both the kernel and a
+  client is COMPILED TWICE, never copied** (`build/userland/shared/`,
+  see the Makefile): the two builds use different code models so the
+  objects can't be shared, but the source can, which is why the ring-3
+  and kernel Calculators cannot disagree about arithmetic. Only
+  freestanding files qualify.
 - **The window manager lives in `apps/wm/`** -- the core event
   loop/input/render split (`wm.c`/`wm_input.c`/`wm_render.c`, sharing
   state through `wm_internal.h`'s `extern`s) plus the pieces that grew
@@ -896,6 +905,17 @@ repeated manual steps to be worth automating:
   offsets in Python -- the Python copy drifts silently the moment a row
   is added to the app, which is exactly what happened when the dropdown
   and listbox rows landed mid-file.
+- **`calculator_client_test.py`** -- drives the RING-3 Calculator
+  (`userland/calculator.c`) and asserts on it (8 checks). Worth reading
+  for two techniques: it uses **no OCR** -- every check is a round trip
+  (a state change must alter the display's pixels, and returning to the
+  same logical state must restore them EXACTLY), which proves rendering
+  and arithmetic together and also catches a right number drawn in the
+  wrong place; and its last check presses a button, drags OFF it and
+  releases, which must NOT commit. That one matters because a client
+  acting on button-down passes every other check and fails only that.
+  Geometry is derived from the window's reported content size, not
+  hardcoded, so it survives a font-size change.
 - **`uiclient_test.py`** -- drives `userland/uiclient.c`, the ring-3
   client that renders real text with `userland/ugfx.c`, and asserts on
   it (8 checks: text actually rendered, the button drew, a click and a

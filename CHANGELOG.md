@@ -32,6 +32,72 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
 ## [Unreleased]
 
 ### Added
+- **Calculator runs in ring 3.** The final step of Milestone 41: a real
+  application, moved out of the kernel and running as an ordinary
+  ring-3 process that talks to the window server over the protocol.
+  Same button grid, same keyboard handling, same commit-on-release
+  behaviour, same look.
+
+  **The arithmetic is genuinely shared, not copied.**
+  `apps/calc_engine.c` is compiled a SECOND time with
+  `USERLAND_CFLAGS` and linked into the ring-3 binary (see the
+  Makefile's `build/userland/shared/` rule). It only ever needed
+  `string.h` and `knum.h`, both freestanding, so nothing about it had
+  to change. That is the strongest form this migration could take: a
+  bug fixed in the engine fixes both copies of the app, because there
+  is only one engine. `kernel/lib/string.c` and `knum.c` ride the same
+  path. The objects have to be rebuilt rather than reused because the
+  kernel's are `-mcmodel=kernel` and a ring-3 ELF is `-mcmodel=large`
+  -- a second compile is the only way to share the SOURCE.
+
+  **`userland/uui.c` is the ported widget layer** --
+  `ui_primitives` + `ui_button` + `ui_button_group`, which is exactly
+  what Calculator is built from, and deliberately not the rest of
+  `apps/ui/`. The remainder follows when a client needs it, the same
+  "second real caller" bar `apps/ui/` holds itself to; porting the lot
+  up front would be inventing an API for nobody.
+
+  Behaviour was carried across verbatim, including the two rules most
+  likely to be lost in a port: the interaction states derive their
+  wash direction from the control's OWN luminance (the kernel version's
+  comment records why -- always lightening produced a hover that moved
+  this near-white theme by two units out of 255, invisible), and a
+  press **commits on release**, so a press dragged off its button does
+  nothing.
+
+  **Two WM gaps had to be closed for that second rule to be possible at
+  all**, and they are the real bug fixes in this entry:
+  - Clients never received `WIN_EV_MOUSE_UP` or `WIN_EV_MOUSE_MOVE` --
+    only `MOUSE_DOWN`. A client could therefore only ever act on
+    button-down, which is precisely what the guidelines forbid. Both
+    are routed now, including the "cursor left the window" move that
+    clears a stale highlight.
+  - `content_pressed` was only set for a window with an `on_press`
+    callback, which a client window never has. So a client got a
+    `MOUSE_DOWN` that was never followed by a `MOUSE_UP` and could
+    never complete a click. Symptom while building this: the ring-3
+    Calculator's keyboard worked perfectly and its mouse did nothing.
+
+  Verified:
+  - **`tools/calculator_client_test.py`** (new), 8 checks, all passing.
+    No OCR: every check is a round trip -- a state change must alter
+    the display's pixels and returning to the same logical state must
+    restore them EXACTLY, which proves rendering and arithmetic
+    together and also catches a right number drawn in the wrong place.
+    It cross-checks the keyboard and mouse paths against each other,
+    and the last check is the one that matters: press, drag off,
+    release must NOT commit. A client acting on button-down passes
+    every other check and fails that one.
+  - The kernel-space Calculator still computes correctly after the
+    engine edit (`7 + 3 = 10`), and the two are visually identical --
+    `screenshots/2026-08-14/kernel-vs-ring3-calculator.png` /
+    `ring3-calculator.png`.
+  - Regressions all clean: `uidemo_test.py` 27/27 (the kernel widget
+    suite, unaffected by the `wm_input.c` changes),
+    `winclient_test.py` 8/8, `uiclient_test.py` 8/8,
+    `damage_sweep.py` 35 interactions / 0 violations, `preflight.sh`
+    PASS with 89 KTESTs.
+
 - **A ring-3 window client can draw real text, with the desktop's own
   font.** Stage 4 of Milestone 41: the userland drawing runtime, and
   the piece that turns "a process owns a window" into "a process can
@@ -3017,6 +3083,15 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   as the active selection.
 
 ### Fixed
+- **`calc_engine.c`'s fraction buffer is sized to its callee's worst
+  case.** `-Wstringop-overflow` fired once that file started being
+  compiled for userland too (the ring-3 Calculator shares it):
+  `append_uint()` can write up to 16 bytes and `frac_buf` was 5. Not
+  actually a bug -- `frac_part` is `v % CALC_SCALE` with `v >= 0`, so it
+  is always at most 4 digits and the tight size was correct -- but that
+  bound is invisible to the compiler, and to a reader it takes a
+  paragraph to reconstruct. Nineteen bytes of stack beats an invariant
+  you have to prove to yourself before believing the code is safe.
 - **The GUI Terminal's `run` resolves through PATH instead of a
   hardcoded `/bin/` prefix -- eight of its ten allowlisted binaries had
   been broken since the /bin -> /tests split.** `apps/terminal.c` built
