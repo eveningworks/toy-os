@@ -377,6 +377,52 @@ once this exists.*
 
 ### Milestone 12 -- Shell pipes & job control (planned v0.12.0)
 
+**Read this as "make `ush` a real shell".** `userland/ush.c` (Milestone
+41) already runs in ring 3 and spawns programs with their output piped
+back, so this milestone is no longer hypothetical -- it is the specific
+list of things standing between that and something bash-shaped. Each
+item below says whether it needs KERNEL work or is purely the shell's,
+because that is the distinction that decides what can be done today:
+
+**Needs new kernel support first:**
+- [ ] **stdin redirection in `SYS_SPAWN`.** It takes an stdout fd
+      today and nothing else, so a child can be read FROM but never
+      written TO. `|`, `<` and any interactive child all need this, and
+      it is the single highest-value item here -- one more argument.
+- [ ] **`dup`/`dup2`-style fd plumbing**, so the shell can wire an
+      arbitrary fd to 0/1/2 rather than the two special cases spawn
+      hardcodes. The general form of the item above.
+- [ ] **A per-process cwd.** `ush` keeps its own, and a spawned child
+      does not inherit it -- so `cd /bin` then `hello` finds the program
+      only because PATH is absolute. Also listed under Milestone 40.
+- [ ] **An environment passed to a child.** `crt0.asm` already reads
+      `envp` off the stack per SysV; the kernel always passes an empty
+      one. `export` cannot mean anything until a child receives it.
+- [ ] **Ctrl-C** -- see Milestone 10, whose requirements this
+      migration is what makes achievable.
+- [ ] **`#!` handling**, which is the loader's job, not the shell's:
+      `elf_load()` rejects a non-ELF file, so a script cannot be
+      spawned at all today.
+
+**Purely the shell's own work, doable now:**
+- [ ] `|` pipes between two commands -- the PIPE primitive exists
+      (`SYS_PIPE`); what is missing is parsing plus the stdin item
+      above.
+- [ ] Quoting/escaping, `&&`/`||`/`;`, globbing, aliases, `$?`/`$1`,
+      and a history buffer. All parsing and string work over syscalls
+      that already exist.
+- [ ] Line editing. Worth noting `kernel/lib/klineedit.c` is
+      freestanding and could be compiled for userland through the
+      shared-source rule (`build/userland/shared/`) rather than
+      reimplemented -- the same trick that keeps one arithmetic engine
+      behind both Calculators.
+
+**Needs both:**
+- [ ] Background jobs (`&`) and `fg`/`bg`/`jobs` -- the shell tracks
+      the table, but "which job is in the foreground" is also what
+      Ctrl-C needs, and a background child writing to a terminal that
+      has moved on needs the TTY layer (Milestone 7) to arbitrate.
+
 - [ ] `|` pipes between two commands
 - [ ] `>`/`<`/`>>` redirection
 - [ ] Background jobs (`&`)
@@ -1196,8 +1242,13 @@ Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
       move to ring 3 later without rewriting every call site -- the same
       "one struct of function pointers" pattern `display_driver` and the
       VFS backend probe already use here
-- [ ] A bigger process table (4 slots) -- binds as soon as more than a
-      couple of clients are open at once.
+- [ ] A bigger process table (4 slots) -- now genuinely binding: a
+      ring-3 terminal plus the program it spawned is already two, so
+      two terminals running commands exhausts it.
+- [ ] `ush` improvements once the kernel supports them: pipelines
+      (`a | b` -- the pipe primitive exists, the parsing doesn't),
+      redirection, and Ctrl-C (see Milestone 10, whose requirements
+      this migration is what makes achievable).
 - [ ] A GROWABLE user stack. Raised from 1 page to 4 after the ring-3
       Notepad page-faulted opening its file dialog; the real answer is
       a page-fault handler that maps another page when the faulting
@@ -1223,10 +1274,13 @@ Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
       Its file dialog is drawn by the APP, not the window server, which
       is what GTK/Qt do; `apps/wm/file_picker.c` is a WM modal and was
       not portable.
-- [ ] Port the remaining `apps/ui/` widgets as clients need them --
-      `ui_textbox`, `ui_listbox`/`ui_dropdown`, `ui_focus`.
-      Deliberately not done up front: the same "second real caller" bar
-      `apps/ui/` itself is held to.
+- [x] ~~Port the remaining `apps/ui/` widgets~~ -- done
+      (`userland/uwidgets.c`): scrollbar, text field, checkbox, radio
+      list, listbox, dropdown, focus ring.
+- [x] ~~Migrate Terminal to `userland/`~~ -- done, and it needed new
+      kernel machinery rather than a port: see the pipes/spawn entry in
+      `CHANGELOG.md`. Its shell (`userland/ush.c`) runs in ring 3 too
+      rather than proxying the kernel's.
 - [ ] Decide whether the userland widget/graphics code becomes a real
       shared library rather than being statically linked into each
       client. Right now `ugfx.o` + `uui.o` are linked per binary, which

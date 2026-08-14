@@ -204,8 +204,8 @@ static int is_blocked_command(const char *cmd) {
 static const char *const RUN_ALLOWED_BINS[] = {
     "crash_test", "exit_test", "file_test", "hello", "lspci",
     "newsyscalls_test", "nx_test", "socket_test", "spin_test",
-    "calculator", "notepad", "uiclient", "winclient", "write_bad_test",
-    "write_test",
+    "calculator", "notepad", "pipe_test", "uiclient", "uterm", "winclient",
+    "write_bad_test", "write_test",
 };
 #define RUN_ALLOWED_COUNT (sizeof(RUN_ALLOWED_BINS) / sizeof(RUN_ALLOWED_BINS[0]))
 
