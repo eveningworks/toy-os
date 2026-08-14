@@ -154,6 +154,7 @@ FPU_RACE_ELF = userland/fpu_race.elf
 LSCPU_ELF = userland/lscpu.elf
 SPIN_TEST_ELF = userland/spin_test.elf
 EVENT_TEST_ELF = userland/event_test.elf
+WINCLIENT_ELF = userland/winclient.elf
 
 # Which userland ELFs get seeded onto disk.img's /bin, and under what
 # name. The mapping is explicit because it isn't always mechanical --
@@ -198,7 +199,8 @@ SEED_TESTS = \
 	$(FPU_TEST_ELF):fpu_test \
 	$(FPU_RACE_ELF):fpu_race \
 	$(SPIN_TEST_ELF):spin_test \
-	$(EVENT_TEST_ELF):event_test
+	$(EVENT_TEST_ELF):event_test \
+	$(WINCLIENT_ELF):winclient
 
 # Both lists together -- only USERLAND_ELVES below needs the union, so
 # it's derived rather than maintained as a third list.

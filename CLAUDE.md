@@ -136,11 +136,25 @@ technical conventions below:
   third copy shipped a scrollbar that drew and did nothing. (`apps/widgets.h`/`.c` -- the
   single file all of `apps/ui/` was split out of -- no longer exists;
   see `docs/decisions.md`.)
+- **A ring-3 process can own a real window** (`apps/wm/wm_client.c` +
+  `kernel/proc/win_server.c`, protocol in
+  `kernel/include/abi/win_proto.h`). Two rules matter before touching
+  it. **Every client operation is a typed MESSAGE carried by the one
+  `SYS_WIN_REQUEST` syscall, never a syscall of its own** -- that is
+  what keeps the boundary a protocol, so the window server can later
+  move to ring 3 as a transport swap instead of a rewrite; see
+  `docs/decisions.md`. And **the split is memory vs. presentation**:
+  `win_server.c` owns ids/buffers/mappings/teardown (page tables and
+  the frame allocator, which `apps/` can't reach), `wm_client.c` owns
+  the window list, chrome, z-order and input routing, and they meet at
+  a registered `struct win_server_ops` -- the same registry pattern as
+  `display_driver`.
 - **The window manager lives in `apps/wm/`** -- the core event
   loop/input/render split (`wm.c`/`wm_input.c`/`wm_render.c`, sharing
   state through `wm_internal.h`'s `extern`s) plus the pieces that grew
   their own files as they appeared: `desktop.c`, `start_menu.c`,
-  `context_menu.c`, `confirm_dialog.c`, `file_picker.c`, `wm_tray.c`.
+  `context_menu.c`, `confirm_dialog.c`, `file_picker.c`, `wm_tray.c`,
+  `wm_client.c`.
   Split by concern for readability -- it's still one tightly-coupled
   event loop, not decoupled components. See `apps/wm/wm.c`'s top
   comment.
@@ -876,6 +890,16 @@ repeated manual steps to be worth automating:
   offsets in Python -- the Python copy drifts silently the moment a row
   is added to the app, which is exactly what happened when the dropdown
   and listbox rows landed mid-file.
+- **`winclient_test.py`** -- drives `userland/winclient.c`, the ring-3
+  client that owns a real window on the desktop, and asserts the
+  windowing protocol end to end (8 checks: the window appears in the
+  WM's own list at the requested size, the client's pixels reach the
+  screen, a key and a click each route to it and make it redraw, the
+  window behind it does NOT change, the close handshake completes, the
+  desktop survives). Geometry comes from `gui windows` and content from
+  PIXEL VALUES with a control point, per `docs/gui-guidelines.md`. Run
+  it after touching `apps/wm/wm_client.c`, `kernel/proc/win_server.c`,
+  or anything in `abi/win_proto.h`.
 - **`sched_gui_test.py`** -- proves the desktop stays ALIVE while a
   ring-3 process runs, the end-to-end counterpart to
   `kernel/proc/sched_test.c`'s KTESTs. The trick it encodes: the `gui`

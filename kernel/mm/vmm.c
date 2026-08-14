@@ -95,6 +95,52 @@ int vmm_map_user_page(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr) {
     return vmm_map_user_page_flags(pml4_phys, vaddr, paddr, 1, 0);
 }
 
+// The inverse of vmm_map_user_page(): clears one page's PTE so the
+// address stops resolving.
+//
+// It deliberately does NOT free the frame that was mapped, or any of
+// the page tables above it. The caller owns the frame (it allocated it
+// and knows how -- pmm_free_frame() vs pmm_free_contiguous() are not
+// interchangeable), and the intermediate tables belong to the address
+// space, which frees them wholesale in vmm_destroy_address_space().
+// Freeing either from here would be this function guessing.
+//
+// This exists because a mapping that outlives what it points at is a
+// use-after-free the CPU will happily service: a client window's buffer
+// is freed when the window is destroyed, and without this the client
+// would keep a writable mapping onto frames that had been handed to
+// somebody else (see kernel/proc/win_server.c).
+//
+// Returns 1 if a mapping was removed, 0 if nothing was mapped there --
+// which is not an error, just nothing to do.
+int vmm_unmap_user_page(uint64_t pml4_phys, uint64_t vaddr) {
+    int pml4_index = (int)((vaddr >> 39) & 0x1FF);
+    int pdpt_index = (int)((vaddr >> 30) & 0x1FF);
+    int pd_index   = (int)((vaddr >> 21) & 0x1FF);
+    int pt_index   = (int)((vaddr >> 12) & 0x1FF);
+
+    // Walk without creating anything -- an absent level just means the
+    // address was never mapped.
+    uint64_t *pml4 = table_at(pml4_phys);
+    if (!(pml4[pml4_index] & PAGE_PRESENT)) return 0;
+    uint64_t *pdpt = table_at(pml4[pml4_index] & ADDR_MASK);
+    if (!(pdpt[pdpt_index] & PAGE_PRESENT)) return 0;
+    uint64_t *pd = table_at(pdpt[pdpt_index] & ADDR_MASK);
+    if (!(pd[pd_index] & PAGE_PRESENT)) return 0;
+    uint64_t *pt = table_at(pd[pd_index] & ADDR_MASK);
+    if (!(pt[pt_index] & PAGE_PRESENT)) return 0;
+
+    pt[pt_index] = 0;
+
+    // Only worth an INVLPG if this address space is the live one. For
+    // any other, the stale TLB entry cannot be reached without a CR3
+    // load first, and writing CR3 flushes non-global entries anyway.
+    if (vmm_current_pml4() == pml4_phys) {
+        __asm__ volatile ("invlpg (%0)" : : "r"(vaddr) : "memory");
+    }
+    return 1;
+}
+
 void vmm_switch_address_space(uint64_t pml4_phys) {
     __asm__ volatile ("mov %0, %%cr3" : : "r"(pml4_phys) : "memory");
 }

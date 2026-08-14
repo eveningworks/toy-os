@@ -32,6 +32,94 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
 ## [Unreleased]
 
 ### Added
+- **A ring-3 process can own a real window on the desktop.** Stage 3 of
+  Milestone 41, and the point the whole milestone was aimed at: a
+  window in the window manager's own window list, with ordinary chrome,
+  a taskbar button, focus and z-order, sitting alongside the
+  kernel-space apps -- drawn by a separate ring-3 process into shared
+  memory.
+
+  What separates this from the two older experiments, both of which
+  stay for what they are: `gui_test.c` maps the whole physical
+  framebuffer and draws straight onto the screen (modal, no window at
+  all); `win_test.c` gets a private buffer the kernel composites with a
+  hand-drawn title bar (a real client/server split, but still modal,
+  single-window, and outside the WM's list). `userland/winclient.c` is
+  a client of a protocol: it asks the server for a window, draws into
+  the buffer it gets back, and BLOCKS for input rather than polling.
+
+  **One syscall, not one per operation.** `SYS_WIN_REQUEST` carries a
+  typed `struct win_request_msg` and dispatches on its own `type`
+  (`WIN_REQ_CREATE`/`PRESENT`/`DESTROY`/`TITLE`). That is the
+  architectural bet stated in Milestone 41: adding an operation is a
+  new message type rather than a new kernel entry point, and moving the
+  server to ring 3 later is a transport swap rather than a rewrite of
+  every call site. `abi/win_proto.h` now describes both directions of
+  the protocol, and neither struct contains a pointer, so the same
+  bytes work whether copied by a syscall or read out of a shared ring.
+
+  **The split between kernel and window manager falls on memory vs.
+  presentation.** `kernel/proc/win_server.c` owns window ids, the pixel
+  buffers, the per-process mappings, ownership and teardown -- page
+  tables and the frame allocator, which `apps/` cannot reach at all
+  (`kernel/include/kernel` is off its include path, deliberately).
+  `apps/wm/wm_client.c` owns the slot in `windows[]`, the chrome, the
+  geometry, the z-order and input routing. They meet at a registered
+  `struct win_server_ops`, the same pattern `display_driver` and the
+  VFS backend probe already use here -- and for the same reason: the
+  implementation swaps, the callers don't notice. The WM registers
+  itself as `wm_run()` starts and unregisters as it exits, so a client
+  request made outside GUI mode is refused (-1) rather than dispatched
+  into a desktop that isn't drawing.
+
+  Note that -1 and 0 are deliberately different answers: "there is no
+  server" means "you are not in a desktop session", "the server said
+  no" means "try something smaller". A client can act on the
+  difference.
+
+  **The close button is a handshake, not a seizure.** Clicking X on a
+  client window sends `WIN_EV_CLOSE`; the client answers with
+  `WIN_REQ_DESTROY`. The WM never removes the window itself, because a
+  client may have unsaved state and would otherwise be left drawing
+  into a buffer that is no longer on screen. A client that ignores the
+  request keeps its window -- the honest consequence, and force-closing
+  an unresponsive one needs a timeout and a way to kill the process,
+  neither of which exists yet.
+
+  Two supporting pieces that were missing and are useful well beyond
+  this:
+  - **`vmm_unmap_user_page()`** (`kernel/mm/vmm.c`). There was no way
+    to remove a user mapping at all. Without it a destroyed window's
+    pages stay mapped into the client, which is a use-after-free the
+    CPU will happily service once those frames are handed to someone
+    else. It deliberately frees neither the frame (only the caller
+    knows whether that means `pmm_free_frame()` or
+    `pmm_free_contiguous()`) nor the page tables above it (those belong
+    to the address space).
+  - **`gfx_blit()`** (`kernel/drivers/gfx.c`). A `gfx_put_pixel()` loop
+    rather than a row-wise memcpy, exactly like `gfx_fill_rect()`
+    beside it -- that is what makes it honour the clip rect, the damage
+    region and the dirty-row tracking `gfx_present()` depends on, with
+    no second copy of any of it to keep in sync.
+
+  Verified:
+  - **`tools/winclient_test.py`** (new), 8 checks, all passing: the
+    client's window appears in the WM's own list at the size it asked
+    for, its pixels reach the screen, a key and a click each route to
+    it and make it redraw, the window behind it does NOT change, the
+    close handshake completes, and the desktop survives the client
+    exiting. Content is checked by PIXEL VALUE, with a control point
+    that must not move -- a screenshot is not an assertion, and half of
+    each check is the neighbour staying put.
+  - **Damage invariant with a client window**: `gui damage verify on`
+    through presents, a window drag, focus switches and minimise/
+    restore -- 0 violations. `WIN_REQ_PRESENT` damages only the content
+    rect, not the whole window: over-damaging is how a compositor
+    quietly stops being one.
+  - `damage_sweep.py` 27 interactions / 0 violations, `preflight.sh`
+    PASS with 89 KTESTs, `sched_gui_test.py` 6/6.
+  - Screenshots: `screenshots/2026-08-14/ring3-client-window.png` and
+    `ring3-client-closed.png`.
 - **Ring-3 processes can block, and there is a windowing event protocol
   to block on.** Stage 2 of Milestone 41. Two things landed together
   because neither is useful alone: a client that can receive events but
