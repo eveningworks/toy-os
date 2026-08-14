@@ -45,9 +45,14 @@ static const struct fs_ops *const g_backends[] = {
 
 // The default backend: what a blank/foreign disk gets formatted with,
 // and what serves RAM-only boots (no disk at all). Index into
-// g_backends. Flips to tfs3 in Stage E of the plan, once the write
-// path has soaked.
-#define FS_DEFAULT_BACKEND 0
+// g_backends -- and NOT index 0: tfs3 probes first, but tfs2 stays
+// the default until Stage E flips it once the write path has soaked.
+// (Stage B briefly had this at 0 by accident after tfs3 was prepended
+// to the list -- combined with a stale-object skew that made the
+// honesty check refuse tfs2, one boot quietly reformatted the dev
+// image as tfs3. Two constants that must move together are now one
+// comment apart on purpose.)
+#define FS_DEFAULT_BACKEND 1
 
 static const struct fs_ops *g_fs = 0;
 static int g_persistent = 0;
@@ -61,6 +66,11 @@ static int g_persistent = 0;
 // introducing an unenforced one.
 static int caps_are_honest(const struct fs_ops *fs) {
     if (!fs->name || !fs->probe || !fs->wipe || !fs->format || !fs->init) return 0;
+    // Optional ops: the bit and the pointer must agree, both ways --
+    // a NULL op behind a declared cap would crash a caller that
+    // trusted fs_has(); a real op behind an undeclared cap is a
+    // feature callers can never find. display.c's rule, verbatim.
+    if (((fs->caps & FS_CAP_HARDLINKS) != 0) != (fs->link != 0)) return 0;
     return 1;
 }
 
@@ -257,4 +267,11 @@ int fs_disk_usage(uint64_t *out_used_bytes, uint64_t *out_total_bytes) {
 
 int fs_check(int repair, struct fs_check_result *out) {
     return g_fs->check(repair, out);
+}
+
+int fs_link(const char *existing, const char *newpath) {
+    // Optional op -- the caps bit and this NULL check are the same
+    // fact, and caps_are_honest() made sure they can't disagree.
+    if (!g_fs->link) return 0;
+    return g_fs->link(existing, newpath);
 }

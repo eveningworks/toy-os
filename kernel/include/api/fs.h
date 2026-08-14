@@ -251,6 +251,14 @@ const char *fs_backend_name(void);
 uint32_t fs_capabilities(void);
 int fs_has(uint32_t cap);
 
+// Hardlink: a second name for an existing file. Returns 1 on success,
+// 0 on failure -- including "the active filesystem has no hardlinks"
+// (check fs_has(FS_CAP_HARDLINKS) first for a better error message;
+// the `ln` shell command does exactly that). Directories are always
+// refused. Both names are the same inode afterwards (fs_stat()'s ino
+// agrees), and the data is freed only when the last name is deleted.
+int fs_link(const char *existing, const char *newpath);
+
 // Reformat the disk with the named backend ("tfs2", "tfs3") and
 // remount by re-running the probe loop. DESTROYS the current
 // filesystem contents -- callers own the confirmation UX (see the

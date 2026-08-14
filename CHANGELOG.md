@@ -1974,6 +1974,67 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
     mounts loudly from the group-1 backup with the filesystem fully
     readable. All against disk copies.
 
+- **TFS3 writes now -- Stage C: allocators, journal transactions, the
+  full mutation surface, and the first optional fs_ops op.**
+  - **Allocators**: whole-volume block/inode bitmaps cached in RAM at
+    mount (~284 KiB each on 9 GiB, the same order as TFS2's static
+    bitmap), per-group rotor, try-adjacent-first on append,
+    parent-group locality, `ata_trim()` on every free (runs
+    coalesced). Bitmap/GDT writes are write-through and UNJOURNALED
+    under the set-before-use / clear-after-persist ordering -- a
+    crash costs a leak fsck reclaims, never a double allocation
+    (TFS2's exact discipline, inherited deliberately).
+  - **Journal scope narrowed from the design doc's first sketch, on
+    purpose**: transactions carry dirent blocks + inode-table blocks
+    only -- the structures whose torn write is namespace corruption.
+    With bitmaps under the leak rule instead, every operation fits
+    <= 3 of the 4 slots (create 2, mkdir 3, delete <= 3, data write
+    1, link 2), and directory growth runs as its own
+    empty-block-first transaction. That empty-first split fixed a
+    bug caught in review: the first version wrote the child's name
+    into the grow block one transaction before the child's inode
+    existed. Commit discipline is `persist_record()`'s two-barrier
+    sequence, generalized; replay is all-or-discard on per-image
+    checksums, left-committed on failed replay.
+  - **Mutations**: touch/write (append + truncate-then-write)/
+    write_range/steppable writes (one block per step, inode committed
+    once on the final step)/mkdir (`.`/`..`, parent link count)/
+    delete (empty-dir refusal, hardlink-aware: blocks freed only at
+    links==0). Plus **`link()` -- the first OPTIONAL fs_ops op**,
+    NULL on tfs2, paired with FS_CAP_HARDLINKS; the caps honesty
+    check now cross-checks bit vs pointer for real, and the `ln`
+    shell command demonstrates the caps mechanism (clean refusal
+    message on tfs2). A 16-entry name-lookup cache cuts repeated
+    path-walk dirent scans.
+  - **Write-run coalescing**: full-block spans over contiguous
+    allocations go out as one multi-sector transfer straight from
+    the caller's buffer, capped by `ata_max_sectors_per_xfer()`.
+    Measured: 4.6 -> **28.0 MB/s** write on `stress 150` -- faster
+    than TFS2's 25.1.
+  - **A three-cause bug found by the suite, worth its lessons**: one
+    boot quietly reformatted the dev disk.img as tfs3. (1) a stale
+    `tfs.o` (built before `link` joined `struct fs_ops`) left
+    `tfs_ops.link` reading garbage past the object, so (2) the caps
+    honesty check -- correctly paranoid -- refused tfs2, and (3)
+    Stage B had silently made tfs3 the blank-disk DEFAULT when it was
+    prepended to the probe list while `FS_DEFAULT_BACKEND` stayed
+    index 0. Fixes: default pinned to tfs2 until Stage E (with a
+    comment binding the two constants), and a full clean rebuild
+    cleared the skew -- an observed instance of CLAUDE.md's
+    "dependency tracking is only as good as the .d files" caveat.
+  - Known cost, deferred to Stage E with the default flip: a fresh
+    TFS3 format writes ~73 MB of metadata host-side (71 groups of
+    zeroed inode tables); lazy/TRIM-based table init is the ext4-
+    style fix to evaluate there.
+  - Verified: 81/81 KTESTs on tfs2; on a tfs3-formatted copy, the
+    whole fs suite passes live (fault injection included, fsck
+    honestly skipped until Stage D), `steptest 64` round-trips 64 MB
+    through the stepped API byte-for-byte, `stress 150` passes at
+    28.0 MB/s write / 26.6 read, usage returns to baseline after
+    delete with the host image flat (TRIM working through the
+    volume seam), hardlinks share an ino and survive deleting the
+    first name, and files survive a VM reboot.
+
 ### Changed
 - **A documented, checked on-disk filesystem layout -- and the test
   binaries moved out of `/bin`.** Asked for a future-proof directory

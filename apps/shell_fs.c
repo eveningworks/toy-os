@@ -267,6 +267,52 @@ void cmd_cd(const char *args) {
     k_strcpy(cwd, path);
 }
 
+// Hardlink: `ln <existing> <newname>`. The caps mechanism's showcase
+// command -- on a filesystem whose format has no link counts (tfs2)
+// it says so instead of failing mysteriously.
+void cmd_ln(const char *args) {
+    char first[FS_PATH_MAX];
+    int n = 0;
+    const char *p = args;
+    while (*p == ' ') p++;
+    while (*p && *p != ' ' && n < FS_PATH_MAX - 1) first[n++] = *p++;
+    first[n] = '\0';
+    while (*p == ' ') p++;
+
+    if (n == 0 || !*p) {
+        vga_write("usage: ln <existing-file> <new-name>\n");
+        return;
+    }
+    if (!fs_has(FS_CAP_HARDLINKS)) {
+        vga_write("ln: the active filesystem (");
+        vga_write(fs_backend_name());
+        vga_write(") has no hardlinks\n");
+        return;
+    }
+    char src[FS_PATH_MAX], dst[FS_PATH_MAX];
+    if (!resolve_path(first, src) || !resolve_path(p, dst)) {
+        vga_write("ln: path too long\n");
+        return;
+    }
+    if (!fs_exists(src)) {
+        vga_write("ln: no such file: "); vga_write(src); vga_putc('\n');
+        return;
+    }
+    if (fs_is_dir(src)) {
+        vga_write("ln: hardlinks to directories are refused (they make the tree a graph)\n");
+        return;
+    }
+    if (fs_exists(dst)) {
+        vga_write("ln: already exists: "); vga_write(dst); vga_putc('\n');
+        return;
+    }
+    if (fs_link(src, dst)) {
+        vga_write("ln: "); vga_write(dst); vga_write(" -> same inode as "); vga_write(src); vga_putc('\n');
+    } else {
+        vga_write("ln: failed\n");
+    }
+}
+
 // Reformat the disk with a named backend and remount -- the live
 // filesystem-switching path (see fs.h's fs_format_backend()). The
 // `confirm` word is mandatory: this destroys everything on disk, and

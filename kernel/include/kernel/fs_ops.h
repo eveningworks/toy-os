@@ -139,6 +139,22 @@ struct fs_ops {
     // deliberately report-only). Required, not optional/NULLable, same
     // reasoning as the steppable pairs above.
     int (*check)(int repair, struct fs_check_result *out);
+
+    // ---- optional ops (the caps rule becomes real here) ----
+    //
+    // Everything above is required. From here down, an op may be NULL
+    // when the backend's format can't support it -- and each optional
+    // op is paired with an FS_CAP_* bit, ONE FACT STATED TWICE:
+    // callers ask fs_has(), vfs.c's probe loop REFUSES a backend
+    // whose bit and pointer disagree (caps_are_honest(), modeled on
+    // display.c's). Don't add an optional op without its bit.
+
+    // FS_CAP_HARDLINKS. Adds a second name for an existing FILE
+    // (never a directory -- that makes the tree a graph); both names
+    // are the same inode, and the data is freed only when the last
+    // name goes. Paths follow the same normalized-absolute contract
+    // as everything above.
+    int (*link)(const char *existing, const char *newpath);
 };
 
 #endif

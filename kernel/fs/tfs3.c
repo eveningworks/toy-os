@@ -83,6 +83,49 @@ static uint32_t g_itb;        // inode-table blocks per group
 static uint32_t g_meta_off;   // first data-ish block offset within a group (2 [+cksum] + itb)
 static struct t3_gd *g_gd = 0; // free-count caches, g_sb.gc entries
 
+// In-RAM copies of every group's block/inode bitmap (g_sb.gc * 4 KiB
+// each -- ~284 KiB per cache on the 9 GiB image, the same order as
+// tfs.c's static full-disk bitmap). RAM is the authority during
+// operation; changed blocks are written through, UNJOURNALED, with
+// the set-before-use / clear-after-persist ordering that makes a
+// crash cost a leak, never a double allocation -- TFS2's exact
+// discipline, inherited deliberately (see the journal section).
+static uint8_t *g_bbm = 0;
+static uint8_t *g_ibm = 0;
+static uint32_t *g_rotor = 0; // per-group scan start (ext2's trick)
+
+// Dirty tracking for the write-through: one bit per group, per cache.
+#define T3_MAX_GROUPS (T3_GDT_BLOCKS * T3_BLOCK / 16u)
+static uint8_t g_bbm_dirty[T3_MAX_GROUPS / 8];
+static uint8_t g_ibm_dirty[T3_MAX_GROUPS / 8];
+static uint8_t g_gdt_dirty[T3_MAX_GROUPS / 8];
+
+// Journal transaction staging (up to 4 block images -- see the
+// design doc's journal section and txn_commit() below).
+static uint8_t g_txn_img[T3_JSLOTS][T3_BLOCK];
+static uint32_t g_txn_target[T3_JSLOTS];
+static int g_txn_count = 0;
+static uint32_t g_jrn_seq = 0;
+
+// Tiny name-lookup cache (dir ino + name -> child ino): path walks
+// are the hot loop, and every component is otherwise a dirent scan.
+// Invalidated wholesale on any mutation -- cheap and obviously
+// correct; per-directory invalidation is a later refinement if it
+// ever shows up in profiles.
+#define T3_NCACHE 16
+#define T3_NCACHE_NAME 48
+static struct {
+    uint64_t dir, ino;
+    uint8_t len;
+    char name[T3_NCACHE_NAME];
+} g_ncache[T3_NCACHE];
+static int g_ncache_next = 0;
+
+static void ncache_flush(void) {
+    for (int i = 0; i < T3_NCACHE; i++) g_ncache[i].dir = 0;
+    g_ncache_next = 0;
+}
+
 // One block of scratch for everything on this (single-threaded)
 // kernel -- same convention as tfs.c's g_io_scratch.
 static uint8_t g_blk[T3_BLOCK];
@@ -289,8 +332,18 @@ static uint32_t block_for_index(const struct t3_inode *node, uint32_t idx) {
 // ---- path resolution ------------------------------------------------------
 
 // Walk one directory's dirent chain looking for `name` (len bytes, no
-// NUL requirement). Returns the child inode or 0.
-static uint64_t dir_lookup(const struct t3_inode *dir, const char *name, uint32_t name_len) {
+// NUL requirement). Returns the child inode or 0. `dir_ino` is only
+// for the name cache; pass 0 to bypass caching (e.g. during repair).
+static uint64_t dir_lookup(uint64_t dir_ino, const struct t3_inode *dir,
+                           const char *name, uint32_t name_len) {
+    if (dir_ino && name_len < T3_NCACHE_NAME) {
+        for (int i = 0; i < T3_NCACHE; i++) {
+            if (g_ncache[i].dir == dir_ino && g_ncache[i].len == name_len &&
+                k_memcmp(g_ncache[i].name, name, name_len) == 0) {
+                return g_ncache[i].ino;
+            }
+        }
+    }
     uint32_t nblocks = (uint32_t)((dir->size + T3_BLOCK - 1) / T3_BLOCK);
     for (uint32_t b = 0; b < nblocks; b++) {
         uint32_t blk = block_for_index(dir, b);
@@ -303,6 +356,14 @@ static uint64_t dir_lookup(const struct t3_inode *dir, const char *name, uint32_
             if (rec_len < 8 || off + rec_len > T3_BLOCK) break; // corrupt chain -- stop, don't loop
             if (e_ino != 0 && nl == name_len &&
                 k_memcmp(g_blk + off + 7, name, name_len) == 0) {
+                if (dir_ino && name_len < T3_NCACHE_NAME) {
+                    int s = g_ncache_next;
+                    g_ncache_next = (g_ncache_next + 1) % T3_NCACHE;
+                    g_ncache[s].dir = dir_ino;
+                    g_ncache[s].ino = e_ino;
+                    g_ncache[s].len = (uint8_t)name_len;
+                    k_memcpy(g_ncache[s].name, name, name_len);
+                }
                 return e_ino;
             }
             off += rec_len;
@@ -327,7 +388,7 @@ static int resolve(const char *norm, uint64_t *out_ino) {
         if (len == 0 || len > T3_NAME_MAX) return 0;
         struct t3_inode dir;
         if (!read_inode(ino, &dir) || dir.type != T3_TYPE_DIR) return 0;
-        ino = dir_lookup(&dir, start, len);
+        ino = dir_lookup(ino, &dir, start, len);
         if (!ino) return 0;
         if (*p == '/') p++;
     }
@@ -350,6 +411,716 @@ static int lookup(const char *path, uint64_t *out_ino, struct t3_inode *out_node
     if (!resolve(norm, &ino)) return 0;
     if (out_ino) *out_ino = ino;
     if (out_node) return read_inode(ino, out_node);
+    return 1;
+}
+
+// ---- allocation (RAM bitmaps, write-through, leak-safe ordering) ---------
+
+static void mark_dirty(uint8_t *set, uint32_t g) { set[g >> 3] |= (uint8_t)(1u << (g & 7)); }
+static int test_dirty(const uint8_t *set, uint32_t g) { return (set[g >> 3] >> (g & 7)) & 1; }
+static void clear_dirty(uint8_t *set, uint32_t g) { set[g >> 3] &= (uint8_t)~(1u << (g & 7)); }
+
+static int bbm_test(uint32_t g, uint32_t i) { return (g_bbm[g * T3_BLOCK + (i >> 3)] >> (i & 7)) & 1; }
+static void bbm_set(uint32_t g, uint32_t i, int v) {
+    uint8_t *b = &g_bbm[g * T3_BLOCK + (i >> 3)];
+    if (v) *b |= (uint8_t)(1u << (i & 7)); else *b &= (uint8_t)~(1u << (i & 7));
+    mark_dirty(g_bbm_dirty, g);
+}
+static int ibm_test(uint32_t g, uint32_t i) { return (g_ibm[g * T3_BLOCK + (i >> 3)] >> (i & 7)) & 1; }
+static void ibm_set(uint32_t g, uint32_t i, int v) {
+    uint8_t *b = &g_ibm[g * T3_BLOCK + (i >> 3)];
+    if (v) *b |= (uint8_t)(1u << (i & 7)); else *b &= (uint8_t)~(1u << (i & 7));
+    mark_dirty(g_ibm_dirty, g);
+}
+
+// Highest usable data offset within group g (backup regions excluded).
+static uint32_t group_data_end(uint32_t g) {
+    uint32_t groups[2];
+    int n = backup_groups(g_sb.gc, groups);
+    for (int i = 0; i < n; i++) {
+        if (groups[i] == g) return T3_BPG - T3_BACKUP_BLOCKS;
+    }
+    return T3_BPG;
+}
+
+// Try to allocate one specific block (the adjacent-first fast path).
+static int alloc_block_at(uint32_t blk) {
+    if (blk < T3_GROUP0 + g_meta_off) return 0;
+    uint32_t g = (blk - T3_GROUP0) / T3_BPG;
+    uint32_t i = (blk - T3_GROUP0) % T3_BPG;
+    if (g >= g_sb.gc || i < g_meta_off || i >= group_data_end(g)) return 0;
+    if (bbm_test(g, i)) return 0;
+    bbm_set(g, i, 1);
+    g_gd[g].free_blocks--;
+    mark_dirty(g_gdt_dirty, g);
+    return 1;
+}
+
+// Allocate one data block: `hint` (try hint+1's spirit: exactly that
+// block) first, then rotor scan of the preferred group, then every
+// other group. Returns the block number or 0.
+static uint32_t alloc_block(uint32_t prefer_group, uint32_t adjacent_to) {
+    if (adjacent_to && alloc_block_at(adjacent_to + 1)) return adjacent_to + 1;
+    if (prefer_group >= g_sb.gc) prefer_group = 0;
+    for (uint32_t n = 0; n < g_sb.gc; n++) {
+        uint32_t g = (prefer_group + n) % g_sb.gc;
+        if (g_gd[g].free_blocks == 0) continue;
+        uint32_t end = group_data_end(g);
+        uint32_t start = g_rotor[g];
+        if (start < g_meta_off || start >= end) start = g_meta_off;
+        for (uint32_t k = 0; k < end - g_meta_off; k++) {
+            uint32_t i = start + k;
+            if (i >= end) i = g_meta_off + (i - end);
+            if (!bbm_test(g, i)) {
+                bbm_set(g, i, 1);
+                g_gd[g].free_blocks--;
+                mark_dirty(g_gdt_dirty, g);
+                g_rotor[g] = i + 1;
+                return group_base(g) + i;
+            }
+        }
+    }
+    return 0;
+}
+
+static void free_block_bit(uint32_t blk) {
+    uint32_t g = (blk - T3_GROUP0) / T3_BPG;
+    uint32_t i = (blk - T3_GROUP0) % T3_BPG;
+    if (g >= g_sb.gc) return;
+    if (!bbm_test(g, i)) return; // double-free guard -- fsck's problem, not a crash
+    bbm_set(g, i, 0);
+    g_gd[g].free_blocks++;
+    mark_dirty(g_gdt_dirty, g);
+    if (g_rotor[g] > i) g_rotor[g] = i;
+}
+
+static uint64_t alloc_inode(uint32_t prefer_group) {
+    if (prefer_group >= g_sb.gc) prefer_group = 0;
+    for (uint32_t n = 0; n < g_sb.gc; n++) {
+        uint32_t g = (prefer_group + n) % g_sb.gc;
+        if (g_gd[g].free_inodes == 0) continue;
+        for (uint32_t i = 0; i < g_sb.ipg; i++) {
+            if (!ibm_test(g, i)) {
+                ibm_set(g, i, 1);
+                g_gd[g].free_inodes--;
+                mark_dirty(g_gdt_dirty, g);
+                return (uint64_t)g * g_sb.ipg + i;
+            }
+        }
+    }
+    return 0;
+}
+
+static void free_inode_bit(uint64_t ino) {
+    uint32_t g = (uint32_t)(ino / g_sb.ipg);
+    uint32_t i = (uint32_t)(ino % g_sb.ipg);
+    if (g >= g_sb.gc || !ibm_test(g, i)) return;
+    ibm_set(g, i, 0);
+    g_gd[g].free_inodes++;
+    mark_dirty(g_gdt_dirty, g);
+}
+
+// Write every dirty bitmap block and GDT block through to disk.
+// UNJOURNALED on purpose: called BEFORE the transaction that makes an
+// allocation reachable (set-before-use) and AFTER the transaction
+// that makes a free unreachable (clear-after-persist), so a crash at
+// any point costs a leaked block/inode -- never a double allocation.
+// TFS2's exact metadata-ordering rule, see docs/decisions.md.
+static int flush_alloc_state(void) {
+    int ok = 1;
+    for (uint32_t g = 0; g < g_sb.gc; g++) {
+        if (test_dirty(g_bbm_dirty, g)) {
+            if (!write_block(group_base(g), g_bbm + g * T3_BLOCK)) ok = 0;
+            clear_dirty(g_bbm_dirty, g);
+        }
+        if (test_dirty(g_ibm_dirty, g)) {
+            if (!write_block(group_base(g) + 1, g_ibm + g * T3_BLOCK)) ok = 0;
+            clear_dirty(g_ibm_dirty, g);
+        }
+    }
+    // GDT blocks: rebuild each dirty block from the RAM free counts.
+    // Backup GDT snapshots are deliberately NOT refreshed (stale by
+    // design -- fsck recomputes counts anyway; see the design doc).
+    for (uint32_t tb = 0; tb < T3_GDT_BLOCKS; tb++) {
+        int dirty = 0;
+        for (uint32_t i = 0; i < T3_BLOCK / 16 && !dirty; i++) {
+            uint32_t g = tb * (T3_BLOCK / 16) + i;
+            if (g < g_sb.gc && test_dirty(g_gdt_dirty, g)) dirty = 1;
+        }
+        if (!dirty) continue;
+        k_memset(g_blk, 0, T3_BLOCK);
+        for (uint32_t i = 0; i < T3_BLOCK / 16; i++) {
+            uint32_t g = tb * (T3_BLOCK / 16) + i;
+            if (g >= g_sb.gc) break;
+            uint8_t *e = g_blk + i * 16;
+            wr32(e, g_gd[g].free_blocks);
+            wr32(e + 4, g_gd[g].free_inodes);
+            wr32(e + 12, k_fnv1a(e, 12));
+            clear_dirty(g_gdt_dirty, g);
+        }
+        if (!write_block(T3_GDT_BLOCK + tb, g_blk)) ok = 0;
+    }
+    return ok;
+}
+
+// TRIM freed blocks in runs, best-effort -- parity with tfs.c's
+// free_block(): the block is free either way, a refused TRIM must not
+// fail the delete. Called with a sorted-ish run start/count.
+static void trim_run(uint32_t first_blk, uint32_t count) {
+    if (!count || !ata_trim_supported()) return;
+    ata_trim(g_vol.base_lba + first_blk * T3_SPB, count * T3_SPB);
+}
+
+// ---- journal: one fixed-size multi-block transaction ---------------------
+//
+// What goes THROUGH the journal: dirent blocks and inode-table blocks
+// -- the structures whose torn write is NAMESPACE corruption. What
+// deliberately does NOT: bitmap and GDT blocks (leak-safe ordering
+// above; a torn bitmap costs a leak fsck reclaims), data blocks and
+// indirect-pointer blocks (unreachable until the inode that points at
+// them commits). This is narrower than the design doc's first sketch
+// ("dirent + inode + bitmaps") and is a deliberate revision: bitmaps
+// under the leak rule keeps every operation's transaction at <= 3
+// slots with the same crash guarantees TFS2 gives, for half the
+// journaled bytes. The doc's journal section records this.
+//
+// Commit discipline = persist_record()'s, generalized (see tfs.c for
+// the two-barrier reasoning): stage images + committed header, FLUSH,
+// write targets, FLUSH, clear header (no barrier -- a stale committed
+// header just replays idempotently).
+
+static void txn_reset(void) { g_txn_count = 0; }
+
+// Stage `blk`'s new image into the transaction. Returns a writable
+// pointer to the staged 4 KiB image (pre-loaded from disk so callers
+// patch in place), or 0 when full/read-failed. Staging the same block
+// twice returns the same image.
+static uint8_t *txn_stage(uint32_t blk) {
+    for (int i = 0; i < g_txn_count; i++) {
+        if (g_txn_target[i] == blk) return g_txn_img[i];
+    }
+    if (g_txn_count >= (int)T3_JSLOTS) return 0;
+    if (!read_block(blk, g_txn_img[g_txn_count])) return 0;
+    g_txn_target[g_txn_count] = blk;
+    return g_txn_img[g_txn_count++];
+}
+
+static int write_journal_header(int commit) {
+    uint8_t sec[ATA_SECTOR_SIZE];
+    k_memset(sec, 0, sizeof(sec));
+    sec[0] = 'J'; sec[1] = 'R'; sec[2] = 'N'; sec[3] = '3';
+    sec[4] = (uint8_t)commit;
+    sec[5] = (uint8_t)g_txn_count;
+    wr32(sec + 8, g_jrn_seq);
+    for (int i = 0; i < g_txn_count; i++) {
+        wr32(sec + 12 + i * 8, g_txn_target[i]);
+        wr32(sec + 16 + i * 8, k_fnv1a(g_txn_img[i], T3_BLOCK));
+    }
+    wr32(sec + 44, k_fnv1a(sec, 44));
+    return vol_write_sectors(T3_JH_BLOCK * T3_SPB, 1, sec);
+}
+
+static int txn_commit(void) {
+    if (g_txn_count == 0) return 1;
+    g_jrn_seq++;
+    for (int i = 0; i < g_txn_count; i++) {
+        if (!write_block(T3_JDATA_BLOCK + (uint32_t)i, g_txn_img[i])) { txn_reset(); return 0; }
+    }
+    if (!write_journal_header(1)) { txn_reset(); return 0; }
+    ata_flush_now(); // barrier 1: the transaction survives a crash from here
+    int ok = 1;
+    for (int i = 0; i < g_txn_count; i++) {
+        if (!write_block(g_txn_target[i], g_txn_img[i])) ok = 0;
+    }
+    ata_flush_now(); // barrier 2: targets durable before the commit flag clears
+    if (ok) {
+        int saved = g_txn_count;
+        g_txn_count = 0;
+        write_journal_header(0); // no barrier -- see the discipline note above
+        g_txn_count = saved;
+    } else {
+        // Leave the header committed: replay finishes the job next
+        // boot, same call replay_journal() in tfs.c makes.
+        klog_write("tfs3: transaction target write failed -- left committed for replay\n");
+    }
+    txn_reset();
+    return ok;
+}
+
+static void replay_journal(void) {
+    uint8_t sec[ATA_SECTOR_SIZE];
+    if (!vol_read_sectors(T3_JH_BLOCK * T3_SPB, 1, sec)) return;
+    if (!(sec[0] == 'J' && sec[1] == 'R' && sec[2] == 'N' && sec[3] == '3')) return;
+    if (k_fnv1a(sec, 44) != rd32(sec + 44)) return; // torn header = no transaction
+    g_jrn_seq = rd32(sec + 8);
+    if (!sec[4]) return; // not committed
+    uint32_t count = sec[5];
+    if (count == 0 || count > T3_JSLOTS) count = 0;
+
+    int all_ok = (count > 0);
+    for (uint32_t i = 0; i < count && all_ok; i++) {
+        if (!read_block(T3_JDATA_BLOCK + i, g_txn_img[i])) all_ok = 0;
+        else if (k_fnv1a(g_txn_img[i], T3_BLOCK) != rd32(sec + 16 + i * 8)) all_ok = 0;
+    }
+    if (all_ok) {
+        for (uint32_t i = 0; i < count && all_ok; i++) {
+            if (!write_block(rd32(sec + 12 + i * 8), g_txn_img[i])) all_ok = 0;
+        }
+        if (all_ok) {
+            ata_flush_now();
+            klog_write("tfs3: replayed a committed journal transaction (");
+            klog_write_dec(count); klog_write(" blocks)\n");
+        } else {
+            klog_write("tfs3: journal replay write failed -- left committed for next boot\n");
+            return;
+        }
+    } else {
+        klog_write("tfs3: discarded a torn journal transaction\n");
+    }
+    g_txn_count = 0;
+    write_journal_header(0);
+}
+
+// ---- inode staging (through the transaction) ------------------------------
+
+static void pack_inode_into(uint8_t *p, const struct t3_inode *node) {
+    k_memset(p, 0, T3_INODE_SIZE);
+    p[0] = node->type;
+    wr16(p + 2, node->links);
+    wr64(p + 4, node->size);
+    wr64(p + 12, node->created);
+    wr64(p + 20, node->modified);
+    for (int i = 0; i < 15; i++) wr32(p + 28 + i * 4, node->ptrs[i]);
+    uint8_t chk[124];
+    k_memcpy(chk, p, 88);
+    k_memcpy(chk + 88, p + 92, 36);
+    wr32(p + 88, k_fnv1a(chk, sizeof(chk)));
+}
+
+// Patch inode `ino`'s 128 bytes inside its (journal-staged) table
+// block. `node == 0` zeroes the slot -- a dead inode fails its
+// checksum by design, the bitmap is the allocation authority.
+static int txn_stage_inode(uint64_t ino, const struct t3_inode *node) {
+    uint32_t lba, off;
+    if (!inode_pos(ino, &lba, &off)) return 0;
+    uint32_t blk = lba / T3_SPB;
+    uint32_t within = (lba % T3_SPB) * ATA_SECTOR_SIZE + off;
+    uint8_t *img = txn_stage(blk);
+    if (!img) return 0;
+    if (node) pack_inode_into(img + within, node);
+    else k_memset(img + within, 0, T3_INODE_SIZE);
+    return 1;
+}
+
+static uint64_t now_epoch(void) {
+    struct rtc_time t;
+    rtc_read_local(&t);
+    return tz_rtc_to_epoch(&t);
+}
+
+// ---- block-map allocation (write side) ------------------------------------
+
+// One-deep cache of the last-level pointer block being filled, so a
+// long sequential write patches it in RAM and writes it once per
+// 1024 data blocks instead of read-modify-writing 4 KiB per block.
+static struct {
+    uint32_t blk;   // 0 = empty
+    int dirty;
+    uint8_t buf[T3_BLOCK];
+} g_pcache;
+
+static int pcache_flush(void) {
+    if (g_pcache.blk && g_pcache.dirty) {
+        if (!write_block(g_pcache.blk, g_pcache.buf)) return 0;
+        g_pcache.dirty = 0;
+    }
+    return 1;
+}
+
+static int pcache_load(uint32_t blk, int fresh) {
+    if (g_pcache.blk == blk) return 1;
+    if (!pcache_flush()) return 0;
+    g_pcache.blk = blk;
+    g_pcache.dirty = 0;
+    if (fresh) { k_memset(g_pcache.buf, 0, T3_BLOCK); g_pcache.dirty = 1; return 1; }
+    return read_block(blk, g_pcache.buf);
+}
+
+static void pcache_drop(void) { g_pcache.blk = 0; g_pcache.dirty = 0; }
+
+// Allocate (if needed) and return the pointer-table slot chain for
+// file-block `idx`, allocating intermediate pointer blocks as it
+// goes. Returns the existing-or-new data block number via *out_blk
+// (0 if a fresh one must be allocated by the caller and recorded with
+// map_set_block()). This walks with the pcache for the LEAF table.
+static int map_get_or_alloc_tables(struct t3_inode *node, uint32_t idx,
+                                    uint32_t prefer_group,
+                                    uint32_t *out_leaf_blk, uint32_t *out_leaf_slot,
+                                    uint32_t *out_existing) {
+    if (idx < 12) {
+        *out_leaf_blk = 0; // direct -- lives in the inode itself
+        *out_leaf_slot = idx;
+        *out_existing = node->ptrs[idx];
+        return 1;
+    }
+    idx -= 12;
+    uint32_t l1 = T3_PTRS_PER_BLOCK;
+    uint32_t l2 = l1 * l1;
+    int ptr_index;         // 12 single, 13 double, 14 triple
+    uint32_t rem = idx;
+    if (idx < l1) { ptr_index = 12; }
+    else if (idx - l1 < l2) { ptr_index = 13; rem = idx - l1; }
+    else { ptr_index = 14; rem = idx - l1 - l2; }
+
+    // Top-level table.
+    uint32_t table = node->ptrs[ptr_index];
+    int fresh = 0;
+    if (!table) {
+        table = alloc_block(prefer_group, 0);
+        if (!table) return 0;
+        node->ptrs[ptr_index] = table;
+        fresh = 1;
+    }
+    if (ptr_index == 12) {
+        if (!pcache_load(table, fresh)) return 0;
+        *out_leaf_blk = table;
+        *out_leaf_slot = rem;
+        *out_existing = rd32(g_pcache.buf + rem * 4);
+        return 1;
+    }
+
+    // Middle level(s): walked with read-modify-write (rare compared
+    // to leaf patches -- one RMW per 1024 (or 1024^2) data blocks).
+    uint32_t levels = (ptr_index == 13) ? 1 : 2;
+    uint32_t divisors[2] = { l1, 1 };
+    if (levels == 2) { divisors[0] = l2; divisors[1] = l1; }
+    for (uint32_t d = 0; d < levels; d++) {
+        uint32_t slot = rem / divisors[d];
+        rem = rem % divisors[d];
+        if (fresh) k_memset(g_ptr_blk, 0, T3_BLOCK);
+        else if (!read_block(table, g_ptr_blk)) return 0;
+        uint32_t next = rd32(g_ptr_blk + slot * 4);
+        int next_fresh = 0;
+        if (!next) {
+            next = alloc_block(prefer_group, 0);
+            if (!next) return 0;
+            wr32(g_ptr_blk + slot * 4, next);
+            if (!write_block(table, g_ptr_blk)) return 0;
+            next_fresh = 1;
+        } else if (fresh) {
+            // Can't happen (a fresh table has no entries), but keep
+            // the write so a fresh middle table always lands on disk.
+            if (!write_block(table, g_ptr_blk)) return 0;
+        }
+        table = next;
+        fresh = next_fresh;
+    }
+    if (!pcache_load(table, fresh)) return 0;
+    *out_leaf_blk = table;
+    *out_leaf_slot = rem;
+    *out_existing = rd32(g_pcache.buf + rem * 4);
+    return 1;
+}
+
+static void map_set_block(struct t3_inode *node, uint32_t leaf_blk,
+                          uint32_t leaf_slot, uint32_t data_blk) {
+    if (!leaf_blk) {
+        node->ptrs[leaf_slot] = data_blk; // direct
+    } else {
+        wr32(g_pcache.buf + leaf_slot * 4, data_blk);
+        g_pcache.dirty = 1;
+    }
+}
+
+// ---- write core ------------------------------------------------------------
+
+// Write [offset, offset+len) into the file behind *node (whose inode
+// number is `ino`), allocating as needed, then commit the updated
+// inode through the journal. The order is the leak-safe one: bitmap
+// state flushes BEFORE the inode transaction makes anything
+// reachable. Returns 1/0.
+static int do_write(uint64_t ino, struct t3_inode *node, uint64_t offset,
+                    const void *buf, uint32_t len) {
+    const uint8_t *src = (const uint8_t *)buf;
+    uint32_t prefer_group = (uint32_t)(ino / g_sb.ipg);
+    uint32_t last_alloc = 0;
+    uint32_t total = 0;
+
+    pcache_drop();
+    while (total < len) {
+        uint64_t file_off = offset + total;
+        uint32_t bi = (uint32_t)(file_off / T3_BLOCK);
+        uint32_t within = (uint32_t)(file_off % T3_BLOCK);
+        uint32_t chunk = T3_BLOCK - within;
+        if (chunk > len - total) chunk = len - total;
+
+        uint32_t leaf_blk, leaf_slot, existing;
+        if (!map_get_or_alloc_tables(node, bi, prefer_group, &leaf_blk, &leaf_slot, &existing))
+            return 0;
+        uint32_t blk = existing;
+        int fresh = 0;
+        if (!blk) {
+            blk = alloc_block(prefer_group, last_alloc);
+            if (!blk) return 0;
+            map_set_block(node, leaf_blk, leaf_slot, blk);
+            fresh = 1;
+        }
+        last_alloc = blk;
+
+        if (chunk == T3_BLOCK) {
+            // Run coalescing, the write half of what took TFS2 from 18
+            // to 25 MB/s: gather the CONTIGUOUS on-disk run of full
+            // blocks this write covers (the adjacent-first allocator
+            // makes long runs the common case) and issue it as one
+            // multi-sector transfer straight from the caller's buffer
+            // -- no bounce, no per-block ATA round trip. Measured on
+            // tfs3 before this existed: 4.6 MB/s; the per-block loop
+            // was the whole gap.
+            uint32_t run = 1;
+            uint32_t want = (len - total) / T3_BLOCK; // whole blocks left
+            // One transfer must fit the ATA path's per-command cap
+            // (128 sectors on DMA, 8 on PIO -- ask, don't assume,
+            // same rule tfs.c's batching follows).
+            uint32_t cap = (uint32_t)ata_max_sectors_per_xfer() / T3_SPB;
+            if (cap < 1) cap = 1;
+            if (want > cap) want = cap;
+            while (run < want) {
+                uint32_t nleaf, nslot, nexist;
+                if (!map_get_or_alloc_tables(node, bi + run, prefer_group, &nleaf, &nslot, &nexist))
+                    return 0;
+                uint32_t nblk = nexist;
+                if (!nblk) {
+                    nblk = alloc_block(prefer_group, last_alloc);
+                    if (!nblk) return 0;
+                    map_set_block(node, nleaf, nslot, nblk);
+                }
+                if (nblk != last_alloc + 1) {
+                    // Not contiguous: it's allocated and recorded, the
+                    // next loop iteration will write it as its own run.
+                    last_alloc = 0; // don't bias the next adjacency try
+                    break;
+                }
+                last_alloc = nblk;
+                run++;
+            }
+            if (!vol_write_sectors(blk * T3_SPB, (int)(run * T3_SPB), src + total)) return 0;
+            total += run * T3_BLOCK;
+        } else {
+            if (fresh || file_off >= node->size) k_memset(g_blk, 0, T3_BLOCK);
+            else if (!read_block(blk, g_blk)) return 0;
+            k_memcpy(g_blk + within, src + total, chunk);
+            if (!write_block(blk, g_blk)) return 0;
+            total += chunk;
+        }
+    }
+    if (!pcache_flush()) return 0;
+    pcache_drop();
+
+    if (offset + len > node->size) node->size = offset + len;
+    node->modified = now_epoch();
+
+    if (!flush_alloc_state()) return 0;       // set-before-use
+    if (!txn_stage_inode(ino, node)) { txn_reset(); return 0; }
+    return txn_commit();                       // the commit point: file grows atomically
+}
+
+// Free every data + pointer block behind *node (for truncate/delete),
+// TRIMming as it goes, and leave the pointer fields zeroed. The
+// caller must have ALREADY committed the inode/dirent transaction
+// that makes these blocks unreachable -- clear-after-persist.
+static void free_tree_level(uint32_t table_blk, int depth);
+
+static void free_all_blocks(struct t3_inode *node) {
+    uint32_t run_start = 0, run_len = 0;
+    for (int i = 0; i < 12; i++) {
+        uint32_t blk = node->ptrs[i];
+        if (blk) {
+            free_block_bit(blk);
+            if (run_len && blk == run_start + run_len) run_len++;
+            else { trim_run(run_start, run_len); run_start = blk; run_len = 1; }
+        }
+        node->ptrs[i] = 0;
+    }
+    trim_run(run_start, run_len);
+    if (node->ptrs[12]) { free_tree_level(node->ptrs[12], 0); node->ptrs[12] = 0; }
+    if (node->ptrs[13]) { free_tree_level(node->ptrs[13], 1); node->ptrs[13] = 0; }
+    if (node->ptrs[14]) { free_tree_level(node->ptrs[14], 2); node->ptrs[14] = 0; }
+}
+
+// depth 0: entries are data blocks; deeper: entries are tables.
+// Recursion depth is bounded at 3 by the format itself. Uses a local
+// table copy (kmalloc) instead of the shared scratch because levels
+// nest.
+static void free_tree_level(uint32_t table_blk, int depth) {
+    uint8_t *tbl = kmalloc(T3_BLOCK);
+    if (!tbl) return; // leak rather than corrupt -- fsck reclaims
+    if (read_block(table_blk, tbl)) {
+        uint32_t run_start = 0, run_len = 0;
+        for (uint32_t i = 0; i < T3_PTRS_PER_BLOCK; i++) {
+            uint32_t e = rd32(tbl + i * 4);
+            if (!e) continue;
+            if (depth == 0) {
+                free_block_bit(e);
+                if (run_len && e == run_start + run_len) run_len++;
+                else { trim_run(run_start, run_len); run_start = e; run_len = 1; }
+            } else {
+                free_tree_level(e, depth - 1);
+            }
+        }
+        trim_run(run_start, run_len);
+    }
+    free_block_bit(table_blk);
+    trim_run(table_blk, 1);
+    kfree(tbl);
+}
+
+// ---- dirent editing (through the transaction) ------------------------------
+
+// Find room for a new dirent in `dir` and stage the patched block.
+// Grows the directory by one block IN ITS OWN transaction first when
+// needed (an empty extra dir block is harmless if the follow-up
+// transaction never lands -- two consistent states, no 5-slot
+// transaction; see the design doc's journal section).
+static int dirent_insert(uint64_t dir_ino, struct t3_inode *dir,
+                         const char *name, uint32_t name_len, uint64_t child_ino) {
+    uint32_t need = (7 + name_len + 3) & ~3u;
+    uint32_t nblocks = (uint32_t)((dir->size + T3_BLOCK - 1) / T3_BLOCK);
+
+    for (uint32_t b = 0; b < nblocks; b++) {
+        uint32_t blk = block_for_index(dir, b);
+        if (!blk || !read_block(blk, g_blk)) return 0;
+        uint32_t off = 0;
+        while (off + 8 <= T3_BLOCK) {
+            uint32_t e_ino = rd32(g_blk + off);
+            uint16_t rec_len = rd16(g_blk + off + 4);
+            uint8_t nl = g_blk[off + 6];
+            if (rec_len < 8 || off + rec_len > T3_BLOCK) break;
+            uint32_t used = e_ino ? ((7u + nl + 3u) & ~3u) : 0;
+            if (rec_len - used >= need) {
+                uint8_t *img = txn_stage(blk);
+                if (!img) return 0;
+                uint32_t new_off = off + used;
+                if (e_ino) wr16(img + off + 4, (uint16_t)used);
+                wr32(img + new_off, (uint32_t)child_ino);
+                wr16(img + new_off + 4, (uint16_t)(rec_len - used));
+                img[new_off + 6] = (uint8_t)name_len;
+                k_memcpy(img + new_off + 7, name, name_len);
+                return 1;
+            }
+            off += rec_len;
+        }
+    }
+
+    // No room: grow the directory by one EMPTY block in its own
+    // transaction, then stage the insertion into it as part of the
+    // caller's transaction. The empty-first split is load-bearing:
+    // an early version wrote the child's entry INTO the grow block,
+    // which made the name visible one transaction before the child's
+    // inode existed -- exactly the namespace-corruption window the
+    // journal is for. An empty extra block, by contrast, is harmless
+    // slack if the caller's transaction never lands.
+    if (nblocks >= 12 + T3_PTRS_PER_BLOCK) return 0; // dirs stop at single-indirect scale
+    if (g_txn_count != 0) return 0; // grow needs its own txn; callers stage after insert only
+    uint32_t prefer_group = (uint32_t)(dir_ino / g_sb.ipg);
+    uint32_t newblk = alloc_block(prefer_group, 0);
+    if (!newblk) return 0;
+    k_memset(g_blk, 0, T3_BLOCK);
+    wr16(g_blk + 4, (uint16_t)T3_BLOCK); // one free entry spanning the block
+    if (!write_block(newblk, g_blk)) { free_block_bit(newblk); return 0; }
+
+    // Wire it into the map. Directs cover 12 blocks; past that the
+    // single-indirect table gets the pointer (RMW, no pcache needed
+    // at dir scale).
+    if (nblocks < 12) {
+        dir->ptrs[nblocks] = newblk;
+    } else {
+        uint32_t table = dir->ptrs[12];
+        int fresh = 0;
+        if (!table) {
+            table = alloc_block(prefer_group, 0);
+            if (!table) { free_block_bit(newblk); return 0; }
+            dir->ptrs[12] = table;
+            fresh = 1;
+        }
+        if (fresh) k_memset(g_ptr_blk, 0, T3_BLOCK);
+        else if (!read_block(table, g_ptr_blk)) { free_block_bit(newblk); return 0; }
+        wr32(g_ptr_blk + (nblocks - 12) * 4, newblk);
+        if (!write_block(table, g_ptr_blk)) { free_block_bit(newblk); return 0; }
+    }
+    dir->size += T3_BLOCK;
+    dir->modified = now_epoch();
+    if (!flush_alloc_state()) return 0;
+    if (!txn_stage_inode(dir_ino, dir)) { txn_reset(); return 0; }
+    if (!txn_commit()) return 0;
+
+    // Now stage the actual insertion into the fresh block, in the
+    // caller's transaction.
+    uint8_t *img = txn_stage(newblk);
+    if (!img) return 0;
+    wr32(img, (uint32_t)child_ino);
+    wr16(img + 4, (uint16_t)T3_BLOCK);
+    img[6] = (uint8_t)name_len;
+    k_memcpy(img + 7, name, name_len);
+    return 1;
+}
+
+// Stage the removal of `name` from `dir` (ext2-style fold into the
+// previous entry). Returns the removed entry's inode via *out_child,
+// 0 on not-found/failure.
+static int dirent_remove(struct t3_inode *dir, const char *name,
+                         uint32_t name_len, uint64_t *out_child) {
+    uint32_t nblocks = (uint32_t)((dir->size + T3_BLOCK - 1) / T3_BLOCK);
+    for (uint32_t b = 0; b < nblocks; b++) {
+        uint32_t blk = block_for_index(dir, b);
+        if (!blk || !read_block(blk, g_blk)) return 0;
+        uint32_t off = 0, prev_off = 0;
+        int have_prev = 0;
+        while (off + 8 <= T3_BLOCK) {
+            uint32_t e_ino = rd32(g_blk + off);
+            uint16_t rec_len = rd16(g_blk + off + 4);
+            uint8_t nl = g_blk[off + 6];
+            if (rec_len < 8 || off + rec_len > T3_BLOCK) break;
+            if (e_ino && nl == name_len && k_memcmp(g_blk + off + 7, name, name_len) == 0) {
+                uint8_t *img = txn_stage(blk);
+                if (!img) return 0;
+                if (have_prev) {
+                    uint16_t p_len = rd16(img + prev_off + 4);
+                    wr16(img + prev_off + 4, (uint16_t)(p_len + rec_len));
+                } else {
+                    wr32(img + off, 0);
+                    img[off + 6] = 0;
+                }
+                *out_child = e_ino;
+                return 1;
+            }
+            prev_off = off; have_prev = 1;
+            off += rec_len;
+        }
+    }
+    return 0;
+}
+
+// Split a normalized path into (parent inode, final component).
+static int split_parent(const char *norm, uint64_t *out_parent,
+                        const char **out_name, uint32_t *out_len) {
+    if (k_strcmp(norm, "/") == 0) return 0;
+    const char *last = norm;
+    for (const char *p = norm; *p; p++) if (*p == '/') last = p;
+    uint32_t len = (uint32_t)k_strlen(last + 1);
+    if (len == 0 || len > T3_NAME_MAX) return 0;
+    char parent[T3_PATH_BUF];
+    if (last == norm) { parent[0] = '/'; parent[1] = '\0'; }
+    else {
+        uint32_t plen = (uint32_t)(last - norm);
+        if (plen >= T3_PATH_BUF) return 0;
+        k_memcpy(parent, norm, plen);
+        parent[plen] = '\0';
+    }
+    uint64_t pino = T3_INO_ROOT;
+    if (k_strcmp(parent, "/") != 0 && !resolve(parent, &pino)) return 0;
+    *out_parent = pino;
+    *out_name = last + 1;
+    *out_len = len;
     return 1;
 }
 
@@ -538,9 +1309,19 @@ static int tfs3_format(void) {
     return 1;
 }
 
+static void unmount_state(void) {
+    if (g_gd) { kfree(g_gd); g_gd = 0; }
+    if (g_bbm) { kfree(g_bbm); g_bbm = 0; }
+    if (g_ibm) { kfree(g_ibm); g_ibm = 0; }
+    if (g_rotor) { kfree(g_rotor); g_rotor = 0; }
+    ncache_flush();
+    pcache_drop();
+    txn_reset();
+}
+
 static int tfs3_init(void) {
     g_mounted = 0;
-    if (g_gd) { kfree(g_gd); g_gd = 0; }
+    unmount_state();
     if (!ata_present()) {
         // tfs3 has no RAM-only mode of its own -- that's the default
         // backend's job (vfs.c). Reaching here without a disk means
@@ -553,10 +1334,35 @@ static int tfs3_init(void) {
         klog_write("tfs3: no valid superblock (primary or backup) -- not mounted\n");
         return 0;
     }
+    if (g_sb.flags != 0) {
+        // Feature bits this kernel doesn't implement yet (e.g. the
+        // per-block checksum table's write half). Refusing beats
+        // mounting read-write and silently rotting the feature's
+        // state -- the capabilities-must-not-lie rule, applied to a
+        // format.
+        klog_write("tfs3: superblock declares feature bits this kernel doesn't support -- not mounted\n");
+        return 0;
+    }
     derive_geometry();
+    replay_journal(); // before anything reads the structures a crash may have half-written
 
     g_gd = kmalloc(sizeof(struct t3_gd) * g_sb.gc);
-    if (!g_gd) return 0;
+    g_bbm = kmalloc((size_t)g_sb.gc * T3_BLOCK);
+    g_ibm = kmalloc((size_t)g_sb.gc * T3_BLOCK);
+    g_rotor = kmalloc(sizeof(uint32_t) * g_sb.gc);
+    if (!g_gd || !g_bbm || !g_ibm || !g_rotor) { unmount_state(); return 0; }
+    k_memset(g_bbm_dirty, 0, sizeof(g_bbm_dirty));
+    k_memset(g_ibm_dirty, 0, sizeof(g_ibm_dirty));
+    k_memset(g_gdt_dirty, 0, sizeof(g_gdt_dirty));
+    for (uint32_t g = 0; g < g_sb.gc; g++) {
+        g_rotor[g] = g_meta_off;
+        if (!read_block(group_base(g), g_bbm + (size_t)g * T3_BLOCK) ||
+            !read_block(group_base(g) + 1, g_ibm + (size_t)g * T3_BLOCK)) {
+            klog_write("tfs3: bitmap read failed -- not mounted\n");
+            unmount_state();
+            return 0;
+        }
+    }
     uint32_t bad_gd = 0;
     for (uint32_t tb = 0; tb <= (g_sb.gc - 1) / (T3_BLOCK / 16); tb++) {
         if (!read_block(T3_GDT_BLOCK + tb, g_blk)) { kfree(g_gd); g_gd = 0; return 0; }
@@ -592,7 +1398,7 @@ static int tfs3_init(void) {
     struct t3_inode root;
     if (!read_inode(T3_INO_ROOT, &root) || root.type != T3_TYPE_DIR) {
         klog_write("tfs3: root inode invalid -- not mounted\n");
-        kfree(g_gd); g_gd = 0;
+        unmount_state();
         return 0;
     }
 
@@ -809,25 +1615,321 @@ static int tfs3_disk_usage(uint64_t *out_used, uint64_t *out_total) {
     return 1;
 }
 
-// ---- mutating ops: Stage C ---------------------------------------------
+// ---- mutating ops ---------------------------------------------------------
 
-static void write_path_pending(void) {
-    klog_write("tfs3: write path not built yet (Stage C) -- operation refused\n");
+// Create a file or directory entry under an existing parent.
+// Transaction: parent dirent block + child inode block (+ the child's
+// own `.`/`..` dirent block is DATA, written before anything points
+// at it) + parent inode block for mkdir's link-count bump. <= 3
+// slots; directory growth runs as its own transaction inside
+// dirent_insert() (see its comment).
+static int create_entry(const char *path, uint8_t type, uint64_t *out_ino) {
+    char norm[T3_PATH_BUF];
+    if (!g_mounted || !normalize(path, norm)) return 0;
+    uint64_t existing;
+    if (resolve(norm, &existing)) return 0; // caller decides what exists means
+    uint64_t parent_ino;
+    const char *name; uint32_t name_len;
+    if (!split_parent(norm, &parent_ino, &name, &name_len)) return 0;
+    struct t3_inode parent;
+    if (!read_inode(parent_ino, &parent) || parent.type != T3_TYPE_DIR) return 0;
+
+    uint32_t prefer_group = (uint32_t)(parent_ino / g_sb.ipg);
+    uint64_t ino = alloc_inode(prefer_group);
+    if (!ino) return 0;
+
+    struct t3_inode node;
+    k_memset(&node, 0, sizeof(node));
+    node.type = type;
+    node.links = (type == T3_TYPE_DIR) ? 2 : 1;
+    node.created = node.modified = now_epoch();
+
+    if (type == T3_TYPE_DIR) {
+        // The child's own dirent block: plain data until the inode
+        // transaction lands, so a direct (unjournaled) write is safe.
+        uint32_t blk = alloc_block(prefer_group, 0);
+        if (!blk) { free_inode_bit(ino); flush_alloc_state(); return 0; }
+        k_memset(g_blk, 0, T3_BLOCK);
+        wr32(g_blk, (uint32_t)ino); wr16(g_blk + 4, 12); g_blk[6] = 1; g_blk[7] = '.';
+        wr32(g_blk + 12, (uint32_t)parent_ino); wr16(g_blk + 16, (uint16_t)(T3_BLOCK - 12));
+        g_blk[18] = 2; g_blk[19] = '.'; g_blk[20] = '.';
+        if (!write_block(blk, g_blk)) { free_inode_bit(ino); free_block_bit(blk); flush_alloc_state(); return 0; }
+        node.ptrs[0] = blk;
+        node.size = T3_BLOCK;
+    }
+
+    if (!flush_alloc_state()) return 0; // set-before-use
+
+    txn_reset();
+    int ins = dirent_insert(parent_ino, &parent, name, name_len, ino);
+    if (!ins) { txn_reset(); return 0; }
+    if (!txn_stage_inode(ino, &node)) { txn_reset(); return 0; }
+    if (type == T3_TYPE_DIR) {
+        parent.links++;
+        parent.modified = node.created;
+        if (!txn_stage_inode(parent_ino, &parent)) { txn_reset(); return 0; }
+    }
+    if (!txn_commit()) return 0;
+    ncache_flush();
+    if (out_ino) *out_ino = ino;
+    return 1;
 }
 
-static int tfs3_touch(const char *path) { (void)path; write_path_pending(); return 0; }
-static int tfs3_write(const char *path, const char *data, int append) {
-    (void)path; (void)data; (void)append; write_path_pending(); return 0;
+static int tfs3_touch(const char *path) {
+    char norm[T3_PATH_BUF];
+    if (!g_mounted || !normalize(path, norm)) return 0;
+    uint64_t ino;
+    struct t3_inode node;
+    if (resolve(norm, &ino)) {
+        // Existing file: a no-op that succeeds; existing dir: refuse.
+        // Matches tfs_touch()'s behavior exactly (incl. not bumping
+        // `modified` -- see fs.h's fs_stat_info comment).
+        if (!read_inode(ino, &node)) return 0;
+        return node.type == T3_TYPE_FILE;
+    }
+    return create_entry(path, T3_TYPE_FILE, 0);
 }
-static int tfs3_mkdir(const char *path) { (void)path; write_path_pending(); return 0; }
-static int tfs3_delete(const char *path) { (void)path; write_path_pending(); return 0; }
+
+static int tfs3_mkdir(const char *path) {
+    char norm[T3_PATH_BUF];
+    if (!g_mounted || !normalize(path, norm)) return 0;
+    uint64_t ino;
+    if (resolve(norm, &ino)) return 0; // exists (file OR dir) -- refuse, like tfs2
+    return create_entry(path, T3_TYPE_DIR, 0);
+}
+
 static int tfs3_write_range(const char *path, uint64_t offset, const void *buf, uint32_t len) {
-    (void)path; (void)offset; (void)buf; (void)len; write_path_pending(); return 0;
+    char norm[T3_PATH_BUF];
+    if (!g_mounted || !normalize(path, norm)) return 0;
+    uint64_t ino;
+    struct t3_inode node;
+    if (!resolve(norm, &ino)) {
+        if (!create_entry(path, T3_TYPE_FILE, &ino)) return 0;
+    }
+    if (!read_inode(ino, &node) || node.type != T3_TYPE_FILE) return 0;
+    if (len == 0) return 1;
+    return do_write(ino, &node, offset, buf, len);
 }
+
+static int tfs3_write(const char *path, const char *data, int append) {
+    char norm[T3_PATH_BUF];
+    if (!g_mounted || !normalize(path, norm)) return 0;
+    uint64_t ino;
+    struct t3_inode node;
+    if (!resolve(norm, &ino)) {
+        if (!create_entry(path, T3_TYPE_FILE, &ino)) return 0;
+    }
+    if (!read_inode(ino, &node) || node.type != T3_TYPE_FILE) return 0;
+
+    uint32_t len = (uint32_t)k_strlen(data);
+    uint64_t start = node.size;
+    if (!append && node.size > 0) {
+        // Truncate: commit the emptied inode FIRST, then return the
+        // old blocks -- tfs_write()'s detach-then-persist ordering,
+        // expressed in TFS3 terms (clear-after-persist; a crash
+        // between the two steps leaks, fsck reclaims).
+        struct t3_inode old = node;
+        k_memset(node.ptrs, 0, sizeof(node.ptrs));
+        node.size = 0;
+        node.modified = now_epoch();
+        txn_reset();
+        if (!txn_stage_inode(ino, &node)) { txn_reset(); return 0; }
+        if (!txn_commit()) return 0;
+        free_all_blocks(&old);
+        flush_alloc_state();
+        start = 0;
+    } else if (!append) {
+        start = 0;
+    }
+    if (len == 0) return 1;
+    return do_write(ino, &node, start, data, len);
+}
+
+static int tfs3_delete(const char *path) {
+    char norm[T3_PATH_BUF];
+    if (!g_mounted || !normalize(path, norm)) return 0;
+    if (k_strcmp(norm, "/") == 0) return 0;
+    uint64_t ino;
+    struct t3_inode node;
+    if (!resolve(norm, &ino) || !read_inode(ino, &node)) return 0;
+
+    if (node.type == T3_TYPE_DIR) {
+        // Empty means "nothing but . and .." -- the no-recursive-
+        // delete policy, unchanged (docs/decisions.md).
+        uint32_t nblocks = (uint32_t)((node.size + T3_BLOCK - 1) / T3_BLOCK);
+        for (uint32_t b = 0; b < nblocks; b++) {
+            uint32_t blk = block_for_index(&node, b);
+            if (!blk || !read_block(blk, g_blk)) return 0;
+            uint32_t off = 0;
+            while (off + 8 <= T3_BLOCK) {
+                uint32_t e_ino = rd32(g_blk + off);
+                uint16_t rec_len = rd16(g_blk + off + 4);
+                uint8_t nl = g_blk[off + 6];
+                if (rec_len < 8 || off + rec_len > T3_BLOCK) break;
+                if (e_ino && !(nl == 1 && g_blk[off + 7] == '.') &&
+                    !(nl == 2 && g_blk[off + 7] == '.' && g_blk[off + 8] == '.')) {
+                    return 0; // not empty
+                }
+                off += rec_len;
+            }
+        }
+    }
+
+    uint64_t parent_ino;
+    const char *name; uint32_t name_len;
+    if (!split_parent(norm, &parent_ino, &name, &name_len)) return 0;
+    struct t3_inode parent;
+    if (!read_inode(parent_ino, &parent) || parent.type != T3_TYPE_DIR) return 0;
+
+    txn_reset();
+    uint64_t removed = 0;
+    if (!dirent_remove(&parent, name, name_len, &removed) || removed != ino) {
+        txn_reset();
+        return 0;
+    }
+
+    int gone = 0;
+    if (node.type == T3_TYPE_DIR || node.links <= 1) {
+        // Last name: zero the inode; blocks are freed after commit.
+        if (!txn_stage_inode(ino, 0)) { txn_reset(); return 0; }
+        gone = 1;
+        if (node.type == T3_TYPE_DIR) {
+            parent.links--;
+            parent.modified = now_epoch();
+            if (!txn_stage_inode(parent_ino, &parent)) { txn_reset(); return 0; }
+        }
+    } else {
+        // A hardlink remains -- just drop the count.
+        node.links--;
+        if (!txn_stage_inode(ino, &node)) { txn_reset(); return 0; }
+    }
+    if (!txn_commit()) return 0;
+    ncache_flush();
+
+    if (gone) {
+        // clear-after-persist: nothing references these anymore.
+        free_all_blocks(&node);
+        free_inode_bit(ino);
+        flush_alloc_state();
+    }
+    return 1;
+}
+
+// The first OPTIONAL fs_ops op, gated by FS_CAP_HARDLINKS (the caps
+// honesty check in vfs.c verifies the pair). Files only -- hardlinked
+// directories turn the tree into a graph, refused by every real Unix
+// filesystem for the same reason (see the design doc).
+static int tfs3_link(const char *existing, const char *newpath) {
+    char norm[T3_PATH_BUF], newnorm[T3_PATH_BUF];
+    if (!g_mounted || !normalize(existing, norm) || !normalize(newpath, newnorm)) return 0;
+    uint64_t ino, clash;
+    struct t3_inode node;
+    if (!resolve(norm, &ino) || !read_inode(ino, &node)) return 0;
+    if (node.type != T3_TYPE_FILE) return 0;
+    if (resolve(newnorm, &clash)) return 0; // target name taken
+    uint64_t parent_ino;
+    const char *name; uint32_t name_len;
+    if (!split_parent(newnorm, &parent_ino, &name, &name_len)) return 0;
+    struct t3_inode parent;
+    if (!read_inode(parent_ino, &parent) || parent.type != T3_TYPE_DIR) return 0;
+
+    txn_reset();
+    if (!dirent_insert(parent_ino, &parent, name, name_len, ino)) { txn_reset(); return 0; }
+    node.links++;
+    if (!txn_stage_inode(ino, &node)) { txn_reset(); return 0; }
+    if (!txn_commit()) return 0;
+    ncache_flush();
+    return 1;
+}
+
+// Steppable write: one block per step() call, inode committed once on
+// the final step -- so a crash mid-stream leaks fresh blocks and
+// leaves the file at its old size, same contract the blocking path
+// gives (fs.h: on FS_STEP_DONE size/mtime/metadata are updated).
+struct t3_write_step {
+    uint64_t ino;
+    struct t3_inode node;
+    const uint8_t *src;
+    uint64_t offset;
+    uint32_t len, total;
+    uint32_t last_alloc;
+};
+
 static void *tfs3_write_range_begin(const char *path, uint64_t offset, const void *buf, uint32_t len) {
-    (void)path; (void)offset; (void)buf; (void)len; write_path_pending(); return 0;
+    char norm[T3_PATH_BUF];
+    if (!g_mounted || !normalize(path, norm)) return 0;
+    uint64_t ino;
+    if (!resolve(norm, &ino)) {
+        if (!create_entry(path, T3_TYPE_FILE, &ino)) return 0;
+    }
+    struct t3_write_step *st = kmalloc(sizeof(*st));
+    if (!st) return 0;
+    if (!read_inode(ino, &st->node) || st->node.type != T3_TYPE_FILE) { kfree(st); return 0; }
+    st->ino = ino;
+    st->src = (const uint8_t *)buf;
+    st->offset = offset;
+    st->len = len;
+    st->total = 0;
+    st->last_alloc = 0;
+    pcache_drop();
+    return st;
 }
-static int tfs3_write_range_step(void *handle) { (void)handle; return 2 /* FS_STEP_FAILED */; }
+
+static int tfs3_write_range_step(void *handle) {
+    struct t3_write_step *st = (struct t3_write_step *)handle;
+    if (st->total < st->len) {
+        uint64_t file_off = st->offset + st->total;
+        uint32_t bi = (uint32_t)(file_off / T3_BLOCK);
+        uint32_t within = (uint32_t)(file_off % T3_BLOCK);
+        uint32_t chunk = T3_BLOCK - within;
+        if (chunk > st->len - st->total) chunk = st->len - st->total;
+
+        uint32_t prefer_group = (uint32_t)(st->ino / g_sb.ipg);
+        uint32_t leaf_blk, leaf_slot, existing;
+        if (!map_get_or_alloc_tables(&st->node, bi, prefer_group, &leaf_blk, &leaf_slot, &existing)) {
+            pcache_drop(); kfree(st); return 2 /* FS_STEP_FAILED */;
+        }
+        uint32_t blk = existing;
+        int fresh = 0;
+        if (!blk) {
+            blk = alloc_block(prefer_group, st->last_alloc);
+            if (!blk) { pcache_drop(); kfree(st); return 2; }
+            map_set_block(&st->node, leaf_blk, leaf_slot, blk);
+            fresh = 1;
+        }
+        st->last_alloc = blk;
+
+        int ok;
+        if (chunk == T3_BLOCK) {
+            ok = write_block(blk, st->src + st->total);
+        } else {
+            if (fresh || file_off >= st->node.size) {
+                k_memset(g_blk, 0, T3_BLOCK);
+            } else if (!read_block(blk, g_blk)) {
+                pcache_drop(); kfree(st); return 2;
+            }
+            k_memcpy(g_blk + within, st->src + st->total, chunk);
+            ok = write_block(blk, g_blk);
+        }
+        if (!ok) { pcache_drop(); kfree(st); return 2; }
+        st->total += chunk;
+        if (st->total < st->len) return 0 /* FS_STEP_PENDING */;
+    }
+
+    // Final step: land the pointer cache, the allocation state, and
+    // the inode -- the same commit point do_write() has.
+    if (!pcache_flush()) { pcache_drop(); kfree(st); return 2; }
+    pcache_drop();
+    if (st->offset + st->len > st->node.size) st->node.size = st->offset + st->len;
+    st->node.modified = now_epoch();
+    int ok = flush_alloc_state();
+    if (ok) {
+        txn_reset();
+        ok = txn_stage_inode(st->ino, &st->node) && txn_commit();
+    }
+    kfree(st);
+    return ok ? 1 /* FS_STEP_DONE */ : 2;
+}
 
 // fsck: Stage D. Returning 0 means "nothing on disk to check", which
 // is not quite honest for a mounted read-only tfs3 -- accepted as a
@@ -868,4 +1970,5 @@ const struct fs_ops tfs3_ops = {
     .stat = tfs3_stat,
     .disk_usage = tfs3_disk_usage,
     .check = tfs3_check,
+    .link = tfs3_link, // optional op, paired with FS_CAP_HARDLINKS above
 };

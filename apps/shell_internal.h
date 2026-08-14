@@ -67,6 +67,7 @@ void cmd_meminfo(void);
 void cmd_df(void);
 void cmd_fsck(const char *args);
 void cmd_fsformat(const char *args); // shell_fs.c -- destructive, physical shell only
+void cmd_ln(const char *args);       // shell_fs.c -- hardlink, refuses on FS_CAP_HARDLINKS-less backends
 void cmd_ktest(const char *args);
 void cmd_fputest(void);
 void cmd_stress(const char *args);

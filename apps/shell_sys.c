@@ -212,6 +212,8 @@ static const char *const TEST_HELP_LINES[] = {
     "  fsformat <fs> confirm - DESTROY everything on disk and reformat\n",
     "                  with the named filesystem (tfs2, tfs3), then\n",
     "                  remount it live. `df` shows which one is active.\n",
+    "  ln <file> <new> - hardlink: a second name for the same file\n",
+    "                  (tfs3 only -- tfs2's format has no link counts)\n",
     "\n",
     "Every other former *test command (elftest, syscalltest, writetest,\n",
     "ptrtest, guitest, echotest, wintest, filetest, newsyscalltest,\n",
