@@ -60,7 +60,15 @@ int64_t sys_write(int fd, const void *buf, size_t len) {
 }
 
 int64_t sys_read(int fd, void *buf, size_t len) {
-    return syscall3(SYS_READ, (uint64_t)fd, (uint64_t)(uintptr_t)buf, (uint64_t)len);
+    int64_t r;
+    // Loops on SYS_RETRY, which a blocking read (a pipe with no data
+    // yet) returns when the process is woken. 0 is NOT the retry
+    // signal here -- it is a real end-of-file, which is exactly why
+    // SYS_RETRY has its own value. See abi/syscall_abi.h.
+    do {
+        r = syscall3(SYS_READ, (uint64_t)fd, (uint64_t)(uintptr_t)buf, (uint64_t)len);
+    } while (r == SYS_RETRY);
+    return r;
 }
 
 int sys_open(const char *path, int flags) {
@@ -165,3 +173,26 @@ int sys_win_create(struct win_request *req) {
 }
 
 int sys_win_present(void) { return (int)syscall0(SYS_WIN_PRESENT); }
+
+// --- processes and pipes ----------------------------------------------
+
+int sys_pipe(int fds[2]) {
+    return (int)syscall1(SYS_PIPE, (uint64_t)(uintptr_t)fds);
+}
+
+int sys_spawn(const char *path, const char *args, int stdout_fd) {
+    return (int)syscall3(SYS_SPAWN, (uint64_t)(uintptr_t)path,
+                          (uint64_t)(uintptr_t)args, (uint64_t)(int64_t)stdout_fd);
+}
+
+int sys_waitpid(int pid, int *out_code) {
+    int64_t r;
+    // Same retry contract as sys_wait_event(): a 0 return means the
+    // process was woken and should ask again, not that the child
+    // exited. Each pass that finds it still running parks again, so
+    // this consumes no CPU while waiting.
+    do {
+        r = syscall2(SYS_WAITPID, (uint64_t)(int64_t)pid, (uint64_t)(uintptr_t)out_code);
+    } while (r == SYS_RETRY);
+    return (int)r;
+}

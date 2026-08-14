@@ -28,6 +28,20 @@
 
 #define SYS_WRITE_MAX 1024
 
+// The value a BLOCKING syscall returns when the process was woken but
+// must call again -- the spurious-wakeup contract every blocking call
+// here shares (see SYS_WAIT_EVENT for why the kernel cannot simply
+// hand over the result at wake time: the wake runs in an interrupt,
+// under an address space where the caller's buffer is not addressable).
+//
+// It is -2, and NOT 0, for a concrete reason: 0 is a legitimate result
+// for SYS_READ (end of file). Using it as the retry sentinel made a
+// reader treat "woken, ask again" as "there will never be more data" --
+// a pipe read that returned empty the instant its writer produced
+// something. A sentinel has to be a value the call can never otherwise
+// return.
+#define SYS_RETRY (-2)
+
 // Experimental userspace-GUI syscalls (see kernel/core/gui_test.c /
 // apps/README.md's "GUI in user space" note for the honest scope of
 // this: modal only -- one ring-3 process gets the real screen to
@@ -415,5 +429,31 @@ struct dirent {
                             // for userland/win_test.c: those are modal
                             // and single-window, and their window never
                             // enters the WM's window list at all.
+
+#define SYS_PIPE    26 // RDI = pointer to int[2] (out): [0] = read fd,
+                        // [1] = write fd. Returns 1, or -1 (bad
+                        // pointer, or no free pipe).
+
+#define SYS_SPAWN   27 // RDI = path, RSI = whitespace-separated args
+                        // (NULL/"" for none), RDX = an fd from
+                        // SYS_PIPE's WRITE end to use as the child's
+                        // stdout, or -1 for the console. Returns the
+                        // child's pid (> 0), or -1.
+                        //
+                        // This is what lets a ring-3 program run
+                        // another and read its output -- the thing a
+                        // terminal does, and the first time one
+                        // process here could see another's stdout.
+
+#define SYS_WAITPID 28 // RDI = pid from SYS_SPAWN, RSI = pointer to an
+                        // int (out) for the exit code, or NULL.
+                        // BLOCKS until that child exits, then reaps it.
+                        // Returns the pid on success, or -1 for a pid
+                        // that isn't this caller's live child.
+                        //
+                        // Same "0 means woken, ask again" retry
+                        // contract as SYS_WAIT_EVENT, and for the same
+                        // reason -- see that entry. libsys wraps the
+                        // loop (sys_waitpid()).
 
 #endif

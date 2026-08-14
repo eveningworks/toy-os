@@ -158,6 +158,7 @@ WINCLIENT_ELF = userland/winclient.elf
 UICLIENT_ELF = userland/uiclient.elf
 CALCULATOR_ELF = userland/calculator.elf
 NOTEPAD_ELF = userland/notepad.elf
+PIPE_TEST_ELF = userland/pipe_test.elf
 
 # Which userland ELFs get seeded onto disk.img's /bin, and under what
 # name. The mapping is explicit because it isn't always mechanical --
@@ -202,6 +203,7 @@ SEED_TESTS = \
 	$(FPU_TEST_ELF):fpu_test \
 	$(FPU_RACE_ELF):fpu_race \
 	$(SPIN_TEST_ELF):spin_test \
+	$(PIPE_TEST_ELF):pipe_test \
 	$(EVENT_TEST_ELF):event_test \
 	$(WINCLIENT_ELF):winclient \
 	$(UICLIENT_ELF):uiclient \

@@ -96,6 +96,8 @@
 #include "process.h" // process_context_is_armed() -- see kernel_slot_runnable()
 #include "win_events.h" // win_events_reset() at spawn -- see scheduler_spawn()
 #include "win_server.h" // win_server_client_gone() -- see scheduler_on_exit()
+#include "pipe.h"      // pipe_close_writer() when a piped child exits
+#include "syscall_abi.h" // SYS_RETRY -- the wake value a blocked waiter sees
 #include "fs.h"
 #include "gdt.h"
 #include "fpu.h"
@@ -182,6 +184,10 @@ struct sched_process {
     uint64_t kernel_rsp; // this process's saved trapframe pointer --
                           // valid whenever state != SCHED_UNUSED
     int exit_code;        // valid only once state == SCHED_ZOMBIE
+    // Pipe index this process's stdout goes to, or -1 for the console.
+    // Lives here rather than in the fd table because fd 1 has always
+    // been a hardcoded console in SYS_WRITE -- see scheduler.h.
+    int stdout_pipe;
     // This process's x87/SSE registers while it isn't the one running.
     // 16-byte aligned because FXSAVE/FXRSTOR #GP otherwise -- see fpu.h,
     // including why only ring-3 processes need one of these at all.
@@ -350,7 +356,7 @@ static void switch_to_kernel(void) {
 // (>= 0) or -1 on any failure (no free slot, missing/unreadable file,
 // `args` too long to fit the one stack page, or the same allocation
 // failures every other ELF-loading path already handles the same way).
-static int spawn_from_fs(const char *path, const char *args) {
+static int spawn_from_fs(const char *path, const char *args, int stdout_pipe) {
     int slot = -1;
     for (int i = 0; i < MAX_PROCS; i++) {
         if (procs[i].state == SCHED_UNUSED) { slot = i; break; }
@@ -418,6 +424,7 @@ static int spawn_from_fs(const char *path, const char *args) {
     // would be both wrong and an information leak between processes.
     fpu_init_state(procs[slot].fpu);
     procs[slot].wait_reason = 0;
+    procs[slot].stdout_pipe = stdout_pipe;
     procs[slot].state      = SCHED_READY;
     alive_count++;
     return slot;
@@ -583,6 +590,22 @@ void scheduler_on_exit(int code) {
     // is registered, which is every non-GUI boot.
     win_server_client_gone(current_index + 1);
 
+    // A parent blocked in SYS_WAITPID has to hear about this. Waking
+    // every child-waiter rather than only this one's parent is the
+    // same "name the event, not the waiter" rule the wait reasons
+    // follow -- each woken parent re-checks its own child and parks
+    // again if it was somebody else's that exited.
+    scheduler_wake(SCHED_WAIT_CHILD, SYS_RETRY);
+
+    // Closing the write end is what turns the parent's blocking read
+    // into EOF rather than an indefinite wait. Done here, at exit,
+    // because a process that dies without closing its own stdout is
+    // the normal case, not an error.
+    if (procs[current_index].stdout_pipe >= 0) {
+        pipe_close_writer(procs[current_index].stdout_pipe);
+        procs[current_index].stdout_pipe = -1;
+    }
+
     current_index = -1;
 
     // Continue the rotation from the slot that just exited (which is
@@ -602,7 +625,11 @@ int scheduler_current_pid(void) {
 }
 
 int scheduler_spawn(const char *path, const char *args) {
-    int slot = spawn_from_fs(path, args);
+    return scheduler_spawn_piped(path, args, -1);
+}
+
+int scheduler_spawn_piped(const char *path, const char *args, int pipe_idx) {
+    int slot = spawn_from_fs(path, args, pipe_idx);
     if (slot < 0) return 0;
 
     // Clear any events left over from the previous tenant of this slot.
@@ -612,6 +639,17 @@ int scheduler_spawn(const char *path, const char *args) {
     // new process can ever look at it.
     win_events_reset(slot + 1);
     return slot + 1; // 1-based pid (see scheduler.h)
+}
+
+int scheduler_stdout_pipe(int pid) {
+    if (pid < 1 || pid > MAX_PROCS) return -1;
+    if (procs[pid - 1].state == SCHED_UNUSED) return -1;
+    return procs[pid - 1].stdout_pipe;
+}
+
+int scheduler_pid_valid(int pid) {
+    if (pid < 1 || pid > MAX_PROCS) return 0;
+    return procs[pid - 1].state != SCHED_UNUSED;
 }
 
 enum sched_poll_result scheduler_poll(int pid, int *out_exit_code) {
@@ -635,8 +673,8 @@ enum sched_poll_result scheduler_poll(int pid, int *out_exit_code) {
 }
 
 void scheduler_demo_run(void) {
-    int a = spawn_from_fs("/bin/counter_a", NULL);
-    int b = spawn_from_fs("/bin/counter_b", NULL);
+    int a = spawn_from_fs("/bin/counter_a", NULL, -1);
+    int b = spawn_from_fs("/bin/counter_b", NULL, -1);
     if (a < 0 || b < 0) {
         vga_write("schedtest: failed to spawn one or both counter processes --\n");
         vga_write("were /bin/counter_a and /bin/counter_b seeded onto disk.img?\n");

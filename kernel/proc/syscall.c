@@ -8,6 +8,7 @@
 #include "scheduler.h"
 #include "win_events.h"
 #include "win_server.h"
+#include "pipe.h"
 #include "pmm.h"
 #include "fs.h"
 #include "string.h"
@@ -38,7 +39,7 @@ enum fd_mode { FD_MODE_READ, FD_MODE_WRITE };
 // empty; it exists so a socket slot has *some* member to be valid C,
 // and as the obvious place to grow real per-socket state once a NIC
 // driver exists.
-enum fd_kind { FD_KIND_FILE, FD_KIND_SOCKET };
+enum fd_kind { FD_KIND_FILE, FD_KIND_SOCKET, FD_KIND_PIPE_R, FD_KIND_PIPE_W };
 
 struct open_file {
     int used;
@@ -53,10 +54,38 @@ struct open_file {
         struct {
             int unused_placeholder; // no real socket state yet -- see SYS_SOCKET's doc comment
         } socket;
+        struct {
+            int idx; // index into pipe.c's table
+        } pipe;
     };
 };
 
 static struct open_file fd_table[FD_TABLE_SIZE];
+
+// Slot allocation and lookup, factored out when pipes needed both and
+// found the logic inlined at half a dozen call sites. `fd_lookup()` in
+// particular carries the ownership check that keeps one process from
+// touching another's fds -- having that written once is worth more than
+// the line count saved.
+static int alloc_fd(uint64_t pml4, enum fd_kind kind, int pipe_idx) {
+    for (int i = 0; i < FD_TABLE_SIZE; i++) {
+        if (fd_table[i].used) continue;
+        fd_table[i].used = 1;
+        fd_table[i].owner_pml4 = pml4;
+        fd_table[i].kind = kind;
+        if (kind == FD_KIND_PIPE_R || kind == FD_KIND_PIPE_W) fd_table[i].pipe.idx = pipe_idx;
+        return FD_BASE + i;
+    }
+    return -1;
+}
+
+static struct open_file *fd_lookup(int fd, uint64_t pml4) {
+    int slot = fd - FD_BASE;
+    if (slot < 0 || slot >= FD_TABLE_SIZE) return NULL;
+    struct open_file *f = &fd_table[slot];
+    if (!f->used || f->owner_pml4 != pml4) return NULL;
+    return f;
+}
 
 // SYS_LISTDIR scratch state -- fs_list() (fs.c) takes a plain callback
 // with no context/userdata parameter, so there's nowhere to thread "which
@@ -241,6 +270,13 @@ void syscall_process_exit_cleanup(uint64_t pml4_phys) {
     // below wouldn't reclaim these on its own.
     for (int i = 0; i < FD_TABLE_SIZE; i++) {
         if (fd_table[i].used && fd_table[i].owner_pml4 == pml4_phys) {
+            // A pipe end must be RELEASED, not just forgotten: a
+            // process that dies holding the last write end is exactly
+            // how a reader learns there is no more output coming, and
+            // dropping the reference silently would leave that reader
+            // blocked forever on a dead writer.
+            if (fd_table[i].kind == FD_KIND_PIPE_R) pipe_close_reader(fd_table[i].pipe.idx);
+            else if (fd_table[i].kind == FD_KIND_PIPE_W) pipe_close_writer(fd_table[i].pipe.idx);
             fd_table[i].used = 0;
         }
     }
@@ -338,16 +374,24 @@ void syscall_dispatch(uint64_t *regs) {
         // could never legally read that address itself.
         uint64_t pml4 = vmm_current_pml4();
 
-        if (fd == 1 || fd == 2) { // stdout / stderr -> the console, as before
+        if (fd == 1 || fd == 2) { // stdout / stderr
             if (!vmm_validate_user_range(pml4, buf_ptr, len)) {
                 klog_write("syscall: write() rejected -- invalid buffer pointer\n");
                 regs[14] = (uint64_t)-1; // simplified error indicator (no errno yet)
             } else {
                 const char *buf = (const char *)(uintptr_t)buf_ptr;
-                for (uint64_t i = 0; i < len; i++) {
-                    vga_putc(buf[i]);
+                // A process spawned with SYS_SPAWN's stdout redirection
+                // writes into a pipe instead of the console. That is
+                // what lets a parent READ this output; without it every
+                // child's stdout goes to whatever sink the console has
+                // installed and the parent never sees it.
+                int out_pipe = scheduler_stdout_pipe(scheduler_current_pid());
+                if (out_pipe >= 0) {
+                    regs[14] = (uint64_t)pipe_write(out_pipe, buf, (uint32_t)len);
+                } else {
+                    for (uint64_t i = 0; i < len; i++) vga_putc(buf[i]);
+                    regs[14] = len; // bytes written, back via RAX
                 }
-                regs[14] = len; // return value (bytes written) goes back via RAX
             }
         } else { // a real file, opened via SYS_OPEN
             int slot = fd - FD_BASE;
@@ -386,6 +430,31 @@ void syscall_dispatch(uint64_t *regs) {
         if (len > SYS_WRITE_MAX) len = SYS_WRITE_MAX;
 
         uint64_t pml4 = vmm_current_pml4();
+
+        // A pipe fd reads from the pipe, and BLOCKS when it is empty
+        // with a writer still alive. Handled before the file path
+        // because the two have nothing in common beyond the fd table.
+        struct open_file *pf = fd_lookup(fd, pml4);
+        if (pf && pf->kind == FD_KIND_PIPE_R) {
+            if (!vmm_validate_user_range(pml4, buf_ptr, len)) {
+                klog_write("syscall: read() rejected -- invalid buffer pointer\n");
+                regs[14] = (uint64_t)-1;
+            } else {
+                int64_t n = pipe_read(pf->pipe.idx, (char *)(uintptr_t)buf_ptr, (uint32_t)len);
+                if (n >= 0) {
+                    regs[14] = (uint64_t)n; // bytes, or 0 for EOF
+                } else if (!scheduler_block_current(regs, SCHED_WAIT_PIPE)) {
+                    // Nowhere to park (kernel code or the legacy path).
+                    // Report EOF rather than spinning: a caller that
+                    // cannot block must not be told "try again forever".
+                    regs[14] = 0;
+                } else {
+                    blocked = 1;
+                }
+            }
+            goto read_done;
+        }
+
         int slot = fd - FD_BASE;
         // Same kind check as SYS_WRITE above -- SYS_RECV is the only
         // way to read from a socket fd.
@@ -419,6 +488,8 @@ void syscall_dispatch(uint64_t *regs) {
             fd_table[slot].file.offset += n;
             regs[14] = n;
         }
+    read_done:
+        ;
     } else if (rax == SYS_OPEN) {
         uint64_t pml4 = vmm_current_pml4();
 
@@ -485,6 +556,11 @@ void syscall_dispatch(uint64_t *regs) {
             fd_table[slot].owner_pml4 != pml4) {
             regs[14] = (uint64_t)-1;
         } else {
+            // A pipe end is reference counted, unlike a file or socket
+            // fd: closing the LAST writer is what turns a blocked
+            // reader's wait into EOF, so this cannot just clear `used`.
+            if (fd_table[slot].kind == FD_KIND_PIPE_R) pipe_close_reader(fd_table[slot].pipe.idx);
+            else if (fd_table[slot].kind == FD_KIND_PIPE_W) pipe_close_writer(fd_table[slot].pipe.idx);
             fd_table[slot].used = 0;
             regs[14] = 0;
         }
@@ -770,6 +846,104 @@ void syscall_dispatch(uint64_t *regs) {
         } else {
             vga_set_color((enum vga_color)rdi, (enum vga_color)rsi);
             regs[14] = 1;
+        }
+    } else if (rax == SYS_PIPE) {
+        uint64_t pml4 = vmm_current_pml4();
+        if (!vmm_validate_user_range(pml4, rdi, sizeof(int) * 2)) {
+            klog_write("syscall: pipe() rejected -- invalid user pointer\n");
+            regs[14] = (uint64_t)-1;
+        } else {
+            int idx = pipe_create();
+            int rfd = idx >= 0 ? alloc_fd(pml4, FD_KIND_PIPE_R, idx) : -1;
+            int wfd = rfd >= 0 ? alloc_fd(pml4, FD_KIND_PIPE_W, idx) : -1;
+            if (idx < 0 || rfd < 0 || wfd < 0) {
+                // Unwind rather than leak. A half-made pipe with only
+                // one end is worse than none: the caller cannot tell,
+                // and would block forever on the end that is missing.
+                if (rfd >= 0) fd_table[rfd - FD_BASE].used = 0;
+                if (idx >= 0) { pipe_close_reader(idx); pipe_close_writer(idx); }
+                klog_write("syscall: pipe() failed -- no free pipe or fd\n");
+                regs[14] = (uint64_t)-1;
+            } else {
+                int *out = (int *)(uintptr_t)rdi;
+                out[0] = rfd;
+                out[1] = wfd;
+                regs[14] = 1;
+            }
+        }
+    } else if (rax == SYS_SPAWN) {
+        uint64_t pml4 = vmm_current_pml4();
+        int spawn_rc = -1;
+        if (!vmm_validate_user_range(pml4, rdi, FS_PATH_MAX)) {
+            klog_write("syscall: spawn() rejected -- invalid path pointer\n");
+        } else {
+            const char *path = (const char *)(uintptr_t)rdi;
+            const char *args = 0;
+            if (rsi && vmm_validate_user_range(pml4, rsi, 1)) args = (const char *)(uintptr_t)rsi;
+
+            // Resolve the caller's write-end fd to a pipe index. An fd
+            // that isn't this process's own write end is REFUSED rather
+            // than quietly ignored: spawning with console output
+            // instead would leave the parent blocked on a pipe nothing
+            // will ever write to.
+            int stdout_pipe = -1;
+            int ok = 1;
+            int64_t wfd = (int64_t)rdx;
+            if (wfd >= 0) {
+                struct open_file *f = fd_lookup((int)wfd, pml4);
+                if (!f || f->kind != FD_KIND_PIPE_W) {
+                    klog_write("syscall: spawn() rejected -- stdout fd isn't this process's pipe write end\n");
+                    ok = 0;
+                } else {
+                    stdout_pipe = f->pipe.idx;
+                    // The child becomes a SECOND writer; the parent
+                    // keeps its own. Without this the parent closing
+                    // its copy would signal EOF while the child is
+                    // still producing output.
+                    pipe_add_writer(stdout_pipe);
+                }
+            }
+            if (ok) {
+                int pid = scheduler_spawn_piped(path, args, stdout_pipe);
+                if (pid == 0 && stdout_pipe >= 0) pipe_close_writer(stdout_pipe); // undo
+                spawn_rc = pid > 0 ? pid : -1;
+            }
+        }
+        regs[14] = (uint64_t)(int64_t)spawn_rc;
+    } else if (rax == SYS_WAITPID) {
+        uint64_t pml4 = vmm_current_pml4();
+        int pid = (int)rdi;
+        int *out = 0;
+        int bad = 0;
+        if (rsi) {
+            if (!vmm_validate_user_range(pml4, rsi, sizeof(int))) {
+                klog_write("syscall: waitpid() rejected -- invalid out pointer\n");
+                bad = 1;
+            } else {
+                out = (int *)(uintptr_t)rsi;
+            }
+        }
+        if (bad || !scheduler_pid_valid(pid)) {
+            regs[14] = (uint64_t)-1;
+        } else {
+            int code = 0;
+            enum sched_poll_result r = scheduler_poll(pid, &code);
+            if (r == SCHED_POLL_EXITED) {
+                if (out) *out = code;
+                regs[14] = (uint64_t)(int64_t)pid;
+            } else if (r == SCHED_POLL_INVALID) {
+                regs[14] = (uint64_t)-1;
+            } else {
+                // Still running: park. Interrupts are off for the whole
+                // handler, so "still running" and "park" are atomic
+                // against the exit that would wake us -- the same
+                // lost-wakeup argument as SYS_WAIT_EVENT.
+                if (!scheduler_block_current(regs, SCHED_WAIT_CHILD)) {
+                    regs[14] = (uint64_t)-1; // nowhere to park
+                } else {
+                    blocked = 1;
+                }
+            }
         }
     } else if (rax == SYS_WIN_REQUEST) {
         uint64_t pml4 = vmm_current_pml4();

@@ -321,9 +321,37 @@ once this exists.*
 - [ ] Exit-status visible to a waiting parent
 - [ ] Userspace signal handlers -- a trampoline that returns through the
       kernel, not just default dispositions
-- [ ] Ctrl-C in the keyboard driver raising SIGINT on the foreground
-      process (needs Milestone 7's TTY layer to know what "foreground"
-      means)
+- [ ] **Ctrl-C interrupting a running program**, the way it works in a
+      Linux shell. Broken out because it is the signal feature people
+      actually miss, and because the prerequisite chain turns out to be
+      SHORTER than this file assumed -- see the Details entry below.
+      The requirements, smallest first:
+      - [ ] `SYS_KILL(pid, sig)` -- a ring-3 process can signal another.
+            Needs a per-process pending-signal field on
+            `struct sched_process`, which `scheduler_tick()` checks.
+      - [ ] A default disposition of TERMINATE, applied at a safe point
+            (the next tick or syscall return, never mid-handler), which
+            must tear the process down through the SAME path a normal
+            exit takes -- zombie + exit code -- so the parent's
+            `scheduler_poll()`/wait sees a result rather than a
+            vanished pid.
+      - [ ] A distinguishable exit status, so a shell can print
+            "Interrupted" rather than reporting a clean exit.
+      - [ ] The foreground concept. **This does NOT need Milestone 7's
+            full TTY layer** once the terminal is a ring-3 process that
+            spawns its own children (Milestone 41): the terminal knows
+            its own child's pid, so "the foreground process" is the
+            terminal's own state. A kernel TTY is needed for the
+            PHYSICAL shell's Ctrl-C, and for job control (`fg`/`bg`,
+            Milestone 12) -- not for this.
+      - [ ] Nothing in the keyboard driver. Ctrl already reaches apps as
+            a control code (0x03), see `keyboard.h`'s "Ctrl and Alt"
+            note -- a ring-3 terminal receives `^C` as an ordinary key
+            event today and simply has nothing to do with it yet.
+      - [ ] Userspace handlers (a `signal()`-style trampoline that
+            returns through the kernel) are explicitly NOT required for
+            Ctrl-C and should not gate it -- terminate-by-default is
+            the whole behaviour most programs want.
 - [ ] SIGSEGV/SIGILL delivered to the process instead of the kernel
       tearing it down unconditionally
 - [ ] SIGCHLD on child exit
@@ -646,9 +674,45 @@ guess.*
 ### Milestone 24 -- Runtime + interop (planned v0.24.0)
 
 - [ ] Inter-process IPC (message passing)
-- [ ] Real C library (CRT0, TLS, FPU/SSE, malloc/free -- today's only
-      ring-3 allocator, `SYS_SBRK`, is bump-only/grow-only with no
-      free-list allocator built on top of it anywhere)
+- [ ] **A real C library.** Partly started: `userland/crt0.asm` and
+      `userland/sys.c` (libsys) landed with the ring-3 GUI work, so a
+      program is already just a `main()` over typed syscall wrappers.
+      What a *libc* still needs on top of that, in dependency order:
+      - [x] ~~crt0: `_start`, argc/argv/envp off a SysV stack, call
+            `main()`, exit with its return value~~ -- done.
+      - [x] ~~A syscall layer with one definition per call~~ -- done
+            (`userland/sys.h`). A libc sits ON this, not instead of it.
+      - [ ] `malloc`/`free`/`realloc`. `SYS_SBRK` is the only
+            allocator-adjacent syscall and is grow-only with no
+            free-list on top anywhere. A first cut is the kernel's own
+            `kernel/mm/heap.c` design (it already coalesces by address
+            adjacency) rebuilt over sbrk -- or compiled for userland via
+            the shared-source rule, if it can be made allocator-agnostic.
+      - [ ] `string.h`/`mem*`. Mostly free: `kernel/lib/string.c` is
+            freestanding and already compiles for userland through
+            `build/userland/shared/`. What's missing is the standard
+            NAMES (`strlen` vs `k_strlen`), which is a thin header, not
+            an implementation.
+      - [ ] `stdio`: `printf`/`snprintf` first (`kernel/lib/kfmt.c` is
+            the same story as string.c), then a buffered `FILE` layer
+            over the fd syscalls. Buffering is the part with real
+            design in it -- unbuffered `printf` is one syscall per call.
+      - [ ] `errno`. Syscalls return 0/-1/a count today with no shared
+            vocabulary for *why*; this is listed separately below and is
+            a prerequisite for a libc that reports failures usefully.
+      - [ ] TLS (FS.base) -- needed for a per-thread `errno` and for
+            GCC's default stack-protector guard. This is why
+            `-mstack-protector-guard=global` is used today, which is a
+            real workaround rather than a preference (`docs/decisions.md`).
+      - [ ] `atexit`/`exit` split: crt0 currently calls `sys_exit()`
+            directly and says so. A libc interposes `exit()` to run
+            handlers and flush stdio -- that ONE line in `crt0.asm` is
+            the whole change, and the layering is already shaped for it.
+      - [ ] Decide the target before building much of it: our own
+            POSIX-shaped libc, or enough Linux syscall-ABI compatibility
+            to run stock musl binaries. Milestone 40 owns that decision
+            and it changes what "done" means here. The SysV entry ABI
+            landing already removed one obstacle to the musl route.
 - [ ] FAT16/FAT32 driver
 - [ ] `g_next_kernel_rsp` reentrancy fixed properly
 - [ ] `wintest` made non-modal
@@ -1649,9 +1713,40 @@ its own"). A first rough breakdown:
 - A `kill`/`ps`-style shell command -- list running processes
   (`scheduler.c`'s `procs[]` table has this info already, just not
   exposed) and send them a signal.
-- Exit-status visible to a waiting parent -- shares its underlying gap
-  with Milestone 9's `wait()` item (today's `scheduler_on_exit()` doesn't
-  track the exit code at all).
+- Exit-status visible to a waiting parent -- largely closed already:
+  `scheduler_on_exit()` records the code and holds the slot as a
+  SCHED_ZOMBIE until `scheduler_poll()` reaps it (Milestone 1 phase 4b).
+  What is missing is a ring-3-visible `wait()`, not the bookkeeping.
+
+**Ctrl-C specifically, because it is the feature people actually miss,
+and because this file used to overstate what it needs.**
+
+The long-standing claim was that SIGINT needs Milestone 7's TTY layer,
+on the reasoning that "deliver SIGINT to the foreground process" is
+meaningless without a foreground process. That is true for the PHYSICAL
+shell, and it is true for job control (`fg`/`bg`). It is NOT true once
+the terminal is a ring-3 process that spawns its own children
+(Milestone 41): such a terminal knows its child's pid because it asked
+for it, so "the foreground process" is the terminal's own state and
+needs no kernel concept at all.
+
+What Ctrl-C actually requires, then:
+
+- A `kill`-equivalent syscall and a per-process pending-signal flag the
+  scheduler checks. This is the only new kernel mechanism.
+- A TERMINATE default disposition applied at a safe point -- the next
+  tick or a syscall return, never mid-handler -- and routed through the
+  same teardown a normal exit uses, so the parent still gets a reaped
+  result rather than a pid that disappears.
+- An exit status a shell can distinguish from a clean exit, so it can
+  say "Interrupted".
+- Nothing in the keyboard driver: Ctrl already arrives as a control
+  code (`keyboard.h`), so a ring-3 terminal receives `^C` today and
+  simply has nowhere to send it.
+
+Userspace signal handlers are a separate, larger item and must not gate
+this: terminate-by-default is the behaviour nearly every program wants
+from Ctrl-C, and shipping that first is what makes the shell usable.
 
 ### Milestone 11 -- Crash reporting & postmortem debugging
 
