@@ -35,6 +35,7 @@ there when you add an entry, or the index quietly stops being one.
 - [The windowing protocol is one syscall carrying typed messages, not a syscall per operation](#the-windowing-protocol-is-one-syscall-carrying-typed-messages-not-a-syscall-per-operation)
 - [A client window's close button is a handshake, not a seizure](#a-client-windows-close-button-is-a-handshake-not-a-seizure)
 - [Ring-3 clients draw for themselves, and the font is shared read-only](#ring-3-clients-draw-for-themselves-and-the-font-is-shared-read-only)
+- [Calculator's engine is shared source compiled twice, not copied](#calculators-engine-is-shared-source-compiled-twice-not-copied)
 - [Stack canaries: `-mstack-protector-guard=global` and a fixed constant, not GCC's defaults](#stack-canaries--mstack-protector-guardglobal-and-a-fixed-constant-not-gccs-defaults)
 - [NX enforcement scoped to userspace only -- the kernel's own identity map stays RWX](#nx-enforcement-scoped-to-userspace-only----the-kernels-own-identity-map-stays-rwx)
 - [The serial debug console is poll-based from existing idle loops, not a new kernel thread](#the-serial-debug-console-is-poll-based-from-existing-idle-loops-not-a-new-kernel-thread)
@@ -2599,9 +2600,46 @@ within the mapping; and the tables are coverage maps, not bitmasks, so
 same letters visibly jagged).
 
 The boundary this stops at: `ugfx` is a drawing runtime, not a widget
-toolkit. `apps/ui/`'s widgets are still ring-0-only, which is what a
-real app like Calculator is built from -- see `docs/roadmap.md`'s
-Milestone 41.
+toolkit. The widgets Calculator needs were ported separately into
+`userland/uui.c` -- see the next entry.
+
+## Calculator's engine is shared source compiled twice, not copied
+
+`userland/calculator.c` is a port of `apps/calculator.c`, but
+`apps/calc_engine.c` is NOT ported. The same file is compiled a second
+time with `USERLAND_CFLAGS` (Makefile, `build/userland/shared/`) and
+linked into the ring-3 binary. `kernel/lib/string.c` and `knum.c` ride
+the same path.
+
+Why a second compile rather than reusing the object: the kernel builds
+with `-mcmodel=kernel` and a ring-3 ELF with `-mcmodel=large`, linking
+at `VMM_USER_BASE`. The objects are not interchangeable, so rebuilding
+is the only way to share the SOURCE — and sharing the source is the
+whole point. A bug fixed in the engine fixes both copies of the app,
+because there is only one engine. Two hand-synced copies of arithmetic
+would have been the worst possible outcome of this migration.
+
+The rule for putting a file on that path: it must be freestanding.
+`calc_engine.c` needs only `string.h` and `knum.h`, which need only
+`<stddef.h>`/`<stdint.h>`. A file that reaches for kernel state does
+not qualify, and the `-Iapps` that lets `calculator.c` see
+`calc_engine.h` is scoped to that one object with a target-specific
+variable so no other userland program gains the ability to include
+`apps/` headers.
+
+What was deliberately NOT shared: the presentation layer.
+`ui_button_group` became `uui_button_group` (`userland/uui.c`), because
+the kernel version draws through `gfx_*` straight to the framebuffer
+and takes its events as WM callbacks — neither of which exists in ring
+3. That is a genuine port, and its behaviour (commit-on-release,
+luminance-derived hover direction) was carried over deliberately rather
+than reinvented; see `uui.h`.
+
+The kernel-space Calculator is still there on purpose. Keeping both is
+what made the migration verifiable — the two were compared side by
+side, and the shared engine means they cannot disagree about
+arithmetic. Retiring the old one is a separate decision
+(`docs/roadmap.md`, Milestone 41).
 
 ## `strace` traces an address space, and prints each line after the handler returns
 

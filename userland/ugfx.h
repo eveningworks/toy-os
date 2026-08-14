@@ -77,4 +77,30 @@ int ugfx_text_width(const char *str);
 void ugfx_draw_string(struct ugfx_surface *s, int x, int y,
                        const char *str, uint32_t color, uint32_t bg);
 
+// Same, but also stops at `max_w` pixels from `x` -- for a label inside
+// a control of known width. Returns 1 if the whole string fitted, 0 if
+// it was cut short, so a caller can react (shorten, ellipsise) rather
+// than silently overflowing its own layout.
+int ugfx_draw_string_clipped(struct ugfx_surface *s, int x, int y, int max_w,
+                              const char *str, uint32_t color, uint32_t bg);
+
+// --- colour ----------------------------------------------------------
+//
+// The kernel's gfx.c equivalents decode the framebuffer's actual pixel
+// format at runtime (channel positions and widths vary by mode). These
+// don't need to: a client's window buffer is 32bpp 0xRRGGBB by protocol
+// definition (abi/win_proto.h), so the layout is fixed and known at
+// compile time. Simpler, and correct for the only format a client ever
+// sees.
+
+uint32_t ugfx_rgb(uint8_t r, uint8_t g, uint8_t b);
+
+// `under` mixed toward `over` by `alpha`/255.
+uint32_t ugfx_blend(uint32_t under, uint32_t over, uint8_t alpha);
+
+// Perceived brightness, 0..255. Used to decide which WAY to shift a
+// colour for a hover/pressed state -- see uui.h, where getting this
+// backwards produced a hover nobody could see.
+uint8_t ugfx_luminance(uint32_t color);
+
 #endif

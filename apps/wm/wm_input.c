@@ -187,6 +187,17 @@ void wm_handle_left_click(int mx, int my) {
             if (windows[fi].app && windows[fi].app->on_press) {
                 content_pressed = fi;
                 windows[fi].app->on_press(&windows[fi], ccx, ccy);
+            } else if (wm_client_is_client_window(&windows[fi])) {
+                // A client has no on_press callback -- it does its own
+                // press logic from the message. But content_pressed is
+                // what routes the subsequent drag-tracking moves and
+                // the RELEASE to this window, so it still has to be
+                // set, or the client would receive a MOUSE_DOWN that
+                // is never followed by a MOUSE_UP and could never
+                // commit a click. That is exactly the bug this line
+                // fixes: keyboard input worked and mouse input did
+                // not.
+                content_pressed = fi;
             }
             // A ring-3 client gets the same event as a message instead
             // of a callback. It has no on_click/on_press distinction --
@@ -384,8 +395,18 @@ void wm_update_drag_resize(int mx, int my, uint8_t buttons) {
                 int ccy = my - window_content_y(w);
                 if (w->app->on_press(w, ccx, ccy)) redraw_pending = 1;
             }
+            // A client gets the drag as MOUSE_MOVE with the button
+            // held, which is what lets its widgets re-hit-test and
+            // "un-press" when the cursor slides off a control -- the
+            // same behaviour on_press gives a kernel app.
+            wm_client_send_mouse(w, WIN_EV_MOUSE_MOVE, mx, my, 1);
         } else {
             if (w->app && w->app->on_release) w->app->on_release(w);
+            // The release is what COMMITS a click, for a client exactly
+            // as for an app: a press dragged off its control has
+            // already been cleared by the moves above, so this makes it
+            // correctly do nothing (docs/gui-guidelines.md).
+            wm_client_send_mouse(w, WIN_EV_MOUSE_UP, mx, my, 0);
             content_pressed = -1;
             redraw_pending = 1;
         }
@@ -505,12 +526,22 @@ void wm_update_content_hover(int mx, int my, uint8_t buttons) {
             if (prev->app && prev->app->on_hover) {
                 if (prev->app->on_hover(prev, -1, -1)) redraw_pending = 1;
             }
+            // Same "you are being left" signal for a client. Sent as a
+            // move to (-1,-1) in its own coordinates, which its widgets
+            // hit-test as "nothing" and clear their highlight from --
+            // no special case needed on either side.
+            if (wm_client_is_client_window(prev)) {
+                wm_client_send_mouse(prev, WIN_EV_MOUSE_MOVE,
+                                      window_content_x(prev) - 1,
+                                      window_content_y(prev) - 1, 0);
+            }
         }
         content_hover_win = now;
     }
 
     if (now < 0) return;
     struct window *w = &windows[now];
+    wm_client_send_mouse(w, WIN_EV_MOUSE_MOVE, mx, my, 0); // no-op for an app window
     if (!w->app || !w->app->on_hover) return;
     int ccx = mx - window_content_x(w);
     int ccy = my - window_content_y(w);

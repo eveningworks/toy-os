@@ -138,3 +138,54 @@ void ugfx_draw_string(struct ugfx_surface *s, int x, int y,
         }
     }
 }
+
+int ugfx_draw_string_clipped(struct ugfx_surface *s, int x, int y, int max_w,
+                              const char *str, uint32_t color, uint32_t bg) {
+    if (!s || !str || !g_glyphs || max_w <= 0) return 0;
+
+    // How many WHOLE glyphs fit. Whole glyphs rather than a pixel clip:
+    // half a letter reads as a rendering bug, while a short label just
+    // reads as a short label.
+    int fits = max_w / (g_char_w > 0 ? g_char_w : 1);
+    int len = 0;
+    while (str[len]) len++;
+
+    if (fits >= len) {
+        ugfx_draw_string(s, x, y, str, color, bg);
+        return 1;
+    }
+
+    // Draw only what fits, a glyph at a time -- there is no truncated
+    // copy of the string because there is nowhere to put one (a client
+    // has no allocator), and a fixed scratch buffer would just move the
+    // length limit somewhere less obvious.
+    for (int n = 0; n < fits; n++) {
+        char one[2];
+        one[0] = str[n];
+        one[1] = '\0';
+        ugfx_draw_string(s, x + n * g_char_w, y, one, color, bg);
+    }
+    return 0;
+}
+
+uint32_t ugfx_rgb(uint8_t r, uint8_t g, uint8_t b) {
+    return ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+}
+
+uint32_t ugfx_blend(uint32_t under, uint32_t over, uint8_t alpha) {
+    uint32_t out = 0;
+    for (int shift = 0; shift <= 16; shift += 8) {
+        uint32_t u = (under >> shift) & 0xFF;
+        uint32_t o = (over >> shift) & 0xFF;
+        uint32_t v = (u * (255u - alpha) + o * alpha) / 255u;
+        out |= (v & 0xFF) << shift;
+    }
+    return out;
+}
+
+uint8_t ugfx_luminance(uint32_t color) {
+    // Rec. 601 weights, /256 -- the same ones gfx.c uses, so a client's
+    // idea of "is this colour light or dark" matches the desktop's.
+    uint32_t r = (color >> 16) & 0xFF, g = (color >> 8) & 0xFF, b = color & 0xFF;
+    return (uint8_t)((r * 77 + g * 150 + b * 29) / 256);
+}
