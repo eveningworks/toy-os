@@ -32,6 +32,76 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
 ## [Unreleased]
 
 ### Added
+- **A ring-3 window client can draw real text, with the desktop's own
+  font.** Stage 4 of Milestone 41: the userland drawing runtime, and
+  the piece that turns "a process owns a window" into "a process can
+  look like an application".
+
+  **`userland/ugfx.c`/`.h` -- the userland counterpart to `gfx.c`,** and
+  deliberately much smaller: rectangles, glyph-accurate anti-aliased
+  text, and the metrics to lay them out, all as plain arithmetic over
+  the client's own window buffer. There are **no syscalls in the
+  drawing path** -- a client redraws at memory speed and only crosses
+  into the kernel to say `WIN_REQ_PRESENT`. The alternative, a "draw
+  text" syscall, would have put every client's rendering back inside
+  the kernel, which is the thing this milestone is moving away from.
+  Drawing isn't privileged; only the framebuffer is.
+
+  **The font is mapped read-only rather than copied
+  (`WIN_REQ_FONT`).** The baked glyph tables are ~11,800 lines in
+  `kernel/drivers/font_ttf.c`, and they are ordinary kernel `.rodata`
+  that this kernel already identity-maps -- so sharing them is just
+  pointing more PTEs at the same frames. No copy, one instance in
+  memory however many clients ask, and, more importantly, a client's
+  text **cannot drift from the desktop's**: link a copy into each
+  binary instead and a client keeps rendering at the old size after
+  `font_size` changes. Read-only is load-bearing rather than tidiness
+  -- these are pages of the kernel image, and a writable mapping would
+  let any client scribble on kernel `.rodata`.
+
+  Two details that would have produced convincing-looking garbage if
+  got wrong, both now pinned down in the ABI: the glyph data does not
+  start on a page boundary, so `WIN_REQ_FONT` returns the offset of
+  glyph 0 within the mapping (ignoring it shifts every glyph by a few
+  bytes); and the tables are coverage maps, not masks, so `ugfx` blends
+  per pixel -- a `> 128` threshold would render the same letters
+  visibly jagged.
+
+  `ugfx_draw_string()` **clips**, unlike the kernel's
+  `gfx_draw_string()`, whose not clipping is a documented trap that has
+  caused the identical overlap bug twice (`docs/gui-guidelines.md`).
+  There was no reason to reproduce that in a new API.
+
+  **`userland/uiclient.c`** is the app-shaped client: a titled window
+  with two text lines, a labelled button, and a counter that responds
+  to clicks and keys -- rendered entirely by the ring-3 process, with
+  the kernel only compositing finished pixels. Alongside
+  `winclient.c`, which stays as the minimal flat-colour protocol demo.
+
+  Verified:
+  - **`tools/uiclient_test.py`** (new), 8 checks, all passing: the
+    window opens, text actually rendered, the button drew as a filled
+    control, a click and a key each repaint the counter, the unchanged
+    label comes back identical, and the close handshake works.
+    "Text was rendered" is asserted as INK COVERAGE in a band -- a run
+    of anti-aliased glyphs puts a countable number of non-background
+    pixels in its row range, while a failure leaves the band uniform.
+    That distinguishes real text from both a blank window and a solid
+    fill, which a single-pixel sample cannot.
+  - Worth knowing for the next test written here: a client's `stdout`
+    goes to the owning Terminal's scrollback via `vga_putc()`'s active
+    sink, **not** to the serial console -- so `DebugConsole.logs()`
+    cannot see a client's log lines, even though the same syscall from
+    a shell-spawned process would be visible. The test's assertions are
+    pixel-based for that reason.
+  - `winclient_test.py` 8/8 and `damage_sweep.py` 27/0 still pass,
+    `preflight.sh` PASS with 89 KTESTs.
+  - Screenshot: `screenshots/2026-08-14/ring3-uiclient-text.png`.
+
+  Not done, and the honest boundary: this is a drawing runtime, not a
+  widget toolkit. Porting `apps/ui/`'s widgets (so Calculator itself
+  could move to `userland/`) is the next increment and is tracked in
+  `docs/roadmap.md` -- `ugfx` is the layer such a port would sit on.
 - **A ring-3 process can own a real window on the desktop.** Stage 3 of
   Milestone 41, and the point the whole milestone was aimed at: a
   window in the window manager's own window list, with ordinary chrome,

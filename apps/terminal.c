@@ -179,7 +179,8 @@ static int is_blocked_command(const char *cmd) {
 // which never arrives), `gui_test`/`win_test` (framebuffer/own-window
 // takeover, same hazard `gui` above has), `counter_a`/`counter_b`
 // (infinite-loop-by-design demo processes for `schedtest`, not real
-// commands -- see scheduler.c). `winclient` is a deliberate exception
+// commands -- see scheduler.c). `winclient` and `uiclient` are
+// deliberate exceptions
 // to the "must return on its own" rule: it opens a real client window
 // on the desktop and runs until that window is closed, which is the
 // whole point of it -- it is the demonstration that a ring-3 process
@@ -203,7 +204,7 @@ static int is_blocked_command(const char *cmd) {
 static const char *const RUN_ALLOWED_BINS[] = {
     "crash_test", "exit_test", "file_test", "hello", "lspci",
     "newsyscalls_test", "nx_test", "socket_test", "spin_test",
-    "winclient", "write_bad_test", "write_test",
+    "uiclient", "winclient", "write_bad_test", "write_test",
 };
 #define RUN_ALLOWED_COUNT (sizeof(RUN_ALLOWED_BINS) / sizeof(RUN_ALLOWED_BINS[0]))
 

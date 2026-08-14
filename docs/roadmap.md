@@ -1135,8 +1135,22 @@ Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
 - [ ] A bigger process table and a growable user stack (4 slots and a
       single 4KB page today -- both bind immediately once apps are
       processes)
+- [x] ~~A userland drawing runtime, so a client can render more than
+      flat colour~~ -- done: `userland/ugfx.c` (rects, anti-aliased
+      text, metrics), with the desktop's font mapped READ-ONLY via
+      `WIN_REQ_FONT` rather than copied into each binary. See
+      `CHANGELOG.md`; `userland/uiclient.c` is the app-shaped client
+      built on it.
+- [ ] Port `apps/ui/`'s widget set to userland on top of `ugfx`. This
+      is what "migrate Calculator" actually requires and it is the
+      reason that item is not just a file move: Calculator is built out
+      of `ui_button_group`/`ui_focus`/theme colours, none of which
+      exist in ring 3. Decide while porting whether the widgets become
+      a shared userland library or get statically linked per client --
+      the same question the font already answered, and the font's
+      answer (share it, one copy, no drift) is the precedent.
 - [ ] Migrate one real app (Calculator first: self-contained, no fs) to
-      `userland/` as the proof
+      `userland/` as the proof -- blocked on the widget port above
 - [ ] ELF loader hardening -- `elf_load()` isn't told the file's size,
       so `p_offset`/`p_filesz` are unbounded and `p_vaddr` unchecked.
       Tolerable while every binary is one we built; not once loading
@@ -2578,11 +2592,12 @@ comment.
   (modal, outside the window list); new clients use `SYS_WIN_REQUEST`.
 - **4-process table, one 4KB stack page, no growth, no IPC, no
   `fork`/`exec`.**
-- **Drawing lives in the kernel** -- `gfx.c`, `apps/ui/` and the
-  11,800-line baked font are all ring-0. A ring-3 app has no way to
-  draw text today short of doing it itself, byte by byte. This is the
-  single biggest item in moving the server out later, which is exactly
-  why C keeps that option open rather than pretending it's cheap.
+- **Drawing lived in the kernel** -- half addressed. `userland/ugfx.c`
+  now gives a client rectangles and real anti-aliased text, with the
+  font mapped read-only from the kernel's own tables (`WIN_REQ_FONT`)
+  rather than duplicated. What is still ring-0-only is `apps/ui/`'s
+  WIDGET set, which is what a real app like Calculator is actually
+  built from -- see the widget-port item above.
 
 **ELF loader hardening belongs here**, not to a security milestone:
 `elf_load()` is never told the file's size (`elf_run_from_fs()` has it
