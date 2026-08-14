@@ -152,6 +152,10 @@ static const char *const BLOCKED_CMDS[] = {
     // so it freezes this window's event loop exactly the way `run`
     // used to before its async path existed. Same refusal, same reason.
     "gui", "ring3test", "schedtest", "strace",
+    // Reformats the disk and remounts a (possibly different)
+    // filesystem out from under every open window -- physical shell
+    // only, same spirit as `gui`.
+    "fsformat",
 };
 #define BLOCKED_CMD_COUNT (sizeof(BLOCKED_CMDS) / sizeof(BLOCKED_CMDS[0]))
 

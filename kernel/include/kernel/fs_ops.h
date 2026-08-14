@@ -2,7 +2,7 @@
 #define FS_OPS_H
 
 #include <stdint.h>
-#include "fs.h" // struct fs_timestamps, for .stat below
+#include "fs.h" // struct fs_stat_info + FS_CAP_* bits, for .stat/.caps below
 
 // The VFS backend interface -- fs.h's public fs_* API (kapi.h's stable
 // surface, unchanged by any of this) is implemented by vfs.c as a thin
@@ -36,13 +36,44 @@
 // different path rules -- e.g. case-insensitivity, a different max
 // length).
 struct fs_ops {
-    const char *name; // short identifier, e.g. "tfs" -- diagnostic only
+    const char *name; // short identifier, e.g. "tfs2" -- fs_backend_name() reports it
 
-    // Called once, from fs_init(). Returns 1 if this backend found (or
-    // formatted) real persistent storage and every mutating call below
-    // is being written through to it, 0 if it's falling back to
-    // RAM-only behavior (files vanish on reboot) -- same meaning as
-    // fs_is_persistent()'s doc comment in fs.h, just per-backend here.
+    // FS_CAP_* bits (fs.h) this backend's FORMAT genuinely supports.
+    // Same contract as display.h's caps field: one fact stated twice
+    // (the bit, and -- once optional ops exist -- the matching function
+    // pointer), with the probe loop in vfs.c refusing a backend whose
+    // two statements disagree. Today every op below is required, so
+    // the honesty check has nothing optional to cross-check yet; it
+    // starts biting with the first optional op (planned: link()).
+    uint32_t caps;
+
+    // Detection only -- read this backend's superblock location and
+    // judge it. NEVER formats, never mounts, no side effects beyond
+    // the read. Only called when a disk is actually present (vfs.c
+    // owns ata_init()/ata_present() sequencing). Returns:
+    //   1  this is my filesystem (magic + version + validation passed)
+    //   0  readable, but not mine (blank or foreign bytes)
+    //  -1  could not read the superblock at all -- vfs.c treats this
+    //      as "refuse to touch the disk" (the data-loss lesson in
+    //      tfs.c's init comment), never as "blank, go format"
+    int (*probe)(void);
+
+    // Write a fresh, empty filesystem to the disk. Does NOT mount it
+    // (fs_init()/fs_format_backend() call init() after). Returns 1 on
+    // success, 0 on failure (too-small disk, write errors). Only
+    // called deliberately: from the blank/foreign-disk policy in
+    // fs_init(), or from the user-facing `fsformat` command -- a
+    // backend never formats on its own initiative anymore.
+    int (*format)(void);
+
+    // Called once this backend is chosen, from fs_init(). Mounts what
+    // probe() claimed (or format() just wrote) and returns 1 if every
+    // mutating call below is written through to real persistent
+    // storage, 0 if it's falling back to RAM-only behavior (files
+    // vanish on reboot) -- same meaning as fs_is_persistent()'s doc
+    // comment in fs.h, just per-backend here. Re-validates the disk
+    // itself (probe()'s answer isn't carried over) so it degrades
+    // safely even if the disk changed between the two calls.
     int (*init)(void);
 
     int (*touch)(const char *path);
@@ -84,7 +115,7 @@ struct fs_ops {
     int (*is_dir)(const char *path);
     int (*exists)(const char *path);
     void (*list)(const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir));
-    int (*stat)(const char *path, struct fs_timestamps *out); // see fs.h's fs_stat()
+    int (*stat)(const char *path, struct fs_stat_info *out); // see fs.h's fs_stat() -- ino + epoch times, converted by the backend if its format stores something else
 
     // Backs fs_disk_usage() -- see fs.h's doc comment for the
     // byte-scaled, metadata-excluded contract every backend must

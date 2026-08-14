@@ -1874,6 +1874,60 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
     format change. Partition mounting itself stays deliberately
     unbuilt (new "Volumes and partitions" section).
 
+- **The VFS selects filesystems by probe now -- Stage A of the TFS3
+  plan: multi-backend infrastructure, live-tested with TFS2 alone.**
+  TFS2's on-disk format is byte-for-byte unchanged; everything below
+  is kernel-side shape, built so the TFS3 backend drops into a ready
+  slot.
+  - **`fs_ops` grew `caps` + `probe()` + `format()`** (`fs_ops.h`).
+    probe() is detection only -- read the superblock, judge it, never
+    format -- returning claim / not-mine / unreadable as three
+    distinct answers. format() writes a fresh filesystem and is only
+    ever called deliberately. The caps bitmask (`FS_CAP_INODES/
+    HARDLINKS/SYMLINKS/EPOCH_TIME`, in `fs.h`) mirrors
+    `display_driver`'s rule: a capability and its optional op are one
+    fact stated twice, refused when they disagree -- the honesty
+    check runs now and starts biting when the first optional op
+    (`link()`, Stage C) exists. `tfs2` declares `caps = 0`, honestly.
+  - **`vfs.c` owns selection policy** (mirroring
+    `display.c`'s probe loop): `ata_init()` once, walk the backend
+    list, mount the first claim. Nobody claims a READABLE disk →
+    format with the default backend, deliberately, here -- the
+    auto-format-on-foreign-disk else-branch is gone from
+    `tfs_init()`, which now leaves an unrecognized disk untouched and
+    degrades loudly. An UNREADABLE superblock still refuses
+    everything (the data-loss lesson, now enforced at the policy
+    level too). New accessors: `fs_backend_name()`,
+    `fs_capabilities()`, `fs_has()`.
+  - **`fs_stat()` is canonical now**: `struct fs_stat_info { ino,
+    created, modified }` replaces `fs_timestamps` -- epoch seconds
+    (local-derived, honestly documented as such) instead of broken-down
+    civil time, plus a stable identity number. TFS2 reports its table
+    slot as a synthetic ino (the Linux-for-FAT trick) and converts its
+    stored 7-byte civil timestamps at stat time. The ring-3 ABI is
+    untouched: `SYS_LISTDIR` converts epoch back to `rtc_time` at the
+    boundary (`syscall.c`), so `ls -l` never noticed.
+  - **`tz.c` gained the kernel's first civil<->epoch conversion**
+    (`tz_rtc_to_epoch()`/`tz_epoch_to_rtc()`, Hinnant's
+    days_from_civil/civil_from_days), KTESTed against
+    Python-cross-checked vectors including both leap rules and the
+    2038 rollover.
+  - **`fsformat <tfs2|tfs3> confirm`** (shell): reformat + live
+    remount through the same probe path a boot takes -- the
+    filesystem-switching primitive, with a mandatory `confirm` word
+    and a place on the GUI Terminal's blocked-command list (it yanks
+    the filesystem out from under open windows). `df`/`fsck`/`about`/
+    System Info all name the active backend now (`fs_ops.name` had
+    zero readers before this).
+  - Verified: 80/80 KTESTs (three new: epoch vectors, backend
+    name/caps, stat ino/epoch semantics); live boot of the existing
+    TFS2 disk.img probes and mounts it (`df`: "Filesystem: tfs2");
+    `stat` shows synthetic inos and correctly round-tripped
+    timestamps; `fsformat tfs3 confirm` fails cleanly (backend not
+    built yet); `fsformat tfs2 confirm` formats, remounts live, takes
+    writes, and the file survives a VM reboot; `fsck` clean and
+    named. All against a disk copy.
+
 ### Changed
 - **A documented, checked on-disk filesystem layout -- and the test
   binaries moved out of `/bin`.** Asked for a future-proof directory

@@ -107,6 +107,61 @@ static int last_sunday(int year, int month) {
     return last_day - last_dow;
 }
 
+// ---- civil <-> epoch conversion ----
+//
+// Pure calendar arithmetic (Howard Hinnant's days_from_civil /
+// civil_from_days), no timezone knowledge: the rtc_time in and out is
+// whatever calendar time the caller had, and the "epoch" is seconds
+// since 1970-01-01 00:00:00 *in that same reckoning*. The filesystem
+// feeds these LOCAL times (rtc_read_local()), so its stored epochs are
+// local-derived -- deliberately, and documented at the call sites: this
+// makes timestamps arithmetic-comparable, it does not invent UTC
+// handling the kernel doesn't have. Lives here because this file
+// already owns every other piece of calendar math in the kernel.
+
+uint64_t tz_rtc_to_epoch(const struct rtc_time *t) {
+    int y = (int)t->year;
+    int m = (int)t->month;
+    int d = (int)t->day;
+    y -= m <= 2;
+    // Years below 1970 can't come off this hardware path (the RTC
+    // reports a real current date); clamp defensively rather than
+    // underflow the unsigned result.
+    if (y < 0) return 0;
+    int era = y / 400;
+    int yoe = y - era * 400;                                    // [0, 399]
+    int doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;   // [0, 365]
+    int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;            // [0, 146096]
+    long days = (long)era * 146097 + doe - 719468;              // since 1970-01-01
+    if (days < 0) return 0;
+    return (uint64_t)days * 86400u
+         + (uint64_t)t->hour * 3600u
+         + (uint64_t)t->minute * 60u
+         + (uint64_t)t->second;
+}
+
+void tz_epoch_to_rtc(uint64_t epoch, struct rtc_time *out) {
+    uint64_t days = epoch / 86400u;
+    uint32_t rem = (uint32_t)(epoch % 86400u);
+    out->hour = (uint8_t)(rem / 3600u);
+    out->minute = (uint8_t)((rem % 3600u) / 60u);
+    out->second = (uint8_t)(rem % 60u);
+
+    long z = (long)days + 719468;
+    long era = z / 146097;
+    long doe = z - era * 146097;                                        // [0, 146096]
+    long yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;   // [0, 399]
+    long y = yoe + era * 400;
+    long doy = doe - (365 * yoe + yoe / 4 - yoe / 100);                 // [0, 365]
+    long mp = (5 * doy + 2) / 153;                                      // [0, 11]
+    long d = doy - (153 * mp + 2) / 5 + 1;                              // [1, 31]
+    long m = mp + (mp < 10 ? 3 : -9);                                   // [1, 12]
+    y += m <= 2;
+    out->year = (uint16_t)y;
+    out->month = (uint8_t)m;
+    out->day = (uint8_t)d;
+}
+
 static int eu_dst_active(int year, int month, int day) {
     if (month > 3 && month < 10) return 1;
     if (month < 3 || month > 10) return 0;

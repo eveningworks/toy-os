@@ -225,10 +225,19 @@ void cmd_stat(const char *name) {
         fs_read(path, &size);
         vga_write("  size:     "); vga_write_dec(size); vga_write(" bytes\n");
     }
-    struct fs_timestamps ts;
-    if (fs_stat(path, &ts)) {
-        vga_write("  created:  "); print_stat_timestamp(&ts.created); vga_putc('\n');
-        vga_write("  modified: "); print_stat_timestamp(&ts.modified); vga_putc('\n');
+    struct fs_stat_info st;
+    if (fs_stat(path, &st)) {
+        // Timestamps come back as (local-derived) epoch seconds now --
+        // see fs.h's fs_stat_info -- so display converts back to civil
+        // time. The inode number is real on a backend with inodes,
+        // synthetic-but-stable (table slot) otherwise; say which.
+        struct rtc_time t;
+        vga_write("  inode:    "); vga_write_dec((uint32_t)st.ino);
+        vga_write(fs_has(FS_CAP_INODES) ? "\n" : " (synthetic)\n");
+        tz_epoch_to_rtc(st.created, &t);
+        vga_write("  created:  "); print_stat_timestamp(&t); vga_putc('\n');
+        tz_epoch_to_rtc(st.modified, &t);
+        vga_write("  modified: "); print_stat_timestamp(&t); vga_putc('\n');
     } else {
         // Only the implicit root "/" (no entry of its own -- see fs.h)
         // reaches here, since fs_exists() already confirmed everything
@@ -256,4 +265,47 @@ void cmd_cd(const char *args) {
         return;
     }
     k_strcpy(cwd, path);
+}
+
+// Reformat the disk with a named backend and remount -- the live
+// filesystem-switching path (see fs.h's fs_format_backend()). The
+// `confirm` word is mandatory: this destroys everything on disk, and
+// a destructive command that can be typed by accident is a bug in the
+// command, not the user. Physical shell only -- the GUI Terminal's
+// blocked-command list includes it (apps/terminal.c), since yanking
+// the filesystem out from under open windows helps nobody.
+void cmd_fsformat(const char *args) {
+    char name[16];
+    int n = 0;
+    const char *p = args;
+    while (*p == ' ') p++;
+    while (*p && *p != ' ' && n < (int)sizeof(name) - 1) name[n++] = *p++;
+    name[n] = '\0';
+    while (*p == ' ') p++;
+
+    if (n == 0) {
+        vga_write("usage: fsformat <tfs2|tfs3> confirm\n");
+        vga_write("       DESTROYS the current filesystem and reformats with the named one\n");
+        return;
+    }
+    if (k_strcmp(p, "confirm") != 0) {
+        vga_write("fsformat: this DESTROYS every file on disk.\n");
+        vga_write("fsformat: run `fsformat "); vga_write(name);
+        vga_write(" confirm` if that is really what you want.\n");
+        return;
+    }
+    if (!fs_is_persistent()) {
+        vga_write("fsformat: no disk (RAM-only boot) -- nothing to format\n");
+        return;
+    }
+    vga_write("fsformat: formatting with "); vga_write(name); vga_write("...\n");
+    if (fs_format_backend(name)) {
+        k_strcpy(cwd, "/"); // the old working directory no longer exists
+        vga_write("fsformat: done -- active filesystem is now ");
+        vga_write(fs_backend_name());
+        vga_putc('\n');
+    } else {
+        vga_write("fsformat: failed (unknown filesystem name, or the format itself failed -- see dmesg)\n");
+        vga_write("fsformat: known names: tfs2, tfs3 (tfs3 lands with the TFS3 backend)\n");
+    }
 }

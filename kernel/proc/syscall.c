@@ -95,9 +95,13 @@ static void listdir_collect(const char *name, uint32_t size, int is_dir) {
     size_t nl = k_strlen(name);
     if (dl + nl < FS_PATH_MAX) k_strcpy(full_path + dl, name);
 
-    struct fs_timestamps ts;
-    if (fs_stat(full_path, &ts)) {
-        e->modified = ts.modified;
+    struct fs_stat_info st;
+    if (fs_stat(full_path, &st)) {
+        // The dirent ABI (syscall_abi.h) deliberately keeps struct
+        // rtc_time -- the epoch shape is kernel-internal (fs.h's
+        // fs_stat_info), converted back to civil time right here at
+        // the boundary so userland (ls -l) is untouched.
+        tz_epoch_to_rtc(st.modified, &e->modified);
     } else {
         k_memset(&e->modified, 0, sizeof(e->modified));
     }

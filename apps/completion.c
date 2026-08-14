@@ -21,7 +21,7 @@
 const char *const COMPLETION_COMMANDS[] = {
     "about", "append", "apps", "ata", "beep", "cat", "cd", "clear", "color",
     "cursor", "debug", "df", "dmatest", "dmesg", "echo", "edit", "fontsize",
-    "fputest", "fsck", "gui", "help", "ktest", "history", "keyboard", "lspci", "ls",
+    "fputest", "fsck", "fsformat", "gui", "help", "ktest", "history", "keyboard", "lspci", "ls",
     "meminfo", "mkdir", "nano", "parttable", "pwd", "reboot",
     "ring3test", "rm", "run", "schedtest", "stat", "steptest", "strace", "stress",
     "path", "time", "timezone", "touch", "uptime", "write",
@@ -299,6 +299,13 @@ static int complete_argument(struct collector *c, const char *cmd, int arg_index
         return 1;
     }
     if (k_strcmp(cmd, "fsck") == 0) { add_candidate(c, "repair"); return 1; }
+    if (k_strcmp(cmd, "fsformat") == 0) {
+        // Backend names only -- deliberately NOT completing "confirm",
+        // which exists to be typed on purpose.
+        add_candidate(c, "tfs2");
+        add_candidate(c, "tfs3");
+        return 1;
+    }
 
     // Commands whose argument is free text, where completing a path
     // would be actively unhelpful.

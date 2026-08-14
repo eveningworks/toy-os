@@ -47,8 +47,12 @@ void about_draw(struct window *win) {
     gfx_draw_string(cx + ABOUT_MARGIN, cy + ABOUT_MARGIN + 2 * line_h, "bar to move, use the", fg, bg);
     gfx_draw_string(cx + ABOUT_MARGIN, cy + ABOUT_MARGIN + 3 * line_h, "_ / o / x buttons.", fg, bg);
     gfx_draw_string(cx + ABOUT_MARGIN, cy + ABOUT_MARGIN + 4 * line_h, "Esc: back to shell.", fg, bg);
-    gfx_draw_string(cx + ABOUT_MARGIN, cy + ABOUT_MARGIN + 5 * line_h,
-                     fs_is_persistent() ? "Storage: disk (persistent)" : "Storage: RAM (not persistent)",
-                     fg, bg);
+    // Named backend + persistence in one line, built rather than
+    // picked from two constants now that the name varies.
+    char storage[48];
+    k_snprintf(storage, sizeof(storage), "Storage: %s (%s)",
+               fs_backend_name(),
+               fs_is_persistent() ? "persistent" : "RAM, not persistent");
+    gfx_draw_string(cx + ABOUT_MARGIN, cy + ABOUT_MARGIN + 5 * line_h, storage, fg, bg);
     (void)ch;
 }

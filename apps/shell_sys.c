@@ -209,6 +209,9 @@ static const char *const TEST_HELP_LINES[] = {
     "                  fixes what can be fixed without guessing. Blocks\n",
     "                  claimed by two files are always reported, never\n",
     "                  repaired -- see fs.h's fs_check().\n",
+    "  fsformat <fs> confirm - DESTROY everything on disk and reformat\n",
+    "                  with the named filesystem (tfs2, tfs3), then\n",
+    "                  remount it live. `df` shows which one is active.\n",
     "\n",
     "Every other former *test command (elftest, syscalltest, writetest,\n",
     "ptrtest, guitest, echotest, wintest, filetest, newsyscalltest,\n",
@@ -328,8 +331,9 @@ void cmd_about(void) {
     vga_write(" -- a small x86-64 hobby kernel\n");
     vga_write("Boot: GRUB/Multiboot2 | C + ASM | Tested on QEMU\n");
     vga_write("Storage: ");
-    vga_write(fs_is_persistent() ? "disk-backed (files persist across reboots)\n"
-                                  : "RAM only (no disk found -- files won't survive a reboot)\n");
+    vga_write(fs_backend_name());
+    vga_write(fs_is_persistent() ? ", disk-backed (files persist across reboots)\n"
+                                  : ", RAM only (no disk found -- files won't survive a reboot)\n");
 }
 
 // Milestone 25 (docs/roadmap.md): "the simplest possible output" -- a
@@ -375,9 +379,11 @@ void cmd_df(void) {
     fs_disk_usage(&used_bytes, &total_bytes);
     uint64_t free_bytes = total_bytes - used_bytes;
 
-    vga_write("Filesystem (");
+    vga_write("Filesystem: ");
+    vga_write(fs_backend_name());
+    vga_write(" (");
     vga_write(fs_is_persistent() ? "persistent, on disk" : "RAM-only -- won't survive reboot");
-    vga_write("):\n");
+    vga_write(")\n");
     vga_write("  total: "); vga_write_dec((uint32_t)(total_bytes / 1024));
     vga_write(" KB\n");
     vga_write("  used:  "); vga_write_dec((uint32_t)(used_bytes / 1024));
@@ -468,7 +474,9 @@ void cmd_fsck(const char *args) {
     }
 
     struct fs_check_result r;
-    vga_write(repair ? "fsck: checking and repairing ...\n" : "fsck: checking (read-only) ...\n");
+    vga_write(repair ? "fsck: checking and repairing " : "fsck: checking (read-only) ");
+    vga_write(fs_backend_name());
+    vga_write(" ...\n");
     if (!fs_check(repair, &r)) {
         vga_write("fsck: filesystem is RAM-only -- nothing on disk to check.\n");
         return;

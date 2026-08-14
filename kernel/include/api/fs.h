@@ -195,27 +195,69 @@ int fs_exists(const char *path);
 // `dir_path` doesn't exist or isn't a directory.
 void fs_list(const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir));
 
-// `created`/`modified` are broken-down local time (via tz.c's
-// rtc_read_local(), same source SYS_GETTIME uses -- see timer.h),
-// not a Unix epoch integer: this kernel has never needed a
-// civil-date<->epoch conversion for anything else, so storing the
-// same struct rtc_time everything else already uses avoids adding
-// one just for this. A host-side tool reading these off an on-disk
-// TFS2 image converts them itself if it wants epoch seconds -- see
-// docs/tfs2-spec.md. Set once at creation (fs_touch()/fs_mkdir()) and
-// bumped on every fs_write() that actually changes a file's data;
-// touching an already-existing file is a no-op today (matches
-// tfs_touch()'s existing behavior) and does NOT bump `modified`.
-struct fs_timestamps {
-    struct rtc_time created;
-    struct rtc_time modified;
+// The canonical per-entry metadata every backend reports, whatever it
+// stores on disk.
+//
+// `ino` is a stable, unique-per-entry identity number: a real inode
+// number on a backend that has them (TFS3), a synthetic-but-stable one
+// where the format doesn't (TFS2 reports its table slot index, which
+// already never moves for the life of the entry) -- the same trick
+// Linux's VFS plays for FAT. Callers may compare inos for identity
+// within one boot of one filesystem; nothing more is promised.
+//
+// `created`/`modified` are SECONDS SINCE THE UNIX EPOCH -- but derived
+// from local civil time (tz.c's rtc_read_local(), converted via
+// tz_rtc_to_epoch()), with no zone recorded. That makes timestamps
+// arithmetic-comparable, which the old broken-down struct rtc_time
+// shape wasn't; it does NOT make them UTC. A backend that stores civil
+// time on disk (TFS2's 7-byte RTC fields, format unchanged) converts
+// at stat time; a backend that stores epoch natively (TFS3) reports it
+// straight through -- see FS_CAP_EPOCH_TIME below. Display formatting
+// goes back through tz_epoch_to_rtc(). Set at creation
+// (fs_touch()/fs_mkdir()), `modified` bumped on every data-changing
+// fs_write(); touching an existing file stays a no-op and does NOT
+// bump `modified`.
+struct fs_stat_info {
+    uint64_t ino;
+    uint64_t created;
+    uint64_t modified;
 };
 
-// Fills *out with `path`'s created/modified timestamps. Returns 1 on
+// Fills *out with `path`'s identity + timestamps. Returns 1 on
 // success, 0 if `path` doesn't exist. Meaningless (returns 0) for the
 // implicit root "/", which has no entry of its own -- same as every
 // other per-entry call in this header.
-int fs_stat(const char *path, struct fs_timestamps *out);
+int fs_stat(const char *path, struct fs_stat_info *out);
+
+// ---- backend identity & capabilities ----
+
+// Capability bits a filesystem backend declares (struct fs_ops .caps).
+// Same rule as display.h's DISPLAY_CAP_*: a capability and its
+// optional operation are one fact stated twice -- callers ask the bit,
+// and the VFS's probe loop refuses a backend whose bits and function
+// pointers disagree (enforcement bites once the first optional op
+// exists; see fs_ops.h). Bits describe what the ACTIVE backend's
+// format genuinely supports, not what's implemented in the kernel yet.
+#define FS_CAP_INODES     (1u << 0) // real on-disk inodes (ino is not synthetic)
+#define FS_CAP_HARDLINKS  (1u << 1) // format carries link counts
+#define FS_CAP_SYMLINKS   (1u << 2) // format carries symlinks (resolution may still be unimplemented)
+#define FS_CAP_EPOCH_TIME (1u << 3) // timestamps stored as epoch natively, not converted at stat time
+
+// The active backend's short name ("tfs2", "tfs3") -- diagnostic, for
+// df/fsck/about-style output. Valid after fs_init(); never NULL.
+const char *fs_backend_name(void);
+
+// The active backend's FS_CAP_* bits / a single-bit convenience test.
+uint32_t fs_capabilities(void);
+int fs_has(uint32_t cap);
+
+// Reformat the disk with the named backend ("tfs2", "tfs3") and
+// remount by re-running the probe loop. DESTROYS the current
+// filesystem contents -- callers own the confirmation UX (see the
+// `fsformat` shell command). Returns 1 on success (new fs mounted), 0
+// on unknown name, format failure, or no disk. Physical-shell only by
+// convention: it yanks the filesystem out from under any open state.
+int fs_format_backend(const char *name);
 
 // 1 if the active backend found (or formatted) a usable disk via
 // ata.c, so every fs_touch()/fs_write()/fs_mkdir()/fs_delete() above is

@@ -1118,6 +1118,71 @@ static void read_full_bitmap(void) {
 // tfs_init() can call it once, right after a disk is confirmed usable.
 int tfs_selftest(void); // no longer run at boot -- see kernel/fs/fs_test.c
 
+// Detection only, per fs_ops.h's probe contract: read the superblock
+// sector and judge the bytes. The read-retry here is the same
+// don't-conflate-read-failure-with-foreign-disk lesson tfs_init()'s
+// comment below tells in full.
+static int tfs_probe(void) {
+    if (!ata_present()) return 0;
+    uint8_t sb[ATA_SECTOR_SIZE];
+    int sb_read = 0;
+    for (int attempt = 1; attempt <= FS_SUPERBLOCK_READ_MAX_RETRIES; attempt++) {
+        if (ata_read_sector(FS_SUPERBLOCK_LBA, sb)) { sb_read = 1; break; }
+    }
+    if (!sb_read) return -1;
+    if (sb[0] == FS_DISK_MAGIC0 && sb[1] == FS_DISK_MAGIC1 &&
+        sb[2] == FS_DISK_MAGIC2 && sb[3] == FS_DISK_MAGIC3 &&
+        sb[4] == FS_DISK_VERSION) return 1;
+    return 0;
+}
+
+// Writes a fresh, empty TFS2 filesystem: superblock, empty journal, a
+// bitmap with every reserved block pre-marked allocated, an empty
+// record table. This used to be tfs_init()'s else-branch, run
+// automatically on any unrecognized disk; formatting is a deliberate
+// act now (vfs.c's blank-disk policy, or the `fsformat` command), so
+// it lives behind its own fs_ops entry point. Does not mount --
+// tfs_init() re-reads everything afterwards.
+static int tfs_format(void) {
+    if (!ata_present()) return 0;
+
+    g_total_blocks = FS_DISK_TOTAL_BLOCKS;
+    clamp_total_blocks_to_disk();
+    if (g_total_blocks <= FS_DATA_START_BLOCK) {
+        klog_write("fs: disk is too small to hold the tfs2 metadata region -- not formatting\n");
+        return 0;
+    }
+
+    // The write helpers below are disk-gated on g_disk_backed; flip it
+    // for the duration of the format. tfs_init() re-derives it from
+    // the superblock afterwards either way.
+    g_disk_backed = 1;
+    write_superblock();
+    write_journal_header(0, 0, 0);
+    k_memset(g_bitmap, 0, sizeof(g_bitmap));
+    for (uint32_t b = 0; b < FS_DATA_START_BLOCK; b++) bit_set(g_bitmap, b, 1);
+    write_full_bitmap();
+    g_bitmap_scan_hint = FS_DATA_START_BLOCK;
+    k_memset(files, 0, sizeof(files));
+    int slots_failed = 0;
+    for (int i = 0; i < FS_MAX_FILES; i++) {
+        if (!persist_record(i)) slots_failed++;
+    }
+    g_disk_backed = 0; // not mounted -- that's tfs_init()'s call to make
+    if (slots_failed) {
+        // Each failure already logged its own slot/LBA in
+        // persist_record(). A blank record that didn't land isn't
+        // corruption, but the format didn't fully take -- say so and
+        // fail it rather than claiming success.
+        klog_write("fs: WARNING -- format left "); klog_write_dec((uint32_t)slots_failed);
+        klog_write(" of "); klog_write_dec((uint32_t)FS_MAX_FILES);
+        klog_write(" record slots unwritten\n");
+        return 0;
+    }
+    klog_write("fs: formatted a fresh tfs2 filesystem on disk\n");
+    return 1;
+}
+
 static int tfs_init(void) {
     k_memset(files, 0, sizeof(files));
     k_memset(g_ram_blocks, 0, sizeof(g_ram_blocks));
@@ -1125,7 +1190,9 @@ static int tfs_init(void) {
     g_ram_scan_hint = 1;
     g_disk_backed = 0;
 
-    ata_init();
+    // ata_init() moved to vfs.c's fs_init() -- the disk comes up once,
+    // before any backend is probed, not inside whichever backend
+    // happens to run first.
     if (!ata_present()) {
         klog_write("fs: no disk found -- files are RAM-only, won't survive reboot\n");
         return 0;
@@ -1194,35 +1261,18 @@ static int tfs_init(void) {
             }
             if (ok) deserialize_record(&files[i], rec);
         }
-        klog_write("fs: loaded persistent filesystem from disk\n");
+        klog_write("fs: loaded persistent tfs2 filesystem from disk\n");
     } else {
-        // Blank, foreign, or old-version disk (including a pre-rework
-        // TFS2 image, see this file's top-of-file warning) -- format
-        // fresh: superblock, empty journal, a bitmap with every
-        // reserved block pre-marked allocated, and an empty table.
-        g_disk_backed = 1;
-        write_superblock();
-        write_journal_header(0, 0, 0);
-        k_memset(g_bitmap, 0, sizeof(g_bitmap));
-        for (uint32_t b = 0; b < FS_DATA_START_BLOCK; b++) bit_set(g_bitmap, b, 1);
-        write_full_bitmap();
-        g_bitmap_scan_hint = FS_DATA_START_BLOCK;
-        int slots_failed = 0;
-        for (int i = 0; i < FS_MAX_FILES; i++) {
-            if (!persist_record(i)) slots_failed++;
-        }
-        if (slots_failed) {
-            // Each failure already logged its own slot/LBA in
-            // persist_record(). A blank record that didn't land isn't
-            // corruption (the slot's `used` byte is whatever was there
-            // before, and tfs_init() will read it back as-is next boot),
-            // but it does mean this format didn't fully take -- say so
-            // rather than claiming a clean format.
-            klog_write("fs: WARNING -- format left "); klog_write_dec((uint32_t)slots_failed);
-            klog_write(" of "); klog_write_dec((uint32_t)FS_MAX_FILES);
-            klog_write(" record slots unwritten\n");
-        }
-        klog_write("fs: formatted a fresh persistent filesystem on disk\n");
+        // Blank, foreign, or old-version disk. This backend no longer
+        // formats on its own initiative -- that's vfs.c's blank-disk
+        // policy (which calls tfs_format() deliberately, then init()
+        // again) or the user's `fsformat`. Reaching here at boot means
+        // the policy layer chose not to format (or another backend's
+        // disk is present and something is misconfigured); leave the
+        // disk untouched and degrade, loudly.
+        klog_write("fs: disk is not a tfs2 v3 filesystem -- leaving it untouched\n");
+        klog_write("fs: running RAM-only this boot; files will not persist\n");
+        g_disk_backed = 0;
     }
     return g_disk_backed;
 }
@@ -1699,13 +1749,24 @@ static int tfs_read_range_step(void *handle, uint32_t *out_total) {
     return 1 /* FS_STEP_DONE */;
 }
 
-static int tfs_stat(const char *path, struct fs_timestamps *out) {
+static int tfs_stat(const char *path, struct fs_stat_info *out) {
     char norm[FS_PATH_MAX];
     if (!normalize(path, norm)) return 0;
     if (k_strcmp(norm, "/") == 0) return 0;
     struct file *f = find(norm);
     if (!f) return 0;
-    if (out) { out->created = f->created; out->modified = f->modified; }
+    if (out) {
+        // TFS2 has no on-disk inodes; the table slot index is the
+        // synthetic ino (stable for the life of the entry -- records
+        // never move between slots). Timestamps are stored as 7-byte
+        // broken-down local time on disk (format unchanged) and
+        // converted to the canonical epoch shape here, at stat time --
+        // see fs.h's fs_stat_info comment for exactly what these
+        // epochs mean.
+        out->ino = (uint64_t)(f - files);
+        out->created = tz_rtc_to_epoch(&f->created);
+        out->modified = tz_rtc_to_epoch(&f->modified);
+    }
     return 1;
 }
 
@@ -2027,6 +2088,9 @@ static int tfs_check(int repair, struct fs_check_result *out) {
 
 const struct fs_ops tfs_ops = {
     .name = "tfs2",
+    .caps = 0, // no on-disk inodes/hardlinks/symlinks, timestamps stored civil -- see fs.h's FS_CAP_* comment
+    .probe = tfs_probe,
+    .format = tfs_format,
     .init = tfs_init,
     .touch = tfs_touch,
     .write = tfs_write,

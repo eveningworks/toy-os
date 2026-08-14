@@ -46,4 +46,13 @@ int tz_find_by_name(const char *name);
 // might genuinely want that instead.
 void rtc_read_local(struct rtc_time *out);
 
+// Pure civil <-> epoch calendar conversion (no timezone math): seconds
+// since 1970-01-01 00:00:00 in the same reckoning as the rtc_time
+// passed in. Feed it local time, get a local-derived epoch -- which is
+// exactly what the filesystem's timestamps do; see tz.c's comment on
+// these two for why that honesty matters. Inverses of each other for
+// any date the RTC can produce (1970..9999).
+uint64_t tz_rtc_to_epoch(const struct rtc_time *t);
+void tz_epoch_to_rtc(uint64_t epoch, struct rtc_time *out);
+
 #endif

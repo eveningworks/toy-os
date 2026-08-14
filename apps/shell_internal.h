@@ -66,6 +66,7 @@ void cmd_echo(const char *args);
 void cmd_meminfo(void);
 void cmd_df(void);
 void cmd_fsck(const char *args);
+void cmd_fsformat(const char *args); // shell_fs.c -- destructive, physical shell only
 void cmd_ktest(const char *args);
 void cmd_fputest(void);
 void cmd_stress(const char *args);

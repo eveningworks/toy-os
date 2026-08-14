@@ -37,6 +37,47 @@ KTEST("fs", "triple-indirect addressing (legacy selftest)") {
     KTEST_ASSERT(tfs_selftest() == 1);
 }
 
+KTEST("fs", "backend reports a name and honest capabilities") {
+    // Valid in every boot mode -- RAM-only still has an active backend.
+    KTEST_ASSERT(fs_backend_name() != 0);
+    KTEST_ASSERT(fs_backend_name()[0] != '\0');
+    // tfs2 declares no capabilities (no inodes/hardlinks/symlinks, and
+    // its timestamps are stored civil, converted at stat time). When
+    // tfs3 lands this assertion becomes conditional on the name.
+    if (k_strcmp(fs_backend_name(), "tfs2") == 0) {
+        KTEST_ASSERT_EQ(fs_capabilities(), 0u);
+        KTEST_ASSERT_EQ(fs_has(FS_CAP_HARDLINKS), 0);
+    }
+}
+
+KTEST("fs", "stat reports a stable ino and sane epoch timestamps") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    FRESH("/.ktest_stat_a");
+    FRESH("/.ktest_stat_b");
+    KTEST_ASSERT(fs_write("/.ktest_stat_a", "a", 0) == 1);
+    KTEST_ASSERT(fs_write("/.ktest_stat_b", "b", 0) == 1);
+
+    struct fs_stat_info sa, sb, sa2;
+    KTEST_ASSERT(fs_stat("/.ktest_stat_a", &sa) == 1);
+    KTEST_ASSERT(fs_stat("/.ktest_stat_b", &sb) == 1);
+    KTEST_ASSERT(sa.ino != sb.ino); // identity means distinct entries differ
+    KTEST_ASSERT(fs_stat("/.ktest_stat_a", &sa2) == 1);
+    KTEST_ASSERT(sa.ino == sa2.ino); // ...and repeat stats agree
+
+    // Epochs are local-derived seconds (fs.h) -- the RTC reports a
+    // real current date, so anything from a live boot is well past
+    // 2020-01-01 (1577836800) and created <= modified always holds.
+    KTEST_ASSERT(sa.created >= 1577836800ull);
+    KTEST_ASSERT(sa.created <= sa.modified);
+
+    // Root has no entry of its own -- unchanged contract.
+    struct fs_stat_info r;
+    KTEST_ASSERT_EQ(fs_stat("/", &r), 0);
+
+    fs_delete("/.ktest_stat_a");
+    fs_delete("/.ktest_stat_b");
+}
+
 KTEST("fs", "write then read back") {
     if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
     FRESH("/.ktest_rw");
