@@ -795,6 +795,113 @@ def cmd_trim(args):
     print(f"trim: punched {punched} free blocks ({punched * BLOCK // 1024} KB)")
 
 
+def cmd_corrupt(args):
+    """Inject KNOWN damage so the kernel's fsck (and its backup/journal
+    recovery) can be tested against inconsistencies whose exact shape
+    is known in advance -- the same reasoning as tfs2_writer.py's
+    corrupt command: the kernel deliberately avoids producing these,
+    so without this fsck could only ever be proven to report 'clean'.
+    """
+    img = Tfs3Image(args.disk, writable=True)
+    did = []
+
+    if args.leak:
+        n = args.leak
+        g = 0
+        start = img.data_start(g) - img.group_base(g)
+        bitmap = bytearray(img.read_block(img.group_base(g)))
+        leaked = 0
+        for i in range(start, BLOCKS_PER_GROUP):
+            if leaked >= n:
+                break
+            if not (bitmap[i >> 3] >> (i & 7)) & 1:
+                bitmap[i >> 3] |= 1 << (i & 7)
+                leaked += 1
+        img.write_block(img.group_base(g), bytes(bitmap))
+        did.append(f"leaked {leaked} blocks (allocated, referenced by nothing)")
+
+    if args.free_referenced:
+        # Clear the bitmap bits of blocks a real file owns.
+        target = args.free_referenced_path or _largest_file(img)
+        ino = img.lookup(target)
+        if ino is None:
+            raise SystemExit(f"no such file to damage: {target}")
+        blocks = img.file_blocks(img.read_inode(ino))[:args.free_referenced]
+        for blk in blocks:
+            img.block_bit(blk, 0)
+        did.append(f"freed {len(blocks)} blocks still referenced by {target}")
+
+    if args.bad_link_count:
+        ino = img.lookup(args.bad_link_count)
+        if ino is None:
+            raise SystemExit(f"no such path: {args.bad_link_count}")
+        raw = bytearray(img.read_bytes(img.inode_pos(ino), INODE_SIZE))
+        links = struct.unpack_from("<H", raw, 2)[0]
+        struct.pack_into("<H", raw, 2, links + 3)
+        body = bytes(raw[0:88]) + bytes(raw[92:128])
+        struct.pack_into("<I", raw, 88, fnv1a(body))
+        img.write_bytes(img.inode_pos(ino), bytes(raw))
+        did.append(f"link count of {args.bad_link_count}: {links} -> {links + 3}")
+
+    if args.smash_superblock:
+        img.write_bytes(SB_BLOCK * BLOCK, b"\x00" * SECTOR)
+        did.append("primary superblock zeroed (backups intact)")
+
+    if args.stage_journal:
+        ino = img.lookup(args.stage_journal)
+        if ino is None:
+            raise SystemExit(f"no such path: {args.stage_journal}")
+        # A committed transaction whose one image is the inode-table
+        # block with the target's `modified` set to a marker epoch --
+        # replay applies it, so `stat` shows 1970-01-15 00:00:45
+        # (epoch 1209645) exactly when (and only when) replay ran.
+        pos = img.inode_pos(ino)
+        blk = pos // BLOCK
+        img_block = bytearray(img.read_block(blk))
+        off = pos % BLOCK
+        struct.pack_into("<Q", img_block, off + 20, 1209645)
+        body = bytes(img_block[off:off + 88]) + bytes(img_block[off + 92:off + 128])
+        struct.pack_into("<I", img_block, off + 88, fnv1a(body))
+        img.write_block(JOURNAL_DATA_BLOCK, bytes(img_block))
+        hdr = bytearray(SECTOR)
+        hdr[0:4] = b"JRN3"
+        hdr[4] = 1  # committed
+        hdr[5] = 1  # one block
+        struct.pack_into("<I", hdr, 8, 424242)
+        struct.pack_into("<II", hdr, 12, blk,
+                         fnv1a(bytes(img_block)) if not args.stage_journal_torn
+                         else (fnv1a(bytes(img_block)) ^ 0xDEADBEEF))
+        struct.pack_into("<I", hdr, 44, fnv1a(bytes(hdr[:44])))
+        img.write_bytes(JOURNAL_HEADER_BLOCK * BLOCK, bytes(hdr))
+        did.append(("staged a TORN committed transaction (replay must discard it)"
+                    if args.stage_journal_torn else
+                    f"staged a committed transaction: {args.stage_journal}'s mtime -> epoch 1209645 on replay"))
+
+    img.close()
+    if not did:
+        raise SystemExit("corrupt: pass at least one damage flag (see --help)")
+    for d in did:
+        print(f"corrupt: {d}")
+
+
+def _largest_file(img, dir_ino=INO_ROOT, prefix=""):
+    best, best_size = None, -1
+    for name, ino in img.dirents(dir_ino):
+        if name in (".", ".."):
+            continue
+        node = img.read_inode(ino)
+        path = f"{prefix}/{name}"
+        if node["type"] == TYPE_DIR:
+            sub = _largest_file(img, ino, path)
+            if sub:
+                sn = img.read_inode(img.lookup(sub))
+                if sn["size"] > best_size:
+                    best, best_size = sub, sn["size"]
+        elif node["size"] > best_size:
+            best, best_size = path, node["size"]
+    return best
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -816,6 +923,17 @@ def main():
     p = sub.add_parser("delete"); p.add_argument("disk"); p.add_argument("path"); p.set_defaults(fn=cmd_delete)
     p = sub.add_parser("sync"); p.add_argument("disk"); p.add_argument("seed_dir"); p.set_defaults(fn=cmd_sync)
     p = sub.add_parser("trim"); p.add_argument("disk"); p.set_defaults(fn=cmd_trim)
+
+    p = sub.add_parser("corrupt")
+    p.add_argument("disk")
+    p.add_argument("--leak", type=int, default=0, metavar="N")
+    p.add_argument("--free-referenced", type=int, default=0, metavar="N")
+    p.add_argument("--free-referenced-path", default=None)
+    p.add_argument("--bad-link-count", default=None, metavar="PATH")
+    p.add_argument("--smash-superblock", action="store_true")
+    p.add_argument("--stage-journal", default=None, metavar="PATH")
+    p.add_argument("--stage-journal-torn", action="store_true")
+    p.set_defaults(fn=cmd_corrupt)
 
     args = ap.parse_args()
     args.fn(args)

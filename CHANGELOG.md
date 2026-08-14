@@ -2035,6 +2035,38 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
     volume seam), hardlinks share an ino and survive deleting the
     first name, and files survive a VM reboot.
 
+- **TFS3 can be checked, repaired, and recovered now -- Stage D: a
+  real fsck, and corruption tooling to prove it against.**
+  - **`tfs3_check()`**: walks the namespace from the root (depth-
+    capped DFS), marks every reachable block and inode, then
+    reconciles against the allocation bitmaps. Same result-field
+    meanings and repair rules as TFS2's fsck (reclaim+TRIM leaks,
+    re-mark referenced-but-free, zero out-of-range pointers, NEVER
+    resolve a double allocation), plus the TFS3-only checks: inode
+    checksums, `.`/`..` targets, link counts verified against
+    observed name counts (one rule covers files, dirs and the root,
+    since root's own `..` points at itself), orphaned inodes
+    reclaimed, free-count caches recomputed, and -- on a repair pass
+    only -- a primary superblock that failed at mount rewritten from
+    the mounted backup, plus all backup copies refreshed.
+  - **`tfs3_writer.py corrupt`**: `--leak N`, `--free-referenced N`,
+    `--bad-link-count PATH`, `--smash-superblock`,
+    `--stage-journal PATH [--stage-journal-torn]` -- known damage for
+    a checker that would otherwise only ever be proven to say
+    "clean", same reasoning as tfs2_writer's corrupt modes.
+  - Verified, each end-to-end on corrupted images: 5 injected leaks
+    detected and reclaimed (20 KB TRIMmed back); a 1->4 link-count
+    lie detected and repaired to the observed count;
+    referenced-but-free x3 detected and re-marked; a zeroed primary
+    superblock boots loudly from the group-1 backup, `fsck repair`
+    restores it, and the next boot mounts the primary silently; a
+    staged committed journal transaction replays at mount (the
+    marker mtime lands exactly), and a torn one is discarded with
+    the honest caveat that the torn case's proof is the klog line,
+    since the staged image was byte-identical to the applied one.
+    81/81 KTESTs on tfs2; the full fs suite (fsck test now live
+    again) passes 10/10 on a tfs3 disk.
+
 ### Changed
 - **A documented, checked on-disk filesystem layout -- and the test
   binaries moved out of `/bin`.** Asked for a future-proof directory

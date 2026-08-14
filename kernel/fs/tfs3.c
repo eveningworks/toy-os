@@ -80,6 +80,7 @@ static struct {
 } g_sb;
 
 static uint32_t g_itb;        // inode-table blocks per group
+static int g_mounted_from_backup = 0; // primary superblock was bad at mount; fsck repair restores it
 static uint32_t g_meta_off;   // first data-ish block offset within a group (2 [+cksum] + itb)
 static struct t3_gd *g_gd = 0; // free-count caches, g_sb.gc entries
 
@@ -216,7 +217,7 @@ static int load_superblock(int loud) {
         got = vol_read_sectors(T3_SB_BLOCK * T3_SPB, 1, sec);
     }
     if (!got) return -1;
-    if (parse_superblock(sec)) return 1;
+    if (parse_superblock(sec)) { g_mounted_from_backup = 0; return 1; }
 
     // Primary readable but invalid -- try the backups, derived from
     // the volume size (see docs/tfs3-design.md "Superblock backups").
@@ -229,6 +230,7 @@ static int load_superblock(int loud) {
         uint32_t blk = T3_GROUP0 + (groups[i] + 1) * T3_BPG - 1;
         if (!vol_read_sectors(blk * T3_SPB, 1, sec)) continue;
         if (parse_superblock(sec)) {
+            g_mounted_from_backup = 1;
             if (loud) {
                 klog_write("tfs3: primary superblock invalid -- mounted from the backup in group ");
                 klog_write_dec(groups[i]);
@@ -238,6 +240,28 @@ static int load_superblock(int loud) {
         }
     }
     return 0;
+}
+
+// Serialize g_sb and write it to the primary AND every backup slot --
+// fsck repair's restore path, and never called at mount.
+static int write_superblock_everywhere(void) {
+    k_memset(g_blk, 0, T3_BLOCK);
+    g_blk[0] = 'T'; g_blk[1] = 'F'; g_blk[2] = 'S'; g_blk[3] = '3';
+    g_blk[4] = T3_VERSION; g_blk[5] = g_sb.flags;
+    wr32(g_blk + 8, g_sb.total_blocks);
+    wr32(g_blk + 12, g_sb.bpg);
+    wr32(g_blk + 16, g_sb.ipg);
+    wr32(g_blk + 20, g_sb.gc);
+    wr32(g_blk + 24, T3_GROUP0);
+    wr32(g_blk + 44, k_fnv1a(g_blk, 44));
+    int ok = write_block(T3_SB_BLOCK, g_blk);
+    uint32_t groups[2];
+    int n = backup_groups(g_sb.gc, groups);
+    for (int i = 0; i < n; i++) {
+        uint32_t blk = T3_GROUP0 + (groups[i] + 1) * T3_BPG - 1;
+        if (!write_block(blk, g_blk)) ok = 0;
+    }
+    return ok;
 }
 
 // ---- group / inode geometry ----------------------------------------------
@@ -1931,14 +1955,323 @@ static int tfs3_write_range_step(void *handle) {
     return ok ? 1 /* FS_STEP_DONE */ : 2;
 }
 
-// fsck: Stage D. Returning 0 means "nothing on disk to check", which
-// is not quite honest for a mounted read-only tfs3 -- accepted as a
-// temporary lie with a klog, replaced when the real walker lands.
+// ---- fsck -----------------------------------------------------------------
+//
+// One pass: walk the namespace from the root, mark every reachable
+// block and inode, then reconcile against the allocation bitmaps.
+// Result-field mapping keeps fs_check_result's TFS2-era meanings:
+// records_used = reachable inodes, leaked/referenced_but_free/
+// double_allocated/out_of_range = blocks, exactly as fs.h documents.
+// Repair semantics follow the same rules as tfs.c's: reclaim leaks
+// (and TRIM them), re-mark referenced-but-free, zero out-of-range
+// pointers, NEVER resolve a double allocation. TFS3 additions: link
+// counts verified against observed name counts (repaired on a repair
+// pass), free-count caches recomputed, and a primary superblock that
+// was bad at mount (we ran from a backup) is rewritten -- on repair
+// only, never automatically (see the design doc's backup rules).
+
+struct t3_fsck {
+    uint8_t *breach;     // block reachability, gc*4096
+    uint8_t *ireach;     // inode reachability, gc*4096
+    uint8_t *names;      // observed name count per inode, u8 saturating
+    struct fs_check_result *r;
+    int repair;
+    int link_mismatches;
+};
+
+static int fsck_block_ok(uint32_t blk) {
+    if (blk < T3_GROUP0 + g_meta_off) return 0;
+    uint32_t g = (blk - T3_GROUP0) / T3_BPG;
+    uint32_t i = (blk - T3_GROUP0) % T3_BPG;
+    if (g >= g_sb.gc) return 0;
+    if (i < g_meta_off || i >= group_data_end(g)) return 0;
+    return 1;
+}
+
+// Mark one referenced block; counts out-of-range and doubles.
+// Returns 1 if the block is usable (in range, first reference).
+static int fsck_mark_block(struct t3_fsck *fk, uint32_t blk) {
+    if (!fsck_block_ok(blk)) { fk->r->out_of_range++; return 0; }
+    uint32_t idx = blk - T3_GROUP0;
+    uint32_t g = idx / T3_BPG, i = idx % T3_BPG;
+    uint8_t *b = &fk->breach[(size_t)g * T3_BLOCK + (i >> 3)];
+    if (*b & (1u << (i & 7))) { fk->r->double_allocated++; return 0; }
+    *b |= (uint8_t)(1u << (i & 7));
+    fk->r->blocks_referenced++;
+    return 1;
+}
+
+// Walk one inode's whole block tree (data + pointer blocks). `zap`
+// support: on a repair pass, out-of-range pointers found in the INODE
+// itself are zeroed via a transaction; ones inside pointer blocks are
+// zeroed in place (data-class blocks, unjournaled like all data).
+static void fsck_walk_table(struct t3_fsck *fk, uint32_t table_blk, int depth) {
+    uint8_t *tbl = kmalloc(T3_BLOCK);
+    if (!tbl || !read_block(table_blk, tbl)) { if (tbl) kfree(tbl); return; }
+    int dirty = 0;
+    for (uint32_t i = 0; i < T3_PTRS_PER_BLOCK; i++) {
+        uint32_t e = rd32(tbl + i * 4);
+        if (!e) continue;
+        if (!fsck_block_ok(e)) {
+            fk->r->out_of_range++;
+            if (fk->repair) { wr32(tbl + i * 4, 0); dirty = 1; fk->r->pointers_cleared++; }
+            continue;
+        }
+        if (depth == 0) fsck_mark_block(fk, e);
+        else if (fsck_mark_block(fk, e)) fsck_walk_table(fk, e, depth - 1);
+    }
+    if (dirty) write_block(table_blk, tbl);
+    kfree(tbl);
+}
+
+static void fsck_walk_inode_blocks(struct t3_fsck *fk, uint64_t ino, struct t3_inode *node) {
+    int inode_dirty = 0;
+    for (int i = 0; i < 12; i++) {
+        if (!node->ptrs[i]) continue;
+        if (!fsck_block_ok(node->ptrs[i])) {
+            fk->r->out_of_range++;
+            if (fk->repair) { node->ptrs[i] = 0; inode_dirty = 1; fk->r->pointers_cleared++; }
+        } else {
+            fsck_mark_block(fk, node->ptrs[i]);
+        }
+    }
+    for (int p = 12; p <= 14; p++) {
+        if (!node->ptrs[p]) continue;
+        if (!fsck_block_ok(node->ptrs[p])) {
+            fk->r->out_of_range++;
+            if (fk->repair) { node->ptrs[p] = 0; inode_dirty = 1; fk->r->pointers_cleared++; }
+        } else if (fsck_mark_block(fk, node->ptrs[p])) {
+            fsck_walk_table(fk, node->ptrs[p], p - 12);
+        }
+    }
+    if (inode_dirty) {
+        txn_reset();
+        if (txn_stage_inode(ino, node)) txn_commit(); else txn_reset();
+    }
+}
+
+static void fsck_mark_ino(struct t3_fsck *fk, uint64_t ino) {
+    uint32_t g = (uint32_t)(ino / g_sb.ipg), i = (uint32_t)(ino % g_sb.ipg);
+    if (g >= g_sb.gc) return;
+    fk->ireach[(size_t)g * T3_BLOCK + (i >> 3)] |= (uint8_t)(1u << (i & 7));
+}
+
+static int fsck_ino_reached(struct t3_fsck *fk, uint64_t ino) {
+    uint32_t g = (uint32_t)(ino / g_sb.ipg), i = (uint32_t)(ino % g_sb.ipg);
+    if (g >= g_sb.gc) return 1;
+    return (fk->ireach[(size_t)g * T3_BLOCK + (i >> 3)] >> (i & 7)) & 1;
+}
+
+// Depth-capped DFS over the directory tree. 32 components is far past
+// anything the 64-byte caller paths can even express today; a deeper
+// tree gets a klog and an unwalked subtree (reported as leaks --
+// wrong, but loudly wrong).
+static void fsck_walk_dir(struct t3_fsck *fk, uint64_t dir_ino, uint64_t parent_ino, int depth) {
+    if (depth > 32) {
+        klog_write("tfs3 fsck: directory nesting past 32 -- subtree not walked\n");
+        return;
+    }
+    struct t3_inode dir;
+    if (!read_inode(dir_ino, &dir) || dir.type != T3_TYPE_DIR) return;
+    fk->r->records_used++;
+    fsck_walk_inode_blocks(fk, dir_ino, &dir);
+
+    uint32_t nblocks = (uint32_t)((dir.size + T3_BLOCK - 1) / T3_BLOCK);
+    for (uint32_t b = 0; b < nblocks; b++) {
+        uint32_t blk = block_for_index(&dir, b);
+        uint8_t *dirblk = kmalloc(T3_BLOCK);
+        if (!dirblk) return;
+        if (!blk || !read_block(blk, dirblk)) { kfree(dirblk); continue; }
+        uint32_t off = 0;
+        while (off + 8 <= T3_BLOCK) {
+            uint32_t e_ino = rd32(dirblk + off);
+            uint16_t rec_len = rd16(dirblk + off + 4);
+            uint8_t nl = dirblk[off + 6];
+            if (rec_len < 8 || off + rec_len > T3_BLOCK) {
+                klog_write("tfs3 fsck: corrupt dirent chain in inode ");
+                klog_write_dec((uint32_t)dir_ino); klog_write("\n");
+                break;
+            }
+            if (e_ino != 0 && nl > 0) {
+                int is_dot = (nl == 1 && dirblk[off + 7] == '.');
+                int is_dotdot = (nl == 2 && dirblk[off + 7] == '.' && dirblk[off + 8] == '.');
+                uint64_t child = e_ino;
+                if (child < (uint64_t)g_sb.gc * g_sb.ipg) {
+                    uint8_t *nc = &fk->names[child];
+                    if (*nc < 255) (*nc)++;
+                }
+                if (is_dot) {
+                    if (child != dir_ino) klog_write("tfs3 fsck: `.` points away from its own directory\n");
+                } else if (is_dotdot) {
+                    if (child != parent_ino) klog_write("tfs3 fsck: `..` points away from the parent\n");
+                } else {
+                    struct t3_inode cn;
+                    if (!read_inode(child, &cn)) {
+                        klog_write("tfs3 fsck: dirent -> inode ");
+                        klog_write_dec((uint32_t)child);
+                        klog_write(" whose checksum fails (not repaired -- deleting a name is data loss)\n");
+                    } else if (fsck_ino_reached(fk, child)) {
+                        // Already visited: fine for files (hardlink),
+                        // never for dirs.
+                        if (cn.type == T3_TYPE_DIR)
+                            klog_write("tfs3 fsck: directory reachable by two names\n");
+                    } else {
+                        fsck_mark_ino(fk, child);
+                        if (cn.type == T3_TYPE_DIR) {
+                            fsck_walk_dir(fk, child, dir_ino, depth + 1);
+                        } else {
+                            fk->r->records_used++;
+                            fsck_walk_inode_blocks(fk, child, &cn);
+                        }
+                    }
+                }
+            }
+            off += rec_len;
+        }
+        kfree(dirblk);
+    }
+}
+
 static int tfs3_check(int repair, struct fs_check_result *out) {
-    (void)repair;
-    if (out) k_memset(out, 0, sizeof(*out));
-    if (g_mounted) klog_write("tfs3: fsck not built yet (Stage D)\n");
-    return 0;
+    struct fs_check_result local;
+    struct fs_check_result *r = out ? out : &local;
+    k_memset(r, 0, sizeof(*r));
+    if (!g_mounted) return 0;
+
+    struct t3_fsck fk;
+    k_memset(&fk, 0, sizeof(fk));
+    fk.r = r;
+    fk.repair = repair;
+    size_t bmbytes = (size_t)g_sb.gc * T3_BLOCK;
+    uint64_t total_inodes = (uint64_t)g_sb.gc * g_sb.ipg;
+    fk.breach = kmalloc(bmbytes);
+    fk.ireach = kmalloc(bmbytes);
+    fk.names = kmalloc((size_t)total_inodes);
+    if (!fk.breach || !fk.ireach || !fk.names) {
+        klog_write("tfs3 fsck: not enough memory for the reachability maps -- not checked\n");
+        if (fk.breach) kfree(fk.breach);
+        if (fk.ireach) kfree(fk.ireach);
+        if (fk.names) kfree(fk.names);
+        return 0;
+    }
+    k_memset(fk.breach, 0, bmbytes);
+    k_memset(fk.ireach, 0, bmbytes);
+    k_memset(fk.names, 0, (size_t)total_inodes);
+
+    fsck_mark_ino(&fk, T3_INO_ROOT);
+    fsck_walk_dir(&fk, T3_INO_ROOT, T3_INO_ROOT, 0);
+
+    // Reconcile blocks: reach map vs allocation bitmap, per group.
+    // Metadata and backup regions are allocated-by-design and outside
+    // the reach map, so only the data area is compared.
+    for (uint32_t g = 0; g < g_sb.gc; g++) {
+        uint32_t end = group_data_end(g);
+        uint32_t free_b = 0;
+        uint32_t leak_run_start = 0, leak_run_len = 0;
+        for (uint32_t i = 0; i < T3_BPG; i++) {
+            int alloc = bbm_test(g, i);
+            if (i < g_meta_off || i >= end) continue; // format-owned
+            int reach = (fk.breach[(size_t)g * T3_BLOCK + (i >> 3)] >> (i & 7)) & 1;
+            if (alloc && !reach) {
+                r->leaked++;
+                if (repair) {
+                    bbm_set(g, i, 0);
+                    r->reclaimed++;
+                    uint32_t blk = group_base(g) + i;
+                    if (leak_run_len && blk == leak_run_start + leak_run_len) leak_run_len++;
+                    else { trim_run(leak_run_start, leak_run_len); leak_run_start = blk; leak_run_len = 1; }
+                }
+            } else if (!alloc && reach) {
+                r->referenced_but_free++;
+                if (repair) { bbm_set(g, i, 1); r->marked_allocated++; }
+            }
+            if (!bbm_test(g, i)) free_b++;
+        }
+        if (repair) trim_run(leak_run_start, leak_run_len);
+
+        // Inode bitmap + free counts: reconcile, repair-only writes.
+        uint32_t free_i = 0;
+        for (uint32_t i = 0; i < g_sb.ipg; i++) {
+            uint64_t ino = (uint64_t)g * g_sb.ipg + i;
+            int alloc = ibm_test(g, i);
+            int reach = (fk.ireach[(size_t)g * T3_BLOCK + (i >> 3)] >> (i & 7)) & 1;
+            if (g == 0 && i == 0) { free_i += !alloc; continue; } // ino 0 reserved
+            if (alloc && !reach) {
+                // An orphaned inode is the inode-space leak. Reported
+                // through the same counter (they are the same failure
+                // class); reclaimed on repair.
+                r->leaked++;
+                if (repair) {
+                    ibm_set(g, i, 0);
+                    r->reclaimed++;
+                    txn_reset();
+                    if (txn_stage_inode(ino, 0)) txn_commit(); else txn_reset();
+                }
+            } else if (!alloc && reach) {
+                r->referenced_but_free++;
+                if (repair) { ibm_set(g, i, 1); r->marked_allocated++; }
+            }
+            if (!ibm_test(g, i)) free_i++;
+        }
+
+        if (g_gd[g].free_blocks != free_b || g_gd[g].free_inodes != free_i) {
+            if (repair) {
+                g_gd[g].free_blocks = free_b;
+                g_gd[g].free_inodes = free_i;
+                mark_dirty(g_gdt_dirty, g);
+            }
+        }
+    }
+
+    // Link counts: observed names vs stored counts. A directory's
+    // observed count from the walk is its own dirent + `.` + each
+    // child's `..`, which is exactly the 2+subdirs rule -- so one
+    // comparison covers both types.
+    for (uint64_t ino = 1; ino < total_inodes; ino++) {
+        if (!fsck_ino_reached(&fk, ino) && ino != T3_INO_ROOT) continue;
+        if (!fk.names[ino] && ino != T3_INO_ROOT) continue;
+        struct t3_inode node;
+        if (!read_inode(ino, &node)) continue;
+        // One rule covers files, dirs AND the root: names[] counted
+        // every dirent pointing at the inode, including `.`/`..`. A
+        // dir gets parent-entry + own-`.` + children's `..` = 2+subdirs;
+        // the root lacks a parent entry but its own `..` points at
+        // itself, which restores the same total. Files get their
+        // hardlink count.
+        uint16_t want = fk.names[ino];
+        if (node.links != want && fk.names[ino] < 255) {
+            fk.link_mismatches++;
+            klog_write("tfs3 fsck: inode "); klog_write_dec((uint32_t)ino);
+            klog_write(" links="); klog_write_dec(node.links);
+            klog_write(" but "); klog_write_dec(want);
+            klog_write(" name(s) observed");
+            if (repair) {
+                node.links = want;
+                txn_reset();
+                if (txn_stage_inode(ino, &node) && txn_commit()) klog_write(" -- repaired");
+                else txn_reset();
+            }
+            klog_write("\n");
+        }
+    }
+
+    if (repair) {
+        flush_alloc_state();
+        // A primary superblock that failed at mount (we're running
+        // from a backup) gets rewritten now, deliberately here and
+        // never automatically at mount -- see the design doc.
+        if (g_mounted_from_backup) {
+            if (write_superblock_everywhere()) {
+                klog_write("tfs3 fsck: primary superblock restored from the mounted backup\n");
+                g_mounted_from_backup = 0;
+            }
+        }
+    }
+
+    kfree(fk.breach);
+    kfree(fk.ireach);
+    kfree(fk.names);
+    return 1;
 }
 
 const struct fs_ops tfs3_ops = {
