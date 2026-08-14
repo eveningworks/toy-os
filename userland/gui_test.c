@@ -13,24 +13,11 @@
 // keypress cycles to a new color, until 'q' is pressed, at which point
 // it exits cleanly via the exit syscall.
 #include <stdint.h>
-#include "syscall_abi.h"
+#include "sys.h"
 
-static inline int64_t syscall2(uint64_t num, uint64_t arg1, uint64_t arg2) {
-    int64_t ret;
-    __asm__ volatile (
-        "int $0x80"
-        : "=a"(ret)
-        : "a"(num), "D"(arg1), "S"(arg2)
-        : "memory"
-    );
-    return ret;
-}
 
-static inline void sys_exit(int code) __attribute__((noreturn));
-static inline void sys_exit(int code) {
-    syscall2(SYS_EXIT, (uint64_t)(int64_t)code, 0);
-    for (;;) { } // unreachable
-}
+
+
 
 static void fill_screen(volatile uint32_t *fb, const struct gui_info *info, uint32_t color) {
     uint32_t pitch_pixels = info->pitch / 4; // assumes 32bpp, matching gfx.c's own assumption
@@ -41,9 +28,9 @@ static void fill_screen(volatile uint32_t *fb, const struct gui_info *info, uint
     }
 }
 
-void _start(void) {
+int main(void) {
     struct gui_info info;
-    int64_t ok = syscall2(SYS_GUI_INIT, (uint64_t)(uintptr_t)&info, 0);
+    int64_t ok = sys_call(SYS_GUI_INIT, (uint64_t)(uintptr_t)&info, 0, 0);
     if (!ok) sys_exit(1);
 
     volatile uint32_t *fb = (volatile uint32_t *)(uintptr_t)GUI_FB_VADDR;
@@ -52,7 +39,7 @@ void _start(void) {
     fill_screen(fb, &info, color);
 
     for (;;) {
-        int64_t key = syscall2(SYS_GUI_POLL_KEY, 0, 0);
+        int64_t key = sys_call(SYS_GUI_POLL_KEY, 0, 0, 0);
         if (key == 'q') break;
         if (key >= 0) {
             color = (color + 0x00335577) & 0x00FFFFFF; // cycle to a new color

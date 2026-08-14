@@ -22,27 +22,15 @@
 // decoding (family/model combining, leaf-4 cache arithmetic) in one
 // place. See api/cpuinfo.h.
 #include <stdint.h>
-#include "syscall_abi.h"
+#include "sys.h"
 #include "cpuinfo.h"
 #include "cpu_features.h" // the (word,bit) -> name table, shared with the Control Panel
 
-static inline int64_t syscall2(uint64_t num, uint64_t arg1, uint64_t arg2) {
-    int64_t ret;
-    __asm__ volatile ("int $0x80" : "=a"(ret) : "a"(num), "D"(arg1), "S"(arg2) : "memory");
-    return ret;
-}
 
-static inline int64_t syscall3(uint64_t num, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
-    int64_t ret;
-    __asm__ volatile ("int $0x80" : "=a"(ret) : "a"(num), "D"(arg1), "S"(arg2), "d"(arg3) : "memory");
-    return ret;
-}
 
-static inline void sys_exit(int code) __attribute__((noreturn));
-static inline void sys_exit(int code) {
-    syscall2(SYS_EXIT, (uint64_t)(int64_t)code, 0);
-    for (;;) { }
-}
+
+
+
 
 static uint64_t my_strlen(const char *s) {
     uint64_t n = 0;
@@ -54,7 +42,7 @@ static uint64_t my_strlen(const char *s) {
 // reason: kfmt.h's k_snprintf() is kernel code, never linked into a
 // ring-3 ELF.
 static void put(const char *s) {
-    syscall3(SYS_WRITE, 1, (uint64_t)(uintptr_t)s, my_strlen(s));
+    sys_call(SYS_WRITE, 1, (uint64_t)(uintptr_t)s, my_strlen(s));
 }
 
 static void put_udec(uint32_t v) {
@@ -101,12 +89,12 @@ static struct cpu_info g_ci; // a global, not a stack local: 300+ bytes,
 
 int main_lscpu(void);
 
-void _start(void) {
+int main(void) {
     sys_exit(main_lscpu());
 }
 
 int main_lscpu(void) {
-    if (syscall2(SYS_CPU_INFO, (uint64_t)(uintptr_t)&g_ci, 0) != 1) {
+    if (sys_call(SYS_CPU_INFO, (uint64_t)(uintptr_t)&g_ci, 0, 0) != 1) {
         put("lscpu: SYS_CPU_INFO failed\n");
         return 1;
     }

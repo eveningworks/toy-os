@@ -29,55 +29,22 @@
 // -- unconditionally, not gated on a flag, per this feature's own
 // scope (see CHANGELOG.md/docs/decisions.md).
 #include <stdint.h>
-#include "syscall_abi.h"
+#include "sys.h"
 #include "vga.h" // enum vga_color only -- see this file's top comment
 
-static inline int64_t syscall0(uint64_t num) {
-    int64_t ret;
-    __asm__ volatile ("int $0x80" : "=a"(ret) : "a"(num) : "memory");
-    (void)ret;
-    return ret;
-}
 
-static inline int64_t syscall2(uint64_t num, uint64_t arg1, uint64_t arg2) {
-    int64_t ret;
-    __asm__ volatile (
-        "int $0x80"
-        : "=a"(ret)
-        : "a"(num), "D"(arg1), "S"(arg2)
-        : "memory"
-    );
-    return ret;
-}
 
-static inline int64_t syscall3(uint64_t num, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
-    int64_t ret;
-    __asm__ volatile (
-        "int $0x80"
-        : "=a"(ret)
-        : "a"(num), "D"(arg1), "S"(arg2), "d"(arg3)
-        : "memory"
-    );
-    return ret;
-}
 
-static inline int64_t sys_write(const char *buf, uint64_t len) {
-    return syscall3(SYS_WRITE, 1, (uint64_t)(uintptr_t)buf, len);
-}
 
-static inline int64_t sys_listdir(const char *path, struct dirent *out, uint64_t max) {
-    return syscall3(SYS_LISTDIR, (uint64_t)(uintptr_t)path, (uint64_t)(uintptr_t)out, max);
-}
 
-static inline int64_t sys_set_color(enum vga_color fg, enum vga_color bg) {
-    return syscall2(SYS_SET_COLOR, (uint64_t)fg, (uint64_t)bg);
-}
 
-static inline void sys_exit(int code) __attribute__((noreturn));
-static inline void sys_exit(int code) {
-    syscall2(SYS_EXIT, (uint64_t)(int64_t)code, 0);
-    for (;;) { }
-}
+
+
+
+
+
+
+
 
 static uint64_t my_strlen(const char *s) {
     uint64_t n = 0;
@@ -86,7 +53,7 @@ static uint64_t my_strlen(const char *s) {
 }
 
 static void put(const char *s) {
-    sys_write(s, my_strlen(s));
+    sys_write(1, s, my_strlen(s));
 }
 
 static void put_udec(uint32_t n) {
@@ -125,7 +92,7 @@ static void put_timestamp(const struct rtc_time *t) {
     put_padded(t->second, 2);
 }
 
-void _start(int argc, char **argv) {
+int main(int argc, char **argv) {
     int show_long = 0;
     int show_all = 0; // accepted, no-op -- see this file's top comment
     const char *path = "/"; // shell always passes a resolved absolute

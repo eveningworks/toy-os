@@ -23,43 +23,19 @@
 // and their recovery. What's gained is that the binary named `hello`
 // now does what its name says.
 #include <stdint.h>
-#include "syscall_abi.h"
+#include "sys.h"
 
 // Same two inline syscall stubs every other userland program here
 // carries its own copy of -- there's no libc and no shared userland
 // runtime to put them in (see userland/write_test.c, which this
 // mirrors).
-static inline int64_t syscall2(uint64_t num, uint64_t arg1, uint64_t arg2) {
-    int64_t ret;
-    __asm__ volatile (
-        "int $0x80"
-        : "=a"(ret)
-        : "a"(num), "D"(arg1), "S"(arg2)
-        : "memory"
-    );
-    return ret;
-}
 
-static inline int64_t syscall3(uint64_t num, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
-    int64_t ret;
-    __asm__ volatile (
-        "int $0x80"
-        : "=a"(ret)
-        : "a"(num), "D"(arg1), "S"(arg2), "d"(arg3)
-        : "memory"
-    );
-    return ret;
-}
 
-static inline int64_t sys_write(const char *buf, uint64_t len) {
-    return syscall3(SYS_WRITE, 1, (uint64_t)(uintptr_t)buf, len);
-}
 
-static inline void sys_exit(int code) __attribute__((noreturn));
-static inline void sys_exit(int code) {
-    syscall2(SYS_EXIT, (uint64_t)(int64_t)code, 0);
-    for (;;) { } // unreachable
-}
+
+
+
+
 
 static uint64_t my_strlen(const char *s) {
     uint64_t n = 0;
@@ -67,8 +43,8 @@ static uint64_t my_strlen(const char *s) {
     return n;
 }
 
-void _start(void) {
+int main(void) {
     const char *msg = "Hello from a real ELF64 binary in ring 3!\n";
-    sys_write(msg, my_strlen(msg));
+    sys_write(1, msg, my_strlen(msg));
     sys_exit(0);
 }

@@ -15,24 +15,11 @@
 // report it runs under is parsed off the same serial console (same
 // reasoning as spin_test.c).
 #include <stdint.h>
-#include "syscall_abi.h"
+#include "sys.h"
 
-static inline int64_t syscall2(uint64_t num, uint64_t arg1, uint64_t arg2) {
-    int64_t ret;
-    __asm__ volatile (
-        "int $0x80"
-        : "=a"(ret)
-        : "a"(num), "D"(arg1), "S"(arg2)
-        : "memory"
-    );
-    return ret;
-}
 
-static inline void sys_exit(int code) __attribute__((noreturn));
-static inline void sys_exit(int code) {
-    syscall2(SYS_EXIT, (uint64_t)(int64_t)code, 0);
-    for (;;) { } // unreachable
-}
+
+
 
 // The documented SYS_WAIT_EVENT contract, and the reason it is a loop:
 // a 0 return means "you were woken, ask again", not "no event". The
@@ -50,7 +37,7 @@ static inline void sys_exit(int code) {
 static int wait_event(struct win_event *ev) {
     int64_t r;
     do {
-        r = syscall2(SYS_WAIT_EVENT, (uint64_t)(uintptr_t)ev, 0);
+        r = sys_call(SYS_WAIT_EVENT, (uint64_t)(uintptr_t)ev, 0, 0);
     } while (r == 0);
     return (int)r;
 }
@@ -68,7 +55,7 @@ static int parse_count(const char *s) {
 
 #define WANT_DEFAULT 3
 
-void _start(int argc, char **argv) {
+int main(int argc, char **argv) {
     int want = argc > 1 ? parse_count(argv[1]) : WANT_DEFAULT;
     if (want <= 0) want = WANT_DEFAULT;
 
