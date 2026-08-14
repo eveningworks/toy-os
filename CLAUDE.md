@@ -929,6 +929,15 @@ repeated manual steps to be worth automating:
   acting on button-down passes every other check and fails only that.
   Geometry is derived from the window's reported content size, not
   hardcoded, so it survives a font-size change.
+- **`notepad_client_test.py`** -- drives the RING-3 Notepad and asserts
+  a full round trip: type, save, verify the bytes on disk via `cat` (a
+  completely independent path -- the editor claiming success proves
+  nothing), clear, reopen, and require the rendered text to match pixel
+  for pixel. Two traps it encodes: `ls`'s output on this console is
+  interleaved with kernel log lines, so parsing it needs a strict
+  entry-shaped regex rather than `split()[-1]`; and a reference
+  screenshot must park the caret first, since `load_file()` resets the
+  cursor to 0 and a caret bar is a real pixel difference.
 - **`uiclient_test.py`** -- drives `userland/uiclient.c`, the ring-3
   client that renders real text with `userland/ugfx.c`, and asserts on
   it (8 checks: text actually rendered, the button drew, a click and a

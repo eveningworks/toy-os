@@ -13,6 +13,12 @@ struct kernel_context g_process_ctx;
 // process.h's process_context_is_armed()/process_context_recover().
 static int g_process_ctx_armed = 0;
 
+// The ring-0 stack a legacy (process_run_ring3) process's traps land
+// on. One is enough: process_context_is_armed() makes these calls
+// strictly non-nesting, so at most one legacy process exists at a time.
+// Sized to match the scheduler's own per-process kstacks.
+static uint8_t g_legacy_kstack[8192] __attribute__((aligned(16)));
+
 int process_context_is_armed(void) {
     return g_process_ctx_armed;
 }
@@ -67,6 +73,26 @@ int process_run_ring3_args(uint64_t pml4_phys, uint64_t entry, uint64_t user_rsp
         return rc - 1;
     }
     g_process_ctx_armed = 1;
+
+    // Give this process its OWN ring-0 stack for traps, rather than
+    // inheriting whatever RSP0 happens to be set to.
+    //
+    // This path never touched RSP0 before, and got away with it while a
+    // legacy process could never coexist with a scheduler-managed one:
+    // RSP0 was still the boot stack, which nothing else was using. That
+    // stopped being true once ring-3 GUI clients could be alive at the
+    // same time -- switch_to() (scheduler.c) points RSP0 at the running
+    // process's kstack and leaves it there, so a subsequent `run` from
+    // the physical shell would take its syscalls and interrupts onto a
+    // CLIENT's kernel stack, overwriting the trapframe that client is
+    // suspended on.
+    //
+    // The symptom was thoroughly misleading: the legacy program ran
+    // fine, and the client died with a page fault at its NEXT syscall,
+    // resuming from a trapframe that had been scribbled over minutes of
+    // debugging earlier. Found by running `ls` from the debug console
+    // while Notepad had a window open.
+    gdt_set_kernel_stack((uint64_t)&g_legacy_kstack[sizeof g_legacy_kstack]);
 
     vmm_switch_address_space(pml4_phys);
 

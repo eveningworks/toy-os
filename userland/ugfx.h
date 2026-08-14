@@ -74,6 +74,12 @@ int ugfx_text_width(const char *str);
 // not clipping is a documented trap that has caused the same overlap
 // bug twice (see docs/gui-guidelines.md). There was no reason to
 // reproduce that here.
+// One glyph at (x, y), alpha-blended between `bg` and `color`. The
+// per-cell primitive a text widget needs -- ugfx_draw_string() is a
+// loop over this.
+void ugfx_draw_char(struct ugfx_surface *s, int x, int y, char c,
+                     uint32_t color, uint32_t bg);
+
 void ugfx_draw_string(struct ugfx_surface *s, int x, int y,
                        const char *str, uint32_t color, uint32_t bg);
 
