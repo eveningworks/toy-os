@@ -1,0 +1,39 @@
+#ifndef UUI_BUTTON_GROUP_H
+#define UUI_BUTTON_GROUP_H
+
+#include <stdint.h>
+#include "ui/uui_button.h"
+
+// Split out of the single uwidgets.c/.h this used to be, one file per
+// widget -- the same shape as apps/ui/, so a widget's kernel-side and
+// ring-3 versions live at matching paths. See ui/uui.h.
+
+struct uui_button_group {
+    struct uui_button *buttons; // not owned -- caller's array
+    int count;
+};
+
+void uui_button_group_init(struct uui_button_group *g,
+                            struct uui_button *buttons, int count);
+
+void uui_button_group_draw(const struct uui_button_group *g,
+                            struct ugfx_surface *s);
+
+// Re-hit-tests and updates every button's `pressed` flag. Returns 1 if
+// which button is hot changed (so the caller knows to repaint). Dragging
+// off one button onto another re-presses correctly because this
+// re-tests every button every time rather than remembering one.
+int uui_button_group_press(struct uui_button_group *g, int cx, int cy);
+
+// Same for `hovered`, with no button held. Pass (-1, -1) when the
+// cursor leaves -- nothing is hit there, so the highlight clears with
+// no special case.
+int uui_button_group_hover(struct uui_button_group *g, int cx, int cy);
+
+// Clears whichever button was pressed and returns its `code`, or -1 if
+// none was. **This is how a button commits.** A press dragged off its
+// button already had `pressed` cleared by uui_button_group_press(), so
+// it returns -1 here and the action correctly does not happen.
+int uui_button_group_release(struct uui_button_group *g);
+
+#endif

@@ -246,6 +246,39 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   thumb cannot be in two places), and commit-on-release.
 
 ### Changed
+- **The ring-3 toolkit is one file per widget now, like `apps/ui/`.**
+  `uui.c`/`.h` (buttons) and `uwidgets.c`/`.h` (650 lines holding a
+  scrollbar, text field, checkbox, radio list, listbox, dropdown, canvas
+  and focus ring) are eleven pairs: `uui_primitives`, `uui_button`,
+  `uui_button_group`, `uui_scrollbar`, `uui_field`, `uui_checkbox`,
+  `uui_radio_list`, `uui_listbox`, `uui_dropdown`, `uui_canvas`,
+  `uui_focus`. `uui.h` is now the umbrella that includes them all,
+  exactly as `apps/ui/ui.h` is -- so every app's existing
+  `#include "ui/uui.h"` keeps working and only `gfxdemo.c` changed, by
+  losing a line.
+
+  The point is the correspondence: a widget's kernel-side and ring-3
+  versions now live at matching paths, which turns porting between them
+  into a file-to-file comparison instead of a hunt through two large
+  files. It matters ahead of stage 1a, which adds a `natural_size()` and
+  a `set_geometry()` to every one of these widgets.
+
+  `uwidgets.c`'s private `slen()` became `k_strlen()` from
+  `kernel/lib/string.c` -- already in `libuapp.a`, and dropped again by
+  `--gc-sections` where unused, so using the shared one costs nothing.
+  That is `CLAUDE.md`'s standing rule (check the toolkit before
+  hand-rolling a string loop) applied rather than a copy relocated.
+
+  **Verified as pure code motion**: `nm --print-size --defined-only`
+  across all 29 binaries is byte-identical before and after -- same
+  symbols, same sizes -- with only addresses moving, plus `ktest`
+  108/108 and all 82 GUI regression checks passing. One honest gap: the
+  `k_strlen` swap is inside `uui_checkbox_width()`, which
+  `--gc-sections` drops from every current binary, so it is
+  compile-verified but not exercised at runtime.
+
+  This completes stage 0 of `docs/uapp-design.md`.
+
 - **Userland programs link one archive and name nothing.**
   `build/userland/libuapp.a` holds `userland/ui/`, `userland/lib/` and
   the sources shared with the kernel; every ELF links it with

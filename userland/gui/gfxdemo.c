@@ -19,7 +19,6 @@
 #include "rt/sys.h"
 #include "ui/ugfx.h"
 #include "ui/uui.h"
-#include "ui/uwidgets.h"
 #include "ui/utheme.h"
 #include "geom.h"
 #include "fixed.h"

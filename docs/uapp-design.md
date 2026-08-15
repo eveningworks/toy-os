@@ -761,8 +761,15 @@ includes off one `-Iuserland`, ELFs to `build/`, and `SEED_*` derived
 from the directories. Then the split of `uwidgets.c` one-file-per-widget
 to match `apps/ui/`. No behaviour change in either; the acceptance test
 is ELFs identical after `--strip-debug` (see above).
-**Status: the move is done** -- 29/29 ELFs identical, all 82 GUI checks
-passing with no test tool edited. The split is next.
+**Status: DONE.** The move landed first (29/29 ELFs identical after
+`--strip-debug`), then `libuapp.a` with `--gc-sections` -- brought
+forward from its deferral because the split was about to turn each
+app's object list from three entries into eight, which is exactly the
+second real caller the deferral was waiting for. A program now names no
+objects at all, and the 29 binaries lost 171 KB between them. Then the
+split itself, verified as pure motion by an identical
+`nm --print-size` dump across all 29. All 82 GUI regression checks pass
+throughout, with no test tool edited. **Stage 1a is next.**
 
 **Stage 1a -- normalise the widget set.** One `natural_size()` spelling
 replacing the three that exist; `set_geometry()` on generation B;
