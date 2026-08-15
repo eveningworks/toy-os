@@ -28,9 +28,14 @@ void ui_radio_list_natural_size(const struct ui_radio_list *list, int *out_w, in
     if (out_h) *out_h = row_count(list) * list->row_h;
 }
 
-void ui_radio_list_draw(const struct ui_radio_list *list, int x, int y, int selected,
+void ui_radio_list_draw(const struct ui_radio_list *list, int origin_x, int origin_y, int selected,
                          int hovered, uint32_t bg, uint32_t fg, uint32_t accent) {
     int text_h = gfx_char_h();
+    // The control's own content-relative position plus the window's
+    // content origin -- the same two-part addressing ui_button_draw()
+    // and ui_listbox_draw() use.
+    int x = origin_x + list->x;
+    int y = origin_y + list->y;
     for (int i = 0; i < list->count; i++) {
         int col, row;
         item_cell(list, i, &col, &row);
@@ -69,7 +74,14 @@ void ui_radio_list_draw(const struct ui_radio_list *list, int x, int y, int sele
     }
 }
 
-int ui_radio_list_hit(const struct ui_radio_list *list, int x, int y, int px, int py) {
+void ui_radio_list_set_geometry(struct ui_radio_list *list, int x, int y) {
+    list->x = x;
+    list->y = y;
+    ui_radio_list_natural_size(list, &list->w, &list->h);
+}
+
+int ui_radio_list_hit(const struct ui_radio_list *list, int cx, int cy) {
+    int x = list->x, y = list->y, px = cx, py = cy;
     for (int i = 0; i < list->count; i++) {
         int col, row;
         item_cell(list, i, &col, &row);

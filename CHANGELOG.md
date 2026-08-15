@@ -245,6 +245,44 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   one geometry calculation shared by draw/hit-test/drag (so a scrollbar
   thumb cannot be in two places), and commit-on-release.
 
+### Changed
+- **The radio list and the ring-3 text field carry their own geometry.**
+  Both were "generation B" in `docs/uapp-design.md`'s widget audit: a
+  struct with real state, but no position -- `draw()` and `hit()` were
+  each *told* where the control was, separately, on every call. Two
+  consequences: nothing else could ask where the control is (so a layout
+  has nowhere to write), and the two callers could disagree, which is
+  the classic source of a click landing on the wrong row.
+
+  They now have `x, y, w, h` and a `set_geometry()`, matching every
+  generation-A widget. `ui_radio_list_draw()` takes the window's content
+  origin rather than the control's position, and `ui_radio_list_hit()`
+  takes a content-relative point -- the same two-part addressing
+  `ui_button` and `ui_listbox` already use. `w`/`h` are derived from
+  `natural_size()` rather than stored from the caller, because a radio
+  list cannot be stretched into a size its grid doesn't produce.
+
+  `text_field` was NOT converted, and that is the audit being wrong
+  rather than a gap: it has no callers outside `ui_textbox`, which is
+  already a generation-A object wrapping it. It is an implementation
+  detail, not a layout child.
+
+  **Verified where it mattered most by hand, because no test covers it.**
+  The Control Panel's timezone picker is the only caller of the changed
+  API outside UI Demo, and `gui_regress` does not drive the Control
+  Panel at all. Checked by pixel value with a control point, per
+  `docs/gui-guidelines.md`: clicking `tokyo` moved its marker from
+  (235,235,235) to (51,144,255), moved `utc`'s the other way, and left
+  `helsinki`'s untouched.
+
+  A cross-check fell out of it too. UI Demo's layout log now reports the
+  radio list's stored geometry instead of recomputing `2 * col_w` and
+  `2 * radio_row_h()` at the call site -- so `uidemo_test.py`'s clicks,
+  which are derived from that log, would land somewhere else if
+  `natural_size()` and the app's hand arithmetic ever disagreed. They
+  agree: 27/27 unchanged. That is the first real verification that the
+  natural sizes are right rather than merely self-consistent.
+
 ### Added
 - **Every widget reports a natural size, in one spelling.** Eleven
   `*_natural_size(..., int *w, int *h)` functions across `apps/ui/` and

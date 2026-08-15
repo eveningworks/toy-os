@@ -250,7 +250,7 @@ static enum widget_id widget_at(int cx, int cy) {
     int beta_x = PAD + checkbox_w("Alpha") + 20;
     if (widget_checkbox_hit(beta_x, cy0, CHK_SIZE, "Beta", cx, cy)) return W_CHK_BETA;
 
-    if (ui_radio_list_hit(&g_state.radio, PAD, row_radio(), cx, cy) >= 0) return W_RADIO;
+    if (ui_radio_list_hit(&g_state.radio, cx, cy) >= 0) return W_RADIO;
     if (ui_textbox_hit(&g_state.textbox, cx, cy)) return W_TEXTBOX;
 
     if (ui_textview_hit(&g_state.view, cx, cy)) return W_SCROLLBACK;
@@ -275,8 +275,15 @@ static void log_layout(void) {
                        g_state.buttons[0].w, g_state.buttons[0].h },
         { "chk_alpha", PAD, row_checks(),
                        checkbox_w("Alpha"), CHK_SIZE },
-        { "radio",     PAD, row_radio(), 2 * g_state.radio.col_w,
-                       2 * radio_row_h() },
+        // Read from the control rather than recomputed here -- which
+        // is also a check: these used to be `2 * col_w` and
+        // `2 * radio_row_h()` worked out at this call site, and they
+        // now come from ui_radio_list_set_geometry() via
+        // ui_radio_list_natural_size(). If the two ever disagreed, the
+        // logged geometry would move and uidemo_test.py's clicks would
+        // land somewhere else.
+        { "radio",     g_state.radio.x, g_state.radio.y,
+                       g_state.radio.w, g_state.radio.h },
         { "textbox",   g_state.textbox.x, g_state.textbox.y,
                        g_state.textbox.w, g_state.textbox.h },
         { "dropdown",  g_state.dropdown.x, g_state.dropdown.y,
@@ -311,6 +318,11 @@ static void layout(void) {
                                 PAD + i * (BTN_W + ROW_GAP), row_buttons(),
                                 BTN_W, btn_h());
     }
+    // The radio list joins the relayout now that it carries its own
+    // position -- it used to be told where it was on every draw and
+    // every hit test, separately, which is exactly the arrangement that
+    // lets the two disagree.
+    ui_radio_list_set_geometry(&g_state.radio, PAD, row_radio());
     ui_textbox_set_geometry(&g_state.textbox, PAD, row_textbox(), TBX_W, tbx_h());
     ui_dropdown_set_geometry(&g_state.dropdown, PAD, row_dropdown(), DD_W, dd_h());
     ui_listbox_set_geometry(&g_state.list, PAD, row_list(), LIST_W, list_h());
@@ -405,10 +417,9 @@ void uidemo_draw(struct window *win) {
     // The hovered ROW, not just "is the list hovered" -- widget_at()
     // reports the widget, so ask the list itself which row that is.
     int radio_hot = (g_state.hover_name == W_RADIO)
-        ? ui_radio_list_hit(&g_state.radio, PAD, row_radio(),
-                             g_state.hover_x, g_state.hover_y)
+        ? ui_radio_list_hit(&g_state.radio, g_state.hover_x, g_state.hover_y)
         : -1;
-    ui_radio_list_draw(&g_state.radio, cx + PAD, cy + row_radio(), g_state.radio_sel,
+    ui_radio_list_draw(&g_state.radio, cx, cy, g_state.radio_sel,
                         radio_hot, THEME_WINDOW_BG, THEME_TEXT, THEME_SELECTION_BG);
 
     ui_textbox_draw(&g_state.textbox, cx, cy);
@@ -562,7 +573,7 @@ void uidemo_click(struct window *win, int cx, int cy) {
         logline(msg);
         set_status(msg);
     } else if (w == W_RADIO) {
-        int hit = ui_radio_list_hit(&g_state.radio, PAD, row_radio(), cx, cy);
+        int hit = ui_radio_list_hit(&g_state.radio, cx, cy);
         if (hit >= 0) {
             g_state.radio_sel = hit;
             k_snprintf(msg, sizeof msg, "radio %s", RADIO_LABELS[hit]);

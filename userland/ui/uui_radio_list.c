@@ -22,9 +22,16 @@ static void radio_cell(const struct uui_radio_list *l, int i, int x, int y, int 
     *cy = y + (i / cols) * l->row_h;
 }
 
+void uui_radio_list_set_geometry(struct uui_radio_list *l, int x, int y) {
+    l->x = x;
+    l->y = y;
+    uui_radio_list_natural_size(l, &l->w, &l->h);
+}
+
 void uui_radio_list_draw(struct ugfx_surface *s, const struct uui_radio_list *l,
-                          int x, int y, int selected, int hovered,
+                          int selected, int hovered,
                           uint32_t bg, uint32_t fg) {
+    int x = l->x, y = l->y;
     for (int i = 0; i < l->count; i++) {
         int cx, cy;
         radio_cell(l, i, x, y, &cx, &cy);
@@ -47,7 +54,8 @@ void uui_radio_list_draw(struct ugfx_surface *s, const struct uui_radio_list *l,
     }
 }
 
-int uui_radio_list_hit(const struct uui_radio_list *l, int x, int y, int px, int py) {
+int uui_radio_list_hit(const struct uui_radio_list *l, int cx, int cy) {
+    int x = l->x, y = l->y, px = cx, py = cy;
     for (int i = 0; i < l->count; i++) {
         int cx, cy;
         radio_cell(l, i, x, y, &cx, &cy);

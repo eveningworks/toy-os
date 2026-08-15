@@ -102,7 +102,12 @@ static void tz_applet_draw(int x, int y, int w, int h) {
     // hovered. Passing -1 is honest rather than wrong -- the row hover
     // simply doesn't show here yet. Forwarding hover into applets is
     // recorded in docs/roadmap.md's known-issues list.
-    ui_radio_list_draw(&g_tz_list, x, list_y, tz_current_index(), -1,
+    // Position the control, then draw it where it says it is. The
+    // applet's own (x, y) is already absolute here, so the origin
+    // passed to draw() is (0, 0) -- see ui_radio_list.h on the
+    // two-part addressing.
+    ui_radio_list_set_geometry(&g_tz_list, x, list_y);
+    ui_radio_list_draw(&g_tz_list, 0, 0, tz_current_index(), -1,
                         THEME_WINDOW_BG, THEME_TEXT, THEME_SELECTION_BG);
 
     // The current local time, so the effect of a change is visible
@@ -121,7 +126,10 @@ static int tz_applet_click(int x, int y, int w, int h, int px, int py) {
     (void)w; (void)h;
     tz_applet_build_list();
     int list_y = y + gfx_char_h() + 8;
-    int hit = ui_radio_list_hit(&g_tz_list, x, list_y, px, py);
+    // The click handler runs without a draw in between, so it restates
+    // the geometry rather than trusting whatever the last draw left.
+    ui_radio_list_set_geometry(&g_tz_list, x, list_y);
+    int hit = ui_radio_list_hit(&g_tz_list, px, py);
     if (hit < 0) return 0;
     return tz_set_index(hit); // persists to /etc/toyos.conf itself
 }

@@ -25,6 +25,16 @@
 // kept in sync with).
 
 struct ui_radio_list {
+    // Content-relative geometry, the same convention every other widget
+    // here uses (ui_button, ui_listbox, ui_textbox, ...). This used to
+    // live nowhere: draw() and hit() each took an x/y from the caller,
+    // which meant the control had no position of its own for anything
+    // ELSE to read -- and a layout has nowhere to write. `w`/`h` are
+    // kept in step by ui_radio_list_set_geometry() from the natural
+    // size, since a radio list's size is entirely determined by its
+    // grid.
+    int x, y, w, h;
+
     const char *const *options; // caller-owned array of `count` labels
     int count;
     int cols;         // columns to lay the rows out in (1 = a plain vertical list)
@@ -41,6 +51,16 @@ struct ui_radio_list {
 // exactly this, under a name nothing else shared.
 void ui_radio_list_natural_size(const struct ui_radio_list *list, int *out_w, int *out_h);
 
+// Positions the control. `w`/`h` follow from the grid rather than from
+// the caller -- a radio list cannot be stretched into a size its rows
+// and columns don't produce, so it recomputes them from
+// ui_radio_list_natural_size() rather than storing whatever it is told.
+// Separate from configuring the list for the same reason
+// ui_button_set_geometry() is separate from ui_button_init(): geometry
+// is font-dependent and gets recomputed, and re-running a full init
+// every frame would wipe state that has to survive.
+void ui_radio_list_set_geometry(struct ui_radio_list *list, int x, int y);
+
 // Draws every option at (x, y), with row `selected` marked. `selected`
 // outside [0, count) simply marks nothing -- a caller whose underlying
 // setting isn't in the list (an /etc file naming a city this build
@@ -56,7 +76,7 @@ void ui_radio_list_natural_size(const struct ui_radio_list *list, int *out_w, in
 // (see ui_radio_list_hit below), so the wash covers the whole row too --
 // a highlight smaller than the target it describes misreports where to
 // click.
-void ui_radio_list_draw(const struct ui_radio_list *list, int x, int y, int selected,
+void ui_radio_list_draw(const struct ui_radio_list *list, int origin_x, int origin_y, int selected,
                          int hovered, uint32_t bg, uint32_t fg, uint32_t accent);
 
 // Index of the option at (px, py), or -1 if the point isn't on one.
@@ -64,6 +84,6 @@ void ui_radio_list_draw(const struct ui_radio_list *list, int x, int y, int sele
 // between them), not just the marker or the text -- a 14px circle is a
 // mean click target, and the whole row reading as clickable is what
 // every real settings list does.
-int ui_radio_list_hit(const struct ui_radio_list *list, int x, int y, int px, int py);
+int ui_radio_list_hit(const struct ui_radio_list *list, int cx, int cy);
 
 #endif

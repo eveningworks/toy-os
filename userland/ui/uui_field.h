@@ -15,6 +15,12 @@
 #define UUI_FIELD_MAX 48
 
 struct uui_field {
+    // Content-relative geometry -- see apps/ui/ui_radio_list.h's note.
+    // Unlike the radio list, a field CAN be stretched, so w/h are
+    // whatever set_geometry is told (its natural width is 0, meaning
+    // "no preference" -- see uui_primitives.h).
+    int x, y, w, h;
+
     char buf[UUI_FIELD_MAX]; // NUL-terminated
     int len;
     int cursor; // [0, len]
@@ -35,8 +41,12 @@ void uui_field_natural_size(const struct uui_field *f, int *out_w, int *out_h);
 // Draws the field, scrolling its content horizontally so the caret
 // stays visible -- typing past the right edge behaves like a real text
 // input rather than drawing through the border.
-void uui_field_draw(struct ugfx_surface *s, int x, int y, int w, int h,
-                     const struct uui_field *f,
+void uui_field_set_geometry(struct uui_field *f, int x, int y, int w, int h);
+
+// Point (cx, cy) inside the field, content-relative.
+int uui_field_hit(const struct uui_field *f, int cx, int cy);
+
+void uui_field_draw(struct ugfx_surface *s, const struct uui_field *f,
                      uint32_t bg, uint32_t fg, uint32_t border);
 
 #endif

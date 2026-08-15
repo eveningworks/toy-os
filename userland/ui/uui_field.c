@@ -73,9 +73,17 @@ int uui_field_key(struct uui_field *f, int key) {
     return 1;
 }
 
-void uui_field_draw(struct ugfx_surface *s, int x, int y, int w, int h,
-                     const struct uui_field *f,
+void uui_field_set_geometry(struct uui_field *f, int x, int y, int w, int h) {
+    f->x = x; f->y = y; f->w = w; f->h = h;
+}
+
+int uui_field_hit(const struct uui_field *f, int cx, int cy) {
+    return uui_hit(f->x, f->y, f->w, f->h, cx, cy);
+}
+
+void uui_field_draw(struct ugfx_surface *s, const struct uui_field *f,
                      uint32_t bg, uint32_t fg, uint32_t border) {
+    int x = f->x, y = f->y, w = f->w, h = f->h;
     ugfx_fill_rect(s, x, y, w, h, bg);
     ugfx_draw_rect(s, x, y, w, h, border);
 
