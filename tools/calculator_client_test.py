@@ -45,8 +45,6 @@ DEFAULT_SOCK = ".vm.serial"
 TITLE = "Calculator"
 SPAWN_CMD = "run calculator"
 
-# userland/gui/calculator.c's layout constants.
-MARGIN, GAP, COLS, ROWS = 8, 6, 4, 5
 SPAWN_TIMEOUT_S = 15.0
 
 # Row-major, matching the client's BUTTONS[] table.
@@ -58,35 +56,56 @@ LABELS = ["C", "CE", "%", "/",
 
 
 class Layout:
-    """Button geometry solved from the reported content size.
+    """Button geometry as the CLIENT reports it, not as Python guesses.
 
-    Derived rather than hardcoded: the client sizes everything off the
-    font it is handed, so pinning pixel values here would silently
-    mis-click the moment the desktop font size changed.
+    Calculator logs one `calculator: layout <what> [name] x y w h` line
+    per widget at startup (content-relative), the same grammar UI Demo
+    and Shapes use. This class just parses them.
+
+    It used to solve the geometry from the reported content size
+    instead, inverting the app's own sizing formula -- including a
+    literal `char_h = (ch - 150) // 7`. That is the trap both other GUI
+    test tools document, and it sprang: when Calculator moved to
+    uui_layout the inversion produced a char_h of 18 against a real 17
+    and buttons 44px wide against a real 40, so every click landed
+    several pixels off centre. They still landed INSIDE the buttons, so
+    this suite stayed green while measuring something it no longer
+    understood -- which is worse than a red test, because nothing asks
+    you to look.
     """
 
-    def __init__(self, content):
+    def __init__(self, content, lines):
         self.ox, self.oy = content["x"], content["y"]
-        cw, ch = content["w"], content["h"]
-        self.btn_w = (cw - 2 * MARGIN - (COLS - 1) * GAP) // COLS
-        # ch = 2*MARGIN + (2*char_h + 30) + ROWS*(char_h+16) + (ROWS-1)*GAP
-        self.char_h = (ch - 150) // 7
-        self.btn_h = self.char_h + 16
-        self.top_h = 2 * self.char_h + 30
-        self.cw, self.chh = cw, ch
+        self.cw, self.chh = content["w"], content["h"]
+        self.buttons = {}   # label -> (x, y, w, h), content-relative
+        self.display = None
+        for l in lines:
+            if "calculator: layout " not in l:
+                continue
+            parts = l.split("calculator: layout ", 1)[1].split()
+            if parts[0] == "btn" and len(parts) >= 6:
+                self.buttons[parts[1]] = tuple(int(v) for v in parts[2:6])
+            elif parts[0] == "display" and len(parts) >= 5:
+                self.display = tuple(int(v) for v in parts[1:5])
+
+    def complete(self):
+        return self.display is not None and len(self.buttons) == len(LABELS)
 
     def button_center(self, label):
-        i = LABELS.index(label)
-        row, col = i // COLS, i % COLS
-        bx = MARGIN + col * (self.btn_w + GAP)
-        by = MARGIN + self.top_h + row * (self.btn_h + GAP)
-        return (self.ox + bx + self.btn_w // 2, self.oy + by + self.btn_h // 2)
+        x, y, w, h = self.buttons[label]
+        return (self.ox + x + w // 2, self.oy + y + h // 2)
 
     def display_box(self):
-        """Screen-coordinate box of the numeric display strip."""
-        y = self.oy + MARGIN + (self.char_h + 4) + 2
-        return (self.ox + MARGIN, y,
-                self.ox + self.cw - MARGIN, y + self.char_h + 16)
+        """Screen-coordinate box of the numeric display strip.
+
+        The display ITEM covers the expression line and the numeric
+        strip below it; the strip is the lower part. Derived from the
+        reported rect rather than from font metrics.
+        """
+        x, y, w, h = self.display
+        strip_h = h * 2 // 3
+        return (self.ox + x, self.oy + y + h - strip_h,
+                self.ox + x + w, self.oy + y + h)
 
 
 class Result:
@@ -120,18 +139,26 @@ def run(dbg, qmp, tmp, shot_dir, res):
     type_text(dbg, SPAWN_CMD)
     dbg.send("gui key 0x0d")
 
+    # Poll for BOTH the window and the client's self-reported layout --
+    # the ELF has to load and lay itself out before either is answerable.
     deadline = time.time() + SPAWN_TIMEOUT_S
-    win = None
+    win, lines = None, []
     while time.time() < deadline:
+        lines += dbg.logs("calculator:", clear=True)
         win = dbg.window(TITLE)
-        if win:
+        if win and any("layout btn" in l for l in lines):
             break
+        time.sleep(0.3)
     res.check("Calculator runs as a ring-3 process with its own window", win is not None,
               f"no window titled {TITLE!r} within {SPAWN_TIMEOUT_S}s")
     if not win:
         return
 
-    lay = Layout(win["content"])
+    lay = Layout(win["content"], lines)
+    res.check("Calculator reports its own layout", lay.complete(),
+              f"got {len(lay.buttons)}/{len(LABELS)} buttons, display={lay.display}")
+    if not lay.complete():
+        return
     box = lay.display_box()
     zero = display_pixels(qmp, tmp, "calc_zero.png", box)
 

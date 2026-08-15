@@ -245,6 +245,30 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   one geometry calculation shared by draw/hit-test/drag (so a scrollbar
   thumb cannot be in two places), and commit-on-release.
 
+### Fixed
+- **Calculator's test was measuring geometry it no longer understood.**
+  `calculator_client_test.py` solved button positions by inverting the
+  app's old sizing formula in Python -- including a literal
+  `char_h = (ch - 150) // 7`. That is precisely the trap
+  `uidemo_test.py` and `gfxdemo_test.py` both document, and it sprang:
+  after the move to `uui_layout` the inversion produced a `char_h` of 18
+  against a real 17 and buttons 44px wide against a real 40, so every
+  click landed several pixels off centre. They still landed INSIDE the
+  buttons, so the suite stayed green.
+
+  A green test measuring the wrong thing is worse than a red one,
+  because nothing asks you to look. Calculator now reports its own
+  layout at startup -- one `calculator: layout btn <label> x y w h` line
+  per button plus one for the display, content-relative, on stderr, the
+  same grammar the other two apps use -- and the test parses those
+  instead of deriving anything. 9 checks now: the extra one is that the
+  client reported a complete layout at all.
+
+  Worth stating as a rule, since three tools have now needed it: **a GUI
+  test should ask the app where things are.** Re-deriving it in Python
+  works until the layout changes, and then fails quietly rather than
+  loudly.
+
 ### Added
 - **Layout: apps stop doing coordinate arithmetic.** Stage 1c of
   `docs/uapp-design.md`. `uui_layout` places widgets in a column, row or

@@ -139,6 +139,52 @@ static char code_for_key(int key) {
     return 0;
 }
 
+// --- self-reported layout --------------------------------------------
+//
+// Calculator reports where its buttons actually are, rather than
+// letting tools/calculator_client_test.py re-derive them from the
+// window size. That test used to invert this app's old sizing formula
+// in Python (`char_h = (ch - 150) // 7`), which is exactly the trap
+// uidemo_test.py and gfxdemo_test.py document: the Python copy drifts
+// silently the moment the layout changes. It did drift here -- after
+// the move to uui_layout it computed a char_h of 18 against a real 17,
+// and its clicks landed several pixels off centre. They still landed
+// INSIDE the buttons, so the suite stayed green while measuring
+// something it no longer understood. That is a worse failure than a
+// red test, and this is the fix.
+//
+// Grammar matches the other two: one line per widget, content-relative,
+// on stderr (which reaches dmesg -- a client's stdout goes to its
+// owning Terminal's scrollback, where no test can read it).
+static void log_line(const char *s) { sys_eprint(s); }
+
+static int append_int(char *buf, int n, int v) {
+    if (v < 0) { buf[n++] = '-'; v = -v; }
+    char d[12];
+    int c = 0;
+    if (v == 0) d[c++] = '0';
+    while (v > 0) { d[c++] = (char)('0' + v % 10); v /= 10; }
+    while (c > 0) buf[n++] = d[--c];
+    return n;
+}
+
+static void log_rect(const char *what, const char *name, int x, int y, int w, int h) {
+    char b[80];
+    int n = 0;
+    const char *pre = "calculator: layout ";
+    while (pre[n]) { b[n] = pre[n]; n++; }
+    for (const char *p = what; *p; p++) b[n++] = *p;
+    b[n++] = ' ';
+    if (name) { for (const char *p = name; *p; p++) b[n++] = *p; b[n++] = ' '; }
+    n = append_int(b, n, x); b[n++] = ' ';
+    n = append_int(b, n, y); b[n++] = ' ';
+    n = append_int(b, n, w); b[n++] = ' ';
+    n = append_int(b, n, h);
+    b[n++] = '\n';
+    b[n] = '\0';
+    log_line(b);
+}
+
 // --- the layout ------------------------------------------------------
 //
 // A column of [display area, 4x5 button grid]. That is the whole of
@@ -168,6 +214,15 @@ static void on_action(struct uapp *a, int code) {
 static void on_open(struct uapp *a) {
     (void)a;
     calc_reset(&g_calc);
+
+    // Geometry is settled by now: uapp runs the layout before calling
+    // this, so every rect below is the one that will actually be drawn.
+    log_rect("display", 0, g_display.x, g_display.y, g_display.w, g_display.h);
+    for (int i = 0; i < BUTTON_COUNT; i++) {
+        log_rect("btn", BUTTONS[i].label,
+                  g_buttons[i].x, g_buttons[i].y, g_buttons[i].w, g_buttons[i].h);
+    }
+    log_line("calculator: ready\n");
 }
 
 int main(void) {
