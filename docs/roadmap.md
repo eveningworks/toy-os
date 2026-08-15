@@ -113,7 +113,54 @@ adds 4; 12 adds 5; 13 adds 6; 14 and up add 8.
       `krandom_quality()` reporting which one it got, and the stack
       canary randomized from it at boot
 - [ ] Kernel ASLR (randomize load base) -- the entropy source it was
-      blocked on exists now; what remains is the relocation work itself
+      blocked on exists now; what remains is the relocation work itself.
+      **Scoped out on 2026-08-15 without building anything; the
+      measurements below are the part worth not repeating.**
+
+      *Feasible, and the identity map is why.* VA==PA across the low
+      4 GiB, so moving the image keeps it mapped and every PC-relative
+      reference survives untouched. Linking the current objects with
+      `ld --emit-relocs` and counting what lands in LOADED sections
+      (`.text`/`.rodata`/`.eh_frame`/`.ktests`/`.data`) gives:
+
+      | type | count | needs fixup |
+      |---|---|---|
+      | `PC32` + `PLT32` | 11,947 | no -- relative |
+      | `32S` | 5,364 | yes |
+      | `64` | 1,816 | yes |
+      | `32` | 9 | yes |
+
+      So **7,189 fixups**, about a 29 KB table -- small enough to embed
+      in the image and apply at boot, which is Linux's `CONFIG_RELOCATABLE`
+      shape (a build-time relocs tool over `--emit-relocs`, not a PIE
+      link).
+
+      *Two constraints found by measuring, not by reading.*
+      `-mcmodel=kernel` (Makefile) makes every absolute reference a
+      32-bit sign-extended immediate, so **the base must stay in the low
+      2 GiB** -- a higher-half design is a different, much larger change.
+      And the image is 2.3 MB on disk but **~14.5 MB in memory**, because
+      `.bss` carries gfx's 13 MB back buffer; on a 256 MB guest that
+      leaves roughly 92 slots at 2 MiB alignment, i.e. **~6.5 bits of
+      entropy** (Linux's x86 physical KASLR gets ~9). Real, but modest,
+      and worth deciding about before building rather than after.
+
+      *Suggested staging, because a wrong fixup is a machine that does
+      not boot.* (1) the build-time relocs tool plus a check that the
+      table matches the image; (2) self-relocate with offset ZERO --
+      nothing moves, so a failure there means the fixup code is wrong
+      and nothing else; (3) turn on the random offset. Stage 2 is
+      independently useful (it makes the kernel genuinely relocatable)
+      and is the positive control for stage 3. `make debug` + GDB is the
+      recovery path when a stage does not boot.
+
+      *Also unresolved:* `pmm.c` reserves `0.._kernel_end`, which
+      over-reserves once the image moves up; `boot.asm`'s page tables
+      (`p4_table`/`p3_table`/`p2_tables`) live in `.bss`, so CR3 has to
+      be reloaded with their relocated addresses; and the copy/fixup
+      stub has to be position-independent, which argues for writing it
+      in assembly rather than trusting a C file compiled `-fPIC` not to
+      emit an absolute reference.
 - [x] ~~Enable SMEP/SMAP (CR4)~~ -- done. `paging_enable_smep_smap()`
       sets both where CPUID reports them, and the audit it forced is the
       substance: all 23 deliberate user-pointer dereferences now go

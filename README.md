@@ -319,6 +319,8 @@ Useful tools in `tools/` (all documented in their own docstrings):
 | `tfs3_writer.py`, `tfs2_writer.py` | Read, write, delete, inspect and corrupt-for-testing files inside a TFS3 / TFS2 `disk.img` from the host, without booting. Each refuses the other's images. |
 | `seed_disk.py` | Format-aware seeding front-end the Makefile uses: probes the image's magic, delegates to the matching writer, formats a blank image with the default (TFS3). |
 | `fs_switch_test.py` | Boots a disk copy and proves probe, wipefs, live `fsformat` switching both ways, and reboot persistence -- run after touching `kernel/fs/`. |
+| `usertest_run.py`, `gui_regress.py` | The self-checking ring-3 `/tests` diagnostics, and every GUI test tool, each as one pass/fail table. |
+| `faulttest_run.py` | The `/tests` binaries that fault ON PURPOSE, asserted against the kernel's own crash report rather than an exit code they don't have. |
 | `screenshot_diff.py` | Pixel-diff two screenshots with a pass/fail threshold. |
 
 `CLAUDE.md` documents the conventions and environment quirks in depth.
@@ -371,6 +373,20 @@ Useful tools in `tools/` (all documented in their own docstrings):
   `docs/decisions.md`). `run nx_test` / `run stack_smash_test` prove
   the userspace half for real, not by assertion; the `paging` KTESTs
   and a deliberate `PANIC: Page fault` prove the kernel half.
+- **SMEP and SMAP** are set wherever the CPU reports them, so ring 0
+  cannot execute, read or write a user page at all. Kernel code reaches
+  user memory only through `vmm.h`'s copy helpers, which go via the
+  kernel's own identity map -- so **EFLAGS.AC is never set anywhere in
+  this kernel** and there is no STAC/CLAC window in which the
+  protection is off. QEMU's default `qemu64` model supports neither
+  bit; `--cpu max` is what exercises them.
+- **A guard page below each user stack.** The region is unmapped, so an
+  overflow already faulted -- what is new is that `SYS_SBRK` is bounded
+  against it (it previously had no ceiling and could map the heap
+  straight over the live stack, silently) and that a fault there is
+  reported as `Stack overflow` with the stack's range rather than as an
+  anonymous page fault. `run stackovf_test`, and
+  `tools/faulttest_run.py` asserts the report.
 - An entropy source (`kernel/lib/krandom.c`): RDSEED, then RDRAND, then
   a TSC-jitter harvest when the CPU has neither, mixed through
   splitmix64's finalizer. Deliberately NOT a CSPRNG, and it says so --
