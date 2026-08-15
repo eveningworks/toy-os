@@ -246,6 +246,52 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   thumb cannot be in two places), and commit-on-release.
 
 ### Changed
+- **Userland programs link one archive and name nothing.**
+  `build/userland/libuapp.a` holds `userland/ui/`, `userland/lib/` and
+  the sources shared with the kernel; every ELF links it with
+  `--gc-sections`, so each binary gets exactly the members it
+  references. The per-binary `EXTRA_OBJS_<name>` lists are empty, and
+  **adding a GUI app is now a `.c` file in `userland/gui/` with no
+  Makefile edit at all** -- which was the point of the whole exercise.
+
+  Brought forward from "deferred until a client needs it": splitting
+  the toolkit one file per widget was about to turn each app's object
+  list from three entries into eight, which is exactly the second real
+  caller the deferral was waiting for.
+
+  Measured across the 29 userland binaries: **171 KB smaller in total**,
+  Terminal -32% (138 KB to 94 KB), Calculator -27%, `uiclient` -41%.
+  `hello` gained nothing -- it references no toolkit symbol, so it pulls
+  no member, which was the specific risk of linking a toolkit globally.
+  All 82 GUI regression checks pass, `ktest` 108/108, no test tool
+  edited.
+
+  Three mechanics matter together and are useless apart, so all three
+  are commented where they live: `-ffunction-sections -fdata-sections`
+  (archive granularity alone still links a whole member -- one checkbox
+  would drag in the listbox and dropdown sharing its `.c`);
+  `userland/rt/link.ld` matching `.text.*` rather than `.text` (with
+  function-sections on, a script matching only `.text` places no code,
+  the link SUCCEEDS, and the symptom is a fault at the entry point
+  rather than a linker error); and the archive going last on the link
+  line.
+
+  **A general trap this exposed:** the Makefile tracks header
+  dependencies, not compiler flags. Adding `-ffunction-sections` to
+  `USERLAND_CFLAGS` invalidated nothing, so the first build linked
+  stale objects and `--gc-sections` looked like it half-worked --
+  binaries shrank (unreferenced archive members were skipped) while
+  unused functions survived inside every member that was pulled in.
+  `make clean` after a flags change; a compiler flag that appears to
+  work partially is a stale-object symptom first. Now noted in
+  `CLAUDE.md` next to the dependency-tracking paragraph.
+
+  Also removed two things the restructure had orphaned: a
+  `$(BUILD)/userland/crt0.o: userland/crt0.asm` rule naming a path that
+  no longer exists (the generic `%.asm` rule had silently taken over),
+  and the comment block explaining why a toolkit could not be linked
+  globally without `--gc-sections`.
+
 - **`userland/` is split by role, and the build derives from it.** 44
   files sat flat in one directory -- the C runtime, the GUI toolkit,
   six real apps, a shell library and about twenty single-mechanism

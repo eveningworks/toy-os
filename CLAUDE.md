@@ -189,7 +189,17 @@ technical conventions below:
   `main`, passes its return to `sys_exit`) and `userland/rt/sys.c` is
   libsys -- one typed wrapper per syscall. **Never hand-roll an
   `int $0x80` stub in a new program**; that duplication across twenty
-  files is exactly what libsys replaced. `sys_call()` is the raw escape
+  files is exactly what libsys replaced. **A program names no other
+  objects either** -- `build/userland/libuapp.a` (the toolkit,
+  `userland/lib/`, and the sources shared with the kernel) is linked
+  into every ELF with `--gc-sections`, so each binary gets exactly the
+  members it references and nothing else; `hello` pulls no toolkit code
+  at all. Adding a GUI app is a `.c` file in `userland/gui/` with no
+  Makefile edit. Two things this depends on, both easy to break:
+  `userland/rt/link.ld` must match `.text.*` (function-sections put
+  every function in its own section, and a script matching only
+  `.text` links an empty program that faults at its entry point), and
+  the archive must come LAST on the link line. `sys_call()` is the raw escape
   hatch and is for the `/tests` diagnostics that poke the raw ABI on
   purpose, not for ordinary code. Two things to know before touching
   `crt0.asm`: the entry ABI is the STANDARD SysV stack layout (argc at
@@ -538,7 +548,16 @@ being read and `touch kernel/include/kernel/process.h` rebuilt
 *nothing*. It's a recursive `find` now, and **`tools/check_deps.py`
 (in `preflight.sh` and CI) proves per build directory that the tracking
 is actually live** -- so if that check is green, believe the tracking
-and go looking elsewhere. See `docs/decisions.md`. One subtlety if you ever
+and go looking elsewhere. **What is NOT tracked is a CFLAGS change** --
+the `.d` files record headers, so editing `CFLAGS`/`USERLAND_CFLAGS`
+invalidates nothing and the next build happily links objects compiled
+under the old flags. That bit for real when `-ffunction-sections` was
+added: `--gc-sections` looked like it half-worked (binaries shrank,
+because unreferenced archive members were skipped, but unused functions
+survived inside every object that WAS pulled in) purely because nothing
+had recompiled. **`make clean` after a flags change**, and treat a
+compiler flag that appears to work partially as a stale-object symptom
+first. See `docs/decisions.md`. One subtlety if you ever
 touch `tools/gen_version.sh`: it's deliberately idempotent (only
 rewrites `kernel/include/api/version.h` when `VERSION`'s value actually
 changed) specifically so this dependency tracking doesn't regress --

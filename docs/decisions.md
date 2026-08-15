@@ -157,7 +157,7 @@ there when you add an entry, or the index quietly stops being one.
 - [Repo history scrubbed of the maintainer's real name -- privacy request, not a bug fix](#repo-history-scrubbed-of-the-maintainers-real-name----privacy-request-not-a-bug-fix)
 - [Socket fds: scaffolding ahead of the driver, not a working transport](#socket-fds-scaffolding-ahead-of-the-driver-not-a-working-transport)
 - [Header dependency tracking is a `find`, and a test proves it works](#header-dependency-tracking-is-a-find-and-a-test-proves-it-works)
-- [Userland link lines are one `EXTRA_OBJS_<name>` line, not a libuapp.a (yet)](#userland-link-lines-are-one-extra_objs_name-line-not-a-libuappa-yet)
+- [Userland programs link one archive, and name nothing](#userland-programs-link-one-archive-and-name-nothing)
 - [Parallel test VMs lease a slot, they don't derive one from their position](#parallel-test-vms-lease-a-slot-they-dont-derive-one-from-their-position)
 
 **Session workflow & environment**
@@ -2205,30 +2205,50 @@ with no guard would have left the next directory move free to do this
 again. See `CHANGELOG.md`'s "the build's header dependency tracking had
 silently stopped working" entry.
 
-## Userland link lines are one `EXTRA_OBJS_<name>` line, not a libuapp.a (yet)
+## Userland programs link one archive, and name nothing
 
 Each ring-3 GUI client used to need a hand-written `FOO_OBJS = ...`
 block plus its own link rule in the Makefile -- four of them, ~50 lines,
-identical apart from the object list. A client now names its extra
-objects on one line (`EXTRA_OBJS_notepad = uui utext $(UGFX_OBJS)`) and
-the single `userland/%.elf` pattern rule picks them up through
-`.SECONDEXPANSION`.
+identical apart from the object list. That became one
+`EXTRA_OBJS_<name>` line per binary, and then, once the toolkit was
+about to be split one-file-per-widget, an archive: `libuapp.a` holds
+`userland/ui/`, `userland/lib/` and the sources shared with the kernel,
+every program links it, and **a program names nothing at all** -- the
+linker pulls only the members it references. A new GUI app is a `.c`
+file in `userland/gui/` and no Makefile edit.
 
-The considered alternative was a real `libuapp.a` with
-`-ffunction-sections`/`--gc-sections`, which would make a new client
-**zero** Makefile lines. It was deliberately deferred, not rejected: it
-changes `USERLAND_CFLAGS` for every ring-3 binary and hands the linker
-the decision about what each one contains, which needs its own size
-verification (`hello` must not gain the font path). That's a change
-worth making when a client actually needs it rather than preemptively --
-the same "second real caller" bar `apps/ui/` holds itself to. It is
-listed in `docs/roadmap.md`.
+The archive was deliberately deferred at design time and then brought
+forward, which is the rule working rather than a reversal: the bar is a
+second real caller, and splitting `uwidgets.c` into ten per-widget
+objects was what created one. Without an archive that split would have
+turned each app's object list from three entries into eight.
 
-Why `ugfx` implies `shared/geom shared/fixed` via a `UGFX_OBJS` group
-rather than a rule in the pattern: `userland/ui/ugfx.h` includes the shared
-`geom.h`, so the pair genuinely travels with it -- but writing the group
-out keeps what a binary links readable, where a rule inside the link
-line would hide it.
+Three mechanics that are load-bearing together, and useless apart:
+
+- `-ffunction-sections -fdata-sections` plus `--gc-sections`. Archive
+  granularity alone still links the whole of a member: one checkbox
+  would pull in the listbox, dropdown and text field sharing its `.c`.
+- **`userland/rt/link.ld` must match `.text.*`, not just `.text`.** With
+  function-sections on, a script matching only `*(.text)` places none of
+  the code. The link SUCCEEDS and the ELF is nearly empty; the symptom
+  is a fault at the entry point, not a linker error.
+- **The archive goes last on the link line.** A linker resolves archive
+  members against the undefined symbols accumulated so far, so an
+  archive ahead of its callers contributes nothing.
+
+Measured on the 29 userland binaries: 171 KB smaller in total, Terminal
+-32%, Calculator -27%, `uiclient` -41%, and `hello` gained nothing (it
+references no toolkit symbol, so it pulls no member). See
+`CHANGELOG.md`'s "userland programs link one archive" entry.
+
+**The trap this exposed, which is general:** the Makefile tracks HEADER
+dependencies (`-MMD`/`-MP`), not compiler FLAGS. Adding
+`-ffunction-sections` to `USERLAND_CFLAGS` invalidated nothing, so the
+first build linked stale objects compiled without it -- and the result
+looked like `--gc-sections` half-working (binaries shrank, because
+unreferenced archive members were still skipped, but unused functions
+inside a pulled member survived). `make clean` after a CFLAGS change,
+and be suspicious of a flag that appears to work partially.
 
 ## Parallel test VMs lease a slot, they don't derive one from their position
 

@@ -27,10 +27,18 @@ SECTIONS
 {
     . = 0x8000000000;
 
-    .text : { *(.text) } :text
+    /* The `.text.*` / `.data.*` / `.bss.*` wildcards are REQUIRED, not
+       tidiness: USERLAND_CFLAGS carries -ffunction-sections
+       -fdata-sections (so --gc-sections can drop unreferenced widgets
+       out of libuapp.a), which puts every function in its own
+       `.text.<name>` section. A script matching only `*(.text)` would
+       silently place none of them -- the link succeeds, the ELF is
+       nearly empty, and the failure surfaces as a page fault at the
+       entry point rather than as a linker error. */
+    .text : { *(.text .text.*) } :text
     . = ALIGN(4096);
     .rodata : { *(.rodata*) } :rodata
     . = ALIGN(4096);
-    .data : { *(.data) } :data
-    .bss : { *(COMMON) *(.bss) } :data
+    .data : { *(.data .data.*) } :data
+    .bss : { *(COMMON) *(.bss .bss.*) } :data
 }

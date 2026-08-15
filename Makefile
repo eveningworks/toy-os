@@ -10,6 +10,7 @@ GRUB_MKRESCUE := $(shell command -v grub-mkrescue 2>/dev/null || command -v grub
 
 CC = gcc
 LD = ld
+AR = ar
 ASM = nasm
 
 # kernel/include holds the driver/core headers + kapi.h (the boundary
@@ -131,7 +132,8 @@ DISK_IMG = disk.img
 # interrupt vector rather than only where the scheduler swaps processes.
 USERLAND_CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-protector-guard=global -fno-pic -fno-pie \
                    -mno-red-zone -mcmodel=large \
-                   -Wall -Wextra -O2 -g -c $(API_INCLUDES) -Iuserland -MMD -MP
+                   -Wall -Wextra -O2 -g -c $(API_INCLUDES) -Iuserland \
+                   -ffunction-sections -fdata-sections -MMD -MP
 # --- userland source layout ------------------------------------------
 #
 # userland/ is split by ROLE, and the split is load-bearing rather than
@@ -310,47 +312,49 @@ $(BUILD)/userland/%.o: userland/%.c
 # the canary symbols GCC emits references to. All three are linked into
 # every userland ELF, which is what lets a program be nothing but its
 # own main().
-$(BUILD)/userland/crt0.o: userland/crt0.asm
-	@mkdir -p $(dir $@)
-	$(ASM) $(ASMFLAGS) $< -o $@
-
 USERLAND_RT = $(BUILD)/userland/rt/crt0.o $(BUILD)/userland/rt/sys.o \
               $(BUILD)/userland/rt/stack_chk.o
 
-# What a userland ELF links BEYOND the runtime above, one line per
-# binary, named without the $(BUILD)/userland/ prefix and the .o suffix.
-# A program with no entry here (the common case -- `hello`, every
-# /tests binary) links nothing extra, exactly as before.
+# libuapp.a -- the toolkit, the userland libraries, and the sources
+# shared with the kernel, as ONE archive every program links against.
 #
-# This replaced four hand-written 12-line `FOO_OBJS = ...` blocks plus
-# their own link rules, which were identical apart from the object list
-# -- the same per-binary Makefile tax that `apps/wm/` and `apps/ui/`
-# each paid before source discovery went recursive. Adding a ring-3 GUI
-# app is now one line here and a .c file in userland/gui/, not a copied
-# block that is easy to get subtly wrong.
+# This replaced a per-binary object list (EXTRA_OBJS_<name>, which had
+# itself replaced four hand-written FOO_OBJS blocks). The reason it is
+# an archive rather than a longer list is what an archive DOES: the
+# linker pulls in only the members a program actually references, so a
+# program names nothing at all and still gets exactly what it uses.
+# Adding a widget, or a whole new app, needs no Makefile edit.
 #
-# Deliberately NOT folded into the pattern rule's common objects the way
-# stack_chk.o is: stack_chk.o is needed by every userland binary (GCC
-# emits references to it from any protected function), whereas ugfx.o is
-# wanted only by window clients -- and with no --gc-sections here,
-# linking it globally would pull the whole font-rendering path into
-# programs like `hello` that never draw anything. (A real libuapp.a with
-# --gc-sections would make even this line unnecessary; that's noted in
-# docs/roadmap.md, to be done when a client actually needs it rather
-# than preemptively.)
+# It works because of -ffunction-sections -fdata-sections above plus
+# --gc-sections below: archive member granularity alone would still
+# link the whole of (say) uwidgets.o for one checkbox, which is exactly
+# what this removes. userland/rt/link.ld's `.text.*` wildcards are
+# load-bearing for the same reason -- see the comment there.
 #
-# UGFX_OBJS is a group rather than three repeated entries because
-# userland/ugfx.h includes the SHARED geom.h (enum geom_aa), so anything
-# drawing through ugfx needs the shared geometry pair linked with it.
-# Written out rather than implied by the rule itself: a reader can see
-# what a binary actually gets.
-UGFX_OBJS = ui/ugfx shared/geom shared/fixed
+# `shared/` is in here too (see the shared-source rule below), which is
+# why the ring-3 Calculator no longer has to name calc_engine, string
+# and knum: it references calc_* and the linker finds it.
+LIBUAPP_SRCS = $(shell find userland/ui userland/lib -name '*.c' 2>/dev/null | sort)
+LIBUAPP_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBUAPP_SRCS)) \
+               $(BUILD)/userland/shared/geom.o \
+               $(BUILD)/userland/shared/fixed.o \
+               $(BUILD)/userland/shared/calc_engine.o \
+               $(BUILD)/userland/shared/string.o \
+               $(BUILD)/userland/shared/knum.o
+LIBUAPP      = $(BUILD)/userland/libuapp.a
 
-EXTRA_OBJS_uiclient   = $(UGFX_OBJS)
-EXTRA_OBJS_calculator = ui/uui $(UGFX_OBJS) shared/calc_engine shared/string shared/knum
-EXTRA_OBJS_notepad    = ui/uui ui/utext $(UGFX_OBJS)
-EXTRA_OBJS_terminal   = lib/ush ui/uui ui/utext $(UGFX_OBJS)
-EXTRA_OBJS_gfxdemo    = ui/uui ui/uwidgets $(UGFX_OBJS)
+$(LIBUAPP): $(LIBUAPP_OBJS)
+	@mkdir -p $(dir $@)
+	$(AR) rcs $@ $^
+
+# Kept as the escape hatch for an object that must be linked
+# unconditionally rather than pulled from the archive on demand. Empty
+# today, and an empty list is the good outcome -- see $(LIBUAPP) above.
+EXTRA_OBJS_uiclient   =
+EXTRA_OBJS_calculator =
+EXTRA_OBJS_notepad    =
+EXTRA_OBJS_terminal   =
+EXTRA_OBJS_gfxdemo    =
 
 # The extras for one binary, as real object paths.
 uextra = $(patsubst %,$(BUILD)/userland/%.o,$(EXTRA_OBJS_$(notdir $(1))))
@@ -362,8 +366,14 @@ uextra = $(patsubst %,$(BUILD)/userland/%.o,$(EXTRA_OBJS_$(notdir $(1))))
 # per-target variable, which is the whole point here.
 .SECONDEXPANSION:
 
-$(BUILD)/userland/%.elf: $(BUILD)/userland/%.o $(USERLAND_RT) userland/rt/link.ld $$(call uextra,$$*)
-	$(LD) -n -T userland/rt/link.ld -nostdlib -o $@ $(BUILD)/userland/rt/crt0.o $< $(call uextra,$*) $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o
+# --gc-sections drops every section nothing reaches, which is what
+# makes linking against one archive cheap: `hello` references nothing in
+# libuapp.a and gains nothing from it. The archive goes LAST -- a
+# linker resolves archive members against the undefined symbols it has
+# accumulated so far, so an archive placed before its callers
+# contributes nothing and the link fails with undefined references.
+$(BUILD)/userland/%.elf: $(BUILD)/userland/%.o $(USERLAND_RT) userland/rt/link.ld $(LIBUAPP) $$(call uextra,$$*)
+	$(LD) -n --gc-sections -T userland/rt/link.ld -nostdlib -o $@ $(BUILD)/userland/rt/crt0.o $< $(call uextra,$*) $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o $(LIBUAPP)
 
 # Sources SHARED between the kernel image and userland ELFs, compiled a
 # second time with USERLAND_CFLAGS into build/userland/shared/.
