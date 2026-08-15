@@ -11,16 +11,16 @@
 #
 #   tools/set_version.sh 0.2.0-dev
 #       Starting a new round of dev work (typically right after a
-#       release). Just rewrites VERSION. CHANGELOG.md is untouched --
-#       its fresh "## [Unreleased]" section (added by the release path
-#       below) keeps accumulating entries as before.
+#       release). Just rewrites VERSION; CHANGELOG.md is untouched.
 #
 #   tools/set_version.sh 0.2.0
 #       Cutting a real release. Rewrites VERSION AND stamps
 #       CHANGELOG.md: the current "## [Unreleased]" heading is renamed
-#       to "## [0.2.0] - <today's date>", and a fresh empty
-#       "## [Unreleased]" section is inserted above it so new entries
-#       have somewhere to go immediately. Doesn't touch git at all --
+#       to "## [0.2.0] - <today's date>", with a fresh empty one above.
+#       NOTE: CHANGELOG.md is closed (see CLAUDE.md) -- no new entries
+#       are written to it, so that stamp only labels the backlog that
+#       accumulated before the freeze, and is a no-op afterwards.
+#       Release notes come from `git log`. Doesn't touch git at all --
 #       tagging (`git tag v0.2.0`) and pushing are still separate,
 #       deliberate steps you run yourself (or via tools/device_git.sh),
 #       same as before.

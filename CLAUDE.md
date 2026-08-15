@@ -510,6 +510,29 @@ technical conventions below:
   its own keys to be unwieldy sharing `toyos.conf` (a GUI app with a
   dozen preferences, say) should get its own `/etc/<name>.conf` instead
   of cramming into the shared one just to match convention.
+- **A comment's length should track how SURPRISING the code is and how
+  dangerous it is to change -- not how much history it accumulated.**
+  This codebase leans hard on comments and mostly earns it: the note
+  above `damage_cursor()` saying `prev_cursor_*` means "where the
+  cursor was last actually DRAWN, recorded in `wm_render_frame()`, NOT
+  here" is what exposed a real bug weeks later, and `cpuinfo.h`'s "a
+  lazy calibration deadlocks inside a syscall" has stopped at least one
+  session moving that call. Keep writing those. Two things earn their
+  length: **the invariant** (what must stay true), and **the trap**
+  (what breaks if you edit this the obvious way).
+
+  What does NOT earn it is the war story. Several comments here retell
+  two or three past incidents with exact pixel counts and coordinates,
+  forty lines where the rule is two sentences. **Cap the anecdote at
+  one clause** -- "(a missed declaration left a second cursor on
+  screen)" persuades exactly as well as the forensics, and the
+  forensics are in `git log` if anyone truly wants them. Overall
+  density is ~25% of all `.c`/`.h` lines; headers run 65-80% and that's
+  fine, a header IS the documentation.
+
+  Existing long comments are deliberately NOT being retro-trimmed: they
+  read cheaply, and a bulk rewrite's most likely casualty is the one
+  sentence that saves a future session. This is a rule for new writing.
 - **`CHANGELOG.md` is CLOSED as of 2026-08-15. Do not add entries to
   it.** For most of this project every non-trivial change got a full
   writeup there, and the four files grew to ~12,000 lines. The reason
