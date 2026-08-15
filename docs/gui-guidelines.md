@@ -311,6 +311,40 @@ reason -- `run shapes`, press `A`.)
 **Angles are in TURNS**, not radians -- `FX_ONE` is a full rotation.
 See `docs/decisions.md`.
 
+## An app cannot draw outside its own window
+
+**This is enforced, not asked for.** The window manager narrows the clip
+rect to a window's content area around every `on_draw()`
+(`wm_render.c`'s `clip_to_window_content()`), so a kernel-space app that
+paints out of bounds has those pixels dropped rather than landing on the
+desktop or on the window behind it. It is a containment boundary, and it
+exists because the Control Panel's System Info rows once carried on down
+the desktop, perfectly legible, well outside the frame.
+
+A ring-3 client cannot do it at all: it draws into its own buffer, which
+IS its window, and it has no mapping of the framebuffer or of any other
+window. `ugfx` clips every primitive to the surface besides, so even a
+bounds mistake cannot reach the pages after its own buffer. Paging
+enforces the rest.
+
+**Deliberately drawing outside is possible, and is `gfx_clear_clip_rect()`.**
+That is the explicit opt-out: it removes the active clip for the rest of
+the current `on_draw()`, and the WM re-establishes the boundary for
+every window on every frame, so the escape cannot outlive one paint.
+Nothing in the tree needs it today. If you reach for it, say why in a
+comment -- the WM's own chrome and overlay drawing happen outside any
+app's `on_draw()` and do not need it either.
+
+**The boundary is tested continuously.** UI Demo paints two magenta
+squares outside its own content rect on every frame, and
+`tools/uidemo_test.py` asserts that colour appears nowhere on screen.
+That check exists because the boundary is one call in one function, it
+has silently regressed once already (an empty clip rect used to CLEAR
+the clip rather than reject every write, handing an app a full-screen
+`on_draw()`), and a regression is otherwise invisible until some app
+happens to overdraw. Validated by removing the clip and watching that
+one check -- and only that one -- go red.
+
 ## The damage invariant, and how to check it
 
 The WM only repaints the region declared as damage. That makes it

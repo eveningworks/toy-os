@@ -262,6 +262,32 @@ def run(d):
             d.key(K_SPACE), "button 2")
 
 
+def check_containment(d, qmp, tmp):
+    """The window manager must clip an app to its own window.
+
+    UI Demo deliberately paints two magenta squares outside its own
+    content rect on every frame (see apps/uidemo.c). They must never
+    reach the screen: wm_render.c's clip_to_window_content() narrows the
+    clip to the window's content area around on_draw(), which is a
+    containment boundary rather than an optimisation -- without it, an
+    app with a layout bug paints over the desktop and over whatever
+    window sits behind it.
+
+    Asserted as "this colour is nowhere on screen" rather than by
+    sampling the two spots, because a broken boundary does not
+    necessarily fail THERE: it lets everything the app draws escape, and
+    the markers are only the part guaranteed to be outside.
+    """
+    from PIL import Image
+    p = os.path.abspath(os.path.join(tmp, "uidemo_containment.png"))
+    qmp.screenshot(p)
+    with Image.open(p) as im:
+        colours = im.convert("RGB").getcolors(maxcolors=1 << 24) or []
+        leaked = sum(n for n, c in colours if c == (255, 0, 255))
+    d._record("an app cannot draw outside its own window", leaked == 0,
+              [], f"{leaked} magenta pixel(s) escaped the window")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -287,6 +313,11 @@ def main():
     d.open()
     print(f"uidemo_test: layout {d.layout}, row_h {d.row_h}")
     run(d)
+
+    print("\n== containment ==")
+    if qmp is None:
+        qmp = QMPSession(port=args.qmp_port)
+    check_containment(d, qmp, "/tmp")
 
     if args.shot:
         if qmp is None:

@@ -246,6 +246,41 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   thumb cannot be in two places), and commit-on-release.
 
 ### Added
+- **The "an app cannot draw outside its own window" boundary is tested
+  now, and documented as a boundary.** Asked whether toy-os could stop
+  GUI apps painting over the desktop by accident, the way Windows and
+  KDE do. It already could, on both sides -- but nothing checked it and
+  nothing said so.
+
+  A ring-3 client cannot do it at all: it draws into its own buffer,
+  which IS its window, with no mapping of the framebuffer or of any
+  other window, and `ugfx` clips every primitive to the surface
+  besides. Paging enforces the rest. A kernel-space app is clipped to
+  its content area around every `on_draw()` by `wm_render.c`'s
+  `clip_to_window_content()`.
+
+  What was missing is that the boundary is **one call in one function**,
+  it has silently regressed once already (an empty clip rect used to
+  CLEAR the clip rather than reject every write, handing an app a
+  full-screen `on_draw()` -- the damage sweep's long-standing 20px
+  violation), and a regression is invisible until some app happens to
+  overdraw.
+
+  So UI Demo now paints two magenta squares outside its own content rect
+  **on every frame**, in a colour used nowhere else, and
+  `tools/uidemo_test.py` asserts that colour appears nowhere on screen
+  -- as a whole-screen colour census rather than by sampling the two
+  spots, since a broken boundary lets everything an app draws escape and
+  the markers are only the part guaranteed to be outside. Validated by
+  removing the clip and confirming that one check, and only that one,
+  goes red.
+
+  The explicit opt-out is named as such in `docs/gui-guidelines.md`:
+  `gfx_clear_clip_rect()`, which lasts only for the current paint since
+  the WM re-establishes the boundary for every window every frame.
+  Nothing in the tree needs it.
+
+### Added
 - **Resize, end to end -- and a client window can finally be resized.**
   Stage 3 of `docs/uapp-design.md`, and the thing the whole design was
   aimed at. `WIN_EV_RESIZE` has been defined in TWP since the protocol

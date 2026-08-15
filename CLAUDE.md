@@ -113,7 +113,15 @@ technical conventions below:
   pixel constant in a test tool -- prefer `DebugConsole.menu_row(label)`
   over `gui_flow.py`'s calibrated numbers, which have needed
   re-measuring three times now.
-  (5) **Interaction states come from `enum ui_state` /
+  (5) **An app cannot draw outside its own window, and that is
+  enforced** -- the WM clips to the content area around every
+  `on_draw()` (`clip_to_window_content()`), and a ring-3 client draws
+  into its own buffer with no mapping of anything else. The explicit
+  opt-out is `gfx_clear_clip_rect()`, which lasts only for that paint.
+  UI Demo overdraws on purpose every frame and `uidemo_test.py` asserts
+  the marker colour never reaches the screen, so the boundary is tested
+  rather than assumed.
+  (6) **Interaction states come from `enum ui_state` /
   `ui_state_bg()`**, which derives hover/pressed from the control's own
   colour; don't hand-pick tints, and don't assume hover means "lighter"
   (on this near-white theme it has to darken -- `gfx_luminance()`

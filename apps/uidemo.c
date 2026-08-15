@@ -86,6 +86,11 @@
 #define BTN_COUNT  3
 #define CHK_SIZE   (gfx_char_h() - 2)
 
+// Magenta, used for nothing else in this GUI -- see uidemo_draw()'s
+// containment-boundary note. A test asserting "this colour is nowhere
+// on screen" needs a colour no legitimate pixel can be.
+#define OOB_MARKER (gfx_rgb(255, 0, 255))
+
 #define CHK_GAP 20
 
 // Gap between the two checkboxes, in pixels. The second one's x used
@@ -406,6 +411,29 @@ void uidemo_draw(struct window *win) {
     int cx = window_content_x(win), cy = window_content_y(win);
     int cw = window_content_w(win), ch = window_content_h(win);
     gfx_fill_rect(cx, cy, cw, ch, THEME_WINDOW_BG);
+
+    // A DELIBERATE attempt to draw outside this window, on every frame.
+    //
+    // The window manager narrows the clip to a window's content area
+    // around on_draw() (wm_render.c's clip_to_window_content()), so an
+    // app cannot paint over the desktop or over another window by
+    // accident. That is a containment boundary, and it was added after
+    // the Control Panel's System Info rows ran on down the desktop,
+    // perfectly legible, well outside the frame.
+    //
+    // Nothing tested it. It is enforced by one call in one function, it
+    // has silently regressed once already (an empty clip rect used to
+    // CLEAR the clip rather than reject every write, which handed an
+    // app a full-screen on_draw), and a regression is invisible until
+    // some app happens to overdraw.
+    //
+    // So UI Demo overdraws on purpose, in a colour used nowhere else,
+    // and tools/uidemo_test.py asserts these pixels never appear. If
+    // the boundary breaks, the test goes red the same day rather than
+    // whenever an app next has a layout bug.
+    gfx_fill_rect(cx - 40, cy - 40, 30, 30, OOB_MARKER);
+    gfx_fill_rect(cx + cw + 10, cy + ch + 10, 30, 30, OOB_MARKER);
+
     layout();
 
     ui_button_group_draw(&g_state.group, cx, cy);
