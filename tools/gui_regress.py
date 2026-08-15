@@ -10,10 +10,22 @@ Running them is the standard check after touching `apps/ui/`,
 hand means retyping the same six commands, each with its own image copy
 and VM lifecycle. This is that sequence, once, with a summary table.
 
-    python3 tools/gui_regress.py                 # all of them
+    python3 tools/gui_regress.py                 # all of them, 4 at a time
+    python3 tools/gui_regress.py -j1             # one at a time (the old behaviour)
     python3 tools/gui_regress.py -k uidemo -k gfxdemo    # a subset
     python3 tools/gui_regress.py --list
     echo $?                                      # 0 = every tool passed
+
+WHY IT RUNS THEM IN PARALLEL
+----------------------------
+The tools are independent by construction (see below) and each spends
+almost all of its wall clock waiting on an emulated machine, so running
+them one after another wasted most of the host. Each concurrent tool
+gets a VM SLOT -- `vm.py --instance N`, which derives that VM's
+pidfile, serial socket, QMP port and VNC display from N, and which the
+tool is pointed at with `--sock`/`--qmp-port`. Nothing is shared, so
+the isolation the per-tool image and per-tool VM already provided is
+unchanged; only the scheduling is.
 
 WHY EACH TOOL GETS ITS OWN IMAGE AND ITS OWN VM
 -----------------------------------------------
@@ -48,7 +60,9 @@ tools drive whatever is already on the image.
 """
 
 import argparse
+import concurrent.futures as cf
 import os
+import queue
 import shutil
 import subprocess
 import sys
@@ -57,6 +71,12 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
+
+# How many tools run at once by default. Each one is a QEMU with 256 MB
+# of guest RAM under TCG, so this is bounded by host cores far more than
+# by memory; four keeps a 7-tool run to two rounds while leaving the
+# machine usable. `-j1` restores the original serial behaviour exactly.
+DEFAULT_JOBS = 4
 
 # In rough dependency order: the widget toolkit first, so a toolkit
 # regression is reported before the apps built on it start failing for
@@ -72,15 +92,29 @@ TOOLS = [
 ]
 
 
-def run_one(name, script, disk_src, timeout, keep_logs):
+def run_one(name, script, disk_src, timeout, keep_logs, slot):
+    """Run one tool against its own image, in VM slot `slot`.
+
+    Everything that could collide between two concurrently running
+    tools is derived from `slot`: vm.py's pidfile/serial socket/QMP
+    port/VNC display (`--instance`), and the `--sock`/`--qmp-port` the
+    tool itself connects with. The disk copy is already per-tool.
+
+    Note the `stop` below is also slot-scoped -- it used to be a bare
+    `vm.py stop`, which under parallelism would have killed a sibling's
+    VM rather than a leftover of its own.
+    """
     tool = os.path.join(HERE, script)
     if not os.path.exists(tool):
         return ("SKIP", 0.0, f"no such tool: {script}")
 
     img = os.path.join(tempfile.gettempdir(), f"gui_regress_{name}.img")
     vm = os.path.join(HERE, "vm.py")
+    inst = ["--instance", str(slot)]
+    sock = ".vm.serial" if slot == 0 else f".vm.{slot}.serial"
+    qmp_port = 4445 + slot
 
-    subprocess.run([sys.executable, vm, "stop"], cwd=REPO,
+    subprocess.run([sys.executable, vm] + inst + ["stop"], cwd=REPO,
                    capture_output=True)
     # --reflink=auto: a copy-on-write clone where the filesystem
     # supports it, a plain copy where it doesn't. Never --reflink=always,
@@ -89,16 +123,18 @@ def run_one(name, script, disk_src, timeout, keep_logs):
 
     started = time.time()
     try:
-        subprocess.run([sys.executable, vm, "--disk", img, "start"],
+        subprocess.run([sys.executable, vm] + inst + ["--disk", img, "start"],
                        cwd=REPO, capture_output=True, timeout=120)
-        r = subprocess.run([sys.executable, tool], cwd=REPO,
-                           capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run([sys.executable, tool,
+                            "--sock", sock, "--qmp-port", str(qmp_port)],
+                           cwd=REPO, capture_output=True, text=True,
+                           timeout=timeout)
         out = r.stdout + r.stderr
         rc = r.returncode
     except subprocess.TimeoutExpired:
         out, rc = f"TIMEOUT after {timeout}s", 124
     finally:
-        subprocess.run([sys.executable, vm, "stop"], cwd=REPO,
+        subprocess.run([sys.executable, vm] + inst + ["stop"], cwd=REPO,
                        capture_output=True)
 
     if keep_logs:
@@ -131,6 +167,10 @@ def main():
     ap.add_argument("--logs", metavar="DIR",
                     help="write each tool's full output to DIR/<name>.log")
     ap.add_argument("--list", action="store_true", help="list the tools and exit")
+    ap.add_argument("-j", "--jobs", type=int, default=DEFAULT_JOBS, metavar="N",
+                    help=f"run N tools concurrently, each in its own VM slot "
+                         f"(default: {DEFAULT_JOBS}). -j1 is the old serial "
+                         f"behaviour, one VM at a time in slot 0.")
     args = ap.parse_args()
 
     if args.list:
@@ -155,14 +195,51 @@ def main():
         print("gui_regress: qemu-system-x86_64 not on PATH")
         return 2
 
+    jobs = max(1, min(args.jobs, len(picked)))
     print(f"gui_regress: {len(picked)} tool(s), each on its own copy of "
-          f"{os.path.basename(disk)}\n")
-    results = []
-    for name, script, what in picked:
-        print(f"=== {name}: {what}")
-        status, secs, summary = run_one(name, script, disk, args.timeout, args.logs)
-        print(f"    {status}  ({secs:.0f}s)  {summary}\n")
-        results.append((name, status, secs, summary))
+          f"{os.path.basename(disk)}, {jobs} at a time\n")
+
+    # Each concurrent tool gets a VM slot, and the slot is what keeps
+    # two of them from sharing a pidfile, a serial socket or a QMP port
+    # (see vm.py's _apply_instance and run_one above).
+    #
+    # Slots are LEASED from a pool, not derived from the tool's position
+    # in the list. Position looks equivalent and is not: with `-j4` and
+    # seven tools, task 4 also maps to slot 0, but it starts as soon as
+    # ANY worker frees up -- which is routinely while task 0 is still
+    # running on slot 0. Written that way first, and the symptom was
+    # ugly and misleading: the fifth tool's `vm.py --instance 0 stop`
+    # killed the first tool's VM out from under it, so the FIRST tool
+    # died on a broken pipe and the fifth died on a screenshot that was
+    # never written. Neither traceback pointed anywhere near the
+    # scheduling. A lease is held for exactly as long as the VM exists.
+    free_slots = queue.Queue()
+    for s in range(jobs):
+        free_slots.put(s)
+
+    def work(name, script, what):
+        slot = free_slots.get()
+        try:
+            status, secs, summary = run_one(name, script, disk, args.timeout,
+                                            args.logs, slot)
+        finally:
+            free_slots.put(slot)
+        return (name, what, slot, status, secs, summary)
+
+    done = {}
+    with cf.ThreadPoolExecutor(max_workers=jobs) as pool:
+        futures = [pool.submit(work, *t) for t in picked]
+        # as_completed, not map: results print the moment each tool
+        # finishes rather than in submission order, so one slow tool
+        # doesn't hold up everything behind it. The summary table below
+        # is rebuilt in the original (dependency) order regardless.
+        for fut in cf.as_completed(futures):
+            name, what, slot, status, secs, summary = fut.result()
+            print(f"=== {name}: {what}  [slot {slot}]\n"
+                  f"    {status}  ({secs:.0f}s)  {summary}\n", end="\n")
+            done[name] = (status, secs, summary)
+
+    results = [(name, *done[name]) for name, _s, _w in picked if name in done]
 
     print("gui_regress: summary")
     for name, status, secs, summary in results:

@@ -14,6 +14,11 @@
 #   1. make clean && make all -- full rebuild from scratch, no stale .o
 #      files hiding a real error.
 #   2. make iso -- confirms the ISO actually assembles.
+#   2b. tools/check_deps.py -- confirms every build directory's .d files
+#       are actually reaching make. A clean build hides this entirely
+#       (nothing is stale when everything was just compiled), which is
+#       exactly why it went unnoticed for a directory move; the check
+#       is cheap and structural, so it runs here rather than nowhere.
 #   3. tools/boot_smoke_test.py -- confirms the built ISO boots cleanly.
 #   3b. tools/ktest_run.py -- runs the in-kernel test suite and fails
 #       the whole preflight if any test failed. "Does it boot" and
@@ -68,6 +73,9 @@ fi
 
 step "make iso"
 make iso >/tmp/preflight_iso.log 2>&1 || fail "make iso (see /tmp/preflight_iso.log)"
+
+step "check_deps.py (header dependency tracking)"
+python3 tools/check_deps.py || fail "header dependency tracking"
 
 step "check_layout.py (disk layout vs docs/filesystem-layout.md)"
 python3 tools/check_layout.py || fail "filesystem layout check"

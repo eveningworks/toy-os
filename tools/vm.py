@@ -24,6 +24,15 @@ Safety: this only ever kills a QEMU whose PID it wrote to its own
 pidfile (.vm.pid), so an interactive `make run` window is never at risk
 -- the mistake CLAUDE.md warns about with `pkill -f qemu-system-x86_64`.
 
+Several VMs can run at once, each in its own slot:
+
+    python3 tools/vm.py --instance 2 --disk /tmp/b.img start
+    python3 tools/vm.py --instance 2 exec "df"
+
+`--instance N` derives the pidfile, serial socket, QMP port and VNC
+display from N (see _apply_instance), so slot 2 can never stop slot 0's
+VM or connect to its console. Slot 0 is the default and is unchanged.
+
 GUI/rendering work still needs tools/qmp_test.py: a text transcript says
 nothing about whether a button is drawn in the right place.
 """
@@ -38,7 +47,37 @@ import time
 PIDFILE = ".vm.pid"
 SERIAL_SOCK = ".vm.serial"
 QMP_PORT = 4445
+VNC_DISPLAY = 5
 PROMPT = "dbg> "
+
+
+def _apply_instance(args):
+    """Derive every per-VM resource from one slot number.
+
+    Several VMs can run side by side (tools/gui_regress.py runs the GUI
+    test tools in parallel, one slot each), and each needs its own
+    pidfile, serial socket, QMP port and VNC display. Deriving all four
+    from a single `--instance N` keeps them from being mixed up: slot 3
+    is always `.vm.3.pid`/`.vm.3.serial`/port 4448/display :8, so a
+    failing parallel run can be re-driven by hand with the same numbers.
+
+    Deliberately derived rather than allocated by probing for free
+    ports: a probe has a bind/close race, and a port that differs on
+    every run makes a failure harder to reproduce than it needs to be.
+
+    Slot 0 keeps the original, unsuffixed names and the original port,
+    so every existing caller and every test tool's default still works
+    untouched.
+    """
+    global PIDFILE, SERIAL_SOCK
+    n = getattr(args, "instance", 0) or 0
+    if n:
+        PIDFILE = f".vm.{n}.pid"
+        SERIAL_SOCK = f".vm.{n}.serial"
+    if getattr(args, "qmp_port", None) is None:
+        args.qmp_port = QMP_PORT + n
+    if getattr(args, "vnc", None) is None:
+        args.vnc = VNC_DISPLAY + n
 
 
 def _running(pid):
@@ -243,8 +282,15 @@ def main():
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--iso", default="toy-os.iso")
     ap.add_argument("--disk", default="disk.img")
-    ap.add_argument("--qmp-port", type=int, default=QMP_PORT)
-    ap.add_argument("--vnc", type=int, default=5)
+    ap.add_argument("--instance", type=int, default=0, metavar="N",
+                    help="run as VM slot N: pidfile .vm.N.pid, socket .vm.N.serial, "
+                         f"QMP port {QMP_PORT}+N, VNC :{VNC_DISPLAY}+N. Slot 0 (the "
+                         "default) keeps the original unsuffixed names. Lets several "
+                         "VMs run side by side -- see tools/gui_regress.py -j.")
+    ap.add_argument("--qmp-port", type=int, default=None,
+                    help=f"override the QMP port (default: {QMP_PORT} + --instance)")
+    ap.add_argument("--vnc", type=int, default=None,
+                    help=f"override the VNC display (default: {VNC_DISPLAY} + --instance)")
     ap.add_argument("--timeout", type=float, default=30.0)
     ap.add_argument("--cpu", default=None,
                      help="QEMU -cpu model (e.g. max, Skylake-Client). The default "
@@ -278,6 +324,7 @@ def main():
     p_run.set_defaults(func=cmd_run)
 
     args = ap.parse_args()
+    _apply_instance(args)
     return args.func(args)
 
 

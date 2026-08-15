@@ -46,6 +46,15 @@ jobs:
       - name: make iso
         run: make iso
 
+      # CI always builds clean, so it can never OBSERVE a stale object --
+      # which is precisely why the Makefile's `-include` line for the
+      # -MMD/-MP dependency files could break in a directory move and
+      # stay broken. This checks the property structurally instead of
+      # waiting for a symptom: touch a header per build directory, ask
+      # make what it would rebuild, and require an answer.
+      - name: Header dependency tracking works
+        run: python3 tools/check_deps.py -v
+
       # Structural, not behavioural: does the seeded image's directory
       # layout still match docs/filesystem-layout.md? Cheap (no boot),
       # and it catches a directory added without being documented --

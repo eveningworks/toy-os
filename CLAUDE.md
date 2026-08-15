@@ -509,7 +509,15 @@ a GUI test ever shows something inexplicable right after a header
 change (dependency tracking is only as good as the `.d` files being
 correct), but it should no longer be *routine* -- if you find yourself
 needing it regularly, that's a sign the tracking broke somehow, worth
-investigating rather than working around. One subtlety if you ever
+investigating rather than working around. **It broke exactly that way
+once, and stayed broken:** the `-include` line named six directories by
+hand, and when source discovery went recursive the kernel's objects
+moved to `build/kernel/...`, so 88 of 161 `.d` files silently stopped
+being read and `touch kernel/include/kernel/process.h` rebuilt
+*nothing*. It's a recursive `find` now, and **`tools/check_deps.py`
+(in `preflight.sh` and CI) proves per build directory that the tracking
+is actually live** -- so if that check is green, believe the tracking
+and go looking elsewhere. See `docs/decisions.md`. One subtlety if you ever
 touch `tools/gen_version.sh`: it's deliberately idempotent (only
 rewrites `kernel/include/api/version.h` when `VERSION`'s value actually
 changed) specifically so this dependency tracking doesn't regress --
@@ -542,7 +550,13 @@ python3 tools/vm.py stop
 python3 tools/vm.py run "ktest"          # start+exec+stop in one
 python3 tools/vm.py --kvm run "stress 150"   # same, KVM-accelerated (see `make run-kvm`)
 python3 tools/vm.py --cpu Skylake-Client run "lscpu"  # a specific QEMU CPU model
+python3 tools/vm.py --instance 2 --disk /tmp/b.img start  # a second VM, alongside
 ```
+
+`--instance N` is how you run more than one VM at once: pidfile, serial
+socket, QMP port and VNC display are all derived from N, so slot 2 can
+never stop slot 0's VM or connect to its console. Slot 0 is the default
+and is exactly what it always was.
 
 **`--cpu MODEL` matters more than it sounds** for anything reading
 CPUID: the default `qemu64` reports as **AuthenticAMD** with no CPUID
@@ -901,8 +915,17 @@ and not applicable, on a direct local checkout).
 
 The rest, added once the build/test/delivery loop above had enough
 repeated manual steps to be worth automating:
+- **`check_deps.py`** -- proves the build's header dependency tracking
+  is actually live: touches one header per build directory (discovered
+  from `build/`, not listed, so a new source directory is covered as
+  soon as it's been built once), asks `make all -n` what it would
+  rebuild, and fails on any directory that answers "nothing". Restores
+  mtimes, so a run changes nothing. Exists because that tracking broke
+  silently for the whole of `kernel/` when objects moved directories
+  and nothing noticed -- a clean build can't observe a stale `.o`, so
+  neither could CI. In `preflight.sh` and CI.
 - **`preflight.sh`** -- one command running `make clean && make all &&
-  make iso` + `check_layout.py` + `boot_smoke_test.py` + `ktest_run.py`
+  make iso` + `check_deps.py` + `check_layout.py` + `boot_smoke_test.py` + `ktest_run.py`
   + a `git status --short` summary (`fs_switch_test.py` is NOT in it --
   that one needs a disk copy and a longer boot cycle, run it yourself
   after `kernel/fs/` changes), so
@@ -1054,15 +1077,23 @@ repeated manual steps to be worth automating:
   DISTINCT COLOURS in the canvas (468 with, 5 without) rather than by
   sampling a point, since a curve moves and a fixed sample point
   doesn't follow it.
-- **`gui_regress.py`** -- runs every GUI test tool in turn, each against
+- **`gui_regress.py`** -- runs every GUI test tool, each against
   its own freshly-copied disk image and its own VM, and prints one
-  pass/fail table (~2 minutes, ~82 checks). This is the standard check
+  pass/fail table (~35 seconds, ~82 checks). This is the standard check
   after touching `apps/ui/`, `userland/`, or anything the WM draws.
   `-k NAME` for a subset, `--logs DIR` to keep each tool's full output,
   `--list` to see what's in it. The per-tool fresh image and fresh VM
   are the parts that matter: several tools write files, and every one
   of them expects an empty desktop -- a tool inheriting the previous
   one's state fails in ways that look exactly like real widget bugs.
+  It runs **four tools at a time** (`-j N` to change, `-j1` for the old
+  serial behaviour -- that took 107s), each in its own **VM slot**:
+  `vm.py --instance N` derives that VM's pidfile, serial socket, QMP
+  port and VNC display from one number, and the slot is LEASED for as
+  long as the VM lives rather than derived from the tool's position in
+  the list. Use `--instance` yourself any time you need a second
+  headless VM alongside one that's already up; slot 0 is the plain
+  `.vm.pid`/`.vm.serial`/4445 every existing caller assumes.
   `damage_sweep.py` is deliberately NOT in it (much slower under
   `gui damage verify on`, and it has its own `--positive-control`
   protocol) -- run that separately.

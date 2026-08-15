@@ -156,6 +156,9 @@ there when you add an entry, or the index quietly stops being one.
 - [CI is kept for the environment, not the checks -- they duplicate `make verify` exactly](#ci-is-kept-for-the-environment-not-the-checks----they-duplicate-make-verify-exactly)
 - [Repo history scrubbed of the maintainer's real name -- privacy request, not a bug fix](#repo-history-scrubbed-of-the-maintainers-real-name----privacy-request-not-a-bug-fix)
 - [Socket fds: scaffolding ahead of the driver, not a working transport](#socket-fds-scaffolding-ahead-of-the-driver-not-a-working-transport)
+- [Header dependency tracking is a `find`, and a test proves it works](#header-dependency-tracking-is-a-find-and-a-test-proves-it-works)
+- [Userland link lines are one `EXTRA_OBJS_<name>` line, not a libuapp.a (yet)](#userland-link-lines-are-one-extra_objs_name-line-not-a-libuappa-yet)
+- [Parallel test VMs lease a slot, they don't derive one from their position](#parallel-test-vms-lease-a-slot-they-dont-derive-one-from-their-position)
 
 **Session workflow & environment**
 
@@ -2174,6 +2177,82 @@ every GUI regression is invisible to it -- a mis-clipped label, a click
 handler testing the wrong coordinate space. Those need local screenshot
 testing regardless, and a green CI badge must not be read as "the
 desktop is fine".
+
+## Header dependency tracking is a `find`, and a test proves it works
+
+The Makefile's `-include` for the `-MMD -MP` dependency files used to
+name six directories by hand. When source discovery went recursive,
+kernel objects moved from `build/core/` to `build/kernel/core/`, the
+glob stopped matching, and **88 of 161 `.d` files silently stopped
+being read** -- `touch kernel/include/kernel/process.h && make all`
+rebuilt nothing at all. It is a `$(shell find $(BUILD) -name '*.d')`
+now, which cannot drift when a directory moves.
+
+Two things are worth remembering beyond the fix. First, the failure was
+invisible in every way this project normally looks: nothing warns, a
+clean build is unaffected, and the symptom appears later as a stale
+`.o` compiled against an old struct layout -- which is not a compile
+error but an array indexed with the wrong stride at runtime. This repo
+has paid for that twice already (the Start menu drawing function
+prologues as text; a filesystem honesty check reading garbage and
+refusing a good backend). Second, that invisibility is why the fix
+comes with `tools/check_deps.py` rather than standing alone: it touches
+one header per build directory, asks `make -n` what it would rebuild,
+and fails if the answer is "nothing". It runs in `preflight.sh` and CI,
+and was validated by putting the old glob back and watching it report
+exactly the ten directories that had been uncovered. A one-line fix
+with no guard would have left the next directory move free to do this
+again. See `CHANGELOG.md`'s "the build's header dependency tracking had
+silently stopped working" entry.
+
+## Userland link lines are one `EXTRA_OBJS_<name>` line, not a libuapp.a (yet)
+
+Each ring-3 GUI client used to need a hand-written `FOO_OBJS = ...`
+block plus its own link rule in the Makefile -- four of them, ~50 lines,
+identical apart from the object list. A client now names its extra
+objects on one line (`EXTRA_OBJS_notepad = uui utext $(UGFX_OBJS)`) and
+the single `userland/%.elf` pattern rule picks them up through
+`.SECONDEXPANSION`.
+
+The considered alternative was a real `libuapp.a` with
+`-ffunction-sections`/`--gc-sections`, which would make a new client
+**zero** Makefile lines. It was deliberately deferred, not rejected: it
+changes `USERLAND_CFLAGS` for every ring-3 binary and hands the linker
+the decision about what each one contains, which needs its own size
+verification (`hello` must not gain the font path). That's a change
+worth making when a client actually needs it rather than preemptively --
+the same "second real caller" bar `apps/ui/` holds itself to. It is
+listed in `docs/roadmap.md`.
+
+Why `ugfx` implies `shared/geom shared/fixed` via a `UGFX_OBJS` group
+rather than a rule in the pattern: `userland/ugfx.h` includes the shared
+`geom.h`, so the pair genuinely travels with it -- but writing the group
+out keeps what a binary links readable, where a rule inside the link
+line would hide it.
+
+## Parallel test VMs lease a slot, they don't derive one from their position
+
+`tools/gui_regress.py` runs the GUI test tools concurrently, each
+against its own VM. Everything that could collide -- pidfile, serial
+socket, QMP port, VNC display -- is derived from one slot number
+(`vm.py --instance N`), and slot 0 keeps the original unsuffixed names
+so every existing caller is unaffected.
+
+The subtle part is how a tool GETS its slot. Deriving it from the
+tool's index in the list (`idx % jobs`) looks equivalent to leasing one
+and isn't: with `-j4` and seven tools, task 4 also maps to slot 0, but
+it starts as soon as any worker frees up, which is routinely while task
+0 is still running there. Written that way first, and the symptom was
+actively misleading -- the fifth tool's slot-0 `vm.py stop` killed the
+FIRST tool's VM, so the first tool died on a broken pipe and the fifth
+died on a screenshot that was never written, with neither traceback
+pointing anywhere near the scheduling. Slots come from a
+`queue.Queue` lease held for exactly as long as the VM exists.
+
+Ports are derived, not probed for. A free-port probe has a bind/close
+race and gives a different port every run, which makes re-driving a
+failed tool by hand harder than it needs to be; `-j4` always means
+slots 0-3.
 
 ## Repo is MIT; the baked JetBrains Mono glyph data is separately SIL OFL 1.1
 

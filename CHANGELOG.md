@@ -246,6 +246,64 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   thumb cannot be in two places), and commit-on-release.
 
 ### Changed
+- **A ring-3 GUI app is one Makefile line now, not a copied block.**
+  Every client that draws needed its own `FOO_OBJS = ...` list plus its
+  own link rule -- `CALC_OBJS`, `NOTEPAD_OBJS`, `UTERM_OBJS`,
+  `GFXDEMO_OBJS`, plus a `uiclient.elf` override, about 50 lines that
+  differed only in which objects they named. That is the same per-binary
+  tax `apps/wm/` and `apps/ui/` each paid before source discovery went
+  recursive.
+
+  A binary now names its extras on one line
+  (`EXTRA_OBJS_notepad = uui utext $(UGFX_OBJS)`) and the single
+  `userland/%.elf` pattern rule picks them up via `.SECONDEXPANSION`,
+  which is what lets a pattern rule's prerequisites depend on the stem.
+  Programs with no entry -- `hello`, every `/tests` binary -- link
+  exactly what they linked before.
+
+  `ugfx` is grouped with `shared/geom shared/fixed` as `UGFX_OBJS`
+  because `userland/ugfx.h` includes the shared `geom.h`, so the pair
+  really does travel with it. Written out as a group rather than implied
+  inside the link rule, so what a binary gets stays readable.
+
+  Verified the way a refactor like this should be: **all 29 userland
+  ELFs are byte-for-byte identical** to the ones the old rules produced
+  (the four rewritten lists were kept in their original object order
+  specifically so this check would be meaningful), and the full GUI
+  regression passes.
+
+  Not done, deliberately: a real `libuapp.a` with `--gc-sections`, which
+  would make a new client zero Makefile lines. It changes
+  `USERLAND_CFLAGS` for every ring-3 binary and needs its own size
+  verification; it's in `docs/roadmap.md` for when a client actually
+  needs it. See `docs/decisions.md`.
+
+- **`tools/gui_regress.py` runs the GUI tools in parallel -- 107s to
+  34s.** The seven tools are independent by construction (each gets its
+  own disk copy and its own VM, for reasons its docstring explains at
+  length) and each spends nearly all its wall clock waiting on an
+  emulated machine, so running them one after another wasted most of the
+  host. They run four at a time now; `-j N` changes that and `-j1` is
+  the old behaviour exactly.
+
+  What made this possible is `vm.py --instance N`: one slot number from
+  which the pidfile, serial socket, QMP port and VNC display are all
+  derived, so two VMs cannot share any of them. Slot 0 keeps the
+  original unsuffixed `.vm.pid`/`.vm.serial` and port 4445, so every
+  existing caller and every tool's own defaults are untouched. The test
+  tools already accepted `--sock`/`--qmp-port`, so none of them needed
+  changing.
+
+  One mistake worth recording, because it produced a genuinely confusing
+  failure: slots were first derived from a tool's position in the list
+  (`idx % jobs`). That looks equivalent to leasing one and isn't -- with
+  `-j4` and seven tools, task 4 also maps to slot 0 but starts whenever
+  a worker frees up, routinely while task 0 is still running there. The
+  fifth tool's `vm.py --instance 0 stop` killed the first tool's VM, so
+  the run reported a broken pipe in `uidemo` and a missing screenshot in
+  `calculator`, with neither traceback anywhere near the scheduling.
+  Slots are leased from a queue for exactly as long as a VM exists.
+
 - **Default font size is 14, down from 18** (`kernel/drivers/gfx.c`).
   It has come down twice before for the same reason: more real UI on
   screen than the previous default was chosen against. With eleven
@@ -335,6 +393,47 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   starting point.
 
 ### Fixed
+- **The build's header dependency tracking had silently stopped working
+  for the entire kernel.** Asked what would make future development
+  faster; this turned up while surveying the build, and it is a bug, not
+  an improvement. The Makefile's `-include` for the `-MMD -MP` dependency
+  files named six directories by hand
+  (`$(BUILD)/core/*.d $(BUILD)/drivers/*.d ...`). Source discovery went
+  recursive some time ago and objects moved from `build/core/` to
+  `build/kernel/core/`; the glob kept matching the handful under
+  `build/apps/` and `build/userland/` and stopped matching everything
+  else. **88 of 161 `.d` files were not being read.** Measured directly:
+  `touch kernel/include/kernel/process.h && make all -n` planned zero
+  rebuilds. It plans twelve now.
+
+  This is the failure mode the `-include` line exists to prevent, so
+  the comment above it claiming the problem was solved was true when
+  written and false since. What it produces is not a compile error but
+  a stale `.o` built against an old struct layout sitting next to fresh
+  ones -- an array indexed with the wrong stride at runtime. This repo
+  has paid for that twice (the Start menu rendering function prologues
+  as text; a filesystem honesty check reading garbage and refusing a
+  good backend), and both times the cause was hard to see from the
+  symptom.
+
+  The line is `$(shell find $(BUILD) -name '*.d')` now, which cannot
+  drift when a directory moves.
+
+  **The fix ships with a guard, because a clean build cannot observe
+  this.** `tools/check_deps.py` walks `build/`, picks one object per
+  directory, picks a header that object's own `.d` says it depends on,
+  touches it, and asks `make all -n` what it would rebuild -- a gap in
+  any directory is a failure. Header mtimes are restored, so a run
+  leaves the tree as it found it. Directories are discovered rather than
+  listed, so the next new source directory is covered the moment it has
+  been built once. It runs in `tools/preflight.sh` and in CI (which
+  always builds clean, and so is structurally incapable of noticing a
+  stale object any other way).
+
+  Validated as a positive control before being trusted: putting the old
+  glob back makes it report exactly the ten uncovered directories and
+  exit 1, restoring the fix makes it green again.
+
 - **stderr was being swallowed into the parent's stdout pipe.** A
   process spawned with `SYS_SPAWN`'s stdout redirection had fd 1 AND
   fd 2 routed into the same pipe, so a child's diagnostics landed

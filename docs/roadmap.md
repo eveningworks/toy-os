@@ -896,6 +896,22 @@ history is worth reading, but a fixed papercut is just noise.
       IF the drive guarantees deterministic-read-zero after TRIM
       (QEMU with discard=unmap does; IDENTIFY word 69 bit 5 is the
       honest gate). Until then it's a papercut, not a bug.
+- [ ] **A `libuapp.a` would make a new ring-3 GUI client zero Makefile
+      lines.** Not a bug -- a deliberately deferred improvement, parked
+      here because this is the one list for unscheduled small things.
+      Today a client that draws names its extra objects on one line
+      (`EXTRA_OBJS_notepad = uui utext $(UGFX_OBJS)`), which already
+      replaced four hand-written `FOO_OBJS` blocks. Archiving
+      `uui`/`ugfx`/`utext`/`uwidgets`/the shared objects into a real
+      static library and linking every ELF against it with
+      `-ffunction-sections`/`--gc-sections` would remove even that line.
+      Deferred because it changes `USERLAND_CFLAGS` for every ring-3
+      binary and hands the linker the decision about what each one
+      contains, which needs its own verification -- specifically that
+      `hello` does NOT gain the font-rendering path (compare
+      `size userland/hello.elf` before and after). Worth doing when a
+      client actually needs it, not preemptively. See
+      `docs/decisions.md`.
 - [ ] The vmsvga HARDWARE cursor is off by default because it fights the
       relative PS/2 mouse (QEMU warps the host pointer). The display
       driver itself works. The configuration where a hardware cursor

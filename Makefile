@@ -365,21 +365,53 @@ $(BUILD)/userland/crt0.o: userland/crt0.asm
 
 USERLAND_RT = $(BUILD)/userland/crt0.o $(BUILD)/userland/sys.o $(BUILD)/userland/stack_chk.o
 
-userland/%.elf: $(BUILD)/userland/%.o $(USERLAND_RT) userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/crt0.o $< $(BUILD)/userland/sys.o $(BUILD)/userland/stack_chk.o
-
-# Window clients that draw with the userland graphics runtime
-# (userland/ugfx.c) link it in explicitly, via a rule that overrides the
-# pattern above for just those binaries.
+# What a userland ELF links BEYOND the runtime above, one line per
+# binary, named without the $(BUILD)/userland/ prefix and the .o suffix.
+# A program with no entry here (the common case -- `hello`, every
+# /tests binary) links nothing extra, exactly as before.
 #
-# Deliberately NOT added to the pattern rule's common objects the way
+# This replaced four hand-written 12-line `FOO_OBJS = ...` blocks plus
+# their own link rules, which were identical apart from the object list
+# -- the same per-binary Makefile tax that `apps/wm/` and `apps/ui/`
+# each paid before source discovery went recursive. Adding a ring-3 GUI
+# app is now one line here plus a SEED_BINARIES entry, not a copied
+# block that is easy to get subtly wrong.
+#
+# Deliberately NOT folded into the pattern rule's common objects the way
 # stack_chk.o is: stack_chk.o is needed by every userland binary (GCC
 # emits references to it from any protected function), whereas ugfx.o is
-# wanted only by window clients -- and with no --gc-sections here, adding
-# it globally would link the whole font-rendering path into programs
-# like `hello` that never draw anything.
-userland/uiclient.elf: $(BUILD)/userland/uiclient.o $(BUILD)/userland/ugfx.o $(BUILD)/userland/shared/geom.o $(BUILD)/userland/shared/fixed.o $(USERLAND_RT) userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/crt0.o $(BUILD)/userland/uiclient.o $(BUILD)/userland/ugfx.o $(BUILD)/userland/shared/geom.o $(BUILD)/userland/shared/fixed.o $(BUILD)/userland/sys.o $(BUILD)/userland/stack_chk.o
+# wanted only by window clients -- and with no --gc-sections here,
+# linking it globally would pull the whole font-rendering path into
+# programs like `hello` that never draw anything. (A real libuapp.a with
+# --gc-sections would make even this line unnecessary; that's noted in
+# docs/roadmap.md, to be done when a client actually needs it rather
+# than preemptively.)
+#
+# UGFX_OBJS is a group rather than three repeated entries because
+# userland/ugfx.h includes the SHARED geom.h (enum geom_aa), so anything
+# drawing through ugfx needs the shared geometry pair linked with it.
+# Written out rather than implied by the rule itself: a reader can see
+# what a binary actually gets.
+UGFX_OBJS = ugfx shared/geom shared/fixed
+
+EXTRA_OBJS_uiclient   = $(UGFX_OBJS)
+EXTRA_OBJS_calculator = uui $(UGFX_OBJS) shared/calc_engine shared/string shared/knum
+EXTRA_OBJS_notepad    = uui utext $(UGFX_OBJS)
+EXTRA_OBJS_terminal   = ush uui utext $(UGFX_OBJS)
+EXTRA_OBJS_gfxdemo    = uui uwidgets $(UGFX_OBJS)
+
+# The extras for one binary, as real object paths.
+uextra = $(patsubst %,$(BUILD)/userland/%.o,$(EXTRA_OBJS_$(1)))
+
+# .SECONDEXPANSION lets the prerequisite list reference the stem: `$$*`
+# survives make's first expansion (when the rule is read, and the stem
+# isn't known yet) and is expanded a second time per target, once it is.
+# Without it there is no way for one pattern rule to depend on a
+# per-target variable, which is the whole point here.
+.SECONDEXPANSION:
+
+userland/%.elf: $(BUILD)/userland/%.o $(USERLAND_RT) userland/link.ld $$(call uextra,$$*)
+	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/crt0.o $< $(call uextra,$*) $(BUILD)/userland/sys.o $(BUILD)/userland/stack_chk.o
 
 # Sources SHARED between the kernel image and userland ELFs, compiled a
 # second time with USERLAND_CFLAGS into build/userland/shared/.
@@ -414,70 +446,6 @@ $(BUILD)/userland/shared/%.o: apps/%.c
 # so no OTHER userland program gains the ability to reach into apps/.
 $(BUILD)/userland/calculator.o: USERLAND_CFLAGS += -Iapps
 
-# The ported Calculator: its own code, the userland widget toolkit, and
-# the shared arithmetic engine.
-CALC_OBJS = $(BUILD)/userland/crt0.o \
-            $(BUILD)/userland/calculator.o \
-            $(BUILD)/userland/uui.o \
-            $(BUILD)/userland/ugfx.o \
-            $(BUILD)/userland/shared/geom.o \
-            $(BUILD)/userland/shared/fixed.o \
-            $(BUILD)/userland/shared/calc_engine.o \
-            $(BUILD)/userland/shared/string.o \
-            $(BUILD)/userland/shared/knum.o \
-            $(BUILD)/userland/sys.o \
-            $(BUILD)/userland/stack_chk.o
-
-userland/calculator.elf: $(CALC_OBJS) userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(CALC_OBJS)
-
-# Notepad: the userland widget toolkit plus the text buffer.
-NOTEPAD_OBJS = $(BUILD)/userland/crt0.o \
-               $(BUILD)/userland/notepad.o \
-               $(BUILD)/userland/uui.o \
-               $(BUILD)/userland/utext.o \
-               $(BUILD)/userland/ugfx.o \
-               $(BUILD)/userland/shared/geom.o \
-               $(BUILD)/userland/shared/fixed.o \
-               $(BUILD)/userland/sys.o \
-               $(BUILD)/userland/stack_chk.o
-
-userland/notepad.elf: $(NOTEPAD_OBJS) userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(NOTEPAD_OBJS)
-
-# The ring-3 Terminal: the text widget, the shell it links against, and
-# the runtime. Seeded as `uterm` so it doesn't collide with the
-# kernel-space Terminal in the Start menu while both exist.
-UTERM_OBJS = $(BUILD)/userland/crt0.o \
-             $(BUILD)/userland/terminal.o \
-             $(BUILD)/userland/ush.o \
-             $(BUILD)/userland/uui.o \
-             $(BUILD)/userland/utext.o \
-             $(BUILD)/userland/ugfx.o \
-             $(BUILD)/userland/shared/geom.o \
-             $(BUILD)/userland/shared/fixed.o \
-             $(BUILD)/userland/sys.o \
-             $(BUILD)/userland/stack_chk.o
-
-userland/terminal.elf: $(UTERM_OBJS) userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(UTERM_OBJS)
-
-# The shapes demo: the widget toolkit plus the SHARED geometry module
-# (kernel/lib/geom.c and fixed.c, compiled a second time for ring 3 --
-# the same code the kernel's gfx_draw_line()/gfx_draw_ellipse() use).
-GFXDEMO_OBJS = $(BUILD)/userland/crt0.o \
-               $(BUILD)/userland/gfxdemo.o \
-               $(BUILD)/userland/uui.o \
-               $(BUILD)/userland/uwidgets.o \
-               $(BUILD)/userland/ugfx.o \
-               $(BUILD)/userland/shared/geom.o \
-               $(BUILD)/userland/shared/fixed.o \
-               $(BUILD)/userland/sys.o \
-               $(BUILD)/userland/stack_chk.o
-
-userland/gfxdemo.elf: $(GFXDEMO_OBJS) userland/link.ld
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(GFXDEMO_OBJS)
-
 $(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(ASM_OBJECTS) $(C_OBJECTS)
 
@@ -494,7 +462,20 @@ $(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) linker.ld
 # checkout, and `-include` (not `include`) so a missing/deleted .d file
 # is silently ignored rather than a hard error -- both matter for
 # `make clean` followed immediately by `make all` to still work.
--include $(wildcard $(BUILD)/core/*.d $(BUILD)/drivers/*.d $(BUILD)/apps/*.d $(BUILD)/apps/wm/*.d $(BUILD)/apps/ui/*.d $(BUILD)/userland/*.d)
+#
+# RECURSIVE, via `find`, and deliberately not a hand-written list of
+# directories: this line used to name six of them
+# ($(BUILD)/core/*.d $(BUILD)/drivers/*.d ...), which stopped matching
+# anything under kernel/ the day source discovery went recursive and
+# objects moved from build/core/ to build/kernel/core/. Nothing failed
+# -- make simply had no dependency information for 88 of the 161 .d
+# files, so `touch kernel/include/kernel/process.h && make all` rebuilt
+# NOTHING and left every kernel object stale against the new header.
+# That is precisely the bug this line exists to prevent (see the
+# paragraph above), silently reintroduced by a directory move. A
+# `find` can't drift that way. tools/check_deps.py is the guard that
+# proves it, and runs in preflight.sh and CI.
+-include $(shell find $(BUILD) -name '*.d' 2>/dev/null)
 
 # Only created if it doesn't already exist -- see DISK_IMG's comment
 # above for why this must never overwrite an existing image.
