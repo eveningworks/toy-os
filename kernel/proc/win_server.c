@@ -2,6 +2,9 @@
 // mappings, ownership and teardown. See win_server.h for why the split
 // between this and the registered presentation layer falls where it
 // does.
+// **TWS -- the Toy Window Server**, memory half. See
+// abi/win_proto.h for TWP, the protocol it serves, and
+// apps/wm/wm_client.c for the presentation half.
 #include "win_server.h"
 #include "vmm.h"
 #include "pmm.h"

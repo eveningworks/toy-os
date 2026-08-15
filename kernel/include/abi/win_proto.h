@@ -3,9 +3,17 @@
 
 #include <stdint.h>
 
-// The windowing protocol's event format -- the kernel<->client contract
-// for "something happened to your window". Shared by the kernel's
+// **TWP -- the Toy Window Protocol.** This file IS the protocol: the
+// kernel<->client contract for "something happened to your window" and
+// for everything a client can ask of its window. Shared by the kernel's
 // dispatcher and by ring-3 clients, same as syscall_abi.h.
+//
+// Named because it is the piece meant to outlive its implementation.
+// TWS (the Toy Window Server, kernel/proc/win_server.c +
+// apps/wm/wm_client.c) is one implementation of it and is scheduled to
+// become a ring-3 process; Toykit (userland/ui/) is the client library
+// apps use instead of speaking it by hand. A protocol you can name is
+// one you can version -- see docs/decisions.md.
 //
 // This is deliberately a MESSAGE FORMAT, not a set of syscall
 // signatures, and that distinction is the whole architectural bet (see

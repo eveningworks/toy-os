@@ -1,7 +1,16 @@
 #ifndef UUI_H
 #define UUI_H
 
-// uui -- the ring-3 widget toolkit, and the umbrella include for it.
+// **Toykit** -- the ring-3 GUI toolkit -- and the umbrella include for
+// its widgets.
+//
+// Toykit is what a ring-3 app programs against: these widgets, ugfx.h
+// for drawing, utheme.h for colours. It sits on TWP (the Toy Window
+// Protocol, abi/win_proto.h), which TWS serves -- the same relationship
+// GTK has to Wayland. The `uui_`/`ugfx_` prefixes are unchanged and stay
+// that way; a toolkit's name and its symbol prefix don't have to match
+// (GNOME's toolkit is GTK), and renaming several hundred symbols to
+// spell a name out would be churn for nothing.
 //
 // This file used to BE the toolkit (states, buttons, button groups),
 // with everything else in a second grab-bag called uwidgets.h. Both are

@@ -1,5 +1,7 @@
-// Client windows, presentation side: the window manager acting as the
-// window SERVER for ring-3 processes.
+// Client windows, presentation side: the window manager acting as
+// **TWS -- the Toy Window Server** -- for ring-3 processes. The
+// protocol it serves is TWP (abi/win_proto.h); the client library on
+// the other side is Toykit (userland/ui/).
 //
 // The split with kernel/proc/win_server.c is described in that file's
 // header -- it owns the memory (ids, buffers, mappings, teardown),

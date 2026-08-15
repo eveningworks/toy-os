@@ -245,6 +245,37 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   one geometry calculation shared by draw/hit-test/drag (so a scrollbar
   thumb cannot be in two places), and commit-on-release.
 
+### Added
+- **The GUI stack has names: TWP, TWS and Toykit.** Three things had no
+  name, so every sentence about them was a description instead --
+  "the windowing protocol", "the window manager acting as a server",
+  "the ring-3 widgets".
+
+  **TWP**, the Toy Window Protocol (`abi/win_proto.h`), is the
+  client<->server contract. **TWS**, the Toy Window Server
+  (`win_server.c` + `wm_client.c`), implements it. **Toykit**
+  (`userland/ui/`) is the client toolkit an app programs against.
+  Roughly Wayland, its compositor, and GTK.
+
+  Three names rather than one because the protocol is meant to outlive
+  this particular server: M41 moves TWS to ring 3, and the whole bet in
+  `win_proto.h` is that this is a transport swap rather than a rewrite.
+  Naming the protocol separately is what makes that sentence sayable --
+  and what would make "TWP v2" a thing.
+
+  TWP/TWS follow TFS2/TFS3's style, since they are the same kind of
+  thing: a contract worth versioning. Toykit deliberately breaks it --
+  the plain version would be "TUI", which universally means *text* user
+  interface and would mislead every reader arriving without context.
+
+  **No code churn.** Symbol prefixes are unchanged (`uui_`, `ugfx_`,
+  `uapp_`, `WIN_REQ_*`) and stay that way: a toolkit's name and its
+  prefix need not match -- GNOME's is GTK -- and renaming several
+  hundred symbols to spell a name out would cost a large diff and buy a
+  reader nothing. The names went where the ambiguity actually was:
+  `README.md`, `docs/decisions.md`, `CLAUDE.md`, and the top-of-file
+  comment of each layer.
+
 ### Changed
 - **The checkbox is an object; the scrollbar deliberately stays
   stateless.** The last of `docs/uapp-design.md`'s "generation C" --

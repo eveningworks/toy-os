@@ -158,6 +158,7 @@ there when you add an entry, or the index quietly stops being one.
 - [Socket fds: scaffolding ahead of the driver, not a working transport](#socket-fds-scaffolding-ahead-of-the-driver-not-a-working-transport)
 - [Header dependency tracking is a `find`, and a test proves it works](#header-dependency-tracking-is-a-find-and-a-test-proves-it-works)
 - [Userland programs link one archive, and name nothing](#userland-programs-link-one-archive-and-name-nothing)
+- [The GUI stack has names: TWP, TWS and Toykit](#the-gui-stack-has-names-twp-tws-and-toykit)
 - [Parallel test VMs lease a slot, they don't derive one from their position](#parallel-test-vms-lease-a-slot-they-dont-derive-one-from-their-position)
 
 **Session workflow & environment**
@@ -2204,6 +2205,39 @@ exactly the ten directories that had been uncovered. A one-line fix
 with no guard would have left the next directory move free to do this
 again. See `CHANGELOG.md`'s "the build's header dependency tracking had
 silently stopped working" entry.
+
+## The GUI stack has names: TWP, TWS and Toykit
+
+Three things had no names, which made every sentence about them a
+description: "the windowing protocol", "the window manager acting as a
+server", "the ring-3 widgets". They are now:
+
+| Name | What | Where | Analogy |
+|---|---|---|---|
+| **TWP** -- Toy Window Protocol | the client<->server message contract | `kernel/include/abi/win_proto.h` | Wayland, the X11 protocol |
+| **TWS** -- Toy Window Server | the compositor implementing it | `kernel/proc/win_server.c` + `apps/wm/wm_client.c` | Mutter, Weston, Xorg |
+| **Toykit** | the client toolkit an app programs against | `userland/ui/` | GTK, Qt, Win32 |
+
+**Why three and not one.** The protocol is deliberately meant to outlive
+this particular server -- M41 moves TWS to ring 3, and the whole bet in
+`win_proto.h` is that this is a transport swap rather than a rewrite.
+Naming the protocol separately is what makes that sentence sayable, and
+what makes "TWP v2" a thing you could version. One name for all three
+would blur exactly the line the design leans on.
+
+**TWP and TWS follow TFS2/TFS3's style** -- short, plain, project-initial
+-- because they are the same kind of thing: a format or service with a
+contract worth versioning. **Toykit deliberately breaks that pattern**,
+because the plain version would be "TUI", which universally means *text*
+user interface and would mislead every reader arriving without context.
+It is also the name said out loud most often, which is worth a real word.
+
+**The symbol prefixes do NOT change.** Toykit's are `uui_`, `ugfx_`,
+`uapp_`; TWP's are `WIN_REQ_*`/`WIN_EV_*`. A toolkit's name and its
+prefix need not match -- GNOME's toolkit is GTK -- and renaming several
+hundred symbols to spell a name out would be churn with no reader
+benefit. The names are for docs, comments and conversation, which is
+where the ambiguity actually was.
 
 ## Userland programs link one archive, and name nothing
 

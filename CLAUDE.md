@@ -215,6 +215,16 @@ technical conventions below:
   `sub rsp, 8` there looks like it restores the old convention and
   instead faults every SSE-using binary while leaving plain ones
   working, see `docs/decisions.md`.
+- **The GUI stack has names -- use them.** **TWP** (Toy Window
+  Protocol, `abi/win_proto.h`) is the client<->server contract;
+  **TWS** (Toy Window Server, `kernel/proc/win_server.c` +
+  `apps/wm/wm_client.c`) implements it; **Toykit** (`userland/ui/`) is
+  the client toolkit an app programs against -- roughly Wayland, its
+  compositor, and GTK. Three names rather than one because the protocol
+  is meant to outlive this server (M41 moves TWS to ring 3). Symbol
+  prefixes are unchanged and stay that way (`uui_`, `ugfx_`, `uapp_`,
+  `WIN_REQ_*`); a toolkit's name and its prefix need not match. See
+  `docs/decisions.md`.
 - **A ring-3 process can own a real window** (`apps/wm/wm_client.c` +
   `kernel/proc/win_server.c`, protocol in
   `kernel/include/abi/win_proto.h`). Two rules matter before touching

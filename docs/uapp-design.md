@@ -5,6 +5,12 @@
 build it in named stages afterwards. Nothing in `userland/` implements
 any of this yet.
 
+**Naming, settled since this was written:** the protocol is **TWP**
+(Toy Window Protocol), the server implementing it is **TWS**, and the
+client toolkit this document designs for is **Toykit** -- see
+`docs/decisions.md`. This file predates those names and mostly says
+"the protocol" and "the toolkit"; read them as TWP and Toykit.
+
 **The one-sentence version:** ring-3 clients should describe themselves
 and supply callbacks, the way kernel-space apps already do through
 `struct gui_app` -- instead of each one hand-writing the window

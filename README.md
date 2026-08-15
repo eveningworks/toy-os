@@ -55,7 +55,9 @@ the kernel":
   VFS picks by superblock probe, and `fsformat` switches live.
 - **A real GUI** -- a window manager with movable/resizable windows, a
   taskbar, a Start menu, a draggable desktop, and five apps including a
-  terminal emulator that runs the actual shell.
+  terminal emulator that runs the actual shell. Ring-3 apps get their
+  own windows over **TWP**, the Toy Window Protocol, served by **TWS**
+  and programmed against with **Toykit**.
 - **Its own test suite** -- `make test` boots the OS headless, runs
   in-kernel tests including deliberate fault injection, and exits
   non-zero on failure.
