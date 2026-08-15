@@ -96,16 +96,17 @@ adds 4; 12 adds 5; 13 adds 6; 14 and up add 8.
 ### Milestone 2 -- Memory protection hardening (planned v0.2.0)
 
 - [x] ~~NX bit enforcement (non-executable data pages)~~ -- done for
-      userspace, see `CHANGELOG.md`'s `[Unreleased]` entry
+      userspace first, and for the kernel's own identity map with the
+      W^X item below; see `CHANGELOG.md`'s `[Unreleased]` entry
 - [x] ~~Stack canaries (`-fstack-protector`)~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry
-- [ ] Page-align `.text` away from `.rodata`/`.data`/`.bss` in
-      `linker.ld` -- the concrete prerequisite the kernel half of W^X
-      below is blocked on
-- [ ] W^X on kernel + userspace mappings -- userspace half done
-      alongside NX above (same entry); the kernel's own identity map
-      (`boot.asm`) is still flat present+writable, no split, see
-      `docs/decisions.md`'s NX entry for why that's a separate, larger
-      change. Needs the `linker.ld` split above first.
+- [x] ~~Page-align `.text` away from `.rodata`/`.data`/`.bss` in
+      `linker.ld`~~ -- done, with four real PT_LOAD segments; also
+      silenced the long-standing RWX LOAD-segment link warning. See
+      `CHANGELOG.md`'s `[Unreleased]` entry
+- [x] ~~W^X on kernel + userspace mappings~~ -- both halves done. The
+      kernel's identity map gets NX on every huge PDE plus one 4KiB
+      split for `.text`, and CR0.WP so ring 0 honours read-only at all;
+      see `docs/decisions.md`'s kernel W^X entry
 - [ ] A real entropy source (RDRAND, TSC jitter fallback) -- prerequisite
       for both kernel ASLR below and a non-constant stack-canary guard
 - [ ] Kernel ASLR (randomize load base) -- needs the entropy source above
@@ -1624,12 +1625,14 @@ scheduler-managed. Built as planned:
 
 ### Milestone 2 -- Memory protection hardening
 
-New milestone, lightly scoped -- added because the build already surfaces
-the gap today: `make all` currently emits `ld: warning: build/kernel.bin
-has a LOAD segment with RWX permissions`, and `CFLAGS` explicitly passes
-`-fno-stack-protector`. Neither is a bug (nothing about them breaks
+New milestone, lightly scoped -- added because the build surfaced the
+gap itself: `make all` used to emit `ld: warning: build/kernel.bin has
+a LOAD segment with RWX permissions`, and `CFLAGS` explicitly passed
+`-fno-stack-protector`. Neither was a bug (nothing about them broke
 correctness), but they're exactly the kind of baseline hardening a real OS
-has and a hobby kernel this far along is a natural point to start closing:
+has and a hobby kernel this far along is a natural point to start closing.
+Both of those are closed now; SMEP/SMAP, ASLR and the entropy source
+they need are what's left:
 
 - ~~NX bit enforcement~~ (userspace) -- done, see `CHANGELOG.md`'s
   `[Unreleased]` entry: EFER.NXE set at boot, `vmm_map_user_page()`
@@ -1643,18 +1646,27 @@ has and a hobby kernel this far along is a natural point to start closing:
   originally called for (`userland/tests/nx_test.c`, `run nx_test`): the
   kernel reports a Present+User+Instruction-Fetch page fault and tears
   the process down instead of executing the injected code. The
-  kernel's own identity map (`boot.asm`) is unchanged/still RWX --
-  that's the userspace-vs-kernel split the W^X bullet below still
-  tracks the kernel half of.
-- W^X on kernel + userspace mappings -- userspace half done alongside
-  NX above (same `vmm_map_user_page()`/`elf.c` change: a segment's
-  writable bit now comes from its real `PF_W` flag too, not a blanket
-  1). Kernel half still open -- `boot.asm`'s flat 2MiB-huge-page
-  identity map has no code/data split at all yet; would need
-  `linker.ld` to page-align `.text` away from `.rodata`/`.data`/`.bss`
-  first and `pmm.c`'s frame reservation to become section-aware, a
-  bigger and riskier change to a boot-critical path than the userspace
-  half was -- see `docs/decisions.md`'s NX entry.
+  kernel's own identity map (`boot.asm`) was left RWX at this point --
+  the W^X bullet below is where the kernel half landed.
+- ~~W^X on kernel + userspace mappings~~ -- both halves done. Userspace
+  came with NX above (same `vmm_map_user_page()`/`elf.c` change: a
+  segment's writable bit now comes from its real `PF_W` flag too, not a
+  blanket 1). The kernel half is `paging_enforce_wx()`
+  (`kernel/arch/x86_64/paging.c`, called from the top of
+  `kernel_main()`): every one of the identity map's 2048 2MiB PDEs gets
+  its NX bit set and stays a huge page, and the single slot holding the
+  read-only part of the kernel image is split to 4KiB so `.text` can be
+  executable-and-read-only while `.rodata` is read-only and NX. Plus
+  CR0.WP, without which ring 0 ignores the read-only bit entirely and
+  half the protection is decorative. `linker.ld` supplies the four real
+  PT_LOAD segments, the `ALIGN(4096)`s and the boundary symbols it
+  reads. This turned out much smaller than the estimate above: the
+  whole read-only part of the image fits in the FIRST 2MiB page, so it
+  is one static table out of `.bss` and no allocator, and `pmm.c`
+  needed no change at all. Seven KTESTs, two positive controls that
+  each fire on exactly the right check, and a live `PANIC: Page fault`
+  from a deliberate write to `.text` -- see `docs/decisions.md`'s
+  kernel W^X entry and `CHANGELOG.md`'s `[Unreleased]` entry.
 - ~~Stack canaries~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry:
   `-fstack-protector-strong` is on for both the kernel and userland now,
   with `-mstack-protector-guard=global` (a fixed constant, not random --

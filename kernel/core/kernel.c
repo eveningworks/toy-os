@@ -8,6 +8,7 @@
 #include "klog.h"
 #include "idt.h"
 #include "gdt.h"
+#include "paging.h"
 #include "fpu.h"
 #include "cpuinfo.h"
 #include "multiboot.h"
@@ -47,6 +48,19 @@ void kernel_main(uint64_t multiboot_info_addr) {
     klog_write("toy-os: kernel_main reached, initializing...\n");
 
     multiboot_set_info(multiboot_info_addr);
+
+    // As early as the log allows. boot.asm hands over a 4GiB identity map
+    // that is uniformly present+writable with no NX anywhere, so until
+    // this runs the kernel's own .text is writable and every byte of RAM,
+    // the framebuffer included, is executable. It needs nothing that is
+    // initialized below -- no heap, no allocator, no interrupts -- only
+    // the linker symbols, so there is no reason to run any of the rest of
+    // this function unprotected first.
+    if (paging_enforce_wx()) {
+        klog_write("toy-os: kernel W^X applied (.text read-only+exec, everything else NX)\n");
+    } else {
+        klog_write("toy-os: WARNING -- kernel W^X NOT applied; split table pool exhausted\n");
+    }
 
     // Before any device driver: PCI enumeration is what a driver probes
     // against. Safe this early -- pci.c is a port-I/O scan into a static

@@ -419,6 +419,23 @@ technical conventions below:
   `docs/decisions.md`'s `Build N` pointers name whichever file that
   build actually lives in -- keep them accurate when a split moves
   entries.
+- **`linker.ld` decides kernel memory PERMISSIONS now, not just
+  placement.** Four PT_LOAD segments (R / R+X / R / RW) and four
+  boundary symbols -- `__kimage_start`, `__ktext_start`, `__ktext_end`,
+  `__kdata_start` -- which `paging_enforce_wx()`
+  (`kernel/arch/x86_64/paging.c`, called from the top of `kernel_main()`)
+  reads at boot to rewrite the identity map: `.text` read-only and the
+  only executable range, the rest of the image read-only and NX,
+  everything else writable and NX, plus CR0.WP. Two things follow.
+  **A new output section must be placed explicitly and assigned to a
+  segment** -- with PHDRS declared, an orphan's permissions are wherever
+  `ld` decided to put it, and the failure is silent in the direction
+  that matters (a section landing in the R+X band becomes executable).
+  **The `ALIGN(4096)`s between the bands are load-bearing**: W^X is
+  enforced per 4KiB page, so two sections sharing a page get one
+  permission and the more permissive one always wins. Adding to the
+  `paging` KTESTs is the cheap way to keep this honest; their positive
+  controls are in `CHANGELOG.md`'s entry.
 - **A graphics card is a `display_driver`, not a special case.**
   `kernel/include/kernel/display.h` defines the interface (required
   probe/get_surface; optional flush, cursor, accel, modeset, each behind

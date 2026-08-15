@@ -32,6 +32,72 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
 ## [Unreleased]
 
 ### Changed
+- **The kernel enforces W^X on its own memory now, finishing Milestone
+  2.** `boot.asm` hands over a flat 4GiB identity map that is uniformly
+  present+writable with no NX anywhere, which meant the kernel's `.text`
+  was writable and every byte of RAM -- the heap, every stack, the
+  framebuffer -- was executable. `paging_enforce_wx()`
+  (`kernel/arch/x86_64/paging.c`), called from the top of
+  `kernel_main()`, rewrites that map so exactly one range is executable
+  (`.text`, which is also read-only), the rest of the kernel image is
+  read-only and NX, and everything else is writable and NX.
+
+  The half of Milestone 2 that had been left open was described as
+  needing a `linker.ld` section split *and* section-aware frame
+  reservation in `pmm.c` (see `docs/decisions.md`). The `linker.ld` half
+  was real; the `pmm.c` half turned out not to be -- it reserves
+  `0.._kernel_end` as one blob and nothing here frees any of it. What
+  actually made this small was noticing where the image sits: `.boot`,
+  `.text`, `.rodata`, `.eh_frame`, `.ktests` and `.data` all live below
+  `0x19c000`, so the entire read-only part of the kernel fits inside the
+  FIRST 2MiB page. So all 2048 PDEs stay huge pages and just get their
+  NX bit set, and one single slot is split to 4KiB -- one table out of
+  `.bss`, no allocator, which is why this can run before `pmm_init()`
+  instead of after it.
+
+  Ring 3 is untouched by the blanket NX: `userland/rt/link.ld` links at
+  `0x8000000000`, PML4 index 1, while the identity map is everything
+  under index 0.
+
+  `linker.ld` gained four PT_LOAD segments with real permission flags
+  (R / R+X / R / RW, mirroring `userland/rt/link.ld`), `ALIGN(4096)`
+  between the bands, and the `__kimage_start` / `__ktext_start` /
+  `__ktext_end` / `__kdata_start` symbols the runtime pass reads. That
+  also silences `ld: warning: build/kernel.bin has a LOAD segment with
+  RWX permissions`, which had been printing on every build since the
+  project started. `.eh_frame` is placed explicitly rather than left an
+  orphan -- with PHDRS declared, where `ld` puts an orphan decides its
+  permissions.
+
+  **CR0.WP is set here too, and it is the half that would have been easy
+  to skip.** With WP clear -- how the CPU resets, and what GRUB hands
+  over -- a supervisor write ignores the read/write bit entirely, so
+  ring 0 could still overwrite `.text` through a mapping that reads as
+  read-only in every page table. NX needs no such switch (EFER.NXE
+  already covers it), so leaving WP out gives half-working protection
+  whose page tables dump perfectly correct.
+
+  Verified three ways. Seven KTESTs in a new
+  `kernel/arch/x86_64/paging_test.c` walk the live tables: no page in
+  the kernel map is both writable and executable, `.text` is
+  executable-and-not-writable at both ends, `.rodata`/`.boot` are
+  read-only and NX, `.data` is writable and NX (the other half of the
+  assertion -- a pass that made everything read-only would boot into
+  nothing), `0xB8000` stays writable, and CR0.WP is set. Two positive
+  controls, each firing precisely: making `.text` writable reddens
+  exactly the violation walk and the `.text` check and leaves the other
+  five green; commenting out the CR0.WP line reddens exactly the CR0
+  check and leaves all six page-table checks green, which is the point
+  of testing it separately. And a live probe -- one byte written to
+  `__ktext_start` from `kernel_main()` gives `PANIC: Page fault`. That
+  probe is deliberately not committed, since a ring-0 fault ends the
+  boot and cannot live in a suite; to reproduce it, add
+  `{ extern char __ktext_start[]; volatile char *t = __ktext_start; *t = 0x90; }`
+  after `idt_init()` (before it, there is no IDT yet and the machine
+  triple-faults silently instead of reporting).
+
+  Full gate clean: preflight 132 ktests (was 125), `usertest_run` 6/6,
+  `gui_regress` 13 tools / 186 checks.
 - **The shell has a name now: `tosh`** -- t + OS + h, contracting
   "toy-os shell" the way `bash` contracts "Bourne-again shell". It was
   unnamed until now, which was fine while there was one command line

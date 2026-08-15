@@ -362,9 +362,12 @@ Useful tools in `tools/` (all documented in their own docstrings):
 - Baseline memory hardening (Milestone 2): NX enforced for userspace
   pages with W^X from each ELF segment's real `p_flags`, and
   `-fstack-protector-strong` canaries on both the kernel and userland.
-  The kernel's own identity map is still RWX -- see
-  `docs/decisions.md`. `run nx_test` / `run stack_smash_test` prove
-  both for real, not by assertion.
+  The kernel's own identity map is W^X too -- `.text` is the only
+  executable range in it and is read-only, everything else is NX, and
+  CR0.WP is set so ring 0 actually honours that (see
+  `docs/decisions.md`). `run nx_test` / `run stack_smash_test` prove
+  the userspace half for real, not by assertion; the `paging` KTESTs
+  and a deliberate `PANIC: Page fault` prove the kernel half.
 - Two persistent, disk-backed filesystems behind a probe-selecting
   VFS (`kernel/fs/vfs.c` -- one ACTIVE backend at a time, chosen by
   superblock magic; a blank disk gets the default). **TFS3**

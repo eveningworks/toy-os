@@ -46,7 +46,8 @@ there when you add an entry, or the index quietly stops being one.
 - [Ring-3 GUI apps live in /bin, not /tests](#ring-3-gui-apps-live-in-bin-not-tests)
 - [stderr goes to the kernel log, and is never redirected into a pipe](#stderr-goes-to-the-kernel-log-and-is-never-redirected-into-a-pipe)
 - [Stack canaries: `-mstack-protector-guard=global` and a fixed constant, not GCC's defaults](#stack-canaries--mstack-protector-guardglobal-and-a-fixed-constant-not-gccs-defaults)
-- [NX enforcement scoped to userspace only -- the kernel's own identity map stays RWX](#nx-enforcement-scoped-to-userspace-only----the-kernels-own-identity-map-stays-rwx)
+- [NX landed in userspace first, and the default mapper is the non-executable one](#nx-landed-in-userspace-first-and-the-default-mapper-is-the-non-executable-one)
+- [Kernel W^X: NX on every huge PDE, one 4KiB split for `.text`, and CR0.WP](#kernel-wx-nx-on-every-huge-pde-one-4kib-split-for-text-and-cr0wp)
 - [The serial debug console is poll-based from existing idle loops, not a new kernel thread](#the-serial-debug-console-is-poll-based-from-existing-idle-loops-not-a-new-kernel-thread)
 
 **Filesystem & storage**
@@ -3492,22 +3493,17 @@ one stop in every real toolkit; and the ring WRAPS while `ui_listbox`
 CLAMPS, which is not an inconsistency -- a tab ring is a cycle with no
 ends, a list has a first and last item whose boundaries mean something.
 
-## NX enforcement scoped to userspace only -- the kernel's own identity map stays RWX
+## NX landed in userspace first, and the default mapper is the non-executable one
 
 Milestone 2's "NX bit enforcement" and "W^X on kernel + userspace
-mappings" roadmap items were done together for the *userspace* half
-only (`kernel/proc/elf.c`/`vmm.c`, `userland/rt/link.ld`) -- deliberately
-not touching `kernel/arch/x86_64/boot.asm`'s own flat 2MiB-huge-page identity
-map, which stays plain present+writable, no NX, no code/data split, on
-purpose. Giving the kernel itself real NX/W^X would need `linker.ld` to
-page-align `.text` away from `.rodata`/`.data`/`.bss` first (it
-currently doesn't, unlike `userland/rt/link.ld` post this change) and
-`pmm.c`'s frame-reservation logic to become section-aware instead of
-treating the whole kernel image as one blob -- a much larger, riskier
-change to a boot-critical path than userspace enforcement, which only
-touches process page tables that already get created fresh per-process
-anyway. Left as the remaining half of the "W^X on kernel... mappings"
-roadmap checkbox.
+mappings" roadmap items were done for the *userspace* half first
+(`kernel/proc/elf.c`/`vmm.c`, `userland/rt/link.ld`), deliberately not
+touching `kernel/arch/x86_64/boot.asm`'s own flat 2MiB-huge-page
+identity map, on the reasoning that process page tables get created
+fresh per process anyway while the boot map is a boot-critical path.
+The kernel half landed a milestone later and is its own entry below --
+**the identity map is no longer RWX**, so don't take the ordering here
+as a statement about today's state.
 
 The default mapper (`vmm_map_user_page()`) was changed to be
 non-executable by default rather than adding a parallel "safe" variant
@@ -3522,6 +3518,54 @@ verification (a purpose-built `userland/tests/nx_test.c` that jumps into a
 non-executable data page and confirms the CPU actually faults --
 `error_code=0x15` decodes to Present+User+Instruction-Fetch, not a
 generic unmapped-page fault).
+
+## Kernel W^X: NX on every huge PDE, one 4KiB split for `.text`, and CR0.WP
+
+`paging_enforce_wx()` (`kernel/arch/x86_64/paging.c`, called from the
+top of `kernel_main()`) rewrites the identity map boot.asm hands over.
+It is deliberately NOT a general "make the map fine-grained" pass: all
+2048 2MiB PDEs keep being huge pages and just get their NX bit set,
+and only the slots holding something that must not be writable get
+split down to 4KiB. That is one slot -- `.boot`/`.text`/`.rodata`/
+`.eh_frame`/`.ktests` all fit inside the first 2MiB page -- so the
+whole thing costs one 4KiB table out of `.bss` and needs no allocator,
+which is why it can run before `pmm_init()` rather than after.
+
+Two claims the previous entry made turned out not to hold, and both
+are worth knowing before someone re-derives them:
+
+- **`pmm.c` needed no changes.** The entry above predicted its
+  frame reservation would have to become section-aware. It reserves
+  `0.._kernel_end` as one blob and nothing here frees any of it, so
+  section-awareness would only matter to a change that wants to hand
+  parts of the image back, which this isn't.
+- **The 2MiB granularity was never the obstacle.** The obstacle was
+  believing the split had to happen in `boot.asm`'s 32-bit
+  pre-long-mode code. Doing it in C afterwards is the same result with
+  none of that risk, and it can read the linker symbols directly.
+
+**Ring 3 is unaffected because user mappings never enter this map at
+all**: `userland/rt/link.ld` links at `0x8000000000`, i.e. PML4 index
+1, while the identity map is everything under index 0. Every process's
+PML4 shares entry 0 (`vmm_create_address_space()`), so the blanket NX
+reaches every address space -- and touches no user page.
+
+**CR0.WP is the half that is easy to omit and impossible to notice.**
+With WP clear -- the state the CPU resets into, and what GRUB hands
+over -- a supervisor write ignores the read/write bit entirely, so ring
+0 can scribble over a `.text` mapping that reads as read-only in every
+page table. NX needs no equivalent switch (EFER.NXE covers it), so the
+failure mode is half-working protection whose page tables look
+completely correct in a dump. The `paging` KTEST asserts the bit
+separately for exactly this reason, and its positive control is the
+demonstration: clearing that one line turns the CR0 check red and
+leaves every page-table check green.
+
+Verified live, not only by reading bits back: a one-byte write to
+`__ktext_start` from `kernel_main()` produces `PANIC: Page fault`. That
+probe is not committed -- a ring-0 fault ends the boot, so it cannot
+live in a suite -- see CHANGELOG.md's `[Unreleased]` entry for how to
+reproduce it in two lines.
 
 ## An unreadable superblock is not a foreign disk -- refuse to format, don't guess
 

@@ -162,12 +162,17 @@ enable_paging:
     mov ecx, 0xC0000080   ; EFER MSR
     rdmsr
     or eax, 1 << 8         ; long mode enable
-    or eax, 1 << 11        ; NXE -- honor the NX bit (PTE bit 63) everywhere;
-                            ; harmless on its own since nothing sets bit 63
-                            ; yet here -- vmm.c is what actually uses it, for
-                            ; per-process user pages (see docs/decisions.md).
-                            ; The kernel's own identity map below stays plain
-                            ; present+writable, no NX, same as before.
+    or eax, 1 << 11        ; NXE -- honor the NX bit (PTE bit 63) everywhere.
+                            ; Nothing here sets bit 63: the map built below is
+                            ; deliberately still flat present+writable, because
+                            ; getting the permissions right needs the linker's
+                            ; section symbols and is far easier in C than in
+                            ; 32-bit pre-long-mode asm. paging_enforce_wx()
+                            ; (paging.c) rewrites this map at the top of
+                            ; kernel_main() -- NX on every huge PDE, one 4KiB
+                            ; split so .text can be read-only and executable,
+                            ; and CR0.WP. vmm.c uses the same bit for
+                            ; per-process user pages. See docs/decisions.md.
     wrmsr
 
     mov eax, cr0
