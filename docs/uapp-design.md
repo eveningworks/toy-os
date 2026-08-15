@@ -8,15 +8,26 @@ any of this yet.
 **The one-sentence version:** ring-3 clients should describe themselves
 and supply callbacks, the way kernel-space apps already do through
 `struct gui_app` -- instead of each one hand-writing the window
-handshake and the event loop, which is why the window manager cannot
-gain a feature without every app being edited.
+handshake, the event loop, and the arithmetic that places every widget.
 
 Decisions settled deliberately rather than defaulted, each with its own
-section below: the loop lives in the library but an escape hatch exists
-(Shapes animates, Terminal blocks inside a command); drawing stays
-immediate-mode; window *behaviour* becomes protocol state instead of a
-field on a kernel-side struct; and resize is a **configure/ack
-handshake**, not a size the server imposes.
+section below:
+
+- The loop lives in the library, with an escape hatch (Shapes animates,
+  Terminal blocks inside a command).
+- Drawing stays **immediate-mode**, but **layout does not** -- rects are
+  computed by a layout pass, not by each app. These are separable, and
+  conflating them is what made the first draft of this document reject
+  layout for the wrong reason.
+- Window *behaviour* becomes protocol state instead of a field on a
+  kernel-side struct.
+- Resize is a **configure/ack handshake**, not a size the server
+  imposes.
+- **No GUI string type.** UTF-8 is byte-compatible with ASCII by
+  design; what breaks later is text *arithmetic*, not `const char *`.
+- The widget set gets **normalised before** any of this is built on it,
+  because it is currently three inconsistent generations and only one of
+  them can participate.
 
 ## The problem, measured
 
@@ -85,44 +96,46 @@ matters:
 nothing handles it**, and the reason it stalled is that shipping it
 would have meant editing every client's loop by hand.
 
+## What "easier" actually means
+
+Removing the handshake and the loop is necessary and not sufficient. A
+first draft of this design stopped there, and the resulting "Hello
+button, World label" example still needed a `hello_size()` computing
+`ugfx_text_width("Hello") + 24` and `ugfx_char_h() + 12`, *the same two
+expressions again* in `on_open`, and a draw call reading
+
+```c
+ugfx_draw_string(s, MARGIN, MARGIN + g_buttons[0].h + GAP,
+                  g_text, UTHEME_TEXT, UTHEME_PANEL_BG);
+```
+
+-- a y coordinate derived by hand from another widget's height, plus a
+foreground and background the app has no real opinion about. That is
+still the app doing the toolkit's job. Three distinct causes:
+
+1. **Widgets don't know their own natural size**, so every app computes
+   it, with the padding constants copied in.
+2. **There is no layout pass**, so every coordinate is arithmetic over
+   its neighbours' geometry.
+3. **Window size is stated rather than derived**, so a third copy of the
+   same numbers appears in `default_size`/`on_size`.
+
+Each is addressed below. The target for that example is fifteen lines
+with no coordinates in it at all -- see "What a small app looks like".
+
 ## Shape
 
 A client describes itself and supplies callbacks; `uapp_run()` owns the
 loop. Everything a window can do is a function on the app handle rather
 than a message the app assembles.
 
-```c
-#include "uapp.h"
-
-static void on_draw(struct uapp *a, struct ugfx_surface *s) { ... }
-
-static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
-    (void)buttons;
-    int code = uui_button_group_release(&g_group);
-    if (code >= 0) calc_input(&g_calc, (char)code);
-    uapp_redraw(a);
-}
-
-int main(void) {
-    struct uapp_desc desc = {
-        .title      = "Calculator",
-        .on_size    = calc_size,        // font-derived, like default_size()
-        .flags      = UAPP_FIXED_SIZE,
-        .on_draw    = on_draw,
-        .on_release = on_release,
-        .on_key     = on_key,
-    };
-    return uapp_run(&desc);
-}
-```
-
 ## API sketch (`userland/uapp.h`)
 
 Illustrative, not final -- the point is the shape. Types come from
-`ugfx.h` and `win_proto.h`; nothing here is new kernel surface.
+`ugfx.h`, `uui.h` and `win_proto.h`; nothing here is new kernel surface.
 
 ```c
-struct uapp;   // opaque; one process, one app handle
+struct uapp;   // opaque; one process, one window (for now)
 
 // --- behaviour flags -------------------------------------------------
 #define UAPP_FIXED_SIZE   0x01  // no resize grip (the default is resizable)
@@ -132,15 +145,20 @@ struct uapp;   // opaque; one process, one app handle
 struct uapp_desc {
     const char *title;
 
-    // Initial CONTENT size. Either a fixed pair, or -- preferred, and
-    // the same reasoning as gui_app::default_size() -- a callback that
-    // derives it from the font the server handed over, so a window is
-    // sized for the font it opens under. If both are given the callback
-    // wins.
+    // --- content: pick ONE of these three ---------------------------
+    // A layout the library places, sizes the window from, and draws by
+    // default. The ordinary case.
+    struct uui_layout *layout;
+    // Or: a button group the library routes the mouse to, for an app
+    // that draws its own content but wants standard controls.
+    struct uui_button_group *buttons;
+    // Or: nothing, and the app draws and hit-tests everything itself.
+
+    // Only needed to override what the layout implies.
     int w, h;
     void (*on_size)(int *w, int *h);
+    int min_w, min_h;
 
-    int min_w, min_h;      // 0 = the library's floor
     unsigned flags;        // UAPP_*
     void *state;           // opaque, handed back via uapp_state()
 
@@ -149,7 +167,8 @@ struct uapp_desc {
     // event, so an app only writes the ones it cares about. This is the
     // property that lets the WM grow without touching apps.
     void (*on_open)   (struct uapp *a);
-    void (*on_draw)   (struct uapp *a, struct ugfx_surface *s);
+    void (*on_action) (struct uapp *a, int code);  // a control committed
+    void (*on_draw)   (struct uapp *a, struct uapp_draw *d);
     void (*on_key)    (struct uapp *a, int key, unsigned mods);
     void (*on_press)  (struct uapp *a, int x, int y, unsigned buttons);
     void (*on_release)(struct uapp *a, int x, int y, unsigned buttons);
@@ -171,12 +190,21 @@ int   uapp_resize(struct uapp *a, int w, int h);   // ask; may be refused
 void *uapp_state(struct uapp *a);
 int   uapp_width(struct uapp *a);
 int   uapp_height(struct uapp *a);
-struct ugfx_surface *uapp_surface(struct uapp *a);
+
+// --- drawing, for an app with its own content --------------------------
+// The context carries the surface AND the theme defaults, which is what
+// takes ugfx_draw_string()'s six arguments down to three. The styled
+// forms stay for the cases that genuinely differ.
+struct ugfx_surface *uapp_surface(struct uapp_draw *d);
+void uapp_text(struct uapp_draw *d, int x, int y, const char *s);
+void uapp_text_styled(struct uapp_draw *d, int x, int y, const char *s,
+                       uint32_t fg, uint32_t bg);
+void uapp_fill(struct uapp_draw *d, int x, int y, int w, int h, uint32_t c);
 
 // --- escape hatch, for an app that owns its own loop ------------------
-int uapp_open(struct uapp **out, const struct uapp_desc *desc);
-int uapp_pump(struct uapp *a, int block);  // dispatch pending events;
-                                            // 0 once the app should exit
+int  uapp_open(struct uapp **out, const struct uapp_desc *desc);
+int  uapp_pump(struct uapp *a, int block);  // dispatch pending events;
+                                             // 0 once the app should exit
 void uapp_close(struct uapp *a);
 ```
 
@@ -188,6 +216,20 @@ and presents **once** before it next blocks. A mouse drag crossing three
 buttons costs one present instead of three, and an app can call
 `uapp_redraw()` from as many places as it likes without thinking about
 it. Apps stop containing the phrase "and don't forget to present".
+
+### `on_action` is where the commit rule lives
+
+`docs/gui-guidelines.md`'s press-then-commit-on-release rule is
+currently re-implemented in every app, as three mouse callbacks that
+forward to `uui_button_group_press/_hover/_release` and then check the
+return. With `.layout` or `.buttons` set, the library does that routing
+and calls `on_action(a, code)` when a control actually commits. The rule
+lives in one place instead of once per app, which is the same argument
+`ui_textview.h` makes about scrolling having been copy-pasted into three
+apps until the third copy shipped a scrollbar that drew and did nothing.
+
+The raw `on_press`/`on_motion`/`on_release` callbacks stay for apps
+doing their own hit-testing -- Shapes' canvas, Notepad's text area.
 
 ### `on_tick` is how an animating app stays honest
 
@@ -205,6 +247,132 @@ as it arrives. That is an app driving the loop, not the loop driving the
 app, so `uapp_open()`/`uapp_pump()` stay available. Everything else uses
 `uapp_run()`, which is implemented in terms of them.
 
+## Layout: natural sizes, one pass, two-pass draw
+
+Three pieces, in dependency order.
+
+**Natural size.** Every widget type answers "how big do you want to be"
+-- a button is `text_width(label) + UUI_BTN_PAD_X*2` by
+`char_h + UUI_BTN_PAD_Y*2`, with the padding a `uui` constant rather
+than a number copied into each app.
+
+This is not a new concept, it is an existing one nobody named. It is
+already implemented three times, in three incompatible spellings:
+
+| Existing | Widget |
+|---|---|
+| `ui_radio_list_size(list, *w, *h)` | radio list |
+| `uui_checkbox_width(size, label)` | checkbox (width only) |
+| `ui_listbox_height_for_rows(lb, rows)` | listbox (height only, parameterised) |
+
+Three real callers, no shared signature. Formalising it is consolidation,
+not speculation -- the same finding that produced `kernel/lib/`.
+
+**One layout pass.** Widgets are declared in order and a
+column/row/grid container places them, with margins and gaps derived
+from `char_h` so the result reflows at any font size (`CLAUDE.md`'s
+font-derived-layout rule, which app-computed coordinates satisfy only by
+each app remembering to). The pass runs at open and on resize, and
+writes through the `set_geometry()` that generation-A widgets already
+have -- and whose comment already says geometry is font-dependent and
+gets recomputed. Nothing about existing widgets needs to change for the
+pass to have somewhere to write.
+
+**Window size derived from it.** Once natural sizes exist, the initial
+window size is the layout's natural size plus margins, so `on_size`
+disappears for anything that doesn't want a specific size. This also
+means a window is correctly sized at every font size for free, rather
+than by each app remembering to derive it.
+
+**Drawing is still immediate-mode, and stays two passes.** The default
+`on_draw` walks the layout and draws each widget; nothing retains damage
+state, and the compositor one level up keeps doing that job. But it
+cannot be a single loop: `ui_dropdown_draw_popup()` must be called
+**after every other widget**, because drawing is immediate-mode and
+z-order is call order. So the widget descriptor carries an `overlay`
+flag and the default draw is a content pass followed by an overlay pass.
+Missing this would reintroduce exactly the bug `ui_dropdown.h` warns
+about.
+
+**Layout is not retained mode.** The first draft of this document
+rejected layout by citing "immediate-mode stays" and "a layout engine is
+M20", which conflated two separable things. Computing rects once and
+drawing them immediately is not retained mode; it is what every app here
+already does by hand. The M20 relationship is real but narrower than it
+looked: this takes the first bite of it on the ring-3 side only, and
+does not commit the kernel-space GUI to anything.
+
+## Text, and Unicode later
+
+**Decision: no GUI string type.** Widgets keep taking `const char *`.
+
+UTF-8 is byte-compatible with ASCII by design -- that is the entire
+point of the encoding -- so the parameter type survives the migration
+untouched. What does not survive is **arithmetic on the bytes**, and a
+wrapper struct does not fix arithmetic. Concretely, the two things that
+will actually hurt at `docs/roadmap.md` M37 are both already in the
+tree, and neither is a string type:
+
+- **`userland/ugfx.c`'s `int idx = (int)c - WIN_FONT_FIRST_CHAR;`** --
+  glyph lookup is ASCII-contiguous by construction, and
+  `abi/win_proto.h` bakes that into the protocol ("glyph 0 is ASCII 32
+  and they run contiguously from there"). This needs a real glyph map,
+  and it is a protocol change as well as a code change.
+- **`struct scrollback_cell { char ch; uint8_t fg; }`** -- 8192 fixed
+  one-byte cells. The terminal's *storage* assumes one byte is one
+  character and one column. This is the expensive one.
+
+What generalises instead is a small set of **text chokepoints**, which
+already half-exist: `ugfx_text_width()` is the single measuring
+function and its comment already anticipates a proportional face, and
+`utext.c` already routes measure / draw / index-at-point through one
+shared wrap accounting *specifically* so the three cannot disagree.
+Finish that pattern:
+
+| Chokepoint | Replaces, in widget code |
+|---|---|
+| `width(s)` | `len * char_w` |
+| `index_at_x(s, x)` | scanning with `i * char_w` |
+| `next(s, i)` / `prev(s, i)` | `i + 1` / `i - 1` for a cursor |
+| `truncate_to_width(s, w)` | `s + n`, and hand-rolled ellipsis logic |
+
+with the standing rule that **no widget does character arithmetic
+itself**. Then UTF-8 becomes a change inside four functions plus the
+font map, rather than a change in every widget.
+
+The alternative considered and rejected: `typedef const char *uui_text;`
+in widget signatures now, so they don't change at M37. It costs almost
+nothing, but it buys almost nothing -- no compile-time safety, no
+behaviour -- while making every example noisier. Per `CLAUDE.md`'s bar,
+the type gets added when a caller genuinely needs it; the chokepoint
+functions have several callers today.
+
+## The widget audit: three generations
+
+Asked directly -- do the *other* UI components work under this model?
+Today, no. The set is three inconsistent generations, and the split
+falls exactly where layout needs it.
+
+| Generation | Widgets | Shape | Fits layout? |
+|---|---|---|---|
+| **A. Retained geometry** | `ui_button`, `ui_dropdown`, `ui_listbox`, `ui_textbox`, `ui_textview`; `uui_listbox`, `uui_dropdown` | `_init(x,y,w,h)`, `_set_geometry()`, `_draw(origin)`, `_hit`/`_hover`/`_press` | **Yes.** Only needs `natural_size()`. |
+| **B. State, no stored rect** | `ui_radio_list`, `uui_radio_list`, `uui_field`, `text_field` | struct exists, but `_draw(w, x, y, …)`/`_hit(w, x, y, px, py)` take coordinates every call | **Not yet.** Needs `set_geometry()` -- small and mechanical. |
+| **C. Free functions, no state** | `widget_checkbox_*`, `uui_checkbox_*`, `widget_scrollbar_*`, `uui_scrollbar_*`, `widget_button()` | no struct at all; the caller passes everything, every call | **No.** Nothing to lay out, nowhere to hold hover/pressed, cannot join `ui_focus`. Needs a struct. |
+
+A checkbox cannot be a layout child today because a checkbox is not an
+object. That is the finding that adds a stage to the plan: **normalise
+first, build on it second.** Skipping it produces a layout layer that
+works for buttons and quietly doesn't for half the toolkit -- which is
+worse than no layout layer, because the gap is invisible until an app
+hits it.
+
+One more constraint the audit turned up: **`ui_focus_ops` is already a
+per-widget vtable.** The layout descriptor should extend that table
+rather than introduce a second one, or a widget ends up declaring itself
+twice in two places that can drift -- the same failure `fs_ops.caps` and
+`display_driver` guard against by refusing a driver whose two statements
+disagree.
+
 ## Protocol additions
 
 `uapp` is a **client-side library over the existing messages**. It adds
@@ -213,12 +381,12 @@ the server can move to ring 3 as a transport swap
 (`docs/roadmap.md` M41). A convenience layer that reached around the
 protocol would quietly cash that in.
 
-Stage 1 needs no protocol change at all. Stages 2-3 add three messages
-and start sending one event that already exists:
+Stages 1a-1c need no protocol change at all. Stages 2-3 add three
+messages and start sending one event that already exists:
 
 | Message | Fields | Purpose |
 |---|---|---|
-| `WIN_REQ_HINTS` (6) | `a` = `UAPP_*` behaviour flags, `b`/`c` = min w/h | The client states how its window should behave. Sent once after create. |
+| `WIN_REQ_HINTS` (6) | `a` = behaviour flags, `b`/`c` = min w/h | The client states how its window should behave. Sent once after create. |
 | `WIN_REQ_RESIZE` (7) | `a`/`b` = requested content w/h | Reallocate and remap this window's buffer. On success `a`/`b` come back as the size actually granted. |
 | `WIN_REQ_MOVE` (8) | `c`/`d` = screen x/y | Reposition. Lowest value of the three; may slip a stage. |
 | `WIN_EV_RESIZE` (6, exists) | `a`/`b` = proposed content size | The server proposing a size. **Currently never sent.** |
@@ -254,16 +422,18 @@ solved the same way, for the same reason):
    by the server. The client's buffer pointer stays valid across a
    resize by construction. This is the fixed-vaddr decision paying off
    in a way it wasn't designed for.
-4. `uapp` rebuilds its `ugfx_surface` (stride changes with width), calls
-   `on_resize` if the app supplied one, then `on_draw`, then presents.
-   The WM adopts the new content size when the present arrives.
+4. `uapp` rebuilds its surface (stride changes with width), **re-runs
+   the layout pass**, calls `on_resize` if the app supplied one, then
+   `on_draw`, then presents. The WM adopts the new content size when the
+   present arrives.
 5. If the server refuses (out of frames, over `WIN_CLIENT_MAX_W/H`), the
    client keeps the size it had and the window does not change. A
    refusal is a normal outcome, not an error path.
 
-**An app that supplies no `on_resize` still resizes correctly** -- the
-library reallocates, rebuilds the surface and repaints. That is the
-whole argument for this design in one sentence.
+**An app that supplies no `on_resize` still resizes correctly, and with
+layout its widgets move to the right places** -- the library
+reallocates, re-lays-out, repaints. That is the whole argument for this
+design in one sentence.
 
 This is also the same shape as the close button, which
 `docs/decisions.md` already records as "a handshake, not a seizure".
@@ -271,11 +441,8 @@ Two operations, one precedent.
 
 ## Decisions settled deliberately
 
-**Drawing stays immediate-mode.** `on_draw` repaints the content; widgets
-do not retain damage state. It matches `apps/ui/`, it matches what all
-five clients do now, and retained-mode is where toolkits get genuinely
-hard. Damage tracking already exists one level up, in the compositor,
-which is where it belongs.
+**Drawing stays immediate-mode; layout does not.** See "Layout" above
+for why these are separable and why the first draft got it wrong.
 
 **Callbacks are optional, with library defaults.** A new event type ships
 as a new optional callback plus a default the library applies. Existing
@@ -296,18 +463,65 @@ being untested at >1 means (M41 lists it). The handle is opaque
 specifically so a future `uapp_window_create()` can appear without the
 single-window API changing shape.
 
-**`uapp` is ring-3 only; `gui_app` stays as it is.** No attempt to
-unify the two toolkits now. `apps/ui/` and `userland/uui.c` are already
-separate ports and M41 has the kernel-space side retiring eventually;
-the right move is to make the ring-3 side the good one and let porting
-flow in that direction, not to build a shared abstraction over a layer
-that is scheduled to disappear.
+**`uapp` is ring-3 only; `gui_app` stays as it is.** Confirmed with the
+maintainer. No attempt to unify the two toolkits. `apps/ui/` and
+`userland/uui.c` are already separate ports and M41 has the
+kernel-space side retiring eventually; the right move is to make the
+ring-3 side the good one and let porting flow in that direction, not to
+build a shared abstraction over a layer that is scheduled to disappear.
+Normalisation (stage 1a) is worth doing on both sides anyway, since
+`uidemo` is the test app for the kernel-space set and is how the
+behaviour gets verified at all.
 
-**Widgets stay where they are.** `uapp` does not absorb `uui`. It hands
-`on_draw` a surface and hands the mouse callbacks content-relative
-coordinates -- exactly what `uui_button_group_*` already takes. The two
-compose without either knowing about the other, which is what keeps
-`uui` usable from a client that wants no app framework at all.
+**`uapp` composes with `uui`, it does not absorb it.** A client that
+wants no app framework can still use the widgets directly, and a client
+that wants no widgets can still use `uapp`. `.layout` and `.buttons` are
+opt-in fields, not a required content model.
+
+## What a small app looks like
+
+A button labelled "Hello" and "World" underneath, complete:
+
+```c
+#include "uapp.h"
+
+enum { BTN_HELLO = 1 };
+static const char *g_text = "World";
+
+static struct uui_widget WIDGETS[] = {
+    UUI_BUTTON("Hello", BTN_HELLO),
+    UUI_LABEL(&g_text),
+};
+
+static void on_action(struct uapp *a, int code) {
+    if (code == BTN_HELLO) { g_text = "World!"; uapp_redraw(a); }
+}
+
+int main(void) {
+    struct uapp_desc desc = {
+        .title     = "Hello",
+        .layout    = UAPP_COLUMN(WIDGETS),
+        .on_action = on_action,
+    };
+    return uapp_run(&desc);
+}
+```
+
+Plus one Makefile line (`EXTRA_OBJS_hello = uui uapp $(UGFX_OBJS)`) and
+one `SEED_PROGRAMS` entry. No coordinates, no padding constants, no
+colours, no `on_size`, no `on_draw`, no handshake, no event loop. The
+same program written against today's API is about 120 lines, roughly 60
+of them machinery.
+
+`UUI_LABEL(&g_text)` binds to a pointer rather than taking a setter, so
+changing the text is an assignment plus `uapp_redraw()`. **Open
+question, to settle before stage 1c:** pointer-binding for text vs.
+opaque widgets with `uui_label_set_text()`. Pointer-binding is what makes
+the example fifteen lines; setters are more conventional and survive a
+widget wanting to cache measured metrics. Current lean: pointer-binding
+for plain text, setters for anything with internal state -- and note
+that `utext`/`ui_textview` deliberately cache nothing, which weakens the
+main argument for setters.
 
 ## What each client becomes
 
@@ -316,28 +530,125 @@ rather than quietly forgotten.
 
 | Client | Today | After | What goes |
 |---|---:|---:|---|
-| `winclient.c` | 141 | ~50 | the whole handshake and loop; it becomes a paint function and a keypress |
-| `uiclient.c` | 189 | ~95 | ditto |
-| `calculator.c` | 282 | ~205 | 3 private syscall helpers, the create/title dance, the 35-line switch |
-| `gfxdemo.c` | 298 | ~235 | the poll/yield loop becomes `on_tick` |
-| `terminal.c` | 191 | ~165 | handshake only -- it keeps its own loop via the hatch |
-| `notepad.c` | 565 | ~490 | handshake + switch; gains resize for free |
+| `winclient.c` | 141 | ~45 | the whole handshake and loop |
+| `uiclient.c` | 189 | ~85 | ditto, plus its own button placement |
+| `calculator.c` | 282 | ~180 | 3 private syscall helpers, the create/title dance, the 35-line switch, and `button_rect()`/`metrics_init()` once the grid is a layout |
+| `gfxdemo.c` | 298 | ~230 | the poll/yield loop becomes `on_tick`; the canvas keeps its own drawing |
+| `terminal.c` | 191 | ~160 | handshake only -- it keeps its own loop via the hatch |
+| `notepad.c` | 565 | ~470 | handshake + switch; gains resize for free |
 
-The absolute saving is not the point -- roughly 300 lines. The point is
-that the ~55 lines removed from each are the *same* 55 lines, and that
-the next client written pays none of it.
+The absolute saving is not the point -- roughly 400 lines. The point is
+that the removed lines are the *same* lines in each file, and that the
+next client written pays none of it.
+
+## File structure
+
+Asked separately, and the answer is yes -- `userland/` needs the
+treatment `kernel/` and `apps/` already got, and it needs it *before*
+this design lands rather than after.
+
+**Today it is flat: 44 source files in one directory**, mixing four
+unrelated things -- the C runtime (`crt0.asm`, `sys.c`, `stack_chk.c`,
+`link.ld`), the toolkit (`ugfx`, `uui`, `uwidgets`, `utext`, `utheme`),
+six real GUI apps plus the shell, and about twenty single-mechanism test
+diagnostics (`nx_test.c`, `fpu_race.c`, `write_bad_test.c`, ...). The
+diagnostics outnumber everything else and bury it.
+
+Three specific problems, each of which this design makes worse:
+
+- **The toolkit split is arbitrary.** `uui.c` is 125 lines and holds
+  buttons; `uwidgets.c` is 650 and holds scrollbar, field, checkbox,
+  radio list, listbox and dropdown. Meanwhile `apps/ui/` -- the same
+  widgets, on the kernel side -- is one file per widget. Stage 1a adds
+  a `natural_size()` and a `set_geometry()` to *every one of those
+  widgets*, which is exactly when a 650-line grab bag stops being
+  tolerable. `CLAUDE.md`'s rule applies squarely: split when a file
+  mixes more than one real concern, and follow the existing pattern
+  rather than inventing one.
+- **Source discovery never became recursive here.** The Makefile finds
+  kernel and apps sources with `$(shell find kernel apps -name '*.c')`,
+  but userland is served by flat pattern rules
+  (`$(BUILD)/userland/%.o: userland/%.c`). So `userland/` is the one
+  place left where adding a directory means editing the Makefile --
+  the tax the recursive change removed everywhere else.
+- **Build artifacts live in the source tree.** `userland/*.elf` are
+  written next to their `.c` files and hidden with a `.gitignore` line,
+  while every other object in the project lands under `build/`.
+
+### Proposed layout
+
+```
+userland/
+  rt/      crt0.asm, sys.c/h, stack_chk.c, link.ld
+  ui/      ugfx, utheme, utext, uapp, and one file per widget
+           (uui_button, uui_listbox, uui_dropdown, uui_checkbox,
+            uui_scrollbar, uui_field, uui_radio_list, uui_layout)
+  bin/     calculator, notepad, terminal, gfxdemo, uiclient,
+           winclient, ush
+  tests/   hello, exit_test, nx_test, fpu_test, ... (~20)
+```
+
+with ELFs built to `build/userland/bin/*.elf` rather than into the
+source directory.
+
+**`ui/` deliberately mirrors `apps/ui/`**, one file per widget, so the
+kernel-side and ring-3 versions of a widget are findable at the same
+relative path -- which matters while both exist and porting flows one
+way.
+
+**`bin/` and `tests/` deliberately mirror the on-disk layout.**
+`docs/filesystem-layout.md` already makes `/bin` versus `/tests` a real,
+enforced distinction (`tools/check_layout.py` fails CI in both
+directions), and the Makefile currently restates that split by hand as
+`SEED_PROGRAMS` and `SEED_TESTS`. If the source directory *is* the
+destination, those two lists collapse to a discovery plus the handful of
+genuine renames (`echo.c` seeds as `echo_test`). One fact, stated once,
+instead of a mapping to keep in step -- and the drift it prevents is
+real: every ring-3 client landed in `/tests` originally because the
+first one did, and nobody moved them until the Start menu forced it.
+
+### Do it first, and prove it changed nothing
+
+This belongs **before** stage 1a. Moving files while adding functions to
+them makes both halves harder to review, and the move has an unusually
+strong correctness check available: a pure `git mv` plus Makefile
+rework should leave **every userland ELF byte-for-byte identical**, the
+same check that verified this session's `EXTRA_OBJS` change. A move that
+changes a binary is a move that changed something.
+
+`apps/` needs nothing. `apps/wm/` and `apps/ui/` are already split by
+concern, and M41 retires the kernel-space app set eventually -- so the
+right amount of restructuring there is none.
 
 ## Staging
 
 Each stage is a commit that builds, tests and stands on its own -- the
 A-E pattern TFS3 used.
 
-**Stage 1 -- the library, no kernel changes.** `userland/uapp.c`/`.h`
-over today's five messages. Port `winclient`, `uiclient` and
-`calculator`. Their existing test tools must pass **unchanged**: they
-assert externally observable behaviour, which makes them an unusually
-good regression net for a refactor whose entire claim is that nothing
-observable changed.
+**Stage 0 -- restructure `userland/`.** The layout above: `git mv` into
+`rt/`/`ui/`/`bin/`/`tests/`, recursive source discovery, ELFs to
+`build/`, `SEED_*` derived from the directories, and `uwidgets.c` split
+one-file-per-widget to match `apps/ui/`. No behaviour change, and the
+acceptance test is byte-identical ELFs.
+
+**Stage 1a -- normalise the widget set.** One `natural_size()` spelling
+replacing the three that exist; `set_geometry()` on generation B;
+structs for generation C (`uui_checkbox`, `uui_scrollbar`); the text
+chokepoints. No new concepts and no app changes. `tools/uidemo_test.py`
+drives every one of these widgets and its 27 checks must pass unchanged
+-- which makes it an unusually good net for a refactor whose entire
+claim is that nothing observable changed.
+
+**Stage 1b -- the library.** `userland/uapp.c`/`.h` over today's five
+messages: the descriptor, the loop, `on_action`, the draw context, the
+escape hatch. Port `winclient` and `uiclient`. Their test tools must
+pass unchanged.
+
+**Stage 1c -- layout.** Containers, the two-pass draw, auto-sized
+windows, the default `on_draw`. **Calculator is the proof**: a 5×4 grid
+with a display area above it is a real layout, and if `calculator.c`
+does not come out shorter and clearer, the layer is not earning its
+place and should be reconsidered rather than shipped.
 
 **Stage 2 -- behaviour becomes protocol state.** `WIN_REQ_HINTS`;
 `wm_find_resize_zone()` and friends read the window rather than
@@ -346,10 +657,11 @@ observable changed.
 
 **Stage 3 -- resize, end to end.** The rubber band, `WIN_EV_RESIZE`
 actually sent, `WIN_REQ_RESIZE` and the server-side realloc/remap,
-`uapp`'s default handling. Port `notepad` and `terminal` and let them
-declare themselves resizable. **The acceptance test for the whole design
-is that Stage 3 touches zero lines in `calculator.c`, `winclient.c`,
-`uiclient.c` or `gfxdemo.c`** and they keep passing.
+`uapp`'s default handling including the layout re-run. Port `notepad`
+and `terminal` and let them declare themselves resizable. **The
+acceptance test for the whole design is that Stage 3 touches zero lines
+in `calculator.c`, `winclient.c`, `uiclient.c` or `gfxdemo.c`** and they
+keep passing.
 
 **Stage 4 -- optional.** `WIN_EV_FOCUS`, `WIN_REQ_MOVE`, and a second
 window per process if M41 wants it.
@@ -358,17 +670,19 @@ window per process if M41 wants it.
 
 - `tools/gui_regress.py` after every stage. Six of its seven tools drive
   the clients being ported, and all of them must pass without edits --
-  an edit to a test tool during Stage 1 is a signal that behaviour
+  an edit to a test tool during stages 1a-1c is a signal that behaviour
   changed, not that the tool was wrong.
-- `tools/damage_sweep.py` after Stage 2 and 3: both touch what the WM
+- `tools/uidemo_test.py` specifically gates stage 1a, since it is the
+  only thing that exercises the generation B and C widgets at all.
+- `tools/damage_sweep.py` after stages 2 and 3: both touch what the WM
   draws, and the rubber band is new drawing.
-- A new `tools/uapp_test.py` for the resize handshake specifically, with
-  the assertions this repo has learned to demand: the window's reported
+- A new `tools/uapp_test.py` for the resize handshake, with the
+  assertions this repo has learned to demand: the window's reported
   content size and the client's own painted extent must agree **after**
   the ack (a client that resized its buffer but not its drawing passes
   any check that looks at only one of them); a refused resize must leave
   the window pixel-identical; and a positive control -- break the ack
-  path deliberately and confirm the test goes red -- before the clean run
+  path deliberately and confirm the test goes red -- before a clean run
   is believed.
 - `make test` throughout: `win_server.c`'s realloc path wants KTESTs
   with `fault_inject.h` failing the frame allocation, since "the server
@@ -376,10 +690,14 @@ window per process if M41 wants it.
 
 ## Out of scope
 
-- **A layout engine.** Apps keep computing
-  `MARGIN + col * (BTN_W + GAP)`. That is roadmap M20 and a separate
-  argument.
-- **Retained-mode widgets**, for the reasons above.
+- **A general layout engine for the kernel-space GUI.** Stage 1c is the
+  ring-3 toolkit only. M20 remains its own item; this informs it rather
+  than replacing it.
+- **Retained-mode widgets.** Layout is computed once and drawn
+  immediately; nothing retains damage state below the compositor.
+- **A GUI string type.** See "Text, and Unicode later" -- and note that
+  M37's real cost is the glyph map and `struct scrollback_cell`, neither
+  of which this design changes or blocks.
 - **Client-side decorations** (`UAPP_NO_TITLE_BAR` is reserved, not
   planned). The WM owns chrome; a client drawing its own title bar is a
   much larger conversation about who owns the desktop's look.
@@ -389,3 +707,19 @@ window per process if M41 wants it.
   unaffected by any of this: `on_close` returning 0 is a client
   *refusing* politely, which is not the same problem as one that never
   answers.
+
+## Revision history
+
+- **First draft.** The library, the callbacks, the protocol additions,
+  resize as a handshake. Explicitly rejected a layout engine and said
+  "`uapp` does not absorb `uui`".
+- **This revision**, after review (and its own follow-up, which added
+  the "File structure" section and stage 0): the rejection of layout was wrong and
+  is reversed -- it conflated layout with retained-mode rendering, and
+  the resulting example still had the app computing button padding
+  twice and deriving a label's y coordinate by hand. Adds natural sizes,
+  the layout pass, the draw context and `on_action`; adds the widget
+  audit that found the three generations and made stage 1a necessary;
+  and settles the GUI-string question as "no type, formalise the
+  chokepoints". The composition rule survives in a narrower form:
+  `uapp` composes with `uui` rather than absorbing it.

@@ -1252,7 +1252,11 @@ Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
       messages; `WIN_REQ_HINTS` so behaviour is a property of the
       window rather than of a kernel-side struct; then resize as a
       configure/ack handshake. The acceptance test is that stage three
-      touches zero lines in the clients that don't opt in.
+      touches zero lines in the clients that don't opt in. Ahead of all
+      of it: normalise the widget set (three inconsistent generations
+      today -- only one can participate in layout) and restructure
+      `userland/` into `rt/`/`ui/`/`bin/`/`tests/`, which is also where
+      `SEED_PROGRAMS`/`SEED_TESTS` stop being hand-maintained lists.
 - [ ] Multiple windows per process: the protocol already carries window
       ids and `win_server.c` already tracks WIN_CLIENT_MAX per client,
       but `userland/winclient.c` only ever opens one, so the path is
