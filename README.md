@@ -468,7 +468,10 @@ kernel/fs/       -- the filesystems: TFS3 (tfs3.c, the default) and
 kernel/lib/      -- cross-cutting services with no hardware of their
                      own. The shared toolkit lives here -- strings
                      (string.c), numbers<->strings (knum.c), a bounded
-                     formatter (kfmt.c), path manipulation (kpath.c) and
+                     formatter (kfmt.c, whose two kernel sinks sit in
+                     kfmt_print.c so the formatter itself stays
+                     freestanding and can be shared with ring 3),
+                     path manipulation (kpath.c) and
                      the readline-style line editor both command lines
                      share (klineedit.c) -- plus a
                      JSON library (json.c), the kernel log ring buffer
@@ -517,16 +520,33 @@ apps/            -- programs. Two kinds:
                      the window manager, Calculator, Notepad, and
                      Terminal -- one file per widget, see apps/README.md.
                      apps/theme.h holds the THEME_* named colors.
-userland/        -- freestanding ring-3 test programs (no libc, no
-                     crt0), compiled and linked as real ELF64
+userland/        -- ring-3 programs, split by ROLE: rt/ (crt0, libsys,
+                     link.ld), ui/ (Toykit, the GUI toolkit), lib/ (the
+                     non-UI libraries -- the ush shell, plus string.h/
+                     stdio.h/cmem.c, the C names over the shared
+                     toolkit), gui/ (windowed apps), bin/ (command-line
+                     programs) and tests/ (single-mechanism
+                     diagnostics). The last three produce one ELF per
+                     .c and the directory decides where it seeds, so
+                     adding a program is a file and no Makefile edit.
+                     Freestanding, but no longer bare: crt0 gives every
+                     program a real main() over SysV argc/argv, and
+                     strlen/memcpy/snprintf are available under their C
+                     names (the same k_* code, compiled a second time
+                     into libuapp.a -- see docs/decisions.md). Still NOT
+                     a libc: no malloc, no FILE, no printf, no errno
+                     (docs/roadmap.md, Milestone 24).
+                     Compiled and linked as real ELF64
                      executables via userland/rt/link.ld (-mcmodel=large,
                      and separate page-aligned segments per permission
                      class so W^X means something -- see
                      docs/process-isolation.md and the Makefile's own
                      USERLAND_CFLAGS comment),
-                     seeded onto disk.img's /bin at build time (see the
-                     Makefile's `seed` target, tools/seed_disk.py, and
-                     docs/decisions.md) and run via the shell's
+                     seeded onto disk.img at build time -- gui/ and bin/
+                     to /bin, tests/ to /tests (see the
+                     Makefile's `seed` target, tools/seed_disk.py,
+                     docs/filesystem-layout.md, and
+                     docs/decisions.md) -- and run via the shell's
                      `run <name>` -- not loaded as GRUB modules anymore.
                      hello.c is the smallest one -- greet via SYS_WRITE,
                      exit(0) -- and the one to read first; crash_test.c
@@ -544,6 +564,11 @@ userland/        -- freestanding ring-3 test programs (no libc, no
                      the Milestone 2 hardening mechanisms on purpose
                      (jump into a data page; overflow a stack buffer)
                      and are how both are actually verified.
+                     libc_test.c checks lib/string.h and lib/stdio.h
+                     from ring 3 (26 checks) -- the part a KTEST
+                     structurally cannot reach, since the k_* logic
+                     underneath has KTESTs already and would pass
+                     whether or not any of it were linkable here.
 seed/            -- the files mirrored onto disk.img at build time by
                      the Makefile's `seed` target via
                      tools/seed_disk.py (which probes the image's

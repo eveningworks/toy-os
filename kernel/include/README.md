@@ -22,6 +22,11 @@ is a promise: console, graphics, keyboard/mouse, timer/RTC, filesystem
 heap, PCI, version, and the shared toolkit (`string.h`, `knum.h`,
 `kfmt.h`, `kpath.h`, `klineedit.h` -- see CLAUDE.md's note to check
 these before hand-rolling a digit loop, a formatter or a path join).
+Three of those (`string.h`, `knum.h`, `kfmt.h`) are also on
+`userland/`'s include path, since their implementations are compiled a
+second time into `libuapp.a`; `userland/lib/string.h` and
+`userland/lib/stdio.h` are thin C-name headers over them, and live in
+`userland/` rather than here because nothing in the kernel uses them.
 Adding a header here means committing to it.
 
 ## abi/ -- the kernel<->userland contract

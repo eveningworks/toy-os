@@ -32,6 +32,48 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
 ## [Unreleased]
 
 ### Added
+- **`tools/usertest_run.py`, and the gap it closes.** `make test` runs
+  the KTESTs inside the kernel; `gui_regress.py` runs the windowed
+  clients. Nothing ran a plain `/tests` binary except a person typing
+  `run <name>` at a shell -- so `libc_test`, written specifically to
+  cover what a KTEST structurally cannot reach, would have been checked
+  once and never again. This runs the self-checking ones (`libc_test`,
+  `fpu_test`, `newsyscalls_test`, `file_test`, `write_test`,
+  `exit_test`) as one pass/fail table and is now in `preflight.sh`.
+
+  Each entry asserts an exit code AND required output, because either
+  alone is weak: a program that dies before running its checks can still
+  exit 0, and one that prints "all checks passed" while returning
+  non-zero is equally wrong. `exit_test`'s expected code is 42
+  specifically so a kernel that lost exit codes entirely and reported 0
+  for everything would redden something.
+
+  **The exclusion list is the substantive part** and is in the tool with
+  a reason per entry, because a harness that just ran everything would
+  report failures of its own assumptions as failures of the code.
+  `pipe_test` is the worked example: it exits 3 under `run` because its
+  `waitpid` finds no parent, and passes perfectly well under the KTEST
+  that spawns it properly. Verified by positive control -- a wrong
+  expected exit code and a never-printed expected string each reddened
+  exactly their own row, and the tool exited 1.
+- **`check_layout.py` warns about orphaned seeded files.** `sync` is
+  additive and cannot delete, a trap `docs/filesystem-layout.md` has
+  documented for a while; nothing checked whether it had already sprung.
+  It had. All four ring-3 GUI apps (`calculator`, `notepad`, `shapes`,
+  `uterm`) were still sitting in `/tests` long after moving to `/bin` --
+  runnable, frozen at whatever build last synced them, two versions of
+  each program under two paths. The check compares each seeded directory
+  against `seed/sync/` and prints the exact `delete` commands.
+
+  A warning rather than a failure: a dev image legitimately accumulates
+  state, a freshly built image can never trip it, and failing the gate
+  over harmless stale bytes is the fastest way to teach everyone to
+  ignore the tool -- the same reasoning that made `optional` a status in
+  that file. It stays directories-only otherwise; this asks whether a
+  seeded file is an ORPHAN, never which files should exist, so it does
+  not reopen the churn problem that scoping note is about. Confirmed
+  exact in both directions: it names the four and nothing else, and goes
+  silent on a copy with them deleted.
 - **The toolkit's string and formatting code reaches ring 3 now, under
   the standard C names** -- `userland/lib/string.h` and
   `userland/lib/stdio.h`, linked out of `libuapp.a`. Asked for as "the

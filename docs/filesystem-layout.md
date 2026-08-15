@@ -157,6 +157,21 @@ deliberate cleanup.
 - `make clean-disk` to start from an empty image, if losing everything
   else on it is acceptable.
 
+**`tools/check_layout.py` now warns when this has already happened** --
+it compares each seeded directory on the image against `seed/sync/` and
+names any file the seed tree no longer places there, printing the exact
+`delete` commands. A warning, not a failure: a dev image legitimately
+accumulates state, a freshly built one can never trip it, and failing
+the gate over stale bytes that harm nothing only teaches people to
+ignore the tool.
+
+It earned itself immediately. The `/bin` -> `/tests` move above is not
+the only one that happened: the four ring-3 GUI apps (`calculator`,
+`notepad`, `shapes`, `uterm`) later moved the OTHER way, `/tests` ->
+`/bin`, and their `/tests` copies were still on the dev image long
+afterwards -- runnable, and frozen at whatever build last synced them.
+Nothing had noticed, because nothing was looking.
+
 ## The record budget -- a TFS2 constraint, mostly retired
 
 **On TFS3 (the default format for fresh images since Milestone 15

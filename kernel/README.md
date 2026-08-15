@@ -12,7 +12,7 @@ question to answer when adding one.
 | `proc/` | ELF loading, syscalls, processes, the scheduler | Is it about *running* something? |
 | `fs/` | The probe-selecting VFS + two backends (TFS3 default, TFS2 legacy) | Is it about files? |
 | `drivers/` | Console, graphics, PS/2, ATA, PCI, partitions, speaker | Does it talk to a specific piece of hardware? |
-| `lib/` | the toolkit (`string.c`, `knum.c`, `kfmt.c`, `kpath.c`, `fixed.c`, `geom.c`), JSON, klog, debug flags, `/etc` config, timezone/font/keyboard settings | Is it a service with no hardware and no policy of its own? |
+| `lib/` | the toolkit (`string.c`, `knum.c`, `kfmt.c` + `kfmt_print.c`, `kpath.c`, `fixed.c`, `geom.c`), JSON, klog, debug flags, `/etc` config, timezone/font/keyboard settings | Is it a service with no hardware and no policy of its own? |
 | `include/` | Headers, split by audience | See `include/README.md` |
 
 ## Why this shape
@@ -42,7 +42,10 @@ Three specific things the split buys:
   `string.c` (strings/memory, plus `k_fnv1a()` -- the project's one
   non-cryptographic checksum, promoted out of tfs.c when tfs3.c
   became its second caller), `knum.c` (numbers <-> strings),
-  `kfmt.c` (`k_snprintf` + `vga_printf`/`klog_printf`) and `kpath.c`
+  `kfmt.c` (`k_snprintf`) with `kfmt_print.c` beside it
+  (`vga_printf`/`klog_printf` -- one header, two files, because
+  `kfmt.c` has to stay freestanding to be shared with ring 3; see
+  `docs/decisions.md`) and `kpath.c`
   (path join/normalize/resolve). **Check these before writing a digit
   loop, a hex formatter, a digit-parsing loop, a path-joining
   loop, a checksum, or a line/ellipse rasteriser** -- there were nine, ten, six and three copies of the first four

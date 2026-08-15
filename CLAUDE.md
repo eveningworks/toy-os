@@ -828,7 +828,9 @@ says nothing about whether a button is drawn in the right place; see
 its own module docstring for the same division stated in code.
 
 **GitHub Actions (`.github/workflows/build.yml`)** runs `make clean &&
-make all && make iso` plus `tools/boot_smoke_test.py` on every push/PR
+make all && make iso` plus `check_deps.py`, `check_layout.py`,
+`boot_smoke_test.py`, `ktest_run.py` and `usertest_run.py` on every
+push/PR
 to `main` -- so a build break or boot regression is caught
 automatically, independent of whether a session (or a human) remembered
 to verify locally first. This doesn't replace verifying locally before
@@ -1115,6 +1117,7 @@ repeated manual steps to be worth automating:
   neither could CI. In `preflight.sh` and CI.
 - **`preflight.sh`** -- one command running `make clean && make all &&
   make iso` + `check_deps.py` + `check_layout.py` + `boot_smoke_test.py` + `ktest_run.py`
+  + `usertest_run.py`
   + a `git status --short` summary (`fs_switch_test.py` is NOT in it --
   that one needs a disk copy and a longer boot cycle, run it yourself
   after `kernel/fs/` changes), so
@@ -1161,7 +1164,25 @@ repeated manual steps to be worth automating:
   the budgets (64-byte caller-side path buffers everywhere; the
   256-record table on TFS2-legacy images only -- TFS3, the default
   since Milestone 15, has ~590k inodes) and the `sync`-never-deletes
-  trap that makes moving a seeded file need an explicit cleanup.
+  trap that makes moving a seeded file need an explicit cleanup. It
+  also WARNS (never fails) about orphans -- a file in a seeded directory
+  that `seed/sync/` no longer places there, i.e. exactly that trap
+  having already happened -- and prints the `delete` commands to fix it.
+  That check found all four ring-3 GUI apps still sitting in `/tests`
+  months after they moved to `/bin`, each frozen at the build that put
+  them there.
+- **`usertest_run.py`** -- runs the self-checking ring-3 diagnostics in
+  `/tests` (`libc_test`, `fpu_test`, `newsyscalls_test`, `file_test`,
+  `write_test`, `exit_test`) as one pass/fail table, asserting BOTH an
+  exit code and required output. In `preflight.sh`. It fills a real gap:
+  `make test` runs inside the kernel and `gui_regress.py` covers the
+  windowed clients, so nothing ever ran a plain `/tests` binary except a
+  person typing `run <name>`. **Read its `EXCLUDED` list before adding
+  to it** -- a test that faults on purpose, blocks on the serial port,
+  needs a desktop, or needs a parent to spawn it will fail in a way that
+  says nothing about the code under test. `pipe_test` is the worked
+  example: it exits 3 under `run` because its `waitpid` finds no parent,
+  and passes fine under the KTEST that spawns it properly.
 - **`pixel_probe.py`** -- reads exact pixel values out of screenshots,
   and tabulates the same points across several (`--compare a.png b.png
   --at 85,100 --at 215,100`), flagging which moved and which didn't.
@@ -1172,8 +1193,8 @@ repeated manual steps to be worth automating:
   neighbour staying put. `--box N` averages a square, for anti-aliased
   edges where a single pixel is a coin toss.
 - **`check_layout.py`** -- see the `docs/` section: verifies the built
-  image's directories against `docs/filesystem-layout.md`. Runs in
-  `preflight.sh` and CI.
+  image's directories against `docs/filesystem-layout.md`, and warns
+  about orphaned seeded files. Runs in `preflight.sh` and CI.
 - **`dialog_test.py`** -- verifies the confirm dialog's buttons by
   PIXEL VALUE: hover moves the hovered button and leaves its neighbour
   alone, a press dragged off doesn't commit, No closes it. Three traps

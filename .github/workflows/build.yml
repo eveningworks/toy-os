@@ -73,3 +73,12 @@ jobs:
       # instead of printing FAILED into a log nobody reads.
       - name: Kernel test suite (ktest)
         run: python3 tools/ktest_run.py -v
+
+      # The same question one privilege ring out. ktest runs INSIDE the
+      # kernel, so it cannot tell whether a /tests binary still links,
+      # loads and passes its own checks -- which is exactly the gap
+      # libc_test covers. See the tool's docstring for what it
+      # deliberately does not run, and why running everything would be
+      # worse than running these six.
+      - name: Ring-3 userland tests (/tests diagnostics)
+        run: python3 tools/usertest_run.py

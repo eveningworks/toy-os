@@ -27,6 +27,22 @@ Deliberately scoped to DIRECTORIES, not files. Files churn constantly
 (every `/bin` binary, every config key); directories are the structural
 decision the doc is actually about, and the thing worth a build failure.
 
+The one file-level exception is ORPHANS, reported as a warning at the
+end, and it is not a reopening of the churn problem above: it never asks
+which files SHOULD exist, only whether a seeded directory holds a binary
+that `seed/sync/` no longer places there. That is a specific, silent
+failure mode rather than churn -- `sync` is additive and cannot delete,
+so a binary that MOVED (say `/tests/calculator` -> `/bin/calculator`)
+leaves its old copy behind forever, still runnable, frozen at whatever
+build produced it. Two versions of a program under two paths, one of
+them permanently stale. It has happened here for real, to all four
+ring-3 GUI apps.
+
+It warns rather than fails, on purpose. A dev image legitimately
+accumulates state, a freshly built one can never trip this, and failing
+the gate over harmless stale bytes is the fastest way to teach everyone
+to ignore the tool -- the same reasoning that made `optional` a status.
+
 Usage:
     python3 tools/check_layout.py [--disk disk.img] [--doc docs/filesystem-layout.md]
 
@@ -122,6 +138,46 @@ def dirs_on_image(disk, writer_dir):
     return found
 
 
+def orphans_on_image(disk, writer_dir, seed_root):
+    """Files under a seeded directory that seed/sync/ no longer places there.
+
+    Returns [(image_path, seed_dir)]. Only directories that seed/sync/
+    actually mirrors are examined -- anything the OS itself writes
+    (/etc/history, a user's saved file) is none of this check's business
+    and is never looked at.
+    """
+    fmt = image_format(disk)
+    writer = os.path.join(writer_dir, f"{fmt}_writer.py")
+    found = []
+    for sub in sorted(os.listdir(seed_root)):
+        seed_dir = os.path.join(seed_root, sub)
+        if not os.path.isdir(seed_dir):
+            continue
+        expected = {n for n in os.listdir(seed_dir)
+                    if os.path.isfile(os.path.join(seed_dir, n))}
+        if not expected:
+            continue  # a directory seeded only with subdirectories
+        r = subprocess.run([sys.executable, writer, "ls", disk, "/" + sub],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            continue  # not on the image at all -- the directory check owns that
+        for line in r.stdout.splitlines():
+            parts = line.split()
+            if fmt == "tfs2":
+                if len(parts) >= 2 and parts[0] == "FILE":
+                    name = parts[1].rsplit("/", 1)[-1]
+                else:
+                    continue
+            else:
+                if len(parts) >= 4 and parts[0] == "-":
+                    name = parts[3]
+                else:
+                    continue
+            if name not in expected:
+                found.append((f"/{sub}/{name}", os.path.relpath(seed_dir, REPO)))
+    return found
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--disk", default=os.path.join(REPO, "disk.img"))
@@ -163,6 +219,24 @@ def main():
         print("\nThe doc is the source of truth: decide what the layout SHOULD be,")
         print("write that down, then make the build match it.")
         return 1
+
+    # Warning, not failure -- see the module docstring on why.
+    seed_root = os.path.join(REPO, "seed", "sync")
+    if os.path.isdir(seed_root):
+        stale = orphans_on_image(args.disk, os.path.join(REPO, "tools"), seed_root)
+        if stale:
+            fmt = image_format(args.disk)
+            print(f"check_layout: WARNING -- {len(stale)} orphaned file(s) on the image.")
+            print("  `sync` is additive and never deletes, so a binary that MOVED "
+                  "leaves\n  its old copy behind forever, frozen at an old build:\n")
+            for path, seed_dir in stale:
+                print(f"    {path}  (nothing in {seed_dir}/ places it there any more)")
+            print("\n  Remove them with:")
+            for path, _ in stale:
+                print(f"    python3 tools/{fmt}_writer.py delete "
+                      f"{os.path.relpath(args.disk, REPO)} {path}")
+            print("  ...or `make clean-disk && make iso` for a fresh image "
+                  "(wipes saved files).\n")
 
     if not args.quiet:
         present = sum(1 for st, _ in documented.values() if st == "present")

@@ -23,6 +23,11 @@
 #   3b. tools/ktest_run.py -- runs the in-kernel test suite and fails
 #       the whole preflight if any test failed. "Does it boot" and
 #       "does it work" are different questions; this asks the second.
+#   3c. tools/usertest_run.py -- the same question one ring out. The
+#       KTESTs run INSIDE the kernel and so cannot tell whether a
+#       /tests binary still links, loads and passes its own checks;
+#       that gap is what libc_test was written into, and without this
+#       step it would have been run once by hand and never again.
 #   4. git status --short -- just informational: lists what's dirty so
 #      you can eyeball it against the file list you're about to
 #      deliver. This does NOT run git through the device bridge (that's
@@ -86,11 +91,20 @@ python3 tools/boot_smoke_test.py || fail "boot smoke test"
 step "ktest (in-kernel test suite)"
 python3 tools/ktest_run.py || fail "kernel test suite"
 
+# The ring-3 side of the same question. ktest runs INSIDE the kernel, so
+# it cannot see whether a /tests binary still links and runs at all --
+# which is exactly the gap libc_test was written into. Boots once more
+# against a temporary copy of disk.img; see the tool's docstring for
+# what it deliberately does NOT run and why.
+step "usertest_run.py (ring-3 /tests diagnostics)"
+python3 tools/usertest_run.py || fail "ring-3 userland tests"
+
 step "git status --short (informational -- compare against your delivery file list)"
 git status --short || true
 
 echo
-echo "preflight: PASS -- build, iso, boot smoke test and ktest all clean."
+echo "preflight: PASS -- build, iso, boot smoke test, ktest and the"
+echo "preflight: ring-3 /tests diagnostics all clean."
 if [ -z "$(git config user.name 2>/dev/null)" ]; then
   echo "preflight: no git identity configured -- this looks like a Cowork"
   echo "preflight: device-bridge sandbox clone. Deliver via SendUserFile +"
