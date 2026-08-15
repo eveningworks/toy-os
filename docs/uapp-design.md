@@ -835,8 +835,14 @@ question: it needs `uapp_flush()`, not its own loop, so
 app blocks" and "this app needs the loop" looked like the same
 requirement for three stages and were not.
 
-**Stage 4 -- optional.** `WIN_EV_FOCUS`, `WIN_REQ_MOVE`, and a second
-window per process if M41 wants it.
+**Stage 4 -- `WIN_EV_FOCUS` only. DONE.** Sent on every focus change;
+`uapp` records it and repaints, so an app draws its caret behind
+`uapp_focused()` with no callback. Notepad and Terminal both do.
+
+`WIN_REQ_MOVE` and multiple windows per process were deliberately NOT
+built: neither has a caller. Nothing wants to reposition itself and
+nothing wants a second window, and TWP already carries window ids, so
+both are reachable when something does.
 
 ## Testing
 

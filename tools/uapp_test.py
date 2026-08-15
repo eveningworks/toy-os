@@ -152,6 +152,101 @@ def run(dbg, qmp, tmp, res):
                   edge == BORDER, f"top-left content pixel {edge}, want {BORDER}")
 
 
+def check_focus_caret(dbg, qmp, tmp, res):
+    """A caret must not be drawn while its window is unfocused.
+
+    An unfocused window showing a caret claims to be taking input that
+    is actually going somewhere else -- which is the whole reason TWP
+    has WIN_EV_FOCUS. Terminal draws one; winclient does not, so it
+    makes a convenient thief of focus.
+
+    Asserted as a ROUND TRIP rather than by hunting for the caret's
+    pixels: capture Terminal's content focused, take focus away, and
+    require the region to CHANGE; give focus back and require it to
+    match the first capture EXACTLY. "It changed" alone would be
+    satisfied by almost anything; "it came back identical" is what says
+    the only difference was the caret.
+
+    The two windows are moved apart first -- an occluded region would
+    differ for reasons that have nothing to do with focus.
+    """
+    from PIL import Image
+
+    def region(name, box):
+        p = os.path.abspath(os.path.join(tmp, name))
+        qmp.screenshot(p)
+        with Image.open(p) as im:
+            return im.convert("RGB").crop(box).tobytes()
+
+    # winclient is still running, and the Terminal that spawned it is
+    # still waiting on it -- a second `run` there would go nowhere. Quit
+    # it first ('q', see winclient.c). This cost a confusing failure
+    # once: the Terminal simply never produced a second window and the
+    # check reported "no ring-3 Terminal", which points at the wrong
+    # thing entirely.
+    win = dbg.window(TITLE)
+    if win:
+        dbg.click(win["x"] + win["w"] // 2, win["y"] + win["h"] // 2)
+        dbg.send("gui key q")
+        dbg.settle()
+        deadline = time.time() + 5
+        while time.time() < deadline and dbg.window(TITLE):
+            time.sleep(0.2)
+
+    # Terminal, moved clear of winclient's spawn position.
+    dbg.send("gui open Terminal")
+    dbg.settle()
+    for ch in "run uterm":
+        dbg.send(f"gui key {'0x20' if ch == ' ' else ch}")
+    dbg.settle()
+    dbg.send("gui key 0x0d")
+
+    deadline = time.time() + SPAWN_TIMEOUT_S
+    term = None
+    while time.time() < deadline:
+        term = dbg.window("Terminal (ring 3)")
+        if term:
+            break
+        time.sleep(0.3)
+    if not term:
+        res.check("a ring-3 Terminal opened, to test the caret", False,
+                  "no 'Terminal (ring 3)' window")
+        return
+
+    dbg.drag(term["x"] + 60, term["y"] + 8, 700 + 60, term["y"] + 8)
+    dbg.settle()
+    term = dbg.window("Terminal (ring 3)")
+    c = term["content"]
+    box = (c["x"], c["y"], c["x"] + c["w"], c["y"] + c["h"])
+
+    focused = region("focus_a.png", box)
+
+    # The kernel-space Terminal steals focus. It is used rather than
+    # winclient because winclient was quit above, and rather than
+    # opening something new because it is already on screen and (after
+    # the move) does not overlap.
+    thief = dbg.window("Terminal")
+    if thief is None:
+        res.check("a second window exists to take focus", False, "no 'Terminal' window")
+        return
+    dbg.click(thief["x"] + 40, thief["y"] + 8)
+    dbg.settle()
+    time.sleep(0.4)
+    unfocused = region("focus_b.png", box)
+    res.check("an unfocused window stops drawing its caret",
+              unfocused != focused,
+              "the Terminal's content is pixel-identical focused and unfocused")
+
+    # And back.
+    dbg.click(term["x"] + 60, term["y"] + 8)
+    dbg.settle()
+    time.sleep(0.4)
+    refocused = region("focus_c.png", box)
+    res.check("refocusing restores it exactly",
+              refocused == focused,
+              "content differs from the original focused capture")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -171,6 +266,7 @@ def main():
     with DebugConsole(args.sock) as dbg:
         dbg.settle()
         run(dbg, qmp, args.tmp, res)
+        check_focus_caret(dbg, qmp, args.tmp, res)
 
     n_ok, n_bad = len(res.passes), len(res.fails)
     print(f"\nuapp_test: {n_ok} passed, {n_bad} failed")

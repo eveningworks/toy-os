@@ -39,6 +39,16 @@
 #define WIN_EV_CLOSE      5 // the server wants this window gone
 #define WIN_EV_RESIZE     6 // a, b: PROPOSED content size -- a configure,
                             // not a command. See below.
+#define WIN_EV_FOCUS      7 // a: 1 = this window gained keyboard focus,
+                            // 0 = lost it.
+                            //
+                            // Sent because a client cannot otherwise
+                            // tell: it sees keys only when focused, but
+                            // "no keys have arrived" is indistinguishable
+                            // from "the user is thinking". An app that
+                            // draws a CARET has to know -- an unfocused
+                            // window showing one claims to be taking
+                            // input that is going somewhere else.
 
 // Fixed 24-byte layout, no padding on x86-64, no pointers -- so the
 // same bytes work unchanged whether they are copied out by a syscall or

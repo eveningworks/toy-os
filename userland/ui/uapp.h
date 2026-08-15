@@ -136,6 +136,11 @@ struct uapp_desc {
     void (*on_release)(struct uapp *a, int x, int y, unsigned buttons);
     void (*on_motion)(struct uapp *a, int x, int y, unsigned buttons);
 
+    // Keyboard focus arrived (1) or left (0). Most apps do not need
+    // this: the library records it and repaints, so an app that draws
+    // its caret with uapp_focused() needs no callback at all.
+    void (*on_focus)(struct uapp *a, int focused);
+
     // The window was resized -- the library has already reallocated the
     // buffer, rebuilt the surface and re-run the layout before calling
     // this. Most apps need nothing here, which is the point: **an app
@@ -189,6 +194,12 @@ int uapp_set_title(struct uapp *a, const char *title);
 // public because an app may also want to resize itself.
 int uapp_resize(struct uapp *a, int w, int h);
 void *uapp_state(struct uapp *a);
+
+// Does this window have keyboard focus? An app drawing a caret should
+// ask -- an unfocused window showing one claims to be taking input that
+// is going somewhere else. Starts true: a window is frontmost the
+// moment it is created.
+int uapp_focused(const struct uapp *a);
 int uapp_width(const struct uapp *a);
 int uapp_height(const struct uapp *a);
 

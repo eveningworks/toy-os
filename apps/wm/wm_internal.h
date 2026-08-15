@@ -297,6 +297,9 @@ void wm_client_send_key(struct window *win, int key, unsigned mods);
 void wm_client_send_mouse(struct window *win, int type, int x, int y, unsigned buttons);
 void wm_client_send_close(struct window *win);
 
+// Tell a client its window gained (1) or lost (0) keyboard focus.
+void wm_client_send_focus(struct window *win, int focused);
+
 // Propose a content size to a client (WIN_EV_RESIZE). A proposal, not a
 // command -- see wm_client.c and abi/win_proto.h.
 void wm_client_send_resize(struct window *win, int w, int h);

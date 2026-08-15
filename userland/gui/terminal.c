@@ -70,7 +70,7 @@ static void text_rect(struct ugfx_surface *s, int *x, int *y, int *w, int *h) {
     *h = s->h - 2 * MARGIN - ugfx_char_h() - 4;
 }
 
-static void draw(struct ugfx_surface *s) {
+static void draw(struct ugfx_surface *s, int focused) {
     ugfx_fill(s, ugfx_rgb(0, 0, 0));
 
     int tx, ty, tw, th;
@@ -87,7 +87,11 @@ static void draw(struct ugfx_surface *s) {
     px += 2 * ugfx_char_w();
     ugfx_draw_string_clipped(s, px, py, s->w - px - MARGIN, g_line,
                               ugfx_rgb(240, 240, 240), ugfx_rgb(0, 0, 0));
-    if (!g_running) {
+    // Only while FOCUSED, and only while not running a command. An
+    // unfocused window drawing a caret claims to be taking input that
+    // is actually going to whatever window is in front of it -- which
+    // is the whole reason TWP has a focus event.
+    if (!g_running && focused) {
         ugfx_fill_rect(s, px + ugfx_text_width(g_line), py, 2, ugfx_char_h(),
                         ugfx_rgb(240, 240, 240));
     }
@@ -117,8 +121,7 @@ static void run_current_line(struct uapp *a) {
 // --- Toykit callbacks -------------------------------------------------
 
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
-    (void)a;
-    draw(uapp_surface(d));
+    draw(uapp_surface(d), uapp_focused(a));
 }
 
 static void on_key(struct uapp *a, int key, unsigned mods) {

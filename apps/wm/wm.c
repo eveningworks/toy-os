@@ -171,6 +171,16 @@ void bring_to_front(int idx) {
     wm_damage_rect(windows[idx].x, windows[idx].y, windows[idx].w, windows[idx].h);
     wm_damage_rect(0, screen_h - taskbar_h, screen_w, taskbar_h);
 
+    // Tell the clients involved, BEFORE the reorder -- prev_front is
+    // still the front window here, and windows[idx] is still the one
+    // being promoted. A client cannot work focus out for itself: it
+    // sees keys only while focused, and "no keys" looks the same as
+    // "the user is thinking".
+    if (prev_front != &windows[idx]) {
+        wm_client_send_focus(prev_front, 0);
+        wm_client_send_focus(&windows[idx], 1);
+    }
+
     struct window tmp = windows[idx];
     for (int i = idx; i < window_count - 1; i++) windows[i] = windows[i + 1];
     windows[window_count - 1] = tmp;
@@ -320,6 +330,14 @@ void close_window(int idx) {
     // a static struct with nothing to free.
     if (windows[idx].app && windows[idx].app->on_close) {
         windows[idx].app->on_close(&windows[idx]);
+    }
+
+    // If the FRONT window is going away, whatever ends up frontmost
+    // gains keyboard focus -- and a client has to be told, since it
+    // sees keys only while focused. Sent before the shift, while the
+    // indices still mean what they say.
+    if (idx == window_count - 1 && window_count > 1) {
+        wm_client_send_focus(&windows[window_count - 2], 1);
     }
 
     // Report the closing window's own rect as damage BEFORE the array

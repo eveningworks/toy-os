@@ -9,6 +9,7 @@ struct uapp {
     int w, h;
     struct ugfx_surface surface;
     int dirty;    // something asked for a repaint since the last present
+    int focused;  // keyboard focus, per WIN_EV_FOCUS
     int running;
     int status;
 };
@@ -77,6 +78,7 @@ void uapp_quit(struct uapp *a, int status) {
 }
 
 void *uapp_state(struct uapp *a) { return a->desc->state; }
+int uapp_focused(const struct uapp *a) { return a->focused; }
 int uapp_width(const struct uapp *a) { return a->w; }
 int uapp_height(const struct uapp *a) { return a->h; }
 
@@ -145,6 +147,15 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
         }
         break;
 
+    case WIN_EV_FOCUS:
+        // Recorded and repainted for the app, so the common case --
+        // "stop drawing my caret when I am not focused" -- needs no
+        // callback, just uapp_focused() in on_draw.
+        a->focused = ev->a ? 1 : 0;
+        if (d->on_focus) d->on_focus(a, a->focused);
+        a->dirty = 1;
+        break;
+
     case WIN_EV_KEY:
         if (d->on_key) d->on_key(a, ev->a, ev->mods);
         break;
@@ -195,6 +206,9 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     a->desc = desc;
     a->dirty = 1;
     a->running = 1;
+    // A window is frontmost the moment it is created, so TWS sends no
+    // event to say so -- see wm_client.c's on_window_created().
+    a->focused = 1;
     a->status = 0;
 
     // The font FIRST: on_size derives the window size from the metrics,

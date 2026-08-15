@@ -245,6 +245,37 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   one geometry calculation shared by draw/hit-test/drag (so a scrollbar
   thumb cannot be in two places), and commit-on-release.
 
+### Added
+- **`WIN_EV_FOCUS`: an unfocused window stops drawing its caret.** Stage
+  4 of `docs/uapp-design.md`. A client sees keys only while focused, so
+  "no keys have arrived" and "the user is thinking" look identical to
+  it -- which meant Notepad and Terminal both drew a caret while
+  unfocused, each claiming to be taking input that was going somewhere
+  else.
+
+  TWS sends the event on every focus change: a raise, a window opening
+  (the one losing focus is told), and the front window closing (the one
+  promoted is told). `uapp` records it and repaints, so the common case
+  needs no callback at all -- an app asks `uapp_focused()` in its
+  `on_draw`, which is exactly what both apps now do. `desc.on_focus`
+  exists for anything that needs more.
+
+  Checked as a ROUND TRIP rather than by hunting for caret pixels:
+  capture Terminal's content focused, take focus away and require the
+  region to CHANGE, give focus back and require it to match the first
+  capture EXACTLY. "It changed" alone would be satisfied by almost
+  anything; "it came back identical" is what says the only difference
+  was the caret. Positive control run -- making the caret ignore focus
+  again fails exactly those checks.
+
+  **`WIN_REQ_MOVE` and multiple windows per process were NOT built.**
+  Both are listed in the design's stage 4 and neither has a caller:
+  nothing in the tree wants to reposition itself, and nothing wants a
+  second window. `WIN_CLIENT_MAX` is 4 and the protocol already carries
+  window ids, so the path exists when something needs it. Shipping
+  either now would be the third kind of dead API this design has
+  deliberately avoided.
+
 ### Changed
 - **Notepad and Terminal run on Toykit, and both are resizable.** The
   last two hand-rolled TWP clients. Every ring-3 GUI app now uses

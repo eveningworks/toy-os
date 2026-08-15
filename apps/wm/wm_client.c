@@ -76,6 +76,12 @@ static int on_window_created(int pid, uint32_t id, uint32_t *buf,
     for (; deflt[i] && i < WIN_TITLE_MAX - 1; i++) win->title[i] = deflt[i];
     win->title[i] = '\0';
 
+    // A new window steals focus, so the one losing it has to be told.
+    // (The new window itself does not need an event: a client that has
+    // just created a window and been made frontmost can assume it has
+    // focus, and uapp starts in that state.)
+    if (window_count > 0) wm_client_send_focus(&windows[window_count - 1], 0);
+
     window_count++;
     redraw_pending = 1;
     wm_damage_rect(0, screen_h - taskbar_h, screen_w, taskbar_h); // new taskbar button
@@ -256,6 +262,19 @@ void wm_client_send_resize(struct window *win, int w, int h) {
     ev.window = win->client_win;
     ev.a = w;
     ev.b = h;
+    win_events_push(win->client_pid, &ev);
+}
+
+// Keyboard focus arrived or left. Only a client needs telling: a
+// kernel-space app is called by the WM, which knows perfectly well
+// which window is frontmost, whereas a client sees nothing but its own
+// event queue.
+void wm_client_send_focus(struct window *win, int focused) {
+    if (!wm_client_is_client_window(win)) return;
+    struct win_event ev = {0};
+    ev.type = WIN_EV_FOCUS;
+    ev.window = win->client_win;
+    ev.a = focused ? 1 : 0;
     win_events_push(win->client_pid, &ev);
 }
 

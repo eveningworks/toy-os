@@ -261,7 +261,7 @@ static void draw_dialog(struct ugfx_surface *s) {
     }
 }
 
-static void draw(struct ugfx_surface *s) {
+static void draw(struct ugfx_surface *s, int focused) {
     ugfx_fill(s, UTHEME_PANEL_BG);
 
     layout_toolbar();
@@ -271,7 +271,13 @@ static void draw(struct ugfx_surface *s) {
     text_rect(s, &tx, &ty, &tw, &th);
     ugfx_draw_rect(s, tx - 1, ty - 1, tw + 2, th + 2, ugfx_rgb(200, 205, 215));
     utext_draw(&g_text, s, tx, ty, tw, th,
-                UTHEME_TEXT, UTHEME_WHITE, ugfx_rgb(205, 220, 240), !g_dialog_open);
+                // The caret shows only when this window has keyboard
+                // focus AND no modal dialog is over the text. An
+                // unfocused window drawing one claims to be taking
+                // input that is going somewhere else -- see TWP's
+                // WIN_EV_FOCUS.
+                UTHEME_TEXT, UTHEME_WHITE, ugfx_rgb(205, 220, 240),
+                focused && !g_dialog_open);
     draw_scrollbar(s, tx, ty, tw, th);
 
     ugfx_draw_string_clipped(s, MARGIN, s->h - ugfx_char_h() - 2, s->w - 2 * MARGIN,
@@ -469,7 +475,7 @@ static int g_dragging;
 
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
     set_title(a);
-    draw(uapp_surface(d));
+    draw(uapp_surface(d), uapp_focused(a));
 }
 
 static void on_key(struct uapp *a, int key, unsigned mods) {
