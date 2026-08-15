@@ -26,6 +26,24 @@ struct window {
     int saved_x, saved_y, saved_w, saved_h; // geometry to restore to after
                                             // un-maximizing
     enum window_state state;
+
+    // Can the user resize this window? A property of the WINDOW, not of
+    // whatever created it -- which is the whole point of it living here.
+    //
+    // It used to be read as `w->app && w->app->resizable` at seven
+    // separate call sites, and `app` is NULL for a ring-3 client by
+    // construction (a window has either an `app` or a client, never
+    // both). So no client window could EVER be resizable -- not by
+    // decision, but because "resizable" was a field on a struct only
+    // kernel-space apps have. That is why WIN_EV_RESIZE has been
+    // defined in TWP since the protocol was written and is still never
+    // sent. Both kinds of window can answer this one.
+    //
+    // Set from gui_app::resizable when an app window opens; a client's
+    // stays 0 until it can say otherwise (TWP's hints message, and the
+    // resize handshake behind it).
+    int resizable;
+
     const struct gui_app *app;
     void *app_state;
     int open; // 1 while this slot is in use

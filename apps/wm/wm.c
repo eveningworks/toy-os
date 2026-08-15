@@ -267,6 +267,7 @@ void open_app(const struct gui_app *app) {
     win->h = content_h + WM_TITLEBAR_H + 2;
     win->state = WIN_NORMAL;
     win->app = app;
+    win->resizable = app && app->resizable;
     win->open = 1;
 
     int i = 0;

@@ -207,7 +207,7 @@ static void cmd_windows(int json) {
             klog_printf("\"state\":\"%s\",\"focused\":%s,\"resizable\":%s}",
                          state_name(w->state),
                          (i == window_count - 1) ? "true" : "false",
-                         (w->app && w->app->resizable) ? "true" : "false");
+                         w->resizable ? "true" : "false");
         }
         klog_write("]}\r\n");
         return;

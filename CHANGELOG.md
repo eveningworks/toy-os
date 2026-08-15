@@ -245,6 +245,35 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   one geometry calculation shared by draw/hit-test/drag (so a scrollbar
   thumb cannot be in two places), and commit-on-release.
 
+### Changed
+- **Resizability is a property of the window, not of the app struct.**
+  Stage 2 of `docs/uapp-design.md`. `struct window` carries `resizable`;
+  the seven places that read `w->app && w->app->resizable` read the
+  window instead, and `open_app()` sets it once.
+
+  This is the dead end the whole `uapp` design started from. `app` is
+  NULL for a ring-3 client by construction -- a window has either an
+  `app` or a client, never both -- so **no client window could ever be
+  resizable**, not by decision but because "resizable" was a field on a
+  struct only kernel-space apps have. Any behaviour added the same way
+  (always on top, no chrome, a minimum size) inherited the same dead
+  end. Both kinds of window can answer this one.
+
+  No behaviour change: app windows keep exactly what `gui_app::resizable`
+  says, and a client's stays 0 -- because nothing can resize a client
+  yet. Verified with the full 83-check regression, `ktest` 112/112, and
+  a clean `damage_sweep` (27 interactions, 0 violations), which matters
+  here because this decides whether the resize grip is drawn.
+
+  **Deviation from the plan, stated because it changes the staging:**
+  the design doc had `WIN_REQ_HINTS` landing in this stage too. It
+  doesn't, because a hint saying "resizable" with no resize handshake
+  behind it either does nothing at all -- dead API -- or enables a grip
+  that drags the chrome while the client's buffer stays the old size,
+  which is the visibly-wrong behaviour the design explicitly rejects.
+  Hints move to stage 3, where they are honoured the moment they are
+  understood.
+
 ### Fixed
 - **Calculator's test was measuring geometry it no longer understood.**
   `calculator_client_test.py` solved button positions by inverting the

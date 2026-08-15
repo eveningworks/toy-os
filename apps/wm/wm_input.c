@@ -43,7 +43,7 @@ int wm_find_resize_zone(int mx, int my, int *out_right, int *out_bottom) {
         if (!widget_hit(w->x, w->y, w->w, w->h, mx, my)) continue;
 
         if (w->state == WIN_MAXIMIZED) return -1; // maximized windows aren't resizable
-        if (!(w->app && w->app->resizable)) return -1; // fixed-size app -- see gui_apps.h
+        if (!w->resizable) return -1; // fixed-size window -- see wm.h
         if (my < w->y + WM_TITLEBAR_H) return -1; // over the title bar, not the resize border
 
         int on_right = (mx >= w->x + w->w - RESIZE_MARGIN);
@@ -234,7 +234,7 @@ static void ctx_minimize_window(void *ctx) {
 
 static void ctx_toggle_maximize_window(void *ctx) {
     int i = *(int *)ctx;
-    if (!(windows[i].app && windows[i].app->resizable)) return; // fixed-size app -- same rule the title-bar button follows
+    if (!windows[i].resizable) return; // same rule the title-bar button follows
     if (windows[i].state == WIN_MAXIMIZED) {
         windows[i].x = windows[i].saved_x; windows[i].y = windows[i].saved_y;
         windows[i].w = windows[i].saved_w; windows[i].h = windows[i].saved_h;
@@ -313,7 +313,7 @@ void wm_handle_right_click(int mx, int my) {
         static struct context_menu_item items[3];
         int n = 0;
         items[n].label = "Minimize"; items[n].on_select = ctx_minimize_window; items[n].ctx = &g_ctx_window_target; n++;
-        if (w->app && w->app->resizable) {
+        if (w->resizable) {
             items[n].label = (w->state == WIN_MAXIMIZED) ? "Restore" : "Maximize";
             items[n].on_select = ctx_toggle_maximize_window; items[n].ctx = &g_ctx_window_target; n++;
         }
@@ -448,7 +448,7 @@ void wm_update_title_btn_press(int mx, int my, uint8_t buttons) {
             // Fixed-size apps (Calculator -- see gui_apps.h) get a
             // disabled maximize button: focus the window like any other
             // click on it, but don't touch its geometry.
-            if (windows[idx].app && windows[idx].app->resizable) {
+            if (windows[idx].resizable) {
                 if (windows[idx].state == WIN_MAXIMIZED) {
                     windows[idx].x = windows[idx].saved_x; windows[idx].y = windows[idx].saved_y;
                     windows[idx].w = windows[idx].saved_w; windows[idx].h = windows[idx].saved_h;

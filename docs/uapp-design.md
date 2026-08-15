@@ -806,10 +806,18 @@ folded into one `uui_widget_ops`. The two-pass overlay draw is NOT
 built -- no layout contains a dropdown yet, and it is internal to
 `uui_layout_draw()` when one does.
 
-**Stage 2 -- behaviour becomes protocol state.** `WIN_REQ_HINTS`;
-`wm_find_resize_zone()` and friends read the window rather than
-`w->app`; `gui windows --json` starts reporting a client's real
-`resizable`. No visible change yet for anything that doesn't opt in.
+**Stage 2 -- behaviour becomes a property of the window. DONE.**
+`struct window` carries `resizable`, and the seven readers of
+`w->app->resizable` ask the window. No behaviour change; a client's
+stays 0 because nothing can resize one yet.
+
+`WIN_REQ_HINTS` was planned for this stage and deliberately moved to
+stage 3. A hint saying "resizable" with no handshake behind it either
+does nothing -- dead API, which this document has argued against three
+times -- or enables a grip that drags the chrome while the buffer stays
+put, which is exactly the wrong behaviour described under "Resize is a
+configure/ack handshake". The hint and the thing that honours it should
+land together.
 
 **Stage 3 -- resize, end to end.** The rubber band, `WIN_EV_RESIZE`
 actually sent, `WIN_REQ_RESIZE` and the server-side realloc/remap,

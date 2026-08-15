@@ -331,7 +331,7 @@ static void draw_window_chrome(struct window *win, int idx, int focused) {
     uint32_t titlebar = focused ? gfx_rgb(50, 90, 160) : gfx_rgb(120, 120, 130);
     uint32_t titletext = THEME_WHITE;
     uint32_t winbg = THEME_WINDOW_BG;
-    int can_resize = win->app && win->app->resizable;
+    int can_resize = win->resizable;
 
     gfx_fill_rect(win->x, win->y, win->w, win->h, winbg);
 
@@ -429,7 +429,7 @@ static void draw_window_chrome(struct window *win, int idx, int focused) {
 // when maximized or when the app isn't resizable (see gui_apps.h).
 static void draw_resize_grip(const struct window *win) {
     if (win->state == WIN_MAXIMIZED) return;
-    if (!(win->app && win->app->resizable)) return;
+    if (!win->resizable) return;
     uint32_t border = THEME_BORDER;
     gfx_fill_rect(win->x + win->w - 8, win->y + win->h - 3, 5, 2, border);
     gfx_fill_rect(win->x + win->w - 3, win->y + win->h - 8, 2, 5, border);
