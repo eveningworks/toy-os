@@ -245,6 +245,66 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   one geometry calculation shared by draw/hit-test/drag (so a scrollbar
   thumb cannot be in two places), and commit-on-release.
 
+### Added
+- **Text chokepoints, so no widget does character arithmetic on a
+  string.** `gfx_text_next()`/`gfx_text_prev()` join the existing
+  `gfx_text_width()`/`gfx_text_fit_chars()`, and `ugfx` gains the whole
+  set on the ring-3 side. Together they are every question a caller can
+  ask about where characters sit, and the rule they enforce is that no
+  widget answers one itself -- not `k_strlen(s) * gfx_char_w()` to
+  measure a string, not `i + 1` to step a cursor.
+
+  This is groundwork for Milestone 37 (UTF-8) and 21 (proportional
+  metrics), and the point is not that the functions are clever -- they
+  are trivial today -- but that they are the only places that have to
+  change. `docs/uapp-design.md` records the two things that will still
+  hurt regardless and that this does not touch: `ugfx.c`'s
+  ASCII-contiguous glyph lookup (which `abi/win_proto.h` bakes into the
+  protocol) and `ui_scrollback.c`'s one-byte-per-cell storage.
+
+  **Explicitly NOT a ban on `gfx_char_w()`.** Using it as a layout unit
+  -- a `char_w + 4` scrollbar, `char_w / 2` padding, `w / char_w` grid
+  columns -- is "size this proportionally to the font", stays
+  meaningful whatever the font does, and stays. The banned pattern is
+  measuring or indexing *a string* with it. Both headers say so, because
+  the distinction is the part that will otherwise get mis-applied.
+
+  Converted the call sites that broke the rule: `ui_checkbox` and
+  `uui_checkbox` measuring a label with `k_strlen * char_w`,
+  `widget_button_state()` centring one the same way, and the cursor
+  stepping in `ui_textbox` and `uui_field`.
+
+  **`gfx_text_index_at_x()` was written and then deleted before
+  landing.** It belongs in this set, but nothing places a caret by
+  clicking today (clicking a `ui_textbox` only focuses it), and the two
+  callers that looked like they wanted it -- `ui_scrollback` and
+  `utext` -- are asking a different question: which COLUMN of a wrapped
+  grid, not which index of a string. Added when a real caller appears,
+  per `CLAUDE.md`'s bar; the same rule that had `k_strstr` written,
+  unused, and removed again before it shipped.
+
+  Also gave the kernel's `gfx_text_width()`/`gfx_text_fit_chars()` the
+  NULL guard the ring-3 versions always had -- optional labels reach
+  measuring code unguarded, and two halves of one API disagreeing about
+  NULL is its own bug.
+
+  7 new KTESTs in `kernel/drivers/gfx_test.c`, all written relative to
+  `gfx_char_w()` rather than to baked pixel numbers, since font size is
+  a runtime setting. Validated as a positive control: breaking
+  `fit_chars`'s `<=` to `<` fails two tests on the right assertions.
+  While writing them, two `"gfx"`-suite tests turned up misfiled in
+  `kernel/drivers/vga_test.c`, covering exactly two of the new ones and
+  covering them better (negative widths, newline handling) -- moved to
+  `gfx_test.c` and the duplicates dropped, so the suite is 112 rather
+  than the 115 a straight addition would have given.
+
+  One honest gap: the ring-3 conversions are compile-verified only.
+  `uui_field` has no client at all, and `uui_checkbox_width()` is
+  dropped by `--gc-sections` from every current binary. The kernel-side
+  conversions are exercised by `uidemo_test.py`'s 27 checks.
+
+  First piece of stage 1a in `docs/uapp-design.md`.
+
 ### Changed
 - **The ring-3 toolkit is one file per widget now, like `apps/ui/`.**
   `uui.c`/`.h` (buttons) and `uwidgets.c`/`.h` (650 lines holding a

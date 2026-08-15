@@ -67,6 +67,37 @@ int ugfx_char_h(void);
 // and callers that assumed it are then wrong everywhere at once.
 int ugfx_text_width(const char *str);
 
+// --- the rest of the text chokepoints ---------------------------------
+//
+// The ring-3 half of the kernel's gfx_text_* set, same rule and same
+// reasoning (see kernel/include/api/gfx.h, which states it in full):
+// **no widget does character arithmetic on a string itself** -- not
+// `len * ugfx_char_w()` to measure it, not `i + 1` to step a cursor.
+// Those are
+// the sites that have to change when text stops being one byte per
+// fixed cell, and routed through here that migration is four functions
+// plus the glyph lookup instead of a hunt through every widget.
+//
+// Not a ban on ugfx_char_w() as a LAYOUT UNIT -- padding of
+// `char_w / 2`, a `char_w + 4` scrollbar, `w / char_w` grid columns are
+// all "size this proportionally to the font" and stay. The banned
+// pattern is measuring or indexing A STRING with it.
+
+// How many leading characters of `str` fit within `max_w` pixels, whole
+// glyphs only -- the measurement half of ugfx_draw_string_clipped(),
+// for a caller doing its own windowing (a field scrolling to follow its
+// cursor) that needs the count rather than the drawing.
+int ugfx_text_fit_chars(const char *str, int max_w);
+
+// Step one character forward/back from `i`, clamped to [0, length].
+// Trivial today and deliberately still a function: these are the two
+// places a multi-byte encoding has to skip a sequence rather than a
+// byte.
+int ugfx_text_next(const char *str, int i);
+int ugfx_text_prev(const char *str, int i);
+
+// An index-at-x is deliberately absent here too -- see gfx.h.
+
 // Draws `str` with its top-left at (x, y), alpha-blending each glyph's
 // coverage between `bg` and `color` -- the same anti-aliased result the
 // kernel's own text has, because it is the same glyph data.

@@ -48,8 +48,7 @@ void widget_button_state(int x, int y, int w, int h, const char *label,
     gfx_fill_rect(x, y, w, h, fill);
     if (!label) return;
 
-    int len = (int)k_strlen(label);
-    int lx = x + (w - len * gfx_char_w()) / 2;
+    int lx = x + (w - gfx_text_width(label)) / 2;
     int ly = y + (h - gfx_char_h()) / 2;
     // The nudge is what makes "pressed" feel physical; the darker fill
     // alone reads as a colour change rather than a press.

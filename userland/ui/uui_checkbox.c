@@ -10,7 +10,7 @@
 
 int uui_checkbox_width(int size, const char *label) {
     if (!label) return size;
-    return size + CHECKBOX_LABEL_GAP + k_strlen(label) * ugfx_char_w();
+    return size + CHECKBOX_LABEL_GAP + ugfx_text_width(label);
 }
 
 void uui_checkbox_draw(struct ugfx_surface *s, int x, int y, int size,

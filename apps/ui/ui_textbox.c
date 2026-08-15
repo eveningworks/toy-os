@@ -39,7 +39,7 @@ static void textfield_delete_at_cursor(struct text_field *tf) {
 
 static void textfield_backspace(struct text_field *tf) {
     if (tf->cursor <= 0) return;
-    tf->cursor--;
+    tf->cursor = gfx_text_prev(tf->buf, tf->cursor);
     textfield_delete_at_cursor(tf);
 }
 
@@ -51,7 +51,7 @@ static void textfield_insert(struct text_field *tf, char c) {
                (size_t)(tf->len - tf->cursor));
     tf->buf[tf->cursor] = c;
     tf->len++;
-    tf->cursor++;
+    tf->cursor = gfx_text_next(tf->buf, tf->cursor);
     tf->buf[tf->len] = '\0';
 }
 

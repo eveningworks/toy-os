@@ -88,6 +88,23 @@ int ugfx_text_width(const char *str) {
     return n * g_char_w;
 }
 
+int ugfx_text_fit_chars(const char *str, int max_w) {
+    if (!str || g_char_w <= 0 || max_w < g_char_w) return 0;
+    int n = 0, used = 0;
+    while (str[n] && used + g_char_w <= max_w) { used += g_char_w; n++; }
+    return n;
+}
+
+int ugfx_text_next(const char *str, int i) {
+    if (!str || i < 0) return 0;
+    return str[i] ? i + 1 : i;
+}
+
+int ugfx_text_prev(const char *str, int i) {
+    (void)str;
+    return i > 0 ? i - 1 : 0;
+}
+
 // Character -> glyph slot. The shared table is ASCII 32..126 laid out
 // contiguously from index 0; anything outside that draws as a space,
 // which is the quiet-degradation choice (a client rendering a stray

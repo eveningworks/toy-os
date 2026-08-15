@@ -27,7 +27,7 @@ static void field_insert(struct uui_field *f, char c) {
     for (int i = f->len; i > f->cursor; i--) f->buf[i] = f->buf[i - 1];
     f->buf[f->cursor] = c;
     f->len++;
-    f->cursor++;
+    f->cursor = ugfx_text_next(f->buf, f->cursor);
     f->buf[f->len] = '\0';
 }
 
@@ -42,13 +42,13 @@ int uui_field_key(struct uui_field *f, int key) {
     if (!f->active) return 0;
 
     if (key == '\b') {
-        if (f->cursor > 0) { f->cursor--; field_delete(f); }
+        if (f->cursor > 0) { f->cursor = ugfx_text_prev(f->buf, f->cursor); field_delete(f); }
     } else if (key == KEY_DELETE) {
         field_delete(f);
     } else if (key == KEY_ARROW_LEFT) {
-        if (f->cursor > 0) f->cursor--;
+        f->cursor = ugfx_text_prev(f->buf, f->cursor);
     } else if (key == KEY_ARROW_RIGHT) {
-        if (f->cursor < f->len) f->cursor++;
+        if (f->cursor < f->len) f->cursor = ugfx_text_next(f->buf, f->cursor);
     } else if (key == KEY_HOME) {
         f->cursor = 0;
     } else if (key == KEY_END) {

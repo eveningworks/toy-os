@@ -532,6 +532,11 @@ void gfx_draw_char(int x, int y, char c, uint32_t fg, uint32_t bg) {
 // gfx_char_w()` themselves. Stops at a newline: a multi-line string has
 // no single width, and every caller of this is measuring one row.
 int gfx_text_width(const char *s) {
+    // NULL is an answer, not a fault: an optional label (a button with
+    // none is legal, see ui_button_draw) reaches measuring code
+    // unguarded, and the ring-3 ugfx_text_width() has always accepted
+    // it. Two halves of one API disagreeing about NULL is its own bug.
+    if (!s) return 0;
     int n = 0;
     while (s[n] && s[n] != '\n') n++;
     return n * gfx_char_w();
@@ -543,12 +548,25 @@ int gfx_text_width(const char *s) {
 // own windowing (a text field scrolling to follow its cursor, see
 // apps/ui/ui_textbox.c) need the count without the drawing.
 int gfx_text_fit_chars(const char *s, int max_w) {
+    if (!s) return 0;
     int cw = gfx_char_w();
     if (cw <= 0 || max_w < cw) return 0;
     int n = 0;
     int used = 0;
     while (s[n] && s[n] != '\n' && used + cw <= max_w) { used += cw; n++; }
     return n;
+}
+
+// Cursor stepping. See gfx.h for why these are functions rather than
+// `i + 1` / `i - 1` at each call site.
+int gfx_text_next(const char *s, int i) {
+    if (!s || i < 0) return 0;
+    return s[i] ? i + 1 : i;
+}
+
+int gfx_text_prev(const char *s, int i) {
+    (void)s;
+    return i > 0 ? i - 1 : 0;
 }
 
 // gfx_draw_string(), but stopping at `max_w` pixels.

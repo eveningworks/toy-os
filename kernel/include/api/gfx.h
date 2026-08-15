@@ -199,6 +199,51 @@ int gfx_text_width(const char *s);
 // scrolling to follow its cursor) that need the count, not the drawing.
 int gfx_text_fit_chars(const char *s, int max_w);
 
+// --- the rest of the text chokepoints ---------------------------------
+//
+// Together with gfx_text_width()/gfx_text_fit_chars() above, these are
+// every question a caller can ask about where characters SIT. The rule
+// they exist to enforce, and the reason they are grouped here:
+//
+//   **No widget does character arithmetic on a string itself.** Not
+//   `k_strlen(s) * gfx_char_w()` to measure it, not `i + 1` to step a
+//   cursor. Every one of those is a place that has to change when text
+//   stops being one byte per fixed-width cell -- and there are enough of
+//   them, spread across enough widgets, that finding them all later is
+//   the hard part. Routed through here, that migration is these four
+//   functions plus the glyph lookup.
+//
+// This is NOT a ban on gfx_char_w(). Using it as a LAYOUT UNIT is fine
+// and stays -- a scrollbar `gfx_char_w() + 4` wide, padding of
+// `gfx_char_w() / 2`, a grid of `w / gfx_char_w()` columns. Those are
+// "size this proportionally to the font", which remains meaningful
+// whatever the font does. The banned pattern is specifically measuring
+// or indexing A STRING with it.
+//
+// Milestone 37 (UTF-8) and Milestone 21 (proportional metrics) are the
+// two changes this is aimed at; see docs/uapp-design.md's "Text, and
+// Unicode later", including the two things that will still hurt
+// regardless (the ASCII-contiguous glyph lookup, and
+// ui_scrollback.c's one-byte cells).
+
+// Step one character forward/back from index `i` in `s`, clamped to
+// [0, length]. Trivial today (i+1 / i-1) and deliberately still a
+// function: these are the two places a multi-byte encoding has to skip
+// a whole sequence rather than a byte, and a widget that wrote `++`
+// inline is a widget that will be wrong then.
+int gfx_text_next(const char *s, int i);
+int gfx_text_prev(const char *s, int i);
+
+// DELIBERATELY ABSENT: a `gfx_text_index_at_x()` turning a click offset
+// into a character index. It belongs in this set and will be needed the
+// day a caret can be placed by clicking -- but nothing does that today
+// (clicking a ui_textbox only focuses it), and the wrapped-buffer
+// callers that look like they want it, ui_scrollback and utext, are
+// asking a different question: which COLUMN of a wrapped grid, not
+// which index of a string. Added when a real caller turns up, per
+// CLAUDE.md's bar -- the same rule that had k_strstr written, unused,
+// and deleted again before it landed.
+
 // gfx_draw_string() bounded to `max_w` pixels. Returns 1 if the whole
 // string fitted, 0 if it was cut -- so a caller can add an ellipsis or
 // widen itself without measuring twice.

@@ -7,7 +7,7 @@
 
 int widget_checkbox_width(int size, const char *label) {
     if (!label) return size;
-    return size + CHECKBOX_LABEL_GAP + (int)k_strlen(label) * gfx_char_w();
+    return size + CHECKBOX_LABEL_GAP + gfx_text_width(label);
 }
 
 void widget_checkbox_draw(int x, int y, int size, int checked, int hovered,
