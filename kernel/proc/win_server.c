@@ -208,6 +208,71 @@ static int map_font(int pid, struct win_request_msg *req) {
     return 1;
 }
 
+// Reallocate a window's buffer, mapped AT THE SAME VIRTUAL ADDRESS.
+//
+// That last part is what makes a client-driven resize simple rather
+// than a lifetime problem: win_buffer_vaddr() derives the address from
+// the window id, so the client's pointer is unchanged and it never has
+// to be told where its pixels moved. The fixed-vaddr decision was made
+// for a different reason (a client can compute its own buffer address)
+// and pays off here.
+//
+// Ordering is chosen so a FAILURE leaves the window exactly as it was:
+// the new frames are allocated and zeroed BEFORE anything is unmapped,
+// so running out of memory means the old buffer is still mapped and
+// still correct. A refusal is a normal outcome of this call, not an
+// error path -- see abi/win_proto.h.
+static int resize_window(struct client_window *cw, int w, int h) {
+    if (w <= 0 || h <= 0 || w > WIN_CLIENT_MAX_W || h > WIN_CLIENT_MAX_H) return 0;
+
+    uint32_t bytes = (uint32_t)w * (uint32_t)h * 4;
+    uint32_t pages = (bytes + 4095) / 4096;
+
+    uint64_t phys = pmm_alloc_contiguous(pages);
+    if (!phys) {
+        klog_write("win_server: resize refused -- out of contiguous memory\n");
+        return 0;
+    }
+    uint8_t *bp = (uint8_t *)(uintptr_t)phys;
+    for (uint32_t i = 0; i < pages * 4096; i++) bp[i] = 0;
+
+    // Only now is the old mapping disturbed.
+    for (uint32_t i = 0; i < cw->pages; i++) {
+        vmm_unmap_user_page(cw->pml4, cw->vaddr + (uint64_t)i * 4096);
+    }
+    for (uint32_t i = 0; i < pages; i++) {
+        if (!vmm_map_user_page(cw->pml4, cw->vaddr + (uint64_t)i * 4096,
+                                phys + (uint64_t)i * 4096)) {
+            // Half-mapped and the old frames are already unmapped: put
+            // the ORIGINAL buffer back rather than leaving the client
+            // with an address that faults. The old frames are still
+            // allocated -- nothing has freed them yet -- so this can
+            // always succeed with the memory it had a moment ago.
+            for (uint32_t j = 0; j < i; j++) {
+                vmm_unmap_user_page(cw->pml4, cw->vaddr + (uint64_t)j * 4096);
+            }
+            for (uint32_t j = 0; j < cw->pages; j++) {
+                vmm_map_user_page(cw->pml4, cw->vaddr + (uint64_t)j * 4096,
+                                   (uint64_t)(uintptr_t)cw->buf + (uint64_t)j * 4096);
+            }
+            pmm_free_contiguous(phys, pages);
+            klog_write("win_server: resize refused -- mapping failed\n");
+            return 0;
+        }
+    }
+
+    pmm_free_contiguous((uint64_t)(uintptr_t)cw->buf, cw->pages);
+    cw->buf = (uint32_t *)(uintptr_t)phys;
+    cw->pages = pages;
+    cw->w = w;
+    cw->h = h;
+
+    if (g_ops && g_ops->window_resized) {
+        g_ops->window_resized(cw->pid, cw->id, cw->buf, w, h);
+    }
+    return 1;
+}
+
 int win_server_request(int pid, struct win_request_msg *req) {
     if (!g_ops || !req) return -1;
 
@@ -239,6 +304,24 @@ int win_server_request(int pid, struct win_request_msg *req) {
         for (; i < WIN_TITLE_LEN - 1 && req->text[i]; i++) title[i] = req->text[i];
         title[i] = '\0';
         if (g_ops->window_title) g_ops->window_title(pid, cw->id, title);
+        return 1;
+    }
+    case WIN_REQ_HINTS: {
+        struct client_window *cw = lookup(pid, req->window);
+        if (!cw) return 0;
+        if (g_ops->window_hints) {
+            g_ops->window_hints(pid, cw->id, (unsigned)req->a, req->b, req->c);
+        }
+        return 1;
+    }
+    case WIN_REQ_RESIZE: {
+        struct client_window *cw = lookup(pid, req->window);
+        if (!cw) return 0;
+        if (!resize_window(cw, req->a, req->b)) return 0;
+        // Hand back what was actually granted, so a client never has to
+        // assume it got what it asked for.
+        req->a = cw->w;
+        req->b = cw->h;
         return 1;
     }
     case WIN_REQ_FONT:

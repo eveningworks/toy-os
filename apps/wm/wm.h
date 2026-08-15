@@ -44,6 +44,12 @@ struct window {
     // resize handshake behind it).
     int resizable;
 
+    // Smallest content size this window will accept, 0 for "the WM's
+    // own floor". Only a client sets it (through TWP's hints); a
+    // kernel-space app has never needed one because nothing resizes it
+    // below its chrome.
+    int min_w, min_h;
+
     const struct gui_app *app;
     void *app_state;
     int open; // 1 while this slot is in use

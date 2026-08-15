@@ -58,6 +58,14 @@ int resize_right = 0, resize_bottom = 0;
 int resize_start_mx, resize_start_my;
 int resize_start_w, resize_start_h;
 
+// A CLIENT window's resize is a PROPOSAL, not a live change: the buffer
+// belongs to the client, so the WM tracks the size the drag implies and
+// draws an outline, rather than growing a frame around pixels that are
+// still the old size. Sent as WIN_EV_RESIZE on release. -1 = no
+// proposal in flight, which is also what an app window's resize leaves
+// it at (those still resize live -- the WM owns their pixels).
+int resize_prop_w = -1, resize_prop_h = -1;
+
 int content_dragging = -1; // index into windows[], or -1 -- see wm_internal.h
 int content_pressed = -1; // index into windows[], or -1 -- see wm_internal.h
 

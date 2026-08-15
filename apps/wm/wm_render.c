@@ -313,6 +313,23 @@ static void hw_cursor_upload(void) {
     hw_cursor_ready = gfx_hw_cursor_define(argb, CURSOR_SPRITE_W, CURSOR_SPRITE_H, 0, 0);
 }
 
+// The outline a client-window resize drag is proposing. Drawn instead
+// of resizing the window, because a client's buffer is still the old
+// size until the client itself changes it -- growing the frame around
+// it would show a window with its content stuck in one corner, which is
+// the whole reason resize is a handshake (abi/win_proto.h).
+//
+// Drawn just before the cursor, so it sits over the windows it
+// describes. A 1px rectangle: cheap, unmistakable, and the same idiom
+// every WM used before compositing made live resize affordable.
+static void draw_resize_outline(void) {
+    if (resizing < 0 || resize_prop_w <= 0 || resize_prop_h <= 0) return;
+    const struct window *w = &windows[resizing];
+    gfx_draw_rect(w->x, w->y, resize_prop_w, resize_prop_h, THEME_WHITE);
+    gfx_draw_rect(w->x + 1, w->y + 1, resize_prop_w - 2, resize_prop_h - 2,
+                   gfx_rgb(50, 90, 160));
+}
+
 // Saves what's under (x, y) before drawing the cursor there, so a later
 // cursor-only move can restore it. Used by both render paths.
 static void draw_cursor_at(int x, int y) {
@@ -323,6 +340,7 @@ static void draw_cursor_at(int x, int y) {
             return; // nothing painted, so nothing to save or restore
         }
     }
+    draw_resize_outline();
     save_cursor_under(x, y);
     draw_cursor(x, y, resolve_cursor_kind(x, y));
 }

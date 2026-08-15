@@ -245,6 +245,52 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   one geometry calculation shared by draw/hit-test/drag (so a scrollbar
   thumb cannot be in two places), and commit-on-release.
 
+### Added
+- **Resize, end to end -- and a client window can finally be resized.**
+  Stage 3 of `docs/uapp-design.md`, and the thing the whole design was
+  aimed at. `WIN_EV_RESIZE` has been defined in TWP since the protocol
+  was written and never sent; it is sent now.
+
+  TWP gains `WIN_REQ_HINTS` (behaviour flags plus a minimum content
+  size, declared rather than inferred) and `WIN_REQ_RESIZE`. TWS
+  reallocates the buffer and remaps it **at the same virtual address**,
+  so the client's pointer survives -- `win_buffer_vaddr()` derives that
+  address from the window id rather than returning it, a decision made
+  for an unrelated reason that pays off completely here.
+
+  **It is a configure/ack handshake**, following Wayland's
+  `xdg_toplevel`: dragging a client window's grip draws a rubber-band
+  outline and changes nothing; on release the WM PROPOSES a size; the
+  client answers with `WIN_REQ_RESIZE` and repaints, and only then does
+  the WM adopt it. The obvious alternative -- resize the window and let
+  the client find out -- would composite the old buffer into the new
+  content rectangle, showing a window with its pixels stuck in one
+  corner. Kernel-space app windows still resize live, because the WM
+  owns their pixels.
+
+  The server's ordering is chosen so a failure changes nothing: new
+  frames are allocated and zeroed BEFORE anything is unmapped, and a
+  half-completed remap puts the original buffer back. Refusal is a
+  normal outcome, not an error path.
+
+  **The acceptance test the design set for itself passed.** Stage 3
+  touched **zero lines** in `calculator.c`, `uiclient.c` and
+  `gfxdemo.c`, and all 83 existing checks stayed green -- the claim
+  being that an app which never mentions resize is not affected by
+  resize existing. `winclient` opted in afterwards, and its entire
+  resize implementation is `.flags = UAPP_RESIZABLE` plus a minimum
+  size. It contains no resize code: `uapp` answers the proposal,
+  reallocates, rebuilds the surface, re-runs the layout and repaints.
+
+  New `tools/uapp_test.py` (6 checks, in `gui_regress`) drives the
+  handshake, with the assertion that matters paired on purpose: the
+  window's reported size AND the client's painted extent must both
+  change. A client that resized its buffer but not its drawing passes
+  either half alone -- and that is exactly the failure the handshake
+  exists to prevent. Verified by pixel: after a 92x72 drag the border
+  is at the new corner and the old corner is interior fill.
+  `damage_sweep` clean at 27 interactions.
+
 ### Changed
 - **Resizability is a property of the window, not of the app struct.**
   Stage 2 of `docs/uapp-design.md`. `struct window` carries `resizable`;

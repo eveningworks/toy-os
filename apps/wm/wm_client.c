@@ -122,11 +122,53 @@ static void on_window_title(int pid, uint32_t id, const char *title) {
     redraw_pending = 1;
 }
 
+// The client declaring how its window should behave. This is the other
+// half of resizability living on the window (see wm.h): a client has no
+// `gui_app` to carry it, so it says so itself.
+static void on_window_hints(int pid, uint32_t id, unsigned flags, int min_w, int min_h) {
+    int idx = find_client_window(pid, id);
+    if (idx < 0) return;
+
+    windows[idx].resizable = (flags & WIN_HINT_RESIZABLE) ? 1 : 0;
+    windows[idx].min_w = min_w;
+    windows[idx].min_h = min_h;
+
+    // The resize grip appears or disappears with this, so the chrome
+    // has to be repainted -- the frame only, not the content.
+    wm_damage_rect(windows[idx].x, windows[idx].y, windows[idx].w, windows[idx].h);
+    redraw_pending = 1;
+}
+
+// The client answered a WIN_EV_RESIZE proposal: its buffer is now this
+// size. The WM adopts it here rather than when the proposal was sent,
+// which is what stops the chrome and the content ever disagreeing --
+// see abi/win_proto.h's configure/ack description.
+static void on_window_resized(int pid, uint32_t id, uint32_t *buf, int w, int h) {
+    int idx = find_client_window(pid, id);
+    if (idx < 0) return;
+    struct window *win = &windows[idx];
+
+    // Damage the OLD rect before moving to the new one: shrinking
+    // leaves desktop behind that nothing else would repaint.
+    wm_damage_rect(win->x, win->y, win->w, win->h);
+
+    win->client_buf = buf;
+    win->client_w = w;
+    win->client_h = h;
+    win->w = w + 2;
+    win->h = h + WM_TITLEBAR_H + 2;
+
+    wm_damage_rect(win->x, win->y, win->w, win->h);
+    redraw_pending = 1;
+}
+
 static const struct win_server_ops WM_SERVER_OPS = {
     .window_created   = on_window_created,
     .window_present   = on_window_present,
     .window_destroyed = on_window_destroyed,
     .window_title     = on_window_title,
+    .window_hints     = on_window_hints,
+    .window_resized   = on_window_resized,
 };
 
 void wm_client_init(void) {
@@ -192,6 +234,28 @@ void wm_client_send_mouse(struct window *win, int type, int x, int y, unsigned b
     ev.a = x - window_content_x(win);
     ev.b = y - window_content_y(win);
     ev.mods = buttons;
+    win_events_push(win->client_pid, &ev);
+}
+
+// Propose a new CONTENT size. Deliberately a proposal: the WM does not
+// resize a client's window, because the buffer belongs to the client
+// and only it can decide when that changes. If the client agrees it
+// answers with WIN_REQ_RESIZE and on_window_resized() above adopts the
+// result; if it ignores this, nothing happens and the window stays as
+// it was. Same politeness as the close button.
+void wm_client_send_resize(struct window *win, int w, int h) {
+    if (!wm_client_is_client_window(win)) return;
+
+    int min_w = win->min_w > 0 ? win->min_w : 1;
+    int min_h = win->min_h > 0 ? win->min_h : 1;
+    if (w < min_w) w = min_w;
+    if (h < min_h) h = min_h;
+
+    struct win_event ev = {0};
+    ev.type = WIN_EV_RESIZE;
+    ev.window = win->client_win;
+    ev.a = w;
+    ev.b = h;
     win_events_push(win->client_pid, &ev);
 }
 

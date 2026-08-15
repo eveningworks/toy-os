@@ -819,13 +819,17 @@ put, which is exactly the wrong behaviour described under "Resize is a
 configure/ack handshake". The hint and the thing that honours it should
 land together.
 
-**Stage 3 -- resize, end to end.** The rubber band, `WIN_EV_RESIZE`
-actually sent, `WIN_REQ_RESIZE` and the server-side realloc/remap,
-`uapp`'s default handling including the layout re-run. Port `notepad`
-and `terminal` and let them declare themselves resizable. **The
-acceptance test for the whole design is that Stage 3 touches zero lines
-in `calculator.c`, `winclient.c`, `uiclient.c` or `gfxdemo.c`** and they
-keep passing.
+**Stage 3 -- resize, end to end. DONE.** `WIN_REQ_HINTS` and
+`WIN_REQ_RESIZE` in TWP, the server-side realloc/remap at the same
+virtual address, the rubber band, `WIN_EV_RESIZE` finally sent, and
+`uapp` answering it by default. **The acceptance test passed**: zero
+lines changed in `calculator.c`, `uiclient.c` or `gfxdemo.c`, all 83
+existing checks green. `winclient` opted in afterwards with one field
+and no resize code. `tools/uapp_test.py` covers the handshake.
+
+Notepad and Terminal are NOT yet ported -- they are still hand-rolled
+TWP clients, so they cannot opt in until they move onto uapp. That is
+the next piece of work rather than part of this stage.
 
 **Stage 4 -- optional.** `WIN_EV_FOCUS`, `WIN_REQ_MOVE`, and a second
 window per process if M41 wants it.

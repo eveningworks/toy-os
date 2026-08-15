@@ -63,6 +63,19 @@ struct win_server_ops {
 
     // Set `id`'s title (already truncated to fit WIN_TITLE_LEN).
     void (*window_title)(int pid, uint32_t id, const char *title);
+
+    // The client declared how this window should behave --
+    // WIN_HINT_* flags plus a minimum content size. Behaviour is
+    // DECLARED, never inferred (see abi/win_proto.h).
+    void (*window_hints)(int pid, uint32_t id, unsigned flags,
+                          int min_w, int min_h);
+
+    // `id`'s buffer has been reallocated at `w` x `h`; `buf` is the new
+    // kernel-visible pointer and the old one is already freed. The
+    // client asked for this -- see the configure/ack handshake in
+    // abi/win_proto.h -- so the presentation layer is being told, not
+    // asked.
+    void (*window_resized)(int pid, uint32_t id, uint32_t *buf, int w, int h);
 };
 
 // Registers the presentation layer. The WM calls this with its ops as

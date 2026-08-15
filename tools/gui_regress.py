@@ -89,6 +89,7 @@ TOOLS = [
     ("calculator", "calculator_client_test.py", "Calculator in ring 3"),
     ("notepad", "notepad_client_test.py", "Notepad in ring 3"),
     ("uterm", "uterm_test.py", "Terminal + the ring-3 shell"),
+    ("uapp", "uapp_test.py", "the TWP resize handshake"),
 ]
 
 

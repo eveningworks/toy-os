@@ -73,6 +73,15 @@ static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
 int main(void) {
     struct uapp_desc desc = {
         .title   = "Ring 3 Client",
+        // Opting in is one field. Everything behind it -- answering
+        // TWS's proposal, reallocating the buffer, rebuilding the
+        // surface, repainting -- is uapp's (ui/uapp.h). This client
+        // adds no resize code at all: on_draw already fills whatever
+        // surface it is handed, which is what "an app that has never
+        // heard of resizing resizes correctly" means in practice.
+        .flags   = UAPP_RESIZABLE,
+        .min_w   = 120,
+        .min_h   = 80,
         .w       = WIN_W,
         .h       = WIN_H,
         .x       = 260,

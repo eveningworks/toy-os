@@ -53,6 +53,11 @@
 
 struct uapp;
 
+// Behaviour, declared to TWS at open. Absent = the defaults: a
+// fixed-size window. Declared rather than inferred -- the server does
+// not guess resizability from a window's size (abi/win_proto.h).
+#define UAPP_RESIZABLE 0x01
+
 // The drawing context handed to on_draw. Carries the surface AND the
 // theme defaults, which is what takes ugfx_draw_string()'s six
 // arguments down to three for the common case.
@@ -90,6 +95,12 @@ struct uapp_desc {
     // here.
     int x, y;
 
+    // UAPP_* behaviour flags, plus the smallest content size this app
+    // will accept (0 = no opinion). Sent to TWS as hints once the
+    // window exists.
+    unsigned flags;
+    int min_w, min_h;
+
     // Handed back to every callback via uapp_state(). The library never
     // looks inside it.
     void *state;
@@ -125,6 +136,13 @@ struct uapp_desc {
     void (*on_release)(struct uapp *a, int x, int y, unsigned buttons);
     void (*on_motion)(struct uapp *a, int x, int y, unsigned buttons);
 
+    // The window was resized -- the library has already reallocated the
+    // buffer, rebuilt the surface and re-run the layout before calling
+    // this. Most apps need nothing here, which is the point: **an app
+    // with a layout and no on_resize resizes correctly**, because the
+    // layout was re-run for it.
+    void (*on_resize)(struct uapp *a, int w, int h);
+
     // Return 0 to REFUSE the close; the default accepts. Refusing
     // politely is not the same problem as a client that never answers,
     // which is TWS's to solve (see docs/roadmap.md's M41).
@@ -153,6 +171,11 @@ void uapp_redraw(struct uapp *a);
 
 void uapp_quit(struct uapp *a, int status);
 int uapp_set_title(struct uapp *a, const char *title);
+
+// Ask TWS for a different content size. Returns 0 if it refused, in
+// which case nothing changed. Called for you when TWS proposes one;
+// public because an app may also want to resize itself.
+int uapp_resize(struct uapp *a, int w, int h);
 void *uapp_state(struct uapp *a);
 int uapp_width(const struct uapp *a);
 int uapp_height(const struct uapp *a);

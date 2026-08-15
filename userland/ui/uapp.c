@@ -78,6 +78,27 @@ void *uapp_state(struct uapp *a) { return a->desc->state; }
 int uapp_width(const struct uapp *a) { return a->w; }
 int uapp_height(const struct uapp *a) { return a->h; }
 
+int uapp_resize(struct uapp *a, int w, int h) {
+    struct win_request_msg req;
+    req_clear(&req);
+    req.type = WIN_REQ_RESIZE;
+    req.window = a->window;
+    req.a = w;
+    req.b = h;
+    if (req_send(&req) != 1) return 0;
+
+    // The server hands back what it actually granted rather than what
+    // was asked for, and the buffer is at the same virtual address as
+    // before -- win_buffer_vaddr() derives it from the window id, so
+    // the pointer never moves. Rebuilding the surface is only about the
+    // new width being the new row stride.
+    a->w = req.a;
+    a->h = req.b;
+    a->surface = ugfx_surface_for_window(a->window, a->w, a->h);
+    if (a->desc->layout) uui_layout_run(a->desc->layout, 0, 0, a->w, a->h);
+    return 1;
+}
+
 int uapp_set_title(struct uapp *a, const char *title) {
     struct win_request_msg req;
     req_clear(&req);
@@ -103,6 +124,23 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
         // The default ACCEPTS. An app that wants to refuse says so;
         // an app that has never heard of closing still closes.
         if (!d->on_close || d->on_close(a)) uapp_quit(a, 0);
+        break;
+
+    case WIN_EV_RESIZE:
+        // A PROPOSAL from TWS, answered here. Everything an app would
+        // otherwise have to remember -- ask the server, rebuild the
+        // surface, re-lay-out, repaint -- happens for it. An app that
+        // has never heard of resizing gets all of it; one that cares
+        // adds on_resize.
+        //
+        // A refusal is normal (out of memory, over WIN_CLIENT_MAX_*),
+        // and the answer is to keep the size we had and repaint
+        // nothing: the window is unchanged, so there is nothing to
+        // show.
+        if (uapp_resize(a, ev->a, ev->b)) {
+            if (d->on_resize) d->on_resize(a, a->w, a->h);
+            a->dirty = 1;
+        }
         break;
 
     case WIN_EV_KEY:
@@ -186,6 +224,18 @@ int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     a->window = req.window;
 
     if (desc->title) uapp_set_title(a, desc->title);
+
+    // Declare behaviour. Sent unconditionally, including when the app
+    // asked for nothing: "fixed size, no minimum" is a statement, and
+    // leaving TWS to assume it would be the inference this protocol
+    // deliberately avoids.
+    req_clear(&req);
+    req.type = WIN_REQ_HINTS;
+    req.window = a->window;
+    req.a = (int)desc->flags;
+    req.b = desc->min_w;
+    req.c = desc->min_h;
+    req_send(&req);
     a->surface = ugfx_surface_for_window(a->window, a->w, a->h);
 
     // Now that the content size is settled, place everything in it.

@@ -345,25 +345,52 @@ void wm_update_drag_resize(int mx, int my, uint8_t buttons) {
     }
 
     if (resizing >= 0) {
+        struct window *w = &windows[resizing];
+        int is_client = wm_client_is_client_window(w);
+
         if (buttons & 0x1) {
-            struct window *w = &windows[resizing];
             int dx = mx - resize_start_mx;
             int dy = my - resize_start_my;
+            int neww = w->w, newh = w->h;
             if (resize_right) {
-                int neww = resize_start_w + dx;
+                neww = resize_start_w + dx;
                 if (neww < MIN_CONTENT_W + 2) neww = MIN_CONTENT_W + 2;
                 if (w->x + neww > screen_w) neww = screen_w - w->x;
-                w->w = neww;
             }
             if (resize_bottom) {
-                int newh = resize_start_h + dy;
+                newh = resize_start_h + dy;
                 int min_h = MIN_CONTENT_H + WM_TITLEBAR_H + 2;
                 if (newh < min_h) newh = min_h;
                 if (w->y + newh > screen_h - taskbar_h) newh = screen_h - taskbar_h - w->y;
-                w->h = newh;
             }
-            redraw_pending = 1;
+
+            if (is_client) {
+                // Propose only -- an outline, drawn by wm_render.c. The
+                // window keeps its real size until the client answers.
+                if (resize_prop_w != neww || resize_prop_h != newh) {
+                    // The old outline has to be erased as well as the
+                    // new one drawn, so damage both.
+                    if (resize_prop_w > 0) wm_damage_rect(w->x, w->y, resize_prop_w, resize_prop_h);
+                    resize_prop_w = neww;
+                    resize_prop_h = newh;
+                    wm_damage_rect(w->x, w->y, neww, newh);
+                    redraw_pending = 1;
+                }
+            } else {
+                w->w = neww;
+                w->h = newh;
+                redraw_pending = 1;
+            }
         } else {
+            if (is_client && resize_prop_w > 0) {
+                // Released: ask. The CONTENT size, not the frame's --
+                // the client knows nothing about chrome.
+                wm_damage_rect(w->x, w->y, resize_prop_w, resize_prop_h);
+                wm_client_send_resize(w, resize_prop_w - 2,
+                                       resize_prop_h - WM_TITLEBAR_H - 2);
+                redraw_pending = 1;
+            }
+            resize_prop_w = resize_prop_h = -1;
             resizing = -1;
         }
     }

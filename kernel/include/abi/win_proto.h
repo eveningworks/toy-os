@@ -37,7 +37,8 @@
 #define WIN_EV_MOUSE_DOWN 3 // a, b: position; mods: button bits
 #define WIN_EV_MOUSE_UP   4 // a, b: position; mods: button bits
 #define WIN_EV_CLOSE      5 // the server wants this window gone
-#define WIN_EV_RESIZE     6 // a, b: new content size
+#define WIN_EV_RESIZE     6 // a, b: PROPOSED content size -- a configure,
+                            // not a command. See below.
 
 // Fixed 24-byte layout, no padding on x86-64, no pointers -- so the
 // same bytes work unchanged whether they are copied out by a syscall or
@@ -74,6 +75,29 @@ struct win_event {
                            // the buffer.
 #define WIN_REQ_TITLE   4 // `window`: which one; the title comes from
                            // the request's `text` field.
+#define WIN_REQ_HINTS   6 // How this window should BEHAVE. a: WIN_HINT_*
+                           // flags, b/c: minimum content w/h (0 = the
+                           // server's floor). Sent once after create,
+                           // and re-sendable if an app changes its mind.
+                           //
+                           // Behaviour is DECLARED, not inferred: the
+                           // server does not guess "resizable" from a
+                           // window's size or its title. Same principle
+                           // as fs_ops.caps and display_driver's
+                           // capability bits.
+#define WIN_REQ_RESIZE  7 // a/b: requested content w/h. Reallocates this
+                           // window's buffer and remaps it AT THE SAME
+                           // VIRTUAL ADDRESS, so the client's pointer
+                           // stays valid across the call -- see
+                           // win_buffer_vaddr() below, which derives
+                           // that address from the window id rather
+                           // than returning it. On success a/b come
+                           // back as the size actually granted.
+                           //
+                           // A client resizes ITSELF. The server never
+                           // reallocates a buffer underneath a running
+                           // client; it asks, with WIN_EV_RESIZE, and
+                           // this is the answer. See that event.
 #define WIN_REQ_FONT    5 // No inputs. Maps the desktop's ACTIVE font
                            // read-only into the client at
                            // WIN_FONT_VADDR and fills in the metrics:
@@ -102,6 +126,41 @@ struct win_event {
                            // pages out of the kernel image itself, so
                            // a writable mapping would let any client
                            // scribble on kernel .rodata.
+
+// --- window behaviour hints (WIN_REQ_HINTS's `a`) ---------------------
+#define WIN_HINT_RESIZABLE 0x01 // the user may resize this window
+
+// --- resize is a CONFIGURE/ACK HANDSHAKE ------------------------------
+//
+// The obvious implementation -- the server resizes the window when the
+// user drags, and the client finds out afterwards -- is wrong here, and
+// visibly so: the server composites client_w * client_h pixels into
+// whatever content rectangle the chrome now describes, so the window
+// would grow with the content stuck at the old size in one corner. The
+// buffer belongs to the client; only the client can decide when it
+// changes.
+//
+// So, following Wayland's xdg_toplevel configure/ack -- the same
+// problem, solved the same way, for the same reason:
+//
+//   1. The user drags the resize grip. The WM tracks a proposed size
+//      and draws a rubber-band outline; the window itself does not
+//      change yet.
+//   2. On release the WM clamps to the client's hinted minimum and
+//      sends WIN_EV_RESIZE(w, h) -- a proposal.
+//   3. The client answers with WIN_REQ_RESIZE. The server frees the old
+//      frames, allocates new ones and maps them at the same virtual
+//      address, so the client's buffer pointer survives.
+//   4. The client redraws and presents. The WM adopts the new content
+//      size when that present arrives.
+//   5. If the server refuses (out of contiguous memory, over
+//      WIN_CLIENT_MAX_*), the client keeps the size it had and the
+//      window does not change. A refusal is a normal outcome, not an
+//      error path.
+//
+// A client that ignores WIN_EV_RESIZE simply does not resize, which is
+// the same politeness WIN_EV_CLOSE has: see "a client window's close
+// button is a handshake, not a seizure" in docs/decisions.md.
 
 // Longest window title a client may set, including the NUL. Matches the
 // window manager's own WIN_TITLE_MAX -- a client that sends more gets

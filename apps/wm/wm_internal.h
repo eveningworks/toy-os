@@ -117,6 +117,10 @@ extern int resize_right, resize_bottom;
 extern int resize_start_mx, resize_start_my;
 extern int resize_start_w, resize_start_h;
 
+// The outline a client-window resize drag is proposing (see wm.c).
+// -1/-1 when there is none.
+extern int resize_prop_w, resize_prop_h;
+
 // index into windows[], or -1 if no app is currently capturing a
 // content-area drag via its on_drag_start callback (see gui_apps.h) --
 // same shape as dragging/resizing above, just app-owned instead of
@@ -292,5 +296,9 @@ void wm_client_draw(const struct window *win);
 void wm_client_send_key(struct window *win, int key, unsigned mods);
 void wm_client_send_mouse(struct window *win, int type, int x, int y, unsigned buttons);
 void wm_client_send_close(struct window *win);
+
+// Propose a content size to a client (WIN_EV_RESIZE). A proposal, not a
+// command -- see wm_client.c and abi/win_proto.h.
+void wm_client_send_resize(struct window *win, int w, int h);
 
 #endif
