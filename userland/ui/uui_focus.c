@@ -40,7 +40,10 @@ int uui_focus_key(struct uui_focus *f, int key, unsigned mods) {
     if (key == '\t') return (mods & KEY_MOD_SHIFT) ? uui_focus_prev(f) : uui_focus_next(f);
     if (f->current < 0 || f->current >= f->count) return 0;
     const struct uui_focusable *it = &f->items[f->current];
-    return it->ops->key ? it->ops->key(it->widget, key) : 0;
+    // mods forwarded now that this shares uui_widget_ops with layout --
+    // a widget that cares about Shift can see it rather than having the
+    // focus ring silently swallow the distinction.
+    return it->ops->key ? it->ops->key(it->widget, key, mods) : 0;
 }
 
 int uui_focus_click(struct uui_focus *f, int cx, int cy) {

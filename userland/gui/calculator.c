@@ -43,6 +43,7 @@
 #include "rt/sys.h"
 #include "ui/ugfx.h"
 #include "ui/uui.h"
+#include "ui/uapp.h"
 #include "ui/utheme.h"
 #include "calc_engine.h"
 #include "string.h"
@@ -51,21 +52,8 @@
 
 
 
-static int win_request(struct win_request_msg *req) {
-    return (int)sys_call(SYS_WIN_REQUEST, (uint64_t)(uintptr_t)req, 0, 0);
-}
 
-static void clear_req(struct win_request_msg *req) {
-    for (unsigned i = 0; i < sizeof(*req); i++) ((uint8_t *)req)[i] = 0;
-}
 
-static int wait_event(struct win_event *ev) {
-    int64_t r;
-    do { // 0 = "woken, ask again"; parks again rather than spinning
-        r = sys_call(SYS_WAIT_EVENT, (uint64_t)(uintptr_t)ev, 0, 0);
-    } while (r == 0);
-    return (int)r;
-}
 
 #define GRID_COLS 4
 #define GRID_ROWS 5
@@ -87,49 +75,25 @@ static const struct calc_button BUTTONS[BUTTON_COUNT] = {
     { "+/-", 's' }, { "0",   '0' }, { ".",   '.' }, { "=",   '=' },
 };
 
-// Layout metrics, resolved once from the font the server handed us.
-// Same formulas as apps/calculator.c's macros -- BTN_W fits "+/-"/"CE",
-// the widest labels, at any size.
-static int g_btn_w, g_btn_h, g_display_h, g_expr_h, g_top_h;
-#define BTN_GAP 6
-#define MARGIN 8
-#define DISPLAY_GAP 8
-#define EXPR_GAP 2
+// Layout. The display area's height is the only metric this app still
+// computes -- everything else (window size, button sizes, positions,
+// margins, gaps) comes from uui_layout and the buttons' own natural
+// sizes. `button_rect()`, `metrics_init()`, `content_w()`,
+// `content_h()` and the four spacing constants they needed are gone;
+// see ui/uui_layout.h.
+#define MARGIN 8   // still used by the display's own drawing, below
 
-static void metrics_init(void) {
-    g_btn_w     = 4 * ugfx_char_w() + 16;
-    g_btn_h     = ugfx_char_h() + 16;
-    g_display_h = ugfx_char_h() + 16;
-    g_expr_h    = ugfx_char_h() + 4;
-    g_top_h     = g_expr_h + EXPR_GAP + g_display_h + DISPLAY_GAP;
-}
-
-static int content_w(void) {
-    return 2 * MARGIN + GRID_COLS * g_btn_w + (GRID_COLS - 1) * BTN_GAP;
-}
-static int content_h(void) {
-    return MARGIN + g_top_h + GRID_ROWS * g_btn_h + (GRID_ROWS - 1) * BTN_GAP + MARGIN;
-}
-
-static void button_rect(int index, int *bx, int *by, int *bw, int *bh) {
-    int row = index / GRID_COLS;
-    int col = index % GRID_COLS;
-    *bw = g_btn_w;
-    *bh = g_btn_h;
-    *bx = MARGIN + col * (g_btn_w + BTN_GAP);
-    *by = MARGIN + g_top_h + row * (g_btn_h + BTN_GAP);
-}
+static int display_h(void) { return ugfx_char_h() + 16; }
+static int expr_h(void)    { return ugfx_char_h() + 4; }
 
 static struct calc_state g_calc;
 static struct uui_button g_buttons[BUTTON_COUNT];
 static struct uui_button_group g_group;
 
-static void draw(struct ugfx_surface *s) {
+static void draw_display(struct ugfx_surface *s, const struct uui_custom *c) {
     uint32_t bg = UTHEME_PANEL_BG;
     uint32_t fg = UTHEME_TEXT;
     uint32_t display_bg = UTHEME_WHITE;
-
-    ugfx_fill(s, bg);
 
     // Expression-so-far ("12 +") while an operator is pending, right
     // aligned and muted -- secondary to the main display, exactly as in
@@ -145,20 +109,21 @@ static void draw(struct ugfx_surface *s) {
         expr[pos++] = g_calc.pending_op;
         expr[pos] = '\0';
 
-        int expr_x = s->w - MARGIN - 6 - ugfx_text_width(expr);
-        if (expr_x < MARGIN + 4) expr_x = MARGIN + 4;
-        ugfx_draw_string(s, expr_x, MARGIN, expr, expr_fg, bg);
+        int expr_x = c->x + c->w - 6 - ugfx_text_width(expr);
+        if (expr_x < c->x + 4) expr_x = c->x + 4;
+        ugfx_draw_string(s, expr_x, c->y, expr, expr_fg, bg);
     }
 
-    // Display: right-aligned, like a real calculator.
-    int display_y = MARGIN + g_expr_h + EXPR_GAP;
-    ugfx_fill_rect(s, MARGIN, display_y, s->w - 2 * MARGIN, g_display_h, display_bg);
-    int text_x = s->w - MARGIN - 6 - ugfx_text_width(g_calc.display);
-    if (text_x < MARGIN + 4) text_x = MARGIN + 4;
-    int text_y = display_y + (g_display_h - ugfx_char_h()) / 2;
+    // Display: right-aligned, like a real calculator. Positioned
+    // against the rect the layout handed this item rather than against
+    // the window -- which is what lets it sit anywhere the layout puts
+    // it without this code knowing where that is.
+    int display_y = c->y + expr_h() + 2;
+    ugfx_fill_rect(s, c->x, display_y, c->w, display_h(), display_bg);
+    int text_x = c->x + c->w - 6 - ugfx_text_width(g_calc.display);
+    if (text_x < c->x + 4) text_x = c->x + 4;
+    int text_y = display_y + (display_h() - ugfx_char_h()) / 2;
     ugfx_draw_string(s, text_x, text_y, g_calc.display, fg, display_bg);
-
-    uui_button_group_draw(&g_group, s);
 }
 
 // Same passthrough the kernel version uses: the keyboard driver already
@@ -174,50 +139,39 @@ static char code_for_key(int key) {
     return 0;
 }
 
-static void present(uint32_t id) {
-    struct win_request_msg req;
-    clear_req(&req);
-    req.type = WIN_REQ_PRESENT;
-    req.window = id;
-    win_request(&req);
+// --- the layout ------------------------------------------------------
+//
+// A column of [display area, 4x5 button grid]. That is the whole of
+// this app's geometry now: the window is sized from this column's
+// natural size, the grid divides its room between twenty buttons, and
+// each button's natural size comes from its own label. Nothing here
+// says a coordinate.
+
+static struct uui_custom g_display;
+static struct uui_item g_grid_items[BUTTON_COUNT];
+static struct uui_layout g_grid;
+static struct uui_item g_root_items[2];
+static struct uui_layout g_root;
+
+static void on_key(struct uapp *a, int key, unsigned mods) {
+    (void)mods;
+    if (key == 0x1B) { uapp_quit(a, 0); return; } // Esc closes, as the desktop's apps do
+    char code = code_for_key(key);
+    if (code) { calc_input(&g_calc, code); uapp_redraw(a); }
+}
+
+static void on_action(struct uapp *a, int code) {
+    calc_input(&g_calc, (char)code);
+    uapp_redraw(a);
+}
+
+static void on_open(struct uapp *a) {
+    (void)a;
+    calc_reset(&g_calc);
 }
 
 int main(void) {
-    struct win_request_msg req;
-
-    // The font has to arrive before the layout can be computed -- every
-    // metric is derived from the glyph size. But WIN_REQ_FONT needs a
-    // session, and a window is what proves there is one, so the window
-    // is created first at a provisional size and resized... except a
-    // client cannot resize itself yet (Milestone 41). So instead: ask
-    // for the font FIRST via a throwaway create is not possible either.
-    //
-    // Resolved the simple way: create the window at the size implied by
-    // the font, which means asking for the font before the window. The
-    // server allows that -- WIN_REQ_FONT needs a registered server, not
-    // a window (see win_server.c's map_font()).
-    if (!ugfx_font_init()) sys_exit(2);
-    metrics_init();
-
-    clear_req(&req);
-    req.type = WIN_REQ_CREATE;
-    req.a = content_w();
-    req.b = content_h();
-    req.c = 340;
-    req.d = 150;
-    if (win_request(&req) != 1) sys_exit(1);
-    uint32_t id = req.window;
-
-    clear_req(&req);
-    req.type = WIN_REQ_TITLE;
-    req.window = id;
-    const char *title = "Calculator";
-    int t = 0;
-    for (; title[t] && t < WIN_TITLE_LEN - 1; t++) req.text[t] = title[t];
-    req.text[t] = '\0';
-    win_request(&req);
-
-    calc_reset(&g_calc);
+    if (!ugfx_font_init()) return 2; // metrics are needed to build the layout
 
     uint32_t fg = UTHEME_TEXT;
     uint32_t btn_bg = UTHEME_BUTTON_BG;
@@ -225,58 +179,43 @@ int main(void) {
     for (int i = 0; i < BUTTON_COUNT; i++) {
         char c = BUTTONS[i].code;
         int is_op = (c == '+' || c == '-' || c == '*' || c == '/' || c == '%' || c == '=');
-        int bx, by, bw, bh;
-        button_rect(i, &bx, &by, &bw, &bh);
-        uui_button_init(&g_buttons[i], bx, by, bw, bh, BUTTONS[i].label,
+        // Geometry is 0 here on purpose: the layout assigns it, and a
+        // button's natural size comes from its own label.
+        uui_button_init(&g_buttons[i], 0, 0, 0, 0, BUTTONS[i].label,
                          is_op ? op_btn_bg : btn_bg, fg, (int)(unsigned char)c);
+        g_grid_items[i].ops = &uui_button_ops;
+        g_grid_items[i].widget = &g_buttons[i];
     }
     uui_button_group_init(&g_group, g_buttons, BUTTON_COUNT);
 
-    struct ugfx_surface s = ugfx_surface_for_window(id, content_w(), content_h());
-    draw(&s);
-    present(id);
+    g_grid.dir = UUI_GRID;
+    g_grid.cols = GRID_COLS;
+    g_grid.margin = 0; // the root column already insets everything
+    g_grid.items = g_grid_items;
+    g_grid.count = BUTTON_COUNT;
 
-    for (;;) {
-        struct win_event ev;
-        if (wait_event(&ev) != 1) break;
+    g_display.w = 0; // no width preference -- fill the column
+    g_display.h = expr_h() + 2 + display_h();
+    g_display.draw = draw_display;
 
-        int quit = 0, dirty = 0;
+    g_root_items[0].ops = &uui_custom_ops;
+    g_root_items[0].widget = &g_display;
+    g_root_items[1].ops = &uui_layout_ops;
+    g_root_items[1].widget = &g_grid;
 
-        if (ev.type == WIN_EV_CLOSE) {
-            quit = 1;
-        } else if (ev.type == WIN_EV_KEY) {
-            if (ev.a == 0x1B) {
-                quit = 1; // Esc closes, same as the desktop's own apps
-            } else {
-                char code = code_for_key(ev.a);
-                if (code) { calc_input(&g_calc, code); dirty = 1; }
-            }
-        } else if (ev.type == WIN_EV_MOUSE_DOWN) {
-            dirty |= uui_button_group_press(&g_group, ev.a, ev.b);
-        } else if (ev.type == WIN_EV_MOUSE_MOVE) {
-            // With a button held this re-hit-tests the press (so
-            // dragging off a button un-presses it); with none held it
-            // is just hover tracking. Both return "did anything
-            // change", so a mouse moving across the window only causes
-            // a repaint when it actually crosses a boundary.
-            if (ev.mods) dirty |= uui_button_group_press(&g_group, ev.a, ev.b);
-            else         dirty |= uui_button_group_hover(&g_group, ev.a, ev.b);
-        } else if (ev.type == WIN_EV_MOUSE_UP) {
-            // The commit point. A press dragged off its button was
-            // already cleared by the moves above, so this returns -1
-            // and correctly does nothing.
-            int code = uui_button_group_release(&g_group);
-            if (code >= 0) calc_input(&g_calc, (char)code);
-            dirty = 1;
-        }
+    g_root.dir = UUI_COLUMN;
+    g_root.items = g_root_items;
+    g_root.count = 2;
 
-        if (quit) break;
-        if (dirty) { draw(&s); present(id); }
-    }
-
-    clear_req(&req);
-    req.type = WIN_REQ_DESTROY;
-    req.window = id;
-    win_request(&req);
-    sys_exit(0);
+    struct uapp_desc desc = {
+        .title     = "Calculator",
+        .x         = 340,
+        .y         = 150,
+        .layout    = &g_root,
+        .buttons   = &g_group,
+        .on_open   = on_open,
+        .on_key    = on_key,
+        .on_action = on_action,
+    };
+    return uapp_run(&desc);
 }

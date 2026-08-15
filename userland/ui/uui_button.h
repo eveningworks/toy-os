@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "ui/uui_primitives.h"
+#include "ui/uui_widget.h"
 
 // Split out of the single uwidgets.c/.h this used to be, one file per
 // widget -- the same shape as apps/ui/, so a widget's kernel-side and
@@ -33,5 +34,8 @@ void uui_button_set_geometry(struct uui_button *b, int x, int y, int w, int h);
 // Preferred minimum: the label plus font-derived padding. See
 // uui_primitives.h.
 void uui_button_natural_size(const struct uui_button *b, int *out_w, int *out_h);
+
+// So a button can sit in a uui_layout. See ui/uui_widget.h.
+extern const struct uui_widget_ops uui_button_ops;
 
 #endif

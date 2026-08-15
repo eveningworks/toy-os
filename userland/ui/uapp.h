@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "ui/ugfx.h"
 #include "ui/uui_button_group.h"
+#include "ui/uui_layout.h"
 
 // uapp -- Toykit's application layer: describe your app, supply
 // callbacks, and let the library own the window handshake and the event
@@ -63,11 +64,23 @@ struct uapp_draw {
 struct uapp_desc {
     const char *title;
 
-    // Initial CONTENT size. Either a fixed pair, or -- preferred, and
-    // the same reasoning as the kernel's gui_app::default_size() -- a
-    // callback that derives it from the font, so a window is sized for
-    // the font it opens under. The callback wins if both are given, and
-    // it runs AFTER the font is available.
+    // The content, laid out. With this set the library sizes the window
+    // from the layout's natural size, re-runs the layout whenever the
+    // window's size is known, and draws it -- so an app with nothing
+    // custom to paint needs no on_size and no on_draw at all.
+    //
+    // The library clears the window to the theme background, draws the
+    // layout, and only then calls on_draw -- so app-specific painting
+    // goes on top of the widgets rather than under them, and an app
+    // never has to remember to clear.
+    struct uui_layout *layout;
+
+    // Initial CONTENT size, for an app not using a layout. Either a
+    // fixed pair, or -- preferred, and the same reasoning as the
+    // kernel's gui_app::default_size() -- a callback that derives it
+    // from the font, so a window is sized for the font it opens under.
+    // Precedence is on_size, then layout, then w/h; all three run AFTER
+    // the font is available.
     int w, h;
     void (*on_size)(int *w, int *h);
 

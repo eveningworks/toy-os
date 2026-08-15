@@ -46,6 +46,18 @@ static void present(struct uapp *a) {
 static void flush(struct uapp *a) {
     if (!a->dirty) return;
     a->dirty = 0;
+    // With a layout: CLEAR, then draw it, then let the app paint on
+    // top. The clear is the library's job because it is every app's
+    // first line otherwise -- and getting it wrong is silent: an app
+    // that clears in its own on_draw paints over the layout that was
+    // just drawn, and the window comes up empty with no error anywhere.
+    // (Written that way first. The test suite reported three failures
+    // that all looked like "clicks do nothing"; a screenshot showed an
+    // empty window and explained all three at once.)
+    if (a->desc->layout) {
+        ugfx_fill(&a->surface, UTHEME_PANEL_BG);
+        uui_layout_draw(&a->surface, a->desc->layout);
+    }
     if (a->desc->on_draw) {
         struct uapp_draw d = { &a->surface, UTHEME_TEXT, UTHEME_PANEL_BG };
         a->desc->on_draw(a, &d);
@@ -151,9 +163,14 @@ int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     // see its comment on why it cannot create-then-resize.)
     if (!ugfx_font_init()) return 0;
 
+    // Precedence: an explicit on_size wins, then the layout's natural
+    // size, then a fixed w/h. The layout case is the one that makes
+    // "the window is exactly big enough for its content" free rather
+    // than a third copy of the same arithmetic in every app.
     a->w = desc->w;
     a->h = desc->h;
-    if (desc->on_size) desc->on_size(&a->w, &a->h);
+    if (desc->on_size)     desc->on_size(&a->w, &a->h);
+    else if (desc->layout) uui_layout_natural_size(desc->layout, &a->w, &a->h);
     if (a->w <= 0 || a->h <= 0) return 0;
 
     struct win_request_msg req;
@@ -170,6 +187,11 @@ int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
 
     if (desc->title) uapp_set_title(a, desc->title);
     a->surface = ugfx_surface_for_window(a->window, a->w, a->h);
+
+    // Now that the content size is settled, place everything in it.
+    // Re-run rather than trusting the natural-size pass: the window may
+    // have been created at a different size than was asked for.
+    if (desc->layout) uui_layout_run(desc->layout, 0, 0, a->w, a->h);
 
     if (desc->on_open) desc->on_open(a);
     flush(a); // the first frame, from the dirty flag set above

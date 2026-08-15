@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "ui/ugfx.h"
 #include "ui/uui_primitives.h"
+#include "ui/uui_widget.h"
 
 
 // Split out of the single uwidgets.c/.h this used to be, one file per
@@ -17,15 +18,14 @@
 // is how a listbox next to a dropdown became unreachable from the
 // keyboard in the kernel version.
 
-struct uui_focus_ops {
-    int  (*key)(void *w, int key);
-    int  (*hit)(const void *w, int cx, int cy);
-    void (*set_focused)(void *w, int focused);
-};
-
+// Focus uses uui_widget_ops -- the SAME table a widget exports for
+// layout, not a second one. A widget declaring itself twice is a widget
+// whose two declarations can drift, and `hit` is the obvious casualty:
+// a layout and a focus ring both want it and they must agree. See
+// ui/uui_widget.h.
 struct uui_focusable {
     void *widget;
-    const struct uui_focus_ops *ops;
+    const struct uui_widget_ops *ops;
 };
 
 struct uui_focus {

@@ -795,11 +795,16 @@ warning about. All test tools passed unchanged. The draw-context
 helpers were cut for having no callers; `on_resize`/`on_focus`/hints
 wait for stages 2-3.
 
-**Stage 1c -- layout.** Containers, the two-pass draw, auto-sized
-windows, the default `on_draw`. **Calculator is the proof**: a 5×4 grid
-with a display area above it is a real layout, and if `calculator.c`
-does not come out shorter and clearer, the layer is not earning its
-place and should be reconsidered rather than shipped.
+**Stage 1c -- layout. DONE.** Containers (column/row/grid), nesting, a
+custom item for an app's own drawing, auto-sized windows, and the
+library clearing + drawing the layout before `on_draw`. Calculator was
+the proof and passed it: 282 -> 230 lines, every coordinate gone
+(`button_rect`, `metrics_init`, `content_w`, `content_h` and their four
+spacing constants), its `on_draw` gone entirely, and
+`calculator_client_test.py` passing unedited. `uui_focus_ops` was
+folded into one `uui_widget_ops`. The two-pass overlay draw is NOT
+built -- no layout contains a dropdown yet, and it is internal to
+`uui_layout_draw()` when one does.
 
 **Stage 2 -- behaviour becomes protocol state.** `WIN_REQ_HINTS`;
 `wm_find_resize_zone()` and friends read the window rather than

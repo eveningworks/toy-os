@@ -20,3 +20,27 @@ void uui_button_natural_size(const struct uui_button *b, int *out_w, int *out_h)
 void uui_button_set_geometry(struct uui_button *b, int x, int y, int w, int h) {
     b->x = x; b->y = y; b->w = w; b->h = h;
 }
+
+// --- as a layout child ------------------------------------------------
+//
+// No `draw` slot: a button is drawn by its GROUP (uui_button_group),
+// which is what knows the pressed/hovered state to draw it in. The
+// layout places buttons; the group paints them. Two owners of two
+// different things, rather than one struct pretending to be both.
+
+static void btn_natural(const void *w, int *out_w, int *out_h) {
+    uui_button_natural_size((const struct uui_button *)w, out_w, out_h);
+}
+static void btn_geometry(void *w, int x, int y, int width, int height) {
+    uui_button_set_geometry((struct uui_button *)w, x, y, width, height);
+}
+static int btn_hit(const void *w, int cx, int cy) {
+    const struct uui_button *b = (const struct uui_button *)w;
+    return uui_hit(b->x, b->y, b->w, b->h, cx, cy);
+}
+
+const struct uui_widget_ops uui_button_ops = {
+    .natural_size = btn_natural,
+    .set_geometry = btn_geometry,
+    .hit          = btn_hit,
+};

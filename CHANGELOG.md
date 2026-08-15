@@ -246,6 +246,56 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   thumb cannot be in two places), and commit-on-release.
 
 ### Added
+- **Layout: apps stop doing coordinate arithmetic.** Stage 1c of
+  `docs/uapp-design.md`. `uui_layout` places widgets in a column, row or
+  grid; containers nest; `uapp` sizes the window from the layout's
+  natural size, runs it, clears the window and draws it.
+
+  **Calculator is the proof, and it lost every coordinate it had.**
+  `button_rect()`, `metrics_init()`, `content_w()`, `content_h()` and
+  the four spacing constants they needed are gone, and so is its
+  `on_draw` -- the app now declares "a column of [display area, 4x5
+  grid]" and says nothing about where anything is. 282 -> 230 lines,
+  with `calculator_client_test.py` passing **unedited**.
+
+  Three decisions behind the shape:
+
+  **One `uui_widget_ops`, not two.** A widget exports a single table --
+  `natural_size`, `set_geometry`, `draw`, `hit`, plus the focus slots --
+  and `uui_focus_ops` is gone, folded into it. The widget audit warned
+  that a widget declaring itself twice can drift, and `hit` was the
+  obvious casualty: layout and focus both want it and they must agree.
+  Cheap to do now because ring-3 focus has no callers yet.
+
+  **Containers nest**, so a layout is itself a widget. That is what lets
+  Calculator be a column containing a grid, and it is the same shape
+  Notepad and Terminal have (a content area plus a control strip), so
+  the next ports get it free.
+
+  **A custom item** (`uui_custom`) lets an app's own drawing take part
+  in a layout -- Calculator's display area is the first one. An app
+  should not have to choose between using the layout and drawing
+  something the toolkit has no widget for.
+
+  Margins and gaps are font-derived, so a laid-out window reflows with
+  `fontsize` rather than only looking right at one size.
+
+  Not built: the second `draw_overlay` pass a dropdown's popup needs
+  (z-order is call order in immediate mode). No layout contains a
+  dropdown yet, and the change is internal to `uui_layout_draw()` when
+  one does -- which is the point of the layer.
+
+  **A bug worth recording, because the failure was silent.** The first
+  version had `uapp` draw the layout and then call `on_draw`, and
+  Calculator cleared its background in `on_draw` -- painting over the
+  widgets that had just been drawn. The window came up completely
+  empty with no error anywhere, and the test suite reported three
+  failures that all read as "clicks do nothing". A screenshot explained
+  all three in one look. The clear is the library's job now: it happens
+  before the layout is drawn, so an app cannot get this wrong, and
+  Calculator's `on_draw` disappeared entirely as a result.
+
+### Added
 - **`uapp` -- Toykit's application layer.** Describe the app, supply
   callbacks, and the library owns the window handshake and the event
   loop. Stage 1b of `docs/uapp-design.md`.
