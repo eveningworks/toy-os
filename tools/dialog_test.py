@@ -34,6 +34,7 @@ The buttons are located by scanning for THEME_BUTTON_BG rather than by
 hardcoded offsets, because the dialog sizes itself to its message and any
 reword would move them.
 """
+import argparse
 import sys, os, tempfile, time
 sys.path.insert(0, "tools")
 from qmp_test import QMPSession
@@ -47,7 +48,10 @@ from PIL import Image
 # stale PNGs had been committed once and were silently re-committed
 # whenever someone ran the tool before staging. Pass a directory as
 # argv[1] to keep them somewhere.
-OUT = sys.argv[1] if len(sys.argv) > 1 else tempfile.gettempdir()
+# Screenshot scratch dir. Was sys.argv[1], which collided with the
+# flags added below -- gui_regress passes --sock first, so OUT
+# would have become the literal string "--sock".
+OUT = tempfile.gettempdir()
 fails = []
 
 
@@ -62,9 +66,24 @@ def check(name, ok, detail=""):
 
 
 def main():
-    qmp = QMPSession(port=4445)
-    qmp.send_text("gui"); qmp.send_key("ret"); time.sleep(2.0)
-    dbg = DebugConsole(".vm.serial")
+    global OUT
+    # The same --sock/--qmp-port every other tool takes. Without them
+    # this could only ever run against VM slot 0, so gui_regress -- which
+    # hands each tool its own slot -- could not include it: it connected
+    # to slot 0's socket, found nothing there, and timed out in six
+    # seconds looking like a dialog bug.
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--sock", default=".vm.serial")
+    ap.add_argument("--qmp-port", type=int, default=4445)
+    ap.add_argument("--in-gui", action="store_true")
+    ap.add_argument("--tmp", default=OUT)
+    args = ap.parse_args()
+    OUT = args.tmp
+
+    qmp = QMPSession(port=args.qmp_port)
+    if not args.in_gui:
+        qmp.send_text("gui"); qmp.send_key("ret"); time.sleep(2.0)
+    dbg = DebugConsole(args.sock)
 
     st = dbg.json("gui taskbar --json")["start"]
     dbg.send(f"gui click {st['cx']} {st['cy']}")
@@ -89,36 +108,28 @@ def main():
     a = os.path.abspath(f"{OUT}/dlg-rest.png")
     qmp.screenshot(a)
 
-    # Find the two buttons by scanning the button row for the button
-    # background colour, rather than guessing offsets: the dialog sizes
-    # itself to its message, so hardcoding would break on a reword.
+    # ASK the WM where the buttons are (`gui dialog --json`), rather than
+    # scanning the button row for THEME_BUTTON_BG.
+    #
+    # The colour scan worked and was still wrong in the way this repo
+    # keeps paying for: it assumed the dialog's palette AND that both
+    # buttons sit on one row of a known width band. Both assumptions were
+    # true only for a Yes/No dialog -- the force-quit dialog's "Force
+    # Quit"/"Wait" are wider and differently spaced, so a tool written
+    # this way measures one dialog and silently cannot measure another.
+    info = dbg.json("gui dialog --json")
+    btns = info.get("buttons", [])
+    check("the WM reports both dialog buttons", len(btns) == 2, str(info))
+    if len(btns) != 2:
+        return 1
+
     img = Image.open(a).convert("RGB")
-    btn_bg = (225, 225, 230)  # THEME_BUTTON_BG
-    row = None
-    for yy in range(cy, cy + 90):
-        xs = [xx for xx in range(cx - 200, cx + 200) if img.getpixel((xx, yy)) == btn_bg]
-        if len(xs) > 40:
-            row, spans = yy, xs
-            break
-    if row is None:
-        print("  FAIL  could not locate the button row by colour")
-        return 1
+    runs = [(b["x"], b["x"] + b["w"] - 1) for b in btns]
+    row = btns[0]["cy"]
+    print(f"  buttons: {[(b['label'], b['cx'], b['cy']) for b in btns]}")
 
-    # Split the matched x's into two runs -- Yes and No.
-    runs = []
-    start = spans[0]
-    for i in range(1, len(spans)):
-        if spans[i] != spans[i - 1] + 1:
-            runs.append((start, spans[i - 1]))
-            start = spans[i]
-    runs.append((start, spans[-1]))
-    print(f"  button row y={row}, runs={runs}")
-    check("found exactly two buttons", len(runs) == 2, str(runs))
-    if len(runs) != 2:
-        return 1
-
-    yes_c = ((runs[0][0] + runs[0][1]) // 2, row)
-    no_c = ((runs[1][0] + runs[1][1]) // 2, row)
+    yes_c = (btns[0]["cx"], btns[0]["cy"])
+    no_c = (btns[1]["cx"], btns[1]["cy"])
 
     # Hover Yes.
     print('  hover at', dbg.warp_cursor(qmp, *yes_c))

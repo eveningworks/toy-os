@@ -96,6 +96,25 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   fires. Their value is entirely in being paired with the hung case.
 
 ### Fixed
+- **`gui_regress.py` did not actually run every GUI tool, and one of the
+  two missing ones could not have run.** `dialog_test.py` and
+  `sched_gui_test.py` were never in its list while CLAUDE.md described
+  the suite as running all of them -- and `dialog_test.py` had no
+  argument parsing at all, hardcoding VM slot 0's serial socket and QMP
+  port, so under the suite's per-tool slots it connected to the wrong
+  VM and timed out in six seconds looking like a dialog bug. It takes
+  `--sock`/`--qmp-port`/`--in-gui`/`--tmp` like every other tool now
+  (its screenshot directory was `sys.argv[1]`, which those flags would
+  have collided with), and both are in the suite: thirteen tools, 175
+  checks.
+
+  `dialog_test.py` also stopped finding the buttons by scanning a row
+  for `THEME_BUTTON_BG` and asks `gui dialog --json` instead. The scan
+  worked, but only for a Yes/No dialog -- it assumed both buttons sat on
+  one row inside a known width band, which the wider "Force Quit"/"Wait"
+  pair breaks. A tool that silently measures one dialog and cannot
+  measure another is the same failure mode as every other re-derived
+  geometry in this repo.
 - **A Start-menu-launched app leaked its scheduler slot, and the desktop
   silently stopped launching anything after four.** `MAX_PROCS` is 4, a
   process stays `SCHED_ZOMBIE` until somebody polls it, and nothing

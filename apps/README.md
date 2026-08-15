@@ -524,10 +524,18 @@ exists:
   processes in `userland/`, indistinguishable from the kernel-space
   windows beside them -- which is why the Task Manager labels every row
   `[r0]` or `[r3]`.
-- Ring 3 has a drawing runtime and the widget toolkit: `userland/ui/ugfx.c`
-  (surfaces, text, the desktop font mapped read-only), `uui.c` /
-  `uwidgets.c` / `utext.c` (the `apps/ui/` widgets, ported), and
-  `uui_canvas` for shapes.
+- Ring 3 has a drawing runtime and the widget toolkit, **Toykit**:
+  `userland/ui/ugfx.c` (surfaces, text, the desktop font mapped
+  read-only), `utext.c` (the wrapped editable buffer), `uapp.c` (the
+  app layer -- describe your app, the library owns the handshake and the
+  loop) and one file per widget, `uui_*.c`, mirroring `apps/ui/`'s
+  layout so a widget's two versions sit at matching paths. (It was
+  `uui.c` + a grab-bag called `uwidgets.c` until that split; neither
+  file exists now.)
+  Two widgets have no kernel-side twin and were written here first:
+  `uui_menubar` (nested pull-down menus) and `uui_statusbar`. Ring-3
+  windows also answer a liveness ping, which is what lets the WM tell a
+  wedged client from a busy one -- see `docs/decisions.md`.
 
 So the honest current division is: `apps/` holds the window manager,
 the desktop and the kernel-space apps; `userland/` holds the ring-3

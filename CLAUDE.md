@@ -1150,13 +1150,16 @@ repeated manual steps to be worth automating:
 - **`check_layout.py`** -- see the `docs/` section: verifies the built
   image's directories against `docs/filesystem-layout.md`. Runs in
   `preflight.sh` and CI.
-- **`dialog_test.py`** -- verifies the confirm dialog's Yes/No buttons
-  by PIXEL VALUE: hover moves the hovered button and leaves its
-  neighbour alone, a press dragged off doesn't commit, No closes it.
-  Two traps it encodes: hover needs the REAL cursor parked (use
+- **`dialog_test.py`** -- verifies the confirm dialog's buttons by
+  PIXEL VALUE: hover moves the hovered button and leaves its neighbour
+  alone, a press dragged off doesn't commit, No closes it. Three traps
+  it encodes: hover needs the REAL cursor parked (use
   `DebugConsole.warp_cursor()` -- `gui move` holds for one WM iteration
   only, and `QMPSession.goto()` is open-loop and undershoots a large
-  jump), and don't sample the pixel under the cursor sprite.
+  jump); don't sample the pixel under the cursor sprite; and take the
+  button rects from `gui dialog --json`, not by scanning a row for
+  THEME_BUTTON_BG, which only ever worked for a Yes/No dialog and
+  cannot measure the wider "Force Quit"/"Wait" one.
 - **`uidemo_test.py`** -- drives UI Demo's widgets and asserts on its
   log (27 checks: click selection, cancel paths, keyboard navigation,
   Tab/Shift-Tab focus cycling, Space activating a focused button,
@@ -1279,7 +1282,7 @@ repeated manual steps to be worth automating:
   which is worth reading before trusting them.
 - **`gui_regress.py`** -- runs every GUI test tool, each against
   its own freshly-copied disk image and its own VM, and prints one
-  pass/fail table (~2.5 minutes, 164 checks across eleven tools). This is the standard check
+  pass/fail table (~2.5 minutes, 175 checks across thirteen tools). This is the standard check
   after touching `apps/ui/`, `userland/`, or anything the WM draws.
   `-k NAME` for a subset, `--logs DIR` to keep each tool's full output,
   `--list` to see what's in it. The per-tool fresh image and fresh VM
