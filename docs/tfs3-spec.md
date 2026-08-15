@@ -69,6 +69,10 @@ group_count = (volume_blocks - group0_start) / 32768   (floor; trailing
 group g = blocks [group0_start + g*32768, group0_start + (g+1)*32768)
 ```
 
+`tools/tfs3_writer.py format --fs-version {1,2}` writes either layout
+-- v2 by default, v1 so that the layout the kernel still mounts stays
+producible and therefore testable (`tools/tfs3_v1_test.py`).
+
 A reformat must erase the OTHER version's backup superblock sectors,
 for the same reason the wipefs rule exists between filesystems: a
 stale backup at a position the new layout never writes will claim the

@@ -128,13 +128,17 @@ def align4(n: int) -> int:
 
 # ---- on-disk structures -------------------------------------------------
 
-def pack_superblock(total_blocks, bpg, ipg, gc, flags=0):
-    body = struct.pack("<4sBBHIIIII", MAGIC, VERSION, flags, 0,
-                       total_blocks, bpg, ipg, gc, GEOMETRY[VERSION]["group0"])
-    # The version's own layout, written down: validated on read, never
-    # believed on its own (the constants above are the authority).
-    body += struct.pack("<III4x", GEOMETRY[VERSION]["jdata"],
-                        GEOMETRY[VERSION]["jslots"], GEOMETRY[VERSION]["gdt"])
+def pack_superblock(total_blocks, bpg, ipg, gc, flags=0, version=None):
+    version = VERSION if version is None else version
+    body = struct.pack("<4sBBHIIIII", MAGIC, version, flags, 0,
+                       total_blocks, bpg, ipg, gc, GEOMETRY[version]["group0"])
+    if version >= 2:
+        # The version's own layout, written down: validated on read,
+        # never believed on its own (the constants are the authority).
+        body += struct.pack("<III4x", GEOMETRY[version]["jdata"],
+                            GEOMETRY[version]["jslots"], GEOMETRY[version]["gdt"])
+    else:
+        body += b"\x00" * 16
     assert len(body) == 44
     return body + struct.pack("<I", fnv1a(body))
 
@@ -508,9 +512,17 @@ def cmd_format(args):
             raise SystemExit(f"{args.disk}: already a valid TFS3 v{old['version']} "
                              "image -- pass --force to reformat it")
 
-    # parse_superblock() above may have switched the module to an older
-    # image's geometry; a fresh filesystem is always the newest version.
-    set_geometry(VERSION)
+    # parse_superblock() above may have switched the module to some
+    # other image's geometry. A fresh filesystem is the newest version
+    # unless --fs-version says otherwise -- which exists so the OLDER
+    # layout stays reachable: the kernel still mounts v1, and a format
+    # nothing can produce is a code path nothing can test. Same rule as
+    # `ata nodma` making the PIO fallback reachable on purpose.
+    fs_version = getattr(args, "fs_version", VERSION)
+    if fs_version not in GEOMETRY:
+        raise SystemExit(f"unknown format version {fs_version} "
+                         f"(known: {sorted(GEOMETRY)})")
+    set_geometry(fs_version)
 
     total_blocks = size // BLOCK
     gc = (total_blocks - GROUP0_START) // BLOCKS_PER_GROUP
@@ -549,7 +561,7 @@ def cmd_format(args):
         # writes, so leaving them means a future reader whose primary
         # is damaged can mount a corpse with the wrong geometry.
         for ver, geo in GEOMETRY.items():
-            if ver == VERSION or total_blocks <= geo["group0"]:
+            if ver == fs_version or total_blocks <= geo["group0"]:
                 continue
             old_gc = (total_blocks - geo["group0"]) // BLOCKS_PER_GROUP
             for g in backup_groups(old_gc):
@@ -559,9 +571,10 @@ def cmd_format(args):
             f.seek(blk * BLOCK)
             f.write(data)
 
-        sb = pack_superblock(total_blocks, BLOCKS_PER_GROUP, ipg, gc)
+        sb = pack_superblock(total_blocks, BLOCKS_PER_GROUP, ipg, gc,
+                             version=fs_version)
         wblk(SB_BLOCK, sb + b"\x00" * (BLOCK - len(sb)))
-        jh = pack_journal_header_empty()
+        jh = pack_journal_header_empty(fs_version)
         wblk(JOURNAL_HEADER_BLOCK, jh + b"\x00" * (BLOCK - len(jh)))
         for i in range(JOURNAL_SLOTS):
             wblk(JOURNAL_DATA_BLOCK + i, b"\x00" * BLOCK)
@@ -646,7 +659,7 @@ def cmd_format(args):
                 wblk(tail - GDT_BLOCKS + i, bytes(gdt[i * BLOCK:(i + 1) * BLOCK]))
             wblk(tail, sb + b"\x00" * (BLOCK - len(sb)))
 
-    print(f"formatted {args.disk} as TFS3 v{VERSION}: {total_blocks} blocks, {gc} groups, "
+    print(f"formatted {args.disk} as TFS3 v{fs_version}: {total_blocks} blocks, {gc} groups, "
           f"{ipg} inodes/group, backups in groups {backup_groups(gc)}")
 
 
@@ -1007,6 +1020,11 @@ def main():
     p.add_argument("--bytes-per-inode", type=int, default=DEFAULT_BYTES_PER_INODE)
     p.add_argument("--force", action="store_true")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--fs-version", type=int, default=VERSION, metavar="N",
+                   help="on-disk format version to write (1 = the four-slot "
+                        "journal, 2 = the 32-slot one, default). v1 exists so "
+                        "the kernel's still-supported older layout stays "
+                        "testable -- see tools/tfs3_v1_test.py")
     p.set_defaults(fn=cmd_format)
 
     p = sub.add_parser("info"); p.add_argument("disk"); p.set_defaults(fn=cmd_info)

@@ -64,6 +64,31 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   the banner says Alt+F4 now.
 
 ### Added
+- **`tools/tfs3_v1_test.py`, and `format --fs-version` to make it
+  possible.** Shipping TFS3 v2 left v1 support in the worst state a
+  feature can be in: still relied upon (the kernel mounts v1 on
+  purpose, because a probe answering "not mine" would hand the image to
+  the blank-disk policy, which formats it) but no longer PRODUCIBLE --
+  once `format` wrote v2, nothing in the repo could make a v1 image, so
+  the path could not be tested at all. During this work it was verified
+  by hand-preserving the old `disk.img` before `make clean-disk`, which
+  is not a test.
+
+  `tfs3_writer.py format --fs-version 1` writes the old layout, and the
+  new tool boots one: 8 checks covering mount (v1, four journal slots),
+  a host-written file read back in the OS, a file rename, a same-parent
+  directory rename, and the load-bearing pair -- a cross-parent
+  directory move REFUSED with the message naming the fix, and that
+  refusal having changed nothing. That pair is the only end-to-end view
+  of the credit reservation there is. Same rule as `ata nodma` keeping
+  the PIO path reachable: a fallback nothing can reach is a guess.
+
+  Two of its own checks were wrong first, both worth knowing: it used
+  `ls`, which is a real `/bin/ls` ELF that a freshly formatted image
+  doesn't have, so the directory checks were measuring seeding rather
+  than renaming; and it read the FIRST `cat` of a file rather than the
+  one after the truncate, which would have passed whether truncate did
+  anything or not.
 - **`fs_rename()` and `fs_truncate()`, on both backends, with `mv` and
   `truncate` in the shell.** Until now there was no way to rename a
   file in toy-os at all -- not from the shell, not from any app -- and

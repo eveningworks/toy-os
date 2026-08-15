@@ -160,6 +160,16 @@ technical conventions below:
   scrolling, in order to test scrolling, proves nothing. The general
   form is this file's existing rule: ask what a broken version would
   still pass.
+- **A positive control can turn nothing red because the test's DATA
+  never reached the code under test.** The truncate tests wrote 16 KB,
+  which fits TFS3's twelve DIRECT pointers, so disabling the
+  indirect-table handling outright changed no result -- the tests were
+  green, thorough-looking, and blind to that whole path. The general
+  form: when a control fires nothing, suspect the fixture before the
+  harness, and ask what input size/shape actually reaches the branch.
+  This is the same family as the three GUI ways below, and the fix was
+  the same -- a case whose input crosses the boundary (20 blocks
+  truncated to 15, straddling a pointer table).
 - **Verify GUI changes by reading PIXEL VALUES, not by looking at the
   screenshot** (`tools/pixel_probe.py`). A hover state that moved the
   background by two units out of 255 looked perfectly plausible in a
@@ -438,6 +448,26 @@ technical conventions below:
   than a review catch). See `kernel/include/README.md`, including where
   a new header starts life (`kernel/`, moving to `api/` only when an app
   genuinely needs it).
+- **A new TFS3 operation must COUNT ITS JOURNAL CREDITS, and the count
+  is the design.** `txn_begin(n)` reserves `n` distinct metadata blocks
+  up front (jbd2's discipline in miniature) and refuses before anything
+  changes if the volume's journal can't hold them; `txn_stage()` past
+  the reservation fails rather than tearing. Count the worst case, not
+  the common one -- rename needs five for a cross-parent DIRECTORY move
+  (both dirent blocks, the child's `..`, both parents' link counts) and
+  three or four for everything else, which is why v1 images (four
+  slots) refuse exactly that one operation and nothing else. Two rules
+  around it: the reservation is a MAX, so dedup via `txn_stage()`
+  returning the same image is free; and an insert that may GROW a
+  directory has to be staged FIRST, because the grow commits its own
+  transaction and can only do that while nothing else is staged.
+- **Shrinking a file, or anything else that stops referencing a block,
+  commits the pointer change BEFORE freeing the bit.** A crash between
+  costs a leak (fsck reclaims); the other order hands a live file's
+  blocks to the next allocation. That forces a commit into the middle
+  of truncation, which is why both backends keep the straddling pointer
+  tables' original images in memory across it -- see
+  `docs/decisions.md`'s truncation entry before touching either.
 - **`/etc` on the persistent filesystem is the config-file convention**
   (`kernel_main()` creates it right after `fs_init()`, before anything
   that might read a config file runs). Don't hand-roll a parser for a
@@ -1431,6 +1461,11 @@ repeated manual steps to be worth automating:
   tfs2_writer's). Spec: `docs/tfs3-spec.md`; the kernel backend
   (`kernel/fs/tfs3.c`) is kept in lockstep and the same bar applies
   as tfs2_writer's: direct+single-indirect write scope only.
+  **`format --fs-version {1,2}`** picks the on-disk layout: v2 (32
+  journal slots, GDT at 42, group 0 at 58) is the default and what a
+  fresh image gets; v1 (four slots, GDT at 14, group 0 at 30) exists so
+  the layout the kernel still mounts stays PRODUCIBLE and therefore
+  testable -- `tools/tfs3_v1_test.py` is its caller.
   **TFS3 is the default format for FRESH images** (blank-disk policy
   in `vfs.c` and `seed_disk.py`); an existing TFS2 disk.img keeps
   mounting as TFS2 -- `make clean-disk && make iso` is the deliberate
@@ -1442,6 +1477,18 @@ repeated manual steps to be worth automating:
   `sync` to the matching writer, and formats a blank image with the
   default (tfs3) -- the same policy the kernel's blank-disk path
   applies at boot.
+- **`tfs3_v1_test.py`** -- boots a freshly built TFS3 **v1** image and
+  proves the kernel still mounts and uses the older on-disk layout (8
+  checks). Run it after touching TFS3's geometry, journal, or any
+  operation's credit count. It exists because v2 made v1 support
+  simultaneously untested AND untestable -- once `format` wrote v2,
+  nothing in the repo could produce a v1 image at all, so
+  `tfs3_writer.py format --fs-version 1` was added alongside it. Same
+  rule as `ata nodma` keeping the PIO path reachable: a fallback
+  nothing can reach is a guess. Its load-bearing check is that a
+  cross-parent DIRECTORY move is refused there (v1's four journal slots
+  cannot hold the five-block transaction) and that the refusal changed
+  NOTHING -- the only end-to-end view of the credit reservation.
 - **`fs_switch_test.py`** -- boots a COPY of disk.img and proves the
   multi-backend story end-to-end: probe mounts the image's own
   format, `fsformat` live-switches both ways (wipefs rule included),
