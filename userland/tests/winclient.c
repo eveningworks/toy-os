@@ -24,6 +24,7 @@
 // helpers this file used to define for itself. That was 55 of its 141
 // lines. What is left is what the program actually does.
 #include <stdint.h>
+#include "rt/sys.h"
 #include "ui/uapp.h"
 
 #define WIN_W 320
@@ -61,8 +62,33 @@ static void next_color(struct uapp *a) {
 
 static void on_key(struct uapp *a, int key, unsigned mods) {
     (void)mods;
-    if (key == 0x1B || key == 'q') uapp_quit(a, 0); // Esc or q
+    if (key == 'q') uapp_quit(a, 0); // Esc no longer closes -- Alt+F4 does
     else next_color(a);
+}
+
+// REFUSES the first two close requests and accepts the third.
+//
+// This is the on_close veto's only caller in the tree, and it is here
+// on purpose: uapp has always documented that returning 0 refuses a
+// close, and nothing exercised it, so "an app can decline to be closed"
+// was an untested claim. A diagnostic in userland/tests/ is exactly the
+// right place for it -- exercising a protocol edge case is what this
+// program is for.
+//
+// Two refusals rather than one, because there are exactly three ways a
+// user closes a window -- the context menu's Close, the title bar's X,
+// and Alt+F4 -- and all three must ASK. Refusing twice lets one test
+// walk all three in order and prove each of them both asks and is
+// refusable. Right-click > Close did neither, until wm_request_close()
+// existed: it tore the window down on the spot.
+static int g_close_requests;
+
+static int on_close(struct uapp *a) {
+    (void)a;
+    g_close_requests++;
+    sys_eprint(g_close_requests <= 2 ? "winclient: close refused\n"
+                                      : "winclient: close accepted\n");
+    return g_close_requests > 2;
 }
 
 static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
@@ -89,6 +115,7 @@ int main(void) {
         .on_draw = on_draw,
         .on_key  = on_key,
         .on_press = on_press,
+        .on_close = on_close,
     };
     return uapp_run(&desc);
 }

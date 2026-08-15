@@ -62,4 +62,17 @@ void context_menu_draw(int mx, int my);
 // returns 0 if it wasn't open at all.
 int context_menu_handle_click(int mx, int my);
 
+// The open menu's geometry, for the debug console (`gui ctxmenu`) and
+// therefore for tests. Returns the row count, or 0 when nothing is
+// open; the out-params are the menu's rect and its row height, all
+// taken from the SAME statics drawing and hit-testing use, so a test
+// cannot be told a different position from the one a click would land
+// on. `context_menu_row_label(i)` names row i.
+//
+// Exists because right-click > Close had no way to be driven from a
+// test, which is how it went on tearing ring-3 windows down without
+// their handshake while the X button beside it did the right thing.
+int context_menu_geometry(int *x, int *y, int *w, int *item_h);
+const char *context_menu_row_label(int index);
+
 #endif

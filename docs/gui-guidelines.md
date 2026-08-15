@@ -242,6 +242,32 @@ Alt is an ESC prefix** (`api/keyboard.h`): Alt-F arrives as ESC then
 'f', which cannot be told from the Esc that closes the menu. `KEY_F10`
 focuses the bar instead -- Windows' own second binding.
 
+## Closing a window: Esc doesn't, Alt+F4 does
+
+**Esc is app-local and closes nothing.** It cancels a dialog, closes a
+menu, clears a selection. It used to quit six apps, which is not what
+Esc does on any desktop and which put unsaved work one stray press away
+once Esc became the menu-close key too.
+
+**Alt+F4 closes the focused window, and the window manager handles it**
+-- it never reaches the app, exactly as on Windows (routed through
+`DefWindowProc` to `WM_SYSCOMMAND`/`SC_CLOSE`) and KDE (a KWin global
+shortcut). An app that could swallow the shortcut would defeat its
+purpose.
+
+**What the app still decides is whether it closes.** All three routes --
+the title bar's X, the context menu's Close, and Alt+F4 -- go through
+one `wm_request_close()`, which ASKS a ring-3 client with
+`WIN_EV_CLOSE`; returning 0 from `uapp_desc.on_close` refuses. Do your
+cleanup there and return 1, or refuse and stay open.
+
+Two things this rule is worth stating for. A window operation must not
+have one route that asks and another that seizes: the context menu's
+Close used to call `close_window()` straight, so right-clicking closed
+a client that had explicitly declined. And when you add a fourth route,
+route it through the same function rather than repeating the client
+check -- that check being repeated is what let the third one drift.
+
 ## Status bars: panes, not a string
 
 `uui_statusbar` carries a MESSAGE that stretches and INDICATORS that do

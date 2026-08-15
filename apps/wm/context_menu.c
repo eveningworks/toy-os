@@ -43,6 +43,20 @@ void context_menu_open_at(int x, int y, const struct context_menu_item *items, i
     redraw_pending = 1;
 }
 
+int context_menu_geometry(int *x, int *y, int *w, int *item_h) {
+    if (!context_menu_open) return 0;
+    if (x) *x = g_x;
+    if (y) *y = g_y;
+    if (w) *w = g_w;
+    if (item_h) *item_h = g_item_h;
+    return g_count;
+}
+
+const char *context_menu_row_label(int index) {
+    if (!context_menu_open || index < 0 || index >= g_count) return 0;
+    return g_items[index].label;
+}
+
 void context_menu_close(void) {
     context_menu_open = 0;
     redraw_pending = 1;

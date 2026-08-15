@@ -227,6 +227,25 @@ class DebugConsole:
     def menu(self):
         return self.json("gui menu --json")
 
+    def ctxmenu(self):
+        """The open right-click menu's geometry and rows, or open=False.
+
+        Same shape as menu(). Use ctxmenu_row(label) to get a row's
+        centre rather than computing one from item_h -- a derived row
+        index is exactly what docs/gui-guidelines.md says not to do.
+        """
+        return self.json("gui ctxmenu --json")
+
+    def ctxmenu_row(self, label):
+        """(x, cy) of the context-menu row with this label, or None."""
+        m = self.ctxmenu()
+        if not m.get("open"):
+            return None
+        for r in m.get("rows", []):
+            if r.get("label") == label:
+                return (m["x"] + m["w"] // 2, r["cy"])
+        return None
+
     def taskbar(self):
         return self.json("gui taskbar --json")
 
@@ -311,6 +330,13 @@ class DebugConsole:
             return []
         self.settle()
         return self.events()
+
+    def rclick(self, x, y, settle=True):
+        """Right-click -- what opens a context menu. See ctxmenu()."""
+        self.send(f"gui rclick {x} {y}")
+        if settle:
+            self.settle()
+        return []
 
     def drag(self, x0, y0, x1, y1, settle=True):
         self.send(f"gui drag {x0} {y0} {x1} {y1}")

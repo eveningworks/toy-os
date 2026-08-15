@@ -174,7 +174,15 @@ def run(dbg, qmp, tmp, shot_dir, res):
     res.check("it survives an external command and a failure",
               dbg.window(TITLE) is not None)
 
+    # Esc belongs to the shell's line editor now, not to closing the
+    # window -- see docs/decisions.md. Alt+F4 closes, via the WM.
     key(dbg, "0x1b")  # Esc
+    dbg.settle()
+    time.sleep(0.5)
+    res.check("Esc does NOT close it", dbg.window(TITLE) is not None,
+              "Esc must reach the shell, not the window")
+
+    dbg.send("gui key 0xa5 alt")
     dbg.settle()
     deadline = time.time() + SPAWN_TIMEOUT_S
     gone = False
@@ -182,7 +190,7 @@ def run(dbg, qmp, tmp, shot_dir, res):
         if dbg.window(TITLE) is None:
             gone = True
             break
-    res.check("Esc closes it", gone)
+    res.check("Alt+F4 closes it", gone)
 
 
 def main():

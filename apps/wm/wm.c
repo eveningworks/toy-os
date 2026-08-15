@@ -305,6 +305,20 @@ void open_app(const struct gui_app *app) {
     klog_write("\n");
 }
 
+// See wm_internal.h. The reasoning lives in wm_input.c's X-button
+// comment, which this was extracted from -- a client's window is the
+// CLIENT's to close, because it may have unsaved state and because the
+// process would otherwise go on drawing into a buffer that is no longer
+// on screen.
+void wm_request_close(int idx) {
+    if (idx < 0 || idx >= window_count) return;
+    if (wm_client_is_client_window(&windows[idx])) {
+        wm_client_send_close(&windows[idx]);
+        return;
+    }
+    close_window(idx); // shifts windows[] -- no caller may touch idx again
+}
+
 void close_window(int idx) {
     // Refuse to close a window with a write in flight -- pending_write's
     // handle is polled by index (pending_write_win), and the callback it
@@ -699,7 +713,27 @@ void wm_run(void) {
                 for (int i = window_count - 1; i >= 0; i--) {
                     if (windows[i].state != WIN_MINIMIZED) { f = i; break; }
                 }
-                if (f >= 0 && key != -1 && !file_picker_open && wm_client_is_client_window(&windows[f])) {
+
+                // Alt+F4 closes the focused window, and is handled HERE
+                // rather than delivered to the app -- a window-manager
+                // shortcut, exactly as it is in Windows (routed through
+                // DefWindowProc to WM_SYSCOMMAND/SC_CLOSE) and in KDE
+                // (a KWin global shortcut). The app still decides what
+                // happens, because this asks through the same
+                // wm_request_close() the X button uses and a client may
+                // refuse it; what the app does NOT get is the chance to
+                // silently swallow the keystroke, which is the whole
+                // point of the shortcut existing.
+                //
+                // Matched on the modifier bit rather than a dedicated
+                // KEY_ALT_F4 code: nothing is folded for a function key
+                // the way Ctrl/Alt are folded into a letter, so mods are
+                // usable here, and this generalises to any future
+                // Alt+F<n> without a new code each time.
+                if (key == KEY_F4 && (key_mods & KEY_MOD_ALT) && f >= 0 && !file_picker_open) {
+                    wm_request_close(f); // may shift windows[] -- f is dead after this
+                    redraw_pending = 1;
+                } else if (f >= 0 && key != -1 && !file_picker_open && wm_client_is_client_window(&windows[f])) {
                     // Focused window belongs to a ring-3 client: the
                     // key becomes a protocol message rather than a
                     // callback. Same focus rule either way -- who gets

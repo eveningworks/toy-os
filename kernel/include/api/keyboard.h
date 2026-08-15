@@ -46,6 +46,15 @@
 // ambiguity, and is the binding both of those desktops offer anyway.
 #define KEY_F10               0xA4
 
+// F4 -- exists for Alt+F4, which CLOSES the focused window. That is a
+// window-manager shortcut (apps/wm/wm.c intercepts it before routing
+// keys to the focused window), the way it is in Windows and KDE, not a
+// key an app handles. Matched as KEY_F4 plus KEY_MOD_ALT rather than
+// given a combined KEY_ALT_F4 code the way the Shift+arrow family was:
+// nothing is folded for a function key, so the modifier bits are usable
+// here, and this generalises to a future Alt+F<n> for free.
+#define KEY_F4                0xA5
+
 // ---- Ctrl and Alt ----
 //
 // These do NOT get KEY_* codes of their own. They're encoded the way a

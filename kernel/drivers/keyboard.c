@@ -91,13 +91,21 @@ static int ring_pop(uint32_t *out) {
 #define SC_END         0x4F
 #define SC_DELETE      0x53
 
-// F2/F3, unlike the keys above, aren't 0xE0-prefixed extended scancodes
-// -- they're plain scancodes like any letter key, just two no layout
-// table maps to anything (scancode 0x3C/0x3D are unmapped -- 0, same
-// "nothing happens" as any other unmapped slot). Checked explicitly,
-// before the layout translation, same as the shift keys below them.
+// The function keys, unlike the keys above, aren't 0xE0-prefixed
+// extended scancodes -- they're plain scancodes like any letter key,
+// just ones no layout table maps to anything (0x3C-0x3E and 0x44 are
+// unmapped -- 0, same "nothing happens" as any other unmapped slot).
+// Checked explicitly, before the layout translation, same as the shift
+// keys below them.
+//
+// Only the four with callers exist: F2/F3 (the file manager), F10 (focus
+// the menu bar) and F4 (Alt+F4 closes a window). Pushing them here and
+// not through the layout translation is also what keeps Alt+F4 whole --
+// it returns before the Alt-prefixes-with-ESC path below, so the key
+// arrives once, with KEY_MOD_ALT set, rather than as ESC + something.
 #define SC_F2 0x3C
 #define SC_F3 0x3D
+#define SC_F4  0x3E
 #define SC_F10 0x44
 
 // Processes one byte already read from the 8042 by i8042_poll(). This
@@ -157,6 +165,7 @@ void keyboard_feed_byte(uint8_t sc) {
 
     if (sc == SC_F2) { ring_push(KEY_F2); return; }
     if (sc == SC_F3) { ring_push(KEY_F3); return; }
+    if (sc == SC_F4) { ring_push(KEY_F4); return; }
     if (sc == SC_F10) { ring_push(KEY_F10); return; }
 
     if (sc >= 128) return;

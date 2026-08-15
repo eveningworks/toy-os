@@ -113,7 +113,7 @@ static void bump(struct uapp *a, int to) {
 
 static void on_key(struct uapp *a, int key, unsigned mods) {
     (void)mods;
-    if (key == 0x1B || key == 'q') uapp_quit(a, 0);
+    if (key == 'q') uapp_quit(a, 0); // Esc no longer closes -- Alt+F4 does
     else if (key == ' ' || key == '\n' || key == '\r') bump(a, g_count + 1);
     else if (key == 'r') bump(a, 0);
 }

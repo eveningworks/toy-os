@@ -149,9 +149,57 @@ def run(dbg, qmp, tmp, shot_dir, res):
     # client answers with WIN_REQ_DESTROY. So a successful close proves
     # the client was alive and processed the event -- the WM never
     # removes the window itself.
+    #
+    # winclient REFUSES the first request and accepts the second (its
+    # on_close), which is what makes the request half of that provable
+    # rather than merely asserted: a WM that tore the window down itself
+    # would pass "it closed" and fail "it survived being asked".
     close_x = win["x"] + win["w"] - 14
     close_y = win["y"] + 14
+    # There are exactly THREE ways a user closes a window, and all three
+    # must ask the same way. winclient refuses the first two requests, so
+    # this walks them in order and each refusal is a real assertion
+    # rather than the absence of one.
+    #
+    # 1. The context menu's Close. This is the one that was broken: it
+    #    called close_window() directly, so a ring-3 window was destroyed
+    #    without WIN_EV_CLOSE ever being sent and the client's refusal
+    #    was moot. Nothing could catch it, because nothing could open a
+    #    context menu -- hence `gui rclick` and `gui ctxmenu`.
+    dbg.rclick(win["x"] + win["w"] // 2, win["y"] + 8)
+    dbg.settle()
+    row = dbg.ctxmenu_row("Close")
+    res.check("right-clicking a window offers a Close row", row is not None,
+              f"context menu: {dbg.ctxmenu()}")
+    if row:
+        dbg.click(*row)
+        dbg.settle()
+        time.sleep(0.6)
+        res.check("the context menu's Close ASKS the client, and can be refused",
+                  dbg.window(CLIENT_TITLE) is not None,
+                  "the window vanished -- Close bypassed the handshake")
+
+    # 2. The title bar's X.
     dbg.send(f"gui click {close_x} {close_y}")
+    dbg.settle()
+    time.sleep(0.6)
+    res.check("the X button can be refused too",
+              dbg.window(CLIENT_TITLE) is not None,
+              "the window vanished even though the client declined")
+
+    # 3. Alt+F4 -- a WM shortcut, not a key the app sees. The client has
+    #    now been asked three times and accepts.
+    #
+    # The guard is not ceremony: without it this check passes when the
+    # window was ALREADY gone, which is exactly what happens if one of
+    # the routes above destroyed it instead of asking. Running the
+    # positive control (restore the context menu's close_window() call)
+    # showed this check going green for that reason -- a test reporting
+    # success for a close that had already happened without it.
+    still_there = dbg.window(CLIENT_TITLE) is not None
+    res.check("the window is still open for Alt+F4 to close",
+              still_there, "an earlier route destroyed it instead of asking")
+    dbg.send("gui key 0xa5 alt")
     dbg.settle()
 
     deadline = time.time() + SPAWN_TIMEOUT_S
@@ -160,7 +208,7 @@ def run(dbg, qmp, tmp, shot_dir, res):
         if dbg.window(CLIENT_TITLE) is None:
             gone = True
             break
-    res.check("the close button is a handshake the client completes", gone,
+    res.check("Alt+F4 asks the same way, and the client completes the handshake", gone,
               "the window was still listed after the close request")
 
     # And the desktop must be intact afterwards -- a client teardown

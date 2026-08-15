@@ -224,7 +224,13 @@ void wm_handle_left_click(int mx, int my) {
 // between open and select.
 static int g_ctx_window_target;
 
-static void ctx_close_window(void *ctx) { close_window(*(int *)ctx); }
+// Goes through wm_request_close(), not close_window(). It used to call
+// the latter, which for a ring-3 client destroyed its window without
+// ever sending WIN_EV_CLOSE -- so right-click > Close skipped the
+// handshake the X button had always honoured, and an app refusing to
+// close was closed anyway. A WM feature that treats one window kind
+// correctly and the other not; see wm_internal.h.
+static void ctx_close_window(void *ctx) { wm_request_close(*(int *)ctx); }
 
 static void ctx_minimize_window(void *ctx) {
     int i = *(int *)ctx;
@@ -513,7 +519,7 @@ void wm_update_title_btn_press(int mx, int my, uint8_t buttons) {
             // with the context menu's Maximize/Restore item.
             wm_toggle_maximize(idx);
             bring_to_front(idx);
-        } else if (wm_client_is_client_window(&windows[idx])) {
+        } else {
             // A client's window is the CLIENT's to close: it may have
             // unsaved state, and the WM tearing it down behind the
             // process's back would leave that process drawing into a
@@ -527,9 +533,13 @@ void wm_update_title_btn_press(int mx, int my, uint8_t buttons) {
             // unresponsive client needs a "not responding" timeout and
             // a way to kill the process, neither of which exists yet --
             // see docs/roadmap.md's Milestone 41.
-            wm_client_send_close(&windows[idx]);
-        } else {
-            close_window(idx); // shifts windows[] -- nothing below may touch windows[idx] again
+            //
+            // That whole decision now lives in wm_request_close() rather
+            // than here, because the X button was not the only way a
+            // user closes a window and the other ways were not honouring
+            // it. May shift windows[] -- nothing below may touch
+            // windows[idx] again.
+            wm_request_close(idx);
         }
     }
 

@@ -109,7 +109,7 @@ static const struct uui_menu_item file_items[] = {
     UUI_MENU("Save",         CMD_SAVE,    "Ctrl-S"),
     UUI_MENU("Save As...",   CMD_SAVE_AS, 0),
     UUI_MENU_SEP,
-    UUI_MENU("Exit",         CMD_EXIT,    "Esc"),
+    UUI_MENU("Exit",         CMD_EXIT,    "Alt+F4"),
 };
 
 static const struct uui_menu_item edit_items[] = {
@@ -840,7 +840,13 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
         return;
     }
 
-    if (key == 0x1B) { uapp_quit(a, 0); return; }
+    // Esc is NOT a quit key. It closes a menu or cancels a dialog --
+    // both handled above -- and otherwise does nothing. Closing the
+    // window is Alt+F4, which never reaches here: the WM takes it and
+    // asks through the same handshake the X button uses, so this app's
+    // on_close (uapp's default, accept) still decides. That matters
+    // most here of all the clients: Esc was one stray press away from
+    // destroying unsaved text, and it became the menu-close key too.
     editor_key(key);
     uapp_redraw(a);
 }
@@ -981,7 +987,7 @@ static void on_open_cb(struct uapp *a) {
     (void)a;
     utext_init(&g_text);
     g_path[0] = '\0';
-    set_status("F10 for the menu -- Ctrl-O open, Ctrl-S save, Esc quit");
+    set_status("F10 for the menu -- Ctrl-O open, Ctrl-S save, Alt+F4 quit");
 
     for (int i = 0; i < RECENT_MAX; i++) scopy(g_recent[i], "(empty)", PATH_MAX_LEN);
 

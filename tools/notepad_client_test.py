@@ -349,7 +349,23 @@ def run(dbg, qmp, tmp, shot_dir, res):
     # Clean up the file so a re-run starts from the same state.
     dbg.send(f"sh rm /{SAVE_NAME}")
 
+    # Esc must NOT close it. This check is the point of the whole
+    # change: Esc used to quit, which put unsaved text one stray
+    # keypress away from gone -- and once Esc also became the
+    # menu-close key, that keypress got much easier to hit by accident.
     key(dbg, ESC)
+    dbg.settle()
+    time.sleep(0.6)
+    res.check("Esc does NOT close the editor",
+              find_window(dbg, SAVE_NAME) is not None
+              or find_window(dbg, "untitled") is not None,
+              "Esc closed the window -- it must be app-local now")
+
+    # Alt+F4 does. It never reaches the app: the WM takes it and asks
+    # through the same handshake the X button uses, so a successful
+    # close still proves the client processed WIN_EV_CLOSE and answered
+    # with WIN_REQ_DESTROY.
+    dbg.send("gui key 0xa5 alt")
     dbg.settle()
     deadline = time.time() + SPAWN_TIMEOUT_S
     gone = False
@@ -357,7 +373,7 @@ def run(dbg, qmp, tmp, shot_dir, res):
         if find_window(dbg, SAVE_NAME) is None and find_window(dbg, "untitled") is None:
             gone = True
             break
-    res.check("Esc closes the editor", gone)
+    res.check("Alt+F4 closes the editor", gone)
 
 
 def main():

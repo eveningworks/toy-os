@@ -90,6 +90,7 @@ there when you add an entry, or the index quietly stops being one.
 - [Widgets are added once a second real caller needs them -- except the checkbox](#widgets-are-added-once-a-second-real-caller-needs-them----except-the-checkbox)
 - [A client's menus are clamped to its own window, and that is one rectangle away from not being](#a-clients-menus-are-clamped-to-its-own-window-and-that-is-one-rectangle-away-from-not-being)
 - [A menu bar opens on press, which is the one place the commit-on-release rule bends](#a-menu-bar-opens-on-press-which-is-the-one-place-the-commit-on-release-rule-bends)
+- [Esc doesn't close a window; Alt+F4 does, and it is a WM shortcut rather than an app key](#esc-doesnt-close-a-window-altf4-does-and-it-is-a-wm-shortcut-rather-than-an-app-key)
 - [Angles are measured in turns, not radians](#angles-are-measured-in-turns-not-radians)
 - [The geometry rasteriser draws through a callback, not into a framebuffer](#the-geometry-rasteriser-draws-through-a-callback-not-into-a-framebuffer)
 - [The canvas widget clips in the plot callback, not by trimming geometry](#the-canvas-widget-clips-in-the-plot-callback-not-by-trimming-geometry)
@@ -4140,3 +4141,57 @@ Worth knowing when testing it: that cancel path is the ONLY check in
 commits on press. Every other check presses and releases in the same
 place, so a commit-on-press build passes all of them. Confirmed by
 building exactly that and watching one check go red.
+
+## Esc doesn't close a window; Alt+F4 does, and it is a WM shortcut rather than an app key
+
+`apps/wm/wm.c`'s key loop and `wm_request_close()`; landed with the
+menu bar's follow-up, see `CHANGELOG.md`.
+
+Six ring-3 apps used to quit on Esc, which was always a papercut and
+became a real hazard once Esc was also the key that closes a menu: one
+stray press in Notepad with no menu open discarded unsaved text. Neither
+Windows nor KDE closes a window on Esc. It is now app-local everywhere --
+cancel a dialog, close a menu, clear a selection -- and closes nothing.
+
+**Alt+F4 is handled by the window manager, not delivered to the focused
+app.** That is what both desktops actually do: Windows routes it through
+`DefWindowProc` to `WM_SYSCOMMAND`/`SC_CLOSE`, and KDE's is a KWin
+global shortcut, so in neither case does the application see the
+keystroke. The alternative -- deliver the key and let each app call
+`uapp_quit()` -- was rejected for three reasons: every app would have to
+implement it or the shortcut would silently do nothing, each
+kernel-space app would need its own copy, and an app stuck in a bad
+state could never be closed from the keyboard, which is precisely the
+case the shortcut exists for.
+
+**The app still decides what happens**, because the WM ASKS rather than
+tears down: `wm_request_close()` sends `WIN_EV_CLOSE` to a client, and
+`uapp_desc.on_close` returning 0 refuses. Alt+F4 and the title bar's X
+are indistinguishable to an app -- exactly as they are on Windows, where
+both arrive as `WM_CLOSE` -- so no client needed editing to gain the
+shortcut, and none can tell the two apart in order to behave
+inconsistently between them. A `reason` field on the close event was
+considered and dropped: neither model desktop distinguishes these at the
+app level, and nothing in the tree wanted it.
+
+**Why all three closes share one function.** They did not, and the odd
+one out was broken: the context menu's Close called `close_window()`
+directly, destroying a ring-3 window without ever sending
+`WIN_EV_CLOSE`. It survived because no test could open a context menu.
+`gui rclick` and `gui ctxmenu` exist now for that reason, and
+`winclient` refuses its first two close requests so each route is
+measured rather than assumed.
+
+**Encoding**: `KEY_F4` + `KEY_MOD_ALT`, not a combined `KEY_ALT_F4`
+code. The Shift+arrow family got discrete codes because the terminal
+encoding genuinely cannot express them; a function key has no such
+problem -- nothing is folded, the modifier bits ride alongside it
+already, and matching on them generalises to any future Alt+F<n>. The
+driver returns on the function-key check before the Alt-prefixes-with-
+ESC path, so Alt+F4 arrives as one key with the modifier set rather than
+as ESC followed by something.
+
+**Still not solved: an app that ignores the request keeps its window.**
+That is the honest consequence of a polite handshake, and force-quitting
+needs a not-responding timeout plus a way to kill the process. See
+`docs/roadmap.md`, Milestone 41.

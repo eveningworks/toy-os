@@ -356,7 +356,7 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
 
 static void on_key(struct uapp *a, int key, unsigned mods) {
     (void)mods;
-    if (key == 0x1B || key == 'q') { uapp_quit(a, 0); return; }
+    if (key == 'q') { uapp_quit(a, 0); return; } // Esc no longer closes -- Alt+F4 does
     if (key == 'a' || key == 'A') {
         log_line(uui_checkbox_toggle(&g_aa_check)
                   ? "gfxdemo: aa on\n" : "gfxdemo: aa off\n");

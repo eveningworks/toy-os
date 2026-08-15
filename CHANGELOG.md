@@ -31,6 +31,65 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
 
 ## [Unreleased]
 
+### Changed
+- **Esc no longer closes an application window; Alt+F4 does, and an app
+  can refuse it.** Six apps quit on Esc -- Notepad, Calculator, Terminal,
+  Shapes and the two `/tests` diagnostics -- which put unsaved text one
+  stray keypress away from gone, and got materially worse the moment Esc
+  also became the menu-close key. Neither Windows nor KDE has ever closed
+  a window on Esc.
+
+  **Alt+F4 is a window-manager shortcut, not a key an app sees.** That is
+  how both model desktops do it: Windows routes it through
+  `DefWindowProc` to `WM_SYSCOMMAND`/`SC_CLOSE`, and KDE's is a KWin
+  global shortcut. `wm.c` intercepts it before routing keys to the
+  focused window, so a wedged or inattentive app cannot swallow it --
+  which is the situation the shortcut exists for. The app still decides
+  what HAPPENS, because the WM asks through the same handshake the X
+  button uses and a client may decline (`uapp_desc.on_close` returning
+  0). Alt+F4 and the X are indistinguishable to an app, exactly as
+  `WM_CLOSE` is on Windows, so every existing client got the shortcut
+  with no edit.
+
+  Matched as `KEY_F4` plus `KEY_MOD_ALT` rather than a combined
+  `KEY_ALT_F4` code the way the Shift+arrow family works: nothing is
+  folded for a function key, so the modifier bits are usable, and it
+  generalises to a future Alt+F*n* for free. The driver pushes F4 before
+  the Alt-prefixes-with-ESC path, so the key arrives once with the
+  modifier set rather than as ESC + something.
+
+### Fixed
+- **Right-click > Close destroyed a ring-3 window without asking the
+  process.** `ctx_close_window()` called `close_window()` directly, so
+  the context menu skipped the `WIN_EV_CLOSE` handshake the title bar's X
+  had always honoured -- a client with unsaved state got no say, and the
+  process went on drawing into a buffer that was no longer on screen.
+  The same shape as the maximize bug before it: a WM feature that handled
+  one window kind correctly and the other not, found by asking what a new
+  feature does to the *other* kind.
+
+  All three user-facing closes now go through one `wm_request_close()`
+  -- the X, the context menu, and Alt+F4 -- so a client's veto holds
+  whichever one the user reaches for. `close_window()` remains the
+  unconditional teardown for the WM's own use and for a client that has
+  agreed.
+
+  It had survived because nothing could reach it: no test could open a
+  context menu at all. So `gui rclick X Y` and `gui ctxmenu [--json]`
+  now exist (`apps/wm/wm_debug.c`), the latter reporting the open menu's
+  rows from the same statics drawing and hit-testing use --
+  `DebugConsole.ctxmenu_row("Close")` gives a row's centre instead of
+  deriving one. `userland/tests/winclient.c` refuses its first two close
+  requests, which turns "a client can decline" from a documented claim
+  into the thing three checks measure, one per route.
+
+  Verified with a positive control: restoring the direct
+  `close_window()` call reddens the context-menu check first. It also
+  showed the Alt+F4 check passing VACUOUSLY on an already-destroyed
+  window, so that check now asserts the window is still open before
+  pressing anything -- a test reporting success for a close that had
+  already happened without it.
+
 ### Added
 - **A menu bar and a status bar for ring-3 GUI apps, and Notepad rebuilt
   around them.** Asked for as "a simple interface an app can use to add

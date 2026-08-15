@@ -299,6 +299,38 @@ static void cmd_probe(int px, int py, int json) {
 
 // Start menu rows, as the kernel computes them -- the numbers
 // tools/gui_flow.py used to hardcode.
+// The open right-click menu's rows, in the same shape cmd_menu() reports
+// the Start menu's. Without this a test cannot reach a context-menu row
+// at all except by re-deriving its position, which this project's own
+// rules forbid -- and the one thing that most needed testing there was
+// the Close row, which used to skip a client's close handshake.
+static void cmd_ctxmenu(int json) {
+    int x = 0, y = 0, w = 0, ih = 0;
+    int rows = context_menu_geometry(&x, &y, &w, &ih);
+
+    if (json) {
+        klog_printf("{\"open\":%s,\"x\":%d,\"y\":%d,\"w\":%d,\"item_h\":%d,\"rows\":[",
+                     rows ? "true" : "false", x, y, w, ih);
+        for (int i = 0; i < rows; i++) {
+            klog_printf("%s{\"label\":\"%s\",\"y\":%d,\"cy\":%d}",
+                         i ? "," : "", context_menu_row_label(i),
+                         y + i * ih, y + i * ih + ih / 2);
+        }
+        klog_write("]}\r\n");
+        return;
+    }
+
+    if (!rows) { klog_write("context menu: closed\r\n"); return; }
+    klog_printf("context menu: open, x=%d y=%d w=%d item_h=%d rows=%d\r\n",
+                 x, y, w, ih, rows);
+    for (int i = 0; i < rows; i++) {
+        klog_write("  row "); col_int(i, 3);
+        klog_write("centre="); col_int(y + i * ih + ih / 2, 6);
+        klog_write(context_menu_row_label(i));
+        klog_write("\r\n");
+    }
+}
+
 static void cmd_menu(int json) {
     int mx, my, mw, item_h, total;
     start_menu_geometry(&mx, &my, &mw, &item_h, &total);
@@ -472,6 +504,20 @@ static int cmd_move(int x, int y) {
 // what makes press and release land on different frames -- a control
 // that arms on press and commits on release (every control in this GUI,
 // see docs/gui-guidelines.md) needs exactly that to behave normally.
+// The RIGHT button, which opens a context menu. Bit 0x2, matching
+// wm.c's own right_edge_down test -- the same press/press/release shape
+// cmd_click() uses for the left one, so the WM sees a real edge.
+//
+// Added because no test could open a context menu at all, which is how
+// its Close row went on tearing ring-3 windows down without their
+// handshake while the X button beside it asked politely.
+static int cmd_rclick(int x, int y) {
+    return inject_push(x, y, 0) &&
+           inject_push(x, y, 2) &&
+           inject_push(x, y, 2) &&
+           inject_push(x, y, 0);
+}
+
 static int cmd_click(int x, int y) {
     return inject_push(x, y, 0) &&
            inject_push(x, y, 1) &&
@@ -543,6 +589,8 @@ static void usage(void) {
     klog_write("  windows [--json]      open windows: rects, content rects, z-order, focus\r\n");
     klog_write("  probe X Y [--json]    what is at this point, and what would take the click\r\n");
     klog_write("  menu [--json]         start menu row geometry, as the kernel computes it\r\n");
+    klog_write("  ctxmenu [--json]      the open right-click menu's rows, same shape as `menu`\r\n");
+    klog_write("  rclick X Y            right-click, which is what opens a context menu\r\n");
     klog_write("  taskbar [--json]      start button + per-window button rects\r\n");
     klog_write("  state [--json]        overlays, cursor, armed state, damage rect\r\n");
     klog_write("  damage [verify on|off]  the damage rect; verify renders every frame\r\n");
@@ -569,6 +617,7 @@ int wm_debug_dispatch(char *line) {
     // so grab positional arguments BEFORE asking about the flag.
     if (k_strcmp(sub, "windows") == 0)      { cmd_windows(wants_json(p)); return 1; }
     if (k_strcmp(sub, "menu") == 0)         { cmd_menu(wants_json(p)); return 1; }
+    if (k_strcmp(sub, "ctxmenu") == 0)      { cmd_ctxmenu(wants_json(p)); return 1; }
     if (k_strcmp(sub, "taskbar") == 0)      { cmd_taskbar(wants_json(p)); return 1; }
     if (k_strcmp(sub, "state") == 0)        { cmd_state(wants_json(p)); return 1; }
 
@@ -635,6 +684,16 @@ int wm_debug_dispatch(char *line) {
             return 1;
         }
         cmd_close(idx);
+        return 1;
+    }
+
+    if (k_strcmp(sub, "rclick") == 0) {
+        int x, y;
+        if (!parse_int(next_tok(&p), &x) || !parse_int(next_tok(&p), &y)) {
+            klog_write("usage: gui rclick X Y\r\n");
+            return 1;
+        }
+        klog_write(cmd_rclick(x, y) ? "gui: queued rclick\r\n" : "gui: input queue full\r\n");
         return 1;
     }
 

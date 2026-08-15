@@ -195,6 +195,19 @@ void bring_to_front(int idx);
 void open_app(const struct gui_app *app);
 void close_window(int idx);
 
+// ASK a window to close, the way a user asking it to would: a ring-3
+// client gets WIN_EV_CLOSE and answers for itself, a kernel-space app is
+// closed directly. **Every user-facing close goes through here** -- the
+// title bar's X, the context menu's Close, and Alt+F4 -- so that a
+// client's veto (uapp's on_close) holds whichever one the user reached
+// for. It did not, before this existed: the context menu called
+// close_window() straight, which tore a client's window down behind the
+// process's back and skipped its handshake entirely.
+//
+// close_window() remains the unconditional teardown, for the WM's own
+// use and for a client that has agreed (WIN_REQ_DESTROY).
+void wm_request_close(int idx);
+
 // Last frame's damage rect, for wm_debug.c's `gui state`. w/h <= 0
 // means "no damage reported -- full-screen repaint".
 void wm_debug_damage(int *out_x, int *out_y, int *out_w, int *out_h);

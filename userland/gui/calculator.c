@@ -201,7 +201,9 @@ static struct uui_layout g_root;
 
 static void on_key(struct uapp *a, int key, unsigned mods) {
     (void)mods;
-    if (key == 0x1B) { uapp_quit(a, 0); return; } // Esc closes, as the desktop's apps do
+    // Esc deliberately does NOT close. Closing is Alt+F4 (a WM
+    // shortcut) or the title bar's X -- see docs/decisions.md. Esc is
+    // the app's own key, for cancelling whatever it has open.
     char code = code_for_key(key);
     if (code) { calc_input(&g_calc, code); uapp_redraw(a); }
 }

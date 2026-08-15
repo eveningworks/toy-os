@@ -108,7 +108,17 @@ technical conventions below:
   (2) **`on_click` fires on button-DOWN despite its name**, so a
   control that commits there can never be cancelled -- arm in
   `on_press`, act in `on_release`, which is what the title bar has
-  always done. (3) **`gfx_set_clip_rect()` with a non-positive w/h sets an EMPTY
+  always done. (The menu bar is the documented exception: a menu OPENS
+  on press, as it does on every real desktop, and its items still commit
+  on release.)
+  (2b) **Esc closes nothing; Alt+F4 closes a window, and the WM handles
+  it** -- it never reaches the app, the way it doesn't on Windows or in
+  KDE. All three user-facing closes (the X, the context menu's Close,
+  Alt+F4) go through one `wm_request_close()`, which ASKS a ring-3
+  client and can be refused from `uapp_desc.on_close`. Route a fourth
+  one through the same function rather than repeating the client check;
+  repeating it is exactly how the context menu drifted into seizing a
+  window instead of asking for it. (3) **`gfx_set_clip_rect()` with a non-positive w/h sets an EMPTY
   clip -- nothing draws -- and only `gfx_clear_clip_rect()` removes a
   clip**; conflating the two once handed an app's whole `on_draw()` an
   unclipped screen (the damage sweep's long-standing "20px"
@@ -722,11 +732,21 @@ family now (`apps/wm/wm_debug.c`), live while the desktop is up:
 gui windows [--json]     rects, content rects, z-order, focus
 gui probe X Y [--json]   which window/region is at a point, and what overlay would take the click
 gui menu | gui taskbar    row + button geometry, as the kernel computes it
+gui ctxmenu [--json]     the OPEN right-click menu's rows, same shape as `menu`
 gui state [--json]       overlays, cursor, armed drag/resize/press, damage rect
 gui damage [verify on|off]  the damage rect; verify catches missed damage
 gui open <App>           open a window directly -- no Start-menu clicking
-gui click X Y | gui drag X1 Y1 X2 Y2 | gui key <c>   synthetic input
+gui click X Y | gui rclick X Y | gui drag X1 Y1 X2 Y2 | gui key <c> [alt|ctrl|shift]
 ```
+
+`rclick`/`ctxmenu` are newer than the rest and exist for a specific
+reason: no test could open a context menu at all, which is how its
+Close row went on destroying ring-3 windows without their close
+handshake while the X button beside it asked politely. Use
+`DebugConsole.ctxmenu_row("Close")` rather than deriving a row from
+`item_h`. And note `gui key` takes modifier words -- `gui key 0xa5 alt`
+is Alt+F4, which is the only way to close a window from a test now that
+Esc doesn't.
 
 **`gui damage verify on` catches the WM's worst bug class.** The
 compositor only repaints declared damage, so anything that changes on

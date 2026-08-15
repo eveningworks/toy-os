@@ -165,7 +165,8 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
 
 static void on_key(struct uapp *a, int key, unsigned mods) {
     (void)mods;
-    if (key == 0x1B) { uapp_quit(a, 0); return; }
+    // Esc belongs to the shell's line editor, not to closing the
+    // window: Alt+F4 does that now. See docs/decisions.md.
 
     if (key == '\n' || key == '\r') {
         run_current_line(a);
