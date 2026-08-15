@@ -86,17 +86,12 @@
 #define BTN_COUNT  3
 #define CHK_SIZE   (gfx_char_h() - 2)
 
-// The checkbox reports a natural size (a w/h pair) rather than a bare
-// width now -- see apps/ui/ui_primitives.h. This demo only ever wants
-// the width, and asks for it in one place rather than at each of the
-// three call sites. Note the layout log below still reports CHK_SIZE as
-// the drawn height, not the natural one: what the tests click is what
-// is drawn.
-static int checkbox_w(const char *label) {
-    int w = 0;
-    widget_checkbox_natural_size(CHK_SIZE, label, &w, 0);
-    return w;
-}
+#define CHK_GAP 20
+
+// Gap between the two checkboxes, in pixels. The second one's x used
+// to be worked out at four separate call sites from the first's width;
+// now layout() positions both objects once and everything else reads
+// their stored geometry.
 
 // Row origins, top to bottom. Functions rather than constants because
 // each depends on the live font metrics.
@@ -157,7 +152,7 @@ struct uidemo_state {
     struct ui_textview view;   // scrollback + scrollbar + all its input handling
     struct ui_dropdown dropdown;
     struct ui_listbox list;
-    int checked[2];
+    struct ui_checkbox chk[2];
     int radio_sel;
     int hover_name;      // index into WIDGET_NAMES, or -1
     int hover_x, hover_y; // last hover point, for widgets whose hover is per-ROW rather than per-widget
@@ -245,10 +240,8 @@ static enum widget_id widget_at(int cx, int cy) {
     for (int i = 0; i < BTN_COUNT; i++) {
         if (ui_button_hit(&g_state.buttons[i], cx, cy)) return (enum widget_id)(W_BTN1 + i);
     }
-    int cy0 = row_checks();
-    if (widget_checkbox_hit(PAD, cy0, CHK_SIZE, "Alpha", cx, cy)) return W_CHK_ALPHA;
-    int beta_x = PAD + checkbox_w("Alpha") + 20;
-    if (widget_checkbox_hit(beta_x, cy0, CHK_SIZE, "Beta", cx, cy)) return W_CHK_BETA;
+    if (ui_checkbox_hit(&g_state.chk[0], cx, cy)) return W_CHK_ALPHA;
+    if (ui_checkbox_hit(&g_state.chk[1], cx, cy)) return W_CHK_BETA;
 
     if (ui_radio_list_hit(&g_state.radio, cx, cy) >= 0) return W_RADIO;
     if (ui_textbox_hit(&g_state.textbox, cx, cy)) return W_TEXTBOX;
@@ -274,7 +267,7 @@ static void log_layout(void) {
         { "btn1",      g_state.buttons[0].x, g_state.buttons[0].y,
                        g_state.buttons[0].w, g_state.buttons[0].h },
         { "chk_alpha", PAD, row_checks(),
-                       checkbox_w("Alpha"), CHK_SIZE },
+                       g_state.chk[0].w, g_state.chk[0].h },
         // Read from the control rather than recomputed here -- which
         // is also a check: these used to be `2 * col_w` and
         // `2 * radio_row_h()` worked out at this call site, and they
@@ -322,6 +315,9 @@ static void layout(void) {
     // position -- it used to be told where it was on every draw and
     // every hit test, separately, which is exactly the arrangement that
     // lets the two disagree.
+    ui_checkbox_set_geometry(&g_state.chk[0], PAD, row_checks());
+    ui_checkbox_set_geometry(&g_state.chk[1],
+                              PAD + g_state.chk[0].w + CHK_GAP, row_checks());
     ui_radio_list_set_geometry(&g_state.radio, PAD, row_radio());
     ui_textbox_set_geometry(&g_state.textbox, PAD, row_textbox(), TBX_W, tbx_h());
     ui_dropdown_set_geometry(&g_state.dropdown, PAD, row_dropdown(), DD_W, dd_h());
@@ -335,6 +331,15 @@ void uidemo_open(struct window *win) {
                         THEME_BUTTON_BG, THEME_TEXT, i + 1);
     }
     ui_button_group_init(&g_state.group, g_state.buttons, BTN_COUNT);
+
+    // The two checkboxes are objects now (apps/ui/ui_checkbox.h): they
+    // hold their own geometry, checked state and hover, so layout()
+    // positions them and everything else reads them. Their x/y here are
+    // placeholders -- layout() runs before every draw and every event.
+    ui_checkbox_init(&g_state.chk[0], PAD, 0, CHK_SIZE, "Alpha",
+                      THEME_WINDOW_BG, THEME_TEXT);
+    ui_checkbox_init(&g_state.chk[1], PAD, 0, CHK_SIZE, "Beta",
+                      THEME_WINDOW_BG, THEME_TEXT);
 
     g_state.radio.options = RADIO_LABELS;
     g_state.radio.count = RADIO_COUNT;
@@ -377,7 +382,7 @@ void uidemo_open(struct window *win) {
         widget_scrollback_putc(&g_state.view.tb, '\n');
     }
 
-    g_state.checked[0] = g_state.checked[1] = 0;
+    g_state.chk[0].checked = g_state.chk[1].checked = 0;
     g_state.hover_name = W_NONE;
     g_state.armed = 0;
     // Tab order is array order -- see ui_focus.h on why that's the whole
@@ -405,14 +410,10 @@ void uidemo_draw(struct window *win) {
 
     ui_button_group_draw(&g_state.group, cx, cy);
 
-    int chk_y = cy + row_checks();
-    widget_checkbox_draw(cx + PAD, chk_y, CHK_SIZE, g_state.checked[0],
-                          g_state.hover_name == W_CHK_ALPHA, "Alpha",
-                          THEME_WINDOW_BG, THEME_TEXT);
-    int beta_x = cx + PAD + checkbox_w("Alpha") + 20;
-    widget_checkbox_draw(beta_x, chk_y, CHK_SIZE, g_state.checked[1],
-                          g_state.hover_name == W_CHK_BETA, "Beta",
-                          THEME_WINDOW_BG, THEME_TEXT);
+    g_state.chk[0].hovered = (g_state.hover_name == W_CHK_ALPHA);
+    g_state.chk[1].hovered = (g_state.hover_name == W_CHK_BETA);
+    ui_checkbox_draw(&g_state.chk[0], cx, cy);
+    ui_checkbox_draw(&g_state.chk[1], cx, cy);
 
     // The hovered ROW, not just "is the list hovered" -- widget_at()
     // reports the widget, so ask the list itself which row that is.
@@ -567,9 +568,9 @@ void uidemo_click(struct window *win, int cx, int cy) {
 
     if (w == W_CHK_ALPHA || w == W_CHK_BETA) {
         int idx = (w == W_CHK_ALPHA) ? 0 : 1;
-        g_state.checked[idx] = !g_state.checked[idx];
+        ui_checkbox_toggle(&g_state.chk[idx]);
         k_snprintf(msg, sizeof msg, "check %s %s",
-                   idx ? "beta" : "alpha", g_state.checked[idx] ? "on" : "off");
+                   idx ? "beta" : "alpha", g_state.chk[idx].checked ? "on" : "off");
         logline(msg);
         set_status(msg);
     } else if (w == W_RADIO) {

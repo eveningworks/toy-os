@@ -2241,6 +2241,21 @@ Measured on the 29 userland binaries: 171 KB smaller in total, Terminal
 references no toolkit symbol, so it pulls no member). See
 `CHANGELOG.md`'s "userland programs link one archive" entry.
 
+**A second trap, found when the first source file was deleted:** `ar
+rcs` UPDATES an archive rather than rebuilding it, so a member whose
+source has gone stays inside indefinitely. Splitting `uwidgets.c` into
+per-widget files left `uwidgets.o` in `libuapp.a` for three commits, and
+nothing failed -- a linker pulls the first member that satisfies a
+symbol and only errors when two ALREADY-pulled members collide, so the
+link kept working while being free to use the deleted file's code. It
+surfaced only when `ui_checkbox` became an object and the two versions
+of `uui_checkbox_draw` finally differed. The rule `rm -f $@` first, so
+the archive is a function of its declared objects rather than of every
+object that has ever existed. Note `make clean` hides this class of bug
+rather than revealing it: a full `preflight.sh` would have built a
+correct archive and said nothing, which is why `--skip-clean` runs are
+worth keeping in the loop.
+
 **The trap this exposed, which is general:** the Makefile tracks HEADER
 dependencies (`-MMD`/`-MP`), not compiler FLAGS. Adding
 `-ffunction-sections` to `USERLAND_CFLAGS` invalidated nothing, so the

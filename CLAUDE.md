@@ -199,7 +199,15 @@ technical conventions below:
   `userland/rt/link.ld` must match `.text.*` (function-sections put
   every function in its own section, and a script matching only
   `.text` links an empty program that faults at its entry point), and
-  the archive must come LAST on the link line. `sys_call()` is the raw escape
+  the archive must come LAST on the link line. And the archive rule
+  **deletes `libuapp.a` before rebuilding it**: `ar rcs` updates an
+  existing archive and never removes a member whose source file is
+  gone, so a deleted or renamed `.c` leaves its object inside forever.
+  That does not fail loudly -- a linker pulls the first member
+  satisfying a symbol and only errors when two members it already
+  pulled collide -- so the build quietly links the deleted file's code
+  until the two versions finally differ. It happened here: splitting
+  `uwidgets.c` left `uwidgets.o` in the archive for three commits. `sys_call()` is the raw escape
   hatch and is for the `/tests` diagnostics that poke the raw ABI on
   purpose, not for ordinary code. Two things to know before touching
   `crt0.asm`: the entry ABI is the STANDARD SysV stack layout (argc at

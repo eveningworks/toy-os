@@ -36,8 +36,11 @@
 static struct uui_canvas g_canvas;
 static struct uui_button g_buttons[3];
 static struct uui_button_group g_bar;
-static int g_aa = 1;            // anti-aliasing on
-static int g_checkbox_hover;
+// The anti-aliasing toggle IS the checkbox now: its `checked` field is
+// the single store, so the keyboard shortcut and the click cannot end up
+// disagreeing with what is drawn. `g_aa` and `g_checkbox_hover` were two
+// separate globals the widget had to be handed on every call.
+static struct uui_checkbox g_aa_check;
 static fx_t g_angle;            // in turns; wraps naturally
 static int g_speed = 3;         // angle steps per frame, in 1/1024 turns
 static int g_frames;
@@ -131,7 +134,7 @@ static void draw(struct ugfx_surface *s) {
 
     int cx = uui_canvas_cx(&g_canvas);
     int cy = uui_canvas_cy(&g_canvas);
-    enum geom_aa aa = g_aa ? GEOM_AA : GEOM_ALIASED;
+    enum geom_aa aa = g_aa_check.checked ? GEOM_AA : GEOM_ALIASED;
 
     // A few static rings, so there is something to judge the curve
     // rasteriser against while everything else moves.
@@ -180,8 +183,8 @@ static void draw(struct ugfx_surface *s) {
     // Controls.
     uui_button_group_draw(&g_bar, s);
 
-    uui_checkbox_draw(s, MARGIN, checkbox_y(), ugfx_char_h(), g_aa, g_checkbox_hover,
-                       "anti-aliased  (A)", UTHEME_PANEL_BG, UTHEME_TEXT);
+    uui_checkbox_set_geometry(&g_aa_check, MARGIN, checkbox_y());
+    uui_checkbox_draw(s, &g_aa_check);
 
     // Readout, right-aligned so it does not jump around as digits change.
     char info[48];
@@ -224,6 +227,14 @@ int main(void) {
     uui_button_init(&g_buttons[1], 0, 0, 0, 0, "Faster", bg, fg, BTN_FASTER);
     uui_button_init(&g_buttons[2], 0, 0, 0, 0, "Reset",  bg, fg, BTN_RESET);
     uui_button_group_init(&g_bar, g_buttons, 3);
+
+    // Anti-aliasing starts on, and the checkbox holds that fact -- see
+    // g_aa_check's declaration. Positioned here as well as in the draw
+    // so a click that somehow arrives before the first frame still hits
+    // a real rectangle rather than one at the origin.
+    uui_checkbox_init(&g_aa_check, MARGIN, checkbox_y(), ugfx_char_h(),
+                       "anti-aliased  (A)", UTHEME_PANEL_BG, UTHEME_TEXT);
+    g_aa_check.checked = 1;
     layout();
 
     struct ugfx_surface s = ugfx_surface_for_window(g_win, WIN_W, WIN_H);
@@ -251,16 +262,15 @@ int main(void) {
             if (ev.type == WIN_EV_KEY) {
                 if (ev.a == 0x1B || ev.a == 'q') { quit = 1; break; }
                 if (ev.a == 'a' || ev.a == 'A') {
-                    g_aa = !g_aa;
-                    log_line(g_aa ? "gfxdemo: aa on\n" : "gfxdemo: aa off\n");
+                    log_line(uui_checkbox_toggle(&g_aa_check)
+                              ? "gfxdemo: aa on\n" : "gfxdemo: aa off\n");
                 }
                 if (ev.a == '+' || ev.a == '=') { if (g_speed < 40) { g_speed++; log_speed(); } }
                 if (ev.a == '-') { if (g_speed > 0) { g_speed--; log_speed(); } }
             } else if (ev.type == WIN_EV_MOUSE_DOWN) {
-                if (uui_checkbox_hit(MARGIN, checkbox_y(), ugfx_char_h(),
-                                      "anti-aliased  (A)", ev.a, ev.b)) {
-                    g_aa = !g_aa;
-                    log_line(g_aa ? "gfxdemo: aa on\n" : "gfxdemo: aa off\n");
+                if (uui_checkbox_hit(&g_aa_check, ev.a, ev.b)) {
+                    log_line(uui_checkbox_toggle(&g_aa_check)
+                              ? "gfxdemo: aa on\n" : "gfxdemo: aa off\n");
                 } else {
                     uui_button_group_press(&g_bar, ev.a, ev.b);
                 }
@@ -268,8 +278,7 @@ int main(void) {
                 if (ev.mods) uui_button_group_press(&g_bar, ev.a, ev.b);
                 else {
                     uui_button_group_hover(&g_bar, ev.a, ev.b);
-                    g_checkbox_hover = uui_checkbox_hit(MARGIN, checkbox_y(), ugfx_char_h(),
-                                                         "anti-aliased  (A)", ev.a, ev.b);
+                    uui_checkbox_hover(&g_aa_check, ev.a, ev.b);
                 }
             } else if (ev.type == WIN_EV_MOUSE_UP) {
                 int code = uui_button_group_release(&g_bar);

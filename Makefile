@@ -343,8 +343,19 @@ LIBUAPP_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBUAPP_SRCS)) \
                $(BUILD)/userland/shared/knum.o
 LIBUAPP      = $(BUILD)/userland/libuapp.a
 
+# The `rm -f` is load-bearing: `ar rcs` UPDATES an existing archive,
+# adding and replacing members but never removing one whose source file
+# has gone. Splitting uwidgets.c into per-widget files left uwidgets.o
+# inside the archive, and it stayed there -- the link kept succeeding,
+# because a linker pulls the first member that satisfies a symbol and
+# only errors when two members it ALREADY pulled collide. So the build
+# was quietly free to link the deleted file's code instead of its
+# replacement, and said nothing until the two versions finally differed.
+# Building the archive from scratch each time makes it a function of
+# $(LIBUAPP_OBJS) rather than of every object that has ever existed.
 $(LIBUAPP): $(LIBUAPP_OBJS)
 	@mkdir -p $(dir $@)
+	rm -f $@
 	$(AR) rcs $@ $^
 
 # Kept as the escape hatch for an object that must be linked

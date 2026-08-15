@@ -54,6 +54,22 @@ enum scrollbar_zone {
 // Fills (x, y, w, h) with `track_bg`, then draws the proportionally-sized
 // thumb in `thumb_bg`. If `total_lines <= visible_rows` (nothing to
 // scroll), only the track is drawn.
+// **The scrollbar is deliberately NOT an object**, unlike every other
+// widget here. Its state -- how many lines there are, how many are
+// visible, where the view is scrolled to -- belongs to whatever it
+// scrolls: ui_listbox, ui_textview and the file picker each own that
+// already. Giving the scrollbar its own copy would be two sources of
+// truth for one fact, which is the bug class this file's shared
+// geometry helper exists to prevent. It is a rendering helper for other
+// widgets, not a layout child, so nothing ever places a bare one.
+//
+// That is what the `widget_` prefix means now, in what is otherwise a
+// tree of `ui_<widget>_*` objects: **a stateless helper that is not a
+// layout child.** widget_hit() is the other one. The prefix used to
+// mean "not converted yet"; ui_checkbox becoming an object spent the
+// last of that meaning, so it was worth restating as a rule rather than
+// leaving as an accident.
+
 // Preferred minimum: the strip's width, and no height preference -- a
 // scrollbar is exactly as tall as whatever it scrolls. See
 // ui_primitives.h. Still a free function; the struct comes when the

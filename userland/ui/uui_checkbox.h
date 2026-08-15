@@ -5,24 +5,42 @@
 #include "ui/ugfx.h"
 #include "ui/uui_primitives.h"
 
+// The ring-3 checkbox, an OBJECT -- it holds its own geometry, checked
+// state and hover, like uui_button/uui_listbox. It used to be three
+// free functions told (x, y, size, label, checked, hovered) on every
+// call, which left it nothing to keep and nowhere for a layout to
+// write. See apps/ui/ui_checkbox.h for the full note; this is a
+// faithful mirror of it.
 
-// Split out of the single uwidgets.c/.h this used to be, one file per
-// widget -- the same shape as apps/ui/, so a widget's kernel-side and
-// ring-3 versions live at matching paths. See ui/uui.h.
+struct uui_checkbox {
+    // Content-relative. w/h come from uui_checkbox_natural_size() via
+    // init/set_geometry, never from the caller: the clickable area IS
+    // the box plus the label, and a caller-supplied size could disagree
+    // with what is drawn.
+    int x, y, w, h;
 
-// --- checkbox ---------------------------------------------------------
+    int size;           // edge length of the box
+    const char *label;  // not owned; may be NULL
 
-// Width of the whole clickable area: box + gap + label.
-// Preferred minimum: the box, the gap and the label. See
-// uui_primitives.h.
-void uui_checkbox_natural_size(int size, const char *label, int *out_w, int *out_h);
+    int checked;        // the value
+    int hovered;        // OWNED -- driven by uui_checkbox_hover()
+    int disabled;
 
-void uui_checkbox_draw(struct ugfx_surface *s, int x, int y, int size,
-                        int checked, int hovered, const char *label,
-                        uint32_t bg, uint32_t fg);
+    uint32_t bg, fg;
+};
 
-// Hit-tests box AND label -- a highlight larger than its target is a
-// lie about where to click, and so is the reverse.
-int uui_checkbox_hit(int x, int y, int size, const char *label, int px, int py);
+void uui_checkbox_init(struct uui_checkbox *cb, int x, int y, int size,
+                        const char *label, uint32_t bg, uint32_t fg);
+void uui_checkbox_set_geometry(struct uui_checkbox *cb, int x, int y);
+void uui_checkbox_natural_size(const struct uui_checkbox *cb, int *out_w, int *out_h);
+void uui_checkbox_draw(struct ugfx_surface *s, const struct uui_checkbox *cb);
+int  uui_checkbox_hit(const struct uui_checkbox *cb, int cx, int cy);
+// 1 if `hovered` changed, so a caller knows to repaint.
+int  uui_checkbox_hover(struct uui_checkbox *cb, int cx, int cy);
+// Flips `checked`, returns the new value. Commits on CONTACT rather
+// than on release -- correct for a toggle, and the deliberate exception
+// to the press-then-commit rule (docs/gui-guidelines.md), since the
+// result is instantly visible and instantly reversible.
+int  uui_checkbox_toggle(struct uui_checkbox *cb);
 
 #endif

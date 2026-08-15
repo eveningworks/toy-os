@@ -1,5 +1,5 @@
-// field. Split out of uwidgets.c -- see ui/uui_field.h.
-#include "ui/uui_field.h"
+// field. Split out of uwidgets.c -- see ui/uui_textbox.h.
+#include "ui/uui_textbox.h"
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
 
 // Caret width in pixels -- a bar, not a block, so it sits between
@@ -7,17 +7,17 @@
 #define CARET_W 2
 
 // Inset around the text inside the box. Shared by the draw and by
-// uui_field_natural_size(), so the height reported and the height drawn
+// uui_textbox_natural_size(), so the height reported and the height drawn
 // cannot disagree.
-#define UUI_FIELD_PAD 4
+#define UUI_TEXTBOX_PAD 4
 
 // ---------------------------------------------------------------------
 // ---------------------------------------------------------------------
 
-void uui_field_init(struct uui_field *f, const char *initial) {
+void uui_textbox_init(struct uui_textbox *f, const char *initial) {
     int i = 0;
     if (initial) {
-        while (initial[i] && i < UUI_FIELD_MAX - 1) { f->buf[i] = initial[i]; i++; }
+        while (initial[i] && i < UUI_TEXTBOX_MAX - 1) { f->buf[i] = initial[i]; i++; }
     }
     f->buf[i] = '\0';
     f->len = i;
@@ -25,10 +25,10 @@ void uui_field_init(struct uui_field *f, const char *initial) {
     f->active = 0;
 }
 
-void uui_field_set_active(struct uui_field *f, int active) { f->active = active ? 1 : 0; }
+void uui_textbox_set_active(struct uui_textbox *f, int active) { f->active = active ? 1 : 0; }
 
-static void field_insert(struct uui_field *f, char c) {
-    if (f->len >= UUI_FIELD_MAX - 1) return;
+static void field_insert(struct uui_textbox *f, char c) {
+    if (f->len >= UUI_TEXTBOX_MAX - 1) return;
     for (int i = f->len; i > f->cursor; i--) f->buf[i] = f->buf[i - 1];
     f->buf[f->cursor] = c;
     f->len++;
@@ -36,20 +36,20 @@ static void field_insert(struct uui_field *f, char c) {
     f->buf[f->len] = '\0';
 }
 
-static void field_delete(struct uui_field *f) {
+static void field_delete(struct uui_textbox *f) {
     if (f->cursor >= f->len) return;
     for (int i = f->cursor; i < f->len - 1; i++) f->buf[i] = f->buf[i + 1];
     f->len--;
     f->buf[f->len] = '\0';
 }
 
-void uui_field_natural_size(const struct uui_field *f, int *out_w, int *out_h) {
+void uui_textbox_natural_size(const struct uui_textbox *f, int *out_w, int *out_h) {
     (void)f;
     if (out_w) *out_w = 0;                             // no preference
-    if (out_h) *out_h = ugfx_char_h() + 2 * UUI_FIELD_PAD; // and this one is real
+    if (out_h) *out_h = ugfx_char_h() + 2 * UUI_TEXTBOX_PAD; // and this one is real
 }
 
-int uui_field_key(struct uui_field *f, int key) {
+int uui_textbox_key(struct uui_textbox *f, int key) {
     if (!f->active) return 0;
 
     if (key == '\b') {
@@ -73,21 +73,21 @@ int uui_field_key(struct uui_field *f, int key) {
     return 1;
 }
 
-void uui_field_set_geometry(struct uui_field *f, int x, int y, int w, int h) {
+void uui_textbox_set_geometry(struct uui_textbox *f, int x, int y, int w, int h) {
     f->x = x; f->y = y; f->w = w; f->h = h;
 }
 
-int uui_field_hit(const struct uui_field *f, int cx, int cy) {
+int uui_textbox_hit(const struct uui_textbox *f, int cx, int cy) {
     return uui_hit(f->x, f->y, f->w, f->h, cx, cy);
 }
 
-void uui_field_draw(struct ugfx_surface *s, const struct uui_field *f,
+void uui_textbox_draw(struct ugfx_surface *s, const struct uui_textbox *f,
                      uint32_t bg, uint32_t fg, uint32_t border) {
     int x = f->x, y = f->y, w = f->w, h = f->h;
     ugfx_fill_rect(s, x, y, w, h, bg);
     ugfx_draw_rect(s, x, y, w, h, border);
 
-    int pad = UUI_FIELD_PAD;
+    int pad = UUI_TEXTBOX_PAD;
     int char_w = ugfx_char_w();
     int ty = y + (h - ugfx_char_h()) / 2;
 
@@ -105,7 +105,7 @@ void uui_field_draw(struct ugfx_surface *s, const struct uui_field *f,
         if (start > max_start) start = max_start;
     }
 
-    char shown[UUI_FIELD_MAX];
+    char shown[UUI_TEXTBOX_MAX];
     int n = 0;
     for (; n < visible && f->buf[start + n]; n++) shown[n] = f->buf[start + n];
     shown[n] = '\0';

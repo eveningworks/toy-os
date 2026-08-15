@@ -246,6 +246,57 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   thumb cannot be in two places), and commit-on-release.
 
 ### Changed
+- **The checkbox is an object; the scrollbar deliberately stays
+  stateless.** The last of `docs/uapp-design.md`'s "generation C" --
+  widgets that were pure free functions with nowhere to keep state and
+  nothing for a layout to write to.
+
+  `ui_checkbox`/`uui_checkbox` now hold their own geometry, `checked`,
+  `hovered` and `disabled`, with `init`/`set_geometry`/`natural_size`/
+  `draw`/`hit`/`hover`/`toggle` -- the same shape as `ui_button`. UI Demo
+  and Shapes were converted, and both got smaller for it: Shapes' two
+  globals (`g_aa`, `g_checkbox_hover`) collapse into the widget, so the
+  keyboard shortcut and the click can no longer disagree with what is
+  drawn, and UI Demo stopped recomputing the second checkbox's x at four
+  separate call sites.
+
+  **The scrollbar was NOT converted, and that is a decision rather than
+  a gap.** Its state -- total lines, visible rows, scroll offset --
+  belongs to whatever it scrolls, and `ui_listbox`, `ui_textview` and
+  the file picker each own that already. Giving it a copy would be two
+  sources of truth for one fact. It is a rendering helper, not a layout
+  child; nothing ever places a bare one.
+
+  That settles what the `widget_` prefix means in a tree of
+  `ui_<widget>_*` objects: **a stateless helper that is not a layout
+  child** -- `widget_hit()` and the scrollbar. It used to mean "not
+  converted yet", and the checkbox spent the last of that meaning, so it
+  was worth restating as a rule instead of leaving as an accident.
+
+  Also renamed `uui_field` to `uui_textbox`, so the two sides of one
+  widget share a name as well as a path (`apps/ui/ui_textbox.h`).
+  Matching paths were the point of splitting the toolkit per widget, and
+  mismatched names undercut it. Free -- it had no callers.
+
+- **Fixed: `libuapp.a` kept objects whose source files were gone.**
+  `ar rcs` updates an archive rather than rebuilding it, so splitting
+  `uwidgets.c` into per-widget files left `uwidgets.o` inside for three
+  commits. Nothing failed: a linker pulls the first member that
+  satisfies a symbol and only errors when two already-pulled members
+  collide, so the build was quietly free to link the deleted file's code
+  instead of its replacement. It surfaced only when `ui_checkbox` became
+  an object and the two versions of `uui_checkbox_draw` finally
+  differed. The rule deletes the archive first, so it is a function of
+  its declared objects rather than of every object that has ever
+  existed.
+
+  Worth noting which check caught it and which would not have: a
+  `--skip-clean` preflight did, because it reused the stale archive. A
+  full `make clean` preflight builds a correct archive and reports
+  nothing -- so cleaning hides this class of bug rather than revealing
+  it.
+
+### Changed
 - **The radio list and the ring-3 text field carry their own geometry.**
   Both were "generation B" in `docs/uapp-design.md`'s widget audit: a
   struct with real state, but no position -- `draw()` and `hit()` were
