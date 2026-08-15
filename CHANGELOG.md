@@ -32,6 +32,95 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
 ## [Unreleased]
 
 ### Added
+- **`fs_rename()` and `fs_truncate()`, on both backends, with `mv` and
+  `truncate` in the shell.** Until now there was no way to rename a
+  file in toy-os at all -- not from the shell, not from any app -- and
+  shrinking one meant rewriting it. Both were the last open functional
+  items in Milestone 3, and rename was Milestone 15's leftover.
+
+  **Rename is one journal transaction on TFS3**, so the namespace never
+  shows both names or neither. It moves files and directories, across
+  directories, fixing the moved directory's `..` and both parents' link
+  counts. Three things are refused rather than guessed: an existing
+  destination (see below), a directory moved into its own subtree
+  (which would detach it into a cycle nothing references), and the
+  root. On TFS2, whose format stores a whole path per record, a file
+  rename is one record edit and a DIRECTORY rename is one edit per
+  descendant -- non-atomic, stated in `fs.h` rather than papered over,
+  and precisely the difference TFS3's dirent tree buys.
+
+  **There is deliberately no atomic replace.** POSIX `rename(2)`
+  silently destroys the destination; this returns 0 and `mv` says
+  "remove it first". It is the one mistake `mv` can make that a user
+  cannot undo, and adding the replace later is additive where removing
+  it would not be. See `docs/decisions.md`.
+
+  **Truncate grows sparsely** -- both backends already read an
+  unallocated range as zeros, so `truncate big 1000000000` is one inode
+  write and no blocks -- and shrinking frees the blocks past the new
+  end, in two phases with a commit between them. That ordering is the
+  substantive part: the inode must stop referencing a block BEFORE the
+  bit is freed, or a crash in between hands a live file's blocks to the
+  allocator. The obvious implementation gets this backwards. The
+  awkward consequence is that phase one rewrites the pointer tables, so
+  phase two can't read from disk what it needs to free -- solved by
+  noting that a cut is clean at every level except at most one
+  straddling entry, so keeping three 4 KiB originals in memory covers
+  it. Written up in `docs/decisions.md`.
+
+  Seven KTESTs, including the two that would catch a plausible-looking
+  wrong version: a rename must leave the OLD name gone (a rename
+  implemented as a copy passes "the new name exists" perfectly well)
+  with the same inode afterwards, and a fault-injected rename must
+  leave both names exactly as it found them. Plus an `fsck`-clean
+  assertion after a partial truncate and a rename, which is the only
+  check that can see the block bookkeeping being wrong at all.
+- **TFS3 format v2: a 32-slot journal, and a credit reservation before
+  a transaction starts.** v1's four slots turned out to be a constraint
+  on what OPERATIONS could exist rather than a tuning number -- moving
+  a directory between parents touches five metadata blocks, so it could
+  not be expressed. The journal sits between the superblock and the
+  group descriptors with nothing spare around it, so growing it moves
+  `group0_start`: hence a format version.
+
+  **v1 images still mount read/write.** That is not politeness: a probe
+  answering "not mine" would hand the image to the blank-disk policy,
+  which formats it, so refusing to read an old format is a way of
+  destroying it. Only `format`/`fsformat tfs3 confirm` writes v2, and
+  `make clean-disk && make iso` is the deliberate move. Each version's
+  geometry is a set of constants rather than superblock parameters,
+  which keeps the property the fixed-size GDT exists for -- a reader
+  whose primary superblock is bad has two candidate values of
+  `group0_start` to try, not an unknown one.
+
+  **`txn_begin(credits)` is jbd2's reservation discipline in
+  miniature**, and it is what makes the version split behave: an
+  operation too big for this volume's journal is refused before it has
+  changed anything, so a v1 image declines exactly one operation --
+  with a message naming the fix -- instead of half-completing it. That
+  refusal fired for real during this work, as a free positive control:
+  the dev `disk.img` was still v1 (`sync` never reformats), so the
+  cross-parent directory-move test reddened on the first run and passed
+  on a fresh image.
+
+  `docs/decisions.md` records why this is NOT ext4's journal: credits
+  were worth taking now, a circular log's real payoff is batching
+  commits (a throughput project with its own recovery surface), and
+  revoke blocks solve a hazard TFS3 doesn't have.
+- **The header, spec and host tool moved in lockstep.** The v2 journal
+  header had to move its slot table and checksum -- four v1 entries end
+  exactly where v1 put its checksum, so 32 would have overwritten it --
+  and `tools/tfs3_writer.py` reads both versions, writes v2, and erases
+  the other version's backup superblocks on reformat. That last one is
+  the wipefs rule one format version apart instead of one filesystem
+  apart, and the kernel's `tfs3_format()` does the same.
+
+### Fixed
+- **`tools/seed_disk.py` would have reformatted a v2 image.** Its probe
+  hardcoded TFS3 version 1, so a v2 `disk.img` read as BLANK and the
+  seed step tried to format it -- caught only because the writer tool
+  refuses to format an image it recognises, which turned silent data
+  loss into a build error. It accepts any known TFS3 version now.
 - **`tools/usertest_run.py`, and the gap it closes.** `make test` runs
   the KTESTs inside the kernel; `gui_regress.py` runs the windowed
   clients. Nothing ran a plain `/tests` binary except a person typing

@@ -677,6 +677,119 @@ static void reattach_blocks(struct file *f, const struct file *snapshot) {
     f->triple_indirect = snapshot->triple_indirect;
 }
 
+// ---- partial truncation (the tail-cut twin of detach_blocks()) -------------
+//
+// Shrinking a file has the same ordering requirement everything else
+// here does, and detach_blocks() above states it: the RECORD that
+// stops referencing a block must be on disk before the block's bit is
+// freed, or a crash in between leaves a live file pointing at space
+// the allocator can hand to someone else. detach_blocks() only
+// expresses "drop everything"; a tail cut also has to rewrite the one
+// pointer table per level that straddles the cut -- and once a table
+// has been rewritten, the disk no longer describes what was dropped.
+//
+// So the original image of each straddling table is kept (there is at
+// most one per level, because the cut is a clean split at every other
+// entry) and phase two walks those. Same shape as tfs3.c's
+// trunc_begin()/trunc_free(); deliberately a twin rather than shared
+// code, since the two backends already keep their own block-map walks
+// and persist through completely different mechanisms (a record write
+// here, a journal transaction there).
+//
+// Depth follows walk_indirect()'s convention: 1 = this table's entries
+// are data blocks.
+static uint32_t g_trunc_orig[4][FS_PTRS_PER_BLOCK];
+static uint32_t g_trunc_blk[4], g_trunc_from[4];
+static int g_trunc_used[4], g_trunc_emptied[4];
+
+// Zero every entry of `table` covering table-relative index >= `from`,
+// write it back, and keep the original for the freeing phase. Returns
+// 1 if nothing was kept, i.e. the caller should drop the table itself.
+static int trunc_detach(uint32_t table, int depth, uint32_t from) {
+    if (depth < 1 || depth > 3 || g_trunc_used[depth]) return 0;
+    uint32_t *orig = g_trunc_orig[depth];
+    if (!read_block(table, orig)) return 0;
+
+    uint32_t span = 1;
+    for (int d = 1; d < depth; d++) span *= FS_PTRS_PER_BLOCK;
+
+    int empty = 1, dirty = 0;
+    // Patch in the shared free scratch, which nothing else is using at
+    // this depth (free_tree()'s reasoning, same array discipline).
+    uint32_t *img = g_free_scratch[depth];
+    for (int i = 0; i < FS_PTRS_PER_BLOCK; i++) img[i] = orig[i];
+
+    for (uint32_t i = 0; i < (uint32_t)FS_PTRS_PER_BLOCK; i++) {
+        uint32_t e = orig[i];
+        if (!e) continue;
+        uint32_t start = i * span;
+        if (start + span <= from) { empty = 0; continue; }       // wholly kept
+        if (start >= from) { img[i] = 0; dirty = 1; }            // wholly dropped
+        else if (trunc_detach(e, depth - 1, from - start)) { img[i] = 0; dirty = 1; }
+        else empty = 0;
+    }
+    // An emptied table is freed whole by the caller -- writing it
+    // would be a write to a block about to be returned.
+    if (dirty && !empty && !write_block(table, img)) empty = 0;
+
+    g_trunc_blk[depth] = table;
+    g_trunc_from[depth] = from;
+    g_trunc_used[depth] = 1;
+    g_trunc_emptied[depth] = empty;
+    return empty;
+}
+
+// Detach every block holding file-block index >= `first` from `f`,
+// snapshotting the original pointers into `snapshot`. The caller
+// persists the record, then calls trunc_free_tail().
+static void trunc_detach_tail(struct file *f, uint32_t first, struct file *snapshot) {
+    for (int d = 0; d < 4; d++) { g_trunc_used[d] = 0; g_trunc_emptied[d] = 0; }
+    *snapshot = *f;
+
+    for (uint32_t i = first; i < FS_N_DIRECT; i++) f->direct[i] = 0;
+
+    uint32_t base = FS_N_DIRECT, span = FS_PTRS_PER_BLOCK;
+    uint32_t *roots[3] = { &f->single_indirect, &f->double_indirect, &f->triple_indirect };
+    for (int lvl = 0; lvl < 3; lvl++) {
+        uint32_t blk = *roots[lvl];
+        if (blk) {
+            if (first <= base) *roots[lvl] = 0;
+            else if (first < base + span && trunc_detach(blk, lvl + 1, first - base)) *roots[lvl] = 0;
+        }
+        base += span;
+        span *= FS_PTRS_PER_BLOCK;
+    }
+}
+
+// Return the detached blocks to the bitmap. Every table read here is
+// one phase one deliberately left alone, so the disk still describes
+// the subtree being freed.
+static void trunc_free_tail(const struct file *snapshot, uint32_t first) {
+    for (uint32_t i = first; i < FS_N_DIRECT; i++) {
+        if (snapshot->direct[i]) free_block(snapshot->direct[i]);
+    }
+    const uint32_t roots[3] = { snapshot->single_indirect, snapshot->double_indirect,
+                                snapshot->triple_indirect };
+    uint32_t base = FS_N_DIRECT, span = FS_PTRS_PER_BLOCK;
+    for (int lvl = 0; lvl < 3; lvl++) {
+        if (roots[lvl] && first <= base) free_tree(roots[lvl], lvl + 1);
+        base += span;
+        span *= FS_PTRS_PER_BLOCK;
+    }
+    for (int d = 1; d <= 3; d++) {
+        if (!g_trunc_used[d]) continue;
+        uint32_t sp = 1;
+        for (int k = 1; k < d; k++) sp *= FS_PTRS_PER_BLOCK;
+        for (uint32_t i = 0; i < (uint32_t)FS_PTRS_PER_BLOCK; i++) {
+            uint32_t e = g_trunc_orig[d][i];
+            if (!e || i * sp < g_trunc_from[d]) continue; // kept, or the next boundary down
+            free_tree(e, d - 1);
+        }
+        if (g_trunc_emptied[d]) free_block(g_trunc_blk[d]);
+        g_trunc_used[d] = 0;
+    }
+}
+
 static void free_all_blocks(struct file *f) {
     for (int i = 0; i < FS_N_DIRECT; i++) {
         if (f->direct[i]) free_block(f->direct[i]);
@@ -1479,6 +1592,113 @@ static int tfs_write(const char *path, const char *data, int append) {
     return persist_record(idx);
 }
 
+// Rename/move. TFS2 stores a whole PATH per record and has no
+// directory objects, so renaming a file is a one-record edit -- and
+// renaming a DIRECTORY is one edit per descendant, because each
+// descendant's own record spells out the full path it used to live at.
+//
+// That makes a directory rename NON-ATOMIC here, which fs.h says out
+// loud: a crash partway leaves some descendants under the new name and
+// some under the old. It is the honest consequence of the flat format,
+// and it is exactly what TFS3's dirent tree makes a single journalled
+// operation instead. Every length is checked BEFORE the first record is
+// touched, so the only way to fail midway is a disk error.
+static int tfs_rename(const char *oldpath, const char *newpath) {
+    char oldn[FS_PATH_MAX], newn[FS_PATH_MAX];
+    if (!normalize(oldpath, oldn) || !normalize(newpath, newn)) return 0;
+    if (k_strcmp(oldn, "/") == 0 || k_strcmp(newn, "/") == 0) return 0;
+    if (k_strcmp(oldn, newn) == 0) return 1;
+
+    struct file *f = find(oldn);
+    if (!f) return 0;
+    if (find(newn)) return 0;      // destination taken -- no atomic replace, see fs.h
+    if (!parent_is_dir(newn)) return 0;
+
+    size_t oldlen = k_strlen(oldn), newlen = k_strlen(newn);
+    int is_dir = (f->type == FS_TYPE_DIR);
+
+    if (is_dir) {
+        // Moving a directory into its own subtree would orphan it.
+        if (k_strncmp(newn, oldn, oldlen) == 0 && newn[oldlen] == '/') return 0;
+        // Every descendant's new path must fit before anything moves.
+        for (int i = 0; i < FS_MAX_FILES; i++) {
+            if (!files[i].used) continue;
+            if (k_strncmp(files[i].path, oldn, oldlen) != 0 || files[i].path[oldlen] != '/') continue;
+            if (newlen + (k_strlen(files[i].path) - oldlen) >= FS_PATH_MAX) return 0;
+        }
+    }
+
+    int idx = (int)(f - files);
+    char saved[FS_PATH_MAX];
+    k_strcpy(saved, f->path);
+    k_strcpy(f->path, newn);
+    if (!persist_record(idx)) { k_strcpy(f->path, saved); return 0; }
+    if (!is_dir) return 1;
+
+    for (int i = 0; i < FS_MAX_FILES; i++) {
+        if (!files[i].used || i == idx) continue;
+        if (k_strncmp(files[i].path, saved, oldlen) != 0 || files[i].path[oldlen] != '/') continue;
+        char moved[FS_PATH_MAX];
+        k_strcpy(moved, newn);
+        k_strcpy(moved + newlen, files[i].path + oldlen);
+        char was[FS_PATH_MAX];
+        k_strcpy(was, files[i].path);
+        k_strcpy(files[i].path, moved);
+        if (!persist_record(i)) {
+            // Half-moved, and there is no way back: the records
+            // already rewritten are on disk. Put THIS one back so
+            // memory and disk still agree about it, and report the
+            // failure rather than pretending.
+            k_strcpy(files[i].path, was);
+            klog_write("tfs2: rename left a directory partly moved (disk write failed)\n");
+            return 0;
+        }
+    }
+    return 1;
+}
+
+// Set a file's size exactly. Growing is sparse -- read_block() returns
+// zeros for block 0, so an unallocated range already reads as zeros
+// and no blocks are consumed until something writes there.
+static int tfs_truncate(const char *path, uint64_t size) {
+    char norm[FS_PATH_MAX];
+    if (!normalize(path, norm)) return 0;
+    struct file *f = find(norm);
+    if (!f || f->type != FS_TYPE_FILE) return 0;
+    if (f->size == size) return 1;
+
+    int idx = (int)(f - files);
+    uint64_t old_size = f->size;
+
+    if (size > old_size) {
+        f->size = size;
+        rtc_read_local(&f->modified);
+        if (!persist_record(idx)) { f->size = old_size; return 0; }
+        return 1;
+    }
+
+    uint32_t first = (uint32_t)((size + FS_BLOCK_SIZE - 1) / FS_BLOCK_SIZE);
+    struct file snapshot;
+    trunc_detach_tail(f, first, &snapshot);
+    f->size = size;
+    rtc_read_local(&f->modified);
+    if (!persist_record(idx)) {
+        // Nothing has been freed, so putting the pointers back leaves
+        // memory and disk agreeing -- except for any straddling table
+        // already rewritten, whose dropped entries are now a space
+        // leak that fsck reclaims. Never corruption; see detach_blocks().
+        reattach_blocks(f, &snapshot);
+        f->size = old_size;
+        return 0;
+    }
+    // Record first, blocks second -- the ordering detach_blocks()
+    // exists to preserve.
+    write_batch_begin();
+    trunc_free_tail(&snapshot, first);
+    write_batch_end();
+    return 1;
+}
+
 static int tfs_delete(const char *path) {
     char norm[FS_PATH_MAX];
     if (!normalize(path, norm)) return 0;
@@ -2116,6 +2336,8 @@ const struct fs_ops tfs_ops = {
     .write_range_step = tfs_write_range_step,
     .read_range_begin = tfs_read_range_begin,
     .read_range_step = tfs_read_range_step,
+    .rename = tfs_rename,
+    .truncate = tfs_truncate,
     .is_dir = tfs_is_dir,
     .exists = tfs_exists,
     .list = tfs_list,

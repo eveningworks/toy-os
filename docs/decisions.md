@@ -72,6 +72,9 @@ there when you add an entry, or the index quietly stops being one.
 - [Thin provisioning: the image is sparse at birth, and TRIM is what keeps it that way](#thin-provisioning-the-image-is-sparse-at-birth-and-trim-is-what-keeps-it-that-way)
 - [TFS2 stays in the kernel as a second filesystem -- the VFS probes by superblock magic](#tfs2-stays-in-the-kernel-as-a-second-filesystem----the-vfs-probes-by-superblock-magic)
 - [TFS3's journal covers dirent + inode blocks; bitmaps stay leak-safe write-through](#tfs3s-journal-covers-dirent--inode-blocks-bitmaps-stay-leak-safe-write-through)
+- [TFS3 v2 grew the journal by moving the layout, not by making it a log like ext4's](#tfs3-v2-grew-the-journal-by-moving-the-layout-not-by-making-it-a-log-like-ext4s)
+- [`fs_rename()` refuses an existing destination -- there is no atomic replace](#fs_rename-refuses-an-existing-destination----there-is-no-atomic-replace)
+- [Truncation is two phases with a commit between them, and keeps the boundary tables in memory](#truncation-is-two-phases-with-a-commit-between-them-and-keeps-the-boundary-tables-in-memory)
 - [ATA DATA SET MANAGEMENT must be issued over DMA, not PIO](#ata-data-set-management-must-be-issued-over-dma-not-pio)
 - [Zero-filling a freshly allocated block is skipped only when the caller overwrites it whole](#zero-filling-a-freshly-allocated-block-is-skipped-only-when-the-caller-overwrites-it-whole)
 
@@ -3819,6 +3822,107 @@ directory growth runs as its own empty-block-first transaction
 name visible one transaction before the child's inode existed). See
 `docs/tfs3-spec.md`'s journal section and CHANGELOG.md's Stage C
 entry.
+
+## TFS3 v2 grew the journal by moving the layout, not by making it a log like ext4's
+
+Four slots turned out to be a design constraint on OPERATIONS, not a
+tuning number: a rename that moves a directory between parents touches
+five metadata blocks (both dirent blocks, the child's `..`, both
+parents' link counts), so it could not be expressed at all. The
+journal sits between the superblock and the group descriptors, and
+everything before group 0 was spoken for, so making room meant moving
+`group0_start` -- i.e. a format version.
+
+**Why not ext4's journal.** jbd2 makes the journal a regular inode
+(inode 8, ~128 MB by default) holding a circular log: a descriptor
+block naming each following image's real target, the images, then a
+commit block. Three separable ideas live in that, and only one was
+worth taking now:
+
+- **Credits, taken.** `jbd2_journal_start(journal, nblocks)` reserves
+  the worst case up front and refuses an operation that cannot fit
+  before it has changed anything. TFS3 used to discover "full" halfway
+  through, when `txn_stage()` returned 0 and each caller unwound by
+  hand. `txn_begin(credits)` is that discipline in miniature, and it
+  is what lets a v1 image behave CORRECTLY rather than half-completing:
+  the one operation it cannot hold is refused with a message, and
+  everything else is unaffected.
+- **A large circular log, deferred.** Its real payoff is batching many
+  operations into one commit, which would cut the two `ata_flush_now()`
+  barriers TFS3 pays per metadata operation. That is a throughput
+  project with its own crash-recovery surface (sequence numbers, log
+  wrap, checkpointing), not a side effect of needing five slots.
+- **Revoke blocks, not needed.** They exist because a freed metadata
+  block can be reused as file data, where replay would clobber it.
+  TFS3 journals only dirent and inode-table blocks, and frees blocks
+  unjournaled under the leak-safe rule, so the hazard never arises.
+
+**Both versions stay mountable, and that is not politeness.** A probe
+that returned "not mine" for a v1 image would hand it to the
+blank-disk policy, which formats -- so refusing to READ an old format
+is a way of destroying it. v1 mounts read/write with its own geometry;
+only `format` (and `fsformat tfs3 confirm`) writes v2. Each version's
+geometry is a set of CONSTANTS rather than superblock parameters,
+which preserves the property the fixed-size descriptor table exists
+for: a reader whose primary superblock is unreadable has two candidate
+values of `group0_start` to try, not an unknown one. The superblock
+does carry the offsets, but a mount validates them against the
+version's constants and rejects a disagreement.
+
+The reformat also has to erase the OTHER version's backup superblock
+sectors -- the wipefs rule one format version apart instead of one
+filesystem apart, and the same seance it was written for. See
+`docs/tfs3-spec.md`'s layout section.
+
+## `fs_rename()` refuses an existing destination -- there is no atomic replace
+
+POSIX `rename(2)` silently replaces the destination. `fs_rename()`
+returns 0 instead, and the shell's `mv` says "remove it first".
+
+Two reasons. The API's whole style is "a parser rejects rather than
+guesses" applied to destructive operations -- and this is the one
+mistake `mv` can make that a user cannot undo, because the replaced
+file's blocks are gone. And the atomic version is a bigger operation
+than it looks: it has to free the old target's inode inside the same
+transaction, which adds a slot and a rollback path for something no
+caller has asked for. Adding it later is additive; having shipped a
+silent overwrite and then restricting it would not be.
+
+Two other refusals are not policy but necessity: a directory moved
+into its own subtree would detach that subtree into a cycle nothing
+references, and the root has no parent to be renamed in. Renaming
+something to its own path succeeds and changes nothing.
+
+## Truncation is two phases with a commit between them, and keeps the boundary tables in memory
+
+Shrinking obeys the same ordering as every other metadata change here
+-- the inode that stops referencing a block must be durable BEFORE the
+block's bit is freed, or a crash in between leaves a live file pointing
+at space the allocator can hand to a second file. The obvious
+implementation (free the tail, then write the inode) inverts exactly
+that, and it is the double-allocation the whole discipline exists to
+prevent.
+
+That forces a commit into the middle of the operation, which creates a
+second problem: phase one rewrites the pointer tables, so phase two can
+no longer read from disk what it is supposed to free. The way out is
+the shape of the cut. A truncation is a clean split -- at every level
+each entry is wholly kept or wholly dropped -- EXCEPT for at most one
+straddling entry per level. So there are at most three partially
+rewritten tables, and keeping their original images in memory (12 KiB)
+is enough for phase two to walk everything phase one detached; every
+other table it reads is one phase one deliberately did not touch.
+
+Growing needs none of this: both backends read an unallocated range as
+zeros, so a grow moves the size field and nothing else. `truncate f
+1000000000` is one inode write and no blocks.
+
+Both backends implement this the same way and separately
+(`trunc_begin`/`trunc_free` in tfs3.c, `trunc_detach_tail`/
+`trunc_free_tail` in tfs.c), consistent with their already-parallel
+block-map walks -- they persist through completely different mechanisms
+(a journal transaction vs. a record write), which is most of what the
+code around the walk is.
 
 ## The process entry ABI is SysV, and crt0 owns the stack alignment
 

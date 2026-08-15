@@ -67,6 +67,41 @@ int fs_mkdir(const char *path);
 // exist, or a non-empty directory -- no recursive delete).
 int fs_delete(const char *path);
 
+// Renames or moves an entry: `oldpath` gets the name `newpath`, which
+// may sit in a different directory. Works for files and directories
+// alike. Returns 1 on success, 0 on failure.
+//
+// Three refusals worth knowing, all returning 0 rather than guessing:
+//   - `newpath` ALREADY EXISTS. There is deliberately no atomic
+//     replace here (POSIX rename(2) has one); a caller that wants to
+//     overwrite deletes the destination first and owns the decision,
+//     and the shell's `mv` says so rather than silently destroying a
+//     file the user forgot about.
+//   - a directory moved INTO ITS OWN SUBTREE (`mv /docs /docs/old`),
+//     which would detach the subtree into a cycle nothing references.
+//   - either path being the root.
+// Renaming something to its own current path succeeds and changes
+// nothing.
+//
+// On a backend with a journal (TFS3) this is ATOMIC: a crash leaves
+// exactly one of the two names, never both and never neither. TFS2
+// stores whole paths per record, so renaming a DIRECTORY there
+// rewrites each descendant's path as its own record write and a crash
+// mid-way can leave the subtree half-moved -- reported by that
+// backend's own doc comment, and the reason the atomicity promise
+// above names the backend.
+int fs_rename(const char *oldpath, const char *newpath);
+
+// Sets a file's size exactly, ftruncate(2)-style. Shrinking frees the
+// blocks past the new end; growing extends the file with zeros and
+// does NOT consume blocks for the new range (both backends read an
+// unallocated range as zeros), so growing a file to a gigabyte is a
+// metadata-only operation. Returns 1 on success, 0 on failure --
+// including `path` naming a directory, which sizes itself.
+//
+// Setting the size a file already has is a successful no-op.
+int fs_truncate(const char *path, uint64_t size);
+
 // Returns pointer to file data (not null-terminated beyond size) and sets
 // *out_size, or NULL if not found or if `path` names a directory.
 //

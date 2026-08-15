@@ -146,11 +146,22 @@ adds 4; 12 adds 5; 13 adds 6; 14 and up add 8.
       (TFS2: `find()` over 256 record slots; TFS3: a dirent-chain scan
       per component, softened by its in-RAM name cache). The on-disk
       index remains open.
-- [ ] `fs_rename()` -- there's no way to rename a file without
-      read + write + delete. (Owned jointly with Milestone 15's
-      leftover: on TFS3 it's a journalled directory op that fits the
-      4-slot transaction; implement it there, this item then closes.)
-- [ ] `fs_truncate()` -- shrinking a file is only possible by rewriting it
+- [x] ~~`fs_rename()`~~ -- done on both backends, plus `mv` in the
+      shell, see `CHANGELOG.md`'s `[Unreleased]` entry. One journal
+      transaction on TFS3 (files and directories, across directories,
+      `..` and link counts included); one record edit per descendant
+      on TFS2, non-atomic and documented as such. No atomic replace
+      of an existing destination, on purpose -- see
+      `docs/decisions.md`. Note the prediction in this item was
+      WRONG in an interesting way: it did NOT fit the 4-slot
+      transaction (a directory changing parents needs five blocks),
+      which is what prompted TFS3 format v2's 32-slot journal and the
+      `txn_begin()` credit reservation.
+- [x] ~~`fs_truncate()`~~ -- done on both backends, plus `truncate` in
+      the shell, see `CHANGELOG.md`'s `[Unreleased]` entry. Growing is
+      sparse (metadata only); shrinking frees the tail in two phases
+      with a commit between them, so a crash can cost a leak but never
+      a double allocation.
 - [x] ~~TRIM/discard on delete, so freed blocks are reported to the
       device~~ -- done on both backends (`ata_trim()` from tfs.c's
       `free_block()` and tfs3.c's `trim_run()`, plus `discard=unmap`
@@ -515,8 +526,12 @@ probe-selected backend, with live switching via `fsformat` -- see
       fs_ops op, gated by FS_CAP_HARDLINKS)
 - [ ] Unlink-while-open -- an fd keeps its inode alive after the name
       is gone (needs fd-level state the VFS doesn't hold yet)
-- [ ] `rename()` as a directory operation, atomic through the journal
-      -- fits the 4-slot transaction (two dirent blocks + inode)
+- [x] ~~`rename()` as a directory operation, atomic through the
+      journal~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry.
+      It did NOT fit the 4-slot transaction as this item predicted: a
+      directory changing parents needs five blocks (both dirent
+      blocks, the child's `..`, both parents' link counts), which is
+      what prompted format v2's 32-slot journal.
 - [ ] Raise `FS_PATH_MAX` (64) -- the FORMAT no longer caps anything
       (255-byte names, unlimited depth, ~590k inodes on 9 GiB), but
       every caller still holds 64-byte buffers; raising the API

@@ -124,6 +124,12 @@ struct fs_ops {
     void *(*read_range_begin)(const char *path, uint64_t offset, void *buf, uint32_t len);
     int (*read_range_step)(void *handle, uint32_t *out_total); // returns an fs_step_result (fs.h) as a plain int
 
+    // Both required, both backends implement them -- see fs.h's
+    // fs_rename()/fs_truncate() for the contract (what is refused,
+    // and which backend promises atomicity).
+    int (*rename)(const char *oldpath, const char *newpath);
+    int (*truncate)(const char *path, uint64_t size);
+
     int (*is_dir)(const char *path);
     int (*exists)(const char *path);
     void (*list)(const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir));

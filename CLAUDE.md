@@ -982,8 +982,9 @@ The gotchas it already gets right, for when you need to know why:
   `qmp_test.py`'s `launch_qemu_cmd()` default are `:5` (TCP 5905),
   `vm.py --instance N` is `:5+N`, and `gui_regress.py`'s four parallel
   slots are `:5`-`:8`. Any viewer works (`remmina -c vnc://localhost:5905`
-  is what's installed on the maintainer's machine). **Say to turn VIEW-ONLY
-  on**: a connected viewer's real mouse motion goes into the same
+  is what's installed on the maintainer's machine -- but that URI form
+  cannot be view-only; use `tools/watch_vm.sh` below, which launches a
+  saved profile that is). **View-only matters**: a connected viewer's real mouse motion goes into the same
   emulated PS/2 device the synthetic input uses, and the two fighting
   looks exactly like a flaky test rather than like interference.
   Attaching or detaching mid-run is free.
@@ -1362,6 +1363,17 @@ repeated manual steps to be worth automating:
   trusting a clean run -- a clean sweep otherwise can't be told apart
   from a sweep that isn't checking anything, which has happened here
   for real.
+- **`watch_vm.sh`** -- attach a VIEW-ONLY VNC viewer to a headless VM,
+  so a run can be watched live without interfering with it.
+  `tools/watch_vm.sh [slot...]`; the display derives from the VM slot
+  exactly as `vm.py --instance N` does (slot N is `:5+N`, TCP
+  `5905+N`). View-only is the point, not a preference -- a connected
+  viewer's real mouse motion goes into the same emulated PS/2 device
+  the synthetic input uses, and the two fighting looks exactly like a
+  flaky test. Remmina's quick-connect URI (`remmina -c
+  vnc://localhost:5905`) has NO view-only option, so this writes a
+  saved profile with `viewonly=1` and launches that instead, which is
+  the whole reason it's a script rather than a line in this file.
 - **`screenshot_diff.py`** -- Pillow-based pixel diff between two
   screenshots with a pass/fail `--threshold` (default 0.2%) and an
   optional `--out` diff-highlight image, for catching a rendering

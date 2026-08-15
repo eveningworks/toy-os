@@ -116,6 +116,10 @@ static void dispatch(char *line) {
         cmd_fsformat(args ? args : "");
     } else if (k_strcmp(cmd, "ln") == 0) {
         cmd_ln(args ? args : "");
+    } else if (k_strcmp(cmd, "mv") == 0) {
+        cmd_mv(args ? args : "");
+    } else if (k_strcmp(cmd, "truncate") == 0) {
+        cmd_truncate(args ? args : "");
     } else if (k_strcmp(cmd, "ktest") == 0) {
         cmd_ktest(args ? args : "");
     } else if (k_strcmp(cmd, "dmesg") == 0) {

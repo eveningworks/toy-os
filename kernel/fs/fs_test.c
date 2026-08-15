@@ -125,6 +125,282 @@ KTEST("fs", "delete frees the file's blocks") {
     KTEST_ASSERT_EQ((int64_t)used_after, (int64_t)used_before);
 }
 
+// ---- rename / truncate ----
+
+KTEST("fs", "rename moves a file, content and identity intact") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    FRESH("/.ktest_mv_a");
+    FRESH("/.ktest_mv_b");
+    KTEST_ASSERT(fs_write("/.ktest_mv_a", "payload", 0) == 1);
+    struct fs_stat_info before;
+    KTEST_ASSERT(fs_stat("/.ktest_mv_a", &before) == 1);
+
+    KTEST_ASSERT(fs_rename("/.ktest_mv_a", "/.ktest_mv_b") == 1);
+    // Both halves matter: the old name must be GONE, not merely the
+    // new one present -- a rename implemented as a copy passes the
+    // second check alone.
+    KTEST_ASSERT_EQ(fs_exists("/.ktest_mv_a"), 0);
+    KTEST_ASSERT(fs_exists("/.ktest_mv_b") == 1);
+
+    uint32_t size = 0;
+    const char *data = fs_read("/.ktest_mv_b", &size);
+    KTEST_ASSERT(data != 0);
+    KTEST_ASSERT_EQ(size, 7);
+    KTEST_ASSERT(k_strcmp(data, "payload") == 0);
+
+    // Same entry, not a new one -- on tfs3 that is a real inode number,
+    // so a copy-and-delete implementation would show a different ino.
+    struct fs_stat_info after;
+    KTEST_ASSERT(fs_stat("/.ktest_mv_b", &after) == 1);
+    if (fs_has(FS_CAP_INODES)) KTEST_ASSERT(before.ino == after.ino);
+
+    fs_delete("/.ktest_mv_b");
+}
+
+KTEST("fs", "rename refuses an existing destination and the root") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    FRESH("/.ktest_mvx_a");
+    FRESH("/.ktest_mvx_b");
+    KTEST_ASSERT(fs_write("/.ktest_mvx_a", "one", 0) == 1);
+    KTEST_ASSERT(fs_write("/.ktest_mvx_b", "two", 0) == 1);
+
+    KTEST_ASSERT_EQ(fs_rename("/.ktest_mvx_a", "/.ktest_mvx_b"), 0);
+    // Refused means UNCHANGED, not half-done: both files still there,
+    // and the destination still holds its own content.
+    KTEST_ASSERT(fs_exists("/.ktest_mvx_a") == 1);
+    uint32_t size = 0;
+    const char *data = fs_read("/.ktest_mvx_b", &size);
+    KTEST_ASSERT(data != 0 && k_strcmp(data, "two") == 0);
+
+    KTEST_ASSERT_EQ(fs_rename("/", "/.ktest_mvx_c"), 0);
+    KTEST_ASSERT_EQ(fs_rename("/.ktest_mvx_a", "/"), 0);
+    KTEST_ASSERT_EQ(fs_rename("/.ktest_nonexistent", "/.ktest_mvx_c"), 0);
+    // Renaming to itself is a no-op, not a failure.
+    KTEST_ASSERT(fs_rename("/.ktest_mvx_a", "/.ktest_mvx_a") == 1);
+    KTEST_ASSERT(fs_exists("/.ktest_mvx_a") == 1);
+
+    fs_delete("/.ktest_mvx_a");
+    fs_delete("/.ktest_mvx_b");
+}
+
+KTEST("fs", "rename moves a directory and its contents between parents") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    fs_delete("/.ktest_md/sub/f");
+    fs_delete("/.ktest_md/sub");
+    fs_delete("/.ktest_md2/sub/f");
+    fs_delete("/.ktest_md2/sub");
+    fs_delete("/.ktest_md");
+    fs_delete("/.ktest_md2");
+    KTEST_ASSERT_EQ(fs_exists("/.ktest_md"), 0);
+    KTEST_ASSERT_EQ(fs_exists("/.ktest_md2"), 0);
+
+    KTEST_ASSERT(fs_mkdir("/.ktest_md") == 1);
+    KTEST_ASSERT(fs_mkdir("/.ktest_md2") == 1);
+    KTEST_ASSERT(fs_mkdir("/.ktest_md/sub") == 1);
+    KTEST_ASSERT(fs_write("/.ktest_md/sub/f", "deep", 0) == 1);
+
+    // Into its own subtree: refused, or the subtree becomes a cycle
+    // nothing can reach.
+    KTEST_ASSERT_EQ(fs_rename("/.ktest_md", "/.ktest_md/sub/inner"), 0);
+
+    // A same-parent directory rename fits every journal, so it is
+    // asserted unconditionally.
+    KTEST_ASSERT(fs_rename("/.ktest_md/sub", "/.ktest_md/moved") == 1);
+    KTEST_ASSERT(fs_is_dir("/.ktest_md/moved") == 1);
+    KTEST_ASSERT_EQ(fs_exists("/.ktest_md/sub"), 0);
+    KTEST_ASSERT(fs_rename("/.ktest_md/moved", "/.ktest_md/sub") == 1);
+
+    // Changing PARENTS is the five-block case a TFS3 v1 image's
+    // four-slot journal genuinely cannot express (see tfs3.c's
+    // geometry comment). Refusing is the correct answer there, so
+    // check the refusal changed nothing and skip the rest rather than
+    // reporting a failure against an older on-disk format.
+    if (!fs_rename("/.ktest_md/sub", "/.ktest_md2/sub")) {
+        KTEST_ASSERT(fs_is_dir("/.ktest_md/sub") == 1);
+        KTEST_ASSERT_EQ(fs_exists("/.ktest_md2/sub"), 0);
+        fs_delete("/.ktest_md/sub/f");
+        fs_delete("/.ktest_md/sub");
+        fs_delete("/.ktest_md");
+        fs_delete("/.ktest_md2");
+        KTEST_SKIP("journal too small for a cross-parent directory move (tfs3 v1 image)");
+    }
+    KTEST_ASSERT_EQ(fs_exists("/.ktest_md/sub"), 0);
+    KTEST_ASSERT(fs_is_dir("/.ktest_md2/sub") == 1);
+    // The descendant moved with it -- the part a rename that only
+    // repoints the directory itself gets wrong.
+    uint32_t size = 0;
+    const char *data = fs_read("/.ktest_md2/sub/f", &size);
+    KTEST_ASSERT(data != 0);
+    KTEST_ASSERT(k_strcmp(data, "deep") == 0);
+    // And listing the new parent finds it, which is what proves the
+    // ".." fixup and the parent's own directory data agree.
+    KTEST_ASSERT(fs_is_dir("/.ktest_md2") == 1);
+
+    fs_delete("/.ktest_md2/sub/f");
+    fs_delete("/.ktest_md2/sub");
+    fs_delete("/.ktest_md");
+    fs_delete("/.ktest_md2");
+}
+
+KTEST("fs", "truncate shrinks, frees blocks, and grows sparsely") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    FRESH("/.ktest_trunc");
+
+    static char chunk[16384];
+    for (int i = 0; i < 16384; i++) chunk[i] = (char)('A' + (i % 26));
+
+    uint64_t used_empty = 0, total = 0;
+    fs_disk_usage(&used_empty, &total);
+    KTEST_ASSERT(fs_write_range("/.ktest_trunc", 0, chunk, sizeof(chunk)) == 1);
+    KTEST_ASSERT_EQ((int64_t)fs_size("/.ktest_trunc"), 16384);
+
+    uint64_t used_full = 0;
+    fs_disk_usage(&used_full, &total);
+    KTEST_ASSERT(used_full > used_empty);
+
+    // Shrink to a non-block multiple, so the partial final block is
+    // kept and only the whole blocks past it are freed.
+    KTEST_ASSERT(fs_truncate("/.ktest_trunc", 5000) == 1);
+    KTEST_ASSERT_EQ((int64_t)fs_size("/.ktest_trunc"), 5000);
+    uint64_t used_small = 0;
+    fs_disk_usage(&used_small, &total);
+    KTEST_ASSERT(used_small < used_full); // blocks actually came back
+
+    // The surviving prefix is byte-for-byte what was written -- a
+    // truncate that dropped the wrong blocks still reports the right
+    // size.
+    static char back[5000];
+    KTEST_ASSERT_EQ(fs_read_range("/.ktest_trunc", 0, back, sizeof(back)), 5000u);
+    for (int i = 0; i < 5000; i++) KTEST_ASSERT(back[i] == chunk[i]);
+    // ...and reading past the new end returns nothing.
+    KTEST_ASSERT_EQ(fs_read_range("/.ktest_trunc", 5000, back, 16), 0u);
+
+    // Grow: the new range reads as zeros and costs no blocks.
+    uint64_t before_grow = 0;
+    fs_disk_usage(&before_grow, &total);
+    KTEST_ASSERT(fs_truncate("/.ktest_trunc", 40000) == 1);
+    KTEST_ASSERT_EQ((int64_t)fs_size("/.ktest_trunc"), 40000);
+    uint64_t after_grow = 0;
+    fs_disk_usage(&after_grow, &total);
+    KTEST_ASSERT_EQ((int64_t)after_grow, (int64_t)before_grow);
+
+    static char zeros[512];
+    KTEST_ASSERT_EQ(fs_read_range("/.ktest_trunc", 20000, zeros, sizeof(zeros)), 512u);
+    for (int i = 0; i < 512; i++) KTEST_ASSERT_EQ(zeros[i], 0);
+
+    // To zero and back to the starting usage -- the same
+    // exact-reclaim assertion the delete test makes.
+    KTEST_ASSERT(fs_truncate("/.ktest_trunc", 0) == 1);
+    KTEST_ASSERT_EQ((int64_t)fs_size("/.ktest_trunc"), 0);
+    uint64_t used_zero = 0;
+    fs_disk_usage(&used_zero, &total);
+    KTEST_ASSERT_EQ((int64_t)used_zero, (int64_t)used_empty);
+
+    fs_delete("/.ktest_trunc");
+}
+
+KTEST("fs", "truncate cuts a file that uses indirect blocks") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    FRESH("/.ktest_tind");
+
+    // 20 blocks: past the 12 direct pointers, so the single-indirect
+    // table is in play. Cutting to 15 blocks leaves that table
+    // STRADDLING the cut -- partly kept, partly dropped -- which is
+    // the only case the two-phase truncate has to keep an original
+    // table image around for, and the case a file that fits in the
+    // direct pointers never reaches. (The first version of these
+    // tests wrote 4 blocks and a positive control that disabled the
+    // boundary handling entirely turned nothing red.)
+    enum { BLK = 4096, NBLK = 20, KEEP = 15 };
+    static char chunk[BLK];
+    uint64_t used_before = 0, total = 0;
+    fs_disk_usage(&used_before, &total);
+    for (int b = 0; b < NBLK; b++) {
+        for (int i = 0; i < BLK; i++) chunk[i] = (char)('a' + ((b + i) % 26));
+        KTEST_ASSERT(fs_write_range("/.ktest_tind", (uint64_t)b * BLK, chunk, BLK) == 1);
+    }
+    KTEST_ASSERT_EQ((int64_t)fs_size("/.ktest_tind"), (int64_t)NBLK * BLK);
+    uint64_t used_full = 0;
+    fs_disk_usage(&used_full, &total);
+
+    KTEST_ASSERT(fs_truncate("/.ktest_tind", (uint64_t)KEEP * BLK) == 1);
+    KTEST_ASSERT_EQ((int64_t)fs_size("/.ktest_tind"), (int64_t)KEEP * BLK);
+
+    // The dropped blocks are actually back -- not merely unreferenced.
+    uint64_t used_cut = 0;
+    fs_disk_usage(&used_cut, &total);
+    KTEST_ASSERT((int64_t)(used_full - used_cut) >= (int64_t)(NBLK - KEEP) * BLK);
+
+    // The kept blocks past the direct pointers still read correctly,
+    // which is what proves the straddling table was rewritten rather
+    // than dropped.
+    static char back[BLK];
+    for (int b = 12; b < KEEP; b++) {
+        KTEST_ASSERT_EQ(fs_read_range("/.ktest_tind", (uint64_t)b * BLK, back, BLK), (uint32_t)BLK);
+        for (int i = 0; i < BLK; i++) KTEST_ASSERT(back[i] == (char)('a' + ((b + i) % 26)));
+    }
+
+    // And the bookkeeping is intact: a boundary table left pointing at
+    // freed blocks shows up here and nowhere else.
+    struct fs_check_result r;
+    KTEST_ASSERT(fs_check(0, &r) == 1);
+    KTEST_ASSERT_EQ(r.leaked, 0);
+    KTEST_ASSERT_EQ(r.double_allocated, 0);
+    KTEST_ASSERT_EQ(r.referenced_but_free, 0);
+    KTEST_ASSERT_EQ(r.out_of_range, 0);
+
+    KTEST_ASSERT(fs_delete("/.ktest_tind") == 1);
+    // Deleting the truncated file returns everything -- a leak in the
+    // truncate shows up as a permanent shortfall here.
+    uint64_t used_after = 0;
+    fs_disk_usage(&used_after, &total);
+    KTEST_ASSERT_EQ((int64_t)used_after, (int64_t)used_before);
+}
+
+KTEST("fs", "truncate refuses a directory and no-ops at the same size") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    fs_delete("/.ktest_td");
+    KTEST_ASSERT(fs_mkdir("/.ktest_td") == 1);
+    KTEST_ASSERT_EQ(fs_truncate("/.ktest_td", 0), 0);
+    KTEST_ASSERT(fs_is_dir("/.ktest_td") == 1);
+    fs_delete("/.ktest_td");
+
+    FRESH("/.ktest_tn");
+    KTEST_ASSERT(fs_write("/.ktest_tn", "1234", 0) == 1);
+    KTEST_ASSERT(fs_truncate("/.ktest_tn", 4) == 1);
+    uint32_t size = 0;
+    const char *data = fs_read("/.ktest_tn", &size);
+    KTEST_ASSERT(data != 0);
+    KTEST_ASSERT_EQ(size, 4);
+    KTEST_ASSERT(k_strcmp(data, "1234") == 0);
+    fs_delete("/.ktest_tn");
+}
+
+KTEST("fs", "fsck stays clean across a rename and a truncate") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    FRESH("/.ktest_fsck_a");
+    FRESH("/.ktest_fsck_b");
+    static char chunk[12288];
+    for (int i = 0; i < 12288; i++) chunk[i] = 'z';
+    KTEST_ASSERT(fs_write_range("/.ktest_fsck_a", 0, chunk, sizeof(chunk)) == 1);
+    KTEST_ASSERT(fs_truncate("/.ktest_fsck_a", 3000) == 1);
+    KTEST_ASSERT(fs_rename("/.ktest_fsck_a", "/.ktest_fsck_b") == 1);
+
+    // The point of this one: a partial truncate rewrites a pointer
+    // table, and a rename rewrites dirents. Either getting the
+    // bookkeeping wrong shows up here as a leak, a double allocation,
+    // or a pointer into freed space -- none of which the functional
+    // assertions above can see.
+    struct fs_check_result r;
+    KTEST_ASSERT(fs_check(0, &r) == 1);
+    KTEST_ASSERT_EQ(r.leaked, 0);
+    KTEST_ASSERT_EQ(r.double_allocated, 0);
+    KTEST_ASSERT_EQ(r.referenced_but_free, 0);
+    KTEST_ASSERT_EQ(r.out_of_range, 0);
+
+    fs_delete("/.ktest_fsck_b");
+}
+
 // ---- error paths, reachable only via fault injection ----
 
 KTEST("fs", "a failed metadata write is reported, not swallowed") {
@@ -178,6 +454,32 @@ KTEST("fs", "a failed read is reported, not silently short") {
     KTEST_ASSERT(got < sizeof(readback));
 
     fs_delete("/.ktest_dread");
+}
+
+KTEST("fs", "a failed rename leaves both names as they were") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    FRESH("/.ktest_mvf_a");
+    FRESH("/.ktest_mvf_b");
+    KTEST_ASSERT(fs_write("/.ktest_mvf_a", "keepme", 0) == 1);
+
+    // A rename that can't reach the disk must report failure AND leave
+    // the namespace exactly as it found it -- the source still there,
+    // the destination still absent. Half a rename is the failure this
+    // is guarding against, and it is invisible to any test that only
+    // checks the return value.
+    fault_fail_next_ata_writes(64);
+    int ok = fs_rename("/.ktest_mvf_a", "/.ktest_mvf_b");
+    fault_fail_next_ata_writes(0);
+    KTEST_ASSERT_EQ(ok, 0);
+    KTEST_ASSERT(fs_exists("/.ktest_mvf_a") == 1);
+    KTEST_ASSERT_EQ(fs_exists("/.ktest_mvf_b"), 0);
+
+    uint32_t size = 0;
+    const char *data = fs_read("/.ktest_mvf_a", &size);
+    KTEST_ASSERT(data != 0);
+    KTEST_ASSERT(k_strcmp(data, "keepme") == 0);
+
+    fs_delete("/.ktest_mvf_a");
 }
 
 KTEST("fs", "fsck reports a clean filesystem") {

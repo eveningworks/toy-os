@@ -313,6 +313,106 @@ void cmd_ln(const char *args) {
     }
 }
 
+// Splits "<a> <b>" into two resolved absolute paths. Returns 0 (and
+// prints nothing) if either word is missing, so each caller can print
+// its own usage line.
+static int two_paths(const char *args, const char *what, char *a, char *b) {
+    char first[FS_PATH_MAX];
+    int n = 0;
+    const char *p = args;
+    while (*p == ' ') p++;
+    while (*p && *p != ' ' && n < FS_PATH_MAX - 1) first[n++] = *p++;
+    first[n] = '\0';
+    while (*p == ' ') p++;
+    if (n == 0 || !*p) return 0;
+    if (!resolve_path(first, a) || !resolve_path(p, b)) {
+        vga_write(what); vga_write(": path too long\n");
+        return -1;
+    }
+    return 1;
+}
+
+// `mv <src> <dst>` -- rename or move. Deliberately refuses to
+// overwrite: fs_rename() has no atomic replace, and a move that
+// silently destroys the destination is the one mistake this command
+// can make that the user cannot undo.
+void cmd_mv(const char *args) {
+    char src[FS_PATH_MAX], dst[FS_PATH_MAX];
+    int r = two_paths(args, "mv", src, dst);
+    if (r < 0) return;
+    if (r == 0) {
+        vga_write("usage: mv <source> <destination>\n");
+        return;
+    }
+    if (!fs_exists(src)) {
+        vga_write("mv: no such file or directory: "); vga_write(src); vga_putc('\n');
+        return;
+    }
+    if (fs_exists(dst)) {
+        vga_write("mv: already exists: "); vga_write(dst);
+        vga_write(" (remove it first -- mv never overwrites)\n");
+        return;
+    }
+    // The one refusal this command can diagnose better than the
+    // backend can: a directory moved under itself. Checked BEFORE the
+    // call so the message names the actual reason instead of listing
+    // candidates.
+    if (fs_is_dir(src)) {
+        size_t slen = k_strlen(src);
+        if (k_strncmp(dst, src, slen) == 0 && dst[slen] == '/') {
+            vga_write("mv: cannot move "); vga_write(src);
+            vga_write(" inside itself\n");
+            return;
+        }
+    }
+    if (fs_rename(src, dst)) {
+        vga_write("mv: "); vga_write(src); vga_write(" -> "); vga_write(dst); vga_putc('\n');
+        return;
+    }
+    vga_write("mv: failed -- see dmesg\n");
+}
+
+// `truncate <file> <size>` -- set a file's size exactly. Growing is
+// sparse, so `truncate big 1000000000` is instant and costs no blocks.
+void cmd_truncate(const char *args) {
+    char first[FS_PATH_MAX], path[FS_PATH_MAX];
+    int n = 0;
+    const char *p = args;
+    while (*p == ' ') p++;
+    while (*p && *p != ' ' && n < FS_PATH_MAX - 1) first[n++] = *p++;
+    first[n] = '\0';
+    while (*p == ' ') p++;
+
+    if (n == 0 || !*p) {
+        vga_write("usage: truncate <file> <size-in-bytes>\n");
+        return;
+    }
+    uint64_t size = 0;
+    if (!k_parse_u64(p, &size)) {
+        vga_write("truncate: not a number: "); vga_write(p); vga_putc('\n');
+        return;
+    }
+    if (!resolve_path(first, path)) {
+        vga_write("truncate: path too long\n");
+        return;
+    }
+    if (!fs_exists(path)) {
+        vga_write("truncate: no such file: "); vga_write(path); vga_putc('\n');
+        return;
+    }
+    if (fs_is_dir(path)) {
+        vga_write("truncate: "); vga_write(path); vga_write(" is a directory\n");
+        return;
+    }
+    uint64_t was = fs_size(path);
+    if (!fs_truncate(path, size)) {
+        vga_write("truncate: failed\n");
+        return;
+    }
+    vga_printf("truncate: %s %llu -> %llu bytes\n", path, (unsigned long long)was,
+               (unsigned long long)size);
+}
+
 // Reformat the disk with a named backend and remount -- the live
 // filesystem-switching path (see fs.h's fs_format_backend()). The
 // `confirm` word is mandatory: this destroys everything on disk, and

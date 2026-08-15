@@ -248,6 +248,14 @@ enum fs_step_result fs_read_range_step(void *handle, uint32_t *out_total) {
     return (enum fs_step_result)g_fs->read_range_step(handle, out_total);
 }
 
+int fs_rename(const char *oldpath, const char *newpath) {
+    return g_fs->rename(oldpath, newpath);
+}
+
+int fs_truncate(const char *path, uint64_t size) {
+    return g_fs->truncate(path, size);
+}
+
 int fs_is_dir(const char *path) {
     return g_fs->is_dir(path);
 }

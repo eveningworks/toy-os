@@ -46,17 +46,54 @@ BLOCK = 4096
 SPB = BLOCK // SECTOR  # sectors per block
 
 MAGIC = b"TFS3"
-VERSION = 1
+VERSION = 2          # what `format` writes
+VERSION_MIN = 1      # oldest version this tool reads/edits
 
 SB_BLOCK = 8
 JOURNAL_HEADER_BLOCK = 9
-JOURNAL_DATA_BLOCK = 10
-JOURNAL_SLOTS = 4
-GDT_BLOCK = 14
-GDT_BLOCKS = 16                       # fixed -- see the design doc's rationale
+GDT_BLOCKS = 16                       # fixed -- see the spec's rationale
 GDT_CAPACITY = GDT_BLOCKS * BLOCK // 16
-GROUP0_START = GDT_BLOCK + GDT_BLOCKS  # 30, a format constant
 BLOCKS_PER_GROUP = 32768               # one 4 KiB bitmap's worth
+
+# Two complete geometries, one per format version -- the journal is a
+# fixed region between the superblock and the group descriptors, so
+# making it bigger moves everything after it. v1 had four slots, which
+# cannot hold the five-block transaction a cross-directory directory
+# move needs; v2 has 32. Keep in lockstep with kernel/fs/tfs3.c's
+# T3_V1_*/T3_V2_* sets -- and note each version's numbers are
+# CONSTANTS, which is what lets a reader with an unreadable primary
+# superblock still find the backups by trying both.
+GEOMETRY = {
+    1: dict(jdata=10, jslots=4,  gdt=14, group0=30),
+    2: dict(jdata=10, jslots=32, gdt=42, group0=58),
+}
+
+# The active geometry, set by set_geometry() before any structure whose
+# position depends on it is touched. Mirrors the kernel's globals.
+JOURNAL_DATA_BLOCK = GEOMETRY[1]["jdata"]
+JOURNAL_SLOTS = GEOMETRY[1]["jslots"]
+GDT_BLOCK = GEOMETRY[1]["gdt"]
+GROUP0_START = GEOMETRY[1]["group0"]
+FS_VERSION = 1
+
+
+def set_geometry(version):
+    global JOURNAL_DATA_BLOCK, JOURNAL_SLOTS, GDT_BLOCK, GROUP0_START, FS_VERSION
+    g = GEOMETRY[version]
+    JOURNAL_DATA_BLOCK, JOURNAL_SLOTS = g["jdata"], g["jslots"]
+    GDT_BLOCK, GROUP0_START = g["gdt"], g["group0"]
+    FS_VERSION = version
+
+
+def journal_cksum_off(version):
+    # Four v1 slot entries end exactly where v1 put the header
+    # checksum, so v2 moves the slot table to 16 and the checksum to
+    # the end of the sector. See tfs3.c's jh_cksum_off().
+    return SECTOR - 4 if version >= 2 else 44
+
+
+def journal_slots_off(version):
+    return 16 if version >= 2 else 12
 INODE_SIZE = 128
 BACKUP_BLOCKS = GDT_BLOCKS + 1         # 16-block GDT snapshot + 1 superblock copy
 
@@ -92,30 +129,44 @@ def align4(n: int) -> int:
 # ---- on-disk structures -------------------------------------------------
 
 def pack_superblock(total_blocks, bpg, ipg, gc, flags=0):
-    body = struct.pack("<4sBBHIIIII16x", MAGIC, VERSION, flags, 0,
-                       total_blocks, bpg, ipg, gc, GROUP0_START)
+    body = struct.pack("<4sBBHIIIII", MAGIC, VERSION, flags, 0,
+                       total_blocks, bpg, ipg, gc, GEOMETRY[VERSION]["group0"])
+    # The version's own layout, written down: validated on read, never
+    # believed on its own (the constants above are the authority).
+    body += struct.pack("<III4x", GEOMETRY[VERSION]["jdata"],
+                        GEOMETRY[VERSION]["jslots"], GEOMETRY[VERSION]["gdt"])
     assert len(body) == 44
     return body + struct.pack("<I", fnv1a(body))
 
 
 def parse_superblock(sec: bytes):
+    """Validate a superblock sector and, on success, switch the module's
+    geometry to its version."""
     body = sec[:44]
     (magic, ver, flags, _res, total_blocks, bpg, ipg, gc,
      group0) = struct.unpack("<4sBBHIIIII", body[:28])
     cksum = struct.unpack("<I", sec[44:48])[0]
-    if magic != MAGIC or ver != VERSION:
+    if magic != MAGIC or not (VERSION_MIN <= ver <= VERSION):
         return None
     if fnv1a(body) != cksum:
         return None
-    if group0 != GROUP0_START or bpg != BLOCKS_PER_GROUP:
+    if group0 != GEOMETRY[ver]["group0"] or bpg != BLOCKS_PER_GROUP:
         return None
+    if ver >= 2:
+        jdata, jslots, gdt = struct.unpack("<III", body[28:40])
+        if (jdata, jslots, gdt) != (GEOMETRY[ver]["jdata"], GEOMETRY[ver]["jslots"],
+                                    GEOMETRY[ver]["gdt"]):
+            return None
+    set_geometry(ver)
     return dict(flags=flags, total_blocks=total_blocks, bpg=bpg,
-                ipg=ipg, gc=gc)
+                ipg=ipg, gc=gc, version=ver)
 
 
-def pack_journal_header_empty():
-    body = struct.pack("<4sBBHI", b"JRN3", 0, 0, 0, 0) + b"\x00" * 32
-    assert len(body) == 44
+def pack_journal_header_empty(version=None):
+    version = VERSION if version is None else version
+    ck = journal_cksum_off(version)
+    body = struct.pack("<4sBBHI", b"JRN3", 0, 0, 0, 0) + b"\x00" * (ck - 12)
+    assert len(body) == ck
     return body + struct.pack("<I", fnv1a(body))
 
 
@@ -159,21 +210,28 @@ class Tfs3Image:
         if sb is None:
             sb = self._try_backups()
         if sb is None:
-            raise SystemExit(f"{path}: not a TFS3 v1 image (superblock and "
+            raise SystemExit(f"{path}: not a TFS3 image (superblock and "
                              f"backups all invalid) -- refusing to touch it")
         self.sb = sb
         self.itb = sb["ipg"] * INODE_SIZE // BLOCK  # inode-table blocks per group
 
     def _try_backups(self):
+        # Which version wrote the disk is exactly what the unreadable
+        # primary would have said, so try every version's backup
+        # positions -- there are only two, both constants.
         total_blocks = self.file_size // BLOCK
-        gc = (total_blocks - GROUP0_START) // BLOCKS_PER_GROUP
-        for g in backup_groups(gc):
-            blk = GROUP0_START + (g + 1) * BLOCKS_PER_GROUP - 1
-            sb = parse_superblock(self.read_bytes(blk * BLOCK, SECTOR))
-            if sb is not None:
-                print(f"note: primary superblock invalid -- using the "
-                      f"backup in group {g}", file=sys.stderr)
-                return sb
+        for ver in range(VERSION, VERSION_MIN - 1, -1):
+            group0 = GEOMETRY[ver]["group0"]
+            if total_blocks <= group0:
+                continue
+            gc = (total_blocks - group0) // BLOCKS_PER_GROUP
+            for g in backup_groups(gc):
+                blk = group0 + (g + 1) * BLOCKS_PER_GROUP - 1
+                sb = parse_superblock(self.read_bytes(blk * BLOCK, SECTOR))
+                if sb is not None and sb["version"] == ver:
+                    print(f"note: primary superblock invalid -- using the "
+                          f"backup in group {g}", file=sys.stderr)
+                    return sb
         return None
 
     def close(self):
@@ -445,11 +503,14 @@ def cmd_format(args):
         with open(args.disk, "rb") as f:
             f.seek(SB_BLOCK * BLOCK)
             sec = f.read(SECTOR)
-        if sec and parse_superblock(sec + b"\x00" * (SECTOR - len(sec))) and not args.force:
-            raise SystemExit(f"{args.disk}: already a valid TFS3 v1 image -- "
-                             "pass --force to reformat it")
-    elif not size:
-        raise SystemExit("image doesn't exist -- pass --size BYTES to create it")
+        old = parse_superblock(sec + b"\x00" * (SECTOR - len(sec))) if sec else None
+        if old and not args.force:
+            raise SystemExit(f"{args.disk}: already a valid TFS3 v{old['version']} "
+                             "image -- pass --force to reformat it")
+
+    # parse_superblock() above may have switched the module to an older
+    # image's geometry; a fresh filesystem is always the newest version.
+    set_geometry(VERSION)
 
     total_blocks = size // BLOCK
     gc = (total_blocks - GROUP0_START) // BLOCKS_PER_GROUP
@@ -483,6 +544,17 @@ def cmd_format(args):
         if f.read(4) == b"TFS2":
             f.seek(0)
             f.write(b"\x00" * SECTOR)
+        # Same rule WITHIN this format: an older TFS3 version's backup
+        # superblocks sit at positions this version's layout never
+        # writes, so leaving them means a future reader whose primary
+        # is damaged can mount a corpse with the wrong geometry.
+        for ver, geo in GEOMETRY.items():
+            if ver == VERSION or total_blocks <= geo["group0"]:
+                continue
+            old_gc = (total_blocks - geo["group0"]) // BLOCKS_PER_GROUP
+            for g in backup_groups(old_gc):
+                f.seek((geo["group0"] + (g + 1) * BLOCKS_PER_GROUP - 1) * BLOCK)
+                f.write(b"\x00" * SECTOR)
         def wblk(blk, data):
             f.seek(blk * BLOCK)
             f.write(data)
@@ -574,7 +646,7 @@ def cmd_format(args):
                 wblk(tail - GDT_BLOCKS + i, bytes(gdt[i * BLOCK:(i + 1) * BLOCK]))
             wblk(tail, sb + b"\x00" * (BLOCK - len(sb)))
 
-    print(f"formatted {args.disk} as TFS3 v1: {total_blocks} blocks, {gc} groups, "
+    print(f"formatted {args.disk} as TFS3 v{VERSION}: {total_blocks} blocks, {gc} groups, "
           f"{ipg} inodes/group, backups in groups {backup_groups(gc)}")
 
 
@@ -685,7 +757,7 @@ def delete_path(img, path):
 def cmd_info(args):
     img = Tfs3Image(args.disk)
     sb = img.sb
-    print(f"TFS3 v1: {sb['total_blocks']} blocks, {sb['gc']} groups, "
+    print(f"TFS3 v{sb['version']}: {sb['total_blocks']} blocks, {sb['gc']} groups, "
           f"{sb['ipg']} inodes/group, flags={sb['flags']}")
     free_b = free_i = 0
     for g in range(sb["gc"]):
@@ -888,10 +960,12 @@ def cmd_corrupt(args):
         hdr[4] = 1  # committed
         hdr[5] = 1  # one block
         struct.pack_into("<I", hdr, 8, 424242)
-        struct.pack_into("<II", hdr, 12, blk,
+        slots = journal_slots_off(FS_VERSION)
+        ck = journal_cksum_off(FS_VERSION)
+        struct.pack_into("<II", hdr, slots, blk,
                          fnv1a(bytes(img_block)) if not args.stage_journal_torn
                          else (fnv1a(bytes(img_block)) ^ 0xDEADBEEF))
-        struct.pack_into("<I", hdr, 44, fnv1a(bytes(hdr[:44])))
+        struct.pack_into("<I", hdr, ck, fnv1a(bytes(hdr[:ck])))
         img.write_bytes(JOURNAL_HEADER_BLOCK * BLOCK, bytes(hdr))
         did.append(("staged a TORN committed transaction (replay must discard it)"
                     if args.stage_journal_torn else

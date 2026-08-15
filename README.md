@@ -226,7 +226,10 @@ shell and the GUI Terminal.
   binary, not a shell built-in, see `docs/decisions.md`), `cd [dir]`,
   `pwd`, `mkdir <dir>`, `cat <f>`, `touch <f>`, `write <f> <text>`,
   `append <f> <text>`, `rm <f>`, `stat <f>` (type, size, inode
-  number, created/modified), `ln <file> <new>` (hardlink -- TFS3
+  number, created/modified), `mv <a> <b>` (rename or move a file or
+  directory; never overwrites -- remove the destination first),
+  `truncate <f> <n>` (set a file's size exactly; growing is sparse, so
+  it costs no blocks), `ln <file> <new>` (hardlink -- TFS3
   only; on TFS2 it explains that the format has no link counts),
   `edit <f>`/`nano <f>`
   (full-screen nano/pico-style editor -- arrows/Home/End/Delete to
@@ -367,7 +370,8 @@ Useful tools in `tools/` (all documented in their own docstrings):
   superblock magic; a blank disk gets the default). **TFS3**
   (`kernel/fs/tfs3.c`, the default for fresh images -- see
   `docs/tfs3-spec.md`): block groups, 128-byte checksummed inodes,
-  hardlinks (`ln`), `.`/`..`, multi-block journal transactions,
+  hardlinks (`ln`), `.`/`..`, atomic rename/move (`mv`) and
+  truncation, 32-slot journal transactions,
   ext-style superblock backups, ~590k files on a 9 GiB volume with
   255-byte names, ~28 MB/s write / ~27 MB/s read. **TFS2**
   (`kernel/fs/tfs.c`, the original, format unchanged -- see

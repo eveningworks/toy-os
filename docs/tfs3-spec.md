@@ -33,41 +33,71 @@ both magics -- see "Coexistence with TFS2" below.
 
 ## Disk layout
 
+There are two versions of this layout. They differ ONLY in the size of
+the journal region and therefore in where everything after it starts.
+
+**v2** (current; what `format` writes):
+
 | Region | Blocks | Contents |
 |---|---|---|
 | reserved | 0-7 | never touched (32 KiB for MBR/GPT on a flat disk) |
 | superblock | 8 | first sector meaningful |
 | journal header | 9 | first sector meaningful |
-| journal images | 10-13 | four staged block images (one per slot) |
-| group descriptors | 14-29 | fixed 16 blocks = 4096 slots of 16 bytes |
-| block groups | 30... | group 0, group 1, ... to end of volume |
+| journal images | 10-41 | 32 staged block images (one per slot) |
+| group descriptors | 42-57 | fixed 16 blocks = 4096 slots of 16 bytes |
+| block groups | 58... | group 0, group 1, ... to end of volume |
 
-Derivable with no superblock in hand (the point of the fixed-size
-descriptor table):
+**v1** (Milestone 15; still mounted read/write, never written fresh):
+
+| Region | Blocks | Contents |
+|---|---|---|
+| journal images | 10-13 | four staged block images |
+| group descriptors | 14-29 | as above |
+| block groups | 30... | as above |
+
+Each version's numbers are CONSTANTS, not parameters. That is what
+keeps the geometry derivable with no superblock in hand -- the point of
+the fixed-size descriptor table -- because a reader whose primary
+superblock is unreadable has only two candidate values of
+`group0_start` to try:
 
 ```
-group0_start = 30                       (constant)
+group0_start = 58 (v2) or 30 (v1)       (constants)
 blocks_per_group = 32768                (constant, one 4 KiB bitmap)
-group_count = (volume_blocks - 30) / 32768   (floor; trailing partial
-                                              group unused)
-group g = blocks [30 + g*32768, 30 + (g+1)*32768)
+group_count = (volume_blocks - group0_start) / 32768   (floor; trailing
+                                                        partial group unused)
+group g = blocks [group0_start + g*32768, group0_start + (g+1)*32768)
 ```
+
+A reformat must erase the OTHER version's backup superblock sectors,
+for the same reason the wipefs rule exists between filesystems: a
+stale backup at a position the new layout never writes will claim the
+disk with the wrong geometry the first time a primary goes bad.
 
 ## Superblock (block 8, first sector)
 
 | Offset | Size | Field | Notes |
 |---|---|---|---|
 | 0 | 4 | magic | `"TFS3"` |
-| 4 | 1 | version | 1 |
+| 4 | 1 | version | 2 (v1 images still mount) |
 | 5 | 1 | flags | bit 0 reserves a per-group data-checksum table (never set by current tools; the kernel REFUSES to mount unknown flag bits rather than rot a feature it doesn't implement) |
 | 6 | 2 | reserved | |
 | 8 | 4 | total_blocks | volume size in blocks |
 | 12 | 4 | blocks_per_group | 32768; a reader rejects anything else |
 | 16 | 4 | inodes_per_group | multiple of 32 (whole table blocks); 8192 at the default 16 KiB-per-inode format ratio |
 | 20 | 4 | group_count | |
-| 24 | 4 | group0_start | always 30, validated |
-| 28 | 16 | reserved | |
+| 24 | 4 | group0_start | 58 on v2, 30 on v1; validated against the version's constant |
+| 28 | 4 | journal_start | v2 only: 10 |
+| 32 | 4 | journal_blocks | v2 only: 32 |
+| 36 | 4 | gdt_start | v2 only: 42 |
+| 40 | 4 | reserved | |
 | 44 | 4 | checksum | FNV-1a over bytes 0-43 |
+
+The three v2 offsets are the version's own layout written down. A
+reader VALIDATES them against the constants above and rejects a
+superblock that disagrees; it never believes them on their own, since
+the layout is what makes the backups findable when this sector is the
+thing that has gone bad.
 
 ### Superblock backups
 
@@ -158,10 +188,10 @@ block-leading entry). Every directory has real `.` and `..` entries;
 the root's `..` points at itself. A `rec_len < 8` or one that runs
 past the block marks a corrupt chain -- stop, don't loop.
 
-## The journal (blocks 9-13)
+## The journal (blocks 9-41 on v2, 9-13 on v1)
 
-One fixed-size transaction of up to 4 metadata block images. What
-goes through it: **dirent blocks and inode-table blocks only** -- the
+One fixed-size transaction of up to `journal_blocks` metadata block
+images -- 32 on v2, 4 on v1. What goes through it: **dirent blocks and inode-table blocks only** -- the
 structures whose torn write is namespace corruption. Bitmaps, group
 descriptors, data blocks and indirect-pointer blocks are deliberately
 NOT journaled: allocation state follows the set-before-use /
@@ -174,16 +204,29 @@ Header (block 9, first sector):
 |---|---|---|---|
 | 0 | 4 | magic | `"JRN3"` |
 | 4 | 1 | commit | nonzero = transaction pending |
-| 5 | 1 | count | 1-4 |
+| 5 | 1 | count | 1..journal_blocks |
 | 6 | 2 | reserved | |
 | 8 | 4 | seq | monotonic, diagnostic |
-| 12 | 32 | slots[4] | per slot: target block u32, FNV-1a of the image u32 |
-| 44 | 4 | checksum | FNV-1a over bytes 0-43 |
+| 16 | 8*n | slots[] | per slot: target block u32, FNV-1a of the image u32 |
+| 508 | 4 | checksum | FNV-1a over bytes 0-507 |
 
-Images live in blocks 10..13 in slot order. Write discipline (two
-barriers, `persist_record()`'s generalization -- see tfs.c for why
+The slot table and the checksum MOVED in v2: four v1 entries at offset
+12 end exactly at byte 44, which is where v1 put its checksum, so 32 of
+them would have overwritten it. v1's header is unchanged (slots at 12,
+checksum at 44 over bytes 0-43) and is read that way on a v1 image.
+
+Images live in blocks 10..10+count-1 in slot order. Write discipline
+(two barriers, `persist_record()`'s generalization -- see tfs.c for why
 two is the minimum): stage images + committed header, FLUSH, write
 targets, FLUSH, clear commit (no barrier).
+
+A writer RESERVES its slot count before staging anything (`txn_begin()`
+kernel-side, jbd2's credit discipline in miniature), so an operation
+too big for the volume's journal is refused before it has changed
+anything. That is how a v1 image behaves correctly rather than
+half-completing: moving a directory between parents needs five blocks
+(both dirent blocks, the child's `..`, both parents' link counts) and
+is refused there, with every other operation unaffected.
 
 ### Journal semantics for readers
 

@@ -25,7 +25,11 @@ def probe(disk):
         lba0 = f.read(5)
         f.seek(8 * 4096)
         blk8 = f.read(5)
-    if blk8[:4] == b"TFS3" and blk8[4:5] == b"\x01":
+    # Any TFS3 format version claims the image -- the writer tool reads
+    # both v1 (four journal slots) and v2 (32), and picking a version
+    # here would make a v2 image look BLANK and get reformatted, which
+    # is the one outcome this probe exists to prevent.
+    if blk8[:4] == b"TFS3" and 1 <= blk8[4] <= 2:
         return "tfs3"
     if lba0[:4] == b"TFS2" and lba0[4:5] == b"\x03":
         return "tfs2"
