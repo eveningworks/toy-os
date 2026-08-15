@@ -39,7 +39,19 @@ enum uui_scrollbar_zone {
 
 // Preferred minimum: the strip's width; no height preference -- a
 // scrollbar is as tall as whatever it scrolls. See uui_primitives.h.
+//
+// The WIDTH IS A PARAMETER of every function below, so an app that wants
+// a wider or narrower bar simply passes one -- but it should get its
+// default from HERE rather than picking a pixel count, or the bar stops
+// tracking the font size (CLAUDE.md's font-derived layout rule) and the
+// toolkit's bars quietly stop matching each other. Notepad hardcoding 8
+// is what made this worth spelling out.
 void uui_scrollbar_natural_size(int *out_w, int *out_h);
+
+// How far the thumb is inset from each side of a `w`-wide strip. Exposed
+// because a caller that wants to know where the thumb's PIXELS are (a
+// test, mainly) would otherwise re-derive it and drift.
+int uui_scrollbar_thumb_inset(int w);
 
 void uui_scrollbar_draw(struct ugfx_surface *s, int x, int y, int w, int h,
                          int total_lines, int visible_rows, int scroll_offset,

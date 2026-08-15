@@ -186,12 +186,22 @@ struct win_event {
 // title is a cosmetic problem and not worth failing a request over.
 #define WIN_TITLE_LEN 32
 
-// Largest client window, in pixels. Bounded because the server
-// allocates and maps the whole buffer up front: at 4 bytes per pixel
-// this is 300 pages, which is the most this kernel is willing to hand
-// one window without a growable-mapping story.
-#define WIN_CLIENT_MAX_W 640
-#define WIN_CLIENT_MAX_H 480
+// Largest client window, in pixels -- the 1280x720 mode boot.asm asks
+// for, so a client can be dragged to fill the screen and the window
+// manager's own screen-bounds clamp (wm_update_drag_resize()) becomes
+// the effective limit rather than this one. That is the point: at 640x480
+// a resize past the cap was refused SILENTLY, since a refusal is a normal
+// protocol outcome and looks identical to a client that simply declined.
+//
+// Still bounded, because the server allocates and maps the whole buffer
+// up front and does it CONTIGUOUSLY (see create_window()): at 4 bytes
+// per pixel this is 900 frames from pmm_alloc_contiguous(), the most
+// this kernel is willing to hand one window without a growable-mapping
+// story. Growing past the display, or dropping the contiguity
+// requirement so fragmentation can't refuse a resize, is docs/roadmap.md's
+// growable client buffers item -- not this constant getting bigger again.
+#define WIN_CLIENT_MAX_W 1280
+#define WIN_CLIENT_MAX_H 720
 
 // Same fixed-layout discipline as struct win_event: no pointers, so the
 // identical bytes work whether copied by a syscall or read out of a
@@ -209,10 +219,16 @@ struct win_request_msg {
 //
 // Spaced WIN_BUFFER_STRIDE apart, which is comfortably more than the
 // largest buffer WIN_CLIENT_MAX_W * WIN_CLIENT_MAX_H * 4 can need
-// (1.17 MiB), so two windows' mappings can never overlap regardless of
-// their sizes.
+// (3.52 MiB), so two windows' mappings can never overlap regardless of
+// their sizes. The stride is the SECOND cap on window size and the one
+// that is easy to miss -- it bounded windows to 2 MiB of pixels no
+// matter what WIN_CLIENT_MAX_* said. Kept at a comfortable multiple
+// rather than the tight fit, since virtual address space costs nothing
+// here: nothing else in a client's address space lives above
+// WIN_CLIENT_BASE (the stack tops out at 0x8000200000, the heap below
+// that), so the whole region and the font above it are free to grow.
 #define WIN_CLIENT_BASE   0x8001000000ULL
-#define WIN_BUFFER_STRIDE 0x0000200000ULL // 2 MiB per window slot
+#define WIN_BUFFER_STRIDE 0x0000800000ULL // 8 MiB per window slot
 #define WIN_CLIENT_MAX    4 // windows one client may hold at once
 
 static inline uint64_t win_buffer_vaddr(uint32_t window) {

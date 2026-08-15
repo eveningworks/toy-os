@@ -74,7 +74,14 @@ enum scrollbar_zone {
 // scrollbar is exactly as tall as whatever it scrolls. See
 // ui_primitives.h. Still a free function; the struct comes when the
 // checkbox and scrollbar become objects and can join a layout.
+// The WIDTH IS A PARAMETER of every function below, so a control that
+// wants a wider or narrower strip passes one -- but its default should
+// come from HERE rather than from a pixel count, or the bar stops
+// tracking the font size and the desktop's bars stop matching.
 void widget_scrollbar_natural_size(int *out_w, int *out_h);
+
+// How far the thumb is inset from each side of a `w`-wide strip.
+int widget_scrollbar_thumb_inset(int w);
 
 void widget_scrollbar_draw(int x, int y, int w, int h, int total_lines, int visible_rows,
                             int scroll_offset, uint32_t track_bg, uint32_t thumb_bg);

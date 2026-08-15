@@ -31,6 +31,104 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
 
 ## [Unreleased]
 
+### Fixed
+- **A client window can be as big as the screen, and maximizing one
+  finally works.** Two separate ceilings held ring-3 windows at
+  640x480, and only one of them was the obvious constant.
+  `WIN_CLIENT_MAX_W/H` said 640x480; `WIN_BUFFER_STRIDE` -- the
+  per-window slot in a client's address space -- said 2 MiB of pixels
+  whatever that constant claimed, so raising one alone would have
+  changed nothing above 1024x512. Both now describe the 1280x720 mode
+  `boot.asm` asks for, which makes the WM's own screen-bounds clamp the
+  effective limit instead. That matters because a resize past the cap
+  was refused SILENTLY: a refusal is a normal protocol outcome and is
+  indistinguishable from a client politely declining, so dragging
+  Notepad's grip past 640 wide simply stopped, with nothing logged and
+  nothing to see. The stride went to 8 MiB rather than the tight fit --
+  virtual address space costs nothing here, nothing else in a client's
+  address space lives above `WIN_CLIENT_BASE`, and a stride that
+  *barely* fits is how this class of bug comes back.
+
+  Looking for a reliable way to grow a window past the old cap in a
+  test turned up a real bug behind it: **maximize never went through
+  the resize handshake.** Both call sites (the title-bar button and the
+  context menu's Maximize item, each holding its own copy of the same
+  fifteen lines) set `w->w`/`w->h` directly. For a kernel-space app
+  that is the whole operation. For a CLIENT it is exactly the failure
+  `abi/win_proto.h`'s configure/ack section describes: the chrome went
+  full-screen while the client's buffer stayed 640x400, leaving its
+  pixels in the top-left corner and undrawn desktop filling the rest.
+  Screenshotted before the fix, so this is observed rather than
+  reasoned. Maximize now proposes the new content size the same way the
+  grip does and `on_window_resized()` adopts it on the ack; the two
+  copies became one `wm_toggle_maximize()`, since a client window is
+  precisely the case where two copies of a rule stop agreeing.
+
+  Zeroing a new buffer also stopped being a byte-at-a-time loop
+  (`k_memset` now) -- a full-screen window is 3.5 MiB and the same loop
+  runs again on every resize.
+
+  Still owed, and now on the roadmap under Milestone 41 rather than
+  built speculatively: dropping the CONTIGUITY requirement.
+  `pmm_alloc_contiguous()` is asked for 900 frames for a full-screen
+  window, a resize allocates the new buffer before freeing the old, and
+  a fragmented allocator's refusal is that same silent one. Doing it
+  needs a way to map scattered frames into a contiguous *kernel*
+  virtual range, which this kernel has no helper for -- everything
+  kernel-side is identity-mapped.
+
+  `tools/uapp_test.py` gained three checks (11 total): maximize grows a
+  client past the old cap, the client PAINTS the whole maximized
+  buffer, and restoring shrinks it back. The first two are a pair on
+  purpose -- the reported size and the painted extent must both reach
+  the new size, and the bug above satisfied the first alone. Maximize
+  is used to get there rather than a grip drag because a drag's
+  reachable size depends on where the window happens to sit, which made
+  an earlier version of the same check pass or fail on window POSITION.
+- **The scrollbar: wider, and it no longer jumps when you grab it.**
+  Two problems, reported from actually using Notepad. The thumb leapt
+  the moment you moved the mouse unless you had caught its top edge
+  exactly -- because `notepad.c` passed `grab_offset_in_thumb = 0`, so
+  the drag maths was told every press landed at the thumb's top and
+  moved the thumb to put its top under the cursor. `ui_scrollbar.h`
+  documents that parameter and both kernel-side callers use it
+  correctly; the ring-3 Notepad was the one that didn't. And the strip
+  was 8px wide with a 6px thumb, from a hardcoded `#define SCROLLBAR_W
+  8` that also had to agree with a separately hardcoded "10px gutter"
+  in the text rect.
+
+  Both were symptoms of the same thing: the app owning what belongs to
+  the widget. The width now comes from `uui_scrollbar_natural_size()`
+  and the gutter is derived from it, so the two cannot disagree; the
+  natural width went from `char_w + 4` to `char_w + 6` (14px at the
+  default font) on both sides of the desktop, with the thumb's inset
+  now derived from the strip's width so a wider bar gets a wider
+  gutter instead of a fatter block. `ui_textview.c` and `ui_listbox.c`
+  each had their own copy of the `gfx_char_w() + 4` expression and now
+  ask the scrollbar, which is what actually keeps the desktop's bars
+  matching each other.
+
+  What the bug really exposed is that "how a scrollbar behaves" was
+  written nowhere, so it could be rebuilt underneath without anyone
+  noticing which part had been lost. `docs/gui-guidelines.md` has a
+  **"Scrollbars: what a real one does"** section now -- eight points
+  every real toolkit implements identically (no jump on grab, absolute
+  1:1 dragging, trough pages / thumb drags / arrows step, a minimum
+  thumb size, one geometry function behind draw and hit-test alike, a
+  hittable width, the wheel working without the bar, and the track
+  drawn even when it cannot scroll) -- and a new
+  **`tools/scrollbar_test.py`** asserts four of them against the ring-3
+  Notepad. It measures the THUMB'S PIXELS (track and thumb are known
+  flat colours, so a column scan gives its exact top and height)
+  rather than reading text.
+
+  The positive control is the interesting part: with the grab offset
+  broken again, the no-jump check goes red and **every other check
+  stays green**, including drag-back-and-return -- the jump drives the
+  thumb into the end of the track, and returning from a clamped
+  position looks perfectly correct. One check stands between that bug
+  and a green suite.
+
 ### Added
 - **The Start menu can launch ring-3 apps.** Until now the registry
   (`apps/gui_apps.c`) was the only way into the Start menu and the

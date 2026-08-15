@@ -1222,25 +1222,36 @@ Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
       focus, z-order and a taskbar button~~ -- done, see `CHANGELOG.md`.
       `SYS_WIN_REQUEST` carries typed messages; `win_server.c` owns the
       memory half and `wm_client.c` the presentation half.
-- [ ] **An app model for clients (`uapp`)** -- designed, not built; see
-      `docs/uapp-design.md` for the full argument, API sketch and
-      staging. Every client today hand-writes the create/title/present
-      handshake and the same `switch (ev.type)` loop (~55 of
-      `winclient.c`'s 141 lines), which is the same duplication `crt0`
-      and libsys already removed one layer down. The consequence that
-      matters is not verbosity: **window behaviour is unreachable from
-      ring 3**, because `wm_input.c` gates resizing on
-      `w->app->resizable` and a client window has no `app`. That is why
-      `WIN_EV_RESIZE` has been defined since the protocol was written
-      and is still never sent. Three stages: the library over today's
-      messages; `WIN_REQ_HINTS` so behaviour is a property of the
-      window rather than of a kernel-side struct; then resize as a
-      configure/ack handshake. The acceptance test is that stage three
-      touches zero lines in the clients that don't opt in. Ahead of all
-      of it: normalise the widget set (three inconsistent generations
-      today -- only one can participate in layout) and restructure
-      `userland/` into `rt/`/`ui/`/`bin/`/`tests/`, which is also where
-      `SEED_PROGRAMS`/`SEED_TESTS` stop being hand-maintained lists.
+- [x] ~~**An app model for clients (`uapp`)**~~ -- done, stages 0
+      through 4; see `docs/uapp-design.md` for the design and what each
+      stage actually landed, and `CHANGELOG.md`. The toolkit is
+      **Toykit** (`userland/ui/`), the protocol **TWP** and the server
+      **TWS**. A ring-3 GUI app is now one `.c` file in `userland/gui/`
+      with no Makefile edit: a `struct uapp_desc` and callbacks, all of
+      them optional with a library default. Window behaviour became a
+      property of the WINDOW rather than of a kernel-side `struct
+      gui_app`, which is what unblocked `WIN_EV_RESIZE` -- defined since
+      the protocol was written and never sent until stage 3. All six
+      ring-3 GUI apps run on it and all are resizable, none containing
+      any resize code. The acceptance test held: stage 3 changed zero
+      lines in the clients that didn't opt in.
+- [ ] **Growable client buffers.** `win_server.c` allocates a window's
+      pixels with `pmm_alloc_contiguous()` and maps the whole thing up
+      front, so a window's size is capped twice over -- by
+      `WIN_CLIENT_MAX_W/H` and by `WIN_BUFFER_STRIDE`, the per-window
+      slot in the client's address space. Both were raised to the
+      1280x720 display size, which is enough for a full-screen client
+      and makes the WM's own screen-bounds clamp the effective limit
+      instead. What is still owed is dropping the CONTIGUITY
+      requirement: 900 contiguous frames is a lot to ask a fragmented
+      allocator for, a resize allocates the new buffer before freeing
+      the old, and the failure is a silent refusal (a normal protocol
+      outcome, indistinguishable from a client declining). Doing it
+      needs a way to map scattered frames into a contiguous KERNEL
+      virtual range as well as the client's, which this kernel has no
+      helper for today -- everything kernel-side is identity-mapped.
+      Related to Milestone 8's demand paging, and the natural time to
+      do it is alongside that rather than on its own.
 - [ ] Multiple windows per process: the protocol already carries window
       ids and `win_server.c` already tracks WIN_CLIENT_MAX per client,
       but `userland/tests/winclient.c` only ever opens one, so the path is

@@ -20,8 +20,20 @@ static void sb_track(int y, int h, int bar_w, unsigned flags, int *ty, int *th) 
     *th = h;
 }
 
+// How far the thumb is inset from each side of the strip. Derived from
+// the bar's width rather than fixed at 1px: the gutter is what reads as
+// "a capsule in a groove" instead of "a block filling it", and a single
+// pixel of it disappears as the bar gets wider. Kept to whole pixels and
+// never more than 2, so a narrow bar still has a thumb worth grabbing.
+int uui_scrollbar_thumb_inset(int w) {
+    int inset = 1 + w / 12;
+    if (inset > 2) inset = 2;
+    if (w <= 4) inset = 0;
+    return inset;
+}
+
 // A rounded rectangle -- the capsule shape a modern scrollbar thumb
-// has. Just the four corner pixels trimmed: at 8-12px wide, that is the
+// has. Just the four corner pixels trimmed: at 8-14px wide, that is the
 // whole difference between "capsule" and "block", and it needs no
 // anti-aliasing or new drawing machinery to read correctly.
 static void fill_capsule(struct ugfx_surface *s, int x, int y, int w, int h, uint32_t c) {
@@ -69,7 +81,11 @@ static void sb_geometry(int y, int h, int total_lines, int visible_rows, int scr
 }
 
 void uui_scrollbar_natural_size(int *out_w, int *out_h) {
-    if (out_w) *out_w = ugfx_char_w() + 4;
+    // char_w + 6, not + 4: the narrower strip left a 6px thumb that was
+    // genuinely hard to hit with a mouse, which is what raised this.
+    // Still font-derived, so the bar stays proportional at every font
+    // size -- a fixed pixel width would be right at exactly one of them.
+    if (out_w) *out_w = ugfx_char_w() + 6;
     if (out_h) *out_h = 0; // no preference: as tall as its content area
 }
 
@@ -98,10 +114,12 @@ void uui_scrollbar_draw(struct ugfx_surface *s, int x, int y, int w, int h,
 
     int ty, th, ms;
     sb_geometry(tky, tkh, total_lines, visible_rows, scroll_offset, &ty, &th, &ms);
-    // Inset by a pixel each side so the track shows around the capsule
-    // -- that gap is most of what reads as "modern" rather than "a grey
-    // block filling a groove".
-    fill_capsule(s, x + 1, ty, w - 2, th, thumb_bg);
+    // Inset each side so the track shows around the capsule -- that gap
+    // is most of what reads as "modern" rather than "a grey block
+    // filling a groove". Width-derived, so a wider bar gets a wider
+    // gutter instead of a fatter block; see uui_scrollbar_thumb_inset().
+    int in = uui_scrollbar_thumb_inset(w);
+    fill_capsule(s, x + in, ty, w - 2 * in, th, thumb_bg);
 }
 
 enum uui_scrollbar_zone uui_scrollbar_hit(int x, int y, int w, int h,

@@ -173,6 +173,21 @@ static int save_file(const char *path) {
 
 static int toolbar_h(void) { return ugfx_char_h() + 16; }
 
+// The scrollbar's width comes from the WIDGET, not from a number here.
+// It used to be `#define SCROLLBAR_W 8` with a matching hardcoded "10px
+// gutter" in the text rect below -- two constants that had to agree,
+// both narrower than the toolkit's own bars, and the reason this one was
+// hard to grab with a mouse. See ui/uui_scrollbar.h.
+static int scrollbar_w(void) {
+    int w;
+    uui_scrollbar_natural_size(&w, 0);
+    return w;
+}
+
+// Width plus the 2px breathing space between the text and the strip, so
+// the text rect and the bar's own x can never disagree about the gap.
+static int scrollbar_gutter(void) { return scrollbar_w() + 2; }
+
 // Derived from the content SIZE rather than from a surface, because the
 // event callbacks need it too and they never hold one. That it derives
 // at all is what makes this app resizable with no resize code: a bigger
@@ -180,7 +195,7 @@ static int toolbar_h(void) { return ugfx_char_h() + 16; }
 static void text_rect_for(int cw, int ch, int *x, int *y, int *w, int *h) {
     *x = MARGIN;
     *y = MARGIN + toolbar_h() + TOOLBAR_GAP;
-    *w = cw - 2 * MARGIN - 10;                 // 10px gutter for the scrollbar
+    *w = cw - 2 * MARGIN - scrollbar_gutter(); // room for the scrollbar
     *h = ch - *y - MARGIN - ugfx_char_h() - 4; // status line at the bottom
 }
 
@@ -198,8 +213,6 @@ static void layout_toolbar(void) {
 
 // --- drawing ----------------------------------------------------------
 
-#define SCROLLBAR_W 8
-
 // Where the scrollbar strip is, given the text rect. One derivation,
 // used by the draw and by the hit test below -- two copies of this is
 // the classic way a scrollbar ends up drawing in one place and
@@ -208,7 +221,7 @@ static void scrollbar_rect(int tx, int ty, int tw, int th,
                             int *bx, int *by, int *bw, int *bh) {
     *bx = tx + tw + 2;
     *by = ty;
-    *bw = SCROLLBAR_W;
+    *bw = scrollbar_w();
     *bh = th;
 }
 
@@ -488,6 +501,7 @@ static void editor_key(int key) {
 
 static int g_dragging;
 static int g_scrollbar_drag;
+static int g_scrollbar_grab; // how far down the thumb the drag started
 
 // Reports the scrollbar's rect, content-relative, so a test asks where
 // it is instead of re-deriving it -- the rule docs/gui-guidelines.md
@@ -567,9 +581,20 @@ static int scrollbar_press(int px, int py, int tx, int ty, int tw, int th) {
     case UUI_SB_BELOW:
         utext_scroll(&g_text, -visible);
         return 1;
-    case UUI_SB_THUMB:
+    case UUI_SB_THUMB: {
+        // WHERE on the thumb the grab happened. Without this the drag
+        // maths below is told the cursor is at the thumb's TOP, so the
+        // thumb leaps up by however far down it was actually grabbed --
+        // which made the bar usable only by catching its top edge
+        // exactly. ui_listbox.c and ui_textview.c have always captured
+        // this; ui/uui_scrollbar.h's `grab_offset_in_thumb` says to.
+        int thumb_y, thumb_h;
+        uui_scrollbar_thumb_rect(by, bh, total, visible, g_text.scroll_offset,
+                                  &thumb_y, &thumb_h, bw, NP_SCROLLBAR_FLAGS);
+        g_scrollbar_grab = py - thumb_y;
         g_scrollbar_drag = 1;
         return 1;
+    }
     }
     return 1;
 }
@@ -629,7 +654,8 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
                 // The widget's own drag mapping -- so the thumb tracks
                 // the cursor the same way it is drawn, arrows included.
                 g_text.scroll_offset =
-                    uui_scrollbar_offset_for_drag(by, bh, total, visible, y, 0,
+                    uui_scrollbar_offset_for_drag(by, bh, total, visible, y,
+                                                   g_scrollbar_grab,
                                                    bw, NP_SCROLLBAR_FLAGS);
                 uapp_redraw(a);
             }

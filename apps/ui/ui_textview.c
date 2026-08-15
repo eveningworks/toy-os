@@ -4,12 +4,17 @@
 #include "kapi.h"
 
 #define DEFAULT_WHEEL_LINES 3
-// Font-derived, not a fixed pixel count: this is exactly what Terminal
-// and Notepad each had (TERM_SCROLLBAR_W / NOTEPAD_SCROLLBAR_W, both
-// `gfx_char_w() + 4`), so adopting the control changes no pixels. A
-// constant here would have quietly resized both bars, and been wrong at
-// every font size but one.
-#define DEFAULT_BAR_W      (gfx_char_w() + 4)
+// Font-derived, not a fixed pixel count: a constant here would be right
+// at exactly one font size. It used to spell the derivation out
+// (`gfx_char_w() + 4`, matching the TERM_SCROLLBAR_W / NOTEPAD_SCROLLBAR_W
+// this control replaced) -- and so did ui_listbox.c, so widening the bar
+// meant finding both. It asks the scrollbar itself now.
+static int default_bar_w(void) {
+    int w;
+    widget_scrollbar_natural_size(&w, NULL);
+    return w;
+}
+#define DEFAULT_BAR_W      default_bar_w()
 // Below this much room for text, AUTO hides the bar entirely -- the
 // hide-when-narrow rule both apps also had, as bar_w * 3.
 #define DEFAULT_MIN_TEXT_W (DEFAULT_BAR_W * 3)

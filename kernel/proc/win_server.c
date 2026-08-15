@@ -114,8 +114,10 @@ static int create_window(int pid, const struct win_request_msg *req, uint32_t *o
 
     // Zero it before the client ever sees it: a fresh window must not
     // show whatever the previous owner of these frames left behind.
-    uint8_t *bytes_p = (uint8_t *)(uintptr_t)phys;
-    for (uint32_t i = 0; i < pages * 4096; i++) bytes_p[i] = 0;
+    // k_memset() rather than the byte loop this used to be -- a
+    // full-screen window is 3.5 MiB, and the same loop runs again on
+    // every resize.
+    k_memset((void *)(uintptr_t)phys, 0, (size_t)pages * 4096);
 
     for (uint32_t i = 0; i < pages; i++) {
         if (!vmm_map_user_page(pml4, vaddr + (uint64_t)i * 4096, phys + (uint64_t)i * 4096)) {
@@ -233,8 +235,7 @@ static int resize_window(struct client_window *cw, int w, int h) {
         klog_write("win_server: resize refused -- out of contiguous memory\n");
         return 0;
     }
-    uint8_t *bp = (uint8_t *)(uintptr_t)phys;
-    for (uint32_t i = 0; i < pages * 4096; i++) bp[i] = 0;
+    k_memset((void *)(uintptr_t)phys, 0, (size_t)pages * 4096);
 
     // Only now is the old mapping disturbed.
     for (uint32_t i = 0; i < cw->pages; i++) {

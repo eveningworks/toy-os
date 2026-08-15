@@ -30,11 +30,25 @@ static void scrollbar_geometry(int y, int h, int total_lines, int visible_rows, 
 }
 
 void widget_scrollbar_natural_size(int *out_w, int *out_h) {
-    // Matches the DEFAULT_BAR_W that ui_listbox.c and ui_textview.c
-    // each derive for themselves -- font-derived, so the strip stays
-    // proportional to the text it scrolls.
-    if (out_w) *out_w = gfx_char_w() + 4;
+    // THE default bar width for this side of the desktop -- ui_listbox.c
+    // and ui_textview.c derive theirs from this call rather than
+    // repeating the expression, so widening the bar is one edit.
+    // Font-derived, so the strip stays proportional to the text it
+    // scrolls; char_w + 6 rather than + 4 because the narrower strip's
+    // thumb was hard to hit with a mouse. Kept in step with
+    // userland/ui/uui_scrollbar.c's, so the two sides match.
+    if (out_w) *out_w = gfx_char_w() + 6;
     if (out_h) *out_h = 0; // no preference: as tall as its content area
+}
+
+// See userland/ui/uui_scrollbar.c -- same rule, same reason: the gutter
+// is what reads as a capsule in a groove, and one pixel of it vanishes
+// as the bar widens.
+int widget_scrollbar_thumb_inset(int w) {
+    int inset = 1 + w / 12;
+    if (inset > 2) inset = 2;
+    if (w <= 4) inset = 0;
+    return inset;
 }
 
 // A rounded rectangle -- the capsule shape a modern scrollbar thumb
@@ -56,10 +70,11 @@ void widget_scrollbar_draw(int x, int y, int w, int h, int total_lines, int visi
 
     int thumb_y, thumb_h, max_scroll;
     scrollbar_geometry(y, h, total_lines, visible_rows, scroll_offset, &thumb_y, &thumb_h, &max_scroll);
-    // Inset a pixel each side so the track shows around the capsule --
-    // that gap is most of what reads as modern rather than as a grey
-    // block filling a groove.
-    fill_capsule(x + 1, thumb_y, w - 2, thumb_h, thumb_bg);
+    // Inset each side so the track shows around the capsule -- that gap
+    // is most of what reads as modern rather than as a grey block
+    // filling a groove.
+    int in = widget_scrollbar_thumb_inset(w);
+    fill_capsule(x + in, thumb_y, w - 2 * in, thumb_h, thumb_bg);
 }
 
 // NOTE: stepper arrows are a ring-3 option only (uui_scrollbar.h's

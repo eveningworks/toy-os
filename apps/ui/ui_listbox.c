@@ -7,10 +7,15 @@
 
 #define DEFAULT_WHEEL_ROWS 3
 // Matched to ui_textview's bar, deliberately: two scrollbars of
-// different widths in one window read as a mistake, and both are
-// font-derived for the same reason (a constant is correct at exactly
-// one font size).
-#define DEFAULT_BAR_W (gfx_char_w() + 4)
+// different widths in one window read as a mistake. Both now ask the
+// scrollbar for its own natural width rather than each repeating the
+// derivation, which is what actually keeps them matched.
+static int default_bar_w(void) {
+    int w;
+    widget_scrollbar_natural_size(&w, NULL);
+    return w;
+}
+#define DEFAULT_BAR_W default_bar_w()
 // Below this much room for labels, AUTO hides the bar entirely -- the
 // same rule and the same ratio ui_textview uses.
 #define DEFAULT_MIN_ROW_W (DEFAULT_BAR_W * 3)

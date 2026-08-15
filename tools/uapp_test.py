@@ -151,6 +151,98 @@ def run(dbg, qmp, tmp, res):
         res.check("the client is still drawing after being resized twice",
                   edge == BORDER, f"top-left content pixel {edge}, want {BORDER}")
 
+    check_maximize(dbg, qmp, tmp, res)
+
+
+# The old WIN_CLIENT_MAX_W/H. Named rather than inlined because what is
+# being asserted is "past the size that used to be refused", and the
+# constant it refers to no longer exists in the tree.
+OLD_CAP_W, OLD_CAP_H = 640, 480
+
+
+def check_maximize(dbg, qmp, tmp, res):
+    """Maximizing a CLIENT window, which is a resize the client must ack.
+
+    Two things are under test and they are worth separating.
+
+    **Maximize is a proposal, not an imposition.** The WM owns where a
+    window sits and how big its frame is; it does NOT own a client's
+    pixel buffer. Setting `w->w`/`w->h` directly -- which both maximize
+    call sites did until this check was written -- gives full-screen
+    chrome around a buffer still at the old size, with undrawn desktop
+    filling the difference. That is the exact failure
+    abi/win_proto.h's configure/ack section describes for the grip, and
+    it went unnoticed because nothing maximized a client window.
+
+    **The buffer that results is past the old 640x480 cap**, and past
+    what the old 2 MiB WIN_BUFFER_STRIDE could address at all -- a
+    full-screen buffer is ~3.2 MiB. Maximize is used to get there rather
+    than a grip drag because the drag's reachable size depends on where
+    the window happens to sit, which made the same assertion pass or
+    fail on window POSITION.
+
+    Asserted as a PAIR, the same way checks 3/4 are: the reported
+    content size and the client's PAINTED extent must both reach the new
+    size. A server that accepted the request and handed back a buffer
+    still bounded by the stride would satisfy either half alone.
+
+    Positive control, done by hand when this was written: restore the
+    direct `windows[idx].w = screen_w` assignment in
+    wm_input.c's wm_toggle_maximize(). The reported size still grows --
+    check 7 stays green -- and the painted-extent half goes red, which
+    is the half that was missing.
+    """
+    st = dbg.state()
+    screen_w, screen_h = st["screen"]["w"], st["screen"]["h"]
+
+    win = dbg.window(TITLE)
+    if not win:
+        res.check("the client window survived to be maximized", False, "no window")
+        return
+
+    # The maximize button is the middle of the three at the title bar's
+    # right end. Its centre comes from the WM rather than from pixel
+    # arithmetic here -- see gui_debug.py.
+    dbg.click(win["x"] + win["w"] - 40, win["y"] + 12)
+    dbg.settle()
+    time.sleep(0.8)
+
+    big = dbg.window(TITLE)
+    bc = big["content"] if big else None
+    res.check("maximizing a client window grows it past the old 640x480 cap",
+              bc is not None and bc["w"] > OLD_CAP_W and bc["h"] > OLD_CAP_H,
+              f"content {bc['w']}x{bc['h']}" if bc else "window gone")
+
+    if bc:
+        # Three points: the far corner, a point beyond the old cap on
+        # BOTH axes, and one that must NOT be the border -- the
+        # neighbour half of the assertion docs/gui-guidelines.md asks
+        # for. The interior points are clamped inside the content so a
+        # smaller screen shrinks the claim rather than sampling chrome.
+        ix = min(bc["x"] + OLD_CAP_W + 8, bc["x"] + bc["w"] - 6)
+        iy = min(bc["y"] + OLD_CAP_H + 8, bc["y"] + bc["h"] - 6)
+        corner = pixel(qmp, tmp, "uapp_max.png",
+                       bc["x"] + bc["w"] - 2, bc["y"] + bc["h"] - 2)
+        beyond = pixel(qmp, tmp, "uapp_max.png", ix, iy)
+        painted_past_cap = ix > bc["x"] + OLD_CAP_W and iy > bc["y"] + OLD_CAP_H
+        res.check("the client painted the whole maximized buffer",
+                  corner == BORDER and beyond != BORDER and painted_past_cap,
+                  f"corner {corner} (want {BORDER}), interior at "
+                  f"({ix - bc['x']},{iy - bc['y']}) {beyond} (want != {BORDER}), "
+                  f"past cap on both axes: {painted_past_cap}")
+
+    # Restore, and require it to come back -- the reverse direction is a
+    # resize too, and a client that only handled growth would pass
+    # everything above and leave a full-screen buffer behind.
+    dbg.click(big["x"] + big["w"] - 40, big["y"] + 12)
+    dbg.settle()
+    time.sleep(0.8)
+    back = dbg.window(TITLE)
+    res.check("restoring a maximized client window shrinks its buffer back",
+              back is not None and back["content"]["w"] < OLD_CAP_W,
+              f"content {back['content']['w']}x{back['content']['h']}"
+              if back else "window gone")
+
 
 def check_focus_caret(dbg, qmp, tmp, res):
     """A caret must not be drawn while its window is unfocused.

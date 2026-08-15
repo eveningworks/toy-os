@@ -122,6 +122,74 @@ and both were uncancellable the whole time -- which is also why there
 is deliberately no `ui_button_group_click()` any more (see
 `docs/decisions.md`).
 
+## Scrollbars: what a real one does
+
+A scrollbar looks trivial and has more behaviour than any other control
+here. This section is the specification, written down because the
+implementation has been rebuilt under it twice and each time something
+in this list quietly stopped being true. Every point below is how
+Windows, KDE/Breeze, macOS and GTK all behave -- they differ on looks,
+not on any of this. If a change makes one of these false, the change is
+wrong even if it builds and even if the bar still moves.
+
+**1. The thumb must not jump when you grab it.** Pressing anywhere on
+the thumb and moving by N pixels moves the thumb by exactly N pixels,
+from wherever it was. This means recording HOW FAR DOWN THE THUMB the
+press landed, and subtracting it on every motion event
+(`grab_offset_in_thumb`). Passing 0 there is the bug this section exists
+for: the thumb then leaps so its TOP sits under the cursor, and the
+control is usable only by catching its top edge exactly. It shipped that
+way in the ring-3 Notepad, and the symptom reads as "the scrollbar is
+broken" rather than as an off-by-a-grab-offset, which is why it survived.
+
+**2. Dragging is absolute, not relative to the content.** The thumb
+follows the cursor 1:1 in TRACK space; the content position is derived
+from the thumb, never the other way round. A drag past either end
+clamps, and dragging back returns along the same path -- no accumulated
+drift.
+
+**3. The trough pages, the thumb drags, the arrows step.** A press on
+the track above the thumb goes back one visible page, below it forward
+one page, and a stepper arrow (where the app asks for them) moves one
+line. Three zones, three different amounts. A trough click that jumps
+straight to the clicked position instead of paging is a different
+convention -- macOS offers it as an option, KDE as `scrollbarLeftClick`
+-- and this toolkit deliberately pages, so don't "fix" it to jump.
+
+**4. The thumb has a minimum size** (`UUI_SCROLLBAR_MIN_THUMB_H`).
+Proportional sizing alone makes the thumb vanish on long content, and a
+0px thumb is a control you cannot grab at all.
+
+**5. The hit area and the drawn thumb are the same rectangle.** They
+must come from one geometry function -- `sb_geometry()` here, which
+draw, hit-test and the drag maths all call. Two derivations is the
+classic way a scrollbar ends up drawing in one place and responding in
+another, and the copy Notepad used to carry did exactly that.
+
+**6. It must be wide enough to hit with a mouse.** The strip is
+FONT-DERIVED (`uui_scrollbar_natural_size()` /
+`widget_scrollbar_natural_size()`, `char_w + 6`), which is also this
+document's size-everything-from-the-font rule -- but the floor is
+ergonomic, not aesthetic. An app that hardcodes a pixel width gets a bar
+that is right at exactly one font size and, in Notepad's case, an 8px
+strip with a 6px thumb that was genuinely hard to click. **Take the
+width from the widget.** Passing your own is supported -- it is a
+parameter of every scrollbar call -- but the DEFAULT must come from the
+widget or the desktop's bars stop matching each other.
+
+**7. The wheel scrolls the CONTENT, and never needs the bar.** A
+control with `UI_SCROLLBAR_NEVER` still scrolls. The bar is an
+indicator and a handle, not the mechanism.
+
+**8. It is an indicator even when it cannot scroll.** The track is drawn
+whether or not there is a thumb, so you can see the control is
+scrollable before you go looking. (The near-invisible modern style needs
+hover-to-expand to compensate, and these widgets deliberately keep no
+hover state.)
+
+`tools/scrollbar_test.py` asserts points 1, 2, 3 and 6 against the
+ring-3 Notepad. Run it after touching either scrollbar port.
+
 ## Keyboard: focus, and what a control owes it
 
 A window's widgets share one `ui_focus` ring (`apps/ui/ui_focus.h`).

@@ -232,21 +232,55 @@ static void ctx_minimize_window(void *ctx) {
     redraw_pending = 1;
 }
 
-static void ctx_toggle_maximize_window(void *ctx) {
-    int i = *(int *)ctx;
-    if (!windows[i].resizable) return; // same rule the title-bar button follows
+// Maximize, or restore a maximized window. One implementation, called
+// by both the title-bar button and the context menu -- they used to hold
+// a copy each, and a CLIENT window is exactly the case where two copies
+// of a rule stop agreeing.
+//
+// The client half is the part worth reading. A kernel-space app draws
+// into whatever rect the WM gives it, so setting w/h here is the whole
+// operation. A CLIENT owns its own pixel buffer, so imposing a size
+// produces precisely the failure abi/win_proto.h describes for the grip:
+// full-screen chrome around a buffer still the old size, with undrawn
+// desktop filling the difference. It did exactly that until this was
+// fixed. So a client is PROPOSED the new content size, the same
+// configure/ack the grip uses, and wm_client.c's on_window_resized()
+// adopts w/h when the client answers.
+static void wm_toggle_maximize(int i) {
+    if (!windows[i].resizable) return; // same rule for both entry points
+    int is_client = wm_client_is_client_window(&windows[i]);
+
+    // Damage the rect the window is leaving, in both directions: the
+    // window is about to move and resize, and nothing else repaints the
+    // desktop it uncovers.
+    wm_damage_rect(windows[i].x, windows[i].y, windows[i].w, windows[i].h);
+
     if (windows[i].state == WIN_MAXIMIZED) {
         windows[i].x = windows[i].saved_x; windows[i].y = windows[i].saved_y;
-        windows[i].w = windows[i].saved_w; windows[i].h = windows[i].saved_h;
         windows[i].state = WIN_NORMAL;
+        if (is_client) {
+            wm_client_send_resize(&windows[i], windows[i].saved_w - 2,
+                                   windows[i].saved_h - WM_TITLEBAR_H - 2);
+        } else {
+            windows[i].w = windows[i].saved_w; windows[i].h = windows[i].saved_h;
+        }
     } else {
         windows[i].saved_x = windows[i].x; windows[i].saved_y = windows[i].y;
         windows[i].saved_w = windows[i].w; windows[i].saved_h = windows[i].h;
         windows[i].x = 0; windows[i].y = 0;
-        windows[i].w = screen_w; windows[i].h = screen_h - taskbar_h;
         windows[i].state = WIN_MAXIMIZED;
+        if (is_client) {
+            wm_client_send_resize(&windows[i], screen_w - 2,
+                                   screen_h - taskbar_h - WM_TITLEBAR_H - 2);
+        } else {
+            windows[i].w = screen_w; windows[i].h = screen_h - taskbar_h;
+        }
     }
     redraw_pending = 1;
+}
+
+static void ctx_toggle_maximize_window(void *ctx) {
+    wm_toggle_maximize(*(int *)ctx);
 }
 
 static void ctx_open_app(void *ctx) { open_app((const struct gui_app *)ctx); }
@@ -475,19 +509,9 @@ void wm_update_title_btn_press(int mx, int my, uint8_t buttons) {
             // Fixed-size apps (Calculator -- see gui_apps.h) get a
             // disabled maximize button: focus the window like any other
             // click on it, but don't touch its geometry.
-            if (windows[idx].resizable) {
-                if (windows[idx].state == WIN_MAXIMIZED) {
-                    windows[idx].x = windows[idx].saved_x; windows[idx].y = windows[idx].saved_y;
-                    windows[idx].w = windows[idx].saved_w; windows[idx].h = windows[idx].saved_h;
-                    windows[idx].state = WIN_NORMAL;
-                } else {
-                    windows[idx].saved_x = windows[idx].x; windows[idx].saved_y = windows[idx].y;
-                    windows[idx].saved_w = windows[idx].w; windows[idx].saved_h = windows[idx].h;
-                    windows[idx].x = 0; windows[idx].y = 0;
-                    windows[idx].w = screen_w; windows[idx].h = screen_h - taskbar_h;
-                    windows[idx].state = WIN_MAXIMIZED;
-                }
-            }
+            // wm_toggle_maximize() enforces that itself, and is shared
+            // with the context menu's Maximize/Restore item.
+            wm_toggle_maximize(idx);
             bring_to_front(idx);
         } else if (wm_client_is_client_window(&windows[idx])) {
             // A client's window is the CLIENT's to close: it may have

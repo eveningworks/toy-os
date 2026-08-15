@@ -1172,6 +1172,19 @@ repeated manual steps to be worth automating:
   DISTINCT COLOURS in the canvas (468 with, 5 without) rather than by
   sampling a point, since a curve moves and a fixed sample point
   doesn't follow it.
+- **`scrollbar_test.py`** -- scrollbar BEHAVIOUR, against the ring-3
+  Notepad: the thumb doesn't jump when grabbed anywhere on it, a drag is
+  reversible, the trough pages while an arrow steps, and the strip is
+  wide enough to hit. It measures the THUMB'S PIXELS (track and thumb
+  are known flat colours, so a column scan gives its exact top and
+  height) rather than reading text, and takes the strip's rect from
+  Notepad's own `notepad: layout scrollbar` line. Written after the
+  ring-3 Notepad shipped a bar that scrolled -- so every other check
+  passed -- while jumping to put the thumb's top under the cursor,
+  making it grabbable only by its top edge. The spec it enforces is
+  `docs/gui-guidelines.md`'s "Scrollbars: what a real one does"; run it
+  after touching either `apps/ui/ui_scrollbar.c` or
+  `userland/ui/uui_scrollbar.c`.
 - **`gui_regress.py`** -- runs every GUI test tool, each against
   its own freshly-copied disk image and its own VM, and prints one
   pass/fail table (~35 seconds, ~82 checks). This is the standard check
