@@ -159,6 +159,7 @@ there when you add an entry, or the index quietly stops being one.
 - [Header dependency tracking is a `find`, and a test proves it works](#header-dependency-tracking-is-a-find-and-a-test-proves-it-works)
 - [Userland programs link one archive, and name nothing](#userland-programs-link-one-archive-and-name-nothing)
 - [The GUI stack has names: TWP, TWS and Toykit](#the-gui-stack-has-names-twp-tws-and-toykit)
+- [Ring-3 GUI apps are callbacks and a layout, not a loop](#ring-3-gui-apps-are-callbacks-and-a-layout-not-a-loop)
 - [Parallel test VMs lease a slot, they don't derive one from their position](#parallel-test-vms-lease-a-slot-they-dont-derive-one-from-their-position)
 
 **Session workflow & environment**
@@ -2238,6 +2239,36 @@ prefix need not match -- GNOME's toolkit is GTK -- and renaming several
 hundred symbols to spell a name out would be churn with no reader
 benefit. The names are for docs, comments and conversation, which is
 where the ambiguity actually was.
+
+## Ring-3 GUI apps are callbacks and a layout, not a loop
+
+Every TWP client used to hand-write the same three things: the
+create/title/present/destroy handshake, a `for(;;)` around a
+`switch (ev.type)`, and a `draw(); present();` pair at every state
+change -- about 55 of `winclient.c`'s 141 lines before it did anything
+of its own. Then it computed every rectangle by hand as well.
+
+Toykit's `uapp` (`userland/ui/uapp.h`) owns the loop; `uui_layout`
+(`userland/ui/uui_layout.h`) owns the geometry. An app is a
+`struct uapp_desc` and some callbacks.
+
+**The property that justifies it, and the one to preserve:** every
+callback is optional and the library has a defined default for every
+event, so TWS can gain a feature without any app being edited. That was
+tested rather than asserted -- shipping resize (stage 3) touched ZERO
+lines in the clients that did not opt in, and they all kept passing. An
+unknown event type is ignored on purpose.
+
+Four pieces of API were written and deleted before landing, each for
+having no caller: `gfx_text_index_at_x()`, `uapp_text()`, the
+`uapp_open()`/`uapp_pump()` escape hatch, and `WIN_REQ_MOVE`. The hatch
+is the instructive one -- the design predicted for three stages that
+Terminal would need it because Terminal BLOCKS inside a command, and
+porting it showed the requirement was to PAINT at a chosen moment
+(`uapp_flush()`, one line), not to own the loop. "This app blocks" and
+"this app needs the loop" are not the same requirement.
+
+Full design and staging: `docs/uapp-design.md`.
 
 ## Userland programs link one archive, and name nothing
 

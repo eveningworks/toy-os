@@ -235,6 +235,17 @@ technical conventions below:
   `sub rsp, 8` there looks like it restores the old convention and
   instead faults every SSE-using binary while leaving plain ones
   working, see `docs/decisions.md`.
+- **Ring-3 GUI apps are written against Toykit's `uapp`, and a new one
+  is a `.c` file in `userland/gui/` with NO Makefile edit.** Describe
+  the app in a `struct uapp_desc` -- title, a `uui_layout`, callbacks --
+  and `uapp_run()` owns the TWP handshake and the event loop
+  (`userland/ui/uapp.h`). Every callback is optional with a library
+  default, which is what lets TWS gain a feature without apps being
+  edited. Do not hand-roll a window handshake or an event loop in a new
+  client; that is what this replaced. Layout (`uui_layout.h`) means an
+  app writes no coordinates: declare a column/row/grid, and the window
+  sizes itself from the content. Resize, focus and wheel all arrive for
+  free. `docs/uapp-design.md` is the full design and its staging.
 - **The GUI stack has names -- use them.** **TWP** (Toy Window
   Protocol, `abi/win_proto.h`) is the client<->server contract;
   **TWS** (Toy Window Server, `kernel/proc/win_server.c` +
@@ -1181,6 +1192,13 @@ repeated manual steps to be worth automating:
   `damage_sweep.py` is deliberately NOT in it (much slower under
   `gui damage verify on`, and it has its own `--positive-control`
   protocol) -- run that separately.
+- **`uapp_test.py`** -- the TWP resize handshake and focus events, via
+  `winclient` (which contains no resize code -- it sets
+  `.flags = UAPP_RESIZABLE` and nothing else, so what is under test is
+  Toykit's and TWS's). 8 checks. Its focus check is a ROUND TRIP:
+  capture a Terminal's content focused, take focus away and require it
+  to CHANGE, give focus back and require it to match the first capture
+  EXACTLY -- "it changed" alone is satisfied by almost anything.
 - **`damage_sweep.py`** -- drives the WM through the interactions that
   historically break the damage invariant with `gui damage verify on`,
   and exits non-zero on a violation. Run it after touching anything

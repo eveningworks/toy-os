@@ -402,6 +402,27 @@ So when you change anything that draws:
   expects a violation, so you can prove it against a deliberately broken
   build instead of trusting a green result.
 
+## A GUI test asks the app where things are
+
+Every app built to be tested against reports its own geometry -- one
+`<app>: layout <what> x y w h` line per widget, content-relative, on
+stderr (which reaches `dmesg`; a client's stdout goes to its owning
+Terminal's scrollback, where no test can read it). UI Demo, Shapes,
+Calculator, Terminal and Notepad all do it, and their tools parse those
+lines.
+
+**Do not re-derive geometry in Python.** Four tools have now learned
+this the same way. `calculator_client_test.py` inverted the app's sizing
+formula, including a literal `char_h = (ch - 150) // 7`, and when the
+app moved to `uui_layout` it computed 18 against a real 17 and clicked
+several pixels off centre -- inside the buttons, so the suite stayed
+GREEN while measuring something it no longer understood. The arrow check
+in `notepad_client_test.py` computed a stepper's position, hit the track
+instead, paged rather than stepped, and could not step back.
+
+A derived copy drifts silently the moment the layout changes. Add the
+log line to the app instead; it is a dozen lines and it cannot drift.
+
 ## Three ways a GUI test passes without testing anything
 
 All three of these shipped a real bug past a green suite. They are
