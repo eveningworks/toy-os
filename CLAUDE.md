@@ -64,7 +64,16 @@ technical conventions below:
   exactly 1; there is no floating point in this kernel, the build
   passes `-mno-sse`) and `geom.h` (`geom_line`/`_polyline`/`_ellipse`/
   `_circle`/`_fill_ellipse`/`_rotate`/`_transform`, each taking a
-  `GEOM_ALIASED` or `GEOM_AA` flag). Reach for the `gfx_draw_line()`/
+  `GEOM_ALIASED` or `GEOM_AA` flag; **plus a small 3D section** --
+  `geom_pt3`, `geom_rotate3` (yaw then pitch then roll, in that fixed
+  order because rotations don't commute), `geom_project` (perspective,
+  eye at `-dist`, denominator clamped so a point at the eye can't divide
+  by zero or flip through the origin) and `geom_transform3`, which
+  scales/rotates/projects a model and hands back each vertex's ROTATED
+  depth so a caller can shade or sort by distance. Deliberately not a 3D
+  engine: no matrices, no faces, no depth buffer, no clipping planes --
+  a model is points plus whatever edge list the caller keeps beside
+  them, which is all the Shapes demo's cube is). Reach for the `gfx_draw_line()`/
   `gfx_draw_circle()`/`gfx_fill_ellipse()` wrappers in the kernel and
   `uui_canvas` in ring 3 rather than `geom_*` directly -- both handle
   the plot callback, and the canvas handles clipping. Two things about
@@ -675,10 +684,15 @@ log says which widget it actually hit. Read its top comment for the
 layout table and the log grammar before writing coordinates by hand.
 
 **Its ring-3 counterpart is "Shapes"** (`userland/gui/gfxdemo.c`, `run
-shapes` from a Terminal) -- a rotating wireframe triangle and ellipse
+shapes` from a Terminal) -- **two scenes, switched with the `2D / 3D`
+button or `S`**: a rotating wireframe triangle and ellipse, or a
+perspective-projected wireframe CUBE with depth-shaded edges. Both are
 drawn with the shared geometry module, with the same one-line-per-state
-log grammar (`gfxdemo: aa off`) and a self-reported `gfxdemo: layout
-canvas <x> <y> <w> <h>`. Use it as the known target when testing
+log grammar (`gfxdemo: aa off`, `gfxdemo: scene 3d`) and self-reported
+`gfxdemo: layout canvas <x> <y> <w> <h>` / `layout buttons <x> <y> <w>
+<h> <pitch> <count>` -- take button positions from the second of those
+rather than deriving them from the canvas rect. Use it as the known
+target when testing
 `kernel/lib/geom.c`, `uui_canvas`, or ring-3 drawing generally;
 `tools/gfxdemo_test.py` drives it. **A ring-3 app's diagnostics go to
 `sys_eprint()` (stderr), not `sys_print()`** -- stderr reaches the

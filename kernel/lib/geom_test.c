@@ -225,3 +225,113 @@ KTEST("geom", "a degenerate shape is a point, not a crash") {
     geom_ellipse(&t, 0, 0, -5, -5, 0xFFFFFF, GEOM_ALIASED);
     KTEST_ASSERT_EQ(g_rec.n, 0);
 }
+
+// --- 3D ---------------------------------------------------------------
+//
+// Worth testing here rather than by looking at the Shapes demo for the
+// reason this file opens with: a projection that is subtly wrong still
+// produces a shape that spins convincingly. These pin the parts a
+// picture cannot -- that the axes are the ones the header claims, that
+// perspective actually makes near larger than far, and that a point at
+// the eye does not divide by zero.
+
+KTEST("geom", "each 3D rotation turns the axes the header says it does") {
+    struct geom_pt3 p;
+
+    // A quarter turn of YAW takes +x to -z: the x/z plane turns and y is
+    // untouched. Getting a sign wrong here spins the model the wrong way
+    // and looks entirely plausible.
+    p = geom_rotate3((struct geom_pt3){ FX_ONE, 0, 0 }, FX_ONE / 4, 0, 0);
+    KTEST_ASSERT_EQ(p.x, 0);
+    KTEST_ASSERT_EQ(p.y, 0);
+    KTEST_ASSERT_EQ(p.z, -FX_ONE);
+
+    // A quarter turn of PITCH takes +y to +z, leaving x alone.
+    p = geom_rotate3((struct geom_pt3){ 0, FX_ONE, 0 }, 0, FX_ONE / 4, 0);
+    KTEST_ASSERT_EQ(p.x, 0);
+    KTEST_ASSERT_EQ(p.y, 0);
+    KTEST_ASSERT_EQ(p.z, FX_ONE);
+
+    // A quarter turn of ROLL takes +x to +y, leaving z alone -- the same
+    // turn the 2D geom_rotate() does, which is the point.
+    p = geom_rotate3((struct geom_pt3){ FX_ONE, 0, 0 }, 0, 0, FX_ONE / 4);
+    KTEST_ASSERT_EQ(p.x, 0);
+    KTEST_ASSERT_EQ(p.y, FX_ONE);
+    KTEST_ASSERT_EQ(p.z, 0);
+}
+
+KTEST("geom", "a zero rotation leaves a point exactly where it was") {
+    struct geom_pt3 in = { 3 * FX_ONE, -7 * FX_ONE, 11 * FX_ONE };
+    struct geom_pt3 p = geom_rotate3(in, 0, 0, 0);
+    KTEST_ASSERT_EQ(p.x, in.x);
+    KTEST_ASSERT_EQ(p.y, in.y);
+    KTEST_ASSERT_EQ(p.z, in.z);
+}
+
+KTEST("geom", "perspective makes near bigger than far") {
+    fx_t dist = fx_from_int(100);
+    struct geom_pt3 p_near = { fx_from_int(10), 0, fx_from_int(-50) };
+    struct geom_pt3 p_far  = { fx_from_int(10), 0, fx_from_int(50) };
+
+    struct geom_pt n = geom_project(p_near, dist);
+    struct geom_pt f = geom_project(p_far, dist);
+
+    // THE property that distinguishes a cube from a flat hexagon: two
+    // points at the same x, one nearer, must not project to the same
+    // place. An orthographic projection -- or a divide that silently
+    // cancelled -- passes every other check here.
+    KTEST_ASSERT(n.x > f.x);
+    KTEST_ASSERT_EQ(n.x, fx_from_int(20));  // 10 * 100/50
+    KTEST_ASSERT(f.x < fx_from_int(10));    // 10 * 100/150
+
+    // A point on the projection plane is unmoved by it.
+    struct geom_pt on = geom_project((struct geom_pt3){ fx_from_int(7), fx_from_int(3), 0 }, dist);
+    KTEST_ASSERT_EQ(on.x, fx_from_int(7));
+    KTEST_ASSERT_EQ(on.y, fx_from_int(3));
+}
+
+KTEST("geom", "a point at or behind the eye clamps instead of dividing by zero") {
+    fx_t dist = fx_from_int(100);
+
+    // Exactly at the eye: the denominator is 0 before clamping.
+    struct geom_pt at = geom_project((struct geom_pt3){ FX_ONE, 0, -dist }, dist);
+    // Far off screen, which is the intended outcome -- not a crash, and
+    // not a small plausible-looking coordinate.
+    KTEST_ASSERT(at.x > fx_from_int(100));
+
+    // Behind it: must NOT come back with a flipped sign, which is what
+    // an unclamped divide produces and what makes a model turn inside
+    // out at exactly one angle.
+    struct geom_pt behind = geom_project((struct geom_pt3){ FX_ONE, 0, -2 * dist }, dist);
+    KTEST_ASSERT(behind.x > 0);
+}
+
+KTEST("geom", "geom_transform3 reports the rotated depth it projected with") {
+    // Two opposite corners of a cube, face on. With no rotation the
+    // depths are simply the input z values -- which is the check that
+    // out_z is the ROTATED depth and not something recomputed or the
+    // pre-scale value.
+    struct geom_pt3 pts[2] = {
+        { fx_from_int(-10), 0, fx_from_int(-10) },
+        { fx_from_int(-10), 0, fx_from_int(10) },
+    };
+    int xs[2], ys[2];
+    fx_t z[2];
+    geom_transform3(pts, 2, 0, 0, 0, FX_ONE, fx_from_int(100), 200, 100, xs, ys, z);
+
+    KTEST_ASSERT_EQ(z[0], fx_from_int(-10));
+    KTEST_ASSERT_EQ(z[1], fx_from_int(10));
+
+    // Both are at x = -10 in the model, so the NEARER one must land
+    // further from the centre. Same claim as the projection test, but
+    // through the call an app actually makes.
+    KTEST_ASSERT(xs[0] < xs[1]);
+    KTEST_ASSERT(xs[1] < 200);
+    KTEST_ASSERT_EQ(ys[0], 100);   // y = 0 stays on the centre line
+
+    // Scale multiplies z as well as x and y -- a scale that only touched
+    // two of the three axes would squash the model flat as it grew.
+    fx_t z2[2];
+    geom_transform3(pts, 2, 0, 0, 0, 2 * FX_ONE, fx_from_int(100), 200, 100, xs, ys, z2);
+    KTEST_ASSERT_EQ(z2[1], fx_from_int(20));
+}

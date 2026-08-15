@@ -33,9 +33,19 @@
 #define BTN_SLOWER 1
 #define BTN_FASTER 2
 #define BTN_RESET  3
+#define BTN_SCENE  4
+
+// The two scenes get the canvas to themselves rather than sharing it.
+// Both were drawn together first and it was simply illegible: the
+// canvas already holds two static rings, a pulsing ellipse, a triangle
+// and its three vertex dots, and a cube in the middle of that reads as
+// noise. A toggle also gives the test a named, settled state to assert
+// on, which "everything at once" does not.
+#define SCENE_2D 0
+#define SCENE_3D 1
 
 static struct uui_canvas g_canvas;
-static struct uui_button g_buttons[3];
+static struct uui_button g_buttons[4];
 static struct uui_button_group g_bar;
 // The anti-aliasing toggle IS the checkbox now: its `checked` field is
 // the single store, so the keyboard shortcut and the click cannot end up
@@ -45,6 +55,7 @@ static struct uui_checkbox g_aa_check;
 static fx_t g_angle;            // in turns; wraps naturally
 static int g_speed = 3;         // angle steps per frame, in 1/1024 turns
 static int g_frames;
+static int g_scene = SCENE_2D;
 
 
 // The triangle, as unit-ish points about its own centre. Kept in
@@ -54,6 +65,43 @@ static const struct geom_pt TRI[3] = {
     { 0,               -110 * FX_ONE / 1 },
     {  95 * FX_ONE,     55 * FX_ONE },
     { -95 * FX_ONE,     55 * FX_ONE },
+};
+
+// --- the cube ---------------------------------------------------------
+//
+// Eight corners and twelve edges, and that is the whole model -- every
+// rotation and the perspective divide come from geom_transform3()
+// (kernel/lib/geom.c), the same file compiled into the kernel. The app
+// owns no trigonometry and no projection maths at all, which is the
+// point of it living there.
+//
+// Half-size 80 against a projection distance of 320: near enough that
+// the front face is visibly larger than the back one. Push the distance
+// far higher and the two squares converge until a face-on cube is a
+// single square with nothing inside it -- which is exactly the
+// degenerate case tools/gfxdemo_test.py asserts against.
+#define CUBE_HALF 80
+#define CUBE_DIST fx_from_int(320)
+
+static const struct geom_pt3 CUBE[8] = {
+    { -CUBE_HALF * FX_ONE, -CUBE_HALF * FX_ONE, -CUBE_HALF * FX_ONE },
+    {  CUBE_HALF * FX_ONE, -CUBE_HALF * FX_ONE, -CUBE_HALF * FX_ONE },
+    {  CUBE_HALF * FX_ONE,  CUBE_HALF * FX_ONE, -CUBE_HALF * FX_ONE },
+    { -CUBE_HALF * FX_ONE,  CUBE_HALF * FX_ONE, -CUBE_HALF * FX_ONE },
+    { -CUBE_HALF * FX_ONE, -CUBE_HALF * FX_ONE,  CUBE_HALF * FX_ONE },
+    {  CUBE_HALF * FX_ONE, -CUBE_HALF * FX_ONE,  CUBE_HALF * FX_ONE },
+    {  CUBE_HALF * FX_ONE,  CUBE_HALF * FX_ONE,  CUBE_HALF * FX_ONE },
+    { -CUBE_HALF * FX_ONE,  CUBE_HALF * FX_ONE,  CUBE_HALF * FX_ONE },
+};
+
+// Front face, back face, then the four struts joining them. An edge
+// list rather than a polyline because a cube's edges do not form one
+// path -- drawing it as a closed polyline would invent three diagonals
+// that are not there.
+static const uint8_t CUBE_EDGES[12][2] = {
+    {0,1},{1,2},{2,3},{3,0},   // z = -half
+    {4,5},{5,6},{6,7},{7,4},   // z = +half
+    {0,4},{1,5},{2,6},{3,7},   // the struts
 };
 
 // Diagnostics go to STDERR, which the kernel routes to the kernel log
@@ -93,6 +141,28 @@ static void log_layout(void) {
     log_line(b);
 }
 
+// "gfxdemo: layout buttons <x> <y> <w> <h> <pitch> <count>" -- enough to
+// click any button in the row exactly. tools/gfxdemo_test.py used to
+// reach the first one with `canvas_y + canvas_h + 8 + 12`, re-deriving
+// the app's own spacing in Python, which is the drift this repo has
+// been bitten by four times. Adding a fourth button is what made it
+// worth reporting rather than guessing.
+static void log_buttons(void) {
+    char b[96];
+    int n = 0;
+    const char *pre = "gfxdemo: layout buttons ";
+    while (pre[n]) { b[n] = pre[n]; n++; }
+    const struct uui_button *b0 = &g_buttons[0];
+    int v[6] = { b0->x, b0->y, b0->w, b0->h, g_buttons[1].x - b0->x, 4 };
+    for (int i = 0; i < 6; i++) {
+        if (i) b[n++] = ' ';
+        n = append_int(b, n, v[i]);
+    }
+    b[n++] = '\n';
+    b[n] = '\0';
+    log_line(b);
+}
+
 static void log_speed(void) {
     char b[48];
     int n = 0;
@@ -105,6 +175,10 @@ static void log_speed(void) {
 }
 
 
+static void log_scene(void) {
+    log_line(g_scene == SCENE_3D ? "gfxdemo: scene 3d\n" : "gfxdemo: scene 2d\n");
+}
+
 static int checkbox_y(void) { return WIN_H - MARGIN - ugfx_char_h() - 8; }
 
 static void layout(void) {
@@ -116,20 +190,71 @@ static void layout(void) {
 
     int bw = 9 * ugfx_char_w();
     int by = MARGIN + ch + 8;
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         uui_button_set_geometry(&g_buttons[i], MARGIN + i * (bw + 6), by, bw, bar_h);
     }
 }
 
-static void draw(struct ugfx_surface *s) {
-    ugfx_fill(s, UTHEME_PANEL_BG);
-    layout();
-    uui_canvas_begin(s, &g_canvas);
+// The 3D scene: one wireframe cube, spinning about two axes at once so
+// it reads as a solid rather than as a hexagon that happens to wobble.
+//
+// Edges are shaded by DEPTH, and that is not decoration -- it is the
+// visible proof that the projection is real. geom_transform3() hands
+// back each vertex's rotated z, so an edge's colour comes from where it
+// actually is in space; without a genuine 3D transform there would be
+// nothing to shade by.
+static void draw_cube(struct ugfx_surface *s, int cx, int cy, enum geom_aa aa) {
+    int xs[8], ys[8];
+    fx_t z[8];
 
-    int cx = uui_canvas_cx(&g_canvas);
-    int cy = uui_canvas_cy(&g_canvas);
-    enum geom_aa aa = g_aa_check.checked ? GEOM_AA : GEOM_ALIASED;
+    // Two axes, at rates whose ratio is not a simple fraction -- a cube
+    // yawing alone shows the same silhouette four times per turn, and a
+    // pitch of exactly half the yaw repeats on a short cycle too. Both
+    // make it look like a much simpler shape than it is.
+    geom_transform3(CUBE, 8, g_angle, fx_mul(g_angle, 24248 /* ~0.37 */), 0,
+                     FX_ONE, CUBE_DIST, cx, cy, xs, ys, z);
 
+    for (int e = 0; e < 12; e++) {
+        int a = CUBE_EDGES[e][0], b = CUBE_EDGES[e][1];
+
+        // Mid-edge depth, mapped from the model's own z range to a
+        // brightness. Nearer is brighter, which is the convention every
+        // wireframe renderer has used since they were the only kind.
+        //
+        // Note fx_mul, NOT fx_round of a plain division: the first draft
+        // wrote `fx_round(k * 255 / FX_ONE)`, which shifts an already-
+        // integer 0..255 down another 16 bits and makes every edge the
+        // same colour. It looked like the shading simply "wasn't very
+        // strong" rather than like arithmetic that never ran.
+        fx_t mid = (z[a] + z[b]) / 2;
+        fx_t k = fx_div(mid + fx_from_int(CUBE_HALF), fx_from_int(2 * CUBE_HALF));
+        int t = fx_round(fx_mul(k, fx_from_int(255)));
+        if (t < 0) t = 0;
+        if (t > 255) t = 255;
+        int shade = 235 - t * 150 / 255;   // 235 near .. 85 far
+
+        uui_canvas_line(s, &g_canvas, xs[a], ys[a], xs[b], ys[b],
+                         ugfx_rgb((uint8_t)shade, (uint8_t)(shade * 4 / 5),
+                                   (uint8_t)(90 + shade / 3)), aa);
+    }
+
+    // A dot at each corner, so the filled-ellipse path is exercised in
+    // this scene too -- and sized by depth, which makes a wrong
+    // projection obvious at a glance rather than only in a diff.
+    for (int i = 0; i < 8; i++) {
+        fx_t nearness = fx_div(fx_from_int(CUBE_HALF) - z[i], fx_from_int(2 * CUBE_HALF));
+        int r = 2 + fx_round(fx_mul(nearness, fx_from_int(4)));
+        if (r < 2) r = 2;
+        uui_canvas_fill_ellipse(s, &g_canvas, xs[i] - g_canvas.x, ys[i] - g_canvas.y,
+                                 r, r, ugfx_rgb(250, 230, 180));
+    }
+}
+
+// The 2D scene: the rings, the pulsing ellipse and the triangle this
+// demo opened with. Extracted when the cube arrived so the two scenes
+// are symmetric -- one function each, called by one `if` -- rather than
+// one of them being "the body of draw()" and the other a special case.
+static void draw_shapes_2d(struct ugfx_surface *s, int cx, int cy, enum geom_aa aa) {
     // A few static rings, so there is something to judge the curve
     // rasteriser against while everything else moves.
     uui_canvas_circle(s, &g_canvas, cx, cy, 150, ugfx_rgb(38, 44, 56), aa);
@@ -173,6 +298,19 @@ static void draw(struct ugfx_surface *s) {
                                      4, 4, ugfx_rgb(250, 230, 180));
         }
     }
+}
+
+static void draw(struct ugfx_surface *s) {
+    ugfx_fill(s, UTHEME_PANEL_BG);
+    layout();
+    uui_canvas_begin(s, &g_canvas);
+
+    int cx = uui_canvas_cx(&g_canvas);
+    int cy = uui_canvas_cy(&g_canvas);
+    enum geom_aa aa = g_aa_check.checked ? GEOM_AA : GEOM_ALIASED;
+
+    if (g_scene == SCENE_3D) draw_cube(s, cx, cy, aa);
+    else                      draw_shapes_2d(s, cx, cy, aa);
 
     // Controls.
     uui_button_group_draw(&g_bar, s);
@@ -223,6 +361,10 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
         log_line(uui_checkbox_toggle(&g_aa_check)
                   ? "gfxdemo: aa on\n" : "gfxdemo: aa off\n");
     }
+    if (key == 's' || key == 'S') {
+        g_scene = (g_scene == SCENE_3D) ? SCENE_2D : SCENE_3D;
+        log_scene();
+    }
     if (key == '+' || key == '=') { if (g_speed < 40) { g_speed++; log_speed(); } }
     if (key == '-') { if (g_speed > 0) { g_speed--; log_speed(); } }
 }
@@ -252,6 +394,11 @@ static void on_action(struct uapp *a, int code) {
     if (code == BTN_SLOWER && g_speed > 0) g_speed--;
     else if (code == BTN_FASTER && g_speed < 40) g_speed++;
     else if (code == BTN_RESET) { g_speed = 3; g_angle = 0; }
+    else if (code == BTN_SCENE) {
+        g_scene = (g_scene == SCENE_3D) ? SCENE_2D : SCENE_3D;
+        log_scene();
+        return;   // the scene did not change the speed; do not claim it did
+    }
     log_speed();
 }
 
@@ -261,19 +408,25 @@ static void on_open(struct uapp *a) {
     uui_button_init(&g_buttons[0], 0, 0, 0, 0, "Slower", bg, fg, BTN_SLOWER);
     uui_button_init(&g_buttons[1], 0, 0, 0, 0, "Faster", bg, fg, BTN_FASTER);
     uui_button_init(&g_buttons[2], 0, 0, 0, 0, "Reset",  bg, fg, BTN_RESET);
-    uui_button_group_init(&g_bar, g_buttons, 3);
+    // The label says what pressing it GIVES you, not what is showing --
+    // a button reading "2D" while the 2D scene is up is the ambiguity
+    // every toggle-labelled-with-its-own-state has.
+    uui_button_init(&g_buttons[3], 0, 0, 0, 0, "2D / 3D", bg, fg, BTN_SCENE);
+    uui_button_group_init(&g_bar, g_buttons, 4);
 
     // Anti-aliasing starts on, and the checkbox holds that fact -- see
     // g_aa_check's declaration.
     uui_checkbox_init(&g_aa_check, MARGIN, checkbox_y(), ugfx_char_h(),
-                       "anti-aliased  (A)", UTHEME_PANEL_BG, UTHEME_TEXT);
+                       "anti-aliased  (A)   scene: S", UTHEME_PANEL_BG, UTHEME_TEXT);
     g_aa_check.checked = 1;
     layout();
 
     log_line("gfxdemo: ready\n");
     log_line("gfxdemo: aa on\n");
     log_layout();
+    log_buttons();
     log_speed();
+    log_scene();
 }
 
 int main(void) {

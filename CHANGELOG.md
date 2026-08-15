@@ -31,6 +31,64 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
 
 ## [Unreleased]
 
+### Added
+- **A rotating 3D cube in the Shapes demo, and the 3D maths behind it in
+  the shared geometry library.** `kernel/lib/geom.c` had 2D rotation and
+  nothing else, so a cube needed three things that did not exist:
+  3D points, rotation about more than one axis, and a projection. They
+  went into `geom.c` rather than into the one app that wanted them --
+  that file IS the shared geometry home, it is compiled twice so the
+  kernel-space GUI can draw the same wireframe a ring-3 client does, and
+  a second copy of a projection is a second thing that can disagree
+  about where a vertex landed. Noted honestly: `CLAUDE.md`'s bar for a
+  new API is a second real caller and this shipped with one, which was
+  the maintainer's call after being shown the tradeoff.
+
+  What landed is small on purpose and is **not a 3D engine** -- no
+  matrices, no faces, no depth buffer, no clipping planes.
+  `geom_rotate3()` (yaw, then pitch, then roll, in that fixed order
+  because rotations do not commute and a caller composing its own would
+  have no way to know which order this file meant), `geom_project()`
+  (perspective, eye at `-dist`) and `geom_transform3()`, which scales,
+  rotates, projects and offsets a whole model in one pass. A model is
+  points plus whatever edge list the caller keeps beside them; the cube
+  in `gfxdemo.c` is eight corners, twelve edges and no arithmetic of its
+  own.
+
+  `geom_transform3()` also reports each vertex's ROTATED depth, which is
+  only available inside the transform and is what lets the demo shade
+  edges by distance. That shading is the point rather than decoration:
+  it is the one visible property a flat 2D wireframe cannot have, so it
+  is also what the test asserts on.
+
+  The two scenes get the canvas to themselves, switched by an `S` key or
+  a `2D / 3D` button. Drawing them together was tried first and was
+  simply illegible -- the canvas already holds two rings, a pulsing
+  ellipse, a triangle and three vertex dots.
+
+  Verified: 5 new KTESTs pin the maths precisely (each axis turns the
+  one the header claims, near projects larger than far, a point at the
+  eye clamps instead of dividing by zero, and scale reaches z as well as
+  x and y) -- 117 KTESTs total. `tools/gfxdemo_test.py` grew 5 checks
+  (23 total) for the parts only it can see: the toggle from both the key
+  and the button, the cube animating AND stopping dead, the depth
+  shading, and a round trip that must come back pixel-identical.
+  Positive-controlled by flattening the shade to a constant, which took
+  the 3D scene from 14 distinct colours to 3 and turned exactly that one
+  check red.
+
+  Two things worth recording from building it. The first draft wrote
+  `fx_round(k * 255 / FX_ONE)` for the shade -- `fx_round` on an
+  already-integer value, which shifts it down another 16 bits and makes
+  every edge the same colour. It read as "the shading isn't very strong"
+  rather than as arithmetic that never ran. And the round-trip check
+  failed on its first run because the spin tests between the two
+  captures had advanced the angle: the assertion was wrong, not the app.
+  Shapes now also reports `gfxdemo: layout buttons <x> <y> <w> <h>
+  <pitch> <count>`, so the test clicks the button it means instead of
+  re-deriving the row from the canvas rect -- the fourth button is what
+  made that guess unsafe.
+
 ### Fixed
 - **A client window can be as big as the screen, and maximizing one
   finally works.** Two separate ceilings held ring-3 windows at

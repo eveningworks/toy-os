@@ -202,3 +202,75 @@ void geom_transform(const struct geom_pt *pts, int count,
         out_ys[i] = cy + fx_round(p.y);
     }
 }
+
+// --- 3D ---------------------------------------------------------------
+
+struct geom_pt3 geom_rotate3(struct geom_pt3 p, fx_t yaw, fx_t pitch, fx_t roll) {
+    fx_t s, c;
+    struct geom_pt3 r;
+
+    // Yaw, about the Y axis: x and z turn, y is untouched.
+    s = fx_sin(yaw); c = fx_cos(yaw);
+    r.x = fx_mul(p.x, c) + fx_mul(p.z, s);
+    r.y = p.y;
+    r.z = fx_mul(p.z, c) - fx_mul(p.x, s);
+    p = r;
+
+    // Pitch, about X.
+    s = fx_sin(pitch); c = fx_cos(pitch);
+    r.x = p.x;
+    r.y = fx_mul(p.y, c) - fx_mul(p.z, s);
+    r.z = fx_mul(p.y, s) + fx_mul(p.z, c);
+    p = r;
+
+    // Roll, about Z -- the same two-axis turn geom_rotate() does, kept
+    // here rather than delegating because the 2D version takes a
+    // geom_pt and building one per call to save three lines would cost
+    // more than it saves.
+    s = fx_sin(roll); c = fx_cos(roll);
+    r.x = fx_mul(p.x, c) - fx_mul(p.y, s);
+    r.y = fx_mul(p.x, s) + fx_mul(p.y, c);
+    r.z = p.z;
+    return r;
+}
+
+// The smallest denominator the projection will divide by, in Q16.16 --
+// a quarter of a model unit. A point at exactly the eye has no
+// projection at all, and a point BEHIND it has one that is mathematically
+// valid and visually nonsense (the shape turns inside out through the
+// origin). Clamping puts such a point far off screen instead, where the
+// caller's own clipping deals with it, rather than producing a
+// plausible-looking wrong coordinate.
+#define PROJ_MIN_DEN (FX_ONE / 4)
+
+struct geom_pt geom_project(struct geom_pt3 p, fx_t dist) {
+    fx_t den = dist + p.z;
+    if (den < PROJ_MIN_DEN) den = PROJ_MIN_DEN;
+
+    fx_t k = fx_div(dist, den);
+    struct geom_pt out;
+    out.x = fx_mul(p.x, k);
+    out.y = fx_mul(p.y, k);
+    return out;
+}
+
+void geom_transform3(const struct geom_pt3 *pts, int count,
+                      fx_t yaw, fx_t pitch, fx_t roll, fx_t scale,
+                      fx_t dist, int cx, int cy,
+                      int *out_xs, int *out_ys, fx_t *out_z) {
+    if (!pts || !out_xs || !out_ys) return;
+    for (int i = 0; i < count; i++) {
+        struct geom_pt3 p = pts[i];
+        // Scale first, then rotate, then project -- the same order
+        // geom_transform() uses, extended by the one step it lacks.
+        p.x = fx_mul(p.x, scale);
+        p.y = fx_mul(p.y, scale);
+        p.z = fx_mul(p.z, scale);
+        p = geom_rotate3(p, yaw, pitch, roll);
+        if (out_z) out_z[i] = p.z;
+
+        struct geom_pt q = geom_project(p, dist);
+        out_xs[i] = cx + fx_round(q.x);
+        out_ys[i] = cy + fx_round(q.y);
+    }
+}

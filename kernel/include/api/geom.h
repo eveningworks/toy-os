@@ -101,4 +101,54 @@ void geom_transform(const struct geom_pt *pts, int count,
                      fx_t turns, fx_t scale, int cx, int cy,
                      int *out_xs, int *out_ys);
 
+// --- 3D ---------------------------------------------------------------
+//
+// Enough to spin a wireframe MODEL and get 2D points back. Deliberately
+// not a 3D engine: no matrices, no clipping planes, no depth buffer, no
+// faces. A model here is points plus whatever edge list the caller keeps
+// beside it, and what this file owns is the part every caller would
+// otherwise re-derive identically -- three axis rotations and a
+// perspective divide, in Q16.16, with angles in TURNS like everything
+// else here.
+//
+// It lives in geom.c rather than in the one app that wanted it because
+// this file IS the shared geometry home: it is compiled twice, so the
+// kernel-space GUI can draw the same wireframe as a ring-3 client, and
+// a second copy of a projection is a second thing that can disagree
+// about where a vertex landed. (Noted honestly: CLAUDE.md's bar for a
+// new API is a second real caller, and this shipped with one.)
+
+struct geom_pt3 { fx_t x, y, z; };
+
+// Rotation about each axis in turn -- yaw about Y, then pitch about X,
+// then roll about Z. The order is fixed and stated because rotations do
+// not commute: a caller composing its own would get a different result
+// and have no way to know which one this file meant.
+struct geom_pt3 geom_rotate3(struct geom_pt3 p, fx_t yaw, fx_t pitch, fx_t roll);
+
+// Perspective projection onto the z = 0 plane, with the eye at
+// (0, 0, -dist). A point's x and y shrink by dist / (dist + z), so
+// nearer geometry is drawn larger -- which is the entire visual
+// difference between a cube and a hexagon with a cross in it.
+//
+// `dist` is in the model's own units. Small values exaggerate the
+// perspective; very large ones approach an orthographic projection,
+// where a face-on cube collapses into a single square. A point at or
+// behind the eye cannot be projected meaningfully, so the denominator
+// is clamped to a small positive value rather than dividing by zero or
+// flipping the point through the origin.
+struct geom_pt geom_project(struct geom_pt3 p, fx_t dist);
+
+// Scale, rotate, project and offset a whole model in one pass, writing
+// rounded screen coordinates ready for geom_line()/geom_polyline().
+//
+// `out_z` (optional -- pass NULL) receives each point's ROTATED depth,
+// before projection. That is what a caller needs to shade or sort edges
+// by distance, and it is only available in here, which is why it is an
+// output rather than something the caller recomputes.
+void geom_transform3(const struct geom_pt3 *pts, int count,
+                      fx_t yaw, fx_t pitch, fx_t roll, fx_t scale,
+                      fx_t dist, int cx, int cy,
+                      int *out_xs, int *out_ys, fx_t *out_z);
+
 #endif

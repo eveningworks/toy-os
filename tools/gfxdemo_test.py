@@ -60,6 +60,7 @@ DEFAULT_SOCK = ".vm.serial"
 # The demo's own key bindings (userland/gui/gfxdemo.c). Sent as hex because
 # `gui key` splits its arguments on whitespace and parses ints that way.
 K_A = "0x61"        # toggle anti-aliasing
+K_S = "0x73"        # toggle the 2D / 3D scene
 K_MINUS = "0x2d"    # slower
 K_PLUS = "0x2b"     # faster
 K_Q = "0x71"        # quit
@@ -73,6 +74,7 @@ class Shapes:
         self.fails, self.passes = [], []
         self.win = None
         self.canvas = None      # (x, y, w, h), content-relative
+        self.buttons = None     # (x, y, w, h, pitch, count), ditto
 
     # -- plumbing ------------------------------------------------------
 
@@ -171,14 +173,30 @@ class Shapes:
             if "layout canvas" in l:
                 parts = l.split("layout canvas")[1].split()
                 self.canvas = tuple(int(p) for p in parts[:4])
+            if "layout buttons" in l:
+                # x y w h pitch count -- so a click lands on the button
+                # the test MEANT, at any font size. Replaces this file's
+                # old `canvas_y + canvas_h + 8 + 12`, which re-derived
+                # the app's spacing here and would have been wrong the
+                # moment a fourth button was added.
+                parts = l.split("layout buttons")[1].split()
+                self.buttons = tuple(int(p) for p in parts[:6])
         self.win = self.dbg.window("Shapes")
         if self.win is None:
             print("gfxdemo_test: no Shapes window -- did `run shapes` fail?")
             print("  startup log:", lines)
             sys.exit(2)
-        if self.canvas is None:
+        if self.canvas is None or self.buttons is None:
             print("gfxdemo_test: Shapes never logged its layout:", lines)
             sys.exit(2)
+
+    def click_button(self, index):
+        """Click the centre of button `index`, from the row the app
+        reported. Never from arithmetic over the canvas rect."""
+        bx, by, bw, bh, pitch, count = self.buttons
+        if index >= count:
+            raise IndexError(f"button {index} of {count}")
+        return self.click_content(bx + index * pitch + bw // 2, by + bh // 2)
 
     def set_speed(self, target):
         """Walk the speed to `target` with the keyboard, confirming as it
@@ -196,6 +214,98 @@ class Shapes:
             if target == 0 and not got:
                 return True     # already at 0: nothing left to log
         return False
+
+
+def check_cube(d):
+    """The 3D scene: a wireframe cube from geom_transform3().
+
+    What is actually worth asserting here is narrow, because the
+    projection maths is already pinned precisely by KTESTs in
+    kernel/lib/geom_test.c (the rotation axes, near-bigger-than-far, the
+    clamp at the eye). Re-testing arithmetic through a screenshot would
+    be a worse version of a test that already exists. What only THIS can
+    check is that the app wired it up:
+
+      * the scene toggles, from the key and from the button;
+      * the cube animates, and stops dead -- the same pairing the 2D
+        scene gets, because either half alone is satisfied by a bug;
+      * the edges are DEPTH-SHADED, which is the one visible property
+        that cannot exist without a real 3D transform. A flat wireframe
+        drawn with 2D rotations has one edge colour; a projected one has
+        a different shade per edge. Counted with AA OFF, or
+        anti-aliasing's partial coverage would supply the extra colours
+        by itself and the check would pass on a flat drawing.
+      * toggling away and back restores the 2D scene EXACTLY, which
+        catches a scene switch that leaves state behind.
+    """
+    d.check("speed reaches 0 before comparing frames", d.set_speed(0))
+    time.sleep(0.5)
+
+    # AA off first: the colour count below has to measure shading, not
+    # coverage. (Left off for both scenes, so the comparison is fair.)
+    d.key(K_A)
+    time.sleep(0.4)
+    flat_2d = d.canvas_image("scene-2d")
+    colors_2d = d.distinct_colors(flat_2d)
+
+    got = d.key(K_S)
+    d.check_log("pressing S switches to the 3D scene", got, "gfxdemo: scene 3d")
+    time.sleep(0.5)
+    cube = d.canvas_image("scene-3d")
+
+    d.check("the 3D scene draws something different",
+            d.differing_fraction(flat_2d, cube) > 0.01,
+            "the canvas barely changed when the scene switched")
+
+    colors_3d = d.distinct_colors(cube)
+    print(f"        ({colors_2d} distinct colours in 2D aliased, {colors_3d} in 3D)")
+    d.check("the cube's edges are shaded by depth",
+            colors_3d > colors_2d,
+            f"{colors_3d} distinct colours in the 3D scene vs {colors_2d} in the "
+            "2D one, both aliased -- a per-edge depth shade is the only thing "
+            "that can add them, and it needs a real projection to exist")
+
+    # Round trip, taken NOW rather than at the end of this function: the
+    # claim is "the same angle draws the same pixels", so nothing between
+    # the two captures may advance the angle. The first draft ran the
+    # spin checks in between and failed here for exactly that reason --
+    # the assertion was wrong, not the app.
+    got = d.click_button(3)   # "2D / 3D" -- the BUTTON, not the key, so
+                               # both paths into the toggle are covered
+    d.check_log("the 2D / 3D button switches back", got, "gfxdemo: scene 2d")
+    time.sleep(0.5)
+    back = d.canvas_image("scene-2d-again")
+    d.check("returning to the 2D scene restores it exactly",
+            d.differing_fraction(flat_2d, back) == 0.0,
+            "the 2D scene came back different from how it was left -- at "
+            "speed 0 with the angle unchanged it must be pixel-identical")
+
+    # Now the animation pair, which needs the angle to move.
+    d.key(K_S)
+    time.sleep(0.3)
+    d.check("speed returns for the cube", d.set_speed(4))
+    a = d.canvas_image("cube-spin-a")
+    time.sleep(0.7)
+    b = d.canvas_image("cube-spin-b")
+    d.check("the cube is rotating", d.differing_fraction(a, b) > 0.01,
+            "the cube did not move between frames")
+
+    d.check("the cube stops at speed 0", d.set_speed(0))
+    time.sleep(0.5)
+    s1 = d.canvas_image("cube-still-a")
+    time.sleep(0.7)
+    s2 = d.canvas_image("cube-still-b")
+    still = d.differing_fraction(s1, s2)
+    d.check("at speed 0 the cube is static", still < 0.001,
+            f"{still:.4%} of sampled pixels still changed at speed 0")
+
+    # Hand the rest of the run the state it expects: 2D scene, AA on,
+    # speed 3. A check that leaves global state behind fails the NEXT
+    # check instead of itself, which is a genuinely confusing way to
+    # debug -- it happened on this function's first run.
+    d.key(K_S)
+    d.set_speed(3)
+    d.key(K_A)   # anti-aliasing back on, as the rest of the run expects
 
 
 def run(d):
@@ -250,11 +360,12 @@ def run(d):
 
     d.check("speed returns from the keyboard", d.set_speed(3))
 
-    # 4. The buttons work, and report through the same log grammar. The
-    #    button row sits one gap below the canvas (userland/gui/gfxdemo.c's
-    #    layout()), which is why the canvas rect is all this needs.
-    by = d.canvas[1] + d.canvas[3] + 8 + 12    # +12: inside the row, not on its edge
-    got = d.click_content(d.canvas[0] + 20, by)   # "Slower", the first button
+    check_cube(d)
+
+    # 5. The buttons work, and report through the same log grammar.
+    #    Clicked at the centre the APP reported, not at an offset derived
+    #    here -- see click_button().
+    got = d.click_button(0)   # "Slower"
     d.check_log("the Slower button changes speed", got, "gfxdemo: speed 2")
 
     # 5. It exits cleanly when asked, rather than being killed.
