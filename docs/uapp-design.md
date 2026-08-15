@@ -583,29 +583,76 @@ userland/
   ui/      ugfx, utheme, utext, uapp, and one file per widget
            (uui_button, uui_listbox, uui_dropdown, uui_checkbox,
             uui_scrollbar, uui_field, uui_radio_list, uui_layout)
-  bin/     calculator, notepad, terminal, gfxdemo, uiclient,
-           winclient, ush
-  tests/   hello, exit_test, nx_test, fpu_test, ... (~20)
+  gui/     calculator, notepad, terminal, gfxdemo, uiclient, winclient
+  bin/     ls, lspci, lscpu, hello, ush
+  tests/   exit_test, nx_test, fpu_test, write_bad_test, ... (~20)
 ```
 
-with ELFs built to `build/userland/bin/*.elf` rather than into the
-source directory.
+with ELFs built to `build/userland/**` rather than into the source
+directory.
 
 **`ui/` deliberately mirrors `apps/ui/`**, one file per widget, so the
 kernel-side and ring-3 versions of a widget are findable at the same
 relative path -- which matters while both exist and porting flows one
 way.
 
-**`bin/` and `tests/` deliberately mirror the on-disk layout.**
+**`gui/` is separate from `bin/`** because a windowed client and a
+command-line program are different kinds of thing to write, test and
+read, even though both seed to `/bin`.
+
+**The directories imply the seed destination.**
 `docs/filesystem-layout.md` already makes `/bin` versus `/tests` a real,
 enforced distinction (`tools/check_layout.py` fails CI in both
 directions), and the Makefile currently restates that split by hand as
-`SEED_PROGRAMS` and `SEED_TESTS`. If the source directory *is* the
-destination, those two lists collapse to a discovery plus the handful of
-genuine renames (`echo.c` seeds as `echo_test`). One fact, stated once,
-instead of a mapping to keep in step -- and the drift it prevents is
-real: every ring-3 client landed in `/tests` originally because the
-first one did, and nobody moved them until the Start menu forced it.
+`SEED_PROGRAMS` and `SEED_TESTS`. With the tree above the rule is two
+lines -- `gui/` and `bin/` to `/bin`, `tests/` to `/tests` -- plus the
+handful of genuine renames (`echo.c` seeds as `echo_test`), instead of
+two per-file lists to keep in step. The drift that prevents is real:
+every ring-3 client landed in `/tests` originally because the first one
+did, and nobody moved them until the Start menu forced it.
+
+### Why not a top-level `gui/` tree
+
+Asked directly: should the whole GUI -- the WM, the widgets, the apps,
+both rings -- live under one top-level directory instead of being split
+across `apps/` and `userland/`? No, for three reasons.
+
+**It would cross-cut the boundary the build enforces.** `apps/` and
+`userland/` are not two flavours of the same thing: they compile with
+different code models (`-mcmodel=kernel` against `-mcmodel=large`), link
+at different addresses, and see different include paths --
+`kernel/include/` is deliberately off `apps/`'s path so reaching for an
+internal header is a compile error rather than a review catch (see
+`kernel/include/README.md`). A directory holding both rings puts files
+with incompatible compile flags side by side, and the enforcement
+quietly stops meaning anything.
+
+**`apps/` is a shrinking tree.** M41 retires the kernel-space desktop;
+`userland/` is where GUI code lives permanently. Restructuring around
+the tree that is scheduled to disappear is investment in the wrong
+place.
+
+**`apps/` is really two things, and only one of them is the GUI.** It
+holds the desktop (`wm/`, `ui/`, `gui.c`, `gui_apps.c`, `theme.h`, and
+the GUI apps) *and* the physical shell (`shell*.c`, `completion.c`,
+`editor.c`, `apps.c`) -- which is ring-0 by nature, is what `Esc` drops
+back to, and does not retire with the GUI. So the end state is not "one
+gui tree" but:
+
+```
+userland/   ... rt/ ui/ gui/ bin/ tests/, plus wm/ once M41
+                moves the window server out of the kernel
+apps/       ... empties out; what remains is the physical shell,
+                and should be named shell/ at that point
+```
+
+`userland/` *becomes* the whole userland, GUI included. That reaches the
+same place a top-level `gui/` was reaching for -- the GUI in one
+coherent home -- by following the privilege boundary instead of cutting
+across it, in increments, with no third tree. Renaming `apps/` is
+explicitly **not** part of this work: it is churn on a tree whose
+contents are about to move anyway, and it should happen once, at the
+end, when what is left is genuinely just the shell.
 
 ### Do it first, and prove it changed nothing
 
