@@ -891,6 +891,17 @@ The gotchas it already gets right, for when you need to know why:
   the guest. Use `-vga std -vnc :N` (no `-display none`) instead; VNC
   doesn't need an actual client connected, it just needs to exist as a
   head for input routing to work.
+- **That VNC head is also how the user WATCHES a headless run live**, and
+  it needs no setup or flag -- the head is always there. The display
+  number is derived from the VM slot: `vm.py start` (slot 0) and
+  `qmp_test.py`'s `launch_qemu_cmd()` default are `:5` (TCP 5905),
+  `vm.py --instance N` is `:5+N`, and `gui_regress.py`'s four parallel
+  slots are `:5`-`:8`. Any viewer works (`remmina -c vnc://localhost:5905`
+  is what's installed on the maintainer's machine). **Say to turn VIEW-ONLY
+  on**: a connected viewer's real mouse motion goes into the same
+  emulated PS/2 device the synthetic input uses, and the two fighting
+  looks exactly like a flaky test rather than like interference.
+  Attaching or detaching mid-run is free.
 - **Mouse input:** this kernel's mouse driver is PS/2, not USB HID --
   never add `-device usb-tablet` OR `-device usb-mouse` to a headless
   test launch (same reasoning as `make run`'s comment above -- it's
