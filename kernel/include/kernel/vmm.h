@@ -97,6 +97,41 @@ uint64_t vmm_current_pml4(void);
 // read it on the process's behalf.
 int vmm_validate_user_range(uint64_t pml4_phys, uint64_t vaddr, uint64_t len);
 
+// **The ONLY sanctioned way for kernel code to touch user memory.**
+//
+// These walk the page tables to each frame and copy through the
+// kernel's own identity map rather than dereferencing the user virtual
+// address. That is a supervisor access to a supervisor page, so CR4.SMAP
+// -- which faults a supervisor access to a USER page unless EFLAGS.AC is
+// set -- never applies, and this kernel therefore never sets AC at all.
+// The alternative (STAC/CLAC around each access) turns the protection
+// off for precisely the window a bug would use it in.
+//
+// So: **once SMAP is on, dereferencing a ring-3 pointer from kernel code
+// is a page fault, not a subtle bug.** If you find yourself wanting a
+// raw `*(struct foo *)user_ptr`, that is the thing these replaced.
+//
+// They also subsume vmm_validate_user_range() at the call sites that
+// used to pair it with a manual copy loop: the walk and the copy are one
+// operation per page here, so there is no window between checking a
+// mapping and using it. Keep using the validator on its own only where
+// nothing is copied (a pointer's mere validity is the question).
+//
+// All three return 1 on success, 0 if any byte of the range is not
+// present-and-user-accessible. **A failed copy is all-or-nothing from
+// the caller's point of view** -- bytes may already have been written
+// before the bad page was reached, so treat the destination as holding
+// nothing trustworthy rather than salvaging a prefix.
+int vmm_copy_from_user(uint64_t pml4_phys, void *dst, uint64_t uaddr, uint64_t len);
+int vmm_copy_to_user(uint64_t pml4_phys, uint64_t uaddr, const void *src, uint64_t len);
+
+// A NUL-terminated string, copied byte at a time (the length isn't known
+// until the terminator is found) and always NUL-terminated in `dst`,
+// truncating at `max - 1` if the user's string is longer. Fails only on
+// an unreadable page, NOT on truncation -- every caller here is copying
+// into a fixed path buffer that caps the length anyway.
+int vmm_copy_string_from_user(uint64_t pml4_phys, char *dst, uint64_t uaddr, uint64_t max);
+
 // The physical address of the kernel's own (shared, original) PML4 --
 // what CR3 pointed to before any process address space existed.
 uint64_t vmm_kernel_pml4_phys(void);

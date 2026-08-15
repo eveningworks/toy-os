@@ -96,7 +96,13 @@ static struct open_file *fd_lookup(int fd, uint64_t pml4) {
 // SYS_LISTDIR call instead: safe because syscalls in this kernel are
 // never reentrant or concurrent (same assumption SYS_WIN_* above already
 // relies on).
-static struct dirent *g_listdir_out = 0;
+// g_listdir_out is a USER virtual address, not a pointer -- deliberately
+// typed as one so it cannot be dereferenced by accident. Each entry is
+// copied out with vmm_copy_to_user() as fs_list() reports it; see the
+// SYS_LISTDIR arm for why the array isn't bounced through the kernel
+// stack in one go.
+static uint64_t g_listdir_out = 0;
+static uint64_t g_listdir_pml4 = 0;
 static uint32_t g_listdir_max = 0;
 static uint32_t g_listdir_count = 0;
 // Holds the (already-validated, NUL-terminated) directory path for the
@@ -107,7 +113,8 @@ static char g_listdir_dir_path[FS_PATH_MAX];
 
 static void listdir_collect(const char *name, uint32_t size, int is_dir) {
     if (g_listdir_count >= g_listdir_max) return;
-    struct dirent *e = &g_listdir_out[g_listdir_count];
+    struct dirent entry;
+    struct dirent *e = &entry;
     k_strcpy(e->name, name);
     e->size = size;
     e->is_dir = (uint32_t)is_dir;
@@ -139,6 +146,13 @@ static void listdir_collect(const char *name, uint32_t size, int is_dir) {
         k_memset(&e->modified, 0, sizeof(e->modified));
     }
 
+    // The range was validated once, before fs_list() started, so this
+    // cannot fail -- and if it somehow did, dropping the entry is the
+    // right answer, not writing a partial one.
+    if (!vmm_copy_to_user(g_listdir_pml4, g_listdir_out + (uint64_t)g_listdir_count * sizeof entry,
+                           &entry, sizeof entry)) {
+        return;
+    }
     g_listdir_count++;
 }
 
@@ -377,11 +391,16 @@ void syscall_dispatch(uint64_t *regs) {
         uint64_t pml4 = vmm_current_pml4();
 
         if (fd == 1 || fd == 2) { // stdout / stderr
-            if (!vmm_validate_user_range(pml4, buf_ptr, len)) {
+            // len is already capped at SYS_WRITE_MAX above, so the
+            // bounce buffer is always big enough. Copying first (rather
+            // than reading through the user pointer as this used to) is
+            // what SMAP requires -- see vmm.h.
+            char kbuf[SYS_WRITE_MAX];
+            if (!vmm_copy_from_user(pml4, kbuf, buf_ptr, len)) {
                 klog_write("syscall: write() rejected -- invalid buffer pointer\n");
                 regs[14] = (uint64_t)-1; // simplified error indicator (no errno yet)
             } else {
-                const char *buf = (const char *)(uintptr_t)buf_ptr;
+                const char *buf = kbuf;
                 // stderr goes to the KERNEL LOG, never to the pipe.
                 //
                 // Redirecting stdout is a request to capture a program's
@@ -423,9 +442,6 @@ void syscall_dispatch(uint64_t *regs) {
                 fd_table[slot].owner_pml4 != pml4 || fd_table[slot].file.mode != FD_MODE_WRITE) {
                 klog_write("syscall: write() rejected -- bad fd\n");
                 regs[14] = (uint64_t)-1;
-            } else if (!vmm_validate_user_range(pml4, buf_ptr, len)) {
-                klog_write("syscall: write() rejected -- invalid buffer pointer\n");
-                regs[14] = (uint64_t)-1;
             } else {
                 // fs_write() (fs.c) works on NUL-terminated C strings,
                 // not explicit-length buffers -- see syscall_abi.h's
@@ -433,13 +449,18 @@ void syscall_dispatch(uint64_t *regs) {
                 // scratch buffer (len is already capped at
                 // SYS_WRITE_MAX, so this is always big enough) before
                 // handing it to fs_write(), rather than changing fs.c
-                // itself this round.
+                // itself this round. The copy was a manual loop through
+                // the user pointer; it is the same copy, done the one way
+                // SMAP permits (vmm.h).
                 char tmp[SYS_WRITE_MAX + 1];
-                const char *ubuf = (const char *)(uintptr_t)buf_ptr;
-                for (uint64_t i = 0; i < len; i++) tmp[i] = ubuf[i];
-                tmp[len] = '\0';
-                fs_write(fd_table[slot].file.name, tmp, 1); // 1 = append
-                regs[14] = len;
+                if (!vmm_copy_from_user(pml4, tmp, buf_ptr, len)) {
+                    klog_write("syscall: write() rejected -- invalid buffer pointer\n");
+                    regs[14] = (uint64_t)-1;
+                } else {
+                    tmp[len] = '\0';
+                    fs_write(fd_table[slot].file.name, tmp, 1); // 1 = append
+                    regs[14] = len;
+                }
             }
         }
     } else if (rax == SYS_READ) {
@@ -459,8 +480,16 @@ void syscall_dispatch(uint64_t *regs) {
                 klog_write("syscall: read() rejected -- invalid buffer pointer\n");
                 regs[14] = (uint64_t)-1;
             } else {
-                int64_t n = pipe_read(pf->pipe.idx, (char *)(uintptr_t)buf_ptr, (uint32_t)len);
-                if (n >= 0) {
+                // pipe_read() fills a kernel buffer, which is then
+                // handed out -- it cannot write into the user pointer
+                // itself once SMAP is on (vmm.h). len is capped at
+                // SYS_WRITE_MAX above.
+                char kbuf[SYS_WRITE_MAX];
+                int64_t n = pipe_read(pf->pipe.idx, kbuf, (uint32_t)len);
+                if (n >= 0 && !vmm_copy_to_user(pml4, buf_ptr, kbuf, (uint64_t)n)) {
+                    klog_write("syscall: read() rejected -- invalid buffer pointer\n");
+                    regs[14] = (uint64_t)-1;
+                } else if (n >= 0) {
                     regs[14] = (uint64_t)n; // bytes, or 0 for EOF
                 } else if (!scheduler_block_current(regs, SCHED_WAIT_PIPE)) {
                     // Nowhere to park (kernel code or the legacy path).
@@ -501,11 +530,21 @@ void syscall_dispatch(uint64_t *regs) {
             // the behaviour wanted here -- a file deleted mid-read by
             // another shell should read as EOF, not fabricate data or
             // fault.
+            //
+            // fs_read_range() fills a KERNEL buffer, which is then
+            // copied out -- it used to be handed the user pointer
+            // directly, which SMAP forbids (vmm.h). len is capped at
+            // SYS_WRITE_MAX above, so the bounce buffer always fits.
             uint32_t off = fd_table[slot].file.offset;
-            char *ubuf = (char *)(uintptr_t)buf_ptr;
-            uint32_t n = fs_read_range(fd_table[slot].file.name, off, ubuf, (uint32_t)len);
-            fd_table[slot].file.offset += n;
-            regs[14] = n;
+            char kbuf[SYS_WRITE_MAX];
+            uint32_t n = fs_read_range(fd_table[slot].file.name, off, kbuf, (uint32_t)len);
+            if (!vmm_copy_to_user(pml4, buf_ptr, kbuf, n)) {
+                klog_write("syscall: read() rejected -- invalid buffer pointer\n");
+                regs[14] = (uint64_t)-1;
+            } else {
+                fd_table[slot].file.offset += n;
+                regs[14] = n;
+            }
         }
     read_done:
         ;
@@ -519,15 +558,11 @@ void syscall_dispatch(uint64_t *regs) {
         // would get rejected here even if the real string is safely
         // NUL-terminated well before the end -- an acceptable tradeoff
         // for a path buffer this small.
-        if (!vmm_validate_user_range(pml4, rdi, FS_PATH_MAX)) {
+        char name[FS_PATH_MAX];
+        if (!vmm_copy_string_from_user(pml4, name, rdi, FS_PATH_MAX)) {
             klog_write("syscall: open() rejected -- invalid path pointer\n");
             regs[14] = (uint64_t)-1;
         } else {
-            const char *upath = (const char *)(uintptr_t)rdi;
-            char name[FS_PATH_MAX];
-            uint32_t n = 0;
-            while (n < FS_PATH_MAX - 1 && upath[n] != '\0') { name[n] = upath[n]; n++; }
-            name[n] = '\0';
 
             uint32_t flags = (uint32_t)rsi;
             int want_write = (flags & SYS_O_WRITE) != 0;
@@ -639,7 +674,7 @@ void syscall_dispatch(uint64_t *regs) {
             info.height = (uint32_t)gfx_height();
             info.pitch = gfx_framebuffer_pitch();
             info.bpp = gfx_framebuffer_bpp();
-            *(struct gui_info *)(uintptr_t)rdi = info;
+            vmm_copy_to_user(pml4, rdi, &info, sizeof info); // range validated just above
 
             uint64_t fb_phys = gfx_framebuffer_phys();
             uint64_t fb_size = (uint64_t)info.pitch * info.height;
@@ -737,7 +772,8 @@ void syscall_dispatch(uint64_t *regs) {
             klog_write("syscall: win_create() rejected -- invalid request pointer\n");
             regs[14] = 0;
         } else {
-            struct win_request req = *(struct win_request *)(uintptr_t)rdi;
+            struct win_request req;
+            vmm_copy_from_user(pml4, &req, rdi, sizeof req); // range validated just above
             int bad_size = (req.w == 0 || req.h == 0 || req.w > WIN_MAX_W || req.h > WIN_MAX_H);
 
             if (bad_size) {
@@ -776,7 +812,7 @@ void syscall_dispatch(uint64_t *regs) {
 
                     req.pitch = g_win_pitch;
                     req.bpp = 32;
-                    *(struct win_request *)(uintptr_t)rdi = req;
+                    vmm_copy_to_user(pml4, rdi, &req, sizeof req);
                     regs[14] = 1;
                 }
             }
@@ -791,15 +827,11 @@ void syscall_dispatch(uint64_t *regs) {
         }
     } else if (rax == SYS_UNLINK) {
         uint64_t pml4 = vmm_current_pml4();
-        if (!vmm_validate_user_range(pml4, rdi, FS_PATH_MAX)) {
+        char name[FS_PATH_MAX];
+        if (!vmm_copy_string_from_user(pml4, name, rdi, FS_PATH_MAX)) {
             klog_write("syscall: unlink() rejected -- invalid path pointer\n");
             regs[14] = 0;
         } else {
-            const char *upath = (const char *)(uintptr_t)rdi;
-            char name[FS_PATH_MAX];
-            uint32_t n = 0;
-            while (n < FS_PATH_MAX - 1 && upath[n] != '\0') { name[n] = upath[n]; n++; }
-            name[n] = '\0';
             regs[14] = (uint64_t)fs_delete(name);
         }
     } else if (rax == SYS_LISTDIR) {
@@ -807,18 +839,21 @@ void syscall_dispatch(uint64_t *regs) {
         uint32_t max = (uint32_t)rdx;
         if (max > SYS_LISTDIR_MAX) max = SYS_LISTDIR_MAX;
 
-        if (!vmm_validate_user_range(pml4, rdi, FS_PATH_MAX) ||
-            !vmm_validate_user_range(pml4, rsi, (uint64_t)max * sizeof(struct dirent))) {
+        char path[FS_PATH_MAX];
+        if (!vmm_validate_user_range(pml4, rsi, (uint64_t)max * sizeof(struct dirent)) ||
+            !vmm_copy_string_from_user(pml4, path, rdi, FS_PATH_MAX)) {
             klog_write("syscall: listdir() rejected -- invalid pointer\n");
             regs[14] = (uint64_t)-1;
         } else {
-            const char *upath = (const char *)(uintptr_t)rdi;
-            char path[FS_PATH_MAX];
-            uint32_t n = 0;
-            while (n < FS_PATH_MAX - 1 && upath[n] != '\0') { path[n] = upath[n]; n++; }
-            path[n] = '\0';
-
-            g_listdir_out = (struct dirent *)(uintptr_t)rsi;
+            // The output array stays a USER address here, and
+            // listdir_collect() copies each entry out individually --
+            // fs_list() calls back per entry, so there is no single
+            // moment when the whole array could be copied at once, and
+            // SYS_LISTDIR_MAX of them is far too much to bounce through
+            // an 8 KiB kernel stack. The range is validated up front so
+            // each per-entry copy is a walk, not a second check.
+            g_listdir_out = rsi;
+            g_listdir_pml4 = pml4;
             g_listdir_max = max;
             g_listdir_count = 0;
             k_strcpy(g_listdir_dir_path, path); // see listdir_collect()'s per-entry fs_stat()
@@ -835,7 +870,7 @@ void syscall_dispatch(uint64_t *regs) {
         } else {
             struct rtc_time t;
             rtc_read_local(&t);
-            *(struct rtc_time *)(uintptr_t)rdi = t;
+            vmm_copy_to_user(pml4, rdi, &t, sizeof t); // range validated just above
             regs[14] = 1;
         }
     } else if (rax == SYS_YIELD) {
@@ -861,7 +896,7 @@ void syscall_dispatch(uint64_t *regs) {
             klog_write("syscall: pci_info() rejected -- bad index or invalid pointer\n");
             regs[14] = (uint64_t)-1;
         } else {
-            *(struct pci_device *)(uintptr_t)rsi = *dev;
+            vmm_copy_to_user(pml4, rsi, dev, sizeof *dev); // range validated just above
             regs[14] = 1;
         }
     } else if (rax == SYS_CPU_INFO) {
@@ -870,7 +905,9 @@ void syscall_dispatch(uint64_t *regs) {
             klog_write("syscall: cpu_info() rejected -- invalid user pointer\n");
             regs[14] = (uint64_t)-1;
         } else {
-            cpu_info_get((struct cpu_info *)(uintptr_t)rdi);
+            struct cpu_info ci;
+            cpu_info_get(&ci);
+            vmm_copy_to_user(pml4, rdi, &ci, sizeof ci); // range validated just above
             regs[14] = 1;
         }
     } else if (rax == SYS_GETRANDOM) {
@@ -887,7 +924,12 @@ void syscall_dispatch(uint64_t *regs) {
             klog_write("syscall: getrandom() rejected -- invalid user pointer\n");
             regs[14] = (uint64_t)-1;
         } else {
-            krandom_bytes((void *)(uintptr_t)rdi, (size_t)rsi);
+            // Into a kernel buffer, then out -- krandom_bytes() must
+            // not write through a ring-3 pointer (vmm.h). Bounded by
+            // SYS_GETRANDOM_MAX, checked above.
+            unsigned char rbuf[SYS_GETRANDOM_MAX];
+            krandom_bytes(rbuf, (size_t)rsi);
+            vmm_copy_to_user(pml4, rdi, rbuf, rsi); // range validated just above
             regs[14] = rsi;
         }
     } else if (rax == SYS_SET_COLOR) {
@@ -915,21 +957,24 @@ void syscall_dispatch(uint64_t *regs) {
                 klog_write("syscall: pipe() failed -- no free pipe or fd\n");
                 regs[14] = (uint64_t)-1;
             } else {
-                int *out = (int *)(uintptr_t)rdi;
-                out[0] = rfd;
-                out[1] = wfd;
+                int out[2] = { rfd, wfd };
+                vmm_copy_to_user(pml4, rdi, out, sizeof out); // range validated above
                 regs[14] = 1;
             }
         }
     } else if (rax == SYS_SPAWN) {
         uint64_t pml4 = vmm_current_pml4();
         int spawn_rc = -1;
-        if (!vmm_validate_user_range(pml4, rdi, FS_PATH_MAX)) {
+        char path[FS_PATH_MAX];
+        // The argument string gets the same budget as the path: it is
+        // handed to elf_build_argv_on_stack(), which enforces the real
+        // limit (one stack page) and rejects anything longer.
+        char argbuf[FS_PATH_MAX];
+        if (!vmm_copy_string_from_user(pml4, path, rdi, FS_PATH_MAX)) {
             klog_write("syscall: spawn() rejected -- invalid path pointer\n");
         } else {
-            const char *path = (const char *)(uintptr_t)rdi;
             const char *args = 0;
-            if (rsi && vmm_validate_user_range(pml4, rsi, 1)) args = (const char *)(uintptr_t)rsi;
+            if (rsi && vmm_copy_string_from_user(pml4, argbuf, rsi, FS_PATH_MAX)) args = argbuf;
 
             // Resolve the caller's write-end fd to a pipe index. An fd
             // that isn't this process's own write end is REFUSED rather
@@ -963,14 +1008,16 @@ void syscall_dispatch(uint64_t *regs) {
     } else if (rax == SYS_WAITPID) {
         uint64_t pml4 = vmm_current_pml4();
         int pid = (int)rdi;
-        int *out = 0;
+        // `out` is a USER address (0 = the caller doesn't want the exit
+        // code), never dereferenced -- see the copy below.
+        uint64_t out = 0;
         int bad = 0;
         if (rsi) {
             if (!vmm_validate_user_range(pml4, rsi, sizeof(int))) {
                 klog_write("syscall: waitpid() rejected -- invalid out pointer\n");
                 bad = 1;
             } else {
-                out = (int *)(uintptr_t)rsi;
+                out = rsi;
             }
         }
         if (bad || !scheduler_pid_valid(pid)) {
@@ -979,7 +1026,7 @@ void syscall_dispatch(uint64_t *regs) {
             int code = 0;
             enum sched_poll_result r = scheduler_poll(pid, &code);
             if (r == SCHED_POLL_EXITED) {
-                if (out) *out = code;
+                if (out) vmm_copy_to_user(pml4, out, &code, sizeof code);
                 regs[14] = (uint64_t)(int64_t)pid;
             } else if (r == SCHED_POLL_INVALID) {
                 regs[14] = (uint64_t)-1;
@@ -1019,12 +1066,13 @@ void syscall_dispatch(uint64_t *regs) {
             // field after it was validated but before it was used --
             // and `window` in particular is used to index the server's
             // own tables.
-            struct win_request_msg req = *(struct win_request_msg *)(uintptr_t)rdi;
+            struct win_request_msg req;
+            vmm_copy_from_user(pml4, &req, rdi, sizeof req); // range validated above
             int rc = win_server_request(pid, &req);
 
             // Only copy back a request the server actually looked at --
             // a malformed one leaves the client's buffer as it was sent.
-            if (rc >= 0) *(struct win_request_msg *)(uintptr_t)rdi = req;
+            if (rc >= 0) vmm_copy_to_user(pml4, rdi, &req, sizeof req);
             regs[14] = (uint64_t)(int64_t)rc;
         }
     } else if (rax == SYS_POLL_EVENT || rax == SYS_WAIT_EVENT) {
@@ -1047,7 +1095,7 @@ void syscall_dispatch(uint64_t *regs) {
         } else {
             struct win_event ev;
             if (win_events_pop(pid, &ev)) {
-                *(struct win_event *)(uintptr_t)rdi = ev;
+                vmm_copy_to_user(pml4, rdi, &ev, sizeof ev); // range validated above
                 regs[14] = 1;
             } else if (rax == SYS_POLL_EVENT) {
                 regs[14] = 0; // empty, and this one never blocks

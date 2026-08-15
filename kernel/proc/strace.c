@@ -255,7 +255,17 @@ static void ap_user_string(char *out, size_t cap, size_t *len, uint64_t pml4_phy
         ap_hex(out, cap, len, ptr);
         return;
     }
-    const char *src = (const char *)(uintptr_t)ptr;
+    // Copied out first rather than read in place: kernel code may not
+    // dereference a ring-3 pointer once CR4.SMAP is on (see vmm.h).
+    // One byte past what is displayed, so the truncation test below can
+    // still ask whether a NUL followed without a second copy.
+    char src[STR_MAX + 1];
+    uint64_t want = max_len < STR_MAX + 1 ? max_len : STR_MAX + 1;
+    if (!vmm_copy_from_user(pml4_phys, src, ptr, want)) {
+        ap_hex(out, cap, len, ptr);
+        return;
+    }
+
     char buf[STR_MAX];
     size_t n = 0;
     while (n < STR_MAX && n < max_len) {

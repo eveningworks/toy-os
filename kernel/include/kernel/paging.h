@@ -49,4 +49,36 @@ uint64_t paging_kernel_leaf(uint64_t vaddr);
 // under them.
 int paging_wx_violations(void);
 
+// Whether each of the two CR4 protections is on, as returned by both
+// functions below.
+#define PAGING_SMEP_ON (1 << 0)
+#define PAGING_SMAP_ON (1 << 1)
+
+// Sets CR4.SMEP and CR4.SMAP where the CPU supports them, and returns
+// which ones were turned on. Call once from kernel_main(), before
+// anything drops to ring 3.
+//
+// SMEP stops ring 0 EXECUTING a user page; SMAP stops it READING or
+// WRITING one. Neither is a nicety layered over the page-table bits --
+// they are the CPU refusing what the bits merely describe, which is
+// what makes a corrupted kernel pointer into a fault rather than an
+// exploit.
+//
+// **The rule SMAP imposes on the whole kernel: touch user memory only
+// through vmm.h's copy helpers.** Those go via the kernel's identity
+// map, so AC is never set anywhere in this kernel and there is no
+// window in which the protection is off. A raw `*(T *)user_ptr` in
+// kernel code faults once this is on -- which is the point.
+//
+// A CPU without either bit gets neither set (writing a reserved CR4 bit
+// is a #GP, not a no-op) and the return value says so. QEMU's default
+// `qemu64` model is exactly that case, so testing the hardware path
+// needs `--cpu max`.
+int paging_enable_smep_smap(void);
+
+// What CR4 says right now -- for the KTESTs and `lscpu`-style
+// reporting, so "we asked for it" and "the CPU has it" stay separate
+// questions.
+int paging_smep_smap_state(void);
+
 #endif

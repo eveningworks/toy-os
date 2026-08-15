@@ -6,6 +6,7 @@
 #include "gfx.h"
 #include "serial.h"
 #include "klog.h"
+#include "kfmt.h"      // klog_printf() -- the SMEP/SMAP line
 #include "idt.h"
 #include "gdt.h"
 #include "paging.h"
@@ -63,6 +64,17 @@ void kernel_main(uint64_t multiboot_info_addr) {
     } else {
         klog_write("toy-os: WARNING -- kernel W^X NOT applied; split table pool exhausted\n");
     }
+
+    // The CPU's own half of the same idea, right beside it: SMEP stops
+    // ring 0 executing a user page, SMAP stops it reading or writing
+    // one. Both are absent on QEMU's default qemu64 model, so a boot
+    // that reports neither is normal there rather than a failure --
+    // `--cpu max` is what exercises them. See paging.h for the rule SMAP
+    // imposes on every kernel access to user memory.
+    int prot = paging_enable_smep_smap();
+    klog_printf("toy-os: SMEP %s, SMAP %s\n",
+                 (prot & PAGING_SMEP_ON) ? "on" : "unavailable",
+                 (prot & PAGING_SMAP_ON) ? "on" : "unavailable");
 
     // Before any device driver: PCI enumeration is what a driver probes
     // against. Safe this early -- pci.c is a port-I/O scan into a static

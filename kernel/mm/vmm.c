@@ -1,5 +1,6 @@
 #include "vmm.h"
 #include "pmm.h"
+#include "string.h" // k_memcpy() -- the user-copy helpers below
 #include <stddef.h>
 
 // The kernel's own top-level page table, from boot.asm. Every process's
@@ -9,6 +10,7 @@ extern uint64_t p4_table[512];
 #define PAGE_PRESENT  (1ULL << 0)
 #define PAGE_WRITABLE (1ULL << 1)
 #define PAGE_USER     (1ULL << 2)
+#define PAGE_HUGE     (1ULL << 7)  // a PDPT/PD entry that IS the leaf, not a table pointer
 #define PAGE_NX       (1ULL << 63) // requires EFER.NXE, set once in boot.asm
 #define ADDR_MASK     0x000FFFFFFFFFF000ULL
 
@@ -190,10 +192,127 @@ uint64_t vmm_current_pml4(void) {
     return cr3;
 }
 
+// The physical address `vaddr` maps to, or 0 if it isn't a present,
+// user-accessible mapping at every level of the walk.
+//
+// 0 doubles as the failure value, which is sound here for the same
+// reason it is throughout pmm.c: frame 0 is the real-mode IVT and is
+// never handed out. Doesn't handle a 2MiB huge-page leaf at the PD
+// level, since vmm_map_user_page() never creates one for
+// process-private mappings -- it always descends to an individual 4KiB
+// PTE -- and a huge PDE reaching here would be read as a pointer to a
+// page table, so it is refused explicitly rather than mis-walked.
+static uint64_t user_phys_of(uint64_t pml4_phys, uint64_t vaddr) {
+    int pml4_index = (int)((vaddr >> 39) & 0x1FF);
+    int pdpt_index = (int)((vaddr >> 30) & 0x1FF);
+    int pd_index   = (int)((vaddr >> 21) & 0x1FF);
+    int pt_index   = (int)((vaddr >> 12) & 0x1FF);
+
+    uint64_t e = table_at(pml4_phys)[pml4_index];
+    if (!(e & PAGE_PRESENT) || !(e & PAGE_USER)) return 0;
+
+    e = table_at(e & ADDR_MASK)[pdpt_index];
+    if (!(e & PAGE_PRESENT) || !(e & PAGE_USER)) return 0;
+    if (e & PAGE_HUGE) return 0; // a 1GiB leaf -- see above
+
+    e = table_at(e & ADDR_MASK)[pd_index];
+    if (!(e & PAGE_PRESENT) || !(e & PAGE_USER)) return 0;
+    if (e & PAGE_HUGE) return 0; // a 2MiB leaf -- see above
+
+    e = table_at(e & ADDR_MASK)[pt_index];
+    if (!(e & PAGE_PRESENT) || !(e & PAGE_USER)) return 0;
+
+    return (e & ADDR_MASK) | (vaddr & 0xFFF);
+}
+
+// Copies between a kernel buffer and user memory THROUGH THE KERNEL'S
+// OWN IDENTITY MAP, never by dereferencing the user virtual address.
+//
+// **That is what makes SMAP absolute here rather than something the
+// kernel keeps switching off.** SMAP faults a supervisor access whose
+// mapping has U=1 unless EFLAGS.AC is set, and the usual answer is to
+// bracket every such access in STAC/CLAC -- which means the protection
+// is off for exactly the window where a bug would use it. Walking to
+// the frame and copying through the kernel's identity mapping (U=0, all
+// 4 GiB of it, see boot.asm) is a supervisor access to a supervisor
+// page, so SMAP never applies and AC is never touched at all. Nothing
+// in this kernel may reach into a user pointer any other way once CR4
+// SMAP is on.
+//
+// It also closes a TOCTOU gap the old shape had: validating a range and
+// then dereferencing it separately leaves room for the mapping to
+// change in between. Here the walk and the copy are the same operation,
+// per page.
+//
+// `dir` is which way the bytes move; both directions share the walk,
+// the page splitting and the failure semantics. Returns 1 only if EVERY
+// byte was copied -- a partial copy is reported as failure, with
+// whatever was already written left in place, so a caller must treat 0
+// as "the destination holds nothing you can trust" rather than trying
+// to salvage a prefix.
+enum copy_dir { COPY_FROM_USER, COPY_TO_USER };
+
+static int copy_user(uint64_t pml4_phys, uint64_t uaddr, void *kbuf,
+                      uint64_t len, enum copy_dir dir) {
+    if (len == 0) return 1;
+    if (uaddr + len < uaddr) return 0; // the range wraps
+
+    uint8_t *k = (uint8_t *)kbuf;
+    while (len) {
+        uint64_t phys = user_phys_of(pml4_phys, uaddr);
+        if (!phys) return 0;
+
+        // Never copy past the end of the page just walked -- the next
+        // one is a separate mapping and may not exist at all.
+        uint64_t in_page = 4096 - (uaddr & 0xFFF);
+        uint64_t n = len < in_page ? len : in_page;
+
+        uint8_t *u = (uint8_t *)(uintptr_t)phys;
+        if (dir == COPY_FROM_USER) k_memcpy(k, u, (size_t)n);
+        else                        k_memcpy(u, k, (size_t)n);
+
+        uaddr += n;
+        k += n;
+        len -= n;
+    }
+    return 1;
+}
+
+int vmm_copy_from_user(uint64_t pml4_phys, void *dst, uint64_t uaddr, uint64_t len) {
+    return copy_user(pml4_phys, uaddr, dst, len, COPY_FROM_USER);
+}
+
+int vmm_copy_to_user(uint64_t pml4_phys, uint64_t uaddr, const void *src, uint64_t len) {
+    // The cast drops const, which copy_user() then honours by direction
+    // rather than by type -- one walk/split implementation is worth more
+    // than the constness it costs at this one line.
+    return copy_user(pml4_phys, uaddr, (void *)(uintptr_t)src, len, COPY_TO_USER);
+}
+
+int vmm_copy_string_from_user(uint64_t pml4_phys, char *dst, uint64_t uaddr, uint64_t max) {
+    if (max == 0) return 0;
+
+    // Byte at a time rather than a bulk copy, because the length is not
+    // known until the NUL is found: a caller's buffer may legitimately
+    // sit near the end of its last mapped page, and reading `max` bytes
+    // to look for a terminator would refuse a perfectly valid short
+    // string. (The old shape validated a full FS_PATH_MAX range for
+    // exactly this reason and had to accept that refusal.)
+    for (uint64_t i = 0; i < max - 1; i++) {
+        uint64_t phys = user_phys_of(pml4_phys, uaddr + i);
+        if (!phys) return 0;
+        char c = *(char *)(uintptr_t)phys;
+        dst[i] = c;
+        if (c == '\0') return 1;
+    }
+    dst[max - 1] = '\0';
+    return 1; // truncated at max-1, NUL-terminated -- callers cap paths anyway
+}
+
 // Checks PRESENT + USER at every level for the single 4KiB page
-// containing `vaddr`. Doesn't handle a 2MiB huge-page leaf at the PD
-// level, since vmm_map_user_page() never creates one for process-private
-// mappings -- it always descends to an individual 4KiB PTE.
+// containing `vaddr`. See user_phys_of() above, which this now wraps --
+// the two used to be one function that discarded the physical address
+// it had just walked to.
 static int page_is_valid_user(uint64_t pml4_phys, uint64_t vaddr) {
     int pml4_index = (int)((vaddr >> 39) & 0x1FF);
     int pdpt_index = (int)((vaddr >> 30) & 0x1FF);

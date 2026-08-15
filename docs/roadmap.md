@@ -114,10 +114,15 @@ adds 4; 12 adds 5; 13 adds 6; 14 and up add 8.
       canary randomized from it at boot
 - [ ] Kernel ASLR (randomize load base) -- the entropy source it was
       blocked on exists now; what remains is the relocation work itself
-- [ ] Enable SMEP/SMAP (CR4) -- the CPU refusing kernel-mode execution of
-      and access to user pages, which is a stronger guarantee than the
-      page-table bits alone and costs two CR4 bits plus an audit of every
-      deliberate user-buffer access (`vmm.c`'s validation path)
+- [x] ~~Enable SMEP/SMAP (CR4)~~ -- done. `paging_enable_smep_smap()`
+      sets both where CPUID reports them, and the audit it forced is the
+      substance: all 23 deliberate user-pointer dereferences now go
+      through `vmm_copy_from_user()`/`_to_user()`/`_string_from_user()`,
+      which walk to the frame and copy through the kernel's identity map.
+      **This kernel never sets EFLAGS.AC** -- there is no STAC/CLAC
+      anywhere and so no window where SMAP is off. Verified enforcing: a
+      deliberate raw dereference takes a ring-0 `#PF` under `--cpu max`
+      and runs fine on `qemu64`, which reports neither bit
 - [x] ~~Guard page below each user stack~~ -- done. The layout is stated
       once in `kernel/include/kernel/uaddr.h` (both loaders used to
       carry their own copy), the region below the stack is reserved

@@ -210,3 +210,72 @@ int paging_wx_violations(void) {
     }
     return bad;
 }
+
+// ---------------------------------------------------------------------
+// SMEP / SMAP
+// ---------------------------------------------------------------------
+//
+// Two CR4 bits that make the CPU itself refuse what the page tables only
+// describe. SMEP (bit 20): ring 0 cannot EXECUTE a page marked
+// user-accessible, which kills the return-to-userspace family of exploits
+// outright -- a corrupted kernel return address pointing into a ring-3
+// buffer faults instead of running it. SMAP (bit 21): ring 0 cannot READ
+// or WRITE a user page either, unless EFLAGS.AC is set.
+//
+// **This kernel never sets AC.** Kernel code reaches user memory only
+// through vmm.h's copy helpers, which walk to the frame and go through
+// the kernel's own identity map (U=0) -- a supervisor access to a
+// supervisor page, which SMAP does not police. So SMAP here has no
+// relaxation window at all, and STAC/CLAC appear nowhere. Read vmm.h
+// before adding any other way to touch a ring-3 pointer.
+//
+// **The trap, and it is a live one:** paging_make_user_page() adds the
+// USER bit to the KERNEL's own identity mapping of a page. Any page it
+// touches becomes SMAP-protected against the kernel's ordinary access to
+// it, at the address the kernel normally uses. Nothing calls it today
+// outside this file; a future caller must copy through vmm.h's helpers
+// or expect a fault in code that looks entirely innocent.
+//
+// Both are silently absent on QEMU's default `qemu64` CPU model, so the
+// hardware path only runs under `--cpu max` (or a real machine) -- the
+// same trap the RDRAND work paid for. Absence is not a failure: an
+// unsupported bit is left clear and reported as such, because setting a
+// reserved CR4 bit is a #GP, not a no-op.
+
+#define CR4_SMEP_BIT (1ULL << 20)
+#define CR4_SMAP_BIT (1ULL << 21)
+
+static uint64_t read_cr4_local(void) {
+    uint64_t v;
+    __asm__ volatile ("mov %%cr4, %0" : "=r"(v));
+    return v;
+}
+
+int paging_enable_smep_smap(void) {
+    // CPUID.07H:0:EBX bit 7 = SMEP, bit 20 = SMAP. Read directly rather
+    // than through cpu_info_get(), which builds a large struct and is
+    // not necessarily initialised this early in kernel_main().
+    uint32_t ebx = 0;
+    uint32_t eax = 0, ecx = 0, edx = 0;
+    __asm__ volatile ("cpuid"
+                       : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                       : "a"(7), "c"(0));
+
+    int have_smep = (ebx >> 7) & 1u;
+    int have_smap = (ebx >> 20) & 1u;
+
+    uint64_t cr4 = read_cr4_local();
+    if (have_smep) cr4 |= CR4_SMEP_BIT;
+    if (have_smap) cr4 |= CR4_SMAP_BIT;
+    if (have_smep || have_smap) {
+        __asm__ volatile ("mov %0, %%cr4" :: "r"(cr4) : "memory");
+    }
+
+    return (have_smep ? PAGING_SMEP_ON : 0) | (have_smap ? PAGING_SMAP_ON : 0);
+}
+
+int paging_smep_smap_state(void) {
+    uint64_t cr4 = read_cr4_local();
+    return ((cr4 & CR4_SMEP_BIT) ? PAGING_SMEP_ON : 0) |
+            ((cr4 & CR4_SMAP_BIT) ? PAGING_SMAP_ON : 0);
+}
