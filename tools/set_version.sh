@@ -55,6 +55,14 @@ case "$NEW" in
         echo "version: $OLD -> $NEW (dev round started, CHANGELOG.md untouched)"
         ;;
     *)
+        # CHANGELOG.md is CLOSED (see CLAUDE.md's delivery section) --
+        # no new entries are written to it. This stamp is kept because
+        # its "## [Unreleased]" section still holds everything that
+        # accumulated before it was frozen, and that backlog deserves a
+        # version heading when the release is finally cut. Once that has
+        # happened the section stays empty and this becomes a harmless
+        # no-op; release notes come from `git log` instead, where every
+        # commit body already lists its changed files.
         CHANGELOG="CHANGELOG.md"
         if [ ! -f "$CHANGELOG" ]; then
             echo "version: $OLD -> $NEW (no CHANGELOG.md found, skipped the stamp)"
@@ -79,6 +87,7 @@ case "$NEW" in
         mv "$TMP" "$CHANGELOG"
         echo "version: $OLD -> $NEW (released)"
         echo "CHANGELOG.md: \"## [Unreleased]\" stamped as \"## [$NEW] - $TODAY\", fresh Unreleased section added above it"
-        echo "next: review the CHANGELOG stamp, then 'git tag v$NEW && git push origin main --tags' when ready"
+        echo "next: write the release notes from 'git log' (CHANGELOG.md is frozen -- see CLAUDE.md),"
+        echo "      then 'git tag v$NEW && git push origin main --tags' when ready"
         ;;
 esac

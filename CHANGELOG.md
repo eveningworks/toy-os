@@ -1,4 +1,22 @@
-# Changelog
+# Changelog -- CLOSED 2026-08-15, kept for reference
+
+**Do not add entries to this file.** It is frozen, along with the three
+archives beside it, and stays in the tree because ~800 places across the
+repo point into it -- `docs/decisions.md` alone has 108 "see
+`CHANGELOG.md`'s entry" references, and 31 source and tool files have
+more in their comments. Those pointers still resolve; that is this
+file's remaining job.
+
+What replaced it, and why, is in `CLAUDE.md`'s delivery section. In
+short: what changed goes in the commit message (which already lists
+every file with a note), how a mechanism works goes in a comment beside
+the code, why-this-way goes in `docs/decisions.md`, and what is still
+broken goes in `docs/roadmap.md`. The same reasoning was being written
+into three places, and this was the copy that was not being read.
+
+Everything below is the historical record, unchanged.
+
+---
 
 All notable changes to toy-os, in the order they happened. Each entry
 notes what was added and, where relevant, what broke and how it got

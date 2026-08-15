@@ -413,20 +413,10 @@ technical conventions below:
   boundary -- see `docs/decisions.md`'s entry on this) rather than
   inventing a new pattern each time, and record the split's own
   reasoning in a top-of-file comment the way `apps/wm/wm.c` and
-  `kernel/fs/tfs.c` do. The changelog is the same
-  instinct applied to docs, not code -- split by era each time it
-  passed ~4,200 lines, cutting at one heading with a straight move and
-  no rewording: `CHANGELOG-archive.md` holds Milestone 1 through Build
-  173, `CHANGELOG-archive-2.md` holds Build 183 through Build 502 (the
-  whole `## Build N` heading era), `CHANGELOG-archive-3.md` holds
-  releases `[0.0.9]` and `[0.1.0]`, and `CHANGELOG.md` keeps
-  `## [Unreleased]` plus every release after `[0.1.0]`. All four stay
-  grep-able; a future split follows the same pattern rather than
-  inventing a new one -- cut at a release heading, straight move, no
-  rewording. Note
-  `docs/decisions.md`'s `Build N` pointers name whichever file that
-  build actually lives in -- keep them accurate when a split moves
-  entries.
+  `kernel/fs/tfs.c` do. (This used to be followed by the changelog's own
+  splitting rule -- split by era every ~4,200 lines. That rule is
+  retired along with the changelog itself: the four files are frozen,
+  see the delivery section below.)
 - **`linker.ld` decides kernel memory PERMISSIONS now, not just
   placement.** Four PT_LOAD segments (R / R+X / R / RW) and four
   boundary symbols -- `__kimage_start`, `__ktext_start`, `__ktext_end`,
@@ -520,10 +510,37 @@ technical conventions below:
   its own keys to be unwieldy sharing `toyos.conf` (a GUI app with a
   dozen preferences, say) should get its own `/etc/<name>.conf` instead
   of cramming into the shared one just to match convention.
-- Every non-trivial change so far has gotten a `CHANGELOG.md` entry in
-  the same style: what changed, why, and what was verified. Keep doing
-  that -- it's the project's record of *why* things are the way they
-  are, which matters a lot in a codebase this hand-rolled.
+- **`CHANGELOG.md` is CLOSED as of 2026-08-15. Do not add entries to
+  it.** For most of this project every non-trivial change got a full
+  writeup there, and the four files grew to ~12,000 lines. The reason
+  for stopping is not that the record was worthless, it is that the
+  same reasoning was being written three times -- once in a comment
+  beside the code, once in `docs/decisions.md`, and once at length in a
+  file that in practice nobody re-reads (a session measured its own
+  usage: it read `CLAUDE.md`, `docs/roadmap.md`'s known-issues, the
+  `docs/decisions.md` index and source comments, and never opened the
+  archives at all). Writing it was a real fraction of every change's
+  cost; reading it wasn't happening.
+
+  **Where the three kinds of thing go now:**
+  - *What changed, file by file* -- the COMMIT MESSAGE, which already
+    lists every changed file with a one-line note (see
+    `docs/decisions.md`'s versioning entry for the format). `git log`
+    is the chronological record.
+  - *How the mechanism works, and the trap in it* -- a comment next to
+    the code. This is what actually gets found by whoever edits it.
+  - *Why this way and not the obvious way* -- `docs/decisions.md`, and
+    write the reasoning THERE rather than a pointer to somewhere else.
+    That file is topic-indexed, which is why it gets read.
+  - *What is broken / not built yet* -- `docs/roadmap.md`, with a
+    reproduction precise enough to replay.
+
+  The four changelog files stay in the tree, frozen: ~800 places across
+  the repo (108 in `docs/decisions.md` alone, plus comments in 31
+  source and tool files) say "see `CHANGELOG.md`'s entry", and those
+  pointers still resolve. Don't delete them, don't split them, don't
+  update them. A new `docs/decisions.md` entry should be
+  self-contained instead of pointing into them.
 - **`kernel/include/api/version.h` is GENERATED, not hand-edited** --
   `tools/gen_version.sh` regenerates it from `VERSION` (repo root, e.g.
   `0.1.0-dev`) as the first step of `make all`/`make iso`. Never edit
