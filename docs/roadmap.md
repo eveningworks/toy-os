@@ -1238,6 +1238,21 @@ Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
       focus, z-order and a taskbar button~~ -- done, see `CHANGELOG.md`.
       `SYS_WIN_REQUEST` carries typed messages; `win_server.c` owns the
       memory half and `wm_client.c` the presentation half.
+- [ ] **An app model for clients (`uapp`)** -- designed, not built; see
+      `docs/uapp-design.md` for the full argument, API sketch and
+      staging. Every client today hand-writes the create/title/present
+      handshake and the same `switch (ev.type)` loop (~55 of
+      `winclient.c`'s 141 lines), which is the same duplication `crt0`
+      and libsys already removed one layer down. The consequence that
+      matters is not verbosity: **window behaviour is unreachable from
+      ring 3**, because `wm_input.c` gates resizing on
+      `w->app->resizable` and a client window has no `app`. That is why
+      `WIN_EV_RESIZE` has been defined since the protocol was written
+      and is still never sent. Three stages: the library over today's
+      messages; `WIN_REQ_HINTS` so behaviour is a property of the
+      window rather than of a kernel-side struct; then resize as a
+      configure/ack handshake. The acceptance test is that stage three
+      touches zero lines in the clients that don't opt in.
 - [ ] Multiple windows per process: the protocol already carries window
       ids and `win_server.c` already tracks WIN_CLIENT_MAX per client,
       but `userland/winclient.c` only ever opens one, so the path is
