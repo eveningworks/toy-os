@@ -212,25 +212,25 @@ static void scrollbar_rect(int tx, int ty, int tw, int th,
     *bh = th;
 }
 
+// Notepad used to hand-roll its scrollbar here -- trough, thumb
+// position, thumb height, all recomputed locally -- while
+// ui/uui_scrollbar.h had exactly that widget. The copy is why it drew
+// something it could never move: none of the widget's hit-testing came
+// with it.
+//
+// Arrows are ON here (UUI_SCROLLBAR_ARROWS): an editor is where a
+// stepper is actually wanted, and this is the flag's first caller.
+#define NP_SCROLLBAR_FLAGS UUI_SCROLLBAR_ARROWS
+
 static void draw_scrollbar(struct ugfx_surface *s, int tx, int ty, int tw, int th) {
     int total, visible;
     utext_metrics(&g_text, tw, th, &total, &visible);
 
-    int bar_x, bar_y, bar_w, bar_h;
-    scrollbar_rect(tx, ty, tw, th, &bar_x, &bar_y, &bar_w, &bar_h);
-    ugfx_fill_rect(s, bar_x, bar_y, bar_w, bar_h, ugfx_rgb(225, 225, 230));
-    if (total <= visible) return; // nothing to scroll -- leave the trough bare
-
-    // first_line is the same quantity utext_draw() computes; the thumb
-    // has to be derived from it or the two disagree while scrolled.
-    int first = total - visible - g_text.scroll_offset;
-    if (first < 0) first = 0;
-
-    int thumb_h = th * visible / total;
-    if (thumb_h < 12) thumb_h = 12;
-    int span = th - thumb_h;
-    int thumb_y = ty + (total > visible ? span * first / (total - visible) : 0);
-    ugfx_fill_rect(s, bar_x, thumb_y, bar_w, thumb_h, ugfx_rgb(150, 155, 165));
+    int bx, by, bw, bh;
+    scrollbar_rect(tx, ty, tw, th, &bx, &by, &bw, &bh);
+    uui_scrollbar_draw(s, bx, by, bw, bh, total, visible, g_text.scroll_offset,
+                        ugfx_rgb(225, 225, 230), ugfx_rgb(150, 155, 165),
+                        NP_SCROLLBAR_FLAGS);
 }
 
 static void draw_dialog(struct ugfx_surface *s) {
@@ -489,9 +489,39 @@ static void editor_key(int key) {
 static int g_dragging;
 static int g_scrollbar_drag;
 
+// Reports the scrollbar's rect, content-relative, so a test asks where
+// it is instead of re-deriving it -- the rule docs/gui-guidelines.md
+// states after three tools each learned it the hard way. Written once
+// per draw; the log is idempotent enough that a reader only ever needs
+// the last line.
+static void log_layout(struct uapp *a) {
+    int tx, ty, tw, th, bx, by, bw, bh;
+    text_rect_for(uapp_width(a), uapp_height(a), &tx, &ty, &tw, &th);
+    scrollbar_rect(tx, ty, tw, th, &bx, &by, &bw, &bh);
+
+    char b[80];
+    int n = 0;
+    const char *pre = "notepad: layout scrollbar ";
+    while (pre[n]) { b[n] = pre[n]; n++; }
+    int v[4] = { bx, by, bw, bh };
+    for (int i = 0; i < 4; i++) {
+        if (i) b[n++] = ' ';
+        int x = v[i];
+        char d2[12];
+        int c = 0;
+        if (x <= 0) d2[c++] = '0';
+        while (x > 0) { d2[c++] = (char)('0' + x % 10); x /= 10; }
+        while (c > 0) b[n++] = d2[--c];
+    }
+    b[n++] = '\n';
+    b[n] = '\0';
+    sys_eprint(b);
+}
+
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
     set_title(a);
     draw(uapp_surface(d), uapp_focused(a));
+    log_layout(a);
 }
 
 static void on_key(struct uapp *a, int key, unsigned mods) {
@@ -507,30 +537,40 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     uapp_redraw(a);
 }
 
-// Scrolls to put `first` at the top, expressed as utext's scroll_offset
-// (which counts BACKWARDS from the bottom -- see utext.h).
-static void scroll_to_first(int first, int total, int visible) {
-    int off = total - visible - first;
-    if (off < 0) off = 0;
-    g_text.scroll_offset = off;
-}
 
 // A click in the trough jumps there; a click on the thumb starts a
 // drag. Returns 1 if the scrollbar took the click.
 static int scrollbar_press(int px, int py, int tx, int ty, int tw, int th) {
     int bx, by, bw, bh;
     scrollbar_rect(tx, ty, tw, th, &bx, &by, &bw, &bh);
-    if (px < bx || px >= bx + bw || py < by || py >= by + bh) return 0;
 
     int total, visible;
     utext_metrics(&g_text, tw, th, &total, &visible);
-    if (total <= visible) return 1; // nothing to scroll, but the click was ours
 
-    // Centre the view on where the trough was clicked.
-    int span = bh > 0 ? bh : 1;
-    int first = (py - by) * (total - visible) / span;
-    scroll_to_first(first, total, visible);
-    g_scrollbar_drag = 1;
+    // The widget classifies the click, so the arrows, the thumb and the
+    // trough cannot disagree with what was drawn.
+    enum uui_scrollbar_zone z =
+        uui_scrollbar_hit(bx, by, bw, bh, total, visible, g_text.scroll_offset,
+                           px, py, NP_SCROLLBAR_FLAGS);
+    switch (z) {
+    case UUI_SB_NONE:
+        return 0;
+    case UUI_SB_UP:
+        utext_scroll(&g_text, 1);   // one line back
+        return 1;
+    case UUI_SB_DOWN:
+        utext_scroll(&g_text, -1);  // one line forward
+        return 1;
+    case UUI_SB_ABOVE:
+        utext_scroll(&g_text, visible);  // page
+        return 1;
+    case UUI_SB_BELOW:
+        utext_scroll(&g_text, -visible);
+        return 1;
+    case UUI_SB_THUMB:
+        g_scrollbar_drag = 1;
+        return 1;
+    }
     return 1;
 }
 
@@ -586,9 +626,11 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
             if (total > visible) {
                 int bx, by, bw, bh;
                 scrollbar_rect(tx, ty, tw, th, &bx, &by, &bw, &bh);
-                int span = bh > 0 ? bh : 1;
-                int first = (y - by) * (total - visible) / span;
-                scroll_to_first(first, total, visible);
+                // The widget's own drag mapping -- so the thumb tracks
+                // the cursor the same way it is drawn, arrows included.
+                g_text.scroll_offset =
+                    uui_scrollbar_offset_for_drag(by, bh, total, visible, y, 0,
+                                                   bw, NP_SCROLLBAR_FLAGS);
                 uapp_redraw(a);
             }
         } else if (g_dragging) {

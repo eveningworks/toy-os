@@ -86,7 +86,7 @@ void uui_listbox_draw(struct ugfx_surface *s, const struct uui_listbox *lb) {
     if (bar) {
         uui_scrollbar_draw(s, lb->x + lb->w - bar, lb->y, bar, lb->h,
                             lb->count, vis, lb->count - vis - lb->top,
-                            lb->track_bg, lb->thumb_bg);
+                            lb->track_bg, lb->thumb_bg, 0);
     }
 }
 

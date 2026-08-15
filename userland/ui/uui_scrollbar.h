@@ -14,12 +14,28 @@
 
 #define UUI_SCROLLBAR_MIN_THUMB_H 16
 
+// Optional stepper arrows at each end, as Vivaldi and the older
+// toolkits draw them. OFF by default, so nothing changes for a caller
+// that does not ask -- and off is the modern default (neither macOS nor
+// GNOME draws them any more). An app that wants them says so; the
+// widget stays stateless either way, since an arrow is hit-tested from
+// geometry and the scroll position still belongs to whatever is being
+// scrolled.
+#define UUI_SCROLLBAR_ARROWS 0x01
+
 enum uui_scrollbar_zone {
     UUI_SB_NONE = 0,
     UUI_SB_ABOVE,  // the track above the thumb -- page up
     UUI_SB_THUMB,  // the thumb itself -- start a drag
     UUI_SB_BELOW,  // the track below the thumb -- page down
+    UUI_SB_UP,     // the top arrow -- step one line back
+    UUI_SB_DOWN,   // the bottom arrow -- step one line forward
 };
+
+// How tall each arrow button is, when UUI_SCROLLBAR_ARROWS is set:
+// square, so it follows the bar's width and stays proportional to the
+// font like everything else.
+#define uui_scrollbar_arrow_h(w) (w)
 
 // Preferred minimum: the strip's width; no height preference -- a
 // scrollbar is as tall as whatever it scrolls. See uui_primitives.h.
@@ -27,19 +43,22 @@ void uui_scrollbar_natural_size(int *out_w, int *out_h);
 
 void uui_scrollbar_draw(struct ugfx_surface *s, int x, int y, int w, int h,
                          int total_lines, int visible_rows, int scroll_offset,
-                         uint32_t track_bg, uint32_t thumb_bg);
+                         uint32_t track_bg, uint32_t thumb_bg, unsigned flags);
 
 enum uui_scrollbar_zone uui_scrollbar_hit(int x, int y, int w, int h,
                                            int total_lines, int visible_rows,
-                                           int scroll_offset, int px, int py);
+                                           int scroll_offset, int px, int py,
+                                           unsigned flags);
 
 void uui_scrollbar_thumb_rect(int y, int h, int total_lines, int visible_rows,
-                               int scroll_offset, int *out_thumb_y, int *out_thumb_h);
+                               int scroll_offset, int *out_thumb_y, int *out_thumb_h,
+                               int bar_w, unsigned flags);
 
 // The scroll offset a thumb drag to `py` implies. `grab_offset_in_thumb`
 // is how far down the thumb the drag started, so the thumb doesn't jump
 // under the cursor on the first pixel of movement.
 int uui_scrollbar_offset_for_drag(int y, int h, int total_lines, int visible_rows,
-                                   int py, int grab_offset_in_thumb);
+                                   int py, int grab_offset_in_thumb,
+                                   int bar_w, unsigned flags);
 
 #endif

@@ -37,6 +37,18 @@ void widget_scrollbar_natural_size(int *out_w, int *out_h) {
     if (out_h) *out_h = 0; // no preference: as tall as its content area
 }
 
+// A rounded rectangle -- the capsule shape a modern scrollbar thumb
+// has. Just the four corner pixels trimmed: at this width that is the
+// whole difference between "capsule" and "block", and it needs no
+// anti-aliasing. Kept identical to userland/ui/uui_scrollbar.c's, so
+// the two sides of the desktop look like one system.
+static void fill_capsule(int x, int y, int w, int h, uint32_t c) {
+    if (w <= 2 || h <= 2) { gfx_fill_rect(x, y, w, h, c); return; }
+    gfx_fill_rect(x, y + 1, w, h - 2, c);
+    gfx_fill_rect(x + 1, y, w - 2, 1, c);
+    gfx_fill_rect(x + 1, y + h - 1, w - 2, 1, c);
+}
+
 void widget_scrollbar_draw(int x, int y, int w, int h, int total_lines, int visible_rows,
                             int scroll_offset, uint32_t track_bg, uint32_t thumb_bg) {
     gfx_fill_rect(x, y, w, h, track_bg);
@@ -44,8 +56,16 @@ void widget_scrollbar_draw(int x, int y, int w, int h, int total_lines, int visi
 
     int thumb_y, thumb_h, max_scroll;
     scrollbar_geometry(y, h, total_lines, visible_rows, scroll_offset, &thumb_y, &thumb_h, &max_scroll);
-    gfx_fill_rect(x, thumb_y, w, thumb_h, thumb_bg);
+    // Inset a pixel each side so the track shows around the capsule --
+    // that gap is most of what reads as modern rather than as a grey
+    // block filling a groove.
+    fill_capsule(x + 1, thumb_y, w - 2, thumb_h, thumb_bg);
 }
+
+// NOTE: stepper arrows are a ring-3 option only (uui_scrollbar.h's
+// UUI_SCROLLBAR_ARROWS). No kernel-space app asks for them, and this
+// side is retiring under M41 -- so it gets the same LOOK without the
+// plumbing nothing here would use.
 
 enum scrollbar_zone widget_scrollbar_hit(int x, int y, int w, int h, int total_lines,
                                           int visible_rows, int scroll_offset, int px, int py) {

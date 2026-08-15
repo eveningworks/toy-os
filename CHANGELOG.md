@@ -245,6 +245,36 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   one geometry calculation shared by draw/hit-test/drag (so a scrollbar
   thumb cannot be in two places), and commit-on-release.
 
+### Changed
+- **Scrollbars restyled, with optional stepper arrows.** A capsule thumb
+  inset a pixel inside a visible track, replacing a flat grey block
+  filling a flat groove -- the style Vivaldi and KDE use, chosen with
+  the track kept VISIBLE because the quieter near-invisible variant
+  needs hover-to-expand to stay findable, and this widget deliberately
+  holds no hover state of its own.
+
+  `UUI_SCROLLBAR_ARROWS` adds stepper arrows at each end; a click steps
+  one line, a click on the track pages. **Off by default** -- nothing
+  changes for a caller that does not ask, and off is also the modern
+  default (neither macOS nor GNOME draws them). Notepad is the flag's
+  first caller, an editor being where a stepper is actually wanted. The
+  widget stays stateless: an arrow is hit-tested from geometry and the
+  scroll position still belongs to whatever is being scrolled.
+
+  The kernel-space scrollbar gets the same LOOK but not the arrow
+  plumbing: no kernel app asks for arrows, and that side retires under
+  M41, so it takes the capsule and nothing else. One desktop, one style.
+
+  **Notepad stopped hand-rolling its scrollbar.** It had its own trough,
+  thumb position and thumb height while `uui_scrollbar` sat unused --
+  which is exactly why it drew something it could never move: none of
+  the widget's hit-testing came with the copy. It uses the widget for
+  drawing, classification and drag mapping now, and reports its
+  scrollbar rect through the log so the test asks where it is instead of
+  deriving it. That rule earned itself again here: the first version of
+  the arrow check computed the arrow's position in Python, hit the track
+  instead, paged rather than stepped, and could not step back.
+
 ### Fixed
 - **Three bugs found by USING the desktop, not by running the suite.**
   All three were reported from a real session; all three passed every

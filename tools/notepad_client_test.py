@@ -271,6 +271,44 @@ def run(dbg, qmp, tmp, shot_dir, res):
     res.check("dragging the scrollbar scrolls the editor", dragged != at_bottom,
               "the text area did not change when the scrollbar thumb was dragged")
 
+    # The stepper arrows (UUI_SCROLLBAR_ARROWS -- Notepad is the flag's
+    # first caller). Clicking one steps a line; paired so that "the top
+    # arrow did something" cannot pass by the view simply drifting.
+    for _ in range(6):
+        dbg.send("gui wheel -9")
+    dbg.settle()
+    time.sleep(0.4)
+    pinned = text_pixels(qmp, tmp, "np_pinned.png", box)
+
+    # Ask the app where its scrollbar is. Deriving it here is how the
+    # first version of this check clicked the TRACK instead of the
+    # arrow, paged instead of stepping, and then could not step back.
+    sb = None
+    for l in reversed(dbg.logs("notepad: layout scrollbar", clear=False)):
+        sb = [int(v) for v in l.split("layout scrollbar")[1].split()[:4]]
+        break
+    res.check("Notepad reports its scrollbar geometry", sb is not None,
+              "no 'notepad: layout scrollbar' line")
+    if sb is None:
+        return
+    sbx, sby, sbw, sbh = sb
+    bar_x = ox + sbx + sbw // 2
+    bar_top = oy + sby + sbw // 2
+    dbg.send(f"gui click {bar_x} {bar_top}")
+    dbg.settle()
+    time.sleep(0.4)
+    stepped = text_pixels(qmp, tmp, "np_arrow_up.png", box)
+    res.check("the scrollbar's up arrow steps the view", stepped != pinned,
+              "clicking the top stepper arrow changed nothing")
+
+    bar_bottom = oy + sby + sbh - sbw // 2
+    dbg.send(f"gui click {bar_x} {bar_bottom}")
+    dbg.settle()
+    time.sleep(0.4)
+    unstepped = text_pixels(qmp, tmp, "np_arrow_down.png", box)
+    res.check("the down arrow steps back", unstepped == pinned,
+              "stepping up then down did not return to the same pixels")
+
 
     if shot_dir:
         qmp.screenshot(os.path.abspath(os.path.join(shot_dir, "ring3-notepad-reopened.png")))
