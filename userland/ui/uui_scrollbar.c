@@ -29,6 +29,11 @@ static void sb_geometry(int y, int h, int total_lines, int visible_rows, int scr
     *out_max_scroll = max_scroll;
 }
 
+void uui_scrollbar_natural_size(int *out_w, int *out_h) {
+    if (out_w) *out_w = ugfx_char_w() + 4;
+    if (out_h) *out_h = 0; // no preference: as tall as its content area
+}
+
 void uui_scrollbar_draw(struct ugfx_surface *s, int x, int y, int w, int h,
                          int total_lines, int visible_rows, int scroll_offset,
                          uint32_t track_bg, uint32_t thumb_bg) {

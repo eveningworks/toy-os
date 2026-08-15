@@ -21,7 +21,9 @@ struct uui_radio_list {
     int marker_size;
 };
 
-void uui_radio_list_size(const struct uui_radio_list *l, int *out_w, int *out_h);
+// Preferred minimum: the grid its columns and rows need. See
+// uui_primitives.h. Renamed from uui_radio_list_size().
+void uui_radio_list_natural_size(const struct uui_radio_list *l, int *out_w, int *out_h);
 void uui_radio_list_draw(struct ugfx_surface *s, const struct uui_radio_list *l,
                           int x, int y, int selected, int hovered,
                           uint32_t bg, uint32_t fg);

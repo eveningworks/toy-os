@@ -23,6 +23,12 @@ struct uui_dropdown {
 
 void uui_dropdown_init(struct uui_dropdown *d, int x, int y, int w, int h,
                         const char *const *items, int count);
+// Preferred minimum for the CLOSED box: the widest item it could show,
+// plus insets and arrow room. Widest ITEM, not the selected one -- a box
+// that fits today's value and clips tomorrow's is the bug this
+// prevents. See uui_primitives.h.
+void uui_dropdown_natural_size(const struct uui_dropdown *d, int *out_w, int *out_h);
+
 void uui_dropdown_draw(struct ugfx_surface *s, const struct uui_dropdown *d);
 
 // **Call this AFTER every other widget has drawn.** Drawing is

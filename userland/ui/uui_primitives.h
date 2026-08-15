@@ -60,6 +60,22 @@ uint32_t uui_state_bg(uint32_t base, enum uui_state state);
 // this is a bounds check and nothing more.
 int uui_hit(int x, int y, int w, int h, int px, int py);
 
+// --- natural size ------------------------------------------------------
+//
+// The ring-3 half of apps/ui/ui_primitives.h's contract, same rule and
+// same reasoning -- read that one for the full statement. In short:
+//
+//     void uui_<widget>_natural_size(const struct ..., int *w, int *h);
+//
+// is the PREFERRED MINIMUM, the smallest size at which the widget looks
+// right; a layout may hand it more. **0 means NO PREFERENCE** and
+// callers must handle it -- a text field has no intrinsic width, so it
+// writes 0 for width and a real height that must be honoured. Padding
+// is font-derived, never a pixel constant.
+#define UUI_PAD_X (ugfx_char_w())
+#define UUI_PAD_Y (ugfx_char_h() / 2)
+
+
 // Fills the rect with `bg` shifted for `state`, then centres `label`
 // (may be NULL) in `fg`. Pressed draws a darker fill plus a 1px
 // down-right nudge of the label -- the darker fill alone reads as a

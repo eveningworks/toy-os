@@ -127,6 +127,23 @@ void ui_dropdown_close(struct ui_dropdown *dd) {
     dd->list.thumb_grab = -1;
 }
 
+void ui_dropdown_natural_size(const struct ui_dropdown *dd, int *out_w, int *out_h) {
+    // The same pad/arrow_room the draw uses. Widest ITEM, not the
+    // currently selected one -- a box that fits today's value and clips
+    // tomorrow's is the bug this prevents.
+    int pad = gfx_char_w() / 2;
+    int arrow_room = gfx_char_w() * 2;
+    if (out_w) {
+        int widest = 0;
+        for (int i = 0; i < dd->list.count; i++) {
+            int tw = gfx_text_width(dd->list.items[i]);
+            if (tw > widest) widest = tw;
+        }
+        *out_w = widest + pad * 2 + arrow_room;
+    }
+    if (out_h) *out_h = gfx_char_h() + 2 * UI_PAD_Y;
+}
+
 int ui_dropdown_hit(const struct ui_dropdown *dd, int cx, int cy) {
     return widget_hit(dd->x, dd->y, dd->w, dd->h, cx, cy);
 }

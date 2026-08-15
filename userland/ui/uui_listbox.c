@@ -32,6 +32,11 @@ void uui_listbox_set_items(struct uui_listbox *lb, const char *const *items, int
     lb->hovered = -1;
 }
 
+// Left inset for a row's label. Hoisted out of the draw so
+// uui_listbox_natural_size() reserves exactly what the draw uses --
+// the same "one geometry, shared" rule the scrollbar follows.
+#define UUI_LISTBOX_PAD_X 4
+
 int uui_listbox_row_h(const struct uui_listbox *lb) {
     return lb->row_h > 0 ? lb->row_h : ugfx_char_h() + 4;
 }
@@ -74,7 +79,7 @@ void uui_listbox_draw(struct ugfx_surface *s, const struct uui_listbox *lb) {
         else if (idx == lb->hovered) { rbg = uui_state_bg(lb->bg, UUI_STATE_HOVER); }
 
         if (rbg != lb->bg) ugfx_fill_rect(s, lb->x, ry, text_w, rh, rbg);
-        ugfx_draw_string_clipped(s, lb->x + 4, ry + (rh - ugfx_char_h()) / 2,
+        ugfx_draw_string_clipped(s, lb->x + UUI_LISTBOX_PAD_X, ry + (rh - ugfx_char_h()) / 2,
                                   text_w - 8, lb->items[idx], rfg, rbg);
     }
 
@@ -83,6 +88,18 @@ void uui_listbox_draw(struct ugfx_surface *s, const struct uui_listbox *lb) {
                             lb->count, vis, lb->count - vis - lb->top,
                             lb->track_bg, lb->thumb_bg);
     }
+}
+
+void uui_listbox_natural_size(const struct uui_listbox *lb, int *out_w, int *out_h) {
+    if (out_w) {
+        int widest = 0;
+        for (int i = 0; i < lb->count; i++) {
+            int tw = ugfx_text_width(lb->items[i]);
+            if (tw > widest) widest = tw;
+        }
+        *out_w = widest + UUI_LISTBOX_PAD_X * 2 + lb->bar_w;
+    }
+    if (out_h) *out_h = lb->count * uui_listbox_row_h(lb);
 }
 
 int uui_listbox_hit(const struct uui_listbox *lb, int cx, int cy) {

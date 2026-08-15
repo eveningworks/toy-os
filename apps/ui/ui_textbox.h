@@ -82,6 +82,12 @@ void ui_textbox_init(struct ui_textbox *tbx, int x, int y, int w, int h,
 // ui_button_set_geometry().
 void ui_textbox_set_geometry(struct ui_textbox *tbx, int x, int y, int w, int h);
 
+// Height only: one row of text plus its insets. **Width is 0 -- no
+// preference** (see ui_primitives.h). A field's width is whatever the
+// form gives it; twenty columns would be an invented number that
+// nothing honours once a layout stretches it.
+void ui_textbox_natural_size(const struct ui_textbox *tbx, int *out_w, int *out_h);
+
 void ui_textbox_draw(const struct ui_textbox *tbx, int origin_x, int origin_y);
 int ui_textbox_hit(const struct ui_textbox *tbx, int cx, int cy);
 

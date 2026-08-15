@@ -34,6 +34,12 @@ int  uui_listbox_scrollbar_visible(const struct uui_listbox *lb);
 void uui_listbox_draw(struct ugfx_surface *s, const struct uui_listbox *lb);
 
 // Row index at (cx, cy), or -1 if outside / on the scrollbar.
+// Preferred minimum: wide enough for the longest item plus insets and
+// the scrollbar, tall enough for every row. A layout may give LESS
+// height and the listbox scrolls, which is what it is for. See
+// uui_primitives.h.
+void uui_listbox_natural_size(const struct uui_listbox *lb, int *out_w, int *out_h);
+
 int  uui_listbox_hit(const struct uui_listbox *lb, int cx, int cy);
 int  uui_listbox_hover(struct uui_listbox *lb, int cx, int cy);   // 1 if changed
 int  uui_listbox_click(struct uui_listbox *lb, int cx, int cy);   // selects; 1 if changed

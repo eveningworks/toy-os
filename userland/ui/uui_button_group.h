@@ -16,6 +16,11 @@ struct uui_button_group {
 void uui_button_group_init(struct uui_button_group *g,
                             struct uui_button *buttons, int count);
 
+// The box every button in the group currently occupies -- the union of
+// their rects. 0x0 for an empty group.
+void uui_button_group_natural_size(const struct uui_button_group *g,
+                                    int *out_w, int *out_h);
+
 void uui_button_group_draw(const struct uui_button_group *g,
                             struct ugfx_surface *s);
 

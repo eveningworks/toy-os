@@ -246,6 +246,60 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   thumb cannot be in two places), and commit-on-release.
 
 ### Added
+- **Every widget reports a natural size, in one spelling.** Eleven
+  `*_natural_size(..., int *w, int *h)` functions across `apps/ui/` and
+  their `uui_` mirrors -- button, button group, checkbox, radio list,
+  listbox, dropdown, text box/field, text view, scrollbar.
+
+  The concept already existed three times under three names, which is
+  what makes this consolidation rather than speculation:
+  `ui_radio_list_size()` (already exactly this shape),
+  `widget_checkbox_width()` (width only) and
+  `ui_listbox_height_for_rows()` (height only, parameterised). Three
+  real callers, no shared signature.
+
+  Two decisions worth stating, both in `ui_primitives.h` where every
+  widget's header points:
+
+  **It is the PREFERRED MINIMUM, not an exact size.** A layout may hand
+  a widget more, and every widget here already draws correctly into
+  whatever rectangle it gets. An exact size would make a resizable
+  window nearly pointless -- nothing would grow to fill one -- and
+  stage 3 would have had to revisit every widget.
+
+  **0 means NO PREFERENCE, and callers must handle it.** A text field
+  has no intrinsic width; twenty columns is no more correct than
+  fifteen, so it reports 0 for width and a real height that must be
+  honoured. A text view reports 0 for both. Inventing a default would
+  have looked tidier and been a lie, since the number stops being the
+  answer the moment anything stretches it.
+
+  Padding is font-derived (`UI_PAD_X` = `gfx_char_w()`, `UI_PAD_Y` =
+  `gfx_char_h() / 2`), never a pixel constant, so a widget sized this
+  way reflows with `fontsize` like the rest of the GUI.
+
+  A side effect worth having: three widgets were computing the same
+  rectangle in two or three places. The checkbox's hover wash, its hit
+  test and its natural size are now one calculation with three callers
+  -- previously the draw and the hit test each derived it separately,
+  which is the exact shape of the bug `ui_scrollbar.c`'s shared geometry
+  helper exists to prevent. The text field's and listbox's insets were
+  hoisted out of their draws for the same reason, so the height reported
+  and the height drawn cannot disagree.
+
+  Verified with `uidemo_test.py`'s 27 checks and the full 82-check
+  regression, unchanged. **No KTESTs**, and that is a boundary rather
+  than an omission: `ktest.h` is kernel-internal and `APPS_CFLAGS`
+  deliberately strips that include path, so `apps/` cannot reach the
+  test framework at all -- the GUI harness is the substitute. Worth
+  knowing before trying to unit-test a widget.
+
+  Honest scope note: the new functions have no callers yet. Stage 1c's
+  layout is the caller, and it is what will prove the numbers are right
+  rather than merely consistent. What IS verified now is that nothing
+  regressed and that the shared-geometry refactors above behave.
+
+### Added
 - **Text chokepoints, so no widget does character arithmetic on a
   string.** `gfx_text_next()`/`gfx_text_prev()` join the existing
   `gfx_text_width()`/`gfx_text_fit_chars()`, and `ugfx` gains the whole

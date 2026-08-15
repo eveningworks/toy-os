@@ -42,6 +42,20 @@ void uui_dropdown_draw_popup(struct ugfx_surface *s, const struct uui_dropdown *
     ugfx_draw_rect(s, d->list.x, d->list.y, d->list.w, d->list.h, d->border);
 }
 
+void uui_dropdown_natural_size(const struct uui_dropdown *d, int *out_w, int *out_h) {
+    int pad = ugfx_char_w() / 2;
+    int arrow_room = ugfx_char_w() * 2;
+    if (out_w) {
+        int widest = 0;
+        for (int i = 0; i < d->list.count; i++) {
+            int tw = ugfx_text_width(d->list.items[i]);
+            if (tw > widest) widest = tw;
+        }
+        *out_w = widest + pad * 2 + arrow_room;
+    }
+    if (out_h) *out_h = ugfx_char_h() + 2 * UUI_PAD_Y;
+}
+
 int uui_dropdown_hit(const struct uui_dropdown *d, int cx, int cy) {
     return uui_hit(d->x, d->y, d->w, d->h, cx, cy);
 }

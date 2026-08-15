@@ -31,6 +31,39 @@
 // this doesn't care, it's just a bounds check.
 int widget_hit(int x, int y, int w, int h, int px, int py);
 
+// --- natural size ------------------------------------------------------
+//
+// Every widget answers ONE question the same way:
+//
+//     void ui_<widget>_natural_size(const struct ..., int *w, int *h);
+//
+// **The PREFERRED MINIMUM -- the smallest size at which the widget looks
+// right.** A layout is free to hand it more (a listbox filling a
+// window's height, a text field filling a row's width), and every
+// widget here already draws correctly into whatever rectangle it is
+// given, so this is a request rather than a demand. That is what makes
+// a resizable window possible at all: with an exact size, nothing grows
+// to fill one.
+//
+// **0 means NO PREFERENCE, and callers must handle it.** A text field
+// has no intrinsic width -- twenty columns is no more correct than
+// fifteen -- so it writes 0 and lets the layout decide, while still
+// reporting a real height that must be honoured. Writing an invented
+// default instead would look tidier and be a lie: the number would
+// never be the actual answer once anything stretched it.
+//
+// This replaced three different spellings of the same idea that had
+// grown up separately -- `ui_radio_list_size()`, `widget_checkbox_width()`
+// (width only) and `ui_listbox_height_for_rows()` (height only,
+// parameterised). Three real callers, no shared signature; naming it
+// once is consolidation, not speculation.
+//
+// Padding is FONT-DERIVED, never a pixel constant, so a widget sized
+// this way reflows with `fontsize` like the rest of the GUI.
+#define UI_PAD_X (gfx_char_w())
+#define UI_PAD_Y (gfx_char_h() / 2)
+
+
 // Fills the rect with `bg`, then -- if `label` is non-NULL -- centers it
 // in `fg` on `bg` using the current font (gfx_char_w()/gfx_char_h(), so
 // it stays correct across gfx_set_font_size() calls same as everything

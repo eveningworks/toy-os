@@ -21,7 +21,7 @@ static int row_count(const struct ui_radio_list *list) {
     return (list->count + cols - 1) / cols; // ceiling, so a partial last row still counts
 }
 
-void ui_radio_list_size(const struct ui_radio_list *list, int *out_w, int *out_h) {
+void ui_radio_list_natural_size(const struct ui_radio_list *list, int *out_w, int *out_h) {
     int cols = list->cols > 0 ? list->cols : 1;
     if (cols > list->count && list->count > 0) cols = list->count; // don't reserve empty columns
     if (out_w) *out_w = cols * list->col_w;

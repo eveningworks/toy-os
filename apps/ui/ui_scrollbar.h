@@ -54,6 +54,12 @@ enum scrollbar_zone {
 // Fills (x, y, w, h) with `track_bg`, then draws the proportionally-sized
 // thumb in `thumb_bg`. If `total_lines <= visible_rows` (nothing to
 // scroll), only the track is drawn.
+// Preferred minimum: the strip's width, and no height preference -- a
+// scrollbar is exactly as tall as whatever it scrolls. See
+// ui_primitives.h. Still a free function; the struct comes when the
+// checkbox and scrollbar become objects and can join a layout.
+void widget_scrollbar_natural_size(int *out_w, int *out_h);
+
 void widget_scrollbar_draw(int x, int y, int w, int h, int total_lines, int visible_rows,
                             int scroll_offset, uint32_t track_bg, uint32_t thumb_bg);
 

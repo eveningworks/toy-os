@@ -10,6 +10,17 @@ void ui_button_group_init(struct ui_button_group *g, struct ui_button *buttons, 
     g->activated = -1;
 }
 
+void ui_button_group_natural_size(const struct ui_button_group *g, int *out_w, int *out_h) {
+    int x1 = 0, y1 = 0;
+    for (int i = 0; i < g->count; i++) {
+        const struct ui_button *b = &g->buttons[i];
+        if (b->x + b->w > x1) x1 = b->x + b->w;
+        if (b->y + b->h > y1) y1 = b->y + b->h;
+    }
+    if (out_w) *out_w = x1;
+    if (out_h) *out_h = y1;
+}
+
 void ui_button_group_draw(const struct ui_button_group *g, int origin_x, int origin_y) {
     for (int i = 0; i < g->count; i++) {
         ui_button_draw(&g->buttons[i], origin_x, origin_y);

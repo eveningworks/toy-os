@@ -29,6 +29,14 @@ static void scrollbar_geometry(int y, int h, int total_lines, int visible_rows, 
     *out_max_scroll = max_scroll;
 }
 
+void widget_scrollbar_natural_size(int *out_w, int *out_h) {
+    // Matches the DEFAULT_BAR_W that ui_listbox.c and ui_textview.c
+    // each derive for themselves -- font-derived, so the strip stays
+    // proportional to the text it scrolls.
+    if (out_w) *out_w = gfx_char_w() + 4;
+    if (out_h) *out_h = 0; // no preference: as tall as its content area
+}
+
 void widget_scrollbar_draw(int x, int y, int w, int h, int total_lines, int visible_rows,
                             int scroll_offset, uint32_t track_bg, uint32_t thumb_bg) {
     gfx_fill_rect(x, y, w, h, track_bg);

@@ -37,6 +37,12 @@ struct ui_button_group {
 };
 
 void ui_button_group_init(struct ui_button_group *g, struct ui_button *buttons, int count);
+// The box every button in the group currently occupies -- the union of
+// their rects, not the sum of their natural sizes, because a group's
+// buttons are already positioned relative to each other by whoever laid
+// them out. 0x0 for an empty group.
+void ui_button_group_natural_size(const struct ui_button_group *g, int *out_w, int *out_h);
+
 void ui_button_group_draw(const struct ui_button_group *g, int origin_x, int origin_y);
 
 // Direct WM event adapters -- shaped to drop straight into gui_apps.h's

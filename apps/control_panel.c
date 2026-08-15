@@ -108,7 +108,7 @@ static void tz_applet_draw(int x, int y, int w, int h) {
     // The current local time, so the effect of a change is visible
     // right here and not only in the taskbar clock.
     int list_h = 0;
-    ui_radio_list_size(&g_tz_list, 0, &list_h);
+    ui_radio_list_natural_size(&g_tz_list, 0, &list_h);
     struct rtc_time t;
     rtc_read_local(&t);
     char line[48];

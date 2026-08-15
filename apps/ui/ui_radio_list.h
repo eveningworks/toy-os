@@ -36,7 +36,10 @@ struct ui_radio_list {
 // Total pixel size the list occupies, so a caller can size a window or
 // a panel around it without duplicating the row/column arithmetic.
 // Shared by draw()/hit() so the three can never disagree.
-void ui_radio_list_size(const struct ui_radio_list *list, int *out_w, int *out_h);
+// Preferred minimum: the grid its columns and rows need. See
+// ui_primitives.h. Renamed from ui_radio_list_size() -- it was already
+// exactly this, under a name nothing else shared.
+void ui_radio_list_natural_size(const struct ui_radio_list *list, int *out_w, int *out_h);
 
 // Draws every option at (x, y), with row `selected` marked. `selected`
 // outside [0, count) simply marks nothing -- a caller whose underlying

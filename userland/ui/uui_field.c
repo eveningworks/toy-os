@@ -6,6 +6,11 @@
 // characters rather than covering one.
 #define CARET_W 2
 
+// Inset around the text inside the box. Shared by the draw and by
+// uui_field_natural_size(), so the height reported and the height drawn
+// cannot disagree.
+#define UUI_FIELD_PAD 4
+
 // ---------------------------------------------------------------------
 // ---------------------------------------------------------------------
 
@@ -38,6 +43,12 @@ static void field_delete(struct uui_field *f) {
     f->buf[f->len] = '\0';
 }
 
+void uui_field_natural_size(const struct uui_field *f, int *out_w, int *out_h) {
+    (void)f;
+    if (out_w) *out_w = 0;                             // no preference
+    if (out_h) *out_h = ugfx_char_h() + 2 * UUI_FIELD_PAD; // and this one is real
+}
+
 int uui_field_key(struct uui_field *f, int key) {
     if (!f->active) return 0;
 
@@ -68,7 +79,7 @@ void uui_field_draw(struct ugfx_surface *s, int x, int y, int w, int h,
     ugfx_fill_rect(s, x, y, w, h, bg);
     ugfx_draw_rect(s, x, y, w, h, border);
 
-    int pad = 4;
+    int pad = UUI_FIELD_PAD;
     int char_w = ugfx_char_w();
     int ty = y + (h - ugfx_char_h()) / 2;
 

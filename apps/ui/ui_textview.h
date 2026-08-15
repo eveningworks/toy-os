@@ -112,6 +112,14 @@ void ui_textview_init(struct ui_textview *tv, int x, int y, int w, int h,
 // an in-progress drag, is left alone. What a per-frame relayout calls.
 void ui_textview_set_geometry(struct ui_textview *tv, int x, int y, int w, int h);
 
+// **Both 0 -- no preference in either direction** (see
+// ui_primitives.h). A text view is the archetypal fill widget: it wraps
+// to whatever width it gets and scrolls at whatever height, so any
+// number here would be invented. It is included rather than omitted so
+// that every widget answers the same question, and a layout never has
+// to special-case which ones do.
+void ui_textview_natural_size(const struct ui_textview *tv, int *out_w, int *out_h);
+
 // 1 if the scrollbar is showing right now, given the policy and the
 // current content. Apps rarely need this; ui_textview_text_w() is
 // usually the question they actually have.

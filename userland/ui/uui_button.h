@@ -30,4 +30,8 @@ void uui_button_init(struct uui_button *b, int x, int y, int w, int h,
 // ever be drawn.
 void uui_button_set_geometry(struct uui_button *b, int x, int y, int w, int h);
 
+// Preferred minimum: the label plus font-derived padding. See
+// uui_primitives.h.
+void uui_button_natural_size(const struct uui_button *b, int *out_w, int *out_h);
+
 #endif

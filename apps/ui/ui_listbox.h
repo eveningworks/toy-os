@@ -166,6 +166,14 @@ int ui_listbox_visible_rows(const struct ui_listbox *lb);
 // caller laying out around the control instead of fitting into it.
 int ui_listbox_height_for_rows(const struct ui_listbox *lb, int rows);
 
+// Preferred minimum: wide enough for the longest item plus its insets
+// and the scrollbar strip, tall enough for every row. See
+// ui_primitives.h -- a layout may well give LESS height than this, and
+// the listbox scrolls, which is exactly what it is for. Kept alongside
+// ui_listbox_height_for_rows() rather than replacing it: "how tall for
+// N rows" is a different question an app still asks directly.
+void ui_listbox_natural_size(const struct ui_listbox *lb, int *out_w, int *out_h);
+
 // 1 if (cx, cy) is inside the control at all (rows or scrollbar).
 int ui_listbox_hit(const struct ui_listbox *lb, int cx, int cy);
 

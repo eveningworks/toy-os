@@ -8,6 +8,18 @@ void uui_button_group_init(struct uui_button_group *g,
     g->count = count;
 }
 
+void uui_button_group_natural_size(const struct uui_button_group *g,
+                                    int *out_w, int *out_h) {
+    int x1 = 0, y1 = 0;
+    for (int i = 0; i < g->count; i++) {
+        const struct uui_button *b = &g->buttons[i];
+        if (b->x + b->w > x1) x1 = b->x + b->w;
+        if (b->y + b->h > y1) y1 = b->y + b->h;
+    }
+    if (out_w) *out_w = x1;
+    if (out_h) *out_h = y1;
+}
+
 void uui_button_group_draw(const struct uui_button_group *g,
                             struct ugfx_surface *s) {
     for (int i = 0; i < g->count; i++) {

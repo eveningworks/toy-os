@@ -13,7 +13,9 @@
 // --- checkbox ---------------------------------------------------------
 
 // Width of the whole clickable area: box + gap + label.
-int uui_checkbox_width(int size, const char *label);
+// Preferred minimum: the box, the gap and the label. See
+// uui_primitives.h.
+void uui_checkbox_natural_size(int size, const char *label, int *out_w, int *out_h);
 
 void uui_checkbox_draw(struct ugfx_surface *s, int x, int y, int size,
                         int checked, int hovered, const char *label,

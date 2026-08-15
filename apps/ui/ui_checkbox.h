@@ -19,7 +19,11 @@
 // Total clickable width for a checkbox at `size` with `label` (or just
 // `size` if `label` is NULL) -- shared by draw()/hit() so they always
 // agree on the same geometry, same pattern as ui_scrollbar.h's widgets.
-int widget_checkbox_width(int size, const char *label);
+// Preferred minimum: the box, the gap and the label. See
+// ui_primitives.h. Still a free function taking its parameters rather
+// than a struct -- the checkbox has no state to hold yet; that comes
+// when it becomes an object and can join a layout.
+void widget_checkbox_natural_size(int size, const char *label, int *out_w, int *out_h);
 
 // Draws the box (outlined in `fg`; filled with `fg` too, inset, when
 // `checked`) at (x, y), sized `size` x `size`, then `label` (if any)

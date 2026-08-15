@@ -28,6 +28,10 @@ void uui_field_set_active(struct uui_field *f, int active);
 // Enter: "commit this field" is the caller's decision, not the widget's.
 int uui_field_key(struct uui_field *f, int key);
 
+// Height only: one row plus insets. **Width is 0 -- no preference**
+// (see uui_primitives.h): a field's width is whatever the form gives it.
+void uui_field_natural_size(const struct uui_field *f, int *out_w, int *out_h);
+
 // Draws the field, scrolling its content horizontally so the caret
 // stays visible -- typing past the right edge behaves like a real text
 // input rather than drawing through the border.

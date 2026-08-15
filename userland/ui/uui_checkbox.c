@@ -8,9 +8,10 @@
 
 #define CHECKBOX_LABEL_GAP 6
 
-int uui_checkbox_width(int size, const char *label) {
-    if (!label) return size;
-    return size + CHECKBOX_LABEL_GAP + ugfx_text_width(label);
+void uui_checkbox_natural_size(int size, const char *label, int *out_w, int *out_h) {
+    if (out_w) *out_w = label ? size + CHECKBOX_LABEL_GAP + ugfx_text_width(label) : size;
+    // The box or the text, whichever is taller.
+    if (out_h) *out_h = size > ugfx_char_h() ? size : ugfx_char_h();
 }
 
 void uui_checkbox_draw(struct ugfx_surface *s, int x, int y, int size,
@@ -20,8 +21,8 @@ void uui_checkbox_draw(struct ugfx_surface *s, int x, int y, int size,
         // The WHOLE clickable area, because that is what the hit test
         // covers -- a highlight smaller than its target misleads about
         // where to click.
-        int hw = uui_checkbox_width(size, label);
-        int hh = size > ugfx_char_h() ? size : ugfx_char_h();
+        int hw, hh;
+        uui_checkbox_natural_size(size, label, &hw, &hh);
         bg = uui_state_bg(bg, UUI_STATE_HOVER);
         ugfx_fill_rect(s, x, y, hw, hh, bg);
     }
@@ -37,8 +38,9 @@ void uui_checkbox_draw(struct ugfx_surface *s, int x, int y, int size,
 }
 
 int uui_checkbox_hit(int x, int y, int size, const char *label, int px, int py) {
-    int w = uui_checkbox_width(size, label);
-    int row_h = ugfx_char_h();
-    int h = size > row_h ? size : row_h;
+    // The same box the draw highlights and a layout would reserve --
+    // one calculation, three users.
+    int w, h;
+    uui_checkbox_natural_size(size, label, &w, &h);
     return uui_hit(x, y, w, h, px, py);
 }

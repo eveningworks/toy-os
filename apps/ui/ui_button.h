@@ -55,6 +55,11 @@ void ui_button_init(struct ui_button *b, int x, int y, int w, int h,
 // should call, not ui_button_init().
 void ui_button_set_geometry(struct ui_button *b, int x, int y, int w, int h);
 
+// Preferred minimum: the label plus font-derived padding. See
+// ui_primitives.h for what "natural size" means. A button given more
+// centres its label in whatever it gets, which it already did.
+void ui_button_natural_size(const struct ui_button *b, int *out_w, int *out_h);
+
 // Marks the button non-interactive: ui_button_group_press()/_click()
 // skip it (same as never being hit), and ui_button_draw() renders it
 // dimmed regardless of the caller's own bg/fg. Independent of `pressed`

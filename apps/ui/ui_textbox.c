@@ -2,6 +2,11 @@
 #include "ui_focus.h"
 #include "ui_textbox.h"
 #include "ui_primitives.h" // widget_hit(), CURSOR_BAR_W
+
+// Inset around the text inside the box. Shared by the draw and by
+// ui_textbox_natural_size(), so the height reported and the height
+// drawn cannot disagree.
+#define TEXTBOX_PAD 4
 #include "kapi.h"
 
 // ---- struct text_field / widget_textfield_* (the editing implementation) ----
@@ -83,7 +88,7 @@ void widget_textfield_draw(int x, int y, int w, int h, const struct text_field *
     gfx_fill_rect(x, y, w, h, bg);
     gfx_draw_rect(x, y, w, h, border);
 
-    int pad = 4;
+    int pad = TEXTBOX_PAD;
     int ty = y + (h - gfx_char_h()) / 2;
     int char_w = gfx_char_w();
 
@@ -149,6 +154,12 @@ void ui_textbox_set_geometry(struct ui_textbox *tbx, int x, int y, int w, int h)
 void ui_textbox_draw(const struct ui_textbox *tbx, int origin_x, int origin_y) {
     widget_textfield_draw(origin_x + tbx->x, origin_y + tbx->y, tbx->w, tbx->h,
                            &tbx->field, tbx->bg, tbx->fg, tbx->border);
+}
+
+void ui_textbox_natural_size(const struct ui_textbox *tbx, int *out_w, int *out_h) {
+    (void)tbx;
+    if (out_w) *out_w = 0;                              // no preference
+    if (out_h) *out_h = gfx_char_h() + 2 * TEXTBOX_PAD; // and this one is real
 }
 
 int ui_textbox_hit(const struct ui_textbox *tbx, int cx, int cy) {

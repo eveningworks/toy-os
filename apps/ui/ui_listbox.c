@@ -148,6 +148,18 @@ void ui_listbox_set_selected(struct ui_listbox *lb, int index) {
     scroll_into_view(lb, lb->selected);
 }
 
+void ui_listbox_natural_size(const struct ui_listbox *lb, int *out_w, int *out_h) {
+    if (out_w) {
+        int widest = 0;
+        for (int i = 0; i < lb->count; i++) {
+            int tw = gfx_text_width(lb->items[i]);
+            if (tw > widest) widest = tw;
+        }
+        *out_w = widest + lb->pad_x * 2 + lb->bar_w;
+    }
+    if (out_h) *out_h = ui_listbox_height_for_rows(lb, lb->count);
+}
+
 int ui_listbox_hit(const struct ui_listbox *lb, int cx, int cy) {
     return widget_hit(lb->x, lb->y, lb->w, lb->h, cx, cy);
 }

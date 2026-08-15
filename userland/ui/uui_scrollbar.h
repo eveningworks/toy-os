@@ -21,6 +21,10 @@ enum uui_scrollbar_zone {
     UUI_SB_BELOW,  // the track below the thumb -- page down
 };
 
+// Preferred minimum: the strip's width; no height preference -- a
+// scrollbar is as tall as whatever it scrolls. See uui_primitives.h.
+void uui_scrollbar_natural_size(int *out_w, int *out_h);
+
 void uui_scrollbar_draw(struct ugfx_surface *s, int x, int y, int w, int h,
                          int total_lines, int visible_rows, int scroll_offset,
                          uint32_t track_bg, uint32_t thumb_bg);

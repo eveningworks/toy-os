@@ -86,6 +86,18 @@
 #define BTN_COUNT  3
 #define CHK_SIZE   (gfx_char_h() - 2)
 
+// The checkbox reports a natural size (a w/h pair) rather than a bare
+// width now -- see apps/ui/ui_primitives.h. This demo only ever wants
+// the width, and asks for it in one place rather than at each of the
+// three call sites. Note the layout log below still reports CHK_SIZE as
+// the drawn height, not the natural one: what the tests click is what
+// is drawn.
+static int checkbox_w(const char *label) {
+    int w = 0;
+    widget_checkbox_natural_size(CHK_SIZE, label, &w, 0);
+    return w;
+}
+
 // Row origins, top to bottom. Functions rather than constants because
 // each depends on the live font metrics.
 static int row_buttons(void) { return PAD; }
@@ -235,7 +247,7 @@ static enum widget_id widget_at(int cx, int cy) {
     }
     int cy0 = row_checks();
     if (widget_checkbox_hit(PAD, cy0, CHK_SIZE, "Alpha", cx, cy)) return W_CHK_ALPHA;
-    int beta_x = PAD + widget_checkbox_width(CHK_SIZE, "Alpha") + 20;
+    int beta_x = PAD + checkbox_w("Alpha") + 20;
     if (widget_checkbox_hit(beta_x, cy0, CHK_SIZE, "Beta", cx, cy)) return W_CHK_BETA;
 
     if (ui_radio_list_hit(&g_state.radio, PAD, row_radio(), cx, cy) >= 0) return W_RADIO;
@@ -262,7 +274,7 @@ static void log_layout(void) {
         { "btn1",      g_state.buttons[0].x, g_state.buttons[0].y,
                        g_state.buttons[0].w, g_state.buttons[0].h },
         { "chk_alpha", PAD, row_checks(),
-                       widget_checkbox_width(CHK_SIZE, "Alpha"), CHK_SIZE },
+                       checkbox_w("Alpha"), CHK_SIZE },
         { "radio",     PAD, row_radio(), 2 * g_state.radio.col_w,
                        2 * radio_row_h() },
         { "textbox",   g_state.textbox.x, g_state.textbox.y,
@@ -385,7 +397,7 @@ void uidemo_draw(struct window *win) {
     widget_checkbox_draw(cx + PAD, chk_y, CHK_SIZE, g_state.checked[0],
                           g_state.hover_name == W_CHK_ALPHA, "Alpha",
                           THEME_WINDOW_BG, THEME_TEXT);
-    int beta_x = cx + PAD + widget_checkbox_width(CHK_SIZE, "Alpha") + 20;
+    int beta_x = cx + PAD + checkbox_w("Alpha") + 20;
     widget_checkbox_draw(beta_x, chk_y, CHK_SIZE, g_state.checked[1],
                           g_state.hover_name == W_CHK_BETA, "Beta",
                           THEME_WINDOW_BG, THEME_TEXT);

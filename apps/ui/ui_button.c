@@ -19,6 +19,11 @@ void ui_button_init(struct ui_button *b, int x, int y, int w, int h,
     b->disabled = 0;
 }
 
+void ui_button_natural_size(const struct ui_button *b, int *out_w, int *out_h) {
+    if (out_w) *out_w = gfx_text_width(b->label) + 2 * UI_PAD_X;
+    if (out_h) *out_h = gfx_char_h() + 2 * UI_PAD_Y;
+}
+
 void ui_button_set_geometry(struct ui_button *b, int x, int y, int w, int h) {
     b->x = x;
     b->y = y;

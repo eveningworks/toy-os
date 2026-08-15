@@ -36,6 +36,12 @@ void ui_textview_init(struct ui_textview *tv, int x, int y, int w, int h,
     tv->pan_remainder = 0;
 }
 
+void ui_textview_natural_size(const struct ui_textview *tv, int *out_w, int *out_h) {
+    (void)tv;
+    if (out_w) *out_w = 0;
+    if (out_h) *out_h = 0;
+}
+
 void ui_textview_set_geometry(struct ui_textview *tv, int x, int y, int w, int h) {
     tv->x = x; tv->y = y; tv->w = w; tv->h = h;
 }

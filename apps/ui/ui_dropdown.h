@@ -127,6 +127,12 @@ void ui_dropdown_close(struct ui_dropdown *dd);
 
 // Draws the closed box (value + arrow). Draws NOTHING of the popup --
 // see the header comment above for why that is a separate call.
+// Preferred minimum for the CLOSED box: the widest item it could show,
+// plus the insets and the room the arrow needs. The popup sizes itself
+// against the box, so this is the only size a layout has to know. See
+// ui_primitives.h.
+void ui_dropdown_natural_size(const struct ui_dropdown *dd, int *out_w, int *out_h);
+
 void ui_dropdown_draw(struct ui_dropdown *dd, int origin_x, int origin_y);
 
 // Draws the popup if open, and nothing at all if not. **Must be called

@@ -10,7 +10,7 @@ static int radio_rows(const struct uui_radio_list *l) {
     return (l->count + cols - 1) / cols;
 }
 
-void uui_radio_list_size(const struct uui_radio_list *l, int *out_w, int *out_h) {
+void uui_radio_list_natural_size(const struct uui_radio_list *l, int *out_w, int *out_h) {
     int cols = l->cols > 0 ? l->cols : 1;
     if (out_w) *out_w = cols * l->col_w;
     if (out_h) *out_h = radio_rows(l) * l->row_h;
