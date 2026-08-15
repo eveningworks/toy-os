@@ -1339,6 +1339,26 @@ Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
       compiled twice, the same pattern as `calc_engine.c`.
       `userland/gui/gfxdemo.c` ("Shapes") is the ring-3 demo;
       `tools/gfxdemo_test.py` and `kernel/lib/geom_test.c` test it.
+- [ ] **`WIN_REQ_POPUP` -- a popup SURFACE, so a menu can leave its
+      window.** The caller now exists: `userland/ui/uui_menubar.c`
+      resolves its placement (flip / slide / clamp) against a bounds
+      rectangle the app hands it, and today that rectangle is the
+      client's own content area, because a TWP client can draw nowhere
+      else. On Windows a popped-up menu is a real `HWND` of the
+      `#32768` class in SCREEN coordinates, constrained against the
+      monitor work area; on KDE it is a `Qt::Popup`, which under
+      Wayland is an `xdg_popup` with a positioner the compositor
+      resolves. Neither is bounded by its parent window.
+      The shape here: a TWP message creating a child surface anchored
+      to a parent rect, composited above the parent by TWS, owning an
+      input grab, and destroyed on click-out or on the client's say-so.
+      The widget then takes the screen rect instead of the window's and
+      changes nothing else -- the placement maths is already the right
+      maths. What that buys: a full menu on a window too small to hold
+      one, which is the only case where the current behaviour is
+      visibly not a desktop's. What it costs: z-order, damage and
+      input routing in `wm_client.c` for a window kind that is not in
+      the window list.
 - [ ] Fill a POLYGON, not just an ellipse. `geom_fill_ellipse()` is a
       scanline fill of one specific shape; the general version is an
       edge-list/active-edge-table scanline fill taking arbitrary

@@ -1,0 +1,607 @@
+// menu bar + nested pull-down menus. See ui/uui_menubar.h for the design.
+#include "ui/uui_menubar.h"
+#include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
+
+// ---------------------------------------------------------------------
+// metrics -- all font-derived, per docs/gui-guidelines.md
+// ---------------------------------------------------------------------
+
+static int pad(void)      { return ugfx_char_w() / 2; }
+static int gutter(void)   { return ugfx_char_w() * 2; } // the tick column
+static int arrow_col(void){ return ugfx_char_w(); }     // the submenu arrow
+static int accel_gap(void){ return ugfx_char_w() * 2; }
+
+static int row_height(void) { return ugfx_char_h() + 6; }
+
+// A separator is a hairline with air above and below it, not a row.
+static int sep_height(void) { int h = ugfx_char_h() / 3; return h < 5 ? 5 : h; }
+
+static int is_sep(const struct uui_menu_item *it) { return it->label == 0; }
+static int is_sub(const struct uui_menu_item *it) { return it->sub != 0 && it->sub_count > 0; }
+
+static int item_height(const struct uui_menu_item *it) {
+    return is_sep(it) ? sep_height() : row_height();
+}
+
+// The one place item state is asked for. A separator has no code and is
+// never queried; a submenu IS queried, so an app can grey out a branch.
+static unsigned flags_of(const struct uui_menubar *m, const struct uui_menu_item *it) {
+    if (is_sep(it) || !m->item_flags) return 0;
+    return m->item_flags(it->code);
+}
+
+static int enabled(const struct uui_menubar *m, const struct uui_menu_item *it) {
+    return !is_sep(it) && !(flags_of(m, it) & UUI_MI_DISABLED);
+}
+
+static int title_w(const struct uui_menu_item *it) {
+    return ugfx_text_width(it->label) + 2 * ugfx_char_w();
+}
+
+// ONE geometry for a popup, shared by placement, drawing and hit-testing
+// -- the rule docs/gui-guidelines.md states for scrollbars and which
+// applies just as hard here, where a click landing one row off is the
+// classic symptom of two copies of this arithmetic.
+static void level_size(const struct uui_menu_item *items, int count,
+                        int *out_w, int *out_h) {
+    int widest = 0, widest_accel = 0;
+    int h = 2; // the 1px border, top and bottom
+
+    for (int i = 0; i < count; i++) {
+        const struct uui_menu_item *it = &items[i];
+        h += item_height(it);
+        if (is_sep(it)) continue;
+        int lw = ugfx_text_width(it->label);
+        if (lw > widest) widest = lw;
+        if (!is_sub(it) && it->accel) {
+            int aw = ugfx_text_width(it->accel);
+            if (aw > widest_accel) widest_accel = aw;
+        }
+    }
+
+    // The arrow column is reserved whether or not this menu has a
+    // submenu, so labels line up between sibling menus.
+    int w = 2 + pad() + gutter() + widest + arrow_col() + pad();
+    if (widest_accel) w += accel_gap() + widest_accel;
+
+    *out_w = w;
+    *out_h = h;
+}
+
+// y offset of row `index` from the popup's top edge.
+static int row_offset(const struct uui_menu_item *items, int index) {
+    int y = 1;
+    for (int i = 0; i < index; i++) y += item_height(&items[i]);
+    return y;
+}
+
+// Which SELECTABLE row a point falls on, or -1. Separators deliberately
+// answer -1: they are drawn but are not rows you can be on.
+static int row_at(const struct uui_menu_level *lv, int dy) {
+    int y = 1;
+    for (int i = 0; i < lv->count; i++) {
+        int h = item_height(&lv->items[i]);
+        if (dy >= y && dy < y + h) return is_sep(&lv->items[i]) ? -1 : i;
+        y += h;
+    }
+    return -1;
+}
+
+// ---------------------------------------------------------------------
+// placement -- flip, then slide, then clamp
+// ---------------------------------------------------------------------
+//
+// The same vocabulary as Wayland's xdg_positioner constraint adjustments
+// (flip_x/flip_y/slide_x/slide_y), which is what KDE's menus resolve
+// through and what Win32 does against the monitor work area. The only
+// difference here is which rectangle it is resolved against -- see the
+// header. `side` picks the preferred edge: 0 = below the anchor
+// (a bar title), 1 = to its right (a submenu).
+
+static void place(const struct uui_menubar *m, int ax, int ay, int aw, int ah,
+                   int w, int h, int side, int *out_x, int *out_y) {
+    int x, y;
+
+    if (side == 0) {
+        x = ax;
+        y = ay + ah;
+        if (y + h > m->by + m->bh && ay - h >= m->by) y = ay - h; // flip above
+    } else {
+        x = ax + aw;
+        y = ay - 1; // the submenu's first row lines up with its parent row
+        if (x + w > m->bx + m->bw && ax - w >= m->bx) x = ax - w; // flip left
+    }
+
+    if (x + w > m->bx + m->bw) x = m->bx + m->bw - w; // slide
+    if (x < m->bx) x = m->bx;                          // clamp
+    if (y + h > m->by + m->bh) y = m->by + m->bh - h;
+    if (y < m->by) y = m->by;
+
+    *out_x = x;
+    *out_y = y;
+}
+
+// ---------------------------------------------------------------------
+// opening and closing
+// ---------------------------------------------------------------------
+
+void uui_menubar_close(struct uui_menubar *m) {
+    m->open_root = -1;
+    m->depth = 0;
+}
+
+// Next selectable row from `from` in direction `dir`, wrapping. -1 if the
+// menu has no selectable row at all (every item disabled).
+static int step_sel(const struct uui_menubar *m, const struct uui_menu_item *items,
+                     int count, int from, int dir) {
+    if (count <= 0) return -1;
+    int i = from;
+    for (int n = 0; n < count; n++) {
+        i = (i < 0) ? (dir > 0 ? 0 : count - 1) : (i + dir + count) % count;
+        if (enabled(m, &items[i])) return i;
+    }
+    return -1;
+}
+
+static void open_root(struct uui_menubar *m, int index) {
+    m->open_root = index;
+    m->depth = 0;
+    if (index < 0 || index >= m->count) return;
+
+    const struct uui_menu_item *it = &m->items[index];
+    if (!is_sub(it)) return; // a bare title commits nothing and opens nothing
+
+    int tx, ty, tw, th;
+    uui_menubar_title_rect(m, index, &tx, &ty, &tw, &th);
+
+    int w, h;
+    level_size(it->sub, it->sub_count, &w, &h);
+
+    int px, py;
+    place(m, tx, ty, tw, th, w, h, 0, &px, &py);
+
+    m->level[0].items = it->sub;
+    m->level[0].count = it->sub_count;
+    m->level[0].x = px; m->level[0].y = py;
+    m->level[0].w = w;  m->level[0].h = h;
+    m->level[0].hot = -1;
+    m->level[0].parent = index;
+    m->depth = 1;
+}
+
+// Opens level `lvl + 1` from row `index` of level `lvl`.
+static void open_sub(struct uui_menubar *m, int lvl, int index) {
+    if (lvl + 1 >= UUI_MENU_MAX_DEPTH) return;
+    struct uui_menu_level *parent = &m->level[lvl];
+    const struct uui_menu_item *it = &parent->items[index];
+    if (!is_sub(it)) return;
+
+    int ax, ay, aw, ah;
+    uui_menubar_item_rect(m, lvl, index, &ax, &ay, &aw, &ah);
+
+    int w, h;
+    level_size(it->sub, it->sub_count, &w, &h);
+
+    int px, py;
+    place(m, ax, ay, aw, ah, w, h, 1, &px, &py);
+
+    struct uui_menu_level *lv = &m->level[lvl + 1];
+    lv->items = it->sub;
+    lv->count = it->sub_count;
+    lv->x = px; lv->y = py;
+    lv->w = w;  lv->h = h;
+    lv->hot = -1;
+    lv->parent = index;
+    m->depth = lvl + 2;
+}
+
+// ---------------------------------------------------------------------
+// setup
+// ---------------------------------------------------------------------
+
+void uui_menubar_init(struct uui_menubar *m, const struct uui_menu_item *items,
+                       int count) {
+    m->x = m->y = m->w = m->h = 0;
+    m->items = items;
+    m->count = count;
+    m->open_root = -1;
+    m->hot_root = -1;
+    m->depth = 0;
+    m->bx = m->by = 0;
+    m->bw = m->bh = 0;
+    m->item_flags = 0;
+
+    m->bar_bg      = ugfx_rgb(235, 235, 238);
+    m->fg          = ugfx_rgb(20, 20, 20);
+    m->popup_bg    = ugfx_rgb(250, 250, 252);
+    m->hot_bg      = ugfx_rgb(205, 220, 240);
+    m->border      = ugfx_rgb(150, 155, 165);
+    m->accel_fg    = ugfx_rgb(120, 125, 135);
+    m->disabled_fg = ugfx_rgb(170, 172, 178);
+}
+
+void uui_menubar_set_geometry(struct uui_menubar *m, int x, int y, int w, int h) {
+    m->x = x; m->y = y; m->w = w; m->h = h;
+    if (m->bw <= 0 || m->bh <= 0) { m->bx = x; m->by = y; m->bw = w; m->bh = h; }
+}
+
+void uui_menubar_set_bounds(struct uui_menubar *m, int x, int y, int w, int h) {
+    m->bx = x; m->by = y; m->bw = w; m->bh = h;
+}
+
+void uui_menubar_natural_size(const struct uui_menubar *m, int *out_w, int *out_h) {
+    if (out_w) {
+        int w = ugfx_char_w();
+        for (int i = 0; i < m->count; i++) w += title_w(&m->items[i]);
+        *out_w = w;
+    }
+    // +1 for the hairline that separates the strip from the content.
+    if (out_h) *out_h = ugfx_char_h() + 7;
+}
+
+int uui_menubar_is_open(const struct uui_menubar *m) { return m->depth > 0; }
+int uui_menubar_depth(const struct uui_menubar *m) { return m->depth; }
+
+// ---------------------------------------------------------------------
+// geometry queries
+// ---------------------------------------------------------------------
+
+int uui_menubar_title_rect(const struct uui_menubar *m, int index,
+                            int *x, int *y, int *w, int *h) {
+    if (index < 0 || index >= m->count) return 0;
+    int tx = m->x + ugfx_char_w() / 2;
+    for (int i = 0; i < index; i++) tx += title_w(&m->items[i]);
+    if (x) *x = tx;
+    if (y) *y = m->y;
+    if (w) *w = title_w(&m->items[index]);
+    if (h) *h = m->h - 1; // above the hairline
+    return 1;
+}
+
+int uui_menubar_popup_rect(const struct uui_menubar *m, int level,
+                            int *x, int *y, int *w, int *h) {
+    if (level < 0 || level >= m->depth) return 0;
+    const struct uui_menu_level *lv = &m->level[level];
+    if (x) *x = lv->x;
+    if (y) *y = lv->y;
+    if (w) *w = lv->w;
+    if (h) *h = lv->h;
+    return 1;
+}
+
+int uui_menubar_item_rect(const struct uui_menubar *m, int level, int index,
+                           int *x, int *y, int *w, int *h) {
+    if (level < 0 || level >= m->depth) return 0;
+    const struct uui_menu_level *lv = &m->level[level];
+    if (index < 0 || index >= lv->count) return 0;
+    if (x) *x = lv->x;
+    if (y) *y = lv->y + row_offset(lv->items, index);
+    if (w) *w = lv->w;
+    if (h) *h = item_height(&lv->items[index]);
+    return 1;
+}
+
+static int title_at(const struct uui_menubar *m, int cx, int cy) {
+    for (int i = 0; i < m->count; i++) {
+        int x, y, w, h;
+        uui_menubar_title_rect(m, i, &x, &y, &w, &h);
+        if (uui_hit(x, y, w, h, cx, cy)) return i;
+    }
+    return -1;
+}
+
+int uui_menubar_hit(const struct uui_menubar *m, int cx, int cy) {
+    if (uui_hit(m->x, m->y, m->w, m->h, cx, cy)) return 1;
+    for (int l = 0; l < m->depth; l++) {
+        const struct uui_menu_level *lv = &m->level[l];
+        if (uui_hit(lv->x, lv->y, lv->w, lv->h, cx, cy)) return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------
+// drawing
+// ---------------------------------------------------------------------
+
+static void draw_tick(struct ugfx_surface *s, int x, int y, uint32_t fg) {
+    int ch = ugfx_char_h();
+    int mid = ch / 2;
+    ugfx_draw_line(s, x + 1, y + mid, x + ch / 3, y + ch - 3, fg, GEOM_AA);
+    ugfx_draw_line(s, x + ch / 3, y + ch - 3, x + ch - 2, y + 2, fg, GEOM_AA);
+}
+
+static void draw_arrow(struct ugfx_surface *s, int cx, int cy, uint32_t fg) {
+    int r = ugfx_char_h() / 4;
+    if (r < 3) r = 3;
+    for (int i = 0; i <= r; i++)
+        ugfx_fill_rect(s, cx - r / 2 + i, cy - (r - i), 1, 2 * (r - i) + 1, fg);
+}
+
+void uui_menubar_draw(struct ugfx_surface *s, const struct uui_menubar *m) {
+    ugfx_fill_rect(s, m->x, m->y, m->w, m->h, m->bar_bg);
+    ugfx_fill_rect(s, m->x, m->y + m->h - 1, m->w, 1, m->border);
+
+    for (int i = 0; i < m->count; i++) {
+        int x, y, w, h;
+        uui_menubar_title_rect(m, i, &x, &y, &w, &h);
+
+        // An OPEN title reads as pressed, because it is: the button is
+        // conceptually still down for as long as its menu is showing.
+        enum uui_state st = UUI_STATE_REST;
+        if (m->depth > 0 && m->open_root == i) st = UUI_STATE_PRESSED;
+        else if (m->hot_root == i) st = UUI_STATE_HOVER;
+
+        uint32_t bg = uui_state_bg(m->bar_bg, st);
+        if (st != UUI_STATE_REST) ugfx_fill_rect(s, x, y, w, h, bg);
+        ugfx_draw_string_clipped(s, x + ugfx_char_w(), y + (h - ugfx_char_h()) / 2,
+                                  w - 2 * ugfx_char_w() + 2, m->items[i].label,
+                                  m->fg, bg);
+    }
+}
+
+static void draw_level(struct ugfx_surface *s, const struct uui_menubar *m,
+                        const struct uui_menu_level *lv) {
+    ugfx_fill_rect(s, lv->x, lv->y, lv->w, lv->h, m->popup_bg);
+    ugfx_draw_rect(s, lv->x, lv->y, lv->w, lv->h, m->border);
+
+    int y = lv->y + 1;
+    for (int i = 0; i < lv->count; i++) {
+        const struct uui_menu_item *it = &lv->items[i];
+        int h = item_height(it);
+
+        if (is_sep(it)) {
+            ugfx_fill_rect(s, lv->x + pad(), y + h / 2, lv->w - 2 * pad(), 1, m->border);
+            y += h;
+            continue;
+        }
+
+        unsigned f = flags_of(m, it);
+        int off = (f & UUI_MI_DISABLED) != 0;
+        uint32_t bg = m->popup_bg;
+        if (i == lv->hot && !off) {
+            bg = m->hot_bg;
+            ugfx_fill_rect(s, lv->x + 1, y, lv->w - 2, h, bg);
+        }
+        uint32_t fg = off ? m->disabled_fg : m->fg;
+        int ty = y + (h - ugfx_char_h()) / 2;
+
+        if (f & UUI_MI_CHECKED) draw_tick(s, lv->x + 1 + pad(), ty, fg);
+
+        int label_x = lv->x + 1 + pad() + gutter();
+        int right = lv->x + lv->w - 1 - pad() - arrow_col();
+        int avail = right - label_x;
+
+        if (is_sub(it)) {
+            draw_arrow(s, right + arrow_col() / 2, y + h / 2, fg);
+        } else if (it->accel) {
+            int aw = ugfx_text_width(it->accel);
+            avail -= aw + accel_gap();
+            ugfx_draw_string_clipped(s, right - aw, ty, aw, it->accel,
+                                      off ? m->disabled_fg : m->accel_fg, bg);
+        }
+
+        ugfx_draw_string_clipped(s, label_x, ty, avail, it->label, fg, bg);
+        y += h;
+    }
+}
+
+void uui_menubar_draw_popup(struct ugfx_surface *s, const struct uui_menubar *m) {
+    // Outermost first: a child overlaps its parent's right edge, so call
+    // order IS z-order here too.
+    for (int l = 0; l < m->depth; l++) draw_level(s, m, &m->level[l]);
+}
+
+// ---------------------------------------------------------------------
+// mouse
+// ---------------------------------------------------------------------
+
+int uui_menubar_press(struct uui_menubar *m, int cx, int cy) {
+    int t = title_at(m, cx, cy);
+    if (t >= 0) {
+        // Clicking the open title closes it, as every real menu bar does.
+        if (m->depth > 0 && m->open_root == t) uui_menubar_close(m);
+        else open_root(m, t);
+        return 1;
+    }
+
+    if (uui_hit(m->x, m->y, m->w, m->h, cx, cy)) {
+        uui_menubar_close(m); // the bar's empty space is still the bar's
+        return 1;
+    }
+
+    if (m->depth > 0) {
+        for (int l = 0; l < m->depth; l++) {
+            const struct uui_menu_level *lv = &m->level[l];
+            if (uui_hit(lv->x, lv->y, lv->w, lv->h, cx, cy)) {
+                uui_menubar_motion(m, cx, cy);
+                return 1;
+            }
+        }
+        // A click anywhere else DISMISSES rather than falling through to
+        // whatever is underneath -- an open menu owns the next click.
+        uui_menubar_close(m);
+        return 1;
+    }
+    return 0;
+}
+
+int uui_menubar_motion(struct uui_menubar *m, int cx, int cy) {
+    int changed = 0;
+
+    int t = title_at(m, cx, cy);
+    if (t != m->hot_root) { m->hot_root = t; changed = 1; }
+    if (m->depth <= 0) return changed;
+
+    // Sliding along the bar with a menu open switches menus -- Windows,
+    // KDE, GTK and macOS all do this, and it is what makes a menu bar
+    // browsable in one gesture.
+    if (t >= 0) {
+        if (t != m->open_root) { open_root(m, t); return 1; }
+        return changed;
+    }
+
+    for (int l = m->depth - 1; l >= 0; l--) {
+        struct uui_menu_level *lv = &m->level[l];
+        if (!uui_hit(lv->x, lv->y, lv->w, lv->h, cx, cy)) continue;
+
+        int idx = row_at(lv, cy - lv->y);
+        if (idx != lv->hot) { lv->hot = idx; changed = 1; }
+
+        int want = l + 1;
+        if (idx >= 0 && is_sub(&lv->items[idx]) && enabled(m, &lv->items[idx])) {
+            // Re-opening an already-open submenu every motion event would
+            // repaint continuously, which is the on_hover contract's
+            // "return 1 only when it actually changed" in another guise.
+            if (m->depth <= l + 1 || m->level[l + 1].parent != idx) {
+                m->depth = l + 1;
+                open_sub(m, l, idx);
+                changed = 1;
+            }
+            want = m->depth;
+        }
+        if (m->depth != want) { m->depth = want; changed = 1; }
+        return changed;
+    }
+
+    // Off every popup: the chain stays as it is. Sweeping the cursor
+    // diagonally toward a submenu leaves the parent briefly, and closing
+    // there would make submenus nearly unreachable.
+    return changed;
+}
+
+int uui_menubar_release(struct uui_menubar *m, int cx, int cy) {
+    if (m->depth <= 0) return -1;
+
+    for (int l = m->depth - 1; l >= 0; l--) {
+        const struct uui_menu_level *lv = &m->level[l];
+        if (!uui_hit(lv->x, lv->y, lv->w, lv->h, cx, cy)) continue;
+
+        int idx = row_at(lv, cy - lv->y);
+        if (idx < 0) return -1;
+        const struct uui_menu_item *it = &lv->items[idx];
+        if (!enabled(m, it) || is_sub(it)) return -1;
+
+        int code = it->code;
+        uui_menubar_close(m);
+        return code;
+    }
+    return -1;
+}
+
+// ---------------------------------------------------------------------
+// keyboard
+// ---------------------------------------------------------------------
+
+static void hot_to_first(struct uui_menubar *m) {
+    if (m->depth <= 0) return;
+    struct uui_menu_level *lv = &m->level[m->depth - 1];
+    lv->hot = step_sel(m, lv->items, lv->count, -1, +1);
+}
+
+static void move_root(struct uui_menubar *m, int dir) {
+    if (m->count <= 0) return;
+    int i = m->open_root;
+    if (i < 0) i = 0;
+    open_root(m, (i + dir + m->count) % m->count);
+    hot_to_first(m);
+}
+
+// Enter/Space, and the unique-letter case. 1 if consumed.
+static int activate(struct uui_menubar *m, int *out_code) {
+    struct uui_menu_level *lv = &m->level[m->depth - 1];
+    if (lv->hot < 0) return 1;
+    const struct uui_menu_item *it = &lv->items[lv->hot];
+    if (!enabled(m, it)) return 1;
+
+    if (is_sub(it)) {
+        open_sub(m, m->depth - 1, lv->hot);
+        hot_to_first(m);
+        return 1;
+    }
+    if (out_code) *out_code = it->code;
+    uui_menubar_close(m);
+    return 1;
+}
+
+static char lower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
+
+static int letter_jump(struct uui_menubar *m, int key, int *out_code) {
+    struct uui_menu_level *lv = &m->level[m->depth - 1];
+    char want = lower((char)key);
+
+    int matches = 0, first = -1;
+    for (int i = 0; i < lv->count; i++) {
+        if (!enabled(m, &lv->items[i])) continue;
+        if (lower(lv->items[i].label[0]) != want) continue;
+        matches++;
+        if (first < 0) first = i;
+    }
+    if (matches == 0) return 1; // an open menu swallows the key regardless
+
+    if (matches == 1) {
+        lv->hot = first;
+        return activate(m, out_code); // unique match acts, as in Windows
+    }
+
+    // Several: cycle to the next one after the highlight.
+    for (int n = 1; n <= lv->count; n++) {
+        int i = (lv->hot + n + lv->count) % lv->count;
+        if (lv->hot < 0) i = (n - 1) % lv->count;
+        if (!enabled(m, &lv->items[i])) continue;
+        if (lower(lv->items[i].label[0]) == want) { lv->hot = i; return 1; }
+    }
+    return 1;
+}
+
+int uui_menubar_key(struct uui_menubar *m, int key, int *out_code) {
+    if (m->depth <= 0) {
+        if (key == KEY_F10 && m->count > 0) {
+            open_root(m, 0);
+            hot_to_first(m);
+            return 1;
+        }
+        return 0;
+    }
+
+    switch (key) {
+    case 0x1B: // Esc closes the deepest menu, not the whole chain
+        if (m->depth > 1) m->depth--;
+        else uui_menubar_close(m);
+        return 1;
+
+    case KEY_ARROW_UP:
+    case KEY_ARROW_DOWN: {
+        struct uui_menu_level *lv = &m->level[m->depth - 1];
+        lv->hot = step_sel(m, lv->items, lv->count, lv->hot,
+                            key == KEY_ARROW_DOWN ? +1 : -1);
+        return 1;
+    }
+
+    case KEY_ARROW_RIGHT: {
+        struct uui_menu_level *lv = &m->level[m->depth - 1];
+        if (lv->hot >= 0 && is_sub(&lv->items[lv->hot]) && enabled(m, &lv->items[lv->hot])) {
+            open_sub(m, m->depth - 1, lv->hot);
+            hot_to_first(m);
+            return 1;
+        }
+        move_root(m, +1);
+        return 1;
+    }
+
+    case KEY_ARROW_LEFT:
+        if (m->depth > 1) { m->depth--; return 1; }
+        move_root(m, -1);
+        return 1;
+
+    case '\n':
+    case '\r':
+    case ' ':
+        return activate(m, out_code);
+
+    default:
+        break;
+    }
+
+    if (key >= 33 && key < 127) return letter_jump(m, key, out_code);
+    return 1; // an open menu owns the keyboard
+}

@@ -32,6 +32,93 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
 ## [Unreleased]
 
 ### Added
+- **A menu bar and a status bar for ring-3 GUI apps, and Notepad rebuilt
+  around them.** Asked for as "a simple interface an app can use to add
+  menus and sub menus and sub sub menus", looking and behaving like
+  Windows or KDE. Two new Toykit widgets, `userland/ui/uui_menubar.*`
+  and `userland/ui/uui_statusbar.*`, plus the first caller.
+
+  **The menu is a declared tree, not a built one.** Toykit has no
+  allocator, so there is no `uui_menu_add()`: a menu is const arrays
+  pointing at each other (`UUI_MENU`, `UUI_SUBMENU`, `UUI_MENU_SEP`),
+  which nests to any depth and reads like the menu looks. Notepad's
+  whole File/Edit/View structure is 30 lines of declaration. Commits
+  arrive as the item's `code` from `uui_menubar_release()` or
+  `uui_menubar_key()` -- the same shape `uui_button_group_release()`
+  already has, so the menu and the Ctrl accelerators route through one
+  `do_command()` and cannot drift apart.
+
+  **Per-item state is ASKED FOR, not stored in the tree.** Whether Save
+  is greyed or Status bar is ticked changes as the document does, and
+  the tree is const, so there is no flags field to keep in sync: an app
+  sets `item_flags` and the widget queries it per item on every draw and
+  every hit test. That is GTK's action-state model rather than Win32's
+  `EnableMenuItem()`, and it means an app can never forget to refresh
+  its menu -- there is nothing to refresh. Notepad's is one `switch`.
+
+  **The one deliberate divergence from a real desktop, and why it is
+  small.** On Windows a popped-up menu is a real `HWND` of the `#32768`
+  class positioned in SCREEN coordinates and constrained against the
+  monitor work area; on KDE it is a `Qt::Popup` toplevel, which under
+  Wayland is an `xdg_popup` whose positioner the compositor resolves
+  with flip/slide/resize adjustments. Both may extend far outside the
+  window that owns them. A TWP client cannot: it draws into its own
+  buffer and nothing else, and that is enforced. So the placement here
+  implements the same vocabulary -- flip to the other side, slide along
+  the other axis, clamp last -- against a BOUNDS RECTANGLE the caller
+  supplies, which today is the window's content area. That rectangle is
+  the whole of the difference: when TWP gains a popup surface
+  (`docs/roadmap.md`, M41) the widget is handed the screen rect instead
+  and the maths is already right. Visible only on a window small enough
+  that a menu would have overflowed it.
+
+  **No Alt+letter mnemonics, deliberately.** Alt does not reach an app
+  as a modifier in this OS -- it arrives terminal-style as an ESC prefix
+  (`api/keyboard.h`), so Alt-F is ESC then 'f' and is indistinguishable
+  from the Esc that has to close the menu. **F10** focuses the bar
+  instead, which is Windows' own second binding for the same job and has
+  no such ambiguity; it needed one new key code (`KEY_F10`, scancode
+  0x44) in `kernel/drivers/keyboard.c`. Arrows walk titles and items
+  (skipping separators and disabled rows), Right opens a submenu or
+  moves to the next menu, Left closes one level or moves back, Enter and
+  Space commit, Esc closes ONE level, and a letter jumps to the next
+  matching item -- activating immediately when it is the only match, as
+  Windows does.
+
+  **The status bar is panes, not a string**, because that is the shape
+  Win32's `SB_SETPARTS` and Qt's `addWidget`/`addPermanentWidget` both
+  settled on: a message that stretches and indicators that do not. An
+  indicator that slid around as the message changed would be unreadable
+  at a glance. Widths are in CHARACTERS, not pixels, so the strip
+  reflows with `fontsize` like everything else. Notepad's three panes are
+  the status message, `Ln n, Col n` (logical lines, counted from
+  newlines, which is what every editor means by it) and a modified flag.
+
+  **Notepad lost its toolbar.** New / Open / Save were the only commands
+  it could offer while each had to be a button wide enough to read; it
+  now has Save As, Select All, Delete Selection, a Recent files submenu,
+  Go to > Top/Bottom and a checkable Status bar toggle, and spends less
+  window on them than the three buttons did.
+
+  Verified with a new `tools/menubar_test.py` (22 checks, in
+  `gui_regress.py`), two positive controls, `preflight.sh` (117 ktests),
+  the full GUI suite (10 tools, 143 checks) and a damage-verify pass
+  over every menu interaction (0 violations). The two controls are the
+  useful part of that list: making the bar commit on PRESS turns exactly
+  the drag-off-and-release check red and nothing else, and making a
+  dismissing click fall through leaves the "the menu closed" check GREEN
+  and reddens only the one that measures whether the caret moved. Both
+  are recorded in the tool's docstring, because they say which single
+  check is load-bearing for each rule.
+
+  Fixing `tools/notepad_client_test.py` for the new chrome found a third
+  thing worth writing down: it sampled the text area through a hardcoded
+  `oy + 60`-to-`oy + 200` band, and when the menu bar (shorter than the
+  old toolbar) moved the text up, that band sampled blank background in
+  every state -- so "typed", "cleared" and "reopened" all compared equal,
+  two checks failed and a third passed for the wrong reason. Notepad now
+  reports `notepad: layout text` and the tool asks for it. That is the
+  ask-the-app rule collecting its fifth tool.
 - **A rotating 3D cube in the Shapes demo, and the 3D maths behind it in
   the shared geometry library.** `kernel/lib/geom.c` had 2D rotation and
   nothing else, so a cube needed three things that did not exist:

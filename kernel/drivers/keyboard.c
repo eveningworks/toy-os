@@ -98,6 +98,7 @@ static int ring_pop(uint32_t *out) {
 // before the layout translation, same as the shift keys below them.
 #define SC_F2 0x3C
 #define SC_F3 0x3D
+#define SC_F10 0x44
 
 // Processes one byte already read from the 8042 by i8042_poll(). This
 // must NOT read port 0x60 itself -- see i8042.h for why.
@@ -156,6 +157,7 @@ void keyboard_feed_byte(uint8_t sc) {
 
     if (sc == SC_F2) { ring_push(KEY_F2); return; }
     if (sc == SC_F3) { ring_push(KEY_F3); return; }
+    if (sc == SC_F10) { ring_push(KEY_F10); return; }
 
     if (sc >= 128) return;
     char c = keyboard_layout_translate(sc, shift_pressed, altgr_pressed);

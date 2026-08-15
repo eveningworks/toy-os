@@ -88,6 +88,8 @@ there when you add an entry, or the index quietly stops being one.
 **GUI: window manager, compositor & widgets**
 
 - [Widgets are added once a second real caller needs them -- except the checkbox](#widgets-are-added-once-a-second-real-caller-needs-them----except-the-checkbox)
+- [A client's menus are clamped to its own window, and that is one rectangle away from not being](#a-clients-menus-are-clamped-to-its-own-window-and-that-is-one-rectangle-away-from-not-being)
+- [A menu bar opens on press, which is the one place the commit-on-release rule bends](#a-menu-bar-opens-on-press-which-is-the-one-place-the-commit-on-release-rule-bends)
 - [Angles are measured in turns, not radians](#angles-are-measured-in-turns-not-radians)
 - [The geometry rasteriser draws through a callback, not into a framebuffer](#the-geometry-rasteriser-draws-through-a-callback-not-into-a-framebuffer)
 - [The canvas widget clips in the plot callback, not by trimming geometry](#the-canvas-widget-clips-in-the-plot-callback-not-by-trimming-geometry)
@@ -4087,3 +4089,54 @@ old 76px square-cell pitch only about seven characters fit, so
 "Calculator" and "Calculator (ring 3)" both became "Calcu..". The
 pitch had to widen too. `gfx_draw_string_clipped()` is what does the
 cutting, per `docs/gui-guidelines.md`'s first rule.
+
+## A client's menus are clamped to its own window, and that is one rectangle away from not being
+
+`userland/ui/uui_menubar.c`; landed with the menu bar, see
+`CHANGELOG.md`.
+
+On Windows, a popped-up menu is a real `HWND` of the built-in `#32768`
+class, positioned in SCREEN coordinates and constrained against the
+monitor work area -- it can sit anywhere on the desktop, far outside the
+window that owns it, and a menu taller than the screen grows scroll
+arrows. On KDE it is a `Qt::Popup` toplevel, which under Wayland is
+literally an `xdg_popup`: a child surface with a positioner (anchor
+rect, gravity, and `constraint_adjustment` flags -- flip_x, flip_y,
+slide_x, slide_y, resize) that the COMPOSITOR resolves, plus an implicit
+grab. Every submenu is another such surface.
+
+A TWP client can do none of that. It draws into its own window buffer
+and has no mapping of the framebuffer or of any other window, which is
+enforced rather than asked for (`docs/gui-guidelines.md`). So the menu
+resolves the same vocabulary -- flip to the other side, slide along the
+other axis, clamp last -- against a BOUNDS RECTANGLE the caller passes
+in (`uui_menubar_set_bounds`), and Notepad passes its content rect.
+
+The point of writing it that way rather than hardcoding the window: that
+rectangle is the entire difference. When TWP grows a popup surface
+(`docs/roadmap.md`, M41's `WIN_REQ_POPUP`) the widget is handed the
+screen rect instead and the placement code is already correct -- one
+rect, not a rewrite. The divergence is visible only on a window small
+enough that a menu would have overflowed it, which is why shipping the
+widget first and the protocol second was the phasing chosen rather than
+building both at once.
+
+## A menu bar opens on press, which is the one place the commit-on-release rule bends
+
+`docs/gui-guidelines.md` says a control must not act until the button is
+released over it, and `uui_menubar` opens a menu on button-DOWN anyway.
+That is deliberate and it is what Windows, KDE, GTK and macOS all do:
+pressing a title shows its menu at once, and you may then either release
+and click an item or keep the button held, slide down, and release over
+the item you want. Requiring a full click to open would break the second
+gesture entirely.
+
+The half of the rule that matters is kept -- the ITEM still commits on
+release, so pressing "Exit" and dragging off it does nothing. Opening a
+menu is not an action; it is showing the actions.
+
+Worth knowing when testing it: that cancel path is the ONLY check in
+`tools/menubar_test.py` that can tell a correct menu from one that
+commits on press. Every other check presses and releases in the same
+place, so a commit-on-press build passes all of them. Confirmed by
+building exactly that and watching one check go red.

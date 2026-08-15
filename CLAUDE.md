@@ -287,7 +287,21 @@ technical conventions below:
   live in **`userland/ui/uui.c`** (the ported `ui_button_group` and
   friends) with colours in `userland/ui/utheme.h` -- port more from
   `apps/ui/` only when a client actually needs them, the same bar
-  `apps/ui/` holds itself to. **A file needed by both the kernel and a
+  `apps/ui/` holds itself to. Two of them have no kernel-side twin and
+  were written here first: **`uui_menubar`** (a menu bar with submenus
+  nested to any depth -- a menu is const arrays pointing at each other,
+  since Toykit has no allocator, and per-item checked/disabled state is
+  ASKED FOR through an `item_flags` hook rather than stored in the tree)
+  and **`uui_statusbar`** (panes: a message that stretches, indicators
+  that don't, widths in characters). Both are Notepad's. Three things
+  to know before touching them: **the menu bar opens on PRESS**, the one
+  deliberate bend in the commit-on-release rule (the item still commits
+  on release -- see `docs/decisions.md`); **a popup is clamped to a
+  bounds rect the app passes in**, which is the client's window today
+  and becomes the screen when `WIN_REQ_POPUP` lands, so the flip/slide/
+  clamp code is already the right code; and **there are no Alt+letter
+  mnemonics on purpose** -- Alt is an ESC prefix here, so Alt-F is
+  ambiguous with Esc, and `KEY_F10` focuses the bar instead. **A file needed by both the kernel and a
   client is COMPILED TWICE, never copied** (`build/userland/shared/`,
   see the Makefile): the two builds use different code models so the
   objects can't be shared, but the source can, which is why the ring-3
@@ -1210,9 +1224,22 @@ repeated manual steps to be worth automating:
   `docs/gui-guidelines.md`'s "Scrollbars: what a real one does"; run it
   after touching either `apps/ui/ui_scrollbar.c` or
   `userland/ui/uui_scrollbar.c`.
+- **`menubar_test.py`** -- the menu bar, its nested submenus and the
+  status bar (`userland/ui/uui_menubar.*`, `uui_statusbar.*`), driven
+  through the ring-3 Notepad. 22 checks: the popup is DRAWN (not merely
+  responsive), a title opens on press while an item commits on release,
+  a press dragged off commits nothing, a click outside dismisses AND is
+  swallowed rather than reaching the text, submenus open on hover and
+  are placed to the right, Esc closes one level, disabled and checkable
+  items behave, and the status bar's indicator tracks the cursor while
+  its message pane does not. Two positive controls are recorded in its
+  docstring, and they are the reusable part: commit-on-press reddens
+  exactly the drag-off check, and a dismissing click that falls through
+  leaves "the menu closed" GREEN and reddens only the caret measurement.
+  Run it after touching either widget.
 - **`gui_regress.py`** -- runs every GUI test tool, each against
   its own freshly-copied disk image and its own VM, and prints one
-  pass/fail table (~35 seconds, ~82 checks). This is the standard check
+  pass/fail table (~2 minutes, 143 checks across ten tools). This is the standard check
   after touching `apps/ui/`, `userland/`, or anything the WM draws.
   `-k NAME` for a subset, `--logs DIR` to keep each tool's full output,
   `--list` to see what's in it. The per-tool fresh image and fresh VM

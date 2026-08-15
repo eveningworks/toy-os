@@ -190,6 +190,78 @@ hover state.)
 `tools/scrollbar_test.py` asserts points 1, 2, 3 and 6 against the
 ring-3 Notepad. Run it after touching either scrollbar port.
 
+## Menus: the one control that opens on press
+
+`uui_menubar` (`userland/ui/uui_menubar.h`) is the exception to the
+press-then-commit rule above, and it is an exception every real desktop
+makes. **A menu bar title opens its menu on button-DOWN.** Press "File"
+and the menu is there immediately; you may then release and click an
+item, or keep the button held, slide down and release over the item you
+want. Both gestures work, and both are how Windows, KDE, GTK and macOS
+behave.
+
+The half of the rule that protects the user is kept: **the item still
+commits on RELEASE.** Press "Exit", drag off it, release -- nothing
+happens. `tools/menubar_test.py` asserts exactly that, and it is the
+only check in that file that can tell the two apart: every other one
+presses and releases in the same place, so a menu that acted on press
+would pass all of them.
+
+The rest of the behaviour, all of which real toolkits implement
+identically:
+
+- **Sliding along the bar with a menu open SWITCHES menus.** That is
+  what makes a menu bar browsable in one gesture.
+- **A submenu opens on hover**, after a short travel onto its parent
+  row, and does not close when the cursor briefly leaves the parent on
+  the way to it. Re-opening an already-open submenu on every motion
+  event repaints continuously -- same contract as `on_hover`.
+- **A click anywhere else DISMISSES, and the menu owns that click.** It
+  must not also reach whatever is underneath. This has its own check
+  because the obvious one ("the menu closed") stays green when the click
+  falls through; what catches it is measuring the caret.
+- **Esc closes ONE level**, not the whole chain.
+- **Separators and disabled rows are skipped by the arrows** and commit
+  nothing when released on.
+
+**Per-item state is asked for, never stored in the menu.** The tree is
+`const`; an app sets `item_flags` and the widget queries it per item on
+every draw and hit test. There is deliberately no "refresh the menu"
+call to forget.
+
+**Where a popup is allowed to go is a parameter.** Windows constrains a
+menu against the monitor work area and KDE lets the compositor resolve
+an `xdg_popup` positioner; a TWP client can draw only inside its own
+window, so the widget resolves the same flip/slide/clamp against a
+bounds rectangle the app supplies. Pass it the content rect. See
+`docs/decisions.md` for why that divergence is the whole difference and
+what changes when TWP grows a popup surface.
+
+**Alt+letter mnemonics do not exist here and should not be added while
+Alt is an ESC prefix** (`api/keyboard.h`): Alt-F arrives as ESC then
+'f', which cannot be told from the Esc that closes the menu. `KEY_F10`
+focuses the bar instead -- Windows' own second binding.
+
+## Status bars: panes, not a string
+
+`uui_statusbar` carries a MESSAGE that stretches and INDICATORS that do
+not, which is the shape Win32's `SB_SETPARTS` (a `-1` last part) and
+Qt's `addWidget` vs `addPermanentWidget` both arrived at. An indicator
+that slides around as the message changes is unreadable at a glance.
+
+Two rules: pane widths are in **characters**, not pixels, so the strip
+reflows with the font like everything else here; and the text is the
+**app's own buffers**, not copied, so updating the status is assigning a
+string and there is no set/get pair to keep in sync.
+
+Real toolkits sink each part behind a bevel. This one does not bevel
+anything, so parts are separated by a hairline and the strip by a
+hairline along its top.
+
+When testing one, pair the halves: "the indicator changed when the
+cursor moved" is satisfied by a bar that repaints everything, and "the
+message did not change" is satisfied by a dead indicator. Assert both.
+
 ## Keyboard: focus, and what a control owes it
 
 A window's widgets share one `ui_focus` ring (`apps/ui/ui_focus.h`).

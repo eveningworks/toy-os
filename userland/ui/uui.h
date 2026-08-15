@@ -52,6 +52,8 @@
 #include "ui/uui_listbox.h"
 #include "ui/uui_dropdown.h"
 #include "ui/uui_canvas.h"
+#include "ui/uui_menubar.h"
+#include "ui/uui_statusbar.h"
 #include "ui/uui_focus.h"
 
 #endif

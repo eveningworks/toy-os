@@ -2,8 +2,8 @@
 //
 // The kernel-space original is apps/notepad.c. This is the same editor
 // -- wrapped scrollable text, a cursor, click-to-position and
-// drag-select, a toolbar, open and save -- running as an ordinary
-// ring-3 program over the windowing protocol.
+// drag-select, open and save -- running as an ordinary ring-3 program
+// over the windowing protocol.
 //
 // WHAT THE MIGRATION MADE SIMPLER, WHICH IS THE INTERESTING PART
 // ---------------------------------------------------------------
@@ -29,6 +29,13 @@
 // own, and a portal is a later refinement rather than the starting
 // point. So the picker below is part of the application, using
 // sys_listdir() for the listing.
+//
+// THE THREE-BUTTON TOOLBAR IS GONE, replaced by a real menu bar
+// (ui/uui_menubar.h) and a real status bar (ui/uui_statusbar.h). New /
+// Open / Save were the only commands this editor could offer while they
+// each had to be a button wide enough to read; a menu holds Save As,
+// Select All, a Recent list and the view commands without spending any
+// window on them, which is exactly why every desktop editor has one.
 #include <stdint.h>
 #include "rt/sys.h"
 #include "ui/ugfx.h"
@@ -42,22 +49,90 @@
 #define WIN_H 380
 
 #define MARGIN 8
-#define TOOLBAR_GAP 6
-
-// Toolbar button codes.
-#define BTN_NEW  1
-#define BTN_OPEN 2
-#define BTN_SAVE 3
 
 #define PATH_MAX_LEN 64 // FS_PATH_MAX
 
+// --- menu command codes -----------------------------------------------
+//
+// One numbering for the menu and for the keyboard accelerators, so
+// Ctrl-S and File > Save cannot drift apart: both call do_command().
+#define CMD_NEW        1
+#define CMD_OPEN       2
+#define CMD_SAVE       3
+#define CMD_SAVE_AS    4
+#define CMD_EXIT       5
+#define CMD_RECENT     6  // the submenu itself -- queried, never committed
+#define CMD_RECENT_0   7
+#define CMD_RECENT_1   8
+#define CMD_RECENT_2   9
+#define CMD_SELECT_ALL 10
+#define CMD_DELETE     11
+#define CMD_GOTO       12 // submenu
+#define CMD_GOTO_TOP   13
+#define CMD_GOTO_END   14
+#define CMD_STATUSBAR  15
+
+#define RECENT_MAX 3
+
 static struct utext g_text;
-static struct uui_button g_buttons[3];
-static struct uui_button_group g_toolbar;
 
 static char g_path[PATH_MAX_LEN];   // "" until saved/opened
 static char g_status[96];
 static int g_dirty;
+static int g_show_status = 1;
+
+// The Recent list. The menu items below point straight at these buffers,
+// so "update the menu" is "write the string" -- there is no menu state
+// to keep in sync. See ui/uui_menubar.h on why the tree is const and the
+// per-item state is asked for instead.
+static char g_recent[RECENT_MAX][PATH_MAX_LEN];
+static int g_recent_count;
+
+static struct uui_menubar g_menu;
+static struct uui_statusbar g_statusbar;
+static char g_lncol[20];
+static char g_modflag[8];
+
+// --- the menu tree ----------------------------------------------------
+
+static const struct uui_menu_item recent_items[] = {
+    UUI_MENU(g_recent[0], CMD_RECENT_0, 0),
+    UUI_MENU(g_recent[1], CMD_RECENT_1, 0),
+    UUI_MENU(g_recent[2], CMD_RECENT_2, 0),
+};
+
+static const struct uui_menu_item file_items[] = {
+    UUI_MENU("New",          CMD_NEW,     "Ctrl-N"),
+    UUI_MENU("Open...",      CMD_OPEN,    "Ctrl-O"),
+    UUI_SUBMENU_CODE("Recent files", recent_items, CMD_RECENT),
+    UUI_MENU_SEP,
+    UUI_MENU("Save",         CMD_SAVE,    "Ctrl-S"),
+    UUI_MENU("Save As...",   CMD_SAVE_AS, 0),
+    UUI_MENU_SEP,
+    UUI_MENU("Exit",         CMD_EXIT,    "Esc"),
+};
+
+static const struct uui_menu_item edit_items[] = {
+    UUI_MENU("Select All",       CMD_SELECT_ALL, "Ctrl-A"),
+    UUI_MENU("Delete Selection", CMD_DELETE,     "Del"),
+};
+
+static const struct uui_menu_item goto_items[] = {
+    UUI_MENU("Top of file",    CMD_GOTO_TOP, 0),
+    UUI_MENU("Bottom of file", CMD_GOTO_END, 0),
+};
+
+static const struct uui_menu_item view_items[] = {
+    UUI_SUBMENU("Go to", goto_items),
+    UUI_MENU_SEP,
+    UUI_MENU("Status bar", CMD_STATUSBAR, 0),
+};
+
+static const struct uui_menu_item menu_bar[] = {
+    UUI_SUBMENU("File", file_items),
+    UUI_SUBMENU("Edit", edit_items),
+    UUI_SUBMENU("View", view_items),
+};
 
 // --- the open dialog --------------------------------------------------
 //
@@ -89,7 +164,23 @@ static void scopy(char *dst, const char *src, int cap) {
     dst[i] = '\0';
 }
 
+static int seq(const char *a, const char *b) {
+    int i = 0;
+    for (; a[i] && a[i] == b[i]; i++) {}
+    return a[i] == b[i];
+}
+
 static void set_status(const char *s) { scopy(g_status, s, (int)sizeof g_status); }
+
+// Appends `v` as decimal at `n`; returns the new length.
+static int put_int(char *b, int n, int v) {
+    char d[12];
+    int c = 0;
+    if (v <= 0) d[c++] = '0';
+    while (v > 0) { d[c++] = (char)('0' + v % 10); v /= 10; }
+    while (c > 0) b[n++] = d[--c];
+    return n;
+}
 
 // The title carries the filename and a dirty marker, so it changes as
 // the document does. Sent only when it ACTUALLY changed: this used to
@@ -111,6 +202,19 @@ static void set_title(struct uapp *a) {
     }
     scopy(g_shown_title, t, WIN_TITLE_LEN);
     uapp_set_title(a, t);
+}
+
+// Most-recent-first, deduplicated, capped. Called on every successful
+// open and save, which is the only place a path becomes "a file this
+// session has actually touched".
+static void recent_push(const char *path) {
+    int at = RECENT_MAX - 1;
+    for (int i = 0; i < g_recent_count; i++)
+        if (seq(g_recent[i], path)) { at = i; break; }
+
+    for (int i = at; i > 0; i--) scopy(g_recent[i], g_recent[i - 1], PATH_MAX_LEN);
+    scopy(g_recent[0], path, PATH_MAX_LEN);
+    if (g_recent_count < RECENT_MAX) g_recent_count++;
 }
 
 // --- file I/O ---------------------------------------------------------
@@ -136,6 +240,7 @@ static int load_file(const char *path) {
     utext_sel_clear(&g_text);
     scopy(g_path, path, PATH_MAX_LEN);
     g_dirty = 0;
+    recent_push(path);
     set_status("opened");
     return 1;
 }
@@ -165,13 +270,25 @@ static int save_file(const char *path) {
 
     scopy(g_path, path, PATH_MAX_LEN);
     g_dirty = 0;
+    recent_push(path);
     set_status("saved");
     return 1;
 }
 
 // --- layout -----------------------------------------------------------
 
-static int toolbar_h(void) { return ugfx_char_h() + 16; }
+static int menubar_h(void) {
+    int h;
+    uui_menubar_natural_size(&g_menu, 0, &h);
+    return h;
+}
+
+static int statusbar_h(void) {
+    if (!g_show_status) return 0;
+    int h;
+    uui_statusbar_natural_size(&g_statusbar, 0, &h);
+    return h;
+}
 
 // The scrollbar's width comes from the WIDGET, not from a number here.
 // It used to be `#define SCROLLBAR_W 8` with a matching hardcoded "10px
@@ -194,20 +311,65 @@ static int scrollbar_gutter(void) { return scrollbar_w() + 2; }
 // window is simply a bigger page.
 static void text_rect_for(int cw, int ch, int *x, int *y, int *w, int *h) {
     *x = MARGIN;
-    *y = MARGIN + toolbar_h() + TOOLBAR_GAP;
+    *y = menubar_h() + MARGIN;
     *w = cw - 2 * MARGIN - scrollbar_gutter(); // room for the scrollbar
-    *h = ch - *y - MARGIN - ugfx_char_h() - 4; // status line at the bottom
+    *h = ch - *y - MARGIN - statusbar_h();
 }
 
 static void text_rect(struct ugfx_surface *s, int *x, int *y, int *w, int *h) {
     text_rect_for(s->w, s->h, x, y, w, h);
 }
 
-static void layout_toolbar(void) {
-    int bw = 8 * ugfx_char_w();
-    int bh = toolbar_h();
-    for (int i = 0; i < 3; i++) {
-        uui_button_set_geometry(&g_buttons[i], MARGIN + i * (bw + TOOLBAR_GAP), MARGIN, bw, bh);
+// Placed against the CONTENT rect, which is also the popup bounds handed
+// to the menu bar -- see ui/uui_menubar.h on why that rectangle is the
+// whole difference between this and a real desktop's popups.
+static void layout_chrome(int cw, int ch) {
+    uui_menubar_set_geometry(&g_menu, 0, 0, cw, menubar_h());
+    uui_menubar_set_bounds(&g_menu, 0, 0, cw, ch);
+    uui_statusbar_set_geometry(&g_statusbar, 0, ch - statusbar_h(), cw, statusbar_h());
+}
+
+// LOGICAL lines, not wrapped rows: "Ln 12" in every editor's status bar
+// counts newlines, and a reader comparing it against a shell `sed -n
+// 12p` expects the same answer.
+static void update_indicators(void) {
+    int line = 1, col = 1;
+    for (int i = 0; i < g_text.cursor && i < g_text.count; i++) {
+        if (utext_at(&g_text, i) == '\n') { line++; col = 1; }
+        else col++;
+    }
+
+    int n = 0;
+    g_lncol[n++] = 'L'; g_lncol[n++] = 'n'; g_lncol[n++] = ' ';
+    n = put_int(g_lncol, n, line);
+    g_lncol[n++] = ','; g_lncol[n++] = ' ';
+    g_lncol[n++] = 'C'; g_lncol[n++] = 'o'; g_lncol[n++] = 'l'; g_lncol[n++] = ' ';
+    n = put_int(g_lncol, n, col);
+    g_lncol[n] = '\0';
+
+    scopy(g_modflag, g_dirty ? "MOD" : "--", (int)sizeof g_modflag);
+}
+
+// --- item state -------------------------------------------------------
+//
+// Asked for by the menu bar, per item, every draw and every hit test. So
+// there is no "refresh the menu" step anywhere in this app: greying Save
+// out when the document is clean is this function and nothing else.
+static unsigned menu_item_flags(int code) {
+    switch (code) {
+    case CMD_SAVE:
+        return g_dirty ? 0 : UUI_MI_DISABLED;
+    case CMD_DELETE:
+        return utext_sel_present(&g_text) ? 0 : UUI_MI_DISABLED;
+    case CMD_RECENT:
+        return g_recent_count > 0 ? 0 : UUI_MI_DISABLED;
+    case CMD_RECENT_0: return g_recent_count > 0 ? 0 : UUI_MI_DISABLED;
+    case CMD_RECENT_1: return g_recent_count > 1 ? 0 : UUI_MI_DISABLED;
+    case CMD_RECENT_2: return g_recent_count > 2 ? 0 : UUI_MI_DISABLED;
+    case CMD_STATUSBAR:
+        return g_show_status ? UUI_MI_CHECKED : 0;
+    default:
+        return 0;
     }
 }
 
@@ -225,12 +387,6 @@ static void scrollbar_rect(int tx, int ty, int tw, int th,
     *bh = th;
 }
 
-// Notepad used to hand-roll its scrollbar here -- trough, thumb
-// position, thumb height, all recomputed locally -- while
-// ui/uui_scrollbar.h had exactly that widget. The copy is why it drew
-// something it could never move: none of the widget's hit-testing came
-// with it.
-//
 // Arrows are ON here (UUI_SCROLLBAR_ARROWS): an editor is where a
 // stepper is actually wanted, and this is the flag's first caller.
 #define NP_SCROLLBAR_FLAGS UUI_SCROLLBAR_ARROWS
@@ -292,26 +448,32 @@ static void draw_dialog(struct ugfx_surface *s) {
 static void draw(struct ugfx_surface *s, int focused) {
     ugfx_fill(s, UTHEME_PANEL_BG);
 
-    layout_toolbar();
-    uui_button_group_draw(&g_toolbar, s);
+    layout_chrome(s->w, s->h);
+    uui_menubar_draw(s, &g_menu);
 
     int tx, ty, tw, th;
     text_rect(s, &tx, &ty, &tw, &th);
     ugfx_draw_rect(s, tx - 1, ty - 1, tw + 2, th + 2, ugfx_rgb(200, 205, 215));
     utext_draw(&g_text, s, tx, ty, tw, th,
                 // The caret shows only when this window has keyboard
-                // focus AND no modal dialog is over the text. An
-                // unfocused window drawing one claims to be taking
-                // input that is going somewhere else -- see TWP's
+                // focus AND no modal dialog or open menu is over the
+                // text. An unfocused window drawing one claims to be
+                // taking input that is going somewhere else -- see TWP's
                 // WIN_EV_FOCUS.
                 UTHEME_TEXT, UTHEME_WHITE, ugfx_rgb(205, 220, 240),
-                focused && !g_dialog_open);
+                focused && !g_dialog_open && !uui_menubar_is_open(&g_menu));
     draw_scrollbar(s, tx, ty, tw, th);
 
-    ugfx_draw_string_clipped(s, MARGIN, s->h - ugfx_char_h() - 2, s->w - 2 * MARGIN,
-                              g_status, ugfx_rgb(90, 100, 115), UTHEME_PANEL_BG);
+    if (g_show_status) {
+        update_indicators();
+        uui_statusbar_draw(s, &g_statusbar);
+    }
 
     if (g_dialog_open) draw_dialog(s);
+
+    // LAST. Drawing is immediate-mode, so z-order is call order -- a
+    // menu drawn in place would be painted over by the text area.
+    uui_menubar_draw_popup(s, &g_menu);
 }
 
 // --- the dialog's behaviour -------------------------------------------
@@ -382,6 +544,7 @@ static void open_dialog(int saving) {
     g_dialog_open = 1;
     g_dialog_saving = saving;
     g_sel = 0;
+    uui_menubar_close(&g_menu); // a modal owns the input; the menu steps aside
     if (saving) {
         scopy(g_name_field, g_path[0] ? g_path : "", PATH_MAX_LEN);
         g_name_len = slen(g_name_field);
@@ -433,7 +596,88 @@ static int dialog_key(int key) {
     return 1; // modal: swallow everything else
 }
 
+// --- commands ---------------------------------------------------------
+//
+// The ONE place a command happens. The menu bar routes here, and so do
+// the Ctrl accelerators -- which is what stops "Ctrl-S" and "File >
+// Save" from being two implementations of saving.
+
+static void log_action(int code);
+
+static void do_command(struct uapp *a, int code) {
+    log_action(code);
+    switch (code) {
+    case CMD_NEW:
+        utext_clear(&g_text);
+        g_path[0] = '\0';
+        g_dirty = 0;
+        set_status("new file");
+        break;
+    case CMD_OPEN:
+        open_dialog(0);
+        break;
+    case CMD_SAVE:
+        if (g_path[0]) save_file(g_path);
+        else open_dialog(1);
+        break;
+    case CMD_SAVE_AS:
+        open_dialog(1);
+        break;
+    case CMD_EXIT:
+        uapp_quit(a, 0);
+        break;
+    case CMD_RECENT_0:
+    case CMD_RECENT_1:
+    case CMD_RECENT_2: {
+        int i = code - CMD_RECENT_0;
+        if (i < g_recent_count) {
+            // A copy: load_file() calls recent_push(), which rewrites the
+            // very slot the path is being read out of.
+            char p[PATH_MAX_LEN];
+            scopy(p, g_recent[i], PATH_MAX_LEN);
+            load_file(p);
+        }
+        break;
+    }
+    case CMD_SELECT_ALL:
+        g_text.cursor = 0;
+        utext_sel_start(&g_text);
+        g_text.cursor = g_text.count;
+        set_status("selected all");
+        break;
+    case CMD_DELETE:
+        if (utext_sel_present(&g_text)) { utext_sel_delete(&g_text); g_dirty = 1; }
+        break;
+    case CMD_GOTO_TOP:
+        g_text.cursor = 0;
+        utext_sel_clear(&g_text);
+        utext_scroll(&g_text, g_text.count); // clamps to the top
+        break;
+    case CMD_GOTO_END:
+        g_text.cursor = g_text.count;
+        utext_sel_clear(&g_text);
+        g_text.scroll_offset = 0; // 0 is pinned to the newest text
+        break;
+    case CMD_STATUSBAR:
+        g_show_status = !g_show_status;
+        break;
+    default:
+        break;
+    }
+}
+
 // --- editor keys -------------------------------------------------------
+
+// Returns 1 if this key was an accelerator, having run its command.
+static int accelerator(struct uapp *a, int key) {
+    switch (key) {
+    case 0x0E: do_command(a, CMD_NEW);        return 1; // Ctrl-N
+    case 0x0F: do_command(a, CMD_OPEN);       return 1; // Ctrl-O
+    case 0x13: do_command(a, CMD_SAVE);       return 1; // Ctrl-S
+    case 0x01: do_command(a, CMD_SELECT_ALL); return 1; // Ctrl-A
+    default:   return 0;
+    }
+}
 
 static void editor_key(int key) {
     switch (key) {
@@ -468,13 +712,6 @@ static void editor_key(int key) {
         if (utext_sel_present(&g_text)) utext_sel_delete(&g_text);
         else utext_backspace(&g_text);
         g_dirty = 1; return;
-
-    case 0x0F: // Ctrl-O
-        open_dialog(0); return;
-    case 0x13: // Ctrl-S
-        if (g_path[0]) save_file(g_path);
-        else open_dialog(1);
-        return;
     default: break;
     }
 
@@ -494,42 +731,85 @@ static void editor_key(int key) {
 // --- Toykit callbacks -------------------------------------------------
 //
 // Notepad does NOT use uapp's `buttons` routing, on purpose: its file
-// dialog is modal and has to swallow input the toolbar would otherwise
-// see. `desc.buttons` is optional for exactly this case -- an app with
-// its own precedence rules keeps them, and still gets the loop, the
+// dialog is modal and its menu bar owns input ahead of everything else.
+// `desc.buttons` is optional for exactly this case -- an app with its
+// own precedence rules keeps them, and still gets the loop, the
 // handshake and the resize handling.
 
 static int g_dragging;
 static int g_scrollbar_drag;
 static int g_scrollbar_grab; // how far down the thumb the drag started
 
-// Reports the scrollbar's rect, content-relative, so a test asks where
-// it is instead of re-deriving it -- the rule docs/gui-guidelines.md
-// states after three tools each learned it the hard way. Written once
-// per draw; the log is idempotent enough that a reader only ever needs
-// the last line.
-static void log_layout(struct uapp *a) {
-    int tx, ty, tw, th, bx, by, bw, bh;
-    text_rect_for(uapp_width(a), uapp_height(a), &tx, &ty, &tw, &th);
-    scrollbar_rect(tx, ty, tw, th, &bx, &by, &bw, &bh);
+// --- self-reported layout ----------------------------------------------
+//
+// docs/gui-guidelines.md: a GUI test asks the app where things are.
+// Re-deriving a menu's rectangles in Python would be hopeless anyway --
+// they depend on which submenu is open and on how the placement flipped
+// -- so every rect a test could want is reported here, from the SAME
+// accessors the widget draws with.
 
-    char b[80];
-    int n = 0;
-    const char *pre = "notepad: layout scrollbar ";
-    while (pre[n]) { b[n] = pre[n]; n++; }
-    int v[4] = { bx, by, bw, bh };
-    for (int i = 0; i < 4; i++) {
-        if (i) b[n++] = ' ';
-        int x = v[i];
-        char d2[12];
-        int c = 0;
-        if (x <= 0) d2[c++] = '0';
-        while (x > 0) { d2[c++] = (char)('0' + x % 10); x /= 10; }
-        while (c > 0) b[n++] = d2[--c];
+static void emit(const char *prefix, const int *v, int n) {
+    char b[96];
+    int i = 0;
+    while (prefix[i]) { b[i] = prefix[i]; i++; }
+    for (int k = 0; k < n; k++) {
+        b[i++] = ' ';
+        i = put_int(b, i, v[k]);
     }
-    b[n++] = '\n';
-    b[n] = '\0';
+    b[i++] = '\n';
+    b[i] = '\0';
     sys_eprint(b);
+}
+
+static void log_action(int code) {
+    int v[1] = { code };
+    emit("notepad: action", v, 1);
+}
+
+static void log_layout(struct uapp *a) {
+    int cw = uapp_width(a), ch = uapp_height(a);
+
+    int tx, ty, tw, th, x, y, w, h;
+    text_rect_for(cw, ch, &tx, &ty, &tw, &th);
+    scrollbar_rect(tx, ty, tw, th, &x, &y, &w, &h);
+    { int v[4] = { x, y, w, h }; emit("notepad: layout scrollbar", v, 4); }
+
+    // The editable area itself. Added when the toolbar became a menu
+    // bar: the text moved up by the difference in chrome height, and a
+    // test sampling a hardcoded band below it went on comparing three
+    // identical patches of blank background and reporting them as
+    // passes. A rect the app states cannot drift that way.
+    { int v[4] = { tx, ty, tw, th }; emit("notepad: layout text", v, 4); }
+
+    { int v[4] = { g_menu.x, g_menu.y, g_menu.w, g_menu.h };
+      emit("notepad: layout menubar", v, 4); }
+
+    for (int i = 0; i < (int)(sizeof menu_bar / sizeof menu_bar[0]); i++) {
+        if (!uui_menubar_title_rect(&g_menu, i, &x, &y, &w, &h)) continue;
+        int v[5] = { i, x, y, w, h };
+        emit("notepad: layout title", v, 5);
+    }
+
+    if (g_show_status) {
+        { int v[4] = { g_statusbar.x, g_statusbar.y, g_statusbar.w, g_statusbar.h };
+          emit("notepad: layout statusbar", v, 4); }
+        for (int i = 0; i < g_statusbar.count; i++) {
+            if (!uui_statusbar_pane_rect(&g_statusbar, i, &x, &y, &w, &h)) continue;
+            int v[5] = { i, x, y, w, h };
+            emit("notepad: layout pane", v, 5);
+        }
+    }
+
+    for (int l = 0; l < uui_menubar_depth(&g_menu); l++) {
+        if (uui_menubar_popup_rect(&g_menu, l, &x, &y, &w, &h)) {
+            int v[5] = { l, x, y, w, h };
+            emit("notepad: layout popup", v, 5);
+        }
+        for (int i = 0; uui_menubar_item_rect(&g_menu, l, i, &x, &y, &w, &h); i++) {
+            int v[6] = { l, i, x, y, w, h };
+            emit("notepad: layout item", v, 6);
+        }
+    }
 }
 
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
@@ -542,15 +822,28 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     (void)mods;
     if (g_dialog_open) {
         dialog_key(key);
-    } else if (key == 0x1B) {
-        uapp_quit(a, 0);
+        uapp_redraw(a);
         return;
-    } else {
-        editor_key(key);
     }
+
+    // The menu bar gets first refusal. When closed it takes only F10, so
+    // Esc still quits and every editing key is untouched.
+    int code = -1;
+    if (uui_menubar_key(&g_menu, key, &code)) {
+        if (code >= 0) do_command(a, code);
+        uapp_redraw(a);
+        return;
+    }
+
+    if (accelerator(a, key)) {
+        uapp_redraw(a);
+        return;
+    }
+
+    if (key == 0x1B) { uapp_quit(a, 0); return; }
+    editor_key(key);
     uapp_redraw(a);
 }
-
 
 // A click in the trough jumps there; a click on the thumb starts a
 // drag. Returns 1 if the scrollbar took the click.
@@ -586,8 +879,7 @@ static int scrollbar_press(int px, int py, int tx, int ty, int tw, int th) {
         // maths below is told the cursor is at the thumb's TOP, so the
         // thumb leaps up by however far down it was actually grabbed --
         // which made the bar usable only by catching its top edge
-        // exactly. ui_listbox.c and ui_textview.c have always captured
-        // this; ui/uui_scrollbar.h's `grab_offset_in_thumb` says to.
+        // exactly. ui/uui_scrollbar.h's `grab_offset_in_thumb` says so.
         int thumb_y, thumb_h;
         uui_scrollbar_thumb_rect(by, bh, total, visible, g_text.scroll_offset,
                                   &thumb_y, &thumb_h, bw, NP_SCROLLBAR_FLAGS);
@@ -628,8 +920,8 @@ static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
                 }
             }
         }
-    } else if (uui_button_group_press(&g_toolbar, x, y)) {
-        // a toolbar button armed
+    } else if (uui_menubar_press(&g_menu, x, y)) {
+        // the menu opened, switched, or swallowed a dismissing click
     } else if (scrollbar_press(x, y, tx, ty, tw, th)) {
         // handled: jumped to the clicked position
     } else if (x >= tx && x < tx + tw && y >= ty && y < ty + th) {
@@ -643,6 +935,15 @@ static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
 static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
     int tx, ty, tw, th;
     text_rect_for(uapp_width(a), uapp_height(a), &tx, &ty, &tw, &th);
+
+    // The menu tracks the cursor whether or not a button is held -- that
+    // is what makes press-on-a-title, drag-down, release-on-an-item work,
+    // and it is how every real menu bar behaves. Skipped only while a
+    // text or scrollbar drag owns the mouse.
+    if (!g_dragging && !g_scrollbar_drag && !g_dialog_open) {
+        if (uui_menubar_motion(&g_menu, x, y)) uapp_redraw(a);
+        if (uui_menubar_is_open(&g_menu)) return;
+    }
 
     if (buttons) {
         if (g_scrollbar_drag) {
@@ -662,30 +963,17 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
         } else if (g_dragging) {
             g_text.cursor = utext_index_at_point(&g_text, tx, ty, tw, th, x, y);
             uapp_redraw(a);
-        } else if (uui_button_group_press(&g_toolbar, x, y)) {
-            uapp_redraw(a);
         }
-    } else if (uui_button_group_hover(&g_toolbar, x, y)) {
-        uapp_redraw(a);
     }
 }
 
 static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
-    (void)x; (void)y; (void)buttons;
+    (void)buttons;
     g_dragging = 0;
     g_scrollbar_drag = 0;
-    int code = uui_button_group_release(&g_toolbar);
-    if (code == BTN_NEW) {
-        utext_clear(&g_text);
-        g_path[0] = '\0';
-        g_dirty = 0;
-        set_status("new file");
-    } else if (code == BTN_OPEN) {
-        open_dialog(0);
-    } else if (code == BTN_SAVE) {
-        if (g_path[0]) save_file(g_path);
-        else open_dialog(1);
-    }
+
+    int code = uui_menubar_release(&g_menu, x, y);
+    if (code >= 0) do_command(a, code);
     uapp_redraw(a);
 }
 
@@ -693,13 +981,19 @@ static void on_open_cb(struct uapp *a) {
     (void)a;
     utext_init(&g_text);
     g_path[0] = '\0';
-    set_status("Ctrl-O open, Ctrl-S save, Esc quit");
+    set_status("F10 for the menu -- Ctrl-O open, Ctrl-S save, Esc quit");
 
-    uint32_t fg = UTHEME_TEXT, bg = UTHEME_BUTTON_BG;
-    uui_button_init(&g_buttons[0], 0, 0, 0, 0, "New",  bg, fg, BTN_NEW);
-    uui_button_init(&g_buttons[1], 0, 0, 0, 0, "Open", bg, fg, BTN_OPEN);
-    uui_button_init(&g_buttons[2], 0, 0, 0, 0, "Save", bg, fg, BTN_SAVE);
-    uui_button_group_init(&g_toolbar, g_buttons, 3);
+    for (int i = 0; i < RECENT_MAX; i++) scopy(g_recent[i], "(empty)", PATH_MAX_LEN);
+
+    uui_menubar_init(&g_menu, menu_bar, (int)(sizeof menu_bar / sizeof menu_bar[0]));
+    g_menu.item_flags = menu_item_flags;
+
+    uui_statusbar_init(&g_statusbar);
+    g_statusbar.count = 3;
+    g_statusbar.panes[0].text = g_status;   g_statusbar.panes[0].chars = 0;
+    g_statusbar.panes[1].text = g_lncol;    g_statusbar.panes[1].chars = 14;
+    g_statusbar.panes[2].text = g_modflag;  g_statusbar.panes[2].chars = 4;
+    update_indicators();
 }
 
 int main(void) {
@@ -712,8 +1006,8 @@ int main(void) {
         // Resizable: an editor is the app that most wants it, and it
         // needs no resize code -- text_rect_for() already derives the
         // text area from the content size, so a bigger window is a
-        // bigger page. The minimum keeps the toolbar and one text row
-        // visible.
+        // bigger page. The minimum keeps the menu bar, one text row and
+        // the status bar visible.
         .flags      = UAPP_RESIZABLE,
         .min_w      = 240,
         .min_h      = 120,

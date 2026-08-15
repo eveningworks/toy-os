@@ -38,6 +38,14 @@
 #define KEY_CTRL_ARROW_LEFT   0xA2
 #define KEY_CTRL_ARROW_RIGHT  0xA3
 
+// F10 -- focuses an application's menu bar (ui/uui_menubar.h), which is
+// what it does on Windows and in KDE. It exists rather than Alt+letter
+// mnemonics because Alt is encoded terminal-style as an ESC PREFIX (see
+// "Ctrl and Alt" below), so Alt-F arrives as ESC then 'f' and cannot be
+// told apart from the Esc that has to close the menu. F10 has no such
+// ambiguity, and is the binding both of those desktops offer anyway.
+#define KEY_F10               0xA4
+
 // ---- Ctrl and Alt ----
 //
 // These do NOT get KEY_* codes of their own. They're encoded the way a

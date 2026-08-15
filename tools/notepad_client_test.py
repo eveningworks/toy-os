@@ -107,9 +107,23 @@ def run(dbg, qmp, tmp, shot_dir, res):
 
     c = win["content"]
     ox, oy = c["x"], c["y"]
-    # The text area, per notepad.c's text_rect(). Sampled generously
-    # inside it so the exact toolbar height doesn't matter.
-    box = (ox + MARGIN + 2, oy + 60, ox + c["w"] - 40, oy + 200)
+    # The text area, as the app reports it. This used to be a hardcoded
+    # band (`oy + 60` to `oy + 200`) chosen to sit "generously inside"
+    # it -- which stopped being true the moment the toolbar became a
+    # menu bar and the text moved up by the difference. The band then
+    # sampled blank background in every state, so "typed", "cleared" and
+    # "reopened" all compared equal and two checks failed while a third
+    # passed for the wrong reason. Ask the app (docs/gui-guidelines.md).
+    tr = None
+    for l in reversed(dbg.logs("notepad: layout text", clear=False)):
+        tr = [int(v) for v in l.split("layout text")[1].split()[:4]]
+        break
+    res.check("Notepad reports its text area", tr is not None,
+              "no 'notepad: layout text' line")
+    if tr is None:
+        return
+    box = (ox + tr[0] + 2, oy + tr[1] + 2,
+           ox + tr[0] + tr[2] - 2, oy + tr[1] + tr[3] - 2)
 
     body = "Round trip through the real filesystem."
     type_text(dbg, body)
@@ -160,7 +174,15 @@ def run(dbg, qmp, tmp, shot_dir, res):
               f"`cat` returned: {catted[:200]!r}")
 
     # --- clear, then reopen -------------------------------------------
-    dbg.send("gui click %d %d" % (ox + MARGIN + 20, oy + MARGIN + 12))  # New
+    # Ctrl-N. This used to click a toolbar button at a hardcoded offset;
+    # the toolbar is a menu bar now (ui/uui_menubar.h), and that offset
+    # landed on the File TITLE instead -- which opened the menu, left it
+    # open, and had it swallow the Ctrl-O and the arrow keys below. The
+    # "New clears the editor" check still passed, because the popup
+    # drawing over the sampled box changed those pixels too. The menu
+    # itself is covered by tools/menubar_test.py; this test is about the
+    # editor, so it drives the accelerator.
+    key(dbg, "0x0e")  # Ctrl-N
     dbg.settle()
     time.sleep(0.5)
     cleared = text_pixels(qmp, tmp, "np_cleared.png", box)
@@ -261,10 +283,21 @@ def run(dbg, qmp, tmp, shot_dir, res):
     res.check("scrolling back restores the view exactly", back == at_bottom,
               "scrolling up and down again did not return to the same pixels")
 
-    # The scrollbar strip sits just right of the text area (notepad.c's
-    # scrollbar_rect). Dragging its thumb must move the view too.
-    bar_x = ox + c["w"] - MARGIN - 6
-    dbg.drag(bar_x, oy + 210, bar_x, oy + 70)
+    # Dragging the thumb must move the view too. The strip's rect comes
+    # from the app -- this used to be `ox + c["w"] - MARGIN - 6`, a
+    # re-derivation that stopped pointing at the bar the moment the
+    # chrome around the text area changed (docs/gui-guidelines.md: a GUI
+    # test asks the app where things are).
+    sb0 = None
+    for l in reversed(dbg.logs("notepad: layout scrollbar", clear=False)):
+        sb0 = [int(v) for v in l.split("layout scrollbar")[1].split()[:4]]
+        break
+    if sb0 is None:
+        res.check("dragging the scrollbar scrolls the editor", False,
+                  "no 'notepad: layout scrollbar' line")
+        return
+    bar_x = ox + sb0[0] + sb0[2] // 2
+    dbg.drag(bar_x, oy + sb0[1] + sb0[3] - 40, bar_x, oy + sb0[1] + 40)
     dbg.settle()
     time.sleep(0.4)
     dragged = text_pixels(qmp, tmp, "np_bardrag.png", box)

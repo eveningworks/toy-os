@@ -91,6 +91,7 @@ TOOLS = [
     ("uterm", "uterm_test.py", "Terminal + the ring-3 shell"),
     ("uapp", "uapp_test.py", "the TWP resize handshake"),
     ("scrollbar", "scrollbar_test.py", "scrollbar behaviour, per the guidelines"),
+    ("menubar", "menubar_test.py", "menu bar, submenus and the status bar"),
 ]
 
 
