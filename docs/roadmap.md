@@ -183,6 +183,26 @@ adds 4; 12 adds 5; 13 adds 6; 14 and up add 8.
 - [ ] A `ktest -v` that reports each assertion, not just pass/fail
 - [ ] Tests for the boundary this kernel enforces by include path: an
       apps/-side compile check that reaching for `kernel/` fails
+- [ ] **A golden-image baseline for the GUI, diffed automatically.**
+      The GUI suite asserts on facts it thought to check -- a pixel
+      here, a reported geometry there -- so a rendering change nobody
+      wrote a check for lands green. A committed reference screenshot
+      per app, compared each run, catches the class of regression the
+      targeted checks miss by construction. `tools/screenshot_diff.py`
+      already does the comparison with a threshold and a highlight
+      image; what is missing is the baseline set and the masking.
+      **Masking is the whole difficulty, not a detail**: the taskbar
+      clock changes in every screenshot, so a whole-screen diff is
+      pure noise, and the same goes for anything else time- or
+      state-dependent. So this needs per-baseline ignore rectangles
+      (the tray strip at minimum) and a way to regenerate a baseline
+      deliberately when a change is intended, or it becomes a check
+      everyone learns to re-bless without reading. Note this is NOT the
+      retired `screenshots/` convention coming back: those were
+      per-commit artifacts a human was expected to eyeball, which is
+      exactly the part that does not work -- the value here is in the
+      machine doing the comparison. See `CLAUDE.md`'s "Screenshots are
+      a TESTING TOOL, not a deliverable".
 
 ### Milestone 5 -- Benchmark suite (planned v0.5.0)
 
