@@ -442,6 +442,30 @@ directory (see `apps/README.md`).
 Semantic colour is separate from decoration: the close button is red
 because closing is destructive, not because it looks nice.
 
+## Background colour belongs to a cell, not to a region
+
+The text console (`kernel/drivers/vga.c`) has no notion of a coloured
+region -- only per-cell foreground and background, set by
+`vga_set_color()` and applied as each character is drawn. Two places
+invent blank space rather than drawing a character, and both have to
+decide a colour for it:
+
+- **A scroll fills the incoming row with the console's DEFAULT
+  background**, never the live `cur_bg`. Nobody has written to that row,
+  so it is the console's, not the caller's. Filling it with a transient
+  colour paints a full-width band no text asked for, and text drawn on
+  that row afterwards only repaints its own cells -- which is what put
+  ragged red stripes across the lines below the panic banner.
+- **A newline while a non-default background is set pads to the end of
+  the line**, so a coloured run is a deliberate full-width band rather
+  than a highlight whose right edge is wherever the text stopped.
+
+If you add a third way to produce blank space, decide which of those two
+it is. And if you add a coloured region of any kind, remember the
+console redraws from scrollback on PageUp -- anything painted straight
+into the framebuffer without going through `sb_record()` disappears the
+first time the user scrolls.
+
 ## Size everything from the font, never in fixed pixels
 
 Window sizes come from each app's `default_size()`, called at open time

@@ -49,6 +49,8 @@ there when you add an entry, or the index quietly stops being one.
 - [NX landed in userspace first, and the default mapper is the non-executable one](#nx-landed-in-userspace-first-and-the-default-mapper-is-the-non-executable-one)
 - [Kernel W^X: NX on every huge PDE, one 4KiB split for `.text`, and CR0.WP](#kernel-wx-nx-on-every-huge-pde-one-4kib-split-for-text-and-cr0wp)
 - [The user stack's guard is an unmapped hole plus two rules, and the sbrk rule is the one that mattered](#the-user-stacks-guard-is-an-unmapped-hole-plus-two-rules-and-the-sbrk-rule-is-the-one-that-mattered)
+- [SMAP is absolute here because the kernel copies through its own identity map, not with STAC/CLAC](#smap-is-absolute-here-because-the-kernel-copies-through-its-own-identity-map-not-with-stacclac)
+- [A blank console cell gets the console's colour, and a coloured line pads to its own edge](#a-blank-console-cell-gets-the-consoles-colour-and-a-coloured-line-pads-to-its-own-edge)
 - [The serial debug console is poll-based from existing idle loops, not a new kernel thread](#the-serial-debug-console-is-poll-based-from-existing-idle-loops-not-a-new-kernel-thread)
 
 **Filesystem & storage**
@@ -3692,6 +3694,93 @@ because GCC's accumulator form of tail-recursion elimination had turned
 at -O2. `volatile` on the frame does not prevent that; the call goes
 through a `volatile` function pointer now, and the frame is read after
 the call returns. `objdump -d` is what settled it, not reading the C.
+
+## SMAP is absolute here because the kernel copies through its own identity map, not with STAC/CLAC
+
+CR4.SMAP faults a supervisor access to a page whose mapping has U=1.
+The standard answer is to bracket every deliberate kernel access to user
+memory in `STAC`/`CLAC` -- which switches the protection OFF for exactly
+the window a bug would use it in, and which requires getting every
+window's extent right forever.
+
+This kernel does not do that, and **sets EFLAGS.AC nowhere at all.**
+`vmm_copy_from_user()`/`vmm_copy_to_user()`/`vmm_copy_string_from_user()`
+walk the process's page tables to the physical frame and copy through
+the kernel's OWN identity map -- a supervisor access to a supervisor
+page, which SMAP does not police. That option exists because boot.asm
+identity-maps the whole low 4 GiB; a kernel without a full physmap could
+not choose it.
+
+Three things follow, in descending order of how easy they are to
+forget:
+
+- **A raw `*(T *)user_ptr` in kernel code is now a page fault**, not a
+  subtle bug. That is the point: the rule is enforced by the CPU rather
+  than by review. All 23 sites that used to do it -- struct copy-outs,
+  path strings, the `SYS_READ`/`SYS_WRITE` bulk buffers, `SYS_LISTDIR`'s
+  per-entry writes, strace's argument strings -- go through the helpers.
+- **The helpers subsume `vmm_validate_user_range()` where they replaced a
+  validate-then-copy pair**, and close a TOCTOU gap in doing so: the walk
+  and the copy are one operation per page, so there is no interval in
+  which a checked mapping can change before it is used. The validator
+  still stands alone where nothing is copied.
+- **`paging_make_user_page()` is the live trap.** It adds U=1 to the
+  KERNEL's own identity mapping of a page, which makes that page
+  SMAP-protected against the kernel's ordinary access to it, at the
+  address the kernel normally uses. Nothing calls it outside `paging.c`
+  today; a future caller must go through the helpers or fault in code
+  that looks innocent.
+
+SMEP (ring 0 cannot execute a user page) needed no audit -- the kernel
+never executes user pages -- and is the cheaper half by far.
+
+**Both bits are absent on QEMU's default `qemu64` model**, so the
+hardware path only runs under `--cpu max`. The KTESTs are written to
+assert CR4 against CPUID rather than asserting the bits are on, so they
+are meaningful under both models and can fail under either. What they
+CANNOT show is enforcement: the helpers never touch a user mapping, so
+they behave identically with SMAP on or off. That was proved separately
+by putting one raw dereference back into `SYS_WIN_CREATE` -- ring-0
+`#PF`, `CR2` pointing at the client's stack, `error_code=0x1`, under
+`--cpu max`, while the same build ran clean on `qemu64`.
+
+## A blank console cell gets the console's colour, and a coloured line pads to its own edge
+
+Two rules in `kernel/drivers/vga.c`, from one visible bug: the panic
+banner painted ragged red stripes across lines that had nothing to do
+with it.
+
+**A scroll fills the incoming row with the console's DEFAULT background,
+not the live `cur_bg`.** The row scrolling in is blank -- nobody has
+written to it -- so it belongs to the console rather than to whatever
+colour a caller happens to have set. Filling it with `cur_bg` painted a
+full-width band no text had asked for, and text drawn on that row later
+only repainted its own cells, leaving the rest of the band behind. This
+is the same reasoning `cursor_hide()` already spells out for the cursor
+cell, applied to the other place that invents blank space.
+
+**A newline with a non-default background pads to the end of the line.**
+Otherwise a coloured run's right edge is wherever its text happened to
+stop, which reads as a highlight rather than as a banner -- and made the
+banner's appearance depend on whether a scroll had happened to fill the
+row first. Padding makes it deliberate.
+
+Two things about where that padding lives:
+
+- It is in `vga_putc()`, the single funnel, **so the spaces go through
+  `sb_record()` as well.** Done inside `fb_putc()` alone it would look
+  right until PageUp redrew the line from scrollback without it.
+- The padding **replaces** the newline on screen (writing the last column
+  wraps, which is the same move) but **must still record one** --
+  `sb_record('\n')` is what calls `sb_start_line()`. Skipping it
+  accumulated all five banner lines into a single scrollback line, and a
+  PageUp/PageDown round trip redrew the banner as one stripe with four
+  lines missing. Found by testing the round trip, not by reading it.
+
+And the loop bound is computed BEFORE the first space: looping on
+`col < width` does not terminate, because writing the last column wraps
+`col` back to 0. That fills the screen solid red, which is at least an
+obvious failure.
 
 ## `/etc` and `/tmp` are created by the MOUNT, not by `kernel_main()`
 

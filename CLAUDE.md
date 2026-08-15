@@ -456,6 +456,23 @@ technical conventions below:
   control-register access; and a filesystem backend goes in `fs/`, not
   `drivers/` -- the block device is the driver, the filesystem on top
   of it isn't.
+- **Kernel code touches user memory ONLY through `vmm.h`'s copy
+  helpers** (`vmm_copy_from_user`/`_to_user`/`_string_from_user`).
+  CR4.SMEP and CR4.SMAP are on wherever the CPU has them
+  (`paging_enable_smep_smap()`), so a raw `*(T *)user_ptr` in ring-0
+  code is a page fault, not a subtle bug. The helpers walk to the frame
+  and copy through the kernel's own identity map (U=0), which SMAP does
+  not police -- **so this kernel sets EFLAGS.AC nowhere and there is no
+  STAC/CLAC window in which the protection is off.** They also subsume
+  `vmm_validate_user_range()` where it used to be paired with a manual
+  copy loop, closing the gap between checking a mapping and using it.
+  Two traps: `paging_make_user_page()` adds U=1 to the KERNEL's own
+  identity mapping, so any page it touches becomes SMAP-protected
+  against the kernel's normal access to it; and **both bits are absent
+  on QEMU's default `qemu64`**, so `--cpu max` is the only way the
+  hardware path runs (the KTESTs assert CR4 against CPUID rather than
+  demanding the bits, so they are meaningful under both). See
+  `docs/decisions.md`.
 - **The ring-3 address-space map is `kernel/include/kernel/uaddr.h`,
   stated once.** Heap base, heap limit, guard region, stack bottom/top
   and page counts, read by `scheduler.c`'s spawn path, `elf_run.c`'s

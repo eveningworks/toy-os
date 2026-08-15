@@ -38,6 +38,13 @@ static uint16_t *buf = VGA_MEM;
 static enum vga_color cur_fg = VGA_LIGHT_GREY;
 static enum vga_color cur_bg = VGA_BLACK;
 
+// The console's OWN background, as opposed to whatever colour a caller
+// has temporarily set. A cell nobody has written to belongs to the
+// console, so blank space introduced by a scroll is painted with this
+// rather than with cur_bg -- see fb_scroll_if_needed(). Same reasoning
+// cursor_hide() already spells out for the cursor cell.
+#define CONSOLE_DEFAULT_BG VGA_BLACK
+
 // ---- output sink redirection (see vga.h's struct vga_sink comment) ----
 static const struct vga_sink *active_sink = 0;
 
@@ -95,8 +102,12 @@ static void legacy_scroll_if_needed(void) {
     for (size_t y = 1; y < VGA_HEIGHT; y++)
         for (size_t x = 0; x < VGA_WIDTH; x++)
             buf[(y - 1) * VGA_WIDTH + x] = buf[y * VGA_WIDTH + x];
+    // The scrolled-in row is blank, so it gets the console's own colours
+    // rather than whatever legacy_color happens to be -- see
+    // fb_scroll_if_needed() for the artifact this avoids.
+    uint8_t blank = make_color(VGA_LIGHT_GREY, CONSOLE_DEFAULT_BG);
     for (size_t x = 0; x < VGA_WIDTH; x++)
-        buf[(VGA_HEIGHT - 1) * VGA_WIDTH + x] = make_entry(' ', legacy_color);
+        buf[(VGA_HEIGHT - 1) * VGA_WIDTH + x] = make_entry(' ', blank);
     row = VGA_HEIGHT - 1;
 }
 
@@ -339,7 +350,12 @@ static void fb_clear(void) {
 
 static void fb_scroll_if_needed(void) {
     if (row < console_rows) return;
-    gfx_scroll_up(CELL_H, palette_rgb(cur_bg));
+    // CONSOLE_DEFAULT_BG, not cur_bg: the row scrolling in is blank, and
+    // filling it with a transient colour paints a full-width band that
+    // no text asked for and that later text on that row only partly
+    // repaints. That is what left ragged red stripes across the lines
+    // after a panic banner.
+    gfx_scroll_up(CELL_H, palette_rgb(CONSOLE_DEFAULT_BG));
     row = console_rows - 1;
 }
 
@@ -751,6 +767,43 @@ void vga_putc(char c) {
         return;
     }
     sb_snap_to_live();
+
+    // A newline while a non-default background is set PADS TO THE END OF
+    // THE LINE with spaces instead of just moving down, so a coloured
+    // run reads as one full-width band (a panic banner) rather than as a
+    // ragged highlight whose right edge depends on the text length.
+    //
+    // Done here, in the one funnel, so the padding goes through
+    // sb_record() as well -- a fix applied inside fb_putc() alone would
+    // look right until the user pressed PageUp and the line redrew from
+    // scrollback without it.
+    //
+    // The padding REPLACES the newline: writing to the last column wraps
+    // (col back to 0, row++), which is the same move, so emitting '\n'
+    // as well would leave a blank line behind.
+    if (c == '\n' && cur_bg != CONSOLE_DEFAULT_BG) {
+        // The count is computed ONCE, before any space is written.
+        // Looping on `col < width` instead does not terminate: writing
+        // the last column wraps col back to 0, which satisfies the
+        // condition again, and the console fills solid.
+        size_t width = fb_mode ? console_cols : VGA_WIDTH;
+        size_t pad = width - col;
+        for (size_t i = 0; i < pad; i++) {
+            sb_record(' ');
+            if (fb_mode) fb_putc(' ');
+            else legacy_putc(' ');
+        }
+        // The screen's line break came from the wrap above, but
+        // scrollback's has to be recorded explicitly -- sb_record('\n')
+        // is what calls sb_start_line(). Without it every padded line
+        // accumulates into ONE scrollback line, and a PageUp/PageDown
+        // round trip redraws the banner as a single stripe with four of
+        // its five lines missing.
+        sb_record('\n');
+        gfx_flush();
+        return;
+    }
+
     sb_record(c);
     if (fb_mode) fb_putc(c);
     else legacy_putc(c);
