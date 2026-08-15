@@ -124,8 +124,14 @@ def run_one(name, script, disk_src, timeout, keep_logs, slot):
                    capture_output=True)
     # --reflink=auto: a copy-on-write clone where the filesystem
     # supports it, a plain copy where it doesn't. Never --reflink=always,
-    # which fails outright on ext4.
-    subprocess.run(["cp", "--reflink=auto", disk_src, img], cwd=REPO, check=True)
+    # which fails outright on ext4. --sparse=always because disk.img is
+    # ~4 MB of data in a 9 GB sparse file, and the destination is
+    # usually /tmp on a tmpfs -- filling the holes in would cost 9 GB of
+    # RAM per tool (`cp` defaults to --sparse=auto and gets this right
+    # already; stating it means a future edit cannot quietly lose it,
+    # which is exactly how damage_hunt.py's shutil.copyfile did).
+    subprocess.run(["cp", "--reflink=auto", "--sparse=always", disk_src, img],
+                   cwd=REPO, check=True)
 
     started = time.time()
     try:
@@ -142,6 +148,14 @@ def run_one(name, script, disk_src, timeout, keep_logs, slot):
     finally:
         subprocess.run([sys.executable, vm] + inst + ["stop"], cwd=REPO,
                        capture_output=True)
+        # The per-tool image has served its purpose once the VM is
+        # stopped. Left behind, a full run leaves thirteen of them in
+        # /tmp -- sparse, so cheap on disk, but that is RAM on a tmpfs
+        # and they are stale the moment `make iso` reseeds disk.img.
+        try:
+            os.unlink(img)
+        except OSError:
+            pass
 
     if keep_logs:
         with open(os.path.join(keep_logs, f"{name}.log"), "w") as f:
