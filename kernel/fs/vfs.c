@@ -141,9 +141,37 @@ static void probe_and_mount(int allow_format) {
     mount_backend(fallback);
 }
 
+// The directories the rest of the OS assumes exist on whatever is
+// mounted. Both mkdirs are no-ops if the directory is already there,
+// so this is safe to call after every mount, which is the point:
+//
+//   /etc  the config-file convention (see api/etc_config.h). Anything
+//         calling etc_config_set() before this has run writes nothing
+//         and reports failure -- a persisted timezone or font size
+//         silently stops persisting.
+//   /tmp  the one directory POSIX actually mandates by name (it says
+//         almost nothing else about layout -- see
+//         docs/filesystem-layout.md). Scratch space has to exist on
+//         any disk, including one this build never seeded, which is
+//         why it is created rather than seeded. Deliberately NOT
+//         emptied here: fs_delete() refuses non-empty directories on
+//         purpose and there is no recursive delete (see
+//         docs/decisions.md), so clearing it needs a real directory
+//         walk that nothing has needed yet.
+//
+// This lives beside the mount rather than in kernel_main(), where it
+// used to be, because a mount is not only a boot-time event: the
+// `fsformat` command reformats and remounts a live disk, and that path
+// left both directories missing until the next reboot.
+static void ensure_layout(void) {
+    fs_mkdir("/etc");
+    fs_mkdir("/tmp");
+}
+
 void fs_init(void) {
     ata_init(); // the disk comes up once, here -- before any backend is probed
     probe_and_mount(1);
+    ensure_layout();
 }
 
 int fs_is_persistent(void) {
@@ -184,7 +212,12 @@ int fs_format_backend(const char *name) {
     // written superblock is what should claim the disk. No formatting
     // on this pass: it just happened.
     probe_and_mount(0);
-    return g_fs == target && g_persistent;
+    if (!(g_fs == target && g_persistent)) return 0;
+    // Same layout a boot would leave behind. Without this the disk came
+    // back with no /etc and no /tmp until the next reboot, so the very
+    // next `timezone` or `font` change silently failed to persist.
+    ensure_layout();
+    return 1;
 }
 
 int fs_touch(const char *path) {

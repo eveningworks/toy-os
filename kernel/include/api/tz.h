@@ -29,8 +29,15 @@ const char *tz_city_name(int index);
 // tz_init() loads a saved choice or tz_set_index() changes it).
 int tz_current_index(void);
 
-// Selects city `index` and persists the choice to disk (see fs.h) so it
-// survives a reboot. Returns 1 on success, 0 if `index` is out of range.
+// Selects city `index` and persists the choice to disk (see fs.h) so
+// it survives a reboot. Returns an `enum setting_result`
+// (etc_config.h): SETTING_INVALID if `index` is out of range (nothing
+// applied), SETTING_SAVED if the choice was applied AND written, or
+// SETTING_UNSAVED if it was applied in memory but the write failed --
+// which this used to report as plain success, so `timezone Helsinki`
+// on a filesystem with no /etc claimed to have set a timezone that did
+// not survive the next reboot. Both non-zero values mean "applied", so
+// an `if (!tz_set_index(i))` caller still reads correctly.
 int tz_set_index(int index);
 
 // Case-sensitive lookup of a city by its tz_city_name() -- the shell's

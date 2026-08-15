@@ -407,10 +407,13 @@ int tz_current_index(void) {
 }
 
 int tz_set_index(int index) {
-    if (index < 0 || index >= tz_city_count_loaded) return 0;
+    if (index < 0 || index >= tz_city_count_loaded) return SETTING_INVALID;
+    // The selection applies either way -- it is in memory and every
+    // rtc_read_local() honours it from here on. Only the PERSISTENCE
+    // can fail, so that is the only part of the answer worth splitting.
     current_index = index;
-    etc_config_set(TZ_CONFIG_FILE, TZ_CONFIG_KEY, TZ_CITIES[index].name);
-    return 1;
+    return etc_config_set(TZ_CONFIG_FILE, TZ_CONFIG_KEY, TZ_CITIES[index].name)
+               ? SETTING_SAVED : SETTING_UNSAVED;
 }
 
 int tz_find_by_name(const char *name) {

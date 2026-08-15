@@ -36,6 +36,7 @@ void font_config_init(void) {
     if (want != FONT_SIZE_COUNT) gfx_set_font_size(want);
 }
 
-void font_config_save(enum font_size size) {
-    etc_config_set(FONT_CONFIG_FILE, FONT_CONFIG_KEY, gfx_font_size_name(size));
+int font_config_save(enum font_size size) {
+    return etc_config_set(FONT_CONFIG_FILE, FONT_CONFIG_KEY, gfx_font_size_name(size))
+               ? SETTING_SAVED : SETTING_UNSAVED;
 }

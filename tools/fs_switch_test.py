@@ -4,7 +4,9 @@
 Boots a COPY of disk.img and walks the whole multi-backend story:
 
   1. the build's disk.img mounts as what its magic says (tfs3 today)
-  2. `fsformat tfs2 confirm` live-switches to tfs2; writes work there
+  2. `fsformat tfs2 confirm` live-switches to tfs2; writes work there,
+     and the remount leaves /etc and /tmp behind so a setting written
+     right afterwards actually persists
   3. a REBOOT re-probes and still picks tfs2, and the file survived
   4. `fsformat tfs3 confirm` switches back; writes work; fsck is clean
   5. a final reboot re-probes tfs3 and the file survived
@@ -75,6 +77,23 @@ def main():
         out = vm_exec(f"fsformat {other} confirm")
         check(f"fsformat {other} reports success", "active filesystem is now " + other in out, out[-200:])
         check(f"df agrees ({other})", active_fs() == other)
+        # The layout a mount is supposed to leave behind. `fsformat`
+        # reformats and remounts a LIVE disk, and that path used to skip
+        # kernel_main()'s mkdirs entirely -- so /etc and /tmp were gone
+        # until the next reboot and the next `timezone`/`fontsize`
+        # silently persisted nothing while reporting success. Asserted
+        # with `stat`, a builtin: a freshly formatted image has no /bin,
+        # so `ls` is not available to a test at this point.
+        out = vm_exec("stat /etc", "stat /tmp")
+        check("live reformat leaves /etc and /tmp behind",
+              out.count("type:     directory") >= 2, out[-300:])
+        # The assertion that matters more than the directories existing:
+        # a setting written after the reformat actually lands on disk.
+        # A missing /etc failed this while the command still said "set".
+        out = vm_exec("timezone Helsinki", "cat /etc/toyos.conf")
+        check("a setting persists after a live reformat",
+              "timezone=helsinki" in out and "NOT saved" not in out, out[-300:])
+
         vm_exec("write /switch.txt made-on-" + other)
         out = vm_exec("cat /switch.txt")
         check("write+read works on " + other, "made-on-" + other in out, out[-200:])

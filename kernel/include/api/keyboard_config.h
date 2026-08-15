@@ -22,6 +22,9 @@ void keyboard_config_init(void);
 // same split as tz_set_index()/font_config_save(); the shell's
 // `keyboard` command calls keyboard_layout_load() itself and this
 // separately.
-void keyboard_config_save(const char *name);
+// Returns an `enum setting_result` (etc_config.h): SETTING_INVALID for
+// an empty name, SETTING_SAVED if written, SETTING_UNSAVED if the write
+// failed.
+int keyboard_config_save(const char *name);
 
 #endif

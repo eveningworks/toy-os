@@ -23,6 +23,10 @@ void font_config_init(void);
 // (applies); callers that want to change the active size call
 // gfx_set_font_size() themselves and this separately (see the shell's
 // `fontsize` command).
-void font_config_save(enum font_size size);
+// Returns an `enum setting_result` (etc_config.h): SETTING_SAVED if
+// the key was written, SETTING_UNSAVED if `size` was accepted but the
+// write failed -- callers are expected to SAY SO rather than report an
+// unqualified success, see the shell's `fontsize`.
+int font_config_save(enum font_size size);
 
 #endif

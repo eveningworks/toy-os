@@ -33,4 +33,26 @@ int etc_config_get(const char *path, const char *key, char *out, uint32_t out_si
 // the underlying fs_write() failed.
 int etc_config_set(const char *path, const char *key, const char *value);
 
+// What a "change a setting and persist it" call actually managed to do
+// -- tz_set_index(), font_config_save(), cursor_config_save() and
+// keyboard_config_save() all return this.
+//
+// It exists because those four used to conflate "applied" with
+// "saved": three returned void and tz_set_index() returned 1 for a
+// valid index whether or not the write landed, so `timezone Helsinki`
+// on a filesystem with no /etc printed "Timezone set to helsinki." and
+// persisted nothing. Applying and persisting are two outcomes and a
+// caller that reports one as the other is lying to the user; a setting
+// silently not surviving a reboot is close to the worst way to find
+// that out.
+//
+// SETTING_UNSAVED is deliberately non-zero, so the pre-existing
+// `if (!tz_set_index(i))` idiom still reads as "did it apply?" and
+// only callers that want the finer answer have to look for it.
+enum setting_result {
+    SETTING_INVALID = 0, // bad argument -- nothing applied, nothing written
+    SETTING_SAVED   = 1, // applied, and written to its /etc file
+    SETTING_UNSAVED = 2, // applied in memory, but the write FAILED
+};
+
 #endif

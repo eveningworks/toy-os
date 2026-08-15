@@ -870,24 +870,6 @@ rediscover the setup -- a seed, a command, a click sequence. And
 completed *features* stay struck through above because the milestone
 history is worth reading, but a fixed papercut is just noise.
 
-- [ ] **A 205px damage violation on a window drag** (the one survivor
-      of the damage-sweep family; the old 20px tick-frame entry that
-      used to live here was root-caused to `gfx_set_clip_rect()`
-      treating an empty rect as *no* clip and is fixed -- see
-      `CHANGELOG.md`'s `[Unreleased]`; note its recorded "inside
-      Terminal's content" detail was WRONG, it was Notepad's resize
-      grip). Reproduce: `python3 tools/damage_sweep.py --random 50
-      --seed 5` -- fires on random step 47, "205 px changed outside the
-      damage rect, first at (251,166); damage was (261,47 249x322)",
-      on `[47] drag Calculator by (-180,200)`. Known so far:
-      pre-existing (reproduced identically on 572f5a4, before the
-      empty-clip fix); deterministic for this seed; the damage box is
-      NARROWER than Calculator itself (249 wide vs the window's 260)
-      and the first differing pixel sits 10px LEFT of the box's x0,
-      which smells like one drag frame damaging a rect that
-      disagrees with where the window was actually drawn. Not
-      diagnosed further -- measure before fixing, per the entry this
-      one replaces.
 - [ ] **Control Panel applets can't show hover.** `struct applet`'s
       `draw(x, y, w, h)` doesn't carry the cursor position, so the
       timezone applet passes `hovered = -1` to `ui_radio_list_draw()`

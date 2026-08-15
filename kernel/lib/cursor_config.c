@@ -18,7 +18,8 @@ void cursor_config_init(void) {
     if (vga_cursor_style_parse(value, &want)) vga_set_cursor_style(want);
 }
 
-void cursor_config_save(enum vga_cursor_style style) {
-    if (style >= VGA_CURSOR_STYLE_COUNT) return;
-    etc_config_set(CURSOR_CONFIG_FILE, CURSOR_CONFIG_KEY, VGA_CURSOR_STYLE_NAMES[style]);
+int cursor_config_save(enum vga_cursor_style style) {
+    if (style >= VGA_CURSOR_STYLE_COUNT) return SETTING_INVALID;
+    return etc_config_set(CURSOR_CONFIG_FILE, CURSOR_CONFIG_KEY, VGA_CURSOR_STYLE_NAMES[style])
+               ? SETTING_SAVED : SETTING_UNSAVED;
 }

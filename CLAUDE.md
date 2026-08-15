@@ -486,8 +486,19 @@ technical conventions below:
   tables' original images in memory across it -- see
   `docs/decisions.md`'s truncation entry before touching either.
 - **`/etc` on the persistent filesystem is the config-file convention**
-  (`kernel_main()` creates it right after `fs_init()`, before anything
-  that might read a config file runs). Don't hand-roll a parser for a
+  (`vfs.c`'s `ensure_layout()` creates it, and `/tmp`, after EVERY
+  mount -- `fs_init()` at boot and `fs_format_backend()` when
+  `fsformat` reformats a live disk. It used to be two `fs_mkdir()`
+  calls in `kernel_main()`, which is correct exactly once per boot and
+  left a reformatted disk with neither directory; see
+  `docs/decisions.md`. Anything that belongs to "having a filesystem"
+  rather than "booting" goes beside the mount). And **a setting says
+  whether it actually PERSISTED**: `tz_set_index()` and the three
+  `*_config_save()`s return `enum setting_result`
+  (`SETTING_INVALID`/`SAVED`/`UNSAVED`) and their shell commands print
+  `(NOT saved -- ...)` rather than an unqualified success, because
+  reporting "applied" as "saved" is a lie the user only finds after a
+  reboot. Don't hand-roll a parser for a
   new setting -- read/write it through `kernel/include/api/etc_config.h`'s
   `etc_config_get()`/`etc_config_set()` (name=value lines, `#` comments,
   see `kernel/lib/etc_config.c`'s top comment for the exact format).

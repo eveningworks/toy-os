@@ -53,6 +53,8 @@ there when you add an entry, or the index quietly stops being one.
 **Filesystem & storage**
 
 - [Filesystem is one active backend, not mount points](#filesystem-is-one-active-backend-not-mount-points)
+- [`/etc` and `/tmp` are created by the MOUNT, not by `kernel_main()`](#etc-and-tmp-are-created-by-the-mount-not-by-kernel_main)
+- [A setting reports whether it PERSISTED, separately from whether it applied](#a-setting-reports-whether-it-persisted-separately-from-whether-it-applied)
 - [No recursive delete](#no-recursive-delete)
 - [Persistent filesystem is write-through with a single-slot journal](#persistent-filesystem-is-write-through-with-a-single-slot-journal)
 - [File timestamps: broken-down local time on disk (TFS2), epoch seconds at the API since M15](#file-timestamps-broken-down-local-time-on-disk-tfs2-epoch-seconds-at-the-api-since-m15)
@@ -3566,6 +3568,45 @@ Verified live, not only by reading bits back: a one-byte write to
 probe is not committed -- a ring-0 fault ends the boot, so it cannot
 live in a suite -- see CHANGELOG.md's `[Unreleased]` entry for how to
 reproduce it in two lines.
+
+## `/etc` and `/tmp` are created by the MOUNT, not by `kernel_main()`
+
+`ensure_layout()` in `kernel/fs/vfs.c` makes both, and it is called
+from `fs_init()` and from `fs_format_backend()`. They used to be two
+`fs_mkdir()` calls on the line after `fs_init()` in `kernel_main()`,
+which is correct exactly once per boot and wrong the moment anything
+else mounts a filesystem -- `fsformat` reformats and remounts a live
+disk and never goes near that line, so it left a volume with neither
+directory until the next reboot.
+
+The general shape is worth keeping: **if a step belongs to "having a
+filesystem" rather than to "booting", it belongs beside the mount.**
+What makes it cheap is that `fs_mkdir()` is a no-op on an existing
+directory, so the rule can be "after every mount" with no conditions
+to get wrong. See CHANGELOG.md's `[Unreleased]` entry.
+
+## A setting reports whether it PERSISTED, separately from whether it applied
+
+`tz_set_index()`, `font_config_save()`, `cursor_config_save()` and
+`keyboard_config_save()` return `enum setting_result`
+(`kernel/include/api/etc_config.h`): `SETTING_INVALID`,
+`SETTING_SAVED`, `SETTING_UNSAVED`. Three values rather than a bool
+because a caller has three different things to say -- and the four
+shell commands do say them, through one shared `print_save_result()`.
+
+This replaced three `void` returns and one that answered a different
+question (`tz_set_index()` returned 1 for a valid index whether or not
+the write landed). The symptom was `timezone Helsinki` printing
+`Timezone set to helsinki.` on a filesystem with no `/etc` and writing
+nothing -- a lie the user only discovers after a reboot. Note the
+writer was never at fault: `etc_config_set()` correctly returned 0 to
+callers that did not look, which is the reusable lesson. **A function
+that can fail and whose caller returns `void` is a silent failure
+waiting for a reason to happen.**
+
+`SETTING_UNSAVED` is deliberately non-zero so the existing
+`if (!tz_set_index(i))` idiom still reads as "did it apply?" -- adding
+a distinction should not force every caller to care about it.
 
 ## An unreadable superblock is not a foreign disk -- refuse to format, don't guess
 

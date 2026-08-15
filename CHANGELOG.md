@@ -120,6 +120,74 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   standalone one needs an interactive-stdin story first).
 
 ### Fixed
+- **`fsformat` left the disk with no `/etc` and no `/tmp` until the next
+  reboot.** Both were created by `kernel_main()` on the line after
+  `fs_init()`, but a mount is not only a boot-time event: `fsformat`
+  reformats and remounts a live disk through `fs_format_backend()`,
+  which never passes through that line. The result was a freshly
+  formatted volume missing the two directories the rest of the OS
+  assumes -- so the very next `timezone` or `fontsize` had nowhere to
+  write, and (see the next entry) said nothing about it.
+
+  Fixed by moving them next to the mount instead: `ensure_layout()` in
+  `kernel/fs/vfs.c`, called from `fs_init()` and from
+  `fs_format_backend()` after a successful remount. Both `fs_mkdir()`s
+  are no-ops when the directory already exists, which is what makes
+  "call it after every mount" the simple answer rather than a set of
+  conditions. `kernel_main()` lost its two mkdirs and gained a pointer.
+
+  Verified live -- `fsformat tfs2 confirm`, then `stat /etc`, `stat
+  /tmp` and a `timezone Helsinki` that now really lands in
+  `/etc/toyos.conf` -- with the positive control (the `ensure_layout()`
+  call removed) reproducing the original bug exactly. Two checks added
+  to `tools/fs_switch_test.py`, now 14, using `stat` rather than `ls`:
+  a freshly formatted image has no `/bin`, so `ls` is not a program
+  a test can run at that point.
+- **A setting that failed to persist still reported success.**
+  `timezone Helsinki` on a filesystem with no `/etc` printed `Timezone
+  set to helsinki.` and wrote nothing at all. Nothing was broken about
+  the writer: `etc_config_set()` correctly returned 0, and
+  `tz_set_index()` ignored it while `font_config_save()`,
+  `cursor_config_save()` and `keyboard_config_save()` all returned
+  `void`. Applying a setting and persisting it are two outcomes, and
+  reporting the first as both is the kind of lie the user only
+  discovers after a reboot.
+
+  All four now return `enum setting_result` (`api/etc_config.h`):
+  `SETTING_INVALID` (bad argument, nothing applied), `SETTING_SAVED`,
+  or `SETTING_UNSAVED` (applied in memory, write failed). The three-way
+  answer is the point -- "you gave me nonsense" and "I could not write
+  it down" need different words. `SETTING_UNSAVED` is deliberately
+  non-zero so the pre-existing `if (!tz_set_index(i))` idiom still
+  reads as "did it apply?". The four shell commands print through one
+  shared `print_save_result()` so the wording can't drift between them:
+  `Timezone set to tokyo (NOT saved -- /etc unwritable, see dmesg).`
+
+  Found while verifying the `fsformat` fix above, which is the useful
+  part of the story: the reformat bug's real damage was not the missing
+  directories, it was that nothing downstream noticed them missing.
+  Four KTESTs in a new `kernel/lib/etc_config_test.c` cover it (round
+  trip, in-place key replacement, a write under a missing directory
+  returning 0, all four savers reaching the real filesystem, and
+  `SETTING_INVALID` kept distinct from `SETTING_UNSAVED`), and the
+  behaviour was confirmed live by emptying and removing `/etc` on a
+  running system.
+- **The 205px damage violation is gone, and its known-issue entry is
+  deleted.** `docs/roadmap.md` recorded it as reproducing on
+  `tools/damage_sweep.py --random 50 --seed 5`, random step 47, `drag
+  Calculator by (-180,200)`. Re-measured before touching anything, per
+  that list's own rule: step 47 of that seed is still exactly that
+  interaction -- the walk has not diverged -- and it now produces no
+  violation, across three runs. Seeds 1, 2, 3, 7 and 11 were swept too,
+  ~500 interactions in total, all clean.
+
+  The harness was proved to be awake rather than assumed: with one
+  `wm_damage_rect()` call deliberately removed from `wm.c`'s raise
+  path, the same sweep reported three distinct violations. What is NOT
+  known is which change fixed it -- bisecting from the `572f5a4` the
+  entry names would have cost more than the answer is worth, and the
+  entry is deleted rather than amended because a corrected known-issue
+  entry still implies something is broken.
 - **`tools/seed_disk.py` would have reformatted a v2 image.** Its probe
   hardcoded TFS3 version 1, so a v2 `disk.img` read as BLANK and the
   seed step tried to format it -- caught only because the writer tool

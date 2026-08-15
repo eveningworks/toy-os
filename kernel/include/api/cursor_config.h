@@ -17,6 +17,10 @@
 // is absent or names a style that doesn't exist.
 void cursor_config_init(void);
 
-void cursor_config_save(enum vga_cursor_style style);
+// Persists `style` as /etc/toyos.conf's "cursor_style=<name>" key.
+// Returns an `enum setting_result` (etc_config.h): SETTING_INVALID for
+// an out-of-range style, SETTING_SAVED if written, SETTING_UNSAVED if
+// the write failed.
+int cursor_config_save(enum vga_cursor_style style);
 
 #endif

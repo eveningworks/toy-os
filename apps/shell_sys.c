@@ -265,6 +265,19 @@ void cmd_time(void) {
 // LosAngeles` both work. Still an exact match otherwise -- no prefixes,
 // no fuzzy matching. `color <name>` remains case-sensitive; nothing has
 // asked for it, and its names are typed lowercase.
+// One place for the "...and it did not actually persist" tail every
+// setting command needs, so the wording can't drift between four of
+// them. Prints nothing on a clean save. The settings themselves are
+// applied either way -- this is only about surviving a reboot, and
+// saying so beats an unqualified success message that turns out to be
+// half true only after the machine is restarted (see etc_config.h's
+// enum setting_result for the bug that prompted it).
+static void print_save_result(int r) {
+    if (r == SETTING_UNSAVED) {
+        vga_write(" (NOT saved -- /etc unwritable, see dmesg)");
+    }
+}
+
 void cmd_timezone(const char *args) {
     if (args && k_strlen(args) > 0) {
         int idx = tz_find_by_name(args);
@@ -272,9 +285,10 @@ void cmd_timezone(const char *args) {
             vga_write("Unknown timezone. Run `timezone` with no arguments to see the list.\n");
             return;
         }
-        tz_set_index(idx);
+        int r = tz_set_index(idx);
         vga_write("Timezone set to ");
         vga_write(tz_city_name(idx));
+        print_save_result(r);
         vga_write(".\n");
         return;
     }
@@ -320,9 +334,10 @@ void cmd_timezone(const char *args) {
         vga_write("Not a valid choice.\n");
         return;
     }
-    tz_set_index(choice - 1);
+    int r = tz_set_index(choice - 1);
     vga_write("Timezone set to ");
     vga_write(tz_city_name(choice - 1));
+    print_save_result(r);
     vga_write(".\n");
 }
 
@@ -988,9 +1003,10 @@ void cmd_cursor(const char *args) {
     }
 
     vga_set_cursor_style(want);
-    cursor_config_save(want);
+    int r = cursor_config_save(want);
     vga_write("cursor style set to ");
     vga_write(VGA_CURSOR_STYLE_NAMES[want]);
+    print_save_result(r);
     vga_write("\n");
 }
 
@@ -1164,9 +1180,10 @@ void cmd_fontsize(const char *args) {
     }
     gfx_set_font_size(want);
     vga_reflow(); // recompute console_cols/rows for the new cell size and clear
-    font_config_save(want); // persist to /etc/fontsize so it survives a reboot
+    int r = font_config_save(want); // persist to /etc/toyos.conf so it survives a reboot
     vga_write("Font size set to ");
     vga_write(gfx_font_size_name(want));
+    print_save_result(r);
     vga_write(".\n");
 }
 
@@ -1183,7 +1200,7 @@ void cmd_keyboard(const char *args) {
         return;
     }
     int found = keyboard_layout_load(args);
-    keyboard_config_save(keyboard_layout_current());
+    int r = keyboard_config_save(keyboard_layout_current());
     if (!found) {
         vga_write("keyboard: '");
         vga_write(args);
@@ -1194,6 +1211,7 @@ void cmd_keyboard(const char *args) {
     }
     vga_write("Keyboard layout set to ");
     vga_write(keyboard_layout_current());
+    print_save_result(r);
     vga_write(".\n");
 }
 
