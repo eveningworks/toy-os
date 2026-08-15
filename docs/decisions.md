@@ -1189,7 +1189,7 @@ one gate had a differently-shaped filter the others didn't.** No
 negative as `char` -- `gfx_draw_char()`'s old `c < 32 || c > 126`
 range check and five `key >= 32 && key < 127`-shaped "is this a
 printable char" gates across `apps/` (terminal, notepad, widgets
-textfield, editor) and `userland/echo.c` all
+textfield, editor) and `userland/tests/echo.c` all
 silently rejected Nordic letters before this build. `keyboard.h`'s new
 `IS_PRINTABLE_KEY()` macro (and `font_ttf_glyph_index()` in gfx.c,
 which takes the codepoint as `int`/`unsigned char` rather than relying
@@ -1476,7 +1476,7 @@ kernel only for the control-register bits -- is architecturally tidier
 but means two mechanisms and, worse, a second copy of the decoding
 (the extended family/model combining rules, leaf 4's `(value - 1)`
 encodings). This codebase already has that mistake on display:
-`userland/lspci.c` carries "its own class/subclass -> name table"
+`userland/bin/lspci.c` carries "its own class/subclass -> name table"
 because `pci_class_name()` is kernel code, and that copy can drift.
 The feature *name* table is shared instead, via `api/cpu_features.h` --
 a header both sides include, deliberately kept out of `kapi.h` so the
@@ -1883,7 +1883,7 @@ the plan got right and is still true: getting a binary's bytes onto
 in-guest compiler -- see the next entry for which of the plan's two
 options (`bootstrap-install` vs. a host-side writer tool) was picked,
 and why. See `CHANGELOG.md`'s `[Unreleased]` entry for the full
-implementation (`SYS_PCI_COUNT`/`SYS_PCI_INFO`, `userland/lspci.c`,
+implementation (`SYS_PCI_COUNT`/`SYS_PCI_INFO`, `userland/bin/lspci.c`,
 `elf_run.c`, `install_bin_binaries()`).
 
 ## `/bin` binaries: boot-time bootstrap-install now, a host-side TFS2 writer tool later
@@ -2225,7 +2225,7 @@ the same "second real caller" bar `apps/ui/` holds itself to. It is
 listed in `docs/roadmap.md`.
 
 Why `ugfx` implies `shared/geom shared/fixed` via a `UGFX_OBJS` group
-rather than a rule in the pattern: `userland/ugfx.h` includes the shared
+rather than a rule in the pattern: `userland/ui/ugfx.h` includes the shared
 `geom.h`, so the pair genuinely travels with it -- but writing the group
 out keeps what a binary links readable, where a rule inside the link
 line would hide it.
@@ -2656,7 +2656,7 @@ far.
 
 ## Ring-3 clients draw for themselves, and the font is shared read-only
 
-Two decisions that go together, both in `userland/ugfx.c`.
+Two decisions that go together, both in `userland/ui/ugfx.c`.
 
 **No drawing syscalls.** A client renders into its own window buffer
 with plain arithmetic -- there is no "draw text" or "fill rect" syscall,
@@ -2693,11 +2693,11 @@ same letters visibly jagged).
 
 The boundary this stops at: `ugfx` is a drawing runtime, not a widget
 toolkit. The widgets Calculator needs were ported separately into
-`userland/uui.c` -- see the next entry.
+`userland/ui/uui.c` -- see the next entry.
 
 ## Calculator's engine is shared source compiled twice, not copied
 
-`userland/calculator.c` is a port of `apps/calculator.c`, but
+`userland/gui/calculator.c` is a port of `apps/calculator.c`, but
 `apps/calc_engine.c` is NOT ported. The same file is compiled a second
 time with `USERLAND_CFLAGS` (Makefile, `build/userland/shared/`) and
 linked into the ring-3 binary. `kernel/lib/string.c` and `knum.c` ride
@@ -2720,7 +2720,7 @@ variable so no other userland program gains the ability to include
 `apps/` headers.
 
 What was deliberately NOT shared: the presentation layer.
-`ui_button_group` became `uui_button_group` (`userland/uui.c`), because
+`ui_button_group` became `uui_button_group` (`userland/ui/uui.c`), because
 the kernel version draws through `gfx_*` straight to the framebuffer
 and takes its events as WM callbacks — neither of which exists in ring
 3. That is a genuine port, and its behaviour (commit-on-release,
@@ -2895,7 +2895,7 @@ are worth knowing if this is ever revisited:
   `kernel/core/`), so the TLS-based default would dereference an
   unconfigured segment. `global` instead reads a plain
   `extern uintptr_t __stack_chk_guard` (`kernel/lib/stack_protector.c`
-  for the kernel, `userland/stack_chk.c` for userland -- two separate
+  for the kernel, `userland/rt/stack_chk.c` for userland -- two separate
   symbols, two separate address spaces, no reason to share one).
   Building real TLS infrastructure just to use GCC's default guard
   would have been wildly disproportionate to what this milestone item
@@ -2923,7 +2923,7 @@ are worth knowing if this is ever revisited:
   other `run <name>` finishing, so nothing new was needed to "catch"
   it.
 - **Verifying it actually works needs `noinline` on the test's overflow
-  function.** `userland/stack_smash_test.c`'s first version called an
+  function.** `userland/tests/stack_smash_test.c`'s first version called an
   un-annotated `static void smash(void)` from `_start` -- at `-O2` GCC
   inlined it straight into `_start`, which moved the canary check to
   `_start`'s OWN epilogue, after `_start`'s later code (a "survived"
@@ -3332,12 +3332,12 @@ ends, a list has a first and last item whose boundaries mean something.
 
 Milestone 2's "NX bit enforcement" and "W^X on kernel + userspace
 mappings" roadmap items were done together for the *userspace* half
-only (`kernel/proc/elf.c`/`vmm.c`, `userland/link.ld`) -- deliberately
+only (`kernel/proc/elf.c`/`vmm.c`, `userland/rt/link.ld`) -- deliberately
 not touching `kernel/arch/x86_64/boot.asm`'s own flat 2MiB-huge-page identity
 map, which stays plain present+writable, no NX, no code/data split, on
 purpose. Giving the kernel itself real NX/W^X would need `linker.ld` to
 page-align `.text` away from `.rodata`/`.data`/`.bss` first (it
-currently doesn't, unlike `userland/link.ld` post this change) and
+currently doesn't, unlike `userland/rt/link.ld` post this change) and
 `pmm.c`'s frame-reservation logic to become section-aware instead of
 treating the whole kernel image as one blob -- a much larger, riskier
 change to a boot-critical path than userspace enforcement, which only
@@ -3354,7 +3354,7 @@ with zero call-site changes; only `kernel/proc/elf.c` (needs real
 per-segment control) and `kernel/proc/ring3_test.c` (its one
 hand-assembled code page) call the explicit-flags variant instead. See
 CHANGELOG.md's `[Unreleased]` entry for the full mechanics and the QMP
-verification (a purpose-built `userland/nx_test.c` that jumps into a
+verification (a purpose-built `userland/tests/nx_test.c` that jumps into a
 non-executable data page and confirms the CPU actually faults --
 `error_code=0x15` decodes to Present+User+Instruction-Fetch, not a
 generic unmapped-page fault).
@@ -3666,7 +3666,7 @@ A new process starts with the standard SysV layout on its stack --
 `argc` at `(%rsp)`, then `argv[]`, a NULL, then `envp` (empty; there is
 no environment yet, and no auxv, because nothing consumes one and
 inventing entries nobody reads is how an ABI accumulates fiction).
-`userland/crt0.asm` reads it and calls `main()`.
+`userland/rt/crt0.asm` reads it and calls `main()`.
 
 It used to arrive in RDI/RSI instead. That was toy-os's own convention,
 fine while every `_start` was a C function taking two parameters, and a
@@ -3694,7 +3694,7 @@ GUI client took a #GP a few instructions into `main()`, while every
 plain non-SSE program worked perfectly. Nothing about that symptom
 points at stack alignment until you notice which binaries are affected.
 
-See `CHANGELOG.md`'s `[Unreleased]` entry, `userland/crt0.asm`, and
+See `CHANGELOG.md`'s `[Unreleased]` entry, `userland/rt/crt0.asm`, and
 `kernel/proc/elf_run.c`'s `elf_build_argv_on_stack()`.
 
 ## A legacy ring-3 process needs its own RSP0 and must not be descheduled
@@ -3754,7 +3754,7 @@ happened" is only safe when nothing can legitimately be zero.
 
 ## The ring-3 terminal runs its own shell, not the kernel's
 
-`userland/terminal.c` links `userland/ush.c` -- a shell implemented over
+`userland/gui/terminal.c` links `userland/lib/ush.c` -- a shell implemented over
 syscalls -- rather than calling the kernel's `shell_dispatch()` through
 some new "run this command line" syscall.
 
@@ -3819,7 +3819,7 @@ each of those has more than one answer here:
 - `gfx.c` plots into the kernel's framebuffer, routing opaque pixels to
   `gfx_put_pixel()` and partial ones to `gfx_blend_pixel()`.
 - A ring-3 app plots into its own window surface, in a different address
-  space, through `userland/ugfx.c`.
+  space, through `userland/ui/ugfx.c`.
 - `uui_canvas` wraps that again to CLIP -- which is the case that
   justifies the design on its own, see the next entry.
 - `kernel/lib/geom_test.c` plots into an array and asserts on

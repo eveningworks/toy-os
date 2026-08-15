@@ -163,9 +163,30 @@ technical conventions below:
   third copy shipped a scrollbar that drew and did nothing. (`apps/widgets.h`/`.c` -- the
   single file all of `apps/ui/` was split out of -- no longer exists;
   see `docs/decisions.md`.)
-- **Every ring-3 program is just a `main()`.** `userland/crt0.asm`
+- **`userland/` is split by ROLE, and the build derives things from it
+  -- adding a program is a `.c` file and nothing else.** `rt/` (crt0,
+  libsys, stack_chk, link.ld), `ui/` (the GUI toolkit -- ugfx, utheme,
+  utext, the widgets; mirrors `apps/ui/` so a widget's kernel-side and
+  ring-3 versions sit at the same relative path), `lib/` (userland
+  libraries that aren't UI -- `ush`, the shell the ring-3 Terminal
+  links against), `gui/` (windowed apps), `bin/` (command-line
+  programs), `tests/` (single-mechanism diagnostics). **The first three
+  produce objects; the last three produce one ELF per `.c`, and the
+  directory also says where it seeds** -- `gui/` and `bin/` to `/bin`,
+  `tests/` to `/tests`, which is `docs/filesystem-layout.md`'s
+  distinction stated once instead of restated as a Makefile list that
+  could drift from it. Only three programs' on-disk names differ from
+  their file names (`SEED_NAME_*` in the Makefile: terminal->uterm,
+  gfxdemo->shapes, echo->echo_test). Note `tests/` holds windowed
+  diagnostics too (`winclient`, `uiclient`) -- the directories name a
+  DESTINATION, and those two exercise the windowing protocol rather
+  than being programs a user wants offered. **Includes are
+  path-qualified** (`#include "ui/ugfx.h"`, `#include "rt/sys.h"`) off
+  a single `-Iuserland`, so an include line says which layer it reaches
+  into. ELFs build to `build/userland/**`, not into the source tree.
+- **Every ring-3 program is just a `main()`.** `userland/rt/crt0.asm`
   provides `_start` (reads argc/argv off the stack per SysV, calls
-  `main`, passes its return to `sys_exit`) and `userland/sys.c` is
+  `main`, passes its return to `sys_exit`) and `userland/rt/sys.c` is
   libsys -- one typed wrapper per syscall. **Never hand-roll an
   `int $0x80` stub in a new program**; that duplication across twenty
   files is exactly what libsys replaced. `sys_call()` is the raw escape
@@ -188,15 +209,15 @@ technical conventions below:
   the frame allocator, which `apps/` can't reach), `wm_client.c` owns
   the window list, chrome, z-order and input routing, and they meet at
   a registered `struct win_server_ops` -- the same registry pattern as
-  `display_driver`. **A client draws with `userland/ugfx.c`**, not with
+  `display_driver`. **A client draws with `userland/ui/ugfx.c`**, not with
   syscalls -- there is no drawing syscall and there shouldn't be, since
   only the framebuffer is privileged, not drawing. The one thing a
   client can't produce for itself is the font, which
   `WIN_REQ_FONT` maps READ-ONLY out of the kernel's own tables rather
   than copying (one instance in memory, and client text can't drift
   from the desktop's when `font_size` changes). Widgets for a client
-  live in **`userland/uui.c`** (the ported `ui_button_group` and
-  friends) with colours in `userland/utheme.h` -- port more from
+  live in **`userland/ui/uui.c`** (the ported `ui_button_group` and
+  friends) with colours in `userland/ui/utheme.h` -- port more from
   `apps/ui/` only when a client actually needs them, the same bar
   `apps/ui/` holds itself to. **A file needed by both the kernel and a
   client is COMPILED TWICE, never copied** (`build/userland/shared/`,
@@ -205,8 +226,8 @@ technical conventions below:
   and kernel Calculators cannot disagree about arithmetic. Only
   freestanding files qualify.
 - **One process can run another and read its output**: `SYS_PIPE` +
-  `SYS_SPAWN` + `SYS_WAITPID`, wrapped by libsys. `userland/ush.c` is a
-  shell built on them and `userland/terminal.c` the ring-3 Terminal
+  `SYS_SPAWN` + `SYS_WAITPID`, wrapped by libsys. `userland/lib/ush.c` is a
+  shell built on them and `userland/gui/terminal.c` the ring-3 Terminal
   around it. Two rules to know. **The retry sentinel is `SYS_RETRY`
   (-2), never 0** -- 0 is a real answer for `read` (EOF), and using it
   as "ask again" made a pipe read report end-of-file the instant its
@@ -585,7 +606,7 @@ screenshot in the loop -- and when a click lands on the wrong thing, the
 log says which widget it actually hit. Read its top comment for the
 layout table and the log grammar before writing coordinates by hand.
 
-**Its ring-3 counterpart is "Shapes"** (`userland/gfxdemo.c`, `run
+**Its ring-3 counterpart is "Shapes"** (`userland/gui/gfxdemo.c`, `run
 shapes` from a Terminal) -- a rotating wireframe triangle and ellipse
 drawn with the shared geometry module, with the same one-line-per-state
 log grammar (`gfxdemo: aa off`) and a self-reported `gfxdemo: layout
@@ -1003,7 +1024,7 @@ repeated manual steps to be worth automating:
   is added to the app, which is exactly what happened when the dropdown
   and listbox rows landed mid-file.
 - **`calculator_client_test.py`** -- drives the RING-3 Calculator
-  (`userland/calculator.c`) and asserts on it (8 checks). Worth reading
+  (`userland/gui/calculator.c`) and asserts on it (8 checks). Worth reading
   for two techniques: it uses **no OCR** -- every check is a round trip
   (a state change must alter the display's pixels, and returning to the
   same logical state must restore them EXACTLY), which proves rendering
@@ -1029,8 +1050,8 @@ repeated manual steps to be worth automating:
   entry-shaped regex rather than `split()[-1]`; and a reference
   screenshot must park the caret first, since `load_file()` resets the
   cursor to 0 and a caret bar is a real pixel difference.
-- **`uiclient_test.py`** -- drives `userland/uiclient.c`, the ring-3
-  client that renders real text with `userland/ugfx.c`, and asserts on
+- **`uiclient_test.py`** -- drives `userland/tests/uiclient.c`, the ring-3
+  client that renders real text with `userland/ui/ugfx.c`, and asserts on
   it (8 checks: text actually rendered, the button drew, a click and a
   key each repaint, the unchanged label comes back identical, the close
   handshake works). Two things it encodes: "text was rendered" is
@@ -1040,9 +1061,9 @@ repeated manual steps to be worth automating:
   way), and **a client's `stdout` goes to the owning Terminal's
   scrollback, not the serial console** -- so `DebugConsole.logs()`
   can't see a client's own log lines even though a shell-spawned
-  process's are visible. Run it after touching `userland/ugfx.c` or
+  process's are visible. Run it after touching `userland/ui/ugfx.c` or
   the font-sharing path.
-- **`winclient_test.py`** -- drives `userland/winclient.c`, the ring-3
+- **`winclient_test.py`** -- drives `userland/tests/winclient.c`, the ring-3
   client that owns a real window on the desktop, and asserts the
   windowing protocol end to end (8 checks: the window appears in the
   WM's own list at the requested size, the client's pixels reach the
@@ -1066,7 +1087,7 @@ repeated manual steps to be worth automating:
   there, versus a continuously responsive desktop) -- do that again
   before trusting a clean run, same reasoning as `damage_sweep.py`'s
   `--positive-control`.
-- **`gfxdemo_test.py`** -- drives the Shapes demo (`userland/gfxdemo.c`)
+- **`gfxdemo_test.py`** -- drives the Shapes demo (`userland/gui/gfxdemo.c`)
   and asserts on its log + its pixels, 13 checks. Run it after touching
   `kernel/lib/geom.c`/`fixed.c`, `uui_canvas`, or anything a ring-3
   client draws with. Three of its checks encode reasoning worth

@@ -105,8 +105,8 @@ ISO = toy-os.iso
 # get a fresh, correctly-sized one.
 DISK_IMG = disk.img
 
-# userland test programs (see userland/README or kernel's "Process
-# isolation" README section) -- plain freestanding binaries, no
+# userland programs (see the "Process isolation" section of README.md)
+# -- plain freestanding binaries, no
 # kernel-specific flags like -mcmodel=kernel needed since these run in
 # ordinary ring-3 user space, not as part of the kernel image.
 # -mcmodel=large IS needed though: these link at VMM_USER_BASE
@@ -114,10 +114,10 @@ DISK_IMG = disk.img
 # string literal) from that address with a 32-bit relocation -- the
 # linker fails with "relocation truncated to fit" without this.
 # Same stack-canary flags as CFLAGS above, and the same reasoning --
-# see that comment. Every userland ELF needs userland/stack_chk.c's
-# __stack_chk_guard/__stack_chk_fail linked in now (see SEED_BINARIES
-# below and each $(FOO_ELF) rule) since GCC emits implicit references
-# to both from any protected function in any userland .c file.
+# see that comment. Every userland ELF needs userland/rt/stack_chk.c's
+# __stack_chk_guard/__stack_chk_fail linked in (see USERLAND_RT below)
+# since GCC emits implicit references to both from any protected
+# function in any userland .c file.
 # NOTE the deliberate asymmetry with CFLAGS above: userland ELFs are
 # built WITHOUT -mno-mmx/-mno-sse/-mno-sse2, so ring-3 code gets real
 # hardware floating point and SSE. The kernel (and apps/, which is ring
@@ -131,113 +131,64 @@ DISK_IMG = disk.img
 # interrupt vector rather than only where the scheduler swaps processes.
 USERLAND_CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-protector-guard=global -fno-pic -fno-pie \
                    -mno-red-zone -mcmodel=large \
-                   -Wall -Wextra -O2 -g -c $(API_INCLUDES) -MMD -MP
-HELLO_ELF = userland/hello.elf
-EXIT_TEST_ELF = userland/exit_test.elf
-WRITE_TEST_ELF = userland/write_test.elf
-WRITE_BAD_TEST_ELF = userland/write_bad_test.elf
-GUI_TEST_ELF = userland/gui_test.elf
-COUNTER_A_ELF = userland/counter_a.elf
-COUNTER_B_ELF = userland/counter_b.elf
-ECHO_ELF = userland/echo.elf
-WIN_TEST_ELF = userland/win_test.elf
-FILE_TEST_ELF = userland/file_test.elf
-NEWSYSCALLS_TEST_ELF = userland/newsyscalls_test.elf
-CRASH_TEST_ELF = userland/crash_test.elf
-SOCKET_TEST_ELF = userland/socket_test.elf
-LSPCI_ELF = userland/lspci.elf
-LS_ELF = userland/ls.elf
-STACK_SMASH_TEST_ELF = userland/stack_smash_test.elf
-NX_TEST_ELF = userland/nx_test.elf
-FPU_TEST_ELF = userland/fpu_test.elf
-FPU_RACE_ELF = userland/fpu_race.elf
-LSCPU_ELF = userland/lscpu.elf
-SPIN_TEST_ELF = userland/spin_test.elf
-EVENT_TEST_ELF = userland/event_test.elf
-WINCLIENT_ELF = userland/winclient.elf
-UICLIENT_ELF = userland/uiclient.elf
-CALCULATOR_ELF = userland/calculator.elf
-NOTEPAD_ELF = userland/notepad.elf
-PIPE_TEST_ELF = userland/pipe_test.elf
-UTERM_ELF = userland/terminal.elf
-GFXDEMO_ELF = userland/gfxdemo.elf
-
-# Which userland ELFs get seeded onto disk.img's /bin, and under what
-# name. The mapping is explicit because it isn't always mechanical --
-# echo.c is seeded as `echo_test`.
+                   -Wall -Wextra -O2 -g -c $(API_INCLUDES) -Iuserland -MMD -MP
+# --- userland source layout ------------------------------------------
 #
-# MUST be defined above `all:`: make expands a rule's prerequisite list
-# when it READS the rule, not when it runs it, so USERLAND_ELVES below
-# would expand to nothing if this lived further down the file (which is
-# exactly what happened while writing this -- `make all` silently built
-# no ELFs at all and still exited 0).
-# Real user-facing programs -> /bin. Kept deliberately short: /bin is
-# what a person sees when they type `ls /bin`, and what PATH offers
-# first. See docs/filesystem-layout.md.
-# Real user-facing programs -> /bin. The four ring-3 GUI apps here
-# (calculator, notepad, uterm, shapes) sat in /tests until the Start
-# menu learned to launch them: every client written during the ring-3
-# migration landed in /tests because that is where the first one went,
-# and nobody moved them once they stopped being experiments. A program
-# offered in the Start menu is user-facing by definition, and /tests is
-# explicitly "not things a user of the OS wants offered to them" --
-# see docs/filesystem-layout.md, including the note on cleaning up the
-# stale copies a move leaves behind on existing images.
-SEED_PROGRAMS = \
-	$(LSPCI_ELF):lspci \
-	$(LSCPU_ELF):lscpu \
-	$(LS_ELF):ls \
-	$(HELLO_ELF):hello \
-	$(CALCULATOR_ELF):calculator \
-	$(NOTEPAD_ELF):notepad \
-	$(UTERM_ELF):uterm \
-	$(GFXDEMO_ELF):shapes
+# userland/ is split by ROLE, and the split is load-bearing rather than
+# cosmetic -- the build derives what to build, and where to seed it,
+# from which directory a file is in:
+#
+#   rt/     the C runtime every ring-3 program starts through
+#           (crt0.asm, sys.c = libsys, stack_chk.c, link.ld)
+#   ui/     the GUI toolkit: ugfx, utheme, utext and the widgets.
+#           Mirrors apps/ui/, so a widget's kernel-side and ring-3
+#           versions sit at the same relative path while both exist.
+#   lib/    userland libraries that aren't UI (ush, the shell the
+#           ring-3 Terminal links against)
+#   gui/    windowed applications  -> seeded to /bin
+#   bin/    command-line programs  -> seeded to /bin
+#   tests/  single-mechanism diagnostics -> seeded to /tests
+#
+# LIBRARY directories (rt, ui, lib) produce objects only. PROGRAM
+# directories (gui, bin, tests) produce one ELF per .c file, with no
+# list to maintain -- which is the point. /bin vs /tests is a real
+# distinction docs/filesystem-layout.md enforces through
+# tools/check_layout.py, and it used to be restated here as two
+# hand-written lists plus 29 FOO_ELF variables that could drift from
+# them. Now the directory IS the statement.
+#
+# Note tests/ holds windowed diagnostics too (winclient, uiclient): the
+# directories name a DESTINATION, and those two exercise the windowing
+# protocol rather than being programs a user wants offered.
+USERLAND_PROGRAM_DIRS = gui bin tests
 
-# Test/demo binaries -> /tests. These are exercises of one kernel
-# mechanism each (a deliberate fault, a syscall round-trip, a window),
-# not things a user of the OS wants offered to them. They used to sit in
-# /bin alongside the real programs, where they outnumbered them 14 to 3.
-# /tests is deliberately NOT an FHS directory -- see
-# docs/filesystem-layout.md for why that exception was made rather than
-# using /usr/libexec.
-SEED_TESTS = \
-	$(EXIT_TEST_ELF):exit_test \
-	$(WRITE_TEST_ELF):write_test \
-	$(WRITE_BAD_TEST_ELF):write_bad_test \
-	$(GUI_TEST_ELF):gui_test \
-	$(COUNTER_A_ELF):counter_a \
-	$(COUNTER_B_ELF):counter_b \
-	$(ECHO_ELF):echo_test \
-	$(WIN_TEST_ELF):win_test \
-	$(FILE_TEST_ELF):file_test \
-	$(NEWSYSCALLS_TEST_ELF):newsyscalls_test \
-	$(CRASH_TEST_ELF):crash_test \
-	$(SOCKET_TEST_ELF):socket_test \
-	$(STACK_SMASH_TEST_ELF):stack_smash_test \
-	$(NX_TEST_ELF):nx_test \
-	$(FPU_TEST_ELF):fpu_test \
-	$(FPU_RACE_ELF):fpu_race \
-	$(SPIN_TEST_ELF):spin_test \
-	$(PIPE_TEST_ELF):pipe_test \
-	$(EVENT_TEST_ELF):event_test \
-	$(WINCLIENT_ELF):winclient \
-	$(UICLIENT_ELF):uiclient
+# Every program source, and the ELF it builds to. A new program is a .c
+# file in one of those directories and nothing else -- the same
+# reasoning as C_SOURCES's recursive discovery below.
+USERLAND_PROGRAMS = $(shell find $(addprefix userland/,$(USERLAND_PROGRAM_DIRS)) -name '*.c' 2>/dev/null | sort)
+USERLAND_ELVES    = $(patsubst userland/%.c,$(BUILD)/userland/%.elf,$(USERLAND_PROGRAMS))
 
-# Both lists together -- only USERLAND_ELVES below needs the union, so
-# it's derived rather than maintained as a third list.
-SEED_BINARIES = $(SEED_PROGRAMS) $(SEED_TESTS)
+# The handful of programs whose on-disk name isn't their file name --
+# three exceptions spelled once each, instead of a name column on every
+# entry of a 29-line list:
+#   terminal -> uterm      so it doesn't collide with the kernel-space
+#                          Terminal in the Start menu while both exist
+#   gfxdemo  -> shapes     the demo's user-facing name
+#   echo     -> echo_test  a syscall exercise, not a real echo(1)
+SEED_NAME_terminal = uterm
+SEED_NAME_gfxdemo  = shapes
+SEED_NAME_echo     = echo_test
 
-# Every ELF named in SEED_BINARIES, without the :diskname suffix -- what
-# `all` and `iso` actually have to build. Derived rather than listed
-# again, so the two can't drift.
-USERLAND_ELVES = $(foreach pair,$(SEED_BINARIES),$(firstword $(subst :, ,$(pair))))
+# The on-disk name for one ELF path: its override if it has one, else
+# its own basename.
+seed_name = $(or $(SEED_NAME_$(basename $(notdir $(1)))),$(basename $(notdir $(1))))
 
 # Seed directory for the writer tools' `sync` (reached through
 # tools/seed_disk.py, which probes the image's format) -- see the
 # `seed` target below and docs/decisions.md. Not committed as a
 # generic directory: SEED_DIR/sync/bin/* are build-generated copies of
-# each SEED_BINARIES entry, staged fresh by the `seed` target's own
-# recipe every build, not tracked source files.
+# each userland ELF, staged fresh by the `seed` target's own recipe
+# every build, not tracked source files.
 SEED_DIR = seed
 
 # The PCI ID Database (pci-ids.ucw.cz), bundled rather than fetched or
@@ -334,10 +285,10 @@ $(BUILD)/%.o: %.asm
 	$(ASM) $(ASMFLAGS) $< -o $@
 
 # Userland ELFs: two generic rules instead of three hand-written lines
-# per binary (17 binaries = ~55 lines before this). A new /bin program is
-# now a .c file plus one SEED_BINARIES entry -- and that entry is needed
-# only because the on-disk name isn't always the file name (echo.c is
-# seeded as `echo_test`).
+# per binary (17 binaries = ~55 lines before this). A new program is now
+# a .c file in userland/gui, userland/bin or userland/tests and nothing
+# else -- the directory says both that it is a program and where it
+# seeds to (see "userland source layout" above).
 $(BUILD)/userland/%.o: userland/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(USERLAND_CFLAGS) $< -o $@
@@ -363,7 +314,8 @@ $(BUILD)/userland/crt0.o: userland/crt0.asm
 	@mkdir -p $(dir $@)
 	$(ASM) $(ASMFLAGS) $< -o $@
 
-USERLAND_RT = $(BUILD)/userland/crt0.o $(BUILD)/userland/sys.o $(BUILD)/userland/stack_chk.o
+USERLAND_RT = $(BUILD)/userland/rt/crt0.o $(BUILD)/userland/rt/sys.o \
+              $(BUILD)/userland/rt/stack_chk.o
 
 # What a userland ELF links BEYOND the runtime above, one line per
 # binary, named without the $(BUILD)/userland/ prefix and the .o suffix.
@@ -374,7 +326,7 @@ USERLAND_RT = $(BUILD)/userland/crt0.o $(BUILD)/userland/sys.o $(BUILD)/userland
 # their own link rules, which were identical apart from the object list
 # -- the same per-binary Makefile tax that `apps/wm/` and `apps/ui/`
 # each paid before source discovery went recursive. Adding a ring-3 GUI
-# app is now one line here plus a SEED_BINARIES entry, not a copied
+# app is now one line here and a .c file in userland/gui/, not a copied
 # block that is easy to get subtly wrong.
 #
 # Deliberately NOT folded into the pattern rule's common objects the way
@@ -392,16 +344,16 @@ USERLAND_RT = $(BUILD)/userland/crt0.o $(BUILD)/userland/sys.o $(BUILD)/userland
 # drawing through ugfx needs the shared geometry pair linked with it.
 # Written out rather than implied by the rule itself: a reader can see
 # what a binary actually gets.
-UGFX_OBJS = ugfx shared/geom shared/fixed
+UGFX_OBJS = ui/ugfx shared/geom shared/fixed
 
 EXTRA_OBJS_uiclient   = $(UGFX_OBJS)
-EXTRA_OBJS_calculator = uui $(UGFX_OBJS) shared/calc_engine shared/string shared/knum
-EXTRA_OBJS_notepad    = uui utext $(UGFX_OBJS)
-EXTRA_OBJS_terminal   = ush uui utext $(UGFX_OBJS)
-EXTRA_OBJS_gfxdemo    = uui uwidgets $(UGFX_OBJS)
+EXTRA_OBJS_calculator = ui/uui $(UGFX_OBJS) shared/calc_engine shared/string shared/knum
+EXTRA_OBJS_notepad    = ui/uui ui/utext $(UGFX_OBJS)
+EXTRA_OBJS_terminal   = lib/ush ui/uui ui/utext $(UGFX_OBJS)
+EXTRA_OBJS_gfxdemo    = ui/uui ui/uwidgets $(UGFX_OBJS)
 
 # The extras for one binary, as real object paths.
-uextra = $(patsubst %,$(BUILD)/userland/%.o,$(EXTRA_OBJS_$(1)))
+uextra = $(patsubst %,$(BUILD)/userland/%.o,$(EXTRA_OBJS_$(notdir $(1))))
 
 # .SECONDEXPANSION lets the prerequisite list reference the stem: `$$*`
 # survives make's first expansion (when the rule is read, and the stem
@@ -410,8 +362,8 @@ uextra = $(patsubst %,$(BUILD)/userland/%.o,$(EXTRA_OBJS_$(1)))
 # per-target variable, which is the whole point here.
 .SECONDEXPANSION:
 
-userland/%.elf: $(BUILD)/userland/%.o $(USERLAND_RT) userland/link.ld $$(call uextra,$$*)
-	$(LD) -n -T userland/link.ld -nostdlib -o $@ $(BUILD)/userland/crt0.o $< $(call uextra,$*) $(BUILD)/userland/sys.o $(BUILD)/userland/stack_chk.o
+$(BUILD)/userland/%.elf: $(BUILD)/userland/%.o $(USERLAND_RT) userland/rt/link.ld $$(call uextra,$$*)
+	$(LD) -n -T userland/rt/link.ld -nostdlib -o $@ $(BUILD)/userland/rt/crt0.o $< $(call uextra,$*) $(BUILD)/userland/rt/sys.o $(BUILD)/userland/rt/stack_chk.o
 
 # Sources SHARED between the kernel image and userland ELFs, compiled a
 # second time with USERLAND_CFLAGS into build/userland/shared/.
@@ -444,7 +396,7 @@ $(BUILD)/userland/shared/%.o: apps/%.c
 # apps/ header (calc_engine.h). Scoped to this object with a
 # target-specific variable rather than added to the pattern rule above,
 # so no OTHER userland program gains the ability to reach into apps/.
-$(BUILD)/userland/calculator.o: USERLAND_CFLAGS += -Iapps
+$(BUILD)/userland/gui/calculator.o: USERLAND_CFLAGS += -Iapps
 
 $(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(ASM_OBJECTS) $(C_OBJECTS)
@@ -488,7 +440,7 @@ $(DISK_IMG):
 # build time; no grub.cfg/iso recipe changes needed anymore, unlike
 # when these were GRUB modules (see docs/decisions.md).
 
-# Seeds $(DISK_IMG) with every SEED_BINARIES entry, plus the /etc/kbs/*
+# Seeds $(DISK_IMG) with every userland ELF, plus the /etc/kbs/*
 # keyboard-layout data files, via tools/seed_disk.py (see
 # docs/decisions.md) -- this is what gets each binary onto disk now,
 # replacing both the old boot-time BIN_BOOTSTRAP/GRUB-module install
@@ -517,8 +469,12 @@ $(DISK_IMG):
 # regenerate once xkbcli is installed.
 seed: $(DISK_IMG) $(USERLAND_ELVES)
 	mkdir -p $(SEED_DIR)/sync/bin $(SEED_DIR)/sync/tests
-	$(foreach pair,$(SEED_PROGRAMS),cp $(word 1,$(subst :, ,$(pair))) $(SEED_DIR)/sync/bin/$(word 2,$(subst :, ,$(pair)));)
-	$(foreach pair,$(SEED_TESTS),cp $(word 1,$(subst :, ,$(pair))) $(SEED_DIR)/sync/tests/$(word 2,$(subst :, ,$(pair)));)
+	# Destination comes from the SOURCE DIRECTORY, not from a list:
+	# build/userland/{gui,bin}/x.elf -> /bin/x, build/userland/tests/x.elf
+	# -> /tests/x, with $(call seed_name,...) applying the three renames.
+	# See "userland source layout" above for why this is derived.
+	$(foreach e,$(filter $(BUILD)/userland/gui/% $(BUILD)/userland/bin/%,$(USERLAND_ELVES)),cp $(e) $(SEED_DIR)/sync/bin/$(call seed_name,$(e));)
+	$(foreach e,$(filter $(BUILD)/userland/tests/%,$(USERLAND_ELVES)),cp $(e) $(SEED_DIR)/sync/tests/$(call seed_name,$(e));)
 	# The PCI ID database, staged the same way the ELFs above are, and
 	# for the same reason: $(SEED_DIR)/sync is a build-staging tree that
 	# `make clean` deletes wholesale and .gitignore excludes, so nothing
@@ -670,7 +626,11 @@ verify:
 	@bash tools/preflight.sh
 
 clean:
-	rm -rf $(BUILD) $(ISO) iso/boot/kernel.bin $(HELLO_ELF) $(EXIT_TEST_ELF) $(WRITE_TEST_ELF) $(WRITE_BAD_TEST_ELF) $(GUI_TEST_ELF) $(COUNTER_A_ELF) $(COUNTER_B_ELF) $(ECHO_ELF) $(WIN_TEST_ELF) $(FILE_TEST_ELF) $(NEWSYSCALLS_TEST_ELF) $(CRASH_TEST_ELF) $(SOCKET_TEST_ELF) $(LSPCI_ELF) $(LS_ELF) $(STACK_SMASH_TEST_ELF) $(NX_TEST_ELF) $(FPU_TEST_ELF) $(FPU_RACE_ELF) $(LSCPU_ELF) $(SEED_DIR)/sync
+	# One line, because userland ELFs land in $(BUILD) now like every
+	# other build product. This used to name 21 $(FOO_ELF) variables by
+	# hand -- they built into the source tree next to their .c files and
+	# needed a .gitignore entry to stay out of the repo.
+	rm -rf $(BUILD) $(ISO) iso/boot/kernel.bin $(SEED_DIR)/sync
 	# Deliberately NOT touching $(DISK_IMG) here -- see its comment above.
 	# Use `make clean-disk` to explicitly wipe the persistent filesystem.
 

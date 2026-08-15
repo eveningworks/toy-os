@@ -1,0 +1,258 @@
+// ugfx -- see ugfx.h for what this is and why the font arrives the way
+// it does.
+#include "ui/ugfx.h"
+#include "syscall_abi.h"
+
+static inline int64_t syscall2(uint64_t num, uint64_t arg1, uint64_t arg2) {
+    int64_t ret;
+    __asm__ volatile (
+        "int $0x80"
+        : "=a"(ret)
+        : "a"(num), "D"(arg1), "S"(arg2)
+        : "memory"
+    );
+    return ret;
+}
+
+// Font state, filled by ugfx_font_init(). Zero until then, which makes
+// a forgotten init draw nothing rather than dereference a wild pointer
+// -- see ugfx.h.
+static const unsigned char *g_glyphs = 0;
+static int g_char_w = 0;
+static int g_char_h = 0;
+static int g_glyph_count = 0;
+
+struct ugfx_surface ugfx_surface_for_window(uint32_t window, int w, int h) {
+    struct ugfx_surface s;
+    s.pixels = (uint32_t *)(uintptr_t)win_buffer_vaddr(window);
+    s.w = w;
+    s.h = h;
+    return s;
+}
+
+void ugfx_fill_rect(struct ugfx_surface *s, int x, int y, int w, int h, uint32_t color) {
+    if (!s || !s->pixels) return;
+    // Clip rather than trust the caller: a client drawing outside its
+    // own buffer would be corrupting whatever the allocator put after
+    // it, and a bounds mistake is far easier to make in a client than
+    // in the WM (the client computes its own layout with no help).
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > s->w) w = s->w - x;
+    if (y + h > s->h) h = s->h - y;
+    if (w <= 0 || h <= 0) return;
+
+    for (int j = 0; j < h; j++) {
+        uint32_t *row = s->pixels + (uint32_t)(y + j) * (uint32_t)s->w + (uint32_t)x;
+        for (int i = 0; i < w; i++) row[i] = color;
+    }
+}
+
+void ugfx_fill(struct ugfx_surface *s, uint32_t color) {
+    if (!s) return;
+    ugfx_fill_rect(s, 0, 0, s->w, s->h, color);
+}
+
+void ugfx_draw_rect(struct ugfx_surface *s, int x, int y, int w, int h, uint32_t color) {
+    if (w <= 0 || h <= 0) return;
+    ugfx_fill_rect(s, x, y, w, 1, color);
+    ugfx_fill_rect(s, x, y + h - 1, w, 1, color);
+    ugfx_fill_rect(s, x, y, 1, h, color);
+    ugfx_fill_rect(s, x + w - 1, y, 1, h, color);
+}
+
+int ugfx_font_init(void) {
+    struct win_request_msg req;
+    for (unsigned i = 0; i < sizeof(req); i++) ((uint8_t *)&req)[i] = 0;
+    req.type = WIN_REQ_FONT;
+    if (syscall2(SYS_WIN_REQUEST, (uint64_t)(uintptr_t)&req, 0) != 1) return 0;
+
+    g_char_w = req.a;
+    g_char_h = req.b;
+    g_glyph_count = req.c;
+    // Glyph 0 sits at the mapping's base PLUS the data's offset within
+    // its first page -- the tables are ordinary kernel .rodata and do
+    // not start on a page boundary. Ignoring `d` here would shift every
+    // glyph by a few bytes and render convincing-looking garbage.
+    g_glyphs = (const unsigned char *)(uintptr_t)(WIN_FONT_VADDR + (uint32_t)req.d);
+    return 1;
+}
+
+int ugfx_char_w(void) { return g_char_w; }
+int ugfx_char_h(void) { return g_char_h; }
+
+int ugfx_text_width(const char *str) {
+    if (!str) return 0;
+    int n = 0;
+    while (str[n]) n++;
+    return n * g_char_w;
+}
+
+// Character -> glyph slot. The shared table is ASCII 32..126 laid out
+// contiguously from index 0; anything outside that draws as a space,
+// which is the quiet-degradation choice (a client rendering a stray
+// byte should look wrong, not read out of bounds).
+static int glyph_index(unsigned char c) {
+    int idx = (int)c - WIN_FONT_FIRST_CHAR;
+    if (idx < 0 || idx >= g_glyph_count) return 0;
+    return idx;
+}
+
+// Blends `fg` over `bg` by `alpha` (0..255), per channel. The glyph
+// tables are coverage maps, not masks -- that is what makes this text
+// anti-aliased rather than jagged, and it's why a plain "if (a > 128)"
+// threshold would visibly degrade it.
+static uint32_t blend(uint32_t fg, uint32_t bg, unsigned alpha) {
+    unsigned fr = (fg >> 16) & 0xFF, fg_ = (fg >> 8) & 0xFF, fb = fg & 0xFF;
+    unsigned br = (bg >> 16) & 0xFF, bg_ = (bg >> 8) & 0xFF, bb = bg & 0xFF;
+    unsigned r = (fr * alpha + br * (255 - alpha)) / 255;
+    unsigned g = (fg_ * alpha + bg_ * (255 - alpha)) / 255;
+    unsigned b = (fb * alpha + bb * (255 - alpha)) / 255;
+    return (r << 16) | (g << 8) | b;
+}
+
+void ugfx_draw_char(struct ugfx_surface *s, int x, int y, char c,
+                     uint32_t color, uint32_t bg) {
+    if (!s || !s->pixels || !g_glyphs) return;
+    if (x >= s->w || y >= s->h || x + g_char_w <= 0 || y + g_char_h <= 0) return;
+
+    const unsigned char *glyph =
+        g_glyphs + win_glyph_offset((uint32_t)glyph_index((unsigned char)c),
+                                     g_char_w, g_char_h);
+
+    for (int row = 0; row < g_char_h; row++) {
+        int py = y + row;
+        if (py < 0 || py >= s->h) continue;
+        for (int col = 0; col < g_char_w; col++) {
+            int px = x + col;
+            if (px < 0 || px >= s->w) continue;
+            unsigned a = glyph[row * g_char_w + col];
+            if (!a) continue; // fully background -- leave it alone
+            uint32_t *p = &s->pixels[(uint32_t)py * (uint32_t)s->w + (uint32_t)px];
+            *p = (a == 255) ? color : blend(color, bg, a);
+        }
+    }
+}
+
+void ugfx_draw_string(struct ugfx_surface *s, int x, int y,
+                       const char *str, uint32_t color, uint32_t bg) {
+    if (!s || !str) return;
+    for (int n = 0; str[n]; n++) {
+        int gx = x + n * g_char_w;
+        if (gx >= s->w) break; // the rest is off the right edge
+        ugfx_draw_char(s, gx, y, str[n], color, bg);
+    }
+}
+
+int ugfx_draw_string_clipped(struct ugfx_surface *s, int x, int y, int max_w,
+                              const char *str, uint32_t color, uint32_t bg) {
+    if (!s || !str || !g_glyphs || max_w <= 0) return 0;
+
+    // How many WHOLE glyphs fit. Whole glyphs rather than a pixel clip:
+    // half a letter reads as a rendering bug, while a short label just
+    // reads as a short label.
+    int fits = max_w / (g_char_w > 0 ? g_char_w : 1);
+    int len = 0;
+    while (str[len]) len++;
+
+    if (fits >= len) {
+        ugfx_draw_string(s, x, y, str, color, bg);
+        return 1;
+    }
+
+    // Draw only what fits, a glyph at a time -- there is no truncated
+    // copy of the string because there is nowhere to put one (a client
+    // has no allocator), and a fixed scratch buffer would just move the
+    // length limit somewhere less obvious.
+    for (int n = 0; n < fits; n++) {
+        char one[2];
+        one[0] = str[n];
+        one[1] = '\0';
+        ugfx_draw_string(s, x + n * g_char_w, y, one, color, bg);
+    }
+    return 0;
+}
+
+uint32_t ugfx_rgb(uint8_t r, uint8_t g, uint8_t b) {
+    return ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+}
+
+uint32_t ugfx_blend(uint32_t under, uint32_t over, uint8_t alpha) {
+    uint32_t out = 0;
+    for (int shift = 0; shift <= 16; shift += 8) {
+        uint32_t u = (under >> shift) & 0xFF;
+        uint32_t o = (over >> shift) & 0xFF;
+        uint32_t v = (u * (255u - alpha) + o * alpha) / 255u;
+        out |= (v & 0xFF) << shift;
+    }
+    return out;
+}
+
+uint8_t ugfx_luminance(uint32_t color) {
+    // Rec. 601 weights, /256 -- the same ones gfx.c uses, so a client's
+    // idea of "is this colour light or dark" matches the desktop's.
+    uint32_t r = (color >> 16) & 0xFF, g = (color >> 8) & 0xFF, b = color & 0xFF;
+    return (uint8_t)((r * 77 + g * 150 + b * 29) / 256);
+}
+
+// --- geometry bindings ------------------------------------------------
+//
+// The client-side half of the shared geometry module. The only thing
+// that differs from the kernel's binding (gfx.c) is where a pixel
+// lands: a client's own window buffer rather than the framebuffer.
+
+void ugfx_blend_pixel(struct ugfx_surface *s, int x, int y, uint32_t color, uint8_t alpha) {
+    if (!s || !s->pixels) return;
+    if (x < 0 || y < 0 || x >= s->w || y >= s->h) return;
+    uint32_t *p = &s->pixels[(uint32_t)y * (uint32_t)s->w + (uint32_t)x];
+    *p = (alpha >= 255) ? color : blend(color, *p, alpha);
+}
+
+static void ugfx_geom_plot(void *ctx, int x, int y, uint32_t color, uint8_t alpha) {
+    ugfx_blend_pixel((struct ugfx_surface *)ctx, x, y, color, alpha);
+}
+
+// Built per call rather than kept as a global: a client can have more
+// than one surface (several windows), and a cached target would quietly
+// draw into whichever one was used last.
+static struct geom_target target_for(struct ugfx_surface *s) {
+    struct geom_target t;
+    t.plot = ugfx_geom_plot;
+    t.ctx = s;
+    return t;
+}
+
+void ugfx_draw_line(struct ugfx_surface *s, int x0, int y0, int x1, int y1,
+                     uint32_t color, enum geom_aa aa) {
+    struct geom_target t = target_for(s);
+    geom_line(&t, x0, y0, x1, y1, color, aa);
+}
+
+void ugfx_draw_polyline(struct ugfx_surface *s, const int *xs, const int *ys,
+                         int count, int closed, uint32_t color, enum geom_aa aa) {
+    struct geom_target t = target_for(s);
+    geom_polyline(&t, xs, ys, count, closed, color, aa);
+}
+
+void ugfx_draw_circle(struct ugfx_surface *s, int cx, int cy, int r,
+                       uint32_t color, enum geom_aa aa) {
+    struct geom_target t = target_for(s);
+    geom_circle(&t, cx, cy, r, color, aa);
+}
+
+void ugfx_draw_ellipse(struct ugfx_surface *s, int cx, int cy, int rx, int ry,
+                        uint32_t color, enum geom_aa aa) {
+    struct geom_target t = target_for(s);
+    geom_ellipse(&t, cx, cy, rx, ry, color, aa);
+}
+
+void ugfx_fill_circle(struct ugfx_surface *s, int cx, int cy, int r, uint32_t color) {
+    struct geom_target t = target_for(s);
+    geom_fill_circle(&t, cx, cy, r, color);
+}
+
+void ugfx_fill_ellipse(struct ugfx_surface *s, int cx, int cy, int rx, int ry,
+                        uint32_t color) {
+    struct geom_target t = target_for(s);
+    geom_fill_ellipse(&t, cx, cy, rx, ry, color);
+}

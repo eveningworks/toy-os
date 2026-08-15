@@ -292,7 +292,7 @@ Lines, curves and rotation come from `kernel/lib/geom.c` (see
   opaque pixels to `gfx_put_pixel()` and partial ones to
   `gfx_blend_pixel()` -- get that wrong by hand and anti-aliased edges
   come out as hard pixels against the wrong background.
-- **In a ring-3 app**, use `uui_canvas` (`userland/uwidgets.h`). It
+- **In a ring-3 app**, use `uui_canvas` (`userland/ui/uwidgets.h`). It
   owns the drawing rect, converts local to surface coordinates, and
   CLIPS. A shape drawn without clipping does not fail visibly at first
   -- it fails the day the shape grows, by painting over the app's own

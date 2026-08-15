@@ -3,7 +3,7 @@
 
 WHAT THIS IS
 ------------
-Shapes (`userland/gfxdemo.c`) is a RING-3 client that draws with the
+Shapes (`userland/gui/gfxdemo.c`) is a RING-3 client that draws with the
 shared geometry module -- `kernel/lib/geom.c` and `fixed.c`, compiled a
 second time for userland. This drives it and checks three claims that a
 screenshot cannot settle on its own:
@@ -57,7 +57,7 @@ from qmp_test import QMPSession             # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
 
-# The demo's own key bindings (userland/gfxdemo.c). Sent as hex because
+# The demo's own key bindings (userland/gui/gfxdemo.c). Sent as hex because
 # `gui key` splits its arguments on whitespace and parses ints that way.
 K_A = "0x61"        # toggle anti-aliasing
 K_MINUS = "0x2d"    # slower
@@ -251,7 +251,7 @@ def run(d):
     d.check("speed returns from the keyboard", d.set_speed(3))
 
     # 4. The buttons work, and report through the same log grammar. The
-    #    button row sits one gap below the canvas (userland/gfxdemo.c's
+    #    button row sits one gap below the canvas (userland/gui/gfxdemo.c's
     #    layout()), which is why the canvas rect is all this needs.
     by = d.canvas[1] + d.canvas[3] + 8 + 12    # +12: inside the row, not on its edge
     got = d.click_content(d.canvas[0] + 20, by)   # "Slower", the first button

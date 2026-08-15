@@ -481,7 +481,7 @@ headers, not part of `kapi.h`.
 ## GUI in user space (experimental, separate from everything above)
 
 Everything above -- `wm.c`, `notepad.c`, `about.c`, all of it -- runs in
-kernel space at ring 0. `userland/gui_test.c` (a real disk-hosted
+kernel space at ring 0. `userland/tests/gui_test.c` (a real disk-hosted
 binary at `/bin/gui_test`, run via `run gui_test` -- see
 `docs/decisions.md`) is a first, deliberately narrow step toward
 something different: a genuinely isolated ring-3 process drawing
@@ -524,7 +524,7 @@ exists:
   processes in `userland/`, indistinguishable from the kernel-space
   windows beside them -- which is why the Task Manager labels every row
   `[r0]` or `[r3]`.
-- Ring 3 has a drawing runtime and the widget toolkit: `userland/ugfx.c`
+- Ring 3 has a drawing runtime and the widget toolkit: `userland/ui/ugfx.c`
   (surfaces, text, the desktop font mapped read-only), `uui.c` /
   `uwidgets.c` / `utext.c` (the `apps/ui/` widgets, ported), and
   `uui_canvas` for shapes.

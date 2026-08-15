@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drive the text-rendering ring-3 client (userland/uiclient.c).
+"""Drive the text-rendering ring-3 client (userland/tests/uiclient.c).
 
 Where winclient_test.py proves the windowing PROTOCOL with flat colour
 fills, this proves the userland drawing RUNTIME: a ring-3 process

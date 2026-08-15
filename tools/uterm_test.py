@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drive the RING-3 Terminal (userland/terminal.c) and assert on it.
+"""Drive the RING-3 Terminal (userland/gui/terminal.c) and assert on it.
 
 What this actually proves, and why it is the interesting test in the
 set: a ring-3 process runs ANOTHER program and reads its output. That

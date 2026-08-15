@@ -246,6 +246,51 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   thumb cannot be in two places), and commit-on-release.
 
 ### Changed
+- **`userland/` is split by role, and the build derives from it.** 44
+  files sat flat in one directory -- the C runtime, the GUI toolkit,
+  six real apps, a shell library and about twenty single-mechanism
+  diagnostics that outnumbered and buried the rest. It is now `rt/`
+  (crt0, libsys, stack_chk, link.ld), `ui/` (ugfx, utheme, utext, the
+  widgets), `lib/` (`ush`), `gui/` (windowed apps), `bin/`
+  (command-line programs) and `tests/` (diagnostics).
+
+  The split is load-bearing rather than cosmetic. Library directories
+  produce objects; program directories produce one ELF per `.c`, **and
+  the directory also says where it seeds** -- `gui/` and `bin/` to
+  `/bin`, `tests/` to `/tests`. That deleted 29 hand-written
+  `FOO_ELF = userland/x.elf` variables and the two `SEED_PROGRAMS`/
+  `SEED_TESTS` lists, leaving three rename exceptions
+  (terminal->uterm, gfxdemo->shapes, echo->echo_test). `/bin` versus
+  `/tests` is a distinction `docs/filesystem-layout.md` already
+  enforces through `tools/check_layout.py`; it was being restated here
+  as a list that could drift from it, and the drift was real -- every
+  ring-3 client landed in `/tests` originally because the first one
+  did, and nobody moved them until the Start menu forced it.
+
+  Also: includes are path-qualified now (`#include "ui/ugfx.h"`,
+  `#include "rt/sys.h"`) off a single `-Iuserland`, so an include line
+  says which layer it reaches into; and ELFs build to
+  `build/userland/**` instead of into the source tree next to their
+  `.c` files, which retires a `.gitignore` entry and a 21-variable
+  `clean` line.
+
+  **Verified by a check that failed first and was right to.** The
+  intended acceptance test was "every userland ELF byte-for-byte
+  identical" -- a pure move cannot change a binary. All 29 differed.
+  The cause was not a bug: `USERLAND_CFLAGS` carries `-g`, every ELF
+  embeds its source path in DWARF, and changing those paths is the
+  entire point of the move. Restated as **identical after
+  `--strip-debug`**, all 29 match exactly. Recording it because the
+  naive check reads as a catastrophe (29 of 29 binaries changed) when
+  nothing executable moved at all. Beyond that: `preflight.sh` clean,
+  all 82 GUI regression checks passing **with no test tool edited**,
+  and a scratch image seeded from the new rules holding exactly the
+  right `/bin` (8 entries, all three renames applied) and `/tests` (21
+  entries).
+
+  First half of stage 0 in `docs/uapp-design.md`; the `uwidgets.c`
+  one-file-per-widget split is the second.
+
 - **A ring-3 GUI app is one Makefile line now, not a copied block.**
   Every client that draws needed its own `FOO_OBJS = ...` list plus its
   own link rule -- `CALC_OBJS`, `NOTEPAD_OBJS`, `UTERM_OBJS`,

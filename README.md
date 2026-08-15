@@ -517,7 +517,7 @@ apps/            -- programs. Two kinds:
                      apps/theme.h holds the THEME_* named colors.
 userland/        -- freestanding ring-3 test programs (no libc, no
                      crt0), compiled and linked as real ELF64
-                     executables via userland/link.ld (-mcmodel=large,
+                     executables via userland/rt/link.ld (-mcmodel=large,
                      and separate page-aligned segments per permission
                      class so W^X means something -- see
                      docs/process-isolation.md and the Makefile's own

@@ -2,7 +2,6 @@
 /build/
 /iso/
 /toy-os.iso
-/userland/*.elf
 
 # Persistent disk image (see Makefile's DISK_IMG comment) -- deliberately
 # left alone by `make clean`, it's local dev state, not a repo asset.

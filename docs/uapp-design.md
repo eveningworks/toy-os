@@ -541,6 +541,79 @@ The absolute saving is not the point -- roughly 400 lines. The point is
 that the removed lines are the *same* lines in each file, and that the
 next client written pays none of it.
 
+## What this buys, and what it doesn't
+
+The whole point is that a change to the WM, the widgets or the drawing
+layer stops meaning a change to every app. That is a claim worth stating
+precisely, because stated loosely it is false.
+
+**Free -- no app changes:**
+
+| Change | Why |
+|---|---|
+| New event types (focus, wheel, drag-and-drop, timer, font-changed) | optional callback plus a library default; an app that ignores it still behaves correctly |
+| New window behaviours (snap, always-on-top, tiling) | WM-side; apps opt in with a hint or ignore it |
+| Chrome -- title bar, close button, shadows | apps never draw chrome (already true) |
+| Theme and palette | apps use theme constants and the draw context's defaults |
+| Font size | already free via font-derived layout; more so once the window auto-sizes |
+| Widget internals -- a listbox gaining keyboard nav, a button gaining a focus ring | behaviour belongs to the widget, the rule `ui_textview.h` already states |
+| Resize | non-opt-in apps untouched; opt-in apps get re-layout for free |
+| **The transport** -- one-message-per-syscall to a shared-memory ring | apps talk to `uapp`, not to the protocol |
+| **The window server moving to ring 3** | same argument |
+
+The last two are the biggest practical win and the easiest to overlook:
+both are remaining M41 items, and today either would touch every
+client's event loop.
+
+**Still touches apps, correctly:**
+
+- An app wanting to *use* a new capability. New feature, new app code.
+- Apps that draw their own content (Shapes' canvas, Notepad's text
+  area). A change to text semantics reaches them *if* they do character
+  arithmetic -- which is what the chokepoint rule is for, and it holds
+  only as far as the discipline does.
+- Apps carrying hardcoded values. `calculator.c` hardcodes
+  `ugfx_rgb(210, 218, 235)` for operator buttons; `winclient.c`
+  hardcodes `WIN_W`/`WIN_H`. An abstraction only protects code written
+  against it.
+
+**Never free, correctly:** anything that changes what the app *means*.
+
+### Five rules, and making one of them structural
+
+Each rule removes one reason an app would need editing: an app never
+touches the protocol, never computes chrome or geometry, never does
+character arithmetic, never picks interaction colours, and never owns
+the event loop.
+
+Rules erode. Two things make these hold rather than be hoped for:
+
+1. **Stage 3's acceptance test measures the property directly** -- zero
+   lines changed in the clients that don't opt into resize.
+2. **Include-path enforcement for the most important rule.** Once the
+   restructure separates `userland/gui/` from `userland/ui/`, build the
+   GUI apps *without* `kernel/include/abi` on their include path, so
+   `win_proto.h` and `syscall_abi.h` are reachable only from
+   `userland/ui/` (i.e. from `uapp` and libsys) and from
+   `userland/tests/`, which pokes the raw ABI on purpose. An app
+   reaching for the protocol then fails to compile instead of being
+   caught in review -- exactly the mechanism `kernel/include/kernel/`
+   already uses to keep `apps/` out of kernel internals, and the
+   reason that boundary has held where a documented convention would
+   not have. Cost is one `-I` line, and it is only expressible *after*
+   stage 0 puts apps and toolkit in different directories.
+
+### The precedent that says this is achievable here
+
+The experiment has already been run once in this repo: dropping the
+default font from 18 to 14 was a **one-line change** and all 82 GUI
+regression checks passed unchanged, because layout is font-derived. The
+counter-example is in the same changelog entry -- the hardcoded pixel
+constants in `tools/gui_flow.py` did not reflow and needed re-measuring
+for the third time. The property holds exactly as far as nothing
+hardcodes what the layer above should own, which is why stage 1a and the
+include-path rule matter more than they look.
+
 ## File structure
 
 Asked separately, and the answer is yes -- `userland/` needs the
@@ -659,9 +732,19 @@ end, when what is left is genuinely just the shell.
 This belongs **before** stage 1a. Moving files while adding functions to
 them makes both halves harder to review, and the move has an unusually
 strong correctness check available: a pure `git mv` plus Makefile
-rework should leave **every userland ELF byte-for-byte identical**, the
-same check that verified this session's `EXTRA_OBJS` change. A move that
-changes a binary is a move that changed something.
+rework should leave every userland ELF identical, the same check that
+verified this session's `EXTRA_OBJS` change. A move that changes a
+binary is a move that changed something.
+
+**One correction, from running it:** "byte-for-byte identical" is the
+wrong bar, and it fails for a reason that is not a bug. `USERLAND_CFLAGS`
+carries `-g`, so every ELF embeds its source path in DWARF -- and the
+whole point of the move is that those paths change. All 29 differed on
+the first check. The right bar, and the one the move actually met, is
+**identical after `--strip-debug`**: every loadable byte the same, with
+the debug info correctly naming the new locations. Worth recording
+because the naive check looks like a catastrophic failure (29 of 29
+binaries changed) when nothing executable moved at all.
 
 `apps/` needs nothing. `apps/wm/` and `apps/ui/` are already split by
 concern, and M41 retires the kernel-space app set eventually -- so the
@@ -672,11 +755,14 @@ right amount of restructuring there is none.
 Each stage is a commit that builds, tests and stands on its own -- the
 A-E pattern TFS3 used.
 
-**Stage 0 -- restructure `userland/`.** The layout above: `git mv` into
-`rt/`/`ui/`/`bin/`/`tests/`, recursive source discovery, ELFs to
-`build/`, `SEED_*` derived from the directories, and `uwidgets.c` split
-one-file-per-widget to match `apps/ui/`. No behaviour change, and the
-acceptance test is byte-identical ELFs.
+**Stage 0 -- restructure `userland/`.** Two commits. First the move:
+`git mv` into `rt/`/`ui/`/`lib/`/`gui/`/`bin/`/`tests/`, path-qualified
+includes off one `-Iuserland`, ELFs to `build/`, and `SEED_*` derived
+from the directories. Then the split of `uwidgets.c` one-file-per-widget
+to match `apps/ui/`. No behaviour change in either; the acceptance test
+is ELFs identical after `--strip-debug` (see above).
+**Status: the move is done** -- 29/29 ELFs identical, all 82 GUI checks
+passing with no test tool edited. The split is next.
 
 **Stage 1a -- normalise the widget set.** One `natural_size()` spelling
 replacing the three that exist; `set_geometry()` on generation B;

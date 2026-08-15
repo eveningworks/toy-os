@@ -377,7 +377,7 @@ once this exists.*
 
 ### Milestone 12 -- Shell pipes & job control (planned v0.12.0)
 
-**Read this as "make `ush` a real shell".** `userland/ush.c` (Milestone
+**Read this as "make `ush` a real shell".** `userland/lib/ush.c` (Milestone
 41) already runs in ring 3 and spawns programs with their output piped
 back, so this milestone is no longer hypothetical -- it is the specific
 list of things standing between that and something bash-shaped. Each
@@ -720,14 +720,14 @@ guess.*
 ### Milestone 24 -- Runtime + interop (planned v0.24.0)
 
 - [ ] Inter-process IPC (message passing)
-- [ ] **A real C library.** Partly started: `userland/crt0.asm` and
-      `userland/sys.c` (libsys) landed with the ring-3 GUI work, so a
+- [ ] **A real C library.** Partly started: `userland/rt/crt0.asm` and
+      `userland/rt/sys.c` (libsys) landed with the ring-3 GUI work, so a
       program is already just a `main()` over typed syscall wrappers.
       What a *libc* still needs on top of that, in dependency order:
       - [x] ~~crt0: `_start`, argc/argv/envp off a SysV stack, call
             `main()`, exit with its return value~~ -- done.
       - [x] ~~A syscall layer with one definition per call~~ -- done
-            (`userland/sys.h`). A libc sits ON this, not instead of it.
+            (`userland/rt/sys.h`). A libc sits ON this, not instead of it.
       - [ ] `malloc`/`free`/`realloc`. `SYS_SBRK` is the only
             allocator-adjacent syscall and is grow-only with no
             free-list on top anywhere. A first cut is the kernel's own
@@ -909,7 +909,7 @@ history is worth reading, but a fixed papercut is just noise.
       binary and hands the linker the decision about what each one
       contains, which needs its own verification -- specifically that
       `hello` does NOT gain the font-rendering path (compare
-      `size userland/hello.elf` before and after). Worth doing when a
+      `size build/userland/hello.elf` before and after). Worth doing when a
       client actually needs it, not preemptively. See
       `docs/decisions.md`.
 - [ ] The vmsvga HARDWARE cursor is off by default because it fights the
@@ -1259,7 +1259,7 @@ Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
       `SEED_PROGRAMS`/`SEED_TESTS` stop being hand-maintained lists.
 - [ ] Multiple windows per process: the protocol already carries window
       ids and `win_server.c` already tracks WIN_CLIENT_MAX per client,
-      but `userland/winclient.c` only ever opens one, so the path is
+      but `userland/tests/winclient.c` only ever opens one, so the path is
       untested with more.
 - [ ] Move the transport from one-message-per-syscall to a
       shared-memory ring the client maps once. The message formats are
@@ -1290,13 +1290,13 @@ Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
       address is just below the stack (Milestone 9), not a bigger
       constant.
 - [x] ~~A userland drawing runtime, so a client can render more than
-      flat colour~~ -- done: `userland/ugfx.c` (rects, anti-aliased
+      flat colour~~ -- done: `userland/ui/ugfx.c` (rects, anti-aliased
       text, metrics), with the desktop's font mapped READ-ONLY via
       `WIN_REQ_FONT` rather than copied into each binary. See
-      `CHANGELOG.md`; `userland/uiclient.c` is the app-shaped client
+      `CHANGELOG.md`; `userland/tests/uiclient.c` is the app-shaped client
       built on it.
 - [x] ~~Port the `apps/ui/` widgets Calculator needs to userland~~ --
-      done: `userland/uui.c` (`ui_primitives` + `ui_button` +
+      done: `userland/ui/uui.c` (`ui_primitives` + `ui_button` +
       `ui_button_group`). Statically linked per client for now, not a
       shared library -- see the note below on when that should change.
 - [x] ~~Migrate one real app (Calculator) to `userland/`~~ -- done, see
@@ -1304,17 +1304,17 @@ Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
       once per code model) rather than copied, so there is only ever
       one arithmetic implementation.
 - [x] ~~Port `ui_scrollback` (the wrapped, editable text buffer)~~ --
-      done as `userland/utext.c`, pulled in by the ring-3 Notepad.
+      done as `userland/ui/utext.c`, pulled in by the ring-3 Notepad.
 - [x] ~~Migrate Notepad to `userland/`~~ -- done, see `CHANGELOG.md`.
       Its file dialog is drawn by the APP, not the window server, which
       is what GTK/Qt do; `apps/wm/file_picker.c` is a WM modal and was
       not portable.
 - [x] ~~Port the remaining `apps/ui/` widgets~~ -- done
-      (`userland/uwidgets.c`): scrollbar, text field, checkbox, radio
+      (`userland/ui/uwidgets.c`): scrollbar, text field, checkbox, radio
       list, listbox, dropdown, focus ring.
 - [x] ~~Migrate Terminal to `userland/`~~ -- done, and it needed new
       kernel machinery rather than a port: see the pipes/spawn entry in
-      `CHANGELOG.md`. Its shell (`userland/ush.c`) runs in ring 3 too
+      `CHANGELOG.md`. Its shell (`userland/lib/ush.c`) runs in ring 3 too
       rather than proxying the kernel's.
 - [x] ~~Geometry primitives, so a client can draw more than rectangles
       and text~~ -- done: `kernel/lib/geom.c` + `fixed.c` (lines,
@@ -1322,7 +1322,7 @@ Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
       aliased and anti-aliased), wrapped as `gfx_draw_*()` in the
       kernel and as the `uui_canvas` widget in ring 3. Shared source
       compiled twice, the same pattern as `calc_engine.c`.
-      `userland/gfxdemo.c` ("Shapes") is the ring-3 demo;
+      `userland/gui/gfxdemo.c` ("Shapes") is the ring-3 demo;
       `tools/gfxdemo_test.py` and `kernel/lib/geom_test.c` test it.
 - [ ] Fill a POLYGON, not just an ellipse. `geom_fill_ellipse()` is a
       scanline fill of one specific shape; the general version is an
@@ -1569,10 +1569,10 @@ has and a hobby kernel this far along is a natural point to start closing:
   framebuffer/window-buffer pages that were its only pre-existing
   callers), and `elf.c`'s loader reads each PT_LOAD segment's real
   `p_flags` instead of mapping everything RWX -- which only means
-  anything because `userland/link.ld` now emits separate page-aligned
+  anything because `userland/rt/link.ld` now emits separate page-aligned
   segments per permission class instead of one merged one. Verified
   with exactly the deliberate "jump into a data page" test this bullet
-  originally called for (`userland/nx_test.c`, `run nx_test`): the
+  originally called for (`userland/tests/nx_test.c`, `run nx_test`): the
   kernel reports a Present+User+Instruction-Fetch page fault and tears
   the process down instead of executing the injected code. The
   kernel's own identity map (`boot.asm`) is unchanged/still RWX --
@@ -2286,7 +2286,7 @@ isolated from each other with no way to communicate.
 
 A real C library on top of `filetest`'s fd-aware syscalls: CRT0
 (argc/argv from the initial stack -- partially there already,
-`elf_build_argv_on_stack()`/`process_run_ring3_args()`, `userland/ls.c`
+`elf_build_argv_on_stack()`/`process_run_ring3_args()`, `userland/bin/ls.c`
 is the one existing caller), TLS (FS.base), FPU/SSE context-switch
 save/restore, and malloc/free -- none of which exist yet. `SYS_SBRK`
 (`kernel/include/abi/syscall_abi.h`) is the only allocator-adjacent syscall
@@ -2839,11 +2839,11 @@ comment.
   contract is published and `echo.c` depends on it); new code should
   use the event API instead.
 - ~~**One window per process at a fixed vaddr**~~ -- superseded.
-  `SYS_WIN_CREATE`/`SYS_WIN_PRESENT` remain for `userland/win_test.c`
+  `SYS_WIN_CREATE`/`SYS_WIN_PRESENT` remain for `userland/tests/win_test.c`
   (modal, outside the window list); new clients use `SYS_WIN_REQUEST`.
 - **4-process table, one 4KB stack page, no growth, no IPC, no
   `fork`/`exec`.**
-- **Drawing lived in the kernel** -- half addressed. `userland/ugfx.c`
+- **Drawing lived in the kernel** -- half addressed. `userland/ui/ugfx.c`
   now gives a client rectangles and real anti-aliased text, with the
   font mapped read-only from the kernel's own tables (`WIN_REQ_FONT`)
   rather than duplicated. What is still ring-0-only is `apps/ui/`'s

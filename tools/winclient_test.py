@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drive the ring-3 client window (userland/winclient.c) and assert on it.
+"""Drive the ring-3 client window (userland/tests/winclient.c) and assert on it.
 
 Proves the windowing protocol end to end, in the direction that matters:
 a RING-3 PROCESS owns a window in the window manager's own window list,
@@ -39,7 +39,7 @@ DEFAULT_SOCK = ".vm.serial"
 CLIENT_TITLE = "Ring 3 Client"
 SPAWN_CMD = "run winclient"
 
-# userland/winclient.c's COLORS[], as (r, g, b). The client starts on
+# userland/tests/winclient.c's COLORS[], as (r, g, b). The client starts on
 # the first and advances one step per key or click.
 COLORS = [
     (0x2E, 0x40, 0x53),

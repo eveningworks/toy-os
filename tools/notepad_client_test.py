@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drive the RING-3 Notepad (userland/notepad.c) and assert on it.
+"""Drive the RING-3 Notepad (userland/gui/notepad.c) and assert on it.
 
 The headline check is a full ROUND TRIP through the real filesystem:
 type text, save it to a file, clear the buffer, reopen the file, and

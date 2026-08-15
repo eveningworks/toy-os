@@ -48,7 +48,7 @@ from qmp_test import QMPSession             # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
 
-# The silent long-running spinner (userland/spin_test.c), seeded to
+# The silent long-running spinner (userland/tests/spin_test.c), seeded to
 # /tests. Silent matters here for the same reason it does in the KTEST:
 # its output would land in the Terminal window mid-test.
 # A BARE name on purpose: the Terminal's allowlist matches bare names,

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Drive the RING-3 Calculator (userland/calculator.c) and assert on it.
+"""Drive the RING-3 Calculator (userland/gui/calculator.c) and assert on it.
 
 This is the proof for the app-migration step: Calculator running as an
 ordinary ring-3 process, drawing with the ported widget toolkit
-(userland/uui.c) and computing with the SAME apps/calc_engine.c the
+(userland/ui/uui.c) and computing with the SAME apps/calc_engine.c the
 kernel-space version uses.
 
 WHAT IT ASSERTS, AND WHY IN THIS FORM
@@ -45,7 +45,7 @@ DEFAULT_SOCK = ".vm.serial"
 TITLE = "Calculator"
 SPAWN_CMD = "run calculator"
 
-# userland/calculator.c's layout constants.
+# userland/gui/calculator.c's layout constants.
 MARGIN, GAP, COLS, ROWS = 8, 6, 4, 5
 SPAWN_TIMEOUT_S = 15.0
 

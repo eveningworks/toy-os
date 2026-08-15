@@ -58,7 +58,7 @@ version of
 - `elf.c` -- a minimal ELF64 loader: parses `PT_LOAD` program headers
   (no relocations, no dynamic linking, no section/symbol-table parsing)
   and maps each one via `vmm_map_user_page()`, allocating real frames
-  from the PMM. `userland/hello.c` is a real, separately compiled and
+  from the PMM. `userland/bin/hello.c` is a real, separately compiled and
   linked ELF64 test program (no libc, no crt0) that GRUB loads into
   memory as a Multiboot2 *module* -- see `grub.cfg`'s `module2` line,
   the standard mechanism for handing a bootloader-loaded file to the
@@ -80,7 +80,7 @@ version of
   address translation and not an identity-mapping shortcut.
   (Told as it happened, per this document's framing: `elf_test.c` and
   its marker-plus-`hlt` mechanism are both gone now, and today's
-  `userland/hello.c` is a plain greet-and-exit program -- see
+  `userland/bin/hello.c` is a plain greet-and-exit program -- see
   `docs/decisions.md`'s entry on why, and on the fault it left behind
   when the harness was removed from under it. `ring3_test.c` is
   unchanged and still does exactly what's described above.)
@@ -139,7 +139,7 @@ from deep inside the interrupt handler -- a completely different call
 stack (the TSS's kernel stack, switched to automatically on any
 ring3-to-ring0 transition). `syscall_test.c` -- long since replaced by a real /bin binary (shell command
 `syscalltest`) demonstrates the whole thing: it loads a second real ELF
-binary (`userland/exit_test.c`, GRUB's second `module2` line) that calls
+binary (`userland/tests/exit_test.c`, GRUB's second `module2` line) that calls
 `exit(42)` instead of deliberately faulting, and prints the exit code it
 gets back. Unlike `ring3test`/`elftest`, this command *returns* -- the
 shell keeps running normally afterward.
@@ -182,7 +182,7 @@ simpler than `exit` to implement: it doesn't need the
 `process_context_restore()` jump back to the kernel caller at all --
 it just performs the write and returns normally, resuming ring 3 right
 after the `int 0x80`, same as any hardware interrupt returns to whatever
-it interrupted. `userland/write_test.c` (shell command `writetest`,
+it interrupted. `userland/tests/write_test.c` (shell command `writetest`,
 GRUB's third module) is the first userland program in this project
 whose console output the process produced *itself* -- watch for
 "Hello from ring 3, printed via a real write syscall!" appearing inline
@@ -194,7 +194,7 @@ the very first build of `write_test.c` failed to *link* --
 `relocation truncated to fit` against its own string literal. Cause: the
 default x86-64 code model assumes a program's code and data live within
 the low 32 bits of address space (or close enough for a RIP-relative
-32-bit displacement to reach); `userland/link.ld` places every test
+32-bit displacement to reach); `userland/rt/link.ld` places every test
 program at `VMM_USER_BASE` (512GiB), and `write_test.c` was the first
 one to reference something outside its own code (a string in
 `.rodata`), which needs the compiler to compute that string's address
@@ -217,7 +217,7 @@ Without this, kernel-only memory is still *present* in every process's
 page tables (`PML4` entry 0 is shared -- see above), just not
 user-accessible, so a process could hand the kernel an address it could
 never legally read itself and get the kernel, running at full privilege,
-to read it on the process's behalf. `userland/write_bad_test.c` (GRUB's
+to read it on the process's behalf. `userland/tests/write_bad_test.c` (GRUB's
 fourth module, shell command `ptrtest`) proves the fix actually works,
 the same way `ring3test`/`elftest` prove isolation: it deliberately
 passes address `0x1000` (real, present, but kernel-only) to `write`, and
@@ -237,7 +237,7 @@ still couldn't do much.
 **A first, deliberately narrow step toward GUI in user space:** two more
 syscalls, `SYS_GUI_INIT` (maps the real linear framebuffer directly into
 the calling process's own address space) and `SYS_GUI_POLL_KEY`
-(non-blocking keyboard read). `userland/gui_test.c` (GRUB's fifth
+(non-blocking keyboard read). `userland/tests/gui_test.c` (GRUB's fifth
 module, shell command `guitest`) is the first ring-3 process in this
 project to draw real pixels and read real input with zero kernel-space
 drawing code involved once it's running -- it fills the screen with a
@@ -280,7 +280,7 @@ process's saved register block, or back to the shell. Up to four
 processes (`MAX_PROCS`) can be READY at once, each with its own
 dedicated kernel stack used as `TSS.RSP0` while it runs, so a preempting
 interrupt always lands on that process's own stack rather than one
-shared with anything else. `userland/counter_a.c` / `counter_b.c` --
+shared with anything else. `userland/tests/counter_a.c` / `counter_b.c` --
 two tiny freestanding ring-3 programs with no yield syscall anywhere,
 each printing its own letter 20 times with a long busy-spin between
 prints -- are the proof: if the output interleaves instead of printing
