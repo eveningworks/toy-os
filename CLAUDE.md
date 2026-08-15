@@ -925,14 +925,20 @@ The gotchas it already gets right, for when you need to know why:
   file somewhere else; the only symptom is Pillow raising
   `FileNotFoundError` on a path that looks obviously correct.
 
-The project's standing instruction is to include screenshots as proof
-whenever testing happens this way -- send them with `SendUserFile`,
-don't just describe what the screenshot showed. Also save a handful of
-the representative ones into `screenshots/YYYY-MM-DD/` (today's date,
-not `TOYOS_VERSION` -- see `screenshots/README.md`) with descriptive
-filenames, not the generic `shot13.png`-style names a testing session
-naturally produces. This is in addition to sending them to the user,
-not instead of it.
+**Screenshots are a TESTING TOOL, not a deliverable.** Take as many as
+a check needs, into a scratch directory. Do NOT save them into
+`screenshots/` as evidence -- that convention is retired (2026-08-15, at
+the maintainer's request: the artifacts were not being used and
+producing them slowed the loop down). `screenshots/` is kept for what
+is already in it, not added to.
+
+Show the user a screenshot when SEEING it is the answer -- a layout
+that has to be looked at, a rendering question a number can't settle.
+Don't attach one to prove a check passed: `docs/gui-guidelines.md`
+already asks for pixel values with a control point (`pixel_probe.py`),
+and a pass/fail table from `gui_regress.py` is better evidence than an
+image, because a reader has to interpret the image and can only read
+the table.
 
 ## tools/
 
