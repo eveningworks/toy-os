@@ -246,6 +246,53 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   thumb cannot be in two places), and commit-on-release.
 
 ### Added
+- **`uapp` -- Toykit's application layer.** Describe the app, supply
+  callbacks, and the library owns the window handshake and the event
+  loop. Stage 1b of `docs/uapp-design.md`.
+
+  Three clients ported, and all three got shorter without any test tool
+  being edited: `winclient` 141 -> 85 lines, `uiclient` 189 -> 148,
+  `gfxdemo` 298 -> 298 but with its whole loop replaced by callbacks.
+  What went from each: the create/title/present/destroy handshake (with
+  its byte-at-a-time struct zero and bounded title copy), the `for(;;)`
+  and its `switch (ev.type)`, the private `win_request()`/`clear_req()`/
+  `wait_event()` helpers three clients each defined for themselves, and
+  the `draw(); present();` pair at every state change.
+
+  **The property that justifies it**: every callback is optional and the
+  library has a defined default for every event, so TWS can gain a
+  feature without apps being edited. An unknown event type is ignored on
+  purpose. That is the same optional-slot vtable as `display_driver`'s
+  capabilities and `ui_focus_ops`.
+
+  `uapp_redraw()` only marks dirty; the loop draws and presents ONCE
+  before it next blocks, so a drag across three buttons costs one round
+  trip instead of three.
+
+  `desc.buttons` routes the mouse to a `uui_button_group` and reports a
+  COMMITTED control as `on_action(code)` -- so the
+  press-then-commit-on-release rule from `docs/gui-guidelines.md` lives
+  in one place rather than being re-implemented per app. Shapes proves
+  it: its checkbox is still hand-hit-tested through `on_press` while its
+  button bar is routed, which is the composition the design wanted.
+
+  `on_tick` is the animating path -- Shapes forced it to exist, since
+  TWP has no timer event and a client that blocked for input would stop
+  moving.
+
+  Not shipped, deliberately: `on_resize`/`on_focus`/behaviour hints wait
+  for the protocol work in stages 2-3 rather than landing now as fields
+  nothing honours. And a `uapp_text()` taking the draw context's theme
+  defaults was written and then removed before landing -- every client
+  today draws with its own palette, so it had no callers. Both come back
+  when their caller does, the same bar that had `gfx_text_index_at_x()`
+  deleted a few commits ago.
+
+  Still unexercised, and worth saying: the `uapp_open()`/`uapp_pump()`
+  escape hatch, `on_close` returning 0, and `on_release`. Terminal is
+  the client that will use the hatch, in a later stage.
+
+### Added
 - **The GUI stack has names: TWP, TWS and Toykit.** Three things had no
   name, so every sentence about them was a description instead --
   "the windowing protocol", "the window manager acting as a server",

@@ -19,6 +19,7 @@
 #include "rt/sys.h"
 #include "ui/ugfx.h"
 #include "ui/uui.h"
+#include "ui/uapp.h"
 #include "ui/utheme.h"
 #include "geom.h"
 #include "fixed.h"
@@ -45,7 +46,6 @@ static fx_t g_angle;            // in turns; wraps naturally
 static int g_speed = 3;         // angle steps per frame, in 1/1024 turns
 static int g_frames;
 
-static uint32_t g_win;
 
 // The triangle, as unit-ish points about its own centre. Kept in
 // fixed point so geom_transform() can rotate and scale it without the
@@ -104,12 +104,6 @@ static void log_speed(void) {
     log_line(b);
 }
 
-static void present(void) {
-    struct win_request_msg req = {0};
-    req.type = WIN_REQ_PRESENT;
-    req.window = g_win;
-    sys_win_request(&req);
-}
 
 static int checkbox_y(void) { return WIN_H - MARGIN - ugfx_char_h() - 8; }
 
@@ -202,26 +196,67 @@ static void draw(struct ugfx_surface *s) {
     ugfx_draw_string(s, ix, checkbox_y(), info, ugfx_rgb(110, 120, 135), UTHEME_PANEL_BG);
 }
 
-int main(void) {
-    if (!ugfx_font_init()) return 2;
+// --- Toykit callbacks -------------------------------------------------
+//
+// Shapes is the app that forced `on_tick` to exist: there is no timer
+// event in TWP, so its animation is driven by the loop's own pace, and
+// a client that blocked for input would simply stop moving. With
+// on_tick set, uapp polls instead of blocking, calls this once per
+// pass, repaints if it returns 1, and yields.
+static int on_tick(struct uapp *a) {
+    (void)a;
+    g_angle += g_speed * (FX_ONE / 1024);
+    g_frames++;
+    return 1; // always repaint -- at speed 0 that redraws the same
+              // pixels, which is exactly what "it stops dead" means
+}
 
-    struct win_request_msg req = {0};
-    req.type = WIN_REQ_CREATE;
-    req.a = WIN_W;
-    req.b = WIN_H;
-    req.c = 220;
-    req.d = 110;
-    if (sys_win_request(&req) != 1) return 1;
-    g_win = req.window;
+static void on_draw(struct uapp *a, struct uapp_draw *d) {
+    (void)a;
+    draw(uapp_surface(d));
+}
 
-    req.type = WIN_REQ_TITLE;
-    req.window = g_win;
-    const char *title = "Shapes";
-    int t = 0;
-    for (; title[t] && t < WIN_TITLE_LEN - 1; t++) req.text[t] = title[t];
-    req.text[t] = '\0';
-    sys_win_request(&req);
+static void on_key(struct uapp *a, int key, unsigned mods) {
+    (void)mods;
+    if (key == 0x1B || key == 'q') { uapp_quit(a, 0); return; }
+    if (key == 'a' || key == 'A') {
+        log_line(uui_checkbox_toggle(&g_aa_check)
+                  ? "gfxdemo: aa on\n" : "gfxdemo: aa off\n");
+    }
+    if (key == '+' || key == '=') { if (g_speed < 40) { g_speed++; log_speed(); } }
+    if (key == '-') { if (g_speed > 0) { g_speed--; log_speed(); } }
+}
 
+// The button bar is routed by uapp (see desc.buttons below), so this
+// only has to handle the control uapp does not know about. The two
+// never overlap, so it does not matter that the bar was offered the
+// press first -- there is no button under the checkbox to press.
+static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
+    (void)a; (void)buttons;
+    if (uui_checkbox_hit(&g_aa_check, x, y)) {
+        log_line(uui_checkbox_toggle(&g_aa_check)
+                  ? "gfxdemo: aa on\n" : "gfxdemo: aa off\n");
+    }
+}
+
+static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
+    (void)a;
+    if (!buttons) uui_checkbox_hover(&g_aa_check, x, y);
+}
+
+// A button COMMITTED -- pressed and released on the same control. The
+// press/drag-off/release bookkeeping that decides this lives in uapp
+// and uui_button_group now, not here.
+static void on_action(struct uapp *a, int code) {
+    (void)a;
+    if (code == BTN_SLOWER && g_speed > 0) g_speed--;
+    else if (code == BTN_FASTER && g_speed < 40) g_speed++;
+    else if (code == BTN_RESET) { g_speed = 3; g_angle = 0; }
+    log_speed();
+}
+
+static void on_open(struct uapp *a) {
+    (void)a;
     uint32_t fg = UTHEME_TEXT, bg = UTHEME_BUTTON_BG;
     uui_button_init(&g_buttons[0], 0, 0, 0, 0, "Slower", bg, fg, BTN_SLOWER);
     uui_button_init(&g_buttons[1], 0, 0, 0, 0, "Faster", bg, fg, BTN_FASTER);
@@ -229,78 +264,35 @@ int main(void) {
     uui_button_group_init(&g_bar, g_buttons, 3);
 
     // Anti-aliasing starts on, and the checkbox holds that fact -- see
-    // g_aa_check's declaration. Positioned here as well as in the draw
-    // so a click that somehow arrives before the first frame still hits
-    // a real rectangle rather than one at the origin.
+    // g_aa_check's declaration.
     uui_checkbox_init(&g_aa_check, MARGIN, checkbox_y(), ugfx_char_h(),
                        "anti-aliased  (A)", UTHEME_PANEL_BG, UTHEME_TEXT);
     g_aa_check.checked = 1;
     layout();
 
-    struct ugfx_surface s = ugfx_surface_for_window(g_win, WIN_W, WIN_H);
     log_line("gfxdemo: ready\n");
     log_line("gfxdemo: aa on\n");
     log_layout();
     log_speed();
+}
 
-    for (;;) {
-        // Advance and repaint, then drain whatever input arrived. There
-        // is no timer event, so animation is driven by this loop's own
-        // pace -- the WM's per-frame mouse-move suppression means an
-        // idle cursor does not wake us, so a poll rather than a block
-        // is what keeps it turning.
-        g_angle += g_speed * (FX_ONE / 1024);
-        g_frames++;
-        draw(&s);
-        present();
-
-        struct win_event ev;
-        int quit = 0;
-        while (sys_poll_event(&ev) == 1) {
-            if (ev.type == WIN_EV_CLOSE) { quit = 1; break; }
-
-            if (ev.type == WIN_EV_KEY) {
-                if (ev.a == 0x1B || ev.a == 'q') { quit = 1; break; }
-                if (ev.a == 'a' || ev.a == 'A') {
-                    log_line(uui_checkbox_toggle(&g_aa_check)
-                              ? "gfxdemo: aa on\n" : "gfxdemo: aa off\n");
-                }
-                if (ev.a == '+' || ev.a == '=') { if (g_speed < 40) { g_speed++; log_speed(); } }
-                if (ev.a == '-') { if (g_speed > 0) { g_speed--; log_speed(); } }
-            } else if (ev.type == WIN_EV_MOUSE_DOWN) {
-                if (uui_checkbox_hit(&g_aa_check, ev.a, ev.b)) {
-                    log_line(uui_checkbox_toggle(&g_aa_check)
-                              ? "gfxdemo: aa on\n" : "gfxdemo: aa off\n");
-                } else {
-                    uui_button_group_press(&g_bar, ev.a, ev.b);
-                }
-            } else if (ev.type == WIN_EV_MOUSE_MOVE) {
-                if (ev.mods) uui_button_group_press(&g_bar, ev.a, ev.b);
-                else {
-                    uui_button_group_hover(&g_bar, ev.a, ev.b);
-                    uui_checkbox_hover(&g_aa_check, ev.a, ev.b);
-                }
-            } else if (ev.type == WIN_EV_MOUSE_UP) {
-                int code = uui_button_group_release(&g_bar);
-                if (code == BTN_SLOWER && g_speed > 0) g_speed--;
-                else if (code == BTN_FASTER && g_speed < 40) g_speed++;
-                else if (code == BTN_RESET) { g_speed = 3; g_angle = 0; }
-                if (code > 0) log_speed();
-            }
-        }
-        if (quit) break;
-
-        // Give the rest of the system a turn. Without this the demo
-        // would take its full timeslice every round and make the
-        // desktop feel sticky -- it is doing real work every frame, so
-        // yielding is politeness rather than a workaround.
-        sys_yield();
-    }
-
-    struct win_request_msg d = {0};
-    d.type = WIN_REQ_DESTROY;
-    d.window = g_win;
-    sys_win_request(&d);
+int main(void) {
+    struct uapp_desc desc = {
+        .title     = "Shapes",
+        .w         = WIN_W,
+        .h         = WIN_H,
+        .x         = 220,
+        .y         = 110,
+        .buttons   = &g_bar,
+        .on_open   = on_open,
+        .on_draw   = on_draw,
+        .on_tick   = on_tick,
+        .on_key    = on_key,
+        .on_press  = on_press,
+        .on_motion = on_motion,
+        .on_action = on_action,
+    };
+    int rc = uapp_run(&desc);
     log_line("gfxdemo: exiting\n");
-    return 0;
+    return rc;
 }

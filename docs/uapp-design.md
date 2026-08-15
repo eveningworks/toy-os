@@ -785,10 +785,15 @@ drives every one of these widgets and its 27 checks must pass unchanged
 -- which makes it an unusually good net for a refactor whose entire
 claim is that nothing observable changed.
 
-**Stage 1b -- the library.** `userland/uapp.c`/`.h` over today's five
-messages: the descriptor, the loop, `on_action`, the draw context, the
-escape hatch. Port `winclient` and `uiclient`. Their test tools must
-pass unchanged.
+**Stage 1b -- the library. DONE.** `userland/ui/uapp.c`/`.h` over
+today's five messages: the descriptor, the loop, `on_action`, the
+escape hatch. Ported `winclient` (141 -> 85 lines), `uiclient`
+(189 -> 148) and `gfxdemo` -- the third added beyond the plan because
+it is what exercises `on_tick` and the button routing, and shipping
+those unexercised would have repeated the mistake this document keeps
+warning about. All test tools passed unchanged. The draw-context
+helpers were cut for having no callers; `on_resize`/`on_focus`/hints
+wait for stages 2-3.
 
 **Stage 1c -- layout.** Containers, the two-pass draw, auto-sized
 windows, the default `on_draw`. **Calculator is the proof**: a 5×4 grid
