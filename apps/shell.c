@@ -619,7 +619,7 @@ void shell_main(void) {
     shell_path_init(); // same: read PATH from /etc/toyos.conf once, see shell_path.c
 
     vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
-    vga_write("toy-os shell -- type 'help' to get started\n");
+    vga_write("tosh -- the toy-os shell. Type 'help' to get started.\n");
     vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
 
     for (;;) {

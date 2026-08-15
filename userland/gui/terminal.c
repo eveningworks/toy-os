@@ -11,15 +11,15 @@
 //
 // With those, a ring-3 terminal is an ordinary program: it reads keys
 // from its window, hands complete lines to a shell it links against
-// (userland/ush.c), and shows whatever comes back. Nothing it does
+// (userland/tosh.c), and shows whatever comes back. Nothing it does
 // requires privilege.
 //
 // WHAT IS DELIBERATELY DIFFERENT from the kernel Terminal, and why:
 //
-//   * The shell is `ush`, not the kernel's. The kernel shell's builtins
+//   * The shell is `tosh`, not the kernel's. The kernel shell's builtins
 //     (fsck, ktest, fsformat, timezone...) reach into subsystems no
 //     syscall exposes, and wrapping each one would be re-exporting the
-//     kernel's internals under a new name. ush has the builtins a shell
+//     kernel's internals under a new name. tosh has the builtins a shell
 //     can honestly implement over the file API, and spawns everything
 //     else. `Esc` still drops to the physical shell for the rest.
 //
@@ -35,7 +35,7 @@
 #include "ui/uapp.h"
 #include "ui/utext.h"
 #include "ui/utheme.h"
-#include "lib/ush.h"
+#include "lib/tosh.h"
 #include "keyboard.h"
 
 #define WIN_W 640
@@ -43,7 +43,7 @@
 #define MARGIN 6
 
 static struct utext g_out;      // the scrollback
-static struct ush g_shell;
+static struct tosh g_shell;
 static int g_running;  // 1 while a command is executing
 
 // Where the prompt was last drawn, content-relative. Reported through
@@ -123,14 +123,14 @@ static void run_current_line(struct uapp *a) {
     put("\n");
 
     g_running = 1;
-    // Show the echoed command BEFORE blocking on it -- ush_run_line()
+    // Show the echoed command BEFORE blocking on it -- tosh_run_line()
     // below can take seconds, and the loop would not otherwise paint
     // until this handler returned, i.e. after the command it echoed.
     // This is what uapp_flush() is for; see ui/uapp.h.
     uapp_redraw(a);
     uapp_flush(a);
 
-    ush_run_line(&g_shell, g_line);
+    tosh_run_line(&g_shell, g_line);
 
     g_running = 0;
     g_line_len = 0;
@@ -188,12 +188,12 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
 static void on_open_cb(struct uapp *a) {
     (void)a;
     utext_init(&g_out);
-    ush_init(&g_shell, out_sink, 0);
+    tosh_init(&g_shell, out_sink, 0);
     g_line[0] = '\0';
     g_line_len = 0;
 
-    put("toy-os terminal, running in ring 3.\n");
-    put("Type `help`. Esc closes this window.\n\n");
+    put("tosh -- the toy-os shell, running in ring 3.\n");
+    put("Type `help`. Alt+F4 closes this window.\n\n");
 }
 
 int main(void) {

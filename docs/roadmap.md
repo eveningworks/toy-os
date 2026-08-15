@@ -408,7 +408,7 @@ once this exists.*
 
 ### Milestone 12 -- Shell pipes & job control (planned v0.12.0)
 
-**Read this as "make `ush` a real shell".** `userland/lib/ush.c` (Milestone
+**Read this as "make `tosh` a real shell".** `userland/lib/tosh.c` (Milestone
 41) already runs in ring 3 and spawns programs with their output piped
 back, so this milestone is no longer hypothetical -- it is the specific
 list of things standing between that and something bash-shaped. Each
@@ -423,7 +423,7 @@ because that is the distinction that decides what can be done today:
 - [ ] **`dup`/`dup2`-style fd plumbing**, so the shell can wire an
       arbitrary fd to 0/1/2 rather than the two special cases spawn
       hardcodes. The general form of the item above.
-- [ ] **A per-process cwd.** `ush` keeps its own, and a spawned child
+- [ ] **A per-process cwd.** `tosh` keeps its own, and a spawned child
       does not inherit it -- so `cd /bin` then `hello` finds the program
       only because PATH is absolute. Also listed under Milestone 40.
 - [ ] **An environment passed to a child.** `crt0.asm` already reads
@@ -1318,7 +1318,7 @@ Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
 - [ ] A bigger process table (4 slots) -- now genuinely binding: a
       ring-3 terminal plus the program it spawned is already two, so
       two terminals running commands exhausts it.
-- [ ] `ush` improvements once the kernel supports them: pipelines
+- [ ] `tosh` improvements once the kernel supports them: pipelines
       (`a | b` -- the pipe primitive exists, the parsing doesn't),
       redirection, and Ctrl-C (see Milestone 10, whose requirements
       this migration is what makes achievable).
@@ -1352,7 +1352,7 @@ Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
       list, listbox, dropdown, focus ring.
 - [x] ~~Migrate Terminal to `userland/`~~ -- done, and it needed new
       kernel machinery rather than a port: see the pipes/spawn entry in
-      `CHANGELOG.md`. Its shell (`userland/lib/ush.c`) runs in ring 3 too
+      `CHANGELOG.md`. Its shell (`userland/lib/tosh.c`) runs in ring 3 too
       rather than proxying the kernel's.
 - [x] ~~Geometry primitives, so a client can draw more than rectangles
       and text~~ -- done: `kernel/lib/geom.c` + `fixed.c` (lines,

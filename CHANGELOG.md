@@ -31,6 +31,38 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
 
 ## [Unreleased]
 
+### Changed
+- **The shell has a name now: `tosh`** -- t + OS + h, contracting
+  "toy-os shell" the way `bash` contracts "Bourne-again shell". It was
+  unnamed until now, which was fine while there was one command line
+  and no reason to refer to it.
+
+  The name covers the shell LANGUAGE and behaviour, which has two front
+  ends -- `apps/shell.c` in the kernel and `userland/lib/tosh.c` in
+  ring 3 -- the way `sh` names a language rather than one binary. It is
+  deliberately not the terminal; `uterm` stays the terminal emulator.
+  `userland/lib/ush.c`/`.h` became `tosh.c`/`.h` with `ush_*` ->
+  `tosh_*`, and both command lines now greet you by name.
+
+  Most of the reasoning is in what the name AVOIDS, since each
+  alternative looks obviously right until you search for it: `toysh` is
+  toybox's real shell, `hush` is busybox's, `tsh` is the CS:APP shell
+  lab that thousands of students grep for, and `tush` reads as crude
+  Finnish slang. `docs/decisions.md` records those, and that there is
+  no `/bin/tosh` binary yet (the ring-3 shell is a library because its
+  first caller is a GUI terminal that cannot block in a `read()`; a
+  standalone one needs an interactive-stdin story first).
+
+### Fixed
+- **`tools/seed_disk.py` would have reformatted a v2 image.** Its probe
+  hardcoded TFS3 version 1, so a v2 `disk.img` read as BLANK and the
+  seed step tried to format it -- caught only because the writer tool
+  refuses to format an image it recognises, which turned silent data
+  loss into a build error. It accepts any known TFS3 version now.
+- **The ring-3 Terminal still told users Esc closes the window.** It
+  stopped being true when Alt+F4 landed and the WM took over closing;
+  the banner says Alt+F4 now.
+
 ### Added
 - **`fs_rename()` and `fs_truncate()`, on both backends, with `mv` and
   `truncate` in the shell.** Until now there was no way to rename a
@@ -114,13 +146,6 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   the other version's backup superblocks on reformat. That last one is
   the wipefs rule one format version apart instead of one filesystem
   apart, and the kernel's `tfs3_format()` does the same.
-
-### Fixed
-- **`tools/seed_disk.py` would have reformatted a v2 image.** Its probe
-  hardcoded TFS3 version 1, so a v2 `disk.img` read as BLANK and the
-  seed step tried to format it -- caught only because the writer tool
-  refuses to format an image it recognises, which turned silent data
-  loss into a build error. It accepts any known TFS3 version now.
 - **`tools/usertest_run.py`, and the gap it closes.** `make test` runs
   the KTESTs inside the kernel; `gui_regress.py` runs the windowed
   clients. Nothing ran a plain `/tests` binary except a person typing

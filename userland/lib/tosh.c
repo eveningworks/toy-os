@@ -1,4 +1,4 @@
-// ush -- a small shell that runs in RING 3.
+// tosh -- the toy-os shell (t + OS + h), running in RING 3.
 //
 // The kernel has its own shell (apps/shell*.c) with dozens of builtins
 // that reach straight into the filesystem, the drivers and the test
@@ -16,8 +16,8 @@
 // Structured as a library rather than a program: userland/terminal.c
 // links it and feeds it a line at a time, because a GUI terminal owns
 // its own event loop and cannot sit in a read() loop of its own. A
-// standalone `ush` binary would be a thin main() over the same calls.
-#include "lib/ush.h"
+// standalone `tosh` binary would be a thin main() over the same calls.
+#include "lib/tosh.h"
 #include "rt/sys.h"
 
 static int slen(const char *s) { int n = 0; while (s && s[n]) n++; return n; }
@@ -39,7 +39,7 @@ static void scopy(char *dst, const char *src, int cap) {
 // "/a" vs "a" subtly different per command is exactly how a shell ends
 // up with paths that mean different things in different places -- the
 // bug kernel/lib/kpath.c exists to have fixed once, on that side.
-static void resolve(struct ush *sh, const char *path, char *out, int cap) {
+static void resolve(struct tosh *sh, const char *path, char *out, int cap) {
     if (!path || !path[0]) { scopy(out, sh->cwd, cap); return; }
     if (path[0] == '/') { scopy(out, path, cap); return; }
 
@@ -57,21 +57,21 @@ static void up_one(char *dir) {
     if (n < 1) n = 1;
     dir[n] = '\0';
     if (n > 1 && dir[n - 1] == '/') dir[n - 1] = '\0';
-    if (!dir[0]) scopy(dir, "/", USH_PATH_MAX);
+    if (!dir[0]) scopy(dir, "/", TOSH_PATH_MAX);
 }
 
-void ush_init(struct ush *sh, ush_out_fn out, void *ctx) {
-    scopy(sh->cwd, "/", USH_PATH_MAX);
+void tosh_init(struct tosh *sh, tosh_out_fn out, void *ctx) {
+    scopy(sh->cwd, "/", TOSH_PATH_MAX);
     sh->out = out;
     sh->ctx = ctx;
     sh->last_status = 0;
 }
 
-static void emit(struct ush *sh, const char *s) {
+static void emit(struct tosh *sh, const char *s) {
     if (sh->out) sh->out(sh->ctx, s, slen(s));
 }
 
-static void emit_int(struct ush *sh, int v) {
+static void emit_int(struct tosh *sh, int v) {
     char b[16];
     int i = 0;
     if (v < 0) { b[i++] = '-'; v = -v; }
@@ -86,9 +86,9 @@ static void emit_int(struct ush *sh, int v) {
 
 // --- builtins ---------------------------------------------------------
 
-static void bi_ls(struct ush *sh, const char *arg) {
-    char path[USH_PATH_MAX];
-    resolve(sh, arg, path, USH_PATH_MAX);
+static void bi_ls(struct tosh *sh, const char *arg) {
+    char path[TOSH_PATH_MAX];
+    resolve(sh, arg, path, TOSH_PATH_MAX);
 
     struct dirent ents[32];
     int n = sys_listdir(path, ents, 32);
@@ -100,10 +100,10 @@ static void bi_ls(struct ush *sh, const char *arg) {
     }
 }
 
-static void bi_cat(struct ush *sh, const char *arg) {
+static void bi_cat(struct tosh *sh, const char *arg) {
     if (!arg || !arg[0]) { emit(sh, "cat: needs a filename\n"); return; }
-    char path[USH_PATH_MAX];
-    resolve(sh, arg, path, USH_PATH_MAX);
+    char path[TOSH_PATH_MAX];
+    resolve(sh, arg, path, TOSH_PATH_MAX);
 
     int fd = sys_open(path, 0);
     if (fd < 0) { emit(sh, "cat: cannot open "); emit(sh, path); emit(sh, "\n"); return; }
@@ -117,12 +117,12 @@ static void bi_cat(struct ush *sh, const char *arg) {
     sys_close(fd);
 }
 
-static void bi_cd(struct ush *sh, const char *arg) {
-    if (!arg || !arg[0]) { scopy(sh->cwd, "/", USH_PATH_MAX); return; }
+static void bi_cd(struct tosh *sh, const char *arg) {
+    if (!arg || !arg[0]) { scopy(sh->cwd, "/", TOSH_PATH_MAX); return; }
     if (seq(arg, "..")) { up_one(sh->cwd); return; }
 
-    char path[USH_PATH_MAX];
-    resolve(sh, arg, path, USH_PATH_MAX);
+    char path[TOSH_PATH_MAX];
+    resolve(sh, arg, path, TOSH_PATH_MAX);
     // Verified with a listdir rather than assumed: `cd` onto a file (or
     // onto nothing) silently "succeeding" leaves every later relative
     // path wrong, with nothing pointing at the cd as the cause.
@@ -133,7 +133,7 @@ static void bi_cd(struct ush *sh, const char *arg) {
         emit(sh, "\n");
         return;
     }
-    scopy(sh->cwd, path, USH_PATH_MAX);
+    scopy(sh->cwd, path, TOSH_PATH_MAX);
 }
 
 // --- external programs -------------------------------------------------
@@ -142,9 +142,9 @@ static void bi_cd(struct ush *sh, const char *arg) {
 // this shell's sink. THIS is the part that could not exist before
 // SYS_SPAWN/SYS_PIPE: a ring-3 program starting another and reading
 // what it prints.
-static int run_external(struct ush *sh, const char *path, const char *args) {
+static int run_external(struct tosh *sh, const char *path, const char *args) {
     int fds[2];
-    if (sys_pipe(fds) != 1) { emit(sh, "ush: out of pipes\n"); return -1; }
+    if (sys_pipe(fds) != 1) { emit(sh, "tosh: out of pipes\n"); return -1; }
 
     int pid = sys_spawn(path, args, fds[1]);
     if (pid < 0) {
@@ -199,16 +199,16 @@ static int find_program(const char *name, char *out, int cap) {
     return 0;
 }
 
-int ush_run_line(struct ush *sh, const char *line) {
+int tosh_run_line(struct tosh *sh, const char *line) {
     // Split into command and the rest. Everything after the first space
     // is handed to the program verbatim -- there is no quoting or
     // globbing here, and pretending otherwise would be worse than not
     // having it.
-    char cmd[USH_PATH_MAX];
+    char cmd[TOSH_PATH_MAX];
     int i = 0;
     while (line[i] == ' ') i++;
     int c = 0;
-    while (line[i] && line[i] != ' ' && c < USH_PATH_MAX - 1) cmd[c++] = line[i++];
+    while (line[i] && line[i] != ' ' && c < TOSH_PATH_MAX - 1) cmd[c++] = line[i++];
     cmd[c] = '\0';
     while (line[i] == ' ') i++;
     const char *args = line[i] ? line + i : 0;
@@ -221,14 +221,14 @@ int ush_run_line(struct ush *sh, const char *line) {
     if (seq(cmd, "pwd"))  { emit(sh, sh->cwd); emit(sh, "\n"); return 0; }
     if (seq(cmd, "echo")) { if (args) emit(sh, args); emit(sh, "\n"); return 0; }
     if (seq(cmd, "help")) {
-        emit(sh, "ush -- a ring-3 shell.\n"
+        emit(sh, "tosh -- the toy-os shell, running in ring 3.\n"
                  "builtins: ls cat cd pwd echo help\n"
                  "anything else is spawned from /bin, /usr/bin or /tests\n");
         return 0;
     }
 
-    char path[USH_PATH_MAX];
-    if (!find_program(cmd, path, USH_PATH_MAX)) {
+    char path[TOSH_PATH_MAX];
+    if (!find_program(cmd, path, TOSH_PATH_MAX)) {
         emit(sh, cmd);
         emit(sh, ": not found\n");
         sh->last_status = -1;

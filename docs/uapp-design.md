@@ -663,7 +663,7 @@ userland/
            (uui_button, uui_listbox, uui_dropdown, uui_checkbox,
             uui_scrollbar, uui_field, uui_radio_list, uui_layout)
   gui/     calculator, notepad, terminal, gfxdemo, uiclient, winclient
-  bin/     ls, lspci, lscpu, hello, ush
+  bin/     ls, lspci, lscpu, hello, tosh
   tests/   exit_test, nx_test, fpu_test, write_bad_test, ... (~20)
 ```
 

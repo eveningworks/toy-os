@@ -157,7 +157,7 @@ USERLAND_CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-pro
 #   ui/     the GUI toolkit: ugfx, utheme, utext and the widgets.
 #           Mirrors apps/ui/, so a widget's kernel-side and ring-3
 #           versions sit at the same relative path while both exist.
-#   lib/    userland libraries that aren't UI (ush, the shell the
+#   lib/    userland libraries that aren't UI (tosh, the shell the
 #           ring-3 Terminal links against)
 #   gui/    windowed applications  -> seeded to /bin
 #   bin/    command-line programs  -> seeded to /bin

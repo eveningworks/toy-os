@@ -210,7 +210,7 @@ technical conventions below:
   libsys, stack_chk, link.ld), `ui/` (the GUI toolkit -- ugfx, utheme,
   utext, the widgets; mirrors `apps/ui/` so a widget's kernel-side and
   ring-3 versions sit at the same relative path), `lib/` (userland
-  libraries that aren't UI -- `ush`, the shell the ring-3 Terminal
+  libraries that aren't UI -- `tosh`, the shell the ring-3 Terminal
   links against, plus `string.h`/`stdio.h`/`cmem.c`, the C names over
   the toolkit; see the bullet below), `gui/` (windowed apps), `bin/` (command-line
   programs), `tests/` (single-mechanism diagnostics). **The first three
@@ -342,7 +342,7 @@ technical conventions below:
   and kernel Calculators cannot disagree about arithmetic. Only
   freestanding files qualify.
 - **One process can run another and read its output**: `SYS_PIPE` +
-  `SYS_SPAWN` + `SYS_WAITPID`, wrapped by libsys. `userland/lib/ush.c` is a
+  `SYS_SPAWN` + `SYS_WAITPID`, wrapped by libsys. `userland/lib/tosh.c` is a
   shell built on them and `userland/gui/terminal.c` the ring-3 Terminal
   around it. Two rules to know. **The retry sentinel is `SYS_RETRY`
   (-2), never 0** -- 0 is a real answer for `read` (EOF), and using it

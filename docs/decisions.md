@@ -37,6 +37,7 @@ there when you add an entry, or the index quietly stops being one.
 - [Ring-3 clients draw for themselves, and the font is shared read-only](#ring-3-clients-draw-for-themselves-and-the-font-is-shared-read-only)
 - [Calculator's engine is shared source compiled twice, not copied](#calculators-engine-is-shared-source-compiled-twice-not-copied)
 - [Ring 3 gets the C names; the kernel keeps `k_`](#ring-3-gets-the-c-names-the-kernel-keeps-k_)
+- [The shell is called `tosh`, and the name covers the language, not a binary](#the-shell-is-called-tosh-and-the-name-covers-the-language-not-a-binary)
 - [The process entry ABI is SysV, and crt0 owns the stack alignment](#the-process-entry-abi-is-sysv-and-crt0-owns-the-stack-alignment)
 - [A legacy ring-3 process needs its own RSP0 and must not be descheduled](#a-legacy-ring-3-process-needs-its-own-rsp0-and-must-not-be-descheduled)
 - [The retry sentinel is -2 because 0 is a real answer](#the-retry-sentinel-is--2-because-0-is-a-real-answer)
@@ -3924,6 +3925,45 @@ block-map walks -- they persist through completely different mechanisms
 (a journal transaction vs. a record write), which is most of what the
 code around the walk is.
 
+## The shell is called `tosh`, and the name covers the language, not a binary
+
+`tosh` = t + OS + h, contracting "toy-os shell" the way `bash` contracts
+"Bourne-again shell". It was unnamed until 2026-08-15, which was fine
+while there was one command line and no reason to refer to it.
+
+**What the name covers.** The shell LANGUAGE and behaviour -- the
+builtins, the command-line editing, the way a line is dispatched --
+which today has two front ends: `apps/shell.c` in the kernel and
+`userland/lib/tosh.c` in ring 3. `sh` names a language rather than one
+binary, and this follows that. It is deliberately NOT the terminal:
+`uterm` is the terminal emulator, and a terminal that is not a shell is
+a distinction every real system keeps.
+
+**Four names were rejected for collisions**, which is most of the
+reasoning worth recording, because each looks obviously right until you
+search for it:
+
+- `toysh` -- toybox's actual shell.
+- `hush` -- busybox's actual shell.
+- `tsh` -- the CS:APP shell lab, assigned to enormous numbers of
+  students, so the name is unsearchable.
+- `tush` -- reads as crude Finnish slang, which the maintainer
+  (Finnish) would have to explain forever.
+
+`wish` (Tcl), `posh` and `ion` (Redox) were ruled out the same way.
+`tosh` is British slang for "nonsense", which is the one live objection
+and was accepted deliberately: for a hobby OS's shell it reads as
+self-aware rather than rude, and no software owns the name.
+
+**There is no `/bin/tosh` yet.** The ring-3 shell is a LIBRARY, because
+its first caller is a GUI terminal that owns its own event loop and
+cannot sit blocked in a `read()` (see `tosh.h`). A standalone binary
+would be a thin `main()` over the same `tosh_init()`/`tosh_run_line()`
+calls -- the header has said so since it was written -- but it needs an
+interactive stdin story first: a process started by the physical
+shell's `run` has nowhere useful to read a line from, which is the same
+limitation that makes `echotest` hang under headless testing.
+
 ## The process entry ABI is SysV, and crt0 owns the stack alignment
 
 A new process starts with the standard SysV layout on its stack --
@@ -4018,7 +4058,7 @@ happened" is only safe when nothing can legitimately be zero.
 
 ## The ring-3 terminal runs its own shell, not the kernel's
 
-`userland/gui/terminal.c` links `userland/lib/ush.c` -- a shell implemented over
+`userland/gui/terminal.c` links `userland/lib/tosh.c` -- a shell implemented over
 syscalls -- rather than calling the kernel's `shell_dispatch()` through
 some new "run this command line" syscall.
 
@@ -4030,14 +4070,14 @@ matters: the kernel shell's builtins (`fsck`, `ktest`, `fsformat`,
 driver state. Exposing them through one syscall would re-export the
 kernel's internals under a new name and call it a migration.
 
-So `ush` has the builtins a shell can honestly implement over the file
+So `tosh` has the builtins a shell can honestly implement over the file
 API, and spawns everything else through `SYS_SPAWN` with its output
 piped back. The kernel shell is still reachable -- `Esc` leaves the
 desktop for the physical one -- which is the honest division: the
 ring-3 terminal does what a terminal does, and kernel-only operations
 stay in a kernel-only shell.
 
-The cost is real and worth stating: `ush` is less capable than the
+The cost is real and worth stating: `tosh` is less capable than the
 kernel Terminal today. That is a consequence of the boundary being
 drawn honestly rather than a defect to paper over.
 

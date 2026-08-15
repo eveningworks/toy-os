@@ -526,7 +526,7 @@ apps/            -- programs. Two kinds:
                      apps/theme.h holds the THEME_* named colors.
 userland/        -- ring-3 programs, split by ROLE: rt/ (crt0, libsys,
                      link.ld), ui/ (Toykit, the GUI toolkit), lib/ (the
-                     non-UI libraries -- the ush shell, plus string.h/
+                     non-UI libraries -- the tosh shell, plus string.h/
                      stdio.h/cmem.c, the C names over the shared
                      toolkit), gui/ (windowed apps), bin/ (command-line
                      programs) and tests/ (single-mechanism
