@@ -729,6 +729,23 @@ changed) specifically so this dependency tracking doesn't regress --
 would make every file that includes `kapi.h` (nearly everything) look
 "out of date" and rebuild every single time.
 
+**`make all` does NOT update `toy-os.iso`, and every headless test boots
+the ISO.** `ktest_run.py`, `boot_smoke_test.py`, `vm.py` and the GUI
+tools all launch `toy-os.iso`, so a `make all` without `make iso`
+leaves them testing the PREVIOUS build while reporting on the current
+one. This does not fail loudly -- it fails as a clean pass. It bit for
+real this session in the worst possible place: a positive control (make
+`.text` writable, expect the W^X KTESTs to go red) came back 132/132
+green, which reads exactly like "the test is measuring nothing" and
+sent a session looking at the test instead of the build. The rebuild
+made it fire on precisely the two right checks. So: **`make iso`, not
+`make all`, before any headless run**, and when a positive control
+turns nothing red, check that the ISO is newer than the change before
+suspecting anything else (`ls -l build/kernel.bin toy-os.iso`). This is
+the same lesson as the fixture one below with a different cause -- the
+data never reached the code under test because the code never reached
+the machine.
+
 **`make test` / `tools/ktest_run.py`** -- the in-kernel test suite.
 Tests are `KTEST("suite", "name") { ... }` blocks living next to the
 code they exercise (`kernel/mm/mm_test.c`, `kernel/fs/fs_test.c`, ...);
@@ -1421,6 +1438,19 @@ repeated manual steps to be worth automating:
   trusting a clean run -- a clean sweep otherwise can't be told apart
   from a sweep that isn't checking anything, which has happened here
   for real.
+- **`damage_hunt.py`** -- `damage_sweep.py` over MANY seeds, a fresh
+  disk copy and its own `vm.py --instance` slot each, as one pass/fail
+  table; non-zero if any seed violated the invariant. One seed is one
+  ORDERING, and this bug family lives in orderings, so "does any of a
+  batch fail" is the question worth asking -- and the four-line shell
+  loop that answers it had been written from scratch twice, getting the
+  slot/`--sock`/`--qmp-port` triple wrong each time. **`-j` defaults to
+  1 deliberately**: parallel VMs have reported a violation the same
+  seed does not reproduce serially, and whether that's a real
+  load-sensitive WM bug or a harness artifact is undiagnosed (see
+  `docs/roadmap.md`'s known issues). Re-check any `-j > 1` finding at
+  `-j 1` before believing it. Not in `gui_regress.py`, same reason
+  `damage_sweep.py` isn't.
 - **`watch_vm.sh`** -- attach a VIEW-ONLY VNC viewer to a headless VM,
   so a run can be watched live without interfering with it.
   `tools/watch_vm.sh [slot...]`; the display derives from the VM slot

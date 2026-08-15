@@ -870,6 +870,24 @@ rediscover the setup -- a seed, a command, a click sequence. And
 completed *features* stay struck through above because the milestone
 history is worth reading, but a fixed papercut is just noise.
 
+- [ ] **A `resize-shrink Notepad` damage violation that only appears
+      under parallel VMs.** Reproduce: `python3 tools/damage_hunt.py
+      --seeds 4 6 --random 20 -j 2` -- both seeds reported an identical
+      `63 px changed outside the damage rect, first at (349,264);
+      damage was (0,329 1280x391)` on the FIXED sequence's
+      `resize-shrink Notepad` step. What makes it unresolved rather
+      than a bug report: `-j 1` is clean, and so is `-j 2 --random 0`,
+      so it is not simply "the fixed sequence is broken". Two live
+      hypotheses needing opposite fixes -- a real WM bug that only
+      loses the race when frames are slow, or the harness sampling a
+      mid-resize frame under contention. Per this file's own rule,
+      design ONE experiment that separates them before fixing toward
+      either; a good candidate is re-running the failing combination
+      with `gui damage verify` reporting timestamps, or reproducing the
+      same slowdown serially (a busy loop, or `-j 1` under external
+      CPU load). Found by `damage_hunt.py`'s first real run, on the
+      same day the old 205px entry was measured gone.
+
 - [ ] **Control Panel applets can't show hover.** `struct applet`'s
       `draw(x, y, w, h)` doesn't carry the cursor position, so the
       timezone applet passes `hovered = -1` to `ui_radio_list_draw()`
