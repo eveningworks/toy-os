@@ -92,6 +92,7 @@ TOOLS = [
     ("uapp", "uapp_test.py", "the TWP resize handshake"),
     ("scrollbar", "scrollbar_test.py", "scrollbar behaviour, per the guidelines"),
     ("menubar", "menubar_test.py", "menu bar, submenus and the status bar"),
+    ("forcequit", "forcequit_test.py", "not-responding detection and force quit"),
 ]
 
 

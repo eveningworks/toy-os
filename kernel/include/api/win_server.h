@@ -76,6 +76,17 @@ struct win_server_ops {
     // abi/win_proto.h -- so the presentation layer is being told, not
     // asked.
     void (*window_resized)(int pid, uint32_t id, uint32_t *buf, int w, int h);
+
+    // The client answered a liveness ping with this serial. OPTIONAL,
+    // like every slot here -- a presentation layer that does not care
+    // about liveness leaves it NULL and clients simply never get
+    // pinged, because nothing asks.
+    //
+    // Note which side owns what: win_server relays the pong (it owns
+    // the protocol), and the WM decides what a missing one MEANS (it
+    // owns presentation -- the title, the dialog, the policy). The
+    // timeout is not in here for that reason.
+    void (*window_pong)(int pid, uint32_t id, uint32_t serial);
 };
 
 // Registers the presentation layer. The WM calls this with its ops as

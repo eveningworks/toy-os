@@ -93,6 +93,23 @@ struct window {
     // a client that is doing nothing still burns half the CPU under the
     // scheduler's rotation. INT32_MIN means "nothing sent yet".
     int client_last_mx, client_last_my;
+
+    // --- liveness (see apps/wm/wm_client.c's "Is it still there?") ---
+    //
+    // A client that has stopped pumping its queue looks exactly like an
+    // idle one from out here: both draw nothing and send nothing. So the
+    // WM asks -- WIN_EV_PING with a serial, WIN_REQ_PONG back -- and
+    // these track that exchange. `ping_serial` is 0 when no ping is
+    // outstanding.
+    uint32_t ping_serial;
+    uint64_t ping_sent_tick;
+    int not_responding;   // no answer within WM_PING_TIMEOUT_TICKS
+
+    // When this window was ASKED to close (0 = not asked). A client is
+    // entitled to take its time, or to refuse outright, so this alone
+    // is never grounds for anything -- it is paired with a missing pong,
+    // which is what separates "declined" from "wedged".
+    uint64_t close_asked_tick;
 };
 
 // Height of a window's title bar in pixels (matches the taskbar height).

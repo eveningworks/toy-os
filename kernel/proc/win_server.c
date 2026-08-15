@@ -325,6 +325,14 @@ int win_server_request(int pid, struct win_request_msg *req) {
         req->b = cw->h;
         return 1;
     }
+    case WIN_REQ_PONG: {
+        struct client_window *cw = lookup(pid, req->window);
+        if (!cw) return 0;
+        // Relayed, not interpreted. Whether a late pong or a missing
+        // one means anything is the WM's call -- see win_server.h.
+        if (g_ops && g_ops->window_pong) g_ops->window_pong(pid, req->window, req->a);
+        return 1;
+    }
     case WIN_REQ_FONT:
         return map_font(pid, req);
     default:

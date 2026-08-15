@@ -652,6 +652,41 @@ int scheduler_pid_valid(int pid) {
     return procs[pid - 1].state != SCHED_UNUSED;
 }
 
+int scheduler_kill(int pid, int exit_code) {
+    if (pid < 1 || pid > MAX_PROCS) return 0;
+    int slot = pid - 1;
+
+    // Killing the CURRENT process would have to switch away and never
+    // come back, which is scheduler_on_exit()'s job and reached through
+    // SYS_EXIT. Refused rather than half-implemented: the caller here is
+    // the window manager, which is never the process it is killing.
+    if (slot == current_index) return 0;
+
+    if (procs[slot].state != SCHED_READY && procs[slot].state != SCHED_BLOCKED)
+        return 0; // unused, already a zombie, or running (handled above)
+
+    procs[slot].state = SCHED_ZOMBIE;
+    procs[slot].exit_code = exit_code;
+    alive_count--;
+
+    // Exactly the teardown scheduler_on_exit() does, and for the same
+    // reasons -- see its comments. A killed client's windows must come
+    // off the screen now rather than at reap, or a dead process leaves a
+    // window drawing stale pixels and answering no input.
+    win_server_client_gone(pid);
+    scheduler_wake(SCHED_WAIT_CHILD, SYS_RETRY);
+    if (procs[slot].stdout_pipe >= 0) {
+        pipe_close_writer(procs[slot].stdout_pipe);
+        procs[slot].stdout_pipe = -1;
+    }
+
+    // No switch: the victim is not the process running, so the CPU is
+    // already somewhere valid. If it was READY it simply never gets
+    // picked again; if it was BLOCKED, find_next_runnable() skips
+    // zombies exactly as it skipped it before.
+    return 1;
+}
+
 enum sched_poll_result scheduler_poll(int pid, int *out_exit_code) {
     if (pid < 1 || pid > MAX_PROCS) return SCHED_POLL_INVALID;
     int slot = pid - 1;

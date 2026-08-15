@@ -228,6 +228,7 @@ void open_app(const struct gui_app *app) {
         int pid = scheduler_spawn(app->exec_path, 0);
         klog_printf("wm: launched %s (%s) as pid %d\n",
                      app->name, app->exec_path, pid);
+        if (pid > 0) wm_track_launched(pid);
         // pid 0 means no free process slot, or the binary is missing
         // from /bin. Say so in the log rather than failing silently --
         // from the desktop the only symptom is a menu item that does
@@ -303,6 +304,99 @@ void open_app(const struct gui_app *app) {
     klog_write("wm: opened ");
     klog_write(app->name);
     klog_write("\n");
+}
+
+// Pids this desktop launched, so their slots can be reaped.
+//
+// A process that exits stays SCHED_ZOMBIE until somebody polls it
+// (scheduler.h). The Terminal's children are reaped by the ring-3
+// shell's waitpid; a Start-menu launch has no shell, so nothing was
+// polling these at all and every open-then-close of a launched app
+// burned a slot permanently. With MAX_PROCS at 4 that is four launches
+// per boot, after which the desktop silently opens nothing -- measured,
+// not deduced: the fifth `gui open Shapes` simply never produced a
+// window.
+//
+// Reaping is also what makes force-quit repeatable rather than a
+// four-shot escape hatch.
+static int g_launched[MAX_WINDOWS];
+
+void wm_track_launched(int pid) {
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        if (g_launched[i] == 0) { g_launched[i] = pid; return; }
+    }
+    // Full: every slot is a pid still running. Dropping the newest is
+    // the honest outcome -- it just means this one is not reaped until
+    // the next boot, which is where we started.
+    klog_write("wm: launch table full -- this pid will not be reaped\n");
+}
+
+static void wm_reap_launched(void) {
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        if (!g_launched[i]) continue;
+        int code = 0;
+        if (scheduler_poll(g_launched[i], &code) != SCHED_POLL_RUNNING) {
+            g_launched[i] = 0; // reaped (or already gone) -- slot is free again
+        }
+    }
+}
+
+// --- force quit -------------------------------------------------------
+//
+// The window a force-quit dialog is currently about. An index would go
+// stale the moment any other window closed (close_window() reshuffles
+// windows[], which has bitten pending_write/read/proc for exactly this
+// reason), and the dialog outlives several frames, so this holds the
+// pid instead -- which nothing reshuffles.
+static int g_force_quit_pid;
+
+static void wm_force_quit_yes(void) {
+    if (!g_force_quit_pid) return;
+    klog_printf("wm: force-quitting pid %d\r\n", g_force_quit_pid);
+
+    // Killing the process is what takes the window down: scheduler_kill
+    // calls win_server_client_gone(), which destroys the client's
+    // windows through the same path a normal exit uses. Removing the
+    // window here as well would be a second teardown of the same thing.
+    scheduler_kill(g_force_quit_pid, -1);
+    g_force_quit_pid = 0;
+    redraw_pending = 1;
+}
+
+static void wm_force_quit_no(void) {
+    // "Wait" restarts the clock rather than giving up on the window: an
+    // app that was merely slow gets another chance, and one that is
+    // truly wedged will offer the dialog again next time the user asks
+    // it to close. Not re-arming would make the first Wait permanent.
+    for (int i = 0; i < window_count; i++) {
+        if (windows[i].client_pid == g_force_quit_pid) {
+            windows[i].close_asked_tick = 0;
+            windows[i].ping_serial = 0;
+            // not_responding TOO. check_liveness() reports only the
+            // TRANSITION into that state, so leaving the flag set made
+            // the first Wait permanent: the window stayed marked, the
+            // transition never happened again, and no later Alt+F4
+            // could ever re-offer the dialog. Measured, not reasoned --
+            // the second Alt+F4 in a row simply did nothing.
+            windows[i].not_responding = 0;
+            break;
+        }
+    }
+    redraw_pending = 1; // the title bar drops "(Not Responding)"
+    g_force_quit_pid = 0;
+    redraw_pending = 1;
+}
+
+static void wm_offer_force_quit(int idx) {
+    if (confirm_dialog_open) return;   // already asking about something
+    if (idx < 0 || idx >= window_count) return;
+
+    static char msg[WIN_TITLE_MAX + 32];
+    k_snprintf(msg, sizeof msg, "%s is not responding.", windows[idx].title);
+
+    g_force_quit_pid = windows[idx].client_pid;
+    confirm_dialog_open_labelled(msg, "Force Quit", "Wait",
+                                  wm_force_quit_yes, wm_force_quit_no);
 }
 
 // See wm_internal.h. The reasoning lives in wm_input.c's X-button
@@ -603,6 +697,16 @@ void wm_run(void) {
         // pending so output that streamed in between two mouse-move
         // events still shows up promptly instead of waiting for some
         // unrelated redraw to happen to fire.
+        wm_reap_launched();
+
+        // Liveness, once per frame. Only reports a window that has gone
+        // unresponsive WHILE being asked to close -- see
+        // wm_client_check_liveness().
+        {
+            int hung = wm_client_check_liveness();
+            if (hung >= 0) wm_offer_force_quit(hung);
+        }
+
         if (pending_proc) {
             redraw_pending = 1;
             int exit_code = -1;

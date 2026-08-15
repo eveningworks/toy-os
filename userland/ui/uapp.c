@@ -124,6 +124,27 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
     const struct uapp_desc *d = a->desc;
 
     switch (ev->type) {
+    case WIN_EV_PING: {
+        // Answered HERE, with no app involvement and no callback --
+        // deliberately. A liveness check an app could forget to answer
+        // would report every app that had not been updated as hung, and
+        // one an app could answer from a background thread would report
+        // a wedged app as healthy (there are no threads here, but the
+        // principle is why xdg_shell puts pong in the toolkit too).
+        //
+        // Answering from the event loop is exactly the right test: this
+        // line only runs if the loop is turning. An app stuck inside its
+        // own on_draw or on_key never reaches it, which is precisely
+        // what "not responding" should mean.
+        struct win_request_msg req;
+        req_clear(&req);
+        req.type = WIN_REQ_PONG;
+        req.window = a->window;
+        req.a = ev->a; // the serial, echoed unchanged
+        req_send(&req);
+        break;
+    }
+
     case WIN_EV_CLOSE:
         // The default ACCEPTS. An app that wants to refuse says so;
         // an app that has never heard of closing still closes.

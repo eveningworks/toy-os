@@ -47,6 +47,32 @@
                             // so Notepad drew a scrollbar it could never
                             // move and the wheel did nothing in any
                             // ring-3 window.
+#define WIN_EV_PING       9 // a: an opaque serial the client must echo
+                            // back in WIN_REQ_PONG, unchanged.
+                            //
+                            // LIVENESS, and the reason it is a protocol
+                            // message rather than something the server
+                            // can work out for itself: a client that has
+                            // stopped pumping its event queue is
+                            // indistinguishable, from the outside, from
+                            // one that is simply idle. Both draw
+                            // nothing and send nothing. So the server
+                            // asks, and a client that cannot answer is
+                            // wedged.
+                            //
+                            // This is xdg_shell's ping/pong and ICCCM's
+                            // _NET_WM_PING, and it exists for the same
+                            // reason both of those do: without it the
+                            // only honest thing a compositor can say
+                            // about an unresponsive window is nothing.
+                            //
+                            // A client never writes ping-handling code:
+                            // uapp answers it inside the loop, which is
+                            // exactly the property that made every
+                            // callback optional (ui/uapp.h). An app
+                            // wedged in its OWN callback therefore
+                            // fails to answer, which is correct -- it
+                            // really is not responding.
 #define WIN_EV_FOCUS      7 // a: 1 = this window gained keyboard focus,
                             // 0 = lost it.
                             //
@@ -116,6 +142,10 @@ struct win_event {
                            // reallocates a buffer underneath a running
                            // client; it asks, with WIN_EV_RESIZE, and
                            // this is the answer. See that event.
+#define WIN_REQ_PONG    8 // a: the serial from WIN_EV_PING, echoed back
+                           // unchanged. The answer to a liveness check;
+                           // see that event. Sent by the toolkit, not
+                           // by application code.
 #define WIN_REQ_FONT    5 // No inputs. Maps the desktop's ACTIVE font
                            // read-only into the client at
                            // WIN_FONT_VADDR and fills in the metrics:

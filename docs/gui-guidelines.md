@@ -268,6 +268,28 @@ a client that had explicitly declined. And when you add a fourth route,
 route it through the same function rather than repeating the client
 check -- that check being repeated is what let the third one drift.
 
+## When an app stops answering
+
+A window that will not close is either **declining** or **wedged**, and
+those want opposite responses. Never treat a timeout as evidence of
+either: ask the client whether it is alive (`WIN_EV_PING`, answered by
+Toykit's loop) and let the answer decide. `docs/decisions.md` has the
+full reasoning.
+
+Three rules the WM follows here, worth matching in anything similar:
+
+- **Mark, don't interrupt.** A hung window gets "(Not Responding)" in
+  its title bar. The modal only appears once the user has actually asked
+  it to close -- a dialog that appears on its own, over whatever they
+  were doing, for a window they never touched, is worse than the hang.
+- **Offer verbs, not Yes/No.** The buttons are "Force Quit" and "Wait",
+  because the user is choosing between two actions rather than answering
+  a question. `confirm_dialog_open_labelled()` exists for this.
+- **"Wait" must not be permanent.** It re-arms the check rather than
+  suppressing it, so an app that was merely slow gets another chance and
+  one that is truly stuck can be offered again. Getting this wrong is
+  invisible until someone presses Wait twice.
+
 ## Status bars: panes, not a string
 
 `uui_statusbar` carries a MESSAGE that stretches and INDICATORS that do

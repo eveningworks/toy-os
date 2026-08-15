@@ -168,6 +168,10 @@ static void on_window_resized(int pid, uint32_t id, uint32_t *buf, int w, int h)
     redraw_pending = 1;
 }
 
+// Defined below with the rest of the liveness code, which reads more
+// naturally next to the ping that provokes it than up here.
+static void on_window_pong(int pid, uint32_t id, uint32_t serial);
+
 static const struct win_server_ops WM_SERVER_OPS = {
     .window_created   = on_window_created,
     .window_present   = on_window_present,
@@ -175,6 +179,7 @@ static const struct win_server_ops WM_SERVER_OPS = {
     .window_title     = on_window_title,
     .window_hints     = on_window_hints,
     .window_resized   = on_window_resized,
+    .window_pong      = on_window_pong,
 };
 
 void wm_client_init(void) {
@@ -296,4 +301,91 @@ void wm_client_send_close(struct window *win) {
     ev.type = WIN_EV_CLOSE;
     ev.window = win->client_win;
     win_events_push(win->client_pid, &ev);
+
+    // Ask whether it is even listening, at the same moment. A close that
+    // goes unanswered means one of two very different things -- the app
+    // declined, or the app is wedged -- and only the ping can tell them
+    // apart. Getting that wrong in either direction is bad: offering to
+    // force-quit an app that deliberately refused is obnoxious, and
+    // refusing to offer it for one that is hung is the whole problem.
+    win->close_asked_tick = pit_ticks();
+    wm_client_ping(win);
+}
+
+// ---------------------------------------------------------------------
+// Is it still there?
+// ---------------------------------------------------------------------
+//
+// An unresponsive client is invisible from out here. It holds its
+// window, its buffer stays mapped, and it sends nothing -- which is
+// also an exact description of a client that is idle and perfectly
+// healthy. Nothing the WM can observe separates them.
+//
+// So it asks. WIN_EV_PING carries a serial, the client's event loop
+// echoes it back in WIN_REQ_PONG (uapp does this, so no application
+// contains ping code), and a client that does not answer within
+// WM_PING_TIMEOUT_TICKS is not answering its queue at all. That is
+// xdg_shell's ping and ICCCM's _NET_WM_PING, for the same reason.
+//
+// The serial is not decoration: without it a late pong from a previous
+// ping would clear the current one, so an app answering every check one
+// round behind -- exactly what a badly overloaded app does -- would
+// always look healthy.
+
+static uint32_t g_next_serial = 1;
+
+void wm_client_ping(struct window *win) {
+    if (!wm_client_is_client_window(win)) return;
+    if (win->ping_serial) return; // one outstanding at a time
+
+    if (++g_next_serial == 0) g_next_serial = 1; // 0 means "none"
+    win->ping_serial = g_next_serial;
+    win->ping_sent_tick = pit_ticks();
+
+    struct win_event ev = {0};
+    ev.type = WIN_EV_PING;
+    ev.window = win->client_win;
+    ev.a = (int)win->ping_serial;
+    win_events_push(win->client_pid, &ev);
+}
+
+static void on_window_pong(int pid, uint32_t id, uint32_t serial) {
+    int idx = find_client_window(pid, id);
+    if (idx < 0) return;
+    struct window *w = &windows[idx];
+    if (serial != w->ping_serial) return; // stale -- see above
+    w->ping_serial = 0;
+    if (w->not_responding) {
+        w->not_responding = 0;
+        redraw_pending = 1; // the title bar said "(Not Responding)"
+    }
+}
+
+// Called once per frame from wm_run(). Returns the index of a window
+// that has just been found unresponsive WHILE BEING ASKED TO CLOSE, or
+// -1 -- which is the only case that warrants interrupting the user.
+int wm_client_check_liveness(void) {
+    uint64_t now = pit_ticks();
+    int report = -1;
+
+    for (int i = 0; i < window_count; i++) {
+        struct window *w = &windows[i];
+        if (!wm_client_is_client_window(w)) continue;
+        if (!w->ping_serial) continue;
+        if (now - w->ping_sent_tick < WM_PING_TIMEOUT_TICKS) continue;
+
+        if (!w->not_responding) {
+            w->not_responding = 1;
+            redraw_pending = 1;
+            klog_printf("wm: client pid %d is not responding\r\n", w->client_pid);
+            // Only a window the user has actually asked to close earns a
+            // dialog. An app that hangs while nobody is trying to do
+            // anything with it gets the title-bar mark and nothing more
+            // -- a modal that appears on its own, over whatever the user
+            // was doing, for a window they never touched, would be worse
+            // than the hang.
+            if (w->close_asked_tick) report = i;
+        }
+    }
+    return report;
 }

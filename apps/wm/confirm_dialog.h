@@ -51,6 +51,25 @@ extern int confirm_dialog_open;
 // then just closes the dialog with no further action).
 void confirm_dialog_open_with(const char *message, void (*on_yes)(void), void (*on_no)(void));
 
+// Same, with the buttons named. "Yes"/"No" is right for a question and
+// wrong for a choice between two actions -- the force-quit dialog asks
+// "Force Quit" or "Wait", and answering that with Yes/No would make the
+// user work out which is which. Windows and KDE both label these
+// buttons with the verbs.
+//
+// The labels are NOT copied, same ownership rule as `message`. They
+// last until the next dialog opens; confirm_dialog_open_with() resets
+// them to Yes/No, so an ordinary dialog can never inherit them.
+void confirm_dialog_open_labelled(const char *message, const char *yes, const char *no,
+                                   void (*on_yes)(void), void (*on_no)(void));
+
+// Button 0 (yes/affirmative) or 1 (no), and the open dialog's message.
+// For the debug console, and therefore for tests -- see the note in the
+// .c on why scanning for them by colour was worse. 0 if nothing is open.
+int confirm_dialog_button_rect(int index, int *x, int *y, int *w, int *h,
+                                const char **label);
+const char *confirm_dialog_message(void);
+
 // Draws the dialog at its centered position -- a no-op if
 // confirm_dialog_open is 0 (same "caller still checks, this just
 // draws" contract as start_menu_draw()/context_menu_draw()).

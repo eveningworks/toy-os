@@ -1339,6 +1339,16 @@ Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
       compiled twice, the same pattern as `calc_engine.c`.
       `userland/gui/gfxdemo.c` ("Shapes") is the ring-3 demo;
       `tools/gfxdemo_test.py` and `kernel/lib/geom_test.c` test it.
+- [x] ~~A not-responding timeout and a way to force-quit a client that
+      ignores `WIN_EV_CLOSE`~~ -- done, see `CHANGELOG.md`. Built on a
+      real liveness ping (`WIN_EV_PING`/`WIN_REQ_PONG`, i.e. xdg_shell's)
+      rather than a close timeout, because a client that DECLINES and one
+      that is WEDGED are the same observation to a timer. Force Quit
+      terminates the process (`scheduler_kill()`), and the WM reaps the
+      pids it launched, which is what makes it repeatable. What is still
+      NOT built: any indication that an app is hung outside a close
+      attempt -- the ping is only sent when the WM asks a window to
+      close, so that is the only time the title-bar mark can appear.
 - [ ] **`WIN_REQ_POPUP` -- a popup SURFACE, so a menu can leave its
       window.** The caller now exists: `userland/ui/uui_menubar.c`
       resolves its placement (flip / slide / clamp) against a bounds

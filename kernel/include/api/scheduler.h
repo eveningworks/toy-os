@@ -143,6 +143,22 @@ enum sched_poll_result scheduler_poll(int pid, int *out_exit_code);
 // the saved trapframe. Returns 0 if the caller has no slot to park in
 // (kernel code, or the legacy process_run_ring3() path) -- callers must
 // treat that as "fall back to non-blocking", not as an error to ignore.
+// Terminate `pid` from OUTSIDE it -- what a force-quit does to a wedged
+// process. Returns 1 if it killed something, 0 if the pid was invalid,
+// already dead, or is the process currently running (this is for
+// killing somebody ELSE; a process ending itself uses SYS_EXIT).
+//
+// The teardown is scheduler_on_exit()'s, minus the part that only makes
+// sense for the running process: the slot becomes a zombie holding
+// `exit_code`, the window server drops the client's windows, anyone
+// blocked in waitpid is woken, and its stdout pipe's write end is
+// closed so a reader sees EOF instead of hanging forever. What it does
+// NOT do is switch away, because the caller is not the victim.
+//
+// A killed process is a zombie like any other and still has to be
+// reaped -- see scheduler_poll(). The WM reaps the ones it launched.
+int scheduler_kill(int pid, int exit_code);
+
 int scheduler_block_current(uint64_t *regs, int reason);
 
 // Wakes every process blocked on `reason`, handing each `value` as its

@@ -7,6 +7,8 @@
 
 int confirm_dialog_open = 0;
 
+static const char *g_yes_label = "Yes";
+static const char *g_no_label = "No";
 static const char *g_message;
 static void (*g_on_yes)(void);
 static void (*g_on_no)(void);
@@ -31,7 +33,12 @@ static struct ui_button_group g_group;
 #define BTN_GAP 12
 #define BTN_H_EXTRA 10 // button height beyond one text row
 
-void confirm_dialog_open_with(const char *message, void (*on_yes)(void), void (*on_no)(void)) {
+
+// The real opener. Both entry points below set the labels FIRST,
+// because the layout is measured from them -- a "Force Quit" button
+// sized for the word "Yes" is exactly the kind of bug this file's own
+// comment about hand-drawn geometry warns about.
+static void open_common(const char *message, void (*on_yes)(void), void (*on_no)(void)) {
     g_message = message;
     g_on_yes = on_yes;
     g_on_no = on_no;
@@ -43,7 +50,7 @@ void confirm_dialog_open_with(const char *message, void (*on_yes)(void), void (*
     // (see api/gfx.h).
     int msg_w = gfx_text_width(message);
 
-    const char *yes_label = "Yes", *no_label = "No";
+    const char *yes_label = g_yes_label, *no_label = g_no_label;
     int yes_w = gfx_text_width(yes_label) + 24;
     int no_w = gfx_text_width(no_label) + 24;
     int buttons_w = yes_w + BTN_GAP + no_w;
@@ -128,4 +135,45 @@ void confirm_dialog_update_press(int mx, int my, uint8_t buttons) {
 int confirm_dialog_update_hover(int mx, int my) {
     if (!confirm_dialog_open) return 0;
     return ui_button_group_hover(&g_group, mx, my);
+}
+
+
+void confirm_dialog_open_with(const char *message, void (*on_yes)(void), void (*on_no)(void)) {
+    // Reset, so a labelled dialog's words cannot leak into an ordinary
+    // one. This is the only place that can guarantee it.
+    g_yes_label = "Yes";
+    g_no_label = "No";
+    open_common(message, on_yes, on_no);
+}
+
+void confirm_dialog_open_labelled(const char *message, const char *yes, const char *no,
+                                   void (*on_yes)(void), void (*on_no)(void)) {
+    g_yes_label = yes ? yes : "Yes";
+    g_no_label = no ? no : "No";
+    open_common(message, on_yes, on_no);
+}
+
+// The buttons' own rects, for the debug console (`gui dialog`) and so
+// for tests. Same reasoning as context_menu_geometry(): read from the
+// SAME ui_button the dialog draws and hit-tests, so a test cannot be
+// told a position a click would not land on.
+//
+// tools/dialog_test.py used to find these by scanning the button row for
+// THEME_BUTTON_BG, which works but re-derives geometry in Python -- the
+// thing this project's own rules say not to do, and which stops working
+// the moment a button's label changes its width. "Force Quit"/"Wait" is
+// exactly that change.
+int confirm_dialog_button_rect(int index, int *x, int *y, int *w, int *h,
+                                const char **label) {
+    if (!confirm_dialog_open || index < 0 || index > 1) return 0;
+    if (x) *x = g_btns[index].x;
+    if (y) *y = g_btns[index].y;
+    if (w) *w = g_btns[index].w;
+    if (h) *h = g_btns[index].h;
+    if (label) *label = g_btns[index].label;
+    return 1;
+}
+
+const char *confirm_dialog_message(void) {
+    return confirm_dialog_open ? g_message : 0;
 }

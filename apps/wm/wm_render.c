@@ -372,11 +372,24 @@ static void draw_window_chrome(struct window *win, int idx, int focused) {
 
     // Truncate the title if the window's been resized narrower than it
     // needs -- otherwise it draws over the minimize/maximize/close buttons.
-    char title_buf[WIN_TITLE_MAX];
+    //
+    // A wedged client says so in its title bar, as it does on Windows.
+    // Built into the SAME buffer that gets truncated, so the suffix is
+    // subject to the same width budget as the name -- appending it after
+    // the truncation would draw straight over the buttons, which is this
+    // codebase's most-repeated drawing bug (docs/gui-guidelines.md).
+    char full[WIN_TITLE_MAX + 20];
+    const char *shown = win->title;
+    if (win->not_responding) {
+        k_snprintf(full, sizeof full, "%s (Not Responding)", win->title);
+        shown = full;
+    }
+
+    char title_buf[WIN_TITLE_MAX + 20];
     int avail_px = r.min_x - (win->x + 6);
     int max_chars = avail_px > 0 ? avail_px / gfx_char_w() : 0;
     int i = 0;
-    for (; win->title[i] && i < max_chars && i < WIN_TITLE_MAX - 1; i++) title_buf[i] = win->title[i];
+    for (; shown[i] && i < max_chars && i < (int)sizeof title_buf - 1; i++) title_buf[i] = shown[i];
     title_buf[i] = '\0';
     gfx_draw_string(win->x + 6, win->y + (WM_TITLEBAR_H - gfx_char_h()) / 2, title_buf, titletext, titlebar);
 

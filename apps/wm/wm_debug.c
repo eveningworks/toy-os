@@ -204,6 +204,11 @@ static void cmd_windows(int json) {
             // so a test asserting "this really is a ring-3 client" would
             // have nothing to read.
             klog_printf("\"client_pid\":%d,", w->client_pid);
+            // The FLAG, not the decorated title: wm_render.c appends
+            // "(Not Responding)" at draw time, so the title here is the
+            // client's own and a test looking for the suffix in it finds
+            // nothing. Report the fact and let the test assert on that.
+            klog_printf("\"not_responding\":%s,", w->not_responding ? "true" : "false");
             klog_printf("\"state\":\"%s\",\"focused\":%s,\"resizable\":%s}",
                          state_name(w->state),
                          (i == window_count - 1) ? "true" : "false",
@@ -328,6 +333,33 @@ static void cmd_ctxmenu(int json) {
         klog_write("centre="); col_int(y + i * ih + ih / 2, 6);
         klog_write(context_menu_row_label(i));
         klog_write("\r\n");
+    }
+}
+
+// The open confirm dialog's message and buttons.
+static void cmd_dialog(int json) {
+    const char *msg = confirm_dialog_message();
+    if (json) {
+        klog_printf("{\"open\":%s,\"message\":\"%s\",\"buttons\":[",
+                     msg ? "true" : "false", msg ? msg : "");
+        for (int i = 0; i < 2; i++) {
+            int x, y, w, h; const char *label = 0;
+            if (!confirm_dialog_button_rect(i, &x, &y, &w, &h, &label)) break;
+            klog_printf("%s{\"label\":\"%s\",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,"
+                         "\"cx\":%d,\"cy\":%d}",
+                         i ? "," : "", label ? label : "", x, y, w, h,
+                         x + w / 2, y + h / 2);
+        }
+        klog_write("]}\r\n");
+        return;
+    }
+    if (!msg) { klog_write("dialog: closed\r\n"); return; }
+    klog_printf("dialog: open -- \"%s\"\r\n", msg);
+    for (int i = 0; i < 2; i++) {
+        int x, y, w, h; const char *label = 0;
+        if (!confirm_dialog_button_rect(i, &x, &y, &w, &h, &label)) break;
+        klog_printf("  button %d centre=%d,%d  %s\r\n", i, x + w / 2, y + h / 2,
+                     label ? label : "");
     }
 }
 
@@ -480,6 +512,27 @@ static void cmd_open(const char *name) {
     }
 }
 
+// Spawn a ring-3 binary directly, with no Terminal in the loop.
+//
+// `gui open` can only launch what is in the app registry, so every test
+// that wanted a ring-3 client had to open a Terminal and type at it --
+// which drags the Terminal's own allowlist, its pending-process slot and
+// its shell into a test that is about something else entirely. It also
+// makes a client that never exits untestable: the Terminal that spawned
+// it cannot then be closed.
+//
+// Tracked for reaping exactly as a Start-menu launch is, so this does
+// not quietly reintroduce the leak wm_track_launched() exists to fix.
+static void cmd_spawn(const char *path) {
+    int pid = scheduler_spawn(path, 0);
+    if (pid > 0) {
+        wm_track_launched(pid);
+        klog_printf("gui: spawned \"%s\" as pid %d\r\n", path, pid);
+    } else {
+        klog_printf("gui: spawn of \"%s\" FAILED (no slot, or no such binary)\r\n", path);
+    }
+}
+
 static void cmd_close(int index) {
     if (index < 0 || index >= window_count) {
         klog_printf("gui: no window %d (see `gui windows`)\r\n", index);
@@ -590,7 +643,9 @@ static void usage(void) {
     klog_write("  probe X Y [--json]    what is at this point, and what would take the click\r\n");
     klog_write("  menu [--json]         start menu row geometry, as the kernel computes it\r\n");
     klog_write("  ctxmenu [--json]      the open right-click menu's rows, same shape as `menu`\r\n");
+    klog_write("  dialog [--json]       the open confirm dialog's message and button centres\r\n");
     klog_write("  rclick X Y            right-click, which is what opens a context menu\r\n");
+    klog_write("  spawn PATH            run a ring-3 binary directly -- no Terminal needed\r\n");
     klog_write("  taskbar [--json]      start button + per-window button rects\r\n");
     klog_write("  state [--json]        overlays, cursor, armed state, damage rect\r\n");
     klog_write("  damage [verify on|off]  the damage rect; verify renders every frame\r\n");
@@ -618,6 +673,7 @@ int wm_debug_dispatch(char *line) {
     if (k_strcmp(sub, "windows") == 0)      { cmd_windows(wants_json(p)); return 1; }
     if (k_strcmp(sub, "menu") == 0)         { cmd_menu(wants_json(p)); return 1; }
     if (k_strcmp(sub, "ctxmenu") == 0)      { cmd_ctxmenu(wants_json(p)); return 1; }
+    if (k_strcmp(sub, "dialog") == 0)       { cmd_dialog(wants_json(p)); return 1; }
     if (k_strcmp(sub, "taskbar") == 0)      { cmd_taskbar(wants_json(p)); return 1; }
     if (k_strcmp(sub, "state") == 0)        { cmd_state(wants_json(p)); return 1; }
 
@@ -684,6 +740,13 @@ int wm_debug_dispatch(char *line) {
             return 1;
         }
         cmd_close(idx);
+        return 1;
+    }
+
+    if (k_strcmp(sub, "spawn") == 0) {
+        char *path = next_tok(&p);
+        if (!path) { klog_write("usage: gui spawn /path/to/binary\r\n"); return 1; }
+        cmd_spawn(path);
         return 1;
     }
 

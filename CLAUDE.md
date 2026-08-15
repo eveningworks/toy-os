@@ -736,8 +736,19 @@ gui ctxmenu [--json]     the OPEN right-click menu's rows, same shape as `menu`
 gui state [--json]       overlays, cursor, armed drag/resize/press, damage rect
 gui damage [verify on|off]  the damage rect; verify catches missed damage
 gui open <App>           open a window directly -- no Start-menu clicking
+gui dialog [--json]      the open confirm dialog's message and button CENTRES
+gui spawn PATH           run a ring-3 binary directly -- no Terminal in the loop
 gui click X Y | gui rclick X Y | gui drag X1 Y1 X2 Y2 | gui key <c> [alt|ctrl|shift]
 ```
+
+`gui spawn` is the one to reach for when a test needs a ring-3 client:
+`gui open` can only launch what is in the app registry, so tests used to
+open a Terminal and type at it, dragging that Terminal's allowlist, its
+pending-process slot and its shell into a test about something else --
+and a client that never exits could not be tested at all, because the
+Terminal that spawned it then could not be closed. `gui dialog` reports
+the confirm dialog's buttons; do not scan for them by colour, which
+assumed "Yes"/"No" sizing and breaks on "Force Quit"/"Wait".
 
 `rclick`/`ctxmenu` are newer than the rest and exist for a specific
 reason: no test could open a context menu at all, which is how its
@@ -1257,9 +1268,18 @@ repeated manual steps to be worth automating:
   exactly the drag-off check, and a dismissing click that falls through
   leaves "the menu closed" GREEN and reddens only the caret measurement.
   Run it after touching either widget.
+- **`forcequit_test.py`** -- not-responding detection and force quit
+  (TWP's ping/pong, `scheduler_kill()`, the dialog, and the slot
+  reaping). 15 checks. The design point it encodes: a client that
+  REFUSES to close and one that is WEDGED are identical to a plain
+  timeout, so `winclient` (declines, keeps answering) and
+  `userland/tests/hangclient.c` (stops pumping on `h`) are tested
+  against each other -- neither half means much alone. Its positive
+  control reddens exactly one check and leaves the winclient ones green,
+  which is worth reading before trusting them.
 - **`gui_regress.py`** -- runs every GUI test tool, each against
   its own freshly-copied disk image and its own VM, and prints one
-  pass/fail table (~2 minutes, 143 checks across ten tools). This is the standard check
+  pass/fail table (~2.5 minutes, 164 checks across eleven tools). This is the standard check
   after touching `apps/ui/`, `userland/`, or anything the WM draws.
   `-k NAME` for a subset, `--logs DIR` to keep each tool's full output,
   `--list` to see what's in it. The per-tool fresh image and fresh VM

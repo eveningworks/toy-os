@@ -208,6 +208,28 @@ void close_window(int idx);
 // use and for a client that has agreed (WIN_REQ_DESTROY).
 void wm_request_close(int idx);
 
+// --- client liveness (apps/wm/wm_client.c) ---------------------------
+//
+// How long an unanswered ping means "not responding". At the PIT's
+// 100Hz this is 3 seconds -- long enough that an app doing a slow disk
+// read is not slandered, short enough that a user who has just pressed
+// Alt+F4 is not left wondering. Windows uses 5s before ghosting a
+// window; KDE's is comparable.
+#define WM_PING_TIMEOUT_TICKS 300
+
+void wm_client_ping(struct window *win);
+
+// Remember a pid this desktop launched, so wm_run() reaps its slot when
+// it exits. See wm.c -- without this a Start-menu launch leaked a
+// scheduler slot per open/close and the desktop stopped launching
+// anything after four.
+void wm_track_launched(int pid);
+
+// Once per frame. Returns the index of a window that has just gone
+// unresponsive while being asked to close (the only case worth a
+// dialog), or -1.
+int wm_client_check_liveness(void);
+
 // Last frame's damage rect, for wm_debug.c's `gui state`. w/h <= 0
 // means "no damage reported -- full-screen repaint".
 void wm_debug_damage(int *out_x, int *out_y, int *out_w, int *out_h);

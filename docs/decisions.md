@@ -91,6 +91,7 @@ there when you add an entry, or the index quietly stops being one.
 - [A client's menus are clamped to its own window, and that is one rectangle away from not being](#a-clients-menus-are-clamped-to-its-own-window-and-that-is-one-rectangle-away-from-not-being)
 - [A menu bar opens on press, which is the one place the commit-on-release rule bends](#a-menu-bar-opens-on-press-which-is-the-one-place-the-commit-on-release-rule-bends)
 - [Esc doesn't close a window; Alt+F4 does, and it is a WM shortcut rather than an app key](#esc-doesnt-close-a-window-altf4-does-and-it-is-a-wm-shortcut-rather-than-an-app-key)
+- [Not-responding is a PING, not a close timeout -- because "refused" and "wedged" look identical to a timer](#not-responding-is-a-ping-not-a-close-timeout----because-refused-and-wedged-look-identical-to-a-timer)
 - [Angles are measured in turns, not radians](#angles-are-measured-in-turns-not-radians)
 - [The geometry rasteriser draws through a callback, not into a framebuffer](#the-geometry-rasteriser-draws-through-a-callback-not-into-a-framebuffer)
 - [The canvas widget clips in the plot callback, not by trimming geometry](#the-canvas-widget-clips-in-the-plot-callback-not-by-trimming-geometry)
@@ -4195,3 +4196,59 @@ as ESC followed by something.
 That is the honest consequence of a polite handshake, and force-quitting
 needs a not-responding timeout plus a way to kill the process. See
 `docs/roadmap.md`, Milestone 41.
+
+## Not-responding is a PING, not a close timeout -- because "refused" and "wedged" look identical to a timer
+
+`abi/win_proto.h`'s `WIN_EV_PING`/`WIN_REQ_PONG`, `apps/wm/wm_client.c`'s
+liveness section, `scheduler_kill()`. See `CHANGELOG.md`.
+
+The obvious build is a timer: send `WIN_EV_CLOSE`, and if no
+`WIN_REQ_DESTROY` arrives within N seconds, offer to force-quit. It is
+smaller, needs no protocol change, and is wrong.
+
+A client is entitled to refuse a close -- `uapp_desc.on_close` returning
+0 is a documented, tested part of the toolkit, and `winclient` does
+exactly that. To a timer, a client that declined and a client that is
+wedged are the same observation: the window is still there N seconds
+later. Acting on that means either offering to kill apps that
+deliberately said no, or not offering it for apps that are genuinely
+hung. There is no threshold that separates them, because the thing that
+separates them was never measured.
+
+So the server asks a question only a running event loop can answer.
+`WIN_EV_PING` carries a serial; `WIN_REQ_PONG` echoes it. That is
+xdg_shell's ping/pong and ICCCM's `_NET_WM_PING`, adopted for the same
+reason both exist: from outside, a wedged client and an idle one are
+indistinguishable -- neither draws, neither sends -- so the only honest
+thing a compositor can otherwise say about an unresponsive window is
+nothing.
+
+Three details worth keeping:
+
+**The toolkit answers, not the app.** `uapp_run()` handles the ping with
+no callback and no app involvement. A check an app could forget to
+answer would report every un-updated app as hung; and answering from the
+event loop is precisely the right test, because an app stuck inside its
+own `on_draw` never reaches that line.
+
+**The serial is load-bearing.** Without it, a late pong from a previous
+ping clears the current one -- so an app answering one round behind, the
+exact behaviour of a badly overloaded app, always looks healthy.
+
+**A hung window nobody is touching gets the title-bar mark and nothing
+more.** The dialog is modal and appears over whatever the user is doing;
+raising one unprompted, for a window they never interacted with, is
+worse than the hang. It is offered only when they have actually asked
+the window to close.
+
+Force Quit kills the PROCESS (`scheduler_kill()`), not just the window.
+Dropping the window alone would leave a process drawing into a buffer
+that is no longer mapped, which is the exact hazard the close handshake
+exists to avoid -- and would leave the scheduler slot held, which on a
+4-slot table is four rescues before the desktop stops launching
+anything.
+
+Still not built: a general "this app is hung" indication outside a close
+attempt (the ping is only sent when the WM asks a window to close, so
+that is the only time the mark can appear), and any way to recover a
+client that is hung but has NOT been asked to close.

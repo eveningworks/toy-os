@@ -31,6 +31,88 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
 
 ## [Unreleased]
 
+### Added
+- **A not-responding timeout and a force-quit dialog, built on a real
+  liveness ping.** The close handshake has always been polite -- a client
+  that ignores `WIN_EV_CLOSE` keeps its window -- and until now there was
+  nothing a user could do about it. `docs/roadmap.md` had this under M41
+  as needing "a not-responding timeout and a way to kill the process";
+  this is both.
+
+  **Liveness is a protocol message, not a deduction.** `WIN_EV_PING`
+  carries a serial and `WIN_REQ_PONG` echoes it, which is xdg_shell's
+  ping/pong and ICCCM's `_NET_WM_PING`. It exists because a wedged client
+  and an idle one are indistinguishable from outside: both draw nothing
+  and send nothing. Toykit answers pings inside `uapp_run()`'s loop, so
+  no application contains ping code and no app needed editing -- and an
+  app stuck in its OWN callback fails to answer, which is exactly what
+  "not responding" should mean.
+
+  **That ping is what makes the feature honest**, and is why a plain
+  close timeout was rejected. A client that REFUSES to close and one that
+  is WEDGED look identical to a timer: the window is still there either
+  way. Offering to force-quit an app that deliberately declined would be
+  obnoxious; not offering it for one that is hung is the whole problem.
+  `winclient` (declines, keeps pumping) and the new `hangclient` (stops
+  pumping) are tested against each other for precisely this.
+
+  The dialog appears automatically ~3s after a close request goes
+  unanswered by a client that is also not answering pings, names the app,
+  and offers **Force Quit** / **Wait** -- verbs, not Yes/No, which needed
+  `confirm_dialog_open_labelled()`. Wait re-arms rather than giving up.
+  The title bar gains "(Not Responding)", built into the same buffer the
+  title truncation uses so the suffix is subject to the same width budget
+  as the name.
+
+  **Force Quit terminates the process**, via a new `scheduler_kill()`:
+  scheduler_on_exit()'s teardown -- zombie the slot, drop the client's
+  windows through `win_server_client_gone()`, wake waiters, close the
+  stdout pipe -- for a process that is not the one running, and without
+  the context switch that only makes sense for a process ending itself.
+  Removing the window without killing the process was considered and
+  rejected: it leaves a process drawing into a buffer that is no longer
+  mapped, which is what the close handshake's own comment warns about.
+
+  New: `userland/tests/hangclient.c` (a client that wedges on `h`, so the
+  feature has something to detect), `tools/forcequit_test.py` (15 checks,
+  in `gui_regress.py`), and three debug commands -- `gui spawn PATH`
+  (run a ring-3 binary with no Terminal in the loop), `gui dialog
+  [--json]` (the open dialog's message and button centres) and a
+  `not_responding` field on `gui windows --json`.
+
+  Two things measured rather than assumed. The dialog's buttons are
+  reported by the WM instead of scanned for by colour, because
+  `dialog_test.py`'s colour scan assumed "Yes"/"No" sizing and these
+  buttons are wider. And the first version of the not-responding check
+  grepped the window's TITLE for the suffix -- which is added at draw
+  time and is not in the title at all, so it failed against a working
+  feature; it asks for the flag now, and separately asserts the mark
+  reaches the screen.
+
+  Positive control: raising `WM_PING_TIMEOUT_TICKS` to 30000 reddens
+  exactly one check, "Alt+F4 on a hung client offers Force Quit". The
+  winclient checks stay green, which is the point -- they pass because
+  nothing was offered, and so would they against a detector that never
+  fires. Their value is entirely in being paired with the hung case.
+
+### Fixed
+- **A Start-menu-launched app leaked its scheduler slot, and the desktop
+  silently stopped launching anything after four.** `MAX_PROCS` is 4, a
+  process stays `SCHED_ZOMBIE` until somebody polls it, and nothing
+  polled these: the Terminal's children are reaped by the ring-3 shell's
+  `waitpid`, but a launcher has no shell. `open_app()`'s own comment
+  explained why it did not track the pid (the WM-global `pending_proc`
+  slot is single-occupancy) -- correct about that, and the conclusion
+  drawn from it left the slot unreclaimed forever.
+
+  Measured before fixing, not deduced: the fifth `gui open Shapes` in a
+  row produced no window and no error. The WM now keeps a small table of
+  the pids it launched and reaps them in its frame loop. That is also
+  what makes force quit repeatable rather than a four-shot escape hatch,
+  which is why it landed here -- `forcequit_test.py` runs six
+  spawn-and-kill cycles and a regression shows up as a spawn that stops
+  working.
+
 ### Changed
 - **Esc no longer closes an application window; Alt+F4 does, and an app
   can refuse it.** Six apps quit on Esc -- Notepad, Calculator, Terminal,
