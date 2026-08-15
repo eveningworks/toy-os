@@ -38,15 +38,21 @@ every frame twice and the walk takes minutes.
 
 -j DEFAULTS TO 1 FOR A REASON
 -----------------------------
-Parallel VMs have been seen reporting a violation that the same seed
-does not reproduce serially -- `--seeds 4 6 --random 20 -j 2` reported
-an identical `resize-shrink Notepad` violation on both seeds, while
-`-j 1` and `-j 2 --random 0` were clean. Whether that is a real
-load-sensitive WM bug or an artifact of the harness sampling a
-mid-resize frame under contention is NOT diagnosed (see
-docs/roadmap.md's known-issues list). Until it is, treat a violation
-that only appears at -j > 1 as unconfirmed, and re-check it at -j 1
-before believing it.
+Parallelism here costs more than CPU. Each slot boots its own guest and
+each guest wants its own copy of disk.img, and both of those get worse
+faster than the seed count suggests -- at -j 4, four guests booting at
+once are slow enough that two of them missed their QMP connect entirely
+on the run this paragraph was written from. That is now reported as
+ERROR rather than swallowed (see run_seed), but it still means a high
+-j buys less than it looks like it does.
+
+What is NOT a reason any more: a `resize-shrink Notepad` violation that
+`--seeds 4 6 --random 20 -j 2` was recorded as producing while -j 1 was
+clean. It did not reproduce in six attempts -- four at -j 2 idle, and
+one each at -j 1 and -j 2 under fourteen busy-looping host cores --
+with the harness proven awake by a positive control in between. See
+CHANGELOG.md's entry, and note the two harness bugs that measurement
+turned up, which are the durable part of it.
 
 A CLEAN RUN STILL PROVES LESS THAN IT LOOKS
 -------------------------------------------
@@ -69,17 +75,58 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 
 
+def copy_disk(src, dst):
+    """Copy disk.img WITHOUT filling in its holes.
+
+    disk.img is ~4 MB of data inside a 9 GB sparse file, and /tmp is
+    commonly a tmpfs -- so `shutil.copyfile` (which writes the zeros out)
+    costs 9 GB of RAM per slot. That is not a tidiness point: at -j 4 it
+    filled a 32 GB tmpfs outright and the run died of ENOSPC, and at
+    -j 2 it put ~18 GB of host memory pressure behind every sweep, which
+    is most of what made a parallel run behave unlike a serial one.
+    `cp --reflink=auto --sparse=always` keeps the copy sparse (and free,
+    on a CoW filesystem); shutil is the fallback for a host without it.
+    """
+    try:
+        subprocess.run(["cp", "--reflink=auto", "--sparse=always", src, dst],
+                       check=True, capture_output=True)
+    except (OSError, subprocess.CalledProcessError):
+        shutil.copyfile(src, dst)
+
+
 def run_seed(seed, slot, count, keep_logs):
-    """One seed on one VM slot. Returns (seed, violations, summary_line)."""
+    """One seed on one VM slot.
+
+    Returns (seed, status, violations, summary) where status is "pass",
+    "fail" (the invariant was violated) or "error" (the sweep did not
+    complete, so it says NOTHING about the invariant either way). The
+    third state is the point: this used to report pass/fail only, so a
+    sweep that crashed in its first ten seconds landed in the table as
+    a PASS -- the exact "green because it tested nothing" failure this
+    repo's testing notes warn about most.
+    """
     disk = f"/tmp/damage_hunt_{slot}.img"
-    shutil.copyfile(os.path.join(REPO, "disk.img"), disk)
+    copy_disk(os.path.join(REPO, "disk.img"), disk)
 
     def vm(*args):
         return subprocess.run(
             [sys.executable, os.path.join(HERE, "vm.py"), "--instance", str(slot), *args],
             cwd=REPO, capture_output=True, text=True)
 
-    vm("--disk", disk, "start")
+    # vm.py start already waits for the guest to answer on the debug
+    # console and exits non-zero if it never does -- this used to throw
+    # that away, so a VM that never booted was swept anyway. At -j 4
+    # (four guests booting at once) that is not hypothetical: two seeds
+    # died in QMPSession's constructor, and both were reported PASS.
+    started = vm("--disk", disk, "start")
+    if started.returncode != 0:
+        vm("stop")
+        try:
+            os.unlink(disk)
+        except OSError:
+            pass
+        why = (started.stdout + started.stderr).strip().splitlines()
+        return seed, "error", [], why[-1] if why else "vm.py start failed"
     try:
         # --sock and --qmp-port must BOTH follow the slot; vm.py derives
         # them from --instance the same way (see its _apply_instance).
@@ -101,12 +148,25 @@ def run_seed(seed, slot, count, keep_logs):
         with open(os.path.join(keep_logs, f"seed-{seed}.log"), "w") as fh:
             fh.write(out)
 
-    violations = [l.strip() for l in out.splitlines() if "DAMAGE BUG" in l]
+    # Match the sweep's OWN per-step report line, not any line mentioning
+    # the phrase: `damage_sweep.py` prints "  DAMAGE BUG [label] ...",
+    # and repeats each hit in its closing summary. A bare `in` test
+    # counted both copies -- and worse, matched a Python TRACEBACK, since
+    # gui_debug.py's source contains the string. That is how a run whose
+    # sweep died of a BrokenPipeError was reported as a damage violation,
+    # quoting a line of Python as the evidence.
+    violations = [l.strip() for l in out.splitlines()
+                  if l.strip().startswith("DAMAGE BUG [")]
     # Distinct-violation count comes from the tool's own summary line
     # rather than being recounted here -- it dedupes, this shouldn't
-    # have to know how.
-    summary = next((l for l in out.splitlines() if "distinct violation" in l), "(no summary)")
-    return seed, violations, summary.strip()
+    # have to know how. Its ABSENCE means the sweep never finished.
+    summary = next((l.strip() for l in out.splitlines() if "distinct violation" in l), None)
+    if summary is None or proc.returncode not in (0, 1):
+        last = [l.strip() for l in out.splitlines() if l.strip()]
+        return seed, "error", violations, (
+            f"sweep did not complete (exit {proc.returncode}): "
+            f"{last[-1] if last else 'no output'}")
+    return seed, ("fail" if violations else "pass"), violations, summary
 
 
 def main():
@@ -140,18 +200,27 @@ def main():
             results.append(fut.result())
 
     print()
-    failed = 0
-    for seed, violations, summary in sorted(results):
-        mark = "FAIL" if violations else "PASS"
-        if violations:
+    failed = errored = 0
+    for seed, status, violations, summary in sorted(results):
+        mark = {"pass": "PASS", "fail": "FAIL", "error": "ERROR"}[status]
+        if status == "fail":
             failed += 1
-        print(f"  {mark}  seed {seed:<5} {summary}")
+        elif status == "error":
+            errored += 1
+        print(f"  {mark:<5} seed {seed:<5} {summary}")
         for v in violations:
             print(f"          {v}")
 
     print()
     if failed:
         print(f"damage_hunt: {failed}/{len(results)} seed(s) violated the damage invariant")
+    if errored:
+        # Not folded into the failure count: an errored seed did not
+        # measure the invariant at all, and calling that a violation
+        # would be as wrong as calling it a pass.
+        print(f"damage_hunt: {errored}/{len(results)} seed(s) did not complete "
+              f"-- they measured NOTHING, clean or otherwise")
+    if failed or errored:
         return 1
     print(f"damage_hunt: all {len(results)} seeds clean "
           f"(this proves these orderings found nothing, not that none exist)")

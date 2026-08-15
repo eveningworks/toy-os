@@ -864,7 +864,13 @@ screen without being declared leaves stale pixels -- no crash, no
 assertion, often visible in one interaction only. Verify mode renders
 every frame twice (damage-limited, then unrestricted) and reports any
 differing pixel with coordinates. It found four real bugs in its first
-minute. Turn it on whenever you touch drawing, damage, focus or
+minute. **Read the whole report line before believing it**: it also
+carries the diff's BOUNDING BOX (63 px are a caret, a border or a
+scrollbar depending on their extent) and a verdict from a THIRD render
+of the same frame -- `scene stable (real missed damage)` means the
+comparison is trustworthy, `SCENE UNSTABLE -- verdict void` means
+`render_scene()` disagreed with itself and the report proves nothing.
+See `docs/decisions.md`. Turn it on whenever you touch drawing, damage, focus or
 chrome; `docs/gui-guidelines.md` has the invariant it enforces.
 
 Reach for this BEFORE QMP for anything that isn't literally about
@@ -1444,13 +1450,26 @@ repeated manual steps to be worth automating:
   ORDERING, and this bug family lives in orderings, so "does any of a
   batch fail" is the question worth asking -- and the four-line shell
   loop that answers it had been written from scratch twice, getting the
-  slot/`--sock`/`--qmp-port` triple wrong each time. **`-j` defaults to
-  1 deliberately**: parallel VMs have reported a violation the same
-  seed does not reproduce serially, and whether that's a real
-  load-sensitive WM bug or a harness artifact is undiagnosed (see
-  `docs/roadmap.md`'s known issues). Re-check any `-j > 1` finding at
-  `-j 1` before believing it. Not in `gui_regress.py`, same reason
-  `damage_sweep.py` isn't.
+  slot/`--sock`/`--qmp-port` triple wrong each time. **A seed reports
+  `pass`, `fail` or `error`, and the third one is load-bearing** -- a
+  sweep that crashed (a guest too slow to accept a QMP connection at
+  high `-j`, a serial socket dropping mid-run) measured NOTHING, and
+  this tool used to score exactly that as a PASS. `-j` still defaults
+  to 1, but for a plainer reason than before: each slot boots its own
+  guest, and four booting at once is enough to lose two of them. Not in
+  `gui_regress.py`, same reason `damage_sweep.py` isn't. The earlier
+  "parallel VMs report a violation `-j 1` doesn't" claim is retired --
+  it failed to reproduce six times, and the mechanism that made `-j 2`
+  special was this tool putting 9 GB of tmpfs behind each slot (see the
+  next bullet).
+- **A copy of `disk.img` must stay SPARSE, and `shutil.copyfile` does
+  not.** The image is ~4 MB of data in a 9 GB sparse file, so a
+  hole-filling copy costs 9 GB -- of RAM, when the destination is
+  `/tmp` on a tmpfs. That silently turned `damage_hunt.py -j N` into
+  "N x 9 GB of host memory pressure" and killed `-j 4` outright with
+  ENOSPC. Use `cp --reflink=auto --sparse=always` (what the tool does
+  now); `cp --reflink=auto` is already what this file recommends
+  elsewhere for the same file.
 - **`watch_vm.sh`** -- attach a VIEW-ONLY VNC viewer to a headless VM,
   so a run can be watched live without interfering with it.
   `tools/watch_vm.sh [slot...]`; the display derives from the VM slot

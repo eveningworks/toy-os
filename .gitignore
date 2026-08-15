@@ -50,7 +50,11 @@ __pycache__/
 /Makefile.new
 *.yml.new
 
-# tools/vm.py's managed VM: pidfile + COM1 unix socket
+# tools/vm.py's managed VM: pidfile + COM1 unix socket. The wildcard
+# forms are `vm.py --instance N`'s (.vm.1.pid, .vm.1.serial, ...), which
+# tools/damage_hunt.py leaves one of per parallel slot.
 .vm.pid
 .vm.serial
+.vm.*.pid
+.vm.*.serial
 ktest_qemu.log

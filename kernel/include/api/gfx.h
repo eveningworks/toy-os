@@ -58,11 +58,21 @@ void gfx_flush(void);
 // is nothing to compare) or the scratch buffer can't be allocated.
 int gfx_verify_snapshot(void);
 
-// Compares the current back buffer against the last snapshot. Returns
-// the number of differing pixels, and writes the first one's
-// coordinates to *out_x/*out_y when non-NULL. 0 means the two renders
-// agreed -- i.e. the damage rect covered everything that changed.
-int gfx_verify_diff(int *out_x, int *out_y);
+// What a comparison found. The BOUNDING BOX matters as much as the
+// count: 63 differing pixels are a caret, a window border or a whole
+// scrollbar depending on their extent, and the first pixel's
+// coordinates alone can't tell those apart.
+struct gfx_diff {
+    int count;              // differing pixels; 0 means the renders agreed
+    int first_x, first_y;   // the first differing pixel, scanning top-down
+    int x0, y0, x1, y1;     // half-open bounding box of every difference
+};
+
+// Compares the current back buffer against the last snapshot, filling
+// *out. A count of 0 means the two renders agreed -- i.e. the damage
+// rect covered everything that changed. Returns the count too, so a
+// caller can branch on it directly.
+int gfx_verify_diff(struct gfx_diff *out);
 
 // Frees the scratch buffer.
 void gfx_verify_release(void);

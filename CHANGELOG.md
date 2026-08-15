@@ -120,6 +120,134 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   standalone one needs an interactive-stdin story first).
 
 ### Fixed
+- **The cheap cursor path stranded its own sprite outside the damage
+  rect** -- which is what the `-j 2`-only "resize" violation actually
+  was. `wm_render_cursor_move()` (`apps/wm/wm_render.c`) is the WM's
+  fast path for the most common event it sees: the mouse moved and
+  nothing else changed, so undraw the sprite, draw it at the new spot,
+  present -- no scene render, no damage. But it never recorded itself in
+  `prev_cursor_*`, which is what the FULL path uses to decide where to
+  erase the sprite from. So a cheap move to B followed by a full frame
+  whose cursor is already at C damaged the position before the move and
+  the position after it, and never B -- leaving a cursor sitting on
+  screen until something else happened to repaint that region.
+  `prev_cursor_x/y` are set here now, exactly as the full path sets them.
+
+  Consecutive cheap moves hid this completely (each restores what the
+  last one saved), which is why it lived in `docs/roadmap.md` as a
+  papercut described as "currently harmless" -- the entry even predicted
+  it "will bite if the save/restore ever stops cleaning up after
+  itself". What made it bite was neither of the two hypotheses recorded
+  beside it (a load-sensitive WM bug, or the harness sampling a
+  mid-resize frame): it needs a full frame to land while the cursor has
+  already moved on, and an injected event overrides the real mouse for
+  ONE wm_run() iteration, so every `gui` test's cursor snaps back to the
+  real PS/2 position on the next one and gets two chances per event.
+  That is also why the strandings sat at (640,360) -- where
+  `mouse_init()` leaves the real cursor -- and why the label on the
+  report ("resize-shrink Notepad", "drag-back Notepad", "taskbar
+  Calculator") was never anything but whichever step was running.
+
+  **What identified it was the diff's bounding box, which the report did
+  not use to have.** "63 px at (349,264)" had been a shapeless number
+  for a week; `(349,264 9x15)` and `(115,20 12x19)` are cursor-sprite
+  shaped (the sprite is 13x19), sitting exactly under the cursor, with
+  the frame's damage being the taskbar strip a clock tick had declared.
+  Four independent hits, all the same shape.
+
+  Measured before and after with the same harness and configuration:
+  four violations across ~19 completed randomised sweeps before,
+  and none after.
+
+  The known issue this came from recorded two live hypotheses needing
+  opposite fixes and an instruction to design ONE discriminating
+  experiment before fixing toward either.
+
+  It is rare, not absent, and that nearly buried it: six complete runs
+  of the exact recorded combination found nothing -- four at `-j 2` on
+  an idle host, then one each at `-j 1` and `-j 2` with fourteen of
+  sixteen host cores pinned by busy loops -- before it reproduced with
+  the recorded fingerprint byte for byte (`63 px ... first at (349,264);
+  damage was (0,329 1280x391)`). Two things follow for anyone who meets
+  a rare one again: a handful of clean runs is not evidence, and the
+  harness has to be proved awake before any of them count at all. That
+  proof was a positive control -- `compute_window_damage()`'s resize
+  branch changed to damage only the window's NEW rect instead of the
+  union with its old one, which made the sweep report three violations
+  of ~12,000 px each with the moved window's bounding box.
+
+  **What actually made `-j 2` different from `-j 1` was host memory, not
+  the WM.** `disk.img` is ~4 MB of data inside a 9 GB sparse file, and
+  `damage_hunt.py` copied it per slot with `shutil.copyfile`, which
+  writes the holes out as real zeros -- into `/tmp`, which is a tmpfs
+  here. So every parallel slot cost 9 GB of RAM: `-j 2` ran every sweep
+  behind ~18 GB of memory pressure, and `-j 4` filled a 32 GB tmpfs and
+  died of ENOSPC mid-run. It copies with `cp --reflink=auto
+  --sparse=always` now (falling back to `shutil`), which makes the
+  copies free: four concurrent VMs leave `/tmp` at 707 MB, and eight
+  seeds at `-j 4` finish in 117 s.
+
+  **The discriminating experiment is now permanent, in the kernel.** A
+  difference between the damage-limited and unrestricted renders means
+  one of exactly two things -- a genuinely missed damage declaration, or
+  a `render_scene()` that is not a pure function of the frame's state,
+  which would make the comparison meaningless. (The second is not
+  hypothetical: the unrestricted pass calls every window's `on_draw()`
+  while the damage-limited one SKIPS windows outside the damage box.)
+  So `gui damage verify on` now renders the same unrestricted frame a
+  THIRD time whenever it reports, in the same frame and under the same
+  load, and prints its verdict inside the existing report line: `scene
+  stable (real missed damage)` or `SCENE UNSTABLE -- verdict void`, plus
+  the differing pixels' BOUNDING BOX and which window (if any) they
+  landed in. The positive control validated the verdict in the known
+  direction -- all three deliberate violations reported `scene stable`
+  -- and when the real one finally fired, it reported `scene stable
+  (real missed damage)` too. That is the answer the known issue asked
+  for: hypothesis (a), a genuine missed declaration.
+
+  The report also names the window the difference landed in and whether
+  that window was in the frame's damage at all, and prints the cursor's
+  current and last-drawn positions -- which is what turned "63 px
+  somewhere in Notepad" into "a sprite where the cursor used to be".
+  `gfx_verify_diff()` fills a `struct gfx_diff` now rather than
+  returning a count and a first pixel.
+
+  One thing deliberately NOT committed: a `cursor_damage_test.py` that
+  drove the sequence directly. Two versions of it reported nothing
+  against the kernel that was actively failing -- a click cannot strand
+  a sprite, because `gui click` queues four events consumed one per
+  iteration and its leading move is itself a cheap frame that tidies up
+  on the way past. A test that cannot go red is worse than no test, so
+  it was deleted rather than committed green; `damage_hunt.py` already
+  finds this, and the mechanism is written down here instead.
+
+  **Two harness bugs, which are the durable part of this.** Re-running
+  eight seeds at `-j 4` produced a table with one FAIL whose evidence
+  was a line of PYTHON -- `damage_hunt.py` scanned the sweep's output
+  for the substring `DAMAGE BUG`, and `gui_debug.py`'s own source
+  contains it, so a `BrokenPipeError` traceback read as a violation (and
+  every genuine hit was counted twice, being echoed in the sweep's
+  summary). Worse, two other seeds died in `QMPSession`'s constructor
+  when four guests booting at once were too slow to accept a QMP
+  connection, and both were reported **PASS** -- `vm.py start` already
+  exits non-zero when the guest never reaches the debug console, and
+  this threw that away. A seed now reports `pass`/`fail`/**`error`**,
+  where error means the sweep measured nothing either way and exits
+  non-zero without being counted as a violation; violations are matched
+  on the sweep's own `DAMAGE BUG [` line prefix.
+
+  Both `docs/roadmap.md` known-issue entries are DELETED rather than
+  struck through, per that file's own rule: the `-j 2` one and the
+  `wm_render_cursor_move()` papercut, which turn out to have been the
+  same bug described from two ends -- one as a symptom nobody could
+  attribute, the other as a mechanism nobody had connected to a symptom.
+  Worth remembering next time a papercut is filed as "currently
+  harmless": that entry named the exact function, the exact missing
+  bookkeeping and the exact conditions, and still sat next to a
+  "hypotheses unknown" report of its own effects. `.gitignore` also grew
+  `.vm.*.pid`/`.vm.*.serial`, the per-slot files `vm.py --instance N`
+  leaves behind.
+
 - **`fsformat` left the disk with no `/etc` and no `/tmp` until the next
   reboot.** Both were created by `kernel_main()` on the line after
   `fs_init()`, but a mount is not only a boot-time event: `fsformat`

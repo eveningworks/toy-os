@@ -880,14 +880,84 @@ void wm_render_frame(int mx, int my) {
         // frame is trivially equal to itself.
         if (gfx_verify_snapshot()) {
             render_scene(mx, my, 0);
-            int bx = -1, by = -1;
-            int diff = gfx_verify_diff(&bx, &by);
+            struct gfx_diff d;
+            int diff = gfx_verify_diff(&d);
             if (diff && !verify_reported) {
                 verify_reported = 1;
+                // THE IDEMPOTENCE PROBE. A difference between the two
+                // renders means one of exactly two things, and they need
+                // opposite fixes:
+                //
+                //   (a) the damage-limited render missed a pixel that
+                //       genuinely changed -- a real missed declaration,
+                //       the bug this whole mode exists to find; or
+                //   (b) render_scene() is not a pure function of the
+                //       frame's state, so the two renders disagree about
+                //       a scene that no damage rect could have covered.
+                //
+                // (b) is not hypothetical: the unrestricted pass calls
+                // every window's on_draw(), while the damage-limited one
+                // SKIPS windows outside the damage box (Phase 3 above),
+                // so anything an on_draw() mutates happens a different
+                // number of times in the two passes.
+                //
+                // Rendering the same unrestricted frame a THIRD time
+                // separates them, in the same frame and under the same
+                // load: if it reproduces its own output exactly, the
+                // scene is stable and the diff above is a real (a). If
+                // it does not, the comparison itself was measuring
+                // nothing and (a) cannot be concluded from it.
+                struct gfx_diff again = { 0, -1, -1, 0, 0, 0, 0 };
+                int probed = gfx_verify_snapshot();
+                if (probed) {
+                    render_scene(mx, my, 0);
+                    gfx_verify_diff(&again);
+                }
+                // Which window the difference landed in, and whether
+                // that window was inside this frame's damage box at
+                // all. "63 px at (349,264)" says nothing on its own;
+                // "inside Notepad, which this frame did not damage" is
+                // the bug report.
+                int owner = -1;
+                int cx = (d.x0 + d.x1) / 2, cy = (d.y0 + d.y1) / 2;
+                for (int i = window_count - 1; i >= 0; i--) {
+                    if (windows[i].state == WIN_MINIMIZED) continue;
+                    if (cx >= windows[i].x && cx < windows[i].x + windows[i].w &&
+                        cy >= windows[i].y && cy < windows[i].y + windows[i].h) {
+                        owner = i;
+                        break;
+                    }
+                }
+                // The cursor is the other half of the picture: its box
+                // is damaged from prev_cursor_* and (mx,my), and
+                // wm_render_cursor_move()'s cheap path draws the sprite
+                // WITHOUT recording where it put it -- so a diff sitting
+                // on the cursor with prev_cursor_* somewhere else is a
+                // different bug from a diff in an app's own pixels.
+                klog_printf("wm:   cursor now (%d,%d), prev drawn (%d,%d)\n",
+                             mx, my, prev_cursor_x, prev_cursor_y);
+                klog_printf("wm:   diff is in %s%s%s, damage-intersecting=%d\n",
+                             owner < 0 ? "no window (desktop/taskbar/overlay)" : "window '",
+                             owner < 0 ? "" : windows[owner].title,
+                             owner < 0 ? "" : "'",
+                             owner < 0 ? 0 : window_intersects_damage(&windows[owner]));
                 klog_printf("wm: DAMAGE BUG -- %d px changed outside the damage rect, "
-                             "first at (%d,%d); damage was (%d,%d %dx%d)\n",
-                             diff, bx, by, damage_x0, damage_y0,
-                             damage_x1 - damage_x0, damage_y1 - damage_y0);
+                             "first at (%d,%d); damage was (%d,%d %dx%d); "
+                             "diff bbox (%d,%d %dx%d); %s\n",
+                             diff, d.first_x, d.first_y, damage_x0, damage_y0,
+                             damage_x1 - damage_x0, damage_y1 - damage_y0,
+                             d.x0, d.y0, d.x1 - d.x0, d.y1 - d.y0,
+                             !probed ? "probe unavailable"
+                             : again.count == 0 ? "scene stable (real missed damage)"
+                             : "SCENE UNSTABLE -- verdict void");
+                if (probed && again.count) {
+                    klog_printf("wm:   probe -- a repeated unrestricted render of the same "
+                                 "frame differs from itself by %d px, first at (%d,%d), "
+                                 "bbox (%d,%d %dx%d)\n",
+                                 again.count, again.first_x, again.first_y,
+                                 again.x0, again.y0, again.x1 - again.x0,
+                                 again.y1 - again.y0);
+                }
             } else if (!diff) {
                 verify_reported = 0; // armed again for the next distinct failure
             }
@@ -918,5 +988,27 @@ void wm_render_cursor_move(int mx, int my) {
     }
     restore_cursor_under();
     draw_cursor_at(mx, my);
+
+    // This path DREW the cursor, so it has to say where -- prev_cursor_*
+    // is "where the sprite actually is", and the next damage-limited
+    // frame erases it from there. Leaving it to wm_render_frame() alone
+    // meant a cheap move stranded the sprite: the frame damaged the
+    // position before the cheap move and the position after it, and
+    // never the one in between, so the sprite sat there until something
+    // else happened to repaint that region.
+    //
+    // Consecutive cheap moves hid it (each one restores what the last
+    // saved), which is why this survived as "currently harmless" in
+    // docs/roadmap.md. It needs a FULL frame to land while the cursor
+    // has already moved on -- an injected event overrides the real mouse
+    // for one iteration, so a `gui` test's cursor snaps back to the real
+    // PS/2 position every other iteration and gets plenty of chances.
+    // `gui damage verify on` reported it as 12x19 and 9x15 boxes -- the
+    // sprite is 13x19 -- sitting exactly under the cursor, roughly once
+    // in five randomised damage_hunt.py sweeps, labelled as whatever
+    // interaction happened to be running.
+    prev_cursor_x = mx;
+    prev_cursor_y = my;
+
     gfx_present();
 }

@@ -165,21 +165,29 @@ int gfx_verify_snapshot(void) {
     return 1;
 }
 
-int gfx_verify_diff(int *out_x, int *out_y) {
-    if (!double_buffered || !verify_scratch) return 0;
-    int count = 0;
-    int fx = -1, fy = -1;
+int gfx_verify_diff(struct gfx_diff *out) {
+    struct gfx_diff d = { 0, -1, -1, 0, 0, 0, 0 };
+    if (!double_buffered || !verify_scratch) {
+        if (out) *out = d;
+        return 0;
+    }
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             uint32_t i = (uint32_t)y * (uint32_t)width + (uint32_t)x;
             if (back_buffer[i] == verify_scratch[i]) continue;
-            if (fx < 0) { fx = x; fy = y; }
-            count++;
+            if (d.count == 0) {
+                d.first_x = x; d.first_y = y;
+                d.x0 = x; d.y0 = y; d.x1 = x + 1; d.y1 = y + 1;
+            } else {
+                if (x < d.x0) d.x0 = x;
+                if (x + 1 > d.x1) d.x1 = x + 1;
+                if (y + 1 > d.y1) d.y1 = y + 1;  // scan order fixes y0 already
+            }
+            d.count++;
         }
     }
-    if (out_x) *out_x = fx;
-    if (out_y) *out_y = fy;
-    return count;
+    if (out) *out = d;
+    return d.count;
 }
 
 void gfx_verify_release(void) {

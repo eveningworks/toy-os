@@ -870,24 +870,6 @@ rediscover the setup -- a seed, a command, a click sequence. And
 completed *features* stay struck through above because the milestone
 history is worth reading, but a fixed papercut is just noise.
 
-- [ ] **A `resize-shrink Notepad` damage violation that only appears
-      under parallel VMs.** Reproduce: `python3 tools/damage_hunt.py
-      --seeds 4 6 --random 20 -j 2` -- both seeds reported an identical
-      `63 px changed outside the damage rect, first at (349,264);
-      damage was (0,329 1280x391)` on the FIXED sequence's
-      `resize-shrink Notepad` step. What makes it unresolved rather
-      than a bug report: `-j 1` is clean, and so is `-j 2 --random 0`,
-      so it is not simply "the fixed sequence is broken". Two live
-      hypotheses needing opposite fixes -- a real WM bug that only
-      loses the race when frames are slow, or the harness sampling a
-      mid-resize frame under contention. Per this file's own rule,
-      design ONE experiment that separates them before fixing toward
-      either; a good candidate is re-running the failing combination
-      with `gui damage verify` reporting timestamps, or reproducing the
-      same slowdown serially (a busy loop, or `-j 1` under external
-      CPU load). Found by `damage_hunt.py`'s first real run, on the
-      same day the old 205px entry was measured gone.
-
 - [ ] **Control Panel applets can't show hover.** `struct applet`'s
       `draw(x, y, w, h)` doesn't carry the cursor position, so the
       timezone applet passes `hovered = -1` to `ui_radio_list_draw()`
@@ -909,14 +891,19 @@ history is worth reading, but a fixed papercut is just noise.
       legitimate thing to have open, and the sweep now covers it -- but
       worth knowing when reading a failure label that says "raise" and
       finding a modal in the state dump.
-- [ ] `wm_render_cursor_move()`'s cheap path draws the cursor without
-      recording it in `prev_cursor_*`, unlike `wm_render_frame()`, which
-      does so on every frame. It's currently harmless: that path also
-      calls `restore_cursor_under()`, so it cleans up after itself. But
-      the two paths disagreeing about who tracks the cursor's drawn
-      position is precisely the shape of the bug fixed in the semver-era
-      CHANGELOG entry for the damage sweep, and it will bite if the save
-      /restore path is ever removed in favour of pure damage tracking.
+- [ ] **`damage_hunt.py -j 4` loses VM SLOT 0 every run.** Reproduce:
+      `python3 tools/damage_hunt.py --seeds 1 2 3 4 5 6 7 8 --random 20
+      -j 4` -- seeds 1 and 5 report ERROR every time (seed 1 with a
+      `BrokenPipeError` partway through, seed 5 with a QMP
+      `TimeoutError` at startup), while seeds 2,3,4,6,7,8 pass. Those
+      two are exactly the seeds that land on slot 0 (`slot = index %
+      j`), and seed 1 alone at `-j 1` passes with all 51 interactions,
+      so it is neither seed-specific nor a kernel crash. Reported as
+      `error` rather than counted clean since this session, so it is
+      visible rather than silently reducing coverage. Likely slot 0's
+      `.vm.pid`/`.vm.serial`/port 4445 being reused before the previous
+      guest has fully gone; the other slots use per-instance names.
+      Not diagnosed further.
 - [ ] Resizing a window by its grip sometimes doesn't take on the first
       drag (visible in `damage_sweep.py -v`: a `resize-grow` followed by
       a `resize-shrink` starting from the *same* coordinates, meaning

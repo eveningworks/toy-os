@@ -117,6 +117,8 @@ there when you add an entry, or the index quietly stops being one.
 - [ui_button/ui_button_group: Brutal-OS-inspired, but not a full retained view system](#ui_buttonui_button_group-brutal-os-inspired-but-not-a-full-retained-view-system)
 - [The display layer: cards are drivers, and capabilities must not lie](#the-display-layer-cards-are-drivers-and-capabilities-must-not-lie)
 - [Damage verification: the invariant nothing enforced](#damage-verification-the-invariant-nothing-enforced)
+- [Both cursor paths record where they drew the sprite](#both-cursor-paths-record-where-they-drew-the-sprite)
+- [A damage-verify failure renders the frame a THIRD time before believing itself](#a-damage-verify-failure-renders-the-frame-a-third-time-before-believing-itself)
 - [GUI testing asks the kernel, rather than measuring a screenshot](#gui-testing-asks-the-kernel-rather-than-measuring-a-screenshot)
 - [The WM clips each app's on_draw() to its window -- containment, not optimisation](#the-wm-clips-each-apps-on_draw-to-its-window----containment-not-optimisation)
 - [CPU info: one syscall, because "supported" and "enabled" sit on opposite sides of a privilege boundary](#cpu-info-one-syscall-because-supported-and-enabled-sit-on-opposite-sides-of-a-privilege-boundary)
@@ -1398,6 +1400,43 @@ The general lesson, which is why this is written down rather than just
 built: when a subsystem's correctness rests on a convention every caller
 must remember, the fix is not more care -- it's making the convention
 checkable. See `CHANGELOG.md`.
+
+## Both cursor paths record where they drew the sprite
+
+`wm_render_frame()` (the full path) and `wm_render_cursor_move()` (the
+cheap "mouse moved, nothing else changed" path) both draw the cursor, so
+both set `prev_cursor_*` -- "where the sprite actually is", which is what
+the next damage-limited frame uses to decide where to erase it from.
+
+The cheap path used not to, and it looked safe: consecutive cheap moves
+restore what the previous one saved, so nothing is left behind. What it
+missed is a FULL frame landing while the cursor has already moved on --
+that frame damages the position before the cheap move and the position
+after it, never the one in between, and a cursor stays on screen. It was
+filed as a harmless inconsistency in `docs/roadmap.md` for weeks while
+its own symptom sat two entries above it, filed as an unexplained
+"resize" damage violation. See `CHANGELOG.md`'s `[Unreleased]` entry --
+including why a test driving this with `gui click` cannot catch it.
+
+## A damage-verify failure renders the frame a THIRD time before believing itself
+
+The two-render comparison above can only tell you the renders DISAGREED,
+and there are exactly two ways that happens: a genuinely missed damage
+declaration, or a `render_scene()` that isn't a pure function of the
+frame's state -- in which case the comparison measured nothing. The
+second isn't hypothetical, because the two passes don't do the same
+work: the unrestricted one calls every window's `on_draw()`, while the
+damage-limited one skips windows outside the damage box entirely.
+
+So a report re-renders the same unrestricted frame once more, in the
+same frame and under the same load, and states which case it is
+("scene stable (real missed damage)" / "SCENE UNSTABLE -- verdict
+void") alongside the diff's bounding box. This was built to settle a
+recorded known issue whose two hypotheses needed opposite fixes and
+which then failed to reproduce at all -- the probe stayed because the
+next such report should not have to re-open the same question. See
+`CHANGELOG.md`'s `[Unreleased]` entry, and note the harness half of it:
+`damage_hunt.py` was scoring a crashed sweep as a PASS.
 
 ## GUI testing asks the kernel, rather than measuring a screenshot
 
