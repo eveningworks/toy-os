@@ -6,13 +6,13 @@ question to answer when adding one.
 
 | Directory | Holds | The test for "does it belong here?" |
 |---|---|---|
-| `arch/x86_64/` | Multiboot entry, GDT/TSS, IDT, PIC, IRQ dispatch, page tables, the ring switch, FPU/SSE enable + FXSAVE, CPUID | Would this be rewritten wholesale on a different CPU architecture? |
+| `arch/x86_64/` | Multiboot entry, GDT/TSS, IDT, PIC, IRQ dispatch, page tables, the ring switch, FPU/SSE enable + FXSAVE, CPUID, RDSEED/RDRAND/RDTSC (`random_hw.c`) | Would this be rewritten wholesale on a different CPU architecture? |
 | `core/` | `kernel_main`, multiboot parsing, timer, serial + the debug console, power | Does it own the machine as a whole, rather than one resource? |
 | `mm/` | Physical frames, address spaces, the kernel heap | Is it about memory? |
 | `proc/` | ELF loading, syscalls, processes, the scheduler | Is it about *running* something? |
 | `fs/` | The probe-selecting VFS + two backends (TFS3 default, TFS2 legacy) | Is it about files? |
 | `drivers/` | Console, graphics, PS/2, ATA, PCI, partitions, speaker | Does it talk to a specific piece of hardware? |
-| `lib/` | the toolkit (`string.c`, `knum.c`, `kfmt.c` + `kfmt_print.c`, `kpath.c`, `fixed.c`, `geom.c`), JSON, klog, debug flags, `/etc` config, timezone/font/keyboard settings | Is it a service with no hardware and no policy of its own? |
+| `lib/` | the toolkit (`string.c`, `knum.c`, `kfmt.c` + `kfmt_print.c`, `kpath.c`, `fixed.c`, `geom.c`, `krandom.c`), JSON, klog, debug flags, `/etc` config, timezone/font/keyboard settings | Is it a service with no hardware and no policy of its own? |
 | `include/` | Headers, split by audience | See `include/README.md` |
 
 ## Why this shape

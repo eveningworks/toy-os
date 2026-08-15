@@ -242,7 +242,8 @@ shell and the GUI Terminal.
   `Alt-B`/`Alt-F`, `Ctrl-K`/`Ctrl-U`/`Ctrl-W`, `Ctrl-Y` yank, `Ctrl-T`
   transpose, `Alt-U`/`Alt-L`/`Alt-C` case, `Ctrl-_` undo, `Ctrl-R`
   reverse history search, `Alt-.` last argument). `help` lists them all.
-- **System info:** `time`, `timezone [city]`, `uptime`, `meminfo`,
+- **System info:** `time`, `timezone [city]`, `uptime`, `random [n]`
+  (the entropy source and some values from it), `meminfo`,
   `df` (disk space: total/used/free, KB-scale -- also names the
   active filesystem backend), `dmesg`, `lspci`,
   `parttable`. CPU identification is `/bin/lscpu` (see below), not a
@@ -361,13 +362,22 @@ Useful tools in `tools/` (all documented in their own docstrings):
   Also shown in the Control Panel's System Info applet.
 - Baseline memory hardening (Milestone 2): NX enforced for userspace
   pages with W^X from each ELF segment's real `p_flags`, and
-  `-fstack-protector-strong` canaries on both the kernel and userland.
+  `-fstack-protector-strong` canaries on both the kernel and userland
+  -- the kernel's guard is RANDOM per boot, seeded from the entropy
+  source below.
   The kernel's own identity map is W^X too -- `.text` is the only
   executable range in it and is read-only, everything else is NX, and
   CR0.WP is set so ring 0 actually honours that (see
   `docs/decisions.md`). `run nx_test` / `run stack_smash_test` prove
   the userspace half for real, not by assertion; the `paging` KTESTs
   and a deliberate `PANIC: Page fault` prove the kernel half.
+- An entropy source (`kernel/lib/krandom.c`): RDSEED, then RDRAND, then
+  a TSC-jitter harvest when the CPU has neither, mixed through
+  splitmix64's finalizer. Deliberately NOT a CSPRNG, and it says so --
+  `krandom_quality()` reports which source it actually got, since on
+  the default `qemu64` model (no RDSEED/RDRAND) the jitter fallback is
+  weak under emulation. Reachable from ring 3 as `SYS_GETRANDOM` and
+  from the shell as `random`.
 - Two persistent, disk-backed filesystems behind a probe-selecting
   VFS (`kernel/fs/vfs.c` -- one ACTIVE backend at a time, chosen by
   superblock magic; a blank disk gets the default). **TFS3**
@@ -486,8 +496,9 @@ kernel/lib/      -- cross-cutting services with no hardware of their
                      (debugflags.c), /etc config reading (etc_config.c)
                      and its users (tz.c, font_config.c,
                      keyboard_config.c), keyboard layout data-file
-                     parsing (keyboard_layout.c), and stack-canary
-                     support (stack_protector.c).
+                     parsing (keyboard_layout.c), the entropy source
+                     (krandom.c), and stack-canary support
+                     (stack_protector.c, which seeds its guard from it).
 kernel/drivers/  -- device drivers, and only device drivers: console
                      (vga.c), framebuffer graphics with double buffering
                      + damage-region clipping (gfx.c), the baked TTF

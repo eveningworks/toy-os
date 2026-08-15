@@ -1303,7 +1303,7 @@ repeated manual steps to be worth automating:
   them there.
 - **`usertest_run.py`** -- runs the self-checking ring-3 diagnostics in
   `/tests` (`libc_test`, `fpu_test`, `newsyscalls_test`, `file_test`,
-  `write_test`, `exit_test`) as one pass/fail table, asserting BOTH an
+  `write_test`, `exit_test`, `random_test`) as one pass/fail table, asserting BOTH an
   exit code and required output. In `preflight.sh`. It fills a real gap:
   `make test` runs inside the kernel and `gui_regress.py` covers the
   windowed clients, so nothing ever ran a plain `/tests` binary except a
