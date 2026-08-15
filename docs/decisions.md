@@ -116,6 +116,7 @@ there when you add an entry, or the index quietly stops being one.
 - [Button press/release feedback: a general `on_press`/`on_release` WM mechanism, not a Calculator-only hack](#button-pressrelease-feedback-a-general-on_presson_release-wm-mechanism-not-a-calculator-only-hack)
 - [ui_button/ui_button_group: Brutal-OS-inspired, but not a full retained view system](#ui_buttonui_button_group-brutal-os-inspired-but-not-a-full-retained-view-system)
 - [The display layer: cards are drivers, and capabilities must not lie](#the-display-layer-cards-are-drivers-and-capabilities-must-not-lie)
+- [The entropy source stops short of a CSPRNG, on purpose](#the-entropy-source-stops-short-of-a-csprng-on-purpose)
 - [Damage verification: the invariant nothing enforced](#damage-verification-the-invariant-nothing-enforced)
 - [Both cursor paths record where they drew the sprite](#both-cursor-paths-record-where-they-drew-the-sprite)
 - [A damage-verify failure renders the frame a THIRD time before believing itself](#a-damage-verify-failure-renders-the-frame-a-third-time-before-believing-itself)
@@ -3085,6 +3086,30 @@ same-session `tools/qmp_test.py` fix (a QEMU-backgrounding pattern that
 turned out to be unreliable specifically in the sandboxed environment
 this was discovered in).
 
+## The entropy source stops short of a CSPRNG, on purpose
+
+`kernel/lib/krandom.c` is RDSEED/RDRAND when the CPU has them, TSC
+jitter when it doesn't, and a mixing function over whichever it got. It
+is explicitly NOT a CSPRNG -- no entropy accounting, no reseed
+schedule, no backtracking resistance -- and `krandom_quality()` exists
+so a caller can find that out rather than assume otherwise.
+
+The alternative considered was the Linux shape: an entropy pool fed by
+interrupt/keyboard/mouse timing, seeding a ChaCha20 DRBG. Rejected for
+this kernel because it would mean shipping and maintaining a stream
+cipher, plus event hooks across several drivers, to dress up an input
+whose actual quality is set by the machine underneath -- and under TCG
+that input is timing measured against a software timestamp counter.
+Entropy accounting on top of that would be a number that looks like a
+guarantee and isn't, which is the failure mode this repo's testing
+notes complain about most. Two honest labels beat one dishonest pool.
+
+What was measured rather than assumed: three separate boots on the
+jitter path produced three different values, so the fallback is not
+deterministic under emulation. That is the claim it needed to survive;
+it is not a claim about cryptographic strength. See `CHANGELOG.md`'s
+`[Unreleased]` entry.
+
 ## Stack canaries: `-mstack-protector-guard=global` and a fixed constant, not GCC's defaults
 
 Milestone 2's stack-canary item (`CHANGELOG.md`'s `[Unreleased]` entry)
@@ -3106,16 +3131,22 @@ are worth knowing if this is ever revisited:
   Building real TLS infrastructure just to use GCC's default guard
   would have been wildly disproportionate to what this milestone item
   actually needed.
-- **The guard value is a fixed compile-time constant, not random.**
-  There's no entropy source anywhere in this kernel (the same gap
-  blocking the kernel-ASLR item further down this same milestone) --
-  seeding a real random guard at boot needs an RNG that doesn't exist
-  yet. A fixed guard still catches the threat model that actually
-  matters here (an accidental linear buffer overflow corrupting
-  whatever's next on the stack) -- it just can't defend against an
-  attacker who's read this exact binary and crafts an overflow that
-  writes the correct guard bytes back on its way past. Worth
-  revisiting once/if a real RNG exists.
+- **The guard starts as a fixed compile-time constant and is REPLACED
+  with a random one at boot.** It was constant-only at first, because
+  this kernel had no entropy source at all; `krandom.h` exists now
+  (see the entry below), and `stack_guard_randomize()` installs a
+  random guard from it early in `kernel_main()`. The constant still
+  protects everything before that point, so it is a fallback rather
+  than a placeholder -- and it is KEPT, with a log line, if krandom
+  reports no entropy, since a guard "randomized" from nothing is no
+  stronger and only looks handled.
+
+  Two details that are load-bearing rather than incidental: the install
+  must happen directly in `kernel_main()` (changing the guard while an
+  instrumented frame is live panics that frame on return -- the
+  defence firing on innocent code), and the guard's low byte is forced
+  to ZERO deliberately, as glibc does, so that the guard terminates a
+  string-copy overflow instead of surviving one.
 - **`__stack_chk_fail`, not a synthesized trap.** Neither the kernel
   nor userland implementation routes through `idt.c`'s existing fault
   dispatcher -- each is just a small, direct function GCC's generated

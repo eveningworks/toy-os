@@ -28,6 +28,8 @@
 #include "apps.h"
 #include "scheduler.h"
 #include "debug_console.h"
+#include "krandom.h"      // entropy source -- krandom_init()
+#include "stack_guard.h"  // stack_guard_randomize() -- read its header before moving the call
 #include "knum.h"
 #include <stdint.h>
 
@@ -110,6 +112,21 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // cpuinfo.h, a lazy calibration inside a syscall can't ever finish.
     cpu_info_init();
     klog_write("toy-os: CPU identified, clock calibrated\n");
+
+    // Entropy (Milestone 2, docs/roadmap.md). Has to be after
+    // cpu_info_init() -- it asks CPUID for RDSEED/RDRAND through
+    // cpu_info -- and after idt_init(), because with neither
+    // instruction it falls back to timing jitter measured against the
+    // PIT, which has to be ticking.
+    krandom_init();
+
+    // ...and immediately: a random stack canary. This call must stay
+    // HERE, a statement in kernel_main() itself rather than tucked
+    // inside a helper -- changing __stack_chk_guard while any
+    // instrumented frame is live makes that frame panic on return, and
+    // kernel_main()'s own frame is the only one that can be live at
+    // this point (it never returns). See kernel/lib/stack_protector.c.
+    stack_guard_randomize();
 
     serial_irq_init(); // COM1 RX -- see serial.c for why this can't run inside serial_init() itself
     klog_write("toy-os: serial RX enabled (debug console on COM1, see docs/decisions.md)\n");

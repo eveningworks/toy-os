@@ -62,6 +62,8 @@ TESTS = [
      ["filetest: round trip OK"], []),
     ("write_test", 0,
      ["Hello from ring 3"], []),
+    ("random_test", 0,
+     ["random_test: all checks passed"], ["FAIL"]),
     # Not a self-checker: it exists to prove an exit code survives the
     # round trip out of ring 3, so the CODE is the whole assertion.
     ("exit_test", 42, [], []),

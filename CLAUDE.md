@@ -52,7 +52,7 @@ technical conventions below:
   around the boundary.
 - **There is a shared toolkit in `kernel/lib/` -- check it before
   hand-rolling a digit loop, a formatter, a path join, or a
-  rasteriser.** Six headers, all reachable through `kapi.h` and all
+  rasteriser.** Seven headers, all reachable through `kapi.h` and all
   with KTESTs. The four original ones:
   `string.h` (strings/memory/char classes), `knum.h` (numbers <->
   strings: `k_utoa`/`k_itoa`/`k_htoa`, `k_parse_u32`/`k_parse_hex`,
@@ -76,7 +76,15 @@ technical conventions below:
   depth so a caller can shade or sort by distance. Deliberately not a 3D
   engine: no matrices, no faces, no depth buffer, no clipping planes --
   a model is points plus whatever edge list the caller keeps beside
-  them, which is all the Shapes demo's cube is). Reach for the `gfx_draw_line()`/
+  them, which is all the Shapes demo's cube is). And one for
+  unpredictability: `krandom.h` (`krandom_u64`/`krandom_bytes`,
+  RDSEED/RDRAND with a TSC-jitter fallback) -- **deliberately NOT a
+  CSPRNG, and `krandom_quality()` is how a caller finds that out**
+  instead of assuming. The stack canary is randomized from it at boot,
+  which is the one place here where changing a global at the wrong
+  moment makes innocent code panic: read
+  `kernel/lib/stack_protector.c`'s comment before moving that call.
+  Reach for the `gfx_draw_line()`/
   `gfx_draw_circle()`/`gfx_fill_ellipse()` wrappers in the kernel and
   `uui_canvas` in ring 3 rather than `geom_*` directly -- both handle
   the plot callback, and the canvas handles clipping. Two things about

@@ -47,5 +47,6 @@
 #include "kpath.h"     // path join/normalize/resolve/basename/dirname -- one implementation, shared by the shell and the Terminal
 #include "klineedit.h" // readline-style line editing (buffer/cursor/kill ring/undo), shared by the shell and the GUI Terminal
 #include "debugflags.h" // dbgflag_enabled/set/parse -- per-subsystem runtime debug-log toggles (see the shell's `debug` command)
+#include "krandom.h"   // krandom_u64/krandom_bytes + krandom_quality -- the kernel's entropy source (RDSEED/RDRAND, TSC jitter otherwise). Deliberately NOT a CSPRNG; the quality enum is how a caller finds that out (see krandom.h)
 
 #endif

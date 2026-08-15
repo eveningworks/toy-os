@@ -111,6 +111,17 @@ int sys_pci_count(void);
 int sys_pci_info(int index, struct pci_device *out);
 int sys_cpu_info(struct cpu_info *out);
 
+// Fills `buf` with `n` random bytes from the kernel's entropy source.
+// Returns n, or -1 for an invalid pointer or an n over
+// SYS_GETRANDOM_MAX (4096). Never returns a short count -- it either
+// fills the whole buffer or fails, since nothing in the kernel blocks
+// waiting for entropy.
+//
+// The bytes are as good as the machine allows and no better: on a CPU
+// without RDSEED/RDRAND they come from timing jitter, which is weak
+// under emulation. See kernel/include/api/krandom.h.
+int sys_getrandom(void *buf, unsigned long n);
+
 // Sets the console colours this process writes in. Both are
 // `enum vga_color` values; out-of-range is refused, not clamped.
 int sys_set_color(int fg, int bg);

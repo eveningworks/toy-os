@@ -456,4 +456,30 @@ struct dirent {
                         // reason -- see that entry. libsys wraps the
                         // loop (sys_waitpid()).
 
+#define SYS_GETRANDOM 29 // RDI = buffer (out), RSI = byte count. Fills
+                          // the buffer with random bytes and returns
+                          // how many it wrote, or -1 for an invalid
+                          // pointer or a count over
+                          // SYS_GETRANDOM_MAX.
+                          //
+                          // ALWAYS fills the whole buffer or fails --
+                          // it never returns a short count the way
+                          // Linux's getrandom() can, because nothing
+                          // here blocks waiting for entropy. What it
+                          // cannot tell the caller is how GOOD the
+                          // bytes are: the kernel may be running on a
+                          // CPU with no RDSEED/RDRAND, in which case
+                          // they come from timing jitter that is weak
+                          // under emulation (see api/krandom.h's
+                          // krandom_quality, which has deliberately not
+                          // been exposed here -- a ring-3 program that
+                          // could read it would mostly use it to decide
+                          // to carry on anyway).
+
+// The largest single SYS_GETRANDOM request. Not a security limit -- it
+// stops a bad count from turning into a long uninterruptible fill in
+// ring 0, the same reasoning as every other bounded copy across this
+// boundary.
+#define SYS_GETRANDOM_MAX 4096
+
 #endif

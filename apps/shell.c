@@ -94,6 +94,8 @@ static void dispatch(char *line) {
         cmd_timezone(args);
     } else if (k_strcmp(cmd, "uptime") == 0) {
         cmd_uptime();
+    } else if (k_strcmp(cmd, "random") == 0) {
+        cmd_random(args ? args : "");
     } else if (k_strcmp(cmd, "about") == 0) {
         cmd_about();
     } else if (k_strcmp(cmd, "beep") == 0) {

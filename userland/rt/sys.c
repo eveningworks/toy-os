@@ -163,6 +163,10 @@ int sys_cpu_info(struct cpu_info *out) {
     return (int)syscall1(SYS_CPU_INFO, (uint64_t)(uintptr_t)out);
 }
 
+int sys_getrandom(void *buf, unsigned long n) {
+    return (int)syscall2(SYS_GETRANDOM, (uint64_t)(uintptr_t)buf, (uint64_t)n);
+}
+
 int sys_set_color(int fg, int bg) {
     return (int)syscall2(SYS_SET_COLOR, (uint64_t)(int64_t)fg, (uint64_t)(int64_t)bg);
 }

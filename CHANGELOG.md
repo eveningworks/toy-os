@@ -326,6 +326,80 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   the banner says Alt+F4 now.
 
 ### Added
+- **The kernel has an entropy source, and the stack canary is random
+  now** (Milestone 2, `docs/roadmap.md`). This kernel had no source of
+  unpredictability at all, which is why `__stack_chk_guard` was a
+  compile-time constant and why kernel ASLR was blocked -- both items
+  said so and pointed at this gap.
+
+  `kernel/include/api/krandom.h` is the surface: `krandom_u64()`,
+  `krandom_bytes()`, and `krandom_quality()`. Three layers underneath,
+  and only the first is real entropy -- **RDSEED, then RDRAND**
+  (`kernel/arch/x86_64/random_hw.c`, arch-local because it is three
+  inline-asm instructions and nothing else), falling back to **TSC
+  jitter** harvested against PIT tick boundaries, with a **mixing
+  function** (splitmix64's finalizer) over whichever was obtained, so
+  that a jittery input's few varying low bits reach the whole word.
+
+  **RDSEED before RDRAND is the point, not an ordering detail.** RDRAND
+  is a DRBG the CPU reseeds; RDSEED is that entropy source directly,
+  and is what Intel documents for seeding. Both report failure in CF
+  and leave the destination register architecturally ZERO -- so a
+  caller that ignores the flag does not get a weak random number, it
+  gets a hard zero, silently, forever. `arch_rdseed64()`/
+  `arch_rdrand64()` therefore return a status and write through a
+  pointer; there is deliberately no variant returning the value.
+
+  **What it does NOT claim.** It is not a CSPRNG: no entropy
+  accounting, no reseed schedule, no backtracking resistance, and no
+  stream cipher (see `docs/decisions.md` for why shipping one for this
+  was rejected). That is what `krandom_quality()` exists for -- a
+  caller can ask whether it got `KRANDOM_HW` or `KRANDOM_JITTER`
+  instead of assuming, the same instinct as `enum setting_result`
+  refusing to report "applied" as "saved".
+
+  **The canary, and the trap in installing it.** With
+  `-mstack-protector-guard=global`, an instrumented function reads the
+  guard in its prologue and compares in its epilogue -- so changing it
+  while any instrumented frame is live panics that frame on return,
+  with "stack smashing detected", in code that did nothing wrong.
+  `stack_guard_randomize()` is therefore called as a statement in
+  `kernel_main()` itself and nowhere else (its own frame is then the
+  only instrumented one live, and it never returns), and the function
+  is marked `no_stack_protector` so it cannot trip over its own
+  change. It also forces the guard's **low byte to zero on purpose**,
+  as glibc does: a string-copy overflow stops at a NUL, so a guard that
+  terminates the copy is a defence rather than a weakness. Eight bits
+  knowingly spent. If krandom has no entropy, the build-time constant
+  is KEPT and said so in the log, rather than installing a "random"
+  guard derived from nothing.
+
+  **`SYS_GETRANDOM` (29)** exposes it to ring 3 -- fills the buffer or
+  fails, never a short count, since nothing here blocks waiting for
+  entropy. `krandom_quality()` is deliberately NOT exposed: a ring-3
+  program that could read it would mostly use it to decide to carry on
+  anyway. Plus `random [n]` in the shell, which prints the SOURCE first
+  and the values second, because the numbers look equally random either
+  way and the source is the only part a reader can judge.
+
+  Verified on both CPU models, which matters here more than usual --
+  the default `qemu64` reports neither instruction, so without
+  `--cpu max` the hardware path would never have run at all. Under
+  `--cpu max`: `Entropy source: hardware (RDSEED/RDRAND)`; under
+  `qemu64`: the jitter fallback, and **three separate boots produced
+  three different values**, which is the claim that actually needed
+  measuring -- jitter sampled against a software timestamp counter
+  could easily have been deterministic, and the fallback would then
+  have been worth nothing. Six KTESTs, a ring-3 diagnostic
+  (`/tests/random_test`, in `usertest_run.py`'s table), and two
+  positive controls: skipping the canary install reddens exactly the
+  guard check, and a source stuck at a constant reddens "consecutive
+  draws differ" and "a large fill is not one value repeated" while
+  leaving the others green. That second control is recorded in the test
+  file, because it showed the bit-spread test passing against a
+  constant -- it catches a broken MIXER, not a stuck source, and now
+  says so.
+
 - **`tools/tfs3_v1_test.py`, and `format --fs-version` to make it
   possible.** Shipping TFS3 v2 left v1 support in the worst state a
   feature can be in: still relied upon (the kernel mounts v1 on

@@ -107,9 +107,13 @@ adds 4; 12 adds 5; 13 adds 6; 14 and up add 8.
       kernel's identity map gets NX on every huge PDE plus one 4KiB
       split for `.text`, and CR0.WP so ring 0 honours read-only at all;
       see `docs/decisions.md`'s kernel W^X entry
-- [ ] A real entropy source (RDRAND, TSC jitter fallback) -- prerequisite
-      for both kernel ASLR below and a non-constant stack-canary guard
-- [ ] Kernel ASLR (randomize load base) -- needs the entropy source above
+- [x] ~~A real entropy source (RDRAND, TSC jitter fallback)~~ -- done,
+      see `CHANGELOG.md`'s `[Unreleased]` entry: `krandom_u64()`/
+      `krandom_bytes()` over RDSEED/RDRAND with a TSC-jitter fallback,
+      `krandom_quality()` reporting which one it got, and the stack
+      canary randomized from it at boot
+- [ ] Kernel ASLR (randomize load base) -- the entropy source it was
+      blocked on exists now; what remains is the relocation work itself
 - [ ] Enable SMEP/SMAP (CR4) -- the CPU refusing kernel-mode execution of
       and access to user pages, which is a stronger guarantee than the
       page-table bits alone and costs two CR4 bits plus an audit of every

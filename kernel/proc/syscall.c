@@ -15,6 +15,7 @@
 #include "tz.h"
 #include "pci.h"
 #include "cpuinfo.h"
+#include "krandom.h"
 #include "strace_internal.h"
 #include <stddef.h>
 
@@ -856,6 +857,23 @@ void syscall_dispatch(uint64_t *regs) {
         } else {
             cpu_info_get((struct cpu_info *)(uintptr_t)rdi);
             regs[14] = 1;
+        }
+    } else if (rax == SYS_GETRANDOM) {
+        uint64_t pml4 = vmm_current_pml4();
+        if (rsi > SYS_GETRANDOM_MAX) {
+            klog_write("syscall: getrandom() rejected -- count over SYS_GETRANDOM_MAX\n");
+            regs[14] = (uint64_t)-1;
+        } else if (rsi == 0) {
+            // A zero-length request is a legal no-op, NOT an error --
+            // validating a zero-length range would reject a NULL
+            // pointer that is never going to be dereferenced.
+            regs[14] = 0;
+        } else if (!vmm_validate_user_range(pml4, rdi, rsi)) {
+            klog_write("syscall: getrandom() rejected -- invalid user pointer\n");
+            regs[14] = (uint64_t)-1;
+        } else {
+            krandom_bytes((void *)(uintptr_t)rdi, (size_t)rsi);
+            regs[14] = rsi;
         }
     } else if (rax == SYS_SET_COLOR) {
         if (rdi > VGA_WHITE || rsi > VGA_WHITE) {

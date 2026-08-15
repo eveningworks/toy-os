@@ -24,7 +24,7 @@ const char *const COMPLETION_COMMANDS[] = {
     "fputest", "fsck", "fsformat", "gui", "help", "ktest", "history", "keyboard", "ln", "lspci", "ls",
     "meminfo", "mkdir", "mv", "nano", "parttable", "pwd", "reboot",
     "ring3test", "rm", "run", "schedtest", "stat", "steptest", "strace", "stress",
-    "path", "time", "timezone", "touch", "truncate", "uptime", "write",
+    "path", "random", "time", "timezone", "touch", "truncate", "uptime", "write",
     0
 };
 

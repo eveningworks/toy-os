@@ -9,20 +9,72 @@
 // directly, so this file has no header -- there's no API surface for
 // another .c file to include.
 //
-// __stack_chk_guard is a fixed compile-time constant, not a random
-// value seeded at boot -- there's no entropy source in this kernel yet
-// (see docs/roadmap.md's kernel ASLR item, blocked on the same gap).
-// A fixed guard still catches the common case this is meant to catch
-// (a linear buffer overflow walking off the end of a local array and
-// corrupting whatever's next on the stack) -- it just can't defend
-// against an attacker who has read this exact binary and can craft an
-// overflow that writes the correct guard bytes back on its way past.
-// See docs/decisions.md for the fuller writeup.
+// __stack_chk_guard starts as a fixed compile-time constant and is
+// REPLACED with a random one early in boot (stack_guard_randomize()
+// below, called from kernel_main() once krandom_init() has run). The
+// constant is still what protects every frame before that point, which
+// is most of the arch bring-up -- it is a fallback, not a placeholder.
+//
+// Why a random guard matters at all: a fixed one catches the common
+// case either way (a linear overflow walking off the end of a local
+// array), but an attacker who has read this exact binary knows the
+// constant and can write it back on the way past. A value that differs
+// per boot cannot be baked into an exploit.
 #include <stdint.h>
 #include "vga.h"
 #include "klog.h"
+#include "kfmt.h"     // klog_printf
+#include "krandom.h"
 
 uintptr_t __stack_chk_guard = 0xDEC0DE99AA55C3A5ULL;
+
+// **The trap this function exists to contain.** With
+// -mstack-protector-guard=global, an instrumented function reads this
+// global in its PROLOGUE and compares against it in its EPILOGUE. So
+// changing it while any instrumented frame is live makes that frame
+// fail its check on return -- a "stack smashing detected" panic caused
+// by the defence itself, in code that did nothing wrong.
+//
+// Two things make this safe here, and both are requirements on the
+// CALLER rather than properties of this code:
+//
+//   1. It must be called from kernel_main() directly, as a statement
+//      between other calls -- never from inside a helper. At that
+//      point the only instrumented frame that can be live is
+//      kernel_main()'s own.
+//   2. kernel_main() must never return, which it doesn't (it ends in
+//      the shell loop, and the halt below it is unreachable). Its own
+//      epilogue would compare against the new guard having stored the
+//      old one, so a kernel_main() that returned would panic here.
+//
+// This function is itself marked no_stack_protector so it cannot be the
+// frame that trips over its own change.
+__attribute__((no_stack_protector))
+void stack_guard_randomize(void) {
+    enum krandom_quality q = krandom_quality();
+    if (q == KRANDOM_NONE) {
+        // Refuse rather than install a guard mixed from nothing: the
+        // compile-time constant above is no weaker than a "random" one
+        // derived from a source that has admitted it has no entropy,
+        // and swapping it would only make the failure look handled.
+        klog_write("krandom: stack guard left at its build-time value (no entropy)\n");
+        return;
+    }
+
+    uint64_t g = krandom_u64();
+
+    // A guard containing a zero byte is the classic weakness -- a
+    // string-copy overflow stops at a NUL, so an attacker who only
+    // needs to reproduce the bytes up to the first zero has less work
+    // to do. Force the low byte to zero DELIBERATELY instead, which is
+    // what glibc does: it makes the guard terminate a string copy
+    // rather than survive one, turning that same property into a
+    // defence. The cost is eight bits of the guard, knowingly spent.
+    g &= ~0xFFULL;
+
+    __stack_chk_guard = (uintptr_t)g;
+    klog_printf("krandom: stack guard randomized from %s\n", krandom_quality_name(q));
+}
 
 void __stack_chk_fail(void) {
     vga_set_color(VGA_WHITE, VGA_RED);

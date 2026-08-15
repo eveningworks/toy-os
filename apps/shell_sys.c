@@ -139,6 +139,7 @@ static const char *const HELP_LINES[] = {
     "  timezone      - show/pick your timezone (interactive list)\n",
     "  timezone <c>  - set timezone directly, e.g. `timezone helsinki`\n",
     "  uptime        - show ticks since boot\n",
+    "  random [n]    - show the entropy source and n random values\n",
     "  meminfo       - show memory map + physical frame allocator stats\n",
     "  df            - show filesystem disk space (total/used/free)\n",
     "  dmesg         - show the kernel log (boot messages, driver/\n",
@@ -347,6 +348,40 @@ void cmd_uptime(void) {
     vga_write(".");
     print_two_digit((uint32_t)(ticks % 100));
     vga_write(" seconds since boot\n");
+}
+
+// `random` -- what the entropy source is and what it produces. Prints
+// the SOURCE first and the bytes second, deliberately: the numbers look
+// equally random either way, and the only thing a reader can actually
+// judge is which source they came from (see api/krandom.h).
+void cmd_random(const char *args) {
+    unsigned count = 4;
+    if (args && args[0]) {
+        uint32_t n;
+        if (!k_parse_u32(args, &n) || n == 0 || n > 32) {
+            vga_write("usage: random [count]   (1..32 values, default 4)\n");
+            return;
+        }
+        count = n;
+    }
+
+    vga_write("Entropy source: ");
+    vga_write(krandom_quality_name(krandom_quality()));
+    if (krandom_quality() == KRANDOM_JITTER) {
+        // Said plainly rather than left for the reader to infer from
+        // the label -- this is the case where the numbers below are
+        // least trustworthy, and under QEMU it is the usual one.
+        vga_write("\n  (no RDSEED/RDRAND on this CPU -- weak under emulation)");
+    }
+    vga_write("\n");
+
+    for (unsigned i = 0; i < count; i++) {
+        char buf[24];
+        k_htoa(krandom_u64(), buf, sizeof buf, 16); // fixed width -- the values line up as a column
+        vga_write("  0x");
+        vga_write(buf);
+        vga_write("\n");
+    }
 }
 
 void cmd_about(void) {
