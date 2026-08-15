@@ -12,18 +12,11 @@
 #include "klog.h"
 #include "string.h"
 #include "strace_internal.h"
+#include "uaddr.h"
 
-// Chosen the same way file_test.c/newsyscalls_test.c's own STACK_VADDR
-// constants are: well clear of wherever a small ELF's own PT_LOAD
-// segments land near VMM_USER_BASE.
-// See scheduler.c's PROC_USTACK_PAGES for why this is not 1.
-#define ELF_RUN_STACK_PAGES 4
-#define ELF_RUN_STACK_VADDR 0x8000200000ULL // TOP page; grows down
-
-// Same address the old echo_test.c used for its own HEAP_VADDR -- well
-// clear of both the stack above and wherever a small ELF's own PT_LOAD
-// segments land near VMM_USER_BASE.
-#define ELF_RUN_HEAP_VADDR 0x8000100000ULL
+// Stack/heap/guard addresses come from uaddr.h -- this loader and the
+// scheduler's build the SAME ring-3 layout, and used to say so in two
+// places with nothing keeping them equal.
 
 // Max argv entries (including argv[0], the path itself) a single
 // elf_run_from_fs() call can hand off -- plenty for anything this
@@ -203,13 +196,13 @@ int elf_run_from_fs(const char *path, const char *args) {
     // The TOP page holds argv and is where RSP starts; the rest are
     // mapped below it so the stack has room to grow into.
     uint64_t stack_phys = 0;
-    for (int pg = 0; pg < ELF_RUN_STACK_PAGES; pg++) {
+    for (int pg = 0; pg < UADDR_STACK_PAGES; pg++) {
         uint64_t frame = pmm_alloc_frame();
         if (!frame) {
             vga_write("run: out of physical memory for the stack\n");
             return -1;
         }
-        if (!vmm_map_user_page(as, ELF_RUN_STACK_VADDR - (uint64_t)pg * 4096, frame)) {
+        if (!vmm_map_user_page(as, UADDR_STACK_VADDR - (uint64_t)pg * 4096, frame)) {
             vga_write("run: failed to map a stack page\n");
             return -1;
         }
@@ -223,10 +216,10 @@ int elf_run_from_fs(const char *path, const char *args) {
     // called it, for the one binary that needed SYS_SBRK) -- made
     // universal here so any /bin binary can use it, not just the ones
     // whose bespoke kernel-side loader remembered to arm it.
-    syscall_reset_heap(as, ELF_RUN_HEAP_VADDR);
+    syscall_reset_heap(as, UADDR_HEAP_BASE);
 
     uint64_t argc = 0, argv = 0, user_rsp = 0;
-    if (!elf_build_argv_on_stack(stack_phys, ELF_RUN_STACK_VADDR, path, args,
+    if (!elf_build_argv_on_stack(stack_phys, UADDR_STACK_VADDR, path, args,
                                   &argc, &argv, &user_rsp)) {
         vga_write("run: arguments too long for ");
         vga_write(path);

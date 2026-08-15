@@ -48,6 +48,7 @@ there when you add an entry, or the index quietly stops being one.
 - [Stack canaries: `-mstack-protector-guard=global` and a fixed constant, not GCC's defaults](#stack-canaries--mstack-protector-guardglobal-and-a-fixed-constant-not-gccs-defaults)
 - [NX landed in userspace first, and the default mapper is the non-executable one](#nx-landed-in-userspace-first-and-the-default-mapper-is-the-non-executable-one)
 - [Kernel W^X: NX on every huge PDE, one 4KiB split for `.text`, and CR0.WP](#kernel-wx-nx-on-every-huge-pde-one-4kib-split-for-text-and-cr0wp)
+- [The user stack's guard is an unmapped hole plus two rules, and the sbrk rule is the one that mattered](#the-user-stacks-guard-is-an-unmapped-hole-plus-two-rules-and-the-sbrk-rule-is-the-one-that-mattered)
 - [The serial debug console is poll-based from existing idle loops, not a new kernel thread](#the-serial-debug-console-is-poll-based-from-existing-idle-loops-not-a-new-kernel-thread)
 
 **Filesystem & storage**
@@ -3638,6 +3639,59 @@ Verified live, not only by reading bits back: a one-byte write to
 probe is not committed -- a ring-0 fault ends the boot, so it cannot
 live in a suite -- see CHANGELOG.md's `[Unreleased]` entry for how to
 reproduce it in two lines.
+
+## The user stack's guard is an unmapped hole plus two rules, and the sbrk rule is the one that mattered
+
+`kernel/include/kernel/uaddr.h` states the ring-3 address-space map
+once -- heap base, heap limit, guard region, stack bottom and top --
+and `scheduler.c`'s spawn path, `elf_run.c`'s legacy loader,
+`syscall.c`'s `SYS_SBRK` and `idt.c`'s fault report all read it. It used
+to be two identical copies (`PROC_USTACK_*` and `ELF_RUN_STACK_*`) with
+nothing keeping them equal, and the fault classifier would have been a
+third.
+
+**The guard region has no page-table representation, and does not need
+one.** It is defined by being unmapped, which is what a page that was
+never mapped already does. So a stack overflow ALREADY faulted before
+any of this; nothing was added to make it fault. What the constants buy
+is the two things a hole cannot do for itself:
+
+- **`SYS_SBRK` is bounded against it.** This is the real defect the
+  work found. The heap grows up from `0x8000100000` and the stack down
+  from `0x8000200000`, about 1 MiB apart, and sbrk had no ceiling of
+  any kind -- a large enough request mapped fresh pages straight over
+  the live stack, one page at a time. Nothing faulted and nothing was
+  logged; the process simply found its own locals changing underneath
+  it. The check is written `inc > LIMIT - brk` rather than
+  `brk + inc > LIMIT` because the sum overflows for a large enough
+  increment and the comparison then passes.
+- **The fault gets a NAME.** `uaddr_is_stack_guard(cr2)` in the ring-3
+  branch of `isr_dispatch()` turns `Page fault / CR2=0x80001fc...` into
+  `Stack overflow` plus the stack's range. Ring 0 is excluded
+  deliberately: the kernel's own stacks are elsewhere, so a supervisor
+  fault at that address is a wild pointer and mislabelling it would be
+  worse than not labelling it.
+
+One guard page does not catch a single frame LARGER than the guard
+jumping clean over it -- the classic guard-page hole, which real
+kernels close with a stack-probe ABI. `UADDR_GUARD_PAGES` is there to
+be widened rather than have a second mechanism grow beside it.
+
+**Both positive controls changed the design, and neither confirmed
+what it was expected to.** Removing the sbrk bound left
+`userland/tests/guard_test.c` entirely GREEN, because the test asked
+for 1 GiB and the guest ran out of physical memory long before it ran
+out of address space -- sbrk refused for the wrong reason and every
+check passed. Asking for 2 MiB instead (just past the gap, trivially
+allocatable) reddened the refusal checks, and writing through the
+returned pointer was needed on top of that before the corruption became
+visible at all: an alias costs nothing until somebody writes. And
+`userland/tests/stackovf_test.c` first hung forever without faulting,
+because GCC's accumulator form of tail-recursion elimination had turned
+`return frame[0] + burn(depth + 1)` into a LOOP with one reused frame
+at -O2. `volatile` on the frame does not prevent that; the call goes
+through a `volatile` function pointer now, and the frame is read after
+the call returns. `objdump -d` is what settled it, not reading the C.
 
 ## `/etc` and `/tmp` are created by the MOUNT, not by `kernel_main()`
 

@@ -456,6 +456,17 @@ technical conventions below:
   control-register access; and a filesystem backend goes in `fs/`, not
   `drivers/` -- the block device is the driver, the filesystem on top
   of it isn't.
+- **The ring-3 address-space map is `kernel/include/kernel/uaddr.h`,
+  stated once.** Heap base, heap limit, guard region, stack bottom/top
+  and page counts, read by `scheduler.c`'s spawn path, `elf_run.c`'s
+  legacy loader, `SYS_SBRK` and `idt.c`'s fault report. **The guard
+  region below the stack is defined by being UNMAPPED** -- there is no
+  PTE to set, so an overflow always faulted; what the header buys is
+  that sbrk is bounded against it (it had NO ceiling, and a big enough
+  request mapped pages over the live stack with nothing faulting or
+  logged) and that a fault there is reported as `Stack overflow` rather
+  than as an anonymous #PF. Adding an mmap or ASLR replaces this
+  header rather than adding beside it; see `docs/decisions.md`.
 - **`kernel/include/` is split by audience and the build enforces it**
   -- `api/` (what `apps/` may use), `abi/` (the kernel<->userland
   contract `userland/` shares), `kernel/` (internal, and NOT on
@@ -1313,6 +1324,21 @@ repeated manual steps to be worth automating:
   says nothing about the code under test. `pipe_test` is the worked
   example: it exits 3 under `run` because its `waitpid` finds no parent,
   and passes fine under the KTEST that spawns it properly.
+- **`faulttest_run.py`** -- the ring-3 diagnostics that FAULT ON
+  PURPOSE, which `usertest_run.py` correctly excludes and which
+  therefore nothing ran at all. A faulting binary has no exit code and
+  no output of its own, so the assertion is the KERNEL's report, read
+  out of the serial log: each entry names required AND forbidden
+  substrings, which is where the value is -- a stack overflow and a
+  null dereference are both page faults, and every entry doubles as the
+  positive control for its neighbours. Each test gets its own QEMU,
+  because a ring-3 crash takes the serial debug console down with it
+  (`vm.py` cannot drive these at all -- `crash_test` included), so the
+  command is typed at the PHYSICAL shell over QMP instead. Not in
+  `gui_regress.py`; run it after touching the fault path, the ELF
+  loader, or the user address-space layout. `stack_smash_test` is
+  deliberately absent -- its message goes to the process's stdout, i.e.
+  the screen, so there is nothing in the log to assert on.
 - **`pixel_probe.py`** -- reads exact pixel values out of screenshots,
   and tabulates the same points across several (`--compare a.png b.png
   --at 85,100 --at 215,100`), flagging which moved and which didn't.

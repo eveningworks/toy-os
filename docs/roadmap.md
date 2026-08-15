@@ -118,8 +118,14 @@ adds 4; 12 adds 5; 13 adds 6; 14 and up add 8.
       and access to user pages, which is a stronger guarantee than the
       page-table bits alone and costs two CR4 bits plus an audit of every
       deliberate user-buffer access (`vmm.c`'s validation path)
-- [ ] Guard page below each user stack -- today a stack overflow runs
-      straight into whatever is mapped beneath it
+- [x] ~~Guard page below each user stack~~ -- done. The layout is stated
+      once in `kernel/include/kernel/uaddr.h` (both loaders used to
+      carry their own copy), the region below the stack is reserved
+      unmapped, `SYS_SBRK` refuses to grow into it, and a ring-3 fault
+      there is reported as `Stack overflow` rather than as an anonymous
+      page fault. The sbrk bound was the real find: it had no ceiling
+      at all, so a large enough request mapped pages straight over the
+      live stack with nothing faulting or logged
 - [ ] Heap red-zones + use-after-free poisoning in `heap.c`, behind a
       `debug` flag
 
@@ -408,8 +414,10 @@ once this exists.*
 - [ ] A host-side script to inspect a core dump against the ELF's DWARF
 - [ ] Distinguish "the kernel faulted" from "a process faulted and the
       kernel tore it down correctly" in whatever gets recorded
-- [ ] Stack-overflow detection via a guard page, reported as such rather
-      than as a mystery fault
+- [x] ~~Stack-overflow detection via a guard page, reported as such
+      rather than as a mystery fault~~ -- done as Milestone 2's guard
+      page item; `uaddr_is_stack_guard()` is what names it, and
+      `tools/faulttest_run.py` asserts the report
 
 ### Milestone 12 -- Shell pipes & job control (planned v0.12.0)
 

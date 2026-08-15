@@ -17,6 +17,7 @@
 #include "cpuinfo.h"
 #include "krandom.h"
 #include "strace_internal.h"
+#include "uaddr.h"
 #include <stddef.h>
 
 // SYS_OPEN/SYS_READ/SYS_CLOSE state: a small global table of open files,
@@ -689,6 +690,20 @@ void syscall_dispatch(uint64_t *regs) {
         // into the wrong address space.
         if (g_heap_pml4 == 0 || pml4 != g_heap_pml4) {
             klog_write("syscall: sbrk() rejected -- no heap armed for this process\n");
+            regs[14] = (uint64_t)-1;
+        } else if (inc > UADDR_HEAP_LIMIT - g_heap_brk) {
+            // The heap grows UP toward the stack's guard region, and
+            // nothing else stops it: before this check, sbrk() past the
+            // ~1 MiB gap happily mapped pages straight over the live
+            // stack -- no fault, no message, just a process whose locals
+            // started changing under it. Refuse at the guard instead, so
+            // the failure is the ordinary out-of-memory answer sbrk()
+            // callers already handle.
+            //
+            // Written as `inc > LIMIT - brk` rather than
+            // `brk + inc > LIMIT` on purpose: the sum overflows for a
+            // large enough inc and the comparison then passes.
+            klog_write("syscall: sbrk() rejected -- would grow into the stack guard\n");
             regs[14] = (uint64_t)-1;
         } else {
             uint64_t old_brk = g_heap_brk;

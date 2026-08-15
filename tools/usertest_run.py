@@ -64,6 +64,8 @@ TESTS = [
      ["Hello from ring 3"], []),
     ("random_test", 0,
      ["random_test: all checks passed"], ["FAIL"]),
+    ("guard_test", 0,
+     ["guard_test: all checks passed"], ["FAIL"]),
     # Not a self-checker: it exists to prove an exit code survives the
     # round trip out of ring 3, so the CODE is the whole assertion.
     ("exit_test", 42, [], []),
@@ -76,6 +78,8 @@ EXCLUDED = [
     ("crash_test",       "faults on purpose; the point is the kernel's recovery"),
     ("nx_test",          "faults on purpose (jumps into a data page) -- see shell_flow.py"),
     ("stack_smash_test", "faults on purpose (trips the stack canary)"),
+    ("stackovf_test",    "runs off the stack on purpose; the assertion is the KERNEL's "
+                          "report, not an exit code -- see its own top comment"),
     ("write_bad_test",   "hands the kernel a bad pointer on purpose"),
     ("pipe_test",        "needs a parent to spawn it and reap it; exits 3 under `run`, "
                           "and kernel/proc/pipe_test.c's KTEST covers it properly"),

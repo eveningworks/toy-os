@@ -13,6 +13,7 @@
 #include "scheduler.h"
 #include "vmm.h"
 #include "process.h"
+#include "uaddr.h" // uaddr_is_stack_guard() -- naming a stack overflow as one
 
 struct idt_entry {
     uint16_t offset_low;
@@ -230,19 +231,38 @@ void isr_dispatch(uint64_t *regs) {
         // kfmt.h existed. It formats into a stack buffer, which is fine
         // in an exception handler -- KFMT_LINE_MAX is 256 bytes and this
         // is the deepest the fault path ever goes.
+        // A ring-3 #PF in the unmapped guard region below the user
+        // stack is a stack overflow, and saying so is the whole point
+        // of reserving that region: the fault happened either way, but
+        // "Page fault, CR2=0x80001fc..." points at nothing, and the
+        // last time a client outgrew its stack the symptom was exactly
+        // that. Ring 0 is excluded because the kernel's own stacks are
+        // elsewhere entirely (scheduler.c's per-process kstacks), so a
+        // supervisor fault at this address is a wild pointer, not an
+        // overflow, and mislabelling it would be worse than not
+        // labelling it.
+        int stack_overflow = vector == 14 && (cs & 3) == 3 &&
+                              uaddr_is_stack_guard(cr2);
+
         vga_set_color(VGA_WHITE, VGA_RED);
         vga_printf("\n*** %s%s ***\n",
                     recoverable ? "RING-3 PROCESS CRASHED: " : "KERNEL PANIC: ",
-                    exception_names[vector]);
+                    stack_overflow ? "Stack overflow" : exception_names[vector]);
         vga_printf("RIP=0x%lx  CS=0x%lx (ring %lu)\n", rip, cs, cs & 3);
         if (vector == 14) {
             vga_printf("error_code=0x%lx  CR2=0x%lx\n", error_code, cr2);
         } else {
             vga_printf("error_code=0x%lx\n", error_code);
         }
+        if (stack_overflow) {
+            vga_printf("Ran off the bottom of the user stack "
+                       "(0x%lx..0x%lx) into its guard page.\n",
+                       (uint64_t)UADDR_STACK_BOTTOM,
+                       (uint64_t)UADDR_STACK_VADDR + 4096);
+        }
 
         klog_printf("%s%s\n", recoverable ? "RING-3 CRASH: " : "PANIC: ",
-                     exception_names[vector]);
+                     stack_overflow ? "Stack overflow" : exception_names[vector]);
 
         if ((cs & 3) == 3 && ring3_hook) {
             ring3_hook(vector, error_code, cs, cr2);
