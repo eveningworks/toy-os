@@ -39,6 +39,14 @@
 #define WIN_EV_CLOSE      5 // the server wants this window gone
 #define WIN_EV_RESIZE     6 // a, b: PROPOSED content size -- a configure,
                             // not a command. See below.
+#define WIN_EV_WHEEL      8 // a: notches, + = up/away, - = down/toward.
+                            //
+                            // A client had no way to receive scrolling
+                            // at all before this: kernel-space apps got
+                            // gui_app::on_wheel and clients got nothing,
+                            // so Notepad drew a scrollbar it could never
+                            // move and the wheel did nothing in any
+                            // ring-3 window.
 #define WIN_EV_FOCUS      7 // a: 1 = this window gained keyboard focus,
                             // 0 = lost it.
                             //

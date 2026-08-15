@@ -44,7 +44,13 @@
 
 static struct utext g_out;      // the scrollback
 static struct ush g_shell;
-static int g_running;           // 1 while a command is executing
+static int g_running;  // 1 while a command is executing
+
+// Where the prompt was last drawn, content-relative. Reported through
+// the log so tools/uterm_test.py can assert it follows the transcript
+// rather than re-deriving it in Python -- the trap every other GUI test
+// tool here documents.
+static int g_prompt_y;
 
 // The line being typed. Not utext's cursor: the prompt line is a
 // separate, editable thing from the transcript above it, exactly as in
@@ -79,8 +85,21 @@ static void draw(struct ugfx_surface *s, int focused) {
                 ugfx_rgb(220, 220, 220), ugfx_rgb(0, 0, 0),
                 ugfx_rgb(60, 80, 120), 0);
 
-    // Prompt line.
-    int py = s->h - MARGIN - ugfx_char_h();
+    // The prompt follows the TRANSCRIPT, clamped to the bottom row.
+    //
+    // It used to be pinned to the bottom unconditionally, which is
+    // wrong whenever the transcript is short: the output sat at the top
+    // and the prompt was stranded at the foot of the window with a band
+    // of empty black between them. A real terminal puts the prompt
+    // immediately after the last line and only reaches the bottom once
+    // the screen has filled. Clamping gives both behaviours with one
+    // expression.
+    int total_lines = 0, visible_rows = 0;
+    utext_metrics(&g_out, tw, th, &total_lines, &visible_rows);
+    int py = ty + total_lines * ugfx_char_h();
+    int bottom = s->h - MARGIN - ugfx_char_h();
+    if (py > bottom) py = bottom;
+    g_prompt_y = py;
     ugfx_draw_string(s, MARGIN, py, g_shell.cwd, ugfx_rgb(120, 200, 120), ugfx_rgb(0, 0, 0));
     int px = MARGIN + ugfx_text_width(g_shell.cwd);
     ugfx_draw_string(s, px, py, "> ", ugfx_rgb(120, 200, 120), ugfx_rgb(0, 0, 0));
@@ -120,8 +139,28 @@ static void run_current_line(struct uapp *a) {
 
 // --- Toykit callbacks -------------------------------------------------
 
+// One line per widget, content-relative, on stderr -- the same grammar
+// UI Demo, Shapes and Calculator use.
+static void log_layout(void) {
+    char b[64];
+    int n = 0;
+    const char *pre = "uterm: layout prompt ";
+    while (pre[n]) { b[n] = pre[n]; n++; }
+    int v = g_prompt_y;
+    char d[12];
+    int c = 0;
+    if (v <= 0) d[c++] = '0';
+    while (v > 0) { d[c++] = (char)('0' + v % 10); v /= 10; }
+    while (c > 0) b[n++] = d[--c];
+    b[n++] = '\n';
+    b[n] = '\0';
+    sys_eprint(b);
+}
+
+
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
     draw(uapp_surface(d), uapp_focused(a));
+    log_layout(); // after the draw: g_prompt_y is where it actually went
 }
 
 static void on_key(struct uapp *a, int key, unsigned mods) {

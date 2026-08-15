@@ -208,6 +208,70 @@ def run(dbg, qmp, tmp, shot_dir, res):
         res.check("...and it is not simply the blank buffer",
                   reopened != blank_ref)
 
+    # --- scrolling: the wheel and the scrollbar -----------------------
+    #
+    # Both were dead. TWP carried no wheel event at all, so a ring-3
+    # client could never receive scrolling -- Notepad drew a scrollbar it
+    # had no way to move, and the wheel did nothing in any ring-3
+    # window. Nothing here noticed, because every check was about typing
+    # and saving.
+    #
+    # Round-tripped rather than just "it changed": scroll down, require
+    # the text to move, scroll back, require it to match the original
+    # exactly. "It changed" alone would also pass if scrolling corrupted
+    # the view.
+    # NUMBERED, not 40 copies of the same word: scrolling a buffer of
+    # identical lines produces pixel-identical output, so a test that
+    # typed "line" forty times could not tell a working scroll from a
+    # dead one. (It didn't -- that is how this check first "failed"
+    # against a feature that worked.)
+    for i in range(40):
+        type_text(dbg, f"row{i}")
+        key(dbg, "0x0d")
+    dbg.settle()
+    time.sleep(0.5)
+
+    # Pin the view to the BOTTOM first, then move UP from it.
+    #
+    # Which edge the view starts at depends on where the caret ended up,
+    # and this test learned that twice. First it wheeled UP from a view
+    # that was already at the top (the caret is at 0 after reopening a
+    # file), so nothing moved and "scrolling back restores it" passed
+    # trivially. Then it tried to pin to the top by wheeling up -- which
+    # only works if the wheel works, i.e. it assumed what it was testing.
+    # Wheeling DOWN always lands at the bottom whatever the state, so
+    # that is the fixed point to measure from.
+    for _ in range(6):
+        dbg.send("gui wheel -9")
+    dbg.settle()
+    time.sleep(0.4)
+    at_bottom = text_pixels(qmp, tmp, "np_bottom.png", box)
+
+    dbg.send("gui wheel 3")
+    dbg.settle()
+    time.sleep(0.4)
+    scrolled = text_pixels(qmp, tmp, "np_wheel.png", box)
+    res.check("the mouse wheel scrolls the editor", scrolled != at_bottom,
+              "the text area is pixel-identical before and after a wheel notch")
+
+    dbg.send("gui wheel -3")
+    dbg.settle()
+    time.sleep(0.4)
+    back = text_pixels(qmp, tmp, "np_wheel_back.png", box)
+    res.check("scrolling back restores the view exactly", back == at_bottom,
+              "scrolling up and down again did not return to the same pixels")
+
+    # The scrollbar strip sits just right of the text area (notepad.c's
+    # scrollbar_rect). Dragging its thumb must move the view too.
+    bar_x = ox + c["w"] - MARGIN - 6
+    dbg.drag(bar_x, oy + 210, bar_x, oy + 70)
+    dbg.settle()
+    time.sleep(0.4)
+    dragged = text_pixels(qmp, tmp, "np_bardrag.png", box)
+    res.check("dragging the scrollbar scrolls the editor", dragged != at_bottom,
+              "the text area did not change when the scrollbar thumb was dragged")
+
+
     if shot_dir:
         qmp.screenshot(os.path.abspath(os.path.join(shot_dir, "ring3-notepad-reopened.png")))
 

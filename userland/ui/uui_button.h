@@ -35,6 +35,12 @@ void uui_button_set_geometry(struct uui_button *b, int x, int y, int w, int h);
 // uui_primitives.h.
 void uui_button_natural_size(const struct uui_button *b, int *out_w, int *out_h);
 
+// Draws ONE button in its own current state. The group used to derive
+// that state inline, which meant a button could only be painted BY a
+// group -- so a button placed by a layout was placed, hit-tested and
+// never drawn. See uui_button_ops below.
+void uui_button_draw_one(struct ugfx_surface *s, const struct uui_button *b);
+
 // So a button can sit in a uui_layout. See ui/uui_widget.h.
 extern const struct uui_widget_ops uui_button_ops;
 

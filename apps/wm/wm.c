@@ -710,8 +710,16 @@ void wm_run(void) {
                 } else if (f >= 0 && key != -1 && !file_picker_open && windows[f].app && windows[f].app->on_key) {
                     windows[f].app->on_key(&windows[f], key, key_mods);
                 }
-                if (f >= 0 && wheel != 0 && !file_picker_open && windows[f].app && windows[f].app->on_wheel) {
-                    windows[f].app->on_wheel(&windows[f], wheel);
+                if (f >= 0 && wheel != 0 && !file_picker_open) {
+                    // A client gets the same notches as a message. Until
+                    // TWP carried a wheel event, only kernel-space apps
+                    // could scroll -- so Notepad drew a scrollbar it
+                    // could never move.
+                    if (wm_client_is_client_window(&windows[f])) {
+                        wm_client_send_wheel(&windows[f], wheel);
+                    } else if (windows[f].app && windows[f].app->on_wheel) {
+                        windows[f].app->on_wheel(&windows[f], wheel);
+                    }
                 }
                 // Typing/scrolling is the single most common redraw
                 // trigger this loop sees besides mouse movement -- worth

@@ -126,6 +126,18 @@ technical conventions below:
   colour; don't hand-pick tints, and don't assume hover means "lighter"
   (on this near-white theme it has to darken -- `gfx_luminance()`
   decides).
+- **Three ways a GUI test passes without testing anything**, each of
+  which has shipped a real bug past a green suite (see
+  `docs/gui-guidelines.md`): (1) **"it responds" is not "it is drawn"**
+  -- the ring-3 Calculator shipped with no visible buttons at all,
+  because every check asserted that clicking one changed the display,
+  which it did; (2) **moving identical content is pixel-identical** --
+  a scroll test typing forty copies of one line cannot tell a working
+  scroll from a dead one, so number the rows; (3) **a test must not
+  assume the thing it is testing** -- reaching a known start position by
+  scrolling, in order to test scrolling, proves nothing. The general
+  form is this file's existing rule: ask what a broken version would
+  still pass.
 - **Verify GUI changes by reading PIXEL VALUES, not by looking at the
   screenshot** (`tools/pixel_probe.py`). A hover state that moved the
   background by two units out of 255 looked perfectly plausible in a

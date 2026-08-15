@@ -402,6 +402,37 @@ So when you change anything that draws:
   expects a violation, so you can prove it against a deliberately broken
   build instead of trusting a green result.
 
+## Three ways a GUI test passes without testing anything
+
+All three of these shipped a real bug past a green suite. They are
+listed together because they share a shape: the assertion was true, and
+it was not the assertion anyone wanted.
+
+**1. "It responds" is not "it is drawn."** The ring-3 Calculator shipped
+with NO VISIBLE BUTTONS. The layout placed them, hit-testing worked, and
+every check passed -- because every check asserted that clicking a
+button CHANGED THE DISPLAY, which it did. Nothing asserted the buttons
+were painted. If a control can be interacted with, assert separately
+that it can be SEEN: sample its face, away from its label, against a
+control point that is not the control.
+
+**2. Moving identical content is pixel-identical.** A scrolling test
+typed forty copies of the same line, scrolled, and compared the text
+area -- which is unchanged whether scrolling works or not. It reported a
+working feature as broken, and would just as happily have reported a
+broken one as working. **Test content must be distinguishable**: number
+the rows.
+
+**3. A test must not assume the thing it is testing.** The same test
+then tried to reach a known starting position by scrolling to the top --
+using the scroll it was there to verify. Pick a fixed point you can
+reach unconditionally (the bottom, after typing) or set the state
+directly.
+
+The general form is the rule this file already states: **ask what a
+broken version would still pass.** These are three specific ways to
+answer it wrong.
+
 ## Verifying a GUI change
 
 A screenshot proves it drew *something*. It does not prove it drew the

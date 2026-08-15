@@ -165,6 +165,41 @@ def run(dbg, qmp, tmp, shot_dir, res):
     if shot_dir:
         qmp.screenshot(os.path.abspath(os.path.join(shot_dir, "ring3-calculator.png")))
 
+    # --- the buttons are actually DRAWN -------------------------------
+    #
+    # This check exists because its absence shipped a Calculator with no
+    # visible buttons at all. The layout placed them and hit-testing
+    # worked, so every existing check passed: they all assert that
+    # clicking a button CHANGES THE DISPLAY, which it did. "A click has
+    # an effect" is not "the button is visible", and nothing was
+    # checking the second.
+    #
+    # Sampled a few pixels inside a button's face, away from its centred
+    # label, plus a control point on the panel background that must NOT
+    # be button-coloured.
+    from PIL import Image
+    shot = os.path.abspath(os.path.join(tmp, "calc_faces.png"))
+    qmp.screenshot(shot)
+    with Image.open(shot) as im:
+        px = im.convert("RGB")
+
+        def face(label):
+            x, y, w, h = lay.buttons[label]
+            return px.getpixel((lay.ox + x + 3, lay.oy + y + 3))
+
+        digit = face("7")          # UTHEME_BUTTON_BG
+        operator = face("/")       # the operator tint
+        # Between the display and the grid: panel background, no button.
+        dx, dy, dw, dh = lay.display
+        gap = px.getpixel((lay.ox + dx + 2, lay.oy + dy + dh + 1))
+
+    res.check("the buttons are actually drawn, not just clickable",
+              digit != gap and operator != gap,
+              f"digit face {digit}, operator face {operator}, panel {gap} "
+              "-- a button face indistinguishable from the panel means nothing painted them")
+    res.check("operator buttons are tinted differently from digits",
+              operator != digit, f"both {digit}")
+
     # --- mouse arithmetic, through the ported widgets ------------------
     def click(label):
         dbg.send("gui click %d %d" % lay.button_center(label))

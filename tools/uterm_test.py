@@ -112,6 +112,28 @@ def run(dbg, qmp, tmp, shot_dir, res):
     base = ink(qmp, tmp, "ut_base.png", box)
     res.check("it renders its banner", base > 100, f"only {base} ink pixels")
 
+    # --- the prompt follows the transcript ----------------------------
+    #
+    # It used to be pinned to the bottom of the window unconditionally,
+    # so a fresh Terminal showed two banner lines at the top and a
+    # prompt stranded at the foot with a band of empty black between.
+    # A real terminal puts the prompt after the last line and only
+    # reaches the bottom once the screen has filled.
+    #
+    # Paired on purpose: "near the top with a short transcript" alone
+    # would also pass if the prompt were simply nailed to the top, and
+    # "near the bottom after output" alone is what the bug did. Both
+    # together say it FOLLOWS.
+    def prompt_y():
+        for l in reversed(dbg.logs("uterm: layout prompt", clear=False)):
+            return int(l.split("layout prompt")[1].split()[0])
+        return None
+
+    short_y = prompt_y()
+    res.check("the prompt follows a short transcript instead of sitting at the bottom",
+              short_y is not None and short_y < c["h"] // 2,
+              f"prompt at y={short_y} in a {c['h']}px content area")
+
     # A BUILTIN: handled inside the shell, no spawn.
     type_line(dbg, "echo hi")
     after_echo = ink(qmp, tmp, "ut_echo.png", box)
@@ -128,6 +150,13 @@ def run(dbg, qmp, tmp, shot_dir, res):
               after_lscpu > after_echo * 2,
               f"echo left {after_echo} ink, lscpu left {after_lscpu} -- "
               "expected far more if the program's output really arrived")
+
+    # The other half of the pair: lscpu fills the window, so the prompt
+    # must now be at the bottom rather than wherever it started.
+    long_y = prompt_y()
+    res.check("a full transcript pushes the prompt to the bottom",
+              long_y is not None and short_y is not None and long_y > short_y,
+              f"prompt was at y={short_y}, now y={long_y} after lscpu filled the window")
 
     if shot_dir:
         qmp.screenshot(os.path.abspath(os.path.join(shot_dir, "ring3-terminal-spawn.png")))

@@ -198,12 +198,27 @@ static void layout_toolbar(void) {
 
 // --- drawing ----------------------------------------------------------
 
+#define SCROLLBAR_W 8
+
+// Where the scrollbar strip is, given the text rect. One derivation,
+// used by the draw and by the hit test below -- two copies of this is
+// the classic way a scrollbar ends up drawing in one place and
+// responding in another.
+static void scrollbar_rect(int tx, int ty, int tw, int th,
+                            int *bx, int *by, int *bw, int *bh) {
+    *bx = tx + tw + 2;
+    *by = ty;
+    *bw = SCROLLBAR_W;
+    *bh = th;
+}
+
 static void draw_scrollbar(struct ugfx_surface *s, int tx, int ty, int tw, int th) {
     int total, visible;
     utext_metrics(&g_text, tw, th, &total, &visible);
 
-    int bar_x = tx + tw + 2;
-    ugfx_fill_rect(s, bar_x, ty, 8, th, ugfx_rgb(225, 225, 230));
+    int bar_x, bar_y, bar_w, bar_h;
+    scrollbar_rect(tx, ty, tw, th, &bar_x, &bar_y, &bar_w, &bar_h);
+    ugfx_fill_rect(s, bar_x, bar_y, bar_w, bar_h, ugfx_rgb(225, 225, 230));
     if (total <= visible) return; // nothing to scroll -- leave the trough bare
 
     // first_line is the same quantity utext_draw() computes; the thumb
@@ -215,7 +230,7 @@ static void draw_scrollbar(struct ugfx_surface *s, int tx, int ty, int tw, int t
     if (thumb_h < 12) thumb_h = 12;
     int span = th - thumb_h;
     int thumb_y = ty + (total > visible ? span * first / (total - visible) : 0);
-    ugfx_fill_rect(s, bar_x, thumb_y, 8, thumb_h, ugfx_rgb(150, 155, 165));
+    ugfx_fill_rect(s, bar_x, thumb_y, bar_w, thumb_h, ugfx_rgb(150, 155, 165));
 }
 
 static void draw_dialog(struct ugfx_surface *s) {
@@ -472,6 +487,7 @@ static void editor_key(int key) {
 // handshake and the resize handling.
 
 static int g_dragging;
+static int g_scrollbar_drag;
 
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
     set_title(a);
@@ -488,6 +504,40 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
     } else {
         editor_key(key);
     }
+    uapp_redraw(a);
+}
+
+// Scrolls to put `first` at the top, expressed as utext's scroll_offset
+// (which counts BACKWARDS from the bottom -- see utext.h).
+static void scroll_to_first(int first, int total, int visible) {
+    int off = total - visible - first;
+    if (off < 0) off = 0;
+    g_text.scroll_offset = off;
+}
+
+// A click in the trough jumps there; a click on the thumb starts a
+// drag. Returns 1 if the scrollbar took the click.
+static int scrollbar_press(int px, int py, int tx, int ty, int tw, int th) {
+    int bx, by, bw, bh;
+    scrollbar_rect(tx, ty, tw, th, &bx, &by, &bw, &bh);
+    if (px < bx || px >= bx + bw || py < by || py >= by + bh) return 0;
+
+    int total, visible;
+    utext_metrics(&g_text, tw, th, &total, &visible);
+    if (total <= visible) return 1; // nothing to scroll, but the click was ours
+
+    // Centre the view on where the trough was clicked.
+    int span = bh > 0 ? bh : 1;
+    int first = (py - by) * (total - visible) / span;
+    scroll_to_first(first, total, visible);
+    g_scrollbar_drag = 1;
+    return 1;
+}
+
+static void on_wheel(struct uapp *a, int notches) {
+    // Three lines a notch, the same step the kernel-space scrollback
+    // uses. utext_scroll clamps for us.
+    utext_scroll(&g_text, notches * 3);
     uapp_redraw(a);
 }
 
@@ -515,6 +565,8 @@ static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
         }
     } else if (uui_button_group_press(&g_toolbar, x, y)) {
         // a toolbar button armed
+    } else if (scrollbar_press(x, y, tx, ty, tw, th)) {
+        // handled: jumped to the clicked position
     } else if (x >= tx && x < tx + tw && y >= ty && y < ty + th) {
         g_text.cursor = utext_index_at_point(&g_text, tx, ty, tw, th, x, y);
         utext_sel_start(&g_text);
@@ -528,7 +580,18 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
     text_rect_for(uapp_width(a), uapp_height(a), &tx, &ty, &tw, &th);
 
     if (buttons) {
-        if (g_dragging) {
+        if (g_scrollbar_drag) {
+            int total, visible;
+            utext_metrics(&g_text, tw, th, &total, &visible);
+            if (total > visible) {
+                int bx, by, bw, bh;
+                scrollbar_rect(tx, ty, tw, th, &bx, &by, &bw, &bh);
+                int span = bh > 0 ? bh : 1;
+                int first = (y - by) * (total - visible) / span;
+                scroll_to_first(first, total, visible);
+                uapp_redraw(a);
+            }
+        } else if (g_dragging) {
             g_text.cursor = utext_index_at_point(&g_text, tx, ty, tw, th, x, y);
             uapp_redraw(a);
         } else if (uui_button_group_press(&g_toolbar, x, y)) {
@@ -542,6 +605,7 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
 static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
     (void)x; (void)y; (void)buttons;
     g_dragging = 0;
+    g_scrollbar_drag = 0;
     int code = uui_button_group_release(&g_toolbar);
     if (code == BTN_NEW) {
         utext_clear(&g_text);
@@ -591,6 +655,7 @@ int main(void) {
         .on_press   = on_press,
         .on_motion  = on_motion,
         .on_release = on_release,
+        .on_wheel   = on_wheel,
     };
     return uapp_run(&desc);
 }

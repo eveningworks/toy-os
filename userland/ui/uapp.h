@@ -136,6 +136,10 @@ struct uapp_desc {
     void (*on_release)(struct uapp *a, int x, int y, unsigned buttons);
     void (*on_motion)(struct uapp *a, int x, int y, unsigned buttons);
 
+    // Wheel notches: + is up/away, - is down/toward. An app with
+    // scrollable content wants this; one without can ignore it.
+    void (*on_wheel)(struct uapp *a, int notches);
+
     // Keyboard focus arrived (1) or left (0). Most apps do not need
     // this: the library records it and repaints, so an app that draws
     // its caret with uapp_focused() needs no callback at all.

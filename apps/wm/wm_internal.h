@@ -300,6 +300,9 @@ void wm_client_send_close(struct window *win);
 // Tell a client its window gained (1) or lost (0) keyboard focus.
 void wm_client_send_focus(struct window *win, int focused);
 
+// Deliver wheel notches to a client (WIN_EV_WHEEL).
+void wm_client_send_wheel(struct window *win, int notches);
+
 // Propose a content size to a client (WIN_EV_RESIZE). A proposal, not a
 // command -- see wm_client.c and abi/win_proto.h.
 void wm_client_send_resize(struct window *win, int w, int h);

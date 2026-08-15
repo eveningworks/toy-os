@@ -23,15 +23,7 @@ void uui_button_group_natural_size(const struct uui_button_group *g,
 void uui_button_group_draw(const struct uui_button_group *g,
                             struct ugfx_surface *s) {
     for (int i = 0; i < g->count; i++) {
-        const struct uui_button *b = &g->buttons[i];
-        enum uui_state st = UUI_STATE_REST;
-        // Order matters: pressed wins over hovered. A pressed button is
-        // always also under the cursor, and showing the hover wash on
-        // top of the press would weaken the stronger signal.
-        if (b->disabled)     st = UUI_STATE_DISABLED;
-        else if (b->pressed) st = UUI_STATE_PRESSED;
-        else if (b->hovered) st = UUI_STATE_HOVER;
-        uui_button_draw(s, b->x, b->y, b->w, b->h, b->label, b->bg, b->fg, st);
+        uui_button_draw_one(s, &g->buttons[i]);
     }
 }
 

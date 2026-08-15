@@ -245,6 +245,58 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   one geometry calculation shared by draw/hit-test/drag (so a scrollbar
   thumb cannot be in two places), and commit-on-release.
 
+### Fixed
+- **Three bugs found by USING the desktop, not by running the suite.**
+  All three were reported from a real session; all three passed every
+  existing check.
+
+  **The ring-3 Calculator had no visible buttons.** `uui_button_ops`
+  shipped without a `draw` slot, on the theory that a button is painted
+  by its GROUP and a layout only places it. Calculator's twenty buttons
+  were placed, hit-tested and never drawn. Every check passed because
+  every check asserted that clicking a button CHANGED THE DISPLAY --
+  which it did. Buttons draw themselves now, and
+  `uui_button_draw_one()` is the single place that derives a button's
+  visual state, used by both the layout and the group.
+
+  **The ring-3 Terminal's prompt was pinned to the bottom** of the
+  window while the transcript was top-aligned, so a fresh Terminal
+  showed two banner lines at the top and a prompt stranded at the foot
+  with a band of empty black between. It follows the transcript now,
+  clamped to the bottom once the screen fills -- which is what a real
+  terminal does.
+
+  **The ring-3 Notepad's scrollbar and mouse wheel did nothing.** Two
+  separate causes: TWP carried no wheel event at all, so no ring-3
+  client could ever receive scrolling (kernel-space apps had
+  `gui_app::on_wheel`; clients had nothing), and Notepad's scrollbar was
+  draw-only with no hit-testing. `WIN_EV_WHEEL` now runs through TWS,
+  `uapp` (`desc.on_wheel`) and into Notepad, and the scrollbar responds
+  to clicks and thumb drags, sharing one `scrollbar_rect()` between the
+  draw and the hit test.
+
+  Each fix ships with a check that fails without it, verified by
+  positive control.
+
+### Added
+- **Three testing rules, each learned from a bug that shipped past a
+  green suite.** In `docs/gui-guidelines.md` and `CLAUDE.md`:
+
+  1. **"It responds" is not "it is drawn."** The invisible Calculator
+     buttons above.
+  2. **Moving identical content is pixel-identical.** Writing the
+     scroll test, it typed forty copies of the same line -- which looks
+     the same scrolled or not, so it reported a working feature as
+     broken and would have reported a broken one as working just as
+     happily. Number the rows.
+  3. **A test must not assume the thing it is testing.** The same test
+     then tried to reach a known starting position by scrolling, in
+     order to test scrolling.
+
+  The general form is the rule already in that file -- ask what a broken
+  version would still pass. These are three specific ways to answer it
+  wrong, and two of the three were mine, made while fixing the first.
+
 ### Added
 - **`WIN_EV_FOCUS`: an unfocused window stops drawing its caret.** Stage
   4 of `docs/uapp-design.md`. A client sees keys only while focused, so

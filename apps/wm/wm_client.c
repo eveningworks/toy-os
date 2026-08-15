@@ -278,6 +278,18 @@ void wm_client_send_focus(struct window *win, int focused) {
     win_events_push(win->client_pid, &ev);
 }
 
+// Wheel notches, to the focused client. Same focus rule as keys: who
+// receives it is the WM's decision and does not change because the
+// recipient is a process rather than a callback.
+void wm_client_send_wheel(struct window *win, int notches) {
+    if (!wm_client_is_client_window(win)) return;
+    struct win_event ev = {0};
+    ev.type = WIN_EV_WHEEL;
+    ev.window = win->client_win;
+    ev.a = notches;
+    win_events_push(win->client_pid, &ev);
+}
+
 void wm_client_send_close(struct window *win) {
     if (!wm_client_is_client_window(win)) return;
     struct win_event ev = {0};

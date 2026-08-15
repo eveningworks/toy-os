@@ -147,6 +147,10 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
         }
         break;
 
+    case WIN_EV_WHEEL:
+        if (d->on_wheel) { d->on_wheel(a, ev->a); a->dirty = 1; }
+        break;
+
     case WIN_EV_FOCUS:
         // Recorded and repainted for the app, so the common case --
         // "stop drawing my caret when I am not focused" -- needs no
