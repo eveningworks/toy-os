@@ -169,6 +169,18 @@ int uapp_run(const struct uapp_desc *desc);
 // don't forget to present".
 void uapp_redraw(struct uapp *a);
 
+// Draw and present NOW, if anything is dirty, instead of waiting for
+// the loop to come round. For a handler that is about to BLOCK and
+// wants what it has already produced on screen first -- Terminal echoes
+// the command line, flushes, and only then runs the shell, which can
+// take seconds. Without this the echo would appear after the command it
+// echoed.
+//
+// Not the normal way to paint: uapp_redraw() and let the loop coalesce.
+// Reach for this only when something long is about to happen inside a
+// callback.
+void uapp_flush(struct uapp *a);
+
 void uapp_quit(struct uapp *a, int status);
 int uapp_set_title(struct uapp *a, const char *title);
 
@@ -192,20 +204,21 @@ int uapp_height(const struct uapp *a);
 // (see kernel/include/api/gfx.h).
 struct ugfx_surface *uapp_surface(struct uapp_draw *d);
 
-// --- escape hatch, for an app that owns its own loop -------------------
+// --- no escape hatch, and why ----------------------------------------
 //
-// Terminal is the case that forces this to exist: it blocks inside a
-// command (the shell runs to completion in a function call) and wants
-// to paint output as it arrives. That is an app driving the loop rather
-// than the loop driving the app. uapp_run() is implemented in terms of
-// these three.
-int uapp_open(struct uapp **out, const struct uapp_desc *desc);
-
-// Dispatches whatever has arrived, then repaints if anything asked for
-// it. `block` waits for an event; otherwise it drains what is already
-// queued and returns. Returns 0 once the app should exit.
-int uapp_pump(struct uapp *a, int block);
-
-void uapp_close(struct uapp *a);
+// There was one: uapp_open()/uapp_pump()/uapp_close(), so an app could
+// drive the loop itself. The design predicted Terminal would need it,
+// because Terminal BLOCKS inside a command -- the shell runs to
+// completion in a function call -- and wants what it has already
+// produced on screen first.
+//
+// Porting Terminal showed that is not a loop problem at all. It needs
+// to PAINT at a moment of its choosing, which is uapp_flush(), one
+// line. With that, Terminal uses uapp_run() like everything else, and
+// the hatch had no caller in the tree.
+//
+// So it was removed rather than kept for a case that turned out not to
+// exist. It comes back the day something genuinely owns its own loop --
+// and the shape is already known, since it was written once.
 
 #endif

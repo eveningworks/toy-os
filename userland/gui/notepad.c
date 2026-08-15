@@ -33,6 +33,7 @@
 #include "rt/sys.h"
 #include "ui/ugfx.h"
 #include "ui/uui.h"
+#include "ui/uapp.h"
 #include "ui/utext.h"
 #include "ui/utheme.h"
 #include "keyboard.h" // KEY_* codes, the same ones the WM delivers
@@ -90,25 +91,26 @@ static void scopy(char *dst, const char *src, int cap) {
 
 static void set_status(const char *s) { scopy(g_status, s, (int)sizeof g_status); }
 
-static void set_title(uint32_t id) {
-    struct win_request_msg req = {0};
-    req.type = WIN_REQ_TITLE;
-    req.window = id;
+// The title carries the filename and a dirty marker, so it changes as
+// the document does. Sent only when it ACTUALLY changed: this used to
+// be called before every repaint, which meant a TWP message per
+// keystroke to say the same thing.
+static char g_shown_title[WIN_TITLE_LEN];
+
+static void set_title(struct uapp *a) {
     char t[WIN_TITLE_LEN];
     const char *name = g_path[0] ? g_path : "untitled";
     int i = 0;
     if (g_dirty && i < WIN_TITLE_LEN - 2) t[i++] = '*';
     for (int j = 0; name[j] && i < WIN_TITLE_LEN - 1; j++) t[i++] = name[j];
     t[i] = '\0';
-    scopy(req.text, t, WIN_TITLE_LEN);
-    sys_win_request(&req);
-}
 
-static void present(uint32_t id) {
-    struct win_request_msg req = {0};
-    req.type = WIN_REQ_PRESENT;
-    req.window = id;
-    sys_win_request(&req);
+    for (int j = 0;; j++) {
+        if (t[j] != g_shown_title[j]) break;
+        if (!t[j]) return; // identical -- nothing to send
+    }
+    scopy(g_shown_title, t, WIN_TITLE_LEN);
+    uapp_set_title(a, t);
 }
 
 // --- file I/O ---------------------------------------------------------
@@ -171,11 +173,19 @@ static int save_file(const char *path) {
 
 static int toolbar_h(void) { return ugfx_char_h() + 16; }
 
-static void text_rect(struct ugfx_surface *s, int *x, int *y, int *w, int *h) {
+// Derived from the content SIZE rather than from a surface, because the
+// event callbacks need it too and they never hold one. That it derives
+// at all is what makes this app resizable with no resize code: a bigger
+// window is simply a bigger page.
+static void text_rect_for(int cw, int ch, int *x, int *y, int *w, int *h) {
     *x = MARGIN;
     *y = MARGIN + toolbar_h() + TOOLBAR_GAP;
-    *w = s->w - 2 * MARGIN - 10;               // 10px gutter for the scrollbar
-    *h = s->h - *y - MARGIN - ugfx_char_h() - 4; // status line at the bottom
+    *w = cw - 2 * MARGIN - 10;                 // 10px gutter for the scrollbar
+    *h = ch - *y - MARGIN - ugfx_char_h() - 4; // status line at the bottom
+}
+
+static void text_rect(struct ugfx_surface *s, int *x, int *y, int *w, int *h) {
+    text_rect_for(s->w, s->h, x, y, w, h);
 }
 
 static void layout_toolbar(void) {
@@ -447,18 +457,102 @@ static void editor_key(int key) {
     }
 }
 
-int main(void) {
-    if (!ugfx_font_init()) return 2;
+// --- Toykit callbacks -------------------------------------------------
+//
+// Notepad does NOT use uapp's `buttons` routing, on purpose: its file
+// dialog is modal and has to swallow input the toolbar would otherwise
+// see. `desc.buttons` is optional for exactly this case -- an app with
+// its own precedence rules keeps them, and still gets the loop, the
+// handshake and the resize handling.
 
-    struct win_request_msg req = {0};
-    req.type = WIN_REQ_CREATE;
-    req.a = WIN_W;
-    req.b = WIN_H;
-    req.c = 180;
-    req.d = 90;
-    if (sys_win_request(&req) != 1) return 1;
-    uint32_t id = req.window;
+static int g_dragging;
 
+static void on_draw(struct uapp *a, struct uapp_draw *d) {
+    set_title(a);
+    draw(uapp_surface(d));
+}
+
+static void on_key(struct uapp *a, int key, unsigned mods) {
+    (void)mods;
+    if (g_dialog_open) {
+        dialog_key(key);
+    } else if (key == 0x1B) {
+        uapp_quit(a, 0);
+        return;
+    } else {
+        editor_key(key);
+    }
+    uapp_redraw(a);
+}
+
+static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
+    (void)buttons;
+    int tx, ty, tw, th;
+    text_rect_for(uapp_width(a), uapp_height(a), &tx, &ty, &tw, &th);
+
+    if (g_dialog_open) {
+        if (!g_dialog_saving) {
+            int row_h = ugfx_char_h() + 4;
+            int list_y = 40 + 10 + ugfx_char_h() + 8;
+            int idx = (y - list_y) / row_h;
+            if (idx >= 0 && idx < g_entry_count) {
+                // Clicking the already-selected row activates it. There
+                // is no double-click concept in TWP, and requiring a
+                // trip to the keyboard to enter a directory would be
+                // worse.
+                if (idx == g_sel) {
+                    if (dialog_activate()) g_dialog_open = 0;
+                } else {
+                    g_sel = idx;
+                }
+            }
+        }
+    } else if (uui_button_group_press(&g_toolbar, x, y)) {
+        // a toolbar button armed
+    } else if (x >= tx && x < tx + tw && y >= ty && y < ty + th) {
+        g_text.cursor = utext_index_at_point(&g_text, tx, ty, tw, th, x, y);
+        utext_sel_start(&g_text);
+        g_dragging = 1;
+    }
+    uapp_redraw(a);
+}
+
+static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
+    int tx, ty, tw, th;
+    text_rect_for(uapp_width(a), uapp_height(a), &tx, &ty, &tw, &th);
+
+    if (buttons) {
+        if (g_dragging) {
+            g_text.cursor = utext_index_at_point(&g_text, tx, ty, tw, th, x, y);
+            uapp_redraw(a);
+        } else if (uui_button_group_press(&g_toolbar, x, y)) {
+            uapp_redraw(a);
+        }
+    } else if (uui_button_group_hover(&g_toolbar, x, y)) {
+        uapp_redraw(a);
+    }
+}
+
+static void on_release(struct uapp *a, int x, int y, unsigned buttons) {
+    (void)x; (void)y; (void)buttons;
+    g_dragging = 0;
+    int code = uui_button_group_release(&g_toolbar);
+    if (code == BTN_NEW) {
+        utext_clear(&g_text);
+        g_path[0] = '\0';
+        g_dirty = 0;
+        set_status("new file");
+    } else if (code == BTN_OPEN) {
+        open_dialog(0);
+    } else if (code == BTN_SAVE) {
+        if (g_path[0]) save_file(g_path);
+        else open_dialog(1);
+    }
+    uapp_redraw(a);
+}
+
+static void on_open_cb(struct uapp *a) {
+    (void)a;
     utext_init(&g_text);
     g_path[0] = '\0';
     set_status("Ctrl-O open, Ctrl-S save, Esc quit");
@@ -468,98 +562,29 @@ int main(void) {
     uui_button_init(&g_buttons[1], 0, 0, 0, 0, "Open", bg, fg, BTN_OPEN);
     uui_button_init(&g_buttons[2], 0, 0, 0, 0, "Save", bg, fg, BTN_SAVE);
     uui_button_group_init(&g_toolbar, g_buttons, 3);
+}
 
-    struct ugfx_surface s = ugfx_surface_for_window(id, WIN_W, WIN_H);
-    set_title(id);
-    draw(&s);
-    present(id);
-
-    int dragging = 0;
-
-    for (;;) {
-        struct win_event ev;
-        if (sys_wait_event(&ev) != 1) break;
-
-        int quit = 0, dirty_paint = 0;
-        int tx, ty, tw, th;
-        text_rect(&s, &tx, &ty, &tw, &th);
-
-        if (ev.type == WIN_EV_CLOSE) {
-            quit = 1;
-        } else if (ev.type == WIN_EV_KEY) {
-            if (g_dialog_open) {
-                dialog_key(ev.a);
-            } else if (ev.a == 0x1B) {
-                quit = 1;
-            } else {
-                editor_key(ev.a);
-            }
-            dirty_paint = 1;
-        } else if (ev.type == WIN_EV_MOUSE_DOWN) {
-            if (g_dialog_open) {
-                if (!g_dialog_saving) {
-                    int row_h = ugfx_char_h() + 4;
-                    int list_y = 40 + 10 + ugfx_char_h() + 8;
-                    int idx = (ev.b - list_y) / row_h;
-                    if (idx >= 0 && idx < g_entry_count) {
-                        // Clicking the already-selected row activates
-                        // it. There is no double-click concept in the
-                        // protocol, and requiring a trip to the
-                        // keyboard to enter a directory would be worse.
-                        if (idx == g_sel) {
-                            if (dialog_activate()) g_dialog_open = 0;
-                        } else {
-                            g_sel = idx;
-                        }
-                    }
-                }
-            } else if (uui_button_group_press(&g_toolbar, ev.a, ev.b)) {
-                // a toolbar button armed
-            } else if (ev.a >= tx && ev.a < tx + tw && ev.b >= ty && ev.b < ty + th) {
-                g_text.cursor = utext_index_at_point(&g_text, tx, ty, tw, th, ev.a, ev.b);
-                utext_sel_start(&g_text);
-                dragging = 1;
-            }
-            dirty_paint = 1;
-        } else if (ev.type == WIN_EV_MOUSE_MOVE) {
-            if (ev.mods) {
-                if (dragging) {
-                    g_text.cursor = utext_index_at_point(&g_text, tx, ty, tw, th, ev.a, ev.b);
-                    dirty_paint = 1;
-                } else {
-                    dirty_paint |= uui_button_group_press(&g_toolbar, ev.a, ev.b);
-                }
-            } else {
-                dirty_paint |= uui_button_group_hover(&g_toolbar, ev.a, ev.b);
-            }
-        } else if (ev.type == WIN_EV_MOUSE_UP) {
-            dragging = 0;
-            int code = uui_button_group_release(&g_toolbar);
-            if (code == BTN_NEW) {
-                utext_clear(&g_text);
-                g_path[0] = '\0';
-                g_dirty = 0;
-                set_status("new file");
-            } else if (code == BTN_OPEN) {
-                open_dialog(0);
-            } else if (code == BTN_SAVE) {
-                if (g_path[0]) save_file(g_path);
-                else open_dialog(1);
-            }
-            dirty_paint = 1;
-        }
-
-        if (quit) break;
-        if (dirty_paint) {
-            set_title(id);
-            draw(&s);
-            present(id);
-        }
-    }
-
-    struct win_request_msg d = {0};
-    d.type = WIN_REQ_DESTROY;
-    d.window = id;
-    sys_win_request(&d);
-    return 0;
+int main(void) {
+    struct uapp_desc desc = {
+        .title      = "untitled",
+        .w          = WIN_W,
+        .h          = WIN_H,
+        .x          = 180,
+        .y          = 90,
+        // Resizable: an editor is the app that most wants it, and it
+        // needs no resize code -- text_rect_for() already derives the
+        // text area from the content size, so a bigger window is a
+        // bigger page. The minimum keeps the toolbar and one text row
+        // visible.
+        .flags      = UAPP_RESIZABLE,
+        .min_w      = 240,
+        .min_h      = 120,
+        .on_open    = on_open_cb,
+        .on_draw    = on_draw,
+        .on_key     = on_key,
+        .on_press   = on_press,
+        .on_motion  = on_motion,
+        .on_release = on_release,
+    };
+    return uapp_run(&desc);
 }

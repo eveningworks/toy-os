@@ -245,6 +245,51 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
   one geometry calculation shared by draw/hit-test/drag (so a scrollbar
   thumb cannot be in two places), and commit-on-release.
 
+### Changed
+- **Notepad and Terminal run on Toykit, and both are resizable.** The
+  last two hand-rolled TWP clients. Every ring-3 GUI app now uses
+  `uapp`, and every one of them can be resized -- with no resize code in
+  any of them, because each derives its content rect from the window
+  size and `uapp` re-runs that on the client's behalf. Notepad drags
+  from 560x380 to 620x452 and the page simply gets bigger.
+
+  Notepad deliberately does NOT use `uapp`'s button routing: its file
+  dialog is modal and has to swallow input the toolbar would otherwise
+  see. `desc.buttons` being optional is what makes that possible -- an
+  app with its own precedence rules keeps them and still gets the loop,
+  the handshake and resize. It also stopped re-sending its window title
+  on every repaint (a TWP message per keystroke, to say the same thing);
+  it now sends one only when the title actually changes.
+
+- **`uapp_flush()`, and the escape hatch deleted for having no caller.**
+  The design predicted Terminal would need `uapp_open()`/`uapp_pump()`
+  -- an app driving the loop itself -- because it BLOCKS inside a
+  command while the shell runs to completion.
+
+  Porting it showed that was the wrong diagnosis. Terminal does not need
+  to own the loop; it needs to PAINT at a moment of its choosing, so the
+  echoed command reaches the screen before the command it echoed. That
+  is `uapp_flush()`, one line, and Terminal uses `uapp_run()` like
+  everything else.
+
+  Which left the hatch with no caller in the tree, so it is gone -- the
+  same bar that removed `gfx_text_index_at_x()` and `uapp_text()` before
+  they shipped. It comes back the day something genuinely owns its own
+  loop, and the shape is already known, since it was written once.
+
+  Worth recording as a design lesson: "this app blocks" and "this app
+  needs the loop" looked like the same requirement for three stages and
+  were not.
+
+- **A limit worth knowing: a client window cannot exceed 640x480.**
+  `WIN_CLIENT_MAX_W`/`_H` bound the buffer TWS allocates up front, and a
+  resize past them is refused -- correctly, and silently from the user's
+  side: the window simply stops growing. Notepad opens at 560x380, so it
+  is closer to that ceiling than is comfortable. Not changed here (the
+  cap exists because the whole buffer is allocated and mapped at once,
+  which is a real constraint until there is a growable mapping story),
+  but it is now reachable by dragging rather than theoretical.
+
 ### Added
 - **The "an app cannot draw outside its own window" boundary is tested
   now, and documented as a boundary.** Asked whether toy-os could stop

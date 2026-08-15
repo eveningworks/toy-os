@@ -69,6 +69,8 @@ static void flush(struct uapp *a) {
 
 void uapp_redraw(struct uapp *a) { a->dirty = 1; }
 
+void uapp_flush(struct uapp *a) { flush(a); }
+
 void uapp_quit(struct uapp *a, int status) {
     a->running = 0;
     a->status = status;
@@ -188,7 +190,7 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
 
 // --- lifecycle --------------------------------------------------------
 
-int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
+static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     struct uapp *a = &g_app;
     a->desc = desc;
     a->dirty = 1;
@@ -250,7 +252,7 @@ int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     return 1;
 }
 
-int uapp_pump(struct uapp *a, int block) {
+static int uapp_pump(struct uapp *a, int block) {
     struct win_event ev;
 
     if (block) {
@@ -268,7 +270,7 @@ int uapp_pump(struct uapp *a, int block) {
     return a->running;
 }
 
-void uapp_close(struct uapp *a) {
+static void uapp_close(struct uapp *a) {
     struct win_request_msg req;
     req_clear(&req);
     req.type = WIN_REQ_DESTROY;

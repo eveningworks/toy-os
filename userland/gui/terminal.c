@@ -32,6 +32,7 @@
 #include "rt/sys.h"
 #include "ui/ugfx.h"
 #include "ui/uui.h"
+#include "ui/uapp.h"
 #include "ui/utext.h"
 #include "ui/utheme.h"
 #include "lib/ush.h"
@@ -43,7 +44,6 @@
 
 static struct utext g_out;      // the scrollback
 static struct ush g_shell;
-static uint32_t g_win;
 static int g_running;           // 1 while a command is executing
 
 // The line being typed. Not utext's cursor: the prompt line is a
@@ -60,12 +60,6 @@ static void out_sink(void *ctx, const char *text, int len) {
 
 static void put(const char *s) { while (*s) utext_putc(&g_out, *s++); }
 
-static void present(void) {
-    struct win_request_msg req = {0};
-    req.type = WIN_REQ_PRESENT;
-    req.window = g_win;
-    sys_win_request(&req);
-}
 
 static void text_rect(struct ugfx_surface *s, int *x, int *y, int *w, int *h) {
     *x = MARGIN;
@@ -99,15 +93,19 @@ static void draw(struct ugfx_surface *s) {
     }
 }
 
-static void run_current_line(struct ugfx_surface *s) {
+static void run_current_line(struct uapp *a) {
     put(g_shell.cwd);
     put("> ");
     put(g_line);
     put("\n");
 
     g_running = 1;
-    draw(s);
-    present(); // show the echoed command BEFORE blocking on it
+    // Show the echoed command BEFORE blocking on it -- ush_run_line()
+    // below can take seconds, and the loop would not otherwise paint
+    // until this handler returned, i.e. after the command it echoed.
+    // This is what uapp_flush() is for; see ui/uapp.h.
+    uapp_redraw(a);
+    uapp_flush(a);
 
     ush_run_line(&g_shell, g_line);
 
@@ -116,26 +114,36 @@ static void run_current_line(struct ugfx_surface *s) {
     g_line[0] = '\0';
 }
 
-int main(void) {
-    if (!ugfx_font_init()) return 2;
+// --- Toykit callbacks -------------------------------------------------
 
-    struct win_request_msg req = {0};
-    req.type = WIN_REQ_CREATE;
-    req.a = WIN_W;
-    req.b = WIN_H;
-    req.c = 120;
-    req.d = 120;
-    if (sys_win_request(&req) != 1) return 1;
-    g_win = req.window;
+static void on_draw(struct uapp *a, struct uapp_draw *d) {
+    (void)a;
+    draw(uapp_surface(d));
+}
 
-    req.type = WIN_REQ_TITLE;
-    req.window = g_win;
-    const char *title = "Terminal (ring 3)";
-    int t = 0;
-    for (; title[t] && t < WIN_TITLE_LEN - 1; t++) req.text[t] = title[t];
-    req.text[t] = '\0';
-    sys_win_request(&req);
+static void on_key(struct uapp *a, int key, unsigned mods) {
+    (void)mods;
+    if (key == 0x1B) { uapp_quit(a, 0); return; }
 
+    if (key == '\n' || key == '\r') {
+        run_current_line(a);
+    } else if (key == '\b') {
+        if (g_line_len > 0) g_line[--g_line_len] = '\0';
+    } else if (key == KEY_PAGE_UP) {
+        utext_scroll(&g_out, 5);
+    } else if (key == KEY_PAGE_DOWN) {
+        utext_scroll(&g_out, -5);
+    } else if (key >= 32 && key < 127 && g_line_len < LINE_MAX - 1) {
+        g_line[g_line_len++] = (char)key;
+        g_line[g_line_len] = '\0';
+    } else {
+        return; // nothing changed
+    }
+    uapp_redraw(a);
+}
+
+static void on_open_cb(struct uapp *a) {
+    (void)a;
     utext_init(&g_out);
     ush_init(&g_shell, out_sink, 0);
     g_line[0] = '\0';
@@ -143,49 +151,25 @@ int main(void) {
 
     put("toy-os terminal, running in ring 3.\n");
     put("Type `help`. Esc closes this window.\n\n");
+}
 
-    struct ugfx_surface s = ugfx_surface_for_window(g_win, WIN_W, WIN_H);
-    draw(&s);
-    present();
-
-    for (;;) {
-        struct win_event ev;
-        if (sys_wait_event(&ev) != 1) break;
-
-        int quit = 0, dirty = 0;
-
-        if (ev.type == WIN_EV_CLOSE) {
-            quit = 1;
-        } else if (ev.type == WIN_EV_KEY) {
-            int k = ev.a;
-            if (k == 0x1B) {
-                quit = 1;
-            } else if (k == '\n' || k == '\r') {
-                run_current_line(&s);
-                dirty = 1;
-            } else if (k == '\b') {
-                if (g_line_len > 0) g_line[--g_line_len] = '\0';
-                dirty = 1;
-            } else if (k == KEY_PAGE_UP) {
-                utext_scroll(&g_out, 5);
-                dirty = 1;
-            } else if (k == KEY_PAGE_DOWN) {
-                utext_scroll(&g_out, -5);
-                dirty = 1;
-            } else if (k >= 32 && k < 127 && g_line_len < LINE_MAX - 1) {
-                g_line[g_line_len++] = (char)k;
-                g_line[g_line_len] = '\0';
-                dirty = 1;
-            }
-        }
-
-        if (quit) break;
-        if (dirty) { draw(&s); present(); }
-    }
-
-    struct win_request_msg d = {0};
-    d.type = WIN_REQ_DESTROY;
-    d.window = g_win;
-    sys_win_request(&d);
-    return 0;
+int main(void) {
+    struct uapp_desc desc = {
+        .title   = "Terminal (ring 3)",
+        .w       = WIN_W,
+        .h       = WIN_H,
+        .x       = 120,
+        .y       = 120,
+        // A terminal is the other app that obviously wants resizing --
+        // and needs no resize code, because draw() derives its text area
+        // from the surface. The minimum keeps a usable number of
+        // columns and rows.
+        .flags   = UAPP_RESIZABLE,
+        .min_w   = 280,
+        .min_h   = 140,
+        .on_open = on_open_cb,
+        .on_draw = on_draw,
+        .on_key  = on_key,
+    };
+    return uapp_run(&desc);
 }

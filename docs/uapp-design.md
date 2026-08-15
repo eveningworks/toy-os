@@ -827,9 +827,13 @@ lines changed in `calculator.c`, `uiclient.c` or `gfxdemo.c`, all 83
 existing checks green. `winclient` opted in afterwards with one field
 and no resize code. `tools/uapp_test.py` covers the handshake.
 
-Notepad and Terminal are NOT yet ported -- they are still hand-rolled
-TWP clients, so they cannot opt in until they move onto uapp. That is
-the next piece of work rather than part of this stage.
+Notepad and Terminal were ported afterwards, so every ring-3 GUI app
+now runs on Toykit and every one is resizable -- none of them
+containing any resize code. Terminal also settled the escape-hatch
+question: it needs `uapp_flush()`, not its own loop, so
+`uapp_open()`/`uapp_pump()` were deleted for having no caller. "This
+app blocks" and "this app needs the loop" looked like the same
+requirement for three stages and were not.
 
 **Stage 4 -- optional.** `WIN_EV_FOCUS`, `WIN_REQ_MOVE`, and a second
 window per process if M41 wants it.
