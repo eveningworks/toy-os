@@ -57,7 +57,10 @@ technical conventions below:
   `string.h` (strings/memory/char classes), `knum.h` (numbers <->
   strings: `k_utoa`/`k_itoa`/`k_htoa`, `k_parse_u32`/`k_parse_hex`,
   ...), `kfmt.h` (`k_snprintf`, plus `vga_printf`/`klog_printf` for a
-  whole line in one call), `kpath.h` (`k_path_join`/`_normalize`/
+  whole line in one call -- one header but TWO files, since `kfmt.c` is
+  freestanding and shared with ring 3 while the two kernel sinks live in
+  `kfmt_print.c`; a kernel include in the former silently takes
+  `snprintf` away from userland), `kpath.h` (`k_path_join`/`_normalize`/
   `_resolve`/`_basename`/`_dirname`). Plus two for drawing:
   `fixed.h` (Q16.16 fixed point and trig -- **angles are in TURNS, not
   radians**, so `FX_ONE` is a full rotation and `fx_sin(FX_ONE/4)` is
@@ -208,7 +211,8 @@ technical conventions below:
   utext, the widgets; mirrors `apps/ui/` so a widget's kernel-side and
   ring-3 versions sit at the same relative path), `lib/` (userland
   libraries that aren't UI -- `ush`, the shell the ring-3 Terminal
-  links against), `gui/` (windowed apps), `bin/` (command-line
+  links against, plus `string.h`/`stdio.h`/`cmem.c`, the C names over
+  the toolkit; see the bullet below), `gui/` (windowed apps), `bin/` (command-line
   programs), `tests/` (single-mechanism diagnostics). **The first three
   produce objects; the last three produce one ELF per `.c`, and the
   directory also says where it seeds** -- `gui/` and `bin/` to `/bin`,
@@ -223,6 +227,26 @@ technical conventions below:
   path-qualified** (`#include "ui/ugfx.h"`, `#include "rt/sys.h"`) off
   a single `-Iuserland`, so an include line says which layer it reaches
   into. ELFs build to `build/userland/**`, not into the source tree.
+- **In ring 3 the toolkit is reachable under the C names -- don't
+  hand-roll a `my_strlen` or a digit loop there either.**
+  `#include "lib/string.h"` for `strlen`/`strcmp`/`strlcpy`/`mem*`/the
+  `ctype` handful, `#include "lib/stdio.h"` for `snprintf`. These are
+  NOT a second implementation: they are the same `k_*` code, compiled a
+  second time into `libuapp.a` by the Makefile's shared-source rule, so
+  a ring-3 `strlen` and the kernel's `k_strlen` cannot diverge. The
+  kernel keeps the `k_` prefix and these headers are not on its include
+  path. Reach for `knum.h`'s `k_utoa`/`k_htoa` directly when you need a
+  fixed-width number -- kfmt's printf has zero-pad widths for numbers
+  but no `*` width and no left-justify. What does NOT exist yet, on
+  purpose: `malloc`, `FILE`, `printf`, `errno`, TLS (Milestone 24).
+  Three traps are documented in `docs/decisions.md` and in the files
+  themselves, all of which fail quietly: a header named `string.h`
+  including `"string.h"` finds ITSELF (hence the `<>`), an archive
+  member cannot be named `string.o` twice (hence `cmem.c`), and
+  `USERLAND_CFLAGS`'s `-fno-tree-loop-distribute-patterns` is what stops
+  a real `memcpy` recursing into itself through `k_memcpy` -- it LINKS
+  and blows the stack at runtime. Adding to these headers follows the
+  usual bar: a second real caller.
 - **Every ring-3 program is just a `main()`.** `userland/rt/crt0.asm`
   provides `_start` (reads argc/argv off the stack per SysV, calls
   `main`, passes its return to `sys_exit`) and `userland/rt/sys.c` is

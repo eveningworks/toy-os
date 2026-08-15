@@ -10,67 +10,48 @@
 // ring-3 syscalls instead of calling pci_device_at()/pci_class_name()
 // directly).
 //
-// No libc (freestanding, same as every other userland/*.c here) -- the
-// syscall wrappers and small print helpers below are the same shape
-// newsyscalls_test.c already established. `pci_class_name()` itself
+// Strings and number conversion come from lib/string.h and knum.h,
+// linked out of libuapp.a. This file used to carry its own my_strlen(),
+// a truncating copy, a decimal digit loop and a hex nibble loop, with a
+// comment calling that a deliberate duplicate; it was only ever
+// deliberate because the toolkit could not be linked into a ring-3 ELF.
+// It can be now, so the copies are gone -- put_udec()/put_hex_digits()
+// below are two-line wrappers that pick the buffer and the sink, which
+// is the part that really is this file's business.
+//
+// `pci_class_name()` itself
 // can't be called from here even though its declaration is visible via
 // "pci.h" (Makefile's USERLAND_CFLAGS pulls in kernel/include) --
 // that's kernel-space code in kernel/drivers/pci.c, never linked into
 // a userland ELF (see userland/link.ld: one object file, no kernel
 // code). So this file carries its own small copy of the same
 // class/subclass -> name table instead. If pci_class_name() ever grows
-// a new case, this table doesn't pick it up automatically -- same
-// tradeoff every other userland test's small local helpers already
-// make (e.g. put_udec() below existing separately from vga_write_dec()).
+// a new case, this table doesn't pick it up automatically -- the one
+// duplication here that is still real, since that table lives in a
+// kernel driver rather than in the shared toolkit.
 #include <stdint.h>
 #include "rt/sys.h"
+#include "lib/string.h" // strlen
+#include "knum.h"       // k_htoa -- fixed-width hex, which kfmt has no
+                         // conversion for (no `*` width in its printf)
 #include "pci.h" // struct pci_device only -- see this file's top comment
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-static uint64_t my_strlen(const char *s) {
-    uint64_t n = 0;
-    while (s[n]) n++;
-    return n;
-}
-
 static void put(const char *s) {
-    sys_write(1, s, my_strlen(s));
+    sys_write(1, s, strlen(s));
 }
 
-// Unsigned decimal. This file's top comment has always cited put_udec()
-// as an example of a small local helper duplicated rather than shared
-// with the kernel -- but it had been removed at some point, leaving the
-// comment describing a function that wasn't here. Reinstated by the IRQ
-// number the name/BAR output below needed.
 static void put_udec(uint32_t v) {
-    char buf[11];
-    int i = 10;
-    buf[i] = '\0';
-    if (v == 0) buf[--i] = '0';
-    while (v > 0) { buf[--i] = (char)('0' + (v % 10)); v /= 10; }
-    put(buf + i);
+    char buf[21]; // k_utoa documents 21 as always sufficient
+    k_utoa(v, buf, sizeof buf);
+    put(buf);
 }
 
+// Fixed-width, no "0x" -- a table column, which is the exact case
+// k_htoa's min_digits argument exists for (see knum.h's note on why the
+// prefix is the caller's business).
 static void put_hex_digits(uint32_t v, int digits) {
-    char buf[9]; // enough for the widest caller here (4 digits) + '\0'
-    for (int i = 0; i < digits; i++) {
-        uint8_t nibble = (uint8_t)((v >> ((digits - 1 - i) * 4)) & 0xF);
-        buf[i] = nibble < 10 ? (char)('0' + nibble) : (char)('a' + nibble - 10);
-    }
-    buf[digits] = '\0';
+    char buf[17];
+    k_htoa(v, buf, sizeof buf, (unsigned)digits);
     put(buf);
 }
 
@@ -153,20 +134,8 @@ static char g_vendor_name[MAX_DEVS][VENDOR_NAME_MAX];
 static char g_device_name[MAX_DEVS][DEVICE_NAME_MAX];
 static int  g_count;
 
-
-
-
-
-
-
 static void put_err(const char *s) {
-    sys_call(SYS_WRITE, 2, (uint64_t)(uintptr_t)s, my_strlen(s));
-}
-
-static void copy_trunc(char *dst, const char *src, uint64_t cap) {
-    uint64_t i = 0;
-    while (src[i] && i + 1 < cap) { dst[i] = src[i]; i++; }
-    dst[i] = '\0';
+    sys_call(SYS_WRITE, 2, (uint64_t)(uintptr_t)s, strlen(s));
 }
 
 // Exactly `digits` lowercase-or-uppercase hex characters, or -1. Strict
@@ -209,7 +178,7 @@ static void handle_line(char *line, int32_t *cur_vendor) {
         while (*name == ' ') name++;
         for (int i = 0; i < g_count; i++) {
             if (g_dev[i].vendor_id == (uint16_t)id && !g_vendor_name[i][0]) {
-                copy_trunc(g_vendor_name[i], name, VENDOR_NAME_MAX);
+                strlcpy(g_vendor_name[i], name, VENDOR_NAME_MAX);
             }
         }
         return;
@@ -225,7 +194,7 @@ static void handle_line(char *line, int32_t *cur_vendor) {
     for (int i = 0; i < g_count; i++) {
         if (g_dev[i].vendor_id == (uint16_t)*cur_vendor &&
             g_dev[i].device_id == (uint16_t)id && !g_device_name[i][0]) {
-            copy_trunc(g_device_name[i], name, DEVICE_NAME_MAX);
+            strlcpy(g_device_name[i], name, DEVICE_NAME_MAX);
         }
     }
 }

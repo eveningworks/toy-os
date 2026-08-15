@@ -133,7 +133,19 @@ DISK_IMG = disk.img
 USERLAND_CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-protector-guard=global -fno-pic -fno-pie \
                    -mno-red-zone -mcmodel=large \
                    -Wall -Wextra -O2 -g -c $(API_INCLUDES) -Iuserland \
-                   -ffunction-sections -fdata-sections -MMD -MP
+                   -ffunction-sections -fdata-sections -MMD -MP \
+                   -fno-tree-loop-distribute-patterns
+# That last flag stops GCC rewriting a hand-written copy loop into a
+# call to memcpy(). It matters only in userland, and only since
+# userland/lib/string.c started providing a real memcpy: the rewrite
+# applied to k_memcpy's own loop would make memcpy() call k_memcpy()
+# call memcpy() forever. It would LINK -- every symbol resolves -- and
+# blow the stack at runtime with no obvious cause. The kernel needs no
+# such flag, because it defines no memcpy at all, so there the same
+# rewrite is a loud undefined reference instead. -ffreestanding does
+# not promise this on its own; Linux passes the same flag for the same
+# reason. NOTE this is a CFLAGS change, which the .d files do not
+# track -- `make clean` after touching it (see CLAUDE.md).
 # --- userland source layout ------------------------------------------
 #
 # userland/ is split by ROLE, and the split is load-bearing rather than
@@ -340,7 +352,8 @@ LIBUAPP_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBUAPP_SRCS)) \
                $(BUILD)/userland/shared/fixed.o \
                $(BUILD)/userland/shared/calc_engine.o \
                $(BUILD)/userland/shared/string.o \
-               $(BUILD)/userland/shared/knum.o
+               $(BUILD)/userland/shared/knum.o \
+               $(BUILD)/userland/shared/kfmt.o
 LIBUAPP      = $(BUILD)/userland/libuapp.a
 
 # The `rm -f` is load-bearing: `ar rcs` UPDATES an existing archive,

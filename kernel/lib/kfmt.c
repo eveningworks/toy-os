@@ -1,6 +1,15 @@
 // See kfmt.h for the supported conversions and why the set is
 // deliberately small.
 //
+// THIS FILE IS FREESTANDING, AND THAT IS LOAD-BEARING. It is compiled
+// twice -- once into the kernel, once into build/userland/shared/ for
+// libuapp.a -- so a ring-3 program formats with the same k_snprintf()
+// the kernel does. That is only possible while nothing here reaches for
+// kernel state, which is why vga_printf()/klog_printf() live in
+// kfmt_print.c instead: they need vga.h and klog.h, and one include of
+// either would disqualify the whole file from the shared path. Keep new
+// conversions here; keep new SINKS there.
+//
 // Shape of the implementation: one output cursor struct that counts
 // every byte it is asked to emit but only STORES the ones that fit.
 // That's what gives C99 snprintf's "return what it would have been"
@@ -10,8 +19,6 @@
 #include "kfmt.h"
 #include "knum.h"
 #include "string.h"
-#include "vga.h"
-#include "klog.h"
 
 struct out {
     char *buf;
@@ -122,22 +129,4 @@ size_t k_snprintf(char *out, size_t cap, const char *fmt, ...) {
     size_t n = k_vsnprintf(out, cap, fmt, ap);
     va_end(ap);
     return n;
-}
-
-void vga_printf(const char *fmt, ...) {
-    char line[KFMT_LINE_MAX];
-    va_list ap;
-    va_start(ap, fmt);
-    k_vsnprintf(line, sizeof line, fmt, ap);
-    va_end(ap);
-    vga_write(line);
-}
-
-void klog_printf(const char *fmt, ...) {
-    char line[KFMT_LINE_MAX];
-    va_list ap;
-    va_start(ap, fmt);
-    k_vsnprintf(line, sizeof line, fmt, ap);
-    va_end(ap);
-    klog_write(line);
 }

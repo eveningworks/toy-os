@@ -23,53 +23,39 @@
 // place. See api/cpuinfo.h.
 #include <stdint.h>
 #include "rt/sys.h"
+#include "lib/string.h" // strlen, memcpy
+#include "knum.h"       // k_utoa/k_htoa -- fixed-width hex has no kfmt
+                         // conversion (its printf has no `*` width)
 #include "cpuinfo.h"
 #include "cpu_features.h" // the (word,bit) -> name table, shared with the Control Panel
 
-
-
-
-
-
-
-static uint64_t my_strlen(const char *s) {
-    uint64_t n = 0;
-    while (s[n]) n++;
-    return n;
-}
-
-// Same small local print helpers lspci.c carries, and for the same
-// reason: kfmt.h's k_snprintf() is kernel code, never linked into a
-// ring-3 ELF.
+// The sink. Everything below formats into a buffer and hands it here;
+// the conversions themselves are the toolkit's, not this file's.
 static void put(const char *s) {
-    sys_call(SYS_WRITE, 1, (uint64_t)(uintptr_t)s, my_strlen(s));
+    sys_call(SYS_WRITE, 1, (uint64_t)(uintptr_t)s, strlen(s));
 }
 
 static void put_udec(uint32_t v) {
-    char buf[11];
-    int i = 10;
-    buf[i] = '\0';
-    if (v == 0) buf[--i] = '0';
-    while (v > 0) { buf[--i] = (char)('0' + (v % 10)); v /= 10; }
-    put(buf + i);
-}
-
-static void put_hex(uint32_t v, int digits) {
-    char buf[9];
-    for (int i = 0; i < digits; i++) {
-        uint8_t nib = (uint8_t)((v >> ((digits - 1 - i) * 4)) & 0xF);
-        buf[i] = nib < 10 ? (char)('0' + nib) : (char)('a' + nib - 10);
-    }
-    buf[digits] = '\0';
+    char buf[21]; // knum.h documents 21 as always sufficient
+    k_utoa(v, buf, sizeof buf);
     put(buf);
 }
 
-// Left-justified label, so the values line up in a column without a
-// printf-style width specifier (there is no printf here).
+// Fixed width, no "0x" prefix -- see knum.h on why k_htoa leaves the
+// prefix to the caller.
+static void put_hex(uint32_t v, int digits) {
+    char buf[17];
+    k_htoa(v, buf, sizeof buf, (unsigned)digits);
+    put(buf);
+}
+
+// Left-justified label, so the values line up in a column. Still a pad
+// loop rather than a format string: kfmt's printf has zero-pad widths
+// for numbers only -- no left-justify and no width on %s.
 static void put_label(const char *s) {
     put(s);
     put(":");
-    int pad = 22 - (int)my_strlen(s) - 1;
+    int pad = 22 - (int)strlen(s) - 1;
     for (int i = 0; i < pad; i++) put(" ");
 }
 
@@ -105,9 +91,9 @@ int main_lscpu(void) {
         // The brand string is right-padded with spaces by many CPUs
         // (it's a fixed 48-byte field), so trim before printing.
         char trimmed[CPU_BRAND_LEN];
-        int n = (int)my_strlen(g_ci.brand);
+        int n = (int)strlen(g_ci.brand);
         while (n > 0 && g_ci.brand[n - 1] == ' ') n--;
-        for (int i = 0; i < n; i++) trimmed[i] = g_ci.brand[i];
+        memcpy(trimmed, g_ci.brand, (size_t)n);
         trimmed[n] = '\0';
         // Leading spaces happen too, on Intel parts especially.
         const char *p = trimmed;
@@ -143,7 +129,7 @@ int main_lscpu(void) {
         put(" ");
         put(cpu_cache_type_name(c->type));
         // Pad the type name out to the width of "instruction".
-        for (int p = (int)my_strlen(cpu_cache_type_name(c->type)); p < 12; p++) put(" ");
+        for (int p = (int)strlen(cpu_cache_type_name(c->type)); p < 12; p++) put(" ");
         put_cache_size(c->size_kb);
         put(", ");
         if (c->ways == 0xFFFF) {
@@ -165,7 +151,7 @@ int main_lscpu(void) {
         put("  ");
         put((g_ci.enabled & CPU_ENABLES[i].bit) ? "[on ] " : "[off] ");
         put(CPU_ENABLES[i].name);
-        for (int p = (int)my_strlen(CPU_ENABLES[i].name); p < 16; p++) put(" ");
+        for (int p = (int)strlen(CPU_ENABLES[i].name); p < 16; p++) put(" ");
         put(CPU_ENABLES[i].source);
         put("\n");
     }
@@ -182,7 +168,7 @@ int main_lscpu(void) {
         int off = needs && !(g_ci.enabled & f->enable);
         if (off) gated_off++;
 
-        int len = (int)my_strlen(f->name) + (off ? 1 : 0) + 1;
+        int len = (int)strlen(f->name) + (off ? 1 : 0) + 1;
         if (col + len > 78) { put("\n "); col = 1; }
         put(" ");
         put(f->name);

@@ -754,15 +754,23 @@ guess.*
             `kernel/mm/heap.c` design (it already coalesces by address
             adjacency) rebuilt over sbrk -- or compiled for userland via
             the shared-source rule, if it can be made allocator-agnostic.
-      - [ ] `string.h`/`mem*`. Mostly free: `kernel/lib/string.c` is
-            freestanding and already compiles for userland through
-            `build/userland/shared/`. What's missing is the standard
-            NAMES (`strlen` vs `k_strlen`), which is a thin header, not
-            an implementation.
-      - [ ] `stdio`: `printf`/`snprintf` first (`kernel/lib/kfmt.c` is
-            the same story as string.c), then a buffered `FILE` layer
-            over the fd syscalls. Buffering is the part with real
-            design in it -- unbuffered `printf` is one syscall per call.
+      - [x] ~~`string.h`/`mem*`~~ -- done: `userland/lib/string.h`, the
+            C names over the same `k_*` code (one implementation, not
+            two). `memcpy`/`memmove`/`memset`/`memcmp` are real symbols
+            in `userland/lib/cmem.c` because GCC can emit calls to them
+            itself; everything else is a `static inline`. See
+            `CHANGELOG.md`, and note the `-fno-tree-loop-distribute-`
+            `patterns` flag that now has to stay in `USERLAND_CFLAGS`.
+      - [x] ~~`snprintf`~~ -- done: `userland/lib/stdio.h`, which is
+            kfmt's formatter. It needed `kernel/lib/kfmt.c` split first
+            (the `vga_printf`/`klog_printf` sinks moved to
+            `kfmt_print.c`) so the rest could be freestanding enough for
+            the shared-source rule. `userland/tests/libc_test.c` is its
+            first ring-3 caller and its test.
+      - [ ] `stdio` proper: `printf` and a buffered `FILE` layer over the
+            fd syscalls. Buffering is the part with real design in it --
+            unbuffered `printf` is one syscall per call, which is worse
+            than the `put()`-shaped code it would replace.
       - [ ] `errno`. Syscalls return 0/-1/a count today with no shared
             vocabulary for *why*; this is listed separately below and is
             a prerequisite for a libc that reports failures usefully.

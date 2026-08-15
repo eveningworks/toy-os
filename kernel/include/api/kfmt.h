@@ -54,11 +54,17 @@ size_t k_vsnprintf(char *out, size_t cap, const char *fmt, va_list ap);
 size_t k_snprintf(char *out, size_t cap, const char *fmt, ...)
     __attribute__((format(printf, 3, 4)));
 
-// The sink wrappers. Both format into a fixed stack buffer
-// (KFMT_LINE_MAX) and then hand the result to vga_write()/klog_write()
-// -- a line longer than that is truncated, which is why this is for
-// diagnostics and UI text rather than for anything that must not lose
-// bytes. Nothing here allocates.
+// The sink wrappers, which live in kfmt_print.c rather than kfmt.c.
+// One header, two files, on purpose: kfmt.c is freestanding and is
+// compiled a second time into libuapp.a so ring-3 programs share this
+// formatter, and these two need vga.h/klog.h. See kfmt_print.c's top
+// comment -- a kernel include in kfmt.c takes k_snprintf() away from
+// userland without any other symptom.
+//
+// Both format into a fixed stack buffer (KFMT_LINE_MAX) and then hand
+// the result to vga_write()/klog_write() -- a line longer than that is
+// truncated, which is why this is for diagnostics and UI text rather
+// than for anything that must not lose bytes. Nothing here allocates.
 #define KFMT_LINE_MAX 256
 
 void vga_printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));

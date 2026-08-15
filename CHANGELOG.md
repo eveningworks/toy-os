@@ -32,6 +32,106 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
 ## [Unreleased]
 
 ### Added
+- **The toolkit's string and formatting code reaches ring 3 now, under
+  the standard C names** -- `userland/lib/string.h` and
+  `userland/lib/stdio.h`, linked out of `libuapp.a`. Asked for as "the
+  cheap libc win" while scoping what a ring-3 display server (M41) would
+  actually need; the conclusion there was that a full libc is NOT a
+  prerequisite for that work (`apps/wm/` contains zero `kmalloc` calls --
+  its window list, damage rects and z-order are all static tables), but
+  that this particular slice was nearly free and worth taking on its own.
+
+  **What made it not-quite-free was `kfmt.c`.** `kernel/lib/string.c`
+  and `knum.c` were already compiled a second time into
+  `build/userland/shared/` and linked into every ring-3 ELF; `kfmt.c`
+  could not join them because it included `vga.h` and `klog.h` for
+  `vga_printf()`/`klog_printf()`, and the Makefile's shared-source rule
+  requires a freestanding file. Those two sinks moved to a new
+  `kernel/lib/kfmt_print.c`, leaving `kfmt.c` as pure
+  `k_vsnprintf`/`k_snprintf`. One header still declares all four -- the
+  split is about what each half may include, not about what they are.
+  The rule going forward is in both files' top comments: a new
+  CONVERSION goes in `kfmt.c`, a new SINK in `kfmt_print.c`, and one
+  kernel include in the former silently takes `snprintf` away from
+  userland again.
+
+  **This was already costing real duplication.** `userland/bin/lscpu.c`
+  and `lspci.c` each carried their own `my_strlen`, decimal digit loop
+  and hex nibble loop -- with a comment in each calling it a deliberate
+  duplicate because `k_snprintf()` "is kernel code, never linked into a
+  ring-3 ELF". That was true, and it is the exact pattern the toolkit was
+  created to end (a survey once found the same int->string loop written
+  nine times, hex ten times). `lspci.c`'s `copy_trunc()` was `k_strlcpy`
+  under another name. All of it is gone; both files now format through
+  `k_utoa`/`k_htoa` and their remaining `put_udec`/`put_hex` are two-line
+  wrappers choosing a buffer and a sink.
+
+  **Why the C names rather than exposing `k_*`.** Three reasons, weakest
+  last. GCC may emit calls to `memcpy`/`memset`/`memmove`/`memcmp` by
+  itself -- a large struct assignment, an array initialiser -- even under
+  `-ffreestanding`, and those need real symbols under exactly those
+  names; the tree had none, so that was a latent link failure waiting for
+  the first big struct copy rather than a bug anyone had hit. Second, any
+  future port of outside C code expects these names. Third, ring-3 code
+  is ordinary application code and reads better in the ordinary
+  vocabulary. The kernel keeps its `k_` prefix unchanged and these
+  headers are not on its include path.
+
+  Those four are real functions in `userland/lib/cmem.c` (a
+  compiler-emitted call cannot be satisfied by an inline); everything
+  else is a `static inline` straight through to the toolkit -- zero cost,
+  no archive member. That is the whole rule, not a per-function judgment.
+  `strncpy` is deliberately absent: `strlcpy` is there instead, for the
+  reason `api/string.h` already gives.
+
+  **Three traps this hit, all recorded in comments where they bite.**
+  `userland/lib/string.h` including `"string.h"` resolves to ITSELF (a
+  quoted include searches the including file's directory first); the
+  guard makes that a silent no-op and every `k_*` then undeclared, so it
+  uses `<string.h>`, which skips the current directory. The
+  implementation file could not be called `string.c`: `ar` stores members
+  by basename and `libuapp.a` already contained `shared/string.o`, so
+  two same-named members landed in one archive -- exactly the situation
+  the Makefile's `rm -f` comment describes, and it linked silently
+  because the two happened to define disjoint symbols. Hence `cmem.c`.
+  And `USERLAND_CFLAGS` now passes `-fno-tree-loop-distribute-patterns`:
+  GCC rewriting `k_memcpy`'s own loop into a `memcpy` call would make
+  `memcpy()` call `k_memcpy()` call `memcpy()` forever, and it would
+  LINK, failing at runtime as a stack overflow with no obvious cause.
+  Before a `memcpy` symbol existed the same rewrite was a loud undefined
+  reference, which is why the kernel needs no such flag. Verified with
+  `nm -u build/userland/shared/string.o` (empty).
+
+  `snprintf` is a macro, not an inline, so GCC's `format(printf, ...)`
+  attribute still fires at the call site -- which immediately caught two
+  real mistakes in the new test (`%lx` handed a `long long`, and a
+  literal `NULL` for `%s`).
+
+  Verified: `lscpu` and `lspci` output is byte-for-byte identical before
+  and after, captured from two builds of the same commit. New
+  `userland/tests/libc_test.c` (26 checks, `run libc_test`) covers what a
+  KTEST structurally cannot -- the k_* logic already has KTESTs and would
+  pass whether or not any of it were reachable from ring 3, so these
+  assert C's contract (`memset` truncating its `int` to a byte, all three
+  `mem*` returning their destination) and byte-exact `snprintf` output
+  including C99 truncation semantics. It is also `kfmt.o`'s first ring-3
+  caller; without it the archive would have shipped an unproven
+  capability. Positive control: breaking `memcpy`'s return value reddened
+  the intended check -- and a second one, revealing that the NULL-`%s`
+  check derived its input from `g_fail` and so failed whenever an earlier
+  check had. Fixed (a `volatile` global) and re-run clean; that flaw
+  would have shipped invisibly behind a green suite. `preflight.sh` clean
+  (117 KTESTs). Honest cost: `lscpu`'s text grew 610 bytes and `lspci`'s
+  1042, because the shared converters are more general than the tiny
+  hand-rolled ones they replaced; `hello` is unchanged at 198 bytes,
+  which is `--gc-sections` doing its job.
+
+  What is deliberately NOT here: `malloc`/`free`, a buffered `FILE`
+  layer, `printf` itself, `errno` and TLS. Those are the rest of
+  Milestone 24 and each has real design in it -- an unbuffered `printf`
+  is one syscall per call, which is worse than the `put()`-shaped code it
+  would replace.
+
 - **A not-responding timeout and a force-quit dialog, built on a real
   liveness ping.** The close handshake has always been polite -- a client
   that ignores `WIN_EV_CLOSE` keeps its window -- and until now there was

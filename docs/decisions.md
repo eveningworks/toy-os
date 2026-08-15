@@ -36,6 +36,7 @@ there when you add an entry, or the index quietly stops being one.
 - [A client window's close button is a handshake, not a seizure](#a-client-windows-close-button-is-a-handshake-not-a-seizure)
 - [Ring-3 clients draw for themselves, and the font is shared read-only](#ring-3-clients-draw-for-themselves-and-the-font-is-shared-read-only)
 - [Calculator's engine is shared source compiled twice, not copied](#calculators-engine-is-shared-source-compiled-twice-not-copied)
+- [Ring 3 gets the C names; the kernel keeps `k_`](#ring-3-gets-the-c-names-the-kernel-keeps-k_)
 - [The process entry ABI is SysV, and crt0 owns the stack alignment](#the-process-entry-abi-is-sysv-and-crt0-owns-the-stack-alignment)
 - [A legacy ring-3 process needs its own RSP0 and must not be descheduled](#a-legacy-ring-3-process-needs-its-own-rsp0-and-must-not-be-descheduled)
 - [The retry sentinel is -2 because 0 is a real answer](#the-retry-sentinel-is--2-because-0-is-a-real-answer)
@@ -2836,6 +2837,61 @@ what made the migration verifiable — the two were compared side by
 side, and the shared engine means they cannot disagree about
 arithmetic. Retiring the old one is a separate decision
 (`docs/roadmap.md`, Milestone 41).
+
+## Ring 3 gets the C names; the kernel keeps `k_`
+
+`userland/lib/string.h` and `userland/lib/stdio.h` declare `strlen`,
+`memcpy`, `snprintf` and friends — but there is no second
+implementation. Every one of them is the toolkit's `k_*` function, and
+`kernel/lib/string.c`/`knum.c`/`kfmt.c` are compiled a second time into
+`build/userland/shared/` for `libuapp.a`, the same shared-source rule
+[Calculator's engine](#calculators-engine-is-shared-source-compiled-twice-not-copied)
+uses.
+
+Why two vocabularies for one set of functions. The kernel's reason for
+avoiding the C names is in `api/string.h`: GCC knows what `strlen` means
+and recognising a hand-written one can produce surprising code in a
+freestanding build. Ring 3 has the opposite need — GCC may EMIT calls to
+`memcpy`/`memset`/`memmove`/`memcmp` on its own, for a large struct
+assignment or an array initialiser, and those calls need real symbols
+under exactly those names. Nothing in the tree provided them, which was
+a latent link failure rather than a bug anyone had hit. So those four
+are real functions (`userland/lib/cmem.c`) and everything else is a
+`static inline` wrapper — that split is the rule, not a per-function
+judgment.
+
+Three things that bit while building it, each now recorded where it
+bites rather than only here. `userland/lib/string.h` cannot include
+`"string.h"`, because a quoted include searches the including file's own
+directory first and that resolves to itself; the guard makes it a silent
+no-op and every `k_*` is then undeclared. It uses `<string.h>`, which
+skips the current directory. The implementation file cannot be called
+`string.c`, because `ar` stores members by BASENAME and `libuapp.a`
+already contains `shared/string.o` — two same-named members in one
+archive, which linked silently only because they happened to define
+disjoint symbols. And `USERLAND_CFLAGS` carries
+`-fno-tree-loop-distribute-patterns`: without it GCC may rewrite
+`k_memcpy`'s own copy loop into a `memcpy` call, making `memcpy()` call
+`k_memcpy()` call `memcpy()` forever. That LINKS, and fails at runtime
+as a stack overflow with no obvious cause. Before a `memcpy` symbol
+existed the same rewrite was a loud undefined reference, which is why
+the kernel needs no such flag — the asymmetry is deliberate.
+
+Getting `snprintf` there also forced `kfmt.c` apart:
+`vga_printf()`/`klog_printf()` needed `vga.h`/`klog.h` and so
+disqualified the whole file from the shared path. They live in
+`kernel/lib/kfmt_print.c` now. One header still declares all four; the
+split is about what each half may INCLUDE. A new conversion goes in
+`kfmt.c`, a new sink in `kfmt_print.c`, and a single kernel include in
+the former takes `snprintf` away from userland with no other symptom.
+
+What this deliberately is not: a libc. No `malloc`, no `FILE`, no
+`printf`, no `errno`, no TLS — those are Milestone 24 and each has real
+design in it. See `CHANGELOG.md`'s `[Unreleased]` entry, including the
+honest size cost (`lscpu` +610 bytes of text, `lspci` +1042, because the
+shared converters are more general than the hand-rolled loops they
+replaced) and why a full libc turned out NOT to be a prerequisite for
+moving the display server to ring 3.
 
 ## `strace` traces an address space, and prints each line after the handler returns
 
