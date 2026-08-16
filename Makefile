@@ -584,6 +584,23 @@ seed: $(DISK_IMG) $(USERLAND_ELVES)
 	fi
 	python3 tools/seed_disk.py $(DISK_IMG) $(SEED_DIR)
 
+# The LIVE ISO is a SEPARATE ARTIFACT, and that is the point.
+#
+# It was briefly part of `make iso`, which made every ISO 162 MiB and
+# every boot pay for GRUB reading a 129 MiB module off an emulated
+# CD-ROM before the kernel got a single instruction. Locally that took
+# the boot smoke test from ~2s to 7s; on CI's slower runner it blew the
+# 12s timeout and turned the build red. Measured, not guessed.
+#
+# So the live image ships the way a distribution ships one: as its own
+# image you build when you want it (`make live-iso` -> toy-os-live.iso),
+# leaving the ordinary ISO exactly as fast as it was. The two differ
+# only in the module and the menu.
+#
+# The 129 MiB is TFS3's floor, not a choice -- see $(LIVE_IMG_MB) below
+# -- and shrinking it is a roadmap item. Once it is small, this can
+# fold back into the default ISO.
+#
 # The LIVE IMAGE: a small TFS3 filesystem carried inside the ISO and
 # handed to the kernel by GRUB as a module, so the OS can boot with no
 # disk at all (docs/live-cd-design.md). Built from the same seed tree
@@ -608,10 +625,10 @@ $(LIVE_IMG): $(USERLAND_ELVES) seed
 	python3 tools/tfs3_writer.py sync $(LIVE_IMG) $(SEED_DIR)
 	python3 tools/tfs3_writer.py trim $(LIVE_IMG)
 
-iso: version $(KERNEL) $(USERLAND_ELVES) seed $(LIVE_IMG)
+iso: version $(KERNEL) $(USERLAND_ELVES) seed
 	mkdir -p iso/boot/grub
+	rm -f iso/boot/live.img
 	cp $(KERNEL) iso/boot/kernel.bin
-	cp $(LIVE_IMG) iso/boot/live.img
 	sed 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' grub.cfg > iso/boot/grub/grub.cfg
 	@if [ -z "$(GRUB_MKRESCUE)" ]; then \
 		echo "make: grub-mkrescue not found (looked for grub-mkrescue and grub2-mkrescue)."; \
@@ -620,6 +637,24 @@ iso: version $(KERNEL) $(USERLAND_ELVES) seed $(LIVE_IMG)
 		exit 1; \
 	fi
 	$(GRUB_MKRESCUE) -o $(ISO) iso
+
+# The live ISO: same kernel, plus the filesystem image as a module and a
+# menu that can force it. Built into its own staging tree so it cannot
+# leave a stale module behind in the ordinary one.
+LIVE_ISO = toy-os-live.iso
+
+live-iso: version $(KERNEL) $(USERLAND_ELVES) seed $(LIVE_IMG)
+	rm -rf iso-live
+	mkdir -p iso-live/boot/grub
+	cp $(KERNEL) iso-live/boot/kernel.bin
+	cp $(LIVE_IMG) iso-live/boot/live.img
+	sed 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' grub-live.cfg > iso-live/boot/grub/grub.cfg
+	@if [ -z "$(GRUB_MKRESCUE)" ]; then \
+		echo "make: grub-mkrescue not found -- see README.md's dependency table."; \
+		exit 1; \
+	fi
+	$(GRUB_MKRESCUE) -o $(LIVE_ISO) iso-live
+	@echo "live-iso: $(LIVE_ISO) -- boots with no disk; see docs/live-cd-design.md"
 
 # -vga std: explicit (matches QEMU's own default, but pinned here so the
 #   higher 1280x720 mode boot.asm requests isn't at the mercy of a
@@ -748,7 +783,7 @@ clean:
 	# other build product. This used to name 21 $(FOO_ELF) variables by
 	# hand -- they built into the source tree next to their .c files and
 	# needed a .gitignore entry to stay out of the repo.
-	rm -rf $(BUILD) $(ISO) iso/boot/kernel.bin iso/boot/live.img $(SEED_DIR)/sync
+	rm -rf $(BUILD) $(ISO) $(LIVE_ISO) iso/boot/kernel.bin iso/boot/live.img iso-live $(SEED_DIR)/sync
 	# Deliberately NOT touching $(DISK_IMG) here -- see its comment above.
 	# Use `make clean-disk` to explicitly wipe the persistent filesystem.
 

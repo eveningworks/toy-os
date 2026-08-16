@@ -101,9 +101,17 @@ class Result:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--iso", default="toy-os.iso")
+    # The LIVE iso, which is its own artifact (`make live-iso`) -- the
+    # ordinary one carries no module, deliberately, because GRUB reads
+    # the whole thing off the CD before the kernel starts and that cost
+    # belongs to the image that needs it. See the Makefile.
+    ap.add_argument("--iso", default="toy-os-live.iso")
     ap.add_argument("--tmp", default="/tmp")
     args = ap.parse_args()
+
+    if not os.path.exists(args.iso):
+        print(f"live_boot_test: {args.iso} not found -- run `make live-iso` first")
+        return 1
 
     serial = os.path.abspath(os.path.join(args.tmp, "live_serial.log"))
     sock = os.path.abspath(os.path.join(args.tmp, "live.serial"))
