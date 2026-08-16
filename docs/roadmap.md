@@ -1076,6 +1076,22 @@ guess.*
 - [ ] `strace` extended to follow a process's children once `fork()`
       exists
 
+### Not built yet, and deliberately so
+
+- [ ] **Group DRAG for a rubber-band selection** -- moving every selected
+      item together as one gesture. The selection half is built and
+      shared (`kernel/lib/rubberband.c`, both surfaces); this is the
+      layer above it. What it needs: a per-item commit callback so the
+      module can offer "item i moved by (dx, dy)" without learning what
+      an item is, and a decision about how it composes with the
+      desktop's existing single-icon drag (which currently arms on any
+      press over an icon, including one that is already selected).
+- [ ] **A ring-3 file manager**, the second caller the rubber-band
+      module was shaped for. Until it exists, `RB_ADD`/`RB_TOGGLE` and
+      the whole shared-source arrangement have exactly one caller --
+      which is this project's usual bar not yet met, recorded honestly
+      rather than presented as vindicated.
+
 ### Known issues and papercuts (unscheduled)
 
 - [ ] **`damage_sweep.py`'s `resize-shrink Terminal` step reports a real
@@ -1099,53 +1115,6 @@ guess.*
       something other than what its name suggests -- worth reading
       `wm_render.c`'s verify path before trusting either number. Start
       there rather than at the resize code.
-
-- [ ] **`menubar_test.py` is FLAKY in the full suite** -- observed three
-      times in one session (2026-08-16): it fails one check when run as
-      part of `gui_regress.py`, and passes 22/22 every time it is re-run
-      on its own. Never seen to fail twice in a row, and no other tool
-      shows it. Recorded rather than dismissed because "re-run it and it
-      passes" is exactly how a real intermittent bug gets ignored for
-      months -- and because the next person to see it red should know it
-      is known, not spend an hour bisecting.
-      Rate seen 2026-08-16 (third session): TWO failures in four full
-      runs, both the same check, and it passed on re-run each time. That
-      is far more frequent than the earlier "one in three" and makes it
-      reproducible enough to bisect deliberately rather than wait for.
-      **NAMED, 2026-08-16 (third session).** The `--logs` capture finally
-      caught it. The failing check is always this one:
-
-          FAIL  Recent files is greyed until a save, then opens a real
-                submenu
-                levels open over Recent after saving: [0]
-                (it was disabled and unopenable before the save)
-
-      So the first half of that check is fine -- Recent files IS greyed
-      out and unopenable before a save. What fails is the second half:
-      after the save, hovering it opens NO submenu level. The other 21
-      checks pass, including every other submenu check ("hovering a
-      submenu parent opens the next level" among them), which narrows it
-      considerably: submenu opening as a mechanism works in that same
-      run, on a different parent.
-      That points away from the parallel-contention theory and toward a
-      RACE between the save completing and the menu's `item_flags` hook
-      being asked again -- the enabled/disabled state is asked for, never
-      stored (see `uui_menubar`), so the hover that follows a save reads
-      whatever the flags hook says at that instant.
-      **What has NOT been established:** whether the save had actually
-      finished when the hover happened. The next step is to assert the
-      file exists on disk (an independent path, per `notepad_client_test.py`)
-      between the save and the hover, and see whether the failure moves.
-      **So: always pass `--logs DIR` when running the full suite**, e.g.
-      `python3 tools/gui_regress.py --logs /tmp/gr`. It costs nothing on
-      a green run and is the only way this entry ever gets closed; the
-      failure is too rare to reproduce on demand, so the capture has to
-      already be armed when it happens.
-      Rate seen 2026-08-16 (second session): one failure in three
-      full-suite runs, and that run had no `--logs`, so the check is
-      still unnamed. Running `menubar` alone did not reproduce it in
-      either attempt, which is weak evidence for the parallel-contention
-      theory over a bug in the widget.
 
 Small things that are real, reproducible, and not worth their own
 milestone -- bugs too minor to schedule, rough edges, and behaviour

@@ -1,0 +1,26 @@
+{
+  "skill_name": "toy-os-feature-workflow",
+  "evals": [
+    {
+      "id": 1,
+      "eval_name": "small-uptime-flag",
+      "prompt": "Can we add a -h flag to uptime so it shows days/hours/minutes instead of raw seconds?",
+      "expected_output": "Recognizes this as small enough to skip (or lightly apply) the full AskUserQuestion/docs-entry ceremony, while still following the CHANGELOG/testing conventions proportionally (versioning itself is semver + -dev, not a per-change build number -- this change wouldn't touch VERSION at all).",
+      "files": []
+    },
+    {
+      "id": 2,
+      "eval_name": "calculator-mousewheel",
+      "prompt": "Can we add mouse wheel support to the Calculator app so scrolling changes the displayed value?",
+      "expected_output": "Researches Calculator + widgets.h + wheel event handling first, and includes the widget-vs-one-off tradeoff as one of the presented choices (per the project's standing instruction to ask before adding widgets), not just implementation-detail choices.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "eval_name": "tmpfs-planning",
+      "prompt": "I want to add a RAM disk / tmpfs for scratch files alongside TFS2. What would that take?",
+      "expected_output": "Recognizes this as a planning-only request (like the ELF/bin session), researches the VFS/TFS2 boundary, presents phasing/scope choices, and drafts a docs/roadmap.md checkbox entry (- [ ] ...) rather than starting to implement.",
+      "files": []
+    }
+  ]
+}

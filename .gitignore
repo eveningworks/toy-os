@@ -12,6 +12,7 @@
 # anything that includes it compiles, so its absence from a fresh clone
 # is a non-event.
 /kernel/include/api/version.h
+/kernel/include/api/build_date.h
 
 # Persistent disk image (see Makefile's DISK_IMG comment) -- deliberately
 # left alone by `make clean`, it's local dev state, not a repo asset.
@@ -75,3 +76,8 @@ __pycache__/
 .vm.*.pid
 .vm.*.serial
 ktest_qemu.log
+
+# Claude Code worktrees (.claude/worktrees/) are transient checkouts, not
+# repo content -- the skill beside them IS tracked, so this ignores the
+# one directory rather than all of .claude/.
+/.claude/worktrees/

@@ -224,6 +224,59 @@ ring-3 Notepad; `tools/uidemo_test.py` asserts 1, 2, 3 and 9 against the
 listbox and the dropdown popup. Run both after touching either
 scrollbar port.
 
+## Rubber-band selection: what a real one does
+
+Drag on empty space and a rectangle selects what it touches. Like the
+scrollbar above, it looks trivial and has more behaviour than it
+appears, so this is the specification. Windows, KDE, macOS and GTK agree
+on every point below; they differ only on whether the band is drawn as a
+translucent fill or an outline.
+
+The implementation is `kernel/lib/rubberband.c`, shared source compiled
+into both the kernel and ring 3 -- so there is one of these, not one per
+surface. A caller supplies item geometry through `struct rb_ops` and
+does its own drawing; everything below belongs to the module, not to the
+app. Each point is a KTEST in `kernel/lib/rubberband_test.c`.
+
+**1. Selection updates LIVE as the band sweeps.** Items highlight the
+moment the band touches them, not on release. Anything else makes the
+drag feel like it is not doing anything.
+
+**2. Pulling the band back off an item DESELECTS it.** This is the point
+that separates a real implementation from a plausible one, and the only
+one a growing band cannot test: recompute the selection from the
+selection-as-it-was-at-press on every motion, never accumulate into it.
+An accumulating version is pixel-identical while the band grows.
+
+**3. Dragging up-and-left is an ordinary drag.** The band's rectangle is
+normalised. A version that forgets selects nothing in that direction and
+passes every other check, because tests are naturally written
+down-and-right.
+
+**4. A small movement is a CLICK, not a tiny band.** Below a few pixels
+of travel the gesture is a click; otherwise every click is a degenerate
+zero-size band. A plain click on empty space then clears the selection,
+which falls out of the same rule (an empty band selects nothing) rather
+than being a special case beside it.
+
+**5. A modifier composes with what was already selected.** Plain drag
+replaces; Ctrl/Shift adds. Both must stay correct while the band SHRINKS
+as well as grows, which is why the base selection is remembered for the
+whole drag rather than just its first frame. A modified click on empty
+space must NOT clear the selection -- that is the whole point of holding
+the modifier.
+
+**6. The band draws LAST, above the items it crosses.** Drawing is
+immediate-mode here, so z-order is call order -- the same rule popups
+follow. An outline rather than a translucent fill, because `gfx.c` has
+no alpha blend and a solid fill would hide the highlights the user is
+watching appear.
+
+**7. Damage the UNION of where the band was and where it is.** The
+compositor repaints declared damage only, so damaging just the new
+rectangle leaves the old outline on screen. Track the rect as DRAWN, not
+as computed -- the same bookkeeping rule the cursor follows.
+
 ## Menus: the one control that opens on press
 
 `uui_menubar` (`userland/ui/uui_menubar.h`) is the exception to the

@@ -182,6 +182,36 @@ def actions(dbg, clear=True):
     return out
 
 
+def unpark(dbg, qmp):
+    """Move the real cursor off any menu, to empty desktop.
+
+    The companion to hover(): a parked cursor is the point of that
+    helper and a hazard everywhere else. Top-left of the SCREEN, which
+    is desktop icons at worst -- hovering an icon changes nothing that
+    this tool measures, where hovering a menu row changes everything.
+    """
+    dbg.warp_cursor(qmp, 8, 8)
+    dbg.settle()
+
+
+def hover(dbg, qmp, rect):
+    """Park the REAL cursor over `rect` and leave it there.
+
+    NOT `gui move`: injected input overrides the mouse for ONE WM
+    iteration and then the real pointer takes over, so a submenu opened
+    by an injected hover closes again before the layout can be read.
+    That raced, and it is the whole story behind this tool's long-
+    standing intermittent failure -- the check saw no submenu perhaps one
+    run in three, while a second identical hover opened it every time.
+
+    warp_cursor() drives the actual PS/2 cursor and confirms arrival, so
+    the hover PERSISTS. Same rule dialog_test.py already follows for
+    hover states (docs/gui-guidelines.md, CLAUDE.md).
+    """
+    dbg.warp_cursor(qmp, rect[0] + rect[2] // 2, rect[1] + rect[3] // 2)
+    dbg.settle()
+
+
 def shot(qmp, tmp, name):
     from PIL import Image
     p = os.path.abspath(os.path.join(tmp, name))
@@ -315,8 +345,7 @@ def run(dbg, qmp, tmp, res):
                   "View menu did not open")
         return
     go = lay3.rect("item 0 0")          # "Go to"
-    dbg.move(go[0] + go[2] // 2, go[1] + go[3] // 2)
-    dbg.settle()
+    hover(dbg, qmp, go)
     time.sleep(0.4)
     lay4 = layout(dbg, content)
     res.check("hovering a submenu parent opens the next level",
@@ -341,6 +370,16 @@ def run(dbg, qmp, tmp, res):
         res.check("committing closes the whole chain",
                   layout(dbg, content).popups() == [],
                   "a committed menu must not stay open")
+
+    # The real cursor is still parked on the submenu row from hover()
+    # above, and it STAYS there -- that is the whole point of using it.
+    # Left there it silently changes every later check: a menu opened
+    # afterwards finds the pointer already inside it, so it can close or
+    # open a submenu on its own. That is not hypothetical -- it turned
+    # the dismiss check below into a vacuous pass ("the menu closed",
+    # because it was never open) while its click-through partner went
+    # red. Park it back on empty desktop before moving on.
+    unpark(dbg, qmp)
 
     # --- 8. THE CANCEL PATH -------------------------------------------
     # Press an item, drag off the menu entirely, release. Nothing may
@@ -504,8 +543,7 @@ def run(dbg, qmp, tmp, res):
     lay8 = layout(dbg, content)
     if lay8.has("item 0 2"):
         rec = lay8.rect("item 0 2")
-        dbg.move(rec[0] + rec[2] // 2, rec[1] + rec[3] // 2)
-        dbg.settle()
+        hover(dbg, qmp, rec)
         time.sleep(0.4)
         lay9 = layout(dbg, content)
         res.check("Recent files is greyed until a save, then opens a real submenu",

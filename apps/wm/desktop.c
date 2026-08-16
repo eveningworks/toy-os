@@ -5,6 +5,7 @@
 #include "ui/ui.h"
 #include "theme.h"
 #include "rubberband.h"
+#include "build_date.h" // GENERATED, and included ONLY here -- see gen_version.sh
 #include "kapi.h"
 
 #define DESKTOP_ICON_SIZE 48
@@ -270,13 +271,32 @@ void desktop_draw(void) {
     // the -dirty marker, which is the whole reason to want it on screen
     // (api/version.h). Right-aligned from its own measured width, so it
     // stays anchored when the version string or the font size changes.
+    //
+    // The build DATE goes underneath, because the version string cannot
+    // answer "am I still running yesterday's build?" -- a whole day of
+    // dev builds share one commit-and-dirty marker. It comes from its
+    // own generated header (build_date.h) rather than version.h, at day
+    // granularity, so that it rebuilds THIS file and not the tree; see
+    // tools/gen_version.sh.
     {
-        const char *ver = "toy-os " TOYOS_VERSION_FULL;
-        int vw = gfx_text_width(ver);
-        int vx = screen_w - vw - 12;
-        int vy = (screen_h - taskbar_h) - gfx_char_h() - 8;
-        gfx_draw_string_clipped(vx, vy, vw, ver,
-                                 gfx_rgb(90, 125, 155), gfx_rgb(24, 60, 90));
+        const char *lines[2] = {
+            "toy-os " TOYOS_VERSION_FULL,
+            "built " TOYOS_BUILD_DATE,
+        };
+        uint32_t fg = gfx_rgb(90, 125, 155);
+        uint32_t bg = gfx_rgb(24, 60, 90);
+        int line_h = gfx_char_h() + 2;
+        // Bottom line sits one line above the taskbar; the block grows
+        // UPWARDS, so adding a third line later moves nothing.
+        int base_y = (screen_h - taskbar_h) - line_h - 8;
+        for (int i = 0; i < 2; i++) {
+            int w = gfx_text_width(lines[i]);
+            // Each line right-aligned on its own width, so the two stay
+            // flush to the same edge whatever the font or the strings.
+            gfx_draw_string_clipped(screen_w - w - 12,
+                                     base_y - (1 - i) * line_h,
+                                     w, lines[i], fg, bg);
+        }
     }
 
     // The band LAST, so it sits above every icon it crosses. Drawing is

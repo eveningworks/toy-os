@@ -34,6 +34,7 @@ there when you add an entry, or the index quietly stops being one.
 - [`SYS_WAIT_EVENT` makes clients loop instead of restarting the syscall](#sys_wait_event-makes-clients-loop-instead-of-restarting-the-syscall)
 - [The windowing protocol is one syscall carrying typed messages, not a syscall per operation](#the-windowing-protocol-is-one-syscall-carrying-typed-messages-not-a-syscall-per-operation)
 - [A client window's close button is a handshake, not a seizure](#a-client-windows-close-button-is-a-handshake-not-a-seizure)
+- [A hover test parks the REAL cursor, and must un-park it afterwards](#a-hover-test-parks-the-real-cursor-and-must-un-park-it-afterwards)
 - [Rubber-band selection is shared source compiled twice, and it owns the behaviour](#rubber-band-selection-is-shared-source-compiled-twice-and-it-owns-the-behaviour)
 - [One desktop-entry directory with a `ShowIn` key, not a second directory per surface](#one-desktop-entry-directory-with-a-showin-key-not-a-second-directory-per-surface)
 - [Desktop entries reload live off a filesystem generation counter, not a directory poll](#desktop-entries-reload-live-off-a-filesystem-generation-counter-not-a-directory-poll)
@@ -2816,6 +2817,61 @@ cannot reach, since `kernel/include/kernel` is off its include path),
 `apps/wm/wm_client.c` owns presentation (window list, chrome, z-order,
 input routing), and they meet at a registered `struct win_server_ops`
 -- the same registry pattern as `display.h`'s `display_driver`.
+
+## A hover test parks the REAL cursor, and must un-park it afterwards
+
+`menubar_test.py` failed one check intermittently for three sessions --
+roughly one full-suite run in three, always
+`Recent files is greyed until a save, then opens a real submenu`, and
+always passing on re-run. Diagnosed 2026-08-16. Two halves, and the
+second is the part that was not previously written down.
+
+**The cause was the documented `gui move` trap, in the last tool that
+had not adopted the fix.** An injected move overrides the mouse for ONE
+WM iteration; the submenu opened on that iteration and closed again when
+the real pointer took over, so reading the layout afterwards was a race.
+`dialog_test.py` and `uidemo_test.py` already used
+`DebugConsole.warp_cursor()` for exactly this and said so in their
+docstrings; `menubar_test.py` was the holdout.
+
+Two steps made it a diagnosis rather than a guess, and they generalise:
+
+- **Get a rate under both conditions.** Five runs of the tool ALONE
+  passed; two of four full parallel runs failed. That alone ruled out a
+  widget bug and pointed at timing.
+- **Design a probe whose outcomes differ under each hypothesis.** The
+  first two theories -- the disk write is slow, the recent-list update
+  lags -- were both wrong, and a probe settled it: the saved file was on
+  disk in 0.00s, and a SECOND identical hover opened the submenu. Item
+  enabled, hover lost. That is the direct evidence the whole diagnosis
+  rests on, and it came from instrumenting a real failure rather than
+  from reasoning about the code.
+
+**The evidence for the fix, stated as numbers.** Before: two of four
+full-suite runs failed. After: **eight of eight passed**, plus three of
+three with the tool alone. At the observed pre-fix rate those eight
+consecutive passes are about a 0.4% coincidence, which is the point at
+which this stops being "it seems better".
+
+**What does NOT work, recorded because it would otherwise be
+rediscovered.** Shortening the check's post-save wait to 0.05s looked
+like an on-demand reproducer (it failed 1 of 2, then 1 of 4) and is not:
+with the fix reverted AND that amplifier in place, four more runs
+passed. Those early failures were luck, not a trigger. So the amplifier
+is worthless as a control, and the mechanism evidence above -- an
+instrumented real failure -- is what the diagnosis actually rests on.
+
+**The new lesson is the un-park.** A parked real cursor is the point of
+`warp_cursor()` and a hazard everywhere after it: it STAYS there, so a
+menu opened later finds the pointer already inside it and can close or
+expand on its own. Applying the fix to both submenu hovers turned a
+different check red 5/5 -- and its partner, "a click outside dismisses
+the menu", stayed GREEN, because the menu really was closed; it had
+never opened. That is the vacuous-pass shape this repo keeps meeting: an
+absence check satisfied for the wrong reason. So a tool that parks the
+cursor moves it back to neutral ground when the measurement is done
+(`unpark()`), and the pair reads as one idiom rather than two unrelated
+calls.
 
 ## Rubber-band selection is shared source compiled twice, and it owns the behaviour
 

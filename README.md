@@ -54,8 +54,9 @@ QEMU, and it does not stop at "hello world from the kernel":
   files survive a power cut, and both come with an `fsck`. The VFS picks
   by superblock probe; `fsformat` switches live.
 - **A real GUI** — a window manager with movable, resizable windows, a
-  taskbar, a Start menu built from `.desktop` files, and a desktop of
-  draggable icons. Most apps are ordinary **ring-3 processes** that own
+  taskbar, a Start menu built from `.desktop` files (picked up live —
+  drop a file in and it appears), and a desktop of draggable icons with
+  rubber-band selection. Most apps are ordinary **ring-3 processes** that own
   their windows over **TWP**, the Toy Window Protocol, served by **TWS**
   and programmed against with **Toykit**.
 - **Its own test suite** — `make test` boots the OS headless, runs

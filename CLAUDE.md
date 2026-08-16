@@ -77,7 +77,15 @@ technical conventions below:
   engine: no matrices, no faces, no depth buffer, no clipping planes --
   a model is points plus whatever edge list the caller keeps beside
   them, which is all the Shapes demo's cube is). And one for
-  unpredictability: `krandom.h` (`krandom_u64`/`krandom_bytes`,
+  And one for SELECTION: `rubberband.h` (`rb_begin`/`rb_motion`/
+  `rb_end`, a fixed-bitset selection set, and RB_REPLACE/ADD/TOGGLE) --
+  the drag-a-rectangle-to-select behaviour, owning the band, the
+  selection and the modifier rules while the caller supplies item
+  geometry through a `struct rb_ops` and does its own drawing. Shared
+  source compiled twice, like `geom.c`, so the kernel desktop and a
+  future ring-3 file manager cannot diverge; the spec is
+  `docs/gui-guidelines.md`'s "Rubber-band selection" section. And one
+  for unpredictability: `krandom.h` (`krandom_u64`/`krandom_bytes`,
   RDSEED/RDRAND with a TSC-jitter fallback) -- **deliberately NOT a
   CSPRNG, and `krandom_quality()` is how a caller finds that out**
   instead of assuming. The stack canary is randomized from it at boot,
@@ -422,7 +430,17 @@ technical conventions below:
   `data/wm/desktop/`, format documented in its README). `gui_apps.c`
   scans that directory at desktop startup, so **adding an app to the
   desktop is dropping a file there**, not editing a table and
-  rebuilding. `Exec=/bin/wm/apps/foo` spawns a binary;
+  rebuilding -- and it is picked up LIVE, no restart: the WM watches
+  `fs_generation()` (one integer compare per frame, no I/O unless the
+  filesystem actually changed) and re-reads the directory when it moves.
+  **One directory feeds BOTH surfaces**, with `ShowIn=desktop startmenu`
+  choosing which; a second directory per surface was rejected because an
+  app wanted in both would have its file duplicated and the copies
+  drift. Anything positional must go through
+  `gui_app_visible_count()`/`_at()` -- the Start menu's rows are indexed
+  by position, so filtering the draw while hit-testing the unfiltered
+  registry lands every click on the wrong app and looks correct in a
+  screenshot. `Exec=/bin/wm/apps/foo` spawns a binary;
   `Exec=builtin:taskmgr` names a kernel-space app's callbacks, and that
   form disappears when the last one moves to ring 3. Windowed binaries
   live under `/bin/wm/{system,apps,demos}/` -- the class is the SOURCE
@@ -717,6 +735,14 @@ technical conventions below:
   deliberately idempotent (it rewrites `version.h` only when the content
   changed) because `kapi.h` includes it, and a value that differs every
   build turns every build into a full rebuild. See `docs/decisions.md`.
+  **The build DATE lives in its own generated header for exactly that
+  reason** -- `kernel/include/api/build_date.h` (`TOYOS_BUILD_DATE`),
+  also written by `gen_version.sh`, at DAY granularity, and included by
+  ONE file (`apps/wm/desktop.c`, the desktop's watermark). So it
+  rebuilds one object at most once a day instead of the tree every
+  build. Include it only where it is displayed; pulling it into a widely
+  included header recreates the problem it is shaped to avoid. Both
+  generated headers are gitignored.
 - **Versioning is semver + a `-dev` suffix, not a per-change build
   number.** `VERSION` only changes via `tools/set_version.sh
   <version>`: `0.2.0-dev` starts a new dev round, `0.2.0` (no `-dev`)
@@ -1719,6 +1745,15 @@ repeated manual steps to be worth automating:
   `docs/gui-guidelines.md`'s "Scrollbars: what a real one does"; run it
   after touching either `apps/ui/ui_scrollbar.c` or
   `userland/ui/uui_scrollbar.c`.
+- **A tool that PARKS the real cursor must un-park it.**
+  `DebugConsole.warp_cursor()` is the right way to hold a hover -- `gui
+  move` lasts one WM iteration -- but the cursor then STAYS there, and a
+  menu opened later finds the pointer already inside it. That turned one
+  check red 5/5 while its partner ("a click outside dismisses the menu")
+  stayed green for the wrong reason: the menu had never opened. Park,
+  measure, un-park; `menubar_test.py`'s `hover()`/`unpark()` pair is the
+  worked example. This is what the long-standing menubar flake turned
+  out to be -- see `docs/decisions.md`.
 - **`menubar_test.py`** -- the menu bar, its nested submenus and the
   status bar (`userland/ui/uui_menubar.*`, `uui_statusbar.*`), driven
   through the ring-3 Notepad. 22 checks: the popup is DRAWN (not merely
@@ -1825,6 +1860,18 @@ repeated manual steps to be worth automating:
   trusting a clean run -- a clean sweep otherwise can't be told apart
   from a sweep that isn't checking anything, which has happened here
   for real.
+- **`flake_hunt.py`** -- one GUI tool run N times, reporting which
+  CHECKS failed and how often (`python3 tools/flake_hunt.py menubar -n 6
+  --keep /tmp/flake`). The sibling of `damage_hunt.py`: that one varies
+  a SEED, this one varies nothing and asks whether a tool is
+  intermittent. Reach for it the moment a tool fails once and passes on
+  re-run -- a rate is the diagnosis, a verdict is not, and this repo has
+  a recorded case of a real bug coming back clean six times before
+  reproducing five times running. Scores a run that never printed a
+  summary as `error`, not `pass`: a run that measured nothing must not
+  look like a good one. Also the way to check a fix -- and to catch a
+  fix that starts a DIFFERENT check failing, which is what happened when
+  the menubar flake was fixed.
 - **`damage_hunt.py`** -- `damage_sweep.py` over MANY seeds, a fresh
   disk copy and its own `vm.py --instance` slot each, as one pass/fail
   table; non-zero if any seed violated the invariant. One seed is one
@@ -2044,6 +2091,21 @@ user), consider whether it's the kind of question a future session
 would hit again -- if so, add a short entry to `docs/decisions.md`
 pointing at the answer, the same judgment call as `tools/`'s "does
 this fix a rederive-from-scratch cost" bar.
+
+## The session workflow skill lives IN this repo
+
+`.claude/skills/toy-os-feature-workflow/` -- the end-to-end playbook a
+session follows (research first, offer real choices, build and test with
+proof, write the docs, ship). It used to live in `~/.claude/skills/`,
+outside version control, which meant ~1,750 lines of accumulated project
+knowledge had no history, no diff review and no backup. It is tracked
+here now for the same reason everything else is.
+
+Two consequences. **Update it in the repo**, not in the home directory,
+or the two copies drift and the untracked one silently wins. And
+`.gitignore` excludes `/.claude/worktrees/` specifically rather than all
+of `.claude/`, because those are transient checkouts while the skill
+beside them is real content.
 
 ## Delivering changes
 
