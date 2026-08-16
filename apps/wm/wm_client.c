@@ -194,6 +194,25 @@ static int on_debug_command(const char *line, char *out, int cap) {
     return o.len;
 }
 
+// Asks every window owned by `pid` to close, through the SAME
+// wm_request_close() the X button, Alt+F4 and the context menu use --
+// so a client may decline, and there is no fourth close path with its
+// own idea of the rules.
+//
+// Iterates DOWNWARD because wm_request_close() may remove the window
+// and shift everything above it down; going upward would skip the
+// window that slid into the index just handled.
+static int on_close_pid(int pid) {
+    int asked = 0;
+    for (int i = window_count - 1; i >= 0; i--) {
+        if (i >= window_count) continue;      // the list shrank under us
+        if (windows[i].client_pid != pid) continue;
+        wm_request_close(i);
+        asked++;
+    }
+    return asked;
+}
+
 static const struct win_server_ops WM_SERVER_OPS = {
     .window_created   = on_window_created,
     .window_present   = on_window_present,
@@ -203,6 +222,7 @@ static const struct win_server_ops WM_SERVER_OPS = {
     .window_resized   = on_window_resized,
     .window_pong      = on_window_pong,
     .debug_command    = on_debug_command,
+    .close_pid        = on_close_pid,
 };
 
 void wm_client_init(void) {

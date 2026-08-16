@@ -118,6 +118,10 @@ there when you add an entry, or the index quietly stops being one.
 
 - [The desktop's app list is a directory of files, not a table in the kernel](#the-desktops-app-list-is-a-directory-of-files-not-a-table-in-the-kernel)
 - [Widgets are added once a second real caller needs them -- except the checkbox](#widgets-are-added-once-a-second-real-caller-needs-them----except-the-checkbox)
+- [A table PULLS its rows, and stores none of them](#a-table-pulls-its-rows-and-stores-none-of-them)
+- [cpu_ticks is a total, not a percentage](#cpu_ticks-is-a-total-not-a-percentage)
+- [SYS_KILL is unprivileged, and killing the WM is the point](#sys_kill-is-unprivileged-and-killing-the-wm-is-the-point)
+- [A lone button routes its own clicks; the group is for grids](#a-lone-button-routes-its-own-clicks-the-group-is-for-grids)
 - [The ring-3 UI Demo selects on contact where the kernel one committed on release](#the-ring-3-ui-demo-selects-on-contact-where-the-kernel-one-committed-on-release)
 - [A compositor's view of a window is at a DERIVED address, and revocation is the feature](#a-compositors-view-of-a-window-is-at-a-derived-address-and-revocation-is-the-feature)
 - [The third inert scrollbar: drawing one and handling it are separate jobs](#the-third-inert-scrollbar-drawing-one-and-handling-it-are-separate-jobs)
@@ -310,6 +314,102 @@ message in and back out on every request. Widening the shared struct to
 hold a diagnostic reply would put a kilobyte-sized copy on the hot path
 to serve a channel used only by test tooling. So the hot path keeps its
 56-byte message and the diagnostic pays for its own size.
+
+## A table PULLS its rows, and stores none of them
+
+`uui_table` (`userland/ui/uui_table.h`) holds no data. It asks the app
+for one cell at a time through a `cell(ctx, row, col, out, cap)`
+callback, and the app supplies `row_count`.
+
+The obvious alternative -- hand the widget an array of rows -- needs
+somewhere to put a copy, and Toykit has no allocator (which is also why
+a menu is a const tree). Task Manager re-reads the whole process table
+several times a second; copying it into the widget each time would mean
+either a fixed maximum baked into the widget or an allocator built to
+serve one caller.
+
+Pulling has a second property that matters more than the memory: there
+is no cached state to invalidate. Processes appear and exit under a live
+view, and the table simply asks again on the next paint. A widget that
+owned rows would need the app to remember to push updates into it, and
+the failure mode of forgetting is a table showing plausible, stale
+numbers -- which is worse than an empty one, because nothing looks
+wrong.
+
+What the app still owes: `uui_table_set_rows()` on a refresh, which
+clamps the scroll position and the selection. That is a function rather
+than an assignment precisely because both need clamping when the row
+count shrinks.
+
+## cpu_ticks is a total, not a percentage
+
+`struct proc_info.cpu_ticks` (`kernel/include/abi/proc_info.h`) reports
+the cumulative timer ticks a process has been the running one for. It
+does not report a percentage, and the kernel deliberately does not
+compute one.
+
+A percentage is a difference between two samples divided by the time
+between them, and only the consumer knows how far apart its samples
+are. Reporting a percentage would bake the kernel's chosen interval into
+the ABI, and any reader refreshing at a different rate would then be
+reading a number that means something other than what it says. Linux
+makes the same call with `/proc/stat`, which reports totals and leaves
+the arithmetic to `top`.
+
+The consequence is that a consumer needs a common clock for the
+denominator, which is what `SYS_TICKS` is for -- the SAME counter
+`scheduler_tick()` bills against. Dividing a `cpu_ticks` delta by a
+delta of anything else (the RTC, say) gives a ratio of two unrelated
+clocks that happens to look like a percentage.
+
+## SYS_KILL is unprivileged, and killing the WM is the point
+
+Any process may kill any other, including the window manager once it is
+a ring-3 process. There is no permission check, and that is a decision
+rather than an omission.
+
+There is nothing to hang a check on. This kernel has no user model, no
+capability system and no process groups, so a permission test would have
+to invent the very concept it claims to enforce -- and a check that
+always passes is worse than no check, because it reads as protection.
+The header says so plainly and names `SYS_KILL` as the first syscall a
+future privilege model has to gate.
+
+Protecting the window manager specifically was considered and rejected
+for a sharper reason: Milestone 41 stage 4's stated exit criterion is
+that **killing the WM process must not panic the kernel**. Being able to
+do it from Task Manager is a way to exercise the property the milestone
+exists to establish, not a hole in it.
+
+The polite counterpart is `WIN_REQ_CLOSE_PID`, which asks the target's
+window to close and can be refused -- it runs the same
+`wm_request_close()` the X button and Alt+F4 use, so there is no fourth
+close path with its own rules. Windows draws the same line between End
+Task and End Process.
+
+## A lone button routes its own clicks; the group is for grids
+
+`uui_button_ops` used to have `draw` and `hit` and nothing else, so a
+single declared button was painted, hit-tested, and ignored every click
+-- routing lived only in `uui_button_group`. Even one button therefore
+needed a group wrapped around it.
+
+That is not how the toolkits this is modelled on behave. A `QPushButton`
+and a Win32 `BUTTON` both handle their own click; Qt's `QButtonGroup`
+exists for EXCLUSIVITY (radio behaviour), not for delivering the press.
+It is also a silent trap of exactly the kind this repo keeps paying for:
+the button draws correctly, hit-tests correctly, and does nothing, with
+no error anywhere to point at the cause.
+
+So `uui_button_ops` gained `press`/`motion`/`release`, implementing the
+same arm-on-press, commit-on-release, don't-commit-if-dragged-off rule
+the group implements. The change is ADDITIVE -- the group still routes
+its own buttons, so Calculator's keypad is untouched.
+
+What the group is still good for is a GRID of many buttons handled as
+one widget, which is genuinely less code than twenty layout items. It is
+on `docs/roadmap.md`'s list to retire once that is no longer worth a
+separate widget.
 
 ## Widgets are added once a second real caller needs them -- except the checkbox
 

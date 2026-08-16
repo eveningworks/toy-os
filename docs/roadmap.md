@@ -1094,6 +1094,28 @@ guess.*
 
 ### Known issues and papercuts (unscheduled)
 
+- [ ] **Retire `uui_button_group` once nothing needs it.** A standalone
+      `uui_button` routes its own clicks now (press/motion/release on
+      `uui_button_ops`), which is how QPushButton, GtkButton and a Win32
+      BUTTON all behave -- Qt's `QButtonGroup` exists for EXCLUSIVITY,
+      not for delivering the press, so this toolkit's group is doing a
+      job no real one does. It survives today only as a convenience for
+      a grid of many buttons treated as one widget (Calculator's keypad,
+      UI Demo's row). The work: move those callers to individual items
+      and delete `uui_button_group.[ch]` plus its kernel-side twin.
+      Not urgent -- both shapes work -- but the group is the one that
+      should go, not the button.
+- [ ] **Task Manager sits at 100% CPU, because it polls.** It refreshes
+      from `on_tick`, which makes uapp's loop poll instead of block, so
+      the process is runnable every scheduling round and honestly
+      reports ~100%. Every OTHER client blocks in `SYS_WAIT_EVENT` and
+      reports 0%, which is what makes the number so conspicuous. The
+      fix is a timer EVENT (`WIN_EV_TIMER`, already listed under M41's
+      out-of-scope items): a client asks to be woken every N ms and
+      blocks in between, the way a real task manager does. Until then
+      the reading is accurate rather than wrong, which is why this is a
+      papercut and not a bug.
+
 - [ ] **`damage_sweep.py`'s `resize-shrink Terminal` step reports a real
       missed damage.** Reproduces every run, no seed needed:
       `python3 tools/vm.py --disk <copy> start` then

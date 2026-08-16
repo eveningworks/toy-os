@@ -14,6 +14,7 @@
 #include "pmm.h"
 #include "fs.h"
 #include "string.h"
+#include "timer.h" // pit_ticks() -- SYS_TICKS
 #include "tz.h"
 #include "pci.h"
 #include "cpuinfo.h"
@@ -948,6 +949,8 @@ void syscall_dispatch(uint64_t *regs) {
             vmm_copy_to_user(pml4, rsi, &info, sizeof info); // validated above
             regs[14] = 1;
         }
+    } else if (rax == SYS_TICKS) {
+        regs[14] = pit_ticks();
     } else if (rax == SYS_KILL) {
         // Unprivileged on purpose -- see SYS_KILL in abi/syscall_abi.h.
         // A process killing ITSELF is legal and behaves like exiting.

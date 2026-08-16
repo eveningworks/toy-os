@@ -250,6 +250,27 @@ struct win_event {
                            // a writable mapping would let any client
                            // scribble on kernel .rodata.
 
+#define WIN_REQ_CLOSE_PID  12 // a: the pid whose window(s) should be
+                           // ASKED to close. Returns 1 if at least one
+                           // window was asked, 0 if that pid has none.
+                           //
+                           // Task Manager's "End Task": the polite half
+                           // of ending a process, as against SYS_KILL's
+                           // immediate one. It goes through the server
+                           // rather than being a syscall because the
+                           // decision is the WINDOW MANAGER's -- it runs
+                           // the same wm_request_close() the X button
+                           // and Alt+F4 use, so a client may refuse it
+                           // exactly as it may refuse those, and there
+                           // is no fourth path that could drift from
+                           // them (repeating that check is precisely how
+                           // the context menu once drifted into seizing
+                           // windows instead of asking).
+                           //
+                           // Unprivileged, like SYS_KILL and for the
+                           // same reason -- and strictly weaker than it,
+                           // since the target may decline.
+
 #define WIN_REQ_DEBUG_CMD  10 // Run one `gui` diagnostic command. The
                            // command text and the reply both ride
                            // struct win_debug_msg, not this struct --

@@ -142,6 +142,25 @@ int uapp_set_title(struct uapp *a, const char *title) {
     return req_send(&req);
 }
 
+// Asks the window manager to close every window belonging to `pid` --
+// Task Manager's "End Task". POLITE: the target may refuse, exactly as
+// it may refuse its own X button, because the WM runs the same
+// wm_request_close() for all of them. sys_kill() is the half that
+// cannot be refused.
+//
+// Returns 1 if at least one window was asked, 0 if that pid has none
+// (a process with no window is not an error -- it simply cannot be
+// asked this way, and the caller should say so rather than appear to
+// have done something).
+int uapp_request_close_pid(struct uapp *a, int pid) {
+    (void)a; // not about this app's own window
+    struct win_request_msg req;
+    req_clear(&req);
+    req.type = WIN_REQ_CLOSE_PID;
+    req.a = pid;
+    return req_send(&req) == 1;
+}
+
 // --- public: drawing --------------------------------------------------
 
 struct ugfx_surface *uapp_surface(struct uapp_draw *d) { return d->surface; }

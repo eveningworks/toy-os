@@ -97,11 +97,55 @@ void uui_layout_run(struct uui_layout *l, int x, int y, int w, int h) {
         return;
     }
 
+    // --- main-axis growth -------------------------------------------
+    //
+    // An item flagged to fill along the STACKING direction absorbs
+    // whatever space the others did not use -- flexbox's flex-grow, in
+    // its simplest form. Without this every child got its natural size
+    // and a resized window simply grew empty space below the last one,
+    // so nothing in a column could ever get taller: Task Manager's table
+    // widened with its window and kept exactly the rows it opened with.
+    //
+    // The cross axis is handled per item below and is a different
+    // question ("how wide is a row in this column"), which is why the
+    // two flags do not mean the same thing in both directions:
+    // UUI_FILL_H grows a COLUMN's children and stretches a ROW's.
+    int grow_count = 0, natural_total = 0;
+    for (int i = 0; i < l->count; i++) {
+        int iw, ih;
+        item_natural(&l->items[i], &iw, &ih);
+        natural_total += (l->dir == UUI_COLUMN) ? ih : iw;
+
+        unsigned grow_flag = (l->dir == UUI_COLUMN) ? UUI_FILL_H : UUI_FILL_W;
+        if (l->items[i].flags & grow_flag) grow_count++;
+    }
+    if (l->count > 1) natural_total += (l->count - 1) * g;
+
+    int inner_main = (l->dir == UUI_COLUMN) ? inner_h : inner_w;
+    int spare = inner_main - natural_total;
+    if (spare < 0) spare = 0; // given less than it wants, it overflows
+                               // rather than shrinking children below
+                               // their stated minimum -- the same call
+                               // the grid above makes.
+    int grow_each = grow_count > 0 ? spare / grow_count : 0;
+    int grow_seen = 0;
+
     int cursor = (l->dir == UUI_COLUMN) ? iy : ix;
     for (int i = 0; i < l->count; i++) {
         struct uui_item *it = &l->items[i];
         int iw, ih;
         item_natural(it, &iw, &ih);
+
+        // The LAST growing item takes the rounding remainder, so the
+        // children exactly fill the container instead of leaving a
+        // few pixels that read as a layout bug.
+        unsigned grow_flag = (l->dir == UUI_COLUMN) ? UUI_FILL_H : UUI_FILL_W;
+        if (it->flags & grow_flag) {
+            grow_seen++;
+            int extra = (grow_seen == grow_count)
+                          ? spare - grow_each * (grow_count - 1) : grow_each;
+            if (l->dir == UUI_COLUMN) ih += extra; else iw += extra;
+        }
 
         // 0 means "no preference" (uui_primitives.h), so a child that
         // does not care gets the cross-axis size rather than nothing --

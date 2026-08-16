@@ -461,6 +461,17 @@ int win_server_request(int pid, struct win_request_msg *req) {
 
     if (!g_ops) return -1;
 
+    // Not addressed to one of the CALLER's own windows -- it names
+    // another process entirely, so it skips the lookup() ownership
+    // check every other request below goes through. That is the whole
+    // point of it (a task manager acts on other processes) and is why
+    // the header documents it as unprivileged rather than leaving the
+    // missing check to be discovered.
+    if (req->type == WIN_REQ_CLOSE_PID) {
+        if (!g_ops->close_pid) return 0;
+        return g_ops->close_pid(req->a) > 0 ? 1 : 0;
+    }
+
     switch (req->type) {
     case WIN_REQ_CREATE: {
         uint32_t id = 0;

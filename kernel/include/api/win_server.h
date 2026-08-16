@@ -103,6 +103,12 @@ struct win_server_ops {
     // would make every `gui` command re-entrant with respect to the
     // transport, and these are dispatched from inside wm_run() itself.
     int (*debug_command)(const char *line, char *out, int cap);
+
+    // Ask every window belonging to `pid` to close, through whatever
+    // path the presentation layer already uses for its own close button
+    // -- so a client may refuse, and there is no second close policy.
+    // Returns how many windows were asked. OPTIONAL like every slot.
+    int (*close_pid)(int pid);
 };
 
 // Registers the presentation layer. The WM calls this with its ops as

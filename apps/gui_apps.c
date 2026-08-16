@@ -1,5 +1,4 @@
 #include "gui_apps.h"
-#include "taskmgr.h"
 #include "control_panel.h"
 #include "kapi.h"
 #include "etc_config.h"
@@ -46,7 +45,6 @@ struct builtin {
 };
 
 static const struct builtin BUILTINS[] = {
-    { "taskmgr", taskmgr_default_size, taskmgr_open, taskmgr_draw, 0, 0, 0 },
     { "controlpanel", control_panel_default_size, control_panel_open,
       control_panel_draw, control_panel_press, control_panel_release,
       control_panel_hover },

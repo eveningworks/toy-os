@@ -234,6 +234,12 @@ void uapp_flush(struct uapp *a);
 void uapp_quit(struct uapp *a, int status);
 int uapp_set_title(struct uapp *a, const char *title);
 
+// Asks the WM to close every window owned by `pid` -- the POLITE way to
+// end another process, which it may refuse. Returns 1 if at least one
+// window was asked, 0 if that pid has none. See sys_kill() for the half
+// that cannot be refused.
+int uapp_request_close_pid(struct uapp *a, int pid);
+
 // Ask TWS for a different content size. Returns 0 if it refused, in
 // which case nothing changed. Called for you when TWS proposes one;
 // public because an app may also want to resize itself.

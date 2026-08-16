@@ -114,7 +114,45 @@ static void bg_ops_draw(struct ugfx_surface *s, const void *w) {
     uui_button_group_draw((const struct uui_button_group *)w, s);
 }
 
+// --- taking part in a layout -----------------------------------------
+//
+// These two were missing, and the symptom was not a compile error: a
+// group declared in a layout kept whatever coordinates its buttons were
+// given at init and was allotted no space, so the buttons drew wherever
+// they happened to sit -- on top of the widget above them -- while the
+// layout believed the group occupied nothing. Every slot in
+// uui_widget_ops is optional, which is the right default and also means
+// an omission like this is silent.
+static void bg_ops_natural_size(const void *w, int *out_w, int *out_h) {
+    uui_button_group_natural_size((const struct uui_button_group *)w, out_w, out_h);
+}
+
+// TRANSLATES the buttons rather than re-laying them out: their relative
+// arrangement is the app's (a row, a grid, a gap between two of them),
+// and a group that re-flowed them here would silently override it.
+static void bg_ops_geometry(void *w, int x, int y, int width, int height) {
+    (void)width; (void)height;
+    struct uui_button_group *g = (struct uui_button_group *)w;
+    if (g->count <= 0) return;
+
+    // The group's origin is the top-left of the union of its buttons,
+    // which is what natural_size() reported -- so shifting by the
+    // difference puts that union exactly where the layout asked.
+    int min_x = g->buttons[0].x, min_y = g->buttons[0].y;
+    for (int i = 1; i < g->count; i++) {
+        if (g->buttons[i].x < min_x) min_x = g->buttons[i].x;
+        if (g->buttons[i].y < min_y) min_y = g->buttons[i].y;
+    }
+    int dx = x - min_x, dy = y - min_y;
+    for (int i = 0; i < g->count; i++) {
+        g->buttons[i].x += dx;
+        g->buttons[i].y += dy;
+    }
+}
+
 const struct uui_widget_ops uui_button_group_ops = {
+    .natural_size = bg_ops_natural_size,
+    .set_geometry = bg_ops_geometry,
     .draw    = bg_ops_draw,
     .hit     = bg_ops_hit,
     .press   = bg_ops_press,

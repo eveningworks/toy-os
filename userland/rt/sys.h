@@ -138,6 +138,12 @@ int sys_proc_info(int index, struct proc_info *out);
 // is the window close handshake, which an app may refuse.
 int sys_kill(int pid, int exit_code);
 
+// Monotonic timer ticks since boot -- the SAME counter proc_info's
+// cpu_ticks is billed against, which is what makes a CPU percentage
+// computable (a cpu_ticks delta over a delta of this). Not wall-clock:
+// see sys_gettime() for that, and do not use it to measure an interval.
+unsigned long sys_ticks(void);
+
 // Sets the console colours this process writes in. Both are
 // `enum vga_color` values; out-of-range is refused, not clamped.
 int sys_set_color(int fg, int bg);

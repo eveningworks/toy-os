@@ -524,6 +524,21 @@ struct dirent {
                           // same reason Windows separates End Task from
                           // End Process.
 
+#define SYS_TICKS     32 // No arguments. Returns the monotonic timer tick
+                          // count since boot.
+                          //
+                          // MONOTONIC, unlike SYS_GETTIME, which reports
+                          // RTC wall-clock time -- that one goes
+                          // backwards when the clock is set and has
+                          // one-second resolution, so it can measure
+                          // neither an interval nor an animation. This
+                          // is the same counter scheduler_tick() bills
+                          // cpu_ticks against, which is what makes a CPU
+                          // PERCENTAGE computable at all: the numerator
+                          // is a proc_info delta and the denominator is
+                          // a delta of this. Two different clocks would
+                          // give a ratio that means nothing.
+
 // The number of process-table slots SYS_PROC_INFO can be asked about.
 // Mirrors the kernel's SCHED_MAX_PROCS; a caller loops 0..this-1.
 #define SYS_PROC_MAX 64

@@ -1,5 +1,5 @@
 # Task Manager -- see this directory's README.md for the format.
 Name=Task Manager
-Exec=builtin:taskmgr
+Exec=/bin/wm/system/taskmgr
 Category=system
 Icon=T

@@ -57,9 +57,61 @@ static void btn_draw(struct ugfx_surface *s, const void *w) {
     uui_button_draw_one(s, (const struct uui_button *)w);
 }
 
+// --- routed pointer input, so a LONE button works --------------------
+//
+// A single button used to draw, hit-test, and ignore clicks entirely:
+// routing lived only in uui_button_group, so even one button needed a
+// group wrapped round it to do anything. That is not how the toolkits
+// this is modelled on behave -- a QPushButton and a Win32 BUTTON both
+// handle their own click, and Qt's QButtonGroup exists for EXCLUSIVITY,
+// not for delivering the press. It is also a silent trap: the button
+// draws perfectly, hit-tests correctly and does nothing, with nothing to
+// point at the cause (it cost this project a debugging cycle).
+//
+// Additive: the group still routes its own buttons, so a grid like
+// Calculator's is unchanged. What this buys is that a button no longer
+// NEEDS one.
+//
+// Arm on press, commit on release, and a press dragged off commits
+// nothing -- docs/gui-guidelines.md's rule, implemented the same way the
+// group implements it rather than a second time with different edges.
+static int btn_press(void *w, int cx, int cy) {
+    struct uui_button *b = (struct uui_button *)w;
+    if (b->disabled) return 0;
+    int hit = uui_hit(b->x, b->y, b->w, b->h, cx, cy);
+    if (b->pressed == hit) return 0;
+    b->pressed = hit;
+    return hit;
+}
+
+static int btn_motion(void *w, int cx, int cy, unsigned buttons) {
+    struct uui_button *b = (struct uui_button *)w;
+    if (b->disabled) return 0;
+    int hit = uui_hit(b->x, b->y, b->w, b->h, cx, cy);
+    // Held: re-arm against the CURRENT position, so dragging off
+    // disarms and dragging back re-arms.
+    int *flag = buttons ? &b->pressed : &b->hovered;
+    if (*flag == hit) return 0;
+    *flag = hit;
+    return 1;
+}
+
+static int btn_release(void *w, int cx, int cy) {
+    (void)cx; (void)cy;
+    struct uui_button *b = (struct uui_button *)w;
+    // A press dragged off already had `pressed` cleared by btn_motion,
+    // so this correctly commits nothing.
+    int was = b->pressed;
+    b->pressed = 0;
+    return was; // 1 = committed, and the app is told which widget by id
+}
+
 const struct uui_widget_ops uui_button_ops = {
     .natural_size = btn_natural,
     .set_geometry = btn_geometry,
     .draw         = btn_draw,
     .hit          = btn_hit,
+    .press        = btn_press,
+    .motion       = btn_motion,
+    .release      = btn_release,
 };

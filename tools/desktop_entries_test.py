@@ -71,8 +71,19 @@ def write_entry(dbg, show_in=None):
     `write` truncates and `append` adds; both terminate the line, which
     is what makes a multi-line file authorable from the shell at all.
     """
+    # Exec names a real ring-3 BINARY, not a builtin. It used to say
+    # `builtin:taskmgr`, and that broke the moment Task Manager became a
+    # ring-3 process: load_entry() refuses an entry naming a builtin that
+    # does not exist (correctly, and loudly), so the probe never loaded
+    # and this file reported "live reload did not fire" for a reason that
+    # had nothing to do with live reload.
+    #
+    # A binary rather than the one remaining builtin, so this survives
+    # M41's stage 4 deleting the last of them. Nothing here ever launches
+    # the entry -- the test is about PARSING and reloading -- so what the
+    # path points at only has to be a plausible one.
     dbg.send(f"sh write {TEST_FILE} Name={TEST_NAME}")
-    dbg.send(f"sh append {TEST_FILE} Exec=builtin:taskmgr")
+    dbg.send(f"sh append {TEST_FILE} Exec=/bin/wm/system/about")
     dbg.send(f"sh append {TEST_FILE} Category=demos")
     if show_in:
         dbg.send(f"sh append {TEST_FILE} ShowIn={show_in}")
@@ -241,20 +252,29 @@ def main():
     # rewrites that array in place -- so reloading under an open window
     # would rebind it to whatever entry landed in its slot. Only a
     # kernel-space app holds such a pointer (a ring-3 client's is 0), so
-    # Task Manager is the lever here.
+    # a builtin is the lever here.
+    #
+    # CONTROL PANEL, not Task Manager. Task Manager was the lever until it
+    # became a ring-3 process, at which point its window's `app` pointer
+    # became 0 and the reload correctly stopped deferring for it -- so
+    # this check failed while the behaviour it guards was perfectly fine.
+    # Control Panel is the LAST remaining builtin; when M41's stage 4
+    # moves it, there will be no kernel-space app left to hold a registry
+    # pointer, and this check and the guard it covers both retire
+    # together. That is the guard's own comment in apps/wm/wm.c.
     #
     # Asserted as deferred-then-delivered, not just deferred: "it did not
     # appear" alone is equally satisfied by a reload that stopped working
     # altogether, which is the failure this guard could easily cause.
     dbg.send(f"sh rm {TEST_FILE}")
     wait_for_reload(dbg, TEST_NAME, present=False)
-    dbg.open_app("Task Manager")
+    dbg.open_app("Control Panel")
     dbg.settle()
     time.sleep(0.5)
 
-    if dbg.window("Task Manager") is None:
+    if dbg.window("Control Panel") is None:
         check("reload defers while a kernel-space app is open", False,
-              "Task Manager did not open")
+              "Control Panel did not open")
     else:
         write_entry(dbg)
         time.sleep(2.5)

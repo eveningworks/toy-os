@@ -172,6 +172,10 @@ int sys_proc_info(int index, struct proc_info *out) {
                           (uint64_t)(uintptr_t)out);
 }
 
+unsigned long sys_ticks(void) {
+    return (unsigned long)syscall0(SYS_TICKS);
+}
+
 int sys_kill(int pid, int exit_code) {
     return (int)syscall2(SYS_KILL, (uint64_t)(int64_t)pid,
                           (uint64_t)(int64_t)exit_code);

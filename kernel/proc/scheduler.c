@@ -499,7 +499,14 @@ int scheduler_proc_info(int index, struct proc_info *out) {
     // would report whatever now lives at that PML4 address. Report 0.
     if (p->state != SCHED_ZOMBIE) out->mem_bytes = vmm_user_bytes(p->pml4_phys);
 
+    // SCHED_RUNNING is a state in its own right here, NOT just "READY
+    // and current" -- a process asking this question about itself is in
+    // it, which is why the first version reported the caller as "-":
+    // it mapped READY and BLOCKED and let RUNNING fall to the default.
+    // The `index == current_index` test is still wanted, because a
+    // process can be READY and current between a tick and a switch.
     switch (p->state) {
+        case SCHED_RUNNING: out->state = PROC_STATE_RUNNING; break;
         case SCHED_READY:   out->state = (index == current_index)
                                           ? PROC_STATE_RUNNING : PROC_STATE_READY; break;
         case SCHED_BLOCKED: out->state = PROC_STATE_BLOCKED; break;
