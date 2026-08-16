@@ -104,6 +104,7 @@ TOOLS = [
     ("sched", "sched_gui_test.py", "the desktop stays live while a process runs"),
     ("blank", "blank_window_test.py", "no app opens a blank window"),
     ("compositor", "compositor_test.py", "raw input to a ring-3 compositor"),
+    ("entries", "desktop_entries_test.py", "ShowIn= and live .desktop reload"),
 ]
 
 # Roughly how long each tool takes, in seconds, used ONLY to decide what
@@ -127,6 +128,7 @@ COST_S = {
     "scrollbar": 21,
     "uidemo": 20,
     "compositor": 19,
+    "entries": 26,
     "uterm": 18,
     "blank": 17,
     "calculator": 15,

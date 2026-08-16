@@ -372,13 +372,15 @@ static void cmd_menu(int json) {
     if (json) {
         klog_printf("{\"open\":%s,\"x\":%d,\"y\":%d,\"w\":%d,\"item_h\":%d,\"rows\":[",
                      start_menu_open ? "true" : "false", mx, my, mw, item_h);
-        for (int i = 0; i < gui_app_registry_count; i++) {
+        int app_rows = gui_app_visible_count(GUI_SHOW_STARTMENU);
+        for (int i = 0; i < app_rows; i++) {
             klog_printf("%s{\"label\":\"%s\",\"kind\":\"app\",\"y\":%d,\"cy\":%d}",
-                         i ? "," : "", gui_app_registry[i].name,
+                         i ? "," : "",
+                         gui_app_visible_at(GUI_SHOW_STARTMENU, i)->name,
                          my + i * item_h, my + i * item_h + item_h / 2);
         }
         for (int i = 0; i < wm_system_action_count; i++) {
-            int row = gui_app_registry_count + i;
+            int row = app_rows + i;
             klog_printf(",{\"label\":\"%s\",\"kind\":\"action\",\"y\":%d,\"cy\":%d}",
                          wm_system_actions[i].label,
                          my + row * item_h, my + row * item_h + item_h / 2);
@@ -389,15 +391,17 @@ static void cmd_menu(int json) {
 
     klog_printf("start menu: %s, x=%d y=%d w=%d item_h=%d rows=%d\r\n",
                  start_menu_open ? "open" : "closed", mx, my, mw, item_h, total);
-    for (int i = 0; i < gui_app_registry_count; i++) {
+    int app_rows = gui_app_visible_count(GUI_SHOW_STARTMENU);
+    for (int i = 0; i < app_rows; i++) {
         klog_write("  row "); col_int(i, 3);
         klog_write("y="); col_int(my + i * item_h, 6);
         klog_write("centre="); col_int(my + i * item_h + item_h / 2, 6);
-        klog_write("app     "); klog_write(gui_app_registry[i].name);
+        klog_write("app     ");
+        klog_write(gui_app_visible_at(GUI_SHOW_STARTMENU, i)->name);
         klog_write("\r\n");
     }
     for (int i = 0; i < wm_system_action_count; i++) {
-        int row = gui_app_registry_count + i;
+        int row = app_rows + i;
         klog_write("  row "); col_int(row, 3);
         klog_write("y="); col_int(my + row * item_h, 6);
         klog_write("centre="); col_int(my + row * item_h + item_h / 2, 6);
@@ -771,9 +775,18 @@ int wm_debug_dispatch(char *line) {
         for (int i = 0; i < gui_app_registry_count; i++) {
             klog_write("  ");
             col_str(gui_app_registry[i].name, 16);
-            klog_printf("resizable=%d multi_instance=%d\r\n",
+            // `show_in` is what makes "loaded" and "visible here" two
+            // separate observations. Without it a test cannot tell an
+            // entry FILTERED off a surface from one that never loaded,
+            // and an assertion that cannot tell those apart passes just
+            // as happily against a broken parser as against a working
+            // filter.
+            unsigned s = gui_app_registry[i].show_in;
+            klog_printf("resizable=%d multi_instance=%d show_in=%s%s\r\n",
                          gui_app_registry[i].resizable,
-                         gui_app_registry[i].multi_instance);
+                         gui_app_registry[i].multi_instance,
+                         (s & GUI_SHOW_DESKTOP) ? "desktop" : "",
+                         (s & GUI_SHOW_STARTMENU) ? "+startmenu" : "");
         }
         return 1;
     }

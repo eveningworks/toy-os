@@ -111,6 +111,10 @@ void cmd_mkdir(const char *name) {
     }
 }
 
+// Longest line `write`/`append` will put in a file. Generous next to
+// any real config line and small enough to sit on the shell's stack.
+#define SHELL_WRITE_LINE_MAX 256
+
 void cmd_write_or_append(const char *args, int append) {
     if (!args || k_strlen(args) == 0) {
         vga_write(append ? "usage: append <file> <text>\n" : "usage: write <file> <text>\n");
@@ -124,9 +128,31 @@ void cmd_write_or_append(const char *args, int append) {
     while (*rest == ' ') rest++;
 
     char path[FS_PATH_MAX];
-    if (!resolve_path(name, path) || !fs_write(path, rest, append)) {
+    if (!resolve_path(name, path)) {
         vga_write("write: failed\n");
+        return;
     }
+
+    // Each command writes one LINE, terminated. Neither used to, which
+    // made a multi-line file impossible to author from the shell at all
+    // -- `write f a` then `append f b` produced "ab", so every
+    // line-based format this system has (/etc/toyos.conf, .desktop
+    // entries) could be read by the shell and never written by it.
+    //
+    // Refuses rather than truncating when the line will not fit, the
+    // same rule kfmt's formatters follow: a silently shortened config
+    // line is a wrong value, not a cosmetic problem.
+    char line[SHELL_WRITE_LINE_MAX];
+    unsigned int n = k_strlen(rest);
+    if (n + 2 > sizeof line) {
+        vga_write("write: line too long\n");
+        return;
+    }
+    k_memcpy(line, rest, n);
+    line[n] = '\n';
+    line[n + 1] = '\0';
+
+    if (!fs_write(path, line, append)) vga_write("write: failed\n");
 }
 
 // editor_run() blocks the calling context in its own keyboard-read

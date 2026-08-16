@@ -39,7 +39,7 @@ from qmp_test import QMPSession             # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
 TITLE = "Terminal"
-SPAWN_PATH = "/bin/uterm"   # spawned directly -- see run()
+SPAWN_PATH = "/bin/wm/apps/uterm"   # spawned directly -- see run()
 SPAWN_TIMEOUT_S = 15.0
 
 # The terminal draws light text on black, so "ink" is anything not black.

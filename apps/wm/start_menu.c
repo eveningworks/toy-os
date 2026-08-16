@@ -68,8 +68,9 @@ static uint64_t flash_until = 0;
 // assuming a fixed char count.
 int start_menu_w(void) {
     int max_chars = 0;
-    for (int i = 0; i < gui_app_registry_count; i++) {
-        int n = (int)k_strlen(gui_app_registry[i].name);
+    int app_rows = gui_app_visible_count(GUI_SHOW_STARTMENU);
+    for (int i = 0; i < app_rows; i++) {
+        int n = (int)k_strlen(gui_app_visible_at(GUI_SHOW_STARTMENU, i)->name);
         if (n > max_chars) max_chars = n;
     }
     for (int i = 0; i < wm_system_action_count; i++) {
@@ -89,7 +90,7 @@ void start_menu_geometry(int *out_menu_x, int *out_menu_y, int *out_menu_w,
     *out_item_h = gfx_char_h() + 6;
     *out_menu_w = start_menu_w();
     *out_menu_x = 4;
-    *out_total_items = gui_app_registry_count + wm_system_action_count;
+    *out_total_items = gui_app_visible_count(GUI_SHOW_STARTMENU) + wm_system_action_count;
     *out_menu_y = (screen_h - taskbar_h) - (*out_item_h) * (*out_total_items);
 }
 
@@ -146,7 +147,8 @@ void start_menu_draw(int mx, int my) {
         hot = (my - menu_y) / item_h;
     }
 
-    for (int i = 0; i < gui_app_registry_count; i++) {
+    int app_rows = gui_app_visible_count(GUI_SHOW_STARTMENU);
+    for (int i = 0; i < app_rows; i++) {
         int y = menu_y + i * item_h;
         uint32_t row_bg = bg, row_fg = fg;
         if (i == hot) {
@@ -157,13 +159,14 @@ void start_menu_draw(int mx, int my) {
         // Clipped: an app name longer than the menu is wide would
         // otherwise be drawn through the border (docs/gui-guidelines.md).
         gfx_draw_string_clipped(menu_x + 8, y + 3, menu_w - 16,
-                                 gui_app_registry[i].name, row_fg, row_bg);
+                                 gui_app_visible_at(GUI_SHOW_STARTMENU, i)->name,
+                                 row_fg, row_bg);
     }
     if (wm_system_action_count > 0) {
-        int divider_y = menu_y + gui_app_registry_count * item_h;
+        int divider_y = menu_y + app_rows * item_h;
         gfx_fill_rect(menu_x, divider_y, menu_w, 1, border);
         for (int i = 0; i < wm_system_action_count; i++) {
-            int idx = gui_app_registry_count + i;
+            int idx = app_rows + i;
             int y = menu_y + idx * item_h;
             uint32_t row_bg = bg, row_fg = fg;
             if (idx == hot) {
@@ -191,10 +194,12 @@ int start_menu_handle_click(int mx, int my) {
 
     if (widget_hit(menu_x, menu_y, menu_w, item_h * total_items, mx, my)) {
         int idx = (my - menu_y) / item_h;
-        if (idx >= 0 && idx < gui_app_registry_count) {
-            open_app(&gui_app_registry[idx]);
-        } else if (idx >= gui_app_registry_count && idx < total_items) {
-            wm_system_actions[idx - gui_app_registry_count].on_select();
+        int app_rows = gui_app_visible_count(GUI_SHOW_STARTMENU);
+        struct gui_app *app = gui_app_visible_at(GUI_SHOW_STARTMENU, idx);
+        if (app) {
+            open_app(app);
+        } else if (idx >= app_rows && idx < total_items) {
+            wm_system_actions[idx - app_rows].on_select();
         }
         // The row's action already ran above -- only closing the menu
         // is deferred, so the click gets a brief visible flash instead

@@ -552,6 +552,59 @@ static void compositor_raw(uint32_t type, int32_t a, int32_t b, uint32_t mods) {
     win_events_push(pid, &ev);
 }
 
+// ---- live reload of /usr/wm/desktop ----
+//
+// Drop a .desktop file in and it appears, the way KDE and Explorer watch
+// their desktop folders. There is no inotify here, so the mechanism is
+// fs_generation() (api/fs.h): a counter the VFS bumps on every change to
+// the filesystem.
+//
+// **The idle cost is one integer compare per frame and no I/O at all.**
+// That is the entire reason the counter exists rather than this
+// re-listing the directory on a timer -- a timer would mean a real disk
+// read every few seconds forever on a machine doing nothing, which is
+// the opposite of subtle.
+//
+// The counter is global, so any filesystem change wakes this, not just
+// one in /usr/wm/desktop. A Notepad save costs one small directory read
+// and finds nothing changed. That is the deliberate trade: per-path
+// watches would need a registry, a lifetime and an eviction policy to
+// save a read that only happens when something already changed.
+static void poll_desktop_entries(void) {
+    static uint64_t seen_gen;
+    static uint64_t quiet_until;
+    static int primed;
+
+    // First call adopts the current value rather than treating the whole
+    // boot as a change -- the registry was just loaded from this very
+    // directory.
+    if (!primed) {
+        primed = 1;
+        seen_gen = fs_generation();
+        return;
+    }
+
+    uint64_t gen = fs_generation();
+    if (gen == seen_gen) return; // the common case, and it is free
+
+    // Never mid-interaction. The selection, the armed click and the drag
+    // are all REGISTRY INDICES, and a reload renumbers them; an open
+    // Start menu would have its rows move under the cursor between press
+    // and release. Deferring costs nothing -- the generation stays
+    // changed, so this fires as soon as the interaction ends.
+    if (start_menu_open || desktop_drag_active()) return;
+
+    uint64_t now = pit_ticks();
+    if (now < quiet_until) return;
+    quiet_until = now + 50; // ~500ms at the PIT's 100Hz
+
+    seen_gen = gen;
+    gui_apps_load();
+    desktop_entries_changed();
+    wm_damage_rect(0, 0, screen_w, screen_h - taskbar_h);
+    redraw_pending = 1;
+}
+
 // ---- main loop ----
 
 void wm_run(void) {
@@ -644,6 +697,9 @@ void wm_run(void) {
         // be on the kernel command line for a script to have been loaded
         // at all.
         demo_gui_tick();
+
+        // One integer compare unless the filesystem actually changed.
+        poll_desktop_entries();
 
         mouse_get_state(&mx, &my, &buttons);
 

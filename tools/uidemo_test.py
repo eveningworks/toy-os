@@ -61,7 +61,7 @@ from gui_debug import DebugConsole          # noqa: E402
 from qmp_test import QMPSession             # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
-SPAWN_PATH = "/bin/uidemo"   # a ring-3 process since M41's stage 0
+SPAWN_PATH = "/bin/wm/demos/uidemo"   # a ring-3 process since M41's stage 0
 SPAWN_TIMEOUT_S = 15.0
 
 # api/keyboard.h. Sent as hex, which is how that header writes them.

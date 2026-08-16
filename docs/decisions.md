@@ -34,6 +34,9 @@ there when you add an entry, or the index quietly stops being one.
 - [`SYS_WAIT_EVENT` makes clients loop instead of restarting the syscall](#sys_wait_event-makes-clients-loop-instead-of-restarting-the-syscall)
 - [The windowing protocol is one syscall carrying typed messages, not a syscall per operation](#the-windowing-protocol-is-one-syscall-carrying-typed-messages-not-a-syscall-per-operation)
 - [A client window's close button is a handshake, not a seizure](#a-client-windows-close-button-is-a-handshake-not-a-seizure)
+- [One desktop-entry directory with a `ShowIn` key, not a second directory per surface](#one-desktop-entry-directory-with-a-showin-key-not-a-second-directory-per-surface)
+- [Desktop entries reload live off a filesystem generation counter, not a directory poll](#desktop-entries-reload-live-off-a-filesystem-generation-counter-not-a-directory-poll)
+- [`append` zeroed the block it appended into, and `write`/`append` now write LINES](#append-zeroed-the-block-it-appended-into-and-writeappend-now-write-lines)
 - [Claiming the compositor role is a message, and it is the one request that works with no window server](#claiming-the-compositor-role-is-a-message-and-it-is-the-one-request-that-works-with-no-window-server)
 - [Raw input to the compositor is level state, tapped inside the WM loop rather than at the driver](#raw-input-to-the-compositor-is-level-state-tapped-inside-the-wm-loop-rather-than-at-the-driver)
 - [Ring-3 clients draw for themselves, and the font is shared read-only](#ring-3-clients-draw-for-themselves-and-the-font-is-shared-read-only)
@@ -2812,6 +2815,114 @@ cannot reach, since `kernel/include/kernel` is off its include path),
 `apps/wm/wm_client.c` owns presentation (window list, chrome, z-order,
 input routing), and they meet at a registered `struct win_server_ops`
 -- the same registry pattern as `display.h`'s `display_driver`.
+
+## One desktop-entry directory with a `ShowIn` key, not a second directory per surface
+
+`/usr/wm/desktop/` feeds BOTH the desktop icons and the Start menu. Asked
+for a separate `/usr/wm/startmenu/` so an app could appear in one place
+and not the other, the answer is a KEY on the existing entry instead:
+`ShowIn=desktop startmenu`, defaulting to both.
+
+The reason is duplication. Two directories means any app wanted in both
+places has its file copied into both, and the copies drift -- rename the
+app or change its `Exec=` and only one surface updates, silently. That is
+the same failure this repo has already paid for with the `kpath` copies
+that disagreed about `../x` and the three hand-copied scrolling
+implementations whose third copy shipped a dead scrollbar.
+freedesktop.org hit the identical question and answered it with
+`OnlyShowIn`/`NotShowIn` rather than a second directory.
+
+`NoDisplay=1` is kept and still means NEITHER -- a different statement
+("this is not a launchable thing") from `ShowIn` ("it is, but only over
+there").
+
+**The parser deliberately breaks this project's usual rule.** Everywhere
+else here a parser REJECTS rather than guesses; a `ShowIn` naming nothing
+recognisable falls back to showing on both surfaces, with a log line. The
+usual rule assumes the outcomes are "a value" or "an error", and here
+they are not symmetric: hiding an app because its key was misspelled
+makes it vanish with no visible cause, and an unreachable app reads as a
+broken system (the desktop has already shipped that bug once, when icons
+wrapped off the bottom of the screen). Showing it in one place too many,
+loudly, is recoverable.
+
+**The implementation trap, which is where the real bug would have been.**
+The Start menu's rows are POSITIONAL: it draws row i from a list and
+hit-tests by dividing the click's y by the row height. Filtering the draw
+while leaving the hit-test on the unfiltered registry lands every click
+on the wrong app and looks perfectly correct in a screenshot. So both go
+through one accessor pair -- `gui_app_visible_count()` /
+`gui_app_visible_at()` -- which makes the disagreement unrepresentable
+rather than merely avoided. The desktop keeps registry indexing instead
+(its icon positions are persisted by NAME in `/etc/desktop.conf`, so a
+reload must not renumber them) and skips hidden entries in place.
+
+## Desktop entries reload live off a filesystem generation counter, not a directory poll
+
+Dropping a `.desktop` file in now updates the desktop and Start menu
+without a restart, the way KDE and Explorer watch their desktop folders.
+There is no inotify here, so the question was what "watch" means.
+
+The obvious answer -- re-list the directory every few seconds -- was
+rejected on cost: it means a real disk read every few seconds forever on
+a completely idle machine. That is exactly the class of always-on
+background cost this project keeps out.
+
+Instead `fs_generation()` (`api/fs.h`): one counter the VFS bumps on
+every successful mutation. The WM compares it each frame, which is an
+integer compare and no I/O, and re-reads the directory only when it has
+moved. Idle cost is nothing; latency when something does change is one
+frame plus a ~500ms debounce.
+
+Three things about it worth keeping:
+
+- **It is global, not per-path, on purpose.** A watcher wakes for changes
+  it does not care about and pays one small directory read for the false
+  positive. Per-path watches would need a registry, a lifetime and an
+  eviction policy to save a read that only happens when something already
+  changed.
+- **The streamed write path bumps once, at `FS_STEP_DONE`.** A save is
+  one change however many slices it took, and this is the path Notepad
+  saves through -- without it, editing a file in the editor would be
+  invisible to anything watching.
+- **The reload DEFERS while the Start menu is open or an icon is
+  mid-drag.** The selection, the armed click and the drag are all
+  registry indices, and a reload renumbers them. Deferring costs nothing
+  because the generation stays changed, so it fires the moment the
+  interaction ends.
+
+## `append` zeroed the block it appended into, and `write`/`append` now write LINES
+
+Two bugs found by trying to create a `.desktop` file from the shell, one
+of them serious.
+
+**TFS3 destroyed data on every append.** `do_write_inner()`'s
+partial-block path decides whether to read a block before modifying it,
+and asked whether the WRITE OFFSET was at or past end-of-file. An append
+starts exactly at `node->size` by definition, so that test was true every
+single time and the whole block was zeroed -- wiping the bytes already in
+it. `write f AAAA` then `append f BBBB` left four NULs followed by BBBB
+on disk. The right question is whether the BLOCK begins past EOF, not
+where this particular write starts; a partial block is a read-modify-
+write, and the read is skippable only when the block is freshly allocated
+or lies wholly beyond the file.
+
+The regression tests have to use a fixture SMALLER than a block. An
+append that happens to land on a block boundary takes the fresh-block
+path and is correct either way, so a test written with block-aligned data
+passes against the bug -- this repo's recurring "the data never crossed
+the branch" trap, and the reason all three new KTESTs go red against the
+old line while a size-only assertion would not (the file was the right
+length; it was full of NULs).
+
+**And neither `write` nor `append` terminated its line**, so `write f a`
+followed by `append f b` produced `ab`. That made a multi-line file
+impossible to author from the shell at all -- which meant every
+line-based format this system has (`/etc/toyos.conf`, `.desktop` entries)
+could be READ by the shell and never WRITTEN by it. Both commands write
+one terminated line now, and refuse rather than truncate a line that does
+not fit, matching kfmt's rule that a value which does not fit is written
+not at all rather than wrongly.
 
 ## Claiming the compositor role is a message, and it is the one request that works with no window server
 

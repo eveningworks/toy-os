@@ -1190,7 +1190,20 @@ static int do_write_inner(uint64_t ino, struct t3_inode *node, uint64_t offset,
             if (!vol_write_sectors(blk * T3_SPB, (int)(run * T3_SPB), src + total)) return 0;
             total += run * T3_BLOCK;
         } else {
-            if (fresh || file_off >= node->size) k_memset(g_blk, 0, T3_BLOCK);
+            // Can this block hold bytes worth preserving? The question
+            // is about the BLOCK, not about where this write starts.
+            //
+            // Asking `file_off >= node->size` looks equivalent and is
+            // catastrophically not: an APPEND always starts exactly at
+            // node->size, so that test was true every time and zeroed
+            // the whole block -- destroying the bytes already in it.
+            // `write f AAAA` then `append f BBBB` left NUL NUL NUL NUL
+            // BBBB on disk. A partial block is a read-modify-write, and
+            // the read is only skippable when there is provably nothing
+            // under it: the block is freshly allocated, or it begins
+            // past end-of-file (a sparse write landing beyond EOF).
+            uint64_t block_start = (uint64_t)bi * T3_BLOCK;
+            if (fresh || block_start >= node->size) k_memset(g_blk, 0, T3_BLOCK);
             else if (!read_block(blk, g_blk)) return 0;
             k_memcpy(g_blk + within, src + total, chunk);
             if (!write_block(blk, g_blk)) return 0;

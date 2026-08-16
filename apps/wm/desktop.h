@@ -73,4 +73,18 @@ void desktop_handle_click(int mx, int my);
 // top comment).
 void desktop_handle_right_click(int mx, int my);
 
+// Is an icon drag in progress? The entry watcher in wm.c asks before
+// reloading the registry: a drag holds a REGISTRY INDEX, and a reload
+// renumbers entries under it.
+int desktop_drag_active(void);
+
+// The registry has been reloaded -- drop everything derived from it.
+// Icon positions are re-read (they are keyed by NAME on disk, so a
+// user's arrangement survives), and the selection, the click-tracking
+// and the double-click timer are cleared, because all three are
+// registry INDICES and an index into a table that just changed is not a
+// reference to anything. Silently keeping them is how a reload would
+// turn "open Notepad" into "open whatever is now in slot 3".
+void desktop_entries_changed(void);
+
 #endif

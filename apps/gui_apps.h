@@ -255,6 +255,12 @@ struct gui_app {
     // second copy of a program may run is the PROGRAM's decision, the
     // way it is on a real system; a launcher launches.
     const char *exec_path;
+
+    // GUI_SHOW_* bits: which surfaces this entry appears on, from its
+    // ShowIn= key. Always non-zero for a registered entry -- an entry
+    // that appears nowhere is NoDisplay=1 and never reaches the
+    // registry at all.
+    unsigned show_in;
 };
 
 // Caps on the live registry. Fixed tables rather than allocation, the
@@ -270,6 +276,44 @@ struct gui_app {
 // kernel.
 extern struct gui_app gui_app_registry[];
 extern int gui_app_registry_count;
+
+// --- which SURFACE an entry appears on --------------------------------
+//
+// The desktop icons and the Start menu are built from ONE directory
+// (/usr/wm/desktop), and an entry appears on both unless its ShowIn=
+// key says otherwise. A second directory was the obvious alternative and
+// is rejected: an app wanted in both places would need its file
+// duplicated, and the two copies drift -- a renamed app or a changed
+// Exec= silently updates one surface only. freedesktop.org answered the
+// same question with a key (OnlyShowIn/NotShowIn) for the same reason.
+//
+// NoDisplay=1 still means NEITHER, and is not the same statement as
+// ShowIn: "this is not a launchable thing" versus "this is, but only
+// over there".
+#define GUI_SHOW_DESKTOP   0x1
+#define GUI_SHOW_STARTMENU 0x2
+#define GUI_SHOW_ALL       (GUI_SHOW_DESKTOP | GUI_SHOW_STARTMENU)
+
+// How many entries appear on `surface`, and the n'th of them.
+//
+// **Use these for anything positional.** The Start menu's rows are
+// indexed by position, so drawing from a filtered list while hit-testing
+// against the unfiltered registry lands every click on the wrong app --
+// the exact drift this repo's "one geometry helper shared by draw and
+// hit-test" rule exists to stop (see start_menu_geometry()). Routing
+// both through one accessor makes that disagreement unrepresentable.
+//
+// gui_app_visible_at() returns NULL for an out-of-range index rather
+// than clamping, so a stale index is a visible no-op instead of a
+// launch of whatever happens to be last.
+int gui_app_visible_count(unsigned surface);
+struct gui_app *gui_app_visible_at(unsigned surface, int n);
+
+// Does this entry appear on `surface`? For a consumer that must keep
+// registry indexing for its own reasons -- desktop.c's icon positions
+// are registry-indexed and persisted by NAME, so it skips in place
+// rather than re-indexing.
+int gui_app_shows_in(const struct gui_app *app, unsigned surface);
 
 // Scans the desktop-entry directory and fills the registry. Called once
 // as the desktop starts, before anything draws a menu.

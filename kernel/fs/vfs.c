@@ -260,20 +260,36 @@ int fs_format_backend(const char *name) {
     return 1;
 }
 
+// Bumped by every mutation below, on SUCCESS only -- a refused write
+// changed nothing, and waking a watcher for it would make the counter
+// mean "someone tried" rather than "something changed". See
+// fs_generation() in api/fs.h for what reads this and why it is global.
+static uint64_t g_generation;
+
+uint64_t fs_generation(void) { return g_generation; }
+
+// Bump on a truthy result, and pass that result straight through, so a
+// wrapper stays a one-liner and no call site can bump without also
+// returning what the backend said.
+static inline int bumped(int ok) {
+    if (ok) g_generation++;
+    return ok;
+}
+
 int fs_touch(const char *path) {
-    return g_fs->touch(path);
+    return bumped(g_fs->touch(path));
 }
 
 int fs_write(const char *path, const char *data, int append) {
-    return g_fs->write(path, data, append);
+    return bumped(g_fs->write(path, data, append));
 }
 
 int fs_mkdir(const char *path) {
-    return g_fs->mkdir(path);
+    return bumped(g_fs->mkdir(path));
 }
 
 int fs_delete(const char *path) {
-    return g_fs->del(path);
+    return bumped(g_fs->del(path));
 }
 
 const char *fs_read(const char *path, uint32_t *out_size) {
@@ -289,7 +305,7 @@ uint32_t fs_read_range(const char *path, uint64_t offset, void *buf, uint32_t le
 }
 
 int fs_write_range(const char *path, uint64_t offset, const void *buf, uint32_t len) {
-    return g_fs->write_range(path, offset, buf, len);
+    return bumped(g_fs->write_range(path, offset, buf, len));
 }
 
 void *fs_write_range_begin(const char *path, uint64_t offset, const void *buf, uint32_t len) {
@@ -304,7 +320,14 @@ enum fs_step_result fs_write_range_step(void *handle) {
     // the dispatch boundary, not in every backend" spirit as the rest
     // of this file.
     if (!handle) return FS_STEP_FAILED;
-    return (enum fs_step_result)g_fs->write_range_step(handle);
+    enum fs_step_result r = (enum fs_step_result)g_fs->write_range_step(handle);
+    // Bump once, on completion -- not per step. A streamed write is one
+    // change to the filesystem however many slices it took, and bumping
+    // per step would wake a watcher repeatedly through a single save.
+    // This path is the one Notepad saves through, so without it editing
+    // a file in the editor would not be seen by anything watching.
+    if (r == FS_STEP_DONE) g_generation++;
+    return r;
 }
 
 void *fs_read_range_begin(const char *path, uint64_t offset, void *buf, uint32_t len) {
@@ -322,11 +345,11 @@ enum fs_step_result fs_read_range_step(void *handle, uint32_t *out_total) {
 }
 
 int fs_rename(const char *oldpath, const char *newpath) {
-    return g_fs->rename(oldpath, newpath);
+    return bumped(g_fs->rename(oldpath, newpath));
 }
 
 int fs_truncate(const char *path, uint64_t size) {
-    return g_fs->truncate(path, size);
+    return bumped(g_fs->truncate(path, size));
 }
 
 int fs_is_dir(const char *path) {
@@ -357,5 +380,5 @@ int fs_link(const char *existing, const char *newpath) {
     // Optional op -- the caps bit and this NULL check are the same
     // fact, and caps_are_honest() made sure they can't disagree.
     if (!g_fs->link) return 0;
-    return g_fs->link(existing, newpath);
+    return bumped(g_fs->link(existing, newpath));
 }

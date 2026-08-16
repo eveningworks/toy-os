@@ -62,7 +62,7 @@ from gui_debug import DebugConsole
 from qmp_test import QMPSession
 
 DEFAULT_SOCK = ".vm.serial"
-SPAWN_PATH = "/bin/notepad"   # spawned directly -- see spawn()
+SPAWN_PATH = "/bin/wm/apps/notepad"   # spawned directly -- see spawn()
 SPAWN_TIMEOUT_S = 20.0
 ENTER = "0x0d"
 ESC = "0x1b"

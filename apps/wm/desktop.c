@@ -135,9 +135,17 @@ static void desktop_load_positions(void) {
     int per_col = usable_h / DESKTOP_ICON_ROW_H;
     if (per_col < 1) per_col = 1;   // a tiny screen still gets one per column
 
+    // `slot` counts icons actually PLACED, not registry entries, so an
+    // entry hidden by ShowIn= leaves no gap in the default grid.
+    int slot = 0;
     for (int i = 0; i < n; i++) {
-        icon_col[i] = i / per_col;
-        icon_row[i] = i % per_col;
+        if (!gui_app_shows_in(&gui_app_registry[i], GUI_SHOW_DESKTOP)) {
+            icon_col[i] = icon_row[i] = -1; // never drawn, never hit-tested
+            continue;
+        }
+        icon_col[i] = slot / per_col;
+        icon_row[i] = slot % per_col;
+        slot++;
 
         char value[16];
         if (!etc_config_get(DESKTOP_CONF_PATH, gui_app_registry[i].name, value, sizeof(value))) continue;
@@ -172,6 +180,7 @@ void desktop_draw(void) {
     uint32_t icon_selected_bg = gfx_rgb(70, 110, 160);
 
     for (int i = 0; i < gui_app_registry_count; i++) {
+        if (!gui_app_shows_in(&gui_app_registry[i], GUI_SHOW_DESKTOP)) continue;
         int x, y;
         if (drag.active && drag.index == i) {
             x = drag_px;
@@ -238,12 +247,22 @@ void desktop_draw(void) {
     }
 }
 
+int desktop_drag_active(void) { return drag.active; }
+
+void desktop_entries_changed(void) {
+    positions_loaded = 0;   // re-read from DESKTOP_CONF_PATH, keyed by name
+    selected_index = -1;
+    last_click_index = -1;
+    last_click_tick = 0;
+}
+
 // Which icon (if any) is under (mx, my) -- shared by click and
 // right-click handling so they can't disagree about hitboxes.
 static int icon_hit_test(int mx, int my) {
     desktop_load_positions();
     struct icon_grid g = current_grid();
     for (int i = 0; i < gui_app_registry_count; i++) {
+        if (!gui_app_shows_in(&gui_app_registry[i], GUI_SHOW_DESKTOP)) continue;
         int x, y;
         icon_grid_cell_rect(&g, icon_col[i], icon_row[i], &x, &y);
         if (widget_hit(x, y, DESKTOP_ICON_SIZE, DESKTOP_ICON_SIZE + 18, mx, my)) return i;
@@ -394,12 +413,17 @@ void desktop_handle_right_click(int mx, int my) {
     // array is safe the same way g_walk_scratch-style buffers are
     // elsewhere in this codebase.
     static struct context_menu_item items[16];
-    int n = gui_app_registry_count;
-    if (n > 16) n = 16; // sanity cap -- registry is currently 5 entries
+    // The desktop's own menu, so it shows what the desktop shows -- an
+    // entry hidden from this surface by ShowIn= must not be launchable
+    // from here either, or "hidden" would mean "hidden unless you
+    // right-click".
+    int n = gui_app_visible_count(GUI_SHOW_DESKTOP);
+    if (n > 16) n = 16; // sanity cap; the registry holds ~8 entries today
     for (int i = 0; i < n; i++) {
-        items[i].label = gui_app_registry[i].name;
+        struct gui_app *app = gui_app_visible_at(GUI_SHOW_DESKTOP, i);
+        items[i].label = app->name;
         items[i].on_select = launch_from_menu;
-        items[i].ctx = (void *)&gui_app_registry[i];
+        items[i].ctx = (void *)app;
     }
     context_menu_open_at(mx, my, items, n);
 }

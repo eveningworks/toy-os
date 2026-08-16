@@ -280,7 +280,7 @@ def check_focus_caret(dbg, qmp, tmp, res):
             time.sleep(0.2)
 
     # The ring-3 Terminal, spawned directly (see run()'s note).
-    dbg.send("gui spawn /bin/uterm")
+    dbg.send("gui spawn /bin/wm/apps/uterm")
 
     deadline = time.time() + SPAWN_TIMEOUT_S
     term = None

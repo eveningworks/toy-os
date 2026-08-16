@@ -537,3 +537,81 @@ KTEST("fs", "reported size matches the volume, partial last group included") {
         KTEST_ASSERT(total > device / 2);
     }
 }
+
+// --- append must PRESERVE what is already in the block ----------------
+//
+// do_write_inner()'s partial-block path decides whether to read the
+// block before modifying it. It used to ask whether the WRITE OFFSET was
+// at or past end-of-file -- which an append always is, by definition --
+// so every append zeroed its whole block and destroyed the bytes already
+// there. `write f AAAA` then `append f BBBB` left four NULs and BBBB.
+//
+// The fixture has to be SMALLER than a block for this to be reachable at
+// all: an append that happens to land on a block boundary takes the
+// fresh-block path and is correct either way, so a test written with
+// block-aligned data would pass against the bug. That is this repo's
+// recurring "the data never crossed the branch" trap, so both sizes are
+// here and the small one is the load-bearing half.
+
+KTEST("fs", "append preserves the bytes already in the block") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    FRESH("/.ktest_append");
+
+    KTEST_ASSERT(fs_write("/.ktest_append", "AAAA", 0) == 1);
+    KTEST_ASSERT(fs_write("/.ktest_append", "BBBB", 1) == 1);
+
+    uint32_t size = 0;
+    const char *data = fs_read("/.ktest_append", &size);
+    KTEST_ASSERT(data != 0);
+    KTEST_ASSERT_EQ(size, 8);
+    // The whole point: the HEAD survived. A size check alone passes
+    // against the bug -- the file was the right length and full of NULs.
+    KTEST_ASSERT(k_strcmp(data, "AAAABBBB") == 0);
+
+    fs_delete("/.ktest_append");
+}
+
+KTEST("fs", "repeated appends build one continuous file") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    FRESH("/.ktest_append2");
+
+    // Four appends, none block-aligned, so every one of them lands mid
+    // block and takes the read-modify-write path.
+    KTEST_ASSERT(fs_write("/.ktest_append2", "one\n", 0) == 1);
+    KTEST_ASSERT(fs_write("/.ktest_append2", "two\n", 1) == 1);
+    KTEST_ASSERT(fs_write("/.ktest_append2", "three\n", 1) == 1);
+    KTEST_ASSERT(fs_write("/.ktest_append2", "four\n", 1) == 1);
+
+    uint32_t size = 0;
+    const char *data = fs_read("/.ktest_append2", &size);
+    KTEST_ASSERT(data != 0);
+    KTEST_ASSERT_EQ(size, 19);
+    KTEST_ASSERT(k_strcmp(data, "one\ntwo\nthree\nfour\n") == 0);
+
+    fs_delete("/.ktest_append2");
+}
+
+KTEST("fs", "an append that crosses a block boundary keeps both halves") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no disk");
+    FRESH("/.ktest_append3");
+
+    // Straddle the boundary deliberately: the tail of block 0 is a
+    // read-modify-write, the head of block 1 is a fresh block. A bug in
+    // either half shows up as a hole in the middle of the file.
+    static char head[4090];
+    for (int i = 0; i < (int)sizeof(head) - 1; i++) head[i] = 'x';
+    head[sizeof(head) - 1] = '\0';
+
+    KTEST_ASSERT(fs_write("/.ktest_append3", head, 0) == 1);
+    KTEST_ASSERT(fs_write("/.ktest_append3", "TAIL", 1) == 1);
+
+    uint32_t size = 0;
+    const char *data = fs_read("/.ktest_append3", &size);
+    KTEST_ASSERT(data != 0);
+    KTEST_ASSERT_EQ(size, sizeof(head) - 1 + 4);
+    KTEST_ASSERT(data[0] == 'x');
+    KTEST_ASSERT(data[sizeof(head) - 2] == 'x');
+    KTEST_ASSERT(k_strcmp(data + sizeof(head) - 1, "TAIL") == 0);
+
+    fs_delete("/.ktest_append3");
+}

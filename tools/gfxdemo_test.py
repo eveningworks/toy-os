@@ -156,7 +156,7 @@ class Shapes:
         kernel-space Terminal retired in M41's stage 0, and the ring-3
         one has no window yet when the injected keys would arrive.
         """
-        self.dbg.send("gui spawn /bin/shapes")
+        self.dbg.send("gui spawn /bin/wm/demos/shapes")
 
         # The ELF has to be loaded and the window created before any of
         # this is answerable; poll rather than guessing at a sleep.

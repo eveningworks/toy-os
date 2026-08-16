@@ -39,7 +39,7 @@ Paths may be relative to the cwd or absolute.
 | `ls [-al] [dir]` | Coloured by default; `-l` shows type/size/mtime, `-a` is a no-op. A real disk-hosted `/bin/ls` binary, not a builtin — see `decisions.md`. |
 | `cd [dir]`, `pwd`, `mkdir <dir>` | |
 | `cat <f>`, `touch <f>` | |
-| `write <f> <text>`, `append <f> <text>` | |
+| `write <f> <text>`, `append <f> <text>` | Each writes one LINE, terminated — `write` truncates first, `append` adds. Neither used to terminate, which made a multi-line file impossible to author from the shell at all. A line too long to fit is refused, not truncated. |
 | `rm <f>` | Does not recurse — see `decisions.md`. |
 | `stat <f>` | Type, size, inode number, created/modified. |
 | `mv <a> <b>` | Rename or move a file or directory. Never overwrites: remove the destination first, since there is no atomic replace. |

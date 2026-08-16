@@ -20,6 +20,47 @@ or the D-Bus activation none of which exist here.
     Icon       a single character, drawn in the icon tile (no image
                format exists yet; see docs/roadmap.md's Milestone 19)
     NoDisplay  1 to keep it out of the menu and off the desktop
+    ShowIn     which surfaces this appears on (see below)
+
+## ShowIn
+
+One directory feeds BOTH the desktop icons and the Start menu, and an
+entry appears on both unless it says otherwise:
+
+    ShowIn=startmenu            in the menu only, no desktop icon
+    ShowIn=desktop              an icon only, not in the menu
+    ShowIn=desktop startmenu    both -- the default, so you can omit it
+
+Words are separated by spaces or commas. A word that isn't recognised is
+logged and ignored, and an entry whose `ShowIn` names nothing valid
+falls back to appearing on both rather than vanishing: an app that
+disappears with no visible cause is far worse than one shown in a place
+you didn't ask for.
+
+`NoDisplay=1` still means NEITHER, and is a different statement --
+"this isn't a launchable thing" rather than "it is, but only over there".
+
+**Why a key and not a second directory.** A `/usr/wm/startmenu/`
+alongside this one would mean any app wanted in both places had its file
+duplicated, and the two copies drift -- rename the app or change its
+`Exec` and only one surface updates. freedesktop.org answered the same
+question the same way, with `OnlyShowIn`/`NotShowIn`.
+
+## Changes are picked up live
+
+You do not need to restart the desktop. The window manager watches
+`fs_generation()` (a counter the VFS bumps on any filesystem change) and
+re-reads this directory when it moves, so a file dropped in, edited or
+deleted shows up within about half a second.
+
+The idle cost is one integer compare per frame and no disk I/O at all --
+worth knowing before "just poll the directory every few seconds" looks
+like the simpler option. It defers while the Start menu is open or an
+icon is mid-drag, because both hold an index into the entry list that a
+reload renumbers.
+
+Your icon ARRANGEMENT survives a reload: positions live in
+`/etc/desktop.conf` keyed by `Name`, not by position in the list.
 
 ## Exec
 

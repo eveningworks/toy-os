@@ -294,6 +294,25 @@ int fs_has(uint32_t cap);
 // agrees), and the data is freed only when the last name is deleted.
 int fs_link(const char *existing, const char *newpath);
 
+// A counter bumped by every operation that changes what is ON the
+// filesystem -- create, write, mkdir, delete, rename, truncate, link,
+// and a reformat. Never decreases; the VALUE is meaningless, only
+// whether it differs from one you saved earlier.
+//
+// This is the cheap half of "watch a directory" on a kernel with no
+// inotify. A watcher saves the counter, compares it (one integer, no
+// I/O) as often as it likes, and re-reads the directory only when it
+// has moved. The alternative is re-listing the directory on a timer,
+// which means a real disk read every few seconds forever on a
+// completely idle machine -- the thing this exists to avoid.
+//
+// Deliberately GLOBAL rather than per-path: a watcher gets woken by
+// changes it does not care about, and pays one directory read for a
+// false positive. Per-path watches would need a registry, a lifetime
+// and an eviction policy, all to save a read that only happens when
+// something actually changed anyway.
+uint64_t fs_generation(void);
+
 // Reformat the disk with the named backend ("tfs2", "tfs3") and
 // remount by re-running the probe loop. DESTROYS the current
 // filesystem contents -- callers own the confirmation UX (see the

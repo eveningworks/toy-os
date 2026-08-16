@@ -98,6 +98,50 @@ static int cat_rank(const char *c) {
     return 3;
 }
 
+// An entry's ShowIn= key -> GUI_SHOW_* bits. Absent means BOTH, which is
+// what every entry meant before this key existed.
+//
+// Words are separated by spaces or commas: `ShowIn=desktop startmenu`.
+//
+// A key naming nothing recognisable falls back to BOTH and says so,
+// rather than rejecting the way this project's parsers normally do. The
+// usual rule ("a parser rejects rather than guesses") assumes the two
+// outcomes are a value and an error; here the failure directions are
+// asymmetric. Hiding an app because its ShowIn= was misspelled makes it
+// vanish from the desktop with no visible cause, which is the single
+// worst thing this file can do -- an unreachable app looks like a broken
+// system (see wm_reap_launched()'s comment for the last time that
+// happened). Showing it in both places with a log line is recoverable.
+static unsigned parse_show_in(const char *path, const char *file) {
+    char raw[32];
+    if (!etc_config_get(path, "ShowIn", raw, sizeof raw)) return GUI_SHOW_ALL;
+
+    unsigned bits = 0;
+    const char *p = raw;
+    while (*p) {
+        while (*p == ' ' || *p == ',') p++;
+        if (!*p) break;
+
+        const char *word = p;
+        while (*p && *p != ' ' && *p != ',') p++;
+        int len = (int)(p - word);
+
+        if (len == 7 && k_strncmp(word, "desktop", 7) == 0) {
+            bits |= GUI_SHOW_DESKTOP;
+        } else if (len == 9 && k_strncmp(word, "startmenu", 9) == 0) {
+            bits |= GUI_SHOW_STARTMENU;
+        } else {
+            klog_printf("wm: %s has an unknown ShowIn word -- ignored\n", file);
+        }
+    }
+
+    if (!bits) {
+        klog_printf("wm: %s names no valid ShowIn surface -- showing on both\n", file);
+        return GUI_SHOW_ALL;
+    }
+    return bits;
+}
+
 static void load_entry(const char *file) {
     char path[64];
     k_snprintf(path, sizeof path, "%s/%s", DESKTOP_DIR, file);
@@ -123,6 +167,7 @@ static void load_entry(const char *file) {
     a->name = g_names[i];
     a->icon = icon[0];
     a->resizable = 1;
+    a->show_in = parse_show_in(path, file);
 
     if (k_strncmp(g_execs[i], "builtin:", 8) == 0) {
         const char *key = g_execs[i] + 8;
@@ -192,4 +237,33 @@ void gui_apps_load(void) {
         klog_printf("wm: %d desktop entries from " DESKTOP_DIR "\n",
                      gui_app_registry_count);
     }
+}
+
+// --- per-surface views of the registry (see gui_apps.h) ---------------
+//
+// A linear scan per call, which is the right trade at this size: the
+// registry holds a dozen entries, the callers are a menu draw and a hit
+// test, and the alternative -- a cached filtered index array -- is a
+// second copy of the registry that can go stale when gui_apps_load()
+// re-runs. Correct by construction beats fast at eleven items.
+
+int gui_app_shows_in(const struct gui_app *app, unsigned surface) {
+    return app && (app->show_in & surface) != 0;
+}
+
+int gui_app_visible_count(unsigned surface) {
+    int n = 0;
+    for (int i = 0; i < gui_app_registry_count; i++) {
+        if (gui_app_shows_in(&gui_app_registry[i], surface)) n++;
+    }
+    return n;
+}
+
+struct gui_app *gui_app_visible_at(unsigned surface, int n) {
+    if (n < 0) return 0;
+    for (int i = 0; i < gui_app_registry_count; i++) {
+        if (!gui_app_shows_in(&gui_app_registry[i], surface)) continue;
+        if (n-- == 0) return &gui_app_registry[i];
+    }
+    return 0; // out of range: a no-op, never a clamp onto the last entry
 }

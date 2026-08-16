@@ -1562,7 +1562,16 @@ repeated manual steps to be worth automating:
   having already happened -- and prints the `delete` commands to fix it.
   That check found all four ring-3 GUI apps still sitting in `/tests`
   months after they moved to `/bin`, each frozen at the build that put
-  them there.
+  them there. **It fired again in 2026-08-16, and that time the orphans
+  were LOAD-BEARING**: six stale binaries at `/bin/<name>` were what
+  eight GUI test tools had been spawning, long after seeding moved them
+  to `/bin/wm/{system,apps,demos}/`. Deleting the orphans (the remedy
+  the tool prints) turned the suite red instantly. The right repair is
+  to point the tools at the CURRENT path, not to keep the stale copy --
+  but the lesson generalises: **an orphan the tool reports may be
+  something you are still using, so re-run `gui_regress.py` after acting
+  on that warning**, and treat a test that still works after a file
+  moved as evidence it is testing the old copy.
 - **`usertest_run.py`** -- runs the self-checking ring-3 diagnostics in
   `/tests` (`libc_test`, `fpu_test`, `newsyscalls_test`, `file_test`,
   `write_test`, `exit_test`, `random_test`) as one pass/fail table, asserting BOTH an
@@ -1765,6 +1774,13 @@ repeated manual steps to be worth automating:
   both paths run at once. Run it after touching `apps/wm/wm.c`'s loop,
   `win_server.c`'s compositor registration, or the `WIN_EV_RAW_*`
   events. In `gui_regress.py`.
+- **`desktop_entries_test.py`** -- the `.desktop` entry system: the
+  `ShowIn=` key and live reload, 13 checks. Its reusable lesson is in the
+  ShowIn checks: they assert an entry is **LOADED but filtered** (`gui
+  apps` versus `gui menu`), never just "absent from the menu" -- the
+  first version asserted only absence and passed with the filter
+  disabled outright, because `write` truncates and the check was racing
+  the transient invalid file. In `gui_regress.py`.
 - **`gui_regress.py`** -- runs every GUI test tool, each against
   its own freshly-copied disk image and its own VM, and prints one
   pass/fail table (~1.5 minutes, 200 checks across fourteen tools). This is the standard check

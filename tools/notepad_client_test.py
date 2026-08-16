@@ -31,7 +31,7 @@ from gui_debug import DebugConsole          # noqa: E402
 from qmp_test import QMPSession             # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
-SPAWN_PATH = "/bin/notepad"   # spawned directly -- see run()
+SPAWN_PATH = "/bin/wm/apps/notepad"   # spawned directly -- see run()
 SAVE_NAME = "np_test.txt"
 
 MARGIN = 8

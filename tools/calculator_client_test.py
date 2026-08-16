@@ -43,7 +43,7 @@ from qmp_test import QMPSession             # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
 TITLE = "Calculator"
-SPAWN_PATH = "/bin/calculator"   # spawned directly -- see run()
+SPAWN_PATH = "/bin/wm/apps/calculator"   # spawned directly -- see run()
 
 SPAWN_TIMEOUT_S = 15.0
 
