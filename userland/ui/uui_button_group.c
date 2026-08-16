@@ -10,16 +10,40 @@ void uui_button_group_init(struct uui_button_group *g,
     g->activated = 0;
 }
 
+// The EXTENT of the buttons -- the union's own width and height, not
+// the distance from the origin to their far edge.
+//
+// It used to measure from (0,0), which is the same number only while the
+// group happens to sit at the origin. That held for as long as nothing
+// ever moved a group, and stopped holding the moment one took part in a
+// layout: placed at y=284, the group reported a natural HEIGHT of 312,
+// which is its offset plus its size. In a column that inflated the space
+// the layout believed its children needed, so the widget above it (Task
+// Manager's table) grew by 16 px instead of the 300 it was given -- a
+// resize that looked like the table simply ignoring the window.
+//
+// A natural size that depends on where the widget currently IS cannot be
+// right: it is the size the widget wants, asked before anyone knows
+// where it goes.
 void uui_button_group_natural_size(const struct uui_button_group *g,
                                     int *out_w, int *out_h) {
-    int x1 = 0, y1 = 0;
-    for (int i = 0; i < g->count; i++) {
+    if (g->count <= 0) {
+        if (out_w) *out_w = 0;
+        if (out_h) *out_h = 0;
+        return;
+    }
+
+    int x0 = g->buttons[0].x, y0 = g->buttons[0].y;
+    int x1 = x0 + g->buttons[0].w, y1 = y0 + g->buttons[0].h;
+    for (int i = 1; i < g->count; i++) {
         const struct uui_button *b = &g->buttons[i];
+        if (b->x < x0) x0 = b->x;
+        if (b->y < y0) y0 = b->y;
         if (b->x + b->w > x1) x1 = b->x + b->w;
         if (b->y + b->h > y1) y1 = b->y + b->h;
     }
-    if (out_w) *out_w = x1;
-    if (out_h) *out_h = y1;
+    if (out_w) *out_w = x1 - x0;
+    if (out_h) *out_h = y1 - y0;
 }
 
 void uui_button_group_draw(const struct uui_button_group *g,

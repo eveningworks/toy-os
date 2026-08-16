@@ -257,6 +257,17 @@ static void on_widget(struct uapp *a, int id, int reason) {
 }
 
 static int on_tick(struct uapp *a) {
+    // Report the table's rect whenever it CHANGES, not just at open.
+    // A geometry logged once at startup cannot show whether a resize
+    // reflowed, which is exactly the question a resize bug raises.
+    static int last_w, last_h;
+    if (g_table.w != last_w || g_table.h != last_h) {
+        last_w = g_table.w;
+        last_h = g_table.h;
+        logf_("taskmgr: layout table %d %d %d %d\n",
+                g_table.x, g_table.y, g_table.w, g_table.h);
+    }
+
     static int passes;
     if (++passes < REFRESH_PASSES) return 0;
     passes = 0;
