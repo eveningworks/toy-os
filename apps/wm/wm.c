@@ -36,8 +36,40 @@
 #include "kapi.h"
 #include "demo.h"
 
-struct window windows[MAX_WINDOWS];
+struct window *windows = NULL;
 int window_count = 0;
+static int windows_cap = 0;
+
+// Grows the window table by doubling. See wm_internal.h for the two
+// rules the caller owes (index, don't cache a `struct window *`).
+//
+// kmalloc + copy + kfree rather than a realloc: this kernel's heap has
+// no realloc, and at a few hundred bytes per window the copy is
+// irrelevant next to opening a window at all.
+int wm_windows_reserve(int n) {
+    if (n <= windows_cap) return 1;
+
+    int cap = windows_cap ? windows_cap : WM_WINDOWS_INITIAL;
+    while (cap < n) cap *= 2;
+
+    struct window *grown = kmalloc((size_t)cap * sizeof *grown);
+    if (!grown) {
+        // The only way a window can be refused now. Logged rather than
+        // silent: the old fixed-table refusal did nothing at all and
+        // read as a dead Start menu.
+        klog_write("wm: out of memory growing the window table\n");
+        return 0;
+    }
+
+    k_memset(grown, 0, (size_t)cap * sizeof *grown);
+    if (windows) {
+        k_memcpy(grown, windows, (size_t)window_count * sizeof *grown);
+        kfree(windows);
+    }
+    windows = grown;
+    windows_cap = cap;
+    return 1;
+}
 
 int screen_w, screen_h;
 int taskbar_h;
@@ -258,7 +290,11 @@ void open_app(const struct gui_app *app) {
             return;
         }
     }
-    if (window_count >= MAX_WINDOWS) return; // no room -- silently ignore
+    // Grow rather than refuse. This used to be
+    // `if (window_count >= MAX_WINDOWS) return;` -- a SILENT no-op, so
+    // clicking a seventh app in the Start menu did nothing at all with
+    // no message anywhere.
+    if (!wm_windows_reserve(window_count + 1)) return;
 
     struct window *win = &windows[window_count];
     k_memset(win, 0, sizeof(*win));
@@ -331,21 +367,26 @@ void open_app(const struct gui_app *app) {
 //
 // Reaping is also what makes force-quit repeatable rather than a
 // four-shot escape hatch.
-static int g_launched[MAX_WINDOWS];
+// Sized by SCHED_MAX_PROCS, not by the window count. It tracks
+// PROCESSES the desktop launched, so the scheduler's table is its
+// real bound -- the two were the same number by coincidence while
+// windows were capped at 6, and that coincidence broke the moment
+// the window table started growing.
+static int g_launched[SCHED_MAX_PROCS];
 
 // Slot i's pid, or 0 if free. For `gui state`, which is how a test sees
 // that a process the desktop launched is still alive -- the WM reaps
 // this table every iteration, so a non-zero entry means "running as of
 // the last loop pass" without the test needing a second liveness call.
 int wm_launched_pid(int slot) {
-    if (slot < 0 || slot >= MAX_WINDOWS) return 0;
+    if (slot < 0 || slot >= SCHED_MAX_PROCS) return 0;
     return g_launched[slot];
 }
 
-int wm_launched_max(void) { return MAX_WINDOWS; }
+int wm_launched_max(void) { return SCHED_MAX_PROCS; }
 
 void wm_track_launched(int pid) {
-    for (int i = 0; i < MAX_WINDOWS; i++) {
+    for (int i = 0; i < SCHED_MAX_PROCS; i++) {
         if (g_launched[i] == 0) { g_launched[i] = pid; return; }
     }
     // Full: every slot is a pid still running. Dropping the newest is
@@ -355,7 +396,7 @@ void wm_track_launched(int pid) {
 }
 
 static void wm_reap_launched(void) {
-    for (int i = 0; i < MAX_WINDOWS; i++) {
+    for (int i = 0; i < SCHED_MAX_PROCS; i++) {
         if (!g_launched[i]) continue;
         int code = 0;
         if (scheduler_poll(g_launched[i], &code) != SCHED_POLL_RUNNING) {
@@ -626,6 +667,16 @@ void wm_run(void) {
     if (!gfx_init()) {
         vga_write("gui: no linear RGB framebuffer available from GRUB\n");
         klog_write("wm: cannot enter GUI mode -- no linear RGB framebuffer from GRUB\n");
+        return;
+    }
+
+    // Allocate the window table up front so `windows` is never NULL
+    // while the desktop is up. Every loop over it is bounded by
+    // window_count and so is already safe at zero, but a desktop that
+    // cannot hold one window is not a desktop -- fail here, where there
+    // is somewhere to say so, rather than at the first Start-menu click.
+    if (!wm_windows_reserve(WM_WINDOWS_INITIAL)) {
+        vga_write("gui: out of memory for the window table\n");
         return;
     }
 

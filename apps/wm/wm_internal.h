@@ -20,7 +20,17 @@
 // needs; if you're adding a new *app* (a window's contents), you want
 // wm.h instead -- see apps/README.md.
 
-#define MAX_WINDOWS 6
+// How many window slots exist at startup. NOT a limit: the table grows
+// on demand (wm_windows_reserve()), so the only ceiling on open windows
+// is memory, the way it is on a real desktop -- Windows bounds windows
+// by per-process USER handle quotas in the thousands, and X11 by a
+// 29-bit resource id. This used to be a hard `#define MAX_WINDOWS 6`,
+// and the seventh window was refused: politely for a ring-3 client
+// (a create request that fails, which the protocol allows) and SILENTLY
+// for anything opened from the Start menu, which simply did nothing.
+//
+// Sized so the common case never reallocates at all.
+#define WM_WINDOWS_INITIAL 8
 
 // Taskbar/title-bar button sizing -- derived from the current font
 // (gfx_char_w/h) rather than fixed pixel constants; see the CHANGELOG
@@ -44,8 +54,27 @@ int btn_size(void);
 // comment above for why this is deliberately not hidden behind
 // accessor functions: it's one event loop's state, not a boundary
 // between independently-reasoned-about components.
-extern struct window windows[MAX_WINDOWS];
+// A grown-on-demand block, not a fixed array -- but still indexed as
+// `windows[i]`, which is why every one of its ~230 use sites is
+// unchanged. Two rules follow from it MOVING when it grows:
+//
+//   - **Never hold a `struct window *` across a call that can open a
+//     window.** This was already the rule for a different reason (a
+//     window's index changes when the z-order does -- see
+//     docs/decisions.md's "struct window * isn't a stable per-window
+//     identity"); growth makes the pointer itself stale rather than
+//     merely pointing at the wrong window.
+//   - Index, don't cache. `windows[i]` is always current.
+extern struct window *windows;
 extern int window_count;
+
+// Makes room for at least `n` windows, growing the table if needed.
+// Returns 0 only if the allocation failed, which is the ONLY reason a
+// window can now be refused.
+//
+// Call it before appending; `windows` may be a different pointer
+// afterwards.
+int wm_windows_reserve(int n);
 
 extern int screen_w, screen_h;
 extern int taskbar_h;

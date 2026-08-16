@@ -35,7 +35,11 @@ static int find_client_window(int pid, uint32_t id) {
 
 static int on_window_created(int pid, uint32_t id, uint32_t *buf,
                               int w, int h, int x, int y) {
-    if (window_count >= MAX_WINDOWS) return 0; // no room -- the create fails
+    // Grow the table instead of refusing at a fixed count. A refusal is
+    // still a legal protocol outcome (the client sees the create fail),
+    // but now it means the kernel is out of memory rather than that the
+    // desktop already has six windows.
+    if (!wm_windows_reserve(window_count + 1)) return 0;
 
     // Same "the window losing focus must repaint its title bar" damage
     // open_app() does, and for the same reason -- a new window steals

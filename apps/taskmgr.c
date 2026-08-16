@@ -18,7 +18,13 @@
 #define TM_MARGIN 8
 #define TM_LINE_GAP 6
 #define TM_COLS 40                // widest line's character budget
-#define TM_MAX_WINDOW_ROWS 6      // matches apps/wm/wm_internal.h's MAX_WINDOWS
+// How many window rows the panel has room for. This used to say it
+// "matches MAX_WINDOWS" -- there is no such limit any more (the window
+// table grows on demand), so this is now a DISPLAY budget: the window
+// sizes itself for this many rows and taskmgr_draw() shows a
+// "+N more" line rather than silently omitting the rest, which is what
+// a cap that quietly matched a different constant used to do.
+#define TM_MAX_WINDOW_ROWS 12
 #define TM_HEADER_ROWS 2          // "Windows:" + a blank separator before the memory panel
 #define TM_MEMORY_ROWS 5          // section title + 4 stat lines (see taskmgr_draw)
 
@@ -95,8 +101,14 @@ void taskmgr_draw(struct window *win) {
     gfx_draw_string(x, y + (row++) * line_h, "Windows:  [r0] kernel-space  [r3] ring-3 process", fg, bg);
 
     int count = wm_window_count();
-    for (int i = 0; i < TM_MAX_WINDOW_ROWS; i++) {
-        if (i >= count) break;
+
+    // With the window table unbounded, there can be more windows than
+    // rows. Keep the last row for a "+N more" line rather than stopping
+    // silently -- a panel that shows twelve of twenty windows and says
+    // nothing is telling the user there are twelve.
+    int shown = (count > TM_MAX_WINDOW_ROWS) ? TM_MAX_WINDOW_ROWS - 1 : count;
+
+    for (int i = 0; i < shown; i++) {
         const struct window *w = wm_get_window(i);
         if (!w) break;
 
@@ -140,10 +152,12 @@ void taskmgr_draw(struct window *win) {
     }
     if (count == 0) {
         gfx_draw_string(x, y + (row++) * line_h, "  (none)", fg, bg);
-        row = TM_HEADER_ROWS - 1 + TM_MAX_WINDOW_ROWS; // keep the memory panel's y fixed either way
-    } else {
-        row = TM_HEADER_ROWS - 1 + TM_MAX_WINDOW_ROWS;
+    } else if (count > shown) {
+        char more[32];
+        k_snprintf(more, sizeof more, "  +%d more", count - shown);
+        gfx_draw_string(x, y + (row++) * line_h, more, fg, bg);
     }
+    row = TM_HEADER_ROWS - 1 + TM_MAX_WINDOW_ROWS; // keep the memory panel's y fixed either way
 
     row++; // blank separator line
 
