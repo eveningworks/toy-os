@@ -253,3 +253,67 @@ KTEST("winshare", "clearing the compositor drops its mappings") {
 
     fixture_down(&f);
 }
+
+// --- the way IN to all of the above (M41 stage 2) ---------------------
+//
+// Everything above calls win_server_set_compositor() directly, which
+// nothing outside this file could do: the registration existed with no
+// syscall and no message reaching it. These cover the message that fills
+// that gap, and the two rules around it.
+//
+// They deliberately do NOT go through the syscall: what is interesting
+// here is win_server_request()'s own handling, and driving it directly
+// keeps the test free of a user address space it does not need.
+
+KTEST("winshare", "WIN_REQ_SET_COMPOSITOR claims and releases the role") {
+    struct win_request_msg req = {0};
+
+    req.type = WIN_REQ_SET_COMPOSITOR;
+    req.a = 1;
+    KTEST_ASSERT_EQ(win_server_request(COMP_PID, &req), 1);
+    KTEST_ASSERT_EQ(win_server_compositor_pid(), COMP_PID);
+
+    req.a = 0;
+    KTEST_ASSERT_EQ(win_server_request(COMP_PID, &req), 1);
+    KTEST_ASSERT_EQ(win_server_compositor_pid(), 0);
+}
+
+KTEST("winshare", "only the holder may release the compositor role") {
+    struct win_request_msg req = {0};
+    req.type = WIN_REQ_SET_COMPOSITOR;
+
+    req.a = 1;
+    KTEST_ASSERT_EQ(win_server_request(COMP_PID, &req), 1);
+
+    // Without this check any process could evict the compositor, taking
+    // the raw input stream and every buffer mapping down with it -- a
+    // denial of service that needs no privilege at all.
+    req.a = 0;
+    KTEST_ASSERT_EQ(win_server_request(COMP_PID + 1, &req), 0);
+    KTEST_ASSERT_EQ(win_server_compositor_pid(), COMP_PID);
+
+    KTEST_ASSERT_EQ(win_server_request(COMP_PID, &req), 1);
+    KTEST_ASSERT_EQ(win_server_compositor_pid(), 0);
+}
+
+KTEST("winshare", "claiming needs no registered presentation layer") {
+    // THE stage-4 property: the ring-3 WM is itself the compositor, so
+    // there is no kernel-side presentation layer for it to wait on. Every
+    // other request is refused outright when none is registered; this one
+    // must not be. Skipped when the desktop is up, since the condition
+    // under test is then not present -- `make test` runs before GUI mode,
+    // which is when this actually means something.
+    if (win_server_active()) KTEST_SKIP("desktop is up -- no !g_ops regime to test");
+
+    struct win_request_msg req = {0};
+    req.type = WIN_REQ_PRESENT;
+    KTEST_ASSERT_EQ(win_server_request(COMP_PID, &req), -1); // the control
+
+    req.type = WIN_REQ_SET_COMPOSITOR;
+    req.a = 1;
+    KTEST_ASSERT_EQ(win_server_request(COMP_PID, &req), 1);
+    KTEST_ASSERT_EQ(win_server_compositor_pid(), COMP_PID);
+
+    req.a = 0;
+    KTEST_ASSERT_EQ(win_server_request(COMP_PID, &req), 1);
+}

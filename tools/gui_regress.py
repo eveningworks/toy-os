@@ -103,6 +103,7 @@ TOOLS = [
     ("dialog", "dialog_test.py", "the confirm dialog, by pixel value"),
     ("sched", "sched_gui_test.py", "the desktop stays live while a process runs"),
     ("blank", "blank_window_test.py", "no app opens a blank window"),
+    ("compositor", "compositor_test.py", "raw input to a ring-3 compositor"),
 ]
 
 # Roughly how long each tool takes, in seconds, used ONLY to decide what
@@ -125,6 +126,7 @@ COST_S = {
     "uapp": 21,
     "scrollbar": 21,
     "uidemo": 20,
+    "compositor": 19,
     "uterm": 18,
     "blank": 17,
     "calculator": 15,

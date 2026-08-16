@@ -1073,6 +1073,7 @@ gui state [--json]       overlays, cursor, armed drag/resize/press, damage rect
 gui damage [verify on|off]  the damage rect; verify catches missed damage
 gui open <App>           open a window directly -- no Start-menu clicking
 gui dialog [--json]      the open confirm dialog's message and button CENTRES
+gui compositor [--json]  the registered compositor pid, queue depth, drops
 gui spawn PATH [args]    run a ring-3 binary directly -- no Terminal in the loop
 gui click X Y | gui rclick X Y | gui drag X1 Y1 X2 Y2 | gui key <c> [alt|ctrl|shift]
 ```
@@ -1755,6 +1756,15 @@ repeated manual steps to be worth automating:
   where every PATH lookup in the tour failed, because "it booted,
   reached the desktop and opened windows" is satisfied by a tour whose
   every command failed. See `docs/decisions.md`.
+- **`compositor_test.py`** -- M41 stage 2's raw input path to a
+  registered ring-3 compositor (`userland/tests/compclient.c`), 16
+  checks. Its design point: every injected input is asserted TWICE, once
+  in the compositor's log and once in UI Demo's, because "the compositor
+  received the click" is equally satisfied by an implementation that
+  stole the input stream outright -- and stage 2's whole shape is that
+  both paths run at once. Run it after touching `apps/wm/wm.c`'s loop,
+  `win_server.c`'s compositor registration, or the `WIN_EV_RAW_*`
+  events. In `gui_regress.py`.
 - **`gui_regress.py`** -- runs every GUI test tool, each against
   its own freshly-copied disk image and its own VM, and prints one
   pass/fail table (~1.5 minutes, 200 checks across fourteen tools). This is the standard check

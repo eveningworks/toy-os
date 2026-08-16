@@ -34,6 +34,8 @@ there when you add an entry, or the index quietly stops being one.
 - [`SYS_WAIT_EVENT` makes clients loop instead of restarting the syscall](#sys_wait_event-makes-clients-loop-instead-of-restarting-the-syscall)
 - [The windowing protocol is one syscall carrying typed messages, not a syscall per operation](#the-windowing-protocol-is-one-syscall-carrying-typed-messages-not-a-syscall-per-operation)
 - [A client window's close button is a handshake, not a seizure](#a-client-windows-close-button-is-a-handshake-not-a-seizure)
+- [Claiming the compositor role is a message, and it is the one request that works with no window server](#claiming-the-compositor-role-is-a-message-and-it-is-the-one-request-that-works-with-no-window-server)
+- [Raw input to the compositor is level state, tapped inside the WM loop rather than at the driver](#raw-input-to-the-compositor-is-level-state-tapped-inside-the-wm-loop-rather-than-at-the-driver)
 - [Ring-3 clients draw for themselves, and the font is shared read-only](#ring-3-clients-draw-for-themselves-and-the-font-is-shared-read-only)
 - [Calculator's engine is shared source compiled twice, not copied](#calculators-engine-is-shared-source-compiled-twice-not-copied)
 - [Ring 3 gets the C names; the kernel keeps `k_`](#ring-3-gets-the-c-names-the-kernel-keeps-k_)
@@ -2810,6 +2812,100 @@ cannot reach, since `kernel/include/kernel` is off its include path),
 `apps/wm/wm_client.c` owns presentation (window list, chrome, z-order,
 input routing), and they meet at a registered `struct win_server_ops`
 -- the same registry pattern as `display.h`'s `display_driver`.
+
+## Claiming the compositor role is a message, and it is the one request that works with no window server
+
+Milestone 41's stage 1 landed the compositor registration --
+`win_server_set_compositor()`, the access-control idiom every mapping
+call copies, and revocation of every mapping when the holder changes --
+and nothing outside a KTEST could reach any of it. There was no syscall
+and no `WIN_REQ_*` that got there. Stage 2's first job was filling that
+gap, and the fork was whether to fill it with a message
+(`WIN_REQ_SET_COMPOSITOR = 9`) or a syscall (`SYS_*  = 30`).
+
+The message, for the reason the whole protocol exists: TWP's bet is that
+an operation is a typed message on one transport, so moving the server
+to ring 3 is a transport swap rather than a rewrite of every call site.
+A syscall for the one operation a ring-3 window server needs most would
+have been the exact shape the protocol was designed to avoid.
+
+The argument against it was real, though, and worth recording because it
+looked fatal at first: every other request is refused outright when no
+presentation layer is registered, in TWO places -- `syscall.c`'s
+`win_server_active()` gate and `win_server_request()`'s own `!g_ops`
+guard. A compositor could therefore never register before the WM did.
+That is harmless in stages 2 and 3, where the ring-0 WM is always
+registered, and fatal in stage 4, where the ring-3 WM *is* the
+compositor and there is no kernel-side presentation layer left to
+register first. The registration would have become unreachable at
+precisely the point of the milestone.
+
+The fix is small and is the reason the objection did not decide
+anything: handle `SET_COMPOSITOR` ABOVE the `!g_ops` guard, and make the
+syscall's gate typed (copy the request in first, then apply the gate to
+every type except this one). Six lines, and the exception is documented
+at all three sites because it is the kind of thing a later edit
+re-tightens without noticing.
+
+Two rules came with it. Claiming REPLACES the previous holder -- last
+claimant wins, the same non-arbitration `display_register()` already
+uses -- and revokes every mapping the old one held. But RELEASING is
+only the holder's to do: without that check any process could evict the
+compositor and take the raw input stream and every buffer mapping down
+with it, a denial of service needing no privilege at all. Both are
+KTESTs in `kernel/proc/win_server_test.c`'s `winshare` suite, and the
+third one there asserts the no-presentation-layer case directly, with
+`WIN_REQ_PRESENT` returning -1 in the same breath as its control.
+
+## Raw input to the compositor is level state, tapped inside the WM loop rather than at the driver
+
+Stage 2 delivers the input stream a compositor needs -- the one
+`wm_input.c` consumes, before focus and hit-testing. Two things about
+how were decided rather than defaulted.
+
+**It is LEVEL STATE, not synthesised edges.** There is no unified input
+event anywhere in this kernel to reuse. `mouse_get_state()` returns an
+absolute clamped position plus a button bitmask, and today's WM derives
+presses and releases by diffing against its own previous sample; the
+wheel is a read-and-reset accumulator; only the keyboard is a real
+queue. The only event struct in the tree, `struct win_event`, is
+*post*-routing and per-client. So the choice was to synthesise edges in
+the kernel or hand the compositor the same level state and let it diff.
+The second, because it is what the WM already does -- one differ instead
+of two, and an event that stays honest about what the hardware actually
+reports. `WIN_EV_RAW_MOUSE` carries screen coordinates and the button
+bitmask; `WIN_EV_RAW_KEY` and `WIN_EV_RAW_WHEEL` are separate types
+because the keyboard and the wheel are separate mechanisms, not fields
+of the pointer's state.
+
+**The tap goes inside `wm.c`'s loop, not at the driver.** This is the
+finding that would have cost a session otherwise. `gui click` and
+`gui key` inject through `wm_debug.c` and are applied AFTER the real
+driver read -- the mouse is overridden for one iteration, and an
+injected key is used only when the real keyboard returned -1 so a human
+is never pre-empted. A tap on `mouse_get_state()` would therefore be
+invisible to every synthetic event, i.e. invisible to all 13 GUI test
+tools, which are the only proof any of this works. Tapping after the
+override is what makes stage 2 testable at all.
+
+**And it is gated on CHANGE.** The WM loop runs on every timer tick and
+the event queue is 32 deep dropping the oldest, so pushing level state
+unconditionally floods it while the user sits still. The positive
+control for this is worth repeating rather than re-deriving: removing
+the gate reddens exactly one check in `tools/compositor_test.py` ("idle
+produces no mouse events", 12 lines in one idle second against 0). The
+neighbouring `dropped == 0` check stayed GREEN under that control,
+because a client blocked in `sys_wait_event()` drains 12 events/second
+without effort -- so that check catches a compositor falling BEHIND, not
+a flood, and should not be read as covering this.
+
+Both paths run at once, which is the stage's whole shape: stage 4
+deletes the WM's own routing and keeps this, so the flip is a deletion
+rather than a cutover. `compositor_test.py` asserts every injected input
+TWICE -- once in the compositor's log and once in UI Demo's -- because
+"the compositor received the click" is equally satisfied by an
+implementation that stole the stream outright, which would be a
+regression wearing a feature's clothes.
 
 ## A client window's close button is a handshake, not a seizure
 

@@ -7,6 +7,8 @@
 #include "file_picker.h"
 #include "gui_apps.h"
 #include "kapi.h"
+#include "win_server.h"
+#include "win_events.h"
 
 // ---------------------------------------------------------------------
 // Synthetic input queue
@@ -674,6 +676,34 @@ static int cmd_wheel(const char *s) {
     return 1;
 }
 
+// Is there a second consumer of the input stream, and is it keeping up?
+//
+// No other `gui` subcommand can see one: everything else reports the
+// WM's own state, and a registered compositor is by definition another
+// process. Without this, "the compositor received the click" could only
+// be asserted from the client's own log -- which cannot distinguish
+// "delivered and handled" from "never delivered" when the client is the
+// thing under test.
+//
+// `dropped` is the load-bearing number. The queue is 32 deep and drops
+// the OLDEST, so a compositor falling behind loses input silently; that
+// is exactly the failure this has to be able to name.
+static void cmd_compositor(int json) {
+    int pid = win_server_compositor_pid();
+    int pending = pid ? win_events_pending(pid) : 0;
+    int dropped = pid ? win_events_dropped(pid) : 0;
+
+    if (json) {
+        klog_printf("{\"pid\":%d,\"pending\":%d,\"dropped\":%d}\r\n",
+                    pid, pending, dropped);
+    } else if (!pid) {
+        klog_write("compositor: none registered\r\n");
+    } else {
+        klog_printf("compositor: pid %d  pending %d  dropped %d\r\n",
+                    pid, pending, dropped);
+    }
+}
+
 static void usage(void) {
     klog_write("gui subcommands (all of these work while the desktop is up):\r\n");
     klog_write("  windows [--json]      open windows: rects, content rects, z-order, focus\r\n");
@@ -685,6 +715,8 @@ static void usage(void) {
     klog_write("  spawn PATH            run a ring-3 binary directly -- no Terminal needed\r\n");
     klog_write("  taskbar [--json]      start button + per-window button rects\r\n");
     klog_write("  state [--json]        overlays, cursor, armed state, damage rect\r\n");
+    klog_write("  compositor [--json]   the registered compositor pid, its queue depth\r\n");
+    klog_write("                        and how much input it has dropped\r\n");
     klog_write("  damage [verify on|off]  the damage rect; verify renders every frame\r\n");
     klog_write("                        twice and reports pixels the damage rect missed\r\n");
     klog_write("  apps                  the gui_app registry\r\n");
@@ -713,6 +745,7 @@ int wm_debug_dispatch(char *line) {
     if (k_strcmp(sub, "dialog") == 0)       { cmd_dialog(wants_json(p)); return 1; }
     if (k_strcmp(sub, "taskbar") == 0)      { cmd_taskbar(wants_json(p)); return 1; }
     if (k_strcmp(sub, "state") == 0)        { cmd_state(wants_json(p)); return 1; }
+    if (k_strcmp(sub, "compositor") == 0)   { cmd_compositor(wants_json(p)); return 1; }
 
     if (k_strcmp(sub, "damage") == 0) {
         char *arg = next_tok(&p);

@@ -358,7 +358,23 @@ static int resize_window(struct client_window *cw, int w, int h) {
 }
 
 int win_server_request(int pid, struct win_request_msg *req) {
-    if (!g_ops || !req) return -1;
+    if (!req) return -1;
+
+    // Deliberately ABOVE the !g_ops guard: claiming the compositor role
+    // must not require a registered presentation layer, because in
+    // stage 4 the ring-3 WM is both and there is no kernel-side one left
+    // to register first. Gating it here would make it unreachable at
+    // exactly the point of the milestone. See WIN_REQ_SET_COMPOSITOR.
+    if (req->type == WIN_REQ_SET_COMPOSITOR) {
+        if (req->a) return win_server_set_compositor(pid, vmm_current_pml4());
+        // Releasing is only yours to do. Without this any process could
+        // evict the compositor and silently take the input stream and
+        // every buffer mapping down with it.
+        if (pid != g_comp_pid) return 0;
+        return win_server_set_compositor(0, 0);
+    }
+
+    if (!g_ops) return -1;
 
     switch (req->type) {
     case WIN_REQ_CREATE: {

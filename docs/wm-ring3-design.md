@@ -265,7 +265,47 @@ the other five stay green because destroy, resize and unregister each
 have their own path. Nothing outside the kernel uses any of this yet,
 which is the stage's own definition.
 
-### Stage 2 -- input to a compositor process
+### Stage 2 -- input to a compositor process -- **BUILT, 2026-08-16**
+
+Landed as designed. What exists now, and the two decisions the survey
+below left open, both settled in `docs/decisions.md`:
+
+- **`WIN_REQ_SET_COMPOSITOR = 9`**, not a new syscall. The objection
+  recorded below (every request is refused with no presentation layer
+  registered, so a compositor could not register before the WM) turned
+  out to cost six lines rather than a redesign: the case is handled
+  ABOVE `win_server_request()`'s `!g_ops` guard, and `syscall.c`'s gate
+  is applied after the copy-in so it can exempt this one type. Claiming
+  replaces the previous holder; only the holder may release.
+- **`WIN_EV_RAW_MOUSE` / `_KEY` / `_WHEEL` (10/11/12)**, carrying LEVEL
+  STATE with screen coordinates -- the same thing the WM diffs today,
+  so there is one differ rather than two. Pushed onto the compositor
+  pid's existing `win_events` queue; no new transport, as predicted.
+  Gated on CHANGE, or the tick-rate loop overflows a 32-deep queue while
+  the user sits still.
+- **The tap is inside `wm.c`'s loop, after the `wm_debug` overrides** --
+  the survey's key finding, and it held.
+- **`gui compositor [--json]`** in `wm_debug.c`: pid, queue depth,
+  drops. The only view of a second consumer, since every other `gui`
+  subcommand reports the WM's own state.
+- **`userland/tests/compclient.c`** registers, logs the raw stream to
+  stderr and quits on `q`. It owns NO window on purpose -- a window
+  would drag focus, hit-testing and z-order into a test about none of
+  those.
+- **`tools/compositor_test.py`**, 16 checks, in `gui_regress.py`. Every
+  injected input is asserted twice: in the compositor's log AND in UI
+  Demo's, because "the compositor got the click" is also satisfied by an
+  implementation that stole the stream. Two positive controls are
+  recorded in `docs/decisions.md`; the reusable part is that removing
+  the change-gate reddens exactly one check and leaves the neighbouring
+  `dropped == 0` green, so that check is not covering what it looks like
+  it covers.
+
+Both input paths are live, as planned -- `gui_regress.py` passes
+unchanged (15 tools), which is the evidence that the second consumer
+changed nothing.
+
+### Stage 2 -- input to a compositor process (original survey)
 
 - A syscall delivering raw keyboard and mouse events to the registered
   compositor: the stream `wm_input.c` consumes today, before focus and

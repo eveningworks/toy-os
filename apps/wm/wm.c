@@ -25,6 +25,8 @@
 // tracking of the scene: see wm_render_cursor_move() in wm_render.c.
 #include "wm_internal.h"
 #include "wm_debug.h"
+#include "win_server.h"
+#include "win_events.h"
 #include "start_menu.h"
 #include "context_menu.h"
 #include "confirm_dialog.h"
@@ -519,6 +521,36 @@ void close_window(int idx) {
     if (pending_proc_win > idx) pending_proc_win--;
 }
 
+// ---- raw input to a registered compositor (M41 stage 2) ----
+//
+// A SECOND consumer of the same input stream this loop reads, running
+// alongside the real routing rather than replacing it. Stage 4 deletes
+// the routing below and leaves this; until then both are live, which is
+// what makes the eventual flip a deletion instead of a cutover.
+//
+// **The tap has to be here, not at the driver.** `gui click` and
+// `gui key` inject through wm_debug.c and are applied AFTER the real
+// driver read (see the two override blocks in the loop). Tapping
+// mouse_get_state() directly would make every synthetic event invisible
+// to the compositor -- i.e. invisible to the 13 GUI test tools, which
+// are the only proof any of this works.
+//
+// A no-op with no compositor registered, which is every ordinary boot.
+static void compositor_raw(uint32_t type, int32_t a, int32_t b, uint32_t mods) {
+    int pid = win_server_compositor_pid();
+    if (!pid) return;
+
+    struct win_event ev = {
+        .type = type,
+        .window = 0, // meaningless for raw input -- no window chosen yet
+        .a = a,
+        .b = b,
+        .mods = mods,
+        .reserved = 0,
+    };
+    win_events_push(pid, &ev);
+}
+
 // ---- main loop ----
 
 void wm_run(void) {
@@ -633,6 +665,14 @@ void wm_run(void) {
             }
         }
         int mouse_moved = (mx != prev_mx || my != prev_my);
+
+        // Only on a CHANGE. This loop runs on every timer tick, so an
+        // unconditional push would overflow a 32-deep queue in a
+        // fraction of a second and report constant drops while the user
+        // sat still. See WIN_EV_RAW_MOUSE.
+        if (mouse_moved || buttons != prev_buttons) {
+            compositor_raw(WIN_EV_RAW_MOUSE, mx, my, buttons);
+        }
 
         int left_edge_down = (buttons & 0x1) && !(prev_buttons & 0x1);
         if (left_edge_down) wm_handle_left_click(mx, my);
@@ -843,6 +883,12 @@ void wm_run(void) {
         if (wheel == 0) wheel = wm_debug_next_wheel(); // `gui wheel`, same
                                                         // second-place rule as
                                                         // the injected key above
+
+        // Both taps sit after their injected-input fallbacks above, so a
+        // `gui key` / `gui wheel` reaches the compositor exactly as a
+        // real one does.
+        if (key != -1) compositor_raw(WIN_EV_RAW_KEY, key, 0, key_mods);
+        if (wheel != 0) compositor_raw(WIN_EV_RAW_WHEEL, wheel, 0, 0);
 
         if (key != -1 || wheel != 0) {
             // A modal file picker (e.g. Notepad's Save As...) captures

@@ -1052,13 +1052,6 @@ void syscall_dispatch(uint64_t *regs) {
         } else if (pid == 0) {
             klog_write("syscall: win_request() rejected -- caller isn't a scheduled process\n");
             regs[14] = (uint64_t)-1;
-        } else if (!win_server_active()) {
-            // No desktop running. Refused rather than silently
-            // succeeding, so a client started outside GUI mode finds
-            // out immediately instead of drawing into a buffer nothing
-            // will ever composite.
-            klog_write("syscall: win_request() rejected -- no window server registered\n");
-            regs[14] = (uint64_t)-1;
         } else {
             // Copy in, act, copy back: the request is handled against a
             // KERNEL copy, never against the user page directly. The
@@ -1066,14 +1059,33 @@ void syscall_dispatch(uint64_t *regs) {
             // field after it was validated but before it was used --
             // and `window` in particular is used to index the server's
             // own tables.
+            //
+            // The copy happens BEFORE the "is there a window server"
+            // gate below, because that gate now has a typed exception
+            // and the type is only knowable from the copy.
             struct win_request_msg req;
             vmm_copy_from_user(pml4, &req, rdi, sizeof req); // range validated above
-            int rc = win_server_request(pid, &req);
 
-            // Only copy back a request the server actually looked at --
-            // a malformed one leaves the client's buffer as it was sent.
-            if (rc >= 0) vmm_copy_to_user(pml4, rdi, &req, sizeof req);
-            regs[14] = (uint64_t)(int64_t)rc;
+            if (!win_server_active() && req.type != WIN_REQ_SET_COMPOSITOR) {
+                // No desktop running. Refused rather than silently
+                // succeeding, so a client started outside GUI mode finds
+                // out immediately instead of drawing into a buffer nothing
+                // will ever composite.
+                //
+                // SET_COMPOSITOR is exempt: claiming the role is what a
+                // ring-3 window server does BEFORE there is a
+                // presentation layer, and in stage 4 there is never a
+                // kernel-side one. See abi/win_proto.h.
+                klog_write("syscall: win_request() rejected -- no window server registered\n");
+                regs[14] = (uint64_t)-1;
+            } else {
+                int rc = win_server_request(pid, &req);
+
+                // Only copy back a request the server actually looked at
+                // -- a malformed one leaves the client's buffer as sent.
+                if (rc >= 0) vmm_copy_to_user(pml4, rdi, &req, sizeof req);
+                regs[14] = (uint64_t)(int64_t)rc;
+            }
         }
     } else if (rax == SYS_POLL_EVENT || rax == SYS_WAIT_EVENT) {
         // Both share everything except what happens when the queue is

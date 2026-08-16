@@ -73,6 +73,40 @@
                             // wedged in its OWN callback therefore
                             // fails to answer, which is correct -- it
                             // really is not responding.
+// --- raw input, for the registered compositor only --------------------
+//
+// Everything above is POST-routing: the server has already decided which
+// window an event belongs to and made the coordinates window-relative. A
+// compositor is the thing that makes that decision, so it needs the
+// stream from BEFORE it -- screen coordinates, no focus, no hit-testing.
+//
+// These go only to the pid registered with WIN_REQ_SET_COMPOSITOR, and
+// `window` is meaningless on all three (there is no window yet; that is
+// the point).
+//
+// **The mouse is LEVEL STATE, not edges.** The kernel does not
+// synthesise press/release events, because it does not have any: the
+// PS/2 driver exposes an absolute clamped position plus a button
+// bitmask, and today's WM derives edges by diffing against its own
+// previous sample. Handing the compositor the same level state it would
+// have read itself keeps one differ instead of two, and keeps this
+// event honest about what the hardware actually reports. A compositor
+// diffs it exactly as wm.c does.
+//
+// Sent only when something CHANGED (position or buttons). The WM loop
+// runs on every timer tick, so an unconditional push would overflow a
+// 32-deep queue within a fraction of a second and report constant drops
+// while the user did nothing at all.
+#define WIN_EV_RAW_MOUSE 10 // a, b: SCREEN position; mods: button bits
+                            // (bit0 = left, bit1 = right), level state.
+#define WIN_EV_RAW_KEY   11 // a: key code (api/keyboard.h), mods:
+                            // KEY_MOD_*. Pre-focus: no window has been
+                            // chosen yet.
+#define WIN_EV_RAW_WHEEL 12 // a: notches, + = up/away, - = down/toward.
+                            // Separate from RAW_MOUSE because the
+                            // driver's wheel is a read-and-reset
+                            // accumulator, not part of the level state.
+
 #define WIN_EV_FOCUS      7 // a: 1 = this window gained keyboard focus,
                             // 0 = lost it.
                             //
@@ -146,6 +180,40 @@ struct win_event {
                            // unchanged. The answer to a liveness check;
                            // see that event. Sent by the toolkit, not
                            // by application code.
+#define WIN_REQ_SET_COMPOSITOR 9 // a: 1 = claim the compositor role,
+                           // 0 = release it. No other fields.
+                           //
+                           // The way IN to win_server.h's compositor
+                           // registration, which existed with nothing
+                           // able to call it. A registered compositor
+                           // may map other processes' window buffers
+                           // and receives the raw input stream
+                           // (WIN_EV_RAW_*) the WM consumes today.
+                           //
+                           // A MESSAGE rather than a syscall of its
+                           // own, because that is this protocol's whole
+                           // bet -- see the header comment. That costs
+                           // one exception, made in two places and
+                           // worth knowing about: every other request
+                           // is refused outright when no presentation
+                           // layer is registered (syscall.c's
+                           // win_server_active() gate, and
+                           // win_server_request()'s own !g_ops guard),
+                           // and this one must work without one. In
+                           // stage 4 the ring-3 WM IS the compositor,
+                           // so there is no kernel-side presentation
+                           // layer left to register first -- gating
+                           // this behind one would make it permanently
+                           // unreachable at exactly the point it
+                           // matters.
+                           //
+                           // Claiming replaces any previous holder and
+                           // revokes every mapping it held; dying
+                           // releases it (win_server_client_gone()).
+                           // There is deliberately no arbitration --
+                           // last claimant wins, the same way
+                           // display_register() lets the last driver
+                           // claim the screen.
 #define WIN_REQ_FONT    5 // No inputs. Maps the desktop's ACTIVE font
                            // read-only into the client at
                            // WIN_FONT_VADDR and fills in the metrics:

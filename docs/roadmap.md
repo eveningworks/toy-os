@@ -1086,11 +1086,30 @@ guess.*
       passes" is exactly how a real intermittent bug gets ignored for
       months -- and because the next person to see it red should know it
       is known, not spend an hour bisecting.
-      **What has NOT been done:** nobody has captured WHICH check fails
-      (the re-run wipes the log). The suite runs four tools in parallel,
-      so contention for the VM slot or the shared serial socket is the
-      first thing to rule out -- but rule it out from a log, not from
-      reasoning.
+      **NAMED, 2026-08-16 (third session).** The `--logs` capture finally
+      caught it. The failing check is always this one:
+
+          FAIL  Recent files is greyed until a save, then opens a real
+                submenu
+                levels open over Recent after saving: [0]
+                (it was disabled and unopenable before the save)
+
+      So the first half of that check is fine -- Recent files IS greyed
+      out and unopenable before a save. What fails is the second half:
+      after the save, hovering it opens NO submenu level. The other 21
+      checks pass, including every other submenu check ("hovering a
+      submenu parent opens the next level" among them), which narrows it
+      considerably: submenu opening as a mechanism works in that same
+      run, on a different parent.
+      That points away from the parallel-contention theory and toward a
+      RACE between the save completing and the menu's `item_flags` hook
+      being asked again -- the enabled/disabled state is asked for, never
+      stored (see `uui_menubar`), so the hover that follows a save reads
+      whatever the flags hook says at that instant.
+      **What has NOT been established:** whether the save had actually
+      finished when the hover happened. The next step is to assert the
+      file exists on disk (an independent path, per `notepad_client_test.py`)
+      between the save and the hover, and see whether the failure moves.
       **So: always pass `--logs DIR` when running the full suite**, e.g.
       `python3 tools/gui_regress.py --logs /tmp/gr`. It costs nothing on
       a green run and is the only way this entry ever gets closed; the
