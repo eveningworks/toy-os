@@ -417,6 +417,17 @@ technical conventions below:
   that spawns must close its own copy of the pipe's write end**, or the
   read never sees EOF even after the child exits, because a live writer
   (itself) still exists.
+- **The Start menu and desktop icons are built from FILES**, one
+  `.desktop`-style entry per app in `/usr/wm/desktop/` (source of truth:
+  `data/wm/desktop/`, format documented in its README). `gui_apps.c`
+  scans that directory at desktop startup, so **adding an app to the
+  desktop is dropping a file there**, not editing a table and
+  rebuilding. `Exec=/bin/wm/apps/foo` spawns a binary;
+  `Exec=builtin:taskmgr` names a kernel-space app's callbacks, and that
+  form disappears when the last one moves to ring 3. Windowed binaries
+  live under `/bin/wm/{system,apps,demos}/` -- the class is the SOURCE
+  directory (`userland/gui/<class>/`) and the Makefile derives the
+  destination, same rule that already made `userland/gui` mean `/bin`.
 - **A Start-menu entry can launch a RING-3 program, not just a
   kernel-space app.** `apps/gui_apps.c`'s registry entries normally
   carry callbacks; one carrying `exec_path` instead (see
@@ -482,6 +493,24 @@ technical conventions below:
   permission and the more permissive one always wins. Adding to the
   `paging` KTESTs is the cheap way to keep this honest; their positive
   controls are in `CHANGELOG.md`'s entry.
+- **A filesystem talks to a `block_device`, not to a disk.**
+  `kernel/include/kernel/block.h` -- five required ops, two optional
+  behind capability bits, one active device, registered like
+  `display_driver`. TFS3 uses it (that is what lets a live image mount
+  from RAM); **TFS2 deliberately still calls `ata_*` directly**, since a
+  live image is always TFS3. Two things to know: capabilities are
+  checked at registration (claim FLUSH with no `flush()` and you are
+  refused), and **`persistent` is a field on the DEVICE** -- a backend
+  cannot tell RAM from disk, so `fs_is_persistent()` is
+  `fs->init() && blk_persistent()`. Getting that wrong makes a live
+  session tell the user their files are saved.
+- **TFS3's last block group may be PARTIAL** (ext2/3/4's rule), so a
+  volume need not be a multiple of 128 MiB. `group_span(g)` is the one
+  place that answers "how big is group g"; `T3_BPG` still means the
+  STRIDE between groups. Blocks past the volume's end are marked used in
+  the last group's bitmap at format time, which is why nothing else
+  needed special-casing. The host writer must agree exactly or an image
+  will not mount.
 - **A graphics card is a `display_driver`, not a special case.**
   `kernel/include/kernel/display.h` defines the interface (required
   probe/get_surface; optional flush, cursor, accel, modeset, each behind
@@ -828,6 +857,10 @@ make test   # boot headless, run the in-kernel test suite, exit non-zero on fail
 make verify # the full pre-delivery gate: clean build + iso + boot test + ktest
             # (same as tools/preflight.sh, which also summarises `git status`)
 make run   # boots in QEMU with an SDL window (the user's machine, not usable headlessly)
+make live-iso   # toy-os-live.iso -- carries a TFS3 image as a GRUB module
+make run-live   # boots that with NO disk attached at all
+make demo-iso   # toy-os-demo.iso -- boots straight into a scripted tour
+make run-demo   # boots that; for showing the system with nobody typing
 make run-audio  # same as run, + a PulseAudio backend so the PC speaker (`beep`) is audible
 make run-kvm    # same as run, but KVM-accelerated (-enable-kvm -cpu host) instead of
                 # TCG emulation -- needs /dev/kvm readable
@@ -908,6 +941,18 @@ changed) specifically so this dependency tracking doesn't regress --
 `kapi.h` includes `version.h`, so an unconditional rewrite every build
 would make every file that includes `kapi.h` (nearly everything) look
 "out of date" and rebuild every single time.
+
+**The live and demo ISOs are SEPARATE artifacts, on purpose.** The
+ordinary `toy-os.iso` carries no GRUB module: a 129 MiB one took the
+boot smoke test from 1.6s to 7.0s locally and blew CI's 12s timeout
+outright, because GRUB reads the whole module off the emulated CD-ROM
+before the kernel starts. The live image is 24 MiB now (partial block
+groups), so folding it back into the default ISO is possible -- but
+measure the boot first. `tools/live_boot_test.py` drives the live one
+(launch with `launch_qemu_cmd(disk=None)`, which omits `-drive`
+entirely); the demo one is `data/wm/demo.script`, a text file on the
+image, performed one step per WM iteration through `wm_debug_dispatch()`
+-- the same path the GUI tests use.
 
 **`make all` does NOT update `toy-os.iso`, and every headless test boots
 the ISO.** `ktest_run.py`, `boot_smoke_test.py`, `vm.py` and the GUI
@@ -1638,6 +1683,19 @@ repeated manual steps to be worth automating:
   against each other -- neither half means much alone. Its positive
   control reddens exactly one check and leaves the winclient ones green,
   which is worth reading before trusting them.
+- **`blank_window_test.py`** -- opens EVERY app in the registry and
+  requires its window to contain more than a flat fill. Reads the app
+  list from the KERNEL (`gui apps`), so an app added tomorrow is covered
+  without editing it. Exists because UI Demo shipped completely blank
+  and a 35-check suite passed it: every check asserted on the app's LOG,
+  and the widgets were live, hit-testable and simply never painted. In
+  `gui_regress.py`.
+- **`live_boot_test.py`** -- boots `toy-os-live.iso` with NO disk and
+  asserts a shipped binary RUNS, plus that `df` reports the image's real
+  size and says RAM-only. Not in `gui_regress.py` (it builds its own
+  QEMU); run it after touching the block layer, TFS3's geometry or the
+  live path. **"It booted" proves nothing here** -- the kernel degrades
+  to an empty RAM filesystem and still reaches a shell and a desktop.
 - **`gui_regress.py`** -- runs every GUI test tool, each against
   its own freshly-copied disk image and its own VM, and prints one
   pass/fail table (~2.5 minutes, 175 checks across thirteen tools). This is the standard check

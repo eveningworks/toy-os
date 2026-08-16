@@ -57,6 +57,8 @@ there when you add an entry, or the index quietly stops being one.
 
 **Filesystem & storage**
 
+- [A filesystem talks to a BLOCK DEVICE, and persistence is the device's answer](#a-filesystem-talks-to-a-block-device-and-persistence-is-the-devices-answer)
+- [TFS3's last block group may be partial, like ext2/3/4's](#tfs3s-last-block-group-may-be-partial-like-ext234s)
 - [Filesystem is one active backend, not mount points](#filesystem-is-one-active-backend-not-mount-points)
 - [`/etc` and `/tmp` are created by the MOUNT, not by `kernel_main()`](#etc-and-tmp-are-created-by-the-mount-not-by-kernel_main)
 - [A setting reports whether it PERSISTED, separately from whether it applied](#a-setting-reports-whether-it-persisted-separately-from-whether-it-applied)
@@ -100,11 +102,11 @@ there when you add an entry, or the index quietly stops being one.
 
 **GUI: window manager, compositor & widgets**
 
+- [The desktop's app list is a directory of files, not a table in the kernel](#the-desktops-app-list-is-a-directory-of-files-not-a-table-in-the-kernel)
 - [Widgets are added once a second real caller needs them -- except the checkbox](#widgets-are-added-once-a-second-real-caller-needs-them----except-the-checkbox)
 - [The ring-3 UI Demo selects on contact where the kernel one committed on release](#the-ring-3-ui-demo-selects-on-contact-where-the-kernel-one-committed-on-release)
 - [A compositor's view of a window is at a DERIVED address, and revocation is the feature](#a-compositors-view-of-a-window-is-at-a-derived-address-and-revocation-is-the-feature)
 - [The third inert scrollbar: drawing one and handling it are separate jobs](#the-third-inert-scrollbar-drawing-one-and-handling-it-are-separate-jobs)
-- [A filesystem talks to a BLOCK DEVICE, and persistence is the device's answer](#a-filesystem-talks-to-a-block-device-and-persistence-is-the-devices-answer)
 - [The toolkit routes pointer input; an app configures and is told what changed](#the-toolkit-routes-pointer-input-an-app-configures-and-is-told-what-changed)
 - [What editing text MEANS lives in one place, and the storage does not](#what-editing-text-means-lives-in-one-place-and-the-storage-does-not)
 - [A GUI test spawns its client directly, instead of typing at a Terminal](#a-gui-test-spawns-its-client-directly-instead-of-typing-at-a-terminal)
@@ -177,6 +179,7 @@ there when you add an entry, or the index quietly stops being one.
 
 **Build, versioning & project docs**
 
+- [The demo ISO is a separate image, and its tour is a file on it](#the-demo-iso-is-a-separate-image-and-its-tour-is-a-file-on-it)
 - [Build-number scheme: fix/feature/major tiers, not dates or semver](#build-number-scheme-fixfeaturemajor-tiers-not-dates-or-semver)
 - [Versioning: semver + `-dev` suffix, not a per-change build number](#versioning-semver---dev-suffix-not-a-per-change-build-number)
 - [A dev build shows its commit; a release shows only its version](#a-dev-build-shows-its-commit-a-release-shows-only-its-version)
@@ -5414,3 +5417,118 @@ disk, and asking it would have reported a live session as persistent.
 the single most misleading thing this feature could have done was let a
 live volume claim your files were safe. It says
 `tfs3 (RAM-only -- won't survive reboot)` instead.
+
+
+## TFS3's last block group may be partial, like ext2/3/4's
+
+TFS3 divided a volume into whole 128 MiB block groups by floor
+division, so the smallest filesystem it could make was 128 MiB and every
+volume threw away the remainder. That was fine while the only volume was
+a 9 GiB disk image, and became the single biggest cost of the Live CD:
+the smallest live image was 129 MiB, which made the ISO 162 MB and put
+7 seconds of GRUB module-reading in front of every boot.
+
+ext2/3/4 have always allowed the LAST group to be short. The
+32768-blocks-per-group figure is not a size choice, it is the number of
+blocks one block of bitmap can describe; nothing about it requires the
+volume to divide evenly. So the group count is a ceiling now, and
+`group_span(g)` -- "how many blocks group g actually has" -- is the one
+place that answers it. **`T3_BPG` still means the STRIDE between
+groups**, and every block<->group calculation still uses it; only the
+sites that meant "the size of this group" changed. The live image is
+24 MiB and the ISO 57 MB.
+
+The trick that kept the change small: at format time, blocks past the
+end of the volume are marked USED in the last group's bitmap. The
+allocator, the free-block search and the bitmap arithmetic then need no
+knowledge of partial groups at all -- they simply never find those
+blocks free.
+
+**It also recovered space on the disk that was never a live image.** A
+9 GiB `disk.img` now formats to 9362512 KB rather than 9232704 KB:
+~127 MB that had existed and been unaddressable the whole time.
+
+Two of the three sites that needed `group_span()` were found by failure
+rather than by reading the code, which is the part worth carrying:
+`df` reported a 16 MiB volume as 127 MB (free-space accounting still
+assumed full groups), and the BACKUP SUPERBLOCK write used the nominal
+group end, which lands past the volume -- so `fsformat` on a real disk
+failed with nothing printed anywhere. That one was found by putting
+`klog_printf(__LINE__)` on every `return 0` in the format path, which
+took one run after three wrong guesses. A third followed from the
+second: `group_span()` reads `g_sb`, and `format()` had not published
+the new geometry yet, so during a format every span was computed from
+the PREVIOUS volume's numbers.
+
+**The positive control is the interesting part, because it did not
+fire.** Re-introducing the `df` bug leaves the new geometry KTEST green:
+on the 9 GB dev disk one group over-reported is 1.4% of the total, and
+no honest bound is that tight. What catches it is `live_boot_test.py`'s
+size check against the ~24 MB live volume -- the only small volume
+anything here mounts. The KTEST's comment now records what it cannot
+catch. Generalising: when a control fires nothing, ask whether the
+test's DATA can express the bug at all before suspecting the harness.
+
+
+## The desktop's app list is a directory of files, not a table in the kernel
+
+`apps/gui_apps.c` held a C array of every app on the desktop, so adding
+one meant editing the kernel and rebuilding it -- for a ring-3 program
+that the kernel otherwise knows nothing about beyond a path to spawn.
+With M41 moving the apps out of ring 0 one at a time, that table was
+also the thing that would need editing on every single stage.
+
+The list is `/usr/wm/desktop/*.desktop` now, one entry per app, scanned
+at desktop startup: freedesktop's idea, and near enough its file format
+that the entries are readable to anyone who has seen a Linux one
+(`Name=`, `Exec=`, `Icon=`, `Categories=`). The parser is
+`etc_config`'s, already in the tree for `/etc/toyos.conf` -- key=value
+lines with `#` comments is exactly the format, so no second parser
+exists. **Adding an app to the desktop is dropping a file in
+`data/wm/desktop/`.**
+
+`Exec=builtin:taskmgr` is the deliberate bridge: it names a
+kernel-space app's callbacks rather than a binary, so the two apps that
+cannot move to ring 3 yet (Task Manager and Control Panel need syscalls
+that do not exist until M41 stage 4) live in the same list as everything
+else. That form disappears when the last one moves, and nothing else
+needs to change when it does.
+
+Windowed binaries went to `/bin/wm/{system,apps,demos}/` at the same
+time, the class taken from the SOURCE directory (`userland/gui/<class>/`)
+the way `userland/gui` already meant `/bin`. The category a user sees is
+therefore a property of where the code lives, not a string repeated in
+two places that can disagree.
+
+
+## The demo ISO is a separate image, and its tour is a file on it
+
+Asked for a way to show the system on a laptop with nobody typing.
+Three shapes were possible: a boot flag on the normal ISO, a recorded
+input trace, or a scripted tour. The tour won on the same grounds the
+`gui` debug commands did -- it drives the real system through the real
+paths, so it cannot drift out of sync with the software it is
+demonstrating, and when it breaks it breaks visibly.
+
+**It is its own ISO (`make demo-iso`) rather than a runtime toggle**, for
+one reason: a demo that can start itself by accident is a demo that
+starts during something else. The `demo` keyword is on the kernel
+command line in a grub.cfg that only that image carries.
+
+**The script is a FILE on the image** (`/usr/wm/demo.script`, source
+`data/wm/demo.script`), not compiled in, so the tour can be edited on a
+live USB stick with no toolchain present. Its CLI half runs at the
+console; its GUI half is performed **one step per WM iteration** from
+inside `wm_run()`'s loop, through the same `wm_debug_dispatch()` path
+the 175 GUI checks already use. That is not an implementation detail --
+driving a desktop from outside its own event loop is precisely what
+makes a scripted demo hang, and the debug console already had the
+answer.
+
+**The live ISO stays a separate artifact from the normal one**, which
+cost a red CI to learn: a 129 MiB GRUB module took the boot smoke test
+from 1.6s to 7.0s locally and blew CI's timeout outright, because GRUB
+reads the whole module off the emulated CD-ROM before the kernel starts.
+Partial block groups have since brought the image to 24 MiB, so folding
+it into the default ISO is now arguable -- measure the boot before doing
+it.
