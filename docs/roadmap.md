@@ -1018,6 +1018,20 @@ guess.*
 
 ### Known issues and papercuts (unscheduled)
 
+- [ ] **`menubar_test.py` is FLAKY in the full suite** -- observed three
+      times in one session (2026-08-16): it fails one check when run as
+      part of `gui_regress.py`, and passes 22/22 every time it is re-run
+      on its own. Never seen to fail twice in a row, and no other tool
+      shows it. Recorded rather than dismissed because "re-run it and it
+      passes" is exactly how a real intermittent bug gets ignored for
+      months -- and because the next person to see it red should know it
+      is known, not spend an hour bisecting.
+      **What has NOT been done:** nobody has captured WHICH check fails
+      (the re-run wipes the log). Next step is `--logs` on the failing
+      run and reading the check name before theorising; the suite runs
+      four tools in parallel, so contention for the VM slot or the
+      shared serial socket is the first thing to rule out.
+
 Small things that are real, reproducible, and not worth their own
 milestone -- bugs too minor to schedule, rough edges, and behaviour
 that's defensible but surprising. This is the ONE list for them: don't

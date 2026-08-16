@@ -11,6 +11,7 @@
 #include "fault_inject.h"
 #include "kapi.h"
 #include "tfs3.h" // the caps-declaration test below reads tfs3_ops directly
+#include "block.h" // blk_sector_count() -- the geometry test at the bottom
 
 int tfs_selftest(void); // kernel/fs/tfs.c -- needs its file-static state
 
@@ -490,4 +491,49 @@ KTEST("fs", "fsck reports a clean filesystem") {
     KTEST_ASSERT_EQ(r.double_allocated, 0);
     KTEST_ASSERT_EQ(r.referenced_but_free, 0);
     KTEST_ASSERT_EQ(r.out_of_range, 0);
+}
+
+
+// A PARTIAL LAST BLOCK GROUP is legal, and the numbers have to agree.
+//
+// TFS3 used to require whole 128 MiB groups, which made the smallest
+// possible filesystem 128 MiB and the live ISO carrying one ten times
+// bigger than its contents. ext2/3/4 have always allowed the last group
+// to be short; this checks the arithmetic that came with allowing it,
+// on whatever volume this boot happens to have.
+//
+// The trap it guards: `df` reported a 16 MiB volume as 127 MB, because
+// the free-space accounting still assumed every group was T3_BPG blocks.
+// A size that lies is worse than no size at all.
+//
+// **This test CANNOT catch that one on its own, and the positive control
+// proved it**: re-introduce the bug and this stays green, because on the
+// 9 GB dev disk over-reporting by one group is 1.4% of the total and no
+// honest bound here is that tight. What catches it is
+// tools/live_boot_test.py, which boots a ~24 MB volume -- the only small
+// one anything mounts -- and checks df's total against it.
+//
+// Kept anyway, for the two things it does cover cheaply: a total larger
+// than the device, and used larger than total. Recorded rather than
+// quietly trusted, because a check whose limits are not written down is
+// one somebody later assumes covers more than it does.
+KTEST("fs", "reported size matches the volume, partial last group included") {
+    if (!fs_is_persistent()) KTEST_SKIP("RAM-only boot, no volume to measure");
+
+    uint64_t total = 0, used = 0;
+    if (!fs_disk_usage(&used, &total)) KTEST_SKIP("backend reports no usage");
+
+    // The usable total must fit inside the device, and must not be
+    // absurdly smaller than it either -- the old floor-division wasted
+    // up to a whole group, and the old T3_BPG assumption over-reported
+    // by one. Both directions are checked because they failed in
+    // opposite directions.
+    uint64_t device = (uint64_t)blk_sector_count() * 512;
+    KTEST_ASSERT(total <= device);
+    KTEST_ASSERT(used <= total);
+    if (device > 64u * 1024 * 1024) {
+        // Metadata is a few percent; anything under half the device
+        // means a group's worth was dropped on the floor.
+        KTEST_ASSERT(total > device / 2);
+    }
 }

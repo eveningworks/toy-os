@@ -32,6 +32,7 @@
 #include "desktop.h"
 #include "wm_tray.h"
 #include "kapi.h"
+#include "demo.h"
 
 struct window windows[MAX_WINDOWS];
 int window_count = 0;
@@ -595,6 +596,12 @@ void wm_run(void) {
         // docs/decisions.md. Keeps the serial debug console responsive
         // while the GUI desktop is up, not just at the physical prompt.
         debug_console_poll();
+
+        // One scripted step per iteration, when a demo is running (see
+        // apps/demo.h). A no-op on every ordinary boot -- `demo` has to
+        // be on the kernel command line for a script to have been loaded
+        // at all.
+        demo_gui_tick();
 
         mouse_get_state(&mx, &my, &buttons);
 

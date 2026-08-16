@@ -37,6 +37,14 @@
 #define T3_JH_BLOCK     9u
 #define T3_GDT_BLOCKS   16u             // fixed -- positions derive without a superblock
 #define T3_BPG          32768u          // blocks per group (one 4 KiB bitmap)
+
+// The smallest a group may be. Every group is T3_BPG blocks except
+// possibly the last, which may be SHORT -- ext2/3/4's rule, and what
+// makes a filesystem smaller than 128 MiB possible at all. This floor is
+// generous: one group's metadata is two bitmaps plus an inode table
+// (~130 blocks at the default inode density), and a volume that cannot
+// hold that plus a root directory is not a filesystem.
+#define T3_MIN_GROUP_BLOCKS 512u
 #define T3_INODE_SIZE   128u
 #define T3_INODES_PER_SECTOR (ATA_SECTOR_SIZE / T3_INODE_SIZE)
 #define T3_BACKUP_BLOCKS (T3_GDT_BLOCKS + 1)
@@ -271,7 +279,9 @@ static int parse_superblock(const uint8_t *sec) {
     }
     if (gc == 0 || ipg == 0 || ipg > T3_BPG) return 0;
     if ((uint64_t)total_blocks * T3_SPB > (uint64_t)g_vol.sector_count) return 0; // claims more volume than exists
-    if (group0 + (uint64_t)gc * bpg > total_blocks) return 0;
+    // The LAST group may be partial (see group_span()), so the volume
+    // has to contain every group's START, not every group's full extent.
+    if (group0 + (uint64_t)(gc - 1) * bpg >= total_blocks) return 0;
     if (!set_geometry_version(version)) return 0;
     g_sb.version = (uint8_t)version;
     g_sb.flags = sec[5];
@@ -316,11 +326,16 @@ static int load_superblock(int loud) {
     for (uint32_t v = T3_VERSION; v >= T3_VERSION_MIN; v--) {
         uint32_t group0 = group0_for_version(v);
         if (vol_blocks <= group0) continue;
-        uint32_t gc = (vol_blocks - group0) / T3_BPG;
+        // Ceiling, matching format(): a volume of one partial group has
+        // one group, not zero.
+        uint32_t gc = (vol_blocks - group0 + T3_BPG - 1) / T3_BPG;
         uint32_t groups[2];
         int n = backup_groups(gc, groups);
         for (int i = 0; i < n; i++) {
-            uint32_t blk = group0 + (groups[i] + 1) * T3_BPG - 1;
+            uint32_t gbase = group0 + groups[i] * T3_BPG;
+            uint32_t gspan = vol_blocks - gbase;
+            if (gspan > T3_BPG) gspan = T3_BPG;
+            uint32_t blk = gbase + gspan - 1;
             if (!vol_read_sectors(blk * T3_SPB, 1, sec)) continue;
             if (parse_superblock(sec) && g_sb.version == v) {
                 g_mounted_from_backup = 1;
@@ -338,6 +353,11 @@ static int load_superblock(int loud) {
 
 // Serialize g_sb and write it to the primary AND every backup slot --
 // fsck repair's restore path, and never called at mount.
+// Forward-declared: used by the superblock writer just below, defined
+// with the geometry helpers where it belongs. See group_span() for what
+// a partial group is and why the backup moved.
+static uint32_t group_backup_block(uint32_t g);
+
 static int write_superblock_everywhere(void) {
     k_memset(g_blk, 0, T3_BLOCK);
     g_blk[0] = 'T'; g_blk[1] = 'F'; g_blk[2] = 'S'; g_blk[3] = '3';
@@ -357,15 +377,48 @@ static int write_superblock_everywhere(void) {
     uint32_t groups[2];
     int n = backup_groups(g_sb.gc, groups);
     for (int i = 0; i < n; i++) {
-        uint32_t blk = g_group0 + (groups[i] + 1) * T3_BPG - 1;
-        if (!write_block(blk, g_blk)) ok = 0;
+        uint32_t blk = group_backup_block(groups[i]);
+        if (blk && !write_block(blk, g_blk)) ok = 0;
     }
     return ok;
 }
 
+// Declared here because persist_superblock() above needs it and the
+// geometry helpers below own it -- see group_span().
+static uint32_t group_backup_block(uint32_t g);
+
 // ---- group / inode geometry ----------------------------------------------
 
 static uint32_t group_base(uint32_t g) { return g_group0 + g * T3_BPG; }
+
+// How many blocks group `g` ACTUALLY has.
+//
+// Every group is T3_BPG except possibly the LAST, which is short when
+// the volume does not divide evenly into groups -- exactly what ext2/3/4
+// allow, and for the same reason: without it the smallest filesystem
+// that can exist is one whole group (128 MiB at a 4 KiB block), which
+// made a 4 MiB live image impossible and the ISO carrying it ten times
+// larger than its contents.
+//
+// A partial group is otherwise an ORDINARY group: same bitmap, same
+// metadata layout, same arithmetic. The only difference is where it
+// ends, which is why this is the single place that answers it -- every
+// caller that used T3_BPG as "the size of a group" now asks here, and a
+// caller that means "the STRIDE between groups" still says T3_BPG.
+static uint32_t group_span(uint32_t g) {
+    uint32_t base = group_base(g);
+    if (base >= g_sb.total_blocks) return 0;
+    uint32_t rest = g_sb.total_blocks - base;
+    return rest < T3_BPG ? rest : T3_BPG;
+}
+
+// Where group g's superblock/GDT backup lives: its LAST block, which for
+// a partial group is the last block of the volume rather than a block
+// past the end of it.
+static uint32_t group_backup_block(uint32_t g) {
+    uint32_t span = group_span(g);
+    return span ? group_base(g) + span - 1 : 0;
+}
 
 static uint32_t cksum_table_blocks(void) {
     // Feature bit 0: per-group data-block checksum table (format-time
@@ -562,10 +615,13 @@ static void alog_push(uint32_t blk); // rollback log, defined below with its sto
 static uint32_t group_data_end(uint32_t g) {
     uint32_t groups[2];
     int n = backup_groups(g_sb.gc, groups);
+    uint32_t span = group_span(g);
     for (int i = 0; i < n; i++) {
-        if (groups[i] == g) return T3_BPG - T3_BACKUP_BLOCKS;
+        if (groups[i] == g) {
+            return span > T3_BACKUP_BLOCKS ? span - T3_BACKUP_BLOCKS : 0;
+        }
     }
-    return T3_BPG;
+    return span;
 }
 
 // Try to allocate one specific block (the adjacent-first fast path).
@@ -1567,11 +1623,16 @@ static int tfs3_wipe(void) {
     for (uint32_t v = T3_VERSION_MIN; v <= T3_VERSION; v++) {
         uint32_t group0 = group0_for_version(v);
         if (vol_blocks <= group0) continue;
-        uint32_t gc = (vol_blocks - group0) / T3_BPG;
+        // Ceiling, matching format(): a volume of one partial group has
+        // one group, not zero.
+        uint32_t gc = (vol_blocks - group0 + T3_BPG - 1) / T3_BPG;
         uint32_t groups[2];
         int n = backup_groups(gc, groups);
         for (int i = 0; i < n; i++) {
-            uint32_t blk = group0 + (groups[i] + 1) * T3_BPG - 1;
+            uint32_t gbase = group0 + groups[i] * T3_BPG;
+            uint32_t gspan = vol_blocks - gbase;
+            if (gspan > T3_BPG) gspan = T3_BPG;
+            uint32_t blk = gbase + gspan - 1;
             if (!vol_write_sectors(blk * T3_SPB, 1, zero)) ok = 0;
         }
     }
@@ -1589,17 +1650,36 @@ static int tfs3_format(void) {
     g_sb.version = T3_VERSION;
 
     uint32_t vol_blocks = g_vol.sector_count / T3_SPB;
-    if (vol_blocks <= g_group0 + T3_BPG) {
-        klog_write("tfs3: volume too small for one block group -- not formatting\n");
+    // The floor is the METADATA, not a whole group. A group needs its
+    // two bitmaps, its inode table and somewhere to put the root
+    // directory; beyond that a PARTIAL last group is fine, exactly as
+    // ext2/3/4 allow -- which is what lets a 16 MiB live image exist
+    // instead of a 129 MiB one. (`meta` is computed just below, so this
+    // checks the generous version of the same thing: one group's
+    // metadata cannot exceed a few hundred blocks.)
+    if (vol_blocks <= g_group0 + T3_MIN_GROUP_BLOCKS) {
+        klog_write("tfs3: volume too small even for one partial group -- not formatting\n");
         return 0;
     }
-    uint32_t gc = (vol_blocks - g_group0) / T3_BPG;
+    // CEILING: a volume that ends mid-group still has that group.
+    uint32_t gc = (vol_blocks - g_group0 + T3_BPG - 1) / T3_BPG;
     if (gc > T3_GDT_BLOCKS * T3_BLOCK / 16) gc = T3_GDT_BLOCKS * T3_BLOCK / 16;
     uint32_t ipg = T3_BPG * T3_BLOCK / T3_BYTES_PER_INODE;
     if (ipg > T3_BPG) ipg = T3_BPG;
     ipg = (ipg / T3_INODES_PER_SECTOR / T3_SPB) * T3_INODES_PER_SECTOR * T3_SPB; // whole table blocks
     uint32_t itb = ipg * T3_INODE_SIZE / T3_BLOCK;
     uint32_t meta = 2 + itb; // no checksum-table feature at format time (flags = 0)
+
+    // Publish the geometry BEFORE anything uses it. group_span() and
+    // everything built on it read g_sb, and during a format that still
+    // held the PREVIOUS volume's numbers (or zeros on a fresh boot) --
+    // so every group's span came out wrong and the format failed with
+    // no clue as to why. The superblock image below is written from
+    // these same values, so there is one source rather than two.
+    g_sb.total_blocks = vol_blocks;
+    g_sb.bpg = T3_BPG;
+    g_sb.ipg = ipg;
+    g_sb.gc = gc;
 
     uint32_t groups[2];
     int nb = backup_groups(gc, groups);
@@ -1642,12 +1722,14 @@ static int tfs3_format(void) {
         for (uint32_t v = T3_VERSION_MIN; v < T3_VERSION; v++) {
             uint32_t old0 = group0_for_version(v);
             if (vol_blocks <= old0) continue;
-            uint32_t old_gc = (vol_blocks - old0) / T3_BPG;
+            uint32_t old_gc = (vol_blocks - old0 + T3_BPG - 1) / T3_BPG;
             uint32_t old_groups[2];
             int on = backup_groups(old_gc, old_groups);
             for (int i = 0; i < on; i++) {
-                uint32_t blk = old0 + (old_groups[i] + 1) * T3_BPG - 1;
-                vol_write_sectors(blk * T3_SPB, 1, zero);
+                uint32_t gbase = old0 + old_groups[i] * T3_BPG;
+                uint32_t gspan = vol_blocks - gbase;
+                if (gspan > T3_BPG) gspan = T3_BPG;
+                vol_write_sectors((gbase + gspan - 1) * T3_SPB, 1, zero);
             }
         }
     }
@@ -1671,7 +1753,13 @@ static int tfs3_format(void) {
         for (uint32_t i = 0; i < T3_BLOCK / 16; i++) {
             uint32_t g = tb * (T3_BLOCK / 16) + i;
             if (g >= gc) break;
-            uint32_t free_b = T3_BPG - meta;
+            // The last group's span, not T3_BPG -- a partial group has
+            // fewer free blocks and the GDT cache is what the allocator
+            // trusts.
+            uint32_t gbase = g_group0 + g * T3_BPG;
+            uint32_t gspan = vol_blocks - gbase;
+            if (gspan > T3_BPG) gspan = T3_BPG;
+            uint32_t free_b = gspan > meta ? gspan - meta : 0;
             uint32_t free_i = ipg;
             for (int j = 0; j < nb; j++) {
                 if (groups[j] == g) free_b -= T3_BACKUP_BLOCKS;
@@ -1685,7 +1773,10 @@ static int tfs3_format(void) {
         if (!write_block(g_gdt_block + tb, g_blk)) return 0;
         // Backup GDT snapshots get the identical block.
         for (int j = 0; j < nb; j++) {
-            uint32_t tail = g_group0 + (groups[j] + 1) * T3_BPG - 1;
+            uint32_t gbase = g_group0 + groups[j] * T3_BPG;
+            uint32_t gspan = vol_blocks - gbase;
+            if (gspan > T3_BPG) gspan = T3_BPG;
+            uint32_t tail = gbase + gspan - 1;
             if (!write_block(tail - T3_GDT_BLOCKS + tb, g_blk)) return 0;
         }
     }
@@ -1695,12 +1786,25 @@ static int tfs3_format(void) {
         uint32_t base = group_base(g);
         k_memset(g_blk, 0, T3_BLOCK);
         for (uint32_t i = 0; i < meta; i++) g_blk[i >> 3] |= (uint8_t)(1u << (i & 7));
+        uint32_t gspan = vol_blocks - base;
+        if (gspan > T3_BPG) gspan = T3_BPG;
+
         int is_backup = 0;
         for (int j = 0; j < nb; j++) if (groups[j] == g) is_backup = 1;
         if (is_backup) {
-            for (uint32_t i = T3_BPG - T3_BACKUP_BLOCKS; i < T3_BPG; i++)
+            for (uint32_t i = gspan - T3_BACKUP_BLOCKS; i < gspan; i++)
                 g_blk[i >> 3] |= (uint8_t)(1u << (i & 7));
         }
+
+        // Everything past the volume's end is marked USED, permanently.
+        // That is what makes a partial group need no special case
+        // anywhere else: the bitmap is still a full T3_BPG bits, the
+        // allocator still reads it the same way, and the blocks that do
+        // not exist are simply never free. Miss this and the allocator
+        // hands out a block past the end of the device, which fails as a
+        // refused write somewhere far away from the cause.
+        for (uint32_t i = gspan; i < T3_BPG; i++)
+            g_blk[i >> 3] |= (uint8_t)(1u << (i & 7));
         if (g == 0) {
             uint32_t i = meta; // the root dirent block
             g_blk[i >> 3] |= (uint8_t)(1u << (i & 7));
@@ -1750,8 +1854,14 @@ static int tfs3_format(void) {
     k_memset(g_blk, 0, T3_BLOCK);
     k_memcpy(g_blk, sb, ATA_SECTOR_SIZE);
     for (int j = 0; j < nb; j++) {
-        uint32_t tail = g_group0 + (groups[j] + 1) * T3_BPG - 1;
-        if (!write_block(tail, g_blk)) return 0;
+        // The group's REAL last block. A partial last group ends before
+        // g_group0 + (g+1)*T3_BPG, and writing the backup superblock
+        // past the end of the volume failed the entire format with
+        // nothing anywhere to say why.
+        uint32_t gbase = g_group0 + groups[j] * T3_BPG;
+        uint32_t gspan = vol_blocks - gbase;
+        if (gspan > T3_BPG) gspan = T3_BPG;
+        if (!write_block(gbase + gspan - 1, g_blk)) return 0;
     }
 
     blk_flush(); // one barrier so the whole format is durable before init() re-reads it
@@ -2059,7 +2169,11 @@ static int tfs3_disk_usage(uint64_t *out_used, uint64_t *out_total) {
     int nb = backup_groups(g_sb.gc, groups);
     uint64_t total_data = 0, free_data = 0;
     for (uint32_t g = 0; g < g_sb.gc; g++) {
-        uint32_t data = T3_BPG - g_meta_off;
+        // The group's REAL extent -- the last one may be partial, and
+        // using T3_BPG here made `df` report a 16 MiB volume as 127 MB.
+        // A size that lies is worse than no size at all.
+        uint32_t span = group_span(g);
+        uint32_t data = span > g_meta_off ? span - g_meta_off : 0;
         for (int j = 0; j < nb; j++) if (groups[j] == g) data -= T3_BACKUP_BLOCKS;
         total_data += data;
         free_data += g_gd[g].free_blocks;

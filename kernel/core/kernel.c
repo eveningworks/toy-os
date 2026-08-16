@@ -27,6 +27,8 @@
 #include "cursor_config.h"
 #include "keyboard_config.h"
 #include "apps.h"
+#include "demo.h"
+#include "gui.h"
 #include "scheduler.h"
 #include "debug_console.h"
 #include "krandom.h"      // entropy source -- krandom_init()
@@ -234,6 +236,14 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // shell or the GUI draws. `dmesg`, the serial port and the console's
     // own scrollback all still have them.
     klog_set_console_echo(0);
+
+    // A scripted tour, if the command line asked for one. Runs the CLI
+    // half here and hands the rest to the desktop; see apps/demo.h.
+    if (demo_requested() && demo_load("/usr/wm/demo.script") > 0) {
+        if (demo_run_cli()) {
+            gui_main();
+        }
+    }
 
     apps_start();
 

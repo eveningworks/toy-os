@@ -54,6 +54,9 @@ JOURNAL_HEADER_BLOCK = 9
 GDT_BLOCKS = 16                       # fixed -- see the spec's rationale
 GDT_CAPACITY = GDT_BLOCKS * BLOCK // 16
 BLOCKS_PER_GROUP = 32768               # one 4 KiB bitmap's worth
+# The last group may be shorter than that; this is the floor. Must match
+# the kernel's T3_MIN_GROUP_BLOCKS -- the two format the same volumes.
+MIN_GROUP_BLOCKS = 512
 
 # Two complete geometries, one per format version -- the journal is a
 # fixed region between the superblock and the group descriptors, so
@@ -228,9 +231,11 @@ class Tfs3Image:
             group0 = GEOMETRY[ver]["group0"]
             if total_blocks <= group0:
                 continue
-            gc = (total_blocks - group0) // BLOCKS_PER_GROUP
+            gc = (total_blocks - group0 + BLOCKS_PER_GROUP - 1) // BLOCKS_PER_GROUP
             for g in backup_groups(gc):
-                blk = group0 + (g + 1) * BLOCKS_PER_GROUP - 1
+                gbase = group0 + g * BLOCKS_PER_GROUP
+                span = min(total_blocks - gbase, BLOCKS_PER_GROUP)
+                blk = gbase + span - 1
                 sb = parse_superblock(self.read_bytes(blk * BLOCK, SECTOR))
                 if sb is not None and sb["version"] == ver:
                     print(f"note: primary superblock invalid -- using the "
@@ -267,6 +272,17 @@ class Tfs3Image:
 
     def data_start(self, g):
         return self.inode_table_block(g) + self.itb
+
+    def group_span(self, g):
+        """Blocks group g actually has -- short for a partial last group."""
+        base = GROUP0_START + g * BLOCKS_PER_GROUP
+        rest = self.sb["total_blocks"] - base
+        return min(rest, BLOCKS_PER_GROUP) if rest > 0 else 0
+
+    def group_backup_block(self, g):
+        """Where g's superblock/GDT backup lives: its LAST real block."""
+        span = self.group_span(g)
+        return GROUP0_START + g * BLOCKS_PER_GROUP + span - 1 if span else 0
 
     def is_backup_group(self, g):
         return g in backup_groups(self.sb["gc"])
@@ -329,7 +345,9 @@ class Tfs3Image:
         order = list(range(prefer_group, gc)) + list(range(0, prefer_group))
         for g in order:
             start = self.data_start(g) - self.group_base(g)
-            end = BLOCKS_PER_GROUP - (BACKUP_BLOCKS if self.is_backup_group(g) else 0)
+            # The group's REAL extent: the last group may be partial.
+            span = self.group_span(g)
+            end = span - (BACKUP_BLOCKS if self.is_backup_group(g) else 0)
             bitmap = self.read_block(self.group_base(g))
             for i in range(start, end):
                 if not (bitmap[i >> 3] >> (i & 7)) & 1:
@@ -525,10 +543,15 @@ def cmd_format(args):
     set_geometry(fs_version)
 
     total_blocks = size // BLOCK
-    gc = (total_blocks - GROUP0_START) // BLOCKS_PER_GROUP
-    if gc < 1:
-        raise SystemExit(f"image too small: need at least "
-                         f"{(GROUP0_START + BLOCKS_PER_GROUP) * BLOCK} bytes for one group")
+    # CEILING, matching the kernel: the last group may be PARTIAL, which
+    # is ext2/3/4's rule and what makes a filesystem smaller than one
+    # 128 MiB group possible. The floor is a group's metadata plus room
+    # for a root directory, not a whole group.
+    gc = (total_blocks - GROUP0_START + BLOCKS_PER_GROUP - 1) // BLOCKS_PER_GROUP
+    if total_blocks <= GROUP0_START + MIN_GROUP_BLOCKS:
+        raise SystemExit(f"image too small: need more than "
+                         f"{(GROUP0_START + MIN_GROUP_BLOCKS) * BLOCK} bytes "
+                         f"(one group's metadata plus a root directory)")
     if gc > GDT_CAPACITY:
         gc = GDT_CAPACITY  # 512 GiB -- unreachable under LBA28, but honest
     ipg = min(BLOCKS_PER_GROUP, BLOCK * BLOCKS_PER_GROUP // args.bytes_per_inode)
@@ -563,9 +586,11 @@ def cmd_format(args):
         for ver, geo in GEOMETRY.items():
             if ver == fs_version or total_blocks <= geo["group0"]:
                 continue
-            old_gc = (total_blocks - geo["group0"]) // BLOCKS_PER_GROUP
+            old_gc = (total_blocks - geo["group0"] + BLOCKS_PER_GROUP - 1) // BLOCKS_PER_GROUP
             for g in backup_groups(old_gc):
-                f.seek((geo["group0"] + (g + 1) * BLOCKS_PER_GROUP - 1) * BLOCK)
+                gbase = geo["group0"] + g * BLOCKS_PER_GROUP
+                span = min(total_blocks - gbase, BLOCKS_PER_GROUP)
+                f.seek((gbase + span - 1) * BLOCK)
                 f.write(b"\x00" * SECTOR)
         def wblk(blk, data):
             f.seek(blk * BLOCK)
@@ -584,7 +609,9 @@ def cmd_format(args):
         gdt = bytearray()
         for g in range(gc):
             meta = 2 + itb
-            free_b = BLOCKS_PER_GROUP - meta
+            gbase = GROUP0_START + g * BLOCKS_PER_GROUP
+            span = min(total_blocks - gbase, BLOCKS_PER_GROUP)
+            free_b = span - meta
             free_i = ipg
             if g in backup_groups(gc):
                 free_b -= BACKUP_BLOCKS
@@ -620,13 +647,14 @@ def cmd_format(args):
 
         for g in range(gc):
             base = GROUP0_START + g * BLOCKS_PER_GROUP
+            span = min(total_blocks - base, BLOCKS_PER_GROUP)
             bbm = bytearray(BLOCK)
             def setbit(bm, i):
                 bm[i >> 3] |= 1 << (i & 7)
             for i in range(2 + itb):
                 setbit(bbm, i)
             if g in backup_groups(gc):
-                for i in range(BLOCKS_PER_GROUP - BACKUP_BLOCKS, BLOCKS_PER_GROUP):
+                for i in range(span - BACKUP_BLOCKS, span):
                     setbit(bbm, i)
             ibm = bytearray(BLOCK)
             if g == 0:
@@ -654,7 +682,8 @@ def cmd_format(args):
 
         # Backup regions: GDT snapshot + superblock copy, byte-identical.
         for g in backup_groups(gc):
-            tail = GROUP0_START + (g + 1) * BLOCKS_PER_GROUP - 1
+            gbase = GROUP0_START + g * BLOCKS_PER_GROUP
+            tail = gbase + min(total_blocks - gbase, BLOCKS_PER_GROUP) - 1
             for i in range(GDT_BLOCKS):
                 wblk(tail - GDT_BLOCKS + i, bytes(gdt[i * BLOCK:(i + 1) * BLOCK]))
             wblk(tail, sb + b"\x00" * (BLOCK - len(sb)))

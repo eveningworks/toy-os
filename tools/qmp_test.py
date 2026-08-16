@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reusable helpers for driving toy-os in headless QEMU over QMP.
+r"""Reusable helpers for driving toy-os in headless QEMU over QMP.
 
 Every GUI-testing session up to this point has re-derived the same few
 gotchas from scratch (usually by hitting them first). This module exists

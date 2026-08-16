@@ -157,9 +157,24 @@ def main():
         for line in df.splitlines():
             if "used:" in line:
                 used_kb = int("".join(c for c in line if c.isdigit()) or 0)
+        total_kb = 0
+        for line in df.splitlines():
+            if "total:" in line:
+                total_kb = int("".join(c for c in line if c.isdigit()) or 0)
         res.check("the filesystem mounted from the live image",
                   "tfs3" in df.lower() and used_kb > 1000,
                   f"{used_kb} KB used -- an empty RAM filesystem, not the image")
+
+        # The SIZE has to be the image's, and this is the check that
+        # catches a partial last block group being mis-measured. The live
+        # image is the only small volume anything boots, so it is the
+        # only place the bug is visible: a KTEST on the 9 GB dev disk
+        # cannot see one group over-reported (1.4% of the total), and
+        # `df` on this volume said 127 MB for a 16 MiB filesystem.
+        res.check("the reported size is the image's, not a whole block group",
+                  0 < total_kb < 64 * 1024,
+                  f"df says {total_kb} KB for a ~24 MB image -- the last "
+                  f"group's real span is being ignored")
 
         # 2. shipped content is there -- the check that separates a live
         #    mount from an empty RAM filesystem

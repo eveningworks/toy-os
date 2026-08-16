@@ -283,6 +283,10 @@ help:
 	@echo "                 needs /dev/kvm; port-I/O-heavy paths can get slower, so"
 	@echo "                 don't compare its throughput numbers against run's"
 	@echo "  run-nographic  Boot toy-os.iso in QEMU with no display, serial only (implies iso)"
+	@echo "  live-iso       Build toy-os-live.iso -- carries a filesystem image, boots with NO disk"
+	@echo "  run-live       Boot that live ISO with no disk attached (implies live-iso)"
+	@echo "  demo-iso       Build toy-os-demo.iso -- boots straight into a scripted tour"
+	@echo "  run-demo       Boot that demo ISO (implies demo-iso)"
 	@echo "  debug          Boot toy-os.iso frozen (QEMU's -s -S) for real GDB"
 	@echo "                 debugging -- attach with: gdb build/kernel.bin -ex"
 	@echo "                 'target remote localhost:1234', then continue"
@@ -574,6 +578,10 @@ seed: $(DISK_IMG) $(USERLAND_ELVES)
 	# sync/ is a build-staging tree `make clean` deletes wholesale.
 	mkdir -p $(SEED_DIR)/sync/usr/wm/desktop $(SEED_DIR)/sync/usr/wm/startup
 	cp data/wm/desktop/*.desktop $(SEED_DIR)/sync/usr/wm/desktop/
+	# The scripted tour. Seeded always -- it is inert unless `demo` is on
+	# the kernel command line, and having it present means a live image
+	# can be edited into a demo without a rebuild.
+	cp data/wm/demo.script $(SEED_DIR)/sync/usr/wm/demo.script
 	@if [ -n "$$(ls -A data/wm/startup 2>/dev/null)" ]; then \
 	    cp data/wm/startup/* $(SEED_DIR)/sync/usr/wm/startup/; fi
 	@if command -v xkbcli >/dev/null 2>&1; then \
@@ -607,16 +615,14 @@ seed: $(DISK_IMG) $(USERLAND_ELVES)
 # disk.img is, by the same writer tool -- one format, one builder, and
 # the live path is the disk path with a different device underneath.
 #
-# SIZE IS THE FORMAT'S FLOOR, not a choice: TFS3 puts 32768 blocks in a
-# group (T3_BPG -- 128 MiB at a 4 KiB block) and the kernel refuses a
-# superblock whose blocks-per-group differs, so one group is the
-# smallest TFS3 volume that can exist. The seed tree is single-digit
-# megabytes, so this image is ~97% zeros: it costs ISO size and
-# boot-time RAM and nothing else. Shrinking it means letting bpg vary
-# for small volumes (it is already a superblock field, just range-checked
-# to one value) -- see docs/live-cd-design.md.
+# Sized for the seed tree plus room to work in -- which is possible at
+# all only because TFS3's LAST block group may now be partial, the rule
+# ext2/3/4 have always had. It was 129 MiB when a whole 128 MiB group
+# was the floor, and that made the live ISO 162 MiB and cost GRUB seven
+# seconds reading the module off an emulated CD-ROM before the kernel
+# ran a single instruction.
 LIVE_IMG    = $(BUILD)/live.img
-LIVE_IMG_MB = 129
+LIVE_IMG_MB = 24
 
 $(LIVE_IMG): $(USERLAND_ELVES) seed
 	@mkdir -p $(BUILD)
@@ -655,6 +661,38 @@ live-iso: version $(KERNEL) $(USERLAND_ELVES) seed $(LIVE_IMG)
 	fi
 	$(GRUB_MKRESCUE) -o $(LIVE_ISO) iso-live
 	@echo "live-iso: $(LIVE_ISO) -- boots with no disk; see docs/live-cd-design.md"
+
+# The DEMO ISO: the live ISO plus `demo` on the kernel command line, so
+# it boots straight into the scripted tour with nobody touching a key.
+# For showing the system on real hardware -- write it to a USB stick and
+# boot it.
+#
+# Deliberately its own target and its own grub.cfg rather than a runtime
+# toggle: a demo that can start itself by accident is a demo that starts
+# during something else.
+DEMO_ISO = toy-os-demo.iso
+
+demo-iso: version $(KERNEL) $(USERLAND_ELVES) seed $(LIVE_IMG)
+	rm -rf iso-demo
+	mkdir -p iso-demo/boot/grub
+	cp $(KERNEL) iso-demo/boot/kernel.bin
+	cp $(LIVE_IMG) iso-demo/boot/live.img
+	sed 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' grub-demo.cfg > iso-demo/boot/grub/grub.cfg
+	@if [ -z "$(GRUB_MKRESCUE)" ]; then \
+		echo "make: grub-mkrescue not found -- see README.md's dependency table."; \
+		exit 1; \
+	fi
+	$(GRUB_MKRESCUE) -o $(DEMO_ISO) iso-demo
+	@echo "demo-iso: $(DEMO_ISO) -- boots the tour with no input; see data/wm/demo.script"
+
+run-demo: demo-iso
+	qemu-system-x86_64 -cdrom $(DEMO_ISO) -serial stdio -vga std -display sdl,grab-mod=rctrl -m 2048
+
+# Boot the live ISO the way a user would: NO -drive at all. That is the
+# whole point -- pointing it at disk.img would let the ordinary disk path
+# run and prove nothing about the live one.
+run-live: live-iso
+	qemu-system-x86_64 -cdrom $(LIVE_ISO) -serial stdio -vga std -display sdl,grab-mod=rctrl -m 2048
 
 # -vga std: explicit (matches QEMU's own default, but pinned here so the
 #   higher 1280x720 mode boot.asm requests isn't at the mercy of a
@@ -783,7 +821,7 @@ clean:
 	# other build product. This used to name 21 $(FOO_ELF) variables by
 	# hand -- they built into the source tree next to their .c files and
 	# needed a .gitignore entry to stay out of the repo.
-	rm -rf $(BUILD) $(ISO) $(LIVE_ISO) iso/boot/kernel.bin iso/boot/live.img iso-live $(SEED_DIR)/sync
+	rm -rf $(BUILD) $(ISO) $(LIVE_ISO) $(DEMO_ISO) iso/boot/kernel.bin iso/boot/live.img iso-live iso-demo $(SEED_DIR)/sync
 	# Deliberately NOT touching $(DISK_IMG) here -- see its comment above.
 	# Use `make clean-disk` to explicitly wipe the persistent filesystem.
 
