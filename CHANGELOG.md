@@ -49,6 +49,8 @@ using `## [x.y.z] - date` headings is in archive 3 or here.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-16
+
 ### Changed
 - **The kernel enforces W^X on its own memory now, finishing Milestone
   2.** `boot.asm` hands over a flat 4GiB identity map that is uniformly
