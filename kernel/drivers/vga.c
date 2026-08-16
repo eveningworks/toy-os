@@ -27,6 +27,39 @@
 
 static int fb_mode = 0;
 
+// ---- console double buffering ----
+//
+// The framebuffer console draws into gfx.c's back buffer and publishes
+// with gfx_present(), rather than drawing straight at the display.
+//
+// The invariant this buys: **the console never READS the framebuffer.**
+// It used to, in two places -- scrolling shifted the visible pixels up
+// in place, and the cursor saved the cell underneath itself before
+// painting over it. Both are reads of a surface that is write-combined
+// (see paging.c), and WC is a write optimisation that makes reads
+// strictly worse: stores coalesce into bursts, while each load is an
+// uncached bus round trip with no cache fill and no prefetch. A
+// full-screen shift is a whole screen of those, which on a real machine
+// is slow enough to watch the scanline travel down the display. It is
+// invisible under plain QEMU, whose TCG ignores guest memory types
+// entirely -- `make run-kvm` and real hardware are where it shows.
+//
+// The trap, if you edit this: presenting is now a SEPARATE step from
+// drawing, so anything that puts text on screen and then stops without
+// reaching a flush point leaves that text in RAM only. The flush points
+// are vga_present() from the keyboard's idle loop (the physical shell's
+// "output is over, waiting for a human" moment), the throttled present
+// at the end of each vga_putc(), and the explicit call on the panic
+// path. A new path that prints and then halts needs its own.
+//
+// There is deliberately NO "console has drawn something" flag here.
+// gfx.c already tracks the dirty bounding box, and gfx_present() returns
+// immediately when it is empty, so that IS the answer -- a second copy
+// of it kept in this file could only ever disagree with it, and the
+// direction it would disagree in is the silent one (text drawn, flag not
+// set, nothing ever shown). Present unconditionally and let gfx.c decide.
+static uint64_t fb_last_present_tick;
+
 static size_t row;
 static size_t col;
 static size_t console_cols;
@@ -340,12 +373,38 @@ int vga_cursor_style_parse(const char *name, enum vga_cursor_style *out) {
 
 // ---- framebuffer text-console backend ----
 
+// Publishes everything the console has drawn since the last present.
+// Cheap when nothing changed, so callers on an idle path can call it
+// unconditionally -- only the dirty bounding box is blitted.
+void vga_present(void) {
+    if (!fb_mode) return;
+    // Both modes, in the one place, so no caller has to know which is
+    // live. Double-buffered, gfx_present() blits the dirty box and
+    // publishes it; drawing straight at the display it is a no-op and
+    // gfx_flush() is what tells a driver-owned mode to show the region.
+    // Exactly one of the two does the work on any given boot.
+    gfx_present();
+    gfx_flush();
+    fb_last_present_tick = pit_ticks();
+}
+
+// The mid-burst present. Bounded to one per PIT tick (100Hz) so a
+// command dumping hundreds of scrolling lines pays for one full-screen
+// blit per tick rather than one per line, while still animating instead
+// of appearing to freeze until it finishes. The tail of the burst is
+// caught by vga_present() from the idle loop, so nothing relies on this
+// firing on the last line.
+static void fb_present_throttled(void) {
+    if (pit_ticks() == fb_last_present_tick) return;
+    vga_present();
+}
+
 static void fb_clear(void) {
     gfx_clear(palette_rgb(cur_bg));
     row = 0;
     col = 0;
     cursor_on_screen = 0; // whatever was drawn is gone along with everything else
-    gfx_flush(); // see gfx.h -- a driver-owned mode shows nothing until told
+    vga_present(); // a clear is a visible event in its own right, not part of a burst
 }
 
 static void fb_scroll_if_needed(void) {
@@ -524,6 +583,11 @@ static void sb_repaint(uint32_t back) {
         col = sb_len[sb_total % SB_LINES] < console_cols ? sb_len[sb_total % SB_LINES] : 0;
         cursor_show_and_reset_blink();
     }
+
+    // A repaint is a whole new screen and it is the direct answer to a
+    // PageUp/PageDown keypress, so it publishes immediately rather than
+    // waiting for the idle loop -- this is not part of an output burst.
+    vga_present();
 }
 
 void vga_scroll_back(int lines) {
@@ -584,6 +648,12 @@ void vga_init(void) {
 
     if (gfx_init()) {
         fb_mode = 1;
+        // Draw into the back buffer, not at the display -- see the
+        // double-buffering comment at the top of this file for why the
+        // console must never read the framebuffer. Falls back to drawing
+        // straight at the screen if the surface is too large for
+        // back_buffer, which still works, just slowly on a real machine.
+        gfx_set_double_buffered(1);
         console_cols = (size_t)gfx_width() / CELL_W;
         console_rows = (size_t)gfx_height() / CELL_H;
         fb_clear();
@@ -620,7 +690,18 @@ void vga_clear(void) {
     }
     if (fb_mode) fb_clear();
     else legacy_clear();
-    gfx_flush(); // see gfx.h -- a driver-owned mode shows nothing until told
+}
+
+void vga_resume(void) {
+    if (!fb_mode) return;
+    // The window manager turned double buffering on for itself and the
+    // back buffer still holds its last frame, which has nothing to do
+    // with the console's idea of where text is. Re-enable (a no-op if it
+    // is already on -- but it also resets the dirty box, which is right:
+    // nothing of the console's is pending) and repaint from scrollback,
+    // so the screen and this file's row/col agree again.
+    gfx_set_double_buffered(1);
+    sb_repaint(0);
 }
 
 void vga_reflow(void) {
@@ -669,7 +750,7 @@ void vga_cursor_tick(void) {
     // erase-to-black hide would have eaten the character underneath.
     if (cursor_on_screen) cursor_hide();
     else cursor_draw();
-    gfx_flush(); // see gfx.h -- a driver-owned mode shows nothing until told
+    vga_present(); // the blink is its own event, not part of an output burst
 }
 
 // Repositions the insertion point without erasing anything -- see
@@ -800,14 +881,14 @@ void vga_putc(char c) {
         // round trip redraws the banner as a single stripe with four of
         // its five lines missing.
         sb_record('\n');
-        gfx_flush();
+        fb_present_throttled();
         return;
     }
 
     sb_record(c);
     if (fb_mode) fb_putc(c);
     else legacy_putc(c);
-    gfx_flush(); // see gfx.h -- a driver-owned mode shows nothing until told
+    fb_present_throttled();
 }
 
 void vga_backspace(void) {
@@ -823,7 +904,6 @@ void vga_backspace(void) {
 
 void vga_write(const char *s) {
     while (*s) vga_putc(*s++);
-    gfx_flush(); // see gfx.h -- a driver-owned mode shows nothing until told
 }
 
 // These two are now three lines each over knum.h's converters. They

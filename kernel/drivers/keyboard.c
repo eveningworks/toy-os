@@ -219,6 +219,11 @@ int keyboard_getchar_mods(uint8_t *out_mods) {
         // apps/wm/wm.c's loop covers the GUI case separately).
         vga_cursor_tick();
         debug_console_poll();
+        // The physical console's flush point: it draws into a back
+        // buffer and this is where "output is finished, we are waiting
+        // for a human" is true, so it is where the screen catches up.
+        // Cheap when nothing changed. See vga.h's vga_present().
+        vga_present();
         __asm__ volatile ("hlt");
     }
 

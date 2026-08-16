@@ -144,6 +144,16 @@ void gfx_clear_clip_rect(void) {
 
 
 void gfx_flush(void) {
+    // Nothing has reached the display yet when there is a back buffer --
+    // publishing is gfx_present()'s job, and it calls display_flush()
+    // itself. Returning early here is load-bearing rather than an
+    // optimisation: this function's last act is to CLEAR the dirty box,
+    // which while double-buffered would throw away the record of what
+    // still needs presenting. The console draws a character, the
+    // throttle correctly decides not to present yet, and a gfx_flush()
+    // in between would erase the evidence -- which is exactly what left
+    // the whole boot log in RAM with one stray glyph on screen.
+    if (double_buffered) return;
     if (dirty_x1 <= dirty_x0) return;   // nothing drawn since last time
     // A no-op on a scanned framebuffer: display_flush() checks the
     // capability itself, so this file never asks which card it's on.
@@ -379,8 +389,10 @@ void gfx_present(void) {
         }
     }
     // Publish before clearing the box -- on a driver-owned mode the
-    // adapter shows nothing until told, see gfx_flush().
-    gfx_flush();
+    // adapter shows nothing until told. Called directly rather than
+    // through gfx_flush(), which deliberately does nothing while double
+    // buffering is on (see its comment).
+    display_flush(dirty_x0, dirty_y0, dirty_x1 - dirty_x0, dirty_y1 - dirty_y0);
     dirty_x0 = dirty_x1 = dirty_y0 = dirty_y1 = 0;
 }
 
@@ -434,19 +446,36 @@ void gfx_scroll_up(int pixel_rows, uint32_t bg_color) {
         }
         // The memmove above writes straight into back_buffer, bypassing
         // gfx_put_pixel() -- mark the shifted region dirty by hand so
-        // gfx_present() still picks it up. (Not currently reachable with
-        // double buffering on -- the console, the only caller, leaves it
-        // off -- but this keeps the function correct on its own terms
-        // rather than relying on that caller-side invariant.)
+        // gfx_present() still picks it up.
         dirty_mark_rect(0, 0, width, height - pixel_rows);
         gfx_fill_rect(0, height - pixel_rows, width, pixel_rows, bg_color);
         return;
     }
+    // The degraded path: shifting the visible framebuffer in place, which
+    // means READING it back. Write-combining does not help a load -- it
+    // coalesces stores into burst transfers, while each read is still a
+    // full bus round trip the CPU stalls on -- so on real hardware this
+    // costs roughly a whole screen of uncached reads on top of the
+    // writes, and it is slow enough to watch the scanline travel down
+    // the display. Every ordinary console reaches the double-buffered
+    // branch above instead and never reads the framebuffer at all; this
+    // survives only for a surface too large for back_buffer
+    // (GFX_MAX_PIXELS), where there is nothing else to shift.
     uint32_t row_bytes = (uint32_t)width * (bpp / 8);
     for (int y = 0; y < height - pixel_rows; y++) {
         uint8_t *dst = fb + (uint32_t)y * pitch;
         const uint8_t *src = fb + (uint32_t)(y + pixel_rows) * pitch;
-        for (uint32_t i = 0; i < row_bytes; i++) dst[i] = src[i];
+        // Word at a time where the format allows it, for the same reason
+        // gfx_present() does: one bus transaction per four bytes, not per
+        // byte. Aligned because a 32bpp surface has 4-byte pixels and
+        // `pitch` is a whole number of them.
+        if (bpp == 32) {
+            uint32_t *d32 = (uint32_t *)dst;
+            const uint32_t *s32 = (const uint32_t *)src;
+            for (uint32_t i = 0; i < row_bytes / 4; i++) d32[i] = s32[i];
+        } else {
+            for (uint32_t i = 0; i < row_bytes; i++) dst[i] = src[i];
+        }
     }
     gfx_fill_rect(0, height - pixel_rows, width, pixel_rows, bg_color);
 }
@@ -787,3 +816,26 @@ uint64_t gfx_bench_fill(uint32_t color, int iterations) {
     __asm__ volatile ("mfence" ::: "memory");
     return arch_rdtsc() - start;
 }
+
+// See gfx.h. Measures a BURST -- n scrolls then one present -- because
+// that is the shape console output actually has, and because the two
+// modes put the cost in different places: unbuffered, every scroll is a
+// full-screen read-modify-write of the framebuffer and the present is a
+// no-op; double-buffered, every scroll is a RAM memmove and the single
+// present at the end is the only thing that touches the display.
+// Averaging over the burst is what makes the two comparable.
+uint64_t gfx_bench_scroll(int pixel_rows, int iterations) {
+    if (!fb || width <= 0 || height <= 0) return 0;
+    if (pixel_rows <= 0 || pixel_rows >= height || iterations <= 0) return 0;
+
+    uint32_t bg = 0x000000;
+    uint64_t start = arch_rdtsc();
+
+    for (int n = 0; n < iterations; n++) gfx_scroll_up(pixel_rows, bg);
+    gfx_present(); // no-op when unbuffered; the whole cost when not
+
+    __asm__ volatile ("mfence" ::: "memory");
+    return arch_rdtsc() - start;
+}
+
+int gfx_double_buffered(void) { return double_buffered; }

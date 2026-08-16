@@ -1189,6 +1189,31 @@ figure is not real. **If a user reports something that reproduces only
 on hardware, ask what the emulator models differently BEFORE doubting
 the report.** See `docs/decisions.md`.
 
+**But `make run-kvm` DOES honour guest memory types, and that is the one
+way to reproduce this class of bug locally.** TCG ignores PAT entirely,
+so a write-combined framebuffer behaves exactly like a cached one under
+plain `make run`; KVM does not. That distinction is what turned "slow
+only on the maintainer's laptop" into a measurement:
+`python3 tools/vm.py --kvm run "gfxbench 20"` reported **178.5 ms** per
+scrolled text line against **0.5 ms** once the console stopped reading
+the framebuffer. Reach for `--kvm` before concluding a hardware-only
+report is untestable.
+
+**The framebuffer console draws into a back buffer and PUBLISHES
+separately, and the invariant is that it never READS the framebuffer.**
+Write-combining is a write optimisation that makes reads strictly worse
+(uncached, no prefetch), so the console's old scroll -- shifting visible
+pixels up in place -- became its slowest operation the moment WC landed.
+It draws through `gfx.c`'s back buffer now and publishes with
+`gfx_present()`. **The trap: a path that prints and then HALTS without
+reaching a flush point leaves its text in RAM only.** The flush points
+are `vga_present()` in `keyboard_getchar_mods()`'s idle loop, a
+tick-throttled present at the end of `vga_putc()`, and an explicit call
+on `idt.c`'s panic path -- add one to any new print-then-halt path.
+Note there is deliberately no dirty flag in `vga.c`: `gfx.c` already
+tracks the dirty box and `gfx_present()` no-ops when empty, so a second
+copy could only disagree with it silently. See `docs/decisions.md`.
+
 **`strace <binary>` is often the fastest way to see what a `/bin`
 binary is doing** -- one decoded line per syscall
 (`open("notes.txt", O_WRITE|O_CREAT) = 3`), and the same lines land in

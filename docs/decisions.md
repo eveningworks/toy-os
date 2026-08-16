@@ -50,6 +50,8 @@ there when you add an entry, or the index quietly stops being one.
 - [Kernel W^X: NX on every huge PDE, one 4KiB split for `.text`, and CR0.WP](#kernel-wx-nx-on-every-huge-pde-one-4kib-split-for-text-and-cr0wp)
 - [The framebuffer is write-combined via PAT, and `nopat` exists to make the MTRR fallback reachable](#the-framebuffer-is-write-combined-via-pat-and-nopat-exists-to-make-the-mtrr-fallback-reachable)
 - [The RAM meter is an uncomposited overlay, which is why it is debug-only](#the-ram-meter-is-an-uncomposited-overlay-which-is-why-it-is-debug-only)
+- [The console is double-buffered because write-combining made its scroll 357x slower](#the-console-is-double-buffered-because-write-combining-made-its-scroll-357x-slower)
+- [The legacy text console cannot be selected from GRUB, and `gfxpayload=text` does not do it](#the-legacy-text-console-cannot-be-selected-from-grub-and-gfxpayloadtext-does-not-do-it)
 - [The user stack's guard is an unmapped hole plus two rules, and the sbrk rule is the one that mattered](#the-user-stacks-guard-is-an-unmapped-hole-plus-two-rules-and-the-sbrk-rule-is-the-one-that-mattered)
 - [SMAP is absolute here because the kernel copies through its own identity map, not with STAC/CLAC](#smap-is-absolute-here-because-the-kernel-copies-through-its-own-identity-map-not-with-stacclac)
 - [Heap debug mode is a runtime toggle, and `kfree()` tells the two block shapes apart by a magic that cannot be a pointer](#heap-debug-mode-is-a-runtime-toggle-and-kfree-tells-the-two-block-shapes-apart-by-a-magic-that-cannot-be-a-pointer)
@@ -5653,3 +5655,96 @@ reads the whole module off the emulated CD-ROM before the kernel starts.
 Partial block groups have since brought the image to 24 MiB, so folding
 it into the default ISO is now arguable -- measure the boot before doing
 it.
+
+## The console is double-buffered because write-combining made its scroll 357x slower
+
+Write-combining the framebuffer (see the PAT entry above) made every
+drawing path in the system faster except one, and made that one
+dramatically worse. WC is a **write** optimisation: stores are gathered
+into burst transfers instead of going out one at a time. It does nothing
+for loads, and it removes the caching that used to hide them -- a read
+from a WC page is an uncached bus round trip with no cache fill and no
+prefetch.
+
+The framebuffer console was the one surface that read the framebuffer
+back. It scrolled by shifting the visible pixels up in place, which is a
+whole screen of reads, and its cursor saved the cell underneath itself
+before painting over it, which is another read per blink. So the GUI got
+faster (double-buffered, writes only) while the CLI got slower, and the
+symptom was a scanline you could watch travel down a real display.
+
+Measured with `gfxbench 20` under `make run-kvm`, same build, the only
+difference being whether the console had a back buffer:
+
+| | ms per scrolled text line |
+|---|---|
+| direct (reads the framebuffer) | 178.5 |
+| double-buffered | 0.5 |
+
+Full-screen *fill* throughput was identical either way (17.3 GB/s), which
+is what confirms the change touches only the read path.
+
+The fix is the invariant, not the number: **the console never reads the
+framebuffer.** It draws into gfx.c's back buffer -- which already
+existed, is already a static array, and already had dirty-rect tracking
+for the WM -- and publishes with `gfx_present()`. Scrolling becomes a RAM
+memmove and the cursor's save becomes a RAM read.
+
+Two things worth knowing before editing it. **Drawing and showing are
+now separate steps**, so a path that prints and then halts without
+reaching a flush point leaves its text in RAM only; the flush points are
+`vga_present()` from `keyboard_getchar_mods()`'s idle loop, a throttled
+present at the end of each `vga_putc()`, and an explicit call on the
+panic path in `idt.c` (which is the one that would otherwise lose the
+panic banner itself). And **there is deliberately no "dirty" flag in
+vga.c** -- gfx.c already tracks the dirty box and `gfx_present()` no-ops
+when it is empty, so a second copy of that fact could only ever disagree
+with it, in the silent direction.
+
+Why this was invisible for so long: plain QEMU's TCG ignores guest
+memory types entirely, so both paths are equally fast under `make run`
+and every test in this repo. `make run-kvm` honours them, which is what
+made it reproducible at all -- and is the reason `gfxbench` reports
+which mode is live rather than just a number. See `kernel/drivers/vga.c`'s
+double-buffering comment and `kernel/drivers/gfx_test.c`'s scroll KTESTs,
+which pin the shift but explicitly cannot pin the cost.
+
+## The legacy text console cannot be selected from GRUB, and `gfxpayload=text` does not do it
+
+`kernel/drivers/vga.c` has a complete legacy 80x25 `0xB8000` backend, and
+it is dead code on every normal boot: `vga_init()` only reaches it when
+`gfx_init()` finds no usable linear framebuffer. The obvious way to make
+it reachable -- a second GRUB menu entry with `set gfxpayload=text` --
+was tried and **does not work**, and the measurements are worth recording
+so nobody spends the time again.
+
+`boot.asm`'s multiboot2 header carries a framebuffer request tag (type 5)
+asking for 1280x720x32. GRUB acts on that *before* the kernel runs, so by
+the time any kernel command-line word could be read the adapter is
+already in a graphics mode and writes to `0xB8000` land nowhere visible.
+That rules out a cmdline flag outright.
+
+`gfxpayload` does not rescue it either. Two experiments, both booted and
+read back from `dmesg`:
+
+- With the header requesting 1280x720x32, `set gfxpayload=800x600x32` in
+  the menu entry changed nothing -- still 1280x720. So for multiboot2 the
+  header's request wins and `gfxpayload` is ignored.
+- With the header's width/height/depth set to 0/0/0 ("no preference"),
+  the resolution *did* change (GRUB chose 1280x800), proving the header
+  edit took effect -- and `set gfxpayload=text` **still** produced a
+  linear framebuffer. GRUB's multiboot2 loader always sets a graphics
+  mode when the kernel carries a framebuffer request tag.
+
+So making text mode selectable needs one of: a second kernel image built
+without the framebuffer tag (a `make text-iso` variant, the way
+`live-iso` and `demo-iso` are already separate artifacts), or a runtime
+VGA mode-3 switch by banging registers directly, since there is no BIOS
+`int 10h` in long mode. Neither is built. This is recorded rather than
+attempted because the first is a whole second build of the kernel for a
+fallback nobody has needed yet, and the second is a few hundred lines of
+fragile register tables.
+
+Note the fallback is not *entirely* unreachable in the meantime: it is
+what runs on a machine where GRUB provides no framebuffer at all, which
+is the case it exists for.

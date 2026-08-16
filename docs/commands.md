@@ -67,7 +67,7 @@ history search, `Alt-.` last argument. `help` lists them all.
 | `heap` | Kernel heap stats. `heap debug on\|off` red-zones new allocations and poisons freed ones; `heap check` sweeps for a use-after-free. |
 | `df` | Total/used/free, and the name of the active filesystem backend. |
 | `dmesg`, `lspci`, `parttable` | |
-| `gfxbench [iterations]` | Times full-screen framebuffer fills and reports ms/frame, an fps ceiling, MB/s, and which write-combining mechanism is live. Meaningful only on real hardware — see `decisions.md`. |
+| `gfxbench [iterations]` | Times full-screen framebuffer fills *and* console scrolls, reporting ms/frame, an fps ceiling, MB/s, which write-combining mechanism is live, and whether the console is double-buffered. Meaningful only under `make run-kvm` or on real hardware — plain QEMU's TCG ignores memory types, so both console modes measure the same there. See `decisions.md`. |
 
 CPU identification is `/bin/lscpu`, not a builtin: vendor, brand string,
 family/model/stepping, calibrated MHz, cache hierarchy, and every CPUID

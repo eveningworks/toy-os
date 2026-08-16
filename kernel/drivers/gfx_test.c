@@ -100,3 +100,59 @@ KTEST("gfx", "text helpers survive a NULL string") {
     KTEST_ASSERT_EQ(gfx_text_next(0, 3), 0);
     KTEST_ASSERT_EQ(gfx_text_prev(0, 3), 2);
 }
+
+// --- scrolling --------------------------------------------------------
+//
+// gfx_scroll_up() is the console's hot path and has two implementations:
+// shift the back buffer in RAM, or shift the visible framebuffer in
+// place. Only the first is used in practice, and the difference is not
+// cosmetic -- the second READS the framebuffer, which a write-combined
+// surface makes an uncached bus round trip per load, measured at 178.5ms
+// versus 0.5ms per text line under `make run-kvm`. See vga.c's
+// double-buffering comment.
+//
+// What can be asserted here is the shift itself. What CANNOT is the cost
+// -- the whole reason that regression survived a green suite is that
+// plain QEMU's TCG ignores guest memory types, so both paths are equally
+// fast here. `gfxbench` on a KVM guest or real hardware is the only
+// thing that measures it, which is why it reports which mode is live.
+
+KTEST("gfx", "scroll_up shifts the back buffer up by exactly pixel_rows") {
+    if (!gfx_double_buffered()) KTEST_SKIP("no back buffer to shift");
+
+    int w = gfx_width(), h = gfx_height();
+    KTEST_ASSERT(w > 16 && h > 16);
+
+    const int rows = 8;
+    uint32_t marker = gfx_rgb(200, 100, 50);
+    uint32_t fill   = gfx_rgb(10, 20, 30);
+
+    // A marker line at y == rows must land at y == 0, and both ENDS are
+    // checked: a per-row copy that got its length wrong still moves the
+    // left edge correctly.
+    for (int x = 0; x < w; x++) gfx_put_pixel(x, rows, marker);
+    gfx_scroll_up(rows, fill);
+
+    KTEST_ASSERT_EQ(gfx_get_pixel(0, 0), marker);
+    KTEST_ASSERT_EQ(gfx_get_pixel(w - 1, 0), marker);
+
+    // ...and the band it vacated is the fill colour, not a copy of the
+    // last real row.
+    KTEST_ASSERT_EQ(gfx_get_pixel(0, h - 1), fill);
+    KTEST_ASSERT_EQ(gfx_get_pixel(w - 1, h - rows), fill);
+}
+
+KTEST("gfx", "scroll_up of the whole height clears rather than shifting") {
+    if (!gfx_double_buffered()) KTEST_SKIP("no back buffer to shift");
+
+    int h = gfx_height();
+    uint32_t fill = gfx_rgb(7, 8, 9);
+    gfx_put_pixel(0, 0, gfx_rgb(255, 255, 255));
+
+    // pixel_rows >= height has nothing left to shift, so it is a clear.
+    // Guarding this is what stops the row loop running with a negative
+    // bound.
+    gfx_scroll_up(h, fill);
+    KTEST_ASSERT_EQ(gfx_get_pixel(0, 0), fill);
+    KTEST_ASSERT_EQ(gfx_get_pixel(0, h - 1), fill);
+}

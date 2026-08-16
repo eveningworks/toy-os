@@ -264,6 +264,13 @@ void isr_dispatch(uint64_t *regs) {
         klog_printf("%s%s\n", recoverable ? "RING-3 CRASH: " : "PANIC: ",
                      stack_overflow ? "Stack overflow" : exception_names[vector]);
 
+        // The console draws into a back buffer and normally publishes
+        // from the keyboard's idle loop (see vga.h's vga_present()). A
+        // kernel panic never reaches that loop -- it halts below -- so
+        // without this the banner reporting the panic is the one thing
+        // that never makes it to the screen.
+        vga_present();
+
         if ((cs & 3) == 3 && ring3_hook) {
             ring3_hook(vector, error_code, cs, cr2);
         }

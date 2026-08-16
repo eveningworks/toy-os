@@ -1700,4 +1700,23 @@ void cmd_gfxbench(const char *args) {
     } else {
         vga_write("(too fast to measure)\n");
     }
+
+    // The console's own hot path, measured separately -- a full-screen
+    // fill and a scroll cost wildly different amounts once the surface
+    // is write-combined, because only the scroll reads it back. One
+    // text line per scroll, which is what console output actually does.
+    uint64_t scroll_cycles = gfx_bench_scroll(gfx_char_h(), iterations);
+
+    vga_write("  scroll: ");
+    if (scroll_cycles == 0) {
+        vga_write("(not measurable on this surface)\n");
+        return;
+    }
+    uint64_t scroll_us = (scroll_cycles / (uint64_t)info.mhz) / (uint64_t)iterations;
+    vga_write_dec((uint32_t)(scroll_us / 1000));
+    vga_putc('.');
+    vga_write_dec((uint32_t)((scroll_us % 1000) / 100));
+    vga_write(" ms per text line, ");
+    vga_write(gfx_double_buffered() ? "buffered" : "DIRECT (reads the framebuffer)");
+    vga_putc('\n');
 }

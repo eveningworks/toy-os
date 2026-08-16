@@ -294,6 +294,29 @@ void gfx_present(void);
 // cached host RAM; the number only says something on real hardware.
 uint64_t gfx_bench_fill(uint32_t color, int iterations);
 
+// Times a BURST of `iterations` scrolls of `pixel_rows` each, followed
+// by one present -- the shape a run of console output actually has.
+// Returns elapsed TSC cycles, 0 if the arguments are unusable.
+//
+// This is the console's other half, and the two modes put the cost in
+// completely different places: drawing straight at the display, every
+// scroll shifts the visible pixels in place and so READS the whole
+// framebuffer, which write-combining makes worse rather than better;
+// double-buffered, every scroll is a RAM memmove and only the single
+// present touches the display at all. Measuring the burst rather than
+// one scroll is what makes those comparable.
+//
+// Like gfx_bench_fill(), the number is only meaningful on a real
+// machine or under `make run-kvm`: plain QEMU's TCG ignores guest
+// memory types entirely, so the expensive case simply does not happen
+// there. See paging.h.
+uint64_t gfx_bench_scroll(int pixel_rows, int iterations);
+
+// Whether drawing currently goes to the back buffer rather than
+// straight at the display. Reported by `gfxbench`, since it decides
+// which of the two cost models above applies.
+int gfx_double_buffered(void);
+
 // Bits per pixel of the active surface (32 or 24), and a name for the
 // mechanism that made its framebuffer write-combining ("PAT", "MTRR" or
 // "none (uncached)").

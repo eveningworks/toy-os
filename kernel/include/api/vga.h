@@ -99,6 +99,29 @@ uint32_t vga_color_rgb(enum vga_color c);
 // in legacy 80x25 text mode (that console's cell size never changes).
 void vga_reflow(void);
 
+// Publishes everything the framebuffer console has drawn since the last
+// call, and resumes ownership of the screen after something else (the
+// window manager) has had it.
+//
+// The console draws into gfx.c's back buffer rather than at the display,
+// so that it never READS the framebuffer -- a write-combined surface
+// makes reads strictly worse, and shifting the visible pixels up to
+// scroll was a whole screen of them. See vga.c's double-buffering
+// comment. The consequence is that drawing and showing are now separate
+// steps: text sits in RAM until something presents it.
+//
+// Cheap and idempotent when nothing has changed, so an idle path can
+// call it unconditionally -- keyboard_getchar_mods()'s wait loop does,
+// which is the physical shell's "output is finished, waiting for a
+// human" moment and covers the tail of any burst. A path that prints
+// and then HALTS without reaching that loop must call this itself, or
+// its last output is never seen; the fault handler's panic report does.
+void vga_present(void);
+
+// Re-enables console double buffering and repaints, after the window
+// manager has been using the screen. Called on the way out of GUI mode.
+void vga_resume(void);
+
 // Current console height in text rows -- 25 in legacy 80x25 text mode,
 // or gfx_height()/gfx_char_h() in framebuffer mode (varies with the
 // active font size, see vga_reflow()). Lets callers that print a lot of

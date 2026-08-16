@@ -109,9 +109,10 @@ Plus the smaller ones, all of which stage 4 needs: syscalls for
 `etc_config_*` (settings), a monotonic tick (`pit_ticks()`;
 `sys_gettime` is RTC wall-clock and wrong for animation), and
 `scheduler_kill`/`scheduler_poll` for force-quit and reaping. And
-`MAX_PROCS` is **4** (`kernel/proc/scheduler.c`) -- the WM itself would
-take one, leaving three for the entire desktop, when a terminal running
-a command is already two.
+`MAX_PROCS` was **4** when this was written -- the WM itself would have
+taken one, leaving three for the entire desktop, when a terminal running
+a command is already two. It is `SCHED_MAX_PROCS` = 64 now, so this
+particular blocker is gone.
 
 ### The consequence that is not in the roadmap
 
@@ -277,6 +278,65 @@ synthetic input via `gui click`/`gui key`, and logs it -- while the real
 WM keeps working from the same stream. `gui_regress.py` unchanged
 proves the second consumer changed nothing.
 
+#### Measured, 2026-08-16 -- what stage 2 actually costs
+
+Surveyed before building, so the next session starts from facts rather
+than a re-read. Four findings change the shape of the work:
+
+**There is no unified input event anywhere to reuse.** The WM does not
+poll an event queue -- it reads *level state* and diffs it itself.
+`mouse_get_state(&x, &y, &buttons)` (`kernel/drivers/mouse.c`) returns an
+absolute clamped position plus a button bitmask, and `wm.c` derives
+presses and releases by comparing against its own `prev_mx/prev_my/
+prev_buttons`. The wheel is a read-and-reset accumulator
+(`mouse_get_wheel_delta()`). Only the keyboard is a real queue -- a
+256-entry ring in `kernel/drivers/keyboard.c` packed as
+`key | (mods << 16)`, drained one key per iteration by
+`keyboard_try_getchar_mods()`. The only event struct in the tree,
+`struct win_event`, is *post*-routing and per-client. So stage 2 either
+synthesizes press/release edges in the kernel or hands the compositor
+the same level state and lets it diff -- and the second is what the WM
+does today, which argues for it.
+
+**The tap must go inside `wm.c`'s loop, not at the driver.** `gui click`
+and `gui key` inject into rings in `wm_debug.c` and are applied *after*
+the real driver read -- mouse state is overridden for that one iteration
+(`wm.c`, after `mouse_get_state()`), and an injected key is used only
+when the real keyboard returned -1, so a human is never pre-empted.
+Tapping `mouse_get_state()` directly would therefore make every
+synthetic event invisible to the compositor, which is precisely the
+thing the stage has to demonstrate.
+
+**Registration already exists and has no way in.** Stage 1 landed
+`win_server_set_compositor(pid, pml4)`, `win_server_compositor_pid()`,
+and the access-control idiom the rest should copy
+(`if (!g_comp_pid || requester_pid != g_comp_pid) return 0;`), including
+revocation of every mapping when the compositor is replaced or cleared.
+**Nothing outside `kernel/proc/win_server_test.c` calls any of it** --
+there is no syscall and no `WIN_REQ_*` that reaches it. Filling that gap
+is the first thing stage 2 does.
+
+**Delivery needs no new transport.** Raw events can be pushed onto the
+compositor pid's existing `win_events` queue with new `WIN_EV_*` types,
+and `sys_wait_event()` works unchanged on the client side. Next free
+`WIN_REQ_*` is 9, next free `WIN_EV_*` is 10, next free syscall number is
+30. `struct win_event` has a spare `reserved` word if a raw event needs a
+fifth payload field, and its `window` field is meaningless for raw input
+-- a natural place to carry which device it came from.
+
+Two consequences to decide before writing code. Registration as
+`WIN_REQ_SET_COMPOSITOR = 9` costs only `win_proto.h` plus one `case` in
+`win_server.c`, and matches TWP's "operations are messages, not
+syscalls" bet; the one argument against is that `SYS_WIN_REQUEST` is
+refused outright when no presentation layer is registered, so a
+compositor could not register before the WM does. And the event queue is
+**32 deep and drops the oldest** -- thin for a raw pointer-motion
+stream, with `win_events_dropped()` as the observable. A `gui compositor`
+subcommand reporting `win_server_compositor_pid()` plus queue depth and
+drops is ~10 lines in `wm_debug.c`'s existing style and is the natural
+"the second consumer is live" assertion, since no existing `gui`
+subcommand can see one.
+
 ### Stage 3 -- transport swap
 
 The stage that makes stage 4 a swap rather than a leap.
@@ -300,7 +360,8 @@ timing, and this bug family lives in orderings.
 ### Stage 4 -- the WM process
 
 - Prerequisites: a ring-3 allocator, the settings/tick/process
-  syscalls, a larger `MAX_PROCS`, and the ELF loader hardening above.
+  syscalls, and the ELF loader hardening above (`MAX_PROCS` is already
+  raised).
 - `apps/wm/` becomes a ring-3 binary linked against Toykit and the
   ported widgets, spawned at boot. `win_server.c` stays in the kernel:
   it owns page tables and the frame allocator, which is exactly what

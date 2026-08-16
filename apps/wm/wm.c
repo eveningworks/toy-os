@@ -667,7 +667,12 @@ void wm_run(void) {
             // above, one layer down: a request serviced after this
             // point would attach a window to a list nobody repaints.
             wm_client_shutdown();
-            gfx_set_double_buffered(0); // console draws straight to screen
+            // Hand the screen back to the console, which owns its own
+            // double buffering (see vga.h's vga_present()) rather than
+            // inheriting whatever the WM left the flag set to. This used
+            // to turn buffering OFF, which left the console drawing --
+            // and, when it scrolled, READING -- the framebuffer directly.
+            vga_resume();
             return;
         }
 

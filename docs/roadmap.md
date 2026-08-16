@@ -1087,10 +1087,20 @@ guess.*
       months -- and because the next person to see it red should know it
       is known, not spend an hour bisecting.
       **What has NOT been done:** nobody has captured WHICH check fails
-      (the re-run wipes the log). Next step is `--logs` on the failing
-      run and reading the check name before theorising; the suite runs
-      four tools in parallel, so contention for the VM slot or the
-      shared serial socket is the first thing to rule out.
+      (the re-run wipes the log). The suite runs four tools in parallel,
+      so contention for the VM slot or the shared serial socket is the
+      first thing to rule out -- but rule it out from a log, not from
+      reasoning.
+      **So: always pass `--logs DIR` when running the full suite**, e.g.
+      `python3 tools/gui_regress.py --logs /tmp/gr`. It costs nothing on
+      a green run and is the only way this entry ever gets closed; the
+      failure is too rare to reproduce on demand, so the capture has to
+      already be armed when it happens.
+      Rate seen 2026-08-16 (second session): one failure in three
+      full-suite runs, and that run had no `--logs`, so the check is
+      still unnamed. Running `menubar` alone did not reproduce it in
+      either attempt, which is weak evidence for the parallel-contention
+      theory over a bug in the widget.
 
 Small things that are real, reproducible, and not worth their own
 milestone -- bugs too minor to schedule, rough edges, and behaviour
@@ -1105,23 +1115,22 @@ rediscover the setup -- a seed, a command, a click sequence. And
 completed *features* stay struck through above because the milestone
 history is worth reading, but a fixed papercut is just noise.
 
-- [ ] **The framebuffer speed fix is UNVERIFIED on real hardware.**
-      Write-combining (PAT, with an MTRR fallback behind `nopat`) and
-      32-bit blit stores landed 2026-08-16 against a report of very slow
-      drawing on an ASUS Zenbook UX305FA (1920x1080). Both mechanisms are
-      confirmed to apply and to boot cleanly, but **the speed claim
-      itself cannot be tested here**: QEMU's framebuffer is cached host
-      RAM, so the bug it fixes is unobservable and `gfxbench` reports an
-      implausible ~2500 MB/s under emulation.
-      **To settle it:** boot the laptop, run `gfxbench 20` at the shell,
-      and compare against the same command on a build with the
-      `pat_apply()` call stubbed out. Expect the "write-combining:" line
-      to read `PAT`. A `none (uncached)` reading there would mean the
-      CPUID probe failed and is itself the bug.
-      No serial port on that machine, so the readout is shaped to be
-      photographed; `docs/decisions.md` records the alternative
-      (write results to the TFS3 volume, read them back with
-      `tools/tfs3_writer.py read`) if a text transcript is ever needed.
+- [ ] **`gfxbench`'s numbers are only meaningful under KVM or on real
+      hardware.** Plain QEMU's TCG ignores guest memory types entirely,
+      so a write-combined framebuffer behaves exactly like a cached one
+      and the tool reports an implausible ~17 GB/s. This is not a bug to
+      fix -- it is a permanent property of the emulator, recorded here
+      because it has now cost two sessions. Use `make run-kvm` /
+      `python3 tools/vm.py --kvm run "gfxbench 20"` for any framebuffer
+      performance question, and treat a TCG number as evidence of
+      nothing. `gfxbench` prints the live write-combining mechanism and
+      whether the console is buffered beside its timings for exactly
+      this reason.
+      (The 2026-08-16 write-combining fix itself is SETTLED: confirmed
+      on the maintainer's ASUS Zenbook UX305FA -- the GUI and the Shapes
+      demo both run well now. The console-scroll regression that same
+      change introduced is fixed and documented in
+      `docs/decisions.md`.)
 - [ ] **`rammeter` doesn't appear at the physical console.** It ticks
       from `wm_render_frame()` only, so it shows on the desktop and
       nowhere else. The console has no repaint loop to hang it off, and
