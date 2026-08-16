@@ -1,9 +1,15 @@
 # Booting from the ISO alone -- a Live CD for toy-os
 
-**Status: DESIGN, not implemented.** Written the way
+**Status: BUILT 2026-08-16** -- stages A, B and C all landed in one
+pass; see "What actually shipped" at the bottom. The design below stands
+as written, with two corrections recorded there.
+
+Originally written as: **DESIGN, not implemented.** Written the way
 `docs/wm-ring3-design.md`, `docs/uapp-design.md` and `docs/tfs3-design.md`
 were: settle the shape and the arguments first, build it in named stages
-afterwards. Nothing below is built yet.
+afterwards. (That sentence read "nothing below is built yet" until the
+day it all was -- kept, because the design is what it is because it was
+written before the code.)
 
 **The one-sentence version:** the ISO carries a small TFS3 image as a
 GRUB module, the VFS gains a RAM block device, and the existing tfs3
@@ -279,3 +285,55 @@ here. The assertion has to be that a file the ISO shipped can be read.
   reservation and the no-disk mount path all already exist, and what is
   missing is a block-device indirection TFS3 is two functions away from,
   plus one genuine blocker in kernel ASLR.
+
+
+## What actually shipped (2026-08-16)
+
+All of stages A, B and C, verified by `tools/live_boot_test.py`: the ISO
+boots with **no `-drive` at all** and comes up with a real `/bin` and
+`/usr`, a binary from the image runs, and `df` says
+`tfs3 (RAM-only -- won't survive reboot)`.
+
+**Stage A found exactly what this document predicted.** `slot_usable()`
+weighed the old image and the multiboot info structure and knew nothing
+about modules, so kernel ASLR could relocate the kernel on top of the
+live image. Fixed, with a KTEST that asserts no module range intersects
+the running image -- and which SKIPS with a reason when no modules are
+loaded, because a green tick on a boot with nothing to hit would be a
+check that cannot fail.
+
+**Two corrections to the design above.**
+
+1. **Persistence is a field on the device, not a capability bit.** The
+   design said `fs_is_persistent()` becomes a property of the device and
+   left it there; in practice the VFS computes
+   `fs->init() && blk_persistent()`, because a backend genuinely cannot
+   tell -- TFS3 mounts a RAM image exactly as it mounts a disk. Getting
+   this wrong would have had a live session tell the user their files
+   were saved.
+
+2. **The live image cannot be small.** The design assumed an image
+   "sized to fit" the seed tree. TFS3 puts 32768 blocks in a group
+   (`T3_BPG`, 128 MiB at a 4 KiB block) and the kernel REFUSES a
+   superblock whose blocks-per-group differs, so one group is the
+   smallest volume the format allows. The live image is therefore 129
+   MiB of which ~4 MiB is used, and the ISO is ~162 MiB rather than the
+   ~20 MiB it was.
+
+   That is the honest cost and it is worth writing down rather than
+   hiding: it costs ISO size and boot-time RAM and nothing else. The fix
+   is to let `bpg` vary for small volumes -- it is already a superblock
+   FIELD, just range-checked to a single value in both the kernel and
+   `tfs3_writer.py` -- which is a change to a tested filesystem's
+   geometry validation and deserves its own pass rather than being
+   smuggled into this one.
+
+**What did NOT need doing.** The block-device indirection was smaller
+than costed: TFS3 already funnelled every read and write through
+`vol_read_sectors()`/`vol_write_sectors()`, so the whole backend moved
+in 15 call-site substitutions plus one include. TFS2 kept its 24 direct
+`ata_*` calls exactly as planned.
+
+**Still out of scope, unchanged:** a writable overlay, compression,
+installing to disk from a live session, and USB-bootable hybrid ISO
+layout.

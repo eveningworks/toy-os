@@ -1507,39 +1507,25 @@ doc makes that its own stage, deliberately before the WM moves.
       must SKIP with a reason rather than fail -- otherwise booting with
       `nowx` reddens six checks and the next session "fixes" the tests.
       Asked for 2026-08-16.
-- [ ] **A Live-CD boot: run from the ISO with no disk.** Asked for
-      2026-08-16. Most of the parts exist -- `multiboot_get_module()`
-      (`kernel/core/multiboot.c`) already reads GRUB modules, and the
-      VFS already degrades to a RAM-only filesystem when there is no
-      disk (`vfs.c`) -- so what is missing is putting the seed tree in
-      the ISO as a module and populating the RAM filesystem from it at
-      boot. The design fork worth pricing first: ship the module as a
-      TFS3 IMAGE the VFS mounts read-only from memory (same code paths,
-      no second format) versus a simple archive unpacked into the RAM
-      fs (simpler to write, a second format to maintain). Note the old
-      `BIN_BOOTSTRAP` GRUB-module path was removed for good reasons --
-      see `docs/decisions.md` -- so this should not just reinstate it.
-      **Designed now: `docs/live-cd-design.md`**, four stages, decided
-      in favour of the TFS3-image-mounted-from-RAM shape. Its blocker is
-      worth knowing about independently of the feature: `slot_usable()`
-      (`kernel/arch/x86_64/reloc.c`) does not consider module ranges, so
-      kernel ASLR can relocate the image on top of a GRUB module -- a
-      failure that depends on the random base and vanishes under
-      `nokaslr`, which reads as an ASLR bug rather than an eaten module.
-- [x] ~~**Cross-process buffer sharing**~~ -- done 2026-08-16 (design
-      doc's stage 1). A window's frames can be mapped into a second
-      address space and, more to the point, REVOKED when they stop being
-      that window's: explicit destroy, client death, resize, and the
-      compositor unregistering or dying. Guarded -- only the registered
-      compositor may ask, and only for a window that exists and belongs
-      to the pid named. The compositor's address for a window is DERIVED
-      (`win_compositor_vaddr(pid, id)`), so a resize re-maps at the same
-      place and the kernel can revoke without being told where. Seven
-      KTESTs in `kernel/proc/win_server_test.c`, with the positive
-      control recorded in the file: disabling revocation on destroy
-      reddens exactly the two revocation checks. Nothing outside the
-      kernel uses it yet, which is the stage's own definition -- the
-      ring-3 WM is its first caller, in stage 4.
+- [x] ~~**A Live-CD boot: run from the ISO with no disk.**~~ -- done
+      2026-08-16, all three stages in one pass. The ISO carries a TFS3
+      image as a GRUB module, a block-device layer sits between the
+      filesystems and the disk, and a RAM device mounts the module. Two
+      GRUB entries: the default prefers a disk and falls back to the
+      image, `toy-os (live)` forces the image. Proven by
+      `tools/live_boot_test.py`, which boots with NO -drive and asserts
+      a shipped binary runs -- "it booted" proves nothing here, since
+      the kernel degrades to an empty RAM filesystem and still reaches a
+      shell. The ASLR blocker was real and is fixed. Costs: the ISO is
+      ~162 MiB because TFS3's minimum volume is one 128 MiB block
+      group. See docs/live-cd-design.md's "What actually shipped".
+- [ ] **Let TFS3 blocks-per-group vary for small volumes.** `bpg` is
+      already a superblock field; both the kernel (`T3_BPG`) and
+      `tfs3_writer.py` range-check it to exactly 32768, so the smallest
+      TFS3 volume is 128 MiB. That is what makes the live image -- and
+      therefore the ISO -- an order of magnitude bigger than the data in
+      it. Touches a tested filesystem's geometry validation, so it wants
+      its own pass with `fs_switch_test.py` and `tfs3_v1_test.py`.
 - [ ] **Raw input to the compositor.** The WM is the thing that decides
       focus, so it cannot receive input through the focus-routed event
       queue it is itself responsible for filling. Needs the raw

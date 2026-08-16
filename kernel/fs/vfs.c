@@ -29,6 +29,9 @@
 #include "tfs.h"
 #include "tfs3.h"
 #include "ata.h"
+#include "block.h"
+#include "kfmt.h"    // klog_printf
+#include "multiboot.h" // a live image arrives as a GRUB module
 #include "klog.h"
 #include "string.h"
 
@@ -81,7 +84,12 @@ static int caps_are_honest(const struct fs_ops *fs) {
 // persistent flag init() reported.
 static int mount_backend(const struct fs_ops *fs) {
     g_fs = fs;
-    g_persistent = fs->init();
+    // Persistence is the DEVICE's answer, not the backend's: TFS3
+    // mounts a RAM image exactly as it mounts a disk and cannot tell
+    // them apart, so asking it would report a live session as
+    // persistent -- which `df`, `fsck` and the About window would then
+    // repeat to the user.
+    g_persistent = fs->init() && blk_persistent();
     klog_write("fs: active backend: ");
     klog_write(fs->name);
     klog_write(g_persistent ? " (persistent)\n" : " (RAM-only)\n");
@@ -92,10 +100,42 @@ static int mount_backend(const struct fs_ops *fs) {
 // (fs_format_backend): pick a backend for the disk that's present.
 // `allow_format` gates the blank-disk policy so a reformat path that
 // just formatted doesn't recurse into formatting again.
+// A LIVE IMAGE: a filesystem the bootloader handed over as a module,
+// mounted from RAM through the same backend a disk uses. See
+// docs/live-cd-design.md for why it is a filesystem image rather than
+// an archive -- one format, one mount path, no unpack step.
+//
+// WHEN it is used, and the rule is deliberately conservative: only when
+// there is no disk, or when the command line asks for it. A real disk
+// present and unasked-for is mounted exactly as before. A live session
+// that quietly displaced somebody's installed system would be the worst
+// thing this feature could do.
+static int try_live_module(void) {
+    struct multiboot_module_info mod;
+    if (!multiboot_get_module(0, &mod) || !mod.found) return 0;
+    if (mod.end <= mod.start) return 0;
+
+    const char *cmdline = multiboot_cmdline();
+    int forced = cmdline && k_strstr(cmdline, "live");
+    if (ata_present() && !forced) return 0;
+
+    if (!blk_ram_register(mod.start, mod.end - mod.start)) return 0;
+    klog_printf("fs: live image at 0x%x, %u KiB%s\n", (unsigned)mod.start,
+                 (unsigned)((mod.end - mod.start) / 1024),
+                 forced ? " (forced by `live` on the command line)" : "");
+    return 1;
+}
+
 static void probe_and_mount(int allow_format) {
     const struct fs_ops *fallback = g_backends[FS_DEFAULT_BACKEND];
 
-    if (!ata_present()) {
+    // The live image gets first refusal, then the disk. Registering a
+    // block device is what makes the probe below read from RAM instead
+    // of ATA -- the backends are unchanged and never learn which it is.
+    int live = try_live_module();
+    if (!live) blk_ata_init();
+
+    if (!blk_present()) {
         // No disk: the default backend's init() sets up its RAM-only
         // mode. Nothing to probe.
         mount_backend(fallback);
@@ -197,7 +237,7 @@ int fs_format_backend(const char *name) {
         if (k_strcmp(g_backends[i]->name, name) == 0) { target = g_backends[i]; break; }
     }
     if (!target) return 0;
-    if (!ata_present()) return 0;
+    if (!blk_present()) return 0;
     // The wipefs rule (fs_ops.h's wipe contract): erase every OTHER
     // backend's signatures first, so nothing stale -- a primary the
     // new format doesn't happen to overwrite, or a far-away backup

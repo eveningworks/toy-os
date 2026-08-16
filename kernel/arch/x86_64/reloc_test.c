@@ -15,6 +15,7 @@
 #include "ktest.h"
 #include "kapi.h"
 #include "reloc.h"
+#include "multiboot.h" // module ranges -- see the module test at the bottom
 
 extern char __kimage_start[];
 extern char _kernel_end[];
@@ -103,4 +104,34 @@ KTEST("reloc", "the table sits between its own linker symbols") {
     KTEST_ASSERT((const char *)__krelocs_start >= __kimage_start);
     KTEST_ASSERT((const char *)__krelocs_end <= _kernel_end);
     KTEST_ASSERT((const void *)__krelocs_end > (const void *)__krelocs_start);
+}
+
+
+// The relocation must not land on a GRUB MODULE.
+//
+// This is the check that would have caught the Live CD blocker
+// (docs/live-cd-design.md): slot_usable() weighed the old image and the
+// multiboot info structure and knew nothing about modules, so a big
+// enough module in low memory could be overwritten by the relocated
+// kernel -- randomly, depending on the base, and never under `nokaslr`.
+//
+// SKIPS when there are no modules, and says so: a green tick here on a
+// boot with nothing loaded would be a check that cannot fail. The Live
+// CD work is what makes this meaningful, and the skip is the honest
+// state until then.
+KTEST("reloc", "the running image does not overlap any GRUB module") {
+    struct multiboot_module_info mod;
+    if (!multiboot_get_module(0, &mod) || !mod.found) {
+        KTEST_SKIP("no GRUB modules loaded on this boot");
+    }
+
+    uint64_t img_start = (uint64_t)(uintptr_t)__kimage_start;
+    uint64_t img_end = (uint64_t)(uintptr_t)_kernel_end;
+
+    for (int i = 0; ; i++) {
+        if (!multiboot_get_module(i, &mod) || !mod.found) break;
+        // Half-open ranges on both sides: touching end-to-start is fine,
+        // overlapping by a byte is not.
+        KTEST_ASSERT(mod.end <= img_start || mod.start >= img_end);
+    }
 }

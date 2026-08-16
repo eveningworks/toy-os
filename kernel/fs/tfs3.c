@@ -12,7 +12,7 @@
 // Everything on disk is VOLUME-relative: block b lives at sector
 // g_vol.base_lba + b * T3_SPB, and this file only touches the disk
 // through vol_read()/vol_write(). Today the volume is the flat disk
-// ({0, ata_sector_count()}); when partition mounting arrives the
+// ({0, blk_sector_count()}); when partition mounting arrives the
 // probe loop hands in a partition's extent instead and nothing here
 // changes -- that seam is the point (see the design doc's "Volumes
 // and partitions").
@@ -20,7 +20,10 @@
 #include "fs_ops.h"
 #include "tfs3.h"
 #include "string.h"
-#include "ata.h"
+#include "block.h" // TFS3 talks to a BLOCK DEVICE, not to a disk --
+                    // that is what lets a live image mount from RAM
+#include "ata.h"   // ATA_SECTOR_SIZE only: 512 is the sector size every
+                    // block device here uses, and it is spelled once there
 #include "klog.h"
 #include "tz.h"
 #include "heap.h"
@@ -196,12 +199,12 @@ static void wr16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v
 
 static int vol_read_sectors(uint32_t lba, int count, void *buf) {
     if (lba + (uint32_t)count > g_vol.sector_count) return 0;
-    return ata_read_sectors(g_vol.base_lba + lba, count, buf);
+    return blk_read_sectors(g_vol.base_lba + lba, count, buf);
 }
 
 static int vol_write_sectors(uint32_t lba, int count, const void *buf) {
     if (lba + (uint32_t)count > g_vol.sector_count) return 0;
-    return ata_write_sectors(g_vol.base_lba + lba, count, buf);
+    return blk_write_sectors(g_vol.base_lba + lba, count, buf);
 }
 
 static int read_block(uint32_t blk, void *buf) {
@@ -214,7 +217,7 @@ static int write_block(uint32_t blk, const void *buf) {
 
 static void set_flat_volume(void) {
     g_vol.base_lba = 0;
-    g_vol.sector_count = ata_sector_count();
+    g_vol.sector_count = blk_sector_count();
 }
 
 // ---- superblock ----------------------------------------------------------
@@ -753,8 +756,8 @@ static void alog_rollback(void) {
 // free_block(): the block is free either way, a refused TRIM must not
 // fail the delete. Called with a sorted-ish run start/count.
 static void trim_run(uint32_t first_blk, uint32_t count) {
-    if (!count || !ata_trim_supported()) return;
-    ata_trim(g_vol.base_lba + first_blk * T3_SPB, count * T3_SPB);
+    if (!count || !blk_trim_supported()) return;
+    blk_trim(g_vol.base_lba + first_blk * T3_SPB, count * T3_SPB);
 }
 
 // ---- journal: one fixed-size multi-block transaction ---------------------
@@ -851,12 +854,12 @@ static int txn_commit(void) {
         if (!write_block(g_jdata_block + (uint32_t)i, g_txn_img[i])) { txn_reset(); return 0; }
     }
     if (!write_journal_header(1)) { txn_reset(); return 0; }
-    ata_flush_now(); // barrier 1: the transaction survives a crash from here
+    blk_flush(); // barrier 1: the transaction survives a crash from here
     int ok = 1;
     for (int i = 0; i < g_txn_count; i++) {
         if (!write_block(g_txn_target[i], g_txn_img[i])) ok = 0;
     }
-    ata_flush_now(); // barrier 2: targets durable before the commit flag clears
+    blk_flush(); // barrier 2: targets durable before the commit flag clears
     if (ok) {
         int saved = g_txn_count;
         g_txn_count = 0;
@@ -892,7 +895,7 @@ static void replay_journal(void) {
             if (!write_block(rd32(sec + slots + i * 8), g_txn_img[i])) all_ok = 0;
         }
         if (all_ok) {
-            ata_flush_now();
+            blk_flush();
             klog_write("tfs3: replayed a committed journal transaction (");
             klog_write_dec(count); klog_write(" blocks)\n");
         } else {
@@ -1106,7 +1109,7 @@ static int do_write_inner(uint64_t ino, struct t3_inode *node, uint64_t offset,
             // One transfer must fit the ATA path's per-command cap
             // (128 sectors on DMA, 8 on PIO -- ask, don't assume,
             // same rule tfs.c's batching follows).
-            uint32_t cap = (uint32_t)ata_max_sectors_per_xfer() / T3_SPB;
+            uint32_t cap = (uint32_t)blk_max_sectors_per_xfer() / T3_SPB;
             if (cap < 1) cap = 1;
             if (want > cap) want = cap;
             while (run < want) {
@@ -1540,7 +1543,7 @@ static int split_parent(const char *norm, uint64_t *out_parent,
 // ---- probe / format / init -------------------------------------------------
 
 static int tfs3_probe(void) {
-    if (!ata_present()) return 0;
+    if (!blk_present()) return 0;
     set_flat_volume();
     return load_superblock(0);
 }
@@ -1550,7 +1553,7 @@ static int tfs3_probe(void) {
 // same way load_superblock()'s fallback finds them). See fs_ops.h's
 // wipe contract for the mounted-a-corpse story that made this an op.
 static int tfs3_wipe(void) {
-    if (!ata_present()) return 1;
+    if (!blk_present()) return 1;
     set_flat_volume();
     uint8_t zero[ATA_SECTOR_SIZE];
     k_memset(zero, 0, sizeof(zero));
@@ -1578,7 +1581,7 @@ static int tfs3_wipe(void) {
 // Kernel-side format, kept in lockstep with tfs3_writer.py's
 // cmd_format() -- one description of the layout, two writers of it.
 static int tfs3_format(void) {
-    if (!ata_present()) return 0;
+    if (!blk_present()) return 0;
     set_flat_volume();
 
     // A fresh filesystem is always the newest version.
@@ -1751,7 +1754,7 @@ static int tfs3_format(void) {
         if (!write_block(tail, g_blk)) return 0;
     }
 
-    ata_flush_now(); // one barrier so the whole format is durable before init() re-reads it
+    blk_flush(); // one barrier so the whole format is durable before init() re-reads it
     klog_write("tfs3: formatted a fresh tfs3 filesystem (");
     klog_write_dec(gc); klog_write(" groups, ");
     klog_write_dec(ipg); klog_write(" inodes/group)\n");
@@ -1771,7 +1774,7 @@ static void unmount_state(void) {
 static int tfs3_init(void) {
     g_mounted = 0;
     unmount_state();
-    if (!ata_present()) {
+    if (!blk_present()) {
         // tfs3 has no RAM-only mode of its own -- that's the default
         // backend's job (vfs.c). Reaching here without a disk means
         // the policy layer chose us anyway; degrade honestly.

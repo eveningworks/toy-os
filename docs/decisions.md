@@ -104,6 +104,7 @@ there when you add an entry, or the index quietly stops being one.
 - [The ring-3 UI Demo selects on contact where the kernel one committed on release](#the-ring-3-ui-demo-selects-on-contact-where-the-kernel-one-committed-on-release)
 - [A compositor's view of a window is at a DERIVED address, and revocation is the feature](#a-compositors-view-of-a-window-is-at-a-derived-address-and-revocation-is-the-feature)
 - [The third inert scrollbar: drawing one and handling it are separate jobs](#the-third-inert-scrollbar-drawing-one-and-handling-it-are-separate-jobs)
+- [A filesystem talks to a BLOCK DEVICE, and persistence is the device's answer](#a-filesystem-talks-to-a-block-device-and-persistence-is-the-devices-answer)
 - [The toolkit routes pointer input; an app configures and is told what changed](#the-toolkit-routes-pointer-input-an-app-configures-and-is-told-what-changed)
 - [What editing text MEANS lives in one place, and the storage does not](#what-editing-text-means-lives-in-one-place-and-the-storage-does-not)
 - [A GUI test spawns its client directly, instead of typing at a Terminal](#a-gui-test-spawns-its-client-directly-instead-of-typing-at-a-terminal)
@@ -5376,3 +5377,40 @@ because Notepad calls those directly; they delegate now instead of
 reimplementing. The one visible change is `struct utext`'s three fields
 becoming one `struct uui_edit ed`, so there is a single owner of the
 caret rather than two structures that could disagree.
+
+
+## A filesystem talks to a BLOCK DEVICE, and persistence is the device's answer
+
+TFS3 called `ata_*` directly, which was fine while a disk was the only
+thing a filesystem could live on. A Live CD mounts an image the
+bootloader handed over as a GRUB module, with no ATA controller
+involved, so the choice was a block-device abstraction or an
+`if (live) ... else ...` at every call site -- and the second shape rots
+predictably: one path gets tested and the other is found broken later.
+
+`struct block_device` (`kernel/include/kernel/block.h`) is the same
+registry pattern `display_driver` and `fs_ops` already use here. Five
+required operations, two optional ones behind capability bits, one
+active device. TFS3 moved in 15 call-site substitutions because it
+already funnelled everything through two functions for partition
+support; **TFS2 deliberately kept its 24 direct `ata_*` calls**, since a
+live image is always TFS3 and rewiring a legacy backend to serve a
+feature it will never carry is cost with no return.
+
+**Capabilities are declared and refused at registration**, per the
+display_driver rule: a device claiming `BLK_CAP_FLUSH` with no `flush()`
+is rejected, and so is a `flush()` with no bit. A device that needs a
+flush and silently never gets one turns the journal's two barriers into
+no-ops, which is a corruption bug that surfaces long after the mistake.
+On a RAM device both optional operations are genuinely absent and the
+block layer turns them into no-ops -- correct, not a degradation, since
+nothing there can be lost independently of everything else.
+
+**The part worth remembering: persistence belongs to the DEVICE.** The
+VFS computes `g_persistent = fs->init() && blk_persistent()`, because a
+backend cannot tell -- TFS3 mounts a RAM image exactly as it mounts a
+disk, and asking it would have reported a live session as persistent.
+`df`, `fsck` and the About window all repeat that answer to the user, so
+the single most misleading thing this feature could have done was let a
+live volume claim your files were safe. It says
+`tfs3 (RAM-only -- won't survive reboot)` instead.

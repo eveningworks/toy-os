@@ -188,6 +188,30 @@ static uint64_t boot_entropy(void) {
 }
 
 // Is `k` (a slot index, delta = k * 2MiB) a base this image can live at?
+// Does [start, end) land on top of a GRUB MODULE?
+//
+// It could, and nothing stopped it: this function checked the old image
+// and the multiboot info structure and nothing else, because there have
+// been no modules since it was written. A Live CD puts a multi-megabyte
+// filesystem image in low memory as a module (docs/live-cd-design.md),
+// and relocating the kernel over it corrupts it silently -- the failure
+// depends on the random base, so it reproduces on some boots and not
+// others, and `nokaslr` makes it vanish entirely. That reads as "the
+// ASLR code is broken" rather than "the module was eaten", which is the
+// worst possible signpost.
+//
+// pmm.c already reserves module ranges, and does not help: this runs
+// long before the PMM exists.
+static int hits_a_module(uint64_t start, uint64_t end) {
+    for (int i = 0; ; i++) {
+        struct multiboot_module_info mod;
+        if (!multiboot_get_module(i, &mod)) break;
+        if (!mod.found) break;
+        if (overlaps(start, end, mod.start, mod.end)) return 1;
+    }
+    return 0;
+}
+
 static int slot_usable(uint64_t k, uint64_t img_start, uint64_t img_size,
                        uint64_t old_end, uint64_t info_start, uint64_t info_end) {
     uint64_t delta = k * TWO_MIB;
@@ -202,6 +226,7 @@ static int slot_usable(uint64_t k, uint64_t img_start, uint64_t img_size,
     if (end > 0x100000000ULL) return 0;      // the identity map stops at 4GiB
     if (!range_fits_in_ram(start, end)) return 0;
     if (info_end > info_start && overlaps(start, end, info_start, info_end)) return 0;
+    if (hits_a_module(start, end)) return 0;
     if (kernel_reloc_check((int64_t)delta) != 0) return 0; // would break a 32-bit reference
     return 1;
 }

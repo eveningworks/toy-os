@@ -584,9 +584,34 @@ seed: $(DISK_IMG) $(USERLAND_ELVES)
 	fi
 	python3 tools/seed_disk.py $(DISK_IMG) $(SEED_DIR)
 
-iso: version $(KERNEL) $(USERLAND_ELVES) seed
+# The LIVE IMAGE: a small TFS3 filesystem carried inside the ISO and
+# handed to the kernel by GRUB as a module, so the OS can boot with no
+# disk at all (docs/live-cd-design.md). Built from the same seed tree
+# disk.img is, by the same writer tool -- one format, one builder, and
+# the live path is the disk path with a different device underneath.
+#
+# SIZE IS THE FORMAT'S FLOOR, not a choice: TFS3 puts 32768 blocks in a
+# group (T3_BPG -- 128 MiB at a 4 KiB block) and the kernel refuses a
+# superblock whose blocks-per-group differs, so one group is the
+# smallest TFS3 volume that can exist. The seed tree is single-digit
+# megabytes, so this image is ~97% zeros: it costs ISO size and
+# boot-time RAM and nothing else. Shrinking it means letting bpg vary
+# for small volumes (it is already a superblock field, just range-checked
+# to one value) -- see docs/live-cd-design.md.
+LIVE_IMG    = $(BUILD)/live.img
+LIVE_IMG_MB = 129
+
+$(LIVE_IMG): $(USERLAND_ELVES) seed
+	@mkdir -p $(BUILD)
+	rm -f $(LIVE_IMG)
+	python3 tools/tfs3_writer.py format $(LIVE_IMG) --size $$(( $(LIVE_IMG_MB) * 1024 * 1024 ))
+	python3 tools/tfs3_writer.py sync $(LIVE_IMG) $(SEED_DIR)
+	python3 tools/tfs3_writer.py trim $(LIVE_IMG)
+
+iso: version $(KERNEL) $(USERLAND_ELVES) seed $(LIVE_IMG)
 	mkdir -p iso/boot/grub
 	cp $(KERNEL) iso/boot/kernel.bin
+	cp $(LIVE_IMG) iso/boot/live.img
 	sed 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' grub.cfg > iso/boot/grub/grub.cfg
 	@if [ -z "$(GRUB_MKRESCUE)" ]; then \
 		echo "make: grub-mkrescue not found (looked for grub-mkrescue and grub2-mkrescue)."; \
@@ -723,7 +748,7 @@ clean:
 	# other build product. This used to name 21 $(FOO_ELF) variables by
 	# hand -- they built into the source tree next to their .c files and
 	# needed a .gitignore entry to stay out of the repo.
-	rm -rf $(BUILD) $(ISO) iso/boot/kernel.bin $(SEED_DIR)/sync
+	rm -rf $(BUILD) $(ISO) iso/boot/kernel.bin iso/boot/live.img $(SEED_DIR)/sync
 	# Deliberately NOT touching $(DISK_IMG) here -- see its comment above.
 	# Use `make clean-disk` to explicitly wipe the persistent filesystem.
 

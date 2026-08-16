@@ -146,11 +146,16 @@ def launch_qemu_cmd(iso="toy-os.iso", disk="disk.img", serial_log="serial.log",
     Deliberately no -display none (see module docstring) -- -vnc gives
     a display head without needing an actual VNC client to connect.
     """
+    # disk=None launches with NO DRIVE AT ALL -- the Live CD case
+    # (tools/live_boot_test.py). Not the same as pointing at an empty
+    # image: the kernel has to find no ATA device and mount the ISO's
+    # module instead, which is the whole property under test.
+    drive = (f"-drive file={disk},format=raw,if=ide,discard=unmap " if disk else "")
     return (
         f"qemu-system-x86_64 -cdrom {iso} "
         # discard=unmap: the guest's ATA TRIM becomes a hole punch in the
         # backing file, so a test that writes and deletes doesn't grow it.
-        f"-drive file={disk},format=raw,if=ide,discard=unmap "
+        f"{drive}"
         f"-vga std -m 2048 -serial file:{serial_log} "
         f"-qmp tcp:127.0.0.1:{qmp_port},server,nowait -vnc :{vnc_display} "
         f"-daemonize -pidfile {pidfile}"
