@@ -6,6 +6,7 @@
 #include "pmm.h"
 #include "multiboot.h"
 #include "klog.h"
+#include "reloc.h"
 #include <stddef.h>
 
 // Linker symbol from linker.ld: the first physical address after
@@ -13,6 +14,9 @@
 // to here (rather than a hardcoded guess) means this stays correct if
 // the kernel grows.
 extern char _kernel_end[];
+// The first address the image occupies. Only needed once the image can
+// MOVE -- see pmm_init()'s two-range reservation under kernel ASLR.
+extern char __kimage_start[];
 
 #define FRAME_SIZE 4096
 
@@ -80,7 +84,23 @@ void pmm_init(void) {
     // regardless of what the memory map claims about that range --
     // BIOS/GRUB commonly report it as "available" since they have no
     // idea a kernel is sitting inside it.
-    reserve_range(0, (uint64_t)(uintptr_t)_kernel_end);
+    //
+    // With kernel ASLR this is TWO ranges, not one. `_kernel_end` is a
+    // relocated symbol, so it names the end of the image that is
+    // actually running -- reserving [0, _kernel_end) would cover the
+    // abandoned original too, but at the cost of reserving every free
+    // byte between them, which on a randomized base is most of RAM.
+    // So the two are reserved separately, and the abandoned image is
+    // reserved rather than reclaimed because it is still LIVE: the CPU
+    // is using the GDT inside it until gdt_init() replaces it, and
+    // handing those frames out would corrupt it long before then.
+    uint64_t reloc_delta = kernel_reloc_delta();
+    if (reloc_delta) {
+        reserve_range(0, (uint64_t)(uintptr_t)_kernel_end - reloc_delta);
+        reserve_range((uint64_t)(uintptr_t)__kimage_start, (uint64_t)(uintptr_t)_kernel_end);
+    } else {
+        reserve_range(0, (uint64_t)(uintptr_t)_kernel_end);
+    }
 
     // Also reserve any Multiboot2 module -- grub.cfg has none as of the
     // ELF64-binaries-to-/bin migration (see docs/decisions.md), so this

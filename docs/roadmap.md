@@ -93,7 +93,7 @@ adds 4; 12 adds 5; 13 adds 6; 14 and up add 8.
 - [x] Async process spawning for the GUI Terminal (`ls` and an allowlist
       of verified-safe `/bin` binaries via `run`)
 
-### Milestone 2 -- Memory protection hardening (planned v0.2.0)
+### Milestone 2 -- Memory protection hardening (COMPLETE 2026-08-16, unreleased)
 
 - [x] ~~NX bit enforcement (non-executable data pages)~~ -- done for
       userspace first, and for the kernel's own identity map with the
@@ -112,40 +112,48 @@ adds 4; 12 adds 5; 13 adds 6; 14 and up add 8.
       `krandom_bytes()` over RDSEED/RDRAND with a TSC-jitter fallback,
       `krandom_quality()` reporting which one it got, and the stack
       canary randomized from it at boot
-- [ ] Kernel ASLR (randomize load base) -- **stages 1 and 2 LANDED
-      2026-08-16; stage 3 (the random base itself) is what remains.**
+- [x] ~~Kernel ASLR (randomize load base)~~ -- **DONE 2026-08-16, all
+      three stages.** The kernel picks a random 2 MiB-aligned base at
+      boot, copies itself there and patches its own absolute references.
 
-      *What exists now.* `tools/genrelocs.py` extracts every absolute
+      *How it works.* `tools/genrelocs.py` extracts every absolute
       reference from a `ld --emit-relocs` link and emits it as a table
-      (7,367 fixups, 29 KB) that the kernel carries in `.krelocs`;
-      `kernel/arch/x86_64/reloc.c` applies it, and `kernel_main()` calls
-      it at boot with a delta of ZERO, before `paging_enforce_wx()`
-      makes `.text` read-only. `kernel_reloc_check(delta)` answers how
-      high a base may go; six KTESTs (suite `reloc`) cover the table,
-      and the build fails if the table and the image disagree. Two
-      positive controls: moving `.krelocs` above `.data` reddens the
-      build gate with the right diagnosis, and a corrupted table reddens
-      exactly three KTESTs.
+      (~7,400 fixups, 29 KB) that the kernel carries in `.krelocs`;
+      `kernel/arch/x86_64/reloc.c` picks a base, copies the image,
+      applies the table to the copy and repoints CR3 at the copied page
+      tables. It runs from `long_mode_start`, before `kernel_main` --
+      it moves the stack, so it cannot return into the frame that
+      called it. The build fails if the table and the image disagree.
+      `nokaslr` on the GRUB command line disables it.
 
-      *Three things the build settled that the scoping below left open.*
-      CR3 does NOT need rebuilding -- `boot.asm`'s tables identity-map
-      the whole low 4 GiB, so they already map wherever the image lands,
-      provided the new base is ABOVE the old one (which also makes
-      `pmm.c`'s `reserve_range(0, _kernel_end)` cover the old image for
-      free, so that is settled too). The `.krelocs` placement removes
-      the two-pass chicken-and-egg entirely. And the shipped kernel must
-      have its `.rela` sections stripped -- GRUB will not boot the
-      `--emit-relocs` image, and the symptom is an empty serial log.
+      *Measured, not assumed.* 114 candidate bases on a 256 MB guest
+      (~6.8 bits, against the ~6.5 predicted below); five consecutive
+      boots gave five different bases, which is what makes the TSC
+      fallback worth having; hardware entropy confirmed separately
+      under `--cpu max`, where SMEP/SMAP also still engage. Eight
+      KTESTs (suite `reloc`), and the whole suite passing on a
+      randomized base -- 175 KTESTs, 8/8 ring-3 diagnostics, 3/3 fault
+      tests, 13/13 GUI tools -- is what carries the claim that a
+      relocated kernel actually works, since no test inside a running
+      kernel can move the image out from under itself.
 
-      *What stage 3 still needs*, none of it started: pick a random
-      2 MiB-aligned base from `krandom_u64()`, copy the image there
-      (a `__bss_start` symbol does not exist yet), zero the new `.bss`,
-      and jump. Delta zero is degenerate for the copy -- at zero the
-      destination is the source, so zeroing `.bss` would wipe the live
-      stack and the page tables the CPU is walking -- so the copy path
-      is genuinely unexercised, and stage 2 does not pretend otherwise.
-      The copy/jump stub still has to be position-independent, which
-      still argues for assembly.
+      *The scoping below got three things wrong, and the CR3 one is the
+      interesting failure.* **CR3 DOES have to be repointed** -- not for
+      any mapping reason (the boot tables identity-map the whole low
+      4 GiB and already cover the new location) but because `paging.c`
+      reaches them by LINKER SYMBOL, so after relocation
+      `paging_enforce_wx()` writes into the copied table while the CPU
+      walks the original. Nothing faults; W^X just stops applying. All
+      six W^X KTESTs stay green with that step disabled, because they
+      read the same symbol the code wrote -- only a check that asks the
+      CPU for CR3 catches it. **`pmm.c` reserves two ranges, not one**,
+      since a single span would swallow most of RAM on a randomized
+      base. And **no `__bss_start` was needed**: `.bss` is copied rather
+      than zeroed, which is what lets the caller keep its stack frame.
+
+      *Still true from the scoping:* the base must stay in the low
+      2 GiB (`-mcmodel=kernel`), and the copy is bounded by RAM and by
+      the image's ~14.5 MB in-memory size, not by the random source.
 
       **The measurements below are from the 2026-08-15 scoping, kept
       because they are the part worth not repeating.**
@@ -187,16 +195,18 @@ adds 4; 12 adds 5; 13 adds 6; 14 and up add 8.
       and is the positive control for stage 3. `make debug` + GDB is the
       recovery path when a stage does not boot.
 
-      *The three "also unresolved" items this scoping listed have since
-      been answered, two of them by not being problems.* `pmm.c`
-      reserving `0.._kernel_end` over-reserves once the image moves up
-      -- which is exactly what makes the old image safe, so it is the
-      behaviour to keep rather than fix. `boot.asm`'s page tables living
-      in `.bss` does not force a CR3 reload, because they identity-map
-      the whole low 4 GiB and so already map the new location. Only the
-      third stands: the copy stub has to be position-independent, which
-      still argues for assembly over a C file compiled `-fPIC` and
-      trusted not to emit an absolute reference.
+      *The three "also unresolved" items this scoping listed were all
+      real, though not always for the reason given.* `pmm.c`'s
+      reservation did need changing, but into TWO ranges rather than a
+      wider one. `boot.asm`'s page tables living in `.bss` did force a
+      CR3 reload -- not because the new location goes unmapped (it does
+      not) but because `paging.c` names those tables by linker symbol,
+      so after a move the code and the hardware disagree about which
+      copy is live. And the copy stub did need to be position-
+      independent -- satisfied by keeping it in C that runs entirely
+      from the OLD image and only ever jumping into the new one at the
+      end, in the two lines of assembly that adjust `rsp` and the call
+      target.
 - [x] ~~Enable SMEP/SMAP (CR4)~~ -- done. `paging_enable_smep_smap()`
       sets both where CPUID reports them, and the audit it forced is the
       substance: all 23 deliberate user-pointer dereferences now go
@@ -1771,11 +1781,14 @@ they need are what's left:
   canary violation is caught and reported, not silently corrupting the
   stack -- verified for real with a deliberate userland self-test
   (`run stack_smash_test`), not just "the kernel still boots".
-- Kernel ASLR -- randomize the kernel's load base each boot (needs a real
-  entropy source, itself a small gap -- today's kernel has no RNG at all).
-  Lowest priority of the four here: real value depends on an attacker
-  model this toy OS doesn't really have yet, but worth having the
-  mechanism.
+- ~~Kernel ASLR~~ -- done, all three stages; see the milestone list
+  above for what landed and what the scoping got wrong. Was written up
+  here as the lowest priority of the four, on the grounds that its real
+  value depends on an attacker model this toy OS does not have -- which
+  is still true, and the mechanism is worth having anyway. The entropy
+  source it was blocked on arrived first, and the base still cannot use
+  it (`krandom_init()` spins on a PIT that has not started this early),
+  so the base has its own RDSEED/RDRAND/TSC path.
 
 ### Milestone 3 -- Storage hardening
 

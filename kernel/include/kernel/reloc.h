@@ -29,6 +29,44 @@ void kernel_relocate(int64_t delta);
 // This is what bounds how high a randomized base may go.
 uint64_t kernel_reloc_check(int64_t delta);
 
+// ---- stage 3: choosing a base and moving the image ----
+
+// Called from long_mode_start (boot.asm) with the Multiboot2 info
+// pointer, BEFORE kernel_main. Picks a random 2MiB-aligned base above
+// the link address, copies the image there, applies the relocation
+// table to the copy and repoints CR3 at the copied page tables.
+// Returns the delta applied, or 0 if it did not relocate (in which
+// case kernel_reloc_note() says why).
+//
+// The caller must then continue in the RELOCATED image: add the delta
+// to both the stack pointer and the address it calls kernel_main at.
+// Returning normally would carry on in the abandoned copy.
+//
+// `nokaslr` on the GRUB command line disables it -- the recovery path
+// if a machine turns out not to survive relocation.
+uint64_t kernel_relocate_boot(uint64_t mb2_info);
+
+// How far the running image was moved (0 = not relocated). pmm.c needs
+// it to reserve the ABANDONED image as well: it still holds the GDT
+// the CPU uses until gdt_init(), and it sits below the new image where
+// nothing else would cover it.
+uint64_t kernel_reloc_delta(void);
+
+// Did the base come from RDSEED/RDRAND (1) or from the timestamp
+// counter (0)? Reported at boot rather than assumed: the TSC fallback
+// is weak, and it is what QEMU's default qemu64 gets. krandom_init()
+// cannot be used this early -- it spins until the PIT ticks, and the
+// PIT is not running yet.
+int kernel_reloc_entropy_hw(void);
+
+// How many candidate bases the chosen one was drawn from -- the honest
+// form of "how much entropy", since it is bounded by RAM, not by the
+// random source.
+uint64_t kernel_reloc_slots(void);
+
+// One phrase for the boot log: "relocated", or why not.
+const char *kernel_reloc_note(void);
+
 // How many table entries do not currently describe a reference into
 // this image -- 0 for a table that matches the image it ships with.
 // A drifted table's first symptom is otherwise a kernel that does not

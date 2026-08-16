@@ -41,8 +41,12 @@ stack_bottom:
 stack_top:
 
 align 4096
+; All three are exported because kernel ASLR has to rewrite the two
+; levels of internal pointers after relocating the image -- the copied
+; tables still point at the originals. See reloc.c.
 global p4_table
 p4_table: resb 4096
+global p3_table
 p3_table: resb 4096
 global p2_tables
 p2_tables: resb 4096 * 4   ; four P2 tables => 4 x 1GiB = 4GiB identity mapped
@@ -202,6 +206,7 @@ gdt64:
 section .text
 bits 64
 global long_mode_start
+extern kernel_relocate_boot
 long_mode_start:
     mov ax, 0
     mov ss, ax
@@ -210,8 +215,35 @@ long_mode_start:
     mov fs, ax
     mov gs, ax
 
-    mov rdi, rdi         ; multiboot info ptr already in edi/rdi from _start
-    call kernel_main
+    ; multiboot info ptr is already in edi/rdi from _start, which is
+    ; also where the SysV first argument goes.
+    ;
+    ; Kernel ASLR happens here, between paging coming up and the kernel
+    ; proper starting: the identity map already covers the whole low
+    ; 4GiB, so the image can be copied anywhere in it, and nothing has
+    ; run yet that would need un-doing. kernel_relocate_boot() returns
+    ; how far it moved the image, or 0.
+    ;
+    ; Pushed TWICE to keep rsp 16-byte aligned across the call, which
+    ; is what SysV requires at a call site. One push would leave it
+    ; 8-aligned and break any SSE the callee's code generation used.
+    push rdi
+    push rdi
+    call kernel_relocate_boot
+    pop rdi
+    pop rdi
+
+    ; rax = delta. Both of these are no-ops when it is 0.
+    ;
+    ; The stack moves first: .bss was COPIED rather than zeroed, so the
+    ; relocated stack already holds this frame byte for byte, and
+    ; adding the delta lands on the same position within it. Then jump
+    ; into the relocated kernel_main -- `lea rel` gives its address in
+    ; the image we are still executing, so the delta has to be added.
+    add rsp, rax
+    lea rcx, [rel kernel_main]
+    add rcx, rax
+    call rcx
 
     cli
 .hang:

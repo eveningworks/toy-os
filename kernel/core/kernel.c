@@ -31,6 +31,10 @@
 #include "debug_console.h"
 #include "krandom.h"      // entropy source -- krandom_init()
 #include "reloc.h"        // the image's own relocation table -- kernel_relocate()
+
+// Where the running image starts -- a relocated symbol, so under kernel
+// ASLR it reports where the kernel actually IS, not where it was linked.
+extern char __kimage_start[];
 #include "stack_guard.h"  // stack_guard_randomize() -- read its header before moving the call
 #include "knum.h"
 #include <stdint.h>
@@ -53,19 +57,25 @@ void kernel_main(uint64_t multiboot_info_addr) {
 
     multiboot_set_info(multiboot_info_addr);
 
-    // Apply the image's own relocation table. The delta is ZERO today:
-    // nothing has moved the kernel yet (that is stage 3 -- see
-    // docs/roadmap.md), so every fixup adds nothing. What it does prove
-    // on every boot is that the table describes real, mapped, writable
-    // words in THIS image -- a table that had drifted from its image
-    // faults here rather than at some unrelated address later.
+    // Kernel ASLR already happened, in long_mode_start, before this
+    // function was reached -- the image copied itself to a random
+    // 2MiB-aligned base and applied its own relocation table. It has to
+    // run there rather than here: it moves the stack, so it cannot
+    // return into the frame that called it.
     //
-    // Ordering is load-bearing and this is the only place it can go:
-    // the fixups write into .text, and paging_enforce_wx() below makes
-    // .text read-only with CR0.WP set, after which every one of these
-    // writes is a ring-0 page fault. See reloc.c.
-    kernel_relocate(0);
-    klog_printf("toy-os: relocation table applied (%u fixups, %u bytes, delta 0)\n",
+    // All this does is report it, because that code cannot log at all
+    // (serial_init() had not run) -- which is why every decision it
+    // made is sitting in a global waiting to be printed.
+    uint64_t reloc_delta = kernel_reloc_delta();
+    if (reloc_delta) {
+        klog_printf("toy-os: kernel relocated +0x%lx, running at 0x%lx (1 of %lu candidate bases, %s entropy)\n",
+                    reloc_delta, (uint64_t)(uintptr_t)__kimage_start,
+                    kernel_reloc_slots(),
+                    kernel_reloc_entropy_hw() ? "hardware" : "TSC -- weak");
+    } else {
+        klog_printf("toy-os: kernel NOT relocated (%s)\n", kernel_reloc_note());
+    }
+    klog_printf("toy-os: relocation table: %lu fixups, %lu bytes\n",
                 kernel_reloc_count(), kernel_reloc_table_bytes());
 
     // As early as the log allows. boot.asm hands over a 4GiB identity map

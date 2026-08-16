@@ -4872,28 +4872,106 @@ genuinely contains one legitimate absolute reference to
 `_kernel_end + 0xfff`. Exactly one entry needs it, which is why the
 bound is a measured constant rather than a guess.
 
-None of this proves a NONZERO delta yields a working kernel -- nothing
-has moved the image, and no test inside a running kernel can move it out
-from under itself. That gap is stage 3, and it is a gap rather than a
-covered case.
+Since stage 3 landed, all of this runs against an image that HAS moved,
+so the checks now offset every location by the delta -- reading the bare
+link-time address reaches into the abandoned image, which is still
+mapped and still holds pre-relocation values, so it does not fault. It
+just answers questions about a kernel that is no longer running.
 
-### Why stage 2 does not rebuild CR3, and why a lower base is refused
+What no test inside a running kernel can do is prove the relocation
+itself: it cannot move the image out from under itself. That claim is
+carried by the whole suite passing on a randomized base instead --
+every headless run picks a different one, so 175 KTESTs, the ring-3
+diagnostics, the fault tests and the 13 GUI tools are collectively an
+assertion that a relocated kernel works, across many bases rather than
+one.
 
-The roadmap anticipated having to reload CR3 with relocated page-table
-addresses, since `boot.asm`'s `p4_table`/`p3_table`/`p2_tables` live in
-`.bss`. It turns out not to be necessary: those tables identity-map the
-entire low 4 GiB, so they already map wherever the image lands, and
-keeping them where they are removes the step entirely.
+### CR3 *does* have to be repointed, for a reason that has nothing to do with mapping
 
-What that buys has one condition, and it is why `kernel_relocate()`
-documents a relocated base as ABOVE the link base and never below.
-`pmm.c` reserves `[0, _kernel_end)`, and after relocation `_kernel_end`
-is the NEW end -- so a higher base leaves the old image, the boot stack
-and the boot page tables inside the reserved range for free. A lower
-base would hand the old image's pages, including the live CR3, to the
-frame allocator.
+Stage 2 concluded this step was unnecessary and was **wrong**, so the
+reasoning is worth stating carefully rather than merely corrected.
 
-Relatedly, delta zero is degenerate for the COPY step and stage 2 does
-not attempt one: at zero the destination is the source, so zeroing the
-new `.bss` would wipe the live stack and the page tables the CPU is
-currently walking. The copy is stage 3's, along with the random base.
+The original argument was sound as far as it went: `boot.asm`'s
+`p4_table`/`p3_table`/`p2_tables` identity-map the entire low 4 GiB, so
+they already map wherever the image lands, and the old tables stay
+reserved. Nothing about MAPPING requires a change.
+
+What it missed is that `paging.c` reaches those tables by **linker
+symbol** -- `extern uint64_t p2_tables[2048]`. After relocation that
+symbol names the COPIED table, so `paging_enforce_wx()` and
+`vmm_map_user_page()` write into a table the CPU is not walking. There
+is no fault and no error: W^X simply never takes effect, and user
+mappings land somewhere nobody reads.
+
+So stage 3 repoints CR3 at the copied tables and rewrites the two
+levels of internal pointers to match. The p2 entries need nothing --
+they are pure identity mappings, whose values do not depend on where
+the table itself lives. Every address in that code is computed as
+`symbol + delta`, because it runs from the OLD image where the bare
+symbols still name the old tables; writing through them would rewrite
+the tables being abandoned and reload CR3 with the value it already
+held, which looks exactly like a working call.
+
+**The general lesson is about the test, not the code.** All six W^X
+KTESTs stay GREEN with this step disabled, because they read
+`p2_tables` through the same symbol `enforce_wx()` wrote -- test and
+code agree with each other while the hardware walks something else
+entirely. The check that catches it compares CR3 against the symbol,
+i.e. asks the CPU rather than the program. When a subsystem is reached
+through an indirection, at least one test has to bypass that
+indirection, or the whole suite can be self-consistently wrong.
+
+### Why a lower base is refused, and why delta zero cannot exercise the copy
+
+The relocated base is always ABOVE the link base. `pmm.c` reserves the
+old image and the new one as two SEPARATE ranges -- separate rather
+than one span because on a randomized base the gap between them is most
+of RAM -- and the abandoned image has to stay reserved because it is
+still live: the CPU uses the GDT inside it until `gdt_init()` replaces
+it. A base below the link address would put the old image above the new
+one, outside anything the reservation covers, and hand those frames to
+the allocator. Being above also makes the copy non-overlapping, so a
+forward `k_memcpy` is correct.
+
+`.bss` is COPIED rather than zeroed, which is what lets the caller
+carry on: the relocated stack already holds the live frame byte for
+byte, so adding the delta to `rsp` lands on the same position within it.
+
+Delta zero is degenerate for the copy, which is why stage 2 could not
+exercise it and did not pretend to: at zero the destination is the
+source, so copying or zeroing `.bss` would wipe the live stack and the
+page tables the CPU is currently walking.
+
+### The base's entropy is bounded by RAM, and cannot come from the normal RNG
+
+`krandom_init()` cannot be called this early. It harvests jitter by
+spinning until `pit_ticks()` changes, and the PIT is not initialised
+yet -- so on a machine without RDSEED/RDRAND, which is QEMU's default
+`qemu64` and therefore most test runs, it would spin forever. The base
+gets its own minimal source instead: RDSEED, then RDRAND, then the
+timestamp counter, and it REPORTS which one it got rather than letting
+a reader assume the base is unpredictable.
+
+The TSC fallback was measured rather than assumed, per the same rule
+the entropy source itself was held to: five consecutive boots under TCG
+produced five different bases.
+
+The honest entropy figure is the number of candidate bases, not the
+width of the random draw: 114 on a 256 MB guest, about 6.8 bits, which
+matches the ~6.5 bits predicted when this was scoped. It is bounded by
+RAM and by the image being ~14.5 MB in memory (gfx's 13 MB back buffer
+in `.bss`), not by the random source. Linux's x86 physical KASLR gets
+about 9 bits.
+
+The relocation also cannot log -- `klog_write()` goes straight out the
+serial port and `serial_init()` has not run -- so every decision it
+makes is recorded in a global and printed by `kernel_main()` once it
+can. And every one of those globals must be assigned BEFORE the copy,
+because the copy is what carries them into the image that will actually
+run; assigning after it writes only to the abandoned image, and the
+running kernel would report a delta of zero while sitting at a
+relocated address.
+
+`nokaslr` on the GRUB command line turns it off -- the same spelling
+Linux uses, and the recovery path if a machine turns out not to survive
+being relocated.

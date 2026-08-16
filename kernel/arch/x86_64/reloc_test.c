@@ -59,6 +59,37 @@ KTEST("reloc", "a delta that pushes the image past 2GiB is refused") {
     KTEST_ASSERT(kernel_reloc_check(0x7FFFFFFF) > 0);
 }
 
+// Stage 3. These are written to pass whether or not this boot actually
+// relocated -- `nokaslr`, or a machine with no room above the image,
+// are legitimate outcomes, and a test that demanded relocation would
+// fail on exactly the configurations where declining was correct. What
+// they assert is CONSISTENCY: if it moved, everything must agree about
+// where it moved to.
+KTEST("reloc", "a relocated kernel is where it says it is") {
+    uint64_t delta = kernel_reloc_delta();
+    if (delta == 0) return; // did not relocate this boot -- see above
+
+    // The link base is 1M (linker.ld) and the delta is always a whole
+    // number of 2MiB pages, which is what keeps the read-only band
+    // inside a single 2MiB page for paging_enforce_wx().
+    KTEST_ASSERT((delta % 0x200000ULL) == 0);
+    KTEST_ASSERT((uint64_t)(uintptr_t)__kimage_start == 0x100000ULL + delta);
+}
+
+// The check that would have caught the bug this stage nearly shipped.
+// paging.c reaches the page tables by LINKER SYMBOL (`extern uint64_t
+// p2_tables[2048]`), so after relocation those symbols name the COPIED
+// tables -- and if CR3 still pointed at the originals, every write
+// paging_enforce_wx() and vmm_map_user_page() make would land in a
+// table nobody walks. Nothing faults; W^X just silently stops applying.
+// Asserting the CPU and the symbols agree is the whole test.
+KTEST("reloc", "CR3 walks the same page tables the symbols name") {
+    extern uint64_t p4_table[512];
+    uint64_t cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+    KTEST_ASSERT((cr3 & ~0xFFFULL) == ((uint64_t)(uintptr_t)p4_table & ~0xFFFULL));
+}
+
 KTEST("reloc", "the table sits between its own linker symbols") {
     // .krelocs must stay inside the image: linker.ld places it after
     // .data and before .bss, and an orphaned section would land
@@ -66,7 +97,10 @@ KTEST("reloc", "the table sits between its own linker symbols") {
     // like putting it.
     extern const uint32_t __krelocs_start[];
     extern const uint32_t __krelocs_end[];
-    KTEST_ASSERT((char *)__krelocs_start >= __kimage_start);
-    KTEST_ASSERT((char *)__krelocs_end <= _kernel_end);
-    KTEST_ASSERT(__krelocs_end > __krelocs_start);
+    // Compared as addresses, not as arrays: `a > b` on two arrays is
+    // a -Warray-compare warning (and in C++23 an error), because it
+    // reads as comparing contents.
+    KTEST_ASSERT((const char *)__krelocs_start >= __kimage_start);
+    KTEST_ASSERT((const char *)__krelocs_end <= _kernel_end);
+    KTEST_ASSERT((const void *)__krelocs_end > (const void *)__krelocs_start);
 }

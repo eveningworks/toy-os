@@ -498,14 +498,24 @@ technical conventions below:
   half is nonzero**, and because `prev` is the header's LAST field.
   Break either and the failure is silent, on the freeing path. See
   `docs/decisions.md`.
-- **The kernel can relocate itself, and `linker.ld` + the Makefile's
-  two-pass link are where that lives.** `tools/genrelocs.py` (above)
-  builds the table; `kernel_relocate(0)` runs at boot from
-  `kernel_main()` **before `paging_enforce_wx()`**, which is not
-  cosmetic ordering -- the fixups write into `.text`, and enforce_wx
-  makes it read-only with CR0.WP. Adding an output section means
-  keeping `.krelocs` after `.data` and before `.bss`. The random base
-  is NOT built (stage 3); `docs/roadmap.md` says exactly what is left.
+- **The kernel RELOCATES ITSELF at boot -- it is not running where it
+  was linked.** `kernel_relocate_boot()` (`kernel/arch/x86_64/reloc.c`)
+  runs from `long_mode_start`, picks a random 2 MiB-aligned base, copies
+  the image there, patches its ~7,400 absolute references from the
+  `.krelocs` table and repoints CR3 at the copied page tables. `dmesg`
+  says where it landed; **`nokaslr` on the GRUB command line turns it
+  off**, which is the first thing to try if something breaks in a way
+  that smells address-dependent. Four things to know before touching
+  any of it: it **cannot log** (serial isn't up -- decisions go into
+  globals that `kernel_main()` prints), it **cannot call
+  `krandom_init()`** (that spins on a PIT that hasn't started), every
+  global it sets must be assigned **before the copy** or it lands only
+  in the abandoned image, and `.krelocs` must stay after `.data` and
+  before `.bss` in `linker.ld`. The one that cost a near-miss: `paging.c`
+  reaches the page tables by LINKER SYMBOL, so a relocation that forgets
+  CR3 leaves W^X silently not applied -- **and all six W^X KTESTs stay
+  green**, because they read the same symbol the code wrote. Only the
+  KTEST that asks the CPU for CR3 catches it. See `docs/decisions.md`.
 - **`kernel/include/` is split by audience and the build enforces it**
   -- `api/` (what `apps/` may use), `abi/` (the kernel<->userland
   contract `userland/` shares), `kernel/` (internal, and NOT on

@@ -44,7 +44,8 @@ under QEMU, and it is not a teaching toy that stops at "hello world from
 the kernel":
 
 - **Real memory management** -- a physical frame allocator, per-process
-  page tables, a kernel heap, NX/W^X enforcement and stack canaries.
+  page tables, a kernel heap, NX/W^X enforcement, stack canaries and
+  kernel ASLR.
 - **Real processes** -- an ELF64 loader, ring-3 user mode, syscalls, a
   preemptive round-robin scheduler, and hardware floating point for
   ring-3 code with per-process FPU state across context switches.
@@ -390,6 +391,22 @@ Useful tools in `tools/` (all documented in their own docstrings):
   reported as `Stack overflow` with the stack's range rather than as an
   anonymous page fault. `run stackovf_test`, and
   `tools/faulttest_run.py` asserts the report.
+- **Kernel ASLR.** The kernel is not running where it was linked: at
+  boot it picks a random 2 MiB-aligned base, copies itself there,
+  patches its own ~7,400 absolute references from a table the build
+  generates (`tools/genrelocs.py`, Linux's `CONFIG_RELOCATABLE` shape --
+  a relocs tool over `ld --emit-relocs`, not a PIE link) and repoints
+  CR3 at the relocated page tables. `dmesg` reports the base it chose;
+  `nokaslr` on the GRUB command line disables it. About 6.8 bits of
+  entropy on a 256 MB guest, bounded by RAM rather than by the random
+  source -- and it says whether the base came from hardware entropy or
+  from the weak TSC fallback rather than letting you assume.
+- **Heap red-zones and use-after-free poisoning**, behind a runtime
+  switch (`heap debug on`) so they are reachable in a booted system
+  rather than needing a special build. A canary each side of every
+  allocation, `0xDE` over anything freed, and `heap check` to sweep for
+  a write through a freed pointer. A detected violation is logged and
+  the block quarantined rather than handed back to the free list.
 - An entropy source (`kernel/lib/krandom.c`): RDSEED, then RDRAND, then
   a TSC-jitter harvest when the CPU has neither, mixed through
   splitmix64's finalizer. Deliberately NOT a CSPRNG, and it says so --

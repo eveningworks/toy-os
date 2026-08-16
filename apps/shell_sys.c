@@ -460,7 +460,7 @@ void cmd_heap(const char *args) {
     if (k_strcmp(args, "check") == 0) {
         uint64_t bad = heap_check();
         if (bad) {
-            vga_printf("heap: %u damaged free block(s) found -- see dmesg\n", bad);
+            vga_printf("heap: %lu damaged free block(s) found -- see dmesg\n", bad);
         } else {
             vga_write("heap: no damage found in poisoned free blocks\n");
             if (!heap_debug()) {
@@ -478,15 +478,15 @@ void cmd_heap(const char *args) {
     uint64_t total = heap_total_bytes();
     uint64_t used = heap_used_bytes();
     vga_printf("Kernel heap (kmalloc/kfree):\n");
-    vga_printf("  claimed from pmm: %u bytes (%u KB)\n", total, total / 1024);
-    vga_printf("  handed out:       %u bytes\n", used);
-    vga_printf("  free:             %u bytes\n", total - used);
+    vga_printf("  claimed from pmm: %lu bytes (%lu KB)\n", total, total / 1024);
+    vga_printf("  handed out:       %lu bytes\n", used);
+    vga_printf("  free:             %lu bytes\n", total - used);
     vga_printf("  debug mode:       %s\n", heap_debug() ? "on" : "off");
-    vga_printf("  red-zone checks:  %u\n", heap_rz_checks());
+    vga_printf("  red-zone checks:  %lu\n", heap_rz_checks());
 
     uint64_t bad = heap_violations();
     if (bad) {
-        vga_printf("  VIOLATIONS:       %u (%u bytes quarantined -- see dmesg)\n",
+        vga_printf("  VIOLATIONS:       %lu (%lu bytes quarantined -- see dmesg)\n",
                    bad, heap_quarantined_bytes());
     } else {
         vga_printf("  violations:       0\n");

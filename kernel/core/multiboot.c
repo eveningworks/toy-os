@@ -112,6 +112,30 @@ int multiboot_get_framebuffer(struct framebuffer_info *out) {
     return 0;
 }
 
+// Tag type 1: the command line GRUB was given for this kernel, as a
+// NUL-terminated string immediately after the tag header. Returns 0
+// when there is no such tag, which is the normal case for this repo's
+// grub.cfg -- so a caller must handle absence rather than an empty
+// string. First user: reloc.c's `nokaslr`, the off switch for kernel
+// ASLR and the only recovery path if a machine cannot survive being
+// relocated.
+const char *multiboot_cmdline(void) {
+    if (mb_info_addr == 0) return 0;
+
+    uint8_t *base = (uint8_t *)(uintptr_t)mb_info_addr;
+    uint32_t total_size = *(uint32_t *)base;
+    uint8_t *ptr = base + 8;
+    uint8_t *end = base + total_size;
+
+    while (ptr < end) {
+        struct mb_tag *tag = (struct mb_tag *)ptr;
+        if (tag->type == 0) break;
+        if (tag->type == 1) return (const char *)(tag + 1);
+        ptr += (tag->size + 7) & ~7u; // tags are 8-byte aligned
+    }
+    return 0;
+}
+
 void multiboot_mmap_foreach(void (*cb)(const struct multiboot_mmap_region *region)) {
     if (mb_info_addr == 0) return;
 

@@ -21,6 +21,12 @@ struct multiboot_mmap_region {
 // mmap tag isn't present.
 void multiboot_mmap_foreach(void (*cb)(const struct multiboot_mmap_region *region));
 
+// The command line GRUB was given for this kernel, or 0 if the
+// bootloader supplied no command-line tag -- which is the normal case
+// for this repo's grub.cfg, so callers must handle 0 rather than
+// expecting an empty string. First user: `nokaslr` (see reloc.h).
+const char *multiboot_cmdline(void);
+
 struct multiboot_module_info {
     uint64_t start; // physical address (inclusive)
     uint64_t end;   // physical address (exclusive)

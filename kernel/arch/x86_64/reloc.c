@@ -44,6 +44,9 @@
 // relocated page-table addresses" step the roadmap anticipated.
 #include "reloc.h"
 #include "klog.h"
+#include "multiboot.h"
+#include "random_hw.h"
+#include "string.h"
 
 // linker.ld places the table after .data and before .bss, so that
 // adding it cannot move any address it records. See that file.
@@ -58,6 +61,15 @@ extern char _kernel_end[];
 
 #define RELOC_WIDE (1u << 31) // this entry patches 8 bytes, not 4
 #define RELOC_ADDR_MASK 0x7FFFFFFFu
+
+// How far the running image was moved. Declared up here because every
+// function that READS a fixup location needs it: the table records
+// LINK-time addresses, so once the image has moved, the word an entry
+// describes lives at location + g_delta. Reading the bare location
+// instead reaches into the abandoned image -- which is still mapped and
+// still holds pre-relocation values, so it does not fault; it just
+// answers questions about a kernel that is no longer running.
+static uint64_t g_delta = 0;
 
 uint64_t kernel_reloc_count(void) {
     return (uint64_t)(__krelocs_end - __krelocs_start);
@@ -97,12 +109,218 @@ void kernel_relocate(int64_t delta) {
 uint64_t kernel_reloc_check(int64_t delta) {
     uint64_t bad = 0;
     for (const uint32_t *e = __krelocs_start; e != __krelocs_end; e++) {
-        uint64_t loc = (uint64_t)(*e & RELOC_ADDR_MASK);
+        uint64_t loc = (uint64_t)(*e & RELOC_ADDR_MASK) + g_delta;
         if (*e & RELOC_WIDE) continue; // 64-bit references cannot overflow
         int64_t v = (int64_t)*(const int32_t *)loc + delta;
         if (v < 0 || v > 0x7FFFFFFF) bad++;
     }
     return bad;
+}
+
+// ---- stage 3: picking a base and moving the image ----
+//
+// Everything below runs from long_mode_start, BEFORE kernel_main, from
+// the image still sitting at its link address. Three constraints shape
+// it, and none of them are obvious from the outside:
+//
+//   * It cannot log. klog_write() goes straight out the serial port and
+//     serial_init() has not run, so every decision here is recorded in
+//     a global and printed by kernel_main() once it can.
+//   * It cannot call krandom_init(). That harvests jitter by spinning
+//     until pit_ticks() changes, and the PIT is not initialised yet --
+//     on a machine without RDSEED/RDRAND (QEMU's default qemu64, which
+//     is most test runs) it would spin forever. So the base gets its
+//     own minimal entropy path, and reports honestly which one it got.
+//   * Every global it sets must be set BEFORE the copy, because the
+//     copy is what carries them into the image that will actually run.
+//     Assigning after the copy writes only to the abandoned image, and
+//     the running kernel would report a delta of zero while sitting at
+//     a relocated address.
+
+#define TWO_MIB 0x200000ULL
+
+static int g_entropy_hw = 0;
+static uint64_t g_slots = 0;
+static const char *g_note = "not attempted";
+
+// The relocated base must be 2MiB-aligned RELATIVE to the link base,
+// i.e. the delta is a multiple of 2MiB, which keeps every page-level
+// assumption elsewhere intact. paging_enforce_wx() in particular relies
+// on the whole read-only band (~672KB) sitting inside a single 2MiB
+// page; a delta that is any other size would straddle two and silently
+// leave half the image writable.
+#define MAX_SLOT_INDEX 2048 // 2048 * 2MiB = the 4GiB the identity map covers
+
+#define MAX_REGIONS 32
+static struct { uint64_t base, len; } g_avail[MAX_REGIONS];
+static int g_avail_count = 0;
+
+static void collect_region(const struct multiboot_mmap_region *r) {
+    if (r->type != 1) return; // available RAM only
+    if (g_avail_count >= MAX_REGIONS) return;
+    g_avail[g_avail_count].base = r->base;
+    g_avail[g_avail_count].len = r->length;
+    g_avail_count++;
+}
+
+static int range_fits_in_ram(uint64_t start, uint64_t end) {
+    for (int i = 0; i < g_avail_count; i++) {
+        uint64_t rs = g_avail[i].base, re = g_avail[i].base + g_avail[i].len;
+        if (start >= rs && end <= re) return 1;
+    }
+    return 0; // must fit ENTIRELY within one reported available region
+}
+
+static int overlaps(uint64_t a1, uint64_t a2, uint64_t b1, uint64_t b2) {
+    return a1 < b2 && b1 < a2;
+}
+
+// One 64-bit value to choose a slot with. Hardware if the CPU has it,
+// otherwise the timestamp counter -- which is weak, and is why
+// kernel_reloc_entropy_hw() exists for the boot log to say so rather
+// than let a reader assume the base is unpredictable.
+static uint64_t boot_entropy(void) {
+    uint64_t v;
+    if (arch_has_rdseed() && arch_rdseed64(&v)) { g_entropy_hw = 1; return v; }
+    if (arch_has_rdrand() && arch_rdrand64(&v)) { g_entropy_hw = 1; return v; }
+    g_entropy_hw = 0;
+    return arch_rdtsc();
+}
+
+// Is `k` (a slot index, delta = k * 2MiB) a base this image can live at?
+static int slot_usable(uint64_t k, uint64_t img_start, uint64_t img_size,
+                       uint64_t old_end, uint64_t info_start, uint64_t info_end) {
+    uint64_t delta = k * TWO_MIB;
+    uint64_t start = img_start + delta;
+    uint64_t end = start + img_size;
+
+    // Above the old image, always. Two things depend on it: the copy
+    // becomes non-overlapping (so a forward k_memcpy is correct), and
+    // the abandoned image stays below the new one where pmm.c reserves
+    // it -- it still holds the GDT the CPU uses until gdt_init().
+    if (start < old_end) return 0;
+    if (end > 0x100000000ULL) return 0;      // the identity map stops at 4GiB
+    if (!range_fits_in_ram(start, end)) return 0;
+    if (info_end > info_start && overlaps(start, end, info_start, info_end)) return 0;
+    if (kernel_reloc_check((int64_t)delta) != 0) return 0; // would break a 32-bit reference
+    return 1;
+}
+
+// Repoints CR3 at the RELOCATED copy of boot.asm's page tables.
+//
+// This is the step stage 2 concluded was unnecessary, and it was wrong
+// about it -- for a reason that has nothing to do with mapping. The
+// tables do map the new image already, since they identity-map the
+// whole low 4GiB. The problem is that paging.c reaches them by LINKER
+// SYMBOL (`extern uint64_t p2_tables[2048]`), so after relocation
+// paging_enforce_wx() and vmm_map_user_page() write into the copied
+// tables while the CPU is still walking the originals. Nothing faults;
+// W^X simply never takes effect and user mappings land in a table
+// nobody reads.
+//
+// The copy's p2 entries are already correct -- they are pure identity
+// mappings, whose values do not depend on where the table itself
+// lives. Only the two levels of internal pointers need rewriting.
+//
+// Every address here is computed as `symbol + delta` because this runs
+// from the OLD image, where the symbols still name the old tables.
+// Writing through the bare symbols would rewrite the tables we are
+// about to abandon and reload CR3 with the address it already holds --
+// a no-op that looks exactly like a working call.
+static void adopt_relocated_page_tables(uint64_t delta) {
+    extern uint64_t p4_table[512];
+    extern uint64_t p3_table[512];
+    extern uint64_t p2_tables[2048];
+
+    uint64_t new_p4 = (uint64_t)(uintptr_t)p4_table + delta;
+    uint64_t new_p3 = (uint64_t)(uintptr_t)p3_table + delta;
+    uint64_t new_p2 = (uint64_t)(uintptr_t)p2_tables + delta;
+
+    // present + writable + user, matching boot.asm -- permissions are
+    // ANDed down the whole walk, so a missing USER bit at a parent
+    // level would block ring 3 no matter what the leaf says.
+    for (int i = 0; i < 4; i++) {
+        ((uint64_t *)(uintptr_t)new_p3)[i] = (new_p2 + (uint64_t)i * 4096) | 0x7;
+    }
+    ((uint64_t *)(uintptr_t)new_p4)[0] = new_p3 | 0x7;
+
+    __asm__ volatile("mov %0, %%cr3" :: "r"(new_p4) : "memory");
+}
+
+uint64_t kernel_reloc_delta(void) { return g_delta; }
+int kernel_reloc_entropy_hw(void) { return g_entropy_hw; }
+uint64_t kernel_reloc_slots(void) { return g_slots; }
+const char *kernel_reloc_note(void) { return g_note; }
+
+uint64_t kernel_relocate_boot(uint64_t mb2_info) {
+    uint64_t img_start = (uint64_t)(uintptr_t)__kimage_start;
+    uint64_t old_end = (uint64_t)(uintptr_t)_kernel_end;
+    uint64_t img_size = old_end - img_start;
+
+    // Safe here: this only records the pointer in a global, which the
+    // copy then carries into the new image. kernel_main() calls it
+    // again, harmlessly.
+    multiboot_set_info(mb2_info);
+
+    // An explicit off switch, and the only recovery path if a machine
+    // turns out not to survive being relocated. Same spelling Linux
+    // uses, on the GRUB command line.
+    const char *cmdline = multiboot_cmdline();
+    if (cmdline && k_strstr(cmdline, "nokaslr")) {
+        g_note = "disabled by nokaslr on the command line";
+        return 0;
+    }
+
+    g_avail_count = 0;
+    multiboot_mmap_foreach(collect_region);
+    if (g_avail_count == 0) {
+        g_note = "no memory map -- nowhere known to be safe";
+        return 0;
+    }
+
+    uint64_t info_start = 0, info_end = 0;
+    multiboot_get_info_range(&info_start, &info_end);
+
+    uint64_t slots = 0;
+    for (uint64_t k = 1; k < MAX_SLOT_INDEX; k++) {
+        if (slot_usable(k, img_start, img_size, old_end, info_start, info_end)) slots++;
+    }
+    if (slots == 0) {
+        g_slots = 0;
+        g_note = "no candidate base fits -- not enough RAM above the image";
+        return 0;
+    }
+
+    uint64_t pick = boot_entropy() % slots;
+    uint64_t chosen = 0;
+    uint64_t seen = 0;
+    for (uint64_t k = 1; k < MAX_SLOT_INDEX; k++) {
+        if (!slot_usable(k, img_start, img_size, old_end, info_start, info_end)) continue;
+        if (seen == pick) { chosen = k; break; }
+        seen++;
+    }
+    if (chosen == 0) { // unreachable, but a wrong base is a dead machine
+        g_note = "slot selection disagreed with itself";
+        return 0;
+    }
+
+    uint64_t delta = chosen * TWO_MIB;
+
+    // EVERY global must be written before the copy -- see this section's
+    // top comment. After the copy they belong to the abandoned image.
+    g_delta = delta;
+    g_slots = slots;
+    g_note = "relocated";
+
+    // Non-overlapping by construction (delta >= img_size, since the base
+    // is above the old image's end), so a forward copy is correct.
+    // .bss is copied rather than zeroed on purpose: it holds the stack
+    // this code is standing on, and the caller continues on the copy.
+    k_memcpy((void *)(uintptr_t)(img_start + delta), (const void *)(uintptr_t)img_start, img_size);
+
+    kernel_relocate((int64_t)delta); // patches the NEW image; the table holds link-time addresses
+    adopt_relocated_page_tables(delta);
+    return delta;
 }
 
 // Does every entry currently point at a word holding a reference into
@@ -126,7 +344,7 @@ uint64_t kernel_reloc_implausible(void) {
     uint64_t bad = 0;
 
     for (const uint32_t *e = __krelocs_start; e != __krelocs_end; e++) {
-        uint64_t loc = (uint64_t)(*e & RELOC_ADDR_MASK);
+        uint64_t loc = (uint64_t)(*e & RELOC_ADDR_MASK) + g_delta;
         if (loc < lo || loc >= hi) { bad++; continue; }
         if (loc >= rodata_end) continue; // writable at runtime -- see above
 

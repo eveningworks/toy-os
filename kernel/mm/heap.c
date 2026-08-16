@@ -177,9 +177,11 @@ static int rz_fail(const char *what, const struct heap_block *b,
                    uint64_t expected, uint64_t found) {
     g_rz_violations++;
     g_quarantined_bytes += b->size;
-    klog_printf("heap: RED-ZONE VIOLATION %s block=0x%x size=%u\n",
+    // %lx/%lu, not %x/%u: kfmt reads a 32-bit argument without the `l`
+    // (see kfmt.c), which silently truncates every value here.
+    klog_printf("heap: RED-ZONE VIOLATION %s block=0x%lx size=%lu\n",
                 what, (uint64_t)(uintptr_t)b, b->size);
-    klog_printf("heap:   expected 0x%x, found 0x%x -- block quarantined, not returned to the free list\n",
+    klog_printf("heap:   expected 0x%lx, found 0x%lx -- block quarantined, not returned to the free list\n",
                 expected, found);
     return 0;
 }
@@ -349,7 +351,7 @@ void kfree(void *ptr) {
         b = (struct heap_block *)ptr - 1;
         if (!header_plausible(b)) {
             g_rz_violations++;
-            klog_printf("heap: CORRUPT HEADER at 0x%x (size=%u state=%u) -- refusing to free\n",
+            klog_printf("heap: CORRUPT HEADER at 0x%lx (size=%lu state=%lu) -- refusing to free\n",
                         (uint64_t)(uintptr_t)b, b->size, (uint64_t)b->free);
             return;
         }
