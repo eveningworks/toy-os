@@ -105,6 +105,7 @@ TOOLS = [
     ("blank", "blank_window_test.py", "no app opens a blank window"),
     ("compositor", "compositor_test.py", "raw input to a ring-3 compositor"),
     ("entries", "desktop_entries_test.py", "ShowIn= and live .desktop reload"),
+    ("taskmgr", "taskmgr_test.py", "the table widget, resize reflow, ending a process"),
 ]
 
 # Roughly how long each tool takes, in seconds, used ONLY to decide what

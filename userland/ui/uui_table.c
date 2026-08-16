@@ -372,8 +372,13 @@ static void tb_ops_draw(struct ugfx_surface *s, const void *w) {
     uui_table_draw(s, (const struct uui_table *)w);
 }
 
+// `>= 0`, NOT the row index. The router tests this as a BOOLEAN
+// (`!it->ops->hit(...)` in ui/uui_route.c), so returning the index makes
+// ROW 0 report "not hit" -- it is the one row whose index is falsey, so
+// the first row of the table silently cannot be selected while every
+// other row works. See uui_listbox.c, which had the identical bug.
 static int tb_ops_hit(const void *w, int cx, int cy) {
-    return uui_table_hit((const struct uui_table *)w, cx, cy);
+    return uui_table_hit((const struct uui_table *)w, cx, cy) >= 0;
 }
 
 static int tb_ops_key(void *w, int key, unsigned mods) {

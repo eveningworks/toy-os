@@ -214,6 +214,7 @@ static void on_widget(struct uapp *a, int id, int reason) {
         // The selection moved: any arm was aimed at the previous row and
         // must not survive onto this one.
         if (g_armed) { g_armed = 0; set_labels(); }
+        logf_("taskmgr: selected pid %d\n", selected_pid());
         uapp_redraw(a);
         return;
     }
@@ -228,11 +229,19 @@ static void on_widget(struct uapp *a, int id, int reason) {
     id = code;
 
     int pid = selected_pid();
-    if (!pid) return;
+    if (!pid) {
+        // Nothing selected: say so. A silent return here is
+        // indistinguishable from a click that missed the button
+        // entirely, and a test cannot tell those apart from outside.
+        logf_("taskmgr: no row selected\n");
+        return;
+    }
 
     if (g_armed != id) {          // first click: arm
         g_armed = id;
         set_labels();
+        logf_("taskmgr: armed %s pid %d\n",
+                id == ID_KILL ? "kill" : "end", pid);
         uapp_redraw(a);
         return;
     }
@@ -266,6 +275,16 @@ static int on_tick(struct uapp *a) {
         last_h = g_table.h;
         logf_("taskmgr: layout table %d %d %d %d\n",
                 g_table.x, g_table.y, g_table.w, g_table.h);
+        // The BUTTONS move with it -- they sit below the table, so a
+        // resize relocates them. Reporting only the table left a tool
+        // clicking the buttons' pre-resize coordinates, which misses
+        // them entirely and reads as "the button does nothing".
+        logf_("taskmgr: layout btn_end %d %d %d %d\n",
+                g_buttons[BTN_END].x, g_buttons[BTN_END].y,
+                g_buttons[BTN_END].w, g_buttons[BTN_END].h);
+        logf_("taskmgr: layout btn_kill %d %d %d %d\n",
+                g_buttons[BTN_KILL].x, g_buttons[BTN_KILL].y,
+                g_buttons[BTN_KILL].w, g_buttons[BTN_KILL].h);
     }
 
     static int passes;

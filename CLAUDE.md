@@ -119,6 +119,36 @@ technical conventions below:
   search, the case-folding pair for `timezone Helsinki`'s lookup, which
   is also why that folding is ASCII-only; see `docs/decisions.md`.
   That's the rule working, not an argument against it.)
+- **A widget's `ops->hit` is a BOOLEAN, and a widget whose own
+  `_hit()` returns a ROW INDEX must convert it.** The router tests it as
+  `!it->ops->hit(...)` (`userland/ui/uui_route.c`), so returning the
+  index makes ROW 0 -- the one row whose index is falsey -- report "not
+  hit". The first row then silently cannot be clicked while every other
+  row works, on a widget that draws, scrolls and hovers perfectly.
+  `uui_listbox` shipped that way and nothing noticed until `uui_table`
+  reproduced it by copying the line; `uui_radio_list` had it right all
+  along. Write `>= 0`.
+- **A widget's `natural_size` must not depend on where the widget
+  currently IS.** `uui_button_group_natural_size()` measured its
+  buttons' far edge from the ORIGIN, which equals the union's extent
+  only while the group sits at (0,0) -- true until something moved one.
+  Placed at y=284 it reported a natural height of 312 (its offset plus
+  its size), which inflated what the layout believed its children needed
+  and left Task Manager's table growing 16 px against a 300 px resize.
+  Natural size is the size a widget WANTS, asked before anyone knows
+  where it goes; anything else is a feedback loop between layout and
+  measurement.
+- **A lone `uui_button` routes its own clicks now** -- `press`/`motion`/
+  `release` are on `uui_button_ops`, as on QPushButton and a Win32
+  BUTTON. It used to be draw-and-hit only, so a single declared button
+  drew perfectly and ignored every click, which is a silent trap.
+  `uui_button_group` still routes its own buttons and is worth keeping
+  only for a GRID of them (Calculator's keypad); `docs/roadmap.md` has
+  retiring it as an item.
+- **A layout CAN grow a child along its stacking axis.** `UUI_FILL_H` in
+  a column (and `UUI_FILL_W` in a row) absorbs the leftover space,
+  flexbox's flex-grow. Before that nothing in a column could get taller
+  and a resized window just grew empty space under the last child.
 - **Anything drawn follows `docs/gui-guidelines.md`.** Three things
   bite most often. (1) **`gfx_draw_string()` does not clip** -- use
   `gfx_draw_string_clipped()` and `gfx_text_width()` for anything in a
@@ -319,6 +349,13 @@ technical conventions below:
   app writes no coordinates: declare a column/row/grid, and the window
   sizes itself from the content. Resize, focus and wheel all arrive for
   free. `docs/uapp-design.md` is the full design and its staging.
+- **`uui_table` is the multi-column widget** (`userland/ui/uui_table.h`)
+  -- columns with per-column width (in CHARACTERS, or 0 to stretch) and
+  alignment, a header, selection, scrolling. **It PULLS its rows through
+  a callback and stores none of them**: Toykit has no allocator, and
+  Task Manager re-reads the process table several times a second, so
+  there is nothing cached to go stale. Sizing is derived, so a resizable
+  window reflows with no arithmetic in the app. See `docs/decisions.md`.
 - **Editable text has ONE implementation of what editing means**
   (`userland/ui/uui_edit.h`): the caret, the selection and the keymap --
   Ctrl+A, Shift+arrows, typing replaces the selection, Backspace and
@@ -380,7 +417,13 @@ technical conventions below:
   unreachable-path rule means it is UNVALIDATED -- see
   `docs/decisions.md` for what is most likely wrong with it before
   designing stage 4 around it. **The WM itself is still ring 0, and
-  `docs/wm-ring3-design.md` is the staged plan for moving it** -- read
+  `docs/wm-ring3-design.md` is the staged plan for moving it** -- STAGES
+  0-3 ARE DONE (stage 3 landed 2026-08-16: the `gui` commands travel as
+  protocol messages over `struct win_transport`, so the test tooling has
+  already crossed the boundary the WM still has to). Stage 4 is the WM
+  itself; of its prerequisites the ELF hardening and the tick/process
+  syscalls are done, a ring-3 allocator is decided-but-unbuilt, and the
+  settings syscalls are not. Read
   that before touching anything in `apps/wm/` with the migration in
   mind. Its load-bearing point: all 13 GUI test tools drive the WM
   through `wm_debug.c`'s `gui` commands over the KERNEL's serial
@@ -438,6 +481,26 @@ technical conventions below:
   that spawns must close its own copy of the pipe's write end**, or the
   read never sees EOF even after the child exits, because a live writer
   (itself) still exists.
+- **Per-process facts exist now, and Task Manager is a ring-3 app.**
+  `struct sched_process` gained a name, `cpu_ticks` and (via
+  `vmm_user_bytes()`) memory; `abi/proc_info.h` is what userland sees,
+  reached by `SYS_PROC_INFO` (by SLOT, not pid -- an empty slot is a
+  SUCCESSFUL report of pid 0, so enumeration skips rather than stops).
+  `SYS_KILL` force-ends a process and `SYS_TICKS` is the MONOTONIC
+  counter `cpu_ticks` is billed against -- a CPU percentage is a delta
+  of one over a delta of the other, and `sys_gettime` (RTC wall-clock)
+  cannot serve. `cpu_ticks` is deliberately a TOTAL, not a percentage;
+  see `docs/decisions.md`. **`SYS_KILL` is unprivileged on purpose** --
+  there is no user model to gate it on, and killing the ring-3 WM is
+  stage 4's exit criterion rather than a hole.
+- **`Exec=builtin:` has ONE user left: Control Panel.** Task Manager
+  moved to `userland/gui/system/taskmgr.c` in this round, so the
+  registry's builtin table is down to a single row and disappears with
+  it in stage 4. Two live consequences: an entry naming a builtin that
+  no longer exists is REFUSED (loudly -- that is correct, and it broke
+  `desktop_entries_test.py`'s fixture when taskmgr moved), and Control
+  Panel is now the only lever for "a kernel-space app is open", which
+  the WM's live-reload deferral is gated on.
 - **The Start menu and desktop icons are built from FILES**, one
   `.desktop`-style entry per app in `/usr/wm/desktop/` (source of truth:
   `data/wm/desktop/`, format documented in its README). `gui_apps.c`
@@ -471,6 +534,25 @@ technical conventions below:
   program, and shouldn't), and **a real ring-3 app is seeded to `/bin`,
   not `/tests`** -- see `docs/filesystem-layout.md`, and note that
   moving a seeded file needs an explicit delete since `sync` is additive.
+- **There is no limit on open windows** -- `windows[]` is a grown-on-
+  demand block (`wm_windows_reserve()`), not a fixed array, so the only
+  ceiling is memory. Two rules follow from it MOVING when it grows:
+  never hold a `struct window *` across anything that can open a window,
+  and index rather than cache. (The z-order already renumbered indices,
+  so the second half of that rule predates this.) `MAX_WINDOWS` is gone;
+  `WM_WINDOWS_INITIAL` is a starting capacity.
+- **Super/Win toggles the Start menu, and Alt+F4 closes a window** --
+  both are WM shortcuts consumed before keys reach the focused window,
+  so a full-screen app cannot swallow either. `KEY_SUPER` comes from the
+  0xE0-prefixed 0x5B/0x5C scancodes; left and right send the same code.
+- **A window may be dragged off the left/right/bottom edges and UNDER
+  the taskbar**, keeping 8 character-widths of title bar grabbable and
+  never above the top edge (every other edge is recoverable by dragging
+  the title bar; the title bar cannot recover itself). A window that
+  ends up unreachable anyway is pulled back by
+  `wm_ensure_reachable()` when its taskbar button is clicked -- this
+  desktop has no Alt+Space/Win+arrow escape, so that button is the only
+  handle such a window has.
 - **The window manager lives in `apps/wm/`** -- the core event
   loop/input/render split (`wm.c`/`wm_input.c`/`wm_render.c`, sharing
   state through `wm_internal.h`'s `extern`s) plus the pieces that grew
@@ -1202,6 +1284,15 @@ to verify locally first. This doesn't replace verifying locally before
 delivering a change (still do that -- see "Working in the cloud
 sandbox" above), it's a second, automatic check behind it.
 
+**A COPY of `disk.img` GOES STALE the moment you rebuild.** `make iso`
+re-seeds the real `disk.img` with the newly built `/bin` binaries; a
+copy taken before that still holds the OLD ones. So a VM booted from the
+copy runs the NEW kernel (from the ISO) against the OLD userland, and a
+ring-3 fix appears not to work while the kernel half of the same change
+plainly does. That reads exactly like a bug in the app. **Re-copy after
+every `make iso`**, not once at the start of a session -- it cost real
+time here, debugging a layout fix that had already landed.
+
 **Test against a COPY of `disk.img` if the user might have their own
 QEMU open.** Two separate hazards, both hit for real: QEMU takes a
 write lock on the image, so a headless launch dies with `Failed to get
@@ -1829,9 +1920,16 @@ repeated manual steps to be worth automating:
   first version asserted only absence and passed with the filter
   disabled outright, because `write` truncates and the check was racing
   the transient invalid file. In `gui_regress.py`.
+- **`taskmgr_test.py`** -- the ring-3 Task Manager: `uui_table`, resize
+  reflow, and ending a process (12 checks). Its resize check asserts the
+  table grew by ROUGHLY WHAT THE WINDOW GREW BY, not merely that it
+  changed -- the bug it was written after grew the width correctly and
+  the height by 16 px against 300, so "it changed" was satisfied. On its
+  first run it found a pre-existing bug in `uui_listbox` (see the
+  widget-`hit` trap in the widget section above).
 - **`gui_regress.py`** -- runs every GUI test tool, each against
   its own freshly-copied disk image and its own VM, and prints one
-  pass/fail table (~1.5 minutes, 200 checks across fourteen tools). This is the standard check
+  pass/fail table (~1.5 minutes, 255 checks across seventeen tools). This is the standard check
   after touching `apps/ui/`, `userland/`, or anything the WM draws.
   Tools are **STARTED longest-first** (`COST_S`/`pick_order()`), because
   a parallel run cannot end before its slowest member does and

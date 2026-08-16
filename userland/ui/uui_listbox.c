@@ -244,8 +244,20 @@ int uui_listbox_key(struct uui_listbox *lb, int key) {
 // full ones). A listbox has no focused/unfocused state of its own --
 // selection is already visible -- so set_focused is absent rather than
 // a no-op that pretends otherwise.
+// `>= 0`, NOT the row index.
+//
+// uui_listbox_hit() returns a ROW, and the router tests this slot as a
+// BOOLEAN (`!it->ops->hit(...)` in ui/uui_route.c) -- so row 0, the one
+// row whose index is falsey, reported "not hit" and could not be
+// selected by clicking, while every other row worked. A first row that
+// ignores clicks is easy to miss precisely because the widget is
+// otherwise fine: it draws, it scrolls, it highlights on hover.
+//
+// Found by building uui_table, which reproduced the bug by copying this
+// line. uui_radio_list had it right all along; the other widgets' _hit
+// functions return uui_hit(), which is already a boolean.
 static int lb_ops_hit(const void *w, int cx, int cy) {
-    return uui_listbox_hit((const struct uui_listbox *)w, cx, cy);
+    return uui_listbox_hit((const struct uui_listbox *)w, cx, cy) >= 0;
 }
 static int lb_ops_key(void *w, int key, unsigned mods) {
     (void)mods;

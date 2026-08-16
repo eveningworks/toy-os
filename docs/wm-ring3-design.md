@@ -1,10 +1,12 @@
 # The WM in ring 3 -- finishing Milestone 41
 
-**Status: DESIGN, not implemented.** Written the way
-`docs/uapp-design.md` and `docs/tfs3-design.md` were: decide the shape
-and the arguments first, build it in named stages afterwards. Nothing
-below is built yet, and the stages are deliberately sized so each one
-ships on its own.
+**Status: STAGES 0-3 BUILT (2026-08-16). Stage 4 is the WM itself and
+is not started.** Written the way `docs/uapp-design.md` and
+`docs/tfs3-design.md` were: decide the shape and the arguments first,
+build it in named stages afterwards. Each stage below carries its own
+built/not-built note -- read those before the prose around them, which
+was written in advance and is corrected in place where building it
+proved something different.
 
 **The one-sentence version:** the window manager is still ~5,300 lines
 of ring-0 C that draws by calling `gfx.c` directly; moving it to ring 3
@@ -101,9 +103,20 @@ the boundary is a protocol -- but it goes client → *kernel*. It must
 become client → *WM process*. The message formats are already
 pointer-free and fixed-layout for exactly this reason.
 
-**4. A ring-3 allocator.** The WM's per-window state is `kmalloc`'d.
-Ring 3 has `sbrk` and no `malloc` (Milestone 24). Toykit has no
-allocator at all today -- which is why a menu is a const tree.
+**4. A ring-3 allocator.** ~~The WM's per-window state is `kmalloc`'d.~~
+**CORRECTION (2026-08-16): that claim was false.** `apps/wm/` allocates
+nothing -- the only `kmalloc` reference in it was a COMMENT pointing at
+`apps/calculator.c`, which stage 0 deleted. Its window table is a grown
+block (`wm_windows_reserve()`) and that growth is its only allocation.
+So stage 4 does not need an allocator to proceed.
+
+Ring 3 still has `sbrk` and no `malloc` (Milestone 24), and Toykit has
+no allocator at all -- which is why a menu is a const tree and why
+`uui_table` pulls its rows instead of storing them. Building one is the
+maintainer's decision for Toykit generally, not a blocker for this
+milestone. **Check a stated blocker against the code before planning
+around it**: this one survived unchallenged because it sounded
+plausible.
 
 Plus the smaller ones, all of which stage 4 needs: syscalls for
 `etc_config_*` (settings), a monotonic tick (`pit_ticks()`;
@@ -116,11 +129,11 @@ particular blocker is gone.
 
 ### The consequence that is not in the roadmap
 
-**All 13 GUI test tools drive the WM through `apps/wm/wm_debug.c`'s
-`gui` command family** -- 814 lines reached over the kernel's serial
+**All 17 GUI test tools drive the WM through `apps/wm/wm_debug.c`'s
+`gui` command family** -- reached over the kernel's serial
 debug console. `gui windows`, `gui click`, `gui probe`, `gui damage
 verify`, `gui dialog`, `gui ctxmenu` and the rest are how 175 checks
-assert anything at all about the desktop. A ring-3 WM cannot answer a
+assert anything at all about the desktop (255 checks now). A ring-3 WM cannot answer a
 command dispatched from inside the kernel's console.
 
 That is not a detail to discover in stage 4. It is the reason stage 3
@@ -478,9 +491,31 @@ would be needed to say more, and was not run.
 
 ### Stage 4 -- the WM process
 
-- Prerequisites: a ring-3 allocator, the settings/tick/process
-  syscalls, and the ELF loader hardening above (`MAX_PROCS` is already
-  raised).
+**Prerequisite status, 2026-08-16** (they were a flat list before, and
+half of them have since landed for their own reasons):
+
+- **ELF loader hardening -- DONE.** Every offset in the file is bounded
+  against a size the loader is now told, PT_INTERP is refused rather
+  than ignored, and both callers destroy the address space on failure
+  instead of leaking it. 16 KTESTs (`kernel/proc/elf_test.c`).
+- **The tick and process syscalls -- DONE.** `SYS_TICKS` (monotonic),
+  `SYS_PROC_INFO` and `SYS_KILL`, built for Task Manager. `scheduler_
+  poll` was already reachable.
+- **`MAX_PROCS` -- long since raised** to `SCHED_MAX_PROCS` = 64.
+- **A ring-3 allocator -- DECIDED, NOT BUILT.** Note the original
+  blocker text below is WRONG and stayed wrong for a while: it said the
+  WM's per-window state is `kmalloc`'d, which traced to
+  `apps/calculator.c` -- a file stage 0 deleted. `apps/wm/` allocates
+  nothing; its window table is a grown block now, and the growth is the
+  only allocation it does. So stage 4 does not NEED an allocator. The
+  maintainer's call is to build one anyway, for Toykit generally
+  (Milestone 24 work), rather than to make the ring-3 WM permanently
+  allocation-free.
+- **The settings syscalls (`etc_config_*`) -- NOT DONE.** Still needed
+  by Control Panel, which is the last `Exec=builtin:` and therefore the
+  last kernel-space app.
+
+Remaining prerequisites, then:
 - `apps/wm/` becomes a ring-3 binary linked against Toykit and the
   ported widgets, spawned at boot. `win_server.c` stays in the kernel:
   it owns page tables and the frame allocator, which is exactly what

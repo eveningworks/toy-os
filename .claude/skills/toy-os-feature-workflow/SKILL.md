@@ -1334,6 +1334,66 @@ obvious wrong answer:**
   alternative produces two implementations that drift, which this repo
   has paid for three times. It must stay freestanding to qualify.
 
+**2026-08-16 (M41 stage 3, and a long feature run): the traps were all
+SILENT, and three of them were in code I had just written.**
+
+- **A COPY of `disk.img` goes STALE the moment you rebuild.** `make iso`
+  re-seeds the real image with the new `/bin` binaries; a copy taken
+  before that still holds the old ones. The VM then runs the NEW kernel
+  against the OLD userland, so a ring-3 fix looks like it did nothing
+  while the kernel half of the same change plainly works. Re-copy after
+  every `make iso`, not once per session. This cost real time debugging
+  a layout fix that had already landed.
+- **A widget's `ops->hit` is a BOOLEAN.** The router tests
+  `!it->ops->hit(...)`, so a widget whose `_hit()` returns a ROW INDEX
+  makes row 0 -- the one falsey index -- unclickable, while every other
+  row works. `uui_listbox` shipped that way and a 42-check tool never
+  noticed; it was found only when a new widget copied the line. Write
+  `>= 0`.
+- **A `natural_size` that depends on the widget's POSITION is a feedback
+  loop.** `uui_button_group_natural_size()` measured from the origin
+  rather than reporting the union's extent, which is the same number
+  only while the group sits at (0,0). Once a layout moved it, it
+  reported offset-plus-size, ate the sibling's growth allowance, and the
+  symptom was a table growing 16 px against a 300 px resize -- which
+  reads as a broken resize path, not a broken measurement. **When a
+  number is wrong by a specific amount, work backwards from the amount**:
+  286 was arithmetically only explicable one way, and that named the
+  function.
+- **Check a stated blocker against the code before planning around it.**
+  `docs/wm-ring3-design.md` listed "a ring-3 allocator" as a stage-4
+  blocker because "the WM's per-window state is kmalloc'd". It is not
+  and was not: the only `kmalloc` in `apps/wm/` was a COMMENT pointing
+  at a file stage 0 had already deleted. A whole prerequisite evaporated
+  on one grep.
+- **Ship the test tool WITH the app, not after.** Task Manager shipped
+  with no tool, and a resize bug went out with it. The tool written
+  afterwards found the bug in ten seconds -- and then found a
+  pre-existing one in `uui_listbox` besides. If an app is worth adding
+  to `gui_regress.py`, it was worth adding before the commit.
+- **Assert the MAGNITUDE, not the change.** "The table resized" is
+  satisfied by 16 px out of 300, which is exactly the shipped bug. The
+  check has to be "it grew by roughly what the window grew by".
+- **A check that cannot distinguish success from a missed click passes
+  vacuously.** "One click arms and kills nothing" is equally satisfied
+  by a click that landed nowhere. The fix was to make the APP log its
+  state transitions (`taskmgr: armed kill pid N`, `no row selected`),
+  which is the same "ask the app where things are" rule applied to
+  state rather than geometry.
+- **A geometry logged once at startup cannot answer a question about
+  resizing** -- and if a widget moves with the thing that resized, log
+  that too. Reporting only the table left a tool clicking the buttons'
+  pre-resize coordinates and concluding the buttons were broken.
+- **`DebugConsole.logs()` CLEARS what it returns.** A second parser over
+  it finds nothing, so a value reported once vanishes. Accumulate across
+  calls, or parse everything in one pass.
+- **I recorded a wrong diagnosis and had to withdraw it.** A slot-0
+  correlation for a flaky tool went into `docs/roadmap.md` inferred from
+  a neighbouring entry rather than observed -- and `--logs` did not
+  record the slot, so it could not be checked afterwards. Write down
+  what was MEASURED; if the tooling cannot answer the question, fix the
+  tooling (it records the slot now) rather than guessing.
+
 The specific commands below
 were verified current as of the last time this skill was updated, but
 if `CLAUDE.md`, `VERSION`/`BUILD_NUMBER`, `apps/ui/`, or

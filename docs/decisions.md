@@ -122,6 +122,8 @@ there when you add an entry, or the index quietly stops being one.
 - [cpu_ticks is a total, not a percentage](#cpu_ticks-is-a-total-not-a-percentage)
 - [SYS_KILL is unprivileged, and killing the WM is the point](#sys_kill-is-unprivileged-and-killing-the-wm-is-the-point)
 - [A lone button routes its own clicks; the group is for grids](#a-lone-button-routes-its-own-clicks-the-group-is-for-grids)
+- [A natural size must not depend on where the widget currently sits](#a-natural-size-must-not-depend-on-where-the-widget-currently-sits)
+- [A widget's ops->hit is a boolean, and a row index is not one](#a-widgets-ops-hit-is-a-boolean-and-a-row-index-is-not-one)
 - [The ring-3 UI Demo selects on contact where the kernel one committed on release](#the-ring-3-ui-demo-selects-on-contact-where-the-kernel-one-committed-on-release)
 - [A compositor's view of a window is at a DERIVED address, and revocation is the feature](#a-compositors-view-of-a-window-is-at-a-derived-address-and-revocation-is-the-feature)
 - [The third inert scrollbar: drawing one and handling it are separate jobs](#the-third-inert-scrollbar-drawing-one-and-handling-it-are-separate-jobs)
@@ -410,6 +412,48 @@ What the group is still good for is a GRID of many buttons handled as
 one widget, which is genuinely less code than twenty layout items. It is
 on `docs/roadmap.md`'s list to retire once that is no longer worth a
 separate widget.
+
+## A natural size must not depend on where the widget currently sits
+
+`uui_button_group_natural_size()` computed its buttons' far edge FROM
+THE ORIGIN -- `x1`/`y1` started at 0 and took the max of `b->x + b->w`.
+That is the union's extent only while the group sits at (0,0), which
+held for exactly as long as nothing ever moved a group.
+
+The moment one took part in a layout it broke: placed at y=284, the
+group reported a natural HEIGHT of 312 -- its offset plus its size. In a
+column that inflated the space the layout believed its children needed,
+so the growth allowance for the widget above it was eaten by a number
+that was really a coordinate. The visible symptom was Task Manager's
+table growing 16 px against a 300 px window resize, which reads as a
+broken resize path rather than as a broken measurement.
+
+The rule: a natural size is the size a widget WANTS, asked before anyone
+has decided where it goes. One that varies with the widget's current
+position is a feedback loop between layout and measurement, and it
+converges on a wrong answer rather than failing outright.
+
+It reports `max - min` per axis now. Callers whose widgets start at the
+origin are unaffected, which is why nothing caught it earlier.
+
+## A widget's ops->hit is a boolean, and a row index is not one
+
+`uui_route.c` tests the slot as `!it->ops->hit(...)`. A widget whose own
+`_hit()` returns a ROW INDEX therefore has to convert -- because row 0
+is the one row whose index is falsey, so it reports "not hit" and cannot
+be clicked, while every other row works.
+
+`uui_listbox` shipped that way. The failure is close to invisible: the
+widget draws, scrolls, highlights on hover and selects rows 1..n
+perfectly, and only the first row is dead. It survived a 42-check test
+tool. It was found by building `uui_table`, which copied the line and
+reproduced the bug, and only then failed loudly enough to trace --
+Task Manager's first row is the one a test naturally clicks.
+
+`uui_radio_list` had `>= 0` all along; every other widget's `_hit()`
+returns `uui_hit()`, which is already a boolean. So the trap only
+applies to widgets that report WHICH item was hit, and there are exactly
+two of those.
 
 ## Widgets are added once a second real caller needs them -- except the checkbox
 
