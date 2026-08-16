@@ -976,6 +976,11 @@ void wm_render_frame(int mx, int my) {
     prev_cursor_y = my;
 
     gfx_present();
+    // AFTER the present, on purpose: the meter is an overlay that is
+    // never composited, so it has to land on the finished frame rather
+    // than in the back buffer. It rate-limits itself and is a no-op
+    // unless `rammeter` was on the command line.
+    rammeter_tick();
     damage_reset();
 }
 

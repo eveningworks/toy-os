@@ -282,4 +282,45 @@ int gfx_set_double_buffered(int enabled);
 // buffering is off.
 void gfx_present(void);
 
+// Times `iterations` full-screen fills of the VISIBLE framebuffer and
+// returns the total in TSC cycles. Deliberately bypasses the back buffer
+// and the dirty-rect machinery: what it measures is the one thing that
+// makes drawing slow on real hardware -- the cost of getting bytes
+// across the bus into an uncached-or-not MMIO aperture.
+//
+// It leaves the screen filled with `color`, which is the caller's
+// problem (the `gfxbench` command fills with the console background, so
+// it reads as a clear). Meaningless under QEMU, where the framebuffer is
+// cached host RAM; the number only says something on real hardware.
+uint64_t gfx_bench_fill(uint32_t color, int iterations);
+
+// Bits per pixel of the active surface (32 or 24), and a name for the
+// mechanism that made its framebuffer write-combining ("PAT", "MTRR" or
+// "none (uncached)").
+//
+// Both exist so `gfxbench` can report them WITHOUT reaching into
+// display.h or paging.h, which are kernel-internal and off the apps/
+// include path on purpose. A shell command wanting a kernel fact gets a
+// function here; it does not get to include its way around the
+// boundary.
+int gfx_bpp(void);
+const char *gfx_write_combining_name(void);
+
+// --- overlay drawing: straight to the visible framebuffer ---
+//
+// These bypass the back buffer, the clip rect AND the dirty-rect box.
+// That is normally the exact recipe for stale pixels, and it is right
+// only for something that sits ON TOP of a finished frame and is never
+// composited -- today, the `rammeter` debug readout. Anything the user
+// interacts with belongs in the back buffer with its damage declared,
+// or `gui damage verify on` will correctly call it a violation.
+//
+// Text composites against the caller's `bg`, never against what is on
+// screen: blending against the screen would mean reading the
+// framebuffer back, which on real hardware is uncached and costs more
+// than the write it was meant to improve.
+void gfx_overlay_fill(int x, int y, int w, int h, uint32_t color);
+void gfx_overlay_char(int x, int y, char c, uint32_t fg, uint32_t bg);
+void gfx_overlay_string(int x, int y, const char *s, uint32_t fg, uint32_t bg);
+
 #endif

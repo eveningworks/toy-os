@@ -3,6 +3,8 @@
 #include "heap.h"
 #include "multiboot.h"
 #include "font_ttf.h"
+#include "random_hw.h" // arch_rdtsc(), for gfx_bench_fill()
+#include "paging.h"    // paging_wc_name(), for gfx_write_combining_name()
 #include <stddef.h>
 
 static uint8_t *fb = 0;
@@ -352,12 +354,28 @@ void gfx_present(void) {
     for (int y = dirty_y0; y < dirty_y1; y++) {
         const uint32_t *src = back_buffer + (uint32_t)y * (uint32_t)width + dirty_x0;
         uint8_t *dst = fb + (uint32_t)y * pitch + (uint32_t)dirty_x0 * bytes;
-        for (int x = dirty_x0; x < dirty_x1; x++) {
-            uint32_t c = *src++;
-            dst[0] = (uint8_t)(c & 0xFF);
-            dst[1] = (uint8_t)((c >> 8) & 0xFF);
-            dst[2] = (uint8_t)((c >> 16) & 0xFF);
-            dst += bytes;
+        if (bytes == 4) {
+            // One 32-bit store per pixel, not three 8-bit ones. This is
+            // not micro-optimisation: the framebuffer is uncached MMIO
+            // on real hardware, where each store is a separate bus
+            // transaction the CPU stalls on, so three-per-pixel is
+            // literally three times the cost of the whole blit. It is
+            // free under QEMU, whose framebuffer is cached host RAM --
+            // which is why the difference is invisible to every test
+            // here and was measurable only on a real machine.
+            //
+            // Safe as an aligned 32-bit access because a 32bpp surface
+            // has 4-byte pixels and `pitch` is a whole number of them.
+            uint32_t *d32 = (uint32_t *)dst;
+            for (int x = dirty_x0; x < dirty_x1; x++) *d32++ = *src++;
+        } else {
+            for (int x = dirty_x0; x < dirty_x1; x++) {
+                uint32_t c = *src++;
+                dst[0] = (uint8_t)(c & 0xFF);
+                dst[1] = (uint8_t)((c >> 8) & 0xFF);
+                dst[2] = (uint8_t)((c >> 16) & 0xFF);
+                dst += bytes;
+            }
         }
     }
     // Publish before clearing the box -- on a driver-owned mode the
@@ -654,4 +672,118 @@ void gfx_fill_circle(int cx, int cy, int r, uint32_t color) {
 
 void gfx_fill_ellipse(int cx, int cy, int rx, int ry, uint32_t color) {
     geom_fill_ellipse(&GFX_TARGET, cx, cy, rx, ry, color);
+}
+
+// --- overlay drawing ---
+//
+// Writes straight to the VISIBLE framebuffer, bypassing the back buffer,
+// the clip rect and the dirty-rect box alike. That combination is
+// normally a bug -- it is exactly what leaves stale pixels behind -- and
+// it is correct here for one narrow use: a debug overlay that must sit
+// on top of a finished frame without telling the compositor anything.
+// Nothing it draws is ever composited, so nothing it draws may be
+// damage-tracked; the WM repaints over it freely and the overlay simply
+// redraws itself on its next tick.
+//
+// **Do not reach for these for anything the user is meant to interact
+// with.** A real control belongs in the back buffer with its damage
+// declared, or `gui damage verify on` will (correctly) call it a
+// violation.
+//
+// Text is composited against the caller's `bg` rather than against
+// whatever is on screen, deliberately: blending against the screen would
+// mean READING the framebuffer, and on real hardware that read is
+// uncached and slower than the write it was meant to prettify.
+static inline void raw_put(int x, int y, uint32_t color) {
+    if (!fb || x < 0 || y < 0 || x >= width || y >= height) return;
+    uint8_t *p = fb + (uint32_t)y * pitch + (uint32_t)x * (bpp / 8);
+    if (bpp == 32) {
+        *(uint32_t *)p = color;
+        return;
+    }
+    p[0] = (uint8_t)(color & 0xFF);
+    p[1] = (uint8_t)((color >> 8) & 0xFF);
+    p[2] = (uint8_t)((color >> 16) & 0xFF);
+}
+
+void gfx_overlay_fill(int x, int y, int w, int h, uint32_t color) {
+    for (int j = 0; j < h; j++)
+        for (int i = 0; i < w; i++)
+            raw_put(x + i, y + j, color);
+}
+
+void gfx_overlay_char(int x, int y, char c, uint32_t fg, uint32_t bg) {
+    int idx = font_ttf_glyph_index((unsigned char)c);
+    if (idx < 0) idx = font_ttf_glyph_index('?');
+    const struct font_ttf_variant *fv = &font_ttf_variants[cur_font_size];
+    const unsigned char *glyph = fv->glyphs + (size_t)idx * (size_t)fv->w * (size_t)fv->h;
+
+    uint8_t fg_r = unpack_channel(fg, red_pos, red_size);
+    uint8_t fg_g = unpack_channel(fg, green_pos, green_size);
+    uint8_t fg_b = unpack_channel(fg, blue_pos, blue_size);
+    uint8_t bg_r = unpack_channel(bg, red_pos, red_size);
+    uint8_t bg_g = unpack_channel(bg, green_pos, green_size);
+    uint8_t bg_b = unpack_channel(bg, blue_pos, blue_size);
+
+    for (int row = 0; row < fv->h; row++) {
+        for (int col = 0; col < fv->w; col++) {
+            uint8_t a = glyph[row * fv->w + col];
+            uint32_t color;
+            if (a == 0) {
+                color = bg;
+            } else if (a == 255) {
+                color = fg;
+            } else {
+                color = pack_channel(blend_channel(bg_r, fg_r, a), red_pos, red_size)
+                      | pack_channel(blend_channel(bg_g, fg_g, a), green_pos, green_size)
+                      | pack_channel(blend_channel(bg_b, fg_b, a), blue_pos, blue_size);
+            }
+            raw_put(x + col, y + row, color);
+        }
+    }
+}
+
+void gfx_overlay_string(int x, int y, const char *s, uint32_t fg, uint32_t bg) {
+    if (!s) return;
+    int cw = gfx_char_w();
+    for (int i = 0; s[i]; i++) gfx_overlay_char(x + i * cw, y, s[i], fg, bg);
+}
+
+int gfx_bpp(void) { return bpp; }
+
+const char *gfx_write_combining_name(void) {
+    return paging_wc_name(display_write_combining());
+}
+
+// See gfx.h. The store loop mirrors gfx_present()'s exactly -- one
+// 32-bit write per pixel at 32bpp, three byte writes at 24 -- because
+// the point is to measure that loop and not a tuned stand-in for it.
+uint64_t gfx_bench_fill(uint32_t color, int iterations) {
+    if (!fb || width <= 0 || height <= 0 || iterations <= 0) return 0;
+
+    int bytes = bpp / 8;
+    uint64_t start = arch_rdtsc();
+
+    for (int n = 0; n < iterations; n++) {
+        for (int y = 0; y < height; y++) {
+            uint8_t *dst = fb + (uint32_t)y * pitch;
+            if (bytes == 4) {
+                uint32_t *d32 = (uint32_t *)dst;
+                for (int x = 0; x < width; x++) *d32++ = color;
+            } else {
+                for (int x = 0; x < width; x++) {
+                    dst[0] = (uint8_t)(color & 0xFF);
+                    dst[1] = (uint8_t)((color >> 8) & 0xFF);
+                    dst[2] = (uint8_t)((color >> 16) & 0xFF);
+                    dst += bytes;
+                }
+            }
+        }
+    }
+
+    // Write-combining buffers are flushed by a serialising instruction,
+    // not by the last store retiring -- without this the final burst
+    // lands outside the measured window and WC looks faster than it is.
+    __asm__ volatile ("mfence" ::: "memory");
+    return arch_rdtsc() - start;
 }

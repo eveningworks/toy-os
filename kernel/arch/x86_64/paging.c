@@ -1,4 +1,6 @@
 #include "paging.h"
+#include "multiboot.h"
+#include "string.h"
 #include <stddef.h>
 
 // boot.asm identity-maps the first 4GiB with 2MiB pages, laid out as one
@@ -278,4 +280,217 @@ int paging_smep_smap_state(void) {
     uint64_t cr4 = read_cr4_local();
     return ((cr4 & CR4_SMEP_BIT) ? PAGING_SMEP_ON : 0) |
             ((cr4 & CR4_SMAP_BIT) ? PAGING_SMAP_ON : 0);
+}
+
+// --- write-combining the framebuffer ---
+//
+// The problem this solves is worth stating plainly, because it is
+// invisible in every test this repo can run: GRUB's linear framebuffer
+// is UNCACHED MMIO on real hardware, so each store to it is a bus
+// transaction the CPU waits on. gfx_present() pushes millions of them
+// per frame, which is seconds per full repaint on a real machine and
+// entirely unnoticeable under QEMU, where the "framebuffer" is ordinary
+// cached host RAM. Write-combining lets the CPU gather those stores in
+// a fill buffer and burst them out, which is the whole fix.
+//
+// Preferred mechanism is PAT, for one reason worth keeping: it is
+// PER-PAGE, so it needs no power-of-two sizing, no natural alignment and
+// no free range register -- all three of which an MTRR demands and a
+// framebuffer does not always offer.
+
+#define MSR_IA32_PAT       0x277u
+#define MSR_IA32_MTRRCAP   0xFEu
+#define MSR_IA32_MTRR_DEF  0x2FFu
+#define MSR_IA32_MTRR_BASE 0x200u   // base/mask pairs run 0x200,0x201,0x202,...
+
+#define PAT_TYPE_WC   0x01ULL
+#define MTRR_TYPE_WC  0x01ULL
+
+#define PAGE_PWT      (1ULL << 3)
+#define PAGE_PCD      (1ULL << 4)
+// Bit 12 is PAT on a 2MiB page. On a 4KiB page bit 12 is part of the
+// PHYSICAL ADDRESS and PAT is bit 7 instead -- setting the wrong one
+// does not fault, it silently repoints the mapping somewhere else. Every
+// write below checks PAGE_HUGE before choosing.
+#define PAGE_PAT_HUGE (1ULL << 12)
+#define PAGE_PAT_4K   (1ULL << 7)
+
+static uint64_t read_msr_local(uint32_t msr) {
+    uint32_t lo, hi;
+    __asm__ volatile ("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
+    return ((uint64_t)hi << 32) | lo;
+}
+
+static void write_msr_local(uint32_t msr, uint64_t val) {
+    __asm__ volatile ("wrmsr" :: "c"(msr), "a"((uint32_t)val),
+                                  "d"((uint32_t)(val >> 32)));
+}
+
+static uint32_t cpuid_edx1(void) {
+    uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
+    __asm__ volatile ("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                              : "a"(1), "c"(0));
+    return edx;
+}
+
+// Physical address width, for building an MTRR mask. CPUID leaf
+// 0x80000008 is the architectural answer; 36 bits is the pre-leaf
+// default and is what the fallback assumes.
+static uint32_t phys_addr_bits(void) {
+    uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
+    __asm__ volatile ("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                              : "a"(0x80000000u), "c"(0));
+    if (eax < 0x80000008u) return 36;
+    __asm__ volatile ("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                              : "a"(0x80000008u), "c"(0));
+    uint32_t bits = eax & 0xFFu;
+    return (bits >= 32 && bits <= 52) ? bits : 36;
+}
+
+static int nopat_requested(void) {
+    const char *cmdline = multiboot_cmdline();
+    return cmdline && k_strstr(cmdline, "nopat") ? 1 : 0;
+}
+
+// Points PAT slot 4 at write-combining, leaving slots 0-3 at their
+// architectural defaults so every mapping that does not opt in keeps
+// exactly the meaning it had. Slot 4 is selected by PAT=1, PCD=0, PWT=0,
+// which is why the PDE writes below set one bit and clear two.
+static void pat_install_wc_slot(void) {
+    uint64_t pat = read_msr_local(MSR_IA32_PAT);
+    pat &= ~(0xFFULL << 32);            // slot 4 lives in byte 4
+    pat |= (PAT_TYPE_WC << 32);
+    write_msr_local(MSR_IA32_PAT, pat);
+}
+
+static int pat_apply(uint64_t phys, uint64_t size) {
+    pat_install_wc_slot();
+
+    uint64_t first = phys / HUGE_SIZE;
+    uint64_t last  = (phys + size - 1) / HUGE_SIZE;
+
+    for (uint64_t pde = first; pde <= last; pde++) {
+        uint64_t e = p2_tables[pde];
+        if (!(e & PAGE_PRESENT)) continue;
+
+        if (e & PAGE_HUGE) {
+            e &= ~(PAGE_PCD | PAGE_PWT);
+            e |= PAGE_PAT_HUGE;
+            p2_tables[pde] = e;
+            continue;
+        }
+        // Split by paging_enforce_wx() -- retype the 4KiB leaves instead.
+        // Not expected for a framebuffer (it is far above the kernel
+        // image), but writing the huge-page bit here would corrupt the
+        // mapping rather than fail, so handle it rather than assume.
+        uint64_t *pt = (uint64_t *)(uintptr_t)(e & 0x000FFFFFFFFFF000ULL);
+        for (int i = 0; i < 512; i++) {
+            if (!(pt[i] & PAGE_PRESENT)) continue;
+            pt[i] = (pt[i] & ~(PAGE_PCD | PAGE_PWT)) | PAGE_PAT_4K;
+        }
+    }
+
+    // The region was uncached, so nothing of it is in cache to write
+    // back -- but the old translations are, and a stale TLB entry would
+    // keep the old type. Cheap once at boot.
+    __asm__ volatile ("wbinvd" ::: "memory");
+    flush_tlb();
+    return PAGING_WC_PAT;
+}
+
+// A variable-range MTRR describes a power-of-two block at a naturally
+// aligned base -- neither of which a framebuffer is obliged to be. So
+// cover the range greedily: at each step take the largest block that
+// both fits the remaining length and matches the current base's
+// alignment. Refuses rather than covering PART of the framebuffer,
+// since a half-write-combined framebuffer is a performance bug that
+// looks exactly like the one being fixed.
+#define MTRR_MAX_USED 8
+
+static int mtrr_apply(uint64_t phys, uint64_t size) {
+    uint64_t cap = read_msr_local(MSR_IA32_MTRRCAP);
+    uint32_t vcnt = (uint32_t)(cap & 0xFFu);
+    if (vcnt == 0) return PAGING_WC_NONE;
+    if (vcnt > MTRR_MAX_USED) vcnt = MTRR_MAX_USED;
+
+    // Plan the decomposition before touching any register, so a refusal
+    // costs nothing and leaves the MTRRs exactly as the firmware left
+    // them.
+    uint64_t base[MTRR_MAX_USED], len[MTRR_MAX_USED];
+    uint32_t n = 0;
+    uint64_t p = phys, remaining = size;
+    while (remaining > 0) {
+        if (n >= vcnt) return PAGING_WC_NONE;   // needs more ranges than exist
+        uint64_t block = 0x1000ULL;
+        // Grow while the block stays aligned to its own size and fits.
+        while (block * 2 <= remaining && (p % (block * 2)) == 0) block *= 2;
+        if (p % block) return PAGING_WC_NONE;   // not even 4KiB aligned
+        base[n] = p;
+        len[n] = block;
+        n++;
+        p += block;
+        remaining -= block;
+    }
+
+    uint64_t mask_hi = ((1ULL << phys_addr_bits()) - 1) & ~0xFFFULL;
+
+    // SDM 11.11.8's memory-type change protocol. Skipping any of it
+    // risks the CPU servicing a fetch under the old type mid-change; it
+    // costs microseconds, once, at boot.
+    unsigned long flags;
+    __asm__ volatile ("pushfq; popq %0; cli" : "=r"(flags) :: "memory");
+
+    uint64_t cr0, cr4;
+    __asm__ volatile ("mov %%cr0, %0" : "=r"(cr0));
+    __asm__ volatile ("mov %%cr4, %0" : "=r"(cr4));
+
+    // Global pages would survive the TLB flush below and keep the old
+    // memory type with them.
+    uint64_t cr4_nopge = cr4 & ~(1ULL << 7);
+    if (cr4 != cr4_nopge) __asm__ volatile ("mov %0, %%cr4" :: "r"(cr4_nopge) : "memory");
+
+    // CD=1, NW=0 -- no-fill cache mode.
+    __asm__ volatile ("mov %0, %%cr0" :: "r"((cr0 | (1ULL << 30)) & ~(1ULL << 29)) : "memory");
+    __asm__ volatile ("wbinvd" ::: "memory");
+    flush_tlb();
+
+    uint64_t def = read_msr_local(MSR_IA32_MTRR_DEF);
+    write_msr_local(MSR_IA32_MTRR_DEF, def & ~(1ULL << 11));   // E = 0
+
+    for (uint32_t i = 0; i < n; i++) {
+        write_msr_local(MSR_IA32_MTRR_BASE + 2 * i, base[i] | MTRR_TYPE_WC);
+        write_msr_local(MSR_IA32_MTRR_BASE + 2 * i + 1,
+                        ((~(len[i] - 1)) & mask_hi) | (1ULL << 11)); // V = 1
+    }
+
+    write_msr_local(MSR_IA32_MTRR_DEF, def | (1ULL << 11));    // E = 1
+
+    __asm__ volatile ("wbinvd" ::: "memory");
+    flush_tlb();
+    __asm__ volatile ("mov %0, %%cr0" :: "r"(cr0) : "memory");
+    if (cr4 != cr4_nopge) __asm__ volatile ("mov %0, %%cr4" :: "r"(cr4) : "memory");
+
+    __asm__ volatile ("pushq %0; popfq" :: "r"(flags) : "memory", "cc");
+    return PAGING_WC_MTRR;
+}
+
+int paging_set_write_combining(uint64_t phys, uint64_t size) {
+    if (size == 0) return PAGING_WC_NONE;
+    if (phys + size > (uint64_t)PDE_COUNT * HUGE_SIZE) return PAGING_WC_NONE;
+
+    uint32_t edx = cpuid_edx1();
+    int have_pat  = (edx >> 16) & 1u;
+    int have_mtrr = (edx >> 12) & 1u;
+
+    if (have_pat && !nopat_requested()) return pat_apply(phys, size);
+    if (have_mtrr) return mtrr_apply(phys, size);
+    return PAGING_WC_NONE;
+}
+
+const char *paging_wc_name(int result) {
+    switch (result) {
+        case PAGING_WC_PAT:  return "PAT";
+        case PAGING_WC_MTRR: return "MTRR";
+        default:             return "none (uncached)";
+    }
 }

@@ -26,6 +26,7 @@
 #include "multiboot.h" // multiboot_print_meminfo
 #include "pmm.h"       // pmm_total_frames/pmm_free_frames -- physical frame allocator stats
 #include "heap.h"      // kmalloc/kzalloc/kfree -- kernel-space heap (see heap.h's top comment)
+#include "rammeter.h"  // rammeter_tick -- the `rammeter` debug overlay, off unless asked for
 #include "power.h"     // system_reboot, system_poweroff
 #include "speaker.h"   // speaker_beep -- PC speaker (PIT channel 2 + port 0x61), see kernel/drivers/speaker.c
 #include "pci.h"       // PCI config-space enumeration -- pci_init/pci_device_at/pci_class_name (see pci.c)

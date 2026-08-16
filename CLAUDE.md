@@ -1942,6 +1942,12 @@ TFS2-legacy images only). Not advisory: `tools/check_layout.py` reads its table 
 `preflight`/CI if the built image disagrees, in either direction. Read
 it before adding a directory, a config file or any seeded data.
 
+`docs/boot-flags.md` -- every word the kernel looks for on the GRUB
+command line (`nokaslr`, `nopat`, `rammeter`, `live`, `demo`), what each
+does, and how to set one without rebuilding. Matching is by SUBSTRING
+with no parser, spread across five files with no registry, so this table
+is the only list of them -- add a row when adding a flag.
+
 `docs/gui-guidelines.md` -- how the GUI is supposed to look and behave:
 the four `enum ui_state` interaction states and their flat (non-bevelled)
 rendering, the press-then-commit-on-release rule every control follows,

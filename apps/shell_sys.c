@@ -1621,3 +1621,83 @@ void cmd_debug(const char *args) {
         vga_write("usage: debug [<subsystem> on|off]\n");
     }
 }
+
+// `gfxbench [iterations]` -- how fast can we actually get pixels onto
+// the screen, and by which mechanism.
+//
+// This exists because the answer differs by orders of magnitude between
+// QEMU and real hardware while NOTHING on screen reveals which you are
+// getting. A framebuffer left uncached makes every store a bus
+// transaction the CPU waits on; write-combining gathers them into
+// bursts. Under QEMU the framebuffer is cached host RAM, so this reports
+// an implausibly good number there and is only meaningful on a real
+// machine -- which is also the machine with no serial port, so the
+// output is shaped to be readable in a photograph of the screen.
+//
+// It leaves the screen filled, deliberately in the console background
+// colour so it reads as a clear rather than as damage.
+void cmd_gfxbench(const char *args) {
+    while (*args == ' ') args++;
+
+    int iterations = 10;
+    if (*args) {
+        uint32_t n = 0;
+        if (!k_parse_u32(args, &n) || n == 0 || n > 1000) {
+            vga_write("usage: gfxbench [iterations]   (1-1000, default 10)\n");
+            return;
+        }
+        iterations = (int)n;
+    }
+
+    int w = gfx_width(), h = gfx_height(), depth = gfx_bpp();
+    if (w <= 0 || h <= 0 || depth <= 0) {
+        vga_write("gfxbench: no display surface\n");
+        return;
+    }
+
+    struct cpu_info info;
+    cpu_info_get(&info);
+
+    uint64_t cycles = gfx_bench_fill(0x000000, iterations);
+
+    // Bytes actually pushed: visible pixels, not the whole pitch -- the
+    // loop skips any padding at the end of each scanline.
+    uint64_t bytes = (uint64_t)w * h * (depth / 8) * (uint64_t)iterations;
+
+    vga_write("gfxbench: "); vga_write_dec((uint32_t)w);
+    vga_putc('x'); vga_write_dec((uint32_t)h);
+    vga_write(" x"); vga_write_dec((uint32_t)depth);
+    vga_write(", "); vga_write_dec((uint32_t)iterations);
+    vga_write(" full-screen fills\n");
+
+    vga_write("  write-combining: ");
+    vga_write(gfx_write_combining_name());
+    vga_putc('\n');
+
+    if (info.mhz == 0) {
+        // No usable clock: report raw cycles rather than a wrong
+        // millisecond figure. A number in the wrong unit is worse than
+        // none, because it invites comparison.
+        vga_write("  total: "); vga_write_dec((uint32_t)(cycles / 1000000));
+        vga_write(" Mcycles (CPU MHz unknown -- no ms/MB-s figure)\n");
+        return;
+    }
+
+    uint64_t total_us = cycles / (uint64_t)info.mhz;
+    uint64_t per_us = total_us / (uint64_t)iterations;
+
+    vga_write("  per frame: "); vga_write_dec((uint32_t)(per_us / 1000));
+    vga_putc('.'); vga_write_dec((uint32_t)((per_us % 1000) / 100));
+    vga_write(" ms (");
+    if (per_us > 0) vga_write_dec((uint32_t)(1000000 / per_us));
+    else            vga_write("inf");
+    vga_write(" fps ceiling)\n");
+
+    vga_write("  throughput: ");
+    if (total_us > 0) {
+        vga_write_dec((uint32_t)(bytes / total_us));   // bytes/us == MB/s
+        vga_write(" MB/s\n");
+    } else {
+        vga_write("(too fast to measure)\n");
+    }
+}

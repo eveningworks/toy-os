@@ -2,6 +2,7 @@
 #include "display.h"
 #include "klog.h"
 #include "kfmt.h"
+#include "paging.h"
 
 // Small and fixed: there are two drivers today and a handful is the
 // realistic ceiling. A linked list would need each driver to carry a
@@ -11,6 +12,12 @@
 static const struct display_driver *g_drivers[MAX_DISPLAY_DRIVERS];
 static int g_count;
 static const struct display_driver *g_active;
+
+// Which mechanism (if any) made the framebuffer write-combining. Kept
+// because the three outcomes differ by orders of magnitude in speed and
+// nothing on screen distinguishes them -- `gfxbench` reports it beside
+// the timings so a slow result can be read rather than guessed at.
+static int g_wc = PAGING_WC_NONE;
 
 void display_register(const struct display_driver *drv) {
     if (!drv || g_count >= MAX_DISPLAY_DRIVERS) return;
@@ -47,6 +54,15 @@ int display_probe(void) {
         g_active = d;
         struct display_surface s;
         d->get_surface(&s);
+
+        // Ask for the framebuffer to be write-combining before anything
+        // draws. On real hardware it is uncached MMIO otherwise, and the
+        // cost is not subtle -- see paging_set_write_combining(). This is
+        // the right place for it precisely because it is the first point
+        // where the surface's address and extent are both known, and it
+        // has to hold for whichever driver claimed, not just vesafb.
+        g_wc = paging_set_write_combining(s.addr, (uint64_t)s.pitch * s.height);
+
         klog_printf("display: using \"%s\" -- %ux%u x%u pitch %u, caps:%s%s%s%s%s\n",
                      d->name, s.width, s.height, (unsigned)s.bpp, s.pitch,
                      (d->caps & DISPLAY_CAP_NEEDS_FLUSH) ? " flush" : "",
@@ -54,6 +70,7 @@ int display_probe(void) {
                      (d->caps & DISPLAY_CAP_ACCEL_FILL)  ? " fill" : "",
                      (d->caps & DISPLAY_CAP_ACCEL_COPY)  ? " copy" : "",
                      (d->caps & DISPLAY_CAP_MODESET)     ? " modeset" : "");
+        klog_printf("display: framebuffer write-combining: %s\n", paging_wc_name(g_wc));
         return 1;
     }
     klog_write("display: no driver claimed the hardware\n");
@@ -61,6 +78,8 @@ int display_probe(void) {
 }
 
 const struct display_driver *display_active(void) { return g_active; }
+
+int display_write_combining(void) { return g_wc; }
 
 int display_has(uint32_t cap) {
     return g_active && (g_active->caps & cap) != 0;

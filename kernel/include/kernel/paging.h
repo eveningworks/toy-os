@@ -81,4 +81,41 @@ int paging_enable_smep_smap(void);
 // questions.
 int paging_smep_smap_state(void);
 
+// How a range's memory type was arranged. Reported rather than assumed
+// because the three outcomes perform ENORMOUSLY differently and the
+// difference is invisible on screen -- see paging_set_write_combining().
+enum paging_wc_result {
+    PAGING_WC_NONE = 0,  // left as firmware set it (uncached, on real hardware)
+    PAGING_WC_PAT,       // a write-combining IA32_PAT slot, selected per page
+    PAGING_WC_MTRR,      // a variable-range MTRR covering the region
+};
+
+// Asks the CPU to treat [phys, phys+size) as WRITE-COMBINING: stores are
+// gathered in a fill buffer and flushed to the bus in bursts instead of
+// each one making the CPU wait on its own transaction.
+//
+// **This is the difference between a usable framebuffer and an unusable
+// one, and nothing on screen says which you got.** GRUB's linear
+// framebuffer is uncached MMIO on real hardware, where a single-byte
+// store costs a full bus round trip -- a 1920x1080 frame is millions of
+// them, i.e. seconds per repaint. Under QEMU the "framebuffer" is
+// ordinary cached host RAM, so the entire problem is invisible there and
+// no test in this repo can observe it; `gfxbench` on real hardware is
+// the only way to see the difference.
+//
+// Two mechanisms, because one of them is not always available:
+// PAT (per-page, precise, needs CPUID.01H:EDX[16]) is preferred, and a
+// variable-range MTRR is the fallback. `nopat` on the GRUB command line
+// forces the MTRR path -- without that switch the fallback would be
+// unreachable on every machine this OS can run on and therefore a guess,
+// the same reason `ata nodma` exists.
+//
+// `size` 0, an unmapped range or a range crossing 4GiB is refused.
+// Returns an enum paging_wc_result saying which mechanism actually
+// applied, NOT whether the call was reasonable.
+int paging_set_write_combining(uint64_t phys, uint64_t size);
+
+// A name for enum paging_wc_result, for logs and `gfxbench`.
+const char *paging_wc_name(int result);
+
 #endif

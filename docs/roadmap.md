@@ -1105,6 +1105,31 @@ rediscover the setup -- a seed, a command, a click sequence. And
 completed *features* stay struck through above because the milestone
 history is worth reading, but a fixed papercut is just noise.
 
+- [ ] **The framebuffer speed fix is UNVERIFIED on real hardware.**
+      Write-combining (PAT, with an MTRR fallback behind `nopat`) and
+      32-bit blit stores landed 2026-08-16 against a report of very slow
+      drawing on an ASUS Zenbook UX305FA (1920x1080). Both mechanisms are
+      confirmed to apply and to boot cleanly, but **the speed claim
+      itself cannot be tested here**: QEMU's framebuffer is cached host
+      RAM, so the bug it fixes is unobservable and `gfxbench` reports an
+      implausible ~2500 MB/s under emulation.
+      **To settle it:** boot the laptop, run `gfxbench 20` at the shell,
+      and compare against the same command on a build with the
+      `pat_apply()` call stubbed out. Expect the "write-combining:" line
+      to read `PAT`. A `none (uncached)` reading there would mean the
+      CPUID probe failed and is itself the bug.
+      No serial port on that machine, so the readout is shaped to be
+      photographed; `docs/decisions.md` records the alternative
+      (write results to the TFS3 volume, read them back with
+      `tools/tfs3_writer.py read`) if a text transcript is ever needed.
+- [ ] **`rammeter` doesn't appear at the physical console.** It ticks
+      from `wm_render_frame()` only, so it shows on the desktop and
+      nowhere else. The console has no repaint loop to hang it off, and
+      the obvious hooks are both worse than the gap: drawing from the
+      PIT IRQ can interleave with a compositor mid-blit, and hooking
+      `keyboard_getchar()`'s wait would have a driver calling into gfx.
+      Reproduce: boot with `rammeter` and stay at the shell -- nothing
+      is drawn until `gui`.
 - [ ] **Control Panel applets can't show hover.** `struct applet`'s
       `draw(x, y, w, h)` doesn't carry the cursor position, so the
       timezone applet passes `hovered = -1` to `ui_radio_list_draw()`

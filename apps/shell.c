@@ -106,6 +106,8 @@ static void dispatch(char *line) {
         cmd_meminfo();
     } else if (k_strcmp(cmd, "heap") == 0) {
         cmd_heap(args ? args : "");
+    } else if (k_strcmp(cmd, "gfxbench") == 0) {
+        cmd_gfxbench(args ? args : "");
     } else if (k_strcmp(cmd, "df") == 0) {
         cmd_df();
     } else if (k_strcmp(cmd, "stress") == 0) {

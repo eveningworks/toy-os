@@ -542,7 +542,16 @@ void wm_run(void) {
     // full-screen repaint below is visible as flicker while it happens.
     // If the mode is too large to buffer we just draw directly; it still
     // works, it just flickers (see gfx_set_double_buffered).
-    gfx_set_double_buffered(1);
+    //
+    // SAY SO when it fails. The consequence is not only flicker: drawing
+    // direct means every anti-aliased glyph reads the pixel under it
+    // back, and on real hardware that read comes from uncached MMIO, so
+    // the desktop goes from slow to unusable. A mode one pixel past
+    // GFX_MAX_PIXELS used to take that path in complete silence.
+    if (!gfx_set_double_buffered(1)) {
+        klog_write("wm: mode too large to double-buffer -- drawing direct "
+                    "(expect flicker, and very slow text on real hardware)\n");
+    }
 
     mouse_set_bounds(screen_w, screen_h);
     mouse_init();

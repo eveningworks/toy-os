@@ -48,6 +48,8 @@ there when you add an entry, or the index quietly stops being one.
 - [Stack canaries: `-mstack-protector-guard=global` and a fixed constant, not GCC's defaults](#stack-canaries--mstack-protector-guardglobal-and-a-fixed-constant-not-gccs-defaults)
 - [NX landed in userspace first, and the default mapper is the non-executable one](#nx-landed-in-userspace-first-and-the-default-mapper-is-the-non-executable-one)
 - [Kernel W^X: NX on every huge PDE, one 4KiB split for `.text`, and CR0.WP](#kernel-wx-nx-on-every-huge-pde-one-4kib-split-for-text-and-cr0wp)
+- [The framebuffer is write-combined via PAT, and `nopat` exists to make the MTRR fallback reachable](#the-framebuffer-is-write-combined-via-pat-and-nopat-exists-to-make-the-mtrr-fallback-reachable)
+- [The RAM meter is an uncomposited overlay, which is why it is debug-only](#the-ram-meter-is-an-uncomposited-overlay-which-is-why-it-is-debug-only)
 - [The user stack's guard is an unmapped hole plus two rules, and the sbrk rule is the one that mattered](#the-user-stacks-guard-is-an-unmapped-hole-plus-two-rules-and-the-sbrk-rule-is-the-one-that-mattered)
 - [SMAP is absolute here because the kernel copies through its own identity map, not with STAC/CLAC](#smap-is-absolute-here-because-the-kernel-copies-through-its-own-identity-map-not-with-stacclac)
 - [Heap debug mode is a runtime toggle, and `kfree()` tells the two block shapes apart by a magic that cannot be a pointer](#heap-debug-mode-is-a-runtime-toggle-and-kfree-tells-the-two-block-shapes-apart-by-a-magic-that-cannot-be-a-pointer)
@@ -3658,6 +3660,89 @@ Verified live, not only by reading bits back: a one-byte write to
 probe is not committed -- a ring-0 fault ends the boot, so it cannot
 live in a suite -- see CHANGELOG.md's `[Unreleased]` entry for how to
 reproduce it in two lines.
+
+## The framebuffer is write-combined via PAT, and `nopat` exists to make the MTRR fallback reachable
+
+Reported as "drawing is really slow" on a real machine (an ASUS Zenbook
+UX305FA) while being perfectly fast under QEMU. The cause was that
+nothing in this kernel had ever set a memory type: `pat` and `mtrr`
+existed only as CPUID feature-name strings in `cpu_features.h`. GRUB's
+linear framebuffer is therefore whatever the firmware left it as, which
+on real hardware is **uncached MMIO** — every store is a bus transaction
+the CPU stalls on. `gfx_present()` compounded that by writing pixels a
+BYTE at a time (three stores per pixel), so a full 1920x1080 frame was
+6.2 million individually-stalled writes.
+
+**QEMU cannot show any of this**, because its framebuffer is ordinary
+cached host RAM. That is the important part for a future session: no
+test in this repo can observe the bug, a clean `gui_regress` says
+nothing about it, and the only instrument is `gfxbench` run on real
+hardware.
+
+**PAT is preferred over MTRRs** because it is per-page: it needs no
+power-of-two size, no natural alignment and no free range register,
+all three of which a variable-range MTRR demands and a framebuffer does
+not reliably offer. Slot 4 of `IA32_PAT` is repointed at WC and slots
+0–3 are left at their architectural defaults, so every mapping that does
+not opt in keeps exactly the meaning it had; a page opts in by setting
+the PAT bit and clearing PCD/PWT, which selects slot 4.
+
+An MTRR marking a region UC does not defeat this — SDM Table 11-7 gives
+UC(MTRR) + WC(PAT) = WC, which is why Linux write-combines framebuffers
+through PAT without touching MTRRs either.
+
+**The trap, and it fails silently in the dangerous direction:** bit 12
+is PAT on a 2 MiB page, but on a 4 KiB page bit 12 is part of the
+PHYSICAL ADDRESS and PAT is bit 7. Writing the huge-page bit into a 4 KiB
+PTE does not fault; it silently repoints the mapping somewhere else. The
+framebuffer is far above the kernel image so it is never in a range
+`paging_enforce_wx()` split, but the code checks `PAGE_HUGE` rather than
+relying on that.
+
+**`nopat` exists because the fallback would otherwise be unreachable.**
+PAT has been present since the Pentium III, so every machine this OS can
+run on — QEMU's default model included — takes the PAT path, and an MTRR
+path nobody can execute is a guess, not a fallback. This is the same
+reasoning as `ata nodma` keeping the PIO disk path reachable. With the
+flag, both were verified to boot and to report the mechanism they
+actually used.
+
+What is NOT proven by anything committed: that write-combining is
+*faster*. It cannot be, in this environment. The speed claim can only be
+settled by `gfxbench` on the real machine.
+
+## The RAM meter is an uncomposited overlay, which is why it is debug-only
+
+`rammeter` (a GRUB flag, see `docs/boot-flags.md`) draws a live
+frame-allocator and heap readout in the top-right corner. It writes
+STRAIGHT to the visible framebuffer through `gfx_overlay_*`, bypassing
+the back buffer, the clip rect and the dirty-rect box alike.
+
+That combination is normally a bug — it is precisely what leaves stale
+pixels behind, and it is the family `gui damage verify on` exists to
+catch. It is correct here only because the overlay is never composited:
+the WM knows nothing about it, paints over it whenever it repaints that
+corner, and the meter reappears on its next tick. Nothing it draws is
+interactive, so nothing is lost when a repaint eats it.
+
+**A control the user touches must not be built this way.** It belongs in
+the back buffer with its damage declared, or the verifier will correctly
+call it a violation.
+
+Two consequences worth knowing. The damage verifier compares BACK BUFFER
+contents, so the overlay is invisible to it and reports no violations —
+which is a property of where it draws, not an exemption anyone coded.
+And it ticks only from `wm_render_frame()`, so it appears on the desktop
+and NOT at the physical console, which has no repaint loop to hang it
+off.
+
+**The heap row is deliberately not warn-coloured.** `heap_total_bytes()`
+is what the allocator has claimed from pmm so far, and it claims more on
+demand, so heap-used-against-claimed sits near full as a matter of
+course — it read 89% on a freshly booted desktop. Colouring that yellow
+would cry wolf every boot and teach the reader to ignore the one row
+where the colour means something. Only the physical-frame row has a real
+ceiling, so only it gets the green/amber/red bands.
 
 ## The user stack's guard is an unmapped hole plus two rules, and the sbrk rule is the one that mattered
 

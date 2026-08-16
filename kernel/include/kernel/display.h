@@ -129,4 +129,12 @@ int  display_mode_count(void);
 void display_mode_at(int index, struct display_mode *out);
 int  display_set_mode(const struct display_mode *mode);
 
+// Which mechanism made the framebuffer write-combining at probe time
+// (an enum paging_wc_result). Worth asking about because PAGING_WC_NONE
+// is not a cosmetic difference -- it is the difference between a
+// responsive desktop and a several-seconds-per-frame one on real
+// hardware, and nothing on screen says which you got. `gfxbench` prints
+// it beside its timings for exactly that reason.
+int display_write_combining(void);
+
 #endif
