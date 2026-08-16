@@ -32,6 +32,10 @@ struct uui_radio_list {
     // nothing that already worked had to change.
     int selected;
     int hovered;   // OWNED -- driven through the ops table's motion
+
+    // Own colours, for the same reason the textbox has them: a generic
+    // draw slot cannot carry them as arguments.
+    uint32_t bg, fg;
 };
 
 // Preferred minimum: the grid its columns and rows need. See
@@ -42,9 +46,7 @@ void uui_radio_list_natural_size(const struct uui_radio_list *l, int *out_w, int
 // into a size its rows and columns don't produce.
 void uui_radio_list_set_geometry(struct uui_radio_list *l, int x, int y);
 
-void uui_radio_list_draw(struct ugfx_surface *s, const struct uui_radio_list *l,
-                          int selected, int hovered,
-                          uint32_t bg, uint32_t fg);
+void uui_radio_list_draw(struct ugfx_surface *s, const struct uui_radio_list *l);
 // Index under the content-relative point (cx, cy), or -1.
 int uui_radio_list_hit(const struct uui_radio_list *l, int cx, int cy);
 

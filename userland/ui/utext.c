@@ -17,9 +17,9 @@ void utext_init(struct utext *t) {
     t->start = 0;
     t->count = 0;
     t->scroll_offset = 0;
-    t->cursor = 0;
-    t->sel_anchor = 0;
-    t->sel_active = 0;
+    t->ed.cursor = 0;
+    t->ed.sel_anchor = 0;
+    t->ed.sel_active = 0;
 }
 
 void utext_clear(struct utext *t) { utext_init(t); }
@@ -36,7 +36,7 @@ void utext_putc(struct utext *t, char c) {
         t->buf[(t->start + t->count) % UTEXT_CAP] = c;
         t->count++;
     }
-    t->cursor = t->count;
+    t->ed.cursor = t->count;
 }
 
 void utext_scroll(struct utext *t, int delta_lines) {
@@ -55,7 +55,7 @@ static void measure(struct utext *t, int max_cols, int visible_rows,
     int captured = 0;
 
     for (int i = 0; i <= t->count; i++) {
-        if (i == t->cursor && !captured) {
+        if (i == t->ed.cursor && !captured) {
             cursor_line = line;
             cursor_col = col;
             captured = 1;
@@ -214,83 +214,144 @@ static int line_end(const struct utext *t, int pos) {
     return i;
 }
 
-void utext_cursor_left(struct utext *t)  { if (t->cursor > 0) t->cursor--; }
-void utext_cursor_right(struct utext *t) { if (t->cursor < t->count) t->cursor++; }
-void utext_cursor_home(struct utext *t)  { t->cursor = line_start(t, t->cursor); }
-void utext_cursor_end(struct utext *t)   { t->cursor = line_end(t, t->cursor); }
+void utext_cursor_left(struct utext *t)  { if (t->ed.cursor > 0) t->ed.cursor--; }
+void utext_cursor_right(struct utext *t) { if (t->ed.cursor < t->count) t->ed.cursor++; }
+void utext_cursor_home(struct utext *t)  { t->ed.cursor = line_start(t, t->ed.cursor); }
+void utext_cursor_end(struct utext *t)   { t->ed.cursor = line_end(t, t->ed.cursor); }
 
 void utext_cursor_up(struct utext *t) {
-    int start = line_start(t, t->cursor);
+    int start = line_start(t, t->ed.cursor);
     if (start == 0) return; // already on the first line
-    int col = t->cursor - start;
+    int col = t->ed.cursor - start;
     int prev_start = line_start(t, start - 1);
     int prev_len = (start - 1) - prev_start;
-    t->cursor = prev_start + (col < prev_len ? col : prev_len);
+    t->ed.cursor = prev_start + (col < prev_len ? col : prev_len);
 }
 
 void utext_cursor_down(struct utext *t) {
-    int start = line_start(t, t->cursor);
-    int end = line_end(t, t->cursor);
+    int start = line_start(t, t->ed.cursor);
+    int end = line_end(t, t->ed.cursor);
     if (end >= t->count) return; // already on the last line
-    int col = t->cursor - start;
+    int col = t->ed.cursor - start;
     int next_start = end + 1;
     int next_end = line_end(t, next_start);
     int next_len = next_end - next_start;
-    t->cursor = next_start + (col < next_len ? col : next_len);
+    t->ed.cursor = next_start + (col < next_len ? col : next_len);
 }
 
 // --- editing -----------------------------------------------------------
 
 void utext_insert(struct utext *t, char c) {
     if (t->count >= UTEXT_CAP) return; // refuses; see utext.h
-    for (int i = t->count; i > t->cursor; i--) set_at(t, i, utext_at(t, i - 1));
-    set_at(t, t->cursor, c);
+    for (int i = t->count; i > t->ed.cursor; i--) set_at(t, i, utext_at(t, i - 1));
+    set_at(t, t->ed.cursor, c);
     t->count++;
-    t->cursor++;
+    t->ed.cursor++;
 }
 
 void utext_delete(struct utext *t) {
-    if (t->cursor >= t->count) return;
-    for (int i = t->cursor; i < t->count - 1; i++) set_at(t, i, utext_at(t, i + 1));
+    if (t->ed.cursor >= t->count) return;
+    for (int i = t->ed.cursor; i < t->count - 1; i++) set_at(t, i, utext_at(t, i + 1));
     t->count--;
 }
 
 void utext_backspace(struct utext *t) {
-    if (t->cursor <= 0) return;
-    t->cursor--;
+    if (t->ed.cursor <= 0) return;
+    t->ed.cursor--;
     utext_delete(t);
 }
 
+// --- the shared edit core's accessors ----------------------------------
+
+static int ed_len(void *text) { return ((struct utext *)text)->count; }
+
+static char ed_at(void *text, int i) { return utext_at((struct utext *)text, i); }
+
+static int ed_insert(void *text, int i, char c) {
+    struct utext *t = (struct utext *)text;
+    if (t->count >= UTEXT_CAP) return 0; // refuses; see utext.h
+    for (int k = t->count; k > i; k--) set_at(t, k, utext_at(t, k - 1));
+    set_at(t, i, c);
+    t->count++;
+    return 1;
+}
+
+static void ed_erase(void *text, int start, int end) {
+    struct utext *t = (struct utext *)text;
+    if (start < 0) start = 0;
+    if (end > t->count) end = t->count;
+    if (start >= end) return;
+    int n = end - start;
+    for (int i = start; i < t->count - n; i++) set_at(t, i, utext_at(t, i + n));
+    t->count -= n;
+}
+
+// The four that make this MULTI-LINE. A single-line field leaves these
+// NULL and the core declines Up/Down instead of pretending.
+static int ed_line_start(void *text, int i) { return line_start((struct utext *)text, i); }
+static int ed_line_end(void *text, int i)   { return line_end((struct utext *)text, i); }
+
+static int ed_line_up(void *text, int pos) {
+    struct utext *t = (struct utext *)text;
+    int start = line_start(t, pos);
+    if (start == 0) return pos;               // already on the first line
+    int col = pos - start;
+    int prev_start = line_start(t, start - 1);
+    int prev_len = (start - 1) - prev_start;
+    return prev_start + (col < prev_len ? col : prev_len);
+}
+
+static int ed_line_down(void *text, int pos) {
+    struct utext *t = (struct utext *)text;
+    int start = line_start(t, pos);
+    int end = line_end(t, pos);
+    if (end >= t->count) return pos;          // already on the last line
+    int col = pos - start;
+    int next_start = end + 1;
+    int next_end = line_end(t, next_start);
+    int next_len = next_end - next_start;
+    return next_start + (col < next_len ? col : next_len);
+}
+
+static const struct uui_edit_ops UTEXT_EDIT_OPS = {
+    .len = ed_len,
+    .at = ed_at,
+    .insert = ed_insert,
+    .erase = ed_erase,
+    .line_start = ed_line_start,
+    .line_end = ed_line_end,
+    .line_up = ed_line_up,
+    .line_down = ed_line_down,
+};
+
 // --- selection ---------------------------------------------------------
 
+// These four are the edit core's, delegated rather than reimplemented.
+// They keep their old names and behaviour because Notepad calls them
+// directly, and a rename would have been churn with no gain.
 void utext_sel_start(struct utext *t) {
-    t->sel_anchor = t->cursor;
-    t->sel_active = 1;
+    t->ed.sel_anchor = t->ed.cursor;
+    t->ed.sel_active = 1;
 }
 
-void utext_sel_clear(struct utext *t) {
-    t->sel_active = 0;
-    t->sel_anchor = 0;
-}
+void utext_sel_clear(struct utext *t) { uui_edit_clear_selection(&t->ed); }
 
-int utext_sel_present(const struct utext *t) {
-    return t->sel_active && t->sel_anchor != t->cursor;
-}
+int utext_sel_present(const struct utext *t) { return uui_edit_has_selection(&t->ed); }
 
 void utext_sel_range(const struct utext *t, int *out_start, int *out_end) {
-    int a = t->sel_anchor, b = t->cursor;
-    if (a > b) { int tmp = a; a = b; b = tmp; }
-    if (out_start) *out_start = a;
-    if (out_end) *out_end = b;
+    uui_edit_range(&t->ed, out_start, out_end);
 }
 
 void utext_sel_delete(struct utext *t) {
-    if (!utext_sel_present(t)) return;
-    int a, b;
-    utext_sel_range(t, &a, &b);
-    int n = b - a;
-    for (int i = a; i < t->count - n; i++) set_at(t, i, utext_at(t, i + n));
-    t->count -= n;
-    t->cursor = a;
-    utext_sel_clear(t);
+    uui_edit_delete_selection(&t->ed, &UTEXT_EDIT_OPS, t);
+}
+
+// --- the edit core's view of this buffer -------------------------------
+//
+// The ring is not contiguous, so the core never touches it directly:
+// these five (plus the four line ops) are the whole interface, and they
+// are the reason a 48-byte field and an 8 KB document can share one
+// keymap without sharing storage.
+int utext_key(struct utext *t, int key, unsigned mods) {
+    return uui_edit_key(&t->ed, &UTEXT_EDIT_OPS, t, key, mods);
 }

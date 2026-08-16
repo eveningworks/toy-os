@@ -29,6 +29,7 @@ static struct uui_item *nested(struct uui_item *it, int *out_count) {
 // Deliver a press to one item; returns the consuming item, or NULL.
 static struct uui_item *press_item(struct uui_item *it, int cx, int cy,
                                    int *changed) {
+    if (it->hidden) return NULL;   // hidden is hidden from the mouse too
     int n = 0;
     struct uui_item *sub = nested(it, &n);
     if (sub) {
@@ -60,6 +61,7 @@ static struct uui_item *overlay_owner(struct uui_item *items, int count) {
             if (o) return o;
             continue;
         }
+        if (items[i].hidden) continue;
         const struct uui_widget_ops *ops = items[i].ops;
         if (ops && ops->overlay_active && ops->overlay_active(items[i].widget)) {
             return &items[i];
@@ -116,6 +118,7 @@ int uui_router_motion(struct uui_router *r, int cx, int cy, unsigned buttons,
         struct uui_item *list = sub ? sub : &r->items[i];
         int listn = sub ? n : 1;
         for (int j = 0; j < listn; j++) {
+            if (list[j].hidden) continue;
             const struct uui_widget_ops *ops = list[j].ops;
             if (!ops || !ops->motion) continue;
             if (ops->motion(list[j].widget, cx, cy, buttons)) {
@@ -143,8 +146,36 @@ int uui_router_release(struct uui_router *r, int cx, int cy, int *out_changed) {
     return id;
 }
 
+static void draw_items(struct ugfx_surface *s, struct uui_item *items, int count) {
+    for (int i = 0; i < count; i++) {
+        if (items[i].hidden) continue;
+        int n = 0;
+        struct uui_item *sub = nested(&items[i], &n);
+        if (sub) { draw_items(s, sub, n); continue; }
+        if (items[i].ops && items[i].ops->draw) items[i].ops->draw(s, items[i].widget);
+    }
+}
+
+static void draw_overlays(struct ugfx_surface *s, struct uui_item *items, int count) {
+    for (int i = 0; i < count; i++) {
+        if (items[i].hidden) continue;
+        int n = 0;
+        struct uui_item *sub = nested(&items[i], &n);
+        if (sub) { draw_overlays(s, sub, n); continue; }
+        if (items[i].ops && items[i].ops->draw_overlay) {
+            items[i].ops->draw_overlay(s, items[i].widget);
+        }
+    }
+}
+
+void uui_router_draw(struct uui_router *r, struct ugfx_surface *s) {
+    draw_items(s, r->items, r->count);
+    draw_overlays(s, r->items, r->count);
+}
+
 static int wheel_item(struct uui_item *it, int cx, int cy, int notches,
                       int *changed, int *id) {
+    if (it->hidden) return 0;
     int n = 0;
     struct uui_item *sub = nested(it, &n);
     if (sub) {

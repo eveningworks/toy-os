@@ -33,6 +33,12 @@ struct uui_widget_ops {
 
     void (*draw)(struct ugfx_surface *s, const void *w);
 
+    // Anything this widget draws ON TOP of its siblings -- a dropdown's
+    // open popup. Painted in a second pass after every widget's `draw`,
+    // which is what makes z-order the toolkit's problem rather than a
+    // rule every app has to remember ("call draw_popup LAST").
+    void (*draw_overlay)(struct ugfx_surface *s, const void *w);
+
     // Content-relative hit test.
     int (*hit)(const void *w, int cx, int cy);
 
@@ -75,6 +81,12 @@ struct uui_item {
     const struct uui_widget_ops *ops;
     void *widget;
     unsigned flags;
+
+    // Not drawn, not hit-tested, not focusable -- the widget still
+    // exists and keeps its state. This is how an app SHOWS and HIDES a
+    // control: set the flag, and both the painter and the router skip
+    // it, so a hidden widget cannot be clicked by accident.
+    int hidden;
 
     // The app's name for this widget, reported back through
     // uapp_desc.on_widget() when the widget changes. Ids are the app's

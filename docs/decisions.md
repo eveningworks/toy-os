@@ -105,6 +105,7 @@ there when you add an entry, or the index quietly stops being one.
 - [A compositor's view of a window is at a DERIVED address, and revocation is the feature](#a-compositors-view-of-a-window-is-at-a-derived-address-and-revocation-is-the-feature)
 - [The third inert scrollbar: drawing one and handling it are separate jobs](#the-third-inert-scrollbar-drawing-one-and-handling-it-are-separate-jobs)
 - [The toolkit routes pointer input; an app configures and is told what changed](#the-toolkit-routes-pointer-input-an-app-configures-and-is-told-what-changed)
+- [What editing text MEANS lives in one place, and the storage does not](#what-editing-text-means-lives-in-one-place-and-the-storage-does-not)
 - [A GUI test spawns its client directly, instead of typing at a Terminal](#a-gui-test-spawns-its-client-directly-instead-of-typing-at-a-terminal)
 - [A client's menus are clamped to its own window, and that is one rectangle away from not being](#a-clients-menus-are-clamped-to-its-own-window-and-that-is-one-rectangle-away-from-not-being)
 - [A menu bar opens on press, which is the one place the commit-on-release rule bends](#a-menu-bar-opens-on-press-which-is-the-one-place-the-commit-on-release-rule-bends)
@@ -5336,3 +5337,42 @@ what a user expects, and it is why `uapp` tracks the last pointer
 position -- `WIN_EV_WHEEL` carries notches and no coordinates, exactly
 as Wayland's axis event does, because the client already knows where its
 pointer is.
+
+
+## What editing text MEANS lives in one place, and the storage does not
+
+Editable text existed three times over and behaved differently in each:
+`uui_textbox` (single-line) had a caret and NO selection at all, `utext`
+(multi-line) had selection primitives but no keymap, and Notepad
+hand-wrote the keymap on top of them -- about sixty lines deciding what
+Ctrl+A means, what Shift+Left does, and what typing with a selection
+active should do. A second app wanting a text field would have written
+that a fourth time.
+
+`uui_edit` (`userland/ui/uui_edit.h`) owns the CURSOR, the SELECTION and
+the KEYMAP, and delegates every read or write of characters through four
+accessors. That split is the whole design: a 48-byte line and an 8 KB
+ring cannot share storage, but they absolutely should share what
+Backspace with a selection active does. It is the same shape
+`kernel/lib/klineedit.c` already has kernel-side, where the physical
+shell and the GUI Terminal share one line editor and each only paints
+the result.
+
+What a text field does now, which it could not before: click to place
+the caret, drag to select, Ctrl+A, Shift+arrows, typing replaces the
+selection, Backspace and Delete remove it. All of that arrived in
+`uui_textbox` by deleting its keymap rather than by writing one.
+
+**Two things the core deliberately does not decide.** Enter is never
+consumed -- a field commits, a document inserts a newline, and that is
+the widget's call, so Notepad still handles it and the field still
+leaves it to the app. And Up/Down are offered only when the caller
+supplies line accessors: a single-line field has no line above, so the
+core declines the key rather than swallowing it, and the app can use it
+for something else.
+
+The multi-line side kept its public API (`utext_sel_*`, `utext_cursor_*`)
+because Notepad calls those directly; they delegate now instead of
+reimplementing. The one visible change is `struct utext`'s three fields
+becoming one `struct uui_edit ed`, so there is a single owner of the
+caret rather than two structures that could disagree.

@@ -235,7 +235,7 @@ static int load_file(const char *path) {
     }
     sys_close(fd);
 
-    g_text.cursor = 0;
+    g_text.ed.cursor = 0;
     g_text.scroll_offset = 0;
     utext_sel_clear(&g_text);
     scopy(g_path, path, PATH_MAX_LEN);
@@ -334,7 +334,7 @@ static void layout_chrome(int cw, int ch) {
 // 12p` expects the same answer.
 static void update_indicators(void) {
     int line = 1, col = 1;
-    for (int i = 0; i < g_text.cursor && i < g_text.count; i++) {
+    for (int i = 0; i < g_text.ed.cursor && i < g_text.count; i++) {
         if (utext_at(&g_text, i) == '\n') { line++; col = 1; }
         else col++;
     }
@@ -640,21 +640,23 @@ static void do_command(struct uapp *a, int code) {
         break;
     }
     case CMD_SELECT_ALL:
-        g_text.cursor = 0;
-        utext_sel_start(&g_text);
-        g_text.cursor = g_text.count;
+        // Ctrl-A reaches the editor as a control code and is handled by
+        // the shared keymap too; this is the MENU path to the same
+        // thing, which is why it calls the same core rather than
+        // re-implementing it out of cursor moves.
+        utext_key(&g_text, 0x01, 0);
         set_status("selected all");
         break;
     case CMD_DELETE:
         if (utext_sel_present(&g_text)) { utext_sel_delete(&g_text); g_dirty = 1; }
         break;
     case CMD_GOTO_TOP:
-        g_text.cursor = 0;
+        g_text.ed.cursor = 0;
         utext_sel_clear(&g_text);
         utext_scroll(&g_text, g_text.count); // clamps to the top
         break;
     case CMD_GOTO_END:
-        g_text.cursor = g_text.count;
+        g_text.ed.cursor = g_text.count;
         utext_sel_clear(&g_text);
         g_text.scroll_offset = 0; // 0 is pinned to the newest text
         break;
@@ -680,50 +682,28 @@ static int accelerator(struct uapp *a, int key) {
 }
 
 static void editor_key(int key) {
-    switch (key) {
-    case KEY_ARROW_LEFT:  utext_sel_clear(&g_text); utext_cursor_left(&g_text); return;
-    case KEY_ARROW_RIGHT: utext_sel_clear(&g_text); utext_cursor_right(&g_text); return;
-    case KEY_ARROW_UP:    utext_sel_clear(&g_text); utext_cursor_up(&g_text); return;
-    case KEY_ARROW_DOWN:  utext_sel_clear(&g_text); utext_cursor_down(&g_text); return;
-    case KEY_HOME:        utext_sel_clear(&g_text); utext_cursor_home(&g_text); return;
-    case KEY_END:         utext_sel_clear(&g_text); utext_cursor_end(&g_text); return;
-    case KEY_PAGE_UP:     utext_scroll(&g_text, 5); return;
-    case KEY_PAGE_DOWN:   utext_scroll(&g_text, -5); return;
+    // Paging is this app's, because it is about the VIEW rather than
+    // the text -- the core moves a caret, and a page here scrolls
+    // without moving one.
+    if (key == KEY_PAGE_UP)   { utext_scroll(&g_text, 5);  return; }
+    if (key == KEY_PAGE_DOWN) { utext_scroll(&g_text, -5); return; }
 
-    // Shift+arrow extends a selection: anchor once, then move.
-    case KEY_SHIFT_ARROW_LEFT:
-        if (!g_text.sel_active) utext_sel_start(&g_text);
-        utext_cursor_left(&g_text); return;
-    case KEY_SHIFT_ARROW_RIGHT:
-        if (!g_text.sel_active) utext_sel_start(&g_text);
-        utext_cursor_right(&g_text); return;
-    case KEY_SHIFT_ARROW_UP:
-        if (!g_text.sel_active) utext_sel_start(&g_text);
-        utext_cursor_up(&g_text); return;
-    case KEY_SHIFT_ARROW_DOWN:
-        if (!g_text.sel_active) utext_sel_start(&g_text);
-        utext_cursor_down(&g_text); return;
-
-    case KEY_DELETE:
-        if (utext_sel_present(&g_text)) utext_sel_delete(&g_text);
-        else utext_delete(&g_text);
-        g_dirty = 1; return;
-    case '\b':
-        if (utext_sel_present(&g_text)) utext_sel_delete(&g_text);
-        else utext_backspace(&g_text);
-        g_dirty = 1; return;
-    default: break;
-    }
-
-    if (key == '\n' || key == '\r') {
-        if (utext_sel_present(&g_text)) utext_sel_delete(&g_text);
-        utext_insert(&g_text, '\n');
-        g_dirty = 1;
+    // Everything else -- arrows, Shift+arrows, Home/End, Ctrl+A,
+    // Backspace and Delete removing a selection, typing replacing one --
+    // is the SHARED keymap (ui/uui_edit.h). This function used to be
+    // sixty lines of exactly that, written here and nowhere else, so
+    // the single-line text field got none of it.
+    int before = g_text.count;
+    if (utext_key(&g_text, key, 0)) {
+        if (g_text.count != before) g_dirty = 1;
         return;
     }
-    if (key >= 32 && key < 127) {
-        if (utext_sel_present(&g_text)) utext_sel_delete(&g_text);
-        utext_insert(&g_text, (char)key);
+
+    // Enter is deliberately declined by the core: a field commits, a
+    // document inserts a newline. This is a document.
+    if (key == '\n' || key == '\r') {
+        utext_sel_delete(&g_text);
+        utext_insert(&g_text, '\n');
         g_dirty = 1;
     }
 }
@@ -931,7 +911,7 @@ static void on_press(struct uapp *a, int x, int y, unsigned buttons) {
     } else if (scrollbar_press(x, y, tx, ty, tw, th)) {
         // handled: jumped to the clicked position
     } else if (x >= tx && x < tx + tw && y >= ty && y < ty + th) {
-        g_text.cursor = utext_index_at_point(&g_text, tx, ty, tw, th, x, y);
+        g_text.ed.cursor = utext_index_at_point(&g_text, tx, ty, tw, th, x, y);
         utext_sel_start(&g_text);
         g_dragging = 1;
     }
@@ -967,7 +947,7 @@ static void on_motion(struct uapp *a, int x, int y, unsigned buttons) {
                 uapp_redraw(a);
             }
         } else if (g_dragging) {
-            g_text.cursor = utext_index_at_point(&g_text, tx, ty, tw, th, x, y);
+            g_text.ed.cursor = utext_index_at_point(&g_text, tx, ty, tw, th, x, y);
             uapp_redraw(a);
         }
     }

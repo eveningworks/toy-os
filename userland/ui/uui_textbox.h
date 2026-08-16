@@ -8,6 +8,7 @@
 // should be a file-to-file comparison, not a translation.
 
 #include <stdint.h>
+#include "ui/uui_edit.h"
 #include "ui/ugfx.h"
 #include "ui/uui_primitives.h"
 
@@ -29,8 +30,24 @@ struct uui_textbox {
 
     char buf[UUI_TEXTBOX_MAX]; // NUL-terminated
     int len;
-    int cursor; // [0, len]
+
+    // Caret and selection, and the standard keymap that goes with them
+    // (Ctrl+A, Shift+arrows, typing replaces the selection...) -- see
+    // ui/uui_edit.h. Shared with the multi-line editor so a field and a
+    // document cannot behave differently.
+    //
+    // `ed.cursor` is what `cursor` used to be; reach through it rather
+    // than keeping a second copy.
+    struct uui_edit ed;
+
     int active; // 1 = focused: draws a caret and accepts keys
+
+    // The widget's OWN colours, defaulted at init from the theme. They
+    // used to be arguments to draw(), which meant the toolkit could not
+    // draw a field on an app's behalf -- the generic draw slot has
+    // nowhere to carry three colours. An app that wants different ones
+    // assigns them after init.
+    uint32_t bg, fg, border, sel_bg;
 };
 
 void uui_textbox_init(struct uui_textbox *f, const char *initial);
@@ -38,7 +55,17 @@ void uui_textbox_set_active(struct uui_textbox *f, int active);
 
 // Returns 1 if the key was consumed. Deliberately does NOT consume
 // Enter: "commit this field" is the caller's decision, not the widget's.
+//
+// `mods` is passed through to the edit core; Shift arrives as its own
+// key code rather than a bit (api/keyboard.h), so most callers can pass
+// 0 and lose nothing.
 int uui_textbox_key(struct uui_textbox *f, int key);
+int uui_textbox_key_mods(struct uui_textbox *f, int key, unsigned mods);
+
+// The text, and how much of it is selected. For an app that wants to
+// read a field without knowing about the edit core.
+const char *uui_textbox_text(const struct uui_textbox *f);
+int uui_textbox_has_selection(const struct uui_textbox *f);
 
 // Height only: one row plus insets. **Width is 0 -- no preference**
 // (see uui_primitives.h): a field's width is whatever the form gives it.
@@ -58,8 +85,7 @@ int uui_textbox_hit(const struct uui_textbox *f, int cx, int cy);
 // nearest gap, so clicking a glyph's right half lands after it.
 int uui_textbox_index_at_x(const struct uui_textbox *f, int cx);
 
-void uui_textbox_draw(struct ugfx_surface *s, const struct uui_textbox *f,
-                     uint32_t bg, uint32_t fg, uint32_t border);
+void uui_textbox_draw(struct ugfx_surface *s, const struct uui_textbox *f);
 
 // The focus ring's ops table for a field: hit/key/set_focused only, the
 // drawing and layout slots left NULL (every slot is optional -- see

@@ -110,7 +110,12 @@ static int bg_ops_release(void *w, int cx, int cy) {
     return 1;
 }
 
+static void bg_ops_draw(struct ugfx_surface *s, const void *w) {
+    uui_button_group_draw((const struct uui_button_group *)w, s);
+}
+
 const struct uui_widget_ops uui_button_group_ops = {
+    .draw    = bg_ops_draw,
     .hit     = bg_ops_hit,
     .press   = bg_ops_press,
     .motion  = bg_ops_motion,

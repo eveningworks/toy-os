@@ -233,7 +233,12 @@ static int tv_ops_wheel(void *w, int notches) {
     return uui_textview_wheel((struct uui_textview *)w, notches);
 }
 
+static void tv_ops_draw(struct ugfx_surface *s, const void *w) {
+    uui_textview_draw(s, (struct uui_textview *)(void *)(const void *)w);
+}
+
 const struct uui_widget_ops uui_textview_ops = {
+    .draw    = tv_ops_draw,
     .hit     = tv_ops_hit,
     .press   = tv_ops_press,
     .motion  = tv_ops_motion,

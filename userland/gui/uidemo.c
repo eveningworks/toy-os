@@ -161,7 +161,6 @@ static struct {
     struct uui_dropdown dropdown;
     struct uui_listbox list;
     struct uui_checkbox chk[2];
-    int radio_sel;
     int hover_name;
     int hover_x, hover_y;
     struct uui_focus focus;
@@ -341,9 +340,13 @@ static void on_open(struct uapp *a) {
     g.radio.row_h = radio_row_h();
     g.radio.col_w = 10 * ugfx_char_w() + 24;
     g.radio.marker_size = ugfx_char_h() - 4;
-    g.radio_sel = 0;
+    g.radio.selected = 0;
+    g.radio.hovered = -1;
+    g.radio.bg = UTHEME_PANEL_BG;
+    g.radio.fg = UTHEME_TEXT;
 
     uui_textbox_init(&g.textbox, "type here");
+    g.textbox.border = BORDER;
 
     uui_dropdown_init(&g.dropdown, 0, 0, 0, 0, DD_ITEMS, DD_COUNT);
     // Fewer rows than the popup would otherwise want, so the popup has a
@@ -406,32 +409,13 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
 
     layout();
 
-    uui_button_group_draw(&g.group, s);
-
-    g.chk[0].hovered = (g.hover_name == W_CHK_ALPHA);
-    g.chk[1].hovered = (g.hover_name == W_CHK_BETA);
-    uui_checkbox_draw(s, &g.chk[0]);
-    uui_checkbox_draw(s, &g.chk[1]);
-
-    // The hovered ROW, not just "is the list hovered" -- widget_at()
-    // reports the widget, so ask the list itself which row that is.
-    int radio_hot = (g.hover_name == W_RADIO)
-        ? uui_radio_list_hit(&g.radio, g.hover_x, g.hover_y) : -1;
-    uui_radio_list_draw(s, &g.radio, g.radio_sel, radio_hot,
-                        UTHEME_PANEL_BG, UTHEME_TEXT);
-
-    uui_textbox_draw(s, &g.textbox, UTHEME_WHITE, UTHEME_TEXT, BORDER);
-    uui_dropdown_draw(s, &g.dropdown);   // the closed box only
-    uui_listbox_draw(s, &g.list);
-    uui_textview_draw(s, &g.view);
-
+    // **No widget draw calls.** The toolkit has already drawn every
+    // widget in ITEMS -- and every popup on top of them -- before this
+    // runs. What is left here is what the toolkit has no widget for:
+    // the containment markers above and this app's status line.
     ugfx_draw_string_clipped(s, PAD, row_status(), s->w - 2 * PAD, g.status,
                              UTHEME_TEXT, UTHEME_PANEL_BG);
 
-    // LAST, after every other widget. Drawing is immediate-mode, so
-    // z-order is call order: a popup drawn any earlier would be painted
-    // over by the listbox and the text view below it.
-    uui_dropdown_draw_popup(s, &g.dropdown);
 }
 
 // --- input --------------------------------------------------------
@@ -627,14 +611,14 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
 // dropdown declares an overlay of its own, so its OPEN POPUP outranks
 // everything regardless of where it sits in this array.
 static struct uui_item ITEMS[] = {
-    { &uui_button_group_ops, &g.group,    0, ID_BUTTONS },
-    { &uui_checkbox_ops,     &g.chk[0],   0, ID_CHK_ALPHA },
-    { &uui_checkbox_ops,     &g.chk[1],   0, ID_CHK_BETA },
-    { &uui_radio_list_ops,   &g.radio,    0, ID_RADIO },
-    { &uui_textbox_ops,      &g.textbox,  0, ID_TEXTBOX },
-    { &uui_listbox_ops,      &g.list,     0, ID_LISTBOX },
-    { &uui_textview_ops,     &g.view,     0, ID_VIEW },
-    { &uui_dropdown_ops,     &g.dropdown, 0, ID_DROPDOWN },
+    { .ops = &uui_button_group_ops, .widget = &g.group, .id = ID_BUTTONS },
+    { .ops = &uui_checkbox_ops, .widget = &g.chk[0], .id = ID_CHK_ALPHA },
+    { .ops = &uui_checkbox_ops, .widget = &g.chk[1], .id = ID_CHK_BETA },
+    { .ops = &uui_radio_list_ops, .widget = &g.radio, .id = ID_RADIO },
+    { .ops = &uui_textbox_ops, .widget = &g.textbox, .id = ID_TEXTBOX },
+    { .ops = &uui_listbox_ops, .widget = &g.list, .id = ID_LISTBOX },
+    { .ops = &uui_textview_ops, .widget = &g.view, .id = ID_VIEW },
+    { .ops = &uui_dropdown_ops, .widget = &g.dropdown, .id = ID_DROPDOWN },
 };
 
 int main(void) {

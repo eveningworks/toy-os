@@ -309,7 +309,15 @@ adds 4; 12 adds 5; 13 adds 6; 14 and up add 8.
       checksums every inode at rest (verified on each read); TFS2's
       records still have no at-rest integrity check
 
-### ~~Milestone 4 -- Kernel test harness~~ (v0.2.0, completed 2026-08-13)
+### Milestone 4 -- Kernel test harness (the HARNESS shipped v0.2.0; five items still open)
+
+*The heading used to be struck through as "completed 2026-08-13" while
+five boxes below it were unchecked. That is the milestone lying about
+itself: what shipped is the harness -- registration, `make test`, CI,
+fault injection, and moving the boot self-tests behind it -- and what is
+listed after that is coverage work nobody has done. Struck-through means
+DONE here, so the strike came off rather than the boxes going on.*
+
 
 - [x] ~~A registration mechanism for in-kernel tests~~ -- done, see
       `CHANGELOG.md`'s `[Unreleased]` entry (KTEST() + a `.ktests`
@@ -650,7 +658,13 @@ it serves. Small, and it makes everything above it discoverable.*
 - [ ] A GUI documentation viewer reusing the scrollback widget
 - [ ] A check that every builtin actually has a page, run in CI
 
-### ~~Milestone 15 -- TFS3: an inode layer~~ (v0.2.0, completed 2026-08-14)
+### Milestone 15 -- TFS3: an inode layer (the FILESYSTEM shipped v0.2.0; three items still open)
+
+*Same correction as Milestone 4 above: the heading claimed completion
+with three boxes unchecked (unlink-while-open, raising `FS_PATH_MAX`,
+and the symlink implementation). TFS3 itself is done and is the default
+format; those three are follow-ups it did not include.*
+
 
 *Spec as shipped: `docs/tfs3-spec.md`; design record:
 `docs/tfs3-design.md`; built in five staged commits (see

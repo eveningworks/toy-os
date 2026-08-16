@@ -64,9 +64,13 @@ static void flush(struct uapp *a) {
     // (Written that way first. The test suite reported three failures
     // that all looked like "clicks do nothing"; a screenshot showed an
     // empty window and explained all three at once.)
-    if (a->desc->layout) {
+    // Declared widgets are DRAWN FOR THE APP, overlays last. An app with
+    // widgets and nothing custom needs no on_draw at all; one with
+    // custom painting (a canvas, a text area) still gets called, on top.
+    if (a->desc->layout || a->router.count) {
         ugfx_fill(&a->surface, UTHEME_PANEL_BG);
-        uui_layout_draw(&a->surface, a->desc->layout);
+        if (a->desc->layout) uui_layout_draw(&a->surface, a->desc->layout);
+        if (a->router.count) uui_router_draw(&a->router, &a->surface);
     }
     if (a->desc->on_draw) {
         struct uapp_draw d = { &a->surface, UTHEME_TEXT, UTHEME_PANEL_BG };

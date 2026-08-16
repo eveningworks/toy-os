@@ -301,7 +301,12 @@ static int lb_ops_bounds(const void *w, int cx, int cy) {
     return uui_hit(lb->x, lb->y, lb->w, lb->h, cx, cy);
 }
 
+static void lb_ops_draw(struct ugfx_surface *s, const void *w) {
+    uui_listbox_draw(s, (const struct uui_listbox *)w);
+}
+
 const struct uui_widget_ops uui_listbox_ops = {
+    .draw          = lb_ops_draw,
     .hit           = lb_ops_bounds,
     .key           = lb_ops_key,
     .accepts_focus = lb_ops_accepts_focus,

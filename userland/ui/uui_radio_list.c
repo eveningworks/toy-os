@@ -29,9 +29,9 @@ void uui_radio_list_set_geometry(struct uui_radio_list *l, int x, int y) {
     uui_radio_list_natural_size(l, &l->w, &l->h);
 }
 
-void uui_radio_list_draw(struct ugfx_surface *s, const struct uui_radio_list *l,
-                          int selected, int hovered,
-                          uint32_t bg, uint32_t fg) {
+void uui_radio_list_draw(struct ugfx_surface *s, const struct uui_radio_list *l) {
+    int selected = l->selected, hovered = l->hovered;
+    uint32_t bg = l->bg, fg = l->fg;
     int x = l->x, y = l->y;
     for (int i = 0; i < l->count; i++) {
         int cx, cy;
@@ -93,7 +93,12 @@ static int rl_ops_motion(void *w, int cx, int cy, unsigned buttons) {
     return 1;
 }
 
+static void rl_ops_draw(struct ugfx_surface *s, const void *w) {
+    uui_radio_list_draw(s, (const struct uui_radio_list *)w);
+}
+
 const struct uui_widget_ops uui_radio_list_ops = {
+    .draw   = rl_ops_draw,
     .hit    = rl_ops_hit,
     .press  = rl_ops_press,
     .motion = rl_ops_motion,

@@ -27,6 +27,9 @@ void uui_checkbox_init(struct uui_checkbox *cb, int x, int y, int size,
     cb->fg = fg;
     cb->checked = 0;
     cb->hovered = 0;
+    // OFF by default -- see uui_checkbox.h and the exception recorded in
+    // docs/gui-guidelines.md.
+    cb->hover_effect = 0;
     cb->disabled = 0;
     uui_checkbox_set_geometry(cb, x, y);
 }
@@ -35,7 +38,7 @@ void uui_checkbox_draw(struct ugfx_surface *s, const struct uui_checkbox *cb) {
     uint32_t bg = cb->bg;
     uint32_t fg = cb->disabled ? uui_state_bg(cb->fg, UUI_STATE_DISABLED) : cb->fg;
 
-    if (cb->hovered && !cb->disabled) {
+    if (cb->hovered && cb->hover_effect && !cb->disabled) {
         // The WHOLE clickable area -- the hit test is box+label, and a
         // highlight smaller than its target misleads about where to
         // click. w/h ARE the natural size, so the two cannot drift.
@@ -97,7 +100,12 @@ static int cb_ops_motion(void *w, int cx, int cy, unsigned buttons) {
     return uui_checkbox_hover((struct uui_checkbox *)w, cx, cy);
 }
 
+static void cb_ops_draw(struct ugfx_surface *s, const void *w) {
+    uui_checkbox_draw(s, (const struct uui_checkbox *)w);
+}
+
 const struct uui_widget_ops uui_checkbox_ops = {
+    .draw   = cb_ops_draw,
     .hit    = cb_ops_hit,
     .press  = cb_ops_press,
     .motion = cb_ops_motion,

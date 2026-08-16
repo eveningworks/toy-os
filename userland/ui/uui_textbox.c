@@ -15,6 +15,48 @@
 // ---------------------------------------------------------------------
 // ---------------------------------------------------------------------
 
+// --- the edit core's view of this field -------------------------------
+//
+// Four small functions are all a 48-byte line needs to become editable
+// text with a full keymap (ui/uui_edit.h). The line ops stay NULL: a
+// single-line field genuinely has no line above, so Up and Down are
+// declined rather than silently swallowed.
+static int tb_len(void *t) { return ((struct uui_textbox *)t)->len; }
+
+static char tb_at(void *t, int i) {
+    struct uui_textbox *f = (struct uui_textbox *)t;
+    return (i >= 0 && i < f->len) ? f->buf[i] : 0;
+}
+
+static int tb_insert(void *t, int i, char c) {
+    struct uui_textbox *f = (struct uui_textbox *)t;
+    if (f->len >= UUI_TEXTBOX_MAX - 1) return 0; // full: a normal answer
+    if (i < 0 || i > f->len) return 0;
+    for (int k = f->len; k > i; k--) f->buf[k] = f->buf[k - 1];
+    f->buf[i] = c;
+    f->len++;
+    f->buf[f->len] = '\0';
+    return 1;
+}
+
+static void tb_erase(void *t, int start, int end) {
+    struct uui_textbox *f = (struct uui_textbox *)t;
+    if (start < 0) start = 0;
+    if (end > f->len) end = f->len;
+    if (start >= end) return;
+    int n = end - start;
+    for (int k = start; k + n <= f->len; k++) f->buf[k] = f->buf[k + n];
+    f->len -= n;
+    f->buf[f->len] = '\0';
+}
+
+static const struct uui_edit_ops TB_EDIT_OPS = {
+    .len = tb_len,
+    .at = tb_at,
+    .insert = tb_insert,
+    .erase = tb_erase,
+};
+
 void uui_textbox_init(struct uui_textbox *f, const char *initial) {
     int i = 0;
     if (initial) {
@@ -22,27 +64,27 @@ void uui_textbox_init(struct uui_textbox *f, const char *initial) {
     }
     f->buf[i] = '\0';
     f->len = i;
-    f->cursor = i;
+    uui_edit_init(&f->ed);
+    f->ed.cursor = i;
     f->active = 0;
+    f->bg = ugfx_rgb(255, 255, 255);
+    f->fg = ugfx_rgb(20, 20, 20);
+    f->border = ugfx_rgb(150, 155, 165);
+    f->sel_bg = ugfx_rgb(205, 220, 240);
+}
+
+const char *uui_textbox_text(const struct uui_textbox *f) { return f->buf; }
+
+int uui_textbox_has_selection(const struct uui_textbox *f) {
+    return uui_edit_has_selection(&f->ed);
 }
 
 void uui_textbox_set_active(struct uui_textbox *f, int active) { f->active = active ? 1 : 0; }
 
-static void field_insert(struct uui_textbox *f, char c) {
-    if (f->len >= UUI_TEXTBOX_MAX - 1) return;
-    for (int i = f->len; i > f->cursor; i--) f->buf[i] = f->buf[i - 1];
-    f->buf[f->cursor] = c;
-    f->len++;
-    f->cursor = ugfx_text_next(f->buf, f->cursor);
-    f->buf[f->len] = '\0';
-}
-
-static void field_delete(struct uui_textbox *f) {
-    if (f->cursor >= f->len) return;
-    for (int i = f->cursor; i < f->len - 1; i++) f->buf[i] = f->buf[i + 1];
-    f->len--;
-    f->buf[f->len] = '\0';
-}
+// (field_insert()/field_delete() lived here. They are tb_insert() and
+// tb_erase() above now -- the same two operations, expressed as the
+// edit core's accessors so the keymap that drives them is shared with
+// the multi-line editor rather than written twice.)
 
 void uui_textbox_natural_size(const struct uui_textbox *f, int *out_w, int *out_h) {
     (void)f;
@@ -56,7 +98,7 @@ void uui_textbox_natural_size(const struct uui_textbox *f, int *out_w, int *out_
 // arithmetic is the classic way a caret ends up one glyph off.
 static int field_window_start(const struct uui_textbox *f, int visible) {
     if (!f->active || f->len <= visible) return 0;
-    int start = f->cursor - visible + 1;
+    int start = f->ed.cursor - visible + 1;
     if (start < 0) start = 0;
     int max_start = f->len - visible;
     if (start > max_start) start = max_start;
@@ -65,7 +107,7 @@ static int field_window_start(const struct uui_textbox *f, int visible) {
 
 int uui_textbox_index_at_x(const struct uui_textbox *f, int cx) {
     int char_w = ugfx_char_w();
-    if (char_w <= 0) return f->cursor;
+    if (char_w <= 0) return f->ed.cursor;
     int pad = UUI_TEXTBOX_PAD;
     int visible = (f->w - 2 * pad) / char_w;
     if (visible < 0) visible = 0;
@@ -82,28 +124,18 @@ int uui_textbox_index_at_x(const struct uui_textbox *f, int cx) {
     return idx;
 }
 
-int uui_textbox_key(struct uui_textbox *f, int key) {
+int uui_textbox_key_mods(struct uui_textbox *f, int key, unsigned mods) {
     if (!f->active) return 0;
+    // The whole keymap -- Ctrl+A, Shift+arrows, backspace-deletes-the-
+    // selection, typing-replaces-it -- lives in the edit core, shared
+    // with the multi-line editor. This widget used to carry its own,
+    // which had none of that: the caret moved with arrows and nothing
+    // else, so you could not select anything in a text field at all.
+    return uui_edit_key(&f->ed, &TB_EDIT_OPS, f, key, mods);
+}
 
-    if (key == '\b') {
-        if (f->cursor > 0) { f->cursor = ugfx_text_prev(f->buf, f->cursor); field_delete(f); }
-    } else if (key == KEY_DELETE) {
-        field_delete(f);
-    } else if (key == KEY_ARROW_LEFT) {
-        f->cursor = ugfx_text_prev(f->buf, f->cursor);
-    } else if (key == KEY_ARROW_RIGHT) {
-        if (f->cursor < f->len) f->cursor = ugfx_text_next(f->buf, f->cursor);
-    } else if (key == KEY_HOME) {
-        f->cursor = 0;
-    } else if (key == KEY_END) {
-        f->cursor = f->len;
-    } else if (key >= 32 && key < 127) {
-        field_insert(f, (char)key);
-    } else {
-        // Notably Enter: committing a field is the caller's decision.
-        return 0;
-    }
-    return 1;
+int uui_textbox_key(struct uui_textbox *f, int key) {
+    return uui_textbox_key_mods(f, key, 0);
 }
 
 void uui_textbox_set_geometry(struct uui_textbox *f, int x, int y, int w, int h) {
@@ -114,8 +146,8 @@ int uui_textbox_hit(const struct uui_textbox *f, int cx, int cy) {
     return uui_hit(f->x, f->y, f->w, f->h, cx, cy);
 }
 
-void uui_textbox_draw(struct ugfx_surface *s, const struct uui_textbox *f,
-                     uint32_t bg, uint32_t fg, uint32_t border) {
+void uui_textbox_draw(struct ugfx_surface *s, const struct uui_textbox *f) {
+    uint32_t bg = f->bg, fg = f->fg, border = f->border;
     int x = f->x, y = f->y, w = f->w, h = f->h;
     ugfx_fill_rect(s, x, y, w, h, bg);
     ugfx_draw_rect(s, x, y, w, h, border);
@@ -136,13 +168,29 @@ void uui_textbox_draw(struct ugfx_surface *s, const struct uui_textbox *f,
     int n = 0;
     for (; n < visible && f->buf[start + n]; n++) shown[n] = f->buf[start + n];
     shown[n] = '\0';
+    // The SELECTION, behind the glyphs. Drawn before the text and
+    // clipped to the visible window, so a selection running off either
+    // edge shows as far as the field does rather than painting over the
+    // border. A selection nobody can see is not a selection.
+    if (f->active && uui_edit_has_selection(&f->ed)) {
+        int a, b;
+        uui_edit_range(&f->ed, &a, &b);
+        a -= start; b -= start;
+        if (a < 0) a = 0;
+        if (b > visible) b = visible;
+        if (b > a) {
+            ugfx_fill_rect(s, x + pad + a * char_w, ty,
+                            (b - a) * char_w, ugfx_char_h(), f->sel_bg);
+        }
+    }
+
     // Clipped as a safety net, not because the slice is expected to be
     // wrong: if the windowing ever miscomputes, text stops at the edge
     // rather than drawing through the border.
     ugfx_draw_string_clipped(s, x + pad, ty, w - 2 * pad, shown, fg, bg);
 
     if (f->active) {
-        ugfx_fill_rect(s, x + pad + (f->cursor - start) * char_w, ty,
+        ugfx_fill_rect(s, x + pad + (f->ed.cursor - start) * char_w, ty,
                         CARET_W, ugfx_char_h(), fg);
     }
 }
@@ -158,8 +206,7 @@ static int ops_hit(const void *w, int cx, int cy) {
     return uui_textbox_hit((const struct uui_textbox *)w, cx, cy);
 }
 static int ops_key(void *w, int key, unsigned mods) {
-    (void)mods;
-    return uui_textbox_key((struct uui_textbox *)w, key);
+    return uui_textbox_key_mods((struct uui_textbox *)w, key, mods);
 }
 static void ops_set_focused(void *w, int focused) {
     uui_textbox_set_active((struct uui_textbox *)w, focused);
@@ -184,14 +231,34 @@ const struct uui_widget_ops uui_textbox_focus_ops = {
 static int tb_ops_press(void *w, int cx, int cy) {
     (void)cy;
     struct uui_textbox *f = (struct uui_textbox *)w;
-    f->cursor = uui_textbox_index_at_x(f, cx);
+    // Places the caret AND collapses any selection, which is what a
+    // plain click does everywhere.
+    uui_edit_place(&f->ed, &TB_EDIT_OPS, f, uui_textbox_index_at_x(f, cx), 0);
     return 1;
 }
 
+// Dragging from that press EXTENDS the selection -- the pointer grab
+// (ui/uui_route.h) is what delivers these once the cursor has left the
+// field, so a drag that runs past the end keeps selecting instead of
+// stopping at the border.
+static int tb_ops_motion(void *w, int cx, int cy, unsigned buttons) {
+    (void)cy;
+    if (!buttons) return 0;
+    struct uui_textbox *f = (struct uui_textbox *)w;
+    uui_edit_place(&f->ed, &TB_EDIT_OPS, f, uui_textbox_index_at_x(f, cx), 1);
+    return 1;
+}
+
+static void tb_ops_draw(struct ugfx_surface *s, const void *w) {
+    uui_textbox_draw(s, (const struct uui_textbox *)w);
+}
+
 const struct uui_widget_ops uui_textbox_ops = {
+    .draw          = tb_ops_draw,
     .hit           = ops_hit,
     .key           = ops_key,
     .set_focused   = ops_set_focused,
     .accepts_focus = ops_accepts_focus,
     .press         = tb_ops_press,
+    .motion        = tb_ops_motion,
 };

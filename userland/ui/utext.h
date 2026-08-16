@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "ui/ugfx.h"
+#include "ui/uui_edit.h"
 
 // utext -- the ring-3 port of apps/ui/ui_scrollback.c: a wrapped,
 // scrollable, editable text buffer with a cursor and a selection.
@@ -49,15 +50,14 @@ struct utext {
     // depends on the current width.
     int scroll_offset;
 
-    // "The cursor sits just before buf[cursor]", in [0, count].
-    int cursor;
-
-    // Selection spans [min(anchor,cursor), max(anchor,cursor)), computed
-    // lazily rather than tracked. `active` is a separate flag rather
-    // than "anchor == cursor" so an active-but-empty selection (the
-    // instant a drag starts) stays distinguishable from none at all.
-    int sel_anchor;
-    int sel_active;
+    // Caret and selection, plus the keymap that goes with them, come
+    // from the shared edit core (ui/uui_edit.h) -- the same one the
+    // single-line uui_textbox uses, so a field and a document cannot
+    // disagree about what Ctrl+A or Shift+Left does.
+    //
+    // `ed.cursor` is what `cursor` used to be, and `ed.sel_anchor` /
+    // `ed.sel_active` what those were: same meanings, one owner.
+    struct uui_edit ed;
 };
 
 void utext_init(struct utext *t);
@@ -115,6 +115,15 @@ void utext_sel_start(struct utext *t);  // anchor at the current cursor
 void utext_sel_clear(struct utext *t);
 int  utext_sel_present(const struct utext *t);
 void utext_sel_range(const struct utext *t, int *out_start, int *out_end);
-void utext_sel_delete(struct utext *t); // removes it and clears
+void utext_sel_delete(struct utext *t);
+
+// One keypress through the SHARED keymap: Ctrl+A, Shift+arrows, typing
+// replaces the selection, Backspace and Delete remove it. Returns 1 if
+// consumed. Enter is deliberately NOT consumed -- a document inserts a
+// newline and a field commits, and that is the caller's call.
+//
+// Notepad hand-wrote roughly sixty lines of this before the core
+// existed; a second editor would have written them again, differently.
+int utext_key(struct utext *t, int key, unsigned mods); // removes it and clears
 
 #endif

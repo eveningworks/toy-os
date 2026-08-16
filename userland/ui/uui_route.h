@@ -87,6 +87,18 @@ int uui_router_release(struct uui_router *r, int cx, int cy, int *out_changed);
 int uui_router_wheel(struct uui_router *r, int cx, int cy, int notches,
                       int *out_changed);
 
+// Draws every declared widget, then every OVERLAY on top.
+//
+// Two passes, and the second is the point: a dropdown's popup is drawn
+// after all the ordinary widgets, so it lands over them without the app
+// ordering anything. "Call draw_popup LAST" used to be a rule an app
+// had to remember, and immediate-mode drawing meant forgetting it
+// painted the listbox straight over the popup with nothing to notice.
+//
+// Hidden items are skipped, so hiding a widget removes it from the
+// picture and from hit-testing with one flag.
+void uui_router_draw(struct uui_router *r, struct ugfx_surface *s);
+
 // Drops any grab -- for an app that tears down or replaces its widgets
 // while the button is held.
 void uui_router_reset(struct uui_router *r);

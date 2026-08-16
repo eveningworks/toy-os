@@ -189,7 +189,19 @@ static int dd_ops_wheel(void *w, int notches) {
     return uui_listbox_wheel(&d->list, notches);
 }
 
+static void dd_ops_draw(struct ugfx_surface *s, const void *w) {
+    uui_dropdown_draw(s, (const struct uui_dropdown *)w);
+}
+
+// The popup, drawn in the painter's SECOND pass so it lands on top of
+// every other widget without the app having to order anything.
+static void dd_ops_draw_overlay(struct ugfx_surface *s, const void *w) {
+    uui_dropdown_draw_popup(s, (const struct uui_dropdown *)w);
+}
+
 const struct uui_widget_ops uui_dropdown_ops = {
+    .draw           = dd_ops_draw,
+    .draw_overlay   = dd_ops_draw_overlay,
     .hit            = dd_ops_hit,
     .key            = dd_ops_key,
     .accepts_focus  = dd_ops_accepts_focus,

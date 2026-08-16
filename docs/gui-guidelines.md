@@ -84,6 +84,22 @@ screenshot, not by looking at one -- see "Verifying" below.
 darker fill plus a 1px nudge; the nudge is what makes it feel physical,
 and the fill alone reads as a colour change rather than a press.
 
+**The CHECKBOX is the exception: no hover wash, by default.**
+`uui_checkbox`'s `hover_effect` is 0 unless an app asks for it. The
+reason is what the wash actually covers -- the whole clickable area,
+box *and* label, because a highlight smaller than its target misleads
+about where to click. That is right for a button and wrong for a form of
+checkboxes, where it reads as a block of colour sliding around after the
+cursor rather than as feedback about one control. A checkbox also
+already says what it is: the tick is the state, and hovering adds
+nothing a user needs. An app that wants the wash sets `hover_effect = 1`
+and gets exactly the old behaviour.
+
+This is listed here rather than left implicit precisely because the
+table above says every pressable control shows hover -- one documented
+exception is fine, an undocumented one is a widget somebody "fixes"
+later.
+
 ## Press, then commit on release
 
 **A control must not act until the button is released over it.** Press

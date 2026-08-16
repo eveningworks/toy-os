@@ -26,6 +26,15 @@ struct uui_checkbox {
     int hovered;        // OWNED -- driven by uui_checkbox_hover()
     int disabled;
 
+    // Draw a hover wash behind the box and label? **OFF by default**,
+    // which makes the checkbox the one documented exception to
+    // docs/gui-guidelines.md's hover contract. The wash covers the whole
+    // clickable area -- box plus label -- which on a form of several
+    // checkboxes reads as a moving block of colour following the cursor
+    // rather than as feedback, and the control's state is already
+    // legible from the tick. An app that wants it sets this to 1.
+    int hover_effect;
+
     uint32_t bg, fg;
 };
 

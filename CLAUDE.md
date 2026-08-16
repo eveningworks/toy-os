@@ -311,6 +311,16 @@ technical conventions below:
   app writes no coordinates: declare a column/row/grid, and the window
   sizes itself from the content. Resize, focus and wheel all arrive for
   free. `docs/uapp-design.md` is the full design and its staging.
+- **Editable text has ONE implementation of what editing means**
+  (`userland/ui/uui_edit.h`): the caret, the selection and the keymap --
+  Ctrl+A, Shift+arrows, typing replaces the selection, Backspace and
+  Delete remove it -- with STORAGE delegated through four accessors, so
+  the single-line `uui_textbox` and the multi-line `utext` share
+  behaviour without sharing a buffer. Same split as
+  `kernel/lib/klineedit.c` kernel-side. Don't add a keymap to a widget:
+  add the accessors and call `uui_edit_key()`. It deliberately declines
+  Enter (a field commits, a document inserts a newline) and declines
+  Up/Down unless the caller supplies line accessors.
 - **A ring-3 app does NOT route mouse input to its widgets -- the
   toolkit does** (`userland/ui/uui_route.h`). Declare
   `uapp_desc.widgets` (a `struct uui_item[]`, each with an app-chosen
@@ -328,6 +338,17 @@ technical conventions below:
   reverse of draw order), and **the wheel goes to the widget under the
   cursor**, so a test has to park the REAL cursor first
   (`DebugConsole.warp_cursor()`; `gui move` lasts one WM iteration).
+- **The toolkit DRAWS the declared widgets too, popups last.** A widget
+  owns its colours (defaulted from the theme at init), exports a `draw`
+  slot, and `uapp` paints every item in `uapp_desc.widgets` before
+  calling `on_draw` -- which an app needs only for painting the toolkit
+  has no widget for. `uui_item.hidden` removes a widget from BOTH the
+  picture and hit-testing, which is how an app shows and hides a
+  control. Note `struct uui_item` is initialised with DESIGNATED
+  initialisers (`.ops`, `.widget`, `.id`): positional ones silently
+  re-bind when a field is added, and adding `hidden` did exactly that
+  -- every widget's id landed in `hidden` and the compiler's
+  missing-initializer warning was the only thing that noticed.
 - **The GUI stack has names -- use them.** **TWP** (Toy Window
   Protocol, `abi/win_proto.h`) is the client<->server contract;
   **TWS** (Toy Window Server, `kernel/proc/win_server.c` +
