@@ -159,7 +159,14 @@ USERLAND_CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-pro
 #           versions sit at the same relative path while both exist.
 #   lib/    userland libraries that aren't UI (tosh, the shell the
 #           ring-3 Terminal links against)
-#   gui/    windowed applications  -> seeded to /bin
+#   gui/    windowed applications, in one subdirectory per CLASS:
+#             gui/system/ -> /bin/wm/system   (About; the desktop's own)
+#             gui/apps/   -> /bin/wm/apps     (Calculator, Notepad, Terminal)
+#             gui/demos/  -> /bin/wm/demos    (Shapes, UI Demo)
+#           The subdirectory is the destination, exactly as the top-level
+#           one is -- so a new app is still a .c file and nothing else,
+#           and WHICH class it belongs to is stated by where it lives
+#           rather than in a table somewhere.
 #   bin/    command-line programs  -> seeded to /bin
 #   tests/  single-mechanism diagnostics -> seeded to /tests
 #
@@ -430,7 +437,7 @@ $(BUILD)/userland/shared/%.o: apps/%.c
 # apps/ header (calc_engine.h). Scoped to this object with a
 # target-specific variable rather than added to the pattern rule above,
 # so no OTHER userland program gains the ability to reach into apps/.
-$(BUILD)/userland/gui/calculator.o: USERLAND_CFLAGS += -Iapps
+$(BUILD)/userland/gui/apps/calculator.o: USERLAND_CFLAGS += -Iapps
 
 # The kernel is linked TWICE, and the reason is kernel ASLR.
 #
@@ -544,7 +551,14 @@ seed: $(DISK_IMG) $(USERLAND_ELVES)
 	# build/userland/{gui,bin}/x.elf -> /bin/x, build/userland/tests/x.elf
 	# -> /tests/x, with $(call seed_name,...) applying the three renames.
 	# See "userland source layout" above for why this is derived.
-	$(foreach e,$(filter $(BUILD)/userland/gui/% $(BUILD)/userland/bin/%,$(USERLAND_ELVES)),cp $(e) $(SEED_DIR)/sync/bin/$(call seed_name,$(e));)
+	# gui/<class>/x.elf -> /bin/wm/<class>/x, preserving the class
+	# directory. `dir` of the path relative to gui/ IS the class, so
+	# adding gui/games/ later needs no edit here.
+	mkdir -p $(SEED_DIR)/sync/bin/wm
+	$(foreach e,$(filter $(BUILD)/userland/gui/%,$(USERLAND_ELVES)),\
+	    mkdir -p $(SEED_DIR)/sync/bin/wm/$(patsubst %/,%,$(subst $(BUILD)/userland/gui/,,$(dir $(e)))) && \
+	    cp $(e) $(SEED_DIR)/sync/bin/wm/$(patsubst %/,%,$(subst $(BUILD)/userland/gui/,,$(dir $(e))))/$(call seed_name,$(e));)
+	$(foreach e,$(filter $(BUILD)/userland/bin/%,$(USERLAND_ELVES)),cp $(e) $(SEED_DIR)/sync/bin/$(call seed_name,$(e));)
 	$(foreach e,$(filter $(BUILD)/userland/tests/%,$(USERLAND_ELVES)),cp $(e) $(SEED_DIR)/sync/tests/$(call seed_name,$(e));)
 	# The PCI ID database, staged the same way the ELFs above are, and
 	# for the same reason: $(SEED_DIR)/sync is a build-staging tree that
@@ -554,6 +568,14 @@ seed: $(DISK_IMG) $(USERLAND_ELVES)
 	# LICENSE's "Third-party data" section for what governs it.
 	mkdir -p $(SEED_DIR)/sync/usr/share/hwdata
 	cp $(PCI_IDS) $(SEED_DIR)/sync/usr/share/hwdata/pci.ids
+	# Desktop entries -- what the Start menu and the desktop icons are
+	# built FROM (see docs/filesystem-layout.md). Hand-authored and
+	# tracked under data/wm/, staged here for the same reason pci.ids is:
+	# sync/ is a build-staging tree `make clean` deletes wholesale.
+	mkdir -p $(SEED_DIR)/sync/usr/wm/desktop $(SEED_DIR)/sync/usr/wm/startup
+	cp data/wm/desktop/*.desktop $(SEED_DIR)/sync/usr/wm/desktop/
+	@if [ -n "$$(ls -A data/wm/startup 2>/dev/null)" ]; then \
+	    cp data/wm/startup/* $(SEED_DIR)/sync/usr/wm/startup/; fi
 	@if command -v xkbcli >/dev/null 2>&1; then \
 		python3 tools/gen_kbs.py us --write; \
 		python3 tools/gen_kbs.py se --write; \

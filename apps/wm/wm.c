@@ -552,6 +552,11 @@ void wm_run(void) {
     // nothing will ever composite -- see wm_client.c.
     wm_client_init();
 
+    // Build the app list from /usr/wm/desktop/ before anything draws a
+    // menu or an icon. Data on disk, not a compiled-in table -- see
+    // apps/gui_apps.c.
+    gui_apps_load();
+
     window_count = 0;
     start_menu_open = 0;
     context_menu_close();

@@ -1,62 +1,195 @@
 #include "gui_apps.h"
 #include "taskmgr.h"
 #include "control_panel.h"
+#include "kapi.h"
+#include "etc_config.h"
 
-// To add a new windowed app: write apps/foo.c + apps/foo.h implementing
-// the gui_app callbacks (see apps/notepad.c for the simplest example),
-// then add one line here. That's the whole integration -- it'll show up
-// in the Start menu automatically.
+// The Start menu and the desktop icons are built from DATA ON DISK --
+// one file per app in /usr/wm/desktop/, scanned at desktop startup.
+// Adding an app to the desktop is dropping a file there; it is not
+// editing this table and rebuilding the kernel.
 //
-// Window sizes are computed by each app's own default_size() from
-// whatever font is active when the window opens (see gui_apps.h's
-// comment on default_size) -- not fixed pixel constants, so a window is
-// always right-sized for its font instead of cramped at large fonts or
-// full of wasted space at small ones.
+// The format is `name=value` with `#` comments, read through
+// kernel/lib/etc_config.c -- the same parser /etc/toyos.conf uses,
+// because a second config format to maintain would buy nothing. It is a
+// deliberate small subset of freedesktop.org's .desktop files: same
+// idea, same key names where they overlap, none of the localisation or
+// MIME machinery that has nothing to attach to here. See
+// data/wm/desktop/README.md.
 //
-// `resizable` (see gui_apps.h) is 1 for everything except Calculator --
-// its button grid has no sensible way to fill extra window space, so
-// it's fixed at whatever default_size() computed for the active font.
+// TWO KINDS OF ENTRY, and the reason the file format has to know:
 //
-// Designated initializers (rather than positional, which this table
-// used until on_drag_start/on_drag were added to gui_apps.h) so adding
-// another optional callback in the future doesn't require touching
-// every existing entry's field order again -- only apps that actually
-// use a given callback need to mention it.
-const struct gui_app gui_app_registry[] = {
-    { .name = "Task Manager", .default_size = taskmgr_default_size, .on_open = taskmgr_open,
-      .on_draw = taskmgr_draw, .resizable = 1 },
-    { .name = "Control Panel", .default_size = control_panel_default_size,
-      .on_open = control_panel_open, .on_draw = control_panel_draw,
-      .on_hover = control_panel_hover,
-      .on_press = control_panel_press, .on_release = control_panel_release,
-      .resizable = 1 },
-    // --- ring-3 programs (gui_apps.h's `exec_path`) ------------------
-    //
-    // These are LAUNCHERS, not apps: opening one spawns a process from
-    // /bin, and that process builds its own window over the windowing
-    // protocol. No callbacks, no default_size -- see `exec_path`.
-    //
-    // The "(ring 3)" suffixes are gone: Calculator, Notepad and Terminal
-    // used to exist BOTH ways, which is what made that migration
-    // verifiable, and the kernel-space three retired in Milestone 41's
-    // stage 0 (docs/wm-ring3-design.md). There is one of each again, so
-    // the disambiguating suffix has nothing left to disambiguate.
-    //
-    // Appended at the END on purpose, after UI Demo. Registry order is
-    // both the Start-menu row order and the desktop icon order, so
-    // inserting anywhere above would renumber every row index that
-    // tools/ has written down. (Saved desktop icon positions survive
-    // either way -- desktop.c keys those by app NAME precisely so a
-    // reorder can't scramble them.) Same reasoning as UI Demo's own
-    // "last on purpose" note above.
-    { .name = "About", .exec_path = "/bin/about" },
-    { .name = "Shapes", .exec_path = "/bin/shapes" },
-    { .name = "Calculator", .exec_path = "/bin/calculator" },
-    { .name = "Notepad", .exec_path = "/bin/notepad" },
-    { .name = "Terminal", .exec_path = "/bin/uterm" },
-    // Last on purpose: a testing target, not something a user of the OS
-    // is looking for, and keeping it at the end means every other app's
-    // Start-menu row index stays put.
-    { .name = "UI Demo", .exec_path = "/bin/uidemo" },
+//   Exec=/bin/wm/apps/calculator   spawn that binary; the process makes
+//                                  its own window over TWP.
+//   Exec=builtin:taskmgr           a kernel-space app, whose callbacks
+//                                  are compiled in and looked up below.
+//
+// The `builtin:` form exists only while kernel-space apps do -- when the
+// last of them moves to ring 3 (Milestone 41's stage 4) every entry
+// names a real binary and BUILTINS below goes with them. Naming it in
+// the format now is what lets the two coexist without the format
+// caring which is which.
+
+#define DESKTOP_DIR "/usr/wm/desktop"
+
+// The apps that still live in the kernel. Looked up by the name after
+// `builtin:`, so a desktop entry can point at one exactly as it points
+// at a binary.
+struct builtin {
+    const char *key;
+    void (*default_size)(int *w, int *h);
+    void (*on_open)(struct window *win);
+    void (*on_draw)(struct window *win);
+    int (*on_press)(struct window *win, int cx, int cy);
+    void (*on_release)(struct window *win);
+    int (*on_hover)(struct window *win, int cx, int cy);
 };
-const int gui_app_registry_count = sizeof(gui_app_registry) / sizeof(gui_app_registry[0]);
+
+static const struct builtin BUILTINS[] = {
+    { "taskmgr", taskmgr_default_size, taskmgr_open, taskmgr_draw, 0, 0, 0 },
+    { "controlpanel", control_panel_default_size, control_panel_open,
+      control_panel_draw, control_panel_press, control_panel_release,
+      control_panel_hover },
+};
+#define BUILTIN_COUNT ((int)(sizeof BUILTINS / sizeof BUILTINS[0]))
+
+// The live registry. Not const any more: it is filled in at startup from
+// the directory above. Everything that reads it (start_menu.c,
+// desktop.c, wm.c, wm_debug.c) is unchanged -- they still see a flat
+// array and a count.
+struct gui_app gui_app_registry[GUI_APP_MAX];
+int gui_app_registry_count;
+
+// Storage for the strings the entries point at. A desktop entry's Name
+// and Exec come out of a file, so they need somewhere to live for the
+// session; there is no allocator worth using here and the counts are
+// tiny, so it is a fixed table like everything else in this WM.
+static char g_names[GUI_APP_MAX][GUI_APP_NAME_MAX];
+static char g_execs[GUI_APP_MAX][GUI_APP_EXEC_MAX];
+static char g_cats[GUI_APP_MAX][16];
+
+// Scanning state: fs_list()'s callback carries no context pointer, so
+// the walk collects filenames here first and parses afterwards. Parsing
+// inside the callback would mean reading files while a directory walk
+// is in progress, which is a re-entrancy the filesystem does not
+// promise.
+static char g_files[GUI_APP_MAX][64];
+static int g_file_count;
+
+static void collect(const char *name, uint32_t size, int is_dir) {
+    (void)size;
+    if (is_dir || g_file_count >= GUI_APP_MAX) return;
+    // Only *.desktop, so a README or an editor's leftover is ignored
+    // rather than parsed into a blank menu row.
+    int n = (int)k_strlen(name);
+    if (n < 9 || k_strcmp(name + n - 8, ".desktop") != 0) return;
+    k_strlcpy(g_files[g_file_count], name, sizeof g_files[0]);
+    g_file_count++;
+}
+
+// Category order in the menu: the desktop's own things first, then real
+// apps, then the demos. An unknown category sorts last rather than
+// being dropped -- a typo should show up as a misplaced row, not as an
+// app that silently vanished.
+static int cat_rank(const char *c) {
+    if (k_strcmp(c, "system") == 0) return 0;
+    if (k_strcmp(c, "apps") == 0) return 1;
+    if (k_strcmp(c, "demos") == 0) return 2;
+    return 3;
+}
+
+static void load_entry(const char *file) {
+    char path[64];
+    k_snprintf(path, sizeof path, "%s/%s", DESKTOP_DIR, file);
+
+    char name[GUI_APP_NAME_MAX], exec[GUI_APP_EXEC_MAX];
+    char cat[16], icon[8], nodisplay[8];
+    if (!etc_config_get(path, "Name", name, sizeof name)) return;
+    if (!etc_config_get(path, "Exec", exec, sizeof exec)) return;
+    if (!etc_config_get(path, "Category", cat, sizeof cat)) k_strlcpy(cat, "apps", sizeof cat);
+    if (!etc_config_get(path, "Icon", icon, sizeof icon)) icon[0] = '\0';
+    if (etc_config_get(path, "NoDisplay", nodisplay, sizeof nodisplay)
+        && nodisplay[0] == '1') return;
+
+    int i = gui_app_registry_count;
+    if (i >= GUI_APP_MAX) return;
+
+    k_strlcpy(g_names[i], name, GUI_APP_NAME_MAX);
+    k_strlcpy(g_execs[i], exec, GUI_APP_EXEC_MAX);
+    k_strlcpy(g_cats[i], cat, sizeof g_cats[0]);
+
+    struct gui_app *a = &gui_app_registry[i];
+    k_memset(a, 0, sizeof *a);
+    a->name = g_names[i];
+    a->icon = icon[0];
+    a->resizable = 1;
+
+    if (k_strncmp(g_execs[i], "builtin:", 8) == 0) {
+        const char *key = g_execs[i] + 8;
+        for (int b = 0; b < BUILTIN_COUNT; b++) {
+            if (k_strcmp(BUILTINS[b].key, key) != 0) continue;
+            a->default_size = BUILTINS[b].default_size;
+            a->on_open = BUILTINS[b].on_open;
+            a->on_draw = BUILTINS[b].on_draw;
+            a->on_press = BUILTINS[b].on_press;
+            a->on_release = BUILTINS[b].on_release;
+            a->on_hover = BUILTINS[b].on_hover;
+            gui_app_registry_count++;
+            return;
+        }
+        // Named a builtin that does not exist. Refused loudly rather
+        // than shown as a menu row that does nothing when clicked.
+        klog_printf("wm: %s names unknown builtin \"%s\" -- ignored\n", file, key);
+        return;
+    }
+
+    a->exec_path = g_execs[i];
+    gui_app_registry_count++;
+}
+
+void gui_apps_load(void) {
+    gui_app_registry_count = 0;
+    g_file_count = 0;
+
+    fs_list(DESKTOP_DIR, collect);
+
+    // Filename order is whatever the directory hands back, so sort by
+    // (category, filename) before parsing: the Start menu's row order is
+    // something tests and users both read, and "whatever order the
+    // filesystem felt like" is not an order.
+    for (int i = 0; i < g_file_count; i++) load_entry(g_files[i]);
+
+    for (int i = 1; i < gui_app_registry_count; i++) {
+        for (int j = i; j > 0; j--) {
+            int rj = cat_rank(g_cats[j]), rp = cat_rank(g_cats[j - 1]);
+            if (rj > rp || (rj == rp && k_strcmp(g_names[j], g_names[j - 1]) >= 0)) break;
+            struct gui_app ta = gui_app_registry[j];
+            gui_app_registry[j] = gui_app_registry[j - 1];
+            gui_app_registry[j - 1] = ta;
+            char tmp[GUI_APP_NAME_MAX];
+            k_strlcpy(tmp, g_names[j], sizeof tmp);
+            k_strlcpy(g_names[j], g_names[j - 1], GUI_APP_NAME_MAX);
+            k_strlcpy(g_names[j - 1], tmp, GUI_APP_NAME_MAX);
+            char tc[16];
+            k_strlcpy(tc, g_cats[j], sizeof tc);
+            k_strlcpy(g_cats[j], g_cats[j - 1], sizeof g_cats[0]);
+            k_strlcpy(g_cats[j - 1], tc, sizeof g_cats[0]);
+            // The registry entries point INTO g_names, so the swapped
+            // rows have to be re-pointed rather than carrying stale
+            // pointers to each other's storage.
+            gui_app_registry[j].name = g_names[j];
+            gui_app_registry[j - 1].name = g_names[j - 1];
+        }
+    }
+
+    if (gui_app_registry_count == 0) {
+        // No entries: a disk without /usr/wm, or a RAM-only boot with
+        // nothing seeded. Say so -- an empty Start menu with no
+        // explanation looks like the desktop is broken, and this is the
+        // one message that distinguishes "no apps installed" from it.
+        klog_write("wm: no desktop entries in " DESKTOP_DIR " -- Start menu is empty\n");
+    } else {
+        klog_printf("wm: %d desktop entries from " DESKTOP_DIR "\n",
+                     gui_app_registry_count);
+    }
+}

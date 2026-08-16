@@ -21,6 +21,11 @@ struct window; // full definition in wm.h
 struct gui_app {
     const char *name; // shown in the Start menu and the title bar
 
+    // The single character drawn in the desktop icon's tile, from the
+    // entry's Icon= key. 0 falls back to the first letter of the name,
+    // which is what the desktop drew before entries existed.
+    char icon;
+
     // Computes this app's initial content-area size in pixels, from
     // whatever font size is currently active (gfx_char_w()/gfx_char_h()
     // -- see gfx_set_font_size()). Called once, at window-open time, so
@@ -252,7 +257,22 @@ struct gui_app {
     const char *exec_path;
 };
 
-extern const struct gui_app gui_app_registry[];
-extern const int gui_app_registry_count;
+// Caps on the live registry. Fixed tables rather than allocation, the
+// same choice every other list in this WM makes.
+#define GUI_APP_MAX      32
+#define GUI_APP_NAME_MAX 32
+#define GUI_APP_EXEC_MAX 64
+
+// The registry, BUILT AT STARTUP from /usr/wm/desktop/ -- see
+// gui_apps.c's top comment and data/wm/desktop/README.md. Not const any
+// more, and not a compiled-in list: adding an app to the desktop is
+// dropping a file there, not editing this file and rebuilding the
+// kernel.
+extern struct gui_app gui_app_registry[];
+extern int gui_app_registry_count;
+
+// Scans the desktop-entry directory and fills the registry. Called once
+// as the desktop starts, before anything draws a menu.
+void gui_apps_load(void);
 
 #endif

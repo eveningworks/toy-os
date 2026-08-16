@@ -1,0 +1,5 @@
+# About -- see this directory's README.md for the format.
+Name=About
+Exec=/bin/wm/system/about
+Category=system
+Icon=A

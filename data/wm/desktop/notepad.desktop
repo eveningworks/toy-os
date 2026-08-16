@@ -1,0 +1,5 @@
+# Notepad -- see this directory's README.md for the format.
+Name=Notepad
+Exec=/bin/wm/apps/notepad
+Category=apps
+Icon=N

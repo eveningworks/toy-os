@@ -1,0 +1,5 @@
+# Calculator -- see this directory's README.md for the format.
+Name=Calculator
+Exec=/bin/wm/apps/calculator
+Category=apps
+Icon=C

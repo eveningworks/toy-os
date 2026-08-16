@@ -37,7 +37,11 @@ in check_layout.py changes with it.)
 
 | Path | Holds | Created by | Status |
 |---|---|---|---|
-| `/bin` | Real user-facing programs (`ls`, `lspci`, `lscpu`, `hello`, and the ring-3 GUI apps `calculator`, `notepad`, `uterm`, `shapes`) | build | present |
+| `/bin` | Real user-facing programs a person runs by name (`ls`, `lspci`, `lscpu`, `hello`) | build | present |
+| `/bin/wm` | Container only -- holds the windowed apps, split by class | build | present |
+| `/bin/wm/system` | The desktop's own (`about`) | build | present |
+| `/bin/wm/apps` | Windowed applications (`calculator`, `notepad`, `uterm`) | build | present |
+| `/bin/wm/demos` | Things that exist to be looked at or tested (`shapes`, `uidemo`) | build | present |
 | `/etc` | Config: `toyos.conf`, `timezones`, `history` | boot | present |
 | `/etc/kbs` | Generated keyboard layout data (`us`, `se`) | build | optional |
 | `/tests` | Test/demo binaries -- one kernel mechanism each | build | present |
@@ -45,6 +49,9 @@ in check_layout.py changes with it.)
 | `/usr` | Container only -- holds `share/`, nothing of its own | build | present |
 | `/usr/share` | Read-only architecture-independent data | build | present |
 | `/usr/share/hwdata` | `pci.ids`, read by `/bin/lspci` | build | present |
+| `/usr/wm` | Container only -- holds the desktop's data | build | present |
+| `/usr/wm/desktop` | Desktop entries: one `.desktop` per launchable app, scanned at desktop startup to build the Start menu and the icons | build | present |
+| `/usr/wm/startup` | Entries launched when the desktop starts. Empty on purpose | build | present |
 | `/home` | Per-user directories | Milestone 17 | reserved |
 | `/usr/share/man` | Manual pages | Milestone 14 | reserved |
 | `/usr/share/fonts` | Runtime-loadable fonts | Milestone 21 | reserved |

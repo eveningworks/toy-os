@@ -32,11 +32,11 @@ will need updating to match (there's no runtime query for them over
 QMP, this mirrors the kernel's own math with numbers instead of live
 gfx_char_w()/gfx_char_h() calls).
 
-APP_ORDER must stay in sync with apps/gui_apps.c's `gui_app_registry[]`
-order (Start menu shows apps in registry order, then SYSTEM_ACTIONS
-below a 1px divider) -- if that registry changes, update this list to
-match, same way a session already has to update any hardcoded
-screenshot-comparison expectations.
+APP_ORDER mirrors what the WM builds from /usr/wm/desktop/ -- entries
+sorted by CATEGORY (system, apps, demos) then by name, with
+SYSTEM_ACTIONS below a 1px divider. Adding a .desktop file changes it,
+so prefer asking the kernel (`gui apps`, or DebugConsole.menu_row) over
+trusting this copy.
 
 Usage:
     import sys; sys.path.insert(0, "tools")
@@ -75,17 +75,16 @@ TASKBAR_H = 24       # WM_TITLEBAR_H -- taskbar strip is the same height as a ti
 ITEM_H = 22           # Start menu row height (gfx_char_h() + 6 -- see above)
 START_BTN = (50, 703)  # inside the taskbar's Start button, safely off any edge
 
-# Keep in sync with apps/gui_apps.c's gui_app_registry[] order -- or
-# don't, and ask the kernel instead: `gui apps` / `gui menu --json` list
-# the registry live, in order (tools/gui_debug.py).
-APP_ORDER = ["Task Manager", "Control Panel",
-             # Launcher entries: these spawn a ring-3 program from /bin
-             # rather than opening a kernel-space window, so open_app()
-             # here returns before any window exists -- a caller that
-             # wants the window must wait for the client to create it
-             # (poll `gui windows`), not assume it is up on return.
-             "About", "Shapes", "Calculator", "Notepad", "Terminal",
-             "UI Demo"]
+# Ask the kernel instead where you can: `gui apps` / `gui menu --json`
+# list the registry live, in order (tools/gui_debug.py).
+# Order comes from /usr/wm/desktop/ now -- the WM sorts entries by
+# CATEGORY (system, apps, demos) and then by name, so this list is a
+# mirror of that rather than of a table in gui_apps.c. Most entries
+# spawn a ring-3 program, so open_app() returns before any window
+# exists: a caller that wants the window must poll `gui windows`.
+APP_ORDER = ["About", "Control Panel", "Task Manager",
+             "Calculator", "Notepad", "Terminal",
+             "Shapes", "UI Demo"]
 # Keep in sync with apps/wm/start_menu.c's wm_system_actions[] order.
 SYSTEM_ACTIONS = ["Exit to shell", "Shutdown"]
 

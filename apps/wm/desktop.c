@@ -191,7 +191,11 @@ void desktop_draw(void) {
         // Stand-in glyph: the app name's first letter, centered in the
         // square -- see this file's top comment on why (no image
         // decoder yet).
-        char initial[2] = { gui_app_registry[i].name[0], '\0' };
+        // The entry's Icon= character, falling back to the name's first
+        // letter -- which is what this drew before desktop entries
+        // existed, so an entry with no Icon= looks exactly as it did.
+        char ic = gui_app_registry[i].icon;
+        char initial[2] = { ic ? ic : gui_app_registry[i].name[0], '\0' };
         int gx = x + (DESKTOP_ICON_SIZE - gfx_char_w()) / 2;
         int gy = y + (DESKTOP_ICON_SIZE - gfx_char_h()) / 2;
         gfx_draw_string(gx, gy, initial, icon_fg, gfx_rgb(60, 90, 130));

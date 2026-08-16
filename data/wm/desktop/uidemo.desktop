@@ -1,0 +1,5 @@
+# UI Demo -- see this directory's README.md for the format.
+Name=UI Demo
+Exec=/bin/wm/demos/uidemo
+Category=demos
+Icon=U

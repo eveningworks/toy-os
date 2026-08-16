@@ -1,0 +1,5 @@
+# Control Panel -- see this directory's README.md for the format.
+Name=Control Panel
+Exec=builtin:controlpanel
+Category=system
+Icon=C

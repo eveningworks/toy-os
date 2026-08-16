@@ -1,0 +1,5 @@
+# Terminal -- see this directory's README.md for the format.
+Name=Terminal
+Exec=/bin/wm/apps/uterm
+Category=apps
+Icon=T
