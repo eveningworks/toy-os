@@ -38,8 +38,8 @@ from gui_debug import DebugConsole          # noqa: E402
 from qmp_test import QMPSession             # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
-TITLE = "Terminal (ring 3)"
-SPAWN_CMD = "run uterm"
+TITLE = "Terminal"
+SPAWN_PATH = "/bin/uterm"   # spawned directly -- see run()
 SPAWN_TIMEOUT_S = 15.0
 
 # The terminal draws light text on black, so "ink" is anything not black.
@@ -88,12 +88,11 @@ def ink(qmp, tmp, name, box):
 
 
 def run(dbg, qmp, tmp, shot_dir, res):
-    dbg.send("gui open Terminal")
-    dbg.settle()
-    for ch in SPAWN_CMD:
-        key(dbg, HEX.get(ch, ch))
-    dbg.settle()
-    key(dbg, "0x0d")
+    # Spawned directly: this test's subject IS the ring-3 Terminal, and
+    # since M41's stage 0 there is no kernel-space one to type `run
+    # uterm` at (a `gui open Terminal` now spawns this same binary, but
+    # via the launcher rather than the path under test).
+    dbg.send(f"gui spawn {SPAWN_PATH}")
 
     deadline = time.time() + SPAWN_TIMEOUT_S
     win = None
@@ -104,6 +103,20 @@ def run(dbg, qmp, tmp, shot_dir, res):
     res.check("the ring-3 Terminal opens its own window", win is not None)
     if not win:
         return
+
+    # A window in the WM's list is not yet a window with PIXELS in it:
+    # the client has to draw and present its first frame. Wait for the
+    # app to say it laid itself out rather than sleeping -- capturing
+    # before that reads DESKTOP through the window's rect, which scores
+    # as ~230k ink and makes every later comparison meaningless. (The
+    # old flow typed `run uterm` at a Terminal, whose keystroke latency
+    # hid this; spawning directly does not.)
+    deadline = time.time() + SPAWN_TIMEOUT_S
+    while time.time() < deadline:
+        if dbg.logs("uterm: layout prompt", clear=False):
+            break
+        time.sleep(0.2)
+    dbg.settle()
 
     c = win["content"]
     # The transcript area, clear of the prompt line at the bottom.

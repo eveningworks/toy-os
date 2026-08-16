@@ -1,5 +1,6 @@
 // dropdown. Split out of uwidgets.c -- see ui/uui_dropdown.h.
 #include "ui/uui_dropdown.h"
+#include "ui/uui_widget.h"  // the ops table the focus ring takes
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
 
 // ---------------------------------------------------------------------
@@ -21,6 +22,24 @@ void uui_dropdown_init(struct uui_dropdown *d, int x, int y, int w, int h,
 }
 
 int uui_dropdown_selected(const struct uui_dropdown *d) { return d->list.selected; }
+
+// Moves the closed box AND re-places the popup under it.
+//
+// The popup's geometry is the WIDGET's, not the app's: an app that set
+// d->x/y/w/h directly (the only way to move one before this existed)
+// left the popup wherever init() had put it, so it drew and hit-tested
+// at a stale position -- every row committing whatever init happened to
+// select. Behaviour belongs to the component (docs/gui-guidelines.md).
+void uui_dropdown_set_geometry(struct uui_dropdown *d, int x, int y, int w, int h) {
+    d->x = x; d->y = y; d->w = w; d->h = h;
+    int rh = uui_listbox_row_h(&d->list);
+    int rows = d->list.count < d->max_rows ? d->list.count : d->max_rows;
+    if (rows < 1) rows = 1;
+    d->list.x = x;
+    d->list.y = y + h;
+    d->list.w = w;
+    d->list.h = rows * rh;
+}
 
 void uui_dropdown_draw(struct ugfx_surface *s, const struct uui_dropdown *d) {
     ugfx_fill_rect(s, d->x, d->y, d->w, d->h, d->bg);
@@ -91,3 +110,24 @@ int uui_dropdown_key(struct uui_dropdown *d, int key) {
     if (key == '\n' || key == '\r') { d->open = 0; return 1; } // Enter commits
     return uui_listbox_key(&d->list, key);
 }
+
+// --- focus ------------------------------------------------------------
+//
+// Focus-only ops (see uui_textbox.c). The hit test covers the CLOSED
+// box only: an open popup is hit-tested by the app before focus is
+// consulted, the same order the kernel version documents -- input order
+// is the reverse of draw order.
+static int dd_ops_hit(const void *w, int cx, int cy) {
+    return uui_dropdown_hit((const struct uui_dropdown *)w, cx, cy);
+}
+static int dd_ops_key(void *w, int key, unsigned mods) {
+    (void)mods;
+    return uui_dropdown_key((struct uui_dropdown *)w, key);
+}
+static int dd_ops_accepts_focus(const void *w) { (void)w; return 1; }
+
+const struct uui_widget_ops uui_dropdown_focus_ops = {
+    .hit = dd_ops_hit,
+    .key = dd_ops_key,
+    .accepts_focus = dd_ops_accepts_focus,
+};

@@ -25,18 +25,22 @@
 // plain stateful structs/functions the way they always were, since
 // every real caller recomputes their content area live from the
 // window's current size on every frame anyway.
+// Four widgets left this file in Milestone 41's stage 0
+// (docs/wm-ring3-design.md): the checkbox, dropdown, listbox and text
+// view had no caller once the GUI apps moved to ring 3, and their
+// ring-3 twins under userland/ui/ are the ones that survive the
+// milestone. What is left is what the WINDOW MANAGER itself still uses
+// -- plus ui_focus, which has no user of its own but is what
+// ui_button_group and ui_textbox export their focus tables INTO; it
+// retires with them when the WM moves in stage 4.
 #include "ui_primitives.h"
 #include "ui_scrollback.h"
 #include "ui_scrollbar.h"
-#include "ui_textview.h"
-#include "ui_checkbox.h"
 #include "ui_button.h"
 #include "ui_button_group.h"
 #include "ui_textbox.h"
 #include "ui_icon_grid.h"
 #include "ui_radio_list.h"
 #include "ui_focus.h"
-#include "ui_listbox.h"
-#include "ui_dropdown.h"
 
 #endif

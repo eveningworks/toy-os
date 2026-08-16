@@ -43,7 +43,7 @@ from qmp_test import QMPSession             # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
 TITLE = "Calculator"
-SPAWN_CMD = "run calculator"
+SPAWN_PATH = "/bin/calculator"   # spawned directly -- see run()
 
 SPAWN_TIMEOUT_S = 15.0
 
@@ -134,10 +134,10 @@ def display_pixels(qmp, tmp, name, box):
 
 
 def run(dbg, qmp, tmp, shot_dir, res):
-    dbg.send("gui open Terminal")
-    dbg.settle()
-    type_text(dbg, SPAWN_CMD)
-    dbg.send("gui key 0x0d")
+    # `gui spawn` rather than typing `run calculator` at a Terminal: the
+    # kernel-space Terminal retired in M41's stage 0, and the ring-3 one
+    # has no window yet when the injected keys would arrive.
+    dbg.send(f"gui spawn {SPAWN_PATH}")
 
     # Poll for BOTH the window and the client's self-reported layout --
     # the ELF has to load and lay itself out before either is answerable.

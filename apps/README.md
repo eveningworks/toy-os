@@ -91,44 +91,21 @@ run their own blocking loop:
 inside the window manager) -- these are event-driven: they never run
 their own loop, the window manager calls their `on_open`/`on_draw`/
 `on_key`/`on_click` callbacks instead. See "Adding a new GUI app" below.
-- **Notepad** (`notepad.c`) -- a small text editor with a toolbar (Save/
-  Load, using `fs_write`/`fs_read` from kapi.h under a fixed filename),
-  real cursor movement (arrows/Home/End/Delete, since build 377 --
-  `apps/ui/ui_scrollback.h`'s `text_scrollback` widget gained a cursor).
-  Good example
-  of all four callbacks: on_open, on_draw, on_key, and on_click (the
-  toolbar buttons).
-- **About** (`about.c`) -- a static info window with no input handling at
-  all (on_key/on_click both NULL). Good example of the minimum a GUI app
-  can be.
-- **Calculator** (`calculator.c`) -- a 4-function calculator with a
-  button grid, working from both clicks and the keyboard. The arithmetic
-  itself lives in `calc_engine.c`/`.h`, kept free of any gfx/wm
-  dependency; `calculator.c` is just the adapter that maps button
-  clicks/keypresses onto `calc_input()` calls.
-- **Terminal** (`terminal.c`) -- a GUI terminal emulator that runs the
-  real shell dispatcher (`shell_dispatch()`, see `shell.h`) through a
-  `vga_sink` redirecting into a `text_scrollback` widget, rather than
-  duplicating shell.c's command handlers. Also hosts the `edit`/`nano`
-  full-screen text editor (`editor.c`) as a small non-blocking "sub-mode"
-  of its own -- `editor_run()`'s blocking keyboard loop can't run inside
-  Terminal's event-driven window the way it does at the physical
-  console, so Terminal drives the same `editor_handle_key()` one
-  keystroke at a time from its own `on_key` callback instead. See
-  `terminal.c`'s top comment and `editor.h` for the full split.
-  `strace` joined `gui`/`ring3test`/`schedtest` on `BLOCKED_CMDS` for
-  the original reason `run` used to be there: it runs its target
-  through the blocking `elf_run_from_fs()` (deliberately -- the trace
-  has to interleave with the traced process's output in real time), so
-  it would freeze this window's event loop. `ls` and
-  `run <name>` (for a small, verified-safe allowlist -- see
-  `RUN_ALLOWED_BINS` in `terminal.c`) run real `/bin` ELF binaries
-  asynchronously via `scheduler.h`'s `scheduler_spawn()`/
-  `scheduler_poll()` and `wm.h`'s `window_start_process()` (Milestone 1
-  phase 4b, see `docs/roadmap.md`) instead of the blocking
-  `elf_run_from_fs()` path the physical shell still uses -- no stdin
-  routing to the spawned process yet, so this only covers short,
-  output-only commands.
+**Five of these retired in Milestone 41's stage 0**
+(`docs/wm-ring3-design.md`). Notepad, Calculator and Terminal were
+DELETED -- their ring-3 twins under `userland/gui/` had been shipping
+alongside them, which is what made that migration verifiable, and
+keeping two of each stopped paying once it was. About and UI Demo were
+PORTED to `userland/gui/` and are launched from the Start menu through
+`exec_path`, exactly as the other ring-3 apps are. What is left below is
+what still runs inside the kernel, and it is the set that moves with the
+window manager itself in stage 4.
+
+The one deliberate loss: the ring-3 About no longer reports the
+filesystem backend and whether it persists. Those are kernel calls with
+no syscall behind them, and stage 0 is the stage that adds no kernel
+capability; `df` and `fsck` report the same two facts meanwhile.
+
 - **Task Manager** (`taskmgr.c`) -- lists every open window (title +
   normal/minimized/maximized state) and shows system memory (physical
   RAM and kernel heap, total/used). Redraws every tick alongside the
@@ -259,6 +236,16 @@ pulled in together via the umbrella include `apps/ui/ui.h`
 `widgets.c` pair; it was split out file-per-widget once the pair grew
 past "two small functions" (see `docs/decisions.md`). `apps/widgets.h`/
 `.c` no longer exist.
+
+**This directory is now SHRINKING, on purpose.** Milestone 41's stage 0
+deleted the checkbox, dropdown, listbox and text view from it: with the
+GUI apps in ring 3, nothing kernel-side called them, and their ring-3
+twins under `userland/ui/` are the copies that survive the milestone.
+What is left is what the WINDOW MANAGER itself still draws with, plus
+`ui_focus`, which has no user of its own but is what `ui_button_group`
+and `ui_textbox` export their focus tables into. All of it retires with
+the WM in stage 4 -- so **add a widget here only if the WM needs it**;
+anything an app needs belongs in `userland/ui/`.
 
 **The standing rule for anything here: the WIDGET owns behaviour, the
 APP owns configuration.** Input handling, hit-testing, geometry and

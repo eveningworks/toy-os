@@ -1451,18 +1451,38 @@ doc makes that its own stage, deliberately before the WM moves.
       proposes, the client reallocates and acks. Landed in uapp stage 3
       and touched ZERO lines in the clients that had not opted in, which
       was the acceptance test. Covered by `tools/uapp_test.py`.
-- [ ] **Empty ring 0 of applications first** (design doc's stage 0, and
-      the largest reduction available without any new kernel work).
-      Delete the kernel-side Notepad, Calculator and Terminal now that
-      the ring-3 versions ship and are launchable from the Start menu;
-      port About, Task Manager, Control Panel and UI Demo to
-      `userland/gui/`. That leaves `apps/ui/` (2,310 lines) with no
-      callers at all, so it is DELETED rather than migrated: of ring 0's
-      ~11,100 GUI lines, 4,259 go away outright and 1,515 move, leaving
-      only the WM's 5,296 -- which is the only part that needs any of
-      the new kernel capabilities below. Task Manager and Control Panel
-      need the process-list and settings syscalls the WM will need
-      anyway, so building them here means the WM inherits them proven.
+- [x] ~~**Empty ring 0 of applications first**~~ -- done 2026-08-16
+      (design doc's stage 0). Notepad, Calculator and Terminal DELETED
+      from the kernel now that the ring-3 versions ship and launch from
+      the Start menu; About and UI Demo ported to `userland/gui/`; the
+      checkbox, dropdown, listbox and text view deleted from `apps/ui/`.
+      The design doc's claim that `apps/ui/` ends with no callers was
+      WRONG and is corrected there: seven files in `apps/wm/` include
+      it, so the rest of it retires with the WM in stage 4.
+      **Task Manager and Control Panel deliberately did NOT move**: each
+      needs a syscall ring 3 does not have (a process list, and
+      `etc_config`), and stage 0 is defined as the stage that adds no
+      kernel capability -- so they move in stage 4 with the syscalls
+      they need, not before. Proven by `gui_regress.py` 13/13 with
+      `uidemo_test.py`'s 28 checks now driving the RING-3 widgets.
+- [ ] **Restore the About window's storage line.** The kernel-side
+      About printed the filesystem backend and whether it persists
+      (`fs_backend_name()`/`fs_is_persistent()`); the ring-3 port cannot,
+      because neither has a syscall behind it, and stage 0 added none.
+      Fold it into stage 4's settings/process syscall batch rather than
+      adding a one-off. `df` and `fsck` report both facts meanwhile.
+- [ ] **A Live-CD boot: run from the ISO with no disk.** Asked for
+      2026-08-16. Most of the parts exist -- `multiboot_get_module()`
+      (`kernel/core/multiboot.c`) already reads GRUB modules, and the
+      VFS already degrades to a RAM-only filesystem when there is no
+      disk (`vfs.c`) -- so what is missing is putting the seed tree in
+      the ISO as a module and populating the RAM filesystem from it at
+      boot. The design fork worth pricing first: ship the module as a
+      TFS3 IMAGE the VFS mounts read-only from memory (same code paths,
+      no second format) versus a simple archive unpacked into the RAM
+      fs (simpler to write, a second format to maintain). Note the old
+      `BIN_BOOTSTRAP` GRUB-module path was removed for good reasons --
+      see `docs/decisions.md` -- so this should not just reinstate it.
 - [ ] **Cross-process buffer sharing** -- the actual blocker. Today
       `win_server.c` hands `wm_client.c` a plain kernel pointer, which
       works only because everything is identity-mapped; a ring-3 WM

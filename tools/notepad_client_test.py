@@ -31,7 +31,7 @@ from gui_debug import DebugConsole          # noqa: E402
 from qmp_test import QMPSession             # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
-SPAWN_CMD = "run notepad"
+SPAWN_PATH = "/bin/notepad"   # spawned directly -- see run()
 SAVE_NAME = "np_test.txt"
 
 MARGIN = 8
@@ -90,10 +90,10 @@ def text_pixels(qmp, tmp, name, box):
 
 
 def run(dbg, qmp, tmp, shot_dir, res):
-    dbg.send("gui open Terminal")
-    dbg.settle()
-    type_text(dbg, SPAWN_CMD)
-    key(dbg, ENTER)
+    # `gui spawn` rather than typing `run notepad` at a Terminal: the
+    # kernel-space Terminal retired in M41's stage 0, and the ring-3 one
+    # has no window yet when the injected keys would arrive.
+    dbg.send(f"gui spawn {SPAWN_PATH}")
 
     deadline = time.time() + SPAWN_TIMEOUT_S
     win = None

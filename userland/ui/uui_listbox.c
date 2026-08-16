@@ -1,5 +1,6 @@
 // listbox. Split out of uwidgets.c -- see ui/uui_listbox.h.
 #include "ui/uui_listbox.h"
+#include "ui/uui_widget.h"  // the ops table the focus ring takes
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
 
 // ---------------------------------------------------------------------
@@ -160,3 +161,24 @@ int uui_listbox_key(struct uui_listbox *lb, int key) {
     listbox_reveal(lb);
     return lb->selected != before;
 }
+
+// --- focus ------------------------------------------------------------
+//
+// Focus-only ops (see uui_textbox.c's note on why these tables are not
+// full ones). A listbox has no focused/unfocused state of its own --
+// selection is already visible -- so set_focused is absent rather than
+// a no-op that pretends otherwise.
+static int lb_ops_hit(const void *w, int cx, int cy) {
+    return uui_listbox_hit((const struct uui_listbox *)w, cx, cy);
+}
+static int lb_ops_key(void *w, int key, unsigned mods) {
+    (void)mods;
+    return uui_listbox_key((struct uui_listbox *)w, key);
+}
+static int lb_ops_accepts_focus(const void *w) { (void)w; return 1; }
+
+const struct uui_widget_ops uui_listbox_focus_ops = {
+    .hit = lb_ops_hit,
+    .key = lb_ops_key,
+    .accepts_focus = lb_ops_accepts_focus,
+};

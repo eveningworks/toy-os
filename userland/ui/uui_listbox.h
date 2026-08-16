@@ -46,4 +46,8 @@ int  uui_listbox_click(struct uui_listbox *lb, int cx, int cy);   // selects; 1 
 int  uui_listbox_wheel(struct uui_listbox *lb, int notches);      // 1 if scrolled
 int  uui_listbox_key(struct uui_listbox *lb, int key);            // arrows/home/end
 
+// Focus-only ops -- see uui_textbox.h's note.
+struct uui_widget_ops;
+extern const struct uui_widget_ops uui_listbox_focus_ops;
+
 #endif

@@ -41,7 +41,10 @@ from qmp_test import QMPSession             # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
 CLIENT_TITLE = "Counter (ring 3)"
-SPAWN_CMD = "run uiclient"
+# Spawned directly (DebugConsole.spawn -> `gui spawn`), not by typing at
+# a Terminal: the kernel-space Terminal retired in M41's stage 0, and the
+# ring-3 one has no window yet when the keys would arrive.
+SPAWN_PATH = "/tests/uiclient"
 
 # uiclient.c's own layout constants, window-relative. It reports these
 # on startup (`uiclient: layout btn ...`) for the same reason
@@ -65,12 +68,6 @@ class Result:
             print(f"        {detail}")
 
 
-def type_text(dbg, text):
-    for ch in text:
-        dbg.send(f"gui key {'0x20' if ch == ' ' else ch}")
-    dbg.settle()
-
-
 def grab(qmp, path):
     from PIL import Image
     qmp.screenshot(os.path.abspath(path))
@@ -89,17 +86,7 @@ def ink_count(im, x, y, w, h, bg=BG, tol=12):
 
 
 def run(dbg, qmp, tmp, shot_dir, res):
-    dbg.send("gui open Terminal")
-    dbg.settle()
-    type_text(dbg, SPAWN_CMD)
-    dbg.send("gui key 0x0d")
-
-    deadline = time.time() + SPAWN_TIMEOUT_S
-    win = None
-    while time.time() < deadline:
-        win = dbg.window(CLIENT_TITLE)
-        if win:
-            break
+    win = dbg.spawn(SPAWN_PATH, CLIENT_TITLE, SPAWN_TIMEOUT_S)
     res.check("the text-rendering client opened its window", win is not None,
               f"no window titled {CLIENT_TITLE!r} within {SPAWN_TIMEOUT_S}s")
     if not win:

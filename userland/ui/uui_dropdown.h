@@ -23,6 +23,10 @@ struct uui_dropdown {
 
 void uui_dropdown_init(struct uui_dropdown *d, int x, int y, int w, int h,
                         const char *const *items, int count);
+// Moves the box and re-places the popup under it. Setting x/y/w/h by
+// hand leaves the popup where init() put it -- see the .c file.
+void uui_dropdown_set_geometry(struct uui_dropdown *d, int x, int y, int w, int h);
+
 // Preferred minimum for the CLOSED box: the widest item it could show,
 // plus insets and arrow room. Widest ITEM, not the selected one -- a box
 // that fits today's value and clips tomorrow's is the bug this
@@ -41,5 +45,9 @@ int uui_dropdown_hit(const struct uui_dropdown *d, int cx, int cy);
 int uui_dropdown_click(struct uui_dropdown *d, int cx, int cy); // 1 if it consumed the click
 int uui_dropdown_key(struct uui_dropdown *d, int key);
 int uui_dropdown_selected(const struct uui_dropdown *d);
+
+// Focus-only ops -- see uui_textbox.h's note.
+struct uui_widget_ops;
+extern const struct uui_widget_ops uui_dropdown_focus_ops;
 
 #endif

@@ -51,7 +51,7 @@ from qmp_test import QMPSession
 
 DEFAULT_SOCK = ".vm.serial"
 TITLE = "Ring 3 Client"
-SPAWN_CMD = "run winclient"
+SPAWN_PATH = "/tests/winclient"   # spawned directly -- see run()
 SPAWN_TIMEOUT_S = 15.0
 
 # winclient's border colour (0xECF0F1) and one of its fills (0x2E4053).
@@ -78,12 +78,10 @@ def pixel(qmp, tmp, name, x, y):
 
 
 def run(dbg, qmp, tmp, res):
-    dbg.send("gui open Terminal")
-    dbg.settle()
-    for ch in SPAWN_CMD:
-        dbg.send(f"gui key {'0x20' if ch == ' ' else ch}")
-    dbg.settle()
-    dbg.send("gui key 0x0d")
+    # `gui spawn`, not a Terminal typing `run winclient`: the kernel-space
+    # Terminal retired in M41's stage 0, and the ring-3 one has no window
+    # yet when the injected keys would arrive.
+    dbg.send(f"gui spawn {SPAWN_PATH}")
 
     deadline = time.time() + SPAWN_TIMEOUT_S
     win = None
@@ -270,12 +268,8 @@ def check_focus_caret(dbg, qmp, tmp, res):
         with Image.open(p) as im:
             return im.convert("RGB").crop(box).tobytes()
 
-    # winclient is still running, and the Terminal that spawned it is
-    # still waiting on it -- a second `run` there would go nowhere. Quit
-    # it first ('q', see winclient.c). This cost a confusing failure
-    # once: the Terminal simply never produced a second window and the
-    # check reported "no ring-3 Terminal", which points at the wrong
-    # thing entirely.
+    # winclient is quit first ('q', see winclient.c) so the focus checks
+    # below have a predictable pair of windows on screen.
     win = dbg.window(TITLE)
     if win:
         dbg.click(win["x"] + win["w"] // 2, win["y"] + win["h"] // 2)
@@ -285,41 +279,47 @@ def check_focus_caret(dbg, qmp, tmp, res):
         while time.time() < deadline and dbg.window(TITLE):
             time.sleep(0.2)
 
-    # Terminal, moved clear of winclient's spawn position.
-    dbg.send("gui open Terminal")
-    dbg.settle()
-    for ch in "run uterm":
-        dbg.send(f"gui key {'0x20' if ch == ' ' else ch}")
-    dbg.settle()
-    dbg.send("gui key 0x0d")
+    # The ring-3 Terminal, spawned directly (see run()'s note).
+    dbg.send("gui spawn /bin/uterm")
 
     deadline = time.time() + SPAWN_TIMEOUT_S
     term = None
     while time.time() < deadline:
-        term = dbg.window("Terminal (ring 3)")
+        term = dbg.window("Terminal")
         if term:
             break
         time.sleep(0.3)
     if not term:
         res.check("a ring-3 Terminal opened, to test the caret", False,
-                  "no 'Terminal (ring 3)' window")
+                  "no 'Terminal' window")
         return
 
     dbg.drag(term["x"] + 60, term["y"] + 8, 700 + 60, term["y"] + 8)
     dbg.settle()
-    term = dbg.window("Terminal (ring 3)")
+    term = dbg.window("Terminal")
     c = term["content"]
     box = (c["x"], c["y"], c["x"] + c["w"], c["y"] + c["h"])
 
+    # Focus it EXPLICITLY rather than assuming the spawn left it focused
+    # -- clicked in the CONTENT, not the title bar, since the window that
+    # steals focus below opens near the left edge and a title-bar click
+    # can land on whatever is stacked there. Assuming the baseline state
+    # is what made this check compare two unfocused captures and report
+    # "pixel-identical" when the caret was working correctly.
+    dbg.click(c["x"] + c["w"] - 30, c["y"] + c["h"] - 30)
+    dbg.settle()
+    time.sleep(0.4)
     focused = region("focus_a.png", box)
 
-    # The kernel-space Terminal steals focus. It is used rather than
-    # winclient because winclient was quit above, and rather than
-    # opening something new because it is already on screen and (after
-    # the move) does not overlap.
-    thief = dbg.window("Terminal")
+    # A second window steals focus. The kernel-space Terminal used to
+    # play this part; it retired in M41's stage 0, so a kernel app that
+    # is still kernel-side takes it -- the Terminal under test was
+    # dragged clear to the right above, so this cannot overlap it.
+    dbg.open_app("Control Panel")
+    dbg.settle()
+    thief = dbg.window("Control Panel")
     if thief is None:
-        res.check("a second window exists to take focus", False, "no 'Terminal' window")
+        res.check("a second window exists to take focus", False, "no 'Control Panel' window")
         return
     dbg.click(thief["x"] + 40, thief["y"] + 8)
     dbg.settle()
@@ -329,8 +329,9 @@ def check_focus_caret(dbg, qmp, tmp, res):
               unfocused != focused,
               "the Terminal's content is pixel-identical focused and unfocused")
 
-    # And back.
-    dbg.click(term["x"] + 60, term["y"] + 8)
+    # And back -- same point as the first focusing click, so the caret is
+    # in the same place and "restores it exactly" can be exact.
+    dbg.click(c["x"] + c["w"] - 30, c["y"] + c["h"] - 30)
     dbg.settle()
     time.sleep(0.4)
     refocused = region("focus_c.png", box)

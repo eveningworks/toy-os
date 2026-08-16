@@ -198,7 +198,10 @@ static void on_open_cb(struct uapp *a) {
 
 int main(void) {
     struct uapp_desc desc = {
-        .title   = "Terminal (ring 3)",
+        // Plain "Terminal" since Milestone 41's stage 0 retired the
+        // kernel-space one -- the suffix existed only to tell two
+        // identically-named Terminals apart, and there is one now.
+        .title   = "Terminal",
         .w       = WIN_W,
         .h       = WIN_H,
         .x       = 120,

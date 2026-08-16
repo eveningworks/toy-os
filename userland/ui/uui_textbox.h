@@ -55,4 +55,11 @@ int uui_textbox_hit(const struct uui_textbox *f, int cx, int cy);
 void uui_textbox_draw(struct ugfx_surface *s, const struct uui_textbox *f,
                      uint32_t bg, uint32_t fg, uint32_t border);
 
+// The focus ring's ops table for a field: hit/key/set_focused only, the
+// drawing and layout slots left NULL (every slot is optional -- see
+// uui_widget.h). A field's draw takes three colours the generic
+// signature cannot carry, so a full table here would be half-honest.
+struct uui_widget_ops;
+extern const struct uui_widget_ops uui_textbox_focus_ops;
+
 #endif

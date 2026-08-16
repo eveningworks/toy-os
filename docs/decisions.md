@@ -101,6 +101,8 @@ there when you add an entry, or the index quietly stops being one.
 **GUI: window manager, compositor & widgets**
 
 - [Widgets are added once a second real caller needs them -- except the checkbox](#widgets-are-added-once-a-second-real-caller-needs-them----except-the-checkbox)
+- [The ring-3 UI Demo selects on contact where the kernel one committed on release](#the-ring-3-ui-demo-selects-on-contact-where-the-kernel-one-committed-on-release)
+- [A GUI test spawns its client directly, instead of typing at a Terminal](#a-gui-test-spawns-its-client-directly-instead-of-typing-at-a-terminal)
 - [A client's menus are clamped to its own window, and that is one rectangle away from not being](#a-clients-menus-are-clamped-to-its-own-window-and-that-is-one-rectangle-away-from-not-being)
 - [A menu bar opens on press, which is the one place the commit-on-release rule bends](#a-menu-bar-opens-on-press-which-is-the-one-place-the-commit-on-release-rule-bends)
 - [Esc doesn't close a window; Alt+F4 does, and it is a WM shortcut rather than an app key](#esc-doesnt-close-a-window-altf4-does-and-it-is-a-wm-shortcut-rather-than-an-app-key)
@@ -5072,3 +5074,66 @@ costs a full build: clone the mirror and run `make all` by hand before
 relying on a backup for anything irreversible. That test is worth the
 minutes -- matching hashes prove the bytes survived, but only a build
 proves it restores to a working project.
+
+
+## The ring-3 UI Demo selects on contact where the kernel one committed on release
+
+Milestone 41's stage 0 moved UI Demo to ring 3, and with it the 28
+checks that are most of what proves the widget set works. Three of those
+checks changed meaning, and the reason is worth stating once so a future
+session does not "fix" the app back:
+
+**A listbox row and a dropdown item act on CONTACT** in `userland/ui/`,
+where the kernel widgets armed on press and committed on release. That
+is not a regression in the port -- it is the ring-3 widgets' existing
+contract, already shared by four shipping apps, and it is what Windows
+and GTK do with a list. `docs/gui-guidelines.md`'s commit-on-release
+rule is about controls whose action is NOT already visible: a button
+fires something invisible, so a press dragged away from it must do
+nothing, and UI Demo still asserts exactly that for its buttons. A
+selection is visible as it happens, and a user who presses the wrong row
+sees the wrong row highlighted rather than triggering something.
+
+**A closed dropdown takes only the keys that OPEN it** (Down, Enter,
+Space), where the kernel one cycled its value with the popup shut. The
+ring-3 behaviour is the better one and was kept deliberately: an arrow
+key cannot change a setting the user cannot see.
+
+**The button group is not a focus stop.** Ring 3's group has no
+keyboard activation, so a tab stop there would be a stop that does
+nothing. The tab ring is textbox, dropdown, listbox.
+
+What the port did NOT change is the layout, the widget list, or the log
+grammar -- so the other 25 checks are the same assertions against
+different code, which is the point of having moved the target.
+
+## A GUI test spawns its client directly, instead of typing at a Terminal
+
+Eight of the thirteen GUI test tools used to open the kernel-space
+Terminal and type `run <name>` at it to get a ring-3 client on screen.
+Stage 0 deleted that Terminal, and the failure was not subtle: `gui open
+Terminal` now spawns the RING-3 terminal, whose window does not exist
+when the injected keys arrive, so ten tools failed at their first check
+at once.
+
+They use `gui spawn` now, via `DebugConsole.spawn(path, title)`, which
+waits for the window and gives the client a moment to present its first
+frame. That was already the documented advice -- `wm_debug.c` added `gui
+spawn` precisely so a test would stop dragging a Terminal's allowlist,
+its single pending-process slot and its shell into a test about
+something else -- and stage 0 is simply what forced it.
+
+Two traps the conversion exposed, both of which read as widget bugs:
+
+- **A window in the WM's list is not a window with pixels.** The
+  Terminal-typing path had enough incidental latency to hide this;
+  spawning directly does not. A capture taken too early reads DESKTOP
+  through the window's rect, which scored as ~230k "ink" and made every
+  later comparison meaningless. Wait for the app's own layout line where
+  it has one.
+- **A klog line can land in the MIDDLE of a `--json` reply.** The
+  console has no per-writer buffering, so a process exiting while `gui
+  windows --json` is printing splices its message through the object.
+  `DebugConsole.json()` re-asks rather than trying to unpick the
+  fragment: the splice is a collision, not a property of the answer, and
+  a repair heuristic would silently accept genuinely malformed output.

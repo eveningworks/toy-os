@@ -21,8 +21,9 @@ a frozen WM cannot answer one -- which makes "did the WM answer?" a
 direct, host-observable liveness test, no screenshot to interpret. But
 answering quickly proves nothing on its own unless the process really
 was still running at the time, so every sample is paired with the WM's
-own `proc_pid` (`gui state --json`, added for exactly this) and only
-samples taken while a process was genuinely live are counted.
+own launch table (`gui state --json`'s "launched", added for exactly
+this) and only samples taken while a process was genuinely live are
+counted.
 
 That pairing is the whole point: OVERLAP is the claim, not speed.
 
@@ -50,17 +51,17 @@ DEFAULT_SOCK = ".vm.serial"
 
 # The silent long-running spinner (userland/tests/spin_test.c), seeded to
 # /tests. Silent matters here for the same reason it does in the KTEST:
-# its output would land in the Terminal window mid-test.
-# A BARE name on purpose: the Terminal's allowlist matches bare names,
-# and PATH ("/bin;/usr/bin;/tests") is what resolves it to
-# /tests/spin_test -- so this also exercises the PATH resolution the
-# Terminal's `run` uses instead of the "/bin/" prefix it hardcoded.
+# its output would land on the desktop's log mid-test.
 #
 # The trailing number is spin_test's round count (see its parse_rounds()
 # comment): each sample below costs a full serial round trip, so the
 # process has to live for seconds to overlap MIN_LIVE_SAMPLES of them.
 # The default duration overlapped exactly 3.
-SPIN_CMD = "run spin_test 40"
+SPIN_PATH = "/tests/spin_test 40"   # `gui spawn` forwards the argument
+
+# A kernel-space app, opened only so there is a window on screen for
+# `gui windows` to walk -- the second half of the liveness claim.
+WINDOW_APP = "Control Panel"
 
 K_RET = "0x0d"
 K_SPACE = "0x20"  # `gui key` splits on whitespace, so space must be hex
@@ -100,34 +101,40 @@ class Result:
 
 
 def run(dbg, qmp, shot_dir, res):
-    # A Terminal is what spawns a scheduler-managed process from the
-    # desktop (window_start_process() -> scheduler_spawn()); `run` from
-    # the PHYSICAL shell takes the legacy blocking path instead, which
-    # deliberately still freezes the kernel context (see
-    # kernel_slot_runnable()) and would prove the opposite of the point.
-    dbg.send("gui open Terminal")
+    # `gui spawn` goes through scheduler_spawn() exactly as a Start-menu
+    # launch does; `run` from the PHYSICAL shell takes the legacy
+    # blocking path instead, which deliberately still freezes the kernel
+    # context (see kernel_slot_runnable()) and would prove the opposite
+    # of the point. This used to open the kernel-space Terminal and type
+    # at it -- that Terminal retired in M41's stage 0, and spawning
+    # directly drops the shell, its allowlist and its pending-process
+    # slot out of a test that was never about any of them.
+    #
+    # A window still has to be on screen, because `gui windows` answering
+    # is half the liveness claim below.
+    dbg.open_app(WINDOW_APP)
     dbg.settle()
-    term = dbg.window("Terminal")
-    res.check("Terminal window opened", term is not None)
-    if term is None:
+    win = dbg.window(WINDOW_APP)
+    res.check(f"{WINDOW_APP} window opened", win is not None)
+    if win is None:
         return
 
     if shot_dir:
         qmp.screenshot(os.path.abspath(os.path.join(shot_dir, "sched-gui-before.png")))
 
-    type_text(dbg, SPIN_CMD)
-    dbg.send(f"gui key {K_RET}")
+    dbg.send(f"gui spawn {SPIN_PATH}")
 
     # Wait for the WM to actually report a live process before sampling,
     # so a slow spawn can't be mistaken for a short one.
     deadline = time.time() + SPAWN_TIMEOUT_S
     pid = 0
     while time.time() < deadline:
-        pid = dbg.json("gui state --json").get("proc_pid", 0)
-        if pid:
+        live = dbg.json("gui state --json").get("launched", [])
+        if live:
+            pid = live[0]
             break
-    res.check("Terminal spawned a ring-3 process", pid != 0,
-              f"gui state never reported proc_pid within {SPAWN_TIMEOUT_S}s")
+    res.check("the desktop spawned a ring-3 process", pid != 0,
+              f"gui state never listed a launched pid within {SPAWN_TIMEOUT_S}s")
     if not pid:
         return
 
@@ -140,14 +147,14 @@ def run(dbg, qmp, shot_dir, res):
     deadline = time.time() + RUN_TIMEOUT_S
     while time.time() < deadline:
         st = dbg.json("gui state --json")
-        if not st.get("proc_pid", 0):
+        if pid not in st.get("launched", []):
             break
         live_samples += 1
 
         # Not just `gui state`: exercise a second, heavier command that
         # walks real WM structures, so this can't pass on some trivial
         # fast path that skips the loop.
-        if dbg.window("Terminal") is not None:
+        if dbg.window(WINDOW_APP) is not None:
             windows_answered += 1
 
         if shot_dir and not shot_taken and live_samples >= 3:
@@ -164,9 +171,9 @@ def run(dbg, qmp, shot_dir, res):
 
     # It has to actually finish -- a WM that stays responsive because
     # the process never ran would otherwise pass everything above.
-    ended = dbg.json("gui state --json").get("proc_pid", 0) == 0
+    ended = pid not in dbg.json("gui state --json").get("launched", [])
     res.check("the process finished and the WM reaped it", ended,
-              f"proc_pid still set after {RUN_TIMEOUT_S}s")
+              f"pid {pid} still listed after {RUN_TIMEOUT_S}s")
 
     # And the desktop must still be usable afterwards, not merely alive
     # during -- a rotation bug that corrupted the kernel's saved context
@@ -174,7 +181,7 @@ def run(dbg, qmp, shot_dir, res):
     dbg.send("gui key 0x1b")  # Esc: dismiss anything the typing opened
     dbg.settle()
     res.check("desktop still responsive after the process exited",
-              dbg.window("Terminal") is not None)
+              dbg.window(WINDOW_APP) is not None)
 
     if shot_dir:
         qmp.screenshot(os.path.abspath(os.path.join(shot_dir, "sched-gui-after.png")))

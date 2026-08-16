@@ -23,8 +23,9 @@ Decisions settled deliberately rather than defaulted, each with a
 section below:
 
 - **Ring 0 loses its apps before it loses the WM.** Stage 0 empties
-  `apps/` of GUI applications, which deletes `apps/ui/` outright and
-  cuts what has to move by more than half.
+  `apps/` of GUI applications, which cuts what has to move by more than
+  half. It does NOT delete `apps/ui/` outright -- see stage 0's own
+  correction below; the WM is itself a heavy user of it.
 - **The transport becomes an abstraction before anything moves.** The
   desktop must look identical at the end of stage 3, with the WM still
   in ring 0. That is what makes stage 4 a swap rather than a leap.
@@ -150,7 +151,7 @@ A-E pattern TFS3 used and uapp repeated. **Stages 0 through 3 all end
 with `tools/gui_regress.py` passing 13/13 with no test tool edited.**
 That invariant is what steers the whole migration.
 
-### Stage 0 -- empty ring 0 of applications
+### Stage 0 -- empty ring 0 of applications  [DONE 2026-08-16]
 
 The largest single reduction available, and it needs no new kernel
 capability.
@@ -170,18 +171,48 @@ capability.
   now drives the *userland* widgets. That is the point -- those are the
   widgets that survive.
 
-**Ends with `apps/ui/` having no callers**, and deletable. The
-arithmetic, since it is the argument for doing this first: ring 0 holds
-about 11,100 lines of GUI today -- `apps/wm/` 5,296, `apps/ui/` 2,310,
-and 3,464 across the seven apps. Stage 0 **deletes 4,259** outright
-(the three duplicated apps at 1,949, plus `apps/ui/` at 2,310) and
-**moves 1,515** (the four ported apps). Ring 0 is left holding only the
-WM's 5,296 lines -- less than half of what it started with, and the
-only part that actually needs the four new kernel capabilities.
+**CORRECTION, from building it.** This section claimed stage 0 "ends
+with `apps/ui/` having no callers, and deletable". That was wrong: the
+WINDOW MANAGER is itself a heavy user of `apps/ui/` -- seven files in
+`apps/wm/` include `ui/ui.h` (`desktop.c`, `file_picker.c`,
+`start_menu.c`, `wm_render.c`, `wm_input.c`, `context_menu.c`,
+`confirm_dialog.c`). What stage 0 actually deletes is the half of it
+the apps owned: the checkbox, dropdown, listbox and text view. The
+primitives, button, button group, textbox, radio list, icon grid,
+scrollbar and scrollback stay until the WM moves in stage 4, and
+`ui_focus` stays with them because the surviving button group and
+textbox export focus tables into it.
 
-**Proven by:** `gui_regress.py` 13/13, with `uidemo_test.py` and
-`notepad_client_test.py` now covering ring-3 targets. A deleted app
-that something still references is a link error, not a silent gap.
+**What actually shipped.** The three duplicated apps (Notepad,
+Calculator, Terminal) deleted; About and UI Demo ported to
+`userland/gui/` and launched through `exec_path`; four widgets deleted
+from `apps/ui/`. Task Manager and Control Panel did NOT move -- both
+need a syscall ring 3 does not have (a process list, and
+`etc_config`), and those are stage 4's, so moving them here would have
+made stage 0 a stage that adds kernel capability, which is exactly what
+it is defined not to be. They are the remaining kernel-space apps.
+
+**Three things it turned up that were not in the plan:**
+
+  1. **`uui_textview` did not exist.** UI Demo's text view had no ring-3
+     twin, so one was ported (`userland/ui/uui_textview.c`) over `utext`
+     and `uui_scrollbar`.
+  2. **A real WM bug.** Opening a window never told the previously
+     focused CLIENT it had lost focus -- only `bring_to_front()` sent
+     focus events, and `wm_client.c`'s own create path. A client
+     therefore kept drawing a caret for input going elsewhere. Nothing
+     had crossed that path because every test opened its second window
+     before the client existed.
+  3. **The test tools had to change after all**, though not their
+     checks: eight of them opened the kernel-space Terminal and typed
+     `run <name>` at it. With that Terminal gone, `gui open Terminal`
+     spawns the ring-3 one, whose window does not exist yet when the
+     keys arrive. They use `gui spawn` now (`DebugConsole.spawn()`),
+     which is what `wm_debug.c` added it for.
+
+**Proven by:** `gui_regress.py` 13/13, with `uidemo_test.py`'s 28 checks
+now driving the RING-3 widgets. A deleted app that something still
+references is a link error, not a silent gap.
 
 ### Stage 1 -- cross-process buffer sharing
 

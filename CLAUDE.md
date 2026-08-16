@@ -197,13 +197,17 @@ technical conventions below:
   `gui_apps.h`.
 - **`apps/ui/ui.h`** (the umbrella include for `ui_primitives.h`'s
   `widget_hit`/`widget_button`, `ui_scrollback.h`, `ui_scrollbar.h`,
-  `ui_checkbox.h`, `ui_button.h`/`ui_button_group.h`, `ui_textbox.h`,
-  `ui_radio_list.h`, `ui_icon_grid.h`, `ui_textview.h`,
-  `ui_listbox.h`/`ui_dropdown.h` -- the dropdown composes the listbox,
-  and its popup needs `ui_dropdown_draw_popup()` called AFTER every
-  other widget, since drawing is immediate-mode and z-order is call
-  order -- and `ui_focus.h`, the per-window keyboard-focus ring a widget
-  joins by exporting one `ui_focus_ops` table. **Route keys through
+  `ui_button.h`/`ui_button_group.h`, `ui_textbox.h`,
+  `ui_radio_list.h`, `ui_icon_grid.h`
+  -- and `ui_focus.h`, the per-window keyboard-focus ring a widget
+  joins by exporting one `ui_focus_ops` table. **This directory is
+  SHRINKING**: M41's stage 0 deleted the checkbox, dropdown, listbox
+  and text view once the GUI apps moved to ring 3, and what is left is
+  what the WM itself draws with, retiring with it in stage 4. A new
+  widget belongs in `userland/ui/` unless the WM needs it. The popup
+  rule the dropdown documented still holds for its ring-3 twin
+  (`uui_dropdown_draw_popup()` LAST, since drawing is immediate-mode
+  and z-order is call order). **Route keys through
   `ui_focus_key()`, never by trying each widget in turn**: the first one
   tried swallows every key it recognises, which left a listbox next to a
   dropdown unreachable from the keyboard)
@@ -923,7 +927,8 @@ run` window is never at risk. GUI/rendering work still needs
 whether a button is drawn in the right place.
 
 **There is a GUI app built to be tested against: "UI Demo"**
-(`apps/uidemo.c`). One of every `apps/ui/` widget at documented,
+(`userland/gui/uidemo.c` -- a RING-3 process since Milestone 41's
+stage 0; it was `apps/uidemo.c`). One of every Toykit widget at documented,
 font-derived, content-relative offsets, and every interaction logged as
 one parseable line (`uidemo: button 2`, `uidemo: check alpha on`,
 `uidemo: cancel btn`). Combined with the `gui` commands below, a GUI
@@ -962,11 +967,18 @@ gui state [--json]       overlays, cursor, armed drag/resize/press, damage rect
 gui damage [verify on|off]  the damage rect; verify catches missed damage
 gui open <App>           open a window directly -- no Start-menu clicking
 gui dialog [--json]      the open confirm dialog's message and button CENTRES
-gui spawn PATH           run a ring-3 binary directly -- no Terminal in the loop
+gui spawn PATH [args]    run a ring-3 binary directly -- no Terminal in the loop
 gui click X Y | gui rclick X Y | gui drag X1 Y1 X2 Y2 | gui key <c> [alt|ctrl|shift]
 ```
 
-`gui spawn` is the one to reach for when a test needs a ring-3 client:
+`gui spawn` is the ONLY way a test starts a client now -- since M41's
+stage 0 there is no kernel-space Terminal to type `run <name>` at, and
+`gui open Terminal` spawns the ring-3 one, whose window does not exist
+yet when injected keys arrive. `DebugConsole.spawn(path, title)` wraps
+it, waits for the window and gives the client a moment to present its
+first frame; a capture taken before that reads DESKTOP through the
+window's rect. It also takes ARGS now (`gui spawn /tests/spin_test 40`).
+It is the one to reach for when a test needs a ring-3 client:
 `gui open` can only launch what is in the app registry, so tests used to
 open a Terminal and type at it, dragging that Terminal's allowlist, its
 pending-process slot and its shell into a test about something else --

@@ -150,13 +150,13 @@ class Shapes:
     # -- setup ---------------------------------------------------------
 
     def open(self):
-        """Launch Shapes from a Terminal and read its self-reported layout."""
-        self.dbg.send("gui open Terminal")
-        self.dbg.settle()
-        for ch in "run shapes":
-            self.dbg.send(f"gui key {'0x20' if ch == ' ' else ch}")
-        self.dbg.settle()
-        self.dbg.send("gui key 0x0d")
+        """Launch Shapes and read its self-reported layout.
+
+        Spawned directly rather than typed at a Terminal: the
+        kernel-space Terminal retired in M41's stage 0, and the ring-3
+        one has no window yet when the injected keys would arrive.
+        """
+        self.dbg.send("gui spawn /bin/shapes")
 
         # The ELF has to be loaded and the window created before any of
         # this is answerable; poll rather than guessing at a sleep.

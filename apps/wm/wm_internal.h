@@ -225,6 +225,11 @@ void wm_client_ping(struct window *win);
 // anything after four.
 void wm_track_launched(int pid);
 
+// Read back the launch table: slot i's pid (0 = free), and how many
+// slots there are. Only wm_debug.c's `gui state` uses these.
+int wm_launched_pid(int slot);
+int wm_launched_max(void);
+
 // Once per frame. Returns the index of a window that has just gone
 // unresponsive while being asked to close (the only case worth a
 // dialog), or -1.

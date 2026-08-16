@@ -37,7 +37,10 @@ from qmp_test import QMPSession             # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
 CLIENT_TITLE = "Ring 3 Client"
-SPAWN_CMD = "run winclient"
+# Spawned directly with `gui spawn` (DebugConsole.spawn) rather than by
+# typing at a Terminal -- see BEHIND_TITLE's comment in run().
+SPAWN_PATH = "/tests/winclient"
+BEHIND_TITLE = "Control Panel"
 
 # userland/tests/winclient.c's COLORS[], as (r, g, b). The client starts on
 # the first and advances one step per key or click.
@@ -63,12 +66,6 @@ class Result:
             print(f"        {detail}")
 
 
-def type_text(dbg, text):
-    for ch in text:
-        dbg.send(f"gui key {'0x20' if ch == ' ' else ch}")
-    dbg.settle()
-
-
 def sample(qmp, path, x, y):
     """One pixel's (r, g, b) from a fresh screenshot."""
     from PIL import Image
@@ -85,19 +82,16 @@ def near(got, want, tol=6):
 
 
 def run(dbg, qmp, tmp, shot_dir, res):
-    dbg.send("gui open Terminal")
+    # A second window to sit BEHIND the client, as the control point for
+    # "nothing else changed". It used to be the kernel-space Terminal
+    # this test typed `run winclient` at; that Terminal retired in M41's
+    # stage 0, so the client is spawned directly and the control window
+    # is a kernel app that draws static content (the Task Manager's
+    # process list would change the moment the client spawns).
+    dbg.open_app(BEHIND_TITLE)
     dbg.settle()
-    type_text(dbg, SPAWN_CMD)
-    dbg.send("gui key 0x0d")
 
-    # Wait for the client's window to appear in the WM's own list --
-    # not a fixed sleep, which would race a slow spawn.
-    deadline = time.time() + SPAWN_TIMEOUT_S
-    win = None
-    while time.time() < deadline:
-        win = dbg.window(CLIENT_TITLE)
-        if win:
-            break
+    win = dbg.spawn(SPAWN_PATH, CLIENT_TITLE, SPAWN_TIMEOUT_S)
     res.check("a ring-3 process owns a window in the WM's window list", win is not None,
               f"no window titled {CLIENT_TITLE!r} within {SPAWN_TIMEOUT_S}s")
     if not win:
@@ -111,8 +105,9 @@ def run(dbg, qmp, tmp, shot_dir, res):
     cx, cy = c["x"] + c["w"] // 2, c["y"] + c["h"] // 2
     # A control point on the Terminal behind it, which nothing in this
     # test should ever change.
-    term = dbg.window("Terminal")
-    tx, ty = term["content"]["x"] + 20, term["content"]["y"] + term["content"]["h"] - 20
+    behind = dbg.window(BEHIND_TITLE)
+    tx = behind["content"]["x"] + 20
+    ty = behind["content"]["y"] + behind["content"]["h"] - 20
 
     got = sample(qmp, os.path.join(tmp, "wc0.png"), cx, cy)
     res.check("the client's own pixels reach the screen",
@@ -214,7 +209,7 @@ def run(dbg, qmp, tmp, shot_dir, res):
     # And the desktop must be intact afterwards -- a client teardown
     # that corrupted the window list would show up here.
     res.check("the desktop survives the client exiting",
-              dbg.window("Terminal") is not None)
+              dbg.window(BEHIND_TITLE) is not None)
 
     if shot_dir:
         qmp.screenshot(os.path.abspath(os.path.join(shot_dir, "ring3-client-closed.png")))

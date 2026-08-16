@@ -467,15 +467,31 @@ static void cmd_state(int json) {
                      dragging, resizing, content_pressed);
         klog_printf("\"redraw_pending\":%s,\"pending\":%d,",
                      redraw_pending ? "true" : "false", wm_debug_input_pending());
-        // The pid of the ring-3 process this desktop is currently
-        // running (0 = none) -- wm.c's pending_proc. Exposed because it
-        // is the only host-observable way to tell that a client process
-        // and the WM are alive AT THE SAME TIME: a test that wants to
-        // prove the desktop stays responsive while a process runs has
-        // to know the process is still running, and asking the WM is
-        // the same "ask, don't measure a screenshot" principle the rest
-        // of this file is built on. See tools/sched_gui_test.py.
+        // The pid of the ring-3 process a WINDOW is waiting on (0 =
+        // none) -- wm.c's pending_proc, which only window_start_process()
+        // sets. **Since M41's stage 0 retired the kernel-space Terminal
+        // nothing calls that, so this reads 0 always**; the field and the
+        // plumbing stay for the next caller rather than being ripped out
+        // and re-added. Use "launched" below to ask whether a process the
+        // desktop started is alive.
         klog_printf("\"proc_pid\":%d,", pending_proc);
+        // Every pid the desktop launched that is still running -- the
+        // WM's own reaped launch table (wm.c's g_launched). This is the
+        // host-observable way to tell that a client process and the WM
+        // are alive AT THE SAME TIME: proving the desktop stays
+        // responsive while a process runs needs the process's liveness
+        // from the same answer, and asking the WM is the "ask, don't
+        // measure a screenshot" principle the rest of this file is built
+        // on. See tools/sched_gui_test.py.
+        klog_write("\"launched\":[");
+        int first = 1;
+        for (int i = 0; i < wm_launched_max(); i++) {
+            int pid = wm_launched_pid(i);
+            if (!pid) continue;
+            klog_printf("%s%d", first ? "" : ",", pid);
+            first = 0;
+        }
+        klog_write("],");
         klog_printf("\"damage\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d}}\r\n",
                      dx, dy, dw, dh);
         return;
@@ -490,6 +506,15 @@ static void cmd_state(int json) {
     klog_printf("injected events pending: %d\r\n", wm_debug_input_pending());
     if (pending_proc) klog_printf("ring-3 process: pid %d\r\n", pending_proc);
     else              klog_write("ring-3 process: none\r\n");
+    klog_write("launched (still running):");
+    int any = 0;
+    for (int i = 0; i < wm_launched_max(); i++) {
+        int pid = wm_launched_pid(i);
+        if (!pid) continue;
+        klog_printf(" %d", pid);
+        any = 1;
+    }
+    klog_write(any ? "\r\n" : " none\r\n");
     klog_printf("damage rect: x=%d y=%d w=%d h=%d%s\r\n", dx, dy, dw, dh,
                  dw <= 0 ? "  (none this frame -- full-screen repaint)" : "");
 }
@@ -523,8 +548,8 @@ static void cmd_open(const char *name) {
 //
 // Tracked for reaping exactly as a Start-menu launch is, so this does
 // not quietly reintroduce the leak wm_track_launched() exists to fix.
-static void cmd_spawn(const char *path) {
-    int pid = scheduler_spawn(path, 0);
+static void cmd_spawn(const char *path, const char *args) {
+    int pid = scheduler_spawn(path, args);
     if (pid > 0) {
         wm_track_launched(pid);
         klog_printf("gui: spawned \"%s\" as pid %d\r\n", path, pid);
@@ -745,8 +770,14 @@ int wm_debug_dispatch(char *line) {
 
     if (k_strcmp(sub, "spawn") == 0) {
         char *path = next_tok(&p);
-        if (!path) { klog_write("usage: gui spawn /path/to/binary\r\n"); return 1; }
-        cmd_spawn(path);
+        if (!path) { klog_write("usage: gui spawn /path/to/binary [args]\r\n"); return 1; }
+        // Everything after the path is the argument string, passed
+        // through verbatim (scheduler_spawn splits it the same way the
+        // shell's `run` does). Needed because a test's binary can take
+        // one -- spin_test's round count is the reason this exists, and
+        // without it that test had to go through a Terminal to say it.
+        while (*p == ' ' || *p == '\t') p++;
+        cmd_spawn(path, *p ? p : 0);
         return 1;
     }
 

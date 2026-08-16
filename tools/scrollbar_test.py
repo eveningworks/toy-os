@@ -60,7 +60,7 @@ from gui_debug import DebugConsole
 from qmp_test import QMPSession
 
 DEFAULT_SOCK = ".vm.serial"
-SPAWN_CMD = "run notepad"
+SPAWN_PATH = "/bin/notepad"   # spawned directly -- see run()
 SPAWN_TIMEOUT_S = 20.0
 ENTER = "0x0d"
 
@@ -171,12 +171,10 @@ def read_layout(dbg):
 
 
 def run(dbg, qmp, tmp, res):
-    dbg.send("gui open Terminal")
-    dbg.settle()
-    for ch in SPAWN_CMD:
-        dbg.send(f"gui key {'0x20' if ch == ' ' else ch}")
-    dbg.settle()
-    dbg.send(f"gui key {ENTER}")
+    # `gui spawn`, not a Terminal typing `run notepad`: the kernel-space
+    # Terminal retired in M41's stage 0, and the ring-3 one has no window
+    # yet when the injected keys would arrive.
+    dbg.send(f"gui spawn {SPAWN_PATH}")
 
     deadline = time.time() + SPAWN_TIMEOUT_S
     win = None

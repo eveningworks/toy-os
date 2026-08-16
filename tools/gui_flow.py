@@ -78,15 +78,14 @@ START_BTN = (50, 703)  # inside the taskbar's Start button, safely off any edge
 # Keep in sync with apps/gui_apps.c's gui_app_registry[] order -- or
 # don't, and ask the kernel instead: `gui apps` / `gui menu --json` list
 # the registry live, in order (tools/gui_debug.py).
-APP_ORDER = ["Notepad", "About", "Calculator", "Terminal", "Task Manager",
-             "Control Panel", "UI Demo",
+APP_ORDER = ["Task Manager", "Control Panel",
              # Launcher entries: these spawn a ring-3 program from /bin
              # rather than opening a kernel-space window, so open_app()
              # here returns before any window exists -- a caller that
              # wants the window must wait for the client to create it
              # (poll `gui windows`), not assume it is up on return.
-             "Shapes", "Calculator (ring 3)", "Notepad (ring 3)",
-             "Terminal (ring 3)"]
+             "About", "Shapes", "Calculator", "Notepad", "Terminal",
+             "UI Demo"]
 # Keep in sync with apps/wm/start_menu.c's wm_system_actions[] order.
 SYSTEM_ACTIONS = ["Exit to shell", "Shutdown"]
 

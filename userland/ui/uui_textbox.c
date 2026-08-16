@@ -1,5 +1,6 @@
 // field. Split out of uwidgets.c -- see ui/uui_textbox.h.
 #include "ui/uui_textbox.h"
+#include "ui/uui_widget.h"  // the ops table the focus ring takes
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
 
 // Caret width in pixels -- a bar, not a block, so it sits between
@@ -119,3 +120,29 @@ void uui_textbox_draw(struct ugfx_surface *s, const struct uui_textbox *f,
                         CARET_W, ugfx_char_h(), fg);
     }
 }
+
+// --- focus ------------------------------------------------------------
+//
+// A FOCUS-ONLY ops table: hit/key/set_focused/accepts_focus, with the
+// drawing and layout slots left NULL. Every slot is optional (see
+// uui_widget.h), and a field's draw takes three colours the generic
+// signature has nowhere to carry -- so this table is what uui_focus
+// needs and nothing more, rather than a half-honest full one.
+static int ops_hit(const void *w, int cx, int cy) {
+    return uui_textbox_hit((const struct uui_textbox *)w, cx, cy);
+}
+static int ops_key(void *w, int key, unsigned mods) {
+    (void)mods;
+    return uui_textbox_key((struct uui_textbox *)w, key);
+}
+static void ops_set_focused(void *w, int focused) {
+    uui_textbox_set_active((struct uui_textbox *)w, focused);
+}
+static int ops_accepts_focus(const void *w) { (void)w; return 1; }
+
+const struct uui_widget_ops uui_textbox_focus_ops = {
+    .hit = ops_hit,
+    .key = ops_key,
+    .set_focused = ops_set_focused,
+    .accepts_focus = ops_accepts_focus,
+};

@@ -278,6 +278,14 @@ void open_app(const struct gui_app *app) {
         struct window *losing_focus = &windows[window_count - 1];
         wm_damage_rect(losing_focus->x, losing_focus->y,
                         losing_focus->w, losing_focus->h);
+        // ...and if it is a CLIENT, it has to be TOLD, not just
+        // repainted: a client sees nothing but its own event queue, so
+        // an unannounced focus loss leaves it drawing a caret for input
+        // that is going somewhere else. wm_client.c's own create path
+        // has always done this; opening a kernel-space app over a client
+        // did not, which is a path nothing exercised until a test
+        // stopped opening its second window first.
+        wm_client_send_focus(losing_focus, 0);
     }
 
     int content_w, content_h;
@@ -320,6 +328,17 @@ void open_app(const struct gui_app *app) {
 // Reaping is also what makes force-quit repeatable rather than a
 // four-shot escape hatch.
 static int g_launched[MAX_WINDOWS];
+
+// Slot i's pid, or 0 if free. For `gui state`, which is how a test sees
+// that a process the desktop launched is still alive -- the WM reaps
+// this table every iteration, so a non-zero entry means "running as of
+// the last loop pass" without the test needing a second liveness call.
+int wm_launched_pid(int slot) {
+    if (slot < 0 || slot >= MAX_WINDOWS) return 0;
+    return g_launched[slot];
+}
+
+int wm_launched_max(void) { return MAX_WINDOWS; }
 
 void wm_track_launched(int pid) {
     for (int i = 0; i < MAX_WINDOWS; i++) {

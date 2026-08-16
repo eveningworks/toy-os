@@ -77,6 +77,9 @@ PROMPT = "dbg> "
 # because they are dispatched from inside the very loop that drains
 # them (see wm_debug.h). Polling from the host side is the way to wait.
 SETTLE_S = 0.25       # post-drain grace, and the fallback when polling can't run
+SPAWN_TIMEOUT_S = 15.0  # how long spawn() waits for a client's window to appear
+RETRIES_ON_SPLICED_JSON = 3  # see json() -- a klog line can land mid-object
+FIRST_PRESENT_S = 0.4  # grace after a client's window appears -- see spawn()
 SETTLE_TIMEOUT_S = 15.0  # give up rather than hang if the queue never empties
 
 
@@ -131,14 +134,24 @@ class DebugConsole:
         Tolerates the kernel prefixing its own klog lines (`wm: opened
         ...`) by taking the last line that parses -- klog output and
         command output share this wire, and a test asserting on values
-        should not break because the kernel logged something."""
-        text = self.send(command)
+        should not break because the kernel logged something.
+
+        A klog line can also land in the MIDDLE of the JSON line rather
+        than before it -- the console has no per-writer buffering, so a
+        process exiting while this command is printing splices its
+        message straight through the object. Nothing can parse that, so
+        the command is simply re-asked: the splice is a collision, not a
+        property of the answer. Re-asking rather than trying to unpick
+        the fragment keeps this from silently "repairing" genuinely
+        malformed output."""
         last_error = None
-        for line in reversed([l for l in text.splitlines() if l.strip()]):
-            try:
-                return _json.loads(line)
-            except ValueError as e:
-                last_error = e
+        for _ in range(RETRIES_ON_SPLICED_JSON):
+            text = self.send(command)
+            for line in reversed([l for l in text.splitlines() if l.strip()]):
+                try:
+                    return _json.loads(line)
+                except ValueError as e:
+                    last_error = e
         raise ValueError(f"no JSON in response to {command!r}: {text!r} ({last_error})")
 
     # -- conveniences over the raw commands ------------------------------
@@ -296,6 +309,38 @@ class DebugConsole:
 
     def open_app(self, name):
         return self.send(f"gui open {name}")
+
+    def spawn(self, path, title=None, timeout=SPAWN_TIMEOUT_S):
+        """Run a ring-3 binary and (optionally) wait for its window.
+
+        `gui spawn` with no Terminal in the loop -- which is the only way
+        to start a client since Milestone 41's stage 0 retired the
+        kernel-space Terminal. Every tool used to `gui open Terminal` and
+        type `run <name>` at it; that idiom now opens the RING-3 terminal,
+        whose window does not exist yet when the keys arrive, so the keys
+        went nowhere and the test failed at its first check.
+
+        Returns the window dict once it appears, or None on timeout (with
+        `title` None, returns immediately after spawning).
+        """
+        self.send(f"gui spawn {path}")
+        if title is None:
+            return None
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            win = self.window(title)
+            if win is not None:
+                # A window in the WM's list is not yet a window with
+                # PIXELS: the client still has to draw and present its
+                # first frame. A caller that samples immediately reads
+                # desktop through the window's rect. Settle, then a short
+                # grace -- and if the app reports its own layout line,
+                # wait for THAT instead (see uterm_test.py).
+                self.settle()
+                time.sleep(FIRST_PRESENT_S)
+                return win
+            time.sleep(0.2)
+        return None
 
     def damage_verify(self, on=True):
         """Turn the damage-invariant checker on/off. Pair with

@@ -52,6 +52,8 @@ from gui_debug import DebugConsole          # noqa: E402
 from qmp_test import QMPSession             # noqa: E402
 
 DEFAULT_SOCK = ".vm.serial"
+SPAWN_PATH = "/bin/uidemo"   # a ring-3 process since M41's stage 0
+SPAWN_TIMEOUT_S = 15.0
 
 # api/keyboard.h. Sent as hex, which is how that header writes them.
 K_UP, K_DOWN = "0x91", "0x92"
@@ -133,12 +135,14 @@ class Demo:
     # -- setup ---------------------------------------------------------
 
     def open(self):
-        """Open a FRESH UI Demo window and read its self-reported layout.
+        """Spawn a FRESH UI Demo and read its self-reported layout.
 
-        UI Demo is single-instance: re-opening an existing window just
-        focuses it and never calls on_open, so no layout lines are
-        emitted. Close everything first or the layout dict comes back
-        empty and every coordinate below is zero.
+        UI Demo is a RING-3 PROCESS since Milestone 41's stage 0
+        (userland/gui/uidemo.c), so this spawns it rather than opening a
+        kernel-space window, and waits for the app's own layout lines --
+        a window in the WM's list does not yet mean the client has run
+        its on_open. Everything else is unchanged: close whatever is on
+        screen first, or a stale window's coordinates are read instead.
         """
         while True:
             ws = self.dbg.json("gui windows --json")["windows"]
@@ -148,9 +152,15 @@ class Demo:
             self.dbg.settle()
         self.dbg.logs("", clear=True)
 
-        self.dbg.send("gui open UI Demo")
-        self.dbg.settle()
-        for line in self.events():
+        self.dbg.spawn(SPAWN_PATH, "UI Demo")
+        deadline = time.time() + SPAWN_TIMEOUT_S
+        lines = []
+        while time.time() < deadline:
+            lines += self.events()
+            if any("layout listbox_row_h" in l for l in lines):
+                break
+            time.sleep(0.2)
+        for line in lines:
             p = line.split()
             if len(p) >= 7 and p[1] == "layout":
                 self.layout[p[2]] = tuple(int(v) for v in p[3:7])
@@ -169,6 +179,10 @@ class Demo:
         x, y, w, h = self.layout["listbox"]
         return x + 10, y + n * self.row_h + self.row_h // 2
 
+    def textbox_center(self):
+        x, y, w, h = self.layout["textbox"]
+        return x + w // 2, y + h // 2
+
     def dropdown_center(self):
         x, y, w, h = self.layout["dropdown"]
         return x + w // 2, y + h // 2
@@ -186,15 +200,22 @@ def run(d):
     print("\n== listbox: mouse ==")
     d.check("click row 1 selects it", d.click(*d.list_row(1)), "list 1 bravo")
     d.check("click row 3 selects it", d.click(*d.list_row(3)), "list 3 delta")
-    # The cancel path is a separate test from the happy path
-    # (docs/gui-guidelines.md): press a row, drag off, release.
-    d.check_absent("press dragged off commits nothing",
-                   d.drag(lx + 10, ly + d.row_h // 2, lx - 60, ly - 60),
-                   "list 0 alpha")
+    # A ROW SELECTS ON CONTACT here, unlike the kernel widget this
+    # replaced, which armed on press and committed on release. That is
+    # the ring-3 listbox's existing contract (uui_listbox.h) and what
+    # Windows and GTK do -- the commit-on-release rule
+    # docs/gui-guidelines.md states is about BUTTONS, whose action is not
+    # already visible. So the assertion is that the press itself selects:
+    # a drag beginning on row 0 selects row 0 and dragging away does not
+    # un-select it.
+    d.check("a press selects on contact and dragging off keeps it",
+            d.drag(lx + 10, ly + d.row_h // 2, lx - 60, ly - 60),
+            "list 0 alpha")
 
     print("\n== listbox: keyboard ==")
-    d.check("down arrow moves selection", d.key(K_DOWN), "list 4 echo")
-    d.check("up arrow moves selection", d.key(K_UP), "list 3 delta")
+    # Selection is row 0 after the drag above, not row 3.
+    d.check("down arrow moves selection", d.key(K_DOWN), "list 1 bravo")
+    d.check("up arrow moves selection", d.key(K_UP), "list 0 alpha")
     d.check("End jumps to last", d.key(K_END), "list 11 lima")
     d.check("Home jumps to first", d.key(K_HOME), "list 0 alpha")
     d.check("PageDown pages", d.key(K_PGDN), "list 4 echo")
@@ -217,11 +238,18 @@ def run(d):
     bx, by, bw, bh = d.layout["btn1"]
     got = d.click(bx + bw // 2, by + bh // 2)
     d.check_absent("outside click changes no value", got, "dropdown 0")
-    # Clicking the buttons row moves focus THERE -- the button group is in
-    # the focus ring, so this is "focus buttons", not "focus none".
-    d.check("outside click moved focus to the buttons", got, "focus buttons")
+    # ...and it is SWALLOWED: the dismissing click must not also press
+    # the button it landed on, which is the half of this that a popup
+    # falling through would break.
+    d.check("outside click is swallowed by the popup", got, "dropdown close")
+    d.check_absent("...and did not press the button underneath", got, "button 1")
 
     print("\n== keyboard focus follows the click ==")
+    # Focus somewhere else FIRST, so "clicking the listbox focuses it"
+    # can actually be a change -- a check that passes only because focus
+    # was already there proves nothing.
+    d.click(*d.textbox_center())
+    d.events()
     d.check("clicking the listbox focuses it", d.click(*d.list_row(0)), "focus listbox")
     d.check("...and arrows now reach the listbox", d.key(K_DOWN), "list ")
     d.check("clicking the dropdown focuses it back", d.click(*ddc), "focus dropdown")
@@ -229,37 +257,39 @@ def run(d):
     d.events()
 
     print("\n== dropdown: keyboard while closed ==")
-    d.check("Home while closed", d.key(K_HOME), "dropdown 0 Aardvark")
-    d.check("down arrow changes value while closed", d.key(K_DOWN), "dropdown 1 Badger")
-
-    print("\n== dropdown: Esc restores the opening value ==")
-    # Value is Badger (1). Open, arrow to 2, Esc -- then arrow again
-    # while closed: a correct restore means the next Down goes 1 -> 2.
-    d.click(*ddc)
-    d.key(K_DOWN)
+    # A CLOSED ring-3 dropdown takes only the keys that OPEN it (Down,
+    # Enter, Space) and ignores the rest -- it does not cycle its value
+    # with the popup shut, which the kernel widget did. Both are real
+    # toolkit behaviours; this one means an arrow key can never change a
+    # setting the user cannot see.
+    d.check("Home while closed does nothing", d.key(K_HOME), "(no focus)")
+    d.check("down arrow opens it instead of cycling", d.key(K_DOWN), "dropdown open")
     d.key(K_ESC)
     d.events()
-    d.check("Esc restored the opening value", d.key(K_DOWN), "dropdown 2 Capybara")
 
     print("\n== Tab / Shift-Tab move focus ==")
-    # Tab order is the app's array order: buttons, textbox, dropdown,
-    # listbox. Focus is on the dropdown (index 2) here.
+    # Tab order is the app's array order: textbox, dropdown, listbox.
+    # The button group is NOT a stop -- the ring-3 group has no keyboard
+    # activation, so a stop there would be a stop that does nothing.
+    # Focus is on the dropdown (index 1) here.
     d.check("Tab moves forward", d.key(K_TAB), "focus listbox")
-    d.check("Tab wraps", d.key(K_TAB), "focus buttons")
+    d.check("Tab wraps", d.key(K_TAB), "focus textbox")
     # Shift-Tab is the case modifier bits exist for at all: Tab has no
     # shifted character, so without them this is indistinguishable from
     # plain Tab and a ring can only ever cycle one way.
     d.check("Shift-Tab moves backward", d.key(K_TAB, "shift"), "focus listbox")
     d.check("Shift-Tab again", d.key(K_TAB, "shift"), "focus dropdown")
 
-    print("\n== focused buttons take arrows and Space ==")
-    d.key(K_TAB)  # -> listbox
-    d.key(K_TAB)  # -> buttons (wrap)
-    d.events()
-    d.check("Space activates the focused button", d.key(K_SPACE), "button 1")
-    d.key(K_RIGHT)
-    d.check("right arrow moves within the group, Space commits it",
-            d.key(K_SPACE), "button 2")
+    print("\n== buttons still commit on RELEASE, not on press ==")
+    # The one control where commit-on-release matters, and the reason
+    # the rule exists: a button's action is not already visible, so a
+    # press the user drags away from must do nothing.
+    bx, by, bw, bh = d.layout["btn1"]
+    d.check("clicking a button commits it",
+            d.click(bx + bw // 2, by + bh // 2), "button 1")
+    d.check_absent("a press dragged off the button commits nothing",
+                   d.drag(bx + bw // 2, by + bh // 2, bx + bw // 2, by - 80),
+                   "button 1")
 
 
 def check_containment(d, qmp, tmp):
