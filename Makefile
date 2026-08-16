@@ -301,11 +301,23 @@ help:
 # is per-target (the object's own directory) rather than a set of
 # order-only prerequisites naming every directory, so a new source
 # directory needs nothing here either.
-$(BUILD)/%.o: %.c
+#
+# `| version` is ORDER-ONLY and is what makes the generated headers
+# (version.h, build_date.h) exist before anything includes them. It has
+# to be here, on the compile rules, rather than on `all`: listing
+# `version` first in `all:`s prerequisites orders nothing under `-j`,
+# because make is free to build every prerequisite subtree at once. The
+# failure is a `build_date.h: No such file or directory` on whichever
+# object won the race -- apps/wm/desktop.c, the only file that includes
+# it -- with gen_version.sh's own output appearing AFTER the error in
+# the log. Order-only rather than a normal prerequisite because
+# `version` is .PHONY and therefore always out of date: a normal one
+# would rebuild every object on every build.
+$(BUILD)/%.o: %.c | version
 	@mkdir -p $(dir $@)
 	$(CC) $(if $(filter apps/%,$<),$(APPS_CFLAGS),$(CFLAGS)) $< -o $@
 
-$(BUILD)/%.o: %.asm
+$(BUILD)/%.o: %.asm | version
 	@mkdir -p $(dir $@)
 	$(ASM) $(ASMFLAGS) $< -o $@
 
@@ -314,7 +326,7 @@ $(BUILD)/%.o: %.asm
 # a .c file in userland/gui, userland/bin or userland/tests and nothing
 # else -- the directory says both that it is a program and where it
 # seeds to (see "userland source layout" above).
-$(BUILD)/userland/%.o: userland/%.c
+$(BUILD)/userland/%.o: userland/%.c | version
 	@mkdir -p $(dir $@)
 	$(CC) $(USERLAND_CFLAGS) $< -o $@
 
@@ -430,11 +442,11 @@ $(BUILD)/userland/%.elf: $(BUILD)/userland/%.o $(USERLAND_RT) userland/rt/link.l
 #
 # -Iapps is needed for calc_engine.h and is scoped to this rule alone,
 # so an ordinary userland program still cannot include apps/ headers.
-$(BUILD)/userland/shared/%.o: kernel/lib/%.c
+$(BUILD)/userland/shared/%.o: kernel/lib/%.c | version
 	@mkdir -p $(dir $@)
 	$(CC) $(USERLAND_CFLAGS) -Iapps $< -o $@
 
-$(BUILD)/userland/shared/%.o: apps/%.c
+$(BUILD)/userland/shared/%.o: apps/%.c | version
 	@mkdir -p $(dir $@)
 	$(CC) $(USERLAND_CFLAGS) -Iapps $< -o $@
 
