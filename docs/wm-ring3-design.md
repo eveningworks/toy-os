@@ -397,6 +397,42 @@ either.
 `damage_hunt.py` over several seeds -- the transport changes event
 timing, and this bug family lives in orderings.
 
+#### Scope DECIDED, 2026-08-16 -- do not relitigate
+
+Settled with the maintainer before stage 2 shipped, recorded here so the
+next session starts from it rather than re-opening it:
+
+- **Build the abstraction and the `gui` forwarding. DEFER the ring.**
+  The shared-memory ring is a performance item, not a prerequisite:
+  stage 4 needs the WM to talk over *something*, and the syscall
+  transport already does. The `gui` forwarding is the load-bearing half
+  -- all sixteen GUI tools drive the WM through `wm_debug.c` over the
+  KERNEL's serial console, so the ~240 checks that prove the desktop
+  works have to cross the transport before the WM can move at all.
+- **The debug channel is a `WIN_REQ_*`/`WIN_EV_*` pair**, command string
+  in and output back, not a side channel of its own. Same precedent
+  stage 2 set with `WIN_REQ_SET_COMPOSITOR`: an operation is a message,
+  so there is no new kernel entry point and nothing for a ring-3 server
+  to re-plumb. The argument for a separate channel -- diagnostics are
+  not app-facing traffic and arguably do not belong in the app protocol
+  -- was heard and rejected as not worth a second mechanism to maintain
+  and move.
+- **Write the limitation down rather than pretend otherwise.** An
+  abstraction with exactly ONE implementation is shaped around that
+  implementation and nothing proves it is not. This repo's own rule
+  (`ata nodma`, `nopat`, TFS3 v1) is that an unreachable path is a
+  guess. So `docs/decisions.md` gets an entry saying the seam is
+  UNVALIDATED until a second transport exists, naming what is most
+  likely wrong with it: batching, and who owns the copy. A cheap
+  throwaway second implementation was considered and rejected -- it
+  would prove the seam is not *syscall*-shaped without proving it fits
+  anything real.
+
+**So the exit criterion for stage 3 is not "the ring works", it is:**
+`gui_regress.py` passes untouched with the `gui` commands travelling as
+protocol messages, plus `damage_hunt.py` over several seeds because the
+forwarding changes event timing.
+
 ### Stage 4 -- the WM process
 
 - Prerequisites: a ring-3 allocator, the settings/tick/process
