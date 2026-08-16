@@ -59,6 +59,42 @@ static uint64_t ensure_next_level(uint64_t *table, int index) {
     return new_phys;
 }
 
+// --- per-address-space user page accounting --------------------------
+//
+// How much memory a process is using, counted where mapping actually
+// happens rather than guessed from anywhere else. Task Manager's memory
+// column is this (see abi/proc_info.h); nothing in the kernel could
+// answer the question before.
+//
+// Keyed by PML4 rather than by pid because that is what this layer
+// has: vmm takes an address space, never a process, and deliberately so
+// (see vmm.h -- the address space is passed explicitly so a mapping
+// never depends on which process happens to be current).
+//
+// A small linear table. One entry per live address space, so it is
+// bounded by the process table; a linear scan of that is nothing beside
+// the page-table walk it accompanies.
+#define VMM_ACCT_MAX 72
+
+static struct { uint64_t pml4; uint32_t pages; } g_acct[VMM_ACCT_MAX];
+
+static int acct_slot(uint64_t pml4_phys, int create) {
+    int free_slot = -1;
+    for (int i = 0; i < VMM_ACCT_MAX; i++) {
+        if (g_acct[i].pml4 == pml4_phys && pml4_phys) return i;
+        if (!g_acct[i].pml4 && free_slot < 0) free_slot = i;
+    }
+    if (!create || free_slot < 0) return -1;
+    g_acct[free_slot].pml4 = pml4_phys;
+    g_acct[free_slot].pages = 0;
+    return free_slot;
+}
+
+uint64_t vmm_user_bytes(uint64_t pml4_phys) {
+    int i = acct_slot(pml4_phys, 0);
+    return i < 0 ? 0 : (uint64_t)g_acct[i].pages * 4096;
+}
+
 int vmm_map_user_page_flags(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
                              int writable, int executable) {
     int pml4_index = (int)((vaddr >> 39) & 0x1FF);
@@ -80,7 +116,15 @@ int vmm_map_user_page_flags(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
     if (!executable) flags |= PAGE_NX;
 
     uint64_t *pt = table_at(pt_phys);
+    // Only count a page that was not already mapped here. A remap of the
+    // same address (win_server.c does exactly that on a window resize)
+    // replaces one frame with another and must not count twice.
+    int was_present = (pt[pt_index] & PAGE_PRESENT) != 0;
     pt[pt_index] = (paddr & ADDR_MASK) | flags;
+    if (!was_present) {
+        int i = acct_slot(pml4_phys, 1);
+        if (i >= 0) g_acct[i].pages++;
+    }
     return 1;
 }
 
@@ -133,6 +177,10 @@ int vmm_unmap_user_page(uint64_t pml4_phys, uint64_t vaddr) {
     if (!(pt[pt_index] & PAGE_PRESENT)) return 0;
 
     pt[pt_index] = 0;
+    {
+        int i = acct_slot(pml4_phys, 0);
+        if (i >= 0 && g_acct[i].pages) g_acct[i].pages--;
+    }
 
     // Only worth an INVLPG if this address space is the live one. For
     // any other, the stale TLB entry cannot be reached without a CR3
@@ -184,6 +232,15 @@ void vmm_destroy_address_space(uint64_t pml4_phys) {
         if (pml4[i] & PAGE_PRESENT) destroy_pdpt(pml4[i] & ADDR_MASK);
     }
     pmm_free_frame(pml4_phys);
+
+    // Release the accounting slot. Load-bearing rather than tidiness:
+    // pmm hands the same physical frame out again, so a later address
+    // space can be born at this exact PML4 address and would otherwise
+    // inherit this one's page count.
+    {
+        int i = acct_slot(pml4_phys, 0);
+        if (i >= 0) { g_acct[i].pml4 = 0; g_acct[i].pages = 0; }
+    }
 }
 
 uint64_t vmm_current_pml4(void) {

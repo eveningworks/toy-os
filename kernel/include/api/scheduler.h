@@ -2,6 +2,7 @@
 #define SCHEDULER_H
 
 #include <stdint.h>
+#include "proc_info.h" // struct proc_info -- scheduler_proc_info() below
 
 // Built as the ORIGINAL Milestone 16 (the old pre-v0.1.0 numbering used
 // by CHANGELOG-archive.md, unrelated to docs/roadmap.md's current
@@ -172,6 +173,21 @@ enum sched_poll_result scheduler_poll(int pid, int *out_exit_code);
 // A killed process is a zombie like any other and still has to be
 // reaped -- see scheduler_poll(). The WM reaps the ones it launched.
 int scheduler_kill(int pid, int exit_code);
+
+// Fills `out` with a report on process-table slot `index`
+// (0 .. scheduler_max_procs()-1). An EMPTY slot is a successful call
+// reporting pid 0, not a failure -- a caller enumerating the table
+// should skip it, not stop. Returns 0 only for a bad index or a NULL
+// pointer.
+//
+// Indexed by SLOT rather than by pid so a caller can walk the whole
+// table without knowing which pids exist, which is exactly what a task
+// manager does. See abi/proc_info.h for the fields and for why cpu_ticks
+// is a cumulative total rather than a percentage.
+int scheduler_proc_info(int index, struct proc_info *out);
+
+// How many slots that table has. The bound for the loop above.
+int scheduler_max_procs(void);
 
 int scheduler_block_current(uint64_t *regs, int reason);
 

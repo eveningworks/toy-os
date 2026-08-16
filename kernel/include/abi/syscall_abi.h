@@ -476,6 +476,58 @@ struct dirent {
                           // could read it would mostly use it to decide
                           // to carry on anyway).
 
+#define SYS_PROC_INFO 30 // RDI = process-table slot index, RSI = pointer
+                          // to a `struct proc_info` (out, see
+                          // abi/proc_info.h). Returns 1 on success, 0
+                          // for a bad index or pointer.
+                          //
+                          // Indexed by SLOT, not by pid, so a caller can
+                          // walk the whole table without knowing which
+                          // pids exist -- which is what a task manager
+                          // does. An EMPTY slot is a successful call
+                          // reporting pid 0, so enumeration skips rather
+                          // than stops. The bound is SYS_PROC_MAX below.
+                          //
+                          // Read-only and unprivileged: every process
+                          // can see every other. This kernel has no user
+                          // model to hang a permission on, and inventing
+                          // one here would be a check with nothing
+                          // behind it -- see SYS_KILL, which makes the
+                          // same call about a far more dangerous
+                          // operation and says so.
+
+#define SYS_KILL      31 // RDI = pid, RSI = exit code to report.
+                          // Terminates that process immediately.
+                          // Returns 1 if it was killed, 0 if no such
+                          // process.
+                          //
+                          // **UNPRIVILEGED, DELIBERATELY.** Any process
+                          // may kill any other, including the window
+                          // manager once it is a process (Milestone 41
+                          // stage 4). There is no user model, no
+                          // capability and no process-group notion in
+                          // this kernel, so a permission check here
+                          // would be decoration -- it would have to
+                          // invent the very thing it claims to enforce.
+                          // Written down rather than quietly assumed;
+                          // when a privilege model lands, THIS is the
+                          // syscall it has to gate first.
+                          //
+                          // Killing the WM is not a hole to be closed,
+                          // it is the property stage 4 has to prove: the
+                          // kernel must survive it. See
+                          // docs/wm-ring3-design.md.
+                          //
+                          // This is the FORCE path. The polite one is
+                          // the window close handshake (WIN_EV_CLOSE),
+                          // which an app may refuse; both exist for the
+                          // same reason Windows separates End Task from
+                          // End Process.
+
+// The number of process-table slots SYS_PROC_INFO can be asked about.
+// Mirrors the kernel's SCHED_MAX_PROCS; a caller loops 0..this-1.
+#define SYS_PROC_MAX 64
+
 // The largest single SYS_GETRANDOM request. Not a security limit -- it
 // stops a bad count from turning into a long uninterruptible fill in
 // ring 0, the same reasoning as every other bounded copy across this

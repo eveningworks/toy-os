@@ -1,6 +1,7 @@
 #include "syscall.h"
 #include "process.h"
 #include "klog.h"
+#include "kfmt.h" // klog_printf
 #include "vga.h"
 #include "vmm.h"
 #include "gfx.h"
@@ -933,6 +934,29 @@ void syscall_dispatch(uint64_t *regs) {
             vmm_copy_to_user(pml4, rdi, rbuf, rsi); // range validated just above
             regs[14] = rsi;
         }
+    } else if (rax == SYS_PROC_INFO) {
+        uint64_t pml4 = vmm_current_pml4();
+        struct proc_info info;
+        if (!vmm_validate_user_range(pml4, rsi, sizeof info)) {
+            klog_write("syscall: proc_info() rejected -- invalid user pointer\n");
+            regs[14] = 0;
+        } else if (!scheduler_proc_info((int)rdi, &info)) {
+            regs[14] = 0; // bad index
+        } else {
+            // Filled in a KERNEL struct and copied out, never written
+            // through the user pointer (vmm.h).
+            vmm_copy_to_user(pml4, rsi, &info, sizeof info); // validated above
+            regs[14] = 1;
+        }
+    } else if (rax == SYS_KILL) {
+        // Unprivileged on purpose -- see SYS_KILL in abi/syscall_abi.h.
+        // A process killing ITSELF is legal and behaves like exiting.
+        int killed = scheduler_kill((int)rdi, (int)rsi);
+        if (killed) {
+            klog_printf("syscall: kill(pid %d) by pid %d\n",
+                        (int)rdi, scheduler_current_pid());
+        }
+        regs[14] = (uint64_t)killed;
     } else if (rax == SYS_SET_COLOR) {
         if (rdi > VGA_WHITE || rsi > VGA_WHITE) {
             regs[14] = (uint64_t)-1;

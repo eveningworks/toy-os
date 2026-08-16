@@ -167,6 +167,16 @@ int sys_getrandom(void *buf, unsigned long n) {
     return (int)syscall2(SYS_GETRANDOM, (uint64_t)(uintptr_t)buf, (uint64_t)n);
 }
 
+int sys_proc_info(int index, struct proc_info *out) {
+    return (int)syscall2(SYS_PROC_INFO, (uint64_t)(int64_t)index,
+                          (uint64_t)(uintptr_t)out);
+}
+
+int sys_kill(int pid, int exit_code) {
+    return (int)syscall2(SYS_KILL, (uint64_t)(int64_t)pid,
+                          (uint64_t)(int64_t)exit_code);
+}
+
 int sys_set_color(int fg, int bg) {
     return (int)syscall2(SYS_SET_COLOR, (uint64_t)(int64_t)fg, (uint64_t)(int64_t)bg);
 }

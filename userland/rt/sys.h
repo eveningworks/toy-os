@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "syscall_abi.h"
+#include "proc_info.h" // struct proc_info -- sys_proc_info() below
 #include "pci.h"     // struct pci_device, for sys_pci_info()
 #include "cpuinfo.h" // struct cpu_info, for sys_cpu_info()
 
@@ -121,6 +122,21 @@ int sys_cpu_info(struct cpu_info *out);
 // without RDSEED/RDRAND they come from timing jitter, which is weak
 // under emulation. See kernel/include/api/krandom.h.
 int sys_getrandom(void *buf, unsigned long n);
+
+// Reports on process-table SLOT `index` (0 .. SYS_PROC_MAX-1), not on a
+// pid -- so a caller can walk the table without knowing which pids
+// exist. An empty slot is a SUCCESSFUL call reporting pid 0: skip it,
+// do not stop. Returns 1 on success, 0 for a bad index or pointer.
+int sys_proc_info(int index, struct proc_info *out);
+
+// Terminates `pid` immediately, reporting `exit_code`. Returns 1 if it
+// was killed, 0 if there is no such process.
+//
+// The FORCE path, and unprivileged: any process may kill any other (see
+// abi/syscall_abi.h, which explains why there is no permission check
+// and what would have to change for there to be one). The polite path
+// is the window close handshake, which an app may refuse.
+int sys_kill(int pid, int exit_code);
 
 // Sets the console colours this process writes in. Both are
 // `enum vga_color` values; out-of-range is refused, not clamped.

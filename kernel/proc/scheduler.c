@@ -105,6 +105,7 @@
 #include "klog.h"
 #include "strace_internal.h"
 #include "uaddr.h"
+#include "string.h" // k_strlcpy -- proc_name_from_path()
 #include <stddef.h>
 
 // Defined in idt.c; isr.asm's isr_common epilogue reloads rsp from this
@@ -142,6 +143,25 @@ extern uint64_t g_next_kernel_rsp;
 #define TF_RSP     20
 #define TF_SS      21
 
+// "/bin/wm/demos/uidemo" -> "uidemo". A task manager column is a few
+// characters wide, so the last component is the useful part and the
+// path is not kept at all (see abi/proc_info.h).
+static void proc_name_from_path(char *dst, int cap, const char *path) {
+    if (cap <= 0) return;
+    dst[0] = '\0';
+    if (!path) return;
+
+    const char *base = path;
+    for (const char *p = path; *p; p++) {
+        if (*p == '/') base = p + 1;
+    }
+    // A path ending in '/' leaves nothing; keep the whole thing rather
+    // than reporting an empty name, which would read as a kernel bug.
+    if (!*base) base = path;
+    k_strlcpy(dst, base, (size_t)cap);
+}
+
+
 // SCHED_ZOMBIE (Milestone 1 phase 4b, docs/roadmap.md): a process that
 // has exited but hasn't been scheduler_poll()'d yet. Previously
 // scheduler_on_exit() freed a slot straight to SCHED_UNUSED and
@@ -173,6 +193,24 @@ struct sched_process {
     // Lives here rather than in the fd table because fd 1 has always
     // been a hardcoded console in SYS_WRITE -- see scheduler.h.
     int stdout_pipe;
+
+    // --- what a task manager needs to show (see api/proc_info.h) ------
+    //
+    // None of this existed: the table held state, page tables, a kernel
+    // stack and FPU state, so "which process is this and what is it
+    // costing" had no answer anywhere in the kernel.
+    //
+    // The program's name, from the spawn path's last component. Stored
+    // rather than derived because the path is the caller's buffer and
+    // does not outlive the call.
+    char name[PROC_NAME_MAX];
+
+    // Timer ticks this process has been the RUNNING one for. Cumulative
+    // and monotonic; a percentage is the DIFFERENCE between two reads
+    // divided by the ticks elapsed between them, which is the consumer's
+    // job -- storing a percentage here would bake in a sampling interval
+    // the kernel has no business choosing.
+    uint64_t cpu_ticks;
     // This process's x87/SSE registers while it isn't the one running.
     // 16-byte aligned because FXSAVE/FXRSTOR #GP otherwise -- see fpu.h,
     // including why only ring-3 processes need one of these at all.
@@ -426,10 +464,52 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_pipe) {
     fpu_init_state(procs[slot].fpu);
     procs[slot].wait_reason = 0;
     procs[slot].stdout_pipe = stdout_pipe;
+    // Reset, not inherited: slots are reused, and a reaped process's
+    // name and CPU time showing up on its successor would be a
+    // reporting bug that looks like a scheduling one.
+    proc_name_from_path(procs[slot].name, sizeof procs[slot].name, path);
+    procs[slot].cpu_ticks = 0;
     procs[slot].state      = SCHED_READY;
     alive_count++;
     return slot;
 }
+
+int scheduler_proc_info(int index, struct proc_info *out) {
+    if (!out || index < 0 || index >= MAX_PROCS) return 0;
+
+    struct sched_process *p = &procs[index];
+
+    out->pid = 0;
+    out->state = PROC_STATE_UNUSED;
+    out->cpu_ticks = 0;
+    out->mem_bytes = 0;
+    out->exit_code = 0;
+    out->reserved = 0;
+    out->name[0] = '\0';
+
+    if (p->state == SCHED_UNUSED) return 1; // a real answer: slot empty
+
+    // pid is slot + 1 throughout this file -- 0 is "no process".
+    out->pid = index + 1;
+    out->cpu_ticks = p->cpu_ticks;
+    out->exit_code = p->exit_code;
+    k_strlcpy(out->name, p->name, sizeof out->name);
+
+    // A zombie's address space is already gone, so asking for its memory
+    // would report whatever now lives at that PML4 address. Report 0.
+    if (p->state != SCHED_ZOMBIE) out->mem_bytes = vmm_user_bytes(p->pml4_phys);
+
+    switch (p->state) {
+        case SCHED_READY:   out->state = (index == current_index)
+                                          ? PROC_STATE_RUNNING : PROC_STATE_READY; break;
+        case SCHED_BLOCKED: out->state = PROC_STATE_BLOCKED; break;
+        case SCHED_ZOMBIE:  out->state = PROC_STATE_ZOMBIE;  break;
+        default:            out->state = PROC_STATE_UNUSED;  break;
+    }
+    return 1;
+}
+
+int scheduler_max_procs(void) { return MAX_PROCS; }
 
 void scheduler_tick(uint64_t *regs) {
     if (!scheduler_armed) return;
@@ -464,6 +544,11 @@ void scheduler_tick(uint64_t *regs) {
     }
 
     if (current_index >= 0) {
+        // This process was the one running for the tick that just
+        // fired. Counted here rather than at switch_to() time because
+        // this is the only place that knows a whole tick elapsed under
+        // it -- see abi/proc_info.h on why the total, not a percentage.
+        procs[current_index].cpu_ticks++;
         procs[current_index].kernel_rsp = (uint64_t)regs;
         // Paired with switch_to()'s FXRSTOR. Saved on the way out
         // whether or not the process has touched FP: "has it?" is

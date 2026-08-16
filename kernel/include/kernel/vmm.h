@@ -78,6 +78,19 @@ void vmm_destroy_address_space(uint64_t pml4_phys);
 // this is the calling process's own address space, which is exactly
 // what vmm_validate_user_range() needs to check a user-supplied pointer
 // against.
+// How many bytes of USER memory are mapped into this address space.
+//
+// Counted as pages are mapped and unmapped rather than by walking the
+// tables, so reading it is free -- Task Manager asks once per process
+// per refresh. Counts only what vmm_map_user_page*() placed: the page
+// TABLES themselves are not included, since they are the kernel's
+// bookkeeping rather than the process's memory.
+//
+// A remap of an already-mapped address (a window resize does this)
+// replaces a frame and does not double count. 0 for an address space
+// that has mapped nothing, and for one that no longer exists.
+uint64_t vmm_user_bytes(uint64_t pml4_phys);
+
 uint64_t vmm_current_pml4(void);
 
 // Checks that every byte in [vaddr, vaddr+len) is mapped present AND
