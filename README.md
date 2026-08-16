@@ -3,7 +3,7 @@
 <p align="center">
   A small x86-64 operating system, written from scratch in C and assembly.<br>
   Boots via GRUB into a 64-bit kernel with a shell, a window manager, and a
-  disk-backed filesystem.
+  journaling disk-backed filesystem.
 </p>
 
 <p align="center">
@@ -12,6 +12,7 @@
   </a>
   <img alt="Language" src="https://img.shields.io/badge/language-C%20%2B%20NASM-blue">
   <img alt="Target" src="https://img.shields.io/badge/target-x86__64-lightgrey">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.3.0--dev-orange">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-green">
 </p>
 
@@ -25,107 +26,86 @@
 ## Contents
 
 - [What this is](#what-this-is)
+- [Project status](#project-status)
 - [Quick start](#quick-start)
-  - [Install the dependencies](#install-the-dependencies)
-  - [Build and run](#build-and-run)
-  - [Troubleshooting](#troubleshooting)
-- [Using it](#using-it)
+- [Highlights](#highlights)
+- [Architecture](#architecture)
 - [Development](#development)
-- [Features](#features)
-- [Project layout](#project-layout)
 - [Documentation](#documentation)
+- [Releases](#releases)
 - [License](#license)
 
 ## What this is
 
 A hobby OS built one subsystem at a time, with the reasoning for each
-decision written down as it happened. It boots on real hardware and
-under QEMU, and it is not a teaching toy that stops at "hello world from
-the kernel":
+decision written down as it happened. It boots on real hardware and under
+QEMU, and it does not stop at "hello world from the kernel":
 
-- **Real memory management** -- a physical frame allocator, per-process
-  page tables, a kernel heap, NX/W^X enforcement, stack canaries and
-  kernel ASLR.
-- **Real processes** -- an ELF64 loader, ring-3 user mode, syscalls, a
-  preemptive round-robin scheduler, and hardware floating point for
-  ring-3 code with per-process FPU state across context switches.
-- **Two real filesystems** -- TFS3 (the default: block groups, real
-  inodes, hardlinks, journal transactions, superblock backups) and
-  TFS2 (the original, kept as a second backend), both journaled and
-  disk-backed with an `fsck` and files that survive a power cut. The
-  VFS picks by superblock probe, and `fsformat` switches live.
-- **A real GUI** -- a window manager with movable/resizable windows, a
-  taskbar, a Start menu, a draggable desktop, and five apps including a
-  terminal emulator that runs the actual shell. Ring-3 apps get their
-  own windows over **TWP**, the Toy Window Protocol, served by **TWS**
+- **Real memory management** — a physical frame allocator, per-process
+  page tables, a kernel heap with optional red-zones, NX/W^X enforcement
+  on both the kernel and userspace, SMEP/SMAP, stack canaries, and kernel
+  ASLR.
+- **Real processes** — an ELF64 loader, ring-3 user mode, syscalls, a
+  preemptive round-robin scheduler, pipes and `spawn`/`waitpid`, and
+  per-process FPU state across context switches.
+- **Two real filesystems** — TFS3 (the default: block groups, real
+  inodes, hardlinks, journal transactions, superblock backups) and TFS2
+  (the original, kept as a second backend). Both journal metadata, so
+  files survive a power cut, and both come with an `fsck`. The VFS picks
+  by superblock probe; `fsformat` switches live.
+- **A real GUI** — a window manager with movable, resizable windows, a
+  taskbar, a Start menu built from `.desktop` files, and a desktop of
+  draggable icons. Most apps are ordinary **ring-3 processes** that own
+  their windows over **TWP**, the Toy Window Protocol, served by **TWS**
   and programmed against with **Toykit**.
-- **Its own test suite** -- `make test` boots the OS headless, runs
+- **Its own test suite** — `make test` boots the OS headless, runs
   in-kernel tests including deliberate fault injection, and exits
-  non-zero on failure.
+  non-zero on failure. A separate GUI suite drives the desktop over a
+  serial debug channel and asserts on pixels.
 
 No cross-compiler is needed: host and target are both x86-64, so the
 system GCC works with `-ffreestanding` and kernel-appropriate flags.
 
+## Project status
+
+**Version 0.3.0-dev.** A hobby project under active development, not
+production software. What that means concretely:
+
+**Works today** — booting on real hardware and QEMU, the shell and its
+line editor, both filesystems with `fsck` and live reformatting, the
+window manager and its apps, ring-3 processes with pipes and job
+control, and the full test suite (183 in-kernel tests, 8 ring-3
+diagnostics, 192 GUI checks across 14 tools).
+
+**In flight** — [Milestone 41](docs/wm-ring3-design.md) is moving the
+window manager itself out of the kernel and into ring 3, in stages.
+Stage 0 is done: the GUI apps are now ring-3 processes, and `apps/ui/`
+is deliberately *shrinking* as its widgets retire in favour of
+`userland/ui/`. The WM's own event loop is still kernel-space.
+
+**Known gaps** — there is no USB stack ([Milestone
+32](docs/roadmap.md)), so input on real hardware currently depends on
+the firmware's BIOS legacy PS/2 emulation. No networking, no SMP, no
+`malloc`/`FILE`/`printf` in userland. `docs/roadmap.md` tracks all of it,
+including a candid known-issues list.
+
 ## Quick start
 
-### Install the dependencies
+### Dependencies
 
-You need a C toolchain, NASM, GRUB's rescue-image tools, and QEMU.
+A C toolchain, NASM, GRUB's rescue-image tools, and QEMU.
 
-<table>
-<tr><th>Distribution</th><th>Command</th></tr>
-<tr><td><b>Debian / Ubuntu / Mint / Pop!_OS</b></td><td>
+| Distribution | Command |
+|---|---|
+| **Debian / Ubuntu / Mint** | `sudo apt install build-essential nasm grub-pc-bin grub-common xorriso mtools qemu-system-x86 python3` |
+| **Arch / CachyOS / Manjaro** | `sudo pacman -S --needed base-devel nasm grub xorriso mtools qemu-full python` |
+| **Fedora / RHEL / Rocky** | `sudo dnf install gcc make binutils nasm grub2-tools grub2-pc-modules xorriso mtools qemu-system-x86 python3` |
+| **openSUSE** | `sudo zypper install gcc make binutils nasm grub2 grub2-i386-pc xorriso mtools qemu-x86 python3` |
+| **Alpine** | `doas apk add build-base nasm grub grub-bios xorriso mtools qemu-system-x86_64 python3` |
+| **Void** | `sudo xbps-install -S base-devel nasm grub xorriso mtools qemu python3` |
 
-```bash
-sudo apt install build-essential nasm grub-pc-bin grub-common \
-                 xorriso mtools qemu-system-x86 python3
-```
-
-</td></tr>
-<tr><td><b>Arch / CachyOS / Manjaro / EndeavourOS</b></td><td>
-
-```bash
-sudo pacman -S --needed base-devel nasm grub xorriso mtools \
-                        qemu-full python
-```
-
-</td></tr>
-<tr><td><b>Fedora / RHEL / Rocky / Alma</b></td><td>
-
-```bash
-sudo dnf install gcc make binutils nasm grub2-tools grub2-pc-modules \
-                 xorriso mtools qemu-system-x86 python3
-```
-
-</td></tr>
-<tr><td><b>openSUSE</b></td><td>
-
-```bash
-sudo zypper install gcc make binutils nasm grub2 grub2-i386-pc \
-                    xorriso mtools qemu-x86 python3
-```
-
-</td></tr>
-<tr><td><b>Alpine</b></td><td>
-
-```bash
-doas apk add build-base nasm grub grub-bios xorriso mtools \
-             qemu-system-x86_64 python3
-```
-
-</td></tr>
-<tr><td><b>Void</b></td><td>
-
-```bash
-sudo xbps-install -S base-devel nasm grub xorriso mtools \
-                     qemu python3
-```
-
-</td></tr>
-</table>
-
-**What each package is for**, if your distribution names them
-differently:
+<details>
+<summary>What each package is for, if your distribution names them differently</summary>
 
 | Need | Why |
 |---|---|
@@ -135,12 +115,10 @@ differently:
 | `qemu-system-x86_64` | Runs it. |
 | `python3` | Build-time disk seeding and the test/dev tools. Pillow (`pip install pillow`) is needed only for screenshots. |
 
-> **Verified firsthand on Arch/CachyOS**, and the Debian/Ubuntu list is
-> what this project's CI installs on every push, so both are known-good.
-> The Fedora, openSUSE, Alpine and Void lines are package-name
-> translations of the same requirements -- if one is wrong on your
-> system, the table above says what to look for, and a correction is
-> welcome.
+Verified firsthand on Arch/CachyOS, and the Debian/Ubuntu list is what CI
+installs on every push. The rest are package-name translations of the
+same requirements — corrections welcome.
+</details>
 
 ### Build and run
 
@@ -150,155 +128,165 @@ cd toy-os
 make run
 ```
 
-That builds the kernel, seeds a disk image, produces `toy-os.iso`, and
-boots it in QEMU. Type `help` at the `/>` prompt; type `gui` for the
-window manager and press the Start menu's *Exit to shell* to come back.
-
-The kernel prints its init sequence to the screen while booting, and the
-console keeps scrollback -- **PageUp/PageDown** scrolls through anything
-that went past, including the boot messages, from any prompt.
-
-Other targets:
+That builds the kernel, seeds a disk image, produces `toy-os.iso` and
+boots it in QEMU. Type `help` at the `/>` prompt, or `gui` for the window
+manager (the Start menu's *Exit to shell* comes back). **PageUp/PageDown**
+scrolls the console's history, including the boot log.
 
 ```bash
-make            # build kernel.bin + the userland ELF binaries
-make iso        # + toy-os.iso (bootable GRUB image), seeding disk.img
+make            # kernel.bin + the userland ELF binaries
+make iso        # + toy-os.iso, seeding disk.img
 make run        # build + boot in QEMU with a graphical window
-make run-audio  # same, with a PulseAudio backend so `beep` is audible
 make run-kvm    # same, KVM-accelerated instead of emulated (needs /dev/kvm)
-make run-menu   # same, but with the GRUB boot menu visible (5s timeout)
+make run-menu   # same, with the GRUB boot menu visible
 make run-nographic  # serial console only -- use this over SSH
-make debug      # boot frozen (-s -S) for GDB, see below
+make live-iso   # a Live CD that boots with no disk attached at all
+make demo-iso   # boots straight into a scripted tour
+make debug      # boot frozen (-s -S) for GDB
 make test       # boot headless, run the in-kernel test suite
-make verify     # full check: clean build + iso + boot test + test suite
-make clean      # remove build artifacts (leaves disk.img alone)
+make verify     # full gate: clean build + iso + boot test + test suite
 ```
 
-### Troubleshooting
+<details>
+<summary>Troubleshooting</summary>
 
 | Symptom | Cause and fix |
 |---|---|
-| `make: grub-mkrescue not found` | Install GRUB's rescue tools (`grub-common` on Debian, `grub2-tools` on Fedora, `grub2` on openSUSE). The build looks for both `grub-mkrescue` and `grub2-mkrescue`, so the Fedora/openSUSE naming is handled for you. |
-| `grub-mkrescue` fails with *"cannot find `xorriso`"* or an EFI/mtools error | Install `xorriso` **and** `mtools`; `grub-mkrescue` needs both even for a BIOS-only image. |
-| ISO builds but QEMU shows *"no bootable device"* | The BIOS modules package is missing -- `grub-pc-bin` (Debian), `grub2-pc-modules` (Fedora), `grub2-i386-pc` (openSUSE), `grub-bios` (Alpine). |
-| No window appears (e.g. over SSH) | `make run-nographic` -- serial console only, no display needed. |
+| `grub-mkrescue not found` | Install GRUB's rescue tools (`grub-common` on Debian, `grub2-tools` on Fedora). The build looks for both `grub-mkrescue` and `grub2-mkrescue`. |
+| `grub-mkrescue` fails on *"cannot find `xorriso`"* or mtools | Install `xorriso` **and** `mtools`; it needs both even for a BIOS-only image. |
+| ISO builds but QEMU says *"no bootable device"* | The BIOS modules package is missing — `grub-pc-bin` (Debian), `grub2-pc-modules` (Fedora), `grub2-i386-pc` (openSUSE), `grub-bios` (Alpine). |
+| No window appears (e.g. over SSH) | `make run-nographic`. |
 | The mouse doesn't move in QEMU | Don't add `-device usb-tablet`/`usb-mouse`. This kernel's mouse driver is PS/2 only, and an explicit USB pointer device makes QEMU route motion there instead. |
-| Everything is very slow | `make run` emulates the CPU in software. `make run-kvm` runs it natively if you have `/dev/kvm` -- but note that only helps compute-bound code: disk I/O measures about 1.9x *slower* under KVM, because each port-I/O instruction becomes a VM exit. The build and tests don't need either. |
-| `disk.img` is 9 GB | It's a *sparse* file -- it costs only what's actually written. `make clean-disk` wipes it. |
+| Everything is very slow | `make run` emulates the CPU. `make run-kvm` runs it natively — but that only helps compute-bound code; disk I/O measures ~1.9× *slower* under KVM, because each port-I/O instruction becomes a VM exit. |
+| `disk.img` is 9 GB | It's a *sparse* file — it costs only what is actually written. `make clean-disk` wipes it. |
 
-For real breakpoint/single-step debugging, `make debug` boots frozen at
-CPU reset against QEMU's own GDB stub -- no kernel-side GDB code
-involved. In another terminal:
+For breakpoint debugging, `make debug` boots frozen against QEMU's own
+GDB stub — no kernel-side GDB code involved:
 
 ```bash
 gdb build/kernel.bin -ex "target remote localhost:1234"
 ```
 
-`CFLAGS`/`USERLAND_CFLAGS` both carry `-g`, so the kernel and every
-userland ELF have real DWARF symbols (function names, source lines,
-locals). See `docs/decisions.md` for why there's no in-kernel serial GDB
-stub.
+Both `CFLAGS` and `USERLAND_CFLAGS` carry `-g`, so the kernel and every
+userland ELF have real DWARF symbols.
+</details>
 
-## Using it
+### Using it
 
-Grouped the same way `help` itself groups them (`help tests` for the
-developer/diagnostic set):
+Type `help` at the prompt. The full command reference lives in
+[docs/commands.md](docs/commands.md); [docs/boot-flags.md](docs/boot-flags.md)
+covers what you can pass on the GRUB command line.
 
-Executables run by name, with no prefix: typing `nx_test` searches
-`PATH` (set in `/etc/toyos.conf`, default `/bin;/usr/bin`, searched left
-to right with the first match winning) and runs what it finds. `run
-<name>` still works as the explicit form, going through the same
-resolver. `path` shows the search order. Shell builtins win over both,
-which is what keeps `ls` able to resolve a cwd-relative argument before
-handing `/bin/ls` an absolute path.
+## Highlights
 
-Tab completes commands, paths, and known argument sets (`run`, `color`,
-`debug`, `keyboard`, `timezone`, `fontsize`, `fsck`, `fsformat`,
-`cursor`, `help`) -- one Tab
-extends as far as the candidates agree, and lists them in columns if
-more than one remains, zsh-style. Works identically in the physical
-shell and the GUI Terminal.
+**Boot and hardware.** Multiboot2 via GRUB2, with the 32→64-bit long-mode
+transition done by hand (`kernel/arch/x86_64/boot.asm`). Linear RGB
+framebuffer with automatic fallback to 80×25 VGA text. PS/2 keyboard and
+mouse sharing the 8042 through one dispatcher, with keyboard layouts as
+*data files* generated from Linux's own XKB data rather than a
+compiled-in table. PIT, CMOS RTC, PC speaker, PCI enumeration, and
+MBR/GPT partition parsing.
 
-- **General:** `help`, `clear`, `about`, `beep`, `apps`, `run <app>`,
-  `gui`, `history` (persists across reboot via `/etc/history`),
-  `echo <text>`, `reboot`
-- **Files & filesystem:** `ls [-al] [dir]` (colored by default, `-l`
-  shows type/size/mtime, `-a` a no-op -- a real disk-hosted `/bin/ls`
-  binary, not a shell built-in, see `docs/decisions.md`), `cd [dir]`,
-  `pwd`, `mkdir <dir>`, `cat <f>`, `touch <f>`, `write <f> <text>`,
-  `append <f> <text>`, `rm <f>`, `stat <f>` (type, size, inode
-  number, created/modified), `mv <a> <b>` (rename or move a file or
-  directory; never overwrites -- remove the destination first),
-  `truncate <f> <n>` (set a file's size exactly; growing is sparse, so
-  it costs no blocks), `ln <file> <new>` (hardlink -- TFS3
-  only; on TFS2 it explains that the format has no link counts),
-  `edit <f>`/`nano <f>`
-  (full-screen nano/pico-style editor -- arrows/Home/End/Delete to
-  navigate and edit, F2 to save, F3 to exit; works from both the
-  physical shell and the GUI Terminal, see `apps/editor.c`). Paths may
-  be relative to the cwd or absolute.
-- **Command-line editing:** the shell and the GUI Terminal share one
-  readline-style line editor (`kernel/lib/klineedit.c`) -- arrows and
-  Home/End to move, Ctrl/Alt bindings following bash (`Ctrl-A`/`Ctrl-E`,
-  `Alt-B`/`Alt-F`, `Ctrl-K`/`Ctrl-U`/`Ctrl-W`, `Ctrl-Y` yank, `Ctrl-T`
-  transpose, `Alt-U`/`Alt-L`/`Alt-C` case, `Ctrl-_` undo, `Ctrl-R`
-  reverse history search, `Alt-.` last argument). `help` lists them all.
-- **System info:** `time`, `timezone [city]`, `uptime`, `random [n]`
-  (the entropy source and some values from it), `meminfo`,
-  `heap` (kernel heap stats, plus `heap debug on|off` to red-zone new
-  allocations and poison freed ones, and `heap check` to scan for a
-  use-after-free),
-  `df` (disk space: total/used/free, KB-scale -- also names the
-  active filesystem backend), `dmesg`, `lspci`,
-  `parttable`. CPU identification is `/bin/lscpu` (see below), not a
-  builtin.
-- **Appearance:** `color <name>`, `cursor <translucent|underline|beam|reverse>`
-  (the console's cursor style -- the default tints its cell so the
-  character underneath stays readable), `fontsize <8|10|12|14|16|18|20|24>`,
-  `keyboard <us|se>` (base + Shift + AltGr)
-- **Developer/diagnostic (`help tests`):** `strace <binary> [args]`
-  (Linux-style syscall tracing of a `/bin` binary -- one decoded line
-  per syscall, e.g. `open("notes.txt", O_WRITE|O_CREAT) = 3`, plus a
-  count when it exits; also captured in `dmesg`), `ring3test`,
-  `schedtest`, `fputest` (ring-3 hardware floating point: a value check,
-  then two processes racing with live XMM accumulators to prove the
-  context switch saves FP state -- see `docs/decisions.md` for why FP is
-  ring-3 only),
-  `stress <mb>` (real non-sparse write/read/verify pass over `<mb>`
-  megabytes with a live progress bar, exercising direct/single/double/
-  triple-indirect blocks with genuine data, verified on real hardware
-  at 400MB with no failures -- see `docs/roadmap.md` for the still-open
-  full-8GB-scale run), `dmatest [lba]` and `steptest <mb>` (read-only/
-  small-write-and-read proofs of the async-I/O work's non-blocking DMA
-  primitive and steppable write/read APIs respectively -- see
-  `docs/roadmap.md`'s async I/O item; Notepad's Save As.../Open... are
-  the real callers), `debug [<subsystem> on|off]` (per-subsystem
-  runtime debug-log switches -- `fs`/`wm`/`ata`, off by default, no
-  rebuild needed), `ktest [suite]` (run the in-kernel test suite --
-  see `make test`), `fsck [repair]` (filesystem consistency check:
-  walks every file's block tree and compares it against the free-block
-  bitmap; on TFS3 it also verifies inode checksums, link counts and
-  `.`/`..`, reclaims orphans, and -- on `repair` -- restores a
-  damaged primary superblock from its backups; read-only unless
-  `repair` is passed), `fsformat <tfs2|tfs3> confirm` (DESTROYS the
-  disk's contents and reformats with the named filesystem, then
-  remounts it live -- physical shell only)
+**Memory hardening.** NX and W^X from each ELF segment's real `p_flags`
+in userspace, and the kernel's own identity map is W^X too — `.text` is
+the only executable range and is read-only, with CR0.WP set so ring 0
+actually honours it. SMEP and SMAP wherever the CPU reports them, with
+kernel code reaching user memory only through copy helpers that go via
+the kernel's own map, so **EFLAGS.AC is never set anywhere** and there is
+no STAC/CLAC window. Guard pages below user stacks, randomised stack
+canaries, heap red-zones behind a runtime switch, and **kernel ASLR** —
+the kernel relocates itself to a random base at boot and patches ~7,400
+of its own absolute references.
 
-Plus roughly a dozen real disk-hosted test binaries under `/bin`, run
-via `run <name>` (e.g. `run write_test`, `run nx_test`,
-`run crash_test`) -- see `ls /bin` for the full list and
-`docs/decisions.md` for why these moved off dedicated shell commands.
+**Filesystems.** [TFS3](docs/tfs3-spec.md) is the default: block groups,
+128-byte checksummed inodes, hardlinks, atomic rename and truncation,
+32-slot journal transactions, ext-style superblock backups, ~590k files
+on a 9 GiB volume. [TFS2](docs/tfs2-spec.md) remains as a second backend
+with its format unchanged. Both scale individual files to gigabytes
+through direct and single/double/triple-indirect pointers, batch ATA
+flushes, TRIM freed blocks back to the host, and refuse to touch a disk
+whose superblock could not be read rather than destroying a possibly-good
+filesystem.
+
+**Graphics and GUI.** A real anti-aliased font (JetBrains Mono, baked to
+bitmaps at build time) in eight switchable sizes — and because the entire
+UI is font-*derived*, changing the size reflows everything rather than
+clipping it. Double-buffered rendering with damage-region clipping, and a
+compositor whose damage invariant is enforced by a verification mode that
+renders every frame twice and reports any pixel that changed without
+being declared.
+
+**Userland.** Every ring-3 program is just a `main()`: crt0 provides
+`_start` over the standard SysV stack layout, and libsys gives one typed
+wrapper per syscall. The shared kernel toolkit is compiled a second time
+under the C names, so a ring-3 `strlen` and the kernel's `k_strlen`
+cannot diverge. Adding a program is a `.c` file with no Makefile edit.
+Still deliberately not a libc — no `malloc`, `FILE`, `printf` or `errno`.
+
+## Architecture
+
+Directories are subsystems, not filing cabinets — where a file lives says
+what kind of thing it is.
+
+```
+kernel/
+  arch/x86_64/  everything x86-64 by nature: the Multiboot2 entry and
+                long-mode transition, interrupt stubs, the ring switch,
+                GDT/TSS, IDT, the 8259 PIC, page tables, self-relocation
+  core/         bring-up and whole-machine concerns: kernel_main,
+                multiboot parsing, timers, serial + the debug console
+  mm/           physical frames, per-process address spaces, kernel heap
+  proc/         ELF64 loader, syscalls, scheduler, the window server
+  fs/           TFS3 and TFS2 behind the probe-selecting VFS
+  lib/          services with no hardware: the shared toolkit (strings,
+                numbers, formatter, paths, line editor), JSON, klog,
+                /etc config, entropy, the RAM meter
+  drivers/      one piece of hardware each: console, framebuffer, font,
+                i8042 + keyboard/mouse, ATA, PCI, partitions, speaker,
+                and the display-driver registry
+  include/      headers split by audience, ENFORCED by include paths:
+                api/ (what apps may use), abi/ (the kernel<->userland
+                contract), kernel/ (internal, off apps/'s path)
+
+apps/           kernel-space programs: the shell and editor, and the
+                window manager (apps/wm/). apps/ui/ holds the widgets
+                the WM itself draws with -- deliberately shrinking as
+                Milestone 41 proceeds.
+
+userland/       ring-3 programs, split by ROLE:
+  rt/           crt0, libsys, linker script
+  ui/           Toykit -- the GUI toolkit clients program against
+  lib/          non-UI libraries: the tosh shell, C-name string/stdio
+  gui/          windowed apps      -> seeded to /bin
+  bin/          command-line tools -> seeded to /bin
+  tests/        single-mechanism diagnostics -> seeded to /tests
+
+seed/, data/    what gets mirrored onto disk.img at build time
+tools/          build, test and delivery tooling (see Development)
+docs/           design records, specs, and the decision log
+```
+
+Source discovery is recursive, so a new file — or a whole new directory —
+under `kernel/` or `apps/` is picked up with no Makefile edit. Header
+dependencies are tracked, and `tools/check_deps.py` proves per build
+directory that the tracking is actually live.
+
+`kernel_main()` does hardware bring-up and then calls `apps_start()`,
+which launches the shell. It never mentions the shell by name — the shell
+is simply the first entry in the app registry, and that seam is what
+keeps the kernel core ignorant of what apps exist.
 
 ## Development
 
 ```bash
-make verify     # the full gate: clean build + iso + boot test + ktest
-make test       # just the in-kernel test suite
+make verify                     # the full gate: clean build + iso + boot test + ktest
+bash tools/preflight.sh         # same, plus a git status summary (~25s)
+python3 tools/gui_regress.py    # every GUI test tool as one table (~1.5 min)
 ```
 
-Writing a test is a `KTEST()` block in a `*_test.c` file next to the
-code it exercises -- it registers itself through a linker section, so
-there's no registry to update and no Makefile edit:
+Writing a test is a `KTEST()` block in a `*_test.c` file next to the code
+it exercises. It registers itself through a linker section, so there is
+no registry to update and no Makefile edit:
 
 ```c
 KTEST("mm", "kzalloc returns zeroed memory") {
@@ -310,424 +298,60 @@ KTEST("mm", "kzalloc returns zeroed memory") {
 ```
 
 `kernel/include/kernel/fault_inject.h` can fail the next N disk writes,
-disk reads or `kmalloc` calls, which is how the error paths are tested.
+disk reads or `kmalloc` calls, which is how the error paths are tested at
+all.
 
-Useful tools in `tools/` (all documented in their own docstrings):
+Selected tools (each documented in its own docstring):
 
 | Tool | What it's for |
 |---|---|
 | `vm.py` | Start a headless VM and run shell commands against it, getting **text** back: `vm.py run "fsck"`. Usually a better check than a screenshot. |
-| `ktest_run.py` | Drives the in-kernel test suite over serial and turns it into an exit code. What `make test` and CI run. |
+| `ktest_run.py` | Drives the in-kernel suite over serial and turns it into an exit code. What `make test` and CI run. |
 | `boot_smoke_test.py` | Fast "does it still boot cleanly" check, no GUI. |
-| `qmp_test.py`, `gui_flow.py`, `shell_flow.py` | Drive the GUI over QEMU's QMP socket for rendering/input work, with the mouse/keyboard gotchas already handled. |
-| `tfs3_writer.py`, `tfs2_writer.py` | Read, write, delete, inspect and corrupt-for-testing files inside a TFS3 / TFS2 `disk.img` from the host, without booting. Each refuses the other's images. |
-| `seed_disk.py` | Format-aware seeding front-end the Makefile uses: probes the image's magic, delegates to the matching writer, formats a blank image with the default (TFS3). |
-| `fs_switch_test.py` | Boots a disk copy and proves probe, wipefs, live `fsformat` switching both ways, and reboot persistence -- run after touching `kernel/fs/`. |
-| `usertest_run.py`, `gui_regress.py` | The self-checking ring-3 `/tests` diagnostics, and every GUI test tool, each as one pass/fail table. |
+| `gui_debug.py` | Asks the WM what it is doing — window rects, z-order, hit-testing, damage — instead of measuring a screenshot. |
+| `gui_regress.py` | Every GUI test tool, each on its own fresh disk image and VM, as one pass/fail table. |
+| `damage_sweep.py`, `damage_hunt.py` | Walk the interactions that break the compositor's damage invariant, over one seed or many. |
+| `pixel_probe.py` | Reads exact pixel values out of screenshots and tabulates them across several, so a rendering change is a number rather than an impression. |
+| `qmp_test.py`, `gui_flow.py`, `shell_flow.py` | Drive the GUI over QEMU's QMP socket, with the mouse/keyboard gotchas already handled. |
+| `tfs3_writer.py`, `tfs2_writer.py` | Read, write, inspect and corrupt-for-testing files inside a `disk.img` from the host, without booting. Each refuses the other's images. |
+| `fs_switch_test.py` | Proves probe, wipefs, live `fsformat` both ways, and reboot persistence. |
 | `faulttest_run.py` | The `/tests` binaries that fault ON PURPOSE, asserted against the kernel's own crash report rather than an exit code they don't have. |
-| `screenshot_diff.py` | Pixel-diff two screenshots with a pass/fail threshold. |
 
 `CLAUDE.md` documents the conventions and environment quirks in depth.
-
-## Features
-
-- Boots via GRUB2 as a Multiboot2 kernel, transitions 32-bit -> 64-bit
-  long mode itself (`kernel/arch/x86_64/boot.asm`)
-- Linear RGB framebuffer (1280x720 default), falling back to 80x25 VGA
-  text mode automatically if none is available -- one console (`vga.c`)
-  renders through whichever backend is active, with scrollback
-  (PageUp/PageDown) over the last few hundred lines. The kernel's init
-  sequence is printed to it during boot and stays readable afterwards
-- Serial (COM1) debug logging (`-serial stdio` in QEMU) plus a serial
-  *console* (`kernel/core/debug_console.c`) usable while the screen is
-  showing the GUI or a ring-3 process is running: `meminfo`/`lsfs`/
-  `lsdev` for inspection, `ktest` to run the test suite, and `sh
-  <command>` to run any shell command with its output coming back over
-  the wire -- which is what makes headless verification a text
-  assertion rather than a screenshot (`tools/vm.py`); IDT +
-  remapped 8259 PIC + exception handler (prints and halts instead of
-  triple-faulting)
-- PS/2 keyboard and mouse (IRQ12), sharing the 8042 controller through
-  one dispatcher (`i8042.c`) so the two IRQs don't steal each other's
-  bytes. Keyboard layouts are *data files* (`/etc/kbs/<name>`, `us` and
-  `se` shipped) generated from Linux's own XKB data by
-  `tools/gen_kbs.py`, not a compiled-in table -- base + Shift + AltGr
-  (e.g. `@ # $ { } [ ] \ |` on `se`), arrows, and command history that
-  persists across reboot via `/etc/history`
-- PIT timer (100 Hz), CMOS RTC (`time`, the GUI clock, selectable
-  timezone via `timezone`), and the PC speaker (`beep`)
-- PCI bus enumeration (`lspci`, also a real `/bin/lspci` binary) and
-  MBR/GPT partition-table parsing (`parttable`)
-- CPU identification (`/bin/lscpu`): vendor, brand string,
-  family/model/stepping, calibrated MHz, the cache hierarchy, and every
-  CPUID feature flag -- each marked **supported** and, separately,
-  whether this kernel has actually **enabled** it. That second column is
-  the part Linux's own `lscpu` doesn't have, and it's a real audit of
-  what the OS switches on: SSE2 is supported by every x86-64 chip but
-  needs `CR4.OSFXSR`, and `CPUID` can't tell you whether that happened.
-  Also shown in the Control Panel's System Info applet.
-- Baseline memory hardening (Milestone 2): NX enforced for userspace
-  pages with W^X from each ELF segment's real `p_flags`, and
-  `-fstack-protector-strong` canaries on both the kernel and userland
-  -- the kernel's guard is RANDOM per boot, seeded from the entropy
-  source below.
-  The kernel's own identity map is W^X too -- `.text` is the only
-  executable range in it and is read-only, everything else is NX, and
-  CR0.WP is set so ring 0 actually honours that (see
-  `docs/decisions.md`). `run nx_test` / `run stack_smash_test` prove
-  the userspace half for real, not by assertion; the `paging` KTESTs
-  and a deliberate `PANIC: Page fault` prove the kernel half.
-- **SMEP and SMAP** are set wherever the CPU reports them, so ring 0
-  cannot execute, read or write a user page at all. Kernel code reaches
-  user memory only through `vmm.h`'s copy helpers, which go via the
-  kernel's own identity map -- so **EFLAGS.AC is never set anywhere in
-  this kernel** and there is no STAC/CLAC window in which the
-  protection is off. QEMU's default `qemu64` model supports neither
-  bit; `--cpu max` is what exercises them.
-- **A guard page below each user stack.** The region is unmapped, so an
-  overflow already faulted -- what is new is that `SYS_SBRK` is bounded
-  against it (it previously had no ceiling and could map the heap
-  straight over the live stack, silently) and that a fault there is
-  reported as `Stack overflow` with the stack's range rather than as an
-  anonymous page fault. `run stackovf_test`, and
-  `tools/faulttest_run.py` asserts the report.
-- **Kernel ASLR.** The kernel is not running where it was linked: at
-  boot it picks a random 2 MiB-aligned base, copies itself there,
-  patches its own ~7,400 absolute references from a table the build
-  generates (`tools/genrelocs.py`, Linux's `CONFIG_RELOCATABLE` shape --
-  a relocs tool over `ld --emit-relocs`, not a PIE link) and repoints
-  CR3 at the relocated page tables. `dmesg` reports the base it chose;
-  `nokaslr` on the GRUB command line disables it. About 6.8 bits of
-  entropy on a 256 MB guest, bounded by RAM rather than by the random
-  source -- and it says whether the base came from hardware entropy or
-  from the weak TSC fallback rather than letting you assume.
-- **Heap red-zones and use-after-free poisoning**, behind a runtime
-  switch (`heap debug on`) so they are reachable in a booted system
-  rather than needing a special build. A canary each side of every
-  allocation, `0xDE` over anything freed, and `heap check` to sweep for
-  a write through a freed pointer. A detected violation is logged and
-  the block quarantined rather than handed back to the free list.
-- An entropy source (`kernel/lib/krandom.c`): RDSEED, then RDRAND, then
-  a TSC-jitter harvest when the CPU has neither, mixed through
-  splitmix64's finalizer. Deliberately NOT a CSPRNG, and it says so --
-  `krandom_quality()` reports which source it actually got, since on
-  the default `qemu64` model (no RDSEED/RDRAND) the jitter fallback is
-  weak under emulation. Reachable from ring 3 as `SYS_GETRANDOM` and
-  from the shell as `random`.
-- Two persistent, disk-backed filesystems behind a probe-selecting
-  VFS (`kernel/fs/vfs.c` -- one ACTIVE backend at a time, chosen by
-  superblock magic; a blank disk gets the default). **TFS3**
-  (`kernel/fs/tfs3.c`, the default for fresh images -- see
-  `docs/tfs3-spec.md`): block groups, 128-byte checksummed inodes,
-  hardlinks (`ln`), `.`/`..`, atomic rename/move (`mv`) and
-  truncation, 32-slot journal transactions,
-  ext-style superblock backups, ~590k files on a 9 GiB volume with
-  255-byte names, ~28 MB/s write / ~27 MB/s read. **TFS2**
-  (`kernel/fs/tfs.c`, the original, format unchanged -- see
-  `docs/tfs2-spec.md`): 256-record table, single-slot journal,
-  ~25 MB/s write / ~30 MB/s read. Both journal metadata (files
-  survive a full power-off, not just `reboot`), scale individual
-  files to gigabytes via direct + single/double/triple indirect
-  pointers, batch ATA flushes and coalesce contiguous blocks into
-  multi-sector commands, TRIM freed blocks back to the host, size
-  themselves to the drive's real capacity, and refuse to touch a
-  disk whose superblock couldn't be read -- degrading to RAM-only
-  instead of destroying a possibly-good filesystem. Backends declare
-  capabilities (`FS_CAP_*`) the way display drivers do, `stat`
-  reports real (TFS3) or synthetic (TFS2) inode numbers with
-  epoch-second timestamps, and `fsformat <fs> confirm` switches
-  filesystems live. `about`/`df` show which backend the
-  current boot mounted. See `docs/tfs3-spec.md` (and
-  `docs/tfs2-spec.md` for the legacy format), plus
-  `docs/decisions.md` for the durability tradeoffs.
-- A real anti-aliased font (JetBrains Mono, baked to bitmaps at build
-  time -- `tools/genttf.py`), 8 switchable point sizes (`fontsize <n>`),
-  plus 6 Nordic letters (Å/Ä/Ö/å/ä/ö) alongside ASCII. See
-  `docs/decisions.md` for why Latin-1 over UTF-8.
-- A basic GUI mode: a small window manager (movable/resizable windows,
-  taskbar with a notification area/tray (`apps/wm/wm_tray.c`, the clock
-  is its first item), Start menu, a desktop background with a draggable
-  icon grid (positions persist across reboot), and a
-  reusable right-click context menu wired into the desktop, window
-  chrome, taskbar, and Start menu) with five apps -- Notepad, About,
-  Calculator, Terminal (runs the real shell inside a window; `ls` and an
-  allowlist of `/bin` binaries via `run` execute asynchronously through
-  the scheduler instead of freezing the window, see `docs/roadmap.md`'s
-  async I/O item), and Task
-  Manager (lists windows, shows memory usage). The Start menu's "Exit
-  to shell" and "Shutdown" both ask for confirmation first
-  (`apps/wm/confirm_dialog.c`, a reusable screen-absolute Yes/No
-  modal); Shutdown itself uses the QEMU/Bochs ACPI I/O-port poweroff
-  trick (`kernel/core/power.c`), with a halt-and-message fallback. A
-  reusable Open/Save file-picker dialog (`apps/wm/file_picker.c`, full
-  directory navigation) backs Notepad's Open.../Save As... toolbar
-  buttons and is meant for any future app that needs one. See
-  `apps/README.md` for how to add more apps, and the app registry
-  (`apps/apps.c`) that makes that a one-line addition.
-- A kernel heap allocator (`kmalloc`/`kzalloc`/`kfree`) and a small JSON
-  library (`kernel/lib/json.c`, parse/serialize/read-file/write-file --
-  coexists with the flat `etc_config.h` name=value format, see
-  `docs/decisions.md`).
-- The beginnings of real process isolation and a preemptive scheduler
-  (up to four ring-3 processes genuinely concurrent) -- see
-  [docs/process-isolation.md](docs/process-isolation.md) for the full
-  build-up, bugs included.
-- Syscalls beyond `write`/`exit`: `SYS_READ_KEY`/`SYS_SBRK` (a per-process
-  heap), a real per-window protocol (`SYS_WIN_CREATE`/`SYS_WIN_PRESENT`,
-  still modal -- see `docs/roadmap.md`), and file I/O
-  (`SYS_OPEN`/`SYS_READ`/`SYS_CLOSE`, `SYS_WRITE` extended to take an
-  fd). See the `echo_test`/`win_test`/`file_test` `/bin` binaries
-  (`run echo_test`, etc).
-- A single version string (`VERSION` at the repo root, semver + a
-  `-dev` suffix during development -- see `docs/decisions.md`) shown by
-  both `about` and the GUI About window.
-
-## Project layout
-
-toy-os is split by concern, from the hardware up. Directories are
-subsystems, not filing cabinets -- where a file lives says what kind of
-thing it is:
-
-```
-kernel/arch/x86_64/ -- everything that is x86-64 by nature and would be
-                     rewritten wholesale on another architecture: the
-                     Multiboot2 entry and 32->64-bit transition
-                     (boot.asm), interrupt stubs (isr.asm), the ring
-                     switch (context_switch.asm), GDT/TSS (gdt.c),
-                     IDT (idt.c), the 8259 PIC (pic.c), IRQ dispatch
-                     (irq.c) and kernel-space page tables (paging.c).
-                     See docs/arch-portability.md.
-kernel/core/     -- bring-up and the pieces that own the machine as a
-                     whole: kernel_main (kernel.c), multiboot parsing,
-                     the PIT/RTC timer, serial plus the read-only serial
-                     debug console (debug_console.c), and power
-                     (power.c). Hardware bring-up only; knows nothing
-                     about apps.
-kernel/mm/       -- memory: the physical frame allocator (pmm.c),
-                     per-process address spaces incl. user-pointer
-                     validation (vmm.c), and the kernel heap (heap.c).
-kernel/proc/     -- processes: the ELF64 loader (elf.c/elf_run.c), the
-                     syscall entry point (syscall.c), the process
-                     run/return mechanism (process.c), the preemptive
-                     scheduler (scheduler.c), and the one remaining
-                     in-kernel ring-3 demo (ring3_test.c -- the rest
-                     became real /bin ELF binaries, see userland/).
-kernel/fs/       -- the filesystems: TFS3 (tfs3.c, the default) and
-                     TFS2 (tfs.c) behind the probe-selecting VFS
-                     (vfs.c), plus their KTESTs (fs_test.c). A
-                     filesystem isn't a device driver, so it doesn't
-                     live in drivers/ -- the block device it sits on
-                     (ata.c) does.
-kernel/lib/      -- cross-cutting services with no hardware of their
-                     own. The shared toolkit lives here -- strings
-                     (string.c), numbers<->strings (knum.c), a bounded
-                     formatter (kfmt.c, whose two kernel sinks sit in
-                     kfmt_print.c so the formatter itself stays
-                     freestanding and can be shared with ring 3),
-                     path manipulation (kpath.c) and
-                     the readline-style line editor both command lines
-                     share (klineedit.c) -- plus a
-                     JSON library (json.c), the kernel log ring buffer
-                     behind dmesg (klog.c), runtime debug switches
-                     (debugflags.c), /etc config reading (etc_config.c)
-                     and its users (tz.c, font_config.c,
-                     keyboard_config.c), keyboard layout data-file
-                     parsing (keyboard_layout.c), the entropy source
-                     (krandom.c), and stack-canary support
-                     (stack_protector.c, which seeds its guard from it).
-kernel/drivers/  -- device drivers, and only device drivers: console
-                     (vga.c), framebuffer graphics with double buffering
-                     + damage-region clipping (gfx.c), the baked TTF
-                     font (font_ttf.c), the shared PS/2 controller
-                     dispatcher (i8042.c) plus the keyboard and mouse
-                     behind it, ATA/DMA disk access (ata.c), PCI
-                     enumeration (pci.c), MBR/GPT partition-table
-                     parsing (partition.c) and the PC speaker
-                     (speaker.c).
-kernel/include/  -- headers, split by audience and enforced by the
-                     build's include paths rather than by convention:
-                     api/ is what apps/ may use (kapi.h and everything
-                     it aggregates), abi/ is the kernel<->userland
-                     contract userland/ shares, kernel/ is internal and
-                     is NOT on apps/'s include path. See
-                     kernel/include/README.md.
-apps/            -- programs. Two kinds:
-                     * console apps (shell.c -- itself split into
-                       shell.c/shell_fs.c/shell_sys.c, plus the
-                       full-screen editor in editor.c -- and gui.c)
-                       registered in apps.c: they own the whole screen
-                       and run their own loop
-                     * GUI apps (notepad.c, about.c, calculator.c +
-                       calc_engine.c, terminal.c, taskmgr.c) registered
-                       in gui_apps.c -- event-driven, launched from the
-                       Start menu or a desktop icon, drawn into a window
-                       by the window manager (apps/wm/ -- split across
-                       wm.c/wm_input.c/wm_render.c/desktop.c/
-                       context_menu.c/start_menu.c/confirm_dialog.c/
-                       file_picker.c/wm_tray.c for readability, see
-                       apps/README.md)
-                     Adding either is "write the file, add one line to
-                     the matching registry" -- see apps/README.md.
-                     apps/ui/ holds the shared widget primitives
-                     (primitives, button, button group, scrollback,
-                     scrollbar, checkbox, textbox, icon grid) used by
-                     the window manager, Calculator, Notepad, and
-                     Terminal -- one file per widget, see apps/README.md.
-                     apps/theme.h holds the THEME_* named colors.
-userland/        -- ring-3 programs, split by ROLE: rt/ (crt0, libsys,
-                     link.ld), ui/ (Toykit, the GUI toolkit), lib/ (the
-                     non-UI libraries -- the tosh shell, plus string.h/
-                     stdio.h/cmem.c, the C names over the shared
-                     toolkit), gui/ (windowed apps), bin/ (command-line
-                     programs) and tests/ (single-mechanism
-                     diagnostics). The last three produce one ELF per
-                     .c and the directory decides where it seeds, so
-                     adding a program is a file and no Makefile edit.
-                     Freestanding, but no longer bare: crt0 gives every
-                     program a real main() over SysV argc/argv, and
-                     strlen/memcpy/snprintf are available under their C
-                     names (the same k_* code, compiled a second time
-                     into libuapp.a -- see docs/decisions.md). Still NOT
-                     a libc: no malloc, no FILE, no printf, no errno
-                     (docs/roadmap.md, Milestone 24).
-                     Compiled and linked as real ELF64
-                     executables via userland/rt/link.ld (-mcmodel=large,
-                     and separate page-aligned segments per permission
-                     class so W^X means something -- see
-                     docs/process-isolation.md and the Makefile's own
-                     USERLAND_CFLAGS comment),
-                     seeded onto disk.img at build time -- gui/ and bin/
-                     to /bin, tests/ to /tests (see the
-                     Makefile's `seed` target, tools/seed_disk.py,
-                     docs/filesystem-layout.md, and
-                     docs/decisions.md) -- and run via the shell's
-                     `run <name>` -- not loaded as GRUB modules anymore.
-                     hello.c is the smallest one -- greet via SYS_WRITE,
-                     exit(0) -- and the one to read first; crash_test.c
-                     and nx_test.c are the ones that deliberately fault,
-                     to show the kernel recovering; exit_test.c
-                     and write_test.c call real syscalls and return
-                     cleanly instead -- write_test.c is the only one
-                     that produces its own console output. write_bad_test.c
-                     deliberately passes an invalid pointer to write, to
-                     prove the kernel's pointer validation rejects it.
-                     gui_test.c draws directly to the real screen and
-                     reads real keyboard input -- see the "GUI in user
-                     space" note in apps/README.md for its honest scope.
-                     nx_test.c and stack_smash_test.c each trip one of
-                     the Milestone 2 hardening mechanisms on purpose
-                     (jump into a data page; overflow a stack buffer)
-                     and are how both are actually verified.
-                     libc_test.c checks lib/string.h and lib/stdio.h
-                     from ring 3 (26 checks) -- the part a KTEST
-                     structurally cannot reach, since the k_* logic
-                     underneath has KTESTs already and would pass
-                     whether or not any of it were linkable here.
-seed/            -- the files mirrored onto disk.img at build time by
-                     the Makefile's `seed` target via
-                     tools/seed_disk.py (which probes the image's
-                     format and delegates to the matching writer
-                     tool): seed/sync/bin/ (every
-                     userland ELF), seed/sync/etc/kbs/ (the generated
-                     keyboard layout data files) and
-                     seed/sync/usr/share/hwdata/ (the PCI ID database,
-                     staged from data/ below). `sync/` is
-                     content-hash-synced on every build; a `once/`
-                     subtree would be copy-once. See docs/decisions.md.
-                     NOTE: seed/sync/ is a build STAGING tree -- `make
-                     clean` deletes it and .gitignore excludes it, so
-                     nothing hand-authored belongs there. Anything that
-                     needs to ship lives elsewhere and gets copied in by
-                     the `seed` target.
-                     NOTE: what goes WHERE on the running OS's own
-                     filesystem (/bin vs /tests vs /usr/share vs /etc)
-                     is docs/filesystem-layout.md, which is checked
-                     against the built image by tools/check_layout.py.
-data/            -- bundled third-party data files, tracked in git and
-                     staged into seed/sync/ at build time. Currently
-                     just pci.ids, the PCI ID Database from
-                     pci-ids.ucw.cz, read by /bin/lspci to turn
-                     8086:7010 into "Intel Corporation 82371SB PIIX3
-                     IDE". Bundled rather than downloaded or read from
-                     the build host so builds are reproducible and work
-                     offline. NOT MIT -- see LICENSE's "Third-party
-                     data" section.
-```
-
-`kernel_main()` (in `kernel/core/kernel.c`) does hardware bring-up --
-serial, console, interrupts, filesystem -- then calls `apps_start()`,
-which launches the shell. It never mentions the shell by name; the shell
-is just the first thing in the app registry. That's the seam that makes
-this modular: the kernel core doesn't know or care what apps exist.
-
-Other files:
-```
-linker.ld    -- links kernel at 1 MiB, matching Multiboot2 conventions
-grub.cfg     -- GRUB menu entry pointing at kernel.bin
-Makefile     -- build / iso / run / debug / seed targets. Globs
-                kernel/core, kernel/drivers, apps, apps/wm and apps/ui,
-                so new files in those directories are picked up with no
-                Makefile edit; a *new* subdirectory under apps/ needs its
-                own wildcard + pattern rule (see CLAUDE.md). Header
-                dependencies are tracked (-MMD/-MP), so editing a shared
-                header rebuilds everything that includes it.
-VERSION      -- the single version string (semver + a -dev suffix);
-                kernel/include/api/version.h is GENERATED from it by
-                tools/gen_version.sh, never hand-edited
-tools/genttf.py  -- font source of truth; regenerate kernel/drivers/font_ttf.c
-                     from the .ttf here, don't edit that file by hand. Only
-                     needed to change the font -- the baked output is
-                     already committed, so building/running toy-os itself
-                     doesn't need this. Regenerating needs Python 3,
-                     Pillow (`pip install pillow`), and the JetBrains Mono
-                     font installed (`sudo pacman -S ttf-jetbrains-mono`
-                     on CachyOS, or download from jetbrains.com/lp/mono).
-                     tools/genfont.py is the retired hand-drawn-8x8-font
-                     generator, kept for history/reference only -- nothing
-                     includes its output anymore.
-tools/gen_kbs.py -- generates the seed/sync/etc/kbs/<layout> keyboard
-                     layout data files from Linux's own XKB data, so
-                     adding a layout is one command, not an afternoon
-                     with a scancode chart
-tools/OFL.txt    -- SIL Open Font License 1.1 text for JetBrains Mono,
-                     the baked font's source face
-tools/run_release.sh -- standalone QEMU launcher shipped as a GitHub
-                     Release asset (not run by the build itself) --
-                     gunzips disk.img.gz if needed and boots with the
-                     same device/display flags `make run` uses, for
-                     anyone running from just a release download.
-```
 
 ## Documentation
 
 | Document | Contents |
 |---|---|
-| [docs/decisions.md](docs/decisions.md) | Topic-indexed answers to "why is this built this way?" -- ~70 entries. Start here when something looks odd. |
-| [docs/roadmap.md](docs/roadmap.md) | What's planned, ordered so prerequisites come before the work that needs them. |
-| [docs/filesystem-layout.md](docs/filesystem-layout.md) | What lives where on the OS's own disk, the rules for adding to it, the caller-side path budget and the retired TFS2 record budget. Checked against the built image by `tools/check_layout.py`. |
-| [docs/gui-guidelines.md](docs/gui-guidelines.md) | How the GUI should look and behave: interaction states, press-then-commit-on-release, when feedback is and isn't wanted. |
-| [docs/process-isolation.md](docs/process-isolation.md) | The full ring0/ring3 build-up: GDT/TSS, paging, per-process address spaces, the ELF loader, the scheduler -- told as it was built, bugs included. |
-| [docs/tfs3-spec.md](docs/tfs3-spec.md) | Byte-level on-disk format of TFS3, the default filesystem, spec-style. |
-| [docs/tfs3-design.md](docs/tfs3-design.md) | The design record behind TFS3 -- every decision and its reasoning, kept after implementation. |
-| [docs/tfs2-spec.md](docs/tfs2-spec.md) | Byte-level on-disk format of TFS2, the legacy second backend. |
+| [docs/decisions.md](docs/decisions.md) | Topic-indexed answers to "why is this built this way?". Start here when something looks odd. |
+| [docs/roadmap.md](docs/roadmap.md) | What's planned, ordered so prerequisites come first — plus the known-issues list. |
+| [docs/commands.md](docs/commands.md) | The full shell command reference. |
+| [docs/boot-flags.md](docs/boot-flags.md) | Every word the kernel looks for on the GRUB command line. |
+| [docs/filesystem-layout.md](docs/filesystem-layout.md) | What lives where on the OS's own disk. Checked against the built image by `tools/check_layout.py`. |
+| [docs/gui-guidelines.md](docs/gui-guidelines.md) | How the GUI should look and behave, and how to verify a change to it properly. |
+| [docs/uapp-design.md](docs/uapp-design.md) | Toykit's design: how a ring-3 GUI app is written, and the staging that got there. |
+| [docs/wm-ring3-design.md](docs/wm-ring3-design.md) | Milestone 41 — the staged plan for moving the window manager out of the kernel. |
+| [docs/process-isolation.md](docs/process-isolation.md) | The full ring0/ring3 build-up, told as it was built, bugs included. |
+| [docs/tfs3-spec.md](docs/tfs3-spec.md) / [design](docs/tfs3-design.md) | Byte-level format of the default filesystem, and the reasoning behind it. |
+| [docs/tfs2-spec.md](docs/tfs2-spec.md) | Byte-level format of the legacy second backend. |
+| [docs/live-cd-design.md](docs/live-cd-design.md) | How the Live CD carries a filesystem image as a GRUB module. |
 | [docs/arch-portability.md](docs/arch-portability.md) | What is and isn't x86-64-specific, and what a second architecture would take. |
-| [CHANGELOG.md](CHANGELOG.md) | The full history with rationale, split into four eras ([archive-3](CHANGELOG-archive-3.md), [archive-2](CHANGELOG-archive-2.md), [archive](CHANGELOG-archive.md)). |
-| [kernel/README.md](kernel/README.md) | What each kernel subsystem holds, and the test for where a new file goes. |
-| [apps/README.md](apps/README.md) | How to add a console app or a GUI app. |
+| [kernel/README.md](kernel/README.md), [apps/README.md](apps/README.md) | Where a new file goes, and how to add an app. |
+| [CHANGELOG.md](CHANGELOG.md) | History through 2026-08-15, now **frozen** — `git log` is the chronological record, and reasoning lives in `docs/decisions.md`. |
 
 ## Releases
 
 Tagged releases live on
-[GitHub Releases](https://github.com/eveningworks/toy-os/releases). Each ships
-`toy-os.iso`, a gzipped `disk.img.gz` (there's no installer yet, so the
-pre-seeded disk image is what puts `/bin/ls`, `/bin/lspci` and friends
-on the filesystem -- the ISO alone boots into a near-empty one), and
-`run_release.sh`, a standalone launcher that gunzips the disk image and
-starts QEMU with the flags this OS expects, with no repo checkout
-needed.
+[GitHub Releases](https://github.com/eveningworks/toy-os/releases). Each
+ships `toy-os.iso`, a gzipped `disk.img.gz` (there is no installer yet, so
+the pre-seeded image is what puts `/bin/ls` and friends on the
+filesystem — the ISO alone boots into a near-empty one), and
+`run_release.sh`, a standalone launcher that needs no repo checkout.
 
 ## License
 
-MIT -- see [LICENSE](LICENSE). The baked JetBrains Mono glyph data in
+MIT — see [LICENSE](LICENSE). The baked JetBrains Mono glyph data in
 `kernel/drivers/font_ttf.c` is separately covered by the SIL Open Font
-License 1.1 ([tools/OFL.txt](tools/OFL.txt)).
+License 1.1 ([tools/OFL.txt](tools/OFL.txt)), and the bundled `pci.ids`
+database in `data/` has its own terms — see LICENSE's "Third-party data"
+section.

@@ -1177,6 +1177,18 @@ image), and `vm.py --disk <copy>`. So check whether a QEMU is running
 after, and ask -- don't just work around it silently, and don't ask
 for the cases in the previous sentence either.
 
+**`gfxbench` measures the framebuffer, and its number is MEANINGLESS
+under QEMU.** QEMU's framebuffer is cached host RAM; real hardware's is
+uncached MMIO, where every store is a bus transaction the CPU stalls on.
+That makes a whole class of performance bug structurally invisible to
+every test here -- a clean `gui_regress` says nothing about it. The
+framebuffer is write-combined at display probe now (PAT, or an MTRR
+under `nopat`), and `gfxbench` prints which mechanism is live beside its
+timings. Expect ~2500 MB/s in emulation and treat that as evidence the
+figure is not real. **If a user reports something that reproduces only
+on hardware, ask what the emulator models differently BEFORE doubting
+the report.** See `docs/decisions.md`.
+
 **`strace <binary>` is often the fastest way to see what a `/bin`
 binary is doing** -- one decoded line per syscall
 (`open("notes.txt", O_WRITE|O_CREAT) = 3`), and the same lines land in
@@ -1941,6 +1953,10 @@ it, the deliberate divergences from the FHS, and the budgets that constrain it
 TFS2-legacy images only). Not advisory: `tools/check_layout.py` reads its table and fails
 `preflight`/CI if the built image disagrees, in either direction. Read
 it before adding a directory, a config file or any seeded data.
+
+`docs/commands.md` -- the full shell command reference, grouped the way
+`help` groups it. Lives here rather than in `README.md` so the README
+stays a landing page; update it when adding a command.
 
 `docs/boot-flags.md` -- every word the kernel looks for on the GRUB
 command line (`nokaslr`, `nopat`, `rammeter`, `live`, `demo`), what each
