@@ -1,6 +1,7 @@
 // See uui_textview.h for the design writeup -- in particular why
 // scrolling belongs to the control rather than to each app.
 #include "ui/uui_textview.h"
+#include "ui/uui_widget.h"  // the ops table at the bottom of this file
 
 #define DEFAULT_WHEEL_LINES 3
 
@@ -196,3 +197,46 @@ void uui_textview_drag_end(struct uui_textview *tv) {
     tv->panning = 0;
     tv->pan_remainder = 0;
 }
+
+// --- routed pointer input (ui/uui_route.h) ----------------------------
+//
+// The order below is the whole contract, and it is the same one the
+// hand-written version in every app had to get right: a thumb press
+// claims the drag, otherwise a track press pages, otherwise (in PAN
+// mode) the body pans. Reversing the first two swallows track clicks as
+// pans and the bar silently stops paging.
+static int tv_ops_hit(const void *w, int cx, int cy) {
+    return uui_textview_hit((const struct uui_textview *)w, cx, cy);
+}
+
+static int tv_ops_press(void *w, int cx, int cy) {
+    struct uui_textview *tv = (struct uui_textview *)w;
+    if (uui_textview_drag_start(tv, cx, cy)) return 1;
+    return uui_textview_click(tv, cx, cy);
+}
+
+static int tv_ops_motion(void *w, int cx, int cy, unsigned buttons) {
+    struct uui_textview *tv = (struct uui_textview *)w;
+    if (!buttons) return 0;
+    if (tv->thumb_grab < 0 && !tv->panning) return 0;
+    uui_textview_drag(tv, cx, cy);
+    return 1;
+}
+
+static int tv_ops_release(void *w, int cx, int cy) {
+    (void)cx; (void)cy;
+    uui_textview_drag_end((struct uui_textview *)w);
+    return 0;
+}
+
+static int tv_ops_wheel(void *w, int notches) {
+    return uui_textview_wheel((struct uui_textview *)w, notches);
+}
+
+const struct uui_widget_ops uui_textview_ops = {
+    .hit     = tv_ops_hit,
+    .press   = tv_ops_press,
+    .motion  = tv_ops_motion,
+    .release = tv_ops_release,
+    .wheel   = tv_ops_wheel,
+};

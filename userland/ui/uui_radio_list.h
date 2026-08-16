@@ -25,6 +25,13 @@ struct uui_radio_list {
     int row_h;       // full row height including its gap
     int col_w;
     int marker_size;
+
+    // OWNED by the widget, so a routed press has somewhere to record a
+    // choice. draw() still takes `selected` as an argument (callers
+    // pass `l->selected`) rather than reading this, which is why
+    // nothing that already worked had to change.
+    int selected;
+    int hovered;   // OWNED -- driven through the ops table's motion
 };
 
 // Preferred minimum: the grid its columns and rows need. See
@@ -40,5 +47,10 @@ void uui_radio_list_draw(struct ugfx_surface *s, const struct uui_radio_list *l,
                           uint32_t bg, uint32_t fg);
 // Index under the content-relative point (cx, cy), or -1.
 int uui_radio_list_hit(const struct uui_radio_list *l, int cx, int cy);
+
+// Full table with ROUTED POINTER INPUT (ui/uui_route.h): selecting an
+// option is the widget's job once this is declared, not the app's.
+struct uui_widget_ops;
+extern const struct uui_widget_ops uui_radio_list_ops;
 
 #endif

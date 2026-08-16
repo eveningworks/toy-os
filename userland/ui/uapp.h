@@ -105,6 +105,32 @@ struct uapp_desc {
     // looks inside it.
     void *state;
 
+    // The widgets this app declares, and the ONLY thing it has to do to
+    // get working mouse input. The library hit-tests them, delivers
+    // press/motion/release/wheel, and holds a pointer GRAB so a drag
+    // keeps reaching the widget that started it (ui/uui_route.h).
+    //
+    // **An app with these writes no input code.** Before they existed
+    // the toolkit routed exactly one widget type -- see `buttons` below
+    // -- so Calculator wrote none while UI Demo hand-dispatched
+    // twenty-one calls, and a widget an app forgot to forward was
+    // simply dead with nothing to notice it.
+    //
+    // The same `struct uui_item` array a uui_layout takes, so an app
+    // that lays out with the toolkit passes the array it already has,
+    // and one that places widgets itself (UI Demo, so its coordinates
+    // stay documented for tests) declares the array and no layout.
+    struct uui_item *widgets;
+    int widget_count;
+
+    // A widget changed. `id` is the one the app put on that item, and
+    // `reason` is the input that caused it (enum uui_reason: press,
+    // motion, release, wheel). The app reads the new VALUE from the
+    // widget itself -- uui_dropdown_selected(), cb.checked,
+    // list.selected -- so this stays one callback and a switch rather
+    // than a callback pointer stapled to every widget struct.
+    void (*on_widget)(struct uapp *a, int id, int reason);
+
     // Optional: a button group the library routes the mouse to. With
     // this set, press/motion/release are handled for you and a control
     // that COMMITS (pressed and released on the same button) arrives as

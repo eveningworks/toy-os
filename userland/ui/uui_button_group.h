@@ -11,6 +11,12 @@
 struct uui_button_group {
     struct uui_button *buttons; // not owned -- caller's array
     int count;
+
+    // The code of the button that last COMMITTED, held until the app
+    // collects it with uui_button_group_take_activated(). Needed once
+    // input is routed: the router reports which WIDGET changed, and a
+    // group is one widget with many buttons. 0 = nothing pending.
+    int activated;
 };
 
 void uui_button_group_init(struct uui_button_group *g,
@@ -40,5 +46,17 @@ int uui_button_group_hover(struct uui_button_group *g, int cx, int cy);
 // button already had `pressed` cleared by uui_button_group_press(), so
 // it returns -1 here and the action correctly does not happen.
 int uui_button_group_release(struct uui_button_group *g);
+
+// Collects the code of a button that committed (0 if none), clearing
+// it. The routed path records rather than returns, since the router
+// reports widgets rather than decisions.
+int uui_button_group_take_activated(struct uui_button_group *g);
+
+// Full table with ROUTED POINTER INPUT (ui/uui_route.h). Arms on press,
+// commits on release, and a press dragged off commits nothing -- the
+// rule docs/gui-guidelines.md exists for, implemented once here instead
+// of in every app.
+struct uui_widget_ops;
+extern const struct uui_widget_ops uui_button_group_ops;
 
 #endif

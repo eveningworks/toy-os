@@ -43,4 +43,9 @@ int  uui_checkbox_hover(struct uui_checkbox *cb, int cx, int cy);
 // result is instantly visible and instantly reversible.
 int  uui_checkbox_toggle(struct uui_checkbox *cb);
 
+// Full table with ROUTED POINTER INPUT (ui/uui_route.h): toggling is
+// the widget's once this is declared.
+struct uui_widget_ops;
+extern const struct uui_widget_ops uui_checkbox_ops;
+
 #endif

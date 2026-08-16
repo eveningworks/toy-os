@@ -52,6 +52,12 @@ void uui_textbox_set_geometry(struct uui_textbox *f, int x, int y, int w, int h)
 // Point (cx, cy) inside the field, content-relative.
 int uui_textbox_hit(const struct uui_textbox *f, int cx, int cy);
 
+// The character index a click at `cx` lands on -- the inverse of the
+// placement draw() uses, including its horizontal scrolling, so the
+// caret goes where the glyph is rather than near it. Rounds to the
+// nearest gap, so clicking a glyph's right half lands after it.
+int uui_textbox_index_at_x(const struct uui_textbox *f, int cx);
+
 void uui_textbox_draw(struct ugfx_surface *s, const struct uui_textbox *f,
                      uint32_t bg, uint32_t fg, uint32_t border);
 
@@ -61,5 +67,10 @@ void uui_textbox_draw(struct ugfx_surface *s, const struct uui_textbox *f,
 // signature cannot carry, so a full table here would be half-honest.
 struct uui_widget_ops;
 extern const struct uui_widget_ops uui_textbox_focus_ops;
+
+// Full table with ROUTED POINTER INPUT (ui/uui_route.h): a press places
+// the caret. Everything a text field does with the KEYBOARD is still
+// uui_textbox_key()'s.
+extern const struct uui_widget_ops uui_textbox_ops;
 
 #endif

@@ -1,5 +1,6 @@
 // checkbox. See ui/uui_checkbox.h.
 #include "ui/uui_checkbox.h"
+#include "ui/uui_widget.h"  // the ops table at the bottom of this file
 
 #define CHECKBOX_LABEL_GAP 6
 
@@ -73,3 +74,31 @@ int uui_checkbox_toggle(struct uui_checkbox *cb) {
     cb->checked = !cb->checked;
     return cb->checked;
 }
+
+// --- routed pointer input (ui/uui_route.h) ----------------------------
+//
+// Act-on-contact, which is correct here and not a shortcut: the result
+// of a checkbox is visible the instant it happens, so there is nothing
+// for a commit-on-release rule to protect (see docs/gui-guidelines.md).
+static int cb_ops_hit(const void *w, int cx, int cy) {
+    return uui_checkbox_hit((const struct uui_checkbox *)w, cx, cy);
+}
+
+static int cb_ops_press(void *w, int cx, int cy) {
+    (void)cx; (void)cy;
+    struct uui_checkbox *cb = (struct uui_checkbox *)w;
+    if (cb->disabled) return 0;
+    uui_checkbox_toggle(cb);
+    return 1;
+}
+
+static int cb_ops_motion(void *w, int cx, int cy, unsigned buttons) {
+    (void)buttons;
+    return uui_checkbox_hover((struct uui_checkbox *)w, cx, cy);
+}
+
+const struct uui_widget_ops uui_checkbox_ops = {
+    .hit    = cb_ops_hit,
+    .press  = cb_ops_press,
+    .motion = cb_ops_motion,
+};

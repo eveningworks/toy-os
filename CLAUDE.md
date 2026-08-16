@@ -311,6 +311,23 @@ technical conventions below:
   app writes no coordinates: declare a column/row/grid, and the window
   sizes itself from the content. Resize, focus and wheel all arrive for
   free. `docs/uapp-design.md` is the full design and its staging.
+- **A ring-3 app does NOT route mouse input to its widgets -- the
+  toolkit does** (`userland/ui/uui_route.h`). Declare
+  `uapp_desc.widgets` (a `struct uui_item[]`, each with an app-chosen
+  `id`) and the library hit-tests them, delivers
+  press/motion/release/wheel, and holds a **pointer GRAB** so a drag
+  keeps reaching the widget that started it. The app gets
+  `on_widget(a, id, reason)` and reads the new value from the widget
+  (`uui_dropdown_selected()`, `cb.checked`, `list.selected`). **Do not
+  hand-dispatch input in a new app** -- that is what UI Demo's
+  twenty-one forwarding calls became, and a widget an app forgets to
+  forward is not an error: it draws perfectly and does nothing, which
+  is how `uui_listbox` shipped an undraggable scrollbar. Two things to
+  know: a widget with a popup declares `overlay_active` so it is
+  offered presses before anything is hit-tested (input order is the
+  reverse of draw order), and **the wheel goes to the widget under the
+  cursor**, so a test has to park the REAL cursor first
+  (`DebugConsole.warp_cursor()`; `gui move` lasts one WM iteration).
 - **The GUI stack has names -- use them.** **TWP** (Toy Window
   Protocol, `abi/win_proto.h`) is the client<->server contract;
   **TWS** (Toy Window Server, `kernel/proc/win_server.c` +

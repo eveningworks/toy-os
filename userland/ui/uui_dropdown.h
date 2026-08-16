@@ -55,4 +55,10 @@ int uui_dropdown_selected(const struct uui_dropdown *d);
 struct uui_widget_ops;
 extern const struct uui_widget_ops uui_dropdown_focus_ops;
 
+// Full table with ROUTED POINTER INPUT (ui/uui_route.h), including the
+// `overlay_active` slot that makes an OPEN POPUP take every press
+// before anything is hit-tested -- the popup is drawn outside this
+// widget's own rect, so nothing else can route it correctly.
+extern const struct uui_widget_ops uui_dropdown_ops;
+
 #endif

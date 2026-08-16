@@ -116,6 +116,24 @@ class Demo:
         self.dbg.settle()
         return self.events()
 
+    def park(self, qmp, cx, cy):
+        """Park the REAL cursor over a widget, and wait for it to land.
+
+        Needed since the toolkit routes the wheel to the widget UNDER
+        THE CURSOR (ui/uui_route.h) rather than down a fixed chain in
+        the app -- the wheel scrolls what you are pointing at, so a
+        wheel test has to point at something first.
+
+        `gui move` is NOT enough here: an injected move holds for one WM
+        iteration and then the real PS/2 cursor takes over, so the
+        client's last-known pointer ends up wherever the real cursor
+        was. warp_cursor() drives the real one and confirms it arrived.
+        """
+        x, y = self._abs(cx, cy)
+        self.dbg.warp_cursor(qmp, x, y)
+        self.dbg.settle()
+        return self.events()
+
     def wheel(self, notches):
         self.dbg.send(f"gui wheel {notches}")
         self.dbg.settle()
@@ -212,7 +230,7 @@ class Demo:
         return x + 10, y + h + 1 + n * self.row_h + self.row_h // 2
 
 
-def run(d):
+def run(d, qmp):
     lx, ly, lw, lh = d.layout["listbox"]
     ddc = d.dropdown_center()
 
@@ -241,6 +259,9 @@ def run(d):
 
     print("\n== listbox: wheel scrolls the view, not the selection ==")
     d.key(K_HOME)
+    # Point at the listbox: the wheel goes to the widget under the
+    # cursor now, not to whichever widget the app happened to try first.
+    d.park(qmp, *d.list_row(1))
     d.events()
     # 3 notches x wheel_rows(3) = 9 rows; with 12 items and 4 visible,
     # max_top is 8, so the top visible row becomes item 8.
@@ -384,9 +405,8 @@ def main():
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
-    qmp = None
+    qmp = QMPSession(port=args.qmp_port)
     if not args.in_gui:
-        qmp = QMPSession(port=args.qmp_port)
         qmp.send_text("gui")
         qmp.send_key("ret")
         time.sleep(2.0)
@@ -395,11 +415,9 @@ def main():
     d = Demo(dbg, verbose=args.verbose)
     d.open()
     print(f"uidemo_test: layout {d.layout}, row_h {d.row_h}")
-    run(d)
+    run(d, qmp)
 
     print("\n== containment ==")
-    if qmp is None:
-        qmp = QMPSession(port=args.qmp_port)
     check_containment(d, qmp, "/tmp")
 
     if args.shot:

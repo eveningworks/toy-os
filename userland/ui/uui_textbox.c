@@ -1,6 +1,6 @@
 // field. Split out of uwidgets.c -- see ui/uui_textbox.h.
 #include "ui/uui_textbox.h"
-#include "ui/uui_widget.h"  // the ops table the focus ring takes
+#include "ui/uui_widget.h"  // the ops tables at the bottom of this file
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
 
 // Caret width in pixels -- a bar, not a block, so it sits between
@@ -48,6 +48,38 @@ void uui_textbox_natural_size(const struct uui_textbox *f, int *out_w, int *out_
     (void)f;
     if (out_w) *out_w = 0;                             // no preference
     if (out_h) *out_h = ugfx_char_h() + 2 * UUI_TEXTBOX_PAD; // and this one is real
+}
+
+// How far the visible window has slid right, in characters. Shared by
+// draw() and by uui_textbox_index_at_x() below, so a click lands on the
+// character that is actually drawn there -- two copies of this
+// arithmetic is the classic way a caret ends up one glyph off.
+static int field_window_start(const struct uui_textbox *f, int visible) {
+    if (!f->active || f->len <= visible) return 0;
+    int start = f->cursor - visible + 1;
+    if (start < 0) start = 0;
+    int max_start = f->len - visible;
+    if (start > max_start) start = max_start;
+    return start;
+}
+
+int uui_textbox_index_at_x(const struct uui_textbox *f, int cx) {
+    int char_w = ugfx_char_w();
+    if (char_w <= 0) return f->cursor;
+    int pad = UUI_TEXTBOX_PAD;
+    int visible = (f->w - 2 * pad) / char_w;
+    if (visible < 0) visible = 0;
+
+    int rel = cx - (f->x + pad);
+    if (rel < 0) rel = 0;
+    // Round to the NEAREST gap rather than truncating: clicking the
+    // right half of a glyph should put the caret after it, which is
+    // what a text field does everywhere else.
+    int col = (rel + char_w / 2) / char_w;
+    int idx = field_window_start(f, visible) + col;
+    if (idx < 0) idx = 0;
+    if (idx > f->len) idx = f->len;
+    return idx;
 }
 
 int uui_textbox_key(struct uui_textbox *f, int key) {
@@ -98,13 +130,7 @@ void uui_textbox_draw(struct ugfx_surface *s, const struct uui_textbox *f,
     // kernel widget actually had.
     int visible = char_w > 0 ? (w - 2 * pad) / char_w : 0;
     if (visible < 0) visible = 0;
-    int start = 0;
-    if (f->active && f->len > visible) {
-        start = f->cursor - visible + 1;
-        if (start < 0) start = 0;
-        int max_start = f->len - visible;
-        if (start > max_start) start = max_start;
-    }
+    int start = field_window_start(f, visible);
 
     char shown[UUI_TEXTBOX_MAX];
     int n = 0;
@@ -145,4 +171,27 @@ const struct uui_widget_ops uui_textbox_focus_ops = {
     .key = ops_key,
     .set_focused = ops_set_focused,
     .accepts_focus = ops_accepts_focus,
+};
+
+// --- routed pointer input (ui/uui_route.h) ----------------------------
+//
+// A press PLACES THE CARET, which is what every text field on every
+// desktop does and what this one could not do at all: the caret moved
+// only with arrow keys, so clicking into the middle of a value did
+// nothing and you had to walk there. The character index comes from the
+// same horizontal-window arithmetic draw() uses (see caret_index()), so
+// clicking a glyph puts the caret at that glyph rather than near it.
+static int tb_ops_press(void *w, int cx, int cy) {
+    (void)cy;
+    struct uui_textbox *f = (struct uui_textbox *)w;
+    f->cursor = uui_textbox_index_at_x(f, cx);
+    return 1;
+}
+
+const struct uui_widget_ops uui_textbox_ops = {
+    .hit           = ops_hit,
+    .key           = ops_key,
+    .set_focused   = ops_set_focused,
+    .accepts_focus = ops_accepts_focus,
+    .press         = tb_ops_press,
 };

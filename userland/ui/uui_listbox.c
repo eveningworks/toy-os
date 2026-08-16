@@ -258,3 +258,55 @@ const struct uui_widget_ops uui_listbox_focus_ops = {
     .key = lb_ops_key,
     .accepts_focus = lb_ops_accepts_focus,
 };
+
+// --- routed pointer input (ui/uui_route.h) ----------------------------
+//
+// With these filled in, an app declares a listbox and never mentions
+// input again: the router hit-tests it, a press starts a thumb drag or
+// selects a row, and the pointer GRAB keeps that drag alive when the
+// cursor leaves the control. This is what the app-side forwarding this
+// widget used to require became.
+static int lb_ops_press(void *w, int cx, int cy) {
+    struct uui_listbox *lb = (struct uui_listbox *)w;
+    // The scrollbar outranks the rows: uui_listbox_hit() excludes the
+    // bar column, so a press there has to be offered to the bar first
+    // or it reaches nothing at all -- which is exactly how this
+    // widget's scrollbar shipped dead.
+    if (uui_listbox_press(lb, cx, cy)) return 1;
+    return uui_listbox_click(lb, cx, cy);
+}
+
+static int lb_ops_motion(void *w, int cx, int cy, unsigned buttons) {
+    struct uui_listbox *lb = (struct uui_listbox *)w;
+    if (buttons) return uui_listbox_drag(lb, cx, cy);
+    return uui_listbox_hover(lb, cx, cy);
+}
+
+static int lb_ops_release(void *w, int cx, int cy) {
+    (void)cx; (void)cy;
+    uui_listbox_drag_end((struct uui_listbox *)w);
+    return 0;
+}
+
+static int lb_ops_wheel(void *w, int notches) {
+    return uui_listbox_wheel((struct uui_listbox *)w, notches);
+}
+
+static int lb_ops_bounds(const void *w, int cx, int cy) {
+    const struct uui_listbox *lb = (const struct uui_listbox *)w;
+    // The WHOLE control, scrollbar strip included -- unlike
+    // uui_listbox_hit(), which answers "which ROW" and deliberately
+    // excludes the bar. Two different questions, and conflating them is
+    // how a press on the bar reached nothing.
+    return uui_hit(lb->x, lb->y, lb->w, lb->h, cx, cy);
+}
+
+const struct uui_widget_ops uui_listbox_ops = {
+    .hit           = lb_ops_bounds,
+    .key           = lb_ops_key,
+    .accepts_focus = lb_ops_accepts_focus,
+    .press         = lb_ops_press,
+    .motion        = lb_ops_motion,
+    .release       = lb_ops_release,
+    .wheel         = lb_ops_wheel,
+};

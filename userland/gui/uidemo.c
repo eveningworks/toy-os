@@ -173,6 +173,12 @@ static struct {
     // and "armed then dragged off", and only the second is a cancel --
     // without this, every click on a checkbox also logged "cancel btn".
     int armed;
+    // Values as they were BEFORE the event now being delivered, so
+    // on_widget() can report what CHANGED rather than what it is now.
+    // Widgets reporting deltas instead would put this app's vocabulary
+    // inside the toolkit.
+    int dd_was_open, dd_was_sel;
+    int list_was_sel, list_was_top;
     char status[64];
 } g;
 
@@ -428,181 +434,139 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     uui_dropdown_draw_popup(s, &g.dropdown);
 }
 
+// --- input --------------------------------------------------------
+//
+// **There is no routing here any more.** The toolkit hit-tests the
+// widgets declared in ITEMS below, delivers press/motion/release/wheel
+// to whichever one is under the cursor, and holds a pointer grab so a
+// drag keeps reaching the widget that started it (ui/uui_route.h). This
+// app used to hand-dispatch twenty-one calls to do that, and the one
+// scrollbar it never forwarded was simply dead.
+//
+// What is left is this app's actual job: saying what happened, in the
+// log grammar at the top of the file. Everything below REPORTS; nothing
+// below decides.
+
+// The widget ids ITEMS assigns, which is what on_widget() switches on.
+enum { ID_BUTTONS = 1, ID_CHK_ALPHA, ID_CHK_BETA, ID_RADIO, ID_TEXTBOX,
+       ID_DROPDOWN, ID_LISTBOX, ID_VIEW };
+
+static void snapshot(void);
+
+static void on_widget(struct uapp *a, int id, int reason) {
+    char m[96];
+    switch (id) {
+    case ID_BUTTONS: {
+        // Commit-on-release, decided by the group rather than tracked
+        // here: it records the code that committed and this collects it.
+        int code = uui_button_group_take_activated(&g.group);
+        if (code > 0) {
+            snprintf(m, sizeof m, "button %d", code);
+            logline(m);
+            snprintf(m, sizeof m, "release btn%d", code);
+            log_and_status(m);
+            g.armed = 0;
+        } else if (reason == UUI_REASON_PRESS) {
+            g.armed = 1;   // armed; a release with no code is a cancel
+        } else if (reason == UUI_REASON_RELEASE && g.armed) {
+            log_and_status("cancel btn");
+            g.armed = 0;
+        }
+        break;
+    }
+    case ID_CHK_ALPHA:
+    case ID_CHK_BETA: {
+        int i = (id == ID_CHK_ALPHA) ? 0 : 1;
+        snprintf(m, sizeof m, "check %s %s", i ? "beta" : "alpha",
+                 g.chk[i].checked ? "on" : "off");
+        log_and_status(m);
+        break;
+    }
+    case ID_RADIO:
+        snprintf(m, sizeof m, "radio %s", RADIO_LABELS[g.radio.selected]);
+        log_and_status(m);
+        break;
+    case ID_TEXTBOX:
+        set_status("textbox focused");
+        break;
+    case ID_DROPDOWN: {
+        // open / close / value-changed, told apart by comparing with
+        // what was true before this event (see the was_* snapshots).
+        int sel = uui_dropdown_selected(&g.dropdown);
+        if (g.dropdown.open && !g.dd_was_open) {
+            log_and_status("dropdown open");
+        } else if (!g.dropdown.open && g.dd_was_open && sel != g.dd_was_sel) {
+            snprintf(m, sizeof m, "dropdown %d %s", sel, DD_ITEMS[sel]);
+            log_and_status(m);
+        } else if (!g.dropdown.open && g.dd_was_open) {
+            log_and_status("dropdown close");
+        }
+        break;
+    }
+    case ID_LISTBOX:
+        if (g.list.selected != g.list_was_sel) {
+            snprintf(m, sizeof m, "list %d %s", g.list.selected,
+                     LIST_ITEMS[g.list.selected]);
+            log_and_status(m);
+        } else if (g.list.top != g.list_was_top) {
+            // Scrolling, not selecting. WHICH KIND comes from the
+            // reason: a press on the track pages, a motion while the
+            // thumb is held is a drag.
+            log_list_scroll(reason == UUI_REASON_MOTION ? "thumb" : "page");
+        }
+        break;
+    case ID_VIEW:
+        if (reason == UUI_REASON_WHEEL) log_scroll("wheel");
+        else if (reason == UUI_REASON_MOTION)
+            log_scroll(g.view.thumb_grab >= 0 ? "thumb" : "pan");
+        else if (reason == UUI_REASON_PRESS && g.view.thumb_grab < 0)
+            log_scroll("page");
+        break;
+    default:
+        break;
+    }
+    snapshot();
+    uapp_redraw(a);
+}
+
+// Records the widget values as of the END of this event, which is the
+// same thing as "before the next one" -- only events change them. Kept
+// here rather than taken before dispatch because the toolkit routes to
+// the widget BEFORE handing the app its on_press, by design: the widget
+// acts first, the app reports afterwards.
+static void snapshot(void) {
+    g.dd_was_open = g.dropdown.open;
+    g.dd_was_sel = uui_dropdown_selected(&g.dropdown);
+    g.list_was_sel = g.list.selected;
+    g.list_was_top = g.list.top;
+}
+
+static void on_press(struct uapp *a, int cx, int cy, unsigned buttons) {
+    (void)a; (void)buttons;
+    layout();
+    // Focus follows the click. uui_focus_click() only MOVES focus; it
+    // never consumes the press, which the toolkit has already routed.
+    if (uui_focus_click(&g.focus, cx, cy)) log_focus();
+}
+
 static void on_motion(struct uapp *a, int cx, int cy, unsigned buttons) {
     layout();
-    // With a button held this is a DRAG, which belongs to whatever
-    // claimed the press.
-    if (buttons) {
-        if (g.pressing) {
-            if (uui_dropdown_drag(&g.dropdown, cx, cy)) { uapp_redraw(a); return; }
-            if (uui_listbox_drag(&g.list, cx, cy)) {
-                log_list_scroll("thumb");
-                uapp_redraw(a);
-                return;
-            }
-            if (g.view.thumb_grab >= 0 || g.view.panning) {
-                uui_textview_drag(&g.view, cx, cy);
-                log_scroll(g.view.thumb_grab >= 0 ? "thumb" : "pan");
-                uapp_redraw(a);
-                return;
-            }
-            if (uui_button_group_press(&g.group, cx, cy)) uapp_redraw(a);
-        }
-        return;
-    }
+    if (buttons) return;   // a drag belongs to whoever took the press
 
+    // Hover REPORTING, which is this app's own job: the toolkit already
+    // told the widgets to highlight themselves, but "which widget is
+    // the cursor over" is what a test calibrating a click reads.
     int now = (cx < 0 || cy < 0) ? W_NONE : (int)widget_at(cx, cy);
-    int moved = (cx != g.hover_x || cy != g.hover_y);
     g.hover_x = cx; g.hover_y = cy;
-    int changed = uui_button_group_hover(&g.group, cx, cy);
-    // Row-level hover inside these two is theirs to track: the name
-    // logged below only says WHICH widget, and a listbox highlighting a
-    // different row is a repaint the app would otherwise miss.
-    if (uui_listbox_hover(&g.list, cx, cy)) changed = 1;
     if (now != g.hover_name) {
         g.hover_name = now;
         char m[32];
         snprintf(m, sizeof m, "hover %s", WIDGET_NAMES[now]);
         logline(m);
-        changed = 1;
-    } else if (moved && now == W_RADIO) {
-        changed = 1;   // a move WITHIN the radio list changes the hot row
-    }
-    if (changed) uapp_redraw(a);
-}
-
-static void on_press(struct uapp *a, int cx, int cy, unsigned buttons) {
-    (void)buttons;
-    layout();
-    g.pressing = 1;
-
-    // Focus first, so a widget acting on this very press already has it.
-    // uui_focus_click() only moves focus; it never consumes the press.
-    if (uui_focus_click(&g.focus, cx, cy)) log_focus();
-
-    enum widget_id w = widget_at(cx, cy);
-    char m[64];
-
-    // --- act-on-contact widgets --------------------------------------
-    //
-    // A checkbox toggle, a radio selection, a listbox row and a dropdown
-    // are exactly the cases where acting on contact is correct. The
-    // BUTTONS below deliberately do not act here.
-    int was_open = g.dropdown.open;
-    if (uui_dropdown_click(&g.dropdown, cx, cy)) {
-        int sel = uui_dropdown_selected(&g.dropdown);
-        if (was_open && !g.dropdown.open && sel >= 0 && w == W_DROPDOWN) {
-            snprintf(m, sizeof m, "dropdown %d %s", sel, DD_ITEMS[sel]);
-            log_and_status(m);
-        } else if (!was_open && g.dropdown.open) {
-            log_and_status("dropdown open");
-        } else if (was_open && !g.dropdown.open) {
-            log_and_status("dropdown close");
-        }
         uapp_redraw(a);
-        return;
+    } else if (now == W_RADIO) {
+        uapp_redraw(a);   // the hot ROW may have changed within it
     }
-    // A press that merely DISMISSED an open popup is swallowed here, so
-    // it cannot also act on whatever is underneath -- the same rule the
-    // menu bar follows.
-    if (was_open && !g.dropdown.open) {
-        log_and_status("dropdown close");
-        uapp_redraw(a);
-        return;
-    }
-
-    // The listbox's SCROLLBAR outranks its rows: a press on the strip
-    // scrolls or starts a thumb drag and must not select. widget_at()
-    // reports W_NONE there (uui_listbox_hit excludes the bar), so this
-    // is asked separately rather than inside the W_LISTBOX branch.
-    if (uui_listbox_press(&g.list, cx, cy)) {
-        if (g.list.thumb_grab < 0) log_list_scroll("page");
-        uapp_redraw(a);
-        return;
-    }
-
-    if (w == W_LISTBOX) {
-        if (uui_listbox_click(&g.list, cx, cy) && g.list.selected >= 0) {
-            snprintf(m, sizeof m, "list %d %s", g.list.selected,
-                     LIST_ITEMS[g.list.selected]);
-            log_and_status(m);
-        }
-        uapp_redraw(a);
-        return;
-    }
-
-    if (w == W_CHK_ALPHA || w == W_CHK_BETA) {
-        int idx = (w == W_CHK_ALPHA) ? 0 : 1;
-        uui_checkbox_toggle(&g.chk[idx]);
-        snprintf(m, sizeof m, "check %s %s", idx ? "beta" : "alpha",
-                 g.chk[idx].checked ? "on" : "off");
-        log_and_status(m);
-        uapp_redraw(a);
-        return;
-    }
-
-    if (w == W_RADIO) {
-        int hit = uui_radio_list_hit(&g.radio, cx, cy);
-        if (hit >= 0) {
-            g.radio_sel = hit;
-            snprintf(m, sizeof m, "radio %s", RADIO_LABELS[hit]);
-            log_and_status(m);
-        }
-        uapp_redraw(a);
-        return;
-    }
-
-    if (w == W_TEXTBOX) {
-        set_status("textbox focused");
-        uapp_redraw(a);
-        return;
-    }
-
-    // --- the text view: thumb drag, pan, or page ---------------------
-    if (uui_textview_drag_start(&g.view, cx, cy)) { uapp_redraw(a); return; }
-    if (uui_textview_click(&g.view, cx, cy)) { log_scroll("page"); uapp_redraw(a); return; }
-
-    // --- buttons: arm now, commit on release -------------------------
-    if (uui_button_group_press(&g.group, cx, cy)) uapp_redraw(a);
-    for (int i = 0; i < BTN_COUNT; i++) {
-        if (g.buttons[i].pressed) { g.armed = 1; break; }
-    }
-}
-
-static void on_release(struct uapp *a, int cx, int cy, unsigned buttons) {
-    (void)cx; (void)cy; (void)buttons;
-    layout();
-    g.pressing = 0;
-    uui_textview_drag_end(&g.view);
-    uui_listbox_drag_end(&g.list);
-    uui_dropdown_drag_end(&g.dropdown);
-
-    int code = uui_button_group_release(&g.group);
-    if (code > 0) {
-        char m[32];
-        snprintf(m, sizeof m, "button %d", code);
-        logline(m);
-        snprintf(m, sizeof m, "release btn%d", code);
-        log_and_status(m);
-    } else if (g.armed) {
-        log_and_status("cancel btn");
-    }
-    g.armed = 0;
-    uapp_redraw(a);
-}
-
-static void on_wheel(struct uapp *a, int notches) {
-    layout();
-    // Same top-down order as press: an open popup is on top, so it takes
-    // the wheel first.
-    if (g.dropdown.open && uui_listbox_wheel(&g.dropdown.list, notches)) {
-        uapp_redraw(a);
-        return;
-    }
-    if (uui_listbox_wheel(&g.list, notches)) { uapp_redraw(a); return; }
-    if (!uui_textview_wheel(&g.view, notches)) return;
-    log_scroll("wheel");
-    uapp_redraw(a);
 }
 
 static void on_key(struct uapp *a, int key, unsigned mods) {
@@ -649,21 +613,45 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
         snprintf(m, sizeof m, "key %d (no focus)", key);
         log_and_status(m);
     }
+    // Keys change the same widgets the mouse does, so the comparison
+    // baseline has to move with them.
+    snapshot();
     uapp_redraw(a);
 }
 
+// Every widget this app has, and the id each reports under. THIS is the
+// app's entire input configuration -- the toolkit does the hit-testing,
+// the dispatch and the drag grab from here (ui/uui_route.h).
+//
+// Order is z-order for input: later entries are hit-tested FIRST. The
+// dropdown declares an overlay of its own, so its OPEN POPUP outranks
+// everything regardless of where it sits in this array.
+static struct uui_item ITEMS[] = {
+    { &uui_button_group_ops, &g.group,    0, ID_BUTTONS },
+    { &uui_checkbox_ops,     &g.chk[0],   0, ID_CHK_ALPHA },
+    { &uui_checkbox_ops,     &g.chk[1],   0, ID_CHK_BETA },
+    { &uui_radio_list_ops,   &g.radio,    0, ID_RADIO },
+    { &uui_textbox_ops,      &g.textbox,  0, ID_TEXTBOX },
+    { &uui_listbox_ops,      &g.list,     0, ID_LISTBOX },
+    { &uui_textview_ops,     &g.view,     0, ID_VIEW },
+    { &uui_dropdown_ops,     &g.dropdown, 0, ID_DROPDOWN },
+};
+
 int main(void) {
     struct uapp_desc desc = {
-        .title      = "UI Demo",
-        .on_size    = on_size,
-        .on_open    = on_open,
-        .on_draw    = on_draw,
-        .on_press   = on_press,
-        .on_release = on_release,
-        .on_motion  = on_motion,
-        .on_wheel   = on_wheel,
-        .on_key     = on_key,
-        .flags      = UAPP_RESIZABLE,
+        .title        = "UI Demo",
+        .on_size      = on_size,
+        .on_open      = on_open,
+        .on_draw      = on_draw,
+        .widgets      = ITEMS,
+        .widget_count = (int)(sizeof ITEMS / sizeof ITEMS[0]),
+        .on_widget    = on_widget,
+        // What is left for the app: focus on click, hover reporting and
+        // the keyboard. No press/drag/release routing at all.
+        .on_press     = on_press,
+        .on_motion    = on_motion,
+        .on_key       = on_key,
+        .flags        = UAPP_RESIZABLE,
     };
     return uapp_run(&desc);
 }

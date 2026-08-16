@@ -117,4 +117,11 @@ void uui_textview_drag(struct uui_textview *tv, int cx, int cy);
 void uui_textview_drag_end(struct uui_textview *tv);
 int uui_textview_hit(const struct uui_textview *tv, int cx, int cy);
 
+// Full table with ROUTED POINTER INPUT (ui/uui_route.h). An app that
+// declares a text view with this writes no scrolling code at all --
+// wheel, track paging, thumb dragging and (in PAN mode) body panning
+// are the widget's.
+struct uui_widget_ops;
+extern const struct uui_widget_ops uui_textview_ops;
+
 #endif

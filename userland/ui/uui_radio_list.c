@@ -1,5 +1,6 @@
 // radio list. Split out of uwidgets.c -- see ui/uui_radio_list.h.
 #include "ui/uui_radio_list.h"
+#include "ui/uui_widget.h"  // the ops table at the bottom of this file
 
 // ---------------------------------------------------------------------
 // radio list
@@ -63,3 +64,37 @@ int uui_radio_list_hit(const struct uui_radio_list *l, int cx, int cy) {
     }
     return -1;
 }
+
+// --- routed pointer input (ui/uui_route.h) ----------------------------
+//
+// The widget owns `selected` now. It used to be the APP's -- draw()
+// takes the value as an argument -- which meant a routed press had
+// nowhere to record a choice, and two apps could disagree about which
+// option was current. draw() still accepts an argument (callers pass
+// `l->selected`), so nothing that already worked changed.
+static int rl_ops_hit(const void *w, int cx, int cy) {
+    return uui_radio_list_hit((const struct uui_radio_list *)w, cx, cy) >= 0;
+}
+
+static int rl_ops_press(void *w, int cx, int cy) {
+    struct uui_radio_list *l = (struct uui_radio_list *)w;
+    int idx = uui_radio_list_hit(l, cx, cy);
+    if (idx < 0 || idx == l->selected) return 0;
+    l->selected = idx;
+    return 1;
+}
+
+static int rl_ops_motion(void *w, int cx, int cy, unsigned buttons) {
+    (void)buttons;
+    struct uui_radio_list *l = (struct uui_radio_list *)w;
+    int hot = uui_radio_list_hit(l, cx, cy);
+    if (hot == l->hovered) return 0;
+    l->hovered = hot;
+    return 1;
+}
+
+const struct uui_widget_ops uui_radio_list_ops = {
+    .hit    = rl_ops_hit,
+    .press  = rl_ops_press,
+    .motion = rl_ops_motion,
+};

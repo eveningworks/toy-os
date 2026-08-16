@@ -65,4 +65,9 @@ int  uui_listbox_key(struct uui_listbox *lb, int key);            // arrows/home
 struct uui_widget_ops;
 extern const struct uui_widget_ops uui_listbox_focus_ops;
 
+// The full table, including ROUTED POINTER INPUT (ui/uui_route.h): an
+// app that declares a listbox with this needs no input code at all --
+// selection, scrollbar paging and thumb dragging are the widget's.
+extern const struct uui_widget_ops uui_listbox_ops;
+
 #endif

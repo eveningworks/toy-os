@@ -1,6 +1,7 @@
 // See ui/uapp.h for what this is and why.
 #include "rt/sys.h"   // TWP messages, sys_win_request(), sys_wait_event()
 #include "ui/uapp.h"
+#include "ui/uui_route.h"
 #include "ui/utheme.h"
 
 struct uapp {
@@ -12,6 +13,14 @@ struct uapp {
     int focused;  // keyboard focus, per WIN_EV_FOCUS
     int running;
     int status;
+
+    // Pointer routing (ui/uui_route.h). Empty unless the app declared
+    // widgets, so an app that does its own hit-testing is untouched.
+    struct uui_router router;
+    // The last cursor position seen, because a WHEEL event carries
+    // notches and no coordinates -- and "which widget is under the
+    // cursor" is the only sane answer to where a wheel goes.
+    int mouse_x, mouse_y;
 };
 
 // One process, one window -- which is what every client does today, and
@@ -168,9 +177,20 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
         }
         break;
 
-    case WIN_EV_WHEEL:
-        if (d->on_wheel) { d->on_wheel(a, ev->a); a->dirty = 1; }
+    case WIN_EV_WHEEL: {
+        // To the widget UNDER THE CURSOR, not down a fixed chain -- see
+        // uui_route.h. The app's own on_wheel still fires for anything
+        // the widgets did not take.
+        int changed = 0;
+        int id = a->router.count
+                     ? uui_router_wheel(&a->router, a->mouse_x, a->mouse_y,
+                                        ev->a, &changed)
+                     : 0;
+        if (changed) a->dirty = 1;
+        if (id && d->on_widget) d->on_widget(a, id, UUI_REASON_WHEEL);
+        if (!id && d->on_wheel) { d->on_wheel(a, ev->a); a->dirty = 1; }
         break;
+    }
 
     case WIN_EV_FOCUS:
         // Recorded and repainted for the app, so the common case --
@@ -185,10 +205,22 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
         if (d->on_key) d->on_key(a, ev->a, ev->mods);
         break;
 
-    case WIN_EV_MOUSE_DOWN:
+    case WIN_EV_MOUSE_DOWN: {
+        a->mouse_x = ev->a;
+        a->mouse_y = ev->b;
+        // Routed FIRST, so a widget that wants this press gets it and
+        // takes the pointer grab. The app's on_press still runs: an app
+        // may want a press the widgets ignored (a canvas, a text area),
+        // or may want to log one they took.
+        int changed = 0;
+        int id = a->router.count
+                     ? uui_router_press(&a->router, ev->a, ev->b, &changed) : 0;
+        if (changed) a->dirty = 1;
+        if (id && d->on_widget) d->on_widget(a, id, UUI_REASON_PRESS);
         if (d->buttons && uui_button_group_press(d->buttons, ev->a, ev->b)) a->dirty = 1;
         if (d->on_press) d->on_press(a, ev->a, ev->b, ev->mods);
         break;
+    }
 
     case WIN_EV_MOUSE_MOVE:
         // With a button held this re-hit-tests the press, so dragging
@@ -196,6 +228,17 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
         // tracking. Both report "did anything change", so a cursor
         // crossing the window only repaints when it crosses a boundary.
         // This is the arm that was copied verbatim into three apps.
+        a->mouse_x = ev->a;
+        a->mouse_y = ev->b;
+        if (a->router.count) {
+            int changed = 0;
+            // The GRAB lives here: while a button is held this goes to
+            // whoever took the press, wherever the cursor now is, which
+            // is what makes a drag work with no app state at all.
+            int id = uui_router_motion(&a->router, ev->a, ev->b, ev->mods, &changed);
+            if (changed) a->dirty = 1;
+            if (id && d->on_widget) d->on_widget(a, id, UUI_REASON_MOTION);
+        }
         if (d->buttons) {
             int changed = ev->mods ? uui_button_group_press(d->buttons, ev->a, ev->b)
                                     : uui_button_group_hover(d->buttons, ev->a, ev->b);
@@ -205,6 +248,14 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
         break;
 
     case WIN_EV_MOUSE_UP:
+        a->mouse_x = ev->a;
+        a->mouse_y = ev->b;
+        if (a->router.count) {
+            int changed = 0;
+            int id = uui_router_release(&a->router, ev->a, ev->b, &changed);
+            if (changed) a->dirty = 1;
+            if (id && d->on_widget) d->on_widget(a, id, UUI_REASON_RELEASE);
+        }
         if (d->buttons) {
             // The commit point. A press dragged off its button was
             // already cleared by the moves above, so this returns -1
@@ -283,6 +334,7 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     // Re-run rather than trusting the natural-size pass: the window may
     // have been created at a different size than was asked for.
     if (desc->layout) uui_layout_run(desc->layout, 0, 0, a->w, a->h);
+    uui_router_init(&a->router, desc->widgets, desc->widget_count);
 
     if (desc->on_open) desc->on_open(a);
     flush(a); // the first frame, from the dirty flag set above

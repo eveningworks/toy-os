@@ -148,3 +148,54 @@ const struct uui_widget_ops uui_dropdown_focus_ops = {
     .key = dd_ops_key,
     .accepts_focus = dd_ops_accepts_focus,
 };
+
+// --- routed pointer input (ui/uui_route.h) ----------------------------
+//
+// **This is the widget `overlay_active` exists for.** An open popup is
+// drawn on top of everything and extends well outside the closed box,
+// so `hit` -- which covers the box only -- cannot decide who gets a
+// press. Declaring the overlay makes the router offer every press here
+// FIRST, which is what lets a click inside the popup select a row, a
+// click on the popup's scrollbar scroll it, and a click anywhere else
+// dismiss the popup AND be swallowed rather than also landing on
+// whatever sits underneath.
+static int dd_ops_overlay(const void *w) {
+    return ((const struct uui_dropdown *)w)->open;
+}
+
+static int dd_ops_press(void *w, int cx, int cy) {
+    return uui_dropdown_click((struct uui_dropdown *)w, cx, cy);
+}
+
+static int dd_ops_motion(void *w, int cx, int cy, unsigned buttons) {
+    struct uui_dropdown *d = (struct uui_dropdown *)w;
+    if (buttons) return uui_dropdown_drag(d, cx, cy);
+    if (!d->open) return 0;
+    return uui_listbox_hover(&d->list, cx, cy);
+}
+
+static int dd_ops_release(void *w, int cx, int cy) {
+    (void)cx; (void)cy;
+    uui_dropdown_drag_end((struct uui_dropdown *)w);
+    return 0;
+}
+
+// Only while OPEN: a closed dropdown deliberately ignores the wheel, so
+// the wheel over a form scrolls the form rather than silently changing
+// a value the user cannot see. Same rule the keyboard follows.
+static int dd_ops_wheel(void *w, int notches) {
+    struct uui_dropdown *d = (struct uui_dropdown *)w;
+    if (!d->open) return 0;
+    return uui_listbox_wheel(&d->list, notches);
+}
+
+const struct uui_widget_ops uui_dropdown_ops = {
+    .hit            = dd_ops_hit,
+    .key            = dd_ops_key,
+    .accepts_focus  = dd_ops_accepts_focus,
+    .overlay_active = dd_ops_overlay,
+    .press          = dd_ops_press,
+    .motion         = dd_ops_motion,
+    .release        = dd_ops_release,
+    .wheel          = dd_ops_wheel,
+};

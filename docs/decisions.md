@@ -104,6 +104,7 @@ there when you add an entry, or the index quietly stops being one.
 - [The ring-3 UI Demo selects on contact where the kernel one committed on release](#the-ring-3-ui-demo-selects-on-contact-where-the-kernel-one-committed-on-release)
 - [A compositor's view of a window is at a DERIVED address, and revocation is the feature](#a-compositors-view-of-a-window-is-at-a-derived-address-and-revocation-is-the-feature)
 - [The third inert scrollbar: drawing one and handling it are separate jobs](#the-third-inert-scrollbar-drawing-one-and-handling-it-are-separate-jobs)
+- [The toolkit routes pointer input; an app configures and is told what changed](#the-toolkit-routes-pointer-input-an-app-configures-and-is-told-what-changed)
 - [A GUI test spawns its client directly, instead of typing at a Terminal](#a-gui-test-spawns-its-client-directly-instead-of-typing-at-a-terminal)
 - [A client's menus are clamped to its own window, and that is one rectangle away from not being](#a-clients-menus-are-clamped-to-its-own-window-and-that-is-one-rectangle-away-from-not-being)
 - [A menu bar opens on press, which is the one place the commit-on-release rule bends](#a-menu-bar-opens-on-press-which-is-the-one-place-the-commit-on-release-rule-bends)
@@ -5273,3 +5274,65 @@ The fix put the behaviour in the widget (`uui_listbox_press()` /
 component, so the four shipping apps that use a listbox and every
 dropdown popup get it too, rather than each app growing its own copy
 and one of them getting the grab offset wrong again.
+
+
+## The toolkit routes pointer input; an app configures and is told what changed
+
+Every ring-3 app used to dispatch mouse input by hand: try the dropdown,
+then the listbox, then each button; remember whether a button is down so
+motion means "drag"; remember to call drag_end on release. The rule this
+violated is this project's own -- behaviour belongs to the component
+(`docs/gui-guidelines.md`) -- and input handling is behaviour.
+
+The measurement that settled it, taken before any code changed:
+
+| app | widget-input forwarding calls |
+|---|---|
+| Calculator | 0 |
+| Terminal, winclient, uiclient | 0 |
+| Shapes | 1 |
+| Notepad | 3 |
+| UI Demo | **21** |
+
+Calculator wrote NONE because `uapp_desc.buttons` already routed one
+widget type for it. So the model was proven and simply stopped at button
+groups; UI Demo paid twenty-one calls for using anything else.
+
+**The cost was never verbosity, it was silence.** A widget whose input
+an app forgot to forward is not a compile error and not a visible
+defect: it draws correctly and does nothing. That is exactly how
+`uui_listbox` shipped a scrollbar that could not be dragged.
+
+**What replaced it.** `uui_widget_ops` gained `press`/`motion`/
+`release`/`wheel`, `uui_route.h` walks the same `struct uui_item` array
+a layout already holds, and `uapp` calls it before the app's own
+callbacks. An app declares widgets with ids and gets
+`on_widget(app, id, reason)`; it reads the new value from the widget
+(`uui_dropdown_selected()`, `cb.checked`, `list.selected`). UI Demo went
+from 21 forwarding calls to none -- what is left there is hover
+REPORTING for the tests, which is the app's own business.
+
+Three decisions inside it worth keeping:
+
+- **The pointer GRAB.** Whoever consumes a press gets every motion and
+  the release, wherever the cursor goes. One rule, and it removes all
+  the per-app drag bookkeeping: a thumb drag that leaves the scrollbar
+  keeps scrolling, and a button dragged off still receives its release
+  and so can decline to commit.
+- **`overlay_active`.** An open dropdown popup is drawn outside its own
+  rect, so `hit` cannot route it. A widget declaring an overlay is
+  offered every press first -- input order being the reverse of draw
+  order, stated once in the router instead of re-derived by each app.
+- **An id plus a REASON, not a per-widget callback.** The id is the
+  app's (no allocator here, and one switch reads better than a callback
+  pointer on every widget struct). The reason names the input that
+  arrived -- press, motion, release, wheel -- which is the difference
+  between "scrolled with the wheel" and "dragged the thumb", and cannot
+  be recovered from widget state afterwards.
+
+One deliberate behaviour change fell out: **the wheel goes to the widget
+under the cursor**, not to whichever widget the app tried first. That is
+what a user expects, and it is why `uapp` tracks the last pointer
+position -- `WIN_EV_WHEEL` carries notches and no coordinates, exactly
+as Wayland's axis event does, because the client already knows where its
+pointer is.

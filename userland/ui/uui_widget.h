@@ -40,6 +40,33 @@ struct uui_widget_ops {
     int (*key)(void *w, int key, unsigned mods);
     void (*set_focused)(void *w, int focused);
     int (*accepts_focus)(const void *w);
+
+    // --- pointer input, routed by uui_route.h -----------------------
+    //
+    // **A widget that fills these in never needs an app to forward
+    // anything.** That is the point: before these existed the toolkit
+    // routed exactly ONE widget type (a button group, via
+    // uapp_desc.buttons), so Calculator wrote no input code at all
+    // while UI Demo hand-dispatched twenty-one calls -- and the widget
+    // whose scrollbar an app forgot to forward was simply dead.
+    //
+    // Each returns 1 if it CONSUMED the event (which also means "the
+    // app should repaint"). A press that returns 1 additionally takes
+    // the POINTER GRAB: every motion and the release go to that widget
+    // wherever the cursor then goes, which is what makes a drag work
+    // without any app tracking whether a button is down.
+    int (*press)(void *w, int cx, int cy);
+    int (*motion)(void *w, int cx, int cy, unsigned buttons);
+    int (*release)(void *w, int cx, int cy);
+    int (*wheel)(void *w, int notches);
+
+    // Does this widget currently own an OVERLAY that is drawn outside
+    // its own rect -- an open dropdown popup, say? Such a widget gets
+    // every press offered to it FIRST, before hit-testing anything
+    // else, because input order has to be the reverse of draw order and
+    // its `hit` only covers the closed control. A widget with no
+    // overlay leaves this NULL.
+    int (*overlay_active)(const void *w);
 };
 
 // One thing in a container. `widget` is whatever `ops` expects, not
@@ -48,6 +75,17 @@ struct uui_item {
     const struct uui_widget_ops *ops;
     void *widget;
     unsigned flags;
+
+    // The app's name for this widget, reported back through
+    // uapp_desc.on_widget() when the widget changes. Ids are the app's
+    // to choose and mean nothing to the toolkit; 0 is "don't tell me".
+    //
+    // An id rather than a per-widget callback pointer because a widget
+    // tree here is a const-ish array with no allocator behind it, and
+    // one switch in the app reads better than a function pointer and a
+    // user pointer stapled to every widget struct. Same shape as
+    // uui_menubar's item ids.
+    int id;
 };
 
 // Stretch to the container's cross-axis size instead of taking the
