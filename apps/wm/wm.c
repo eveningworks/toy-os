@@ -594,6 +594,21 @@ static void poll_desktop_entries(void) {
     // changed, so this fires as soon as the interaction ends.
     if (start_menu_open || desktop_drag_active()) return;
 
+    // And never while a window still POINTS INTO the registry.
+    // struct window::app is a pointer into gui_app_registry[] (wm.h),
+    // and gui_apps_load() rewrites that array in place -- re-parsing
+    // every entry and re-sorting the structs. Reloading underneath an
+    // open window would silently rebind it to whatever entry landed in
+    // that slot, so its callbacks would belong to a different app.
+    //
+    // Only a kernel-space app's window holds one; a ring-3 client's is 0
+    // (wm_client.c), which is every window a user is likely to have open
+    // today. So this defers rather than disables, and it disappears
+    // entirely with the last builtin in M41's stage 4.
+    for (int i = 0; i < window_count; i++) {
+        if (windows[i].app) return;
+    }
+
     uint64_t now = pit_ticks();
     if (now < quiet_until) return;
     quiet_until = now + 50; // ~500ms at the PIT's 100Hz

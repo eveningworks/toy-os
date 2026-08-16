@@ -55,9 +55,20 @@ deleted shows up within about half a second.
 
 The idle cost is one integer compare per frame and no disk I/O at all --
 worth knowing before "just poll the directory every few seconds" looks
-like the simpler option. It defers while the Start menu is open or an
-icon is mid-drag, because both hold an index into the entry list that a
-reload renumbers.
+like the simpler option.
+
+It DEFERS (never skips -- it fires as soon as the condition clears) in
+three cases, all for the same reason: something is holding a reference
+into the entry list that a reload would renumber.
+
+  - the Start menu is open (its rows are positional)
+  - an icon is mid-drag (the drag holds an index)
+  - a KERNEL-SPACE app's window is open -- Task Manager or Control
+    Panel. Their windows point directly at a registry entry, so a
+    reload underneath one would rebind it to a different app. A ring-3
+    client's window holds no such pointer, so it does not defer, and
+    this case disappears with the last kernel-space app in Milestone
+    41's stage 4.
 
 Your icon ARRANGEMENT survives a reload: positions live in
 `/etc/desktop.conf` keyed by `Name`, not by position in the list.

@@ -2885,11 +2885,20 @@ Three things about it worth keeping:
   one change however many slices it took, and this is the path Notepad
   saves through -- without it, editing a file in the editor would be
   invisible to anything watching.
-- **The reload DEFERS while the Start menu is open or an icon is
-  mid-drag.** The selection, the armed click and the drag are all
-  registry indices, and a reload renumbers them. Deferring costs nothing
-  because the generation stays changed, so it fires the moment the
-  interaction ends.
+- **The reload DEFERS while anything holds a reference into the entry
+  list** -- an open Start menu (positional rows), an icon mid-drag (an
+  index), or an open KERNEL-SPACE app window. The last is the one worth
+  knowing about: `struct window::app` is a pointer straight into
+  `gui_app_registry[]`, and `gui_apps_load()` rewrites and re-sorts that
+  array in place, so reloading underneath an open window would silently
+  rebind it to whatever entry landed in its slot -- its callbacks would
+  belong to a different app. A ring-3 client's window holds no such
+  pointer (`wm_client.c` sets it to 0), so it does not defer, and the
+  case disappears with the last builtin in stage 4. Deferring costs
+  nothing: the generation stays changed, so it fires the moment the
+  condition clears, and the test asserts both halves -- deferred while
+  open, delivered on close -- because "it did not appear" alone is
+  equally satisfied by a reload that stopped working.
 
 ## `append` zeroed the block it appended into, and `write`/`append` now write LINES
 

@@ -235,6 +235,39 @@ def main():
     else:
         check("clicking row 0 opens the app row 0 names", False, "no rows")
 
+    # --- the reload DEFERS while a kernel-space app is open -----------
+    #
+    # struct window::app points into gui_app_registry[], and a reload
+    # rewrites that array in place -- so reloading under an open window
+    # would rebind it to whatever entry landed in its slot. Only a
+    # kernel-space app holds such a pointer (a ring-3 client's is 0), so
+    # Task Manager is the lever here.
+    #
+    # Asserted as deferred-then-delivered, not just deferred: "it did not
+    # appear" alone is equally satisfied by a reload that stopped working
+    # altogether, which is the failure this guard could easily cause.
+    dbg.send(f"sh rm {TEST_FILE}")
+    wait_for_reload(dbg, TEST_NAME, present=False)
+    dbg.open_app("Task Manager")
+    dbg.settle()
+    time.sleep(0.5)
+
+    if dbg.window("Task Manager") is None:
+        check("reload defers while a kernel-space app is open", False,
+              "Task Manager did not open")
+    else:
+        write_entry(dbg)
+        time.sleep(2.5)
+        check("reload defers while a kernel-space app is open",
+              TEST_NAME not in menu_labels(dbg))
+
+        # ...and resumes the moment it closes. Without this half, the
+        # check above passes against a reload that is simply dead.
+        dbg.send("gui close 0")
+        dbg.settle()
+        check("...and resumes once it closes",
+              wait_for_reload(dbg, TEST_NAME, present=True))
+
     # --- deletion is noticed too --------------------------------------
     write_entry(dbg)                       # back on both surfaces
     wait_for_reload(dbg, TEST_NAME, present=True)
