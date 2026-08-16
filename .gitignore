@@ -6,6 +6,13 @@
 # Persistent disk image (see Makefile's DISK_IMG comment) -- deliberately
 # left alone by `make clean`, it's local dev state, not a repo asset.
 /disk.img
+# Release assets, built by hand when cutting a release (see
+# docs/decisions.md's versioning entry): the gzipped disk image that
+# gets attached to a GitHub Release, and the checksum file covering the
+# uploaded set. Both are reproducible from a build, and disk.img.gz in
+# particular is ~10MB of binary that has no business in git history.
+/disk.img.gz
+/SHA256SUMS
 # Pre-Btrfs-+C-fix backup of a real disk.img, left behind by the
 # no-COW swap described in CHANGELOG.md -- same "not a repo asset"
 # reasoning as disk.img itself, just not matched by the exact pattern
