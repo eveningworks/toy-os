@@ -63,6 +63,10 @@ void win_server_register(const struct win_server_ops *ops) {
     g_ops = ops;
 }
 
+const struct win_server_ops *win_server_ops_current(void) {
+    return g_ops;
+}
+
 int win_server_active(void) {
     return g_ops != NULL;
 }
@@ -354,6 +358,87 @@ static int resize_window(struct client_window *cw, int w, int h) {
     if (g_ops && g_ops->window_resized) {
         g_ops->window_resized(cw->pid, cw->id, cw->buf, w, h);
     }
+    return 1;
+}
+
+// --- the diagnostic channel (Milestone 41, stage 3) -------------------
+//
+// One reply at a time, buffered here between the WM that formats it and
+// the transport that carries it. See win_server.h on why the chunking
+// lives on this side of the boundary rather than in the WM.
+//
+// A single static buffer, and a second DEBUG_CMD simply discards
+// whatever the previous one had left: the console is the only client of
+// this channel and it drains a reply before sending the next command.
+// Sized for the longest reply any subcommand produces (`gui help`, ~1.8
+// KB) with room to grow -- an over-long one is truncated with a marker
+// rather than silently cut, matching kernel/lib's rule that a formatter
+// which does not fit says so.
+#define WIN_DEBUG_REPLY_MAX 4096
+static char g_dbg_reply[WIN_DEBUG_REPLY_MAX];
+static int  g_dbg_len = 0;  // bytes of reply held
+static int  g_dbg_sent = 0; // how many of them have gone out
+
+// Fills `msg` with the next chunk of the held reply.
+static void dbg_take_chunk(struct win_debug_msg *msg) {
+    int left = g_dbg_len - g_dbg_sent;
+    if (left < 0) left = 0;
+
+    int n = left > WIN_DEBUG_CHUNK ? WIN_DEBUG_CHUNK : left;
+    for (int i = 0; i < n; i++) msg->text[i] = g_dbg_reply[g_dbg_sent + i];
+    msg->text[n] = '\0';
+
+    g_dbg_sent += n;
+    msg->type = WIN_EV_DEBUG_OUT;
+    msg->len = (uint32_t)n;
+    // The flag is what makes the reply self-delimiting -- a chunk that
+    // exactly fills the buffer is otherwise indistinguishable from a
+    // truncated one. See WIN_DEBUG_F_MORE.
+    if (g_dbg_sent < g_dbg_len) msg->flags |= WIN_DEBUG_F_MORE;
+}
+
+int win_server_debug(int pid, struct win_debug_msg *msg) {
+    (void)pid; // the console is the only client; kept for the ops shape
+    if (!msg) return 0;
+
+    msg->flags = 0;
+    msg->reserved = 0;
+
+    if (msg->type == WIN_REQ_DEBUG_MORE) {
+        // No live reply is not an error -- it is an empty final chunk,
+        // so a client that asks one time too many terminates cleanly
+        // instead of looping.
+        dbg_take_chunk(msg);
+        return 1;
+    }
+
+    if (msg->type != WIN_REQ_DEBUG_CMD) return 0;
+
+    g_dbg_len = 0;
+    g_dbg_sent = 0;
+
+    if (!g_ops || !g_ops->debug_command) {
+        msg->type = WIN_EV_DEBUG_OUT;
+        msg->len = 0;
+        msg->text[0] = '\0';
+        return 0;
+    }
+
+    msg->text[WIN_DEBUG_CMD_LEN - 1] = '\0'; // the command is client data
+    int n = g_ops->debug_command(msg->text, g_dbg_reply, sizeof g_dbg_reply);
+    if (n < 0) {
+        // Unrecognised, which the caller must be able to tell from a
+        // command that legitimately printed nothing.
+        msg->type = WIN_EV_DEBUG_OUT;
+        msg->flags = WIN_DEBUG_F_UNKNOWN;
+        msg->len = 0;
+        msg->text[0] = '\0';
+        return 1;
+    }
+
+    if (n > (int)sizeof g_dbg_reply) n = (int)sizeof g_dbg_reply;
+    g_dbg_len = n;
+    dbg_take_chunk(msg);
     return 1;
 }
 

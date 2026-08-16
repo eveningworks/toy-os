@@ -20,7 +20,7 @@
 #include "debug_console.h"
 #include "serial.h"
 #include "klog.h"
-#include "wm/wm_debug.h"
+#include "win_transport.h" // `gui` travels as a protocol message now
 #include "kfmt.h"
 #include "string.h"
 #include "pmm.h"
@@ -204,6 +204,40 @@ static void dbg_cmd_lsfs(const char *arg) {
 // this is a debug tool, not a real shell. Mutates `line` in place
 // (null-terminates the command word), same as shell_dispatch() does to
 // its own line buffer.
+// Runs one `gui` command over the window transport and prints the reply.
+//
+// The reply arrives in WIN_DEBUG_CHUNK-sized pieces because a message
+// carries a fixed payload and `gui help` is ~1.8 KB. The loop is bounded
+// rather than "until no MORE flag": a transport that answered with the
+// flag permanently set would otherwise hang the console, and the console
+// is the only way to talk to a wedged desktop. The bound is generous
+// enough that no real reply reaches it.
+static void dbg_cmd_gui(const char *args) {
+    struct win_debug_msg msg;
+    k_memset(&msg, 0, sizeof msg);
+    msg.type = WIN_REQ_DEBUG_CMD;
+    k_strlcpy(msg.text, args ? args : "", WIN_DEBUG_CMD_LEN);
+
+    if (!win_transport_debug(WIN_PID_KERNEL, &msg)) {
+        klog_write("gui: no window manager running\r\n");
+        return;
+    }
+    if (msg.flags & WIN_DEBUG_F_UNKNOWN) {
+        klog_write("unknown gui subcommand -- try `gui help`\r\n");
+        return;
+    }
+
+    for (int guard = 0; guard < 64; guard++) {
+        if (msg.len) klog_write(msg.text);
+        if (!(msg.flags & WIN_DEBUG_F_MORE)) return;
+
+        k_memset(&msg, 0, sizeof msg);
+        msg.type = WIN_REQ_DEBUG_MORE;
+        if (!win_transport_debug(WIN_PID_KERNEL, &msg)) return;
+    }
+    klog_write("\r\ngui: (reply too long, stopped)\r\n");
+}
+
 static void dbg_dispatch(char *line) {
     int i = 0;
     while (line[i] && line[i] != ' ') i++;
@@ -212,19 +246,18 @@ static void dbg_dispatch(char *line) {
     const char *arg = had_space ? line + i + 1 : "";
 
     if (k_strcmp(line, "gui") == 0) {
-        // Routed straight into apps/wm/, which owns the window table --
-        // this file only recognises the word. Same direction kernel/core
-        // already reaches apps/ for `sh` and apps_start(); the Makefile
-        // puts -Iapps on the kernel include path for exactly this.
+        // Sent as a PROTOCOL MESSAGE over the window transport, not
+        // called into apps/wm/ directly (Milestone 41, stage 3). This
+        // file used to call wm_debug_dispatch() across the kernel/apps
+        // boundary; every GUI test tool drives the desktop through here,
+        // so that call is exactly what had to stop before the WM can
+        // become a ring-3 process. What changes in stage 4 is the
+        // transport underneath, not this code.
         //
         // NOT the same as `sh gui`, which is blocked: that would try to
         // ENTER GUI mode from inside the console and never return. These
         // subcommands inspect and drive a desktop that is already up.
-        // `arg` points into `line`, which dbg_dispatch() owns and may
-        // modify -- wm_debug_dispatch() tokenises it in place.
-        if (!wm_debug_dispatch(had_space ? line + i + 1 : line + i)) {
-            klog_write("unknown gui subcommand -- try `gui help`\r\n");
-        }
+        dbg_cmd_gui(had_space ? line + i + 1 : line + i);
         return;
     }
     if (k_strcmp(line, "help") == 0) dbg_cmd_help();

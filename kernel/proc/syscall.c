@@ -8,6 +8,7 @@
 #include "scheduler.h"
 #include "win_events.h"
 #include "win_server.h"
+#include "win_transport.h"
 #include "pipe.h"
 #include "pmm.h"
 #include "fs.h"
@@ -1079,7 +1080,11 @@ void syscall_dispatch(uint64_t *regs) {
                 klog_write("syscall: win_request() rejected -- no window server registered\n");
                 regs[14] = (uint64_t)-1;
             } else {
-                int rc = win_server_request(pid, &req);
+                // Over the transport rather than straight into the
+                // server: SYS_WIN_REQUEST is now ONE carriage for TWP,
+                // not the only one (Milestone 41, stage 3). See
+                // kernel/win_transport.h.
+                int rc = win_transport_request(pid, &req);
 
                 // Only copy back a request the server actually looked at
                 // -- a malformed one leaves the client's buffer as sent.

@@ -15,6 +15,7 @@
 // produced desktop.c/start_menu.c/file_picker.c. See wm.c's top
 // comment.
 #include "wm_internal.h"
+#include "wm_debug.h" // the diagnostic channel's WM end, below
 #include "win_server.h"
 #include "win_events.h"
 #include "kapi.h"
@@ -172,6 +173,23 @@ static void on_window_resized(int pid, uint32_t id, uint32_t *buf, int w, int h)
 // naturally next to the ping that provokes it than up here.
 static void on_window_pong(int pid, uint32_t id, uint32_t serial);
 
+// The diagnostic channel's WM end (Milestone 41, stage 3). The `gui`
+// commands arrive here as protocol messages now, instead of the serial
+// console calling wm_debug_dispatch() directly across the kernel/apps
+// boundary -- which is what has to stop before the WM can be a process.
+//
+// The command line is copied because wm_debug_dispatch_out() tokenises
+// it IN PLACE, and what arrives is the transport's message buffer.
+static int on_debug_command(const char *line, char *out, int cap) {
+    char buf[WIN_DEBUG_CMD_LEN];
+    k_strlcpy(buf, line ? line : "", sizeof buf);
+
+    struct dbg_out o = { .buf = out, .cap = cap, .len = 0, .overflow = 0 };
+    if (!wm_debug_dispatch_out(buf, &o)) return -1;
+    if (o.overflow) dbg_out_write(&o, "gui: (output truncated)\r\n");
+    return o.len;
+}
+
 static const struct win_server_ops WM_SERVER_OPS = {
     .window_created   = on_window_created,
     .window_present   = on_window_present,
@@ -180,6 +198,7 @@ static const struct win_server_ops WM_SERVER_OPS = {
     .window_hints     = on_window_hints,
     .window_resized   = on_window_resized,
     .window_pong      = on_window_pong,
+    .debug_command    = on_debug_command,
 };
 
 void wm_client_init(void) {

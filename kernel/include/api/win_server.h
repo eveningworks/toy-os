@@ -87,6 +87,22 @@ struct win_server_ops {
     // owns presentation -- the title, the dialog, the policy). The
     // timeout is not in here for that reason.
     void (*window_pong)(int pid, uint32_t id, uint32_t serial);
+
+    // Run one `gui` diagnostic command and write its reply into `out`
+    // (`cap` bytes including the NUL). Returns the number of bytes
+    // written, or -1 if the subcommand was not recognised.
+    //
+    // OPTIONAL, like every slot here: a presentation layer with no
+    // diagnostics leaves it NULL and the channel answers "no window
+    // manager", rather than this file having to know what a `gui`
+    // command is. It does not -- the reply is opaque text, and which
+    // subcommands exist is entirely the WM's business.
+    //
+    // The WHOLE reply is produced in one call and chunked by the caller.
+    // The alternative -- letting the WM stream chunks as it formats --
+    // would make every `gui` command re-entrant with respect to the
+    // transport, and these are dispatched from inside wm_run() itself.
+    int (*debug_command)(const char *line, char *out, int cap);
 };
 
 // Registers the presentation layer. The WM calls this with its ops as
@@ -99,6 +115,12 @@ void win_server_register(const struct win_server_ops *ops);
 // `gui` is entered is "no".
 int win_server_active(void);
 
+// The registered presentation layer, or NULL. For KTESTs, which swap in
+// a stub and must put the live desktop's back -- the suite runs inside
+// the LIVE kernel, so a test that leaves a stub registered takes the
+// desktop's diagnostics down for the rest of the boot.
+const struct win_server_ops *win_server_ops_current(void);
+
 // Handles one client request against `pid`. `req` is a KERNEL copy --
 // never the client's own page, which the client could change under us
 // between validation and use. WIN_REQ_CREATE writes the new id back
@@ -108,6 +130,21 @@ int win_server_active(void);
 // window, not this client's window, out of memory), -1 for an unknown
 // request type or with no server registered.
 int win_server_request(int pid, struct win_request_msg *req);
+
+// Handles one diagnostic message -- WIN_REQ_DEBUG_CMD runs `msg->text`
+// and answers with the first chunk of its reply; WIN_REQ_DEBUG_MORE
+// answers with the next one. On return `msg` is a WIN_EV_DEBUG_OUT
+// carrying `len` bytes and WIN_DEBUG_F_* flags.
+//
+// The reply is buffered HERE, between the WM that formatted it and the
+// transport that carries it, because chunking is a property of the
+// carriage and not of the diagnostic. A transport that could pass the
+// whole reply in one message (a shared ring) fetches it in one call and
+// never asks for a second chunk, with nothing on the WM side to change.
+//
+// Returns 1 on success, 0 if no presentation layer is registered or it
+// offers no debug_command.
+int win_server_debug(int pid, struct win_debug_msg *msg);
 
 // Destroys every window `pid` still owns, freeing and unmapping their
 // buffers. Called from process teardown -- a dead client's windows must

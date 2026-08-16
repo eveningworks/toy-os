@@ -34,11 +34,52 @@
 // reaches apps/ for `sh` (see kernel/core/debug_console.c, and the
 // Makefile's -Iapps for why a kernel file may include this at all).
 
-// Handles a `gui ...` command line: `line` is everything AFTER the
-// word `gui`, already trimmed (empty string for a bare `gui`). Writes
-// its output with klog_write()/klog_printf(), so it lands on whatever
-// the debug console is connected to. Returns 1 if the subcommand was
-// recognised, 0 if not (the caller prints usage).
+// --- where a `gui` command's output goes ------------------------------
+//
+// Milestone 41, stage 3. These used to write straight to klog_write(),
+// i.e. to whatever the serial debug console was connected to, which made
+// the reply unavailable to anything but that console. It has to become a
+// PAYLOAD now: the console reaches the WM over the transport (see
+// kernel/win_transport.h), and a message carries bytes, not side effects
+// on a serial port.
+//
+// A caller-supplied sink rather than a klog capture/redirect, which was
+// the cheaper option and is the wrong one: a redirect is global, so
+// kernel log lines emitted DURING a command -- the ELF loader's during
+// `gui spawn`, the WM's during `gui open`, a damage-verify report --
+// would be swallowed into the reply instead of reaching the serial log,
+// silently breaking every test that reads them (DebugConsole.logs(),
+// damage_bugs()). With a sink, only this file's own output is captured
+// and the kernel log is untouched.
+struct dbg_out {
+    char *buf;
+    int   cap;      // buffer size INCLUDING room for the NUL
+    int   len;      // bytes written so far, never >= cap
+    int   overflow; // set once something did not fit; see dbg_out_write
+};
+
+// Append to the sink. A write that does not fit is TRUNCATED and sets
+// `overflow` -- deliberately unlike kernel/lib's formatters, which write
+// nothing rather than a wrong value. The difference is what the value
+// is: a number that is half-written is wrong, whereas a diagnostic
+// transcript that stops early is simply shorter, and the flag is what
+// makes that visible instead of silent.
+void dbg_out_write(struct dbg_out *o, const char *s);
+void dbg_out_printf(struct dbg_out *o, const char *fmt, ...);
+
+// Handles a `gui ...` command line: `line` is everything AFTER the word
+// `gui`, already trimmed (empty string for a bare `gui`). Output goes to
+// `out`. Returns 1 if the subcommand was recognised, 0 if not (the
+// caller prints usage).
+//
+// `line` is tokenised IN PLACE, so it must be writable.
+int wm_debug_dispatch_out(char *line, struct dbg_out *out);
+
+// The same, writing straight to the kernel log. For in-kernel callers
+// that are already inside the WM and want the old behaviour -- the demo
+// tour (apps/demo.c) is the only one. NOT the path the serial console
+// takes any more: that one goes over the transport, which is the whole
+// point of stage 3.
 int wm_debug_dispatch(char *line);
 
 // --- synthetic input, drained by wm_run() ---------------------------

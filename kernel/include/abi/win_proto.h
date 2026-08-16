@@ -107,6 +107,13 @@
                             // driver's wheel is a read-and-reset
                             // accumulator, not part of the level state.
 
+#define WIN_EV_DEBUG_OUT 13 // One chunk of a `gui` command's reply. Rides
+                            // struct win_debug_msg rather than struct
+                            // win_event -- the text does not fit in 24
+                            // bytes; see the diagnostic channel section
+                            // below. Listed here so the event namespace
+                            // stays one list.
+
 #define WIN_EV_FOCUS      7 // a: 1 = this window gained keyboard focus,
                             // 0 = lost it.
                             //
@@ -242,6 +249,70 @@ struct win_event {
                            // pages out of the kernel image itself, so
                            // a writable mapping would let any client
                            // scribble on kernel .rodata.
+
+#define WIN_REQ_DEBUG_CMD  10 // Run one `gui` diagnostic command. The
+                           // command text and the reply both ride
+                           // struct win_debug_msg, not this struct --
+                           // see that struct for why.
+#define WIN_REQ_DEBUG_MORE 11 // Fetch the next chunk of the reply the
+                           // previous DEBUG_CMD started. No inputs.
+
+// --- the diagnostic channel (Milestone 41, stage 3) -------------------
+//
+// The `gui` commands the GUI test tools drive the desktop with, carried
+// as protocol messages instead of a direct call from the kernel's serial
+// console into WM internals. All sixteen tools reach the WM this way, so
+// the ~240 checks that prove the desktop works have to cross the
+// transport before the WM itself can move to ring 3 (stage 4).
+//
+// **A message, not a side channel.** These are ordinary WIN_REQ_*/
+// WIN_EV_* types on the one transport, so a ring-3 window server
+// inherits the diagnostic path with nothing to re-plumb -- the same bet
+// WIN_REQ_SET_COMPOSITOR made. A separate channel was considered (a
+// diagnostic is not app-facing traffic) and rejected as a second
+// mechanism to maintain and move.
+//
+// **Why its own struct rather than widening the two above.** A reply is
+// text and runs to kilobytes -- `gui help` alone is ~1.8 KB and
+// `gui windows --json` grows with the window count. struct win_event is
+// a fixed 24 bytes and struct win_request_msg carries text[32], so
+// neither can hold one; widening either would put a kilobyte-sized copy
+// on the path of EVERY request, and WIN_REQ_PRESENT is the hot path --
+// once per client frame. So the diagnostic pair carries its own payload
+// and the hot path keeps its 56-byte message. Same fixed-layout, no
+// pointer discipline as the other two, for the same reason: these bytes
+// must work unchanged whether a syscall copies them or a client reads
+// them straight out of a shared ring.
+#define WIN_DEBUG_CMD_LEN 128 // longest command, including the NUL. The
+                              // longest one any tool sends today is a
+                              // `spawn` with arguments, ~40 bytes.
+#define WIN_DEBUG_CHUNK   512 // reply bytes per message, excluding the
+                              // NUL. Sized so a typical one-line answer
+                              // fits in a single round trip while the
+                              // struct stays well under a page.
+
+#define WIN_DEBUG_F_MORE  0x01 // set on a reply when more chunks follow:
+                               // ask again with WIN_REQ_DEBUG_MORE. The
+                               // reply is NOT self-delimiting -- a chunk
+                               // that exactly fills the buffer is
+                               // indistinguishable from a truncated one
+                               // otherwise, which is the trap a
+                               // "read until short" convention sets.
+#define WIN_DEBUG_F_UNKNOWN 0x02 // the WM did not recognise the
+                               // subcommand; `text` holds nothing. Kept
+                               // distinct from an empty reply, since a
+                               // command that legitimately prints
+                               // nothing is not an error.
+
+struct win_debug_msg {
+    uint32_t type;  // WIN_REQ_DEBUG_CMD / WIN_REQ_DEBUG_MORE going in,
+                    // WIN_EV_DEBUG_OUT coming back
+    uint32_t flags; // WIN_DEBUG_F_*, reply only
+    uint32_t len;   // bytes valid in `text`, reply only
+    uint32_t reserved; // must be 0; keeps the struct 8-byte aligned
+    char text[WIN_DEBUG_CHUNK + 1]; // command in / reply chunk out,
+                                    // always NUL-terminated
+};
 
 // --- window behaviour hints (WIN_REQ_HINTS's `a`) ---------------------
 #define WIN_HINT_RESIZABLE 0x01 // the user may resize this window

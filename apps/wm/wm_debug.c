@@ -9,6 +9,7 @@
 #include "kapi.h"
 #include "win_server.h"
 #include "win_events.h"
+#include <stdarg.h> // dbg_out_printf()'s varargs
 
 // ---------------------------------------------------------------------
 // Synthetic input queue
@@ -87,6 +88,37 @@ int wm_debug_next_key_mods(uint8_t *out_mods) {
 }
 
 // ---------------------------------------------------------------------
+// The output sink
+// ---------------------------------------------------------------------
+//
+// See wm_debug.h for why a caller-supplied sink rather than a klog
+// redirect. Everything below writes through these two and nothing in
+// this file calls klog_write() any more -- which is the property that
+// keeps a `gui spawn`'s ELF-loader log lines on the serial port where
+// tests read them, instead of inside the reply.
+
+void dbg_out_write(struct dbg_out *o, const char *s) {
+    if (!o || !o->buf || !s) return;
+    while (*s) {
+        if (o->len + 1 >= o->cap) { o->overflow = 1; break; }
+        o->buf[o->len++] = *s++;
+    }
+    o->buf[o->len] = '\0';
+}
+
+void dbg_out_printf(struct dbg_out *o, const char *fmt, ...) {
+    // Formats into a line buffer first, then appends -- k_vsnprintf()
+    // needs somewhere contiguous, and the sink's remaining space is not
+    // guaranteed to be big enough to format into directly.
+    char line[KFMT_LINE_MAX];
+    va_list ap;
+    va_start(ap, fmt);
+    k_vsnprintf(line, sizeof line, fmt, ap);
+    va_end(ap);
+    dbg_out_write(o, line);
+}
+
+// ---------------------------------------------------------------------
 // Argument parsing
 // ---------------------------------------------------------------------
 
@@ -150,16 +182,16 @@ static int wants_json(char *rest) {
 // which is how the first version of this file emitted rows reading
 // "y=%-4d centre=%-4d  app  <garbage>". These two do the padding
 // explicitly instead of pretending the formatter can.
-static void col_str(const char *s, int width) {
+static void col_str(struct dbg_out *o, const char *s, int width) {
     int n = 0;
-    if (s) { klog_write(s); n = (int)k_strlen(s); }
-    for (int i = n; i < width; i++) klog_write(" ");
+    if (s) { dbg_out_write(o, s); n = (int)k_strlen(s); }
+    for (int i = n; i < width; i++) dbg_out_write(o, " ");
 }
 
-static void col_int(int v, int width) {
+static void col_int(struct dbg_out *o, int v, int width) {
     char buf[16];
     k_snprintf(buf, sizeof buf, "%d", v);
-    col_str(buf, width);
+    col_str(o, buf, width);
 }
 
 static const char *state_name(enum window_state s) {
@@ -174,7 +206,7 @@ static const char *state_name(enum window_state s) {
 // Introspection
 // ---------------------------------------------------------------------
 
-// NOTE for anything added below: klog_printf() formats into a
+// NOTE for anything added below: dbg_out_printf() formats into a
 // KFMT_LINE_MAX (256) byte buffer and whatever doesn't fit is simply
 // lost. A single call emitting a whole JSON object overflows that
 // quietly -- `gui state --json` did, and the reply came back as valid
@@ -185,19 +217,19 @@ static const char *state_name(enum window_state s) {
 // z-order, window_count-1 the top (and therefore the focused one -- see
 // wm.c's bring_to_front()). Reported explicitly rather than left for
 // the reader to know.
-static void cmd_windows(int json) {
+static void cmd_windows(struct dbg_out *o, int json) {
     if (json) {
-        klog_write("{\"count\":");
-        klog_printf("%d,\"focused\":%d,\"windows\":[", window_count,
+        dbg_out_write(o, "{\"count\":");
+        dbg_out_printf(o, "%d,\"focused\":%d,\"windows\":[", window_count,
                      window_count > 0 ? window_count - 1 : -1);
         for (int i = 0; i < window_count; i++) {
             const struct window *w = &windows[i];
-            klog_printf("%s{\"z\":%d,\"title\":\"%s\",\"app\":\"%s\",",
+            dbg_out_printf(o, "%s{\"z\":%d,\"title\":\"%s\",\"app\":\"%s\",",
                          i ? "," : "", i, w->title,
                          w->app ? w->app->name : "");
-            klog_printf("\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,",
+            dbg_out_printf(o, "\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,",
                          w->x, w->y, w->w, w->h);
-            klog_printf("\"content\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d},",
+            dbg_out_printf(o, "\"content\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d},",
                          window_content_x(w), window_content_y(w),
                          window_content_w(w), window_content_h(w));
             // client_pid is 0 for a kernel-space window and the owning
@@ -205,37 +237,37 @@ static void cmd_windows(int json) {
             // is otherwise only visible in the Task Manager's own text,
             // so a test asserting "this really is a ring-3 client" would
             // have nothing to read.
-            klog_printf("\"client_pid\":%d,", w->client_pid);
+            dbg_out_printf(o, "\"client_pid\":%d,", w->client_pid);
             // The FLAG, not the decorated title: wm_render.c appends
             // "(Not Responding)" at draw time, so the title here is the
             // client's own and a test looking for the suffix in it finds
             // nothing. Report the fact and let the test assert on that.
-            klog_printf("\"not_responding\":%s,", w->not_responding ? "true" : "false");
-            klog_printf("\"state\":\"%s\",\"focused\":%s,\"resizable\":%s}",
+            dbg_out_printf(o, "\"not_responding\":%s,", w->not_responding ? "true" : "false");
+            dbg_out_printf(o, "\"state\":\"%s\",\"focused\":%s,\"resizable\":%s}",
                          state_name(w->state),
                          (i == window_count - 1) ? "true" : "false",
                          w->resizable ? "true" : "false");
         }
-        klog_write("]}\r\n");
+        dbg_out_write(o, "]}\r\n");
         return;
     }
 
-    klog_printf("%d window(s), z-order bottom to top; the top one has focus\r\n",
+    dbg_out_printf(o, "%d window(s), z-order bottom to top; the top one has focus\r\n",
                  window_count);
     if (window_count == 0) return;
-    klog_write("  z  title           x    y    w    h  | content x/y/w/h    state\r\n");
+    dbg_out_write(o, "  z  title           x    y    w    h  | content x/y/w/h    state\r\n");
     for (int i = 0; i < window_count; i++) {
         const struct window *w = &windows[i];
-        klog_write("  ");
-        col_int(i, 3);
-        col_str(w->title, 16);
-        col_int(w->x, 5); col_int(w->y, 5); col_int(w->w, 5); col_int(w->h, 5);
-        klog_write("| ");
-        col_int(window_content_x(w), 5); col_int(window_content_y(w), 5);
-        col_int(window_content_w(w), 5); col_int(window_content_h(w), 5);
-        klog_write(" ");
-        klog_write(state_name(w->state));
-        klog_write((i == window_count - 1) ? " (focused)\r\n" : "\r\n");
+        dbg_out_write(o, "  ");
+        col_int(o, i, 3);
+        col_str(o, w->title, 16);
+        col_int(o, w->x, 5); col_int(o, w->y, 5); col_int(o, w->w, 5); col_int(o, w->h, 5);
+        dbg_out_write(o, "| ");
+        col_int(o, window_content_x(w), 5); col_int(o, window_content_y(w), 5);
+        col_int(o, window_content_w(w), 5); col_int(o, window_content_h(w), 5);
+        dbg_out_write(o, " ");
+        dbg_out_write(o, state_name(w->state));
+        dbg_out_write(o, (i == window_count - 1) ? " (focused)\r\n" : "\r\n");
     }
 }
 
@@ -243,7 +275,7 @@ static void cmd_windows(int json) {
 // raises -- "did my coordinate land where I thought" -- without a
 // screenshot. Regions are named the same way wm_input.c's hit-testing
 // thinks about them, so the answer maps onto the code that would run.
-static void cmd_probe(int px, int py, int json) {
+static void cmd_probe(struct dbg_out *o, int px, int py, int json) {
     const char *region = "desktop";
     int hit = -1;
 
@@ -279,170 +311,170 @@ static void cmd_probe(int px, int py, int json) {
     else if (py >= screen_h - taskbar_h) overlay = "taskbar";
 
     if (json) {
-        klog_printf("{\"x\":%d,\"y\":%d,\"window\":%d,\"title\":\"%s\","
+        dbg_out_printf(o, "{\"x\":%d,\"y\":%d,\"window\":%d,\"title\":\"%s\","
                      "\"region\":\"%s\",\"overlay\":\"%s\"", px, py, hit,
                      hit >= 0 ? windows[hit].title : "", region, overlay);
         if (hit >= 0) {
             const struct window *w = &windows[hit];
-            klog_printf(",\"content_rel\":{\"x\":%d,\"y\":%d}",
+            dbg_out_printf(o, ",\"content_rel\":{\"x\":%d,\"y\":%d}",
                          px - window_content_x(w), py - window_content_y(w));
         }
-        klog_write("}\r\n");
+        dbg_out_write(o, "}\r\n");
         return;
     }
 
-    klog_printf("(%d,%d): %s", px, py, region);
+    dbg_out_printf(o, "(%d,%d): %s", px, py, region);
     if (hit >= 0) {
         const struct window *w = &windows[hit];
-        klog_printf(" of window %d \"%s\"; content-relative (%d,%d)",
+        dbg_out_printf(o, " of window %d \"%s\"; content-relative (%d,%d)",
                      hit, w->title,
                      px - window_content_x(w), py - window_content_y(w));
     }
     if (k_strcmp(overlay, "none") != 0) {
-        klog_printf("  [%s is above everything and would take this click]", overlay);
+        dbg_out_printf(o, "  [%s is above everything and would take this click]", overlay);
     }
-    klog_write("\r\n");
+    dbg_out_write(o, "\r\n");
 }
 
 // Start menu rows, as the kernel computes them -- the numbers
 // tools/gui_flow.py used to hardcode.
-// The open right-click menu's rows, in the same shape cmd_menu() reports
+// The open right-click menu's rows, in the same shape cmd_menu(o, ) reports
 // the Start menu's. Without this a test cannot reach a context-menu row
 // at all except by re-deriving its position, which this project's own
 // rules forbid -- and the one thing that most needed testing there was
 // the Close row, which used to skip a client's close handshake.
-static void cmd_ctxmenu(int json) {
+static void cmd_ctxmenu(struct dbg_out *o, int json) {
     int x = 0, y = 0, w = 0, ih = 0;
     int rows = context_menu_geometry(&x, &y, &w, &ih);
 
     if (json) {
-        klog_printf("{\"open\":%s,\"x\":%d,\"y\":%d,\"w\":%d,\"item_h\":%d,\"rows\":[",
+        dbg_out_printf(o, "{\"open\":%s,\"x\":%d,\"y\":%d,\"w\":%d,\"item_h\":%d,\"rows\":[",
                      rows ? "true" : "false", x, y, w, ih);
         for (int i = 0; i < rows; i++) {
-            klog_printf("%s{\"label\":\"%s\",\"y\":%d,\"cy\":%d}",
+            dbg_out_printf(o, "%s{\"label\":\"%s\",\"y\":%d,\"cy\":%d}",
                          i ? "," : "", context_menu_row_label(i),
                          y + i * ih, y + i * ih + ih / 2);
         }
-        klog_write("]}\r\n");
+        dbg_out_write(o, "]}\r\n");
         return;
     }
 
-    if (!rows) { klog_write("context menu: closed\r\n"); return; }
-    klog_printf("context menu: open, x=%d y=%d w=%d item_h=%d rows=%d\r\n",
+    if (!rows) { dbg_out_write(o, "context menu: closed\r\n"); return; }
+    dbg_out_printf(o, "context menu: open, x=%d y=%d w=%d item_h=%d rows=%d\r\n",
                  x, y, w, ih, rows);
     for (int i = 0; i < rows; i++) {
-        klog_write("  row "); col_int(i, 3);
-        klog_write("centre="); col_int(y + i * ih + ih / 2, 6);
-        klog_write(context_menu_row_label(i));
-        klog_write("\r\n");
+        dbg_out_write(o, "  row "); col_int(o, i, 3);
+        dbg_out_write(o, "centre="); col_int(o, y + i * ih + ih / 2, 6);
+        dbg_out_write(o, context_menu_row_label(i));
+        dbg_out_write(o, "\r\n");
     }
 }
 
 // The open confirm dialog's message and buttons.
-static void cmd_dialog(int json) {
+static void cmd_dialog(struct dbg_out *o, int json) {
     const char *msg = confirm_dialog_message();
     if (json) {
-        klog_printf("{\"open\":%s,\"message\":\"%s\",\"buttons\":[",
+        dbg_out_printf(o, "{\"open\":%s,\"message\":\"%s\",\"buttons\":[",
                      msg ? "true" : "false", msg ? msg : "");
         for (int i = 0; i < 2; i++) {
             int x, y, w, h; const char *label = 0;
             if (!confirm_dialog_button_rect(i, &x, &y, &w, &h, &label)) break;
-            klog_printf("%s{\"label\":\"%s\",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,"
+            dbg_out_printf(o, "%s{\"label\":\"%s\",\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,"
                          "\"cx\":%d,\"cy\":%d}",
                          i ? "," : "", label ? label : "", x, y, w, h,
                          x + w / 2, y + h / 2);
         }
-        klog_write("]}\r\n");
+        dbg_out_write(o, "]}\r\n");
         return;
     }
-    if (!msg) { klog_write("dialog: closed\r\n"); return; }
-    klog_printf("dialog: open -- \"%s\"\r\n", msg);
+    if (!msg) { dbg_out_write(o, "dialog: closed\r\n"); return; }
+    dbg_out_printf(o, "dialog: open -- \"%s\"\r\n", msg);
     for (int i = 0; i < 2; i++) {
         int x, y, w, h; const char *label = 0;
         if (!confirm_dialog_button_rect(i, &x, &y, &w, &h, &label)) break;
-        klog_printf("  button %d centre=%d,%d  %s\r\n", i, x + w / 2, y + h / 2,
+        dbg_out_printf(o, "  button %d centre=%d,%d  %s\r\n", i, x + w / 2, y + h / 2,
                      label ? label : "");
     }
 }
 
-static void cmd_menu(int json) {
+static void cmd_menu(struct dbg_out *o, int json) {
     int mx, my, mw, item_h, total;
     start_menu_geometry(&mx, &my, &mw, &item_h, &total);
 
     if (json) {
-        klog_printf("{\"open\":%s,\"x\":%d,\"y\":%d,\"w\":%d,\"item_h\":%d,\"rows\":[",
+        dbg_out_printf(o, "{\"open\":%s,\"x\":%d,\"y\":%d,\"w\":%d,\"item_h\":%d,\"rows\":[",
                      start_menu_open ? "true" : "false", mx, my, mw, item_h);
         int app_rows = gui_app_visible_count(GUI_SHOW_STARTMENU);
         for (int i = 0; i < app_rows; i++) {
-            klog_printf("%s{\"label\":\"%s\",\"kind\":\"app\",\"y\":%d,\"cy\":%d}",
+            dbg_out_printf(o, "%s{\"label\":\"%s\",\"kind\":\"app\",\"y\":%d,\"cy\":%d}",
                          i ? "," : "",
                          gui_app_visible_at(GUI_SHOW_STARTMENU, i)->name,
                          my + i * item_h, my + i * item_h + item_h / 2);
         }
         for (int i = 0; i < wm_system_action_count; i++) {
             int row = app_rows + i;
-            klog_printf(",{\"label\":\"%s\",\"kind\":\"action\",\"y\":%d,\"cy\":%d}",
+            dbg_out_printf(o, ",{\"label\":\"%s\",\"kind\":\"action\",\"y\":%d,\"cy\":%d}",
                          wm_system_actions[i].label,
                          my + row * item_h, my + row * item_h + item_h / 2);
         }
-        klog_write("]}\r\n");
+        dbg_out_write(o, "]}\r\n");
         return;
     }
 
-    klog_printf("start menu: %s, x=%d y=%d w=%d item_h=%d rows=%d\r\n",
+    dbg_out_printf(o, "start menu: %s, x=%d y=%d w=%d item_h=%d rows=%d\r\n",
                  start_menu_open ? "open" : "closed", mx, my, mw, item_h, total);
     int app_rows = gui_app_visible_count(GUI_SHOW_STARTMENU);
     for (int i = 0; i < app_rows; i++) {
-        klog_write("  row "); col_int(i, 3);
-        klog_write("y="); col_int(my + i * item_h, 6);
-        klog_write("centre="); col_int(my + i * item_h + item_h / 2, 6);
-        klog_write("app     ");
-        klog_write(gui_app_visible_at(GUI_SHOW_STARTMENU, i)->name);
-        klog_write("\r\n");
+        dbg_out_write(o, "  row "); col_int(o, i, 3);
+        dbg_out_write(o, "y="); col_int(o, my + i * item_h, 6);
+        dbg_out_write(o, "centre="); col_int(o, my + i * item_h + item_h / 2, 6);
+        dbg_out_write(o, "app     ");
+        dbg_out_write(o, gui_app_visible_at(GUI_SHOW_STARTMENU, i)->name);
+        dbg_out_write(o, "\r\n");
     }
     for (int i = 0; i < wm_system_action_count; i++) {
         int row = app_rows + i;
-        klog_write("  row "); col_int(row, 3);
-        klog_write("y="); col_int(my + row * item_h, 6);
-        klog_write("centre="); col_int(my + row * item_h + item_h / 2, 6);
-        klog_write("action  "); klog_write(wm_system_actions[i].label);
-        klog_write("\r\n");
+        dbg_out_write(o, "  row "); col_int(o, row, 3);
+        dbg_out_write(o, "y="); col_int(o, my + row * item_h, 6);
+        dbg_out_write(o, "centre="); col_int(o, my + row * item_h + item_h / 2, 6);
+        dbg_out_write(o, "action  "); dbg_out_write(o, wm_system_actions[i].label);
+        dbg_out_write(o, "\r\n");
     }
 }
 
 // Taskbar: the Start button and one button per open window, with the
 // rects wm_render.c actually draws and wm_input.c actually hit-tests.
-static void cmd_taskbar(int json) {
+static void cmd_taskbar(struct dbg_out *o, int json) {
     int bar_y = screen_h - taskbar_h;
     int sw = start_btn_w();
     int bw = win_btn_w();
 
     if (json) {
-        klog_printf("{\"y\":%d,\"h\":%d,\"start\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,"
+        dbg_out_printf(o, "{\"y\":%d,\"h\":%d,\"start\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,"
                      "\"cx\":%d,\"cy\":%d},\"buttons\":[",
                      bar_y, taskbar_h, 0, bar_y, sw, taskbar_h,
                      sw / 2, bar_y + taskbar_h / 2);
         for (int i = 0; i < window_count; i++) {
             int bx = sw + 4 + i * (bw + 4);
-            klog_printf("%s{\"index\":%d,\"title\":\"%s\",\"x\":%d,\"w\":%d,"
+            dbg_out_printf(o, "%s{\"index\":%d,\"title\":\"%s\",\"x\":%d,\"w\":%d,"
                          "\"cx\":%d,\"cy\":%d}",
                          i ? "," : "", i, windows[i].title, bx, bw,
                          bx + bw / 2, bar_y + taskbar_h / 2);
         }
-        klog_write("]}\r\n");
+        dbg_out_write(o, "]}\r\n");
         return;
     }
 
-    klog_printf("taskbar: y=%d h=%d\r\n", bar_y, taskbar_h);
-    klog_write("  start   x="); col_int(0, 6);
-    klog_write("w="); col_int(sw, 6);
-    klog_printf("centre=(%d,%d)\r\n", sw / 2, bar_y + taskbar_h / 2);
+    dbg_out_printf(o, "taskbar: y=%d h=%d\r\n", bar_y, taskbar_h);
+    dbg_out_write(o, "  start   x="); col_int(o, 0, 6);
+    dbg_out_write(o, "w="); col_int(o, sw, 6);
+    dbg_out_printf(o, "centre=(%d,%d)\r\n", sw / 2, bar_y + taskbar_h / 2);
     for (int i = 0; i < window_count; i++) {
         int bx = sw + 4 + i * (bw + 4);
-        klog_write("  win "); col_int(i, 4);
-        klog_write("x="); col_int(bx, 6);
-        klog_write("w="); col_int(bw, 6);
-        klog_printf("centre=(%d,%d)  %s\r\n",
+        dbg_out_write(o, "  win "); col_int(o, i, 4);
+        dbg_out_write(o, "x="); col_int(o, bx, 6);
+        dbg_out_write(o, "w="); col_int(o, bw, 6);
+        dbg_out_printf(o, "centre=(%d,%d)  %s\r\n",
                      bx + bw / 2, bar_y + taskbar_h / 2, windows[i].title);
     }
 }
@@ -451,7 +483,7 @@ static void cmd_taskbar(int json) {
 // cursor is, what's armed, and this frame's damage rect. The last one
 // is the thing you want when a repaint looks wrong -- it's otherwise
 // completely invisible.
-static void cmd_state(int json) {
+static void cmd_state(struct dbg_out *o, int json) {
     int cx, cy;
     uint8_t buttons;
     mouse_get_state(&cx, &cy, &buttons);
@@ -459,19 +491,19 @@ static void cmd_state(int json) {
     wm_debug_damage(&dx, &dy, &dw, &dh);
 
     if (json) {
-        klog_printf("{\"screen\":{\"w\":%d,\"h\":%d},\"taskbar_h\":%d,",
+        dbg_out_printf(o, "{\"screen\":{\"w\":%d,\"h\":%d},\"taskbar_h\":%d,",
                      screen_w, screen_h, taskbar_h);
-        klog_printf("\"cursor\":{\"x\":%d,\"y\":%d,\"buttons\":%u},",
+        dbg_out_printf(o, "\"cursor\":{\"x\":%d,\"y\":%d,\"buttons\":%u},",
                      cx, cy, (unsigned)buttons);
-        klog_printf("\"overlays\":{\"start_menu\":%s,\"context_menu\":%s,",
+        dbg_out_printf(o, "\"overlays\":{\"start_menu\":%s,\"context_menu\":%s,",
                      start_menu_open ? "true" : "false",
                      context_menu_open ? "true" : "false");
-        klog_printf("\"file_picker\":%s,\"confirm_dialog\":%s},",
+        dbg_out_printf(o, "\"file_picker\":%s,\"confirm_dialog\":%s},",
                      file_picker_open ? "true" : "false",
                      confirm_dialog_open ? "true" : "false");
-        klog_printf("\"dragging\":%d,\"resizing\":%d,\"content_pressed\":%d,",
+        dbg_out_printf(o, "\"dragging\":%d,\"resizing\":%d,\"content_pressed\":%d,",
                      dragging, resizing, content_pressed);
-        klog_printf("\"redraw_pending\":%s,\"pending\":%d,",
+        dbg_out_printf(o, "\"redraw_pending\":%s,\"pending\":%d,",
                      redraw_pending ? "true" : "false", wm_debug_input_pending());
         // The pid of the ring-3 process a WINDOW is waiting on (0 =
         // none) -- wm.c's pending_proc, which only window_start_process()
@@ -480,7 +512,7 @@ static void cmd_state(int json) {
         // plumbing stay for the next caller rather than being ripped out
         // and re-added. Use "launched" below to ask whether a process the
         // desktop started is alive.
-        klog_printf("\"proc_pid\":%d,", pending_proc);
+        dbg_out_printf(o, "\"proc_pid\":%d,", pending_proc);
         // Every pid the desktop launched that is still running -- the
         // WM's own reaped launch table (wm.c's g_launched). This is the
         // host-observable way to tell that a client process and the WM
@@ -489,39 +521,39 @@ static void cmd_state(int json) {
         // from the same answer, and asking the WM is the "ask, don't
         // measure a screenshot" principle the rest of this file is built
         // on. See tools/sched_gui_test.py.
-        klog_write("\"launched\":[");
+        dbg_out_write(o, "\"launched\":[");
         int first = 1;
         for (int i = 0; i < wm_launched_max(); i++) {
             int pid = wm_launched_pid(i);
             if (!pid) continue;
-            klog_printf("%s%d", first ? "" : ",", pid);
+            dbg_out_printf(o, "%s%d", first ? "" : ",", pid);
             first = 0;
         }
-        klog_write("],");
-        klog_printf("\"damage\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d}}\r\n",
+        dbg_out_write(o, "],");
+        dbg_out_printf(o, "\"damage\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d}}\r\n",
                      dx, dy, dw, dh);
         return;
     }
 
-    klog_printf("screen %dx%d, taskbar %dpx\r\n", screen_w, screen_h, taskbar_h);
-    klog_printf("cursor (%d,%d) buttons=0x%x\r\n", cx, cy, (unsigned)buttons);
-    klog_printf("overlays: start_menu=%d context_menu=%d file_picker=%d confirm=%d\r\n",
+    dbg_out_printf(o, "screen %dx%d, taskbar %dpx\r\n", screen_w, screen_h, taskbar_h);
+    dbg_out_printf(o, "cursor (%d,%d) buttons=0x%x\r\n", cx, cy, (unsigned)buttons);
+    dbg_out_printf(o, "overlays: start_menu=%d context_menu=%d file_picker=%d confirm=%d\r\n",
                  start_menu_open, context_menu_open, file_picker_open, confirm_dialog_open);
-    klog_printf("dragging=%d resizing=%d content_pressed=%d redraw_pending=%d\r\n",
+    dbg_out_printf(o, "dragging=%d resizing=%d content_pressed=%d redraw_pending=%d\r\n",
                  dragging, resizing, content_pressed, redraw_pending);
-    klog_printf("injected events pending: %d\r\n", wm_debug_input_pending());
-    if (pending_proc) klog_printf("ring-3 process: pid %d\r\n", pending_proc);
-    else              klog_write("ring-3 process: none\r\n");
-    klog_write("launched (still running):");
+    dbg_out_printf(o, "injected events pending: %d\r\n", wm_debug_input_pending());
+    if (pending_proc) dbg_out_printf(o, "ring-3 process: pid %d\r\n", pending_proc);
+    else              dbg_out_write(o, "ring-3 process: none\r\n");
+    dbg_out_write(o, "launched (still running):");
     int any = 0;
     for (int i = 0; i < wm_launched_max(); i++) {
         int pid = wm_launched_pid(i);
         if (!pid) continue;
-        klog_printf(" %d", pid);
+        dbg_out_printf(o, " %d", pid);
         any = 1;
     }
-    klog_write(any ? "\r\n" : " none\r\n");
-    klog_printf("damage rect: x=%d y=%d w=%d h=%d%s\r\n", dx, dy, dw, dh,
+    dbg_out_write(o, any ? "\r\n" : " none\r\n");
+    dbg_out_printf(o, "damage rect: x=%d y=%d w=%d h=%d%s\r\n", dx, dy, dw, dh,
                  dw <= 0 ? "  (none this frame -- full-screen repaint)" : "");
 }
 
@@ -529,17 +561,17 @@ static void cmd_state(int json) {
 // Driving
 // ---------------------------------------------------------------------
 
-static void cmd_open(const char *name) {
+static void cmd_open(struct dbg_out *o, const char *name) {
     for (int i = 0; i < gui_app_registry_count; i++) {
         if (k_strcmp(gui_app_registry[i].name, name) == 0) {
             open_app(&gui_app_registry[i]);
-            klog_printf("gui: opened \"%s\"\r\n", name);
+            dbg_out_printf(o, "gui: opened \"%s\"\r\n", name);
             return;
         }
     }
-    klog_printf("gui: no app named \"%s\". Known apps:\r\n", name);
+    dbg_out_printf(o, "gui: no app named \"%s\". Known apps:\r\n", name);
     for (int i = 0; i < gui_app_registry_count; i++) {
-        klog_printf("  %s\r\n", gui_app_registry[i].name);
+        dbg_out_printf(o, "  %s\r\n", gui_app_registry[i].name);
     }
 }
 
@@ -554,22 +586,22 @@ static void cmd_open(const char *name) {
 //
 // Tracked for reaping exactly as a Start-menu launch is, so this does
 // not quietly reintroduce the leak wm_track_launched() exists to fix.
-static void cmd_spawn(const char *path, const char *args) {
+static void cmd_spawn(struct dbg_out *o, const char *path, const char *args) {
     int pid = scheduler_spawn(path, args);
     if (pid > 0) {
         wm_track_launched(pid);
-        klog_printf("gui: spawned \"%s\" as pid %d\r\n", path, pid);
+        dbg_out_printf(o, "gui: spawned \"%s\" as pid %d\r\n", path, pid);
     } else {
-        klog_printf("gui: spawn of \"%s\" FAILED (no slot, or no such binary)\r\n", path);
+        dbg_out_printf(o, "gui: spawn of \"%s\" FAILED (no slot, or no such binary)\r\n", path);
     }
 }
 
-static void cmd_close(int index) {
+static void cmd_close(struct dbg_out *o, int index) {
     if (index < 0 || index >= window_count) {
-        klog_printf("gui: no window %d (see `gui windows`)\r\n", index);
+        dbg_out_printf(o, "gui: no window %d (see `gui windows`)\r\n", index);
         return;
     }
-    klog_printf("gui: closing window %d \"%s\"\r\n", index, windows[index].title);
+    dbg_out_printf(o, "gui: closing window %d \"%s\"\r\n", index, windows[index].title);
     // wm_request_close(), NOT close_window() -- the same path the X
     // button, the context menu and Alt+F4 take. This was the FOURTH
     // close in the WM and the one that still seized a window instead of
@@ -692,71 +724,71 @@ static int cmd_wheel(const char *s) {
 // `dropped` is the load-bearing number. The queue is 32 deep and drops
 // the OLDEST, so a compositor falling behind loses input silently; that
 // is exactly the failure this has to be able to name.
-static void cmd_compositor(int json) {
+static void cmd_compositor(struct dbg_out *o, int json) {
     int pid = win_server_compositor_pid();
     int pending = pid ? win_events_pending(pid) : 0;
     int dropped = pid ? win_events_dropped(pid) : 0;
 
     if (json) {
-        klog_printf("{\"pid\":%d,\"pending\":%d,\"dropped\":%d}\r\n",
+        dbg_out_printf(o, "{\"pid\":%d,\"pending\":%d,\"dropped\":%d}\r\n",
                     pid, pending, dropped);
     } else if (!pid) {
-        klog_write("compositor: none registered\r\n");
+        dbg_out_write(o, "compositor: none registered\r\n");
     } else {
-        klog_printf("compositor: pid %d  pending %d  dropped %d\r\n",
+        dbg_out_printf(o, "compositor: pid %d  pending %d  dropped %d\r\n",
                     pid, pending, dropped);
     }
 }
 
-static void usage(void) {
-    klog_write("gui subcommands (all of these work while the desktop is up):\r\n");
-    klog_write("  windows [--json]      open windows: rects, content rects, z-order, focus\r\n");
-    klog_write("  probe X Y [--json]    what is at this point, and what would take the click\r\n");
-    klog_write("  menu [--json]         start menu row geometry, as the kernel computes it\r\n");
-    klog_write("  ctxmenu [--json]      the open right-click menu's rows, same shape as `menu`\r\n");
-    klog_write("  dialog [--json]       the open confirm dialog's message and button centres\r\n");
-    klog_write("  rclick X Y            right-click, which is what opens a context menu\r\n");
-    klog_write("  spawn PATH            run a ring-3 binary directly -- no Terminal needed\r\n");
-    klog_write("  taskbar [--json]      start button + per-window button rects\r\n");
-    klog_write("  state [--json]        overlays, cursor, armed state, damage rect\r\n");
-    klog_write("  compositor [--json]   the registered compositor pid, its queue depth\r\n");
-    klog_write("                        and how much input it has dropped\r\n");
-    klog_write("  damage [verify on|off]  the damage rect; verify renders every frame\r\n");
-    klog_write("                        twice and reports pixels the damage rect missed\r\n");
-    klog_write("  apps                  the gui_app registry\r\n");
-    klog_write("  open <AppName>        open a window directly (no menu clicking)\r\n");
-    klog_write("  close <index>         close window <index> from `gui windows`\r\n");
-    klog_write("  move X Y              move the cursor, nothing held (for hover)\r\n");
-    klog_write("  click X Y             synthetic press+release at a point\r\n");
-    klog_write("  drag X1 Y1 X2 Y2      synthetic press, interpolated move, release\r\n");
-    klog_write("  key <c|0xNN>          synthetic keypress to the focused window\r\n");
-    klog_write("  wheel <n>             synthetic wheel notches (+up / -down)\r\n");
-    klog_write("Injected input enters at the WM loop, below the PS/2 driver -- it tests\r\n");
-    klog_write("WM/app logic, not the mouse driver. It is also asynchronous: the events\r\n");
-    klog_write("drain one per frame, so allow ~100ms before reading the result back.\r\n");
+static void usage(struct dbg_out *o) {
+    dbg_out_write(o, "gui subcommands (all of these work while the desktop is up):\r\n");
+    dbg_out_write(o, "  windows [--json]      open windows: rects, content rects, z-order, focus\r\n");
+    dbg_out_write(o, "  probe X Y [--json]    what is at this point, and what would take the click\r\n");
+    dbg_out_write(o, "  menu [--json]         start menu row geometry, as the kernel computes it\r\n");
+    dbg_out_write(o, "  ctxmenu [--json]      the open right-click menu's rows, same shape as `menu`\r\n");
+    dbg_out_write(o, "  dialog [--json]       the open confirm dialog's message and button centres\r\n");
+    dbg_out_write(o, "  rclick X Y            right-click, which is what opens a context menu\r\n");
+    dbg_out_write(o, "  spawn PATH            run a ring-3 binary directly -- no Terminal needed\r\n");
+    dbg_out_write(o, "  taskbar [--json]      start button + per-window button rects\r\n");
+    dbg_out_write(o, "  state [--json]        overlays, cursor, armed state, damage rect\r\n");
+    dbg_out_write(o, "  compositor [--json]   the registered compositor pid, its queue depth\r\n");
+    dbg_out_write(o, "                        and how much input it has dropped\r\n");
+    dbg_out_write(o, "  damage [verify on|off]  the damage rect; verify renders every frame\r\n");
+    dbg_out_write(o, "                        twice and reports pixels the damage rect missed\r\n");
+    dbg_out_write(o, "  apps                  the gui_app registry\r\n");
+    dbg_out_write(o, "  open <AppName>        open a window directly (no menu clicking)\r\n");
+    dbg_out_write(o, "  close <index>         close window <index> from `gui windows`\r\n");
+    dbg_out_write(o, "  move X Y              move the cursor, nothing held (for hover)\r\n");
+    dbg_out_write(o, "  click X Y             synthetic press+release at a point\r\n");
+    dbg_out_write(o, "  drag X1 Y1 X2 Y2      synthetic press, interpolated move, release\r\n");
+    dbg_out_write(o, "  key <c|0xNN>          synthetic keypress to the focused window\r\n");
+    dbg_out_write(o, "  wheel <n>             synthetic wheel notches (+up / -down)\r\n");
+    dbg_out_write(o, "Injected input enters at the WM loop, below the PS/2 driver -- it tests\r\n");
+    dbg_out_write(o, "WM/app logic, not the mouse driver. It is also asynchronous: the events\r\n");
+    dbg_out_write(o, "drain one per frame, so allow ~100ms before reading the result back.\r\n");
 }
 
-int wm_debug_dispatch(char *line) {
+int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
     char *p = line;
     char *sub = next_tok(&p);
-    if (!sub) { usage(); return 1; }
+    if (!sub) { usage(o); return 1; }
 
     // `rest` is scanned for --json by wants_json(), which consumes it --
     // so grab positional arguments BEFORE asking about the flag.
-    if (k_strcmp(sub, "windows") == 0)      { cmd_windows(wants_json(p)); return 1; }
-    if (k_strcmp(sub, "menu") == 0)         { cmd_menu(wants_json(p)); return 1; }
-    if (k_strcmp(sub, "ctxmenu") == 0)      { cmd_ctxmenu(wants_json(p)); return 1; }
-    if (k_strcmp(sub, "dialog") == 0)       { cmd_dialog(wants_json(p)); return 1; }
-    if (k_strcmp(sub, "taskbar") == 0)      { cmd_taskbar(wants_json(p)); return 1; }
-    if (k_strcmp(sub, "state") == 0)        { cmd_state(wants_json(p)); return 1; }
-    if (k_strcmp(sub, "compositor") == 0)   { cmd_compositor(wants_json(p)); return 1; }
+    if (k_strcmp(sub, "windows") == 0)      { cmd_windows(o, wants_json(p)); return 1; }
+    if (k_strcmp(sub, "menu") == 0)         { cmd_menu(o, wants_json(p)); return 1; }
+    if (k_strcmp(sub, "ctxmenu") == 0)      { cmd_ctxmenu(o, wants_json(p)); return 1; }
+    if (k_strcmp(sub, "dialog") == 0)       { cmd_dialog(o, wants_json(p)); return 1; }
+    if (k_strcmp(sub, "taskbar") == 0)      { cmd_taskbar(o, wants_json(p)); return 1; }
+    if (k_strcmp(sub, "state") == 0)        { cmd_state(o, wants_json(p)); return 1; }
+    if (k_strcmp(sub, "compositor") == 0)   { cmd_compositor(o, wants_json(p)); return 1; }
 
     if (k_strcmp(sub, "damage") == 0) {
         char *arg = next_tok(&p);
         if (arg && k_strcmp(arg, "verify") == 0) {
             char *onoff = next_tok(&p);
             if (!onoff) {
-                klog_printf("damage verification is %s\r\n",
+                dbg_out_printf(o, "damage verification is %s\r\n",
                              wm_damage_verify_enabled() ? "on" : "off");
                 return 1;
             }
@@ -765,16 +797,16 @@ int wm_debug_dispatch(char *line) {
         }
         int dx, dy, dw, dh;
         wm_debug_damage(&dx, &dy, &dw, &dh);
-        klog_printf("damage: x=%d y=%d w=%d h=%d  verify=%s\r\n", dx, dy, dw, dh,
+        dbg_out_printf(o, "damage: x=%d y=%d w=%d h=%d  verify=%s\r\n", dx, dy, dw, dh,
                      wm_damage_verify_enabled() ? "on" : "off");
         return 1;
     }
-    if (k_strcmp(sub, "help") == 0)         { usage(); return 1; }
+    if (k_strcmp(sub, "help") == 0)         { usage(o); return 1; }
 
     if (k_strcmp(sub, "apps") == 0) {
         for (int i = 0; i < gui_app_registry_count; i++) {
-            klog_write("  ");
-            col_str(gui_app_registry[i].name, 16);
+            dbg_out_write(o, "  ");
+            col_str(o, gui_app_registry[i].name, 16);
             // `show_in` is what makes "loaded" and "visible here" two
             // separate observations. Without it a test cannot tell an
             // entry FILTERED off a surface from one that never loaded,
@@ -782,7 +814,7 @@ int wm_debug_dispatch(char *line) {
             // as happily against a broken parser as against a working
             // filter.
             unsigned s = gui_app_registry[i].show_in;
-            klog_printf("resizable=%d multi_instance=%d show_in=%s%s\r\n",
+            dbg_out_printf(o, "resizable=%d multi_instance=%d show_in=%s%s\r\n",
                          gui_app_registry[i].resizable,
                          gui_app_registry[i].multi_instance,
                          (s & GUI_SHOW_DESKTOP) ? "desktop" : "",
@@ -795,16 +827,16 @@ int wm_debug_dispatch(char *line) {
         char *ax = next_tok(&p), *ay = next_tok(&p);
         int x, y;
         if (!parse_int(ax, &x) || !parse_int(ay, &y)) {
-            klog_write("usage: gui probe X Y [--json]\r\n");
+            dbg_out_write(o, "usage: gui probe X Y [--json]\r\n");
             return 1;
         }
-        cmd_probe(x, y, wants_json(p));
+        cmd_probe(o, x, y, wants_json(p));
         return 1;
     }
 
     if (k_strcmp(sub, "open") == 0) {
         char *name = next_tok(&p);
-        if (!name) { klog_write("usage: gui open <AppName>  (see `gui apps`)\r\n"); return 1; }
+        if (!name) { dbg_out_write(o, "usage: gui open <AppName>  (see `gui apps`)\r\n"); return 1; }
         // Re-join a two-word name ("Task Manager", "Control Panel") --
         // next_tok() split it, and quoting over a serial line is worse
         // than just gluing the remainder back on.
@@ -812,50 +844,50 @@ int wm_debug_dispatch(char *line) {
             char *end = name + k_strlen(name);
             *end = ' ';
         }
-        cmd_open(name);
+        cmd_open(o, name);
         return 1;
     }
 
     if (k_strcmp(sub, "close") == 0) {
         int idx;
         if (!parse_int(next_tok(&p), &idx)) {
-            klog_write("usage: gui close <index>  (see `gui windows`)\r\n");
+            dbg_out_write(o, "usage: gui close <index>  (see `gui windows`)\r\n");
             return 1;
         }
-        cmd_close(idx);
+        cmd_close(o, idx);
         return 1;
     }
 
     if (k_strcmp(sub, "spawn") == 0) {
         char *path = next_tok(&p);
-        if (!path) { klog_write("usage: gui spawn /path/to/binary [args]\r\n"); return 1; }
+        if (!path) { dbg_out_write(o, "usage: gui spawn /path/to/binary [args]\r\n"); return 1; }
         // Everything after the path is the argument string, passed
         // through verbatim (scheduler_spawn splits it the same way the
         // shell's `run` does). Needed because a test's binary can take
         // one -- spin_test's round count is the reason this exists, and
         // without it that test had to go through a Terminal to say it.
         while (*p == ' ' || *p == '\t') p++;
-        cmd_spawn(path, *p ? p : 0);
+        cmd_spawn(o, path, *p ? p : 0);
         return 1;
     }
 
     if (k_strcmp(sub, "rclick") == 0) {
         int x, y;
         if (!parse_int(next_tok(&p), &x) || !parse_int(next_tok(&p), &y)) {
-            klog_write("usage: gui rclick X Y\r\n");
+            dbg_out_write(o, "usage: gui rclick X Y\r\n");
             return 1;
         }
-        klog_write(cmd_rclick(x, y) ? "gui: queued rclick\r\n" : "gui: input queue full\r\n");
+        dbg_out_write(o, cmd_rclick(x, y) ? "gui: queued rclick\r\n" : "gui: input queue full\r\n");
         return 1;
     }
 
     if (k_strcmp(sub, "click") == 0) {
         int x, y;
         if (!parse_int(next_tok(&p), &x) || !parse_int(next_tok(&p), &y)) {
-            klog_write("usage: gui click X Y\r\n");
+            dbg_out_write(o, "usage: gui click X Y\r\n");
             return 1;
         }
-        klog_printf(cmd_click(x, y) ? "gui: queued click at (%d,%d)\r\n"
+        dbg_out_printf(o, cmd_click(x, y) ? "gui: queued click at (%d,%d)\r\n"
                                      : "gui: input queue full, click at (%d,%d) DROPPED\r\n",
                      x, y);
         return 1;
@@ -865,10 +897,10 @@ int wm_debug_dispatch(char *line) {
         int x0, y0, x1, y1;
         if (!parse_int(next_tok(&p), &x0) || !parse_int(next_tok(&p), &y0) ||
             !parse_int(next_tok(&p), &x1) || !parse_int(next_tok(&p), &y1)) {
-            klog_write("usage: gui drag X1 Y1 X2 Y2\r\n");
+            dbg_out_write(o, "usage: gui drag X1 Y1 X2 Y2\r\n");
             return 1;
         }
-        klog_printf(cmd_drag(x0, y0, x1, y1)
+        dbg_out_printf(o, cmd_drag(x0, y0, x1, y1)
                      ? "gui: queued drag (%d,%d) -> (%d,%d)\r\n"
                      : "gui: input queue full, drag (%d,%d) -> (%d,%d) DROPPED\r\n",
                      x0, y0, x1, y1);
@@ -876,7 +908,7 @@ int wm_debug_dispatch(char *line) {
     }
 
     if (k_strcmp(sub, "wheel") == 0) {
-        klog_write(cmd_wheel(next_tok(&p)) ? "gui: queued wheel\r\n"
+        dbg_out_write(o, cmd_wheel(next_tok(&p)) ? "gui: queued wheel\r\n"
                                             : "gui: bad or dropped wheel delta\r\n");
         return 1;
     }
@@ -885,19 +917,32 @@ int wm_debug_dispatch(char *line) {
         char *xs = next_tok(&p), *ys = next_tok(&p);
         int x, y;
         if (!xs || !ys || !parse_int(xs, &x) || !parse_int(ys, &y)) {
-            klog_write("usage: gui move X Y\r\n");
+            dbg_out_write(o, "usage: gui move X Y\r\n");
             return 1;
         }
-        klog_printf(cmd_move(x, y) ? "gui: queued move to (%d,%d)\r\n"
+        dbg_out_printf(o, cmd_move(x, y) ? "gui: queued move to (%d,%d)\r\n"
                                     : "gui: move queue full\r\n", x, y);
         return 1;
     }
 
     if (k_strcmp(sub, "key") == 0) {
         char *k = next_tok(&p);
-        klog_write(cmd_key(k, p) ? "gui: queued key\r\n" : "gui: bad or dropped key\r\n");
+        dbg_out_write(o, cmd_key(k, p) ? "gui: queued key\r\n" : "gui: bad or dropped key\r\n");
         return 1;
     }
 
     return 0;
+}
+
+int wm_debug_dispatch(char *line) {
+    // Sized to hold the longest reply any subcommand produces (`gui
+    // help`, ~1.8 KB). This path exists only for the demo tour, which
+    // discards the text anyway -- the console's path goes over the
+    // transport and gets win_server.c's chunking.
+    static char buf[2560];
+    struct dbg_out o = { .buf = buf, .cap = sizeof buf, .len = 0, .overflow = 0 };
+    int known = wm_debug_dispatch_out(line, &o);
+    if (o.len) klog_write(o.buf);
+    if (o.overflow) klog_write("gui: (output truncated)\r\n");
+    return known;
 }
