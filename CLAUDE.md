@@ -725,6 +725,18 @@ Four things about that setup that aren't obvious until you hit them:
 
 ### Direct local checkout
 
+**The repo is `eveningworks/toy-os`** -- an ORGANIZATION, since
+2026-08-16. It moved off a personal account because a personal repo has
+no read-only collaborator role (every collaborator gets write), and
+branch protection is unavailable on a free private repo either way; see
+`docs/decisions.md`. The maintainer's account was renamed in the same
+stretch, and the old handle was scrubbed from committer metadata and the
+current tree by a history rewrite. Practical consequences for a session:
+the remote is `git@github.com:eveningworks/toy-os.git`, nothing in the
+tree should name a personal account (`grep -rn` for one before
+believing a doc), and **run `tools/backup_repo.sh` before any further
+change to the repo's identity or history**.
+
 Confirmed directly in a real local session (2026-08-12): this is
 simpler than the Cowork setup in every way that setup works around --
 
@@ -1302,6 +1314,19 @@ and not applicable, on a direct local checkout).
 
 The rest, added once the build/test/delivery loop above had enough
 repeated manual steps to be worth automating:
+- **`backup_repo.sh`** -- a complete, verifiable backup of the GitHub
+  repo: mirror clone, a bundle of LOCAL refs (catching branches never
+  pushed), **every release asset**, and the repo/PR/issue metadata.
+  Run it before anything that changes the repo's identity or history --
+  a transfer, a visibility change, an account rename, a history
+  rewrite. The reason it exists: `git clone --mirror` is NOT a backup
+  here, because release assets (~130 MB of ISOs and disk images) live
+  only on GitHub and cannot be recovered from a clone. It verifies the
+  bundle and checksums any release shipping a `SHA256SUMS`, but does
+  NOT run the restore test (clone the mirror, `make all`) -- do that by
+  hand before relying on it, since matching hashes prove the bytes
+  survived and only a build proves it restores to a working project.
+  See `docs/decisions.md`.
 - **`genrelocs.py`** -- builds the kernel's own relocation table for
   kernel ASLR: extracts every ABSOLUTE reference from a
   `ld --emit-relocs` link and emits it as a C array the second link

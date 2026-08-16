@@ -175,6 +175,9 @@ there when you add an entry, or the index quietly stops being one.
 - [Repo is MIT; the baked JetBrains Mono glyph data is separately SIL OFL 1.1](#repo-is-mit-the-baked-jetbrains-mono-glyph-data-is-separately-sil-ofl-11)
 - [CI is kept for the environment, not the checks -- they duplicate `make verify` exactly](#ci-is-kept-for-the-environment-not-the-checks----they-duplicate-make-verify-exactly)
 - [Repo history scrubbed of the maintainer's real name -- privacy request, not a bug fix](#repo-history-scrubbed-of-the-maintainers-real-name----privacy-request-not-a-bug-fix)
+- [The repo lives in an organization because a personal repo has no read-only collaborator](#the-repo-lives-in-an-organization-because-a-personal-repo-has-no-read-only-collaborator)
+- [The account rename, and the second history scrub -- scoped by measuring, not by instinct](#the-account-rename-and-the-second-history-scrub----scoped-by-measuring-not-by-instinct)
+- [A backup of this repo is not a `git clone`](#a-backup-of-this-repo-is-not-a-git-clone)
 - [Socket fds: scaffolding ahead of the driver, not a working transport](#socket-fds-scaffolding-ahead-of-the-driver-not-a-working-transport)
 - [Header dependency tracking is a `find`, and a test proves it works](#header-dependency-tracking-is-a-find-and-a-test-proves-it-works)
 - [Userland programs link one archive, and name nothing](#userland-programs-link-one-archive-and-name-nothing)
@@ -4975,3 +4978,97 @@ relocated address.
 `nokaslr` on the GRUB command line turns it off -- the same spelling
 Linux uses, and the recovery path if a machine turns out not to survive
 being relocated.
+
+## The repo lives in an organization because a personal repo has no read-only collaborator
+
+Wanting to show the code to one person without giving them write access
+turns out to be impossible on a personal-account repository. **Every
+collaborator on a personal repo gets write.** The Read/Triage/Write/
+Maintain/Admin roles exist only for repos owned by an ORGANIZATION, and
+paying for GitHub Pro does not change it -- it is a property of personal
+repos, not of the plan.
+
+The usual workaround is closed off too: branch protection and rulesets
+both return `Upgrade to GitHub Pro or make this repository public` on a
+free private repo. Verified by calling the API, before and after the
+move -- **a free ORG does not unlock it either**, which contradicts a
+guess made mid-session and is why it is written down here.
+
+So on 2026-08-16 the repo moved from a personal account to the
+`eveningworks` organization, where an **outside collaborator** can be
+added to one repository with the `Read` role. Outside collaborator
+rather than org member on purpose: an org member can see the
+organization's other repositories and its member list, which defeats the
+point once the org holds more than this project.
+
+Two consequences worth knowing:
+
+- **The remote changed** to `git@github.com:eveningworks/toy-os.git`.
+  GitHub redirects the old path, but the local remote was repointed
+  rather than left depending on a redirect that dies the moment someone
+  claims the old name.
+- **Release assets survive a transfer**, as do tags, Actions history and
+  pending invitations. Only repository *settings* that are plan-gated
+  change meaning.
+
+## The account rename, and the second history scrub -- scoped by measuring, not by instinct
+
+The maintainer's GitHub handle changed after the transfer. Two facts
+made that safe, and both were checked rather than assumed: the numeric
+account ID is unchanged, so GitHub re-resolves every release author and
+commit attribution to the new name; and no commit is *authored* by the
+GitHub account at all (authors are all `toy-os <noreply@toy-os.local>`,
+per the earlier scrub -- see the entry above).
+
+What did carry the old handle was **committer** metadata on nine
+web-UI merge commits (`<id>+<handle>@users.noreply.github.com`), one
+line in a frozen changelog archive, and one commit message.
+
+**The scope of the fix was decided by measuring, and the first estimate
+was wrong by 4x.** Rewriting only the committer fields touches 60
+commits and one tag, because the earliest affected commit postdates
+`v0.1.0`. Scrubbing the string from historical FILE CONTENTS as well
+reaches back to a commit that predates `v0.0.9` -- 264 commits and all
+three tags. That difference was found by asking `git log -S` where the
+string was introduced, *after* the smaller number had already been
+quoted and a decision made on it. The decision was re-put with the real
+number, and the narrower scope chosen.
+
+So: committer metadata and the current tree are clean; old revisions of
+`CHANGELOG-archive.md` still contain the handle if someone checks out a
+months-old commit. That was judged acceptable because a GitHub handle is
+public by nature -- unlike the real name the first scrub removed, where
+the wider blast radius was worth paying.
+
+The mechanics, if this comes up again: `git filter-branch` in a FRESH
+CLONE (never the working checkout, and never a repo with worktrees
+attached), `--tag-name-filter cat` so tags follow, then verify with
+`git diff <old-tip> <new-tip> --stat` -- which must show only the
+intended content change and nothing else. `git filter-repo` is the
+modern tool but is not installed here; filter-branch is built in and was
+sufficient. Take a backup first (`tools/backup_repo.sh`), because a
+force-push over a rewritten history is the one operation where the old
+objects stop being reachable.
+
+## A backup of this repo is not a `git clone`
+
+`tools/backup_repo.sh` exists because the obvious backup is incomplete
+in a way that only shows up when you need it. A mirror clone captures
+every commit, branch and tag -- and none of the **release assets**,
+which are ~130 MB of ISOs and pre-seeded disk images that live only on
+GitHub. Rebuilding a historical release's assets by hand means checking
+out that tag and reproducing the exact build, which is precisely the
+situation a backup is supposed to avoid.
+
+It also captures what a clone cannot: the repo's own settings, the pull
+request bodies, and a bundle of LOCAL refs, since a mirror of the remote
+cannot know about a branch that was never pushed.
+
+Two things it deliberately does not do. It does not capture
+collaborators, webhooks, secrets or Actions history -- those are
+GitHub-side state with no export, and pretending otherwise would be
+worse than saying so. And it does not run the restore test, because that
+costs a full build: clone the mirror and run `make all` by hand before
+relying on a backup for anything irreversible. That test is worth the
+minutes -- matching hashes prove the bytes survived, but only a build
+proves it restores to a working project.
