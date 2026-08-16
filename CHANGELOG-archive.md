@@ -152,7 +152,7 @@ needed to actually drop it from the repo.
 
 ## Build 121 (fix, +1) -- git tag + GitHub Release convention for BUILD_NUMBER bumps
 
-Now that the repo is actually pushed to GitHub (`Drenos/toy-os`, private
+Now that the repo is actually pushed to GitHub (a private repo
 -- see the last few entries), asked what "correct versioning" looks
 like with a real remote in the loop, since `BUILD_NUMBER` alone doesn't
 say which commit a given build number IS. Offered a couple of choices:
