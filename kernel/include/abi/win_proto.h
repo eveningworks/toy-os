@@ -270,6 +270,43 @@ static inline uint64_t win_buffer_vaddr(uint32_t window) {
 // many windows a client opens.
 #define WIN_FONT_VADDR (WIN_CLIENT_BASE + (uint64_t)WIN_CLIENT_MAX * WIN_BUFFER_STRIDE)
 
+// --- the compositor's view of OTHER processes' windows ----------------
+//
+// A ring-3 compositor has to read the pixels of windows it does not own,
+// which is the one thing the addresses above cannot express: they are
+// per-CLIENT, and two clients both hold window 0. So a compositor sees
+// every window in a region of its own, at an address DERIVED from the
+// pair (owner pid, window id) exactly as a client's own buffer is
+// derived from the id alone.
+//
+// **Derived rather than returned, for the same reason it was a good
+// idea the first time.** A resize reallocates a window's frames and
+// re-maps them AT THE SAME ADDRESS, so the compositor's pointer stays
+// valid across a resize it did not initiate and never has to be told
+// where the pixels moved. It also means the kernel can revoke a mapping
+// without being told where it is -- it computes the address the same
+// way -- which is what makes "the mapping is gone after the client
+// dies" checkable rather than a matter of bookkeeping the two sides
+// might disagree about.
+//
+// Placed well above the font so the three regions cannot collide: a
+// client's own buffers end at WIN_FONT_VADDR, and this starts far
+// enough above that the whole compositor region (MAX_PROCS x
+// WIN_CLIENT_MAX slots) fits underneath the next round address. Virtual
+// space costs nothing here.
+#define WIN_COMPOSITOR_BASE 0x8010000000ULL
+
+// How many processes' windows the region has room for. Matches
+// MAX_PROCS (scheduler.c); the server refuses a pid outside it rather
+// than computing an address that overlaps someone else's.
+#define WIN_COMPOSITOR_MAX_PIDS 4
+
+static inline uint64_t win_compositor_vaddr(int pid, uint32_t window) {
+    return WIN_COMPOSITOR_BASE
+         + ((uint64_t)(pid - 1) * WIN_CLIENT_MAX + (uint64_t)window)
+           * WIN_BUFFER_STRIDE;
+}
+
 // Glyph layout in that mapping, so a client can index it without being
 // told anything beyond the metrics WIN_REQ_FONT returns: glyphs are
 // stored back to back, each `h` rows of `w` bytes, row-major, one byte

@@ -1471,6 +1471,20 @@ doc makes that its own stage, deliberately before the WM moves.
       because neither has a syscall behind it, and stage 0 added none.
       Fold it into stage 4's settings/process syscall batch rather than
       adding a one-off. `df` and `fsck` report both facts meanwhile.
+- [ ] **Kernel command-line switches for the protections, not just
+      `nokaslr`.** `multiboot_cmdline()` exists and kernel ASLR is its
+      only user; `nowx`, `nonx`, `nosmap`/`nosmep` and a heap-debug
+      switch would join it. The argument is not convenience, it is
+      TESTING: proving a W^X or SMAP KTEST can go red currently means
+      editing the kernel and rebuilding (see CLAUDE.md's positive-control
+      note, and the session that read 132/132 green off a stale ISO), and
+      a boot flag turns that into a launch argument the suite can run
+      both ways. Two rules it has to follow, or it makes things worse: a
+      disabled protection must be reported loudly (`dmesg` and `about`,
+      as `nokaslr` already does with its note), and the affected KTESTs
+      must SKIP with a reason rather than fail -- otherwise booting with
+      `nowx` reddens six checks and the next session "fixes" the tests.
+      Asked for 2026-08-16.
 - [ ] **A Live-CD boot: run from the ISO with no disk.** Asked for
       2026-08-16. Most of the parts exist -- `multiboot_get_module()`
       (`kernel/core/multiboot.c`) already reads GRUB modules, and the
@@ -1483,14 +1497,27 @@ doc makes that its own stage, deliberately before the WM moves.
       fs (simpler to write, a second format to maintain). Note the old
       `BIN_BOOTSTRAP` GRUB-module path was removed for good reasons --
       see `docs/decisions.md` -- so this should not just reinstate it.
-- [ ] **Cross-process buffer sharing** -- the actual blocker. Today
-      `win_server.c` hands `wm_client.c` a plain kernel pointer, which
-      works only because everything is identity-mapped; a ring-3 WM
-      needs each client's buffer mapped into ITS address space, revoked
-      on client death and on the resize that reallocates. The primitive
-      exists (`vmm_map_user_page()` takes an explicit `pml4_phys`); the
-      policy, the lifetime rules and the guard that only the registered
-      compositor may ask do not.
+      **Designed now: `docs/live-cd-design.md`**, four stages, decided
+      in favour of the TFS3-image-mounted-from-RAM shape. Its blocker is
+      worth knowing about independently of the feature: `slot_usable()`
+      (`kernel/arch/x86_64/reloc.c`) does not consider module ranges, so
+      kernel ASLR can relocate the image on top of a GRUB module -- a
+      failure that depends on the random base and vanishes under
+      `nokaslr`, which reads as an ASLR bug rather than an eaten module.
+- [x] ~~**Cross-process buffer sharing**~~ -- done 2026-08-16 (design
+      doc's stage 1). A window's frames can be mapped into a second
+      address space and, more to the point, REVOKED when they stop being
+      that window's: explicit destroy, client death, resize, and the
+      compositor unregistering or dying. Guarded -- only the registered
+      compositor may ask, and only for a window that exists and belongs
+      to the pid named. The compositor's address for a window is DERIVED
+      (`win_compositor_vaddr(pid, id)`), so a resize re-maps at the same
+      place and the kernel can revoke without being told where. Seven
+      KTESTs in `kernel/proc/win_server_test.c`, with the positive
+      control recorded in the file: disabling revocation on destroy
+      reddens exactly the two revocation checks. Nothing outside the
+      kernel uses it yet, which is the stage's own definition -- the
+      ring-3 WM is its first caller, in stage 4.
 - [ ] **Raw input to the compositor.** The WM is the thing that decides
       focus, so it cannot receive input through the focus-routed event
       queue it is itself responsible for filling. Needs the raw

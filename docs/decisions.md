@@ -102,6 +102,7 @@ there when you add an entry, or the index quietly stops being one.
 
 - [Widgets are added once a second real caller needs them -- except the checkbox](#widgets-are-added-once-a-second-real-caller-needs-them----except-the-checkbox)
 - [The ring-3 UI Demo selects on contact where the kernel one committed on release](#the-ring-3-ui-demo-selects-on-contact-where-the-kernel-one-committed-on-release)
+- [A compositor's view of a window is at a DERIVED address, and revocation is the feature](#a-compositors-view-of-a-window-is-at-a-derived-address-and-revocation-is-the-feature)
 - [A GUI test spawns its client directly, instead of typing at a Terminal](#a-gui-test-spawns-its-client-directly-instead-of-typing-at-a-terminal)
 - [A client's menus are clamped to its own window, and that is one rectangle away from not being](#a-clients-menus-are-clamped-to-its-own-window-and-that-is-one-rectangle-away-from-not-being)
 - [A menu bar opens on press, which is the one place the commit-on-release rule bends](#a-menu-bar-opens-on-press-which-is-the-one-place-the-commit-on-release-rule-bends)
@@ -5137,3 +5138,54 @@ Two traps the conversion exposed, both of which read as widget bugs:
   `DebugConsole.json()` re-asks rather than trying to unpick the
   fragment: the splice is a collision, not a property of the answer, and
   a repair heuristic would silently accept genuinely malformed output.
+
+
+## A compositor's view of a window is at a DERIVED address, and revocation is the feature
+
+Milestone 41's stage 1 lets one process's window buffer be mapped into
+another's address space, so a ring-3 window manager can composite
+windows it does not own. Two things about its shape are worth stating
+because both look like details and neither is.
+
+**The address is derived, not returned.**
+`win_compositor_vaddr(owner_pid, window)` is a formula, exactly as
+`win_buffer_vaddr(window)` already was for a client's own buffer. The
+map call reports the address anyway, so the value has one definition at
+the call site rather than two -- but the compositor could compute it.
+
+Three things fall out of that, and the third is the reason:
+
+  1. A resize reallocates a window's frames and re-maps them at the
+     SAME address, so a compositor's pointer survives a resize it did
+     not initiate and never has to be told the pixels moved. This is
+     the trick that made client-side resize simple, reused.
+  2. There is no per-mapping table to keep in sync, so the two sides
+     cannot disagree about where a window is.
+  3. **The kernel can revoke a mapping without being told where it is.**
+     That is what makes "the mapping is gone after the client died" a
+     checkable property rather than a claim resting on bookkeeping.
+
+**Mapping is three lines; revocation is the whole design.** Frames stop
+belonging to a window on four separate paths -- an explicit destroy,
+the client dying (a different code path: process teardown calls
+`win_server_client_gone()`), a resize that reallocates, and the
+compositor itself unregistering or exiting -- and every one of them has
+to unmap BEFORE the frames go back to the allocator. Miss one and the
+compositor reads memory that now belongs to something else, which
+appears as flickering garbage inside one window and gets diagnosed as a
+drawing bug for as long as that takes.
+
+That is why the KTESTs assert against `vmm_validate_user_range()` --
+the page tables -- rather than against the server's own `comp_mapped`
+flag. The flag is precisely the thing that would be wrong. The recorded
+positive control (disable revocation on destroy; exactly two checks go
+red, on the page-table assertion) is in
+`kernel/proc/win_server_test.c`.
+
+**Why the compositor's address space is captured at registration**
+rather than looked up per call: a mapping must not depend on which
+process happens to be current when the request arrives, since a batched
+or shared-ring transport breaks that assumption -- the same argument
+`win_server_ops` makes about taking `pid` explicitly. It also makes the
+path reachable from a KTEST, which has no processes to look up, and
+that is the only reason these properties are tested at all.

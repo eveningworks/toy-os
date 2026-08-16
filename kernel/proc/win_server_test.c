@@ -1,0 +1,255 @@
+// Tests for cross-process window-buffer sharing -- Milestone 41's
+// stage 1 (docs/wm-ring3-design.md).
+//
+// WHY THESE ARE KTESTS AND NOT A GUI TEST
+// ---------------------------------------
+// The property that matters here is invisible from userland and
+// invisible on screen: after a window is destroyed, the compositor's
+// MAPPING of its pixels must be gone. Nothing a client or a test tool
+// can observe distinguishes "the mapping was revoked" from "the
+// mapping still resolves and the frames happen to be untouched so far"
+// -- the difference only shows up later, as another allocation's data
+// appearing inside a window, which reads as a compositing bug.
+//
+// Asking the page tables directly is the only honest check, and that
+// means running inside the kernel.
+//
+// HOW A TEST GETS A WINDOW WITHOUT A PROCESS
+// ------------------------------------------
+// `win_server_create_raw()` (see win_server.h) makes a window in an
+// address space the test built with vmm_create_address_space(). No
+// process, no protocol, no desktop -- but an ORDINARY window as far as
+// every path under test is concerned, subject to the same ownership
+// checks as any other.
+//
+// POSITIVE CONTROL, run when these were written: comment out
+// destroy_window()'s comp_unmap() call and rebuild. Exactly two checks
+// go red -- "destroying a window revokes the compositor's mapping" and
+// "a client dying revokes it too" -- and they fail on the
+// vmm_validate_user_range() assertion rather than on the bookkeeping
+// flag, which is the pair worth having. The other five stay green, which
+// is itself informative: destroy, resize and unregister each have their
+// OWN revocation call, so breaking one does not implicate the others.
+// Do this again before trusting a clean run after any change here.
+//
+// The reads and writes below go through vmm_copy_to_user() /
+// vmm_copy_from_user() against a specific address space. That is not
+// just the sanctioned way for kernel code to touch user memory (vmm.h)
+// -- it is also the strongest available form of the assertion, because
+// those helpers WALK THE PAGE TABLES to reach the frame. A successful
+// copy proves the mapping resolves in that address space; a failed one
+// proves it does not. Nothing here dereferences a user pointer, so
+// nothing here depends on which CR3 is loaded.
+#include "ktest.h"
+#include "win_server.h"
+#include "vmm.h"
+#include <stddef.h>
+
+// Two synthetic pids, both inside WIN_SERVER_MAX_PIDS. Deliberately not
+// 1: pid 1 is what a real spawned client tends to get, and these tests
+// run in the live kernel where a desktop may be up.
+#define CLIENT_PID 3
+#define COMP_PID   4
+
+#define WIN_W 64
+#define WIN_H 32
+
+// A fixture: two address spaces, one window. Every test needs the same
+// three lines and the same teardown, and a leaked address space here is
+// a leak in the live kernel the suite is running inside.
+struct fixture {
+    uint64_t client_as;
+    uint64_t comp_as;
+    uint32_t id;
+};
+
+static int fixture_up(struct fixture *f) {
+    f->client_as = vmm_create_address_space();
+    f->comp_as = vmm_create_address_space();
+    if (!f->client_as || !f->comp_as) return 0;
+    if (!win_server_create_raw(CLIENT_PID, f->client_as, WIN_W, WIN_H, &f->id)) return 0;
+    if (!win_server_set_compositor(COMP_PID, f->comp_as)) return 0;
+    return 1;
+}
+
+static void fixture_down(struct fixture *f) {
+    win_server_destroy_raw(CLIENT_PID, f->id);
+    // Clear the registration before the address space goes away, so no
+    // stale pml4 is left registered for the next test (or for the live
+    // desktop, which shares this kernel).
+    win_server_set_compositor(0, 0);
+    if (f->client_as) vmm_destroy_address_space(f->client_as);
+    if (f->comp_as) vmm_destroy_address_space(f->comp_as);
+}
+
+KTEST("winshare", "a window maps into the compositor at its derived address") {
+    struct fixture f = {0};
+    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
+
+    uint64_t vaddr = 0;
+    KTEST_ASSERT(win_server_map_to_compositor(COMP_PID, CLIENT_PID, f.id, &vaddr));
+    // The address is DERIVED, so the server and the compositor cannot
+    // disagree about it -- this asserts the returned value is the one
+    // the formula gives rather than something the server chose.
+    KTEST_ASSERT_EQ(vaddr, win_compositor_vaddr(CLIENT_PID, f.id));
+    KTEST_ASSERT(win_server_is_mapped_to_compositor(CLIENT_PID, f.id));
+    KTEST_ASSERT(vmm_validate_user_range(f.comp_as, vaddr, 4096));
+
+    fixture_down(&f);
+}
+
+KTEST("winshare", "both address spaces see the SAME pixels, not a copy") {
+    struct fixture f = {0};
+    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
+
+    uint64_t cvaddr = 0;
+    KTEST_ASSERT(win_server_map_to_compositor(COMP_PID, CLIENT_PID, f.id, &cvaddr));
+
+    // Write as the CLIENT would (into its own mapping), read as the
+    // compositor. A copy would pass a same-value check made any other
+    // way; going through two different address spaces is what makes
+    // this about sharing rather than about memory working.
+    uint32_t pixel = 0xC0FFEE01;
+    KTEST_ASSERT(vmm_copy_to_user(f.client_as, win_buffer_vaddr(f.id),
+                                   &pixel, sizeof pixel));
+    uint32_t seen = 0;
+    KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen, cvaddr, sizeof seen));
+    KTEST_ASSERT_EQ(seen, 0xC0FFEE01);
+
+    // And the other direction: a compositor that only ever reads is the
+    // normal case, but the mapping is writable and a one-way test would
+    // not notice if it silently were not.
+    pixel = 0x0BADF00D;
+    KTEST_ASSERT(vmm_copy_to_user(f.comp_as, cvaddr, &pixel, sizeof pixel));
+    seen = 0;
+    KTEST_ASSERT(vmm_copy_from_user(f.client_as, &seen,
+                                     win_buffer_vaddr(f.id), sizeof seen));
+    KTEST_ASSERT_EQ(seen, 0x0BADF00D);
+
+    fixture_down(&f);
+}
+
+// THE ONE THAT MATTERS. A revocation bug leaves the compositor reading
+// frames the allocator has already handed to something else.
+KTEST("winshare", "destroying a window revokes the compositor's mapping") {
+    struct fixture f = {0};
+    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
+
+    uint64_t cvaddr = 0;
+    KTEST_ASSERT(win_server_map_to_compositor(COMP_PID, CLIENT_PID, f.id, &cvaddr));
+    KTEST_ASSERT(vmm_validate_user_range(f.comp_as, cvaddr, 4096));
+
+    KTEST_ASSERT(win_server_destroy_raw(CLIENT_PID, f.id));
+
+    // Not "the flag says unmapped" -- ask the PAGE TABLES. The flag is
+    // the thing that would be wrong if this were broken.
+    KTEST_ASSERT(!vmm_validate_user_range(f.comp_as, cvaddr, 4096));
+    KTEST_ASSERT(!win_server_is_mapped_to_compositor(CLIENT_PID, f.id));
+
+    f.id = 0; // already destroyed; don't destroy a live window's slot
+    win_server_set_compositor(0, 0);
+    if (f.client_as) vmm_destroy_address_space(f.client_as);
+    if (f.comp_as) vmm_destroy_address_space(f.comp_as);
+}
+
+KTEST("winshare", "a client dying revokes it too") {
+    struct fixture f = {0};
+    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
+
+    uint64_t cvaddr = 0;
+    KTEST_ASSERT(win_server_map_to_compositor(COMP_PID, CLIENT_PID, f.id, &cvaddr));
+
+    // The path a real crash takes, which is NOT the same code as an
+    // orderly WIN_REQ_DESTROY -- process teardown calls this directly.
+    win_server_client_gone(CLIENT_PID);
+
+    KTEST_ASSERT(!vmm_validate_user_range(f.comp_as, cvaddr, 4096));
+    KTEST_ASSERT_EQ(win_server_window_count(CLIENT_PID), 0);
+
+    f.id = 0;
+    win_server_set_compositor(0, 0);
+    if (f.client_as) vmm_destroy_address_space(f.client_as);
+    if (f.comp_as) vmm_destroy_address_space(f.comp_as);
+}
+
+KTEST("winshare", "a resize re-points the mapping at the NEW frames") {
+    struct fixture f = {0};
+    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
+
+    uint64_t cvaddr = 0;
+    KTEST_ASSERT(win_server_map_to_compositor(COMP_PID, CLIENT_PID, f.id, &cvaddr));
+
+    // Mark the OLD buffer. After the resize this value must be gone --
+    // if it is still readable through the compositor's mapping, the
+    // mapping is still pointing at frames the resize freed, which is
+    // precisely the use-after-free this test exists for.
+    uint32_t marker = 0xDEADBEEF;
+    KTEST_ASSERT(vmm_copy_to_user(f.comp_as, cvaddr, &marker, sizeof marker));
+
+    // Not through win_server_request(): that refuses everything when no
+    // presentation layer is registered, and a `ktest` run has no
+    // desktop. This is the same resize_window() the protocol calls.
+    KTEST_ASSERT(win_server_resize_raw(CLIENT_PID, f.id, WIN_W * 3, WIN_H * 3));
+
+    // Still mapped, still at the same address -- that is the whole
+    // point of deriving it (a compositor is never told pixels moved).
+    KTEST_ASSERT(win_server_is_mapped_to_compositor(CLIENT_PID, f.id));
+    KTEST_ASSERT(vmm_validate_user_range(f.comp_as, cvaddr, 4096));
+
+    // A fresh buffer is zeroed, so the marker cannot survive unless the
+    // mapping never moved.
+    uint32_t seen = 0xFFFFFFFF;
+    KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen, cvaddr, sizeof seen));
+    KTEST_ASSERT_EQ(seen, 0);
+
+    // And it is genuinely the new buffer: write through the client's
+    // view and see it through the compositor's.
+    uint32_t pixel = 0x11223344;
+    KTEST_ASSERT(vmm_copy_to_user(f.client_as, win_buffer_vaddr(f.id),
+                                   &pixel, sizeof pixel));
+    KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen, cvaddr, sizeof seen));
+    KTEST_ASSERT_EQ(seen, 0x11223344);
+
+    fixture_down(&f);
+}
+
+KTEST("winshare", "only the registered compositor may map a window") {
+    struct fixture f = {0};
+    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
+
+    uint64_t vaddr = 0;
+    // A process that is not the compositor, asking for someone else's
+    // pixels. This is the request that must never succeed -- a window
+    // buffer is private memory, and mapping it into an arbitrary
+    // process is a hole rather than a feature.
+    KTEST_ASSERT(!win_server_map_to_compositor(CLIENT_PID, CLIENT_PID, f.id, &vaddr));
+    KTEST_ASSERT(!win_server_is_mapped_to_compositor(CLIENT_PID, f.id));
+
+    // Nor may the compositor map a window that does not exist.
+    KTEST_ASSERT(!win_server_map_to_compositor(COMP_PID, CLIENT_PID, WIN_CLIENT_MAX, &vaddr));
+    // Nor one belonging to a pid outside the table.
+    KTEST_ASSERT(!win_server_map_to_compositor(COMP_PID, 0, 0, &vaddr));
+
+    fixture_down(&f);
+}
+
+KTEST("winshare", "clearing the compositor drops its mappings") {
+    struct fixture f = {0};
+    if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
+
+    uint64_t cvaddr = 0;
+    KTEST_ASSERT(win_server_map_to_compositor(COMP_PID, CLIENT_PID, f.id, &cvaddr));
+
+    // A compositor exiting is the case this protects: its address space
+    // is about to be destroyed, and a mapping flag left set would make
+    // the next unmap walk a pml4 that no longer exists.
+    KTEST_ASSERT(win_server_set_compositor(0, 0));
+    KTEST_ASSERT(!win_server_is_mapped_to_compositor(CLIENT_PID, f.id));
+    KTEST_ASSERT(!vmm_validate_user_range(f.comp_as, cvaddr, 4096));
+
+    // And a map request with nobody registered is refused rather than
+    // mapping into whatever pml4 was there last.
+    KTEST_ASSERT(!win_server_map_to_compositor(COMP_PID, CLIENT_PID, f.id, &cvaddr));
+
+    fixture_down(&f);
+}

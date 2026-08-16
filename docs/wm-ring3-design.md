@@ -214,7 +214,7 @@ it is defined not to be. They are the remaining kernel-space apps.
 now driving the RING-3 widgets. A deleted app that something still
 references is a link error, not a silent gap.
 
-### Stage 1 -- cross-process buffer sharing
+### Stage 1 -- cross-process buffer sharing  [DONE 2026-08-16]
 
 - A kernel API to map an existing client window's frames into a second
   process's address space, built on `vmm_map_user_page()`, with
@@ -230,6 +230,39 @@ write through one mapping and read through the other, then destroy the
 client and assert the mapping is gone. The last of those is the one
 that matters -- a revocation bug leaves the WM reading freed frames,
 which will look like a compositing glitch and be diagnosed as one.
+
+**What shipped** (`kernel/proc/win_server.c`, `win_server_test.c`, and
+the ABI in `abi/win_proto.h`):
+
+- `win_server_set_compositor(pid, pml4)` registers who may map, and
+  **captures the address space** rather than looking it up per call.
+  That keeps the mapping independent of which process happens to be
+  current -- the same argument `win_server_ops` makes about taking
+  `pid` -- and it is what makes the whole path reachable from a KTEST,
+  which has no processes to look up.
+- `win_compositor_vaddr(pid, window)` is the derived address, so a
+  resize re-maps at the SAME place and the compositor is never told its
+  pixels moved -- the trick that made client-side resize simple, reused.
+  It also means the kernel can revoke without being told where the
+  mapping is, which is why revocation is checkable rather than a matter
+  of bookkeeping the two sides could disagree about.
+- Revocation on all four paths that invalidate frames: explicit
+  destroy, client death (`win_server_client_gone()`, the crash path,
+  which is NOT the same code), resize (unmap before the free, re-map
+  after, at the same address), and the compositor itself
+  unregistering or dying.
+- `win_server_create_raw()` / `_destroy_raw()` / `_resize_raw()` exist
+  for the tests, because `win_server_request()` refuses everything when
+  no presentation layer is registered and a `ktest` run has no desktop
+  -- a test driving resize through the protocol would only ever test
+  that refusal.
+
+**Seven KTESTs, and the positive control is recorded in the file.**
+Disabling `destroy_window()`'s revocation reddens exactly the two
+revocation checks, on the page-table assertion rather than the flag;
+the other five stay green because destroy, resize and unregister each
+have their own path. Nothing outside the kernel uses any of this yet,
+which is the stage's own definition.
 
 ### Stage 2 -- input to a compositor process
 

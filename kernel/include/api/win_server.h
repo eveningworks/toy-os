@@ -118,4 +118,99 @@ void win_server_client_gone(int pid);
 // How many windows `pid` currently owns. For tests and `gui state`.
 int win_server_window_count(int pid);
 
+// --- cross-process buffer sharing (Milestone 41, stage 1) ------------
+//
+// A ring-3 window manager cannot composite what it cannot read, and a
+// client's pixels live in that client's address space. These map a
+// window's frames into a SECOND address space -- the compositor's --
+// and, more importantly, revoke that mapping when the frames stop being
+// the window's.
+//
+// **Revocation is the substance here, not mapping.** Mapping the same
+// frames twice is three lines; what makes it safe is that a destroyed
+// or resized window's mapping goes away in the same operation that
+// frees the frames. A stale mapping leaves the compositor reading
+// memory the allocator has handed to someone else, which shows up as a
+// compositing GLITCH -- flickering garbage in one window -- and gets
+// diagnosed as a drawing bug for as long as that takes.
+//
+// **Guarded, because a window buffer is private memory.** Only the
+// registered compositor may ask, and only for a window that really
+// exists. Mapping an arbitrary process's pages into another process on
+// request is a hole, not a feature.
+//
+// These live in api/ next to the rest of this header rather than in a
+// second one: `apps/wm/` is the intended caller from stage 4 onward,
+// and splitting one subsystem's declarations across two headers to
+// delay that by a stage would cost more than it protects.
+
+// Registers (or clears, with pid 0) the compositor: which process may
+// map other processes' windows, and the address space its mappings go
+// into.
+//
+// The address space is passed EXPLICITLY rather than looked up from the
+// scheduler at map time. Two reasons: the mapping then never depends on
+// which process happens to be current when the request arrives (a
+// batched or ring transport breaks that assumption -- the same argument
+// win_server_ops makes about taking `pid`), and it makes the whole path
+// reachable from a KTEST, which has no processes to look up.
+//
+// Returns 1 on success, 0 for a pid outside the supported range.
+// Registering a different compositor, or clearing it, drops every
+// mapping the previous one held.
+int win_server_set_compositor(int pid, uint64_t pml4);
+
+// The registered compositor's pid, or 0 if none.
+int win_server_compositor_pid(void);
+
+// Maps `owner_pid`'s window `id` into the compositor's address space.
+// `requester_pid` must BE the registered compositor -- that check is the
+// access control, and it is why this takes a requester at all.
+//
+// Idempotent: mapping a window that is already mapped succeeds and
+// reports the same address, so a compositor may ask again after a
+// resize without unmapping first (it does not need to -- see below --
+// but asking twice must not be an error).
+//
+// On success `*out_vaddr` is win_compositor_vaddr(owner_pid, id), which
+// the caller could have computed itself; it is returned so the address
+// has exactly one definition at the call site rather than two.
+// Returns 1 on success, 0 if refused.
+int win_server_map_to_compositor(int requester_pid, int owner_pid, uint32_t id,
+                                  uint64_t *out_vaddr);
+
+// Drops that mapping. Returns 1 if one was removed, 0 if there was
+// nothing mapped (not an error -- the same contract
+// vmm_unmap_user_page() uses).
+int win_server_unmap_from_compositor(int requester_pid, int owner_pid, uint32_t id);
+
+// Whether `owner_pid`'s window `id` is mapped into the compositor right
+// now. For tests and for `gui state`; a compositor knows its own state.
+int win_server_is_mapped_to_compositor(int owner_pid, uint32_t id);
+
+// Creates a window for `pid` in the address space `pml4`, with no live
+// process and without going through the protocol.
+//
+// **For KTESTs.** The mapping and revocation paths above are otherwise
+// reachable only by spawning a real client and driving TWP at it, which
+// a test running inside the kernel cannot do -- and the property most
+// worth testing (a destroyed window's mapping is gone) is exactly the
+// one that is invisible from userland. Returns 1 and fills `*out_id` on
+// success.
+//
+// Not a back door around the guard: everything it produces is an
+// ordinary window, subject to the same ownership checks as any other.
+int win_server_create_raw(int pid, uint64_t pml4, int w, int h, uint32_t *out_id);
+
+// Destroys a window created by win_server_create_raw(). Same teardown
+// the protocol's WIN_REQ_DESTROY performs, addressable from a test.
+int win_server_destroy_raw(int pid, uint32_t id);
+
+// Resizes one, running the same reallocate-and-remap the protocol's
+// WIN_REQ_RESIZE runs. Separate from the request path for one blunt
+// reason: win_server_request() refuses EVERYTHING when no presentation
+// layer is registered, and a `ktest` run has no desktop -- so a test
+// driving resize through the protocol tests only that refusal.
+int win_server_resize_raw(int pid, uint32_t id, int w, int h);
+
 #endif

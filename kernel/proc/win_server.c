@@ -26,7 +26,19 @@ struct client_window {
     uint64_t vaddr;   // where the client sees it
     uint32_t pages;   // how many frames `buf` spans
     int w, h;
+    // Is this window's buffer currently mapped into the compositor's
+    // address space? Tracked per window rather than inferred, because
+    // the ONLY safe moment to revoke is inside the operation that frees
+    // or replaces the frames -- and that operation has a window, not a
+    // list of mappings.
+    int comp_mapped;
 };
+
+// The registered compositor: which process may map other processes'
+// windows, and where those mappings go. See win_server.h -- the address
+// space is captured here rather than looked up per call.
+static int g_comp_pid = 0;
+static uint64_t g_comp_pml4 = 0;
 
 // [pid - 1][window id]. A flat table rather than a list: WIN_CLIENT_MAX
 // windows across MAX_PROCS processes is 16 entries, and a fixed table
@@ -57,6 +69,38 @@ static struct client_window *lookup(int pid, uint32_t id) {
     return cw;
 }
 
+// Maps a window's frames into the compositor at its derived address.
+// Returns 1 on success (including "already mapped"), 0 if the mapping
+// could not be built -- in which case nothing is left half-mapped.
+static int comp_map(struct client_window *cw) {
+    if (!g_comp_pid || !g_comp_pml4) return 0;
+    uint64_t vaddr = win_compositor_vaddr(cw->pid, cw->id);
+    for (uint32_t i = 0; i < cw->pages; i++) {
+        uint64_t phys = (uint64_t)(uintptr_t)cw->buf + (uint64_t)i * 4096;
+        if (!vmm_map_user_page(g_comp_pml4, vaddr + (uint64_t)i * 4096, phys)) {
+            for (uint32_t j = 0; j < i; j++) {
+                vmm_unmap_user_page(g_comp_pml4, vaddr + (uint64_t)j * 4096);
+            }
+            klog_write("win_server: compositor mapping failed\n");
+            return 0;
+        }
+    }
+    cw->comp_mapped = 1;
+    return 1;
+}
+
+// Revokes it. Safe to call unconditionally; that is the point, since
+// every path that frees or replaces frames has to call it and none of
+// them should have to know whether a mapping exists.
+static void comp_unmap(struct client_window *cw) {
+    if (!cw->comp_mapped) return;
+    uint64_t vaddr = win_compositor_vaddr(cw->pid, cw->id);
+    for (uint32_t i = 0; i < cw->pages; i++) {
+        vmm_unmap_user_page(g_comp_pml4, vaddr + (uint64_t)i * 4096);
+    }
+    cw->comp_mapped = 0;
+}
+
 // Frees a window's frames and unmaps them from its owner's address
 // space. The presentation layer is told FIRST (while `buf` is still
 // valid), so it can drop the window from its list before the memory
@@ -65,6 +109,12 @@ static void destroy_window(struct client_window *cw) {
     if (!cw->used) return;
 
     if (g_ops && g_ops->window_destroyed) g_ops->window_destroyed(cw->pid, cw->id);
+
+    // Before the frames go back to the allocator. A compositor left
+    // holding a mapping of freed frames reads whatever is allocated
+    // there next, which looks like a drawing bug rather than a
+    // use-after-free -- see win_server.h.
+    comp_unmap(cw);
 
     for (uint32_t i = 0; i < cw->pages; i++) {
         vmm_unmap_user_page(cw->pml4, cw->vaddr + (uint64_t)i * 4096);
@@ -78,10 +128,16 @@ static void destroy_window(struct client_window *cw) {
     cw->pages = 0;
 }
 
-static int create_window(int pid, const struct win_request_msg *req, uint32_t *out_id) {
+// `pml4` is passed in rather than read from vmm_current_pml4() here.
+// The protocol path passes the caller's own address space (a syscall
+// does not switch CR3, so that is the client's); win_server_create_raw()
+// passes one a KTEST made. Making it a parameter is also the honest
+// shape: this function maps into an address space, and which one should
+// not depend on when it happens to be called.
+static int create_window(int pid, uint64_t pml4, int w, int h, int x, int y,
+                          uint32_t *out_id) {
     if (pid < 1 || pid > WIN_SERVER_MAX_PIDS) return 0;
 
-    int w = req->a, h = req->b;
     if (w <= 0 || h <= 0 || w > WIN_CLIENT_MAX_W || h > WIN_CLIENT_MAX_H) {
         klog_write("win_server: create refused -- bad size\n");
         return 0;
@@ -97,7 +153,6 @@ static int create_window(int pid, const struct win_request_msg *req, uint32_t *o
     }
 
     struct client_window *cw = &windows[pid - 1][slot];
-    uint64_t pml4 = vmm_current_pml4();
     uint64_t vaddr = win_buffer_vaddr((uint32_t)slot);
     uint32_t bytes = (uint32_t)w * (uint32_t)h * 4;
     uint32_t pages = (bytes + 4095) / 4096;
@@ -138,12 +193,13 @@ static int create_window(int pid, const struct win_request_msg *req, uint32_t *o
     cw->pages = pages;
     cw->w = w;
     cw->h = h;
+    cw->comp_mapped = 0;
 
     // The presentation layer gets the last word: if it has no room in
     // its window list, the whole create fails and the memory goes back
     // rather than leaving a buffer nothing will ever draw.
     if (g_ops && g_ops->window_created) {
-        if (!g_ops->window_created(pid, cw->id, cw->buf, w, h, req->c, req->d)) {
+        if (!g_ops->window_created(pid, cw->id, cw->buf, w, h, x, y)) {
             // Not destroy_window() -- that would call window_destroyed()
             // for a window the presentation layer just refused and never
             // recorded.
@@ -262,11 +318,28 @@ static int resize_window(struct client_window *cw, int w, int h) {
         }
     }
 
+    // The compositor's mapping still points at the OLD frames, which are
+    // about to be freed. Revoke before the free, then rebuild against
+    // the new ones -- at the same virtual address, so the compositor's
+    // pointer is unchanged and it need not be told anything (see
+    // win_compositor_vaddr()).
+    //
+    // Order matters twice over: the unmap has to happen before
+    // pmm_free_contiguous(), and the remap has to use the new frames,
+    // so this cannot be collapsed into one call either side of the
+    // free. If the remap fails, the window is left UNMAPPED rather than
+    // stale -- a compositor that finds its mapping gone can ask again,
+    // whereas one reading freed frames cannot tell anything is wrong.
+    int was_comp_mapped = cw->comp_mapped;
+    comp_unmap(cw);
+
     pmm_free_contiguous((uint64_t)(uintptr_t)cw->buf, cw->pages);
     cw->buf = (uint32_t *)(uintptr_t)phys;
     cw->pages = pages;
     cw->w = w;
     cw->h = h;
+
+    if (was_comp_mapped) comp_map(cw);
 
     if (g_ops && g_ops->window_resized) {
         g_ops->window_resized(cw->pid, cw->id, cw->buf, w, h);
@@ -280,7 +353,10 @@ int win_server_request(int pid, struct win_request_msg *req) {
     switch (req->type) {
     case WIN_REQ_CREATE: {
         uint32_t id = 0;
-        if (!create_window(pid, req, &id)) return 0;
+        // vmm_current_pml4() IS the calling client's address space: a
+        // syscall does not switch CR3 on entry (see vmm.h).
+        if (!create_window(pid, vmm_current_pml4(), req->a, req->b,
+                           req->c, req->d, &id)) return 0;
         req->window = id;
         return 1;
     }
@@ -342,10 +418,93 @@ int win_server_request(int pid, struct win_request_msg *req) {
 
 void win_server_client_gone(int pid) {
     if (pid < 1 || pid > WIN_SERVER_MAX_PIDS) return;
+
+    // The COMPOSITOR dying is not the same event as a client dying, and
+    // it has to be handled first: its address space is about to be torn
+    // down, so every mapping into it becomes meaningless. Clearing the
+    // registration here also drops the per-window flags, so nothing
+    // later tries to unmap out of an address space that no longer
+    // exists.
+    if (pid == g_comp_pid) win_server_set_compositor(0, 0);
+
     for (int i = 0; i < WIN_CLIENT_MAX; i++) {
         struct client_window *cw = &windows[pid - 1][i];
         if (cw->used) destroy_window(cw);
     }
+}
+
+// --- cross-process buffer sharing (see win_server.h) -----------------
+
+int win_server_compositor_pid(void) { return g_comp_pid; }
+
+int win_server_set_compositor(int pid, uint64_t pml4) {
+    if (pid < 0 || pid > WIN_SERVER_MAX_PIDS) return 0;
+
+    // Changing or clearing the compositor drops every mapping the old
+    // one held. Skipping this would leave bookkeeping claiming a
+    // mapping exists in an address space nobody composites from -- and
+    // if that pml4 is later destroyed and its frames reused, a stale
+    // `comp_mapped` makes the next unmap walk whatever now lives there.
+    if (g_comp_pid && g_comp_pml4) {
+        for (int p = 0; p < WIN_SERVER_MAX_PIDS; p++) {
+            for (int i = 0; i < WIN_CLIENT_MAX; i++) {
+                comp_unmap(&windows[p][i]);
+            }
+        }
+    }
+
+    g_comp_pid = pid;
+    g_comp_pml4 = pid ? pml4 : 0;
+    return 1;
+}
+
+int win_server_map_to_compositor(int requester_pid, int owner_pid, uint32_t id,
+                                  uint64_t *out_vaddr) {
+    // The access control, in one place: only the registered compositor,
+    // and only for a window that really exists and really belongs to
+    // the pid named. A window buffer is a client's private memory.
+    if (!g_comp_pid || requester_pid != g_comp_pid) return 0;
+    if (owner_pid < 1 || owner_pid > WIN_COMPOSITOR_MAX_PIDS) return 0;
+
+    struct client_window *cw = lookup(owner_pid, id);
+    if (!cw) return 0;
+
+    if (!cw->comp_mapped && !comp_map(cw)) return 0;
+    if (out_vaddr) *out_vaddr = win_compositor_vaddr(owner_pid, id);
+    return 1;
+}
+
+int win_server_unmap_from_compositor(int requester_pid, int owner_pid, uint32_t id) {
+    if (!g_comp_pid || requester_pid != g_comp_pid) return 0;
+    struct client_window *cw = lookup(owner_pid, id);
+    if (!cw || !cw->comp_mapped) return 0;
+    comp_unmap(cw);
+    return 1;
+}
+
+int win_server_is_mapped_to_compositor(int owner_pid, uint32_t id) {
+    struct client_window *cw = lookup(owner_pid, id);
+    return cw && cw->comp_mapped;
+}
+
+int win_server_create_raw(int pid, uint64_t pml4, int w, int h, uint32_t *out_id) {
+    uint32_t id = 0;
+    if (!create_window(pid, pml4, w, h, 0, 0, &id)) return 0;
+    if (out_id) *out_id = id;
+    return 1;
+}
+
+int win_server_destroy_raw(int pid, uint32_t id) {
+    struct client_window *cw = lookup(pid, id);
+    if (!cw) return 0;
+    destroy_window(cw);
+    return 1;
+}
+
+int win_server_resize_raw(int pid, uint32_t id, int w, int h) {
+    struct client_window *cw = lookup(pid, id);
+    if (!cw) return 0;
+    return resize_window(cw, w, h);
 }
 
 int win_server_window_count(int pid) {
