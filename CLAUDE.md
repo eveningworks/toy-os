@@ -877,6 +877,17 @@ becomes a hardware VM exit (~1us) where TCG services one in-process
 So: useful as a second mode to test in, and useful for anything
 CPU-bound, but always say which mode a benchmark came from --
 `tools/vm.py --kvm` runs the same configuration headlessly.
+
+**The other reason to reach for KVM has nothing to do with speed: it
+HONOURS GUEST MEMORY TYPES and TCG does not.** Under `make run` a
+write-combined or uncached framebuffer behaves exactly like cached RAM,
+so an entire class of graphics performance bug cannot happen there --
+which is what made the console's write-combined scroll regression
+reproduce on the maintainer's laptop and under `make run-kvm`, and
+nowhere else. If a report is "slow only on real hardware", try
+`python3 tools/vm.py --kvm run "gfxbench 20"` BEFORE concluding it is
+untestable here; a previous session recorded exactly that conclusion and
+it was wrong. See `docs/decisions.md`.
 **Source discovery is recursive now** -- every `.c` under `kernel/` or
 `apps/` is compiled and every `.asm` under `kernel/` assembled, with
 `build/` mirroring the source tree, so a new directory needs no Makefile

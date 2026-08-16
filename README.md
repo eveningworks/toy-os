@@ -158,6 +158,7 @@ make verify     # full gate: clean build + iso + boot test + test suite
 | No window appears (e.g. over SSH) | `make run-nographic`. |
 | The mouse doesn't move in QEMU | Don't add `-device usb-tablet`/`usb-mouse`. This kernel's mouse driver is PS/2 only, and an explicit USB pointer device makes QEMU route motion there instead. |
 | Everything is very slow | `make run` emulates the CPU. `make run-kvm` runs it natively — but that only helps compute-bound code; disk I/O measures ~1.9× *slower* under KVM, because each port-I/O instruction becomes a VM exit. |
+| Drawing is slow on real hardware but fine in QEMU | Use `make run-kvm` to reproduce it. Plain `make run` emulates the CPU and **ignores guest memory types entirely**, so an uncached or write-combined framebuffer behaves like cached RAM and a whole class of graphics performance bug is invisible. KVM honours them. `gfxbench` reports the numbers and which mechanisms are live. |
 | `disk.img` is 9 GB | It's a *sparse* file — it costs only what is actually written. `make clean-disk` wipes it. |
 
 For breakpoint debugging, `make debug` boots frozen against QEMU's own

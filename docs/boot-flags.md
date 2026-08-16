@@ -33,6 +33,30 @@ sets a non-zero `GRUB_TIMEOUT`.
 and `make iso`. Note the ISO's copy is generated from the repo-root
 `grub.cfg`; edit that one, not `iso/boot/grub/grub.cfg`.
 
+## Not flags, and why
+
+Two things people reasonably expect to find here and will not.
+
+**There is no flag for the legacy 80x25 text console.** `vga.c` has a
+complete `0xB8000` backend and `vga_init()` falls back to it whenever
+`gfx_init()` finds no usable linear framebuffer -- but you cannot ask for
+that from the command line. `boot.asm`'s multiboot2 header carries a
+framebuffer request tag, and GRUB acts on it *before* the kernel runs, so
+by the time `multiboot_cmdline()` could be read the adapter is already in
+a graphics mode and writes to `0xB8000` land nowhere visible. A GRUB menu
+entry does not work either: `gfxpayload` is ignored for multiboot2
+whenever the header requests a framebuffer, measured both with a specific
+mode requested and with a 0/0/0 "no preference" header. Reaching that
+backend needs a second kernel image built without the tag, or a runtime
+VGA mode-3 switch by hand. See `docs/decisions.md`.
+
+**There is no flag to turn console double buffering off.** The console
+draws into `gfx.c`'s back buffer so that it never reads the framebuffer,
+which is a correctness-shaped performance property rather than a
+preference -- reading a write-combined surface costs ~350x more per
+scrolled line on hardware. `gfxbench` reports which mode is live if you
+need to confirm it.
+
 ## Adding a flag
 
 Read the string with `multiboot_cmdline()` and match with `k_strstr()`,
