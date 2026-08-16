@@ -27,6 +27,13 @@ tool is pointed at with `--sock`/`--qmp-port`. Nothing is shared, so
 the isolation the per-tool image and per-tool VM already provided is
 unchanged; only the scheduling is.
 
+Tools are STARTED longest-first (`COST_S`/`pick_order` below), because
+a parallel run cannot finish before its slowest member does and
+`forcequit` (71s of genuinely waiting out ping timeouts) previously sat
+eleventh of fourteen and finished alone after everything else had
+drained. The summary table is still printed in the declared dependency
+order -- only the start order changed.
+
 WHY EACH TOOL GETS ITS OWN IMAGE AND ITS OWN VM
 -----------------------------------------------
 This is the part that is easy to get wrong and expensive to debug.
@@ -97,6 +104,57 @@ TOOLS = [
     ("sched", "sched_gui_test.py", "the desktop stays live while a process runs"),
     ("blank", "blank_window_test.py", "no app opens a blank window"),
 ]
+
+# Roughly how long each tool takes, in seconds, used ONLY to decide what
+# order to START them in (longest first -- see pick_order below). These
+# are measured wall-clock times from one run on one machine, so treat
+# them as a hint and nothing more: a stale or wrong number costs some
+# scheduling efficiency and can never affect a result, because the tools
+# are independent and each gets its own image and VM regardless.
+#
+# A tool with no entry here is assumed SLOW rather than fast. Being
+# wrong in that direction costs nothing (a quick tool started early
+# finishes early), while assuming a new tool is quick would risk making
+# it the straggler everything else waits behind -- which is the exact
+# problem this table exists to fix.
+COST_S = {
+    "forcequit": 71,   # waits out real ping timeouts; inherently slow
+    "notepad": 51,
+    "menubar": 34,
+    "gfxdemo": 29,
+    "uapp": 21,
+    "scrollbar": 21,
+    "uidemo": 20,
+    "uterm": 18,
+    "blank": 17,
+    "calculator": 15,
+    "sched": 12,
+    "winclient": 12,
+    "uiclient": 9,
+    "dialog": 9,
+}
+COST_UNKNOWN_S = 90
+
+
+def pick_order(picked):
+    """Longest job first -- the standard fix for a parallel makespan.
+
+    Order matters here for one reason: with `-j4`, the run cannot finish
+    before its slowest tool does, so a slow tool that STARTS late adds
+    its whole duration to the tail. `forcequit` (71s) sat eleventh of
+    fourteen in dependency order and finished alone, well after the
+    other thirteen had drained -- 339s of tool-time took 116s of wall
+    clock when the theoretical floor was ~85s.
+
+    This is LPT scheduling (Graham 1969), which is within 4/3 of optimal
+    and costs one sort. Deliberately applied to the START order ONLY:
+    the summary table is still rebuilt in the declared dependency order,
+    so a toolkit regression still reads before the apps built on it.
+
+    Ties keep declaration order (`sorted` is stable), so the ordering is
+    deterministic and a run is reproducible.
+    """
+    return sorted(picked, key=lambda t: -COST_S.get(t[0], COST_UNKNOWN_S))
 
 
 def run_one(name, script, disk_src, timeout, keep_logs, slot):
@@ -249,7 +307,10 @@ def main():
 
     done = {}
     with cf.ThreadPoolExecutor(max_workers=jobs) as pool:
-        futures = [pool.submit(work, *t) for t in picked]
+        # Submitted longest-first (pick_order), not in declaration
+        # order: a ThreadPoolExecutor starts tasks in submission order,
+        # so this is what keeps the slowest tool from being the tail.
+        futures = [pool.submit(work, *t) for t in pick_order(picked)]
         # as_completed, not map: results print the moment each tool
         # finishes rather than in submission order, so one slow tool
         # doesn't hold up everything behind it. The summary table below
