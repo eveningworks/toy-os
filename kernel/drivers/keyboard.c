@@ -111,6 +111,13 @@ static int ring_pop(uint32_t *out) {
 #define SC_F4  0x3E
 #define SC_F10 0x44
 
+// The Windows/Super/Meta keys, both 0xE0-prefixed. Their RELEASE
+// codes (0xDB/0xDC) have bit 7 set, so the press-only guard below
+// already excludes them -- the desktop wants the keypress, not a
+// held-modifier state, since this key ACTS rather than modifies.
+#define SC_SUPER_L 0x5B
+#define SC_SUPER_R 0x5C
+
 // Processes one byte already read from the 8042 by i8042_poll(). This
 // must NOT read port 0x60 itself -- see i8042.h for why.
 void keyboard_feed_byte(uint8_t sc) {
@@ -148,6 +155,12 @@ void keyboard_feed_byte(uint8_t sc) {
             else if (sc == SC_HOME) ring_push(shift_pressed ? KEY_SHIFT_HOME : KEY_HOME);
             else if (sc == SC_END) ring_push(shift_pressed ? KEY_SHIFT_END : KEY_END);
             else if (sc == SC_DELETE) ring_push(KEY_DELETE);
+            // Super/Win opens the Start menu, the way it does on
+            // Windows and KDE. Both sides send the same code: no
+            // desktop distinguishes them, and nothing here should
+            // invent a distinction (same call the driver already
+            // makes for left/right Ctrl).
+            else if (sc == SC_SUPER_L || sc == SC_SUPER_R) ring_push(KEY_SUPER);
         }
         return;
     }

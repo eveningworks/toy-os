@@ -308,6 +308,14 @@ int wm_find_resize_zone(int mx, int my, int *out_right, int *out_bottom);
 void wm_handle_left_click(int mx, int my);
 void wm_update_drag_resize(int mx, int my, uint8_t buttons);
 
+// Pulls a window back somewhere its title bar can be grabbed, if it is
+// no longer reachable at all -- off the side, or entirely behind the
+// taskbar, both of which dragging deliberately allows. A window that is
+// merely hanging off an edge is left alone. See the definition.
+// Returns 1 if it actually moved the window (i.e. it was unreachable),
+// 0 if it was already fine and nothing changed.
+int wm_ensure_reachable(int idx);
+
 // Right-click dispatch (see context_menu.h) -- closes whatever popup is
 // already open, then opens whichever context menu (if any) fits
 // (mx, my)'s target: a Start menu row, a taskbar app button, a window,

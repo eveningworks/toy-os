@@ -76,6 +76,15 @@ void wm_handle_left_click(int mx, int my) {
             if (widget_hit(bx, ty, wbw, taskbar_h, mx, my)) {
                 if (windows[i].state == WIN_MINIMIZED) {
                     windows[i].state = WIN_NORMAL;
+                    wm_ensure_reachable(i);
+                    bring_to_front(i);
+                } else if (wm_ensure_reachable(i)) {
+                    // It was somewhere it could not be grabbed -- off an
+                    // edge, or behind the taskbar. RECOVERING it is the
+                    // action, taking priority over the minimize toggle
+                    // below: minimizing something the user cannot see
+                    // does nothing they can perceive, and this button is
+                    // the only handle such a window has left.
                     bring_to_front(i);
                 } else if (i == window_count - 1) {
                     windows[i].state = WIN_MINIMIZED;
@@ -368,16 +377,89 @@ void wm_handle_right_click(int mx, int my) {
     desktop_handle_right_click(mx, my);
 }
 
+// Pulls a window back to where its title bar can be grabbed again.
+//
+// Dragging may leave a window with its title bar off the side or
+// entirely BEHIND the taskbar (both deliberate -- see the clamp in
+// wm_update_drag_resize()). Windows and KDE allow the same, and both
+// have keyboard escapes for it (Alt+Space then Move, Win+arrow). This
+// desktop has neither, so without this a window pushed under the
+// taskbar would be visible only as a taskbar button and impossible to
+// move ever again.
+//
+// Called when a taskbar button activates a window -- that button is the
+// one handle such a window still has. A window that is already
+// reachable is left exactly where it is, including one deliberately
+// hanging off an edge: the clamps below only bite past the point where
+// nothing grabbable is left.
+int wm_ensure_reachable(int idx) {
+    if (idx < 0 || idx >= window_count) return 0;
+    struct window *w = &windows[idx];
+
+    int keep = gfx_char_w() * 8;
+    if (keep > w->w) keep = w->w;
+
+    int min_x = keep - w->w;
+    int max_x = screen_w - keep;
+    int max_y = screen_h - taskbar_h - WM_TITLEBAR_H; // clear of the taskbar
+
+    int nx = w->x, ny = w->y;
+    if (nx < min_x) nx = min_x;
+    if (nx > max_x) nx = max_x;
+    if (ny < 0) ny = 0;
+    if (ny > max_y) ny = max_y;
+
+    if (nx == w->x && ny == w->y) return 0; // already reachable, leave it
+
+    wm_damage_rect(w->x, w->y, w->w, w->h); // vacated
+    w->x = nx;
+    w->y = ny;
+    wm_damage_rect(w->x, w->y, w->w, w->h); // arrived
+    return 1;
+}
+
 void wm_update_drag_resize(int mx, int my, uint8_t buttons) {
     if (dragging >= 0) {
         if (buttons & 0x1) {
             struct window *w = &windows[dragging];
             w->x = mx - drag_off_x;
             w->y = my - drag_off_y;
-            if (w->x < 0) w->x = 0;
+
+            // A window may hang off the left, right and bottom edges,
+            // the way it can on Windows and KDE -- partially hiding a
+            // window is a normal thing to want, and the old clamp
+            // (fully on screen, always) made it impossible. What is
+            // still enforced is that the window stays REACHABLE:
+            //
+            //  - enough of the title bar stays on screen to grab it
+            //    back, horizontally;
+            //  - the title bar never goes above the top edge, so it can
+            //    never be dragged somewhere the pointer cannot follow.
+            //    Windows enforces the same asymmetry, and for the same
+            //    reason: every other edge can be recovered by dragging
+            //    the title bar, but the title bar cannot recover
+            //    itself.
+            //  - dragged DOWN, the window slides UNDER the taskbar --
+            //    the taskbar is drawn last, so it is already on top;
+            //    what used to stop this was purely this clamp. The
+            //    window stays reachable from its taskbar button even
+            //    when the title bar itself is behind the taskbar, which
+            //    is exactly the bargain Windows and KDE make.
+            //
+            // Font-derived rather than a pixel constant, per
+            // docs/gui-guidelines.md -- at 14pt this is ~64px of
+            // grabbable title bar.
+            int keep = gfx_char_w() * 8;
+            if (keep > w->w) keep = w->w; // a very narrow window stays whole
+
+            int min_x = keep - w->w;             // mostly off the LEFT
+            int max_x = screen_w - keep;         // mostly off the RIGHT
+            int max_y = screen_h - WM_TITLEBAR_H; // down BEHIND the taskbar
+
+            if (w->x < min_x) w->x = min_x;
+            if (w->x > max_x) w->x = max_x;
             if (w->y < 0) w->y = 0;
-            if (w->x + w->w > screen_w) w->x = screen_w - w->w;
-            if (w->y + w->h > screen_h - taskbar_h) w->y = screen_h - taskbar_h - w->h;
+            if (w->y > max_y) w->y = max_y;
             redraw_pending = 1;
         } else {
             dragging = -1;

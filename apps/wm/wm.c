@@ -1048,7 +1048,27 @@ void wm_run(void) {
                 // the way Ctrl/Alt are folded into a letter, so mods are
                 // usable here, and this generalises to any future
                 // Alt+F<n> without a new code each time.
-                if (key == KEY_F4 && (key_mods & KEY_MOD_ALT) && f >= 0 && !file_picker_open) {
+                // Super/Win TOGGLES the Start menu -- open if closed,
+                // close if open, exactly as on Windows and KDE. A
+                // window-manager shortcut like Alt+F4 below, consumed
+                // here so it never reaches the focused window: a
+                // full-screen app must not be able to swallow the Start
+                // menu.
+                //
+                // Suppressed while a MODAL overlay owns input (the
+                // confirm dialog, the file picker). Those take the
+                // screen deliberately, and opening a menu behind one
+                // would leave two things claiming the next click.
+                // The context menu is not modal in that sense and is
+                // simply replaced.
+                if (key == KEY_SUPER) {
+                    if (!confirm_dialog_open && !file_picker_open) {
+                        if (start_menu_open) start_menu_open = 0;
+                        else start_menu_open_now();
+                        context_menu_open = 0;
+                        redraw_pending = 1;
+                    }
+                } else if (key == KEY_F4 && (key_mods & KEY_MOD_ALT) && f >= 0 && !file_picker_open) {
                     wm_request_close(f); // may shift windows[] -- f is dead after this
                     redraw_pending = 1;
                 } else if (f >= 0 && key != -1 && !file_picker_open && wm_client_is_client_window(&windows[f])) {

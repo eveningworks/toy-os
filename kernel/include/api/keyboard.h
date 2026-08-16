@@ -55,6 +55,22 @@
 // here, and this generalises to a future Alt+F<n> for free.
 #define KEY_F4                0xA5
 
+// Super (the Windows/Meta key) -- TOGGLES the Start menu, exactly as it
+// does on Windows and KDE: press to open, press again to close.
+//
+// A KEY_* code rather than a modifier bit, because this key ACTS on its
+// own rather than modifying another keypress. Nothing here supports
+// Super+<letter> combinations, and adding one later means adding a
+// modifier bit beside this, not replacing it.
+//
+// Left and right Super send the SAME code. No desktop distinguishes
+// them, and the driver already makes that call for left/right Ctrl.
+//
+// Like Alt+F4, this is a WINDOW-MANAGER shortcut: apps/wm/wm.c consumes
+// it before keys are routed to the focused window, so it never reaches
+// an app. A full-screen app cannot swallow the Start menu.
+#define KEY_SUPER             0xA6
+
 // ---- Ctrl and Alt ----
 //
 // These do NOT get KEY_* codes of their own. They're encoded the way a

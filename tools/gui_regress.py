@@ -221,7 +221,15 @@ def run_one(name, script, disk_src, timeout, keep_logs, slot):
             pass
 
     if keep_logs:
+        # The slot goes in the LOG, not only on the console. An
+        # intermittent failure is diagnosed after the fact from these
+        # files, and "which slot was it on" is the first question asked
+        # of one -- it was unanswerable once already, which is how a
+        # slot correlation ended up recorded in docs/roadmap.md on no
+        # evidence and had to be withdrawn.
         with open(os.path.join(keep_logs, f"{name}.log"), "w") as f:
+            f.write(f"# tool={name} slot={slot} qmp={4445 + slot} "
+                    f"serial={'.vm.serial' if slot == 0 else f'.vm.{slot}.serial'}\n")
             f.write(out)
 
     # The tools all print a "<name>: N passed, M failed" summary line;

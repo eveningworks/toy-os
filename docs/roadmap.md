@@ -1212,20 +1212,28 @@ history is worth reading, but a fixed papercut is just noise.
       `.vm.pid`/`.vm.serial`/port 4445 being reused before the previous
       guest has fully gone; the other slots use per-instance names.
       Not diagnosed further.
-      **Also hits `gui_regress.py`, same slot-0 fingerprint (measured
-      2026-08-16).** `uidemo` failed twice running with
-      `RuntimeError: UI Demo reported no layout -- is this an older
-      kernel?`, both times on slot 0, and passed on slot 1 and
-      standalone with the SAME kernel. The trap for whoever meets this
-      next: the message names the kernel, so it reads exactly like a
-      kernel regression -- and an A/B against a suspected kernel change
-      is CONFOUNDED, because which slot a tool lands on varies between
-      runs (`pick_order()` starts longest-first, so the order shifts).
-      That cost real time here: disabling a suspected change "fixed" it
-      and re-enabling it did not bring it back, purely because the slot
-      moved. Read the `=== <tool>: ... [slot N]` line and check the slot
-      BEFORE bisecting anything. Pinning a tool to a slot would settle
-      it properly; the tool cannot do that today.
+- [ ] **`gui_regress.py`'s `uidemo` fails intermittently in the full
+      parallel suite** with `RuntimeError: UI Demo reported no layout --
+      is this an older kernel?`, failing before its 15s spawn wait can
+      matter. Measured 2026-08-16: roughly 3 failures in 6 full-suite
+      runs, while `-k uidemo` alone and a 4-tool subset passed EVERY
+      time (42/42 checks), on an unchanged kernel.
+
+      **The trap, which cost real time here.** The message names the
+      kernel, so it reads exactly like a kernel regression, and an A/B
+      against a suspected kernel change is worthless at this failure
+      rate: disabling a suspected change "fixed" it and re-enabling it
+      did not bring it back, purely because the run happened to pass.
+      Get a RATE (`tools/flake_hunt.py`) before believing any A/B.
+
+      **What is NOT established: any correlation with the VM slot.** A
+      slot-0 correlation was written here first and then withdrawn --
+      it was inferred from the `damage_hunt.py` entry above rather than
+      observed, and the two passing A/B runs were the only ones whose
+      slot was ever actually seen. `--logs` does not record which slot a
+      tool ran on, which is exactly why this could not be settled after
+      the fact; it does now (see `gui_regress.py`'s per-tool log
+      header), so the next occurrence can answer it.
 - [ ] Resizing a window by its grip sometimes doesn't take on the first
       drag (visible in `damage_sweep.py -v`: a `resize-grow` followed by
       a `resize-shrink` starting from the *same* coordinates, meaning
