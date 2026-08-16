@@ -7,10 +7,21 @@
 //
 // TOYOS_VERSION is a semver-ish string ("0.1.0-dev" while in
 // development, "0.1.0" once released -- see VERSION at the repo root
-// and tools/set_version.sh), shown by both the shell's `about` and
-// the GUI About window. It's just whatever VERSION currently holds --
-// this script doesn't change it. See docs/decisions.md for why this
+// and tools/set_version.sh). It's just whatever VERSION currently holds
+// -- this script doesn't change it. See docs/decisions.md for why this
 // replaced the earlier per-change build-number scheme.
 #define TOYOS_VERSION "0.3.0-dev"
+
+// The commit this build came from, plus "-dirty" if the working tree
+// did not match it -- i.e. if the source that produced this image
+// exists nowhere in history. "unknown" when built without git.
+#define TOYOS_BUILD_ID "2034bb1-dirty"
+
+// **What to display.** TOYOS_VERSION plus the build id on a dev build,
+// the bare version on a release (its tag already pins it), and a loud
+// "(dirty)" either way if the tree had uncommitted changes. Prefer this
+// over TOYOS_VERSION anywhere a human reads the result; reach for the
+// bare macros when something needs to PARSE the version.
+#define TOYOS_VERSION_FULL "0.3.0-dev (2034bb1-dirty)"
 
 #endif

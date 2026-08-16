@@ -35,6 +35,49 @@ if [ -f "$VERSION_FILE" ]; then
     VERSION=$(cat "$VERSION_FILE")
 fi
 
+# The commit the build came from, and whether the tree matched it.
+#
+# WHY THIS DOES NOT BREAK THE IDEMPOTENCE ABOVE: a commit id changes once
+# per commit, and the dirty marker at most twice per working session, so
+# version.h's mtime still moves only when something real changed. A build
+# TIMESTAMP is the version of this idea to avoid -- it would differ on
+# every single build and rebuild the whole tree every time, which is
+# exactly what the comment above exists to prevent.
+#
+# `unknown` rather than an empty string when there is no git (a release
+# tarball, a stripped CI checkout): an empty marker reads as a bug in
+# this script, and a build that cannot say where it came from should say
+# so.
+BUILD_ID="unknown"
+if command -v git >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; then
+    BUILD_ID=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+    if ! git diff --quiet HEAD 2>/dev/null; then
+        BUILD_ID="$BUILD_ID-dirty"
+    fi
+fi
+
+# What the OS actually shows. The rule, and the reason for each half:
+#
+#   0.3.0-dev  ->  "0.3.0-dev (2034bb1)"
+#       A dev build is not pinned by anything. The commit id is the only
+#       way to know which one an ISO is, which is the whole point.
+#   0.3.0      ->  "0.3.0"
+#       A release IS pinned, by its git tag. The hash is noise on the one
+#       build where you do not need it.
+#   0.3.0 with a dirty tree  ->  "0.3.0 (dirty)"
+#       A release built from uncommitted changes is not the tag it claims
+#       to be. That case should be loud; on a clean release build the
+#       marker never appears, so it costs nothing.
+case "$VERSION" in
+    *-dev) VERSION_FULL="$VERSION ($BUILD_ID)" ;;
+    *)
+        case "$BUILD_ID" in
+            *-dirty) VERSION_FULL="$VERSION (dirty)" ;;
+            *)       VERSION_FULL="$VERSION" ;;
+        esac
+        ;;
+esac
+
 OUT="kernel/include/api/version.h"
 TMP="$OUT.tmp.$$"
 
@@ -48,19 +91,30 @@ cat > "$TMP" << EOF
 //
 // TOYOS_VERSION is a semver-ish string ("0.1.0-dev" while in
 // development, "0.1.0" once released -- see VERSION at the repo root
-// and tools/set_version.sh), shown by both the shell's \`about\` and
-// the GUI About window. It's just whatever VERSION currently holds --
-// this script doesn't change it. See docs/decisions.md for why this
+// and tools/set_version.sh). It's just whatever VERSION currently holds
+// -- this script doesn't change it. See docs/decisions.md for why this
 // replaced the earlier per-change build-number scheme.
 #define TOYOS_VERSION "$VERSION"
+
+// The commit this build came from, plus "-dirty" if the working tree
+// did not match it -- i.e. if the source that produced this image
+// exists nowhere in history. "unknown" when built without git.
+#define TOYOS_BUILD_ID "$BUILD_ID"
+
+// **What to display.** TOYOS_VERSION plus the build id on a dev build,
+// the bare version on a release (its tag already pins it), and a loud
+// "(dirty)" either way if the tree had uncommitted changes. Prefer this
+// over TOYOS_VERSION anywhere a human reads the result; reach for the
+// bare macros when something needs to PARSE the version.
+#define TOYOS_VERSION_FULL "$VERSION_FULL"
 
 #endif
 EOF
 
 if [ -f "$OUT" ] && cmp -s "$TMP" "$OUT"; then
     rm -f "$TMP"
-    echo "version: $VERSION (unchanged)"
+    echo "version: $VERSION_FULL (unchanged)"
 else
     mv "$TMP" "$OUT"
-    echo "version: $VERSION"
+    echo "version: $VERSION_FULL"
 fi

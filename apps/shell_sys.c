@@ -389,7 +389,7 @@ void cmd_random(const char *args) {
 }
 
 void cmd_about(void) {
-    vga_write("toy-os v"); vga_write(TOYOS_VERSION);
+    vga_write("toy-os v"); vga_write(TOYOS_VERSION_FULL);
     vga_write(" -- a small x86-64 hobby kernel\n");
     vga_write("Boot: GRUB/Multiboot2 | C + ASM | Tested on QEMU\n");
     vga_write("Storage: ");

@@ -208,7 +208,7 @@ static void sysinfo_applet_draw(int x, int y, int w, int h) {
             row++; \
         } while (0)
 
-    SYSINFO_LINE("toy-os v" TOYOS_VERSION);
+    SYSINFO_LINE("toy-os v" TOYOS_VERSION_FULL);
 
     // The brand string is a fixed 48-byte field, space-padded on both
     // sides by most CPUs -- trim before showing it.

@@ -30,11 +30,18 @@
 #define MARGIN   8
 #define LINE_GAP 6
 
+// TOYOS_VERSION_FULL rather than TOYOS_VERSION: on a dev build that
+// carries the commit id (and "-dirty" when the tree did not match it),
+// which is the only way to tell which build an ISO actually is. A
+// release shows the bare number -- its tag pins it. The window sizes
+// itself from the widest line, so a longer version string widens the
+// window instead of being clipped.
+//
 // Kept as one table so the size callback and the draw agree by
 // construction -- the kernel version had a ROWS macro beside the draw
 // calls, which is the arrangement that lets the two disagree.
 static const char *const LINES[] = {
-    "toy-os v" TOYOS_VERSION " -- graphics mode",
+    "toy-os v" TOYOS_VERSION_FULL,
     "",
     "Windows: drag the title bar to move,",
     "use the _ / o / x buttons.",

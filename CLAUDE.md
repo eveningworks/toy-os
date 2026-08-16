@@ -637,7 +637,16 @@ technical conventions below:
 - **`kernel/include/api/version.h` is GENERATED, not hand-edited** --
   `tools/gen_version.sh` regenerates it from `VERSION` (repo root, e.g.
   `0.1.0-dev`) as the first step of `make all`/`make iso`. Never edit
-  `version.h` directly.
+  `version.h` directly. It defines three macros:
+  `TOYOS_VERSION` (the bare string), `TOYOS_BUILD_ID` (the short commit
+  plus `-dirty` when the tree did not match it) and
+  **`TOYOS_VERSION_FULL`, which is what anything human-facing should
+  display** -- `0.3.0-dev (2034bb1)` on a dev build, a bare `0.3.0` on a
+  release, and `(dirty)` on either when the build came from uncommitted
+  changes. **Never add a build TIMESTAMP to it**: the script is
+  deliberately idempotent (it rewrites `version.h` only when the content
+  changed) because `kapi.h` includes it, and a value that differs every
+  build turns every build into a full rebuild. See `docs/decisions.md`.
 - **Versioning is semver + a `-dev` suffix, not a per-change build
   number.** `VERSION` only changes via `tools/set_version.sh
   <version>`: `0.2.0-dev` starts a new dev round, `0.2.0` (no `-dev`)

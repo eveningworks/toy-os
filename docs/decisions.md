@@ -175,6 +175,7 @@ there when you add an entry, or the index quietly stops being one.
 
 - [Build-number scheme: fix/feature/major tiers, not dates or semver](#build-number-scheme-fixfeaturemajor-tiers-not-dates-or-semver)
 - [Versioning: semver + `-dev` suffix, not a per-change build number](#versioning-semver---dev-suffix-not-a-per-change-build-number)
+- [A dev build shows its commit; a release shows only its version](#a-dev-build-shows-its-commit-a-release-shows-only-its-version)
 - [Repo is MIT; the baked JetBrains Mono glyph data is separately SIL OFL 1.1](#repo-is-mit-the-baked-jetbrains-mono-glyph-data-is-separately-sil-ofl-11)
 - [CI is kept for the environment, not the checks -- they duplicate `make verify` exactly](#ci-is-kept-for-the-environment-not-the-checks----they-duplicate-make-verify-exactly)
 - [Repo history scrubbed of the maintainer's real name -- privacy request, not a bug fix](#repo-history-scrubbed-of-the-maintainers-real-name----privacy-request-not-a-bug-fix)
@@ -5189,3 +5190,40 @@ or shared-ring transport breaks that assumption -- the same argument
 `win_server_ops` makes about taking `pid` explicitly. It also makes the
 path reachable from a KTEST, which has no processes to look up, and
 that is the only reason these properties are tested at all.
+
+
+## A dev build shows its commit; a release shows only its version
+
+`VERSION` changes about twice a milestone, so for the hundreds of builds
+in between, "0.3.0-dev" identified nothing: two ISOs weeks apart carried
+the same string. `tools/gen_version.sh` now also embeds
+`TOYOS_BUILD_ID` -- `git rev-parse --short HEAD`, plus `-dirty` when the
+working tree did not match it -- and `TOYOS_VERSION_FULL`, which is what
+the `about` command, the Control Panel and the About window display.
+
+The display rule, and why each half:
+
+- **`0.3.0-dev` shows the commit** (`0.3.0-dev (2034bb1)`). A dev build
+  is pinned by nothing else, which is the entire problem being solved.
+- **A release shows the bare number** (`0.3.0`). It is already pinned by
+  its git tag, so the hash is noise on the one build where it is not
+  needed. This was the maintainer's explicit ask and it is the right
+  call.
+- **`dirty` appears on either.** A build from a tree with uncommitted
+  changes came from source that exists nowhere in history -- the hash it
+  prints is a lie without the marker. On a release that is worse, not
+  better, so `0.3.0 (dirty)` is deliberate: it only ever appears when
+  something is already wrong.
+
+**The trap this had to avoid**, and it is the reason a build TIMESTAMP
+is not in there: `gen_version.sh` only rewrites `version.h` when the
+content actually changed, because `kapi.h` includes it and an
+unconditional rewrite makes nearly every object in the tree look stale
+on every build. A commit id changes once per commit and the dirty
+marker at most twice per session, so the property holds. A timestamp
+would differ every single build and quietly turn every build into a
+full rebuild.
+
+`unknown` rather than an empty string when git is unavailable (a release
+tarball, a stripped checkout): an empty marker reads as a bug in the
+script, and a build that cannot say where it came from should say so.
