@@ -15,7 +15,23 @@
 // rather than inside struct sched_process so the scheduler doesn't grow
 // a dependency on the windowing protocol -- it schedules processes, it
 // has no business knowing what a window event is.
-#define WIN_EVENTS_MAX_PIDS 4 // MAX_PROCS (scheduler.c)
+// Derived from SCHED_MAX_PROCS, never a literal -- api/scheduler.h says
+// so in as many words, and this table is what happens when that is
+// ignored: it read `4` long after MAX_PROCS became 64, with a comment
+// still claiming the two matched. queue_for() then returned NULL for
+// every pid above 4, so win_events_push() silently returned 0 and a
+// client in slot 4 or beyond received NO window events of any kind --
+// no keys, no mouse, no close, no resize, no ping. It draws perfectly
+// and answers nothing, and the force-quit path reads it as wedged.
+//
+// Reachable with five processes alive at once (pids are slot + 1, first
+// free slot reused). win_server.c's neighbouring table got a
+// _Static_assert and therefore did not drift; this one had none, which
+// is the whole reason to state the dependency twice.
+#define WIN_EVENTS_MAX_PIDS SCHED_MAX_PROCS
+
+_Static_assert(WIN_EVENTS_MAX_PIDS >= SCHED_MAX_PROCS,
+               "a scheduled process can have no event queue");
 
 struct event_queue {
     struct win_event ring[WIN_EVENT_QUEUE_MAX];

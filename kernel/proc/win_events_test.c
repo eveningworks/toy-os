@@ -160,3 +160,45 @@ KTEST("win_server", "a bad pid owns nothing") {
     KTEST_ASSERT_EQ(win_server_window_count(-1), 0);
     KTEST_ASSERT_EQ(win_server_window_count(99), 0);
 }
+
+// --- every scheduled process has a queue ------------------------------
+//
+// This table read `4` long after SCHED_MAX_PROCS became 64, so a client
+// in slot 4 or beyond got NULL from queue_for() and received no window
+// events at all -- drawing correctly and answering nothing. The
+// _Static_assert in win_events.c is the real guard; this is the runtime
+// half, and it fails on the boundary rather than on an average.
+
+KTEST("win_events", "the HIGHEST pid a scheduler can hand out has a queue") {
+    // The boundary is the whole point: a table one entry short passes
+    // every test written against pid 1.
+    const int top = SCHED_MAX_PROCS;
+
+    win_events_reset(top);
+    KTEST_ASSERT_EQ(win_events_pending(top), 0);
+
+    struct win_event ev = {0};
+    ev.type = WIN_EV_KEY;
+    ev.a = 'z';
+    KTEST_ASSERT(win_events_push(top, &ev));
+    KTEST_ASSERT_EQ(win_events_pending(top), 1);
+
+    struct win_event got = {0};
+    KTEST_ASSERT(win_events_pop(top, &got));
+    KTEST_ASSERT_EQ(got.type, (uint32_t)WIN_EV_KEY);
+    KTEST_ASSERT_EQ(got.a, 'z');
+
+    win_events_reset(top);
+}
+
+KTEST("win_events", "a pid outside the scheduler's range has none") {
+    struct win_event ev = {0};
+    ev.type = WIN_EV_KEY;
+
+    // The other half of the boundary. Refused rather than indexed, so a
+    // bad pid can never reach a neighbouring process's queue.
+    KTEST_ASSERT(!win_events_push(0, &ev));
+    KTEST_ASSERT(!win_events_push(-1, &ev));
+    KTEST_ASSERT(!win_events_push(SCHED_MAX_PROCS + 1, &ev));
+    KTEST_ASSERT_EQ(win_events_pending(SCHED_MAX_PROCS + 1), 0);
+}

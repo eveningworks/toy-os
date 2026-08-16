@@ -571,7 +571,7 @@ static void cmd_close(int index) {
     // close in the WM and the one that still seized a window instead of
     // asking for it: close_window() drops a client's window without
     // telling the client, so the process carries on running with no
-    // window, holding a slot out of MAX_PROCS (4) until reboot. Opening
+    // window, holding a slot out of MAX_PROCS (64) until reboot. Opening
     // four apps from a test then stopped the desktop launching anything
     // at all, which reads as a spawn bug rather than as a close bug.
     //

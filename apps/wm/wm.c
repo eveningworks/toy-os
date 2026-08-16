@@ -323,10 +323,11 @@ void open_app(const struct gui_app *app) {
 // (scheduler.h). The Terminal's children are reaped by the ring-3
 // shell's waitpid; a Start-menu launch has no shell, so nothing was
 // polling these at all and every open-then-close of a launched app
-// burned a slot permanently. With MAX_PROCS at 4 that is four launches
-// per boot, after which the desktop silently opens nothing -- measured,
-// not deduced: the fifth `gui open Shapes` simply never produced a
-// window.
+// burned a slot permanently. With MAX_PROCS at 4, as it was then, that
+// was four launches per boot, after which the desktop silently opened
+// nothing -- measured, not deduced: the fifth `gui open Shapes` simply
+// never produced a window. (MAX_PROCS is 64 now, which raises the
+// ceiling without removing the need to reap.)
 //
 // Reaping is also what makes force-quit repeatable rather than a
 // four-shot escape hatch.
