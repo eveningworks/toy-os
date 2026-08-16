@@ -3,6 +3,8 @@
 #include "elf.h"
 #include "vmm.h"
 #include "pmm.h"
+#include "uaddr.h" // where a segment is and is not allowed to land
+#include "klog.h"
 #include <stddef.h>
 
 #define EI_NIDENT 16
@@ -36,6 +38,7 @@ struct elf64_phdr {
 } __attribute__((packed));
 
 #define PT_LOAD    1
+#define PT_INTERP  3
 #define ET_EXEC    2
 #define EM_X86_64  62
 #define ELFCLASS64 2
@@ -44,6 +47,34 @@ struct elf64_phdr {
 #define PF_W 2 // writable
 
 #define PAGE_SIZE 4096ULL
+
+// An upper bound on program headers. Real executables from this build
+// have four; the cap exists so a corrupt e_phnum cannot walk the header
+// loop for 65535 iterations off the end of a small file.
+#define ELF_MAX_PHNUM 64
+
+// Where a segment is allowed to land.
+//
+// The image links at 0x8000000000 (userland/rt/link.ld) and the heap
+// starts at UADDR_HEAP_BASE, with the guard and stack above that. A
+// segment claiming an address at or past the heap base would be mapped
+// BEFORE the runner maps the stack and heap, so the later mapping
+// silently replaces the segment's pages -- or, worse, the segment's
+// pages survive underneath and the process runs with its stack sitting
+// on loader-controlled bytes. Neither faults; both are decided by a
+// file the loader was handed.
+#define ELF_IMAGE_BASE 0x8000000000ULL
+#define ELF_IMAGE_END  UADDR_HEAP_BASE
+
+// a + b, refusing on unsigned overflow. Every bound below is computed
+// from two file-controlled 64-bit values, so a wrapped sum would pass a
+// <= check it should have failed -- the usual way a range test becomes
+// a no-op.
+static int add_ok(uint64_t a, uint64_t b, uint64_t *out) {
+    if (a > (uint64_t)-1 - b) return 0;
+    *out = a + b;
+    return 1;
+}
 
 // Loads one PT_LOAD segment, page by page. A segment's file/memory
 // bounds don't have to be page-aligned (p_memsz can exceed p_filesz for
@@ -93,8 +124,55 @@ static int load_segment(uint8_t *elf_base, const struct elf64_phdr *ph, uint64_t
     return 1;
 }
 
-int elf_load(uint64_t elf_phys_addr, uint64_t pml4_phys, uint64_t *out_entry) {
+// Is this segment's file range inside the file, and its memory range
+// inside the region a program image may occupy?
+//
+// Every value here comes from the file being loaded, so each is treated
+// as hostile: this is the only thing standing between a malformed
+// header and either a read past the end of the loader's buffer or a
+// mapping placed over the stack.
+static int segment_ok(const struct elf64_phdr *ph, uint64_t elf_size) {
+    // .bss is p_memsz > p_filesz; the reverse is malformed, and would
+    // make load_segment()'s copy range exceed the pages it maps.
+    if (ph->p_filesz > ph->p_memsz) return 0;
+
+    // An EMPTY segment maps nothing, so it gets no say in where it
+    // would have gone. Every binary this build produces ends with one --
+    // a third PT_LOAD at p_vaddr 0 with p_memsz 0, which ld emits for
+    // the empty RW group -- and rejecting it on the address check below
+    // refused every real executable while a hand-built test fixture
+    // (which has no such segment) loaded perfectly. load_segment()
+    // already no-ops on these: its page loop covers an empty range.
+    if (ph->p_memsz == 0) return 1;
+
+    // The file-backed bytes must be inside the buffer we were handed.
+    // This is the defect that mattered most: without it,
+    // load_segment()'s copy reads elf_base[p_offset + ...] straight past
+    // the end of fs_read()'s allocation, out of identity-mapped physical
+    // memory, and into a page it then maps into userland.
+    uint64_t file_end;
+    if (!add_ok(ph->p_offset, ph->p_filesz, &file_end)) return 0;
+    if (file_end > elf_size) return 0;
+
+    // The memory range must sit inside the image region -- above it are
+    // the heap, the guard and the stack, which the runner maps after
+    // this returns.
+    uint64_t mem_end;
+    if (!add_ok(ph->p_vaddr, ph->p_memsz, &mem_end)) return 0;
+    if (ph->p_vaddr < ELF_IMAGE_BASE) return 0;
+    if (mem_end > ELF_IMAGE_END) return 0;
+
+    return 1;
+}
+
+int elf_load(uint64_t elf_phys_addr, uint64_t elf_size, uint64_t pml4_phys,
+             uint64_t *out_entry) {
     uint8_t *base = (uint8_t *)(uintptr_t)elf_phys_addr;
+
+    // Before the header is READ, not after -- dereferencing eh on a
+    // shorter buffer is itself the bug.
+    if (!base || elf_size < sizeof(struct elf64_ehdr)) return 0;
+
     struct elf64_ehdr *eh = (struct elf64_ehdr *)base;
 
     if (eh->e_ident[0] != 0x7F || eh->e_ident[1] != 'E' ||
@@ -103,11 +181,57 @@ int elf_load(uint64_t elf_phys_addr, uint64_t pml4_phys, uint64_t *out_entry) {
     if (eh->e_type != ET_EXEC) return 0; // static, non-PIE only
     if (eh->e_machine != EM_X86_64) return 0;
 
+    // The header table is indexed with e_phentsize as the stride by
+    // every other ELF reader; this one indexes a struct array instead,
+    // so a file declaring a different stride would be silently
+    // misparsed field by field. Refuse rather than reinterpret.
+    if (eh->e_phentsize != sizeof(struct elf64_phdr)) return 0;
+    if (eh->e_phnum == 0 || eh->e_phnum > ELF_MAX_PHNUM) return 0;
+
+    // The table itself must be inside the file.
+    uint64_t ph_bytes = (uint64_t)eh->e_phnum * sizeof(struct elf64_phdr);
+    uint64_t ph_end;
+    if (!add_ok(eh->e_phoff, ph_bytes, &ph_end)) return 0;
+    if (ph_end > elf_size) return 0;
+
     struct elf64_phdr *phdrs = (struct elf64_phdr *)(base + eh->e_phoff);
+
+    // Validate EVERY header before mapping ANY of them, so a file that
+    // is bad in its third segment does not leave the first two mapped
+    // in a half-built address space. Rejection is then a pure function
+    // of the file, with no side effects to unwind.
+    for (uint16_t i = 0; i < eh->e_phnum; i++) {
+        const struct elf64_phdr *ph = &phdrs[i];
+
+        // A dynamic executable names its interpreter here. Nothing in
+        // this kernel loads one, and silently ignoring the header
+        // produces a process that jumps to an entry point expecting an
+        // interpreter that never ran -- a crash with no explanation.
+        // Milestone 35 is where this becomes supported rather than
+        // refused.
+        if (ph->p_type == PT_INTERP) {
+            klog_write("elf: refused -- dynamic executable (PT_INTERP), no interpreter support\n");
+            return 0;
+        }
+
+        if (ph->p_type != PT_LOAD) continue;
+        if (!segment_ok(ph, elf_size)) {
+            klog_write("elf: refused -- segment out of bounds\n");
+            return 0;
+        }
+    }
+
+    // The entry point must be inside the image too: it is loaded into
+    // RIP for a ring-3 iretq, and an unmapped one faults immediately
+    // while an address inside the stack would execute the stack.
+    if (eh->e_entry < ELF_IMAGE_BASE || eh->e_entry >= ELF_IMAGE_END) return 0;
 
     for (uint16_t i = 0; i < eh->e_phnum; i++) {
         struct elf64_phdr *ph = &phdrs[i];
         if (ph->p_type != PT_LOAD) continue;
+        // A failure here is out of memory, not a bad file -- the caller
+        // destroys the address space, which frees whatever was mapped
+        // before it (see elf.h).
         if (!load_segment(base, ph, pml4_phys)) return 0;
     }
 

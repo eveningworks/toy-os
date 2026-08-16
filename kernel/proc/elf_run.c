@@ -188,8 +188,12 @@ int elf_run_from_fs(const char *path, const char *args) {
     strace_claim(as);
 
     uint64_t entry = 0;
-    if (!elf_load(elf_phys, as, &entry)) {
+    // `size` comes from fs_read() above and used to be discarded here;
+    // it is what bounds every offset in the file. On failure the address
+    // space is destroyed rather than leaked -- see elf.h.
+    if (!elf_load(elf_phys, size, as, &entry)) {
         vga_write("run: "); vga_write(path); vga_write(" isn't a valid ELF64 executable\n");
+        vmm_destroy_address_space(as);
         return -1;
     }
 

@@ -363,22 +363,38 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_pipe) {
     strace_claim(as);
 
     uint64_t entry = 0;
-    if (!elf_load(elf_phys, as, &entry)) return -1;
+    // On failure the address space is destroyed rather than leaked --
+    // it owns whatever elf_load() mapped before giving up, and every
+    // failure path below this point owes the same cleanup. This used to
+    // be a bare `return -1`, leaking the PML4, every page table under
+    // it and every segment frame.
+    if (!elf_load(elf_phys, size, as, &entry)) {
+        vmm_destroy_address_space(as);
+        return -1;
+    }
 
     // The TOP page is where argv is laid out and where RSP starts; the
     // rest are mapped below it so the stack has somewhere to grow.
     uint64_t stack_phys = 0;
     for (int pg = 0; pg < UADDR_STACK_PAGES; pg++) {
         uint64_t frame = pmm_alloc_frame();
-        if (!frame) return -1;
+        if (!frame) { vmm_destroy_address_space(as); return -1; }
         uint64_t va = UADDR_STACK_VADDR - (uint64_t)pg * 4096;
-        if (!vmm_map_user_page(as, va, frame)) return -1;
+        if (!vmm_map_user_page(as, va, frame)) {
+            // The frame is not mapped, so destroying the address space
+            // will not reclaim it -- free it here, then let the address
+            // space take everything that IS mapped.
+            pmm_free_frame(frame);
+            vmm_destroy_address_space(as);
+            return -1;
+        }
         if (pg == 0) stack_phys = frame;
     }
 
     uint64_t argc = 0, argv = 0, user_rsp = 0;
     if (!elf_build_argv_on_stack(stack_phys, UADDR_STACK_VADDR, path, args,
                                   &argc, &argv, &user_rsp)) {
+        vmm_destroy_address_space(as);
         return -1;
     }
 
