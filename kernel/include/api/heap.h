@@ -49,6 +49,41 @@ void kfree(void *ptr);
 uint64_t heap_total_bytes(void);
 uint64_t heap_used_bytes(void);
 
+// ---- debug mode: red-zones and use-after-free poisoning ----
+//
+// A RUNTIME switch (`heap debug on` in the shell), not a build flag, so
+// it is reachable in a booted OS and so one build exercises both
+// states. Blocks allocated while it is on carry a canary on each side
+// of the payload and are filled with a poison byte when freed; kfree()
+// checks the canaries, and the next kmalloc() to reuse a freed block
+// checks that the poison is intact -- which is what catches a write
+// through an already-freed pointer.
+//
+// Toggling affects SUBSEQUENT allocations only. Blocks of both kinds
+// coexist safely; see heap.c's top comment for the invariant that lets
+// kfree() tell them apart, and why breaking it would fail silently.
+//
+// A detected violation is reported to the kernel log and the block is
+// QUARANTINED -- permanently leaked rather than returned to the free
+// list, because its metadata is exactly what proved untrustworthy.
+// Nothing panics: that keeps the mechanism testable from a KTEST.
+void heap_set_debug(int on);
+int heap_debug(void);
+
+// Verifies every poisoned free block right now and returns how many
+// were damaged, instead of waiting for whatever allocation eventually
+// reuses one -- which may be far away in time and in subsystem, or may
+// never come. `heap check` in the shell.
+uint64_t heap_check(void);
+
+uint64_t heap_rz_checks(void);       // red-zone checks performed since boot
+uint64_t heap_violations(void);      // violations detected (each one also logged)
+// Block bytes withdrawn from circulation by those violations. Counted
+// in NEITHER heap_used_bytes() nor the free total -- a quarantined
+// block is deliberately stranded, so the two no longer sum to
+// heap_total_bytes() once this is nonzero.
+uint64_t heap_quarantined_bytes(void);
+
 // Exercises kmalloc()/kzalloc()/kfree() (including coalescing) once and
 // logs pass/fail via klog_write() -- same "prove it at boot" pattern as
 // pmm_selftest(). Called once from kernel_main() right after

@@ -30,6 +30,7 @@
 #include "scheduler.h"
 #include "debug_console.h"
 #include "krandom.h"      // entropy source -- krandom_init()
+#include "reloc.h"        // the image's own relocation table -- kernel_relocate()
 #include "stack_guard.h"  // stack_guard_randomize() -- read its header before moving the call
 #include "knum.h"
 #include <stdint.h>
@@ -51,6 +52,21 @@ void kernel_main(uint64_t multiboot_info_addr) {
     klog_write("toy-os: kernel_main reached, initializing...\n");
 
     multiboot_set_info(multiboot_info_addr);
+
+    // Apply the image's own relocation table. The delta is ZERO today:
+    // nothing has moved the kernel yet (that is stage 3 -- see
+    // docs/roadmap.md), so every fixup adds nothing. What it does prove
+    // on every boot is that the table describes real, mapped, writable
+    // words in THIS image -- a table that had drifted from its image
+    // faults here rather than at some unrelated address later.
+    //
+    // Ordering is load-bearing and this is the only place it can go:
+    // the fixups write into .text, and paging_enforce_wx() below makes
+    // .text read-only with CR0.WP set, after which every one of these
+    // writes is a ring-0 page fault. See reloc.c.
+    kernel_relocate(0);
+    klog_printf("toy-os: relocation table applied (%u fixups, %u bytes, delta 0)\n",
+                kernel_reloc_count(), kernel_reloc_table_bytes());
 
     // As early as the log allows. boot.asm hands over a 4GiB identity map
     // that is uniformly present+writable with no NX anywhere, so until

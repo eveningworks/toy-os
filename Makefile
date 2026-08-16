@@ -432,8 +432,45 @@ $(BUILD)/userland/shared/%.o: apps/%.c
 # so no OTHER userland program gains the ability to reach into apps/.
 $(BUILD)/userland/gui/calculator.o: USERLAND_CFLAGS += -Iapps
 
-$(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) linker.ld
-	$(LD) $(LDFLAGS) -o $@ $(ASM_OBJECTS) $(C_OBJECTS)
+# The kernel is linked TWICE, and the reason is kernel ASLR.
+#
+# Pass 1 links with --emit-relocs (-q), which keeps the relocations in
+# the output. tools/genrelocs.py turns those into a table of every
+# ABSOLUTE reference in the image, and pass 2 links that table in, so
+# the kernel carries the list of words it must patch to run from a
+# different address (kernel/arch/x86_64/reloc.c).
+#
+# This is not the usual two-pass chicken-and-egg, because linker.ld
+# places .krelocs AFTER every section that can contain a fixup: adding
+# the table cannot move any address the table records, so pass 1's
+# addresses stay correct in pass 2. The --verify step re-derives the
+# table from the FINAL image and fails the build if the two disagree,
+# which is the only cheap way to notice that a section moved -- the
+# expensive way is a kernel that does not boot.
+KRELOCS_C = $(BUILD)/krelocs.c
+KRELOCS_O = $(BUILD)/krelocs.o
+
+$(BUILD)/kernel.pass1.elf: $(ASM_OBJECTS) $(C_OBJECTS) linker.ld
+	$(LD) $(LDFLAGS) -q -o $@ $(ASM_OBJECTS) $(C_OBJECTS)
+
+$(KRELOCS_C): $(BUILD)/kernel.pass1.elf tools/genrelocs.py
+	python3 tools/genrelocs.py $< --out-c $@
+
+$(KRELOCS_O): $(KRELOCS_C)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# $(KRELOCS_C) is named here as well as via $(KRELOCS_O) because the
+# recipe below READS it. Without that, make classifies it as an
+# intermediate file -- generated only on the way to the .o -- and
+# deletes it once the .o is built, so the next build's --verify has
+# nothing to read and fails with a FileNotFoundError on a path that
+# looks obviously correct. .PRECIOUS keeps it for the same reason.
+.PRECIOUS: $(KRELOCS_C)
+
+$(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) $(KRELOCS_O) $(KRELOCS_C) linker.ld
+	$(LD) $(LDFLAGS) -q -o $(BUILD)/kernel.pass2.elf $(ASM_OBJECTS) $(C_OBJECTS) $(KRELOCS_O)
+	@python3 tools/genrelocs.py $(BUILD)/kernel.pass2.elf --verify $(KRELOCS_C)
+	objcopy --remove-section='.rela.*' $(BUILD)/kernel.pass2.elf $@
 
 # Pulls in every .d file -MMD/-MP generated alongside its .o (same
 # directory, same basename, e.g. build/apps/notepad.d next to

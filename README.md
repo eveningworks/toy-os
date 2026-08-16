@@ -244,6 +244,9 @@ shell and the GUI Terminal.
   reverse history search, `Alt-.` last argument). `help` lists them all.
 - **System info:** `time`, `timezone [city]`, `uptime`, `random [n]`
   (the entropy source and some values from it), `meminfo`,
+  `heap` (kernel heap stats, plus `heap debug on|off` to red-zone new
+  allocations and poison freed ones, and `heap check` to scan for a
+  use-after-free),
   `df` (disk space: total/used/free, KB-scale -- also names the
   active filesystem backend), `dmesg`, `lspci`,
   `parttable`. CPU identification is `/bin/lscpu` (see below), not a

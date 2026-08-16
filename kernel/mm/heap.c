@@ -32,8 +32,33 @@
 // mid-kmalloc. If a future caller ever needs kmalloc from an interrupt
 // handler or a genuinely preemptible kernel thread, this needs a lock
 // first.
+//
+// DEBUG MODE (`heap debug on`, heap_set_debug()) wraps every subsequent
+// allocation in red-zones and poisons what it frees:
+//
+//   off: [header][............ payload ............]
+//   on:  [header][span][MAGIC][ payload ][MAGIC][MAGIC]
+//                            ^-- the pointer the caller gets
+//
+// so an overflow past the request, an underflow just before it, and a
+// write through an already-freed pointer each land in a known byte
+// pattern that kfree() (or the next kmalloc() to reuse the block)
+// checks. The mode is a RUNTIME switch rather than a build flag so it
+// is reachable in a booted OS and so one build covers both states --
+// which means blocks allocated before and after a toggle coexist, and
+// kfree() has to tell them apart from the pointer alone.
+//
+// The trap that makes that sound: kfree() decides by reading the eight
+// bytes immediately before the payload, which are HEAP_RZ_MAGIC in a
+// red-zoned block and the header's `prev` pointer in a plain one. That
+// can never be ambiguous because every heap pointer is an address in
+// the identity-mapped low 4GiB and so fits in 32 bits, while
+// HEAP_RZ_MAGIC's top half is nonzero. Change either fact -- a heap
+// above 4GiB, or a magic that fits in 32 bits -- and the two cases
+// become indistinguishable, silently, on the freeing path.
 #include "heap.h"
 #include "fault_inject.h"
+#include "kfmt.h"
 #include "pmm.h"
 #include "klog.h"
 #include "string.h"
@@ -42,17 +67,44 @@
 #define HEAP_PAGE_SIZE 4096
 #define HEAP_MIN_GROW_PAGES 16 // 64KiB -- avoids growing one page at a time under a run of small allocations
 
+// Per side, and a multiple of HEAP_ALIGN so the payload stays 16-byte
+// aligned with the red-zones in front of it.
+#define HEAP_RZ_SIZE 16
+// Top half nonzero on purpose -- see this file's top comment.
+#define HEAP_RZ_MAGIC 0xC0DEFACE5A5A5A5AULL
+#define HEAP_POISON 0xDE
+
+// `free` is tri-state rather than a bool: a block freed while debug
+// mode was on still carries intact red-zones and a poisoned payload,
+// and the next kmalloc() to reuse it verifies both before handing it
+// out. That check is the only thing that can catch a write through an
+// already-freed pointer.
+#define HEAP_IN_USE 0
+#define HEAP_FREE 1
+#define HEAP_FREE_POISONED 2
+
+// Sits in the four bytes of padding the compiler was inserting after
+// `free` anyway, so it costs nothing, and it is what makes kfree()'s
+// plain path able to reject a pointer that isn't one of ours.
+#define HEAP_HDR_MAGIC 0x48454150u // 'HEAP'
+
 struct heap_block {
     uint64_t size;            // usable payload size, NOT including this header
     int free;
+    uint32_t magic;           // HEAP_HDR_MAGIC -- see header_plausible()
     struct heap_block *next;  // list order, not necessarily address order across regions -- see top comment
-    struct heap_block *prev;
+    struct heap_block *prev;  // MUST stay the last field: kfree() reads these 8 bytes to tell a red-zoned block from a plain one
 };
 
 static struct heap_block *g_head = 0;
 static struct heap_block *g_tail = 0;
 static uint64_t g_total_bytes = 0; // sum of every block's payload size ever claimed from pmm, used + free
 static uint64_t g_used_bytes = 0;
+
+static int g_debug = 0;
+static uint64_t g_rz_checks = 0;
+static uint64_t g_rz_violations = 0;
+static uint64_t g_quarantined_bytes = 0;
 
 static uint64_t align_up(uint64_t n, uint64_t a) {
     return (n + (a - 1)) & ~(a - 1);
@@ -66,7 +118,8 @@ static struct heap_block *append_region(uint64_t pages) {
 
     struct heap_block *b = (struct heap_block *)phys;
     b->size = pages * HEAP_PAGE_SIZE - sizeof(struct heap_block);
-    b->free = 1;
+    b->free = HEAP_FREE;
+    b->magic = HEAP_HDR_MAGIC;
     b->next = 0;
     b->prev = g_tail;
     if (g_tail) g_tail->next = b;
@@ -106,7 +159,8 @@ static void split_block(struct heap_block *b, uint64_t size) {
 
     struct heap_block *rem = (struct heap_block *)((uint8_t *)(b + 1) + size);
     rem->size = remaining - sizeof(struct heap_block);
-    rem->free = 1;
+    rem->free = HEAP_FREE;
+    rem->magic = HEAP_HDR_MAGIC;
     rem->next = b->next;
     rem->prev = b;
     if (b->next) b->next->prev = rem;
@@ -115,28 +169,138 @@ static void split_block(struct heap_block *b, uint64_t size) {
     b->size = size;
 }
 
+// ---- red-zones and poisoning (debug mode only) ----
+
+// Reports a violation and returns 0, so every caller can end with
+// `return rz_fail(...)` and quarantining stays one decision.
+static int rz_fail(const char *what, const struct heap_block *b,
+                   uint64_t expected, uint64_t found) {
+    g_rz_violations++;
+    g_quarantined_bytes += b->size;
+    klog_printf("heap: RED-ZONE VIOLATION %s block=0x%x size=%u\n",
+                what, (uint64_t)(uintptr_t)b, b->size);
+    klog_printf("heap:   expected 0x%x, found 0x%x -- block quarantined, not returned to the free list\n",
+                expected, found);
+    return 0;
+}
+
+// Lays out [span][MAGIC] before the payload and [MAGIC][MAGIC] after
+// it, and returns the pointer the caller gets. `span` is the payload
+// the caller may legitimately touch; b->size can exceed span + 2 *
+// HEAP_RZ_SIZE when split_block() declined to carve off the remainder,
+// and that slack sits AFTER the right red-zone rather than inside it.
+static void *rz_arm(struct heap_block *b, uint64_t span) {
+    uint64_t *lead = (uint64_t *)(b + 1);
+    lead[0] = span;
+    lead[1] = HEAP_RZ_MAGIC;
+
+    uint8_t *payload = (uint8_t *)(lead + 2);
+    uint64_t *trail = (uint64_t *)(payload + span);
+    trail[0] = HEAP_RZ_MAGIC;
+    trail[1] = HEAP_RZ_MAGIC;
+    return payload;
+}
+
+// Is `ptr` the payload of a red-zoned block? See the top comment for
+// why reading the eight bytes before it cannot be ambiguous.
+static int rz_armed(const void *ptr) {
+    return *((const uint64_t *)ptr - 1) == HEAP_RZ_MAGIC;
+}
+
+// Checks both red-zones of an armed block. `span_out` receives the
+// recorded payload length. Returns 0 (and has already reported) on a
+// violation.
+static int rz_check(struct heap_block *b, const void *ptr, uint64_t *span_out) {
+    g_rz_checks++;
+
+    const uint64_t *lead = (const uint64_t *)(b + 1);
+    uint64_t span = lead[0];
+    // The length word is itself inside the left red-zone, so an
+    // underflow of 9..16 bytes lands here rather than on the magic.
+    // Rejecting an impossible span is what turns that into a report
+    // instead of a wild pointer.
+    if (span == 0 || (span % HEAP_ALIGN) != 0 || span + 2 * HEAP_RZ_SIZE > b->size)
+        return rz_fail("left red-zone (length word)", b, b->size, span);
+    if (lead[1] != HEAP_RZ_MAGIC)
+        return rz_fail("left red-zone", b, HEAP_RZ_MAGIC, lead[1]);
+
+    const uint64_t *trail = (const uint64_t *)((const uint8_t *)ptr + span);
+    if (trail[0] != HEAP_RZ_MAGIC)
+        return rz_fail("right red-zone", b, HEAP_RZ_MAGIC, trail[0]);
+    if (trail[1] != HEAP_RZ_MAGIC)
+        return rz_fail("right red-zone (second word)", b, HEAP_RZ_MAGIC, trail[1]);
+
+    *span_out = span;
+    return 1;
+}
+
+// Verifies a poisoned free block before it is handed out again: the
+// red-zones must still stand AND every payload byte must still be
+// HEAP_POISON. Anything else is a write through a pointer whose owner
+// already freed it.
+static int rz_check_poison(struct heap_block *b) {
+    void *ptr = (uint8_t *)(b + 1) + HEAP_RZ_SIZE;
+    uint64_t span = 0;
+    if (!rz_check(b, ptr, &span)) return 0;
+
+    const uint8_t *p = (const uint8_t *)ptr;
+    for (uint64_t i = 0; i < span; i++) {
+        if (p[i] != HEAP_POISON)
+            return rz_fail("use-after-free (poison overwritten)", b, HEAP_POISON, p[i]);
+    }
+    return 1;
+}
+
+// Takes a block permanently out of circulation. Leaking it is the
+// point: its metadata is the thing that proved untrustworthy, so
+// putting it back on the free list hands the damage to the next
+// allocation.
+static void quarantine(struct heap_block *b) {
+    b->free = HEAP_IN_USE;
+}
+
+// Could this plausibly be a header this allocator wrote? Checked on
+// kfree()'s plain path, and it is not paranoia: an underflow of 1..8
+// bytes lands on the magic, which makes an armed block look plain, and
+// kfree() would then take its "header" from 16 bytes inside the real
+// one and start unlinking whatever it found there. This turns that
+// into a report. Deliberately cheap and always on, debug mode or not.
+static int header_plausible(const struct heap_block *b) {
+    if (b->magic != HEAP_HDR_MAGIC) return 0;
+    if (b->free != HEAP_IN_USE && b->free != HEAP_FREE && b->free != HEAP_FREE_POISONED) return 0;
+    if (b->size == 0 || b->size > g_total_bytes) return 0;
+    return 1;
+}
+
 void *kmalloc(size_t size) {
     // See fault_inject.h -- inert unless a test armed it. Returning
     // NULL here is exactly what a genuinely exhausted heap does.
     if (fault_should_fail_alloc()) return 0;
     if (size == 0) return 0;
-    uint64_t need = align_up(size, HEAP_ALIGN);
+    uint64_t span = align_up(size, HEAP_ALIGN);
+    uint64_t rz = g_debug ? HEAP_RZ_SIZE : 0;
+    uint64_t need = span + 2 * rz; // a red-zone on each side of the payload
 
     for (struct heap_block *b = g_head; b; b = b->next) {
-        if (b->free && b->size >= need) {
-            split_block(b, need);
-            b->free = 0;
-            g_used_bytes += b->size;
-            return (void *)(b + 1);
+        if (b->free == HEAP_IN_USE || b->size < need) continue;
+        // A poisoned block is verified BEFORE it is split or handed
+        // out -- once it is reused, the evidence is gone.
+        if (b->free == HEAP_FREE_POISONED && !rz_check_poison(b)) {
+            quarantine(b);
+            continue; // damaged; keep looking rather than handing it out
         }
+        split_block(b, need);
+        b->free = HEAP_IN_USE;
+        g_used_bytes += b->size;
+        return rz ? rz_arm(b, span) : (void *)(b + 1);
     }
 
     struct heap_block *grown = grow_heap(need);
     if (!grown) return 0; // out of physical memory
     split_block(grown, need);
-    grown->free = 0;
+    grown->free = HEAP_IN_USE;
     g_used_bytes += grown->size;
-    return (void *)(grown + 1);
+    return rz ? rz_arm(grown, span) : (void *)(grown + 1);
 }
 
 void *kzalloc(size_t size) {
@@ -151,22 +315,54 @@ void *kzalloc(size_t size) {
 // here).
 static void try_merge_next(struct heap_block *b) {
     struct heap_block *n = b->next;
-    if (!n || !n->free) return;
+    if (!n || n->free == HEAP_IN_USE) return;
     if ((uint8_t *)(b + 1) + b->size != (uint8_t *)n) return; // not physically adjacent
 
     b->size += sizeof(struct heap_block) + n->size;
     b->next = n->next;
     if (n->next) n->next->prev = b;
     else g_tail = b;
+    // The merged region is no longer one verifiable span -- n's header
+    // now sits inside b's payload where poison used to be -- so it
+    // stops claiming to be checkable. Losing that check on merge is
+    // the deliberate cost of coalescing; the red-zone check at free
+    // time has already run by this point.
+    b->free = HEAP_FREE;
 }
 
 void kfree(void *ptr) {
     if (!ptr) return;
-    struct heap_block *b = (struct heap_block *)ptr - 1;
-    if (b->free) return; // double-free -- silently ignored, same "trust the caller, don't crash" contract as pmm_free_frame()
+
+    struct heap_block *b;
+    uint64_t span = 0;
+    int armed = rz_armed(ptr);
+    if (armed) {
+        b = (struct heap_block *)((uint8_t *)ptr - HEAP_RZ_SIZE) - 1;
+        if (b->free != HEAP_IN_USE) return; // double-free, same contract as below
+        if (!rz_check(b, ptr, &span)) {
+            // Accounting stays as-is: a quarantined block is still
+            // held, it just can never be handed out again.
+            quarantine(b);
+            return;
+        }
+    } else {
+        b = (struct heap_block *)ptr - 1;
+        if (!header_plausible(b)) {
+            g_rz_violations++;
+            klog_printf("heap: CORRUPT HEADER at 0x%x (size=%u state=%u) -- refusing to free\n",
+                        (uint64_t)(uintptr_t)b, b->size, (uint64_t)b->free);
+            return;
+        }
+    }
+    if (b->free != HEAP_IN_USE) return; // double-free -- silently ignored, same "trust the caller, don't crash" contract as pmm_free_frame()
 
     g_used_bytes -= b->size;
-    b->free = 1;
+    if (armed) {
+        k_memset(ptr, HEAP_POISON, span);
+        b->free = HEAP_FREE_POISONED;
+    } else {
+        b->free = HEAP_FREE;
+    }
 
     try_merge_next(b);            // pull a free right-neighbor into b
     // Pull b (now possibly bigger) into a free left-neighbor -- but
@@ -184,11 +380,34 @@ void kfree(void *ptr) {
     // LATER kfree() of that same corrupted block subtracting its
     // inflated size from g_used_bytes, underflowing the unsigned
     // counter. See docs/decisions.md for the full story.
-    if (b->prev && b->prev->free) try_merge_next(b->prev);
+    if (b->prev && b->prev->free != HEAP_IN_USE) try_merge_next(b->prev);
 }
 
 uint64_t heap_total_bytes(void) { return g_total_bytes; }
 uint64_t heap_used_bytes(void) { return g_used_bytes; }
+
+// Walks every poisoned free block and verifies it now, rather than
+// waiting for the allocation that happens to reuse it. Without this, a
+// use-after-free is only ever caught at reuse -- which may be a
+// thousand allocations later, in an unrelated subsystem, or never.
+// Returns the number of violations found; each one is reported and its
+// block quarantined, exactly as at reuse.
+uint64_t heap_check(void) {
+    uint64_t before = g_rz_violations;
+    for (struct heap_block *b = g_head; b; b = b->next) {
+        if (b->free != HEAP_FREE_POISONED) continue;
+        if (!rz_check_poison(b)) quarantine(b);
+    }
+    return g_rz_violations - before;
+}
+
+// Affects allocations made from here on, not existing ones -- see the
+// top comment on why both kinds have to coexist.
+void heap_set_debug(int on) { g_debug = on ? 1 : 0; }
+int heap_debug(void) { return g_debug; }
+uint64_t heap_rz_checks(void) { return g_rz_checks; }
+uint64_t heap_violations(void) { return g_rz_violations; }
+uint64_t heap_quarantined_bytes(void) { return g_quarantined_bytes; }
 
 int heap_selftest(void) {
     // Baseline rather than an absolute 0. This used to check

@@ -112,10 +112,43 @@ adds 4; 12 adds 5; 13 adds 6; 14 and up add 8.
       `krandom_bytes()` over RDSEED/RDRAND with a TSC-jitter fallback,
       `krandom_quality()` reporting which one it got, and the stack
       canary randomized from it at boot
-- [ ] Kernel ASLR (randomize load base) -- the entropy source it was
-      blocked on exists now; what remains is the relocation work itself.
-      **Scoped out on 2026-08-15 without building anything; the
-      measurements below are the part worth not repeating.**
+- [ ] Kernel ASLR (randomize load base) -- **stages 1 and 2 LANDED
+      2026-08-16; stage 3 (the random base itself) is what remains.**
+
+      *What exists now.* `tools/genrelocs.py` extracts every absolute
+      reference from a `ld --emit-relocs` link and emits it as a table
+      (7,367 fixups, 29 KB) that the kernel carries in `.krelocs`;
+      `kernel/arch/x86_64/reloc.c` applies it, and `kernel_main()` calls
+      it at boot with a delta of ZERO, before `paging_enforce_wx()`
+      makes `.text` read-only. `kernel_reloc_check(delta)` answers how
+      high a base may go; six KTESTs (suite `reloc`) cover the table,
+      and the build fails if the table and the image disagree. Two
+      positive controls: moving `.krelocs` above `.data` reddens the
+      build gate with the right diagnosis, and a corrupted table reddens
+      exactly three KTESTs.
+
+      *Three things the build settled that the scoping below left open.*
+      CR3 does NOT need rebuilding -- `boot.asm`'s tables identity-map
+      the whole low 4 GiB, so they already map wherever the image lands,
+      provided the new base is ABOVE the old one (which also makes
+      `pmm.c`'s `reserve_range(0, _kernel_end)` cover the old image for
+      free, so that is settled too). The `.krelocs` placement removes
+      the two-pass chicken-and-egg entirely. And the shipped kernel must
+      have its `.rela` sections stripped -- GRUB will not boot the
+      `--emit-relocs` image, and the symptom is an empty serial log.
+
+      *What stage 3 still needs*, none of it started: pick a random
+      2 MiB-aligned base from `krandom_u64()`, copy the image there
+      (a `__bss_start` symbol does not exist yet), zero the new `.bss`,
+      and jump. Delta zero is degenerate for the copy -- at zero the
+      destination is the source, so zeroing `.bss` would wipe the live
+      stack and the page tables the CPU is walking -- so the copy path
+      is genuinely unexercised, and stage 2 does not pretend otherwise.
+      The copy/jump stub still has to be position-independent, which
+      still argues for assembly.
+
+      **The measurements below are from the 2026-08-15 scoping, kept
+      because they are the part worth not repeating.**
 
       *Feasible, and the identity map is why.* VA==PA across the low
       4 GiB, so moving the image keeps it mapped and every PC-relative
@@ -154,13 +187,16 @@ adds 4; 12 adds 5; 13 adds 6; 14 and up add 8.
       and is the positive control for stage 3. `make debug` + GDB is the
       recovery path when a stage does not boot.
 
-      *Also unresolved:* `pmm.c` reserves `0.._kernel_end`, which
-      over-reserves once the image moves up; `boot.asm`'s page tables
-      (`p4_table`/`p3_table`/`p2_tables`) live in `.bss`, so CR3 has to
-      be reloaded with their relocated addresses; and the copy/fixup
-      stub has to be position-independent, which argues for writing it
-      in assembly rather than trusting a C file compiled `-fPIC` not to
-      emit an absolute reference.
+      *The three "also unresolved" items this scoping listed have since
+      been answered, two of them by not being problems.* `pmm.c`
+      reserving `0.._kernel_end` over-reserves once the image moves up
+      -- which is exactly what makes the old image safe, so it is the
+      behaviour to keep rather than fix. `boot.asm`'s page tables living
+      in `.bss` does not force a CR3 reload, because they identity-map
+      the whole low 4 GiB and so already map the new location. Only the
+      third stands: the copy stub has to be position-independent, which
+      still argues for assembly over a C file compiled `-fPIC` and
+      trusted not to emit an absolute reference.
 - [x] ~~Enable SMEP/SMAP (CR4)~~ -- done. `paging_enable_smep_smap()`
       sets both where CPUID reports them, and the audit it forced is the
       substance: all 23 deliberate user-pointer dereferences now go
@@ -178,8 +214,26 @@ adds 4; 12 adds 5; 13 adds 6; 14 and up add 8.
       page fault. The sbrk bound was the real find: it had no ceiling
       at all, so a large enough request mapped pages straight over the
       live stack with nothing faulting or logged
-- [ ] Heap red-zones + use-after-free poisoning in `heap.c`, behind a
-      `debug` flag
+- [x] ~~Heap red-zones + use-after-free poisoning in `heap.c`, behind a
+      `debug` flag~~ -- done, as a RUNTIME toggle (`heap debug on|off`)
+      rather than a build flag, so the mechanism is reachable in a
+      booted OS and one build covers both states. A block allocated
+      while it is on carries a canary on each side of the payload and
+      is filled with 0xDE when freed; `kfree()` checks the canaries and
+      `heap check` (or the next allocation to reuse the block) checks
+      the poison. A violation is logged and the block QUARANTINED --
+      leaked rather than returned to the free list, since its metadata
+      is what proved untrustworthy -- which also keeps detection
+      assertable from a KTEST instead of needing a panic. Nine KTESTs
+      (`mm_test.c`, suite `heap-debug`) and two positive controls, each
+      firing on exactly the expected checks. Two things the build found
+      rather than review: an underflow of 1..8 bytes smashes the magic
+      and makes a red-zoned block look plain, so `kfree()`'s plain path
+      now checks a header magic that costs nothing (it sits in padding
+      the compiler was already inserting); and under the poison control
+      the "a write through a freed pointer is caught" check stays GREEN
+      for the wrong reason, so its negative half is the load-bearing
+      one. See `docs/decisions.md`.
 
 ### Milestone 3 -- Storage hardening (planned v0.3.0)
 
@@ -974,15 +1028,6 @@ history is worth reading, but a fixed papercut is just noise.
       the grow moved nothing). Not diagnosed. Possibly a minimum/maximum
       size clamp doing its job, possibly a grip hit-test that needs the
       press to land more precisely than a test does.
-- [ ] **`fsformat` leaves boot-created directories absent until the
-      next boot.** `kernel_main()` creates `/etc` (and friends) right
-      after `fs_init()`; a live `fsformat <fs> confirm` wipes them and
-      nothing re-runs that bring-up until reboot -- so e.g. `stress`
-      fails with "couldn't create test file" until `mkdir /tmp` or a
-      reboot. Repro: `fsformat tfs3 confirm` then `stress 10`. Fix
-      candidates: have `fs_format_backend()` call the same
-      post-mount bring-up hook boot uses, or teach `fsformat` to
-      recreate the layout table's boot-created rows.
 - [ ] **Kernel-side `fsformat tfs3` writes ~73 MB of zeroed inode
       tables (~3 s, and the host image loses that sparseness).** The
       host tool avoids it (skips fresh-image zeros, hole-punches on

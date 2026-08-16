@@ -91,5 +91,6 @@ void cmd_parttable(void);
 void cmd_ls_bin(const char *args);
 void cmd_debug(const char *args);
 void cmd_ata(const char *args);
+void cmd_heap(const char *args);
 
 #endif

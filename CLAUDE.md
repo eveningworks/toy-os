@@ -484,6 +484,28 @@ technical conventions below:
   logged) and that a fault there is reported as `Stack overflow` rather
   than as an anonymous #PF. Adding an mmap or ASLR replaces this
   header rather than adding beside it; see `docs/decisions.md`.
+- **The kernel heap has a debug mode, and it is a RUNTIME toggle**
+  (`heap debug on|off`, `heap check`; `heap_set_debug()` from a test).
+  Blocks allocated while it is on get a red-zone each side and are
+  poisoned on free; a violation is logged and the block QUARANTINED
+  (leaked on purpose -- its metadata is what proved untrustworthy), so
+  detection stays assertable from a KTEST instead of needing a panic.
+  The trap, if you touch `heap.c`: blocks of both shapes coexist, and
+  `kfree()` tells them apart by reading the eight bytes before the
+  payload -- `HEAP_RZ_MAGIC` in a red-zoned block, the header's `prev`
+  in a plain one. **That is only unambiguous because every heap pointer
+  fits in 32 bits (identity-mapped low 4 GiB) while the magic's top
+  half is nonzero**, and because `prev` is the header's LAST field.
+  Break either and the failure is silent, on the freeing path. See
+  `docs/decisions.md`.
+- **The kernel can relocate itself, and `linker.ld` + the Makefile's
+  two-pass link are where that lives.** `tools/genrelocs.py` (above)
+  builds the table; `kernel_relocate(0)` runs at boot from
+  `kernel_main()` **before `paging_enforce_wx()`**, which is not
+  cosmetic ordering -- the fixups write into `.text`, and enforce_wx
+  makes it read-only with CR0.WP. Adding an output section means
+  keeping `.krelocs` after `.data` and before `.bss`. The random base
+  is NOT built (stage 3); `docs/roadmap.md` says exactly what is left.
 - **`kernel/include/` is split by audience and the build enforces it**
   -- `api/` (what `apps/` may use), `abi/` (the kernel<->userland
   contract `userland/` shares), `kernel/` (internal, and NOT on
@@ -1264,6 +1286,21 @@ and not applicable, on a direct local checkout).
 
 The rest, added once the build/test/delivery loop above had enough
 repeated manual steps to be worth automating:
+- **`genrelocs.py`** -- builds the kernel's own relocation table for
+  kernel ASLR: extracts every ABSOLUTE reference from a
+  `ld --emit-relocs` link and emits it as a C array the second link
+  pass embeds in `.krelocs` (~7,400 fixups, 29 KB), which
+  `kernel/arch/x86_64/reloc.c` applies at boot. `--verify` re-derives
+  the table from the FINAL image and fails the build if the two
+  disagree -- run automatically by the kernel's link rule, because a
+  table that disagrees with its image is otherwise a kernel that does
+  not boot with nothing to read. Three traps live in the Makefile rule
+  and are commented there: the shipped kernel must have its `.rela`
+  sections stripped (GRUB will not boot the `--emit-relocs` image, and
+  the symptom is an EMPTY serial log), `build/krelocs.c` must be a
+  named prerequisite and `.PRECIOUS` or make deletes it as an
+  intermediate, and `linker.ld`'s `.krelocs` must stay after `.data`.
+  See `docs/decisions.md`.
 - **`check_deps.py`** -- proves the build's header dependency tracking
   is actually live: touches one header per build directory (discovered
   from `build/`, not listed, so a new source directory is covered as

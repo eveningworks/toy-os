@@ -50,6 +50,8 @@ there when you add an entry, or the index quietly stops being one.
 - [Kernel W^X: NX on every huge PDE, one 4KiB split for `.text`, and CR0.WP](#kernel-wx-nx-on-every-huge-pde-one-4kib-split-for-text-and-cr0wp)
 - [The user stack's guard is an unmapped hole plus two rules, and the sbrk rule is the one that mattered](#the-user-stacks-guard-is-an-unmapped-hole-plus-two-rules-and-the-sbrk-rule-is-the-one-that-mattered)
 - [SMAP is absolute here because the kernel copies through its own identity map, not with STAC/CLAC](#smap-is-absolute-here-because-the-kernel-copies-through-its-own-identity-map-not-with-stacclac)
+- [Heap debug mode is a runtime toggle, and `kfree()` tells the two block shapes apart by a magic that cannot be a pointer](#heap-debug-mode-is-a-runtime-toggle-and-kfree-tells-the-two-block-shapes-apart-by-a-magic-that-cannot-be-a-pointer)
+- [The kernel's relocation table is placed after `.data`, and the image that is VERIFIED is not the image that ships](#the-kernels-relocation-table-is-placed-after-data-and-the-image-that-is-verified-is-not-the-image-that-ships)
 - [A blank console cell gets the console's colour, and a coloured line pads to its own edge](#a-blank-console-cell-gets-the-consoles-colour-and-a-coloured-line-pads-to-its-own-edge)
 - [The serial debug console is poll-based from existing idle loops, not a new kernel thread](#the-serial-debug-console-is-poll-based-from-existing-idle-loops-not-a-new-kernel-thread)
 
@@ -4750,3 +4752,148 @@ Still not built: a general "this app is hung" indication outside a close
 attempt (the ping is only sent when the WM asks a window to close, so
 that is the only time the mark can appear), and any way to recover a
 client that is hung but has NOT been asked to close.
+
+## Heap debug mode is a runtime toggle, and `kfree()` tells the two block shapes apart by a magic that cannot be a pointer
+
+Red-zones and use-after-free poisoning (`heap debug on`) could have been
+a build flag -- `-DHEAP_DEBUG`, zero cost when off, no per-block
+bookkeeping. They are a RUNTIME switch instead, for two reasons: the
+mechanism is then reachable in a booted OS without producing a second
+image, and one build exercises both states, so `make test` and CI cannot
+silently cover only the half the Makefile happened to pick. This repo's
+standing rule that a fallback nothing can reach is a guess applies to a
+debug facility as much as to a driver path.
+
+The cost is that blocks allocated before and after a toggle coexist, and
+`kfree()` gets only a pointer. Its layouts are:
+
+    off: [header][............ payload ............]
+    on:  [header][span][MAGIC][ payload ][MAGIC][MAGIC]
+                              ^-- what the caller holds
+
+so it decides by reading the eight bytes immediately before the payload:
+`HEAP_RZ_MAGIC` in a red-zoned block, the header's `prev` pointer in a
+plain one. **That is sound rather than a heuristic, and the reason is
+worth keeping**: every heap pointer is an address in the identity-mapped
+low 4 GiB and therefore fits in 32 bits, while the magic's top half is
+nonzero, so no `prev` can ever collide with it. Break either fact -- a
+heap above 4 GiB, or a magic that fits in 32 bits -- and the two cases
+become indistinguishable on the freeing path, silently.
+
+`prev` being the header's LAST field is load-bearing for the same
+reason, which is why it carries a comment saying so.
+
+Two smaller decisions inside it:
+
+**A detected violation quarantines the block; it does not panic.** A
+real kernel panics on a corrupt heap, and that is defensible -- but a
+KTEST cannot then assert that detection works, so the mechanism would
+only ever be proven by a manual crash. Reporting to the log and leaking
+the block keeps it testable, and leaking is the right disposal anyway:
+the block's metadata is exactly what proved untrustworthy, so returning
+it to the free list hands the damage to the next allocation. Quarantined
+bytes are counted in neither the used nor the free total, so those two
+stop summing to `heap_total_bytes()` once any violation has happened --
+stated in `heap.h` rather than left to be discovered.
+
+**`kfree()`'s plain path checks the header, always, debug mode or not.**
+An underflow of 1..8 bytes lands on the magic, which makes a red-zoned
+block look plain -- and `kfree()` would then take its header from 16
+bytes inside the real one and unlink whatever it found there. The guard
+is a `HEAP_HDR_MAGIC` field sitting in four bytes of padding the
+compiler was already inserting after `free`, so it costs nothing.
+
+`heap_check()` exists because a use-after-free is otherwise only caught
+by whatever allocation happens to reuse the block -- possibly a thousand
+allocations later, in an unrelated subsystem, or never.
+
+## The kernel's relocation table is placed after `.data`, and the image that is VERIFIED is not the image that ships
+
+Kernel ASLR (`docs/roadmap.md` M2) needs the kernel to know every
+ABSOLUTE reference in its own image, so it can adjust them if the image
+moves. `tools/genrelocs.py` extracts those from a `ld --emit-relocs`
+link and emits a table the kernel carries; `kernel/arch/x86_64/reloc.c`
+applies it. That is Linux's `CONFIG_RELOCATABLE` shape -- a build-time
+relocs tool, not a PIE link -- and it works here because the low 4 GiB
+is identity-mapped, so VA == PA and only the ~7,300 absolute references
+need help while the ~11,900 PC-relative ones survive a move untouched.
+
+The obvious problem is circular: generating the table needs a linked
+image, and linking the table in changes the image. **The fix is
+placement, not a fixed point.** `linker.ld` puts `.krelocs` after
+`.data` and before `.bss`, below every section that can contain a fixup
+location -- so adding the table cannot move a single address the table
+records, and pass 1's entries stay correct in the pass 2 image that
+contains them. Moving it above `.data` instead makes exactly 8 entries
+describe the image it displaced; `genrelocs.py --verify` reports that as
+a same-size, different-content mismatch and names the cause.
+
+It must also stay before `.bss`: `.bss` is NOBITS, so an allocated
+section after it would force the file to materialise gfx's 13 MB back
+buffer as real bytes on disk.
+
+**The second decision cost a non-booting kernel to find.** The final
+link also uses `--emit-relocs`, because `--verify` has to re-derive the
+table from the FINAL image -- checking it against pass 1 would only
+compare pass 1 to itself. But an image carrying its `.rela` sections is
+2 MB larger and GRUB will not boot it: the symptom is a completely empty
+serial log, with no kernel output at all, which reads like a code bug
+and is a link one. So the build links `kernel.pass2.elf` with `-q`,
+verifies THAT, and ships `objcopy --remove-section='.rela.*'` of it.
+The verified artifact and the shipped artifact are deliberately
+different files, differing only in sections that are never loaded.
+
+A third, smaller trap in the same rule: `build/krelocs.c` is named as a
+prerequisite of the kernel and marked `.PRECIOUS`, because make
+otherwise classifies it as an intermediate file and DELETES it once the
+`.o` is built -- after which the next build's `--verify` fails with a
+FileNotFoundError on a path that looks obviously correct.
+
+### What the table's tests can and cannot prove
+
+`kernel_relocate(0)` runs on every boot, before `paging_enforce_wx()`
+(the fixups write into `.text`, which that call makes read-only with
+CR0.WP, after which every one of them is a ring-0 page fault). A delta
+of zero patches nothing, so what it actually proves is that the table
+describes ~7,300 real, mapped, writable words in this image.
+
+`kernel_reloc_implausible()` checks that each entry points at a word
+holding a reference into the image -- but only for the READ-ONLY part,
+and that limit is the interesting half. A fixup in `.data` is a pointer
+the kernel initialised and is then free to reassign, to a `kmalloc`'d
+block or the framebuffer, so by the time a KTEST runs a healthy `.data`
+entry routinely points outside the image. Checking it anyway reports a
+working kernel as corrupt, which is how the function was first written.
+
+The upper bound also carries a page of slack, because a relocation's
+value is symbol + ADDEND: `pmm.c`'s `reserve_range(0, _kernel_end)`
+constant-folds its page round-up into the relocation, so the image
+genuinely contains one legitimate absolute reference to
+`_kernel_end + 0xfff`. Exactly one entry needs it, which is why the
+bound is a measured constant rather than a guess.
+
+None of this proves a NONZERO delta yields a working kernel -- nothing
+has moved the image, and no test inside a running kernel can move it out
+from under itself. That gap is stage 3, and it is a gap rather than a
+covered case.
+
+### Why stage 2 does not rebuild CR3, and why a lower base is refused
+
+The roadmap anticipated having to reload CR3 with relocated page-table
+addresses, since `boot.asm`'s `p4_table`/`p3_table`/`p2_tables` live in
+`.bss`. It turns out not to be necessary: those tables identity-map the
+entire low 4 GiB, so they already map wherever the image lands, and
+keeping them where they are removes the step entirely.
+
+What that buys has one condition, and it is why `kernel_relocate()`
+documents a relocated base as ABOVE the link base and never below.
+`pmm.c` reserves `[0, _kernel_end)`, and after relocation `_kernel_end`
+is the NEW end -- so a higher base leaves the old image, the boot stack
+and the boot page tables inside the reserved range for free. A lower
+base would hand the old image's pages, including the live CR3, to the
+frame allocator.
+
+Relatedly, delta zero is degenerate for the COPY step and stage 2 does
+not attempt one: at zero the destination is the source, so zeroing the
+new `.bss` would wipe the live stack and the page tables the CPU is
+currently walking. The copy is stage 3's, along with the random base.

@@ -141,6 +141,10 @@ static const char *const HELP_LINES[] = {
     "  uptime        - show ticks since boot\n",
     "  random [n]    - show the entropy source and n random values\n",
     "  meminfo       - show memory map + physical frame allocator stats\n",
+    "  heap          - show kernel heap stats (kmalloc/kfree)\n",
+    "  heap debug on - red-zone new allocations + poison freed ones,\n",
+    "                  reporting overflows/underflows/use-after-free\n",
+    "  heap check    - scan poisoned free blocks for use-after-free now\n",
     "  df            - show filesystem disk space (total/used/free)\n",
     "  dmesg         - show the kernel log (boot messages, driver/\n",
     "                  syscall diagnostics, timestamped)\n",
@@ -420,6 +424,73 @@ void cmd_meminfo(void) {
     vga_write(" ("); vga_write_dec((uint32_t)(total * 4 / 1024)); vga_write(" MB)\n");
     vga_write("  used:  "); vga_write_dec((uint32_t)used);
     vga_write("  free:  "); vga_write_dec((uint32_t)free); vga_putc('\n');
+}
+
+// `heap` -- the kernel heap's stats, and the switch for its debug mode.
+// Separate from `meminfo` (which reports the physical frame allocator)
+// because the two answer different questions: pmm says how much machine
+// is left, this says what kmalloc() is doing with its share of it.
+//
+// The debug mode is deliberately a runtime toggle rather than a build
+// flag; see heap.h. Reporting the violation count unconditionally is
+// half the point -- a violation is logged when it happens, and dmesg
+// scrolls, so a running total is what makes "has this kernel corrupted
+// its heap since boot?" answerable at a glance.
+void cmd_heap(const char *args) {
+    while (*args == ' ') args++;
+
+    if (k_strncmp(args, "debug", 5) == 0) {
+        const char *v = args + 5;
+        while (*v == ' ') v++;
+        if (k_strcmp(v, "on") == 0) {
+            heap_set_debug(1);
+        } else if (k_strcmp(v, "off") == 0) {
+            heap_set_debug(0);
+        } else if (*v != '\0') {
+            vga_write("usage: heap debug [on|off]\n");
+            return;
+        }
+        vga_printf("heap: debug mode %s\n", heap_debug() ? "ON -- new allocations get red-zones" : "off");
+        if (heap_debug()) {
+            vga_write("  (affects allocations made from now on; existing blocks are unchanged)\n");
+        }
+        return;
+    }
+
+    if (k_strcmp(args, "check") == 0) {
+        uint64_t bad = heap_check();
+        if (bad) {
+            vga_printf("heap: %u damaged free block(s) found -- see dmesg\n", bad);
+        } else {
+            vga_write("heap: no damage found in poisoned free blocks\n");
+            if (!heap_debug()) {
+                vga_write("  (debug mode is off -- blocks freed while it was off carry no poison to check)\n");
+            }
+        }
+        return;
+    }
+
+    if (*args != '\0') {
+        vga_write("usage: heap [debug on|off] [check]\n");
+        return;
+    }
+
+    uint64_t total = heap_total_bytes();
+    uint64_t used = heap_used_bytes();
+    vga_printf("Kernel heap (kmalloc/kfree):\n");
+    vga_printf("  claimed from pmm: %u bytes (%u KB)\n", total, total / 1024);
+    vga_printf("  handed out:       %u bytes\n", used);
+    vga_printf("  free:             %u bytes\n", total - used);
+    vga_printf("  debug mode:       %s\n", heap_debug() ? "on" : "off");
+    vga_printf("  red-zone checks:  %u\n", heap_rz_checks());
+
+    uint64_t bad = heap_violations();
+    if (bad) {
+        vga_printf("  VIOLATIONS:       %u (%u bytes quarantined -- see dmesg)\n",
+                   bad, heap_quarantined_bytes());
+    } else {
+        vga_printf("  violations:       0\n");
+    }
 }
 
 // `df` -- disk usage, meminfo's sibling for fs.c's data blocks instead
