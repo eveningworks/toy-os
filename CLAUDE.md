@@ -1696,6 +1696,17 @@ repeated manual steps to be worth automating:
   QEMU); run it after touching the block layer, TFS3's geometry or the
   live path. **"It booted" proves nothing here** -- the kernel degrades
   to an empty RAM filesystem and still reaches a shell and a desktop.
+- **`demo_test.py`** -- boots `toy-os-demo.iso` and asserts the scripted
+  tour actually PERFORMS (6 checks). **On demand only** -- do not add it
+  to `preflight.sh`, `gui_regress.py` or CI (standing request: it boots
+  its own ISO and the demo is a showpiece, not something an ordinary
+  change breaks). Reach for it when the tour is suspect, or after
+  touching `apps/demo.c`, `data/wm/demo.script` or shell dispatch/init.
+  Its load-bearing check is that a PATH-RESOLVED command really reached
+  `elf_run` -- the other five stayed green through a real shipped bug
+  where every PATH lookup in the tour failed, because "it booted,
+  reached the desktop and opened windows" is satisfied by a tour whose
+  every command failed. See `docs/decisions.md`.
 - **`gui_regress.py`** -- runs every GUI test tool, each against
   its own freshly-copied disk image and its own VM, and prints one
   pass/fail table (~2.5 minutes, 175 checks across thirteen tools). This is the standard check

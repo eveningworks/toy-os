@@ -165,6 +165,7 @@ there when you add an entry, or the index quietly stops being one.
 - [Tab completion is a shared candidate generator, not a shared line editor](#tab-completion-is-a-shared-candidate-generator-not-a-shared-line-editor)
 - [Ctrl/Alt are encoded as control codes and an ESC prefix, not as new key codes](#ctrlalt-are-encoded-as-control-codes-and-an-esc-prefix-not-as-new-key-codes)
 - [PATH lives in the shell, not the kernel -- and builtins win over it](#path-lives-in-the-shell-not-the-kernel----and-builtins-win-over-it)
+- [Shell session state is initialised by the DISPATCHER, not by the REPL](#shell-session-state-is-initialised-by-the-dispatcher-not-by-the-repl)
 - [The CLI editor's status bar needs its own line-wrapping pass, not a plain dump-and-let-the-console-wrap](#the-cli-editors-status-bar-needs-its-own-line-wrapping-pass-not-a-plain-dump-and-let-the-console-wrap)
 - [Timezone city list is a database file, not a hardcoded array or a config key](#timezone-city-list-is-a-database-file-not-a-hardcoded-array-or-a-config-key)
 - [`/etc` is one shared `toyos.conf` by default, not a file per setting](#etc-is-one-shared-toyosconf-by-default-not-a-file-per-setting)
@@ -4036,6 +4037,41 @@ and entries in PATH that don't exist are skipped silently -- the default
 `/bin;/usr/bin` names a directory that isn't on a stock disk, and
 warning about it on every boot would be noise. See `CHANGELOG.md`'s
 `[Unreleased]` entry.
+
+## Shell session state is initialised by the DISPATCHER, not by the REPL
+
+`shell_session_init()` (`apps/shell.c`) loads the history file and
+parses PATH, is idempotent, and is called from both `shell_main()` and
+`shell_dispatch()`. Those two lines used to sit at the top of
+`shell_main()` alone, which is correct exactly as long as the
+interactive REPL is the only way into the dispatcher -- and it isn't.
+Two other callers reach `shell_dispatch()` directly: `apps/demo.c`'s
+`sh` verb, and the serial debug console's `sh` command
+(`kernel/core/debug_console.c`, which is what `tools/vm.py exec` drives).
+
+On a demo boot, `demo_run_cli()` runs from `kernel_main()` *before*
+`apps_start()`, so `shell_main()` is never reached and PATH was left
+empty for the whole tour. The failure was almost invisible: every other
+command in `data/wm/demo.script` -- `about`, `df`, `fsck`, `ls`,
+`lspci` -- has its own builtin dispatch entry and worked perfectly, so
+the single casualty was `lscpu`, the one command in the script with no
+builtin, printing "Unknown command" in a screen that scrolls past. (`ls`
+is a builtin *wrapper* that hands `/bin/ls` an absolute path, per the
+entry above, which is why even it was unaffected.)
+
+The general shape is the same one `ensure_layout()` records above: **if
+a step belongs to "having a shell" rather than to "running the
+interactive loop", it belongs beside every entry into the shell, not in
+one of them.** What makes the rule cheap here is the same thing that
+made it cheap there -- a `static int done` guard means it can be called
+unconditionally with no ordering to get wrong.
+
+`tools/demo_test.py` is the regression test, and its load-bearing check
+is that a PATH-resolved command really reached `elf_run`. Its positive
+control is worth repeating before trusting it: reverting the
+`shell_dispatch()` call reddens exactly that one check and leaves the
+other five green -- so "the demo booted, reached the desktop and opened
+windows" is, on its own, no evidence at all that the tour worked.
 
 ## Console scrollback is a character ring in vga.c, and the boot log is echoed to it
 

@@ -215,9 +215,12 @@ static void dispatch(char *line) {
     }
 }
 
+static void shell_session_init(void);
+
 // See shell.h's doc comment -- the public entry point that lets a GUI
 // terminal-emulator app run a command line through the real dispatcher.
 void shell_dispatch(char *line, const struct vga_sink *sink) {
+    shell_session_init();
     const struct vga_sink *prev = vga_set_sink(sink);
     dispatch(line);
     vga_set_sink(prev);
@@ -289,6 +292,27 @@ static void history_load(void) {
         history[history_count][len] = '\0';
         history_count++;
     }
+}
+
+// Everything that belongs to "having a shell session" rather than to
+// "running the interactive REPL". Idempotent and called from BOTH
+// shell_main() and shell_dispatch(), because the REPL is not the only
+// way into the dispatcher: apps/demo.c's `sh` verb and the serial debug
+// console's `sh` both reach it without shell_main() ever running.
+//
+// The trap this closes: with the demo ISO, shell_main() is never
+// reached at all, so PATH was left empty and every command resolved
+// through it reported "Unknown command" while builtins beside it worked
+// perfectly. Same shape as vfs.c's ensure_layout() -- an init step that
+// belongs to a THING must not live only in one of the paths that
+// creates it. See docs/decisions.md.
+static void shell_session_init(void) {
+    static int done = 0;
+    if (done) return;
+    done = 1;
+
+    history_load();
+    shell_path_init(); // read PATH from /etc/toyos.conf once, see shell_path.c
 }
 
 static void history_add(const char *line) {
@@ -619,8 +643,7 @@ static void shell_read_line(char *buf, unsigned int len) {
 void shell_main(void) {
     char line[LINE_MAX];
 
-    history_load(); // once per boot -- shell_main() never returns/re-enters (see its own for(;;) below)
-    shell_path_init(); // same: read PATH from /etc/toyos.conf once, see shell_path.c
+    shell_session_init(); // once per boot; the demo and the serial console reach it first, see its comment
 
     vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
     vga_write("tosh -- the toy-os shell. Type 'help' to get started.\n");
