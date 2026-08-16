@@ -15,13 +15,13 @@
 // The commit this build came from, plus "-dirty" if the working tree
 // did not match it -- i.e. if the source that produced this image
 // exists nowhere in history. "unknown" when built without git.
-#define TOYOS_BUILD_ID "2034bb1-dirty"
+#define TOYOS_BUILD_ID "484871c-dirty"
 
 // **What to display.** TOYOS_VERSION plus the build id on a dev build,
 // the bare version on a release (its tag already pins it), and a loud
 // "(dirty)" either way if the tree had uncommitted changes. Prefer this
 // over TOYOS_VERSION anywhere a human reads the result; reach for the
 // bare macros when something needs to PARSE the version.
-#define TOYOS_VERSION_FULL "0.3.0-dev (2034bb1-dirty)"
+#define TOYOS_VERSION_FULL "0.3.0-dev (484871c-dirty)"
 
 #endif

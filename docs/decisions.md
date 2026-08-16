@@ -5205,15 +5205,21 @@ The display rule, and why each half:
 
 - **`0.3.0-dev` shows the commit** (`0.3.0-dev (2034bb1)`). A dev build
   is pinned by nothing else, which is the entire problem being solved.
-- **A release shows the bare number** (`0.3.0`). It is already pinned by
-  its git tag, so the hash is noise on the one build where it is not
-  needed. This was the maintainer's explicit ask and it is the right
-  call.
-- **`dirty` appears on either.** A build from a tree with uncommitted
-  changes came from source that exists nowhere in history -- the hash it
-  prints is a lie without the marker. On a release that is worse, not
-  better, so `0.3.0 (dirty)` is deliberate: it only ever appears when
-  something is already wrong.
+- **A release shows the bare number** (`0.3.0`), dirty tree or not. It
+  is already pinned by its git tag, so the hash is noise on the one
+  build where it is not needed.
+- **`dirty` appears on a DEV build only.** A build from a tree with
+  uncommitted changes came from source that exists nowhere in history,
+  so the hash it prints is a lie without the marker -- but that matters
+  to whoever is BUILDING, not to whoever is running. "Dirty" is jargon
+  about a repository the user does not have.
+
+  The dirty-RELEASE case is therefore a **build-time warning** rather
+  than a display string: `gen_version.sh` shouts on stderr when
+  `VERSION` has no `-dev` and the tree is dirty, where the person who
+  can still act on it will see it, and the shipped string stays clean.
+  The first version of this printed `0.3.0 (dirty)` to the user; that
+  was simply the wrong audience for the message.
 
 **The trap this had to avoid**, and it is the reason a build TIMESTAMP
 is not in there: `gen_version.sh` only rewrites `version.h` when the

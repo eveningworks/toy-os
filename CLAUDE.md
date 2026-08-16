@@ -641,9 +641,12 @@ technical conventions below:
   `TOYOS_VERSION` (the bare string), `TOYOS_BUILD_ID` (the short commit
   plus `-dirty` when the tree did not match it) and
   **`TOYOS_VERSION_FULL`, which is what anything human-facing should
-  display** -- `0.3.0-dev (2034bb1)` on a dev build, a bare `0.3.0` on a
-  release, and `(dirty)` on either when the build came from uncommitted
-  changes. **Never add a build TIMESTAMP to it**: the script is
+  display** -- `0.3.0-dev (2034bb1)` on a dev build (with `-dirty` when
+  the tree had uncommitted changes) and a bare `0.3.0` on a release,
+  always. A dirty RELEASE build is a loud stderr warning from
+  `gen_version.sh` instead of a display string: the person who needs to
+  know is the one running the build, and "dirty" means nothing to
+  someone reading an About window. **Never add a build TIMESTAMP to it**: the script is
   deliberately idempotent (it rewrites `version.h` only when the content
   changed) because `kapi.h` includes it, and a value that differs every
   build turns every build into a full rebuild. See `docs/decisions.md`.

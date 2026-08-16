@@ -61,19 +61,27 @@ fi
 #   0.3.0-dev  ->  "0.3.0-dev (2034bb1)"
 #       A dev build is not pinned by anything. The commit id is the only
 #       way to know which one an ISO is, which is the whole point.
-#   0.3.0      ->  "0.3.0"
-#       A release IS pinned, by its git tag. The hash is noise on the one
-#       build where you do not need it.
-#   0.3.0 with a dirty tree  ->  "0.3.0 (dirty)"
-#       A release built from uncommitted changes is not the tag it claims
-#       to be. That case should be loud; on a clean release build the
-#       marker never appears, so it costs nothing.
+#   0.3.0      ->  "0.3.0", always, dirty tree or not.
+#       A release IS pinned by its git tag, and the audience is people
+#       running the OS, to whom "dirty" is meaningless jargon about a
+#       repository they do not have.
+#
+# **The dirty-release case is a BUILD-time warning, not a display
+# string.** Cutting a release from uncommitted changes is a real
+# mistake, but the person who needs to hear about it is the one running
+# the build, not the user reading an About window months later. So it is
+# shouted here, where it can still be acted on, and the shipped string
+# stays clean.
 case "$VERSION" in
     *-dev) VERSION_FULL="$VERSION ($BUILD_ID)" ;;
     *)
+        VERSION_FULL="$VERSION"
         case "$BUILD_ID" in
-            *-dirty) VERSION_FULL="$VERSION (dirty)" ;;
-            *)       VERSION_FULL="$VERSION" ;;
+            *-dirty)
+                echo "version: WARNING -- building RELEASE $VERSION from a DIRTY tree." >&2
+                echo "version:   The image will claim to be $VERSION, but its source is not" >&2
+                echo "version:   any commit. Commit (or stash) before cutting a release." >&2
+                ;;
         esac
         ;;
 esac
