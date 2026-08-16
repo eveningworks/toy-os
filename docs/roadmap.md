@@ -1363,6 +1363,20 @@ a windowing protocol, not kernel-space C compiled into `kernel.bin`.
 Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
 -- see the Details entry for the three options weighed and why this one.
 
+**The apps half is done. The WM itself is not, and
+`docs/wm-ring3-design.md` is the staged plan for finishing it** --
+written 2026-08-16, five stages, each shipping on its own. Read it
+before starting any item below; it costs the four kernel capabilities
+that are actually missing and records what already exists (more than
+this list implies -- a ring-3 process can already map the framebuffer,
+and `vmm_map_user_page()` already takes an explicit address space).
+
+**The consequence that is easy to miss:** all 13 GUI test tools drive
+the WM through `apps/wm/wm_debug.c`'s `gui` commands, over the KERNEL's
+serial console. A ring-3 WM cannot answer those, so the 175 checks that
+are the only proof the desktop works have to move with it. The design
+doc makes that its own stage, deliberately before the WM moves.
+
 - [x] ~~The kernel context is a scheduler participant, so `wm_run()`
       keeps drawing while a ring-3 process runs~~ -- done, see
       `CHANGELOG.md`'s `[Unreleased]` entry. Step zero: nothing else
@@ -1422,13 +1436,51 @@ Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
       already designed for it (no pointers, fixed layout) -- this is
       the step that makes the syscall count stop scaling with event
       rate.
-- [ ] Force-close an unresponsive client. Today the X is a polite
-      `WIN_EV_CLOSE` the client answers with `WIN_REQ_DESTROY`; a
-      client that ignores it keeps its window. Needs a "not responding"
-      timeout and a way to kill a process, neither of which exists.
-- [ ] Client-side window resize. The WM can resize a client's window
-      frame, but `WIN_EV_RESIZE` is defined and never sent, and the
-      buffer is allocated once at its creation size.
+- [x] ~~Force-close an unresponsive client~~ -- done. Not a timeout but
+      a PING: `WIN_EV_PING`/`WIN_REQ_PONG` (xdg_shell's shape), answered
+      inside Toykit's loop so no app contains ping code and an app stuck
+      in its own callback correctly fails to answer. That distinction is
+      the substance -- a client that REFUSES to close and one that is
+      WEDGED are the same observation to a timer. Force Quit kills the
+      PROCESS (`scheduler_kill()`), since dropping the window alone
+      leaves a process drawing into an unmapped buffer. Covered by
+      `tools/forcequit_test.py` (15 checks), which tests `winclient`
+      (declines, keeps answering) against `hangclient` (stops pumping).
+- [x] ~~Client-side window resize~~ -- done, as a configure/ack
+      handshake rather than a size the server imposes: `WIN_EV_RESIZE`
+      proposes, the client reallocates and acks. Landed in uapp stage 3
+      and touched ZERO lines in the clients that had not opted in, which
+      was the acceptance test. Covered by `tools/uapp_test.py`.
+- [ ] **Empty ring 0 of applications first** (design doc's stage 0, and
+      the largest reduction available without any new kernel work).
+      Delete the kernel-side Notepad, Calculator and Terminal now that
+      the ring-3 versions ship and are launchable from the Start menu;
+      port About, Task Manager, Control Panel and UI Demo to
+      `userland/gui/`. That leaves `apps/ui/` (2,310 lines) with no
+      callers at all, so it is DELETED rather than migrated: of ring 0's
+      ~11,100 GUI lines, 4,259 go away outright and 1,515 move, leaving
+      only the WM's 5,296 -- which is the only part that needs any of
+      the new kernel capabilities below. Task Manager and Control Panel
+      need the process-list and settings syscalls the WM will need
+      anyway, so building them here means the WM inherits them proven.
+- [ ] **Cross-process buffer sharing** -- the actual blocker. Today
+      `win_server.c` hands `wm_client.c` a plain kernel pointer, which
+      works only because everything is identity-mapped; a ring-3 WM
+      needs each client's buffer mapped into ITS address space, revoked
+      on client death and on the resize that reallocates. The primitive
+      exists (`vmm_map_user_page()` takes an explicit `pml4_phys`); the
+      policy, the lifetime rules and the guard that only the registered
+      compositor may ask do not.
+- [ ] **Raw input to the compositor.** The WM is the thing that decides
+      focus, so it cannot receive input through the focus-routed event
+      queue it is itself responsible for filling. Needs the raw
+      keyboard/mouse stream exposed, running alongside today's routing
+      until the WM actually moves.
+- [ ] **A ring-3 allocator, and four smaller syscalls.** The WM's state
+      is `kmalloc`'d and ring 3 has no `malloc` (Milestone 24); plus
+      `etc_config_*` for settings, a MONOTONIC tick (`sys_gettime` is
+      RTC wall-clock, wrong for animation), and `scheduler_kill`/
+      `scheduler_poll` for force-quit and reaping.
 - [ ] An abstract transport behind that protocol, so the server side can
       move to ring 3 later without rewriting every call site -- the same
       "one struct of function pointers" pattern `display_driver` and the

@@ -316,7 +316,13 @@ technical conventions below:
   is meant to outlive this server (M41 moves TWS to ring 3). Symbol
   prefixes are unchanged and stay that way (`uui_`, `ugfx_`, `uapp_`,
   `WIN_REQ_*`); a toolkit's name and its prefix need not match. See
-  `docs/decisions.md`.
+  `docs/decisions.md`. **The WM itself is still ring 0, and
+  `docs/wm-ring3-design.md` is the staged plan for moving it** -- read
+  that before touching anything in `apps/wm/` with the migration in
+  mind. Its load-bearing point: all 13 GUI test tools drive the WM
+  through `wm_debug.c`'s `gui` commands over the KERNEL's serial
+  console, so the 175 checks that prove the desktop works have to move
+  with it, and that gets its own stage BEFORE the WM moves.
 - **A ring-3 process can own a real window** (`apps/wm/wm_client.c` +
   `kernel/proc/win_server.c`, protocol in
   `kernel/include/abi/win_proto.h`). Two rules matter before touching
