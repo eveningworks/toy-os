@@ -7,8 +7,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Drenos/toy-os/actions/workflows/build.yml">
-    <img alt="CI" src="https://github.com/Drenos/toy-os/actions/workflows/build.yml/badge.svg">
+  <a href="https://github.com/eveningworks/toy-os/actions/workflows/build.yml">
+    <img alt="CI" src="https://github.com/eveningworks/toy-os/actions/workflows/build.yml/badge.svg">
   </a>
   <img alt="Language" src="https://img.shields.io/badge/language-C%20%2B%20NASM-blue">
   <img alt="Target" src="https://img.shields.io/badge/target-x86__64-lightgrey">
@@ -145,7 +145,7 @@ differently:
 ### Build and run
 
 ```bash
-git clone https://github.com/Drenos/toy-os.git
+git clone https://github.com/eveningworks/toy-os.git
 cd toy-os
 make run
 ```
@@ -718,7 +718,7 @@ tools/run_release.sh -- standalone QEMU launcher shipped as a GitHub
 ## Releases
 
 Tagged releases live on
-[GitHub Releases](https://github.com/Drenos/toy-os/releases). Each ships
+[GitHub Releases](https://github.com/eveningworks/toy-os/releases). Each ships
 `toy-os.iso`, a gzipped `disk.img.gz` (there's no installer yet, so the
 pre-seeded disk image is what puts `/bin/ls`, `/bin/lspci` and friends
 on the filesystem -- the ISO alone boots into a near-empty one), and

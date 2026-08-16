@@ -29,7 +29,7 @@ nowhere else.
 `v0.0.9` was tagged ahead of any milestone -- an early snapshot for
 testing, not milestone-complete (see `docs/decisions.md`'s
 release-process entry and the
-[v0.0.9 GitHub Release](https://github.com/Drenos/toy-os/releases/tag/v0.0.9)).
+[v0.0.9 GitHub Release](https://github.com/eveningworks/toy-os/releases/tag/v0.0.9)).
 `v0.1.0` is Milestone 1. `v0.2.0` is Milestones 2, 4 and 15, plus the
 move of the whole GUI into ring 3. Whether/when this project ever calls
 something `1.0.0` is a separate, later judgment call, not mechanically
