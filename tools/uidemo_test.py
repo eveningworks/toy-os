@@ -392,6 +392,51 @@ def check_containment(d, qmp, tmp):
               [], f"{leaked} magenta pixel(s) escaped the window")
 
 
+def check_widgets_drawn(d, qmp, tmp):
+    """The widgets are actually ON SCREEN.
+
+    **This is the check the suite did not have, and its absence let UI
+    Demo ship completely blank.** Every other check here asserts on the
+    app's LOG: clicking a coordinate produced the right line, which it
+    did -- the widgets were live, hit-testable and reporting correctly,
+    and simply not painted. "It responds" is not "it is drawn"
+    (docs/gui-guidelines.md), and this is the third time that exact gap
+    has hidden a real defect in this project.
+
+    What broke: the toolkit draws declared widgets before calling
+    on_draw, and UI Demo's on_draw still began by clearing the surface,
+    so it painted over all of them. uapp.c documents that trap in its
+    own comment; the test suite could not see it.
+
+    Asserted per ROW rather than over the whole window, because a single
+    total is satisfied by one widget drawing and the rest not -- which
+    is a more likely bug than everything vanishing at once.
+    """
+    from PIL import Image
+    path = os.path.abspath(os.path.join(tmp, "uidemo_drawn.png"))
+    qmp.screenshot(path)
+    im = Image.open(path).convert("RGB")
+
+    c = d.win["content"]
+    bg = im.getpixel((c["x"] + c["w"] - 3, c["y"] + c["h"] - 3))  # a corner the
+                                                                  # widgets leave alone
+
+    def ink(name):
+        x, y, w, h = d.layout[name]
+        n = 0
+        for j in range(c["y"] + y, c["y"] + y + h):
+            for i in range(c["x"] + x, c["x"] + x + w):
+                if im.getpixel((i, j)) != bg:
+                    n += 1
+        return n
+
+    for name in ("btn1", "chk_alpha", "radio", "textbox", "dropdown",
+                 "listbox", "scrollback"):
+        n = ink(name)
+        d._record(f"{name} is actually drawn", n > 20, [],
+                  f"only {n} non-background pixels in its own rect")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -418,6 +463,7 @@ def main():
     run(d, qmp)
 
     print("\n== containment ==")
+    check_widgets_drawn(d, qmp, "/tmp")
     check_containment(d, qmp, "/tmp")
 
     if args.shot:

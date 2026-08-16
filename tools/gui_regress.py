@@ -95,6 +95,7 @@ TOOLS = [
     ("forcequit", "forcequit_test.py", "not-responding detection and force quit"),
     ("dialog", "dialog_test.py", "the confirm dialog, by pixel value"),
     ("sched", "sched_gui_test.py", "the desktop stays live while a process runs"),
+    ("blank", "blank_window_test.py", "no app opens a blank window"),
 ]
 
 

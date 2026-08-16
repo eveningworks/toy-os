@@ -118,7 +118,7 @@ def cmd_start(args):
         # discard=unmap turns the guest's ATA TRIM into a hole punch in the
         # backing file -- see kernel/drivers/ata.c's ata_trim().
         "-drive", f"file={args.disk},format=raw,if=ide,discard=unmap",
-        "-m", "256",
+        "-m", "2048",
     ]
     if args.kvm:
         # Matches `make run-kvm`'s flags, so what this measures is what

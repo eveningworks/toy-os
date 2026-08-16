@@ -22,6 +22,20 @@
 // exactly what it always did.
 
 // One-time setup. Call once from kernel_main, before apps_start().
+// How many ring-3 processes can exist at once.
+//
+// Was 4, which was not a design decision so much as a number nobody had
+// revisited: each slot embeds an 8 KiB kernel stack and 512 bytes of FPU
+// state, so the whole table is about 8.8 KiB per process. At 4 that was
+// 35 KiB and the desktop stopped launching anything after four windows;
+// at 64 it is ~560 KiB against a kernel .bss already 13 MiB (the GUI back
+// buffer), which is a rounding error for sixteen times the headroom.
+//
+// **Anything sizing a per-process table must use this**, not a literal.
+// win_server.c did carry its own 4 with a comment saying "MAX_PROCS
+// (scheduler.c)", which is a copy waiting to be forgotten.
+#define SCHED_MAX_PROCS 64
+
 void scheduler_init(void);
 
 // Called from idt.c's isr_dispatch for every timer tick (vector 32),
@@ -67,7 +81,7 @@ void scheduler_demo_run(void);
 // Spawns `path` (optional whitespace-separated `args`, NULL/"" for
 // none -- same convention as elf_run_from_fs()'s, see elf_run.h) as a
 // new scheduler-managed process and returns IMMEDIATELY with a 1-based
-// pid (> 0), or 0 on any setup failure (no free slot -- MAX_PROCS is 4
+// pid (> 0), or 0 on any setup failure (no free slot -- SCHED_MAX_PROCS
 // -- missing/invalid ELF, or arguments too long to fit the process's
 // one stack page). Unlike elf_run_from_fs(), does not block: the
 // process runs preemptively alongside whatever called this, and the

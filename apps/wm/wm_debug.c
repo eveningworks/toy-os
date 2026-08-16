@@ -564,7 +564,19 @@ static void cmd_close(int index) {
         return;
     }
     klog_printf("gui: closing window %d \"%s\"\r\n", index, windows[index].title);
-    close_window(index);
+    // wm_request_close(), NOT close_window() -- the same path the X
+    // button, the context menu and Alt+F4 take. This was the FOURTH
+    // close in the WM and the one that still seized a window instead of
+    // asking for it: close_window() drops a client's window without
+    // telling the client, so the process carries on running with no
+    // window, holding a slot out of MAX_PROCS (4) until reboot. Opening
+    // four apps from a test then stopped the desktop launching anything
+    // at all, which reads as a spawn bug rather than as a close bug.
+    //
+    // See wm_request_close()'s own comment: repeating the client check
+    // is exactly how the context menu drifted, and this is the same
+    // mistake in the debug console.
+    wm_request_close(index);
 }
 
 // A bare cursor MOVE, no buttons. Exists because hover was otherwise

@@ -12,19 +12,27 @@ roadmap): each milestone is just checkboxes and a few words. Full reasoning,
 phased test plans, and cross-references for every item are in **Details**
 at the bottom of this file, organized the same way.
 
-**Versioning: a milestone number orders the work, it does not name a
-release.** These used to be written as "Milestone N (planned v0.N.0)",
-one milestone per minor version. That convention is retired as of
-v0.2.0, because it stopped being true: v0.2.0 shipped Milestones 2, 4
-and 15 together, and Milestone 15 landed while 3 through 14 had not
-started. Pretending otherwise made 38 headings promise a release
-schedule nobody was following.
+**Every milestone heading carries a CLASS and a TARGET VERSION**, as
+`(class, target vX.Y.Z)`. The class is the subsystem it belongs to --
+kernel, memory, process, storage, gui, shell, security, runtime,
+hardware, system, tooling, docs -- so the list can be read by area
+rather than only in order.
 
-So: milestones are a dependency ORDER (see the next paragraph), and a
-release is cut when a coherent chunk of work is done, containing
-however many milestones that turns out to be. What shipped in which
-version is recorded on the milestone itself once it happens, and
-nowhere else.
+**Several milestones share a target version, deliberately.** The old
+convention wrote "Milestone N (planned v0.N.0)", one milestone per minor
+release, and it rotted: v0.2.0 shipped Milestones 2, 4 and 15 together,
+and 15 landed while 3 through 14 had not started. A one-to-one mapping
+promises a schedule nobody follows. Grouping says the true thing -- a
+release is a coherent chunk of work, and here is which chunk each
+milestone is in.
+
+**These are estimates and will move.** A target version is where a
+milestone is currently expected to land, not a commitment; the top of
+this file already says the whole list is a plan rather than a promise.
+Anything past v1.0.0 is written `v1.0.0+` rather than given an invented
+minor, because pretending to know the order that far out is how the last
+convention started lying. What ACTUALLY shipped in which version is
+recorded on the milestone itself once it happens.
 
 `v0.0.9` was tagged ahead of any milestone -- an early snapshot for
 testing, not milestone-complete (see `docs/decisions.md`'s
@@ -95,7 +103,7 @@ adds 4; 12 adds 5; 13 adds 6; 14 and up add 8.
 
 ## Milestones
 
-### ~~Milestone 1 -- Async I/O to the desktop~~ (v0.1.0, released 2026-08-12)
+### ~~Milestone 1 -- Async I/O to the desktop~~ (gui, v0.1.0, released 2026-08-12)
 
 - [x] Non-blocking DMA start/poll primitive
 - [x] Steppable write API
@@ -104,7 +112,7 @@ adds 4; 12 adds 5; 13 adds 6; 14 and up add 8.
 - [x] Async process spawning for the GUI Terminal (`ls` and an allowlist
       of verified-safe `/bin` binaries via `run`)
 
-### ~~Milestone 2 -- Memory protection hardening~~ (v0.2.0, completed 2026-08-16)
+### ~~Milestone 2 -- Memory protection hardening~~ (memory, v0.2.0, completed 2026-08-16)
 
 - [x] ~~NX bit enforcement (non-executable data pages)~~ -- done for
       userspace first, and for the kernel's own identity map with the
@@ -256,7 +264,7 @@ adds 4; 12 adds 5; 13 adds 6; 14 and up add 8.
       for the wrong reason, so its negative half is the load-bearing
       one. See `docs/decisions.md`.
 
-### Milestone 3 -- Storage hardening
+### Milestone 3 -- Storage hardening (storage, target v0.4.0)
 
 - [x] ~~Full multi-GB stress run (`stress 4200` / `stress 8192`)~~ -- done,
       both PASSED byte-for-byte on 2026-08-13 (4200 MB in 326 s, 8192 MB
@@ -309,7 +317,7 @@ adds 4; 12 adds 5; 13 adds 6; 14 and up add 8.
       checksums every inode at rest (verified on each read); TFS2's
       records still have no at-rest integrity check
 
-### Milestone 4 -- Kernel test harness (the HARNESS shipped v0.2.0; five items still open)
+### Milestone 4 -- Kernel test harness (tooling, target v0.4.0; harness shipped v0.2.0; five items open)
 
 *The heading used to be struck through as "completed 2026-08-13" while
 five boxes below it were unchecked. That is the milestone lying about
@@ -361,7 +369,7 @@ DONE here, so the strike came off rather than the boxes going on.*
       machine doing the comparison. See `CLAUDE.md`'s "Screenshots are
       a TESTING TOOL, not a deliverable".
 
-### Milestone 5 -- Benchmark suite
+### Milestone 5 -- Benchmark suite (tooling, target v0.4.0)
 
 - [ ] A `bench` command covering disk, memory, scheduler, and rendering
 - [ ] Recorded baselines checked into the repo
@@ -382,7 +390,7 @@ DONE here, so the strike came off rather than the boxes going on.*
 - [ ] A stable machine description in the output (CPU, RAM, mode) so two
       recorded runs can be told apart
 
-### Milestone 6 -- Fuzzing & property-based testing
+### Milestone 6 -- Fuzzing & property-based testing (tooling, target v0.5.0)
 
 *Placed right after the test harness and benchmark suite: it's the third
 leg of the same stool, and every milestone below it is easier to trust
@@ -406,7 +414,7 @@ once this exists.*
 - [ ] A corpus of past failures kept as regression tests
 - [ ] Run it in CI on a time budget, not to completion
 
-### Milestone 7 -- TTY / virtual terminals
+### Milestone 7 -- TTY / virtual terminals (process, target v0.5.0)
 
 - [ ] A line discipline (line editing, echo control) separate from the
       shell's own input loop. **Partly built ahead of this milestone**:
@@ -438,7 +446,7 @@ once this exists.*
       away
 - [ ] Scrollback per virtual terminal, not one global console buffer
 
-### Milestone 8 -- Demand paging & shared memory
+### Milestone 8 -- Demand paging & shared memory (memory, target v0.6.0)
 
 - [ ] Page-fault-driven mapping (allocate on first touch, not up front)
 - [ ] File-backed `mmap`
@@ -457,7 +465,7 @@ once this exists.*
 - [ ] A `pmap`-style command showing one process's mappings, which is
       also how any of this gets debugged
 
-### Milestone 9 -- `fork()`/`exec()`-style process model
+### Milestone 9 -- `fork()`/`exec()`-style process model (process, target v0.6.0)
 
 - [x] ~~Hardware floating point / SSE for ring-3 processes~~ -- done
       (unplanned, asked for directly mid-session), see `CHANGELOG.md`'s
@@ -490,7 +498,7 @@ once this exists.*
 - [ ] `brk`-style growable per-process heap (`SYS_SBRK` exists but the
       mapping behind it is fixed)
 
-### Milestone 10 -- Signals & process control
+### Milestone 10 -- Signals & process control (process, target v0.5.0)
 
 - [ ] Basic signal delivery (kill-equivalent)
 - [ ] Default dispositions (terminate, ignore)
@@ -533,7 +541,7 @@ once this exists.*
       tearing it down unconditionally
 - [ ] SIGCHLD on child exit
 
-### Milestone 11 -- Crash reporting & postmortem debugging
+### Milestone 11 -- Crash reporting & postmortem debugging (kernel, target v0.6.0)
 
 *After signals, because SIGSEGV delivery is what a core dump hangs off.*
 
@@ -554,7 +562,7 @@ once this exists.*
       page item; `uaddr_is_stack_guard()` is what names it, and
       `tools/faulttest_run.py` asserts the report
 
-### Milestone 12 -- Shell pipes & job control
+### Milestone 12 -- Shell pipes & job control (shell, target v0.5.0)
 
 **Read this as "make `tosh` a real shell".** `userland/lib/tosh.c` (Milestone
 41) already runs in ring 3 and spawns programs with their output piped
@@ -620,7 +628,7 @@ because that is the distinction that decides what can be done today:
 - [ ] Shell scripts, including `#!` handling in `run`
 - [ ] Aliases
 
-### Milestone 13 -- Init & service supervision
+### Milestone 13 -- Init & service supervision (system, target v0.7.0)
 
 *Needs the TTY layer, `fork`/`exec`, signals and job control -- it is
 essentially those four used in anger.*
@@ -640,7 +648,7 @@ essentially those four used in anger.*
 - [ ] One real service to prove it, rather than a framework with no
       users -- the serial debug console is the obvious candidate
 
-### Milestone 14 -- In-OS documentation
+### Milestone 14 -- In-OS documentation (docs, target v0.7.0)
 
 *No hard prerequisites; placed by the shell cluster because that's what
 it serves. Small, and it makes everything above it discoverable.*
@@ -658,7 +666,7 @@ it serves. Small, and it makes everything above it discoverable.*
 - [ ] A GUI documentation viewer reusing the scrollback widget
 - [ ] A check that every builtin actually has a page, run in CI
 
-### Milestone 15 -- TFS3: an inode layer (the FILESYSTEM shipped v0.2.0; three items still open)
+### Milestone 15 -- TFS3: an inode layer (storage, target v0.9.0; filesystem shipped v0.2.0; three items open)
 
 *Same correction as Milestone 4 above: the heading claimed completion
 with three boxes unchecked (unlink-while-open, raising `FS_PATH_MAX`,
@@ -715,7 +723,7 @@ probe-selected backend, with live switching via `fsformat` -- see
       chosen by magic probe everywhere -- kernel, `seed_disk.py`,
       `check_layout.py`)
 
-### Milestone 16 -- Block integrity: checksums & scrubbing
+### Milestone 16 -- Block integrity: checksums & scrubbing (storage, target v0.4.0)
 
 *Right after the inode layer, while that on-disk format is already
 open -- a checksum field wants to be designed in, not bolted on.*
@@ -745,7 +753,7 @@ open -- a checksum field wants to be designed in, not bolted on.*
 - [ ] Measure the write-path cost and record it, since every write now
       computes a checksum
 
-### Milestone 17 -- Multi-user & file permissions
+### Milestone 17 -- Multi-user & file permissions (security, target v0.7.0)
 
 *Wants Milestone 15's inode layer first -- per-file owner/mode bits
 belong on an inode, not on a path-keyed record.*
@@ -762,7 +770,7 @@ belong on an inode, not on a path-keyed record.*
 - [ ] uid/gid carried in the process control block, checked by the
       syscall layer rather than by each caller
 
-### Milestone 18 -- Encryption at rest
+### Milestone 18 -- Encryption at rest (security, target v0.9.0)
 
 *After multi-user, which brings password hashing -- the key derivation
 this needs is the same machinery, and building it twice would be silly.*
@@ -786,7 +794,7 @@ this needs is the same machinery, and building it twice would be silly.*
 - [ ] Write down the threat model honestly: this protects a powered-off
       image, nothing more
 
-### Milestone 19 -- Desktop visual polish
+### Milestone 19 -- Desktop visual polish (gui, target v0.8.0)
 
 - [ ] Basic image decoder (JPEG or similar)
 - [ ] Real wallpaper images
@@ -833,7 +841,7 @@ this needs is the same machinery, and building it twice would be silly.*
 - [ ] Theme switching (a dark variant of `apps/theme.h`'s palette)
 - [ ] A screenshot tool that writes a real image file to disk
 
-### Milestone 20 -- A layout engine for the GUI
+### Milestone 20 -- A layout engine for the GUI (gui, target v0.8.0)
 
 *Before the apps that would use it. Every widget position in `apps/` is
 hand-computed arithmetic today, which is why no window can be resized.*
@@ -855,7 +863,7 @@ hand-computed arithmetic today, which is why no window can be resized.*
 - [ ] Decide explicitly whether layout is immediate-mode (recomputed
       each frame, matching how the WM already draws) or retained
 
-### Milestone 21 -- Runtime font loading & text metrics
+### Milestone 21 -- Runtime font loading & text metrics (gui, target v0.8.0)
 
 *After the layout engine, which is the thing that actually needs to ask
 "how wide is this string?" -- and needs a true answer, not a monospace
@@ -877,7 +885,7 @@ guess.*
       combining marks) needs Milestone 37's UTF-8 work first; this
       milestone stops at metrics and kerning for single-byte text
 
-### Milestone 22 -- Desktop productivity apps
+### Milestone 22 -- Desktop productivity apps (gui, target v0.8.0)
 
 - [ ] Real RING-3 filesystem API surface (list/stat/create/delete/
       seek -- the KERNEL-side fs API grew stat-with-ino, hardlinks and
@@ -896,7 +904,7 @@ guess.*
 - [ ] Per-app settings persisted via `/etc/<app>.conf` (the convention
       exists, only `desktop.conf` uses it)
 
-### Milestone 23 -- GUI clipboard + drag-and-drop
+### Milestone 23 -- GUI clipboard + drag-and-drop (gui, target v0.8.0)
 
 - [ ] System clipboard (copy/paste text)
 - [ ] Paste into Notepad/Terminal
@@ -906,7 +914,7 @@ guess.*
 - [ ] A clipboard history ring
 - [ ] Standard keybindings (Ctrl+C/X/V) routed through the WM
 
-### Milestone 24 -- Runtime + interop
+### Milestone 24 -- Runtime + interop (runtime, target v0.9.0)
 
 - [ ] Inter-process IPC (message passing)
 - [ ] **A real C library.** Partly started: `userland/rt/crt0.asm` and
@@ -966,7 +974,7 @@ guess.*
 - [ ] A consistent `errno`-style error convention -- syscalls return
       0/-1//a count today with no shared vocabulary for *why*
 
-### Milestone 25 -- Real mount points
+### Milestone 25 -- Real mount points (storage, target v0.9.0)
 
 - [ ] A mount table (path prefix -> backend), replacing vfs.c's single
       `g_fs`
@@ -986,7 +994,7 @@ guess.*
 - [ ] A tmpfs/RAM-disk backend as the cheapest possible second mount to
       test against (currently a backlog item)
 
-### Milestone 26 -- Observability
+### Milestone 26 -- Observability (tooling, target v0.7.0)
 
 - [ ] Panic backtraces with function names, using the DWARF symbols the
       build already emits
@@ -1076,7 +1084,7 @@ history is worth reading, but a fixed papercut is just noise.
       driver itself works. The configuration where a hardware cursor
       genuinely works is virtio-gpu + virtio-input below.
 
-### Milestone 27a -- virtio, and a real GPU driver (unscheduled)
+### Milestone 27a -- virtio, and a real GPU driver (hardware, unscheduled)
 
 **Why virtio first, and why the GPU is the prize.** One transport layer
 (virtqueues + the PCI capability/config negotiation) unlocks every
@@ -1110,7 +1118,7 @@ develop against today with no bring-up risk.
       remove the "no USB pointer device" trap in the QEMU flags (see
       CLAUDE.md)
 
-### Milestone 27b -- other emulated hardware worth claiming (unscheduled)
+### Milestone 27b -- other emulated hardware worth claiming (hardware, unscheduled)
 
 Devices QEMU already presents to this machine that nothing drives yet.
 Listed with the honest reason each is or isn't attractive.
@@ -1134,7 +1142,7 @@ Listed with the honest reason each is or isn't attractive.
       against 1280x720 for the others. Recorded so the option isn't
       re-investigated from scratch; the resolution cost rules it out
 
-### Milestone 27 -- AHCI/SATA driver
+### Milestone 27 -- AHCI/SATA driver (hardware, target v1.0.0+)
 
 - [ ] PCI discovery + ABAR mapping
 - [ ] Port detection
@@ -1149,7 +1157,7 @@ Listed with the honest reason each is or isn't attractive.
 - [ ] Port multiplier awareness (detect and report, not necessarily
       support)
 
-### Milestone 28 -- NVMe / modern storage
+### Milestone 28 -- NVMe / modern storage (hardware, target v1.0.0+)
 
 - [ ] PCIe NVMe controller discovery
 - [ ] Admin queue + identify command
@@ -1165,7 +1173,7 @@ Listed with the honest reason each is or isn't attractive.
 - [ ] A PRP list for transfers past one page, the equivalent of the PRD
       table `ata.c` already builds
 
-### Milestone 29 -- Data journaling & snapshots
+### Milestone 29 -- Data journaling & snapshots (storage, target v0.9.0)
 
 - [ ] Journal file *data*, not just metadata -- the gap `tfs.c`'s top
       comment documents honestly today
@@ -1186,7 +1194,7 @@ Listed with the honest reason each is or isn't attractive.
 - [ ] `tools/tfs3_writer.py` able to read a snapshot from the host
 - [ ] Measure the write amplification this introduces, honestly
 
-### Milestone 30 -- ACPI + real power/timer
+### Milestone 30 -- ACPI + real power/timer (hardware, target v1.0.0+)
 
 - [ ] ACPI table parsing (RSDP/MADT/FADT)
 - [ ] Real ACPI-based poweroff
@@ -1197,7 +1205,7 @@ Listed with the honest reason each is or isn't attractive.
 - [ ] S3 suspend/resume
 - [ ] ACPI reboot (today's `reboot` uses the 8042 pulse)
 
-### Milestone 31 -- SMP (multi-core)
+### Milestone 31 -- SMP (kernel, target v1.0.0+)
 
 - [ ] Discover other cores via MADT
 - [ ] Bring up application processors (INIT-SIPI-SIPI)
@@ -1210,7 +1218,7 @@ Listed with the honest reason each is or isn't attractive.
       assuming single-threaded: `tfs.c`'s static scratch buffers,
       `heap.c`'s free list, `vga.c`'s cursor state
 
-### Milestone 32 -- USB (keyboard/mouse)
+### Milestone 32 -- USB (hardware, target v1.0.0+)
 
 - [ ] Host controller discovery
 - [ ] Bring up xHCI
@@ -1226,7 +1234,7 @@ Listed with the honest reason each is or isn't attractive.
 - [ ] Ordering against the PS/2 handoff, so both input paths can coexist
       during transition
 
-### Milestone 33 -- Networking
+### Milestone 33 -- Networking (hardware, target v1.0.0+)
 
 - [ ] NIC driver (rtl8139 first)
 - [ ] Ring-3-readable millisecond-ish clock (a tick counter exposed via
@@ -1247,7 +1255,7 @@ Listed with the honest reason each is or isn't attractive.
 - [ ] A second NIC driver (e1000) to prove the driver interface isn't
       shaped around rtl8139
 
-### Milestone 34 -- Sound
+### Milestone 34 -- Sound (hardware, target v1.0.0+)
 
 - [x] ~~PC speaker beep (simplest possible output)~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry
 - [ ] AC97 or HDA PCI audio device driver
@@ -1257,7 +1265,7 @@ Listed with the honest reason each is or isn't attractive.
 - [ ] A WAV player app
 - [ ] Volume mixer UI, persisted to `/etc`
 
-### Milestone 35 -- Dynamic linking / shared libraries
+### Milestone 35 -- Dynamic linking / shared libraries (runtime, target v0.9.0)
 
 - [ ] A shared-object (`.so`-style) file format
 - [ ] A userspace dynamic linker
@@ -1274,7 +1282,7 @@ Listed with the honest reason each is or isn't attractive.
 - [ ] Versioning, or a written decision to ignore it while there's one
       consumer of every library
 
-### Milestone 36 -- Swap / paging to disk
+### Milestone 36 -- Swap / paging to disk (memory, target v1.0.0+)
 
 - [ ] A swap-backed page reclaim path
 - [ ] Page-out under memory pressure
@@ -1284,7 +1292,7 @@ Listed with the honest reason each is or isn't attractive.
 - [ ] Dirty-page writeback before eviction
 - [ ] Swap usage reported in `meminfo` and Task Manager
 
-### Milestone 37 -- UTF-8 migration
+### Milestone 37 -- UTF-8 migration (runtime, target v0.9.0)
 
 - [ ] UTF-8 decode/encode helpers in `string.c`
 - [ ] Console + `gfx_draw_string()` decoding multi-byte sequences
@@ -1308,7 +1316,7 @@ Listed with the honest reason each is or isn't attractive.
       apply it everywhere
 - [ ] A conversion tool for existing Latin-1 files on disk
 
-### Milestone 38 -- UEFI boot
+### Milestone 38 -- UEFI boot (hardware, target v1.0.0+)
 
 - [ ] A UEFI stub/loader alongside the Multiboot2 path
 - [ ] GOP framebuffer acquisition (instead of GRUB's multiboot tag)
@@ -1327,7 +1335,7 @@ Listed with the honest reason each is or isn't attractive.
 - [ ] A build that produces both a BIOS ISO and a UEFI-bootable image
 - [ ] CI booting both, or the second path rots
 
-### Milestone 39 -- A scripting language
+### Milestone 39 -- A scripting language (runtime, target v1.0.0+)
 
 - [ ] Pick a shape (a small Lisp is the least code; a BASIC is the most
       period-appropriate)
@@ -1347,7 +1355,7 @@ Listed with the honest reason each is or isn't attractive.
 - [ ] Use it for something real -- a startup script for Milestone 13's
       init would prove more than any test suite
 
-### Milestone 40 -- POSIX compatibility
+### Milestone 40 -- POSIX compatibility (runtime, target v1.0.0+)
 
 Mostly a *capstone* over Milestones 6-16 rather than new ground -- see
 its Details entry for what each of those already covers and what's left
@@ -1370,7 +1378,7 @@ that nothing else owns.
 - [ ] Decide, in writing, what is deliberately NOT pursued (conformance
       testing, locales, pthreads, `select`/`poll`, terminal `ioctl`)
 
-### Milestone 41 -- The GUI in ring 3
+### Milestone 41 -- The GUI in ring 3 (gui, target v0.3.0)
 
 Run the desktop the way a real OS does: apps as ring-3 processes talking
 a windowing protocol, not kernel-space C compiled into `kernel.bin`.

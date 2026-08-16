@@ -113,7 +113,9 @@
 // overrides it to something else.
 extern uint64_t g_next_kernel_rsp;
 
-#define MAX_PROCS        4
+// See api/scheduler.h -- one definition, shared with everything that
+// sizes a table per process.
+#define MAX_PROCS        SCHED_MAX_PROCS
 #define PROC_KSTACK_SIZE 8192
 // The user stack's address and size, plus the guard region below it,
 // come from uaddr.h -- this spawn path and elf_run.c's legacy loader

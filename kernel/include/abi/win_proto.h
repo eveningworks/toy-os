@@ -296,10 +296,15 @@ static inline uint64_t win_buffer_vaddr(uint32_t window) {
 // space costs nothing here.
 #define WIN_COMPOSITOR_BASE 0x8010000000ULL
 
-// How many processes' windows the region has room for. Matches
-// MAX_PROCS (scheduler.c); the server refuses a pid outside it rather
-// than computing an address that overlaps someone else's.
-#define WIN_COMPOSITOR_MAX_PIDS 4
+// How many processes' windows the region has room for. Must be >=
+// SCHED_MAX_PROCS (api/scheduler.h) -- win_server.c static_asserts
+// exactly that, since this header is ABI and cannot include a kernel
+// one. The server refuses a pid outside it rather than computing an
+// address that overlaps someone else's.
+//
+// Costs nothing but virtual address space: 64 x WIN_CLIENT_MAX x 8 MiB
+// is 2 GiB of vaddr in a region with nothing above it.
+#define WIN_COMPOSITOR_MAX_PIDS 64
 
 static inline uint64_t win_compositor_vaddr(int pid, uint32_t window) {
     return WIN_COMPOSITOR_BASE

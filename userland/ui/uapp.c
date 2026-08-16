@@ -56,25 +56,40 @@ static void present(struct uapp *a) {
 static void flush(struct uapp *a) {
     if (!a->dirty) return;
     a->dirty = 0;
-    // With a layout: CLEAR, then draw it, then let the app paint on
-    // top. The clear is the library's job because it is every app's
-    // first line otherwise -- and getting it wrong is silent: an app
-    // that clears in its own on_draw paints over the layout that was
-    // just drawn, and the window comes up empty with no error anywhere.
-    // (Written that way first. The test suite reported three failures
-    // that all looked like "clicks do nothing"; a screenshot showed an
-    // empty window and explained all three at once.)
-    // Declared widgets are DRAWN FOR THE APP, overlays last. An app with
-    // widgets and nothing custom needs no on_draw at all; one with
-    // custom painting (a canvas, a text area) still gets called, on top.
-    if (a->desc->layout || a->router.count) {
-        ugfx_fill(&a->surface, UTHEME_PANEL_BG);
-        if (a->desc->layout) uui_layout_draw(&a->surface, a->desc->layout);
-        if (a->router.count) uui_router_draw(&a->router, &a->surface);
-    }
+
+    // ORDER, and it is load-bearing: clear, then the APP's own painting,
+    // then the widgets, then overlays.
+    //
+    // The app paints UNDER its widgets, which makes the failure that
+    // produced this comment structurally impossible. It had already
+    // happened twice: an app whose on_draw begins by clearing the
+    // surface -- the natural first line, and what every client wrote
+    // before the toolkit cleared for them -- wiped everything the
+    // toolkit had just drawn, and the window came up completely blank
+    // with no error anywhere. UI Demo shipped that way and a 35-check
+    // suite passed it, because every check asserted on the app's LOG
+    // and the widgets were live, hit-testable and simply invisible.
+    //
+    // With the app first, a stray clear can only ever wipe its own
+    // backdrop. An app that genuinely needs to paint OVER a widget says
+    // so with on_draw_over.
+    if (a->desc->layout || a->router.count) ugfx_fill(&a->surface, UTHEME_PANEL_BG);
+
     if (a->desc->on_draw) {
         struct uapp_draw d = { &a->surface, UTHEME_TEXT, UTHEME_PANEL_BG };
         a->desc->on_draw(a, &d);
+    }
+
+    if (a->desc->layout) uui_layout_draw(&a->surface, a->desc->layout);
+    if (a->router.count) uui_router_draw(&a->router, &a->surface);
+
+    // The escape hatch, deliberately separate and deliberately last: a
+    // status line over a canvas, a drag ghost. Rare enough that making
+    // it explicit is better than letting every on_draw be ambiguous
+    // about whether it runs above or below the widgets.
+    if (a->desc->on_draw_over) {
+        struct uapp_draw d = { &a->surface, UTHEME_TEXT, UTHEME_PANEL_BG };
+        a->desc->on_draw_over(a, &d);
     }
     present(a);
 }

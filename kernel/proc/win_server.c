@@ -14,7 +14,17 @@
 #include "gfx.h"      // gfx_font_size() -- which variant is active
 #include <stddef.h>
 
-#define WIN_SERVER_MAX_PIDS 4 // MAX_PROCS (scheduler.c)
+#include "scheduler.h" // SCHED_MAX_PROCS -- this table is per process
+
+#define WIN_SERVER_MAX_PIDS SCHED_MAX_PROCS
+
+// The compositor's address region is carved per (pid, window) and its
+// pid count is an ABI constant (abi/win_proto.h), so it cannot include
+// the scheduler's header. Checked here instead of trusted: a pid past
+// the region's end would compute an address overlapping another
+// process's window.
+_Static_assert(WIN_COMPOSITOR_MAX_PIDS >= SCHED_MAX_PROCS,
+               "win_compositor_vaddr() has no room for every process");
 
 struct client_window {
     int used;

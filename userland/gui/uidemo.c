@@ -393,6 +393,12 @@ static void on_open(struct uapp *a) {
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
     (void)a;
     struct ugfx_surface *s = d->surface;
+    // KEPT ON PURPOSE, as a canary. The toolkit already cleared, so this
+    // is redundant -- but it is exactly the line that blanked this app
+    // when on_draw ran AFTER the widgets, and leaving it here means the
+    // day someone flips that order back, UI Demo goes blank and
+    // uidemo_test.py's "is actually drawn" checks fire. A test target
+    // should contain the mistake it is meant to catch.
     ugfx_fill(s, UTHEME_PANEL_BG);
 
     // A DELIBERATE attempt to draw outside this window, every frame.
@@ -409,12 +415,12 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
 
     layout();
 
-    // **No widget draw calls.** The toolkit has already drawn every
-    // widget in ITEMS -- and every popup on top of them -- before this
-    // runs. What is left here is what the toolkit has no widget for:
-    // the containment markers above and this app's status line.
-    ugfx_draw_string_clipped(s, PAD, row_status(), s->w - 2 * PAD, g.status,
-                             UTHEME_TEXT, UTHEME_PANEL_BG);
+    // **No widget draw calls, and no clear.** The toolkit clears, runs
+    // this, then paints every widget in ITEMS on top -- so what happens
+    // here is the BACKDROP. The containment markers above are all this
+    // app paints at this level; its status line goes in on_draw_over,
+    // because a readout belongs above the widgets rather than under
+    // them.
 
 }
 
@@ -533,6 +539,15 @@ static void on_press(struct uapp *a, int cx, int cy, unsigned buttons) {
     if (uui_focus_click(&g.focus, cx, cy)) log_focus();
 }
 
+// Painted OVER the widgets -- a status readout a widget would otherwise
+// be free to cover.
+static void on_draw_over(struct uapp *a, struct uapp_draw *d) {
+    (void)a;
+    struct ugfx_surface *s = d->surface;
+    ugfx_draw_string_clipped(s, PAD, row_status(), s->w - 2 * PAD, g.status,
+                             UTHEME_TEXT, UTHEME_PANEL_BG);
+}
+
 static void on_motion(struct uapp *a, int cx, int cy, unsigned buttons) {
     layout();
     if (buttons) return;   // a drag belongs to whoever took the press
@@ -627,6 +642,7 @@ int main(void) {
         .on_size      = on_size,
         .on_open      = on_open,
         .on_draw      = on_draw,
+        .on_draw_over = on_draw_over,
         .widgets      = ITEMS,
         .widget_count = (int)(sizeof ITEMS / sizeof ITEMS[0]),
         .on_widget    = on_widget,

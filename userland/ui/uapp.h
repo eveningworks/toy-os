@@ -149,9 +149,24 @@ struct uapp_desc {
     // A control committed. Only fires when `buttons` is set.
     void (*on_action)(struct uapp *a, int code);
 
-    // Repaint the content. The library clears nothing first -- an app
-    // owns its whole surface.
+    // Repaint the content. With widgets or a layout declared, this runs
+    // BENEATH them -- the library clears first, calls this, then paints
+    // the widgets on top. That order is what makes an app's own
+    // `ugfx_fill()` harmless: it can wipe its backdrop and never the
+    // widgets. (UI Demo shipped completely blank because the opposite
+    // order let its on_draw erase everything, and a 35-check suite
+    // passed it -- every check read the app's log, and the widgets were
+    // live, hit-testable and invisible.)
+    //
+    // With no widgets and no layout, nothing is cleared for you and this
+    // owns the whole surface, exactly as before.
     void (*on_draw)(struct uapp *a, struct uapp_draw *d);
+
+    // Painting that must land ON TOP of the widgets -- a readout over a
+    // canvas, a drag ghost. Separate from on_draw rather than a flag on
+    // it, so "above or below the widgets" is never ambiguous at the call
+    // site.
+    void (*on_draw_over)(struct uapp *a, struct uapp_draw *d);
 
     void (*on_key)(struct uapp *a, int key, unsigned mods);
 

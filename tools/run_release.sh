@@ -57,4 +57,4 @@ exec qemu-system-x86_64 \
     -serial stdio \
     -vga std \
     -display sdl,grab-mod=rctrl \
-    -m 256
+    -m 2048
