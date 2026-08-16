@@ -43,6 +43,11 @@ void uui_dropdown_draw_popup(struct ugfx_surface *s, const struct uui_dropdown *
 
 int uui_dropdown_hit(const struct uui_dropdown *d, int cx, int cy);
 int uui_dropdown_click(struct uui_dropdown *d, int cx, int cy); // 1 if it consumed the click
+// A drag inside an OPEN popup, forwarded to its list so the popup's
+// scrollbar behaves like any other. No-ops while closed.
+int uui_dropdown_drag(struct uui_dropdown *d, int cx, int cy);
+void uui_dropdown_drag_end(struct uui_dropdown *d);
+
 int uui_dropdown_key(struct uui_dropdown *d, int key);
 int uui_dropdown_selected(const struct uui_dropdown *d);
 

@@ -23,6 +23,7 @@ void uui_listbox_init(struct uui_listbox *lb, int x, int y, int w, int h,
     lb->sel_fg = ugfx_rgb(20, 20, 20);
     lb->track_bg = ugfx_rgb(225, 225, 230);
     lb->thumb_bg = ugfx_rgb(150, 155, 165);
+    lb->thumb_grab = -1;
 }
 
 void uui_listbox_set_items(struct uui_listbox *lb, const char *const *items, int count) {
@@ -124,6 +125,81 @@ int uui_listbox_click(struct uui_listbox *lb, int cx, int cy) {
     if (idx < 0 || idx == lb->selected) return 0;
     lb->selected = idx;
     return 1;
+}
+
+// --- the scrollbar's own input -----------------------------------------
+//
+// A listbox that DREW a scrollbar and handled none of its input shipped
+// in ring 3 and was found by using the desktop, not by the suite -- the
+// third time this project has shipped a bar that draws and does nothing
+// (see apps/ui/ui_textview.h for the first two). The behaviour belongs
+// to the widget: an app forwards its events and gets a real scrollbar,
+// rather than each app growing its own copy of this and one of them
+// getting it wrong.
+//
+// NOTE the offset inversion. `top` counts rows from the TOP, while the
+// scrollbar's `scroll_offset` counts from the BOTTOM (0 = pinned to the
+// newest, matching the text view). draw() already converts one way with
+// `count - vis - top`; everything here has to convert back the same way,
+// or the thumb tracks the cursor upside down.
+static int listbox_bar_x(const struct uui_listbox *lb) {
+    return lb->x + lb->w - lb->bar_w;
+}
+
+static int listbox_offset(const struct uui_listbox *lb) {
+    return lb->count - uui_listbox_visible_rows(lb) - lb->top;
+}
+
+static int listbox_set_offset(struct uui_listbox *lb, int offset) {
+    int before = lb->top;
+    lb->top = lb->count - uui_listbox_visible_rows(lb) - offset;
+    listbox_clamp(lb);
+    return lb->top != before;
+}
+
+int uui_listbox_press(struct uui_listbox *lb, int cx, int cy) {
+    if (!uui_listbox_scrollbar_visible(lb)) return 0;
+    int bx = listbox_bar_x(lb);
+    if (cx < bx || cx >= lb->x + lb->w) return 0;   // not on the strip
+    if (cy < lb->y || cy >= lb->y + lb->h) return 0;
+
+    int vis = uui_listbox_visible_rows(lb);
+    int off = listbox_offset(lb);
+    enum uui_scrollbar_zone zone =
+        uui_scrollbar_hit(bx, lb->y, lb->bar_w, lb->h, lb->count, vis, off,
+                          cx, cy, 0);
+
+    if (zone == UUI_SB_THUMB) {
+        int thumb_y, thumb_h;
+        uui_scrollbar_thumb_rect(lb->y, lb->h, lb->count, vis, off,
+                                  &thumb_y, &thumb_h, lb->bar_w, 0);
+        // The grab offset WITHIN the thumb, so the thumb tracks the
+        // cursor instead of snapping its top to it -- the exact bug the
+        // ring-3 Notepad shipped by passing 0 here.
+        lb->thumb_grab = cy - thumb_y;
+        return 1;
+    }
+
+    // Track: page toward the click, keeping one row of overlap, which is
+    // what every real toolkit does.
+    int page = vis > 1 ? vis - 1 : 1;
+    if (zone == UUI_SB_ABOVE) listbox_set_offset(lb, off + page);
+    else if (zone == UUI_SB_BELOW) listbox_set_offset(lb, off - page);
+    else return 0;
+    return 1;
+}
+
+int uui_listbox_drag(struct uui_listbox *lb, int cx, int cy) {
+    (void)cx;
+    if (lb->thumb_grab < 0) return 0;
+    int vis = uui_listbox_visible_rows(lb);
+    int off = uui_scrollbar_offset_for_drag(lb->y, lb->h, lb->count, vis,
+                                             cy, lb->thumb_grab, lb->bar_w, 0);
+    return listbox_set_offset(lb, off);
+}
+
+void uui_listbox_drag_end(struct uui_listbox *lb) {
+    lb->thumb_grab = -1;
 }
 
 int uui_listbox_wheel(struct uui_listbox *lb, int notches) {

@@ -77,6 +77,7 @@
 //   uidemo: focus <textbox|dropdown|listbox|none>
 //   uidemo: key <code> text="<contents>"
 //   uidemo: scroll <offset> <wheel|page|thumb|pan>
+//   uidemo: list_scroll <top> <thumb|page>   -- the LISTBOX's own bar
 //   uidemo: list <n> <label>
 //   uidemo: dropdown open | close | <n> <label>
 //   uidemo: layout <widget> <x> <y> <w> <h>   -- emitted once on open
@@ -222,6 +223,17 @@ static void log_focus(void) {
     char m[32];
     snprintf(m, sizeof m, "focus %s", now < 0 ? "none" : FOCUS_NAMES[now]);
     logline(m);
+}
+
+// The listbox's scrollbar, which is a different control from the text
+// view's and was inert until a user tried to drag it. Reported so a test
+// can see it move at all: scrolling a list does not change the
+// selection, so without this line a working bar and a dead one produce
+// identical logs.
+static void log_list_scroll(const char *how) {
+    char m[48];
+    snprintf(m, sizeof m, "list_scroll %d %s", g.list.top, how);
+    log_and_status(m);
 }
 
 static void log_scroll(const char *how) {
@@ -422,6 +434,12 @@ static void on_motion(struct uapp *a, int cx, int cy, unsigned buttons) {
     // claimed the press.
     if (buttons) {
         if (g.pressing) {
+            if (uui_dropdown_drag(&g.dropdown, cx, cy)) { uapp_redraw(a); return; }
+            if (uui_listbox_drag(&g.list, cx, cy)) {
+                log_list_scroll("thumb");
+                uapp_redraw(a);
+                return;
+            }
             if (g.view.thumb_grab >= 0 || g.view.panning) {
                 uui_textview_drag(&g.view, cx, cy);
                 log_scroll(g.view.thumb_grab >= 0 ? "thumb" : "pan");
@@ -493,6 +511,16 @@ static void on_press(struct uapp *a, int cx, int cy, unsigned buttons) {
         return;
     }
 
+    // The listbox's SCROLLBAR outranks its rows: a press on the strip
+    // scrolls or starts a thumb drag and must not select. widget_at()
+    // reports W_NONE there (uui_listbox_hit excludes the bar), so this
+    // is asked separately rather than inside the W_LISTBOX branch.
+    if (uui_listbox_press(&g.list, cx, cy)) {
+        if (g.list.thumb_grab < 0) log_list_scroll("page");
+        uapp_redraw(a);
+        return;
+    }
+
     if (w == W_LISTBOX) {
         if (uui_listbox_click(&g.list, cx, cy) && g.list.selected >= 0) {
             snprintf(m, sizeof m, "list %d %s", g.list.selected,
@@ -546,6 +574,8 @@ static void on_release(struct uapp *a, int cx, int cy, unsigned buttons) {
     layout();
     g.pressing = 0;
     uui_textview_drag_end(&g.view);
+    uui_listbox_drag_end(&g.list);
+    uui_dropdown_drag_end(&g.dropdown);
 
     int code = uui_button_group_release(&g.group);
     if (code > 0) {

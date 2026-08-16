@@ -85,6 +85,12 @@ int uui_dropdown_click(struct uui_dropdown *d, int cx, int cy) {
         return 1;
     }
     if (d->open) {
+        // The popup's SCROLLBAR first: a press on it scrolls the list
+        // and must not commit or dismiss. Without this the bar was not
+        // merely inert -- clicking it CLOSED the popup, which is the
+        // most annoying possible answer to "I tried to scroll".
+        if (uui_listbox_press(&d->list, cx, cy)) return 1;
+
         if (uui_hit(d->list.x, d->list.y, d->list.w, d->list.h, cx, cy)) {
             uui_listbox_click(&d->list, cx, cy);
             d->open = 0; // committing closes it
@@ -96,6 +102,17 @@ int uui_dropdown_click(struct uui_dropdown *d, int cx, int cy) {
         return 1;
     }
     return 0;
+}
+
+// Forwarded to the popup's list, so a thumb drag inside an open popup
+// works exactly as it does in a standalone listbox. No-ops while closed.
+int uui_dropdown_drag(struct uui_dropdown *d, int cx, int cy) {
+    if (!d->open) return 0;
+    return uui_listbox_drag(&d->list, cx, cy);
+}
+
+void uui_dropdown_drag_end(struct uui_dropdown *d) {
+    uui_listbox_drag_end(&d->list);
 }
 
 int uui_dropdown_key(struct uui_dropdown *d, int key) {

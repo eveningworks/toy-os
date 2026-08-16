@@ -103,6 +103,7 @@ there when you add an entry, or the index quietly stops being one.
 - [Widgets are added once a second real caller needs them -- except the checkbox](#widgets-are-added-once-a-second-real-caller-needs-them----except-the-checkbox)
 - [The ring-3 UI Demo selects on contact where the kernel one committed on release](#the-ring-3-ui-demo-selects-on-contact-where-the-kernel-one-committed-on-release)
 - [A compositor's view of a window is at a DERIVED address, and revocation is the feature](#a-compositors-view-of-a-window-is-at-a-derived-address-and-revocation-is-the-feature)
+- [The third inert scrollbar: drawing one and handling it are separate jobs](#the-third-inert-scrollbar-drawing-one-and-handling-it-are-separate-jobs)
 - [A GUI test spawns its client directly, instead of typing at a Terminal](#a-gui-test-spawns-its-client-directly-instead-of-typing-at-a-terminal)
 - [A client's menus are clamped to its own window, and that is one rectangle away from not being](#a-clients-menus-are-clamped-to-its-own-window-and-that-is-one-rectangle-away-from-not-being)
 - [A menu bar opens on press, which is the one place the commit-on-release rule bends](#a-menu-bar-opens-on-press-which-is-the-one-place-the-commit-on-release-rule-bends)
@@ -5233,3 +5234,42 @@ full rebuild.
 `unknown` rather than an empty string when git is unavailable (a release
 tarball, a stripped checkout): an empty marker reads as a bug in the
 script, and a build that cannot say where it came from should say so.
+
+
+## The third inert scrollbar: drawing one and handling it are separate jobs
+
+`uui_listbox` drew a scrollbar and handled none of its input. Not
+"handled it badly" -- a press on the strip did not reach the widget at
+all, because `uui_listbox_hit()` deliberately excludes the bar column so
+that clicking it cannot select a row. Dragging the thumb did nothing,
+clicking the track did nothing, and inside a dropdown popup a click on
+the bar fell through to the dismiss branch and CLOSED the popup, which
+is the most annoying possible answer to "I tried to scroll".
+
+Found by the maintainer dragging it on the desktop, after a 28-check
+suite passed clean. That is the third time this project has shipped a
+bar that draws and does nothing (`apps/ui/ui_textview.h` records the
+first two), and the recurrence is the interesting part, so:
+
+**Why it keeps happening.** `uui_scrollbar` is deliberately a stateless
+drawing-and-hit-testing primitive -- correct design, and the reason
+`ui_textview` and `uui_textview` can compose it. But it means DRAWING a
+bar is one call and MAKING IT WORK is a separate set of them, and a
+control that does the first and not the second looks finished. Every
+screenshot is right. Every "does it respond" check passes, because the
+rest of the control responds.
+
+**What actually stops it.** `docs/gui-guidelines.md`'s scrollbar section
+gained a point 9: a control that draws a bar must handle one, and the
+check has to assert the view MOVED. An absence check cannot catch this
+-- "the drag changed no selection" passes perfectly against a dead bar,
+and it stayed green under the positive control while the four real
+checks went red. That is the general lesson worth keeping: when a
+control does nothing, every assertion of the form "X did not happen"
+still passes.
+
+The fix put the behaviour in the widget (`uui_listbox_press()` /
+`_drag()` / `_drag_end()`), not in UI Demo -- behaviour belongs to the
+component, so the four shipping apps that use a listbox and every
+dropdown popup get it too, rather than each app growing its own copy
+and one of them getting the grab offset wrong again.

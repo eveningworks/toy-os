@@ -187,8 +187,26 @@ scrollable before you go looking. (The near-invisible modern style needs
 hover-to-expand to compensate, and these widgets deliberately keep no
 hover state.)
 
+**9. Every control that DRAWS a bar must HANDLE one.** This is not a
+ninth behaviour so much as the reason the previous eight keep getting
+lost: `uui_scrollbar` is a stateless drawing-and-hit-testing primitive,
+so a control that draws it and forwards no input gets a perfect-looking
+bar that does nothing at all. That has now shipped three times -- UI
+Demo kernel-side (drew it, no input), the ring-3 Notepad (dragged from
+the wrong grab offset), and `uui_listbox` (drew it, and a click on it
+did not even reach the widget; in a dropdown popup it dismissed the
+popup instead of scrolling). The last was found by a user dragging it,
+after a 28-check suite passed.
+
+If you add a scrollbar to a control, add `press`/`drag`/`drag_end` to
+that control in the same change, and a check that asserts the view
+MOVED. "It responds" is not "it scrolls", and an absence check ("the
+drag changed no selection") passes happily against a dead bar.
+
 `tools/scrollbar_test.py` asserts points 1, 2, 3 and 6 against the
-ring-3 Notepad. Run it after touching either scrollbar port.
+ring-3 Notepad; `tools/uidemo_test.py` asserts 1, 2, 3 and 9 against the
+listbox and the dropdown popup. Run both after touching either
+scrollbar port.
 
 ## Menus: the one control that opens on press
 

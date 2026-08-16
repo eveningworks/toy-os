@@ -34,6 +34,15 @@ It encodes three things that cost real time to rediscover:
      the same change as this file; against an older kernel every key
      command comes back "bad or dropped key".
 
+POSITIVE CONTROL
+----------------
+Recorded when the listbox scrollbar checks were added: make
+`uui_listbox_press()` return 0 immediately (the state the bar shipped
+in) and rebuild. The four scrollbar checks go red, plus the popup one
+and four cascades from the diverged state. **"the drag changed no
+selection" stays GREEN** -- an absence check cannot catch a control that
+does nothing, which is the useful half of running the control at all.
+
 CAVEAT
 ------
 Injected input enters below the PS/2 driver (see tools/gui_debug.py), so
@@ -183,6 +192,16 @@ class Demo:
         x, y, w, h = self.layout["textbox"]
         return x + w // 2, y + h // 2
 
+    def list_bar_x(self):
+        """A column inside the listbox's SCROLLBAR strip.
+
+        The strip is uui_listbox's `bar_w` (8px) at the control's right
+        edge; -4 lands in the middle of it. Taken from the listbox's own
+        reported rect rather than re-derived, per this file's rule.
+        """
+        x, y, w, h = self.layout["listbox"]
+        return x + w - 4
+
     def dropdown_center(self):
         x, y, w, h = self.layout["dropdown"]
         return x + w // 2, y + h // 2
@@ -228,11 +247,45 @@ def run(d):
     d.check_absent("wheel changes no selection", d.wheel(-3), "list ")
     d.check("view actually scrolled", d.click(*d.list_row(0)), "list 8 india")
 
+    print("\n== listbox: the SCROLLBAR, which a user found inert ==")
+    # This bar DREW and handled nothing -- no drag, no paging, and a
+    # click on it did not even reach the widget. Found by dragging it on
+    # the desktop, after a 28-check suite passed. The checks below are
+    # the ones that were missing; see docs/gui-guidelines.md's
+    # "Scrollbars: what a real one does".
+    d.key(K_HOME)          # selection to row 0, view to the top
+    d.events()
+    bx = d.list_bar_x()
+    lby = ly
+
+    # 1. The thumb DRAGS, and it tracks the cursor rather than paging.
+    got = d.drag(bx, lby + 8, bx, lby + lh - 12)
+    d.check("dragging the listbox thumb scrolls the view", got, "list_scroll")
+    d.check("...and it is a thumb drag, not a track page", got, "thumb")
+    # 2. Reversible: dragging back returns it to the top. A bar that
+    #    only ever moved one way would pass the check above.
+    got = d.drag(bx, lby + lh - 12, bx, lby + 8)
+    d.check("dragging back returns it to the top", got, "list_scroll 0")
+    # 3. Scrolling the view must NOT change the selection -- the same
+    #    rule the wheel follows.
+    d.check_absent("the drag changed no selection", got, "list ")
+    # 4. A click on the TRACK pages toward it.
+    d.check("clicking the track pages", d.click(bx, lby + lh - 6),
+            "list_scroll 3 page")
+
     print("\n== dropdown ==")
     d.check("click opens popup", d.click(*ddc), "dropdown open")
     d.check("click popup row commits value", d.click(*d.popup_row(2)),
             "dropdown 2 Capybara")
     d.check("click reopens", d.click(*ddc), "dropdown open")
+    # The POPUP's scrollbar is the same widget, and clicking it used to
+    # DISMISS the popup -- the most annoying possible answer to "I tried
+    # to scroll". It must scroll and stay open.
+    px, py, pw, ph = d.layout["dropdown"]
+    got = d.click(px + pw - 4, py + ph + 40)
+    d.check_absent("clicking the popup's scrollbar does not dismiss it", got,
+                   "dropdown close")
+    d.check_absent("...and does not commit a value either", got, "dropdown 0")
     # Dismiss from INSIDE the window but outside the popup. A point past
     # the content rect never reaches the app -- see the module docstring.
     bx, by, bw, bh = d.layout["btn1"]

@@ -22,6 +22,10 @@ struct uui_listbox {
     int top;       // first visible row; OWNED
     int row_h;     // 0 = derive from the font
     int bar_w;
+    // Live thumb-drag state: -1 when no drag is in progress, otherwise
+    // the offset WITHIN the thumb that was grabbed. OWNED -- driven by
+    // uui_listbox_press()/_drag()/_drag_end().
+    int thumb_grab;
     uint32_t bg, fg, sel_bg, sel_fg, track_bg, thumb_bg;
 };
 
@@ -44,6 +48,17 @@ int  uui_listbox_hit(const struct uui_listbox *lb, int cx, int cy);
 int  uui_listbox_hover(struct uui_listbox *lb, int cx, int cy);   // 1 if changed
 int  uui_listbox_click(struct uui_listbox *lb, int cx, int cy);   // selects; 1 if changed
 int  uui_listbox_wheel(struct uui_listbox *lb, int notches);      // 1 if scrolled
+
+// --- the scrollbar, which is the widget's job and not the app's ------
+//
+// A press on the strip: starts a thumb drag, or pages when it lands on
+// the track. Returns 1 if it claimed the press, so an app can fall
+// through to selection when it did not. Forward press/drag/drag_end and
+// the bar simply works -- a listbox that drew a bar and handled none of
+// this shipped once already, and a user found it by dragging.
+int  uui_listbox_press(struct uui_listbox *lb, int cx, int cy);
+int  uui_listbox_drag(struct uui_listbox *lb, int cx, int cy);    // 1 if scrolled
+void uui_listbox_drag_end(struct uui_listbox *lb);
 int  uui_listbox_key(struct uui_listbox *lb, int key);            // arrows/home/end
 
 // Focus-only ops -- see uui_textbox.h's note.
