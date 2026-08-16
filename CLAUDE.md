@@ -1709,8 +1709,15 @@ repeated manual steps to be worth automating:
   every command failed. See `docs/decisions.md`.
 - **`gui_regress.py`** -- runs every GUI test tool, each against
   its own freshly-copied disk image and its own VM, and prints one
-  pass/fail table (~2.5 minutes, 175 checks across thirteen tools). This is the standard check
+  pass/fail table (~1.5 minutes, 200 checks across fourteen tools). This is the standard check
   after touching `apps/ui/`, `userland/`, or anything the WM draws.
+  Tools are **STARTED longest-first** (`COST_S`/`pick_order()`), because
+  a parallel run cannot end before its slowest member does and
+  `forcequit` (71s) used to sit eleventh of fourteen and finish alone --
+  that sort alone took a run from 1:56 to 1:30. The summary table is
+  still printed in declared dependency order; only the start order
+  changed, and a tool missing from `COST_S` is assumed SLOW so a new
+  one can never become the straggler by omission.
   `-k NAME` for a subset, `--logs DIR` to keep each tool's full output,
   `--list` to see what's in it. The per-tool fresh image and fresh VM
   are the parts that matter: several tools write files, and every one

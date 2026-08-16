@@ -344,6 +344,38 @@ DONE here, so the strike came off rather than the boxes going on.*
 - [ ] Coverage honesty: a list of what has NO test (the PIO disk path,
       the ELF loader's error branches, the WM event loop) rather than a
       percentage nobody can act on
+- [ ] **A scriptable POINTER, not a one-frame override.** An injected
+      cursor position survives exactly one `wm_run()` iteration -- it is
+      applied at `apps/wm/wm.c:619` and clobbered by
+      `mouse_get_state()` at the top of the next frame
+      (`apps/wm/wm.c:606`) -- and there is no `mouse_set_position()` in
+      the driver API at all, only `mouse_set_bounds`. So nothing can
+      drive the cursor along a path: a hover test has to park the REAL
+      PS/2 cursor via `DebugConsole.warp_cursor()` and confirm arrival,
+      and no test can observe a drag mid-flight. The fix is a
+      persistent pointer SOURCE the WM reads from, which is the same
+      seam Milestone 41's raw-input stage and a USB HID driver
+      (Milestone 32) would both plug into -- so it is worth building as
+      a source rather than as a test hook. Note `gui state` reports the
+      real mouse (`wm_debug.c:451`), so it must learn to say which one
+      is authoritative or it becomes a second thing that lies.
+- [ ] **`gui icons [--json]` -- desktop icon geometry.** No `gui`
+      command reports it: `gui probe` answers the bare region string
+      `"desktop"` with no index, and the rects are private to
+      `apps/wm/desktop.c` (`icon_hit_test()`, `icon_grid_cell_rect()`).
+      So no test can click a desktop icon without hardcoding
+      coordinates -- and those are the worst kind to hardcode, since
+      icons are user-draggable and their positions persist to
+      `/etc/desktop.conf`. Needs a `desktop_icon_rect()` accessor
+      behind it. This is CLAUDE.md's "a geometry line an app does not
+      report is one a tool will re-derive", still true for the one
+      surface that has never reported any.
+- [ ] **Finer `gui drag` interpolation.** `DRAG_STEPS = 8`
+      (`apps/wm/wm_debug.c:622`), so a scripted drag moves in eight big
+      hops rather than the per-frame motion a real drag produces. It
+      can therefore step clean over a hit region, and it does not
+      exercise `wm_update_drag_resize()` the way a hand does -- a drag
+      test can pass while a real drag is broken.
 - [ ] Per-test timing, so a test that quietly becomes slow is visible
 - [ ] A `ktest -v` that reports each assertion, not just pass/fail
 - [ ] Tests for the boundary this kernel enforces by include path: an
@@ -840,6 +872,34 @@ this needs is the same machinery, and building it twice would be silly.*
       whole scene
 - [ ] Theme switching (a dark variant of `apps/theme.h`'s palette)
 - [ ] A screenshot tool that writes a real image file to disk
+- [ ] **A tween/easing helper, once a second real caller exists.**
+      Nothing in the tree interpolates anything over time: the Start
+      menu's click flash, the tray clock and `demo.c`'s `wait` are all
+      "is the deadline reached?" checks, not motion.
+      `kernel/include/api/fixed.h` already has what one needs (Q16.16,
+      `fx_mul`/`fx_div`, `fx_sin` for ease-in/out), so this is small
+      when it is wanted. Deliberately NOT built yet: the obvious
+      consumers -- a cursor walking a path and an animated window drag
+      -- turn out to be the same caller ("walk a point from A to B over
+      N ms"), which fails this repo's second-real-caller bar. Build it
+      when a genuinely different consumer turns up: a WM animation, or
+      Milestone 41's `WIN_EV_TIMER`.
+      **Pace it by `pit_ticks()`, not by frame count** -- `wm_run()` is
+      a free-running loop paced only by `hlt` (`apps/wm/wm.c:592`), so
+      it wakes on any interrupt and runs much slower under
+      `gui damage verify on`; a frame-paced animation would silently
+      change speed between a demo and a test run.
+- [ ] Scripted interaction that spans frames, so the demo tour can show
+      real use -- `demo_gui_tick()` runs exactly one step per WM
+      iteration and advances `g_next` unconditionally
+      (`apps/demo.c:138`), so no scripted action can take time. `wait`
+      is the sole exception (`g_wait_until`, `apps/demo.c:140`) and is
+      the shape the rest would follow. With the three test-harness
+      items above (Milestone 4) this is what would let the tour walk
+      the cursor to a desktop icon, double-click it -- the WM already
+      has double-click, `apps/wm/desktop.c:254`, 300ms -- and drag a
+      window visibly. Window drags already animate per frame
+      (`wm_update_drag_resize()`), so that half needs nothing new.
 
 ### Milestone 20 -- A layout engine for the GUI (gui, target v0.8.0)
 
