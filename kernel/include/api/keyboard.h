@@ -180,6 +180,18 @@ int keyboard_try_getchar(void);
 int keyboard_getchar_mods(uint8_t *out_mods);
 int keyboard_try_getchar_mods(uint8_t *out_mods);
 
+// The modifiers held RIGHT NOW (KEY_MOD_*), for a caller that has no key
+// event to read them off. A mouse click is the case: it carries no
+// modifier state of its own, and Ctrl/Shift-click is a real gesture.
+//
+// A LIVE sample, not a latched one -- it answers "what is held at this
+// instant". That makes it the wrong tool for keyboard input, where what
+// matters is the modifiers held when the KEY was pressed; those ride
+// with the key (keyboard_try_getchar_mods()) precisely so a modifier
+// released a moment later cannot change how an already-typed character
+// is interpreted.
+uint8_t keyboard_mods_now(void);
+
 // Blocking read of one line into buf (max len-1 chars + null terminator).
 // Echoes typed characters to the VGA console and handles backspace.
 void keyboard_read_line(char *buf, unsigned int len);

@@ -58,6 +58,9 @@ static int extended_prefix = 0;
 // docs/decisions.md -- the Shift+arrow family was given discrete codes
 // for exactly this reason, and this generalises that decision rather
 // than reversing it.
+// Exposed as keyboard_mods_now() below. Static here because everything
+// in this file wants the live value; the accessor exists for callers
+// that have no KEY event to read modifiers off -- see keyboard.h.
 static uint8_t current_mods(void) {
     uint8_t m = 0;
     if (shift_pressed) m |= KEY_MOD_SHIFT;
@@ -280,3 +283,15 @@ void keyboard_read_line(char *buf, unsigned int len) {
     }
     buf[pos] = '\0';
 }
+
+// The modifiers held RIGHT NOW, for a caller with no key event to read
+// them off -- a mouse click, which carries no modifier state of its own.
+// The desktop's Ctrl/Shift-drag is the first caller (rubber-band
+// selection, apps/wm/desktop.c).
+//
+// Deliberately a live sample, not a latched value: it answers "what is
+// held at this instant", which is the question a click has. That makes
+// it wrong for keyboard input, where the modifiers that matter are the
+// ones held when the KEY was pressed -- which is why key events carry
+// their own mods (keyboard_try_getchar_mods()) rather than calling this.
+uint8_t keyboard_mods_now(void) { return current_mods(); }

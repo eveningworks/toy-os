@@ -1078,6 +1078,28 @@ guess.*
 
 ### Known issues and papercuts (unscheduled)
 
+- [ ] **`damage_sweep.py`'s `resize-shrink Terminal` step reports a real
+      missed damage.** Reproduces every run, no seed needed:
+      `python3 tools/vm.py --disk <copy> start` then
+      `python3 tools/damage_sweep.py`. The report is
+
+          wm: DAMAGE BUG -- 81055 px changed outside the damage rect,
+          first at (779,120); damage was (120,120 752x496);
+          diff bbox (120,120 752x496); scene stable (real missed damage)
+
+      `scene stable` means the comparison is trustworthy (the third
+      render agreed), so this is not a `verdict void`.
+      **Confirmed PRE-EXISTING, 2026-08-16**: it reproduces identically
+      on the committed `apps/wm/desktop.c` with the rubber-band work
+      reverted, so it is not the band's damage bookkeeping. Established
+      by rebuilding with the old file rather than by reasoning about it.
+      **What is NOT established:** why the diff's bounding box EQUALS the
+      declared damage rect while 81055 px are reported outside it. Those
+      two statements look contradictory and one of them is measuring
+      something other than what its name suggests -- worth reading
+      `wm_render.c`'s verify path before trusting either number. Start
+      there rather than at the resize code.
+
 - [ ] **`menubar_test.py` is FLAKY in the full suite** -- observed three
       times in one session (2026-08-16): it fails one check when run as
       part of `gui_regress.py`, and passes 22/22 every time it is re-run
@@ -1086,6 +1108,10 @@ guess.*
       passes" is exactly how a real intermittent bug gets ignored for
       months -- and because the next person to see it red should know it
       is known, not spend an hour bisecting.
+      Rate seen 2026-08-16 (third session): TWO failures in four full
+      runs, both the same check, and it passed on re-run each time. That
+      is far more frequent than the earlier "one in three" and makes it
+      reproducible enough to bisect deliberately rather than wait for.
       **NAMED, 2026-08-16 (third session).** The `--logs` capture finally
       caught it. The failing check is always this one:
 

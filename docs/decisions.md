@@ -34,6 +34,7 @@ there when you add an entry, or the index quietly stops being one.
 - [`SYS_WAIT_EVENT` makes clients loop instead of restarting the syscall](#sys_wait_event-makes-clients-loop-instead-of-restarting-the-syscall)
 - [The windowing protocol is one syscall carrying typed messages, not a syscall per operation](#the-windowing-protocol-is-one-syscall-carrying-typed-messages-not-a-syscall-per-operation)
 - [A client window's close button is a handshake, not a seizure](#a-client-windows-close-button-is-a-handshake-not-a-seizure)
+- [Rubber-band selection is shared source compiled twice, and it owns the behaviour](#rubber-band-selection-is-shared-source-compiled-twice-and-it-owns-the-behaviour)
 - [One desktop-entry directory with a `ShowIn` key, not a second directory per surface](#one-desktop-entry-directory-with-a-showin-key-not-a-second-directory-per-surface)
 - [Desktop entries reload live off a filesystem generation counter, not a directory poll](#desktop-entries-reload-live-off-a-filesystem-generation-counter-not-a-directory-poll)
 - [`append` zeroed the block it appended into, and `write`/`append` now write LINES](#append-zeroed-the-block-it-appended-into-and-writeappend-now-write-lines)
@@ -2815,6 +2816,61 @@ cannot reach, since `kernel/include/kernel` is off its include path),
 `apps/wm/wm_client.c` owns presentation (window list, chrome, z-order,
 input routing), and they meet at a registered `struct win_server_ops`
 -- the same registry pattern as `display.h`'s `display_driver`.
+
+## Rubber-band selection is shared source compiled twice, and it owns the behaviour
+
+Drag a rectangle on the desktop and it selects the icons it touches,
+highlighting them live as it sweeps and un-highlighting them when pulled
+back -- Windows' and KDE's behaviour. Two decisions made it worth its
+own entry.
+
+**Where it lives: `kernel/lib/rubberband.c`, compiled TWICE.** The
+desktop is kernel-side today and a file manager will be ring-3, so the
+obvious options were "build it in `apps/ui/` and port it later" or
+"build it in `userland/ui/` and the desktop waits". Both produce two
+implementations that drift, which this project has already paid for
+three times (the `kpath` copies that disagreed about `../x`, the three
+hand-copied scrolling implementations whose third shipped a dead
+scrollbar, the ring-3 Notepad's scrollbar grab). So it takes the path
+`kernel/lib/geom.c` and `apps/calc_engine.c` already take: one source
+file, built once into the kernel and once into `libuapp.a`. The Makefile
+rule already existed; the only cost is that the file must stay
+freestanding (`<stdint.h>` only, no allocator, no drawing).
+
+**What it owns: the behaviour, not the items.** The caller answers "how
+many?" and "where is item i?" through a `struct rb_ops` and does its own
+drawing; the module owns the band, the selection set, the modifier
+semantics and the click-versus-drag threshold. That is
+`docs/gui-guidelines.md`'s "behaviour belongs to the component" rule,
+and the payoff is concrete: every rule is a KTEST against a grid of
+made-up rectangles, with no compositor, no cursor and no pixels.
+
+Three rules in there that a from-scratch implementation tends to get
+wrong, each with its own test:
+
+- **A shrinking band deselects.** The selection is recomputed from the
+  selection-at-drag-start on every motion, never accumulated. An
+  accumulating version is indistinguishable while the band grows and
+  wrong the moment it shrinks.
+- **A band dragged up-and-left is an ordinary band.** The rect is
+  normalised; a version that forgets selects nothing in that direction
+  and passes every other test.
+- **A click is not a zero-size band.** Below a small threshold a press is
+  a click, which in replace mode clears the selection ("click empty
+  space to deselect") and falls out of the same rule rather than being a
+  special case. Without the threshold every click is a degenerate drag.
+
+Two integration notes. Modifiers come from `keyboard_mods_now()`, added
+for this: a click carries no modifier state of its own, and it is
+deliberately a LIVE sample rather than a latched one -- which is exactly
+why keyboard input must NOT use it (a key event carries the modifiers
+held when the key was pressed, so a modifier released a moment later
+cannot retroactively change an already-typed character). And the band
+counts as a drag for the entry-reload guard, because its selection is a
+set of registry indices that a reload would renumber.
+
+Group DRAGGING -- moving every selected item together -- is deliberately
+not built yet. This is the layer it would sit on.
 
 ## One desktop-entry directory with a `ShowIn` key, not a second directory per surface
 
