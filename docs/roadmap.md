@@ -1150,6 +1150,17 @@ history is worth reading, but a fixed papercut is just noise.
       demo both run well now. The console-scroll regression that same
       change introduced is fixed and documented in
       `docs/decisions.md`.)
+      **The console fix is now confirmed ON METAL too** (2026-08-16, same
+      Zenbook, live ISO): `gfxbench 20` reports **1.8 ms** per scrolled
+      text line against the 178.5 ms measured before it, with the console
+      self-reporting as `buffered`. Note the bare-metal figure is ~3.6x
+      the 0.5 ms measured under `--kvm`, and that gap is EXPECTED rather
+      than a shortfall -- KVM honours guest memory types but its
+      framebuffer is still host RAM, while a real one is a PCIe-attached
+      surface where even a write-combined store is a bus transaction. So
+      a KVM timing is the right tool for "did this get better" and the
+      wrong one for "how fast is it"; do not quote a KVM number as a
+      hardware target, which this file previously came close to doing.
 - [ ] **`rammeter` doesn't appear at the physical console.** It ticks
       from `wm_render_frame()` only, so it shows on the desktop and
       nowhere else. The console has no repaint loop to hang it off, and
