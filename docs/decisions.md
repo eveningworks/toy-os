@@ -33,6 +33,9 @@ there when you add an entry, or the index quietly stops being one.
 - [Blocking syscalls deschedule; they never wait in place](#blocking-syscalls-deschedule-they-never-wait-in-place)
 - [`SYS_WAIT_EVENT` makes clients loop instead of restarting the syscall](#sys_wait_event-makes-clients-loop-instead-of-restarting-the-syscall)
 - [The windowing protocol is one syscall carrying typed messages, not a syscall per operation](#the-windowing-protocol-is-one-syscall-carrying-typed-messages-not-a-syscall-per-operation)
+- [The TWP transport seam has exactly one implementation, so it is UNVALIDATED](#the-twp-transport-seam-has-exactly-one-implementation-so-it-is-unvalidated)
+- [`gui` output goes to a caller-supplied sink, not through a klog redirect](#gui-output-goes-to-a-caller-supplied-sink-not-through-a-klog-redirect)
+- [The diagnostic channel carries its own payload struct, so presents stay cheap](#the-diagnostic-channel-carries-its-own-payload-struct-so-presents-stay-cheap)
 - [A client window's close button is a handshake, not a seizure](#a-client-windows-close-button-is-a-handshake-not-a-seizure)
 - [A hover test parks the REAL cursor, and must un-park it afterwards](#a-hover-test-parks-the-real-cursor-and-must-un-park-it-afterwards)
 - [Rubber-band selection is shared source compiled twice, and it owns the behaviour](#rubber-band-selection-is-shared-source-compiled-twice-and-it-owns-the-behaviour)
@@ -213,6 +216,100 @@ there when you add an entry, or the index quietly stops being one.
 - [Protected files: `device_commit_files` blocks writes, `device_bash` doesn't](#protected-files-device_commit_files-blocks-writes-device_bash-doesnt)
 - [The device bridge can't delete files, and `git` leaves stale locks behind on it](#the-device-bridge-cant-delete-files-and-git-leaves-stale-locks-behind-on-it)
 - [Cowork device-bridge vs. direct local checkout: detected via `git config user.name`, not assumed](#cowork-device-bridge-vs-direct-local-checkout-detected-via-git-config-username-not-assumed)
+
+## The TWP transport seam has exactly one implementation, so it is UNVALIDATED
+
+Milestone 41's stage 3 added `struct win_transport`
+(`kernel/include/kernel/win_transport.h`) -- the same
+one-struct-of-function-pointers registry as `display_driver` and the VFS
+backend probe -- and there is exactly ONE implementation behind it, the
+`direct` one that calls `win_server_request()`/`win_server_debug()` in
+process. So nothing proves the interface is not simply syscall-shaped.
+
+That matters because this repo's standing rule is the opposite: an
+unreachable path is a guess, which is why `ata nodma`, `nopat` and TFS3
+v1 exist to keep fallbacks producible. An abstraction with one
+implementation is the same problem wearing a different hat, and saying
+so is cheaper than pretending otherwise.
+
+**What is most likely wrong with it, named in advance so stage 4 checks
+these first:**
+
+- **Batching.** `request()` is one message in, one answer out,
+  synchronously. A ring transport wants to submit many and collect
+  later, and the WM's ops are called inline from inside that call.
+- **Who owns the copy.** The reply buffer lives in `win_server.c`
+  between the WM and the transport, which suits a carriage that must
+  chunk. A transport that could hand over the whole reply at once (a
+  shared ring) would want to skip that copy entirely, and the current
+  shape gives it no way to say so.
+
+A cheap throwaway second implementation was considered and rejected: it
+would demonstrate the seam is not *syscall*-shaped without demonstrating
+it fits anything real, which is the only question worth answering. The
+real second implementation is stage 4's, and the honest position until
+then is that this seam is untested design, not proven design.
+
+Deliberately NOT built in this stage: the shared-memory ring. It is a
+performance item, not a prerequisite -- stage 4 needs the WM to talk
+over *something*, and the syscall path already does. See
+`docs/wm-ring3-design.md`'s "Scope DECIDED" note.
+
+## `gui` output goes to a caller-supplied sink, not through a klog redirect
+
+`apps/wm/wm_debug.c` wrote its answers with 143 `klog_write()` /
+`klog_printf()` calls, straight to whatever the serial console was
+connected to. Stage 3 needs that output to become a PAYLOAD, since the
+console now reaches the WM over the transport and a message carries
+bytes rather than side effects on a serial port.
+
+The cheap way was a global capture: `klog_set_capture(buf, cap)` for the
+duration of a command, leaving all 143 sites untouched. It was rejected,
+and the reason is the interesting part -- a redirect is GLOBAL, so
+kernel log lines emitted *during* a command get swallowed too. That is
+not hypothetical: `gui spawn` provokes ELF-loader logging, `gui open`
+provokes the WM's, and `gui damage verify on` provokes the damage
+reports. Every one of those is something a test reads back through
+`DebugConsole.logs()` or `damage_bugs()`, so the capture would have
+quietly moved them out of the serial log and into a reply nobody parses
+for them. A green suite would have stayed green while the diagnostics it
+depends on went missing.
+
+With an explicit `struct dbg_out` (`apps/wm/wm_debug.h`) only this
+file's own output is captured and the kernel log is untouched. The cost
+is a mechanical 143-site diff and a sink parameter threaded through
+~14 functions, which is a one-time price for a property that holds by
+construction afterwards.
+
+Note the sink deliberately breaks `kernel/lib`'s formatter rule (a value
+that does not fit writes NOTHING rather than a truncated one): it
+truncates and sets `overflow`. The difference is what the value IS -- a
+half-written number is wrong, whereas a transcript that stops early is
+merely shorter, and the flag is what keeps that visible instead of
+silent.
+
+## The diagnostic channel carries its own payload struct, so presents stay cheap
+
+`WIN_REQ_DEBUG_CMD`'s command and its reply ride `struct win_debug_msg`
+rather than the two structs every other message uses. This looks like a
+second mechanism and is worth explaining, because the staging note for
+stage 3 explicitly rejected a side channel.
+
+It is not one: these are ordinary `WIN_REQ_*`/`WIN_EV_*` types going
+through the one transport and the one entry point, so a ring-3 window
+server inherits the diagnostic path with nothing to re-plumb. What is
+separate is only the PAYLOAD, and it has to be. A reply is text and runs
+to kilobytes -- `gui help` measured 1699 bytes and `gui windows --json`
+grows with the window count -- while `struct win_event` is a fixed 24
+bytes and `struct win_request_msg` carries `text[32]`. Neither can hold
+one.
+
+The alternative was widening those, and that is the trap: `WIN_REQ_PRESENT`
+is sent once per client frame, and the syscall path copies the whole
+message in and back out on every request. Widening the shared struct to
+hold a diagnostic reply would put a kilobyte-sized copy on the hot path
+to serve a channel used only by test tooling. So the hot path keeps its
+56-byte message and the diagnostic pays for its own size.
 
 ## Widgets are added once a second real caller needs them -- except the checkbox
 

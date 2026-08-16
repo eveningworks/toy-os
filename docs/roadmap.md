@@ -1115,6 +1115,20 @@ guess.*
       something other than what its name suggests -- worth reading
       `wm_render.c`'s verify path before trusting either number. Start
       there rather than at the resize code.
+      **Wider than one step, and INTERMITTENT under a random walk
+      (measured 2026-08-16, M41 stage 3).** `python3 tools/damage_hunt.py
+      --seeds 1 2 3 4 5 6` reports violations on 5 of 6 seeds, and every
+      one is a `resize` interaction -- both the fixed `resize-shrink`
+      step above and random-walk steps like
+      `[8] resize Terminal by (179,-95)`. All carry `scene stable (real
+      missed damage)`. Confirmed pre-existing by rebuilding
+      `origin/main` and re-running: seed 4 reproduces byte for byte, and
+      seed 6 gave 4 violations on one main run and 5 on the next, so the
+      per-seed COUNT varies run to run even on an unchanged build. Treat
+      a count difference between two builds as noise unless it is backed
+      by a rate over several runs. The likely single root cause is
+      whatever the entry above names; this is the same defect seen from
+      more angles, not a separate one.
 
 Small things that are real, reproducible, and not worth their own
 milestone -- bugs too minor to schedule, rough edges, and behaviour
@@ -1526,11 +1540,15 @@ that are actually missing and records what already exists (more than
 this list implies -- a ring-3 process can already map the framebuffer,
 and `vmm_map_user_page()` already takes an explicit address space).
 
-**The consequence that is easy to miss:** all 13 GUI test tools drive
+**The consequence that is easy to miss:** all 16 GUI test tools drive
 the WM through `apps/wm/wm_debug.c`'s `gui` commands, over the KERNEL's
-serial console. A ring-3 WM cannot answer those, so the 175 checks that
+serial console. A ring-3 WM cannot answer those, so the 243 checks that
 are the only proof the desktop works have to move with it. The design
 doc makes that its own stage, deliberately before the WM moves.
+**Stage 3 did it (2026-08-16):** those commands now travel as TWP
+messages over `struct win_transport`, and the whole suite passes with no
+tool edited -- so the tooling has already crossed the boundary the WM
+still has to.
 
 - [x] ~~The kernel context is a scheduler participant, so `wm_run()`
       keeps drawing while a ring-3 process runs~~ -- done, see

@@ -366,7 +366,20 @@ technical conventions below:
   is meant to outlive this server (M41 moves TWS to ring 3). Symbol
   prefixes are unchanged and stay that way (`uui_`, `ugfx_`, `uapp_`,
   `WIN_REQ_*`); a toolkit's name and its prefix need not match. See
-  `docs/decisions.md`. **The WM itself is still ring 0, and
+  `docs/decisions.md`. **How a TWP message is CARRIED is now its own
+  seam** -- `struct win_transport`
+  (`kernel/include/kernel/win_transport.h`), with `SYS_WIN_REQUEST` as
+  one implementation rather than the only path. Two things follow. The
+  `gui` debug commands are protocol messages now
+  (`WIN_REQ_DEBUG_CMD`/`WIN_EV_DEBUG_OUT`), so `debug_console.c` does
+  NOT call into `apps/wm/` any more -- add a new `gui` subcommand in
+  `wm_debug.c` as before, but write its output through its `struct
+  dbg_out` sink, never `klog_write()` (a stray klog call still reaches
+  the serial port, so it silently vanishes from the reply). And the
+  seam has exactly ONE implementation, which by this repo's own
+  unreachable-path rule means it is UNVALIDATED -- see
+  `docs/decisions.md` for what is most likely wrong with it before
+  designing stage 4 around it. **The WM itself is still ring 0, and
   `docs/wm-ring3-design.md` is the staged plan for moving it** -- read
   that before touching anything in `apps/wm/` with the migration in
   mind. Its load-bearing point: all 13 GUI test tools drive the WM

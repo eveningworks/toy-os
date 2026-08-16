@@ -377,7 +377,7 @@ drops is ~10 lines in `wm_debug.c`'s existing style and is the natural
 "the second consumer is live" assertion, since no existing `gui`
 subcommand can see one.
 
-### Stage 3 -- transport swap
+### Stage 3 -- transport swap  [DONE 2026-08-16]
 
 The stage that makes stage 4 a swap rather than a leap.
 
@@ -432,6 +432,49 @@ next session starts from it rather than re-opening it:
 `gui_regress.py` passes untouched with the `gui` commands travelling as
 protocol messages, plus `damage_hunt.py` over several seeds because the
 forwarding changes event timing.
+
+#### Built, 2026-08-16 -- what it actually cost, and one correction
+
+Exit criterion MET: `gui_regress.py` 16/16 tools, 243 checks, with **no
+test tool edited at all**. The `gui` commands travel as
+`WIN_REQ_DEBUG_CMD`/`WIN_EV_DEBUG_OUT` over `struct win_transport`, and
+`kernel/core/debug_console.c` no longer calls into `apps/wm/`.
+
+**The transport was the easy half; the OUTPUT was the work.** This
+section described the stage as a transport abstraction plus forwarding,
+which reads like plumbing. In practice `wm_debug.c` answered by writing
+to `klog_write()` in 143 places, i.e. by a side effect on a serial port,
+and a message has to carry BYTES -- so the real change was giving that
+file an explicit output sink and converting every one of those sites.
+Anything estimating stage 4 from this stage should count that kind of
+work rather than the interface.
+
+**Two things this stage needed that the plan did not mention:**
+
+- **Chunking.** A reply exceeds any fixed message payload (`gui help` is
+  1699 bytes), so `WIN_REQ_DEBUG_MORE` and a `WIN_DEBUG_F_MORE` flag
+  exist. The flag is what makes a reply self-delimiting -- a chunk that
+  exactly fills the buffer is otherwise indistinguishable from a
+  truncated one, which a "read until short" client gets wrong.
+- **Its own payload struct.** `struct win_event` is 24 bytes and
+  `struct win_request_msg` carries `text[32]`; widening either would put
+  a kilobyte copy on `WIN_REQ_PRESENT`, the once-per-frame hot path. See
+  `docs/decisions.md`.
+
+**`damage_hunt.py` over seeds 1-6: 5 of 6 violated the invariant, and
+that is PRE-EXISTING, established by measurement rather than argument.**
+Rebuilding `origin/main` and running the same seeds reproduces seed 4
+byte for byte (81055 px, first at `(779,120)`, same damage rect -- the
+fingerprint `docs/roadmap.md` already records) and reproduces seed 6's
+random-walk violations too. Seed 6 first showed 4 on main against 5 on
+this branch; a second main run showed 5, so that gap was run-to-run
+variance, not the transport. Every violation is a `resize` interaction,
+which this stage does not touch.
+
+**What is NOT established:** whether the transport perturbs the timing
+of that pre-existing family at all. "Both are broken the same way" is
+what was measured; a rate comparison across many seeds on both builds
+would be needed to say more, and was not run.
 
 ### Stage 4 -- the WM process
 
