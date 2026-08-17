@@ -877,16 +877,21 @@ void syscall_dispatch(uint64_t *regs) {
             regs[14] = 1;
         }
     } else if (rax == SYS_YIELD) {
-        // Reuse scheduler_tick()'s exact mechanism (the same one the
-        // 100Hz timer IRQ drives) instead of inventing a second
+        // Reuse the timer's exact rotation instead of inventing a second
         // reschedule path -- `regs` is this process's own trapframe,
-        // laid out identically to what idt.c hands scheduler_tick() on
-        // a real timer interrupt, so calling it here is indistinguishable
-        // from "the timer happened to fire right now." A no-op for
-        // non-scheduler-managed processes (scheduler_current_pid() ==
-        // 0) -- nothing to yield to under the older single-process path.
+        // laid out identically to what idt.c hands the timer on a real
+        // interrupt. A no-op for non-scheduler-managed processes
+        // (scheduler_current_pid() == 0) -- nothing to yield to under
+        // the older single-process path.
+        //
+        // scheduler_yield(), NOT scheduler_tick(): the two differ only
+        // in that this one charges no CPU time. It used to call the
+        // timer's entry point, on the reasoning that a yield is
+        // "indistinguishable from the timer happening to fire right
+        // now" -- true for rescheduling and false for ACCOUNTING, since
+        // a yield elapses microseconds rather than a whole tick.
         if (scheduler_current_pid()) {
-            scheduler_tick(regs);
+            scheduler_yield(regs);
         }
         regs[14] = 0;
     } else if (rax == SYS_PCI_COUNT) {

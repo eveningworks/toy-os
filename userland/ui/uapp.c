@@ -13,6 +13,8 @@ struct uapp {
     int focused;  // keyboard focus, per WIN_EV_FOCUS
     int running;
     int status;
+    int timer_armed; // TWS accepted a WIN_REQ_TIMER, so on_tick arrives
+                     // as an event and the loop can block
 
     // Pointer routing (ui/uui_route.h). Empty unless the app declared
     // widgets, so an app that does its own hit-testing is untouched.
@@ -198,6 +200,14 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
         req_send(&req);
         break;
     }
+
+    case WIN_EV_TIMER:
+        // The app asked to be woken on a schedule (desc.tick_ms), so
+        // this is its on_tick -- reached from the BLOCKING loop, which
+        // is the entire point: the same callback, without the process
+        // being runnable the whole time in between.
+        if (d->on_tick && d->on_tick(a)) a->dirty = 1;
+        break;
 
     case WIN_EV_CLOSE:
         // The default ACCEPTS. An app that wants to refuse says so;
@@ -397,6 +407,22 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     req.b = desc->min_w;
     req.c = desc->min_h;
     req_send(&req);
+
+    // Arm the repeating timer, if the app asked for one. Only useful
+    // alongside an on_tick, which is the only thing it drives -- arming
+    // it without one would wake the process to do nothing, which is a
+    // slower version of the problem it exists to solve.
+    if (desc->tick_ms && desc->on_tick) {
+        req_clear(&req);
+        req.type = WIN_REQ_TIMER;
+        req.window = a->window;
+        req.a = (int)desc->tick_ms;
+        // A refusal is survivable and deliberately not fatal: uapp_run()
+        // checks the same condition and falls back to polling, so an
+        // older server that has never heard of this simply gets the old
+        // behaviour instead of an app that never ticks.
+        a->timer_armed = (req_send(&req) == 1);
+    }
     a->surface = ugfx_surface_for_window(a->window, a->w, a->h);
 
     // Now that the content size is settled, place everything in it.
@@ -449,11 +475,18 @@ int uapp_run(const struct uapp_desc *desc) {
 
     if (!uapp_open(&a, desc)) return 1;
 
-    if (desc->on_tick) {
-        // Animating: poll rather than block, so the app keeps moving
-        // with no input. The yield is politeness, not a workaround --
-        // a client doing real work every frame would otherwise take its
-        // whole timeslice and make the desktop feel sticky.
+    if (desc->on_tick && !a->timer_armed) {
+        // No timer -- either the app named no interval or the server
+        // declined one. Poll rather than block, so the app still keeps
+        // moving with no input. The yield is politeness, not a
+        // workaround: a client doing real work every frame would
+        // otherwise take its whole timeslice and make the desktop feel
+        // sticky.
+        //
+        // This is the OLD path, kept for apps that have not named a
+        // tick_ms. It costs a wake-up per tick whatever the app
+        // actually needed, which is why anything with a real cadence
+        // should set one -- see uapp.h's tick_ms.
         while (a->running) {
             if (desc->on_tick(a)) a->dirty = 1;
             uapp_pump(a, 0);

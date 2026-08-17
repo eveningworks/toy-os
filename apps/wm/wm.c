@@ -907,6 +907,10 @@ void wm_run(void) {
         // unrelated redraw to happen to fire.
         wm_reap_launched();
 
+        // Client timers, once per frame. This is what a client blocks
+        // on instead of polling -- see WIN_REQ_TIMER.
+        wm_client_check_timers();
+
         // Liveness, once per frame. Only reports a window that has gone
         // unresponsive WHILE being asked to close -- see
         // wm_client_check_liveness().

@@ -276,6 +276,53 @@ static int on_window_activate(const char *app_id) {
     return 0;
 }
 
+// The client arming or cancelling its repeating timer (WIN_REQ_TIMER).
+//
+// Milliseconds in, ticks out, floored at ONE: a client asking for a
+// faster interval than the timer resolution gets "every tick" rather
+// than a refusal, and -- more importantly -- rather than an interval of
+// zero, which would make the due-check below fire on every single frame
+// and turn a request to slow down into the busiest possible loop.
+static void on_window_timer(int pid, uint32_t id, unsigned ms) {
+    int idx = find_client_window(pid, id);
+    if (idx < 0) return;
+
+    if (ms == 0) {
+        windows[idx].timer_ticks = 0;
+        windows[idx].timer_due = 0;
+        return;
+    }
+
+    unsigned ticks = (ms * PIT_HZ) / 1000;
+    if (ticks == 0) ticks = 1;
+    windows[idx].timer_ticks = ticks;
+    windows[idx].timer_due = pit_ticks() + ticks;
+}
+
+// Once per frame: deliver WIN_EV_TIMER to every client whose interval
+// has come round.
+//
+// The next deadline is computed from NOW, not by adding the interval to
+// the old one. Those differ only when a client is slower than its own
+// timer -- and there the second form quietly builds a queue of overdue
+// firings that all arrive at once the moment it catches up, which is
+// the opposite of what a client asking to be woken less often wanted.
+void wm_client_check_timers(void) {
+    uint64_t now = pit_ticks();
+    for (int i = 0; i < window_count; i++) {
+        struct window *win = &windows[i];
+        if (!win->open || !win->timer_ticks) continue;
+        if (!wm_client_is_client_window(win)) continue;
+        if (now < win->timer_due) continue;
+
+        struct win_event ev = {0};
+        ev.type = WIN_EV_TIMER;
+        ev.window = win->client_win;
+        win_events_push(win->client_pid, &ev);
+        win->timer_due = now + win->timer_ticks;
+    }
+}
+
 static const struct win_server_ops WM_SERVER_OPS = {
     .window_created   = on_window_created,
     .window_present   = on_window_present,
@@ -287,6 +334,7 @@ static const struct win_server_ops WM_SERVER_OPS = {
     .debug_command    = on_debug_command,
     .close_pid        = on_close_pid,
     .window_activate  = on_window_activate,
+    .window_timer     = on_window_timer,
 };
 
 void wm_client_init(void) {

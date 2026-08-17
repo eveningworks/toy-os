@@ -259,6 +259,12 @@ void wm_track_launched(int pid);
 int wm_launched_pid(int slot);
 int wm_launched_max(void);
 
+// Once per frame. Delivers WIN_EV_TIMER to each client whose repeating
+// timer (TWP's WIN_REQ_TIMER) has come due, which is what lets a client
+// animate or refresh on a schedule while BLOCKING in between instead of
+// polling.
+void wm_client_check_timers(void);
+
 // Once per frame. Returns the index of a window that has just gone
 // unresponsive while being asked to close (the only case worth a
 // dialog), or -1.

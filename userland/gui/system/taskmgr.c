@@ -61,12 +61,16 @@ static void logf_(const char *fmt, ...) {
 #define ID_KILL    3
 #define ID_BUTTONS 4
 
-// How many loop passes between refreshes. There is no timer event, so
-// the refresh is paced by on_tick like Shapes' animation -- see
-// uapp.h's on_tick. Slow enough that the CPU percentages are computed
-// over a meaningful interval rather than over a couple of ticks, where
-// rounding dominates.
-#define REFRESH_PASSES 40
+// How often to re-read the process table, in milliseconds. Paced by a
+// TWS timer (uapp.h's tick_ms), so the app BLOCKS in between rather
+// than waking on every loop pass to decide it has nothing to do -- it
+// used to count 40 passes for the same effect, which still meant being
+// scheduled a hundred times a second to refresh twice.
+//
+// Long enough that the CPU percentages are computed over a meaningful
+// interval rather than over a couple of ticks, where rounding
+// dominates; short enough to feel live.
+#define REFRESH_MS 500
 
 struct row {
     int pid;
@@ -287,9 +291,6 @@ static int on_tick(struct uapp *a) {
                 g_buttons[BTN_KILL].w, g_buttons[BTN_KILL].h);
     }
 
-    static int passes;
-    if (++passes < REFRESH_PASSES) return 0;
-    passes = 0;
     refresh();
     (void)a;
     return 1; // repaint
@@ -377,6 +378,7 @@ int main(void) {
         // raises the one that exists.
         .app_id = "taskmgr",
         .layout = &LAYOUT,
+        .tick_ms = REFRESH_MS,
         .on_size = on_size,
         // Resizable, and the table follows: uui_table's set_geometry
         // recomputes its visible rows and its stretch column from

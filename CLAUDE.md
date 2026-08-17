@@ -349,6 +349,17 @@ technical conventions below:
   app writes no coordinates: declare a column/row/grid, and the window
   sizes itself from the content. Resize, focus and wheel all arrive for
   free. `docs/uapp-design.md` is the full design and its staging.
+- **An app with a cadence sets `tick_ms` and BLOCKS between frames.**
+  `uapp_desc.tick_ms` arms a TWS timer (`WIN_REQ_TIMER` ->
+  `WIN_EV_TIMER`), so `on_tick` arrives as an event instead of the loop
+  spinning: Task Manager asks for 500ms, Shapes for 10ms. Leaving it 0
+  keeps the old polling loop, which is what makes this additive -- but
+  polling wakes a process 100 times a second whatever it actually
+  wanted. Three rules: the interval is in MILLISECONDS (the tick rate
+  is the kernel's business) and is floored at one tick, never zero; the
+  next firing is computed from NOW so a slow client never accumulates a
+  backlog of overdue firings; and there is ONE timer per window. See
+  `docs/decisions.md`.
 - **An app refuses its OWN second copy -- the launcher never does.** A
   `uapp_desc` with an `app_id` and `UAPP_SINGLE_INSTANCE` sends
   `WIN_REQ_ACTIVATE` before creating anything: TWS raises the window
@@ -503,7 +514,14 @@ technical conventions below:
   counter `cpu_ticks` is billed against -- a CPU percentage is a delta
   of one over a delta of the other, and `sys_gettime` (RTC wall-clock)
   cannot serve. `cpu_ticks` is deliberately a TOTAL, not a percentage;
-  see `docs/decisions.md`. **`SYS_KILL` is unprivileged on purpose** --
+  see `docs/decisions.md`. **Only the TIMER bills it** -- `SYS_YIELD`
+  goes through `scheduler_yield()`, which reschedules and charges
+  nothing, because a tick is a unit of elapsed time and a yield elapses
+  microseconds. Calling `scheduler_tick()` there (as it used to) made
+  every polling app bill itself ~100 ticks a second and report a flat
+  100%, several at once, which one CPU cannot do. Accounting is
+  therefore SAMPLED, so sub-tick work reads 0% -- the accepted bias,
+  recorded in `docs/roadmap.md`. **`SYS_KILL` is unprivileged on purpose** --
   there is no user model to gate it on, and killing the ring-3 WM is
   stage 4's exit criterion rather than a hole.
 - **`Exec=builtin:` has ONE user left: Control Panel.** Task Manager

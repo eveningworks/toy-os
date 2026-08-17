@@ -440,6 +440,13 @@ int main(void) {
         .on_open   = on_open,
         .on_draw   = on_draw,
         .on_tick   = on_tick,
+        // One frame per timer tick -- the same cadence the old polling
+        // loop happened to run at (a yield returns about a tick later),
+        // so the rotation speed is unchanged and only the waiting is:
+        // the process blocks between frames instead of being runnable
+        // continuously. on_tick advances the angle by a fixed step per
+        // CALL, so changing this changes how fast the shapes turn.
+        .tick_ms   = 10,
         .on_key    = on_key,
         .on_press  = on_press,
         .on_motion = on_motion,

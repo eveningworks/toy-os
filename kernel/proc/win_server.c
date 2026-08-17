@@ -554,6 +554,16 @@ int win_server_request(int pid, struct win_request_msg *req) {
         req->b = cw->h;
         return 1;
     }
+    case WIN_REQ_TIMER: {
+        struct client_window *cw = lookup(pid, req->window);
+        if (!cw) return 0;
+        if (!g_ops->window_timer) return 0;
+        // Negative is nonsense rather than "cancel" -- 0 already means
+        // that, and silently reinterpreting a bad value hides the bug.
+        if (req->a < 0) return 0;
+        g_ops->window_timer(pid, cw->id, (unsigned)req->a);
+        return 1;
+    }
     case WIN_REQ_PONG: {
         struct client_window *cw = lookup(pid, req->window);
         if (!cw) return 0;

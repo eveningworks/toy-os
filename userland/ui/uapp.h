@@ -125,6 +125,21 @@ struct uapp_desc {
     // here.
     int x, y;
 
+    // How often on_tick should run, in milliseconds. 0 (the default)
+    // keeps the old behaviour: on_tick runs as fast as the loop goes,
+    // which POLLS -- the loop never blocks, and the process is runnable
+    // every scheduling round for as long as it lives.
+    //
+    // Set it, and the library arms a TWS timer instead and BLOCKS in
+    // between, so the app is woken exactly as often as it asked to be.
+    // Pick the rate the app actually needs: a clock or a process list
+    // wants 500-1000, an animation wants 10-33. Polling to do work
+    // twice a second means waking a hundred times a second to decide
+    // not to.
+    //
+    // Ignored without an on_tick, which is the only thing it drives.
+    unsigned tick_ms;
+
     // UAPP_* behaviour flags, plus the smallest content size this app
     // will accept (0 = no opinion). Sent to TWS as hints once the
     // window exists.

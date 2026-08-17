@@ -137,7 +137,7 @@ void idt_init(void) {
     idt_load((uint64_t)&idtp);
 
     pic_remap();
-    pit_init(100); // 100 Hz tick
+    pit_init(PIT_HZ);
 
     irq_register_handler(0, timer_irq_handler);
     irq_register_handler(1, keyboard_irq_handler);

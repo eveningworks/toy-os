@@ -115,6 +115,17 @@ struct window {
     // WM asks -- WIN_EV_PING with a serial, WIN_REQ_PONG back -- and
     // these track that exchange. `ping_serial` is 0 when no ping is
     // outstanding.
+    // --- the client's repeating timer (TWP's WIN_REQ_TIMER) ----------
+    //
+    // `timer_ticks` is the interval, already converted from the
+    // client's milliseconds and floored at 1; 0 means no timer.
+    // `timer_due` is the tick it next fires on. Recomputed from NOW on
+    // each firing rather than advanced by the interval, so a client
+    // that falls behind never accumulates a backlog of overdue firings
+    // it would then receive all at once.
+    unsigned timer_ticks;
+    uint64_t timer_due;
+
     uint32_t ping_serial;
     uint64_t ping_sent_tick;
     int not_responding;   // no answer within WM_PING_TIMEOUT_TICKS

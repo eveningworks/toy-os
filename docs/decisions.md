@@ -38,6 +38,8 @@ there when you add an entry, or the index quietly stops being one.
 - [The diagnostic channel carries its own payload struct, so presents stay cheap](#the-diagnostic-channel-carries-its-own-payload-struct-so-presents-stay-cheap)
 - [A client window's close button is a handshake, not a seizure](#a-client-windows-close-button-is-a-handshake-not-a-seizure)
 - [Single-instance is the app's decision, and the launcher always launches](#single-instance-is-the-apps-decision-and-the-launcher-always-launches)
+- [A yield is not a tick: SYS_YIELD reschedules without billing](#a-yield-is-not-a-tick-sys_yield-reschedules-without-billing)
+- [A client blocks between frames -- WIN_EV_TIMER, not a polling loop](#a-client-blocks-between-frames----win_ev_timer-not-a-polling-loop)
 - [A hover test parks the REAL cursor, and must un-park it afterwards](#a-hover-test-parks-the-real-cursor-and-must-un-park-it-afterwards)
 - [Rubber-band selection is shared source compiled twice, and it owns the behaviour](#rubber-band-selection-is-shared-source-compiled-twice-and-it-owns-the-behaviour)
 - [One desktop-entry directory with a `ShowIn` key, not a second directory per surface](#one-desktop-entry-directory-with-a-showin-key-not-a-second-directory-per-surface)
@@ -444,6 +446,101 @@ brought Task Manager to the front" **stayed green**, because a brand-new
 window is frontmost too. It compares the window's `client_pid` against
 the original's now. "It is on top" and "it is the same window" are
 different claims, and only the second one tests anything.
+
+## A yield is not a tick: SYS_YIELD reschedules without billing
+
+Task Manager and Shapes both showed **100% CPU at the same time**,
+which on a single CPU is impossible -- and that impossibility, visible
+in a screenshot, was the whole diagnosis. It was an accounting bug, not
+a scheduling one.
+
+`SYS_YIELD` rescheduled by calling `scheduler_tick()`, the timer's own
+entry point. The reasoning written at the time was that a yield is
+"indistinguishable from the timer happening to fire right now", and for
+the *rescheduling* that is exactly right -- the trapframe is laid out
+identically and reusing one rotation beats maintaining two. It is wrong
+for the *billing*, because `scheduler_tick()` also does
+`cpu_ticks++`, and a tick is a unit of ELAPSED TIME while a yield
+elapses microseconds.
+
+The magnitude came from a detail worth knowing: a yield returns only
+when the process is next scheduled, about a tick later. So a polling
+app yields roughly 100 times a second and charged itself 100 ticks a
+second against a 100Hz clock -- a clean, stable 100%. Every polling app
+did, simultaneously. Anything that BLOCKED (`SYS_WAIT_EVENT`) never
+yielded and read an honest 0%, which is what made it look like a
+polling problem rather than an accounting one.
+
+So the rotation is now `scheduler_rotate(regs, bill)`, with
+`scheduler_tick()` passing 1 and `scheduler_yield()` passing 0. That
+makes accounting **sampled**: whoever is current when the timer lands
+pays for the whole tick. The known bias is that a process yielding
+constantly is undercharged, and it is the honest direction to be wrong
+in -- the sum can no longer exceed 100%, where before every polling
+process independently claimed all of it. Measured after: a CPU-bound
+`spin_test` reads ~50% (the WM's kernel context takes the rest) while
+timer-paced clients read 0%, so the column discriminates. The upgrade,
+if precision is ever wanted, is a TSC delta per switch; it is in
+`docs/roadmap.md` rather than built.
+
+**The test lesson is the reusable part.** The obvious assertion --
+billed must not EXCEED elapsed -- does not catch this, and the positive
+control is what proved it: the bug produces `billed == elapsed`
+exactly, so a `>` comparison stayed green against a kernel that was
+actively wrong. The real assertion is that a process doing nothing but
+yielding must be billed SUBSTANTIALLY LESS than the whole window
+(`userland/tests/cputime_test.c`). Ask what value the bug actually
+produces, not merely which direction it errs in.
+
+It also cannot be driven by `usertest_run.py`: `run` is the legacy
+`process_run_ring3()` path with no `procs[]` slot, so the test can find
+neither itself nor any billing. `kernel/proc/cputime_test.c` spawns it
+properly, the same arrangement `pipe_test` already needed.
+
+## A client blocks between frames -- WIN_EV_TIMER, not a polling loop
+
+A Toykit app with an `on_tick` used to run its loop flat out: tick,
+pump without blocking, `sys_yield()`, repeat. That wakes a process 100
+times a second whichever cadence it actually wanted -- Task Manager
+counted 40 passes to refresh about twice a second, so 98% of its
+wake-ups existed only to decide it had nothing to do.
+
+`WIN_REQ_TIMER` arms a repeating timer on a window and `WIN_EV_TIMER`
+delivers it, so the app blocks in `SYS_WAIT_EVENT` in between and
+`on_tick` arrives as an ordinary event. An app names `tick_ms` and
+nothing else changes: Task Manager asks for 500ms, Shapes for 10ms
+(one frame per tick, the cadence its yield loop already happened to
+run at, so its rotation speed is unchanged).
+
+Four decisions inside it:
+
+**Milliseconds, not ticks.** The tick rate is the kernel's business,
+and a client asking to be woken every 500ms should not have to know it
+is 100Hz today. The server rounds to whole ticks and floors at one --
+an interval faster than the resolution becomes "every tick" rather than
+an error, and crucially rather than zero, which would fire every frame
+and turn a request to slow down into the busiest possible loop.
+
+**A deadline, not a queue.** The next firing is computed from NOW, not
+by adding the interval to the previous deadline. Those differ only when
+a client is slower than its own timer, and the second form silently
+accumulates overdue firings that all arrive at once when it catches up
+-- the opposite of what a client asking for less frequent wake-ups
+wanted. Same reasoning as the event queue dropping the oldest.
+
+**One timer per window.** A client wanting several derives them from
+one short interval, exactly as an app does on top of a frame clock. A
+general timer service is a bigger feature than anything here needs.
+
+**Polling stays as the fallback.** `tick_ms` of 0, or a server that
+declines the request, leaves the old loop in place. That is what keeps
+this additive: no existing app changed behaviour by not opting in, and
+an older server does not produce an app that simply never ticks.
+
+This also fixed `PIT_HZ` being a bare literal at the `pit_init()` call
+and a "100 Hz" remark in two comments -- fine until something had to
+convert milliseconds to ticks and would have hardcoded it a fourth
+time, where being wrong makes every interval silently the wrong length.
 
 ## A lone button routes its own clicks; the group is for grids
 

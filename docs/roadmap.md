@@ -1105,16 +1105,6 @@ guess.*
       and delete `uui_button_group.[ch]` plus its kernel-side twin.
       Not urgent -- both shapes work -- but the group is the one that
       should go, not the button.
-- [ ] **Task Manager sits at 100% CPU, because it polls.** It refreshes
-      from `on_tick`, which makes uapp's loop poll instead of block, so
-      the process is runnable every scheduling round and honestly
-      reports ~100%. Every OTHER client blocks in `SYS_WAIT_EVENT` and
-      reports 0%, which is what makes the number so conspicuous. The
-      fix is a timer EVENT (`WIN_EV_TIMER`, already listed under M41's
-      out-of-scope items): a client asks to be woken every N ms and
-      blocks in between, the way a real task manager does. Until then
-      the reading is accurate rather than wrong, which is why this is a
-      papercut and not a bug.
 
 - [ ] **`damage_sweep.py`'s `resize-shrink Terminal` step reports a real
       missed damage.** Reproduces every run, no seed needed:
@@ -1165,6 +1155,22 @@ rediscover the setup -- a seed, a command, a click sequence. And
 completed *features* stay struck through above because the milestone
 history is worth reading, but a fixed papercut is just noise.
 
+- [ ] **CPU accounting is SAMPLED, so sub-tick work reads as 0%.**
+      Whoever is current when the 100Hz timer lands pays for the whole
+      tick, so a process that does a little work and then blocks or
+      yields is systematically undercharged -- Shapes animating at
+      100Hz reads 0% while genuinely redrawing every frame. Reproduce:
+      open Task Manager and Shapes together; then `gui spawn
+      /tests/spin_test 60` and watch that one correctly read ~50%,
+      which is what shows the column still discriminates rather than
+      being stuck at zero.
+      This is the accepted tradeoff of the 2026-08-17 billing fix (a
+      yield no longer bills a whole tick -- see `docs/decisions.md`),
+      and it is the honest direction to be wrong in: the old behaviour
+      over-reported to a flat 100% and let two processes each claim the
+      whole CPU. The upgrade is a TSC delta per context switch, which
+      measures real elapsed time instead of sampling it; not scheduled,
+      because nothing here needs that precision yet.
 - [ ] **`gfxbench`'s numbers are only meaningful under KVM or on real
       hardware.** Plain QEMU's TCG ignores guest memory types entirely,
       so a write-combined framebuffer behaves exactly like a cached one

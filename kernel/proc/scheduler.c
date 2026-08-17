@@ -518,7 +518,36 @@ int scheduler_proc_info(int index, struct proc_info *out) {
 
 int scheduler_max_procs(void) { return MAX_PROCS; }
 
-void scheduler_tick(uint64_t *regs) {
+// The rotation, shared by the 100Hz timer and by SYS_YIELD. `bill` is
+// the ONLY difference between them, and it is not a detail:
+//
+// A tick is a unit of ELAPSED TIME. The timer fires after a whole one,
+// so charging the running process for it is right. A yield happens
+// whenever a process feels like it -- microseconds in, not 10ms -- so
+// charging a full tick there bills time that never passed. An app with
+// an on_tick callback yields every loop pass, thousands of times a
+// second against the PIT's hundred, so it billed itself far more ticks
+// than existed: Task Manager and Shapes both read a flat 100% (their
+// share clamped from something absurd), which two processes on one CPU
+// obviously cannot both be. Everything that BLOCKS read an honest 0%,
+// which is what made it look like a polling problem rather than an
+// accounting one.
+//
+// So this is sampling accounting now, the way a simple kernel usually
+// does it: whoever is current when the timer lands pays for the whole
+// tick. The known bias is that a process yielding constantly is
+// undercharged, since it often hands the CPU on before the tick
+// arrives -- accepted deliberately, because the alternative (a TSC
+// delta per switch) is a different feature and the sum can no longer
+// exceed 100% either way.
+static void scheduler_rotate(uint64_t *regs, int bill);
+
+void scheduler_tick(uint64_t *regs) { scheduler_rotate(regs, 1); }
+
+// SYS_YIELD's half: reschedule, charge nothing. See scheduler_rotate().
+void scheduler_yield(uint64_t *regs) { scheduler_rotate(regs, 0); }
+
+static void scheduler_rotate(uint64_t *regs, int bill) {
     if (!scheduler_armed) return;
 
     // A LEGACY BLOCKING PROCESS CANNOT BE PARKED, so while one is in
@@ -555,7 +584,7 @@ void scheduler_tick(uint64_t *regs) {
         // fired. Counted here rather than at switch_to() time because
         // this is the only place that knows a whole tick elapsed under
         // it -- see abi/proc_info.h on why the total, not a percentage.
-        procs[current_index].cpu_ticks++;
+        if (bill) procs[current_index].cpu_ticks++;
         procs[current_index].kernel_rsp = (uint64_t)regs;
         // Paired with switch_to()'s FXRSTOR. Saved on the way out
         // whether or not the process has touched FP: "has it?" is

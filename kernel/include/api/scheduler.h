@@ -47,6 +47,14 @@ void scheduler_init(void);
 // (see scheduler_demo_run()).
 void scheduler_tick(uint64_t *regs);
 
+// SYS_YIELD's entry into the same rotation. Identical to
+// scheduler_tick() except that it charges the caller NO cpu time:
+// a tick is a unit of elapsed time and a yield elapses microseconds, so
+// billing one here bills time that never passed. Reusing scheduler_tick()
+// for this made every polling app report a clamped 100% -- see
+// scheduler_rotate()'s comment.
+void scheduler_yield(uint64_t *regs);
+
 // Called from syscall.c's SYS_EXIT handler INSTEAD of the old
 // process_context_restore(&g_process_ctx, ...) path, whenever
 // scheduler_current_pid() is non-zero (i.e. the exiting process is

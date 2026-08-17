@@ -114,6 +114,29 @@
                             // below. Listed here so the event namespace
                             // stays one list.
 
+#define WIN_EV_TIMER     14 // This window's repeating timer is due. No
+                            // payload: a client that wanted to know the
+                            // time can ask, and putting one here would
+                            // be a second clock to disagree with
+                            // SYS_TICKS.
+                            //
+                            // The point of it is what a client does
+                            // BETWEEN two of these: it blocks in
+                            // SYS_WAIT_EVENT. Without a timer the only
+                            // way to animate or to refresh on a
+                            // schedule was to poll -- run the loop,
+                            // yield, run it again -- which wakes a
+                            // process 100 times a second to do work it
+                            // wanted to do twice. Task Manager was the
+                            // worked example (see docs/roadmap.md).
+                            //
+                            // ONE timer per window, not a set of them.
+                            // A client wanting several derives them
+                            // from one short interval, exactly as an
+                            // app does on top of a single frame clock;
+                            // a general timer service is a bigger
+                            // feature than anything here needs.
+
 #define WIN_EV_FOCUS      7 // a: 1 = this window gained keyboard focus,
                             // 0 = lost it.
                             //
@@ -323,6 +346,31 @@ struct win_event {
                            // if it ever bites, and not worth the extra
                            // state until then, since every launch path
                            // here is a human clicking a menu.
+
+#define WIN_REQ_TIMER      14 // `window`: which one; a: the repeat
+                           // interval in MILLISECONDS, or 0 to cancel.
+                           // Delivers WIN_EV_TIMER every `a` ms until
+                           // cancelled or the window closes.
+                           //
+                           // Milliseconds, not ticks, because the tick
+                           // rate is the kernel's business and a client
+                           // asking to be woken "every 500ms" should
+                           // not have to know it is 100Hz today. The
+                           // server rounds to whole ticks and to a
+                           // minimum of one, so an interval faster than
+                           // the timer resolution becomes "every tick"
+                           // rather than an error -- the same
+                           // clamp-don't-refuse rule the resize path
+                           // follows.
+                           //
+                           // A DEADLINE, not a queue: if the client is
+                           // slow the timer does not accumulate a debt
+                           // of missed firings, it simply fires again
+                           // once the next interval is due. A client
+                           // that cannot keep up should not be punished
+                           // with a backlog it will never drain -- the
+                           // same reasoning as the event queue dropping
+                           // the OLDEST rather than the newest.
 
 #define WIN_REQ_DEBUG_CMD  10 // Run one `gui` diagnostic command. The
                            // command text and the reply both ride

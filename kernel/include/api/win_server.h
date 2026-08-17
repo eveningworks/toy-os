@@ -129,6 +129,17 @@ struct win_server_ops {
     // nothing about whether a second copy may run, only where the first
     // one is. See WIN_REQ_ACTIVATE in abi/win_proto.h.
     int (*window_activate)(const char *app_id);
+
+    // Arm (or, with ms == 0, cancel) this window's repeating timer.
+    // OPTIONAL like every slot: a presentation layer without one simply
+    // never delivers WIN_EV_TIMER, and a client that asked for one waits
+    // forever -- which is why Toykit falls back to polling rather than
+    // assuming the event will come.
+    //
+    // The INTERVAL lives with the presentation layer because that is
+    // what has a frame loop to check it against; win_server owns no
+    // clock of its own.
+    void (*window_timer)(int pid, uint32_t id, unsigned ms);
 };
 
 // Registers the presentation layer. The WM calls this with its ops as

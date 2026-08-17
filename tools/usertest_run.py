@@ -83,6 +83,10 @@ EXCLUDED = [
     ("write_bad_test",   "hands the kernel a bad pointer on purpose"),
     ("pipe_test",        "needs a parent to spawn it and reap it; exits 3 under `run`, "
                           "and kernel/proc/pipe_test.c's KTEST covers it properly"),
+    ("cputime_test",     "must be SCHEDULER-spawned to have a procs[] slot at all; "
+                          "under `run` (the legacy process_run_ring3 path) it has none, "
+                          "so it cannot find itself and nothing is billed to it either. "
+                          "kernel/proc/cputime_test.c's KTEST spawns it properly"),
     ("echo_test",        "blocks forever reading a serial port with nothing on the far end"),
     ("gui_test",         "takes over the real screen; see apps/README.md on its scope"),
     ("win_test",         "modal window, outside the window list"),
