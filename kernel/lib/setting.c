@@ -86,6 +86,30 @@ enum setting_result setting_set(const char *name, const char *value) {
     if (!s || !value) return SETTING_INVALID;
     if (k_strlen(value) >= SETTING_VALUE_MAX) return SETTING_INVALID;
 
+    // SETTING IT TO WHAT IT ALREADY IS COSTS NOTHING. Without this,
+    // re-selecting the current value writes the file and bumps the
+    // generation, and everything watching the generation does real work
+    // -- the desktop re-reads and re-parses every .desktop file, a
+    // compositor reloads its cursor theme. A UI that over-reports a
+    // change then freezes the machine, which is exactly what happened:
+    // Control Panel applied a setting on every pointer-motion event and
+    // the resulting churn was seconds long.
+    //
+    // The file is checked too, not just the live value: on a disk where
+    // the key is absent (a fresh image, or one where /etc was lost) the
+    // live value already matches and skipping would leave nothing
+    // written, so "already correct" has to mean correct in BOTH places.
+    char cur[SETTING_VALUE_MAX];
+    cur[0] = '\0';
+    if (s->get) s->get(cur, sizeof cur);
+    if (cur[0] && k_strcmp(cur, value) == 0) {
+        char on_disk[SETTING_VALUE_MAX];
+        if (etc_config_get(s->file, s->name, on_disk, sizeof on_disk) &&
+            k_strcmp(on_disk, value) == 0) {
+            return SETTING_SAVED; // nothing to do, and nothing to announce
+        }
+    }
+
     enum setting_result r;
     if (s->apply) {
         r = (enum setting_result)s->apply(value);

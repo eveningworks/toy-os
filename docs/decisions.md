@@ -128,6 +128,7 @@ there when you add an entry, or the index quietly stops being one.
 - [A ring-3 write to the framebuffer is transient while the WM is still in ring 0, and the test has to say so](#a-ring-3-write-to-the-framebuffer-is-transient-while-the-wm-is-still-in-ring-0-and-the-test-has-to-say-so)
 - [The hardware cursor left the ring-3 migration, because it is switched off everywhere](#the-hardware-cursor-left-the-ring-3-migration-because-it-is-switched-off-everywhere)
 - [Cursor themes: shapes are data, colours are not, and the app never sees pixels](#cursor-themes-shapes-are-data-colours-are-not-and-the-app-never-sees-pixels)
+- [A whole-file read is not re-entrant, and the VFS refuses the second one](#a-whole-file-read-is-not-re-entrant-and-the-vfs-refuses-the-second-one)
 - [The desktop's app list is a directory of files, not a table in the kernel](#the-desktops-app-list-is-a-directory-of-files-not-a-table-in-the-kernel)
 - [Widgets are added once a second real caller needs them -- except the checkbox](#widgets-are-added-once-a-second-real-caller-needs-them----except-the-checkbox)
 - [A table PULLS its rows, and stores none of them](#a-table-pulls-its-rows-and-stores-none-of-them)
@@ -6947,3 +6948,44 @@ draws the pointer into the framebuffer it already owns. So the whole
 mechanism moves to ring 3 with the WM, and it is independent of the
 hardware cursor (which is switched off everywhere -- see the entry
 above).
+
+## A whole-file read is not re-entrant, and the VFS refuses the second one
+
+`fs_read()` returns a pointer into the backend's own staging buffer.
+Every backend implements it identically (`g_read_buf` in `tfs3.c` and
+`tfs.c`): free the shared buffer, allocate one the size of the file,
+then do a BLOCKING read into it.
+
+The kernel context is a scheduler participant, so the WM can be
+preempted in the middle of that read. A ring-3 process then makes a
+syscall that also reads a file -- `etc_config_get()` on a setting, say
+-- which frees the buffer the suspended read is still writing into and
+allocates a smaller one for itself. The first read resumes and writes
+past the end of somebody else's allocation.
+
+That is not a theory. `heap debug on` caught it as a red-zone violation
+on a 96-byte block whose right red-zone contained `ame=Calc` -- the tail
+of `Name=Calculator`, from a `.desktop` file the desktop was loading
+while Control Panel wrote a setting. The panic itself landed in
+`split_block()`, allocating from the free list the overflow had already
+corrupted, which is why the RIP pointed nowhere near the culprit.
+
+**`fs_read()` refuses a nested call** (`vfs.c`), returning NULL as it
+already does for a missing file. One guard, both backends, and it turns
+silent corruption into a logged refusal. The alternatives were weighed:
+a buffer per caller removes the class of bug rather than guarding it,
+but it is a different API and every caller changes -- worth doing if
+whole-file reads ever become common, not worth doing in the change that
+stops a crash.
+
+**The cost, stated because a caller cannot see it**: a refusal is
+indistinguishable from "no such file" at the call site, so a caller that
+reports "missing" may now be reporting "busy". Hence the klog line.
+
+**The lesson that generalises past this kernel**: hundreds of small
+writes should be survivable, and on Linux or Windows they are. The
+storm that exposed this -- a UI applying a setting on every
+pointer-motion event -- was a bug of its own, but fixing only the storm
+would have hidden the corruption until something else interleaved two
+file reads. When a pathological workload triggers a crash, fix the crash
+first and the workload second.

@@ -535,6 +535,31 @@ technical conventions below:
   that looks for it in a screenshot fails against a working kernel;
   assert the mapping is the real screen by comparing a client read
   against a screendump of the same pixel. See `docs/decisions.md`.
+- **`fs_read()` REFUSES a nested whole-file read**, returning NULL as it
+  does for a missing file. Every backend frees one shared staging
+  buffer, allocates a new one and does a BLOCKING read into it -- so the
+  WM being preempted mid-read while a ring-3 syscall reads a file meant
+  the second call freed the buffer the first was still writing into.
+  Caught as a heap red-zone violation on a 96-byte block holding
+  `ame=Calc`. **The cost to know**: a refusal looks exactly like "no such
+  file" at the call site, so it is logged. See `docs/decisions.md`.
+- **Setting a setting to the value it already has does NOTHING** --
+  `setting_set()` compares the live value AND the file first, and skips
+  the write and the generation bump. This is not micro-optimisation:
+  everything watching `setting_generation()` does real work when it
+  moves (the desktop re-reads every `.desktop` file), so a UI that
+  over-reports a change turns into disk I/O and a desktop-wide reload.
+- **`uui_radio_list` arms on press and COMMITS ON RELEASE**, restoring
+  the previous row if the pointer left the list -- the rule
+  `docs/gui-guidelines.md` states for every control. Two traps came out
+  of adding it. The router only names a widget to the app when that
+  widget HAS a `release` op, so a list without one is invisible to an
+  app that acts on release; and `press` must return non-zero on ANY hit,
+  because the router takes its pointer grab only when press does -- with
+  0 for the already-selected row, that one row silently loses its
+  release. **An app must honour `reason`**: Control Panel discarded it
+  and applied a setting on every pointer-motion event, which froze the
+  desktop for seconds and exposed the `fs_read()` bug above.
 - **A kernel panic now prints enough to diagnose from a pasted log.**
   The relocation offset, the LINK-TIME RIP (the kernel relocates itself,
   so a raw RIP is meaningless on its own) and a stack scan, all to the

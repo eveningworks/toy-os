@@ -223,6 +223,32 @@ def main():
     check("selecting a row selects that setting",
           sel is not None and "cursor_style" in sel, sel or "no select line")
 
+    # --- HOVERING MUST NOT COMMIT ANYTHING ---------------------------
+    #
+    # The bug this guards: cpanel's on_widget() discarded `reason`, so
+    # every router event -- including plain UUI_REASON_MOTION -- was
+    # treated as a commit. Moving the pointer across the choice list
+    # applied a setting per motion event, each of which wrote
+    # /etc/toyos.conf, bumped fs_generation() and made the desktop
+    # re-read every .desktop file. The machine froze for seconds while
+    # hovering, and the churn exposed a re-entrancy bug in fs_read()
+    # that panicked the kernel.
+    #
+    # `gui move` lasts one WM iteration, which is precisely what is
+    # wanted here: several separate motion events, no press, no release.
+    # drain() ACCUMULATES into one list rather than returning only what
+    # is new, so take a mark first -- counting the whole log here would
+    # include the sets made earlier in this test and fail always.
+    mark = len(drain(dbg))
+    for i in range(6):
+        dbg.send(f"gui move {cx + chx + 30} {cy + chy + 11 + i * 8}")
+        dbg.settle()
+    time.sleep(0.4)
+    hover_sets = [l for l in drain(dbg)[mark:] if "cpanel: set " in l]
+    check("hovering the choice list commits nothing",
+          len(hover_sets) == 0,
+          f"{len(hover_sets)} set(s) while only moving: {hover_sets[:2]}")
+
     # --- applying a choice, verified through an INDEPENDENT path ------
     old_value = stored_value(dbg, "cursor_style")
     # Pick a choice that is NOT the current one, so "it changed" cannot

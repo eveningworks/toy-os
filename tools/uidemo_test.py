@@ -183,7 +183,19 @@ class Demo:
         deadline = time.time() + SPAWN_TIMEOUT_S
         lines = []
         while time.time() < deadline:
-            lines += self.events()
+            # logs(), NOT events(). events() filters the output of the
+            # ONE command it issues, so a line printed while some other
+            # command was in flight is lost to it -- and spawn() polls
+            # `gui windows --json` while waiting for the window, which
+            # reads the wire (and therefore the app's own startup lines)
+            # to the prompt. logs() reads send()'s accumulated buffer, so
+            # it sees them wherever they landed.
+            #
+            # That race made this tool ERROR at startup roughly one run
+            # in six ("UI Demo reported no layout"), never failing a
+            # check -- a run that measured nothing. CLAUDE.md records the
+            # trap; this is it biting.
+            lines += self.dbg.logs("uidemo:")
             if any("layout listbox_row_h" in l for l in lines):
                 break
             time.sleep(0.2)

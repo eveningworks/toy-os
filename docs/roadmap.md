@@ -1636,69 +1636,37 @@ that nothing else owns.
 - [ ] Decide, in writing, what is deliberately NOT pursued (conformance
       testing, locales, pthreads, `select`/`poll`, terminal `ioctl`)
 
-### Known issue: `uidemo_test.py` errors at startup ~1 run in 6 (2026-08-17)
+### DIAGNOSED and fixed: GP fault in the heap after repeated setting changes (2026-08-17)
 
-**Measured, not inferred**: `tools/flake_hunt.py uidemo -n 6` gave 5
-pass, 0 fail, 1 ERROR in 109s, and a full `gui_regress.py` run hit the
-same thing once. The failure is always at startup and always the same:
+Kept as a worked example, because the shape recurs.
 
-    RuntimeError: UI Demo reported no layout -- is this an older kernel?
+**Symptom**: switching a setting in Control Panel a few times panicked
+with a General protection fault, and merely HOVERING the choice list
+froze the desktop for seconds.
 
-raised from `uidemo_test.py`'s `open()` after ~5s, i.e. the app's
-`uidemo: layout ...` lines never arrived in time. No CHECK has ever
-failed -- the run measures nothing at all, which is exactly the state
-`flake_hunt.py` scores as `error` rather than `pass`.
+**Three defects, found by `heap debug on`:**
 
-So this is a harness/timing problem, not a widget bug: the tool gives up
-before UI Demo has reported. Likely candidates, none confirmed -- the
-spawn racing the first frame, or `DebugConsole.logs()` clearing the
-lines before `open()` reads them (a documented trap in
-`DebugConsole.spawn()`).
+1. `cpanel`'s `on_widget()` discarded `reason`, so every routed event --
+   including plain `UUI_REASON_MOTION` -- was treated as a commit.
+   Hovering applied a setting per motion event.
+2. `setting_set()` wrote the file and bumped `fs_generation()` even when
+   the value was unchanged, and everything watching that counter does
+   real work (the desktop re-reads every `.desktop` file).
+3. **The actual corruption**: `fs_read()` was not re-entrant. Both
+   backends free one shared staging buffer, allocate a new one, then do
+   a BLOCKING read into it. The kernel context is a scheduler
+   participant, so the WM was preempted mid-read; a ring-3 syscall then
+   read a file, freed that buffer and allocated a 96-byte one, and the
+   suspended read resumed writing `.desktop` bytes past its end.
 
-**What has NOT been established**: whether the rate depends on parallel
-load (all runs above were the default `-j4`), and whether the message is
-ever preceded by a partial layout line. Re-running passes, which is
-precisely how an intermittent gets ignored -- get a rate with
-`flake_hunt.py` before concluding anything.
+The red-zone report named it exactly: a 96-byte block whose right
+red-zone held `ame=Calc` -- the tail of `Name=Calculator`.
 
-### Known issue: GP fault in the heap after repeated setting changes (2026-08-17)
-
-**Not root-caused. Reported by the maintainer, not reproduced here.**
-
-Opening Control Panel and switching the keyboard layout back and forth
-several times panicked with a General protection fault. The RIP resolved
-to `try_merge_next` (`kernel/mm/heap.c:325`), which walks a free block's
-`next` pointer -- so the fault is the SYMPTOM of heap corruption written
-earlier, not a bug at that line.
-
-Reproduction attempts that did NOT fire, all on the same build:
-- 6 rounds of `config set keyboard_layout` alternating, TCG;
-- 30 rounds with Control Panel open, under KVM (the maintainer's mode);
-- 40 rounds with a nonexistent cursor theme configured, so every poll
-  did six `fs_exists()` through a missing directory -- matching the
-  reporter's state exactly, since their image had no cursor files.
-
-So it is intermittent, or needs the real UI interaction (the report's
-log shows many `cpanel: select ...` events between the sets).
-
-**What the log did establish**: the reporter's session ran with KVM, had
-`cursor: theme "default" -- 0 of 6 shapes loaded` throughout (a separate
-bug, since fixed -- the themes were never seeded), and the desktop's
-`.desktop` live reload fired on every setting change, so several
-filesystem consumers were interleaving with a ring-3 process's
-`SYS_SETTING` syscall.
-
-**Next step when it recurs:** the panic report now prints the relocation
-offset, the link-time RIP and a stack scan, so a pasted log names the
-caller. Better still, reproduce with the heap's own detector on -- at
-the physical shell, BEFORE `gui`:
-
-    heap debug on
-    gui
-
-Red-zoned blocks report the violation at the offending free with the
-block named, which is what turns "something corrupted the heap" into a
-culprit. `heap check` sweeps on demand.
+**The reusable part**: (1) and (2) were amplifiers, not the bug. Hundreds
+of small writes SHOULD be survivable; they only weren't because a latent
+kernel bug was waiting. Fixing only the UI would have hidden (3) again.
+And `heap debug on` is what turned "something corrupted the heap" into a
+named block in one run, after three scripted reproductions had failed.
 
 ### Milestone 41 -- The GUI in ring 3 (gui, target v0.3.0)
 

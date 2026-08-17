@@ -111,12 +111,39 @@ static int rl_ops_hit(const void *w, int cx, int cy) {
     return uui_radio_list_hit((const struct uui_radio_list *)w, cx, cy) >= 0;
 }
 
+// ARM on press: move the selection so the user sees what they are
+// choosing, but remember what it was. Nothing is committed here -- the
+// app is not told until release, which is what lets a press dragged off
+// the list change nothing.
 static int rl_ops_press(void *w, int cx, int cy) {
     struct uui_radio_list *l = (struct uui_radio_list *)w;
     int idx = uui_radio_list_hit(l, cx, cy);
-    if (idx < 0 || idx == l->selected) return 0;
+    if (idx < 0) return 0;
+    l->armed_prev = l->selected;
     l->selected = idx;
+    // Non-zero on ANY hit, including a press on the row that is already
+    // selected. The router only takes a pointer grab when press returns
+    // non-zero, and without the grab no release is delivered -- so
+    // returning 0 here would silently break the commit-on-release cycle
+    // for exactly one row.
     return 1;
+}
+
+// COMMIT on release, or cancel if the pointer left the list.
+//
+// Returning non-zero is also what makes the ROUTER report this widget's
+// id to the app at all (uui_route.c only names a widget that has a
+// release op), so without this pair an app acting on release never
+// heard a radio list change -- which is exactly what happened the first
+// time Control Panel was told to stop acting on motion.
+static int rl_ops_release(void *w, int cx, int cy) {
+    struct uui_radio_list *l = (struct uui_radio_list *)w;
+    int idx = uui_radio_list_hit(l, cx, cy);
+    if (idx < 0 && l->armed_prev >= 0) {
+        l->selected = l->armed_prev; // dragged off -- put it back
+    }
+    l->armed_prev = -1;
+    return 1; // always: the app decides, and the visual may have moved
 }
 
 static int rl_ops_motion(void *w, int cx, int cy, unsigned buttons) {
@@ -157,5 +184,6 @@ const struct uui_widget_ops uui_radio_list_ops = {
     .draw   = rl_ops_draw,
     .hit    = rl_ops_hit,
     .press  = rl_ops_press,
+    .release = rl_ops_release,
     .motion = rl_ops_motion,
 };

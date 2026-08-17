@@ -298,8 +298,43 @@ int fs_delete(const char *path) {
     return bumped(g_fs->del(path));
 }
 
+// A whole-file read is NOT re-entrant, and this refuses the second one
+// rather than letting it corrupt the first.
+//
+// **The mechanism, because it is not obvious and it panicked a
+// desktop.** Every backend implements this the same way: free one
+// shared staging buffer, allocate a new one the size of the file, then
+// do a BLOCKING read into it (`g_read_buf` in tfs3.c and tfs.c). The
+// kernel context is a scheduler participant, so the WM can be preempted
+// in the middle of that read; a ring-3 process then makes a syscall
+// that also reads a file, which frees the buffer the suspended read is
+// still writing into and allocates a smaller one. The first read
+// resumes and writes past the end of somebody else's allocation.
+//
+// That is not hypothetical: it was caught by `heap debug on` as a
+// red-zone violation on a 96-byte block whose right red-zone held
+// `Name=Calc` -- the tail of a .desktop file the WM was loading while
+// Control Panel wrote a setting.
+//
+// Refusing is the honest answer here rather than queueing: a caller
+// already has to handle NULL (a missing file returns it), and the
+// alternative -- one buffer per caller -- is a different API. **The
+// cost to know about:** a refusal is indistinguishable from "no such
+// file" at the call site, so it is logged, and a caller that reports
+// "missing" may now be reporting "busy". See docs/decisions.md.
+static int g_read_in_flight;
+
 const char *fs_read(const char *path, uint32_t *out_size) {
-    return g_fs->read(path, out_size);
+    if (g_read_in_flight) {
+        klog_printf("fs: refusing a nested whole-file read of \"%s\" "
+                     "(one is already in flight)\n", path ? path : "(null)");
+        if (out_size) *out_size = 0;
+        return 0;
+    }
+    g_read_in_flight = 1;
+    const char *r = g_fs->read(path, out_size);
+    g_read_in_flight = 0;
+    return r;
 }
 
 uint64_t fs_size(const char *path) {

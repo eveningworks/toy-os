@@ -33,6 +33,15 @@ struct uui_radio_list {
     int selected;
     int hovered;   // OWNED -- driven through the ops table's motion
 
+    // What `selected` was before the press currently in flight, so a
+    // press dragged off the list can put it back. -1 means no press is
+    // armed. See the ops table's press/release pair: this widget arms
+    // on press and COMMITS ON RELEASE, which is what
+    // docs/gui-guidelines.md requires of every control here -- and what
+    // it did not do until a Control Panel that acted on every routed
+    // event, motion included, wrote a setting to disk per mouse move.
+    int armed_prev;
+
     // Own colours, for the same reason the textbox has them: a generic
     // draw slot cannot carry them as arguments.
     uint32_t bg, fg;

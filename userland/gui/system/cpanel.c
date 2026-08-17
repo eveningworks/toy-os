@@ -307,7 +307,21 @@ static void set_tab(int tab) {
 }
 
 static void on_widget(struct uapp *a, int id, int reason) {
-    (void)reason;
+    // COMMIT ON RELEASE, which is docs/gui-guidelines.md's rule for
+    // every control here -- and this file used to discard `reason`
+    // entirely. The router delivers press, MOTION, release and wheel,
+    // so acting on all of them meant merely moving the pointer across
+    // the choice list applied a setting: each motion event wrote
+    // /etc/toyos.conf, which bumped fs_generation(), which made the
+    // desktop re-read and re-parse every .desktop file. Hovering froze
+    // the machine for seconds, and the resulting filesystem churn is
+    // what exposed a re-entrancy bug in fs_read() (see vfs.c).
+    //
+    // The tabs are exempt: uui_button_group does its own arming and
+    // hands over a code only once a press completed on the same button,
+    // so it has already applied this rule internally.
+    if (id != ID_TABS && reason != UUI_REASON_RELEASE) return;
+
     switch (id) {
     case ID_TABS: {
         // The router names the WIDGET, and the group is one widget

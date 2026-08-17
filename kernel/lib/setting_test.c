@@ -31,6 +31,7 @@ static const char *const g_scratch_choices[] = { "amber", "green", "white" };
 
 static char g_scratch_value[SETTING_VALUE_MAX] = "amber";
 static int g_scratch_applies = 1; // 0 makes apply() reject everything
+static int g_scratch_apply_calls;  // how many times apply() actually ran
 
 static int scratch_choice(int index, char *out, uint32_t out_size) {
     if (index < 0 || index >= SCRATCH_CHOICES) return 0;
@@ -43,6 +44,7 @@ static void scratch_get(char *out, uint32_t out_size) {
 }
 
 static int scratch_apply(const char *value) {
+    g_scratch_apply_calls++;
     if (!g_scratch_applies) return SETTING_INVALID;
     for (int i = 0; i < SCRATCH_CHOICES; i++) {
         if (k_strcmp(value, g_scratch_choices[i]) != 0) continue;
@@ -71,6 +73,7 @@ static void scratch_begin(void) {
     setting_unregister(SCRATCH_NAME); // in case a previous test left it
     k_strlcpy(g_scratch_value, "amber", sizeof g_scratch_value);
     g_scratch_applies = 1;
+    g_scratch_apply_calls = 0;
     fs_delete(SCRATCH_FILE); // may not exist
     setting_register(&g_scratch);
 }
@@ -365,4 +368,39 @@ KTEST("setting", "a real setting's value matches its subsystem") {
     char v[SETTING_VALUE_MAX];
     KTEST_ASSERT_EQ(setting_get("font_size", v, sizeof v), 1);
     KTEST_ASSERT_EQ(k_strcmp(v, gfx_font_size_name(gfx_font_size())), 0);
+}
+
+KTEST("setting", "setting a value it already has does no work at all") {
+    // Why this matters far beyond tidiness: everything watching
+    // setting_generation() does REAL work when it moves -- the desktop
+    // re-reads and re-parses every .desktop file, a compositor reloads
+    // its cursor theme. So a UI that over-reports a change turns into
+    // disk I/O and a desktop-wide reload, and one that does it per
+    // pointer-motion event freezes the machine for seconds. That is not
+    // hypothetical; it is the bug this check was written after.
+    scratch_begin();
+
+    // First set is real: the live value already matches ("amber"), but
+    // the FILE has no key yet, so it must still be written. Skipping on
+    // the live value alone would leave a fresh disk with nothing saved.
+    KTEST_ASSERT_EQ(setting_set(SCRATCH_NAME, "amber"), SETTING_SAVED);
+    KTEST_ASSERT(g_scratch_apply_calls >= 1);
+
+    int applies = g_scratch_apply_calls;
+    uint32_t gen = setting_generation();
+
+    // Second set of the same value: still SAVED (it IS saved), but
+    // nothing ran and nobody was told.
+    KTEST_ASSERT_EQ(setting_set(SCRATCH_NAME, "amber"), SETTING_SAVED);
+    KTEST_ASSERT_EQ(g_scratch_apply_calls, applies);
+    KTEST_ASSERT_EQ((int)setting_generation(), (int)gen);
+
+    // The control: a DIFFERENT value must still apply and still
+    // announce itself, or this optimisation has broken settings
+    // entirely rather than made them cheap.
+    KTEST_ASSERT_EQ(setting_set(SCRATCH_NAME, "green"), SETTING_SAVED);
+    KTEST_ASSERT_EQ(g_scratch_apply_calls, applies + 1);
+    KTEST_ASSERT(setting_generation() != gen);
+
+    scratch_end();
 }
