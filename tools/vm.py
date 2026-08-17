@@ -165,7 +165,13 @@ def cmd_start(args):
         # A VNC head rather than -display none: input routing needs a
         # display head to exist even when nothing connects to it (see
         # qmp_test.py's docstring), and `vm.py shot` uses QMP.
-        "-vga", "std", "-vnc", f":{args.vnc}",
+        # `--vga vmware` is not cosmetic: vmsvga is the only driver that
+        # declares DISPLAY_CAP_CURSOR and the only one that can
+        # modeset, so the hardware-cursor and modesetting paths are
+        # UNREACHABLE under the default `std` adapter. Same rule as
+        # `--cpu` above and `ata nodma` -- a fallback nothing can reach
+        # is a guess.
+        "-vga", args.vga, "-vnc", f":{args.vnc}",
         # A unix socket for COM1, with nowait so the guest boots
         # immediately rather than waiting for a client. Anything printed
         # before the first connect is lost, which is fine: exec() gets a
@@ -313,6 +319,11 @@ def main():
     ap.add_argument("--vnc", type=int, default=None,
                     help=f"override the VNC display (default: {VNC_DISPLAY} + --instance)")
     ap.add_argument("--timeout", type=float, default=30.0)
+    ap.add_argument("--vga", default="std",
+                    help="QEMU -vga adapter (std, vmware, ...). `vmware` is the only "
+                         "one this kernel has a modesetting driver for, and the only "
+                         "one offering a hardware cursor -- so those paths are "
+                         "unreachable under the default `std`.")
     ap.add_argument("--cpu", default=None,
                      help="QEMU -cpu model (e.g. max, Skylake-Client). The default "
                           "qemu64 reports as AMD and has no CPUID leaf 4, so this is "

@@ -126,6 +126,7 @@ there when you add an entry, or the index quietly stops being one.
 - [The ring-3 WM owns the back buffer, and its death drops you to a text shell](#the-ring-3-wm-owns-the-back-buffer-and-its-death-drops-you-to-a-text-shell)
 - [The kernel owns its idle work, so the WM's departure deletes a call rather than a capability](#the-kernel-owns-its-idle-work-so-the-wms-departure-deletes-a-call-rather-than-a-capability)
 - [A ring-3 write to the framebuffer is transient while the WM is still in ring 0, and the test has to say so](#a-ring-3-write-to-the-framebuffer-is-transient-while-the-wm-is-still-in-ring-0-and-the-test-has-to-say-so)
+- [The hardware cursor left the ring-3 migration, because it is switched off everywhere](#the-hardware-cursor-left-the-ring-3-migration-because-it-is-switched-off-everywhere)
 - [The desktop's app list is a directory of files, not a table in the kernel](#the-desktops-app-list-is-a-directory-of-files-not-a-table-in-the-kernel)
 - [Widgets are added once a second real caller needs them -- except the checkbox](#widgets-are-added-once-a-second-real-caller-needs-them----except-the-checkbox)
 - [A table PULLS its rows, and stores none of them](#a-table-pulls-its-rows-and-stores-none-of-them)
@@ -6848,3 +6849,42 @@ rather than advisory because a `display_driver` may declare
 `DISPLAY_CAP_NEEDS_FLUSH` (vmsvga does), where written pixels are
 invisible until the driver is told; `display_flush()` already no-ops on
 a scanned-out adapter, so one path serves both and stays exercised.
+
+## The hardware cursor left the ring-3 migration, because it is switched off everywhere
+
+Milestone 41 stage 4a listed "cursor and mouse-bounds ops over TWP" as
+requirement R3, to be deferred to 4b so it would have a real caller.
+Measuring it removed the requirement instead.
+
+`DISPLAY_CAP_CURSOR` is declared by exactly one driver, `vmsvga` -- and
+that driver sets `g_cursor_enabled = 0`, so it does not advertise the
+capability at all by default. The reason is recorded in `vmsvga.c`: with
+a RELATIVE PS/2 mouse the hardware cursor made the pointer jump, and the
+configuration where it genuinely works is virtio-gpu plus virtio-input,
+i.e. an ABSOLUTE pointer, which is Milestone 27a. Under the default
+`-vga std` adapter there is no cursor capability in the first place.
+
+So the hardware cursor is not untested -- it is unreachable on every
+configuration this OS currently boots, and a boot log says so
+(`caps: flush`, with `cursor hardware (disabled by default)`).
+
+Two consequences. **A TWP cursor request would be a protocol path to a
+capability nothing enables**, which is worse than the "only a test calls
+it" problem it was meant to solve -- so R3 moves to M27a, where the
+driver and the absolute pointer that make it work both arrive, rather
+than to stage 4b. And **the cursor that actually exists is the WM's
+software sprite**, which needs nothing from the kernel: a ring-3
+compositor draws its pointer into the framebuffer it is already granted,
+with its own damage, exactly as the ring-0 one does today.
+
+Cursor THEMING is therefore independent of the migration entirely --
+it is about the sprite the compositor draws, so it lives in the
+compositor plus data files, with no protocol and no kernel change.
+
+**The general lesson, which is this repo's own rule catching a plan
+rather than a bug:** before designing a path to reach a capability, check
+that the capability is switched ON somewhere. `tools/vm.py --vga vmware`
+exists now partly because that check had no way to be run -- the
+modesetting and cursor paths are both unreachable under the default
+adapter, the same shape as `--cpu max` for SMEP/SMAP and
+`--kvm --cpu host,+invtsc` for the TSC clocksource.

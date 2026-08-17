@@ -630,7 +630,35 @@ requirement is that `gui damage verify on` keeps working *with the same
 output grammar* -- pixel count, bounding box, and the third-render
 stability verdict -- because the tools parse it.
 
-**R3. The cursor.** `gfx_hw_cursor_available()`/`_define()`/`_move()`
+**R3. The cursor -- REMOVED from stage 4 (2026-08-17), moved to
+Milestone 27a.** Not deferred: measured away. `DISPLAY_CAP_CURSOR` is
+declared by one driver (`vmsvga`) which disables it by default
+(`g_cursor_enabled = 0`) because a hardware cursor over a RELATIVE PS/2
+mouse makes the pointer jump; the configuration where it works is
+virtio-gpu plus virtio-input, i.e. an absolute pointer, which is M27a.
+The default `-vga std` adapter has no cursor capability at all. So a
+TWP cursor request would be a protocol path to a capability nothing
+enables -- worse than the test-only-caller problem it was meant to
+solve.
+
+  What remains is the WM's SOFTWARE sprite, which needs nothing from
+  the kernel: a ring-3 compositor draws its pointer into the
+  framebuffer R1 already grants it, with its own damage, exactly as the
+  ring-0 one does. Mouse BOUNDS fold into the grant, which already
+  reports the geometry. Cursor THEMING is independent of the migration
+  altogether -- it is about the drawn sprite, so it lives in the
+  compositor plus data files. See `docs/decisions.md`.
+
+  A live bug this turned up, for whoever builds the hardware path in
+  M27a: the software path resolves four shapes
+  (`enum wm_cursor_kind` -- arrow, H, V, diagonal) and the hardware
+  path uploads ONE sprite and ignores the kind, because
+  `draw_cursor_at()` returns before `resolve_cursor_kind()` is
+  consulted. Unnoticed because no configuration reaches it.
+
+  The original note, for the reasoning:
+
+  **The cursor.** `gfx_hw_cursor_available()`/`_define()`/`_move()`
 sit on the display driver, which is hardware and stays in ring 0, so
 these become TWP requests or a small syscall. `mouse_init()` and
 `mouse_set_bounds()` are the other half: the WM currently initialises
@@ -745,10 +773,9 @@ should be cut the same way -- a plausible split, to be confirmed when it
 starts: **4a** the kernel capabilities (R1's map/present, R3, R4, R5)
 with the WM still in ring 0 calling them, which is the stage-3 trick
 again and keeps the suite green throughout -- **R1, R4 and R5 landed
-2026-08-17, so 4a is DONE except R3, which was deliberately deferred to
-4b** (the ring-0 WM calls `gfx_hw_cursor_*` directly and cannot
-exercise a TWP cursor request, so shipping one now would add a
-protocol path whose only caller is a test); **4b** the ring-3 binary
+2026-08-17 and R3 was REMOVED (the hardware cursor is switched off on
+the only driver that has one -- it moves to M27a), so 4a is DONE**;
+**4b** the ring-3 binary
 drawing the desktop with input still routed the old way; **4c** the
 input and debug cutover plus R9's deletions; **4d** the death path (R7)
 and its test. 4a is the one that can be built and proven without

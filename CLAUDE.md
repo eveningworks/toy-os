@@ -486,9 +486,15 @@ technical conventions below:
   claim that it did was a comment pointing at a since-deleted file.
   **Every prerequisite is now complete, and stage 4's own REQUIREMENTS
   are written up as R1-R9** (2026-08-17), measured from `apps/wm/`'s
-  call surface rather than estimated. **Stage 4a is DONE except R3: R1,
-  R4 and R5 are BUILT** (R3, the cursor over TWP, is deferred to 4b
-  because the ring-0 WM cannot exercise it). Read that before touching
+  call surface rather than estimated. **Stage 4a is DONE: R1, R4 and R5
+  are BUILT and R3 was REMOVED** -- the hardware cursor is switched off
+  on the only driver that has one (`vmsvga`'s `g_cursor_enabled = 0`,
+  because a hw cursor over a relative PS/2 mouse makes the pointer
+  jump), so it is unreachable on every configuration this OS boots and
+  moved to M27a with virtio-input. **`tools/vm.py --vga vmware` is how
+  you reach the modesetting driver at all** -- the default `std`
+  adapter has neither modesetting nor a cursor plane, same shape as
+  `--cpu max` for SMEP/SMAP. Read that before touching
   anything in `apps/wm/` with the migration in
   mind.
 - **The kernel's idle work has ONE owner: `scheduler_idle()`**
@@ -1306,6 +1312,7 @@ python3 tools/vm.py stop
 python3 tools/vm.py run "ktest"          # start+exec+stop in one
 python3 tools/vm.py --kvm run "stress 150"   # same, KVM-accelerated (see `make run-kvm`)
 python3 tools/vm.py --cpu Skylake-Client run "lscpu"  # a specific QEMU CPU model
+python3 tools/vm.py --vga vmware start   # the MODESETTING driver (vmsvga); `std` has none
 python3 tools/vm.py --instance 2 --disk /tmp/b.img start  # a second VM, alongside
 ```
 

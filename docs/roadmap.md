@@ -1332,6 +1332,28 @@ Measured 2026-08-13: `-vga virtio` boots this kernel fine at 1280x720
 (GRUB sets a VBE mode and we use it), so the device is available to
 develop against today with no bring-up risk.
 
+**Milestone 41's cursor requirement landed here (2026-08-17).** Stage
+4a listed "the cursor over TWP" as a requirement and measuring it moved
+it out: `DISPLAY_CAP_CURSOR` is declared only by `vmsvga`, which
+disables it by default because a hardware cursor over a RELATIVE PS/2
+mouse makes the pointer jump -- so the capability is unreachable on
+every configuration this OS boots, and a protocol path to reach it
+would have been worse than useless. It belongs with the two things that
+make it work, both of which are on this list: an absolute pointer
+(`virtio-input`) and a specified cursor plane (`virtio-gpu`). Until
+then the compositor draws a software sprite, which is what every
+reachable configuration already does. See `docs/decisions.md`.
+
+- [ ] **A live bug to fix when the hardware path is reachable**: the
+      software cursor resolves four shapes (`enum wm_cursor_kind` --
+      arrow, horizontal, vertical, diagonal) and the hardware path
+      uploads ONE sprite and ignores the kind, because
+      `draw_cursor_at()` (`apps/wm/wm_render.c`) returns before
+      `resolve_cursor_kind()` is consulted. So on a hw-cursor adapter a
+      resize edge would show a plain arrow. Unnoticed because nothing
+      reaches that path; reproduce with `tools/vm.py --vga vmware`
+      once `vmsvga.c`'s `g_cursor_enabled` is turned on.
+
 - [ ] virtio transport: PCI capability parsing, virtqueue (descriptor
       table / avail / used rings), notification + ISR handling. Every
       item below depends only on this.
