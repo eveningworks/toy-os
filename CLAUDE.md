@@ -1074,6 +1074,22 @@ simpler than the Cowork setup in every way that setup works around --
 
 ## Building
 
+**Boot flags can be baked into the ISO** rather than typed into the
+GRUB menu each boot: `make iso KCMDLINE="video=1920x1080 nokaslr"`
+(also `live-iso`/`demo-iso`). Empty by default, so every automated path
+is unaffected. `docs/boot-flags.md` lists every word, and the
+`grub*.cfg` files carry a short summary of it for anyone reading them on
+the ISO.
+
+**`video=<W>x<H>` only does something on a MODESETTING driver.**
+`vmsvga` programs the CRTC and honours it; a plain VESA framebuffer
+cannot, so on an adapter GRUB has already fixed the flag is inert --
+which is the VirtualBox VBoxVGA case, where the only fix is
+`VBoxManage setextradata <vm> CustomVideoMode1 1280x720x32` to put the
+mode in the BIOS list at all. The driver walks a fallback LADDER
+(`display_mode_candidate()`) rather than giving up on one refusal, and
+falls back to GRUB's mode only when nothing on it works.
+
 ```
 make all    # kernel.bin + userland test ELFs
 make iso    # + toy-os.iso (grub-mkrescue)

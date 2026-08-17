@@ -3,6 +3,8 @@
 #include "klog.h"
 #include "kfmt.h"
 #include "paging.h"
+#include "multiboot.h" // multiboot_cmdline() -- the video= flag
+#include "string.h"    // k_strstr, k_isdigit
 
 // Small and fixed: there are two drivers today and a handful is the
 // realistic ceiling. A linked list would need each driver to carry a
@@ -80,6 +82,94 @@ int display_probe(void) {
 const struct display_driver *display_active(void) { return g_active; }
 
 int display_write_combining(void) { return g_wc; }
+
+// --- the mode a modesetting driver should aim for ---------------------
+
+// What the multiboot2 header asks GRUB for (boot.asm). Kept in step by
+// hand: the header is assembled, so it cannot share a constant with C.
+#define DISPLAY_DEFAULT_W 1280
+#define DISPLAY_DEFAULT_H 720
+
+// gfx.c's back buffer is a fixed array, so no mode above it can ever be
+// used however capable the adapter is. Stated here as well so the
+// ladder never offers a candidate gfx_init() would refuse -- a driver
+// that programmed one would come up with a live display the rasteriser
+// declines to draw into, which is a black screen with no error.
+#define DISPLAY_MAX_W 1920
+#define DISPLAY_MAX_H 1080
+
+// The standard sizes, largest first. Deliberately common VESA/panel
+// geometries rather than a computed sequence: a mode a real BIOS or a
+// virtual adapter actually offers is what makes a fallback useful.
+static const struct { int w, h; } DISPLAY_LADDER[] = {
+    { 1920, 1080 },
+    { 1600, 900 },
+    { 1366, 768 },
+    { 1280, 1024 },
+    { 1280, 720 },
+    { 1024, 768 },
+    { 800, 600 },
+    { 640, 480 },
+};
+#define DISPLAY_LADDER_COUNT ((int)(sizeof DISPLAY_LADDER / sizeof DISPLAY_LADDER[0]))
+
+void display_preferred_mode(int *out_w, int *out_h) {
+    int w = DISPLAY_DEFAULT_W, h = DISPLAY_DEFAULT_H;
+
+    // `video=<W>x<H>` on the GRUB line. Parsed rather than matched by
+    // substring like the other boot flags, because it carries values --
+    // and a value that does not parse is IGNORED, leaving the default,
+    // rather than being guessed at (the toolkit's rule: a parser
+    // rejects rather than guesses).
+    const char *cmdline = multiboot_cmdline();
+    const char *p = cmdline ? k_strstr(cmdline, "video=") : 0;
+    if (p) {
+        p += 6;
+        uint32_t vw = 0, vh = 0;
+        const char *x = p;
+        while (k_isdigit(*x)) { vw = vw * 10 + (uint32_t)(*x - '0'); x++; }
+        if (*x == 'x' || *x == 'X') {
+            x++;
+            while (k_isdigit(*x)) { vh = vh * 10 + (uint32_t)(*x - '0'); x++; }
+        }
+        if (vw >= 640 && vh >= 480 && vw <= DISPLAY_MAX_W && vh <= DISPLAY_MAX_H) {
+            w = (int)vw;
+            h = (int)vh;
+        } else if (vw || vh) {
+            klog_printf("display: ignoring video=%ux%u -- outside 640x480..%dx%d\n",
+                         vw, vh, DISPLAY_MAX_W, DISPLAY_MAX_H);
+        }
+    }
+
+    if (out_w) *out_w = w;
+    if (out_h) *out_h = h;
+}
+
+int display_mode_candidate(int index, int *out_w, int *out_h) {
+    int pw, ph;
+    display_preferred_mode(&pw, &ph);
+    if (index < 0) return 0;
+    if (index == 0) {
+        if (out_w) *out_w = pw;
+        if (out_h) *out_h = ph;
+        return 1;
+    }
+
+    // Walk the ladder, skipping anything at or above the preferred
+    // size: index 0 already offered that, and a fallback that went
+    // BIGGER would be ignoring what was asked for.
+    int seen = 0;
+    for (int i = 0; i < DISPLAY_LADDER_COUNT; i++) {
+        if (DISPLAY_LADDER[i].w >= pw && DISPLAY_LADDER[i].h >= ph) continue;
+        seen++;
+        if (seen == index) {
+            if (out_w) *out_w = DISPLAY_LADDER[i].w;
+            if (out_h) *out_h = DISPLAY_LADDER[i].h;
+            return 1;
+        }
+    }
+    return 0;
+}
 
 int display_has(uint32_t cap) {
     return g_active && (g_active->caps & cap) != 0;

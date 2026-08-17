@@ -6,6 +6,19 @@
 # every automated path wants -- `make run-menu` overrides it.
 GRUB_TIMEOUT ?= 0
 
+# Extra words appended to the kernel's GRUB command line, baked into the
+# ISO at build time. Empty by default, so every automated path (the boot
+# smoke test, ktest, CI, gui_regress) boots exactly as before.
+#
+#     make iso KCMDLINE="video=1920x1080"
+#     make live-iso KCMDLINE="video=1600x900 nokaslr"
+#
+# This exists so a boot flag can be tried without pressing `e` in the
+# GRUB menu and retyping it every boot. Every word the kernel looks for
+# is listed in docs/boot-flags.md; nothing here validates them, because
+# the kernel matches by substring and an unknown word is simply ignored.
+KCMDLINE ?=
+
 GRUB_MKRESCUE := $(shell command -v grub-mkrescue 2>/dev/null || command -v grub2-mkrescue 2>/dev/null)
 
 CC = gcc
@@ -656,7 +669,7 @@ iso: version $(KERNEL) $(USERLAND_ELVES) seed
 	mkdir -p iso/boot/grub
 	rm -f iso/boot/live.img
 	cp $(KERNEL) iso/boot/kernel.bin
-	sed 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' grub.cfg > iso/boot/grub/grub.cfg
+	sed -e 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' -e 's|@KCMDLINE@|$(KCMDLINE)|' grub.cfg > iso/boot/grub/grub.cfg
 	@if [ -z "$(GRUB_MKRESCUE)" ]; then \
 		echo "make: grub-mkrescue not found (looked for grub-mkrescue and grub2-mkrescue)."; \
 		echo "      Install GRUB's rescue tools + xorriso + mtools -- see README.md's"; \
@@ -675,7 +688,7 @@ live-iso: version $(KERNEL) $(USERLAND_ELVES) seed $(LIVE_IMG)
 	mkdir -p iso-live/boot/grub
 	cp $(KERNEL) iso-live/boot/kernel.bin
 	cp $(LIVE_IMG) iso-live/boot/live.img
-	sed 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' grub-live.cfg > iso-live/boot/grub/grub.cfg
+	sed -e 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' -e 's|@KCMDLINE@|$(KCMDLINE)|' grub-live.cfg > iso-live/boot/grub/grub.cfg
 	@if [ -z "$(GRUB_MKRESCUE)" ]; then \
 		echo "make: grub-mkrescue not found -- see README.md's dependency table."; \
 		exit 1; \
@@ -698,7 +711,7 @@ demo-iso: version $(KERNEL) $(USERLAND_ELVES) seed $(LIVE_IMG)
 	mkdir -p iso-demo/boot/grub
 	cp $(KERNEL) iso-demo/boot/kernel.bin
 	cp $(LIVE_IMG) iso-demo/boot/live.img
-	sed 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' grub-demo.cfg > iso-demo/boot/grub/grub.cfg
+	sed -e 's/@GRUB_TIMEOUT@/$(GRUB_TIMEOUT)/' -e 's|@KCMDLINE@|$(KCMDLINE)|' grub-demo.cfg > iso-demo/boot/grub/grub.cfg
 	@if [ -z "$(GRUB_MKRESCUE)" ]; then \
 		echo "make: grub-mkrescue not found -- see README.md's dependency table."; \
 		exit 1; \

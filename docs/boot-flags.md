@@ -14,6 +14,7 @@ position. Pick names that cannot be substrings of each other.
 
 | Flag | Effect | Read by |
 |---|---|---|
+| `video=<W>x<H>` | Asks a MODESETTING display driver for that screen size, between 640x480 and 1920x1080 (gfx.c's back buffer is the ceiling). Falls back down a ladder of standard sizes if the adapter refuses, and to GRUB's own mode if none work. **Only meaningful to a driver that can program the CRTC** -- `vmsvga` can, a plain VESA framebuffer cannot, so on an adapter GRUB has already fixed this does nothing and that is not a bug. Exists because a VESA BIOS with a short mode list (VirtualBox's VBoxVGA) leaves GRUB on 640x480 however big the multiboot header's preference was. | `kernel/drivers/display/display.c` |
 | `nokaslr` | Disables kernel ASLR — the kernel runs where it was linked instead of relocating itself to a random 2 MiB-aligned base. First thing to try when something breaks in a way that smells address-dependent. | `kernel/arch/x86_64/reloc.c` |
 | `nopat` | Forces the framebuffer's write-combining to go through an MTRR instead of PAT. Exists so the MTRR fallback is reachable — every machine this OS runs on has PAT, so without this switch that path could never be tested. | `kernel/arch/x86_64/paging.c` |
 | `notsc` | Keeps the coarse 100 Hz PIT as the clocksource instead of letting the TSC take over. Exists so the PIT path stays reachable on a machine whose TSC is invariant — the mirror of `nopat`, and the only way to exercise 10 ms-resolution timekeeping (and the 0 % CPU readings it produces for sub-tick work) on hardware that would otherwise never use it. | `kernel/arch/x86_64/clocksource_tsc.c` |
@@ -76,3 +77,20 @@ via `etc_config_get()`/`etc_config_set()` instead — see
 `docs/filesystem-layout.md`. The command line is for decisions that have
 to be made before the filesystem is mounted, or that exist only to make
 a code path reachable for testing.
+
+## Setting one without editing the menu
+
+Every word above can be baked into the ISO at build time, instead of
+pressing `e` in the GRUB menu and retyping it on each boot:
+
+```
+make iso       KCMDLINE="video=1920x1080"
+make live-iso  KCMDLINE="video=1600x900 nokaslr"
+make demo-iso  KCMDLINE="rammeter"
+```
+
+`KCMDLINE` is empty by default, so every automated path -- the boot
+smoke test, `ktest`, CI, `gui_regress.py` -- boots exactly as it did
+before. The substitution happens in the `grub*.cfg` -> `iso*/` step, and
+those files carry a one-screen summary of this table for whoever reads
+them on the ISO itself.

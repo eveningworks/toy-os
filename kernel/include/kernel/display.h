@@ -137,4 +137,37 @@ int  display_set_mode(const struct display_mode *mode);
 // it beside its timings for exactly that reason.
 int display_write_combining(void);
 
+// The mode a MODESETTING driver should aim for, in pixels.
+//
+// Defaults to the size the multiboot2 header asks GRUB for
+// (kernel/arch/x86_64/boot.asm), and is overridden by `video=<W>x<H>`
+// on the GRUB command line -- see docs/boot-flags.md.
+//
+// WHY THIS EXISTS: GRUB can only pick from the modes the firmware
+// offers, and a VESA BIOS with a short list (VirtualBox's VBoxVGA is
+// the reported case) falls back to 640x480 however big the header's
+// preference was. A driver that can program the CRTC itself does not
+// have to live with that -- but it needs to be told what to aim for,
+// and mirroring whatever GRUB settled on means it never asks for more.
+//
+// It is only meaningful to a driver with DISPLAY_CAP_MODESET-class
+// ability. On a plain VESA framebuffer (vesafb) nothing can act on it,
+// which is worth knowing before reporting the flag as broken.
+void display_preferred_mode(int *out_w, int *out_h);
+
+// The FALLBACK LADDER a modesetting driver walks. Index 0 is the
+// preferred mode above; each next index is the next smaller standard
+// size. Returns 1 while `index` names a candidate, 0 once exhausted.
+//
+// A ladder rather than a single attempt because "the adapter cannot do
+// 1920x1080" should mean "then try 1600x900", not "give up and keep
+// whatever GRUB left". Falling back to GRUB's mode is still the last
+// resort, and it is always available -- but it should be the answer
+// after the ladder, not instead of it.
+//
+// Candidates larger than the preferred mode are skipped: the flag says
+// what the user asked for, and quietly exceeding it would be a
+// different kind of wrong from quietly undershooting it.
+int display_mode_candidate(int index, int *out_w, int *out_h);
+
 #endif

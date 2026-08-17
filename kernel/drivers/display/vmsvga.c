@@ -172,7 +172,10 @@ int vmsvga_init(uint32_t want_w, uint32_t want_h) {
     uint32_t max_w = reg_read(SVGA_REG_MAX_WIDTH);
     uint32_t max_h = reg_read(SVGA_REG_MAX_HEIGHT);
     if (want_w > max_w || want_h > max_h) {
-        klog_printf("vmsvga: %ux%u exceeds the adapter's %ux%u -- staying on GRUB's mode\n",
+        // Not a failure: the probe walks a ladder and will try the next
+        // size down. Refusing WITHOUT touching the current mode is what
+        // makes that safe, so nothing below this point has run yet.
+        klog_printf("vmsvga: %ux%u exceeds the adapter's %ux%u -- trying smaller\n",
                      want_w, want_h, max_w, max_h);
         return 0;
     }
@@ -329,13 +332,37 @@ void vmsvga_cursor_show(int on) {
 // is the point of stating both.
 
 static int vmsvga_drv_probe(void) {
+    // THIS DRIVER SETS THE MODE; it does not inherit one.
+    //
+    // It used to mirror GRUB's geometry "so the takeover is invisible",
+    // which is fine when GRUB got what the multiboot header asked for
+    // and useless when it did not: a VESA BIOS with a short mode list
+    // (VirtualBox's is the reported case) leaves GRUB on 640x480, and
+    // faithfully re-programming 640x480 on an adapter that can do far
+    // better is the one thing a modesetting driver should not do.
+    //
+    // So: walk the ladder (display.h), largest first, and take the
+    // first mode the adapter accepts. vmsvga_init() already refuses a
+    // request past SVGA_REG_MAX_WIDTH/HEIGHT without disturbing the
+    // current mode, which is what makes trying several safe.
+    int w, h;
+    for (int i = 0; display_mode_candidate(i, &w, &h); i++) {
+        if (vmsvga_init((uint32_t)w, (uint32_t)h)) {
+            klog_printf("vmsvga: set %dx%d\n", w, h);
+            return 1;
+        }
+    }
+
+    // Nothing on the ladder worked. Fall back to whatever GRUB left --
+    // always available, and better than no display at all. vesafb has
+    // not been activated yet, so multiboot's own record is reached
+    // through the surface the previous driver would report.
     struct display_surface cur;
-    // Match GRUB's current geometry so the takeover is invisible.
-    // vesafb has not been activated at this point, so ask multiboot's
-    // own record through the surface the previous driver would report.
     extern void vesafb_get_probe_surface(struct display_surface *out);
     vesafb_get_probe_surface(&cur);
     if (!cur.width || !cur.height) return 0;
+    klog_printf("vmsvga: no ladder mode accepted -- keeping GRUB's %ux%u\n",
+                 cur.width, cur.height);
     return vmsvga_init(cur.width, cur.height);
 }
 

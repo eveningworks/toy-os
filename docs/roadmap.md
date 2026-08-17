@@ -1094,6 +1094,33 @@ guess.*
 
 ### Known issues and papercuts (unscheduled)
 
+- [ ] **Make the GUI test tooling RESOLUTION-AGNOSTIC.** The suite
+      assumes 1280x720 in at least two places, which is what stops the
+      default resolution being changed (and stops the tools running
+      against a `video=`-booted guest). Known assumptions:
+      `qmp_test.py`'s `QMPSession` starts the cursor at a hardcoded
+      **(640, 360)** -- the centre of 1280x720, and the value
+      `mouse_init()` resets to -- so every open-loop `goto()` would be
+      offset at any other size; and `gui_flow.py` carries calibrated
+      Start-menu numbers that have needed re-measuring three times
+      already.
+
+      The work: derive the screen size once from the guest
+      (`gui state`/`gui windows` already report real geometry, and the
+      WM knows `screen_w`/`screen_h`) and compute the cursor centre and
+      any remaining calibrated point from it, rather than from a
+      constant. Most tools are already safe -- they take geometry from
+      each app's own `layout` lines, which is the rule that exists for
+      exactly this reason.
+
+      Worth doing BEFORE any change to the default resolution, not
+      after: without it, moving the default turns the whole 19-tool
+      suite red for a reason unrelated to whatever else changed. And
+      note the runtime cost that makes the default worth measuring
+      rather than assuming -- a full 1920x1080 repaint moves 8.3 MB
+      against 3.5 MB at 1280x720, and on real hardware that is
+      uncached/write-combined MMIO (see the `gfxbench` entries).
+
 - [ ] **Retire `uui_button_group` once nothing needs it.** A standalone
       `uui_button` routes its own clicks now (press/motion/release on
       `uui_button_ops`), which is how QPushButton, GtkButton and a Win32
