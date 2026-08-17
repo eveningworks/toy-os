@@ -1402,9 +1402,12 @@ Listed with the honest reason each is or isn't attractive.
 
 ### Milestone 30 -- ACPI + real power/timer (hardware, target v1.0.0+)
 
-- [ ] ACPI table parsing (RSDP/MADT/FADT)
+- [ ] ACPI table parsing (RSDP/MADT/FADT/HPET)
 - [ ] Real ACPI-based poweroff
-- [ ] APIC + HPET timer (replacing PIT + 8259 PIC)
+- [ ] **HPET as a third clocksource** -- needs the HPET table above, and
+      is one file once it has it (the registry landed 2026-08-17)
+- [ ] APIC + a `clock_event_device` split, replacing the fixed-100Hz PIT
+      interrupt (the other half of the clocksource work -- see Details)
 - [ ] Battery + AC adapter status (a real laptop concern, and a tray item
       once Milestone 19's tray exists -- it does)
 - [ ] Thermal zone reporting
@@ -1892,14 +1895,13 @@ upward, no caller naming the hardware.
 - [x] **Time sources -- DONE (2026-08-17).** `kernel/clocksource.h`
       registers PIT (rating 110) and TSC (300), and CPU accounting bills
       measured nanoseconds against whichever is live. See
-      `docs/decisions.md`. What is NOT done, and is the natural next
-      piece: **HPET** (rating 250 in Linux's scale), which needs ACPI to
-      discover -- Milestone 30 -- or a hardcoded 0xFED00000 base. It is
-      worth more here than its middle rating suggests, because it is the
-      only sub-microsecond source reachable under plain TCG. Also not
-      done: the other half of the Linux split, `clock_event_device` --
-      timer EVENTS are still a fixed 100Hz PIT, so there is no tickless
-      idle. The original survey text follows.
+      `docs/decisions.md`. The two pieces NOT done are both scheduled
+      under Milestone 30, which is where they belong -- **HPET as a
+      third clocksource** (it needs ACPI's HPET table to discover the
+      base address) and the **`clock_event_device` half**, since timer
+      EVENTS are still a fixed 100Hz PIT with no tickless idle. See that
+      milestone's Details for why HPET matters more than its middle
+      rating suggests. The original survey text follows.
 
 - [ ] **~~Time sources -- the strongest candidate~~ (superseded above).** The tree names
       concrete clocks directly: `pit_ticks()` (monotonic 100Hz, the
@@ -3079,9 +3081,39 @@ deliberately the "works today in this exact dev/test setup" option, not a
 real ACPI-based one) and is the prerequisite for discovering other CPU
 cores (Milestone 31).
 
-APIC + HPET timer, replacing the PIT + remapped 8259 PIC toy-os uses
-today -- also a prerequisite for SMP and for timing finer than the PIT's
-100 Hz tick.
+**HPET as a clocksource, which is now a small job.** The registry
+landed 2026-08-17 (`kernel/include/kernel/clocksource.h`), so adding
+HPET is one file plus a `clocksource_register()` call -- a rating of 250
+on Linux's scale, sitting between the PIT's 110 and the TSC's 300. What
+it is waiting on is discovery: HPET is memory-mapped and its base
+address comes from ACPI's HPET table, which is why this sits here rather
+than beside the registry. (The alternative, hardcoding the conventional
+`0xFED00000`, works on QEMU and essentially every PC chipset and was
+deliberately not done -- it is a guess rather than a discovery, and the
+machine it fails on is the one that is hardest to debug.) It also needs
+its MMIO range mapped uncached, which the PAT work already provides.
+
+**Its real value here is REACHABILITY, not resolution.** The TSC
+clocksource cannot be exercised under plain QEMU at all: TCG does not
+implement `invtsc` (it warns and clears the bit) and KVM withholds it
+even under `-cpu host`, so the only way to run that path is
+`python3 tools/vm.py --kvm --cpu host,+invtsc`. HPET works under plain
+TCG. Adding it would make sub-microsecond timekeeping testable in the
+DEFAULT environment -- CI and `gui_regress.py` included, where KVM is
+not a given -- which is worth more than the middle rating suggests. It
+would also give the CPU percentages real resolution on any machine
+without an invariant TSC, where they currently round sub-tick work to
+0% (see the known-issues entry).
+
+**APIC + a clock_event_device, the other half.** Timekeeping (a counter
+you read) and timer EVENTS (deciding when to interrupt) are separate
+jobs, and only the first one has an interface today -- the tick is still
+a fixed 100 Hz PIT interrupt, so there is no tickless idle and no
+one-shot deadline. Linux calls the second half `clock_event_device`;
+Windows went dynamic-tick for the same reason. This is what would let
+the machine actually sleep between an animating client's frames rather
+than being interrupted a hundred times a second regardless. Also a
+prerequisite for SMP.
 
 ### Milestone 31 -- SMP (multi-core)
 
