@@ -13,6 +13,7 @@
 #include "file_picker.h"
 #include "desktop.h"
 #include "wm_tray.h"
+#include "cursor_theme.h"
 #include "ui/ui.h"
 #include "theme.h"
 #include "kapi.h"
@@ -201,7 +202,50 @@ static void draw_cursor_diag(int x, int y) { // corner resize -- same shape as H
     }
 }
 
+// A themed shape: two coverage masks, coloured here rather than in the
+// file, scaled by whole multiples. Outline first and fill over it, the
+// same order draw_cursor_normal() uses and for the same reason -- a
+// pixel both masks touch ends up the fill's colour.
+//
+// Nearest-neighbour at integer scales only: a pointer wants a hard
+// edge, and a smoothly scaled mask reads as blurry rather than large.
+static void draw_cursor_themed(const struct cursor_shape *s, int x, int y,
+                                int scale) {
+    uint32_t fill = THEME_WHITE, outline = gfx_rgb(0, 0, 0);
+    int ox = x - s->hot_x * scale, oy = y - s->hot_y * scale;
+    for (int row = 0; row < s->h; row++) {
+        for (int col = 0; col < s->w; col++) {
+            unsigned char a = s->outline[row][col];
+            if (!a) continue;
+            for (int j = 0; j < scale; j++)
+                for (int i = 0; i < scale; i++)
+                    gfx_blend_pixel(ox + col * scale + i, oy + row * scale + j,
+                                     outline, a);
+        }
+    }
+    for (int row = 0; row < s->h; row++) {
+        for (int col = 0; col < s->w; col++) {
+            unsigned char a = s->fill[row][col];
+            if (!a) continue;
+            for (int j = 0; j < scale; j++)
+                for (int i = 0; i < scale; i++)
+                    gfx_blend_pixel(ox + col * scale + i, oy + row * scale + j,
+                                     fill, a);
+        }
+    }
+}
+
 static void draw_cursor(int x, int y, enum wm_cursor_kind kind) {
+    // A theme shape when one loaded, the built-in otherwise. That
+    // either/or is the vendor-default/override pattern /etc already
+    // uses: a missing or malformed theme file degrades to a working
+    // pointer rather than to no pointer, which is the one failure this
+    // must not have.
+    const struct cursor_shape *s = cursor_theme_shape(kind);
+    if (s) {
+        draw_cursor_themed(s, x, y, cursor_theme_scale());
+        return;
+    }
     switch (kind) {
         case WM_CURSOR_H:    draw_cursor_h(x, y);    break;
         case WM_CURSOR_V:    draw_cursor_v(x, y);    break;
@@ -254,27 +298,57 @@ static enum wm_cursor_kind resolve_cursor_kind(int mx, int my) {
 // would leave a stale cursor-colored pixel behind on every move, so
 // it's deliberately oversized rather than tightly fit to each shape.
 #define CURSOR_BOX_MARGIN 2
-#define CURSOR_BOX_SIZE 22
+#define CURSOR_BOX_SIZE 22 // the BUILT-IN shapes' box; themed ones derive theirs
 
-static uint32_t cursor_under[CURSOR_BOX_SIZE][CURSOR_BOX_SIZE];
+// The themed shapes make the drawn extent variable -- a theme's size,
+// its hotspot and the size setting's scale all move it -- so the box can
+// no longer be one constant. It is DERIVED from whatever is actually
+// going to be drawn, and every consumer (the save/restore pair and the
+// damage rect) asks the same function. That is the invariant: if these
+// two ever disagree, a cursor move leaves a stale sprite behind, which
+// is a bug this file's comments already record paying for twice.
+#define CURSOR_UNDER_MAX (CURSOR_SHAPE_MAX * 3 + 2 * CURSOR_BOX_MARGIN)
+
+static void cursor_rect(enum wm_cursor_kind kind, int x, int y,
+                         int *ox, int *oy, int *w, int *h) {
+    const struct cursor_shape *s = cursor_theme_shape(kind);
+    if (s) {
+        int sc = cursor_theme_scale();
+        *ox = x - s->hot_x * sc - CURSOR_BOX_MARGIN;
+        *oy = y - s->hot_y * sc - CURSOR_BOX_MARGIN;
+        *w  = s->w * sc + 2 * CURSOR_BOX_MARGIN;
+        *h  = s->h * sc + 2 * CURSOR_BOX_MARGIN;
+    } else {
+        *ox = x - CURSOR_BOX_MARGIN;
+        *oy = y - CURSOR_BOX_MARGIN;
+        *w = *h = CURSOR_BOX_SIZE;
+    }
+    if (*w > CURSOR_UNDER_MAX) *w = CURSOR_UNDER_MAX;
+    if (*h > CURSOR_UNDER_MAX) *h = CURSOR_UNDER_MAX;
+}
+
+static uint32_t cursor_under[CURSOR_UNDER_MAX][CURSOR_UNDER_MAX];
 static int cursor_under_valid = 0;
-static int cursor_under_x, cursor_under_y;
+static int cursor_under_x, cursor_under_y, cursor_under_w, cursor_under_h;
 
 static void restore_cursor_under(void) {
     if (!cursor_under_valid) return;
-    for (int j = 0; j < CURSOR_BOX_SIZE; j++)
-        for (int i = 0; i < CURSOR_BOX_SIZE; i++)
+    for (int j = 0; j < cursor_under_h; j++)
+        for (int i = 0; i < cursor_under_w; i++)
             gfx_put_pixel(cursor_under_x + i, cursor_under_y + j, cursor_under[j][i]);
     cursor_under_valid = 0;
 }
 
-static void save_cursor_under(int x, int y) {
-    int sx = x - CURSOR_BOX_MARGIN, sy = y - CURSOR_BOX_MARGIN;
-    for (int j = 0; j < CURSOR_BOX_SIZE; j++)
-        for (int i = 0; i < CURSOR_BOX_SIZE; i++)
+static void save_cursor_under(int x, int y, enum wm_cursor_kind kind) {
+    int sx, sy, w, h;
+    cursor_rect(kind, x, y, &sx, &sy, &w, &h);
+    for (int j = 0; j < h; j++)
+        for (int i = 0; i < w; i++)
             cursor_under[j][i] = gfx_get_pixel(sx + i, sy + j);
     cursor_under_x = sx;
     cursor_under_y = sy;
+    cursor_under_w = w;
+    cursor_under_h = h;
     cursor_under_valid = 1;
 }
 
@@ -341,8 +415,9 @@ static void draw_cursor_at(int x, int y) {
         }
     }
     draw_resize_outline();
-    save_cursor_under(x, y);
-    draw_cursor(x, y, resolve_cursor_kind(x, y));
+    enum wm_cursor_kind kind = resolve_cursor_kind(x, y);
+    save_cursor_under(x, y, kind);
+    draw_cursor(x, y, kind);
 }
 
 static void draw_window_chrome(struct window *win, int idx, int focused) {
@@ -740,6 +815,12 @@ static void render_scene(int mx, int my, int has_damage) {
 static int first_frame = 1;
 static int overlay_was_open;  // an overlay was up last frame -- see wm_render_frame()
 static int prev_cursor_x = -1, prev_cursor_y = -1;
+// The box the cursor was last DRAWN in, recorded beside the position
+// because a themed shape's extent is not derivable from a position
+// alone -- the theme, its hotspot and the size setting all move it, and
+// any of the three can change between two frames.
+static int prev_cursor_box_x, prev_cursor_box_y;
+static int prev_cursor_box_w, prev_cursor_box_h;
 static int verify_enabled;
 static int verify_reported; // report each distinct failure once, not per frame
 
@@ -749,6 +830,7 @@ void wm_render_reset(void) {
     first_frame = 1;
     overlay_was_open = 0;
     prev_cursor_x = prev_cursor_y = -1;
+    prev_cursor_box_w = prev_cursor_box_h = 0;
 }
 
 void wm_damage_verify_set(int on) {
@@ -799,12 +881,19 @@ static void damage_cursor(int mx, int my) {
     // cursor move left a two-sided sliver behind. The extra 1px here is
     // slack, not the anchor: the anchor has to be the margin, or the two
     // drift apart again the moment either constant is retuned.
-    const int m = CURSOR_BOX_MARGIN + 1;
-    const int span = CURSOR_BOX_SIZE + 2;
-    if (prev_cursor_x >= 0) {
-        wm_damage_rect(prev_cursor_x - m, prev_cursor_y - m, span, span);
+    // Derived from cursor_rect(), the same function save_cursor_under()
+    // uses, with 1px of slack on each side. The PREVIOUS box is stored
+    // rather than recomputed, because the shape under the old position
+    // may not be the shape that is there now -- recomputing it with
+    // today's kind and scale is how a theme or size change leaves the
+    // last frame's larger sprite undamaged.
+    if (prev_cursor_box_w > 0) {
+        wm_damage_rect(prev_cursor_box_x - 1, prev_cursor_box_y - 1,
+                        prev_cursor_box_w + 2, prev_cursor_box_h + 2);
     }
-    wm_damage_rect(mx - m, my - m, span, span);
+    int ox, oy, w, h;
+    cursor_rect(resolve_cursor_kind(mx, my), mx, my, &ox, &oy, &w, &h);
+    wm_damage_rect(ox - 1, oy - 1, w + 2, h + 2);
 }
 
 void wm_render_frame(int mx, int my) {
@@ -974,6 +1063,9 @@ void wm_render_frame(int mx, int my) {
     // what left a second cursor behind.
     prev_cursor_x = mx;
     prev_cursor_y = my;
+    cursor_rect(resolve_cursor_kind(mx, my), mx, my,
+                 &prev_cursor_box_x, &prev_cursor_box_y,
+                 &prev_cursor_box_w, &prev_cursor_box_h);
 
     gfx_present();
     // AFTER the present, on purpose: the meter is an overlay that is
@@ -1014,6 +1106,9 @@ void wm_render_cursor_move(int mx, int my) {
     // interaction happened to be running.
     prev_cursor_x = mx;
     prev_cursor_y = my;
+    cursor_rect(resolve_cursor_kind(mx, my), mx, my,
+                 &prev_cursor_box_x, &prev_cursor_box_y,
+                 &prev_cursor_box_w, &prev_cursor_box_h);
 
     gfx_present();
 }

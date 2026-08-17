@@ -33,6 +33,7 @@
 #include "file_picker.h"
 #include "desktop.h"
 #include "wm_tray.h"
+#include "cursor_theme.h"
 #include "kapi.h"
 #include "demo.h"
 
@@ -684,6 +685,11 @@ void wm_run(void) {
     screen_h = gfx_height();
     taskbar_h = WM_TITLEBAR_H;
 
+    // Registers the two cursor settings and loads the configured theme.
+    // Before the first frame, so the pointer is themed from the moment
+    // it is first drawn rather than snapping a frame later.
+    cursor_theme_init();
+
     klog_write("wm: entering GUI mode (");
     klog_write_dec((uint32_t)screen_w);
     klog_write("x");
@@ -751,6 +757,12 @@ void wm_run(void) {
 
     for (;;) {
         __asm__ volatile ("hlt");
+
+        // Picks up a cursor theme or size changed from Control Panel or
+        // by editing /etc/toyos.conf. One generation compare per frame
+        // and no I/O unless it moved -- the same trick the `.desktop`
+        // reload above uses.
+        cursor_theme_poll();
 
         // The kernel's idle work, which it owns rather than this loop
         // (scheduler.h). What it does today is keep the serial debug

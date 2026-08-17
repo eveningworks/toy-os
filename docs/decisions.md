@@ -127,6 +127,7 @@ there when you add an entry, or the index quietly stops being one.
 - [The kernel owns its idle work, so the WM's departure deletes a call rather than a capability](#the-kernel-owns-its-idle-work-so-the-wms-departure-deletes-a-call-rather-than-a-capability)
 - [A ring-3 write to the framebuffer is transient while the WM is still in ring 0, and the test has to say so](#a-ring-3-write-to-the-framebuffer-is-transient-while-the-wm-is-still-in-ring-0-and-the-test-has-to-say-so)
 - [The hardware cursor left the ring-3 migration, because it is switched off everywhere](#the-hardware-cursor-left-the-ring-3-migration-because-it-is-switched-off-everywhere)
+- [Cursor themes: shapes are data, colours are not, and the app never sees pixels](#cursor-themes-shapes-are-data-colours-are-not-and-the-app-never-sees-pixels)
 - [The desktop's app list is a directory of files, not a table in the kernel](#the-desktops-app-list-is-a-directory-of-files-not-a-table-in-the-kernel)
 - [Widgets are added once a second real caller needs them -- except the checkbox](#widgets-are-added-once-a-second-real-caller-needs-them----except-the-checkbox)
 - [A table PULLS its rows, and stores none of them](#a-table-pulls-its-rows-and-stores-none-of-them)
@@ -6888,3 +6889,61 @@ exists now partly because that check had no way to be run -- the
 modesetting and cursor paths are both unreachable under the default
 adapter, the same shape as `--cpu max` for SMEP/SMAP and
 `--kvm --cpu host,+invtsc` for the TSC clocksource.
+
+## Cursor themes: shapes are data, colours are not, and the app never sees pixels
+
+Three layers, copied from where Windows and Wayland both ended up after
+trying the alternative:
+
+- an **app** names a shape (`arrow`, `text`, `resize-h`, ...);
+- the **compositor** owns the theme and turns that name into pixels;
+- the **display layer** owns any hardware plane.
+
+Windows is `SetCursor(HCURSOR)` -- a handle, never pixels -- with themes
+as `.cur`/`.ani` files named in the registry. Wayland originally had the
+CLIENT supply the pixels (`wl_pointer.set_cursor`), which meant every
+client had to find, load and scale the theme itself; `cursor-shape-v1`
+exists specifically to undo that, letting the client name a shape and
+the compositor supply the image. X11 sat in between: themes are
+directories of images under `/usr/share/icons/<theme>/cursors/`, pushed
+to the hardware cursor by the server. The consensus is worth copying
+rather than re-deriving.
+
+**A shape file carries COVERAGE, not colour** -- an outline mask and a
+fill mask, coloured by the compositor at draw time. That is X11's classic
+image+mask split, and it keeps the two things people change most often
+independent: one shape set serves a light theme and a dark one, and a
+colour change needs no new art. The arrow in this WM was already built
+that way (two baked alpha arrays) before themes existed, so the format
+followed the code rather than the other way round.
+
+**The files are plain text**, a key=value header plus two grids of one
+hex digit per pixel. There is no cursor authoring tool in this OS and
+will not be one soon, so the format a person can open in `edit` beats
+the compact binary that needs a host-side tool -- and the shape is
+visible in the file. `tools/gen_cursors.py` generates the shipped themes
+and doubles as the authoring path; it EXTRACTS the arrow from
+`wm_render.c`'s own arrays rather than duplicating them, so the shipped
+theme cannot drift from the built-in fallback.
+
+**Scaling is integer nearest-neighbour.** A pointer wants a hard edge;
+a smoothly scaled mask reads as blurry rather than large, and a
+pixel-value test gets much harder to write. The size is its own
+registered setting rather than being derived from `font_size`, because
+pointer size is an accessibility choice people make independently of
+text size.
+
+**The built-in shapes stay as the floor.** A missing or malformed theme
+file costs its own shape, not the pointer -- the same vendor-default /
+`/etc`-override pattern `api/config_file.h` already uses. That floor is
+also the trap: it means a theme that loads NOTHING still draws a
+perfectly good pointer, which is exactly how the first working version
+shipped with 0 of 6 shapes loaded and looked correct. Every check in
+`tools/cursor_theme_test.py` therefore asserts on the load count or on a
+pixel DIFFERENCE between two states, never on a cursor being present.
+
+**Nothing here touches the kernel**, which is the point: the compositor
+draws the pointer into the framebuffer it already owns. So the whole
+mechanism moves to ring 3 with the WM, and it is independent of the
+hardware cursor (which is switched off everywhere -- see the entry
+above).

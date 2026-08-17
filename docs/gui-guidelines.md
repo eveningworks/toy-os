@@ -790,3 +790,32 @@ right thing:
   `tools/gfxdemo_test.py` do all of the above for the confirm dialog,
   UI Demo's widgets and the geometry; extend those rather than starting
   a fresh script. `tools/gui_regress.py` runs the whole set in one go.
+
+
+## The pointer
+
+The cursor's shapes are DATA, not code: `/usr/share/cursors/<theme>/`,
+one file per shape, six names (`arrow`, `resize-h`, `resize-v`,
+`resize-diag`, `text`, `wait`). The rules, in the order they bite:
+
+- **A shape file carries coverage, not colour.** Two masks -- outline
+  and fill -- coloured by the compositor at draw time. One shape set
+  therefore serves a light theme and a dark one. Don't bake a colour
+  into a theme, and don't add a per-theme colour key: colour is the
+  compositor's, which is what makes a theme reusable.
+- **Name a shape; never supply pixels.** This is the layer split every
+  real system converged on (Windows' `SetCursor`, Wayland's
+  `cursor-shape-v1`). An app that ships its own cursor art has to find,
+  load and scale a theme itself, which is the thing that was tried and
+  abandoned elsewhere.
+- **The built-in shapes are the floor.** A theme file that is missing or
+  malformed costs its own shape and nothing else. The pointer must never
+  be the thing that disappears.
+- **Testing it: a cursor being on screen proves nothing**, precisely
+  because of that floor -- a theme that loads zero shapes still draws a
+  perfect pointer. Assert the load count, or a pixel difference between
+  two states. See `tools/cursor_theme_test.py`.
+- **Size is a setting, not a consequence of the font size.** People pick
+  a large pointer for reasons that have nothing to do with text size.
+  Scaling is integer nearest-neighbour, because a pointer wants a hard
+  edge.
