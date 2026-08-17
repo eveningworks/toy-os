@@ -58,6 +58,24 @@ struct uapp;
 // not guess resizability from a window's size (abi/win_proto.h).
 #define UAPP_RESIZABLE 0x01
 
+// Only one copy of this app at a time. With this set (and an `app_id`
+// given), uapp_run() asks TWS whether a window already carries that id
+// BEFORE it opens one: if so it raises that window and this process
+// exits 0 without ever appearing on screen, and if not it opens
+// normally and registers the id.
+//
+// The DECISION is here, in the app, on purpose. A launcher launches
+// (apps/gui_apps.h's exec_path), because the desktop cannot know
+// whether a second copy is meaningful -- two Notepads editing two files
+// are useful and two Task Managers are not. An app that leaves this
+// unset behaves exactly as every app did before it existed.
+//
+// Note what this is NOT: a lock. Two copies started in the same instant
+// can both find nothing and both open -- see WIN_REQ_ACTIVATE's known
+// gap. It is the pattern real desktops use for launching, not a
+// mutual-exclusion primitive to build on.
+#define UAPP_SINGLE_INSTANCE 0x02
+
 // The drawing context handed to on_draw. Carries the surface AND the
 // theme defaults, which is what takes ugfx_draw_string()'s six
 // arguments down to three for the common case.
@@ -68,6 +86,18 @@ struct uapp_draw {
 
 struct uapp_desc {
     const char *title;
+
+    // This app's own name for what its window IS -- "taskmgr", not a
+    // path and not the title. Opaque, matched byte for byte, truncated
+    // at WIN_APP_ID_LEN. NULL for the apps that need no identity, which
+    // is most of them.
+    //
+    // Required by UAPP_SINGLE_INSTANCE and otherwise inert today, but
+    // worth setting on anything with a lasting identity: this is the
+    // field a taskbar groups by and the one a "raise that app" request
+    // names, and both want it to have been there all along rather than
+    // added later per app.
+    const char *app_id;
 
     // The content, laid out. With this set the library sizes the window
     // from the layout's natural size, re-runs the layout whenever the

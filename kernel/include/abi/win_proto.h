@@ -150,10 +150,20 @@ struct win_event {
 // transport, with no new kernel entry point and nothing for a future
 // userspace server to re-plumb.
 
-#define WIN_REQ_CREATE  1 // a: width, b: height, c: x, d: y (screen).
+#define WIN_REQ_CREATE  1 // a: width, b: height, c: x, d: y (screen);
+                           // `text`: this window's APP ID, or "" for
+                           // none (see WIN_REQ_ACTIVATE).
                            // On success `window` is filled in with the
                            // new window's id and the client's buffer is
                            // mapped at win_buffer_vaddr(id).
+                           //
+                           // The app id rides CREATE rather than being
+                           // a message of its own so that a window can
+                           // never exist without it: an id registered a
+                           // moment later leaves a gap in which a second
+                           // copy of the same program asks "is anyone
+                           // there?" and is told no. `text` was unused
+                           // by CREATE, so this costs no bytes.
 #define WIN_REQ_PRESENT 2 // `window`: which one. The client has finished
                            // drawing into its buffer; composite it.
 #define WIN_REQ_DESTROY 3 // `window`: which one. Closes it and unmaps
@@ -271,6 +281,49 @@ struct win_event {
                            // same reason -- and strictly weaker than it,
                            // since the target may decline.
 
+#define WIN_REQ_ACTIVATE   13 // `text`: an app id. If any window carries
+                           // it, raise that window (un-minimizing it if
+                           // needed), give it focus, and return 1.
+                           // Return 0 if no window has that id.
+                           //
+                           // SINGLE INSTANCE, and the reason it is the
+                           // CLIENT that decides: a launcher launches
+                           // (see apps/gui_apps.h's exec_path), because
+                           // the desktop cannot know whether a second
+                           // copy of a program is meaningful -- two
+                           // Notepads editing two files are useful and
+                           // two Task Managers are not. So a program
+                           // that wants to be alone asks first, and
+                           // exits quietly if the answer is yes. A
+                           // program that says nothing keeps today's
+                           // behaviour exactly.
+                           //
+                           // This is the named-mutex-plus-raise pattern
+                           // every desktop ends up with (Windows'
+                           // CreateMutex + SetForegroundWindow, GTK's
+                           // GApplication uniqueness, Qt's
+                           // QtSingleApplication) rather than anything
+                           // novel -- the raise is the half that makes
+                           // it feel correct instead of merely refusing
+                           // to start.
+                           //
+                           // Addressed to an app id rather than to one
+                           // of the caller's own windows, so like
+                           // WIN_REQ_CLOSE_PID it skips the ownership
+                           // lookup and is unprivileged. The worst a
+                           // caller can do with it is raise a window
+                           // the user can already click on.
+                           //
+                           // KNOWN GAP, and it is a real one: nothing
+                           // serialises the ask against the create, so
+                           // two copies launched in the same instant can
+                           // both be told "nobody there" and both open.
+                           // That needs the id to be CLAIMED by the ask
+                           // rather than merely queried -- worth doing
+                           // if it ever bites, and not worth the extra
+                           // state until then, since every launch path
+                           // here is a human clicking a menu.
+
 #define WIN_REQ_DEBUG_CMD  10 // Run one `gui` diagnostic command. The
                            // command text and the reply both ride
                            // struct win_debug_msg, not this struct --
@@ -375,6 +428,18 @@ struct win_debug_msg {
 // it truncated at this boundary rather than refused, since a too-long
 // title is a cosmetic problem and not worth failing a request over.
 #define WIN_TITLE_LEN 32
+
+// Longest app id, including the NUL. Rides the same `text` field as a
+// title (they are never both in flight -- one is CREATE's, the other
+// TITLE's), so it is the same size by construction rather than by
+// coincidence: a separate, larger constant would silently truncate the
+// moment `text` stayed 32 bytes.
+//
+// An id is an opaque token matched byte for byte, not a path or a
+// display name -- "taskmgr", not "/bin/wm/system/taskmgr" or "Task
+// Manager". A path would break the moment a binary moved, and a display
+// name would collide with the title the user sees.
+#define WIN_APP_ID_LEN WIN_TITLE_LEN
 
 // Largest client window, in pixels -- the 1280x720 mode boot.asm asks
 // for, so a client can be dragged to fill the screen and the window

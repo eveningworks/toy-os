@@ -80,9 +80,12 @@ static void about_draw(struct uapp *a, struct uapp_draw *d) {
 int main(void) {
     struct uapp_desc desc = {
         .title   = "About",
+        // A second identical, static About box is never what the user
+        // meant by clicking About twice.
+        .app_id  = "about",
         .on_size = about_size,
         .on_draw = about_draw,
-        .flags   = UAPP_RESIZABLE,
+        .flags   = UAPP_RESIZABLE | UAPP_SINGLE_INSTANCE,
     };
     return uapp_run(&desc);
 }

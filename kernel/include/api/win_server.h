@@ -50,8 +50,16 @@ struct win_server_ops {
     // the same memory the client sees at win_buffer_vaddr(id).
     // Return 1 to accept it, 0 to refuse (no free slot in the window
     // list); on 0 the caller frees the buffer and the request fails.
+    //
+    // `app_id` is the client's own name for what this window IS (see
+    // WIN_REQ_ACTIVATE), already truncated to fit WIN_APP_ID_LEN, and
+    // "" when the client did not give one. Passed HERE rather than
+    // through a slot of its own so a window is never briefly visible
+    // without it -- the gap is exactly long enough for a second copy of
+    // the same program to look for its twin and miss.
     int (*window_created)(int pid, uint32_t id, uint32_t *buf,
-                           int w, int h, int x, int y);
+                           int w, int h, int x, int y,
+                           const char *app_id);
 
     // The client finished drawing into `id`'s buffer.
     void (*window_present)(int pid, uint32_t id);
@@ -109,6 +117,18 @@ struct win_server_ops {
     // -- so a client may refuse, and there is no second close policy.
     // Returns how many windows were asked. OPTIONAL like every slot.
     int (*close_pid)(int pid);
+
+    // Raise the window carrying `app_id` -- un-minimize it, bring it to
+    // the front and focus it -- and return 1. Return 0 if no window has
+    // that id. OPTIONAL like every slot here; a presentation layer that
+    // leaves it NULL simply answers "nobody there", which degrades to
+    // today's behaviour (every launch opens a new copy) rather than to
+    // an error.
+    //
+    // The MATCH is here and the POLICY is in the client: this says
+    // nothing about whether a second copy may run, only where the first
+    // one is. See WIN_REQ_ACTIVATE in abi/win_proto.h.
+    int (*window_activate)(const char *app_id);
 };
 
 // Registers the presentation layer. The WM calls this with its ops as

@@ -349,6 +349,19 @@ technical conventions below:
   app writes no coordinates: declare a column/row/grid, and the window
   sizes itself from the content. Resize, focus and wheel all arrive for
   free. `docs/uapp-design.md` is the full design and its staging.
+- **An app refuses its OWN second copy -- the launcher never does.** A
+  `uapp_desc` with an `app_id` and `UAPP_SINGLE_INSTANCE` sends
+  `WIN_REQ_ACTIVATE` before creating anything: TWS raises the window
+  already carrying that id and the second copy exits 0 without ever
+  appearing. Task Manager and About opt in; everything else is unchanged
+  and opens as many copies as it is asked to. Three things to know. The
+  id rides `WIN_REQ_CREATE`'s previously-unused `text` field so a window
+  can never exist without it (a later "register my id" message leaves a
+  gap exactly long enough for a second copy to miss its twin). It is an
+  opaque token -- `"taskmgr"`, not a path and not the title. And **it is
+  not a lock**: two launches in the same instant can both be told
+  "nobody there", which is recorded rather than fixed because every
+  launch path here is a human clicking a menu. See `docs/decisions.md`.
 - **`uui_table` is the multi-column widget** (`userland/ui/uui_table.h`)
   -- columns with per-column width (in CHARACTERS, or 0 to stretch) and
   alignment, a header, selection, scrolling. **It PULLS its rows through
@@ -531,7 +544,9 @@ technical conventions below:
   and Terminal (ring 3) are the current four. Two consequences worth
   knowing before adding one: a launcher always SPAWNS (it never focuses
   an existing window -- the WM can't enforce single-instance on a ring-3
-  program, and shouldn't), and **a real ring-3 app is seeded to `/bin`,
+  program, and shouldn't; the APP refuses a second copy of itself
+  instead, see the single-instance bullet below), and **a real ring-3
+  app is seeded to `/bin`,
   not `/tests`** -- see `docs/filesystem-layout.md`, and note that
   moving a seeded file needs an explicit delete since `sync` is additive.
 - **There is no limit on open windows** -- `windows[]` is a grown-on-
@@ -1927,9 +1942,19 @@ repeated manual steps to be worth automating:
   the height by 16 px against 300, so "it changed" was satisfied. On its
   first run it found a pre-existing bug in `uui_listbox` (see the
   widget-`hit` trap in the widget section above).
+- **`single_instance_test.py`** -- one copy of an app, and relaunching
+  it raising the copy that exists (`WIN_REQ_ACTIVATE`,
+  `UAPP_SINGLE_INSTANCE`; 9 checks). Run it after touching TWP's create
+  path, `wm_client.c`'s window list or `uapp_run()`'s startup. Two of
+  its checks are worth copying: the multi-instance CONTROL (UI Demo
+  declares no app id, so two windows is the right answer there, and an
+  over-eager match reddens exactly that check), and identifying the
+  raised window by **`client_pid`, not by title** -- with the raise
+  disabled a brand-new window is frontmost too, so the title-only
+  version of that check stayed green through the positive control.
 - **`gui_regress.py`** -- runs every GUI test tool, each against
   its own freshly-copied disk image and its own VM, and prints one
-  pass/fail table (~1.5 minutes, 255 checks across seventeen tools). This is the standard check
+  pass/fail table (~1.5 minutes, 264 checks across eighteen tools). This is the standard check
   after touching `apps/ui/`, `userland/`, or anything the WM draws.
   Tools are **STARTED longest-first** (`COST_S`/`pick_order()`), because
   a parallel run cannot end before its slowest member does and

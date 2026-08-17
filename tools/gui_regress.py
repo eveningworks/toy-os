@@ -106,6 +106,7 @@ TOOLS = [
     ("compositor", "compositor_test.py", "raw input to a ring-3 compositor"),
     ("entries", "desktop_entries_test.py", "ShowIn= and live .desktop reload"),
     ("taskmgr", "taskmgr_test.py", "the table widget, resize reflow, ending a process"),
+    ("singleinst", "single_instance_test.py", "one copy of an app, and relaunch raises it"),
 ]
 
 # Roughly how long each tool takes, in seconds, used ONLY to decide what
@@ -133,6 +134,7 @@ COST_S = {
     "uterm": 18,
     "blank": 17,
     "calculator": 15,
+    "singleinst": 22,  # six launches, each waiting out a client's first frame
     "sched": 12,
     "winclient": 12,
     "uiclient": 9,

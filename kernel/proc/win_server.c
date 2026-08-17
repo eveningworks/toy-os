@@ -149,7 +149,7 @@ static void destroy_window(struct client_window *cw) {
 // shape: this function maps into an address space, and which one should
 // not depend on when it happens to be called.
 static int create_window(int pid, uint64_t pml4, int w, int h, int x, int y,
-                          uint32_t *out_id) {
+                          const char *app_id, uint32_t *out_id) {
     if (pid < 1 || pid > WIN_SERVER_MAX_PIDS) return 0;
 
     if (w <= 0 || h <= 0 || w > WIN_CLIENT_MAX_W || h > WIN_CLIENT_MAX_H) {
@@ -213,7 +213,7 @@ static int create_window(int pid, uint64_t pml4, int w, int h, int x, int y,
     // its window list, the whole create fails and the memory goes back
     // rather than leaving a buffer nothing will ever draw.
     if (g_ops && g_ops->window_created) {
-        if (!g_ops->window_created(pid, cw->id, cw->buf, w, h, x, y)) {
+        if (!g_ops->window_created(pid, cw->id, cw->buf, w, h, x, y, app_id)) {
             // Not destroy_window() -- that would call window_destroyed()
             // for a window the presentation layer just refused and never
             // recorded.
@@ -442,6 +442,17 @@ int win_server_debug(int pid, struct win_debug_msg *msg) {
     return 1;
 }
 
+// Copy one of `text`'s NUL-terminated strings out of a request into a
+// kernel buffer of `cap` bytes, truncating to fit. `req->text` is a
+// fixed array with no guarantee of a terminator, so this bounds on BOTH
+// ends -- a client that fills all 32 bytes with no NUL gets a truncated
+// string rather than a read past the field.
+static void copy_text(char *dst, const char *src, int cap) {
+    int i = 0;
+    for (; i < cap - 1 && i < WIN_TITLE_LEN && src[i]; i++) dst[i] = src[i];
+    dst[i] = '\0';
+}
+
 int win_server_request(int pid, struct win_request_msg *req) {
     if (!req) return -1;
 
@@ -472,13 +483,35 @@ int win_server_request(int pid, struct win_request_msg *req) {
         return g_ops->close_pid(req->a) > 0 ? 1 : 0;
     }
 
+    // Also not addressed to one of the caller's own windows -- it names
+    // an app id, and the window carrying it belongs to somebody else by
+    // definition (a client asking about its OWN window learns nothing).
+    // Same unprivileged reasoning as CLOSE_PID above, and weaker still:
+    // the worst outcome is raising a window the user can already see.
+    if (req->type == WIN_REQ_ACTIVATE) {
+        if (!g_ops->window_activate) return 0;
+        char app_id[WIN_APP_ID_LEN];
+        copy_text(app_id, req->text, WIN_APP_ID_LEN);
+        // An empty id matches nothing, rather than matching every
+        // window that never set one. Without this, one app opting in
+        // would start raising unrelated windows.
+        if (!app_id[0]) return 0;
+        return g_ops->window_activate(app_id) ? 1 : 0;
+    }
+
     switch (req->type) {
     case WIN_REQ_CREATE: {
         uint32_t id = 0;
+        // Truncate rather than refuse, exactly as WIN_REQ_TITLE does:
+        // an over-long id is the client's mistake to notice, and
+        // failing the create over it would turn a cosmetic slip into a
+        // window that never opens.
+        char app_id[WIN_APP_ID_LEN];
+        copy_text(app_id, req->text, WIN_APP_ID_LEN);
         // vmm_current_pml4() IS the calling client's address space: a
         // syscall does not switch CR3 on entry (see vmm.h).
         if (!create_window(pid, vmm_current_pml4(), req->a, req->b,
-                           req->c, req->d, &id)) return 0;
+                           req->c, req->d, app_id, &id)) return 0;
         req->window = id;
         return 1;
     }
@@ -499,9 +532,7 @@ int win_server_request(int pid, struct win_request_msg *req) {
         if (!cw) return 0;
         // Truncate rather than refuse -- a too-long title is cosmetic.
         char title[WIN_TITLE_LEN];
-        size_t i = 0;
-        for (; i < WIN_TITLE_LEN - 1 && req->text[i]; i++) title[i] = req->text[i];
-        title[i] = '\0';
+        copy_text(title, req->text, WIN_TITLE_LEN);
         if (g_ops->window_title) g_ops->window_title(pid, cw->id, title);
         return 1;
     }
@@ -611,7 +642,10 @@ int win_server_is_mapped_to_compositor(int owner_pid, uint32_t id) {
 
 int win_server_create_raw(int pid, uint64_t pml4, int w, int h, uint32_t *out_id) {
     uint32_t id = 0;
-    if (!create_window(pid, pml4, w, h, 0, 0, &id)) return 0;
+    // No app id: this is the KTEST/compositor entry point, and a test
+    // window that claimed one could be raised by a real app asking for
+    // its twin.
+    if (!create_window(pid, pml4, w, h, 0, 0, "", &id)) return 0;
     if (out_id) *out_id = id;
     return 1;
 }

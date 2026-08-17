@@ -17,6 +17,13 @@ struct gui_app; // full definition in gui_apps.h
 
 #define WIN_TITLE_MAX 32
 
+// Mirrors abi/win_proto.h's WIN_APP_ID_LEN, the same way WIN_TITLE_MAX
+// mirrors WIN_TITLE_LEN -- this header is app-facing and deliberately
+// does not pull the client/server ABI in. wm_client.c static_asserts
+// that the two agree, since a silently smaller buffer here would
+// truncate ids and make two different apps match each other.
+#define WIN_APP_ID_MAX 32
+
 enum window_state { WIN_NORMAL, WIN_MINIMIZED, WIN_MAXIMIZED };
 
 struct window {
@@ -83,6 +90,13 @@ struct window {
     // win_buffer_vaddr(client_win). It stays valid until
     // window_destroyed() returns; see kernel/proc/win_server.c, which
     // owns the frames behind it.
+    // What this window IS, as its own client named it -- "taskmgr", not
+    // a path and not the title. Empty for a kernel-space app window and
+    // for any client that did not give one. Matched byte for byte by
+    // WIN_REQ_ACTIVATE, which is the whole reason it is stored; nothing
+    // draws it.
+    char app_id[WIN_APP_ID_MAX];
+
     int client_pid;
     uint32_t client_win;
     uint32_t *client_buf;

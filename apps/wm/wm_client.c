@@ -33,8 +33,16 @@ static int find_client_window(int pid, uint32_t id) {
     return -1;
 }
 
+// wm.h mirrors the ABI's id length rather than including it. If those
+// two ever disagree the failure is silent and nasty: ids truncate to the
+// shorter one, so two apps whose names share a prefix start matching
+// each other and raising each other's windows.
+_Static_assert(WIN_APP_ID_MAX == WIN_APP_ID_LEN,
+                "wm.h's WIN_APP_ID_MAX must match abi/win_proto.h's WIN_APP_ID_LEN");
+
 static int on_window_created(int pid, uint32_t id, uint32_t *buf,
-                              int w, int h, int x, int y) {
+                              int w, int h, int x, int y,
+                              const char *app_id) {
     // Grow the table instead of refusing at a fixed count. A refusal is
     // still a legal protocol outcome (the client sees the create fail),
     // but now it means the kernel is out of memory rather than that the
@@ -72,6 +80,14 @@ static int on_window_created(int pid, uint32_t id, uint32_t *buf,
     win->client_h = h;
     win->client_last_mx = INT32_MIN; // nothing delivered yet
     win->client_last_my = INT32_MIN;
+
+    // Already truncated by win_server.c, and "" when the client named
+    // nothing -- which is most of them, and stays matched by nothing.
+    if (app_id) {
+        int i = 0;
+        for (; app_id[i] && i < WIN_APP_ID_MAX - 1; i++) win->app_id[i] = app_id[i];
+        win->app_id[i] = '\0';
+    }
 
     // A placeholder until the client sends WIN_REQ_TITLE. Deliberately
     // not left blank: an untitled window is indistinguishable from a
@@ -213,6 +229,53 @@ static int on_close_pid(int pid) {
     return asked;
 }
 
+// Raise the window carrying `app_id`. See WIN_REQ_ACTIVATE.
+//
+// This is the RAISE half of single-instance; the deciding half is in the
+// client, which asks before it opens anything. So this deliberately says
+// nothing about whether a second copy may run -- it answers "here it is"
+// or "nobody there", and a caller that ignores the answer and opens a
+// window anyway is behaving legally.
+//
+// Searches from the front so that if two windows somehow carry the same
+// id (the create/ask race WIN_REQ_ACTIVATE documents, or two clients
+// that simply chose the same name), the one the user saw most recently
+// is the one that comes back.
+static int on_window_activate(const char *app_id) {
+    if (!app_id || !app_id[0]) return 0;
+
+    for (int i = window_count - 1; i >= 0; i--) {
+        if (!windows[i].open) continue;
+        if (!windows[i].app_id[0]) continue;
+        if (k_strcmp(windows[i].app_id, app_id) != 0) continue;
+
+        // The window that is losing focus has to repaint its title bar,
+        // exactly as on_window_created() and open_app() do -- otherwise
+        // the old frontmost one keeps its focused blue until something
+        // unrelated redraws it.
+        if (window_count > 0 && i != window_count - 1) {
+            struct window *losing = &windows[window_count - 1];
+            wm_damage_rect(losing->x, losing->y, losing->w, losing->h);
+        }
+
+        if (windows[i].state == WIN_MINIMIZED) windows[i].state = WIN_NORMAL;
+        bring_to_front(i);
+        // bring_to_front() renumbers, so the window is at the top now --
+        // damage it there rather than at the index just used.
+        struct window *w = &windows[window_count - 1];
+        wm_damage_rect(w->x, w->y, w->w, w->h);
+        // A window dragged somewhere unreachable is exactly as useless
+        // as no window at all, and this path is the only handle a
+        // second launch gives the user -- same reasoning as the taskbar
+        // button's, so it uses the same repair.
+        wm_ensure_reachable(window_count - 1);
+        redraw_pending = 1;
+        klog_printf("wm: activated existing window for app id '%s'\n", app_id);
+        return 1;
+    }
+    return 0;
+}
+
 static const struct win_server_ops WM_SERVER_OPS = {
     .window_created   = on_window_created,
     .window_present   = on_window_present,
@@ -223,6 +286,7 @@ static const struct win_server_ops WM_SERVER_OPS = {
     .window_pong      = on_window_pong,
     .debug_command    = on_debug_command,
     .close_pid        = on_close_pid,
+    .window_activate  = on_window_activate,
 };
 
 void wm_client_init(void) {

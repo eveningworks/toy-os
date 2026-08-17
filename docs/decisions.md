@@ -37,6 +37,7 @@ there when you add an entry, or the index quietly stops being one.
 - [`gui` output goes to a caller-supplied sink, not through a klog redirect](#gui-output-goes-to-a-caller-supplied-sink-not-through-a-klog-redirect)
 - [The diagnostic channel carries its own payload struct, so presents stay cheap](#the-diagnostic-channel-carries-its-own-payload-struct-so-presents-stay-cheap)
 - [A client window's close button is a handshake, not a seizure](#a-client-windows-close-button-is-a-handshake-not-a-seizure)
+- [Single-instance is the app's decision, and the launcher always launches](#single-instance-is-the-apps-decision-and-the-launcher-always-launches)
 - [A hover test parks the REAL cursor, and must un-park it afterwards](#a-hover-test-parks-the-real-cursor-and-must-un-park-it-afterwards)
 - [Rubber-band selection is shared source compiled twice, and it owns the behaviour](#rubber-band-selection-is-shared-source-compiled-twice-and-it-owns-the-behaviour)
 - [One desktop-entry directory with a `ShowIn` key, not a second directory per surface](#one-desktop-entry-directory-with-a-showin-key-not-a-second-directory-per-surface)
@@ -388,6 +389,61 @@ window to close and can be refused -- it runs the same
 `wm_request_close()` the X button and Alt+F4 use, so there is no fourth
 close path with its own rules. Windows draws the same line between End
 Task and End Process.
+
+## Single-instance is the app's decision, and the launcher always launches
+
+Opening Task Manager twice raises the window that already exists instead
+of opening a second one. The mechanism is `WIN_REQ_ACTIVATE` plus
+Toykit's `UAPP_SINGLE_INSTANCE`, and the decision it encodes is **which
+side gets to say whether a second copy may run**.
+
+The obvious implementation is the wrong one here: have the Start menu
+notice that it already launched this entry and focus that window instead
+of spawning. It needs no protocol change and it was rejected, because
+the desktop does not know enough to make the call. Two Notepads editing
+two files are useful; two Task Managers are not. That is a fact about
+the program, so `apps/gui_apps.h` has always said a launcher **spawns**
+and never focuses -- and a launcher-side rule would also only cover the
+desktop, leaving `run taskmgr` in a Terminal and `gui spawn` to open
+duplicates that the menu refused.
+
+So the program asks. A client that declares an `app_id` and the
+single-instance flag sends `WIN_REQ_ACTIVATE` **before it creates
+anything**: TWS raises the matching window and answers 1, and the second
+copy exits 0 without ever appearing on screen. A client that declares
+nothing behaves exactly as every client did before. This is the pattern
+real desktops converge on -- Windows' named mutex plus
+`SetForegroundWindow`, GApplication's uniqueness, `QtSingleApplication`
+-- and the **raise** is the half that makes it feel correct rather than
+broken; an app that merely declines to start looks like a failed launch.
+
+Three smaller calls inside it:
+
+**The id rides `WIN_REQ_CREATE`'s `text` field**, which was unused by
+that request, rather than becoming a message of its own. A separate
+"register my id" message would leave a window briefly existing without
+one -- and that gap is exactly long enough for a second copy to ask "is
+anyone there?" and be told no.
+
+**The id is an opaque token, not a path or a title.** `"taskmgr"`, not
+`/bin/wm/system/taskmgr` (which breaks the moment a binary moves --
+which has already happened once to every windowed binary in this repo)
+and not `"Task Manager"` (which collides with the title the user sees
+and that Notepad rewrites per file).
+
+**It is not a lock, and the header says so.** Nothing serialises the ask
+against the create, so two copies launched in the same instant can both
+be told "nobody there" and both open. Claiming the id in the ask would
+fix it and needs state to release on a crash; every launch path here is
+a human clicking a menu, so the gap is recorded rather than closed. Do
+not build mutual exclusion on this.
+
+`tools/single_instance_test.py` covers it, and its own positive control
+is worth knowing about: with the raise disabled, the check "the relaunch
+brought Task Manager to the front" **stayed green**, because a brand-new
+window is frontmost too. It compares the window's `client_pid` against
+the original's now. "It is on top" and "it is the same window" are
+different claims, and only the second one tests anything.
 
 ## A lone button routes its own clicks; the group is for grids
 

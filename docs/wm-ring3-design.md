@@ -129,11 +129,11 @@ particular blocker is gone.
 
 ### The consequence that is not in the roadmap
 
-**All 17 GUI test tools drive the WM through `apps/wm/wm_debug.c`'s
+**All 18 GUI test tools drive the WM through `apps/wm/wm_debug.c`'s
 `gui` command family** -- reached over the kernel's serial
 debug console. `gui windows`, `gui click`, `gui probe`, `gui damage
 verify`, `gui dialog`, `gui ctxmenu` and the rest are how 175 checks
-assert anything at all about the desktop (255 checks now). A ring-3 WM cannot answer a
+assert anything at all about the desktop (264 checks now). A ring-3 WM cannot answer a
 command dispatched from inside the kernel's console.
 
 That is not a detail to discover in stage 4. It is the reason stage 3

@@ -42,6 +42,15 @@ static int req_send(struct win_request_msg *req) {
     return sys_win_request(req);
 }
 
+// Fill a request's `text` from a NUL-terminated string, truncating to
+// fit. Shared by the title and the app id -- both ride that one field
+// (never at the same time) and both truncate rather than fail.
+static void copy_text(char *dst, const char *src) {
+    int i = 0;
+    for (; src && src[i] && i < WIN_TITLE_LEN - 1; i++) dst[i] = src[i];
+    dst[i] = '\0';
+}
+
 static void present(struct uapp *a) {
     struct win_request_msg req;
     req_clear(&req);
@@ -136,9 +145,7 @@ int uapp_set_title(struct uapp *a, const char *title) {
     req_clear(&req);
     req.type = WIN_REQ_TITLE;
     req.window = a->window;
-    int i = 0;
-    for (; title && title[i] && i < WIN_TITLE_LEN - 1; i++) req.text[i] = title[i];
-    req.text[i] = '\0';
+    copy_text(req.text, title);
     return req_send(&req);
 }
 
@@ -315,6 +322,29 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
 
 // --- lifecycle --------------------------------------------------------
 
+// For UAPP_SINGLE_INSTANCE: is a copy of this app already on screen? If
+// so TWS raises its window and this returns 1, meaning "you are the
+// second copy, go away quietly".
+//
+// Asked BEFORE the window is created, and before the font is mapped,
+// so the redundant copy costs one round trip and never appears -- a
+// window that flashes up and vanishes is worse than no single-instance
+// support at all.
+//
+// An app with the flag but no id gets 0: nothing to match on, so it
+// opens normally rather than silently refusing to start. That is the
+// safer direction of the two.
+static int activate_existing(const struct uapp_desc *desc) {
+    if (!(desc->flags & UAPP_SINGLE_INSTANCE)) return 0;
+    if (!desc->app_id || !desc->app_id[0]) return 0;
+
+    struct win_request_msg req;
+    req_clear(&req);
+    req.type = WIN_REQ_ACTIVATE;
+    copy_text(req.text, desc->app_id);
+    return req_send(&req) == 1;
+}
+
 static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     struct uapp *a = &g_app;
     a->desc = desc;
@@ -350,6 +380,7 @@ static int uapp_open(struct uapp **out, const struct uapp_desc *desc) {
     // the origin -- see win_server.c's on_window_created().
     req.c = desc->x;
     req.d = desc->y;
+    copy_text(req.text, desc->app_id);
     if (req_send(&req) != 1) return 0;
     a->window = req.window;
 
@@ -409,6 +440,13 @@ static void uapp_close(struct uapp *a) {
 
 int uapp_run(const struct uapp_desc *desc) {
     struct uapp *a;
+
+    // Already running? Its window has been raised; this copy's whole
+    // job is done. Exit 0 -- the user asked for the app and got it, so
+    // the launch SUCCEEDED, and reporting a failure here would put an
+    // error in the log for the case that works.
+    if (activate_existing(desc)) return 0;
+
     if (!uapp_open(&a, desc)) return 1;
 
     if (desc->on_tick) {

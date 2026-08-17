@@ -371,13 +371,18 @@ int main(void) {
 
     struct uapp_desc desc = {
         .title = "Task Manager",
+        // Exactly one of these is useful: a second copy shows the same
+        // table, costs a process slot, and adds its own polling to the
+        // CPU figures it is meant to be reporting. Opening it again
+        // raises the one that exists.
+        .app_id = "taskmgr",
         .layout = &LAYOUT,
         .on_size = on_size,
         // Resizable, and the table follows: uui_table's set_geometry
         // recomputes its visible rows and its stretch column from
         // whatever size the layout hands it, so more window means more
         // processes on screen with no arithmetic here.
-        .flags = UAPP_RESIZABLE,
+        .flags = UAPP_RESIZABLE | UAPP_SINGLE_INSTANCE,
         .min_w = 0, .min_h = 0,
         .widgets = ITEMS,
         .widget_count = 2,
