@@ -1,11 +1,22 @@
 # Changelog -- CLOSED 2026-08-15, kept for reference
 
 **Do not add entries to this file.** It is frozen, along with the three
-archives beside it, and stays in the tree because ~800 places across the
-repo point into it -- `docs/decisions.md` alone has 108 "see
-`CHANGELOG.md`'s entry" references, and 31 source and tool files have
-more in their comments. Those pointers still resolve; that is this
-file's remaining job.
+archives beside it, and stays in the tree because things still point
+into it. Those pointers resolve; that is this file's remaining job.
+
+MEASURED 2026-08-17 (the previous figure here said "~800 places", which
+was never counted): **299 references from outside the four changelog
+files**, of which **109 are in `docs/decisions.md`** and the rest are
+comments spread over ~40 source, tool and doc files -- 14 under
+`kernel/`, 9 under `apps/`, 1 under `userland/`.
+
+The `decisions.md` figure is the load-bearing one, because those entries
+deliberately POINT here instead of restating the reasoning. That is also
+why the dependency shrinks on its own: `CLAUDE.md` now requires a new
+`decisions.md` entry to be self-contained, so every entry added from
+here on needs nothing from this file. Deleting these four would strand
+the 109 that already exist, which is the only real argument for keeping
+them -- not that anyone reads them front to back.
 
 What replaced it, and why, is in `CLAUDE.md`'s delivery section. In
 short: what changed goes in the commit message (which already lists

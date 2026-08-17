@@ -911,9 +911,9 @@ technical conventions below:
   - *What is broken / not built yet* -- `docs/roadmap.md`, with a
     reproduction precise enough to replay.
 
-  The four changelog files stay in the tree, frozen: ~800 places across
-  the repo (108 in `docs/decisions.md` alone, plus comments in 31
-  source and tool files) say "see `CHANGELOG.md`'s entry", and those
+  The four changelog files stay in the tree, frozen: 299 places across
+  the repo (109 in `docs/decisions.md` alone, plus comments in ~40
+  source, tool and doc files) say "see `CHANGELOG.md`'s entry", and those
   pointers still resolve. Don't delete them, don't split them, don't
   update them. A new `docs/decisions.md` entry should be
   self-contained instead of pointing into them.
