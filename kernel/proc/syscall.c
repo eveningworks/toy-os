@@ -1215,7 +1215,19 @@ void syscall_dispatch(uint64_t *regs) {
             struct win_request_msg req;
             vmm_copy_from_user(pml4, &req, rdi, sizeof req); // range validated above
 
-            if (!win_server_active() && req.type != WIN_REQ_SET_COMPOSITOR) {
+            // "Is there a window server?" has two answers now. A
+            // registered ring-0 presentation layer is one; a REGISTERED
+            // COMPOSITOR is the other, and with the WM in ring 3 it is
+            // the only one there will ever be -- there is no kernel-side
+            // layer to register at all.
+            //
+            // Gating on win_server_active() alone rejected every request
+            // a ring-3 WM made after claiming the role, starting with
+            // the framebuffer grant, so the desktop exited before
+            // drawing a pixel. SET_COMPOSITOR was already exempt for the
+            // same reason; that exemption was just one request short.
+            if (!win_server_active() && !win_server_compositor_pid()
+                && req.type != WIN_REQ_SET_COMPOSITOR) {
                 // No desktop running. Refused rather than silently
                 // succeeding, so a client started outside GUI mode finds
                 // out immediately instead of drawing into a buffer nothing

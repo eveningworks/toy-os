@@ -706,7 +706,25 @@ void wm_run(void) {
     uint8_t prev_buttons = buttons;
 
     for (;;) {
-        __asm__ volatile ("hlt");
+        // The ring-0 loop halted here until the next interrupt. `hlt` is
+        // PRIVILEGED, so in ring 3 it is a #GP -- and it was the first
+        // thing this desktop hit on its very first run, after getting
+        // all the way through the framebuffer grant, the cursor theme
+        // and nine desktop entries.
+        //
+        // sys_yield() is the honest replacement and not the final one:
+        // it gives up the rest of the slice, so the desktop is a BUSY
+        // WAITER now rather than a sleeper, and an idle machine costs a
+        // round-robin slot per tick instead of nothing. What it should
+        // do is BLOCK until there is something to do -- but a compositor
+        // is woken by input, by client requests AND by its own cadence
+        // (the taskbar clock, client timers), and only the first two
+        // arrive as events. A blocking wait today would stop the clock.
+        //
+        // The fix is a compositor-side timer, the same shape
+        // WIN_REQ_TIMER gives a window client. Recorded in
+        // docs/roadmap.md rather than bodged here.
+        sys_yield();
 
         // Everything from here to wmwd_frame_end() is this frame's WORK.
         // The `hlt` above is deliberately outside it: time spent halted

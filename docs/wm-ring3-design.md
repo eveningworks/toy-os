@@ -1012,8 +1012,47 @@ ring-0 path is undisturbed. Do not read a green run as evidence this
 works; the first thing the switchover will exercise is exactly this, and
 it should be expected to need fixing.
 
-After that: the switchover itself -- spawning the ring-3 WM instead of
-calling `wm_run()` in ring 0, and deleting `apps/wm/`.
+## The switchover -- STARTED, not finished (2026-08-17)
+
+**The ring-3 desktop runs.** `gui3` at the physical shell spawns
+`/bin/wm/system/toywm` and waits for it (R7's spawn-and-wait), and it
+claims the compositor role, takes the framebuffer grant, loads its
+cursor theme 6 of 6, enters GUI mode at 1280x720, reads its nine desktop
+entries, composites a real desktop, and **answers the serial debug
+console** -- which is the leg that could not be validated until this
+existed, and it worked first time.
+
+It is a SEPARATE command rather than a flip of `gui`, and that ordering
+is the point: every GUI test tool reaches the WM over the debug console,
+so flipping outright would have turned all 23 tools red at once with
+nothing left to ask the desktop with.
+
+**Two real bugs had to be fixed before it drew anything**, both found by
+running it rather than by reading it:
+
+- `SYS_WIN_REQUEST`'s "is there a window server?" gate rejected every
+  request a ring-3 WM made after claiming the role, starting with the
+  framebuffer grant -- so the desktop exited before its first pixel.
+  `SET_COMPOSITOR` was already exempt for exactly this reason; the
+  exemption was one request short. A registered COMPOSITOR is a window
+  server now.
+- `wm_run()`'s idle `hlt` is PRIVILEGED. In ring 0 the loop halted until
+  the next interrupt; in ring 3 it is a #GP, and it was the first thing
+  the desktop hit after getting all the way through the grant, the
+  cursor theme and nine desktop entries.
+
+**What is left is ONE thing: a client cannot get a window.** A spawned
+app creates none and logs nothing, while the compositor is
+demonstrably alive and pumping the same event queue the create arrives
+on. Measured with the flip in place: `desktop_entries` 12/14 and
+`cursor_theme` 5/9 pass against the ring-3 desktop; everything needing a
+client window fails. `docs/roadmap.md` has the reproduction and where to
+start -- beginning with the fact that nothing in the create chain logs
+on failure, which is why this is a mystery rather than a bug report.
+
+`apps/wm/` is deliberately still there and still the default. It gets
+deleted in the change that makes the flip stick -- not before, because
+it is the only thing left to bisect against.
 
 The historical note, for what the state was mid-migration:
 

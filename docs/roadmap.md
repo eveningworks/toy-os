@@ -1094,6 +1094,63 @@ guess.*
 
 ### Known issues and papercuts (unscheduled)
 
+- [ ] **The ring-3 desktop RUNS but cannot give a client a window.**
+      This is the one thing between Milestone 41 and its switchover.
+
+      Reproduce:
+
+          python3 tools/vm.py --disk <copy> start
+          # type `gui3` at the physical shell (QMP), then:
+          gui spawn /bin/wm/demos/uidemo
+          gui windows        -> "0 window(s)"
+
+      The spawned client creates no window and logs NOTHING -- no error
+      from the WM, no stderr from the app, and no `wm: client pid N
+      opened window` line. The compositor is demonstrably alive and
+      pumping events while this happens, because `gui windows` is
+      answered by it, over the same event queue the create would arrive
+      on.
+
+      **What already works, measured with `gui` flipped to the ring-3
+      desktop and the full suite run against it:** it claims the
+      compositor role, takes the framebuffer grant (900 pages), loads
+      its cursor theme 6 of 6, enters GUI mode at 1280x720, reads its 9
+      desktop entries, composites a real desktop (27 distinct colours,
+      background and taskbar where they belong), and answers the serial
+      debug console. `desktop_entries` passes 12/14 and `cursor_theme`
+      5/9 against it. Everything needing a client window fails.
+
+      **Where to start:** the create path is
+      `win_server.c`'s `create_window()` -> `tell_compositor(WIN_EV_
+      CLIENT_CREATED)` -> the compositor's `wm_client_handle_event()`
+      -> `query_window()` + `map_client_window()` -> `on_window_created`.
+      Nothing in that chain logs on failure, which is the first thing to
+      fix -- a silent path is why this is a mystery rather than a bug
+      report. Note the log also shows an unexplained `syscall: exit()
+      called by ring-3 process` immediately before the spawn, which has
+      not been attributed to anything.
+
+      Two real bugs were already found and fixed by getting this far,
+      both of which had to be hit before anything else could be:
+      `SYS_WIN_REQUEST`'s "is there a window server?" gate rejected every
+      request from a ring-3 WM after it claimed the role (a registered
+      COMPOSITOR is a window server now), and `wm_run()`'s idle `hlt` is
+      a PRIVILEGED instruction -- a #GP the moment a ring-3 desktop
+      reached its first frame.
+
+- [ ] **The ring-3 WM busy-waits instead of sleeping.** `wm.c`'s frame
+      loop halted on `hlt` in ring 0; in ring 3 that is privileged, so
+      it calls `sys_yield()` and gives up the rest of its slice. Correct,
+      but an idle desktop now costs a round-robin slot per tick rather
+      than nothing.
+
+      The fix is a compositor-side timer, the same shape `WIN_REQ_TIMER`
+      already gives a window client. A plain blocking wait is NOT the
+      answer and is worth writing down so nobody tries it: a compositor
+      is woken by input, by client requests AND by its own cadence (the
+      taskbar clock, client timers), and only the first two arrive as
+      events -- so blocking on the event queue would stop the clock.
+
 - [ ] **Injected clicks are LOST under parallel `gui_regress` load, and
       the failing checks are finally named.** Reproduce by running the
       full suite (`python3 tools/gui_regress.py --logs DIR`) at the

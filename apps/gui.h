@@ -8,4 +8,10 @@
 // responsible for redrawing the text console afterward (see apps/shell.c).
 void gui_main(void);
 
+// The RING-3 desktop: spawns /bin/wm/system/toywm and waits for it.
+// Temporary, and paired with apps/gui3.c's comment on why it is a
+// separate command rather than a flip of `gui` -- it goes away when
+// apps/wm/ does.
+void gui3_main(void);
+
 #endif

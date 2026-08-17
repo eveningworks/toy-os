@@ -10,6 +10,7 @@
 const struct app_info app_registry[] = {
     { "shell", "Command-line shell",     shell_main },
     { "gui",   "Graphical desktop demo", gui_main   },
+    { "gui3",  "Graphical desktop (ring 3)", gui3_main },
 };
 const int app_registry_count = sizeof(app_registry) / sizeof(app_registry[0]);
 

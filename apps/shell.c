@@ -166,6 +166,8 @@ static void dispatch(char *line) {
         cmd_edit(args ? args : "");
     } else if (k_strcmp(cmd, "gui") == 0) {
         app_run("gui"); // shortcut for `run gui`
+    } else if (k_strcmp(cmd, "gui3") == 0) {
+        app_run("gui3"); // the ring-3 desktop -- see apps/gui3.c
         vga_clear();
         vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
         vga_write("Back from GUI mode.\n");
