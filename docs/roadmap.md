@@ -1111,25 +1111,53 @@ guess.*
       command, and the client's own `WIN_EV_CLIENT_CREATED` is never
       handled because the pump never runs again.
 
-      **The lead, and it is a specific one:** `sys_spawn()` is being
-      called from inside a ring-3 process's syscall, by a process the
-      scheduler is running. Nothing else in the tree does that -- every
-      other spawn comes from the shell or the ring-0 WM, i.e. from the
-      KERNEL CONTEXT. CLAUDE.md already records the shape of this bug
-      family ("a misleading symptom usually means shared state"; the
-      legacy `process_run_ring3()` inheriting another process's RSP0 and
-      overwriting its saved trapframe). Start by reading what
-      `scheduler_spawn()` does to the CALLER's saved state when the
-      caller is itself a scheduled process, rather than by looking at the
-      WM.
+      **ROOT CAUSE FOUND (2026-08-17), and it is in the kernel, not the
+      WM.** `win_server.c`'s `debug_via_compositor()` waits for the
+      compositor's reply with `sti; hlt` inside the handler -- and
+      `scheduler.c` already documents that exact pattern as unsafe:
 
-      Worth knowing before believing any theory here: TWO were already
-      wrong. The debug channel being flooded out of a 32-deep queue by a
-      client's presents (it was not -- switching that channel to a poll
-      changed nothing) and the event drain livelocking on a faster
-      producer (also not -- bounding it changed nothing). Both fixes were
-      kept because both are right independently, but neither was the
-      cause. Instrument before theorising a third time.
+          The obvious implementation of a blocking syscall -- `sti`, then
+          spin or `hlt` inside the handler until the thing you're waiting
+          for arrives -- was tried in this kernel and is genuinely unsafe
+          here, not merely slow [...] because g_next_kernel_rsp (idt.c)
+          is a single global "where to resume".
+
+      It survives TWO contexts (the kernel context waiting, the WM
+      answering), which is why it worked perfectly for 300 frames and
+      through every earlier test. A THIRD context breaks it: the moment
+      any TWP client exists, that single global resume point is
+      clobbered and the WM is never resumed again.
+
+      Every observation fits: no crash, no fault, no log; permanent
+      rather than slow; spawning `/bin/hello` (exits at once, no TWP) is
+      harmless while `winclient` (creates a window and then WAITS, so it
+      is not even presenting) is fatal.
+
+      **The fix is to stop blocking in the kernel**, not to tune the
+      timeout. But the obvious version is a trap worth naming: making the
+      reply ASYNCHRONOUS looks easy, because `dbg_cmd_gui()` prints it
+      with a plain `klog_write()` and could just as well print it later
+      -- and it would break every tool. `DebugConsole.send()` reads to
+      the PROMPT, so a reply arriving after the prompt is a reply the
+      tool never sees. The synchronous shape is load-bearing for the
+      harness, not incidental.
+
+      So the waiter has to block SAFELY rather than not block. The
+      waiter is the kernel context, not a process, so `SCHED_WAIT_*` does
+      not apply as-is -- read `idt.c`'s `g_next_kernel_rsp` first and
+      establish whether the kernel context's own switch path is actually
+      subject to the hazard, or whether the corruption comes from
+      somewhere else in the three-context case. That is the one thing
+      still unmeasured here: the mechanism is documented and the
+      symptoms fit it exactly, but the clobber itself has not been
+      caught in the act.
+
+      Two earlier theories were WRONG, recorded so nobody re-derives
+      them: the debug channel being flooded out of a 32-deep queue by a
+      client's presents (switching it to a poll changed nothing), and
+      the event drain livelocking on a faster producer (bounding it
+      changed nothing). Both fixes were kept because both are right
+      independently -- but neither was the cause.
 
 - [x] ~~**The ring-3 desktop cannot give a client a window.**~~ FIXED
       2026-08-17. `win_server_request()` had `if (!g_ops) return -1;`,
