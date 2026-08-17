@@ -1094,8 +1094,53 @@ guess.*
 
 ### Known issues and papercuts (unscheduled)
 
-- [ ] **The ring-3 desktop RUNS but cannot give a client a window.**
-      This is the one thing between Milestone 41 and its switchover.
+- [ ] **The ring-3 WM stops running the moment it spawns a process.**
+      The one thing between Milestone 41 and its switchover, and the
+      client-window bug this entry used to describe is FIXED (see below).
+
+      Reproduce:
+
+          python3 tools/vm.py --disk <copy> start
+          # type `gui3` at the physical shell (QMP), then:
+          gui spawn /bin/wm/demos/uidemo
+
+      The spawn SUCCEEDS -- the reply comes back, the client starts and
+      prints its layout -- and the WM never runs another frame. No crash,
+      no fault, no log line: it simply stops being scheduled. Instrumented
+      with a per-frame log, the last frame is the one that ran the spawn
+      command, and the client's own `WIN_EV_CLIENT_CREATED` is never
+      handled because the pump never runs again.
+
+      **The lead, and it is a specific one:** `sys_spawn()` is being
+      called from inside a ring-3 process's syscall, by a process the
+      scheduler is running. Nothing else in the tree does that -- every
+      other spawn comes from the shell or the ring-0 WM, i.e. from the
+      KERNEL CONTEXT. CLAUDE.md already records the shape of this bug
+      family ("a misleading symptom usually means shared state"; the
+      legacy `process_run_ring3()` inheriting another process's RSP0 and
+      overwriting its saved trapframe). Start by reading what
+      `scheduler_spawn()` does to the CALLER's saved state when the
+      caller is itself a scheduled process, rather than by looking at the
+      WM.
+
+      Worth knowing before believing any theory here: TWO were already
+      wrong. The debug channel being flooded out of a 32-deep queue by a
+      client's presents (it was not -- switching that channel to a poll
+      changed nothing) and the event drain livelocking on a faster
+      producer (also not -- bounding it changed nothing). Both fixes were
+      kept because both are right independently, but neither was the
+      cause. Instrument before theorising a third time.
+
+- [x] ~~**The ring-3 desktop cannot give a client a window.**~~ FIXED
+      2026-08-17. `win_server_request()` had `if (!g_ops) return -1;`,
+      which refused every request past the compositor/framebuffer ones
+      whenever no RING-0 presentation layer was registered -- which, with
+      the WM in ring 3, is always. One guard, and it silently refused
+      both `WIN_REQ_FONT` (so the desktop drew no text and every
+      font-derived measurement collapsed: `WM_TITLEBAR_H` is
+      `ugfx_char_h() + 8`, so chrome became 8px) and `WIN_REQ_CREATE` (so
+      no client could ever get a window). A window server is EITHER a
+      registered ring-0 layer or a registered compositor.
 
       Reproduce:
 

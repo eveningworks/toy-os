@@ -641,8 +641,28 @@ void wm_run(void) {
         return;
     }
 
+    // THE FONT. A ring-3 process has no glyph tables of its own -- they
+    // are ~11,800 lines of kernel .rodata, mapped READ-ONLY on request
+    // (WIN_REQ_FONT) so a client's text cannot drift from the desktop's.
+    // Every window client gets this inside uapp_run(); the WM is not a
+    // uapp, so it has to ask for itself.
+    //
+    // Without it ugfx_char_h() is 0, and the failure is not "no text" --
+    // it is that plus every font-derived measurement collapsing:
+    // WM_TITLEBAR_H is `ugfx_char_h() + 8`, so chrome becomes 8px, the
+    // taskbar becomes a sliver, and icon labels vanish while their boxes
+    // still draw. That exact picture is what the first person to run
+    // `gui3` saw.
+    if (!ugfx_font_init()) {
+        sys_eprint("wm: cannot enter GUI mode -- the server refused the font\n");
+        return;
+    }
+
     screen_w = g_wm_screen.back.w;
     screen_h = g_wm_screen.back.h;
+    // AFTER the font: WM_TITLEBAR_H is `ugfx_char_h() + 8`, so computing
+    // this first pins the chrome at 8px for the life of the session no
+    // matter what the font does afterwards.
     taskbar_h = WM_TITLEBAR_H;
 
     // Registers the two cursor settings and loads the configured theme.
@@ -781,6 +801,11 @@ void wm_run(void) {
         wmwd_phase("input");
         wm_rawin_pump();
         wm_rawin_mouse(&mx, &my, &buttons);
+
+
+        // The `gui` command channel. Polled, not event-driven -- see
+        // wm_client_poll_debug(). Every GUI test tool arrives here.
+        wm_client_poll_debug();
 
         // Synthetic input from the serial debug console's `gui click` /
         // `gui drag` (apps/wm/wm_debug.c), consumed at most one event

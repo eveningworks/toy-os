@@ -95,7 +95,8 @@
 #include "elf_run.h"
 #include "process.h" // process_context_is_armed() -- see kernel_slot_runnable()
 #include "win_events.h" // win_events_reset() at spawn -- see scheduler_spawn()
-#include "win_server.h" // win_server_client_gone() -- see scheduler_on_exit()
+#include "win_server.h"
+#include "win_input.h" // raw input to a ring-3 compositor // win_server_client_gone() -- see scheduler_on_exit()
 #include "pipe.h"      // pipe_close_writer() when a piped child exits
 #include "syscall_abi.h" // SYS_RETRY -- the wake value a blocked waiter sees
 #include "fs.h"
@@ -971,6 +972,11 @@ void scheduler_demo_run(void) {
 // repo holds: it must be safe wherever the kernel is idle.
 void scheduler_idle(void) {
     debug_console_poll();
+    // Raw input to a ring-3 compositor. Silent unless one is registered
+    // AND no ring-0 presentation layer is -- see win_input.c. It lives
+    // here because this is the kernel's one owner of idle work, so
+    // every waiting loop feeds the desktop without knowing it does.
+    win_input_poll();
     // Write back a quiet disk cache (ata_cache.h). This is the "and an
     // idle timer" half of the flush policy -- the dirty-line threshold
     // bounds how much can accumulate, this bounds how LONG it can sit

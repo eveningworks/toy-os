@@ -352,6 +352,11 @@ int wm_claim_compositor(void);
 // event was something else (raw input, which wm_rawin.c owns).
 int wm_client_handle_event(const struct win_event *ev);
 
+// Runs one pending `gui` command, if any. Called once per frame --
+// POLLED rather than event-driven, so a busy client cannot flood the
+// diagnostic channel out of a lossy queue. See wm_client.c.
+void wm_client_poll_debug(void);
+
 void wm_client_init(void);
 void wm_client_shutdown(void);
 

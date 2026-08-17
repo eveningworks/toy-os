@@ -662,7 +662,18 @@ int win_server_request(int pid, struct win_request_msg *req) {
         return win_surface_present(pid, req->a, req->b, req->c, req->d) ? 0 : -1;
     }
 
-    if (!g_ops) return -1;
+    // A window server is EITHER a registered ring-0 presentation layer
+    // or a registered ring-3 compositor. This used to demand the first,
+    // which refused every request below the moment the WM moved out of
+    // the kernel -- the font (so the desktop drew no text, and every
+    // font-derived measurement collapsed with it) and window creation
+    // (so no client could ever get a window). Silently, because the
+    // refusal is a bare -1 that nothing logs.
+    //
+    // Everything past here therefore has to tolerate g_ops being NULL;
+    // the calls below are all guarded individually rather than by this
+    // one, which is what that used to buy.
+    if (!g_ops && !g_comp_pid) return -1;
 
     // Not addressed to one of the CALLER's own windows -- it names
     // another process entirely, so it skips the lookup() ownership
@@ -748,7 +759,7 @@ int win_server_request(int pid, struct win_request_msg *req) {
         struct client_window *cw = lookup(pid, req->window);
         if (!cw) return 0;
         tell_compositor(WIN_EV_CLIENT_PRESENT, pid, cw->id, 0, 0);
-        if (g_ops->window_present) g_ops->window_present(pid, cw->id);
+        if (g_ops && g_ops->window_present) g_ops->window_present(pid, cw->id);
         return 1;
     }
     case WIN_REQ_DESTROY: {
@@ -765,7 +776,7 @@ int win_server_request(int pid, struct win_request_msg *req) {
         copy_text(title, req->text, WIN_TITLE_LEN);
         k_strlcpy(cw->title, title, sizeof cw->title);
         tell_compositor(WIN_EV_CLIENT_TITLE, pid, cw->id, 0, 0);
-        if (g_ops->window_title) g_ops->window_title(pid, cw->id, title);
+        if (g_ops && g_ops->window_title) g_ops->window_title(pid, cw->id, title);
         return 1;
     }
     case WIN_REQ_HINTS: {
@@ -775,7 +786,7 @@ int win_server_request(int pid, struct win_request_msg *req) {
         cw->min_w = req->b;
         cw->min_h = req->c;
         tell_compositor(WIN_EV_CLIENT_HINTS, pid, cw->id, 0, 0);
-        if (g_ops->window_hints) {
+        if (g_ops && g_ops->window_hints) {
             g_ops->window_hints(pid, cw->id, (unsigned)req->a, req->b, req->c);
         }
         return 1;
@@ -793,12 +804,16 @@ int win_server_request(int pid, struct win_request_msg *req) {
     case WIN_REQ_TIMER: {
         struct client_window *cw = lookup(pid, req->window);
         if (!cw) return 0;
-        if (!g_ops->window_timer) return 0;
+        // A timer with nobody to service it is refused, as before --
+        // but "nobody" now means neither a ring-0 layer NOR a ring-3
+        // compositor, and the compositor is told through the event
+        // beside this call rather than through a slot.
+        if (!g_comp_pid && (!g_ops || !g_ops->window_timer)) return 0;
         // Negative is nonsense rather than "cancel" -- 0 already means
         // that, and silently reinterpreting a bad value hides the bug.
         if (req->a < 0) return 0;
         tell_compositor(WIN_EV_CLIENT_TIMER, pid, cw->id, req->a, 0);
-        g_ops->window_timer(pid, cw->id, (unsigned)req->a);
+        if (g_ops && g_ops->window_timer) g_ops->window_timer(pid, cw->id, (unsigned)req->a);
         return 1;
     }
     case WIN_REQ_PONG: {

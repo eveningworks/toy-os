@@ -26,13 +26,22 @@
 // `WIN_EV_RAW_*` is the ONLY path, the WM's own `compositor_raw()`
 // forwarder is forwarding to itself. It is deleted (R9).
 //
-// THE QUEUE IS FINITE, AND A DROP IS A REAL EVENT
-// -----------------------------------------------
+// THE DRAIN IS BOUNDED, AND THAT IS NOT AN OPTIMISATION
+// ------------------------------------------------------
 // The kernel's per-process event queue is 32 deep and drops the OLDEST
-// when it overflows (see WIN_EV_RAW_MOUSE). So this drains everything
-// available each frame rather than one event per frame: the WM's own
-// frame rate is what bounds how fast it consumes, and taking one event
-// per frame would guarantee a backlog under any real mouse movement.
+// when it overflows (see WIN_EV_RAW_MOUSE). One event per frame would
+// guarantee a backlog under any real mouse movement -- but draining
+// "until empty" is worse than either, and it LIVELOCKED the first
+// desktop that ever had a client on it: a client presents every frame,
+// each present is an event, and they arrived as fast as this consumed
+// them, so the loop never exited, the frame never finished, and the
+// desktop stopped answering the debug console while still showing its
+// last good picture. A desktop that looks alive and is not.
+//
+// So: at most one queue's worth per frame. Bounded, which guarantees the
+// frame completes, and generous, because the queue cannot hold more than
+// that anyway -- anything still waiting is this frame's backlog and the
+// next frame takes it.
 //
 // Motion is COALESCED on purpose -- ten queued moves are one position,
 // and replaying each in turn would make the pointer crawl behind the
@@ -55,6 +64,11 @@ static int g_seeded;
 // rather than a queue: the loop consumes them every frame, and two keys
 // arriving inside one frame is not something the hardware can produce at
 // a 100Hz tick.
+// One queue's worth. The same number as the kernel's depth rather than
+// a tuned one, because "how many can be waiting?" has exactly that
+// answer.
+#define WM_RAWIN_DRAIN_MAX 32
+
 static int g_key = -1;
 static uint8_t g_key_mods;
 static int g_wheel;
@@ -70,11 +84,12 @@ void wm_rawin_pump(void) {
     if (!g_seeded) return;
 
     struct win_event ev;
+    int budget = WM_RAWIN_DRAIN_MAX;
     // Non-blocking: the compositor must not park in the kernel waiting
     // for input, because it still owes the screen a frame, its clients
     // their timers, and the watchdog a measurement. sys_wait_event()
     // is what a CLIENT uses; a compositor polls and then does its work.
-    while (sys_poll_event(&ev) == 1) {
+    while (budget-- > 0 && sys_poll_event(&ev) == 1) {
         switch (ev.type) {
         case WIN_EV_RAW_MOUSE:
             // Coalesced by assignment -- the newest position wins.
