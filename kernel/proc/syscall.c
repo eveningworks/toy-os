@@ -1240,6 +1240,30 @@ void syscall_dispatch(uint64_t *regs) {
                 regs[14] = (uint64_t)(int64_t)rc;
             }
         }
+    } else if (rax == SYS_WIN_DEBUG) {
+        // TWP's diagnostic channel, reachable from ring 3 so a ring-3
+        // compositor can answer `gui` commands. Same copy-in / act /
+        // copy-back discipline as SYS_WIN_REQUEST above, and for the
+        // same reason: the client shares the page and could otherwise
+        // change a field between validation and use.
+        uint64_t pml4 = vmm_current_pml4();
+        int pid = scheduler_current_pid();
+        if (!vmm_validate_user_range(pml4, rdi, sizeof(struct win_debug_msg))) {
+            klog_write("syscall: win_debug() rejected -- invalid user pointer\n");
+            regs[14] = (uint64_t)-1;
+        } else if (pid == 0) {
+            regs[14] = (uint64_t)-1;
+        } else {
+            struct win_debug_msg msg;
+            vmm_copy_from_user(pml4, &msg, rdi, sizeof msg);
+            // Straight to the server, not over the transport: the
+            // transport carries messages TO the window server, and this
+            // is the server's own client answering it. Routing it back
+            // out through the transport would be a loop.
+            int rc = win_server_debug(pid, &msg);
+            vmm_copy_to_user(pml4, rdi, &msg, sizeof msg);
+            regs[14] = (uint64_t)(int64_t)rc;
+        }
     } else if (rax == SYS_POLL_EVENT || rax == SYS_WAIT_EVENT) {
         // Both share everything except what happens when the queue is
         // empty, so they share a handler rather than duplicating the

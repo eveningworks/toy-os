@@ -196,6 +196,10 @@ unsigned long long sys_fs_generation(void) {
     return (unsigned long long)syscall0(SYS_FS_GENERATION);
 }
 
+int sys_win_debug(struct win_debug_msg *msg) {
+    return (int)syscall1(SYS_WIN_DEBUG, (uint64_t)(uintptr_t)msg);
+}
+
 int sys_poweroff(int reboot) {
     return (int)syscall1(SYS_POWEROFF, (uint64_t)reboot);
 }

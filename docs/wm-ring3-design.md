@@ -966,15 +966,51 @@ KTESTs calling it -- a primitive with no protocol path, which by this
 repo's own rule left it unvalidated against real use. A ring-3
 compositor could not see a single client pixel without it.
 
-**What is left, and it is ONE thing:** the `gui` debug command's ring-3
-leg. In ring 0 the kernel calls `win_server_ops.debug_command` and gets
-the output back; a ring-3 WM has to be sent the command and reply with
-the text, and unlike every other callback that reply is NOT optional --
-all 22 GUI test tools read it, so the desktop is unverifiable without
-it. It is also the only remaining path that genuinely wants a round
-trip, because the console is waiting on the answer.
-`wm_client_debug_command()` is exported and uncalled so the gap is
-stated once rather than surfacing as an unused-function warning.
+**The debug leg is BUILT (2026-08-17), and it is the one round trip in
+the whole inversion.** Every other callback became fire-and-forget; this
+one cannot, because the console is holding the line and all 22 GUI test
+tools read the answer -- a desktop whose debug channel does not reply is
+one nobody can verify.
+
+Three messages, the same notify-then-fetch shape `WIN_REQ_WINDOW_INFO`
+uses, because a command is 128 bytes and a reply up to 4096 and neither
+fits in a 24-byte event:
+
+    kernel  --WIN_EV_CLIENT_DEBUG-->  compositor    one is waiting
+    kernel  <--WIN_REQ_DEBUG_TAKE---  compositor    give it to me
+    kernel  <--WIN_REQ_DEBUG_REPLY--  compositor    here is the output
+
+Four things worth knowing before touching it:
+
+- **The kernel BLOCKS while it waits**, in the kernel context running the
+  serial console -- not a syscall handler, so the nested-IRQ hazard
+  CLAUDE.md warns about does not apply, and the console already blocks
+  this way on the filesystem for `sh cat big`. It waits with interrupts
+  ON and `hlt`, because the timer is what schedules the compositor that
+  owes the answer; spinning with them off would deadlock against the
+  process being waited for, and look like a hung machine rather than a
+  slow one.
+- **The deadline is 2 seconds, and a timeout is an EMPTY reply, not an
+  unknown command.** Those are different facts and the tools tell them
+  apart. Without a bound a wedged compositor takes the whole test
+  harness down with it.
+- **The reply is chunked in BOTH directions.** One message carries
+  `WIN_DEBUG_CHUNK` (512) bytes and `gui windows --json` is routinely
+  longer, so the compositor sends several with `WIN_DEBUG_F_MORE` on
+  every piece but the last, and only that last one releases the waiter.
+  Releasing on the first would print 512 bytes and call it the answer.
+- **`SYS_WIN_DEBUG` had to exist.** TWP's diagnostic channel was
+  kernel-internal -- the console called the server directly -- so there
+  was no way for a ring-3 process to be handed a command or send output
+  back.
+
+**UNVALIDATED, and this is the important caveat.** The ring-3 branch only
+runs when NO presentation layer is registered, i.e. when the ring-0 WM is
+gone -- so nothing in the 315-check suite reaches it, and it cannot be
+reached until the switchover. What the suite does prove is that the
+ring-0 path is undisturbed. Do not read a green run as evidence this
+works; the first thing the switchover will exercise is exactly this, and
+it should be expected to need fixing.
 
 After that: the switchover itself -- spawning the ring-3 WM instead of
 calling `wm_run()` in ring 0, and deleting `apps/wm/`.

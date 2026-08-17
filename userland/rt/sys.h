@@ -242,6 +242,11 @@ int sys_waitpid(int pid, int *out_code);
 // One typed message in, one out. See abi/win_proto.h.
 int sys_win_request(struct win_request_msg *req);
 
+// TWP's diagnostic channel -- the `gui` commands the test tools drive
+// the desktop with. Only the registered compositor may use it; see
+// SYS_WIN_DEBUG and WIN_REQ_DEBUG_TAKE.
+int sys_win_debug(struct win_debug_msg *msg);
+
 // Non-blocking. 1 if an event was written, 0 if the queue is empty.
 int sys_poll_event(struct win_event *out);
 

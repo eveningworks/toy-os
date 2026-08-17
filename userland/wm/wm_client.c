@@ -518,6 +518,53 @@ int wm_client_handle_event(const struct win_event *ev) {
     case WIN_EV_CLIENT_CLOSE:
         on_close_pid(pid);
         break;
+    case WIN_EV_CLIENT_DEBUG: {
+        // The one event with somebody waiting on the other end: the
+        // console is blocked until the reply lands (or its deadline
+        // passes), and all 22 GUI test tools arrive this way. So this
+        // runs the command and answers IMMEDIATELY -- it must not be
+        // deferred to the next frame, and it must not fail silently,
+        // because a silent failure here reads as a hung desktop.
+        struct win_debug_msg q;
+        for (unsigned i = 0; i < sizeof q; i++) ((uint8_t *)&q)[i] = 0;
+        q.type = WIN_REQ_DEBUG_TAKE;
+        if (sys_win_debug(&q) != 1) break; // nothing pending -- a stale event
+
+        // Static, not on the stack: a ring-3 process gets four pages of
+        // it (kernel/uaddr.h) and this is 4 KB.
+        static char reply[WIN_DEBUG_REPLY_MAX];
+        int n = wm_client_debug_command(q.text, reply, sizeof reply);
+
+        struct win_debug_msg r;
+        if (n < 0) {
+            // Unrecognised, which a caller must be able to tell from a
+            // command that legitimately printed nothing.
+            for (unsigned i = 0; i < sizeof r; i++) ((uint8_t *)&r)[i] = 0;
+            r.type = WIN_REQ_DEBUG_REPLY;
+            r.flags = WIN_DEBUG_F_UNKNOWN;
+            r.len = 0;
+            sys_win_debug(&r);
+            break;
+        }
+
+        // Chunked, because one message carries WIN_DEBUG_CHUNK bytes and
+        // a `gui windows --json` is routinely longer. WIN_DEBUG_F_MORE on
+        // every piece but the last, which is what releases the waiter.
+        int sent = 0;
+        do {
+            int piece = n - sent;
+            if (piece > WIN_DEBUG_CHUNK) piece = WIN_DEBUG_CHUNK;
+            for (unsigned i = 0; i < sizeof r; i++) ((uint8_t *)&r)[i] = 0;
+            r.type = WIN_REQ_DEBUG_REPLY;
+            for (int i = 0; i < piece; i++) r.text[i] = reply[sent + i];
+            r.text[piece] = '\0';
+            r.len = (uint32_t)piece;
+            sent += piece;
+            if (sent < n) r.flags = WIN_DEBUG_F_MORE;
+            sys_win_debug(&r);
+        } while (sent < n);
+        break;
+    }
     case WIN_EV_CLIENT_ACTIVATE:
         // Told, not asked: the kernel already answered the asking client
         // (it holds the app_ids), so this is only the action.

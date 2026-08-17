@@ -148,6 +148,19 @@
 #define WIN_EV_CLIENT_CLOSE     23 // a: pid, window unused. Close every
                                     // window this pid owns -- the
                                     // desktop's own "quit that app".
+#define WIN_EV_CLIENT_DEBUG     25 // No payload. A `gui` command is
+                                    // waiting; fetch it with
+                                    // WIN_REQ_DEBUG_TAKE and answer with
+                                    // WIN_REQ_DEBUG_REPLY. Thin like the
+                                    // rest because the command is 128
+                                    // bytes and this struct is 24.
+                                    //
+                                    // **The sender is BLOCKED until the
+                                    // reply arrives or the deadline
+                                    // passes.** Unlike every other event
+                                    // here, taking your time has a cost
+                                    // somebody can see: the console is
+                                    // holding the line.
 #define WIN_EV_CLIENT_ACTIVATE  24 // a: pid. RAISE this window: a second
                                     // copy of a single-instance app
                                     // asked for its twin, the kernel
@@ -551,6 +564,24 @@ struct win_event {
                            // see that struct for why.
 #define WIN_REQ_DEBUG_MORE 11 // Fetch the next chunk of the reply the
                            // previous DEBUG_CMD started. No inputs.
+#define WIN_REQ_DEBUG_TAKE 21 // Compositor only. Copies the pending
+                           // `gui` command into `text` and clears it, so
+                           // a second TAKE gets nothing rather than
+                           // running the same command twice.
+                           // Returns 1 with the command, 0 if none is
+                           // pending.
+#define WIN_REQ_DEBUG_REPLY 22 // Compositor only. `text`/`len` are the
+                           // command's output; `flags` may carry
+                           // WIN_DEBUG_F_UNKNOWN for a command the
+                           // compositor did not recognise, which the
+                           // caller must be able to tell from one that
+                           // legitimately printed nothing.
+                           //
+                           // Unblocks whoever asked. A reply with no
+                           // pending command is ignored rather than
+                           // refused -- it means the deadline already
+                           // passed, and the compositor has no way to
+                           // have known that.
 
 // --- the diagnostic channel (Milestone 41, stage 3) -------------------
 //
@@ -585,6 +616,17 @@ struct win_event {
                               // NUL. Sized so a typical one-line answer
                               // fits in a single round trip while the
                               // struct stays well under a page.
+
+// The longest reply a `gui` command may produce, in total. One MESSAGE
+// carries WIN_DEBUG_CHUNK bytes, so a reply larger than that arrives in
+// several -- in both directions now: the kernel already chunked it out
+// to the console, and a ring-3 compositor chunks it IN the same way,
+// setting WIN_DEBUG_F_MORE on every piece but the last.
+//
+// In the ABI rather than private to win_server.c because both ends size
+// a buffer by it, and two ends disagreeing about a maximum is how a
+// reply gets silently truncated at whichever end guessed smaller.
+#define WIN_DEBUG_REPLY_MAX 4096
 
 #define WIN_DEBUG_F_MORE  0x01 // set on a reply when more chunks follow:
                                // ask again with WIN_REQ_DEBUG_MORE. The

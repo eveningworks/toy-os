@@ -13,6 +13,7 @@
 #include "font_ttf.h" // the glyph tables WIN_REQ_FONT shares out
 #include "gfx.h"      // gfx_font_size() -- which variant is active
 #include "win_surface.h" // the compositor's framebuffer grant (M41 stage 4a)
+#include "timer.h"       // pit_ticks() -- the ring-3 debug leg's deadline
 #include "win_events.h"  // WIN_EV_CLOSE to clients when the desktop dies (R7)
 #include "vga.h"         // vga_resume() -- hand the screen back (R7)
 #include "kfmt.h"        // klog_printf
@@ -433,7 +434,6 @@ static int resize_window(struct client_window *cw, int w, int h) {
 // KB) with room to grow -- an over-long one is truncated with a marker
 // rather than silently cut, matching kernel/lib's rule that a formatter
 // which does not fit says so.
-#define WIN_DEBUG_REPLY_MAX 4096
 static char g_dbg_reply[WIN_DEBUG_REPLY_MAX];
 static int  g_dbg_len = 0;  // bytes of reply held
 static int  g_dbg_sent = 0; // how many of them have gone out
@@ -456,6 +456,76 @@ static void dbg_take_chunk(struct win_debug_msg *msg) {
     if (g_dbg_sent < g_dbg_len) msg->flags |= WIN_DEBUG_F_MORE;
 }
 
+// --- the ring-3 debug leg (M41) --------------------------------------
+//
+// The command waiting for a ring-3 compositor to run it, and the reply
+// coming back. One slot: `gui` commands are issued one at a time by a
+// console that blocks on each, so a queue would be state with no second
+// user.
+static char g_dbg_pending[WIN_DEBUG_CMD_LEN];
+static int g_dbg_pending_valid;
+
+// Where a ring-3 compositor's answer lands before it is handed to the
+// waiting caller. Separate from g_dbg_reply, which is the CHUNKING
+// buffer the console reads out of -- writing straight into that would
+// mean the compositor's reply racing the chunk being sent.
+static char g_dbg_ring3[WIN_DEBUG_REPLY_MAX];
+static uint32_t g_dbg_ring3_len;
+static int g_dbg_reply_ready;
+static unsigned g_dbg_reply_flags;
+
+// How long the console waits for the compositor. Two seconds: long
+// enough that a desktop busy with a slow frame still answers, short
+// enough that a WEDGED one does not hang the console -- which would take
+// the whole test harness down with it, since every tool arrives this
+// way.
+//
+// A timeout is reported as an empty reply, NOT as an unknown command:
+// those are different facts, and the tools distinguish them.
+#define DBG_RING3_TIMEOUT_TICKS 200u
+
+// Runs a `gui` command on a RING-3 compositor and waits for the answer.
+// Returns the reply length, or -1 if nothing could be asked.
+//
+// **This blocks the caller**, which is the kernel context running the
+// serial console -- not a syscall handler, so the hazard CLAUDE.md warns
+// about (a nested IRQ clobbering the saved trapframe) does not apply
+// here. The console already blocks this way on the filesystem for `sh
+// cat big`, so a bounded wait is the behaviour it already has.
+//
+// It waits with interrupts ON and `hlt`: the timer has to keep firing,
+// because it is what schedules the compositor that owes us the answer.
+// Spinning with them off would deadlock against the very process being
+// waited for -- the failure that looks like a hung machine rather than a
+// slow one.
+static int debug_via_compositor(const char *line, char *out, int cap) {
+    if (!g_comp_pid) return -1;
+
+    k_strlcpy(g_dbg_pending, line, sizeof g_dbg_pending);
+    g_dbg_pending_valid = 1;
+    g_dbg_reply_ready = 0;
+    g_dbg_reply_flags = 0;
+    g_dbg_ring3_len = 0;
+
+    tell_compositor(WIN_EV_CLIENT_DEBUG, g_comp_pid, 0, 0, 0);
+
+    uint64_t deadline = pit_ticks() + DBG_RING3_TIMEOUT_TICKS;
+    while (!g_dbg_reply_ready && pit_ticks() < deadline) {
+        __asm__ volatile ("sti; hlt");
+    }
+
+    g_dbg_pending_valid = 0;
+    if (!g_dbg_reply_ready) {
+        klog_write("win: compositor did not answer a gui command in time\n");
+        return 0; // empty, and deliberately NOT "unknown" -- see above
+    }
+
+    int n = (int)g_dbg_ring3_len;
+    if (n > cap) n = cap;
+    for (int i = 0; i < n; i++) out[i] = g_dbg_ring3[i];
+    return n;
+}
+
 int win_server_debug(int pid, struct win_debug_msg *msg) {
     (void)pid; // the console is the only client; kept for the ops shape
     if (!msg) return 0;
@@ -471,20 +541,58 @@ int win_server_debug(int pid, struct win_debug_msg *msg) {
         return 1;
     }
 
+    // The compositor fetching the command it was told about.
+    if (msg->type == WIN_REQ_DEBUG_TAKE) {
+        if (!g_comp_pid || pid != g_comp_pid) return 0;
+        if (!g_dbg_pending_valid) { msg->len = 0; msg->text[0] = '\0'; return 0; }
+        k_strlcpy(msg->text, g_dbg_pending, WIN_DEBUG_CMD_LEN);
+        msg->len = (uint32_t)k_strlen(msg->text);
+        // Cleared on TAKE, not on reply: a second TAKE must get nothing
+        // rather than run the same command twice.
+        g_dbg_pending_valid = 0;
+        return 1;
+    }
+
+    // ...and answering it.
+    if (msg->type == WIN_REQ_DEBUG_REPLY) {
+        if (!g_comp_pid || pid != g_comp_pid) return 0;
+        // APPENDED, not assigned: one message carries WIN_DEBUG_CHUNK
+        // bytes and a reply may be longer, so a compositor sends several
+        // with WIN_DEBUG_F_MORE set on every piece but the last. The
+        // waiter is only released by that last one -- otherwise the
+        // console would print the first 512 bytes of a `gui windows`
+        // and call it the whole answer.
+        uint32_t n = msg->len;
+        uint32_t room = (uint32_t)sizeof g_dbg_ring3 - g_dbg_ring3_len;
+        if (n > room) n = room;
+        for (uint32_t i = 0; i < n; i++) g_dbg_ring3[g_dbg_ring3_len + i] = msg->text[i];
+        g_dbg_ring3_len += n;
+        g_dbg_reply_flags |= msg->flags;
+        if (!(msg->flags & WIN_DEBUG_F_MORE)) g_dbg_reply_ready = 1;
+        return 1;
+    }
+
     if (msg->type != WIN_REQ_DEBUG_CMD) return 0;
 
     g_dbg_len = 0;
     g_dbg_sent = 0;
 
-    if (!g_ops || !g_ops->debug_command) {
+    msg->text[WIN_DEBUG_CMD_LEN - 1] = '\0'; // the command is client data
+
+    // A ring-0 WM answers directly; a ring-3 one is asked and waited for.
+    // Both are live during the migration, and the ring-0 one wins while
+    // it exists -- it is still the desktop being driven.
+    int n;
+    if (g_ops && g_ops->debug_command) {
+        n = g_ops->debug_command(msg->text, g_dbg_reply, sizeof g_dbg_reply);
+    } else if (g_comp_pid) {
+        n = debug_via_compositor(msg->text, g_dbg_reply, sizeof g_dbg_reply);
+    } else {
         msg->type = WIN_EV_DEBUG_OUT;
         msg->len = 0;
         msg->text[0] = '\0';
         return 0;
     }
-
-    msg->text[WIN_DEBUG_CMD_LEN - 1] = '\0'; // the command is client data
-    int n = g_ops->debug_command(msg->text, g_dbg_reply, sizeof g_dbg_reply);
     if (n < 0) {
         // Unrecognised, which the caller must be able to tell from a
         // command that legitimately printed nothing.
