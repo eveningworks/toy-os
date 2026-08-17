@@ -752,11 +752,13 @@ void wm_run(void) {
     for (;;) {
         __asm__ volatile ("hlt");
 
-        // Same idle-wakeup piggyback keyboard_getchar() does for the
-        // physical shell -- see kapi.h's include comment and
-        // docs/decisions.md. Keeps the serial debug console responsive
-        // while the GUI desktop is up, not just at the physical prompt.
-        debug_console_poll();
+        // The kernel's idle work, which it owns rather than this loop
+        // (scheduler.h). What it does today is keep the serial debug
+        // console answering while the desktop is up -- and every GUI
+        // test tool arrives over that console, so when this loop becomes
+        // a ring-3 process (Milestone 41 stage 4) this line is DELETED
+        // and the capability stays. That is the whole reason it moved.
+        scheduler_idle();
 
         // One scripted step per iteration, when a demo is running (see
         // apps/demo.h). A no-op on every ordinary boot -- `demo` has to

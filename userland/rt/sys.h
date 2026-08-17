@@ -172,6 +172,17 @@ unsigned long sys_ticks(void);
 // nanosecond precision is really there.
 unsigned long long sys_monotonic_ns(void);
 
+// The filesystem's GENERATION counter -- bumped on every mutation, by
+// anyone. Compare it against the last value you saw to answer "has
+// anything changed?" without listing a directory: that is one integer
+// compare per frame against real disk I/O, which is why the desktop's
+// live `.desktop` reload can afford to ask every frame.
+//
+// It says something changed, never WHAT -- re-read whatever you cache
+// when it moves. Only ever increases, and is non-zero once a filesystem
+// is mounted, so 0 is safe as "not sampled yet".
+unsigned long long sys_fs_generation(void);
+
 // Sets the console colours this process writes in. Both are
 // `enum vga_color` values; out-of-range is refused, not clamped.
 int sys_set_color(int fg, int bg);

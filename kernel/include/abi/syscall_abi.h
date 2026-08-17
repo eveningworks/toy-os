@@ -593,6 +593,24 @@ struct dirent {
                           // SYS_MONOTONIC_NS; none are duplicated here.
                           // Returns 0, or -1 if the pointer is bad.
 
+#define SYS_FS_GENERATION 36 // No arguments. Returns fs_generation()
+                          // (api/fs.h) -- a counter the VFS bumps on
+                          // every mutation of the filesystem, so a
+                          // caller can answer "has anything changed?"
+                          // with one integer compare instead of a
+                          // directory scan.
+                          //
+                          // Deliberately its own syscall rather than a
+                          // field in SYS_SYSINFO: the desktop polls
+                          // this ONCE PER FRAME to decide whether to
+                          // re-read /usr/wm/desktop, and a free poll is
+                          // the entire reason the counter exists. A
+                          // sysinfo field would cost a validated struct
+                          // copy per frame for figures nobody asked
+                          // for. Never zero once a filesystem is
+                          // mounted, so 0 is usable as "not sampled
+                          // yet"; it only ever increases.
+
 // The number of process-table slots SYS_PROC_INFO can be asked about.
 // Mirrors the kernel's SCHED_MAX_PROCS; a caller loops 0..this-1.
 #define SYS_PROC_MAX 64

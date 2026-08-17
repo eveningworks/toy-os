@@ -612,7 +612,20 @@ default -- the hardware cursor is what keeps the pointer moving
 independently of damage, and losing it would show up as cursor lag
 nothing in the suite asserts on.
 
-**R4. `fs_generation()`.** One counter the VFS bumps on every change;
+**R4. `fs_generation()` -- BUILT (2026-08-17).** `SYS_FS_GENERATION`
+(36), no arguments, returns the counter in RAX; `sys_fs_generation()`
+in libsys. Its own syscall rather than a `SYS_SYSINFO` field because
+the desktop polls it once per frame and a validated struct copy per
+frame is exactly the cost the counter exists to avoid.
+`userland/tests/fsgen_test.c` (8 checks, in `usertest_run.py`) pairs
+every "it moved" with an "it did not move": the positive control -- a
+counter the READ bumps -- reddens exactly the three stability checks
+and leaves all four mutation checks green, which is what a
+did-it-change test alone would have shipped.
+
+  The original note, for the reasoning:
+
+  One counter the VFS bumps on every change;
 the WM compares it once per frame to decide whether to re-read
 `/usr/wm/desktop/` (`wm.c:600`). There is no syscall for it, and
 without one the live `.desktop` reload either dies or degrades into
@@ -622,7 +635,24 @@ Cheapest correct answer: one more field in `SYS_SYSINFO`, or a
 one-value `SYS_FS_GENERATION`. `desktop_entries_test.py` (13 checks)
 is its gate.
 
-**R5. The serial debug console's drain point.** This is the
+**R5. The serial debug console's drain point -- BUILT (2026-08-17).**
+`scheduler_idle()` (`api/scheduler.h`) is the one place the kernel does
+its idle work, and the four hand-rolled loops that each remembered to
+poll the console (keyboard's key wait, `wm.c`'s event loop,
+`shell_fs.c`'s read step, the demo's timer) now call it instead. So the
+WM's departure in 4c deletes a CALL rather than the capability.
+Deliberately not the timer tick -- a dispatched command can block on
+the filesystem, and COM1's receive is already interrupt-driven into a
+ring buffer, so nothing is dropped by waiting for a normal context.
+Unifying the sites also fixed a live bug: the poll is not re-entrant
+and genuinely re-enters, and `dbg_dispatch()`'s `arg` points into
+`line_buf`, so a command typed during a long `sh` overwrote the running
+one's arguments. Gate: `gui_regress.py`, 19 tools and 285 checks, every
+one of which arrives over that console. See `docs/decisions.md`.
+
+  The original note, which is why it matters:
+
+  This is the
 requirement nobody would predict, and it is load-bearing for the
 entire test suite. `debug_console_poll()` has exactly two callers that
 matter: `keyboard_getchar_mods()`'s idle loop (the physical shell) and
@@ -685,11 +715,39 @@ document so far has been chosen so the suite passes at its end. Stage 4
 should be cut the same way -- a plausible split, to be confirmed when it
 starts: **4a** the kernel capabilities (R1's map/present, R3, R4, R5)
 with the WM still in ring 0 calling them, which is the stage-3 trick
-again and keeps the suite green throughout; **4b** the ring-3 binary
+again and keeps the suite green throughout -- **R4 and R5 landed
+2026-08-17; R1 and R3 are what remain of it**, and the decisions they
+will be built on are settled below; **4b** the ring-3 binary
 drawing the desktop with input still routed the old way; **4c** the
 input and debug cutover plus R9's deletions; **4d** the death path (R7)
 and its test. 4a is the one that can be built and proven without
 moving anything.
+
+**The four decisions R1/R3 will be built on**, settled 2026-08-17
+before any of it exists, because each had a defensible cheaper answer:
+
+- **They travel as TWP requests**, in a new surface section of
+  `abi/win_proto.h`, not as syscalls of their own -- the repo's
+  standing rule, and it puts them where the compositor role that gates
+  them already lives. `fs_generation` is not a window concern and
+  correctly got a plain syscall instead.
+- **Publishing is always a present carrying a damage rect**, forwarded
+  to `display_flush()`. Not optional and not advertised as a
+  capability: `vmsvga` claims `DISPLAY_CAP_NEEDS_FLUSH`, so a
+  compositor writing straight into a mapped framebuffer shows NOTHING
+  there -- and a flush path reachable only on one driver is, by this
+  repo's own rule, unvalidated. `display_flush()` already no-ops on a
+  continuously-scanned driver, so one code path serves both.
+- **The grant gets its own file**, `kernel/proc/win_surface.c`, owning
+  exactly "the registered compositor's framebuffer grant" -- map,
+  unmap on deregistration, present-with-rect, cursor forwarding.
+  `win_server.c` keeps ids, buffers and mappings and calls into it,
+  rather than growing a display concern on top of memory and ids.
+- **The mapping must carry the WRITE-COMBINING PAT bits.**
+  `vmm_map_user_page()` does not today, so a ring-3 compositor would
+  get a *cached* framebuffer -- the bug class that is structurally
+  invisible under TCG and cost seconds per repaint on real hardware.
+  Measure it under `tools/vm.py --kvm` or do not claim it.
 
 **Proven by:** the same 19 tools, 271 checks, unchanged, for the
 fourth time -- plus `damage_sweep.py --positive-control` first, since

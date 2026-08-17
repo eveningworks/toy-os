@@ -71,7 +71,7 @@ void cmd_cat(const char *name) {
         enum fs_step_result r = FS_STEP_FAILED;
         if (h) {
             do {
-                debug_console_poll();
+                scheduler_idle();
                 vga_cursor_tick();
                 r = fs_read_range_step(h, 0);
             } while (r == FS_STEP_PENDING);

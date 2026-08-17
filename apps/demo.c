@@ -83,7 +83,7 @@ static void spin_ms(uint32_t ms) {
     uint64_t want = (uint64_t)ms / 10; // the PIT runs at 100Hz
     while (pit_ticks() - start < want) {
         __asm__ volatile ("hlt");
-        debug_console_poll(); // stay answerable while the demo waits
+        scheduler_idle(); // stay answerable while the demo waits
     }
 }
 

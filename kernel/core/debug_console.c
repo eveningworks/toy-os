@@ -283,6 +283,17 @@ void debug_console_init(void) {
 }
 
 void debug_console_poll(void) {
+    // NOT re-entrant, and it genuinely re-enters: a dispatched command
+    // can run a long shell command, whose own wait loop calls back in
+    // here (scheduler_idle()). `arg` in dbg_dispatch() points INTO
+    // line_buf, so a nested call assembling the next command overwrites
+    // the running one's arguments underneath it. Refusing the nested
+    // call costs nothing -- COM1's receive is interrupt-driven into a
+    // ring buffer (serial.h), so the bytes wait there instead.
+    static int in_poll = 0;
+    if (in_poll) return;
+    in_poll = 1;
+
     int c;
     while ((c = serial_try_getc()) >= 0) {
         if (c == '\r' || c == '\n') {
@@ -302,4 +313,5 @@ void debug_console_poll(void) {
         }
         // other control bytes (Tab, Ctrl+*, ...) silently ignored
     }
+    in_poll = 0;
 }

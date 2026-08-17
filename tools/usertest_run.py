@@ -66,6 +66,8 @@ TESTS = [
      ["random_test: all checks passed"], ["FAIL"]),
     ("guard_test", 0,
      ["guard_test: all checks passed"], ["FAIL"]),
+    ("fsgen_test", 0,
+     ["fsgen_test: all checks passed"], ["FAIL"]),
     # Not a self-checker: it exists to prove an exit code survives the
     # round trip out of ring 3, so the CODE is the whole assertion.
     ("exit_test", 42, [], []),

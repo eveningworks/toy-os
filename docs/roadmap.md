@@ -1650,6 +1650,19 @@ desktop is up the WM is what keeps the kernel's console answering at
 all. Move it to ring 3 without giving ring 0 its own drain point and
 every one of the 271 checks stops arriving.
 
+**Stage 4a has started (2026-08-17): R4 and R5 are built.**
+`SYS_FS_GENERATION` gives ring 3 the filesystem's change counter
+(`userland/tests/fsgen_test.c`, 8 checks), and `scheduler_idle()`
+(`api/scheduler.h`) makes the kernel the owner of its own idle work, so
+the WM leaving ring 3 deletes a call rather than the console. Unifying
+the four hand-rolled idle loops also fixed a live bug: the poll is not
+re-entrant, and `dbg_dispatch()`'s `arg` points into `line_buf`, so a
+serial command typed during a long `sh` overwrote the running one's
+arguments. What remains of 4a is R1 and R3 -- the framebuffer grant,
+the WC PAT bits on the user mapping, present-with-rect and the cursor
+ops -- with their four design decisions already settled in
+`docs/wm-ring3-design.md`.
+
 - [x] ~~The kernel context is a scheduler participant, so `wm_run()`
       keeps drawing while a ring-3 process runs~~ -- done, see
       `CHANGELOG.md`'s `[Unreleased]` entry. Step zero: nothing else

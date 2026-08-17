@@ -106,6 +106,7 @@
 #include "strace_internal.h"
 #include "uaddr.h"
 #include "clocksource.h" // CPU time is measured, not counted -- bill_current()
+#include "debug_console.h" // the idle work scheduler_idle() owns
 #include "string.h" // k_strlcpy -- proc_name_from_path()
 #include <stddef.h>
 
@@ -904,4 +905,13 @@ void scheduler_demo_run(void) {
     vga_write("command behaves exactly as it did before M16 (see this file's\n");
     vga_write("top comment on why an empty process table makes that safe).\n");
     klog_write("scheduler: demo complete\n");
+}
+
+// See scheduler.h: the kernel's idle work, in one place instead of in
+// whichever loop happened to be running. Adding a second thing here
+// means it becomes live in every waiting loop at once -- which is the
+// point, and also the risk, so the bar is the same one the rest of this
+// repo holds: it must be safe wherever the kernel is idle.
+void scheduler_idle(void) {
+    debug_console_poll();
 }

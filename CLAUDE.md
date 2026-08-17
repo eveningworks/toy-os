@@ -486,9 +486,37 @@ technical conventions below:
   claim that it did was a comment pointing at a since-deleted file.
   **Every prerequisite is now complete, and stage 4's own REQUIREMENTS
   are written up as R1-R9** (2026-08-17), measured from `apps/wm/`'s
-  call surface rather than estimated. Read that before touching
+  call surface rather than estimated. **Stage 4a has started: R4 and R5
+  are BUILT.** Read that before touching
   anything in `apps/wm/` with the migration in
-  mind. Its load-bearing point: all 19 GUI test tools drive the WM
+  mind.
+- **The kernel's idle work has ONE owner: `scheduler_idle()`**
+  (`api/scheduler.h`). Any loop that is waiting rather than working
+  calls it -- the physical shell's key wait, `wm.c`'s event loop, a
+  long `cat`, the demo's timer. What it owns today is
+  `debug_console_poll()`, and the reason it exists is that the serial
+  debug console had no owner at all: it was polled by whichever loop
+  happened to be running, and the WM's copy is the load-bearing one,
+  because all 19 GUI tools and their 285 checks arrive over that
+  console. **Don't add a bare `debug_console_poll()` to a new waiting
+  loop** -- call `scheduler_idle()`, so the WM's move to ring 3 deletes
+  a call rather than the capability. Two things it deliberately does
+  NOT do: run from the timer tick (a dispatched command can be `sh cat
+  big`, which blocks on the filesystem; nothing is lost waiting for a
+  normal context, since COM1's receive is already interrupt-driven into
+  a ring buffer), and touch `vga_cursor_tick()`/`vga_present()` (console
+  upkeep belongs to whoever owns the screen, and the desktop owns it
+  while it is up). The poll is NOT re-entrant and refuses a nested
+  call: `dbg_dispatch()`'s `arg` points into `line_buf`, so a command
+  typed during a long `sh` used to overwrite the running one's
+  arguments. See `docs/decisions.md`.
+- **`SYS_FS_GENERATION` is how ring 3 asks "has the filesystem
+  changed?"** -- no arguments, the counter in RAX,
+  `sys_fs_generation()` in libsys. Its own syscall rather than a
+  `SYS_SYSINFO` field on purpose: the desktop polls it ONCE PER FRAME
+  to decide whether to re-read `/usr/wm/desktop/`, and a free poll is
+  the entire reason the counter exists instead of a directory scan.
+  It says something changed, never what. Its load-bearing point: all 19 GUI test tools drive the WM
   through `wm_debug.c`'s `gui` commands over the KERNEL's serial
   console, so the 271 checks that prove the desktop works have to move
   with it, and that gets its own stage BEFORE the WM moves.

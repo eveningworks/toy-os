@@ -990,6 +990,10 @@ void syscall_dispatch(uint64_t *regs) {
         }
     } else if (rax == SYS_TICKS) {
         regs[14] = pit_ticks();
+    } else if (rax == SYS_FS_GENERATION) {
+        // One integer, no user pointer to validate -- see
+        // syscall_abi.h for why this is not a SYS_SYSINFO field.
+        regs[14] = fs_generation();
     } else if (rax == SYS_MONOTONIC_NS) {
         // The clocksource, not the tick counter -- see syscall_abi.h.
         // Safe with interrupts off, which is the state every syscall

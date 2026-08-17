@@ -124,6 +124,7 @@ there when you add an entry, or the index quietly stops being one.
 **GUI: window manager, compositor & widgets**
 
 - [The ring-3 WM owns the back buffer, and its death drops you to a text shell](#the-ring-3-wm-owns-the-back-buffer-and-its-death-drops-you-to-a-text-shell)
+- [The kernel owns its idle work, so the WM's departure deletes a call rather than a capability](#the-kernel-owns-its-idle-work-so-the-wms-departure-deletes-a-call-rather-than-a-capability)
 - [The desktop's app list is a directory of files, not a table in the kernel](#the-desktops-app-list-is-a-directory-of-files-not-a-table-in-the-kernel)
 - [Widgets are added once a second real caller needs them -- except the checkbox](#widgets-are-added-once-a-second-real-caller-needs-them----except-the-checkbox)
 - [A table PULLS its rows, and stores none of them](#a-table-pulls-its-rows-and-stores-none-of-them)
@@ -6769,3 +6770,40 @@ does for itself today (`apps/wm/wm.c`'s `vga_resume()` on exit, and the
 criterion is that killing the WM is *survivable*, not that it is
 invisible; making it invisible first would hide whether it is
 survivable at all.
+
+## The kernel owns its idle work, so the WM's departure deletes a call rather than a capability
+
+Milestone 41 stage 4a. `scheduler_idle()` (`api/scheduler.h`) is the one
+place the kernel does "while I have nothing else to do" work; what it
+owns today is `debug_console_poll()`.
+
+The reason it exists is a dependency nobody had written down: the serial
+debug console had no owner. It was polled from whichever loop happened
+to be running -- the physical shell's key wait, `apps/wm/wm.c`'s event
+loop, a long `cat`, the demo's timer -- and the WM's copy is the
+load-bearing one, because all 19 GUI test tools and their 285 checks
+arrive over that console while the desktop is up. Moving the WM to ring
+3 (stage 4) removes that loop from ring 0 and takes the whole test wire
+with it, silently, in the direction that reads as "the tools are
+broken". Naming the work kernel-side means the WM's departure deletes a
+CALL and the capability stays.
+
+**Why not the timer tick**, which is the obvious answer and is wrong: a
+dispatched command can be `sh cat big`, which blocks on the filesystem,
+and an interrupt handler must not. Nothing is lost by waiting for a
+normal context -- COM1's receive is already interrupt-driven into a ring
+buffer (`kernel/serial.h`), so the bytes are safe there and only the
+line assembly is deferred.
+
+**Console upkeep is deliberately NOT part of it.** `vga_cursor_tick()`
+and `vga_present()` stay in `keyboard_getchar_mods()`: they belong to
+whoever owns the screen, and the GUI desktop owns it while it is up.
+What `scheduler_idle()` holds is work that is safe wherever the kernel
+is idle.
+
+Unifying the call sites also exposed a live bug. `debug_console_poll()`
+is not re-entrant and genuinely re-enters -- a dispatched command's own
+wait loop calls back into it -- while `dbg_dispatch()`'s `arg` points
+INTO `line_buf`, so a nested call assembling the next command overwrote
+the running one's arguments underneath it. It refuses the nested call
+now; the bytes wait in the UART ring buffer, so nothing is dropped.

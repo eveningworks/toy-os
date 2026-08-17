@@ -209,4 +209,33 @@ int scheduler_block_current(uint64_t *regs, int reason);
 // next ordinary tick rather than being switched to from inside an IRQ.
 int scheduler_wake(int reason, int64_t value);
 
+// The kernel's own "while I have nothing else to do" work, in ONE
+// place. Call it from any loop that is waiting rather than working;
+// it never blocks, never spins and never sleeps -- the `hlt` (or the
+// frame, or the disk step) stays the caller's business.
+//
+// What it owns today is the serial debug console, and the reason it
+// exists is Milestone 41. Every GUI test tool drives the desktop over
+// that console, and the console has never had an owner: it was polled
+// from whichever loop happened to be running -- the physical shell's
+// key wait, apps/wm/wm.c's event loop, a long `cat`, the demo's timer.
+// The WM's copy is the one that matters, because when the WM becomes a
+// ring-3 process (stage 4) ring 0 loses that loop, and with it the wire
+// all 271 GUI checks arrive on -- silently, and in the direction that
+// reads as "the test tools are broken". Naming the work here means the
+// WM's departure deletes a CALL, not the capability.
+//
+// Deliberately NOT called from the timer tick, however tempting: a
+// dispatched command can run a whole shell command (`sh cat big`),
+// which blocks on the filesystem, and an interrupt handler must not.
+// Nothing is lost by waiting for a normal context -- COM1's receive is
+// interrupt-driven into a ring buffer (kernel/kernel/serial.h), so the
+// bytes are already safe; only the line assembly is deferred.
+//
+// Console UPKEEP is not here on purpose (vga_cursor_tick(),
+// vga_present()): those belong to whoever owns the screen, and the GUI
+// desktop owns it while it is up. This is idle work that is safe
+// wherever the kernel is idle.
+void scheduler_idle(void);
+
 #endif

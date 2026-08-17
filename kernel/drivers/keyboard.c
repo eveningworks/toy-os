@@ -3,7 +3,7 @@
 #include "io.h"
 #include "vga.h"
 #include "klog.h"
-#include "debug_console.h"
+#include "scheduler.h" // scheduler_idle() -- the kernel's idle work, in one place
 #include "string.h" // k_tolower() -- the Ctrl-key fold
 
 #define KBD_DATA_PORT 0x60
@@ -235,7 +235,11 @@ int keyboard_getchar_mods(uint8_t *out_mods) {
         // the GUI's own event loop, or a ring-3 process is running --
         // apps/wm/wm.c's loop covers the GUI case separately).
         vga_cursor_tick();
-        debug_console_poll();
+        // The kernel's idle work (scheduler.h) -- the serial debug
+        // console, today. The cursor tick and the present around it are
+        // deliberately NOT part of it: they are the console's own
+        // upkeep, and the GUI desktop owns the screen while it is up.
+        scheduler_idle();
         // The physical console's flush point: it draws into a back
         // buffer and this is where "output is finished, we are waiting
         // for a human" is true, so it is where the screen catches up.
