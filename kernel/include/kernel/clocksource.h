@@ -1,0 +1,114 @@
+#ifndef CLOCKSOURCE_H
+#define CLOCKSOURCE_H
+
+#include <stdint.h>
+
+// A source of MONOTONIC TIME, registered the way a display_driver or an
+// fs_ops backend is: several may exist, the best-rated one wins, and no
+// caller names the hardware.
+//
+// This is Linux's `clocksource` in miniature, and the split it encodes
+// is the one worth keeping: TIMEKEEPING (a counter you read, this file)
+// is a different job from TIMER EVENTS (deciding when to interrupt,
+// which is still the PIT's fixed 100Hz here -- Linux calls that a
+// clock_event_device). Conflating them is how a tick rate ends up
+// meaning both "how often we interrupt" and "how precisely we can
+// measure", which is exactly the confusion that produced this kernel's
+// CPU-accounting bug: billing incremented a TICK COUNTER instead of
+// asking a clock how much time had passed, so a yield -- microseconds
+// long -- was charged a whole 10ms tick. See docs/decisions.md.
+//
+// WHAT THIS IS NOT: a wall clock. `rtc_read_local()` and tz.c's epoch
+// conversion answer "what time is it", which is a separate concept with
+// separate failure modes (it jumps when the user sets it, and it says
+// nothing about elapsed time). Linux keeps clocksource and RTC apart
+// deliberately and so does this; putting the RTC behind this interface
+// would be the mistake this file exists to make hard.
+
+// A raw counter of `bits` significant bits, for the wraparound mask.
+// A 64-bit counter takes CLOCKSOURCE_MASK(64) and never wraps in any
+// time this kernel will run for.
+#define CLOCKSOURCE_MASK(bits) \
+    ((bits) >= 64 ? (uint64_t)~0ULL : (((uint64_t)1 << (bits)) - 1))
+
+// Ratings, matching Linux's scale so the numbers mean something to
+// anyone who has seen them before: 1-99 unfit for real timekeeping,
+// 100-199 functional but coarse, 200-299 good, 300-399 ideal.
+#define CLOCKSOURCE_RATING_PIT 110 // 10ms resolution -- correct, coarse
+#define CLOCKSOURCE_RATING_TSC 300 // sub-nanosecond, and free to read
+
+struct clocksource {
+    const char *name;
+
+    // The raw counter. Must be monotonically increasing within `mask`
+    // and must not require interrupts to be on -- it is read from
+    // inside the scheduler and from syscall handlers, both with IF
+    // clear.
+    uint64_t (*read)(void);
+
+    uint64_t mask;   // significant bits of what read() returns
+    uint32_t mult;   // ns = (delta * mult) >> shift -- see calc below
+    uint32_t shift;
+    int rating;      // higher wins; ties keep the incumbent
+};
+
+// Registers a source. The highest-rated one becomes current; a lower
+// or equal rating is kept in the list's spirit but does not take over,
+// so registration ORDER never decides the outcome. Switching preserves
+// monotonicity: the accumulated nanosecond count carries across, so
+// clocksource_now_ns() never goes backwards when a better source
+// arrives partway through boot.
+//
+// REFUSED if the source is self-contradictory -- no read(), a zero
+// mask, or a zero mult (which would make every delta zero and stop
+// time silently). Same honesty check display_probe() applies to a
+// driver whose capability bits and function pointers disagree.
+int clocksource_register(const struct clocksource *cs);
+
+// Nanoseconds since the first source was registered. Monotonic, never
+// decreasing, and safe to call with interrupts off.
+//
+// NOT free of a caveat: it accumulates on each call, so the raw counter
+// must not advance by more than `max_delta` (computed at registration
+// from mult, so the multiply cannot overflow 64 bits) between two
+// calls. At a 3GHz TSC that is over an hour, and the scheduler reads it
+// on every context switch, so nothing here comes close -- but a source
+// added later with a much larger mult shrinks that window, which is why
+// the clamp logs rather than wrapping quietly.
+uint64_t clocksource_now_ns(void);
+
+// The current source, or NULL before any is registered. For `lscpu`-
+// style reporting and for the KTESTs, which need to know which one they
+// are actually measuring -- a test that cannot say whether it ran
+// against the PIT or the TSC is measuring something it cannot name.
+const struct clocksource *clocksource_current(void);
+
+// Works out a mult/shift pair for a counter running at `freq` Hz, such
+// that ns = (delta * mult) >> shift holds to within rounding for any
+// delta up to `maxsec` seconds' worth. Picks the LARGEST shift that
+// keeps both the multiplier and the worst-case product inside their
+// types -- more shift is more precision, and the limit is overflow.
+//
+// Exposed rather than kept private because each source calls it with
+// its own frequency, and getting it wrong is silent: too small a shift
+// quantises the conversion, too large a one overflows and makes time
+// jump backwards.
+void clocksource_calc_mult_shift(uint32_t *mult, uint32_t *shift,
+                                  uint64_t freq, uint32_t maxsec);
+
+// Registers the PIT-backed source. Called from kernel_main() early --
+// before anything wants a timestamp, and specifically before
+// cpu_info_init(), which calibrates the TSC against the PIT.
+void clocksource_init(void);
+
+// Registers the TSC-backed source if this CPU has an INVARIANT TSC and
+// a usable calibrated frequency. Called from kernel_main() AFTER
+// cpu_info_init(), because it needs the frequency that calibration
+// produces -- and calibration needs the PIT already ticking, which is
+// the ordering trap cpuinfo.h warns about (a lazy calibration inside a
+// syscall deadlocks). This is why registration is two calls rather than
+// one: the two sources become available at genuinely different moments
+// in boot.
+void clocksource_init_tsc(void);
+
+#endif

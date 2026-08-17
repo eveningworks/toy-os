@@ -38,15 +38,15 @@
 struct proc_info {
     int32_t  pid;         // 0 means "this slot is empty"; see SYS_PROC_INFO
     uint32_t state;       // PROC_STATE_*
-    uint64_t cpu_ticks;   // timer ticks spent RUNNING, cumulative
+    uint64_t cpu_ns;      // NANOSECONDS spent RUNNING, cumulative
     uint64_t mem_bytes;   // user memory currently mapped into it
     int32_t  exit_code;   // meaningful only in PROC_STATE_ZOMBIE
     uint32_t reserved;    // must be 0; keeps the struct 8-byte aligned
     char     name[PROC_NAME_MAX];
 };
 
-// **cpu_ticks is cumulative, and that is deliberate.** A percentage is
-// the difference between two reads divided by the ticks elapsed between
+// **cpu_ns is cumulative, and that is deliberate.** A percentage is the
+// difference between two reads divided by the time elapsed between
 // them, which only the consumer can compute -- it is the one that knows
 // how often it refreshes. Reporting a percentage here would bake a
 // sampling interval into the kernel, and a task manager that refreshes
@@ -54,7 +54,18 @@ struct proc_info {
 // something else. The same reasoning Linux applies to /proc/stat, which
 // also reports totals and leaves the arithmetic to `top`.
 //
-// Pair it with SYS_UPTIME_TICKS (the same timer) to get the denominator;
-// without a common clock the percentage has nothing to divide by.
+// Pair it with SYS_MONOTONIC_NS -- the SAME clock, which is what makes
+// the ratio a real percentage rather than one counter over an unrelated
+// other one.
+//
+// **NANOSECONDS, not ticks, and the rename is the point.** This was
+// `cpu_ticks`, incremented once per 100Hz timer interrupt, and a tick
+// count is not a duration: a yield billed a whole tick for microseconds
+// of work (every polling app read a fake 100%, several at once), and
+// charging only from the timer replaced that with the opposite error
+// (anything finishing inside a tick read 0%). The scheduler measures
+// elapsed time against a clocksource now -- exact to the nanosecond
+// wherever the TSC is usable, no worse than before where it is not.
+// See docs/decisions.md.
 
 #endif

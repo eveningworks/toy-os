@@ -130,7 +130,21 @@ def cmd_start(args):
         # guest instructions natively but turns every port-I/O access
         # into a hardware VM exit, so `inb`/`outb`-heavy paths can come
         # out SLOWER here. Say which mode a number came from.
-        cmd += ["-enable-kvm", "-cpu", "host"]
+        #
+        # `--cpu` still applies here, and there is one case that NEEDS
+        # it: QEMU withholds `invtsc` (CPUID 8000_0007H EDX bit 8, the
+        # invariant-TSC bit) even under `-cpu host`, because a guest
+        # that has seen it cannot be live-migrated. So the kernel's TSC
+        # clocksource is unreachable until you ask:
+        #
+        #     python3 tools/vm.py --kvm --cpu host,+invtsc start
+        #
+        # Plain TCG cannot reach it at all -- `-cpu max,+invtsc` warns
+        # "TCG doesn't support requested feature" and clears the bit --
+        # so that command line is the ONLY way to exercise TSC-backed
+        # timekeeping in this environment. See docs/boot-flags.md's
+        # `notsc`, which reaches the other path from the other side.
+        cmd += ["-enable-kvm", "-cpu", args.cpu or "host"]
     elif args.cpu:
         # An explicit QEMU CPU model, for testing code whose behaviour
         # DEPENDS on which CPU is presented. The default (`qemu64`)
@@ -138,7 +152,6 @@ def cmd_start(args):
         # 8000001DH, so anything reading cache topology takes the AMD
         # 80000005H/6H fallback there and the leaf-4 path never runs.
         # `--cpu max` or `--cpu Skylake-Client` exercises the other side.
-        # Ignored under --kvm, which pins -cpu host by definition.
         cmd += ["-cpu", args.cpu]
     cmd += [
         # A VNC head rather than -display none: input routing needs a

@@ -16,6 +16,7 @@ position. Pick names that cannot be substrings of each other.
 |---|---|---|
 | `nokaslr` | Disables kernel ASLR — the kernel runs where it was linked instead of relocating itself to a random 2 MiB-aligned base. First thing to try when something breaks in a way that smells address-dependent. | `kernel/arch/x86_64/reloc.c` |
 | `nopat` | Forces the framebuffer's write-combining to go through an MTRR instead of PAT. Exists so the MTRR fallback is reachable — every machine this OS runs on has PAT, so without this switch that path could never be tested. | `kernel/arch/x86_64/paging.c` |
+| `notsc` | Keeps the coarse 100 Hz PIT as the clocksource instead of letting the TSC take over. Exists so the PIT path stays reachable on a machine whose TSC is invariant — the mirror of `nopat`, and the only way to exercise 10 ms-resolution timekeeping (and the 0 % CPU readings it produces for sub-tick work) on hardware that would otherwise never use it. | `kernel/arch/x86_64/clocksource_tsc.c` |
 | `rammeter` | Draws a live physical-frame and kernel-heap readout in the top-right corner of the desktop, refreshed once a second. Debug instrument, off by default. | `kernel/lib/rammeter.c` |
 | `live` | Forces the GRUB-module filesystem image to be mounted even when a real ATA disk is present. Without it the live image is used only when there is no disk. Only meaningful on `toy-os-live.iso`. | `kernel/fs/vfs.c` |
 | `demo` | Boots straight into the scripted tour in `data/wm/demo.script` instead of to a shell. What `make demo-iso` bakes in. | `apps/demo.c` |

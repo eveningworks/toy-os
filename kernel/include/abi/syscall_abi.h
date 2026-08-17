@@ -532,12 +532,34 @@ struct dirent {
                           // backwards when the clock is set and has
                           // one-second resolution, so it can measure
                           // neither an interval nor an animation. This
-                          // is the same counter scheduler_tick() bills
-                          // cpu_ticks against, which is what makes a CPU
-                          // PERCENTAGE computable at all: the numerator
-                          // is a proc_info delta and the denominator is
-                          // a delta of this. Two different clocks would
-                          // give a ratio that means nothing.
+                          // TICKS, at whatever rate the timer runs
+                          // (PIT_HZ, 100 today). Fine for pacing
+                          // something coarse; useless for measuring
+                          // anything shorter than 10ms, which is why
+                          // CPU accounting no longer uses it -- see
+                          // SYS_MONOTONIC_NS below, which is what a
+                          // proc_info cpu_ns delta divides by.
+
+#define SYS_MONOTONIC_NS 33 // No arguments. Returns NANOSECONDS since
+                          // boot, from the kernel's best available
+                          // clocksource (kernel/clocksource.h) -- the
+                          // TSC where it is invariant and calibrated,
+                          // the 100Hz timer otherwise.
+                          //
+                          // The DENOMINATOR for a CPU percentage: the
+                          // numerator is a delta of proc_info's cpu_ns
+                          // and this is a delta of the same clock, which
+                          // is what makes the ratio a real percentage
+                          // rather than one counter over an unrelated
+                          // other one.
+                          //
+                          // Its RESOLUTION is not promised and a caller
+                          // must not infer one -- on a machine with no
+                          // invariant TSC this advances in 10ms steps
+                          // and two reads inside one tick return the
+                          // same value. Code that needs to know should
+                          // measure across a long enough interval, not
+                          // ask how precise the clock is.
 
 // The number of process-table slots SYS_PROC_INFO can be asked about.
 // Mirrors the kernel's SCHED_MAX_PROCS; a caller loops 0..this-1.

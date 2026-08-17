@@ -176,6 +176,10 @@ unsigned long sys_ticks(void) {
     return (unsigned long)syscall0(SYS_TICKS);
 }
 
+unsigned long long sys_monotonic_ns(void) {
+    return (unsigned long long)syscall0(SYS_MONOTONIC_NS);
+}
+
 int sys_kill(int pid, int exit_code) {
     return (int)syscall2(SYS_KILL, (uint64_t)(int64_t)pid,
                           (uint64_t)(int64_t)exit_code);

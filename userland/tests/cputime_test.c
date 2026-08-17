@@ -39,10 +39,20 @@
 // may be billed more time than passed) and the halfway line is the one
 // that actually fails against the bug.
 //
-// Deliberately NOT asserted: any lower bound on the billing. Accounting
-// is sampled -- whoever is current when the timer lands pays for the
-// whole tick -- so a yielding process is legitimately billed zero, and
-// requiring otherwise would fail a correct kernel.
+// Deliberately NOT asserted: any lower bound on the billing. What a
+// yielding process legitimately uses is a few microseconds per pass, and
+// on a machine whose clocksource is the 100Hz PIT rather than the TSC
+// that rounds to zero -- so requiring any minimum would fail a correct
+// kernel on correct hardware.
+//
+// UPDATED once accounting became a real duration rather than a tick
+// count (kernel/clocksource.h): the scheduler measures each slice
+// against a clock now, so a yield is charged the microseconds it
+// actually took. Both bounds above still hold and still mean the same
+// thing -- the ceiling is now "billed more nanoseconds than passed"
+// rather than ticks -- and the test got STRONGER, because a correct
+// kernel now reports a small non-zero figure instead of a zero that
+// could equally have meant the billing was dead.
 
 #include "rt/sys.h"
 #include "lib/stdio.h"
@@ -74,8 +84,9 @@ int main(void) {
         return 1;
     }
 
-    unsigned long t0 = sys_ticks();
-    unsigned long cpu0 = (unsigned long)me.cpu_ticks;
+    unsigned long t0 = sys_ticks();               // paces the loop
+    unsigned long long ns0 = sys_monotonic_ns();  // measures the window
+    unsigned long long cpu0 = (unsigned long long)me.cpu_ns;
 
     unsigned long yields = 0;
     while (sys_ticks() - t0 < WINDOW_TICKS) {
@@ -89,20 +100,21 @@ int main(void) {
         return 1;
     }
 
-    unsigned long elapsed = sys_ticks() - t0;
-    unsigned long billed = (unsigned long)now.cpu_ticks - cpu0;
+    unsigned long long elapsed = sys_monotonic_ns() - ns0;
+    unsigned long long billed = (unsigned long long)now.cpu_ns - cpu0;
 
-    char line[160];
+    char line[192];
     snprintf(line, sizeof line,
-             "cputime_test: %lu yields, %lu ticks elapsed, %lu ticks billed\n",
-             yields, elapsed, billed);
+             "cputime_test: %lu yields, %lu ms elapsed, %lu us billed\n",
+             yields, (unsigned long)(elapsed / 1000000ULL),
+             (unsigned long)(billed / 1000ULL));
     sys_eprint(line);
 
     // The impossibility: nobody may be billed more time than passed.
     if (billed > elapsed) {
         snprintf(line, sizeof line,
-                 "cputime_test: FAIL -- billed %lu ticks over a %lu tick window\n",
-                 billed, elapsed);
+                 "cputime_test: FAIL -- billed %lu us over a %lu us window\n",
+                 (unsigned long)(billed / 1000ULL), (unsigned long)(elapsed / 1000ULL));
         sys_eprint(line);
         return 1;
     }
@@ -112,9 +124,9 @@ int main(void) {
     // buggy kernel bills it the whole thing.
     if (billed > elapsed / 2) {
         snprintf(line, sizeof line,
-                 "cputime_test: FAIL -- billed %lu of %lu ticks while only yielding "
-                 "(a yield is being charged as a full tick)\n",
-                 billed, elapsed);
+                 "cputime_test: FAIL -- billed %lu us of a %lu us window while only "
+                 "yielding (time is being charged that was not spent running)\n",
+                 (unsigned long)(billed / 1000ULL), (unsigned long)(elapsed / 1000ULL));
         sys_eprint(line);
         return 1;
     }
@@ -124,7 +136,7 @@ int main(void) {
     // test would happily pass. If nothing else was runnable the loop
     // still had to make progress, so the wall clock is the check that
     // the process was not simply wedged.
-    if (yields == 0 || elapsed < WINDOW_TICKS) {
+    if (yields == 0 || sys_ticks() - t0 < WINDOW_TICKS) {
         sys_eprint("cputime_test: FAIL -- the yield loop made no progress\n");
         return 1;
     }

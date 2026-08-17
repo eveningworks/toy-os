@@ -1155,22 +1155,31 @@ rediscover the setup -- a seed, a command, a click sequence. And
 completed *features* stay struck through above because the milestone
 history is worth reading, but a fixed papercut is just noise.
 
-- [ ] **CPU accounting is SAMPLED, so sub-tick work reads as 0%.**
-      Whoever is current when the 100Hz timer lands pays for the whole
-      tick, so a process that does a little work and then blocks or
-      yields is systematically undercharged -- Shapes animating at
-      100Hz reads 0% while genuinely redrawing every frame. Reproduce:
-      open Task Manager and Shapes together; then `gui spawn
-      /tests/spin_test 60` and watch that one correctly read ~50%,
-      which is what shows the column still discriminates rather than
-      being stuck at zero.
-      This is the accepted tradeoff of the 2026-08-17 billing fix (a
-      yield no longer bills a whole tick -- see `docs/decisions.md`),
-      and it is the honest direction to be wrong in: the old behaviour
-      over-reported to a flat 100% and let two processes each claim the
-      whole CPU. The upgrade is a TSC delta per context switch, which
-      measures real elapsed time instead of sampling it; not scheduled,
-      because nothing here needs that precision yet.
+- [ ] **A `sched` KTEST fails under KVM, and only under KVM.**
+      `sched_test.c:133`'s `scheduler_poll(pid, &code) ==
+      SCHED_POLL_RUNNING` -- the "a scheduled process survives a legacy
+      process running alongside" case. Reproduce:
+      `python3 tools/vm.py --kvm start` then `vm.py exec "ktest sched"`.
+      Confirmed PRE-EXISTING (2026-08-17) by stashing all local work and
+      rebuilding: it fails identically on the committed tree, and passes
+      every time under TCG. Almost certainly timing -- the whole suite
+      runs in 0.9s under KVM against 4.7s under TCG, so the spawned
+      process has already exited by the time the poll asks whether it is
+      still running. The fix is probably to assert the process reached a
+      terminal state rather than that it is RUNNING at one instant, but
+      that has not been established.
+- [ ] **On a machine with no invariant TSC, CPU percentages round to
+      0% for sub-tick work.** Accounting measures real elapsed time now
+      (`kernel/clocksource.h`), but it can only be as fine as the live
+      clocksource -- and where the TSC is unusable that is the 100Hz
+      PIT, so anything finishing inside 10ms bills 0. Reproduce with
+      `notsc` on the GRUB command line, or just boot under plain QEMU,
+      which cannot offer an invariant TSC at all. Not a bug and not
+      fixable in software: the honest fix is another clocksource with
+      real resolution, which is what makes HPET (Milestone 30) worth
+      more here than its rating suggests -- it works under plain TCG,
+      where the TSC does not.
+
 - [ ] **`gfxbench`'s numbers are only meaningful under KVM or on real
       hardware.** Plain QEMU's TCG ignores guest memory types entirely,
       so a write-combined framebuffer behaves exactly like a cached one
@@ -1880,8 +1889,19 @@ not clear it yet. What is worth doing now is keeping each seam SHAPED
 so it can appear later without a rewrite: no `inb`/`outb` leaking
 upward, no caller naming the hardware.
 
-- [ ] **Time sources -- the strongest candidate, and the only one where
-      the second implementation already exists.** The tree names
+- [x] **Time sources -- DONE (2026-08-17).** `kernel/clocksource.h`
+      registers PIT (rating 110) and TSC (300), and CPU accounting bills
+      measured nanoseconds against whichever is live. See
+      `docs/decisions.md`. What is NOT done, and is the natural next
+      piece: **HPET** (rating 250 in Linux's scale), which needs ACPI to
+      discover -- Milestone 30 -- or a hardcoded 0xFED00000 base. It is
+      worth more here than its middle rating suggests, because it is the
+      only sub-microsecond source reachable under plain TCG. Also not
+      done: the other half of the Linux split, `clock_event_device` --
+      timer EVENTS are still a fixed 100Hz PIT, so there is no tickless
+      idle. The original survey text follows.
+
+- [ ] **~~Time sources -- the strongest candidate~~ (superseded above).** The tree names
       concrete clocks directly: `pit_ticks()` (monotonic 100Hz, the
       scheduler's billing unit and `SYS_TICKS`) and the TSC (calibrated
       in `cpuinfo`, used by `gfxbench` and the relocation path). Three

@@ -39,6 +39,7 @@ there when you add an entry, or the index quietly stops being one.
 - [A client window's close button is a handshake, not a seizure](#a-client-windows-close-button-is-a-handshake-not-a-seizure)
 - [Single-instance is the app's decision, and the launcher always launches](#single-instance-is-the-apps-decision-and-the-launcher-always-launches)
 - [A yield is not a tick: SYS_YIELD reschedules without billing](#a-yield-is-not-a-tick-sys_yield-reschedules-without-billing)
+- [Clocksources: timekeeping is an interface, and CPU time is measured not counted](#clocksources-timekeeping-is-an-interface-and-cpu-time-is-measured-not-counted)
 - [A client blocks between frames -- WIN_EV_TIMER, not a polling loop](#a-client-blocks-between-frames----win_ev_timer-not-a-polling-loop)
 - [A hover test parks the REAL cursor, and must un-park it afterwards](#a-hover-test-parks-the-real-cursor-and-must-un-park-it-afterwards)
 - [Rubber-band selection is shared source compiled twice, and it owns the behaviour](#rubber-band-selection-is-shared-source-compiled-twice-and-it-owns-the-behaviour)
@@ -496,6 +497,80 @@ It also cannot be driven by `usertest_run.py`: `run` is the legacy
 `process_run_ring3()` path with no `procs[]` slot, so the test can find
 neither itself nor any billing. `kernel/proc/cputime_test.c` spawns it
 properly, the same arrangement `pipe_test` already needed.
+
+## Clocksources: timekeeping is an interface, and CPU time is measured not counted
+
+`kernel/clocksource.h` registers sources of monotonic time the way
+`display_driver` registers cards: several may exist, the best-rated one
+wins, and no caller names the hardware. Two exist -- the 100Hz PIT
+(rating 110) and the TSC (300) -- and the scheduler bills CPU time by
+asking whichever is live how much time actually passed.
+
+**Why an interface at all, given the repo's second-real-caller bar.**
+It clears the bar on arrival: the TSC was already there, calibrated in
+`cpuid.c` and used by `gfxbench`, the relocation path and `krandom`,
+with three call conventions and no abstraction between them. And the
+CPU-accounting bug is the argument in miniature -- billing incremented
+a TICK COUNTER rather than asking a clock how much time had passed, so
+a yield (microseconds) was charged a full 10ms tick, every polling app
+read a fake 100%, and the fix for that produced the opposite error
+(anything finishing inside a tick read 0%). Both errors are the same
+mistake: a tick count is not a duration. An interface that answers "how
+long was that" makes the mistake harder to write.
+
+**The split it encodes** is Linux's: TIMEKEEPING (a counter you read)
+is a different job from TIMER EVENTS (deciding when to interrupt, still
+a fixed 100Hz here -- Linux's `clock_event_device`). Conflating them is
+how one number ends up meaning both "how often we interrupt" and "how
+precisely we can measure".
+
+**Wall clock is deliberately NOT a clocksource.** `rtc_read_local()`
+answers "what time is it", which jumps when the user sets it and has
+one-second resolution. Linux keeps clocksource and RTC apart for the
+same reason, and an early draft of this survey had merged them.
+
+**Raw counter plus mult/shift, not a `read_ns()` per source.** Each
+source exposes its counter and a fixed-point ratio, and one audited
+function does the conversion -- so the overflow reasoning lives in one
+place instead of being re-derived per source. `ns = (delta * mult) >>
+shift`, with the shift picked as large as the worst-case product allows,
+because more shift is more precision and the limit is overflow. The
+conversion runs on a DELTA rather than the absolute counter, which is
+what makes wraparound a subtraction that works by construction and
+makes switching sources mid-boot a matter of not touching the
+accumulated total.
+
+**An invariant TSC is required, not merely preferred.** Without
+CPUID 8000_0007H EDX bit 8 the counter's RATE changes as the CPU
+throttles, so a boot-time calibration silently stops being true and
+every duration is wrong by whatever the CPU felt like doing -- a failure
+whose only symptom is numbers that do not add up. A machine without it
+keeps the PIT, which is coarse and correct, and correct beats precise.
+
+**Reachability, which cost the most time here.** Plain QEMU cannot run
+the TSC path at all: TCG does not implement `invtsc` and says so
+(`warning: TCG doesn't support requested feature`), and KVM withholds it
+even under `-cpu host` because a guest that has seen it cannot be live
+migrated. The only way to exercise it is
+`python3 tools/vm.py --kvm --cpu host,+invtsc`, which `vm.py` now
+supports and documents. The mirror problem is handled the way this repo
+always handles it -- `notsc` on the GRUB command line keeps the PIT, so
+the coarse path stays reachable on hardware where the TSC would win,
+exactly as `nopat` and `ata nodma` do.
+
+**What the accounting is worth now.** Measured under the TSC: a process
+doing nothing but yielding for 300ms is billed 54 MICROSECONDS, which is
+both plausible and invisible to the previous scheme in either of its
+forms. Under the PIT the same run bills 0, which is honest for a clock
+with 10ms resolution.
+
+**The trap, found by the test.** Every path that stops running the
+current process must bill BEFORE changing `current_index`, and the
+first version missed one: when the KERNEL context was running there is
+nobody to charge, but the start timestamp still has to move. Leaving it
+stale handed the next process everything the kernel had just spent --
+measured at 9.51 SECONDS billed across a 300ms window. `bill_current()`
+is called unconditionally at the top of the rotation now.
 
 ## A client blocks between frames -- WIN_EV_TIMER, not a polling loop
 

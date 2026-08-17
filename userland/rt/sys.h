@@ -138,11 +138,21 @@ int sys_proc_info(int index, struct proc_info *out);
 // is the window close handshake, which an app may refuse.
 int sys_kill(int pid, int exit_code);
 
-// Monotonic timer ticks since boot -- the SAME counter proc_info's
-// cpu_ticks is billed against, which is what makes a CPU percentage
-// computable (a cpu_ticks delta over a delta of this). Not wall-clock:
-// see sys_gettime() for that, and do not use it to measure an interval.
+// Monotonic timer TICKS since boot, at whatever rate the timer runs.
+// Coarse -- 10ms steps today -- and fine for pacing something, but not
+// for measuring: use sys_monotonic_ns() for an interval. Not wall-clock
+// either; see sys_gettime() for that.
 unsigned long sys_ticks(void);
+
+// Monotonic NANOSECONDS since boot, from the kernel's best clocksource.
+// The denominator for a CPU percentage: the numerator is a delta of
+// proc_info's cpu_ns and this is a delta of the SAME clock.
+//
+// The resolution is not promised -- on a CPU with no invariant TSC this
+// advances in 10ms steps and two reads inside one tick return the same
+// value, so measure across a long enough interval rather than assuming
+// nanosecond precision is really there.
+unsigned long long sys_monotonic_ns(void);
 
 // Sets the console colours this process writes in. Both are
 // `enum vga_color` values; out-of-range is refused, not clamped.

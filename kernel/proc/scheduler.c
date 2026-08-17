@@ -105,6 +105,7 @@
 #include "klog.h"
 #include "strace_internal.h"
 #include "uaddr.h"
+#include "clocksource.h" // CPU time is measured, not counted -- bill_current()
 #include "string.h" // k_strlcpy -- proc_name_from_path()
 #include <stddef.h>
 
@@ -210,7 +211,7 @@ struct sched_process {
     // divided by the ticks elapsed between them, which is the consumer's
     // job -- storing a percentage here would bake in a sampling interval
     // the kernel has no business choosing.
-    uint64_t cpu_ticks;
+    uint64_t cpu_ns;   // measured, not counted -- see bill_current()
     // This process's x87/SSE registers while it isn't the one running.
     // 16-byte aligned because FXSAVE/FXRSTOR #GP otherwise -- see fpu.h,
     // including why only ring-3 processes need one of these at all.
@@ -219,6 +220,11 @@ struct sched_process {
 };
 
 static struct sched_process procs[MAX_PROCS];
+// When the CURRENT occupant of the CPU (a process, or the kernel
+// context when current_index is -1) started running, in clocksource
+// nanoseconds. bill_current() is the only thing that reads or moves it.
+static uint64_t g_run_start_ns = 0;
+
 static int current_index = -1;    // -1 = kernel/shell in control, not
                                     // a scheduler-managed process
 static int scheduler_armed = 0;
@@ -468,7 +474,7 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_pipe) {
     // name and CPU time showing up on its successor would be a
     // reporting bug that looks like a scheduling one.
     proc_name_from_path(procs[slot].name, sizeof procs[slot].name, path);
-    procs[slot].cpu_ticks = 0;
+    procs[slot].cpu_ns = 0;
     procs[slot].state      = SCHED_READY;
     alive_count++;
     return slot;
@@ -481,7 +487,7 @@ int scheduler_proc_info(int index, struct proc_info *out) {
 
     out->pid = 0;
     out->state = PROC_STATE_UNUSED;
-    out->cpu_ticks = 0;
+    out->cpu_ns = 0;
     out->mem_bytes = 0;
     out->exit_code = 0;
     out->reserved = 0;
@@ -491,7 +497,7 @@ int scheduler_proc_info(int index, struct proc_info *out) {
 
     // pid is slot + 1 throughout this file -- 0 is "no process".
     out->pid = index + 1;
-    out->cpu_ticks = p->cpu_ticks;
+    out->cpu_ns = p->cpu_ns;
     out->exit_code = p->exit_code;
     k_strlcpy(out->name, p->name, sizeof out->name);
 
@@ -518,37 +524,66 @@ int scheduler_proc_info(int index, struct proc_info *out) {
 
 int scheduler_max_procs(void) { return MAX_PROCS; }
 
-// The rotation, shared by the 100Hz timer and by SYS_YIELD. `bill` is
-// the ONLY difference between them, and it is not a detail:
+// CPU time is billed by MEASURING IT, not by counting ticks.
 //
-// A tick is a unit of ELAPSED TIME. The timer fires after a whole one,
-// so charging the running process for it is right. A yield happens
-// whenever a process feels like it -- microseconds in, not 10ms -- so
-// charging a full tick there bills time that never passed. An app with
-// an on_tick callback yields every loop pass, thousands of times a
-// second against the PIT's hundred, so it billed itself far more ticks
-// than existed: Task Manager and Shapes both read a flat 100% (their
-// share clamped from something absurd), which two processes on one CPU
-// obviously cannot both be. Everything that BLOCKS read an honest 0%,
-// which is what made it look like a polling problem rather than an
-// accounting one.
+// The history is worth the paragraph, because the obvious
+// implementation is the wrong one and this kernel shipped it twice.
+// Billing was `cpu_ticks++` from the timer, and SYS_YIELD rescheduled
+// through the same function -- so a yield, which elapses microseconds,
+// charged a whole 10ms tick. A polling app yields about once per tick,
+// so it billed itself 100 ticks a second against a 100Hz clock: a
+// stable, entirely fake 100%, for every polling app simultaneously,
+// which one CPU obviously cannot do. Charging only from the timer
+// fixed the impossibility and replaced it with the opposite error --
+// sampled accounting cannot see a process that runs for less than a
+// tick, so a client drawing one frame every 10ms read 0%.
 //
-// So this is sampling accounting now, the way a simple kernel usually
-// does it: whoever is current when the timer lands pays for the whole
-// tick. The known bias is that a process yielding constantly is
-// undercharged, since it often hands the CPU on before the tick
-// arrives -- accepted deliberately, because the alternative (a TSC
-// delta per switch) is a different feature and the sum can no longer
-// exceed 100% either way.
-static void scheduler_rotate(uint64_t *regs, int bill);
+// Both errors have the same root: a TICK COUNT is not a DURATION. So
+// the scheduler asks a clock (kernel/clocksource.h) how much time
+// actually passed, and charges that. The PIT-backed source makes this
+// no better than before; the TSC-backed one, registered once the CPU
+// is calibrated, makes it exact to the nanosecond. Nothing here knows
+// which is live, which is the point of the interface.
+//
+// The invariant: every path that stops running the current process
+// calls bill_current() BEFORE changing current_index. Miss one and
+// that slice is credited to whoever runs next.
+static void bill_current(void) {
+    uint64_t now = clocksource_now_ns();
+    if (current_index >= 0 && now > g_run_start_ns) {
+        procs[current_index].cpu_ns += now - g_run_start_ns;
+    }
+    // Reset unconditionally, including when the KERNEL context was
+    // running: its time belongs to nobody, and leaving the old start
+    // in place would hand the next process everything the kernel just
+    // spent.
+    g_run_start_ns = now;
+}
 
-void scheduler_tick(uint64_t *regs) { scheduler_rotate(regs, 1); }
+// The rotation, shared by the 100Hz timer and by SYS_YIELD. They are
+// the same operation now that neither one is where billing happens --
+// see bill_current() above.
+static void scheduler_rotate(uint64_t *regs);
 
-// SYS_YIELD's half: reschedule, charge nothing. See scheduler_rotate().
-void scheduler_yield(uint64_t *regs) { scheduler_rotate(regs, 0); }
+void scheduler_tick(uint64_t *regs) { scheduler_rotate(regs); }
 
-static void scheduler_rotate(uint64_t *regs, int bill) {
+// SYS_YIELD's entry into the same rotation. Distinct from the tick only
+// so the call sites read honestly; the accounting difference that used
+// to justify two paths is gone.
+void scheduler_yield(uint64_t *regs) { scheduler_rotate(regs); }
+
+static void scheduler_rotate(uint64_t *regs) {
     if (!scheduler_armed) return;
+
+    // UNCONDITIONALLY, and before anything can return early or switch:
+    // this closes the slice that just ended, whoever owned it. Doing it
+    // inside the `current_index >= 0` branch below was wrong in the one
+    // case that matters -- when the KERNEL context was running there is
+    // nobody to charge, but the start timestamp still has to move, and
+    // leaving it stale handed the next process everything the kernel had
+    // just spent. Measured: a process billed 9.51 SECONDS across a 300ms
+    // window.
+    bill_current();
 
     // A LEGACY BLOCKING PROCESS CANNOT BE PARKED, so while one is in
     // flight this file does not switch at all -- it resumes exactly
@@ -584,7 +619,6 @@ static void scheduler_rotate(uint64_t *regs, int bill) {
         // fired. Counted here rather than at switch_to() time because
         // this is the only place that knows a whole tick elapsed under
         // it -- see abi/proc_info.h on why the total, not a percentage.
-        if (bill) procs[current_index].cpu_ticks++;
         procs[current_index].kernel_rsp = (uint64_t)regs;
         // Paired with switch_to()'s FXRSTOR. Saved on the way out
         // whether or not the process has touched FP: "has it?" is
@@ -651,6 +685,7 @@ static void scheduler_rotate(uint64_t *regs, int bill) {
 int scheduler_block_current(uint64_t *regs, int reason) {
     if (current_index < 0) return 0;
 
+    bill_current(); // this slice ends here -- see bill_current()
     int idx = current_index;
     procs[idx].kernel_rsp = (uint64_t)regs;
     fpu_save(procs[idx].fpu);
@@ -728,6 +763,7 @@ void scheduler_on_exit(int code) {
         procs[current_index].stdout_pipe = -1;
     }
 
+    bill_current(); // the exiting process's last slice
     current_index = -1;
 
     // Continue the rotation from the slot that just exited (which is

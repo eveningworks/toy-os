@@ -85,7 +85,8 @@ static uint8_t g_cached_source = CPU_MHZ_UNKNOWN;
 // 100% one, short enough not to be a visible hang. This is the whole
 // reason the result is cached.
 #define CALIBRATE_TICKS 20
-#define PIT_HZ 100
+// PIT_HZ comes from timer.h -- it used to be redefined here, which is
+// two statements of one fact that a tick-rate change would have split.
 
 // RDTSC against the PIT. Deliberately the fallback, not the first
 // choice: it measures the TSC's rate, which on any modern part is a

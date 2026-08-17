@@ -12,6 +12,7 @@
 #include "paging.h"
 #include "fpu.h"
 #include "cpuinfo.h"
+#include "clocksource.h"
 #include "multiboot.h"
 #include "pmm.h"
 #include "heap.h"
@@ -142,6 +143,12 @@ void kernel_main(uint64_t multiboot_info_addr) {
     idt_init();
     klog_write("toy-os: IDT/PIC/PIT initialized, interrupts enabled\n");
 
+    // Monotonic time, on the PIT to begin with. Before anything wants a
+    // timestamp and before cpu_info_init() below, which calibrates the
+    // TSC against the PIT and so cannot itself depend on a TSC-backed
+    // clock existing yet. The better source is registered after it.
+    clocksource_init();
+
     // Before anything can reach ring 3. The kernel itself never uses FP
     // (see fpu.h on why it's ring-3-only), so nothing above this line
     // cares -- but a process starting without it would #UD on its first
@@ -157,6 +164,13 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // cpuinfo.h, a lazy calibration inside a syscall can't ever finish.
     cpu_info_init();
     klog_write("toy-os: CPU identified, clock calibrated\n");
+
+    // Now that a calibrated frequency exists, offer the TSC. It takes
+    // over from the PIT source only if this CPU's TSC is INVARIANT --
+    // see clocksource_tsc.c, where a varying-rate counter is refused
+    // rather than installed with a calibration that quietly stops being
+    // true.
+    clocksource_init_tsc();
 
     // Entropy (Milestone 2, docs/roadmap.md). Has to be after
     // cpu_info_init() -- it asks CPUID for RDSEED/RDRAND through

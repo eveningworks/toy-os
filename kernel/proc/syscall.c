@@ -15,6 +15,7 @@
 #include "fs.h"
 #include "string.h"
 #include "timer.h" // pit_ticks() -- SYS_TICKS
+#include "clocksource.h" // clocksource_now_ns() -- SYS_MONOTONIC_NS
 #include "tz.h"
 #include "pci.h"
 #include "cpuinfo.h"
@@ -956,6 +957,11 @@ void syscall_dispatch(uint64_t *regs) {
         }
     } else if (rax == SYS_TICKS) {
         regs[14] = pit_ticks();
+    } else if (rax == SYS_MONOTONIC_NS) {
+        // The clocksource, not the tick counter -- see syscall_abi.h.
+        // Safe with interrupts off, which is the state every syscall
+        // handler runs in (the int 0x80 gate clears IF).
+        regs[14] = clocksource_now_ns();
     } else if (rax == SYS_KILL) {
         // Unprivileged on purpose -- see SYS_KILL in abi/syscall_abi.h.
         // A process killing ITSELF is legal and behaves like exiting.

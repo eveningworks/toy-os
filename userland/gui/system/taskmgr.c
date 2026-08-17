@@ -75,7 +75,7 @@ static void logf_(const char *fmt, ...) {
 struct row {
     int pid;
     unsigned state;
-    unsigned long cpu_ticks;
+    unsigned long long cpu_ns;
     unsigned long mem_bytes;
     unsigned cpu_pct;      // computed between refreshes
     char name[PROC_NAME_MAX];
@@ -89,8 +89,8 @@ static int g_row_count;
 // process's previous CPU total to whichever process later landed in
 // that row, and the percentage would be nonsense exactly when the table
 // is busiest.
-static unsigned long g_prev_cpu[SYS_PROC_MAX + 1];
-static unsigned long g_prev_ticks;
+static unsigned long long g_prev_cpu[SYS_PROC_MAX + 1];
+static unsigned long long g_prev_ns;
 
 static struct uui_table g_table;
 
@@ -146,8 +146,13 @@ static void format_bytes(char *out, int cap, unsigned long b) {
 
 // Re-reads the process table and recomputes the CPU percentages.
 static void refresh(void) {
-    unsigned long now = sys_ticks();
-    unsigned long elapsed = now - g_prev_ticks;
+    // NANOSECONDS on both sides of the ratio: the numerator is a delta
+    // of cpu_ns and this is a delta of the same clock (SYS_MONOTONIC_NS).
+    // It used to be ticks, which could not express anything a process
+    // did inside a 10ms slice -- an animating client legitimately read
+    // 0% while drawing every frame.
+    unsigned long long now = sys_monotonic_ns();
+    unsigned long long elapsed = now - g_prev_ns;
 
     int n = 0;
     for (int i = 0; i < SYS_PROC_MAX && n < SYS_PROC_MAX; i++) {
@@ -158,22 +163,20 @@ static void refresh(void) {
         struct row *r = &g_rows[n++];
         r->pid = info.pid;
         r->state = info.state;
-        r->cpu_ticks = (unsigned long)info.cpu_ticks;
+        r->cpu_ns = (unsigned long long)info.cpu_ns;
         r->mem_bytes = (unsigned long)info.mem_bytes;
         strlcpy(r->name, info.name, sizeof r->name);
 
-        // Share of the wall-clock ticks that elapsed since the last
-        // sample -- the numerator and denominator are deltas of the SAME
-        // counter (see sys_ticks()), which is what makes this a real
-        // percentage rather than a ratio of two unrelated clocks.
-        unsigned long prev = (info.pid <= SYS_PROC_MAX) ? g_prev_cpu[info.pid] : 0;
-        unsigned long used = r->cpu_ticks > prev ? r->cpu_ticks - prev : 0;
-        r->cpu_pct = elapsed > 0 ? (unsigned)((used * 100UL) / elapsed) : 0;
+        // This process's share of the interval. See the note above on
+        // why both sides are deltas of the same clock.
+        unsigned long long prev = (info.pid <= SYS_PROC_MAX) ? g_prev_cpu[info.pid] : 0;
+        unsigned long long used = r->cpu_ns > prev ? r->cpu_ns - prev : 0;
+        r->cpu_pct = elapsed > 0 ? (unsigned)((used * 100ULL) / elapsed) : 0;
         if (r->cpu_pct > 100) r->cpu_pct = 100; // a slot reused mid-interval
-        if (info.pid <= SYS_PROC_MAX) g_prev_cpu[info.pid] = r->cpu_ticks;
+        if (info.pid <= SYS_PROC_MAX) g_prev_cpu[info.pid] = r->cpu_ns;
     }
 
-    g_prev_ticks = now;
+    g_prev_ns = now;
     g_row_count = n;
     uui_table_set_rows(&g_table, n);
 }
@@ -298,7 +301,7 @@ static int on_tick(struct uapp *a) {
 
 static void on_open(struct uapp *a) {
     (void)a;
-    g_prev_ticks = sys_ticks();
+    g_prev_ns = sys_monotonic_ns();
     refresh();
     set_labels();
     // Report the layout for the test tool, per this repo's rule that a

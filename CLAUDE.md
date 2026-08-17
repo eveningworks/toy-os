@@ -349,6 +349,21 @@ technical conventions below:
   app writes no coordinates: declare a column/row/grid, and the window
   sizes itself from the content. Resize, focus and wheel all arrive for
   free. `docs/uapp-design.md` is the full design and its staging.
+- **Monotonic time is an INTERFACE, and wall clock is not one of its
+  implementations.** `kernel/clocksource.h` -- sources register like
+  `display_driver`s, best rating wins (PIT 110, TSC 300), and the core
+  converts a raw counter with a mult/shift pair so the overflow
+  reasoning lives in one audited place. `rtc_read_local()` stays out of
+  it: "what time is it" jumps when the clock is set and says nothing
+  about elapsed time, which is why Linux separates clocksource from RTC
+  too. **The TSC needs an INVARIANT TSC** (CPUID 8000_0007H EDX bit 8),
+  or its rate changes as the CPU throttles and every duration is
+  silently wrong. **Reaching that path is the trap**: plain TCG cannot
+  (`-cpu max,+invtsc` warns "TCG doesn't support requested feature") and
+  KVM withholds it even under `-cpu host`, so the ONLY way is
+  `python3 tools/vm.py --kvm --cpu host,+invtsc`. `notsc` on the GRUB
+  line forces the PIT back, so the coarse path stays reachable on
+  hardware where the TSC wins -- same rule as `nopat`/`ata nodma`.
 - **An app with a cadence sets `tick_ms` and BLOCKS between frames.**
   `uapp_desc.tick_ms` arms a TWS timer (`WIN_REQ_TIMER` ->
   `WIN_EV_TIMER`), so `on_tick` arrives as an event instead of the loop
@@ -513,15 +528,19 @@ technical conventions below:
   `SYS_KILL` force-ends a process and `SYS_TICKS` is the MONOTONIC
   counter `cpu_ticks` is billed against -- a CPU percentage is a delta
   of one over a delta of the other, and `sys_gettime` (RTC wall-clock)
-  cannot serve. `cpu_ticks` is deliberately a TOTAL, not a percentage;
-  see `docs/decisions.md`. **Only the TIMER bills it** -- `SYS_YIELD`
-  goes through `scheduler_yield()`, which reschedules and charges
-  nothing, because a tick is a unit of elapsed time and a yield elapses
-  microseconds. Calling `scheduler_tick()` there (as it used to) made
-  every polling app bill itself ~100 ticks a second and report a flat
-  100%, several at once, which one CPU cannot do. Accounting is
-  therefore SAMPLED, so sub-tick work reads 0% -- the accepted bias,
-  recorded in `docs/roadmap.md`. **`SYS_KILL` is unprivileged on purpose** --
+  cannot serve. `cpu_ns` is deliberately a TOTAL, not a percentage;
+  see `docs/decisions.md`. **CPU time is MEASURED, not counted** -- the
+  scheduler asks a clocksource how long each slice actually was
+  (`bill_current()`), so the field is NANOSECONDS and `SYS_MONOTONIC_NS`
+  is its denominator. It was `cpu_ticks`, incremented per timer
+  interrupt, and that was wrong twice: billing from `SYS_YIELD` charged
+  a whole tick for microseconds (every polling app read a fake 100%,
+  several at once, which one CPU cannot do), and billing only from the
+  timer made anything finishing inside a tick read 0%. **The invariant:
+  every path that stops running the current process bills BEFORE
+  changing `current_index`** -- missing the kernel-context case charged
+  one process 9.51 seconds across a 300ms window.
+  **`SYS_KILL` is unprivileged on purpose** --
   there is no user model to gate it on, and killing the ring-3 WM is
   stage 4's exit criterion rather than a hole.
 - **`Exec=builtin:` has ONE user left: Control Panel.** Task Manager
