@@ -206,6 +206,12 @@ static void probe_and_mount(int allow_format) {
 static void ensure_layout(void) {
     fs_mkdir("/etc");
     fs_mkdir("/tmp");
+    // Where a config FILE declares itself -- one descriptor per file,
+    // read by config_files_scan() (api/config_file.h). It has to exist
+    // before anything can register, and `config register` on a machine
+    // whose /etc/config.d is missing would fail for a reason the user
+    // could do nothing about.
+    fs_mkdir("/etc/config.d");
 }
 
 void fs_init(void) {

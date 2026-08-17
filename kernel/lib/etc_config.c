@@ -42,7 +42,9 @@
 // constraint being worked around.
 #define ETC_CONFIG_MAX 512
 
-static int is_space(char c) { return c == ' ' || c == '\t'; }
+// k_isblank() is string.h's now -- line-oriented, so NOT k_isspace(),
+// whose '\n' would run this parser into the next line.
+#define is_space(c) k_isblank(c)
 
 // Narrows [*start, end) by trimming leading/trailing spaces/tabs and
 // returns the trimmed length. Doesn't touch the underlying bytes (no
@@ -137,6 +139,43 @@ int etc_config_get(const char *path, const char *key, char *out, uint32_t out_si
         return 1;
     }
     return 0;
+}
+
+int etc_config_unset(const char *path, const char *key) {
+    // Same rewrite-every-other-line-verbatim shape as etc_config_set()
+    // below, minus the replacement: the key's line is simply not
+    // emitted, so comments and ordering elsewhere in the file survive.
+    //
+    // Returns 0 for "the key was not there" as well as for a failed
+    // write, which is deliberate -- both mean the caller should not
+    // claim to have removed anything -- and the file is left untouched
+    // in the first case rather than rewritten identically.
+    char buf[ETC_CONFIG_MAX];
+    uint32_t out_len = 0;
+    int removed = 0;
+
+    uint32_t size = 0;
+    const char *data = fs_read(path, &size);
+    if (!data || size == 0) return 0;
+
+    uint32_t pos = 0;
+    const char *ls, *le;
+    while (next_line(data, size, &pos, &ls, &le)) {
+        const char *ks, *vs;
+        uint32_t klen, vlen;
+        if (parse_kv(ls, le, &ks, &klen, &vs, &vlen) && key_matches(ks, klen, key)) {
+            removed = 1;
+            continue;
+        }
+        uint32_t line_len = (uint32_t)(le - ls);
+        if (out_len + line_len + 1 >= ETC_CONFIG_MAX) return 0;
+        k_memcpy(buf + out_len, ls, line_len); out_len += line_len;
+        buf[out_len++] = '\n';
+    }
+    if (!removed) return 0;
+
+    buf[out_len] = '\0';
+    return fs_write(path, buf, 0);
 }
 
 int etc_config_set(const char *path, const char *key, const char *value) {

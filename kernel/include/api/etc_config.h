@@ -2,6 +2,7 @@
 #define ETC_CONFIG_H
 
 #include <stdint.h>
+#include "setting_abi.h" // enum setting_result -- see the note at the bottom
 
 // A small shared name=value config-file reader/writer for anything
 // under /etc -- see kernel/lib/etc_config.c's top comment for the
@@ -33,26 +34,29 @@ int etc_config_get(const char *path, const char *key, char *out, uint32_t out_si
 // the underlying fs_write() failed.
 int etc_config_set(const char *path, const char *key, const char *value);
 
-// What a "change a setting and persist it" call actually managed to do
-// -- tz_set_index(), font_config_save(), cursor_config_save() and
-// keyboard_config_save() all return this.
+// Removes `key` from the config file at `path`, keeping every other
+// line -- comments included -- exactly where it was. Returns 1 if the
+// key was there and the rewrite landed, 0 otherwise.
 //
-// It exists because those four used to conflate "applied" with
-// "saved": three returned void and tz_set_index() returned 1 for a
-// valid index whether or not the write landed, so `timezone Helsinki`
-// on a filesystem with no /etc printed "Timezone set to helsinki." and
-// persisted nothing. Applying and persisting are two outcomes and a
-// caller that reports one as the other is lying to the user; a setting
-// silently not surviving a reboot is close to the worst way to find
-// that out.
+// "The key was absent" and "the write failed" are both 0 on purpose:
+// neither entitles a caller to say it removed anything, and an absent
+// key leaves the file untouched rather than rewritten identically.
 //
-// SETTING_UNSAVED is deliberately non-zero, so the pre-existing
-// `if (!tz_set_index(i))` idiom still reads as "did it apply?" and
-// only callers that want the finer answer have to look for it.
-enum setting_result {
-    SETTING_INVALID = 0, // bad argument -- nothing applied, nothing written
-    SETTING_SAVED   = 1, // applied, and written to its /etc file
-    SETTING_UNSAVED = 2, // applied in memory, but the write FAILED
-};
+// This is what makes a setting REVERTIBLE to its built-in default,
+// which deleting the file wholesale could not do without taking every
+// other setting in it along.
+int etc_config_unset(const char *path, const char *key);
+
+// `enum setting_result` -- what a "change a setting and persist it"
+// call actually managed to do -- now lives in abi/setting_abi.h, which
+// this header includes, so every existing `#include "etc_config.h"`
+// still sees it.
+//
+// It moved because SYS_SETTING let a RING-3 program change a setting:
+// the three-way outcome stopped being an internal detail and became
+// part of the kernel<->userland contract. The alternative was a second
+// copy of the enum in the ABI header, which could drift from this one
+// -- and a drift there would mean a client reporting "saved" for a
+// value that was not.
 
 #endif

@@ -24,6 +24,54 @@ KTEST("string", "the original six still do what callers assume") {
     KTEST_ASSERT(eq(buf, "hi"));
 }
 
+KTEST("string", "k_isblank is space and tab ONLY, unlike k_isspace") {
+    KTEST_ASSERT(k_isblank(' '));
+    KTEST_ASSERT(k_isblank('\t'));
+    KTEST_ASSERT(!k_isblank('x'));
+
+    // The distinction that matters, and the reason six parsers each
+    // hand-rolled this instead of calling k_isspace(): they are
+    // line-oriented, so treating '\n' as skippable whitespace would run
+    // them straight into the following line.
+    KTEST_ASSERT(!k_isblank('\n'));
+    KTEST_ASSERT(!k_isblank('\r'));
+    KTEST_ASSERT(k_isspace('\n')); // the contrast, stated
+}
+
+KTEST("string", "k_strlcat appends within bounds and reports truncation") {
+    char buf[8];
+
+    k_strlcpy(buf, "ab", sizeof buf);
+    KTEST_ASSERT_EQ(k_strlcat(buf, "cd", sizeof buf), 4);
+    KTEST_ASSERT_EQ(k_strcmp(buf, "abcd"), 0);
+
+    // Appending to an empty destination is a plain copy.
+    buf[0] = '\0';
+    KTEST_ASSERT_EQ(k_strlcat(buf, "xy", sizeof buf), 2);
+    KTEST_ASSERT_EQ(k_strcmp(buf, "xy"), 0);
+
+    // The case this function was added for: the append does NOT fit.
+    // It must truncate and still terminate -- the hand-rolled
+    // k_strcpy(dst + k_strlen(dst), src) idiom it replaces wrote past
+    // the end here instead.
+    k_strlcpy(buf, "abcde", sizeof buf);
+    KTEST_ASSERT_EQ(k_strlcat(buf, "fghij", sizeof buf), 10); // WOULD have been 10
+    KTEST_ASSERT_EQ(k_strcmp(buf, "abcdefg"), 0);             // 7 chars + NUL
+    KTEST_ASSERT_EQ(buf[7], '\0');
+
+    // Exactly full already: nothing appended, nothing written, and the
+    // would-be length still reported so the caller sees the truncation.
+    k_strlcpy(buf, "abcdefg", sizeof buf);
+    KTEST_ASSERT_EQ(k_strlcat(buf, "z", sizeof buf), 8);
+    KTEST_ASSERT_EQ(k_strcmp(buf, "abcdefg"), 0);
+
+    // A zero-size destination must not be written to at all -- the one
+    // case where there is not even room for a terminator.
+    char guard[2] = { 'Q', 'Q' };
+    k_strlcat(guard, "abc", 0);
+    KTEST_ASSERT_EQ(guard[0], 'Q');
+}
+
 KTEST("string", "k_strlcpy always terminates and reports truncation") {
     char buf[4];
 

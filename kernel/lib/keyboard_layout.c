@@ -115,7 +115,7 @@ static int parse_value(const char *value, uint32_t len) {
 static void apply_line(const char *line, uint32_t len) {
     // Skip leading whitespace to find the real first character.
     uint32_t i = 0;
-    while (i < len && (line[i] == ' ' || line[i] == '\t')) i++;
+    while (i < len && k_isblank(line[i])) i++;
     if (i >= len || line[i] == '#') return; // blank or whole-line comment
 
     // Expect "sc_" + 2 hex digits.

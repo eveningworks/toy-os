@@ -35,6 +35,21 @@ int k_strncmp(const char *a, const char *b, size_t n);
 // deliberately over strncpy's.
 size_t k_strlcpy(char *dst, const char *src, size_t n);
 
+// Appends `src` to `dst`, writing at most `n` bytes in total and ALWAYS
+// NUL-terminating. Returns the length the result WOULD have had, so
+// `>= n` means it was truncated -- BSD strlcat's contract, matching
+// k_strlcpy above.
+//
+// Added for the hand-rolled `k_strcpy(dst + k_strlen(dst), src)` idiom,
+// which is an UNBOUNDED append however carefully the destination was
+// sized: the shell's `ls` argument builder overflowed its buffer with
+// enough flags in front of a long path.
+//
+// Not for building a large buffer in a loop: it rescans `dst` on every
+// call, so appending n pieces costs O(n^2). Code assembling a whole
+// file (etc_config.c) correctly keeps its own length counter instead.
+size_t k_strlcat(char *dst, const char *src, size_t n);
+
 // First/last occurrence of `c` in `s`, or NULL. `c == '\0'` finds the
 // terminator, matching C's strchr.
 char *k_strchr(const char *s, char c);
@@ -77,6 +92,15 @@ void k_memmove(void *dst, const void *src, size_t n);
 // CLAUDE.md on apps/ui/ widgets, same instinct).
 int k_isdigit(char c);
 int k_isspace(char c); // space, tab, newline, carriage return, form feed, vertical tab
+
+// Space or tab ONLY -- C's isblank(). The distinction from k_isspace()
+// is the whole point and it is not pedantry: every LINE-ORIENTED parser
+// here treats '\n' as a terminator, so skipping it as whitespace would
+// run the parser straight into the next line. That is why six separate
+// places had each written `c == ' ' || c == '\t'` by hand rather than
+// call k_isspace() -- etc_config.c and tz.c as private `is_space()`
+// helpers, keyboard_layout.c, demo.c and wm_debug.c inline, twice.
+int k_isblank(char c);
 
 // ASCII case folding. A-Z <-> a-z and nothing else: every byte outside
 // that range, including the Latin-1 Å/Ä/Ö (0xC4/0xC5/0xD6 and their

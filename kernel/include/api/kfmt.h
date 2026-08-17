@@ -41,7 +41,9 @@
 // a garbage value at runtime.
 //
 // There is no `%f` (this kernel has no floating point and compiles with
-// -mno-sse), no `%p`, no left-justify, no precision, and no `*` width.
+// -mno-sse), no `%p`, no precision, and no `*` width. Width on `%s`
+// pads (and `%-Ns` left-justifies); a string longer than its field
+// pushes the column rather than being truncated.
 // Anything unrecognised is emitted literally and consumes no argument,
 // so a typo shows up in the output instead of silently eating the rest
 // of the format string and desynchronising every argument after it.

@@ -29,4 +29,10 @@ void font_config_init(void);
 // unqualified success, see the shell's `fontsize`.
 int font_config_save(enum font_size size);
 
+// Announces this setting to the registry (setting.h), so it appears in
+// `settings` and in the ring-3 Control Panel. Called from
+// settings_init(); the registry's `apply` does what `fontsize` does --
+// validate, apply live, persist -- so the two cannot drift.
+void font_config_setting_register(void);
+
 #endif

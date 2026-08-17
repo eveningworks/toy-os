@@ -7,6 +7,7 @@
 #include "proc_info.h" // struct proc_info -- sys_proc_info() below
 #include "pci.h"     // struct pci_device, for sys_pci_info()
 #include "cpuinfo.h" // struct cpu_info, for sys_cpu_info()
+#include "setting_abi.h" // struct setting_msg, struct sys_info
 
 // libsys -- typed wrappers for every syscall a ring-3 program can make.
 //
@@ -128,6 +129,23 @@ int sys_getrandom(void *buf, unsigned long n);
 // exist. An empty slot is a SUCCESSFUL call reporting pid 0: skip it,
 // do not stop. Returns 1 on success, 0 for a bad index or pointer.
 int sys_proc_info(int index, struct proc_info *out);
+
+// The settings and config-file registries (abi/setting_abi.h). ONE call
+// with an op field, not one per operation -- see SYS_SETTING's comment.
+// Returns 0, or -1 for a bad op or index. Note SETTING_OP_SET reports
+// its own three-way outcome in `msg->result`, which a caller must read:
+// SETTING_UNSAVED means the change is live but will NOT survive a
+// reboot, and reporting that as success is the exact lie this ABI is
+// shaped to prevent.
+//
+// The convenience wrappers below cover the two common cases; anything
+// else (enumeration, choices, reload) builds a message directly.
+int sys_setting(struct setting_msg *msg);
+
+// Whole-machine memory and disk figures. CPU identity is
+// sys_cpu_info(), the PCI count sys_pci_count() and uptime
+// sys_monotonic_ns() -- none are duplicated here.
+int sys_sysinfo(struct sys_info *out);
 
 // Terminates `pid` immediately, reporting `exit_code`. Returns 1 if it
 // was killed, 0 if there is no such process.

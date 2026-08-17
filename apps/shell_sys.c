@@ -1208,14 +1208,21 @@ void cmd_ls_bin(const char *args) {
         return;
     }
 
+    // Bounded appends. This used to be four k_strcpy()s ending in
+    // `k_strcpy(run_args + k_strlen(run_args), path)`, which is an
+    // UNBOUNDED append: enough flags in front of a full-length path
+    // wrote past the end of run_args.
     char run_args[FS_PATH_MAX + 8];
     run_args[0] = '\0';
     if (flags_len > 0) {
-        k_strcpy(run_args, "-");
-        k_strcpy(run_args + 1, flags);
-        k_strcpy(run_args + 1 + flags_len, " ");
+        k_strlcat(run_args, "-", sizeof run_args);
+        k_strlcat(run_args, flags, sizeof run_args);
+        k_strlcat(run_args, " ", sizeof run_args);
     }
-    k_strcpy(run_args + k_strlen(run_args), path);
+    if (k_strlcat(run_args, path, sizeof run_args) >= sizeof run_args) {
+        vga_write("ls: too many flags for that path\n");
+        return;
+    }
 
     int exit_code = elf_run_from_fs("/bin/ls", run_args);
     vga_set_color(shell_fg, VGA_BLACK);

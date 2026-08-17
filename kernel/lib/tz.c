@@ -29,6 +29,7 @@
 #include "string.h"
 #include "knum.h"
 #include "etc_config.h"
+#include "setting.h"
 
 enum dst_rule { TZ_DST_NONE, TZ_DST_EU, TZ_DST_US };
 
@@ -207,7 +208,8 @@ static void rtc_add_minutes(struct rtc_time *t, int delta_minutes) {
 
 // ---- timezone database (/etc/timezones) ----
 
-static int is_tz_space(char c) { return c == ' ' || c == '\t'; }
+// k_isblank() is string.h's now -- line-oriented, so NOT k_isspace().
+#define is_tz_space(c) k_isblank(c)
 
 // Narrows [*start, end) by trimming leading/trailing spaces/tabs and
 // returns the trimmed length -- same trim-in-place approach as
@@ -415,6 +417,43 @@ int tz_set_index(int index) {
     return etc_config_set(TZ_CONFIG_FILE, TZ_CONFIG_KEY, TZ_CITIES[index].name)
                ? SETTING_SAVED : SETTING_UNSAVED;
 }
+
+// --- the registry descriptor (see setting.h) -------------------------
+//
+// The choice list is the loaded city database, so a hand-edited
+// /etc/timezones changes what a settings UI offers with no code change
+// -- the same property tz_load_or_seed_db() already gave the shell's
+// `timezone` command.
+
+static int tz_choice(int index, char *out, uint32_t out_size) {
+    const char *name = tz_city_name(index);
+    if (!name) return 0;
+    k_strlcpy(out, name, out_size);
+    return 1;
+}
+
+static void tz_get(char *out, uint32_t out_size) {
+    const char *name = tz_city_name(tz_current_index());
+    k_strlcpy(out, name ? name : "", out_size);
+}
+
+static int tz_apply(const char *value) {
+    int idx = tz_find_by_name(value);
+    if (idx < 0) return SETTING_INVALID;
+    return tz_set_index(idx);
+}
+
+static const struct setting g_tz_setting = {
+    .name   = TZ_CONFIG_KEY,
+    .label  = "Time zone",
+    .type   = SETTING_TYPE_ENUM,
+    .file   = TZ_CONFIG_FILE,
+    .choice = tz_choice,
+    .get    = tz_get,
+    .apply  = tz_apply,
+};
+
+void tz_setting_register(void) { setting_register(&g_tz_setting); }
 
 int tz_find_by_name(const char *name) {
     // Case-insensitive: every city in the database is spelled lowercase,

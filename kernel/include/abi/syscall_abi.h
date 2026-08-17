@@ -561,6 +561,38 @@ struct dirent {
                           // measure across a long enough interval, not
                           // ask how precise the clock is.
 
+#define SYS_SETTING   34 // RDI = pointer to a `struct setting_msg`
+                          // (abi/setting_abi.h), IN and OUT -- the
+                          // kernel copies it in, fills the out fields
+                          // and copies it back. Returns 0, or -1 for a
+                          // bad op, a bad index, or an unreadable
+                          // pointer.
+                          //
+                          // One syscall with an op field rather than
+                          // five syscalls, for the same reason
+                          // SYS_WIN_REQUEST is one: the boundary is
+                          // then a MESSAGE, and adding an operation
+                          // costs an enum value instead of an ABI
+                          // number that can never be reused.
+                          //
+                          // Note SETTING_OP_SET reports its outcome in
+                          // `result`, not in the return value -- the
+                          // syscall succeeded in asking; whether the
+                          // setting applied AND persisted is a separate
+                          // three-way answer (etc_config.h's `enum
+                          // setting_result`), and collapsing it to
+                          // ok/failed is exactly the lie that made
+                          // `timezone Helsinki` claim success while
+                          // writing nothing.
+
+#define SYS_SYSINFO   35 // RDI = pointer to a `struct sys_info` (out,
+                          // abi/setting_abi.h). Memory and disk usage
+                          // -- the whole-machine facts no other syscall
+                          // reports. CPU identity is SYS_CPU_INFO, the
+                          // PCI count SYS_PCI_COUNT and uptime
+                          // SYS_MONOTONIC_NS; none are duplicated here.
+                          // Returns 0, or -1 if the pointer is bad.
+
 // The number of process-table slots SYS_PROC_INFO can be asked about.
 // Mirrors the kernel's SCHED_MAX_PROCS; a caller loops 0..this-1.
 #define SYS_PROC_MAX 64

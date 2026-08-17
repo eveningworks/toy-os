@@ -44,6 +44,7 @@ in check_layout.py changes with it.)
 | `/bin/wm/demos` | Things that exist to be looked at or tested (`shapes`, `uidemo`) | build | present |
 | `/etc` | Config: `toyos.conf`, `timezones`, `history` | boot | present |
 | `/etc/kbs` | Generated keyboard layout data (`us`, `se`) | build | optional |
+| `/etc/config.d` | One descriptor per registered config file (`Name`/`Path`/`Description`) -- see `api/config_file.h` | boot | present |
 | `/tests` | Test/demo binaries -- one kernel mechanism each | build | present |
 | `/tmp` | Scratch space | boot | present |
 | `/usr` | Container only -- holds `share/`, nothing of its own | build | present |

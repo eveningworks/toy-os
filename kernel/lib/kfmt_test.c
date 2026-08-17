@@ -8,6 +8,43 @@
 
 static int eq(const char *a, const char *b) { return k_strcmp(a, b) == 0; }
 
+KTEST("kfmt", "a string width pads, and '-' left-justifies") {
+    char b[64];
+
+    // The columns a table needs. Before these existed, `%-12s` emitted
+    // the specifier itself into the output -- which reads as working
+    // right up until you look at the result.
+    k_snprintf(b, sizeof b, "[%-6s]", "ab");
+    KTEST_ASSERT(eq(b, "[ab    ]"));
+
+    k_snprintf(b, sizeof b, "[%6s]", "ab");
+    KTEST_ASSERT(eq(b, "[    ab]"));
+
+    // Exactly the field width: no padding either way.
+    k_snprintf(b, sizeof b, "[%-2s][%2s]", "ab", "cd");
+    KTEST_ASSERT(eq(b, "[ab][cd]"));
+
+    // OVER the field width is the case worth pinning: the column is
+    // pushed, the value is NOT truncated. A formatter that shortened a
+    // value to fit would be reporting something other than what it was
+    // given, which this toolkit's formatters never do (see kfmt.h).
+    k_snprintf(b, sizeof b, "[%-3s]", "abcdef");
+    KTEST_ASSERT(eq(b, "[abcdef]"));
+
+    // A null argument still pads, rather than skipping the field and
+    // shifting every later column left.
+    // Through a volatile, or -Wformat-overflow objects at compile time
+    // to the very case being tested at run time.
+    const char *volatile nul = 0;
+    k_snprintf(b, sizeof b, "[%-8s]", nul);
+    KTEST_ASSERT(eq(b, "[(null)  ]"));
+
+    // Numbers are unaffected: '-' is parsed and ignored there, so no
+    // existing zero-padded conversion changes meaning.
+    k_snprintf(b, sizeof b, "%4u|%-4u", 7u, 7u);
+    KTEST_ASSERT(eq(b, "0007|0007"));
+}
+
 KTEST("kfmt", "the supported conversions") {
     char b[64];
 

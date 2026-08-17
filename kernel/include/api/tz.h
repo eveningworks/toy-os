@@ -45,6 +45,11 @@ int tz_set_index(int index);
 // if no city matches.
 int tz_find_by_name(const char *name);
 
+// Announces the timezone to the settings registry (setting.h). Called
+// from settings_init(), after tz_init() has loaded the city database --
+// the choice list IS that database.
+void tz_setting_register(void);
+
 // rtc_read() (see timer.h) plus the currently selected city's offset
 // and, if that city's rule says so, its DST adjustment -- so callers
 // that want to *display* time (the shell's `time`, the taskbar clock)

@@ -46,6 +46,25 @@ size_t k_strlcpy(char *dst, const char *src, size_t n) {
     return src_len; // > n-1 means it was truncated -- see string.h
 }
 
+size_t k_strlcat(char *dst, const char *src, size_t n) {
+    size_t dst_len = 0;
+    // Bound the scan by `n`: an unterminated destination must not send
+    // this walking off the end looking for a NUL that is not there.
+    while (dst_len < n && dst[dst_len] != '\0') dst_len++;
+
+    size_t src_len = k_strlen(src);
+    // Full, or already unterminated -- nothing can be appended, and
+    // there is no room to terminate either. Report the length the
+    // result WOULD have had, which is what tells a caller it truncated.
+    if (dst_len == n) return n + src_len;
+
+    size_t room = n - dst_len - 1;
+    size_t copy = src_len < room ? src_len : room;
+    for (size_t i = 0; i < copy; i++) dst[dst_len + i] = src[i];
+    dst[dst_len + copy] = '\0';
+    return dst_len + src_len;
+}
+
 // The cast away from const matches C's own strchr/strrchr/strstr
 // signatures: the result points into the caller's own buffer, so
 // whether writing through it is legal is the caller's business, not
@@ -105,6 +124,10 @@ void k_memmove(void *dst, const void *src, size_t n) {
 }
 
 int k_isdigit(char c) { return c >= '0' && c <= '9'; }
+int k_isblank(char c) {
+    return c == ' ' || c == '\t';
+}
+
 int k_isspace(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
 }

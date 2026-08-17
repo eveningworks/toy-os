@@ -47,7 +47,7 @@ int demo_load(const char *path) {
         int len = i - start;
         if (i < n) i++; // step over the newline
 
-        while (len > 0 && (buf[start] == ' ' || buf[start] == '\t')) { start++; len--; }
+        while (len > 0 && k_isblank(buf[start])) { start++; len--; }
         while (len > 0 && (buf[start + len - 1] == '\r' || buf[start + len - 1] == ' ')) len--;
         if (len <= 0 || buf[start] == '#') continue;   // blank or comment
         if (len >= DEMO_LINE_MAX) len = DEMO_LINE_MAX - 1;

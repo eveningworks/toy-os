@@ -172,6 +172,14 @@ int sys_proc_info(int index, struct proc_info *out) {
                           (uint64_t)(uintptr_t)out);
 }
 
+int sys_setting(struct setting_msg *msg) {
+    return (int)syscall1(SYS_SETTING, (uint64_t)(uintptr_t)msg);
+}
+
+int sys_sysinfo(struct sys_info *out) {
+    return (int)syscall1(SYS_SYSINFO, (uint64_t)(uintptr_t)out);
+}
+
 unsigned long sys_ticks(void) {
     return (unsigned long)syscall0(SYS_TICKS);
 }

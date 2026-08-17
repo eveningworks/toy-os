@@ -14,7 +14,8 @@
 // conversions are kfmt's too and NOT a full printf's: %d %u %x %s %c
 // %%, an optional zero-pad width, and the l/ll/z length modifiers. No
 // %f (there is no floating point in this project and the build passes
-// -mno-sse), no %p, no left-justify, no precision, no `*` width. Read
+// -mno-sse), no %p, no precision, no `*` width. `%Ns`/`%-Ns` pad a
+// string to a column width (never truncating it). Read
 // kfmt.h before assuming a conversion exists -- an unrecognised one is
 // emitted literally and consumes no argument, so a typo shows up in the
 // output rather than desynchronising every argument after it.

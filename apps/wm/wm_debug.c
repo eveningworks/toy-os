@@ -126,7 +126,7 @@ void dbg_out_printf(struct dbg_out *o, const char *fmt, ...) {
 // it in place and advancing `*p` past it. Returns NULL at end of line.
 static char *next_tok(char **p) {
     char *s = *p;
-    while (*s == ' ' || *s == '\t') s++;
+    while (k_isblank(*s)) s++;
     if (!*s) { *p = s; return 0; }
     char *start = s;
     while (*s && *s != ' ' && *s != '\t') s++;
@@ -866,7 +866,7 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
         // shell's `run` does). Needed because a test's binary can take
         // one -- spin_test's round count is the reason this exists, and
         // without it that test had to go through a Terminal to say it.
-        while (*p == ' ' || *p == '\t') p++;
+        while (k_isblank(*p)) p++;
         cmd_spawn(o, path, *p ? p : 0);
         return 1;
     }

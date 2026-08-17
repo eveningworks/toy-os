@@ -13,6 +13,8 @@
 #include "pipe.h"
 #include "pmm.h"
 #include "fs.h"
+#include "setting.h"
+#include "setting_abi.h"
 #include "string.h"
 #include "timer.h" // pit_ticks() -- SYS_TICKS
 #include "clocksource.h" // clocksource_now_ns() -- SYS_MONOTONIC_NS
@@ -954,6 +956,37 @@ void syscall_dispatch(uint64_t *regs) {
             // through the user pointer (vmm.h).
             vmm_copy_to_user(pml4, rsi, &info, sizeof info); // validated above
             regs[14] = 1;
+        }
+    } else if (rax == SYS_SETTING) {
+        uint64_t pml4 = vmm_current_pml4();
+        struct setting_msg msg;
+        if (!vmm_validate_user_range(pml4, rdi, sizeof msg)) {
+            klog_write("syscall: setting() rejected -- invalid user pointer\n");
+            regs[14] = (uint64_t)-1;
+        } else {
+            vmm_copy_from_user(pml4, &msg, rdi, sizeof msg);
+            int ok = setting_dispatch(&msg);
+            vmm_copy_to_user(pml4, rdi, &msg, sizeof msg); // validated above
+            regs[14] = ok ? 0 : (uint64_t)-1;
+        }
+    } else if (rax == SYS_SYSINFO) {
+        uint64_t pml4 = vmm_current_pml4();
+        struct sys_info info;
+        if (!vmm_validate_user_range(pml4, rdi, sizeof info)) {
+            klog_write("syscall: sysinfo() rejected -- invalid user pointer\n");
+            regs[14] = (uint64_t)-1;
+        } else {
+            uint64_t used = 0, total = 0;
+            k_memset(&info, 0, sizeof info);
+            info.mem_free_kb  = (uint64_t)pmm_free_frames() * 4;
+            info.mem_total_kb = (uint64_t)pmm_total_frames() * 4;
+            if (fs_disk_usage(&used, &total)) {
+                info.disk_used_bytes = used;
+                info.disk_total_bytes = total;
+                info.flags |= SYS_INFO_DISK_VALID;
+            }
+            vmm_copy_to_user(pml4, rdi, &info, sizeof info); // validated above
+            regs[14] = 0;
         }
     } else if (rax == SYS_TICKS) {
         regs[14] = pit_ticks();

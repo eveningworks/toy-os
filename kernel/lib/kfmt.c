@@ -73,6 +73,20 @@ size_t k_vsnprintf(char *out, size_t cap, const char *fmt, va_list ap) {
         const char *start = p; // for the "emit it literally" fallback
         p++;
 
+        // A leading '-' is printf's left-justify flag. Supported for
+        // %s ONLY, which is what a column of text needs; on a number it
+        // is parsed and then ignored rather than silently emitting the
+        // conversion literally, since a right-aligned number is what
+        // anyone printing a table wants anyway.
+        //
+        // Added because every table-printing program was otherwise
+        // reduced to hand-rolling a pad loop -- exactly the duplication
+        // this toolkit exists to absorb, and `%-17s` reads as working
+        // to anyone who has used printf. Before this it emitted the
+        // format specifier itself into the output.
+        int left = 0;
+        if (*p == '-') { left = 1; p++; }
+
         unsigned width = 0;
         while (k_isdigit(*p)) { width = width * 10 + (unsigned)(*p - '0'); p++; }
 
@@ -103,7 +117,15 @@ size_t k_vsnprintf(char *out, size_t cap, const char *fmt, va_list ap) {
         case 'c': put(&o, (char)va_arg(ap, int)); break;
         case 's': {
             const char *s = va_arg(ap, const char *);
-            put_str(&o, s ? s : "(null)");
+            if (!s) s = "(null)";
+            size_t len = k_strlen(s);
+            // A string LONGER than its field is not truncated -- it
+            // pushes the column instead. Truncating would silently
+            // change the value, which is the one thing this toolkit's
+            // formatters are not allowed to do (see kfmt.h).
+            if (!left) { for (size_t i = len; i < width; i++) put(&o, ' '); }
+            put_str(&o, s);
+            if (left) { for (size_t i = len; i < width; i++) put(&o, ' '); }
             break;
         }
         case '%': put(&o, '%'); break;

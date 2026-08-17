@@ -26,6 +26,7 @@
 #include "tz.h"
 #include "timer.h"
 #include "font_config.h"
+#include "setting.h"
 #include "cursor_config.h"
 #include "keyboard_config.h"
 #include "apps.h"
@@ -218,6 +219,10 @@ void kernel_main(uint64_t multiboot_info_addr) {
     cursor_config_init(); // console cursor style, same /etc plumbing as the font size
     keyboard_config_init(); // loads the persisted keyboard layout, if any -- see kernel/lib/keyboard_config.c
     vga_reflow(); // apply it to the console's cell layout (no-op if nothing was persisted)
+    // Announce those four to the settings registry, AFTER their own
+    // init(): a timezone registered before tz_init() would offer an
+    // empty city list, since the choices ARE the loaded database.
+    settings_init();
 
     // One-shot boot-time CMOS/RTC readout, logged for the same reason a
     // real kernel's dmesg has an "rtc_cmos ...: setting system clock"

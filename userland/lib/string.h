@@ -76,6 +76,7 @@ static inline int strcasecmp(const char *a, const char *b) { return k_strcasecmp
 // header comment above. Copies at most `n` bytes, ALWAYS NUL-terminates,
 // and returns strlen(src) so truncation is detectable.
 static inline size_t strlcpy(char *dst, const char *src, size_t n) { return k_strlcpy(dst, src, n); }
+static inline size_t strlcat(char *dst, const char *src, size_t n) { return k_strlcat(dst, src, n); }
 
 // <ctype.h>'s handful, ASCII-only (which is all k_tolower/k_toupper
 // promise -- see api/string.h).

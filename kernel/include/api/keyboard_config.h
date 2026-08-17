@@ -27,4 +27,8 @@ void keyboard_config_init(void);
 // failed.
 int keyboard_config_save(const char *name);
 
+// Announces this setting to the registry (setting.h). Its choice list
+// is read from /etc/kbs at call time -- see keyboard_config.c.
+void keyboard_config_setting_register(void);
+
 #endif

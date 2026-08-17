@@ -13,6 +13,7 @@
 #include "gfx.h"
 #include "string.h"
 #include "etc_config.h"
+#include "setting.h"
 
 #define FONT_CONFIG_FILE "/etc/toyos.conf"
 #define FONT_CONFIG_KEY "font_size"
@@ -40,3 +41,39 @@ int font_config_save(enum font_size size) {
     return etc_config_set(FONT_CONFIG_FILE, FONT_CONFIG_KEY, gfx_font_size_name(size))
                ? SETTING_SAVED : SETTING_UNSAVED;
 }
+
+// --- the registry descriptor (see setting.h) -------------------------
+//
+// The choice list is derived from gfx_font_size_name() for every baked
+// size, for the same reason name_to_size() above matches against it: a
+// second list of size names would need keeping in step with
+// font_ttf_variants[] and would silently stop matching if one moved.
+
+static int font_choice(int index, char *out, uint32_t out_size) {
+    if (index < 0 || index >= (int)FONT_SIZE_COUNT) return 0;
+    k_strlcpy(out, gfx_font_size_name((enum font_size)index), out_size);
+    return 1;
+}
+
+static void font_get(char *out, uint32_t out_size) {
+    k_strlcpy(out, gfx_font_size_name(gfx_font_size()), out_size);
+}
+
+static int font_apply(const char *value) {
+    enum font_size want = name_to_size(value);
+    if (want == FONT_SIZE_COUNT) return SETTING_INVALID;
+    gfx_set_font_size(want);
+    return font_config_save(want);
+}
+
+static const struct setting g_font_setting = {
+    .name   = FONT_CONFIG_KEY,
+    .label  = "Font size",
+    .type   = SETTING_TYPE_ENUM,
+    .file   = FONT_CONFIG_FILE,
+    .choice = font_choice,
+    .get    = font_get,
+    .apply  = font_apply,
+};
+
+void font_config_setting_register(void) { setting_register(&g_font_setting); }

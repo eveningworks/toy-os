@@ -23,4 +23,8 @@ void cursor_config_init(void);
 // the write failed.
 int cursor_config_save(enum vga_cursor_style style);
 
+// Announces this setting to the registry (setting.h). Called from
+// settings_init().
+void cursor_config_setting_register(void);
+
 #endif
