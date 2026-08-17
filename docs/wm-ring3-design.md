@@ -32,7 +32,7 @@ section below:
   desktop must look identical at the end of stage 3, with the WM still
   in ring 0. That is what makes stage 4 a swap rather than a leap.
 - **The `gui` debug commands move WITH the WM**, forwarded over the
-  same transport clients use. The 13 GUI test tools are the only proof
+  same transport clients use. The 18 GUI test tools are the only proof
   the desktop works; a migration that breaks them cannot be verified at
   any step, which would make the whole plan unfalsifiable.
 - **Client buffers get mapped into the WM, not copied.** Copying every
@@ -118,10 +118,13 @@ milestone. **Check a stated blocker against the code before planning
 around it**: this one survived unchallenged because it sounded
 plausible.
 
-Plus the smaller ones, all of which stage 4 needs: syscalls for
-`etc_config_*` (settings), a monotonic tick (`pit_ticks()`;
-`sys_gettime` is RTC wall-clock and wrong for animation), and
-`scheduler_kill`/`scheduler_poll` for force-quit and reaping. And
+Plus the smaller ones. Of these, only **syscalls for `etc_config_*`
+(settings)** are still missing. Monotonic time is done and went further
+than this asked for -- `SYS_TICKS` plus `SYS_MONOTONIC_NS` over a
+clocksource registry (2026-08-17), so an animating client no longer has
+to reach for `sys_gettime`, which is RTC wall-clock and wrong for
+intervals. `scheduler_kill`/`scheduler_poll` for force-quit and reaping
+are done. And
 `MAX_PROCS` was **4** when this was written -- the WM itself would have
 taken one, leaving three for the entire desktop, when a terminal running
 a command is already two. It is `SCHED_MAX_PROCS` = 64 now, so this
@@ -132,8 +135,8 @@ particular blocker is gone.
 **All 18 GUI test tools drive the WM through `apps/wm/wm_debug.c`'s
 `gui` command family** -- reached over the kernel's serial
 debug console. `gui windows`, `gui click`, `gui probe`, `gui damage
-verify`, `gui dialog`, `gui ctxmenu` and the rest are how 175 checks
-assert anything at all about the desktop (264 checks now). A ring-3 WM cannot answer a
+verify`, `gui dialog`, `gui ctxmenu` and the rest are how 264 checks
+assert anything at all about the desktop. A ring-3 WM cannot answer a
 command dispatched from inside the kernel's console.
 
 That is not a detail to discover in stage 4. It is the reason stage 3
@@ -420,7 +423,7 @@ next session starts from it rather than re-opening it:
   stage 4 needs the WM to talk over *something*, and the syscall
   transport already does. The `gui` forwarding is the load-bearing half
   -- all sixteen GUI tools drive the WM through `wm_debug.c` over the
-  KERNEL's serial console, so the ~240 checks that prove the desktop
+  KERNEL's serial console, so the ~264 checks that prove the desktop
   works have to cross the transport before the WM can move at all.
 - **The debug channel is a `WIN_REQ_*`/`WIN_EV_*` pair**, command string
   in and output back, not a side channel of its own. Same precedent
@@ -537,7 +540,7 @@ the first stage at which it becomes true.
 Nothing here introduces a new harness. The migration is steered by the
 one that exists:
 
-- `tools/gui_regress.py` -- 13 tools, 175 checks, each on its own disk
+- `tools/gui_regress.py` -- 18 tools, 264 checks, each on its own disk
   copy and VM. Passes unchanged at the end of every stage.
 - `tools/damage_sweep.py` / `damage_hunt.py` -- the damage invariant,
   which stage 3 and stage 4 both perturb. Run with

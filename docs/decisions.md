@@ -123,7 +123,7 @@ there when you add an entry, or the index quietly stops being one.
 - [The desktop's app list is a directory of files, not a table in the kernel](#the-desktops-app-list-is-a-directory-of-files-not-a-table-in-the-kernel)
 - [Widgets are added once a second real caller needs them -- except the checkbox](#widgets-are-added-once-a-second-real-caller-needs-them----except-the-checkbox)
 - [A table PULLS its rows, and stores none of them](#a-table-pulls-its-rows-and-stores-none-of-them)
-- [cpu_ticks is a total, not a percentage](#cpu_ticks-is-a-total-not-a-percentage)
+- [cpu_ns is a total, not a percentage](#cpu_ns-is-a-total-not-a-percentage)
 - [SYS_KILL is unprivileged, and killing the WM is the point](#sys_kill-is-unprivileged-and-killing-the-wm-is-the-point)
 - [A lone button routes its own clicks; the group is for grids](#a-lone-button-routes-its-own-clicks-the-group-is-for-grids)
 - [A natural size must not depend on where the widget currently sits](#a-natural-size-must-not-depend-on-where-the-widget-currently-sits)
@@ -347,12 +347,16 @@ clamps the scroll position and the selection. That is a function rather
 than an assignment precisely because both need clamping when the row
 count shrinks.
 
-## cpu_ticks is a total, not a percentage
+## cpu_ns is a total, not a percentage
 
-`struct proc_info.cpu_ticks` (`kernel/include/abi/proc_info.h`) reports
-the cumulative timer ticks a process has been the running one for. It
-does not report a percentage, and the kernel deliberately does not
-compute one.
+`struct proc_info.cpu_ns` (`kernel/include/abi/proc_info.h`) reports the
+cumulative time a process has been the running one for. It does not
+report a percentage, and the kernel deliberately does not compute one.
+
+(It was `cpu_ticks`, a count of timer interrupts, until 2026-08-17. The
+"total, not a percentage" argument below is unchanged by that; what
+changed is that a total of TICKS is not a duration, which is a separate
+entry -- see the clocksource one.)
 
 A percentage is a difference between two samples divided by the time
 between them, and only the consumer knows how far apart its samples
@@ -363,10 +367,10 @@ makes the same call with `/proc/stat`, which reports totals and leaves
 the arithmetic to `top`.
 
 The consequence is that a consumer needs a common clock for the
-denominator, which is what `SYS_TICKS` is for -- the SAME counter
-`scheduler_tick()` bills against. Dividing a `cpu_ticks` delta by a
-delta of anything else (the RTC, say) gives a ratio of two unrelated
-clocks that happens to look like a percentage.
+denominator, which is what `SYS_MONOTONIC_NS` is for -- the SAME
+clocksource the scheduler bills against. Dividing a `cpu_ns` delta by a
+delta of anything else (the RTC, say, or `SYS_TICKS`) gives a ratio of
+two unrelated clocks that happens to look like a percentage.
 
 ## SYS_KILL is unprivileged, and killing the WM is the point
 
@@ -3585,8 +3589,8 @@ finding that would have cost a session otherwise. `gui click` and
 driver read -- the mouse is overridden for one iteration, and an
 injected key is used only when the real keyboard returned -1 so a human
 is never pre-empted. A tap on `mouse_get_state()` would therefore be
-invisible to every synthetic event, i.e. invisible to all 13 GUI test
-tools, which are the only proof any of this works. Tapping after the
+invisible to every synthetic event, i.e. invisible to every GUI test
+tool, which are the only proof any of this works. Tapping after the
 override is what makes stage 2 testable at all.
 
 **And it is gated on CHANGE.** The WM loop runs on every timer tick and

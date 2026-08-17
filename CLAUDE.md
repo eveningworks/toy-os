@@ -461,12 +461,15 @@ technical conventions below:
   protocol messages over `struct win_transport`, so the test tooling has
   already crossed the boundary the WM still has to). Stage 4 is the WM
   itself; of its prerequisites the ELF hardening and the tick/process
-  syscalls are done, a ring-3 allocator is decided-but-unbuilt, and the
-  settings syscalls are not. Read
+  syscalls are done (and monotonic time went further than the plan asked
+  -- `SYS_MONOTONIC_NS` over a clocksource registry), the **settings
+  syscalls are the only one still missing**, and the ring-3 allocator
+  turned out NOT to be a blocker: `apps/wm/` allocates nothing, and the
+  claim that it did was a comment pointing at a since-deleted file. Read
   that before touching anything in `apps/wm/` with the migration in
-  mind. Its load-bearing point: all 13 GUI test tools drive the WM
+  mind. Its load-bearing point: all 18 GUI test tools drive the WM
   through `wm_debug.c`'s `gui` commands over the KERNEL's serial
-  console, so the 175 checks that prove the desktop works have to move
+  console, so the 264 checks that prove the desktop works have to move
   with it, and that gets its own stage BEFORE the WM moves.
 - **A ring-3 process can own a real window** (`apps/wm/wm_client.c` +
   `kernel/proc/win_server.c`, protocol in
@@ -1187,6 +1190,25 @@ python3 tools/vm.py --instance 2 --disk /tmp/b.img start  # a second VM, alongsi
 socket, QMP port and VNC display are all derived from N, so slot 2 can
 never stop slot 0's VM or connect to its console. Slot 0 is the default
 and is exactly what it always was.
+
+**Some CPU features are unreachable in BOTH default modes, and the
+invariant TSC is one.** `--cpu` applies under `--kvm` too now, and that
+combination is the ONLY way to run the kernel's TSC clocksource:
+
+```
+python3 tools/vm.py --kvm --cpu host,+invtsc start   # the TSC path
+```
+
+TCG does not implement `invtsc` at all (`-cpu max,+invtsc` prints
+`warning: TCG doesn't support requested feature` and clears the bit),
+and KVM withholds it even under `-cpu host`, because a guest that has
+seen it cannot be live-migrated. So the default test environment
+exercises only the PIT-backed clocksource, and a green suite says
+nothing about the TSC one. `notsc` on the GRUB line reaches the same
+split from the other side. **Generalise it: before concluding a feature
+"just isn't available in QEMU", check whether it needs an explicit `+`
+flag AND which accelerator supports it** -- the two are independent, and
+this cost real time.
 
 **`--cpu MODEL` matters more than it sounds** for anything reading
 CPUID: the default `qemu64` reports as **AuthenticAMD** with no CPUID

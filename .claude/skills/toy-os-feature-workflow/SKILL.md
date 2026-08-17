@@ -560,6 +560,14 @@ twice more.**
     LOADED-but-filtered (`gui apps` vs `gui menu`), never just "absent"
     -- the first version asserted only absence and passed with the
     filter disabled outright.
+  - `python3 tools/single_instance_test.py` -- one copy of an app, and
+    relaunching it RAISING the copy that exists (`WIN_REQ_ACTIVATE`,
+    `UAPP_SINGLE_INSTANCE`). Two of its checks are worth copying: it
+    carries a multi-instance CONTROL (UI Demo declares no app id, so two
+    windows is correct there, and an over-eager match reddens exactly
+    that check), and it identifies the raised window by `client_pid`
+    rather than by title -- the title version stayed green through the
+    positive control, because a brand-new window is frontmost too.
   - `python3 tools/flake_hunt.py <tool> -n N` -- one tool N times,
     reporting which CHECKS failed and how often. Reach for it the moment
     a tool fails once and passes on re-run; a rate is the diagnosis, a
@@ -567,7 +575,7 @@ twice more.**
     `pass`.
   - `python3 tools/gui_regress.py` -- ALL of the app-level ones above
     plus the ring-3 client tests, each on its own fresh disk copy and
-    its own VM, as one pass/fail table (~240 checks across sixteen
+    its own VM, as one pass/fail table (~264 checks across eighteen
     tools, a couple of minutes at the default -j4). **Always pass
     `--logs DIR`**: an intermittent too rare to reproduce on demand can
     only be diagnosed by a capture that was already running, and that
@@ -1063,7 +1071,7 @@ Read this before assuming anything about the project's state.**
 - **`docs/wm-ring3-design.md` is the staged plan for Milestone 41** --
   moving the WM itself to ring 3. Its load-bearing finding: all 13 GUI
   test tools drive the WM through `wm_debug.c`'s `gui` commands over the
-  KERNEL's serial console, so the 175 checks that prove the desktop
+  KERNEL's serial console, so the 264 checks that prove the desktop
   works have to move with it, and that gets its own stage BEFORE the WM
   moves.
 
@@ -1393,6 +1401,71 @@ SILENT, and three of them were in code I had just written.**
   record the slot, so it could not be checked afterwards. Write down
   what was MEASURED; if the tooling cannot answer the question, fix the
   tooling (it records the slot now) rather than guessing.
+
+**2026-08-17 (single instance, CPU accounting, clocksources): four
+lessons, and the first two are about tests that look like they work.**
+
+- **A positive control can pass because the bug produces `==` where you
+  asserted `>`.** CPU accounting billed a whole tick per `SYS_YIELD`,
+  and the test asserted "billed must not EXCEED elapsed". A yield
+  returns about a tick later, so the buggy kernel bills exactly one tick
+  per tick and lands on `billed == elapsed` -- a flat 100%, the reported
+  symptom, sliding straight through a `>` comparison. The check only
+  became real when it asserted a process doing nothing but yielding is
+  billed SUBSTANTIALLY LESS than the window. **Ask what value the bug
+  actually produces, not merely which direction it errs in** -- and the
+  only reason this was caught is that the control was run at all.
+- **The same shape again, from the other side: a check can pass for the
+  wrong reason because the broken version satisfies it differently.**
+  "The relaunch brought the window to the front" stayed green against a
+  kernel with the raise disabled, because a brand-NEW window is
+  frontmost too. Comparing the window's `client_pid` against the
+  original's is what made it load-bearing. Both lessons are this repo's
+  existing rule -- ask what a broken version would still pass -- so
+  treat that rule as covering the ASSERTION's exact form, not just its
+  subject.
+- **A feature's primary path can be unreachable in the test
+  environment, and a green suite then proves nothing about it.** The TSC
+  clocksource needs an invariant TSC, and plain QEMU cannot provide one:
+  TCG does not implement `invtsc` (it warns and clears the bit) and KVM
+  withholds it even under `-cpu host` because a guest that has seen it
+  cannot be live-migrated. `python3 tools/vm.py --kvm --cpu host,+invtsc`
+  is the ONLY way to run that code. Before concluding a CPU feature
+  "isn't available in QEMU", check whether it needs an explicit `+` flag
+  AND which accelerator implements it -- those are independent. Then do
+  what this repo always does for the other direction: `notsc` on the
+  GRUB line keeps the coarse path reachable, as `nopat` and `ata nodma`
+  already do.
+- **Writing an invariant in a comment does not make you obey it.** The
+  new billing carried "every path that stops running the current process
+  must bill BEFORE changing `current_index`" -- and the same commit
+  missed the kernel-context path, so a process was charged 9.51 SECONDS
+  across a 300ms window. The test caught it. When you write a rule of
+  the form "every path must X", immediately enumerate the paths and
+  check them one at a time; the comment is a claim, not an
+  implementation.
+
+**Three diagnostic habits from the same session:**
+
+- **An arithmetic impossibility in a user's screenshot IS the
+  diagnosis.** Two processes each reporting 100% CPU on a single-core
+  machine cannot both be true, so the bug was in the accounting rather
+  than in the scheduling -- established before reading any code, and it
+  ruled out the entire "it polls too much" theory the roadmap had
+  already written down. Look for a claim the system makes that cannot be
+  true, before looking for the mechanism.
+- **A recorded known issue can be confidently wrong.** `docs/roadmap.md`
+  said Task Manager's 100% was "accurate rather than wrong, which is why
+  this is a papercut and not a bug". It was an artefact. The entry was
+  DELETED rather than amended -- an amended known-issue entry still
+  implies something is broken.
+- **Prove a failure is pre-existing before owning it.** A `sched` KTEST
+  failed under KVM; stashing every local change and rebuilding showed it
+  failing identically on the committed tree, which turned "I broke the
+  scheduler" into a roadmap entry in about two minutes. In a
+  worktree-isolated session use `git stash push -u -m <unique-tag>`,
+  capture the SHA, and `git stash apply <sha>` -- never a bare
+  `stash`/`pop`, since the stack is shared with every other worktree.
 
 The specific commands below
 were verified current as of the last time this skill was updated, but

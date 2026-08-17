@@ -239,11 +239,22 @@ doing their own hit-testing -- Shapes' canvas, Notepad's text area.
 
 ### `on_tick` is how an animating app stays honest
 
-Shapes has no timer event, so it polls, advances an angle, presents and
-`sys_yield()`s -- the comment in `gfxdemo.c` explains why blocking would
-freeze it. With `on_tick` set, the library polls instead of blocking,
-calls `on_tick` once per pass, redraws if it returns 1, and yields.
-Shapes keeps its behaviour without keeping its loop.
+With `on_tick` set and no `tick_ms`, the library polls instead of
+blocking: it calls `on_tick` once per pass, redraws if it returns 1, and
+yields. Shapes kept its behaviour without keeping its loop.
+
+**With `tick_ms` set, it BLOCKS instead** (added 2026-08-17). The
+library arms a TWS timer (`WIN_REQ_TIMER`) and `on_tick` arrives as
+`WIN_EV_TIMER`, so the process sleeps in `SYS_WAIT_EVENT` between
+firings. Polling wakes a process ~100 times a second whatever cadence it
+actually wanted -- Task Manager counted 40 passes to refresh twice a
+second, which is 98% of its wake-ups spent deciding it had nothing to
+do. It asks for 500ms now; Shapes asks for 10ms, the cadence its yield
+loop already happened to run at, so its rotation speed is unchanged.
+
+Polling remains the fallback, and that is what keeps this additive: an
+app that names no `tick_ms`, or one whose server declines the request,
+gets exactly the old loop rather than an app that never ticks.
 
 ### Why the escape hatch exists
 
