@@ -23,7 +23,7 @@ Three things that arrived together and that nothing else covers:
      was working perfectly. Nothing in this section opens a window.
   2. The per-process accounting behind it (SYS_PROC_INFO): a spawned
      process must actually appear, by name, with plausible memory.
-  3. Ending a process -- End Process (SYS_KILL) and End Task (the
+  3. Ending a process -- Force Quit (SYS_KILL) and Close (the
      refusable close handshake), each arming on the first click and
      committing on the second.
 
@@ -174,7 +174,14 @@ def main():
     print("task manager (uui_table, process accounting, ending processes)")
 
     # A process to find in the table and later kill.
-    dbg.send(f"gui spawn {VICTIM}")
+    spawn_reply = dbg.send(f"gui spawn {VICTIM}")
+    # "gui: spawned "<path>" as pid N" -- the pid is what makes the row
+    # findable below, and what stops this test ending the desktop.
+    victim_pid = None
+    for tok in spawn_reply.replace("\n", " ").split():
+        if tok.isdigit():
+            victim_pid = int(tok)
+    
     dbg.settle()
     time.sleep(0.6)
 
@@ -339,11 +346,34 @@ def main():
     lay = layout(dbg)
     tx, ty, _, _ = lay["table"]
 
-    # Row 0 is the first listed process.
-    row0_y = cy + ty + lay["header_h"] + lay["row_h"] // 2
-    dbg.send("gui click %d %d" % (cx + tx + 60, row0_y))
-    dbg.settle()
-    time.sleep(0.4)
+    # FIND THE VICTIM'S ROW BY PID rather than assuming a position.
+    #
+    # This used to click row 0 and call it "the first listed process",
+    # which held only while every process in the table was one this test
+    # had spawned. With a ring-3 desktop the WINDOW MANAGER is a process
+    # too and sorts first, so row 0 is the desktop -- and ending it made
+    # the test kill the thing it was testing on.
+    #
+    # Task Manager reports `taskmgr: selected pid N` on every row click,
+    # so ask instead of assume.
+    victim_row = None
+    for row in range(8):
+        ry = cy + ty + lay["header_h"] + lay["row_h"] * row + lay["row_h"] // 2
+        dbg.logs()
+        dbg.send("gui click %d %d" % (cx + tx + 60, ry))
+        dbg.settle()
+        time.sleep(0.3)
+        for line in dbg.logs():
+            if f"taskmgr: selected pid {victim_pid}" in line:
+                victim_row = row
+                break
+        if victim_row is not None:
+            break
+    if not check("found the victim's row in the table",
+                 victim_row is not None, f"pid {victim_pid}"):
+        passed = sum(1 for _, ok, _ in checks if ok)
+        print(f"\ntaskmgr_test: {passed} passed, {len(checks) - passed} failed")
+        return 1
 
     before_count = dbg.json("gui windows --json")["count"]
 

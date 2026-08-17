@@ -1133,11 +1133,20 @@ guess.*
         single -- the tool evicts the desktop and then asks it
         questions. They need to either drive the desktop AS the
         compositor, or run with no desktop up at all.
-      * `taskmgr`, `forcequit` end a process chosen out of the process
-        table, and the desktop is IN that table now. They kill pid 1 and
-        then correctly report that no window manager is running. Same
-        class as the `launched[0]` assumption this repo has already been
-        bitten by once.
+      * ~~`taskmgr`~~ FIXED: it clicked row 0 and called it "the first
+        listed process", which held only while every process in the
+        table was one it had spawned. It finds its victim's ROW BY PID
+        now, by clicking rows until Task Manager reports `selected pid
+        N` for the pid it spawned -- robust to sort order, to the
+        desktop being present, and to any future process appearing.
+      * `forcequit` still ends the desktop. It gets 12 checks in -- the
+        dialog, the not-responding mark, Wait, re-offering -- and dies
+        on the Force Quit itself, with no crash in the log. NOT
+        diagnosed: `wm_force_quit_yes()` kills `g_force_quit_pid`, which
+        is set from `windows[idx].client_pid` and looks right, and
+        `scheduler_kill()` refuses to kill the CURRENT process, so a
+        self-kill should be refused rather than fatal. Start by logging
+        the pid it actually passes.
 
       This is what stands between here and the switchover; the flip
       itself is one line in `apps/gui.c`.

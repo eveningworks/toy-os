@@ -15,7 +15,12 @@
 // in Toykit to hold a copy in. Nothing is cached, so nothing goes stale.
 //
 // TWO WAYS TO END A PROCESS, deliberately, exactly as Windows separates
-// End Task from End Process:
+// "Close" from "Force Quit" -- renamed from Windows' "End Task"/"End
+// Process", which needed the four lines below to tell apart and which a
+// user reasonably reads as two words for one thing. The names now say
+// what the buttons do, and "Force Quit" is the term this desktop
+// already uses in its own force-quit dialog, so one action does not
+// have two names depending on where it was triggered:
 //
 //   End Task    -- asks the window to close (the same handshake the X
 //                  button uses), so an app may save or decline.
@@ -240,8 +245,8 @@ static void set_labels(void) {
     // confirmation at all.
     // `label` is a plain, unowned field (ui/uui_button.h) and every
     // string here is a literal, so it outlives the button.
-    g_buttons[BTN_END].label  = (g_armed == ID_END)  ? "Confirm?" : "End Task";
-    g_buttons[BTN_KILL].label = (g_armed == ID_KILL) ? "Confirm?" : "End Process";
+    g_buttons[BTN_END].label  = (g_armed == ID_END)  ? "Confirm?" : "Close";
+    g_buttons[BTN_KILL].label = (g_armed == ID_KILL) ? "Confirm?" : "Force Quit";
 }
 
 static int selected_pid(void) {
@@ -448,9 +453,9 @@ int main(void) {
     // Labels and codes only -- the RECTS are set in on_size(), because
     // the font does not exist yet at this point and every font-derived
     // size here would be 0.
-    uui_button_init(&g_buttons[BTN_END], 0, 0, 0, 0, "End Task",
+    uui_button_init(&g_buttons[BTN_END], 0, 0, 0, 0, "Close",
                      UTHEME_BUTTON_BG, UTHEME_TEXT, ID_END);
-    uui_button_init(&g_buttons[BTN_KILL], 0, 0, 0, 0, "End Process",
+    uui_button_init(&g_buttons[BTN_KILL], 0, 0, 0, 0, "Force Quit",
                      UTHEME_BUTTON_BG, UTHEME_TEXT, ID_KILL);
     uui_button_group_init(&g_group, g_buttons, 2);
 
