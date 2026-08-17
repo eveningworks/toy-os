@@ -72,6 +72,29 @@ VICTIM = "/bin/wm/demos/uidemo"   # something to list and then kill
 checks = []
 
 
+def header_ink_x(qmp, path, rect):
+    """(leftmost, rightmost) x of non-background ink in `rect`, or None.
+
+    Used to prove the sort arrow does not sit ON TOP of the column
+    title. A right-aligned title is positioned from the column's right
+    edge -- which is where the arrow goes -- so the correct behaviour is
+    that the title SHIFTS LEFT when its column becomes sorted. If the
+    arrow is merely drawn over it, the title does not move.
+
+    Ink extent rather than an ink COUNT: the arrow adds pixels either
+    way, so a count cannot tell the two apart, while the leftmost ink
+    column moves only when the text was actually repositioned.
+    """
+    from PIL import Image
+    qmp.screenshot(path)
+    im = Image.open(path).convert("RGB")
+    x, y, w, h = rect
+    px = list(im.crop((x, y, x + w, y + h)).getdata())
+    bg = max(set(px), key=px.count)
+    xs = [i % w for i, p in enumerate(px) if p != bg]
+    return (min(xs), max(xs)) if xs else None
+
+
 def check(name, ok, detail=""):
     checks.append((name, bool(ok), detail))
     print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"   {detail}" if detail else ""))
@@ -262,6 +285,39 @@ def main():
     check("a DIFFERENT column starts ascending, not reversed",
           lay.get("sort", (None, None))[1] == 1 and lay.get("sort", (None,))[0] != 0,
           f"sort={lay.get('sort')}")
+
+    # --- the arrow must not sit ON the title --------------------------
+    #
+    # Reported from actual use, not caught here: the arrow was drawn at
+    # the column's right edge and RIGHT-aligned titles (PID, CPU,
+    # Memory) are positioned from that same edge, so it landed on the
+    # last character. Reserving clip width was not enough -- the edge
+    # the title is measured from has to move too.
+    #
+    # PID is the tightest case: right-aligned and only six characters
+    # wide. Sorting is currently on a different column, so this measures
+    # the unsorted position first.
+    col0 = lay.get("col0")
+    hdr_rect = None
+    if col0 is not None:
+        # INSET past the chrome: the header's bottom rule and the
+        # column separator are ink too, and including them pinned the
+        # measured extent to the cell's edges no matter where the text
+        # sat -- the first version of this check reported an identical
+        # (0, 47) in both states and proved nothing.
+        hdr_rect = (cx + col0[0] + 3, cy + ty + 2, col0[1] - 6, lay["header_h"] - 5)
+        unsorted_ink = header_ink_x(qmp, f"{args.tmp}/tm_hdr_unsorted.png", hdr_rect)
+        dbg.send("gui click %d %d" % (hdr_x, hdr_y))
+        dbg.settle()
+        time.sleep(0.8)
+        sorted_ink = header_ink_x(qmp, f"{args.tmp}/tm_hdr_sorted.png", hdr_rect)
+        check("the sort arrow does not overlap the column title",
+              unsorted_ink is not None and sorted_ink is not None
+              and sorted_ink[0] < unsorted_ink[0],
+              f"title ink starts at x={unsorted_ink} unsorted, {sorted_ink} sorted")
+    else:
+        check("the sort arrow does not overlap the column title", False,
+              "no col0 rect reported")
 
     # Back to PID ascending, so the checks below see the order they
     # were written against. A test must establish its own preconditions.

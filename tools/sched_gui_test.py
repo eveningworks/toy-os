@@ -122,19 +122,34 @@ def run(dbg, qmp, shot_dir, res):
     if shot_dir:
         qmp.screenshot(os.path.abspath(os.path.join(shot_dir, "sched-gui-before.png")))
 
+    # WHICH pids are already running, before spawning anything. This
+    # used to take `launched[0]` and assume it was the process it had
+    # just started -- true only while `launched` was empty beforehand,
+    # which stopped being true once the app opened above became a RING-3
+    # binary and therefore something the WM tracks for reaping. The test
+    # then watched the windowed app instead of the spin, and waited 30
+    # seconds for a program that is not supposed to exit.
+    #
+    # Measured while fixing it: the spin really is spawned and really is
+    # reaped, in ~7.5s. Nothing was wrong with the scheduler or with
+    # wm_reap_launched(); the test was looking at the wrong pid.
+    already = set(dbg.json("gui state --json").get("launched", []))
+
     dbg.send(f"gui spawn {SPIN_PATH}")
 
-    # Wait for the WM to actually report a live process before sampling,
-    # so a slow spawn can't be mistaken for a short one.
+    # Wait for the WM to report a NEW live process before sampling, so a
+    # slow spawn can't be mistaken for a short one.
     deadline = time.time() + SPAWN_TIMEOUT_S
     pid = 0
     while time.time() < deadline:
-        live = dbg.json("gui state --json").get("launched", [])
-        if live:
-            pid = live[0]
+        live = set(dbg.json("gui state --json").get("launched", []))
+        fresh = live - already
+        if fresh:
+            pid = min(fresh)
             break
     res.check("the desktop spawned a ring-3 process", pid != 0,
-              f"gui state never listed a launched pid within {SPAWN_TIMEOUT_S}s")
+              f"gui state never listed a NEW launched pid within {SPAWN_TIMEOUT_S}s "
+              f"(already running: {sorted(already)})")
     if not pid:
         return
 
@@ -171,9 +186,11 @@ def run(dbg, qmp, shot_dir, res):
 
     # It has to actually finish -- a WM that stays responsive because
     # the process never ran would otherwise pass everything above.
-    ended = pid not in dbg.json("gui state --json").get("launched", [])
+    still = dbg.json("gui state --json").get("launched", [])
+    ended = pid not in still
     res.check("the process finished and the WM reaped it", ended,
-              f"pid {pid} still listed after {RUN_TIMEOUT_S}s")
+              f"the spin is pid {pid}; still listed after {RUN_TIMEOUT_S}s "
+              f"(launched now: {sorted(still)}, pre-existing: {sorted(already)})")
 
     # And the desktop must still be usable afterwards, not merely alive
     # during -- a rotation bug that corrupted the kernel's saved context

@@ -1094,31 +1094,6 @@ guess.*
 
 ### Known issues and papercuts (unscheduled)
 
-- [ ] **`sched_gui_test.py`'s "the process finished and the WM reaped
-      it" fails, deterministically, and PREDATES this round.** Repro:
-      `python3 tools/vm.py start && python3 tools/sched_gui_test.py`.
-      The report is `pid 1 still listed after 30.0s` -- the tool spawns
-      `/tests/spin_test 40` through `gui spawn` and waits for the WM to
-      reap the exited process; it never disappears from the process
-      table. The other five checks pass, so the desktop genuinely stays
-      live while the process runs, which is what that tool is mainly
-      for.
-
-      **Established, not guessed:** 3/3 failures running the tool ALONE
-      (`tools/flake_hunt.py sched -n 3`), so it is not the parallel-run
-      flake family. And it fails identically on a build of commit
-      `2cd5f08` -- the tree as it stood before the settings registry,
-      the Control Panel port and the Toykit widget fixes -- so it is
-      **not caused by any of that work**. That check was therefore
-      already red before this round; nothing in the repo had run
-      `gui_regress.py` recently enough to catch when it started.
-
-      **NOT established:** which commit broke it, or whether the fault
-      is in the reaping (`wm_track_launched`/`scheduler_poll`) or in
-      `spin_test` itself failing to exit. Bisecting between `2cd5f08`
-      and whenever it last passed is the next step; do that before
-      theorising about the mechanism.
-
 - [ ] **Retire `uui_button_group` once nothing needs it.** A standalone
       `uui_button` routes its own clicks now (press/motion/release on
       `uui_button_ops`), which is how QPushButton, GtkButton and a Win32

@@ -248,19 +248,29 @@ void uui_table_draw(struct ugfx_surface *s, const struct uui_table *t) {
         int avail = cw - UUI_TABLE_PAD_X * 2;
         if (avail <= 0) continue;
 
+        // The arrow's reservation is taken out FIRST, before the title
+        // is positioned -- not after. Computing it afterwards is what
+        // made a RIGHT-aligned title (PID, CPU, Memory) draw hard
+        // against the column's right edge, which is exactly where the
+        // arrow goes, so the arrow sat on top of the last character.
+        // Reserving width for the clip is not enough on its own: a
+        // right-aligned string is positioned from the right edge, so
+        // the edge itself has to move.
+        int arrow = 0;
+        if (t->compare && c == t->sort_col) {
+            arrow = ugfx_char_w() + UUI_TABLE_PAD_X; // glyph plus a gap
+        }
+        int text_avail = avail - arrow;
+        if (text_avail <= 0) continue; // no room for a title at all
+
         int tx = cx + UUI_TABLE_PAD_X;
         const char *title = t->cols[c].title ? t->cols[c].title : "";
         if (t->cols[c].align == UUI_TALIGN_RIGHT) {
             int tw = ugfx_text_width(title);
-            if (tw < avail) tx = cx + cw - UUI_TABLE_PAD_X - tw;
+            if (tw < text_avail) tx = cx + cw - UUI_TABLE_PAD_X - arrow - tw;
         }
-        // The sort arrow, and the column title shortened to make room
-        // for it -- otherwise a title that exactly fills its column
-        // would be overprinted by the arrow rather than clipped, which
-        // is the failure gfx_draw_string_clipped() exists to prevent.
-        int arrow = (t->compare && c == t->sort_col) ? ugfx_char_w() : 0;
         ugfx_draw_string_clipped(s, tx, t->y + (hh - ugfx_char_h()) / 2,
-                                  avail - arrow, title, t->head_fg, t->head_bg);
+                                  text_avail, title, t->head_fg, t->head_bg);
         if (arrow) {
             // Drawn as stacked rows rather than a glyph: the baked font
             // has no arrow character, and a triangle built from the
