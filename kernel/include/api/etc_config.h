@@ -25,6 +25,45 @@
 // without a separate check.
 int etc_config_get(const char *path, const char *key, char *out, uint32_t out_size);
 
+// ---- reading several keys out of ONE file --------------------------
+//
+// etc_config_get() re-reads the whole file on EVERY call, which is the
+// right shape for the one-key callers it was written for (tz.c asking
+// for `timezone`) and quietly quadratic for anything asking a file
+// several questions. The desktop was the case that mattered: each
+// `.desktop` entry is asked for six keys, so a nine-entry reload issued
+// 54 whole-file reads. That measured 40ms under TCG and 2.5 SECONDS
+// under KVM, where every port-I/O instruction is a VM exit -- and it
+// ran on every filesystem change, so saving an unrelated setting froze
+// the desktop.
+//
+// So: load once, ask many. The buffer is the caller's, which keeps this
+// allocation-free and re-entrant -- and matters more than it looks,
+// because fs_read() REFUSES a nested whole-file read (it has one shared
+// staging buffer, see vfs.c), so a shared static here would be the same
+// hazard with a new name.
+#define ETC_CONFIG_BUF_MAX 1024
+
+struct etc_config_buf {
+    char data[ETC_CONFIG_BUF_MAX];
+    uint32_t size;
+    int valid;
+};
+
+// Reads `path` into `buf`. Returns 1 if the file was read and fits.
+// A file too large to fit is a REFUSAL (0, buf invalid), not a
+// truncation: half a config file parses as a valid config file whose
+// later keys have silently vanished, which is the failure mode this
+// project's formatter/parser conventions exist to avoid.
+int etc_config_load(const char *path, struct etc_config_buf *buf);
+
+// Same contract as etc_config_get(), answered from an already-loaded
+// buffer instead of from disk. Returns 0 with `out` emptied if the
+// buffer is invalid, so a failed load needs no separate check at each
+// call site.
+int etc_config_buf_get(const struct etc_config_buf *buf, const char *key,
+                       char *out, uint32_t out_size);
+
 // Sets `key=value` in the config file at `path`, creating the file if
 // it doesn't exist yet. If `key` is already present, its line is
 // replaced in place (every other line -- including comments -- keeps

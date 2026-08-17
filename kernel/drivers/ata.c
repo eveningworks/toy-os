@@ -555,10 +555,25 @@ static int dma_issue(uint32_t lba, int count, void *buf, int is_write) {
     outb(g_bm_io + BM_CMD, is_write ? 0 : BM_CMD_READ); // program direction, not started yet
 
     if (!wait_not_busy()) return 0;
+
+    // ARM THE COMPLETION FLAG BEFORE ANYTHING CAN RAISE THE INTERRUPT.
+    // This clear used to sit after the command byte below, which is a
+    // lost-wakeup race: the drive can complete and raise IRQ14 between
+    // the command and the clear, the handler sets the flag, and then
+    // this line wipes it. wait_dma_irq() then waits out the whole
+    // DMA_WAIT_TICKS (5s) budget and the retry succeeds instantly --
+    // which is exactly what it looked like in the log.
+    //
+    // The window is real but tiny, and it is a function of how fast the
+    // transfer completes, so TCG effectively never hit it and KVM (host
+    // page cache, completion in microseconds) hit it constantly: the
+    // desktop froze 2-5 seconds per disk read under `make run-kvm` and
+    // was clean under `make run`. Anything armed after the trigger has
+    // this bug; the flag has to be armed first.
+    g_dma_irq_fired = 0;
+
     select_lba(lba, (uint8_t)count);
     outb(REG_COMMAND, is_write ? CMD_WRITE_DMA : CMD_READ_DMA);
-
-    g_dma_irq_fired = 0;
     outb(g_bm_io + BM_CMD, (uint8_t)((is_write ? 0 : BM_CMD_READ) | BM_CMD_START)); // go
     return 1;
 }

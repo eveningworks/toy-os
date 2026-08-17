@@ -656,8 +656,34 @@ static void poll_desktop_entries(void) {
     quiet_until = now + 50; // ~500ms at the PIT's 100Hz
 
     seen_gen = gen;
+
+    // fs_generation() is GLOBAL: it moves for a write anywhere, and
+    // almost every one of them is not a .desktop file. Ask the cheap
+    // question first -- one directory listing, no file reads -- so
+    // saving a setting stops costing a full re-read of every entry.
+    // That re-read froze the desktop for 2.5s under KVM.
+    static uint64_t seen_fp;
+    static int fp_primed;
+    uint64_t fp = gui_apps_dir_fingerprint();
+    if (fp_primed && fp == seen_fp) return;
+    fp_primed = 1;
+    seen_fp = fp;
+
+    // Timed in two halves because they fail differently: gui_apps_load()
+    // re-reads and re-parses every .desktop file (disk), while
+    // desktop_entries_changed() rebuilds the icon layout (no I/O of its
+    // own). A reload that takes hundreds of milliseconds is worth a line
+    // naming WHICH -- the watchdog can only see the phase as a whole.
+    uint64_t t0 = pit_ticks();
     gui_apps_load();
+    uint64_t t1 = pit_ticks();
     desktop_entries_changed();
+    uint64_t t2 = pit_ticks();
+    if ((t2 - t0) * 10 >= 100) {
+        klog_printf("wm: desktop reload took %u ms (parse %u ms, layout %u ms)\n",
+                    (uint32_t)((t2 - t0) * 10), (uint32_t)((t1 - t0) * 10),
+                    (uint32_t)((t2 - t1) * 10));
+    }
     wm_damage_rect(0, 0, screen_w, screen_h - taskbar_h);
     redraw_pending = 1;
 }

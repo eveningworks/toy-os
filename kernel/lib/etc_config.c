@@ -115,16 +115,11 @@ static int key_matches(const char *key_start, uint32_t key_len, const char *key)
     return 1;
 }
 
-int etc_config_get(const char *path, const char *key, char *out, uint32_t out_size) {
-    if (!out || out_size == 0) return 0;
-    out[0] = '\0';
-
-    uint32_t size = 0;
-    // fs_write() always NUL-terminates at data[size] (see fs.c), so
-    // `data` is safe to scan with plain pointer arithmetic here.
-    const char *data = fs_read(path, &size);
-    if (!data || size == 0) return 0;
-
+// The shared scan. Both the read-per-call and the read-once entry
+// points below are this function plus a way of getting at the bytes --
+// one parser, so the two can never disagree about what a line means.
+static int find_key(const char *data, uint32_t size, const char *key,
+                    char *out, uint32_t out_size) {
     uint32_t pos = 0;
     const char *ls, *le;
     while (next_line(data, size, &pos, &ls, &le)) {
@@ -139,6 +134,47 @@ int etc_config_get(const char *path, const char *key, char *out, uint32_t out_si
         return 1;
     }
     return 0;
+}
+
+int etc_config_get(const char *path, const char *key, char *out, uint32_t out_size) {
+    if (!out || out_size == 0) return 0;
+    out[0] = '\0';
+
+    uint32_t size = 0;
+    // fs_write() always NUL-terminates at data[size] (see fs.c), so
+    // `data` is safe to scan with plain pointer arithmetic here.
+    const char *data = fs_read(path, &size);
+    if (!data || size == 0) return 0;
+
+    return find_key(data, size, key, out, out_size);
+}
+
+int etc_config_load(const char *path, struct etc_config_buf *buf) {
+    if (!buf) return 0;
+    buf->valid = 0;
+    buf->size = 0;
+    buf->data[0] = '\0';
+
+    uint32_t size = 0;
+    const char *data = fs_read(path, &size);
+    if (!data || size == 0) return 0;
+    // Refuse rather than truncate -- see the header. A half-read config
+    // file is a valid-looking config file with keys missing.
+    if (size >= sizeof buf->data) return 0;
+
+    k_memcpy(buf->data, data, size);
+    buf->data[size] = '\0';
+    buf->size = size;
+    buf->valid = 1;
+    return 1;
+}
+
+int etc_config_buf_get(const struct etc_config_buf *buf, const char *key,
+                       char *out, uint32_t out_size) {
+    if (!out || out_size == 0) return 0;
+    out[0] = '\0';
+    if (!buf || !buf->valid || buf->size == 0) return 0;
+    return find_key(buf->data, buf->size, key, out, out_size);
 }
 
 int etc_config_unset(const char *path, const char *key) {

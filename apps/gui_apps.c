@@ -89,9 +89,9 @@ static int cat_rank(const char *c) {
 // worst thing this file can do -- an unreachable app looks like a broken
 // system (see wm_reap_launched()'s comment for the last time that
 // happened). Showing it in both places with a log line is recoverable.
-static unsigned parse_show_in(const char *path, const char *file) {
+static unsigned parse_show_in(const struct etc_config_buf *cfg, const char *file) {
     char raw[32];
-    if (!etc_config_get(path, "ShowIn", raw, sizeof raw)) return GUI_SHOW_ALL;
+    if (!etc_config_buf_get(cfg, "ShowIn", raw, sizeof raw)) return GUI_SHOW_ALL;
 
     unsigned bits = 0;
     const char *p = raw;
@@ -123,13 +123,23 @@ static void load_entry(const char *file) {
     char path[64];
     k_snprintf(path, sizeof path, "%s/%s", DESKTOP_DIR, file);
 
+    // ONE read, six questions. This used to be six etc_config_get()
+    // calls, each of which re-reads the whole file -- so a nine-entry
+    // reload cost 54 whole-file reads, ran on every filesystem change
+    // (fs_generation() is global, so saving an unrelated setting
+    // triggers it), and froze the desktop for 2.5s under KVM, where
+    // each port-I/O instruction is a VM exit. It measured 40ms under
+    // TCG, which is why it went unnoticed: every test here runs TCG.
+    struct etc_config_buf cfg;
+    if (!etc_config_load(path, &cfg)) return;
+
     char name[GUI_APP_NAME_MAX], exec[GUI_APP_EXEC_MAX];
     char cat[16], icon[8], nodisplay[8];
-    if (!etc_config_get(path, "Name", name, sizeof name)) return;
-    if (!etc_config_get(path, "Exec", exec, sizeof exec)) return;
-    if (!etc_config_get(path, "Category", cat, sizeof cat)) k_strlcpy(cat, "apps", sizeof cat);
-    if (!etc_config_get(path, "Icon", icon, sizeof icon)) icon[0] = '\0';
-    if (etc_config_get(path, "NoDisplay", nodisplay, sizeof nodisplay)
+    if (!etc_config_buf_get(&cfg, "Name", name, sizeof name)) return;
+    if (!etc_config_buf_get(&cfg, "Exec", exec, sizeof exec)) return;
+    if (!etc_config_buf_get(&cfg, "Category", cat, sizeof cat)) k_strlcpy(cat, "apps", sizeof cat);
+    if (!etc_config_buf_get(&cfg, "Icon", icon, sizeof icon)) icon[0] = '\0';
+    if (etc_config_buf_get(&cfg, "NoDisplay", nodisplay, sizeof nodisplay)
         && nodisplay[0] == '1') return;
 
     int i = gui_app_registry_count;
@@ -144,7 +154,7 @@ static void load_entry(const char *file) {
     a->name = g_names[i];
     a->icon = icon[0];
     a->resizable = 1;
-    a->show_in = parse_show_in(path, file);
+    a->show_in = parse_show_in(&cfg, file);
 
     // Every app is a ring-3 binary now. An entry still naming the
     // retired `builtin:` form is refused LOUDLY rather than shown as a
@@ -160,6 +170,47 @@ static void load_entry(const char *file) {
     gui_app_registry_count++;
 }
 
+// A cheap answer to "could anything in this directory have changed?",
+// costing ONE directory listing and no per-file reads.
+//
+// The desktop reloads when fs_generation() moves, and that counter is
+// GLOBAL -- it bumps for any write anywhere, so saving a setting made
+// the desktop re-read and re-parse every .desktop file. Under KVM each
+// of those reads competes with whatever ring-3 app just did the saving,
+// and the reload measured 2.5 SECONDS with the desktop frozen for all
+// of it. Almost every one of those reloads had nothing to reload: the
+// directory was byte-for-byte what it already was.
+//
+// WHAT IT CANNOT SEE: an edit that leaves a file's SIZE unchanged, and
+// leaves the set of names unchanged -- fs_list() reports names and
+// sizes, and reading each file to do better is the cost this exists to
+// avoid. The live reload is a convenience (the alternative was no live
+// reload at all), so missing a same-size edit until the next real
+// change is the right trade against freezing the desktop on every
+// unrelated write. fs_stat()'s mtime would close it at the price of a
+// stat per entry, which is the same shape of cost again.
+static uint64_t g_fp;
+
+static void fingerprint_cb(const char *name, uint32_t size, int is_dir) {
+    if (is_dir) return;
+    // FNV-1a over the name, then fold in the size. Order-independent
+    // addition would collide on a swap; this is order-DEPENDENT, which
+    // is fine because fs_list() walks in stable table order.
+    uint64_t h = 1469598103934665603ULL;
+    for (const char *p = name; *p; p++) {
+        h ^= (unsigned char)*p;
+        h *= 1099511628211ULL;
+    }
+    h ^= (uint64_t)size * 2654435761ULL;
+    g_fp = (g_fp * 31) + h;
+}
+
+uint64_t gui_apps_dir_fingerprint(void) {
+    g_fp = 1;
+    fs_list(DESKTOP_DIR, fingerprint_cb);
+    return g_fp;
+}
+
 void gui_apps_load(void) {
     gui_app_registry_count = 0;
     g_file_count = 0;
@@ -170,7 +221,13 @@ void gui_apps_load(void) {
     // (category, filename) before parsing: the Start menu's row order is
     // something tests and users both read, and "whatever order the
     // filesystem felt like" is not an order.
-    for (int i = 0; i < g_file_count; i++) load_entry(g_files[i]);
+    for (int i = 0; i < g_file_count; i++) {
+        uint64_t t = pit_ticks();
+        load_entry(g_files[i]);
+        uint64_t d = pit_ticks() - t;
+        if (d * 10 >= 100)
+            klog_printf("wm: entry %s took %u ms\n", g_files[i], (uint32_t)(d * 10));
+    }
 
     for (int i = 1; i < gui_app_registry_count; i++) {
         for (int j = i; j > 0; j--) {

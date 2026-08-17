@@ -61,6 +61,52 @@ KTEST("etc_config", "the four setting savers report SETTING_SAVED on a good /etc
     KTEST_ASSERT_EQ(keyboard_config_save(keyboard_layout_current()), SETTING_SAVED);
 }
 
+// ---- read once, ask many --------------------------------------------
+
+KTEST("etc_config", "a loaded buffer answers the same as a per-call read") {
+    // EQUIVALENCE is the property worth pinning. etc_config_buf_get()
+    // exists purely so a caller asking one file several questions stops
+    // re-reading it (the desktop asked six keys per .desktop entry, so a
+    // nine-entry reload did 54 whole-file reads) -- so the day it
+    // answers differently from etc_config_get() is the day it is worse
+    // than the thing it replaced. Both run one parser for that reason;
+    // this is the assertion that they still do.
+    fs_delete(SCRATCH);
+    KTEST_ASSERT(etc_config_set(SCRATCH, "alpha", "one"));
+    KTEST_ASSERT(etc_config_set(SCRATCH, "beta", "two"));
+
+    struct etc_config_buf buf;
+    KTEST_ASSERT(etc_config_load(SCRATCH, &buf));
+
+    char from_buf[16], from_disk[16];
+    KTEST_ASSERT(etc_config_buf_get(&buf, "alpha", from_buf, sizeof from_buf));
+    KTEST_ASSERT(etc_config_get(SCRATCH, "alpha", from_disk, sizeof from_disk));
+    KTEST_ASSERT_EQ(k_strcmp(from_buf, from_disk), 0);
+
+    KTEST_ASSERT(etc_config_buf_get(&buf, "beta", from_buf, sizeof from_buf));
+    KTEST_ASSERT_EQ(k_strcmp(from_buf, "two"), 0);
+
+    // An absent key is 0 with `out` emptied, exactly as the per-call
+    // form does it, so callers can use `out` without a second check.
+    char none[16];
+    KTEST_ASSERT_EQ(etc_config_buf_get(&buf, "missing", none, sizeof none), 0);
+    KTEST_ASSERT_EQ(none[0], '\0');
+
+    fs_delete(SCRATCH);
+}
+
+KTEST("etc_config", "an unloaded buffer answers nothing rather than garbage") {
+    // The failure path callers depend on: a load that fails must make
+    // every later get a clean miss, so a caller can load once and check
+    // once rather than guarding every key.
+    struct etc_config_buf buf;
+    KTEST_ASSERT_EQ(etc_config_load("/tmp/ktest_no_such_file.conf", &buf), 0);
+
+    char out[16];
+    KTEST_ASSERT_EQ(etc_config_buf_get(&buf, "alpha", out, sizeof out), 0);
+    KTEST_ASSERT_EQ(out[0], '\0');
+}
+
 KTEST("etc_config", "an invalid argument is INVALID, not a failed save") {
     // The three-way answer is the point: "you gave me nonsense" and "I
     // could not write it down" are different outcomes and a caller that

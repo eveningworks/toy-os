@@ -320,4 +320,10 @@ int gui_app_shows_in(const struct gui_app *app, unsigned surface);
 // as the desktop starts, before anything draws a menu.
 void gui_apps_load(void);
 
+// "Could anything in the entry directory have changed?" -- one directory
+// listing, no file reads, so it is cheap enough to ask on every
+// filesystem change. Equal values mean nothing worth reloading; see
+// gui_apps.c for the one edit it cannot see (a size-preserving one).
+uint64_t gui_apps_dir_fingerprint(void);
+
 #endif
