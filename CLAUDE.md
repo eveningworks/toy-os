@@ -535,6 +535,52 @@ technical conventions below:
   that looks for it in a screenshot fails against a working kernel;
   assert the mapping is the real screen by comparing a client read
   against a screendump of the same pixel. See `docs/decisions.md`.
+- **THE FILESYSTEM IS NOT RE-ENTRANT, and `vfs.c` holds a preemption
+  guard because of it.** `tfs3.c` walks directories, inodes and data
+  through module-level scratch buffers (`g_blk`, `g_ptr_blk`); the
+  kernel context is a scheduler participant and a ring-3 process is
+  preemptible inside a syscall, so an app's file read interleaved with
+  the WM's and overwrote the block the WM was parsing. It did not look
+  like a filesystem bug: the WM reported files that plainly exist as
+  missing, silently, on about one boot in three under KVM. `FS_OP()` in
+  `vfs.c` wraps every backend call in
+  `scheduler_preempt_disable()`/`_enable()` (api/scheduler.h), at the
+  VFS because that is the one place every caller passes through. Three
+  things to know: it does NOT make an `fs_list()` callback safe to call
+  `fs_*` from (that is recursion, which a depth counter cannot see); it
+  is NOT the nested-read refusal below, which protects one buffer during
+  one call rather than the backend's state across the whole call; and an
+  unbalanced `disable()` hangs the machine, which is why `_enable()`
+  clamps at zero instead of going negative and silently disarming the
+  next section. See `docs/decisions.md`.
+- **Prefer `fs_read_into()` to `fs_read()` in anything the kernel
+  context parses.** `fs_read()` hands back a pointer into a shared
+  staging buffer, and that contract is unstatable in a preemptible
+  kernel -- a caller can honour it perfectly and still lose the buffer
+  to a ring-3 syscall mid-parse. `cursor_theme.c` did exactly that, with
+  a comment reasoning the parse happens first (true of the function, not
+  of the machine). `fs_read_into(path, buf, cap)` is `fs_size()` plus
+  `fs_read_range()` into memory the caller owns, so there is no shared
+  buffer to invalidate; it REFUSES an oversized file rather than
+  truncating. The same shape exists for config files:
+  `etc_config_load()` + `etc_config_buf_get()` read once and answer many
+  keys, because `etc_config_get()` re-reads the whole file PER KEY --
+  which made a nine-entry desktop reload 54 whole-file reads.
+- **The disk has a WRITE-BACK CACHE, and its flush can fail**
+  (`kernel/drivers/ata_cache.c`, under `ata_read_sectors()`/
+  `ata_write_sectors()` rather than in the block layer -- TFS2 and
+  `partition.c` bypass the block layer, and a bypass past a write-back
+  cache is a silent correctness hole in both directions). The
+  consequence that matters: a write that returned success can be refused
+  LATER, at the flush, so `blk_flush()`, `ata_flush_now()` and the block
+  device's flush op all RETURN A STATUS now and TFS3's `txn_commit()`
+  checks it -- barrier 1 failing ABANDONS the transaction rather than
+  overwriting targets. A failed write-back keeps its line dirty rather
+  than dropping it. `sync` flushes and reports how many sectors it
+  wrote; shutdown and reboot flush first. **Fault injection sits at the
+  public entry AND on the write-back path**, because with a cache in
+  front "the drive refused this write" no longer happens during the
+  caller's `write()` at all.
 - **`fs_read()` REFUSES a nested whole-file read**, returning NULL as it
   does for a missing file. Every backend frees one shared staging
   buffer, allocates a new one and does a BLOCKING read into it -- so the
@@ -560,6 +606,19 @@ technical conventions below:
   release. **An app must honour `reason`**: Control Panel discarded it
   and applied a setting on every pointer-motion event, which froze the
   desktop for seconds and exposed the `fs_read()` bug above.
+- **The WM has a SLOW-FRAME WATCHDOG** (`apps/wm/wm_watchdog.c`): it
+  times each `wm_run()` iteration by phase and logs anything over a
+  threshold (150ms by default) as
+  `wm: SLOW FRAME 620 ms -- worst phase 'desktop_entries' 610 ms`. The
+  design point worth preserving: it measures only the work AFTER the
+  frame's `hlt`, so a SILENT watchdog during a visible freeze is a real
+  answer -- the loop was not running, i.e. the stall is below us (host
+  scheduling, the display backend, an emulator's fsync) -- rather than a
+  missing measurement. `gui watchdog [<ms>|off]` tunes it and reports
+  the fired/peak counters, which matter as much as the threshold: "no
+  SLOW FRAME lines" is only evidence of a fast WM if it was armed. The
+  attribution trap: `wmwd_phase()` names the phase ABOUT TO START, so
+  the interval it closes belongs to the PREVIOUS one.
 - **A panic NAMES THE FUNCTION now**, on screen and in the log:
   `in crash_gp_fault+0xa`, plus the faulting context (`pid 1` or
   `kernel context`), the general registers, the build id and the uptime.
@@ -1488,6 +1547,7 @@ gui open <App>           open a window directly -- no Start-menu clicking
 gui dialog [--json]      the open confirm dialog's message and button CENTRES
 gui compositor [--json]  the registered compositor pid, queue depth, drops
 gui spawn PATH [args]    run a ring-3 binary directly -- no Terminal in the loop
+gui watchdog [<ms>|off]  slow-frame threshold, plus how often it fired
 gui click X Y | gui rclick X Y | gui drag X1 Y1 X2 Y2 | gui key <c> [alt|ctrl|shift]
 ```
 
@@ -1630,6 +1690,24 @@ timings. Expect ~2500 MB/s in emulation and treat that as evidence the
 figure is not real. **If a user reports something that reproduces only
 on hardware, ask what the emulator models differently BEFORE doubting
 the report.** See `docs/decisions.md`.
+
+**AND KVM HIDES A DIFFERENT CLASS AGAIN -- TIMING.** The memory-type
+note above is about what TCG does not model; this is about what it makes
+too slow to notice. Under KVM a transfer completes in microseconds, so a
+driver race whose window is "between issuing a command and arming its
+completion flag" goes from unreachable to constant. That is a real bug
+this project shipped: `dma_issue()` cleared `g_dma_irq_fired` AFTER the
+command byte, an interrupt landing in that window was wiped, and the
+waiter then burned the whole 5s `DMA_WAIT_TICKS` budget before a retry
+that succeeded instantly. The desktop froze for 2-5 seconds per disk
+read under `make run-kvm` and was perfect under `make run`.
+
+Generalise it: **every automated test in this repo runs TCG**, so a
+green suite says nothing about anything whose behaviour depends on how
+FAST the emulated hardware is. When a user reports something this
+environment cannot reproduce, try `--kvm` before doubting the report --
+and note the report may be of a symptom (a freeze) whose cause is a race,
+not slowness. `tools/kvm_soak.py` is the standing check for this.
 
 **But `make run-kvm` DOES honour guest memory types, and that is the one
 way to reproduce this class of bug locally.** TCG ignores PAT entirely,
@@ -2038,6 +2116,25 @@ repeated manual steps to be worth automating:
   include a point that should NOT change -- half the assertion is the
   neighbour staying put. `--box N` averages a square, for anti-aliased
   edges where a single pixel is a coin toss.
+- **`kvm_soak.py`** -- the desktop under KVM, across FRESH BOOTS, failing
+  on the symptoms that appear only there: a WM frame over a threshold, a
+  file that exists but will not read, an incomplete cursor-theme load, a
+  varying desktop entry count. Exists because **every other test here
+  runs TCG**, and on 2026-08-17 that hid three real bugs at once -- a
+  lost-wakeup race in the ATA driver (5s frozen desktop per disk read),
+  a 54-read desktop reload (40ms TCG / 2.5s KVM), and a non-re-entrant
+  filesystem that silently lost cursor shapes on ~1 boot in 3. Fresh
+  boots per round because that last one is intermittent and one clean
+  run says nothing. Not in `gui_regress.py` (needs `/dev/kvm`, boots its
+  own VMs); run it after touching the disk driver, the filesystem, the
+  VFS, the scheduler's preemption handling, or anything the WM reads
+  from disk -- and whenever a user reports something this environment
+  cannot reproduce. SKIPS loudly without KVM rather than passing
+  quietly. **Its workload CHURNS `/usr/wm/desktop` on purpose**: the
+  desktop only re-reads when that directory changed and a cached read
+  never reaches the drive, so without it the tool does almost no disk
+  I/O -- verified by disarming the VFS preemption guard entirely and
+  still getting four clean rounds.
 - **`panic_resolve.py`** -- paste a panic (from the log, or typed off a
   photograph) and it names every address in it, RIP and stack scan
   alike, annotating the original lines. It finds the relocation delta

@@ -2126,6 +2126,51 @@ upward, no caller naming the hardware.
       M21 runtime loading). Each stays concrete until the second one is
       real.
 
+### Milestone 42 -- Scheduler: blocking, priorities, classes (kernel, target v0.4.0)
+
+Today's scheduler is a preemptive round-robin over `procs[]` with the
+KERNEL CONTEXT as one of the rotation participants, no priorities, and
+**no blocking state at all**. Nothing can sleep until an event; it can
+only spin. Everything below follows from that one gap, and the staging
+matters more than the individual items -- see the Details entry.
+
+Prompted by a real bug (2026-08-17): a ring-3 app doing ordinary file
+I/O could freeze the desktop for seconds and silently corrupt
+kernel-side filesystem operations. Both were fixed at the point of
+damage (a preemption guard in `vfs.c`, `fs_read_into()`, a lost-wakeup
+race in `ata.c`), and none of those fixes address the shape that let it
+happen.
+
+- [ ] **Blocking + wait queues.** The big one, and it subsumes several
+      current workarounds. A process waiting on a timer, a pipe, a
+      window event or the disk should be OFF the run queue until the
+      thing it waits for happens.
+- [ ] **Retire `uapp_desc.tick_ms` as a REQUIREMENT.** It exists because
+      an app with no cadence otherwise polls with `sys_yield()` at full
+      speed; Control Panel omits it and burns 100% of every slice it is
+      given. With wait queues it becomes an optimisation rather than the
+      difference between a well-behaved app and a spinning one.
+- [ ] **Two scheduling classes, Linux-shaped.** A compositor should
+      outrank a background demo; today they are peers, which is why an
+      actively-working app measurably degrades the desktop. Classes
+      queried in priority order (realtime-ish, then normal), NOT a
+      plugin interface -- see the Details entry for why.
+- [ ] **Replace the preemption guard with a real sleeping lock.**
+      `scheduler_preempt_disable()` (added 2026-08-17) is a blunt
+      critical section: correct, and it blocks EVERY process for the
+      duration of a filesystem operation. A lock that sleeps the
+      contender is the right shape once there is a wait queue to sleep
+      it on.
+- [ ] **Bound how long a frame can block on I/O.** Related but separate:
+      see the "Get blocking disk I/O out of the WM's event loop" item
+      under Known issues.
+
+**Sequencing:** do this AFTER Milestone 41 stage 4. Moving the WM to
+ring 3 deletes the scheduler's strangest case -- the kernel context as a
+rotation participant (`ROT_KERNEL`) -- and it would be a waste to design
+priorities and wait queues around a participant that is about to stop
+existing.
+
 ## Backlog
 
 Smaller or lower-priority items not yet slotted into a milestone above.
@@ -3655,6 +3700,51 @@ ignored, and frames already mapped leak when a later segment fails.
 There are no KTESTs for the loader at all. All of that is tolerable
 while every ELF is one this build produced; it stops being tolerable
 the moment loading ring-3 apps is the ordinary path.
+
+### Milestone 42 -- Scheduler: blocking, priorities, classes
+
+**Where this came from.** A user-reported desktop freeze (2026-08-17)
+turned out to have three causes, and the third was structural: any
+ring-3 app doing file I/O could corrupt a kernel-side filesystem
+operation, because the backends keep module-level scratch state and the
+kernel context is preemptible. That was fixed where the damage was. The
+question it raised -- "what change stops this happening again for any
+ring-3 app?" -- is what this milestone is.
+
+**What is actually wrong today, in order of what it costs.**
+
+1. **No blocking state.** This is the gap everything else hangs off.
+   `uapp_desc.tick_ms` exists precisely because an app without a cadence
+   has nothing to wait ON, so it polls; the WM waits for the disk by
+   halting inside a rotation participant. Wait queues fix the CPU waste,
+   make `tick_ms` optional, and stop a busy app degrading the desktop.
+2. **No priorities.** The compositor and a background demo are peers.
+   Every real desktop ranks the compositor above ordinary apps.
+3. **The kernel context is itself a rotation participant** (`ROT_KERNEL`
+   in `scheduler.c`), which is unusual, load-bearing today, and
+   DISAPPEARS with Milestone 41 stage 4. Strong argument not to build
+   scheduler features that assume it.
+
+**On "make the scheduler pluggable, like Linux".** Worth being precise,
+because the premise is a common misreading: Linux does not swap
+schedulers. It has scheduling CLASSES -- stop, deadline, RT,
+CFS/EEVDF, idle -- queried in a fixed priority order and compiled in.
+Pluggable schedulers were proposed repeatedly and explicitly rejected
+for years; the runtime-swappable mechanism (`sched_ext`, BPF) only
+landed in 6.12 and is an escape hatch for experimentation, not how Linux
+schedules. So the model worth copying here is classes, not plugins.
+
+**And a plugin interface would be actively wrong for this project right
+now**, by its own standing rule: a seam with exactly one implementation
+is UNVALIDATED (see `docs/decisions.md` on `struct win_transport`). A
+scheduler plugin API with one scheduler behind it is that trap with more
+surface area. Two concrete classes with two real users is the honest
+version of the same idea; a plugin interface can come later if a genuine
+third policy ever turns up.
+
+**Suggested order:** wait queues first (biggest win, subsumes the
+workarounds), then the two classes, then convert the preemption guard to
+a sleeping lock. Only then consider anything pluggable.
 
 ### Backlog
 

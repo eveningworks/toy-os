@@ -1806,6 +1806,112 @@ point nowhere near the cause. Go to step 1.
   three a byte-for-byte subset. That took one build cycle and turned "I
   broke the compositor" into a recorded pre-existing issue.
 
+**2026-08-17 (a user-reported desktop freeze): THE MOST IMPORTANT
+LESSON IN THIS FILE FOR ANYONE DEBUGGING A REPORT YOU CANNOT
+REPRODUCE.**
+
+The report was "Control Panel sticks for a few seconds". It had THREE
+independent causes, none of which any test here could see, because
+**every automated test in this repo runs under TCG and the user runs
+`make run-kvm`.**
+
+- **A lost-wakeup race in the ATA driver.** `dma_issue()` cleared its
+  completion flag AFTER writing the command byte, so an interrupt
+  arriving in that window was wiped; the waiter then burned the full 5s
+  `DMA_WAIT_TICKS` and the retry succeeded instantly. The window is a
+  function of how FAST the transfer completes, so TCG never hit it and
+  KVM (microsecond completions) hit it constantly. **Generalise: anything
+  armed after its own trigger has this bug**, and emulator speed decides
+  whether you ever see it.
+- **54 whole-file reads per desktop reload.** `etc_config_get()` re-reads
+  the file per key and each `.desktop` entry was asked six questions.
+  40ms under TCG, 2.5s under KVM where each port-I/O is a VM exit.
+- **The filesystem was not re-entrant.** `tfs3.c` uses module-level
+  scratch buffers and the kernel context is preemptible, so any ring-3
+  app doing file I/O corrupted kernel-side lookups. This was WORSE than
+  the freeze -- the desktop silently lost cursor shapes on ~1 boot in 3
+  -- and invisible because a fallback covered it.
+
+**The debugging loop that worked, in order:**
+
+1. **Ask what the user's environment does differently before doubting
+   the report.** `make run-kvm` was mentioned in passing, three
+   exchanges in, and it was the whole answer. Ask early.
+2. **Measure from INSIDE the guest.** `apps/wm/wm_watchdog.c` times each
+   `wm_run()` iteration by phase and logs anything over a threshold
+   (`gui watchdog [<ms>|off]`). Its design point is worth copying: it
+   measures only the work AFTER the frame's `hlt`, which makes a SILENT
+   watchdog during a visible freeze a real answer ("the stall was not
+   ours") rather than a missing measurement.
+3. **Narrow by bisecting the WORK, not the code.** The watchdog named
+   the phase; per-file timing inside that phase named the call; ATA
+   debug (`debug ata on`) showed `dma read attempt 1 failed / ok on
+   attempt 2`, which is a timeout, not slowness.
+4. **A quantised duration is a TIMEOUT, not throughput.** Stalls
+   clustered at ~2.5s and ~5.5s against a 5.0s `DMA_WAIT_TICKS`. Read
+   the constant before theorising about disk speed.
+
+**Three ways I fooled MYSELF, all worth recognising:**
+
+- **My harness produced clean 6.2-second "stalls" that did not exist.**
+  Two threads shared one `DebugConsole` socket, so replies interleaved
+  and every read hit its 6.0s timeout. `gui_debug`'s console is ONE
+  request/response channel -- never poll it from a second thread. Single
+  -threaded, the stalls vanished. Suspect the harness when a number
+  lands suspiciously close to one of its own timeouts.
+- **My filter hid the evidence I had asked for.** Two separate times a
+  script printed only lines matching `SLOW FRAME`, so the diagnostic
+  lines I had just added were drained and discarded, and I concluded the
+  code was not running. `DebugConsole.logs()` CLEARS what it returns --
+  print everything you drained, or you are debugging your grep.
+- **A positive control that reddens nothing means the check is not
+  load-bearing -- and mine did, twice.** A flush-failure KTEST wrapped
+  its assertions in `if (!ok)`, so making a failed write-back report
+  success changed no result. It checks its precondition explicitly now
+  (`ata_cache_dirty() != 0`, else SKIP) and asserts unconditionally.
+  **Run the control on the test you just wrote, not only on old ones.**
+
+**And one thing that generalises past this repo: WHEN THE PREMISE OF A
+DECISION TURNS OUT WRONG, RE-PUT IT.** Three times here:
+
+- The brief said "cache in the block layer, under both filesystems".
+  Those cannot both be true -- TFS2 and `partition.c` bypass the block
+  layer -- and a bypass past a WRITE-BACK cache is a silent correctness
+  hole in both directions. Asked, got "the ATA driver", built there.
+- "Lower `DMA_WAIT_TICKS`" was the obvious fix and would have re-broken
+  a documented one: the comment records it being WIDENED from 3s to 5s
+  after a real host-side stall. Read the comment above a constant before
+  changing it. The resolution was to make the per-ATTEMPT budget
+  escalate (0.3s / 1.0s / 5.0s) while leaving the total intact.
+- The premise "Linux can switch schedulers" is a common misreading:
+  Linux has scheduling CLASSES, compiled in; pluggable schedulers were
+  rejected for years and `sched_ext` (6.12) is an escape hatch. Say so
+  rather than building the thing that was asked for.
+
+**Two tools came out of this. Reach for them:**
+
+- `python3 tools/kvm_soak.py [-n N]` -- boots the desktop under KVM
+  across FRESH BOOTS and fails on the symptoms that only appear there:
+  slow WM frames, a file that exists but will not read, an incomplete
+  cursor-theme load, a varying desktop entry count. Fresh boots because
+  the bug it was written for was intermittent at ~1 in 3; a single clean
+  run says nothing. SKIPS loudly without `/dev/kvm`.
+- `gui watchdog [<ms>|off]` on the debug console -- the threshold plus
+  how often it has fired and the slowest frame seen. Report the counters
+  as well as the threshold: "no SLOW FRAME lines" is only evidence of a
+  fast WM if the watchdog was actually armed.
+
+**A tool that cannot go red must not be committed, and this one nearly
+was.** `kvm_soak.py` passed cleanly with the VFS preemption guard
+disarmed entirely -- because the OTHER two fixes had independently
+removed the disk pressure its workload depended on. Two consequences
+worth carrying: forcing real work matters (it now churns
+`/usr/wm/desktop` so the desktop genuinely re-reads every entry, since
+the reload is skipped when the directory is unchanged and a cached read
+never reaches the drive), and **when reintroducing one bug does not
+reproduce the symptom, the right control is the ORIGINAL TREE** -- build
+the pre-fix commit in a scratch worktree and run the tool against that.
+
 The specific commands below
 were verified current as of the last time this skill was updated, but
 if `CLAUDE.md`, `VERSION`/`BUILD_NUMBER`, `apps/ui/`, or
