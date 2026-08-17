@@ -264,6 +264,29 @@ struct prd {
 // finished the previous one. Keep the two in mind together.
 #define DMA_WAIT_TICKS 500
 
+// ...and the per-ATTEMPT budget, which is a different question from the
+// total one above.
+//
+// The 5s bound is right for "how long may a transfer take before the
+// drive is declared dead", and badly wrong for "how long may the first
+// attempt wait before trying again", because the whole of it is spent
+// with the caller blocked -- and the caller is often the WM, so it is
+// spent with the desktop frozen. A completion that goes missing for any
+// reason (this driver had a lost-wakeup race until 2026-08-17) cost a
+// flat 5 seconds of frozen UI and then succeeded instantly on attempt 2.
+//
+// So: escalate. Attempt 1 gives up quickly and retries, attempts 2 and 3
+// widen out to the full bound, and the TOTAL budget across attempts is
+// unchanged -- which is what the 3s -> 5s widening was actually
+// protecting (a host-side burst stall, see above). A transient miss now
+// costs 0.3s instead of 5s; a genuinely stalled host still gets every
+// bit of the headroom it got before.
+static uint64_t dma_attempt_ticks(int attempt) {
+    if (attempt <= 1) return 30;   // 0.3s -- ~300x a real transfer
+    if (attempt == 2) return 100;  // 1.0s
+    return DMA_WAIT_TICKS;         // 5.0s, the full bound, on the last try
+}
+
 static int g_dma_available = 0;
 
 // Forces transfers down the PIO path even when the hardware has working
@@ -426,7 +449,7 @@ static void ata_irq_handler(uint64_t *regs) {
 //     same "interrupts are off" reason, so the bound here is a plain
 //     iteration count (ATA_POLL_LIMIT), not wall-clock, matching
 //     wait_not_busy()/wait_drq() above.
-static int wait_dma_irq(void) {
+static int wait_dma_irq(uint64_t budget_ticks) {
     if (isr_in_progress()) {
         for (int i = 0; i < ATA_POLL_LIMIT; i++) {
             if (inb(g_bm_io + BM_STATUS) & BM_STATUS_IRQ) {
@@ -440,7 +463,7 @@ static int wait_dma_irq(void) {
 
     uint64_t start = pit_ticks();
     while (!g_dma_irq_fired) {
-        if (pit_ticks() - start > DMA_WAIT_TICKS) return 0;
+        if (pit_ticks() - start > budget_ticks) return 0;
         __asm__ volatile ("hlt");
     }
     return 1;
@@ -614,12 +637,13 @@ static int dma_finish(int ok, int count, void *buf, int is_write) {
 // not to have that problem again.
 static const char *g_dma_fail_reason = "unknown";
 
-static int dma_transfer(uint32_t lba, int count, void *buf, int is_write) {
+static int dma_transfer(uint32_t lba, int count, void *buf, int is_write,
+                        int attempt) {
     if (!dma_issue(lba, count, buf, is_write)) {
         g_dma_fail_reason = "drive stayed busy, command never issued";
         return 0;
     }
-    int ok = wait_dma_irq();
+    int ok = wait_dma_irq(dma_attempt_ticks(attempt));
     if (!ok) g_dma_fail_reason = isr_in_progress()
                  ? "completion IRQ never arrived (polled, syscall context)"
                  : "completion IRQ never arrived within the wall-clock bound";
@@ -761,7 +785,7 @@ static void retry_backoff(int attempt) {
 
 static int dma_transfer_with_retry(uint32_t lba, int count, void *buf, int is_write) {
     for (int attempt = 1; attempt <= ATA_DMA_MAX_RETRIES; attempt++) {
-        if (dma_transfer(lba, count, buf, is_write)) {
+        if (dma_transfer(lba, count, buf, is_write, attempt)) {
             if (attempt > 1 && dbgflag_enabled(DBGFLAG_ATA)) {
                 klog_write("ata: dma "); klog_write(is_write ? "write" : "read");
                 klog_write(" ok on attempt "); klog_write_dec((uint32_t)attempt);
@@ -1136,7 +1160,7 @@ static int dsm_send_block(const uint8_t *block) {
     g_dma_irq_fired = 0;
     outb(g_bm_io + BM_CMD, BM_CMD_START);
 
-    int ok = wait_dma_irq();
+    int ok = wait_dma_irq(DMA_WAIT_TICKS); // no retry loop here -- full bound
     outb(g_bm_io + BM_CMD, 0);
     uint8_t bm_status = inb(g_bm_io + BM_STATUS);
     outb(g_bm_io + BM_STATUS, BM_STATUS_ERROR | BM_STATUS_IRQ);
