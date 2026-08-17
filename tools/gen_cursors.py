@@ -32,7 +32,7 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WM_RENDER = os.path.join(REPO, "apps", "wm", "wm_render.c")
-OUT_ROOT = os.path.join(REPO, "seed", "sync", "usr", "share", "cursors")
+OUT_ROOT = os.path.join(REPO, "data", "cursors")
 
 # One hex digit per pixel, so a 13-wide shape is 13 characters wide and
 # a person can see the shape in the file. 16 levels is well past what a

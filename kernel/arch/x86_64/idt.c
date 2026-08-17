@@ -12,6 +12,7 @@
 #include "syscall.h"
 #include "scheduler.h"
 #include "vmm.h"
+#include "reloc.h" // kernel_reloc_delta() -- a panic RIP is meaningless without it
 #include "process.h"
 #include "uaddr.h" // uaddr_is_stack_guard() -- naming a stack overflow as one
 
@@ -171,6 +172,58 @@ void isr_reset_depth(void) {
 // Called from isr.asm's common stub with rdi = pointer to saved GP regs.
 // Stack layout above saved regs (low->high addr): vector, error_code, then
 // the CPU-pushed iretq frame (rip, cs, rflags, rsp, ss).
+extern char __ktext_start[];
+extern char __ktext_end[];
+
+// What a panic needs to be diagnosable from a pasted log rather than a
+// photograph, printed to the SERIAL log (klog) where it can be copied.
+//
+// **The relocation offset is the load-bearing line.** The kernel moves
+// itself to a random base at boot, so a raw RIP means nothing on its
+// own -- resolving one used to mean scrolling back to the boot banner
+// and doing the subtraction by hand. It prints the link-time address
+// here, ready to paste into `addr2line -f -e build/kernel.bin`.
+//
+// The backtrace is a STACK SCAN, not a frame-pointer walk: this kernel
+// builds at -O2, which omits frame pointers, so an RBP chain would be
+// fiction. Scanning for values that land inside .text overreports --
+// stale return addresses from earlier calls are still down there -- and
+// that is the honest trade, because the alternative is nothing at all.
+// Read the list as candidates, most recent first, not as a call chain.
+static void panic_report_context(uint64_t rip, const uint64_t *regs) {
+    uint64_t delta = kernel_reloc_delta();
+    uint64_t tstart = (uint64_t)(uintptr_t)__ktext_start;
+    uint64_t tend   = (uint64_t)(uintptr_t)__ktext_end;
+
+    if (delta) {
+        klog_printf("  kernel relocated +0x%lx -- link-time RIP = 0x%lx\n",
+                     delta, rip - delta);
+    }
+    klog_printf("  resolve with: addr2line -f -e build/kernel.bin 0x%lx\n",
+                 rip - delta);
+
+    uint64_t rsp = regs[20];
+    // Only walk a stack that could plausibly be one. A wild RSP is
+    // exactly what some faults leave behind, and faulting again inside
+    // the panic handler loses the report entirely -- which is the one
+    // outcome worse than a missing backtrace.
+    if (rsp < 0x1000 || rsp >= 0x100000000ULL || (rsp & 7)) {
+        klog_printf("  no backtrace: RSP=0x%lx is not a walkable stack\n", rsp);
+        return;
+    }
+
+    klog_printf("  stack scan from RSP=0x%lx (candidates, newest first):\n", rsp);
+    const uint64_t *sp = (const uint64_t *)(uintptr_t)rsp;
+    int shown = 0;
+    for (int i = 0; i < 128 && shown < 12; i++) {
+        uint64_t v = sp[i];
+        if (v < tstart || v >= tend) continue;
+        klog_printf("    [%d] 0x%lx  -> 0x%lx\n", i, v, v - delta);
+        shown++;
+    }
+    if (!shown) klog_printf("    (nothing in .text found on the stack)\n");
+}
+
 void isr_dispatch(uint64_t *regs) {
     uint64_t vector = regs[15];
     g_isr_depth++; // see idt.h's isr_in_progress() -- every normal-return
@@ -263,6 +316,17 @@ void isr_dispatch(uint64_t *regs) {
 
         klog_printf("%s%s\n", recoverable ? "RING-3 CRASH: " : "PANIC: ",
                      stack_overflow ? "Stack overflow" : exception_names[vector]);
+        // Everything above went to the SCREEN only, which is why a panic
+        // used to arrive as a photograph. The serial log is where a
+        // report can actually be pasted from, so it gets the same facts.
+        klog_printf("  RIP=0x%lx  CS=0x%lx (ring %lu)  error_code=0x%lx\n",
+                     rip, cs, cs & 3, error_code);
+        if (vector == 14) klog_printf("  CR2=0x%lx\n", cr2);
+        // Ring 0 only. A ring-3 fault's RIP is an address in some
+        // userland ELF, so resolving it against the kernel image would
+        // be confidently wrong -- and its stack is a user mapping this
+        // has no business walking.
+        if ((cs & 3) == 0) panic_report_context(rip, regs);
 
         // The console draws into a back buffer and normally publishes
         // from the keyboard's idle loop (see vga.h's vga_present()). A

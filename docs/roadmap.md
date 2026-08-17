@@ -1636,6 +1636,45 @@ that nothing else owns.
 - [ ] Decide, in writing, what is deliberately NOT pursued (conformance
       testing, locales, pthreads, `select`/`poll`, terminal `ioctl`)
 
+### Known issue: GP fault in the heap after repeated setting changes (2026-08-17)
+
+**Not root-caused. Reported by the maintainer, not reproduced here.**
+
+Opening Control Panel and switching the keyboard layout back and forth
+several times panicked with a General protection fault. The RIP resolved
+to `try_merge_next` (`kernel/mm/heap.c:325`), which walks a free block's
+`next` pointer -- so the fault is the SYMPTOM of heap corruption written
+earlier, not a bug at that line.
+
+Reproduction attempts that did NOT fire, all on the same build:
+- 6 rounds of `config set keyboard_layout` alternating, TCG;
+- 30 rounds with Control Panel open, under KVM (the maintainer's mode);
+- 40 rounds with a nonexistent cursor theme configured, so every poll
+  did six `fs_exists()` through a missing directory -- matching the
+  reporter's state exactly, since their image had no cursor files.
+
+So it is intermittent, or needs the real UI interaction (the report's
+log shows many `cpanel: select ...` events between the sets).
+
+**What the log did establish**: the reporter's session ran with KVM, had
+`cursor: theme "default" -- 0 of 6 shapes loaded` throughout (a separate
+bug, since fixed -- the themes were never seeded), and the desktop's
+`.desktop` live reload fired on every setting change, so several
+filesystem consumers were interleaving with a ring-3 process's
+`SYS_SETTING` syscall.
+
+**Next step when it recurs:** the panic report now prints the relocation
+offset, the link-time RIP and a stack scan, so a pasted log names the
+caller. Better still, reproduce with the heap's own detector on -- at
+the physical shell, BEFORE `gui`:
+
+    heap debug on
+    gui
+
+Red-zoned blocks report the violation at the offending free with the
+block named, which is what turns "something corrupted the heap" into a
+culprit. `heap check` sweeps on demand.
+
 ### Milestone 41 -- The GUI in ring 3 (gui, target v0.3.0)
 
 Run the desktop the way a real OS does: apps as ring-3 processes talking
