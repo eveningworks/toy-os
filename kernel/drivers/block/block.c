@@ -68,13 +68,19 @@ int blk_max_sectors_per_xfer(void) {
     return g_dev ? g_dev->max_sectors_per_xfer() : 1;
 }
 
-// A no-op on a device with no cache, which is CORRECT and not a
-// degradation: a RAM device has nothing that can be lost independently
-// of everything else, so the journal's barriers still mean what they
-// say. Only a device that HAS a cache and does not flush it would be
+// RETURNS whether the data is actually durable. It was `void`, and a
+// barrier that cannot fail is exactly what a write-back cache turns
+// into a silent data-loss bug: the failure of a deferred write surfaces
+// HERE, at the flush, long after the write() that returned success.
+// TFS3's txn_commit() checks it -- see ata_cache.h.
+//
+// 1 on a device with no cache, which is correct and not a degradation:
+// a RAM device has nothing that can be lost independently of everything
+// else. Only a device that HAS a cache and does not flush it would be
 // lying, and blk_register() refuses that shape.
-void blk_flush(void) {
-    if (g_dev && (g_dev->caps & BLK_CAP_FLUSH)) g_dev->flush();
+int blk_flush(void) {
+    if (g_dev && (g_dev->caps & BLK_CAP_FLUSH)) return g_dev->flush();
+    return 1;
 }
 
 int blk_trim_supported(void) {

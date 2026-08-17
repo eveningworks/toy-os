@@ -106,7 +106,8 @@
 #include "strace_internal.h"
 #include "uaddr.h"
 #include "clocksource.h" // CPU time is measured, not counted -- bill_current()
-#include "debug_console.h" // the idle work scheduler_idle() owns
+#include "debug_console.h"
+#include "ata_cache.h" // the idle work scheduler_idle() owns
 #include "string.h" // k_strlcpy -- proc_name_from_path()
 #include <stddef.h>
 
@@ -939,4 +940,10 @@ void scheduler_demo_run(void) {
 // repo holds: it must be safe wherever the kernel is idle.
 void scheduler_idle(void) {
     debug_console_poll();
+    // Write back a quiet disk cache (ata_cache.h). This is the "and an
+    // idle timer" half of the flush policy -- the dirty-line threshold
+    // bounds how much can accumulate, this bounds how LONG it can sit
+    // there, so a machine nobody is touching ends up with its writes on
+    // the platter rather than waiting for the next barrier.
+    atac_idle();
 }

@@ -57,7 +57,7 @@ struct block_device {
     int persistent;
 
     unsigned caps;      // BLK_CAP_*
-    void (*flush)(void);                       // BLK_CAP_FLUSH
+    int (*flush)(void);                        // BLK_CAP_FLUSH, 1 = durable
     int (*trim)(uint32_t lba, uint32_t count); // BLK_CAP_TRIM
 };
 
@@ -80,7 +80,7 @@ uint32_t blk_sector_count(void);
 int blk_read_sectors(uint32_t lba, int count, void *buf);
 int blk_write_sectors(uint32_t lba, int count, const void *buf);
 int blk_max_sectors_per_xfer(void);
-void blk_flush(void);
+int blk_flush(void);
 int blk_trim_supported(void);
 int blk_trim(uint32_t lba, uint32_t count);
 

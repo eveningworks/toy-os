@@ -214,7 +214,34 @@ void ata_flush_end(void);
 // that -- see ata.c's own comments on each, and tfs.c's
 // persist_record() for the real caller. Don't reach for either just to
 // "flush a bit less"; ata_flush_begin()/end() is the tool for that.
-void ata_flush_now(void);
+int ata_flush_now(void);
+
+// ---- the write-back cache, as much of it as apps may see -------------
+//
+// The cache itself is kernel-internal (kernel/ata_cache.h, not on
+// apps/'s include path -- see kernel/include/README.md). What an app
+// legitimately needs is only "is anything being held back?" and "write
+// it out and tell me what happened", which is what `sync` is, so that
+// is what crosses the boundary. struct atac_ops and the line table stay
+// where they belong.
+
+// 1 if a write-back cache is active, so a caller can say "writes go
+// straight to the disk" rather than reporting a sync of nothing.
+int ata_cache_active(void);
+
+// Flushes the cache and the drive. Returns 1 only if everything is
+// durable. `out_written` gets the number of sectors actually written
+// back, `out_pending` the number still dirty afterwards -- non-zero
+// only on failure, and then it is the count of sectors that exist in
+// RAM ONLY. Either pointer may be NULL.
+int ata_sync(uint32_t *out_written, uint32_t *out_pending);
+
+// How many sectors are dirty right now -- i.e. written by somebody,
+// acknowledged, and still only in RAM. 0 when there is no cache.
+// Exists so a test can establish that there is something to lose before
+// asserting about losing it; a check that silently has nothing to
+// measure passes for the wrong reason.
+uint32_t ata_cache_dirty(void);
 void ata_flush_end_no_flush(void);
 
 // Phase 1 of the async-I/O roadmap item (docs/roadmap.md): a

@@ -23,7 +23,7 @@ const char *const COMPLETION_COMMANDS[] = {
     "cursor", "debug", "df", "dmatest", "dmesg", "echo", "edit", "fontsize",
     "fputest", "fsck", "fsformat", "gui", "heap", "help", "ktest", "history", "keyboard", "ln", "lspci", "ls",
     "meminfo", "mkdir", "mv", "nano", "parttable", "pwd", "reboot",
-    "ring3test", "rm", "run", "schedtest", "stat", "steptest", "strace", "stress",
+    "ring3test", "rm", "run", "schedtest", "stat", "steptest", "strace", "stress", "sync",
     "path", "random", "time", "timezone", "touch", "truncate", "uptime", "write",
     0
 };

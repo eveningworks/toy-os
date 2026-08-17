@@ -213,6 +213,9 @@ static const char *const TEST_HELP_LINES[] = {
     "  ktest         - run the in-kernel test suite (kernel/test/ktest.c);\n",
     "                  `ktest <suite>` runs one (mm, fs, lib). Also\n",
     "                  runnable from the host: `make test`.\n",
+    "  sync          - write out anything the disk cache is still holding,\n"
+    "                  and report how many sectors it wrote. Runs\n"
+    "                  automatically at shutdown and reboot.\n",
     "  fsck          - filesystem consistency check: walks every file's\n",
     "                  block tree and compares it against the free-block\n",
     "                  bitmap. Read-only, safe to run any time.\n",
@@ -593,6 +596,35 @@ void cmd_fputest(void) {
 // data-destroying guess). Report-only by default on purpose: this walks
 // every record's block tree and, in repair mode, writes to the bitmap,
 // so "see what it would do" should not require committing to it.
+// Writes out everything the disk cache is still holding, and SAYS WHAT
+// IT WROTE. The count is the point: a `sync` that prints nothing is
+// indistinguishable from one that did nothing, and with a write-back
+// cache underneath the difference is somebody's file.
+void cmd_sync(const char *args) {
+    (void)args;
+    if (!ata_cache_active()) {
+        vga_write("sync: no disk cache active -- writes already go straight to the disk.\n");
+        return;
+    }
+
+    uint32_t wrote = 0, pending = 0;
+    int ok = ata_sync(&wrote, &pending);
+
+    vga_write("sync: wrote "); vga_write_dec(wrote);
+    vga_write(wrote == 1 ? " sector" : " sectors");
+    vga_write(" back to disk");
+    if (wrote == 0 && ok) vga_write(" (nothing was pending)");
+    vga_write(".\n");
+
+    if (!ok) {
+        // Loud, and specific about what to do: the data still exists,
+        // in RAM only, and powering off is what would lose it.
+        vga_write("sync: FAILED -- "); vga_write_dec(pending);
+        vga_write(" sector(s) could NOT be written and are still pending.\n");
+        vga_write("      Do not power off yet; that data is in memory only.\n");
+    }
+}
+
 void cmd_fsck(const char *args) {
     int repair = (args && k_strcmp(args, "repair") == 0);
     if (args && k_strlen(args) > 0 && !repair) {

@@ -17,7 +17,7 @@ static int ata_dev_write(uint32_t lba, int count, const void *buf) {
 
 static int ata_dev_max_xfer(void) { return ata_max_sectors_per_xfer(); }
 
-static void ata_dev_flush(void) { ata_flush_now(); }
+static int ata_dev_flush(void) { return ata_flush_now(); }
 
 static int ata_dev_trim(uint32_t lba, uint32_t count) { return ata_trim(lba, count); }
 

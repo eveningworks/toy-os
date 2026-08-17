@@ -910,12 +910,33 @@ static int txn_commit(void) {
         if (!write_block(g_jdata_block + (uint32_t)i, g_txn_img[i])) { txn_reset(); return 0; }
     }
     if (!write_journal_header(1)) { txn_reset(); return 0; }
-    blk_flush(); // barrier 1: the transaction survives a crash from here
+
+    // BARRIER 1, and it is checked. The journal's whole guarantee is
+    // that everything written before this point is on the platter, so
+    // if the flush cannot say that, the targets below must NOT be
+    // overwritten: a half-written target with no durable journal behind
+    // it is unrecoverable, while abandoning the transaction here costs
+    // nothing that was not already lost. blk_flush() returned void until
+    // a write-back cache went in underneath (ata_cache.h) -- that is
+    // where a deferred write's failure now surfaces.
+    if (!blk_flush()) {
+        klog_write("tfs3: journal barrier failed -- transaction abandoned, "
+                   "targets untouched\n");
+        txn_reset();
+        return 0;
+    }
+
     int ok = 1;
     for (int i = 0; i < g_txn_count; i++) {
         if (!write_block(g_txn_target[i], g_txn_img[i])) ok = 0;
     }
-    blk_flush(); // barrier 2: targets durable before the commit flag clears
+
+    // BARRIER 2: the targets must be durable before the commit flag is
+    // cleared below, or a crash after clearing it loses the record of
+    // work that never reached the disk. A failure here takes the same
+    // path a failed target write does -- leave the header committed and
+    // let replay finish the job next boot.
+    if (!blk_flush()) ok = 0;
     if (ok) {
         int saved = g_txn_count;
         g_txn_count = 0;
@@ -950,8 +971,15 @@ static void replay_journal(void) {
         for (uint32_t i = 0; i < count && all_ok; i++) {
             if (!write_block(rd32(sec + slots + i * 8), g_txn_img[i])) all_ok = 0;
         }
+        if (all_ok && !blk_flush()) {
+            // Same rule as txn_commit()'s barrier 2: if the replayed
+            // targets are not durable, do NOT clear the committed flag
+            // below -- the next boot must replay them again.
+            klog_write("tfs3: journal replay barrier failed -- left committed "
+                       "for next boot\n");
+            return;
+        }
         if (all_ok) {
-            blk_flush();
             klog_write("tfs3: replayed a committed journal transaction (");
             klog_write_dec(count); klog_write(" blocks)\n");
         } else {

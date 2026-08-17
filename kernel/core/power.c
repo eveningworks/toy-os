@@ -2,8 +2,24 @@
 #include "io.h"
 #include "vga.h"
 #include "klog.h"
+#include "ata_cache.h"
+
+// FLUSH FIRST. With a write-back cache under the disk (ata_cache.h) a
+// write that returned success may still be sitting in RAM, so both of
+// these would otherwise discard it -- and the user's last action before
+// a shutdown is exactly the one they would notice missing. Both paths
+// end the machine, so this is the last chance either gets; it is here
+// rather than at the call sites so a future caller cannot forget it.
+static void flush_before_stopping(const char *what) {
+    if (!atac_flush()) {
+        klog_write("power: DISK FLUSH FAILED before ");
+        klog_write(what);
+        klog_write(" -- some writes were NOT saved\n");
+    }
+}
 
 void system_reboot(void) {
+    flush_before_stopping("reboot");
     uint8_t status;
     do {
         status = inb(0x64);
@@ -15,6 +31,7 @@ void system_reboot(void) {
 }
 
 void system_poweroff(void) {
+    flush_before_stopping("power off");
     klog_write("power: poweroff requested (QEMU/Bochs ACPI PM1a_CNT port trick)\n");
 
     // See power.h's top comment: this is QEMU/Bochs's well-known ACPI

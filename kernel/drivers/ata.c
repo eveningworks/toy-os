@@ -20,6 +20,7 @@
 #include "idt.h"
 #include "debugflags.h"
 #include "fault_inject.h"
+#include "ata_cache.h"
 #include <stddef.h>
 
 #define ATA_PRIMARY_IO  0x1F0
@@ -352,12 +353,25 @@ void ata_flush_end(void) {
 // -- tfs.c's fsck repair pass calls persist_record() inside a
 // write_batch_begin()/end() pair, which suppressed every one of the
 // journal's own flushes.
-void ata_flush_now(void) {
-    if (!g_present) return;
-    if (wait_not_busy()) {
-        outb(REG_COMMAND, CMD_CACHE_FLUSH);
-        wait_not_busy();
-    }
+// The DRIVE's own cache flush, with nothing of ours in front of it.
+// This is what the write-back cache calls once its dirty lines are out.
+static int ata_flush_raw(void) {
+    if (!g_present) return 1; // nothing to flush is success, not failure
+    if (!wait_not_busy()) return 0;
+    outb(REG_COMMAND, CMD_CACHE_FLUSH);
+    return wait_not_busy();
+}
+
+// RETURNS A STATUS, and callers must look. It was `void`, which was
+// survivable while a write reached the platter before this was called
+// and is not survivable with a write-back cache in the path: this is
+// where a deferred write's failure surfaces, and it is what TFS3's
+// journal barriers mean by "durable". A barrier that cannot fail cannot
+// keep the journal honest -- see ata_cache.h.
+int ata_flush_now(void) {
+    if (!g_present) return 1;
+    if (atac_enabled()) return atac_flush(); // writes back, then ata_flush_raw()
+    return ata_flush_raw();
 }
 
 // Closes a deferral region WITHOUT the flush ata_flush_end() would
@@ -887,6 +901,9 @@ static int pio_write_sectors(uint32_t lba, int count, const void *buf) {
 // Public API
 // ---------------------------------------------------------------------
 
+// Defined after the raw ops it registers; see ata_cache_start() below.
+static void ata_cache_start(void);
+
 void ata_init(void) {
     g_present = 0;
     g_dma_available = 0;
@@ -936,6 +953,11 @@ void ata_init(void) {
     // Only worth attempting once a drive is confirmed present -- see
     // ata_init_dma()'s own comment.
     ata_init_dma();
+
+    // The write-back cache goes on last, once the transfer path it will
+    // drive is settled. It is handed the RAW ops rather than the public
+    // entry points, so a write-back cannot recurse back into the cache.
+    ata_cache_start();
 }
 
 int ata_present(void) {
@@ -1028,12 +1050,10 @@ int ata_write_sector(uint32_t lba, const void *buf) {
     return ata_write_sectors(lba, 1, buf);
 }
 
-int ata_read_sectors(uint32_t lba, int count, void *buf) {
-    // Deliberate failure injection for tests (fault_inject.h) -- inert
-    // unless a test armed it. Placed at the public entry point, before
-    // any hardware is touched, so an injected failure looks exactly
-    // like the drive refusing: same return value, no side effects.
-    if (fault_should_fail_ata_read()) return 0;
+// The raw transfer, with no cache in the path. ata_read_sectors()
+// below is the public entry point and consults the cache; this is what
+// the cache itself calls back into (see ata_cache.h's struct atac_ops).
+static int ata_read_sectors_raw(uint32_t lba, int count, void *buf) {
     if (!g_present) return 0;
     if (count < 1 || count > ata_max_sectors_per_xfer()) return 0;
     if (!lba_range_ok(lba, count)) return 0;
@@ -1041,17 +1061,80 @@ int ata_read_sectors(uint32_t lba, int count, void *buf) {
     return pio_read_sectors(lba, count, buf);
 }
 
-int ata_write_sectors(uint32_t lba, int count, const void *buf) {
-    // Deliberate failure injection for tests (fault_inject.h) -- inert
-    // unless a test armed it. Placed at the public entry point, before
-    // any hardware is touched, so an injected failure looks exactly
-    // like the drive refusing: same return value, no side effects.
-    if (fault_should_fail_ata_write()) return 0;
+static int ata_write_sectors_raw(uint32_t lba, int count, const void *buf) {
     if (!g_present) return 0;
     if (count < 1 || count > ata_max_sectors_per_xfer()) return 0;
     if (!lba_range_ok(lba, count)) return 0;
     if (dma_in_use()) return dma_transfer_with_retry(lba, count, (void *)(uintptr_t)buf, 1);
     return pio_write_sectors(lba, count, buf);
+}
+
+// ---- the public entry points, and the cache under them ---------------
+//
+// FAULT INJECTION STAYS HERE, ABOVE THE CACHE, and that placement is
+// the whole point of it. Armed from a test (fault_inject.h), it has to
+// make a call fail exactly as a refusing drive would -- and if it sat
+// in the raw path instead, a read served from cache would quietly
+// succeed and a write would fail only later at a flush, so the error
+// paths the KTESTs exist to exercise would stop being reached. The
+// cache is an optimisation; whether an injected failure is observed
+// must not depend on it.
+// A WRITE-BACK is where a deferred write finally meets the drive, so it
+// is the second place an injected write failure has to be observable --
+// with a write-back cache in the path, "the drive refused this write" no
+// longer necessarily happens during the caller's write() at all.
+// Without this, a test can arm a failure, dirty a line and flush, and
+// the flush reports success because nothing on the way to the platter
+// ever asked. (It is not double-counting against the public entry
+// point: a caller's write that was refused there never became a dirty
+// line, so it has no write-back to consume a second failure.)
+static int ata_write_back(uint32_t lba, int count, const void *buf) {
+    if (fault_should_fail_ata_write()) return 0;
+    return ata_write_sectors_raw(lba, count, buf);
+}
+
+static const struct atac_ops ATA_CACHE_OPS = {
+    .read = ata_read_sectors_raw,
+    .write = ata_write_back,
+    .flush = ata_flush_raw,
+};
+
+static void ata_cache_start(void) { atac_init(&ATA_CACHE_OPS); }
+
+int ata_cache_active(void) { return atac_enabled(); }
+
+uint32_t ata_cache_dirty(void) {
+    struct atac_stats st;
+    atac_get_stats(&st);
+    return st.dirty;
+}
+
+int ata_sync(uint32_t *out_written, uint32_t *out_pending) {
+    struct atac_stats before, after;
+    atac_get_stats(&before);
+    int ok = ata_flush_now();
+    atac_get_stats(&after);
+    if (out_written) *out_written = after.writebacks - before.writebacks;
+    if (out_pending) *out_pending = after.dirty;
+    return ok;
+}
+
+int ata_read_sectors(uint32_t lba, int count, void *buf) {
+    if (fault_should_fail_ata_read()) return 0;
+    if (!g_present) return 0;
+    if (count < 1 || count > ata_max_sectors_per_xfer()) return 0;
+    if (!lba_range_ok(lba, count)) return 0;
+    if (atac_enabled()) return atac_read(lba, count, buf);
+    return ata_read_sectors_raw(lba, count, buf);
+}
+
+int ata_write_sectors(uint32_t lba, int count, const void *buf) {
+    if (fault_should_fail_ata_write()) return 0;
+    if (!g_present) return 0;
+    if (count < 1 || count > ata_max_sectors_per_xfer()) return 0;
+    if (!lba_range_ok(lba, count)) return 0;
+    if (atac_enabled()) return atac_write(lba, count, buf);
+    return ata_write_sectors_raw(lba, count, buf);
 }
 
 // Diagnostic only (the shell's `dmatest`, apps/shell_sys.c) -- proves
