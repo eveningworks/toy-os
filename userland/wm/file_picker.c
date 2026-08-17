@@ -6,6 +6,7 @@
 #include "ui/utheme.h"
 #include "kapi.h"
 #include "rt/sys.h"
+#include "wm/wm_fs.h"
 
 int file_picker_open = 0;
 
@@ -118,17 +119,8 @@ static void fp_resolve_typed(char *out) {
 
 // ---- listing ----
 
-static void fp_collect_cb(const char *name, uint32_t size, int is_dir) {
-    (void)size;
-    if (g_entry_count >= FP_MAX_ENTRIES) return; // can't happen -- fs.h caps a dir at this many entries -- defensive only
-    k_strcpy(g_entries[g_entry_count].name, name);
-    g_entries[g_entry_count].is_dir = is_dir;
-    g_entry_count++;
-}
-
-// Directories first, then alphabetical within each group -- fs_list()
-// itself hands back table order (insertion order), not sorted (see
-// fs.h). FP_MAX_ENTRIES is small (<=32) so a plain insertion sort costs
+// Directories first, then alphabetical within each group -- a directory
+// listing arrives in table order (insertion order), not sorted. FP_MAX_ENTRIES is small (<=32) so a plain insertion sort costs
 // nothing worth optimizing.
 static void fp_sort_entries(void) {
     for (int i = 1; i < g_entry_count; i++) {
@@ -147,8 +139,18 @@ static void fp_sort_entries(void) {
 }
 
 static void fp_refresh_listing(void) {
+    // A LOOP, not a callback. The kernel's fs_list() walked a directory
+    // through a callback with no context pointer, so this file had to
+    // collect into a global and parse afterwards; sys_listdir() fills an
+    // array, so the collector is gone entirely.
     g_entry_count = 0;
-    fs_list(g_cwd, fp_collect_cb);
+    struct dirent ents[FP_MAX_ENTRIES];
+    int n = wm_fs_list(g_cwd, ents, FP_MAX_ENTRIES);
+    for (int i = 0; i < n && g_entry_count < FP_MAX_ENTRIES; i++) {
+        k_strcpy(g_entries[g_entry_count].name, ents[i].name);
+        g_entries[g_entry_count].is_dir = (int)ents[i].is_dir;
+        g_entry_count++;
+    }
     fp_sort_entries();
     g_has_up = (k_strcmp(g_cwd, "/") != 0);
     g_selected_row = -1;
@@ -170,7 +172,7 @@ static void fp_refresh_listing(void) {
 // turned out to be a directory (fp_confirm()) gets validated before
 // becoming the active listing.
 static void fp_set_dir(const char *dir) {
-    if (dir && (k_strcmp(dir, "/") == 0 || fs_is_dir(dir))) k_strcpy(g_cwd, dir);
+    if (dir && (k_strcmp(dir, "/") == 0 || wm_fs_is_dir(dir))) k_strcpy(g_cwd, dir);
     else k_strcpy(g_cwd, "/");
     fp_refresh_listing();
 }
@@ -271,7 +273,7 @@ static void fp_confirm(void) {
     // Typed/selected a directory -- real dialogs treat this as
     // "navigate into it", not an error and not a valid choice (you
     // can't Open/Save "a directory" through this simple picker).
-    if (fs_is_dir(path)) {
+    if (wm_fs_is_dir(path)) {
         fp_set_dir(path);
         uui_textbox_init(&g_name_box, "");
         uui_textbox_set_geometry(&g_name_box, g_list_x, g_field_y, g_list_w, g_field_h);
@@ -279,7 +281,7 @@ static void fp_confirm(void) {
         return;
     }
 
-    if (g_mode == FILE_PICKER_OPEN && !fs_exists(path)) return; // silently ignore -- no error UI yet, see file_picker.h
+    if (g_mode == FILE_PICKER_OPEN && !wm_fs_exists(path)) return; // silently ignore -- no error UI yet, see file_picker.h
 
     fp_close();
     if (g_on_choose) g_on_choose(path);

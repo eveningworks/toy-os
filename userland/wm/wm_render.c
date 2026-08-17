@@ -356,40 +356,22 @@ static void save_cursor_under(int x, int y, enum wm_cursor_kind kind) {
     cursor_under_valid = 1;
 }
 
-// --- hardware cursor ---------------------------------------------------
+// --- no hardware cursor here, and that is a decision --------------------
 //
-// When the display adapter has a cursor of its own (see gfx.h's
-// gfx_hw_cursor_*() and kernel/drivers/vmsvga.c), the WM stops drawing
-// one entirely: no sprite blit, no saving the pixels underneath, no
-// damage. Moving it is a handful of register writes. That also removes
-// the whole class of bug the software path has -- a stale sprite left
-// behind is not expressible when nothing was ever painted into the
-// framebuffer.
+// The ring-0 WM had a hardware-cursor path: when the adapter owned a
+// cursor plane the WM drew none at all -- no sprite, no saved pixels, no
+// damage. It is GONE from the ring-3 compositor rather than ported,
+// because M41's R3 measured the capability away: DISPLAY_CAP_CURSOR is
+// declared by one driver (vmsvga), which disables it by default because
+// a hardware cursor over a RELATIVE PS/2 mouse makes the pointer jump.
+// So it is unreachable on every configuration this OS boots, and a TWP
+// path to reach it would have been a protocol surface for a capability
+// nothing enables. It returns with virtio-input's absolute pointer in
+// Milestone 27a, where it can actually be switched on.
 //
-// Nothing here is conditional on WHICH adapter: gfx answers whether a
-// hardware cursor exists, and on plain VGA (and any real machine) it
-// says no and the software path below runs exactly as before.
-static int hw_cursor_ready = 0;
-
-// The sprite's two baked alpha masks, flattened into the 32-bit ARGB an
-// adapter wants. Composited the same way draw_cursor_normal() does:
-// outline first, fill over it, so a pixel both masks touch ends up the
-// fill's colour.
-static void hw_cursor_upload(void) {
-    static uint32_t argb[CURSOR_SPRITE_H * CURSOR_SPRITE_W];
-    for (int row = 0; row < CURSOR_SPRITE_H; row++) {
-        for (int col = 0; col < CURSOR_SPRITE_W; col++) {
-            uint8_t o = cursor_outline_alpha[row][col];
-            uint8_t f = cursor_fill_alpha[row][col];
-            uint8_t a = o > f ? o : f;
-            // Fill wins where both are present, matching the software
-            // draw order; the colour is white for fill, black outline.
-            uint32_t rgb = f ? 0x00FFFFFFu : 0x00000000u;
-            argb[row * CURSOR_SPRITE_W + col] = ((uint32_t)a << 24) | rgb;
-        }
-    }
-    hw_cursor_ready = gfx_hw_cursor_define(argb, CURSOR_SPRITE_W, CURSOR_SPRITE_H, 0, 0);
-}
+// The software sprite below needs nothing from the kernel: it draws into
+// the framebuffer the compositor was already granted (R1). See
+// docs/decisions.md.
 
 // The outline a client-window resize drag is proposing. Drawn instead
 // of resizing the window, because a client's buffer is still the old
@@ -411,13 +393,6 @@ static void draw_resize_outline(void) {
 // Saves what's under (x, y) before drawing the cursor there, so a later
 // cursor-only move can restore it. Used by both render paths.
 static void draw_cursor_at(int x, int y) {
-    if (gfx_hw_cursor_available()) {
-        if (!hw_cursor_ready) hw_cursor_upload();
-        if (hw_cursor_ready) {
-            gfx_hw_cursor_move(x, y);
-            return; // nothing painted, so nothing to save or restore
-        }
-    }
     draw_resize_outline();
     enum wm_cursor_kind kind = resolve_cursor_kind(x, y);
     save_cursor_under(x, y, kind);
@@ -1072,21 +1047,17 @@ void wm_render_frame(int mx, int my) {
                  &prev_cursor_box_w, &prev_cursor_box_h);
 
     ugfx_screen_present(&g_wm_screen);
-    // AFTER the present, on purpose: the meter is an overlay that is
-    // never composited, so it has to land on the finished frame rather
-    // than in the back buffer. It rate-limits itself and is a no-op
-    // unless `rammeter` was on the command line.
-    rammeter_tick();
+    // The `rammeter` overlay does NOT move here. It is painted straight
+    // at the framebuffer after the present, deliberately outside anything
+    // composited -- which in ring 0 meant "after gfx_present()", and in
+    // ring 3 would mean a second writer to a surface the compositor
+    // believes it owns. It stays kernel-side; if it is ever wanted over a
+    // ring-3 desktop it should become a normal overlay this compositor
+    // draws, not a second hand reaching into the same framebuffer.
     damage_reset();
 }
 
 void wm_render_cursor_move(int mx, int my) {
-    if (gfx_hw_cursor_available() && hw_cursor_ready) {
-        // The entire cheap path collapses to this: the adapter composites
-        // the cursor, so a mouse move touches no pixels and needs no blit.
-        gfx_hw_cursor_move(mx, my);
-        return;
-    }
     restore_cursor_under();
     draw_cursor_at(mx, my);
 

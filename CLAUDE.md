@@ -1184,6 +1184,38 @@ technical conventions below:
   cut by hand after `set_version.sh` -- see `docs/decisions.md` for the
   full mechanics, commands, and why this replaced the old
   `tools/bump_build.sh <fix|feature|major>` scheme.
+- **A GitHub Release's notes follow ONE shape, and it is terse.** Set
+  when v0.2.0's had to be rewritten (2026-08-17); follow it for every
+  release so they read as one series rather than as whoever wrote them.
+
+  `docs/release-notes-template.md` is v0.2.0's notes kept verbatim as
+  the worked example -- copy its shape rather than re-deriving it.
+
+  Order: **Install first**, then the areas that changed, and nothing
+  else. Install goes at the top because a release page's job is to get
+  somebody running the thing -- prerequisites, the three files to
+  download, the command, and one line on what persists between runs.
+  Then one `##` per area (Windowing / Filesystem / Memory protection /
+  Process model / Testing / Structure), flat bullets under each.
+
+  What is deliberately NOT in them:
+  - **No commit counts** and **no milestone numbers.** Both are internal
+    bookkeeping; a milestone number means nothing to a reader and dates
+    the note the moment the roadmap is renumbered.
+  - **No pointer to `CHANGELOG.md`.** It is frozen (see below), so the
+    pointer rots.
+  - No promotional framing ("the largest structural change the project
+    has had"). State what exists.
+
+  **And the accuracy rule that caused this:** v0.2.0 shipped titled *the
+  GUI moves to ring 3*, which was not true -- at that tag
+  `apps/calculator.c`, `notepad.c`, `terminal.c`, `uidemo.c`, `about.c`
+  and `taskmgr.c` were all still kernel-space beside their new ring-3
+  twins, and `apps/wm/` was ring 0 (as it still is). A release note is
+  the one document written from memory rather than from the code, so
+  **check every claim against the TAG** -- `git ls-tree -r v<x> --name-only`
+  and `git show v<x>:<file>` answer it in seconds -- and say plainly what
+  is still in progress.
 - **Commit messages list each changed/added file with a one-line note
   in the body** (subject line stays a short summary) -- see
   `docs/decisions.md`'s versioning entry for the exact format.

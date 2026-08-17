@@ -3,6 +3,7 @@
 // rather than colour.
 
 #include "cursor_theme.h"
+#include "wm/wm_fs.h"
 #include "kapi.h"
 #include "setting.h" // not part of the kapi.h umbrella -- see kernel/include/README.md
 #include <stddef.h>
@@ -186,7 +187,7 @@ static int load_one(const char *theme, int index) {
     // to load is not, and used to be equally silent -- which is how an
     // intermittent read failure hid behind the built-in fallback for as
     // long as it did. Say which step failed.
-    if (!fs_exists(path)) return 0;
+    if (!wm_fs_exists(path)) return 0;
 
     // Read into OUR OWN buffer, not fs_read()'s shared staging one.
     //
@@ -204,10 +205,10 @@ static int load_one(const char *theme, int index) {
     // that touches it, which is the property fs_read()'s shared buffer
     // could not offer.
     static char body[CURSOR_FILE_MAX];
-    uint32_t n = fs_read_into(path, body, sizeof body);
+    uint32_t n = wm_fs_read_into(path, body, sizeof body);
     if (n == 0) {
         wm_logf("cursor: %s exists but READ FAILED (size %u) -- "
-                    "using the built-in shape\n", path, (uint32_t)fs_size(path));
+                    "using the built-in shape\n", path, (uint32_t)wm_fs_size(path));
         return 0;
     }
 
@@ -254,22 +255,25 @@ static int g_want_index;
 static int g_seen_index;
 static char g_found_name[SETTING_VALUE_MAX];
 
-static void theme_choice_cb(const char *name, uint32_t size, int is_dir) {
-    (void)size;
-    if (!is_dir) return;
-    if (g_seen_index == g_want_index) k_strlcpy(g_found_name, name,
-                                                 sizeof g_found_name);
-    g_seen_index++;
-}
-
 static int theme_choice(int index, char *out, uint32_t out_size) {
     // Computed from the directory, not a compiled-in list, so dropping a
     // theme in gives it a Control Panel row with no code change -- the
     // same rule the keyboard layouts and the Start menu already follow.
-    g_want_index = index;
-    g_seen_index = 0;
+    // A loop over the listing, not a callback walk -- the two
+    // file-globals this used to need (g_want_index/g_seen_index) existed
+    // only because fs_list()'s callback had nowhere to carry them.
+    struct dirent ents[32];
+    int n = wm_fs_list(CURSOR_DIR, ents, 32);
+    int seen = 0;
     g_found_name[0] = '\0';
-    fs_list(CURSOR_DIR, theme_choice_cb);
+    for (int i = 0; i < n; i++) {
+        if (!ents[i].is_dir) continue;
+        if (seen == index) {
+            k_strlcpy(g_found_name, ents[i].name, sizeof g_found_name);
+            break;
+        }
+        seen++;
+    }
     if (!g_found_name[0]) return 0;
     k_strlcpy(out, g_found_name, out_size);
     return 1;

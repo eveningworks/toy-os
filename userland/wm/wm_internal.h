@@ -114,53 +114,14 @@ extern int wm_exit_requested;
 extern int dragging; // index into windows[], or -1 if not dragging
 extern int drag_off_x, drag_off_y;
 
-// Handle from fs.h's fs_write_range_begin() for a steppable write
-// currently in flight, or NULL if none -- see wm.c's wm_run() loop,
-// which polls it once per frame via fs_write_range_step() instead of
-// blocking (Milestone 1 phase 3, docs/roadmap.md). Same "-1/NULL means
-// none" idiom as dragging/resizing above: a WM-global single slot, not
-// per-window, since only one steppable write is in flight at a time
-// today (window_start_write() refuses a second one while one's already
-// pending -- see wm.h). pending_write_win is the index into windows[]
-// the write belongs to, used to look up which app's on_write_complete
-// callback to invoke once polling reaches a terminal result; -1 when
-// pending_write is NULL.
-extern void *pending_write;
-extern int pending_write_win;
-
-// Handle from fs.h's fs_read_range_begin() for a steppable read
-// currently in flight, or NULL if none -- mirrors pending_write/
-// pending_write_win above exactly (Milestone 1 phase 4,
-// docs/roadmap.md): a second WM-global single slot, polled once per
-// frame via fs_read_range_step() in wm_run(), maintained across
-// bring_to_front()/close_window() reordering the same way. A separate
-// slot from pending_write, not a shared one, since a read and a write
-// could in principle be in flight at the same time for two different
-// windows -- nothing does that yet, but there's no reason to force
-// "only one steppable I/O op at all" when the underlying fs.h API
-// doesn't require it either. pending_read_win is the index into
-// windows[] the read belongs to, used to look up which app's
-// on_read_complete callback to invoke; -1 when pending_read is NULL.
-extern void *pending_read;
-extern int pending_read_win;
-
-// pid from scheduler.h's scheduler_spawn() for a process currently in
-// flight, or 0 if none -- Milestone 1 phase 4b (docs/roadmap.md), the
-// Terminal async-spawn item. Same single-WM-global-slot shape as
-// pending_write/pending_read above, but sentinel-typed differently:
-// scheduler_spawn()/scheduler_poll() already use 0 as "no such
-// process" (scheduler.h), so there's no separate NULL-vs-int
-// distinction to make here the way pending_write's `void *` handle
-// needed -- 0 IS the "none" value both this slot and the scheduler
-// agree on. pending_proc_win is the index into windows[] the process
-// belongs to, used to look up which app's on_process_exit callback to
-// invoke; -1 when pending_proc is 0. Unlike pending_write/pending_read,
-// there's no handle to free on a terminal result -- scheduler_poll()
-// itself reaps the process's slot the moment it returns
-// SCHED_POLL_EXITED, so there's nothing left to leak even if a caller
-// never followed up.
-extern int pending_proc;
-extern int pending_proc_win;
+// The pending_write/pending_read/pending_proc slots are GONE (M41 stage
+// 4c, R9). They existed only because a ring-0 wm_run() must never block
+// on the filesystem, so a save became one block per frame through
+// fs_write_range_step(); a ring-3 WM is a process and can just call
+// read/write and be descheduled. The outcomes were delivered through
+// gui_apps.h's on_write_complete/on_read_complete, which only a
+// kernel-space app ever had -- and ring 0 has held no applications since
+// stage 0, so the machinery was already dead when it was removed.
 
 extern int resizing; // index into windows[], or -1 if not resizing
 extern int resize_right, resize_bottom;
@@ -381,6 +342,11 @@ void wm_render_cursor_move(int mx, int my);
 // Registers/unregisters itself with kernel/proc/win_server.c around
 // wm_run(), so a client request outside GUI mode is refused rather than
 // dispatched into a desktop that isn't running.
+// Claims the compositor role, which gates the framebuffer grant and raw
+// input delivery. Returns 1 on success, 0 if refused -- another process
+// may already hold it. See wm_client.c.
+int wm_claim_compositor(void);
+
 void wm_client_init(void);
 void wm_client_shutdown(void);
 

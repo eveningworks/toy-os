@@ -1121,6 +1121,14 @@ guess.*
       That second tool is what makes this worth one entry rather than
       two: it is not a menu bug, it is injected clicks going missing.
 
+      **A third shape, 2026-08-17:** `uidemo` failed the whole tool with
+      `RuntimeError: UI Demo reported no layout` -- the app never
+      reported its geometry at all, so this is not only lost CLICKS but
+      lost or late app STARTUP. 3/3 pass under `flake_hunt.py`, and the
+      very next full suite run was all clear. Whatever the mechanism is,
+      it costs a message somewhere between the tool, the WM and a
+      freshly spawned client, and only when four guests are running.
+
       **Ruled out:** a dirty disk image. `make iso` re-seeds by sync and
       `menubar_test` saves a file, so a stale recent-files entry
       changing the submenu's contents was the obvious candidate --

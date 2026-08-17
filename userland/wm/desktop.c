@@ -8,6 +8,7 @@
 #include "build_date.h" // GENERATED, and included ONLY here -- see gen_version.sh
 #include "kapi.h"
 #include "rt/sys.h"
+#include "wm/wm_rawin.h"
 #include "icon_grid.h"
 #include "lib/stdio.h"
 
@@ -350,7 +351,7 @@ void desktop_handle_click(int mx, int my) {
     // Modifiers come from the LIVE keyboard state -- a click carries
     // none of its own. Ctrl adds to the selection, Shift too (both are
     // "extend" on every desktop this imitates); plain replaces.
-    uint8_t mods = keyboard_mods_now();
+    uint8_t mods = wm_rawin_mods_now();
     enum rb_mode mode = (mods & (KEY_MOD_CTRL | KEY_MOD_SHIFT))
                         ? RB_ADD : RB_REPLACE;
 

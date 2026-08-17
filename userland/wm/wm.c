@@ -37,6 +37,7 @@
 #include "kapi.h"
 #include "rt/sys.h"
 #include "wm/wm_log.h"
+#include "wm/wm_rawin.h"
 
 struct window *windows = NULL;
 int window_count = 0;
@@ -45,16 +46,22 @@ static int windows_cap = 0;
 // Grows the window table by doubling. See wm_internal.h for the two
 // rules the caller owes (index, don't cache a `struct window *`).
 //
-// kmalloc + copy + kfree rather than a realloc: this kernel's heap has
-// no realloc, and at a few hundred bytes per window the copy is
-// irrelevant next to opening a window at all.
+// sbrk + copy, and the old block is LEAKED rather than freed -- ring 3
+// has no free (SYS_SBRK only grows), which is the one place this port is
+// genuinely worse than the ring-0 original. It is bounded and small: the
+// table doubles, so reaching N windows leaks under N entries in total, a
+// few KiB at any window count a person will reach. A real allocator
+// (Milestone 24) turns this back into a free(); until then the tradeoff
+// is written down rather than hidden behind a wrapper that looks like
+// malloc and silently never releases.
 int wm_windows_reserve(int n) {
     if (n <= windows_cap) return 1;
 
     int cap = windows_cap ? windows_cap : WM_WINDOWS_INITIAL;
     while (cap < n) cap *= 2;
 
-    struct window *grown = kmalloc((size_t)cap * sizeof *grown);
+    struct window *grown = sys_sbrk((int64_t)((size_t)cap * sizeof *grown));
+    if (grown == (void *)-1) grown = 0;
     if (!grown) {
         // The only way a window can be refused now. Logged rather than
         // silent: the old fixed-table refusal did nothing at all and
@@ -66,7 +73,7 @@ int wm_windows_reserve(int n) {
     k_memset(grown, 0, (size_t)cap * sizeof *grown);
     if (windows) {
         k_memcpy(grown, windows, (size_t)window_count * sizeof *grown);
-        kfree(windows);
+        // No free -- see above.
     }
     windows = grown;
     windows_cap = cap;
@@ -106,15 +113,6 @@ int resize_prop_w = -1, resize_prop_h = -1;
 int content_dragging = -1; // index into windows[], or -1 -- see wm_internal.h
 int content_pressed = -1; // index into windows[], or -1 -- see wm_internal.h
 
-void *pending_write = 0; // handle from fs_write_range_begin(), or NULL -- see wm_internal.h
-int pending_write_win = -1; // index into windows[] the write belongs to, or -1
-
-void *pending_read = 0; // handle from fs_read_range_begin(), or NULL -- see wm_internal.h
-int pending_read_win = -1; // index into windows[] the read belongs to, or -1
-
-int pending_proc = 0; // pid from scheduler_spawn(), or 0 -- see wm_internal.h
-int pending_proc_win = -1; // index into windows[] the process belongs to, or -1
-
 int redraw_pending = 1;
 
 // ---- app-facing helpers (declared in wm.h) ----
@@ -130,42 +128,6 @@ int window_content_h(const struct window *win) { return win->h - WM_TITLEBAR_H -
 void window_invalidate(struct window *win) {
     wm_damage_rect(win->x, win->y, win->w, win->h);
     redraw_pending = 1;
-}
-
-int window_write_pending(void) { return pending_write != 0; }
-
-int window_start_write(struct window *win, void *write_handle) {
-    if (pending_write) return 0; // a write's already in flight -- WM-global single slot, see wm_internal.h
-    pending_write = write_handle;
-    pending_write_win = -1;
-    for (int i = 0; i < window_count; i++) {
-        if (&windows[i] == win) { pending_write_win = i; break; }
-    }
-    return 1;
-}
-
-int window_read_pending(void) { return pending_read != 0; }
-
-int window_start_read(struct window *win, void *read_handle) {
-    if (pending_read) return 0; // a read's already in flight -- WM-global single slot, see wm_internal.h
-    pending_read = read_handle;
-    pending_read_win = -1;
-    for (int i = 0; i < window_count; i++) {
-        if (&windows[i] == win) { pending_read_win = i; break; }
-    }
-    return 1;
-}
-
-int window_process_pending(void) { return pending_proc != 0; }
-
-int window_start_process(struct window *win, int pid) {
-    if (pending_proc) return 0; // a process's already in flight -- WM-global single slot, see wm_internal.h
-    pending_proc = pid;
-    pending_proc_win = -1;
-    for (int i = 0; i < window_count; i++) {
-        if (&windows[i] == win) { pending_proc_win = i; break; }
-    }
-    return 1;
 }
 
 // --- read-only window introspection (see wm.h's declarations) ---
@@ -222,24 +184,10 @@ void bring_to_front(int idx) {
     for (int i = idx; i < window_count - 1; i++) windows[i] = windows[i + 1];
     windows[window_count - 1] = tmp;
 
-    // Reordering shifts every slot between idx and the old last slot
-    // down by one, and moves idx's own window to the end -- keep
-    // pending_write_win pointing at the same window (see close_window()
-    // for why this has to stay accurate: the QMP test this phase ships
-    // with explicitly clicks a DIFFERENT window mid-save, which lands
-    // exactly here).
-    if (pending_write_win == idx) pending_write_win = window_count - 1;
-    else if (pending_write_win > idx) pending_write_win--;
-
-    // Same bookkeeping for a pending read -- see wm_internal.h's
-    // pending_read.
-    if (pending_read_win == idx) pending_read_win = window_count - 1;
-    else if (pending_read_win > idx) pending_read_win--;
-
-    // Same bookkeeping for a pending process -- see wm_internal.h's
-    // pending_proc.
-    if (pending_proc_win == idx) pending_proc_win = window_count - 1;
-    else if (pending_proc_win > idx) pending_proc_win--;
+    // Reordering used to need three more fixups here, keeping
+    // pending_write_win/pending_read_win/pending_proc_win pointing at
+    // the same window across the shuffle. R9 deleted those slots, so the
+    // reorder is now just the reorder.
 }
 
 static int find_window_for_app(const struct gui_app *app) {
@@ -262,7 +210,7 @@ void open_app(const struct gui_app *app) {
     // down by the window server when the process dies -- so tracking it
     // here would cap the desktop at one ring-3 app for no benefit.
     if (app->exec_path) {
-        int pid = scheduler_spawn(app->exec_path, 0);
+        int pid = sys_spawn(app->exec_path, 0, -1);
         wm_logf("wm: launched %s (%s) as pid %d\n",
                      app->name, app->exec_path, pid);
         if (pid > 0) wm_track_launched(pid);
@@ -401,7 +349,10 @@ static void wm_reap_launched(void) {
     for (int i = 0; i < SCHED_MAX_PROCS; i++) {
         if (!g_launched[i]) continue;
         int code = 0;
-        if (scheduler_poll(g_launched[i], &code) != SCHED_POLL_RUNNING) {
+        // Non-blocking in the same sense scheduler_poll() was: it
+        // reports "still running" rather than parking, so the desktop
+        // reaps without ever stalling a frame.
+        if (sys_waitpid(g_launched[i], &code) != SYS_RETRY) {
             g_launched[i] = 0; // reaped (or already gone) -- slot is free again
         }
     }
@@ -424,7 +375,7 @@ static void wm_force_quit_yes(void) {
     // calls win_server_client_gone(), which destroys the client's
     // windows through the same path a normal exit uses. Removing the
     // window here as well would be a second teardown of the same thing.
-    scheduler_kill(g_force_quit_pid, -1);
+    sys_kill(g_force_quit_pid, -1);
     g_force_quit_pid = 0;
     redraw_pending = 1;
 }
@@ -488,14 +439,6 @@ void close_window(int idx) {
     // finishes, or (if this is the last window) leave it dangling. Same
     // "block while pending" choice as window_start_write() refusing a
     // second concurrent write. See wm.h's window_write_pending().
-    if (idx == pending_write_win) return;
-
-    // Same refusal for a read in flight -- see wm.h's window_read_pending().
-    if (idx == pending_read_win) return;
-
-    // Same refusal for a process in flight -- see wm.h's window_process_pending().
-    if (idx == pending_proc_win) return;
-
     // Give the app a chance to release whatever it allocated for this
     // window (multi-instance apps kmalloc/kzalloc their own per-window
     // state -- see gui_apps.h's `multi_instance` flag and
@@ -558,42 +501,17 @@ void close_window(int idx) {
     window_count--;
     redraw_pending = 1;
 
-    // A different window closing shifts every later slot down by one --
-    // keep pending_write_win pointing at the same window if it moved.
-    if (pending_write_win > idx) pending_write_win--;
-    if (pending_read_win > idx) pending_read_win--;
-    if (pending_proc_win > idx) pending_proc_win--;
 }
 
-// ---- raw input to a registered compositor (M41 stage 2) ----
-//
-// A SECOND consumer of the same input stream this loop reads, running
-// alongside the real routing rather than replacing it. Stage 4 deletes
-// the routing below and leaves this; until then both are live, which is
-// what makes the eventual flip a deletion instead of a cutover.
-//
-// **The tap has to be here, not at the driver.** `gui click` and
-// `gui key` inject through wm_debug.c and are applied AFTER the real
-// driver read (see the two override blocks in the loop). Tapping
-// mouse_get_state() directly would make every synthetic event invisible
-// to the compositor -- i.e. invisible to the 13 GUI test tools, which
-// are the only proof any of this works.
-//
-// A no-op with no compositor registered, which is every ordinary boot.
-static void compositor_raw(uint32_t type, int32_t a, int32_t b, uint32_t mods) {
-    int pid = win_server_compositor_pid();
-    if (!pid) return;
 
-    struct win_event ev = {
-        .type = type,
-        .window = 0, // meaningless for raw input -- no window chosen yet
-        .a = a,
-        .b = b,
-        .mods = mods,
-        .reserved = 0,
-    };
-    win_events_push(pid, &ev);
-}
+// compositor_raw() is GONE (M41 stage 4c, R9).
+//
+// It pushed every raw input the WM had just polled to the REGISTERED
+// compositor, so a second consumer could exist alongside the ring-0
+// desktop -- stage 2's whole point, and what `compositor_test.py`
+// proves by asserting each injected event twice. In ring 3 the WM IS
+// the registered compositor, so that call forwarded input to itself.
+// Input now arrives the other way round: see wm_rawin.c.
 
 // ---- live reload of /usr/wm/desktop ----
 //
@@ -692,9 +610,24 @@ static void poll_desktop_entries(void) {
 // ---- main loop ----
 
 void wm_run(void) {
-    if (!gfx_init()) {
-        vga_write("gui: no linear RGB framebuffer available from GRUB\n");
-        sys_eprint("wm: cannot enter GUI mode -- no linear RGB framebuffer from GRUB\n");
+    // Claim the compositor role, then take the framebuffer grant it
+    // gates. Both can be refused -- another process may already hold the
+    // role, and the grant is refused to anyone who does not -- so this
+    // returns rather than faulting, and says which half failed.
+    //
+    // There is no vga_write() counterpart here any more: the text
+    // console belongs to the kernel, which restores it when the
+    // compositor goes away (R7). A ring-3 WM that cannot start says so
+    // on stderr and exits; the kernel is what puts the user back at a
+    // shell.
+    if (!wm_claim_compositor()) {
+        sys_eprint("wm: cannot enter GUI mode -- compositor role refused\n");
+        return;
+    }
+    if (!ugfx_screen_init(&g_wm_screen)) {
+        sys_eprint("wm: cannot enter GUI mode -- no framebuffer grant "
+                   "(not the compositor, unsupported pixel format, or no "
+                   "room for a back buffer)\n");
         return;
     }
 
@@ -704,7 +637,7 @@ void wm_run(void) {
     // cannot hold one window is not a desktop -- fail here, where there
     // is somewhere to say so, rather than at the first Start-menu click.
     if (!wm_windows_reserve(WM_WINDOWS_INITIAL)) {
-        vga_write("gui: out of memory for the window table\n");
+        sys_eprint("wm: out of memory for the window table\n");
         return;
     }
 
@@ -717,29 +650,25 @@ void wm_run(void) {
     // it is first drawn rather than snapping a frame later.
     cursor_theme_init();
 
-    sys_eprint("wm: entering GUI mode (");
-    klog_write_dec((uint32_t)screen_w);
-    sys_eprint("x");
-    klog_write_dec((uint32_t)screen_h);
-    sys_eprint(")\n");
+    // Seed the pointer now that the screen's size is known -- this is
+    // what mouse_init() used to do by resetting the device to centre.
+    wm_rawin_init(screen_w, screen_h);
 
-    // Draw off-screen and flip completed frames -- without this the
-    // full-screen repaint below is visible as flicker while it happens.
-    // If the mode is too large to buffer we just draw directly; it still
-    // works, it just flickers (see gfx_set_double_buffered).
+    wm_logf("wm: entering GUI mode (%dx%d)\n", screen_w, screen_h);
+
+    // No gfx_set_double_buffered() here, and there cannot be one: a
+    // compositor's back buffer is not a MODE it can turn off. It is the
+    // surface it owns, allocated by ugfx_screen_init() above, and
+    // drawing straight at the granted framebuffer instead is not a
+    // degraded fallback but a correctness error -- that mapping is
+    // write-combining, where every anti-aliased glyph's read-back is an
+    // uncached round trip. If the buffer could not be allocated,
+    // ugfx_screen_init() already failed and we returned.
     //
-    // SAY SO when it fails. The consequence is not only flicker: drawing
-    // direct means every anti-aliased glyph reads the pixel under it
-    // back, and on real hardware that read comes from uncached MMIO, so
-    // the desktop goes from slow to unusable. A mode one pixel past
-    // GFX_MAX_PIXELS used to take that path in complete silence.
-    if (!gfx_set_double_buffered(1)) {
-        sys_eprint("wm: mode too large to double-buffer -- drawing direct "
-                    "(expect flicker, and very slow text on real hardware)\n");
-    }
-
-    mouse_set_bounds(screen_w, screen_h);
-    mouse_init();
+    // Mouse bounds and mouse_init() are gone with it. The pointer's
+    // position arrives as WIN_EV_RAW_MOUSE, already in screen
+    // coordinates and already bounded by whoever owns the device -- a
+    // ring-3 compositor does not initialise hardware.
 
     // Start accepting client windows. Registered here rather than at
     // boot so a ring-3 client that runs outside GUI mode is refused
@@ -766,19 +695,13 @@ void wm_run(void) {
     title_hover_kind = -1;
     redraw_pending = 1;
     wm_exit_requested = 0;
-    pending_write = 0;
-    pending_write_win = -1;
-    pending_read = 0;
-    pending_read_win = -1;
-    pending_proc = 0;
-    pending_proc_win = -1;
 
     wm_render_reset(); // first frame must be a full repaint -- see wm_render.c
     tray_init();
 
     int mx, my;
     uint8_t buttons;
-    mouse_get_state(&mx, &my, &buttons);
+    wm_rawin_mouse(&mx, &my, &buttons);
     int prev_mx = mx, prev_my = my;
     uint8_t prev_buttons = buttons;
 
@@ -800,14 +723,16 @@ void wm_run(void) {
         wmwd_phase("cursor_theme");
         cursor_theme_poll();
 
-        // The kernel's idle work, which it owns rather than this loop
-        // (scheduler.h). What it does today is keep the serial debug
-        // console answering while the desktop is up -- and every GUI
-        // test tool arrives over that console, so when this loop becomes
-        // a ring-3 process (Milestone 41 stage 4) this line is DELETED
-        // and the capability stays. That is the whole reason it moved.
+        // The kernel's idle work is NOT called from here any more, and
+        // this is the deletion `scheduler_idle()` was created to make
+        // possible. In ring 0 this loop was what kept the serial debug
+        // console answering while the desktop was up -- and every GUI
+        // test tool arrives over that console, so moving the WM out
+        // would have taken the whole test harness with it. Naming the
+        // work kernel-side first (M41 stage 4a, R5) meant the migration
+        // deletes a CALL rather than the capability: the kernel drains
+        // the console from its own idle path, whoever is running.
         wmwd_phase("idle");
-        scheduler_idle();
 
         // The scripted demo tour does NOT run in the ring-3 WM yet, and
         // that is a deferral with a reason rather than an oversight.
@@ -832,8 +757,12 @@ void wm_run(void) {
         wmwd_phase("desktop_entries");
         poll_desktop_entries();
 
+        // Drain everything the kernel has queued for us, then read the
+        // position out of it. One pump per frame, fully draining -- see
+        // wm_rawin.c on why partial draining backs up.
         wmwd_phase("input");
-        mouse_get_state(&mx, &my, &buttons);
+        wm_rawin_pump();
+        wm_rawin_mouse(&mx, &my, &buttons);
 
         // Synthetic input from the serial debug console's `gui click` /
         // `gui drag` (apps/wm/wm_debug.c), consumed at most one event
@@ -859,10 +788,6 @@ void wm_run(void) {
         // unconditional push would overflow a 32-deep queue in a
         // fraction of a second and report constant drops while the user
         // sat still. See WIN_EV_RAW_MOUSE.
-        if (mouse_moved || buttons != prev_buttons) {
-            compositor_raw(WIN_EV_RAW_MOUSE, mx, my, buttons);
-        }
-
         int left_edge_down = (buttons & 0x1) && !(prev_buttons & 0x1);
         if (left_edge_down) wm_handle_left_click(mx, my);
 
@@ -889,7 +814,7 @@ void wm_run(void) {
         // shell's own prompt output the moment control returned to it
         // (see vga.h's struct vga_sink doc comment on why a stale sink
         // is dangerous), not just abandon the process.
-        if (wm_exit_requested && !pending_write && !pending_read && !pending_proc) {
+        if (wm_exit_requested) {
             sys_eprint("wm: exiting GUI mode, returning to shell\n");
             // Stop accepting client windows before the desktop stops
             // drawing them -- same reasoning as the pending_* guards
@@ -901,61 +826,12 @@ void wm_run(void) {
             // inheriting whatever the WM left the flag set to. This used
             // to turn buffering OFF, which left the console drawing --
             // and, when it scrolled, READING -- the framebuffer directly.
-            vga_resume();
+            // No vga_resume(). The text console belongs to the kernel,
+            // which restores it when it sees the compositor deregister --
+            // cleanly, by a kill, or by a fault, all one path (R7). A
+            // ring-3 WM resuming it would be reaching for a device it
+            // does not own.
             return;
-        }
-
-        // Poll one step of a pending write, once per frame, instead of
-        // wm_run() ever calling fs_write_range() and blocking (Milestone
-        // 1 phase 3, docs/roadmap.md) -- Notepad's Save is the first
-        // caller (see wm.h's window_start_write()). One step is one
-        // filesystem block's worth of work (see fs.h's
-        // fs_write_range_step() contract), so this bounds each frame's
-        // extra blocking time to a single block write, not the whole
-        // file. On a terminal result the handle is already freed by
-        // fs_write_range_step() itself -- clear the slot and hand the
-        // outcome to whichever window started it, if it's still open
-        // (see close_window()/bring_to_front() for why pending_write_win
-        // is guaranteed to still be accurate here even if other windows
-        // closed or reordered while this write was in flight).
-        wmwd_phase("fs_steps");
-        if (pending_write) {
-            enum fs_step_result r = fs_write_range_step(pending_write);
-            if (r != FS_STEP_PENDING) {
-                void *finished_win = (pending_write_win >= 0 && pending_write_win < window_count)
-                                          ? &windows[pending_write_win] : 0;
-                const struct gui_app *app = finished_win ? windows[pending_write_win].app : 0;
-                pending_write = 0;
-                pending_write_win = -1;
-                if (finished_win && app && app->on_write_complete) {
-                    app->on_write_complete((struct window *)finished_win, r == FS_STEP_DONE);
-                }
-                redraw_pending = 1;
-            }
-        }
-
-        // Same per-frame polling for a pending read (Milestone 1 phase
-        // 4, docs/roadmap.md) -- mirrors the pending_write block just
-        // above exactly, including the pending_read_win accuracy
-        // guarantee from bring_to_front()/close_window(). The extra
-        // `total` out-param (fs_read_range_step()'s only difference
-        // from fs_write_range_step()) is handed to on_read_complete
-        // alongside success/failure so the app knows how many bytes it
-        // actually got.
-        if (pending_read) {
-            uint32_t total = 0;
-            enum fs_step_result r = fs_read_range_step(pending_read, &total);
-            if (r != FS_STEP_PENDING) {
-                void *finished_win = (pending_read_win >= 0 && pending_read_win < window_count)
-                                          ? &windows[pending_read_win] : 0;
-                const struct gui_app *app = finished_win ? windows[pending_read_win].app : 0;
-                pending_read = 0;
-                pending_read_win = -1;
-                if (finished_win && app && app->on_read_complete) {
-                    app->on_read_complete((struct window *)finished_win, r == FS_STEP_DONE, total);
-                }
-                redraw_pending = 1;
-            }
         }
 
         // Per-frame poll for a pending process (Milestone 1 phase 4b,
@@ -985,22 +861,6 @@ void wm_run(void) {
         {
             int hung = wm_client_check_liveness();
             if (hung >= 0) wm_offer_force_quit(hung);
-        }
-
-        if (pending_proc) {
-            redraw_pending = 1;
-            int exit_code = -1;
-            enum sched_poll_result r = scheduler_poll(pending_proc, &exit_code);
-            if (r != SCHED_POLL_RUNNING) {
-                void *finished_win = (pending_proc_win >= 0 && pending_proc_win < window_count)
-                                          ? &windows[pending_proc_win] : 0;
-                const struct gui_app *app = finished_win ? windows[pending_proc_win].app : 0;
-                pending_proc = 0;
-                pending_proc_win = -1;
-                if (finished_win && app && app->on_process_exit) {
-                    app->on_process_exit((struct window *)finished_win, exit_code);
-                }
-            }
         }
 
         // Mouse movement alone normally takes wm_render_cursor_move()'s
@@ -1065,7 +925,7 @@ void wm_run(void) {
         // per-window or modal use (e.g. canceling a confirm dialog)
         // instead of double-booking it as "exit everything".
         uint8_t key_mods = 0;
-        int key = keyboard_try_getchar_mods(&key_mods);
+        int key = wm_rawin_take_key(&key_mods);
         // A `gui key` from the debug console, if the real keyboard had
         // nothing -- deliberately second, so a human at the keyboard is
         // never pre-empted by a queued test keystroke.
@@ -1074,16 +934,10 @@ void wm_run(void) {
             if (injected) key = injected;
         }
 
-        int wheel = mouse_get_wheel_delta();
+        int wheel = wm_rawin_take_wheel();
         if (wheel == 0) wheel = wm_debug_next_wheel(); // `gui wheel`, same
                                                         // second-place rule as
                                                         // the injected key above
-
-        // Both taps sit after their injected-input fallbacks above, so a
-        // `gui key` / `gui wheel` reaches the compositor exactly as a
-        // real one does.
-        if (key != -1) compositor_raw(WIN_EV_RAW_KEY, key, 0, key_mods);
-        if (wheel != 0) compositor_raw(WIN_EV_RAW_WHEEL, wheel, 0, 0);
 
         if (key != -1 || wheel != 0) {
             // A modal file picker (e.g. Notepad's Save As...) captures

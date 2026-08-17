@@ -846,9 +846,75 @@ is provable on its own with the suite green throughout.
   worth comparing" so a release cannot leave a stale frame a later diff
   would happily compare against.
 
-**4b's second half is UNDER WAY: `userland/wm/` COMPILES, and does not
-link yet.** All fourteen translation units build clean; 41 symbols
-across 80 references still have no ring-3 implementation.
+**Stage 4c is UNDER WAY. `userland/wm/` compiles and is 8 symbols from
+linking** -- down from 41 symbols / 80 references at the end of 4b.
+
+DONE in 4c:
+
+- **R9's deletions.** The `pending_write`/`pending_read`/`pending_proc`
+  step machinery is gone: it existed only because a ring-0 `wm_run()`
+  must never block on the filesystem, and it was already dead, since the
+  outcomes were delivered through `gui_apps.h`'s `on_write_complete`/
+  `on_read_complete` and ring 0 has held no applications since stage 0.
+  Also gone: `compositor_raw()` (stage 2's duplicate input path, which
+  in ring 3 forwards input to itself), the hardware-cursor path (R3
+  measured it away), `gfx_set_double_buffered` (a compositor's back
+  buffer is not a mode it can turn off), `scheduler_idle()` (the
+  deletion R5 was built to make possible), `vga_resume()` and the
+  `rammeter` overlay (both kernel-side by R7).
+- **The input cutover**, which is 4c's headline. `userland/wm/wm_rawin.c`
+  receives `WIN_EV_RAW_MOUSE`/`_KEY`/`_WHEEL` instead of polling
+  `mouse_get_state()`/`keyboard_try_getchar_mods()`. The inversion that
+  shapes it: a poll answers "where is the pointer NOW", an event stream
+  answers "what changed", so the position is kept in the WM and handed
+  to the loop in the shape it already expected -- which is what let
+  `wm.c`'s frame structure survive unchanged. Motion is coalesced
+  (ten queued moves are one position); buttons, keys and wheel notches
+  are not, because each is a discrete thing the user did and a
+  commit-on-release control needs both halves.
+- **The filesystem**, over libsys (`userland/wm/wm_fs.c`). Worth noting
+  the port IMPROVED these sites: `fs_list()` walked a directory through a
+  callback with no context pointer, and three separate comments in this
+  WM complained about having to collect into a file-global and parse
+  afterwards. `sys_listdir()` fills an array, so the workaround and two
+  of the globals simply disappeared.
+- Spawn/kill/reap over `SYS_SPAWN`/`SYS_KILL`/`SYS_WAITPID`, the clock
+  over `SYS_GETTIME`, and the window table over `SYS_SBRK` -- the last
+  of which LEAKS the old block on growth, because ring 3 has no free.
+  Bounded and small (the table doubles), written down rather than hidden
+  behind a wrapper that looks like `malloc`.
+
+**What is left is three items, and all three need NEW KERNEL SURFACE --
+which is why they are separated out rather than being more of the
+same:**
+
+- **`win_events_push` (5 refs) -- the server inversion, and the big
+  one.** Today the kernel receives a client's `SYS_WIN_REQUEST` and
+  CALLS BACK into the WM through `struct win_server_ops` (11 callbacks);
+  a ring-3 WM cannot be called into. So the relationship inverts: the WM
+  claims the compositor role (built -- `wm_claim_compositor()`) and then
+  RECEIVES what it used to be asked, while `win_events_push()` becomes a
+  request asking the kernel to deliver an event to a client. The design
+  question is how a client REQUEST reaches the compositor, given
+  `struct win_event` is a fixed 24 bytes and some callbacks carry a
+  title or a 128-byte debug command. Stage 3's split -- a hot path that
+  stays small, a diagnostic channel carrying its own payload struct --
+  is the precedent to follow.
+- **`setting_register` (1).** `SYS_SETTING` has GET/SET/COUNT/INFO/
+  CHOICE and the file ops, but NO REGISTER, so a ring-3 process cannot
+  contribute a setting. The WM needs it for the two cursor settings.
+- **`system_poweroff` (1).** No syscall exists at all.
+
+And one that needs a decision rather than surface: **`etc_config_*`
+(4 refs)** -- the WM reads and writes arbitrary `name=value` files (icon
+positions, the cursor config), which `SYS_SETTING` does not cover
+because those are not registered settings. Hand-rolling a second parser
+in ring 3 is exactly what `CLAUDE.md` forbids, and the repo's own answer
+is available: **split `kernel/lib/etc_config.c` the way `kfmt.c` is
+split** -- the `name=value` parsing over a buffer is freestanding and
+becomes shared source compiled twice, while the file I/O stays per-ring.
+`etc_config_buf_get()` already operates on an already-loaded buffer, so
+the seam is where the file is read, not in the parser.
 
 The port lives beside `apps/wm/` rather than replacing it, because
 porting the call sites in place would break the kernel build the moment

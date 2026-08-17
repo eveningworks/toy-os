@@ -11,6 +11,7 @@
 #include "win_events.h"
 #include <stdarg.h> // dbg_out_printf()'s varargs
 #include "rt/sys.h"
+#include "wm/wm_rawin.h"
 
 // ---------------------------------------------------------------------
 // Synthetic input queue
@@ -487,7 +488,7 @@ static void cmd_taskbar(struct dbg_out *o, int json) {
 static void cmd_state(struct dbg_out *o, int json) {
     int cx, cy;
     uint8_t buttons;
-    mouse_get_state(&cx, &cy, &buttons);
+    wm_rawin_mouse(&cx, &cy, &buttons);
     int dx, dy, dw, dh;
     wm_debug_damage(&dx, &dy, &dw, &dh);
 
@@ -506,14 +507,19 @@ static void cmd_state(struct dbg_out *o, int json) {
                      dragging, resizing, content_pressed);
         dbg_out_printf(o, "\"redraw_pending\":%s,\"pending\":%d,",
                      redraw_pending ? "true" : "false", wm_debug_input_pending());
-        // The pid of the ring-3 process a WINDOW is waiting on (0 =
-        // none) -- wm.c's pending_proc, which only window_start_process()
-        // sets. **Since M41's stage 0 retired the kernel-space Terminal
-        // nothing calls that, so this reads 0 always**; the field and the
-        // plumbing stay for the next caller rather than being ripped out
-        // and re-added. Use "launched" below to ask whether a process the
-        // desktop started is alive.
-        dbg_out_printf(o, "\"proc_pid\":%d,", pending_proc);
+        // Always 0, and kept in the grammar on purpose. It reported
+        // wm.c's pending_proc -- the process a WINDOW was waiting on --
+        // which only window_start_process() ever set, and nothing has
+        // called that since M41 stage 0 retired the kernel-space
+        // Terminal. Stage 4c DELETED that machinery outright (R9): a
+        // ring-3 WM is a process and can simply block, so the whole
+        // one-step-per-frame dance went with it.
+        //
+        // The field stays because the test tools parse this object and a
+        // key vanishing is a harness failure that looks like a WM bug.
+        // Use "launched" below for the real question -- whether a process
+        // the desktop started is alive.
+        dbg_out_printf(o, "\"proc_pid\":%d,", 0);
         // Every pid the desktop launched that is still running -- the
         // WM's own reaped launch table (wm.c's g_launched). This is the
         // host-observable way to tell that a client process and the WM
@@ -543,8 +549,6 @@ static void cmd_state(struct dbg_out *o, int json) {
     dbg_out_printf(o, "dragging=%d resizing=%d content_pressed=%d redraw_pending=%d\r\n",
                  dragging, resizing, content_pressed, redraw_pending);
     dbg_out_printf(o, "injected events pending: %d\r\n", wm_debug_input_pending());
-    if (pending_proc) dbg_out_printf(o, "ring-3 process: pid %d\r\n", pending_proc);
-    else              dbg_out_write(o, "ring-3 process: none\r\n");
     dbg_out_write(o, "launched (still running):");
     int any = 0;
     for (int i = 0; i < wm_launched_max(); i++) {
@@ -588,7 +592,7 @@ static void cmd_open(struct dbg_out *o, const char *name) {
 // Tracked for reaping exactly as a Start-menu launch is, so this does
 // not quietly reintroduce the leak wm_track_launched() exists to fix.
 static void cmd_spawn(struct dbg_out *o, const char *path, const char *args) {
-    int pid = scheduler_spawn(path, args);
+    int pid = sys_spawn(path, args, -1);
     if (pid > 0) {
         wm_track_launched(pid);
         dbg_out_printf(o, "gui: spawned \"%s\" as pid %d\r\n", path, pid);

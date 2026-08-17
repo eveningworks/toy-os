@@ -88,7 +88,7 @@ int start_menu_w(void) {
 // reason not to share it outright.
 void start_menu_geometry(int *out_menu_x, int *out_menu_y, int *out_menu_w,
                       int *out_item_h, int *out_total_items) {
-    *out_item_h = gfx_char_h() + 6;
+    *out_item_h = ugfx_char_h() + 6;
     *out_menu_w = start_menu_w();
     *out_menu_x = 4;
     *out_total_items = gui_app_visible_count(GUI_SHOW_STARTMENU) + wm_system_action_count;

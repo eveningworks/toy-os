@@ -339,15 +339,42 @@ static const struct win_server_ops WM_SERVER_OPS = {
     .window_timer     = on_window_timer,
 };
 
+// Claims the compositor role. Everything else the WM is allowed to do
+// with the screen is gated on holding it -- the framebuffer grant
+// (WIN_REQ_FB_MAP) is refused to anyone else, and raw input is
+// delivered only to the holder.
+//
+// A REQUEST, not a registration. The ring-0 WM handed the kernel a
+// `struct win_server_ops` and the kernel called back into it; ring 3
+// cannot be called into, so the relationship inverts -- the WM claims
+// the role and then RECEIVES what it used to be asked. See
+// wm_rawin.c for the input half.
+int wm_claim_compositor(void) {
+    struct win_request_msg req;
+    for (unsigned i = 0; i < sizeof req; i++) ((uint8_t *)&req)[i] = 0;
+    req.type = WIN_REQ_SET_COMPOSITOR;
+    req.a = 1; // claim
+    return sys_win_request(&req) == 1;
+}
+
 void wm_client_init(void) {
-    win_server_register(&WM_SERVER_OPS);
+    // WM_SERVER_OPS is not registered any more -- see wm_claim_compositor()
+    // above. The callbacks it named become events the WM receives; the
+    // table itself is what stage 4c's remaining work replaces.
 }
 
 void wm_client_shutdown(void) {
-    // Unregistered on the way out so a client request made after the
-    // desktop has exited is refused, rather than dispatched into a
-    // window list that is no longer being drawn.
-    win_server_register(0);
+    // Released on the way out so a client request made after the desktop
+    // has exited is refused, rather than dispatched into a window list
+    // nobody is drawing. Dropping the role also revokes the framebuffer
+    // grant -- the kernel does that wherever the role is cleared, which
+    // is one place, so a clean exit, a kill and a fault are the same
+    // path (see kernel/proc/win_surface.c).
+    struct win_request_msg req;
+    for (unsigned i = 0; i < sizeof req; i++) ((uint8_t *)&req)[i] = 0;
+    req.type = WIN_REQ_SET_COMPOSITOR;
+    req.a = 0; // release
+    sys_win_request(&req);
 }
 
 int wm_client_is_client_window(const struct window *win) {

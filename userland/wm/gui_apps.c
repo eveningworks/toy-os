@@ -2,6 +2,7 @@
 #include "kapi.h"
 #include "etc_config.h"
 #include "rt/sys.h"
+#include "wm/wm_fs.h"
 #include "wm/wm_log.h"
 
 // The Start menu and the desktop icons are built from DATA ON DISK --
@@ -209,7 +210,9 @@ static void fingerprint_cb(const char *name, uint32_t size, int is_dir) {
 
 uint64_t gui_apps_dir_fingerprint(void) {
     g_fp = 1;
-    fs_list(DESKTOP_DIR, fingerprint_cb);
+    struct dirent ents[GUI_APP_MAX];
+    int n = wm_fs_list(DESKTOP_DIR, ents, GUI_APP_MAX);
+    for (int i = 0; i < n; i++) fingerprint_cb(ents[i].name, ents[i].size, (int)ents[i].is_dir);
     return g_fp;
 }
 
@@ -217,7 +220,9 @@ void gui_apps_load(void) {
     gui_app_registry_count = 0;
     g_file_count = 0;
 
-    fs_list(DESKTOP_DIR, collect);
+    struct dirent ents[GUI_APP_MAX];
+    int n = wm_fs_list(DESKTOP_DIR, ents, GUI_APP_MAX);
+    for (int i = 0; i < n; i++) collect(ents[i].name, ents[i].size, (int)ents[i].is_dir);
 
     // Filename order is whatever the directory hands back, so sort by
     // (category, filename) before parsing: the Start menu's row order is

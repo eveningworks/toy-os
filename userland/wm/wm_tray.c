@@ -8,6 +8,7 @@
 // register later get whatever slot is free, not necessarily in order,
 // so `active` is what actually matters, not slot index continuity.
 #include "wm_internal.h"
+#include "rt/sys.h"
 #include "wm_tray.h"
 #include "kapi.h"
 
@@ -91,7 +92,7 @@ void tray_init(void) {
 void tray_update_clock(void) {
     if (clock_tray_id < 0) return;
     struct rtc_time t;
-    rtc_read_local(&t); // local time for the selected `timezone`, not raw UTC
+    sys_gettime(&t); // local time for the selected `timezone`, not raw UTC
 
     char buf[9];
     buf[0] = '0' + (t.hour / 10);
