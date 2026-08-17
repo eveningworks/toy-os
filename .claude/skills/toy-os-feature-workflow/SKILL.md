@@ -2281,6 +2281,67 @@ means exactly what it says -- real unpushed work on the real
 checkout -- and is worth surfacing to the user rather than
 explaining away.
 
+**2026-08-17 (the M41 migration day): the ring-3 desktop RUNS, and the
+day's lessons are mostly about DIAGNOSIS rather than about this OS.**
+
+Where the milestone stands, so a session does not re-derive it: `gui3`
+at the physical shell starts a ring-3 desktop that composites, opens
+client windows, and answers the `gui` console; it passes 19 of 23 GUI
+tools. `gui` is still the RING-0 desktop and `apps/wm/` still exists --
+the flip is one line in `apps/gui.c`, blocked on four tools
+(`docs/roadmap.md` names them). **Two copies of the WM exist meanwhile:
+a fix to `apps/wm/` must be made to `userland/wm/` too.**
+
+The four lessons worth carrying anywhere:
+
+- **READ THE ABI COMMENT OF ANY CALL YOU SWAP IN.** The single most
+  expensive mistake of the migration was replacing a non-blocking
+  `scheduler_poll()` with `sys_waitpid()` and writing a comment claiming
+  it was "non-blocking in the same sense" -- while `SYS_WAITPID`'s own
+  first line said **BLOCKS**. The desktop then died silently on its
+  first client. A PORT is exactly where this happens, because the new
+  call's name resembles the old one's and the old one's semantics are
+  the ones in your head.
+- **A mechanism that explains the symptoms is not the mechanism that
+  caused them.** One wrong root cause was written up and COMMITTED that
+  day: it blamed a `sti; hlt` wait against a single global resume
+  pointer, reasoned that it survives two contexts and not three, and
+  fitted every observation. The hazard was real and documented -- just
+  not this bug's. Do the cheap disproving check before publishing a
+  diagnosis, and say plainly when you withdraw one.
+- **A discriminating experiment beats a plausible story.** Spawning
+  `/bin/hello` (exits at once) was harmless; spawning `winclient`
+  (creates a window and waits) was fatal. That pair located the bug
+  class in one run, after two theories had each cost a build-and-test
+  cycle. Reach for the experiment whose OUTCOME DIFFERS under the
+  competing explanations.
+- **Instrument before theorising a third time.** A per-frame log line
+  settled "is it stuck, or just slow?" instantly, after reasoning had
+  failed twice. The repo already says this; it was still learned again.
+
+And four things a ring-0 component loses the moment it becomes a
+process -- all hit in one afternoon, all silent:
+
+- `hlt` is **privileged**: the ported idle wait was a #GP on frame one.
+- **The font is not free.** Anything drawing in ring 3 must call
+  `ugfx_font_init()`; without it `ugfx_char_h()` is 0 and every
+  font-derived measurement collapses without an error -- chrome became
+  8px and icon labels vanished while their boxes still drew. It must
+  run BEFORE any geometry derived from it.
+- **Nobody polls the hardware.** Raw input only ever reached a
+  compositor because the ring-0 WM forwarded it; with the WM gone there
+  was no producer at all, and the desktop looked frozen.
+- **One over-strict guard can produce two unrelated symptoms.** A single
+  `!g_ops` check refused both the font and window creation, with a bare
+  `return -1` that nothing logged -- so "no text" and "no windows"
+  looked like two bugs.
+
+Finally, a UI note that generalises: **if a file needs four lines of
+comment to explain two button labels apart, the labels are wrong.** Task
+Manager's "End Task"/"End Process" (Windows' names) became
+"Close"/"Force Quit" -- and "Force Quit" was already this desktop's word
+for that action elsewhere, so one action had stopped having two names.
+
 ## Verification habits this project rewards
 
 Learned repeatedly, and cheap to repeat:

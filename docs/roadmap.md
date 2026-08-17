@@ -1094,6 +1094,37 @@ guess.*
 
 ### Known issues and papercuts (unscheduled)
 
+- [ ] **The taskbar overflows off the right edge once enough windows are
+      open.** Reported with a screenshot, 2026-08-17: thirteen windows,
+      and the last button is clipped by the screen edge and runs under
+      the clock. Two separate things go wrong before that, both visible
+      in the same picture:
+
+      * Buttons shrink until their labels truncate ("Termina",
+        "Calcula", "Task Ma"), so they stop being identifiable well
+        before they stop fitting.
+      * Nothing reserves the clock's strip, so the overflowing button
+        draws underneath it rather than stopping short.
+
+      **The suggested shape (maintainer's, and it matches every real
+      desktop): stop shrinking at a floor, and put the remainder behind
+      an overflow control** -- a chevron at the end of the strip that
+      opens the rest as a list. Windows' taskbar chevron, GNOME's
+      window list overflow and macOS's Dock stack all do a version of
+      this; the common rule is that a button never shrinks below the
+      point where its label is readable, and everything past the last
+      whole button moves into the popup rather than being clipped.
+
+      Worth deciding at the same time, because they are the same
+      geometry: whether the clock's strip is reserved space the buttons
+      lay out against (it should be), and whether the popup reuses the
+      Start menu's list rendering rather than growing a second one.
+
+      Not urgent -- it needs enough windows open that a person is
+      unlikely to hit it by accident -- but it is a visible defect, and
+      the fix is layout work with no protocol implications, so it is a
+      good self-contained item.
+
 - [x] ~~**The ring-3 WM stops the moment it spawns a process.**~~ FIXED
       2026-08-17, and the cause was mine and much duller than the
       diagnosis before it.

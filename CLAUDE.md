@@ -990,6 +990,46 @@ technical conventions below:
   hardware path runs (the KTESTs assert CR4 against CPUID rather than
   demanding the bits, so they are meaningful under both). See
   `docs/decisions.md`.
+- **THE RING-3 DESKTOP EXISTS AND RUNS: `gui3` at the physical shell.**
+  `/bin/wm/system/toywm` is `apps/wm/` compiled as a ring-3 program
+  (sources in `userland/wm/`), spawned and waited on by `apps/gui3.c`.
+  It claims the compositor role, takes the framebuffer grant, loads the
+  font, composites the desktop, opens client windows and answers the
+  `gui` debug console. **`gui` is still the RING-0 desktop** and
+  `apps/wm/` still stands -- the flip waits on four test tools (see
+  `docs/roadmap.md`). **`make iso KCMDLINE="gui3"` runs the WHOLE SUITE
+  against the ring-3 desktop** without editing a source file, which is
+  how "19 of 23 tools pass" was measured; same switch pattern as
+  `nokaslr`/`nopat`/`notsc`, and it disappears with `apps/wm/`. Two copies of the WM
+  therefore exist: **a fix to one must be made to the other** until
+  `apps/wm/` is deleted.
+- **Four things a ring-0 component loses the moment it becomes a
+  process, all of which this migration hit:**
+  (1) **`hlt` is PRIVILEGED** -- the WM's idle wait was a #GP on the
+  first frame; `sys_yield()` replaces it (and busy-waits, see the
+  roadmap). (2) **The font is not free**: anything drawing in ring 3
+  must call `ugfx_font_init()`, which every window client gets inside
+  `uapp_run()` and the WM had to ask for itself -- without it
+  `ugfx_char_h()` is 0 and every font-derived measurement silently
+  collapses (`WM_TITLEBAR_H` became 8px, so the chrome was a sliver and
+  icon labels vanished while their boxes still drew). It must happen
+  BEFORE any geometry is computed from it. (3) **Nobody polls the
+  hardware any more** -- raw input reached a compositor only because the
+  ring-0 WM forwarded it, so `kernel/proc/win_input.c` now polls and
+  pushes `WIN_EV_RAW_*` from `scheduler_idle()`, and starts the mouse,
+  staying silent while a ring-0 layer is registered so it cannot steal
+  that WM's keys. (4) **A single `!g_ops` guard refused everything** --
+  `win_server_request()` demanded a registered RING-0 presentation
+  layer, so a ring-3 WM was refused the font AND window creation, with a
+  bare `return -1` that nothing logged. A window server is now either a
+  ring-0 layer or a registered compositor.
+- **`SYS_WNOHANG` exists, and the bug that produced it is the lesson.**
+  `SYS_WAITPID` BLOCKS -- its own first ABI line says so -- and the
+  ring-3 WM's per-frame reap used it, so the desktop parked on the first
+  client that did not immediately exit, silently and forever. Use
+  `sys_waitpid_nohang()` for any "has it finished?" poll, and note it
+  has NO retry loop on purpose: `SYS_RETRY` is the answer there ("still
+  running"), not a signal to ask again.
 - **`SYS_SBRK` is PER PROCESS, and it used to be reachable only from
   the legacy loader.** The break lives in `struct sched_process` as a
   `struct sched_heap`, armed when the slot is created; the syscall
@@ -1727,6 +1767,25 @@ automatically, independent of whether a session (or a human) remembered
 to verify locally first. This doesn't replace verifying locally before
 delivering a change (still do that -- see "Working in the cloud
 sandbox" above), it's a second, automatic check behind it.
+
+**READ THE ABI COMMENT OF ANY CALL YOU SWAP IN.** The single most
+expensive mistake of the M41 migration was replacing a non-blocking
+`scheduler_poll()` with `sys_waitpid()` and writing a comment asserting
+it was "non-blocking in the same sense" -- while `SYS_WAITPID`'s own
+first line said **BLOCKS**. It cost a day: the ring-3 desktop died
+silently on its first client, and the hunt produced THREE wrong
+mechanisms before the header was read. A port is exactly where this
+happens, because the new call's name resembles the old one's.
+
+**AND A MECHANISM THAT EXPLAINS THE SYMPTOMS IS NOT THE MECHANISM THAT
+CAUSED THEM.** One of those wrong diagnoses was written up and committed:
+it blamed a `sti; hlt` wait against `idt.c`'s single `g_next_kernel_rsp`,
+reasoned that it survives two contexts and not three, and fitted every
+observation -- the hazard was real and documented, just not this bug's.
+Before publishing a root cause, do the cheap disproving check, and
+prefer a discriminating experiment (`/bin/hello` exits at once and was
+harmless; `winclient` waits and was fatal -- that pair located the bug
+class in one run) over a plausible story.
 
 **BEFORE BELIEVING ANY GUI TEST FAILURE, RE-RUN IT ON A FRESH IMAGE.**
 `make iso` re-seeds `disk.img` by SYNC, never reformat, so anything an
