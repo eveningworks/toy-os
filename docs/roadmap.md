@@ -1629,9 +1629,9 @@ that are actually missing and records what already exists (more than
 this list implies -- a ring-3 process can already map the framebuffer,
 and `vmm_map_user_page()` already takes an explicit address space).
 
-**The consequence that is easy to miss:** all 16 GUI test tools drive
+**The consequence that is easy to miss:** all 19 GUI test tools drive
 the WM through `apps/wm/wm_debug.c`'s `gui` commands, over the KERNEL's
-serial console. A ring-3 WM cannot answer those, so the 243 checks that
+serial console. A ring-3 WM cannot answer those, so the 271 checks that
 are the only proof the desktop works have to move with it. The design
 doc makes that its own stage, deliberately before the WM moves.
 **Stage 3 did it (2026-08-16):** those commands now travel as TWP

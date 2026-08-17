@@ -575,7 +575,7 @@ twice more.**
     `pass`.
   - `python3 tools/gui_regress.py` -- ALL of the app-level ones above
     plus the ring-3 client tests, each on its own fresh disk copy and
-    its own VM, as one pass/fail table (~264 checks across eighteen
+    its own VM, as one pass/fail table (~271 checks across nineteen
     tools, a couple of minutes at the default -j4). **Always pass
     `--logs DIR`**: an intermittent too rare to reproduce on demand can
     only be diagnosed by a capture that was already running, and that
@@ -1071,7 +1071,7 @@ Read this before assuming anything about the project's state.**
 - **`docs/wm-ring3-design.md` is the staged plan for Milestone 41** --
   moving the WM itself to ring 3. Its load-bearing finding: all 13 GUI
   test tools drive the WM through `wm_debug.c`'s `gui` commands over the
-  KERNEL's serial console, so the 264 checks that prove the desktop
+  KERNEL's serial console, so the 271 checks that prove the desktop
   works have to move with it, and that gets its own stage BEFORE the WM
   moves.
 
@@ -1466,6 +1466,192 @@ lessons, and the first two are about tests that look like they work.**
   worktree-isolated session use `git stash push -u -m <unique-tag>`,
   capture the SHA, and `git stash apply <sha>` -- never a bare
   `stash`/`pop`, since the stack is shared with every other worktree.
+
+**2026-08-17 (M41 stage 4's prerequisites, and five silent bugs): ring 0
+now contains NO applications. Read this before touching settings, the
+Toykit widgets, or believing a green test run.**
+
+- **`Exec=builtin:` is GONE and `apps/` holds no apps at all.** Control
+  Panel was the last one; it is `userland/gui/system/cpanel.c` now. The
+  builtin table, its lookup and its struct are deleted from
+  `gui_apps.c`. Stage 4's prerequisite list is CLOSED -- what remains is
+  the WM itself.
+- **A setting REGISTERS itself** (`kernel/include/api/setting.h`): name,
+  label, type, file, a choice ENUMERATOR, a getter, and one `apply` that
+  validates, applies AND persists. Announced from `settings_init()` the
+  way a `display_driver` announces itself. **Do not add a setting as a
+  bare `etc_config_get`/`_set` pair any more.**
+
+  The reasoning generalises, and it is the most reusable thing here:
+  the plan asked for "syscalls for `etc_config_*`", i.e. let ring 3 read
+  and write `/etc`. That would have solved ACCESS and left the real
+  problem -- nothing could answer *what settings exist*, so a Control
+  Panel had to carry its own list, a second source of truth that drifts.
+  **When a request names a mechanism, check what the underlying need
+  is.** (Same call as `ShowIn=` instead of a second directory.)
+- **The files did NOT change and must not.** Settings are still plain
+  `name=value` text under `/etc`, editable in `edit`. The registry is an
+  INDEX over those files -- which is the half `/etc` has never been able
+  to provide about itself, and the answer to "which file is this in?".
+  Keeping them hand-editable costs two things, both paid for rather than
+  dodged: `settings_reload()` re-reads after an edit and REPORTS
+  refusals, and a `generation` counter rides every reply so a client
+  notices someone else's change.
+- **`/etc/config.d` is how a config FILE declares itself** -- one
+  `Name`/`Path`/`Description` descriptor each, over a built-in floor.
+  Files-only could not bootstrap (a blank disk has no such directory,
+  and a deleted descriptor would leave `/etc/toyos.conf` nameless), so
+  built-ins are the floor and a descriptor with the same name OVERRIDES
+  one. That is the vendor-default/`/etc`-override pattern, and it is
+  what lets a ring-3 program declare its config with no kernel change --
+  which the WM needs after stage 4.
+- **`/bin/config`** is the front end: `list get set unset where diff
+  reload files show find register unregister`. It contains **no
+  `name=value` parser** -- every value comes back from the kernel's one
+  parser, including the FILE's value as distinct from the live one
+  (`diff`). A second parser there would drift from `etc_config.c`, and
+  the drift would surface as `config` and the system disagreeing.
+
+**FOUR TOYKIT BUGS, all general, all silent, none specific to the app
+that found them.** Each makes a widget look broken in a way that points
+somewhere else:
+
+- **`uui_listbox` and `uui_radio_list` had no `natural_size`/
+  `set_geometry` in their ops tables**, so neither could be POSITIONED
+  by a layout -- they drew at whatever `init()` was given, on top of
+  their siblings and outside the content area. It reads as a clipping
+  bug.
+- **`uui_radio_list` has no `init()`**, so a metric the caller did not
+  assign stayed 0 -- and `row_h`/`col_w` of 0 makes the control
+  zero-sized: it draws nothing, hit-tests nothing, and reports a natural
+  size of nothing, so a layout gives it no room. Invisible AND
+  unclickable from one unassigned field. It has font-derived defaults
+  now. **A widget set up by field assignment rather than an init() is
+  worth auditing for this shape.**
+- **`hidden` was honoured by the router and NOT by the layout's draw**,
+  while `uui_widget.h` has always promised "not drawn". An app declaring
+  both a layout and `.widgets` (the normal shape) got a control that was
+  unclickable and still perfectly visible -- the page it had hidden
+  painting straight over the page it switched to.
+- **`ops->hit` must cover the WHOLE widget, not the rows.** `uui_table`
+  routed on `uui_table_hit()`, which deliberately excludes the header
+  and the scrollbar column because it answers "which ROW". The router
+  therefore never delivered a press to either, and a header click
+  reached nothing at all. This is the SECOND `ops->hit` trap in this
+  toolkit (the first was returning a row index from a boolean slot).
+
+**Sortable columns, and the split worth copying.** `uui_table` sorts on
+a header click: the WIDGET owns the ordering (an `int order[]`
+permutation) and the APP owns the comparison. That is Win32's
+(`LVN_COLUMNCLICK` + `ListView_SortItems`), Qt's
+(`QSortFilterProxyModel` + `lessThan`) and GTK's (`GtkTreeSortable`)
+split, and **none of them sort the DISPLAYED TEXT** -- which is the part
+to copy. This table's cells are formatted strings, so a text sort puts
+"10" before "9" and orders "4 KB" against "1 MB" meaninglessly. Every
+public row index on the widget stays an APP row, so a selection survives
+a re-sort. Insertion sort because it is STABLE and n is bounded; there
+is no `qsort` here.
+
+**A GUI you cannot test the same way twice: `video=<W>x<H>` and
+`KCMDLINE`.** A user reported VirtualBox booting at 640x480 from the
+Live CD. Two independent causes, and only one was ours -- worth
+separating before "fixing" anything. VirtualBox's VBoxVGA has a short
+VESA mode list, GRUB falls back, and **no code here can change that**
+(there is no modesetting driver for a plain VESA framebuffer; the fix is
+VirtualBox's own `CustomVideoMode1` extradata). But with VMSVGA
+(15ad:0405, what QEMU's `-vga vmware` also presents) `vmsvga.c` IS a
+modesetting driver -- and it was mirroring GRUB's geometry "so the
+takeover is invisible", faithfully re-programming 640x480 on an adapter
+that could do far better. It walks a fallback LADDER now
+(`display_mode_candidate()`), because "the adapter cannot do 1920x1080"
+should mean "then try 1600x900", not "keep whatever GRUB left".
+
+`make iso KCMDLINE="video=1920x1080 nokaslr"` bakes boot words into the
+ISO (also `live-iso`/`demo-iso`), so trying a flag no longer means
+pressing `e` in the GRUB menu every boot. The `grub*.cfg` files carry a
+one-screen summary of `docs/boot-flags.md` for whoever reads them on the
+ISO.
+
+**TESTING LESSONS, and the first two are the ones that matter most:**
+
+- **A positive control that reddens NOTHING means the check is not
+  load-bearing -- and that happened TWICE in one session, on checks I
+  had just written.** The Control Panel tool's hidden-page check
+  compared a widget's band against the WHOLE page's ink, a baseline so
+  much larger that it passed either way; the fix was to measure the SAME
+  RECT in both states. The table's sort check compared only the sort
+  STATE, which a widget can record without applying. **Run the control
+  on a NEW test, not just an old one, and read which checks stayed
+  green.**
+- **"It predates me" is a measurement, not a defence.** A deterministic
+  failure was proved not-mine by checking out the previous commit,
+  rebuilding and seeing it fail identically -- which took one build
+  cycle and turned "I broke this" into a recorded known issue with a
+  precise scope. `TOYOS_ALLOW_STALE_ISO=1` exists partly for this.
+  Then, when the time came to fix it, **the fix was in the TEST**: it
+  took `launched[0]` and assumed that was the process it had just
+  spawned, true only while that list started empty -- which stopped
+  being true when the app it opens first became a ring-3 binary. The
+  scheduler and the reaping were correct the whole time. Measure which
+  pid is which before theorising about the mechanism.
+- **`tools/iso_guard.py` now refuses to boot a stale ISO**, from both
+  `vm.py` and `qmp_test.py`'s `launch_qemu_cmd()`. This is the trap
+  every session hit: `make all` without `make iso`, or a `make iso` that
+  FAILED, leaves the suite testing the previous build and reporting a
+  clean PASS. It caught a real failed build within minutes of existing.
+  Its own first version cried wolf on the first userland-only edit
+  (comparing every tree against `build/kernel.bin`) -- **a guard that
+  false-alarms is a guard people switch off**, so each tree is paired
+  with the artifact it actually feeds.
+- **A test that opens a window changes what a later click hits.** Three
+  sorting checks failed while the widget was perfect, because the test
+  spawned an extra process "so there is something to reorder" and that
+  window took focus, landed on top, and swallowed every header click.
+- **`DebugConsole.spawn()` polls with `logs()`, which CLEARS what it
+  returns** -- so an app's own startup lines are consumed before the
+  tool can read them. Send `gui spawn` directly and drain the log
+  yourself when you need them.
+- **A `gui spawn`ed program's STDOUT is invisible to the test.** It goes
+  to its parent's pipe, not the kernel log; only stderr is readable from
+  outside. Verifying a change by spawning `/bin/config get` does not
+  work -- read the file with `sh cat` instead, which is a stronger
+  independent path anyway.
+- **Ask the app for geometry, including a COLUMN's rect.** The sorting
+  test needed to click a header; deriving the column x from the
+  character widths in `COLUMNS[]` is exactly the re-derivation that has
+  drifted in four tools here. Task Manager reports each column's rect
+  now, and its sort state and row order ON CHANGE rather than once at
+  startup -- a state logged only at open cannot show whether a click did
+  anything.
+- **LOOK at what you drew, again.** The sort arrow was reported by the
+  user, not by the suite: it was drawn at the column's right edge and a
+  RIGHT-aligned title is positioned FROM that same edge, so it landed on
+  the last character. Reserving clip width was not enough -- the edge
+  the text is measured from has to move too. Left-aligned columns were
+  always fine, which is why it looked like a clipping bug.
+
+**Documentation has to live where the reader is looking.** The boot-word
+list went into the top of each `grub*.cfg` -- and GRUB's `e` editor
+shows the menuentry BODY only, so it was invisible to the one person it
+was written for. Reported by the user with a screenshot of the editor.
+It is repeated inside each `menuentry` now, kept to four lines because
+the edit screen is ~20 and a full table would push `multiboot2` and
+`boot` off it. **Verified by booting the live ISO with a menu, pressing
+`e` over QMP and screenshotting it** -- the general form of this repo's
+"LOOK at what you drew" rule, applied to a documentation surface rather
+than a drawn one. Reasoning about GRUB's parser would have been cheaper
+and would not have answered the question.
+
+**Two toolkit additions, both earned by a survey rather than a hunch:**
+`k_strlcat` (two real callers, one of which was an unbounded append that
+overflowed in the shell's `ls`) and `k_isblank` (SIX hand-rolled copies
+of `c == ' ' || c == '\t'`, all deliberately not `k_isspace` because
+`'\n'` terminates a line in every parser here). `kfmt` grew `%Ns`/`%-Ns`
+column padding for the same reason. And the survey's other finding is
+the better lesson: **`k_tolower`/`k_toupper` already existed and four
+places hand-rolled them anyway** -- including `klineedit.c`, whose own
+header comment called the duplicate deliberate. **A header calling its
+own duplicate deliberate is worth re-checking against the code.**
 
 The specific commands below
 were verified current as of the last time this skill was updated, but

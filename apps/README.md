@@ -91,28 +91,45 @@ run their own blocking loop:
 inside the window manager) -- these are event-driven: they never run
 their own loop, the window manager calls their `on_open`/`on_draw`/
 `on_key`/`on_click` callbacks instead. See "Adding a new GUI app" below.
-**Five of these retired in Milestone 41's stage 0**
-(`docs/wm-ring3-design.md`). Notepad, Calculator and Terminal were
+**Every one of them has now retired**, across Milestone 41's stage 0
+and its stage-4 prerequisites (`docs/wm-ring3-design.md`).
+Notepad, Calculator and Terminal were
 DELETED -- their ring-3 twins under `userland/gui/` had been shipping
 alongside them, which is what made that migration verifiable, and
 keeping two of each stopped paying once it was. About and UI Demo were
 PORTED to `userland/gui/` and are launched from the Start menu through
-`exec_path`, exactly as the other ring-3 apps are. What is left below is
-what still runs inside the kernel, and it is the set that moves with the
-window manager itself in stage 4.
+`exec_path`, exactly as the other ring-3 apps are. Task Manager and
+Control Panel followed once the syscalls they needed existed.
 
 The one deliberate loss: the ring-3 About no longer reports the
 filesystem backend and whether it persists. Those are kernel calls with
 no syscall behind them, and stage 0 is the stage that adds no kernel
 capability; `df` and `fsck` report the same two facts meanwhile.
 
-- **Task Manager** (`taskmgr.c`) -- lists every open window (title +
-  normal/minimized/maximized state) and shows system memory (physical
-  RAM and kernel heap, total/used). Redraws every tick alongside the
-  taskbar clock so the numbers stay live. Uses `wm_window_count()`/
-  `wm_get_window()` (`wm/wm.h`) -- a small read-only accessor pair
-  added specifically so an app outside `apps/wm/` can list windows
-  without reaching into `wm_internal.h` (which stays WM-private).
+**Nothing is left. As of 2026-08-17 this directory contains no
+applications at all** -- only the window manager, the shell and their
+support code.
+
+Task Manager went to `userland/gui/system/taskmgr.c` once
+`SYS_PROC_INFO`/`SYS_KILL` existed, and Control Panel to
+`userland/gui/system/cpanel.c` once the settings registry did
+(`kernel/include/api/setting.h` + `SYS_SETTING`, plus `SYS_SYSINFO` for
+its System Info page). Both were on stage 4's prerequisite list anyway,
+so building what they needed is what closed that list.
+
+Two consequences worth knowing:
+
+- **`Exec=builtin:` is gone**, along with the table, the lookup and the
+  struct behind it in `gui_apps.c`. Every `.desktop` entry now names a
+  real binary. An entry still carrying the retired form is refused
+  loudly rather than shown as a menu row that does nothing.
+- **The WM's live-`.desktop`-reload deferral is now unreachable.** It
+  defers a reload while a window holds a `gui_app_registry[]` pointer,
+  and only a kernel-space app ever held one (a ring-3 client's is 0).
+  The guard is kept and still correct; `desktop_entries_test.py`
+  asserts the property that makes it unreachable, so a kernel-space app
+  coming back turns that check red instead of producing a mystery
+  rebinding bug later.
 
 ## The window manager (apps/wm/)
 
@@ -312,17 +329,24 @@ nothing but the idea. See `docs/decisions.md`.)
   caller a future file manager's icon view (`docs/roadmap.md`
   Milestone 22) is expected to be. Deliberately an exception to this
   section's own "wait for a second caller" rule below, not a change to
-  it. **That second caller has since arrived** -- the Control Panel's
-  applet chooser (`apps/control_panel.c`) uses the same cell geometry,
-  though not the drag session (applet icons don't move).
+  it. (A second caller did arrive and has since left: the kernel-space
+  Control Panel's applet chooser used the same cell geometry, and that
+  file was deleted when Control Panel moved to ring 3. The desktop icon
+  grid is the only caller again -- which is worth noting rather than
+  quietly deleting, because it means this widget is back to being the
+  documented exception to the second-caller rule rather than a
+  vindication of it.)
 - **`ui_radio_list.h`/`.c`** -- a single-select list: one row per
   option, the active one marked, laid out in one or more columns
   (`ui_radio_list_size/draw/hit`). The mutual exclusivity
   `ui_checkbox.h` deliberately leaves out. Caller-owned selection and
   labels -- this module knows geometry, drawing and hit-testing only,
-  so the selection can live where it actually belongs (for the timezone
-  applet, that's `tz.c`'s own current index rather than a copy needing
-  to be kept in sync). Hit areas are the full row, not just the marker.
+  so the selection can live where it actually belongs. The worked
+  example used to be the kernel-space Control Panel's timezone applet,
+  whose selection lived in `tz.c`'s own current index rather than a copy
+  needing to be kept in sync; that app is in ring 3 now and its ring-3
+  twin `uui_radio_list` makes the same split against the settings
+  registry. Hit areas are the full row, not just the marker.
   Added ahead of a second caller by explicit request, the same
   acknowledged exception `ui_checkbox` and `ui_icon_grid` above are --
   see `docs/decisions.md`.

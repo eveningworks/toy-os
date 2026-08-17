@@ -89,6 +89,16 @@ make live-iso  KCMDLINE="video=1600x900 nokaslr"
 make demo-iso  KCMDLINE="rammeter"
 ```
 
+**Where this list is repeated, and why.** GRUB's `e` editor shows the
+selected menuentry's BODY and nothing else -- comments at the top of a
+`grub*.cfg` are invisible there, which is precisely where someone about
+to add a boot word is looking. So a four-line summary lives INSIDE each
+menuentry as well, and it is kept short deliberately: the edit screen is
+about twenty lines, so a full table would push `multiboot2` and `boot`
+off it and make the screen worse rather than better. Verified by booting
+the live ISO with a menu and screenshotting the editor, not by reasoning
+about GRUB's parser.
+
 `KCMDLINE` is empty by default, so every automated path -- the boot
 smoke test, `ktest`, CI, `gui_regress.py` -- boots exactly as it did
 before. The substitution happens in the `grub*.cfg` -> `iso*/` step, and

@@ -383,7 +383,7 @@ struct win_event {
 //
 // The `gui` commands the GUI test tools drive the desktop with, carried
 // as protocol messages instead of a direct call from the kernel's serial
-// console into WM internals. All sixteen tools reach the WM this way, so
+// console into WM internals. Every GUI tool reaches the WM this way, so
 // the ~240 checks that prove the desktop works have to cross the
 // transport before the WM itself can move to ring 3 (stage 4).
 //

@@ -483,9 +483,9 @@ technical conventions below:
   turned out NOT to be a blocker: `apps/wm/` allocates nothing, and the
   claim that it did was a comment pointing at a since-deleted file. Read
   that before touching anything in `apps/wm/` with the migration in
-  mind. Its load-bearing point: all 18 GUI test tools drive the WM
+  mind. Its load-bearing point: all 19 GUI test tools drive the WM
   through `wm_debug.c`'s `gui` commands over the KERNEL's serial
-  console, so the 264 checks that prove the desktop works have to move
+  console, so the 271 checks that prove the desktop works have to move
   with it, and that gets its own stage BEFORE the WM moves.
 - **A ring-3 process can own a real window** (`apps/wm/wm_client.c` +
   `kernel/proc/win_server.c`, protocol in
@@ -1080,6 +1080,13 @@ GRUB menu each boot: `make iso KCMDLINE="video=1920x1080 nokaslr"`
 is unaffected. `docs/boot-flags.md` lists every word, and the
 `grub*.cfg` files carry a short summary of it for anyone reading them on
 the ISO.
+
+**GRUB's `e` editor shows the menuentry BODY only**, so the boot-word
+summary is repeated inside each `menuentry` in the three `grub*.cfg`
+files, not just at the top of them -- a comment above `menuentry` is
+never seen by anyone editing the line it documents. Keep the inline copy
+to a few lines: the edit screen is ~20 lines and a full table pushes the
+actual commands off it.
 
 **`video=<W>x<H>` only does something on a MODESETTING driver.**
 `vmsvga` programs the CRTC and honours it; a plain VESA framebuffer
@@ -2103,7 +2110,7 @@ repeated manual steps to be worth automating:
   version of that check stayed green through the positive control.
 - **`gui_regress.py`** -- runs every GUI test tool, each against
   its own freshly-copied disk image and its own VM, and prints one
-  pass/fail table (~1.5 minutes, 264 checks across eighteen tools). This is the standard check
+  pass/fail table (~1.5 minutes, 271 checks across nineteen tools). This is the standard check
   after touching `apps/ui/`, `userland/`, or anything the WM draws.
   Tools are **STARTED longest-first** (`COST_S`/`pick_order()`), because
   a parallel run cannot end before its slowest member does and

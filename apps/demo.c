@@ -150,7 +150,7 @@ void demo_gui_tick(void) {
 
     // Everything else is a `gui` subcommand, dispatched through exactly
     // the path the GUI test tools use (apps/wm/wm_debug.c). Reusing it
-    // means the demo drives the desktop the same way 175 checks already
+    // means the demo drives the desktop the same way the GUI suite already
     // do, rather than through a second injection mechanism that could
     // behave differently.
     char cmd[DEMO_LINE_MAX];
