@@ -13,6 +13,9 @@
 #include "font_ttf.h" // the glyph tables WIN_REQ_FONT shares out
 #include "gfx.h"      // gfx_font_size() -- which variant is active
 #include "win_surface.h" // the compositor's framebuffer grant (M41 stage 4a)
+#include "win_events.h"  // WIN_EV_CLOSE to clients when the desktop dies (R7)
+#include "vga.h"         // vga_resume() -- hand the screen back (R7)
+#include "kfmt.h"        // klog_printf
 #include <stddef.h>
 
 #include "scheduler.h" // SCHED_MAX_PROCS -- this table is per process
@@ -626,6 +629,77 @@ void win_server_client_gone(int pid) {
 
 int win_server_compositor_pid(void) { return g_comp_pid; }
 
+// What happens when the desktop goes away (M41's R7).
+//
+// Reached from ONE place -- the role being cleared below -- so a clean
+// deregistration, a `kill`, and the compositor faulting are the same
+// path. That is the property this whole stage is built on: the exit
+// criterion of the milestone is that killing the WM is SURVIVABLE, and
+// three teardown paths that could drift is how one of them ends up not
+// being.
+//
+// **Client windows are ASKED to close, not destroyed.** R7 originally
+// said "drops every client window", which is what a reader expects until
+// you notice that destroy_window() unmaps and frees the CLIENT's own
+// buffer pages -- so a client that happened to be mid-draw would take a
+// page fault, and the compositor dying would cascade into every app
+// dying with it. That is the opposite of survivable. WIN_EV_CLOSE is
+// already the protocol's "the server wants this window gone"; a
+// well-behaved client exits and its windows are freed through the
+// ordinary win_server_client_gone() path a moment later.
+//
+// The cost, stated rather than hidden: a client that IGNORES the event
+// lingers as a process holding its own buffer, with no window on screen
+// and nothing compositing it. That is a leak, not a crash, and it is the
+// right way round -- the alternative trades a leak for a fault.
+static void compositor_gone(void) {
+    // IS THIS COMPOSITOR THE DESKTOP? That is the question the whole
+    // function is conditional on, and getting it wrong is not subtle.
+    //
+    // `win_server_active()` is true while a presentation layer is
+    // registered, which today means the RING-0 WM owns the screen and
+    // the window list. In that world a compositor releasing the role is
+    // a SECOND consumer leaving (stage 2's design -- compclient and
+    // screenclient come and go routinely), not the desktop dying. Asking
+    // every client to close there tears down live windows the WM is
+    // still drawing: `compositor_test.py` caught exactly that, as UI Demo
+    // going silent the moment the test compositor released the role.
+    //
+    // When the WM itself IS the ring-3 compositor there is no registered
+    // presentation layer, so this proceeds and the user lands at a text
+    // shell -- the milestone's exit criterion. The guard costs nothing
+    // then and can go with the ring-0 WM.
+    if (win_server_active()) {
+        klog_write("win: compositor left, but the ring-0 WM still owns the "
+                   "screen -- clients and console untouched\n");
+        return;
+    }
+
+    int asked = 0;
+    for (int p = 0; p < WIN_SERVER_MAX_PIDS; p++) {
+        for (int i = 0; i < WIN_CLIENT_MAX; i++) {
+            struct client_window *cw = &windows[p][i];
+            if (!cw->used) continue;
+            struct win_event ev;
+            k_memset(&ev, 0, sizeof ev);
+            ev.type = WIN_EV_CLOSE;
+            ev.window = cw->id;
+            win_events_push(cw->pid, &ev);
+            asked++;
+        }
+    }
+
+    // Hand the screen back. Reaching here means nobody else is drawing
+    // it (see the guard at the top), so the last frame the dead desktop
+    // left is all the user would otherwise have -- indistinguishable
+    // from a hang. The console owns its own double buffering, so this
+    // repaints rather than inheriting whatever state the compositor left.
+    vga_resume();
+
+    klog_printf("win: compositor gone -- %d client window(s) asked to close, "
+                "console restored\n", asked);
+}
+
 int win_server_set_compositor(int pid, uint64_t pml4) {
     if (pid < 0 || pid > WIN_SERVER_MAX_PIDS) return 0;
 
@@ -649,8 +723,20 @@ int win_server_set_compositor(int pid, uint64_t pml4) {
         win_surface_revoke(g_comp_pid);
     }
 
+    // Was the role HELD, and is it being given up entirely? Only that
+    // transition is a desktop dying. Handing the role from one
+    // compositor to another is not -- the screen keeps an owner, so
+    // asking every client to close and repainting the text console over
+    // the top of the new desktop would be actively wrong.
+    int was_held = (g_comp_pid != 0);
+
     g_comp_pid = pid;
     g_comp_pml4 = pid ? pml4 : 0;
+
+    // AFTER the registration is cleared, not before: compositor_gone()
+    // pushes events and repaints, and anything it reaches must already
+    // see "there is no compositor" rather than a half-cleared one.
+    if (was_held && pid == 0) compositor_gone();
     return 1;
 }
 

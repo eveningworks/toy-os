@@ -765,8 +765,50 @@ the client's refusal line names WHICH of the three gates said no -- the
 grant, the format, or the heap -- because a bare "REFUSED" is three
 different failures wearing one word.
 
-**R7. Lifecycle, and what happens when the WM dies. DECIDED: the
-kernel restores the text console.** Today `wm_run()` returns and calls
+**R7. Lifecycle -- BUILT (2026-08-17), and one of its decisions was
+WRONG as written.** `win_server.c`'s `compositor_gone()` runs off the
+single role-clear chokepoint stage 4a created, so a clean
+deregistration, a `kill` and a fault are one path.
+
+Two corrections came out of building it:
+
+- **Client windows are ASKED to close, not dropped.** The original text
+  below says the kernel "drops every client window" -- but
+  `destroy_window()` unmaps and frees the CLIENT's own buffer pages, so
+  a client mid-draw would fault and the compositor dying would cascade
+  into every app dying with it. That is the opposite of the milestone's
+  exit criterion. `WIN_EV_CLOSE` already means "the server wants this
+  window gone"; a well-behaved client exits and its windows are freed
+  through the ordinary path. The cost, stated rather than hidden: a
+  client that ignores the event lingers holding its own buffer. That is
+  a leak, and the alternative trades a leak for a fault.
+- **The whole teardown is conditional on this compositor BEING the
+  desktop.** While the ring-0 WM is registered it still owns the screen
+  and the window list, so a stand-in compositor leaving is a second
+  consumer going away (stage 2's design -- `compclient` and
+  `screenclient` come and go routinely), not the desktop dying. The
+  first version missed this and tore down live windows the WM was still
+  drawing; `compositor_test.py` caught it as UI Demo going silent. The
+  guard is `win_server_active()`, and it costs nothing once the WM is
+  the compositor -- there is no registered presentation layer then.
+
+`tools/compositor_death_test.py` (10 checks, in `gui_regress.py`) drives
+it with `screenclient` as a stand-in and `gui kill` -- which had to be
+added, because `gui spawn` had no counterpart and the only killers in
+the tree were Task Manager's button and the force-quit dialog. Its
+positive control is worth reading before trusting it: disabling
+`compositor_gone()` reddens exactly TWO of the ten, because the other
+eight are regression cover for 4a's role-clear work rather than tests of
+this.
+
+**What is still untested is the real path** -- clients actually asked,
+console actually restored -- because it cannot happen while a ring-0 WM
+is registered. It needs a scenario driven from the PHYSICAL shell, where
+no presentation layer exists; the two guarded checks invert there.
+
+The original decision, for the reasoning:
+
+  **DECIDED: the kernel restores the text console.** Today `wm_run()` returns and calls
 `vga_resume()` itself (`wm.c:838`), having first shut the client list
 down in order. In ring 3 that ordering has to survive as a kernel-side
 teardown: `win_server.c` sees the compositor deregister (cleanly, or by

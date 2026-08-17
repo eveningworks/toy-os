@@ -97,7 +97,12 @@ BYPASS_ENV = "TOYOS_ALLOW_STALE_ISO"
 # This is the guard's own rule applied to a new tree: pair each tree with
 # the artifact it actually feeds, because a guard that false-alarms is a
 # guard people switch off. Remove this when 4c seeds the WM for real.
-UNSEEDED = ("build/userland/wm",)
+#
+# BOTH sides of the pairing need it: `build/userland/wm` as an output (a
+# `make toywm` must not make the seed look stale) and `userland/wm` as a
+# SOURCE (editing it must not look like a build that never ran, because
+# `make all` genuinely does not build it).
+UNSEEDED = ("build/userland/wm", "userland/wm")
 
 
 def _newest(root: Path, suffixes=None):

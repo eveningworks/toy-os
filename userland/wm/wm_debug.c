@@ -601,6 +601,27 @@ static void cmd_spawn(struct dbg_out *o, const char *path, const char *args) {
     }
 }
 
+// The other half of `gui spawn`. There was no way for a test to end a
+// process it had started: the only killers were Task Manager's button
+// and the force-quit dialog, which drag an app and a modal into a test
+// about neither. M41's R7 needs a compositor killed OUTRIGHT -- the
+// least graceful of the three teardown paths, and the one a crashing WM
+// actually takes.
+//
+// scheduler_kill() is the same call SYS_KILL makes, so this exercises
+// the real path rather than a test-only shortcut.
+static void cmd_kill(struct dbg_out *o, int pid) {
+    if (pid <= 0) {
+        dbg_out_write(o, "usage: gui kill PID\r\n");
+        return;
+    }
+    if (sys_kill(pid, -1)) {
+        dbg_out_printf(o, "gui: killed pid %d\r\n", pid);
+    } else {
+        dbg_out_printf(o, "gui: no such process %d\r\n", pid);
+    }
+}
+
 static void cmd_close(struct dbg_out *o, int index) {
     if (index < 0 || index >= window_count) {
         dbg_out_printf(o, "gui: no window %d (see `gui windows`)\r\n", index);
@@ -899,6 +920,16 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
         // without it that test had to go through a Terminal to say it.
         while (k_isblank(*p)) p++;
         cmd_spawn(o, path, *p ? p : 0);
+        return 1;
+    }
+
+    if (k_strcmp(sub, "kill") == 0) {
+        int pid;
+        if (!parse_int(next_tok(&p), &pid)) {
+            dbg_out_write(o, "usage: gui kill PID\r\n");
+            return 1;
+        }
+        cmd_kill(o, pid);
         return 1;
     }
 

@@ -1609,6 +1609,7 @@ gui dialog [--json]      the open confirm dialog's message and button CENTRES
 gui compositor [--json]  the registered compositor pid, queue depth, drops
 gui spawn PATH [args]    run a ring-3 binary directly -- no Terminal in the loop
 gui watchdog [<ms>|off]  slow-frame threshold, plus how often it fired
+gui kill PID             end a process -- `gui spawn`'s counterpart
 gui click X Y | gui rclick X Y | gui drag X1 Y1 X2 Y2 | gui key <c> [alt|ctrl|shift]
 ```
 
@@ -2417,6 +2418,17 @@ repeated manual steps to be worth automating:
   where every PATH lookup in the tour failed, because "it booted,
   reached the desktop and opened windows" is satisfied by a tour whose
   every command failed. See `docs/decisions.md`.
+- **`compositor_death_test.py`** -- the compositor death path (M41's
+  R7, 10 checks). Killing the compositor must not panic the kernel, and
+  must not take the desktop with it. Two things it encodes. **The
+  teardown is conditional on that compositor BEING the desktop** -- while
+  the ring-0 WM is registered it still owns the screen, so a stand-in
+  compositor leaving is a second consumer going away, not a desktop
+  dying; the first version tore down live windows and `compositor_test`
+  caught it as UI Demo going silent. And its positive control reddens
+  exactly TWO of the ten, because the other eight are regression cover
+  for stage 4a's role-clear path rather than tests of R7 -- read that
+  before trusting a green run. In `gui_regress.py`.
 - **`compositor_test.py`** -- M41 stage 2's raw input path to a
   registered ring-3 compositor (`userland/tests/compclient.c`), 16
   checks. Its design point: every injected input is asserted TWICE, once
