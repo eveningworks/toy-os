@@ -110,6 +110,11 @@ static struct uui_button_group g_group;
 // it was aimed at.
 static int g_armed;
 
+// Named, so compare_rows() below and this array cannot drift: a column
+// inserted in the middle otherwise silently re-points every case in the
+// comparator at its neighbour.
+enum { COL_PID = 0, COL_NAME, COL_STATE, COL_CPU, COL_MEM };
+
 static const struct uui_table_column COLUMNS[] = {
     { "PID",    6, UUI_TALIGN_RIGHT },
     { "Name",   0, UUI_TALIGN_LEFT  }, // stretches with the window
@@ -118,6 +123,37 @@ static const struct uui_table_column COLUMNS[] = {
     { "Memory", 10, UUI_TALIGN_RIGHT },
 };
 #define COL_COUNT ((int)(sizeof COLUMNS / sizeof COLUMNS[0]))
+
+static const char *state_name(unsigned s);
+
+// The whole app-side cost of sortable columns: answer "does row a come
+// before row b in this column?" on the REAL values. The table owns
+// everything else -- the clickable header, the arrow,
+// click-again-to-reverse, keyboard motion in the sorted order -- so
+// nothing else in this file mentions sorting.
+//
+// Comparing the real fields rather than the formatted cells is the
+// point (see uui_table.h): "10" sorts before "9" as text, and 4 KB
+// against 1 MB is meaningless, so three of these five columns would be
+// wrong if the widget sorted what it draws.
+static int compare_rows(void *ctx, int a, int b, int col) {
+    (void)ctx;
+    const struct row *x = &g_rows[a], *y = &g_rows[b];
+    switch (col) {
+    case COL_PID:   return x->pid - y->pid;
+    case COL_NAME:  return strcmp(x->name, y->name);
+    case COL_STATE: return strcmp(state_name(x->state), state_name(y->state));
+    case COL_CPU:   return (int)x->cpu_pct - (int)y->cpu_pct;
+    case COL_MEM:
+        // NOT a subtraction: these are unsigned longs, and a difference
+        // that does not fit an int is the classic comparator bug --
+        // it makes the sort order depend on how far apart two values
+        // happen to be.
+        if (x->mem_bytes < y->mem_bytes) return -1;
+        return x->mem_bytes > y->mem_bytes ? 1 : 0;
+    default: return 0;
+    }
+}
 
 static const char *state_name(unsigned s) {
     switch (s) {
@@ -272,6 +308,45 @@ static void on_widget(struct uapp *a, int id, int reason) {
     uapp_redraw(a);
 }
 
+// The sort state, the column rects and the pids IN SCREEN ORDER.
+//
+// Reported when they CHANGE, not once at startup: a sort state logged
+// only at open cannot show whether a header click did anything, which
+// is the whole question a sorting test asks. Same reasoning as the
+// table's own rect being re-reported on resize, one bug later.
+static void report_sort(int force) {
+    char order[160];
+    int n = 0;
+    order[0] = '\0';
+    for (int i = 0; i < g_row_count && n < (int)sizeof order - 8; i++) {
+        int src = uui_table_source_row(&g_table, i);
+        if (src < 0) break;
+        n += snprintf(order + n, sizeof order - n, "%s%d",
+                      i ? " " : "", g_rows[src].pid);
+    }
+
+    static int last_col = -99, last_dir = 0;
+    static char last_order[160];
+    if (!force && g_table.sort_col == last_col && g_table.sort_dir == last_dir
+        && strcmp(order, last_order) == 0) {
+        return;
+    }
+    last_col = g_table.sort_col;
+    last_dir = g_table.sort_dir;
+    strlcpy(last_order, order, sizeof last_order);
+
+    logf_("taskmgr: sort col %d dir %d\n", g_table.sort_col, g_table.sort_dir);
+    // Each column's own rect, so a test can click a HEADER without
+    // re-deriving column widths from the character counts in COLUMNS[]
+    // -- the re-derivation that has drifted in four tools here already.
+    for (int c = 0; c < COL_COUNT; c++) {
+        int colx, colw;
+        uui_table_column_rect(&g_table, c, &colx, &colw);
+        logf_("taskmgr: layout col%d %d %d\n", c, colx, colw);
+    }
+    logf_("taskmgr: order %s\n", order);
+}
+
 static int on_tick(struct uapp *a) {
     // Report the table's rect whenever it CHANGES, not just at open.
     // A geometry logged once at startup cannot show whether a resize
@@ -295,6 +370,7 @@ static int on_tick(struct uapp *a) {
     }
 
     refresh();
+    report_sort(0);
     (void)a;
     return 1; // repaint
 }
@@ -322,6 +398,13 @@ static void on_open(struct uapp *a) {
             g_buttons[BTN_KILL].x, g_buttons[BTN_KILL].y,
             g_buttons[BTN_KILL].w, g_buttons[BTN_KILL].h);
     logf_("taskmgr: rows %d\n", g_row_count);
+
+    // The sort state, and the pids IN SCREEN ORDER. The order line is
+    // what makes a sorting test assertable at all: "the table changed"
+    // is satisfied by a repaint, and reading the order out of pixels
+    // would mean OCR. This is the same rule as every other layout line
+    // here -- ask the app, do not re-derive.
+    report_sort(1);
 }
 
 static void on_size(int *w, int *h) {
@@ -355,6 +438,12 @@ static struct uui_layout LAYOUT;
 
 int main(void) {
     uui_table_init(&g_table, 0, 0, 100, 100, COLUMNS, COL_COUNT, cell, 0);
+    // Opting in is one call. Sorted by PID ascending to start with,
+    // which is the order the process table is already in -- so the
+    // opening view is unchanged and the first header click is the first
+    // thing that visibly reorders anything.
+    uui_table_set_compare(&g_table, compare_rows);
+    uui_table_set_sort(&g_table, COL_PID, 1);
 
     // Labels and codes only -- the RECTS are set in on_size(), because
     // the font does not exist yet at this point and every font-derived

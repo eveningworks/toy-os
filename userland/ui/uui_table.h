@@ -38,6 +38,44 @@
 typedef void (*uui_table_cell_fn)(void *ctx, int row, int col,
                                    char *out, int cap);
 
+// --- sorting ----------------------------------------------------------
+//
+// THE SPLIT, and it is the one every real toolkit makes: the WIDGET
+// owns the ordering, the APP owns the comparison.
+//
+//   * Win32's ListView sends LVN_COLUMNCLICK and the app calls
+//     ListView_SortItems() with a comparator; the control permutes its
+//     own items.
+//   * Qt's QSortFilterProxyModel keeps a row mapping and compares
+//     through lessThan(), which the app overrides.
+//   * GTK's GtkTreeSortable takes a sort function per column.
+//
+// None of them sort the DISPLAYED TEXT, and that is the part worth
+// copying rather than the API shape: this table's cells are formatted
+// strings, so a text sort puts "10" before "9" and orders "4 KB"
+// against "1 MB" meaninglessly -- three of Task Manager's five columns
+// would be wrong. Qt's default only works because its models hand back
+// typed values. Comparing has to happen on the app's real data, which
+// only the app can reach.
+//
+// So an app supplies this and gets everything else -- the clickable
+// header, the arrow, click-again-to-reverse, and keyboard motion in the
+// sorted order -- without writing any of it.
+//
+// Returns <0, 0 or >0 for a ASCENDING before/equal/after b, exactly
+// like C's qsort comparator. `row_a`/`row_b` are the app's OWN row
+// indices (the same ones `cell` is called with), never view positions.
+typedef int (*uui_table_cmp_fn)(void *ctx, int row_a, int row_b, int col);
+
+// The permutation is a fixed array because Toykit has no allocator.
+// Past this many rows the table shows the first UUI_TABLE_MAX_ROWS in
+// sorted order and the rest unsorted after them, rather than silently
+// dropping any -- see uui_table.c. Task Manager's ceiling is
+// SYS_PROC_MAX (64).
+#define UUI_TABLE_MAX_ROWS 256
+
+#define UUI_TABLE_UNSORTED (-1)
+
 #define UUI_TALIGN_LEFT  0
 #define UUI_TALIGN_RIGHT 1 // numbers -- a right-aligned column of sizes
                             // is readable in a way a ragged one is not
@@ -59,6 +97,22 @@ struct uui_table {
 
     uui_table_cell_fn cell;
     void *ctx;
+
+    // Sorting. `compare` NULL means this table does not sort: the
+    // header is inert and no arrow is drawn, so an app opts in purely
+    // by supplying a comparator.
+    uui_table_cmp_fn compare;
+    int sort_col;   // UUI_TABLE_UNSORTED, or a column index
+    int sort_dir;   // 1 ascending, -1 descending
+
+    // view row -> app row. Rebuilt by uui_table_set_rows() and by
+    // uui_table_set_sort(), which is why an app that already calls
+    // set_rows() after refreshing its data needs no other hook.
+    // `order_rows` is what it was built for, so a row_count that
+    // changed without a rebuild is detectable rather than silently
+    // indexing stale positions.
+    int order[UUI_TABLE_MAX_ROWS];
+    int order_rows;
 
     int selected;   // row index, or -1
     int hovered;    // OWNED -- driven by uui_table_hover()
@@ -85,6 +139,28 @@ void uui_table_init(struct uui_table *t, int x, int y, int w, int h,
 // `selected` so neither points past the end -- which is the whole
 // reason this is a function rather than an assignment.
 void uui_table_set_rows(struct uui_table *t, int row_count);
+
+// Turns sorting on: `compare` is called to order rows, and the header
+// becomes clickable. Pass NULL to turn it off again.
+void uui_table_set_compare(struct uui_table *t, uui_table_cmp_fn compare);
+
+// Sorts by `col` in `dir` (1 ascending, -1 descending), or clears the
+// sort with col = UUI_TABLE_UNSORTED. Rebuilds the order immediately.
+void uui_table_set_sort(struct uui_table *t, int col, int dir);
+
+// The APP's row index for a view position, and the inverse. Every
+// public function that names a row -- `selected`, `hovered`,
+// uui_table_hit() -- speaks the APP's indices, so an app that sorts is
+// otherwise unchanged and a selection SURVIVES a re-sort instead of
+// jumping to whatever landed in that slot. These two exist for the
+// tests and for an app that needs to reason about screen order.
+int  uui_table_source_row(const struct uui_table *t, int view_row);
+int  uui_table_view_row(const struct uui_table *t, int source_row);
+
+// Which column's HEADER is at (cx, cy), or -1. Public for the same
+// reason uui_table_column_rect() is: a test clicks a header without
+// re-deriving its geometry in Python.
+int  uui_table_header_hit(const struct uui_table *t, int cx, int cy);
 
 int  uui_table_row_h(const struct uui_table *t);
 int  uui_table_header_h(const struct uui_table *t);

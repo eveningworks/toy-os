@@ -390,6 +390,20 @@ technical conventions below:
   not a lock**: two launches in the same instant can both be told
   "nobody there", which is recorded rather than fixed because every
   launch path here is a human clicking a menu. See `docs/decisions.md`.
+- **`uui_table` sorts on a header click, and an app supplies only a
+  COMPARATOR.** `uui_table_set_compare()` + `uui_table_set_sort()`; the
+  widget owns the ordering (an `int order[]` permutation), the clickable
+  header, the arrow and the toggle-to-reverse rule, exactly as Win32's
+  `ListView_SortItems` and Qt's `lessThan` split it. **It cannot sort
+  the text it draws** -- cells are formatted strings, so "10" would come
+  before "9" and "4 KB" against "1 MB" is meaningless; comparison has to
+  be on the app's real values. Every public row index on the widget is
+  an APP row, not a screen position, so a selection survives a re-sort
+  and an app that sorts is otherwise unchanged. Two traps it exposed:
+  a widget's `ops->hit` must cover the WHOLE widget (routing on the
+  row-only hit meant header and scrollbar presses reached nothing), and
+  anything comparing `selected` against `top` is mixing an app row with
+  a view offset. See `docs/decisions.md`.
 - **`uui_table` is the multi-column widget** (`userland/ui/uui_table.h`)
   -- columns with per-column width (in CHARACTERS, or 0 to stretch) and
   alignment, a header, selection, scrolling. **It PULLS its rows through

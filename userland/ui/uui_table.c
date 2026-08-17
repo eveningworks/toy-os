@@ -29,6 +29,12 @@ void uui_table_init(struct uui_table *t, int x, int y, int w, int h,
     t->row_h = 0; // derive from the font
     t->bar_w = 8;
     t->thumb_grab = -1;
+    // Sorting off until an app supplies a comparator, so a table that
+    // says nothing about sorting behaves exactly as it did before.
+    t->compare = 0;
+    t->sort_col = UUI_TABLE_UNSORTED;
+    t->sort_dir = 1;
+    t->order_rows = 0;
 
     t->bg = ugfx_rgb(255, 255, 255);
     t->fg = ugfx_rgb(20, 20, 20);
@@ -70,6 +76,78 @@ static void table_clamp(struct uui_table *t) {
     if (t->top < 0) t->top = 0;
 }
 
+// --- sorting ----------------------------------------------------------
+//
+// See uui_table.h for why the app compares and the widget permutes.
+// Everything below maintains `order`, a view-position -> app-row map;
+// identity when there is no sort, so every caller can go through it
+// unconditionally and there is no second, unsorted code path to keep
+// in step.
+
+static void order_identity(struct uui_table *t) {
+    int n = t->row_count;
+    if (n > UUI_TABLE_MAX_ROWS) n = UUI_TABLE_MAX_ROWS;
+    for (int i = 0; i < n; i++) t->order[i] = i;
+    t->order_rows = t->row_count;
+}
+
+static void order_rebuild(struct uui_table *t) {
+    order_identity(t);
+    if (!t->compare || t->sort_col < 0 || t->sort_col >= t->col_count) return;
+
+    int n = t->row_count;
+    if (n > UUI_TABLE_MAX_ROWS) n = UUI_TABLE_MAX_ROWS;
+
+    // Insertion sort: STABLE, which is what makes a second sort on a
+    // different column keep the previous column's order within ties --
+    // the behaviour every desktop table has. Also correct at n = 0 and
+    // 1 with no special cases, and n is bounded by UUI_TABLE_MAX_ROWS,
+    // so the quadratic worst case is 256 rows of a handful of
+    // comparisons. There is no qsort in this toolkit.
+    for (int i = 1; i < n; i++) {
+        int v = t->order[i];
+        int j = i - 1;
+        while (j >= 0) {
+            int c = t->compare(t->ctx, t->order[j], v, t->sort_col) * t->sort_dir;
+            if (c <= 0) break;   // <= keeps equal elements in place: stable
+            t->order[j + 1] = t->order[j];
+            j--;
+        }
+        t->order[j + 1] = v;
+    }
+}
+
+int uui_table_source_row(const struct uui_table *t, int view_row) {
+    if (view_row < 0 || view_row >= t->row_count) return -1;
+    // Past the permutation's capacity, or built for a different row
+    // count: fall back to identity rather than reading a stale slot.
+    // Showing the tail unsorted is a visible oddity; indexing the wrong
+    // row is a silent one.
+    if (view_row >= UUI_TABLE_MAX_ROWS || t->order_rows != t->row_count) return view_row;
+    return t->order[view_row];
+}
+
+int uui_table_view_row(const struct uui_table *t, int source_row) {
+    if (source_row < 0 || source_row >= t->row_count) return -1;
+    if (source_row >= UUI_TABLE_MAX_ROWS || t->order_rows != t->row_count) return source_row;
+    for (int i = 0; i < t->row_count && i < UUI_TABLE_MAX_ROWS; i++) {
+        if (t->order[i] == source_row) return i;
+    }
+    return source_row;
+}
+
+void uui_table_set_compare(struct uui_table *t, uui_table_cmp_fn compare) {
+    t->compare = compare;
+    order_rebuild(t);
+}
+
+void uui_table_set_sort(struct uui_table *t, int col, int dir) {
+    if (col < UUI_TABLE_UNSORTED || col >= t->col_count) return;
+    t->sort_col = col;
+    t->sort_dir = dir < 0 ? -1 : 1;
+    order_rebuild(t);
+}
+
 void uui_table_set_rows(struct uui_table *t, int row_count) {
     t->row_count = row_count;
     // Both of these move on every refresh in a task manager: processes
@@ -77,6 +155,12 @@ void uui_table_set_rows(struct uui_table *t, int row_count) {
     // has to think about it.
     if (t->selected >= row_count) t->selected = row_count > 0 ? row_count - 1 : -1;
     if (t->hovered >= row_count) t->hovered = -1;
+    // The app just told us its data changed, so the permutation is what
+    // is stale. Rebuilding HERE is why an app that already calls this
+    // after a refresh needs no sorting hook of its own -- Task Manager
+    // re-reads the process table several times a second and says
+    // nothing about sorting beyond supplying the comparator.
+    order_rebuild(t);
     table_clamp(t);
 }
 
@@ -170,8 +254,32 @@ void uui_table_draw(struct ugfx_surface *s, const struct uui_table *t) {
             int tw = ugfx_text_width(title);
             if (tw < avail) tx = cx + cw - UUI_TABLE_PAD_X - tw;
         }
+        // The sort arrow, and the column title shortened to make room
+        // for it -- otherwise a title that exactly fills its column
+        // would be overprinted by the arrow rather than clipped, which
+        // is the failure gfx_draw_string_clipped() exists to prevent.
+        int arrow = (t->compare && c == t->sort_col) ? ugfx_char_w() : 0;
         ugfx_draw_string_clipped(s, tx, t->y + (hh - ugfx_char_h()) / 2,
-                                  avail, title, t->head_fg, t->head_bg);
+                                  avail - arrow, title, t->head_fg, t->head_bg);
+        if (arrow) {
+            // Drawn as stacked rows rather than a glyph: the baked font
+            // has no arrow character, and a triangle built from the
+            // font's own cell size stays font-derived per
+            // docs/gui-guidelines.md.
+            int aw = ugfx_char_w();
+            int ah = aw / 2 > 2 ? aw / 2 : 2;
+            int ax = cx + cw - UUI_TABLE_PAD_X - aw;
+            int ay = t->y + (hh - ah) / 2;
+            for (int r = 0; r < ah; r++) {
+                // Ascending points UP, which is the direction the
+                // smallest value is: same as Windows and KDE.
+                int row = (t->sort_dir > 0) ? r : ah - 1 - r;
+                int inset = (ah - 1 - row) * aw / (2 * ah);
+                int rw = aw - 2 * inset;
+                if (rw < 1) rw = 1;
+                ugfx_fill_rect(s, ax + inset, ay + r, rw, 1, t->head_fg);
+            }
+        }
         // Column separator, header only -- a full grid turns a dense
         // table into graph paper, and every desktop table draws the
         // header rule and leaves the body clean.
@@ -181,8 +289,12 @@ void uui_table_draw(struct ugfx_surface *s, const struct uui_table *t) {
 
     // --- rows ---
     for (int i = 0; i < vis; i++) {
-        int idx = t->top + i;
-        if (idx >= t->row_count) break;
+        if (t->top + i >= t->row_count) break;
+        // The app's row for this SCREEN position. `selected` and
+        // `hovered` are app rows too, so the comparisons below are
+        // apples to apples and a selection survives a re-sort.
+        int idx = uui_table_source_row(t, t->top + i);
+        if (idx < 0) break;
         int ry = t->y + hh + i * rh;
 
         uint32_t rbg = t->bg, rfg = t->fg;
@@ -226,14 +338,26 @@ void uui_table_natural_size(const struct uui_table *t, int *out_w, int *out_h) {
     if (out_h) *out_h = uui_table_header_h(t) + uui_table_row_h(t) * 6;
 }
 
+int uui_table_header_hit(const struct uui_table *t, int cx, int cy) {
+    if (!uui_hit(t->x, t->y, t->w, uui_table_header_h(t), cx, cy)) return -1;
+    for (int c = 0; c < t->col_count; c++) {
+        int colx, colw;
+        uui_table_column_rect(t, c, &colx, &colw);
+        if (cx >= colx && cx < colx + colw) return c;
+    }
+    return -1;
+}
+
 int uui_table_hit(const struct uui_table *t, int cx, int cy) {
     int bar = uui_table_scrollbar_visible(t) ? t->bar_w : 0;
     int hh = uui_table_header_h(t);
     if (!uui_hit(t->x, t->y + hh, t->w - bar, t->h - hh, cx, cy)) return -1;
     int rh = uui_table_row_h(t);
-    int idx = t->top + (cy - t->y - hh) / rh;
-    if (idx < 0 || idx >= t->row_count) return -1;
-    return idx;
+    int view = t->top + (cy - t->y - hh) / rh;
+    if (view < 0 || view >= t->row_count) return -1;
+    // The APP's row, not the screen position -- every public row index
+    // on this widget means the same thing (uui_table.h).
+    return uui_table_source_row(t, view);
 }
 
 int uui_table_hover(struct uui_table *t, int cx, int cy) {
@@ -244,6 +368,21 @@ int uui_table_hover(struct uui_table *t, int cx, int cy) {
 }
 
 int uui_table_click(struct uui_table *t, int cx, int cy) {
+    // A header click sorts, and only when the app opted in by supplying
+    // a comparator -- otherwise the header stays inert rather than
+    // becoming a control that highlights and does nothing.
+    if (t->compare) {
+        int col = uui_table_header_hit(t, cx, cy);
+        if (col >= 0) {
+            // Clicking the SAME column reverses; a different one starts
+            // ascending. That is the rule on every desktop, and the
+            // reason it is here rather than in each app.
+            if (col == t->sort_col) uui_table_set_sort(t, col, -t->sort_dir);
+            else                    uui_table_set_sort(t, col, 1);
+            return 1;
+        }
+    }
+
     int idx = uui_table_hit(t, cx, cy);
     if (idx < 0 || idx == t->selected) return 0;
     t->selected = idx;
@@ -326,8 +465,14 @@ int uui_table_wheel(struct uui_table *t, int notches) {
 
 static void table_reveal(struct uui_table *t) {
     int vis = uui_table_visible_rows(t);
-    if (t->selected < t->top) t->top = t->selected;
-    else if (t->selected >= t->top + vis) t->top = t->selected - vis + 1;
+    // `top` is a VIEW offset and `selected` is an APP row, so the two
+    // are only interchangeable while the table is unsorted. Comparing
+    // them directly scrolls to wherever that app row happens to sit in
+    // the underlying data, which once sorted is not where it is drawn.
+    int view = uui_table_view_row(t, t->selected);
+    if (view < 0) return;
+    if (view < t->top) t->top = view;
+    else if (view >= t->top + vis) t->top = view - vis + 1;
     table_clamp(t);
 }
 
@@ -336,16 +481,24 @@ int uui_table_key(struct uui_table *t, int key) {
     int before = t->selected;
     int vis = uui_table_visible_rows(t);
 
-    if (key == KEY_ARROW_UP)        { if (t->selected > 0) t->selected--; }
-    else if (key == KEY_ARROW_DOWN) { if (t->selected < t->row_count - 1) t->selected++; }
-    else if (key == KEY_HOME)       { t->selected = 0; }
-    else if (key == KEY_END)        { t->selected = t->row_count - 1; }
-    else if (key == KEY_PAGE_UP)    { t->selected -= vis;
-                                       if (t->selected < 0) t->selected = 0; }
-    else if (key == KEY_PAGE_DOWN)  { t->selected += vis;
-                                       if (t->selected >= t->row_count) t->selected = t->row_count - 1; }
+    // Motion happens in VIEW order and is converted back at the end:
+    // Down must move to the row visibly BELOW, which is not
+    // selected + 1 once the table is sorted. Doing this in app indices
+    // is the bug that makes arrow keys jump around a sorted table.
+    int view = uui_table_view_row(t, t->selected);
+    if (view < 0) view = 0;
+
+    if (key == KEY_ARROW_UP)        { if (view > 0) view--; }
+    else if (key == KEY_ARROW_DOWN) { if (view < t->row_count - 1) view++; }
+    else if (key == KEY_HOME)       { view = 0; }
+    else if (key == KEY_END)        { view = t->row_count - 1; }
+    else if (key == KEY_PAGE_UP)    { view -= vis; if (view < 0) view = 0; }
+    else if (key == KEY_PAGE_DOWN)  { view += vis;
+                                       if (view >= t->row_count) view = t->row_count - 1; }
     else return 0;
 
+    if (view < 0) view = 0;
+    t->selected = uui_table_source_row(t, view);
     if (t->selected < 0) t->selected = 0;
     table_reveal(t);
     return t->selected != before;
@@ -378,7 +531,19 @@ static void tb_ops_draw(struct ugfx_surface *s, const void *w) {
 // the first row of the table silently cannot be selected while every
 // other row works. See uui_listbox.c, which had the identical bug.
 static int tb_ops_hit(const void *w, int cx, int cy) {
-    return uui_table_hit((const struct uui_table *)w, cx, cy) >= 0;
+    // The WHOLE widget, not just its rows. uui_table_hit() deliberately
+    // excludes the header and the scrollbar column -- it answers "which
+    // ROW", a different question -- so routing on it meant the router
+    // never delivered a press to either. The scrollbar had been working
+    // only because a press on it also lands inside no row and was
+    // reaching uui_table_press() by way of a hit on a NEIGHBOURING row;
+    // a header click landed on nothing at all and was silently dropped,
+    // which is why clicking a column title appeared to do nothing.
+    //
+    // Same distinction uui_listbox's lb_ops_bounds() already draws, and
+    // for the same reason.
+    const struct uui_table *t = (const struct uui_table *)w;
+    return uui_hit(t->x, t->y, t->w, t->h, cx, cy);
 }
 
 static int tb_ops_key(void *w, int key, unsigned mods) {

@@ -6,8 +6,21 @@ WHAT IS UNDER TEST
 Three things that arrived together and that nothing else covers:
 
   1. `uui_table` -- the first multi-column widget. Columns, a header,
-     selection, and REFLOW: the table has to follow its window in BOTH
-     axes.
+     selection, REFLOW (the table has to follow its window in BOTH
+     axes) and SORTING.
+
+     The sorting checks assert the ORDER, not just the sort state: a
+     positive control (making the permutation always identity) leaves
+     "the state changed" green and reddens only the order assertion,
+     because the widget can perfectly well record a sort it never
+     applies. The order comes from the app's own `taskmgr: order` line
+     -- reading it out of pixels would mean OCR.
+
+     One trap already paid for here: the first version of these checks
+     spawned an extra process "so there is something to reorder", and
+     that new window took focus, landed ON TOP of Task Manager and
+     swallowed every header click. Three checks failed while the widget
+     was working perfectly. Nothing in this section opens a window.
   2. The per-process accounting behind it (SYS_PROC_INFO): a spawned
      process must actually appear, by name, with plausible memory.
   3. Ending a process -- End Process (SYS_KILL) and End Task (the
@@ -97,6 +110,18 @@ def layout(dbg):
         m3 = re.search(r"taskmgr: rows (\d+)", line)
         if m3:
             out["rows"] = int(m3.group(1))
+        m4 = re.search(r"taskmgr: sort col (-?\d+) dir (-?\d+)", line)
+        if m4:
+            out["sort"] = (int(m4.group(1)), int(m4.group(2)))
+        # The pids in SCREEN order. Read from the app rather than from
+        # pixels, which would mean OCR -- and asserted on directly,
+        # because "the table repainted" is satisfied by anything.
+        m6 = re.search(r"taskmgr: layout col(\d+) (-?\d+) (\d+)", line)
+        if m6:
+            out[f"col{m6.group(1)}"] = (int(m6.group(2)), int(m6.group(3)))
+        m5 = re.search(r"taskmgr: order (.*)$", line)
+        if m5:
+            out["order"] = [int(v) for v in m5.group(1).split() if v.strip().isdigit()]
     return out
 
 
@@ -181,6 +206,76 @@ def main():
           f"+{dw}px of ~{grow_x}")
     check("the table GROWS TALLER with the window", dh >= grow_y * 0.6,
           f"+{dh}px of ~{grow_y}")
+
+    # --- sortable columns --------------------------------------------
+    #
+    # The widget owns the ordering and the app owns the comparison (see
+    # ui/uui_table.h), so what is under test here is the WIDGET: the
+    # clickable header, the toggle-to-reverse rule, and the permutation
+    # actually reaching the drawn rows.
+    win = window(dbg)
+    cx, cy = win["content"]["x"], win["content"]["y"]
+    lay = layout(dbg)
+    tx, ty, _, _ = lay["table"]
+
+    # NO extra spawn here. The first version opened a second VICTIM to
+    # guarantee something to reorder -- and that new window took focus,
+    # landed on top of Task Manager, and swallowed every header click
+    # below. The checks failed while the widget was working perfectly.
+    # The rows already present (the WM's own launch, the victim, Task
+    # Manager) are enough, and the check below proves it rather than
+    # assuming it.
+    lay = layout(dbg)
+    order_before = lay.get("order", [])
+    check("more than one row, so an order is meaningful",
+          len(order_before) >= 2, f"{order_before}")
+
+    check("it starts sorted by PID ascending",
+          lay.get("sort") == (0, 1) and order_before == sorted(order_before),
+          f"sort={lay.get('sort')} order={order_before}")
+
+    # Click the PID header. Same column -> REVERSE, which is the rule
+    # every desktop table follows and the reason it lives in the widget.
+    hdr_y = cy + ty + lay["header_h"] // 2
+    col0 = lay.get("col0", (0, 40))
+    hdr_x = cx + col0[0] + col0[1] // 2
+    dbg.send("gui click %d %d" % (hdr_x, hdr_y))
+    dbg.settle()
+    time.sleep(0.8)
+    lay = layout(dbg)
+    order_desc = lay.get("order", [])
+    check("clicking the sorted column REVERSES it",
+          lay.get("sort") == (0, -1) and order_desc == sorted(order_before, reverse=True),
+          f"sort={lay.get('sort')} order={order_desc}")
+
+    # A DIFFERENT column starts ascending rather than inheriting the
+    # previous direction -- also the desktop rule, and easy to get wrong.
+    name_col = lay.get("col1")
+    if not check("it reports each column's rect", name_col is not None,
+                 f"col1={name_col}"):
+        name_col = (tx, 80)
+    name_x, name_w = name_col
+    dbg.send("gui click %d %d" % (cx + name_x + name_w // 2, hdr_y))
+    dbg.settle()
+    time.sleep(0.8)
+    lay = layout(dbg)
+    check("a DIFFERENT column starts ascending, not reversed",
+          lay.get("sort", (None, None))[1] == 1 and lay.get("sort", (None,))[0] != 0,
+          f"sort={lay.get('sort')}")
+
+    # Back to PID ascending, so the checks below see the order they
+    # were written against. A test must establish its own preconditions.
+    dbg.send("gui click %d %d" % (hdr_x, hdr_y))
+    dbg.settle()
+    time.sleep(0.5)
+    lay = layout(dbg)
+    if lay.get("sort") == (0, -1):
+        dbg.send("gui click %d %d" % (hdr_x, hdr_y))
+        dbg.settle()
+        time.sleep(0.5)
+        lay = layout(dbg)
+    check("it can be put back to PID ascending",
+          lay.get("sort") == (0, 1), f"sort={lay.get('sort')}")
 
     # --- selecting a row, and ending a process ------------------------
     win = window(dbg)

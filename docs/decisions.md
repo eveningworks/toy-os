@@ -131,6 +131,7 @@ there when you add an entry, or the index quietly stops being one.
 - [A lone button routes its own clicks; the group is for grids](#a-lone-button-routes-its-own-clicks-the-group-is-for-grids)
 - [A natural size must not depend on where the widget currently sits](#a-natural-size-must-not-depend-on-where-the-widget-currently-sits)
 - [A widget's ops->hit is a boolean, and a row index is not one](#a-widgets-ops-hit-is-a-boolean-and-a-row-index-is-not-one)
+- [Sorting: the widget owns the order, the app owns the comparison](#sorting-the-widget-owns-the-order-the-app-owns-the-comparison)
 - [The ring-3 UI Demo selects on contact where the kernel one committed on release](#the-ring-3-ui-demo-selects-on-contact-where-the-kernel-one-committed-on-release)
 - [A compositor's view of a window is at a DERIVED address, and revocation is the feature](#a-compositors-view-of-a-window-is-at-a-derived-address-and-revocation-is-the-feature)
 - [The third inert scrollbar: drawing one and handling it are separate jobs](#the-third-inert-scrollbar-drawing-one-and-handling-it-are-separate-jobs)
@@ -891,6 +892,58 @@ after it was written down).
 
 See `apps/control_panel.c`'s top comment and CHANGELOG.md's
 `[Unreleased]`.
+
+## Sorting: the widget owns the order, the app owns the comparison
+
+`uui_table` sorts on a header click. The split is the decision, and it
+is the one Win32, Qt and GTK all make:
+
+- Win32's ListView sends `LVN_COLUMNCLICK` and the app calls
+  `ListView_SortItems()` with a comparator; the CONTROL permutes its
+  own items.
+- Qt's `QSortFilterProxyModel` keeps a row mapping and compares through
+  `lessThan()`, which the app overrides.
+- GTK's `GtkTreeSortable` takes a sort function per column.
+
+So an app supplies one `uui_table_cmp_fn` and gets the clickable
+header, the arrow, click-again-to-reverse, and keyboard motion in the
+sorted order without writing any of it. Task Manager's whole cost is a
+13-line `compare_rows()`.
+
+**Why the widget cannot just sort what it draws**, which is the obvious
+alternative and the one that needs no app code at all: this table's
+cells are FORMATTED STRINGS pulled through a callback. Sorting them
+puts "10" before "9" and orders "4 KB" against "1 MB" meaninglessly --
+three of Task Manager's five columns would be silently wrong. Qt's
+default comparison only works because its models hand back typed
+values; ours hands back display text. Comparing has to happen on the
+app's real data, which only the app can reach.
+
+**Why the widget owns the permutation rather than asking the app to
+reorder its own rows.** The table stores no rows at all (see the entry
+on pulling rows), so it has nothing to sort -- but it does own
+`selected`, `hovered` and `top`, all of which mean different things
+before and after a reorder. Keeping the mapping inside is what lets
+every public row index on the widget stay an APP row: a selection
+survives a re-sort instead of jumping to whatever landed in that slot,
+and an app that sorts is otherwise unchanged.
+
+The cost is a fixed `int order[UUI_TABLE_MAX_ROWS]` (256), because
+Toykit has no allocator. Past that the tail shows unsorted rather than
+being dropped -- a visible oddity beats a silent one, and Task
+Manager's ceiling is `SYS_PROC_MAX` (64).
+
+**The insertion sort is deliberate**, not a placeholder: it is STABLE,
+which is what makes a second sort on another column keep the previous
+column's order within ties -- the behaviour every desktop table has --
+and n is bounded at 256. There is no `qsort` in this toolkit.
+
+**Two bugs this turned up, both silent.** `tb_ops_hit` routed on
+`uui_table_hit()`, which deliberately excludes the header and the
+scrollbar column because it answers "which ROW" -- so the router never
+delivered a press to either, and a header click reached nothing at all.
+And `table_reveal()` compared `selected` (an app row) against `top` (a
+view offset), which are only interchangeable while unsorted.
 
 ## `gfx_draw_string()` doesn't clip to a width -- callers that need that do their own
 
