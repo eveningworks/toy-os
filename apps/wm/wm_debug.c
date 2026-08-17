@@ -763,6 +763,7 @@ static void usage(struct dbg_out *o) {
     dbg_out_write(o, "  drag X1 Y1 X2 Y2      synthetic press, interpolated move, release\r\n");
     dbg_out_write(o, "  key <c|0xNN>          synthetic keypress to the focused window\r\n");
     dbg_out_write(o, "  wheel <n>             synthetic wheel notches (+up / -down)\r\n");
+    dbg_out_write(o, "  watchdog [<ms>|off]   slow-frame threshold, and how often it fired\r\n");
     dbg_out_write(o, "Injected input enters at the WM loop, below the PS/2 driver -- it tests\r\n");
     dbg_out_write(o, "WM/app logic, not the mouse driver. It is also asynchronous: the events\r\n");
     dbg_out_write(o, "drain one per frame, so allow ~100ms before reading the result back.\r\n");
@@ -801,6 +802,31 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
                      wm_damage_verify_enabled() ? "on" : "off");
         return 1;
     }
+    // The slow-frame watchdog (wm_watchdog.c). Reporting the counters
+    // matters as much as the threshold: "no SLOW FRAME lines in the log"
+    // is only evidence the WM was fast if the watchdog was actually
+    // armed, and those two states otherwise look identical from outside.
+    if (k_strcmp(sub, "watchdog") == 0) {
+        char *arg = next_tok(&p);
+        if (arg) {
+            int ms;
+            if (k_strcmp(arg, "off") == 0) {
+                wmwd_set_threshold_ms(0);
+            } else if (parse_int(arg, &ms) && ms >= 0) {
+                wmwd_set_threshold_ms((uint32_t)ms);
+            } else {
+                dbg_out_write(o, "usage: gui watchdog [<ms>|off]\r\n");
+                return 1;
+            }
+        }
+        uint32_t th = wmwd_threshold_ms();
+        if (th) dbg_out_printf(o, "watchdog: on, threshold %u ms\r\n", th);
+        else    dbg_out_write(o, "watchdog: off\r\n");
+        dbg_out_printf(o, "  %u slow frame(s) so far; slowest frame %u ms\r\n",
+                       wmwd_slow_frames(), wmwd_peak_ms());
+        return 1;
+    }
+
     if (k_strcmp(sub, "help") == 0)         { usage(o); return 1; }
 
     if (k_strcmp(sub, "apps") == 0) {

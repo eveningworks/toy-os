@@ -758,10 +758,19 @@ void wm_run(void) {
     for (;;) {
         __asm__ volatile ("hlt");
 
+        // Everything from here to wmwd_frame_end() is this frame's WORK.
+        // The `hlt` above is deliberately outside it: time spent halted
+        // is time the WM was not asked to do anything, and counting it
+        // would turn every idle frame into a slow one -- and, worse,
+        // would stop a silent watchdog from meaning "the stall was not
+        // ours". See wm_watchdog.c.
+        wmwd_frame_begin();
+
         // Picks up a cursor theme or size changed from Control Panel or
         // by editing /etc/toyos.conf. One generation compare per frame
         // and no I/O unless it moved -- the same trick the `.desktop`
         // reload above uses.
+        wmwd_phase("cursor_theme");
         cursor_theme_poll();
 
         // The kernel's idle work, which it owns rather than this loop
@@ -770,17 +779,21 @@ void wm_run(void) {
         // test tool arrives over that console, so when this loop becomes
         // a ring-3 process (Milestone 41 stage 4) this line is DELETED
         // and the capability stays. That is the whole reason it moved.
+        wmwd_phase("idle");
         scheduler_idle();
 
         // One scripted step per iteration, when a demo is running (see
         // apps/demo.h). A no-op on every ordinary boot -- `demo` has to
         // be on the kernel command line for a script to have been loaded
         // at all.
+        wmwd_phase("demo");
         demo_gui_tick();
 
         // One integer compare unless the filesystem actually changed.
+        wmwd_phase("desktop_entries");
         poll_desktop_entries();
 
+        wmwd_phase("input");
         mouse_get_state(&mx, &my, &buttons);
 
         // Synthetic input from the serial debug console's `gui click` /
@@ -866,6 +879,7 @@ void wm_run(void) {
         // (see close_window()/bring_to_front() for why pending_write_win
         // is guaranteed to still be accurate here even if other windows
         // closed or reordered while this write was in flight).
+        wmwd_phase("fs_steps");
         if (pending_write) {
             enum fs_step_result r = fs_write_range_step(pending_write);
             if (r != FS_STEP_PENDING) {
@@ -919,6 +933,7 @@ void wm_run(void) {
         // pending so output that streamed in between two mouse-move
         // events still shows up promptly instead of waiting for some
         // unrelated redraw to happen to fire.
+        wmwd_phase("clients");
         wm_reap_launched();
 
         // Client timers, once per frame. This is what a client blocks
@@ -1134,11 +1149,14 @@ void wm_run(void) {
         // redraw_pending at all, so a plain full redraw still happens
         // exactly when it used to. See wm_render.c's dirty-rectangle
         // comments for why this split is worth having.
+        wmwd_phase("render");
         if (redraw_pending) {
             redraw_pending = 0;
             wm_render_frame(mx, my);
         } else if (mouse_moved) {
             wm_render_cursor_move(mx, my);
         }
+
+        wmwd_frame_end();
     }
 }

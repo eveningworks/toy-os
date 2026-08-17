@@ -390,4 +390,18 @@ void wm_client_send_wheel(struct window *win, int notches);
 // command -- see wm_client.c and abi/win_proto.h.
 void wm_client_send_resize(struct window *win, int w, int h);
 
+// wm_watchdog.c -- the slow-frame watchdog. Times one loop iteration by
+// phase and logs anything over the threshold. Read that file's top
+// comment before changing where the phases are marked: it measures only
+// the work AFTER the frame's `hlt`, which is what makes "nothing logged
+// during a visible freeze" a real answer (the stall is below us) rather
+// than a missing measurement.
+void wmwd_frame_begin(void);
+void wmwd_phase(const char *name);
+void wmwd_frame_end(void);
+void wmwd_set_threshold_ms(uint32_t ms); // 0 disables
+uint32_t wmwd_threshold_ms(void);
+uint32_t wmwd_slow_frames(void);
+uint32_t wmwd_peak_ms(void);
+
 #endif
