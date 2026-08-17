@@ -114,6 +114,50 @@
                             // below. Listed here so the event namespace
                             // stays one list.
 
+// --- client requests, delivered TO THE COMPOSITOR (M41 stage 4d) ------
+//
+// The inbound half of the inversion. Each of these says "this client did
+// something to this window"; `a` is the client's pid and `window` is its
+// window id, so the compositor can name the window in the query below.
+//
+// Deliberately thin. The detail lives in the kernel -- which received it
+// in the first place -- and is fetched with WIN_REQ_WINDOW_INFO, rather
+// than being crammed into a 24-byte event that would have to grow for
+// the first 32-byte title. A compositor that only needs to know
+// SOMETHING changed does not pay for the detail.
+//
+// Delivered only to the registered compositor, and only while there is
+// one: with no compositor these are dropped, exactly as the ring-0
+// win_server_ops calls were skipped when nothing had registered.
+#define WIN_EV_CLIENT_CREATED   15 // a: pid. A window exists; read it.
+#define WIN_EV_CLIENT_PRESENT   16 // a: pid. Its buffer has new pixels.
+#define WIN_EV_CLIENT_DESTROYED 17 // a: pid. It is going away. The
+                                    // buffer is ALREADY freed when this
+                                    // arrives -- unlike the ring-0
+                                    // callback, which ran while it was
+                                    // still valid, because there is no
+                                    // way to hold a ring-3 process
+                                    // inside a kernel teardown.
+#define WIN_EV_CLIENT_TITLE     18 // a: pid. Title changed; re-read it.
+#define WIN_EV_CLIENT_HINTS     19 // a: pid. Hints changed; re-read.
+#define WIN_EV_CLIENT_RESIZED   20 // a: pid, b: new w, mods: new h. The
+                                    // buffer was reallocated, so the
+                                    // compositor must re-map it.
+#define WIN_EV_CLIENT_PONG      21 // a: pid, b: the serial echoed back.
+#define WIN_EV_CLIENT_TIMER     22 // a: pid. This window's timer is due.
+#define WIN_EV_CLIENT_CLOSE     23 // a: pid, window unused. Close every
+                                    // window this pid owns -- the
+                                    // desktop's own "quit that app".
+#define WIN_EV_CLIENT_ACTIVATE  24 // a: pid. RAISE this window: a second
+                                    // copy of a single-instance app
+                                    // asked for its twin, the kernel
+                                    // found it, and this is the action
+                                    // half. The ANSWER already went back
+                                    // to the asking client, so the
+                                    // compositor is being told, not
+                                    // asked -- which is what removes the
+                                    // round trip.
+
 #define WIN_EV_TIMER     14 // This window's repeating timer is due. No
                             // payload: a client that wanted to know the
                             // time can ask, and putting one here would
@@ -408,6 +452,54 @@ struct win_event {
                            // the same reason the push is: it is the only
                            // process with any business knowing how far
                            // behind another one is.
+#define WIN_REQ_MAP_WINDOW 20 // Map another process's window buffer into
+                           // the compositor.
+                           //   a      = owning pid (in)
+                           //   window = its window id (in)
+                           // Returns 0; the buffer appears at
+                           // win_compositor_vaddr(pid, id), which the
+                           // caller computes itself -- so there is
+                           // nothing to return but success.
+                           //
+                           // Refused to anyone but the registered
+                           // compositor: a window buffer is a client's
+                           // private memory, and this is the request
+                           // that hands it to somebody else.
+                           //
+                           // The kernel side (win_server_map_to_
+                           // compositor()) landed in stage 1 with only
+                           // KTESTs calling it -- a primitive with no
+                           // protocol path, which by this repo's own
+                           // rule left it UNVALIDATED against real use.
+                           // This is that path.
+                           //
+                           // The mapping is REVOKED wherever the frames
+                           // are freed or replaced (destroy, resize,
+                           // client death), so a compositor re-maps on
+                           // WIN_EV_CLIENT_RESIZED rather than assuming
+                           // its pointer survived.
+#define WIN_REQ_WINDOW_INFO 19 // Read one client window's details.
+                           //   a      = owning pid (in)
+                           //   window = its window id (in)
+                           // and on return:
+                           //   a, b   = width, height
+                           //   c      = WIN_HINT_* flags
+                           //   d      = min_w in the low 16 bits,
+                           //            min_h in the high 16
+                           //   text   = the title, NUL-terminated
+                           //
+                           // The compositor's half of the thin events
+                           // above: it is told a window changed and
+                           // reads what it needs. Refused to anyone but
+                           // the registered compositor -- these are
+                           // another process's window's details.
+                           //
+                           // Returns 0, or -1 if there is no such window
+                           // (which is not an error the compositor can
+                           // avoid: a client may destroy a window
+                           // between the event and this call, and the
+                           // right response is to drop the window rather
+                           // than to retry).
 #define WIN_REQ_FB_PRESENT 16 // a, b, c, d: x, y, w, h of the region
                            // just written. Publishes it.
                            //

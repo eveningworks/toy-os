@@ -228,7 +228,21 @@ static void on_window_pong(int pid, uint32_t id, uint32_t serial);
 //
 // The command line is copied because wm_debug_dispatch_out() tokenises
 // it IN PLACE, and what arrives is the transport's message buffer.
-static int on_debug_command(const char *line, char *out, int cap) {
+// NOT static, and not yet called from anywhere -- the one piece of the
+// inversion still missing.
+//
+// In ring 0 the kernel calls this through win_server_ops when a `gui`
+// command arrives over the serial console. A ring-3 WM has to be sent
+// the command and send the OUTPUT BACK, and unlike every other callback
+// here that reply is not optional: all 22 GUI test tools read it, so
+// the desktop is unverifiable without it. It is also the only remaining
+// path that genuinely wants a round trip, because the console is waiting
+// on the answer.
+//
+// Exported rather than deleted so the gap is stated once, here, instead
+// of surfacing as an unused-function warning that reads like dead code.
+// See docs/wm-ring3-design.md.
+int wm_client_debug_command(const char *line, char *out, int cap) {
     char buf[WIN_DEBUG_CMD_LEN];
     k_strlcpy(buf, line ? line : "", sizeof buf);
 
@@ -269,39 +283,55 @@ static int on_close_pid(int pid) {
 // id (the create/ask race WIN_REQ_ACTIVATE documents, or two clients
 // that simply chose the same name), the one the user saw most recently
 // is the one that comes back.
-static int on_window_activate(const char *app_id) {
-    if (!app_id || !app_id[0]) return 0;
+// Raises windows[i] -- split out so the same raise can be entered from
+// either end.
+//
+// In ring 0 the WM was asked "is there a window with this app id?", so
+// it searched its own list. The KERNEL holds the app_ids now and answers
+// that itself, sending the compositor the window it found -- which
+// arrives as (pid, id), not as a name. One body with two doors, because
+// two copies of a raise is two chances for the focus damage below to be
+// right in only one of them.
+static int raise_window_at(int i) {
+    if (i < 0 || i >= window_count || !windows[i].open) return 0;
 
-    for (int i = window_count - 1; i >= 0; i--) {
-        if (!windows[i].open) continue;
-        if (!windows[i].app_id[0]) continue;
-        if (k_strcmp(windows[i].app_id, app_id) != 0) continue;
-
-        // The window that is losing focus has to repaint its title bar,
-        // exactly as on_window_created() and open_app() do -- otherwise
-        // the old frontmost one keeps its focused blue until something
-        // unrelated redraws it.
-        if (window_count > 0 && i != window_count - 1) {
-            struct window *losing = &windows[window_count - 1];
-            wm_damage_rect(losing->x, losing->y, losing->w, losing->h);
-        }
-
-        if (windows[i].state == WIN_MINIMIZED) windows[i].state = WIN_NORMAL;
-        bring_to_front(i);
-        // bring_to_front() renumbers, so the window is at the top now --
-        // damage it there rather than at the index just used.
-        struct window *w = &windows[window_count - 1];
-        wm_damage_rect(w->x, w->y, w->w, w->h);
-        // A window dragged somewhere unreachable is exactly as useless
-        // as no window at all, and this path is the only handle a
-        // second launch gives the user -- same reasoning as the taskbar
-        // button's, so it uses the same repair.
-        wm_ensure_reachable(window_count - 1);
-        redraw_pending = 1;
-        wm_logf("wm: activated existing window for app id '%s'\n", app_id);
-        return 1;
+    // The window that is losing focus has to repaint its title bar,
+    // exactly as on_window_created() and open_app() do -- otherwise
+    // the old frontmost one keeps its focused blue until something
+    // unrelated redraws it.
+    if (window_count > 0 && i != window_count - 1) {
+        struct window *losing = &windows[window_count - 1];
+        wm_damage_rect(losing->x, losing->y, losing->w, losing->h);
     }
-    return 0;
+
+    if (windows[i].state == WIN_MINIMIZED) windows[i].state = WIN_NORMAL;
+    bring_to_front(i);
+    // bring_to_front() renumbers, so the window is at the top now --
+    // damage it there rather than at the index just used.
+    struct window *w = &windows[window_count - 1];
+    wm_damage_rect(w->x, w->y, w->w, w->h);
+    // A window dragged somewhere unreachable is exactly as useless
+    // as no window at all, and this path is the only handle a
+    // second launch gives the user -- same reasoning as the taskbar
+    // button's, so it uses the same repair.
+    wm_ensure_reachable(window_count - 1);
+    redraw_pending = 1;
+    return 1;
+}
+
+// on_window_activate(const char *app_id) is GONE. It searched this WM's
+// own window list by app id -- the question the KERNEL answers now. It
+// received every app_id at create time and keeps them, so it finds the
+// twin itself and sends the window it found. What is left for the
+// compositor is the action, below.
+
+// The ring-3 door: the kernel already decided WHICH window, so this only
+// has to find it in the list and raise it.
+static int on_window_activate_window(int pid, uint32_t id) {
+    int i = find_client_window(pid, id);
+    if (i < 0 || !raise_window_at(i)) return 0;
+    wm_logf("wm: activated existing window (pid %d, window %u)\n", pid, id);
+    return 1;
 }
 
 // The client arming or cancelling its repeating timer (WIN_REQ_TIMER).
@@ -351,19 +381,9 @@ void wm_client_check_timers(void) {
     }
 }
 
-static const struct win_server_ops WM_SERVER_OPS = {
-    .window_created   = on_window_created,
-    .window_present   = on_window_present,
-    .window_destroyed = on_window_destroyed,
-    .window_title     = on_window_title,
-    .window_hints     = on_window_hints,
-    .window_resized   = on_window_resized,
-    .window_pong      = on_window_pong,
-    .debug_command    = on_debug_command,
-    .close_pid        = on_close_pid,
-    .window_activate  = on_window_activate,
-    .window_timer     = on_window_timer,
-};
+// WM_SERVER_OPS is GONE. It was the kernel's way of calling INTO the WM,
+// which a ring-3 process cannot be. Every slot it held is now an event
+// the compositor receives -- see wm_client_handle_event() above.
 
 // Claims the compositor role. Everything else the WM is allowed to do
 // with the screen is gated on holding it -- the framebuffer grant
@@ -375,6 +395,140 @@ static const struct win_server_ops WM_SERVER_OPS = {
 // cannot be called into, so the relationship inverts -- the WM claims
 // the role and then RECEIVES what it used to be asked. See
 // wm_rawin.c for the input half.
+// --- client requests, received (M41 stage 4d) -------------------------
+//
+// The inbound half of the inversion. In ring 0 the kernel CALLED the
+// eleven win_server_ops slots below; a ring-3 compositor is TOLD, one
+// WIN_EV_CLIENT_* event per callback, and reads back the detail it
+// needs. The handlers are unchanged -- only who invokes them is.
+//
+// Why the events are thin and this asks for the rest: struct win_event
+// is 24 bytes and a title is 32, so carrying the detail inline would
+// have meant widening every event in the protocol for the one that
+// needs it. The kernel already HAS these facts (it received them), so
+// it keeps them and answers WIN_REQ_WINDOW_INFO.
+
+// Fills in a window's current size, hints and title. 0 if the window is
+// gone -- which is not a race the compositor can avoid, since a client
+// may destroy a window between the event and this call. Dropping the
+// window is the right answer; retrying is not.
+static int query_window(int pid, uint32_t id, int *w, int *h,
+                         unsigned *flags, int *min_w, int *min_h,
+                         char *title, unsigned title_cap) {
+    struct win_request_msg q;
+    for (unsigned i = 0; i < sizeof q; i++) ((uint8_t *)&q)[i] = 0;
+    q.type = WIN_REQ_WINDOW_INFO;
+    q.a = pid;
+    q.window = id;
+    if (sys_win_request(&q) != 0) return 0;
+    if (w) *w = q.a;
+    if (h) *h = q.b;
+    if (flags) *flags = (unsigned)q.c;
+    // min_w in the low 16 bits, min_h in the high -- see win_proto.h.
+    if (min_w) *min_w = (int)((uint32_t)q.d & 0xFFFF);
+    if (min_h) *min_h = (int)(((uint32_t)q.d >> 16) & 0xFFFF);
+    if (title && title_cap) {
+        unsigned n = 0;
+        while (n + 1 < title_cap && n < WIN_TITLE_LEN && q.text[n]) {
+            title[n] = q.text[n];
+            n++;
+        }
+        title[n] = '\0';
+    }
+    return 1;
+}
+
+// Maps a client's buffer into this process, so the compositor can read
+// its pixels. Idempotent, and must be re-done after a resize: the frames
+// are reallocated, and the old mapping is revoked with them.
+static uint32_t *map_client_window(int pid, uint32_t id) {
+    struct win_request_msg q;
+    for (unsigned i = 0; i < sizeof q; i++) ((uint8_t *)&q)[i] = 0;
+    q.type = WIN_REQ_MAP_WINDOW;
+    q.a = pid;
+    q.window = id;
+    if (sys_win_request(&q) != 0) return 0;
+    // The address is DERIVED, not returned -- see win_proto.h. A fixed
+    // per-(pid, window) address is one a test can assert about; one the
+    // kernel returned would vary per boot.
+    return (uint32_t *)(uintptr_t)win_compositor_vaddr(pid, id);
+}
+
+// One event in, one callback out. Returns 1 if the event was a client
+// request this handled, so the caller can tell it apart from raw input.
+int wm_client_handle_event(const struct win_event *ev) {
+    if (!ev) return 0;
+    int pid = ev->a;
+    uint32_t id = ev->window;
+
+    switch (ev->type) {
+    case WIN_EV_CLIENT_CREATED: {
+        int w = 0, h = 0, min_w = 0, min_h = 0;
+        unsigned flags = 0;
+        char title[WIN_TITLE_LEN];
+        if (!query_window(pid, id, &w, &h, &flags, &min_w, &min_h,
+                          title, sizeof title)) return 1;
+        uint32_t *buf = map_client_window(pid, id);
+        if (!buf) return 1;
+        // x/y are the compositor's to choose -- the kernel never had an
+        // opinion about placement, it only forwarded what the client
+        // asked for. 0,0 lets the existing handler place it.
+        on_window_created(pid, id, buf, w, h, 0, 0, "");
+        break;
+    }
+    case WIN_EV_CLIENT_PRESENT:
+        on_window_present(pid, id);
+        break;
+    case WIN_EV_CLIENT_DESTROYED:
+        // The buffer is ALREADY freed by the time this arrives, unlike
+        // the ring-0 callback which ran while it was still valid (see
+        // win_proto.h). The handler only drops the window from the list,
+        // so that is safe -- but do not add anything here that reads the
+        // pixels.
+        on_window_destroyed(pid, id);
+        break;
+    case WIN_EV_CLIENT_TITLE: {
+        char title[WIN_TITLE_LEN];
+        if (!query_window(pid, id, 0, 0, 0, 0, 0, title, sizeof title)) return 1;
+        on_window_title(pid, id, title);
+        break;
+    }
+    case WIN_EV_CLIENT_HINTS: {
+        unsigned flags = 0;
+        int min_w = 0, min_h = 0;
+        if (!query_window(pid, id, 0, 0, &flags, &min_w, &min_h, 0, 0)) return 1;
+        on_window_hints(pid, id, flags, min_w, min_h);
+        break;
+    }
+    case WIN_EV_CLIENT_RESIZED: {
+        // Re-map before telling the handler: the frames were
+        // reallocated, so the old mapping was revoked with them and the
+        // pointer the window list holds is stale.
+        uint32_t *buf = map_client_window(pid, id);
+        if (!buf) return 1;
+        on_window_resized(pid, id, buf, ev->b, (int)ev->mods);
+        break;
+    }
+    case WIN_EV_CLIENT_PONG:
+        on_window_pong(pid, id, (uint32_t)ev->b);
+        break;
+    case WIN_EV_CLIENT_TIMER:
+        on_window_timer(pid, id, (unsigned)ev->b);
+        break;
+    case WIN_EV_CLIENT_CLOSE:
+        on_close_pid(pid);
+        break;
+    case WIN_EV_CLIENT_ACTIVATE:
+        // Told, not asked: the kernel already answered the asking client
+        // (it holds the app_ids), so this is only the action.
+        on_window_activate_window(pid, id);
+        break;
+    default:
+        return 0; // not ours -- raw input, see wm_rawin.c
+    }
+    return 1;
+}
+
 int wm_claim_compositor(void) {
     struct win_request_msg req;
     for (unsigned i = 0; i < sizeof req; i++) ((uint8_t *)&req)[i] = 0;

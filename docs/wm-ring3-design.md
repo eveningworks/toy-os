@@ -934,12 +934,50 @@ turned out NOT to need the surface they looked like they needed:
   "do not widen this" rule was about (that was a 128-byte debug
   command on the path of every present).
 
-**What is NOT done, and is 4d's remaining half:** the ring-3 WM has
-never been RUN. It links; nothing spawns it. The inbound half of the
-inversion is still missing -- the kernel calls `struct win_server_ops`'
-eleven callbacks in ring 0, and a ring-3 WM has to RECEIVE those as
-events instead. Until that exists the binary can composite but cannot
-learn that a client wants a window.
+**The INBOUND half of the inversion is built (2026-08-17).** The kernel
+still calls `struct win_server_ops` for the ring-0 WM, and now ALSO
+emits one `WIN_EV_CLIENT_*` event per callback to a registered
+compositor -- both live at once, so the flip is a deletion, exactly as
+every earlier stage was arranged.
+
+The design decision that made it cheap: **the kernel already RECEIVED
+every fact a compositor would have to be told, and threw most of them
+away.** It keeps them now (title, app_id, hints, min size), which buys
+two things at once:
+
+- The events stay THIN. `struct win_event` is 24 bytes and a title is
+  32, so carrying detail inline would have meant widening every event
+  in the protocol for the one that needed it. Instead an event says
+  "window N changed" and the compositor reads the rest with
+  `WIN_REQ_WINDOW_INFO`.
+- **`window_activate` stops needing a round trip.** It was the only
+  callback whose RETURN mattered -- single-instance depends on being
+  told whether a twin was raised, and getting that wrong either opens a
+  duplicate or makes the app vanish. The kernel holds the app_ids, so
+  it answers the question itself and sends the compositor the window it
+  found; the compositor is left with the ACTION, which needs no answer.
+  Verified by positive control: clearing the stored app_id reddens five
+  of `single_instance_test.py`'s nine checks, including the one that
+  identifies the raised window by `client_pid` rather than by title.
+
+`WIN_REQ_MAP_WINDOW` landed with it, and is worth noting on its own:
+`win_server_map_to_compositor()` has existed since stage 1 with only
+KTESTs calling it -- a primitive with no protocol path, which by this
+repo's own rule left it unvalidated against real use. A ring-3
+compositor could not see a single client pixel without it.
+
+**What is left, and it is ONE thing:** the `gui` debug command's ring-3
+leg. In ring 0 the kernel calls `win_server_ops.debug_command` and gets
+the output back; a ring-3 WM has to be sent the command and reply with
+the text, and unlike every other callback that reply is NOT optional --
+all 22 GUI test tools read it, so the desktop is unverifiable without
+it. It is also the only remaining path that genuinely wants a round
+trip, because the console is waiting on the answer.
+`wm_client_debug_command()` is exported and uncalled so the gap is
+stated once rather than surfacing as an unused-function warning.
+
+After that: the switchover itself -- spawning the ring-3 WM instead of
+calling `wm_run()` in ring 0, and deleting `apps/wm/`.
 
 The historical note, for what the state was mid-migration:
 

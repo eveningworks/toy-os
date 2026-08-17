@@ -94,9 +94,15 @@ void wm_rawin_pump(void) {
             break;
         default:
             // Anything else on this queue is a CLIENT request the kernel
-            // is routing to the compositor. Not this file's business --
-            // see wm_client.c. Deliberately not dropped silently once
-            // that path exists; today nothing else arrives here.
+            // is routing to us -- a window created, presented, retitled.
+            // Handed to wm_client.c, which turns it back into the same
+            // call the ring-0 kernel used to make directly.
+            //
+            // An event neither this nor that recognises is DROPPED, and
+            // that is deliberate: the protocol is allowed to grow, and a
+            // compositor built against an older kernel should ignore
+            // what it does not know rather than refuse to run.
+            wm_client_handle_event(&ev);
             break;
         }
     }

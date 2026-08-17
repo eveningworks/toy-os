@@ -46,6 +46,18 @@ struct client_window {
     // or replaces the frames -- and that operation has a window, not a
     // list of mappings.
     int comp_mapped;
+
+    // What the kernel used to receive and throw away, passing it
+    // straight through to a ring-0 WM. A ring-3 one is TOLD a window
+    // changed and reads the detail back (WIN_REQ_WINDOW_INFO), so the
+    // detail has to live somewhere -- and the kernel is where it already
+    // arrives. Holding it also lets the kernel answer the one question
+    // that used to need a round trip into the WM: does a window with
+    // this app_id exist? (WIN_REQ_ACTIVATE.)
+    char title[WIN_TITLE_LEN];
+    char app_id[WIN_APP_ID_LEN];
+    unsigned hint_flags;
+    int min_w, min_h;
 };
 
 // The registered compositor: which process may map other processes'
@@ -73,6 +85,31 @@ const struct win_server_ops *win_server_ops_current(void) {
 
 int win_server_active(void) {
     return g_ops != NULL;
+}
+
+// Tells the registered compositor that a client did something.
+//
+// A no-op when nothing has registered, which is the ring-0 desktop's
+// whole lifetime today -- exactly as the win_server_ops calls beside it
+// are skipped when `g_ops` is NULL. So both halves of the inversion can
+// be live at once during the migration without either disturbing the
+// other, which is the property every stage of this plan has been shaped
+// to keep.
+//
+// Fire and forget: no reply, no blocking. The one caller that needed an
+// ANSWER (activate) is answered by the kernel itself now -- see
+// WIN_REQ_ACTIVATE.
+static void tell_compositor(uint32_t type, int pid, uint32_t id,
+                             int32_t b, uint32_t mods) {
+    if (!g_comp_pid) return;
+    struct win_event ev;
+    k_memset(&ev, 0, sizeof ev);
+    ev.type = type;
+    ev.window = id;
+    ev.a = pid;
+    ev.b = b;
+    ev.mods = mods;
+    win_events_push(g_comp_pid, &ev);
 }
 
 // The one place that answers "does `pid` own `id`?". Everything that
@@ -127,6 +164,13 @@ static void destroy_window(struct client_window *cw) {
     if (!cw->used) return;
 
     if (g_ops && g_ops->window_destroyed) g_ops->window_destroyed(cw->pid, cw->id);
+    // AFTER the ring-0 callback, and note the asymmetry documented in
+    // win_proto.h: that callback runs while `buf` is still valid, and
+    // this event is only queued -- by the time the compositor reads it
+    // the buffer is gone. There is no way to hold a ring-3 process
+    // inside a kernel teardown, so the protocol says "already freed"
+    // rather than pretending otherwise.
+    tell_compositor(WIN_EV_CLIENT_DESTROYED, cw->pid, cw->id, 0, 0);
 
     // Before the frames go back to the allocator. A compositor left
     // holding a mapping of freed frames reads whatever is allocated
@@ -216,6 +260,16 @@ static int create_window(int pid, uint64_t pml4, int w, int h, int x, int y,
     // The presentation layer gets the last word: if it has no room in
     // its window list, the whole create fails and the memory goes back
     // rather than leaving a buffer nothing will ever draw.
+    // Everything the kernel was handed and used to forward without
+    // keeping. WIN_REQ_WINDOW_INFO reads it back.
+    k_strlcpy(cw->title, "", sizeof cw->title);
+    k_strlcpy(cw->app_id, app_id ? app_id : "", sizeof cw->app_id);
+    cw->hint_flags = 0;
+    cw->min_w = 0;
+    cw->min_h = 0;
+
+    tell_compositor(WIN_EV_CLIENT_CREATED, pid, cw->id, w, (uint32_t)h);
+
     if (g_ops && g_ops->window_created) {
         if (!g_ops->window_created(pid, cw->id, cw->buf, w, h, x, y, app_id)) {
             // Not destroy_window() -- that would call window_destroyed()
@@ -359,6 +413,7 @@ static int resize_window(struct client_window *cw, int w, int h) {
 
     if (was_comp_mapped) comp_map(cw);
 
+    tell_compositor(WIN_EV_CLIENT_RESIZED, cw->pid, cw->id, w, (uint32_t)h);
     if (g_ops && g_ops->window_resized) {
         g_ops->window_resized(cw->pid, cw->id, cw->buf, w, h);
     }
@@ -508,8 +563,18 @@ int win_server_request(int pid, struct win_request_msg *req) {
     // the header documents it as unprivileged rather than leaving the
     // missing check to be discovered.
     if (req->type == WIN_REQ_CLOSE_PID) {
-        if (!g_ops->close_pid) return 0;
-        return g_ops->close_pid(req->a) > 0 ? 1 : 0;
+        // The compositor is TOLD; the kernel answers from its own
+        // table, because "does that pid own any windows" is a fact it
+        // already holds and does not need to ask for.
+        int owned = 0;
+        if (req->a >= 1 && req->a <= WIN_SERVER_MAX_PIDS) {
+            for (int i = 0; i < WIN_CLIENT_MAX; i++) {
+                if (windows[req->a - 1][i].used) owned++;
+            }
+        }
+        if (owned) tell_compositor(WIN_EV_CLIENT_CLOSE, req->a, 0, 0, 0);
+        if (g_ops && g_ops->close_pid) return g_ops->close_pid(req->a) > 0 ? 1 : 0;
+        return owned > 0;
     }
 
     // Also not addressed to one of the caller's own windows -- it names
@@ -518,14 +583,41 @@ int win_server_request(int pid, struct win_request_msg *req) {
     // Same unprivileged reasoning as CLOSE_PID above, and weaker still:
     // the worst outcome is raising a window the user can already see.
     if (req->type == WIN_REQ_ACTIVATE) {
-        if (!g_ops->window_activate) return 0;
         char app_id[WIN_APP_ID_LEN];
         copy_text(app_id, req->text, WIN_APP_ID_LEN);
         // An empty id matches nothing, rather than matching every
         // window that never set one. Without this, one app opting in
         // would start raising unrelated windows.
         if (!app_id[0]) return 0;
-        return g_ops->window_activate(app_id) ? 1 : 0;
+
+        // **THE KERNEL ANSWERS THIS ONE ITSELF**, and that is what
+        // removes the last thing needing a round trip into ring 3.
+        //
+        // The answer is load-bearing: a second copy of a single-instance
+        // app exits 0 only if told its twin was raised, so getting a
+        // "no" wrong opens a duplicate window and getting a "yes" wrong
+        // makes the app vanish. In ring 0 the WM answered because it
+        // owned the window list. But the kernel RECEIVES every app_id at
+        // create time and now keeps it, so "does a twin exist?" is a
+        // fact it already holds -- and the compositor is left with the
+        // ACTION, raising the window, which needs no answer at all.
+        //
+        // Search order is deliberate: the first match wins, and with one
+        // window per app_id by construction (that is what single
+        // instance MEANS) there is never a second.
+        for (int p = 0; p < WIN_SERVER_MAX_PIDS; p++) {
+            for (int i = 0; i < WIN_CLIENT_MAX; i++) {
+                struct client_window *cw = &windows[p][i];
+                if (!cw->used) continue;
+                if (k_strcmp(cw->app_id, app_id) != 0) continue;
+                tell_compositor(WIN_EV_CLIENT_ACTIVATE, cw->pid, cw->id, 0, 0);
+                // The ring-0 WM still raises it through its own callback
+                // while it exists; both run, neither disturbs the other.
+                if (g_ops && g_ops->window_activate) g_ops->window_activate(app_id);
+                return 1;
+            }
+        }
+        return 0;
     }
 
     switch (req->type) {
@@ -547,6 +639,7 @@ int win_server_request(int pid, struct win_request_msg *req) {
     case WIN_REQ_PRESENT: {
         struct client_window *cw = lookup(pid, req->window);
         if (!cw) return 0;
+        tell_compositor(WIN_EV_CLIENT_PRESENT, pid, cw->id, 0, 0);
         if (g_ops->window_present) g_ops->window_present(pid, cw->id);
         return 1;
     }
@@ -562,12 +655,18 @@ int win_server_request(int pid, struct win_request_msg *req) {
         // Truncate rather than refuse -- a too-long title is cosmetic.
         char title[WIN_TITLE_LEN];
         copy_text(title, req->text, WIN_TITLE_LEN);
+        k_strlcpy(cw->title, title, sizeof cw->title);
+        tell_compositor(WIN_EV_CLIENT_TITLE, pid, cw->id, 0, 0);
         if (g_ops->window_title) g_ops->window_title(pid, cw->id, title);
         return 1;
     }
     case WIN_REQ_HINTS: {
         struct client_window *cw = lookup(pid, req->window);
         if (!cw) return 0;
+        cw->hint_flags = (unsigned)req->a;
+        cw->min_w = req->b;
+        cw->min_h = req->c;
+        tell_compositor(WIN_EV_CLIENT_HINTS, pid, cw->id, 0, 0);
         if (g_ops->window_hints) {
             g_ops->window_hints(pid, cw->id, (unsigned)req->a, req->b, req->c);
         }
@@ -590,6 +689,7 @@ int win_server_request(int pid, struct win_request_msg *req) {
         // Negative is nonsense rather than "cancel" -- 0 already means
         // that, and silently reinterpreting a bad value hides the bug.
         if (req->a < 0) return 0;
+        tell_compositor(WIN_EV_CLIENT_TIMER, pid, cw->id, req->a, 0);
         g_ops->window_timer(pid, cw->id, (unsigned)req->a);
         return 1;
     }
@@ -598,7 +698,8 @@ int win_server_request(int pid, struct win_request_msg *req) {
         if (!cw) return 0;
         // Relayed, not interpreted. Whether a late pong or a missing
         // one means anything is the WM's call -- see win_server.h.
-        if (g_ops && g_ops->window_pong) g_ops->window_pong(pid, req->window, req->a);
+        tell_compositor(WIN_EV_CLIENT_PONG, pid, req->window, req->a, 0);
+    if (g_ops && g_ops->window_pong) g_ops->window_pong(pid, req->window, req->a);
         return 1;
     }
     case WIN_REQ_EVENT_PUSH: {
@@ -629,6 +730,32 @@ int win_server_request(int pid, struct win_request_msg *req) {
         req->a = win_events_pending(target);
         req->b = win_events_dropped(target);
         req->c = g_comp_pid;
+        return 0;
+    }
+    case WIN_REQ_MAP_WINDOW: {
+        if (!g_comp_pid || pid != g_comp_pid) return -1;
+        uint64_t vaddr = 0;
+        // The access control lives inside that call rather than here: it
+        // checks the requester IS the compositor and that the window
+        // really belongs to the pid named. See win_server.h.
+        if (!win_server_map_to_compositor(pid, req->a, req->window, &vaddr)) return -1;
+        return 0;
+    }
+    case WIN_REQ_WINDOW_INFO: {
+        // Another process's window's details, so: compositor only.
+        if (!g_comp_pid || pid != g_comp_pid) return -1;
+        struct client_window *cw = lookup(req->a, req->window);
+        // Not an error the compositor can avoid -- a client may destroy
+        // a window between the event and this call. Dropping the window
+        // is the right response, not retrying.
+        if (!cw) return -1;
+        req->a = cw->w;
+        req->b = cw->h;
+        req->c = (int32_t)cw->hint_flags;
+        // Two 16-bit values in one field rather than widening the
+        // message: a minimum size larger than 65535 is not a thing.
+        req->d = (int32_t)(((uint32_t)cw->min_h << 16) | ((uint32_t)cw->min_w & 0xFFFF));
+        copy_text(req->text, cw->title, WIN_TITLE_LEN);
         return 0;
     }
     case WIN_REQ_FONT:

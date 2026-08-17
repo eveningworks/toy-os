@@ -347,6 +347,11 @@ void wm_render_cursor_move(int mx, int my);
 // may already hold it. See wm_client.c.
 int wm_claim_compositor(void);
 
+// One client-request event, turned back into the callback the ring-0
+// kernel used to make. Returns 1 if it was a client request, 0 if the
+// event was something else (raw input, which wm_rawin.c owns).
+int wm_client_handle_event(const struct win_event *ev);
+
 void wm_client_init(void);
 void wm_client_shutdown(void);
 
