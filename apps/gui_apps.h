@@ -78,8 +78,9 @@ struct gui_app {
     // down and can never be cancelled by dragging away before release.
     // For press-then-commit-on-release behaviour -- what every button
     // in this GUI is supposed to have -- arm in on_press and act in
-    // on_release (see apps/control_panel.c, and the title bar's own
-    // wm_update_title_btn_press()). This callback suits things that
+    // on_release (the title bar's own wm_update_title_btn_press() is
+    // the worked example; apps/control_panel.c used to be the other
+    // one, and moved to ring 3). This callback suits things that
     // genuinely act on contact: placing a text cursor, focusing a
     // field. See docs/gui-guidelines.md.
     //

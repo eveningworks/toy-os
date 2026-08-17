@@ -62,4 +62,11 @@ void uui_statusbar_draw(struct ugfx_surface *s, const struct uui_statusbar *sb);
 int uui_statusbar_pane_rect(const struct uui_statusbar *sb, int index,
                              int *x, int *y, int *w, int *h);
 
+// Declarable in a layout (ui/uui_widget.h), so the layout reserves the
+// bar's height instead of each app subtracting it from the content rect
+// by hand. Draw-only: a status bar reports, it is not a control, and a
+// `hit` slot would make it swallow clicks.
+struct uui_widget_ops;
+extern const struct uui_widget_ops uui_statusbar_ops;
+
 #endif

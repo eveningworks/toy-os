@@ -604,6 +604,14 @@ seed: $(DISK_IMG) $(USERLAND_ELVES)
 		echo "seed: xkbcli not found -- skipping /etc/kbs regeneration (apt-get install libxkbcommon-tools to enable; kernel falls back to compiled-in US regardless)"; \
 	fi
 	python3 tools/seed_disk.py $(DISK_IMG) $(SEED_DIR)
+	# A stamp saying the seed step RAN, which disk.img's own mtime
+	# cannot: seeding is content-hash based, so a rebuild producing
+	# byte-identical ELFs correctly rewrites nothing and leaves the
+	# image untouched. tools/iso_guard.py compares the built ELFs
+	# against this rather than against disk.img, so it does not cry
+	# wolf on a no-op rebuild -- a guard that false-alarms is a guard
+	# people switch off.
+	@touch $(BUILD)/.seeded
 
 # The LIVE ISO is a SEPARATE ARTIFACT, and that is the point.
 #

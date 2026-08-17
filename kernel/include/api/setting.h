@@ -34,7 +34,14 @@
 // stack local leaves the registry holding a dangling pointer that reads
 // as plausible garbage rather than crashing.
 
-#define SETTING_MAX        16 // registered settings; raise freely
+// Raising this means raising SETTING_ABI_MAX with it: a ring-3 client
+// has no allocator, so it sizes its list from that constant, and the
+// two disagreeing means a client silently showing only part of the
+// registry. The assert below is what stops that being silent.
+#define SETTING_MAX        16 // registered settings
+_Static_assert(SETTING_MAX == SETTING_ABI_MAX,
+               "SETTING_MAX and SETTING_ABI_MAX must agree -- a client sizes "
+               "its array from the ABI one and would truncate the list");
 #define SETTING_NAME_MAX   24 // the /etc key, e.g. "font_size"
 #define SETTING_LABEL_MAX  40 // what a settings UI shows, e.g. "Font size"
 #define SETTING_VALUE_MAX  64 // a value, as written to its file

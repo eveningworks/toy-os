@@ -11,16 +11,51 @@ static int radio_rows(const struct uui_radio_list *l) {
     return (l->count + cols - 1) / cols;
 }
 
+// FONT-DERIVED DEFAULTS for the three metrics, used whenever the caller
+// left one at 0. This widget has no init() -- it is set up by assigning
+// its fields -- so every metric a caller forgot used to stay 0, and a
+// row_h or col_w of 0 makes the whole control zero-sized: it draws
+// nothing, hit-tests nothing, and reports a natural size of nothing, so
+// a layout dutifully gives it no room. Invisible AND unclickable, with
+// no error anywhere, from one unassigned field.
+//
+// Deriving them instead is the same treatment uui_listbox_row_h()
+// already gives its own row height, and it keeps layout font-derived
+// per docs/gui-guidelines.md. An explicit non-zero value still wins.
+static int radio_marker(const struct uui_radio_list *l) {
+    if (l->marker_size > 0) return l->marker_size;
+    int m = ugfx_char_h() - 2;
+    return m > 6 ? m : 6;
+}
+
+static int radio_row_h(const struct uui_radio_list *l) {
+    return l->row_h > 0 ? l->row_h : ugfx_char_h() + 6;
+}
+
+static int radio_col_w(const struct uui_radio_list *l) {
+    if (l->col_w > 0) return l->col_w;
+    // The WIDEST option, not the selected one -- a column sized to
+    // today's value and clipping tomorrow's is the bug
+    // uui_dropdown_natural_size() documents avoiding, and it applies
+    // just as hard here.
+    int widest = 0;
+    for (int i = 0; i < l->count; i++) {
+        int tw = ugfx_text_width(l->options[i]);
+        if (tw > widest) widest = tw;
+    }
+    return widest + radio_marker(l) + ugfx_char_w() * 2;
+}
+
 void uui_radio_list_natural_size(const struct uui_radio_list *l, int *out_w, int *out_h) {
     int cols = l->cols > 0 ? l->cols : 1;
-    if (out_w) *out_w = cols * l->col_w;
-    if (out_h) *out_h = radio_rows(l) * l->row_h;
+    if (out_w) *out_w = cols * radio_col_w(l);
+    if (out_h) *out_h = radio_rows(l) * radio_row_h(l);
 }
 
 static void radio_cell(const struct uui_radio_list *l, int i, int x, int y, int *cx, int *cy) {
     int cols = l->cols > 0 ? l->cols : 1;
-    *cx = x + (i % cols) * l->col_w;
-    *cy = y + (i / cols) * l->row_h;
+    *cx = x + (i % cols) * radio_col_w(l);
+    *cy = y + (i / cols) * radio_row_h(l);
 }
 
 void uui_radio_list_set_geometry(struct uui_radio_list *l, int x, int y) {
@@ -40,18 +75,18 @@ void uui_radio_list_draw(struct ugfx_surface *s, const struct uui_radio_list *l)
         uint32_t row_bg = bg;
         if (i == hovered) {
             row_bg = uui_state_bg(bg, UUI_STATE_HOVER);
-            ugfx_fill_rect(s, cx, cy, l->col_w, l->row_h, row_bg);
+            ugfx_fill_rect(s, cx, cy, radio_col_w(l), radio_row_h(l), row_bg);
         }
 
-        int m = l->marker_size;
-        int my = cy + (l->row_h - m) / 2;
+        int m = radio_marker(l);
+        int my = cy + (radio_row_h(l) - m) / 2;
         ugfx_draw_rect(s, cx, my, m, m, fg);
         if (i == selected) {
             int inset = m / 4 > 0 ? m / 4 : 1;
             ugfx_fill_rect(s, cx + inset, my + inset, m - 2 * inset, m - 2 * inset, fg);
         }
-        ugfx_draw_string_clipped(s, cx + m + 6, cy + (l->row_h - ugfx_char_h()) / 2,
-                                  l->col_w - m - 8, l->options[i], fg, row_bg);
+        ugfx_draw_string_clipped(s, cx + m + 6, cy + (radio_row_h(l) - ugfx_char_h()) / 2,
+                                  radio_col_w(l) - m - 8, l->options[i], fg, row_bg);
     }
 }
 
@@ -60,7 +95,7 @@ int uui_radio_list_hit(const struct uui_radio_list *l, int cx, int cy) {
     for (int i = 0; i < l->count; i++) {
         int cx, cy;
         radio_cell(l, i, x, y, &cx, &cy);
-        if (uui_hit(cx, cy, l->col_w, l->row_h, px, py)) return i;
+        if (uui_hit(cx, cy, radio_col_w(l), radio_row_h(l), px, py)) return i;
     }
     return -1;
 }
@@ -93,11 +128,32 @@ static int rl_ops_motion(void *w, int cx, int cy, unsigned buttons) {
     return 1;
 }
 
+// See the note on uui_listbox's pair: without these a radio list
+// declared in a layout drew wherever init() left it.
+//
+// The height/width handed in are IGNORED on purpose -- a radio list
+// cannot be stretched into a size its rows and columns do not produce,
+// which uui_radio_list_set_geometry() has always said by taking only
+// x and y. The ops slot's own comment (uui_widget.h) allows exactly
+// this, and it is why natural_size has to be published alongside: a
+// container that cannot ask how big this wants to be would hand it a
+// cell it then declines to fill.
+static void rl_ops_natural_size(const void *w, int *out_w, int *out_h) {
+    uui_radio_list_natural_size((const struct uui_radio_list *)w, out_w, out_h);
+}
+
+static void rl_ops_set_geometry(void *w, int x, int y, int width, int height) {
+    (void)width; (void)height;
+    uui_radio_list_set_geometry((struct uui_radio_list *)w, x, y);
+}
+
 static void rl_ops_draw(struct ugfx_surface *s, const void *w) {
     uui_radio_list_draw(s, (const struct uui_radio_list *)w);
 }
 
 const struct uui_widget_ops uui_radio_list_ops = {
+    .natural_size = rl_ops_natural_size,
+    .set_geometry = rl_ops_set_geometry,
     .draw   = rl_ops_draw,
     .hit    = rl_ops_hit,
     .press  = rl_ops_press,

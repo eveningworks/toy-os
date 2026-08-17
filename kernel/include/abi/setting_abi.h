@@ -50,6 +50,13 @@ enum setting_result {
     SETTING_UNSAVED = 2, // applied in memory, but the write FAILED
 };
 
+// How many settings the registry can hold, so a client can size a
+// fixed array for the whole list -- there is no allocator in ring 3.
+// Mirrors the kernel's SETTING_MAX (api/setting.h); a client should
+// still read the real count from SETTING_OP_COUNT rather than assume
+// this many exist.
+#define SETTING_ABI_MAX       16
+
 #define SETTING_ABI_NAME_MAX  24 // the /etc key, e.g. "font_size"
 #define SETTING_ABI_LABEL_MAX 40 // human-facing, e.g. "Font size"
 #define SETTING_ABI_VALUE_MAX 64 // a value, as stored

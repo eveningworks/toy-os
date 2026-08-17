@@ -14,6 +14,11 @@ static int lay_gap(const struct uui_layout *l) {
 
 static void item_natural(const struct uui_item *it, int *w, int *h) {
     *w = 0; *h = 0;
+    // A HIDDEN child asks for nothing, so it reserves no space. Without
+    // this a hidden widget still pushed its siblings around -- a page
+    // switch would leave a gap exactly the size of the page it hid,
+    // which reads as a layout bug rather than as a hidden control.
+    if (it->hidden) return;
     if (it->ops && it->ops->natural_size) it->ops->natural_size(it->widget, w, h);
 }
 
@@ -117,7 +122,10 @@ void uui_layout_run(struct uui_layout *l, int x, int y, int w, int h) {
         natural_total += (l->dir == UUI_COLUMN) ? ih : iw;
 
         unsigned grow_flag = (l->dir == UUI_COLUMN) ? UUI_FILL_H : UUI_FILL_W;
-        if (l->items[i].flags & grow_flag) grow_count++;
+        // ...and it must not claim a share of the leftover space
+        // either, or the visible children silently get less than they
+        // should.
+        if (!l->items[i].hidden && (l->items[i].flags & grow_flag)) grow_count++;
     }
     if (l->count > 1) natural_total += (l->count - 1) * g;
 
@@ -140,7 +148,7 @@ void uui_layout_run(struct uui_layout *l, int x, int y, int w, int h) {
         // children exactly fill the container instead of leaving a
         // few pixels that read as a layout bug.
         unsigned grow_flag = (l->dir == UUI_COLUMN) ? UUI_FILL_H : UUI_FILL_W;
-        if (it->flags & grow_flag) {
+        if (!it->hidden && (it->flags & grow_flag)) {
             grow_seen++;
             int extra = (grow_seen == grow_count)
                           ? spare - grow_each * (grow_count - 1) : grow_each;
@@ -166,6 +174,14 @@ void uui_layout_run(struct uui_layout *l, int x, int y, int w, int h) {
 void uui_layout_draw(struct ugfx_surface *s, const struct uui_layout *l) {
     for (int i = 0; i < l->count; i++) {
         const struct uui_item *it = &l->items[i];
+        // `hidden` means NOT DRAWN as well as not hit-tested, which is
+        // what uui_widget.h has always promised and what this loop did
+        // not do. uui_route.c's own draw honoured it, so an app
+        // declaring both a layout and .widgets (the normal shape) got a
+        // control that was unclickable and still perfectly visible --
+        // the page it thought it had hidden painting over the page it
+        // had switched to.
+        if (it->hidden) continue;
         if (it->ops && it->ops->draw) it->ops->draw(s, it->widget);
     }
 }

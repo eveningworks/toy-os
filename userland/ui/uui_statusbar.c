@@ -1,6 +1,7 @@
 // status bar. See ui/uui_statusbar.h for the design.
 #include "ui/uui_statusbar.h"
 #include "ui/uui_primitives.h"
+#include "ui/uui_widget.h"  // the ops table at the bottom of this file
 
 static int pad(void) { return ugfx_char_w() / 2; }
 
@@ -86,3 +87,33 @@ void uui_statusbar_draw(struct ugfx_surface *s, const struct uui_statusbar *sb) 
                                   sb->panes[i].text, sb->fg, sb->bg);
     }
 }
+
+// --- as a LAYOUT widget (ui/uui_widget.h) ----------------------------
+//
+// So an app can declare a status bar in uapp_desc.widgets and have the
+// layout reserve its height, instead of positioning it by hand against
+// the content rect -- which is what the ring-3 Notepad does, and which
+// means every app doing it repeats the same "content height minus the
+// bar" arithmetic. Getting that arithmetic slightly wrong does not
+// fail loudly: the bar simply overlaps whatever is above it.
+//
+// No input slots on purpose. A status bar reports; it is not a control.
+// Adding `hit` would make it swallow clicks meant for the window
+// beneath, which is the opposite of what it is for.
+static void sb_ops_natural_size(const void *w, int *out_w, int *out_h) {
+    uui_statusbar_natural_size((const struct uui_statusbar *)w, out_w, out_h);
+}
+
+static void sb_ops_set_geometry(void *w, int x, int y, int width, int height) {
+    uui_statusbar_set_geometry((struct uui_statusbar *)w, x, y, width, height);
+}
+
+static void sb_ops_draw(struct ugfx_surface *s, const void *w) {
+    uui_statusbar_draw(s, (const struct uui_statusbar *)w);
+}
+
+const struct uui_widget_ops uui_statusbar_ops = {
+    .natural_size = sb_ops_natural_size,
+    .set_geometry = sb_ops_set_geometry,
+    .draw         = sb_ops_draw,
+};

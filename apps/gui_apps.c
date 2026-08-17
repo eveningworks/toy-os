@@ -1,5 +1,4 @@
 #include "gui_apps.h"
-#include "control_panel.h"
 #include "kapi.h"
 #include "etc_config.h"
 
@@ -20,36 +19,16 @@
 //
 //   Exec=/bin/wm/apps/calculator   spawn that binary; the process makes
 //                                  its own window over TWP.
-//   Exec=builtin:taskmgr           a kernel-space app, whose callbacks
-//                                  are compiled in and looked up below.
 //
-// The `builtin:` form exists only while kernel-space apps do -- when the
-// last of them moves to ring 3 (Milestone 41's stage 4) every entry
-// names a real binary and BUILTINS below goes with them. Naming it in
-// the format now is what lets the two coexist without the format
-// caring which is which.
+// There is no second form any more. `Exec=builtin:<name>` named a
+// kernel-space app whose callbacks were compiled in; it was removed
+// when Control Panel -- the last one -- became a ring-3 binary
+// (Milestone 41 stage 4's prerequisite), which is exactly what the
+// format was shaped to allow without any reader of it changing. An
+// entry still carrying `builtin:` now names no binary and is refused
+// by the loader below like any other bad path.
 
 #define DESKTOP_DIR "/usr/wm/desktop"
-
-// The apps that still live in the kernel. Looked up by the name after
-// `builtin:`, so a desktop entry can point at one exactly as it points
-// at a binary.
-struct builtin {
-    const char *key;
-    void (*default_size)(int *w, int *h);
-    void (*on_open)(struct window *win);
-    void (*on_draw)(struct window *win);
-    int (*on_press)(struct window *win, int cx, int cy);
-    void (*on_release)(struct window *win);
-    int (*on_hover)(struct window *win, int cx, int cy);
-};
-
-static const struct builtin BUILTINS[] = {
-    { "controlpanel", control_panel_default_size, control_panel_open,
-      control_panel_draw, control_panel_press, control_panel_release,
-      control_panel_hover },
-};
-#define BUILTIN_COUNT ((int)(sizeof BUILTINS / sizeof BUILTINS[0]))
 
 // The live registry. Not const any more: it is filled in at startup from
 // the directory above. Everything that reads it (start_menu.c,
@@ -167,22 +146,13 @@ static void load_entry(const char *file) {
     a->resizable = 1;
     a->show_in = parse_show_in(path, file);
 
+    // Every app is a ring-3 binary now. An entry still naming the
+    // retired `builtin:` form is refused LOUDLY rather than shown as a
+    // menu row that does nothing when clicked -- the same treatment an
+    // unknown builtin always got, kept because an old entry file can
+    // outlive the mechanism it named.
     if (k_strncmp(g_execs[i], "builtin:", 8) == 0) {
-        const char *key = g_execs[i] + 8;
-        for (int b = 0; b < BUILTIN_COUNT; b++) {
-            if (k_strcmp(BUILTINS[b].key, key) != 0) continue;
-            a->default_size = BUILTINS[b].default_size;
-            a->on_open = BUILTINS[b].on_open;
-            a->on_draw = BUILTINS[b].on_draw;
-            a->on_press = BUILTINS[b].on_press;
-            a->on_release = BUILTINS[b].on_release;
-            a->on_hover = BUILTINS[b].on_hover;
-            gui_app_registry_count++;
-            return;
-        }
-        // Named a builtin that does not exist. Refused loudly rather
-        // than shown as a menu row that does nothing when clicked.
-        klog_printf("wm: %s names unknown builtin \"%s\" -- ignored\n", file, key);
+        klog_printf("wm: %s uses the retired builtin: form -- ignored\n", file);
         return;
     }
 

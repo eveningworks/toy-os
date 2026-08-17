@@ -304,6 +304,27 @@ static int lb_ops_wheel(void *w, int notches) {
     return uui_listbox_wheel((struct uui_listbox *)w, notches);
 }
 
+// A LAYOUT-PARTICIPATING widget needs both of these. Without them the
+// layout has no way to place a listbox at all, so one declared in
+// uapp_desc.widgets drew at whatever coordinates init() was given --
+// which for a widget the app expected to be positioned FOR it means on
+// top of its siblings, outside the content area, looking like a
+// clipping bug rather than a missing ops slot.
+static void lb_ops_natural_size(const void *w, int *out_w, int *out_h) {
+    uui_listbox_natural_size((const struct uui_listbox *)w, out_w, out_h);
+}
+
+static void lb_ops_set_geometry(void *w, int x, int y, int width, int height) {
+    struct uui_listbox *lb = (struct uui_listbox *)w;
+    lb->x = x;
+    lb->y = y;
+    lb->w = width;
+    lb->h = height;
+    // The visible-row count and the scrollbar both derive from h, and
+    // both are recomputed on demand from it (see uui_listbox_visible_
+    // rows()), so there is nothing cached here to invalidate.
+}
+
 static int lb_ops_bounds(const void *w, int cx, int cy) {
     const struct uui_listbox *lb = (const struct uui_listbox *)w;
     // The WHOLE control, scrollbar strip included -- unlike
@@ -318,6 +339,8 @@ static void lb_ops_draw(struct ugfx_surface *s, const void *w) {
 }
 
 const struct uui_widget_ops uui_listbox_ops = {
+    .natural_size  = lb_ops_natural_size,
+    .set_geometry  = lb_ops_set_geometry,
     .draw          = lb_ops_draw,
     .hit           = lb_ops_bounds,
     .key           = lb_ops_key,
