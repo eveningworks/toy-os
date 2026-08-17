@@ -125,6 +125,7 @@ there when you add an entry, or the index quietly stops being one.
 
 - [The ring-3 WM owns the back buffer, and its death drops you to a text shell](#the-ring-3-wm-owns-the-back-buffer-and-its-death-drops-you-to-a-text-shell)
 - [The kernel owns its idle work, so the WM's departure deletes a call rather than a capability](#the-kernel-owns-its-idle-work-so-the-wms-departure-deletes-a-call-rather-than-a-capability)
+- [A ring-3 write to the framebuffer is transient while the WM is still in ring 0, and the test has to say so](#a-ring-3-write-to-the-framebuffer-is-transient-while-the-wm-is-still-in-ring-0-and-the-test-has-to-say-so)
 - [The desktop's app list is a directory of files, not a table in the kernel](#the-desktops-app-list-is-a-directory-of-files-not-a-table-in-the-kernel)
 - [Widgets are added once a second real caller needs them -- except the checkbox](#widgets-are-added-once-a-second-real-caller-needs-them----except-the-checkbox)
 - [A table PULLS its rows, and stores none of them](#a-table-pulls-its-rows-and-stores-none-of-them)
@@ -6807,3 +6808,43 @@ wait loop calls back into it -- while `dbg_dispatch()`'s `arg` points
 INTO `line_buf`, so a nested call assembling the next command overwrote
 the running one's arguments underneath it. It refuses the nested call
 now; the bytes wait in the UART ring buffer, so nothing is dropped.
+
+## A ring-3 write to the framebuffer is transient while the WM is still in ring 0, and the test has to say so
+
+Milestone 41 stage 4a. `WIN_REQ_FB_MAP` grants the registered
+compositor a writable, write-combining mapping of the real framebuffer;
+`WIN_REQ_FB_PRESENT` publishes a rect. The obvious way to test that --
+paint a block, look for it in a screenshot -- is wrong, and it fails
+against a kernel where every part of the mechanism works.
+
+The reason is the shape of the stage: the ring-0 WM still owns the
+screen. A ring-3 write lands in the framebuffer and survives exactly
+until the WM's next frame repaints that region. Measured rather than
+argued: reading the same address back through the mapping returns the
+written colour immediately after the write and the desktop background a
+moment later. Two compositors writing one screen is what 4a IS, so the
+transience is a property to assert, not a race to defeat.
+
+**What is assertable** is that the mapping is the real screen, from two
+independent sides -- the client reports the pixel it reads through the
+new mapping, QEMU's screendump reports the same pixel from the
+display's side, and they must agree. A mapping onto any other memory
+cannot produce agreement.
+
+**The positive control is worth copying, for what stayed green.**
+Offsetting the granted physical base by 2 MiB reddens exactly the
+two-observers check. It leaves "the write reads back through the
+mapping" GREEN -- because a read-back proves only that *some* writable
+page is mapped there, not that it is the framebuffer. A test built on
+the read-back alone would have shipped a grant onto arbitrary memory.
+
+Two mechanism notes worth having beside that. The memory type has to
+reach the USER PTE (`vmm_map_user_page_type()`, `VMM_MT_WC`): the
+kernel's identity map and the compositor's mapping are separate PTEs
+with separate types, and `paging_set_write_combining()` only touches
+the former, so without this the compositor gets a cached framebuffer --
+the bug class TCG cannot show. And `WIN_REQ_FB_PRESENT` is required
+rather than advisory because a `display_driver` may declare
+`DISPLAY_CAP_NEEDS_FLUSH` (vmsvga does), where written pixels are
+invisible until the driver is told; `display_flush()` already no-ops on
+a scanned-out adapter, so one path serves both and stays exercised.

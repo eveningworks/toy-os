@@ -12,6 +12,11 @@ extern uint64_t p4_table[512];
 #define PAGE_USER     (1ULL << 2)
 #define PAGE_HUGE     (1ULL << 7)  // a PDPT/PD entry that IS the leaf, not a table pointer
 #define PAGE_NX       (1ULL << 63) // requires EFER.NXE, set once in boot.asm
+// Selects PAT slot 4 (paging.c points it at write-combining at boot).
+// Bit 7 on a 4KiB PTE -- note that is the same bit PAGE_HUGE uses at the
+// levels ABOVE this one, which is why this constant is named for the
+// page size it is valid on. Every page this file maps is 4KiB.
+#define PAGE_PAT_4K   (1ULL << 7)
 #define ADDR_MASK     0x000FFFFFFFFFF000ULL
 
 // All of this runs with the kernel's own page tables still active (CR3
@@ -95,8 +100,8 @@ uint64_t vmm_user_bytes(uint64_t pml4_phys) {
     return i < 0 ? 0 : (uint64_t)g_acct[i].pages * 4096;
 }
 
-int vmm_map_user_page_flags(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
-                             int writable, int executable) {
+int vmm_map_user_page_type(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
+                            int writable, int executable, int memtype) {
     int pml4_index = (int)((vaddr >> 39) & 0x1FF);
     int pdpt_index = (int)((vaddr >> 30) & 0x1FF);
     int pd_index   = (int)((vaddr >> 21) & 0x1FF);
@@ -114,6 +119,12 @@ int vmm_map_user_page_flags(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
     uint64_t flags = PAGE_PRESENT | PAGE_USER;
     if (writable) flags |= PAGE_WRITABLE;
     if (!executable) flags |= PAGE_NX;
+    // PAT slot 4 (PAT=1, PCD=0, PWT=0) is pointed at write-combining by
+    // paging.c at boot. On a 4KiB page the PAT bit is bit 7 -- bit 12,
+    // which selects it on a 2MiB page, is part of the PHYSICAL ADDRESS
+    // here and setting it would silently repoint the mapping rather
+    // than fault. Every page this function maps is 4KiB.
+    if (memtype == VMM_MT_WC) flags |= PAGE_PAT_4K;
 
     uint64_t *pt = table_at(pt_phys);
     // Only count a page that was not already mapped here. A remap of the
@@ -138,7 +149,15 @@ int vmm_map_user_page_flags(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
 // control (a .text segment has to be executable) -- it calls
 // vmm_map_user_page_flags() directly instead of this wrapper.
 int vmm_map_user_page(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr) {
-    return vmm_map_user_page_flags(pml4_phys, vaddr, paddr, 1, 0);
+    return vmm_map_user_page_type(pml4_phys, vaddr, paddr, 1, 0, VMM_MT_NORMAL);
+}
+
+// The permissions-only form, which is what every caller but the
+// framebuffer grant wants: ordinary cacheable memory.
+int vmm_map_user_page_flags(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
+                             int writable, int executable) {
+    return vmm_map_user_page_type(pml4_phys, vaddr, paddr, writable, executable,
+                                   VMM_MT_NORMAL);
 }
 
 // The inverse of vmm_map_user_page(): clears one page's PTE so the

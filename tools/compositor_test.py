@@ -41,7 +41,10 @@ Usage (the VM must already be up and in GUI mode):
 import argparse
 import os
 import sys
+import tempfile
 import time
+
+from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gui_debug import DebugConsole          # noqa: E402
@@ -93,8 +96,10 @@ def main():
                     help="the VM already shows the desktop; don't type `gui` first")
     args = ap.parse_args()
 
+    # Needed either way now: the framebuffer-grant checks read pixels off
+    # the real screen rather than believing the client's own log.
+    qmp = QMPSession(port=args.qmp_port)
     if not args.in_gui:
-        qmp = QMPSession(port=args.qmp_port)
         qmp.send_text("gui")
         qmp.send_key("ret")
         time.sleep(2.0)
@@ -137,6 +142,9 @@ def main():
     dbg.spawn(SPAWN_PATH)          # no window to wait for -- it has none
     time.sleep(0.5)
     reg = comp_lines(dbg)
+    # Kept for the framebuffer-grant group below: the pre-registration
+    # refusal is logged here, and comp_lines() consumes what it returns.
+    start_lines = list(reg)
     check("client reports registered",
           any("registered" in l for l in reg),
           f"{len(reg)} line(s)")
@@ -199,6 +207,89 @@ def main():
     time.sleep(0.4)
     wheels = comp_lines(dbg, "wheel")
     check("compositor saw a wheel notch", len(wheels) > 0, f"{len(wheels)} line(s)")
+
+    # --- the framebuffer grant (M41 stage 4a) --------------------------
+    #
+    # WHAT THIS CAN AND CANNOT ASSERT, because getting it wrong wasted
+    # real time here. The obvious check -- paint a block and find it in a
+    # screenshot -- is WRONG in stage 4a, and it fails against a working
+    # kernel. The ring-0 WM still owns the screen and repaints it, so a
+    # ring-3 write survives until the WM's next frame and no longer;
+    # measured directly, the framebuffer reads back as the written colour
+    # immediately after the write and as the desktop again a moment
+    # later. Both compositors writing one screen is the whole shape of
+    # this stage. So the assertions below are about the MAPPING being the
+    # real framebuffer, verified from two independent sides, and the
+    # transience is asserted deliberately rather than fought.
+
+    state = dbg.json("gui state --json") or {}
+
+    # Refused to a non-compositor. Logged at startup, before registering.
+    check("the grant is refused to a non-compositor",
+          any("fb-unregistered refused" in l for l in start_lines),
+          "granted!" if any("fb-unregistered GRANTED" in l for l in start_lines)
+          else "refused")
+
+    dbg.logs()
+    dbg.key("f")
+    time.sleep(0.5)
+    fb = [l for l in comp_lines(dbg) if "compclient: fb " in l]
+    check("the compositor is granted the framebuffer", len(fb) > 0,
+          fb[0].strip() if fb else "no fb line")
+
+    # Geometry has to match what the KERNEL says the screen is: "it
+    # returned four numbers" is satisfied by four zeros.
+    geom_ok = False
+    probe_val = None
+    detail = "no fb line"
+    if fb:
+        parts = fb[0].split("compclient: fb ")[1].split()
+        try:
+            w, h, pitch, bpp = (int(p) for p in parts[:4])
+            probe_val = parts[5] if len(parts) > 5 else None
+            screen = state.get("screen", {})
+            geom_ok = (w == screen.get("w") and h == screen.get("h")
+                       and pitch >= w * (bpp // 8) and bpp in (24, 32))
+            detail = f"{w}x{h} pitch={pitch} bpp={bpp} vs kernel {screen}"
+        except (ValueError, IndexError):
+            detail = fb[0].strip()
+    check("its geometry matches the kernel's own screen", geom_ok, detail)
+
+    # THE LOAD-BEARING ONE, and the reason it is worth its length: the
+    # client reports the pixel it reads at (100,100) THROUGH the new
+    # mapping, and QEMU's screendump reports the same pixel from the
+    # display's side. Two independent observers of one address. A
+    # mapping pointed at any other memory -- zeroed frames, the wrong
+    # physical base, someone else's buffer -- cannot produce agreement
+    # here, and every other check in this group would still pass.
+    shot = os.path.join(tempfile.gettempdir(), "compfb.png")
+    qmp.screenshot(shot)
+    px = Image.open(shot).convert("RGB")
+    seen = px.getpixel((100, 100))
+    seen_hex = f"{seen[0]:02x}{seen[1]:02x}{seen[2]:02x}"
+    check("the mapping reads the REAL screen (client vs screendump)",
+          probe_val is not None and probe_val.lstrip("0").lower() == seen_hex.lstrip("0").lower(),
+          f"client={probe_val} screendump={seen_hex}")
+
+    # And a write through it lands, read back through the same mapping.
+    dbg.logs()
+    dbg.key("p")
+    time.sleep(0.5)
+    painted = [l for l in comp_lines(dbg) if "painted" in l]
+    check("present succeeds and the write is in the framebuffer",
+          any("painted 1 readback ff00ff" in l for l in painted),
+          painted[0].strip() if painted else "no painted line")
+
+    # The transience, asserted on purpose: the ring-0 WM repaints over a
+    # ring-3 write, which is correct while both own the screen. When the
+    # WM becomes the ring-3 compositor in 4b this check is what should
+    # change -- so it failing later is a signal, not a flake.
+    dbg.key("r")
+    time.sleep(0.5)
+    reread = [l for l in comp_lines(dbg) if "reread" in l]
+    check("the ring-0 WM still owns the screen (write is transient)",
+          any("reread" in l and "ff00ff" not in l for l in reread),
+          reread[0].strip() if reread else "no reread line")
 
     # --- release -------------------------------------------------------
     # 'q' quits compclient. It owns no window, so there is no close

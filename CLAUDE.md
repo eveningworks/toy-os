@@ -486,8 +486,9 @@ technical conventions below:
   claim that it did was a comment pointing at a since-deleted file.
   **Every prerequisite is now complete, and stage 4's own REQUIREMENTS
   are written up as R1-R9** (2026-08-17), measured from `apps/wm/`'s
-  call surface rather than estimated. **Stage 4a has started: R4 and R5
-  are BUILT.** Read that before touching
+  call surface rather than estimated. **Stage 4a is DONE except R3: R1,
+  R4 and R5 are BUILT** (R3, the cursor over TWP, is deferred to 4b
+  because the ring-0 WM cannot exercise it). Read that before touching
   anything in `apps/wm/` with the migration in
   mind.
 - **The kernel's idle work has ONE owner: `scheduler_idle()`**
@@ -510,6 +511,24 @@ technical conventions below:
   call: `dbg_dispatch()`'s `arg` points into `line_buf`, so a command
   typed during a long `sh` used to overwrite the running one's
   arguments. See `docs/decisions.md`.
+- **The registered compositor can be GRANTED the real framebuffer**
+  (`WIN_REQ_FB_MAP` / `WIN_REQ_FB_PRESENT`, owned by
+  `kernel/proc/win_surface.c`). Writable and WRITE-COMBINING at
+  `WIN_FB_VADDR`, refused to anyone but the compositor, and revoked
+  wherever the role is cleared -- one place, so deregistration, a kill
+  and a fault are the same path. Three things to know. **The memory
+  type must reach the USER PTE** (`vmm_map_user_page_type()`,
+  `VMM_MT_WC`): the kernel's identity map and the compositor's mapping
+  are separate PTEs, and `paging_set_write_combining()` only touches
+  the former, so without this a ring-3 compositor gets a CACHED
+  framebuffer -- the bug class TCG cannot show you. **Present is
+  required, not advisory**: `vmsvga` declares
+  `DISPLAY_CAP_NEEDS_FLUSH`, where written pixels are invisible until
+  the driver is told. And **a ring-3 write is TRANSIENT while the WM is
+  still ring 0** -- it survives until the WM's next frame, so a test
+  that looks for it in a screenshot fails against a working kernel;
+  assert the mapping is the real screen by comparing a client read
+  against a screendump of the same pixel. See `docs/decisions.md`.
 - **`SYS_FS_GENERATION` is how ring 3 asks "has the filesystem
   changed?"** -- no arguments, the counter in RAX,
   `sys_fs_generation()` in libsys. Its own syscall rather than a

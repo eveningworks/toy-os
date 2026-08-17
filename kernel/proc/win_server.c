@@ -12,6 +12,7 @@
 #include "string.h"
 #include "font_ttf.h" // the glyph tables WIN_REQ_FONT shares out
 #include "gfx.h"      // gfx_font_size() -- which variant is active
+#include "win_surface.h" // the compositor's framebuffer grant (M41 stage 4a)
 #include <stddef.h>
 
 #include "scheduler.h" // SCHED_MAX_PROCS -- this table is per process
@@ -470,6 +471,31 @@ int win_server_request(int pid, struct win_request_msg *req) {
         return win_server_set_compositor(0, 0);
     }
 
+    // The framebuffer grant, gated on the same role and handled beside
+    // it -- also above the !g_ops guard, for the reason given there: in
+    // stage 4 the ring-3 WM IS the presentation layer, so requiring one
+    // to already be registered would make the grant unreachable at
+    // exactly the point of the milestone.
+    //
+    // The access control lives HERE rather than in win_surface.c, the
+    // same way it lives here for the per-window compositor mappings --
+    // one file decides who may act as the compositor.
+    if (req->type == WIN_REQ_FB_MAP) {
+        if (pid != g_comp_pid || !g_comp_pid) return -1;
+        uint32_t w = 0, h = 0, pitch = 0, bpp = 0;
+        if (!win_surface_grant(pid, vmm_current_pml4(), &w, &h, &pitch, &bpp))
+            return -1;
+        req->a = (int32_t)w;
+        req->b = (int32_t)h;
+        req->c = (int32_t)pitch;
+        req->d = (int32_t)bpp;
+        return 0;
+    }
+    if (req->type == WIN_REQ_FB_PRESENT) {
+        if (pid != g_comp_pid || !g_comp_pid) return -1;
+        return win_surface_present(pid, req->a, req->b, req->c, req->d) ? 0 : -1;
+    }
+
     if (!g_ops) return -1;
 
     // Not addressed to one of the CALLER's own windows -- it names
@@ -614,6 +640,13 @@ int win_server_set_compositor(int pid, uint64_t pml4) {
                 comp_unmap(&windows[p][i]);
             }
         }
+        // The framebuffer grant goes the same way and for the same
+        // reason: it belongs to the ROLE, not to the process. This is
+        // the one place the role is cleared -- deregistration, a kill
+        // and a fault all arrive here -- so it is the one place the
+        // grant needs revoking, and there is no second bookkeeping to
+        // fall out of step with it.
+        win_surface_revoke(g_comp_pid);
     }
 
     g_comp_pid = pid;

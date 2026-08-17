@@ -1658,10 +1658,17 @@ the WM leaving ring 3 deletes a call rather than the console. Unifying
 the four hand-rolled idle loops also fixed a live bug: the poll is not
 re-entrant, and `dbg_dispatch()`'s `arg` points into `line_buf`, so a
 serial command typed during a long `sh` overwrote the running one's
-arguments. What remains of 4a is R1 and R3 -- the framebuffer grant,
-the WC PAT bits on the user mapping, present-with-rect and the cursor
-ops -- with their four design decisions already settled in
-`docs/wm-ring3-design.md`.
+arguments.
+
+**R1 landed the same day, so 4a is complete except R3.** The registered
+compositor can be granted a writable, write-combining mapping of the
+real framebuffer (`WIN_REQ_FB_MAP`) and publish a damage rect
+(`WIN_REQ_FB_PRESENT`), owned by `kernel/proc/win_surface.c` and
+revoked wherever the compositor role is cleared. R3 (the hardware
+cursor and mouse bounds over TWP) is deliberately deferred to 4b: the
+ring-0 WM calls `gfx_hw_cursor_*` directly and cannot exercise a
+protocol cursor request, so building it now would add a path whose only
+caller is a test.
 
 - [x] ~~The kernel context is a scheduler participant, so `wm_run()`
       keeps drawing while a ring-3 process runs~~ -- done, see

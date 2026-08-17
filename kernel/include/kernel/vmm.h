@@ -45,6 +45,32 @@ int vmm_map_user_page(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr);
 int vmm_map_user_page_flags(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
                              int writable, int executable);
 
+// The memory type a user mapping gets. Ordinary RAM is VMM_MT_NORMAL
+// (cacheable, what every mapping here was before this existed); a
+// framebuffer wants VMM_MT_WC.
+//
+// **Write-combining is a WRITE optimisation and makes reads strictly
+// worse** -- stores coalesce into burst transfers, while a load is a
+// full uncached round trip with no cache fill and no prefetch. So a
+// region mapped WC must be written and not read back. That is exactly
+// the framebuffer's access pattern and exactly why the console had to
+// stop scrolling by reading pixels.
+enum vmm_memtype { VMM_MT_NORMAL = 0, VMM_MT_WC = 1 };
+
+// Both of the above plus the memory type. The type is a named argument
+// rather than a bit the caller sets, because the PAT bit's POSITION
+// depends on the page size (bit 7 on a 4KiB page, bit 12 on a 2MiB one,
+// where bit 12 is part of the physical address instead) -- getting that
+// wrong does not fault, it repoints the mapping. That reasoning stays
+// in one place here.
+//
+// Note this sets the type on the USER mapping only. The kernel's own
+// identity map of the same frames is a separate PTE with its own type,
+// set by paging_set_write_combining() at display probe -- the two are
+// independent, and a framebuffer wants both.
+int vmm_map_user_page_type(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
+                            int writable, int executable, int memtype);
+
 // Loads CR3 with the given address space.
 // Clears one user page's mapping. Does NOT free the frame it pointed
 // at, nor the page tables above it -- the caller owns the frame (only

@@ -347,6 +347,50 @@ struct win_event {
                            // state until then, since every launch path
                            // here is a human clicking a menu.
 
+#define WIN_REQ_FB_MAP     15 // No inputs. Maps the real linear
+                           // framebuffer WRITABLE into the caller at
+                           // WIN_FB_VADDR and fills in its geometry:
+                           // a = width, b = height, c = pitch in
+                           // BYTES, d = bits per pixel. `window` is
+                           // ignored -- the screen belongs to the
+                           // session, not to a window.
+                           //
+                           // REFUSED unless the caller is the
+                           // registered compositor (WIN_REQ_SET_
+                           // COMPOSITOR). That is the whole difference
+                           // between this and the legacy SYS_GUI_INIT,
+                           // which any process may call: this one is a
+                           // grant tied to a role, revoked when the
+                           // role is dropped or the process dies.
+                           //
+                           // The mapping is WRITE-COMBINING. Writes
+                           // coalesce into burst transfers; reads are
+                           // full uncached round trips, so a caller
+                           // composites in its own back buffer and
+                           // copies OUT to this, never reading it back.
+                           //
+                           // Mapping it does not make it visible on
+                           // every adapter -- see WIN_REQ_FB_PRESENT.
+#define WIN_REQ_FB_PRESENT 16 // a, b, c, d: x, y, w, h of the region
+                           // just written. Publishes it.
+                           //
+                           // Required, not advisory, and not something
+                           // a client may skip after checking the
+                           // driver: a display_driver may declare
+                           // DISPLAY_CAP_NEEDS_FLUSH (vmsvga does), and
+                           // on one of those the adapter shows NOTHING
+                           // until told which region changed. On a
+                           // continuously-scanned adapter the kernel's
+                           // display_flush() is already a no-op, so one
+                           // code path serves both and the flush path
+                           // stays exercised rather than becoming
+                           // reachable on one driver only.
+                           //
+                           // A rect rather than the whole screen
+                           // because that is what the caller knows and
+                           // what the adapter wants; a rect outside the
+                           // screen is clamped, and an empty one is a
+                           // legal no-op rather than an error.
 #define WIN_REQ_TIMER      14 // `window`: which one; a: the repeat
                            // interval in MILLISECONDS, or 0 to cancel.
                            // Delivers WIN_EV_TIMER every `a` ms until
@@ -578,6 +622,26 @@ static inline uint64_t win_buffer_vaddr(uint32_t window) {
 // Costs nothing but virtual address space: 64 x WIN_CLIENT_MAX x 8 MiB
 // is 2 GiB of vaddr in a region with nothing above it.
 #define WIN_COMPOSITOR_MAX_PIDS 64
+
+// --- the compositor's framebuffer grant -------------------------------
+//
+// Where WIN_REQ_FB_MAP maps the real linear framebuffer. Above the
+// compositor region (64 x WIN_CLIENT_MAX slots, ~2 GiB) so the three
+// mapped regions -- own buffers, other windows, the screen itself --
+// cannot collide.
+//
+// A FIXED address rather than one the kernel returns, for the reason
+// the derived addresses above give: an address that varies per boot is
+// one nothing can assert about, and a test then cannot tell a wrong
+// mapping from a moved one. There is exactly one registered compositor,
+// so unlike a window buffer this needs no per-process derivation --
+// hence a plain constant rather than a function.
+//
+// Stated here rather than in kernel/uaddr.h (which holds the rest of
+// the ring-3 address map) because a CLIENT needs this number and
+// uaddr.h is kernel-internal -- the same reason WIN_FONT_VADDR lives
+// here. uaddr.h carries a pointer to it.
+#define WIN_FB_VADDR 0x8100000000ULL
 
 static inline uint64_t win_compositor_vaddr(int pid, uint32_t window) {
     return WIN_COMPOSITOR_BASE

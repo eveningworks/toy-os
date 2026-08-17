@@ -73,6 +73,12 @@
 
 #define UADDR_GUARD_BASE    (UADDR_STACK_BOTTOM - (uint64_t)UADDR_GUARD_PAGES * 4096)
 
+// Not stated here, but part of the same map: the windowing regions a
+// GUI client gets -- its own window buffers, the shared font, the
+// compositor's view of other windows, and WIN_FB_VADDR (the registered
+// compositor's framebuffer grant). They live in abi/win_proto.h,
+// because a CLIENT needs those numbers and this header is
+// kernel-internal. All of them sit well above the addresses below.
 #define UADDR_HEAP_BASE     0x8000100000ULL // heap, grows UP via SYS_SBRK
 
 // The first address SYS_SBRK must never map. Derived from the guard,

@@ -30,6 +30,7 @@
 #include <stdint.h>
 #include "rt/sys.h"
 #include "lib/stdio.h"
+#include "lib/string.h" // memset -- the request structs are zeroed
 #include "win_proto.h"
 
 // The one request this program makes. `a` is claim(1)/release(0); every
@@ -46,11 +47,35 @@ static int set_compositor(int claim) {
 int main(void) {
     char buf[64];
 
+    // The access control, checked BEFORE registering, because after
+    // registering there is no way to ask from a non-compositor without a
+    // second process -- and "it was refused" is only meaningful against
+    // "it was granted a moment later to the same process".
+    {
+        struct win_request_msg probe;
+        memset(&probe, 0, sizeof probe);
+        probe.type = WIN_REQ_FB_MAP;
+        sys_eprint(sys_win_request(&probe) == 0
+                       ? "compclient: fb-unregistered GRANTED\n"
+                       : "compclient: fb-unregistered refused\n");
+    }
+
     if (set_compositor(1) != 1) {
         sys_eprint("compclient: registration REFUSED\n");
         return 1;
     }
     sys_eprint("compclient: registered\n");
+
+    // --- the framebuffer grant (M41 stage 4a) ---------------------
+    //
+    // 'f' maps the real screen and paints a marker block into it. The
+    // WM is still compositing the same screen in ring 0, so the block
+    // survives only until the next repaint of that region -- which is
+    // exactly right for a test: it proves the mapping is live and
+    // writable without this program having to own the desktop.
+    struct win_request_msg fb;
+    int have_fb = 0;
+    unsigned fb_w = 0, fb_h = 0, fb_pitch = 0, fb_bpp = 0;
 
     for (;;) {
         struct win_event ev;
@@ -81,6 +106,56 @@ int main(void) {
         // 'q' quits. Checked here rather than in the WM, so the WM's own
         // routing of that same keystroke is untouched -- the two
         // consumers are independent, which is the property on test.
+        // 'f' maps the framebuffer; 'p' paints and publishes a block.
+        // Two keys rather than one so a test can assert the map's
+        // reported geometry BEFORE anything is drawn -- a single key
+        // would make "the mapping worked" and "the pixels arrived" one
+        // observation, and they fail independently.
+        if (ev.type == WIN_EV_RAW_KEY && ev.a == 'f') {
+            memset(&fb, 0, sizeof fb);
+            fb.type = WIN_REQ_FB_MAP;
+            if (sys_win_request(&fb) == 0) {
+                fb_w = (unsigned)fb.a; fb_h = (unsigned)fb.b;
+                fb_pitch = (unsigned)fb.c; fb_bpp = (unsigned)fb.d;
+                have_fb = 1;
+                volatile unsigned int *q = (volatile unsigned int *)WIN_FB_VADDR;
+                unsigned probe = q[100u * (fb_pitch / 4) + 100u];
+                snprintf(buf, sizeof buf, "compclient: fb %u %u %u %u probe %x\n",
+                         fb_w, fb_h, fb_pitch, fb_bpp, probe);
+            } else {
+                snprintf(buf, sizeof buf, "compclient: fb REFUSED\n");
+            }
+            sys_eprint(buf);
+        }
+
+        if (ev.type == WIN_EV_RAW_KEY && ev.a == 'p' && have_fb && fb_bpp == 32) {
+            // A 64x64 block of one known colour at a fixed offset, so a
+            // test reads a pixel value rather than looking at a picture.
+            // Written, never read back: the mapping is write-combining,
+            // where a read is a full uncached round trip.
+            volatile unsigned int *fbp = (volatile unsigned int *)WIN_FB_VADDR;
+            unsigned stride_px = fb_pitch / 4;
+            for (unsigned y = 0; y < 64 && y + 100 < fb_h; y++)
+                for (unsigned x = 0; x < 64 && x + 100 < fb_w; x++)
+                    fbp[(y + 100) * stride_px + (x + 100)] = 0x00FF00FFu;
+
+            struct win_request_msg pr;
+            memset(&pr, 0, sizeof pr);
+            pr.type = WIN_REQ_FB_PRESENT;
+            pr.a = 100; pr.b = 100; pr.c = 64; pr.d = 64;
+            int ok = sys_win_request(&pr) == 0;
+            unsigned back = fbp[132u * stride_px + 132u];
+            snprintf(buf, sizeof buf, "compclient: painted %d readback %x\n", ok, back);
+            sys_eprint(buf);
+        }
+
+        if (ev.type == WIN_EV_RAW_KEY && ev.a == 'r' && have_fb) {
+            volatile unsigned int *fbp = (volatile unsigned int *)WIN_FB_VADDR;
+            unsigned v = fbp[132u * (fb_pitch / 4) + 132u];
+            snprintf(buf, sizeof buf, "compclient: reread %x\n", v);
+            sys_eprint(buf);
+        }
+
         if (ev.type == WIN_EV_RAW_KEY && ev.a == 'q') break;
     }
 

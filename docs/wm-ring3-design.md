@@ -566,7 +566,36 @@ already have a ring-3 path**: the filesystem (`SYS_OPEN`/`READ`/
 the font arrived in stages 1-3. What follows is only what is left --
 each item with what exists, what is missing, and what would prove it.
 
-**R1. The framebuffer, and who owns the back buffer. DECIDED: the WM
+**R1. The framebuffer grant -- BUILT (2026-08-17).** `WIN_REQ_FB_MAP`
+maps the linear framebuffer WRITABLE and WRITE-COMBINING into the
+registered compositor at `WIN_FB_VADDR`, reporting width/height/pitch/
+bpp; `WIN_REQ_FB_PRESENT` publishes a damage rect through
+`display_flush()`. Both are refused to anyone but the compositor, and
+the grant is revoked wherever the role is cleared -- one place, so
+deregistration, a kill and a fault are the same path.
+`kernel/proc/win_surface.c` owns it; `vmm_map_user_page_type()` carries
+the memory type, so the WC PAT bit reaches the user PTE rather than
+only the kernel's identity map.
+
+  **What the test can and cannot assert, because getting it wrong cost
+  real time.** The obvious check -- paint a block, find it in a
+  screenshot -- is WRONG here and fails against a working kernel: the
+  ring-0 WM still owns the screen, so a ring-3 write survives until its
+  next frame and no longer. Measured directly, the framebuffer reads
+  back as the written colour immediately and as the desktop a moment
+  later. What IS assertable is that the mapping is the real screen,
+  from two independent sides: the client reports the pixel it reads
+  through the new mapping and QEMU's screendump reports the same pixel
+  from the display's side, and they must agree. A mapping onto any
+  other memory cannot produce agreement. The positive control (offset
+  the physical base by 2 MiB) reddens exactly that check -- and
+  usefully, "the write reads back" stayed GREEN, because a read-back
+  proves only that *some* writable page is there. `compositor_test.py`,
+  22 checks.
+
+  The original decision, for the reasoning:
+
+  **The framebuffer, and who owns the back buffer. DECIDED: the WM
 does.** The 100-odd `gfx_*` call sites are mostly rasteriser calls
 `ugfx.c` already mirrors; what has no ring-3 owner is the *surface* --
 `gfx_present()`, the write-combining publish, the dirty box,
@@ -715,9 +744,11 @@ document so far has been chosen so the suite passes at its end. Stage 4
 should be cut the same way -- a plausible split, to be confirmed when it
 starts: **4a** the kernel capabilities (R1's map/present, R3, R4, R5)
 with the WM still in ring 0 calling them, which is the stage-3 trick
-again and keeps the suite green throughout -- **R4 and R5 landed
-2026-08-17; R1 and R3 are what remain of it**, and the decisions they
-will be built on are settled below; **4b** the ring-3 binary
+again and keeps the suite green throughout -- **R1, R4 and R5 landed
+2026-08-17, so 4a is DONE except R3, which was deliberately deferred to
+4b** (the ring-0 WM calls `gfx_hw_cursor_*` directly and cannot
+exercise a TWP cursor request, so shipping one now would add a
+protocol path whose only caller is a test); **4b** the ring-3 binary
 drawing the desktop with input still routed the old way; **4c** the
 input and debug cutover plus R9's deletions; **4d** the death path (R7)
 and its test. 4a is the one that can be built and proven without
