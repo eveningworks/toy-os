@@ -751,9 +751,20 @@ static int cmd_wheel(const char *s) {
 // the OLDEST, so a compositor falling behind loses input silently; that
 // is exactly the failure this has to be able to name.
 static void cmd_compositor(struct dbg_out *o, int json) {
-    int pid = win_server_compositor_pid();
-    int pending = pid ? win_events_pending(pid) : 0;
-    int dropped = pid ? win_events_dropped(pid) : 0;
+    // WIN_REQ_EVENT_STATS rather than the kernel's own counters: this
+    // process IS the compositor, so it asks about itself, and the reply
+    // carries the registered pid so the answer cannot disagree with who
+    // the kernel thinks is composing.
+    struct win_request_msg q;
+    for (unsigned i = 0; i < sizeof q; i++) ((uint8_t *)&q)[i] = 0;
+    q.type = WIN_REQ_EVENT_STATS;
+    q.a = 0; // 0 = "me" -- see WIN_REQ_EVENT_STATS
+    int pid = 0, pending = 0, dropped = 0;
+    if (sys_win_request(&q) == 0) {
+        pending = q.a;
+        dropped = q.b;
+        pid = q.c;
+    }
 
     if (json) {
         dbg_out_printf(o, "{\"pid\":%d,\"pending\":%d,\"dropped\":%d}\r\n",

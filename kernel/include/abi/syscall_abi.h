@@ -618,6 +618,32 @@ struct dirent {
                           // the KERNEL fault.
                           // Returns 0, or -1 for a bad pointer or op.
 
+#define SYS_POWEROFF  38 // RDI = 0 to power off, 1 to reboot. Does not
+                          // return on success.
+                          //
+                          // For the DESKTOP, which offers both from the
+                          // Start menu and stops being able to reach
+                          // system_poweroff() the moment it is a ring-3
+                          // process (Milestone 41). The physical shell's
+                          // own `poweroff`/`reboot` are unaffected --
+                          // they are already ring 0.
+                          //
+                          // **Unprivileged, on purpose, and the same
+                          // reasoning as SYS_KILL**: there is no user
+                          // model here to gate it on, so a gate would be
+                          // decoration. Anything that can spawn a
+                          // process can already end the session.
+                          //
+                          // Both paths flush the disk cache first, so a
+                          // write that returned success is on the
+                          // platter before the machine stops -- the one
+                          // thing this must not get wrong.
+                          //
+                          // Returns -1 for an op it does not recognise.
+                          // On success it does not return at all, so a
+                          // caller that continues past it should treat
+                          // that as failure.
+
 #define SYS_FS_GENERATION 36 // No arguments. Returns fs_generation()
                           // (api/fs.h) -- a counter the VFS bumps on
                           // every mutation of the filesystem, so a

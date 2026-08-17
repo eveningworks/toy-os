@@ -696,6 +696,28 @@ technical conventions below:
   the stale-sprite bug this file's comments record paying for twice.
   The previous box is STORED rather than recomputed, because the shape
   under the old position may not be the shape there now.
+- **`etc_config.c` is SPLIT: the parser is shared, the file I/O is
+  kernel-only.** `kernel/lib/etc_config.c` holds the `name=value`
+  parser plus `etc_config_buf_get()`/`etc_config_buf_set()`, is
+  freestanding, and is compiled a second time into `libuapp.a`;
+  `etc_config_file.c` holds the four entry points that reach for
+  `fs.h`. Same shape as `kfmt.c`/`kfmt_print.c` and for the same
+  reason -- the ring-3 WM reads `.desktop` files and writes its own
+  icon positions, and CLAUDE.md's own rule is that a second
+  `name=value` parser drifts from the first, surfacing as the system
+  and `config` disagreeing about a file. **If you add an entry point,
+  ask which half it belongs in: does it look at a buffer, or at a
+  file?** The rewrite loop that `etc_config_set()` and
+  `etc_config_unset()` each carried a copy of is now one
+  buffer-to-buffer function, which is what made it shareable.
+- **A ring-3 compositor delivers events through TWP, not by calling the
+  kernel.** `WIN_REQ_EVENT_PUSH` (put an event on a client's queue) and
+  `WIN_REQ_EVENT_STATS` (queue depth), both **refused to anyone but the
+  registered compositor** -- this is the one request that reaches across
+  into another process's queue, and without that check any client could
+  synthesise a keystroke into any other. `struct win_request_msg` has a
+  `mods` field for it, mirroring `struct win_event`'s: `window` plus
+  `a`-`d` is one field short of carrying an event.
 - **`SYS_FS_GENERATION` is how ring 3 asks "has the filesystem
   changed?"** -- no arguments, the counter in RAX,
   `sys_fs_generation()` in libsys. Its own syscall rather than a

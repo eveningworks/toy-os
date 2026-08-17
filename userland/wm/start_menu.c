@@ -39,7 +39,7 @@ static void action_exit_to_shell(void) {
 // do_exit_to_shell(), system_poweroff() never returns (it halts either
 // way, see its own comment), so there's no wm_exit_requested-style flag
 // to set here -- the callback just calls it directly.
-static void do_shutdown(void) { system_poweroff(); }
+static void do_shutdown(void) { sys_poweroff(0); }
 static void action_shutdown(void) {
     confirm_dialog_open_with("Shut down? Unsaved changes will be lost.", do_shutdown, 0);
 }

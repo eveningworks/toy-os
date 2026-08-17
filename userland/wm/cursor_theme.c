@@ -8,6 +8,7 @@
 #include "setting.h" // not part of the kapi.h umbrella -- see kernel/include/README.md
 #include <stddef.h>
 #include "wm/wm_log.h"
+#include "wm/wm_conf.h"
 
 #define CURSOR_DIR "/usr/share/cursors"
 // The shared file every setting here lives in, per CLAUDE.md's rule
@@ -247,74 +248,16 @@ int cursor_theme_scale(void) { return g_scale; }
 // is what the ring-3 WM will need after Milestone 41 -- registering an
 // apply callback here would have to be undone then.
 
-// fs_list() is a callback walk with no per-call context pointer, so the
-// index being looked for and the name found have to travel through
-// these. Single-threaded and used only inside theme_choice(), which is
-// the only reason that is acceptable.
-static int g_want_index;
-static int g_seen_index;
-static char g_found_name[SETTING_VALUE_MAX];
-
-static int theme_choice(int index, char *out, uint32_t out_size) {
-    // Computed from the directory, not a compiled-in list, so dropping a
-    // theme in gives it a Control Panel row with no code change -- the
-    // same rule the keyboard layouts and the Start menu already follow.
-    // A loop over the listing, not a callback walk -- the two
-    // file-globals this used to need (g_want_index/g_seen_index) existed
-    // only because fs_list()'s callback had nowhere to carry them.
-    struct dirent ents[32];
-    int n = wm_fs_list(CURSOR_DIR, ents, 32);
-    int seen = 0;
-    g_found_name[0] = '\0';
-    for (int i = 0; i < n; i++) {
-        if (!ents[i].is_dir) continue;
-        if (seen == index) {
-            k_strlcpy(g_found_name, ents[i].name, sizeof g_found_name);
-            break;
-        }
-        seen++;
-    }
-    if (!g_found_name[0]) return 0;
-    k_strlcpy(out, g_found_name, out_size);
-    return 1;
-}
-
-static void theme_get(char *out, uint32_t out_size) {
-    k_strlcpy(out, g_theme, out_size);
-}
-
-static const char *const g_sizes[] = { "normal", "large", "huge" };
-
-static int size_choice(int index, char *out, uint32_t out_size) {
-    if (index < 0 || index >= (int)(sizeof g_sizes / sizeof g_sizes[0])) return 0;
-    k_strlcpy(out, g_sizes[index], out_size);
-    return 1;
-}
-
-static void size_get(char *out, uint32_t out_size) {
-    k_strlcpy(out, g_sizes[g_scale - 1 < 0 ? 0 :
-                            (g_scale > 3 ? 2 : g_scale - 1)], out_size);
-}
-
-static const struct setting g_theme_setting = {
-    .name = "cursor_theme",
-    .label = "Cursor theme",
-    .type = SETTING_TYPE_ENUM,
-    .file = CURSOR_CONFIG_FILE,
-    .choice = theme_choice,
-    .get = theme_get,
-    .apply = 0, // persist-only; picked up by cursor_theme_poll()
-};
-
-static const struct setting g_size_setting = {
-    .name = "cursor_size",
-    .label = "Cursor size",
-    .type = SETTING_TYPE_ENUM,
-    .file = CURSOR_CONFIG_FILE,
-    .choice = size_choice,
-    .get = size_get,
-    .apply = 0,
-};
+// The two settings' DESCRIPTORS live in the kernel now
+// (kernel/lib/cursor_theme_config.c). setting_register() takes function
+// pointers and a ring-3 process cannot supply one, so a setting owned
+// here would need the kernel to call back into ring 3 -- the inversion
+// this whole milestone exists to avoid.
+//
+// It does not need to, because both are persist-only: the registry
+// validates and writes to /etc, and this file notices by watching
+// setting_generation() below. The kernel owns the DESCRIPTION, the
+// compositor owns the BEHAVIOUR.
 
 // Reads both keys and applies them. Shared by init and poll so the
 // startup path and the live-change path cannot interpret a value
@@ -324,13 +267,13 @@ static void adopt_settings(void) {
     char val[SETTING_VALUE_MAX];
 
     int scale = 1;
-    if (etc_config_get(CURSOR_CONFIG_FILE, "cursor_size", val, sizeof val)) {
+    if (wm_conf_get(CURSOR_CONFIG_FILE, "cursor_size", val, sizeof val)) {
         if (k_strcmp(val, "large") == 0) scale = 2;
         else if (k_strcmp(val, "huge") == 0) scale = 3;
     }
     g_scale = scale;
 
-    if (!etc_config_get(CURSOR_CONFIG_FILE, "cursor_theme", val, sizeof val) || !val[0])
+    if (!wm_conf_get(CURSOR_CONFIG_FILE, "cursor_theme", val, sizeof val) || !val[0])
         k_strlcpy(val, "default", sizeof val);
     if (k_strcmp(val, g_theme) != 0 || !g_shapes[0].loaded) {
         k_strlcpy(g_theme, val, sizeof g_theme);
@@ -339,15 +282,13 @@ static void adopt_settings(void) {
 }
 
 void cursor_theme_poll(void) {
-    uint32_t gen = setting_generation();
+    uint32_t gen = wm_setting_generation();
     if (gen == g_seen_generation) return; // one compare, no I/O
     g_seen_generation = gen;
     adopt_settings();
 }
 
 void cursor_theme_init(void) {
-    setting_register(&g_theme_setting);
-    setting_register(&g_size_setting);
-    g_seen_generation = setting_generation();
+    g_seen_generation = wm_setting_generation();
     adopt_settings();
 }

@@ -184,6 +184,11 @@ unsigned long long sys_monotonic_ns(void);
 // is mounted, so 0 is safe as "not sampled yet".
 unsigned long long sys_fs_generation(void);
 
+// Powers the machine off (`reboot` = 0) or restarts it (1). DOES NOT
+// RETURN on success, so a caller that continues past it should treat
+// that as a failure. The disk cache is flushed first either way.
+int sys_poweroff(int reboot);
+
 // The kernel's DELIBERATE fault table -- see abi/crash_abi.h. `msg->op`
 // picks enumerate or trigger.
 //

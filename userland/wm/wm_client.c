@@ -17,11 +17,37 @@
 #include "wm_internal.h"
 #include "wm_debug.h" // the diagnostic channel's WM end, below
 #include "win_server.h"
-#include "win_events.h"
 #include "kapi.h"
 #include "ui/utheme.h"
 #include "rt/sys.h"
 #include "wm/wm_log.h"
+
+// --- delivering events to clients (M41 stage 4c) ----------------------
+//
+// The ring-0 WM called win_events_push() -- a kernel function -- to put
+// an event on a client's queue. A process cannot do that, so it ASKS:
+// WIN_REQ_EVENT_PUSH, refused to anyone but the registered compositor,
+// because this is the one request that reaches across into another
+// process's queue.
+//
+// Same signature as the kernel function it replaces, so every call site
+// is unchanged. Returns 1 on success, 0 if the request was refused or
+// the target's queue is full -- and a full queue is not something the
+// compositor can fix (the client is not draining), so it is reported
+// rather than retried.
+static int win_events_push(int pid, const struct win_event *ev) {
+    if (!ev) return 0;
+    struct win_request_msg req;
+    for (unsigned i = 0; i < sizeof req; i++) ((uint8_t *)&req)[i] = 0;
+    req.type = WIN_REQ_EVENT_PUSH;
+    req.a = pid;
+    req.window = ev->window;
+    req.b = (int32_t)ev->type;
+    req.c = ev->a;
+    req.d = ev->b;
+    req.mods = ev->mods;
+    return sys_win_request(&req) == 0;
+}
 
 // Finds the windows[] slot for one client window, or -1. Linear over at
 // most MAX_WINDOWS entries, which is nothing, and it avoids caching an

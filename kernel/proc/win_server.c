@@ -601,6 +601,36 @@ int win_server_request(int pid, struct win_request_msg *req) {
         if (g_ops && g_ops->window_pong) g_ops->window_pong(pid, req->window, req->a);
         return 1;
     }
+    case WIN_REQ_EVENT_PUSH: {
+        // Only the compositor may put events on another process's
+        // queue. Without this any client could synthesise a keystroke
+        // into any other -- the protocol's whole access-control story is
+        // that a window belongs to a process, and this is the one
+        // request that reaches ACROSS processes.
+        if (!g_comp_pid || pid != g_comp_pid) return -1;
+        if (req->a < 1 || req->a > WIN_SERVER_MAX_PIDS) return -1;
+
+        struct win_event ev;
+        k_memset(&ev, 0, sizeof ev);
+        ev.type = (uint32_t)req->b;
+        ev.window = req->window;
+        ev.a = req->c;
+        ev.b = req->d;
+        ev.mods = req->mods;
+        return win_events_push(req->a, &ev) ? 0 : -1;
+    }
+    case WIN_REQ_EVENT_STATS: {
+        if (!g_comp_pid || pid != g_comp_pid) return -1;
+        // 0 means "me". A compositor has no way to learn its own pid
+        // otherwise (there is no getpid), and it is the only pid it can
+        // reasonably ask about without being told one.
+        int target = req->a ? req->a : pid;
+        if (target < 1 || target > WIN_SERVER_MAX_PIDS) return -1;
+        req->a = win_events_pending(target);
+        req->b = win_events_dropped(target);
+        req->c = g_comp_pid;
+        return 0;
+    }
     case WIN_REQ_FONT:
         return map_font(pid, req);
     default:

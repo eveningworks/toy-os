@@ -245,71 +245,16 @@ int cursor_theme_scale(void) { return g_scale; }
 // is what the ring-3 WM will need after Milestone 41 -- registering an
 // apply callback here would have to be undone then.
 
-// fs_list() is a callback walk with no per-call context pointer, so the
-// index being looked for and the name found have to travel through
-// these. Single-threaded and used only inside theme_choice(), which is
-// the only reason that is acceptable.
-static int g_want_index;
-static int g_seen_index;
-static char g_found_name[SETTING_VALUE_MAX];
-
-static void theme_choice_cb(const char *name, uint32_t size, int is_dir) {
-    (void)size;
-    if (!is_dir) return;
-    if (g_seen_index == g_want_index) k_strlcpy(g_found_name, name,
-                                                 sizeof g_found_name);
-    g_seen_index++;
-}
-
-static int theme_choice(int index, char *out, uint32_t out_size) {
-    // Computed from the directory, not a compiled-in list, so dropping a
-    // theme in gives it a Control Panel row with no code change -- the
-    // same rule the keyboard layouts and the Start menu already follow.
-    g_want_index = index;
-    g_seen_index = 0;
-    g_found_name[0] = '\0';
-    fs_list(CURSOR_DIR, theme_choice_cb);
-    if (!g_found_name[0]) return 0;
-    k_strlcpy(out, g_found_name, out_size);
-    return 1;
-}
-
-static void theme_get(char *out, uint32_t out_size) {
-    k_strlcpy(out, g_theme, out_size);
-}
-
-static const char *const g_sizes[] = { "normal", "large", "huge" };
-
-static int size_choice(int index, char *out, uint32_t out_size) {
-    if (index < 0 || index >= (int)(sizeof g_sizes / sizeof g_sizes[0])) return 0;
-    k_strlcpy(out, g_sizes[index], out_size);
-    return 1;
-}
-
-static void size_get(char *out, uint32_t out_size) {
-    k_strlcpy(out, g_sizes[g_scale - 1 < 0 ? 0 :
-                            (g_scale > 3 ? 2 : g_scale - 1)], out_size);
-}
-
-static const struct setting g_theme_setting = {
-    .name = "cursor_theme",
-    .label = "Cursor theme",
-    .type = SETTING_TYPE_ENUM,
-    .file = CURSOR_CONFIG_FILE,
-    .choice = theme_choice,
-    .get = theme_get,
-    .apply = 0, // persist-only; picked up by cursor_theme_poll()
-};
-
-static const struct setting g_size_setting = {
-    .name = "cursor_size",
-    .label = "Cursor size",
-    .type = SETTING_TYPE_ENUM,
-    .file = CURSOR_CONFIG_FILE,
-    .choice = size_choice,
-    .get = size_get,
-    .apply = 0,
-};
+// The two settings' DESCRIPTORS live in the kernel now
+// (kernel/lib/cursor_theme_config.c). setting_register() takes function
+// pointers and a ring-3 process cannot supply one, so a setting owned
+// here would need the kernel to call back into ring 3 -- the inversion
+// this whole milestone exists to avoid.
+//
+// It does not need to, because both are persist-only: the registry
+// validates and writes to /etc, and this file notices by watching
+// setting_generation() below. The kernel owns the DESCRIPTION, the
+// compositor owns the BEHAVIOUR.
 
 // Reads both keys and applies them. Shared by init and poll so the
 // startup path and the live-change path cannot interpret a value
@@ -341,8 +286,6 @@ void cursor_theme_poll(void) {
 }
 
 void cursor_theme_init(void) {
-    setting_register(&g_theme_setting);
-    setting_register(&g_size_setting);
     g_seen_generation = setting_generation();
     adopt_settings();
 }

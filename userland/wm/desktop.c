@@ -11,6 +11,7 @@
 #include "wm/wm_rawin.h"
 #include "icon_grid.h"
 #include "lib/stdio.h"
+#include "wm/wm_conf.h"
 
 #define DESKTOP_ICON_SIZE 48
 #define DESKTOP_ICON_X 16
@@ -125,7 +126,7 @@ static void format_pos(char *out, int col, int row) {
 static void save_position(int i) {
     char value[16];
     format_pos(value, icon_col[i], icon_row[i]);
-    etc_config_set(DESKTOP_CONF_PATH, gui_app_registry[i].name, value);
+    wm_conf_set(DESKTOP_CONF_PATH, gui_app_registry[i].name, value);
 }
 
 // Loads every icon's position from DESKTOP_CONF_PATH, defaulting to
@@ -167,7 +168,7 @@ static void desktop_load_positions(void) {
         slot++;
 
         char value[16];
-        if (!etc_config_get(DESKTOP_CONF_PATH, gui_app_registry[i].name, value, sizeof(value))) continue;
+        if (!wm_conf_get(DESKTOP_CONF_PATH, gui_app_registry[i].name, value, sizeof(value))) continue;
 
         // "<col>,<row>" -- split on the comma, then let knum.h's bounded
         // parser handle each half. Stricter than the digit loops this

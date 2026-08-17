@@ -88,21 +88,14 @@ BYPASS_ENV = "TOYOS_ALLOW_STALE_ISO"
 
 
 # Trees that feed NO seeded artifact, and so must not make the seed look
-# stale. `userland/wm` is M41 stage 4b's ring-3 WM port: it is built by
-# its own on-demand `make toywm` target, is not in USERLAND_PROGRAM_DIRS,
-# and nothing copies it onto the disk image -- so building it correctly
-# changes nothing the tests boot, and complaining would send a session
-# chasing a re-seed that would fix nothing.
+# stale -- the guard's own rule applied to a new tree: pair each tree
+# with the artifact it actually feeds, because a guard that false-alarms
+# is a guard people switch off.
 #
-# This is the guard's own rule applied to a new tree: pair each tree with
-# the artifact it actually feeds, because a guard that false-alarms is a
-# guard people switch off. Remove this when 4c seeds the WM for real.
-#
-# BOTH sides of the pairing need it: `build/userland/wm` as an output (a
-# `make toywm` must not make the seed look stale) and `userland/wm` as a
-# SOURCE (editing it must not look like a build that never ran, because
-# `make all` genuinely does not build it).
-UNSEEDED = ("build/userland/wm", "userland/wm")
+# Empty, and that is the good outcome. It held `userland/wm` while the
+# ring-3 WM was built by an on-demand target rather than by `make all`;
+# the WM is an ordinary program now, so the ordinary pairing covers it.
+UNSEEDED = ()
 
 
 def _newest(root: Path, suffixes=None):

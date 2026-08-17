@@ -29,7 +29,6 @@
 // own /etc/<name>.conf path instead. Nothing here favors one file over
 // many; that choice belongs to each caller.
 #include "etc_config.h"
-#include "fs.h"
 #include "string.h"
 
 // Whole-file working buffer for etc_config_set()'s read-modify-write.
@@ -40,7 +39,8 @@
 // comments) -- this is purely "bigger than any config file we actually
 // write," a self-imposed working-buffer size, not a filesystem
 // constraint being worked around.
-#define ETC_CONFIG_MAX 512
+// (ETC_CONFIG_MAX moved to the header -- both halves of the split need
+// it, and so does the ring-3 side.)
 
 // k_isblank() is string.h's now -- line-oriented, so NOT k_isspace(),
 // whose '\n' would run this parser into the next line.
@@ -136,39 +136,6 @@ static int find_key(const char *data, uint32_t size, const char *key,
     return 0;
 }
 
-int etc_config_get(const char *path, const char *key, char *out, uint32_t out_size) {
-    if (!out || out_size == 0) return 0;
-    out[0] = '\0';
-
-    uint32_t size = 0;
-    // fs_write() always NUL-terminates at data[size] (see fs.c), so
-    // `data` is safe to scan with plain pointer arithmetic here.
-    const char *data = fs_read(path, &size);
-    if (!data || size == 0) return 0;
-
-    return find_key(data, size, key, out, out_size);
-}
-
-int etc_config_load(const char *path, struct etc_config_buf *buf) {
-    if (!buf) return 0;
-    buf->valid = 0;
-    buf->size = 0;
-    buf->data[0] = '\0';
-
-    // fs_read_into(), not fs_read() + a copy: the copy would still have
-    // to happen after fs_read() returned, and the kernel context can be
-    // preempted in that window by a ring-3 process whose own file read
-    // swaps the shared staging buffer underneath it. Refusing rather
-    // than truncating is fs_read_into()'s contract, which is what this
-    // wants anyway -- see the header.
-    uint32_t size = fs_read_into(path, buf->data, sizeof buf->data);
-    if (size == 0) return 0;
-
-    buf->size = size;
-    buf->valid = 1;
-    return 1;
-}
-
 int etc_config_buf_get(const struct etc_config_buf *buf, const char *key,
                        char *out, uint32_t out_size) {
     if (!out || out_size == 0) return 0;
@@ -177,89 +144,67 @@ int etc_config_buf_get(const struct etc_config_buf *buf, const char *key,
     return find_key(buf->data, buf->size, key, out, out_size);
 }
 
-int etc_config_unset(const char *path, const char *key) {
-    // Same rewrite-every-other-line-verbatim shape as etc_config_set()
-    // below, minus the replacement: the key's line is simply not
-    // emitted, so comments and ordering elsewhere in the file survive.
-    //
-    // Returns 0 for "the key was not there" as well as for a failed
-    // write, which is deliberate -- both mean the caller should not
-    // claim to have removed anything -- and the file is left untouched
-    // in the first case rather than rewritten identically.
-    char buf[ETC_CONFIG_MAX];
+// Rewrites `in` with `key` set to `value`, or with `key` REMOVED when
+// `value` is NULL. Returns the new length, or 0 if it would not fit or
+// (for a removal) the key was not there.
+//
+// Buffer to buffer, with no idea where either came from: that is what
+// makes it usable from ring 3, where the file I/O around it is libsys
+// rather than fs.h. It is also the only copy of this logic now --
+// etc_config_set() and etc_config_unset() each had their own, differing
+// only in whether the matched line was re-emitted, and two copies of a
+// file rewriter is two chances to drop somebody's comments.
+//
+// Every line that is not the key's own is copied VERBATIM, so comments
+// and ordering elsewhere survive. A comment on the key's own line does
+// not: the line is replaced wholesale.
+uint32_t etc_config_buf_set(const char *in, uint32_t in_len,
+                            const char *key, const char *value,
+                            char *out, uint32_t out_cap) {
+    if (!key || !out || out_cap == 0) return 0;
     uint32_t out_len = 0;
-    int removed = 0;
-
-    uint32_t size = 0;
-    const char *data = fs_read(path, &size);
-    if (!data || size == 0) return 0;
-
-    uint32_t pos = 0;
-    const char *ls, *le;
-    while (next_line(data, size, &pos, &ls, &le)) {
-        const char *ks, *vs;
-        uint32_t klen, vlen;
-        if (parse_kv(ls, le, &ks, &klen, &vs, &vlen) && key_matches(ks, klen, key)) {
-            removed = 1;
-            continue;
-        }
-        uint32_t line_len = (uint32_t)(le - ls);
-        if (out_len + line_len + 1 >= ETC_CONFIG_MAX) return 0;
-        k_memcpy(buf + out_len, ls, line_len); out_len += line_len;
-        buf[out_len++] = '\n';
-    }
-    if (!removed) return 0;
-
-    buf[out_len] = '\0';
-    return fs_write(path, buf, 0);
-}
-
-int etc_config_set(const char *path, const char *key, const char *value) {
-    char buf[ETC_CONFIG_MAX];
-    uint32_t out_len = 0;
-    int replaced = 0;
+    int matched = 0;
     uint32_t key_len = (uint32_t)k_strlen(key);
-    uint32_t value_len = (uint32_t)k_strlen(value);
+    uint32_t value_len = value ? (uint32_t)k_strlen(value) : 0;
 
-    uint32_t size = 0;
-    const char *data = fs_read(path, &size);
-
-    if (data && size > 0) {
+    if (in && in_len > 0) {
         uint32_t pos = 0;
         const char *ls, *le;
-        while (next_line(data, size, &pos, &ls, &le)) {
+        while (next_line(in, in_len, &pos, &ls, &le)) {
             const char *ks, *vs;
             uint32_t klen, vlen;
             int is_kv = parse_kv(ls, le, &ks, &klen, &vs, &vlen);
-            uint32_t line_len = (uint32_t)(le - ls);
 
             if (is_kv && key_matches(ks, klen, key)) {
-                // Rewrite this line as a plain "key=value" -- any
-                // comment the old line had (on this key's own line) is
-                // dropped rather than preserved; every OTHER line's
-                // comment is untouched since it's copied verbatim below.
-                if (out_len + key_len + 1 + value_len + 1 >= ETC_CONFIG_MAX) return 0;
-                k_memcpy(buf + out_len, key, key_len); out_len += key_len;
-                buf[out_len++] = '=';
-                k_memcpy(buf + out_len, value, value_len); out_len += value_len;
-                buf[out_len++] = '\n';
-                replaced = 1;
+                matched = 1;
+                if (!value) continue; // a removal: drop the line
+                if (out_len + key_len + 1 + value_len + 1 >= out_cap) return 0;
+                k_memcpy(out + out_len, key, key_len); out_len += key_len;
+                out[out_len++] = '=';
+                k_memcpy(out + out_len, value, value_len); out_len += value_len;
+                out[out_len++] = '\n';
             } else {
-                if (out_len + line_len + 1 >= ETC_CONFIG_MAX) return 0;
-                k_memcpy(buf + out_len, ls, line_len); out_len += line_len;
-                buf[out_len++] = '\n';
+                uint32_t line_len = (uint32_t)(le - ls);
+                if (out_len + line_len + 1 >= out_cap) return 0;
+                k_memcpy(out + out_len, ls, line_len); out_len += line_len;
+                out[out_len++] = '\n';
             }
         }
     }
 
-    if (!replaced) {
-        if (out_len + key_len + 1 + value_len + 1 >= ETC_CONFIG_MAX) return 0;
-        k_memcpy(buf + out_len, key, key_len); out_len += key_len;
-        buf[out_len++] = '=';
-        k_memcpy(buf + out_len, value, value_len); out_len += value_len;
-        buf[out_len++] = '\n';
+    // Removing a key that was not there changes nothing, and saying so
+    // matters: the caller must not rewrite the file identically and
+    // must not claim to have removed anything.
+    if (!value && !matched) return 0;
+
+    if (value && !matched) {
+        if (out_len + key_len + 1 + value_len + 1 >= out_cap) return 0;
+        k_memcpy(out + out_len, key, key_len); out_len += key_len;
+        out[out_len++] = '=';
+        k_memcpy(out + out_len, value, value_len); out_len += value_len;
+        out[out_len++] = '\n';
     }
 
-    buf[out_len] = '\0';
-    return fs_write(path, buf, 0);
+    out[out_len] = '\0';
+    return out_len;
 }

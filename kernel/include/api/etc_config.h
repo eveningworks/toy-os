@@ -61,6 +61,27 @@ int etc_config_load(const char *path, struct etc_config_buf *buf);
 // buffer instead of from disk. Returns 0 with `out` emptied if the
 // buffer is invalid, so a failed load needs no separate check at each
 // call site.
+// Rewrites `in` with `key` set to `value`, or `key` REMOVED when
+// `value` is NULL. Returns the new length, or 0 if it would not fit --
+// or, for a removal, if the key was not there, so a caller can tell
+// "nothing to do" from "done" and leave the file untouched.
+//
+// Buffer to buffer and freestanding, which is the point: the ring-3 WM
+// rewrites /etc files through this with libsys doing the I/O, so there
+// is exactly one implementation of what a `name=value` document means.
+// See kernel/lib/etc_config.c on the split.
+// The working-buffer size a whole config document is rewritten through.
+// Not a filesystem limit -- purely "bigger than any config file we
+// actually write". In the header rather than one .c file because the
+// split (parser / file I/O) and the ring-3 side all size buffers by it.
+#ifndef ETC_CONFIG_MAX
+#define ETC_CONFIG_MAX 512
+#endif
+
+uint32_t etc_config_buf_set(const char *in, uint32_t in_len,
+                            const char *key, const char *value,
+                            char *out, uint32_t out_cap);
+
 int etc_config_buf_get(const struct etc_config_buf *buf, const char *key,
                        char *out, uint32_t out_size);
 

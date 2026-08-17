@@ -18,6 +18,7 @@
 #include "string.h"
 #include "timer.h" // pit_ticks() -- SYS_TICKS
 #include "clocksource.h" // clocksource_now_ns() -- SYS_MONOTONIC_NS
+#include "power.h"     // SYS_POWEROFF -- the desktop's shut down/restart
 #include "crashtest.h" // SYS_CRASHTEST -- deliberate faults, see crash_abi.h
 #include "tz.h"
 #include "pci.h"
@@ -1015,6 +1016,23 @@ void syscall_dispatch(uint64_t *regs) {
         }
     } else if (rax == SYS_TICKS) {
         regs[14] = pit_ticks();
+    } else if (rax == SYS_POWEROFF) {
+        // The desktop's Start-menu Shut down / Restart. Unprivileged for
+        // the same reason SYS_KILL is: there is no user model here to
+        // gate it on, so a gate would be decoration -- anything that can
+        // spawn a process can already end the session.
+        //
+        // Neither call returns on success, so there is no "it worked" to
+        // report; the only outcome that reaches the line below is an op
+        // we do not know, or a platform that refused to stop.
+        klog_printf("syscall: poweroff(%d) by pid %d\n",
+                    (int)rdi, scheduler_current_pid());
+        if (rdi == 0) {
+            system_poweroff();
+        } else if (rdi == 1) {
+            system_reboot();
+        }
+        regs[14] = (uint64_t)-1;
     } else if (rax == SYS_CRASHTEST) {
         // Deliberate faults, for testing the panic path (crash_abi.h).
         // Gated on `faultinject`; the LIST is always readable so a UI

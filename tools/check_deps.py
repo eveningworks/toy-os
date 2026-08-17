@@ -142,25 +142,9 @@ def main():
     try:
         for header in saved:
             os.utime(os.path.join(REPO, header), None)
-        # `make all` does not reach every build directory. The ring-3
-        # WM (M41 stage 4b) is built by its own on-demand `toywm`
-        # target, because the port does not link yet and wiring an
-        # incomplete program into the default build would turn this
-        # check, preflight and CI red for the length of the migration.
-        #
-        # Asking the RIGHT target rather than skipping the directory:
-        # a skipped directory is one whose dependency tracking nobody
-        # checks, which is exactly the hole this tool exists to close --
-        # `build/kernel` went unverified that way for months. Both
-        # targets' plans are concatenated, so a probe is satisfied by
-        # whichever one builds it.
-        #
-        # Drop `toywm` here when stage 4c folds the WM into `all`.
-        planned = ""
-        for target in ("all", "toywm"):
-            r = subprocess.run(["make", target, "-n"], cwd=REPO,
-                               capture_output=True, text=True)
-            planned += r.stdout + r.stderr
+        r = subprocess.run(["make", "all", "-n"], cwd=REPO,
+                           capture_output=True, text=True)
+        planned = r.stdout + r.stderr
     finally:
         for header, times in saved.items():
             os.utime(os.path.join(REPO, header), times)

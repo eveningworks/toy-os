@@ -387,6 +387,7 @@ LIBUAPP_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBUAPP_SRCS)) \
                $(BUILD)/userland/shared/geom.o \
                $(BUILD)/userland/shared/rubberband.o \
                $(BUILD)/userland/shared/icon_grid.o \
+               $(BUILD)/userland/shared/etc_config.o \
                $(BUILD)/userland/shared/fixed.o \
                $(BUILD)/userland/shared/calc_engine.o \
                $(BUILD)/userland/shared/string.o \
@@ -428,11 +429,11 @@ EXTRA_OBJS_gfxdemo    =
 # Listed rather than wildcarded on purpose: a stray .c dropped into
 # userland/wm/ should fail to link with an undefined symbol, not get
 # silently absorbed into the desktop.
-EXTRA_OBJS_main       = wm/wm wm/wm_rawin wm/wm_render wm/wm_input wm/wm_client \
+EXTRA_OBJS_toywm      = wm/wm wm/wm_rawin wm/wm_render wm/wm_input wm/wm_client \
                         wm/wm_debug wm/wm_tray wm/wm_watchdog \
                         wm/desktop wm/start_menu wm/context_menu \
                         wm/confirm_dialog wm/file_picker wm/cursor_theme \
-                        wm/gui_apps wm/wm_log wm/wm_fs
+                        wm/gui_apps wm/wm_log wm/wm_fs wm/wm_conf
 
 # --- the ring-3 WM is BUILT ON DEMAND, not by `make all` ---------------
 #

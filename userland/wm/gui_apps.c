@@ -4,6 +4,7 @@
 #include "rt/sys.h"
 #include "wm/wm_fs.h"
 #include "wm/wm_log.h"
+#include "wm/wm_conf.h"
 
 // The Start menu and the desktop icons are built from DATA ON DISK --
 // one file per app in /usr/wm/desktop/, scanned at desktop startup.
@@ -134,7 +135,7 @@ static void load_entry(const char *file) {
     // each port-I/O instruction is a VM exit. It measured 40ms under
     // TCG, which is why it went unnoticed: every test here runs TCG.
     struct etc_config_buf cfg;
-    if (!etc_config_load(path, &cfg)) return;
+    if (!wm_conf_load(path, &cfg)) return;
 
     char name[GUI_APP_NAME_MAX], exec[GUI_APP_EXEC_MAX];
     char cat[16], icon[8], nodisplay[8];

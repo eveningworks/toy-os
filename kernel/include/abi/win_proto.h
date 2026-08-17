@@ -371,6 +371,43 @@ struct win_event {
                            //
                            // Mapping it does not make it visible on
                            // every adapter -- see WIN_REQ_FB_PRESENT.
+#define WIN_REQ_EVENT_PUSH 17 // Deliver one event to a client.
+                           //   a      = target pid
+                           //   window = the target's window id
+                           //   b      = WIN_EV_* type
+                           //   c, d   = the event's a and b
+                           //   mods   = the event's mods
+                           //
+                           // REFUSED unless the caller is the registered
+                           // compositor. Routing input is the
+                           // compositor's job by definition -- it is the
+                           // one process that knows what is on top of
+                           // what -- so this is the request that lets a
+                           // RING-3 one do it. In ring 0 the WM called
+                           // win_events_push() directly, which is not a
+                           // thing a process can do.
+                           //
+                           // The event is spelled out field by field
+                           // rather than copied as a struct, so the
+                           // message stays a message: fixed-layout,
+                           // pointer-free, and readable in a log.
+                           //
+                           // Returns 0 on success, -1 if refused or the
+                           // target's queue is full. A FULL QUEUE IS NOT
+                           // AN ERROR the compositor can fix -- the
+                           // client is not draining -- so it is reported
+                           // rather than retried.
+#define WIN_REQ_EVENT_STATS 18 // Queue depth for a pid.
+                           //   a = pid to ask about, or 0 for "me"
+                           // and on return:
+                           //   a = events pending, b = events dropped,
+                           //   c = the registered compositor's pid
+                           //
+                           // For `gui compositor`, which reports exactly
+                           // these. Readable by the compositor only, for
+                           // the same reason the push is: it is the only
+                           // process with any business knowing how far
+                           // behind another one is.
 #define WIN_REQ_FB_PRESENT 16 // a, b, c, d: x, y, w, h of the region
                            // just written. Publishes it.
                            //
@@ -557,6 +594,16 @@ struct win_request_msg {
     uint32_t type;   // WIN_REQ_*
     uint32_t window; // in for PRESENT/DESTROY/TITLE, out for CREATE
     int32_t  a, b, c, d;
+    // Mirrors struct win_event's own `mods`, and exists for the same
+    // reason it does there: WIN_REQ_EVENT_PUSH carries a whole event,
+    // and a/b/c/d plus `window` is exactly one field short of one.
+    //
+    // Four bytes on a 56-byte message. The rule this does not break is
+    // the one about the DIAGNOSTIC channel (WIN_DEBUG_CMD_LEN, 128
+    // bytes) carrying its own payload struct rather than widening this
+    // one -- that would have put a kilobyte-sized copy on the path of
+    // every request, and WIN_REQ_PRESENT is the hot path.
+    uint32_t mods;
     char     text[WIN_TITLE_LEN]; // WIN_REQ_TITLE only; NUL-terminated
 };
 

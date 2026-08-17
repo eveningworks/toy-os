@@ -888,7 +888,62 @@ is provable on its own with the suite green throughout.
   worth comparing" so a release cannot leave a stale frame a later diff
   would happily compare against.
 
-**Stage 4c is UNDER WAY. `userland/wm/` compiles and is 8 symbols from
+**Stage 4c is DONE: `userland/wm/` LINKS.** `build/userland/gui/system/
+toywm.elf` is the window manager as a ring-3 ELF, built by `make all`
+like any other program -- the on-demand target it sat behind through
+4b/4c is gone, for the reason its own comment gave: a build nobody runs
+rots.
+
+The four remaining pieces needed new kernel surface, and three of them
+turned out NOT to need the surface they looked like they needed:
+
+- **`setting_register` -- no new ABI at all.** It looked like it needed
+  a way for ring 3 to register a setting, which would mean the kernel
+  calling back into ring 3 to apply one -- the same inversion this
+  milestone exists to avoid. It does not, because both cursor settings
+  were already `.apply = 0`: the registry validates and persists, and
+  the compositor notices by watching `setting_generation()`. So the
+  DESCRIPTORS moved to `kernel/lib/cursor_theme_config.c`, beside the
+  other four settings, and the kernel owns the description while the
+  compositor owns the behaviour. `apps/wm/cursor_theme.c`'s own comment
+  had predicted this: "registering an apply callback here would have to
+  be undone then."
+- **`etc_config_*` -- a SPLIT, not new surface.** `etc_config.c` now
+  ends where the file I/O begins: the `name=value` parser and the two
+  buffer entry points are freestanding and compiled twice (into
+  `libuapp.a`), and `etc_config_file.c` holds the four functions that
+  touch `fs.h`. Same arrangement as `kfmt.c`/`kfmt_print.c`. The
+  rewrite logic that `etc_config_set()` and `etc_config_unset()` each
+  carried a copy of became one buffer-to-buffer function, which is what
+  made it shareable at all -- so ring 3 reads `.desktop` files and
+  writes icon positions through the KERNEL's parser, and the two cannot
+  drift.
+- **`system_poweroff` -- one small syscall.** `SYS_POWEROFF` (38),
+  RDI = 0 to power off, 1 to reboot, unprivileged for the same reason
+  `SYS_KILL` is.
+- **`win_events_push` -- the server inversion, and the only real
+  protocol work.** `WIN_REQ_EVENT_PUSH` lets the compositor ask the
+  kernel to put an event on a client's queue; `WIN_REQ_EVENT_STATS`
+  answers the queue depth `gui compositor` reports. Both refused to
+  anyone but the registered compositor -- this is the one request that
+  reaches ACROSS processes, and without that check any client could
+  synthesise a keystroke into any other. `struct win_request_msg`
+  gained a `mods` field, mirroring `struct win_event`'s, because
+  `window` plus `a`-`d` is exactly one field short of carrying an
+  event; four bytes on a 56-byte message, which is not the thing the
+  "do not widen this" rule was about (that was a 128-byte debug
+  command on the path of every present).
+
+**What is NOT done, and is 4d's remaining half:** the ring-3 WM has
+never been RUN. It links; nothing spawns it. The inbound half of the
+inversion is still missing -- the kernel calls `struct win_server_ops`'
+eleven callbacks in ring 0, and a ring-3 WM has to RECEIVE those as
+events instead. Until that exists the binary can composite but cannot
+learn that a client wants a window.
+
+The historical note, for what the state was mid-migration:
+
+**Stage 4c was under way. `userland/wm/` compiled and was 8 symbols from
 linking** -- down from 41 symbols / 80 references at the end of 4b.
 
 DONE in 4c:
