@@ -34,6 +34,7 @@
 #include "multiboot.h" // a live image arrives as a GRUB module
 #include "klog.h"
 #include "string.h"
+#include "scheduler.h" // scheduler_preempt_disable/enable -- see FS_OP below
 
 // Priority order: first probe() == 1 wins. TFS3 goes FIRST when it
 // lands (Stage B of the plan) -- a disk carrying either format is
@@ -62,6 +63,43 @@ static const struct fs_ops *const g_backends[] = {
 
 static const struct fs_ops *g_fs = 0;
 static int g_persistent = 0;
+
+// EVERY backend call runs inside a preemption-free section.
+//
+// The backends are not re-entrant and never were: tfs3.c walks
+// directories, inodes and file data through module-level scratch
+// buffers (g_blk, g_ptr_blk). That is fine for a filesystem only one
+// thing at a time uses, and this kernel is not that -- the kernel
+// context is a scheduler participant and a ring-3 process is
+// preemptible inside a syscall, so the WM reading a file and an app
+// reading a file interleave at any instruction. The app's read then
+// overwrites the block the WM is parsing.
+//
+// It did not look like a filesystem bug from outside. The WM reported
+// files that plainly exist as missing or unreadable, intermittently and
+// with no error logged anywhere -- the desktop losing cursor shapes on
+// roughly one boot in three under KVM, hidden behind the built-in
+// fallback. vfs.c is the one place every caller passes through, so the
+// guard goes here rather than being repeated (and eventually forgotten)
+// in each backend.
+//
+// This is NOT the same thing as fs_read()'s nested-read refusal, which
+// protects one buffer during one call; this protects every backend's
+// internal state for the whole call. Note it does not make a LIST
+// CALLBACK safe to call fs_* from -- that is direct recursion, not
+// preemption, and the depth counter cannot see the difference.
+#define FS_OP(expr) ({                     \
+    scheduler_preempt_disable();           \
+    __auto_type _fs_r = (expr);            \
+    scheduler_preempt_enable();            \
+    _fs_r;                                 \
+})
+
+#define FS_OP_VOID(stmt) do {              \
+    scheduler_preempt_disable();           \
+    stmt;                                  \
+    scheduler_preempt_enable();            \
+} while (0)
 
 // The display.c caps_are_honest() analogue: a capability and its
 // optional function pointer are one fact stated twice, and a backend
@@ -283,19 +321,19 @@ static inline int bumped(int ok) {
 }
 
 int fs_touch(const char *path) {
-    return bumped(g_fs->touch(path));
+    return bumped(FS_OP(g_fs->touch(path)));
 }
 
 int fs_write(const char *path, const char *data, int append) {
-    return bumped(g_fs->write(path, data, append));
+    return bumped(FS_OP(g_fs->write(path, data, append)));
 }
 
 int fs_mkdir(const char *path) {
-    return bumped(g_fs->mkdir(path));
+    return bumped(FS_OP(g_fs->mkdir(path)));
 }
 
 int fs_delete(const char *path) {
-    return bumped(g_fs->del(path));
+    return bumped(FS_OP(g_fs->del(path)));
 }
 
 // A whole-file read is NOT re-entrant, and this refuses the second one
@@ -332,25 +370,48 @@ const char *fs_read(const char *path, uint32_t *out_size) {
         return 0;
     }
     g_read_in_flight = 1;
-    const char *r = g_fs->read(path, out_size);
+    const char *r = FS_OP(g_fs->read(path, out_size));
     g_read_in_flight = 0;
     return r;
 }
 
+uint32_t fs_read_into(const char *path, void *buf, uint32_t cap) {
+    if (!buf || cap == 0) return 0;
+    uint8_t *dst = (uint8_t *)buf;
+    dst[0] = '\0';
+
+    uint64_t size = FS_OP(g_fs->size(path));
+    // Room for the NUL as well, so a text caller can scan the result as
+    // a string without a separate length check at every step.
+    if (size == 0 || size + 1 > (uint64_t)cap) return 0;
+
+    // A loop rather than one call: fs_read_range() may legitimately
+    // return short (see its contract), and treating a short read as the
+    // whole file is how a truncated parse gets in.
+    uint32_t got = 0;
+    while (got < (uint32_t)size) {
+        uint32_t n = FS_OP(g_fs->read_range(path, got, dst + got, (uint32_t)size - got));
+        if (n == 0) return 0; // EOF-before-size or a real failure; either way, refuse
+        got += n;
+    }
+    dst[got] = '\0';
+    return got;
+}
+
 uint64_t fs_size(const char *path) {
-    return g_fs->size(path);
+    return FS_OP(g_fs->size(path));
 }
 
 uint32_t fs_read_range(const char *path, uint64_t offset, void *buf, uint32_t len) {
-    return g_fs->read_range(path, offset, buf, len);
+    return FS_OP(g_fs->read_range(path, offset, buf, len));
 }
 
 int fs_write_range(const char *path, uint64_t offset, const void *buf, uint32_t len) {
-    return bumped(g_fs->write_range(path, offset, buf, len));
+    return bumped(FS_OP(g_fs->write_range(path, offset, buf, len)));
 }
 
 void *fs_write_range_begin(const char *path, uint64_t offset, const void *buf, uint32_t len) {
-    return g_fs->write_range_begin(path, offset, buf, len);
+    return FS_OP(g_fs->write_range_begin(path, offset, buf, len));
 }
 
 enum fs_step_result fs_write_range_step(void *handle) {
@@ -361,7 +422,7 @@ enum fs_step_result fs_write_range_step(void *handle) {
     // the dispatch boundary, not in every backend" spirit as the rest
     // of this file.
     if (!handle) return FS_STEP_FAILED;
-    enum fs_step_result r = (enum fs_step_result)g_fs->write_range_step(handle);
+    enum fs_step_result r = (enum fs_step_result)FS_OP(g_fs->write_range_step(handle));
     // Bump once, on completion -- not per step. A streamed write is one
     // change to the filesystem however many slices it took, and bumping
     // per step would wake a watcher repeatedly through a single save.
@@ -372,7 +433,7 @@ enum fs_step_result fs_write_range_step(void *handle) {
 }
 
 void *fs_read_range_begin(const char *path, uint64_t offset, void *buf, uint32_t len) {
-    return g_fs->read_range_begin(path, offset, buf, len);
+    return FS_OP(g_fs->read_range_begin(path, offset, buf, len));
 }
 
 enum fs_step_result fs_read_range_step(void *handle, uint32_t *out_total) {
@@ -382,44 +443,49 @@ enum fs_step_result fs_read_range_step(void *handle, uint32_t *out_total) {
         if (out_total) *out_total = 0;
         return FS_STEP_FAILED;
     }
-    return (enum fs_step_result)g_fs->read_range_step(handle, out_total);
+    return (enum fs_step_result)FS_OP(g_fs->read_range_step(handle, out_total));
 }
 
 int fs_rename(const char *oldpath, const char *newpath) {
-    return bumped(g_fs->rename(oldpath, newpath));
+    return bumped(FS_OP(g_fs->rename(oldpath, newpath)));
 }
 
 int fs_truncate(const char *path, uint64_t size) {
-    return bumped(g_fs->truncate(path, size));
+    return bumped(FS_OP(g_fs->truncate(path, size)));
 }
 
 int fs_is_dir(const char *path) {
-    return g_fs->is_dir(path);
+    return FS_OP(g_fs->is_dir(path));
 }
 
 int fs_exists(const char *path) {
-    return g_fs->exists(path);
+    return FS_OP(g_fs->exists(path));
 }
 
 void fs_list(const char *dir_path, void (*cb)(const char *name, uint32_t size, int is_dir)) {
-    g_fs->list(dir_path, cb);
+    // The callback runs inside the section too -- it has to, since the
+    // walk holds backend state across it. A callback that only records
+    // what it is handed (every caller here) is fine; one that called
+    // back into fs_* would be re-entering the backend directly, which
+    // no amount of preemption control can make safe.
+    FS_OP_VOID(g_fs->list(dir_path, cb));
 }
 
 int fs_stat(const char *path, struct fs_stat_info *out) {
-    return g_fs->stat(path, out);
+    return FS_OP(g_fs->stat(path, out));
 }
 
 int fs_disk_usage(uint64_t *out_used_bytes, uint64_t *out_total_bytes) {
-    return g_fs->disk_usage(out_used_bytes, out_total_bytes);
+    return FS_OP(g_fs->disk_usage(out_used_bytes, out_total_bytes));
 }
 
 int fs_check(int repair, struct fs_check_result *out) {
-    return g_fs->check(repair, out);
+    return FS_OP(g_fs->check(repair, out));
 }
 
 int fs_link(const char *existing, const char *newpath) {
     // Optional op -- the caps bit and this NULL check are the same
     // fact, and caps_are_honest() made sure they can't disagree.
     if (!g_fs->link) return 0;
-    return bumped(g_fs->link(existing, newpath));
+    return bumped(FS_OP(g_fs->link(existing, newpath)));
 }

@@ -68,6 +68,14 @@ static int cov_to_alpha(char c, unsigned char *out) {
 // broken.
 #define CURSOR_LINE_MAX 128
 
+// A whole shape file: a short header plus two grids of at most
+// CURSOR_SHAPE_MAX rows of CURSOR_SHAPE_MAX characters and a newline
+// each (2 * 32 * 33 = 2112), with room to spare. A file bigger than
+// this is refused by fs_read_into() rather than truncated, which the
+// parser then reports as malformed -- the correct outcome for a shape
+// file this loader cannot represent anyway.
+#define CURSOR_FILE_MAX 4096
+
 // Copies one line out, returning its FULL length (which may exceed what
 // fits) and advancing `*pos` past the newline. -1 at end of input.
 //
@@ -172,15 +180,35 @@ static int load_one(const char *theme, int index) {
     if (!k_snprintf(path, sizeof path, "%s/%s/%s", CURSOR_DIR, theme,
                      g_names[index]))
         return 0;
+    // A theme legitimately need not carry every shape, so "absent" is a
+    // normal outcome and silent. A shape that is THERE and still fails
+    // to load is not, and used to be equally silent -- which is how an
+    // intermittent read failure hid behind the built-in fallback for as
+    // long as it did. Say which step failed.
     if (!fs_exists(path)) return 0;
 
-    // fs_read() hands back a pointer into the backend's own staging
-    // buffer, valid only until the next fs_read()/fs_write() -- so the
-    // parse has to happen before anything else touches the filesystem,
-    // which it does (cursor_shape_parse() is pure).
-    uint32_t n = 0;
-    const char *body = fs_read(path, &n);
-    if (!body || n == 0) return 0;
+    // Read into OUR OWN buffer, not fs_read()'s shared staging one.
+    //
+    // This used to parse straight out of fs_read()'s buffer, with a
+    // comment reasoning that the parse happens before anything else
+    // touches the filesystem. That is true of this function and not of
+    // the machine: the kernel context is preemptible, so a ring-3
+    // process reading a file mid-parse swapped the buffer's contents
+    // and the parse walked somebody else's data. A shape that fails to
+    // parse falls back to the built-in one, so the damage was invisible
+    // -- it showed up only as "5 of 6 shapes loaded" on roughly one
+    // boot in three under KVM.
+    // static, not a 4 KiB stack frame in the WM's own context -- and
+    // safe as a static precisely because this loader is the only thing
+    // that touches it, which is the property fs_read()'s shared buffer
+    // could not offer.
+    static char body[CURSOR_FILE_MAX];
+    uint32_t n = fs_read_into(path, body, sizeof body);
+    if (n == 0) {
+        klog_printf("cursor: %s exists but READ FAILED (size %u) -- "
+                    "using the built-in shape\n", path, (uint32_t)fs_size(path));
+        return 0;
+    }
 
     if (!cursor_shape_parse(body, n, &g_shapes[index])) {
         klog_printf("cursor: %s is malformed -- using the built-in shape\n", path);

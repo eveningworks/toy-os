@@ -155,15 +155,15 @@ int etc_config_load(const char *path, struct etc_config_buf *buf) {
     buf->size = 0;
     buf->data[0] = '\0';
 
-    uint32_t size = 0;
-    const char *data = fs_read(path, &size);
-    if (!data || size == 0) return 0;
-    // Refuse rather than truncate -- see the header. A half-read config
-    // file is a valid-looking config file with keys missing.
-    if (size >= sizeof buf->data) return 0;
+    // fs_read_into(), not fs_read() + a copy: the copy would still have
+    // to happen after fs_read() returned, and the kernel context can be
+    // preempted in that window by a ring-3 process whose own file read
+    // swaps the shared staging buffer underneath it. Refusing rather
+    // than truncating is fs_read_into()'s contract, which is what this
+    // wants anyway -- see the header.
+    uint32_t size = fs_read_into(path, buf->data, sizeof buf->data);
+    if (size == 0) return 0;
 
-    k_memcpy(buf->data, data, size);
-    buf->data[size] = '\0';
     buf->size = size;
     buf->valid = 1;
     return 1;

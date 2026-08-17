@@ -120,6 +120,33 @@ int fs_truncate(const char *path, uint64_t size);
 // tfs.c).
 const char *fs_read(const char *path, uint32_t *out_size);
 
+// The same "read a small file whole", into memory the CALLER owns.
+//
+// **Prefer this to fs_read() in anything the kernel context runs**, and
+// the reason is not style. fs_read() hands back a pointer into ONE
+// shared staging buffer, and that pointer's lifetime is not protected
+// against preemption: the kernel context is a scheduler participant, so
+// a ring-3 process can make a file-reading syscall while a kernel-side
+// parse is still walking the buffer, and the parse then reads somebody
+// else's file. That is not hypothetical -- it made the cursor theme
+// report perfectly good shape files as "malformed" on about one boot in
+// three under KVM, silently, because a shape that fails to parse falls
+// back to the built-in one. The nested-read refusal in vfs.c protects a
+// read in FLIGHT; it cannot protect the buffer after fs_read() returns.
+//
+// There is no shared buffer anywhere in this path -- it is fs_size()
+// plus fs_read_range() into `buf` -- so there is nothing for a
+// concurrent reader to invalidate.
+//
+// Returns the number of bytes read, or 0 for a missing file, a
+// directory, a read failure, or a file that does not fit. A file larger
+// than `cap` is REFUSED rather than truncated: a half-read config file
+// parses as a valid config file with keys silently missing, which is
+// the failure this project's parser conventions exist to prevent. When
+// it returns non-zero it NUL-terminates at buf[n] (so `cap` must leave
+// room for it, and text callers can scan the result as a string).
+uint32_t fs_read_into(const char *path, void *buf, uint32_t cap);
+
 // Returns a file's size in bytes without reading any of its data, or 0
 // if `path` doesn't exist or names a directory -- the cheap way to
 // find out whether a file is small enough to fs_read() whole, or large

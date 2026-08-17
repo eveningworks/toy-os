@@ -573,6 +573,20 @@ void scheduler_tick(uint64_t *regs) { scheduler_rotate(regs); }
 // to justify two paths is gone.
 void scheduler_yield(uint64_t *regs) { scheduler_rotate(regs); }
 
+// Depth, not a flag: sections nest, and an inner one must not re-enable
+// preemption an outer one is relying on. See api/scheduler.h.
+static int g_preempt_depth;
+
+void scheduler_preempt_disable(void) { g_preempt_depth++; }
+
+void scheduler_preempt_enable(void) {
+    if (g_preempt_depth > 0) g_preempt_depth--;
+    // Clamped at 0 rather than allowed to go negative: an extra enable()
+    // is a bug, but letting the count drift below zero would make the
+    // NEXT legitimate disable() a no-op, turning a local mistake into a
+    // silent loss of protection somewhere else entirely.
+}
+
 static void scheduler_rotate(uint64_t *regs) {
     if (!scheduler_armed) return;
 
@@ -611,6 +625,17 @@ static void scheduler_rotate(uint64_t *regs) {
     // The window is narrow but entirely reachable: any `run` from the
     // physical shell while a client has a window open.
     if (process_context_is_armed()) {
+        if (current_index < 0) kernel_saved_rsp = (uint64_t)regs;
+        return;
+    }
+
+    // A CRITICAL SECTION IS OPEN -- resume exactly what was interrupted,
+    // the same treatment (and for the same reason) as the armed legacy
+    // process above: switching away would let another caller re-enter
+    // code that is holding shared state. See scheduler_preempt_disable()
+    // in api/scheduler.h for what holds this and why. The slice is
+    // already billed above, so accounting is unaffected.
+    if (g_preempt_depth > 0) {
         if (current_index < 0) kernel_saved_rsp = (uint64_t)regs;
         return;
     }

@@ -238,4 +238,33 @@ int scheduler_wake(int reason, int64_t value);
 // wherever the kernel is idle.
 void scheduler_idle(void);
 
+// ---- critical sections that must not be preempted -------------------
+//
+// Nests (a depth counter), so an inner section cannot re-enable
+// preemption an outer one was relying on. While the depth is non-zero
+// scheduler_tick() still BILLS the slice that ended -- accounting stays
+// honest -- it simply does not rotate.
+//
+// WHY THIS EXISTS. The kernel context is a scheduler participant, and a
+// ring-3 process is preemptible inside a syscall, so two callers can be
+// interleaved anywhere. That is fine for code with no shared state and
+// silently fatal for code with some -- and the filesystem has some:
+// kernel/fs/tfs3.c parses directories, inodes and data through
+// module-level scratch buffers (g_blk, g_ptr_blk), so a ring-3app
+// reading a file while the WM was mid-lookup overwrote the block the
+// WM was reading. The WM then reported perfectly good files as missing
+// or unreadable, intermittently, with no error anywhere -- the desktop
+// dropping cursor shapes on roughly one boot in three under KVM.
+//
+// vfs.c holds this across every backend call for that reason. It is
+// deliberately a general primitive rather than an fs-specific flag: the
+// hazard is "shared state plus preemption", and the filesystem is
+// simply where this project met it first.
+//
+// THE TRAP: an unbalanced disable() hangs the machine, since nothing
+// will ever rotate again. Pair them on every path out, including the
+// failure ones.
+void scheduler_preempt_disable(void);
+void scheduler_preempt_enable(void);
+
 #endif
