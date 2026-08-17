@@ -2,7 +2,10 @@
 
 **Status: STAGES 0-3 BUILT (2026-08-16); stage 4's PREREQUISITES are
 now complete too (2026-08-17) -- see the stage 4 section. Stage 4 is the WM itself and
-is not started.** Written the way `docs/uapp-design.md` and
+is not started; its REQUIREMENTS are measured and written down
+(2026-08-17), including two decisions settled deliberately (the WM owns
+the back buffer; the kernel restores the text console when the WM
+dies).** Written the way `docs/uapp-design.md` and
 `docs/tfs3-design.md` were: decide the shape and the arguments first,
 build it in named stages afterwards. Each stage below carries its own
 built/not-built note -- read those before the prose around them, which
@@ -546,22 +549,156 @@ half of them have since landed for their own reasons):
   the layout's draw, so a "hidden" page stayed fully visible while every
   log line said it had been hidden.
 
-Remaining prerequisites, then:
-- `apps/wm/` becomes a ring-3 binary linked against Toykit and the
-  ported widgets, spawned at boot. `win_server.c` stays in the kernel:
-  it owns page tables and the frame allocator, which is exactly what
-  ring 3 must not have.
-- `gfx.c`'s rasteriser is already mirrored by `ugfx.c`. What actually
-  moves is the compositor loop, damage tracking, chrome and the input
-  routing -- and the framebuffer access becomes the guarded successor
-  to `SYS_GUI_INIT`.
-- Delete the old input path from stage 2 and the direct debug hook from
-  stage 3.
+The shape, then: `apps/wm/` becomes a ring-3 binary linked against
+Toykit and the ported widgets, spawned instead of called.
+`win_server.c` stays in the kernel -- it owns page tables and the frame
+allocator, which is exactly what ring 3 must not have.
 
-**Proven by:** the same 13 tools, unchanged, for the fourth time -- and
-one new property worth its own test: killing the WM process must not
-panic the kernel. That is the entire point of the milestone, and it is
-the first stage at which it becomes true.
+#### The requirements, measured (2026-08-17)
+
+Not estimated. `apps/wm/` is **7,363 lines across 21 files**, and every
+kernel symbol it names was extracted from its own source. That surface
+falls into seven groups, and the useful result is that **five of them
+already have a ring-3 path**: the filesystem (`SYS_OPEN`/`READ`/
+`WRITE`/`LISTDIR`/`UNLINK`), process control (`SYS_SPAWN`/`KILL`/
+`WAITPID`/`PROC_INFO`/`TICKS`), the clock (`SYS_GETTIME`), settings
+(the `SYS_SETTING` registry) and logging (`sys_eprint`). Raw input and
+the font arrived in stages 1-3. What follows is only what is left --
+each item with what exists, what is missing, and what would prove it.
+
+**R1. The framebuffer, and who owns the back buffer. DECIDED: the WM
+does.** The 100-odd `gfx_*` call sites are mostly rasteriser calls
+`ugfx.c` already mirrors; what has no ring-3 owner is the *surface* --
+`gfx_present()`, the write-combining publish, the dirty box,
+`gfx_blit()`, `gfx_get_pixel()`, `gfx_set_font_size()`. The alternative
+considered and rejected was leaving `gfx.c`'s back buffer in the kernel
+and mapping it into the WM: fewer lines move and the PAT/WC reasoning
+stays in one audited place, but ring 0 would then hold a rasteriser's
+mutable state on behalf of a ring-3 client, which is the half-migration
+this whole plan is shaped to avoid. So: a **guarded successor to
+`SYS_GUI_INIT`** maps the linear framebuffer into the *registered
+compositor only* (the role already exists -- `WIN_REQ_SET_COMPOSITOR`,
+stage 1), the WM allocates and owns its back buffer, and a present
+publishes a rect. The write-combining publish path is duplicated into
+`ugfx.c` rather than shared, because it is a handful of lines and the
+kernel still needs its own for the text console (R7).
+
+  The trap to carry into it: `gfxbench` numbers under QEMU are
+  meaningless (TCG ignores guest memory types), so the WC path must be
+  measured under `tools/vm.py --kvm` or not claimed at all -- this is
+  the one class of regression the whole suite is structurally blind to,
+  and moving the publish is exactly the change that could cause it.
+
+**R2. Damage verification.** `gui damage verify on` is
+`gfx_verify_snapshot()`/`_diff()`/`_release()` -- kernel functions that
+render a frame twice and compare. `damage_sweep.py` and
+`damage_hunt.py` are built entirely on it, and it is the only harness
+this project has for the WM's worst bug class. With R1 decided it
+becomes a **WM-internal** facility: the WM owns both buffers, so it can
+snapshot, re-render unrestricted and diff without the kernel present at
+all, reporting through the same `dbg_out` sink stage 3 gave it. The
+requirement is that `gui damage verify on` keeps working *with the same
+output grammar* -- pixel count, bounding box, and the third-render
+stability verdict -- because the tools parse it.
+
+**R3. The cursor.** `gfx_hw_cursor_available()`/`_define()`/`_move()`
+sit on the display driver, which is hardware and stays in ring 0, so
+these become TWP requests or a small syscall. `mouse_init()` and
+`mouse_set_bounds()` are the other half: the WM currently initialises
+the mouse and tells it the screen size. Bounds are the compositor's
+business (it knows the screen), the device is not. Falling back to a
+software cursor drawn by the WM was considered and is *not* the
+default -- the hardware cursor is what keeps the pointer moving
+independently of damage, and losing it would show up as cursor lag
+nothing in the suite asserts on.
+
+**R4. `fs_generation()`.** One counter the VFS bumps on every change;
+the WM compares it once per frame to decide whether to re-read
+`/usr/wm/desktop/` (`wm.c:600`). There is no syscall for it, and
+without one the live `.desktop` reload either dies or degrades into
+re-listing a directory every frame -- which is real I/O in the
+compositor loop, the exact thing the counter exists to avoid.
+Cheapest correct answer: one more field in `SYS_SYSINFO`, or a
+one-value `SYS_FS_GENERATION`. `desktop_entries_test.py` (13 checks)
+is its gate.
+
+**R5. The serial debug console's drain point.** This is the
+requirement nobody would predict, and it is load-bearing for the
+entire test suite. `debug_console_poll()` has exactly two callers that
+matter: `keyboard_getchar_mods()`'s idle loop (the physical shell) and
+**`wm_run()`'s loop** (`wm.c:759`). While the desktop is up, the WM
+*is* what keeps the kernel's serial console answering -- and all 19 GUI
+tools, all 271 checks, arrive over that wire. Move the WM to ring 3 and
+ring 0 has no drain point at all for the whole time the desktop is
+running. The kernel needs its own: the timer tick or an idle-path poll,
+owned by nothing in `apps/`. Prove it by asserting the console still
+answers *while a ring-3 process is spinning* -- `sched_gui_test.py`
+already encodes that trick in the other direction.
+
+**R6. Memory.** `apps/wm/` allocates in exactly one place: growing
+`windows[]` (`wm_windows_reserve()`). `SYS_SBRK` covers it, so no
+allocator is required (see the prerequisite note above). The rule that
+comes with it is unchanged and gets *more* dangerous in ring 3, where
+a stale `struct window *` faults instead of corrupting: index, never
+cache across anything that can open a window.
+
+**R7. Lifecycle, and what happens when the WM dies. DECIDED: the
+kernel restores the text console.** Today `wm_run()` returns and calls
+`vga_resume()` itself (`wm.c:838`), having first shut the client list
+down in order. In ring 3 that ordering has to survive as a kernel-side
+teardown: `win_server.c` sees the compositor deregister (cleanly, or by
+`scheduler_kill()`, or by faulting -- all three are the same path), so
+it unmaps the framebuffer, drops every client window, and resumes the
+VGA console. The physical shell's `gui` command becomes spawn-and-wait.
+Respawning the WM was considered and rejected for now: it puts a policy
+about *which binary is the desktop* into the kernel, and the milestone's
+exit criterion is that killing the WM is survivable, not invisible.
+
+  The `vga_sink` hazard in `wm.c:820`'s comment is the thing to
+  re-read before building this -- exiting GUI mode with a stale sink
+  installed silently swallows the shell's own output, and the ring-3
+  version has the same hazard with a longer gap between the two halves.
+
+**R8. What compiles twice, and what moves outright.** `apps/ui/`,
+`apps/theme.h` and `kernel/lib/rubberband.h` are all already
+mirrored or shared-source; `gui_apps.c` (the `.desktop` scan) moves
+wholesale and becomes an ordinary ring-3 consumer of `SYS_LISTDIR` --
+note its 32-entry-per-call cap is a real constraint on a desktop
+directory, so either it grows an offset or the scan iterates.
+`wm_debug.c` moves with the WM, which is what stage 3 was for.
+
+**R9. What gets DELETED, not moved.** This is where stage 4 pays some
+of its cost back, and it should be counted as part of the work:
+- The `pending_write`/`pending_read`/`pending_proc` step machinery
+  (`wm.c:843` onward). It exists solely because a ring-0 `wm_run()`
+  must never block on the filesystem. A ring-3 WM is a *process* -- it
+  can call `read`/`write` and be descheduled like anything else, and
+  the whole one-block-per-frame dance goes away.
+- Stage 2's duplicate input path, once `WIN_EV_RAW_*` is the only one.
+- Stage 3's direct debug hook.
+- `SYS_GUI_INIT` in its unguarded form, once R1's successor exists.
+
+#### Sub-staging
+
+7,363 lines is too much to flip in one commit, and every stage in this
+document so far has been chosen so the suite passes at its end. Stage 4
+should be cut the same way -- a plausible split, to be confirmed when it
+starts: **4a** the kernel capabilities (R1's map/present, R3, R4, R5)
+with the WM still in ring 0 calling them, which is the stage-3 trick
+again and keeps the suite green throughout; **4b** the ring-3 binary
+drawing the desktop with input still routed the old way; **4c** the
+input and debug cutover plus R9's deletions; **4d** the death path (R7)
+and its test. 4a is the one that can be built and proven without
+moving anything.
+
+**Proven by:** the same 19 tools, 271 checks, unchanged, for the
+fourth time -- plus `damage_sweep.py --positive-control` first, since
+R2 rebuilds the harness those runs depend on, and a clean sweep from a
+harness that is checking nothing looks identical. And one new property
+worth its own test: **killing the WM process must not panic the
+kernel**, and must land the user at a working text shell. That is the
+entire point of the milestone, and it is the first stage at which it
+becomes true.
 
 ## Testing
 
@@ -602,6 +739,12 @@ step.
 
 ## Revision history
 
+- 2026-08-17: stage 4's requirements measured from `apps/wm/`'s own
+  call surface and written up as R1-R9, with a 4a-4d sub-staging
+  sketch. Two forks settled rather than defaulted (framebuffer
+  ownership, WM-death policy). The unexpected one is R5: the kernel's
+  serial debug console is drained by `wm_run()`'s loop, so moving the
+  WM out silently takes the whole 271-check test wire down with it.
 - 2026-08-16: written, after Milestone 2 closed and v0.2.0 shipped.
   Prompted by the question "what is still needed to get the whole WM
   working in ring 3?" -- the answer being four kernel capabilities, a

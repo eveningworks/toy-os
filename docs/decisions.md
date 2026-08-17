@@ -123,6 +123,7 @@ there when you add an entry, or the index quietly stops being one.
 
 **GUI: window manager, compositor & widgets**
 
+- [The ring-3 WM owns the back buffer, and its death drops you to a text shell](#the-ring-3-wm-owns-the-back-buffer-and-its-death-drops-you-to-a-text-shell)
 - [The desktop's app list is a directory of files, not a table in the kernel](#the-desktops-app-list-is-a-directory-of-files-not-a-table-in-the-kernel)
 - [Widgets are added once a second real caller needs them -- except the checkbox](#widgets-are-added-once-a-second-real-caller-needs-them----except-the-checkbox)
 - [A table PULLS its rows, and stores none of them](#a-table-pulls-its-rows-and-stores-none-of-them)
@@ -6736,3 +6737,35 @@ fragile register tables.
 Note the fallback is not *entirely* unreachable in the meantime: it is
 what runs on a machine where GRUB provides no framebuffer at all, which
 is the case it exists for.
+
+## The ring-3 WM owns the back buffer, and its death drops you to a text shell
+
+Two forks settled while writing Milestone 41 stage 4's requirements
+(`docs/wm-ring3-design.md`, R1 and R7), both of which had a defensible
+cheaper answer.
+
+**The back buffer.** The cheaper option was to leave `gfx.c`'s surface,
+its dirty box and its write-combining publish in the kernel and map the
+buffer into the ring-3 WM -- fewer lines move, and the PAT/WC reasoning
+(which this project has already paid for once, on real hardware only)
+stays in one audited place. Rejected: ring 0 would then be holding a
+rasteriser's mutable state on behalf of a ring-3 client, which is
+exactly the half-migration the staged plan exists to avoid, and it
+leaves `gui damage verify on` -- the harness for the WM's worst bug
+class -- straddling the boundary. So the WM allocates and owns its back
+buffer, a guarded successor to `SYS_GUI_INIT` maps the framebuffer to
+the *registered compositor only*, and damage verification becomes
+WM-internal. The kernel keeps its own publish path regardless, because
+the text console and the panic path still need one.
+
+**What happens when the WM dies.** Respawning it is what a real desktop
+does, and it was rejected for now because it puts a policy about *which
+binary is the desktop* into the kernel. Instead a compositor
+deregistering -- cleanly, by `SYS_KILL`, or by faulting, all the same
+path -- makes `win_server.c` unmap the framebuffer, drop the client
+windows and resume the VGA console, which is what `wm_run()` already
+does for itself today (`apps/wm/wm.c`'s `vga_resume()` on exit, and the
+`vga_sink` hazard commented just above it). The milestone's exit
+criterion is that killing the WM is *survivable*, not that it is
+invisible; making it invisible first would hide whether it is
+survivable at all.

@@ -1639,6 +1639,17 @@ messages over `struct win_transport`, and the whole suite passes with no
 tool edited -- so the tooling has already crossed the boundary the WM
 still has to.
 
+**Stage 4's requirements are written (2026-08-17)** -- R1-R9 in the
+design doc, measured from `apps/wm/`'s own call surface rather than
+estimated, plus a 4a-4d sub-staging sketch and two forks settled in
+`docs/decisions.md` (the WM owns the back buffer; the kernel restores
+the text console when the WM dies). **There is a second easy-to-miss
+consequence, and it is R5:** `debug_console_poll()` -- the drain for
+that same serial wire -- is called from `wm_run()`'s loop, so while the
+desktop is up the WM is what keeps the kernel's console answering at
+all. Move it to ring 3 without giving ring 0 its own drain point and
+every one of the 271 checks stops arriving.
+
 - [x] ~~The kernel context is a scheduler participant, so `wm_run()`
       keeps drawing while a ring-3 process runs~~ -- done, see
       `CHANGELOG.md`'s `[Unreleased]` entry. Step zero: nothing else

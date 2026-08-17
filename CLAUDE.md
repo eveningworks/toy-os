@@ -478,11 +478,16 @@ technical conventions below:
   already crossed the boundary the WM still has to). Stage 4 is the WM
   itself; of its prerequisites the ELF hardening and the tick/process
   syscalls are done (and monotonic time went further than the plan asked
-  -- `SYS_MONOTONIC_NS` over a clocksource registry), the **settings
-  syscalls are the only one still missing**, and the ring-3 allocator
+  -- `SYS_MONOTONIC_NS` over a clocksource registry), the settings
+  syscalls are done too (and went further than the plan asked -- a
+  SETTINGS REGISTRY behind `SYS_SETTING`, not raw `etc_config` access),
+  and the ring-3 allocator
   turned out NOT to be a blocker: `apps/wm/` allocates nothing, and the
-  claim that it did was a comment pointing at a since-deleted file. Read
-  that before touching anything in `apps/wm/` with the migration in
+  claim that it did was a comment pointing at a since-deleted file.
+  **Every prerequisite is now complete, and stage 4's own REQUIREMENTS
+  are written up as R1-R9** (2026-08-17), measured from `apps/wm/`'s
+  call surface rather than estimated. Read that before touching
+  anything in `apps/wm/` with the migration in
   mind. Its load-bearing point: all 19 GUI test tools drive the WM
   through `wm_debug.c`'s `gui` commands over the KERNEL's serial
   console, so the 271 checks that prove the desktop works have to move
