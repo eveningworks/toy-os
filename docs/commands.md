@@ -83,6 +83,34 @@ kernel actually **enabled** it.
 | `fontsize <8\|10\|12\|14\|16\|18\|20\|24>` | The whole UI is font-derived, so this reflows everything rather than clipping it. |
 | `keyboard <us\|se>` | Base + Shift + AltGr. Layouts are data files under `/etc/kbs/`. |
 
+Each of the four above is also a registered SETTING, so `config` can
+read and change it by name — and a value it refuses is reported with the
+legal ones listed. The commands stay because typing `fontsize 16` is
+shorter than `config set font_size 16`, not because they are a separate
+mechanism: both go through the same `apply`, so neither can drift.
+
+## Configuration (`/bin/config`)
+
+Settings live as plain `name=value` text under `/etc` and can be edited
+in `edit` — this is the index over those files, which is the part a
+directory of text cannot provide about itself. See
+`docs/decisions.md`'s settings-registry entry.
+
+| Command | Notes |
+|---|---|
+| `config list` | Every registered setting, its value, and **the file it lives in**. Flags any whose file no longer matches what is live. |
+| `config get <name>` | One value. |
+| `config set <name> <value>` | Validate, apply and persist. `name=value` works too. A refusal lists the legal values; a value that applied but did **not** save says so rather than reporting success. |
+| `config unset <name>` | Removes the key, so the built-in default applies at the next boot. |
+| `config where <name>` | Just the owning file's path — scriptable. |
+| `config diff` | Settings whose file differs from what is in effect, i.e. exactly what a hand edit changed and what `reload` would apply. |
+| `config reload` | Re-read every file after editing by hand. Reports how many values were **refused**. |
+| `config files` | Every known config file, its path, its description, and whether it is built in or declared in `/etc/config.d`. |
+| `config show <name\|path>` | Print one config file verbatim. |
+| `config find <text>` | Search key names **and** values across every registered config file, `file:key=value` per hit. Case-insensitive. |
+| `config register <name> <path> [description]` | Declare a new config file by writing a descriptor into `/etc/config.d`. Picked up live. |
+| `config unregister <name>` | Remove that descriptor. A built-in cannot be unregistered. |
+
 ## Developer and diagnostic (`help tests`)
 
 | Command | Notes |

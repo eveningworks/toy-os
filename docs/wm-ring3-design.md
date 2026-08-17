@@ -1,6 +1,7 @@
 # The WM in ring 3 -- finishing Milestone 41
 
-**Status: STAGES 0-3 BUILT (2026-08-16). Stage 4 is the WM itself and
+**Status: STAGES 0-3 BUILT (2026-08-16); stage 4's PREREQUISITES are
+now complete too (2026-08-17) -- see the stage 4 section. Stage 4 is the WM itself and
 is not started.** Written the way `docs/uapp-design.md` and
 `docs/tfs3-design.md` were: decide the shape and the arguments first,
 build it in named stages afterwards. Each stage below carries its own
@@ -514,9 +515,36 @@ half of them have since landed for their own reasons):
   maintainer's call is to build one anyway, for Toykit generally
   (Milestone 24 work), rather than to make the ring-3 WM permanently
   allocation-free.
-- **The settings syscalls (`etc_config_*`) -- NOT DONE.** Still needed
-  by Control Panel, which is the last `Exec=builtin:` and therefore the
-  last kernel-space app.
+- **The settings syscalls -- DONE (2026-08-17), and they went further
+  than this asked for.** Rather than exposing `etc_config_*` directly,
+  the kernel grew a SETTINGS REGISTRY (`kernel/include/api/setting.h`):
+  a subsystem registers its setting the way a `display_driver`
+  registers, and `SYS_SETTING` hands ring 3 the whole list -- names,
+  labels, legal values, and the file each one lives in. Plus a
+  config-FILE registry (`api/config_file.h`) indexing the /etc
+  documents themselves, extensible from ring 3 by dropping a descriptor
+  in `/etc/config.d` exactly as `.desktop` files extend the Start menu.
+  `SYS_SYSINFO` covers the memory/disk figures System Info needed.
+
+  Why a registry instead of the two syscalls this line asked for:
+  nothing could previously answer "what settings exist", so a Control
+  Panel had to carry its own list -- a second source of truth that
+  drifts the moment a subsystem adds a key. The ring-3 Control Panel is
+  GENERATED from the registry instead and contains no list at all.
+
+- **Control Panel -- MOVED (2026-08-17).** `userland/gui/system/cpanel.c`.
+  With it gone, `Exec=builtin:` has no users, the mechanism is deleted
+  from `gui_apps.c`, and **ring 0 contains no applications at all**.
+  `tools/cpanel_test.py` (14 checks) drives it.
+
+  Moving it also turned up four Toykit bugs, all general: `uui_listbox`
+  and `uui_radio_list` had no `natural_size`/`set_geometry` in their ops
+  tables, so neither could be POSITIONED by a layout; the radio list had
+  no font-derived metric defaults, so an unassigned field made it
+  zero-sized (invisible and unclickable at once); `uui_statusbar` had no
+  ops table; and `hidden` was honoured by the input router but not by
+  the layout's draw, so a "hidden" page stayed fully visible while every
+  log line said it had been hidden.
 
 Remaining prerequisites, then:
 - `apps/wm/` becomes a ring-3 binary linked against Toykit and the

@@ -38,6 +38,9 @@ there when you add an entry, or the index quietly stops being one.
 - [The diagnostic channel carries its own payload struct, so presents stay cheap](#the-diagnostic-channel-carries-its-own-payload-struct-so-presents-stay-cheap)
 - [A client window's close button is a handshake, not a seizure](#a-client-windows-close-button-is-a-handshake-not-a-seizure)
 - [Single-instance is the app's decision, and the launcher always launches](#single-instance-is-the-apps-decision-and-the-launcher-always-launches)
+- [Settings are a REGISTRY, not a pile of syscalls -- and the files stay plain text](#settings-are-a-registry-not-a-pile-of-syscalls----and-the-files-stay-plain-text)
+- [A config file declares itself with a file, over a built-in floor](#a-config-file-declares-itself-with-a-file-over-a-built-in-floor)
+- [A stale ISO passes every test, so the launchers refuse to boot one](#a-stale-iso-passes-every-test-so-the-launchers-refuse-to-boot-one)
 - [A yield is not a tick: SYS_YIELD reschedules without billing](#a-yield-is-not-a-tick-sys_yield-reschedules-without-billing)
 - [Clocksources: timekeeping is an interface, and CPU time is measured not counted](#clocksources-timekeeping-is-an-interface-and-cpu-time-is-measured-not-counted)
 - [A client blocks between frames -- WIN_EV_TIMER, not a polling loop](#a-client-blocks-between-frames----win_ev_timer-not-a-polling-loop)
@@ -716,9 +719,140 @@ half-implemented second copy (see `docs/gui-guidelines.md`'s
 for that: it needed a scrolling, keyboard-navigable, hover-tracking
 list, and composing `ui_listbox` meant writing none of it twice.
 
+## Settings are a REGISTRY, not a pile of syscalls -- and the files stay plain text
+
+Milestone 41 stage 4's last prerequisite was written down as "syscalls
+for `etc_config_*`", i.e. let ring 3 read and write `/etc`. What shipped
+instead is a registry (`kernel/include/api/setting.h`), because the
+literal request would have left the actual problem in place.
+
+**The problem is not access, it is DESCRIPTION.** Five settings existed
+(`timezone`, `font_size`, `cursor_style`, `keyboard_layout`, plus
+`PATH`), each with its own `*_init()`/`*_save()` pair, its own
+validation, and its own in-memory copy in a kernel subsystem. Nothing
+anywhere held the sentence *"a setting called `font_size` exists, it is
+one of these values, and this is how to apply one."* So a Control Panel
+had to carry that list itself -- a second source of truth that drifts
+the moment a subsystem adds a key. Raw `etc_config` syscalls would have
+handed ring 3 a text file and changed none of that.
+
+A subsystem registers a `struct setting` the way it would register a
+`display_driver` or a `block_device`: name, label, type, file, a choice
+ENUMERATOR, a getter, and one `apply` that validates, applies and
+persists. `SYS_SETTING` (`abi/setting_abi.h`) hands ring 3 the whole
+list, so the ring-3 Control Panel is GENERATED from it and contains no
+list at all -- a setting registered anywhere in the kernel gains a row
+with no edit to Control Panel. That is the same move the Start menu made
+when it started reading `.desktop` files instead of a C table.
+
+**The files did not change, and that is deliberate.** Settings are still
+plain `name=value` text under `/etc`, editable with `edit` and readable
+with `cat`. The registry is an INDEX over those files, not a replacement
+-- which is precisely the half Unix's `/etc` cannot provide about
+itself: every descriptor carries its own `file`, so the system can
+finally answer "which file is this setting in?". `config where
+<name>` prints it.
+
+Two consequences of keeping the files hand-editable, both paid for
+rather than avoided:
+
+- A hand edit and the subsystem's live copy disagree until something
+  re-reads. `settings_reload()` re-applies every setting from its file
+  and REPORTS how many values the owner refused -- silently ignoring a
+  typo in a file someone just edited is how a setting appears not to
+  work. `config reload` is the handle; `config diff` shows what an edit
+  has not applied yet, using a `stored` field the kernel fills alongside
+  the live value so no client needs a second `name=value` parser.
+- A `generation` counter rides every reply, so a client learns "someone
+  changed something" from a call it was making anyway. Same trick as
+  `fs_generation()`; not a callback list, because the interested parties
+  are in other address spaces.
+
+`enum setting_result` moved from `api/etc_config.h` to
+`abi/setting_abi.h` in the same change: once ring 3 could change a
+setting, "applied but NOT saved" became part of the kernel<->userland
+contract rather than an internal detail. A client reporting UNSAVED as
+success is the exact lie that enum was introduced to stop.
+
+## A config file declares itself with a file, over a built-in floor
+
+`api/config_file.h` indexes the `/etc` DOCUMENTS -- including the ones
+holding no registered setting at all (`/etc/timezones`, `/etc/kbs`,
+`/etc/desktop.conf`). Those are the hardest to find precisely because
+nothing describes them.
+
+It has two sources, and the split is the decision. Kernel subsystems
+register theirs in code; anything else registers by dropping a
+descriptor (`Name`/`Path`/`Description`) in `/etc/config.d`, which is
+the same shape and the same reasoning as the `.desktop` entries that
+build the Start menu. That is what lets a RING-3 program declare its
+config file with no kernel edit -- which matters because the window
+manager becomes a ring-3 program in stage 4, and it owns
+`/etc/desktop.conf`.
+
+**Why not files only.** A registry living purely in `/etc/config.d`
+cannot bootstrap: a blank disk has no such directory, and a deleted
+descriptor would leave `/etc/toyos.conf` nameless -- the system unable
+to describe its own primary config file. So the built-ins are a FLOOR,
+and a descriptor with the same `Name` OVERRIDES one. That is the
+vendor-default/`/etc`-override pattern real systems use, and it means
+`/etc/config.d` is authoritative for everything except the ability to
+come up at all. Two descriptors colliding, or a built-in colliding with
+a built-in, are refused: there the winner would depend on directory or
+boot order.
+
+A descriptor is a CLAIM, not a guarantee -- it may name a file nothing
+has written yet, and `config files` reports that as "(not created yet)"
+rather than hiding the row. Filtering it would leave "where will my
+settings go?" unanswerable until after the first save.
+
+## A stale ISO passes every test, so the launchers refuse to boot one
+
+Every headless test here boots `toy-os.iso`, and `make all` does not
+rebuild it. So `make all` alone -- or a `make iso` that FAILED on a
+compile error -- leaves the whole suite running against the previous
+build and reporting a clean PASS. It does not fail loudly; it fails as a
+success, which is the worst available direction, and it is what makes a
+positive control come back green and send a session auditing the test
+instead of the build. This has cost time in many sessions, twice in the
+one that finally fixed it.
+
+`tools/iso_guard.py` refuses to launch a stale image, called from
+`vm.py` and `qmp_test.py`'s `launch_qemu_cmd()` -- the only two places
+anything in this repo starts a guest, so one check covers all 19 GUI
+tools plus `ktest_run.py` and `boot_smoke_test.py`.
+
+Two design points, both learned by getting them wrong first:
+
+- **Each source tree is paired with the artifact IT actually feeds**
+  (`kernel/` and `apps/` -> `build/kernel.bin`, `userland/` ->
+  `build/userland`). The first version compared everything against
+  `kernel.bin` and cried wolf on the first userland-only edit, which
+  correctly rebuilds `build/userland/` and correctly does not touch
+  `kernel.bin`. A guard that false-alarms is a guard people switch off.
+- **The userland side is witnessed by `build/.seeded`, a stamp the
+  Makefile's `seed` target touches, not by `disk.img`'s mtime.** Seeding
+  is content-hash based, so a rebuild producing byte-identical ELFs
+  correctly rewrites nothing and leaves the image untouched -- using the
+  image would report a no-op rebuild as staleness.
+
+`TOYOS_ALLOW_STALE_ISO=1` bypasses it, for deliberately testing an older
+image (bisecting, or building an earlier commit to prove a failure
+predates your work -- which is what it was first used for). It prints
+that it is bypassing, so a stale export in a shell cannot quietly become
+the old behaviour.
+
 ## The Control Panel's applets are a registry table, not gui_apps
 
-`apps/control_panel.c` holds a static `struct applet` table -- name,
+**HISTORICAL (2026-08-17): `apps/control_panel.c` is deleted.** Control
+Panel is a ring-3 program now (`userland/gui/system/cpanel.c`) and has
+no applet table at all -- its rows come from the settings registry, so
+the "adding an applet is adding a row" property below was superseded by
+"adding a SETTING adds a row, from anywhere in the kernel". Kept because
+the reasoning about plug-in conventions is still the reasoning that
+shaped what replaced it.
+
+`apps/control_panel.c` held a static `struct applet` table -- name,
 `draw(x,y,w,h)`, `click(...)` -- deliberately mirroring
 `gui_apps.h`'s `gui_app_registry[]` rather than inventing a second
 plug-in convention. Adding an applet is adding a row, the same property

@@ -297,7 +297,9 @@ technical conventions below:
   kernel keeps the `k_` prefix and these headers are not on its include
   path. Reach for `knum.h`'s `k_utoa`/`k_htoa` directly when you need a
   fixed-width number -- kfmt's printf has zero-pad widths for numbers
-  but no `*` width and no left-justify. What does NOT exist yet, on
+  and `%Ns`/`%-Ns` column padding for STRINGS (a value longer than its
+  field pushes the column rather than being truncated), but no `*`
+  width. What does NOT exist yet, on
   purpose: `malloc`, `FILE`, `printf`, `errno`, TLS (Milestone 24).
   Three traps are documented in `docs/decisions.md` and in the files
   themselves, all of which fail quietly: a header named `string.h`
@@ -546,7 +548,21 @@ technical conventions below:
   **`SYS_KILL` is unprivileged on purpose** --
   there is no user model to gate it on, and killing the ring-3 WM is
   stage 4's exit criterion rather than a hole.
-- **`Exec=builtin:` has ONE user left: Control Panel.** Task Manager
+- **`Exec=builtin:` is GONE, and ring 0 contains no applications.**
+  Control Panel was the last one; it is `userland/gui/system/cpanel.c`
+  now, and the builtin table, its lookup and its struct are deleted from
+  `gui_apps.c`. An entry still naming that form is refused loudly rather
+  than shown as a row that does nothing -- an entry file can outlive the
+  mechanism it names. One live consequence: the WM's live-`.desktop`-
+  reload deferral (`apps/wm/wm.c`) is now UNREACHABLE, because it
+  triggers on a window holding a `gui_app_registry[]` pointer and only a
+  kernel-space app ever held one. The guard is kept and correct;
+  `desktop_entries_test.py` asserts the property that makes it
+  unreachable, so a kernel-space app coming back turns that check red
+  instead of producing a mystery rebinding bug.
+
+  The historical note, for context:
+- **`Exec=builtin:` used to have ONE user: Control Panel.** Task Manager
   moved to `userland/gui/system/taskmgr.c` in this round, so the
   registry's builtin table is down to a single row and disappears with
   it in stage 4. Two live consequences: an entry naming a builtin that
@@ -805,6 +821,24 @@ technical conventions below:
   new setting -- read/write it through `kernel/include/api/etc_config.h`'s
   `etc_config_get()`/`etc_config_set()` (name=value lines, `#` comments,
   see `kernel/lib/etc_config.c`'s top comment for the exact format).
+  **A new setting REGISTERS itself** (`kernel/include/api/setting.h`) --
+  a `struct setting` with a name, label, type, file, a choice
+  enumerator, a getter and one `apply` that validates, applies AND
+  persists, announced from `settings_init()` the way a `display_driver`
+  announces itself. That is what lets `SYS_SETTING` hand ring 3 the
+  whole list, so the ring-3 Control Panel is GENERATED and a setting
+  added anywhere in the kernel gains a Control Panel row and a `config`
+  entry with no edit to either. **Don't add a setting as a bare
+  `etc_config_get`/`_set` pair any more** -- that is the shape the
+  registry replaced, and it leaves nothing able to answer "what settings
+  exist". The files are unchanged and still hand-editable; the registry
+  is an INDEX over them, which is the half `/etc` cannot provide about
+  itself. `settings_reload()` (and `config reload`) re-reads them after
+  a hand edit, and REPORTS refusals. See `docs/decisions.md`.
+  **`/etc/config.d` is how a config FILE declares itself** -- one
+  `Name`/`Path`/`Description` descriptor each, so a ring-3 program can
+  register its config with no kernel change, over a built-in floor that
+  lets a blank disk still describe itself (`api/config_file.h`).
   By default, put a new setting's key in the shared `/etc/toyos.conf`
   every setting lives in today (`timezone`, `font_size`, `PATH` -- see
   `kernel/lib/tz.c`/`font_config.c` for the pattern: a small
@@ -1994,6 +2028,32 @@ repeated manual steps to be worth automating:
   first version asserted only absence and passed with the filter
   disabled outright, because `write` truncates and the check was racing
   the transient invalid file. In `gui_regress.py`.
+- **`cpanel_test.py`** -- the ring-3 Control Panel and, through it, the
+  settings registry (14 checks). Run it after touching
+  `kernel/lib/setting.c`, `SYS_SETTING`/`SYS_SYSINFO`, or
+  `uui_listbox`/`uui_radio_list`/`uui_statusbar`/`uui_layout`'s `hidden`
+  handling. Two things it encodes. A change is verified by reading the
+  BYTES ON DISK through the console's own `sh cat`, not by believing the
+  app -- and note `/bin/config get` does NOT work for this, because a
+  spawned program's stdout goes to its parent's pipe rather than the
+  kernel log (only stderr is readable from outside). And its
+  hidden-page check measures the SAME RECT in both states: the first
+  version compared the widget's band against the WHOLE page's ink, a
+  baseline so much larger that a positive control (making the layout
+  ignore `hidden` again) reddened nothing at all. Recorded numbers:
+  55% of the shown ink survives when hidden works, 98% when it does not.
+- **`iso_guard.py`** -- refuses to boot a stale `toy-os.iso`, called
+  from `vm.py` and `qmp_test.py`'s `launch_qemu_cmd()`. `make all`
+  without `make iso`, or a `make iso` that FAILED, otherwise leaves the
+  whole suite testing the previous build and reporting a clean PASS --
+  which is the worst possible direction and has cost time in many
+  sessions. Each source tree is checked against the artifact it feeds
+  (`userland/` -> `build/userland`, not `kernel.bin`), and the seeding
+  step is witnessed by `build/.seeded` rather than `disk.img`'s mtime,
+  because seeding is content-hash based and a byte-identical rebuild
+  correctly rewrites nothing. `TOYOS_ALLOW_STALE_ISO=1` bypasses it, for
+  deliberately booting an older image -- e.g. building an earlier commit
+  to prove a failure predates your work.
 - **`taskmgr_test.py`** -- the ring-3 Task Manager: `uui_table`, resize
   reflow, and ending a process (12 checks). Its resize check asserts the
   table grew by ROUGHLY WHAT THE WINDOW GREW BY, not merely that it

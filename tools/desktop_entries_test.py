@@ -246,47 +246,47 @@ def main():
     else:
         check("clicking row 0 opens the app row 0 names", False, "no rows")
 
-    # --- the reload DEFERS while a kernel-space app is open -----------
+    # --- a reload under an OPEN WINDOW is safe now --------------------
     #
-    # struct window::app points into gui_app_registry[], and a reload
-    # rewrites that array in place -- so reloading under an open window
-    # would rebind it to whatever entry landed in its slot. Only a
-    # kernel-space app holds such a pointer (a ring-3 client's is 0), so
-    # a builtin is the lever here.
+    # This used to assert the opposite: that the reload DEFERRED while a
+    # kernel-space app was open. struct window::app points into
+    # gui_app_registry[], gui_apps_load() rewrites that array in place,
+    # and reloading underneath such a window would rebind it to whatever
+    # entry landed in its slot. Control Panel was the last app that held
+    # one, and it became a ring-3 process in M41 stage 4's prerequisite
+    # work -- a client's `app` is 0 (wm_client.c), so no open window
+    # holds a registry pointer any more and the deferral cannot fire.
     #
-    # CONTROL PANEL, not Task Manager. Task Manager was the lever until it
-    # became a ring-3 process, at which point its window's `app` pointer
-    # became 0 and the reload correctly stopped deferring for it -- so
-    # this check failed while the behaviour it guards was perfectly fine.
-    # Control Panel is the LAST remaining builtin; when M41's stage 4
-    # moves it, there will be no kernel-space app left to hold a registry
-    # pointer, and this check and the guard it covers both retire
-    # together. That is the guard's own comment in apps/wm/wm.c.
-    #
-    # Asserted as deferred-then-delivered, not just deferred: "it did not
-    # appear" alone is equally satisfied by a reload that stopped working
-    # altogether, which is the failure this guard could easily cause.
+    # The check is INVERTED rather than deleted, because "it defers"
+    # becoming untestable is not the same as it not mattering: the guard
+    # in apps/wm/wm.c is still there and still correct, and this now
+    # pins the property that makes it unreachable. If a kernel-space app
+    # ever comes back, this check goes red and points straight at the
+    # guard rather than at a mystery rebinding bug months later.
     dbg.send(f"sh rm {TEST_FILE}")
     wait_for_reload(dbg, TEST_NAME, present=False)
     dbg.open_app("Control Panel")
     dbg.settle()
-    time.sleep(0.5)
+    time.sleep(1.2)
 
-    if dbg.window("Control Panel") is None:
-        check("reload defers while a kernel-space app is open", False,
+    win = dbg.window("Control Panel")
+    if win is None:
+        check("a reload lands while an app window is open", False,
               "Control Panel did not open")
     else:
-        write_entry(dbg)
-        time.sleep(2.5)
-        check("reload defers while a kernel-space app is open",
-              TEST_NAME not in menu_labels(dbg))
+        # It is a RING-3 client, which is the reason the reload is safe.
+        # Asserted from client_pid rather than from the title, so a
+        # kernel-space app wearing the same name could not pass it.
+        check("Control Panel is a ring-3 client",
+              win.get("client_pid", 0) != 0,
+              f"client_pid={win.get('client_pid')}")
 
-        # ...and resumes the moment it closes. Without this half, the
-        # check above passes against a reload that is simply dead.
+        write_entry(dbg)
+        check("a reload lands while an app window is open",
+              wait_for_reload(dbg, TEST_NAME, present=True))
+
         dbg.send("gui close 0")
         dbg.settle()
-        check("...and resumes once it closes",
-              wait_for_reload(dbg, TEST_NAME, present=True))
 
     # --- deletion is noticed too --------------------------------------
     write_entry(dbg)                       # back on both surfaces

@@ -107,6 +107,7 @@ TOOLS = [
     ("entries", "desktop_entries_test.py", "ShowIn= and live .desktop reload"),
     ("taskmgr", "taskmgr_test.py", "the table widget, resize reflow, ending a process"),
     ("singleinst", "single_instance_test.py", "one copy of an app, and relaunch raises it"),
+    ("cpanel", "cpanel_test.py", "the settings registry, in ring 3"),
 ]
 
 # Roughly how long each tool takes, in seconds, used ONLY to decide what
@@ -139,6 +140,7 @@ COST_S = {
     "winclient": 12,
     "uiclient": 9,
     "dialog": 9,
+    "cpanel": 20,
 }
 COST_UNKNOWN_S = 90
 
