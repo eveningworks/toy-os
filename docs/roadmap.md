@@ -1870,6 +1870,87 @@ still has to.
       Tolerable while every binary is one we built; not once loading
       ring-3 apps is the normal path. See the Details entry.
 
+### Where else the `block_device`/`fs_ops` layering approach fits (design, unscheduled)
+
+A survey of where this repo's registry-and-interface pattern (one
+`display_driver`, one `fs_ops` backend, one `block_device`) is missing
+and would pay. **Not a commitment to build any of it** -- the standing
+bar is a second REAL caller, not a plausible one, and most of these do
+not clear it yet. What is worth doing now is keeping each seam SHAPED
+so it can appear later without a rewrite: no `inb`/`outb` leaking
+upward, no caller naming the hardware.
+
+- [ ] **Time sources -- the strongest candidate, and the only one where
+      the second implementation already exists.** The tree names
+      concrete clocks directly: `pit_ticks()` (monotonic 100Hz, the
+      scheduler's billing unit and `SYS_TICKS`) and the TSC (calibrated
+      in `cpuinfo`, used by `gfxbench` and the relocation path). Three
+      call conventions, no abstraction. Milestone 30 (ACPI + real
+      power/timer) brings HPET and TSC-deadline, which is the real
+      trigger; a Linux-style `clocksource` (monotonic, resolution, "is
+      it reliable across sleep") is the natural shape.
+
+      **The 2026-08-17 CPU-accounting bug is evidence for this**, and it
+      is the concrete argument to make when this comes up again:
+      `SYS_YIELD` billed a whole tick because the code incremented a
+      tick counter rather than asking a clock how much time had passed.
+      An interface that answers "how much time elapsed" makes that bug
+      harder to write. Its own follow-up -- billing by TSC delta per
+      context switch, so sub-tick work stops reading 0% -- would be the
+      second real caller.
+
+      Two cautions. `rtc_read_local()`/`tz_rtc_to_epoch()` is WALL CLOCK
+      and does not belong behind the same interface; Linux keeps
+      clocksource and RTC separate deliberately, and merging them here
+      would be the mistake this entry is meant to prevent. And
+      `cpuinfo.h` already warns that a lazy calibration deadlocks inside
+      a syscall -- calibration ORDERING is the hard part, not the
+      interface.
+
+- [ ] **Stack block devices rather than hooking the filesystem, for
+      M18 encryption at rest.** `block_device` is already shaped so a
+      device can wrap another, device-mapper style, and encryption is
+      size-preserving so it composes cleanly -- this is dm-crypt, and
+      writing it as a block layer instead of as TFS3 hooks is the
+      decision that is cheap now and expensive to undo later. Same for
+      M36 swap. Note TFS2 deliberately calls `ata_*` directly, so a
+      stacking layer covers TFS3 only; that is fine, TFS2 is legacy.
+
+- [ ] **M16 block checksums are NOT simply a block layer, and that is
+      the decision to make.** A block-level checksum layer has to put
+      the checksums somewhere -- either shrinking the device's apparent
+      size or carving a separate metadata area -- and that is a
+      filesystem-shaped choice, not a transparent wrapper. It is why
+      ZFS checksums inside the filesystem (it wants them beside the
+      block pointers, which also gets it self-healing) while
+      dm-integrity does it at block level and pays for a metadata
+      region. Decide WHERE THE CHECKSUM METADATA LIVES before writing
+      either half; the layering follows from that answer rather than
+      the reverse.
+
+- [ ] **`block.h` has ONE ACTIVE DEVICE, mirroring the VFS's one active
+      backend** -- the same "one active X" call made twice, in both
+      cases when only one existed. Already in mild tension with
+      `partition.c`, which parses MBR/GPT and can enumerate partitions
+      that cannot then be independently mounted, and it has to give for
+      Milestone 25 (real mount points). Not urgent.
+
+- [ ] **Interfaces that exist with exactly ONE implementation are the
+      same problem seen from the other side, and this repo already
+      flags them as unvalidated.** `struct win_transport` is called out
+      in `docs/decisions.md` for precisely this; `win_server_ops` gets
+      its second implementation in M41 stage 4. These matter more than
+      the missing-interface cases above, because a wrong guess is
+      already baked in rather than still open -- read the decisions
+      entry before designing stage 4 around either.
+
+- [ ] **Keep shaped, do not build (one implementation each).** Input
+      (`mouse.c`/`keyboard.c`, PS/2 only; second arrives with M32 USB or
+      virtio-input), audio (`speaker.c`, PC speaker; M34 sound card),
+      networking (nothing today; M33), fonts (baked `font_ttf.c` tables;
+      M21 runtime loading). Each stays concrete until the second one is
+      real.
+
 ## Backlog
 
 Smaller or lower-priority items not yet slotted into a milestone above.
