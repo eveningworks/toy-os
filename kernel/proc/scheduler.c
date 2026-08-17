@@ -214,6 +214,21 @@ struct sched_process {
     // job -- storing a percentage here would bake in a sampling interval
     // the kernel has no business choosing.
     uint64_t cpu_ns;   // measured, not counted -- see bill_current()
+
+    // This process's SYS_SBRK state: the break it can see, and how far
+    // physical pages have actually been mapped behind it (separate,
+    // because sbrk only maps on first crossing into a page).
+    //
+    // PER PROCESS rather than the file-global pair syscall.c used to
+    // hold, and that was not a tidy-up: those globals are armed only by
+    // syscall_reset_heap(), which only elf_run.c's legacy blocking
+    // loader calls -- so a SCHEDULER-spawned process, which is every GUI
+    // app and everything `gui spawn` starts, had no heap armed and
+    // SYS_SBRK returned -1 for it unconditionally. Nothing noticed
+    // because nothing spawned had ever asked for memory. A ring-3
+    // compositor asks for a whole screen of back buffer on its first
+    // line (M41 stage 4b), which is how this surfaced.
+    struct sched_heap heap;
     // This process's x87/SSE registers while it isn't the one running.
     // 16-byte aligned because FXSAVE/FXRSTOR #GP otherwise -- see fpu.h,
     // including why only ring-3 processes need one of these at all.
@@ -477,6 +492,14 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_pipe) {
     // reporting bug that looks like a scheduling one.
     proc_name_from_path(procs[slot].name, sizeof procs[slot].name, path);
     procs[slot].cpu_ns = 0;
+    // Armed here, at creation, rather than by a separate "set up this
+    // process's heap" call the way the legacy loader does it: an init
+    // step reachable by only one entry point is a bug waiting for a
+    // second entry point, and this one already had that bug -- nothing
+    // in the spawn path ever armed a heap, so SYS_SBRK refused every
+    // scheduled process.
+    procs[slot].heap.brk = UADDR_HEAP_BASE;
+    procs[slot].heap.mapped_end = UADDR_HEAP_BASE;
     procs[slot].state      = SCHED_READY;
     alive_count++;
     return slot;
@@ -807,6 +830,14 @@ void scheduler_on_exit(int code) {
 
 int scheduler_current_pid(void) {
     return current_index < 0 ? 0 : current_index + 1;
+}
+
+struct sched_heap *scheduler_current_heap(void) {
+    // NULL means "the kernel context is running", which for SYS_SBRK is
+    // the legacy elf_run.c process -- not "this process has no heap".
+    // Every slot gets one at creation.
+    if (current_index < 0) return 0;
+    return &procs[current_index].heap;
 }
 
 int scheduler_spawn(const char *path, const char *args) {

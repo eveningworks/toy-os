@@ -725,12 +725,45 @@ owned by nothing in `apps/`. Prove it by asserting the console still
 answers *while a ring-3 process is spinning* -- `sched_gui_test.py`
 already encodes that trick in the other direction.
 
-**R6. Memory.** `apps/wm/` allocates in exactly one place: growing
-`windows[]` (`wm_windows_reserve()`). `SYS_SBRK` covers it, so no
-allocator is required (see the prerequisite note above). The rule that
-comes with it is unchanged and gets *more* dangerous in ring 3, where
-a stale `struct window *` faults instead of corrupting: index, never
-cache across anything that can open a window.
+**R6. Memory -- BUILT (2026-08-17), and the original text below was
+WRONG in both directions.** It said `apps/wm/` allocates in exactly one
+place (growing `windows[]`) and that `SYS_SBRK` therefore covers it.
+Both halves failed on contact with an actual ring-3 surface, and the
+reason is worth more than the fix: **that requirement was measured from
+the EXISTING implementation's call surface, which can only ever find
+what ring 0 already does.** The back buffer is not in that surface
+because in ring 0 it is `gfx.c`'s 8 MiB of `.bss` -- ring 0 was
+providing it silently, and R1 had already decided ring 3 must own it.
+
+- **Size.** One screen of 32bpp pixels is 3.5 MiB at 1280x720 and
+  8.3 MiB at 1920x1080. The ring-3 heap was **1 MiB** (heap base
+  `0x8000100000`, stack top `0x8000200000`). `UADDR_STACK_VADDR` is
+  `0x8000F00000` now -- address space that was already free below
+  `WIN_CLIENT_BASE` -- giving ~14 MiB. A 1080p back buffer plus the
+  verify scratch does NOT fit (8.3 + 8.3); that path reports rather
+  than faults, and raising `WIN_CLIENT_BASE` is the lever.
+- **Reachability.** `SYS_SBRK` was armed only by
+  `syscall_reset_heap()`, whose sole caller is `elf_run.c`'s legacy
+  blocking loader. A scheduler-spawned process -- every GUI app, and
+  everything `gui spawn` starts -- had no heap armed, so `SYS_SBRK`
+  returned -1 for it **unconditionally**. Nothing had noticed because
+  Toykit has no allocator and no spawned program had ever asked for
+  memory. The break is a `struct sched_heap` in `struct sched_process`
+  now, armed at slot creation; the legacy loader keeps its own slot of
+  the same type through the same handler, so the two cannot drift.
+
+The rule that came with the original R6 is unchanged and still gets
+*more* dangerous in ring 3, where a stale `struct window *` faults
+instead of corrupting: index, never cache across anything that can open
+a window.
+
+Proven by `tools/screen_surface_test.py` (14 checks, in
+`gui_regress.py`), whose first check is a real regression gate on the
+heap: the client only reports its geometry if sbrk handed over a full
+screen. Reverting `UADDR_STACK_VADDR` reddens exactly that check, and
+the client's refusal line names WHICH of the three gates said no -- the
+grant, the format, or the heap -- because a bare "REFUSED" is three
+different failures wearing one word.
 
 **R7. Lifecycle, and what happens when the WM dies. DECIDED: the
 kernel restores the text console.** Today `wm_run()` returns and calls
@@ -783,6 +816,38 @@ drawing the desktop with input still routed the old way; **4c** the
 input and debug cutover plus R9's deletions; **4d** the death path (R7)
 and its test. 4a is the one that can be built and proven without
 moving anything.
+
+**4b, in progress. The SURFACE landed first (2026-08-17), before any of
+`apps/wm/` moved**, and that ordering was chosen by measurement: of the
+30 `gfx_*` symbols `apps/wm/` calls, 20 had no `ugfx` counterpart, and
+all 20 are the same concern -- the surface. The drawing primitives were
+already there. So the surface is where 4b's design risk lives, and it
+is provable on its own with the suite green throughout.
+
+`ugfx` now has:
+
+- a **clip rect** and a **damage box** on `struct ugfx_surface`, with
+  the kernel's exact contract restated (a non-positive w/h is an EMPTY
+  clip, not an absent one) and both honoured by every primitive.
+  Rectangles are clipped as rectangles, so `fill_rect` and `blit` keep
+  whole-row writes instead of becoming the per-pixel predicate
+  `gfx_fill_rect()` is;
+- `ugfx_put_pixel`/`get_pixel`/`blit`, `ugfx_damage`/`damage_reset`;
+- **`struct ugfx_screen`** -- the R1 grant plus a sbrk'd back buffer,
+  and `ugfx_screen_present()`, which copies only the damaged box out
+  with one 32-bit store per pixel and then publishes it. It never READS
+  the framebuffer: that mapping is write-combining, where a read is a
+  full uncached round trip;
+- **R2's verify facility** as `ugfx_verify_snapshot`/`_diff`/`_release`,
+  reporting count, first difference and bounding box -- the three things
+  `damage_sweep.py` parses. Per screen, not a file-global. Its scratch
+  is kept once taken rather than freed, because sbrk cannot return
+  pages, and `snapshot_valid` separates "allocated" from "holds a frame
+  worth comparing" so a release cannot leave a stale frame a later diff
+  would happily compare against.
+
+What is left of 4b is the binary itself: compiling `apps/wm/`'s ~8,100
+lines against Toykit and this surface.
 
 **The four decisions R1/R3 will be built on**, settled 2026-08-17
 before any of it exists, because each had a defensible cheaper answer:

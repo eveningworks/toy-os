@@ -35,8 +35,15 @@ void syscall_dispatch(uint64_t *regs);
 // to use SYS_SBRK; without it SYS_SBRK just returns -1. There's only
 // one heap "armed" at a time (mirrors process_run_ring3()'s own
 // single-in-flight-process limitation -- see process.h), so this is
-// meant for the same legacy one-process-at-a-time callers, not
-// scheduler-managed processes.
+// for the same legacy one-process-at-a-time callers.
+//
+// A SCHEDULER-managed process does NOT need this and must not use it:
+// it carries its own `struct sched_heap`, armed when the slot is
+// created, and SYS_SBRK prefers that whenever one is running
+// (scheduler_current_heap()). That is newer than it sounds -- until
+// M41 stage 4b nothing armed a heap for a spawned process at all, so
+// SYS_SBRK returned -1 for every GUI app, silently, because none of
+// them had ever asked for memory.
 void syscall_reset_heap(uint64_t pml4_phys, uint64_t heap_base);
 
 // Frees everything a process privately owned once it's gone -- a normal

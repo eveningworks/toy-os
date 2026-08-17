@@ -76,6 +76,29 @@ void scheduler_on_exit(int code);
 // function's problem). Lets syscall.c pick the right exit path.
 int scheduler_current_pid(void);
 
+// --- the running process's heap ---------------------------------------
+//
+// SYS_SBRK's per-process state, reached by the syscall layer rather than
+// held there. `brk` is what the process sees; `mapped_end` is how far
+// pages have actually been allocated behind it, which is only ever a
+// whole number of pages ahead of or equal to `brk`.
+//
+// Kept as a struct handed out by pointer, not as a get/set pair,
+// because sbrk has to read both and advance both together -- two
+// accessors would make a partially-applied grow representable.
+struct sched_heap {
+    uint64_t brk;
+    uint64_t mapped_end;
+};
+
+// The heap of the process currently on the CPU, or NULL when the kernel
+// context is running (current_index == -1) -- which is the legacy
+// elf_run.c case, where syscall.c's own single-slot heap still applies.
+// Every scheduler-spawned process has one armed from the moment it is
+// created, so the NULL means "not a scheduled process", never "this
+// process has no heap".
+struct sched_heap *scheduler_current_heap(void);
+
 // Runs the M16 demo: spawns two small ring-3 counter programs
 // (userland/counter_a.c, counter_b.c) and preemptively round-robins
 // between them (100Hz timer slices) while the shell itself stays

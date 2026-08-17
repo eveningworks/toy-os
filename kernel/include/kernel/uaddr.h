@@ -19,12 +19,12 @@
 // The map, low to high:
 //
 //     UADDR_HEAP_BASE   0x8000100000   heap, grows UP via SYS_SBRK
-//         ...                          (1 MiB, minus the guard)
+//         ...                          (~14 MiB, minus the guard)
 //     UADDR_HEAP_LIMIT                 sbrk refuses at or past here
 //     UADDR_GUARD_BASE                 UADDR_GUARD_PAGES unmapped pages
 //     UADDR_STACK_BOTTOM               lowest mapped stack page
 //         ...                          stack, grows DOWN
-//     UADDR_STACK_VADDR 0x8000200000   TOP page: argv, and RSP at entry
+//     UADDR_STACK_VADDR 0x8000F00000   TOP page: argv, and RSP at entry
 //
 // **The guard region is defined by being UNMAPPED, and that is the
 // whole mechanism** -- there is no PTE to set, because a page that was
@@ -40,7 +40,24 @@
 // processes. They are fixed at all only because there is no mmap and no
 // ASLR yet; when either lands, this header is what they replace.
 
-#define UADDR_STACK_VADDR   0x8000200000ULL // TOP page; the stack grows DOWN
+// TOP page; the stack grows DOWN.
+//
+// It was 0x8000200000, which left the heap below it exactly 1 MiB. That
+// was fine for as long as the only ring-3 allocation was a few KiB, and
+// it stops being fine at Milestone 41 stage 4b: R1 assigns the back
+// buffer to the COMPOSITOR, and one screen's worth of 32bpp pixels is
+// 3.5 MiB at 1280x720 and 8.3 MiB at 1920x1080 -- so a ring-3
+// compositor could not allocate the one buffer it exists to own.
+//
+// Moved up into the gap that was already free: nothing lives between
+// here and WIN_CLIENT_BASE (0x8001000000, abi/win_proto.h), whose own
+// comment says so. The heap is ~14 MiB now, which holds a 1080p back
+// buffer plus the WM's window table with room to spare. What does NOT
+// fit is a 1080p back buffer AND the damage-verify scratch copy at the
+// same time (8.3 + 8.3 > 14) -- that is debug-only and fails by
+// reporting rather than by faulting, and raising WIN_CLIENT_BASE is the
+// lever if it ever needs to.
+#define UADDR_STACK_VADDR   0x8000F00000ULL
 
 // How many pages of user stack a process gets.
 //

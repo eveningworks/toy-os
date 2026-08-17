@@ -163,23 +163,22 @@ static void listdir_collect(const char *name, uint32_t size, int is_dir) {
     g_listdir_count++;
 }
 
-// SYS_SBRK state for whichever single process syscall_reset_heap() was
-// last armed for (see syscall.h's comment on why there's only one, same
-// reasoning as g_process_ctx above). g_heap_mapped_end tracks how far
-// physical pages have actually been allocated+mapped so far -- separate
-// from g_heap_brk (the process-visible break) because SYS_SBRK only
-// needs to map a new page the first time the break crosses into it, not
-// on every call.
+// SYS_SBRK state for the LEGACY single process syscall_reset_heap() was
+// last armed for -- elf_run.c's blocking loader, which has no scheduler
+// slot to keep this in (same reasoning as g_process_ctx above).
+//
+// A scheduler-spawned process does NOT use this: it carries its own
+// `struct sched_heap`, armed when its slot is created. Both are the same
+// TYPE and go through the same handler, so the two owners cannot drift
+// in behaviour -- which is the whole reason the legacy side is a struct
+// here rather than the loose pair of globals it used to be.
 static uint64_t g_heap_pml4 = 0;
-static uint64_t g_heap_base = 0;
-static uint64_t g_heap_brk = 0;
-static uint64_t g_heap_mapped_end = 0;
+static struct sched_heap g_legacy_heap;
 
 void syscall_reset_heap(uint64_t pml4_phys, uint64_t heap_base) {
     g_heap_pml4 = pml4_phys;
-    g_heap_base = heap_base;
-    g_heap_brk = heap_base;
-    g_heap_mapped_end = heap_base;
+    g_legacy_heap.brk = heap_base;
+    g_legacy_heap.mapped_end = heap_base;
 }
 
 // SYS_WIN_* state -- like the heap above, single-window/single-process
@@ -309,11 +308,15 @@ void syscall_process_exit_cleanup(uint64_t pml4_phys) {
     // right here in syscall.c), even though the PAGES they describe
     // (the heap's mapped range, the window's pixel buffer) ARE part of
     // it and get freed along with everything else below.
+    // Only the LEGACY slot is cleared here. A scheduled process's heap
+    // lives in its scheduler slot and is reset when that slot is next
+    // handed out, which is the only moment it could matter -- clearing
+    // it here would need this function to know which slot died, and the
+    // slot already knows.
     if (g_heap_pml4 == pml4_phys) {
         g_heap_pml4 = 0;
-        g_heap_base = 0;
-        g_heap_brk = 0;
-        g_heap_mapped_end = 0;
+        g_legacy_heap.brk = 0;
+        g_legacy_heap.mapped_end = 0;
     }
     if (g_win_pml4 == pml4_phys) {
         g_win_pml4 = 0;
@@ -730,10 +733,26 @@ void syscall_dispatch(uint64_t *regs) {
         // whole mechanism is legacy-single-process-only, see the header
         // comment) gets a clean -1 instead of silently mapping pages
         // into the wrong address space.
-        if (g_heap_pml4 == 0 || pml4 != g_heap_pml4) {
+        // WHOSE break this is. A scheduler-spawned process carries its
+        // own, armed when its slot is created; the kernel context is the
+        // legacy elf_run.c loader, whose single slot syscall_reset_heap()
+        // arms. Two OWNERS because the legacy loader has no scheduler
+        // slot to hold state in -- but one representation and one
+        // handler, so the two cannot drift in behaviour, and everything
+        // below writes through `hp` rather than to either directly.
+        struct sched_heap *sh = scheduler_current_heap();
+        struct sched_heap *hp = sh ? sh : &g_legacy_heap;
+
+        // The pml4 check applies only to the legacy slot, which is armed
+        // for one address space at a time and would otherwise hand a
+        // later, unrelated process the previous one's break. A scheduled
+        // process needs no such check: its heap is reached THROUGH the
+        // scheduler's notion of who is running, so it cannot be the
+        // wrong one.
+        if (!sh && (g_heap_pml4 == 0 || pml4 != g_heap_pml4)) {
             klog_write("syscall: sbrk() rejected -- no heap armed for this process\n");
             regs[14] = (uint64_t)-1;
-        } else if (inc > UADDR_HEAP_LIMIT - g_heap_brk) {
+        } else if (inc > UADDR_HEAP_LIMIT - hp->brk) {
             // The heap grows UP toward the stack's guard region, and
             // nothing else stops it: before this check, sbrk() past the
             // ~1 MiB gap happily mapped pages straight over the live
@@ -748,27 +767,32 @@ void syscall_dispatch(uint64_t *regs) {
             klog_write("syscall: sbrk() rejected -- would grow into the stack guard\n");
             regs[14] = (uint64_t)-1;
         } else {
-            uint64_t old_brk = g_heap_brk;
+            uint64_t old_brk = hp->brk;
             uint64_t new_brk = old_brk + inc;
             int ok = 1;
 
-            while (g_heap_mapped_end < new_brk) {
+            while (hp->mapped_end < new_brk) {
                 uint64_t frame = pmm_alloc_frame();
                 if (!frame) { ok = 0; break; }
                 for (size_t i = 0; i < 4096; i++) ((uint8_t *)(uintptr_t)frame)[i] = 0;
-                if (!vmm_map_user_page(pml4, g_heap_mapped_end, frame)) {
+                if (!vmm_map_user_page(pml4, hp->mapped_end, frame)) {
                     pmm_free_frame(frame);
                     ok = 0;
                     break;
                 }
-                g_heap_mapped_end += 4096;
+                hp->mapped_end += 4096;
             }
 
+            // Pages already mapped before a failure STAY mapped and
+            // stay accounted for -- that is what makes the retry after a
+            // partial grow start where this one stopped rather than
+            // re-mapping over live pages. Only the break is left where it
+            // was, so the process sees the whole request refused.
             if (!ok) {
                 klog_write("syscall: sbrk() rejected -- out of physical memory\n");
                 regs[14] = (uint64_t)-1;
             } else {
-                g_heap_brk = new_brk;
+                hp->brk = new_brk;
                 regs[14] = old_brk; // classic sbrk() contract: returns the OLD break
             }
         }

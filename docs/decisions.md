@@ -127,6 +127,8 @@ there when you add an entry, or the index quietly stops being one.
 **GUI: window manager, compositor & widgets**
 
 - [The ring-3 WM owns the back buffer, and its death drops you to a text shell](#the-ring-3-wm-owns-the-back-buffer-and-its-death-drops-you-to-a-text-shell)
+- [The compositor's back buffer is ring-3 memory, and getting it there took two kernel fixes](#the-compositors-back-buffer-is-ring-3-memory-and-getting-it-there-took-two-kernel-fixes)
+- [A stale test fixture stops crossing the boundary it tests, silently](#a-stale-test-fixture-stops-crossing-the-boundary-it-tests-silently)
 - [The kernel owns its idle work, so the WM's departure deletes a call rather than a capability](#the-kernel-owns-its-idle-work-so-the-wms-departure-deletes-a-call-rather-than-a-capability)
 - [A ring-3 write to the framebuffer is transient while the WM is still in ring 0, and the test has to say so](#a-ring-3-write-to-the-framebuffer-is-transient-while-the-wm-is-still-in-ring-0-and-the-test-has-to-say-so)
 - [The hardware cursor left the ring-3 migration, because it is switched off everywhere](#the-hardware-cursor-left-the-ring-3-migration-because-it-is-switched-off-everywhere)
@@ -7158,3 +7160,91 @@ With a cache in front, "the drive refused this write" no longer
 necessarily happens during the caller's `write()` at all, so a test
 could otherwise arm a failure, dirty a line, flush, and watch the flush
 report success.
+
+## The compositor's back buffer is ring-3 memory, and getting it there took two kernel fixes
+
+Milestone 41's R1 decided that a ring-3 compositor allocates and owns
+its own back buffer, rather than the kernel keeping `gfx.c`'s and
+mapping it in -- because ring 0 holding a rasteriser's mutable state on
+behalf of a ring-3 client is the half-migration the whole plan is shaped
+to avoid. R6 then said `SYS_SBRK` covers the WM's allocation needs.
+
+R6 was measured against `apps/wm/`'s existing call surface, where the
+only allocation is growing `windows[]`, and it was wrong twice for the
+same reason -- a back buffer is not in that surface, because in ring 0
+it is `gfx.c`'s 8 MiB of `.bss`.
+
+**Wrong about the size.** One screen of 32bpp pixels is 3.5 MiB at
+1280x720 and 8.3 MiB at 1920x1080. The ring-3 heap was 1 MiB: heap base
+`0x8000100000`, stack top `0x8000200000`, everything between them. So
+the compositor could not allocate the one buffer it exists to own.
+Fixed by moving the stack top to `0x8000F00000`, into address space that
+was already free -- nothing lives between there and `WIN_CLIENT_BASE`
+(`0x8001000000`), whose own comment said so. ~14 MiB now, which is a
+1080p buffer with room to spare. What does not fit is that buffer AND
+the damage-verify scratch copy at once (8.3 + 8.3 > 14); that is
+debug-only, fails by reporting rather than faulting, and raising
+`WIN_CLIENT_BASE` is the lever if it ever needs to.
+
+**Wrong about it being reachable at all**, which is the more
+interesting half. `SYS_SBRK`'s state was a set of file-globals in
+`syscall.c` armed by `syscall_reset_heap()`, and the only caller of that
+is `elf_run.c` -- the legacy blocking loader behind `run <name>` at the
+physical shell. A SCHEDULER-spawned process, which is every GUI app and
+everything `gui spawn` starts, never had a heap armed, so `SYS_SBRK`
+returned -1 for it unconditionally. `syscall.h` even said so, in a
+sentence describing the limit as intentional. Nothing noticed for as
+long as it was true, because nothing spawned had ever asked for memory:
+Toykit has no allocator, so a ring-3 app's storage is its globals and
+its stack. The first program to call `sbrk()` from a spawned process was
+the compositor, on its first line.
+
+The break now lives in `struct sched_process` as a `struct sched_heap`,
+armed when the slot is created rather than by a separate call --
+**an init step reachable by only one entry point is a bug waiting for a
+second entry point**, which is the same rule `vfs.c`'s `ensure_layout()`
+and `shell_session_init()` already record. The legacy loader keeps its
+own single slot, because it has no scheduler slot to put one in, but it
+holds the SAME type and goes through the same handler, so the two owners
+cannot drift in behaviour. `scheduler_current_heap()` returning NULL
+means "the kernel context is running", never "this process has no heap".
+
+**The lesson worth carrying:** a requirement measured from an existing
+implementation's call surface can only find what that implementation
+already does. R6 counted what the ring-0 WM allocates; what mattered was
+what a ring-3 one would have to allocate that ring 0 had been getting
+for free from `.bss`. When a migration moves a component across a
+boundary, ask what the boundary was silently providing, not just what
+the component asks for.
+
+## A stale test fixture stops crossing the boundary it tests, silently
+
+`guard_test` proves `SYS_SBRK` stops at the stack guard. It asked for
+2 MiB, with a comment justifying the number: "the gap between the heap
+base and the guard is about 1 MiB, so this is comfortably past it" --
+and warning that an earlier 1 GiB version had passed against a kernel
+with the bound REMOVED, because physical memory ran out before the stack
+did.
+
+Widening the heap to ~14 MiB made the 2 MiB request succeed. The branch
+under test was no longer reached, and the failure surfaced as a
+different check going red for a reason that pointed nowhere near the
+cause. A number chosen against an address map is stale the moment that
+map moves.
+
+It walks to the boundary now: grow in 1 MiB steps until one is refused,
+writing through every chunk handed back, capped at 64 steps. That
+measures the property -- sbrk stops before the stack -- at any heap
+size, and needs no edit the next time the map changes. Both halves of
+the old comment's reasoning survive as parameters rather than as a
+constant: the STEP is small enough that a refusal means the bound
+refused it rather than the allocator giving up, and the CAP bounds a
+kernel with no bound at all, which would otherwise loop until it had
+mapped the address space. Verified by running it against exactly that
+kernel: it dies with `RIP=0x0`, the return address having been
+overwritten by the heap.
+
+Generalising the repo's existing fixture rule: it is not enough to ask
+whether a test's input crosses the branch today. Ask what the input is
+sized AGAINST, and whether that thing can move independently of the
+test.

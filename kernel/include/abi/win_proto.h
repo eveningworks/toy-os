@@ -572,8 +572,11 @@ struct win_request_msg {
 // matter what WIN_CLIENT_MAX_* said. Kept at a comfortable multiple
 // rather than the tight fit, since virtual address space costs nothing
 // here: nothing else in a client's address space lives above
-// WIN_CLIENT_BASE (the stack tops out at 0x8000200000, the heap below
+// WIN_CLIENT_BASE (the stack tops out at 0x8000F00000, the heap below
 // that), so the whole region and the font above it are free to grow.
+// Note the gap under this address is no longer spare: the heap was
+// widened into it to hold a ring-3 compositor's back buffer, so raising
+// WIN_CLIENT_BASE is what buys more heap now (see kernel/uaddr.h).
 #define WIN_CLIENT_BASE   0x8001000000ULL
 #define WIN_BUFFER_STRIDE 0x0000800000ULL // 8 MiB per window slot
 #define WIN_CLIENT_MAX    4 // windows one client may hold at once

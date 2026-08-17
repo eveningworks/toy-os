@@ -60,29 +60,51 @@ int main(void) {
     check(readable, "the newly-broken page is actually mapped");
 
     // --- the gap is finite -----------------------------------------
-    // **2 MiB, not something enormous, and the size is the test.** The
-    // gap between the heap base and the guard is about 1 MiB, so this
-    // is comfortably past it -- while still being an amount a guest
-    // with no bound would have no trouble actually allocating. Asking
-    // for 1 GiB here instead made this whole block PASS against a
-    // kernel with the bound removed, because physical memory ran out
-    // long before the stack did: the request was refused, the break
-    // was left alone, and nothing was ever overwritten. Green, and
-    // measuring "sbrk can fail" rather than "sbrk stops at the guard".
+    //
+    // **The size of the request used to be a hardcoded 2 MiB, and that
+    // is exactly how this check stopped measuring anything.** The
+    // comment justifying the number said "the gap is about 1 MiB, so
+    // this is comfortably past it" -- true until M41 stage 4b widened
+    // the heap to ~14 MiB for a ring-3 compositor's back buffer, at
+    // which point the request simply succeeded and the branch under
+    // test was never reached. A number chosen against an address map is
+    // stale the moment that map moves, and it goes stale SILENTLY.
+    //
+    // So walk to the boundary instead of guessing where it is: grow in
+    // modest steps until one is refused. That measures the property --
+    // "sbrk stops before the stack" -- at any heap size, and needs no
+    // edit the next time the map changes.
+    //
+    // The step matters for the same reason the old constant did. It is
+    // small enough that a guest can really allocate each one, so a
+    // refusal means "the bound refused it" rather than "physical memory
+    // ran out" -- asking for 1 GiB in one go made this whole block pass
+    // against a kernel with the bound REMOVED, because the allocator
+    // gave up long before the stack did. And the cap bounds a kernel
+    // with no bound at all: without it, such a kernel loops here until
+    // it has mapped the entire address space.
+    #define STEP  (1024 * 1024)
+    #define MAX_STEPS 64        // 64 MiB, far past any plausible heap
     void *before = sys_sbrk(0);
-    void *big = sys_sbrk(2 * 1024 * 1024);
-    check(big == (void *)-1, "a request past the guard is refused");
-    check(sys_sbrk(0) == before, "a refused request left the break alone");
-
-    if (big != (void *)-1) {
-        // Unreachable on a kernel with the bound, and the reason the
-        // canary check below means anything without it. A refused
-        // request is visible immediately; an ALLOWED one is not --
-        // mapping over the stack costs nothing until somebody writes
-        // through the heap pointer, at which point the two aliases are
-        // the same memory. So write, and let the canary say so.
-        memset(big, 0, 2 * 1024 * 1024);
+    void *big = (void *)-1;
+    int steps = 0;
+    while (steps < MAX_STEPS) {
+        before = sys_sbrk(0);
+        big = sys_sbrk(STEP);
+        if (big == (void *)-1) break;
+        // Write through EVERY chunk handed back, not just the last.
+        // A refused request is visible immediately; an ALLOWED one that
+        // overlaps the stack is not -- the aliasing costs nothing until
+        // somebody writes, at which point the canary below reports it.
+        memset(big, 0, STEP);
+        steps++;
     }
+    check(big == (void *)-1,
+          "sbrk stops before the stack rather than growing forever");
+    check(steps > 0, "and it allowed real growth before stopping");
+    check(sys_sbrk(0) == before, "a refused request left the break alone");
+    #undef STEP
+    #undef MAX_STEPS
 
     // The kernel reads the increment as UNSIGNED (see SYS_SBRK in
     // syscall.c -- there is no shrink), so a negative value is a

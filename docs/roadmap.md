@@ -1094,6 +1094,35 @@ guess.*
 
 ### Known issues and papercuts (unscheduled)
 
+- [ ] **`tools/faulttest_run.py` reports 0/3, and it is PRE-EXISTING.**
+      All three entries fail identically -- `stackovf_test`,
+      `crash_test` and `nx_test` each with "log never said 'RING-3
+      CRASH: ...'". Reproduce with `python3 tools/faulttest_run.py`
+      (no VM needed; it launches its own QEMU per test).
+
+      **Confirmed pre-existing, 2026-08-17**, by the measurement this
+      repo asks for rather than by reasoning: stashed the whole of M41
+      stage 4b's surface work (`git stash push -u`, applied back by
+      SHA), rebuilt at `ff5ae94`, and got the identical 0/3. So it is
+      not the ring-3 heap change, the per-process `SYS_SBRK` change or
+      the `UADDR_STACK_VADDR` move, all of which touch exactly the
+      paths these tests exercise -- which is why it was worth
+      establishing before anything else.
+
+      **What is NOT established:** whether the kernel's fault reporting
+      regressed or the tool's own harness did. All three failing with
+      the same "log never said" shape, including `crash_test` (a plain
+      null dereference, nothing to do with the address map), points at
+      the harness -- it types at the PHYSICAL shell over QMP and reads
+      the serial log, and either half could have drifted. Start by
+      running one of these by hand (`run nx_test` at the physical shell
+      over QMP) and looking at whether the kernel prints the expected
+      line at all, before touching the fault path.
+
+      Not in `preflight.sh` or `gui_regress.py`, which is why it went
+      unnoticed: it is the only gate covering the deliberate-fault
+      binaries, and nothing runs it automatically.
+
 - [ ] **Get blocking disk I/O out of the WM's event loop.** The desktop
       still reads files synchronously inside `wm_run()`, so a frame can
       block for as long as the disk takes. That is much less painful

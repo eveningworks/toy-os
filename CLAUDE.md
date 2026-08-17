@@ -517,6 +517,21 @@ technical conventions below:
   call: `dbg_dispatch()`'s `arg` points into `line_buf`, so a command
   typed during a long `sh` used to overwrite the running one's
   arguments. See `docs/decisions.md`.
+- **`ugfx` has a SCREEN surface now, and it is the compositor's**
+  (`struct ugfx_screen`, M41 stage 4b). `ugfx_screen_init()` takes R1's
+  framebuffer grant and allocates a matching back buffer from sbrk;
+  `ugfx_screen_present()` copies out only the damaged box and publishes
+  it. Three rules ride with it. **Never read the mapped framebuffer** --
+  it is write-combining, where a read is a full uncached round trip, so
+  a compositor composites in the back buffer and copies OUT. **Present
+  is required, not advisory** (a driver may declare
+  `DISPLAY_CAP_NEEDS_FLUSH`). And **there is no free**: the back buffer
+  and the verify scratch come from sbrk, which only grows, so a screen
+  is initialised once per process and `ugfx_verify_release()`
+  deliberately keeps its memory. The surface also gained a **clip rect
+  and a damage box** shared with ordinary window surfaces -- same
+  contract as the kernel's, including that a non-positive w/h is an
+  EMPTY clip rather than an absent one.
 - **The registered compositor can be GRANTED the real framebuffer**
   (`WIN_REQ_FB_MAP` / `WIN_REQ_FB_PRESENT`, owned by
   `kernel/proc/win_surface.c`). Writable and WRITE-COMBINING at
@@ -952,6 +967,20 @@ technical conventions below:
   on QEMU's default `qemu64`**, so `--cpu max` is the only way the
   hardware path runs (the KTESTs assert CR4 against CPUID rather than
   demanding the bits, so they are meaningful under both). See
+  `docs/decisions.md`.
+- **`SYS_SBRK` is PER PROCESS, and it used to be reachable only from
+  the legacy loader.** The break lives in `struct sched_process` as a
+  `struct sched_heap`, armed when the slot is created; the syscall
+  reaches it through `scheduler_current_heap()`, which returns NULL for
+  the kernel context -- meaning "not a scheduled process", never "no
+  heap". `elf_run.c`'s legacy blocking loader keeps its own single slot
+  (it has no scheduler slot to use) of the SAME type through the same
+  handler, so the two owners cannot drift. Before M41 stage 4b there was
+  only that legacy slot, armed by `syscall_reset_heap()`, so **every
+  scheduler-spawned process got -1 from `sbrk()` unconditionally** --
+  silently, because Toykit has no allocator and nothing spawned had ever
+  asked. The ring-3 heap is also ~14 MiB now, not 1 MiB, because a
+  compositor's back buffer is 3.5 MiB at 1280x720. See
   `docs/decisions.md`.
 - **The ring-3 address-space map is `kernel/include/kernel/uaddr.h`,
   stated once.** Heap base, heap limit, guard region, stack bottom/top
@@ -2350,6 +2379,19 @@ repeated manual steps to be worth automating:
   both paths run at once. Run it after touching `apps/wm/wm.c`'s loop,
   `win_server.c`'s compositor registration, or the `WIN_EV_RAW_*`
   events. In `gui_regress.py`.
+- **`screen_surface_test.py`** -- a ring-3 compositor's SCREEN surface
+  (M41 stage 4b): the back buffer, the clip rect, the damage box, the
+  blit, the publish path and R2's verify diff, driven through
+  `userland/tests/screenclient.c`. 14 checks. Run it after touching
+  `userland/ui/ugfx.[ch]`, `SYS_SBRK`, or `kernel/include/kernel/
+  uaddr.h`. Two things it encodes. Every geometric check asserts an
+  EXACT number, not "it changed" -- a damage box that covers only the
+  last rect passes any did-it-change test, and a clipped blit that
+  offsets its destination but not its SOURCE draws the right count of
+  pixels in the right box with the wrong contents. And its first check
+  is a real gate on the ring-3 HEAP: the client reports geometry only
+  if sbrk handed over a full screen of back buffer. In
+  `gui_regress.py`.
 - **`desktop_entries_test.py`** -- the `.desktop` entry system: the
   `ShowIn=` key and live reload, 13 checks. Its reusable lesson is in the
   ShowIn checks: they assert an entry is **LOADED but filtered** (`gui
