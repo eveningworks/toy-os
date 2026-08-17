@@ -1094,43 +1094,31 @@ guess.*
 
 ### Known issues and papercuts (unscheduled)
 
-- [ ] **A disk read can return BAD DATA under KVM without reporting an
-      error.** Reproduced while fixing the desktop-freeze bug
-      (2026-08-17), roughly one boot in three, and it PREDATES that fix
-      -- the same symptom appears in captures taken before it.
+- [ ] **Get blocking disk I/O out of the WM's event loop.** The desktop
+      still reads files synchronously inside `wm_run()`, so a frame can
+      block for as long as the disk takes. That is much less painful
+      than it was (2026-08-17: the lost-DMA-wakeup race is fixed, the
+      `.desktop` reload only runs when that directory actually changed,
+      each entry costs one read instead of six, and a write-back cache
+      sits underneath) -- a reload now measures in tens of milliseconds
+      where it measured 2.5-5.6 SECONDS. But the worst case is still
+      unbounded in principle rather than by construction.
 
-      Reproduction, from a clean build:
+      The work: move the `.desktop` reload and the cursor-theme load
+      onto the step-per-frame machinery `fs_read_range_step()` already
+      provides, so no single frame can block on the disk. The reason it
+      has not been done is not effort but risk -- open windows hold
+      `struct gui_app *` pointers into `gui_app_registry[]`, so an
+      incremental rebuild needs the registry double-buffered and
+      swapped atomically, and getting that wrong rebinds a live window
+      to a different app's callbacks (which is exactly what
+      `poll_desktop_entries()`'s existing deferral guard exists to
+      prevent).
 
-      ```
-      cp --reflink=auto --sparse=always disk.img /tmp/t.img
-      python3 tools/vm.py --kvm --instance 2 --disk /tmp/t.img start
-      # enter GUI, spawn /bin/wm/system/cpanel, click cursor_theme choices
-      ```
-
-      What comes out of the serial log on a bad boot:
-
-      ```
-      cursor: /usr/share/cursors/bold/resize-h is malformed -- using the built-in shape
-      cursor: theme "bold" -- 5 of 6 shapes loaded
-      cursor: theme "bold" -- 4 of 6 shapes loaded
-      ```
-
-      The files are fine (the same boot loads 6 of 6 on other attempts),
-      so a read is handing back short or wrong bytes and returning
-      SUCCESS. That is worse than a slow read or a refused one: the
-      cursor theme has a built-in fallback, so the damage is invisible,
-      and any caller without a fallback gets silent corruption.
-
-      **What has NOT been established:** whether this is the DMA path
-      specifically, and whether the bounce-buffer copy in `dma_finish()`
-      can run before the transfer has actually landed. One candidate
-      worth checking first: `wait_dma_irq()` returns as soon as
-      `g_dma_irq_fired` is set, and nothing confirms the Bus-Master
-      status register's IRQ bit for THIS transfer -- a late interrupt
-      from the previous one would look identical. `dma_finish()` already
-      reads `bm_status`; requiring `BM_STATUS_IRQ` there would test the
-      theory cheaply. TCG has never shown this, so measure under
-      `--kvm`.
+      Also worth pairing with: `DMA_WAIT_TICKS`'s per-attempt budget is
+      escalating now (0.3s / 1.0s / 5.0s), so a transient miss costs
+      0.3s -- but a genuinely stalled host can still hold a frame for
+      the full total.
 
 - [ ] **Make the GUI test tooling RESOLUTION-AGNOSTIC.** The suite
       assumes 1280x720 in at least two places, which is what stops the

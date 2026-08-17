@@ -45,6 +45,7 @@ Paths may be relative to the cwd or absolute.
 | `mv <a> <b>` | Rename or move a file or directory. Never overwrites: remove the destination first, since there is no atomic replace. |
 | `truncate <f> <n>` | Sets a file's size exactly. Growing is sparse, so it costs no blocks. |
 | `ln <file> <new>` | Hardlink. TFS3 only; on TFS2 it explains that the format has no link counts. |
+| `sync` | Writes out anything the disk cache is still holding, and reports how many sectors it wrote — a `sync` that printed nothing would be indistinguishable from one that did nothing. Runs automatically at shutdown and reboot, and at the journal's barriers, so this is for "write it out NOW" rather than routine use. Says so loudly if a sector could not be written, since that data then exists in RAM only. |
 | `edit <f>` / `nano <f>` | Full-screen nano/pico-style editor — arrows/Home/End/Delete to navigate, F2 save, F3 exit. Works from both front ends (`apps/editor.c`). |
 
 ## Command-line editing

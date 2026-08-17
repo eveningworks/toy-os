@@ -79,6 +79,9 @@ there when you add an entry, or the index quietly stops being one.
 **Filesystem & storage**
 
 - [A filesystem talks to a BLOCK DEVICE, and persistence is the device's answer](#a-filesystem-talks-to-a-block-device-and-persistence-is-the-devices-answer)
+- [The filesystem is not re-entrant, so the VFS holds a preemption guard](#the-filesystem-is-not-re-entrant-so-the-vfs-holds-a-preemption-guard)
+- [`fs_read_into()` reads into the CALLER's buffer; `fs_read()`'s pointer is not preemption-safe](#fs_read_into-reads-into-the-callers-buffer-fs_reads-pointer-is-not-preemption-safe)
+- [The disk cache is under the ATA DRIVER, not the block layer -- and its flush can fail](#the-disk-cache-is-under-the-ata-driver-not-the-block-layer----and-its-flush-can-fail)
 - [TFS3's last block group may be partial, like ext2/3/4's](#tfs3s-last-block-group-may-be-partial-like-ext234s)
 - [Filesystem is one active backend, not mount points](#filesystem-is-one-active-backend-not-mount-points)
 - [`/etc` and `/tmp` are created by the MOUNT, not by `kernel_main()`](#etc-and-tmp-are-created-by-the-mount-not-by-kernel_main)
@@ -7054,3 +7057,104 @@ The table covers RING-0 faults only. A ring-3 program needs no help to
 dereference NULL; the Crash Test app performs those itself, which is
 also what lets it demonstrate the contrast -- a ring-3 button ends the
 process and the desktop carries on, a ring-0 button ends the machine.
+
+
+## The filesystem is not re-entrant, so the VFS holds a preemption guard
+
+`kernel/fs/tfs3.c` walks directories, inodes and file data through
+module-level scratch buffers (`g_blk`, `g_ptr_blk`). That is fine for a
+filesystem only one thing uses at a time, and this kernel is not that:
+the kernel context is a scheduler participant and a ring-3 process is
+preemptible inside a syscall, so the WM reading a file and an app
+reading a file interleave at any instruction. The app's read then
+overwrites the block the WM is parsing.
+
+It does not look like a filesystem bug from outside, which is why it
+survived so long. The WM reported files that plainly exist as missing or
+unreadable -- the desktop loading "5 of 6" cursor shapes on roughly one
+boot in three under KVM, silently, because a shape that fails to load
+falls back to the built-in one. No error was logged anywhere, and 24 MB
+through `stress` verified byte-for-byte under the same contention, which
+ruled the disk out.
+
+So `vfs.c` holds `scheduler_preempt_disable()` across every backend call
+(`FS_OP()`/`FS_OP_VOID()`). It is at the VFS because that is the one
+place every caller passes through; per-backend guards would have to be
+repeated and eventually forgotten. The primitive itself is general
+rather than filesystem-specific -- the hazard is "shared state plus
+preemption", and the filesystem is only where this project met it first.
+
+Three things worth knowing. It does NOT make a `fs_list()` callback safe
+to call `fs_*` from: that is direct recursion, and a depth counter
+cannot tell it from the safe case. It is NOT the same as `fs_read()`'s
+nested-read refusal, which protects one buffer during one call while
+this protects every backend's internal state for the whole call. And an
+unbalanced `disable()` hangs the machine, since nothing would ever
+rotate again -- which is why `scheduler_preempt_enable()` clamps at zero
+rather than letting the count go negative and silently disarming the
+NEXT legitimate section.
+
+## `fs_read_into()` reads into the CALLER's buffer; `fs_read()`'s pointer is not preemption-safe
+
+`fs_read()` hands back a pointer into one shared staging buffer, valid
+"until the next `fs_read()`/`fs_write()`". That contract is unstatable
+in a preemptible kernel: the *caller* can honour it perfectly and still
+lose the buffer, because a ring-3 process can make a file-reading
+syscall while a kernel-side parse is still walking it.
+`apps/wm/cursor_theme.c` did exactly that, with a comment reasoning that
+its parse happens before anything else touches the filesystem -- true of
+the function, and not of the machine.
+
+`fs_read_into(path, buf, cap)` is the fix: `fs_size()` plus
+`fs_read_range()` into memory the caller owns, so there is no shared
+buffer anywhere in the path for a concurrent reader to invalidate. It
+refuses a file larger than the buffer rather than truncating, because a
+half-read config file parses as a valid config file with keys silently
+missing.
+
+`fs_read()` stays, since plenty of callers are one-shot and fine, but
+anything the kernel context parses should prefer `fs_read_into()`. Note
+the preemption guard above and this are complementary, not alternatives:
+the guard protects the backend DURING a call, this removes the shared
+buffer AFTER it returns.
+
+## The disk cache is under the ATA DRIVER, not the block layer -- and its flush can fail
+
+The block layer is the tidier home for a cache and it is the wrong one.
+TFS2 makes seven direct `ata_*` calls and `partition.c` three more, so a
+cache in the block layer would sit beside two bypass paths -- and a
+bypass past a WRITE-BACK cache is a correctness hole in both directions:
+the bypassing reader sees a stale sector, and a later write-back
+overwrites what the bypassing writer put there. Both are silent.
+`ata_read_sectors()`/`ata_write_sectors()` are the one place every
+caller in this kernel funnels through, so caching there means no bypass
+path can exist to get wrong. The cost is that it lives in a driver
+rather than a layer, and a RAM-backed live image gets no cache -- which
+is right anyway, since its "I/O" is already a memcpy.
+
+**The flush had to learn to fail.** A write-back cache means a write
+that returned success may be refused LATER, at the flush -- and
+`blk_flush()`, `ata_flush_now()` and `struct block_device`'s flush op
+were all `void`. TFS3's journal is only safe because its two barriers
+mean "everything before this is on the platter"; a barrier that cannot
+fail cannot say otherwise. All three return a status now, and
+`txn_commit()` checks it: barrier 1 failing ABANDONS the transaction
+rather than overwriting targets, because a half-written target with no
+durable journal behind it is unrecoverable while abandoning costs
+nothing that was not already lost. A failed write-back keeps its line
+DIRTY rather than dropping it, so the data is still there to retry.
+
+Sizing and shape, briefly: 4-way set-associative, 512 sectors, per-
+SECTOR lines (TFS3 issues 1- and 8-sector transfers and a partition
+offset can unalign an 8-sector one, so a larger line would need
+alignment reasoning per-sector lines do not have). Transfers over 8
+sectors bypass the cache and reconcile overlapping lines first, so bulk
+file data cannot evict the metadata the cache exists to hold. Flushes
+happen at the journal's barriers, at a dirty-line threshold, on an idle
+timer via `scheduler_idle()`, at shutdown, and on `sync`.
+
+**Fault injection sits at the public entry AND on the write-back path.**
+With a cache in front, "the drive refused this write" no longer
+necessarily happens during the caller's `write()` at all, so a test
+could otherwise arm a failure, dirty a line, flush, and watch the flush
+report success.
