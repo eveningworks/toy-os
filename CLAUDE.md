@@ -504,7 +504,7 @@ technical conventions below:
   `debug_console_poll()`, and the reason it exists is that the serial
   debug console had no owner at all: it was polled by whichever loop
   happened to be running, and the WM's copy is the load-bearing one,
-  because all 19 GUI tools and their 285 checks arrive over that
+  because all 20 GUI tools and their 280 checks arrive over that
   console. **Don't add a bare `debug_console_poll()` to a new waiting
   loop** -- call `scheduler_idle()`, so the WM's move to ring 3 deletes
   a call rather than the capability. Two things it deliberately does
@@ -582,9 +582,9 @@ technical conventions below:
   `SYS_SYSINFO` field on purpose: the desktop polls it ONCE PER FRAME
   to decide whether to re-read `/usr/wm/desktop/`, and a free poll is
   the entire reason the counter exists instead of a directory scan.
-  It says something changed, never what. Its load-bearing point: all 19 GUI test tools drive the WM
+  It says something changed, never what. Its load-bearing point: all 20 GUI test tools drive the WM
   through `wm_debug.c`'s `gui` commands over the KERNEL's serial
-  console, so the 271 checks that prove the desktop works have to move
+  console, so the 280 checks that prove the desktop works have to move
   with it, and that gets its own stage BEFORE the WM moves.
 - **A ring-3 process can own a real window** (`apps/wm/wm_client.c` +
   `kernel/proc/win_server.c`, protocol in
@@ -742,6 +742,7 @@ technical conventions below:
   state through `wm_internal.h`'s `extern`s) plus the pieces that grew
   their own files as they appeared: `desktop.c`, `start_menu.c`,
   `context_menu.c`, `confirm_dialog.c`, `file_picker.c`, `wm_tray.c`,
+  `cursor_theme.c`,
   `wm_client.c`.
   Split by concern for readability -- it's still one tightly-coupled
   event loop, not decoupled components. See `apps/wm/wm.c`'s top
@@ -1984,8 +1985,12 @@ repeated manual steps to be worth automating:
   neighbour staying put. `--box N` averages a square, for anti-aliased
   edges where a single pixel is a coin toss.
 - **`gen_cursors.py`** -- generates the shipped cursor themes into
-  `seed/sync/usr/share/cursors/`, and is the authoring path for a new
-  one (a theme is a function returning shape name -> masks). It
+  `data/cursors/`, which the Makefile's `seed` target stages onto the
+  image. **Into `data/`, NOT `seed/sync/`** -- that tree is gitignored
+  and `make clean` deletes it, so the first version's themes were never
+  committed and every checkout but the authoring one silently got the
+  built-in fallback. It is the authoring path for a new theme too
+  (a theme is a function returning shape name -> masks). It
   EXTRACTS the default arrow from `apps/wm/wm_render.c`'s own baked
   arrays and ports the procedural resize shapes, so the files on disk
   cannot drift from the built-in fallback they mirror. `--check` fails
@@ -2227,7 +2232,7 @@ repeated manual steps to be worth automating:
   version of that check stayed green through the positive control.
 - **`gui_regress.py`** -- runs every GUI test tool, each against
   its own freshly-copied disk image and its own VM, and prints one
-  pass/fail table (~1.5 minutes, 271 checks across nineteen tools). This is the standard check
+  pass/fail table (~1.5 minutes, 280 checks across twenty tools). This is the standard check
   after touching `apps/ui/`, `userland/`, or anything the WM draws.
   Tools are **STARTED longest-first** (`COST_S`/`pick_order()`), because
   a parallel run cannot end before its slowest member does and

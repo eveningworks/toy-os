@@ -555,6 +555,15 @@ twice more.**
     every injected input is asserted TWICE, in the compositor's log AND
     in UI Demo's, because "the compositor got the click" is equally
     satisfied by an implementation that STOLE the input stream.
+  - `python3 tools/cursor_theme_test.py` -- cursor themes: the theme
+    loads COMPLETELY, switching it changes the drawn pointer, the size
+    setting scales it by the right magnitude, and a theme that does not
+    exist still leaves a working pointer. Read its docstring first: the
+    built-in fallback means "a cursor is on screen" proves nothing.
+  - `python3 tools/gen_cursors.py` -- not a test: generates the shipped
+    cursor themes into `data/cursors/` and is the authoring path for a
+    new one. `--check` fails if they are stale. Re-run it after touching
+    the built-in shapes in `apps/wm/wm_render.c`, which it extracts from.
   - `python3 tools/desktop_entries_test.py` -- the `.desktop` entry
     system: `ShowIn=` and live reload. Its ShowIn checks assert
     LOADED-but-filtered (`gui apps` vs `gui menu`), never just "absent"
@@ -575,7 +584,7 @@ twice more.**
     `pass`.
   - `python3 tools/gui_regress.py` -- ALL of the app-level ones above
     plus the ring-3 client tests, each on its own fresh disk copy and
-    its own VM, as one pass/fail table (~271 checks across nineteen
+    its own VM, as one pass/fail table (~280 checks across twenty
     tools, a couple of minutes at the default -j4). **Always pass
     `--logs DIR`**: an intermittent too rare to reproduce on demand can
     only be diagnosed by a capture that was already running, and that
@@ -1071,7 +1080,7 @@ Read this before assuming anything about the project's state.**
 - **`docs/wm-ring3-design.md` is the staged plan for Milestone 41** --
   moving the WM itself to ring 3. Its load-bearing finding: all 13 GUI
   test tools drive the WM through `wm_debug.c`'s `gui` commands over the
-  KERNEL's serial console, so the 271 checks that prove the desktop
+  KERNEL's serial console, so the 280 checks that prove the desktop
   works have to move with it, and that gets its own stage BEFORE the WM
   moves.
 
@@ -1652,6 +1661,113 @@ the better lesson: **`k_tolower`/`k_toupper` already existed and four
 places hand-rolled them anyway** -- including `klineedit.c`, whose own
 header comment called the duplicate deliberate. **A header calling its
 own duplicate deliberate is worth re-checking against the code.**
+
+**2026-08-17 (M41 stage 4a, cursor themes, and a bug that shipped
+INVISIBLY): read this before touching the WM, the settings, or anything
+you intend to seed onto the disk.**
+
+- **Stage 4a is BUILT and stage 4's requirements are written up as
+  R1-R9** (`docs/wm-ring3-design.md`). R1 (the framebuffer grant), R4
+  (`SYS_FS_GENERATION`) and R5 (the idle-work owner) landed; R3 was
+  REMOVED rather than deferred. What is left of Milestone 41 is 4b-4d:
+  the WM binary itself.
+- **`scheduler_idle()` owns the kernel's idle work** (`api/scheduler.h`).
+  Any loop that is WAITING rather than working calls it -- the shell's
+  key wait, `wm.c`'s event loop, a long `cat`, the demo's timer. Do not
+  add a bare `debug_console_poll()` to a new waiting loop. The reason is
+  Milestone 41: the serial debug console had no owner, it was polled by
+  whichever loop happened to be running, and the WM's copy is the
+  load-bearing one because every GUI test tool arrives over that wire.
+  Naming it kernel-side means the WM's departure deletes a CALL, not the
+  capability. Not on the timer tick: a dispatched command can be
+  `sh cat big`, which blocks on the filesystem.
+- **The registered compositor can be GRANTED the real framebuffer**
+  (`WIN_REQ_FB_MAP`/`WIN_REQ_FB_PRESENT`, `kernel/proc/win_surface.c`).
+  Three traps live there. **The memory type must reach the USER PTE**
+  (`vmm_map_user_page_type()`, `VMM_MT_WC`) -- the kernel's identity map
+  and the client's mapping are separate PTEs, so without it a ring-3
+  compositor gets a CACHED framebuffer, the bug class TCG cannot show.
+  **Present is required, not advisory** -- `vmsvga` declares
+  `DISPLAY_CAP_NEEDS_FLUSH`, where written pixels stay invisible until
+  the driver is told. And **a ring-3 write is TRANSIENT while the WM is
+  still ring 0**: it survives until the WM's next frame, so a test that
+  looks for a painted block in a screenshot FAILS against a working
+  kernel. Assert instead that the mapping is the real screen, by
+  comparing a client's read against a screendump of the same pixel.
+
+**BEFORE DESIGNING A PATH TO REACH A CAPABILITY, CHECK THE CAPABILITY IS
+SWITCHED ON SOMEWHERE.** Stage 4a listed "the cursor over TWP" as a
+requirement, to be deferred so it would have a real caller.
+`DISPLAY_CAP_CURSOR` turned out to be declared by ONE driver, which
+disables it by default (a hardware cursor over a relative PS/2 mouse
+makes the pointer jump) -- so it is unreachable on every configuration
+this OS boots, and a protocol path to reach it would have been worse
+than the problem it solved. The requirement was DELETED and moved to
+M27a, where virtio-input and virtio-gpu make it real. `tools/vm.py
+--vga vmware` exists partly because that check had no way to be run:
+the modesetting driver and the cursor plane are both unreachable under
+the default `std` adapter, the same shape as `--cpu max` for SMEP/SMAP.
+
+**Cursor themes: the pointer's shapes are DATA FILES** (`data/cursors/
+<theme>/<shape>`, generated by `tools/gen_cursors.py`, loaded by
+`apps/wm/cursor_theme.c`). The layering is the one Windows and Wayland
+both converged on: an app NAMES a shape, the compositor owns the theme
+and produces pixels, the display layer owns any hardware plane. Wayland
+originally had clients supply the pixels and added `cursor-shape-v1` to
+undo it -- don't repeat that. A shape file carries COVERAGE, not colour,
+so one shape set serves a light theme and a dark one. Nothing touches
+the kernel, so it all moves to ring 3 with the WM.
+
+**THE BUG WORTH THE MOST HERE: a file written into `seed/sync/` is
+GITIGNORED and deleted by `make clean`.** `docs/filesystem-layout.md`
+rule 5 says so, and the cursor themes were generated straight into it
+anyway. They therefore existed only in the working tree that made them:
+never committed, absent from every other checkout, and the maintainer's
+machine logged `0 of 6 shapes loaded` while every test on the authoring
+machine passed. Anything hand-authored or generated that must SHIP goes
+in a tracked directory (`data/...`) and is staged by the Makefile's
+`seed` target. **Generalise it: when a feature has a fallback, the
+fallback will hide the feature's absence** -- which is the same trap as
+the next bullet, arriving from a direction the test could not see.
+
+**A load-count check is not a draw check.** The cursor theme system
+shipped its first working version loading 0 of 6 shapes and looking
+perfect, because the built-in fallback drew a fine pointer. Its positive
+control makes the split explicit: disabling the theme reddens the two
+DRAWING checks and leaves both "loads every shape" checks green. If a
+feature has a fallback, no check may assert on the fallback's output.
+
+**A test must ESTABLISH the state it measures against.** `cursor_size`
+persists to `/etc/toyos.conf` on the disk image, which a build does not
+re-seed -- so an earlier run's `huge` made a later baseline 9x too large
+and a ratio check read 0.44 instead of 4.00. Set what you measure
+against, and clean up after yourself so the next tool starts where it
+expects to.
+
+**A panic is diagnosable from a pasted log now** (`kernel/arch/x86_64/
+idt.c`): the relocation offset, the LINK-TIME RIP and a stack scan, all
+to the SERIAL log with the `addr2line` command printed ready to paste.
+The RIP line used to go to the screen only, which is why panics arrived
+as photographs. The backtrace is a stack scan, not an RBP walk (-O2
+omits frame pointers), so it overreports -- read it as candidates. When
+a panic lands in `kfree`/`try_merge_next`, that is heap CORRUPTION
+written earlier, not a bug at that line: reproduce with `heap debug on`
+typed at the physical shell BEFORE `gui`, which red-zones every
+subsequent allocation and names the offending block at the free.
+
+**And two process lessons from the same day:**
+
+- **`grep -E "error|warning"` over a build log is case-sensitive and
+  hides `Error 1`.** A kernel link failure (a struct copy GCC lowered to
+  a `memcpy` this kernel has no symbol for) read as a clean build for
+  two rounds because of that filter. Grep case-insensitively, or check
+  the exit status.
+- **Prove a failure is pre-existing rather than assuming it.** A damage
+  sweep reported three violations; stashing the session's work
+  (`git stash push -u -m <tag>`, apply by SHA, never a bare pop) and
+  rebuilding showed the same seed producing FIVE on `HEAD`, each of the
+  three a byte-for-byte subset. That took one build cycle and turned "I
+  broke the compositor" into a recorded pre-existing issue.
 
 The specific commands below
 were verified current as of the last time this skill was updated, but

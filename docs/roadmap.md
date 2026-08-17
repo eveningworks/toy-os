@@ -1636,6 +1636,31 @@ that nothing else owns.
 - [ ] Decide, in writing, what is deliberately NOT pursued (conformance
       testing, locales, pthreads, `select`/`poll`, terminal `ioctl`)
 
+### Known issue: `uidemo_test.py` errors at startup ~1 run in 6 (2026-08-17)
+
+**Measured, not inferred**: `tools/flake_hunt.py uidemo -n 6` gave 5
+pass, 0 fail, 1 ERROR in 109s, and a full `gui_regress.py` run hit the
+same thing once. The failure is always at startup and always the same:
+
+    RuntimeError: UI Demo reported no layout -- is this an older kernel?
+
+raised from `uidemo_test.py`'s `open()` after ~5s, i.e. the app's
+`uidemo: layout ...` lines never arrived in time. No CHECK has ever
+failed -- the run measures nothing at all, which is exactly the state
+`flake_hunt.py` scores as `error` rather than `pass`.
+
+So this is a harness/timing problem, not a widget bug: the tool gives up
+before UI Demo has reported. Likely candidates, none confirmed -- the
+spawn racing the first frame, or `DebugConsole.logs()` clearing the
+lines before `open()` reads them (a documented trap in
+`DebugConsole.spawn()`).
+
+**What has NOT been established**: whether the rate depends on parallel
+load (all runs above were the default `-j4`), and whether the message is
+ever preceded by a partial layout line. Re-running passes, which is
+precisely how an intermittent gets ignored -- get a rate with
+`flake_hunt.py` before concluding anything.
+
 ### Known issue: GP fault in the heap after repeated setting changes (2026-08-17)
 
 **Not root-caused. Reported by the maintainer, not reproduced here.**
@@ -1690,9 +1715,9 @@ that are actually missing and records what already exists (more than
 this list implies -- a ring-3 process can already map the framebuffer,
 and `vmm_map_user_page()` already takes an explicit address space).
 
-**The consequence that is easy to miss:** all 19 GUI test tools drive
+**The consequence that is easy to miss:** all 20 GUI test tools drive
 the WM through `apps/wm/wm_debug.c`'s `gui` commands, over the KERNEL's
-serial console. A ring-3 WM cannot answer those, so the 271 checks that
+serial console. A ring-3 WM cannot answer those, so the 280 checks that
 are the only proof the desktop works have to move with it. The design
 doc makes that its own stage, deliberately before the WM moves.
 **Stage 3 did it (2026-08-16):** those commands now travel as TWP
@@ -1709,7 +1734,7 @@ consequence, and it is R5:** `debug_console_poll()` -- the drain for
 that same serial wire -- is called from `wm_run()`'s loop, so while the
 desktop is up the WM is what keeps the kernel's console answering at
 all. Move it to ring 3 without giving ring 0 its own drain point and
-every one of the 271 checks stops arriving.
+every one of the 280 checks stops arriving.
 
 **Stage 4a has started (2026-08-17): R4 and R5 are built.**
 `SYS_FS_GENERATION` gives ring 3 the filesystem's change counter

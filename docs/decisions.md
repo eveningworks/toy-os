@@ -825,7 +825,7 @@ one that finally fixed it.
 
 `tools/iso_guard.py` refuses to launch a stale image, called from
 `vm.py` and `qmp_test.py`'s `launch_qemu_cmd()` -- the only two places
-anything in this repo starts a guest, so one check covers all 19 GUI
+anything in this repo starts a guest, so one check covers all 20 GUI
 tools plus `ktest_run.py` and `boot_smoke_test.py`.
 
 Two design points, both learned by getting them wrong first:
@@ -6784,7 +6784,7 @@ The reason it exists is a dependency nobody had written down: the serial
 debug console had no owner. It was polled from whichever loop happened
 to be running -- the physical shell's key wait, `apps/wm/wm.c`'s event
 loop, a long `cat`, the demo's timer -- and the WM's copy is the
-load-bearing one, because all 19 GUI test tools and their 285 checks
+load-bearing one, because all 20 GUI test tools and their 280 checks
 arrive over that console while the desktop is up. Moving the WM to ring
 3 (stage 4) removes that loop from ring 0 and takes the whole test wire
 with it, silently, in the direction that reads as "the tools are

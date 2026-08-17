@@ -1,11 +1,12 @@
 # The WM in ring 3 -- finishing Milestone 41
 
-**Status: STAGES 0-3 BUILT (2026-08-16); stage 4's PREREQUISITES are
-now complete too (2026-08-17) -- see the stage 4 section. Stage 4 is the WM itself and
-is not started; its REQUIREMENTS are measured and written down
-(2026-08-17), including two decisions settled deliberately (the WM owns
-the back buffer; the kernel restores the text console when the WM
-dies).** Written the way `docs/uapp-design.md` and
+**Status: STAGES 0-3 BUILT (2026-08-16). STAGE 4a IS BUILT
+(2026-08-17): its requirements were measured and written up as R1-R9,
+R1/R4/R5 landed, and R3 was REMOVED rather than deferred (the hardware
+cursor is switched off on the only driver that has one, so it moved to
+M27a). What remains of stage 4 is 4b-4d -- the WM binary itself.** Two
+decisions were settled deliberately along the way: the WM owns the back
+buffer, and the kernel restores the text console when the WM dies. Written the way `docs/uapp-design.md` and
 `docs/tfs3-design.md` were: decide the shape and the arguments first,
 build it in named stages afterwards. Each stage below carries its own
 built/not-built note -- read those before the prose around them, which
@@ -36,7 +37,7 @@ section below:
   desktop must look identical at the end of stage 3, with the WM still
   in ring 0. That is what makes stage 4 a swap rather than a leap.
 - **The `gui` debug commands move WITH the WM**, forwarded over the
-  same transport clients use. The 19 GUI test tools are the only proof
+  same transport clients use. The 20 GUI test tools are the only proof
   the desktop works; a migration that breaks them cannot be verified at
   any step, which would make the whole plan unfalsifiable.
 - **Client buffers get mapped into the WM, not copied.** Copying every
@@ -122,8 +123,10 @@ milestone. **Check a stated blocker against the code before planning
 around it**: this one survived unchallenged because it sounded
 plausible.
 
-Plus the smaller ones. Of these, only **syscalls for `etc_config_*`
-(settings)** are still missing. Monotonic time is done and went further
+Plus the smaller ones. **All of them are done now** -- the settings
+syscalls landed as a REGISTRY (`SYS_SETTING`) rather than raw
+`etc_config` access, which is why the ring-3 Control Panel carries no
+list of its own. Monotonic time is done and went further
 than this asked for -- `SYS_TICKS` plus `SYS_MONOTONIC_NS` over a
 clocksource registry (2026-08-17), so an animating client no longer has
 to reach for `sys_gettime`, which is RTC wall-clock and wrong for
@@ -136,10 +139,10 @@ particular blocker is gone.
 
 ### The consequence that is not in the roadmap
 
-**All 19 GUI test tools drive the WM through `apps/wm/wm_debug.c`'s
+**All 20 GUI test tools drive the WM through `apps/wm/wm_debug.c`'s
 `gui` command family** -- reached over the kernel's serial
 debug console. `gui windows`, `gui click`, `gui probe`, `gui damage
-verify`, `gui dialog`, `gui ctxmenu` and the rest are how 271 checks
+verify`, `gui dialog`, `gui ctxmenu` and the rest are how 280 checks
 assert anything at all about the desktop. A ring-3 WM cannot answer a
 command dispatched from inside the kernel's console.
 
@@ -704,7 +707,7 @@ ring buffer, so nothing is dropped by waiting for a normal context.
 Unifying the sites also fixed a live bug: the poll is not re-entrant
 and genuinely re-enters, and `dbg_dispatch()`'s `arg` points into
 `line_buf`, so a command typed during a long `sh` overwrote the running
-one's arguments. Gate: `gui_regress.py`, 19 tools and 285 checks, every
+one's arguments. Gate: `gui_regress.py`, 20 tools and 280 checks, every
 one of which arrives over that console. See `docs/decisions.md`.
 
   The original note, which is why it matters:
@@ -714,8 +717,8 @@ requirement nobody would predict, and it is load-bearing for the
 entire test suite. `debug_console_poll()` has exactly two callers that
 matter: `keyboard_getchar_mods()`'s idle loop (the physical shell) and
 **`wm_run()`'s loop** (`wm.c:759`). While the desktop is up, the WM
-*is* what keeps the kernel's serial console answering -- and all 19 GUI
-tools, all 271 checks, arrive over that wire. Move the WM to ring 3 and
+*is* what keeps the kernel's serial console answering -- and all 20 GUI
+tools, all 280 checks, arrive over that wire. Move the WM to ring 3 and
 ring 0 has no drain point at all for the whole time the desktop is
 running. The kernel needs its own: the timer tick or an idle-path poll,
 owned by nothing in `apps/`. Prove it by asserting the console still
@@ -807,7 +810,7 @@ before any of it exists, because each had a defensible cheaper answer:
   invisible under TCG and cost seconds per repaint on real hardware.
   Measure it under `tools/vm.py --kvm` or do not claim it.
 
-**Proven by:** the same 19 tools, 271 checks, unchanged, for the
+**Proven by:** the same 20 tools, 280 checks, unchanged, for the
 fourth time -- plus `damage_sweep.py --positive-control` first, since
 R2 rebuilds the harness those runs depend on, and a clean sweep from a
 harness that is checking nothing looks identical. And one new property
@@ -821,7 +824,7 @@ becomes true.
 Nothing here introduces a new harness. The migration is steered by the
 one that exists:
 
-- `tools/gui_regress.py` -- 19 tools, 271 checks, each on its own disk
+- `tools/gui_regress.py` -- 20 tools, 280 checks, each on its own disk
   copy and VM. Passes unchanged at the end of every stage.
 - `tools/damage_sweep.py` / `damage_hunt.py` -- the damage invariant,
   which stage 3 and stage 4 both perturb. Run with
@@ -860,7 +863,7 @@ step.
   sketch. Two forks settled rather than defaulted (framebuffer
   ownership, WM-death policy). The unexpected one is R5: the kernel's
   serial debug console is drained by `wm_run()`'s loop, so moving the
-  WM out silently takes the whole 271-check test wire down with it.
+  WM out silently takes the whole 280-check test wire down with it.
 - 2026-08-16: written, after Milestone 2 closed and v0.2.0 shipped.
   Prompted by the question "what is still needed to get the whole WM
   working in ring 3?" -- the answer being four kernel capabilities, a
