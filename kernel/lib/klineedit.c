@@ -196,8 +196,7 @@ static void case_word(struct kline_edit *e, int upper, int first_only) {
     for (int i = start; i < end; i++) {
         char c = e->buf[i];
         int up = first_only ? (i == start) : upper;
-        if (up) { if (c >= 'a' && c <= 'z') e->buf[i] = (char)(c - 32); }
-        else    { if (c >= 'A' && c <= 'Z') e->buf[i] = (char)(c + 32); }
+        e->buf[i] = (char)(up ? k_toupper((unsigned char)c) : k_tolower((unsigned char)c));
     }
     e->cursor = end;
 }

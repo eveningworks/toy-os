@@ -120,9 +120,14 @@ int k_isblank(char c);
 //
 // Both take and return `int`, holding an unsigned char value or EOF-ish
 // negatives untouched, so a caller passing a signed `char` straight in
-// can't silently fold the wrong thing. (Case-changing a WORD --
-// Alt-U/L/C -- is in kernel/lib/klineedit.c, which predates these and
-// needs no general helper for it.)
+// can't silently fold the wrong thing.
+//
+// (This used to add that klineedit.c's Alt-U/L/C word case-changing
+// "predates these and needs no general helper". It did not: it was a
+// hand-rolled copy of exactly these two, as were uui_menubar's private
+// `lower()` and keyboard.c's Ctrl-key fold. All three call these now.
+// A helper's own header claiming a duplicate is deliberate is worth
+// re-checking against the code before believing it.)
 int k_tolower(int c);
 int k_toupper(int c);
 

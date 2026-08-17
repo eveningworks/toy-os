@@ -338,10 +338,7 @@ static int line_contains(const char *hay, int hay_len, const char *needle) {
     for (int i = 0; i + nl <= hay_len; i++) {
         int j = 0;
         while (j < nl) {
-            char a = hay[i + j], b = needle[j];
-            if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
-            if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
-            if (a != b) break;
+            if (tolower(hay[i + j]) != tolower(needle[j])) break;
             j++;
         }
         if (j == nl) return 1;

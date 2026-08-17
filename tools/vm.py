@@ -43,6 +43,7 @@ import socket
 import subprocess
 import sys
 import time
+import iso_guard
 
 PIDFILE = ".vm.pid"
 SERIAL_SOCK = ".vm.serial"
@@ -111,6 +112,13 @@ def cmd_start(args):
     for stale in (SERIAL_SOCK, PIDFILE):
         if os.path.exists(stale):
             os.unlink(stale)
+
+    # A stale toy-os.iso boots and PASSES, silently testing the previous
+    # build -- see tools/iso_guard.py. Checked here because vm.py and
+    # qmp_test.py's launch_qemu_cmd() are the two places anything in
+    # this repo starts a guest.
+    if args.iso == "toy-os.iso":
+        iso_guard.assert_iso_fresh()
 
     cmd = [
         "qemu-system-x86_64",

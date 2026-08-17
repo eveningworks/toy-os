@@ -130,6 +130,7 @@ import json
 import os
 import socket
 import time
+import iso_guard
 
 
 def launch_qemu_cmd(iso="toy-os.iso", disk="disk.img", serial_log="serial.log",
@@ -150,6 +151,15 @@ def launch_qemu_cmd(iso="toy-os.iso", disk="disk.img", serial_log="serial.log",
     # (tools/live_boot_test.py). Not the same as pointing at an empty
     # image: the kernel has to find no ATA device and mount the ISO's
     # module instead, which is the whole property under test.
+    # Every headless test boots an ISO that `make all` does not rebuild,
+    # so a stale one is tested silently and PASSES. Checked here because
+    # this function is the single chokepoint every GUI tool launches
+    # through -- see tools/iso_guard.py. Only the ordinary ISO is
+    # guarded: `live_boot_test.py` and `demo_test.py` pass their own,
+    # which are built by separate targets and legitimately lag.
+    if iso == "toy-os.iso":
+        iso_guard.assert_iso_fresh()
+
     drive = (f"-drive file={disk},format=raw,if=ide,discard=unmap " if disk else "")
     return (
         f"qemu-system-x86_64 -cdrom {iso} "

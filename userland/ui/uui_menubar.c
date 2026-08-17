@@ -1,6 +1,7 @@
 // menu bar + nested pull-down menus. See ui/uui_menubar.h for the design.
 #include "ui/uui_menubar.h"
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
+#include "lib/string.h" // tolower() -- the toolkit's, over k_tolower
 
 // ---------------------------------------------------------------------
 // metrics -- all font-derived, per docs/gui-guidelines.md
@@ -523,7 +524,9 @@ static int activate(struct uui_menubar *m, int *out_code) {
     return 1;
 }
 
-static char lower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
+// k_tolower() is the toolkit's (reached as tolower() here, lib/string.h)
+// -- this was a private copy of a function that already existed.
+#define lower(c) ((char)tolower((int)(unsigned char)(c)))
 
 static int letter_jump(struct uui_menubar *m, int key, int *out_code) {
     struct uui_menu_level *lv = &m->level[m->depth - 1];

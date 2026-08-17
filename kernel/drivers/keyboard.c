@@ -4,6 +4,7 @@
 #include "vga.h"
 #include "klog.h"
 #include "debug_console.h"
+#include "string.h" // k_tolower() -- the Ctrl-key fold
 
 #define KBD_DATA_PORT 0x60
 
@@ -199,7 +200,7 @@ void keyboard_feed_byte(uint8_t sc) {
     // but nothing here wants that, and inventing codes for the rest
     // would be making up an encoding instead of following one.
     if (ctrl_pressed) {
-        char lower = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
+        int lower = k_tolower((unsigned char)c);
         if (lower >= 'a' && lower <= 'z') ring_push((uint16_t)(lower - 'a' + 1));
         return;
     }
