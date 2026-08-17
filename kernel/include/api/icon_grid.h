@@ -1,11 +1,21 @@
-#ifndef UI_ICON_GRID_H
-#define UI_ICON_GRID_H
+#ifndef ICON_GRID_H
+#define ICON_GRID_H
 
 // A small reusable icon-grid geometry + drag-to-reposition helper.
 // First caller: the desktop icon grid (apps/wm/desktop.c); built as a
 // standalone widget (not desktop.c-local) so a future file manager's
 // icon view (docs/roadmap.md Milestone 13) can reuse the same cell
-// math and drag session instead of re-deriving it. Same split as the
+// math and drag session instead of re-deriving it.
+//
+// **COMPILED TWICE, like geom.c and rubberband.c** -- once into the
+// kernel and once into libuapp.a (see the Makefile's shared-source
+// rule). Milestone 41's ring-3 WM needs this and the ring-0 one still
+// has it, and the alternative -- porting a copy into userland/ui/ --
+// produces two implementations that drift, which this repo has paid for
+// three times. It qualifies because it is pure geometry and a drag
+// session: no drawing, no colours, no kernel state. **Keep it that
+// way.** Anything here that reaches for a framebuffer, a theme colour
+// or a kernel header takes it off this path and forces the copy. Same split as the
 // rest of apps/ui/ (see ui_button.h's top comment): this module only
 // knows grid geometry (cell <-> pixel) and a drag session (which item,
 // where it was grabbed) -- callers own their own per-item {col,row}

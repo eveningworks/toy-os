@@ -24,4 +24,13 @@
 #define UTHEME_BUTTON_BG  ugfx_rgb(225, 225, 230) // light grey button face
 #define UTHEME_PANEL_BG   ugfx_rgb(245, 245, 245) // window/panel background
 
+// Added for the ring-3 WM (M41 stage 4b), which draws chrome a window
+// client never has to. The VALUES are apps/theme.h's THEME_BORDER and
+// THEME_WINDOW_BG unchanged -- deliberately, because during 4b both
+// desktops exist and a colour that differs between them would read as a
+// rendering bug in whichever one you were looking at. They collapse to
+// one definition when 4c deletes apps/theme.h.
+#define UTHEME_BORDER     ugfx_rgb(60, 60, 60)    // window/menu border lines
+#define UTHEME_WINDOW_BG  ugfx_rgb(235, 235, 235) // default window content background
+
 #endif

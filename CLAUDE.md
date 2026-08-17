@@ -1673,6 +1673,21 @@ to verify locally first. This doesn't replace verifying locally before
 delivering a change (still do that -- see "Working in the cloud
 sandbox" above), it's a second, automatic check behind it.
 
+**BEFORE BELIEVING ANY GUI TEST FAILURE, RE-RUN IT ON A FRESH IMAGE.**
+`make iso` re-seeds `disk.img` by SYNC, never reformat, so anything an
+earlier run wrote is still there -- and several tools' apps WRITE.
+`menubar_test` saves a file (a stale recent-files entry changes a
+submenu's contents, so every later click in it lands on a different
+row), `cpanel_test` and `cursor_theme_test` both persist settings to
+`/etc`. A dirty fixture fails in a way that reads exactly like a code
+regression or a flake. So: `make clean-disk && make iso`, then re-run
+with `--logs DIR`. If it still fails, prove it is not yours by
+rebuilding `HEAD` (`git stash push -u -m <tag>`, apply by SHA, never a
+bare pop) -- that took one build cycle and correctly exonerated a change
+here on 2026-08-17. Note this is NOT a universal explanation: the same
+day, a `menubar`/`gfxdemo` failure survived `clean-disk` and turned out
+to be a pre-existing parallel-load flake (see `docs/roadmap.md`).
+
 **A COPY of `disk.img` GOES STALE the moment you rebuild.** `make iso`
 re-seeds the real `disk.img` with the newly built `/bin` binaries; a
 copy taken before that still holds the OLD ones. So a VM booted from the

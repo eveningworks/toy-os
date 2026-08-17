@@ -846,8 +846,61 @@ is provable on its own with the suite green throughout.
   worth comparing" so a release cannot leave a stale frame a later diff
   would happily compare against.
 
-What is left of 4b is the binary itself: compiling `apps/wm/`'s ~8,100
-lines against Toykit and this surface.
+**4b's second half is UNDER WAY: `userland/wm/` COMPILES, and does not
+link yet.** All fourteen translation units build clean; 41 symbols
+across 80 references still have no ring-3 implementation.
+
+The port lives beside `apps/wm/` rather than replacing it, because
+porting the call sites in place would break the kernel build the moment
+the first one changed, and every stage of this migration has been shaped
+so the suite passes at its end. **Stage 4c deletes `apps/wm/`
+outright** -- two copies of an 8,000-line component is exactly the drift
+this repo has paid for before, so treat it as a countdown: a fix made to
+one during 4b has to be made to the other.
+
+It is built by an on-demand `make toywm` target and NOT by `make all`,
+so an incomplete program cannot turn the default build, `preflight.sh`
+or CI red. `main()` is in `userland/wm/` rather than
+`userland/gui/system/` for the same reason -- that directory is
+auto-discovered. Delete the target and move `main.c` there the moment it
+links; an on-demand target is one nobody runs, and a build nobody runs
+rots. `tools/check_deps.py` asks `make toywm -n` as well as `make all
+-n`, so the new directory's dependency tracking is genuinely verified
+rather than skipped.
+
+What is DONE: the ~110 drawing call sites now name the surface they draw
+into (`wm_surface()`, over one process-wide `ugfx_screen`); the screen
+lifecycle maps onto `ugfx_screen_init`/`_present` and the verify trio;
+the widget calls are `uui_*`, with `uui_textbox` moved to the ring-3
+model where the widget owns its geometry and colours; `icon_grid` became
+SHARED SOURCE (`kernel/lib/icon_grid.c` + `kernel/include/api/`,
+compiled twice like `rubberband.c`) rather than a second copy, since it
+is pure geometry with no drawing or kernel state.
+
+What REMAINS, and it is design rather than mechanics:
+
+- **`win_events_*` / `win_server_*` (22 refs).** The kernel half. A
+  ring-3 WM reaches these over TWP, and deciding that surface is the
+  substantial piece of 4c.
+- **Filesystem (8).** `fs_list`/`fs_exists`/`fs_is_dir`/`fs_size` over
+  `SYS_LISTDIR`/`SYS_OPEN`; `etc_config_*` over the `SYS_SETTING`
+  registry. The `fs_*_range_step` pair is an R9 DELETION -- a ring-3 WM
+  is a process and can just block.
+- **Input (9).** `mouse_*`/`keyboard_*` become stage 2's
+  `WIN_EV_RAW_*`, already built.
+- **Scheduler (5).** `SYS_SPAWN`/`KILL`/`WAITPID` exist;
+  `scheduler_idle`/`tick` are R9 deletions.
+- **No ring-3 path at all yet:** `system_poweroff` (no syscall),
+  `setting_register` (the registry has no ring-3 registration path),
+  `rammeter_tick` and `vga_*` (kernel-side by R7, so the ring-3 WM
+  should not call them), and `gfx_hw_cursor_*` (R3 removed these --
+  delete the paths rather than porting them).
+- **The scripted demo.** `apps/demo.c` is split-brained -- its
+  `demo_load`/`demo_requested`/`demo_run_cli` are the kernel's boot
+  path and `demo_gui_tick` is the WM's per-frame hook -- so it has to be
+  SPLIT before it can move. Left out of 4b deliberately; the demo has an
+  on-demand-only test, so its absence costs nothing until the ring-3 WM
+  is actually the desktop.
 
 **The four decisions R1/R3 will be built on**, settled 2026-08-17
 before any of it exists, because each had a defensible cheaper answer:

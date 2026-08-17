@@ -1094,6 +1094,52 @@ guess.*
 
 ### Known issues and papercuts (unscheduled)
 
+- [ ] **Injected clicks are LOST under parallel `gui_regress` load, and
+      the failing checks are finally named.** Reproduce by running the
+      full suite (`python3 tools/gui_regress.py --logs DIR`) at the
+      default `-j4`; it needs the parallel load, so a single tool cannot
+      show it.
+
+      **Measured 2026-08-17, both on `HEAD` (ff5ae94) and on the M41
+      stage 4b working tree, with the same fingerprint on each** -- so
+      it is PRE-EXISTING, established by rebuilding HEAD rather than by
+      reasoning:
+
+      - `menubar`: 5/5 PASS run alone (`flake_hunt.py menubar -n 5`),
+        and ~30-50% failure in the suite. Always the same two checks:
+        `releasing on a submenu item commits exactly that command` and
+        `committing closes the whole chain`. Every earlier check passes,
+        including `hovering a submenu parent opens the next level` and
+        `a submenu opens to the RIGHT of its parent` -- so the submenu
+        IS open and correctly placed, and only the click on the deepest
+        item fails to commit.
+      - `gfxdemo`, in the same run: `the 2D / 3D button switches back`,
+        `returning to the 2D scene restores it exactly`, `speed returns
+        for the cube`, `the cube is rotating`. All of the form "a click
+        did not take effect".
+
+      That second tool is what makes this worth one entry rather than
+      two: it is not a menu bug, it is injected clicks going missing.
+
+      **Ruled out:** a dirty disk image. `make iso` re-seeds by sync and
+      `menubar_test` saves a file, so a stale recent-files entry
+      changing the submenu's contents was the obvious candidate --
+      `make clean-disk && make iso` does NOT fix it.
+
+      **Hypothesis, NOT verified:** the test parks the REAL PS/2 cursor
+      with `warp_cursor()`, reads the layout, then injects a click.
+      Injected input overrides the real mouse for exactly ONE
+      `wm_run()` iteration (see CLAUDE.md), so under load the real
+      cursor's position can re-assert between the injected move and the
+      press, collapsing the submenu so the press lands on nothing. One
+      cause would explain both menubar checks (nothing commits, so the
+      chain never closes). The discriminating experiment: warp the real
+      cursor ONTO the target before clicking instead of relying on the
+      injected move, and see whether the rate goes to zero. This is the
+      same family as the menubar flake fixed in 2026-08-16 ("item
+      enabled, hover lost"), which suggests that fix addressed one site
+      rather than the mechanism.
+
 - [ ] **`tools/faulttest_run.py` reports 0/3, and it is PRE-EXISTING.**
       All three entries fail identically -- `stackovf_test`,
       `crash_test` and `nx_test` each with "log never said 'RING-3

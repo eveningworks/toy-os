@@ -87,6 +87,19 @@ ARTIFACT_PAIRS = (
 BYPASS_ENV = "TOYOS_ALLOW_STALE_ISO"
 
 
+# Trees that feed NO seeded artifact, and so must not make the seed look
+# stale. `userland/wm` is M41 stage 4b's ring-3 WM port: it is built by
+# its own on-demand `make toywm` target, is not in USERLAND_PROGRAM_DIRS,
+# and nothing copies it onto the disk image -- so building it correctly
+# changes nothing the tests boot, and complaining would send a session
+# chasing a re-seed that would fix nothing.
+#
+# This is the guard's own rule applied to a new tree: pair each tree with
+# the artifact it actually feeds, because a guard that false-alarms is a
+# guard people switch off. Remove this when 4c seeds the WM for real.
+UNSEEDED = ("build/userland/wm",)
+
+
 def _newest(root: Path, suffixes=None):
     """(path, mtime) of the newest file under `root`, or (None, 0.0)."""
     if root.is_file():
@@ -98,6 +111,8 @@ def _newest(root: Path, suffixes=None):
         if not path.is_file():
             continue
         if suffixes is not None and path.suffix not in suffixes:
+            continue
+        if any(u in path.as_posix() for u in UNSEEDED):
             continue
         m = path.stat().st_mtime
         if m > newest_mtime:

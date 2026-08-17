@@ -386,6 +386,7 @@ LIBUAPP_SRCS = $(shell find userland/ui userland/lib -name '*.c' 2>/dev/null | s
 LIBUAPP_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBUAPP_SRCS)) \
                $(BUILD)/userland/shared/geom.o \
                $(BUILD)/userland/shared/rubberband.o \
+               $(BUILD)/userland/shared/icon_grid.o \
                $(BUILD)/userland/shared/fixed.o \
                $(BUILD)/userland/shared/calc_engine.o \
                $(BUILD)/userland/shared/string.o \
@@ -410,12 +411,48 @@ $(LIBUAPP): $(LIBUAPP_OBJS)
 
 # Kept as the escape hatch for an object that must be linked
 # unconditionally rather than pulled from the archive on demand. Empty
-# today, and an empty list is the good outcome -- see $(LIBUAPP) above.
+# today for the single-file programs, and an empty list is the good
+# outcome for those -- see $(LIBUAPP) above.
 EXTRA_OBJS_uiclient   =
 EXTRA_OBJS_calculator =
 EXTRA_OBJS_notepad    =
 EXTRA_OBJS_terminal   =
 EXTRA_OBJS_gfxdemo    =
+
+# ...and the one program that will genuinely need it: the ring-3 window
+# manager (M41 stage 4b). `userland/wm/` is the port of `apps/wm/` and
+# is deliberately NOT one of USERLAND_PROGRAM_DIRS -- those turn every
+# .c into its own ELF, which is right for a program and wrong for the
+# fourteen translation units of one.
+#
+# Listed rather than wildcarded on purpose: a stray .c dropped into
+# userland/wm/ should fail to link with an undefined symbol, not get
+# silently absorbed into the desktop.
+EXTRA_OBJS_main       = wm/wm wm/wm_render wm/wm_input wm/wm_client \
+                        wm/wm_debug wm/wm_tray wm/wm_watchdog \
+                        wm/desktop wm/start_menu wm/context_menu \
+                        wm/confirm_dialog wm/file_picker wm/cursor_theme \
+                        wm/gui_apps wm/wm_log
+
+# --- the ring-3 WM is BUILT ON DEMAND, not by `make all` ---------------
+#
+# `make toywm`, and nothing else reaches it. The port is mid-flight
+# (stage 4b): some of its call sites still name kernel functions that
+# ring 3 has no path to, so the tree does not compile yet, and wiring an
+# incomplete program into the default build would turn `make all`,
+# `preflight.sh` and CI red for the duration of a migration every earlier
+# stage was shaped to keep green.
+#
+# This is why main() lives in `userland/wm/` rather than in
+# `userland/gui/system/`: that directory is auto-discovered, so a file
+# there would be built by `all` whether or not it was ready.
+#
+# **Delete this target and move main.c into userland/gui/system/ the
+# moment the port compiles** -- an on-demand target is a thing nobody
+# runs, and a build nobody runs is a build that rots. Stage 4c does that
+# and deletes apps/wm/ with it.
+.PHONY: toywm
+toywm: $(BUILD)/userland/wm/main.elf
 
 # The extras for one binary, as real object paths.
 uextra = $(patsubst %,$(BUILD)/userland/%.o,$(EXTRA_OBJS_$(notdir $(1))))
