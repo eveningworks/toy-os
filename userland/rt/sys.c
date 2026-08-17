@@ -245,7 +245,16 @@ int sys_waitpid(int pid, int *out_code) {
     // exited. Each pass that finds it still running parks again, so
     // this consumes no CPU while waiting.
     do {
-        r = syscall2(SYS_WAITPID, (uint64_t)(int64_t)pid, (uint64_t)(uintptr_t)out_code);
+        r = syscall3(SYS_WAITPID, (uint64_t)(int64_t)pid,
+                     (uint64_t)(uintptr_t)out_code, 0);
     } while (r == SYS_RETRY);
     return (int)r;
+}
+
+int sys_waitpid_nohang(int pid, int *out_code) {
+    // NO retry loop, deliberately: SYS_RETRY is the answer here ("still
+    // running"), not a signal to ask again. Looping on it is exactly the
+    // mistake that turned this call into a block.
+    return (int)syscall3(SYS_WAITPID, (uint64_t)(int64_t)pid,
+                         (uint64_t)(uintptr_t)out_code, SYS_WNOHANG);
 }

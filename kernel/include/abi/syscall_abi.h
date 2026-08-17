@@ -445,9 +445,27 @@ struct dirent {
                         // terminal does, and the first time one
                         // process here could see another's stdout.
 
+// Flag for SYS_WAITPID's RDX. POSIX's WNOHANG under a shorter name and
+// with the same meaning: ask, do not wait.
+//
+// It exists because the kernel primitive underneath (scheduler_poll())
+// has ALWAYS been non-blocking, and this syscall was throwing that
+// answer away -- so a ring-3 process could not ask "has it finished?"
+// without committing to wait for it. A compositor has to check the
+// processes it launched once a frame and can never block on one, so
+// without this the first client that does not exit stops the desktop.
+#define SYS_WNOHANG 1
+
 #define SYS_WAITPID 28 // RDI = pid from SYS_SPAWN, RSI = pointer to an
                         // int (out) for the exit code, or NULL.
-                        // BLOCKS until that child exits, then reaps it.
+                        // RDX = flags: SYS_WNOHANG to poll instead of
+                        // wait; 0 for the blocking behaviour that
+                        // predates it.
+                        // BLOCKS until that child exits, then reaps it,
+                        // UNLESS SYS_WNOHANG is set -- in which case a
+                        // child that is still running answers
+                        // SYS_RETRY (0) immediately and nothing is
+                        // reaped.
                         // Returns the pid on success, or -1 for a pid
                         // that isn't this caller's live child.
                         //

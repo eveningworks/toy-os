@@ -1094,70 +1094,53 @@ guess.*
 
 ### Known issues and papercuts (unscheduled)
 
-- [ ] **The ring-3 WM stops running the moment it spawns a process.**
-      The one thing between Milestone 41 and its switchover, and the
-      client-window bug this entry used to describe is FIXED (see below).
+- [x] ~~**The ring-3 WM stops the moment it spawns a process.**~~ FIXED
+      2026-08-17, and the cause was mine and much duller than the
+      diagnosis before it.
 
-      Reproduce:
+      `wm_reap_launched()` checked its launched processes with
+      `sys_waitpid()`, which **BLOCKS** -- its own first ABI line says
+      so. The comment introducing it asserted it was "non-blocking in
+      the same sense scheduler_poll() was", which was an assumption
+      never checked against the header. So the desktop parked on the
+      first client that did not immediately exit, which is every client.
 
-          python3 tools/vm.py --disk <copy> start
-          # type `gui3` at the physical shell (QMP), then:
-          gui spawn /bin/wm/demos/uidemo
+      `SYS_WNOHANG` now exists (POSIX's flag, same meaning) and
+      `sys_waitpid_nohang()` wraps it. The kernel primitive underneath
+      (`scheduler_poll()`) was always non-blocking -- the syscall had
+      simply been throwing that answer away, so ring 3 could not ask
+      "has it finished?" without committing to wait.
 
-      The spawn SUCCEEDS -- the reply comes back, the client starts and
-      prints its layout -- and the WM never runs another frame. No crash,
-      no fault, no log line: it simply stops being scheduled. Instrumented
-      with a per-frame log, the last frame is the one that ran the spawn
-      command, and the client's own `WIN_EV_CLIENT_CREATED` is never
-      handled because the pump never runs again.
+      **A WRONG DIAGNOSIS WAS PUBLISHED FIRST and is worth recording.**
+      The previous entry blamed `debug_via_compositor()`'s `sti; hlt`
+      against `idt.c`'s single `g_next_kernel_rsp`, reasoning that it
+      survives two contexts and not three. It fitted every symptom, it
+      cited a real documented hazard, and it was wrong: that hazard is
+      about NESTED ISRs, and the wait runs in ordinary kernel code. The
+      lesson is the one this repo keeps relearning -- a mechanism that
+      explains the symptoms is not the same as the mechanism that caused
+      them, and the cheap check (read the ABI comment of the call you
+      changed) was never done.
 
-      **ROOT CAUSE FOUND (2026-08-17), and it is in the kernel, not the
-      WM.** `win_server.c`'s `debug_via_compositor()` waits for the
-      compositor's reply with `sti; hlt` inside the handler -- and
-      `scheduler.c` already documents that exact pattern as unsafe:
+- [ ] **Five GUI tools assume the desktop is NOT a process.** Measured
+      with `gui` flipped to the ring-3 desktop: 18 of 23 tools pass,
+      including every widget, window, menu and dialog check. The five
+      that fail are tool assumptions, not WM bugs:
 
-          The obvious implementation of a blocking syscall -- `sti`, then
-          spin or `hlt` inside the handler until the thing you're waiting
-          for arrives -- was tried in this kernel and is genuinely unsafe
-          here, not merely slow [...] because g_next_kernel_rsp (idt.c)
-          is a single global "where to resume".
+      * `compositor`, `screen`, `compdeath` register a SECOND compositor
+        (`compclient`, `screenclient`) alongside the desktop. Free when
+        the WM was ring 0; a contradiction now, because the role is
+        single -- the tool evicts the desktop and then asks it
+        questions. They need to either drive the desktop AS the
+        compositor, or run with no desktop up at all.
+      * `taskmgr`, `forcequit` end a process chosen out of the process
+        table, and the desktop is IN that table now. They kill pid 1 and
+        then correctly report that no window manager is running. Same
+        class as the `launched[0]` assumption this repo has already been
+        bitten by once.
 
-      It survives TWO contexts (the kernel context waiting, the WM
-      answering), which is why it worked perfectly for 300 frames and
-      through every earlier test. A THIRD context breaks it: the moment
-      any TWP client exists, that single global resume point is
-      clobbered and the WM is never resumed again.
-
-      Every observation fits: no crash, no fault, no log; permanent
-      rather than slow; spawning `/bin/hello` (exits at once, no TWP) is
-      harmless while `winclient` (creates a window and then WAITS, so it
-      is not even presenting) is fatal.
-
-      **The fix is to stop blocking in the kernel**, not to tune the
-      timeout. But the obvious version is a trap worth naming: making the
-      reply ASYNCHRONOUS looks easy, because `dbg_cmd_gui()` prints it
-      with a plain `klog_write()` and could just as well print it later
-      -- and it would break every tool. `DebugConsole.send()` reads to
-      the PROMPT, so a reply arriving after the prompt is a reply the
-      tool never sees. The synchronous shape is load-bearing for the
-      harness, not incidental.
-
-      So the waiter has to block SAFELY rather than not block. The
-      waiter is the kernel context, not a process, so `SCHED_WAIT_*` does
-      not apply as-is -- read `idt.c`'s `g_next_kernel_rsp` first and
-      establish whether the kernel context's own switch path is actually
-      subject to the hazard, or whether the corruption comes from
-      somewhere else in the three-context case. That is the one thing
-      still unmeasured here: the mechanism is documented and the
-      symptoms fit it exactly, but the clobber itself has not been
-      caught in the act.
-
-      Two earlier theories were WRONG, recorded so nobody re-derives
-      them: the debug channel being flooded out of a 32-deep queue by a
-      client's presents (switching it to a poll changed nothing), and
-      the event drain livelocking on a faster producer (bounding it
-      changed nothing). Both fixes were kept because both are right
-      independently -- but neither was the cause.
+      This is what stands between here and the switchover; the flip
+      itself is one line in `apps/gui.c`.
 
 - [x] ~~**The ring-3 desktop cannot give a client a window.**~~ FIXED
       2026-08-17. `win_server_request()` had `if (!g_ops) return -1;`,

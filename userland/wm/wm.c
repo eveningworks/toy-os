@@ -349,10 +349,18 @@ static void wm_reap_launched(void) {
     for (int i = 0; i < SCHED_MAX_PROCS; i++) {
         if (!g_launched[i]) continue;
         int code = 0;
-        // Non-blocking in the same sense scheduler_poll() was: it
-        // reports "still running" rather than parking, so the desktop
-        // reaps without ever stalling a frame.
-        if (sys_waitpid(g_launched[i], &code) != SYS_RETRY) {
+        // sys_waitpid_NOHANG(), and that distinction is the whole
+        // desktop. The blocking sys_waitpid() PARKS until the child
+        // exits, so reaping a client that is merely RUNNING stopped the
+        // WM dead on its first window -- no crash, no fault, no log --
+        // and the comment that used to sit here asserted it was
+        // "non-blocking in the same sense scheduler_poll() was". It was
+        // not, and SYS_WAITPID's own first ABI line said "BLOCKS".
+        //
+        // SYS_RETRY means "still running" here rather than "ask again",
+        // which is what the flag buys; looping on it would restore the
+        // bug exactly.
+        if (sys_waitpid_nohang(g_launched[i], &code) != SYS_RETRY) {
             g_launched[i] = 0; // reaped (or already gone) -- slot is free again
         }
     }

@@ -1179,6 +1179,14 @@ void syscall_dispatch(uint64_t *regs) {
                 regs[14] = (uint64_t)(int64_t)pid;
             } else if (r == SCHED_POLL_INVALID) {
                 regs[14] = (uint64_t)-1;
+            } else if (rdx & SYS_WNOHANG) {
+                // Asked, not waited. SYS_RETRY is the right answer
+                // rather than a distinct "still running" code: it
+                // already means "no result yet, ask again" everywhere
+                // else in this ABI, and reusing it means a caller that
+                // loops on SYS_RETRY works unchanged whether or not it
+                // passed the flag.
+                regs[14] = (uint64_t)(int64_t)SYS_RETRY;
             } else {
                 // Still running: park. Interrupts are off for the whole
                 // handler, so "still running" and "park" are atomic

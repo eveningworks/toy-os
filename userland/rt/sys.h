@@ -237,6 +237,17 @@ int sys_spawn(const char *path, const char *args, int stdout_fd);
 // sys_wait_event() -- the loop lives here rather than in every caller.
 int sys_waitpid(int pid, int *out_code);
 
+// Asks whether a child has finished, WITHOUT waiting. Returns the pid
+// (reaped, exit code written), SYS_RETRY if it is still running, or -1
+// for a pid that is not this caller's live child.
+//
+// For a caller that must not block on any one child -- a compositor
+// checking everything it launched once a frame is the reason this
+// exists. sys_waitpid()'s own retry loop is the wrong shape there: it
+// hides the "still running" answer, which is exactly the answer such a
+// caller wants.
+int sys_waitpid_nohang(int pid, int *out_code);
+
 // --- windowing -------------------------------------------------------
 
 // One typed message in, one out. See abi/win_proto.h.
