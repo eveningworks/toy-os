@@ -15,6 +15,9 @@
 #include "reloc.h" // kernel_reloc_delta() -- a panic RIP is meaningless without it
 #include "process.h"
 #include "uaddr.h" // uaddr_is_stack_guard() -- naming a stack overflow as one
+#include "ksyms.h" // a panic names the function, not just an address
+#include "version.h" // TOYOS_VERSION_FULL -- a photographed panic identifies its build
+#include "clocksource.h" // uptime, so a panic says WHEN
 
 struct idt_entry {
     uint16_t offset_low;
@@ -199,6 +202,11 @@ static void panic_report_context(uint64_t rip, const uint64_t *regs) {
         klog_printf("  kernel relocated +0x%lx -- link-time RIP = 0x%lx\n",
                      delta, rip - delta);
     }
+    // The name in the LOG too, not only on screen: the log is what gets
+    // pasted into a report, and an address alone was the whole problem.
+    uint32_t rip_off = 0;
+    const char *rip_sym = ksyms_lookup(rip, &rip_off);
+    if (rip_sym) klog_printf("  in %s+0x%x\n", rip_sym, rip_off);
     klog_printf("  resolve with: addr2line -f -e build/kernel.bin 0x%lx\n",
                  rip - delta);
 
@@ -218,7 +226,10 @@ static void panic_report_context(uint64_t rip, const uint64_t *regs) {
     for (int i = 0; i < 128 && shown < 12; i++) {
         uint64_t v = sp[i];
         if (v < tstart || v >= tend) continue;
-        klog_printf("    [%d] 0x%lx  -> 0x%lx\n", i, v, v - delta);
+        uint32_t off = 0;
+        const char *nm = ksyms_lookup(v, &off);
+        if (nm) klog_printf("    [%d] %s+0x%x  (0x%lx)\n", i, nm, off, v - delta);
+        else    klog_printf("    [%d] 0x%lx  -> 0x%lx\n", i, v, v - delta);
         shown++;
     }
     if (!shown) klog_printf("    (nothing in .text found on the stack)\n");
@@ -301,6 +312,13 @@ void isr_dispatch(uint64_t *regs) {
         vga_printf("\n*** %s%s ***\n",
                     recoverable ? "RING-3 PROCESS CRASHED: " : "KERNEL PANIC: ",
                     stack_overflow ? "Stack overflow" : exception_names[vector]);
+        // Name the function. The whole reason the symbol table is baked
+        // into the image (linker.ld's .ksyms, tools/gen_syms.py): a bare
+        // address is unreadable on the machine it happened on, because
+        // the kernel relocated itself to a random base at boot.
+        uint32_t sym_off = 0;
+        const char *sym = ksyms_lookup(rip, &sym_off);
+        if (sym) vga_printf("in %s+0x%x\n", sym, sym_off);
         vga_printf("RIP=0x%lx  CS=0x%lx (ring %lu)\n", rip, cs, cs & 3);
         if (vector == 14) {
             vga_printf("error_code=0x%lx  CR2=0x%lx\n", error_code, cr2);
@@ -313,6 +331,30 @@ void isr_dispatch(uint64_t *regs) {
                        (uint64_t)UADDR_STACK_BOTTOM,
                        (uint64_t)UADDR_STACK_VADDR + 4096);
         }
+
+        // WHO was running, which is the line that would have pointed
+        // straight at a WM/ring-3 interleaving bug this kernel spent a
+        // session on. `pid 0` means the kernel context itself -- the
+        // scheduler participant the desktop runs in, not "no process".
+        int pid = scheduler_current_pid();
+        if (pid) vga_printf("context: pid %d\n", pid);
+        else     vga_printf("context: kernel context (no process)\n");
+
+        // Registers. A wild pointer is usually sitting in one of them,
+        // and on a #GP there is no CR2 to consult.
+        // isr.asm pushes rax..r15 in that order and the stack grows
+        // DOWN, so the last push (r15) is regs[0] and rax is regs[14].
+        // Worth stating: the obvious reading of the push list is exactly
+        // backwards, and six of these eight were wrong the first time.
+        vga_printf("RAX=%lx RBX=%lx RCX=%lx RDX=%lx\n",
+                    regs[14], regs[13], regs[12], regs[11]);
+        vga_printf("RSI=%lx RDI=%lx RBP=%lx RSP=%lx\n",
+                    regs[10], regs[9], regs[8], regs[20]);
+
+        // Build and uptime, so a photograph identifies itself: matching a
+        // panic against the wrong build is a whole wasted round trip.
+        vga_printf("%s  up %lus\n", TOYOS_VERSION_FULL,
+                    (unsigned long)(clocksource_now_ns() / 1000000000ULL));
 
         klog_printf("%s%s\n", recoverable ? "RING-3 CRASH: " : "PANIC: ",
                      stack_overflow ? "Stack overflow" : exception_names[vector]);

@@ -18,6 +18,7 @@
 #include "string.h"
 #include "timer.h" // pit_ticks() -- SYS_TICKS
 #include "clocksource.h" // clocksource_now_ns() -- SYS_MONOTONIC_NS
+#include "crashtest.h" // SYS_CRASHTEST -- deliberate faults, see crash_abi.h
 #include "tz.h"
 #include "pci.h"
 #include "cpuinfo.h"
@@ -990,6 +991,36 @@ void syscall_dispatch(uint64_t *regs) {
         }
     } else if (rax == SYS_TICKS) {
         regs[14] = pit_ticks();
+    } else if (rax == SYS_CRASHTEST) {
+        // Deliberate faults, for testing the panic path (crash_abi.h).
+        // Gated on `faultinject`; the LIST is always readable so a UI
+        // can show the kinds and report the refusal rather than
+        // presenting an empty window.
+        uint64_t pml4 = vmm_current_pml4();
+        struct crash_msg m;
+        if (!vmm_copy_from_user(pml4, &m, rdi, sizeof m)) {
+            regs[14] = (uint64_t)-1;
+        } else if (m.op == CRASH_OP_LIST) {
+            m.count = crash_kind_count();
+            m.flags = crash_armed() ? CRASH_F_ARMED : 0;
+            m.name[0] = m.desc[0] = '\0';
+            const struct crash_kind *k = crash_kind_at(m.index);
+            if (k) {
+                k_strlcpy(m.name, k->name, sizeof m.name);
+                k_strlcpy(m.desc, k->desc, sizeof m.desc);
+            }
+            vmm_copy_to_user(pml4, rdi, &m, sizeof m);
+            regs[14] = 0;
+        } else if (m.op == CRASH_OP_TRIGGER) {
+            // Does not return when it works -- the machine panics.
+            int ok = crash_trigger(m.index);
+            m.flags = crash_armed() ? CRASH_F_ARMED : 0;
+            m.count = crash_kind_count();
+            vmm_copy_to_user(pml4, rdi, &m, sizeof m);
+            regs[14] = ok ? 0 : (uint64_t)-1;
+        } else {
+            regs[14] = (uint64_t)-1;
+        }
     } else if (rax == SYS_FS_GENERATION) {
         // One integer, no user pointer to validate -- see
         // syscall_abi.h for why this is not a SYS_SYSINFO field.

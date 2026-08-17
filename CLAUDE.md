@@ -560,6 +560,27 @@ technical conventions below:
   release. **An app must honour `reason`**: Control Panel discarded it
   and applied a setting on every pointer-motion event, which froze the
   desktop for seconds and exposed the `fs_read()` bug above.
+- **A panic NAMES THE FUNCTION now**, on screen and in the log:
+  `in crash_gp_fault+0xa`, plus the faulting context (`pid 1` or
+  `kernel context`), the general registers, the build id and the uptime.
+  The symbol table is baked into the image by `tools/gen_syms.py` into
+  its own `.ksyms` section -- the same two-pass trick `.krelocs` uses,
+  and for the same reason: linker.ld places it after every address it
+  records, so pass 1's addresses stay correct in pass 2, and `--verify`
+  fails the build if that stops holding. The blob contains NO POINTERS
+  (link-time addresses as u32 literals, names in a string table), so it
+  adds nothing to the ~8,000 relocations the kernel patches at boot.
+  The register dump earns its keep immediately: a #GP has no CR2, and
+  the bad pointer is usually sitting in RAX.
+- **There is a Crash Test app** (`userland/gui/demos/crashtest.c`,
+  Start menu only -- no desktop icon on purpose). Ring-3 buttons fault
+  in the app's own code and prove the desktop survives; Ring-0 buttons
+  ask the KERNEL to panic and are **refused unless booted with
+  `faultinject`**. The kernel owns the fault list
+  (`api/crashtest.h`), so adding a kind there gives the app a button
+  with no edit -- and `tools/crashtest_test.py` (9 checks) is safe in
+  `gui_regress` precisely because the dangerous half is disarmed by
+  default. To exercise a real panic: `make iso KCMDLINE="faultinject"`.
 - **A kernel panic now prints enough to diagnose from a pasted log.**
   The relocation offset, the LINK-TIME RIP (the kernel relocates itself,
   so a raw RIP is meaningless on its own) and a stack scan, all to the
@@ -2009,6 +2030,17 @@ repeated manual steps to be worth automating:
   include a point that should NOT change -- half the assertion is the
   neighbour staying put. `--box N` averages a square, for anti-aliased
   edges where a single pixel is a coin toss.
+- **`gen_syms.py`** -- bakes the kernel's function symbol table into the
+  image so a panic can name the function instead of printing an address
+  nobody can resolve (the kernel relocates itself, so a raw RIP is
+  meaningless without the boot log). Same two-pass + `--verify` shape as
+  `genrelocs.py`; the blob is deliberately pointer-free so it costs no
+  relocations.
+- **`crashtest_test.py`** -- the fault paths (9 checks): the app
+  enumerates the kernel's fault kinds, kernel faults are refused while
+  disarmed, and a ring-3 crash kills the app WITHOUT taking the desktop
+  with it. In `gui_regress.py`, which is only safe because the kernel
+  half is disarmed unless `faultinject` is on the command line.
 - **`gen_cursors.py`** -- generates the shipped cursor themes into
   `data/cursors/`, which the Makefile's `seed` target stages onto the
   image. **Into `data/`, NOT `seed/sync/`** -- that tree is gitignored

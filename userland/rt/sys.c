@@ -188,6 +188,10 @@ unsigned long long sys_monotonic_ns(void) {
     return (unsigned long long)syscall0(SYS_MONOTONIC_NS);
 }
 
+int sys_crashtest(struct crash_msg *msg) {
+    return (int)syscall1(SYS_CRASHTEST, (uint64_t)(uintptr_t)msg);
+}
+
 unsigned long long sys_fs_generation(void) {
     return (unsigned long long)syscall0(SYS_FS_GENERATION);
 }

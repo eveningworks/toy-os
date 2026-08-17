@@ -593,6 +593,31 @@ struct dirent {
                           // SYS_MONOTONIC_NS; none are duplicated here.
                           // Returns 0, or -1 if the pointer is bad.
 
+#define SYS_CRASHTEST 37 // RDI = pointer to a `struct crash_msg`
+                          // (abi/crash_abi.h), in and out.
+                          //
+                          // Enumerates the kernel's DELIBERATE fault
+                          // kinds, and triggers one. It exists because
+                          // the panic path is the one path a kernel
+                          // cannot exercise by accident and must not
+                          // get wrong -- validating a panic report
+                          // otherwise means editing a debug command to
+                          // dereference a bad pointer and taking it out
+                          // again. Linux ships the same thing (lkdtm).
+                          //
+                          // CRASH_OP_TRIGGER MAY NOT RETURN: on success
+                          // the machine has panicked. It returns 0 with
+                          // CRASH_F_ARMED clear when the kernel is not
+                          // armed -- which is the default, since a
+                          // deliberate crash hole has no business being
+                          // open unless `faultinject` was asked for on
+                          // the GRUB command line.
+                          //
+                          // Ring-0 kinds only: a ring-3 program needs
+                          // no help to dereference NULL, only to make
+                          // the KERNEL fault.
+                          // Returns 0, or -1 for a bad pointer or op.
+
 #define SYS_FS_GENERATION 36 // No arguments. Returns fs_generation()
                           // (api/fs.h) -- a counter the VFS bumps on
                           // every mutation of the filesystem, so a

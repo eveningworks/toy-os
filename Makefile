@@ -487,6 +487,12 @@ $(BUILD)/userland/gui/apps/calculator.o: USERLAND_CFLAGS += -Iapps
 KRELOCS_C = $(BUILD)/krelocs.c
 KRELOCS_O = $(BUILD)/krelocs.o
 
+# The panic's symbol table, generated the same way and for the same
+# reason: linker.ld places .ksyms after every address it records, so
+# pass 1's addresses stay correct in pass 2. See tools/gen_syms.py.
+KSYMS_C = $(BUILD)/ksyms.c
+KSYMS_O = $(BUILD)/ksyms.o
+
 $(BUILD)/kernel.pass1.elf: $(ASM_OBJECTS) $(C_OBJECTS) linker.ld
 	$(LD) $(LDFLAGS) -q -o $@ $(ASM_OBJECTS) $(C_OBJECTS)
 
@@ -496,6 +502,14 @@ $(KRELOCS_C): $(BUILD)/kernel.pass1.elf tools/genrelocs.py
 $(KRELOCS_O): $(KRELOCS_C)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(KSYMS_C): $(BUILD)/kernel.pass1.elf tools/gen_syms.py
+	python3 tools/gen_syms.py $< --out-c $@
+
+$(KSYMS_O): $(KSYMS_C)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+.PRECIOUS: $(KSYMS_C)
+
 # $(KRELOCS_C) is named here as well as via $(KRELOCS_O) because the
 # recipe below READS it. Without that, make classifies it as an
 # intermediate file -- generated only on the way to the .o -- and
@@ -504,9 +518,10 @@ $(KRELOCS_O): $(KRELOCS_C)
 # looks obviously correct. .PRECIOUS keeps it for the same reason.
 .PRECIOUS: $(KRELOCS_C)
 
-$(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) $(KRELOCS_O) $(KRELOCS_C) linker.ld
-	$(LD) $(LDFLAGS) -q -o $(BUILD)/kernel.pass2.elf $(ASM_OBJECTS) $(C_OBJECTS) $(KRELOCS_O)
+$(KERNEL): $(ASM_OBJECTS) $(C_OBJECTS) $(KRELOCS_O) $(KRELOCS_C) $(KSYMS_O) $(KSYMS_C) linker.ld
+	$(LD) $(LDFLAGS) -q -o $(BUILD)/kernel.pass2.elf $(ASM_OBJECTS) $(C_OBJECTS) $(KRELOCS_O) $(KSYMS_O)
 	@python3 tools/genrelocs.py $(BUILD)/kernel.pass2.elf --verify $(KRELOCS_C)
+	@python3 tools/gen_syms.py $(BUILD)/kernel.pass2.elf --verify $(KSYMS_C)
 	objcopy --remove-section='.rela.*' $(BUILD)/kernel.pass2.elf $@
 
 # Pulls in every .d file -MMD/-MP generated alongside its .o (same

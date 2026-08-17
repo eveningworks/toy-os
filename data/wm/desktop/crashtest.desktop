@@ -1,0 +1,14 @@
+# Crash Test -- deliberate faults, for exercising the panic path.
+#
+# ShowIn=startmenu deliberately: no desktop icon. Every other entry gets
+# one, but a single click on this one can end the machine, and an icon
+# sitting next to Notepad invites exactly that. It is a diagnostic, so it
+# lives where you go looking for it.
+#
+# The kernel half refuses unless booted with `faultinject` (see
+# docs/boot-flags.md); the app shows the buttons either way and says so.
+Name=Crash Test
+Exec=/bin/wm/demos/crashtest
+Category=demos
+Icon=!
+ShowIn=startmenu

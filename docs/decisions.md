@@ -129,6 +129,8 @@ there when you add an entry, or the index quietly stops being one.
 - [The hardware cursor left the ring-3 migration, because it is switched off everywhere](#the-hardware-cursor-left-the-ring-3-migration-because-it-is-switched-off-everywhere)
 - [Cursor themes: shapes are data, colours are not, and the app never sees pixels](#cursor-themes-shapes-are-data-colours-are-not-and-the-app-never-sees-pixels)
 - [A whole-file read is not re-entrant, and the VFS refuses the second one](#a-whole-file-read-is-not-re-entrant-and-the-vfs-refuses-the-second-one)
+- [The panic names the function, from a table baked into the image](#the-panic-names-the-function-from-a-table-baked-into-the-image)
+- [Deliberate kernel faults are a table, gated by a boot flag](#deliberate-kernel-faults-are-a-table-gated-by-a-boot-flag)
 - [The desktop's app list is a directory of files, not a table in the kernel](#the-desktops-app-list-is-a-directory-of-files-not-a-table-in-the-kernel)
 - [Widgets are added once a second real caller needs them -- except the checkbox](#widgets-are-added-once-a-second-real-caller-needs-them----except-the-checkbox)
 - [A table PULLS its rows, and stores none of them](#a-table-pulls-its-rows-and-stores-none-of-them)
@@ -6989,3 +6991,66 @@ pointer-motion event -- was a bug of its own, but fixing only the storm
 would have hidden the corruption until something else interleaved two
 file reads. When a pathological workload triggers a crash, fix the crash
 first and the workload second.
+
+## The panic names the function, from a table baked into the image
+
+A panic used to print a bare address, and the kernel relocates itself to
+a random base at boot -- so reading one meant scrolling back to the boot
+banner for the relocation offset, subtracting by hand, and running
+`addr2line` on another machine. In practice that meant a panic arrived
+as a photograph and cost a round trip.
+
+`tools/gen_syms.py` bakes the function symbols into a `.ksyms` section,
+and the panic prints `in crash_gp_fault+0xa` plus a named stack scan.
+
+**Three decisions inside that are worth keeping.**
+
+*Placement.* `.ksyms` sits after everything it records, exactly as
+`.krelocs` does, so adding the table cannot move a single address in it
+and a first link pass's addresses stay valid in the second. `--verify`
+re-derives it from the final image and fails the build if that ever
+stops being true -- the expensive way to find out is a panic naming the
+wrong function, which is worse than no name at all.
+
+*No pointers in the blob.* A table of `const char *` or `&function`
+would add one relocation PER SYMBOL to the ~8,000 the kernel already
+patches at boot. So addresses are link-time values in u32 literals and
+names live in a string table addressed by offset; the resolver subtracts
+the relocation delta itself.
+
+*A stack scan, not a frame-pointer walk.* The kernel builds at -O2,
+which omits frame pointers, so an RBP chain would be fiction. The scan
+overreports -- stale return addresses from earlier calls are still on
+the stack -- and the output says so. Overreporting with a caveat beats
+nothing.
+
+The register dump earns its place for a specific reason: a #GP has no
+CR2, so unlike a page fault there is no address to consult, and the bad
+pointer is usually sitting in a register. The first real panic printed
+`RAX=deadbeefdeadbeef`, which was exactly the address that faulted.
+
+## Deliberate kernel faults are a table, gated by a boot flag
+
+The panic path is the one path a kernel cannot exercise by accident and
+must not get wrong. Validating a panic report used to mean editing a
+debug command to dereference a bad pointer, rebuilding, and taking the
+change back out -- which is why `kernel/core/crashtest.c` exists. Linux
+ships the same idea for the same reason (`lkdtm`, sysrq-c).
+
+**The kernel owns the LIST, not just the triggers.** A GUI app, a test
+tool and any future front end enumerate it through `SYS_CRASHTEST`
+rather than hardcoding, so a fault kind added in the kernel appears
+everywhere with no edit -- the same rule the settings registry and the
+`.desktop` entries already follow.
+
+**It is gated on `faultinject`**, off by default, in the same style as
+`nokaslr`/`nopat`/`notsc`/`ata nodma`: each of those exists so a path
+that is otherwise unreachable can be reached deliberately, and a panic
+on demand is exactly that. The refusal is what makes the gate testable
+in the ordinary suite -- `tools/crashtest_test.py` runs in
+`gui_regress.py` precisely because the dangerous half is closed.
+
+The table covers RING-0 faults only. A ring-3 program needs no help to
+dereference NULL; the Crash Test app performs those itself, which is
+also what lets it demonstrate the contrast -- a ring-3 button ends the
+process and the desktop carries on, a ring-0 button ends the machine.

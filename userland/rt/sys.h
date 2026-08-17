@@ -7,7 +7,8 @@
 #include "proc_info.h" // struct proc_info -- sys_proc_info() below
 #include "pci.h"     // struct pci_device, for sys_pci_info()
 #include "cpuinfo.h" // struct cpu_info, for sys_cpu_info()
-#include "setting_abi.h" // struct setting_msg, struct sys_info
+#include "setting_abi.h"
+#include "crash_abi.h" // struct setting_msg, struct sys_info
 
 // libsys -- typed wrappers for every syscall a ring-3 program can make.
 //
@@ -182,6 +183,15 @@ unsigned long long sys_monotonic_ns(void);
 // when it moves. Only ever increases, and is non-zero once a filesystem
 // is mounted, so 0 is safe as "not sampled yet".
 unsigned long long sys_fs_generation(void);
+
+// The kernel's DELIBERATE fault table -- see abi/crash_abi.h. `msg->op`
+// picks enumerate or trigger.
+//
+// CRASH_OP_TRIGGER MAY NOT RETURN: on success the machine has panicked.
+// It returns -1 when the kernel is not armed (CRASH_F_ARMED clear in
+// the reply), which is the default -- `faultinject` on the GRUB command
+// line is what opens the hole.
+int sys_crashtest(struct crash_msg *msg);
 
 // Sets the console colours this process writes in. Both are
 // `enum vga_color` values; out-of-range is refused, not clamped.
