@@ -1541,6 +1541,14 @@ it is **asynchronous** -- call `DebugConsole.settle()` before asserting,
 because a command dispatched from inside `wm_run()` cannot block waiting
 on `wm_run()`.
 
+**`DebugConsole.capture_panic()` is how you read a dying guest.** A
+panicking kernel never returns a prompt, so the normal command/response
+cycle cannot complete and every read looks like a timeout; sending an
+empty line and taking what arrives before the read gives up is the
+panic block. **Do NOT open a second connection to the serial socket** --
+the console already holds it and the new one receives nothing, which
+cost three attempts before the helper existed.
+
 **`settle()` POLLS, and don't replace it with a sleep.** It waits on
 `gui state`'s `pending` (the WM's own undelivered-event count) rather
 than sleeping a fixed interval, because the loop is not a metronome: a
@@ -2030,6 +2038,14 @@ repeated manual steps to be worth automating:
   include a point that should NOT change -- half the assertion is the
   neighbour staying put. `--box N` averages a square, for anti-aliased
   edges where a single pixel is a coin toss.
+- **`panic_resolve.py`** -- paste a panic (from the log, or typed off a
+  photograph) and it names every address in it, RIP and stack scan
+  alike, annotating the original lines. It finds the relocation delta
+  from the text itself. **It checks the BUILD ID first and refuses to
+  be quietly wrong**: resolving against a different build gives
+  confident, plausible, wrong names -- verified, the address that was
+  `try_merge_next` in one report is `rtc_read_local` a few commits
+  later. `--elf` points it at a userland ELF for a ring-3 crash.
 - **`gen_syms.py`** -- bakes the kernel's function symbol table into the
   image so a panic can name the function instead of printing an address
   nobody can resolve (the kernel relocates itself, so a raw RIP is

@@ -555,6 +555,14 @@ twice more.**
     every injected input is asserted TWICE, in the compositor's log AND
     in UI Demo's, because "the compositor got the click" is equally
     satisfied by an implementation that STOLE the input stream.
+  - `python3 tools/crashtest_test.py` -- the fault paths (9 checks):
+    the Crash Test app enumerates the kernel's fault kinds, kernel
+    faults are REFUSED while disarmed, and a ring-3 crash kills the app
+    without taking the desktop with it. Safe in gui_regress only
+    because the dangerous half needs `faultinject` on the command line.
+  - `python3 tools/panic_resolve.py < panic.txt` -- not a test: names
+    every address in a pasted panic. Checks the build id first and says
+    so when it does not match, because wrong names are worse than none.
   - `python3 tools/cursor_theme_test.py` -- cursor themes: the theme
     loads COMPLETELY, switching it changes the drawn pointer, the size
     setting scales it by the right magnitude, and a theme that does not
@@ -1755,7 +1763,36 @@ written earlier, not a bug at that line: reproduce with `heap debug on`
 typed at the physical shell BEFORE `gui`, which red-zones every
 subsequent allocation and names the offending block at the free.
 
-**And two process lessons from the same day:**
+**Debugging a crash, end to end -- the loop that worked:**
+
+1. `heap debug on` at the PHYSICAL shell, before `gui`. Red-zoned
+   blocks report the violation at the offending free WITH the block
+   named. Three scripted reproductions had failed to fire; this named
+   the culprit in one run, and the corrupting bytes (`ame=Calc`) named
+   the writer.
+2. Read the panic. It now prints the function, the faulting context,
+   the registers, the build id and a named stack scan -- and
+   `tools/panic_resolve.py` resolves a pasted one (it checks the BUILD
+   ID first, because resolving against a different build gives
+   confident, wrong names).
+3. Reproduce it deliberately with the Crash Test app or
+   `SYS_CRASHTEST`, booting with `faultinject`.
+4. **Prove it is yours before owning it**: stash, rebuild, run the same
+   seed against HEAD. A damage sweep that reported three violations
+   showed FIVE on HEAD, each of the three a subset -- pre-existing, in
+   one build cycle.
+
+**When a panic lands in `kfree`/`try_merge_next`/`split_block`, that is
+heap CORRUPTION written earlier, not a bug at that line.** The RIP will
+point nowhere near the cause. Go to step 1.
+
+**And three process lessons from the same day:**
+
+- **`grep -E "error|warning"` over a build log is CASE-SENSITIVE and
+  hides `Error 1`.** A kernel link failure read as a clean build for two
+  rounds because of that filter. Grep case-insensitively, or check the
+  exit status -- a filter that can hide the failure is worse than no
+  filter.
 
 - **`grep -E "error|warning"` over a build log is case-sensitive and
   hides `Error 1`.** A kernel link failure (a struct copy GCC lowered to

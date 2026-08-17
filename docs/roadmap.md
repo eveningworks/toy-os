@@ -1636,6 +1636,21 @@ that nothing else owns.
 - [ ] Decide, in writing, what is deliberately NOT pursued (conformance
       testing, locales, pthreads, `select`/`poll`, terminal `ioctl`)
 
+### Idea: make heap debug reachable from boot (2026-08-17)
+
+`heap debug on` is a RUNTIME toggle, so allocations made before someone
+types it are not red-zoned -- and the desktop, the WM's window table and
+every driver's buffers are all allocated before that point. Catching a
+corruption whose victim was allocated at boot therefore needs luck.
+
+A `heapdebug` boot word would close that, in the same style as
+`nokaslr`/`nopat`/`notsc`/`faultinject`: every allocation from the first
+one gets a red zone. Not built. The cost is memory and speed on a boot
+nobody asked for it, which is exactly why it would be a flag.
+
+Raised after a corruption hunt where the runtime toggle DID find the
+culprit -- so this is an improvement, not a gap that blocked anything.
+
 ### DIAGNOSED and fixed: GP fault in the heap after repeated setting changes (2026-08-17)
 
 Kept as a worked example, because the shape recurs.

@@ -159,6 +159,15 @@ class DebugConsole:
     def events(self, prefix="uidemo:"):
         """Kernel log lines emitted since the last command, as a list.
 
+        TRAP, and it has bitten twice: this filters the output of the ONE
+        command it issues. A line printed while some OTHER command was in
+        flight is consumed by that command's read and is invisible here
+        -- spawn() polls `gui windows --json` while waiting for a window,
+        so an app's own startup lines routinely land in one of those. Use
+        logs() when you need everything the app said; it reads send()'s
+        accumulated buffer instead. uidemo_test.py errored at startup
+        roughly one run in six until it switched.
+
         klog output and command output share this wire, and injected
         input is asynchronous -- so the lines an event produces arrive
         AFTER the command that queued it returns, and land in the next
@@ -341,6 +350,31 @@ class DebugConsole:
                 return win
             time.sleep(0.2)
         return None
+
+    def capture_panic(self, seconds=4.0):
+        """Text the guest printed while dying, after something fatal.
+
+        A panicking kernel never returns a prompt, so the ordinary
+        command/response cycle cannot complete and every read looks like
+        a timeout. What DOES work is sending an empty line and taking
+        whatever arrives before the read gives up -- which is exactly
+        the panic block.
+
+        Do NOT open a second connection to the serial socket to do this:
+        the console already holds it and the new one receives nothing.
+        That mistake cost three attempts before this existed.
+
+        Returns the captured text (possibly empty, if nothing panicked).
+        Pair it with tools/panic_resolve.py to name the addresses -- or
+        just read it, since the kernel bakes a symbol table in now.
+        """
+        time.sleep(seconds)
+        prev = self.timeout
+        try:
+            self.timeout = seconds
+            return self.send("")
+        finally:
+            self.timeout = prev
 
     def damage_verify(self, on=True):
         """Turn the damage-invariant checker on/off. Pair with
