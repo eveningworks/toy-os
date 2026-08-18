@@ -356,18 +356,54 @@ def main():
     #
     # Task Manager reports `taskmgr: selected pid N` on every row click,
     # so ask instead of assume.
+    # ASK WHERE IT IS, then click there -- rather than clicking rows until
+    # one answers. The app already reports `taskmgr: order <pid> <pid>
+    # ...` in SCREEN order whenever that order changes, so the row is a
+    # lookup, not a search.
+    #
+    # The blind scan this replaces was fragile in three ways at once, and
+    # went intermittent for it: it gave up after 8 rows, it could not
+    # tell "the victim is not in the table YET" (it is spawned moments
+    # before, and the table refreshes on a 500ms tick) from "not found",
+    # and a re-sort between two of its clicks could move the victim into
+    # a row it had already visited.
+    # The order is logged ON CHANGE, so there may be no new line to wait
+    # for -- the current one was already drained by the checks above,
+    # which is why `lay` (read a few lines up) is the first place to
+    # look. logs() clears what it returns, so anything not kept is gone.
+    def screen_order(deadline, known):
+        if known and victim_pid in known:
+            return known
+        seen = []
+        while time.time() < deadline:
+            seen += dbg.logs()
+            for line in reversed([l for l in seen if "taskmgr: order " in l]):
+                pids = [int(v) for v in line.split("taskmgr: order ", 1)[1].split()
+                        if v.strip().isdigit()]
+                if victim_pid in pids:
+                    return pids
+            time.sleep(0.3)
+        return None
+
     victim_row = None
-    for row in range(8):
+    known_order = lay.get("order")
+    deadline = time.time() + 8.0
+    # Up to three attempts: the order can change between reading it and
+    # clicking (the table refreshes on its own tick), and the click's own
+    # `selected pid` reply is what settles whether it did.
+    for _ in range(3):
+        pids = screen_order(deadline, known_order)
+        if pids is None:
+            break
+        known_order = None   # a retry must re-read, not reuse
+        row = pids.index(victim_pid)
         ry = cy + ty + lay["header_h"] + lay["row_h"] * row + lay["row_h"] // 2
         dbg.logs()
         dbg.send("gui click %d %d" % (cx + tx + 60, ry))
         dbg.settle()
         time.sleep(0.3)
-        for line in dbg.logs():
-            if f"taskmgr: selected pid {victim_pid}" in line:
-                victim_row = row
-                break
-        if victim_row is not None:
+        if any(f"taskmgr: selected pid {victim_pid}" in l for l in dbg.logs()):
+            victim_row = row
             break
     if not check("found the victim's row in the table",
                  victim_row is not None, f"pid {victim_pid}"):

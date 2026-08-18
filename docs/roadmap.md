@@ -1401,17 +1401,34 @@ guess.*
       the pid it spawned -- robust to sort order, to the desktop being
       present, and to any future process appearing.
 
-- [ ] **`taskmgr_test.py`'s "found the victim's row in the table" is
-      INTERMITTENT.** Measured 2026-08-18 with `python3
-      tools/flake_hunt.py taskmgr -n 3`: 2 pass, 1 fail, failing check
-      always that one, against the RING-0 desktop. It arrived with the
-      find-by-pid fix (d648b89) and is a property of the search loop
-      rather than of the WM -- the row is found by clicking rows until
-      the app reports the wanted pid, so a row that scrolls, re-sorts or
-      is not yet drawn when the click lands ends the search early. Get a
-      rate over more runs before fixing; the loop should probably assert
-      it saw every row rather than giving up at the end of the visible
-      ones.
+- [x] ~~**`taskmgr_test.py`'s "found the victim's row" is
+      INTERMITTENT.**~~ The check is rewritten and no longer fragile,
+      but **the flake itself stopped reproducing before that**, and the
+      cause was never identified -- recorded plainly rather than
+      claimed as fixed.
+
+      Measured 2026-08-18: 1 fail in 3 in the morning; 12 consecutive
+      clean runs later the same day, before the tool was touched.
+      Something between those two points changed the timing (the ring-3
+      desktop became the default, and syscall_dispatch()'s frame lost
+      4 KiB), but nothing was measured tying either to this.
+
+      What WAS wrong and is now fixed: the check clicked rows 0..7 until
+      one answered, which is fragile in three ways at once -- it gave up
+      after 8 rows, it could not tell "the victim is not in the table
+      YET" (it is spawned moments earlier and the table refreshes on a
+      500ms tick) from "not found", and a re-sort between two of its
+      clicks could move the victim into a row it had already visited.
+      The app reports `taskmgr: order <pid> ...` in screen order, so the
+      row is a lookup now, with up to three attempts because the order
+      can change between reading it and clicking. Positive control: an
+      absent pid reddens exactly that check.
+
+      The trap it re-taught, which is this repo's oldest: **`logs()`
+      clears what it returns.** The order line had already been drained
+      by an earlier check, so the first version waited 8s for a line
+      that was never coming again -- the app logs the order ON CHANGE,
+      not on request.
 
 - [x] ~~**The ring-3 desktop cannot give a client a window.**~~ FIXED
       2026-08-17. `win_server_request()` had `if (!g_ops) return -1;`,

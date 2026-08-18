@@ -82,11 +82,22 @@ def find_window(dbg, want):
 
 
 def text_pixels(qmp, tmp, name, box):
-    from PIL import Image
-    p = os.path.abspath(os.path.join(tmp, name))
-    qmp.screenshot(p)
-    with Image.open(p) as im:
-        return im.convert("RGB").crop(box).tobytes()
+    """The text area, once the frame has settled.
+
+    Every check here compares one capture against another, so a capture
+    landing mid-paint fails a comparison with nothing wrong with it --
+    the failure mode that made calculator_client_test.py intermittent
+    (see QMPSession.stable_pixels()). This tool showed the same shape
+    once, on "New clears the editor" and its partner, both of which are
+    comparisons against an earlier capture.
+
+    The caret is why this needs saying rather than being obvious: it
+    does NOT blink here (Notepad draws it only where the cursor is, and
+    the cursor does not move on its own), so consecutive reads of a
+    quiet editor really are identical. A tool whose window animates
+    must not use this.
+    """
+    return qmp.stable_pixels(os.path.abspath(os.path.join(tmp, name)), box)
 
 
 def run(dbg, qmp, tmp, shot_dir, res):
