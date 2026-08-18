@@ -245,17 +245,34 @@ int keyboard_getchar_mods(uint8_t *out_mods) {
         // limitation: it does NOT get polled while a blocking command,
         // the GUI's own event loop, or a ring-3 process is running --
         // userland/wm/wm.c's loop covers the GUI case separately).
-        vga_cursor_tick();
+        // ...but ONLY WHEN THE CONSOLE OWNS THE SCREEN. A suspended
+        // reader is one whose screen belongs to a compositor, and the
+        // console's cursor tick and present both write to the
+        // framebuffer -- so doing them anyway paints a blinking text
+        // cursor on top of the desktop, at whatever cell the shell's
+        // prompt left it. Reported from a screenshot: a blinking block
+        // sitting on a desktop icon.
+        //
+        // This is the invariant scheduler_idle() already states -- that
+        // console upkeep belongs to whoever owns the screen, which is
+        // why the tick and the present are deliberately NOT part of it.
+        // Suspending the READ was not enough; the loop body had to stop
+        // drawing too.
+        if (!keyboard_blocking_suspended()) {
+            vga_cursor_tick();
+        }
         // The kernel's idle work (scheduler.h) -- the serial debug
-        // console, today. The cursor tick and the present around it are
-        // deliberately NOT part of it: they are the console's own
-        // upkeep, and the GUI desktop owns the screen while it is up.
+        // console, today. Runs either way: it is the one thing here that
+        // is not the console's, and a suspended shell must still drain
+        // the debug console and feed raw input to the compositor.
         scheduler_idle();
         // The physical console's flush point: it draws into a back
         // buffer and this is where "output is finished, we are waiting
         // for a human" is true, so it is where the screen catches up.
         // Cheap when nothing changed. See vga.h's vga_present().
-        vga_present();
+        if (!keyboard_blocking_suspended()) {
+            vga_present();
+        }
         __asm__ volatile ("hlt");
     }
 

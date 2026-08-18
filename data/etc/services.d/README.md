@@ -13,14 +13,23 @@ so there is no second format to maintain.
 | `Description` | no | A sentence for a human. Unused today; `service status` will show it. |
 | `Exec` | yes | An absolute path to a `/bin` binary. No arguments, no shell -- `SYS_SPAWN` takes a path. |
 | `Target` | no | `text`, `graphical`, or absent. Absent means **every** target. |
-| `Restart` | no | `always` (default) or `no`. |
+| `Restart` | no | `on-failure` (default), `always`, or `no`. |
 
-`Restart=always` restarts the service after a backoff that doubles from
-0ms to a cap; a service that keeps dying quickly is declared a crash
-loop and left down, with a line saying so. That is systemd's
-`Restart=always` plus `StartLimitBurst`, and the give-up matters more
-than the restart: without it a binary that faults at its entry point
-spins the machine forever.
+`Restart=on-failure` (the default) restarts the service if it CRASHED or
+was killed, and leaves it down if it exited cleanly -- a process that
+returned 0 asked to stop. That distinction is load-bearing rather than
+theoretical: the Start menu's *Exit to shell* makes the desktop return 0,
+and under `always` init put it straight back and the menu item silently
+did nothing. `always` restarts it either way; `no` never does (it still
+gets its ONE start -- the key says what happens when it EXITS, not
+whether it runs).
+
+A restart waits a backoff that doubles from 0 ms to a cap, and a service
+that keeps dying QUICKLY is declared a crash loop and left down with a
+line saying so. That is systemd's `StartLimitBurst`, and the give-up
+matters more than the restart: without it a binary that faults at its
+entry point spins the machine forever, with no console left to fix it
+from.
 
 **These files are seeded from here, not authored on the image.**
 `seed/sync/` is a build-staging tree `make clean` deletes and
@@ -52,8 +61,21 @@ straight back:
     ps                           # find the toywm pid
     kill <pid>                   # and it stays dead
 
-A service added while the machine is running is picked up the same way,
-and a descriptor whose `Name` matches a service already known is updated
-IN PLACE -- it keeps its pid, its failure count and its backoff. Matching
-on `Name` rather than on filename is what makes that possible; a fresh
-entry would look "not running" and be started a second time.
+A descriptor whose `Name` matches a service already known is updated IN
+PLACE -- it keeps its pid, its failure count and its backoff. Matching on
+`Name` rather than on filename is what makes that possible; a fresh entry
+would look "not running" and be started a second time.
+
+**WHEN the rescan happens, stated exactly, because it is not "immediately".**
+init rescans on every pass of its loop -- and with a service running it
+BLOCKS in `waitpid(-1)` between passes, consuming nothing. So a change to
+this directory is noticed the next time init WAKES, which is when one of
+its children exits (or, with no children at all, within 250 ms).
+
+That is deliberate rather than an oversight: a periodic rescan would mean
+init polling forever on an idle machine, which is the whole thing
+`SYS_SLEEP` exists to avoid. It also lands the right way round for the
+case that matters -- REMOVING a descriptor and then killing the service
+works, because the kill is itself the wake-up. ADDING one while the
+desktop is up waits for something to happen; `spawn /bin/hello` at the
+shell is a one-line nudge, since `spawn` reparents to init.

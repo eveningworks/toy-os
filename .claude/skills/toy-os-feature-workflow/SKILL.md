@@ -2759,6 +2759,102 @@ Worth checking against before debugging from scratch:
   treated as schedulable.** The legacy `process_run_ring3()` path has no
   `procs[]` slot, so it must not be switched away from.
 
+**2026-08-18 (init stage 2: a boot target, services, supervision). THE
+THEME OF THIS SESSION IS THAT AUTOMATING A LIFECYCLE REMOVES INTERLOCKS
+NOBODY KNEW THEY DEPENDED ON.** Read that first; it caused four of the
+five bugs below.
+
+Where the project stands: init reads `system.default_target`
+(`text`/`graphical`, overridable for one boot with `target=` on the GRUB
+line) and starts the services described in `/etc/services.d`. The desktop
+is one of them -- init's child, restarted when it dies, with a backoff and
+a crash-loop give-up. `gui` still starts one by hand and now refuses when
+a desktop already holds the compositor role.
+
+**THE INTERLOCK LESSON, in the four places it bit.** Before this, `gui`
+blocked the shell inside its own spawn-and-wait loop for the desktop's
+entire lifetime. That was never a designed guarantee, and four things
+were silently relying on it:
+
+  - **The physical shell stopped competing for the keyboard.** With the
+    desktop started by init, the shell sits at a prompt behind it and both
+    drained the same key ring -- a key typed at the desktop got executed
+    by an invisible shell. Fixed with a suspend flag set from the one
+    place the compositor role changes.
+  - **...and the shell stopped DRAWING.** Suspending the read was not
+    enough: the wait loop's BODY calls `vga_cursor_tick()` and
+    `vga_present()`, which publish into the framebuffer the compositor
+    owns. A blinking text cursor appeared on top of a desktop icon. **The
+    user found it in a screenshot while all 23 GUI tools were green.**
+  - **Two GUI tools could take the compositor role and keep it.**
+    `screen_surface_test.py` and `compositor_death_test.py` both kill the
+    desktop first; init restarted it with a zero backoff and it claimed
+    the role straight back.
+  - **`Exit to shell` worked.** It makes the desktop return 0, and an
+    unconditional restart put it straight back, so the menu item silently
+    did nothing.
+
+So: **when you make something automatic, enumerate what the manual step
+was quietly guaranteeing.** "Nothing else was running at the same time"
+is the most common one.
+
+**AND THE GAP THAT LET THE CURSOR BUG THROUGH IS STRUCTURAL, NOT AN
+OVERSIGHT.** Every GUI tool here DRIVES the desktop and then asserts on
+what changed. Not one asked the opposite question -- with nobody touching
+it, does the screen sit still? A suite built entirely from "do X, check Y
+changed" cannot see anything that happens when nothing is done.
+`tools/idle_desktop_test.py` asks it now, and its own control is the
+part to copy: the taskbar clock must CHANGE, which is what proves the
+capture pipeline can see motion at all. Without such a control, a harness
+returning one cached frame reports a beautifully steady desktop and
+passes.
+
+**A PREDICATE NAMED AFTER THE ONLY IMPLEMENTATION IT EVER HAD.**
+`win_server_active()` means "a RING-0 presentation layer is registered".
+The desktop stopped being one when it became a process, and three KTESTs
+that guarded themselves with it -- so they would SKIP while a desktop was
+up -- quietly stopped skipping, with their comments still claiming they
+did. Nothing noticed until `make test` finally ran with a desktop up.
+`win_server_any()` is the predicate that covers both kinds, and one
+non-test caller had been open-coding it correctly all along. **When a
+subsystem gains a second implementation, re-read every predicate named
+after the first.**
+
+**"IT PREDATES ME" IS A MEASUREMENT, AND IT PAID FOR ITSELF TWICE.**
+Three intermittent ktest failures appeared. Stashing the whole session
+(`git stash push -u -m <tag>`, apply by SHA, never a bare pop) and
+building the previous commit gave rates rather than verdicts: the
+console-timeout flake reproduced **5 boots in 9** on HEAD, and
+`heap-debug`'s use-after-free check **1 run in 15** in-guest. Both
+pre-existing, both now recorded with the measured rate instead of a
+guess. `tools/flake_hunt.py ktest -n N` is the loop for this now.
+The one that WAS mine, found the same way: three heap KTESTs compared
+`heap_used_bytes()` against a snapshot, which any concurrent kernel
+allocation breaks -- newly true because a desktop is always running.
+Fixed by establishing the precondition (`scheduler_preempt_disable()`),
+not by loosening the assertion.
+
+**A KTEST RUN LEAVES STATE ON `disk.img`, so a rate that CLIMBS run over
+run is a dirty fixture, not a worsening bug.** One failed write leaked
+two blocks, and the next two runs' `fsck` checks failed against the
+leftovers. `make clean-disk && make iso` between batches.
+
+**WHEN A CHECK YOU JUST WROTE ASSERTS AN INTERMEDIATE STATE, ASK WHETHER
+IT STILL EXISTS.** Both compositor tools asserted "the role is released"
+by SAMPLING it -- and supervision refills it before a sample can see it
+empty, reusing the dead process's slot so even the pid looks unchanged.
+The first fix weakened the assertions to tolerate that. The right fix was
+to ESTABLISH the precondition (`rm /etc/services.d/toywm`, then kill) and
+keep the original assertions, which is strictly better evidence for the
+same property.
+
+**AND ONE FACTUAL ASIDE COST A DESIGN DECISION.** Presenting the restart
+policy options, the note against "restart only on non-zero exit" said "a
+kill is exit code 0-ish here, so `kill` would still restart it". That is
+false -- a killed process reports -1. A wrong aside made the right option
+look useless, the wrong one was chosen, and it broke *Exit to shell*.
+**Check the claim you attach to an option, not just the options.**
+
 ## When the user's request is small
 
 Not every message needs the full six-step ceremony. A one-line

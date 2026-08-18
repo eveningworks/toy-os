@@ -1167,6 +1167,16 @@ technical conventions below:
   failures that each lasted under two seconds -- the threshold is on how
   long it RAN, so killing it by hand twenty times never gives up on it
   while a binary that cannot start is abandoned in four seconds.
+  **`Restart=on-failure` is the DEFAULT, and a clean exit means stop** --
+  the Start menu's *Exit to shell* returns 0, and under an unconditional
+  `always` init put the desktop straight back and that menu item silently
+  did nothing. `always` and `no` are the other two values.
+  **The rescan happens when init WAKES, not immediately**: it blocks in
+  `waitpid(-1)`, so a change to `/etc/services.d` is seen the next time a
+  child exits (or within 250 ms with no children). That is why REMOVING a
+  descriptor then killing the service works -- the kill is the wake-up --
+  while ADDING one while the desktop is up needs a nudge
+  (`spawn /bin/hello`, since `spawn` reparents to init).
   **`gui` at the shell now REFUSES when a desktop is already up** and
   names the pid; it is still how you reach one from a `target=text`
   boot. **init is spawned AFTER `debug_console_init()`**, and that
@@ -1203,6 +1213,17 @@ technical conventions below:
   and deaf**, which looks exactly like a hung machine. Real console
   ownership is the TTY milestone's job; this is a placeholder that makes
   exactly one thing read the keyboard at a time.
+  **SUSPENDING THE READ WAS NOT ENOUGH -- the loop BODY draws.** The
+  first version put the check in the `while` condition only, so the
+  blocking reader stopped returning keys and went on calling
+  `vga_cursor_tick()` and `vga_present()` every iteration: console
+  upkeep, published straight into the framebuffer the compositor owns.
+  The symptom was a blinking text cursor sitting on a desktop icon,
+  reported by the user from a screenshot with **all 23 GUI tools
+  green**. Both calls are guarded now; `scheduler_idle()` is not, because
+  it is the one thing in that loop that is not the console's. The
+  general form: when you suspend a loop, ask what its BODY does as well
+  as what its exit condition is.
 - **`win_server_active()` MEANS A RING-0 LAYER, and the desktop is not
   one.** Use **`win_server_any()`** for "is there a window server at
   all" -- either a ring-0 presentation layer or a registered compositor,
@@ -3010,6 +3031,18 @@ repeated manual steps to be worth automating:
   against each other -- neither half means much alone. Its positive
   control reddens exactly one check and leaves the winclient ones green,
   which is worth reading before trusting them.
+- **`idle_desktop_test.py`** -- with nobody touching it, does the screen
+  SIT STILL? Two regions (the icon column, an empty patch) must be
+  pixel-identical across eight captures. Written after a blinking console
+  cursor appeared on top of a desktop icon and every one of the 23 GUI
+  tools passed, for a structural reason worth knowing: they all DRIVE the
+  desktop and assert on what changed, so nothing was asking the opposite
+  question. It is the cheapest check for a whole class of bug -- a second
+  owner writing to the framebuffer. **The taskbar is excluded and its
+  clock is the control**: it must CHANGE, which is what proves the
+  capture pipeline can see motion at all (without it, a harness handing
+  back one cached frame would report a beautifully steady desktop). In
+  `gui_regress.py`.
 - **`blank_window_test.py`** -- opens EVERY app in the registry and
   requires its window to contain more than a flat fill. Reads the app
   list from the KERNEL (`gui apps`), so an app added tomorrow is covered

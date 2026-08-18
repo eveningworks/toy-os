@@ -350,6 +350,44 @@ def main():
             # on it, which is the opposite of what supervision is for.
             check("a killed-after-running desktop is not treated as a crash loop",
                   "toywm is crash-looping" not in logs)
+
+            # THE OTHER HALF OF THE POLICY, and the one that regressed: a
+            # CLEAN exit is a request to stop. The Start menu's "Exit to
+            # shell" makes the desktop return 0, and under an
+            # unconditional restart init put it straight back, so the menu
+            # item silently did nothing. `gui close`-style paths cannot be
+            # driven from here, so this asserts it the way the code
+            # decides it -- by exit CODE -- using a service of its own.
+            #
+            # /bin/hello exits 0 immediately, which is exactly the shape
+            # under test. It is written as a service with the default
+            # policy, so what is checked is the DEFAULT rather than a
+            # value this test chose.
+            vm.sh("write /etc/services.d/oneshot Name=oneshot")
+            vm.sh("append /etc/services.d/oneshot Exec=/bin/hello")
+
+            # AND THEN WAKE INIT. It rescans /etc/services.d on every
+            # pass of its loop, but with a child running it BLOCKS in
+            # waitpid -- so a descriptor added while the desktop is up is
+            # not noticed until something makes init loop. That is by
+            # design (a periodic rescan would mean init polling, which is
+            # the whole thing SYS_SLEEP exists to avoid) and it is why
+            # this needs a nudge: `spawn` reparents to init, so a
+            # short-lived program exiting is a wake-up.
+            vm.sh("spawn /bin/hello")
+
+            deadline = time.time() + 20
+            logs = ""
+            while time.time() < deadline:
+                logs = vm.sh("dmesg")
+                if "oneshot exited cleanly" in logs:
+                    break
+                time.sleep(0.5)
+            starts = len(re.findall(r"init: started oneshot as pid", logs))
+            check("a service that exits cleanly is NOT restarted",
+                  "oneshot exited cleanly -- not restarting it" in logs
+                  and starts == 1,
+                  f"{starts} start(s)")
     finally:
         vm.run("stop", check_rc=False)
         if tmp:

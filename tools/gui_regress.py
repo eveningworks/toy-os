@@ -112,6 +112,7 @@ TOOLS = [
     ("taskmgr", "taskmgr_test.py", "the table widget, resize reflow, ending a process"),
     ("singleinst", "single_instance_test.py", "one copy of an app, and relaunch raises it"),
     ("cpanel", "cpanel_test.py", "the settings registry, in ring 3"),
+    ("idle", "idle_desktop_test.py", "nothing paints over an idle desktop"),
 ]
 
 # Roughly how long each tool takes, in seconds, used ONLY to decide what
@@ -136,6 +137,7 @@ COST_S = {
     # only makes the start order slightly wrong -- but a tool whose real
     # cost has tripled would quietly become the straggler.
     "forcequit": 71,   # waits out real ping timeouts; inherently slow
+    "idle": 10,        # eight captures a third of a second apart
     "notepad": 37,
     "menubar": 32,
     "gfxdemo": 24,

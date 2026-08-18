@@ -48,8 +48,10 @@ QEMU, and it does not stop at "hello world from the kernel":
   canaries and kernel ASLR.
 - **Real processes** — an ELF64 loader, ring-3 user mode, a table-driven
   syscall layer, a preemptive scheduler, **an `init` as pid 1** that
-  adopts and reaps orphans, a process tree with pipes and
-  `spawn`/`waitpid`, and per-process FPU state across context switches.
+  adopts orphans and **supervises services** described by files in
+  `/etc/services.d` (the desktop is one, restarted if it dies), a process
+  tree with pipes and `spawn`/`waitpid`, and per-process FPU state across
+  context switches.
 - **Two real filesystems** — TFS3 (the default: block groups, real
   inodes, hardlinks, journal transactions, superblock backups) and TFS2
   (the original, kept as a second backend). Both journal metadata, so
@@ -91,10 +93,14 @@ deleted — about 10,400 lines — so there is one implementation again.
 Killing the desktop is survivable: the kernel revokes the grant, asks
 client windows to close and restores the text console.
 
-**In progress** — an [init and a process
-tree](docs/init-design.md): processes have a parent and `waitpid(-1)`
-reaps any child, which is what an init as pid 1 needs. The shell moving
-to ring 3 is planned behind it.
+**[init](docs/init-design.md) holds pid 1 and starts the desktop**
+(2026-08-18): `system.default_target` (`text`/`graphical`) says what the
+machine is for, `/etc/services.d` says what to start, and init restarts a
+service that dies — with a backoff, a give-up so a crash loop cannot spin
+the machine, and `Restart=on-failure` semantics so a clean exit (the Start
+menu's *Exit to shell*) means what it says. `target=text` on the GRUB line overrides the target for
+one boot without rewriting the file. **In progress** — a console device,
+then the shell moving to ring 3.
 
 **Known gaps** — no USB stack, so input on real hardware depends on the
 firmware's legacy PS/2 emulation. No networking, no SMP, no demand
@@ -142,8 +148,9 @@ make run
 ```
 
 That builds the kernel, seeds a disk image, produces `toy-os.iso` and
-boots it in QEMU. Type `help` at the `/>` prompt, or `gui` for the
-desktop (*Exit to shell* in the Start menu comes back). PageUp/PageDown
+boots it in QEMU. **init brings the desktop up on its own**; *Exit to
+shell* in the Start menu drops to the `/>` prompt, and `gui` goes back.
+For a text-only boot, `make iso KCMDLINE="target=text"`. PageUp/PageDown
 scrolls the console history, including the boot log.
 
 ```bash

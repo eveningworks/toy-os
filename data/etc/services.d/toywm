@@ -6,4 +6,4 @@ Name=toywm
 Description=The desktop
 Exec=/bin/wm/system/toywm
 Target=graphical
-Restart=always
+Restart=on-failure

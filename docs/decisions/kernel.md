@@ -2759,12 +2759,34 @@ been restarted. That distinction is what lets a desktop be killed by
 hand twenty times without ever being given up on, while a binary that
 cannot start at all is abandoned in four seconds.
 
+**A CLEAN EXIT IS A REQUEST TO STOP.** `Restart=on-failure` is the
+default: a service that returned 0 stays down, one that crashed or was
+killed comes back. `always` restarts either way, `no` never does. This
+was not the first design -- `always` was, and it broke a real feature:
+the Start menu's *Exit to shell* makes the desktop return 0, so init put
+it straight back and the menu item silently did nothing.
+
+Worth recording is WHY the wrong option was chosen. When the two policies
+were offered, the note against on-failure said "a kill is exit code 0-ish
+here, so `kill` would still restart it" -- which is simply false; a killed
+process reports -1. A wrong factual aside made the right option look
+useless, and it was only caught by opening the Start menu afterwards.
+Check the claim you attach to an option, not just the options.
+
 **Removing a descriptor DISABLES the service rather than stopping it**,
 and init notices without a reboot -- it rescans when `fs_generation()`
 moves, the same free poll the desktop uses for `.desktop` files. That is
 systemd's `disable`/`stop` split, and it is the right way round: killing
 a running process because somebody edited a file in `/etc` is a
 surprise, while declining to restart it is what removing it means.
+
+**The rescan happens when init WAKES, not immediately** -- it blocks in
+`waitpid(-1)` between passes, so a change is seen the next time a child
+exits (or within 250 ms with no children). A periodic rescan would mean
+init polling forever on an idle machine, which is what `SYS_SLEEP` exists
+to avoid. It lands the right way round for the case that matters:
+removing a descriptor and then killing the service works, because the
+kill IS the wake-up.
 
 This was NOT designed in advance -- it was forced by two test tools, and
 the way it was forced is the interesting part. `screen_surface_test.py`
@@ -2824,3 +2846,30 @@ that registers and then never draws leaves a console that is both blank
 and deaf, which looks exactly like a hung machine. `target=text` on the
 GRUB line is the way back, and the role being dropped on death is what
 makes that rare.
+
+**AND SUSPENDING THE READ WAS NOT ENOUGH, which is the half worth
+remembering.** The first version put the check in the wait loop's `while`
+condition only. That correctly stopped the reader consuming keys -- and
+left the loop BODY running every iteration, where it calls
+`vga_cursor_tick()` and `vga_present()`. Those are console upkeep, and
+they publish into the framebuffer the compositor owns, so the shell went
+on blinking a text cursor on top of the desktop at whatever cell its
+prompt had left it. It was reported by the user from a screenshot: a
+blinking block sitting on the Control Panel icon, with all 23 GUI tools
+green.
+
+`scheduler_idle()` had the right rule written down the whole time -- it
+deliberately excludes the cursor tick and the present, because "console
+upkeep belongs to whoever owns the screen, and the desktop owns it while
+it is up". The bug was a second place that had to obey the same rule and
+did not. `scheduler_idle()` itself stays unguarded in that loop, because
+it is the one thing there that is not the console's: a suspended shell
+must still drain the debug console and feed raw input to the compositor.
+
+Two general lessons, and the second cost more than the first. **When you
+suspend a loop, ask what its BODY does, not only what its exit condition
+is.** And **a suite that only ever drives the system cannot see something
+that happens when nobody touches it** -- every GUI tool here interacts and
+then asserts on what changed, so a screen that paints itself while idle
+was structurally invisible to all of them. `tools/idle_desktop_test.py`
+asks that question now, with the taskbar clock as its own control.

@@ -754,6 +754,40 @@ instead, paged rather than stepped, and could not step back.
 A derived copy drifts silently the moment the layout changes. Add the
 log line to the app instead; it is a dozen lines and it cannot drift.
 
+## An idle screen must SIT STILL, and only its owner may paint
+
+While a compositor holds the screen, nothing else may write to the
+framebuffer -- not another process, and not the kernel's own text
+console. The rule sounds obvious and has been broken twice from the
+kernel side, both times by code that was correct in isolation and simply
+did not know a desktop was up.
+
+The one that reached a user: the physical shell's idle loop calls
+`vga_cursor_tick()` and `vga_present()` -- console upkeep -- and once
+init started the desktop at boot the shell was sitting at a prompt behind
+it, blinking a text cursor on top of a desktop icon. `scheduler_idle()`
+already excludes those two calls for exactly this reason; the second
+place that had to obey the same rule did not.
+
+**The check is cheap: with nobody touching it, capture the screen several
+times and require it to be identical.** `tools/idle_desktop_test.py` does
+that and lives in `gui_regress.py`. Two things make it trustworthy rather
+than merely green:
+
+  * **Exclude what legitimately animates, and use it as the control.**
+    The taskbar clock shows seconds, so it must CHANGE -- asserting that
+    is what proves the capture pipeline can see motion at all. Without
+    such a control a harness returning one cached frame reports a
+    perfectly steady desktop and passes.
+  * **Sample across several blink periods.** A 2 Hz blink hides easily
+    between two captures a second apart.
+
+**Why no existing tool caught it, which is the reusable part:** every GUI
+tool here DRIVES the desktop and then asserts on what changed. None of
+them asked the opposite question. When a suite is built entirely out of
+"do X, check Y changed", the things that happen when nobody does anything
+are structurally invisible to it.
+
 ## Three ways a GUI test passes without testing anything
 
 All three of these shipped a real bug past a green suite. They are

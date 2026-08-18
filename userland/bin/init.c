@@ -81,16 +81,30 @@ static const int SVC_BACKOFF_MS[] = { 0, 250, 500, 1000, 2000 };
 // restart is actually due, never on an idle machine.
 #define POLL_SLEEP_MS  50
 
+// Restart= -- what a service's EXIT means.
+//
+// The default is ON_FAILURE, and the reason is a real feature: the Start
+// menu's "Exit to shell" makes the desktop return 0, i.e. it ASKED to
+// stop. Under `always` init restarted it immediately and the menu item
+// silently did nothing. A process that chose to leave stays gone; one
+// that crashed or was killed comes back. That is systemd's
+// `on-failure`, and it is the sensible default here for the same reason
+// it is there.
+#define SVC_RESTART_NO         0
+#define SVC_RESTART_ON_FAILURE 1
+#define SVC_RESTART_ALWAYS     2
+
 struct service {
     char name[SVC_NAME_MAX];
     char exec[SVC_EXEC_MAX];
-    int  restart;      // 1 = Restart=always
+    int  restart;      // SVC_RESTART_*
     int  pid;          // 0 when not running
     unsigned long long started_ms;
     unsigned long long due_ms;  // when it may next be started
     int  fast_failures;
     int  started_once;
     int  seen;         // survived the last scan
+    int  stopped;      // exited cleanly and asked to stay down
     int  disabled;     // its descriptor is gone -- do not start it again
     int  gave_up;
 };
@@ -216,10 +230,18 @@ static void load_service(const char *file) {
     }
 
     char restart[16];
-    s->restart = 1;
-    if (etc_config_buf_get(&g_cfg, "Restart", restart, sizeof restart)
-        && k_strcmp(restart, "no") == 0)
-        s->restart = 0;
+    s->restart = SVC_RESTART_ON_FAILURE;
+    if (etc_config_buf_get(&g_cfg, "Restart", restart, sizeof restart)) {
+        if (k_strcmp(restart, "no") == 0)          s->restart = SVC_RESTART_NO;
+        else if (k_strcmp(restart, "always") == 0) s->restart = SVC_RESTART_ALWAYS;
+        else if (k_strcmp(restart, "on-failure") != 0)
+            // An unrecognised value keeps the default rather than
+            // failing the boot, like every other /etc reader here -- but
+            // it SAYS so, because a typo that silently changes a restart
+            // policy is found the day the service dies and stays dead.
+            logf1("init: %s has an unknown Restart=, using on-failure\n",
+                  s->name);
+    }
 }
 
 // Scans /etc/services.d and reconciles it against what is running.
@@ -329,7 +351,15 @@ static int service_exited(int pid, int code) {
                  s->name, pid, code, (unsigned)ran);
         sys_eprint(g_msg);
 
-        if (!s->restart) return 1;
+        if (s->restart == SVC_RESTART_NO) return 1;
+
+        // A CLEAN exit is a request to stop, not a failure. Only
+        // `Restart=always` overrides that -- see the enum's comment.
+        if (code == 0 && s->restart != SVC_RESTART_ALWAYS) {
+            s->stopped = 1;
+            logf1("init: %s exited cleanly -- not restarting it\n", s->name);
+            return 1;
+        }
 
         // A service that ran for a while and then stopped is a restart;
         // one that died immediately is a loop forming. Only the second
@@ -358,7 +388,8 @@ static int start_due(void) {
         // as "do not start" is the obvious misreading and would leave a
         // one-shot service silently never running.
         if (s->pid || s->gave_up || s->disabled) continue;
-        if (!s->restart && s->started_once) continue;
+        if (s->restart == SVC_RESTART_NO && s->started_once) continue;
+        if (s->stopped) continue; // it asked to stay down
         if (now < s->due_ms) { pending++; continue; }
         start_service(s);
         if (!s->pid && !s->gave_up) pending++;
