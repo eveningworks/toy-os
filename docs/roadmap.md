@@ -1223,6 +1223,28 @@ guess.*
       general shape of a poll whose exit condition is weaker than what
       the code after it needs.
 
+- [ ] **`newsyscalls_test` fails intermittently in CI, and not
+      locally.** Seen once, 2026-08-18, on a DOCS-ONLY commit -- so it
+      is not a regression from the change it failed on, and the two
+      commits either side of it passed. Exit 1 with "at least one phase
+      FAILED"; the phase was not captured, because the harness printed
+      only the tail and the detail line was earlier.
+
+      NOT reproducible here: 9 runs clean, including 3 after a full
+      `ktest_run.py` (the CI step that runs before it, and the one that
+      deliberately injects ATA and allocation failures -- the obvious
+      suspect for leaving the image in a state the unlink/listdir phases
+      trip over). CI differs in building a fresh disk image and running
+      TCG on a shared runner, so timing and filesystem state are both
+      candidates and neither is established.
+
+      Both diagnostics are fixed rather than the bug: the test's SUMMARY
+      line now names the first failing phase ("...FAILED -- first was
+      unlink"), which is the line a truncating harness keeps, and
+      `usertest_run.py` prints the test's own lines instead of the last
+      eight. So the next occurrence should say what it was without a
+      second round trip. Positive control run on both.
+
 - [ ] **Other GUI tools may share the calculator's mid-paint flake.**
       Every tool that compares one screendump against another has the
       same exposure: a capture landing while the frame is still being

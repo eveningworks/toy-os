@@ -73,6 +73,19 @@ static void put_udec(uint32_t v, int min_digits) {
 
 #define TESTFILE "/newsyscalls_test.txt"
 
+// Which phase failed first, for the SUMMARY line.
+//
+// The summary carries it because that line is often the ONLY one a
+// reader gets: a test harness that truncates its capture keeps the tail,
+// and the tail is the summary -- so "at least one phase FAILED" with the
+// detail thousands of characters earlier is a diagnosis that has to be
+// fetched in a second round trip. It cost exactly that on a CI failure.
+static const char *g_failed_phase;
+
+static void phase_failed(const char *name) {
+    if (!g_failed_phase) g_failed_phase = name;
+}
+
 int main(void) {
     int all_ok = 1;
 
@@ -93,7 +106,8 @@ int main(void) {
         ok = ok && (reopened < 0);
 
         if (ok) put("  OK: created, deleted, and confirmed gone\n");
-        else { put("  FAIL: unlink round-trip didn't check out\n"); all_ok = 0; }
+        else { put("  FAIL: unlink round-trip didn't check out\n");
+               all_ok = 0; phase_failed("unlink"); }
     }
 
     // --- Phase 2: SYS_LISTDIR -----------------------------------------
@@ -119,7 +133,7 @@ int main(void) {
             put("\n");
         } else {
             put("  FAIL: listdir() returned an error\n");
-            all_ok = 0;
+            all_ok = 0; phase_failed("listdir");
         }
     }
 
@@ -144,7 +158,7 @@ int main(void) {
             put_udec(t.second, 2); put("\n");
         } else {
             put("  FAIL: gettime() returned implausible fields\n");
-            all_ok = 0;
+            all_ok = 0; phase_failed("gettime");
         }
     }
 
@@ -171,14 +185,16 @@ int main(void) {
         put("  after yield, still running -- return value: ");
         put_udec(ret < 0 ? (uint32_t)(-ret) : (uint32_t)ret, 0);
         put(ok ? " (OK)\n" : " (FAIL, expected 0)\n");
-        if (!ok) all_ok = 0;
+        if (!ok) { all_ok = 0; phase_failed("yield"); }
     }
 
     if (all_ok) {
         put("newsyscalls_test: all phases passed\n");
         sys_exit(0);
     } else {
-        put("newsyscalls_test: at least one phase FAILED\n");
+        put("newsyscalls_test: at least one phase FAILED -- first was ");
+        put(g_failed_phase ? g_failed_phase : "unknown");
+        put("\n");
         sys_exit(1);
     }
 }

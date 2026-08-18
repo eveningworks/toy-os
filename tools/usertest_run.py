@@ -216,8 +216,17 @@ def main():
         if problems:
             failed += 1
             print(f"  FAIL  {name:<18} {'; '.join(problems)}")
-            for line in out.strip().splitlines()[-8:]:
+            # The test's OWN lines first, all of them: a self-checking
+            # binary says which phase failed, and that line is usually
+            # nowhere near the end of the output. Printing only the tail
+            # hid it completely on a CI failure and turned "which phase?"
+            # into a second round trip.
+            own = [l for l in out.splitlines() if name.split("_")[0] in l]
+            for line in own[-20:]:
                 print(f"          | {line}")
+            tail = [l for l in out.strip().splitlines()[-4:] if l not in own]
+            for line in tail:
+                print(f"          . {line}")
         else:
             print(f"  ok    {name}")
     total = len(results)
