@@ -92,6 +92,11 @@ above: a process model without demand paging, or SMP without a scheduler
 that can block, is a different design rather than a smaller one.
 
 ### Demand paging & shared memory (memory)
+**Build STEP 1 first, and specifically its first two items: a per-process
+region list, then `mmap(MAP_ANONYMOUS)`/`munmap` over it.** Everything
+else in this milestone is written in terms of that structure, and
+nothing else here can start without it.
+
 *Listed in BUILD ORDER, not as a wish list -- reordered 2026-08-18 after
 the first two items landed and made the dependencies visible. Two things
 the old list hid: everything below the first heading needs per-process
@@ -110,7 +115,8 @@ address-space bookkeeping that does not exist yet, and everything under
       handed an untouched buffer never faults at all. It is a registered
       hook with three callers; see `docs/decisions.md`
 
-**First: address-space bookkeeping.** The keystone. Today
+**STEP 1 -- address-space bookkeeping.** The keystone, and the only
+item here with no prerequisite left. Today
 `uheap_fault()` answers "is this address yours?" by testing ONE
 hardcoded range, which is exactly enough for a single grow-only heap and
 cannot express anything else. Everything after this section is written
@@ -133,8 +139,8 @@ in terms of the structure this adds.
       first write. A small optimisation ON the anonymous path, so it
       wants the anonymous path to exist first
 
-**Then: file backing.** Needs the region list to record what a region is
-backed BY.
+**STEP 2 -- file backing.** Needs step 1: a region has to record what it
+is backed BY before it can be backed by anything.
 - [ ] File-backed `mmap`
 - [ ] **Note the hazard before starting:** a fault can happen inside a
       syscall, and this filesystem is NOT re-entrant (`vfs.c` holds a
@@ -145,7 +151,8 @@ backed BY.
       -- the first real payoff, and the cheapest sharing case because
       read-only needs no copy path
 
-**Then: sharing, which needs a refcount first.**
+**STEP 3 -- sharing.** Needs step 1 for the regions and, before any of
+its own items, a per-frame refcount.
 - [ ] **A per-frame reference count.** Nothing in this kernel has one.
       `PAGE_BORROWED` says "somebody else frees this", NOT "count me",
       so it cannot express two owners -- which is what every item below
@@ -157,7 +164,8 @@ backed BY.
       implementation, not two (see the fork()/exec() milestone's
       ordering note)
 
-**Unrelated to the sequence above, found while measuring it**
+**NOT PART OF THE SEQUENCE -- independent, small, and found while
+measuring it.** Either can be done at any point, including first.
 - [ ] Guard pages around each stack, so overflow faults precisely
       instead of corrupting a neighbour
 - [ ] **`USERLAND_CFLAGS` has no `-Wframe-larger-than`**, so a ring-3
