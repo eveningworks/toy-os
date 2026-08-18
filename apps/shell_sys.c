@@ -8,6 +8,7 @@
 #include "shell_internal.h"
 #include "shell.h" // shell_path_find() -- cmd_strace() resolves a binary itself
 #include "apps.h"
+#include "mm_audit.h" // `meminfo audit`
 
 static const char *MONTHS[] = {
     "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"
@@ -415,7 +416,16 @@ void cmd_echo(const char *args) {
     vga_putc('\n');
 }
 
-void cmd_meminfo(void) {
+void cmd_meminfo(const char *args) {
+    // `meminfo audit` walks every live process's page tables and
+    // compares them against the frame allocator. The walk itself is
+    // kernel-side (api/mm_audit.h) -- page tables are not something
+    // apps/ may reach into, and the include path enforces that.
+    if (args && k_strcmp(args, "audit") == 0) {
+        mm_audit_report();
+        return;
+    }
+
     multiboot_print_meminfo();
 
     uint64_t total = pmm_total_frames();

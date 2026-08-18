@@ -27,6 +27,12 @@ extern char __kimage_start[];
 #define BITMAP_BYTES (PMM_MAX_FRAMES / 8)
 
 static uint8_t bitmap[BITMAP_BYTES];
+// Which frames pmm accounts for at all -- set once, from the firmware's
+// memory map, and never cleared. Distinct from `bitmap`, which says
+// allocated-or-not: an unmanaged frame (MMIO, a framebuffer) and an
+// allocated one look identical there, and an auditor needs to tell them
+// apart. One bit per frame, 128 KiB, same as the bitmap beside it.
+static uint8_t managed[BITMAP_BYTES];
 static uint64_t total_frames = 0; // frames within regions firmware reported as available
 static uint64_t free_frames = 0;  // currently allocatable (total minus reservations)
 static uint64_t alloc_hint = 0;   // avoids rescanning from frame 0 on every alloc
@@ -59,7 +65,9 @@ static void mark_available_cb(const struct multiboot_mmap_region *region) {
     if (end > PMM_MAX_FRAMES * FRAME_SIZE) end = PMM_MAX_FRAMES * FRAME_SIZE;
 
     for (uint64_t addr = start; addr < end; addr += FRAME_SIZE) {
-        mark_free_bit(addr / FRAME_SIZE);
+        uint64_t f = addr / FRAME_SIZE;
+        managed[f / 8] |= (uint8_t)(1u << (f % 8));
+        mark_free_bit(f);
         total_frames++;
     }
 }
@@ -204,6 +212,30 @@ void pmm_free_contiguous(uint64_t phys_addr, uint64_t count) {
             free_frames++;
         }
     }
+}
+
+// Is this physical address one pmm accounts for at all? False for MMIO
+// and anything the firmware never reported as available RAM -- a
+// framebuffer, most obviously. An auditor has to tell "not mine" from
+// "mine and free": the first is normal, the second is a live mapping
+// pointing at memory the allocator is free to hand out.
+int pmm_frame_is_managed(uint64_t phys_addr) {
+    uint64_t f = phys_addr / FRAME_SIZE;
+    if (f >= PMM_MAX_FRAMES) return 0;
+    // A frame inside a region the firmware reported as available is
+    // accounted for whether it is currently allocated or not; one
+    // outside every such region is not pmm's business. `managed` is
+    // recorded at init because the bitmap alone cannot answer it -- an
+    // unmanaged frame and an allocated one are both a set bit.
+    return (managed[f / 8] & (1u << (f % 8))) != 0;
+}
+
+// Does pmm consider this frame handed out? Only meaningful for a frame
+// pmm_frame_is_managed() claims.
+int pmm_frame_is_used(uint64_t phys_addr) {
+    uint64_t f = phys_addr / FRAME_SIZE;
+    if (f >= PMM_MAX_FRAMES) return 1; // outside the bitmap: never "free"
+    return bit_is_used(f);
 }
 
 uint64_t pmm_total_frames(void) { return total_frames; }

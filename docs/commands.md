@@ -65,6 +65,7 @@ history search, `Alt-.` last argument. `help` lists them all.
 | `time`, `timezone [city]`, `uptime` | |
 | `random [n]` | The entropy source and some values from it. |
 | `meminfo` | Physical frame allocator. |
+| `meminfo audit` | Compares every live process's page tables against the frame allocator, and reports any mapping of a frame the allocator considers free. |
 | `heap` | Kernel heap stats. `heap debug on\|off` red-zones new allocations and poisons freed ones; `heap check` sweeps for a use-after-free. |
 | `df` | Total/used/free, and the name of the active filesystem backend. |
 | `dmesg`, `lspci`, `parttable` | |

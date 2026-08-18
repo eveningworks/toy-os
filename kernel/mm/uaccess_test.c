@@ -263,3 +263,67 @@ KTEST("vmm", "destroying an address space leaves a BORROWED frame alone") {
     pmm_free_frame(f);
     KTEST_ASSERT(pmm_free_frames() == before + 1);
 }
+
+// --- auditing page tables against the allocator ----------------------
+//
+// These two are each other's control: the same address space, the same
+// walk, one with every frame properly allocated and one with a frame
+// freed behind the mapping's back. If the first ever fails, the audit
+// is crying wolf; if the second ever passes, it is measuring nothing.
+
+KTEST("vmm", "a healthy address space audits clean") {
+    uint64_t frames[3];
+    uint64_t as = make_space(3, frames);
+    KTEST_ASSERT(as != 0);
+
+    struct vmm_audit a;
+    KTEST_ASSERT(vmm_audit_space(as, &a) == 0);
+    KTEST_ASSERT(a.pages == 3);
+    KTEST_ASSERT(a.dangling == 0);
+    KTEST_ASSERT(a.borrowed == 0);
+
+    vmm_destroy_address_space(as);
+}
+
+KTEST("vmm", "the audit catches a mapping of a FREED frame") {
+    uint64_t frames[2];
+    uint64_t as = make_space(2, frames);
+    KTEST_ASSERT(as != 0);
+    KTEST_ASSERT(vmm_audit_space(as, 0) == 0); // healthy first
+
+    // Free one frame WITHOUT unmapping it -- exactly the state an
+    // over-free leaves behind, and the state that costs nothing until
+    // the allocator hands that frame to somebody else.
+    pmm_free_frame(frames[1]);
+
+    struct vmm_audit a;
+    KTEST_ASSERT(vmm_audit_space(as, &a) == 1);
+    KTEST_ASSERT(a.dangling == 1);
+    KTEST_ASSERT(a.first_bad_frame == frames[1]);
+    KTEST_ASSERT(a.first_bad_va == TEST_VADDR + 4096);
+
+    // Teardown frees frames[1] again, which pmm ignores (it is already
+    // free), so this leaves nothing behind.
+    vmm_destroy_address_space(as);
+}
+
+KTEST("vmm", "a borrowed mapping is counted, and still audited") {
+    uint64_t f = pmm_alloc_frame();
+    KTEST_ASSERT(f != 0);
+    uint64_t as = vmm_create_address_space();
+    KTEST_ASSERT(as != 0);
+    KTEST_ASSERT(vmm_map_user_borrowed(as, TEST_VADDR, f, 0, 0, VMM_MT_NORMAL));
+
+    struct vmm_audit a;
+    KTEST_ASSERT(vmm_audit_space(as, &a) == 0);
+    KTEST_ASSERT(a.pages == 1 && a.borrowed == 1);
+
+    // A borrowed frame whose real owner has freed it is a
+    // use-after-free waiting to happen, so the audit must not excuse it
+    // just because this address space does not own it.
+    pmm_free_frame(f);
+    KTEST_ASSERT(vmm_audit_space(as, &a) == 1);
+    KTEST_ASSERT(a.borrowed == 1 && a.dangling == 1);
+
+    vmm_destroy_address_space(as);
+}

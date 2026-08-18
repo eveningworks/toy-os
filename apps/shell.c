@@ -111,7 +111,7 @@ static void dispatch(char *line) {
     } else if (k_strcmp(cmd, "echo") == 0) {
         cmd_echo(args ? args : "");
     } else if (k_strcmp(cmd, "meminfo") == 0) {
-        cmd_meminfo();
+        cmd_meminfo(args ? args : "");
     } else if (k_strcmp(cmd, "heap") == 0) {
         cmd_heap(args ? args : "");
     } else if (k_strcmp(cmd, "kstack") == 0) {

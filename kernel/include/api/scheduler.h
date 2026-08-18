@@ -284,6 +284,12 @@ int scheduler_kill(int pid, int exit_code);
 // is a cumulative total rather than a percentage.
 int scheduler_proc_info(int index, struct proc_info *out);
 
+// The address space behind a slot, for a kernel-side caller that needs
+// to walk its page tables (`meminfo audit`). 0 for an empty slot and
+// for a ZOMBIE, whose address space has already been destroyed --
+// walking that would read freed page tables.
+uint64_t scheduler_slot_pml4(int slot);
+
 // How many slots that table has. The bound for the loop above.
 int scheduler_max_procs(void);
 

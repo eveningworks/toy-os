@@ -98,6 +98,27 @@ int vmm_map_user_borrowed(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
 
 int vmm_unmap_user_page(uint64_t pml4_phys, uint64_t vaddr);
 
+// What one address space's user mappings look like to the physical
+// allocator. `dangling` is the one that is a BUG: a present mapping
+// pointing at a frame pmm considers free, i.e. memory the allocator may
+// hand to somebody else while this process is still reading and writing
+// it. Everything else is descriptive.
+struct vmm_audit {
+    uint64_t pages;           // present user PTEs walked
+    uint64_t borrowed;        // of which mapped with vmm_map_user_borrowed()
+    uint64_t unmanaged;       // frames pmm doesn't account for (MMIO) -- normal
+    uint64_t huge;            // 2MiB leaves, not walked -- none today
+    uint64_t dangling;        // present mappings of a FREE frame -- the violation
+    uint64_t first_bad_va;    // where the first one was, for reporting
+    uint64_t first_bad_frame;
+};
+
+// Walks one address space's user half and fills `out`; returns the
+// dangling count, so `if (vmm_audit_space(as, 0))` is a valid check.
+// `out` may be NULL. Read-only -- it changes nothing, so it is safe to
+// call from a shell command or a KTEST at any point.
+uint64_t vmm_audit_space(uint64_t pml4_phys, struct vmm_audit *out);
+
 void vmm_switch_address_space(uint64_t pml4_phys);
 
 // Frees every physical frame this address space privately owns -- every

@@ -2384,3 +2384,51 @@ Found by `tools/frame_balance.py`, which is also the standing check:
 free frames must return to baseline across a spawn/kill cycle as well as
 a spawn/exit one. Its positive control is the original measurement --
 reverting the fix takes the kill cycles from flat to -18 each.
+
+## The audit compares page tables against the allocator, and only in the direction that is cheap
+
+`meminfo audit` (`api/mm_audit.h`, walking with `vmm_audit_space()`)
+walks every live process's page tables and asserts one invariant: **a
+frame a live mapping points at must be one `pmm` considers handed out.**
+A present mapping of a FREE frame is memory the allocator may give to
+somebody else while the process is still reading and writing it.
+
+**Why it exists.** Two bugs on 2026-08-18 were both exactly this, and
+both were silent: an exiting GUI client returned pages of the kernel
+image to the allocator (the font mapping it had never unmapped), and
+`scheduler_kill()` freed nothing at all. Neither cost anything at the
+moment it happened -- a freed-but-still-mapped frame behaves perfectly
+until the allocator hands it out and somebody writes to it -- so nothing
+in a 300-check GUI suite could see either. The invariant above is
+checkable in one walk and would have caught both.
+
+It does catch them, and that was verified rather than assumed: with the
+`PAGE_BORROWED` fix reverted, closing one Calculator leaves the
+still-running desktop holding **5 dangling mappings at `0x8003000000`**
+-- the font region -- named with the address and the frame.
+
+**Why only that direction.** The reverse -- a frame marked used that
+nothing references, an ordinary leak -- is not symmetric. Page tables,
+the kernel heap, the kernel image and any DMA buffer all hold frames no
+page table points at, so a naive sweep reports every one of them.
+Answering it needs each kernel-side owner to declare what it holds,
+which is roughly what a `struct page` array buys a real kernel, and is
+its own project (`docs/roadmap.md`). Claiming a "leak detector" that
+only worked in one direction would be worse than naming the one it
+does.
+
+**Two things about reading its output.** `unmanaged` is NORMAL and not a
+finding: a framebuffer is MMIO, never RAM the firmware reported, so
+`pmm` has nothing to compare against -- the desktop legitimately shows
+~900 such pages, and telling "not mine" from "mine and free" is exactly
+why `pmm_frame_is_managed()` is separate from `pmm_frame_is_used()`. And
+BORROWED pages are audited too, deliberately: a borrowed mapping whose
+real owner has already freed the frame is precisely the use-after-free
+worth catching, so excusing them would audit away the interesting half.
+
+**Where it lives, and why not in the shell.** The first version put the
+walk in `apps/shell_sys.c` and did not compile -- `kernel/include/kernel/`
+is off `apps/`'s include path, so `vmm.h` is unreachable from there.
+That boundary was right: walking page tables is not something an app may
+do. The walk is `kernel/mm/mm_audit.c` and `apps/` sees one function
+that prints a report.

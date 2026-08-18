@@ -300,6 +300,81 @@ void vmm_destroy_address_space(uint64_t pml4_phys) {
     }
 }
 
+// --- auditing page tables against the allocator ----------------------
+//
+// The invariant: every frame a live mapping points at must be one the
+// physical allocator considers HANDED OUT. Nothing checked it before,
+// and the two bugs that prompted this both broke it in the direction
+// that is silent -- a mapping left pointing at a frame pmm had put back
+// in its free list, which costs nothing at all until pmm hands that
+// frame to somebody else and they write to it.
+//
+// This audits the direction that is CHEAP and DANGEROUS. The reverse --
+// a frame marked used that nothing references, i.e. a leak -- is not
+// symmetric: page tables, the kernel heap, the kernel image and any DMA
+// buffer all hold frames no page table references, so a sweep would
+// report every one of them. Answering that needs each owner to declare
+// its frames, which is a much larger job; see docs/roadmap.md.
+//
+// Borrowed pages are audited too, and deliberately: a borrowed mapping
+// whose owner has already freed the frame is exactly the use-after-free
+// PAGE_BORROWED exists to make possible to reason about, so leaving it
+// unchecked would audit away the interesting half.
+static void audit_pt(uint64_t pt_phys, uint64_t base_va, struct vmm_audit *a) {
+    uint64_t *pt = table_at(pt_phys);
+    for (int i = 0; i < 512; i++) {
+        if (!(pt[i] & PAGE_PRESENT)) continue;
+        uint64_t frame = pt[i] & ADDR_MASK;
+        uint64_t va = base_va + (uint64_t)i * 4096;
+        a->pages++;
+        if (pt[i] & PAGE_BORROWED) a->borrowed++;
+        if (!pmm_frame_is_managed(frame)) {
+            // MMIO, or memory the firmware never reported as RAM -- a
+            // framebuffer is the usual one. Not pmm's to account for,
+            // so there is nothing to compare against.
+            a->unmanaged++;
+        } else if (!pmm_frame_is_used(frame)) {
+            if (!a->dangling) { a->first_bad_va = va; a->first_bad_frame = frame; }
+            a->dangling++;
+        }
+    }
+}
+
+static void audit_pd(uint64_t pd_phys, uint64_t base_va, struct vmm_audit *a) {
+    uint64_t *pd = table_at(pd_phys);
+    for (int i = 0; i < 512; i++) {
+        if (!(pd[i] & PAGE_PRESENT)) continue;
+        // A huge page is a leaf here, not a table pointer -- walking
+        // into one would read pixel data as page-table entries.
+        if (pd[i] & PAGE_HUGE) { a->huge++; continue; }
+        audit_pt(pd[i] & ADDR_MASK, base_va + (uint64_t)i * 0x200000, a);
+    }
+}
+
+uint64_t vmm_audit_space(uint64_t pml4_phys, struct vmm_audit *out) {
+    struct vmm_audit zero = {0};
+    if (!out) out = &zero;
+    *out = zero;
+    if (!pml4_phys) return 0;
+
+    uint64_t *pml4 = table_at(pml4_phys);
+    // From 1, not 0: entry 0 is the shared kernel mapping every address
+    // space points at, and it maps the kernel's own frames, the heap and
+    // the page tables -- none of which this audit's invariant covers.
+    // Same reason vmm_destroy_address_space() starts there.
+    for (int i = 1; i < 512; i++) {
+        if (!(pml4[i] & PAGE_PRESENT)) continue;
+        uint64_t *pdpt = table_at(pml4[i] & ADDR_MASK);
+        for (int j = 0; j < 512; j++) {
+            if (!(pdpt[j] & PAGE_PRESENT)) continue;
+            if (pdpt[j] & PAGE_HUGE) { out->huge++; continue; }
+            uint64_t base = ((uint64_t)i << 39) | ((uint64_t)j << 30);
+            audit_pd(pdpt[j] & ADDR_MASK, base, out);
+        }
+    }
+    return out->dangling;
+}
+
 uint64_t vmm_current_pml4(void) {
     uint64_t cr3;
     __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));

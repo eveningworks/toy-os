@@ -1052,6 +1052,24 @@ technical conventions below:
   control-register access; and a filesystem backend goes in `fs/`, not
   `drivers/` -- the block device is the driver, the filesystem on top
   of it isn't.
+- **`meminfo audit` COMPARES PAGE TABLES AGAINST THE ALLOCATOR, and it
+  is the check that would have caught both memory bugs of 2026-08-18.**
+  The invariant: every frame a live mapping points at must be one pmm
+  considers HANDED OUT. A mapping of a free frame is memory the
+  allocator may give to somebody else while the process is still using
+  it -- and it costs nothing until that happens, which is exactly why
+  nobody noticed. `api/mm_audit.h` (`mm_audit_report()`) walks every
+  live address space; `vmm_audit_space()` does one. Three counters are
+  descriptive and one is a bug: **`dangling`**. Two things to know.
+  **`unmanaged` is NORMAL, not a finding** -- a framebuffer is MMIO, not
+  RAM pmm ever accounted for, and the desktop legitimately shows ~900
+  such pages. And **borrowed pages are audited too, on purpose**: a
+  borrowed mapping whose real owner freed the frame is precisely the
+  use-after-free worth catching. **It does NOT find ordinary leaks** (a
+  used frame nothing references) -- page tables, the heap, the kernel
+  image and DMA buffers all hold frames no page table points at, so that
+  direction needs every owner to declare its frames; see
+  `docs/roadmap.md`.
 - **A PROCESS'S MEMORY IS FREED WHEN IT DIES, NOT WHEN IT IS REAPED --
   and killing needs a DIFFERENT entry point from exiting.**
   `syscall_process_exit_cleanup()` is for a process ending itself and

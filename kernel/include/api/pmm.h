@@ -50,6 +50,15 @@ uint64_t pmm_alloc_contiguous(uint64_t count);
 // silently skipped, same as pmm_free_frame().
 void pmm_free_contiguous(uint64_t phys_addr, uint64_t count);
 
+// For an auditor comparing page tables against the allocator (see
+// vmm_audit_space()): is this frame pmm's to account for, and does pmm
+// think it is handed out? The pair matters because "not mine" (MMIO, a
+// framebuffer) and "mine and free" are completely different answers --
+// the second means a live mapping points at memory pmm may hand to
+// somebody else.
+int pmm_frame_is_managed(uint64_t phys_addr);
+int pmm_frame_is_used(uint64_t phys_addr);
+
 uint64_t pmm_total_frames(void);
 uint64_t pmm_free_frames(void);
 

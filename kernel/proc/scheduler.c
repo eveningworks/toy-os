@@ -1048,6 +1048,19 @@ int scheduler_spawn_piped(const char *path, const char *args, int pipe_idx) {
     return slot + 1; // 1-based pid (see scheduler.h)
 }
 
+// The address space of a slot that is genuinely running, or 0. Kernel
+// side only, and deliberately NOT part of struct proc_info: a CR3 is
+// not something userland has any business seeing.
+//
+// A ZOMBIE answers 0 because its address space is already gone -- see
+// scheduler_kill() -- and a caller auditing page tables must not walk
+// freed ones.
+uint64_t scheduler_slot_pml4(int slot) {
+    if (slot < 0 || slot >= MAX_PROCS) return 0;
+    if (procs[slot].state == SCHED_UNUSED || procs[slot].state == SCHED_ZOMBIE) return 0;
+    return procs[slot].pml4_phys;
+}
+
 int scheduler_stdout_pipe(int pid) {
     if (pid < 1 || pid > MAX_PROCS) return -1;
     if (procs[pid - 1].state == SCHED_UNUSED) return -1;
