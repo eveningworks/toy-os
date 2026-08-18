@@ -351,8 +351,16 @@ technical conventions below:
   fixed-width number -- kfmt's printf has zero-pad widths for numbers
   and `%Ns`/`%-Ns` column padding for STRINGS (a value longer than its
   field pushes the column rather than being truncated), but no `*`
-  width. What does NOT exist yet, on
-  purpose: `malloc`, `FILE`, `printf`, `errno`, TLS (Milestone 24).
+  width. **`malloc`/`free`/`calloc` DO exist now**
+  (`#include "lib/stdlib.h"`), and they are not a second allocator:
+  they are `kernel/lib/heap_core.c` -- the kernel's own free list, with
+  its red-zones and poisoning -- compiled a second time with `SYS_SBRK`
+  behind it instead of the frame allocator (`api/heap_os.h`). Two things
+  a caller inherits from sbrk: **`free()` never returns memory to the
+  kernel** (the break cannot move down, so a process's footprint only
+  grows), and a fresh region's pages arrive on touch. What still does
+  NOT exist, on purpose: `realloc`, `FILE`, `printf`, `errno`, TLS
+  (Milestone 24).
   Three traps are documented in `docs/decisions.md` and in the files
   themselves, all of which fail quietly: a header named `string.h`
   including `"string.h"` finds ITSELF (hence the `<>`), an archive
@@ -361,6 +369,18 @@ technical conventions below:
   a real `memcpy` recursing into itself through `k_memcpy` -- it LINKS
   and blows the stack at runtime. Adding to these headers follows the
   usual bar: a second real caller.
+- **RING-3 CODE HAS A FRAME BUDGET NOW, and a link-time bound on the
+  image.** `USERLAND_CFLAGS` carries `-Wframe-larger-than=2048` (the
+  kernel has had 1024/2048 since kernel stacks got guard pages) and
+  `userland/rt/link.ld` `ASSERT`s that the image stays below
+  `UADDR_HEAP_BASE`. Both found something the day they were added: four
+  `struct dirent` arrays on the WM's stack, the worst at **20,608
+  bytes against a 16 KiB stack** -- which does not merely overflow, it
+  steps clean OVER the single 4 KiB guard page into unmapped space
+  (the Stack Clash shape; Linux widened its guard gap to 256 pages in
+  4.11 for this). They are `static` now. **A big local array in ring 3
+  is the thing to look for**, and note the warning names the function
+  where a wider guard would only hide it.
 - **Every ring-3 program is just a `main()`.** `userland/rt/crt0.asm`
   provides `_start` (reads argc/argv off the stack per SysV, calls
   `main`, passes its return to `sys_exit`) and `userland/rt/sys.c` is

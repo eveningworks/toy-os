@@ -57,10 +57,8 @@
 // above 4GiB, or a magic that fits in 32 bits -- and the two cases
 // become indistinguishable, silently, on the freeing path.
 #include "heap.h"
-#include "fault_inject.h"
-#include "kfmt.h"
-#include "pmm.h"
-#include "klog.h"
+#include "heap_os.h"  // the three things this file deliberately does not know
+#include "kfmt.h"     // k_snprintf -- freestanding half, see kfmt.h
 #include "string.h"
 
 #define HEAP_ALIGN 16
@@ -110,13 +108,18 @@ static uint64_t align_up(uint64_t n, uint64_t a) {
     return (n + (a - 1)) & ~(a - 1);
 }
 
-// Pulls `pages` contiguous physical frames from pmm and links them in
-// as one new free block at the tail of the list.
+// Asks the platform for one contiguous run of `pages` and links it in
+// as a new free block at the tail of the list.
+//
+// heap_os_alloc() is the ONLY way this file obtains memory, which is
+// what lets the same allocator serve two rings: the kernel hands back
+// identity-mapped physical frames, ring 3 hands back sbrk'd address
+// space. Neither is visible from here.
 static struct heap_block *append_region(uint64_t pages) {
-    uint64_t phys = pmm_alloc_contiguous(pages);
-    if (!phys) return 0;
+    void *region = heap_os_alloc(pages * HEAP_PAGE_SIZE);
+    if (!region) return 0;
 
-    struct heap_block *b = (struct heap_block *)phys;
+    struct heap_block *b = (struct heap_block *)region;
     b->size = pages * HEAP_PAGE_SIZE - sizeof(struct heap_block);
     b->free = HEAP_FREE;
     b->magic = HEAP_HDR_MAGIC;
@@ -179,10 +182,20 @@ static int rz_fail(const char *what, const struct heap_block *b,
     g_quarantined_bytes += b->size;
     // %lx/%lu, not %x/%u: kfmt reads a 32-bit argument without the `l`
     // (see kfmt.c), which silently truncates every value here.
-    klog_printf("heap: RED-ZONE VIOLATION %s block=0x%lx size=%lu\n",
-                what, (uint64_t)(uintptr_t)b, b->size);
-    klog_printf("heap:   expected 0x%lx, found 0x%lx -- block quarantined, not returned to the free list\n",
-                expected, found);
+    // Formatted here and handed to the platform as text, rather than
+    // calling a logger directly: the kernel's sink is klog and ring
+    // 3's is stderr, and this file must not know which it is talking
+    // to. k_snprintf is the freestanding half of kfmt (see kfmt.h), so
+    // it is available on both sides.
+    char msg[192];
+    k_snprintf(msg, sizeof msg,
+               "heap: RED-ZONE VIOLATION %s block=0x%lx size=%lu\n",
+               what, (uint64_t)(uintptr_t)b, b->size);
+    heap_os_report(msg);
+    k_snprintf(msg, sizeof msg,
+               "heap:   expected 0x%lx, found 0x%lx -- block quarantined, not returned to the free list\n",
+               expected, found);
+    heap_os_report(msg);
     return 0;
 }
 
@@ -275,9 +288,11 @@ static int header_plausible(const struct heap_block *b) {
 }
 
 void *kmalloc(size_t size) {
-    // See fault_inject.h -- inert unless a test armed it. Returning
-    // NULL here is exactly what a genuinely exhausted heap does.
-    if (fault_should_fail_alloc()) return 0;
+    // Inert unless a test armed it (the kernel wires this to
+    // fault_inject.h; ring 3 answers 0 always). Returning NULL here is
+    // exactly what a genuinely exhausted heap does, which is the whole
+    // point -- it exercises every caller's failure path.
+    if (heap_os_should_fail_alloc()) return 0;
     if (size == 0) return 0;
     uint64_t span = align_up(size, HEAP_ALIGN);
     uint64_t rz = g_debug ? HEAP_RZ_SIZE : 0;
@@ -351,8 +366,11 @@ void kfree(void *ptr) {
         b = (struct heap_block *)ptr - 1;
         if (!header_plausible(b)) {
             g_rz_violations++;
-            klog_printf("heap: CORRUPT HEADER at 0x%lx (size=%lu state=%lu) -- refusing to free\n",
-                        (uint64_t)(uintptr_t)b, b->size, (uint64_t)b->free);
+            char msg[160];
+            k_snprintf(msg, sizeof msg,
+                       "heap: CORRUPT HEADER at 0x%lx (size=%lu state=%lu) -- refusing to free\n",
+                       (uint64_t)(uintptr_t)b, b->size, (uint64_t)b->free);
+            heap_os_report(msg);
             return;
         }
     }
@@ -428,14 +446,14 @@ int heap_selftest(void) {
     void *b = kmalloc(128);
     void *c = kzalloc(32);
     if (!a || !b || !c) {
-        klog_write("heap: selftest FAILED (allocation returned 0)\n");
+        heap_os_report("heap: selftest FAILED (allocation returned 0)\n");
         return 0; // failure -- see the message above
     }
 
     uint8_t *cz = (uint8_t *)c;
     for (int i = 0; i < 32; i++) {
         if (cz[i] != 0) {
-            klog_write("heap: selftest FAILED (kzalloc didn't zero)\n");
+            heap_os_report("heap: selftest FAILED (kzalloc didn't zero)\n");
             return 0; // failure -- see the message above
         }
     }
@@ -456,22 +474,22 @@ int heap_selftest(void) {
     // block would underflow g_used_bytes, and nothing here used to
     // check g_used_bytes at all. See docs/decisions.md.
     if (heap_used_bytes() != used_before) {
-        klog_write("heap: selftest FAILED (used_bytes not back to its starting level after freeing everything)\n");
+        heap_os_report("heap: selftest FAILED (used_bytes not back to its starting level after freeing everything)\n");
         return 0; // failure -- see the message above
     }
 
     void *d = kmalloc(64);
     if (!d) {
-        klog_write("heap: selftest FAILED (alloc after free-and-coalesce)\n");
+        heap_os_report("heap: selftest FAILED (alloc after free-and-coalesce)\n");
         return 0; // failure -- see the message above
     }
     kfree(d);
 
     if (heap_used_bytes() != used_before) {
-        klog_write("heap: selftest FAILED (used_bytes not back to its starting level after final free)\n");
+        heap_os_report("heap: selftest FAILED (used_bytes not back to its starting level after final free)\n");
         return 0; // failure -- see the message above
     }
 
-    klog_write("heap: selftest passed\n");
+    heap_os_report("heap: selftest passed\n");
     return 1;
 }

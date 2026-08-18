@@ -2635,3 +2635,53 @@ silently and by design (a refusal is a normal protocol outcome,
 indistinguishable from a client declining). Raising the caps before
 buffers are non-contiguous would convert a hard limit into an
 intermittent silent failure, which is worse. See `docs/roadmap.md`.
+
+## malloc is the KERNEL's allocator compiled twice, not a second one
+
+Ring 3 had no allocator at all: `SYS_SBRK` was the only
+allocator-adjacent syscall, grow-only, with nothing on top. Every
+Toykit app therefore sized its state statically, and the compositor's
+back buffer was a single lifetime allocation that is never freed.
+
+The obvious implementation is a small `malloc` in `userland/lib/`. This
+repo's standing rule says otherwise, and an allocator is the worst place
+to break it: `kernel/mm/heap.c` was already a first-fit, address-ordered,
+coalescing free list with red-zones and use-after-free poisoning behind a
+runtime toggle, all of it covered by KTESTs. A second implementation
+would have started as a subset and drifted, and the drift would surface
+as memory corruption rather than as a behaviour difference anyone could
+see.
+
+So it follows `geom.c`, `kfmt.c` and `etc_config.c`: the allocator moved
+to `kernel/lib/heap_core.c` and is compiled twice, with everything
+platform-specific behind three functions in `api/heap_os.h` --
+`heap_os_alloc` (pmm frames / sbrk), `heap_os_report` (klog / stderr)
+and `heap_os_should_fail_alloc` (fault injection / never). Ring 3 gets
+the C names through `userland/lib/stdlib.h`.
+
+**The state stays in the file's statics rather than becoming a context
+struct**, which is deliberate and is what kept the diff small: each
+compilation unit gets its own free list, and the kernel's heap and a
+process's heap are separate address spaces that must never hand out each
+other's memory. A `struct heap *` parameter would have expressed the
+same thing while touching every line.
+
+**Two things a caller inherits from sbrk.** Nothing is ever returned to
+the kernel -- `free()` puts a block back on this process's list and the
+break never moves down, so a process that allocates 500 MiB and frees it
+still holds it. And a fresh region's pages do not exist yet: the
+allocator writes a block header into it immediately, so the first page
+faults in there, and the rest arrive as the program uses them. Both go
+away with `mmap`/`munmap`, which is a later step of the demand-paging
+milestone and is one function's worth of change here.
+
+**The test's coalescing check was not load-bearing at first, and the
+reason generalises.** It asked whether the process's footprint grew
+after freeing three 4 KiB blocks and requesting 12 KiB -- and stayed
+GREEN with `try_merge_next()` disabled outright, because the allocator
+claims memory in 64 KiB regions, so all three blocks sat inside one and
+the region's own leftover satisfied the request either way. The fixture
+never reached the branch. It compares the returned ADDRESS now: the list
+is address-ordered and first-fit, so a merged block starts where the
+first of the three did, and an allocator that did not merge cannot
+return that address. That version reddens exactly one check.

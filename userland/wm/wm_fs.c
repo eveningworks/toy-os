@@ -50,7 +50,14 @@ static int stat_entry(const char *path, struct dirent *out) {
     const char *leaf = 0;
     if (!split_parent(path, dir, sizeof dir, &leaf)) return 0;
 
-    struct dirent ents[WM_FS_MAX_ENTRIES];
+    // STATIC, not on the stack. A ring-3 stack is 16 KiB with ONE 4 KiB
+    // guard page below it, and WM_FS_MAX_ENTRIES entries of `struct dirent` is
+    // 5,216 bytes -- a frame that large does not merely overflow, it
+    // steps clean OVER the guard into unmapped space, which is the
+    // Stack Clash shape. Found by -Wframe-larger-than the day it was
+    // added to USERLAND_CFLAGS. Safe here: the WM is one event loop and
+    // this does not recurse.
+    static struct dirent ents[WM_FS_MAX_ENTRIES];
     int n = sys_listdir(dir, ents, WM_FS_MAX_ENTRIES);
     if (n <= 0) return 0;
     for (int i = 0; i < n; i++) {

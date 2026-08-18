@@ -168,19 +168,14 @@ its own items, a per-frame refcount.
 measuring it.** Either can be done at any point, including first.
 - [ ] Guard pages around each stack, so overflow faults precisely
       instead of corrupting a neighbour
-- [ ] **`USERLAND_CFLAGS` has no `-Wframe-larger-than`**, so a ring-3
-      function with a frame bigger than the single 4 KiB guard page can
-      step OVER it -- the Stack Clash shape (CVE-2017-1000364), which is
-      why Linux widened its guard gap to 256 pages in 4.11. The kernel
-      side is bounded (1024 bytes, 2048 for `apps/`); ring 3 is not.
-      Found by measuring, 2026-08-18. Cheap either way: a flag, or more
-      guard pages, and the flag is the one that names the offender
-- [ ] **Nothing checks the ~1 MiB between a ring-3 image and its heap.**
-      `link.ld` puts text at `0x8000000000` and `UADDR_HEAP_BASE` is
-      `0x8000100000`, so a binary whose sections pass 1 MiB would
-      overlap its own heap with no diagnostic anywhere. The largest
-      today is `toywm` at ~557 KB -- about 2x headroom, which is less
-      than it sounds
+- [x] ~~A frame-size bound for ring 3~~ DONE 2026-08-18
+      (`-Wframe-larger-than=2048`). It found four oversized frames the
+      day it landed, the worst at 20,608 bytes against a 16 KiB stack --
+      past the guard page entirely. Still open underneath it: the guard
+      is ONE page, where Linux uses 256
+- [x] ~~A check on the ~1 MiB between a ring-3 image and its heap~~
+      DONE 2026-08-18 -- an `ASSERT` in `userland/rt/link.ld`, the only
+      place that knows how big an image actually got
 
 ### More than 4 GiB of RAM (memory)
 *Measured 2026-08-18, while raising the per-process heap. This is not a
@@ -948,12 +943,12 @@ one.
             `main()`, exit with its return value~~ -- done.
       - [x] ~~A syscall layer with one definition per call~~ -- done
             (`userland/rt/sys.h`). A libc sits ON this, not instead of it.
-      - [ ] `malloc`/`free`/`realloc`. `SYS_SBRK` is the only
-            allocator-adjacent syscall and is grow-only with no
-            free-list on top anywhere. A first cut is the kernel's own
-            `kernel/mm/heap.c` design (it already coalesces by address
-            adjacency) rebuilt over sbrk -- or compiled for userland via
-            the shared-source rule, if it can be made allocator-agnostic.
+      - [x] ~~`malloc`/`free`~~ DONE 2026-08-18, the second way round:
+            `kernel/lib/heap_core.c` compiled twice, with sbrk behind it
+            in ring 3 (`api/heap_os.h`, `userland/lib/stdlib.h`). So it
+            is one allocator, not two. `realloc` is still absent, and
+            `free()` cannot return memory to the kernel until `mmap`
+            exists -- see this file's demand-paging milestone
       - [x] ~~`string.h`/`mem*`~~ -- done: `userland/lib/string.h`, the
             C names over the same `k_*` code (one implementation, not
             two). `memcpy`/`memmove`/`memset`/`memcmp` are real symbols

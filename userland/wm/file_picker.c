@@ -144,7 +144,14 @@ static void fp_refresh_listing(void) {
     // collect into a global and parse afterwards; sys_listdir() fills an
     // array, so the collector is gone entirely.
     g_entry_count = 0;
-    struct dirent ents[FP_MAX_ENTRIES];
+    // STATIC, not on the stack. A ring-3 stack is 16 KiB with ONE 4 KiB
+    // guard page below it, and FP_MAX_ENTRIES entries of `struct dirent` is
+    // 20,608 bytes -- a frame that large does not merely overflow, it
+    // steps clean OVER the guard into unmapped space, which is the
+    // Stack Clash shape. Found by -Wframe-larger-than the day it was
+    // added to USERLAND_CFLAGS. Safe here: the WM is one event loop and
+    // this does not recurse.
+    static struct dirent ents[FP_MAX_ENTRIES];
     int n = wm_fs_list(g_cwd, ents, FP_MAX_ENTRIES);
     for (int i = 0; i < n && g_entry_count < FP_MAX_ENTRIES; i++) {
         k_strcpy(g_entries[g_entry_count].name, ents[i].name);

@@ -211,7 +211,14 @@ static void fingerprint_cb(const char *name, uint32_t size, int is_dir) {
 
 uint64_t gui_apps_dir_fingerprint(void) {
     g_fp = 1;
-    struct dirent ents[GUI_APP_MAX];
+    // STATIC, not on the stack. A ring-3 stack is 16 KiB with ONE 4 KiB
+    // guard page below it, and GUI_APP_MAX entries of `struct dirent` is
+    // 2,576 bytes here and 3,904 in gui_apps_load() -- a frame that large does not merely overflow, it
+    // steps clean OVER the guard into unmapped space, which is the
+    // Stack Clash shape. Found by -Wframe-larger-than the day it was
+    // added to USERLAND_CFLAGS. Safe here: the WM is one event loop and
+    // this does not recurse.
+    static struct dirent ents[GUI_APP_MAX];
     int n = wm_fs_list(DESKTOP_DIR, ents, GUI_APP_MAX);
     for (int i = 0; i < n; i++) fingerprint_cb(ents[i].name, ents[i].size, (int)ents[i].is_dir);
     return g_fp;
@@ -221,7 +228,7 @@ void gui_apps_load(void) {
     gui_app_registry_count = 0;
     g_file_count = 0;
 
-    struct dirent ents[GUI_APP_MAX];
+    static struct dirent ents[GUI_APP_MAX];
     int n = wm_fs_list(DESKTOP_DIR, ents, GUI_APP_MAX);
     for (int i = 0; i < n; i++) collect(ents[i].name, ents[i].size, (int)ents[i].is_dir);
 

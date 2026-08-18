@@ -41,4 +41,19 @@ SECTIONS
     . = ALIGN(4096);
     .data : { *(.data .data.*) } :data
     .bss : { *(COMMON) *(.bss .bss.*) } :data
+
+    /* THE IMAGE MUST NOT REACH ITS OWN HEAP. UADDR_HEAP_BASE
+       (kernel/include/kernel/uaddr.h) is 0x8000100000, one MiB above
+       the base above, and SYS_SBRK starts handing out pages there --
+       so a binary whose sections passed that address would have its
+       .bss silently aliased by its own malloc. Nothing checked it
+       until this line: the linker is the only place that knows how big
+       the image actually got.
+
+       Kept as a literal rather than including uaddr.h, which is
+       kernel-internal and not on a linker script's include path
+       anyway. If that constant moves, this moves with it -- the
+       message says so. */
+    ASSERT(. <= 0x8000100000,
+           "userland image reached UADDR_HEAP_BASE (0x8000100000) -- it would overlap its own heap; raise the heap base in kernel/include/kernel/uaddr.h or shrink the program")
 }

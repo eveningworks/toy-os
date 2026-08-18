@@ -81,6 +81,11 @@ TESTS = [
      ["memtest: PASSED", "sbrk refused as expected"], ["FAIL", "MISMATCH"]),
     ("guard_test", 0,
      ["guard_test: all checks passed"], ["FAIL"]),
+    # malloc/free in ring 3 -- the kernel's own allocator over sbrk.
+    # Its coalescing and reuse checks are measured through sbrk(0), an
+    # independent path from the allocator's own bookkeeping.
+    ("malloc_test", 0,
+     ["malloc_test: all checks passed"], ["FAIL"]),
     ("fsgen_test", 0,
      ["fsgen_test: all checks passed"], ["FAIL"]),
     # Not a self-checker: it exists to prove an exit code survives the

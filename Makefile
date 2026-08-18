@@ -154,9 +154,19 @@ DISK_IMG = disk.img
 # interrupt vector rather than only where the scheduler swaps processes.
 USERLAND_CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-protector-guard=global -fno-pic -fno-pie \
                    -mno-red-zone -mcmodel=large \
-                   -Wall -Wextra -O2 -g -c $(API_INCLUDES) -Iuserland \
+                   -Wall -Wextra -Wframe-larger-than=2048 -O2 -g -c $(API_INCLUDES) -Iuserland \
                    -ffunction-sections -fdata-sections -MMD -MP \
                    -fno-tree-loop-distribute-patterns
+# -Wframe-larger-than for RING 3, which had none while the kernel side
+# has had one since kernel stacks got guard pages. The reason is the
+# same and the mechanism is weaker here: a ring-3 stack has ONE 4 KiB
+# guard page below it, and a function whose frame exceeds that can write
+# past the guard without ever touching it -- the Stack Clash shape
+# (CVE-2017-1000364), which is why Linux widened its guard gap to 256
+# pages in 4.11. A warning names the offending function; a wider guard
+# would only hide it. 2048 rather than the kernel's 1024 because a
+# ring-3 stack is 16 KiB where a kernel one is shared with an interrupt
+# frame; raise the guard instead if this ever becomes the constraint.
 # That last flag stops GCC rewriting a hand-written copy loop into a
 # call to memcpy(). It matters only in userland, and only since
 # userland/lib/string.c started providing a real memcpy: the rewrite
@@ -401,7 +411,8 @@ LIBUAPP_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBUAPP_SRCS)) \
                $(BUILD)/userland/shared/calc_engine.o \
                $(BUILD)/userland/shared/string.o \
                $(BUILD)/userland/shared/knum.o \
-               $(BUILD)/userland/shared/kfmt.o
+               $(BUILD)/userland/shared/kfmt.o \
+               $(BUILD)/userland/shared/heap_core.o
 LIBUAPP      = $(BUILD)/userland/libuapp.a
 
 # The `rm -f` is load-bearing: `ar rcs` UPDATES an existing archive,
