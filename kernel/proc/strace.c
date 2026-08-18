@@ -219,6 +219,29 @@ static const struct sc_desc SC_TABLE[] = {
     [SYS_POLL_EVENT]    = { "poll_event",    { A_HEX } },
     [SYS_WAIT_EVENT]    = { "wait_event",    { A_HEX } },
     [SYS_GETRANDOM]     = { "getrandom",     { A_HEX, A_INT } },
+
+    // Everything below arrived after the first version of this table and
+    // traced as a bare number until 2026-08-18 -- which is most of the
+    // interesting ones, since this is where process control, the window
+    // protocol and the settings registry live. `kstack syscalls` reads
+    // the same table (it is the kernel's ONLY list of these names), so a
+    // gap here shows up there too.
+    [SYS_WIN_REQUEST]    = { "win_request",   { A_HEX } },
+    [SYS_PIPE]           = { "pipe",          { A_HEX } },
+    // The args string is an ordinary NUL-terminated string, so A_PATH's
+    // quoting is right for it even though it is not a path.
+    [SYS_SPAWN]          = { "spawn",         { A_PATH, A_PATH, A_FD } },
+    [SYS_WAITPID]        = { "waitpid",       { A_INT, A_HEX, A_INT } },
+    [SYS_PROC_INFO]      = { "proc_info",     { A_INT, A_HEX } },
+    [SYS_KILL]           = { "kill",          { A_INT, A_INT } },
+    [SYS_TICKS]          = { "ticks",         { A_END } },
+    [SYS_MONOTONIC_NS]   = { "monotonic_ns",  { A_END } },
+    [SYS_SETTING]        = { "setting",       { A_HEX } },
+    [SYS_SYSINFO]        = { "sysinfo",       { A_HEX } },
+    [SYS_FS_GENERATION]  = { "fs_generation", { A_END } },
+    [SYS_CRASHTEST]      = { "crashtest",     { A_HEX } },
+    [SYS_POWEROFF]       = { "poweroff",      { A_INT } },
+    [SYS_WIN_DEBUG]      = { "win_debug",     { A_HEX } },
 };
 
 #define SC_TABLE_COUNT (sizeof(SC_TABLE) / sizeof(SC_TABLE[0]))
