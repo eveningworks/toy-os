@@ -33,6 +33,7 @@
 #include "demo.h"
 #include "gui.h"
 #include "scheduler.h"
+#include "process.h"  // process_guard_page_init() -- the legacy loader's stack
 #include "debug_console.h"
 #include "krandom.h"      // entropy source -- krandom_init()
 #include "reloc.h"        // the image's own relocation table -- kernel_relocate()
@@ -261,6 +262,14 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // what it used to do, presenting as a #GP on iretq in an innocent
     // process. See scheduler.c's PROC_KSTACK_SIZE comment.
     scheduler_guard_pages_init();
+    // The legacy blocking loader has its own kernel stack and therefore
+    // its own guard page. `run` and `config set` from the physical
+    // shell use THAT one, so leaving it unguarded left the overflow
+    // reachable from the likeliest place to type the command.
+    if (!process_guard_page_init()) {
+        klog_write("toy-os: WARNING -- the legacy loader's kernel stack has no "
+                   "guard page (split table pool exhausted)\n");
+    }
 
     debug_console_init(); // serial debug console (COM1) -- see docs/decisions.md; polled from keyboard_getchar()'s and wm_run()'s idle-wait loops
 

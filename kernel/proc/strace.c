@@ -223,6 +223,14 @@ static const struct sc_desc SC_TABLE[] = {
 
 #define SC_TABLE_COUNT (sizeof(SC_TABLE) / sizeof(SC_TABLE[0]))
 
+// The table is the kernel's only list of syscall names, so anything
+// else that wants to NAME a syscall asks here rather than growing a
+// second copy that drifts. `kstack syscalls` is the first such caller.
+const char *strace_syscall_name(int nr) {
+    if (nr < 0 || (size_t)nr >= SC_TABLE_COUNT) return 0;
+    return SC_TABLE[nr].name;
+}
+
 static void ap_oflags(char *out, size_t cap, size_t *len, uint64_t flags) {
     if (flags == 0) { ap_ch(out, cap, len, '0'); return; }
     int first = 1;

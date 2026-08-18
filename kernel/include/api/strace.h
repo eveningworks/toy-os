@@ -38,4 +38,8 @@ void strace_disarm(void);
 // returns, not before.
 uint64_t strace_call_count(void);
 
+// The name for a syscall number, or NULL if this kernel has none. The
+// strace table is the one list of these; a second copy would drift.
+const char *strace_syscall_name(int nr);
+
 #endif

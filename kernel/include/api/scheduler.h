@@ -207,6 +207,52 @@ enum sched_poll_result scheduler_poll(int pid, int *out_exit_code);
 // the fault reporter can say what was overrun without a second copy of
 // the number. The definition lives in scheduler.c beside the guard-page
 // machinery it belongs to.
+// --- the kernel-stack debug surface (`kstack` at the shell) ----------
+//
+// Everything here is diagnostic: none of it is on a hot path, and the
+// kernel does not act on any of it. It exists because all three
+// questions below were hand-rolled as throwaway probes during the
+// overflow hunt that produced the guard pages, and the next session
+// should not have to write them again.
+#define SCHED_KSTACK_NAME_MAX 32
+#define SCHED_KSTACK_SYSCALL_MAX 64
+
+struct sched_kstack_info {
+    int slot, pid, state, wait_reason;
+    uint32_t size;       // the stack's capacity in bytes
+    uint32_t used;       // high-water mark: how deep it has EVER been
+    int canary_ok;       // is the magic at the stack's base intact?
+    uint64_t base;       // lowest address of the stack itself
+    uint64_t guard;      // the unmapped page below it
+    uint64_t kernel_rsp; // where a resume would iretq from
+    // ...and what it would iretq INTO, if kernel_rsp points somewhere
+    // sane. `frame_ok` is 0 when it does not, which is itself a finding
+    // rather than a reason to dereference it.
+    int frame_ok;
+    uint64_t rip, cs, rsp, ss;
+    char name[SCHED_KSTACK_NAME_MAX];
+};
+
+// Fills `out` for one slot. Returns 0 for a bad index only -- an UNUSED
+// slot is a successful report with state == 0, the same convention
+// SYS_PROC_INFO follows so enumeration skips rather than stops.
+int scheduler_kstack_info(int idx, struct sched_kstack_info *out);
+
+// The same, for the LEGACY loader's kernel stack (process.c), which has
+// no scheduler slot and is the stack a `run` or `config set` typed at
+// the physical shell actually runs on. Reported through this header
+// rather than process.h because apps/ may not include a kernel-internal
+// one -- and leaving it out would omit the only stack whoever is
+// reading the report is standing on. `slot` and `pid` come back -1.
+int scheduler_kstack_legacy(struct sched_kstack_info *out);
+
+// Per-syscall stack-depth accounting: off by default, and effectively
+// free when off. Turning it ON clears the table.
+void scheduler_kstack_track_set(int on);
+int scheduler_kstack_track_get(void);
+uint32_t scheduler_kstack_syscall_peak(int nr);
+void scheduler_kstack_track_syscall(int nr); // called at syscall exit
+
 int scheduler_kstack_kib(void);
 
 // The lowest address of a slot's kernel stack -- the first mapped word

@@ -1759,3 +1759,104 @@ void cmd_gfxbench(const char *args) {
     vga_write(gfx_double_buffered() ? "buffered" : "DIRECT (reads the framebuffer)");
     vga_putc('\n');
 }
+
+// `kstack` -- the kernel stacks: how close each process is to the edge,
+// what a slot would be resumed into, and which syscall goes deepest.
+//
+// Every one of these was a hand-rolled throwaway probe during the
+// overflow hunt that produced the guard pages (docs/decisions.md). The
+// numbers matter BEFORE a crash, which is the whole point: the bug that
+// prompted this read 8192 of 8192, and the window manager's own path
+// was sitting at 7672 of 8192 -- 520 bytes of margin -- with nothing
+// anywhere reporting it.
+void cmd_kstack(const char *args) {
+    while (*args == ' ') args++;
+
+    if (k_strncmp(args, "track", 5) == 0) {
+        const char *v = args + 5;
+        while (*v == ' ') v++;
+        if (k_strcmp(v, "on") == 0)       scheduler_kstack_track_set(1);
+        else if (k_strcmp(v, "off") == 0) scheduler_kstack_track_set(0);
+        else if (*v != '\0') { vga_write("usage: kstack track [on|off]\n"); return; }
+        vga_printf("kstack: per-syscall depth tracking %s\n",
+                    scheduler_kstack_track_get() ? "ON (table cleared)" : "off");
+        return;
+    }
+
+    if (k_strcmp(args, "syscalls") == 0) {
+        if (!scheduler_kstack_track_get()) {
+            vga_write("kstack: tracking is off -- `kstack track on` first, then\n"
+                       "        exercise the paths you care about\n");
+        }
+        vga_write("syscall            peak stack\n");
+        int shown = 0;
+        for (int nr = 0; nr < SCHED_KSTACK_SYSCALL_MAX; nr++) {
+            uint32_t peak = scheduler_kstack_syscall_peak(nr);
+            if (!peak) continue;
+            // Names come from strace's table -- the kernel's only list
+            // of them. kfmt's numeric widths ZERO-PAD (see kfmt.h), so
+            // the column is built as a string, not with %-7d.
+            const char *nm = strace_syscall_name(nr);
+            char label[24];
+            if (nm) {
+                k_snprintf(label, sizeof label, "%s(%d)", nm, nr);
+            } else {
+                k_snprintf(label, sizeof label, "#%d", nr);
+            }
+            vga_printf("%-18s %lu bytes\n", label, (unsigned long)peak);
+            shown++;
+        }
+        // A table of zeroes and "nothing was recorded" are different
+        // answers, and only one of them means the tracking is working.
+        if (!shown) vga_write("  (nothing recorded yet)\n");
+        return;
+    }
+
+    if (*args != '\0' && k_strcmp(args, "slots") != 0) {
+        vga_write("usage: kstack [slots] | kstack track [on|off] | kstack syscalls\n");
+        return;
+    }
+    int slots = k_strcmp(args, "slots") == 0;
+
+    vga_printf("kernel stacks: %d KiB each, guard page below (unmapped)\n",
+                scheduler_kstack_kib());
+    if (slots) vga_write("slot pid name              state  krsp             cs   rip\n");
+    else       vga_write("slot pid name              used / size    canary\n");
+
+    struct sched_kstack_info k;
+    int live = 0;
+    for (int i = 0; i < 64; i++) {
+        if (!scheduler_kstack_info(i, &k)) break;
+        if (k.state == 0) continue; // SCHED_UNUSED -- skip, don't stop
+        live++;
+        if (slots) {
+            if (k.frame_ok) {
+                vga_printf("%-4d %-3d %-17s %-6d 0x%lx  0x%lx 0x%lx\n",
+                            k.slot, k.pid, k.name, k.state, k.kernel_rsp,
+                            k.cs, k.rip);
+            } else {
+                // The interesting case: a saved rsp that is not inside
+                // this slot's own stack is the finding, not a gap.
+                vga_printf("%-4d %-3d %-17s %-6d 0x%lx  <not in this stack>\n",
+                            k.slot, k.pid, k.name, k.state, k.kernel_rsp);
+            }
+        } else {
+            unsigned pct = k.size ? (unsigned)((uint64_t)k.used * 100 / k.size) : 0;
+            vga_printf("%-4d %-3d %-17s %lu / %lu  (%u%%)  %s\n",
+                        k.slot, k.pid, k.name,
+                        (unsigned long)k.used, (unsigned long)k.size, pct,
+                        k.canary_ok ? "ok" : "DESTROYED");
+        }
+    }
+    if (!live && !slots) vga_write("  (no live processes)\n");
+
+    // The legacy loader's stack is not a scheduler slot, and it is the
+    // one a command typed at THIS shell actually runs on -- so leaving
+    // it out would omit the only stack the reader is standing on.
+    if (!slots && scheduler_kstack_legacy(&k)) {
+        unsigned pct = k.size ? (unsigned)((uint64_t)k.used * 100 / k.size) : 0;
+        vga_printf("--   --  %-17s %lu / %lu  (%u%%)  %s\n",
+                    k.name, (unsigned long)k.used, (unsigned long)k.size, pct,
+                    k.canary_ok ? "ok" : "DESTROYED");
+    }
+}

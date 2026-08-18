@@ -347,9 +347,17 @@ void isr_dispatch(uint64_t *regs) {
         // IST (idt_init()); without it the CPU triple-faults and the
         // machine reboots with nothing printed at all.
         int kstack_slot = -1;
-        if (vector == 14) kstack_slot = scheduler_kstack_guard_slot(cr2);
-        else if (vector == 8) kstack_slot = scheduler_kstack_guard_slot(regs[20]);
-        int kstack_overflow = kstack_slot >= 0;
+        int kstack_legacy = 0;
+        uint64_t guard_at = vector == 14 ? cr2 : (vector == 8 ? regs[20] : 0);
+        if (vector == 14 || vector == 8) {
+            kstack_slot = scheduler_kstack_guard_slot(guard_at);
+            // The legacy loader's stack is not a scheduler slot, and it
+            // is the one `run`/`config set` from the shell use -- so
+            // asking only the scheduler would report the commonest case
+            // as a bare "Double fault".
+            if (kstack_slot < 0) kstack_legacy = process_kstack_guard_hit(guard_at);
+        }
+        int kstack_overflow = kstack_slot >= 0 || kstack_legacy;
 
         vga_set_color(VGA_WHITE, VGA_RED);
         vga_printf("\n*** %s%s ***\n",
@@ -374,7 +382,10 @@ void isr_dispatch(uint64_t *regs) {
                        (uint64_t)UADDR_STACK_BOTTOM,
                        (uint64_t)UADDR_STACK_VADDR + 4096);
         }
-        if (kstack_overflow) {
+        if (kstack_overflow && kstack_legacy) {
+            vga_printf("The LEGACY loader's kernel stack overflowed into its "
+                       "guard page (a `run`/`config` from the shell).\n");
+        } else if (kstack_overflow) {
             vga_printf("Process slot %d (pid %d) ran off the bottom of its "
                        "KERNEL stack into the guard page below it.\n",
                        kstack_slot, kstack_slot + 1);
@@ -411,10 +422,17 @@ void isr_dispatch(uint64_t *regs) {
                                      : stack_overflow ? "Stack overflow"
                                                       : exception_names[vector]);
         if (kstack_overflow) {
-            klog_printf("  process slot %d (pid %d) overran its %d KiB KERNEL "
-                        "stack into the guard page below it -- the call chain "
-                        "below is too deep for one\n",
-                        kstack_slot, kstack_slot + 1, scheduler_kstack_kib());
+            if (kstack_legacy) {
+                klog_printf("  the LEGACY loader's %d KiB kernel stack overran "
+                            "into its guard page -- the call chain below is "
+                            "too deep for one\n", scheduler_kstack_kib());
+            } else {
+                klog_printf("  process slot %d (pid %d) overran its %d KiB "
+                            "KERNEL stack into the guard page below it -- the "
+                            "call chain below is too deep for one\n",
+                            kstack_slot, kstack_slot + 1,
+                            scheduler_kstack_kib());
+            }
         }
         // Everything above went to the SCREEN only, which is why a panic
         // used to arrive as a photograph. The serial log is where a
@@ -427,9 +445,10 @@ void isr_dispatch(uint64_t *regs) {
         // be confidently wrong -- and its stack is a user mapping this
         // has no business walking.
         if ((cs & 3) == 0) {
-            panic_report_context(rip, regs,
-                                  kstack_overflow
-                                      ? scheduler_kstack_base(kstack_slot) : 0);
+            uint64_t scan_from = 0;
+            if (kstack_legacy)         scan_from = process_kstack_base();
+            else if (kstack_slot >= 0) scan_from = scheduler_kstack_base(kstack_slot);
+            panic_report_context(rip, regs, scan_from);
         }
 
         // The console draws into a back buffer and normally publishes

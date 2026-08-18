@@ -6465,6 +6465,35 @@ Two things the reporting needed, both found by running the control
     actionable content. It now prints `resolve -> tfs3_size ->
     read_inode -> atac_read`, which names the path to shorten.
 
+**The legacy loader had its own stack, and fixing only the scheduler's
+left the bug reachable from the likeliest place to hit it.**
+`process.c`'s `g_legacy_kstack` was a bare 8 KiB array with a comment
+claiming it was "sized to match the scheduler's own per-process
+kstacks" -- true when written, false the moment those changed. `run` and
+`config set` typed at the physical shell go through THAT path, so
+`config set cursor_size normal` double-faulted the kernel on committed
+`HEAD`, with the panic itself faulting on the way out. Both owners share
+`kernel/kstack.h` now, which exists precisely so the next size or policy
+change cannot apply to one and not the other. **When a comment asserts
+two things are the same size, check whether anything enforces it.**
+
+**Measuring the high-water mark: scan UP from the base, not down from
+the top.** The obvious cheap version walks down from the known peak and
+stops at the first poison byte, touching only what is new. It is wrong,
+and wrong quietly: real stack data contains `0xAA` bytes, so it stops at
+the first coincidental one. Measured -- a path that genuinely used 8680
+bytes reported **184**, exactly one trapframe, because byte 185 happened
+to be `0xAA`. Linux's `stack_not_used()` scans from the bottom for the
+same reason. The known peak bounds the walk instead, so it shortens as
+the peak grows.
+
+**And attribute only the syscall that GREW the mark.** The peak is a
+property of the stack, so recording it at every syscall exit credits
+every later call with the deepest one's number -- `write` looked as
+expensive as the setting write that really did it. `kstack syscalls`
+now reports the one syscall that pushed the water line down: for the
+overflow above, `#34` (`SYS_SETTING`) at 8680 bytes and nothing else.
+
 ## A dev build shows its commit; a release shows only its version
 
 `VERSION` changes about twice a milestone, so for the hundreds of builds

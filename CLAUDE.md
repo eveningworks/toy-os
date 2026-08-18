@@ -728,6 +728,15 @@ technical conventions below:
   ATA and zeroed the NEXT SLOT'S saved trapframe, so the window manager
   `iretq`'d into CS=0. **Do not grow a kernel stack dynamically** -- no
   mainstream kernel does, and the reasoning is in `docs/decisions.md`.
+  **There are TWO owners and they share `kernel/kstack.h`**: the
+  scheduler's per-slot stacks and `process.c`'s LEGACY loader stack,
+  which is the one a `run` or `config set` typed at the physical shell
+  actually uses. Fixing only the first left `config set` double-faulting
+  the kernel; the header exists so the next change cannot apply to one
+  and not the other. **`kstack` at the shell reports all of it** --
+  per-process high-water usage, the canary, what a slot would be resumed
+  into, and (`kstack track on`) which syscall pushed the water line
+  down. Reach for it BEFORE a crash: `config set` uses 8680 bytes.
 - **A compositor's view of a dead window is POISONED, not unmapped**
   (`comp_poison()` in `kernel/proc/win_server.c`). The invariant: while
   a compositor is registered, a window buffer's slot in its address
@@ -2328,6 +2337,16 @@ repeated manual steps to be worth automating:
   never reaches the drive, so without it the tool does almost no disk
   I/O -- verified by disarming the VFS preemption guard entirely and
   still getting four clean rounds.
+- **`serial_capture.py`** -- read a running VM's serial console RAW,
+  optionally sending one command first. The case `gui_debug.py` cannot
+  cover: a command that KILLS the guest. `DebugConsole` is
+  request/response, so a panicking kernel never returns a prompt and the
+  panic block is discarded as a timeout -- and `capture_panic()` only
+  helps while the console still answers. Only ONE reader may hold the
+  socket, so drive input through `--gui` (QMP) or this tool's `--send`,
+  never a second console. Exits 2 if the capture contains a `PANIC:`,
+  because a run that caught one is not a successful test. Pipe it into
+  `panic_resolve.py`.
 - **`panic_resolve.py`** -- paste a panic (from the log, or typed off a
   photograph) and it names every address in it, RIP and stack scan
   alike, annotating the original lines. It finds the relocation delta

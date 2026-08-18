@@ -1259,6 +1259,18 @@ guess.*
       so it is the same identity whichever side of the boundary the
       registry ends up on.
 
+- [ ] **`strace`'s syscall-name table stops at `SYS_GETRANDOM`.**
+      Everything added since -- `SYS_PROC_INFO`, `SYS_SETTING`,
+      `SYS_SYSINFO`, `SYS_TICKS`, `SYS_KILL`, `SYS_SPAWN`, `SYS_PIPE`,
+      `SYS_WAITPID`, `SYS_WIN_REQUEST`, `SYS_MONOTONIC_NS`,
+      `SYS_FS_GENERATION`, `SYS_CRASHTEST` -- traces as an unnamed
+      number, which is most of the interesting ones. `SC_TABLE` in
+      `kernel/proc/strace.c` is a designated-initialiser array, so each
+      is one line plus its argument types. Noticed because
+      `kstack syscalls` reads the same table (deliberately -- it is the
+      kernel's only list of these names) and reported the culprit as
+      `#34`.
+
 - [ ] **`syscall_dispatch()` has a 4832-byte stack frame, on every
       syscall.** Found by `-Wframe-larger-than=1024` (added 2026-08-18)
       the moment it existed; it is by a wide margin the biggest consumer

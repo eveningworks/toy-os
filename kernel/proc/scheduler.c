@@ -98,7 +98,7 @@
 #include "win_server.h"
 #include "win_input.h" // raw input to a ring-3 compositor // win_server_client_gone() -- see scheduler_on_exit()
 #include "pipe.h"      // pipe_close_writer() when a piped child exits
-#include "paging.h"    // paging_unmap_kernel_page() -- the guard pages
+#include "kstack.h"    // the guard page, canary and poison fill
 #include "kfmt.h"      // klog_printf, vga_printf
 #include "syscall_abi.h" // SYS_RETRY -- the wake value a blocked waiter sees
 #include "fs.h"
@@ -123,44 +123,15 @@ extern uint64_t g_next_kernel_rsp;
 // See api/scheduler.h -- one definition, shared with everything that
 // sizes a table per process.
 #define MAX_PROCS        SCHED_MAX_PROCS
-// 16 KiB, matching Linux's THREAD_SIZE and Windows' x64 kernel stack.
-// It was 8 KiB and that was not enough: a `/bin/config` write measured
-// 8192 of 8192 used on the setting -> etc_config -> VFS -> TFS3 journal
-// -> ATA path, ran off the bottom and zeroed the NEXT SLOT'S saved
-// trapframe, which then #GP'd on iretq in a process that had done
-// nothing wrong. Depth here is many medium frames, not one big one --
-// the largest single frame in the kernel is 928 bytes, which is why
-// CFLAGS carries -Wframe-larger-than=1024 rather than a smaller number.
-#define PROC_KSTACK_SIZE 16384
+// The per-process kernel stacks, one struct kstack each -- guard page,
+// canary and poison fill all come from kernel/kstack.h, which the
+// legacy loader (process.c) shares so the two cannot drift. It was 8
+// KiB with none of it, inside struct sched_process, and the overflow
+// that produced all this is in docs/decisions.md.
+#define PROC_KSTACK_SIZE  KSTACK_BYTES
+#define PROC_KSTACK_GUARD KSTACK_GUARD_BYTES
 
-// Written at the very bottom of every kernel stack and checked whenever
-// a process is switched away from or resumed. Linux's STACK_END_MAGIC /
-// CONFIG_SCHED_STACK_END_CHECK, and it earns its keep for the case the
-// guard page below cannot catch: a frame big enough to STEP OVER the
-// guard entirely and land in the neighbour. Value is arbitrary and
-// deliberately not a plausible pointer, length, or ASCII.
-#define KSTACK_MAGIC 0x57ACC0DE0BADF00DULL
-
-// Each stack gets an unmapped page BELOW it, so an overflow faults on
-// the guard rather than reaching the previous slot -- Linux's
-// CONFIG_VMAP_STACK in miniature (before 4.9 Linux had exactly this
-// bug: stacks in the direct map, an overflow silently corrupting the
-// adjacent task).
-//
-// The stacks are their own page-aligned array rather than a member of
-// struct sched_process for precisely this reason: a guard page has to
-// be page-aligned and must not share a page with anything the kernel
-// still needs. As a struct member it also put ~670 bytes of per-process
-// fields between one stack's bottom and the next slot's, which is what
-// let the overflow reach a trapframe at all.
-#define PROC_KSTACK_GUARD 4096
-
-struct proc_kstack {
-    uint8_t guard[PROC_KSTACK_GUARD];
-    uint8_t stack[PROC_KSTACK_SIZE];
-} __attribute__((aligned(4096)));
-
-static struct proc_kstack kstacks[MAX_PROCS];
+static struct kstack kstacks[MAX_PROCS];
 // The user stack's address and size, plus the guard region below it,
 // come from uaddr.h -- this spawn path and elf_run.c's legacy loader
 // build the SAME ring-3 layout, and used to say so in two places with
@@ -321,25 +292,30 @@ static volatile int alive_count = 0;
 static int rotation_pos = ROT_KERNEL;
 
 static uint64_t kernel_stack_top(int idx) {
-    return (uint64_t)&kstacks[idx].stack[PROC_KSTACK_SIZE];
+    return kstack_top(&kstacks[idx]);
 }
 
 static uint64_t kernel_stack_base(int idx) {
-    return (uint64_t)&kstacks[idx].stack[0];
+    return kstack_base(&kstacks[idx]);
 }
 
-// Lays the canary down. Called wherever a stack starts a new life.
-static void kstack_arm(int idx) {
-    *(volatile uint64_t *)kernel_stack_base(idx) = KSTACK_MAGIC;
+// How deep each slot's stack has ever been, in bytes. Only ever grows
+// within one process's life; reset when the slot starts a new one.
+static uint32_t kstack_peak[MAX_PROCS];
+
+// Called wherever a stack starts a new life. The trapframe the spawn
+// path has just written at the top is what `reserve_top` protects.
+static void kstack_arm_slot(int idx) {
+    kstack_arm(&kstacks[idx], TRAPFRAME_WORDS * 8, &kstack_peak[idx]);
 }
 
-// The check. Deliberately a PANIC rather than a log: the canary being
-// gone means something has already written outside its stack, so every
-// piece of state this scheduler is about to act on is suspect -- and
-// carrying on is how the original bug presented, as a fault in an
-// innocent process several context switches later.
+// The canary check. Deliberately fatal rather than a log line: the
+// canary being gone means something has already written outside its
+// stack, so every piece of state this scheduler is about to act on is
+// suspect -- and carrying on is exactly how the original bug presented,
+// as a fault in an innocent process several context switches later.
 static void kstack_verify(int idx) {
-    if (*(volatile uint64_t *)kernel_stack_base(idx) == KSTACK_MAGIC) return;
+    if (kstack_canary_ok(&kstacks[idx])) return;
     klog_printf("KERNEL STACK OVERFLOW: slot %d (pid %d, \"%s\") overran its "
                 "%d-byte stack -- canary at %lx destroyed\n",
                 idx, idx + 1, procs[idx].name, PROC_KSTACK_SIZE,
@@ -356,7 +332,117 @@ static void kstack_verify(int idx) {
 // Unmaps the guard page below every kernel stack. Called from
 // kernel_main() AFTER paging_enforce_wx(), which rewrites every PDE and
 // would otherwise put the huge page back.
+// --- the kernel-stack debug surface (`kstack` at the shell) ----------
+//
+// Three questions this answers, each of which was a hand-rolled
+// throwaway probe during the overflow hunt that produced this file's
+// guard pages:
+//
+//   1. how close is each process to the edge?   (the high-water mark)
+//   2. what is a slot about to be resumed INTO? (the saved trapframe --
+//      seeing cs=0 rip=0 on one is what named that bug, after three
+//      wrong theories)
+//   3. which SYSCALL is responsible for the depth? (below)
 int scheduler_kstack_kib(void) { return PROC_KSTACK_SIZE / 1024; }
+
+int scheduler_kstack_info(int idx, struct sched_kstack_info *out) {
+    if (idx < 0 || idx >= MAX_PROCS || !out) return 0;
+    k_memset(out, 0, sizeof *out);
+    out->slot       = idx;
+    out->pid        = idx + 1;
+    out->state      = (int)procs[idx].state;
+    out->size       = PROC_KSTACK_SIZE;
+    out->base       = kernel_stack_base(idx);
+    out->guard      = (uint64_t)&kstacks[idx].guard[0];
+    out->kernel_rsp = procs[idx].kernel_rsp;
+    out->wait_reason = procs[idx].wait_reason;
+    k_strlcpy(out->name, procs[idx].name, sizeof out->name);
+    if (procs[idx].state == SCHED_UNUSED) return 1;
+
+    out->used = kstack_used(&kstacks[idx], &kstack_peak[idx]);
+    out->canary_ok = kstack_canary_ok(&kstacks[idx]);
+
+    // The saved trapframe, which is the thing a resume will iretq from.
+    // Bounds-checked against this slot's own stack rather than trusted:
+    // a kernel_rsp pointing anywhere else is itself the finding, and
+    // dereferencing it would turn a diagnostic into a second fault.
+    uint64_t rsp = procs[idx].kernel_rsp;
+    if (rsp >= out->base && rsp + TRAPFRAME_WORDS * 8 <= kernel_stack_top(idx)) {
+        const uint64_t *f = (const uint64_t *)(uintptr_t)rsp;
+        out->rip = f[TF_RIP];
+        out->cs  = f[TF_CS];
+        out->rsp = f[TF_RSP];
+        out->ss  = f[TF_SS];
+        out->frame_ok = 1;
+    }
+    return 1;
+}
+
+int scheduler_kstack_legacy(struct sched_kstack_info *out) {
+    if (!out) return 0;
+    k_memset(out, 0, sizeof *out);
+    out->slot = -1;
+    out->pid  = -1;
+    out->size = KSTACK_BYTES;
+    out->used = process_kstack_used();
+    out->base = process_kstack_base();
+    out->canary_ok = process_kstack_canary_ok();
+    k_strlcpy(out->name, "(legacy loader)", sizeof out->name);
+    return 1;
+}
+
+// Per-syscall depth accounting. OFF by default and effectively free
+// when off; when on, every syscall exit asks how deep this stack has
+// ever been and attributes any GROWTH to the syscall that just ran.
+//
+// It attributes the PEAK, not this call's own usage, which is the
+// honest thing a cheap implementation can say: the peak is a property
+// of the stack, and the syscall recorded against it is the one that was
+// running when it got that deep. Good enough to rank the expensive
+// paths, which is the question worth asking.
+static int g_kstack_track;
+static uint32_t g_syscall_peak[SCHED_KSTACK_SYSCALL_MAX];
+
+void scheduler_kstack_track_set(int on) {
+    g_kstack_track = on ? 1 : 0;
+    if (on) {
+        for (int i = 0; i < SCHED_KSTACK_SYSCALL_MAX; i++) g_syscall_peak[i] = 0;
+    }
+}
+
+int scheduler_kstack_track_get(void) { return g_kstack_track; }
+
+uint32_t scheduler_kstack_syscall_peak(int nr) {
+    if (nr < 0 || nr >= SCHED_KSTACK_SYSCALL_MAX) return 0;
+    return g_syscall_peak[nr];
+}
+
+void scheduler_kstack_track_syscall(int nr) {
+    if (!g_kstack_track) return;
+    if (nr < 0 || nr >= SCHED_KSTACK_SYSCALL_MAX) return;
+
+    uint32_t used, before;
+    if (current_index >= 0) {
+        before = kstack_peak[current_index];
+        used = kstack_used(&kstacks[current_index], &kstack_peak[current_index]);
+    } else if (process_context_is_armed()) {
+        before = process_kstack_peak();
+        // The LEGACY loader's process: no scheduler slot, but its
+        // syscalls land on a real kernel stack all the same -- and it is
+        // the deepest path measured so far (8680 bytes for `config set`
+        // at the shell). Skipping it would leave the tracking blind to
+        // exactly the case that first overflowed.
+        used = process_kstack_used();
+    } else {
+        return;  // the kernel context itself -- not a per-process stack
+    }
+    // Attribute only a syscall that actually PUSHED the high-water
+    // down. The mark is a property of the stack, not of a call, so
+    // recording it unconditionally credits every later syscall with the
+    // deepest one's number -- measured, and it made `write` look as
+    // expensive as the setting write that really did it.
+    if (used > before && used > g_syscall_peak[nr]) g_syscall_peak[nr] = used;
+}
 
 uint64_t scheduler_kstack_base(int idx) {
     if (idx < 0 || idx >= MAX_PROCS) return 0;
@@ -366,7 +452,7 @@ uint64_t scheduler_kstack_base(int idx) {
 void scheduler_guard_pages_init(void) {
     int ok = 0;
     for (int i = 0; i < MAX_PROCS; i++) {
-        if (paging_unmap_kernel_page((uint64_t)&kstacks[i].guard[0])) ok++;
+        if (kstack_guard_arm(&kstacks[i])) ok++;
     }
     klog_printf("sched: %d/%d kernel-stack guard pages armed (%d KiB stacks, "
                 "guards %lx..%lx)\n",
@@ -380,8 +466,7 @@ void scheduler_guard_pages_init(void) {
 // instead of as an anonymous #PF in the middle of the kernel.
 int scheduler_kstack_guard_slot(uint64_t addr) {
     for (int i = 0; i < MAX_PROCS; i++) {
-        uint64_t lo = (uint64_t)&kstacks[i].guard[0];
-        if (addr >= lo && addr < lo + PROC_KSTACK_GUARD) return i;
+        if (kstack_guard_contains(&kstacks[i], addr)) return i;
     }
     return -1;
 }
@@ -582,7 +667,7 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_pipe) {
 
     procs[slot].pml4_phys  = as;
     procs[slot].kernel_rsp = (uint64_t)tf;
-    kstack_arm(slot);
+    kstack_arm_slot(slot);
     // A pristine FP state, not whatever the previous tenant of this
     // slot left behind -- slots get reused (scheduler_poll() reaps back
     // to SCHED_UNUSED), and inheriting the last process's registers

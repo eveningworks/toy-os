@@ -93,6 +93,7 @@ void cmd_ls_bin(const char *args);
 void cmd_debug(const char *args);
 void cmd_ata(const char *args);
 void cmd_heap(const char *args);
+void cmd_kstack(const char *args);
 void cmd_gfxbench(const char *args);
 
 #endif

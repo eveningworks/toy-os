@@ -123,6 +123,7 @@ directory of text cannot provide about itself. See
 | `dmatest [lba]`, `steptest <mb>` | Read-only and small-write proofs of the non-blocking DMA primitive and the steppable write/read APIs. |
 | `debug [<subsystem> on\|off]` | Per-subsystem runtime debug-log switches (`fs`/`wm`/`ata`), off by default, no rebuild needed. |
 | `ktest [suite]` | Runs the in-kernel test suite — see `make test`. |
+| `kstack [slots]`, `kstack track [on\|off]`, `kstack syscalls` | The kernel stacks. Plain: each process's high-water usage against its 16 KiB stack, plus the legacy loader's (the stack a command typed at this shell runs on), and whether its canary is intact. `slots` shows what a slot would be resumed *into* — saved trapframe RIP/CS — which is how a corrupted one is spotted before it is used. `track on` then `syscalls` attributes the depth to the syscall that pushed the water line down. The numbers matter *before* a crash: the overflow this was built after sat at 8680 of 8192 bytes, and the WM's own path at 7672 of 8192, with nothing reporting either. |
 | `fsck [repair]` | Walks every file's block tree against the free-block bitmap. On TFS3 it also verifies inode checksums, link counts and `.`/`..`, reclaims orphans, and on `repair` restores a damaged primary superblock from its backups. Read-only unless `repair` is passed. |
 | `fsformat <tfs2\|tfs3> confirm` | **Destroys the disk's contents**, reformats with the named filesystem and remounts live. Physical shell only. |
 

@@ -68,4 +68,18 @@ void process_context_exit(int code) __attribute__((noreturn));
 // is true.
 void process_context_recover(void) __attribute__((noreturn));
 
+
+// --- the legacy loader's kernel stack (kernel/kstack.h) ---------------
+//
+// It has a guard page and a canary like every scheduler slot's, and it
+// is the stack `run` and `config set` from the physical shell actually
+// use -- so the fault reporter and the `kstack` command both have to be
+// able to ask about it, or it is the one stack nothing can see.
+int process_guard_page_init(void);
+int process_kstack_guard_hit(uint64_t addr);
+uint32_t process_kstack_used(void);
+uint32_t process_kstack_peak(void); // the last measurement, without re-scanning
+uint64_t process_kstack_base(void);
+int process_kstack_canary_ok(void);
+
 #endif

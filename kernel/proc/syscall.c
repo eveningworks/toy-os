@@ -1354,6 +1354,12 @@ void syscall_dispatch(uint64_t *regs) {
         }
     }
 
+    // Diagnostic only, and a no-op unless `kstack track on` armed it.
+    // Here rather than at entry because the point is how deep the
+    // HANDLER went, and here rather than inside each branch because
+    // every branch reaches this line.
+    scheduler_kstack_track_syscall((int)rax);
+
     if (traced) {
         if (blocked) strace_end_noreturn(); // "= ?" -- no value yet, see above
         else         strace_end(rax, regs[14]);

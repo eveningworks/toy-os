@@ -3,6 +3,7 @@
 #include "vmm.h"
 #include "gdt.h"
 #include "idt.h"
+#include "kstack.h" // this path has a real kernel stack now -- see below
 
 // The currently "in-flight" kernel caller waiting for a ring-3 process
 // to exit. See process.h's note on why there's only one of these.
@@ -16,8 +17,45 @@ static int g_process_ctx_armed = 0;
 // The ring-0 stack a legacy (process_run_ring3) process's traps land
 // on. One is enough: process_context_is_armed() makes these calls
 // strictly non-nesting, so at most one legacy process exists at a time.
-// Sized to match the scheduler's own per-process kstacks.
-static uint8_t g_legacy_kstack[8192] __attribute__((aligned(16)));
+//
+// A full `struct kstack` (kernel/kstack.h), the same as every scheduler
+// slot gets -- 16 KiB with a guard page below it and a canary at its
+// base. It was a bare 8 KiB array with none of that, and the comment
+// here claimed it was "sized to match the scheduler's own per-process
+// kstacks", which stopped being true the moment those grew.
+//
+// That was not a tidiness problem. `config set cursor_size normal`
+// typed at the physical shell runs /bin/config through THIS path, and
+// the setting -> etc_config rewrite -> VFS -> TFS3 journal -> ATA chain
+// needs more than 8 KiB: the kernel double-faulted, with the panic
+// itself faulting on the way out. Fixing the scheduler's stacks and not
+// this one left the bug reachable from the one place a user is most
+// likely to type the command.
+static struct kstack g_legacy_kstack;
+static uint32_t g_legacy_peak;
+
+// Armed at boot beside the scheduler's, and for the same reason: the
+// guard page can only be unmapped after paging_enforce_wx() has
+// rewritten every PDE.
+int process_guard_page_init(void) {
+    kstack_arm(&g_legacy_kstack, 0, &g_legacy_peak);
+    return kstack_guard_arm(&g_legacy_kstack);
+}
+
+// For the fault reporter: is this address the legacy stack's guard?
+int process_kstack_guard_hit(uint64_t addr) {
+    return kstack_guard_contains(&g_legacy_kstack, addr);
+}
+
+// For `kstack` at the shell -- the legacy stack is invisible to the
+// per-slot report, and it is the one a shell command actually uses.
+uint32_t process_kstack_used(void) {
+    return kstack_used(&g_legacy_kstack, &g_legacy_peak);
+}
+
+uint64_t process_kstack_base(void) { return kstack_base(&g_legacy_kstack); }
+uint32_t process_kstack_peak(void) { return g_legacy_peak; }
+int process_kstack_canary_ok(void) { return kstack_canary_ok(&g_legacy_kstack); }
 
 int process_context_is_armed(void) {
     return g_process_ctx_armed;
@@ -92,7 +130,7 @@ int process_run_ring3_args(uint64_t pml4_phys, uint64_t entry, uint64_t user_rsp
     // resuming from a trapframe that had been scribbled over minutes of
     // debugging earlier. Found by running `ls` from the debug console
     // while Notepad had a window open.
-    gdt_set_kernel_stack((uint64_t)&g_legacy_kstack[sizeof g_legacy_kstack]);
+    gdt_set_kernel_stack(kstack_top(&g_legacy_kstack));
 
     vmm_switch_address_space(pml4_phys);
 
