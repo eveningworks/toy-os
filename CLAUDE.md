@@ -2969,7 +2969,12 @@ when feedback IS and ISN'T wanted, the `on_hover` contract, text/layout
 budgeting, and how to verify a GUI change properly. Read it before
 touching anything drawn.
 
-`docs/roadmap.md` is **grouped into LAYERS, ground up** (foundation ->
+**Milestones are NAMED, not numbered** (2026-08-18) -- a milestone is
+its title and its position is its layer, so nothing is renumbered when
+one is inserted. Older `Milestone N` references in git history, the
+changelogs and some source comments resolve through the one-way legend
+at the end of `docs/roadmap-details.md`; do not add a number to a new
+one. `docs/roadmap.md` is **grouped into LAYERS, ground up** (foundation ->
 core kernel services -> storage -> devices -> system services ->
 runtime -> GUI -> tooling), with a **Ready now** table at the top of the
 things whose prerequisites are all met. Milestone NUMBERS are ids and do

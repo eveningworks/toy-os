@@ -20,7 +20,7 @@ rather than only in order.
 
 **Several milestones share a target version, deliberately.** The old
 convention wrote "Milestone N (planned v0.N.0)", one milestone per minor
-release, and it rotted: v0.2.0 shipped Milestones 2, 4 and 15 together,
+release, and it rotted: v0.2.0 shipped Memory protection hardening, 4 and 15 together,
 and 15 landed while 3 through 14 had not started. A one-to-one mapping
 promises a schedule nobody follows. Grouping says the true thing -- a
 release is a coherent chunk of work, and here is which chunk each
@@ -38,7 +38,7 @@ recorded on the milestone itself once it happens.
 testing, not milestone-complete (see `docs/decisions.md`'s
 release-process entry and the
 [v0.0.9 GitHub Release](https://github.com/eveningworks/toy-os/releases/tag/v0.0.9)).
-`v0.1.0` is Milestone 1. `v0.2.0` is Milestones 2, 4 and 15, plus the
+`v0.1.0` is Async I/O to the desktop. `v0.2.0` is Memory protection hardening, 4 and 15, plus the
 move of the whole GUI into ring 3. Whether/when this project ever calls
 something `1.0.0` is a separate, later judgment call, not mechanically
 tied to any milestone count.
@@ -47,7 +47,7 @@ tied to any milestone count.
 a workable build order: a layer depends only on the ones above it, and
 nothing in it can be worked around from below. That ordering used to be
 asserted by milestone NUMBER, which is historical -- so the scheduler
-(Milestone 42, and about as low-level as this project gets) sat last,
+(Scheduler: blocking, priorities, classes, and about as low-level as this project gets) sat last,
 below desktop polish and productivity apps that cannot run without it.
 
 **Milestone numbers did NOT change and are not going to.** They are ids,
@@ -59,73 +59,38 @@ Where a dependency is real and not obvious from the layer alone, the
 milestone carries a **Needs:** line naming it. Milestones without one
 depend on nothing outstanding -- that is information, not an omission.
 
-This replaced an earlier arrangement where numbering was fixed and the
-order was only roughly meaningful. Milestones 4-30 were renumbered once,
-in place, to make position and number agree again; 1-3 kept their numbers
-because 1 is released and 2-3 are in progress with completed items that
-`CHANGELOG.md` refers to by number. Prerequisites were pulled *forward*
-rather than dependents pushed back, so the fundamentals (a test harness,
-a TTY layer, demand paging) land early instead of core process work
-landing late.
+**MILESTONES ARE NAMED, NOT NUMBERED.** A milestone is its title --
+"Demand paging & shared memory", "The GUI in ring 3" -- and its position
+is its LAYER. There are no numbers to keep in order, so nothing has to
+be renumbered when something is inserted, which is the whole reason for
+the change: the list was renumbered three times, the third pass moved
+eight milestones at once, and each pass meant rewriting every
+cross-reference in this file and three others plus leaving a translation
+table nobody read.
 
-**Two further renumberings have happened since**, both for the same
-reason and both by insertion rather than reshuffling. The second added
-the TFS3 inode layer, because per-file owner/mode bits want to live on
-an inode and building permissions first would mean building them twice.
-The third added eight milestones at once -- fuzzing, crash reporting,
-init/services, in-OS docs, block checksums, encryption at rest, a
-layout engine and runtime fonts -- each slotted where its prerequisites
-put it rather than appended.
+Titles are unique and say what the work is, which a number never did.
+Adding a milestone is writing a heading in the layer it belongs to.
 
-That third pass is the point at which this convention starts costing
-more than it returns, so: **the position rule is worth a renumbering for
-one or two insertions with a real prerequisite argument. Beyond that,
-append.** Eight at once meant rewriting every cross-reference in this
-file plus three others, and a fourth pass would mean a fourth
-translation table nobody will read carefully.
-
-If you find a `Milestone N` reference that doesn't match this list, it
-predates one of the three renumberings -- translate it below. Entries in
-`CHANGELOG.md`'s released sections and in the `CHANGELOG-archive*.md`
-files were deliberately NOT rewritten: they're a record of what was true
-when written, not a live index. (Note the archives also use "Milestone
-N" for an entirely separate, much older numbering of their own -- there,
-"Milestone 8" is the original process-isolation work, not anything in
-this file.)
-
-Original numbering -> today (all three passes applied):
-
-| Was | Now | | Was | Now | | Was | Now |
-|---|---|---|---|---|---|---|---|
-| 4 | 27 | | 13 | 31 | | 22 | 25 |
-| 5 | 9 | | 14 | 32 | | 23 | 37 |
-| 6 | 10 | | 15 | 33 | | 24 | 26 |
-| 7 | 12 | | 16 | 24 | | 25 | 4 |
-| 8 | 17 | | 17 | 28 | | 26 | 8 |
-| 9 | 19 | | 18 | 35 | | 27 | 38 |
-| 10 | 22 | | 19 | 34 | | 28 | 29 |
-| 11 | 23 | | 20 | 36 | | 29 | 5 |
-| 12 | 30 | | 21 | 7 | | 30 | 39 |
-
-Written against the intermediate scheme (after the inode insertion, when
-the list ran 1-32) -> today: 1-5 unchanged; 6-9 add 1; 10 adds 2; 11
-adds 4; 12 adds 5; 13 adds 6; 14 and up add 8.
+**Older references say `Milestone N`** -- git history, the frozen
+changelogs, some source comments. Those numbers are dead and are not
+coming back; `docs/roadmap-details.md` ends with a one-way legend for
+resolving them. Do not reintroduce a number to a heading here.
 
 ## Ready now
 
 Nothing these need is outstanding -- they can be started today. This is
 not a priority order, it is an availability one.
 
-| Milestone | Layer | Why it is ready |
+| Item | Layer | Why it is ready |
 |---|---|---|
-| **42** Scheduler: blocking, priorities, classes | 2 | Its own note said "do this after Milestone 41 stage 4", and that is done. The kernel context stops being a rotation participant here. |
-| Syscall table + per-subsystem handlers (Known issues) | 2 | Nothing depends on it; everything that adds a syscall gets easier after it, including the settings daemon. |
-| **3** Storage hardening | 3 | Block layer and journal are in place. |
-| **16** Block integrity: checksums & scrubbing | 3 | Same. |
-| **19** Desktop visual polish | 7 | Toykit and the ring-3 desktop are done. |
-| **4** Kernel test harness (5 items open) | 8 | Harness shipped; the open items are additive. |
-| **5** Benchmark suite | 8 | `gfxbench`/`stress` exist to build on. |
-| **26** Observability | 8 | `kstack`, the watchdog and `strace` are the start of it. |
+| **Scheduler: blocking, priorities, classes** | 2 | Its own note said "do this after the GUI moved to ring 3", and that is done. The kernel context stops being a rotation participant here. |
+| **Syscall table + per-subsystem handlers** (see Known issues) | 2 | Nothing depends on it, and everything that adds a syscall gets easier after it -- including the settings daemon. |
+| **Storage hardening** | 3 | Block layer and journal are in place. |
+| **Block integrity: checksums & scrubbing** | 3 | Same. |
+| **Desktop visual polish** | 7 | Toykit and the ring-3 desktop are done. |
+| **Kernel test harness** (5 items open) | 8 | The harness shipped; the open items are additive. |
+| **Benchmark suite** | 8 | `gfxbench`/`stress` exist to build on. |
+| **Observability** | 8 | `kstack`, the slow-frame watchdog and `strace` are the start of it. |
 
 ## Layer 1 -- Kernel foundation (memory, CPU, boot)
 
@@ -133,8 +98,7 @@ What every other layer stands on. Nothing here can be worked around from
 above: a process model without demand paging, or SMP without a scheduler
 that can block, is a different design rather than a smaller one.
 
-### Milestone 8 -- Demand paging & shared memory (memory, target v0.6.0)
-
+### Demand paging & shared memory (memory, target v0.6.0)
 - [ ] Page-fault-driven mapping (allocate on first touch, not up front)
 - [ ] File-backed `mmap`
 - [ ] `MAP_SHARED` memory between two processes
@@ -148,13 +112,12 @@ that can block, is a different design rather than a smaller one.
 - [ ] Guard pages around each stack, so overflow faults precisely
       instead of corrupting a neighbour
 - [ ] Copy-on-write shared between this and `fork()` -- one
-      implementation, not two (see Milestone 9's ordering note)
+      implementation, not two (see the fork()/exec() milestone's ordering note)
 - [ ] A `pmap`-style command showing one process's mappings, which is
       also how any of this gets debugged
 
-### Milestone 36 -- Swap / paging to disk (memory, target v1.0.0+)
-
-**Needs:** Milestone 8 -- swap is demand paging with a backing store.
+### Swap / paging to disk (memory, target v1.0.0+)
+**Needs:** Demand paging & shared memory -- swap is demand paging with a backing store.
 
 - [ ] A swap-backed page reclaim path
 - [ ] Page-out under memory pressure
@@ -164,8 +127,7 @@ that can block, is a different design rather than a smaller one.
 - [ ] Dirty-page writeback before eviction
 - [ ] Swap usage reported in `meminfo` and Task Manager
 
-### Milestone 30 -- ACPI + real power/timer (hardware, target v1.0.0+)
-
+### ACPI + real power/timer (hardware, target v1.0.0+)
 - [ ] ACPI table parsing (RSDP/MADT/FADT/HPET)
 - [ ] Real ACPI-based poweroff
 - [ ] **HPET as a third clocksource** -- needs the HPET table above, and
@@ -173,13 +135,12 @@ that can block, is a different design rather than a smaller one.
 - [ ] APIC + a `clock_event_device` split, replacing the fixed-100Hz PIT
       interrupt (the other half of the clocksource work -- see Details)
 - [ ] Battery + AC adapter status (a real laptop concern, and a tray item
-      once Milestone 19's tray exists -- it does)
+      once the desktop-polish milestone's tray exists -- it does)
 - [ ] Thermal zone reporting
 - [ ] S3 suspend/resume
 - [ ] ACPI reboot (today's `reboot` uses the 8042 pulse)
 
-### Milestone 38 -- UEFI boot (hardware, target v1.0.0+)
-
+### UEFI boot (hardware, target v1.0.0+)
 - [ ] A UEFI stub/loader alongside the Multiboot2 path
 - [ ] GOP framebuffer acquisition (instead of GRUB's multiboot tag)
 - [ ] Memory map from `GetMemoryMap()` feeding `pmm.c`
@@ -193,13 +154,12 @@ that can block, is a different design rather than a smaller one.
 - [ ] Runtime services: what remains callable after `ExitBootServices()`,
       and whether to use any of it (the RTC is the tempting one)
 - [ ] ACPI table discovery via the UEFI system table rather than by
-      scanning low memory (see Milestone 30)
+      scanning low memory (see ACPI + real power/timer)
 - [ ] A build that produces both a BIOS ISO and a UEFI-bootable image
 - [ ] CI booting both, or the second path rots
 
-### Milestone 31 -- SMP (kernel, target v1.0.0+)
-
-**Needs:** Milestone 42 (a scheduler that can block), Milestone 30
+### SMP (kernel, target v1.0.0+)
+**Needs:** Scheduler: blocking, priorities, classes (a scheduler that can block), ACPI + real power/timer
 (ACPI, to enumerate CPUs and program the APIC).
 
 - [ ] Discover other cores via MADT
@@ -219,8 +179,7 @@ The contract userland is written against. Changing it later means
 changing every program that uses it, which is why these come before
 anything that would.
 
-### Milestone 42 -- Scheduler: blocking, priorities, classes (kernel, target v0.4.0)
-
+### Scheduler: blocking, priorities, classes (kernel, target v0.4.0)
 Today's scheduler is a preemptive round-robin over `procs[]` with the
 KERNEL CONTEXT as one of the rotation participants, no priorities, and
 **no blocking state at all**. Nothing can sleep until an event; it can
@@ -258,13 +217,12 @@ happen.
       see the "Get blocking disk I/O out of the WM's event loop" item
       under Known issues.
 
-**Sequencing:** do this AFTER Milestone 41 stage 4. Moving the WM to
+**Sequencing:** do this AFTER the GUI's move to ring 3, stage 4. Moving the WM to
 ring 3 deletes the scheduler's strangest case -- the kernel context as a
 rotation participant (`ROT_KERNEL`) -- and it would be a waste to design
 priorities and wait queues around a participant that is about to stop
 existing.
-### Milestone 10 -- Signals & process control (process, target v0.5.0)
-
+### Signals & process control (process, target v0.5.0)
 - [ ] Basic signal delivery (kill-equivalent)
 - [ ] Default dispositions (terminate, ignore)
 - [ ] A `kill`/`ps`-style shell command
@@ -287,13 +245,13 @@ existing.
             vanished pid.
       - [ ] A distinguishable exit status, so a shell can print
             "Interrupted" rather than reporting a clean exit.
-      - [ ] The foreground concept. **This does NOT need Milestone 7's
+      - [ ] The foreground concept. **This does NOT need the TTY milestone's
             full TTY layer** once the terminal is a ring-3 process that
-            spawns its own children (Milestone 41): the terminal knows
+            spawns its own children (The GUI in ring 3): the terminal knows
             its own child's pid, so "the foreground process" is the
             terminal's own state. A kernel TTY is needed for the
             PHYSICAL shell's Ctrl-C, and for job control (`fg`/`bg`,
-            Milestone 12) -- not for this.
+            Shell pipes & job control) -- not for this.
       - [ ] Nothing in the keyboard driver. Ctrl already reaches apps as
             a control code (0x03), see `keyboard.h`'s "Ctrl and Alt"
             note -- a ring-3 terminal receives `^C` as an ordinary key
@@ -306,9 +264,8 @@ existing.
       tearing it down unconditionally
 - [ ] SIGCHLD on child exit
 
-### Milestone 9 -- `fork()`/`exec()`-style process model (process, target v0.6.0)
-
-**Needs:** Milestone 8 (shared memory / copy-on-write is what makes
+### `fork()`/`exec()`-style process model (process, target v0.6.0)
+**Needs:** Demand paging & shared memory (shared memory / copy-on-write is what makes
 `fork()` cheap rather than a full copy).
 
 - [x] ~~Hardware floating point / SSE for ring-3 processes~~ -- done
@@ -342,9 +299,8 @@ existing.
 - [ ] `brk`-style growable per-process heap (`SYS_SBRK` exists but the
       mapping behind it is fixed)
 
-### Milestone 7 -- TTY / virtual terminals (process, target v0.5.0)
-
-**Needs:** Milestone 10 -- a terminal without signals cannot deliver
+### TTY / virtual terminals (process, target v0.5.0)
+**Needs:** Signals & process control -- a terminal without signals cannot deliver
 Ctrl-C, which is most of what makes it a terminal.
 
 - [ ] A line discipline (line editing, echo control) separate from the
@@ -377,9 +333,8 @@ Ctrl-C, which is most of what makes it a terminal.
       away
 - [ ] Scrollback per virtual terminal, not one global console buffer
 
-### Milestone 12 -- Shell pipes & job control (shell, target v0.5.0)
-
-**Needs:** Milestone 10 (signals) and Milestone 7 (the process groups
+### Shell pipes & job control (shell, target v0.5.0)
+**Needs:** Signals & process control (signals) and TTY / virtual terminals (the process groups
 job control suspends and resumes).
 
 **Read this as "make `tosh` a real shell".** `userland/lib/tosh.c` (Milestone
@@ -399,11 +354,11 @@ because that is the distinction that decides what can be done today:
       hardcodes. The general form of the item above.
 - [ ] **A per-process cwd.** `tosh` keeps its own, and a spawned child
       does not inherit it -- so `cd /bin` then `hello` finds the program
-      only because PATH is absolute. Also listed under Milestone 40.
+      only because PATH is absolute. Also listed under POSIX compatibility.
 - [ ] **An environment passed to a child.** `crt0.asm` already reads
       `envp` off the stack per SysV; the kernel always passes an empty
       one. `export` cannot mean anything until a child receives it.
-- [ ] **Ctrl-C** -- see Milestone 10, whose requirements this
+- [ ] **Ctrl-C** -- see Signals & process control, whose requirements this
       migration is what makes achievable.
 - [ ] **`#!` handling**, which is the loader's job, not the shell's:
       `elf_load()` rejects a non-ELF file, so a script cannot be
@@ -426,7 +381,7 @@ because that is the distinction that decides what can be done today:
 - [ ] Background jobs (`&`) and `fg`/`bg`/`jobs` -- the shell tracks
       the table, but "which job is in the foreground" is also what
       Ctrl-C needs, and a background child writing to a terminal that
-      has moved on needs the TTY layer (Milestone 7) to arbitrate.
+      has moved on needs the TTY layer (TTY / virtual terminals) to arbitrate.
 
 - [ ] `|` pipes between two commands
 - [ ] `>`/`<`/`>>` redirection
@@ -452,8 +407,7 @@ The filesystem is real and journalled already; what is left is
 durability and structure -- integrity checking, snapshots, mount points
 -- none of which the layers above can add for it.
 
-### Milestone 3 -- Storage hardening (storage, target v0.4.0)
-
+### Storage hardening (storage, target v0.4.0)
 - [x] ~~Full multi-GB stress run (`stress 4200` / `stress 8192`)~~ -- done,
       both PASSED byte-for-byte on 2026-08-13 (4200 MB in 326 s, 8192 MB
       in 692 s), see `CHANGELOG.md`'s `[Unreleased]` entry
@@ -505,8 +459,7 @@ durability and structure -- integrity checking, snapshots, mount points
       checksums every inode at rest (verified on each read); TFS2's
       records still have no at-rest integrity check
 
-### Milestone 16 -- Block integrity: checksums & scrubbing (storage, target v0.4.0)
-
+### Block integrity: checksums & scrubbing (storage, target v0.4.0)
 *Right after the inode layer, while that on-disk format is already
 open -- a checksum field wants to be designed in, not bolted on.*
 
@@ -535,9 +488,8 @@ open -- a checksum field wants to be designed in, not bolted on.*
 - [ ] Measure the write-path cost and record it, since every write now
       computes a checksum
 
-### Milestone 15 -- TFS3: an inode layer (storage, target v0.9.0; filesystem shipped v0.2.0; three items open)
-
-*Same correction as Milestone 4 above: the heading claimed completion
+### TFS3: an inode layer (storage, target v0.9.0; filesystem shipped v0.2.0; three items open)
+*Same correction as Kernel test harness above: the heading claimed completion
 with three boxes unchecked (unlink-while-open, raising `FS_PATH_MAX`,
 and the symlink implementation). TFS3 itself is done and is the default
 format; those three are follow-ups it did not include.*
@@ -568,8 +520,8 @@ probe-selected backend, with live switching via `fsformat` -- see
       every caller still holds 64-byte buffers; raising the API
       constant is its own audit. `FS_MAX_FILES` stays as TFS2's table
       size only.
-- [x] ~~Room in the inode for owner/mode (Milestone 17) and `time_t`
-      (Milestone 40)~~ -- done: 128-byte inode reserves uid/mode,
+- [x] ~~Room in the inode for owner/mode (for Multi-user & file permissions) and `time_t`
+      (POSIX compatibility)~~ -- done: 128-byte inode reserves uid/mode,
       timestamps are epoch seconds outright
 - [x] ~~Symlink FORMAT support (fast symlinks inline in the pointer
       area)~~ -- done (type 2 carried; adding the implementation needs
@@ -592,9 +544,8 @@ probe-selected backend, with live switching via `fsformat` -- see
       chosen by magic probe everywhere -- kernel, `seed_disk.py`,
       `check_layout.py`)
 
-### Milestone 29 -- Data journaling & snapshots (storage, target v0.9.0)
-
-**Needs:** Milestone 15's remaining items -- snapshots are a property of
+### Data journaling & snapshots (storage, target v0.9.0)
+**Needs:** the TFS3 inode layer's remaining items -- snapshots are a property of
 the inode layer, not of the block layer under it.
 
 - [ ] Journal file *data*, not just metadata -- the gap `tfs.c`'s top
@@ -616,15 +567,14 @@ the inode layer, not of the block layer under it.
 - [ ] `tools/tfs3_writer.py` able to read a snapshot from the host
 - [ ] Measure the write amplification this introduces, honestly
 
-### Milestone 25 -- Real mount points (storage, target v0.9.0)
-
+### Real mount points (storage, target v0.9.0)
 - [ ] A mount table (path prefix -> backend), replacing vfs.c's single
       `g_fs`
 - [ ] Path resolution that picks a backend per-path
 - [ ] `mount`/`umount` shell commands
 - [ ] Mount a second TFS3 image alongside the first, as the simplest
       possible proof
-- [ ] Mount a FAT volume (needs Milestone 24's FAT driver) read-only
+- [ ] Mount a FAT volume read-only (needs Runtime + interop's FAT driver)
 - [ ] Decide the lookup rule up front: longest-prefix wins, and what
       happens when a mount point shadows existing files
 - [ ] Mounting over a non-empty directory -- allow and hide, or refuse
@@ -636,8 +586,7 @@ the inode layer, not of the block layer under it.
 - [ ] A tmpfs/RAM-disk backend as the cheapest possible second mount to
       test against (currently a backlog item)
 
-### Milestone 18 -- Encryption at rest (security, target v0.9.0)
-
+### Encryption at rest (security, target v0.9.0)
 *After multi-user, which brings password hashing -- the key derivation
 this needs is the same machinery, and building it twice would be silly.*
 
@@ -646,7 +595,7 @@ this needs is the same machinery, and building it twice would be silly.*
 - [ ] KTESTs against published test vectors -- the one domain where
       "it runs" and "it's correct" are completely unrelated
 - [ ] Key derivation from a passphrase, deliberately slow (PBKDF2-style
-      iteration), shared with Milestone 17's password hashing
+      iteration), shared with Multi-user & file permissions's password hashing
 - [ ] Full-volume encryption below the filesystem, so TFS3 needs no
       knowledge of it
 - [ ] A per-block IV/tweak derived from the block number, so identical
@@ -666,8 +615,7 @@ Each of these is one file behind an existing registry (`display_driver`,
 `block_device`) rather than new architecture. They are here because
 everything above can be built and tested without them.
 
-### Milestone 27a -- virtio, and a real GPU driver (hardware, unscheduled)
-
+### virtio, and a real GPU driver (hardware, unscheduled)
 **Why virtio first, and why the GPU is the prize.** One transport layer
 (virtqueues + the PCI capability/config negotiation) unlocks every
 virtio device at once, which is a better return than any single
@@ -681,7 +629,7 @@ Measured 2026-08-13: `-vga virtio` boots this kernel fine at 1280x720
 (GRUB sets a VBE mode and we use it), so the device is available to
 develop against today with no bring-up risk.
 
-**Milestone 41's cursor requirement landed here (2026-08-17).** Stage
+**The GUI in ring 3's cursor requirement landed here (2026-08-17).** Stage
 4a listed "the cursor over TWP" as a requirement and measuring it moved
 it out: `DISPLAY_CAP_CURSOR` is declared only by `vmsvga`, which
 disables it by default because a hardware cursor over a RELATIVE PS/2
@@ -722,8 +670,7 @@ reachable configuration already does. See `docs/decisions.md`.
       remove the "no USB pointer device" trap in the QEMU flags (see
       CLAUDE.md)
 
-### Milestone 27b -- other emulated hardware worth claiming (hardware, unscheduled)
-
+### other emulated hardware worth claiming (hardware, unscheduled)
 Devices QEMU already presents to this machine that nothing drives yet.
 Listed with the honest reason each is or isn't attractive.
 
@@ -746,8 +693,7 @@ Listed with the honest reason each is or isn't attractive.
       against 1280x720 for the others. Recorded so the option isn't
       re-investigated from scratch; the resolution cost rules it out
 
-### Milestone 27 -- AHCI/SATA driver (hardware, target v1.0.0+)
-
+### AHCI/SATA driver (hardware, target v1.0.0+)
 - [ ] PCI discovery + ABAR mapping
 - [ ] Port detection
 - [ ] Bring up one port
@@ -761,12 +707,11 @@ Listed with the honest reason each is or isn't attractive.
 - [ ] Port multiplier awareness (detect and report, not necessarily
       support)
 
-### Milestone 28 -- NVMe / modern storage (hardware, target v1.0.0+)
-
+### NVMe / modern storage (hardware, target v1.0.0+)
 - [ ] PCIe NVMe controller discovery
 - [ ] Admin queue + identify command
 - [ ] I/O submission/completion queues
-- [ ] Backend parity with `ata.c`/AHCI (Milestone 27)
+- [ ] Backend parity with `ata.c` and the AHCI/SATA driver
 - [ ] Doorbell registers and the queue-wrap arithmetic they need
 - [ ] MSI/MSI-X interrupts -- NVMe doesn't use legacy pin-based IRQs
 - [ ] Namespace enumeration (an NVMe disk can present several)
@@ -777,8 +722,7 @@ Listed with the honest reason each is or isn't attractive.
 - [ ] A PRP list for transfers past one page, the equivalent of the PRD
       table `ata.c` already builds
 
-### Milestone 32 -- USB (hardware, target v1.0.0+)
-
+### USB (hardware, target v1.0.0+)
 - [ ] Host controller discovery
 - [ ] Bring up xHCI
 - [ ] Root port + device detection
@@ -793,9 +737,8 @@ Listed with the honest reason each is or isn't attractive.
 - [ ] Ordering against the PS/2 handoff, so both input paths can coexist
       during transition
 
-### Milestone 33 -- Networking (hardware, target v1.0.0+)
-
-**Needs:** a NIC driver, i.e. Milestone 27a's virtio-net.
+### Networking (hardware, target v1.0.0+)
+**Needs:** a NIC driver, i.e. virtio, and a real GPU driver's virtio-net.
 
 - [ ] NIC driver (rtl8139 first)
 - [ ] Ring-3-readable millisecond-ish clock (a tick counter exposed via
@@ -816,8 +759,7 @@ Listed with the honest reason each is or isn't attractive.
 - [ ] A second NIC driver (e1000) to prove the driver interface isn't
       shaped around rtl8139
 
-### Milestone 34 -- Sound (hardware, target v1.0.0+)
-
+### Sound (hardware, target v1.0.0+)
 - [x] ~~PC speaker beep (simplest possible output)~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry
 - [ ] AC97 or HDA PCI audio device driver
 - [ ] A basic mixer/volume syscall surface
@@ -831,9 +773,8 @@ Listed with the honest reason each is or isn't attractive.
 The first layer that is POLICY rather than mechanism, and the first that
 needs processes to outlive the thing that started them.
 
-### Milestone 13 -- Init & service supervision (system, target v0.7.0)
-
-**Needs:** Milestone 42 (deterministic wakeups) and Milestone 10 (a
+### Init & service supervision (system, target v0.7.0)
+**Needs:** Scheduler: blocking, priorities, classes (deterministic wakeups) and Signals & process control (a
 supervisor stops a service by signalling it). **Unlocks:** the ring-3
 settings daemon, and any future name service.
 
@@ -855,9 +796,8 @@ essentially those four used in anger.*
 - [ ] One real service to prove it, rather than a framework with no
       users -- the serial debug console is the obvious candidate
 
-### Milestone 17 -- Multi-user & file permissions (security, target v0.7.0)
-
-*Wants Milestone 15's inode layer first -- per-file owner/mode bits
+### Multi-user & file permissions (security, target v0.7.0)
+*Wants the TFS3 inode layer's inode layer first -- per-file owner/mode bits
 belong on an inode, not on a path-keyed record.*
 
 - [ ] A minimal user/group model
@@ -878,8 +818,7 @@ What a ring-3 program can assume exists. Every item above the GUI layer
 that wants an allocator, a FILE, or a shared library is waiting on this
 one.
 
-### Milestone 24 -- Runtime + interop (runtime, target v0.9.0)
-
+### Runtime + interop (runtime, target v0.9.0)
 - [ ] Inter-process IPC (message passing)
 - [ ] **A real C library.** Partly started: `userland/rt/crt0.asm` and
       `userland/rt/sys.c` (libsys) landed with the ring-3 GUI work, so a
@@ -925,7 +864,7 @@ one.
             the whole change, and the layering is already shaped for it.
       - [ ] Decide the target before building much of it: our own
             POSIX-shaped libc, or enough Linux syscall-ABI compatibility
-            to run stock musl binaries. Milestone 40 owns that decision
+            to run stock musl binaries. POSIX compatibility owns that decision
             and it changes what "done" means here. The SysV entry ABI
             landing already removed one obstacle to the musl route.
 - [ ] FAT16/FAT32 driver
@@ -938,14 +877,13 @@ one.
 - [ ] A consistent `errno`-style error convention -- syscalls return
       0/-1//a count today with no shared vocabulary for *why*
 
-### Milestone 35 -- Dynamic linking / shared libraries (runtime, target v0.9.0)
-
-**Needs:** Milestone 24 (an allocator and a real ELF runtime) and
-Milestone 8 (mapping a library into an existing address space).
+### Dynamic linking / shared libraries (runtime, target v0.9.0)
+**Needs:** Runtime + interop (an allocator and a real ELF runtime) and
+Demand paging & shared memory (mapping a library into an existing address space).
 
 - [ ] A shared-object (`.so`-style) file format
 - [ ] A userspace dynamic linker
-- [ ] Shared libc (once Milestone 24's real C library exists)
+- [ ] Shared libc (once Runtime + interop's real C library exists)
 - [ ] Lazy symbol binding (PLT/GOT-style)
 - [ ] Position-independent code in the userland build (`-fPIC`), which
       the Makefile explicitly disables today
@@ -954,12 +892,11 @@ Milestone 8 (mapping a library into an existing address space).
 - [ ] `dlopen`/`dlsym`-style runtime loading, or an explicit decision not
       to have it
 - [ ] Shared text pages across processes using the same library, which is
-      most of the point (needs Milestone 8's shared mappings)
+      most of the point (needs Demand paging & shared memory's shared mappings)
 - [ ] Versioning, or a written decision to ignore it while there's one
       consumer of every library
 
-### Milestone 37 -- UTF-8 migration (runtime, target v0.9.0)
-
+### UTF-8 migration (runtime, target v0.9.0)
 - [ ] UTF-8 decode/encode helpers in `string.c`
 - [ ] Console + `gfx_draw_string()` decoding multi-byte sequences
 - [ ] A font atlas keyed by codepoint rather than by byte
@@ -982,9 +919,8 @@ Milestone 8 (mapping a library into an existing address space).
       apply it everywhere
 - [ ] A conversion tool for existing Latin-1 files on disk
 
-### Milestone 39 -- A scripting language (runtime, target v1.0.0+)
-
-**Needs:** Milestone 24 -- a scripting language with no allocator is an
+### A scripting language (runtime, target v1.0.0+)
+**Needs:** Runtime + interop -- a scripting language with no allocator is an
 exercise in avoiding one.
 
 - [ ] Pick a shape (a small Lisp is the least code; a BASIC is the most
@@ -1001,16 +937,15 @@ exercise in avoiding one.
 - [ ] A standard library, however small, and where it lives on disk
 - [ ] Reading a script from a file *and* from a pipe, once pipes exist
 - [ ] Interrupting a runaway script (Ctrl-C reaching the interpreter,
-      needs Milestone 10's signals)
-- [ ] Use it for something real -- a startup script for Milestone 13's
+      needs Signals & process control's signals)
+- [ ] Use it for something real -- a startup script for Init & service supervision's
       init would prove more than any test suite
 
-### Milestone 40 -- POSIX compatibility (runtime, target v1.0.0+)
-
-**Needs:** Milestones 9, 10 and 24. POSIX is mostly a promise about
+### POSIX compatibility (runtime, target v1.0.0+)
+**Needs:** `fork()`/`exec()`-style process model, 10 and 24. POSIX is mostly a promise about
 those three.
 
-Mostly a *capstone* over Milestones 6-16 rather than new ground -- see
+Mostly a *capstone* over Fuzzing & property-based testing-16 rather than new ground -- see
 its Details entry for what each of those already covers and what's left
 that nothing else owns.
 
@@ -1037,8 +972,7 @@ Sits highest deliberately: the desktop is a ring-3 process now, so
 everything here is an ordinary program's problem rather than the
 kernel's.
 
-### Milestone 41 -- The GUI in ring 3 (gui, target v0.3.0)
-
+### The GUI in ring 3 (gui, target v0.3.0)
 Run the desktop the way a real OS does: apps as ring-3 processes talking
 a windowing protocol, not kernel-space C compiled into `kernel.bin`.
 Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
@@ -1141,7 +1075,7 @@ caller is a test.
       needs a way to map scattered frames into a contiguous KERNEL
       virtual range as well as the client's, which this kernel has no
       helper for today -- everything kernel-side is identity-mapped.
-      Related to Milestone 8's demand paging, and the natural time to
+      Related to Demand paging & shared memory's demand paging, and the natural time to
       do it is alongside that rather than on its own.
 - [ ] Multiple windows per process: the protocol already carries window
       ids and `win_server.c` already tracks WIN_CLIENT_MAX per client,
@@ -1226,7 +1160,7 @@ caller is a test.
       keyboard/mouse stream exposed, running alongside today's routing
       until the WM actually moves.
 - [ ] **A ring-3 allocator, and four smaller syscalls.** The WM's state
-      is `kmalloc`'d and ring 3 has no `malloc` (Milestone 24); plus
+      is `kmalloc`'d and ring 3 has no `malloc` (Runtime + interop); plus
       `etc_config_*` for settings, a MONOTONIC tick (`sys_gettime` is
       RTC wall-clock, wrong for animation), and `scheduler_kill`/
       `scheduler_poll` for force-quit and reaping.
@@ -1239,12 +1173,12 @@ caller is a test.
       two terminals running commands exhausts it.
 - [ ] `tosh` improvements once the kernel supports them: pipelines
       (`a | b` -- the pipe primitive exists, the parsing doesn't),
-      redirection, and Ctrl-C (see Milestone 10, whose requirements
+      redirection, and Ctrl-C (see Signals & process control, whose requirements
       this migration is what makes achievable).
 - [ ] A GROWABLE user stack. Raised from 1 page to 4 after the ring-3
       Notepad page-faulted opening its file dialog; the real answer is
       a page-fault handler that maps another page when the faulting
-      address is just below the stack (Milestone 9), not a bigger
+      address is just below the stack (`fork()`/`exec()`-style process model), not a bigger
       constant.
 - [x] ~~A userland drawing runtime, so a client can render more than
       flat colour~~ -- done: `userland/ui/ugfx.c` (rects, anti-aliased
@@ -1339,7 +1273,7 @@ caller is a test.
       client. Right now `ugfx.o` + `uui.o` are linked per binary, which
       is fine at two clients and wasteful at ten. The font already set
       the precedent for the answer (share one copy, no drift) -- but
-      sharing CODE needs the dynamic-linking work in Milestone 35,
+      sharing CODE needs the dynamic-linking work in Dynamic linking / shared libraries,
       which is why this is a note and not a task yet.
 - [x] ~~Make the ring-3 apps reachable from the desktop~~ -- done:
       `gui_apps.h`'s `exec_path` turns a registry entry into a launcher
@@ -1363,8 +1297,7 @@ caller is a test.
       Tolerable while every binary is one we built; not once loading
       ring-3 apps is the normal path. See the Details entry.
 
-### Milestone 20 -- A layout engine for the GUI (gui, target v0.8.0)
-
+### A layout engine for the GUI (gui, target v0.8.0)
 *Before the apps that would use it. Every widget position in `apps/` is
 hand-computed arithmetic today, which is why no window can be resized.*
 
@@ -1385,9 +1318,8 @@ hand-computed arithmetic today, which is why no window can be resized.*
 - [ ] Decide explicitly whether layout is immediate-mode (recomputed
       each frame, matching how the WM already draws) or retained
 
-### Milestone 21 -- Runtime font loading & text metrics (gui, target v0.8.0)
-
-**Needs:** Milestone 24 -- loading a font at runtime means allocating
+### Runtime font loading & text metrics (gui, target v0.8.0)
+**Needs:** Runtime + interop -- loading a font at runtime means allocating
 for it.
 
 *After the layout engine, which is the thing that actually needs to ask
@@ -1407,11 +1339,10 @@ guess.*
 - [ ] Keep the baked font as the guaranteed fallback -- the console must
       still work when no disk font is present
 - [ ] Note the boundary: complex-script shaping (bidi, ligatures,
-      combining marks) needs Milestone 37's UTF-8 work first; this
+      combining marks) needs UTF-8 migration's UTF-8 work first; this
       milestone stops at metrics and kerning for single-byte text
 
-### Milestone 19 -- Desktop visual polish (gui, target v0.8.0)
-
+### Desktop visual polish (gui, target v0.8.0)
 - [ ] Basic image decoder (JPEG or similar)
 - [ ] Real wallpaper images
 - [x] ~~Desktop icon repositioning/dragging~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry
@@ -1467,7 +1398,7 @@ guess.*
       -- turn out to be the same caller ("walk a point from A to B over
       N ms"), which fails this repo's second-real-caller bar. Build it
       when a genuinely different consumer turns up: a WM animation, or
-      Milestone 41's `WIN_EV_TIMER`.
+      The GUI in ring 3's `WIN_EV_TIMER`.
       **Pace it by `pit_ticks()`, not by frame count** -- `wm_run()` is
       a free-running loop paced only by `hlt` (`apps/wm/wm.c:592`), so
       it wakes on any interrupt and runs much slower under
@@ -1479,30 +1410,28 @@ guess.*
       (`apps/demo.c:138`), so no scripted action can take time. `wait`
       is the sole exception (`g_wait_until`, `apps/demo.c:140`) and is
       the shape the rest would follow. With the three test-harness
-      items above (Milestone 4) this is what would let the tour walk
+      items above (Kernel test harness) this is what would let the tour walk
       the cursor to a desktop icon, double-click it -- the WM already
       has double-click, `apps/wm/desktop.c:254`, 300ms -- and drag a
       window visibly. Window drags already animate per frame
       (`wm_update_drag_resize()`), so that half needs nothing new.
 
-### Milestone 23 -- GUI clipboard + drag-and-drop (gui, target v0.8.0)
-
+### GUI clipboard + drag-and-drop (gui, target v0.8.0)
 - [ ] System clipboard (copy/paste text)
 - [ ] Paste into Notepad/Terminal
 - [ ] Drag-and-drop between windows
-- [ ] Drag a file from the file manager (Milestone 22) into Notepad
+- [ ] Drag a file from the file manager (see Desktop productivity apps) into Notepad
 - [ ] Typed clipboard formats (text vs. image), not just a text buffer
 - [ ] A clipboard history ring
 - [ ] Standard keybindings (Ctrl+C/X/V) routed through the WM
 
-### Milestone 22 -- Desktop productivity apps (gui, target v0.8.0)
-
-**Needs:** Milestone 24 (allocator, file I/O), Milestone 20 (layout) and
-Milestone 21 (fonts). This is the leaf the three of them exist for.
+### Desktop productivity apps (gui, target v0.8.0)
+**Needs:** Runtime + interop (allocator, file I/O), A layout engine for the GUI (layout) and
+Runtime font loading & text metrics (fonts). This is the leaf the three of them exist for.
 
 - [ ] Real RING-3 filesystem API surface (list/stat/create/delete/
       seek -- the KERNEL-side fs API grew stat-with-ino, hardlinks and
-      capability queries at Milestone 15, but the syscall surface is
+      capability queries at TFS3: an inode layer, but the syscall surface is
       still `SYS_OPEN`/`SYS_READ`/`SYS_CLOSE` sequential-read-only; no
       `SYS_SEEK`/lseek-equivalent exists at all)
 - [ ] File manager app
@@ -1511,7 +1440,7 @@ Milestone 21 (fonts). This is the leaf the three of them exist for.
       `CHANGELOG.md`'s `[Unreleased]` entry (icon-grid chooser +
       drill-in, with Date & Time and System Info applets)
 - [ ] Find/replace in Notepad
-- [ ] An image viewer (needs Milestone 19's decoder)
+- [ ] An image viewer (needs the desktop-polish milestone's decoder)
 - [ ] Scientific mode for Calculator
 - [ ] CPU/memory history graphs in Task Manager
 - [ ] Per-app settings persisted via `/etc/<app>.conf` (the convention
@@ -1524,8 +1453,7 @@ last because they gate nothing -- not because they matter least; this
 repo's test tooling has repeatedly been what turned a mystery into a
 measurement.
 
-### Milestone 4 -- Kernel test harness (tooling, target v0.4.0; harness shipped v0.2.0; five items open)
-
+### Kernel test harness (tooling, target v0.4.0; harness shipped v0.2.0; five items open)
 *The heading used to be struck through as "completed 2026-08-13" while
 five boxes below it were unchecked. That is the milestone lying about
 itself: what shipped is the harness -- registration, `make test`, CI,
@@ -1561,8 +1489,8 @@ DONE here, so the strike came off rather than the boxes going on.*
       PS/2 cursor via `DebugConsole.warp_cursor()` and confirm arrival,
       and no test can observe a drag mid-flight. The fix is a
       persistent pointer SOURCE the WM reads from, which is the same
-      seam Milestone 41's raw-input stage and a USB HID driver
-      (Milestone 32) would both plug into -- so it is worth building as
+      seam The GUI in ring 3's raw-input stage and a USB HID driver
+      (USB) would both plug into -- so it is worth building as
       a source rather than as a test hook. Note `gui state` reports the
       real mouse (`wm_debug.c:451`), so it must learn to say which one
       is authoritative or it becomes a second thing that lies.
@@ -1608,8 +1536,7 @@ DONE here, so the strike came off rather than the boxes going on.*
       machine doing the comparison. See `CLAUDE.md`'s "Screenshots are
       a TESTING TOOL, not a deliverable".
 
-### Milestone 5 -- Benchmark suite (tooling, target v0.4.0)
-
+### Benchmark suite (tooling, target v0.4.0)
 - [ ] A `bench` command covering disk, memory, scheduler, and rendering
 - [ ] Recorded baselines checked into the repo
 - [ ] Regression detection against those baselines (a threshold, like
@@ -1629,8 +1556,7 @@ DONE here, so the strike came off rather than the boxes going on.*
 - [ ] A stable machine description in the output (CPU, RAM, mode) so two
       recorded runs can be told apart
 
-### Milestone 6 -- Fuzzing & property-based testing (tooling, target v0.5.0)
-
+### Fuzzing & property-based testing (tooling, target v0.5.0)
 *Placed right after the test harness and benchmark suite: it's the third
 leg of the same stool, and every milestone below it is easier to trust
 once this exists.*
@@ -1653,8 +1579,7 @@ once this exists.*
 - [ ] A corpus of past failures kept as regression tests
 - [ ] Run it in CI on a time budget, not to completion
 
-### Milestone 26 -- Observability (tooling, target v0.7.0)
-
+### Observability (tooling, target v0.7.0)
 - [ ] Panic backtraces with function names, using the DWARF symbols the
       build already emits
 - [ ] A `/proc`-style read-only introspection tree (processes, memory,
@@ -1675,8 +1600,7 @@ once this exists.*
 - [ ] `strace` extended to follow a process's children once `fork()`
       exists
 
-### Milestone 11 -- Crash reporting & postmortem debugging (kernel, target v0.6.0)
-
+### Crash reporting & postmortem debugging (kernel, target v0.6.0)
 *After signals, because SIGSEGV delivery is what a core dump hangs off.*
 
 - [ ] A real kernel backtrace on panic -- walk the frame pointers, not
@@ -1692,12 +1616,11 @@ once this exists.*
 - [ ] Distinguish "the kernel faulted" from "a process faulted and the
       kernel tore it down correctly" in whatever gets recorded
 - [x] ~~Stack-overflow detection via a guard page, reported as such
-      rather than as a mystery fault~~ -- done as Milestone 2's guard
+      rather than as a mystery fault~~ -- done as Memory protection hardening's guard
       page item; `uaddr_is_stack_guard()` is what names it, and
       `tools/faulttest_run.py` asserts the report
 
-### Milestone 14 -- In-OS documentation (docs, target v0.7.0)
-
+### In-OS documentation (docs, target v0.7.0)
 *No hard prerequisites; placed by the shell cluster because that's what
 it serves. Small, and it makes everything above it discoverable.*
 
@@ -2395,7 +2318,7 @@ history is worth reading, but a fixed papercut is just noise.
       `notsc` on the GRUB command line, or just boot under plain QEMU,
       which cannot offer an invariant TSC at all. Not a bug and not
       fixable in software: the honest fix is another clocksource with
-      real resolution, which is what makes HPET (Milestone 30) worth
+      real resolution, which is what makes HPET (ACPI + real power/timer) worth
       more here than its rating suggests -- it works under plain TCG,
       where the TSC does not.
 
@@ -2570,7 +2493,7 @@ upward, no caller naming the hardware.
       registers PIT (rating 110) and TSC (300), and CPU accounting bills
       measured nanoseconds against whichever is live. See
       `docs/decisions.md`. The two pieces NOT done are both scheduled
-      under Milestone 30, which is where they belong -- **HPET as a
+      under ACPI + real power/timer, which is where they belong -- **HPET as a
       third clocksource** (it needs ACPI's HPET table to discover the
       base address) and the **`clock_event_device` half**, since timer
       EVENTS are still a fixed 100Hz PIT with no tickless idle. See that
@@ -2581,7 +2504,7 @@ upward, no caller naming the hardware.
       concrete clocks directly: `pit_ticks()` (monotonic 100Hz, the
       scheduler's billing unit and `SYS_TICKS`) and the TSC (calibrated
       in `cpuinfo`, used by `gfxbench` and the relocation path). Three
-      call conventions, no abstraction. Milestone 30 (ACPI + real
+      call conventions, no abstraction. ACPI + real power/timer (ACPI + real
       power/timer) brings HPET and TSC-deadline, which is the real
       trigger; a Linux-style `clocksource` (monotonic, resolution, "is
       it reliable across sleep") is the natural shape.
@@ -2629,7 +2552,7 @@ upward, no caller naming the hardware.
       cases when only one existed. Already in mild tension with
       `partition.c`, which parses MBR/GPT and can enumerate partitions
       that cannot then be independently mounted, and it has to give for
-      Milestone 25 (real mount points). Not urgent.
+      Real mount points (real mount points). Not urgent.
 
 - [ ] **Interfaces that exist with exactly ONE implementation are the
       same problem seen from the other side, and this repo already
@@ -2652,8 +2575,7 @@ upward, no caller naming the hardware.
 Kept for the record, and because commits and `docs/decisions.md`
 refer to them by number.
 
-### ~~Milestone 1 -- Async I/O to the desktop~~ (gui, v0.1.0, released 2026-08-12)
-
+### ~~Async I/O to the desktop~~ (gui, v0.1.0, released 2026-08-12)
 - [x] Non-blocking DMA start/poll primitive
 - [x] Steppable write API
 - [x] Wire it up: `wm_run()` polls a pending write (Notepad Save first)
@@ -2661,8 +2583,7 @@ refer to them by number.
 - [x] Async process spawning for the GUI Terminal (`ls` and an allowlist
       of verified-safe `/bin` binaries via `run`)
 
-### ~~Milestone 2 -- Memory protection hardening~~ (memory, v0.2.0, completed 2026-08-16)
-
+### ~~Memory protection hardening~~ (memory, v0.2.0, completed 2026-08-16)
 - [x] ~~NX bit enforcement (non-executable data pages)~~ -- done for
       userspace first, and for the kernel's own identity map with the
       W^X item below; see `CHANGELOG.md`'s `[Unreleased]` entry
@@ -2820,8 +2741,8 @@ Smaller or lower-priority items not yet slotted into a milestone above.
 
 - [ ] Virtio drivers (disk/net)
 - [ ] Multi-architecture support (RISC-V) -- see `docs/arch-portability.md`
-- [ ] A RAM disk backend, once mount points (Milestone 25) make a second
-      backend addressable
+- [ ] A RAM disk backend, once Real mount points makes a second backend
+      addressable
 - [ ] `ls` colour/format options beyond `-l`/`-a`
 - [ ] Serial debug console: make it writable (it's read-only inspection
       today, deliberately -- see `docs/decisions.md`)
@@ -2829,11 +2750,11 @@ Smaller or lower-priority items not yet slotted into a milestone above.
       `FS_MAX_FILES`)
       caps with growable structures, once the heap is trusted enough
 - [ ] Stretch: port a small classic game (e.g. Doom, `doomgeneric`-style)
-      -- see the Details section below for the real prerequisite
+      -- see `docs/roadmap-details.md` for the real prerequisite
       breakdown across milestones (mostly already satisfied)
 
 (*VFS mount points* and *a benchmarking harness* were promoted out of
-this list into what are now Milestones 17 and 5 -- they'd outgrown
+this list into what are now Multi-user & file permissions and 5 -- they'd outgrown
 "smaller or lower-priority". Those numbers read 22 and 29 until this
 line was corrected: it was written before the first renumbering and
 kept the old ones.)
