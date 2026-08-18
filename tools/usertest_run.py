@@ -92,6 +92,10 @@ EXCLUDED = [
     ("stackovf_test",    "runs off the stack on purpose; the assertion is the KERNEL's "
                           "report, not an exit code -- see its own top comment"),
     ("write_bad_test",   "hands the kernel a bad pointer on purpose"),
+    ("waitany_test",     "SYS_WAITPID(-1) needs the caller to BE a scheduled process; "
+                          "`run` uses the legacy loader, which has no pid, so nothing it "
+                          "spawns has a parent and wait-any has nobody to ask about. "
+                          "Drive it with `spawn /tests/waitany_test` instead"),
     ("pipe_test",        "needs a parent to spawn it and reap it; exits 3 under `run`, "
                           "and kernel/proc/pipe_test.c's KTEST covers it properly"),
     ("cputime_test",     "must be SCHEDULER-spawned to have a procs[] slot at all; "

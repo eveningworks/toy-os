@@ -41,7 +41,15 @@ struct proc_info {
     uint64_t cpu_ns;      // NANOSECONDS spent RUNNING, cumulative
     uint64_t mem_bytes;   // user memory currently mapped into it
     int32_t  exit_code;   // meaningful only in PROC_STATE_ZOMBIE
-    uint32_t reserved;    // must be 0; keeps the struct 8-byte aligned
+    // Who spawned this process. 0 means "the kernel did" -- the shell's
+    // `spawn`, `gui`, or a KTEST -- and is also what a process's
+    // children are set to when it dies, so a ppid never names a slot
+    // that has since been handed to somebody else.
+    //
+    // Took `reserved`'s place rather than growing the struct: it was
+    // only ever written as 0 and never read, and this keeps the 8-byte
+    // alignment that field existed for.
+    int32_t  ppid;
     char     name[PROC_NAME_MAX];
 };
 

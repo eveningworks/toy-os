@@ -238,6 +238,9 @@ int sys_spawn(const char *path, const char *args, int stdout_fd) {
                           (uint64_t)(uintptr_t)args, (uint64_t)(int64_t)stdout_fd);
 }
 
+// `pid` may be -1 for "any child of mine" (SYS_WAITPID's ABI comment).
+// Note the -1 RETURN then means "no children at all", which is
+// permanent -- looping on it waits for something that cannot happen.
 int sys_waitpid(int pid, int *out_code) {
     int64_t r;
     // Same retry contract as sys_wait_event(): a 0 return means the

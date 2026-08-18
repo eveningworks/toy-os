@@ -784,9 +784,11 @@ staging.*
 
 - [ ] A real `init`: the first process, started by the kernel, parent of
       everything else
-- [ ] A parent link (`ppid`) and reparenting of orphans -- there is
-      none at all today, so there is no tree to supervise
-- [ ] `waitpid(-1)`, so init can reap any child rather than a named one
+- [x] ~~A parent link (`ppid`) and reparenting of orphans~~ DONE
+      2026-08-18 (stage 0). Reparenting goes to 0 until init exists;
+      `scheduler_reparent()` is the adoption half stage 1 uses
+- [x] ~~`waitpid(-1)`, so init can reap any child rather than a named
+      one~~ DONE 2026-08-18 (stage 0)
 - [ ] pid 1 refuses to be killed
 - [ ] A TARGET setting (`text` / `graphical`) deciding what init starts
       -- systemd's `multi-user.target` / `graphical.target`, SysV's

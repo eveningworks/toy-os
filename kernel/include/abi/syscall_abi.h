@@ -473,6 +473,17 @@ struct dirent {
                         // contract as SYS_WAIT_EVENT, and for the same
                         // reason -- see that entry. libsys wraps the
                         // loop (sys_waitpid()).
+                        //
+                        // RDI = -1 means ANY child of the caller,
+                        // POSIX's wait() convention -- it cannot
+                        // collide with a real pid, which is 1-based.
+                        // It returns the pid it reaped, or -1 when the
+                        // caller has NO CHILDREN AT ALL. That -1 is
+                        // permanent rather than "not yet", so a caller
+                        // must not loop on it: with no children,
+                        // nothing can ever change the answer. "Has
+                        // children, none dead yet" is the ordinary
+                        // block (or SYS_RETRY under SYS_WNOHANG).
 
 #define SYS_GETRANDOM 29 // RDI = buffer (out), RSI = byte count. Fills
                           // the buffer with random bytes and returns

@@ -204,6 +204,17 @@ struct sched_process {
     uint64_t kernel_rsp; // this process's saved trapframe pointer --
                           // valid whenever state != SCHED_UNUSED
     int exit_code;        // valid only once state == SCHED_ZOMBIE
+
+    // Who spawned this process, or 0 for "the kernel did" -- the
+    // shell's `spawn`, `gui`, a KTEST. There was no parent link at all
+    // before this, so there was no process TREE: nothing could ask
+    // which processes are a given one's children, which is what an
+    // init needs to reap orphans and what a `ps` needs to draw.
+    //
+    // Set once at spawn and changed only by reparent_children(), which
+    // is not tidiness -- see its comment for the stale-pid bug it
+    // exists to prevent.
+    int ppid;
     // Pipe index this process's stdout goes to, or -1 for the console.
     // Lives here rather than in the fd table because fd 1 has always
     // been a hardcoded console in SYS_WRITE -- see scheduler.h.
@@ -248,6 +259,10 @@ struct sched_process {
 };
 
 static struct sched_process procs[MAX_PROCS];
+
+// Defined further down, beside scheduler_kill() -- its other caller.
+static void reparent_children(int dead_pid);
+
 // When the CURRENT occupant of the CPU (a process, or the kernel
 // context when current_index is -1) started running, in clocksource
 // nanoseconds. bill_current() is the only thing that reads or moves it.
@@ -676,6 +691,10 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_pipe) {
     fpu_init_state(procs[slot].fpu);
     procs[slot].wait_reason = 0;
     procs[slot].stdout_pipe = stdout_pipe;
+    // The CALLER is the parent. 0 when the kernel context spawned this
+    // -- scheduler_current_pid() returns 0 there, which is exactly the
+    // "no parent" value, so this needs no special case.
+    procs[slot].ppid = scheduler_current_pid();
     // Reset, not inherited: slots are reused, and a reaped process's
     // name and CPU time showing up on its successor would be a
     // reporting bug that looks like a scheduling one.
@@ -704,7 +723,7 @@ int scheduler_proc_info(int index, struct proc_info *out) {
     out->cpu_ns = 0;
     out->mem_bytes = 0;
     out->exit_code = 0;
-    out->reserved = 0;
+    out->ppid = p->ppid;
     out->name[0] = '\0';
 
     if (p->state == SCHED_UNUSED) return 1; // a real answer: slot empty
@@ -988,6 +1007,10 @@ void scheduler_on_exit(int code) {
     // is registered, which is every non-GUI boot.
     win_server_client_gone(current_index + 1);
 
+    // Its children lose their parent before anything can reuse this
+    // slot -- see reparent_children() for why that ordering matters.
+    reparent_children(current_index + 1);
+
     // A parent blocked in SYS_WAITPID has to hear about this. Waking
     // every child-waiter rather than only this one's parent is the
     // same "name the event, not the waiter" rule the wait reasons
@@ -1072,6 +1095,73 @@ int scheduler_pid_valid(int pid) {
     return procs[pid - 1].state != SCHED_UNUSED;
 }
 
+// Called when a process dies, on both paths. Its children lose their
+// parent, and the reason that MATTERS is not tidiness: a pid is a slot
+// index plus one, and slots are reused. Leaving a child pointing at its
+// dead parent's pid means that as soon as the slot is handed out again,
+// the child claims to be the new process's child -- and a waitpid(-1)
+// from that new process would hand it somebody else's corpse.
+//
+// They become parentless (ppid 0) rather than being adopted, because
+// there is nothing to adopt them yet. Stage 1 of docs/init-design.md
+// introduces init as pid 1 and changes this one line to name it, which
+// is when an orphan starts being reaped instead of holding its slot.
+static void reparent_children(int dead_pid) {
+    if (dead_pid <= 0) return;
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (procs[i].state != SCHED_UNUSED && procs[i].ppid == dead_pid) {
+            procs[i].ppid = 0;
+        }
+    }
+}
+
+// Give `pid` a new parent. 0 means "no parent".
+//
+// The general form of what reparent_children() does to a dying
+// process's children, and it exists as a public call because adoption
+// is the other half of the same idea: stage 1 of docs/init-design.md
+// has init adopt orphans instead of leaving them parentless, and that
+// is this function with a different second argument.
+//
+// Refuses to make a process its own parent, which would make the tree
+// a cycle and hang any walk of it.
+int scheduler_reparent(int pid, int new_ppid) {
+    if (pid < 1 || pid > MAX_PROCS) return 0;
+    if (new_ppid < 0 || new_ppid > MAX_PROCS) return 0;
+    if (new_ppid == pid) return 0;
+    if (procs[pid - 1].state == SCHED_UNUSED) return 0;
+    procs[pid - 1].ppid = new_ppid;
+    return 1;
+}
+
+// Reap any ONE dead child of `parent_pid`, which is what an init does
+// all day and what waitpid(-1) exposes to ring 3.
+//
+// Three outcomes, and the third is the one a caller must not confuse
+// with the second: EXITED reaped a child and filled both out-params,
+// RUNNING means there are children and none has died yet, and INVALID
+// means this process has NO children at all -- which is a permanent
+// answer, where RUNNING is a "not yet". A caller that treats them alike
+// either spins forever or gives up too early.
+enum sched_poll_result scheduler_poll_any(int parent_pid, int *out_pid,
+                                           int *out_exit_code) {
+    if (parent_pid < 1 || parent_pid > MAX_PROCS) return SCHED_POLL_INVALID;
+
+    int any_children = 0;
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (procs[i].state == SCHED_UNUSED) continue;
+        if (procs[i].ppid != parent_pid) continue;
+        any_children = 1;
+        if (procs[i].state == SCHED_ZOMBIE) {
+            if (out_pid) *out_pid = i + 1;
+            if (out_exit_code) *out_exit_code = procs[i].exit_code;
+            procs[i].state = SCHED_UNUSED; // reap, as scheduler_poll() does
+            return SCHED_POLL_EXITED;
+        }
+    }
+    return any_children ? SCHED_POLL_RUNNING : SCHED_POLL_INVALID;
+}
+
 int scheduler_kill(int pid, int exit_code) {
     if (pid < 1 || pid > MAX_PROCS) return 0;
     int slot = pid - 1;
@@ -1115,6 +1205,7 @@ int scheduler_kill(int pid, int exit_code) {
     // spaces and must happen while this one still exists.
     syscall_process_kill_cleanup(procs[slot].pml4_phys);
     procs[slot].pml4_phys = 0; // nothing may follow this pointer again
+    reparent_children(pid);
 
     // No switch: the victim is not the process running, so the CPU is
     // already somewhere valid. If it was READY it simply never gets

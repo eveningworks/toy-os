@@ -198,7 +198,7 @@ decision made here.
 
 Each stage builds, boots and passes the existing suites on its own.
 
-### Stage 0 -- the process tree (R1, R2, R3, R7)
+### Stage 0 -- the process tree (R1, R2, R3, R7) -- DONE 2026-08-18
 
 `ppid` in `struct sched_process`, set at spawn from the caller.
 Reparent a dying process's children. `SYS_WAITPID(-1)` for wait-any.
@@ -209,7 +209,20 @@ process at boot. Task Manager gains a column it may ignore.
 
 **Exit criterion:** spawning from a process records that process as the
 parent; killing a parent leaves its children adopted rather than
-orphaned; `waitpid(-1)` returns each dead child exactly once.
+orphaned; `waitpid(-1)` returns each dead child exactly once. **All
+met.** `kernel/proc/proctree_test.c` has four KTESTs and
+`userland/tests/waitany_test.c` covers the syscall on top of them --
+the half a KTEST cannot reach.
+
+Two things came out of building it that the plan did not predict.
+`ppid` took `struct proc_info`'s `reserved` field, which was only ever
+written as 0 and never read, so the ABI struct did not grow. And
+reparenting turned out to be a CORRECTNESS requirement rather than
+housekeeping for init's benefit: pids are slot indices, slots are
+reused, so a stale ppid makes an orphan look like a child of the slot's
+next tenant -- whose `waitpid(-1)` would then reap somebody else's
+child. That is testable today, with no init anywhere, and it is what
+the fourth KTEST asserts.
 
 ### Stage 1 -- init as pid 1 (R4, R5, R6 minimum)
 

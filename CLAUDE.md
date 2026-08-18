@@ -1070,6 +1070,27 @@ technical conventions below:
   image and DMA buffers all hold frames no page table points at, so that
   direction needs every owner to declare its frames; see
   `docs/roadmap.md`.
+- **THERE IS A PROCESS TREE NOW: `ppid`, reparenting, and
+  `waitpid(-1)`.** `struct sched_process` had no parent link at all
+  until 2026-08-18, so there was no tree to walk and no way to ask
+  "has any child of mine died" -- the question an init's whole main
+  loop is. Stage 0 of `docs/init-design.md`. Four things to know.
+  **ppid 0 means the KERNEL spawned it** (`scheduler_current_pid()` is
+  0 in kernel context), which is every process started by `spawn`,
+  `gui` or a KTEST. **A dying process's children are reparented to 0
+  rather than left naming it**, and that is correctness rather than
+  tidiness: a pid is a slot index plus one and slots are reused, so a
+  stale ppid makes the orphan look like a child of whatever process
+  gets that slot next, and THAT process's `waitpid(-1)` would hand it
+  somebody else's corpse. **`waitpid(-1)`'s two negative answers are
+  different**: -1 means "no children at all" and is PERMANENT, while a
+  live-but-not-dead child blocks (or answers `SYS_RETRY` under
+  `SYS_WNOHANG`) -- an init that conflates them either spins forever or
+  stops reaping. And **wait-any cannot work under the shell's `run`**:
+  the legacy loader is not a scheduled process, so it has no pid,
+  so nothing it spawns has a parent. Use `spawn`, which goes through
+  the scheduler. `scheduler_reparent()` is the adoption half, which
+  stage 1 uses to hand orphans to init.
 - **A PROCESS'S MEMORY IS FREED WHEN IT DIES, NOT WHEN IT IS REAPED --
   and killing needs a DIFFERENT entry point from exiting.**
   `syscall_process_exit_cleanup()` is for a process ending itself and

@@ -290,6 +290,29 @@ int scheduler_proc_info(int index, struct proc_info *out);
 // walking that would read freed page tables.
 uint64_t scheduler_slot_pml4(int slot);
 
+// Reap any ONE dead child of `parent_pid` -- what an init does all day,
+// and what SYS_WAITPID(-1) exposes to ring 3. Fills `out_pid` and
+// `out_exit_code` only on SCHED_POLL_EXITED.
+//
+// The three results are NOT interchangeable, and the difference between
+// the last two is the one to get right: SCHED_POLL_RUNNING means this
+// process has children and none has died yet ("not yet"), while
+// SCHED_POLL_INVALID means it has no children at all ("never"). A
+// caller that conflates them either spins forever waiting for a child
+// that does not exist, or gives up while one is still running.
+enum sched_poll_result scheduler_poll_any(int parent_pid, int *out_pid,
+                                           int *out_exit_code);
+
+// Give `pid` a new parent; 0 means "no parent". Returns 0 if either pid
+// is out of range, if `pid` is not a live slot, or if the two are the
+// same (a process cannot be its own parent -- that is a cycle, and it
+// hangs any walk of the tree).
+//
+// The counterpart of the automatic reparenting a dying process's
+// children get: adoption. Stage 1 of docs/init-design.md uses it to
+// hand orphans to init.
+int scheduler_reparent(int pid, int new_ppid);
+
 // How many slots that table has. The bound for the loop above.
 int scheduler_max_procs(void);
 

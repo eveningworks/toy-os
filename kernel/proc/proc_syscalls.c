@@ -260,6 +260,31 @@ int sys_waitpid(struct syscall_ctx *c) {
             out = c->a1;
         }
     }
+    // pid -1 is "any child of mine", the same convention POSIX gives
+    // wait(): it cannot collide with a real pid, which is 1-based.
+    // Handled before the validity check below, which asks about a
+    // specific process and has nothing to say about this.
+    if (!bad && pid == -1) {
+        int child = 0, code = 0;
+        enum sched_poll_result r =
+            scheduler_poll_any(scheduler_current_pid(), &child, &code);
+        if (r == SCHED_POLL_EXITED) {
+            if (out) vmm_copy_to_user(pml4, out, &code, sizeof code);
+            c->regs[14] = (uint64_t)(int64_t)child;
+        } else if (r == SCHED_POLL_INVALID) {
+            // No children AT ALL -- a permanent answer, not "not yet",
+            // so parking here would be a wait nothing could ever end.
+            c->regs[14] = (uint64_t)-1;
+        } else if (c->a2 & SYS_WNOHANG) {
+            c->regs[14] = (uint64_t)(int64_t)SYS_RETRY;
+        } else if (!scheduler_block_current(c->regs, SCHED_WAIT_CHILD)) {
+            c->regs[14] = (uint64_t)-1; // nowhere to park
+        } else {
+            return 1; // parked -- the wake writes the return value
+        }
+        return 0;
+    }
+
     if (bad || !scheduler_pid_valid(pid)) {
         c->regs[14] = (uint64_t)-1;
     } else {
