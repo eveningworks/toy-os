@@ -69,8 +69,7 @@ not the full reasoning restated, just enough to answer the question
 plus a pointer into the relevant `CHANGELOG.md` (or `CHANGELOG-archive.md`,
 for anything old enough to have moved there) entry for the complete
 writeup. This file is an index, not a second copy of the history.
-Every entry also gets a line in the grouped index at the top of the
-file -- add it, or the index silently stops being one.
+The index in `docs/decisions.md` is GENERATED -- run `tools/gen_decisions_index.py` after adding an entry, never edit it by hand.
 
 **When a later change supersedes an existing entry, don't rewrite or
 delete it -- amend it in place with a dated note** ("**Updated at

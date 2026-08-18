@@ -114,6 +114,40 @@ def check_no_duplicate_roadmap_entries(problems):
                                     f"\n      {line[:90]}")
 
 
+# Docs big enough that a bulk edit is done with a script rather than by
+# hand -- which is where the duplication risk lives.
+BULK_EDITED = ("CLAUDE.md", "docs/roadmap.md", "docs/roadmap-details.md",
+               "docs/decisions.md", "README.md", "apps/README.md",
+               ".claude/skills/toy-os-feature-workflow/SKILL.md")
+
+
+def check_no_duplicated_sections(problems):
+    """A heading appearing twice in one document.
+
+    This exists because it happened: an edit to CLAUDE.md used an end
+    anchor that occurred EARLIER in the file than its start anchor, so
+    `s[:start] + new + s[end:]` re-appended everything between them --
+    2,673 lines, silently, and the file went from 3,094 lines to 5,789
+    in a commit whose diff nobody could read at that size. Every heading
+    in the second copy was a duplicate and nothing noticed.
+
+    Headings are the cheap signal: a document with the same `##` twice
+    is either duplicated or badly organised, and both want fixing."""
+    for rel in BULK_EDITED:
+        path = os.path.join(REPO, rel)
+        if not os.path.exists(path):
+            continue
+        seen = {}
+        for line in read(rel).split("\n"):
+            if re.match(r"^#{2,3} \S", line):
+                seen[line.strip()] = seen.get(line.strip(), 0) + 1
+        for line, n in seen.items():
+            if n > 1:
+                problems.append(f"{rel}: heading appears {n} times -- a bulk "
+                                f"edit may have duplicated a region"
+                                f"\n      {line[:90]}")
+
+
 def check_decisions_index_is_current(problems):
     """docs/decisions.md is generated from docs/decisions/. A stale index
     is the failure the generator exists to prevent -- an entry added to a
@@ -148,6 +182,7 @@ def main():
                   check_roadmap_has_no_versions,
                   check_milestones_are_named,
                   check_no_duplicate_roadmap_entries,
+                  check_no_duplicated_sections,
                   check_decisions_index_is_current,
                   check_internal_doc_links):
         check(problems)

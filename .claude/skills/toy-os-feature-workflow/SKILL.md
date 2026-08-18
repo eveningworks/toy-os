@@ -2466,11 +2466,21 @@ rewrite invalidates every SHA, and this repo has done one).
 **Two process notes, both mine and both worth avoiding:**
 
 - **A docs edit that replaces a slice by index can silently delete or
-  duplicate its neighbours.** Mine did both -- three roadmap entries
-  vanished in one commit (including a plan the user had asked for) and
-  an entry was duplicated in another. Nothing tests documentation, and
-  the entries taken were the ones nobody had reread yet. Anchor on the
-  exact text you mean to replace, and grep for duplicates afterwards.
+  duplicate its neighbours, and it will do it three times before you
+  learn.** Mine did: three roadmap entries vanished in one commit
+  (including a plan the user had asked for), an entry was duplicated in
+  another, and then `s[:start] + new + s[end:]` on CLAUDE.md re-appended
+  2,673 lines because the END anchor occurred EARLIER in the file than
+  the start -- 3,094 lines to 5,789, in a commit whose diff was far too
+  large to read.
+
+  Three rules, each of which would have caught one of those: **search
+  anchors DIRECTIONALLY** (`s.index(end, start)`, never `s.index(end)`),
+  **assert the invariant you assume** (`end > start`), and **check the
+  line count afterwards** -- a docs edit that changes a file's size by
+  thousands of lines is not the edit you meant. `tools/check_docs.py`
+  now fails on a repeated heading in any bulk-edited doc, which is the
+  cheap signal for all three.
 - **"It predates me" is a measurement.** Two failures were proved
   pre-existing by stashing the work and rebuilding the previous commit;
   one flake was honestly recorded as "stopped reproducing before I

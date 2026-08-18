@@ -10,8 +10,7 @@ as it happened -- what got added, what broke, and how each bug was
 found and fixed. Moved out of README.md (which now keeps just a short
 summary + a link here) because this is a full implementation
 walkthrough, not a feature list entry. See `docs/decisions.md` for
-shorter topic-indexed "why" answers, and the git history and
-the git history/the git history for the complete history this
+shorter topic-indexed "why" answers, and `git log` for the history this
 was assembled from.
 
 By default, the kernel, drivers, shell, and GUI apps all run in one
