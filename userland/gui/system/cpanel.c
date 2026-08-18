@@ -52,7 +52,12 @@ enum { TAB_SETTINGS = 101, TAB_SYSINFO = 102 };
 
 static char        g_label[MAX_SETTINGS][SETTING_ABI_LABEL_MAX];
 static const char *g_label_ptr[MAX_SETTINGS];
-static char        g_name[MAX_SETTINGS][SETTING_ABI_NAME_MAX];
+// The QUALIFIED name ("system.font_size"), not the bare key: a setting's
+// identity is (namespace, name), so the bare key is not necessarily
+// usable on its own -- and this panel both addresses settings with it
+// and prints it in commands for the user to type.
+static char        g_name[MAX_SETTINGS][SETTING_ABI_QUALIFIED_MAX];
+static char        g_ns[MAX_SETTINGS][SETTING_ABI_NS_MAX];
 static char        g_file[MAX_SETTINGS][SETTING_ABI_FILE_MAX];
 static char        g_value[MAX_SETTINGS][SETTING_ABI_VALUE_MAX];
 static uint32_t    g_type[MAX_SETTINGS];
@@ -108,8 +113,15 @@ static int reload_settings(void) {
 
         int k = g_setting_count;
         (void)k;
-        strlcpy(g_label[k], m.label, sizeof g_label[k]);
-        strlcpy(g_name[k],  m.name,  sizeof g_name[k]);
+        // The namespace rides in the visible label when there is one:
+        // two programs may own settings with the same name and the same
+        // human label, and a list that showed only the label would offer
+        // two identical rows.
+        if (m.ns[0]) snprintf(g_label[k], sizeof g_label[k], "%s  (%s)", m.label, m.ns);
+        else         strlcpy(g_label[k], m.label, sizeof g_label[k]);
+        strlcpy(g_ns[k],    m.ns,    sizeof g_ns[k]);
+        if (m.ns[0]) snprintf(g_name[k], sizeof g_name[k], "%s.%s", m.ns, m.name);
+        else         strlcpy(g_name[k], m.name, sizeof g_name[k]);
         strlcpy(g_file[k],  m.file,  sizeof g_file[k]);
         strlcpy(g_value[k], m.value, sizeof g_value[k]);
         g_type[k] = m.type;

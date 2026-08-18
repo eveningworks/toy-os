@@ -12,14 +12,34 @@
 #include "etc_config.h"
 #include "fs.h"
 #include "string.h"
+#include "heap.h"  // these buffers are KiB-sized -- see below
 
+// THE BUFFERS HERE COME FROM THE HEAP, NOT THE STACK, and that is not
+// style: `struct etc_config_buf` is a KiB, this file is on the deepest
+// kernel path there is (a setting write -> here -> VFS -> TFS3 journal
+// -> ATA), and two of them on one frame is 1.5 KiB of a 16 KiB kernel
+// stack gone before the filesystem is even reached. That path has
+// already overflowed once, in a kernel stack that was half this size --
+// see docs/decisions.md. CFLAGS' -Wframe-larger-than is what surfaced
+// it; there is nothing subtle about the fix.
+//
+// Reading a config file does disk I/O either way, so an allocation is
+// far below the noise floor. A failed allocation reads as "no such
+// file", which is what a caller already has to handle.
 int etc_config_get(const char *path, const char *key, char *out, uint32_t out_size) {
-    struct etc_config_buf buf;
-    if (!etc_config_load(path, &buf)) {
+    struct etc_config_buf *buf = kmalloc(sizeof *buf);
+    if (!buf) {
         if (out && out_size) out[0] = '\0';
         return 0;
     }
-    return etc_config_buf_get(&buf, key, out, out_size);
+    int ok = 0;
+    if (etc_config_load(path, buf)) {
+        ok = etc_config_buf_get(buf, key, out, out_size);
+    } else if (out && out_size) {
+        out[0] = '\0';
+    }
+    kfree(buf);
+    return ok;
 }
 
 int etc_config_load(const char *path, struct etc_config_buf *buf) {
@@ -45,20 +65,33 @@ int etc_config_load(const char *path, struct etc_config_buf *buf) {
 // Both of these are now read / rewrite / write, with the rewrite shared
 // (etc_config_buf_set). They used to carry a copy of that loop each.
 static int rewrite(const char *path, const char *key, const char *value) {
-    struct etc_config_buf in;
-    char out[ETC_CONFIG_MAX];
+    // Heap, for the reason etc_config_get() above gives at length: two
+    // KiB-sized locals here were a 1552-byte frame on the path that has
+    // already overflowed a kernel stack once.
+    struct etc_config_buf *in = kmalloc(sizeof *in);
+    char *out = kmalloc(ETC_CONFIG_MAX);
+    if (!in || !out) {
+        kfree(in);
+        kfree(out);
+        return 0;
+    }
     // A missing file is not an error for a SET -- the key is appended to
     // an empty document and the file created. It is for an unset, which
     // etc_config_buf_set() reports by returning 0 for "not there".
-    if (!etc_config_load(path, &in)) {
-        in.valid = 0;
-        in.size = 0;
-        in.data[0] = '\0';
+    if (!etc_config_load(path, in)) {
+        in->valid = 0;
+        in->size = 0;
+        in->data[0] = '\0';
     }
-    uint32_t n = etc_config_buf_set(in.data, in.size, key, value, out, sizeof out);
-    if (n == 0 && !value) return 0; // unset: key absent, leave the file alone
-    if (n == 0 && value) return 0;  // would not fit
-    return fs_write(path, out, 0);
+    uint32_t n = etc_config_buf_set(in->data, in->size, key, value,
+                                     out, ETC_CONFIG_MAX);
+    int rc = 0;
+    // n == 0 is "the key was absent" for an unset and "it would not
+    // fit" for a set; neither writes anything.
+    if (n != 0) rc = fs_write(path, out, 0);
+    kfree(in);
+    kfree(out);
+    return rc;
 }
 
 int etc_config_unset(const char *path, const char *key) { return rewrite(path, key, 0); }

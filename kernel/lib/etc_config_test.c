@@ -75,7 +75,10 @@ KTEST("etc_config", "a loaded buffer answers the same as a per-call read") {
     KTEST_ASSERT(etc_config_set(SCRATCH, "alpha", "one"));
     KTEST_ASSERT(etc_config_set(SCRATCH, "beta", "two"));
 
-    struct etc_config_buf buf;
+    // static, not automatic: this struct is a KiB, which is over the
+    // kernel's per-function frame budget (Makefile's
+    // -Wframe-larger-than), and a KTEST body is never reentered.
+    static struct etc_config_buf buf;
     KTEST_ASSERT(etc_config_load(SCRATCH, &buf));
 
     char from_buf[16], from_disk[16];
@@ -99,7 +102,10 @@ KTEST("etc_config", "an unloaded buffer answers nothing rather than garbage") {
     // The failure path callers depend on: a load that fails must make
     // every later get a clean miss, so a caller can load once and check
     // once rather than guarding every key.
-    struct etc_config_buf buf;
+    // static, not automatic: this struct is a KiB, which is over the
+    // kernel's per-function frame budget (Makefile's
+    // -Wframe-larger-than), and a KTEST body is never reentered.
+    static struct etc_config_buf buf;
     KTEST_ASSERT_EQ(etc_config_load("/tmp/ktest_no_such_file.conf", &buf), 0);
 
     char out[16];

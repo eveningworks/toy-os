@@ -86,6 +86,7 @@ there when you add an entry, or the index quietly stops being one.
 - [Filesystem is one active backend, not mount points](#filesystem-is-one-active-backend-not-mount-points)
 - [`/etc` and `/tmp` are created by the MOUNT, not by `kernel_main()`](#etc-and-tmp-are-created-by-the-mount-not-by-kernel_main)
 - [A setting reports whether it PERSISTED, separately from whether it applied](#a-setting-reports-whether-it-persisted-separately-from-whether-it-applied)
+- [A setting's identity is (namespace, name), and the namespace is its FILE](#a-settings-identity-is-namespace-name-and-the-namespace-is-its-file)
 - [No recursive delete](#no-recursive-delete)
 - [Persistent filesystem is write-through with a single-slot journal](#persistent-filesystem-is-write-through-with-a-single-slot-journal)
 - [File timestamps: broken-down local time on disk (TFS2), epoch seconds at the API since M15](#file-timestamps-broken-down-local-time-on-disk-tfs2-epoch-seconds-at-the-api-since-m15)
@@ -7419,3 +7420,59 @@ Generalising the repo's existing fixture rule: it is not enough to ask
 whether a test's input crosses the branch today. Ask what the input is
 sized AGAINST, and whether that thing can move independently of the
 test.
+
+## A setting's identity is (namespace, name), and the namespace is its FILE
+
+`config get theme` used to have one possible answer, because a setting's
+identity was a bare global name and `setting_register()` refused a
+second `theme` outright -- silently, first-wins. That was fine while the
+registry was one compiled-in table of five kernel settings. It stops
+being fine the moment two programs own configuration: the loser has no
+way to know it lost, and the winner depends on boot order.
+
+**The namespace is the registered NAME OF THE FILE the setting persists
+to** (`api/config_file.h`), so `font_size` in `/etc/toyos.conf` is
+`system.font_size`. That choice is what made this cheap: the namespace
+is DERIVED, not declared, so **not one `struct setting` had to change**
+and the /etc files are untouched. It also means a ring-3 program that
+registers its own config file with a `/etc/config.d` descriptor gets a
+namespace for free, which is the property the eventual settings daemon
+needs.
+
+Every real system namespaces settings this way -- sysctl puts it in the
+path (`net.ipv4.ip_forward`), GSettings uses a schema id plus a key,
+macOS `defaults` takes a domain and **requires** it for a write. A flat
+global name with silent first-wins was the outlier, not the baseline.
+
+**The lookup rule: qualified is always exact; bare works when exactly
+one setting has that name, and is REFUSED when several do.** Never
+resolved by order -- that would make the answer depend on boot sequence,
+and the caller would never learn it had been guessed at.
+`setting_matches()` returns the count, so "no such setting" and "say
+which one" stay different answers; they need different words in a UI.
+
+Two consequences worth stating:
+
+  * **A write refuses ambiguity where a read merely reports it.**
+    Reading the wrong setting shows a wrong answer; writing the wrong
+    one changes something the user did not mean to change and persists
+    it. `config set`, `config unset` and `config where` all resolve
+    first. This is the same asymmetry that makes the domain mandatory
+    for a `defaults write` and optional for nothing.
+  * **`config` prints qualified names everywhere** -- `list`, `diff`,
+    the ambiguity report. A tool that printed the bare key would be
+    offering a name that is not necessarily usable.
+
+The registration rule follows from the identity: a duplicate is refused
+when the PAIR collides, i.e. the same name in the same file. That was
+always a genuine collision. The same name in two different files is now
+two settings.
+
+**What is NOT in this**, and is a separate item on the roadmap: moving
+the registry out of the kernel. Several settings are kernel state whose
+`apply` mutates live subsystems (timezone, font size, keymap, cursor)
+and cannot leave ring 0; the rest belong to programs, and a ring-3
+settings daemon needs supervision, discovery and an IPC that toy-os does
+not have yet. Qualified names were built first deliberately, because
+(namespace, name) is transport-agnostic -- it is the same identity
+whichever side of that boundary the registry ends up on.

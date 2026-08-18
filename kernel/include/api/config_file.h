@@ -73,6 +73,13 @@ int config_file_count(void);
 const struct config_file *config_file_at(int index);
 const struct config_file *config_file_find(const char *name);
 
+// The descriptor for a PATH rather than a name -- the lookup a setting
+// needs, since a `struct setting` names the file it persists to and its
+// NAMESPACE is that file's registered name (api/setting.h). Returns
+// NULL for a path nothing has registered, which is why a setting in an
+// unregistered file has no namespace and can only be addressed bare.
+const struct config_file *config_file_find_by_path(const char *path);
+
 // Registers the kernel's own config files and then scans
 // CONFIG_DESCRIPTOR_DIR for the rest. Called from settings_init(), and
 // again by settings_reload() -- so `config register` followed by

@@ -1200,6 +1200,18 @@ technical conventions below:
   is an INDEX over them, which is the half `/etc` cannot provide about
   itself. `settings_reload()` (and `config reload`) re-reads them after
   a hand edit, and REPORTS refusals. See `docs/decisions.md`.
+  **A setting's identity is (NAMESPACE, name), and the namespace is the
+  registered name of its FILE** -- `system.font_size` for `font_size` in
+  `/etc/toyos.conf`. Derived, not declared, so no `struct setting` and
+  no `/etc` file changed when it landed, and a ring-3 program that
+  declares its own config file with an `/etc/config.d` descriptor gets a
+  namespace for free. **A bare name works only when exactly one setting
+  has it and is REFUSED when several do** -- never resolved by
+  registration order, which would make the answer depend on boot
+  sequence; `setting_matches()` is how a caller tells "no such setting"
+  from "say which one". A WRITE (`config set`/`unset`) refuses ambiguity
+  where a read merely reports it. Registration refuses a duplicate PAIR,
+  so the same name in two different files is two settings.
   **`/etc/config.d` is how a config FILE declares itself** -- one
   `Name`/`Path`/`Description` descriptor each, so a ring-3 program can
   register its config with no kernel change, over a built-in floor that

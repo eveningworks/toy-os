@@ -61,6 +61,10 @@ enum setting_result {
 #define SETTING_ABI_LABEL_MAX 40 // human-facing, e.g. "Font size"
 #define SETTING_ABI_VALUE_MAX 64 // a value, as stored
 #define SETTING_ABI_FILE_MAX  40 // e.g. "/etc/toyos.conf"
+#define SETTING_ABI_NS_MAX    24 // e.g. "system" -- see `ns` below
+// Room for "<ns>.<name>", which is what GET and SET accept in `name`.
+// INFO still writes the BARE key there and puts the namespace in `ns`.
+#define SETTING_ABI_QUALIFIED_MAX (SETTING_ABI_NS_MAX + SETTING_ABI_NAME_MAX + 1)
 
 // Mirrors enum setting_type (setting.h). ENUM means `choice_count`
 // options are listed through SETTING_OP_CHOICE; STRING means free text
@@ -138,7 +142,24 @@ struct setting_msg {
     // fs_generation() and the desktop's live `.desktop` reload.
     uint32_t generation;
 
-    char name[SETTING_ABI_NAME_MAX];   // in (GET/SET), out (INFO)
+    char name[SETTING_ABI_QUALIFIED_MAX]; // in (GET/SET), out (INFO)
+
+    // The setting's NAMESPACE -- the registered name of the file it
+    // persists to ("system" for /etc/toyos.conf). A setting's identity
+    // is (ns, name), so two programs may both own a `theme`; see
+    // api/setting.h.
+    //
+    // Its own field rather than baked into `name` on purpose: a client
+    // displays, groups and sorts by it (Control Panel puts a heading on
+    // each namespace), and re-splitting a joined string to do that is a
+    // parser every client would grow its own copy of. `name` stays the
+    // bare key, which is also what keeps every existing client correct
+    // without an edit.
+    //
+    // GET/SET accept either form in `name`: bare when unambiguous,
+    // "ns.name" always. A bare name matching more than one setting is
+    // REFUSED rather than resolved by order.
+    char ns[SETTING_ABI_NS_MAX];       // out (INFO)
     char label[SETTING_ABI_LABEL_MAX]; // out (INFO)
     char file[SETTING_ABI_FILE_MAX];   // out (INFO)
     char value[SETTING_ABI_VALUE_MAX]; // in (SET), out (INFO/CHOICE/GET)

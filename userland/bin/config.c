@@ -85,12 +85,89 @@ static int read_file(const char *path, char *buf, int cap) {
 
 // --- subcommands ------------------------------------------------------
 
+// --- qualified names -------------------------------------------------
+//
+// A setting's identity is (namespace, name) -- the namespace being the
+// registered name of the file it lives in, so `font_size` in
+// /etc/toyos.conf is `system.font_size` (api/setting.h). A bare name
+// still works when only one setting has it; when several do, this tool
+// REFUSES and lists them rather than picking, because picking would
+// make the answer depend on registration order.
+//
+// The matching is done HERE, over the enumerated registry, rather than
+// with a new syscall: the kernel already refuses an ambiguous bare
+// name, and what a user needs on top of that refusal is "did you mean
+// these two?" -- which needs the list this tool already reads for
+// `config list`.
+static int name_matches(const struct setting_msg *m, const char *want) {
+    const char *dot = 0;
+    for (const char *p = want; *p; p++) if (*p == '.') { dot = p; break; }
+    if (!dot) return strcmp(m->name, want) == 0;
+
+    // Qualified: both halves must match. A namespace-less setting (its
+    // file has no descriptor) can only ever be addressed bare.
+    if (strncmp(m->ns, want, (size_t)(dot - want)) != 0) return 0;
+    if (m->ns[dot - want] != '\0') return 0;
+    return strcmp(m->name, dot + 1) == 0;
+}
+
+// Fills `out` with "<ns>.<name>", or the bare name when there is no
+// namespace -- the form this tool prints and accepts.
+static void qualified(const struct setting_msg *m, char *out, int cap) {
+    if (m->ns[0]) snprintf(out, cap, "%s.%s", m->ns, m->name);
+    else          strlcpy(out, m->name, (unsigned)cap);
+}
+
+// How many registered settings `want` matches, writing the first one
+// into `first` (if given) and printing all of them when there is more
+// than one. Returns the count.
+static int resolve(const char *want, struct setting_msg *first, int complain) {
+    struct setting_msg m;
+    memset(&m, 0, sizeof m);
+    if (!op(&m, SETTING_OP_COUNT)) return -1;
+    int n = m.count, hits = 0;
+
+    for (int i = 0; i < n; i++) {
+        memset(&m, 0, sizeof m);
+        m.op = SETTING_OP_INFO;
+        m.index = i;
+        if (sys_setting(&m) != 0) continue;
+        if (!name_matches(&m, want)) continue;
+        if (hits == 0 && first) *first = m;
+        hits++;
+    }
+
+    if (hits > 1 && complain) {
+        char line[160];
+        snprintf(line, sizeof line,
+                 "config: '%s' is ambiguous -- %d settings have that name:",
+                 want, hits);
+        putline(line);
+        for (int i = 0; i < n; i++) {
+            memset(&m, 0, sizeof m);
+            m.op = SETTING_OP_INFO;
+            m.index = i;
+            if (sys_setting(&m) != 0) continue;
+            if (!name_matches(&m, want)) continue;
+            char q[SETTING_ABI_QUALIFIED_MAX];
+            qualified(&m, q, sizeof q);
+            snprintf(line, sizeof line, "    %-24s in %s", q, m.file);
+            putline(line);
+        }
+        putline("config: name one of them in full");
+    }
+    return hits;
+}
+
 static int cmd_list(void) {
     struct setting_msg m;
     if (!op(&m, SETTING_OP_COUNT)) { putline("config: registry unavailable"); return 1; }
     int n = m.count;
 
-    putline("SETTING           VALUE                 FILE");
+    // Qualified, because that is the name `config get`/`set` accept in
+    // every case -- printing the bare one would show a name that may
+    // not be usable on its own.
+    putline("SETTING                   VALUE                 FILE");
     for (int i = 0; i < n; i++) {
         memset(&m, 0, sizeof m);
         m.op = SETTING_OP_INFO;
@@ -103,22 +180,34 @@ static int cmd_list(void) {
         // setting "isn't working".
         int edited = m.stored[0] && strcmp(m.value, m.stored) != 0;
         char line[200];
-        snprintf(line, sizeof line, "%-17s %-21s %s%s",
-                 m.name, m.value, m.file, edited ? "  (file differs -- see `config diff`)" : "");
+        char q[SETTING_ABI_QUALIFIED_MAX];
+        qualified(&m, q, sizeof q);
+        snprintf(line, sizeof line, "%-25s %-21s %s%s",
+                 q, m.value, m.file, edited ? "  (file differs -- see `config diff`)" : "");
         putline(line);
     }
     return 0;
 }
 
 static int cmd_get(const char *name) {
-    struct setting_msg m;
-    memset(&m, 0, sizeof m);
-    m.op = SETTING_OP_GET;
-    strlcpy(m.name, name, sizeof m.name);
-    if (sys_setting(&m) != 0) {
+    struct setting_msg found;
+    int hits = resolve(name, &found, 1);
+    if (hits < 0) { putline("config: registry unavailable"); return 1; }
+    if (hits > 1) return 1;             // resolve() listed them
+    if (hits == 0) {
         char line[128];
         snprintf(line, sizeof line, "config: no setting named '%s'", name);
         putline(line);
+        return 1;
+    }
+    // The live value, not the one INFO reported a moment ago: GET is
+    // what a caller means by "what is it now".
+    struct setting_msg m;
+    memset(&m, 0, sizeof m);
+    m.op = SETTING_OP_GET;
+    qualified(&found, m.name, sizeof m.name);
+    if (sys_setting(&m) != 0) {
+        putline("config: registry unavailable");
         return 1;
     }
     putline(m.value);
@@ -126,10 +215,24 @@ static int cmd_get(const char *name) {
 }
 
 static int cmd_set(const char *name, const char *value) {
+    // A WRITE refuses an ambiguous name outright. Reading the wrong
+    // setting shows you a wrong answer; writing the wrong one changes
+    // something you did not mean to change and persists it -- which is
+    // why macOS `defaults` makes the domain mandatory for a write and
+    // optional for nothing.
+    struct setting_msg found;
+    int hits = resolve(name, &found, 1);
+    if (hits < 0) { putline("config: registry unavailable"); return 1; }
+    if (hits > 1) return 1;             // resolve() listed them
+
     struct setting_msg m;
     memset(&m, 0, sizeof m);
     m.op = SETTING_OP_SET;
-    strlcpy(m.name, name, sizeof m.name);
+    // Qualified when it resolved, verbatim when it did not -- an
+    // unknown name has to reach the registry so the refusal comes from
+    // the one place that decides what exists.
+    if (hits == 1) qualified(&found, m.name, sizeof m.name);
+    else           strlcpy(m.name, name, sizeof m.name);
     strlcpy(m.value, value, sizeof m.value);
     if (sys_setting(&m) != 0) { putline("config: registry unavailable"); return 1; }
 
@@ -146,7 +249,7 @@ static int cmd_set(const char *name, const char *value) {
             q.op = SETTING_OP_INFO;
             q.index = i;
             if (sys_setting(&q) != 0) continue;
-            if (strcmp(q.name, name) != 0) continue;
+            if (!name_matches(&q, name)) continue;
             if (q.type != SETTING_ABI_TYPE_ENUM || q.count <= 0) break;
 
             put("  try one of:");
@@ -169,10 +272,17 @@ static int cmd_set(const char *name, const char *value) {
 }
 
 static int cmd_unset(const char *name) {
+    // Same rule as `set`: removing the wrong setting's key is a write.
+    struct setting_msg found;
+    int hits = resolve(name, &found, 1);
+    if (hits < 0) { putline("config: registry unavailable"); return 1; }
+    if (hits > 1) return 1;             // resolve() listed them
+
     struct setting_msg m;
     memset(&m, 0, sizeof m);
     m.op = SETTING_OP_UNSET;
-    strlcpy(m.name, name, sizeof m.name);
+    if (hits == 1) qualified(&found, m.name, sizeof m.name);
+    else           strlcpy(m.name, name, sizeof m.name);
     if (sys_setting(&m) != 0) { putline("config: registry unavailable"); return 1; }
 
     char line[160];
@@ -193,16 +303,12 @@ static int cmd_unset(const char *name) {
 }
 
 static int cmd_where(const char *name) {
-    struct setting_msg m;
-    if (!op(&m, SETTING_OP_COUNT)) return 1;
-    int n = m.count;
-    for (int i = 0; i < n; i++) {
-        memset(&m, 0, sizeof m);
-        m.op = SETTING_OP_INFO;
-        m.index = i;
-        if (sys_setting(&m) != 0) continue;
-        if (strcmp(m.name, name) != 0) continue;
-        putline(m.file); // just the path, so it is usable in a command
+    struct setting_msg found;
+    int hits = resolve(name, &found, 1);
+    if (hits < 0) { putline("config: registry unavailable"); return 1; }
+    if (hits > 1) return 1;             // resolve() listed them
+    if (hits == 1) {
+        putline(found.file); // just the path, so it is usable in a command
         return 0;
     }
     char line[128];
@@ -224,7 +330,9 @@ static int cmd_diff(void) {
         if (!m.stored[0] || strcmp(m.value, m.stored) == 0) continue;
 
         char line[200];
-        snprintf(line, sizeof line, "%-17s live=%-16s file=%s", m.name, m.value, m.stored);
+        char q[SETTING_ABI_QUALIFIED_MAX];
+        qualified(&m, q, sizeof q);
+        snprintf(line, sizeof line, "%-25s live=%-16s file=%s", q, m.value, m.stored);
         putline(line);
         differ++;
     }

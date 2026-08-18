@@ -22,6 +22,14 @@ const struct config_file *config_file_at(int index) {
     return &g_files[index];
 }
 
+const struct config_file *config_file_find_by_path(const char *path) {
+    if (!path || !*path) return 0;
+    for (int i = 0; i < g_count; i++) {
+        if (k_strcmp(g_files[i].path, path) == 0) return &g_files[i];
+    }
+    return 0;
+}
+
 const struct config_file *config_file_find(const char *name) {
     if (!name) return 0;
     for (int i = 0; i < g_count; i++) {

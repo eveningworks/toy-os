@@ -36,18 +36,35 @@ int setting_register(const struct setting *s) {
         klog_write("\n");
         return 0;
     }
-    // A duplicate name is refused rather than shadowing: which copy won
+    // A duplicate is refused rather than shadowing -- which copy won
     // would depend on boot order, and the loser would still appear in
-    // every enumeration.
-    if (setting_find(s->name)) return 0;
+    // every enumeration. What counts as a duplicate is the PAIR
+    // (namespace, name): two programs may both own a `theme`, as long
+    // as they persist it to different files. Same name in the same file
+    // is a genuine collision and always was.
+    for (int i = 0; i < g_count; i++) {
+        if (k_strcmp(g_settings[i]->name, s->name) != 0) continue;
+        const char *a = g_settings[i]->file, *b = s->file;
+        if (a == b || (a && b && k_strcmp(a, b) == 0)) {
+            klog_write("setting: refusing duplicate ");
+            klog_write(s->name);
+            klog_write(" in the same file\n");
+            return 0;
+        }
+    }
     g_settings[g_count++] = s;
     return 1;
 }
 
 int setting_unregister(const char *name) {
     if (!name) return 0;
+    // Through setting_find(), so removing uses exactly the identity
+    // rule looking up does -- including refusing an ambiguous bare
+    // name, where guessing would silently remove the wrong one.
+    const struct setting *want = setting_find(name);
+    if (!want) return 0;
     for (int i = 0; i < g_count; i++) {
-        if (k_strcmp(g_settings[i]->name, name) != 0) continue;
+        if (g_settings[i] != want) continue;
         // Close the gap rather than leaving a hole: `setting_at()` is
         // indexed by row number, and a NULL in the middle would make a
         // UI's enumeration stop early at it.
@@ -65,12 +82,82 @@ const struct setting *setting_at(int index) {
     return g_settings[index];
 }
 
-const struct setting *setting_find(const char *name) {
-    if (!name) return 0;
-    for (int i = 0; i < g_count; i++) {
-        if (k_strcmp(g_settings[i]->name, name) == 0) return g_settings[i];
+const char *setting_namespace(const struct setting *s) {
+    if (!s || !s->file) return "";
+    const struct config_file *f = config_file_find_by_path(s->file);
+    return f ? f->name : "";
+}
+
+int setting_qualified(const struct setting *s, char *out, uint32_t out_size) {
+    if (!s || !out || out_size == 0) return 0;
+    const char *ns = setting_namespace(s);
+    // k_strlcpy/k_strlcat return the length they TRIED to create, so
+    // `>= out_size` is the truncation test -- and a truncated qualified
+    // name is a different setting's name, not a shortened one.
+    out[0] = '\0';
+    if (*ns) {
+        if (k_strlcpy(out, ns, out_size) >= out_size) return 0;
+        if (k_strlcat(out, ".", out_size) >= out_size) return 0;
     }
-    return 0;
+    return k_strlcat(out, s->name, out_size) < out_size;
+}
+
+// Splits "ns.name" into its halves. Returns 1 when a dot was found, 0
+// when the input is a bare name -- so a caller can tell "the user
+// qualified this" from "the user did not", which is the difference
+// between an exact match and one that may be ambiguous.
+static int split_qualified(const char *in, char *ns, uint32_t ns_size,
+                           const char **bare) {
+    const char *dot = 0;
+    for (const char *p = in; *p; p++) {
+        if (*p == '.') { dot = p; break; }
+    }
+    if (!dot) { *bare = in; if (ns_size) ns[0] = '\0'; return 0; }
+    uint32_t n = (uint32_t)(dot - in);
+    if (n >= ns_size) n = ns_size - 1;
+    for (uint32_t i = 0; i < n; i++) ns[i] = in[i];
+    ns[n] = '\0';
+    *bare = dot + 1;
+    return 1;
+}
+
+// The one matcher both setting_find() and setting_matches() use, so
+// "which setting does this name mean" has a single definition.
+// `want_ns` is "" for a bare name.
+static int match(const struct setting *s, const char *want_ns, const char *bare) {
+    if (k_strcmp(s->name, bare) != 0) return 0;
+    if (!*want_ns) return 1;
+    return k_strcmp(setting_namespace(s), want_ns) == 0;
+}
+
+int setting_matches(const char *name) {
+    if (!name || !*name) return 0;
+    char ns[CONFIG_NAME_MAX];
+    const char *bare = name;
+    split_qualified(name, ns, sizeof ns, &bare);
+    int n = 0;
+    for (int i = 0; i < g_count; i++) {
+        if (match(g_settings[i], ns, bare)) n++;
+    }
+    return n;
+}
+
+const struct setting *setting_find(const char *name) {
+    if (!name || !*name) return 0;
+    char ns[CONFIG_NAME_MAX];
+    const char *bare = name;
+    split_qualified(name, ns, sizeof ns, &bare);
+
+    const struct setting *hit = 0;
+    for (int i = 0; i < g_count; i++) {
+        if (!match(g_settings[i], ns, bare)) continue;
+        // AMBIGUOUS: refuse rather than return the first. Returning one
+        // would make which setting a bare name means depend on
+        // registration order, i.e. on boot sequence.
+        if (hit) return 0;
+        hit = g_settings[i];
+    }
+    return hit;
 }
 
 int setting_get(const char *name, char *out, uint32_t out_size) {
@@ -196,6 +283,7 @@ int setting_dispatch(struct setting_msg *msg) {
         k_strlcpy(msg->name, s->name, sizeof msg->name);
         k_strlcpy(msg->label, s->label, sizeof msg->label);
         k_strlcpy(msg->file, s->file ? s->file : "", sizeof msg->file);
+        k_strlcpy(msg->ns, setting_namespace(s), sizeof msg->ns);
         msg->type = (s->type == SETTING_TYPE_ENUM) ? SETTING_ABI_TYPE_ENUM
                                                    : SETTING_ABI_TYPE_STRING;
         msg->count = choice_count(s);

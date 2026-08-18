@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "etc_config.h"
+#include "config_file.h" // a setting's NAMESPACE is its file's name
 
 // The settings registry: one place that knows what settings exist.
 //
@@ -43,6 +44,34 @@ _Static_assert(SETTING_MAX == SETTING_ABI_MAX,
                "SETTING_MAX and SETTING_ABI_MAX must agree -- a client sizes "
                "its array from the ABI one and would truncate the list");
 #define SETTING_NAME_MAX   24 // the /etc key, e.g. "font_size"
+
+// QUALIFIED NAMES: a setting's identity is (namespace, name), not name.
+//
+// The namespace is the registered NAME OF THE FILE it persists to
+// (api/config_file.h) -- `system` for /etc/toyos.conf, `desktop` for
+// /etc/desktop.conf -- so it is DERIVED rather than declared, and no
+// existing `struct setting` had to change. Written `system.font_size`.
+//
+// The problem it fixes: identity used to be a bare global name, and
+// registering a second `theme` was refused silently, first-wins. That
+// was fine with one compiled-in table of five kernel settings and stops
+// being fine the moment two programs own configuration -- the loser had
+// no way to know, and `config get theme` would never have mentioned it.
+//
+// Every real system namespaces this way: sysctl puts it in the path
+// (`net.ipv4.ip_forward`), GSettings uses a schema id plus a key, macOS
+// `defaults` takes a domain and REQUIRES it for a write. A flat global
+// name with silent first-wins was the outlier.
+//
+// THE RULE FOR LOOKUPS: a qualified name is always exact; a bare name
+// works when exactly one setting has it, and is refused as AMBIGUOUS
+// when several do -- never resolved by order, which would make the
+// answer depend on boot sequence. setting_matches() is how a caller
+// tells "no such setting" from "say which one".
+#define SETTING_QUALIFIED_MAX (CONFIG_NAME_MAX + SETTING_NAME_MAX + 1)
+_Static_assert(SETTING_QUALIFIED_MAX == SETTING_ABI_QUALIFIED_MAX,
+               "a qualified name must fit the ABI message's `name` field, or "
+               "a client's `config set system.font_size` arrives truncated");
 #define SETTING_LABEL_MAX  40 // what a settings UI shows, e.g. "Font size"
 #define SETTING_VALUE_MAX  64 // a value, as written to its file
 
@@ -97,7 +126,22 @@ int setting_unregister(const char *name);
 
 int setting_count(void);
 const struct setting *setting_at(int index);
+// Finds a setting by bare or qualified name. NULL if there is no such
+// setting OR if a bare name is ambiguous -- ask setting_matches() which
+// it was before reporting to a user.
 const struct setting *setting_find(const char *name);
+
+// How many settings a bare or qualified name matches: 0 (unknown), 1
+// (usable), or more (ambiguous -- the caller must qualify).
+int setting_matches(const char *name);
+
+// The namespace for a setting: the registered name of the file it
+// persists to, or "" if that file has no descriptor. Never NULL.
+const char *setting_namespace(const struct setting *s);
+
+// Writes "<namespace>.<name>" into `out` (just "<name>" when the
+// setting has no namespace). Returns 1, or 0 if it would not fit.
+int setting_qualified(const struct setting *s, char *out, uint32_t out_size);
 
 // Writes the named setting's current value into `out`. Returns 1, or 0
 // (leaving `out` empty) if no such setting is registered.

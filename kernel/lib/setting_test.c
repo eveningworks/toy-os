@@ -20,6 +20,7 @@
 #include "etc_config.h"
 #include "string.h"
 #include "fs.h"
+#include "config_file.h" // the namespace comes from a file descriptor
 #include "gfx.h"
 #include "font_config.h"
 
@@ -113,11 +114,110 @@ KTEST("setting", "every registered setting reports a value and a file") {
     }
 }
 
-KTEST("setting", "a duplicate name is refused, not shadowed") {
+KTEST("setting", "a duplicate name IN THE SAME FILE is refused, not shadowed") {
     scratch_begin();
     int before = setting_count();
     KTEST_ASSERT_EQ(setting_register(&g_scratch), 0);
     KTEST_ASSERT_EQ(setting_count(), before);
+    scratch_end();
+}
+
+// --- qualified names -------------------------------------------------
+//
+// A setting's identity is (namespace, name), the namespace being the
+// registered name of its FILE -- so the same name in two different
+// files is two settings, which is the whole point: two programs may
+// each own a `theme`. Nothing in the kernel registers such a pair
+// today, so these build one.
+#define SCRATCH2_FILE "/tmp/ktest_setting2.conf"
+
+static char g_scratch2_value[SETTING_VALUE_MAX] = "blue";
+
+static void scratch2_get(char *out, uint32_t out_size) {
+    k_strlcpy(out, g_scratch2_value, out_size);
+}
+
+static int scratch2_apply(const char *value) {
+    k_strlcpy(g_scratch2_value, value, sizeof g_scratch2_value);
+    return etc_config_set(SCRATCH2_FILE, SCRATCH_NAME, value)
+               ? SETTING_SAVED : SETTING_UNSAVED;
+}
+
+// Same NAME as g_scratch, different FILE.
+static const struct setting g_scratch2 = {
+    .name   = SCRATCH_NAME,
+    .label  = "Scratch two",
+    .type   = SETTING_TYPE_STRING,
+    .file   = SCRATCH2_FILE,
+    .choice = 0,
+    .get    = scratch2_get,
+    .apply  = scratch2_apply,
+};
+
+KTEST("setting", "the same name in a DIFFERENT file is a second setting") {
+    scratch_begin();
+    config_file_register("ktestns1", SCRATCH_FILE, "scratch one", 0);
+    config_file_register("ktestns2", SCRATCH2_FILE, "scratch two", 0);
+    int before = setting_count();
+
+    // The registration the old flat namespace refused outright.
+    KTEST_ASSERT_EQ(setting_register(&g_scratch2), 1);
+    KTEST_ASSERT_EQ(setting_count(), before + 1);
+
+    // Each is reachable by its own qualified name, and they are
+    // genuinely different objects -- not one entry found twice.
+    const struct setting *a = setting_find("ktestns1." SCRATCH_NAME);
+    const struct setting *b = setting_find("ktestns2." SCRATCH_NAME);
+    KTEST_ASSERT(a != 0 && b != 0);
+    KTEST_ASSERT(a != b);
+    KTEST_ASSERT_EQ(k_strcmp(setting_namespace(a), "ktestns1"), 0);
+    KTEST_ASSERT_EQ(k_strcmp(setting_namespace(b), "ktestns2"), 0);
+
+    setting_unregister("ktestns2." SCRATCH_NAME);
+    scratch_end();
+}
+
+KTEST("setting", "a bare name matching two settings is AMBIGUOUS, not the first") {
+    scratch_begin();
+    config_file_register("ktestns1", SCRATCH_FILE, "scratch one", 0);
+    config_file_register("ktestns2", SCRATCH2_FILE, "scratch two", 0);
+    KTEST_ASSERT_EQ(setting_register(&g_scratch2), 1);
+
+    // THE assertion of the whole scheme. Returning either one would
+    // make which setting a bare name means depend on registration
+    // order, i.e. on boot sequence -- and the caller would never know
+    // it had been guessed at.
+    KTEST_ASSERT(setting_find(SCRATCH_NAME) == 0);
+    KTEST_ASSERT_EQ(setting_matches(SCRATCH_NAME), 2);
+    // ...while a qualified name is never ambiguous.
+    KTEST_ASSERT_EQ(setting_matches("ktestns1." SCRATCH_NAME), 1);
+
+    // And "no such setting" stays distinguishable from "say which one",
+    // which is the difference a UI has to report differently.
+    KTEST_ASSERT_EQ(setting_matches("ktest_nonexistent"), 0);
+
+    setting_unregister("ktestns2." SCRATCH_NAME);
+    scratch_end();
+}
+
+KTEST("setting", "a qualified name round-trips through setting_qualified()") {
+    scratch_begin();
+    config_file_register("ktestns1", SCRATCH_FILE, "scratch one", 0);
+
+    const struct setting *s = setting_find("ktestns1." SCRATCH_NAME);
+    KTEST_ASSERT(s != 0);
+    char q[SETTING_QUALIFIED_MAX];
+    KTEST_ASSERT_EQ(setting_qualified(s, q, sizeof q), 1);
+    KTEST_ASSERT_EQ(k_strcmp(q, "ktestns1." SCRATCH_NAME), 0);
+    // The name it produces is one it can find again -- the property a
+    // client depends on when it prints a name for the user to type.
+    KTEST_ASSERT(setting_find(q) == s);
+
+    // A buffer too small must FAIL rather than truncate: a truncated
+    // qualified name is a different setting's name, not a shorter one.
+    char tiny[4];
+    KTEST_ASSERT_EQ(setting_qualified(s, tiny, sizeof tiny), 0);
+
     scratch_end();
 }
 

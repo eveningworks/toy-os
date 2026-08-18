@@ -1210,57 +1210,29 @@ guess.*
       further; get a bigger sample first, and note the `taskmgr` flake
       below sits at a similar rate and may share a cause.
 
-- [ ] **Settings: qualified names, and then a ring-3 settings daemon.**
-      Two related items, deliberately staged so the first does not
-      depend on the second.
+- [x] ~~**Settings: qualified names (stage 1).**~~ BUILT 2026-08-18.
+      A setting's identity is (namespace, name), the namespace being the
+      registered name of the file it persists to, so `font_size` in
+      /etc/toyos.conf is `system.font_size`. Derived rather than
+      declared, so no `struct setting` and no /etc file changed. A bare
+      name works when exactly one setting has it and is REFUSED when
+      several do -- never resolved by registration order. R1-R5 all
+      landed; see `docs/decisions.md`.
 
-      **The defect today.** A setting's identity is a bare global name,
-      and `setting_register()` refuses a duplicate silently (first wins,
-      `kernel/lib/setting.c`). `config get X` never searches files at
-      all -- it finds X in the registry, and the registry entry names
-      exactly one file -- so the same key in a second config file is
-      dead text that nothing reads and nothing warns about. With one
-      compiled-in table of five kernel settings that was fine; with two
-      programs owning config it is a collision waiting to happen, and
-      the loser has no way to know.
+- [ ] **Settings: a ring-3 settings daemon (stage 2).** The remaining
+      half, and the one that needs infrastructure toy-os does not have.
 
-      **Stage 1 -- qualified names (`<namespace>.<name>`).** The
-      namespace is the config FILE's registered `Name`, which already
-      exists (`/etc/config.d` descriptors, `api/config_file.h`), so
-      `font_size` in the system file becomes `system.font_size`.
-      Requirements:
+      **The gap it closes:** a ring-3 program still cannot register a
+      setting AT ALL -- the registry is a compiled-in table, so "which
+      settings exist" is a kernel-build-time question. Qualified names
+      make two programs *able* to own the same setting name; this is
+      what would let a program own a setting in the first place.
 
-      * R1. Identity in the registry becomes (namespace, name); the
-        duplicate refusal applies to the PAIR, so two programs may both
-        own a `theme`.
-      * R2. `config get` accepts a bare name and reports every match,
-        qualified, when there is more than one; a qualified name is
-        always exact. `config set` refuses an ambiguous bare name and
-        says which qualified names it meant.
-      * R3. `SYS_SETTING`'s `struct setting_msg` carries the namespace
-        as its own field rather than baking it into `name`, so a client
-        can display and sort by it.
-      * R4. The ring-3 Control Panel groups by namespace, which it can
-        do with no per-setting knowledge.
-      * R5. Existing files do not change. The namespace is derived from
-        where a setting already lives, so `/etc/toyos.conf` keeps its
-        current keys and hand-editing still works.
-
-      Chosen over two alternatives (2026-08-18): making the FILE a
-      command-line selector (macOS `defaults`' shape -- rejected because
-      the file has to be typed on every ambiguous call), and keeping
-      names globally unique with a loud refusal (rejected because it
-      does not actually let two programs use the same name; one still
-      loses).
-
-      **Stage 2 -- a ring-3 settings daemon.** The deeper problem is
-      that a ring-3 program cannot register a setting AT ALL: the
-      registry is a compiled-in table, so "which settings exist" is a
-      kernel-build-time question. Moving it out is the right direction
-      and matches every system except Windows (Linux has no kernel
-      settings registry -- sysctl is kernel parameters only, user config
-      is dconf/gsettings in userspace; macOS has `cfprefsd`; Windows'
-      configuration manager genuinely is in ntoskrnl).
+      Moving the registry out matches every system except Windows
+      (Linux has no kernel settings registry -- sysctl is kernel
+      parameters only, user config is dconf/gsettings in userspace;
+      macOS has `cfprefsd`; Windows' configuration manager genuinely is
+      in ntoskrnl).
 
       **What toy-os does not have yet, which is the real content of this
       item:**

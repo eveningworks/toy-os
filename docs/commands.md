@@ -112,6 +112,15 @@ directory of text cannot provide about itself. See
 | `config register <name> <path> [description]` | Declare a new config file by writing a descriptor into `/etc/config.d`. Picked up live. |
 | `config unregister <name>` | Remove that descriptor. A built-in cannot be unregistered. |
 
+**Settings are named `<namespace>.<name>`** — the namespace being the
+registered name of the file the setting lives in, so `font_size` in
+`/etc/toyos.conf` is `system.font_size`. A bare name still works when
+only one setting has it; when several do, `config` lists them and
+refuses rather than picking. `config set` and `config unset` refuse an
+ambiguous name outright, because writing the wrong setting changes
+something you did not mean to change. `config list` prints the qualified
+form, which is the one that always works.
+
 ## Developer and diagnostic (`help tests`)
 
 | Command | Notes |
