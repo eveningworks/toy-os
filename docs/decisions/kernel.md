@@ -2338,3 +2338,49 @@ first, and was not: an address space must not free what it does not
 own. `tools/frame_balance.py` is the standing check, and
 `kernel/mm/uaccess_test.c` carries the pair of KTESTs -- an owned frame
 comes back, a borrowed one does not -- that are each other's control.
+
+
+## A killed process's address space is destroyed at KILL time, and needs its own entry point
+
+`scheduler_kill()` marked the victim `SCHED_ZOMBIE` and
+`scheduler_poll()` reaped it by marking the slot `SCHED_UNUSED`. Neither
+freed any memory: `syscall_process_exit_cleanup()` ran only from
+`sys_exit`, i.e. only when a process ended ITSELF. Every kill therefore
+leaked the victim's whole address space -- ELF pages, stack, heap, any
+window buffer -- plus its open fds, for the rest of the boot. Measured
+at ~18 frames per kill, compounding, and reachable from the desktop
+because Force Quit goes through `scheduler_kill()`.
+
+**Why at kill and not at reap.** A zombie exists to hold an exit code
+for whoever waits on it. Holding an entire address space as well buys
+nothing -- nothing may run in it again -- so the memory should go at
+death. That is also how Linux splits it: `exit_mm()` drops the `mm_struct`
+when the task dies, while the `task_struct` lingers until it is reaped.
+Waiting for the reap would also mean a process nobody ever waits on
+holds its memory forever, which is the common case here: `gui spawn`
+has no waiter at all.
+
+**Why it could not reuse the exit path, which is the interesting part.**
+`syscall_process_exit_cleanup()` switches CR3 to the kernel's address
+space before destroying the tables, because freeing the frame CR3 still
+points at is a use-after-free. That is free when the dying process is
+the one running -- it is leaving anyway. It is WRONG when the caller is
+somebody else: the window manager force-quitting a client is still
+running in its own address space, and moving CR3 out from under it would
+resume it somewhere else entirely. So `syscall_process_kill_cleanup()`
+destroys the victim's tables and leaves CR3 alone, which is sound
+precisely because they are not the live ones. It refuses loudly if
+handed the caller's own address space -- leaking is survivable, pulling
+CR3 out from under a running process is not.
+
+**Ordering that matters.** The teardown runs AFTER
+`win_server_client_gone()`, which unmaps this process's window buffers
+from the compositor and clears the compositor role if this was the
+desktop. Both of those reach into address spaces, so they have to happen
+while this one still exists. `procs[slot].pml4_phys` is zeroed
+immediately afterwards so nothing can follow it again.
+
+Found by `tools/frame_balance.py`, which is also the standing check:
+free frames must return to baseline across a spawn/kill cycle as well as
+a spawn/exit one. Its positive control is the original measurement --
+reverting the fix takes the kill cycles from flat to -18 each.

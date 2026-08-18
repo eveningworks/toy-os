@@ -1672,27 +1672,27 @@ it serves. Small, and it makes everything above it discoverable.*
       `/proc`-shaped part needs nothing outstanding and is what makes
       the rest possible.
 
-- [ ] **Killing a process leaks its entire address space.**
-      `scheduler_kill()` sets the victim to `SCHED_ZOMBIE` and
-      `scheduler_poll()` reaps it by setting `SCHED_UNUSED`. Neither
-      calls `syscall_process_exit_cleanup()` -- that runs only when a
-      process calls `sys_exit` on itself. So a killed process's ELF
-      pages, stack, heap and any window buffer are never freed, and its
-      open fds are never released.
+- [x] ~~**Killing a process leaks its entire address space.**~~ FIXED
+      2026-08-18. `scheduler_kill()` zombied the victim and
+      `scheduler_poll()` reaped it by marking the slot unused, and
+      NEITHER ever tore the address space down -- that only ever
+      happened when a process called `sys_exit` on itself. So a kill
+      lost the victim's ELF pages, stack, heap and window buffer for the
+      rest of the boot, at ~18 frames a time, reachable from the desktop
+      through Force Quit.
 
-      **Reproduction**, measured 2026-08-18: boot, `spawn
-      /bin/wm/system/toywm`, then repeatedly `gui spawn
-      /bin/wm/apps/calculator` and `gui kill <pid>`, reading `meminfo`
-      between cycles. The free-frame count falls by ~18 per cycle and
-      never recovers. A cycle that lets the app exit normally (Alt+F4,
-      the close handshake) balances exactly, which is the control that
-      identifies the kill path rather than teardown generally.
+      The teardown now runs at kill time rather than at reap, which is
+      the split Linux makes too (`exit_mm()` drops the mm at death; the
+      `task_struct` lingers to hold an exit code). It needed its own
+      entry point rather than reusing the exit one: that switches CR3 to
+      the kernel's address space, which is free when the dying process
+      is the one running and wrong when the caller is somebody else --
+      the window manager force-quitting a client would have resumed in
+      the wrong address space. See `docs/decisions.md`.
 
-      This is the reaping half of an init/PID-1 story: nothing in this
-      system is the universal reaper, and the WM only reaps what it
-      launched itself. Force Quit goes through `scheduler_kill()`, so
-      the leak is reachable from the desktop, not only from a test.
-      `tools/frame_balance.py` is the tool to extend once it is fixed.
+      `tools/frame_balance.py` covers both paths now, and its positive
+      control is the measurement above: reverting the fix takes the kill
+      cycles from flat to -18 each, compounding.
 
 - [ ] **The taskbar overflows off the right edge once enough windows are
       open.** Reported with a screenshot, 2026-08-17: thirteen windows,

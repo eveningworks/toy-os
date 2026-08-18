@@ -83,6 +83,27 @@ def cycle_plain(con):
     con.settle()
 
 
+def cycle_kill(con):
+    """Open a GUI client and KILL it, rather than letting it exit.
+
+    A different teardown path entirely, and it used to free nothing at
+    all: scheduler_kill() zombied the process and scheduler_poll() reaped
+    it by marking the slot unused, while the address space -- ELF pages,
+    stack, heap, window buffer -- was only ever destroyed by a process
+    calling sys_exit on ITSELF. ~18 frames a kill, compounding, and Force
+    Quit reaches it from the desktop.
+    """
+    con.send("gui spawn /bin/wm/apps/calculator")
+    time.sleep(2.0)
+    con.settle()
+    out = con.send("gui windows --json")
+    for pid in sorted(set(re.findall(r'"client_pid":\s*(\d+)', out))):
+        if pid != "0":
+            con.send("gui kill %s" % pid)
+    time.sleep(1.5)
+    con.settle()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cycles", type=int, default=3)
@@ -115,21 +136,28 @@ def main():
                 failures.append("a non-GUI process's teardown moved the count by %+d" % delta)
             prev = now
 
-        for i in range(args.cycles):
-            cycle_gui(con)
-            now = free_frames(con)
-            delta = now - prev
-            print("  GUI      cycle %d: %d (%+d)" % (i + 1, now, delta))
-            if i == 0:
-                if delta > 0:
-                    failures.append(
-                        "OVER-FREE: the first GUI teardown returned %d frames it did not own"
-                        % delta)
-                elif delta < -FIRST_CYCLE_SLACK:
-                    failures.append("first GUI cycle leaked %d frames" % -delta)
-            elif delta != 0:
-                failures.append("GUI cycle %d moved the count by %+d" % (i + 1, delta))
-            prev = now
+        for label, run in (("GUI exit", cycle_gui), ("GUI kill", cycle_kill)):
+            first = True
+            for i in range(args.cycles):
+                run(con)
+                now = free_frames(con)
+                delta = now - prev
+                print("  %-8s cycle %d: %d (%+d)" % (label, i + 1, now, delta))
+                # Only the FIRST cycle of a boot can see an over-free
+                # (afterwards those frames are already free), and only
+                # the first can pay the compositor's one-time costs.
+                if first:
+                    if delta > 0:
+                        failures.append(
+                            "OVER-FREE: the first %s teardown returned %d frames "
+                            "it did not own" % (label, delta))
+                    elif delta < -FIRST_CYCLE_SLACK:
+                        failures.append("first %s cycle leaked %d frames" % (label, -delta))
+                elif delta != 0:
+                    failures.append("%s cycle %d moved the count by %+d"
+                                    % (label, i + 1, delta))
+                first = False
+                prev = now
     finally:
         if not args.keep:
             subprocess.run(["python3", "tools/vm.py", "stop"], capture_output=True)

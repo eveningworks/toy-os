@@ -60,4 +60,12 @@ void syscall_reset_heap(uint64_t pml4_phys, uint64_t heap_base);
 // use-after-free the instant something else allocates it).
 void syscall_process_exit_cleanup(uint64_t pml4_phys);
 
+// The same teardown for a process killed from outside rather than one
+// exiting by itself -- see scheduler_kill(). Identical except that it
+// leaves CR3 alone: the caller is a different, still-running process,
+// and switching address spaces out from under it would resume it in the
+// wrong one. Refuses (loudly, and leaks rather than faulting) if handed
+// the caller's own address space.
+void syscall_process_kill_cleanup(uint64_t pml4_phys);
+
 #endif

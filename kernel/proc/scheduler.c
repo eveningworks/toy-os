@@ -96,6 +96,7 @@
 #include "process.h" // process_context_is_armed() -- see kernel_slot_runnable()
 #include "win_events.h" // win_events_reset() at spawn -- see scheduler_spawn()
 #include "win_server.h"
+#include "syscall.h" // syscall_process_kill_cleanup()
 #include "win_input.h" // raw input to a ring-3 compositor // win_server_client_gone() -- see scheduler_on_exit()
 #include "pipe.h"      // pipe_close_writer() when a piped child exits
 #include "kstack.h"    // the guard page, canary and poison fill
@@ -1085,6 +1086,22 @@ int scheduler_kill(int pid, int exit_code) {
         pipe_close_writer(procs[slot].stdout_pipe);
         procs[slot].stdout_pipe = -1;
     }
+
+    // The victim's memory goes NOW, not at reap. A zombie exists to
+    // hold an exit code for whoever waits on it; holding an entire
+    // address space as well is just a leak, and reaping never freed it
+    // either -- scheduler_poll() only marks the slot unused. This is
+    // the same split Linux makes (exit_mm() drops the mm at death, the
+    // task_struct lingers), and without it every kill lost the victim's
+    // ELF pages, stack, heap and window buffer for the rest of the
+    // boot.
+    //
+    // AFTER win_server_client_gone() above, which unmaps this process's
+    // window buffers from the compositor and clears the compositor role
+    // if this was the desktop -- both of those reach into address
+    // spaces and must happen while this one still exists.
+    syscall_process_kill_cleanup(procs[slot].pml4_phys);
+    procs[slot].pml4_phys = 0; // nothing may follow this pointer again
 
     // No switch: the victim is not the process running, so the CPU is
     // already somewhere valid. If it was READY it simply never gets

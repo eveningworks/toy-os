@@ -1052,6 +1052,20 @@ technical conventions below:
   control-register access; and a filesystem backend goes in `fs/`, not
   `drivers/` -- the block device is the driver, the filesystem on top
   of it isn't.
+- **A PROCESS'S MEMORY IS FREED WHEN IT DIES, NOT WHEN IT IS REAPED --
+  and killing needs a DIFFERENT entry point from exiting.**
+  `syscall_process_exit_cleanup()` is for a process ending itself and
+  switches CR3 to the kernel's address space on the way;
+  `syscall_process_kill_cleanup()` is for `scheduler_kill()` and leaves
+  CR3 alone, because the caller there is a different, still-running
+  process (the WM force-quitting a client) that would otherwise resume
+  in the wrong address space. Neither used to run on the kill path at
+  all, so every kill leaked the victim's ELF pages, stack, heap and
+  window buffer permanently -- ~18 frames a time, reachable from the
+  desktop via Force Quit. Two ordering rules: the teardown runs AFTER
+  `win_server_client_gone()` (which reaches into address spaces and
+  needs this one alive), and `pml4_phys` is zeroed straight after so
+  nothing follows it again. `tools/frame_balance.py` covers both paths.
 - **A USER MAPPING SAYS WHETHER IT OWNS ITS FRAME, and getting that
   wrong is silent.** `vmm_destroy_address_space()` frees every frame it
   finds in a dying process's page tables, so anything mapped in that the
