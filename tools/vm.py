@@ -126,7 +126,7 @@ def cmd_start(args):
         # discard=unmap turns the guest's ATA TRIM into a hole punch in the
         # backing file -- see kernel/drivers/ata.c's ata_trim().
         "-drive", f"file={args.disk},format=raw,if=ide,discard=unmap",
-        "-m", "2048",
+        "-m", str(getattr(args, "mem", 0) or 2048),
     ]
     if args.kvm:
         # Matches `make run-kvm`'s flags, so what this measures is what
@@ -318,6 +318,9 @@ def main():
                     help=f"override the QMP port (default: {QMP_PORT} + --instance)")
     ap.add_argument("--vnc", type=int, default=None,
                     help=f"override the VNC display (default: {VNC_DISPLAY} + --instance)")
+    ap.add_argument("--mem", type=int, default=0, metavar="MIB",
+                    help="guest RAM in MiB (default 2048). Smaller makes "
+                          "memory exhaustion reachable -- see tools/mem_stress.py")
     ap.add_argument("--timeout", type=float, default=30.0)
     ap.add_argument("--vga", default="std",
                     help="QEMU -vga adapter (std, vmware, ...). `vmware` is the only "

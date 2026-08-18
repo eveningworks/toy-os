@@ -2564,6 +2564,23 @@ repeated manual steps to be worth automating:
   loader, or the user address-space layout. `stack_smash_test` is
   deliberately absent -- its message goes to the process's stdout, i.e.
   the screen, so there is nothing in the log to assert on.
+- **`mem_stress.py`** -- several memory hogs at once: does the machine
+  survive running out, and is the memory each one got actually its own?
+  Drives `/tests/memtest`, which takes everything `SYS_SBRK` will give
+  (~14 MiB, the per-process bound in `uaddr.h`), writes a pattern
+  derived from the ADDRESS plus a random per-process salt, and reads it
+  back. **The address-derived pattern is the whole design**: a constant
+  fill cannot detect two virtual pages sharing one physical frame,
+  because both read back the constant and look perfect -- with this,
+  the loser reads a value that is a valid pattern for a different
+  address or a different salt, and says so. Proven by deliberately
+  aliasing every 64th heap page, which it catches and names.
+  **`--mem` shrinks the guest so exhaustion is REACHABLE** -- one
+  process cannot fill a 2 GiB machine, `-n 8 --mem 128` does it -- and
+  the summary says whether memory actually ran out, because a run where
+  everything fitted is a different result, not a better one. Ends by
+  running `meminfo audit`. `memtest` alone is in `usertest_run.py`, so
+  the single-process integrity check runs on every preflight.
 - **`frame_balance.py`** -- does a process's teardown balance? Spawns a
   process, lets it exit, and compares the physical allocator's
   free-frame count against the baseline. Two directions, needing

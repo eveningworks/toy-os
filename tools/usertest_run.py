@@ -73,6 +73,12 @@ TESTS = [
      ["Hello from ring 3"], []),
     ("random_test", 0,
      ["random_test: all checks passed"], ["FAIL"]),
+    # Takes every byte SYS_SBRK will give (~14 MiB), writes an
+    # address-derived pattern and reads it back, so it also asserts the
+    # heap bound holds -- "sbrk refused" is a REQUIRED line, not an
+    # incidental one. Adds about a second.
+    ("memtest", 0,
+     ["memtest: PASSED", "sbrk refused as expected"], ["FAIL", "MISMATCH"]),
     ("guard_test", 0,
      ["guard_test: all checks passed"], ["FAIL"]),
     ("fsgen_test", 0,
