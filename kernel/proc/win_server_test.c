@@ -22,15 +22,25 @@
 // every path under test is concerned, subject to the same ownership
 // checks as any other.
 //
-// POSITIVE CONTROL, run when these were written: comment out
-// destroy_window()'s comp_unmap() call and rebuild. Exactly two checks
-// go red -- "destroying a window revokes the compositor's mapping" and
-// "a client dying revokes it too" -- and they fail on the
-// vmm_validate_user_range() assertion rather than on the bookkeeping
-// flag, which is the pair worth having. The other five stay green, which
-// is itself informative: destroy, resize and unregister each have their
-// OWN revocation call, so breaking one does not implicate the others.
+// POSITIVE CONTROL, re-run when the poison contract landed: change
+// destroy_window()'s comp_poison() back to comp_unmap() and rebuild.
+// Exactly two checks go red -- "destroying a window poisons the
+// compositor's mapping" and "a client dying revokes it too" -- and they
+// fail on vmm_validate_user_range() rather than on the bookkeeping flag,
+// which is the pair worth having. The other five stay green, which is
+// itself informative: destroy, resize and unregister each have their OWN
+// revocation call, so breaking one does not implicate the others.
 // Do this again before trusting a clean run after any change here.
+//
+// WHAT THESE CANNOT PROVE, stated rather than implied: anything about
+// the TLB. Every check here reaches a frame by WALKING the page tables
+// from a pml4 the test built, so a PTE that is right while a live
+// address space still caches the old translation reads as correct.
+// comp_map()'s comp_unpoison() call exists for exactly that hazard --
+// mapping over a present entry does not invalidate anything -- and a
+// KTEST written for it passed with the call commented out. It was
+// deleted rather than committed looking green; the reasoning lives in
+// comp_map()'s comment instead, which is where an edit would meet it.
 //
 // The reads and writes below go through vmm_copy_to_user() /
 // vmm_copy_from_user() against a specific address space. That is not
@@ -131,7 +141,15 @@ KTEST("winshare", "both address spaces see the SAME pixels, not a copy") {
 
 // THE ONE THAT MATTERS. A revocation bug leaves the compositor reading
 // frames the allocator has already handed to something else.
-KTEST("winshare", "destroying a window revokes the compositor's mapping") {
+//
+// What "revoked" means changed with comp_poison() (win_server.c): the
+// slot stays MAPPED, at the shared zero page, because a compositor is a
+// process that learns of the death from a queued event and may blit the
+// slot once more before it does -- and a hole there is a page fault,
+// i.e. the desktop dying. So the assertion is not "nothing is mapped"
+// but "the client's pixels are gone", which is the property that was
+// ever worth having.
+KTEST("winshare", "destroying a window poisons the compositor's mapping") {
     struct fixture f = {0};
     if (!fixture_up(&f)) { fixture_down(&f); KTEST_SKIP("out of memory"); }
 
@@ -139,11 +157,23 @@ KTEST("winshare", "destroying a window revokes the compositor's mapping") {
     KTEST_ASSERT(win_server_map_to_compositor(COMP_PID, CLIENT_PID, f.id, &cvaddr));
     KTEST_ASSERT(vmm_validate_user_range(f.comp_as, cvaddr, 4096));
 
+    // A marker the compositor can only still see through the ORIGINAL
+    // frames, so "reads zero" below distinguishes a poisoned slot from
+    // one left pointing at freed memory. Without it the check passes
+    // against the use-after-free it exists to rule out.
+    uint32_t marker = 0xDEADBEEF;
+    KTEST_ASSERT(vmm_copy_to_user(f.client_as, win_buffer_vaddr(f.id),
+                                   &marker, sizeof marker));
+
     KTEST_ASSERT(win_server_destroy_raw(CLIENT_PID, f.id));
 
-    // Not "the flag says unmapped" -- ask the PAGE TABLES. The flag is
-    // the thing that would be wrong if this were broken.
-    KTEST_ASSERT(!vmm_validate_user_range(f.comp_as, cvaddr, 4096));
+    // Ask the PAGE TABLES, not the flag -- the flag is the thing that
+    // would be wrong if this were broken. Still mapped (no fault for a
+    // compositor mid-frame), and no longer the client's pixels.
+    KTEST_ASSERT(vmm_validate_user_range(f.comp_as, cvaddr, 4096));
+    uint32_t seen = 0xFFFFFFFF;
+    KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen, cvaddr, sizeof seen));
+    KTEST_ASSERT_EQ(seen, 0);
     KTEST_ASSERT(!win_server_is_mapped_to_compositor(CLIENT_PID, f.id));
 
     f.id = 0; // already destroyed; don't destroy a live window's slot
@@ -161,9 +191,20 @@ KTEST("winshare", "a client dying revokes it too") {
 
     // The path a real crash takes, which is NOT the same code as an
     // orderly WIN_REQ_DESTROY -- process teardown calls this directly.
+    uint32_t marker = 0xDEADBEEF;
+    KTEST_ASSERT(vmm_copy_to_user(f.client_as, win_buffer_vaddr(f.id),
+                                   &marker, sizeof marker));
+
     win_server_client_gone(CLIENT_PID);
 
-    KTEST_ASSERT(!vmm_validate_user_range(f.comp_as, cvaddr, 4096));
+    // Poisoned, not unmapped -- see the previous test's comment. This is
+    // the path a force quit takes, where the compositor is the process
+    // that ASKED for the kill and returns from the syscall still holding
+    // the dead window in its list.
+    KTEST_ASSERT(vmm_validate_user_range(f.comp_as, cvaddr, 4096));
+    uint32_t seen = 0xFFFFFFFF;
+    KTEST_ASSERT(vmm_copy_from_user(f.comp_as, &seen, cvaddr, sizeof seen));
+    KTEST_ASSERT_EQ(seen, 0);
     KTEST_ASSERT_EQ(win_server_window_count(CLIENT_PID), 0);
 
     f.id = 0;
@@ -317,3 +358,4 @@ KTEST("winshare", "claiming needs no registered presentation layer") {
     req.a = 0;
     KTEST_ASSERT_EQ(win_server_request(COMP_PID, &req), 1);
 }
+

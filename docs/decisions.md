@@ -147,6 +147,7 @@ there when you add an entry, or the index quietly stops being one.
 - [Sorting: the widget owns the order, the app owns the comparison](#sorting-the-widget-owns-the-order-the-app-owns-the-comparison)
 - [The ring-3 UI Demo selects on contact where the kernel one committed on release](#the-ring-3-ui-demo-selects-on-contact-where-the-kernel-one-committed-on-release)
 - [A compositor's view of a window is at a DERIVED address, and revocation is the feature](#a-compositors-view-of-a-window-is-at-a-derived-address-and-revocation-is-the-feature)
+- [Revoking a compositor's window mapping leaves the zero page behind, not a hole](#revoking-a-compositors-window-mapping-leaves-the-zero-page-behind-not-a-hole)
 - [The third inert scrollbar: drawing one and handling it are separate jobs](#the-third-inert-scrollbar-drawing-one-and-handling-it-are-separate-jobs)
 - [The toolkit routes pointer input; an app configures and is told what changed](#the-toolkit-routes-pointer-input-an-app-configures-and-is-told-what-changed)
 - [What editing text MEANS lives in one place, and the storage does not](#what-editing-text-means-lives-in-one-place-and-the-storage-does-not)
@@ -6322,6 +6323,67 @@ or shared-ring transport breaks that assumption -- the same argument
 path reachable from a KTEST, which has no processes to look up, and
 that is the only reason these properties are tested at all.
 
+
+## Revoking a compositor's window mapping leaves the zero page behind, not a hole
+
+Force Quit killed the ring-3 desktop, deterministically, and the fault
+names the whole design problem: `CR2` was
+`win_compositor_vaddr(victim_pid, 0)` and `RIP` was `ugfx_blit`.
+
+The chain. The WM calls `sys_kill()`; the kernel runs
+`win_server_client_gone()` -> `destroy_window()`, which unmapped the
+compositor's view of the dying window and freed its frames
+SYNCHRONOUSLY, and only QUEUED `WIN_EV_CLIENT_DESTROYED`. The syscall
+returns to a compositor whose own window list still names that window,
+and its next frame blits from the address the kernel just took away.
+
+The asymmetry was documented in `abi/win_proto.h` -- "by the time the
+compositor reads it the buffer is gone" -- and stating it did not make
+it survivable. It was free while the WM was ring 0, where the teardown
+and the compositing were the same thread of control in one address
+space. A compositor that is a PROCESS cannot be held inside a kernel
+teardown, so there is no moment at which "the mapping may go now" is
+true.
+
+**So a revoked slot is remapped to a single shared, read-only zero page
+rather than unmapped** (`comp_poison()` in `kernel/proc/win_server.c`).
+The invariant is: while a compositor is registered, a window buffer's
+slot in its address space is never a hole. A stale blit reads black for
+at most one frame, until the queued event is drained and the window
+leaves the compositor's list.
+
+Note this is NOT a use-after-free -- the frames really are freed and
+handed back to the allocator, which is the property the original unmap
+existed to guarantee. The rejected alternative, leaving the real
+mapping in place, IS one, and it fails as garbage inside a window that
+gets diagnosed as a drawing bug.
+
+Three things it costs, all small and all in the same file. The poison
+has to be taken back out before real frames are mapped over it
+(`comp_unpoison()`, called from `comp_map()`) -- **because
+`vmm_map_user_page_type()` does not invalidate the TLB when it replaces
+a PRESENT entry**, so a live compositor would go on reading zeros from a
+window that draws perfectly. The page count of the DEAD window is what
+must be unmapped, so it is recorded per window rather than recomputed
+from the new one. And a compositor losing the role drops its poison
+along with its mappings, since both live in an address space that is
+about to stop existing.
+
+Read-only rather than writable on purpose: a compositor composites OUT
+of a client buffer and never writes one, so a write there is a bug worth
+faulting on rather than absorbing into a page every dead window shares.
+
+The refcounted alternative -- keep the frames until the compositor
+releases them, which is Wayland's `wl_buffer.release` -- is the more
+general answer and was rejected as too much machinery for the problem:
+a new protocol message, lifetime tracking on both sides, and a
+compositor that never acknowledges leaks frames indefinitely. Poison
+needs one frame and no protocol.
+
+Force quit was the deterministic case, not the only one: the same
+unmap runs when any client exits on its own, and a ring-3 compositor
+preempted mid-blit could always have faulted on it. That race is what
+the invariant closes.
 
 ## A dev build shows its commit; a release shows only its version
 

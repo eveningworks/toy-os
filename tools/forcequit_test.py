@@ -82,8 +82,32 @@ class Result:
             print(f"        {detail}")
 
 
+def gui_json(dbg, command):
+    """`gui ... --json`, tolerating a window manager that is no longer there.
+
+    A RING-3 desktop can die mid-test -- which is exactly the bug this
+    tool was used to find (a force quit unmapped the compositor's view
+    of the dying client's buffer and the WM faulted blitting it). The
+    console then answers "gui: no window manager running", which is not
+    JSON, and letting that raise replaced the whole pass/fail table with
+    a traceback naming `gui windows` rather than the failure. Returning
+    {} lets the remaining checks report, and "the desktop survives a
+    force quit" is the one that names it.
+    """
+    try:
+        return dbg.json(command)
+    except ValueError as exc:
+        if "no window manager" in str(exc):
+            return {}
+        raise
+
+
+def wm_alive(dbg):
+    return bool(gui_json(dbg, "gui state --json"))
+
+
 def titles(dbg):
-    return [w.get("title", "") for w in dbg.json("gui windows --json").get("windows", [])]
+    return [w.get("title", "") for w in gui_json(dbg, "gui windows --json").get("windows", [])]
 
 
 def has_window(dbg, want):
@@ -99,14 +123,14 @@ def marked(dbg, want):
     what the first version of this check did, and it failed against a
     perfectly working feature.
     """
-    for w in dbg.json("gui windows --json").get("windows", []):
+    for w in gui_json(dbg, "gui windows --json").get("windows", []):
         if w.get("title", "").startswith(want):
             return bool(w.get("not_responding"))
     return False
 
 
 def dialog_open(dbg):
-    return bool(dbg.json("gui state --json").get("overlays", {}).get("confirm_dialog"))
+    return bool(gui_json(dbg, "gui state --json").get("overlays", {}).get("confirm_dialog"))
 
 
 def wait_dialog(dbg, secs=DIALOG_WAIT_S):
@@ -125,7 +149,7 @@ def button(dbg, label):
     the labels here are "Force Quit"/"Wait", so anything that assumed
     "Yes"/"No" sizing would click the wrong place.
     """
-    for b in dbg.json("gui dialog --json").get("buttons", []):
+    for b in gui_json(dbg, "gui dialog --json").get("buttons", []):
         if b.get("label") == label:
             return (b["cx"], b["cy"])
     return None
@@ -201,7 +225,7 @@ def run(dbg, qmp, tmp, res):
     if not got:
         return
 
-    info = dbg.json("gui dialog --json")
+    info = gui_json(dbg, "gui dialog --json")
     res.check("the dialog names the app and its buttons are verbs",
               HANG_TITLE in info.get("message", "")
               and button(dbg, "Force Quit") is not None
@@ -215,7 +239,7 @@ def run(dbg, qmp, tmp, res):
     # responds" is not "it is drawn"), and the title-bar suffix is the
     # only thing that tells them.
     win = None
-    for w in dbg.json("gui windows --json").get("windows", []):
+    for w in gui_json(dbg, "gui windows --json").get("windows", []):
         if w.get("title", "").startswith(HANG_TITLE):
             win = w
     if win:
@@ -254,10 +278,14 @@ def run(dbg, qmp, tmp, res):
         dbg.click(*b)
         dbg.settle()
         time.sleep(1.2)
-    res.check("Force Quit removes the hung window", not has_window(dbg, HANG_TITLE),
+    # `wm_alive` first: a dead desktop reports NO windows, so the window
+    # check would otherwise pass vacuously on precisely the failure the
+    # next one is about.
+    res.check("Force Quit removes the hung window",
+              wm_alive(dbg) and not has_window(dbg, HANG_TITLE),
               f"titles: {titles(dbg)}")
     res.check("the desktop survives a force quit",
-              dbg.json("gui state --json").get("screen", {}).get("w", 0) > 0)
+              gui_json(dbg, "gui state --json").get("screen", {}).get("w", 0) > 0)
 
     # --- repeatable ------------------------------------------------------
     #

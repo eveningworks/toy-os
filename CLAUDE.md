@@ -710,6 +710,21 @@ technical conventions below:
   file?** The rewrite loop that `etc_config_set()` and
   `etc_config_unset()` each carried a copy of is now one
   buffer-to-buffer function, which is what made it shareable.
+- **A compositor's view of a dead window is POISONED, not unmapped**
+  (`comp_poison()` in `kernel/proc/win_server.c`). The invariant: while
+  a compositor is registered, a window buffer's slot in its address
+  space is never a HOLE -- frames that go away are replaced by one
+  shared read-only zero page. A compositor is a PROCESS: it learns a
+  window died from a queued event and may blit the slot once more before
+  it drains that, and a hole there is a page fault, i.e. the desktop
+  dying (which is exactly what Force Quit did -- the WM triggers the
+  teardown from inside its own `sys_kill()`). The frames really are
+  freed, so this is not a use-after-free; the mapping that stays live
+  IS one. **The trap: `vmm_map_user_page_type()` does NOT invalidate the
+  TLB when it replaces a PRESENT entry**, so poison has to be unmapped
+  (`comp_unpoison()`, from `comp_map()`) before real frames go over it,
+  or a live compositor reads zeros from a window that draws perfectly.
+  See `docs/decisions.md`.
 - **A ring-3 compositor delivers events through TWP, not by calling the
   kernel.** `WIN_REQ_EVENT_PUSH` (put an event on a client's queue) and
   `WIN_REQ_EVENT_STATS` (queue depth), both **refused to anyone but the
@@ -996,10 +1011,12 @@ technical conventions below:
   It claims the compositor role, takes the framebuffer grant, loads the
   font, composites the desktop, opens client windows and answers the
   `gui` debug console. **`gui` is still the RING-0 desktop** and
-  `apps/wm/` still stands -- the flip waits on four test tools (see
-  `docs/roadmap.md`). **`make iso KCMDLINE="gui3"` runs the WHOLE SUITE
-  against the ring-3 desktop** without editing a source file, which is
-  how "19 of 23 tools pass" was measured; same switch pattern as
+  `apps/wm/` still stands -- the flip waits on five test tools (see
+  `docs/roadmap.md`, and re-measure rather than trusting a count: the
+  list there was stale by two tools until 2026-08-18). **`make iso
+  KCMDLINE="gui3"` runs the WHOLE SUITE against the ring-3 desktop**
+  without editing a source file, which is how "18 of 23 tools pass" was
+  measured; same switch pattern as
   `nokaslr`/`nopat`/`notsc`, and it disappears with `apps/wm/`. Two copies of the WM
   therefore exist: **a fix to one must be made to the other** until
   `apps/wm/` is deleted.

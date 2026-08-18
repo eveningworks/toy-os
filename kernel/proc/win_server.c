@@ -48,6 +48,13 @@ struct client_window {
     // list of mappings.
     int comp_mapped;
 
+    // How many pages of this window's compositor mapping currently hold
+    // the POISON page (see comp_poison()). Non-zero only while the real
+    // frames are gone but the compositor may still blit the slot; the
+    // count is the OLD window's page span, which is what has to be
+    // unmapped again before the slot can be mapped for real.
+    uint32_t comp_poisoned;
+
     // What the kernel used to receive and throw away, passing it
     // straight through to a ring-0 WM. A ring-3 one is TOLD a window
     // changed and reads the detail back (WIN_REQ_WINDOW_INFO), so the
@@ -125,12 +132,47 @@ static struct client_window *lookup(int pid, uint32_t id) {
     return cw;
 }
 
+// One shared, zero-filled frame, mapped READ-ONLY wherever a
+// compositor mapping has to survive the frames behind it going away.
+// Allocated on first use and never freed -- there is exactly one, and
+// the whole point is that it is always available at the moment a window
+// dies.
+static uint64_t g_poison_frame;
+
+static uint64_t poison_frame(void) {
+    if (!g_poison_frame) {
+        uint64_t f = pmm_alloc_frame();
+        if (!f) return 0;
+        k_memset((void *)(uintptr_t)f, 0, 4096);
+        g_poison_frame = f;
+    }
+    return g_poison_frame;
+}
+
+// Takes a poisoned slot's zero-page mappings back out. Must run before
+// anything maps real frames there, and before the compositor's address
+// space goes away.
+static void comp_unpoison(struct client_window *cw) {
+    if (!cw->comp_poisoned || !g_comp_pml4) { cw->comp_poisoned = 0; return; }
+    uint64_t vaddr = win_compositor_vaddr(cw->pid, cw->id);
+    for (uint32_t i = 0; i < cw->comp_poisoned; i++) {
+        vmm_unmap_user_page(g_comp_pml4, vaddr + (uint64_t)i * 4096);
+    }
+    cw->comp_poisoned = 0;
+}
+
 // Maps a window's frames into the compositor at its derived address.
 // Returns 1 on success (including "already mapped"), 0 if the mapping
 // could not be built -- in which case nothing is left half-mapped.
 static int comp_map(struct client_window *cw) {
     if (!g_comp_pid || !g_comp_pml4) return 0;
     uint64_t vaddr = win_compositor_vaddr(cw->pid, cw->id);
+    // A poisoned slot has PRESENT page-table entries pointing at the
+    // zero page, and mapping over a present entry does NOT invalidate
+    // the TLB (vmm_map_user_page_type() only counts it) -- so the
+    // compositor would go on reading zeros from a live window. Unmap
+    // first, which does invalidate.
+    comp_unpoison(cw);
     for (uint32_t i = 0; i < cw->pages; i++) {
         uint64_t phys = (uint64_t)(uintptr_t)cw->buf + (uint64_t)i * 4096;
         if (!vmm_map_user_page(g_comp_pml4, vaddr + (uint64_t)i * 4096, phys)) {
@@ -157,6 +199,40 @@ static void comp_unmap(struct client_window *cw) {
     cw->comp_mapped = 0;
 }
 
+// THE INVARIANT: while a compositor is registered, a window buffer's
+// slot in its address space is never a HOLE. Frames that go away are
+// replaced by the read-only zero page rather than unmapped, because the
+// compositor is a process and cannot be stopped mid-frame: it learns a
+// window died from a QUEUED event (WIN_EV_CLIENT_DESTROYED), and until
+// it drains that event its window list still names the slot. A hole
+// there is a page fault in the compositor, i.e. the desktop dying --
+// which is exactly what Force Quit did, since a ring-3 WM triggers the
+// teardown from inside its own sys_kill() and blits the dead window on
+// the very next frame.
+//
+// Poison reads as black for at most one frame, and the frames really
+// are freed, so this is not a use-after-free -- the alternative that
+// keeps the mapping live IS one.
+//
+// Read-only on purpose: a compositor composites OUT of a client buffer
+// and never writes one, so a write here is a bug worth faulting on
+// rather than silently absorbing into a page every dead window shares.
+static void comp_poison(struct client_window *cw) {
+    if (!cw->comp_mapped) return;
+    uint32_t pages = cw->pages;
+    comp_unmap(cw);                    // also invalidates the TLB
+    uint64_t phys = poison_frame();
+    if (!phys) return;                 // out of memory: a hole, as before
+    uint64_t vaddr = win_compositor_vaddr(cw->pid, cw->id);
+    for (uint32_t i = 0; i < pages; i++) {
+        if (!vmm_map_user_page_flags(g_comp_pml4, vaddr + (uint64_t)i * 4096,
+                                     phys, 0, 0)) {
+            break;
+        }
+        cw->comp_poisoned = i + 1;
+    }
+}
+
 // Frees a window's frames and unmaps them from its owner's address
 // space. The presentation layer is told FIRST (while `buf` is still
 // valid), so it can drop the window from its list before the memory
@@ -176,8 +252,10 @@ static void destroy_window(struct client_window *cw) {
     // Before the frames go back to the allocator. A compositor left
     // holding a mapping of freed frames reads whatever is allocated
     // there next, which looks like a drawing bug rather than a
-    // use-after-free -- see win_server.h.
-    comp_unmap(cw);
+    // use-after-free -- see win_server.h. Poisoned rather than unmapped
+    // because the compositor may blit this slot again before it drains
+    // the event above: see comp_poison().
+    comp_poison(cw);
 
     for (uint32_t i = 0; i < cw->pages; i++) {
         vmm_unmap_user_page(cw->pml4, cw->vaddr + (uint64_t)i * 4096);
@@ -404,7 +482,7 @@ static int resize_window(struct client_window *cw, int w, int h) {
     // stale -- a compositor that finds its mapping gone can ask again,
     // whereas one reading freed frames cannot tell anything is wrong.
     int was_comp_mapped = cw->comp_mapped;
-    comp_unmap(cw);
+    comp_poison(cw);   // never a hole while the window lives -- see comp_poison()
 
     pmm_free_contiguous((uint64_t)(uintptr_t)cw->buf, cw->pages);
     cw->buf = (uint32_t *)(uintptr_t)phys;
@@ -992,6 +1070,11 @@ int win_server_set_compositor(int pid, uint64_t pml4) {
         for (int p = 0; p < WIN_SERVER_MAX_PIDS; p++) {
             for (int i = 0; i < WIN_CLIENT_MAX; i++) {
                 comp_unmap(&windows[p][i]);
+                // The poison mappings of already-destroyed windows go
+                // the same way and for the same reason -- they live in
+                // the OLD compositor's address space, and the record of
+                // them must not outlive it.
+                comp_unpoison(&windows[p][i]);
             }
         }
         // The framebuffer grant goes the same way and for the same

@@ -1153,34 +1153,74 @@ guess.*
       them, and the cheap check (read the ABI comment of the call you
       changed) was never done.
 
-- [ ] **Five GUI tools assume the desktop is NOT a process.** Measured
-      with `gui` flipped to the ring-3 desktop: 18 of 23 tools pass,
-      including every widget, window, menu and dialog check. The five
-      that fail are tool assumptions, not WM bugs:
+- [ ] **Five GUI tools fail against the ring-3 desktop.** Re-measured
+      2026-08-18 with `make iso KCMDLINE="gui3"` and the full suite: 18
+      of 23 pass. `forcequit` and `taskmgr` are FIXED (below); the list
+      that replaced them is not the one previously recorded here, which
+      named only three and had never been re-measured after `cursor` and
+      `cpanel` were added to the suite. Both of those fail on HEAD with
+      no local change, verified by stashing and rebuilding.
 
       * `compositor`, `screen`, `compdeath` register a SECOND compositor
         (`compclient`, `screenclient`) alongside the desktop. Free when
         the WM was ring 0; a contradiction now, because the role is
         single -- the tool evicts the desktop and then asks it
-        questions. They need to either drive the desktop AS the
-        compositor, or run with no desktop up at all.
-      * ~~`taskmgr`~~ FIXED: it clicked row 0 and called it "the first
-        listed process", which held only while every process in the
-        table was one it had spawned. It finds its victim's ROW BY PID
-        now, by clicking rows until Task Manager reports `selected pid
-        N` for the pid it spawned -- robust to sort order, to the
-        desktop being present, and to any future process appearing.
-      * `forcequit` still ends the desktop. It gets 12 checks in -- the
-        dialog, the not-responding mark, Wait, re-offering -- and dies
-        on the Force Quit itself, with no crash in the log. NOT
-        diagnosed: `wm_force_quit_yes()` kills `g_force_quit_pid`, which
-        is set from `windows[idx].client_pid` and looks right, and
-        `scheduler_kill()` refuses to kill the CURRENT process, so a
-        self-kill should be refused rather than fatal. Start by logging
-        the pid it actually passes.
+        questions, and the desktop answers `win: compositor did not
+        answer a gui command in time`. They need to either drive the
+        desktop AS the compositor, or run with no desktop up at all.
+      * `cursor` (`cursor_theme_test.py`) times out reading `gui state
+        --json` -- an EMPTY reply, not a refusal, so this is not the
+        same shape as the three above. Undiagnosed.
+      * `cpanel` fails 4-6 of its checks (the count varies between runs,
+        which is itself unexplained). Undiagnosed.
 
-      This is what stands between here and the switchover; the flip
-      itself is one line in `apps/gui.c`.
+      Both pass against the ring-0 desktop, so they are ring-3-specific
+      rather than broken tools. This is what stands between here and the
+      switchover; the flip itself is one line in `apps/gui.c`.
+
+- [x] ~~**Force Quit kills the ring-3 desktop.**~~ FIXED 2026-08-18, and
+      the previous entry's "no crash in the log" was simply wrong -- the
+      log has the crash, four lines after the kill:
+
+          wm: force-quitting pid 3
+          syscall: kill(pid 3) by pid 1
+          RING-3 CRASH: Page fault
+            RIP=0x80000132a0  CS=0x23 (ring 3)  error_code=0x4
+            CR2=0x8014000000
+
+      `CR2` is `win_compositor_vaddr(3, 0)` -- the victim's own window
+      buffer as mapped into the compositor -- and `addr2line` puts the
+      RIP in `ugfx_blit`. `destroy_window()` unmapped the compositor's
+      view and freed the frames synchronously while only QUEUEING
+      `WIN_EV_CLIENT_DESTROYED`, so the WM returned from its own
+      `sys_kill()` with the dead window still in its list and blitted
+      it. A revoked slot is remapped to a shared read-only zero page now
+      rather than unmapped; see `docs/decisions.md`, "Revoking a
+      compositor's window mapping leaves the zero page behind, not a
+      hole".
+
+      Not force-quit-specific: the same unmap runs when any client exits
+      on its own, and a ring-3 compositor preempted mid-blit could always
+      have faulted on it. Force Quit only made it deterministic, by
+      having the compositor itself trigger the teardown.
+
+- [x] ~~**`taskmgr` clicks row 0 and calls it the first listed
+      process.**~~ FIXED 2026-08-17: it finds its victim's ROW BY PID
+      now, clicking rows until Task Manager reports `selected pid N` for
+      the pid it spawned -- robust to sort order, to the desktop being
+      present, and to any future process appearing.
+
+- [ ] **`taskmgr_test.py`'s "found the victim's row in the table" is
+      INTERMITTENT.** Measured 2026-08-18 with `python3
+      tools/flake_hunt.py taskmgr -n 3`: 2 pass, 1 fail, failing check
+      always that one, against the RING-0 desktop. It arrived with the
+      find-by-pid fix (d648b89) and is a property of the search loop
+      rather than of the WM -- the row is found by clicking rows until
+      the app reports the wanted pid, so a row that scrolls, re-sorts or
+      is not yet drawn when the click lands ends the search early. Get a
+      rate over more runs before fixing; the loop should probably assert
+      it saw every row rather than giving up at the end of the visible
+      ones.
 
 - [x] ~~**The ring-3 desktop cannot give a client a window.**~~ FIXED
       2026-08-17. `win_server_request()` had `if (!g_ops) return -1;`,
