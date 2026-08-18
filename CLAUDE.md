@@ -2969,6 +2969,16 @@ when feedback IS and ISN'T wanted, the `on_hover` contract, text/layout
 budgeting, and how to verify a GUI change properly. Read it before
 touching anything drawn.
 
+`docs/roadmap.md` is **grouped into LAYERS, ground up** (foundation ->
+core kernel services -> storage -> devices -> system services ->
+runtime -> GUI -> tooling), with a **Ready now** table at the top of the
+things whose prerequisites are all met. Milestone NUMBERS are ids and do
+not change -- a number says when something was thought of, its layer
+says what it needs -- and a **Needs:** line appears only where a
+dependency is real and not obvious. The per-item reasoning lives in
+`docs/roadmap-details.md`, split out when the two together passed 4,300
+lines.
+
 Forward-looking "not built yet" items belong in `docs/roadmap.md`
 instead (already actively maintained, with completed items struck
 through and linked to the CHANGELOG build that finished them) -- don't

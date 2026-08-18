@@ -334,7 +334,8 @@ Selected tools (each documented in its own docstring):
 | Document | Contents |
 |---|---|
 | [docs/decisions.md](docs/decisions.md) | Topic-indexed answers to "why is this built this way?". Start here when something looks odd. |
-| [docs/roadmap.md](docs/roadmap.md) | What's planned, ordered so prerequisites come first — plus the known-issues list. |
+| [docs/roadmap.md](docs/roadmap.md) | What's planned, grouped into layers from the kernel up, with a "ready now" list and the known issues. |
+| [docs/roadmap-details.md](docs/roadmap-details.md) | The per-item reasoning and test plans behind that list. |
 | [docs/commands.md](docs/commands.md) | The full shell command reference. |
 | [docs/boot-flags.md](docs/boot-flags.md) | Every word the kernel looks for on the GRUB command line. |
 | [docs/filesystem-layout.md](docs/filesystem-layout.md) | What lives where on the OS's own disk. Checked against the built image by `tools/check_layout.py`. |
