@@ -1223,6 +1223,25 @@ guess.*
       general shape of a poll whose exit condition is weaker than what
       the code after it needs.
 
+- [ ] **Other GUI tools may share the calculator's mid-paint flake.**
+      Every tool that compares one screendump against another has the
+      same exposure: a capture landing while the frame is still being
+      painted fails a comparison with nothing wrong with it, and the
+      window manager being a PROCESS widens that window.
+
+      `calculator` and `notepad` use `QMPSession.stable_pixels()` now
+      (two identical consecutive reads). The rest have NOT been
+      converted, deliberately -- `notepad` was converted because it
+      actually failed that way, and converting blind risks a tool whose
+      window is SUPPOSED to animate: `gfxdemo` rotates, and there
+      stable_pixels() would spend its retries and hand back the last
+      read anyway.
+
+      So convert one when it flakes, not pre-emptively, and check what
+      the window is doing first. Candidates by shape (they compare
+      captures): `uidemo`, `dialog`, `scrollbar`, `menubar`, `uiclient`,
+      `winclient`, `screen`.
+
 - [ ] **Settings: a ring-3 settings daemon (stage 2).** The remaining
       half, and the one that needs infrastructure toy-os does not have.
 
@@ -1290,50 +1309,6 @@ guess.*
       total by nothing, because GCC already overlapped them in the big
       buffer's shadow. `-fstack-usage` said so in one command. See
       `docs/decisions.md`.
-
-- [ ] **Settings: a ring-3 settings daemon (stage 2).** The remaining
-      half, and the one that needs infrastructure toy-os does not have.
-
-      **The gap it closes:** a ring-3 program still cannot register a
-      setting AT ALL -- the registry is a compiled-in table, so "which
-      settings exist" is a kernel-build-time question. Qualified names
-      make two programs *able* to own the same setting name; this is
-      what would let a program own a setting in the first place.
-
-      Moving the registry out matches every system except Windows
-      (Linux has no kernel settings registry -- sysctl is kernel
-      parameters only, user config is dconf/gsettings in userspace;
-      macOS has `cfprefsd`; Windows' configuration manager genuinely is
-      in ntoskrnl).
-
-      **What toy-os does not have yet, which is the real content of this
-      item:**
-
-      * R6. **Supervision.** Nothing restarts a dead process. A settings
-        daemon that dies takes every client's settings with it, and
-        `MAX_PROCS` reaping is currently whoever spawned it.
-      * R7. **Discovery.** A client has to find the daemon. There is no
-        name service; TWS is found by being the registered compositor,
-        which is a single role the kernel tracks -- a second such role
-        is a pattern to copy or a general mechanism to build.
-      * R8. **An IPC that is not TWP.** Pipes are parent/child only and
-        TWP is the window protocol. A request/response channel between
-        unrelated processes does not exist.
-      * R9. **Boot order.** Timezone, font size and keymap are read
-        before any process could be running. Either those stay kernel
-        settings (the split below) or the kernel must tolerate not
-        knowing them until the daemon is up.
-      * R10. **The kernel keeps what is kernel state.** `apply` for
-        timezone/font/keymap/cursor mutates live kernel subsystems and
-        cannot run in ring 3. That half stays a kernel registry --
-        sysctl's actual scope -- and the daemon owns program settings.
-
-      Sequencing: R6-R8 are general infrastructure that a printing
-      service, a name service or a session manager would want too, so
-      this is a milestone rather than a change. Stage 1 is independent
-      and worth doing first -- (namespace, name) is transport-agnostic,
-      so it is the same identity whichever side of the boundary the
-      registry ends up on.
 
 - [ ] **`strace`'s syscall-name table stops at `SYS_GETRANDOM`.**
       Everything added since -- `SYS_PROC_INFO`, `SYS_SETTING`,
