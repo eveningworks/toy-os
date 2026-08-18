@@ -176,6 +176,32 @@ def check_internal_doc_links(problems):
                                     f"exist: {target}")
 
 
+def check_tools_are_documented(problems):
+    """Every tool in tools/ is named somewhere in CLAUDE.md.
+
+    CLAUDE.md already states the rule -- "any genuinely reusable tooling
+    built during a session belongs in tools/... update the files that
+    describe tools/ to match" -- and until now nothing enforced it. A
+    tool nobody documented is a tool the next session rewrites from
+    scratch, which is the exact cost the tools/ directory exists to
+    avoid.
+
+    Deliberately a NAME check and nothing more: it says the tool is
+    mentioned, not that what is written about it is still true. That is
+    the honest limit of what a script can tell.
+    """
+    claude = read("CLAUDE.md")
+    tools_dir = os.path.join(REPO, "tools")
+    if not os.path.isdir(tools_dir):
+        return
+    for name in sorted(os.listdir(tools_dir)):
+        if os.path.splitext(name)[1] not in (".py", ".sh"):
+            continue
+        if name not in claude:
+            problems.append(f"tools/{name} is not mentioned in CLAUDE.md -- "
+                             f"add it to the `## tools/` listing")
+
+
 def main():
     problems = []
     for check in (check_no_changelog_pointers,
@@ -184,13 +210,15 @@ def main():
                   check_no_duplicate_roadmap_entries,
                   check_no_duplicated_sections,
                   check_decisions_index_is_current,
-                  check_internal_doc_links):
+                  check_internal_doc_links,
+                  check_tools_are_documented):
         check(problems)
 
     if not problems:
         print("check_docs: ok -- no dead changelog pointers, no numbered or "
               "versioned milestones, no duplicated roadmap entries, the "
-              "decisions index is current, no broken doc links")
+              "decisions index is current, no broken doc links, every tool "
+              "documented")
         return 0
 
     print(f"check_docs: {len(problems)} problem(s)\n")

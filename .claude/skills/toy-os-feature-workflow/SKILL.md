@@ -10,9 +10,9 @@ description: >
   treat any request touching kernel/, apps/, userland/, or the shell/GUI/
   filesystem behavior of this OS as toy-os work. This is the end-to-end
   playbook -- research the code first, present real implementation choices
-  before writing anything, build and QEMU-test with screenshot proof, write
-  the docs in the repo's established style, and ship the change to both the
-  user's real checkout and GitHub-ready commits. Do not start editing
+  before writing anything, build and verify in QEMU with a positive control,
+  write the docs in the repo's established style, and ship the change to the
+  user's checkout. Do not start editing
   kernel/app code for this repo without consulting this skill first.
 ---
 
@@ -599,6 +599,19 @@ twice more.**
     a tool fails once and passes on re-run; a rate is the diagnosis, a
     verdict is not. Scores a run that printed no summary as `error`, not
     `pass`.
+  - `python3 tools/frame_balance.py` -- does a process's teardown return
+    exactly what it took? Two directions needing opposite fixes: DOWN
+    and staying down is a leak, UP is an OVER-FREE (teardown handed back
+    frames it never owned), which is quieter and worse. Boots its own VM
+    because an over-free is only visible on the first cycle.
+  - `python3 tools/mem_stress.py -n 8 --mem 128` -- several memory hogs
+    at once, with a guest small enough that they actually run out.
+    Drives `/tests/memtest`, whose pattern is ADDRESS-derived so two
+    mappings sharing one frame is detectable at all. Ends with
+    `meminfo audit`.
+  - `python3 tools/check_dispatch.py` -- fails on a dispatch chain over
+    ~20 branches; waive one in place with `dispatch-ok: <reason>`. In
+    preflight and CI, so you rarely run it by hand.
   - `python3 tools/gui_regress.py` -- ALL of the app-level ones above
     plus the ring-3 client tests, each on its own fresh disk copy and
     its own VM, as one pass/fail table (~300 checks across twenty-three
@@ -2487,6 +2500,119 @@ rewrite invalidates every SHA, and this repo has done one).
   touched it, cause unidentified" rather than claimed as fixed. What is
   fixed is the fragility -- that is a different sentence, and the
   roadmap says so.
+
+**2026-08-18 (a long day: the syscall table, two live memory bugs, a
+process tree, and a scroll view). Read the first two before touching
+memory or believing a memory measurement.**
+
+Where the project stands after it, so a session does not re-derive it:
+
+- **Syscalls are a TABLE**, `kernel/proc/syscall_table.c`, one row per
+  number carrying the handler AND what `strace` prints. Handlers live
+  with the subsystem that owns them. Adding one is three edits and no
+  registry: a number in `abi/syscall_abi.h`, a handler plus its
+  prototype in `kernel/include/kernel/syscalls.h`, a row in the table.
+- **`tools/check_dispatch.py` fails the build** on an `if/else` or
+  `switch` over ~20 branches, waivable in place with a
+  `dispatch-ok: <reason>` comment. It exists because `syscall.c` grew to
+  37 branches and NOTHING NOTICED -- one more `else if` is always
+  cheaper than a table until it isn't.
+- **Processes have a PARENT** (`ppid`), orphans are reparented, and
+  `waitpid(-1)` reaps any child. That is stage 0 of
+  `docs/init-design.md`, which plans init as pid 1, the tree under it,
+  and the shell moving to ring 3. Read it before starting any of that:
+  it records that `fork()` is NOT a prerequisite (`SYS_SPAWN` is already
+  `posix_spawn`-shaped) and that `/proc` needs a mount table the VFS
+  does not have.
+- **A user mapping records whether it OWNS its frame**
+  (`vmm_map_user_borrowed`), and `meminfo audit` checks every live
+  address space against the allocator.
+
+**THE MEASUREMENT LESSON, which is the most transferable thing here: AN
+OVER-FREE FIRES ONCE AND THEN GOES QUIET.** Every GUI client maps the
+kernel's glyph tables read-only and nothing unmapped them on exit, so an
+exiting client returned four frames of the KERNEL IMAGE to the physical
+allocator. The first measurement read `+4, +0, +0, +0` -- which looks
+exactly like noise followed by a clean bill of health, and was very
+nearly filed as that. `pmm_free_frame()` only counts a frame that was
+marked used, so the second client to exit finds them already free and
+changes nothing. **Any accounting check for this class must run on a
+FRESH BOOT and believe only its first cycle**, which is why
+`tools/frame_balance.py` boots its own VM.
+
+**And the invariant nobody had ever checked:** a frame a live mapping
+points at must be one the allocator considers HANDED OUT. Nothing
+compared page tables against the bitmap. `meminfo audit` does, catches
+both of the day's bugs, and was verified by reverting the fix and
+watching it name the address. It audits only that direction on purpose --
+a used frame nothing references (an ordinary leak) needs every kernel
+owner to declare its frames, which is a separate project, and claiming
+a "leak detector" that only worked one way would be worse than naming
+the one it does.
+
+**Killing a process freed NOTHING** until this day: `scheduler_kill()`
+zombied it and `scheduler_poll()` reaped the slot, while
+`syscall_process_exit_cleanup()` only ever ran from `sys_exit`. ~18
+frames a kill, compounding, reachable from the desktop via Force Quit.
+Two entry points now, and the reason is worth knowing: the exit path
+switches CR3 to the kernel's address space, which is free when the dying
+process is the one running and WRONG when the caller is somebody else --
+the WM force-quitting a client would resume in the wrong address space.
+
+**Testing memory: make the pattern depend on the ADDRESS.**
+`/tests/memtest` fills everything `sbrk` gives it with
+`(va * K) ^ salt`. A constant fill cannot detect two virtual pages
+sharing one physical frame -- both read back the constant and look
+perfect. Address-derived means the loser reads the OTHER page's value;
+a random per-process salt extends it across processes; and keeping the
+mix invertible lets a mismatch report WHOSE pattern the memory holds.
+Proven by deliberately aliasing every 64th heap page.
+
+**GUI: `uui_layout` OVERFLOWS rather than shrinking children**, so a
+window smaller than its content silently hides part of it. A page whose
+content can grow goes in a `uui_scrollview`, with tabs and status bars
+OUTSIDE it. Three things that came out of building it:
+
+- **A container declares its items through `uui_widget_ops.children`.**
+  The router used to recognise containers by comparing `ops` against
+  `uui_layout_ops`, which worked for one container and SWALLOWED every
+  other one's child ids -- a press inside a scroll view reported the
+  scroll view's id, so Control Panel's radio buttons silently stopped
+  applying. A container with a `hit` clips its children; a plain layout
+  declares none, deliberately.
+- **The ROUTER paints the children, so a container cannot clip what it
+  does not paint.** Hence `children_begin`/`children_end`. And the
+  container's own `draw` is not called when it has children, or
+  `uui_layout`'s would paint everything twice.
+- **A `UUI_FILL` child now absorbs a SHORTFALL, not just leftover
+  space.** Without it the scroll view took its full natural height and
+  pushed the status bar off the window anyway: it fixed what was inside
+  it and could do nothing about what came after.
+
+**Four ways I misled myself in one day, all worth recognising:**
+
+- **A harness that ACCUMULATES a cumulative source double-counts.**
+  `mem_stress.py` appended `sh dmesg` each poll, but dmesg returns the
+  whole buffer every time, so eight processes reported as sixteen passes
+  and the early-exit fired before they had all run.
+- **A helper that takes RELATIVE coordinates will happily accept
+  absolute ones.** `cpanel_test.py`'s `click()` adds the content origin
+  itself; passing screen coordinates offset them twice and landed
+  outside the window, which reads exactly like a dead control.
+- **A threshold picked without a control is a guess.** The new "the
+  status bar survives" check passed WITH the bug present (777 px against
+  4675), because the scrolled page's own content lands in those rows and
+  "is there any ink" is satisfied either way. Run the control on the
+  test you just wrote, and read which checks stayed green.
+- **A count written out as a literal drifts.** `.widget_count = 4` while
+  the array was 3 sent the router one item past the end into a garbage
+  ops pointer. Derive it (`sizeof a / sizeof a[0]`).
+
+**One process note.** A plan asked for first (`docs/init-design.md`)
+changed itself in four places purely by measuring: no parent field
+existed at all, there is no stdin, `/proc` needs a mount table, and the
+roadmap's claim that init needs `fork()` was wrong. Half an hour of
+greps beat a stage of building.
 
 ## Verification habits this project rewards
 

@@ -2459,29 +2459,19 @@ repeated manual steps to be worth automating:
   intermediate, and `linker.ld`'s `.krelocs` must stay after `.data`.
   See `docs/decisions.md`.
 - **`check_docs.py`** -- the documentation rules a script can check,
-  because the ones that rotted before were the ones nobody checked. Five
-  checks, all narrow: a pointer to the DELETED changelog, a milestone
-  heading that reintroduces a number or a target version, a DUPLICATED
-  roadmap entry, and a link to a doc that does not exist. The duplicate
-  check earns its place on its own -- two of this repo's own roadmap
-  edits duplicated an entry and a third silently deleted three, and
-  nothing else tests documentation. It deliberately does NOT flag
-  `Milestone N` in prose (historical, and `docs/roadmap-details.md` ends
-  with a legend for those); the noise would be what stopped anyone
-  running it. In `preflight.sh` and CI.
-- **`check_dispatch.py`** -- refuses a dispatch chain that has grown big
-  enough to want a table. Counts branches in an `if/else` chain or a
-  `switch` and fails past 20; waive one with a `dispatch-ok: <reason>`
-  comment above it. Exists because `syscall.c` reached 37 branches over
-  40 syscalls in 1,492 lines and NOTHING NOTICED it growing -- one more
-  `else if` is always cheaper than a table right up until it isn't, and
-  a written convention with no check is the shape this repo keeps having
-  to delete. Deliberately dumb: it cannot tell a chain that grows with
-  the system from a bounded one (a keymap, a PCI class table), which is
-  what the waiver is for -- and having to write the reason IS the
-  mechanism. Two are waived today, both with their reasoning in place.
-  In `preflight.sh` and CI. `--list` shows the biggest chains whether
-  waived or not.
+  because the ones that rotted before were the ones nobody checked. A
+  pointer to the DELETED changelog, a milestone heading that reintroduces
+  a number or a target version, a DUPLICATED roadmap entry, a stale
+  decisions index, a link to a doc that does not exist, and a tool in
+  `tools/` that CLAUDE.md never mentions. The duplicate check earns its
+  place on its own -- two of this repo's own roadmap edits duplicated an
+  entry and a third silently deleted three. The tool check enforces a
+  rule this file already stated and nothing verified; it is deliberately
+  a NAME check, so it says a tool is mentioned, not that what is written
+  about it is still true. It does NOT flag `Milestone N` in prose
+  (historical, and `docs/roadmap-details.md` ends with a legend for
+  those); the noise would be what stopped anyone running it. In
+  `preflight.sh` and CI.
 - **`check_deps.py`** -- proves the build's header dependency tracking
   is actually live: touches one header per build directory (discovered
   from `build/`, not listed, so a new source directory is covered as

@@ -147,7 +147,7 @@ COST_S = {
     "uterm": 16,
     "singleinst": 16,  # six launches, each waiting out a client's first frame
     "scrollbar": 15,
-    "cpanel": 15,
+    "cpanel": 20,   # +4 scroll checks, incl. a resize and a wheel
     "calculator": 14,
     "entries": 13,
     "sched": 12,
