@@ -1,10 +1,25 @@
 # The WM in ring 3 -- finishing Milestone 41
 
-**Status: STAGES 0-3 BUILT (2026-08-16). STAGE 4a IS BUILT
-(2026-08-17): its requirements were measured and written up as R1-R9,
-R1/R4/R5 landed, and R3 was REMOVED rather than deferred (the hardware
-cursor is switched off on the only driver that has one, so it moved to
-M27a). What remains of stage 4 is 4b-4d -- the WM binary itself.** Two
+**Status: THE SWITCHOVER HAPPENED (2026-08-18). The desktop is a ring-3
+process by default -- `gui` starts `/bin/wm/system/toywm`, and all 23
+GUI tools pass against it. Stages 0-3 landed 2026-08-16, 4a on
+2026-08-17 (R1/R4/R5 built; R3 REMOVED rather than deferred, since the
+hardware cursor is switched off on the only driver that has one and
+moved to M27a), and 4b-4d over 2026-08-17/18.**
+
+**What is left is deletion, not development:** `apps/wm/` is still in
+the tree and still reachable with `make iso KCMDLINE="gui0"`, because a
+fallback nothing can reach is a guess. Removing both is stage 4c's
+remaining item, and until then **a fix to one copy of the WM must be
+made to the other.**
+
+The last blocker was not the WM at all: three test tools spawned their
+own stand-in compositor, which is free while the role is unclaimed and a
+contradiction once the desktop holds it. They ask who holds it now. That
+work also produced the first assertion of the milestone's own exit
+criterion -- killing the desktop revokes the grant, asks clients to
+close, restores the console, leaves the kernel running, and lets a new
+desktop claim the role. Two
 decisions were settled deliberately along the way: the WM owns the back
 buffer, and the kernel restores the text console when the WM dies. Written the way `docs/uapp-design.md` and
 `docs/tfs3-design.md` were: decide the shape and the arguments first,

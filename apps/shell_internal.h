@@ -94,6 +94,8 @@ void cmd_debug(const char *args);
 void cmd_ata(const char *args);
 void cmd_heap(const char *args);
 void cmd_kstack(const char *args);
+void cmd_kill(const char *args);
+void cmd_spawn(const char *args);
 void cmd_gfxbench(const char *args);
 
 #endif

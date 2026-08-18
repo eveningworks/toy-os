@@ -83,11 +83,51 @@ def client_lines(dbg, acc):
     return acc
 
 
+# Set when the desktop had to be taken down for this run -- see main().
+# Keys then travel as REAL keystrokes over QMP instead of `gui key`,
+# which is dispatched from inside a window manager that no longer
+# exists. screenclient reads them either way: as the registered
+# compositor it receives WIN_EV_RAW_KEY, which the kernel pushes from
+# the hardware when no ring-0 layer is in the way.
+NO_WM = {"on": False, "qmp": None}
+
+
+def send_key(dbg, key):
+    if NO_WM["on"]:
+        NO_WM["qmp"].send_key(key)
+    else:
+        dbg.key(key)
+
+
 def one(dbg, acc, key, prefix, settle=0.4):
-    """Send a command key and return its most recent reply line."""
+    """The reply line for one command.
+
+    With a desktop up the command is a keystroke and the reply is
+    whatever arrived after it. Without one the client has already run
+    the whole sequence itself (`screenclient auto`), so the reply is
+    looked up by its STEP MARKER instead -- `d` and `n` both log
+    `damage`, and picking them apart by position in the log is precisely
+    the fragility the markers exist to remove.
+    """
+    if NO_WM["on"]:
+        client_lines(dbg, acc)
+        want = f"screenclient: step {key}"
+        # The LAST occurrence: `r` runs twice, and the second one is the
+        # one a screendump taken after the run can be compared with.
+        starts = [i for i, l in enumerate(acc) if want in l]
+        if not starts:
+            return ""
+        section = acc[starts[-1] + 1:]
+        for l in section:
+            if "screenclient: step " in l:
+                break
+            if f"screenclient: {prefix}" in l:
+                return l
+        return ""
+
     client_lines(dbg, acc)
     before = len(acc)
-    dbg.key(key)
+    send_key(dbg, key)
     time.sleep(settle)
     client_lines(dbg, acc)
     hits = [l for l in acc[before:] if f"screenclient: {prefix}" in l]
@@ -125,9 +165,36 @@ def main():
 
     print("screen surface (M41 stage 4b):")
 
+    # THE COMPOSITOR ROLE IS SINGLE, so a ring-3 desktop already holding
+    # it is not a backdrop this tool can ignore -- claiming the role
+    # would EVICT the desktop and then every `gui` command in here would
+    # be answered by screenclient, which does not implement them. (That
+    # is exactly how this tool failed under `gui3`.)
+    #
+    # So the desktop is taken down deliberately and the checks run with
+    # the client as the only compositor, which is the configuration they
+    # were written for. `kill` at the shell, not `gui kill`: the latter
+    # runs inside the WM's own loop and scheduler_kill() refuses to kill
+    # the current process. `spawn`, not `run`: the legacy loader is not a
+    # scheduled process, so its win_request() is refused outright.
+    owner = (dbg.json("gui compositor --json") or {}).get("pid", 0)
+    NO_WM["qmp"] = qmp
+    if owner > 0:
+        print(f"  (the ring-3 desktop holds the role as pid {owner} -- "
+              f"taking it down for this run)")
+        dbg.send(f"sh kill {owner}")
+        time.sleep(2.0)
+        NO_WM["on"] = True
+
     dbg.logs()
-    dbg.send(f"gui spawn {SPAWN_PATH}")
-    time.sleep(1.2)
+    if NO_WM["on"]:
+        # `auto`: it runs the whole sequence itself, because with no
+        # desktop the physical shell owns the keyboard and injected
+        # keystrokes never reach a compositor.
+        dbg.send(f"sh spawn {SPAWN_PATH} auto")
+    else:
+        dbg.send(f"gui spawn {SPAWN_PATH}")
+    time.sleep(2.5)
     client_lines(dbg, acc)
 
     check("the client registers as compositor",
@@ -147,8 +214,17 @@ def main():
     check("the framebuffer grant is accepted and a back buffer allocated",
           w is not None, line or "no screen line")
 
-    state = dbg.state() or {}
-    kscreen = state.get("screen", {})
+    if NO_WM["on"]:
+        # No WM to ask, so the reference is the DISPLAY itself -- which
+        # is a stronger one anyway: the screendump is the real
+        # framebuffer's geometry rather than the WM's belief about it.
+        ref = os.path.join(tempfile.gettempdir(), "screenref.png")
+        qmp.screenshot(ref)
+        rw, rh = Image.open(ref).size
+        kscreen = {"w": rw, "h": rh}
+    else:
+        state = dbg.state() or {}
+        kscreen = state.get("screen", {})
     check("its geometry matches the kernel's own screen",
           w is not None and w == kscreen.get("w") and h == kscreen.get("h")
           and bpp in (24, 32) and pitch >= w * (bpp // 8),
@@ -239,8 +315,18 @@ def main():
     check("an empty present leaves the next frame's damage intact",
           n == ["50", "60", "8", "9"], " ".join(n) or "no damage line")
 
-    dbg.key("q")
-    time.sleep(0.6)
+    if NO_WM["on"]:
+        # It is holding the screen so the probe above could be compared
+        # against a screendump; wait it out before asserting it released.
+        deadline = time.time() + 9.0
+        while time.time() < deadline:
+            client_lines(dbg, acc)
+            if any("screenclient: exit" in l for l in acc):
+                break
+            time.sleep(0.5)
+    else:
+        send_key(dbg, "q")
+        time.sleep(0.6)
     client_lines(dbg, acc)
     check("the client releases the role and exits cleanly",
           any("screenclient: released" in l for l in acc)
@@ -251,7 +337,16 @@ def main():
     # and wrote to it -- the whole grant is pointless if it can wedge the
     # session. `gui state` answering at all is the liveness proof: it is
     # dispatched from inside wm_run(), so a frozen WM cannot reply.
-    check("the desktop survives", bool(dbg.state()), "gui state answered")
+    if NO_WM["on"]:
+        # There is no desktop to survive; what must is the KERNEL, and
+        # `sh` is served by the kernel context rather than by any
+        # process, so an answer here is exactly that claim.
+        df = dbg.send("sh df")
+        check("the kernel survives a process that mapped the screen",
+              "Filesystem:" in df,
+              df.strip().splitlines()[0] if df.strip() else "no answer")
+    else:
+        check("the desktop survives", bool(dbg.state()), "gui state answered")
 
     return summarise()
 

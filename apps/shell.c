@@ -108,6 +108,10 @@ static void dispatch(char *line) {
         cmd_heap(args ? args : "");
     } else if (k_strcmp(cmd, "kstack") == 0) {
         cmd_kstack(args ? args : "");
+    } else if (k_strcmp(cmd, "kill") == 0) {
+        cmd_kill(args ? args : "");
+    } else if (k_strcmp(cmd, "spawn") == 0) {
+        cmd_spawn(args ? args : "");
     } else if (k_strcmp(cmd, "gfxbench") == 0) {
         cmd_gfxbench(args ? args : "");
     } else if (k_strcmp(cmd, "df") == 0) {

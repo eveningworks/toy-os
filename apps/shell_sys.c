@@ -1860,3 +1860,91 @@ void cmd_kstack(const char *args) {
                     k.canary_ok ? "ok" : "DESTROYED");
     }
 }
+
+// `kill <pid>` -- end a process from the shell.
+//
+// It exists because Milestone 41's exit criterion is that killing the
+// window manager is SURVIVABLE, and until this there was no way to do
+// it: `gui kill` is dispatched from inside the WM's own loop, and
+// scheduler_kill() refuses to kill the CURRENT process, so the one
+// process a test most needs to end was the one process nothing could
+// end. This runs in the kernel context, which is not any process, so it
+// has no such restriction.
+//
+// Unprivileged, like SYS_KILL itself -- there is no user model here to
+// gate it on, so a gate would be decoration (docs/decisions.md).
+void cmd_kill(const char *args) {
+    while (*args == ' ') args++;
+    uint32_t pid = 0;
+    if (!k_parse_u32(args, &pid) || pid == 0) {
+        vga_write("usage: kill <pid>    (`taskmgr`, or `gui windows`, for pids)\n");
+        return;
+    }
+    if (!scheduler_pid_valid((int)pid)) {
+        vga_printf("kill: no process with pid %u\n", pid);
+        return;
+    }
+    // Name it BEFORE killing it: after the kill the slot is a zombie
+    // and the name is still there, but saying which process was ended
+    // is only useful if it is the name the caller was thinking of.
+    struct proc_info info;
+    char name[PROC_NAME_MAX];
+    name[0] = '\0';
+    for (int i = 0; scheduler_proc_info(i, &info); i++) {
+        if (info.pid == (int)pid) { k_strlcpy(name, info.name, sizeof name); break; }
+    }
+    if (!scheduler_kill((int)pid, -1)) {
+        vga_printf("kill: refused for pid %u -- it is the running process, or "
+                    "already a zombie\n", pid);
+        return;
+    }
+    vga_printf("kill: ended pid %u%s%s\n", pid,
+                name[0] ? " -- " : "", name[0] ? name : "");
+}
+
+// `spawn <path> [args]` -- start a program WITHOUT waiting for it.
+//
+// The kernel-context counterpart to `gui spawn`, which needs a window
+// manager to dispatch it, and to `run`, which uses the legacy blocking
+// loader. Both gaps are real: after the desktop dies there is no `gui`
+// to spawn with, and a legacy process is not a scheduled one -- so
+// `run /tests/screenclient` is refused by win_request() with "caller
+// isn't a scheduled process" and cannot claim the compositor role.
+//
+// Which makes this the way to bring the desktop BACK after killing it:
+//
+//     kill 1                       # end the ring-3 desktop
+//     spawn /bin/wm/system/toywm   # and start another one
+//
+// A role that cannot be re-claimed after a crash is not survivable in
+// any useful sense, and until this nothing could demonstrate it.
+void cmd_spawn(const char *args) {
+    while (*args == ' ') args++;
+    if (!*args) {
+        vga_write("usage: spawn <path> [args]    (`run` waits; this does not)\n");
+        return;
+    }
+
+    // Split the path from its arguments at the first space.
+    char path[64];
+    const char *sp = args;
+    while (*sp && *sp != ' ') sp++;
+    size_t n = (size_t)(sp - args);
+    if (n >= sizeof path) {
+        vga_write("spawn: path too long\n");
+        return;
+    }
+    k_memcpy(path, args, n);
+    path[n] = '\0';
+    while (*sp == ' ') sp++;
+
+    int pid = scheduler_spawn(path, *sp ? sp : 0);
+    if (pid <= 0) {
+        vga_printf("spawn: could not start %s -- is it there? (`ls`)\n", path);
+        return;
+    }
+    // The pid, because the caller's next move is usually to wait for it
+    // or to kill it, and both need the number.
+    vga_printf("spawn: %s started as pid %d (not waited for -- `kill %d` to end it)\n",
+                path, pid, pid);
+}

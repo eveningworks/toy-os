@@ -1153,145 +1153,46 @@ guess.*
       them, and the cheap check (read the ABI comment of the call you
       changed) was never done.
 
-- [ ] **Three GUI tools fail against the ring-3 desktop.** Re-measured
-      2026-08-18 on a FRESH disk with `make iso KCMDLINE="gui3"`: 20 of
-      23 pass. All three that remain are tool assumptions, not WM bugs:
+- [x] ~~**GUI tools that assume the desktop is NOT a process.**~~ FIXED
+      2026-08-18, and **the desktop is now ring-3 by default** -- all 23
+      tools pass against it, and `make iso KCMDLINE="gui0"` still selects
+      the ring-0 one while `apps/wm/` remains in the tree.
 
-      * `compositor`, `screen`, `compdeath` register a SECOND compositor
-        (`compclient`, `screenclient`) alongside the desktop. Free when
-        the WM was ring 0; a contradiction now, because the role is
-        single -- the tool evicts the desktop and then asks it
-        questions, and the desktop answers `win: compositor did not
-        answer a gui command in time`. They need to either drive the
-        desktop AS the compositor, or run with no desktop up at all.
+      The three that were left all failed the same way: they spawn their
+      own stand-in compositor, which is free when the role is unclaimed
+      and a contradiction when the desktop holds it -- the stand-in
+      EVICTS the desktop, and the tool then asks `gui` questions of a
+      client that does not implement them. Each asks
+      `gui compositor --json` who holds the role now and runs the
+      scenario that fits:
 
-      This is what stands between here and the switchover; the flip
-      itself is one line in `apps/gui.c`.
+      * `compdeath` kills the DESKTOP rather than a stand-in, which is
+        the milestone's exit criterion and was asserted by nothing at
+        all before: the framebuffer grant is revoked, clients are ASKED
+        to close (a client that declines is still alive afterwards, which
+        is how "asked" is told from "destroyed"), the console comes back,
+        the kernel answers `sh` afterwards, and a new desktop can be
+        started and takes the role.
+      * `compositor` asserts what only exists in the ring-3 world: a
+        REAL hardware click reaching a window through the desktop. Every
+        other tool injects with `gui click`, which enters the WM loop
+        BELOW the PS/2 driver, so the chain from a real interrupt
+        through `win_input.c` and `WIN_EV_RAW_*` was covered by nothing.
+      * `screen` takes the desktop down for its run, since the client
+        under test must itself be the compositor, and drives the client
+        with `screenclient auto` -- with no desktop the physical shell
+        owns the keyboard, so injected keystrokes never reach a
+        compositor.
 
-      An earlier version of this entry also listed `cursor` and
-      `cpanel`, and called them undiagnosed tool assumptions. They were
-      neither: both were the KERNEL STACK OVERFLOW below, and both pass
-      now. Recorded because the misreading is instructive -- they were
-      the only two tools that WRITE a setting, so they were the only two
-      that reached the bug, and they passed on a re-run purely because a
-      setting already at its target value skips the write entirely.
-      **A GUI tool that fails only on a fresh disk is a tool whose
-      fixture finally reached the code.**
+      Two shell commands came out of it, both filling real gaps:
+      `kill <pid>` (the WM cannot kill itself through `gui kill`, since
+      `scheduler_kill()` refuses the current process) and
+      `spawn <path>` (the legacy `run` loader is not a scheduled
+      process, so its `win_request()` is refused and it can never claim
+      the compositor role).
 
-- [ ] **Settings: qualified names, and then a ring-3 settings daemon.**
-      Two related items, deliberately staged so the first does not
-      depend on the second.
-
-      **The defect today.** A setting's identity is a bare global name,
-      and `setting_register()` refuses a duplicate silently (first wins,
-      `kernel/lib/setting.c`). `config get X` never searches files at
-      all -- it finds X in the registry, and the registry entry names
-      exactly one file -- so the same key in a second config file is
-      dead text that nothing reads and nothing warns about. With one
-      compiled-in table of five kernel settings that was fine; with two
-      programs owning config it is a collision waiting to happen, and
-      the loser has no way to know.
-
-      **Stage 1 -- qualified names (`<namespace>.<name>`).** The
-      namespace is the config FILE's registered `Name`, which already
-      exists (`/etc/config.d` descriptors, `api/config_file.h`), so
-      `font_size` in the system file becomes `system.font_size`.
-      Requirements:
-
-      * R1. Identity in the registry becomes (namespace, name); the
-        duplicate refusal applies to the PAIR, so two programs may both
-        own a `theme`.
-      * R2. `config get` accepts a bare name and reports every match,
-        qualified, when there is more than one; a qualified name is
-        always exact. `config set` refuses an ambiguous bare name and
-        says which qualified names it meant.
-      * R3. `SYS_SETTING`'s `struct setting_msg` carries the namespace
-        as its own field rather than baking it into `name`, so a client
-        can display and sort by it.
-      * R4. The ring-3 Control Panel groups by namespace, which it can
-        do with no per-setting knowledge.
-      * R5. Existing files do not change. The namespace is derived from
-        where a setting already lives, so `/etc/toyos.conf` keeps its
-        current keys and hand-editing still works.
-
-      Chosen over two alternatives (2026-08-18): making the FILE a
-      command-line selector (macOS `defaults`' shape -- rejected because
-      the file has to be typed on every ambiguous call), and keeping
-      names globally unique with a loud refusal (rejected because it
-      does not actually let two programs use the same name; one still
-      loses).
-
-      **Stage 2 -- a ring-3 settings daemon.** The deeper problem is
-      that a ring-3 program cannot register a setting AT ALL: the
-      registry is a compiled-in table, so "which settings exist" is a
-      kernel-build-time question. Moving it out is the right direction
-      and matches every system except Windows (Linux has no kernel
-      settings registry -- sysctl is kernel parameters only, user config
-      is dconf/gsettings in userspace; macOS has `cfprefsd`; Windows'
-      configuration manager genuinely is in ntoskrnl).
-
-      **What toy-os does not have yet, which is the real content of this
-      item:**
-
-      * R6. **Supervision.** Nothing restarts a dead process. A settings
-        daemon that dies takes every client's settings with it, and
-        `MAX_PROCS` reaping is currently whoever spawned it.
-      * R7. **Discovery.** A client has to find the daemon. There is no
-        name service; TWS is found by being the registered compositor,
-        which is a single role the kernel tracks -- a second such role
-        is a pattern to copy or a general mechanism to build.
-      * R8. **An IPC that is not TWP.** Pipes are parent/child only and
-        TWP is the window protocol. A request/response channel between
-        unrelated processes does not exist.
-      * R9. **Boot order.** Timezone, font size and keymap are read
-        before any process could be running. Either those stay kernel
-        settings (the split below) or the kernel must tolerate not
-        knowing them until the daemon is up.
-      * R10. **The kernel keeps what is kernel state.** `apply` for
-        timezone/font/keymap/cursor mutates live kernel subsystems and
-        cannot run in ring 3. That half stays a kernel registry --
-        sysctl's actual scope -- and the daemon owns program settings.
-
-      Sequencing: R6-R8 are general infrastructure that a printing
-      service, a name service or a session manager would want too, so
-      this is a milestone rather than a change. Stage 1 is independent
-      and worth doing first -- (namespace, name) is transport-agnostic,
-      so it is the same identity whichever side of the boundary the
-      registry ends up on.
-
-- [ ] **`strace`'s syscall-name table stops at `SYS_GETRANDOM`.**
-      Everything added since -- `SYS_PROC_INFO`, `SYS_SETTING`,
-      `SYS_SYSINFO`, `SYS_TICKS`, `SYS_KILL`, `SYS_SPAWN`, `SYS_PIPE`,
-      `SYS_WAITPID`, `SYS_WIN_REQUEST`, `SYS_MONOTONIC_NS`,
-      `SYS_FS_GENERATION`, `SYS_CRASHTEST` -- traces as an unnamed
-      number, which is most of the interesting ones. `SC_TABLE` in
-      `kernel/proc/strace.c` is a designated-initialiser array, so each
-      is one line plus its argument types. Noticed because
-      `kstack syscalls` reads the same table (deliberately -- it is the
-      kernel's only list of these names) and reported the culprit as
-      `#34`.
-
-- [ ] **`syscall_dispatch()` has a 4832-byte stack frame, on every
-      syscall.** Found by `-Wframe-larger-than=1024` (added 2026-08-18)
-      the moment it existed; it is by a wide margin the biggest consumer
-      of a per-process kernel stack, and the reason 8 KiB was not enough.
-
-      The cause is structural rather than any one local: the function is
-      one long if/else chain over the syscall number, and GCC does not
-      overlap the message structs of branches that can never run
-      together (`win_debug_msg` alone is 528 bytes, and there are a
-      dozen more). `-fconserve-stack` was measured and changes nothing.
-
-      The fix is to extract the big branches into `noinline` handlers so
-      each pays only for its own locals -- mechanical, but it touches
-      most of a 1,400-line file, so it wants its own change and its own
-      test pass. The budget is waived for that one function by name
-      (`#pragma GCC diagnostic` around it, with a comment) rather than
-      raised kernel-wide, so the check keeps working everywhere else.
-
-      Worth measuring after: the deepest path today is `SYS_SETTING` ->
-      `etc_config` rewrite -> VFS -> TFS3 journal -> ATA, which needed
-      more than 8 KiB with this frame under it.
+      What is left of Milestone 41: deleting `apps/wm/` and the `gui0`
+      flag with it, which is stage 4c's own item.
 
 - [x] ~~**Force Quit kills the ring-3 desktop.**~~ FIXED 2026-08-18, and
       the previous entry's "no crash in the log" was simply wrong -- the

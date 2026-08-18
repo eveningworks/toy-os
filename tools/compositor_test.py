@@ -31,6 +31,24 @@ so DebugConsole.logs() can read it -- unlike a client's stdout, which
 goes to its parent's pipe (see uiclient_test.py's docstring for the trap
 in the other direction).
 
+TWO WORLDS, PICKED BY ASKING WHO HOLDS THE ROLE
+-----------------------------------------------
+The design above is stage 2's, and stage 2's whole point was that BOTH
+paths run at once so stage 4 is a deletion rather than a cutover. Once
+the desktop itself is the ring-3 compositor that premise is gone: the
+role is single, so spawning a stand-in EVICTS the desktop and every
+`gui` command afterwards is answered by a client that does not implement
+them. (That is exactly how this tool failed under `gui3`.)
+
+So when a desktop already holds the role, this asserts the thing that
+actually matters there and that nothing else covers: **real hardware
+input reaching a window through the ring-3 desktop.** Every other GUI
+tool injects with `gui click`, which enters the WM loop BELOW the PS/2
+driver -- so the whole chain from a real interrupt through
+`win_input.c`, `WIN_EV_RAW_*` and the desktop's hit-testing is exercised
+by no test at all. Here it is driven with a real QMP click on a button
+whose rect comes from UI Demo's own layout line.
+
 Usage (the VM must already be up and in GUI mode):
 
     python3 tools/vm.py start
@@ -88,6 +106,105 @@ def parse_mouse(line):
     return int(tail[0]), int(tail[1]), int(tail[2])
 
 
+def summarise():
+    passed = sum(1 for _, ok, _ in checks if ok)
+    failed = len(checks) - passed
+    # gui_regress.py pulls the table's summary out of a line matching
+    # "passed," and "failed" -- match the other tools' shape or the row
+    # falls back to whatever the last line happened to be.
+    print(f"\ncompositor_test: {passed} passed, {failed} failed")
+    return 0 if failed == 0 else 1
+
+
+def uidemo_button(dbg):
+    """Open UI Demo and return (window, btn1 rect) -- or (None, None).
+
+    The rect comes from the app's own `uidemo: layout btn1 x y w h`
+    line, never from a Python copy of a widget offset: those drift the
+    moment a row is added to the app, which has bitten four tools here.
+    """
+    dbg.open_app(UIDEMO_TITLE)
+    dbg.settle()
+    win = dbg.window(UIDEMO_TITLE)
+    if win is None:
+        return None, None
+    btn = None
+    for line in dbg.logs("uidemo:"):
+        if "uidemo: layout btn1 " in line:
+            f = line.split("uidemo: layout btn1 ", 1)[1].split()
+            btn = tuple(int(v) for v in f[:4])
+    return win, btn
+
+
+def run_ring3(dbg, qmp, owner):
+    """The desktop IS the compositor: assert the REAL input chain.
+
+    PS/2 interrupt -> win_input.c -> WIN_EV_RAW_* -> the ring-3 desktop
+    -> hit-testing -> the client. Every other tool injects below the
+    driver with `gui click`, so this is the only place the hardware half
+    is exercised.
+    """
+    check("the desktop holds the compositor role", owner > 0, f"pid={owner}")
+
+    win, btn = uidemo_button(dbg)
+    if win is None or btn is None:
+        check("UI Demo opened and reported btn1's layout", False,
+              "no window" if win is None else "no layout line")
+        return summarise()
+    check("UI Demo opened and reported btn1's layout", True, f"btn1={btn}")
+
+    # Idle must not flood the queue. The desktop's loop runs every tick,
+    # and a compositor that pushed level state unconditionally would
+    # overflow a 32-deep queue in a fraction of a second -- so a drop
+    # count of zero after a second of nothing is the check that a
+    # change-gate exists at all.
+    time.sleep(1.0)
+    idle = comp(dbg)
+    check("nothing is dropped while idle", idle.get("dropped", -1) == 0,
+          f"dropped={idle.get('dropped')}")
+
+    content = win["content"]
+    cx = content["x"] + btn[0] + btn[2] // 2
+    cy = content["y"] + btn[1] + btn[3] // 2
+
+    # A REAL click: warp the actual PS/2 cursor onto the button and
+    # press. warp_cursor() confirms arrival through `gui state` rather
+    # than trusting an open-loop move, which undershoots a large jump.
+    dbg.logs()
+    dbg.warp_cursor(qmp, cx, cy)
+    # press/release WITHOUT re-positioning: QMPSession.click() does its
+    # own goto(), which is open-loop and undershoots a large jump -- it
+    # moved the cursor from the button to (0,129) here, and the click
+    # then landed on the desktop while the press itself was delivered
+    # perfectly. warp_cursor() is the one that confirms arrival.
+    qmp.mouse_down()
+    time.sleep(0.2)
+    qmp.mouse_up()
+    time.sleep(0.8)
+    dbg.settle()
+    real = [l for l in dbg.logs("uidemo:") if "uidemo: button 1" in l]
+    check("a REAL hardware click reaches the window through the desktop",
+          len(real) >= 1,
+          f"{len(real)} button line(s) at ({cx},{cy})")
+
+    # ...and the injected path still works, which is what every other
+    # tool depends on. Asserting both is the same pairing the ring-0
+    # scenario makes: either alone is satisfied by a broken half.
+    dbg.logs()
+    dbg.click(cx, cy)
+    dbg.settle()
+    injected = [l for l in dbg.logs("uidemo:") if "uidemo: button 1" in l]
+    check("the injected `gui click` path still reaches it too",
+          len(injected) >= 1, f"{len(injected)} button line(s)")
+
+    # And the desktop was not evicted by any of it.
+    end = comp(dbg)
+    check("the desktop still holds the role afterwards",
+          end.get("pid", 0) == owner, f"pid={end.get('pid')}")
+
+    return summarise()
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--sock", default=DEFAULT_SOCK)
@@ -105,6 +222,11 @@ def main():
         time.sleep(2.0)
 
     dbg = DebugConsole(args.sock)
+
+    owner = comp(dbg).get("pid", 0)
+    if owner > 0:
+        print(f"compositor -- the RING-3 desktop holds the role (pid {owner}):")
+        return run_ring3(dbg, qmp, owner)
 
     print("compositor (M41 stage 2)")
 
@@ -314,13 +436,7 @@ def main():
     check("UI Demo still works after the compositor left", len(still) > 0,
           f"{len(still)} uidemo line(s)")
 
-    passed = sum(1 for _, ok, _ in checks if ok)
-    failed = len(checks) - passed
-    # gui_regress.py pulls the table's summary out of a line matching
-    # "passed," and "failed" -- match the other tools' shape or the row
-    # falls back to whatever the last line happened to be.
-    print(f"\ncompositor_test: {passed} passed, {failed} failed")
-    return 0 if failed == 0 else 1
+    return summarise()
 
 
 if __name__ == "__main__":

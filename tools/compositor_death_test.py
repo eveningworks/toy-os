@@ -4,11 +4,34 @@
 WHAT IS UNDER TEST
 ------------------
 `killing the compositor must not panic the kernel` is the exit criterion
-of the whole milestone, and it is the one property that only becomes
-true at stage 4d. This asserts it now, against a STAND-IN compositor,
-because it is kernel-side and does not need the ring-3 WM to exist:
-`screenclient` claims the compositor role and takes the framebuffer
-grant, which is exactly the state the real WM will be in when it dies.
+of the whole milestone.
+
+**This tool runs two different scenarios, and picks by asking who holds
+the role.** `gui compositor --json` reports pid 0 under the ring-0
+desktop and the window manager's own pid under a ring-3 one
+(`make iso KCMDLINE="gui3"`), so the detection is free and exact.
+
+  * **No compositor registered (the ring-0 desktop).** A STAND-IN --
+    `screenclient` -- claims the role and takes the framebuffer grant,
+    which is the state the real WM will be in when it dies. What is
+    asserted here is the SKIP: a second consumer leaving must NOT tear
+    down a desktop the ring-0 WM still owns.
+
+  * **The desktop already holds it (the ring-3 desktop).** Then the
+    stand-in is not merely unnecessary, it is a contradiction -- the
+    role is single, so claiming it EVICTS the desktop, and the tool then
+    asks questions of something that is no longer there. That is exactly
+    how this tool failed under `gui3` before it learned to look. So it
+    kills the DESKTOP instead, which is the real exit criterion and was
+    asserted by nothing at all until now.
+
+Killing the desktop needs `kill` at the shell, not `gui kill`: the `gui`
+commands are dispatched from inside the WM's own loop and
+scheduler_kill() refuses to kill the CURRENT process, so the one process
+a test most needs to end was the one nothing could end. Restarting it
+needs `spawn` for a matching reason -- `run` uses the legacy blocking
+loader, which is not a scheduled process, so its win_request() is
+refused and it can never claim the role.
 
 Three deaths, one path. The kernel routes a clean deregistration, a
 `kill`, and a fault through `win_server_set_compositor(0, 0)` -- so this
@@ -78,6 +101,7 @@ from qmp_test import QMPSession             # noqa: E402
 DEFAULT_SOCK = ".vm.serial"
 COMP = "/tests/screenclient"
 CLIENT = "/tests/winclient"
+TOYWM = "/bin/wm/system/toywm"
 
 checks = []
 
@@ -85,6 +109,90 @@ checks = []
 def check(name, ok, detail=""):
     checks.append((name, bool(ok), detail))
     print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"    [{detail}]" if detail else ""))
+
+
+def run_ring3(dbg, desktop_pid):
+    """Kill the actual ring-3 desktop -- Milestone 41's exit criterion.
+
+    Everything here is asserted through the KERNEL's console (`sh ...`),
+    not through `gui ...`: the whole point is that the thing answering
+    `gui` is about to stop existing, so using it as the liveness probe
+    would make "it died" and "the kernel died with it" the same result.
+    """
+    # Something for the kernel to ask to close. winclient REFUSES its
+    # first closes, which is deliberate here: it makes the difference
+    # between "asked" and "destroyed" observable, because a refused ask
+    # leaves the process alive and a destroy would not.
+    dbg.send(f"gui spawn {CLIENT}")
+    time.sleep(1.5)
+    wins = [w for w in (dbg.windows() or []) if w.get("client_pid")]
+    check("a client window exists to be asked to close",
+          len(wins) >= 1, f"{len(wins)} client window(s)")
+
+    dbg.logs()
+    killed = dbg.send(f"sh kill {desktop_pid}")
+    time.sleep(2.0)
+    after = "\n".join(dbg.logs()) + killed
+
+    check("the desktop can be killed at all",
+          "ended pid" in killed and "toywm" in killed, killed.strip()[:60])
+
+    # THE exit criterion. `sh` is served by the kernel context, which is
+    # not the process that just died, so an answer here is a liveness
+    # proof for the kernel alone -- which is the claim being made.
+    df = dbg.send("sh df")
+    check("the KERNEL survives killing the desktop",
+          "Filesystem:" in df, df.strip().splitlines()[0] if df.strip() else "no answer")
+
+    check("the framebuffer grant is revoked",
+          "revoked the framebuffer" in after,
+          next((l for l in after.split("\n") if "revoked" in l), "no line"))
+
+    # Asked, not destroyed -- destroying frees the client's own buffer
+    # pages, so a client mid-draw would fault and the desktop dying
+    # would cascade into every app dying with it.
+    check("client windows are ASKED to close",
+          "asked to close" in after,
+          next((l for l in after.split("\n") if "compositor gone" in l), "no line"))
+
+    # ...and the proof that asking is not destroying: winclient declined,
+    # so its process must still be there. `kstack slots` lists live
+    # scheduler slots by name and is served by the kernel, so it still
+    # answers with no desktop up.
+    slots = dbg.send("sh kstack slots")
+    check("a client that DECLINED is still alive (asked, not destroyed)",
+          "winclient" in slots,
+          "winclient present" if "winclient" in slots else slots.strip()[:60])
+
+    check("the text console is restored",
+          "console restored" in after,
+          next((l for l in after.split("\n") if "console restored" in l), "no line"))
+
+    # The role must be free afterwards. With no desktop there is nothing
+    # to answer `gui`, and that refusal IS the observation: the message
+    # means neither a ring-0 layer nor a compositor is registered.
+    gone = dbg.send("gui compositor")
+    check("the compositor role is released",
+          "no window manager running" in gone, gone.strip()[:60])
+
+    # And the half that makes "survivable" mean anything: a desktop that
+    # cannot be restarted after a crash has not survived in any useful
+    # sense. `spawn`, not `run` -- the legacy loader is not a scheduled
+    # process and its win_request() is refused.
+    started = dbg.send(f"sh spawn {TOYWM}")
+    check("a new desktop can be started", "started as pid" in started,
+          started.strip()[:70])
+    time.sleep(4.0)
+
+    st = dbg.json("gui state --json") or {}
+    check("the new desktop composites and answers again",
+          st.get("screen", {}).get("w", 0) > 0, f"screen={st.get('screen')}")
+
+    comp = dbg.json("gui compositor --json") or {}
+    check("...and it holds the compositor role",
+          comp.get("pid", 0) > 0, f"pid={comp.get('pid')}")
+
+    return summarise()
 
 
 def main():
@@ -101,7 +209,15 @@ def main():
         time.sleep(2.0)
     dbg = DebugConsole(args.sock)
 
-    print("compositor death (M41 R7):")
+    # WHO HOLDS THE ROLE decides which scenario is the real one. Asked
+    # before anything is spawned, so the answer is the desktop's own
+    # state rather than something this tool caused.
+    owner = (dbg.json("gui compositor --json") or {}).get("pid", 0)
+    if owner > 0:
+        print(f"compositor death (M41 R7) -- the RING-3 desktop holds the role (pid {owner}):")
+        return run_ring3(dbg, owner)
+
+    print("compositor death (M41 R7) -- no compositor registered; using a stand-in:")
 
     # A real client window, so there is something for the kernel to ask
     # to close. Without one the interesting half of the path is not

@@ -4,24 +4,26 @@
 #include "wm/wm.h"
 
 void gui_main(void) {
-    // WHICH DESKTOP. The ring-0 one by default; the ring-3 one when
-    // `gui3` is on the kernel command line
-    // (`make iso KCMDLINE="gui3"`), which is how the GUI suite is run
-    // against it without editing this file -- the step that otherwise
-    // gets edited in and forgotten on the way out.
+    // WHICH DESKTOP. The RING-3 one by default since 2026-08-18, when
+    // the last three GUI tools that assumed the desktop is not a
+    // process learned to ask who holds the compositor role -- the whole
+    // suite, 23 of 23 tools, now passes against it.
     //
-    // Same switch pattern as nokaslr/nopat/notsc/faultinject, and the
-    // same reasoning: a path nothing can reach is a guess.
+    // `gui0` on the kernel command line (`make iso KCMDLINE="gui0"`)
+    // still starts the ring-0 one. That is not hedging: `apps/wm/` is
+    // still in the tree until stage 4c deletes it, and this repo's
+    // standing rule is that a path nothing can reach is a guess -- the
+    // same reasoning behind nokaslr, nopat, notsc and `ata nodma`. The
+    // flag goes when the code it selects does.
     //
-    // The ring-3 desktop WORKS -- it composites, opens client windows,
-    // and passes 19 of 23 GUI tools. What it is waiting on is four
-    // tools that assume the desktop is not a process
-    // (docs/roadmap.md). When those are fixed this whole function
-    // becomes `gui3_main()` and apps/wm/ is deleted.
+    // The pair is deliberately not symmetrical: `gui3` is also still
+    // accepted, so every existing script and note that asks for the
+    // ring-3 desktop by name keeps working rather than silently
+    // selecting something else.
     const char *cmdline = multiboot_cmdline();
-    if (cmdline && k_strstr(cmdline, "gui3")) {
-        gui3_main();
+    if (cmdline && k_strstr(cmdline, "gui0")) {
+        wm_run();
         return;
     }
-    wm_run();
+    gui3_main();
 }

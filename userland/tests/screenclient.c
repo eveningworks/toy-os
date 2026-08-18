@@ -82,7 +82,13 @@ static void reset_scene(void) {
     ugfx_damage_reset(&g_sc.back);
 }
 
-int main(void) {
+// One scripted command. Split out of main()'s event loop so the same
+// code can be driven WITHOUT keys -- see the `auto` mode below.
+//
+// Returns 0 to stop.
+static int do_cmd(int cmd);
+
+int main(int argc, char **argv) {
     char buf[128];
 
     if (set_compositor(1) != 1) {
@@ -109,16 +115,61 @@ int main(void) {
     }
     sys_eprint(buf);
 
-    for (;;) {
+    // AUTO MODE: run the whole sequence with no keyboard at all.
+    //
+    // Raw keys reach a compositor only while nothing else is consuming
+    // the keyboard, and when this client is the compositor there is no
+    // desktop -- so the PHYSICAL SHELL has the keyboard and every
+    // injected keystroke goes to it instead. That is not a bug in
+    // either; it is what "the role is single" means once the window
+    // manager is a process. A test that needs this client without a
+    // desktop therefore cannot drive it with keys.
+    //
+    // Each step is announced first, so a reader (and the test tool) can
+    // attribute a reply line to the command that produced it -- `d` and
+    // `n` both log `damage`, and telling them apart by position in the
+    // log is exactly the kind of fragility this avoids.
+    if (argc > 1 && argv[1][0] == 'a') {
+        // The probe runs twice: once early, and once at the very end so
+        // a screendump taken right after the client exits is comparable
+        // with it. Anything printed to the console in between repaints
+        // the screen the probe just read.
+        static const char SEQ[] = "rdcbvpnr";
+        for (int i = 0; SEQ[i]; i++) {
+            snprintf(buf, sizeof buf, "screenclient: step %c\n", SEQ[i]);
+            sys_eprint(buf);
+            if (g_have) do_cmd(SEQ[i]);
+        }
+        // HOLD the screen before releasing the role. The last probe
+        // reports a pixel the test compares against a screendump, and
+        // the moment this process exits the kernel restores the text
+        // console and repaints over it -- so without this the two
+        // observers read the screen at different times and the check
+        // fails against a working mapping. Measured: the client
+        // reported ff00ff and the screendump 000000.
+        sys_eprint("screenclient: hold\n");
+        unsigned long long until = sys_monotonic_ns() + 4000000000ULL;
+        while (sys_monotonic_ns() < until) sys_yield();
+    } else for (;;) {
         struct win_event ev;
         if (sys_wait_event(&ev) != 1) continue;
         if (ev.type != WIN_EV_RAW_KEY) continue;
         if (ev.a == 'q') break;
         if (!g_have) continue;
+        do_cmd(ev.a);
+    }
 
-        int x, y, w, h;
+    if (set_compositor(0) == 1) sys_eprint("screenclient: released\n");
+    sys_eprint("screenclient: exit\n");
+    return 0;
+}
 
-        switch (ev.a) {
+static int do_cmd(int cmd) {
+    char buf[128];
+    int x, y, w, h;
+
+    {
+        switch (cmd) {
 
         // --- the damage box tracks exactly what was drawn -------------
         case 'd': {
@@ -265,8 +316,5 @@ int main(void) {
             break;
         }
     }
-
-    if (set_compositor(0) == 1) sys_eprint("screenclient: released\n");
-    sys_eprint("screenclient: exit\n");
-    return 0;
+    return 1;
 }

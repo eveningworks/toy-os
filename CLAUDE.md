@@ -1032,21 +1032,41 @@ technical conventions below:
   hardware path runs (the KTESTs assert CR4 against CPUID rather than
   demanding the bits, so they are meaningful under both). See
   `docs/decisions.md`.
-- **THE RING-3 DESKTOP EXISTS AND RUNS: `gui3` at the physical shell.**
-  `/bin/wm/system/toywm` is `apps/wm/` compiled as a ring-3 program
-  (sources in `userland/wm/`), spawned and waited on by `apps/gui3.c`.
-  It claims the compositor role, takes the framebuffer grant, loads the
-  font, composites the desktop, opens client windows and answers the
-  `gui` debug console. **`gui` is still the RING-0 desktop** and
-  `apps/wm/` still stands -- the flip waits on five test tools (see
-  `docs/roadmap.md`, and re-measure rather than trusting a count: the
-  list there was stale by two tools until 2026-08-18). **`make iso
-  KCMDLINE="gui3"` runs the WHOLE SUITE against the ring-3 desktop**
-  without editing a source file, which is how "18 of 23 tools pass" was
-  measured; same switch pattern as
-  `nokaslr`/`nopat`/`notsc`, and it disappears with `apps/wm/`. Two copies of the WM
-  therefore exist: **a fix to one must be made to the other** until
-  `apps/wm/` is deleted.
+- **THE DESKTOP IS A RING-3 PROCESS. This is the default since
+  2026-08-18.** `/bin/wm/system/toywm` is `apps/wm/` compiled as a
+  ring-3 program (sources in `userland/wm/`), spawned and waited on by
+  `apps/gui3.c`; `gui` starts it. It claims the compositor role, takes
+  the framebuffer grant, loads the font, composites, opens client
+  windows and answers the `gui` debug console, and **all 23 GUI tools
+  pass against it**. `make iso KCMDLINE="gui0"` still starts the RING-0
+  desktop, because `apps/wm/` is still in the tree and a fallback
+  nothing can reach is a guess -- that flag goes when the code it
+  selects does. **Two copies of the WM still exist: a fix to
+  `userland/wm/` must be made to `apps/wm/` too** until stage 4c deletes
+  the latter.
+- **Killing the desktop is survivable, and that is the milestone's exit
+  criterion**: `kill 1` at the shell revokes the framebuffer grant, ASKS
+  each client window to close (never destroys it -- that would fault a
+  client mid-draw), restores the text console and leaves the kernel
+  running; `spawn /bin/wm/system/toywm` starts a new one.
+  **`kill` and `spawn` are shell commands for exactly this reason.**
+  `gui kill` cannot end the desktop (it is dispatched from inside the
+  WM's own loop and `scheduler_kill()` refuses the CURRENT process), and
+  `run` cannot start one (the legacy loader is not a scheduled process,
+  so its `win_request()` is refused). `compositor_death_test.py` asserts
+  the whole cycle.
+- **A GUI tool that needs the compositor role must ASK WHO HOLDS IT**
+  (`gui compositor --json`: pid 0 under the ring-0 desktop, the WM's pid
+  under the ring-3 one). The role is SINGLE, so a tool that spawns its
+  own stand-in evicts the desktop and then asks questions of a client
+  that does not implement them -- which is how `compositor`, `screen`
+  and `compdeath` all failed the moment the desktop became a process.
+  Each picks its scenario from that answer now.
+- **A client that needs raw input without a desktop cannot be driven by
+  keystrokes** -- with no WM the physical shell owns the keyboard, so
+  injected keys go there. `screenclient auto` runs its whole sequence
+  itself for this reason, announcing each step so a reply can be
+  attributed to the command that produced it.
 - **Four things a ring-0 component loses the moment it becomes a
   process, all of which this migration hit:**
   (1) **`hlt` is PRIVILEGED** -- the WM's idle wait was a #GP on the
