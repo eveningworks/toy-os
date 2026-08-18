@@ -78,7 +78,6 @@ not a priority order, it is an availability one.
 | Item | Layer | Why it is ready |
 |---|---|---|
 | **Scheduler: blocking, priorities, classes** | 2 | Its own note said "do this after the GUI moved to ring 3", and that is done. The kernel context stops being a rotation participant here. |
-| **Syscall table + per-subsystem handlers** (see Known issues) | 2 | Nothing depends on it, and everything that adds a syscall gets easier after it -- including the settings daemon. |
 | **Storage hardening** | 3 | Block layer and journal are in place. |
 | **Block integrity: checksums & scrubbing** | 3 | Same. |
 | **Desktop visual polish** | 7 | Toykit and the ring-3 desktop are done. |
@@ -1823,68 +1822,29 @@ it serves. Small, and it makes everything above it discoverable.*
       captures): `uidemo`, `dialog`, `scrollbar`, `menubar`, `uiclient`,
       `winclient`, `screen`.
 
-- [ ] **A syscall TABLE, and handlers in the subsystem that owns them.**
-      `kernel/proc/syscall.c` is 1,492 lines and one `if/else` chain of
-      37 branches over ~40 syscalls, and it grows with every capability
-      added.
+- [x] ~~**A syscall TABLE, and handlers in the subsystem that owns
+      them.**~~ DONE 2026-08-18. `kernel/proc/syscall_table.c` is one
+      row per number -- `{ name, handler, argument kinds, return kind }`
+      -- and `syscall_dispatch()` is a bounds-checked call through it.
+      The 37-branch `if/else` chain is gone; the handlers live in
+      `kernel/proc/syscall_fd.c`, `kernel/fs/fs_syscalls.c`,
+      `kernel/proc/proc_syscalls.c`, `kernel/proc/win_syscalls.c` and
+      `kernel/core/sys_syscalls.c`.
 
-      **How Linux and Windows do it, because they agree on the shape.**
-      Linux has no syscall file at all: each call is defined by a
-      `SYSCALL_DEFINEn()` macro IN THE SUBSYSTEM THAT OWNS IT (`read`
-      and `write` in `fs/read_write.c`, `fork` in `kernel/fork.c`), and
-      dispatch is a TABLE of function pointers (`sys_call_table[]`)
-      generated at build time from one registry file
-      (`arch/x86/entry/syscalls/syscall_64.tbl`). Windows NT is the same
-      idea: the SSDT is an array of service pointers plus an
-      argument-size table, indexed by `KiSystemService`, with
-      implementations in the owning managers (Io, Ob, Ps, Mm) and a
-      separate shadow table for win32k. Neither has a dispatch chain,
-      and neither keeps the implementations together -- the table is the
-      only central thing.
+      Three things landed differently from the plan above, all in
+      `docs/decisions.md`. The table is HAND-WRITTEN, not generated (R4):
+      designated initializers already give the compile-time guarantee
+      generation was proposed for, and a generator would add a parser
+      over a header that is mostly prose. `strace`'s table is MERGED
+      into it rather than kept in step with it (R5), which is not how
+      Linux splits it -- worth reading the entry before assuming it is.
+      And a handler reports "I parked" as its RETURN VALUE while writing
+      its own result into the trapframe (R3), because `SYS_SBRK` returns
+      a pointer and no 64-bit sentinel is free.
 
-      **The specific reason to do it here, beyond file size:** there is
-      already a SECOND table keyed by syscall number -- `strace`'s
-      `SC_TABLE` -- and it drifted. Fourteen entries were missing on
-      2026-08-18, some for months, and the gap was invisible because
-      nothing ties the two together. One table holding
-      `{name, handler, argument kinds}` makes dispatch and tracing
-      unable to disagree, and `kstack syscalls` reads it too.
-
-      **Shape:**
-
-      * R1. One table indexed by syscall number. `syscall_dispatch()`
-        becomes ~100 lines of entry/exit plumbing (the strace hook, the
-        block/park bookkeeping, the stack-depth accounting) plus a
-        bounds-checked call.
-      * R2. Handlers move to the owning subsystem --
-        `kernel/fs/fs_syscalls.c`, `kernel/proc/proc_syscalls.c`,
-        `kernel/proc/win_syscalls.c`. Today's `noinline` handlers are
-        already this shape, arrived at by accident while chasing a stack
-        frame.
-      * R3. A uniform handler signature. This is where the risk is:
-        ~40 handlers have to agree on one, and the ones that park the
-        caller (`SYS_READ` on a pipe, `SYS_WAIT_EVENT`) need to report
-        "I blocked, do not write a return value" through it.
-      * R4. `abi/syscall_abi.h` stays the single source of truth for
-        numbers, and the table is GENERATED from it (the `gen_syms.py` /
-        `genrelocs.py` precedent). That keeps the compile-time
-        guarantee that a number is defined once -- which a
-        self-registering registry like `display_driver` or `.ktests`
-        would lose, since duplicate or missing numbers become a runtime
-        concern. This is the one place to deviate from this repo's usual
-        registry instinct, and the reason should be stated where the
-        table is generated.
-      * R5. `strace`'s names and argument kinds come from the same
-        table, so R2's move cannot leave a syscall untraceable.
-
-      **A structural bonus:** each handler gets its own stack frame, so
-      no syscall can put its locals on every other syscall's frame --
-      which is precisely the bug that made `syscall_dispatch()` 4832
-      bytes and cost a kernel-stack overflow to find.
-
-      Estimated at about a day, mostly mechanical, with the risk
-      concentrated in R3. Worth doing BEFORE the settings daemon below,
-      which will add syscalls of its own.
+      `syscall_dispatch()`'s frame went from 864 bytes to 96, and the
+      largest handler frame (576, `SYS_WIN_DEBUG`) is now paid only by
+      the syscall that needs it.
 
 - [ ] **Settings: a ring-3 settings daemon (stage 2).** The remaining
       half, and the one that needs infrastructure toy-os does not have.
@@ -1939,9 +1899,10 @@ it serves. Small, and it makes everything above it discoverable.*
       reporting the deepest syscall as `#34`.
 
 - [x] ~~**`syscall_dispatch()` has a 4832-byte stack frame.**~~ FIXED
-      2026-08-18: ~864 bytes now, and the deepest measured path in the
-      kernel went from 8680 bytes to 4456 (53% of a kernel stack to
-      27%).
+      2026-08-18: 864 bytes after the big branches were extracted, and
+      **96** once the chain became a table (each handler pays for its
+      own frame). The deepest measured path in the kernel went from
+      8680 bytes to 4456 (53% of a kernel stack to 27%).
 
       The cause was one local -- a 4 KiB `SYS_GETRANDOM_MAX` bounce
       buffer -- not the dozen message structs everyone (including two
@@ -1949,28 +1910,6 @@ it serves. Small, and it makes everything above it discoverable.*
       total by nothing, because GCC already overlapped them in the big
       buffer's shadow. `-fstack-usage` said so in one command. See
       `docs/decisions.md`.
-
-- [ ] **`syscall_dispatch()` has a 4832-byte stack frame, on every
-      syscall.** Found by `-Wframe-larger-than=1024` (added 2026-08-18)
-      the moment it existed; it is by a wide margin the biggest consumer
-      of a per-process kernel stack, and the reason 8 KiB was not enough.
-
-      The cause is structural rather than any one local: the function is
-      one long if/else chain over the syscall number, and GCC does not
-      overlap the message structs of branches that can never run
-      together (`win_debug_msg` alone is 528 bytes, and there are a
-      dozen more). `-fconserve-stack` was measured and changes nothing.
-
-      The fix is to extract the big branches into `noinline` handlers so
-      each pays only for its own locals -- mechanical, but it touches
-      most of a 1,400-line file, so it wants its own change and its own
-      test pass. The budget is waived for that one function by name
-      (`#pragma GCC diagnostic` around it, with a comment) rather than
-      raised kernel-wide, so the check keeps working everywhere else.
-
-      Worth measuring after: the deepest path today is `SYS_SETTING` ->
-      `etc_config` rewrite -> VFS -> TFS3 journal -> ATA, which needed
-      more than 8 KiB with this frame under it.
 
 - [x] ~~**Force Quit kills the ring-3 desktop.**~~ FIXED 2026-08-18, and
       the previous entry's "no crash in the log" was simply wrong -- the

@@ -2187,3 +2187,88 @@ Register also has to be set (`serial_init()`'s original `outb(COM1+1,
 live -- a fully-correct-looking IRQ handler + PIC unmask produced zero
 bytes, not even local echo, until the IER bit was added.
 
+
+## The syscall table is hand-written, and one row carries the handler AND the trace description
+
+`kernel/proc/syscall_table.c` holds one row per syscall number --
+`{ name, handler, argument kinds, return kind }` -- and
+`syscall_dispatch()` is a bounds-checked call through it. Before this,
+dispatch was one `if/else` chain of 37 branches over 40 syscalls in a
+1,492-line `syscall.c`, and `strace` carried a SECOND table keyed by the
+same numbers.
+
+**Why a table at all.** The chain grew with every capability, and the
+handlers had nowhere to live but the one file. Linux and Windows NT
+agree on the alternative: Linux defines each call with
+`SYSCALL_DEFINEn()` in the subsystem that owns it (`read`/`write` in
+`fs/read_write.c`, `fork` in `kernel/fork.c`) and dispatches through
+`sys_call_table[]`; NT's SSDT is an array of service pointers with the
+implementations in Io/Ob/Ps/Mm. Neither has a dispatch chain, and
+neither keeps the implementations together -- the table is the only
+central thing. The handlers here now live in `kernel/proc/syscall_fd.c`,
+`kernel/fs/fs_syscalls.c`, `kernel/proc/proc_syscalls.c`,
+`kernel/proc/win_syscalls.c` and `kernel/core/sys_syscalls.c`.
+
+**Why the trace description shares the row.** This is where toy-os
+deliberately DIFFERS from both, and the comparison is worth stating
+accurately because it is easy to assume otherwise. Linux's
+`sys_call_table[]` holds function pointers and nothing else; the names
+live in `arch/x86/entry/syscalls/syscall_64.tbl`, consumed at build
+time, and the kernel's own per-syscall metadata (`struct
+syscall_metadata` -- name, argument count and types, emitted by the same
+`SYSCALL_DEFINEn` macro) is a SECOND structure, used by ftrace's
+`sys_enter`/`sys_exit` tracepoints. `strace(1)` reads neither: it is a
+userspace `ptrace(2)` program with its own generated per-architecture
+tables. NT is the closest precedent -- the SSDT is paired with
+`KiArgumentTable`, indexed by the same number -- but that is still two
+arrays.
+
+One merged row is a small-system simplification, and it was chosen
+because the drift it prevents had already happened: `strace`'s private
+table stopped at `SYS_GETRANDOM`, so fourteen syscalls -- process
+control, the whole window protocol, the settings registry -- traced as a
+bare `syscall_<n>`, some for months. Nothing tied the two lists
+together, so nothing could notice. At 40 syscalls on one architecture,
+the cost of merging is that a row is wider; the cost of not merging was
+paid already.
+
+**Why it is hand-written and not generated.** The plan for this work
+(`docs/roadmap.md`, before it was struck through) called for generating
+the table from `abi/syscall_abi.h`, following `gen_syms.py` and
+`genrelocs.py`, reasoning that generation preserves the compile-time
+guarantee that a number is defined exactly once. It does not buy that:
+designated initializers (`[SYS_WRITE] = { ... }`) already give it. An
+undefined `SYS_*` is a compile error, and `-Wextra`'s `-Woverride-init`
+turns a duplicated index into an error rather than a silent last-wins.
+What generation would add is a parser over a header that is mostly prose
+comments, and a build step whose correctness depends on those comments'
+formatting. Linux generates because it has six architectures and 400
+calls; that is the size, not the shape, and copying it here would be
+copying the size.
+
+**Why a handler reports "I parked" separately from its return value.**
+The uniform signature is `int handler(struct syscall_ctx *c)`: the
+handler writes its own return value into `c->regs[14]` and returns 1
+only if it blocked the caller. The obvious alternative -- return the
+value, with a sentinel for "blocked" -- has no safe sentinel here.
+`SYS_SBRK` returns a pointer, so every 64-bit value is a legitimate
+result, and a handler that parked must not write `regs[14]` at all
+(the wake writes it; see `SYS_WAIT_EVENT`'s comment). Keeping the
+return value where the branches already put it also made the conversion
+a move rather than a rewrite of 37 bodies.
+
+**The structural bonus, and it is measurable.** Each handler now has its
+own stack frame, so no syscall can put its locals on every other
+syscall's frame. `syscall_dispatch()` went from 864 bytes to **96**
+(`-fstack-usage`); the largest handler frame, `sys_win_debug` at 576, is
+now paid only by `SYS_WIN_DEBUG`. That is the same class of bug that
+made the dispatcher 4832 bytes and cost a kernel-stack overflow to find
+-- structural now rather than a rule someone has to remember.
+
+Adding a syscall is three edits with no registry to forget: the number
+in `abi/syscall_abi.h`, the handler in the subsystem that owns it with
+its prototype in `kernel/include/kernel/syscalls.h`, and a row in
+`syscall_table.c`. `kernel/proc/syscall_test.c` asserts no row is
+half-filled in, and that `strace_syscall_name()` returns the table's own
+string POINTER -- a private copy in `strace.c` holding identical text
+would fail that.

@@ -44,6 +44,7 @@
 #include "strace.h"
 #include "strace_internal.h"
 #include "syscall_abi.h"
+#include "syscall_table.h"
 #include "vmm.h"
 #include "vga.h"
 #include "klog.h"
@@ -165,93 +166,28 @@ static void ap_quoted(char *out, size_t cap, size_t *len,
 
 // ---- the syscall table -----------------------------------------------
 //
-// One row per syscall number, indexed directly by it (index 0 is
-// unused -- syscall numbers start at 1). Add a row when adding a
-// syscall to abi/syscall_abi.h; an unknown number still traces, just
-// as "syscall_<n>" with hex arguments, so a missing row degrades
-// rather than hides the call.
-
-enum arg_kind {
-    A_END = 0, // no more arguments
-    A_INT,     // signed decimal
-    A_HEX,     // pointer/opaque, as hex
-    A_FD,      // a file descriptor -- decimal, but named for readability here
-    A_PATH,    // pointer to a NUL-terminated path, printed as a quoted string
-    A_BUF,     // pointer to a byte buffer whose length is the NEXT argument
-    A_OFLAGS,  // SYS_O_* bitmask
-};
-
-enum ret_kind { R_DEC = 0, R_HEX };
-
-struct sc_desc {
-    const char *name;
-    enum arg_kind args[3];
-    enum ret_kind ret;
-};
-
-static const struct sc_desc SC_TABLE[] = {
-    [SYS_EXIT]          = { "exit",          { A_INT } },
-    [SYS_WRITE]         = { "write",         { A_FD, A_BUF, A_INT } },
-    [SYS_GUI_INIT]      = { "gui_init",      { A_HEX } },
-    [SYS_GUI_POLL_KEY]  = { "gui_poll_key",  { A_END } },
-    [SYS_READ_KEY]      = { "read_key",      { A_END } },
-    // The one syscall returning a pointer rather than a count/status.
-    [SYS_SBRK]          = { "sbrk",          { A_INT }, R_HEX },
-    [SYS_WIN_CREATE]    = { "win_create",    { A_HEX } },
-    [SYS_WIN_PRESENT]   = { "win_present",   { A_END } },
-    // read()'s buffer isn't filled until the handler runs, and the line
-    // is formatted before that (see this file's top comment), so it
-    // prints as a pointer rather than as a string -- same for recv().
-    [SYS_READ]          = { "read",          { A_FD, A_HEX, A_INT } },
-    [SYS_OPEN]          = { "open",          { A_PATH, A_OFLAGS } },
-    [SYS_CLOSE]         = { "close",         { A_FD } },
-    [SYS_UNLINK]        = { "unlink",        { A_PATH } },
-    [SYS_LISTDIR]       = { "listdir",       { A_PATH, A_HEX, A_INT } },
-    [SYS_GETTIME]       = { "gettime",       { A_HEX } },
-    [SYS_YIELD]         = { "yield",         { A_END } },
-    [SYS_SOCKET]        = { "socket",        { A_INT, A_INT } },
-    [SYS_SEND]          = { "send",          { A_FD, A_BUF, A_INT } },
-    [SYS_RECV]          = { "recv",          { A_FD, A_HEX, A_INT } },
-    [SYS_PCI_COUNT]     = { "pci_count",     { A_END } },
-    [SYS_PCI_INFO]      = { "pci_info",      { A_INT, A_HEX } },
-    [SYS_SET_COLOR]     = { "set_color",     { A_INT, A_INT } },
-    [SYS_CPU_INFO]      = { "cpu_info",      { A_HEX } },
-    [SYS_POLL_EVENT]    = { "poll_event",    { A_HEX } },
-    [SYS_WAIT_EVENT]    = { "wait_event",    { A_HEX } },
-    [SYS_GETRANDOM]     = { "getrandom",     { A_HEX, A_INT } },
-
-    // Everything below arrived after the first version of this table and
-    // traced as a bare number until 2026-08-18 -- which is most of the
-    // interesting ones, since this is where process control, the window
-    // protocol and the settings registry live. `kstack syscalls` reads
-    // the same table (it is the kernel's ONLY list of these names), so a
-    // gap here shows up there too.
-    [SYS_WIN_REQUEST]    = { "win_request",   { A_HEX } },
-    [SYS_PIPE]           = { "pipe",          { A_HEX } },
-    // The args string is an ordinary NUL-terminated string, so A_PATH's
-    // quoting is right for it even though it is not a path.
-    [SYS_SPAWN]          = { "spawn",         { A_PATH, A_PATH, A_FD } },
-    [SYS_WAITPID]        = { "waitpid",       { A_INT, A_HEX, A_INT } },
-    [SYS_PROC_INFO]      = { "proc_info",     { A_INT, A_HEX } },
-    [SYS_KILL]           = { "kill",          { A_INT, A_INT } },
-    [SYS_TICKS]          = { "ticks",         { A_END } },
-    [SYS_MONOTONIC_NS]   = { "monotonic_ns",  { A_END } },
-    [SYS_SETTING]        = { "setting",       { A_HEX } },
-    [SYS_SYSINFO]        = { "sysinfo",       { A_HEX } },
-    [SYS_FS_GENERATION]  = { "fs_generation", { A_END } },
-    [SYS_CRASHTEST]      = { "crashtest",     { A_HEX } },
-    [SYS_POWEROFF]       = { "poweroff",      { A_INT } },
-    [SYS_WIN_DEBUG]      = { "win_debug",     { A_HEX } },
-};
-
-#define SC_TABLE_COUNT (sizeof(SC_TABLE) / sizeof(SC_TABLE[0]))
+// There isn't one here any more. `strace` reads THE table
+// (kernel/proc/syscall_table.c) through syscall_desc_at(), so a
+// syscall's name and its argument kinds come from the same row that
+// names its handler -- dispatch and tracing cannot disagree about which
+// syscalls exist.
+//
+// This file used to carry its own copy keyed by the same numbers, and
+// it drifted: fourteen syscalls traced as a bare `syscall_<n>`, some
+// for months, because nothing tied the two lists together. Note this is
+// NOT how Linux splits it -- strace(1) there is a userspace ptrace
+// program with its own generated per-architecture tables, and the
+// kernel's own per-syscall metadata (ftrace's sys_enter/sys_exit) is a
+// second structure beside sys_call_table[]. One merged row is a
+// small-system simplification; see docs/decisions.md.
 
 // The table is the kernel's only list of syscall names, so anything
 // else that wants to NAME a syscall asks here rather than growing a
 // second copy that drifts. `kstack syscalls` is the first such caller.
 const char *strace_syscall_name(int nr) {
-    if (nr < 0 || (size_t)nr >= SC_TABLE_COUNT) return 0;
-    return SC_TABLE[nr].name;
+    if (nr < 0) return 0;
+    const struct syscall_desc *d = syscall_desc_at((uint64_t)nr);
+    return d ? d->name : 0;
 }
 
 static void ap_oflags(char *out, size_t cap, size_t *len, uint64_t flags) {
@@ -321,8 +257,8 @@ size_t strace_format_call(char *out, size_t cap, uint64_t nr,
     if (cap == 0) return 0;
     out[0] = '\0';
 
-    const struct sc_desc *d = 0;
-    if (nr < SC_TABLE_COUNT && SC_TABLE[nr].name) d = &SC_TABLE[nr];
+    const struct syscall_desc *d = syscall_desc_at(nr);
+    if (d && !d->name) d = 0; // a number with no row is an unknown call
 
     if (!d) {
         // Unknown number -- syscall.c's dispatcher no-ops on these, so
@@ -380,8 +316,8 @@ size_t strace_format_ret(char *out, size_t cap, uint64_t nr, uint64_t rax) {
     if (cap == 0) return 0;
     out[0] = '\0';
     ap_str(out, cap, &len, " = ");
-    if (nr < SC_TABLE_COUNT && SC_TABLE[nr].name && SC_TABLE[nr].ret == R_HEX &&
-        (int64_t)rax != -1) {
+    const struct syscall_desc *d = syscall_desc_at(nr);
+    if (d && d->name && d->ret == R_HEX && (int64_t)rax != -1) {
         ap_hex(out, cap, &len, rax); // sbrk's break pointer; -1 stays decimal
     } else {
         ap_sdec(out, cap, &len, rax);

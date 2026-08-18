@@ -5,22 +5,19 @@
 #include "syscall_abi.h"
 
 // Called from isr_dispatch (idt.c) for vector 0x80 (int 0x80) -- i.e.
-// any software interrupt a ring-3 process raises to ask the kernel to do
-// something. `regs` is the same saved-register array isr_dispatch
+// any software interrupt a ring-3 process raises to ask the kernel to
+// do something. `regs` is the same saved-register array isr_dispatch
 // already has (see its comment for the exact layout: regs[14] = rax,
-// regs[9] = rdi, regs[10] = rsi).
+// regs[9] = rdi, regs[10] = rsi, regs[11] = rdx).
 //
-// exit (SYS_EXIT, code in RDI) never returns to isr_common's normal
-// "pop registers and iretq back to ring 3" epilogue -- it jumps straight
-// back into whichever kernel code called process_run_ring3() (see
-// process.h), via process_context_restore().
+// What it does with the number is look it up in the syscall table
+// (kernel/proc/syscall_table.c) and call that row's handler; see
+// kernel/include/kernel/syscall_table.h. An unknown number is a no-op
+// that returns normally, resuming ring 3 right after its `int 0x80`.
 //
-// write (SYS_WRITE, buffer in RDI, length in RSI) is simpler: it just
-// does the write and returns normally, resuming ring 3 right after the
-// `int 0x80`, with the byte count written back into RAX.
-//
-// Any other syscall number is currently a no-op that just returns
-// normally.
+// SYS_EXIT is the one call that may never return here: under the legacy
+// loader it jumps straight back into whichever kernel code called
+// process_run_ring3() (see process.h), via process_context_restore().
 void syscall_dispatch(uint64_t *regs);
 
 // Arms SYS_SBRK for one process: `pml4_phys` is whichever address space
@@ -52,9 +49,10 @@ void syscall_reset_heap(uint64_t pml4_phys, uint64_t heap_base);
 // which covers its heap and any SYS_WIN_CREATE buffer too, since both
 // are just pages mapped into that same address space -- nothing extra
 // to free there), and the kernel-side bookkeeping that ISN'T part of any
-// address space and so wouldn't be touched by that alone: open fds
-// (fd_table), and the single-slot heap/window "armed for this pml4"
-// globals.
+// address space and so wouldn't be touched by that alone -- open fds,
+// and the legacy single-slot heap/window "armed for this pml4" state.
+// That second half is one release hook per syscall file, since the
+// state belongs to those files (see kernel/include/kernel/syscalls.h).
 //
 // Switches CR3 back to the kernel's own address space FIRST, before
 // freeing anything -- see vmm_destroy_address_space()'s comment for why

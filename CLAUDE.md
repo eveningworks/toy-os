@@ -1188,6 +1188,31 @@ technical conventions below:
   CR3 leaves W^X silently not applied -- **and all six W^X KTESTs stay
   green**, because they read the same symbol the code wrote. Only the
   KTEST that asks the CPU for CR3 catches it. See `docs/decisions.md`.
+- **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
+  The number in `abi/syscall_abi.h`, a handler in the subsystem that
+  owns it (`kernel/proc/syscall_fd.c` for anything taking an fd,
+  `kernel/fs/fs_syscalls.c`, `kernel/proc/proc_syscalls.c`,
+  `kernel/proc/win_syscalls.c`, `kernel/core/sys_syscalls.c`) with its
+  prototype in `kernel/include/kernel/syscalls.h`, and a row in
+  `kernel/proc/syscall_table.c`. There is no registry and no init call
+  to forget -- `syscall_dispatch()` is a bounds-checked call through
+  that table and nothing else. It was a 37-branch `if/else` chain in a
+  1,492-line `syscall.c`; the shape is Linux's `sys_call_table[]` and
+  NT's SSDT, deliberately without their generators. Four things to
+  know. **The row carries the `strace` description too** (name,
+  argument kinds, return kind) -- that is one table where there were
+  two, because the second one DRIFTED and fourteen syscalls traced as a
+  bare number for months; `kstack syscalls` reads it as well. **A
+  handler writes its own return value into `c->regs[14]` and RETURNS
+  whether it parked the caller**, because `SYS_SBRK` returns a pointer
+  so no 64-bit value is free to be a "blocked" sentinel. **A local
+  added to `syscall_dispatch()` is paid for by every syscall** -- that
+  is how its frame reached 4832 bytes; it is 96 now, and each handler
+  pays for its own. And **`syscall_process_exit_cleanup()` calls one
+  release hook per file** (`fd_release_all`, `proc_syscall_release`,
+  `win_syscall_release`): kernel-side state keyed by an address space
+  is not part of that address space, so tearing it down frees none of
+  it. See `docs/decisions.md`.
 - **`kernel/include/` is split by audience and the build enforces it**
   -- `api/` (what `apps/` may use), `abi/` (the kernel<->userland
   contract `userland/` shares), `kernel/` (internal, and NOT on
