@@ -215,3 +215,51 @@ KTEST("smep_smap", "a supported bit is actually set, and an unsupported one is n
     KTEST_ASSERT_EQ(!!(state & PAGING_SMEP_ON), cpu_smep);
     KTEST_ASSERT_EQ(!!(state & PAGING_SMAP_ON), cpu_smap);
 }
+
+// --- frame ownership -------------------------------------------------
+//
+// vmm_destroy_address_space() frees the frames a mapping OWNS and must
+// leave a borrowed one alone. The two tests below are each other's
+// control: the same walk, the same teardown, one frame owned and one
+// borrowed, and only the owned one comes back.
+//
+// The bug that produced them: every GUI client maps the kernel's glyph
+// tables read-only (WIN_FONT_VADDR), and nothing unmapped them on exit,
+// so the client's teardown returned pages of kernel .rodata to the
+// physical allocator -- measured at two frames on the first GUI app to
+// close, then silent, because a frame already free cannot be freed
+// twice.
+
+KTEST("vmm", "destroying an address space frees the frames it OWNS") {
+    uint64_t before = pmm_free_frames();
+    uint64_t as = vmm_create_address_space();
+    KTEST_ASSERT(as != 0);
+    uint64_t f = pmm_alloc_frame();
+    KTEST_ASSERT(f != 0);
+    KTEST_ASSERT(vmm_map_user_page(as, TEST_VADDR, f));
+    vmm_destroy_address_space(as);
+    // The frame went back, so the count is where it started.
+    KTEST_ASSERT(pmm_free_frames() == before);
+}
+
+KTEST("vmm", "destroying an address space leaves a BORROWED frame alone") {
+    uint64_t f = pmm_alloc_frame();
+    KTEST_ASSERT(f != 0);
+
+    uint64_t before = pmm_free_frames();
+    uint64_t as = vmm_create_address_space();
+    KTEST_ASSERT(as != 0);
+    // Exactly what win_server.c does for the font, the framebuffer and a
+    // window buffer: map a frame somebody else owns.
+    KTEST_ASSERT(vmm_map_user_borrowed(as, TEST_VADDR, f, 0, 0, VMM_MT_NORMAL));
+    vmm_destroy_address_space(as);
+
+    // Unchanged: the borrowed frame is still allocated to its real
+    // owner. If teardown freed it, the count would be one HIGHER -- and
+    // pmm would hand out a frame somebody is still using.
+    KTEST_ASSERT(pmm_free_frames() == before);
+
+    // Still ours to free, which is the whole claim.
+    pmm_free_frame(f);
+    KTEST_ASSERT(pmm_free_frames() == before + 1);
+}

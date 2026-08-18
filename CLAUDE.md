@@ -1052,6 +1052,27 @@ technical conventions below:
   control-register access; and a filesystem backend goes in `fs/`, not
   `drivers/` -- the block device is the driver, the filesystem on top
   of it isn't.
+- **A USER MAPPING SAYS WHETHER IT OWNS ITS FRAME, and getting that
+  wrong is silent.** `vmm_destroy_address_space()` frees every frame it
+  finds in a dying process's page tables, so anything mapped in that the
+  process does NOT own must go through `vmm_map_user_borrowed()`
+  (`PAGE_BORROWED`, a spare PTE bit). The question to ask at any new
+  mapping site is **who calls `pmm_free_frame()` for this frame?** -- if
+  the answer is not "this address space's teardown", it is borrowed.
+  Five sites were wrong: the font (pages of the KERNEL IMAGE, mapped
+  read-only into every GUI client), the framebuffer twice, a client's
+  window buffer (the window server allocates and frees it), and the
+  poison page -- one frame mapped at every page of a slot, so an owning
+  teardown freed a permanent singleton dozens of times. Closing one GUI
+  app returned four frames of kernel `.rodata` to the allocator.
+  **The trap in MEASURING it: an over-free fires ONCE and then goes
+  quiet**, because `pmm_free_frame()` only counts a frame that was
+  marked used -- so `+4, +0, +0` reads as noise then health, and is not.
+  Check on a fresh boot and believe only the first cycle;
+  `tools/frame_balance.py` does exactly that. This is NOT refcounting --
+  it says "somebody else frees this", not "count me" -- and CoW and
+  `MAP_SHARED` still need a real per-frame refcount. See
+  `docs/decisions.md`.
 - **Kernel code touches user memory ONLY through `vmm.h`'s copy
   helpers** (`vmm_copy_from_user`/`_to_user`/`_string_from_user`).
   CR4.SMEP and CR4.SMAP are on wherever the CPU has them
@@ -2459,6 +2480,20 @@ repeated manual steps to be worth automating:
   loader, or the user address-space layout. `stack_smash_test` is
   deliberately absent -- its message goes to the process's stdout, i.e.
   the screen, so there is nothing in the log to assert on.
+- **`frame_balance.py`** -- does a process's teardown balance? Spawns a
+  process, lets it exit, and compares the physical allocator's
+  free-frame count against the baseline. Two directions, needing
+  opposite fixes: DOWN and staying down is a leak; UP is an OVER-FREE,
+  which is worse and quieter -- teardown handed back frames the process
+  never owned. It found exactly that (an exiting GUI client returning
+  pages of kernel `.rodata`, see `docs/decisions.md`). **It boots its
+  own VM because an over-free fires only ONCE**: the second exit finds
+  those frames already free, so any run that reuses a booted VM
+  measures nothing. The non-GUI control must stay flat -- if it drifts,
+  the fault is in ordinary teardown or in the harness, not in the
+  borrowed-mapping path. Run it after touching `vmm.c`'s mapping or
+  teardown paths, or after adding any mapping of memory a process does
+  not own.
 - **`pixel_probe.py`** -- reads exact pixel values out of screenshots,
   and tabulates the same points across several (`--compare a.png b.png
   --at 85,100 --at 215,100`), flagging which moved and which didn't.

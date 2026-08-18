@@ -11,6 +11,11 @@ extern uint64_t p4_table[512];
 #define PAGE_WRITABLE (1ULL << 1)
 #define PAGE_USER     (1ULL << 2)
 #define PAGE_HUGE     (1ULL << 7)  // a PDPT/PD entry that IS the leaf, not a table pointer
+// Bits 9-11 of a PTE are IGNORED by the hardware and reserved for the
+// OS. This one records that the mapping does NOT own the frame behind
+// it, so vmm_destroy_address_space() must not free it. See
+// vmm_map_user_borrowed().
+#define PAGE_BORROWED (1ULL << 9)
 #define PAGE_NX       (1ULL << 63) // requires EFER.NXE, set once in boot.asm
 // Selects PAT slot 4 (paging.c points it at write-combining at boot).
 // Bit 7 on a 4KiB PTE -- note that is the same bit PAGE_HUGE uses at the
@@ -100,8 +105,8 @@ uint64_t vmm_user_bytes(uint64_t pml4_phys) {
     return i < 0 ? 0 : (uint64_t)g_acct[i].pages * 4096;
 }
 
-int vmm_map_user_page_type(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
-                            int writable, int executable, int memtype) {
+static int map_user(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
+                     int writable, int executable, int memtype, int borrowed) {
     int pml4_index = (int)((vaddr >> 39) & 0x1FF);
     int pdpt_index = (int)((vaddr >> 30) & 0x1FF);
     int pd_index   = (int)((vaddr >> 21) & 0x1FF);
@@ -125,6 +130,10 @@ int vmm_map_user_page_type(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
     // here and setting it would silently repoint the mapping rather
     // than fault. Every page this function maps is 4KiB.
     if (memtype == VMM_MT_WC) flags |= PAGE_PAT_4K;
+    // Ownership, recorded in the PTE itself rather than in a side table:
+    // the teardown walk has the PTE in hand and nothing else, and a side
+    // table would have to be kept in step with every map and unmap.
+    if (borrowed) flags |= PAGE_BORROWED;
 
     uint64_t *pt = table_at(pt_phys);
     // Only count a page that was not already mapped here. A remap of the
@@ -149,15 +158,36 @@ int vmm_map_user_page_type(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
 // control (a .text segment has to be executable) -- it calls
 // vmm_map_user_page_flags() directly instead of this wrapper.
 int vmm_map_user_page(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr) {
-    return vmm_map_user_page_type(pml4_phys, vaddr, paddr, 1, 0, VMM_MT_NORMAL);
+    return map_user(pml4_phys, vaddr, paddr, 1, 0, VMM_MT_NORMAL, 0);
 }
 
 // The permissions-only form, which is what every caller but the
 // framebuffer grant wants: ordinary cacheable memory.
 int vmm_map_user_page_flags(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
                              int writable, int executable) {
-    return vmm_map_user_page_type(pml4_phys, vaddr, paddr, writable, executable,
-                                   VMM_MT_NORMAL);
+    return map_user(pml4_phys, vaddr, paddr, writable, executable,
+                     VMM_MT_NORMAL, 0);
+}
+
+int vmm_map_user_page_type(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
+                            int writable, int executable, int memtype) {
+    return map_user(pml4_phys, vaddr, paddr, writable, executable, memtype, 0);
+}
+
+// The BORROWED form: this address space gets to see the frame, and does
+// not own it. Its PTE carries PAGE_BORROWED, so destroying the address
+// space unmaps it and leaves the frame alone.
+//
+// Every caller is a mapping of memory that belongs to somebody else --
+// the kernel's own glyph tables (one instance, read-only, in every GUI
+// client), the real framebuffer, a window buffer the window server
+// allocated, another process's buffer shared with the compositor, or the
+// one shared zero page a revoked slot is poisoned with. Freeing any of
+// those on exit hands live memory back to the allocator; for the font
+// that is a page of the kernel image.
+int vmm_map_user_borrowed(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
+                           int writable, int executable, int memtype) {
+    return map_user(pml4_phys, vaddr, paddr, writable, executable, memtype, 1);
 }
 
 // The inverse of vmm_map_user_page(): clears one page's PTE so the
@@ -219,7 +249,15 @@ void vmm_switch_address_space(uint64_t pml4_phys) {
 static void destroy_pt(uint64_t pt_phys) {
     uint64_t *pt = table_at(pt_phys);
     for (int i = 0; i < 512; i++) {
-        if (pt[i] & PAGE_PRESENT) pmm_free_frame(pt[i] & ADDR_MASK);
+        // A BORROWED mapping's frame belongs to somebody still using it
+        // -- the kernel image, the framebuffer, the window server, or
+        // another process. Unmapping it is this walk's business; freeing
+        // it is not. Without this an exiting GUI client returned pages
+        // of kernel .rodata (the glyph tables it had mapped read-only)
+        // to the physical allocator, which then handed them out again.
+        if (!(pt[i] & PAGE_PRESENT)) continue;
+        if (pt[i] & PAGE_BORROWED) continue;
+        pmm_free_frame(pt[i] & ADDR_MASK);
     }
     pmm_free_frame(pt_phys);
 }

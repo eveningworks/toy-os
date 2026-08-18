@@ -48,8 +48,8 @@ int win_surface_grant(int pid, uint64_t pml4, uint32_t *out_w, uint32_t *out_h,
         // gets a CACHED framebuffer, where every store lands in a cache
         // line that is then written back in whatever order and at
         // whatever time the CPU chooses. See vmm.h's enum vmm_memtype.
-        if (!vmm_map_user_page_type(pml4, WIN_FB_VADDR + i * 4096,
-                                     phys + i * 4096, 1, 0, VMM_MT_WC)) {
+        if (!vmm_map_user_borrowed(pml4, WIN_FB_VADDR + i * 4096,
+                                    phys + i * 4096, 1, 0, VMM_MT_WC)) {
             // Leave nothing half-mapped: a partial framebuffer is worse
             // than none, because it faults somewhere down the screen
             // instead of at the request.

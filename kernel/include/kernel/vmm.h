@@ -78,6 +78,24 @@ int vmm_map_user_page_type(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
 // pmm_free_contiguous()), and the tables belong to the address space,
 // freed wholesale by vmm_destroy_address_space(). Returns 1 if a
 // mapping was removed, 0 if nothing was mapped there (not an error).
+// Maps a frame this address space does NOT own. Same mapping in every
+// other respect; what differs is teardown -- vmm_destroy_address_space()
+// unmaps a borrowed page and leaves the frame alone, where an ordinary
+// mapping's frame is freed.
+//
+// Use it for any frame whose lifetime is somebody else's: the kernel's
+// glyph tables shared into a GUI client, the real framebuffer, a window
+// buffer the window server allocated and frees itself, another
+// process's buffer shared with the compositor, the shared zero page a
+// revoked slot is poisoned with. The rule is simply "who calls
+// pmm_free_frame() for this?" -- if the answer is not "this address
+// space's teardown", the mapping is borrowed.
+//
+// Recorded in a spare PTE bit rather than a side table, because the
+// teardown walk has the PTE and nothing else to go on.
+int vmm_map_user_borrowed(uint64_t pml4_phys, uint64_t vaddr, uint64_t paddr,
+                           int writable, int executable, int memtype);
+
 int vmm_unmap_user_page(uint64_t pml4_phys, uint64_t vaddr);
 
 void vmm_switch_address_space(uint64_t pml4_phys);

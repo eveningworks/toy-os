@@ -175,7 +175,11 @@ static int comp_map(struct client_window *cw) {
     comp_unpoison(cw);
     for (uint32_t i = 0; i < cw->pages; i++) {
         uint64_t phys = (uint64_t)(uintptr_t)cw->buf + (uint64_t)i * 4096;
-        if (!vmm_map_user_page(g_comp_pml4, vaddr + (uint64_t)i * 4096, phys)) {
+        // BORROWED: these frames are the window server's (allocated in
+        // create_window(), freed in destroy_window()). The compositor
+        // only gets to look at them.
+        if (!vmm_map_user_borrowed(g_comp_pml4, vaddr + (uint64_t)i * 4096, phys,
+                                    1, 0, VMM_MT_NORMAL)) {
             for (uint32_t j = 0; j < i; j++) {
                 vmm_unmap_user_page(g_comp_pml4, vaddr + (uint64_t)j * 4096);
             }
@@ -225,8 +229,11 @@ static void comp_poison(struct client_window *cw) {
     if (!phys) return;                 // out of memory: a hole, as before
     uint64_t vaddr = win_compositor_vaddr(cw->pid, cw->id);
     for (uint32_t i = 0; i < pages; i++) {
-        if (!vmm_map_user_page_flags(g_comp_pml4, vaddr + (uint64_t)i * 4096,
-                                     phys, 0, 0)) {
+        // BORROWED, and doubly so: one frame mapped at every page of the
+        // slot, so an owning teardown would free the same frame `pages`
+        // times -- and it is a permanent singleton nothing ever frees.
+        if (!vmm_map_user_borrowed(g_comp_pml4, vaddr + (uint64_t)i * 4096,
+                                   phys, 0, 0, VMM_MT_NORMAL)) {
             break;
         }
         cw->comp_poisoned = i + 1;
@@ -316,7 +323,11 @@ static int create_window(int pid, uint64_t pml4, int w, int h, int x, int y,
     k_memset((void *)(uintptr_t)phys, 0, (size_t)pages * 4096);
 
     for (uint32_t i = 0; i < pages; i++) {
-        if (!vmm_map_user_page(pml4, vaddr + (uint64_t)i * 4096, phys + (uint64_t)i * 4096)) {
+        // BORROWED: pmm_alloc_contiguous() above made these the window
+        // server's, and destroy_window() frees them. A client's teardown
+        // freeing them too would hand live frames back to the allocator.
+        if (!vmm_map_user_borrowed(pml4, vaddr + (uint64_t)i * 4096,
+                                    phys + (uint64_t)i * 4096, 1, 0, VMM_MT_NORMAL)) {
             // Unwind the pages already mapped, then the frames.
             for (uint32_t j = 0; j < i; j++) vmm_unmap_user_page(pml4, vaddr + (uint64_t)j * 4096);
             pmm_free_contiguous(phys, pages);
@@ -397,8 +408,12 @@ static int map_font(int pid, struct win_request_msg *req) {
         // writable mapping would let any client scribble on kernel
         // .rodata. executable = 0 for the same no-surprises reason
         // every other user mapping here is NX.
-        if (!vmm_map_user_page_flags(pml4, WIN_FONT_VADDR + i * 4096,
-                                      page_base + i * 4096, 0, 0)) {
+        // BORROWED: pages of the KERNEL IMAGE. Nothing here ever frees
+        // them, and an owning mapping made an exiting client return
+        // kernel .rodata to the physical allocator -- measured, two
+        // frames per boot, on the first GUI app to close.
+        if (!vmm_map_user_borrowed(pml4, WIN_FONT_VADDR + i * 4096,
+                                    page_base + i * 4096, 0, 0, VMM_MT_NORMAL)) {
             for (uint64_t j = 0; j < i; j++) {
                 vmm_unmap_user_page(pml4, WIN_FONT_VADDR + j * 4096);
             }

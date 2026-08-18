@@ -2272,3 +2272,69 @@ its prototype in `kernel/include/kernel/syscalls.h`, and a row in
 half-filled in, and that `strace_syscall_name()` returns the table's own
 string POINTER -- a private copy in `strace.c` holding identical text
 would fail that.
+
+## A user mapping records whether it OWNS its frame, in a spare PTE bit
+
+`vmm_destroy_address_space()` walks a dying process's page tables and
+frees every frame it finds. That is correct only while every mapping in
+an address space owns its frame -- and that stopped being true the
+moment anything was shared into a process.
+
+**The bug this was found through.** Every ring-3 GUI client maps the
+kernel's own glyph tables read-only at `WIN_FONT_VADDR` -- that is the
+whole point of `WIN_REQ_FONT`, one instance of the font in memory
+rather than a copy per client. Nothing unmapped them on exit. So an
+exiting GUI client's teardown called `pmm_free_frame()` on pages of the
+KERNEL IMAGE, putting them back in the physical allocator while the
+kernel, the desktop and every other client were still reading them.
+
+Measured on a fresh boot: opening and closing Calculator once returned
+**four frames** of kernel `.rodata` to the allocator. A non-GUI process
+returned zero, which is what identified the borrowed mapping rather
+than process teardown generally as the cause.
+
+**Why nobody had noticed, and this is the part worth carrying
+elsewhere: an over-free shows up ONCE and then goes quiet.**
+`pmm_free_frame()` only counts a frame that was marked used, so the
+second client to exit finds the same font frames already free and
+changes nothing at all. The first measurement of this looked like
+`+4, +0, +0, +0` -- which reads as noise followed by a clean bill of
+health, and was very nearly written off as exactly that. Any accounting
+check for this class has to run on a fresh boot and believe only its
+first cycle. Nothing broke visibly because a freed-but-still-mapped
+frame is harmless right up until the allocator hands it out and
+somebody writes to it.
+
+**The fix: mappings state their ownership.** Bits 9-11 of a PTE are
+ignored by the hardware and reserved for the OS; `PAGE_BORROWED` is one
+of them. `vmm_map_user_borrowed()` sets it, and `destroy_pt()` unmaps
+such a page without freeing the frame. The rule for a caller is a
+single question -- *who calls `pmm_free_frame()` for this frame?* If the
+answer is not "this address space's teardown", the mapping is borrowed.
+
+Five call sites were, and each was a live over-free waiting for its
+address space to die: the font (kernel image), the real framebuffer
+(`WIN_FB_VADDR` and `SYS_GUI_INIT`'s `GUI_FB_VADDR`), a client window
+buffer (the window server allocates it with `pmm_alloc_contiguous()`
+and frees it in `destroy_window()`), another process's buffer shared
+into the compositor, and the poison page -- which was the worst of
+them, being ONE frame mapped at every page of a slot, so an owning
+teardown would have freed the same permanent singleton dozens of times.
+
+**Why a PTE bit and not a side table.** The teardown walk has the PTE
+in hand and nothing else -- no VMA list, no `struct page`. A side table
+would have to be kept in step with every map and unmap, which is the
+same class of second-source-of-truth this repo keeps deleting. Linux
+reaches the same answer from the other end: `vm_normal_page()` exists
+precisely to ask whether a mapping has an owning `struct page` behind
+it, and `VM_PFNMAP` marks the ones that do not.
+
+**What this is NOT.** It is not refcounting, and it does not make a
+frame shareable between two owners -- `PAGE_BORROWED` says "somebody
+else frees this", not "count me". Copy-on-write and `MAP_SHARED` need a
+real per-frame refcount in `pmm`, and that is `docs/roadmap.md`'s
+demand-paging milestone. This is the narrower fact that had to be true
+first, and was not: an address space must not free what it does not
+own. `tools/frame_balance.py` is the standing check, and
+`kernel/mm/uaccess_test.c` carries the pair of KTESTs -- an owned frame
+comes back, a borrowed one does not -- that are each other's control.
