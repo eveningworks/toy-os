@@ -6440,9 +6440,27 @@ and land in the neighbour anyway.
 
 Plus the preventive half: `-Wframe-larger-than=1024` for `kernel/`
 (2048 for `apps/`, which runs on the kernel context's own stack rather
-than a per-process one). `syscall_dispatch()` is waived by name, with
-its extraction scheduled -- a warning that always fires is one everybody
-learns to ignore.
+than a per-process one).
+
+**`syscall_dispatch()`'s 4832 bytes turned out to be ONE local, and the
+obvious suspects were all wrong.** It was waived by name at first, with
+the extraction scheduled; when that was done the cause was a 4 KiB
+`unsigned char rbuf[SYS_GETRANDOM_MAX]` in the getrandom branch. Every
+other local in the function -- a dozen message structs, four separate
+KiB-sized bounce buffers -- overlapped in its shadow, so extracting them
+first changed the total **by nothing at all**, twice. `-fstack-usage`
+answered it in one command after two rounds of reasoning about which
+struct was biggest.
+
+The lesson generalises past this function: **a frame is not the sum of
+what you can see; ask the compiler.** GCC overlaps locals whose live
+ranges are disjoint and refuses to once an address escapes, and which is
+which is not visible by reading. The dispatcher is ~864 bytes now, the
+KiB-sized branches are `noinline` handlers that pay for themselves only
+when they run, and their bounce buffers come from the heap. Measured end
+to end, the deepest path in the kernel (a setting write through the TFS3
+journal to ATA) went from **8680 bytes to 4456** -- from 53% of a kernel
+stack to 27%.
 
 **Dynamic growth was considered and rejected**, and no mainstream kernel
 does it: growing on demand means taking a fault with no usable stack, so

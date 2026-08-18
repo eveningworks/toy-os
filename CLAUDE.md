@@ -713,8 +713,12 @@ technical conventions below:
   step OVER the guard. And **`-Wframe-larger-than=1024` is in CFLAGS**
   (2048 for `apps/`, which runs on the kernel context's stack, not a
   per-process one) -- it found `syscall_dispatch()`'s **4832-byte
-  frame** the moment it existed, which is waived by name with the
-  extraction on the roadmap. The bug that caused all this: an 8 KiB
+  frame** the moment it existed, which turned out to be a single 4 KiB
+  `SYS_GETRANDOM_MAX` buffer and is ~864 bytes now. **A frame is not the
+  sum of what you can see** -- GCC overlaps disjoint locals and stops
+  once an address escapes; `-fstack-usage` answers it in one command,
+  and two rounds of reasoning about which struct was biggest answered
+  it wrongly. The bug that caused all this: an 8 KiB
   stack overflowed on `SYS_SETTING` -> `etc_config` -> VFS -> TFS3 ->
   ATA and zeroed the NEXT SLOT'S saved trapframe, so the window manager
   `iretq`'d into CS=0. **Do not grow a kernel stack dynamically** -- no

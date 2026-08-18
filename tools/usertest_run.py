@@ -51,6 +51,15 @@ VM = os.path.join(REPO, "tools", "vm.py")
 
 # name -> (expected exit code, [substrings that must appear],
 #          [substrings that must NOT appear])
+#
+# A FORBIDDEN substring is matched only against lines the test itself
+# printed -- lines carrying its own name -- never against everything the
+# serial console said during the run. The kernel logs into the same
+# stream, and "FAIL"/"FAILED" are words it uses for its own reasons
+# (`atac: FLUSH FAILED` among them), so an unscoped match turns unrelated
+# kernel noise into a failed test. That is not hypothetical: CI reported
+# newsyscalls_test as FAILED on a run whose captured output ended with
+# "all phases passed" and exit code 0.
 TESTS = [
     ("libc_test", 0,
      ["libc_test: all checks passed"], ["FAIL"]),
@@ -180,9 +189,21 @@ def main():
             for s in want:
                 if s not in out:
                     problems.append(f"missing {s!r}")
+            # Only the test's OWN lines -- see the TESTS table comment.
+            mine = [l for l in out.splitlines() if name.split("_")[0] in l]
+            # A scoped check that found no lines to scope to cannot fail,
+            # which is indistinguishable from passing. Say so.
+            if forbid and not mine:
+                problems.append("no output lines carry this test's name -- "
+                                "its forbidden-substring checks could not run")
             for s in forbid:
-                if s in out:
-                    problems.append(f"saw {s!r}")
+                hits = [l for l in mine if s in l]
+                if hits:
+                    # Quote the offending line. Printing only the tail of
+                    # the output (below) hid it completely the one time
+                    # this fired, which turned a one-line diagnosis into
+                    # an investigation.
+                    problems.append(f"saw {s!r} in: {hits[0].strip()[:80]}")
             results.append((name, problems, out))
     finally:
         vm(args, "stop", check=False)

@@ -2,6 +2,7 @@
 #include "process.h"
 #include "klog.h"
 #include "kfmt.h" // klog_printf
+#include "heap.h"  // bounce buffers come from here, not the stack
 #include "vga.h"
 #include "vmm.h"
 #include "gfx.h"
@@ -336,21 +337,242 @@ void syscall_process_exit_cleanup(uint64_t pml4_phys) {
     vmm_destroy_address_space(pml4_phys);
 }
 
-// KNOWN OFFENDER, and the frame check is how it was found: this
-// function's frame is ~4.8 KiB, because it is one long if/else chain and
-// GCC does not overlap the message structs of branches that can never
-// run together (win_debug_msg alone is 528 bytes). That is ~4.8 KiB
-// consumed on EVERY syscall entry, on a per-process kernel stack, before
-// any handler does anything -- by a distance the biggest consumer of
-// that stack, and the reason 8 KiB was not enough.
+// --- per-syscall handlers, extracted for STACK reasons ---------------
 //
-// The fix is to extract the big branches into noinline handlers so each
-// pays for its own locals only; it is a real refactor of this file and
-// is scheduled separately (docs/roadmap.md). Until then the budget is
-// waived HERE, by name, rather than raised for the whole kernel -- a
-// warning that always fires is one everybody learns to ignore.
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wframe-larger-than="
+// Each of these was a branch of syscall_dispatch()'s if/else chain, and
+// each carries a message struct of a few hundred bytes.  GCC does not
+// overlap the locals of branches that can never run together once their
+// addresses escape (every one of these is passed to something), so the
+// dispatcher's frame was the SUM of them: 4832 bytes, on every syscall
+// entry, on a per-process kernel stack -- by a wide margin the biggest
+// consumer of one, and the reason 8 KiB was not enough (docs/
+// decisions.md).
+//
+// `noinline` is not decoration. These are static with one caller each,
+// so at -O2 GCC would inline every one of them straight back into the
+// dispatcher and put the frame exactly where it was.
+//
+// They take `regs` and write regs[14] themselves, which is the syscall
+// return value -- keeping that convention rather than returning a value
+// means each body is the branch verbatim, so this stayed a move rather
+// than a rewrite.
+#define SYSCALL_HANDLER static __attribute__((noinline)) void
+
+// Returns 1 if the caller was PARKED (its syscall has no return value
+// yet -- the wake writes it), 0 otherwise. That is the one thing the
+// dispatcher still needs to know, so it is the return value rather than
+// another out-parameter.
+static __attribute__((noinline)) int
+sys_do_read_pipe(uint64_t *regs, uint64_t pml4, int pipe_idx,
+                 uint64_t buf_ptr, uint64_t len) {
+    // pipe_read() fills a kernel buffer, which is then handed out -- it
+    // cannot write into the user pointer itself once SMAP is on
+    // (vmm.h). len is capped at SYS_WRITE_MAX by the caller. Heap
+    // rather than stack, for the reason sys_do_write_console() gives.
+    char *kbuf = kmalloc(SYS_WRITE_MAX);
+    if (!kbuf) { regs[14] = (uint64_t)-1; return 0; }
+
+    int64_t n = pipe_read(pipe_idx, kbuf, (uint32_t)len);
+    int blocked = 0;
+    if (n >= 0 && !vmm_copy_to_user(pml4, buf_ptr, kbuf, (uint64_t)n)) {
+        klog_write("syscall: read() rejected -- invalid buffer pointer\n");
+        regs[14] = (uint64_t)-1;
+    } else if (n >= 0) {
+        regs[14] = (uint64_t)n; // bytes, or 0 for EOF
+    } else if (!scheduler_block_current(regs, SCHED_WAIT_PIPE)) {
+        // Nowhere to park (kernel code or the legacy path). Report EOF
+        // rather than spinning: a caller that cannot block must not be
+        // told "try again forever".
+        regs[14] = 0;
+    } else {
+        blocked = 1;
+    }
+    kfree(kbuf);
+    return blocked;
+}
+
+SYSCALL_HANDLER sys_do_write_console(uint64_t *regs, uint64_t pml4, int fd,
+                                      uint64_t buf_ptr, uint64_t len) {
+    // len is capped at SYS_WRITE_MAX by the caller, so the
+    // bounce buffer is always big enough. Copying first (rather
+    // than reading through the user pointer as this used to) is
+    // what SMAP requires -- see vmm.h.
+    // From the HEAP, not the stack: a KiB of bounce buffer at the top of
+    // a syscall is a KiB of a 16 KiB per-process kernel stack, and this
+    // one sits above pipe_write() and the console. A write already
+    // costs far more than an allocation. Same call as the one
+    // etc_config_file.c makes, and for the same reason.
+    char *kbuf = kmalloc(SYS_WRITE_MAX);
+    if (!kbuf) { regs[14] = (uint64_t)-1; return; }
+    if (!vmm_copy_from_user(pml4, kbuf, buf_ptr, len)) {
+        klog_write("syscall: write() rejected -- invalid buffer pointer\n");
+        regs[14] = (uint64_t)-1; // simplified error indicator (no errno yet)
+    } else {
+        const char *buf = kbuf;
+        // stderr goes to the KERNEL LOG, never to the pipe.
+        //
+        // Redirecting stdout is a request to capture a program's
+        // OUTPUT; folding its diagnostics into the same stream
+        // corrupts whatever the parent was trying to read, which
+        // is exactly why Unix has two descriptors rather than
+        // one. The kernel log is the right sink for the second:
+        // it reaches the serial console and `dmesg` no matter
+        // who spawned the process or where its stdout went, so a
+        // GUI client with no terminal attached can still say
+        // something a test (or a person) can read -- the same
+        // path strace's lines take.
+        if (fd == 2) {
+            for (uint64_t i = 0; i < len; i++) klog_putc(buf[i]);
+            regs[14] = len;
+        } else {
+            // A process spawned with SYS_SPAWN's stdout redirection
+            // writes into a pipe instead of the console. That is
+            // what lets a parent READ this output; without it every
+            // child's stdout goes to whatever sink the console has
+            // installed and the parent never sees it.
+            int out_pipe = scheduler_stdout_pipe(scheduler_current_pid());
+            if (out_pipe >= 0) {
+                regs[14] = (uint64_t)pipe_write(out_pipe, buf, (uint32_t)len);
+            } else {
+                for (uint64_t i = 0; i < len; i++) vga_putc(buf[i]);
+                regs[14] = len; // bytes written, back via RAX
+            }
+        }
+    }
+    kfree(kbuf);
+}
+
+SYSCALL_HANDLER sys_do_getrandom(uint64_t *regs, uint64_t pml4,
+                                  uint64_t dst, uint64_t len) {
+    // Into a kernel buffer, then out -- krandom_bytes() must not write
+    // through a ring-3 pointer (vmm.h).
+    //
+    // IN CHUNKS, and that is the whole point of this function existing.
+    // A single bounce buffer here is SYS_GETRANDOM_MAX -- 4096 bytes --
+    // and it lived on syscall_dispatch()'s frame, which made EVERY
+    // syscall, including a bare yield, pay 4 KiB of a 16 KiB per-process
+    // kernel stack before its handler ran. It was that frame's whole
+    // 4832 bytes, near enough: every other local in the dispatcher
+    // overlapped in its shadow, which is why removing a kilobyte of
+    // other buffers changed the total by nothing.
+    //
+    // A chunk costs a few more krandom_bytes() calls on a big request
+    // and bounds the cost at 256 bytes wherever this ends up inlined or
+    // called from.
+    unsigned char chunk[256];
+    uint64_t done = 0;
+    while (done < len) {
+        uint64_t n = len - done;
+        if (n > sizeof chunk) n = sizeof chunk;
+        krandom_bytes(chunk, (size_t)n);
+        // The range was validated as a whole before the loop, so a
+        // partial copy here means the mapping changed underneath us --
+        // report the failure rather than the count.
+        if (!vmm_copy_to_user(pml4, dst + done, chunk, n)) {
+            regs[14] = (uint64_t)-1;
+            return;
+        }
+        done += n;
+    }
+    regs[14] = len;
+}
+
+SYSCALL_HANDLER sys_do_write_file(uint64_t *regs, uint64_t pml4, int slot,
+                                   uint64_t buf_ptr, uint64_t len) {
+    // fs_write() (fs.c) works on NUL-terminated C strings, not
+    // explicit-length buffers -- see syscall_abi.h's comment on
+    // SYS_OPEN for why. Copy into a NUL-terminated scratch buffer (len
+    // is already capped at SYS_WRITE_MAX by the caller, so this is
+    // always big enough) before handing it over. The copy is done the
+    // one way SMAP permits (vmm.h).
+    // Heap, not stack -- see sys_do_write_console(). This one sits
+    // directly above the whole TFS3 journal and ATA path, which is the
+    // deepest chain in the kernel.
+    char *tmp = kmalloc(SYS_WRITE_MAX + 1);
+    if (!tmp) { regs[14] = (uint64_t)-1; return; }
+    if (!vmm_copy_from_user(pml4, tmp, buf_ptr, len)) {
+        klog_write("syscall: write() rejected -- invalid buffer pointer\n");
+        regs[14] = (uint64_t)-1;
+        kfree(tmp);
+        return;
+    }
+    tmp[len] = '\0';
+    fs_write(fd_table[slot].file.name, tmp, 1); // 1 = append
+    regs[14] = len;
+    kfree(tmp);
+}
+
+SYSCALL_HANDLER sys_do_read_file(uint64_t *regs, uint64_t pml4, int slot,
+                                  uint64_t buf_ptr, uint64_t len) {
+    // fs_read_range() reports 0 both at EOF and on any error (fs.h says
+    // so explicitly), which is exactly the behaviour wanted here -- a
+    // file deleted mid-read by another shell should read as EOF, not
+    // fabricate data or fault. It fills a KERNEL buffer which is then
+    // copied out; handing it the user pointer directly is what SMAP
+    // forbids (vmm.h). len is capped at SYS_WRITE_MAX by the caller.
+    uint32_t off = fd_table[slot].file.offset;
+    char *kbuf = kmalloc(SYS_WRITE_MAX);   // heap -- see sys_do_write_console()
+    if (!kbuf) { regs[14] = (uint64_t)-1; return; }
+    uint32_t n = fs_read_range(fd_table[slot].file.name, off, kbuf, (uint32_t)len);
+    if (!vmm_copy_to_user(pml4, buf_ptr, kbuf, n)) {
+        klog_write("syscall: read() rejected -- invalid buffer pointer\n");
+        regs[14] = (uint64_t)-1;
+        kfree(kbuf);
+        return;
+    }
+    fd_table[slot].file.offset += n;
+    regs[14] = n;
+    kfree(kbuf);
+}
+
+SYSCALL_HANDLER sys_do_proc_info(uint64_t *regs, uint64_t rdi, uint64_t rsi) {
+    uint64_t pml4 = vmm_current_pml4();
+    struct proc_info info;
+    if (!vmm_validate_user_range(pml4, rsi, sizeof info)) {
+        klog_write("syscall: proc_info() rejected -- invalid user pointer\n");
+        regs[14] = 0;
+    } else if (!scheduler_proc_info((int)rdi, &info)) {
+        regs[14] = 0; // bad index
+    } else {
+        // Filled in a KERNEL struct and copied out, never written
+        // through the user pointer (vmm.h).
+        vmm_copy_to_user(pml4, rsi, &info, sizeof info); // validated above
+        regs[14] = 1;
+    }
+}
+
+SYSCALL_HANDLER sys_do_setting(uint64_t *regs, uint64_t rdi) {
+    uint64_t pml4 = vmm_current_pml4();
+    struct setting_msg msg;
+    if (!vmm_validate_user_range(pml4, rdi, sizeof msg)) {
+        klog_write("syscall: setting() rejected -- invalid user pointer\n");
+        regs[14] = (uint64_t)-1;
+    } else {
+        vmm_copy_from_user(pml4, &msg, rdi, sizeof msg);
+        int ok = setting_dispatch(&msg);
+        vmm_copy_to_user(pml4, rdi, &msg, sizeof msg); // validated above
+        regs[14] = ok ? 0 : (uint64_t)-1;
+    }
+}
+
+// The dispatcher's own frame is ~864 bytes now. It was 4832 -- consumed
+// on EVERY syscall entry, on a per-process kernel stack, before any
+// handler ran -- and that was the single biggest reason 8 KiB of kernel
+// stack was not enough (docs/decisions.md).
+//
+// Nearly all of it was ONE local: a 4 KiB `unsigned char
+// rbuf[SYS_GETRANDOM_MAX]` in the getrandom branch. Every other local in
+// this function overlapped in its shadow, which is why removing a
+// kilobyte of other buffers first changed the total by nothing at all --
+// the obvious suspects (a dozen message structs) were not the cause, and
+// -fstack-usage said so in one command after two rounds of guessing.
+//
+// The branches that hold a KiB-sized buffer are handlers above rather
+// than inline code, so each pays for its own locals only when it runs,
+// and the bounce buffers themselves come from the heap. Keep it that
+// way: a syscall added here with a big local puts that local on every
+// other syscall's frame, and CFLAGS' -Wframe-larger-than is what says
+// so at build time.
 void syscall_dispatch(uint64_t *regs) {
     uint64_t rax = regs[14]; // syscall number
     uint64_t rdi = regs[9];  // first argument
@@ -417,46 +639,7 @@ void syscall_dispatch(uint64_t *regs) {
         uint64_t pml4 = vmm_current_pml4();
 
         if (fd == 1 || fd == 2) { // stdout / stderr
-            // len is already capped at SYS_WRITE_MAX above, so the
-            // bounce buffer is always big enough. Copying first (rather
-            // than reading through the user pointer as this used to) is
-            // what SMAP requires -- see vmm.h.
-            char kbuf[SYS_WRITE_MAX];
-            if (!vmm_copy_from_user(pml4, kbuf, buf_ptr, len)) {
-                klog_write("syscall: write() rejected -- invalid buffer pointer\n");
-                regs[14] = (uint64_t)-1; // simplified error indicator (no errno yet)
-            } else {
-                const char *buf = kbuf;
-                // stderr goes to the KERNEL LOG, never to the pipe.
-                //
-                // Redirecting stdout is a request to capture a program's
-                // OUTPUT; folding its diagnostics into the same stream
-                // corrupts whatever the parent was trying to read, which
-                // is exactly why Unix has two descriptors rather than
-                // one. The kernel log is the right sink for the second:
-                // it reaches the serial console and `dmesg` no matter
-                // who spawned the process or where its stdout went, so a
-                // GUI client with no terminal attached can still say
-                // something a test (or a person) can read -- the same
-                // path strace's lines take.
-                if (fd == 2) {
-                    for (uint64_t i = 0; i < len; i++) klog_putc(buf[i]);
-                    regs[14] = len;
-                } else {
-                    // A process spawned with SYS_SPAWN's stdout redirection
-                    // writes into a pipe instead of the console. That is
-                    // what lets a parent READ this output; without it every
-                    // child's stdout goes to whatever sink the console has
-                    // installed and the parent never sees it.
-                    int out_pipe = scheduler_stdout_pipe(scheduler_current_pid());
-                    if (out_pipe >= 0) {
-                        regs[14] = (uint64_t)pipe_write(out_pipe, buf, (uint32_t)len);
-                    } else {
-                        for (uint64_t i = 0; i < len; i++) vga_putc(buf[i]);
-                        regs[14] = len; // bytes written, back via RAX
-                    }
-                }
-            }
+            sys_do_write_console(regs, pml4, fd, buf_ptr, len);
         } else { // a real file, opened via SYS_OPEN
             int slot = fd - FD_BASE;
             // kind check: a socket fd (SYS_SOCKET) reaching here means
@@ -478,15 +661,7 @@ void syscall_dispatch(uint64_t *regs) {
                 // itself this round. The copy was a manual loop through
                 // the user pointer; it is the same copy, done the one way
                 // SMAP permits (vmm.h).
-                char tmp[SYS_WRITE_MAX + 1];
-                if (!vmm_copy_from_user(pml4, tmp, buf_ptr, len)) {
-                    klog_write("syscall: write() rejected -- invalid buffer pointer\n");
-                    regs[14] = (uint64_t)-1;
-                } else {
-                    tmp[len] = '\0';
-                    fs_write(fd_table[slot].file.name, tmp, 1); // 1 = append
-                    regs[14] = len;
-                }
+                sys_do_write_file(regs, pml4, slot, buf_ptr, len);
             }
         }
     } else if (rax == SYS_READ) {
@@ -506,25 +681,8 @@ void syscall_dispatch(uint64_t *regs) {
                 klog_write("syscall: read() rejected -- invalid buffer pointer\n");
                 regs[14] = (uint64_t)-1;
             } else {
-                // pipe_read() fills a kernel buffer, which is then
-                // handed out -- it cannot write into the user pointer
-                // itself once SMAP is on (vmm.h). len is capped at
-                // SYS_WRITE_MAX above.
-                char kbuf[SYS_WRITE_MAX];
-                int64_t n = pipe_read(pf->pipe.idx, kbuf, (uint32_t)len);
-                if (n >= 0 && !vmm_copy_to_user(pml4, buf_ptr, kbuf, (uint64_t)n)) {
-                    klog_write("syscall: read() rejected -- invalid buffer pointer\n");
-                    regs[14] = (uint64_t)-1;
-                } else if (n >= 0) {
-                    regs[14] = (uint64_t)n; // bytes, or 0 for EOF
-                } else if (!scheduler_block_current(regs, SCHED_WAIT_PIPE)) {
-                    // Nowhere to park (kernel code or the legacy path).
-                    // Report EOF rather than spinning: a caller that
-                    // cannot block must not be told "try again forever".
-                    regs[14] = 0;
-                } else {
-                    blocked = 1;
-                }
+                blocked = sys_do_read_pipe(regs, pml4, pf->pipe.idx,
+                                            buf_ptr, len);
             }
             goto read_done;
         }
@@ -561,16 +719,7 @@ void syscall_dispatch(uint64_t *regs) {
             // copied out -- it used to be handed the user pointer
             // directly, which SMAP forbids (vmm.h). len is capped at
             // SYS_WRITE_MAX above, so the bounce buffer always fits.
-            uint32_t off = fd_table[slot].file.offset;
-            char kbuf[SYS_WRITE_MAX];
-            uint32_t n = fs_read_range(fd_table[slot].file.name, off, kbuf, (uint32_t)len);
-            if (!vmm_copy_to_user(pml4, buf_ptr, kbuf, n)) {
-                klog_write("syscall: read() rejected -- invalid buffer pointer\n");
-                regs[14] = (uint64_t)-1;
-            } else {
-                fd_table[slot].file.offset += n;
-                regs[14] = n;
-            }
+            sys_do_read_file(regs, pml4, slot, buf_ptr, len);
         }
     read_done:
         ;
@@ -976,40 +1125,12 @@ void syscall_dispatch(uint64_t *regs) {
             klog_write("syscall: getrandom() rejected -- invalid user pointer\n");
             regs[14] = (uint64_t)-1;
         } else {
-            // Into a kernel buffer, then out -- krandom_bytes() must
-            // not write through a ring-3 pointer (vmm.h). Bounded by
-            // SYS_GETRANDOM_MAX, checked above.
-            unsigned char rbuf[SYS_GETRANDOM_MAX];
-            krandom_bytes(rbuf, (size_t)rsi);
-            vmm_copy_to_user(pml4, rdi, rbuf, rsi); // range validated just above
-            regs[14] = rsi;
+            sys_do_getrandom(regs, pml4, rdi, rsi);
         }
     } else if (rax == SYS_PROC_INFO) {
-        uint64_t pml4 = vmm_current_pml4();
-        struct proc_info info;
-        if (!vmm_validate_user_range(pml4, rsi, sizeof info)) {
-            klog_write("syscall: proc_info() rejected -- invalid user pointer\n");
-            regs[14] = 0;
-        } else if (!scheduler_proc_info((int)rdi, &info)) {
-            regs[14] = 0; // bad index
-        } else {
-            // Filled in a KERNEL struct and copied out, never written
-            // through the user pointer (vmm.h).
-            vmm_copy_to_user(pml4, rsi, &info, sizeof info); // validated above
-            regs[14] = 1;
-        }
+        sys_do_proc_info(regs, rdi, rsi);
     } else if (rax == SYS_SETTING) {
-        uint64_t pml4 = vmm_current_pml4();
-        struct setting_msg msg;
-        if (!vmm_validate_user_range(pml4, rdi, sizeof msg)) {
-            klog_write("syscall: setting() rejected -- invalid user pointer\n");
-            regs[14] = (uint64_t)-1;
-        } else {
-            vmm_copy_from_user(pml4, &msg, rdi, sizeof msg);
-            int ok = setting_dispatch(&msg);
-            vmm_copy_to_user(pml4, rdi, &msg, sizeof msg); // validated above
-            regs[14] = ok ? 0 : (uint64_t)-1;
-        }
+        sys_do_setting(regs, rdi);
     } else if (rax == SYS_SYSINFO) {
         uint64_t pml4 = vmm_current_pml4();
         struct sys_info info;
@@ -1369,4 +1490,3 @@ void syscall_dispatch(uint64_t *regs) {
     // isr_dispatch returns normally, isr_common's usual epilogue runs,
     // and ring 3 resumes right after its `int 0x80`.
 }
-#pragma GCC diagnostic pop

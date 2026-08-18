@@ -1275,6 +1275,74 @@ guess.*
       kernel's only list of these names) and reported the culprit as
       `#34`.
 
+- [x] ~~**`syscall_dispatch()` has a 4832-byte stack frame.**~~ FIXED
+      2026-08-18: ~864 bytes now, and the deepest measured path in the
+      kernel went from 8680 bytes to 4456 (53% of a kernel stack to
+      27%).
+
+      The cause was one local -- a 4 KiB `SYS_GETRANDOM_MAX` bounce
+      buffer -- not the dozen message structs everyone (including two
+      rounds of this session) assumed. Extracting those changed the
+      total by nothing, because GCC already overlapped them in the big
+      buffer's shadow. `-fstack-usage` said so in one command. See
+      `docs/decisions.md`.
+
+- [ ] **Settings: a ring-3 settings daemon (stage 2).** The remaining
+      half, and the one that needs infrastructure toy-os does not have.
+
+      **The gap it closes:** a ring-3 program still cannot register a
+      setting AT ALL -- the registry is a compiled-in table, so "which
+      settings exist" is a kernel-build-time question. Qualified names
+      make two programs *able* to own the same setting name; this is
+      what would let a program own a setting in the first place.
+
+      Moving the registry out matches every system except Windows
+      (Linux has no kernel settings registry -- sysctl is kernel
+      parameters only, user config is dconf/gsettings in userspace;
+      macOS has `cfprefsd`; Windows' configuration manager genuinely is
+      in ntoskrnl).
+
+      **What toy-os does not have yet, which is the real content of this
+      item:**
+
+      * R6. **Supervision.** Nothing restarts a dead process. A settings
+        daemon that dies takes every client's settings with it, and
+        `MAX_PROCS` reaping is currently whoever spawned it.
+      * R7. **Discovery.** A client has to find the daemon. There is no
+        name service; TWS is found by being the registered compositor,
+        which is a single role the kernel tracks -- a second such role
+        is a pattern to copy or a general mechanism to build.
+      * R8. **An IPC that is not TWP.** Pipes are parent/child only and
+        TWP is the window protocol. A request/response channel between
+        unrelated processes does not exist.
+      * R9. **Boot order.** Timezone, font size and keymap are read
+        before any process could be running. Either those stay kernel
+        settings (the split below) or the kernel must tolerate not
+        knowing them until the daemon is up.
+      * R10. **The kernel keeps what is kernel state.** `apply` for
+        timezone/font/keymap/cursor mutates live kernel subsystems and
+        cannot run in ring 3. That half stays a kernel registry --
+        sysctl's actual scope -- and the daemon owns program settings.
+
+      Sequencing: R6-R8 are general infrastructure that a printing
+      service, a name service or a session manager would want too, so
+      this is a milestone rather than a change. Stage 1 is independent
+      and worth doing first -- (namespace, name) is transport-agnostic,
+      so it is the same identity whichever side of the boundary the
+      registry ends up on.
+
+- [ ] **`strace`'s syscall-name table stops at `SYS_GETRANDOM`.**
+      Everything added since -- `SYS_PROC_INFO`, `SYS_SETTING`,
+      `SYS_SYSINFO`, `SYS_TICKS`, `SYS_KILL`, `SYS_SPAWN`, `SYS_PIPE`,
+      `SYS_WAITPID`, `SYS_WIN_REQUEST`, `SYS_MONOTONIC_NS`,
+      `SYS_FS_GENERATION`, `SYS_CRASHTEST` -- traces as an unnamed
+      number, which is most of the interesting ones. `SC_TABLE` in
+      `kernel/proc/strace.c` is a designated-initialiser array, so each
+      is one line plus its argument types. Noticed because
+      `kstack syscalls` reads the same table (deliberately -- it is the
+      kernel's only list of these names) and reported the culprit as
+      `#34`.
+
 - [ ] **`syscall_dispatch()` has a 4832-byte stack frame, on every
       syscall.** Found by `-Wframe-larger-than=1024` (added 2026-08-18)
       the moment it existed; it is by a wide margin the biggest consumer
