@@ -145,7 +145,7 @@ is the bookkeeping that makes any other kind of mapping possible.
 Needs phase 2: copy-on-write is what `fork()` actually is, and it is the
 only expensive part of it.
 
-### `fork
+### `fork()`/`exec()`-style process model
 **Needs:** Demand paging & shared memory (shared memory / copy-on-write is what makes `fork()` cheap rather than a full copy).
 
 - [x] ~~Hardware floating point / SSE for ring-3 processes~~ done
