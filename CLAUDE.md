@@ -3306,15 +3306,22 @@ its title and its position is its layer, so nothing is renumbered when
 one is inserted. Older `Milestone N` references in git history, the
 changelogs and some source comments resolve through the one-way legend
 at the end of `docs/roadmap-details.md`; do not add a number to a new
-one. `docs/roadmap.md` is **grouped into LAYERS, ground up** (foundation ->
-core kernel services -> storage -> devices -> system services ->
-runtime -> GUI -> tooling), with a **Ready now** table at the top of the
-things whose prerequisites are all met. Milestone NUMBERS are ids and do
-not change -- a number says when something was thought of, its layer
-says what it needs -- and a **Needs:** line appears only where a
-dependency is real and not obvious. The per-item reasoning lives in
-`docs/roadmap-details.md`, split out when the two together passed 4,300
-lines.
+one. **`docs/roadmap.md` IS ORDERED BY WHAT MUST BE BUILT FIRST** (restructured
+2026-08-18, from eight ground-up LAYERS). **Phases 1-4 are a dependency
+chain** -- the system runs itself, then memory, then the process model,
+then the userland runtime -- so reading top to bottom answers "what
+next". Below them are **tracks** (storage, GUI, hardware, tooling) which
+depend on neither the phases nor each other, ordered internally only;
+saying so is the honest part, since a total order would imply
+dependencies that do not exist.
+
+**EVERY ITEM IS ONE LINE.** No rationale, no measurements, no repros --
+those go to `docs/roadmap-details.md` under a heading of the same name,
+which is why a milestone's title must match in both files. A **Needs:**
+line appears at most once per milestone and only where the dependency is
+real and not obvious. When you tick an item, keep it to one line too:
+the file was 2,939 lines before this and nobody could see the order for
+the prose.
 
 Forward-looking "not built yet" items belong in `docs/roadmap.md`
 instead (already actively maintained, with completed items struck
