@@ -12,7 +12,7 @@ said, because the reason is the useful part.
 
 **A widget owns how it behaves. An app owns whether and how it looks.**
 Unless there's a concrete reason otherwise, new interaction logic goes
-in `apps/ui/`, and the app configures it and forwards events -- it does
+in the toolkit (`userland/ui/`), and the app configures it and forwards events -- it does
 not reimplement it.
 
 Concretely, when you add a control:
@@ -23,7 +23,7 @@ Concretely, when you add a control:
 - What the app gets to decide is exposed as **fields or setters**:
   visibility policy, colours, step sizes, and who owns an ambiguous
   event. Never by copying the widget's internals into the app.
-- Colours come *from* the caller, so `apps/ui/` stays theme-agnostic
+- Colours come *from* the caller, so the toolkit stays theme-agnostic
   (see `ui_primitives.c`). "Configurable" does not mean the widget
   reaches into `theme.h`.
 - If two apps need slightly different behaviour, that's a **flag on the
@@ -31,7 +31,7 @@ Concretely, when you add a control:
   exists exactly so Notepad can keep click-to-position while UI Demo
   pans.
 
-The worked example is `ui_textview` (`apps/ui/ui_textview.h`). Scrolling
+The worked example is the text view (`userland/ui/uui_textview.h`). Scrolling
 used to be every app's own job: Notepad, Terminal and UI Demo each
 carried the same ~20 lines of overflow check, strip reservation, track
 paging, thumb-grab bookkeeping and wheel arithmetic. Three copies meant
@@ -56,7 +56,7 @@ duplication.
 ## The three interaction states
 
 Every clickable control has them, and `enum ui_state`
-(`apps/ui/ui_primitives.h`) is this vocabulary in code so the two can't
+(`userland/ui/uui_widget.h`) is this vocabulary in code so the two can't
 drift apart.
 
 | State | When | Looks like |
@@ -127,7 +127,7 @@ placing a text cursor, focusing a field.
 
 The reference implementation is the title bar
 (`wm_update_title_btn_press()`), which has worked this way all along;
-`apps/control_panel.c` is the app-side version of the same shape.
+`userland/gui/system/cpanel.c` is the app-side version of the same shape.
 
 For a control in a `ui_button_group`, all of that is already done:
 **`ui_button_group_release()` returns the released button's code, or
@@ -399,7 +399,7 @@ message did not change" is satisfied by a dead indicator. Assert both.
 
 ## Keyboard: focus, and what a control owes it
 
-A window's widgets share one `ui_focus` ring (`apps/ui/ui_focus.h`).
+A window's widgets share one focus ring (`userland/ui/uui_route.h`).
 Tab and Shift-Tab cycle it, clicking a widget focuses it, and the
 focused widget gets every key that isn't Tab. **Route keys by focus, not
 by trying each widget in turn** -- the second arrangement works with one
@@ -459,7 +459,7 @@ feedback is noise.
 
 ## Hover
 
-`on_hover(win, cx, cy)` (`apps/gui_apps.h`) is delivered every tick
+`on_hover` (the toolkit's router, `userland/ui/uui_route.h`) is delivered every tick
 while the cursor is over a window's content with no button held, and
 once with `(-1, -1)` when it leaves so the app can clear its highlight.
 

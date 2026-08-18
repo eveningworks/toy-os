@@ -1,38 +1,32 @@
 # Roadmap
 
-Forward-looking "not built yet" items only -- what's already built lives in
-the git history files (full history) and `README.md` (what
-toy-os can do today), not here. See `docs/decisions.md` for *why* existing
+Forward-looking "not built yet" items only -- what is already built lives
+in `git log` and in `README.md` (what toy-os can do today), not here. See `docs/decisions.md` for *why* existing
 things are built the way they are. This list is always subject to change --
-milestones get reordered/reshaped as work actually happens, they're a plan,
-not a promise, and the planned versions below are the same kind of estimate.
+milestones get reordered and reshaped as work actually happens: this is a
+plan, not a promise.
 
 Style note (inspired by [brutal-org/brutal](https://github.com/brutal-org/brutal)'s
-roadmap): each milestone is just checkboxes and a few words. Full reasoning,
-phased test plans, and cross-references for every item are in **Details**
-at the bottom of this file, organized the same way.
+roadmap): each milestone is just checkboxes and a few words. The full
+reasoning, phased test plans and cross-references live in
+**[docs/roadmap-details.md](roadmap-details.md)**.
 
-**Every milestone heading carries a CLASS and a TARGET VERSION**, as
-`(class, target vX.Y.Z)`. The class is the subsystem it belongs to --
-kernel, memory, process, storage, gui, shell, security, runtime,
-hardware, system, tooling, docs -- so the list can be read by area
-rather than only in order.
+**Every milestone heading carries a CLASS** -- kernel, memory, process,
+storage, gui, shell, security, runtime, hardware, system, tooling, docs
+-- so the list can be read by area rather than only in order.
 
-**Several milestones share a target version, deliberately.** The old
-convention wrote "Milestone N (planned v0.N.0)", one milestone per minor
-release, and it rotted: v0.2.0 shipped Memory protection hardening, 4 and 15 together,
-and 15 landed while 3 through 14 had not started. A one-to-one mapping
-promises a schedule nobody follows. Grouping says the true thing -- a
-release is a coherent chunk of work, and here is which chunk each
-milestone is in.
+**No milestone carries a target version, and that is deliberate.** They
+used to, and before that the convention was one milestone per minor
+release ("Milestone N (planned v0.N.0)"). Both rotted the same way: the
+list said where work would land and then it landed somewhere else.
 
-**These are estimates and will move.** A target version is where a
-milestone is currently expected to land, not a commitment; the top of
-this file already says the whole list is a plan rather than a promise.
-Anything past v1.0.0 is written `v1.0.0+` rather than given an invented
-minor, because pretending to know the order that far out is how the last
-convention started lying. What ACTUALLY shipped in which version is
-recorded on the milestone itself once it happens.
+The versioning itself is unchanged -- semver with a `-dev` suffix during
+development, `tools/set_version.sh` to move it. What changed is who
+decides: **work lands on the current dev version, and the maintainer
+decides at release time what number to cut and what goes in it.** A
+roadmap that guesses that in advance is writing a schedule nobody
+signed up to. What ACTUALLY shipped in which version is recorded on the
+milestone once it happens.
 
 `v0.0.9` was tagged ahead of any milestone -- an early snapshot for
 testing, not milestone-complete (see `docs/decisions.md`'s
@@ -98,7 +92,7 @@ What every other layer stands on. Nothing here can be worked around from
 above: a process model without demand paging, or SMP without a scheduler
 that can block, is a different design rather than a smaller one.
 
-### Demand paging & shared memory (memory, target v0.6.0)
+### Demand paging & shared memory (memory)
 - [ ] Page-fault-driven mapping (allocate on first touch, not up front)
 - [ ] File-backed `mmap`
 - [ ] `MAP_SHARED` memory between two processes
@@ -116,7 +110,7 @@ that can block, is a different design rather than a smaller one.
 - [ ] A `pmap`-style command showing one process's mappings, which is
       also how any of this gets debugged
 
-### Swap / paging to disk (memory, target v1.0.0+)
+### Swap / paging to disk (memory)
 **Needs:** Demand paging & shared memory -- swap is demand paging with a backing store.
 
 - [ ] A swap-backed page reclaim path
@@ -127,7 +121,7 @@ that can block, is a different design rather than a smaller one.
 - [ ] Dirty-page writeback before eviction
 - [ ] Swap usage reported in `meminfo` and Task Manager
 
-### ACPI + real power/timer (hardware, target v1.0.0+)
+### ACPI + real power/timer (hardware)
 - [ ] ACPI table parsing (RSDP/MADT/FADT/HPET)
 - [ ] Real ACPI-based poweroff
 - [ ] **HPET as a third clocksource** -- needs the HPET table above, and
@@ -140,7 +134,7 @@ that can block, is a different design rather than a smaller one.
 - [ ] S3 suspend/resume
 - [ ] ACPI reboot (today's `reboot` uses the 8042 pulse)
 
-### UEFI boot (hardware, target v1.0.0+)
+### UEFI boot (hardware)
 - [ ] A UEFI stub/loader alongside the Multiboot2 path
 - [ ] GOP framebuffer acquisition (instead of GRUB's multiboot tag)
 - [ ] Memory map from `GetMemoryMap()` feeding `pmm.c`
@@ -158,7 +152,7 @@ that can block, is a different design rather than a smaller one.
 - [ ] A build that produces both a BIOS ISO and a UEFI-bootable image
 - [ ] CI booting both, or the second path rots
 
-### SMP (kernel, target v1.0.0+)
+### SMP (kernel)
 **Needs:** Scheduler: blocking, priorities, classes (a scheduler that can block), ACPI + real power/timer
 (ACPI, to enumerate CPUs and program the APIC).
 
@@ -179,7 +173,7 @@ The contract userland is written against. Changing it later means
 changing every program that uses it, which is why these come before
 anything that would.
 
-### Scheduler: blocking, priorities, classes (kernel, target v0.4.0)
+### Scheduler: blocking, priorities, classes (kernel)
 Today's scheduler is a preemptive round-robin over `procs[]` with the
 KERNEL CONTEXT as one of the rotation participants, no priorities, and
 **no blocking state at all**. Nothing can sleep until an event; it can
@@ -222,7 +216,7 @@ ring 3 deletes the scheduler's strangest case -- the kernel context as a
 rotation participant (`ROT_KERNEL`) -- and it would be a waste to design
 priorities and wait queues around a participant that is about to stop
 existing.
-### Signals & process control (process, target v0.5.0)
+### Signals & process control (process)
 - [ ] Basic signal delivery (kill-equivalent)
 - [ ] Default dispositions (terminate, ignore)
 - [ ] A `kill`/`ps`-style shell command
@@ -264,7 +258,7 @@ existing.
       tearing it down unconditionally
 - [ ] SIGCHLD on child exit
 
-### `fork()`/`exec()`-style process model (process, target v0.6.0)
+### `fork()`/`exec()`-style process model (process)
 **Needs:** Demand paging & shared memory (shared memory / copy-on-write is what makes
 `fork()` cheap rather than a full copy).
 
@@ -298,7 +292,7 @@ existing.
 - [ ] `brk`-style growable per-process heap (`SYS_SBRK` exists but the
       mapping behind it is fixed)
 
-### TTY / virtual terminals (process, target v0.5.0)
+### TTY / virtual terminals (process)
 **Needs:** Signals & process control -- a terminal without signals cannot deliver
 Ctrl-C, which is most of what makes it a terminal.
 
@@ -332,7 +326,7 @@ Ctrl-C, which is most of what makes it a terminal.
       away
 - [ ] Scrollback per virtual terminal, not one global console buffer
 
-### Shell pipes & job control (shell, target v0.5.0)
+### Shell pipes & job control (shell)
 **Needs:** Signals & process control (signals) and TTY / virtual terminals (the process groups
 job control suspends and resumes).
 
@@ -406,7 +400,7 @@ The filesystem is real and journalled already; what is left is
 durability and structure -- integrity checking, snapshots, mount points
 -- none of which the layers above can add for it.
 
-### Storage hardening (storage, target v0.4.0)
+### Storage hardening (storage)
 - [x] ~~Full multi-GB stress run (`stress 4200` / `stress 8192`)~~ -- done,
       both PASSED byte-for-byte on 2026-08-13 (4200 MB in 326 s, 8192 MB
       in 692 s), see the commit that added it
@@ -457,7 +451,7 @@ durability and structure -- integrity checking, snapshots, mount points
       checksums every inode at rest (verified on each read); TFS2's
       records still have no at-rest integrity check
 
-### Block integrity: checksums & scrubbing (storage, target v0.4.0)
+### Block integrity: checksums & scrubbing (storage)
 *Right after the inode layer, while that on-disk format is already
 open -- a checksum field wants to be designed in, not bolted on.*
 
@@ -486,7 +480,7 @@ open -- a checksum field wants to be designed in, not bolted on.*
 - [ ] Measure the write-path cost and record it, since every write now
       computes a checksum
 
-### TFS3: an inode layer (storage, target v0.9.0; filesystem shipped v0.2.0; three items open)
+### TFS3: an inode layer (storage; the filesystem shipped in v0.2.0, three items open)
 *Same correction as Kernel test harness above: the heading claimed completion
 with three boxes unchecked (unlink-while-open, raising `FS_PATH_MAX`,
 and the symlink implementation). TFS3 itself is done and is the default
@@ -542,7 +536,7 @@ probe-selected backend, with live switching via `fsformat` -- see
       chosen by magic probe everywhere -- kernel, `seed_disk.py`,
       `check_layout.py`)
 
-### Data journaling & snapshots (storage, target v0.9.0)
+### Data journaling & snapshots (storage)
 **Needs:** the TFS3 inode layer's remaining items -- snapshots are a property of
 the inode layer, not of the block layer under it.
 
@@ -565,7 +559,7 @@ the inode layer, not of the block layer under it.
 - [ ] `tools/tfs3_writer.py` able to read a snapshot from the host
 - [ ] Measure the write amplification this introduces, honestly
 
-### Real mount points (storage, target v0.9.0)
+### Real mount points (storage)
 - [ ] A mount table (path prefix -> backend), replacing vfs.c's single
       `g_fs`
 - [ ] Path resolution that picks a backend per-path
@@ -584,7 +578,7 @@ the inode layer, not of the block layer under it.
 - [ ] A tmpfs/RAM-disk backend as the cheapest possible second mount to
       test against (currently a backlog item)
 
-### Encryption at rest (security, target v0.9.0)
+### Encryption at rest (security)
 *After multi-user, which brings password hashing -- the key derivation
 this needs is the same machinery, and building it twice would be silly.*
 
@@ -691,7 +685,7 @@ Listed with the honest reason each is or isn't attractive.
       against 1280x720 for the others. Recorded so the option isn't
       re-investigated from scratch; the resolution cost rules it out
 
-### AHCI/SATA driver (hardware, target v1.0.0+)
+### AHCI/SATA driver (hardware)
 - [ ] PCI discovery + ABAR mapping
 - [ ] Port detection
 - [ ] Bring up one port
@@ -705,7 +699,7 @@ Listed with the honest reason each is or isn't attractive.
 - [ ] Port multiplier awareness (detect and report, not necessarily
       support)
 
-### NVMe / modern storage (hardware, target v1.0.0+)
+### NVMe / modern storage (hardware)
 - [ ] PCIe NVMe controller discovery
 - [ ] Admin queue + identify command
 - [ ] I/O submission/completion queues
@@ -720,7 +714,7 @@ Listed with the honest reason each is or isn't attractive.
 - [ ] A PRP list for transfers past one page, the equivalent of the PRD
       table `ata.c` already builds
 
-### USB (hardware, target v1.0.0+)
+### USB (hardware)
 - [ ] Host controller discovery
 - [ ] Bring up xHCI
 - [ ] Root port + device detection
@@ -735,7 +729,7 @@ Listed with the honest reason each is or isn't attractive.
 - [ ] Ordering against the PS/2 handoff, so both input paths can coexist
       during transition
 
-### Networking (hardware, target v1.0.0+)
+### Networking (hardware)
 **Needs:** a NIC driver, i.e. virtio, and a real GPU driver's virtio-net.
 
 - [ ] NIC driver (rtl8139 first)
@@ -757,7 +751,7 @@ Listed with the honest reason each is or isn't attractive.
 - [ ] A second NIC driver (e1000) to prove the driver interface isn't
       shaped around rtl8139
 
-### Sound (hardware, target v1.0.0+)
+### Sound (hardware)
 - [x] ~~PC speaker beep (simplest possible output)~~ -- done, see the commit that added it
 - [ ] AC97 or HDA PCI audio device driver
 - [ ] A basic mixer/volume syscall surface
@@ -771,7 +765,7 @@ Listed with the honest reason each is or isn't attractive.
 The first layer that is POLICY rather than mechanism, and the first that
 needs processes to outlive the thing that started them.
 
-### Init & service supervision (system, target v0.7.0)
+### Init & service supervision (system)
 **Needs:** Scheduler: blocking, priorities, classes (deterministic wakeups) and Signals & process control (a
 supervisor stops a service by signalling it). **Unlocks:** the ring-3
 settings daemon, and any future name service.
@@ -794,7 +788,7 @@ essentially those four used in anger.*
 - [ ] One real service to prove it, rather than a framework with no
       users -- the serial debug console is the obvious candidate
 
-### Multi-user & file permissions (security, target v0.7.0)
+### Multi-user & file permissions (security)
 *Wants the TFS3 inode layer's inode layer first -- per-file owner/mode bits
 belong on an inode, not on a path-keyed record.*
 
@@ -816,7 +810,7 @@ What a ring-3 program can assume exists. Every item above the GUI layer
 that wants an allocator, a FILE, or a shared library is waiting on this
 one.
 
-### Runtime + interop (runtime, target v0.9.0)
+### Runtime + interop (runtime)
 - [ ] Inter-process IPC (message passing)
 - [ ] **A real C library.** Partly started: `userland/rt/crt0.asm` and
       `userland/rt/sys.c` (libsys) landed with the ring-3 GUI work, so a
@@ -875,7 +869,7 @@ one.
 - [ ] A consistent `errno`-style error convention -- syscalls return
       0/-1//a count today with no shared vocabulary for *why*
 
-### Dynamic linking / shared libraries (runtime, target v0.9.0)
+### Dynamic linking / shared libraries (runtime)
 **Needs:** Runtime + interop (an allocator and a real ELF runtime) and
 Demand paging & shared memory (mapping a library into an existing address space).
 
@@ -894,7 +888,7 @@ Demand paging & shared memory (mapping a library into an existing address space)
 - [ ] Versioning, or a written decision to ignore it while there's one
       consumer of every library
 
-### UTF-8 migration (runtime, target v0.9.0)
+### UTF-8 migration (runtime)
 - [ ] UTF-8 decode/encode helpers in `string.c`
 - [ ] Console + `gfx_draw_string()` decoding multi-byte sequences
 - [ ] A font atlas keyed by codepoint rather than by byte
@@ -917,7 +911,7 @@ Demand paging & shared memory (mapping a library into an existing address space)
       apply it everywhere
 - [ ] A conversion tool for existing Latin-1 files on disk
 
-### A scripting language (runtime, target v1.0.0+)
+### A scripting language (runtime)
 **Needs:** Runtime + interop -- a scripting language with no allocator is an
 exercise in avoiding one.
 
@@ -939,7 +933,7 @@ exercise in avoiding one.
 - [ ] Use it for something real -- a startup script for Init & service supervision's
       init would prove more than any test suite
 
-### POSIX compatibility (runtime, target v1.0.0+)
+### POSIX compatibility (runtime)
 **Needs:** `fork()`/`exec()`-style process model, 10 and 24. POSIX is mostly a promise about
 those three.
 
@@ -970,7 +964,7 @@ Sits highest deliberately: the desktop is a ring-3 process now, so
 everything here is an ordinary program's problem rather than the
 kernel's.
 
-### The GUI in ring 3 (gui, target v0.3.0)
+### The GUI in ring 3 (gui)
 Run the desktop the way a real OS does: apps as ring-3 processes talking
 a windowing protocol, not kernel-space C compiled into `kernel.bin`.
 Chosen shape is **"kernel compositor, userspace-server-ready protocol"**
@@ -1295,7 +1289,7 @@ caller is a test.
       Tolerable while every binary is one we built; not once loading
       ring-3 apps is the normal path. See the Details entry.
 
-### A layout engine for the GUI (gui, target v0.8.0)
+### A layout engine for the GUI (gui)
 *Before the apps that would use it. Every widget position in `apps/` is
 hand-computed arithmetic today, which is why no window can be resized.*
 
@@ -1316,7 +1310,7 @@ hand-computed arithmetic today, which is why no window can be resized.*
 - [ ] Decide explicitly whether layout is immediate-mode (recomputed
       each frame, matching how the WM already draws) or retained
 
-### Runtime font loading & text metrics (gui, target v0.8.0)
+### Runtime font loading & text metrics (gui)
 **Needs:** Runtime + interop -- loading a font at runtime means allocating
 for it.
 
@@ -1340,7 +1334,7 @@ guess.*
       combining marks) needs UTF-8 migration's UTF-8 work first; this
       milestone stops at metrics and kerning for single-byte text
 
-### Desktop visual polish (gui, target v0.8.0)
+### Desktop visual polish (gui)
 - [ ] Basic image decoder (JPEG or similar)
 - [ ] Real wallpaper images
 - [x] ~~Desktop icon repositioning/dragging~~ -- done, see the commit that added it
@@ -1412,7 +1406,7 @@ guess.*
       window visibly. Window drags already animate per frame
       (`wm_update_drag_resize()`), so that half needs nothing new.
 
-### GUI clipboard + drag-and-drop (gui, target v0.8.0)
+### GUI clipboard + drag-and-drop (gui)
 - [ ] System clipboard (copy/paste text)
 - [ ] Paste into Notepad/Terminal
 - [ ] Drag-and-drop between windows
@@ -1421,7 +1415,7 @@ guess.*
 - [ ] A clipboard history ring
 - [ ] Standard keybindings (Ctrl+C/X/V) routed through the WM
 
-### Desktop productivity apps (gui, target v0.8.0)
+### Desktop productivity apps (gui)
 **Needs:** Runtime + interop (allocator, file I/O), A layout engine for the GUI (layout) and
 Runtime font loading & text metrics (fonts). This is the leaf the three of them exist for.
 
@@ -1449,7 +1443,7 @@ last because they gate nothing -- not because they matter least; this
 repo's test tooling has repeatedly been what turned a mystery into a
 measurement.
 
-### Kernel test harness (tooling, target v0.4.0; harness shipped v0.2.0; five items open)
+### Kernel test harness (tooling; the harness shipped in v0.2.0, five items open)
 *The heading used to be struck through as "completed 2026-08-13" while
 five boxes below it were unchecked. That is the milestone lying about
 itself: what shipped is the harness -- registration, `make test`, CI,
@@ -1532,7 +1526,7 @@ DONE here, so the strike came off rather than the boxes going on.*
       machine doing the comparison. See `CLAUDE.md`'s "Screenshots are
       a TESTING TOOL, not a deliverable".
 
-### Benchmark suite (tooling, target v0.4.0)
+### Benchmark suite (tooling)
 - [ ] A `bench` command covering disk, memory, scheduler, and rendering
 - [ ] Recorded baselines checked into the repo
 - [ ] Regression detection against those baselines (a threshold, like
@@ -1552,7 +1546,7 @@ DONE here, so the strike came off rather than the boxes going on.*
 - [ ] A stable machine description in the output (CPU, RAM, mode) so two
       recorded runs can be told apart
 
-### Fuzzing & property-based testing (tooling, target v0.5.0)
+### Fuzzing & property-based testing (tooling)
 *Placed right after the test harness and benchmark suite: it's the third
 leg of the same stool, and every milestone below it is easier to trust
 once this exists.*
@@ -1575,7 +1569,7 @@ once this exists.*
 - [ ] A corpus of past failures kept as regression tests
 - [ ] Run it in CI on a time budget, not to completion
 
-### Observability (tooling, target v0.7.0)
+### Observability (tooling)
 - [ ] Panic backtraces with function names, using the DWARF symbols the
       build already emits
 - [ ] A `/proc`-style read-only introspection tree (processes, memory,
@@ -1596,7 +1590,7 @@ once this exists.*
 - [ ] `strace` extended to follow a process's children once `fork()`
       exists
 
-### Crash reporting & postmortem debugging (kernel, target v0.6.0)
+### Crash reporting & postmortem debugging (kernel)
 *After signals, because SIGSEGV delivery is what a core dump hangs off.*
 
 - [ ] A real kernel backtrace on panic -- walk the frame pointers, not
@@ -1616,7 +1610,7 @@ once this exists.*
       page item; `uaddr_is_stack_guard()` is what names it, and
       `tools/faulttest_run.py` asserts the report
 
-### In-OS documentation (docs, target v0.7.0)
+### In-OS documentation (docs)
 *No hard prerequisites; placed by the shell cluster because that's what
 it serves. Small, and it makes everything above it discoverable.*
 

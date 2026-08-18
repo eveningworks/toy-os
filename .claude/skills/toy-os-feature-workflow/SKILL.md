@@ -2426,6 +2426,26 @@ CHECK the claim -- a confidently wrong premise is worse than no
 comparison. CLAUDE.md carries the full version, including where to look
 per area.
 
+**AND THE RULE THE WHOLE DAY'S DOC WORK CONVERGED ON: prefer facts that
+cannot go stale.** Everything removed as a maintenance burden was the
+same shape -- a pointer to a NUMBER that some other file had to keep
+true. Build numbers died with the changelog that indexed them; milestone
+numbers cost three renumberings and a translation table before becoming
+titles; target versions predicted releases nobody had committed to; test
+counts in prose were wrong within weeks, twice. Name the thing, not its
+index: "see `uui_route.c`'s pointer grab", not "see build 412". The safe
+targets are the ones addressed by title -- a file or symbol, a
+`docs/decisions.md` section, a named milestone in `docs/roadmap.md`, a
+rule in CLAUDE.md or in this skill -- because a title survives edits and
+reordering.
+
+And when history really is the reference, **cite the COMMIT** -- a short
+SHA is the one number that cannot go stale, since nothing has to be
+maintained for it to keep meaning what it meant. Pair it with what it
+did ("the poison-page fix, 978ebf7"), because a bare hash tells a reader
+nothing. CLAUDE.md carries the full version, including the one hazard
+(a history rewrite invalidates every SHA, and this repo has done one).
+
 **Two process notes, both mine and both worth avoiding:**
 
 - **A docs edit that replaces a slice by index can silently delete or

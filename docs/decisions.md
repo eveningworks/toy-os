@@ -1,13 +1,17 @@
 # Decisions
 
 A short, topic-indexed answer to "why does toy-os work this way?" for
-the handful of choices that come up again once code has grown around
-them. This is a pointer file, not a duplicate of the reasoning --
-`README.md`/`apps/README.md` cover architecture, and each entry below
-links to the git history (or source file) that has the full
-writeup. Update the pointer here when a decision changes; don't copy
-the reasoning itself out of the git history or a source comment into this
-file, or the two will drift.
+the choices that come up again once code has grown around them.
+`README.md`/`apps/README.md` cover architecture; this file covers the
+arguments.
+
+**WRITE THE REASONING HERE, IN FULL.** Entries used to be pointers into
+a changelog that held the real writeup -- that changelog was closed in
+August 2026 and deleted, and the entries that had leaned on it were the
+ones left stranded. An entry that cannot be understood without opening
+something else is not finished. Older entries still cite "the git
+history" or a named commit for implementation detail; that is a
+"see also", and a new entry should not need one.
 
 If you're a Claude session or a contributor and about to ask "wait, why
 is this built this way instead of the more obvious way?" -- check here
@@ -191,7 +195,7 @@ there when you add an entry, or the index quietly stops being one.
 - [The desktop's right-click quick-launch menu doesn't distinguish icons from empty space](#the-desktops-right-click-quick-launch-menu-doesnt-distinguish-icons-from-empty-space)
 - [`context_menu.h`'s items carry a `void *ctx`, but `start_menu.h`'s don't](#context_menuhs-items-carry-a-void-ctx-but-start_menuhs-dont)
 - [Click-to-position/selection lives in the shared `text_scrollback` widget, not a Notepad-only one](#click-to-positionselection-lives-in-the-shared-text_scrollback-widget-not-a-notepad-only-one)
-- [The file picker is a WM-level modal overlay (`apps/wm/file_picker.c`), not an `apps/ui/` widget](#the-file-picker-is-a-wm-level-modal-overlay-appswmfile_pickerc-not-an-appsui-widget)
+- [The file picker is a WM-level modal overlay (`userland/wm/file_picker.c`), not an `apps/ui/` widget](#the-file-picker-is-a-wm-level-modal-overlay-appswmfile_pickerc-not-an-appsui-widget)
 - [`struct window *` isn't a stable per-window identity across frames -- don't cache one](#struct-window--isnt-a-stable-per-window-identity-across-frames----dont-cache-one)
 - [Why the compositor uses one scene-wide damage region, not per-window exposure tracking](#why-the-compositor-uses-one-scene-wide-damage-region-not-per-window-exposure-tracking)
 - [The taskbar/tray falls back to full-screen repaint on purpose, not as an oversight](#the-taskbartray-falls-back-to-full-screen-repaint-on-purpose-not-as-an-oversight)
@@ -287,7 +291,7 @@ over *something*, and the syscall path already does. See
 
 ## `gui` output goes to a caller-supplied sink, not through a klog redirect
 
-`apps/wm/wm_debug.c` wrote its answers with 143 `klog_write()` /
+`userland/wm/wm_debug.c` wrote its answers with 143 `klog_write()` /
 `klog_printf()` calls, straight to whatever the serial console was
 connected to. Stage 3 needs that output to become a PAYLOAD, since the
 console now reaches the WM over the transport and a message carries
@@ -305,7 +309,7 @@ quietly moved them out of the serial log and into a reply nobody parses
 for them. A green suite would have stayed green while the diagnostics it
 depends on went missing.
 
-With an explicit `struct dbg_out` (`apps/wm/wm_debug.h`) only this
+With an explicit `struct dbg_out` (`userland/wm/wm_debug.h`) only this
 file's own output is captured and the kernel log is untouched. The cost
 is a mechanical 143-site diff and a sink parameter threaded through
 ~14 functions, which is a one-time price for a property that holds by
@@ -836,7 +840,7 @@ one that finally fixed it.
 
 `tools/iso_guard.py` refuses to launch a stale image, called from
 `vm.py` and `qmp_test.py`'s `launch_qemu_cmd()` -- the only two places
-anything in this repo starts a guest, so one check covers all 20 GUI
+anything in this repo starts a guest, so one check covers all 23 GUI
 tools plus `ktest_run.py` and `boot_smoke_test.py`.
 
 Two design points, both learned by getting them wrong first:
@@ -1417,7 +1421,7 @@ pre-v0.1.0 numbering, not `docs/roadmap.md`'s current Milestone 4)
 specifically so
 drivers could be reshuffled internally without every app needing an
 edit -- apps depend on the aggregated capability surface, never on a
-driver header or `inb`/`outb` directly. `apps/wm/wm.h` is a second,
+driver header or `inb`/`outb` directly. `userland/wm/wm.h` is a second,
 parallel boundary for GUI-specific `window_*` helpers, deliberately
 not folded into `kapi.h` (not every app is a GUI app). See CLAUDE.md's
 "Conventions worth knowing before editing" for the enforcement rule.
@@ -1425,7 +1429,7 @@ not folded into `kapi.h` (not every app is a GUI app). See CLAUDE.md's
 ## `widgets.h`/`theme.h` stay minimal on purpose
 
 Both only gained their current primitives once a *second* real caller
-needed them (the commit \""Splitting wm.c into apps/wm/, and a
+needed them (the commit \""Splitting wm.c into userland/wm/, and a
 shared widgets.h/widgets.c module"\" for widgets.h's origin, and the
 scrollbar-phase builds for how `text_scrollback` grew from
 Terminal-only to shared with Notepad). Deliberately not
@@ -1434,11 +1438,11 @@ header's own top comment before adding to it.
 
 ## The window manager is one event loop, not decoupled components
 
-`apps/wm/` is split into `wm.c`/`wm_input.c`/`wm_render.c` by concern
+`userland/wm/` is split into `wm.c`/`wm_input.c`/`wm_render.c` by concern
 for *readability*, but shares state through `wm_internal.h`'s
 `extern`s rather than hiding it behind accessor functions -- it's
 still one tightly-coupled event loop, the same thing the single
-pre-split `wm.c` was (the commit \""Splitting wm.c into apps/wm/..."\"),
+pre-split `wm.c` was (the commit \""Splitting wm.c into userland/wm/..."\"),
 just spread across files. Deliberate: this is one component's internal
 organization, not a boundary between independently-reasoned-about
 components the way `kapi.h`/`wm.h` are. See `wm_internal.h`'s top
@@ -1641,7 +1645,7 @@ of carrying migration code for formats nothing still produces.
 **Superseded -- was "Esc always exits the whole GUI desktop," see below
 for what changed and why.**
 
-Through **Build 502**, `apps/wm/wm.c`'s event loop checked `key == 27`
+Through **Build 502**, `userland/wm/wm.c`'s event loop checked `key == 27`
 (Esc) and unconditionally left the window manager BEFORE routing the
 keypress to whichever window was focused -- no GUI app's `on_key`
 callback ever saw an Esc press. That hardcoded shortcut is gone: exiting
@@ -1659,7 +1663,7 @@ same conflict) is still true today -- Esc STILL isn't safe to hand to a
 per-window "cancel" handler unless/until something adds its own
 WM-level claim on it, which nothing has yet:
 
-`apps/wm/wm.c`'s event loop no longer touches Esc at all -- so no GUI
+`userland/wm/wm.c`'s event loop no longer touches Esc at all -- so no GUI
 app's `on_key` callback receives it any differently than before, it's
 just not a WM-level exit anymore either. Found the hard way while
 wiring the CLI/GUI text editor's exit key to Esc (**Build 377**):
@@ -1993,7 +1997,7 @@ close that: give Calculator its own private mouse-tracking (poll
 button state directly in `calculator_draw()` somehow), or add a real
 event to the window manager's app-callback contract. Went with the
 latter -- `gui_apps.h` gained `on_press(win, cx, cy)`/`on_release(win)`,
-driven from `apps/wm/wm_input.c`'s `wm_update_drag_resize()` the same
+driven from `userland/wm/wm_input.c`'s `wm_update_drag_resize()` the same
 way `content_dragging`/`on_drag` already work, with a matching
 `content_pressed` index in `wm_internal.h`. Reasoning: this codebase
 already has one precedent for "click vs. hold-and-drag needs its own
@@ -2015,7 +2019,7 @@ way. Worth separating two things that question conflates: the
 *insulation boundary* (apps not reaching into WM internals) already
 existed -- every `apps/*.c` file only ever includes `wm/wm.h` (the
 public `window_*` API) and `apps/ui/ui.h` (was `widgets.h`), never `wm_internal.h` (that's
-`apps/wm/*.c`'s own private `extern` state). What Brutal's button.c
+`userland/wm/*.c`'s own private `extern` state). What Brutal's button.c
 actually demonstrates is different: a widget as a self-contained
 *object* that owns its state (`press`/`over` flags) and reacts to
 events, versus toy-os's old style of `widgets.h` being pure draw
@@ -2144,7 +2148,7 @@ the commit that added it, and note the harness half of it:
 ## GUI testing asks the kernel, rather than measuring a screenshot
 
 The serial debug console gained a `gui` command family
-(`apps/wm/wm_debug.c`) that reports window rects, Start-menu geometry,
+(`userland/wm/wm_debug.c`) that reports window rects, Start-menu geometry,
 hit-test results and the WM's own state, and can open windows and inject
 clicks/drags/keys. It works while the desktop is up because
 `debug_console_poll()` is already called from `wm_run()`'s idle loop.
@@ -2176,7 +2180,7 @@ consumed one per frame. Every control in this GUI arms on press and
 commits on release (`docs/gui-guidelines.md`), which only behaves
 normally if press and release land on different frames.
 
-It lives in `apps/wm/` because it reads the window table;
+It lives in `userland/wm/` because it reads the window table;
 `kernel/core/debug_console.c` only recognises the word `gui` and routes
 it, the same direction that file already reaches `apps/` for `sh`.
 
@@ -2305,7 +2309,7 @@ eight; it took a `#GP` in ring 3 to find that. See the git history.
 Both apps built on `ui_button_group` used to act from `gui_apps.h`'s
 `on_click`, via a `ui_button_group_click()` that hit-tested a point and
 returned that button's code. `on_click` fires on button-**DOWN** (see
-`apps/wm/wm_input.c`'s dispatch, and `gui_apps.h`'s own warning), so
+`userland/wm/wm_input.c`'s dispatch, and `gui_apps.h`'s own warning), so
 both Calculator's keys and Notepad's `Open...`/`Save As...` committed
 the instant the mouse went down: press, drag away, release, and the
 digit was still entered and the file picker still opened. Confirmed by
@@ -2337,7 +2341,7 @@ the same frame -- no visible confirmation the click landed, just an
 instant jump to whatever opened. Adding a brief "you clicked this" flash
 needed the menu to stay open and visibly highlighted for a short time
 *after* the action already ran, which a single-threaded `hlt`-loop WM
-(see `apps/wm/wm.c`'s top comment) can't do with an actual blocking
+(see `userland/wm/wm.c`'s top comment) can't do with an actual blocking
 sleep -- that would freeze mouse/keyboard handling for every window,
 not just the menu, for the duration.
 
@@ -2403,7 +2407,7 @@ describes for files in general). Adding `ui_textbox.c`/`.h` as a third
 pair made a flat `apps/` start to mix two different kinds of file
 (whole *apps* like `calculator.c`/`notepad.c`, and small *widget*
 building blocks they both depend on) -- the same signal that split
-`apps/wm/` out earlier, applied one level up. `apps/ui/` follows that
+`userland/wm/` out earlier, applied one level up. `apps/ui/` follows that
 exact precedent: its own `Makefile` wildcard/rule (`UI_C`/`UI_OBJ`,
 mirroring `WM_C`/`WM_OBJ`), files included via a relative path
 (`"ui/ui.h"`) from `apps/`'s own files.
@@ -2540,7 +2544,7 @@ saves real work for. See the commit that added it.
 
 ## The desktop's right-click quick-launch menu doesn't distinguish icons from empty space
 
-`apps/wm/desktop.c`'s `desktop_handle_right_click()` always opens the
+`userland/wm/desktop.c`'s `desktop_handle_right_click()` always opens the
 same full quick-launch menu (one row per `gui_app_registry` entry)
 regardless of whether the click landed on a specific icon -- a
 per-icon menu (e.g. "Open" / a future "Rename"/"Properties") was
@@ -2566,7 +2570,7 @@ signature carries a `void *ctx` the caller stashes that data in (a
 `gui_app` pointer, or a small `static int` holding a window index) and
 gets back unchanged when a row is selected. Not applied retroactively
 to `start_menu.h` since nothing there needs it and the two aren't a
-shared abstraction to begin with (see `apps/wm/start_menu.h`'s own top
+shared abstraction to begin with (see `userland/wm/start_menu.h`'s own top
 comment on why it isn't a general "menu" type). See the commit that added it.
 
 ## dmesg coverage: log from the one-shot call site, not the hot function itself
@@ -2965,7 +2969,7 @@ server", "the ring-3 widgets". They are now:
 | Name | What | Where | Analogy |
 |---|---|---|---|
 | **TWP** -- Toy Window Protocol | the client<->server message contract | `kernel/include/abi/win_proto.h` | Wayland, the X11 protocol |
-| **TWS** -- Toy Window Server | the compositor implementing it | `kernel/proc/win_server.c` + `apps/wm/wm_client.c` | Mutter, Weston, Xorg |
+| **TWS** -- Toy Window Server | the compositor implementing it | `kernel/proc/win_server.c` + `userland/wm/wm_client.c` | Mutter, Weston, Xorg |
 | **Toykit** | the client toolkit an app programs against | `userland/ui/` | GTK, Qt, Win32 |
 
 **Why three and not one.** The protocol is deliberately meant to outlive
@@ -3125,7 +3129,7 @@ seed time and the XKB layout data itself is never embedded or
 committed (`seed/sync/` is gitignored, pure regenerable build output)
 -- more like depending on `gcc` than bundling third-party data.
 
-## The file picker is a WM-level modal overlay (`apps/wm/file_picker.c`), not an `apps/ui/` widget
+## The file picker is a WM-level modal overlay (`userland/wm/file_picker.c`), not an `apps/ui/` widget
 
 `apps/ui/` widgets are content-relative: they draw and hit-test
 against coordinates local to the window that owns them, and a widget
@@ -3301,7 +3305,7 @@ explicitly on every commit, not assumed).
 ## `struct window *` isn't a stable per-window identity across frames -- don't cache one
 
 Caught live during Milestone 1 phase 3's QMP testing (wiring `wm_run()`
-to poll a pending write, `apps/wm/wm.c`/`wm.h` -- see the commit that added it): `apps/notepad.c` originally cached the `struct
+to poll a pending write, `userland/wm/wm.c`/`wm.h` -- see the commit that added it): `apps/notepad.c` originally cached the `struct
 window *` passed to `notepad_open()` once, in a static, and reused it
 later (across many frames) to register a steppable write against.
 Wrong -- `bring_to_front()` (`wm.c`) reorders `windows[]` (a fixed
@@ -3478,7 +3482,7 @@ no address to re-negotiate when the transport changes.
 The kernel/WM split follows the same line: `kernel/proc/win_server.c`
 owns the memory (ids, buffers, mappings, teardown -- things `apps/`
 cannot reach, since `kernel/include/kernel` is off its include path),
-`apps/wm/wm_client.c` owns presentation (window list, chrome, z-order,
+`userland/wm/wm_client.c` owns presentation (window list, chrome, z-order,
 input routing), and they meet at a registered `struct win_server_ops`
 -- the same registry pattern as `display.h`'s `display_driver`.
 
@@ -4282,7 +4286,7 @@ The window manager used to redraw everything -- `desktop_draw()`'s full
 clear plus every window/taskbar/menu -- on any scene change at all,
 including a once-a-second clock tick. Milestone 19's "real" dirty-rect
 compositor replaces that with a scene-level damage-region accumulator
-(`wm_damage_rect()`, `apps/wm/wm_render.c`) that's deliberately
+(`wm_damage_rect()`, `userland/wm/wm_render.c`) that's deliberately
 separate from `gfx.c`'s existing pixel-level dirty-rect tracking
 (`dirty_mark()`/`gfx_present()`'s blit-only-the-touched-bbox
 optimization) -- that layer already existed and still does its job one
@@ -4362,7 +4366,7 @@ intersect the frame's damage box, rather than calling them and letting
 `window_intersects_damage()`, consulted in `wm_render_frame()`'s
 per-window loop only when a damage box was actually reported that
 frame. This is exactly the kind of change that turns a latent bug into
-a visible one: `bring_to_front()` (`apps/wm/wm.c`) had only ever
+a visible one: `bring_to_front()` (`userland/wm/wm.c`) had only ever
 damaged the newly-promoted window's rect, never the
 previously-frontmost window's -- but that window's titlebar tint
 (focused blue vs. unfocused gray) changes on every z-order swap too.
@@ -4384,7 +4388,7 @@ correctly on every swap
 
 ## The taskbar/tray falls back to full-screen repaint on purpose, not as an oversight
 
-`apps/wm/wm_tray.c`'s `tray_damage()` deliberately does NOT call
+`userland/wm/wm_tray.c`'s `tray_damage()` deliberately does NOT call
 `wm_damage_rect()` -- it just sets `redraw_pending`, relying on
 `wm_render_frame()`'s full-screen fallback, the same as menus/dialogs
 (see the compositor entry above). This looks like it's leaving an easy
@@ -4433,7 +4437,7 @@ arranged it.
 The moment something else declares damage in the same frame, the
 fallback inverts. The frame becomes damage-limited, the overlay is
 clipped away, and whatever was on screen before it stays there.
-`wm_render_frame()` (`apps/wm/wm_render.c`) now discards the damage box
+`wm_render_frame()` (`userland/wm/wm_render.c`) now discards the damage box
 outright while any overlay is open, which makes the documented
 behaviour actually hold instead of depending on a coincidence.
 
@@ -4460,7 +4464,7 @@ have and doesn't otherwise want.
 
 Making it a WM overlay was the other candidate, and is what a real combo
 box does -- Windows' popup escapes its window entirely. It was rejected
-because those overlays are `apps/wm/` internals with WM-level modality,
+because those overlays are `userland/wm/` internals with WM-level modality,
 and a widget in `apps/ui/` reaching into them would invert the layering
 this directory is built on (see `apps/ui/ui_button.h`). The cost is
 real and is stated in the header: `wm_render_frame()` clips each app's
@@ -4510,7 +4514,7 @@ ancestor reported a *different* bug on each run of the same script.
 derived from frame rate is a guess; the queue depth is a fact. The
 commands themselves stay asynchronous and non-blocking -- they are
 dispatched from inside the very loop that drains them, so waiting has
-to happen on the host side (see `apps/wm/wm_debug.h`).
+to happen on the host side (see `userland/wm/wm_debug.h`).
 
 ## Modifier keys ride alongside the key, they don't re-encode it
 
@@ -5196,7 +5200,7 @@ pixel write is rejected until the clip is changed or cleared. It used to
 do the opposite -- treat non-positive as "clear the clip", full screen
 drawable -- while `gfx.h` described that same case as "(nothing draws)".
 The one caller that can produce an empty rect
-(`apps/wm/wm_render.c`'s `clip_to_window_content()`, intersecting a
+(`userland/wm/wm_render.c`'s `clip_to_window_content()`, intersecting a
 window's content with the frame's damage box) was written against the
 words, not the behaviour, so a frame whose damage grazed a window's
 border without reaching its content handed that app's `on_draw()` an
@@ -5768,7 +5772,7 @@ building exactly that and watching one check go red.
 
 ## Esc doesn't close a window; Alt+F4 does, and it is a WM shortcut rather than an app key
 
-`apps/wm/wm.c`'s key loop and `wm_request_close()`; landed with the
+`userland/wm/wm.c`'s key loop and `wm_request_close()`; landed with the
 menu bar's follow-up, see the git history.
 
 Six ring-3 apps used to quit on Esc, which was always a papercut and
@@ -5822,7 +5826,7 @@ needs a not-responding timeout plus a way to kill the process. See
 
 ## Not-responding is a PING, not a close timeout -- because "refused" and "wedged" look identical to a timer
 
-`abi/win_proto.h`'s `WIN_EV_PING`/`WIN_REQ_PONG`, `apps/wm/wm_client.c`'s
+`abi/win_proto.h`'s `WIN_EV_PING`/`WIN_REQ_PONG`, `userland/wm/wm_client.c`'s
 liveness section, `scheduler_kill()`. See the git history.
 
 The obvious build is a timer: send `WIN_EV_CLOSE`, and if no
@@ -6948,7 +6952,7 @@ binary is the desktop* into the kernel. Instead a compositor
 deregistering -- cleanly, by `SYS_KILL`, or by faulting, all the same
 path -- makes `win_server.c` unmap the framebuffer, drop the client
 windows and resume the VGA console, which is what `wm_run()` already
-does for itself today (`apps/wm/wm.c`'s `vga_resume()` on exit, and the
+does for itself today (`userland/wm/wm.c`'s `vga_resume()` on exit, and the
 `vga_sink` hazard commented just above it). The milestone's exit
 criterion is that killing the WM is *survivable*, not that it is
 invisible; making it invisible first would hide whether it is
@@ -6962,9 +6966,9 @@ owns today is `debug_console_poll()`.
 
 The reason it exists is a dependency nobody had written down: the serial
 debug console had no owner. It was polled from whichever loop happened
-to be running -- the physical shell's key wait, `apps/wm/wm.c`'s event
+to be running -- the physical shell's key wait, `userland/wm/wm.c`'s event
 loop, a long `cat`, the demo's timer -- and the WM's copy is the
-load-bearing one, because all 20 GUI test tools and their 280 checks
+load-bearing one, because all 23 GUI test tools and their ~300 checks
 arrive over that console while the desktop is up. Moving the WM to ring
 3 (stage 4) removes that loop from ring 0 and takes the whole test wire
 with it, silently, in the direction that reads as "the tools are
@@ -7275,7 +7279,7 @@ NEXT legitimate section.
 in a preemptible kernel: the *caller* can honour it perfectly and still
 lose the buffer, because a ring-3 process can make a file-reading
 syscall while a kernel-side parse is still walking it.
-`apps/wm/cursor_theme.c` did exactly that, with a comment reasoning that
+`userland/wm/cursor_theme.c` did exactly that, with a comment reasoning that
 its parse happens before anything else touches the filesystem -- true of
 the function, and not of the machine.
 
@@ -7341,7 +7345,7 @@ mapping it in -- because ring 0 holding a rasteriser's mutable state on
 behalf of a ring-3 client is the half-migration the whole plan is shaped
 to avoid. R6 then said `SYS_SBRK` covers the WM's allocation needs.
 
-R6 was measured against `apps/wm/`'s existing call surface, where the
+R6 was measured against `userland/wm/`'s existing call surface, where the
 only allocation is growing `windows[]`, and it was wrong twice for the
 same reason -- a back buffer is not in that surface, because in ring 0
 it is `gfx.c`'s 8 MiB of `.bss`.

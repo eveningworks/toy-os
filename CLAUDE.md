@@ -537,7 +537,7 @@ technical conventions below:
   `debug_console_poll()`, and the reason it exists is that the serial
   debug console had no owner at all: it was polled by whichever loop
   happened to be running, and the WM's copy is the load-bearing one,
-  because all 20 GUI tools and their 280 checks arrive over that
+  because all 23 GUI tools and their ~300 checks arrive over that
   console. **Don't add a bare `debug_console_poll()` to a new waiting
   loop** -- call `scheduler_idle()`, so the WM's move to ring 3 deletes
   a call rather than the capability. Two things it deliberately does
@@ -803,7 +803,7 @@ technical conventions below:
   `SYS_SYSINFO` field on purpose: the desktop polls it ONCE PER FRAME
   to decide whether to re-read `/usr/wm/desktop/`, and a free poll is
   the entire reason the counter exists instead of a directory scan.
-  It says something changed, never what. Its load-bearing point: all 20 GUI test tools drive the WM
+  It says something changed, never what. Its load-bearing point: all 23 GUI test tools drive the WM
   through `wm_debug.c`'s `gui` commands over the KERNEL's serial
   console, so the 280 checks that prove the desktop works have to move
   with it, and that gets its own stage BEFORE the WM moves.
@@ -1272,6 +1272,51 @@ technical conventions below:
   its own keys to be unwieldy sharing `toyos.conf` (a GUI app with a
   dozen preferences, say) should get its own `/etc/<name>.conf` instead
   of cramming into the shared one just to match convention.
+- **PREFER FACTS THAT CANNOT GO STALE. Do not cite a number that some
+  other file has to keep true.** Every maintenance burden this repo has
+  deleted was the same shape: a pointer to a number.
+
+  - Build numbers ("see build 379") died with the changelog they indexed.
+  - Milestone NUMBERS needed three renumberings and a translation table;
+    milestones are named now, and a title does not drift.
+  - Target versions on roadmap items predicted a release nobody had
+    committed to, and were removed.
+  - Test counts in prose ("192 GUI checks across 14 tools") were wrong
+    within weeks -- twice.
+
+  **What IS safe to point at**, and these four carry most of the load:
+  a named file or symbol in the code; a named section in
+  `docs/decisions.md` (topic-indexed, which is why it gets read); a
+  named milestone in `docs/roadmap.md`; a named rule in this file or in
+  `.claude/skills/toy-os-feature-workflow/`. All of them are addressed
+  by TITLE, so they survive edits, moves and reordering -- a section can
+  be rewritten and the pointer still lands. Prefer these to prose that
+  restates the same reasoning a third time.
+
+  The replacement in each case is the same: name the THING, not its
+  index. A comment says "see `uui_route.c`'s pointer grab", not "see
+  build 412". A doc says "the GUI-in-ring-3 milestone", not "M41". If a
+  count genuinely helps, say what it measures and accept it as a
+  snapshot ("~300 checks across 23 tools" beats an exact number nobody
+  will re-measure), or leave it out.
+
+  **When history genuinely IS the reference, cite the COMMIT.** A short
+  SHA is the one number here that cannot go stale -- nothing has to be
+  maintained for `978ebf7` to keep meaning what it meant. Pair it with
+  what it did, because a bare hash tells a reader nothing: "the
+  poison-page fix (978ebf7)", not "see 978ebf7". `git show <sha>` and
+  `git log --grep` do the rest.
+
+  The one hazard: a history rewrite invalidates every SHA, and this repo
+  has done one (scrubbing a real name out of committer metadata). If
+  another is ever needed, that is the cost to weigh -- which is still
+  far cheaper than a file of numbers somebody has to keep true.
+
+  This is not a rule against cross-references -- `docs/decisions.md`
+  and source comments point at each other constantly and that works,
+  because both ends are named things. It is a rule against
+  cross-references whose correctness depends on someone remembering to
+  update a third file.
 - **A comment's length should track how SURPRISING the code is and how
   dangerous it is to change -- not how much history it accumulated.**
   This codebase leans hard on comments and mostly earns it: the note
