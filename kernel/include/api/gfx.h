@@ -142,7 +142,7 @@ uint8_t gfx_luminance(uint32_t color);
 // window-content/damage intersection got that window's entire
 // on_draw() painted unclipped. See gfx.c's comment in
 // gfx_set_clip_rect() itself.) First real caller: the window
-// manager's damage-region compositor (apps/wm/wm_render.c, see
+// manager's damage-region compositor (userland/wm/wm_render.c, see
 // docs/decisions.md) -- restricts a repaint to the screen region that
 // actually needs it instead of always touching everything.
 void gfx_set_clip_rect(int x, int y, int w, int h);

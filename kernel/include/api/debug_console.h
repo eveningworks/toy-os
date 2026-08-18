@@ -32,7 +32,7 @@ void debug_console_init(void);
 // call (via serial_try_getc()), echoing/buffering/dispatching as
 // needed, and returns immediately either way. Meant to be called from
 // an existing idle-wait loop that already wakes on every interrupt
-// (see keyboard_getchar()'s hlt loop and apps/wm/wm.c's own event
+// (see keyboard_getchar()'s hlt loop and userland/wm/wm.c's own event
 // loop, the two call sites this is actually wired into) -- never spins
 // or blocks waiting for more input itself.
 void debug_console_poll(void);

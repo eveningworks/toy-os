@@ -47,7 +47,7 @@
 #define KEY_F10               0xA4
 
 // F4 -- exists for Alt+F4, which CLOSES the focused window. That is a
-// window-manager shortcut (apps/wm/wm.c intercepts it before routing
+// window-manager shortcut (userland/wm/wm.c intercepts it before routing
 // keys to the focused window), the way it is in Windows and KDE, not a
 // key an app handles. Matched as KEY_F4 plus KEY_MOD_ALT rather than
 // given a combined KEY_ALT_F4 code the way the Shift+arrow family was:
@@ -66,7 +66,7 @@
 // Left and right Super send the SAME code. No desktop distinguishes
 // them, and the driver already makes that call for left/right Ctrl.
 //
-// Like Alt+F4, this is a WINDOW-MANAGER shortcut: apps/wm/wm.c consumes
+// Like Alt+F4, this is a WINDOW-MANAGER shortcut: userland/wm/wm.c consumes
 // it before keys are routed to the focused window, so it never reaches
 // an app. A full-screen app cannot swallow the Start menu.
 #define KEY_SUPER             0xA6

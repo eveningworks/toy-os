@@ -6,9 +6,9 @@
 // lines mixing every command category together (see CHANGELOG.md for
 // the build this happened in).
 //
-// Mirrors apps/wm/wm_internal.h's pattern deliberately: this is still
+// Mirrors userland/wm/wm_internal.h's pattern deliberately: this is still
 // fundamentally one component (the shell), split by concern for
-// readability the same way wm.c was split into apps/wm/, not a real
+// readability the same way wm.c was split into userland/wm/, not a real
 // boundary the way kapi.h/wm.h are -- see docs/decisions.md's "window
 // manager is one event loop, not decoupled components" entry, which
 // applies here unchanged. State is shared through plain `extern`s, not

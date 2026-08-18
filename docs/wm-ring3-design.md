@@ -7,11 +7,13 @@ GUI tools pass against it. Stages 0-3 landed 2026-08-16, 4a on
 hardware cursor is switched off on the only driver that has one and
 moved to M27a), and 4b-4d over 2026-08-17/18.**
 
-**What is left is deletion, not development:** `apps/wm/` is still in
-the tree and still reachable with `make iso KCMDLINE="gui0"`, because a
-fallback nothing can reach is a guess. Removing both is stage 4c's
-remaining item, and until then **a fix to one copy of the WM must be
-made to the other.**
+**MILESTONE 41 IS COMPLETE (2026-08-18).** `apps/wm/` and the `gui0`
+flag are deleted -- ~10,400 lines, including `apps/ui/`'s widget set and
+`apps/gui_apps.c`, since the WM was their only caller. There is one
+window manager again, it is a ring-3 process, and the "make every fix
+twice" hazard that ran for the last two days is over. `apps/ui/` is down
+to `ui_scrollback.{c,h}`, which the KERNEL's `edit` command draws with
+and which therefore could not go with the rest.
 
 The last blocker was not the WM at all: three test tools spawned their
 own stand-in compositor, which is free while the role is unclaimed and a

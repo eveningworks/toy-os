@@ -31,9 +31,9 @@
 #include "keyboard_config.h"
 #include "apps.h"
 #include "demo.h"
-#include "gui.h"
 #include "scheduler.h"
 #include "process.h"  // process_guard_page_init() -- the legacy loader's stack
+#include "gui3.h"     // gui3_main() -- the desktop, a ring-3 process
 #include "debug_console.h"
 #include "krandom.h"      // entropy source -- krandom_init()
 #include "reloc.h"        // the image's own relocation table -- kernel_relocate()
@@ -282,7 +282,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // half here and hands the rest to the desktop; see apps/demo.h.
     if (demo_requested() && demo_load("/usr/wm/demo.script") > 0) {
         if (demo_run_cli()) {
-            gui_main();
+            gui3_main();
         }
     }
 

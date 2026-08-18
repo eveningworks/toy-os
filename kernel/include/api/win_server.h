@@ -21,20 +21,20 @@
 //
 // Whoever registers below owns the PRESENTATION half -- where the
 // window sits, what its title bar says, when it is composited, who has
-// focus. Today that is the kernel-space window manager (apps/wm/);
+// focus. Today that is the kernel-space window manager (userland/wm/);
 // under Milestone 41's plan it can later be a ring-3 display server
 // without this file changing, because everything crossing the boundary
 // is already a typed message (abi/win_proto.h) rather than a call into
 // WM internals.
 //
 // The dependency deliberately points WM -> kernel: syscall.c must not
-// include apps/wm/wm.h (apps/ is a peer of the kernel here, not a
+// include userland/wm/wm.h (apps/ is a peer of the kernel here, not a
 // library beneath it), so the WM registers itself as it starts. Same
 // shape as kernel/include/kernel/display.h's display_driver registry,
 // and for the same reason -- the implementation swaps, the callers
 // don't notice.
 //
-// This header lives in api/ rather than kernel/ because apps/wm/ is the
+// This header lives in api/ rather than kernel/ because userland/wm/ is the
 // thing that implements it, and kernel/ is deliberately off apps/'s
 // include path (see kernel/include/README.md). That is the documented
 // promotion trigger -- a header starts in kernel/ and moves here once
@@ -214,7 +214,7 @@ int win_server_window_count(int pid);
 // request is a hole, not a feature.
 //
 // These live in api/ next to the rest of this header rather than in a
-// second one: `apps/wm/` is the intended caller from stage 4 onward,
+// second one: `userland/wm/` is the intended caller from stage 4 onward,
 // and splitting one subsystem's declarations across two headers to
 // delay that by a stage would cost more than it protects.
 

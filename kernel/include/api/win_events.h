@@ -10,7 +10,7 @@
 //
 // Ring 3 reaches these queues through SYS_WAIT_EVENT/SYS_POLL_EVENT and
 // never touches this header. The one thing that does is the window
-// server (apps/wm/wm_client.c), which is why this lives in api/ rather
+// server (userland/wm/wm_client.c), which is why this lives in api/ rather
 // than kernel/ -- see win_server.h's note on the same promotion.
 // Nothing else should be pushing events at a client.
 

@@ -4,7 +4,7 @@
 // does.
 // **TWS -- the Toy Window Server**, memory half. See
 // abi/win_proto.h for TWP, the protocol it serves, and
-// apps/wm/wm_client.c for the presentation half.
+// userland/wm/wm_client.c for the presentation half.
 #include "win_server.h"
 #include "vmm.h"
 #include "pmm.h"

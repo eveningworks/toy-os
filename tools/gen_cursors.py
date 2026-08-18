@@ -9,7 +9,7 @@ the two things people actually change (the shape and the colour) stay
 independent. Same split X11's image+mask cursors have always had.
 
 Why a generator rather than six hand-written files: the default theme's
-arrow already exists as two anti-aliased C arrays in apps/wm/wm_render.c
+arrow already exists as two anti-aliased C arrays in userland/wm/wm_render.c
 and the three resize shapes already exist as procedural loops in the
 same file. Re-typing either by hand is exactly the kind of transcription
 this repo has been bitten by, so the arrow is EXTRACTED from the source
@@ -31,7 +31,7 @@ import re
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-WM_RENDER = os.path.join(REPO, "apps", "wm", "wm_render.c")
+WM_RENDER = os.path.join(REPO, "userland", "wm", "wm_render.c")
 OUT_ROOT = os.path.join(REPO, "data", "cursors")
 
 # One hex digit per pixel, so a 13-wide shape is 13 characters wide and

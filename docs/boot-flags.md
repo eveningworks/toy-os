@@ -21,7 +21,6 @@ position. Pick names that cannot be substrings of each other.
 | `rammeter` | Draws a live physical-frame and kernel-heap readout in the top-right corner of the desktop, refreshed once a second. Debug instrument, off by default. | `kernel/lib/rammeter.c` |
 | `live` | Forces the GRUB-module filesystem image to be mounted even when a real ATA disk is present. Without it the live image is used only when there is no disk. Only meaningful on `toy-os-live.iso`. | `kernel/fs/vfs.c` |
 | `demo` | Boots straight into the scripted tour in `data/wm/demo.script` instead of to a shell. What `make demo-iso` bakes in. | `apps/demo.c` |
-| `gui0` | Start the RING-0 desktop (`apps/wm/`) instead of the default ring-3 one. Kept only while that code is still in the tree -- a fallback nothing can reach is a guess. `gui3` is still accepted as a no-op alias for the default. | `apps/gui.c` |
 | `faultinject` | Arms the kernel's DELIBERATE fault table (`SYS_CRASHTEST`, `kernel/core/crashtest.c`), so the Crash Test app's Ring 0 buttons actually panic the machine. Off by default: a crash hole has no business being open on an ordinary boot, and the app shows the buttons either way and reports the refusal. |
 
 ## Setting one

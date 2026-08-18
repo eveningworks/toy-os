@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """tools/gui_debug.py -- talk to toy-os's serial debug console, and to
-its `gui` command family in particular (see apps/wm/wm_debug.c).
+its `gui` command family in particular (see userland/wm/wm_debug.c).
 
 WHY THIS EXISTS
 ---------------

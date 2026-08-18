@@ -26,7 +26,7 @@
 // might come from separate, non-adjacent pmm regions.
 //
 // Not interrupt-safe or reentrant, matching this kernel's existing
-// single-threaded assumptions elsewhere (see apps/wm/wm.c's top
+// single-threaded assumptions elsewhere (see userland/wm/wm.c's top
 // comment) -- nothing here is called from an ISR, and the scheduler
 // only ever preempts between ring-3 processes, never kernel-mode code
 // mid-kmalloc. If a future caller ever needs kmalloc from an interrupt

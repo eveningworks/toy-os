@@ -1,6 +1,5 @@
 // See ui_scrollback.h for the design writeup.
 #include "ui_scrollback.h"
-#include "ui_primitives.h" // CURSOR_BAR_W
 #include "kapi.h"
 
 static struct scrollback_cell cell_at(const struct text_scrollback *tb, int i) {

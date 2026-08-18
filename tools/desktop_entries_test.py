@@ -259,7 +259,7 @@ def main():
     #
     # The check is INVERTED rather than deleted, because "it defers"
     # becoming untestable is not the same as it not mattering: the guard
-    # in apps/wm/wm.c is still there and still correct, and this now
+    # in userland/wm/wm.c is still there and still correct, and this now
     # pins the property that makes it unreachable. If a kernel-space app
     # ever comes back, this check goes red and points straight at the
     # guard rather than at a mystery rebinding bug months later.

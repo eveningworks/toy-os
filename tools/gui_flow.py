@@ -7,7 +7,7 @@ Every prior GUI-testing session has independently worked out "where is
 the Start button, where does row N of the Start menu land, how far
 apart are the rows" by trial and error against screenshots. This module
 bakes that math in once, from the same geometry the kernel itself uses
-(see apps/wm/start_menu.c's `geometry()`): item_h = char cell height +
+(see userland/wm/start_menu.c's `geometry()`): item_h = char cell height +
 6px, menu_y = (screen_h - taskbar_h) - item_h * total_items, rows
 stacked top to bottom, apps first then system actions below a divider.
 
@@ -85,7 +85,7 @@ START_BTN = (50, 703)  # inside the taskbar's Start button, safely off any edge
 APP_ORDER = ["About", "Control Panel", "Task Manager",
              "Calculator", "Notepad", "Terminal",
              "Shapes", "UI Demo"]
-# Keep in sync with apps/wm/start_menu.c's wm_system_actions[] order.
+# Keep in sync with userland/wm/start_menu.c's wm_system_actions[] order.
 SYSTEM_ACTIONS = ["Exit to shell", "Shutdown"]
 
 # Deriving the menu's top Y from SCREEN_H - TASKBAR_H - ITEM_H*total_items
@@ -147,7 +147,7 @@ class GuiFlow:
         `.name` string)."""
         if name not in APP_ORDER:
             raise ValueError(f"gui_flow: {name!r} not in APP_ORDER {APP_ORDER} -- "
-                              "update APP_ORDER to match apps/gui_apps.c's registry")
+                              "update APP_ORDER to match userland/wm/gui_apps.c's registry")
         self.open_start_menu()
         self.click_menu_row_by_index(APP_ORDER.index(name), settle=settle, _menu_already_open=True)
 

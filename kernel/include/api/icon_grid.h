@@ -2,7 +2,7 @@
 #define ICON_GRID_H
 
 // A small reusable icon-grid geometry + drag-to-reposition helper.
-// First caller: the desktop icon grid (apps/wm/desktop.c); built as a
+// First caller: the desktop icon grid (userland/wm/desktop.c); built as a
 // standalone widget (not desktop.c-local) so a future file manager's
 // icon view (docs/roadmap.md Milestone 13) can reuse the same cell
 // math and drag session instead of re-deriving it.
@@ -22,7 +22,7 @@
 // storage, labels, and glyphs, and decide their own persistence (or
 // none).
 //
-// The drag session mirrors apps/wm/wm_input.c's window-dragging shape
+// The drag session mirrors userland/wm/wm_input.c's window-dragging shape
 // exactly (its `dragging`/`drag_off_x`/`drag_off_y`): mouse-down arms
 // it with the pixel offset from the item's top-left to the grab point
 // (so the item tracks the cursor instead of snapping its corner under

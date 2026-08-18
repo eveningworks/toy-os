@@ -1,23 +1,22 @@
-// `gui3` -- start the RING-3 desktop (Milestone 41's switchover).
+// `gui` -- start the desktop, which is a ring-3 process.
 //
-// The ring-0 `gui` calls wm_run() directly and the desktop IS the kernel
-// for as long as it is up. This spawns `/bin/wm/system/toywm` instead
-// and waits for it, which is what R7 calls "spawn-and-wait" -- the shell
-// blocks exactly as it did before, but what it is blocking on is a
-// process.
+// It spawns `/bin/wm/system/toywm` and waits for it: the shell blocks
+// exactly as it did when the window manager was kernel code, but what
+// it is blocking on is a process. That is R7's "spawn-and-wait", and it
+// is the whole of what the kernel knows about the desktop now.
 //
-// **A SEPARATE COMMAND, deliberately, and only for as long as it takes
-// to trust it.** Every GUI test tool reaches the WM over the serial
-// debug console, and the ring-3 leg of that channel could not be
-// exercised before this existed (see docs/wm-ring3-design.md) -- so
-// flipping `gui` outright would have turned all 315 checks red at once
-// with no way left to ask the desktop what went wrong. With both
-// commands present, the ring-0 desktop stays the one under test while
-// the ring-3 one is brought up beside it.
+// The waiting is what makes the death path work as a user sees it: when
+// the desktop exits -- normally, killed (`kill 1`), or faulting -- this
+// returns and the caller redraws the text console. The kernel has
+// already revoked the framebuffer grant and asked any client windows to
+// close by then (kernel/proc/win_server.c's compositor_gone()).
 //
-// This file goes away with `apps/wm/`: once `gui` spawns the process,
-// there is nothing for a second command to mean.
-#include "gui.h"
+// The file is still named gui3.c because the command it used to
+// implement was `gui3`, kept while the ring-0 desktop existed beside
+// it. `apps/wm/` is gone; `gui3` survives only as an alias in
+// apps/apps.c so notes and scripts that ask for the ring-3 desktop by
+// name keep selecting what they meant.
+#include "gui3.h"
 #include "kapi.h"
 #include "apps.h"
 

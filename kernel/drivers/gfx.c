@@ -105,7 +105,7 @@ static void dirty_mark_rect(int x, int y, int w, int h) {
 // restricts what CAN be touched, before drawing happens. Not active by
 // default (clip_active == 0 means the full screen, same as no clip
 // rect ever having been set). See gfx_set_clip_rect()'s doc comment in
-// gfx.h for the first real caller (apps/wm/wm_render.c's damage-region
+// gfx.h for the first real caller (userland/wm/wm_render.c's damage-region
 // compositor) -- clipping writes this way means the dirty-rect box
 // above only ever grows to cover the active clip, not whatever a full
 // unclipped repaint would have touched, which is the whole point.
@@ -351,11 +351,11 @@ int gfx_set_double_buffered(int enabled) {
 // one write), but this loop touches real/MMIO framebuffer memory, which is
 // the expensive part, and used to do it for all width*height pixels every
 // single frame regardless of how much (if anything) changed. The window
-// manager (apps/wm/) still draws whole windows/widgets into the back
+// manager (userland/wm/) still draws whole windows/widgets into the back
 // buffer when their content actually changes -- this only shrinks the
 // final blit, it doesn't make drawing itself region-aware. The one caller
 // that gets the full benefit of both halves is the cursor-only-moved case
-// (see wm_render_cursor_move() in apps/wm/wm_render.c): a handful of
+// (see wm_render_cursor_move() in userland/wm/wm_render.c): a handful of
 // pixels touched, a handful of pixels blitted, instead of a full frame.
 void gfx_present(void) {
     if (!double_buffered) return;
@@ -505,7 +505,7 @@ static inline uint8_t blend_channel(uint8_t bg_c, uint8_t fg_c, uint8_t alpha) {
 // back via gfx_get_pixel() first, same per-channel math gfx_draw_char()
 // already uses for font anti-aliasing, just exposed as its own function
 // for any caller that wants a soft edge without being a glyph. First
-// real caller: the mouse cursor sprite (apps/wm/wm_render.c), which
+// real caller: the mouse cursor sprite (userland/wm/wm_render.c), which
 // needed the same "baked alpha mask, blended per-pixel" approach the
 // font already uses -- see docs/decisions.md. `alpha` 0 leaves the
 // pixel untouched, 255 fully replaces it with `color`.

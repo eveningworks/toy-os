@@ -10,7 +10,7 @@
 //
 // Named because it is the piece meant to outlive its implementation.
 // TWS (the Toy Window Server, kernel/proc/win_server.c +
-// apps/wm/wm_client.c) is one implementation of it and is scheduled to
+// userland/wm/wm_client.c) is one implementation of it and is scheduled to
 // become a ring-3 process; Toykit (userland/ui/) is the client library
 // apps use instead of speaking it by hand. A protocol you can name is
 // one you can version -- see docs/decisions.md.

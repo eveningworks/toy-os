@@ -674,7 +674,7 @@ So when you change anything that draws:
   used to be assumed, and the assumption held only while nothing else
   declared damage in the same frame.
 - **Then check it, don't reason about it:** `gui damage verify on`
-  (see `apps/wm/wm_debug.c`) renders every frame twice, once
+  (see `userland/wm/wm_debug.c`) renders every frame twice, once
   damage-limited and once unrestricted, and reports any pixel that
   differs. Run it while exercising whatever you changed. It found four
   real bugs in its first minute, four more once a systematic sweep

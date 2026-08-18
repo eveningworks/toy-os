@@ -2,7 +2,7 @@
 // rather than a hardcoded sequence.
 #include "demo.h"
 #include "shell.h"
-#include "wm/wm_debug.h"
+#include "win_debug.h" // `gui` steps travel as protocol messages
 #include "kapi.h"
 #include "multiboot.h"
 
@@ -148,13 +148,15 @@ void demo_gui_tick(void) {
         return;
     }
 
-    // Everything else is a `gui` subcommand, dispatched through exactly
-    // the path the GUI test tools use (apps/wm/wm_debug.c). Reusing it
-    // means the demo drives the desktop the same way the GUI suite already
-    // do, rather than through a second injection mechanism that could
-    // behave differently.
+    // Everything else is a `gui` subcommand, dispatched over the window
+    // TRANSPORT -- exactly the path the debug console and every GUI test
+    // tool use. It used to call wm_debug_dispatch() directly, which only
+    // worked while the window manager was ring-0 code linked into this
+    // image; it is a process now, so the demo talks to it the same way
+    // everything else does rather than through a second mechanism that
+    // could behave differently.
     char cmd[DEMO_LINE_MAX];
     if (*arg) k_snprintf(cmd, sizeof cmd, "%s %s", line, arg);
     else      k_strlcpy(cmd, line, sizeof cmd);
-    wm_debug_dispatch(cmd);
+    win_debug_command(cmd);
 }

@@ -233,7 +233,7 @@ int keyboard_getchar_mods(uint8_t *out_mods) {
         // physical console (see docs/decisions.md for the honest
         // limitation: it does NOT get polled while a blocking command,
         // the GUI's own event loop, or a ring-3 process is running --
-        // apps/wm/wm.c's loop covers the GUI case separately).
+        // userland/wm/wm.c's loop covers the GUI case separately).
         vga_cursor_tick();
         // The kernel's idle work (scheduler.h) -- the serial debug
         // console, today. The cursor tick and the present around it are
@@ -305,7 +305,7 @@ void keyboard_read_line(char *buf, unsigned int len) {
 // The modifiers held RIGHT NOW, for a caller with no key event to read
 // them off -- a mouse click, which carries no modifier state of its own.
 // The desktop's Ctrl/Shift-drag is the first caller (rubber-band
-// selection, apps/wm/desktop.c).
+// selection, userland/wm/desktop.c).
 //
 // Deliberately a live sample, not a latched value: it answers "what is
 // held at this instant", which is the question a click has. That makes

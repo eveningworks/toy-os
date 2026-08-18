@@ -16,7 +16,7 @@
 // file -- and the compositor owns the BEHAVIOUR, which is the same
 // split every other setting here has.
 //
-// This is the file `apps/wm/cursor_theme.c` used to hold these in, and
+// This is the file `userland/wm/cursor_theme.c` used to hold these in, and
 // its comment there already predicted the move: "registering an apply
 // callback here would have to be undone then". It was right.
 //

@@ -46,7 +46,7 @@ void editor_handle_key(struct text_scrollback *tb, const char *path, int key,
                         int *out_should_exit, char *status, unsigned int status_max) {
     // F3 is the real, documented exit key (stands in for nano's
     // Ctrl+X) -- Esc is also accepted as a convenience, but ONLY
-    // reaches here from the physical console: apps/wm/wm.c intercepts
+    // reaches here from the physical console: userland/wm/wm.c intercepts
     // Esc globally to leave the whole GUI desktop before any window's
     // on_key callback ever sees it (see wm.c's own comment at that
     // check), so a Terminal-embedded editor session can never receive

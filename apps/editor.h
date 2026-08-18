@@ -1,7 +1,7 @@
 #ifndef EDITOR_H
 #define EDITOR_H
 
-#include "ui/ui.h" // struct text_scrollback
+#include "ui/ui_scrollback.h" // struct text_scrollback
 
 // A small nano/pico-style full-screen text editor. Two surfaces share
 // the same editing core (load/save/cursor-move/insert/delete, all just
@@ -28,7 +28,7 @@
 // Ctrl-key chording yet (see keyboard.h) -- adding that was explicitly
 // scoped out in favor of a smaller keyboard-driver surface for this
 // pass. Esc also exits, but only from the physical console -- it's
-// NOT the documented/advertised key because apps/wm/wm.c intercepts
+// NOT the documented/advertised key because userland/wm/wm.c intercepts
 // Esc globally to leave the whole GUI desktop before any window's
 // on_key callback ever runs, so a Terminal-embedded editor session can
 // never actually receive it. F3 was picked specifically because it

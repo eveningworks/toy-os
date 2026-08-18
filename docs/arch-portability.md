@@ -38,7 +38,7 @@ path fixes, not a rewrite):
 - `kernel/fs/` -- the whole filesystem stack: `tfs3.c` + `tfs.c` (the
   two backends) + `vfs.c` (the probe/dispatch layer) + `fs_test.c`.
   (Line counts rot -- run `wc -l` for today's numbers.)
-- `apps/wm/*` (1,592 lines, split across `wm.c`/`wm_input.c`/
+- `userland/wm/*` (1,592 lines, split across `wm.c`/`wm_input.c`/
   `wm_render.c`/`desktop.c`/`context_menu.c`/`start_menu.c`) -- the
   window manager, aside from one bare `hlt` in `wm.c`'s idle wait
   (trivially wrapped, see below).
@@ -64,7 +64,7 @@ first.
 **Trivial (config/constant swap, hours not days):**
 - `kernel/proc/elf.c`'s `EM_X86_64` check -- one more machine-type
   constant.
-- The one bare `hlt` in `apps/wm/wm.c` and `scheduler.c` -- both just
+- The one bare `hlt` in `userland/wm/wm.c` and `scheduler.c` -- both just
   need a `cpu_idle()` wrapper (`hlt` on x86, `wfi` on RISC-V) behind a
   header, same insulation `kapi.h` already does for everything else.
 
@@ -234,7 +234,7 @@ arch to actually exist yet.
    existing `vfs.c`, then virtio-input (replacing PS/2) behind the
    existing keyboard/mouse consumer code in `apps/`. Each of these can
    land independently and be smoke-tested on its own.
-6. **GUI/WM bring-up on the second arch.** By this point `apps/wm/*`
+6. **GUI/WM bring-up on the second arch.** By this point `userland/wm/*`
    and everything above `kapi.h` should need zero changes -- this phase
    is mostly "does it actually work," i.e. QMP-style GUI testing
    against the new arch's QEMU machine type, not new code.

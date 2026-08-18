@@ -96,7 +96,7 @@ def app_names(dbg):
 
     This is the property that makes the tool survive the apps changing:
     `gui apps` lists what open_app() can actually launch, so a new entry
-    in apps/gui_apps.c is covered the first time this runs afterwards.
+    in userland/wm/gui_apps.c is covered the first time this runs afterwards.
     """
     out = dbg.send("gui apps")
     names = []

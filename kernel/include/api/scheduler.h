@@ -120,7 +120,7 @@ void scheduler_demo_run(void);
 // caller must poll scheduler_poll(pid, ...) to learn when it finishes
 // and collect its exit code. This is the public, non-blocking
 // counterpart to elf_run_from_fs() the roadmap's Terminal async-spawn
-// item needed -- see apps/wm/wm.c's wm_run() poll loop (Milestone 1
+// item needed -- see userland/wm/wm.c's wm_run() poll loop (Milestone 1
 // phase 4b) for the first real caller.
 int scheduler_spawn(const char *path, const char *args);
 
@@ -308,7 +308,7 @@ int scheduler_wake(int reason, int64_t value);
 // exists is Milestone 41. Every GUI test tool drives the desktop over
 // that console, and the console has never had an owner: it was polled
 // from whichever loop happened to be running -- the physical shell's
-// key wait, apps/wm/wm.c's event loop, a long `cat`, the demo's timer.
+// key wait, userland/wm/wm.c's event loop, a long `cat`, the demo's timer.
 // The WM's copy is the one that matters, because when the WM becomes a
 // ring-3 process (stage 4) ring 0 loses that loop, and with it the wire
 // all 271 GUI checks arrive on -- silently, and in the direction that

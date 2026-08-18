@@ -229,42 +229,33 @@ technical conventions below:
   to the core's keymap and both get it. Ctrl/Alt reach apps as control
   codes and an ESC prefix, terminal-style, NOT as `KEY_*` codes (see
   `keyboard.h`'s "Ctrl and Alt" comment and `docs/decisions.md`).
-- **`apps/wm/wm.h` is a second, peer-level boundary**, not part of
+- **`userland/wm/wm.h` is a second, peer-level boundary**, not part of
   `kapi.h` -- it's the GUI-specific equivalent, included by GUI apps
   for `window_*` helpers. `kapi.h` never includes `wm/wm.h` or
   `gui_apps.h`.
-- **`apps/ui/ui.h`** (the umbrella include for `ui_primitives.h`'s
-  `widget_hit`/`widget_button`, `ui_scrollback.h`, `ui_scrollbar.h`,
-  `ui_button.h`/`ui_button_group.h`, `ui_textbox.h`,
-  `ui_radio_list.h`, `ui_icon_grid.h`
-  -- and `ui_focus.h`, the per-window keyboard-focus ring a widget
-  joins by exporting one `ui_focus_ops` table. **This directory is
-  SHRINKING**: M41's stage 0 deleted the checkbox, dropdown, listbox
-  and text view once the GUI apps moved to ring 3, and what is left is
-  what the WM itself draws with, retiring with it in stage 4. A new
-  widget belongs in `userland/ui/` unless the WM needs it. The popup
-  rule the dropdown documented still holds for its ring-3 twin
-  (`uui_dropdown_draw_popup()` LAST, since drawing is immediate-mode
-  and z-order is call order). **Route keys through
-  `ui_focus_key()`, never by trying each widget in turn**: the first one
-  tried swallows every key it recognises, which left a listbox next to a
-  dropdown unreachable from the keyboard)
-  and **`apps/theme.h`** (`THEME_*` named colors) are small apps-internal
-  helpers, same peer-level pattern as `wm/wm.h`. Both are deliberately
-  minimal on purpose -- see their top comments before adding to them.
-  Add a new widget primitive or theme color only once a second real
-  caller needs it, not preemptively. **And once a widget exists, its
-  BEHAVIOUR belongs to it, not to the apps** -- input handling,
-  hit-testing and geometry live in `apps/ui/`, and an app configures
-  (colours, visibility policy, step sizes, who owns an ambiguous event)
-  and forwards events rather than reimplementing them. That's a standing
-  rule with an escape hatch, not an absolute: see
-  `docs/gui-guidelines.md`'s "Behaviour belongs to the component"
-  section for when not to, and `apps/ui/ui_textview.h` for the worked
-  example -- scrolling used to be copy-pasted into three apps, and the
-  third copy shipped a scrollbar that drew and did nothing. (`apps/widgets.h`/`.c` -- the
-  single file all of `apps/ui/` was split out of -- no longer exists;
-  see `docs/decisions.md`.)
+- **`apps/ui/` IS DOWN TO ONE WIDGET, and the GUI toolkit is
+  `userland/ui/`.** M41's stage 0 deleted the checkbox, dropdown,
+  listbox and text view; stage 4c deleted everything the WM drew with
+  (buttons, primitives, focus ring, scrollbar, textbox, radio list, icon
+  grid) along with `userland/wm/` itself. What is left is
+  `ui_scrollback.{c,h}` -- `struct text_scrollback`, which the KERNEL's
+  own `edit` command draws with (`apps/editor.c`) and which therefore
+  cannot move to ring 3. **A new widget goes in `userland/ui/`. There is
+  no longer any such thing as a kernel-side one.** `apps/theme.h`
+  survives for the same kind of reason: `apps/completion.c` colours the
+  shell's tab-completion with it.
+  The rules those widgets taught still apply to their ring-3 twins and
+  are documented there: draw a popup LAST (drawing is immediate-mode, so
+  z-order is call order), and **route keys through the focus ring, never
+  by trying each widget in turn** -- the first one tried swallows every
+  key it recognises, which left a listbox next to a dropdown unreachable
+  from the keyboard. So does the standing rule that **a widget's
+  BEHAVIOUR belongs to it, not to the app**: input handling, hit-testing
+  and geometry live in the widget, and an app configures and forwards
+  rather than reimplementing. See `docs/gui-guidelines.md`'s "Behaviour
+  belongs to the component" for the escape hatch, and
+  `docs/decisions.md` for why `apps/widgets.h`/`.c`, the single file all
+  of this was split out of, no longer exists either.
 - **`userland/` is split by ROLE, and the build derives things from it
   -- adding a program is a `.c` file and nothing else.** `rt/` (crt0,
   libsys, stack_chk, link.ld), `ui/` (the GUI toolkit -- ugfx, utheme,
@@ -452,7 +443,7 @@ technical conventions below:
 - **The GUI stack has names -- use them.** **TWP** (Toy Window
   Protocol, `abi/win_proto.h`) is the client<->server contract;
   **TWS** (Toy Window Server, `kernel/proc/win_server.c` +
-  `apps/wm/wm_client.c`) implements it; **Toykit** (`userland/ui/`) is
+  `userland/wm/wm_client.c`) implements it; **Toykit** (`userland/ui/`) is
   the client toolkit an app programs against -- roughly Wayland, its
   compositor, and GTK. Three names rather than one because the protocol
   is meant to outlive this server (M41 moves TWS to ring 3). Symbol
@@ -464,7 +455,7 @@ technical conventions below:
   one implementation rather than the only path. Two things follow. The
   `gui` debug commands are protocol messages now
   (`WIN_REQ_DEBUG_CMD`/`WIN_EV_DEBUG_OUT`), so `debug_console.c` does
-  NOT call into `apps/wm/` any more -- add a new `gui` subcommand in
+  NOT call into `userland/wm/` any more -- add a new `gui` subcommand in
   `wm_debug.c` as before, but write its output through its `struct
   dbg_out` sink, never `klog_write()` (a stray klog call still reaches
   the serial port, so it silently vanishes from the reply). And the
@@ -482,10 +473,10 @@ technical conventions below:
   syscalls are done too (and went further than the plan asked -- a
   SETTINGS REGISTRY behind `SYS_SETTING`, not raw `etc_config` access),
   and the ring-3 allocator
-  turned out NOT to be a blocker: `apps/wm/` allocates nothing, and the
+  turned out NOT to be a blocker: `userland/wm/` allocates nothing, and the
   claim that it did was a comment pointing at a since-deleted file.
   **Every prerequisite is now complete, and stage 4's own REQUIREMENTS
-  are written up as R1-R9** (2026-08-17), measured from `apps/wm/`'s
+  are written up as R1-R9** (2026-08-17), measured from `userland/wm/`'s
   call surface rather than estimated. **Stage 4a is DONE: R1, R4 and R5
   are BUILT and R3 was REMOVED** -- the hardware cursor is switched off
   on the only driver that has one (`vmsvga`'s `g_cursor_enabled = 0`,
@@ -495,7 +486,7 @@ technical conventions below:
   you reach the modesetting driver at all** -- the default `std`
   adapter has neither modesetting nor a cursor plane, same shape as
   `--cpu max` for SMEP/SMAP. Read that before touching
-  anything in `apps/wm/` with the migration in
+  anything in `userland/wm/` with the migration in
   mind.
 - **The kernel's idle work has ONE owner: `scheduler_idle()`**
   (`api/scheduler.h`). Any loop that is waiting rather than working
@@ -621,7 +612,7 @@ technical conventions below:
   release. **An app must honour `reason`**: Control Panel discarded it
   and applied a setting on every pointer-motion event, which froze the
   desktop for seconds and exposed the `fs_read()` bug above.
-- **The WM has a SLOW-FRAME WATCHDOG** (`apps/wm/wm_watchdog.c`): it
+- **The WM has a SLOW-FRAME WATCHDOG** (`userland/wm/wm_watchdog.c`): it
   times each `wm_run()` iteration by phase and logs anything over a
   threshold (150ms by default) as
   `wm: SLOW FRAME 620 ms -- worst phase 'desktop_entries' 610 ms`. The
@@ -669,7 +660,7 @@ technical conventions below:
 - **The cursor's shapes are DATA FILES, and a theme is a directory.**
   `/usr/share/cursors/<theme>/<shape>` (six shapes: `arrow`,
   `resize-h`, `resize-v`, `resize-diag`, `text`, `wait`), generated by
-  `tools/gen_cursors.py` and loaded by `apps/wm/cursor_theme.c`. Two
+  `tools/gen_cursors.py` and loaded by `userland/wm/cursor_theme.c`. Two
   registered settings pick the theme and the size, so both get a
   Control Panel row and an `/etc/toyos.conf` key for free. Four things
   to know. **A shape file carries COVERAGE, not colour** -- an outline
@@ -688,7 +679,7 @@ technical conventions below:
   the framebuffer it owns, so it all moves to ring 3 with the WM. See
   `docs/decisions.md`.
 - **The cursor's drawn extent is DERIVED, not a constant.**
-  `cursor_rect()` (`apps/wm/wm_render.c`) is the one place that answers
+  `cursor_rect()` (`userland/wm/wm_render.c`) is the one place that answers
   "what box does the pointer occupy", and the save/restore pair and the
   damage rect both ask it. A theme's size, its hotspot and the size
   setting all move that box, so the old fixed `CURSOR_BOX_SIZE` could
@@ -770,7 +761,7 @@ technical conventions below:
   through `wm_debug.c`'s `gui` commands over the KERNEL's serial
   console, so the 280 checks that prove the desktop works have to move
   with it, and that gets its own stage BEFORE the WM moves.
-- **A ring-3 process can own a real window** (`apps/wm/wm_client.c` +
+- **A ring-3 process can own a real window** (`userland/wm/wm_client.c` +
   `kernel/proc/win_server.c`, protocol in
   `kernel/include/abi/win_proto.h`). Two rules matter before touching
   it. **Every client operation is a typed MESSAGE carried by the one
@@ -851,7 +842,7 @@ technical conventions below:
   `gui_apps.c`. An entry still naming that form is refused loudly rather
   than shown as a row that does nothing -- an entry file can outlive the
   mechanism it names. One live consequence: the WM's live-`.desktop`-
-  reload deferral (`apps/wm/wm.c`) is now UNREACHABLE, because it
+  reload deferral (`userland/wm/wm.c`) is now UNREACHABLE, because it
   triggers on a window holding a `gui_app_registry[]` pointer and only a
   kernel-space app ever held one. The guard is kept and correct;
   `desktop_entries_test.py` asserts the property that makes it
@@ -921,7 +912,7 @@ technical conventions below:
   `wm_ensure_reachable()` when its taskbar button is clicked -- this
   desktop has no Alt+Space/Win+arrow escape, so that button is the only
   handle such a window has.
-- **The window manager lives in `apps/wm/`** -- the core event
+- **The window manager lives in `userland/wm/`** -- the core event
   loop/input/render split (`wm.c`/`wm_input.c`/`wm_render.c`, sharing
   state through `wm_internal.h`'s `extern`s) plus the pieces that grew
   their own files as they appeared: `desktop.c`, `start_menu.c`,
@@ -929,10 +920,10 @@ technical conventions below:
   `cursor_theme.c`,
   `wm_client.c`.
   Split by concern for readability -- it's still one tightly-coupled
-  event loop, not decoupled components. See `apps/wm/wm.c`'s top
+  event loop, not decoupled components. See `userland/wm/wm.c`'s top
   comment.
 - **Split a file once it's grown big enough to be genuinely harder to
-  work with, the same call that produced the `apps/wm/` split above --
+  work with, the same call that produced the `userland/wm/` split above --
   don't wait for it to become unmanageable, but don't split
   preemptively either.** There's no hard line-count rule; the signal is
   practical: a file mixing more than one real concern (e.g. event
@@ -948,12 +939,12 @@ technical conventions below:
   `kernel/drivers/font_ttf.c` (11,800+ lines of baked glyph data) --
   splitting those for line count alone would miss the point; the
   concern there is regenerating them correctly (`tools/genttf.py`), not
-  readability. When a split does make sense: follow the `apps/wm/`
+  readability. When a split does make sense: follow the `userland/wm/`
   pattern (split by concern, share state through a `_internal.h` of
   `extern`s if it's still fundamentally one component, not a real
   boundary -- see `docs/decisions.md`'s entry on this) rather than
   inventing a new pattern each time, and record the split's own
-  reasoning in a top-of-file comment the way `apps/wm/wm.c` and
+  reasoning in a top-of-file comment the way `userland/wm/wm.c` and
   `kernel/fs/tfs.c` do. (This used to be followed by the changelog's own
   splitting rule -- split by era every ~4,200 lines. That rule is
   retired along with the changelog itself: the four files are frozen,
@@ -1033,17 +1024,17 @@ technical conventions below:
   demanding the bits, so they are meaningful under both). See
   `docs/decisions.md`.
 - **THE DESKTOP IS A RING-3 PROCESS. This is the default since
-  2026-08-18.** `/bin/wm/system/toywm` is `apps/wm/` compiled as a
+  2026-08-18.** `/bin/wm/system/toywm` is `userland/wm/` compiled as a
   ring-3 program (sources in `userland/wm/`), spawned and waited on by
   `apps/gui3.c`; `gui` starts it. It claims the compositor role, takes
   the framebuffer grant, loads the font, composites, opens client
   windows and answers the `gui` debug console, and **all 23 GUI tools
-  pass against it**. `make iso KCMDLINE="gui0"` still starts the RING-0
-  desktop, because `apps/wm/` is still in the tree and a fallback
-  nothing can reach is a guess -- that flag goes when the code it
-  selects does. **Two copies of the WM still exist: a fix to
-  `userland/wm/` must be made to `apps/wm/` too** until stage 4c deletes
-  the latter.
+  pass against it**. **`userland/wm/` IS GONE** (deleted 2026-08-18 with the
+  `gui0` flag, ~10,400 lines including `apps/ui/` and
+  `apps/gui_apps.c`), so there is ONE window manager again and the
+  "make every fix twice" hazard is over. Milestone 41 is complete.
+  `apps/` now holds no GUI at all: the shell, the editor, the demo, and
+  `gui3.c`, which spawns the desktop and waits for it.
 - **Killing the desktop is survivable, and that is the milestone's exit
   criterion**: `kill 1` at the shell revokes the framebuffer grant, ASKS
   each client window to close (never destroys it -- that would fault a
@@ -1296,7 +1287,7 @@ technical conventions below:
   **The build DATE lives in its own generated header for exactly that
   reason** -- `kernel/include/api/build_date.h` (`TOYOS_BUILD_DATE`),
   also written by `gen_version.sh`, at DAY granularity, and included by
-  ONE file (`apps/wm/desktop.c`, the desktop's watermark). So it
+  ONE file (`userland/wm/desktop.c`, the desktop's watermark). So it
   rebuilds one object at most once a day instead of the tree every
   build. Include it only where it is displayed; pulling it into a widely
   included header recreates the problem it is shaped to avoid. Both
@@ -1337,7 +1328,7 @@ technical conventions below:
   GUI moves to ring 3*, which was not true -- at that tag
   `apps/calculator.c`, `notepad.c`, `terminal.c`, `uidemo.c`, `about.c`
   and `taskmgr.c` were all still kernel-space beside their new ring-3
-  twins, and `apps/wm/` was ring 0 (as it still is). A release note is
+  twins, and `userland/wm/` was ring 0 (as it still is). A release note is
   the one document written from memory rather than from the code, so
   **check every claim against the TAG** -- `git ls-tree -r v<x> --name-only`
   and `git show v<x>:<file>` answer it in seconds -- and say plainly what
@@ -1531,7 +1522,7 @@ it was wrong. See `docs/decisions.md`.
 `apps/` is compiled and every `.asm` under `kernel/` assembled, with
 `build/` mirroring the source tree, so a new directory needs no Makefile
 edit at all. (It used to be one hand-written wildcard + pattern rule +
-mkdir target per directory; `apps/wm/` and `apps/ui/` each paid that tax
+mkdir target per directory; `userland/wm/` and `apps/ui/` each paid that tax
 when they appeared.) The flip side: a `.c` file anywhere under
 `kernel/` or `apps/` IS in the kernel image -- there's no scratch file
 the build ignores, so throwaway code goes somewhere else.
@@ -1721,7 +1712,7 @@ process's stdout goes into its parent's pipe.
 
 **`tools/gui_debug.py` -- ask the WM what it's doing, instead of
 measuring a screenshot.** The serial debug console has a `gui` command
-family now (`apps/wm/wm_debug.c`), live while the desktop is up:
+family now (`userland/wm/wm_debug.c`), live while the desktop is up:
 
 ```
 gui windows [--json]     rects, content rects, z-order, focus
@@ -2393,7 +2384,7 @@ repeated manual steps to be worth automating:
   committed and every checkout but the authoring one silently got the
   built-in fallback. It is the authoring path for a new theme too
   (a theme is a function returning shape name -> masks). It
-  EXTRACTS the default arrow from `apps/wm/wm_render.c`'s own baked
+  EXTRACTS the default arrow from `userland/wm/wm_render.c`'s own baked
   arrays and ports the procedural resize shapes, so the files on disk
   cannot drift from the built-in fallback they mirror. `--check` fails
   if they are stale.
@@ -2478,7 +2469,7 @@ repeated manual steps to be worth automating:
   window behind it does NOT change, the close handshake completes, the
   desktop survives). Geometry comes from `gui windows` and content from
   PIXEL VALUES with a control point, per `docs/gui-guidelines.md`. Run
-  it after touching `apps/wm/wm_client.c`, `kernel/proc/win_server.c`,
+  it after touching `userland/wm/wm_client.c`, `kernel/proc/win_server.c`,
   or anything in `abi/win_proto.h`.
 - **`sched_gui_test.py`** -- proves the desktop stays ALIVE while a
   ring-3 process runs, the end-to-end counterpart to
@@ -2590,7 +2581,7 @@ repeated manual steps to be worth automating:
   in the compositor's log and once in UI Demo's, because "the compositor
   received the click" is equally satisfied by an implementation that
   stole the input stream outright -- and stage 2's whole shape is that
-  both paths run at once. Run it after touching `apps/wm/wm.c`'s loop,
+  both paths run at once. Run it after touching `userland/wm/wm.c`'s loop,
   `win_server.c`'s compositor registration, or the `WIN_EV_RAW_*`
   events. In `gui_regress.py`.
 - **`screen_surface_test.py`** -- a ring-3 compositor's SCREEN surface

@@ -267,7 +267,7 @@ static volatile int alive_count = 0;
 // That is what froze wm_run() for the whole lifetime of a spawned
 // process -- the Terminal's async spawn only looked live because a
 // process's output reaches the screen from inside its own SYS_WRITE
-// handler (see apps/wm/wm.c's per-frame poll comment), not because the
+// handler (see userland/wm/wm.c's per-frame poll comment), not because the
 // WM was drawing.
 //
 // The kernel now takes a position in the same round-robin cycle a

@@ -4,6 +4,12 @@
 #include <stdint.h>
 #include "vga.h"
 
+// The caret's width in pixels. It lived in ui_primitives.h, which went
+// with the rest of the ring-0 widget set -- this is the only widget
+// left (the kernel's `edit` command draws with it), and it was the only
+// thing it borrowed.
+#define CURSOR_BAR_W 2
+
 // A reusable "console inside a window" primitive: a bounded stream of
 // characters (each remembering the vga_color it was written in), with
 // wrap-and-scroll rendering into any content rect. Originally lived in

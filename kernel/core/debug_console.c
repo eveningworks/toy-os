@@ -247,7 +247,7 @@ static void dbg_dispatch(char *line) {
 
     if (k_strcmp(line, "gui") == 0) {
         // Sent as a PROTOCOL MESSAGE over the window transport, not
-        // called into apps/wm/ directly (Milestone 41, stage 3). This
+        // called into userland/wm/ directly (Milestone 41, stage 3). This
         // file used to call wm_debug_dispatch() across the kernel/apps
         // boundary; every GUI test tool drives the desktop through here,
         // so that call is exactly what had to stop before the WM can
