@@ -1011,7 +1011,7 @@ technical conventions below:
   enforced per 4KiB page, so two sections sharing a page get one
   permission and the more permissive one always wins. Adding to the
   `paging` KTESTs is the cheap way to keep this honest; their positive
-  controls are in `CHANGELOG.md`'s entry.
+  controls are in the commit that added them.
 - **A filesystem talks to a `block_device`, not to a disk.**
   `kernel/include/kernel/block.h` -- five required ops, two optional
   behind capability bits, one active device, registered like
@@ -1295,37 +1295,38 @@ technical conventions below:
   Existing long comments are deliberately NOT being retro-trimmed: they
   read cheaply, and a bulk rewrite's most likely casualty is the one
   sentence that saves a future session. This is a rule for new writing.
-- **`CHANGELOG.md` is CLOSED as of 2026-08-15. Do not add entries to
-  it.** For most of this project every non-trivial change got a full
-  writeup there, and the four files grew to ~12,000 lines. The reason
-  for stopping is not that the record was worthless, it is that the
-  same reasoning was being written three times -- once in a comment
-  beside the code, once in `docs/decisions.md`, and once at length in a
-  file that in practice nobody re-reads (a session measured its own
-  usage: it read `CLAUDE.md`, `docs/roadmap.md`'s known-issues, the
-  `docs/decisions.md` index and source comments, and never opened the
-  archives at all). Writing it was a real fraction of every change's
-  cost; reading it wasn't happening.
+- **THERE IS NO CHANGELOG. It was closed on 2026-08-15 and DELETED on
+  2026-08-18.** For most of this project every non-trivial change got a
+  full writeup there; the four files had reached ~12,000 lines. The
+  reason for stopping was not that the record was worthless -- it was
+  that the same reasoning was being written three times (a comment
+  beside the code, an entry in `docs/decisions.md`, and a long writeup
+  in a file nobody re-read), and the third copy cost a real fraction of
+  every change. The reason for deleting rather than freezing is that a
+  frozen file still has to be reasoned about every time someone edits
+  near it.
 
-  **Where the three kinds of thing go now:**
-  - *What changed, file by file* -- the COMMIT MESSAGE, which already
-    lists every changed file with a one-line note (see
-    `docs/decisions.md`'s versioning entry for the format). `git log`
-    is the chronological record.
+  **Where the four kinds of thing go:**
+  - *What changed, file by file* -- the COMMIT MESSAGE, which lists
+    every changed file with a one-line note. `git log` is the
+    chronological record.
   - *How the mechanism works, and the trap in it* -- a comment next to
     the code. This is what actually gets found by whoever edits it.
-  - *Why this way and not the obvious way* -- `docs/decisions.md`, and
-    write the reasoning THERE rather than a pointer to somewhere else.
-    That file is topic-indexed, which is why it gets read.
+  - *Why this way and not the obvious way* -- `docs/decisions.md`,
+    written out IN FULL there rather than as a pointer elsewhere. That
+    file is topic-indexed, which is why it gets read.
   - *What is broken / not built yet* -- `docs/roadmap.md`, with a
     reproduction precise enough to replay.
 
-  The four changelog files stay in the tree, frozen: 299 places across
-  the repo (109 in `docs/decisions.md` alone, plus comments in ~40
-  source, tool and doc files) say "see `CHANGELOG.md`'s entry", and those
-  pointers still resolve. Don't delete them, don't split them, don't
-  update them. A new `docs/decisions.md` entry should be
-  self-contained instead of pointing into them.
+  **What was lost, stated rather than glossed:** commit messages before
+  the freeze are one-liners ("Build 263 (feature, +10): keyboard Page
+  Up/Page Down scrolling"), so for pre-2026-08-15 work the changelog was
+  the only detailed account. 272 references to it across the repo were
+  rewritten to point at the git history instead; of the 94
+  `docs/decisions.md` entries that cited it, 89 already carried their
+  own reasoning and 5 were checked by hand. What is genuinely gone is
+  the blow-by-blow of old changes -- not the decisions, which are here
+  and in `docs/decisions.md`.
 - **`kernel/include/api/version.h` is GENERATED, not hand-edited** --
   `tools/gen_version.sh` regenerates it from `VERSION` (repo root, e.g.
   `0.1.0-dev`) as the first step of `make all`/`make iso`. Never edit
@@ -1353,8 +1354,7 @@ technical conventions below:
 - **Versioning is semver + a `-dev` suffix, not a per-change build
   number.** `VERSION` only changes via `tools/set_version.sh
   <version>`: `0.2.0-dev` starts a new dev round, `0.2.0` (no `-dev`)
-  cuts a release and also stamps `CHANGELOG.md`'s `## [Unreleased]`
-  section with the version + date, opening a fresh one above it. Git
+  cuts a release. Git
   tags (`v<version>`) and GitHub Releases happen at real releases only,
   cut by hand after `set_version.sh` -- see `docs/decisions.md` for the
   full mechanics, commands, and why this replaced the old
@@ -1377,8 +1377,7 @@ technical conventions below:
   - **No commit counts** and **no milestone numbers.** Both are internal
     bookkeeping; a milestone number means nothing to a reader and dates
     the note the moment the roadmap is renumbered.
-  - **No pointer to `CHANGELOG.md`.** It is frozen (see below), so the
-    pointer rots.
+  - **No pointer to a changelog.** There isn't one (see below).
   - No promotional framing ("the largest structural change the project
     has had"). State what exists.
 
@@ -1596,8 +1595,7 @@ kernel's mouse driver only speaks PS/2 (see `kernel/drivers/mouse.c`),
 there's no USB stack at all, and adding an explicit USB pointer device
 makes QEMU route host mouse motion to THAT instead of the emulated
 PS/2 mouse, so the guest receives nothing and the cursor just never
-moves. Bit an actual user session once (see CHANGELOG-archive-2.md around build
-293's Makefile fix) -- looked exactly like a driver bug, wasn't one.
+moves. Bit an actual user session once (see the commit for build 293's Makefile fix) -- looked exactly like a driver bug, wasn't one.
 
 **A plain `make all` is safe after editing a shared header now** (as of
 build 308) -- the Makefile tracks header dependencies (`-MMD`/`-MP`;
@@ -2934,8 +2932,7 @@ ACTIVE backend (probe-selected), not mount points", "why doesn't
 `fs_delete` recurse"). Deliberately a
 *pointer* file, not a second copy of the reasoning: each entry is a
 couple sentences plus a link into the relevant changelog section
-(`CHANGELOG.md` for the semver era, `CHANGELOG-archive-2.md` for Build
-183-502, `CHANGELOG-archive.md` for anything older) or
+(now the git history) or
 source file, not the reasoning itself restated. It opens with a
 grouped index of every entry -- add a line there when adding an entry,
 or the index silently stops being one. README.md/
@@ -2986,11 +2983,11 @@ lines.
 
 Forward-looking "not built yet" items belong in `docs/roadmap.md`
 instead (already actively maintained, with completed items struck
-through and linked to the CHANGELOG build that finished them) -- don't
+through and linked to the commit that finished them) -- don't
 duplicate that list here or start a second one.
 
 When you resolve a "wait, why is this built this way" question during
-a session (by reading CHANGELOG.md, a source comment, or by asking the
+a session (by reading the git history, a source comment, or by asking the
 user), consider whether it's the kind of question a future session
 would hit again -- if so, add a short entry to `docs/decisions.md`
 pointing at the answer, the same judgment call as `tools/`'s "does

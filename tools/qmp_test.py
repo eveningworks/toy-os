@@ -16,7 +16,7 @@ Gotchas this module already gets right for you:
   motion to THAT instead of the emulated PS/2 mouse, so the guest
   receives nothing at all (looks exactly like "the mouse doesn't work"
   but is actually a launch-flag mistake -- this bit a real interactive
-  session once, see CHANGELOG.md's build-293-adjacent Makefile fix).
+  session once, see the build-293-adjacent Makefile fix).
   Leave the pointer device unspecified; `click()`/`goto()` below use
   `input-send-event` with `rel` axis events against the default
   emulated PS/2 mouse, tracking the cursor position client-side since

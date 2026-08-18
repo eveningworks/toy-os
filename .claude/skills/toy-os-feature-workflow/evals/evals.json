@@ -5,7 +5,7 @@
       "id": 1,
       "eval_name": "small-uptime-flag",
       "prompt": "Can we add a -h flag to uptime so it shows days/hours/minutes instead of raw seconds?",
-      "expected_output": "Recognizes this as small enough to skip (or lightly apply) the full AskUserQuestion/docs-entry ceremony, while still following the CHANGELOG/testing conventions proportionally (versioning itself is semver + -dev, not a per-change build number -- this change wouldn't touch VERSION at all).",
+      "expected_output": "Recognizes this as small enough to skip (or lightly apply) the full AskUserQuestion/docs-entry ceremony, while still following the commit-message and testing conventions proportionally (versioning itself is semver + -dev, not a per-change build number -- this change wouldn't touch VERSION at all).",
       "files": []
     },
     {

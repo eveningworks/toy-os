@@ -30,7 +30,7 @@ void display_register(const struct display_driver *drv) {
 // is refused outright rather than half-used. The failure it prevents is
 // specifically nasty: a card needing NEEDS_FLUSH but with no flush()
 // renders perfectly into memory and shows a frozen screen, which reads
-// as a rendering bug anywhere but here (it did -- see CHANGELOG.md).
+// as a rendering bug anywhere but here (it did -- see the git history).
 static int caps_are_honest(const struct display_driver *d) {
     if (!d->get_surface || !d->probe || !d->name) return 0;
     if ((d->caps & DISPLAY_CAP_NEEDS_FLUSH) && !d->flush) return 0;

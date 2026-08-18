@@ -3,7 +3,7 @@
 // command shares (cwd, shell_fg, history). The commands themselves live
 // in apps/shell_fs.c (filesystem) and apps/shell_sys.c (system-info/
 // settings) -- split out once this file crossed 900 lines mixing every
-// command category together (see CHANGELOG.md for the build this
+// command category together (see the git history for the build this
 // happened in). See shell_internal.h's top comment for why this is a
 // three-file split sharing state via `extern`s, not three independent
 // components.

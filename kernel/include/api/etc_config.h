@@ -8,8 +8,7 @@
 // under /etc -- see kernel/lib/etc_config.c's top comment for the
 // exact file format, and CLAUDE.md's `/etc` bullet for the convention
 // this is part of. Replaces the hand-rolled single-purpose parsers
-// tz.c and font_config.c each used to have (see CHANGELOG's build
-// covering this).
+// tz.c and font_config.c each used to have (see the git history).
 //
 // This is deliberately still just a reader/writer, not a schema or a
 // registry of known keys/files -- callers own their own key names and

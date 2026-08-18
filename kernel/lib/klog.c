@@ -15,7 +15,7 @@
 //
 // Every one of the ~40 existing serial_write() call sites across the
 // kernel was mechanically renamed to klog_write() as part of adding
-// this (see CHANGELOG.md for the build), specifically so dmesg
+// this (see the git history for the build), specifically so dmesg
 // reflects real, complete kernel history from boot -- not just
 // whatever new call sites get added going forward.
 //

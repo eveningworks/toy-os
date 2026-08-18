@@ -51,7 +51,7 @@ What is NOT a reason any more: a `resize-shrink Notepad` violation that
 clean. It did not reproduce in six attempts -- four at -j 2 idle, and
 one each at -j 1 and -j 2 under fourteen busy-looping host cores --
 with the harness proven awake by a positive control in between. See
-CHANGELOG.md's entry, and note the two harness bugs that measurement
+the commit that did it, and note the two harness bugs that measurement
 turned up, which are the durable part of it.
 
 A CLEAN RUN STILL PROVES LESS THAN IT LOOKS

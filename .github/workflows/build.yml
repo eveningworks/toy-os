@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@v4
 
       # Same package list installed by hand earlier in this project's
-      # history (see CHANGELOG.md's build-304-era session) -- nasm for
+      # history (see the build-304-era commits) -- nasm for
       # the boot/interrupt/context-switch assembly, grub-pc-bin +
       # grub-common + xorriso for `make iso` (grub-mkrescue), and
       # qemu-system-x86 for both `make run` and this workflow's own

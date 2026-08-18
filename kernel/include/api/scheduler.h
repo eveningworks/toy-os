@@ -5,7 +5,7 @@
 #include "proc_info.h" // struct proc_info -- scheduler_proc_info() below
 
 // Built as the ORIGINAL Milestone 16 (the old pre-v0.1.0 numbering used
-// by CHANGELOG-archive.md, unrelated to docs/roadmap.md's current
+// by the git history, unrelated to docs/roadmap.md's current
 // Milestone 16): a minimal preemptive round-robin scheduler for ring-3
 // processes, layered on TOP of the M8-M15 process-isolation work
 // without changing it. See scheduler.c for the full design writeup.

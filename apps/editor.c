@@ -51,7 +51,7 @@ void editor_handle_key(struct text_scrollback *tb, const char *path, int key,
     // on_key callback ever sees it (see wm.c's own comment at that
     // check), so a Terminal-embedded editor session can never receive
     // it. Found the hard way while testing this build -- see
-    // CHANGELOG.md's build 377 entry.
+    // the commit for build 377.
     if (key == 27 || key == KEY_F3) {
         *out_should_exit = 1;
         return;
@@ -78,7 +78,7 @@ void editor_handle_key(struct text_scrollback *tb, const char *path, int key,
 }
 
 // Full-screen redraw for the physical console. Unlike the first pass at
-// this (see CHANGELOG.md's build 377/378 entries), this now does its
+// this (see the commit for build 377/378), this now does its
 // own line-wrapping pass rather than just dumping the whole buffer via
 // vga_putc() and letting the console's own wrap/scroll handle it --
 // two things that approach got wrong once actually tested against a
@@ -238,7 +238,7 @@ static void editor_render(struct text_scrollback *tb, const char *path, const ch
 // and this file's own g_editor_buf. A stack-local copy here blew the
 // stack silently in exactly the way that's easy to miss in testing --
 // no crash message, just corrupted memory nearby (this cost real
-// debugging time before the fix; see CHANGELOG.md's build 377 entry).
+// debugging time before the fix; see the commit for build 377).
 // Safe as a single static instance since only one `edit`/`nano` session
 // can be running on the physical console at a time.
 static struct text_scrollback g_editor_tb;

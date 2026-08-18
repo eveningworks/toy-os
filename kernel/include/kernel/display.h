@@ -41,7 +41,7 @@
 // checks this and refuses a driver that lies, because a missing flush on
 // a card that needs one produces a frozen display with the correct
 // pixels sitting in memory, which is a genuinely hard bug to read (it
-// happened -- see CHANGELOG.md).
+// happened -- see the git history).
 
 // What a driver can do. A capability and its function pointer are one
 // fact stated twice, deliberately: callers ask the caps, and

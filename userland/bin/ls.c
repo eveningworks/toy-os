@@ -1,7 +1,7 @@
 // The second real disk-hosted ELF64 program (after userland/lspci.c) --
 // a genuine syscall-driven userland process that replaces the shell's
 // old kernel-space `ls` built-in (apps/shell_fs.c's cmd_ls()/list_cb(),
-// removed the same build this file was added -- see CHANGELOG.md). No
+// removed the same build this file was added -- see the git history). No
 // libc (freestanding, same as every other userland/*.c here) -- same
 // syscall-wrapper/print-helper shape newsyscalls_test.c/lspci.c already
 // established.
@@ -27,7 +27,7 @@
 // Default output is colored via the new SYS_SET_COLOR syscall
 // (directories vs. files), mirroring GNU coreutils' `ls --color=auto`
 // -- unconditionally, not gated on a flag, per this feature's own
-// scope (see CHANGELOG.md/docs/decisions.md).
+// scope (see `docs/decisions.md`).
 #include <stdint.h>
 #include "rt/sys.h"
 #include "vga.h" // enum vga_color only -- see this file's top comment

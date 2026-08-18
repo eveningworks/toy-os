@@ -3,7 +3,7 @@
 // here shares), shell_fs.c (filesystem commands), shell_sys.c
 // (system-info/settings commands), and shell_path.c (PATH lookup and
 // the shared "run this name" resolver). Split out once shell.c crossed 900
-// lines mixing every command category together (see CHANGELOG.md for
+// lines mixing every command category together (see the git history for
 // the build this happened in).
 //
 // Mirrors userland/wm/wm_internal.h's pattern deliberately: this is still

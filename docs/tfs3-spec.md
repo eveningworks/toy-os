@@ -4,7 +4,7 @@ What is actually on a TFS3 disk, byte by byte, as shipped in
 `kernel/fs/tfs3.c` and mirrored by `tools/tfs3_writer.py`. This is the
 sibling of `docs/tfs2-spec.md` and follows its conventions; the design
 history and the reasoning behind every choice live in
-`docs/tfs3-design.md` and the CHANGELOG -- this file documents the
+`docs/tfs3-design.md` and the git history -- this file documents the
 format only.
 
 No backward compatibility: a reader must check magic + version and

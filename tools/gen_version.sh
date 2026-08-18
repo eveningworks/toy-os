@@ -11,7 +11,7 @@
 # deliberate step (tools/set_version.sh), run only when you're
 # starting a new round of dev work or cutting a real release -- not on
 # every build, and not on every change either (unlike the retired
-# per-change build-number scheme this replaced, see CHANGELOG.md and
+# per-change build-number scheme this replaced, see the git history and
 # docs/decisions.md).
 #
 # Idempotent by design (only overwrites version.h if the content

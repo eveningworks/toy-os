@@ -1,7 +1,7 @@
 # Roadmap
 
 Forward-looking "not built yet" items only -- what's already built lives in
-the `CHANGELOG.md` files (full history) and `README.md` (what
+the git history files (full history) and `README.md` (what
 toy-os can do today), not here. See `docs/decisions.md` for *why* existing
 things are built the way they are. This list is always subject to change --
 milestones get reordered/reshaped as work actually happens, they're a plan,
@@ -269,8 +269,7 @@ existing.
 `fork()` cheap rather than a full copy).
 
 - [x] ~~Hardware floating point / SSE for ring-3 processes~~ -- done
-      (unplanned, asked for directly mid-session), see `CHANGELOG.md`'s
-      `[Unreleased]` entry: `CR4.OSFXSR` enabled at boot, a 512-byte
+      (unplanned, asked for directly mid-session), see the commit that added it: `CR4.OSFXSR` enabled at boot, a 512-byte
       FXSAVE area per process saved/restored eagerly across a scheduler
       switch, `userland/` built without `-mno-sse`. Kernel and `apps/`
       stay FP-free, matching what Linux and Windows both actually do --
@@ -311,7 +310,7 @@ Ctrl-C, which is most of what makes it a terminal.
       already holds. What's still missing is the *discipline* half --
       it's a library each front end calls, not something they read
       through, and it has no echo control or raw/cooked distinction.
-      See CHANGELOG.md's `[Unreleased]`.
+      see the git history.
 - [ ] `Ctrl+C`/`Ctrl+D`/`Ctrl+Z` as terminal signals, not keystrokes an
       app happens to notice. The *encoding* groundwork is done -- the
       keyboard driver emits Ctrl as control codes and Alt as an ESC
@@ -388,7 +387,7 @@ because that is the distinction that decides what can be done today:
 - [ ] Background jobs (`&`)
 - [ ] `fg`/`bg`/`jobs`
 - [x] ~~Tab completion (commands, then paths)~~ -- done, see
-      `CHANGELOG.md`'s `[Unreleased]` entry (commands, paths, and
+      the commit that added it (commands, paths, and
       per-command argument sets, shared by both shells)
 - [ ] Globbing (`*`, `?`) expanded by the shell, not each command
 - [ ] Environment variables + `export` -- note `PATH` already exists as
@@ -410,22 +409,21 @@ durability and structure -- integrity checking, snapshots, mount points
 ### Storage hardening (storage, target v0.4.0)
 - [x] ~~Full multi-GB stress run (`stress 4200` / `stress 8192`)~~ -- done,
       both PASSED byte-for-byte on 2026-08-13 (4200 MB in 326 s, 8192 MB
-      in 692 s), see `CHANGELOG.md`'s `[Unreleased]` entry
+      in 692 s), see the commit that added it
 - [x] ~~Coalesce contiguous block writes into fewer ATA commands~~ -- done,
-      see `CHANGELOG.md`'s `[Unreleased]` entry (64KB DMA buffer + run
+      see the commit that added it (64KB DMA buffer + run
       coalescing + skipping the redundant zero-fill: 18 -> 25.1 MB/s write)
-- [x] ~~Journal-batched flush~~ -- done, see `CHANGELOG.md`'s
-      `[Unreleased]` entry (4 flushes per metadata op -> the 2 the
+- [x] ~~Journal-batched flush~~ -- done, see the commit that added it (4 flushes per metadata op -> the 2 the
       recovery protocol actually depends on; format 0.73s -> 0.34s)
 - [x] ~~Detect the drive's real capacity instead of assuming 9 GiB~~ --
-      done, see `CHANGELOG.md`'s `[Unreleased]` entry (`ata_sector_count()`)
+      done, see the commit that added it (`ata_sector_count()`)
 - [x] ~~Stop treating an unreadable superblock as a foreign disk~~ --
-      done, see `CHANGELOG.md`'s `[Unreleased]` entry (this was a
+      done, see the commit that added it (this was a
       data-loss bug, not just hardening)
 - [x] ~~An fsck-style pass to reclaim leaked blocks~~ -- done, see
-      `CHANGELOG.md`'s `[Unreleased]` entry (`fsck`/`fsck repair`, plus
+      the commit that added it (`fsck`/`fsck repair`, plus
       `tools/tfs2_writer.py corrupt` to test it against known damage)
-- [x] ~~GPT/MBR partition table parsing~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry
+- [x] ~~GPT/MBR partition table parsing~~ -- done, see the commit that added it
 - [ ] LBA48 addressing -- 28-bit LBA caps at 128 GiB, which is the real
       ceiling on `FS_DISK_TOTAL_BYTES` growing past today's 9 GiB
 - [ ] A block/buffer cache with write-back -- every read today goes to the
@@ -435,7 +433,7 @@ durability and structure -- integrity checking, snapshots, mount points
       per component, softened by its in-RAM name cache). The on-disk
       index remains open.
 - [x] ~~`fs_rename()`~~ -- done on both backends, plus `mv` in the
-      shell, see `CHANGELOG.md`'s `[Unreleased]` entry. One journal
+      shell, see the commit that added it. One journal
       transaction on TFS3 (files and directories, across directories,
       `..` and link counts included); one record edit per descendant
       on TFS2, non-atomic and documented as such. No atomic replace
@@ -446,14 +444,14 @@ durability and structure -- integrity checking, snapshots, mount points
       which is what prompted TFS3 format v2's 32-slot journal and the
       `txn_begin()` credit reservation.
 - [x] ~~`fs_truncate()`~~ -- done on both backends, plus `truncate` in
-      the shell, see `CHANGELOG.md`'s `[Unreleased]` entry. Growing is
+      the shell, see the commit that added it. Growing is
       sparse (metadata only); shrinking frees the tail in two phases
       with a commit between them, so a crash can cost a leak but never
       a double allocation.
 - [x] ~~TRIM/discard on delete, so freed blocks are reported to the
       device~~ -- done on both backends (`ata_trim()` from tfs.c's
       `free_block()` and tfs3.c's `trim_run()`, plus `discard=unmap`
-      on every `-drive` line); see CHANGELOG.md's `[Unreleased]`
+      on every `-drive` line); see the git history
 - [ ] Boot-time `fsck` report (check, never repair) behind a config key
 - [ ] Per-record checksums in the table itself -- TFS2-only now: TFS3
       checksums every inode at rest (verified on each read); TFS2's
@@ -497,7 +495,7 @@ format; those three are follow-ups it did not include.*
 
 *Spec as shipped: `docs/tfs3-spec.md`; design record:
 `docs/tfs3-design.md`; built in five staged commits (see
-CHANGELOG.md's `[Unreleased]`). TFS2 stays in the kernel as a second
+the git history). TFS2 stays in the kernel as a second
 probe-selected backend, with live switching via `fsformat` -- see
 `docs/decisions.md`.*
 
@@ -510,7 +508,7 @@ probe-selected backend, with live switching via `fsformat` -- see
 - [ ] Unlink-while-open -- an fd keeps its inode alive after the name
       is gone (needs fd-level state the VFS doesn't hold yet)
 - [x] ~~`rename()` as a directory operation, atomic through the
-      journal~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry.
+      journal~~ -- done, see the commit that added it.
       It did NOT fit the 4-slot transaction as this item predicted: a
       directory changing parents needs five blocks (both dirent
       blocks, the child's `..`, both parents' link counts), which is
@@ -760,7 +758,7 @@ Listed with the honest reason each is or isn't attractive.
       shaped around rtl8139
 
 ### Sound (hardware, target v1.0.0+)
-- [x] ~~PC speaker beep (simplest possible output)~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry
+- [x] ~~PC speaker beep (simplest possible output)~~ -- done, see the commit that added it
 - [ ] AC97 or HDA PCI audio device driver
 - [ ] A basic mixer/volume syscall surface
 - [ ] A sound-producing test app
@@ -839,7 +837,7 @@ one.
             two). `memcpy`/`memmove`/`memset`/`memcmp` are real symbols
             in `userland/lib/cmem.c` because GCC can emit calls to them
             itself; everything else is a `static inline`. See
-            `CHANGELOG.md`, and note the `-fno-tree-loop-distribute-`
+            the git history, and note the `-fno-tree-loop-distribute-`
             `patterns` flag that now has to stay in `USERLAND_CFLAGS`.
       - [x] ~~`snprintf`~~ -- done: `userland/lib/stdio.h`, which is
             kfmt's formatter. It needed `kernel/lib/kfmt.c` split first
@@ -1029,10 +1027,10 @@ caller is a test.
 
 - [x] ~~The kernel context is a scheduler participant, so `wm_run()`
       keeps drawing while a ring-3 process runs~~ -- done, see
-      `CHANGELOG.md`'s `[Unreleased]` entry. Step zero: nothing else
+      the commit that added it. Step zero: nothing else
       here works until this does.
 - [x] ~~A blocking wait, so a GUI client doesn't spin-poll its whole
-      timeslice~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry.
+      timeslice~~ -- done, see the commit that added it.
       Blocking syscalls DESCHEDULE rather than wait in place; the
       naive version hangs after one event and the reason is now in
       `docs/decisions.md`.
@@ -1044,12 +1042,12 @@ caller is a test.
       an event belongs to (focus, hit-testing, z-order, all unchanged);
       the protocol decides what it says.
 - [x] ~~Client windows in the WM's own window list, with real chrome,
-      focus, z-order and a taskbar button~~ -- done, see `CHANGELOG.md`.
+      focus, z-order and a taskbar button~~ -- done, see the git history.
       `SYS_WIN_REQUEST` carries typed messages; `win_server.c` owns the
       memory half and `wm_client.c` the presentation half.
 - [x] ~~**An app model for clients (`uapp`)**~~ -- done, stages 0
       through 4; see `docs/uapp-design.md` for the design and what each
-      stage actually landed, and `CHANGELOG.md`. The toolkit is
+      stage actually landed, and the git history. The toolkit is
       **Toykit** (`userland/ui/`), the protocol **TWP** and the server
       **TWS**. A ring-3 GUI app is now one `.c` file in `userland/gui/`
       with no Makefile edit: a `struct uapp_desc` and callbacks, all of
@@ -1184,19 +1182,19 @@ caller is a test.
       flat colour~~ -- done: `userland/ui/ugfx.c` (rects, anti-aliased
       text, metrics), with the desktop's font mapped READ-ONLY via
       `WIN_REQ_FONT` rather than copied into each binary. See
-      `CHANGELOG.md`; `userland/tests/uiclient.c` is the app-shaped client
+      the git history; `userland/tests/uiclient.c` is the app-shaped client
       built on it.
 - [x] ~~Port the `apps/ui/` widgets Calculator needs to userland~~ --
       done: `userland/ui/uui.c` (`ui_primitives` + `ui_button` +
       `ui_button_group`). Statically linked per client for now, not a
       shared library -- see the note below on when that should change.
 - [x] ~~Migrate one real app (Calculator) to `userland/`~~ -- done, see
-      `CHANGELOG.md`. `apps/calc_engine.c` is SHARED (compiled twice,
+      the git history. `apps/calc_engine.c` is SHARED (compiled twice,
       once per code model) rather than copied, so there is only ever
       one arithmetic implementation.
 - [x] ~~Port `ui_scrollback` (the wrapped, editable text buffer)~~ --
       done as `userland/ui/utext.c`, pulled in by the ring-3 Notepad.
-- [x] ~~Migrate Notepad to `userland/`~~ -- done, see `CHANGELOG.md`.
+- [x] ~~Migrate Notepad to `userland/`~~ -- done, see the git history.
       Its file dialog is drawn by the APP, not the window server, which
       is what GTK/Qt do; `apps/wm/file_picker.c` is a WM modal and was
       not portable.
@@ -1205,7 +1203,7 @@ caller is a test.
       list, listbox, dropdown, focus ring.
 - [x] ~~Migrate Terminal to `userland/`~~ -- done, and it needed new
       kernel machinery rather than a port: see the pipes/spawn entry in
-      `CHANGELOG.md`. Its shell (`userland/lib/tosh.c`) runs in ring 3 too
+      the git history. Its shell (`userland/lib/tosh.c`) runs in ring 3 too
       rather than proxying the kernel's.
 - [x] ~~Geometry primitives, so a client can draw more than rectangles
       and text~~ -- done: `kernel/lib/geom.c` + `fixed.c` (lines,
@@ -1216,7 +1214,7 @@ caller is a test.
       `userland/gui/gfxdemo.c` ("Shapes") is the ring-3 demo;
       `tools/gfxdemo_test.py` and `kernel/lib/geom_test.c` test it.
 - [x] ~~A not-responding timeout and a way to force-quit a client that
-      ignores `WIN_EV_CLOSE`~~ -- done, see `CHANGELOG.md`. Built on a
+      ignores `WIN_EV_CLOSE`~~ -- done, see the git history. Built on a
       real liveness ping (`WIN_EV_PING`/`WIN_REQ_PONG`, i.e. xdg_shell's)
       rather than a close timeout, because a client that DECLINES and one
       that is WEDGED are the same observation to a timer. Force Quit
@@ -1345,10 +1343,9 @@ guess.*
 ### Desktop visual polish (gui, target v0.8.0)
 - [ ] Basic image decoder (JPEG or similar)
 - [ ] Real wallpaper images
-- [x] ~~Desktop icon repositioning/dragging~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry
+- [x] ~~Desktop icon repositioning/dragging~~ -- done, see the commit that added it
 - [ ] Per-icon context menus (Rename/Properties)
-- [ ] Full dirty-rect compositor -- mostly done, see `CHANGELOG.md`'s
-      `[Unreleased]` entry: window move/resize/open/close/minimize/
+- [ ] Full dirty-rect compositor -- mostly done, see the commit that added it: window move/resize/open/close/minimize/
       z-order and desktop icon drag now clip repaints to a computed
       damage region instead of always touching the full screen, and
       (Phase 3) a window whose rect doesn't intersect the damage region
@@ -1369,11 +1366,10 @@ guess.*
       now enforced rather than assumed, because "these fall back to a
       full-screen repaint" used to be true only by accident and
       inverted the moment anything else declared damage in the same
-      frame (see `CHANGELOG.md`'s `[Unreleased]` damage-sweep entry).
+      frame (see the git history damage-sweep entry).
       Doing it properly needs each overlay to expose its own geometry,
       which only `start_menu` does today.
-- [x] ~~Taskbar notification area (tray)~~ -- done, see `CHANGELOG.md`'s
-      `[Unreleased]` entry: a dynamic `tray_register()`/
+- [x] ~~Taskbar notification area (tray)~~ -- done, see the commit that added it: a dynamic `tray_register()`/
       `tray_set_text()`/`tray_unregister()` API (`apps/wm/wm.h`), with
       the taskbar clock as its first item (`apps/wm/wm_tray.c`). No
       other GUI app registers a tray item yet -- the API is there for
@@ -1437,7 +1433,7 @@ Runtime font loading & text metrics (fonts). This is the leaf the three of them 
 - [ ] File manager app
 - [ ] Desktop calendar widget
 - [x] ~~Control panel with pluggable applets~~ -- done, see
-      `CHANGELOG.md`'s `[Unreleased]` entry (icon-grid chooser +
+      the commit that added it (icon-grid chooser +
       drill-in, with Date & Time and System Info applets)
 - [ ] Find/replace in Notepad
 - [ ] An image viewer (needs the desktop-polish milestone's decoder)
@@ -1463,7 +1459,7 @@ DONE here, so the strike came off rather than the boxes going on.*
 
 
 - [x] ~~A registration mechanism for in-kernel tests~~ -- done, see
-      `CHANGELOG.md`'s `[Unreleased]` entry (KTEST() + a `.ktests`
+      the commit that added it (KTEST() + a `.ktests`
       linker section: tests register by existing)
 - [x] ~~A `make test` target that boots, runs every registered test, and
       exits non-zero on failure~~ -- done (`tools/ktest_run.py` drives
@@ -1813,8 +1809,16 @@ it serves. Small, and it makes everything above it discoverable.*
       window manager being a PROCESS widens that window.
 
       `calculator` and `notepad` use `QMPSession.stable_pixels()` now
-      (two identical consecutive reads). The rest have NOT been
-      converted, deliberately -- `notepad` was converted because it
+      (two identical consecutive reads). **That fixed `calculator`
+      outright (8/8) and only reduced `notepad`'s rate** -- it still
+      failed once in a full suite run on 2026-08-18 after the change,
+      on the same two checks ("New clears the editor" and its partner),
+      then passed 3/3 on re-run. So something else is going on there:
+      both checks follow a MENU interaction, so the popup still being
+      on screen, or the caret, are the first things to look at rather
+      than paint timing. Not diagnosed.
+
+      The rest have NOT been converted, deliberately -- `notepad` was converted because it
       actually failed that way, and converting blind risks a tool whose
       window is SUPPOSED to animate: `gfxdemo` rotates, and there
       stable_pixels() would spend its retries and hand back the last
@@ -2586,18 +2590,18 @@ refer to them by number.
 ### ~~Memory protection hardening~~ (memory, v0.2.0, completed 2026-08-16)
 - [x] ~~NX bit enforcement (non-executable data pages)~~ -- done for
       userspace first, and for the kernel's own identity map with the
-      W^X item below; see `CHANGELOG.md`'s `[Unreleased]` entry
-- [x] ~~Stack canaries (`-fstack-protector`)~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry
+      W^X item below; see the commit that added it
+- [x] ~~Stack canaries (`-fstack-protector`)~~ -- done, see the commit that added it
 - [x] ~~Page-align `.text` away from `.rodata`/`.data`/`.bss` in
       `linker.ld`~~ -- done, with four real PT_LOAD segments; also
       silenced the long-standing RWX LOAD-segment link warning. See
-      `CHANGELOG.md`'s `[Unreleased]` entry
+      the commit that added it
 - [x] ~~W^X on kernel + userspace mappings~~ -- both halves done. The
       kernel's identity map gets NX on every huge PDE plus one 4KiB
       split for `.text`, and CR0.WP so ring 0 honours read-only at all;
       see `docs/decisions.md`'s kernel W^X entry
 - [x] ~~A real entropy source (RDRAND, TSC jitter fallback)~~ -- done,
-      see `CHANGELOG.md`'s `[Unreleased]` entry: `krandom_u64()`/
+      see the commit that added it: `krandom_u64()`/
       `krandom_bytes()` over RDSEED/RDRAND with a TSC-jitter fallback,
       `krandom_quality()` reporting which one it got, and the stack
       canary randomized from it at boot

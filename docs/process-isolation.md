@@ -2,7 +2,7 @@
 
 > **Note on milestone numbers:** this document predates the current
 > `docs/roadmap.md` numbering and every "Milestone N" below refers to
-> the original pre-v0.1.0 scheme recorded in `CHANGELOG-archive.md`.
+> the original pre-v0.1.0 scheme recorded in the git history.
 > They are not the milestones in today's roadmap.
 
 The build-up of real ring0/ring3 privilege separation in toy-os, told
@@ -10,8 +10,8 @@ as it happened -- what got added, what broke, and how each bug was
 found and fixed. Moved out of README.md (which now keeps just a short
 summary + a link here) because this is a full implementation
 walkthrough, not a feature list entry. See `docs/decisions.md` for
-shorter topic-indexed "why" answers, and `CHANGELOG.md`/
-`CHANGELOG-archive-2.md`/`CHANGELOG-archive.md` for the complete history this
+shorter topic-indexed "why" answers, and the git history and
+the git history/the git history for the complete history this
 was assembled from.
 
 By default, the kernel, drivers, shell, and GUI apps all run in one

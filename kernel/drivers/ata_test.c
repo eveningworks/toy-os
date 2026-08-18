@@ -22,7 +22,7 @@
 // even if an assertion inside `body` would have returned early, which
 // is why the assertions live AFTER this rather than inside it. A test
 // that leaks driver state poisons every test after it, the same cascade
-// the runner's fault_any_armed() check exists to stop (see CHANGELOG.md
+// the runner's fault_any_armed() check exists to stop (see the git history
 // on the flaky CI failure that produced it).
 #define WITH_PIO_FORCED(body)                       \
     do {                                            \

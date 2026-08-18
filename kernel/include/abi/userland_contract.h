@@ -20,7 +20,7 @@
 // kept as a constant nothing implements -- and it was aliasing
 // ELF_RUN_HEAP_VADDR (elf_run.c) exactly, so a future read-back test
 // wanting this back needs its own address clear of the heap and stack,
-// not this one. See docs/decisions.md and CHANGELOG.md.
+// not this one. See docs/decisions.md and the git history.
 //
 // The header itself stays: it is the natural home for the next thing
 // the kernel and a freestanding `/bin` binary have to agree on, and

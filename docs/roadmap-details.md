@@ -10,7 +10,7 @@ The order here follows the old milestone numbering rather than the
 list's layers, deliberately -- these are anchors, and re-sorting them
 would break every pointer into them.
 
-Full reasoning, phased test plans, and CHANGELOG/decisions.md pointers for
+Full reasoning, phased test plans, and the git history/decisions.md pointers for
 every item above, in the same order.
 
 ### Async I/O to the desktop
@@ -21,14 +21,13 @@ Apps run in kernel space, so a disk write from Notepad's Save, the shell's
 desktop, not just the operation. Broken into phases, each independently
 testable:
 
-1. [x] ~~Non-blocking DMA start/poll primitive~~ -- done (see `CHANGELOG.md`'s
-   `[0.1.0]` entry): `dma_transfer_start()`/`dma_transfer_poll()`
+1. [x] ~~Non-blocking DMA start/poll primitive~~ -- done (see the v0.1.0 release): `dma_transfer_start()`/`dma_transfer_poll()`
    (`kernel/drivers/ata.c`/`ata.h`), built from the same `dma_issue()`/
    `dma_finish()` halves the existing blocking `dma_transfer()` uses, so the
    blocking path is unchanged. No real caller yet -- proven standalone via
    the `dmatest [lba]` shell command (read-only, byte-compares a blocking
    read against the non-blocking one, reports poll count).
-2. [x] ~~Steppable write API~~ -- done (see `CHANGELOG.md`'s `[0.1.0]`
+2. [x] ~~Steppable write API~~ -- done (see the v0.1.0 release
    entry): `fs_write_range_begin()`/`fs_write_range_step()` (`fs.h`,
    dispatched through `fs_ops.h`/`vfs.c` to `tfs.c`'s
    `tfs_write_range_begin()`/`_step()`), built from the same
@@ -37,8 +36,7 @@ testable:
    standalone via the `steptest <mb>` shell command (writes via an explicit
    step loop the command drives itself, verifies byte-for-byte against
    readback, reports step count).
-3. [x] ~~Wire up one real caller~~ -- done (see `CHANGELOG.md`'s
-   `[0.1.0]` entry): `wm_run()` polls a pending write once per frame
+3. [x] ~~Wire up one real caller~~ -- done (see the v0.1.0 release): `wm_run()` polls a pending write once per frame
    (`apps/wm/wm.c`, a new WM-global `pending_write` slot) instead of
    calling `fs_write_range()`/`fs_write()` and blocking; Notepad's Save As...
    (`apps/notepad.c`) is the first non-blocking caller, via two new public
@@ -53,7 +51,7 @@ testable:
    the desktop successfully switching focus to the other window while the
    write was still in flight, proving it didn't freeze.
 4. [x] ~~Generalize to reads and the plain shell prompt~~ -- done (see
-   `CHANGELOG.md`'s `[0.1.0]` entry). Read side:
+   the v0.1.0 release). Read side:
    `fs_read_range_begin()`/`fs_read_range_step()` (`fs.h`, dispatched
    through `fs_ops.h`/`vfs.c` to `tfs.c`'s `tfs_read_range_begin()`/
    `_step()`), built the same way Phase 2 built the write side, plus a
@@ -81,7 +79,7 @@ testable:
    debug console/cursor between blocks now.
 
 Separately, async/continuously-armed process spawning for the GUI Terminal
-(Async I/O to the desktop phase 4b) -- [x] done, see `CHANGELOG.md`'s `[0.1.0]`
+(Async I/O to the desktop phase 4b) -- [x] done, see the v0.1.0 release
 entry. Was deliberately deferred, not started, when `ls` migrated to a
 real `/bin` binary (blocked in the Terminal same as `run` at the time,
 see docs/decisions.md) -- the blocker was architectural, not a small fix:
@@ -171,8 +169,7 @@ has and a hobby kernel this far along is a natural point to start closing.
 Both of those are closed now; SMEP/SMAP, ASLR and the entropy source
 they need are what's left:
 
-- ~~NX bit enforcement~~ (userspace) -- done, see `CHANGELOG.md`'s
-  `[Unreleased]` entry: EFER.NXE set at boot, `vmm_map_user_page()`
+- ~~NX bit enforcement~~ (userspace) -- done, see the commit that added it: EFER.NXE set at boot, `vmm_map_user_page()`
   now defaults to non-executable (correct for the stack/heap/
   framebuffer/window-buffer pages that were its only pre-existing
   callers), and `elf.c`'s loader reads each PT_LOAD segment's real
@@ -203,8 +200,8 @@ they need are what's left:
   needed no change at all. Seven KTESTs, two positive controls that
   each fire on exactly the right check, and a live `PANIC: Page fault`
   from a deliberate write to `.text` -- see `docs/decisions.md`'s
-  kernel W^X entry and `CHANGELOG.md`'s `[Unreleased]` entry.
-- ~~Stack canaries~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry:
+  kernel W^X entry and the commit that added it.
+- ~~Stack canaries~~ -- done, see the commit that added it:
   `-fstack-protector-strong` is on for both the kernel and userland now,
   with `-mstack-protector-guard=global` (a fixed constant, not random --
   no entropy source exists yet, see `docs/decisions.md`) since there's
@@ -238,11 +235,10 @@ and the real runs came in at 5.5 and 11.5 minutes. An estimate written
 against an old measurement is worth re-deriving before letting it decide
 what's too expensive to try. And the first `stress 4200` attempt did NOT
 pass: it died at 11% on an ATA timeout that turned out to be a real
-driver bug (see `CHANGELOG.md`'s `[Unreleased]` entry on the pre-issue
+driver bug (see the commit that added it on the pre-issue
 busy wait). The scale test earned its keep by failing first.
 
-~~TFS2/ATA write performance, part 2~~ -- done, see `CHANGELOG.md`'s
-`[Unreleased]` entry. Went exactly the way this item predicted (raise the
+~~TFS2/ATA write performance, part 2~~ -- done, see the commit that added it. Went exactly the way this item predicted (raise the
 per-command cap, then batch contiguous runs into it): the DMA bounce
 buffer grew from 1 frame to 16, `ATA_MAX_SECTORS_PER_XFER` went 8 -> 128
 (one full PRD), and `contiguous_run()` merges consecutive blocks into a
@@ -267,8 +263,7 @@ costs one idempotent replay. Dropping the other two halved metadata cost
 with the crash-safety argument unchanged -- a 256-record format went
 0.73s to 0.34s. See `docs/decisions.md`.
 
-~~GPT/MBR partition table parsing~~ -- done, see `CHANGELOG.md`'s
-`[Unreleased]` entry: `kernel/drivers/partition.c`'s
+~~GPT/MBR partition table parsing~~ -- done, see the commit that added it: `kernel/drivers/partition.c`'s
 `partition_read_table()` reads LBA 0 (and LBA 1 + the entry array, for a
 protective-MBR-signaled GPT disk), exposed via a new `parttable` shell
 command. Read-only, parse-only, same as originally scoped here --
@@ -284,7 +279,7 @@ kernel source unmodified, `tools/mkpart_test.py`).
 
 ### Kernel test harness
 
-**Done** (2026-08-13) -- see `CHANGELOG.md`'s `[Unreleased]` entry. Kept
+**Done** (2026-08-13) -- see the commit that added it. Kept
 here because the reasoning is still the reference for adding tests.
 
 The problem it solved: `heap_selftest()`, `tfs_selftest()`, the PMM
@@ -728,8 +723,7 @@ discussion.
 Real wallpaper images for the desktop background (`apps/wm/desktop.c`
 currently fills a plain color) -- blocked on the image decoder above.
 
-~~Desktop icon repositioning/dragging~~ -- done, see `CHANGELOG.md`'s
-`[Unreleased]` entry: each icon now has real per-icon {col, row} state
+~~Desktop icon repositioning/dragging~~ -- done, see the commit that added it: each icon now has real per-icon {col, row} state
 (`apps/wm/desktop.c`'s `icon_col`/`icon_row`), draggable via a reusable
 icon-grid + drag-session widget (`apps/ui/ui_icon_grid.h`) built with a
 future file manager's icon view (Desktop productivity apps) as a second caller in
@@ -742,7 +736,7 @@ see `docs/decisions.md`.
 
 More compositor work beyond `gfx_present()`'s dirty-pixel blit and the
 cursor-sprite save/restore path -- partially done now, see
-`CHANGELOG.md`'s `[Unreleased]` entry: `apps/wm/wm_render.c` computes a
+the commit that added it: `apps/wm/wm_render.c` computes a
 SCENE-level damage region each frame (comparing each window's last-
 rendered rect/visibility to its current one, plus explicit reports from
 `bring_to_front()`/`close_window()`/desktop icon drag/keyboard input to
@@ -765,7 +759,7 @@ margin.
 
 Phase 3 (skipping a window's draw call entirely, not just its pixel
 writes, when it doesn't intersect the damage region) is done now too --
-see `CHANGELOG.md`'s `[Unreleased]` entry: `wm_render_frame()`
+see the commit that added it: `wm_render_frame()`
 (`apps/wm/wm_render.c`) tests each visible window's rect against the
 frame's damage box and skips `draw_window_chrome()`/`on_draw()`/
 `draw_resize_grip()` entirely for one that doesn't overlap, rather than
@@ -1208,7 +1202,7 @@ PCI enumeration, a real IRQ-handler registration mechanism, contiguous/
 DMA-friendly physical memory, a socket-like fd abstraction + syscalls
 (`SYS_SOCKET`/`SYS_SEND`/`SYS_RECV`, currently scaffolding -- always
 return -1, "no transport yet"), and a real IRQ-driven DMA transfer example
-are all already done (see `CHANGELOG.md`'s build 390/400/410/420/470 and
+are all already done (see the commit for build 390/400/410/420/470 and
 `docs/decisions.md`). What's left is the actual driver and protocol stack:
 
 Realistic path: pick a simple NIC to target (QEMU's `rtl8139` emulation is
@@ -1241,7 +1235,7 @@ multi-session project with its own milestones, not a single build bump.
 New milestone, lightly scoped. No audio subsystem exists today. A first
 rough breakdown, cheapest-to-hardest:
 
-- ~~PC speaker beep~~ -- done, see `CHANGELOG.md`'s `[Unreleased]` entry:
+- ~~PC speaker beep~~ -- done, see the commit that added it:
   `kernel/drivers/speaker.c`'s `speaker_beep(freq_hz, duration_ms)`
   drives PIT channel 2 + port `0x61`'s gate/data bits, exposed via a
   new `beep` shell command (a fixed 800Hz/200ms tone, "simplest
@@ -1474,7 +1468,7 @@ manager ITSELF also runs in ring 3:
 to restore the kernel context only on a tick that found nothing
 `SCHED_READY`, so a ready ring-3 process starved kernel code -- and
 `wm_run()` is kernel code -- until every process exited. Done; see
-`CHANGELOG.md`'s `[Unreleased]` entry and `scheduler.c`'s `ROT_KERNEL`
+the commit that added it and `scheduler.c`'s `ROT_KERNEL`
 comment.
 
 **What the current syscall surface is missing**, beyond that:

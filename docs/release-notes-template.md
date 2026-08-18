@@ -4,7 +4,7 @@
 
      Install FIRST -- the page's job is to get somebody running it. Then
      one section per area, flat bullets. No commit counts, no milestone
-     numbers, no CHANGELOG pointer, no promotional framing. Check every
+     numbers, no the git history pointer, no promotional framing. Check every
      claim against the TAG before publishing: `git ls-tree -r v<x>
      --name-only`, `git show v<x>:<file>`. -->
 

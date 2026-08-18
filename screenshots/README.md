@@ -45,7 +45,7 @@ Why dated subfolders rather than one flat folder: screenshots are a
 point-in-time record ("this is what the GUI looked like and did on
 this date"), not a live asset that gets overwritten as the UI changes.
 Keeping each date's screenshots together makes it possible to look back
-at what changed visually over time, the same way `CHANGELOG.md` records
+at what changed visually over time, the same way the git history records
 what changed functionally.
 
 The `v0.2.0/` ... `v0.7.0/` folders still here are from that first

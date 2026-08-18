@@ -720,7 +720,7 @@ twice more.**
   concluding anything.
 
 **2026-08-15 (documentation change, applies to EVERY session from
-here): comments get shorter, and `CHANGELOG.md` is closed.**
+here): comments get shorter, and the changelog is gone.**
 
 On comments: this repo leans hard on them and mostly earns it -- write
 **the invariant** (what must stay true) and **the trap** (what breaks
@@ -858,7 +858,7 @@ real, and finding it was mostly about not trusting green.**
   that was actively failing (a `gui click` queues four events consumed
   one per iteration, and its leading move is itself a cheap frame that
   cleans up), so it was DELETED rather than committed looking green.
-  The knowledge went into `CHANGELOG.md` instead.
+  The knowledge went into a source comment instead.
 - **The kernel has entropy now** -- `kernel/include/api/krandom.h`
   (`krandom_u64`/`krandom_bytes`/`krandom_quality`), RDSEED then RDRAND
   then TSC jitter, plus `SYS_GETRANDOM` and a `random` shell command.
@@ -1069,8 +1069,7 @@ Read this before assuming anything about the project's state.**
   (clone the mirror, `make all`) is a manual step and worth the minutes.
 - **v0.2.0 is released** (178 commits since v0.1.0; milestones 2, 4 and
   15). `VERSION` is `0.3.0-dev`. The release process is unchanged, but
-  note `CHANGELOG.md`'s `[Unreleased]` stamp did its one useful job
-  there and is a permanent no-op now.
+  note the changelog was deleted outright on 2026-08-18.
 - **The roadmap's "Milestone N (planned v0.N.0)" convention is
   RETIRED** -- 38 headings carried a planned version and the mapping had
   stopped being true. Milestone numbers order work; they do not name
@@ -1915,7 +1914,7 @@ the pre-fix commit in a scratch worktree and run the tool against that.
 The specific commands below
 were verified current as of the last time this skill was updated, but
 if `CLAUDE.md`, `VERSION`/`BUILD_NUMBER`, `apps/ui/`, or
-`CHANGELOG.md`'s structure look different from what's described here,
+the docs' structure look different from what's described here,
 trust the repo over this document, and consider that this skill itself
 may be due for an update to match (see its own delivery step 6 -- the
 same "keep docs matching reality" instinct applies to this file too).
@@ -2141,7 +2140,7 @@ same "keep docs matching reality" instinct applies to this file too).
      throughput rather than QMP interaction) doesn't need to run to
      completion in-session to ship.** Measure the real rate at a small,
      fast scale first (e.g. a `stress 100` -- 100MB -- pass, timed), then
-     be honest in `CHANGELOG.md`/`docs/roadmap.md` about what the
+     be honest in the commit message and `docs/roadmap.md` about what the
      extrapolated full-scale time would be and that it wasn't run. Real
      example: a `stress <mb>` shell command (real, non-sparse
      write/read/verify over `fs_write_range()`/`fs_read_range()`) was
@@ -2154,20 +2153,18 @@ same "keep docs matching reality" instinct applies to this file too).
      mid-test) or silently skipping the feature entirely are both worse
      than saying so plainly.
 
-5. **Write the docs, in the existing style, not a new one.** Every
-   substantive change gets a `CHANGELOG.md` entry under its
-   `## [Unreleased]` heading (Keep a Changelog style -- `### Added`/
-   `### Changed`/`### Fixed`/etc. subsections, no version number
-   attached to the entry itself); read a couple of recent entries first
-   and match the shape (what was asked, what was found, what was
-   decided and why, what got verified) rather than inventing a new
-   format. Add a `docs/decisions.md` entry only when the change answers
+5. **Write the docs, in the existing style, not a new one.** THERE IS
+   NO CHANGELOG -- it was deleted on 2026-08-18 (see CLAUDE.md). What
+   changed goes in the COMMIT MESSAGE, file by file, and `git log` is
+   the chronological record; read a couple of recent commit bodies and
+   match their shape (what was wrong, what actually caused it, the file
+   list, what was verified, what was NOT established) rather than
+   inventing a format. Add a `docs/decisions.md` entry only when the change answers
    a "why does toy-os work this way" question a future session would
    plausibly hit again -- most changes don't need one. Update
    `docs/roadmap.md` (checkbox list, `- [ ]`/`- [x]`) if this session
-   only planned something rather than building it, striking through and
-   linking the CHANGELOG entry once something listed there actually
-   ships; update `README.md`'s own feature/command description instead
+   only planned something rather than building it, striking it through
+   once it actually ships; update `README.md`'s own feature/command description instead
    if it actually got built. See `references/doc-templates.md` for the
    exact shapes and real excerpts to copy the tone from -- don't
    freehand these from scratch, and double-check the template still
@@ -2498,10 +2495,10 @@ Worth checking against before debugging from scratch:
 
 Not every message needs the full six-step ceremony. A one-line
 copy-edit or an obvious typo fix doesn't need an `AskUserQuestion` round
-or a `docs/decisions.md` entry -- and its `CHANGELOG.md` entry can be a
-sentence, not a multi-part writeup. Use judgment on ceremony the way
-the project itself does (compare how short a docs-only or one-line fix
-entry is against a real feature's multi-paragraph one, in any recent
-stretch of `CHANGELOG.md`) -- the sequence above is the shape for a
+or a `docs/decisions.md` entry -- and its commit message can be a
+sentence and a file list, not a multi-part writeup. Use judgment on
+ceremony the way the project itself does (compare how short a docs-only
+or one-line fix commit is against a real feature's, in any recent
+stretch of `git log`) -- the sequence above is the shape for a
 real feature or fix, not a rulebook to apply uniformly regardless of
 size.

@@ -2,7 +2,7 @@
 // about/echo/meminfo/dmesg/reboot/apps/run/fontsize/keyboard/color/
 // history/lspci. Split out of shell.c once it crossed 900 lines mixing every
 // command category together -- see shell_internal.h's top comment for
-// the split's own reasoning and CHANGELOG.md for the build this
+// the split's own reasoning and the git history for the build this
 // happened in. Shares `shell_fg`/history[]/history_count with shell.c
 // (and shell_fs.c) via shell_internal.h.
 #include "shell_internal.h"
@@ -58,7 +58,7 @@ static void console_page(const char *const *lines, uint32_t count) {
     }
 }
 
-// Split in two (see CHANGELOG.md for the request/reasoning): HELP_LINES
+// Split in two (see the git history for the request/reasoning): HELP_LINES
 // is what a day-to-day user actually needs, grouped under headers
 // rather than one flat 50-line list. TEST_HELP_LINES holds the ring-3/
 // syscall/scheduler diagnostic commands -- genuinely useful (they're

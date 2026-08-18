@@ -14,7 +14,7 @@ journaling design -- e.g. write-ahead log vs. alternatives -- ,
 timestamp fields to track), each with a recommended default. The user
 answered all three at once, and every answer was actually used
 (including the chosen name, "TFS2", which then became routed through
-every doc/comment/CHANGELOG entry from then on -- naming choices
+every doc and comment from then on -- naming choices
 aren't cosmetic, they propagate).
 
 **Scope-of-session, not just scope-of-feature:** asked to plan support

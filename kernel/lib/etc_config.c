@@ -1,7 +1,7 @@
 // Shared name=value config-file reader/writer for /etc -- see
 // etc_config.h for the public API. This replaces two independent
 // hand-rolled single-purpose parsers (tz.c's and font_config.c's,
-// see CHANGELOG for the build that did the replacing) with one engine
+// see the git history for the build that did the replacing) with one engine
 // any current or future /etc file can go through.
 //
 // File format: one "key=value" per line. '#' starts a comment that

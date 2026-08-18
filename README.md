@@ -348,7 +348,7 @@ Selected tools (each documented in its own docstring):
 | [docs/live-cd-design.md](docs/live-cd-design.md) | How the Live CD carries a filesystem image as a GRUB module. |
 | [docs/arch-portability.md](docs/arch-portability.md) | What is and isn't x86-64-specific, and what a second architecture would take. |
 | [kernel/README.md](kernel/README.md), [apps/README.md](apps/README.md) | Where a new file goes, and how to add an app. |
-| [CHANGELOG.md](CHANGELOG.md) | History through 2026-08-15, now **frozen** — `git log` is the chronological record, and reasoning lives in `docs/decisions.md`. |
+| [the git history](the git history) | History through 2026-08-15, now **frozen** — `git log` is the chronological record, and reasoning lives in `docs/decisions.md`. |
 
 ## Releases
 

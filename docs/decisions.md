@@ -4,9 +4,9 @@ A short, topic-indexed answer to "why does toy-os work this way?" for
 the handful of choices that come up again once code has grown around
 them. This is a pointer file, not a duplicate of the reasoning --
 `README.md`/`apps/README.md` cover architecture, and each entry below
-links to the CHANGELOG.md section (or source file) that has the full
+links to the git history (or source file) that has the full
 writeup. Update the pointer here when a decision changes; don't copy
-the reasoning itself out of CHANGELOG.md or a source comment into this
+the reasoning itself out of the git history or a source comment into this
 file, or the two will drift.
 
 If you're a Claude session or a contributor and about to ask "wait, why
@@ -722,7 +722,7 @@ need). Its `widget_checkbox_*`, though, was added explicitly ahead of
 any real caller, by direct user request when asked to choose the
 scope -- a deliberate, acknowledged exception to the rule above, not a
 change to it: the rule still applies to whatever gets added *next*.
-See CHANGELOG-archive-2.md's **Build 490** for the full writeup.
+the commit for build 490 for the full writeup.
 
 `ui_radio_list`, and later `ui_listbox`/`ui_dropdown`, were added the
 same way -- ahead of a second caller, by explicit user request. Worth
@@ -906,8 +906,7 @@ over the neighbouring label (see the entry below on that function not
 clipping -- this is that lesson recurring, in a new file, four days
 after it was written down).
 
-See `apps/control_panel.c`'s top comment and CHANGELOG.md's
-`[Unreleased]`.
+See `apps/control_panel.c`'s top comment and the git history.
 
 ## Sorting: the widget owns the order, the app owns the comparison
 
@@ -997,7 +996,7 @@ fixed box" rather than "remember to do this by hand".
 font metrics) lists exactly that function as something it needs, and
 every `k_strlen(s) * gfx_char_w()` open-coded at a call site is a place
 that silently breaks when a glyph stops being one cell wide. See
-CHANGELOG.md's `[Unreleased]` entries.
+the git history.
 
 **Same lesson, vertical axis:** a follow-up report caught the field's
 height having the exact same problem one axis over -- `apps/notepad.c`
@@ -1007,7 +1006,7 @@ erased) the border pixels on any row with a character. Budgeting width
 isn't enough on its own; a fixed-box text widget needs real margin on
 *both* axes, not just clipping on the one that happened to get bug
 reports first. Fixed with a small `ROW_VPAD` constant reserving actual
-vertical slack. See CHANGELOG.md's `[Unreleased]` entry.
+vertical slack. See the commit that added it.
 
 ## IRQ registration: one handler per line, framework-automatic EOI
 
@@ -1030,7 +1029,7 @@ EOI'd and ignored) -- including the timer, which now hands off to
 `scheduler_tick()` from inside its own registered handler
 (`idt.c`'s `timer_irq_handler()`) rather than a dispatch-level special
 case, so every hardware IRQ (32-47) goes through one uniform path. See
-`irq.h`'s top comment and CHANGELOG-archive-2.md's **Build 400** for the full
+`irq.h`'s top comment and the commit for build 400 for the full
 writeup, including what got regression-tested (timer/scheduler,
 keyboard, mouse) since this touched all three.
 
@@ -1062,7 +1061,7 @@ writing, only) caller, but the mechanism itself is general-purpose --
 any future driver wanting to block inside a syscall-reachable code
 path (a NIC's TX/RX ring, say) needs this same check, not a
 driver-specific reinvention. See `idt.h`'s doc comments and
-CHANGELOG-archive-2.md's **Build 470** for the full writeup.
+the commit for build 470 for the full writeup.
 
 ## Thin provisioning: the image is sparse at birth, and TRIM is what keeps it that way
 
@@ -1148,7 +1147,7 @@ it. `pci_enable_bus_master()` (`pci.c`/`pci.h`) sets it via a
 read-modify-write of the Command register, called once from
 `ata_init_dma()`. Any future DMA-capable driver (a NIC) needs this same
 call before its own DMA moves real data -- noted directly in
-`pci.h`'s doc comment, not just here. See CHANGELOG-archive-2.md's **Build 470**
+`pci.h`'s doc comment, not just here. the commit for build 470
 for how this was root-caused (PIO-vs-DMA comparison, then a host-side
 pre-seeded disk image to isolate the read path and trace the bounce
 buffer).
@@ -1185,7 +1184,7 @@ helper makes that disagreement unexpressible.
 Related, same file, same session: `wait_drq()` now records *why* it
 failed in `g_pio_fail_reason`, mirroring `g_dma_fail_reason` -- a
 pass/fail return for control flow, a reason string for whoever reads
-`dmesg`. See `ata.c` and CHANGELOG.md's `[Unreleased]`.
+`dmesg`. See `ata.c` and the git history.
 
 ## ATA's waits are bounded by wall-clock in one context and a spin count in the other
 
@@ -1216,7 +1215,7 @@ speed during exactly the host-side stalls it's supposed to absorb, so
 any timeout that must survive one has to be denominated in real time.
 
 See `ata.c`'s `wait_not_busy()`/`DMA_WAIT_TICKS` comments and
-CHANGELOG.md's `[Unreleased]`.
+the git history.
 
 ## Contiguous memory: linear bitmap scan, not a buddy allocator
 
@@ -1236,7 +1235,7 @@ scan strategy in a way this could regress. Replacing the whole
 allocator to solve a fragmentation problem no code in this kernel has
 actually hit yet was judged premature; it's flagged in
 `docs/roadmap.md` as the fix if that ever changes, not built now. See
-`pmm.h`'s top comment and CHANGELOG-archive-2.md's **Build 410** for the
+`pmm.h`'s top comment and the commit for build 410 for the
 full writeup, including `pmm_selftest()`'s boot-time verification
 (no consumer exists yet to exercise these functions any other way).
 
@@ -1260,7 +1259,7 @@ NOT size-probed (the write-0xFFFFFFFF-and-read-back trick) -- that's
 deferred to whichever future driver actually needs to map a BAR, since
 it means temporarily disabling the device's decode and isn't needed
 just to enumerate/identify what's present. See `pci.h`'s top comment
-and CHANGELOG-archive-2.md's **Build 390** for the full writeup -- this was the
+and the commit for build 390 for the full writeup -- this was the
 first concrete milestone toward the TCP/IP prerequisites README.md's
 **Build 380** entry laid out.
 
@@ -1292,7 +1291,7 @@ never revisited. When a range-based API gets added next to a
 whole-object one (see the entry above on why both exist), the existing
 callers are the thing to check.
 
-See `syscall.c`'s `SYS_READ` branch and CHANGELOG.md's `[Unreleased]`.
+See `syscall.c`'s `SYS_READ` branch and the git history.
 
 ## pci.ids is bundled in `data/`, not downloaded or read from the build host
 
@@ -1343,7 +1342,7 @@ a caps bitmask -- not routing different path prefixes to different
 backends simultaneously. Mount points remain meaningfully more code
 (cross-mount path resolution, boundary conflicts) for a capability
 nothing needs yet. See `fs_ops.h`'s top comment and
-CHANGELOG-archive-2.md's **Build 304**
+the commit for build 304
 for the original reasoning, including what it would take to add mount
 points later if that ever changes.
 
@@ -1375,8 +1374,7 @@ gives genuine crash recovery, not just torn-write detection, for a
 journal region that only costs one extra record's worth of disk space
 total (not per-record). See `tfs.c`'s top comment ("Journaling") for
 the exact 4-step write-ahead sequence and replay logic, `docs/
-tfs2-spec.md` for the on-disk journal format, and CHANGELOG-archive-2.md's
-**Build 480** for the full writeup. **This is TFS2's rule.** The
+tfs2-spec.md` for the on-disk journal format, and the commit for build 480 for the full writeup. **This is TFS2's rule.** The
 "would need more than this" prediction came true at Milestone 15:
 TFS3's mutations touch several metadata blocks, and it ships the
 4-slot transaction journal this entry anticipated -- see the entry
@@ -1409,12 +1407,12 @@ different timezone selections. Acceptable for a toy OS's own files;
 would need revisiting (probably by finally adding an epoch conversion
 helper) if timestamps ever needed to be meaningfully compared against
 a real-world reference. See `fs.h`'s `fs_stat()` doc comment,
-`tfs.c`'s top comment, and CHANGELOG-archive-2.md's **Build 480**.
+`tfs.c`'s top comment, and the commit for build 480.
 
 ## `kapi.h` is the only header apps/ includes
 
 Introduced when the tree was split into `kernel/core/`, `kernel/drivers/`,
-and `apps/` (see `CHANGELOG-archive.md`'s **Milestone 4** -- the old
+and `apps/` (the commit \"Milestone 4\" -- the old
 pre-v0.1.0 numbering, not `docs/roadmap.md`'s current Milestone 4)
 specifically so
 drivers could be reshuffled internally without every app needing an
@@ -1427,8 +1425,8 @@ not folded into `kapi.h` (not every app is a GUI app). See CLAUDE.md's
 ## `widgets.h`/`theme.h` stay minimal on purpose
 
 Both only gained their current primitives once a *second* real caller
-needed them (see CHANGELOG.md's **"Splitting wm.c into apps/wm/, and a
-shared widgets.h/widgets.c module"** for widgets.h's origin, and the
+needed them (the commit \""Splitting wm.c into apps/wm/, and a
+shared widgets.h/widgets.c module"\" for widgets.h's origin, and the
 scrollbar-phase builds for how `text_scrollback` grew from
 Terminal-only to shared with Notepad). Deliberately not
 speculatively built out ahead of a real second caller -- see each
@@ -1440,7 +1438,7 @@ header's own top comment before adding to it.
 for *readability*, but shares state through `wm_internal.h`'s
 `extern`s rather than hiding it behind accessor functions -- it's
 still one tightly-coupled event loop, the same thing the single
-pre-split `wm.c` was (CHANGELOG.md's **"Splitting wm.c into apps/wm/..."**),
+pre-split `wm.c` was (the commit \""Splitting wm.c into apps/wm/..."\"),
 just spread across files. Deliberate: this is one component's internal
 organization, not a boundary between independently-reasoned-about
 components the way `kapi.h`/`wm.h` are. See `wm_internal.h`'s top
@@ -1482,7 +1480,7 @@ none of them are affected. AltGr is deliberately NOT Meta -- it stays a
 layout modifier so Nordic third-level characters keep working.
 
 See `kernel/include/api/keyboard.h`'s "Ctrl and Alt" comment,
-`kernel/lib/klineedit.c`, and CHANGELOG.md's `[Unreleased]`.
+`kernel/lib/klineedit.c`, and the git history.
 
 ## The console cursor saves the pixels it covers
 
@@ -1515,7 +1513,7 @@ of its cell. What works is tinting both, with the glyph tinted harder
 than the background.
 
 See `kernel/drivers/vga.c`'s cursor section, `vga.h`'s cursor-style
-enum, and CHANGELOG.md's `[Unreleased]`.
+enum, and the git history.
 
 ## Terminal wraps the real shell, it doesn't reimplement it
 
@@ -1525,12 +1523,11 @@ shell" command handler that could drift out of sync with the real one.
 A short, explicit list of commands that draw straight to the physical
 screen or block in ways that don't make sense inside a window (`gui`,
 `ring3test`, `elftest`, ...) print an explanation instead of running.
-Built across four phases -- see CHANGELOG-archive-2.md's
-**Builds 183, 193, 203, 253**.
+Built across four phases -- the commit for build 183, 193, 203, 253.
 
 ## `ring3test` still requires a reboot after its fault, on purpose
 
-Once process exit/teardown existed (CHANGELOG-archive.md's **Build 173**) so a
+Once process exit/teardown existed (the commit for build 173) so a
 crashed *scheduled* ring-3 process doesn't halt the kernel, `ring3test`
 kept requiring a reboot anyway -- not because teardown didn't reach it,
 but because it intentionally drops to ring 3 via its own raw `iretq`
@@ -1540,7 +1537,7 @@ recover it *to*. See `process.h` and `docs/roadmap.md`.
 `elftest` used to be this file's other example (same raw-`iretq`
 mechanism, via `hello.elf`) until the ELF64-to-`/bin` migration folded
 it into the generic `run hello` path (see this file's entry on that
-migration, and CHANGELOG.md's `[Unreleased]`), at the cost of losing
+migration, and the git history), at the cost of losing
 test coverage for the raw `iretq` entry path specifically. `ring3test`
 is the one remaining place that path gets exercised. `hello.elf` no
 longer faults at all -- it's a plain greet-and-exit program now; see
@@ -1578,7 +1575,7 @@ report that it lost its harness -- it reports whatever failure the
 missing harness causes.** The migration's own writeup listed exactly
 what coverage was being traded away and still missed this, because the
 lost piece wasn't the test, it was a page mapping the test depended on.
-See CHANGELOG.md's `[Unreleased]`.
+see the git history.
 
 ## The on-disk layout is a trimmed FHS, not POSIX -- and `/tests` is a deliberate exception
 
@@ -1630,11 +1627,11 @@ to be unwieldy sharing it (a GUI app with a dozen preferences) should
 pass its own `/etc/<name>.conf` path instead -- nothing in
 `etc_config.c` favors one file over many, that choice belongs to each
 caller. See `kernel/lib/etc_config.c`'s top comment for the file
-format itself and CHANGELOG-archive-2.md's **Build 357** for the original
+format itself and the commit for build 357 for the original
 writeup, including the one-time forward-migration logic each of
 `tz.c`/`font_config.c` briefly carried to move an already-chosen
 setting out of its old dedicated file the first time it loaded --
-removed later (see `CHANGELOG.md`'s `[Unreleased]` entry) once the
+removed later (see the commit that added it) once the
 project was comfortable dropping pre-1.0 on-disk/config compatibility
 in favor of just starting fresh (a new `disk.img`/`/etc` state) instead
 of carrying migration code for formats nothing still produces.
@@ -1654,7 +1651,7 @@ deliberately left unclaimed at the WM level -- free for a future
 per-window or modal use (e.g. canceling a confirm dialog) instead of
 double-booking it as "exit everything, no matter what's open or
 focused," which is exactly the conflict this entry used to warn about.
-See CHANGELOG.md's `[Unreleased]` "Exit to shell" entry.
+see the git history "Exit to shell" entry.
 
 The original reasoning below is preserved because the underlying fact
 (the CLI/GUI editor's exit key had to be F3, not Esc, because of this
@@ -1674,7 +1671,7 @@ it still needs to be something other than Esc until a WM-level Esc
 handler (e.g. a confirm dialog's cancel) actually exists -- **Build
 377** picked F3 for the editor's exit specifically to sidestep this.
 See `wm.c`'s own comment at the old check's former location and
-CHANGELOG-archive-2.md's **Build 377** for the full story.
+the commit for build 377 for the full story.
 
 ## Don't put a `text_scrollback` on the stack
 
@@ -1691,8 +1688,7 @@ anyway and it silently corrupted nearby memory several calls deep into
 later keystrokes quietly not registering. Any new caller of
 `text_scrollback` (or anything else sized against `SCROLLBACK_CAP`) on a
 kernel-context call path needs a static instance, not a local variable.
-See `apps/editor.c`'s `g_editor_tb` for the fix and CHANGELOG-archive-2.md's
-**Build 377** for the full story.
+See `apps/editor.c`'s `g_editor_tb` for the fix and the commit for build 377 for the full story.
 
 ## The CLI editor's status bar needs its own line-wrapping pass, not a plain dump-and-let-the-console-wrap
 
@@ -1718,7 +1714,7 @@ trailing `\n` so the physical cursor lands right after it instead of a
 row below -- is the general pattern any future full-screen CLI
 renderer in this codebase should copy, not another one-off dump. See
 `editor.c`'s `editor_render()` top comment and
-CHANGELOG-archive-2.md's **Build 379** for the full story, including a padding-math bug the windowing
+the commit for build 379 for the full story, including a padding-math bug the windowing
 itself caught during testing.
 
 ## Timezone city list is a database file, not a hardcoded array or a config key
@@ -1734,7 +1730,7 @@ both into `toyos.conf`. This is also the concrete case **Build 357**'s
 "a setting with enough keys of its own gets its own file" escape hatch
 was written for -- a city list doesn't fit `key=value` shape at all.
 Editing the database only takes effect on the next boot (no live-
-reload command yet); see CHANGELOG-archive-2.md's **Build 367** for the full
+reload command yet); the commit for build 367 for the full
 writeup and what was verified.
 
 ## Build-number scheme: fix/feature/major tiers, not dates or semver
@@ -1748,10 +1744,10 @@ for being consistent and easy to sanity-check later, over a freeform
 number that would be more nuanced but less predictable. Kept here for
 the historical reasoning -- every existing `Build N` changelog
 heading and `build-N` git tag still refers to this scheme. See
-CHANGELOG-archive.md's **Build 110** (the switch itself) and
+the commit for build 110 (the switch itself) and
 **Build 121** (the git tag + GitHub Release convention added on top of
 it) -- both predate the changelog's split into eras, so they're in the
-oldest archive file now, not CHANGELOG.md.
+oldest history now.
 
 ## Versioning: semver + `-dev` suffix, not a per-change build number
 
@@ -1766,26 +1762,26 @@ read into `TOYOS_VERSION` by `tools/gen_version.sh` exactly the way
 `BUILD_NUMBER` was before. It only changes via `tools/set_version.sh
 <version>`, and only for one of two reasons: starting a new dev round
 (`0.2.0-dev`) or cutting a real release (`0.2.0`, no `-dev` suffix).
-`CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/)
+the git history follows [Keep a Changelog](https://keepachangelog.com/)
 from its `## [Unreleased]` section forward -- every change gets an
 entry there, no version/tier attached, until a release is cut; cutting
 one renames that heading to `## [<version>] - <date>` and opens a
 fresh `## [Unreleased]` above it (`tools/set_version.sh` does both
-steps together). See CHANGELOG.md's `## [Unreleased]` intro (added the
+steps together). See the commit that added it (added the
 same day this switch happened) for the change itself.
 
 Day-to-day mechanics: `tools/set_version.sh 0.2.0-dev` starts a new dev
 round (rewrites `VERSION` only); `tools/set_version.sh 0.2.0` (no
-`-dev`) cuts a release (rewrites `VERSION` AND stamps `CHANGELOG.md` as
+`-dev`) cuts a release (rewrites `VERSION` AND stamps the git history as
 above). Git tags moved from `build-N` per push to `v<version>` at real
 releases only, cut by hand after `set_version.sh`:
 ```
-tools/set_version.sh 0.2.0   # rewrites VERSION, stamps CHANGELOG.md
+tools/set_version.sh 0.2.0   # rewrites VERSION, stamps the git history
 git tag v0.2.0
 git push origin main --tags
 ```
 A GitHub Release (title = `v<version>`, body = that release's
-CHANGELOG section, assets attached) is a judgment call per release now
+the git history, assets attached) is a judgment call per release now
 rather than tied to a fixed tier, since there's no tier anymore -- use
 one when a release feels milestone-worthy enough that grabbing a
 working build without cloning + building is worth it.
@@ -1852,7 +1848,7 @@ itself:
 ```
 kernel/drivers/keyboard.c   - added SE layout remap
 apps/shell.c                - fixed signed-char gate in shell_read_line()
-CHANGELOG.md                 - Unreleased entry
+docs/decisions.md - only if it answers a "why this way"
 ```
 Subject line stays a short summary as always; this is just the body,
 so a commit is skimmable on GitHub without opening the full diff.
@@ -1874,8 +1870,7 @@ namespace, the syscall ABI, and the tagged fd table (`FD_KIND_FILE`/
 existing. `sockettest` verifies exactly that surface -- fd allocation,
 kind separation (`SYS_WRITE`/`SYS_READ` correctly reject a socket fd),
 and cleanup -- without pretending a transport exists. See
-`syscall_abi.h`'s `SYS_SOCKET` doc comment and CHANGELOG-archive-2.md's
-**Build 420** for the full writeup.
+`syscall_abi.h`'s `SYS_SOCKET` doc comment and the commit for build 420 for the full writeup.
 
 ## Nordic keyboard/character support: Latin-1, not UTF-8; 3 remapped keys, not a full layout
 
@@ -1925,7 +1920,7 @@ by QMP-testing actual keystrokes end-to-end and noticing the cursor
 didn't even advance -- not by code review -- which is the concrete
 argument for always verifying a "fixed every instance of X" claim by
 testing the behavior, not just re-grepping the pattern you already
-fixed. See CHANGELOG-archive-2.md's **Build 501** for the full writeup.
+fixed. the commit for build 501 for the full writeup.
 
 ## Protected files: `device_commit_files` blocks writes, `device_bash` doesn't
 
@@ -2007,7 +2002,7 @@ press/release is exactly that same shape -- a private per-app
 workaround would have solved Calculator alone and left the next app
 that wants pressed-button feedback (or a held-scrollbar-thumb, or a
 press-and-repeat spinner) to reinvent it from scratch. See
-`CHANGELOG.md`'s `[Unreleased]` entry for the mechanism's actual shape
+the commit that added it for the mechanism's actual shape
 (why it fires on the initial button-down tick, why it returns 1 only
 when the "hot" button changes, how drag-off-before-release un-presses
 without triggering the button).
@@ -2107,7 +2102,7 @@ event that arrived before it.
 The general lesson, which is why this is written down rather than just
 built: when a subsystem's correctness rests on a convention every caller
 must remember, the fix is not more care -- it's making the convention
-checkable. See `CHANGELOG.md`.
+checkable. See the git history.
 
 ## Both cursor paths record where they drew the sprite
 
@@ -2123,7 +2118,7 @@ that frame damages the position before the cheap move and the position
 after it, never the one in between, and a cursor stays on screen. It was
 filed as a harmless inconsistency in `docs/roadmap.md` for weeks while
 its own symptom sat two entries above it, filed as an unexplained
-"resize" damage violation. See `CHANGELOG.md`'s `[Unreleased]` entry --
+"resize" damage violation. See the commit that added it --
 including why a test driving this with `gui click` cannot catch it.
 
 ## A damage-verify failure renders the frame a THIRD time before believing itself
@@ -2143,7 +2138,7 @@ void") alongside the diff's bounding box. This was built to settle a
 recorded known issue whose two hypotheses needed opposite fixes and
 which then failed to reproduce at all -- the probe stayed because the
 next such report should not have to re-open the same question. See
-`CHANGELOG.md`'s `[Unreleased]` entry, and note the harness half of it:
+the commit that added it, and note the harness half of it:
 `damage_hunt.py` was scoring a crashed sweep as a PASS.
 
 ## GUI testing asks the kernel, rather than measuring a screenshot
@@ -2303,7 +2298,7 @@ entry, not 0**: the SysV process-entry convention describes what a real
 crt0 sees, and a real crt0 realigns before calling `main`, but these
 `_start`s are plain C functions GCC compiles as if a return address were
 pushed. Handing one a 16-aligned RSP puts every aligned local off by
-eight; it took a `#GP` in ring 3 to find that. See `CHANGELOG.md`.
+eight; it took a `#GP` in ring 3 to find that. See the git history.
 
 ## Button groups commit on RELEASE, and there is no ui_button_group_click()
 
@@ -2315,7 +2310,7 @@ both Calculator's keys and Notepad's `Open...`/`Save As...` committed
 the instant the mouse went down: press, drag away, release, and the
 digit was still entered and the file picker still opened. Confirmed by
 running that exact gesture under QMP, not by reading the code -- see
-`CHANGELOG.md`.
+the git history.
 
 `ui_button_group_release()` returns the released button's code now
 (`-1` if none). That works because `ui_button_group_press()`
@@ -2358,7 +2353,7 @@ that clock tick; if a future feature wants something similar (a toast
 notification, a temporary status message), this is the pattern to
 reuse rather than reinventing a delay mechanism -- `pit_ticks()`
 deadline + a per-tick check, never a blocking sleep in the WM loop.
-See `CHANGELOG.md`'s `[Unreleased]` entry for the full mechanism.
+See the commit that added it for the full mechanism.
 
 ## Title-bar buttons: press-then-commit-on-release, reusing the content_pressed shape
 
@@ -2396,7 +2391,7 @@ Deliberately does *not* `bring_to_front()` a window just because its
 title-bar button was pressed -- only the committed action does that
 (maximize already did; minimize/close never did), so a press-then-
 drag-off-then-release cancel has no visible side effect whatsoever, not
-even a restack. See `CHANGELOG.md`'s `[Unreleased]` entry for the full
+even a restack. See the commit that added it for the full
 mechanism and what was verified.
 
 ## apps/ui/: a directory for retained-widget objects, once there were three
@@ -2444,12 +2439,12 @@ time two separately-grown regions happened to sit list-adjacent but
 not address-adjacent (freeing block A would silently absorb block B's
 header into A's payload size, and a later allocation into that
 "merged" space would write past the actual end of A's real memory).
-See `CHANGELOG.md`'s `[Unreleased]` entry for the full design and what
+See the commit that added it for the full design and what
 `heap_selftest()` verifies.
 
 ## Calculator is the first `multi_instance` GUI app
 
-`gui_apps.h`'s `multi_instance` flag (see `CHANGELOG.md`) is opt-in
+`gui_apps.h`'s `multi_instance` flag (see the git history) is opt-in
 per app, and Calculator was the one asked for by name when multi-
 window support was requested ("open two or three calculators") -- it's
 also the simplest existing app to convert: no filesystem state, no
@@ -2484,7 +2479,7 @@ Manager did, and it showed an impossible ~16 exabyte figure. Fixed
 with a `b->prev->free` guard; `heap_selftest()` now explicitly asserts
 `heap_used_bytes() == 0` after freeing everything, so this class of
 regression is caught at every future boot instead of needing another
-UI to happen to surface it. See `CHANGELOG.md`'s `[Unreleased]` entry
+UI to happen to surface it. See the commit that added it
 (the Task Manager bullet).
 
 ## TFS2 v2's block pointers go direct + single + double + triple indirect, not just direct + single
@@ -2502,7 +2497,7 @@ rather than stopping at double indirect the way a smaller target could
 have. This is also why `tfs_selftest()` deliberately targets a write
 at a ~4.6GB offset -- past double indirect's ceiling -- as the boot-time
 proof that the triple-indirect chain is really being built and walked,
-not just declared. See `CHANGELOG.md`'s `[Unreleased]` entry (the TFS2
+not just declared. See the commit that added it (the TFS2
 multi-GB bullet) for the full format writeup.
 
 ## `fs_read_range()`/`fs_write_range()` were added alongside `fs_read()`/`fs_write()`, not as a replacement
@@ -2519,7 +2514,7 @@ don't need, `fs_read_range(path, offset, buf, len)`/`fs_write_range()`/
 `fs_size()` were added as a second, parallel API for callers that
 genuinely need bounded-memory access to a large file. `fs_read()`/
 `fs_write()` keep their exact old behavior and signatures. See
-`CHANGELOG.md`'s `[Unreleased]` entry (the TFS2 multi-GB bullet).
+the commit that added it (the TFS2 multi-GB bullet).
 
 ## `apps/widgets.c`/`.h` no longer exist -- and `ui_scrollback`/`ui_scrollbar` didn't get an owned-geometry wrapper
 
@@ -2541,7 +2536,7 @@ there's no per-frame bookkeeping an owned-geometry wrapper would
 actually remove. `ui_textbox`'s geometry, by contrast, genuinely is
 mostly-static (a fixed-position field that only moves on a font-size
 change), which is exactly the case an owned `set_geometry()` call
-saves real work for. See `CHANGELOG.md`'s `[Unreleased]` entry.
+saves real work for. See the commit that added it.
 
 ## The desktop's right-click quick-launch menu doesn't distinguish icons from empty space
 
@@ -2555,7 +2550,7 @@ don't have any per-icon identity or state beyond "which
 custom icon), so a per-icon menu would have nothing more useful to
 offer than the quick-launch menu already does. Revisit once icons gain
 real per-icon state worth a dedicated menu for. See `docs/roadmap.md`
-and `CHANGELOG.md`'s `[Unreleased]` entry (the desktop/context-menu
+and the commit that added it (the desktop/context-menu
 bullet).
 
 ## `context_menu.h`'s items carry a `void *ctx`, but `start_menu.h`'s don't
@@ -2572,8 +2567,7 @@ signature carries a `void *ctx` the caller stashes that data in (a
 gets back unchanged when a row is selected. Not applied retroactively
 to `start_menu.h` since nothing there needs it and the two aren't a
 shared abstraction to begin with (see `apps/wm/start_menu.h`'s own top
-comment on why it isn't a general "menu" type). See `CHANGELOG.md`'s
-`[Unreleased]` entry.
+comment on why it isn't a general "menu" type). See the commit that added it.
 
 ## dmesg coverage: log from the one-shot call site, not the hot function itself
 
@@ -2594,7 +2588,7 @@ coverage: log from whatever call site is genuinely one-shot (an
 `*_init()` function, a boot-sequence call in `kernel_main()`), not
 from a function just because it's the "natural" owner of the
 information, if that function is actually called on every frame/tick/
-redraw instead of once. See `CHANGELOG.md`'s `[Unreleased]` entry for
+redraw instead of once. See the commit that added it for
 the full list of areas covered and `klog_write_dec()`/
 `klog_write_hex()` (`kernel/include/api/klog.h`), added in the same change
 for klog messages that need to include a number.
@@ -2613,13 +2607,12 @@ under an old doc" trap a future session could hit again elsewhere:
   `FS_DATA_MAX` = 2048 bytes, with a whole discussion of multi-slot
   chaining to fix it. By the time this was re-checked, `tfs.c` no
   longer referenced `FS_DATA_MAX` at all -- TFS2 v2's block-addressed
-  on-disk rework (the multi-GB file support entry, `CHANGELOG.md`'s
-  `[Unreleased]`) had already solved this as a side effect, for
+  on-disk rework (the multi-GB file support entry, the git history) had already solved this as a side effect, for
   unrelated reasons, in a different session that had no idea an old
   ELF-binaries plan was depending on that limit staying in place. Three
   comments (`kernel/lib/etc_config.c`, `apps/editor.c`/`.h`) still
   cited the old 2048-byte ceiling as real months later -- corrected in
-  the same change that shipped this (see `CHANGELOG.md`).
+  the same change that shipped this (see the git history).
 - The plan assumed `elf_load()`'s ELF blob would need copying out of
   TFS2's live in-RAM table into a scratch buffer before executing,
   since that memory "isn't stable the way a GRUB module's reserved
@@ -2643,7 +2636,7 @@ the plan got right and is still true: getting a binary's bytes onto
 `disk.img` at all needs *something* outside the OS, since there's no
 in-guest compiler -- see the next entry for which of the plan's two
 options (`bootstrap-install` vs. a host-side writer tool) was picked,
-and why. See `CHANGELOG.md`'s `[Unreleased]` entry for the full
+and why. See the commit that added it for the full
 implementation (`SYS_PCI_COUNT`/`SYS_PCI_INFO`, `userland/bin/lspci.c`,
 `elf_run.c`, `install_bin_binaries()`).
 
@@ -2733,7 +2726,7 @@ boot-time-only install for some reason GRUB-module bootstrap-install
 would fit better than build-time seeding, that's a fresh design
 question when it actually comes up, not a reason to have kept the old
 table around empty -- the git history (this entry, and the
-`CHANGELOG.md` sections it points at) has everything needed to bring
+the commits it points at) has everything needed to bring
 the pattern back if so.
 
 The Makefile's new `seed` target runs on every `make iso` (not just
@@ -2751,7 +2744,7 @@ again.
 `lspci` was the first ELF64 binary moved off a GRUB module onto
 build-time-seeded `/bin` (see this file's `seed`-target entry above).
 The remaining dozen-ish test binaries followed the same path in one
-pass (CHANGELOG.md's `[Unreleased]` entry has the full list) rather
+pass (the commit that added it has the full list) rather
 than staying GRUB modules indefinitely, once it was clear the seeding
 mechanism generalized cleanly -- there was no longer a reason for
 `lspci` to be the only one.
@@ -2815,7 +2808,7 @@ That `gui_flow.py` bug was real and unrelated to this migration:
 the kernel's actual `gfx_char_h() + 6` (`24` at the default font
 size) -- so every `open_app()` call was clicking roughly one row below
 where it meant to. Found and fixed once it was blocking this
-migration's own testing; see CHANGELOG.md's `[Unreleased]` entry.
+migration's own testing; see the commit that added it.
 
 ## Click-to-position/selection lives in the shared `text_scrollback` widget, not a Notepad-only one
 
@@ -2826,8 +2819,7 @@ Notepad-only widget. Terminal and `editor.c` never call the new
 selection API, so it's inert there -- but any future caller of
 `text_scrollback` gets click-to-position/selection for free, and there
 was no plausible reason for the underlying pixel<->buffer-index math
-(and its correctness) to exist twice. See CHANGELOG.md's
-`[Unreleased]` entry for the full implementation.
+(and its correctness) to exist twice. See the commit that added it for the full implementation.
 
 ## The serial debug console is poll-based from existing idle loops, not a new kernel thread
 
@@ -2842,7 +2834,7 @@ limitation: it does NOT get polled while a blocking command, a
 ring-3 process, or anything else that isn't one of those two loops is
 running -- accepted rather than solved, since fixing it properly would
 mean either real kernel threads or polling from many more places for
-a debug-only feature. See CHANGELOG.md's `[Unreleased]` entry.
+a debug-only feature. See the commit that added it.
 
 Getting serial RX working at all needed two things past "unmask the
 PIC": `serial_irq_init()`'s IRQ registration/unmask has to run *after*
@@ -2870,8 +2862,7 @@ compiler -- no X server needed) instead of anyone re-deriving a
 scancode chart by hand. Translation logic itself moved out of
 `keyboard.c` into a new `kernel/lib/keyboard_layout.c`, since owning
 per-region character tables was never really the driver's job (raw
-scancode/shift-state handling is). See CHANGELOG.md's `[Unreleased]`
-entry for the full implementation, including the AltGr/dead-key scope
+scancode/shift-state handling is). See the commit that added it for the full implementation, including the AltGr/dead-key scope
 limits (this driver has no AltGr handling at all, so those symbols
 were never reachable regardless of the table) and a real bug the
 generator's first cut had (omitting Escape/Backspace/Tab/Enter from
@@ -2882,7 +2873,7 @@ ones -- found live, not by review).
 ## A syscall's path-pointer validation checks a full `FS_PATH_MAX` range, not just up to the string's NUL
 
 `elf_run_from_fs()`'s argv-on-stack layout (see `ls`'s migration to a
-real `/bin` binary, `CHANGELOG.md`'s `[Unreleased]` entry) originally
+real `/bin` binary, the commit that added it) originally
 packed argument strings as tightly as possible against the one stack
 page's literal top address. That broke `SYS_LISTDIR` the moment an
 argv string landed close enough to the page boundary: its handler
@@ -2963,8 +2954,7 @@ and fails if the answer is "nothing". It runs in `preflight.sh` and CI,
 and was validated by putting the old glob back and watching it report
 exactly the ten directories that had been uncovered. A one-line fix
 with no guard would have left the next directory move free to do this
-again. See `CHANGELOG.md`'s "the build's header dependency tracking had
-silently stopped working" entry.
+again. See the git history.
 
 ## The GUI stack has names: TWP, TWS and Toykit
 
@@ -3063,7 +3053,7 @@ Three mechanics that are load-bearing together, and useless apart:
 Measured on the 29 userland binaries: 171 KB smaller in total, Terminal
 -32%, Calculator -27%, `uiclient` -41%, and `hello` gained nothing (it
 references no toolkit symbol, so it pulls no member). See
-`CHANGELOG.md`'s "userland programs link one archive" entry.
+the git history.
 
 **A second trap, found when the first source file was deleted:** `ar
 rcs` UPDATES an archive rather than rebuilding it, so a member whose
@@ -3153,7 +3143,7 @@ some UI in it." Any future app-opened dialog that needs to sit above
 arbitrary other windows (a color picker, an "are you sure" variant,
 etc.) should follow this same WM-overlay pattern rather than trying to
 make it work as an `apps/ui/` widget instantiated by the calling app.
-See `CHANGELOG.md`'s `[Unreleased]` entry for the full feature writeup
+See the commit that added it for the full feature writeup
 (navigation model, Notepad's Open.../Save As... integration, the
 `redraw_pending` bug found via QMP testing on `../` double-click
 navigation).
@@ -3214,7 +3204,7 @@ flushes suppressed there.
 all -- a half-written data block after a crash is just incomplete file
 content (`fs_write_range()` documents partial-write behavior), not a
 corrupted recovery structure -- so that path stays one flush per batch.
-See `CHANGELOG.md`'s `[Unreleased]` entry for the numbers and for how
+See the commit that added it for the numbers and for how
 replay/discard were verified without an actual power loss.
 
 ## `fs_ops`'s new steppable-write function pointers are required, not optional/NULLable
@@ -3311,8 +3301,7 @@ explicitly on every commit, not assumed).
 ## `struct window *` isn't a stable per-window identity across frames -- don't cache one
 
 Caught live during Milestone 1 phase 3's QMP testing (wiring `wm_run()`
-to poll a pending write, `apps/wm/wm.c`/`wm.h` -- see `CHANGELOG.md`'s
-`[Unreleased]` entry): `apps/notepad.c` originally cached the `struct
+to poll a pending write, `apps/wm/wm.c`/`wm.h` -- see the commit that added it): `apps/notepad.c` originally cached the `struct
 window *` passed to `notepad_open()` once, in a static, and reused it
 later (across many frames) to register a steppable write against.
 Wrong -- `bring_to_front()` (`wm.c`) reorders `windows[]` (a fixed
@@ -3352,8 +3341,7 @@ was handed in.
 default and only ever set true, briefly, inside `scheduler_demo_run()`
 (`schedtest`), set back false before returning even on failure -- see
 that function's own build-172-era comment for the original reasoning.
-Milestone 1 phase 4b (Terminal async spawn, see `CHANGELOG.md`'s
-`[Unreleased]` entry) needed a scheduler available OUTSIDE that one demo
+Milestone 1 phase 4b (Terminal async spawn, see the commit that added it) needed a scheduler available OUTSIDE that one demo
 call, so `scheduler_init()` now sets `scheduler_armed = 1` once, at
 boot, and nothing ever unsets it again.
 
@@ -3402,7 +3390,7 @@ position out of the rotation entirely while one is in flight, keyed on
 the pre-existing `process_context_is_armed()` rather than a second flag
 that could drift out of agreement with it.
 
-See `CHANGELOG.md`'s `[Unreleased]` entry for the full writeup and how
+See the commit that added it for the full writeup and how
 both directions were verified, `scheduler.c`'s `ROT_KERNEL` comment for
 the design, and `docs/roadmap.md`'s Milestone 41 for what this unblocks.
 
@@ -3435,7 +3423,7 @@ process becomes eligible and runs at the next ordinary tick. An IRQ
 handler that tried to switch directly to the woken process would be
 re-creating exactly the reentrancy this design exists to avoid.
 
-Full writeup in `CHANGELOG.md`'s `[Unreleased]` entry.
+Full writeup in the commit that added it.
 
 ## `SYS_WAIT_EVENT` makes clients loop instead of restarting the syscall
 
@@ -3962,7 +3950,7 @@ the former takes `snprintf` away from userland with no other symptom.
 
 What this deliberately is not: a libc. No `malloc`, no `FILE`, no
 `printf`, no `errno`, no TLS — those are Milestone 24 and each has real
-design in it. See `CHANGELOG.md`'s `[Unreleased]` entry, including the
+design in it. See the commit that added it, including the
 honest size cost (`lscpu` +610 bytes of text, `lspci` +1042, because the
 shared converters are more general than the hand-rolled loops they
 replaced) and why a full libc turned out NOT to be a prerequisite for
@@ -3992,8 +3980,7 @@ handler that faults mid-call prints no line at all, and `SYS_EXIT` --
 which may never return -- has to close out its own line, which is why a
 trace ends with `exit(0) = ?` rather than a return value.
 
-See `kernel/proc/strace.c`'s top comment and `CHANGELOG.md`'s
-`[Unreleased]` entry for the full writeup, including why `strace`
+See `kernel/proc/strace.c`'s top comment and the commit that added it for the full writeup, including why `strace`
 resolves binaries through `shell_path_find()` instead of the usual
 `shell_exec_name()`.
 
@@ -4034,7 +4021,7 @@ divergence that only appears once someone types the command in the
 other window. `k_path_resolve()` is one implementation with tests, so
 they agree by construction.
 
-See `CHANGELOG.md`'s `[Unreleased]` entry for the full migration and
+See the commit that added it for the full migration and
 the count of copies removed, and CLAUDE.md for the "check the toolkit
 first" convention.
 
@@ -4060,7 +4047,7 @@ having no caller (see the toolkit entry above); they came back the way
 real caller" rule working, not an argument against it.
 
 See `kernel/include/api/string.h`, `kernel/lib/tz_test.c`, and
-CHANGELOG.md's `[Unreleased]`.
+the git history.
 
 ## Terminal's `run <name>` uses an explicit allowlist, not a blocklist
 
@@ -4076,7 +4063,7 @@ question for each `/bin` binary became "was this specific one actually
 verified safe" (reads no stdin, doesn't touch the framebuffer/its own
 window) rather than "has anyone flagged this specific one as unsafe
 yet." Every entry was checked against its own `userland/*.c` source, not
-added by assumption -- see `CHANGELOG.md`'s `[Unreleased]` entry for
+added by assumption -- see the commit that added it for
 exactly which binaries and why each excluded one was excluded
 (`echo`'s `SYS_READ_KEY` loop, `gui_test`/`win_test`'s framebuffer/
 window takeover, `counter_a`/`counter_b`'s intentionally-infinite
@@ -4108,8 +4095,7 @@ it's its own isolated VM), non-empty means a direct local checkout
 <noreply@toy-os.local>`). `CLAUDE.md`'s "Working in the cloud sandbox
 vs. directly on the user's machine" section, `tools/preflight.sh`'s
 closing message, and `~/.claude/skills/toy-os-feature-workflow/`'s
-step 0 all use this same check. See `CHANGELOG.md`'s `[Unreleased]`
-entry for the full list of files touched, including the unrelated but
+step 0 all use this same check. See the commit that added it for the full list of files touched, including the unrelated but
 same-session `tools/qmp_test.py` fix (a QEMU-backgrounding pattern that
 turned out to be unreliable specifically in the sandboxed environment
 this was discovered in).
@@ -4135,12 +4121,11 @@ notes complain about most. Two honest labels beat one dishonest pool.
 What was measured rather than assumed: three separate boots on the
 jitter path produced three different values, so the fallback is not
 deterministic under emulation. That is the claim it needed to survive;
-it is not a claim about cryptographic strength. See `CHANGELOG.md`'s
-`[Unreleased]` entry.
+it is not a claim about cryptographic strength. See the commit that added it.
 
 ## Stack canaries: `-mstack-protector-guard=global` and a fixed constant, not GCC's defaults
 
-Milestone 2's stack-canary item (`CHANGELOG.md`'s `[Unreleased]` entry)
+Milestone 2's stack-canary item (the commit that added it)
 turns `-fstack-protector-strong` on for both `CFLAGS` and
 `USERLAND_CFLAGS` (previously explicit `-fno-stack-protector` in both,
 just a "not built yet" placeholder -- see this file's `docs/roadmap.md`
@@ -4207,8 +4192,7 @@ are worth knowing if this is ever revisited:
 
 ## GPT header verification: a host-compiled unit test, not a live boot -- TFS2's own journal collides with LBA 1
 
-`kernel/drivers/partition.c`'s GPT support (Milestone 3, `CHANGELOG.md`'s
-`[Unreleased]` entry) couldn't be verified the same way its MBR half was
+`kernel/drivers/partition.c`'s GPT support (Milestone 3, the commit that added it) couldn't be verified the same way its MBR half was
 (a real `disk.img` patched with synthetic data, booted, `parttable` run
 from the shell over QMP) -- a real, unavoidable architectural conflict,
 not a testing inconvenience:
@@ -4426,7 +4410,7 @@ machine rather than in QMP testing:
    silently removed that safety net, and the cursor stopped tracking
    correctly.
 
-Both are root-caused and fixed in the same CHANGELOG.md `[Unreleased]`
+Both are root-caused and fixed in the same the git history `[Unreleased]`
 entry (search "tray damage-scoping regression"). The fix was simply to
 stop scoping tray damage at all, matching every other still-unscoped
 piece of WM chrome -- not to fix the two bugs while keeping the
@@ -4457,7 +4441,7 @@ Blunt on purpose: giving each overlay a real damage rect is the better
 end state and needs geometry that only `start_menu` exposes today (see
 `docs/roadmap.md`'s Milestone 12 entry). Correct-by-construction first,
 precise later -- the same order the compositor's other phases took. See
-`CHANGELOG.md`'s `[Unreleased]` damage-sweep entry for the reproducer
+the git history damage-sweep entry for the reproducer
 and the two further bugs the change uncovered underneath it.
 
 ## A dropdown's popup is a second draw call the app makes last, not a WM overlay
@@ -4487,7 +4471,7 @@ to what is available otherwise; the scrollbar it inherits from
 
 Input is the mirror rule -- the popup is on top, so it gets first
 refusal, and an app forwards to the dropdown *before* the widgets
-underneath it. See `CHANGELOG.md`'s `[Unreleased]` entry for the
+underneath it. See the commit that added it for the
 worked example in UI Demo.
 
 ## ui_listbox counts scroll from the top; ui_scrollbar counts from the bottom
@@ -4613,7 +4597,7 @@ code, so this is both the secure default and correct for all of them
 with zero call-site changes; only `kernel/proc/elf.c` (needs real
 per-segment control) and `kernel/proc/ring3_test.c` (its one
 hand-assembled code page) call the explicit-flags variant instead. See
-CHANGELOG.md's `[Unreleased]` entry for the full mechanics and the QMP
+the commit that added it for the full mechanics and the QMP
 verification (a purpose-built `userland/tests/nx_test.c` that jumps into a
 non-executable data page and confirms the CPU actually faults --
 `error_code=0x15` decodes to Present+User+Instruction-Fetch, not a
@@ -4664,7 +4648,7 @@ leaves every page-table check green.
 Verified live, not only by reading bits back: a one-byte write to
 `__ktext_start` from `kernel_main()` produces `PANIC: Page fault`. That
 probe is not committed -- a ring-0 fault ends the boot, so it cannot
-live in a suite -- see CHANGELOG.md's `[Unreleased]` entry for how to
+live in a suite -- see the commit that added it for how to
 reproduce it in two lines.
 
 ## The framebuffer is write-combined via PAT, and `nopat` exists to make the MTRR fallback reachable
@@ -4904,7 +4888,7 @@ The general shape is worth keeping: **if a step belongs to "having a
 filesystem" rather than to "booting", it belongs beside the mount.**
 What makes it cheap is that `fs_mkdir()` is a no-op on an existing
 directory, so the rule can be "after every mount" with no conditions
-to get wrong. See CHANGELOG.md's `[Unreleased]` entry.
+to get wrong. See the commit that added it.
 
 ## A setting reports whether it PERSISTED, separately from whether it applied
 
@@ -4948,7 +4932,7 @@ the two error paths have wildly different costs, the cheap-to-recover
 one is the correct default. A blank/foreign disk still auto-formats,
 because that path is only reached on a *successful* read.
 
-See `CHANGELOG.md`'s `[Unreleased]` entry for the full writeup,
+See the commit that added it for the full writeup,
 including the related "disk too small to hold the metadata region" case
 and the one case still not detectable (a 0-length image, which QEMU
 answers with zeros rather than an error).
@@ -4996,7 +4980,7 @@ Where zero-filling still always happens, and why:
 The one visible consequence: if the write that was supposed to overwrite
 a NOZERO block fails, the block keeps stale content. It's past the
 file's size (which only advances for bytes actually written), so no read
-can reach it. See `CHANGELOG.md`'s `[Unreleased]` entry.
+can reach it. See the commit that added it.
 
 ## The DMA bounce buffer is 64KB because that's one PRD, not because 64KB benchmarked well
 
@@ -5013,7 +4997,7 @@ original 2 frames rather than dropping to PIO (a smaller DMA window is
 still far better than no DMA), and `ata_max_sectors_per_xfer()` reports
 the runtime value separately from the compile-time maximum so callers
 that batch (TFS2's coalescing) adapt instead of assuming. See
-`CHANGELOG.md`'s `[Unreleased]` entry.
+the commit that added it.
 
 ## `fsck` reclaims leaks and marks stragglers, but never resolves a double-allocation
 
@@ -5049,8 +5033,7 @@ turned up a live demonstration of why the referenced-but-free repair
 matters: with three referenced blocks marked free, the very next boot's
 shell-history append allocated one of them to `/etc/history`, which
 already belonged to `/bin/counter_a` -- a real double-allocation,
-created by the corruption in seconds. See `CHANGELOG.md`'s
-`[Unreleased]` entry.
+created by the corruption in seconds. See the commit that added it.
 
 ## Tab completion is a shared candidate generator, not a shared line editor
 
@@ -5087,7 +5070,7 @@ Two consequences worth knowing:
   selection -- state that both input loops would have to hold
   identically.
 
-See `CHANGELOG.md`'s `[Unreleased]` entry, including the pre-existing
+See the commit that added it, including the pre-existing
 `dispatch()` bug completion exposed (a trailing space in `args` made
 `cat /etc/timezones ` fail as "no such file").
 
@@ -5126,8 +5109,7 @@ Two smaller notes: a name containing `/` is treated as a path rather
 than a PATH lookup (so `/bin/foo` and `docs/foo` mean what they say),
 and entries in PATH that don't exist are skipped silently -- the default
 `/bin;/usr/bin` names a directory that isn't on a stock disk, and
-warning about it on every boot would be noise. See `CHANGELOG.md`'s
-`[Unreleased]` entry.
+warning about it on every boot would be noise. See the commit that added it.
 
 ## Shell session state is initialised by the DISPATCHER, not by the REPL
 
@@ -5205,7 +5187,7 @@ Design points worth keeping:
   concluded there was nothing to scroll to. The limit has an explicit
   one-step case for exactly that.
 
-See `CHANGELOG.md`'s `[Unreleased]` entry.
+See the commit that added it.
 
 ## An empty clip rect draws nothing -- it is not gfx_clear_clip_rect()
 
@@ -5226,7 +5208,7 @@ fixing. The rule worth keeping: the two states are different operations
 on purpose -- `gfx_clear_clip_rect()` is the only way to remove the
 clip, and a computed rectangle with nothing in it must clip everything
 out, for the same reason a formatter that can't fit writes nothing.
-See `CHANGELOG.md`'s `[Unreleased]` entry for the full diagnosis.
+See the commit that added it for the full diagnosis.
 
 ## TFS2 stays in the kernel as a second filesystem -- the VFS probes by superblock magic
 
@@ -5246,7 +5228,7 @@ optional op are one fact stated twice, refused when they disagree),
 `fs_stat()` is one canonical shape (epoch times + an ino that TFS2
 synthesizes from its table slot, Linux's FAT trick), and the ring-3
 ABI never changed (epochs convert back to `rtc_time` at the syscall
-boundary). See CHANGELOG.md's `[Unreleased]` Stage A/B entries.
+boundary). see the Stage A/B commits.
 
 ## TFS3's journal covers dirent + inode blocks; bitmaps stay leak-safe write-through
 
@@ -5262,7 +5244,7 @@ new format. Every operation fits <= 3 of the journal's 4 slots, and
 directory growth runs as its own empty-block-first transaction
 (inserting the child's name into the grow block would have made the
 name visible one transaction before the child's inode existed). See
-`docs/tfs3-spec.md`'s journal section and CHANGELOG.md's Stage C
+`docs/tfs3-spec.md`'s journal section and the Stage C commits
 entry.
 
 ## TFS3 v2 grew the journal by moving the layout, not by making it a log like ext4's
@@ -5439,7 +5421,7 @@ GUI client took a #GP a few instructions into `main()`, while every
 plain non-SSE program worked perfectly. Nothing about that symptom
 points at stack alignment until you notice which binaries are affected.
 
-See `CHANGELOG.md`'s `[Unreleased]` entry, `userland/rt/crt0.asm`, and
+See the commit that added it, `userland/rt/crt0.asm`, and
 `kernel/proc/elf_run.c`'s `elf_build_argv_on_stack()`.
 
 ## A legacy ring-3 process needs its own RSP0 and must not be descheduled
@@ -5476,7 +5458,7 @@ the scheduler does not own an entry for cannot be treated as
 schedulable, and "the kernel context" was quietly serving as a
 dumping ground for two very different things. Both are covered by a
 KTEST in `kernel/proc/sched_test.c` that runs a legacy process
-alongside a scheduled one; see `CHANGELOG.md` for the full writeup.
+alongside a scheduled one; see the git history.
 
 ## The retry sentinel is -2 because 0 is a real answer
 
@@ -5736,7 +5718,7 @@ cutting, per `docs/gui-guidelines.md`'s first rule.
 ## A client's menus are clamped to its own window, and that is one rectangle away from not being
 
 `userland/ui/uui_menubar.c`; landed with the menu bar, see
-`CHANGELOG.md`.
+the git history.
 
 On Windows, a popped-up menu is a real `HWND` of the built-in `#32768`
 class, positioned in SCREEN coordinates and constrained against the
@@ -5787,7 +5769,7 @@ building exactly that and watching one check go red.
 ## Esc doesn't close a window; Alt+F4 does, and it is a WM shortcut rather than an app key
 
 `apps/wm/wm.c`'s key loop and `wm_request_close()`; landed with the
-menu bar's follow-up, see `CHANGELOG.md`.
+menu bar's follow-up, see the git history.
 
 Six ring-3 apps used to quit on Esc, which was always a papercut and
 became a real hazard once Esc was also the key that closes a menu: one
@@ -5841,7 +5823,7 @@ needs a not-responding timeout plus a way to kill the process. See
 ## Not-responding is a PING, not a close timeout -- because "refused" and "wedged" look identical to a timer
 
 `abi/win_proto.h`'s `WIN_EV_PING`/`WIN_REQ_PONG`, `apps/wm/wm_client.c`'s
-liveness section, `scheduler_kill()`. See `CHANGELOG.md`.
+liveness section, `scheduler_kill()`. See the git history.
 
 The obvious build is a timer: send `WIN_EV_CLOSE`, and if no
 `WIN_REQ_DESTROY` arrives within N seconds, offer to force-quit. It is
@@ -6173,7 +6155,7 @@ quoted and a decision made on it. The decision was re-put with the real
 number, and the narrower scope chosen.
 
 So: committer metadata and the current tree are clean; old revisions of
-`CHANGELOG-archive.md` still contain the handle if someone checks out a
+the git history still contain the handle if someone checks out a
 months-old commit. That was judged acceptable because a GitHub handle is
 public by nature -- unlike the real name the first scrub removed, where
 the wider blast radius was worth paying.

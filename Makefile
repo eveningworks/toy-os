@@ -869,7 +869,7 @@ run-vmware: iso $(DISK_IMG)
 # port-I/O instruction becomes a hardware VM exit costing on the order
 # of a microsecond, where TCG services one in-process for tens of
 # nanoseconds -- so the PIO disk path and other `inb`/`outb`-heavy loops
-# can get SLOWER here. Any throughput figure recorded in CHANGELOG.md
+# can get SLOWER here. Any throughput figure recorded in the git history
 # should say which of the two it came from; they aren't comparable.
 run-kvm: iso $(DISK_IMG)
 	qemu-system-x86_64 -enable-kvm -cpu host -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide,discard=unmap -serial stdio -vga std -display sdl,grab-mod=rctrl -m 2048

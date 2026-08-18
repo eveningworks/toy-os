@@ -39,7 +39,7 @@
 /disk.img.gz
 /SHA256SUMS
 # Pre-Btrfs-+C-fix backup of a real disk.img, left behind by the
-# no-COW swap described in CHANGELOG.md -- same "not a repo asset"
+# no-COW swap described in the git history -- same "not a repo asset"
 # reasoning as disk.img itself, just not matched by the exact pattern
 # above. Safe to delete by hand once the swap's confirmed good.
 /disk.img.cow.bak

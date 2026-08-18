@@ -6,7 +6,7 @@
 // the whole READ side are real; every mutating op fails honestly with
 // one klog. The write path + 4-slot journal transactions are Stage C,
 // fsck is Stage D -- see docs/roadmap.md's Milestone 15 and the
-// CHANGELOG. Split into stages so each lands with `make verify`
+// the git history. Split into stages so each lands with `make verify`
 // green, not because the boundaries are architectural.
 //
 // Everything on disk is VOLUME-relative: block b lives at sector

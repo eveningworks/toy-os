@@ -19,7 +19,7 @@
 // other GUI-vs-CLI pair in this codebase already makes (shell.c's
 // vga_write() vs notepad.c's gfx_draw_string()).
 //
-// Deliberately minimal (see CHANGELOG.md's build 377 entry for the
+// Deliberately minimal (see the commit for build 377 for the
 // choices this was built to): arrow-key/Home/End/Delete navigation and
 // editing, F2 to save, F3 to exit -- no Ctrl-key shortcuts (real nano's
 // Ctrl+O/Ctrl+X/Ctrl+K/...), no search, no cut/paste, no

@@ -200,7 +200,7 @@ working, still-boots-on-x86_64 state; none of them require the second
 arch to actually exist yet.
 
 1. ~~**Mechanical move, zero behavior change.**~~ **DONE** (2026-08-13,
-   as part of a general restructure -- see `CHANGELOG.md`).
+   as part of a general restructure -- see the git history).
    `kernel/arch/x86_64/` holds `boot.asm`, `context_switch.asm`,
    `isr.asm`, `gdt.c`, `idt.c`, `pic.c`, `irq.c` and `paging.c`.
    `timer.c`/`power.c` did not move, for the reason given above.

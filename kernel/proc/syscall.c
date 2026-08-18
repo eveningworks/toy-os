@@ -213,7 +213,7 @@ static int win_close_size(void) {
 }
 
 // Same hand-drawn diagonal cross as apps/wm.c's draw_close_icon() (see
-// CHANGELOG for why a font glyph doesn't work in a small button) --
+// the git history for why a font glyph doesn't work in a small button) --
 // duplicated rather than shared, since wm.c's version is `static` in a
 // completely different translation unit (the GUI app layer), and
 // kernel/core has no existing reason to link against apps/.

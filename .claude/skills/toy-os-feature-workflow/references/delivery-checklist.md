@@ -57,8 +57,9 @@ immediately.
 
 ## 1. Most changes: no version bump at all
 
-**CHANGELOG.md is CLOSED as of 2026-08-15 -- do not add entries to it,
-and do not let the older text in this file talk you back into it.** The
+**THERE IS NO CHANGELOG -- it was closed on 2026-08-15 and DELETED on
+2026-08-18 (see CLAUDE.md). Do not let older text anywhere in this file
+talk you into looking for one.** The
 default path for a routine change is now: a commit message that lists
 every changed file with a one-line note, a comment beside the code for
 any mechanism or trap, a `docs/decisions.md` entry (self-contained, not
@@ -223,7 +224,8 @@ noise.
 
 If a release was cut and feels milestone-worthy enough to want a
 downloadable artifact, prep the GitHub Release too (title `v<version>`,
-body = that release's CHANGELOG section) -- but the `gh release
+body = release notes written from `git log`, in the shape
+docs/release-notes-template.md gives) -- but the `gh release
 create` call itself needs real network access, so it goes in the same
 "run this yourself" bucket as the push, not something to attempt from
 the sandbox (`gh` isn't even preinstalled there). Three assets, not
@@ -257,7 +259,7 @@ collapses to plain `git`, no relay/mirror/wrapper machinery needed.
 
   <file path>   - <one-line note on what changed in it>
   <file path>   - <one-line note on what changed in it>
-  CHANGELOG.md  - Unreleased entry
+  docs/decisions.md - only when the change answers a "why this way"
   EOF
   )"
   ```

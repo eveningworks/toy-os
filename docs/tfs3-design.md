@@ -5,7 +5,7 @@ byte-exact format as shipped.** This file remains the record of the
 design decisions and their reasoning; where the implementation
 deliberately revised the design mid-build, the section carries a note
 (the journal's scope is the significant one). The build was staged
-A-E, one commit each -- see CHANGELOG.md's `[Unreleased]` entries
+A-E, one commit each -- see the git history
 starting at "The VFS selects filesystems by probe now".
 
 Decisions settled deliberately rather than defaulted (each has its own

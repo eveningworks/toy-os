@@ -96,7 +96,7 @@ static void draw_close_icon(int x, int y, int size, uint32_t color) {
 // dilate/erode for the outline ring, downsampled to this size) rather
 // than hand-drawn pixel by pixel. Replaces the old hard-edged
 // staircase shape (a capped `row+1` triangle, no anti-aliasing at all)
-// -- see docs/decisions.md and CHANGELOG.md's `[Unreleased]` entry for
+// -- see docs/decisions.md and the commit that added it for
 // the "why" and the before/after screenshots.
 #define CURSOR_SPRITE_W 13
 #define CURSOR_SPRITE_H 19

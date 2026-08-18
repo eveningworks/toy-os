@@ -54,7 +54,7 @@ static inline struct ugfx_surface *wm_surface(void) { return &g_wm_screen.back; 
 #define WM_WINDOWS_INITIAL 8
 
 // Taskbar/title-bar button sizing -- derived from the current font
-// (gfx_char_w/h) rather than fixed pixel constants; see the CHANGELOG
+// (gfx_char_w/h) rather than fixed pixel constants; see the git history
 // entries on why fixed sizes went stale once the font became
 // runtime-selectable. Used by both wm_input.c (hit-testing these exact
 // regions) and wm_render.c (drawing them), which is why they live here

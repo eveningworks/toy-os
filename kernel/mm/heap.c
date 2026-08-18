@@ -377,7 +377,7 @@ void kfree(void *ptr) {
     // corrupting its accounting (it would report itself as bigger than
     // it was ever allocated for) without ever adding the extra bytes
     // to g_used_bytes. The bug stayed invisible until something first
-    // read heap_used_bytes() for real (Task Manager, see CHANGELOG.md)
+    // read heap_used_bytes() for real (Task Manager, see the git history)
     // and displayed an impossible ~16 exabyte figure -- caused by a
     // LATER kfree() of that same corrupted block subtracting its
     // inflated size from g_used_bytes, underflowing the unsigned

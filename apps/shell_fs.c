@@ -1,7 +1,7 @@
 // Filesystem-related shell commands: cat/touch/mkdir/write/append/
 // rm/pwd/cd/edit. Split out of shell.c once it crossed 900 lines mixing
 // every command category together -- see shell_internal.h's top
-// comment for the split's own reasoning and CHANGELOG.md for the build
+// comment for the split's own reasoning and the git history for the build
 // this happened in. Shares `cwd`/resolve_path() with shell.c and
 // shell_sys.c via shell_internal.h.
 //
@@ -9,7 +9,7 @@
 // directly) -- it migrated to a real /bin binary (userland/ls.c),
 // invoked via cmd_ls_bin() in shell_sys.c, alongside the rest of the
 // disk-hosted-binary commands (cmd_run(), cmd_lspci()'s sibling). See
-// CHANGELOG.md/docs/decisions.md for why.
+// `docs/decisions.md` for why.
 #include "shell_internal.h"
 #include "editor.h"
 

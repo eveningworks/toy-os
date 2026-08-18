@@ -1,6 +1,6 @@
 // TFS2 -- this OS's persistent filesystem, journaled and timestamped
 // as of build 480, and (as of the large-file rework -- see
-// CHANGELOG.md) block-addressed with indirect pointers instead of one
+// the git history) block-addressed with indirect pointers instead of one
 // fixed-size inline data blob per file. This used to be fs.c itself,
 // back when it was the only filesystem toy-os could have; it's now
 // just one backend behind the VFS dispatch layer (vfs.c), reachable

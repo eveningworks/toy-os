@@ -251,7 +251,7 @@ struct prd {
 // up copy-on-write metadata into a periodic transaction commit,
 // independent of QEMU's own disk-cache mode (tried cache=writethrough
 // first; it didn't help, since the bottleneck was never in QEMU's
-// caching layer -- see CHANGELOG.md). `disk.img` itself now carries
+// caching layer -- see the git history). `disk.img` itself now carries
 // Btrfs's `+C` (no-COW) attribute as the real fix for that burst, but
 // widening this bound too costs nothing on the success path and adds
 // a little more headroom against whatever comparable host-side stall
@@ -300,7 +300,7 @@ static int g_dma_available = 0;
 // Second use, which is not hypothetical: comparing a known-good PIO
 // transfer against DMA is how an earlier session root-caused a DMA
 // failure to a host-side stall rather than a driver bug (see
-// CHANGELOG.md). That comparison had to be done by hand-editing the
+// the git history). That comparison had to be done by hand-editing the
 // driver; now it's `ata nodma on`.
 static int g_dma_forced_off = 0;
 

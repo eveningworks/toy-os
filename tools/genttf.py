@@ -9,12 +9,12 @@ developer's machine, and its *output* (plain grayscale-alpha byte arrays)
 is what actually ships in the kernel image.
 
 Bakes EIGHT sizes (8/10/12/14/16/18/20/24, named and selected by their
-point size -- see CHANGELOG's build 347 entry for why these replaced the
+point size -- see the commit for build 347 for why these replaced the
 original four tiny/small/medium/large names) into one font_ttf.c/h,
 selectable at runtime via gfx_set_font_size() (see gfx.c) -- the shell's
 `fontsize` command switches between them by typing the number. Baking
 multiple fixed sizes offline is the tradeoff that avoids needing a real
-runtime TrueType rasterizer (see CHANGELOG for why that's a much bigger
+runtime TrueType rasterizer (see the git history for why that's a much bigger
 undertaking): you get a choice of sizes, not arbitrary ones, but each one
 is genuinely anti-aliased at its native resolution rather than scaled
 from another baked size.
@@ -52,7 +52,7 @@ FONT_PATH = "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Regular.ttf"
 #     baseline_y  = round(ascent * 0.89)
 #     cell_h      = baseline_y + round(descent * 0.6)
 # which reproduces the original hand-tuned tiny/small/medium/large
-# values almost exactly (see build 347's CHANGELOG entry) with only the
+# values almost exactly (see the commit for build 347) with only the
 # same minor, deliberate descender clipping those already had -- the
 # same compromise any fixed-cell terminal font makes. Re-derive with
 # that formula (or re-tune the constants) if you add another size.
