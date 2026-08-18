@@ -396,6 +396,46 @@ class QMPSession:
         Image.open(ppm_path).save(png_path)
         return png_path
 
+    def stable_pixels(self, png_path, box=None, tries=12, settle=0.15):
+        """The screen's pixels, once the frame has STOPPED CHANGING.
+
+        Returns raw RGB bytes for `box` (a PIL crop box, or the whole
+        screen when None), so callers compare captures byte for byte.
+
+        WHY THIS EXISTS. A test that compares one capture against
+        another fails whenever a capture lands mid-paint -- and the
+        comparison it fails is one with nothing wrong with it. That is
+        the commonest way a GUI tool here goes intermittent, and it got
+        worse when the window manager became a PROCESS: a client having
+        drawn into its own buffer, and even having logged that it did,
+        does not mean the compositor has painted it to the screen yet.
+        That is an extra process hop whose timing varies with load.
+
+        Measured, on `calculator_client_test.py`: it failed 4 runs in 6,
+        always on the two checks that compare against the reference
+        frame taken at startup. With this, 6 in 6 pass -- and the probe
+        that proved the mechanism showed EVERY capture needing at least
+        one retry, the startup one needing two.
+
+        A capture is therefore two identical consecutive reads. Falling
+        back to the last read after `tries` keeps a genuinely animating
+        window (a blinking caret, a running demo) from hanging a test
+        rather than pretending it settled -- so a caller that expects
+        animation should not use this.
+        """
+        from PIL import Image
+        prev = None
+        for _ in range(tries):
+            self.screenshot(png_path)
+            with Image.open(png_path) as im:
+                im = im.convert("RGB")
+                cur = (im.crop(box) if box else im).tobytes()
+            if cur == prev:
+                return cur
+            prev = cur
+            time.sleep(settle)
+        return prev
+
     def close(self):
         self._sock.close()
 

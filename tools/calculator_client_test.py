@@ -126,11 +126,15 @@ def type_text(dbg, text):
 
 
 def display_pixels(qmp, tmp, name, box):
-    from PIL import Image
-    p = os.path.abspath(os.path.join(tmp, name))
-    qmp.screenshot(p)
-    with Image.open(p) as im:
-        return im.convert("RGB").crop(box).tobytes()
+    """The display region, once the frame has settled.
+
+    Every check here compares one capture against another, so a capture
+    taken mid-paint fails a comparison with nothing wrong with it --
+    which is what made this tool fail 4 runs in 6. The waiting lives in
+    QMPSession.stable_pixels(), because every GUI tool that compares
+    screendumps has the same exposure.
+    """
+    return qmp.stable_pixels(os.path.abspath(os.path.join(tmp, name)), box)
 
 
 def run(dbg, qmp, tmp, shot_dir, res):
@@ -141,20 +145,27 @@ def run(dbg, qmp, tmp, shot_dir, res):
 
     # Poll for BOTH the window and the client's self-reported layout --
     # the ELF has to load and lay itself out before either is answerable.
+    # Wait for the layout to be COMPLETE, not for the first layout line.
+    # The two are different, and the difference is a flake: the client
+    # logs one line per widget, so breaking on "a layout line arrived"
+    # can leave the rest still in flight -- and the very next check
+    # requires ALL of them. Measured at 1 run in 5 before this.
     deadline = time.time() + SPAWN_TIMEOUT_S
-    win, lines = None, []
+    win, lines, lay = None, [], None
     while time.time() < deadline:
         lines += dbg.logs("calculator:", clear=True)
         win = dbg.window(TITLE)
-        if win and any("layout btn" in l for l in lines):
-            break
+        if win:
+            lay = Layout(win["content"], lines)
+            if lay.complete():
+                break
         time.sleep(0.3)
     res.check("Calculator runs as a ring-3 process with its own window", win is not None,
               f"no window titled {TITLE!r} within {SPAWN_TIMEOUT_S}s")
     if not win:
         return
 
-    lay = Layout(win["content"], lines)
+    lay = lay or Layout(win["content"], lines)
     res.check("Calculator reports its own layout", lay.complete(),
               f"got {len(lay.buttons)}/{len(LABELS)} buttons, display={lay.display}")
     if not lay.complete():

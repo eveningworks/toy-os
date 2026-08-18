@@ -1195,29 +1195,33 @@ guess.*
       deleted the same day -- ~10,400 lines, with `apps/ui/`'s widget set
       and `apps/gui_apps.c`, since the WM was their only caller.
 
-- [ ] **`calculator_client_test.py` is INTERMITTENT against the ring-3
-      desktop.** Measured 2026-08-18 with `flake_hunt.py calculator -n 3`:
-      2 pass, 1 fail, and the same two checks fail together every time --
-      "C restores the display to exactly its initial pixels" and "a press
-      dragged off its button does NOT commit". Both are pixel comparisons
-      against an earlier capture, which is the hint: anything that
-      repaints between the two breaks them without the app being wrong.
+- [x] ~~**`calculator_client_test.py` is INTERMITTENT.**~~ FIXED
+      2026-08-18. Two separate TOOL bugs, neither of them in the OS.
+      Measured before: 2 runs in 6 passed. After: 8 in 8.
 
-      Proved pre-existing relative to the `apps/wm/` deletion by stashing
-      that and re-running against the previous commit -- identical rate,
-      identical checks -- so it arrived with the switchover to the ring-3
-      desktop, not with the removal of the ring-0 one. NOT diagnosed
-      further; get a bigger sample first, and note the `taskmgr` flake
-      below sits at a similar rate and may share a cause.
+      **1. Captures taken mid-paint.** Every check in that tool compares
+      one screendump against another, so a capture that lands while the
+      frame is still being painted fails a comparison with nothing wrong
+      with it. A client having drawn into its own buffer -- and having
+      LOGGED that it did -- does not mean the compositor has painted it
+      to the screen, and with the window manager in ring 3 that is an
+      extra process hop whose timing varies with load. A probe confirmed
+      the mechanism rather than inferring it from the pass rate: EVERY
+      capture needed at least one retry, and the startup reference two.
 
-- [x] ~~**Settings: qualified names (stage 1).**~~ BUILT 2026-08-18.
-      A setting's identity is (namespace, name), the namespace being the
-      registered name of the file it persists to, so `font_size` in
-      /etc/toyos.conf is `system.font_size`. Derived rather than
-      declared, so no `struct setting` and no /etc file changed. A bare
-      name works when exactly one setting has it and is REFUSED when
-      several do -- never resolved by registration order. R1-R5 all
-      landed; see `docs/decisions.md`.
+      The fix is `QMPSession.stable_pixels()` -- a capture is two
+      identical consecutive reads -- and it lives there rather than in
+      the tool because every GUI tool that compares screendumps has the
+      same exposure. **Reach for it in a new tool by default**; the
+      exception is a window you EXPECT to animate, where it would spend
+      its retries and hand back the last read.
+
+      **2. The startup poll broke on the FIRST layout line** while the
+      very next check requires all of them. The client logs one line per
+      widget, so "a layout line arrived" and "the layout is complete"
+      are different conditions; it waits for the second now. This is the
+      general shape of a poll whose exit condition is weaker than what
+      the code after it needs.
 
 - [ ] **Settings: a ring-3 settings daemon (stage 2).** The remaining
       half, and the one that needs infrastructure toy-os does not have.

@@ -216,6 +216,18 @@ technical conventions below:
   This is the same family as the three GUI ways below, and the fix was
   the same -- a case whose input crosses the boundary (20 blocks
   truncated to 15, straddling a pointer table).
+- **A screendump compared against another screendump must be a SETTLED
+  frame** -- `QMPSession.stable_pixels()` (two identical consecutive
+  reads). A client that has drawn into its buffer, and even logged that
+  it did, has not necessarily been composited yet; with the WM in ring 3
+  that is an extra process hop whose timing varies with load, so a
+  capture taken too early fails a comparison that is otherwise correct.
+  Measured on `calculator_client_test.py`: 2 runs in 6 passed before,
+  8 in 8 after, with a probe showing EVERY capture needing a retry. Do
+  not use it on a window you expect to animate. And the sibling trap
+  from the same hunt: **a poll whose exit condition is weaker than what
+  the code after it needs is a flake** -- that tool waited for the first
+  of N layout lines and then required all N.
 - **Verify GUI changes by reading PIXEL VALUES, not by looking at the
   screenshot** (`tools/pixel_probe.py`). A hover state that moved the
   background by two units out of 255 looked perfectly plausible in a
