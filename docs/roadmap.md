@@ -765,15 +765,33 @@ The first layer that is POLICY rather than mechanism, and the first that
 needs processes to outlive the thing that started them.
 
 ### Init & service supervision (system)
-**Needs:** Scheduler: blocking, priorities, classes (deterministic wakeups) and Signals & process control (a
-supervisor stops a service by signalling it). **Unlocks:** the ring-3
-settings daemon, and any future name service.
+**Planned in detail: [docs/init-design.md](init-design.md)**, which
+stages this together with the process tree it needs, the console device
+a ring-3 shell needs, and retiring the kernel shell.
 
-*Needs the TTY layer, `fork`/`exec`, signals and job control -- it is
-essentially those four used in anger.*
+**Needs:** nothing outstanding for the first two stages. **Unlocks:**
+the ring-3 settings daemon, a ring-3 shell, and any future name service.
+
+*This item used to say it needed `fork`/`exec`, signals and job control.
+That was checked against the code on 2026-08-18 and is wrong about the
+first: `SYS_SPAWN` is already `posix_spawn()`-shaped, which is what an
+init needs, and `fork()`'s real content is copy-on-write -- so it
+depends on demand paging and sits BELOW this, not above it. Signals are
+needed to stop a service gracefully, not to start or reap one, so they
+gate the later checkboxes rather than the first three. The TTY is
+genuinely needed, but only for the shell half; see the design doc's
+staging.*
 
 - [ ] A real `init`: the first process, started by the kernel, parent of
       everything else
+- [ ] A parent link (`ppid`) and reparenting of orphans -- there is
+      none at all today, so there is no tree to supervise
+- [ ] `waitpid(-1)`, so init can reap any child rather than a named one
+- [ ] pid 1 refuses to be killed
+- [ ] A TARGET setting (`text` / `graphical`) deciding what init starts
+      -- systemd's `multi-user.target` / `graphical.target`, SysV's
+      runlevels 3 and 5 -- with a `target=` boot word overriding it so a
+      desktop that faults on boot cannot cost you the machine
 - [ ] A service description format in `/etc` (name, command, restart
       policy) via the existing `etc_config` conventions
 - [ ] Start services at boot, in a declared order
