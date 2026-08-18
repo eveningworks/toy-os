@@ -2424,6 +2424,76 @@ it serves. Small, and it makes everything above it discoverable.*
 
 ## Known issues and papercuts (unscheduled)
 
+### The kernel ships ~62 KB of `.eh_frame` unwind tables nothing can ever read
+
+Measured on the current image: `.eh_frame` is **62,076 bytes, 2.5% of
+`kernel.bin`**. Those are DWARF call-frame tables, and their only possible
+consumer is an unwinder -- C++ exceptions, `_Unwind_Backtrace`, a debugger
+walking frames from inside the process. This kernel has none of the three.
+
+It cannot even be used by the one thing that looks like it would want it:
+the panic backtrace is deliberately a **stack SCAN**, not a frame walk,
+because the build is `-O2` and an RBP chain would be fiction (see
+`kernel/arch/x86_64/idt.c`). GDB unwinds from OUTSIDE via QEMU's stub and
+the separate `.debug_*` sections, which are not loaded.
+
+`-fno-asynchronous-unwind-tables` in CFLAGS removes them. What makes this
+worth doing carefully rather than casually:
+
+  * **`linker.ld` places `.eh_frame` EXPLICITLY**, in the read-only band,
+    with a comment saying it is placed "rather than left as an orphan"
+    because with `PHDRS` declared an orphan lands wherever `ld` chose --
+    and the silent direction is the R+X band. Removing the section means
+    removing that placement too, and a stale `*(.eh_frame)` line matching
+    nothing is harmless while a REMOVED one that the flag does not
+    actually suppress is the orphan trap all over again. Check with
+    `size -A build/kernel.bin` afterwards, not by reading the script.
+  * **The W^X KTESTs assert on band boundaries.** Deleting a section moves
+    every address above it. That is exactly what those tests are for, so
+    expect them to be the thing that tells you whether it worked.
+
+Not urgent -- 62 KB of read-only NX data costs nothing at runtime. It is
+recorded because "why is this in the image at all" had never been asked,
+and the answer turned out to be "nobody passed the flag".
+
+### The in-kernel test suite is ~30% of `.text` and ships in release images
+
+Measured: `.text` is 365.9 KiB, of which **108.9 KiB (29.8%) comes from
+`*_test.o`** -- re-measure with `size -A build/kernel.bin` and
+`find build/kernel -name '*_test.o' -exec size -A {} \;`, since both
+figures are a snapshot of one build. Every ISO ever cut -- including the v0.2.0 release people
+downloaded -- contains all 285 tests, their fixtures and their assertion
+strings.
+
+**This is a deliberate trade, not an oversight**, and the trade is good:
+`ktest` runs inside the LIVE booted kernel, which is what makes the tests
+meaningful. They run against a real heap and a real mounted filesystem,
+and that is precisely how three `heap-debug` tests were caught assuming a
+quiescent heap once a desktop was always running. A suite that could only
+run in a stripped-down test build would not have found that.
+
+The registry costs almost nothing on top: `.ktests` is 9,120 bytes for 285
+tests, **exactly 32.0 bytes each** -- one `struct ktest_case` per test,
+dropped in by `__attribute__((used, section(".ktests")))` and bracketed by
+`__ktests_start`/`__ktests_end`. There is no registry file and no init
+call to forget, because the linker IS the registry.
+
+So the item is not "remove it". It is: **decide whether a release build
+should differ from a dev build at all, and write the decision down.**
+Today they are byte-identical, which has a real virtue -- the thing users
+run is the thing that was tested, and a user can run `ktest` on their own
+hardware and send you the output, which has already been useful for
+CPU-dependent paths this environment cannot reach (SMEP/SMAP, the
+invariant TSC).
+
+If it is ever taken: a `-DNO_KTEST` that compiles the `KTEST()` macro to
+nothing is the cheap version, and the thing to verify is that
+`__ktests_start == __ktests_end` leaves `ktest_run_all()` reporting "0
+tests" rather than walking a null range. The 100 KiB is the cheapest
+saving available in the image, and it is still probably not worth losing
+the ability to test a shipped one.
+
+
 ### Two win-server KTESTs only run on a `target=text` boot, since a live desktop removes what they test
 
 `win_server`'s "requests are refused when no server is registered" and

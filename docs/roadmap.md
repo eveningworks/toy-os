@@ -690,6 +690,8 @@ were found at all.
 - [x] ~~`taskmgr_test.py`'s "found the victim's row" is INTERMITTENT~~ done
 - [x] ~~The ring-3 desktop cannot give a client a window~~ done
 - [ ] The ring-3 WM busy-waits instead of sleeping
+- [ ] The kernel ships ~62 KB of `.eh_frame` unwind tables nothing can ever read
+- [ ] The in-kernel test suite is ~30% of `.text` and ships in release images
 - [ ] Two win-server KTESTs only run on a `target=text` boot, since a live desktop removes what they test
 - [ ] The desktop died once at 1.15 s while a `/bin` program ran through the legacy loader -- cause unestablished
 - [ ] `tools/ktest_run.py` reports the debug console never came up, on 5 boots in 9 -- PRE-EXISTING
