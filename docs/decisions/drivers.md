@@ -1,0 +1,245 @@
+# Decisions: Drivers and hardware
+
+Display, disk and input drivers, and the registries they announce themselves through.
+
+Part of **[docs/decisions.md](../decisions.md)**, which indexes every
+decision in this project and is GENERATED from these files -- run
+`tools/gen_decisions_index.py` after adding an entry here, or
+`tools/check_docs.py` will fail.
+
+Write the reasoning HERE, in full: an entry that cannot be understood
+without opening something else is not finished.
+
+---
+
+## DMA needs PCI Bus Master Enable, not just a programmed descriptor
+
+A PCI device's I/O-mapped DMA control registers (a Bus-Master IDE
+controller's BM_CMD/BM_STATUS/BM_PRDT, say) keep accepting reads/
+writes and can report a nominal "transfer complete" status even when
+the PCI Command register's "Bus Master Enable" bit (config offset
+0x04, bit 2) is never set -- without it, the device just never issues
+real memory read/write bus cycles, so DMA "succeeds" while moving no
+actual data. Easy to miss because nothing about the failure looks like
+a failure from software's point of view; only comparing against a
+known-good PIO transfer, or tracing the actual bytes moved, exposes
+it. `pci_enable_bus_master()` (`pci.c`/`pci.h`) sets it via a
+read-modify-write of the Command register, called once from
+`ata_init_dma()`. Any future DMA-capable driver (a NIC) needs this same
+call before its own DMA moves real data -- noted directly in
+`pci.h`'s doc comment, not just here. the commit for build 470
+for how this was root-caused (PIO-vs-DMA comparison, then a host-side
+pre-seeded disk image to isolate the read path and trace the bounce
+buffer).
+
+## The DMA bounce buffer is 64KB because that's one PRD, not because 64KB benchmarked well
+
+`ata.c`'s `DMA_BUF_FRAMES` is 16 (65536 bytes), which sets
+`ATA_MAX_SECTORS_PER_XFER` to 128. The number comes from the hardware
+interface, not tuning: a Physical Region Descriptor's byte-count field
+is 16 bits, with 0 encoding 64KB, so 64KB is the largest single-PRD
+transfer possible and 129 sectors would truncate to a genuinely wrong
+value rather than a clamped one. Going bigger means scatter-gather --
+multiple PRD entries -- which is a real feature, not a constant change.
+
+Two related choices: the allocation failure path retries for the
+original 2 frames rather than dropping to PIO (a smaller DMA window is
+still far better than no DMA), and `ata_max_sectors_per_xfer()` reports
+the runtime value separately from the compile-time maximum so callers
+that batch (TFS2's coalescing) adapt instead of assuming. See
+the commit that added it.
+
+## PCI enumeration is a brute-force flat scan, not bridge-aware recursion
+
+`kernel/drivers/pci.c`'s `pci_init()` checks every one of the 256 x 32
+x 8 possible bus/device/function combinations directly via legacy
+CONFIG_ADDRESS/CONFIG_DATA (0xCF8/0xCFC) port I/O, rather than the
+"real OS" approach of scanning bus 0 and recursing into any PCI-to-PCI
+bridge's secondary bus. Deliberate: the brute-force version needs no
+bridge detection, no recursion, and no cycle safety, and finds the
+same devices as the recursive version on any topology this kernel
+actually runs on (QEMU's default chipset, or ordinary real hardware
+without a deeply nested bridge topology) -- the only real cost is
+wasted probe reads on buses/slots nothing lives at, which is cheap.
+Also chose legacy CF8/CFC access over the newer memory-mapped ECAM
+mechanism, since ECAM needs ACPI/MCFG table parsing just to find its
+base address and CF8/CFC is universally supported including by QEMU's
+emulated chipset. BARs are decoded (I/O-vs-memory, base address) but
+NOT size-probed (the write-0xFFFFFFFF-and-read-back trick) -- that's
+deferred to whichever future driver actually needs to map a BAR, since
+it means temporarily disabling the device's decode and isn't needed
+just to enumerate/identify what's present. See `pci.h`'s top comment
+and the commit for build 390 for the full writeup -- this was the
+first concrete milestone toward the TCP/IP prerequisites README.md's
+**Build 380** entry laid out.
+
+## Nordic keyboard/character support: Latin-1, not UTF-8; 3 remapped keys, not a full layout
+
+Adding Å/Ä/Ö support (build 501) meant three separable choices, made
+the same way each time: keep the codebase's existing "1 char = 1 cell
+= 1 glyph" assumption intact rather than take on the much bigger
+UTF-8 rework it doesn't need yet.
+
+**Encoding: Latin-1/ISO-8859-1 single bytes (Ä=0xC4, Ö=0xD6, Å=0xC5,
+ä=0xE4, ö=0xF6, å=0xE5), not UTF-8.** Every byte-buffer boundary in
+this kernel (`scrollback_cell`, `fs.h`'s file content, the syscall
+ABI's buffer+length `SYS_WRITE`/`SYS_READ`) already assumes one byte
+is one character is one glyph cell; UTF-8 would break that assumption
+everywhere a multi-byte Nordic letter crossed it, for a codebase that
+only needs 6 extra characters right now. `font_ttf.h`'s
+`FONT_TTF_EXTRA_COUNT` bakes exactly these 6 glyphs (see
+`tools/genttf.py`'s `EXTRA_CHARS`), not the full 0xA0-0xFF Latin-1
+Supplement block -- easy to extend later (append to that list and
+re-run the script) if more accented characters are ever needed.
+
+**Keyboard layout: `keyboard <us|se>` remaps 3 scancodes, not a
+from-scratch Nordic layout.** `keyboard.c`'s `scancode_ascii_se[]`/
+`scancode_ascii_shift_se[]` are copies of the US tables with only
+scancodes 0x1A/0x27/0x28 (the physical keys under Å/Ä/Ö on a real
+Nordic keyboard) changed -- everything else, including AltGr-level
+symbols a real Nordic layout also remaps, stays US QWERTY, since this
+driver has no AltGr/dead-key handling at all (see keyboard.h's
+`IS_NORDIC_CHAR()` comment). Persisted the same way `timezone`/
+`fontsize` already are -- a `keyboard_layout=<us|se>` key in
+`/etc/toyos.conf`, loaded once at boot by `keyboard_config_init()`.
+
+**The actual bug that made this hard to verify: `char` is signed, and
+one gate had a differently-shaped filter the others didn't.** No
+`-funsigned-char` in this build's CFLAGS, so a codepoint >= 0x80 is
+negative as `char` -- `gfx_draw_char()`'s old `c < 32 || c > 126`
+range check and five `key >= 32 && key < 127`-shaped "is this a
+printable char" gates across `apps/` (terminal, notepad, widgets
+textfield, editor) and `userland/tests/echo.c` all
+silently rejected Nordic letters before this build. `keyboard.h`'s new
+`IS_PRINTABLE_KEY()` macro (and `font_ttf_glyph_index()` in gfx.c,
+which takes the codepoint as `int`/`unsigned char` rather than relying
+on `char`'s signedness) fixed all of them at once -- except
+`apps/shell.c`'s own `shell_read_line()`, which had a SIXTH,
+differently-worded gate (`c < 128`, not `key >= 32 && key < 127`) that
+a grep for the other five's exact phrasing missed entirely. Found only
+by QMP-testing actual keystrokes end-to-end and noticing the cursor
+didn't even advance -- not by code review -- which is the concrete
+argument for always verifying a "fixed every instance of X" claim by
+testing the behavior, not just re-grepping the pattern you already
+fixed. the commit for build 501 for the full writeup.
+
+## Keyboard layouts are data files (`/etc/kbs/<name>`) generated from Linux's own XKB data, not a compiled-in enum
+
+The original `se` layout only remapped the three Å/Ä/Ö keys -- everything
+else stayed identical to `us`, including keys whose physical legend is
+genuinely different on a real Nordic keyboard (the key beside right
+Shift types `-`/`_` on a physical FI/SE keyboard, not `/`/`?`). Rather
+than hand-fix scancodes one bug report at a time, layouts moved to
+`/etc/kbs/<name>` data files, generated by `tools/gen_kbs.py` from
+`xkbcli compile-keymap` (Linux's own, already-correct XKB layout
+compiler -- no X server needed) instead of anyone re-deriving a
+scancode chart by hand. Translation logic itself moved out of
+`keyboard.c` into a new `kernel/lib/keyboard_layout.c`, since owning
+per-region character tables was never really the driver's job (raw
+scancode/shift-state handling is). See the commit that added it for the full implementation, including the AltGr/dead-key scope
+limits (this driver has no AltGr handling at all, so those symbols
+were never reachable regardless of the table) and a real bug the
+generator's first cut had (omitting Escape/Backspace/Tab/Enter from
+its key list, which silently broke Enter the moment the shell started
+loading layouts from generated files instead of the old compiled-in
+ones -- found live, not by review).
+
+## GDB debugging: QEMU's built-in stub, not an in-kernel serial protocol implementation
+
+`make debug` (`CLAUDE.md`'s "Debugging with GDB" section) boots toy-os
+frozen at CPU reset (`-s -S`) so a real `gdb` on the host can attach
+via `target remote localhost:1234` -- real breakpoints, single-step,
+register/memory inspection. This is QEMU's own built-in GDB remote
+stub: QEMU emulates the CPU directly, so it can expose full debugger
+control over whatever's running in the guest without the guest OS
+needing to implement anything at all.
+
+Worth stating explicitly because the first framing of this idea (a
+`/btw` suggestion) got it wrong: it proposed toy-os's kernel would need
+to "speak the GDB remote serial protocol" itself -- real, substantial
+protocol work (packet framing, register/memory read-write commands,
+breakpoint handling) on top of `kernel/core/debug_console.c`'s existing
+scope (a handful of if/else-dispatched diagnostic commands). That's
+simply unnecessary: `-s`/`-S` are ordinary QEMU flags, no different in
+kind from `-vnc`/`-serial file:...` already used throughout
+`tools/qmp_test.py`'s testing setup, and they work today with zero
+toy-os code changes. Confirmed directly, not just asserted: `break
+kernel_main` + `continue` over a real `gdb` session correctly ran the
+CPU from reset through GRUB/multiboot2 and stopped exactly at
+`kernel_main`, with a real backtrace showing source file/line.
+
+The one actual gap, now closed: `CFLAGS`/`USERLAND_CFLAGS` never
+carried `-g`, so `kernel.bin` and every userland ELF had zero DWARF
+debug info -- GDB could still technically attach, but would only ever
+see raw addresses, no function names or source lines, making
+`break kernel_main`-style debugging impossible. Added `-g` to both,
+kept at `-O2` rather than dropping to `-Og`/`-O0` for a separate debug
+build -- same binary as always, just now carrying symbols, at the cost
+of some locals showing "optimized out" in GDB. A real, deliberate
+build-config-simplicity tradeoff, not an oversight.
+
+## ATA's waits are bounded by wall-clock in one context and a spin count in the other
+
+Every wait in `kernel/drivers/ata.c` that can block looks like it's
+written twice, and the duplication is deliberate. A wall-clock budget
+needs `pit_ticks()` to advance, and it doesn't inside a syscall: `int
+0x80` is wired as an interrupt gate, so IF stays clear for the whole
+handler and no timer IRQ ever increments the counter. A wall-clock loop
+reached from there wouldn't time out, it would hang the machine. So
+`wait_dma_irq()` and `wait_not_busy()` both branch on
+`isr_in_progress()` (`idt.h`) -- real elapsed time when it's safe, a
+fixed `ATA_POLL_LIMIT` spin when it isn't. Same split, same reason, as
+the `hlt`-when-safe/poll-when-inside-a-syscall rule in the entry on
+blocking I/O waits above.
+
+**Why this is worth an entry rather than just a comment:** the two
+bounds were written years apart in project time, and for a long stretch
+only the completion wait had the wall-clock half. `DMA_WAIT_TICKS` was
+deliberately *widened* to 5s to absorb host-side I/O stalls, while
+`wait_not_busy()` sat at a fixed 100000-iteration spin -- which measures
+out to ~12ms, giving three retries ~37ms in total. The driver was
+therefore 135x more patient about a command in flight than about a
+drive still finishing the previous one, and a host stall (a Btrfs
+commit, an ISO being written to the same disk) hit the impatient half.
+The general lesson is the one worth carrying: **a spin count is not a
+duration.** It measures the guest CPU, which keeps running at full
+speed during exactly the host-side stalls it's supposed to absorb, so
+any timeout that must survive one has to be denominated in real time.
+
+See `ata.c`'s `wait_not_busy()`/`DMA_WAIT_TICKS` comments and
+the git history.
+
+## The PIO fallback is reachable on purpose (`ata nodma`), because unreachable fallback code is a guess
+
+`kernel/drivers/ata.c` has two transfer paths: Bus-Master DMA, and a PIO
+fallback for machines where DMA can't be brought up. `ata_init_dma()`
+succeeds under QEMU and on ordinary PC hardware -- so the fallback had
+never executed on any machine this OS boots, and there was no way to
+make it. Roughly a hundred lines of driver that only run in an
+emergency, and had never been observed running at all.
+
+`ata_set_dma_forced_off()` (the `ata nodma on|off` command) exists to
+close that. It is not a debugging convenience bolted on: it's what makes
+the path testable, and `kernel/drivers/ata_test.c` drives the same
+switch so PIO executes on every `make test`. The first time it ran, it
+worked -- which is the outcome that was *hoped for* before and merely
+assumed.
+
+It has a second use that isn't hypothetical. Comparing a known-good PIO
+transfer against a suspect DMA one is how an earlier session root-caused
+a DMA failure to a host-side filesystem stall rather than a driver bug;
+at the time that comparison required hand-editing the driver.
+
+**The implementation detail worth keeping:** every place that asks "DMA
+or PIO?" goes through a single `dma_in_use()` helper rather than testing
+the flags itself. `ata_max_sectors_per_xfer()` reports a smaller cap on
+PIO (8 sectors vs 128), and `tfs.c` batches block writes against that
+number -- so a dispatch site that disagreed with the cap site by even
+one condition would hand the PIO path a transfer it cannot carry. One
+helper makes that disagreement unexpressible.
+
+Related, same file, same session: `wait_drq()` now records *why* it
+failed in `g_pio_fail_reason`, mirroring `g_dma_fail_reason` -- a
+pass/fail return for control flow, a reason string for whoever reads
+`dmesg`. See `ata.c` and the git history.
+

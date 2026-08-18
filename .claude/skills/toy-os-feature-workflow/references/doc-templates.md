@@ -50,6 +50,12 @@ skip ceremony entirely.
 
 ## docs/decisions.md entry
 
+**Entries live in `docs/decisions/<area>.md`** -- kernel, storage,
+drivers, gui, shell, build, workflow -- and `docs/decisions.md` is a
+GENERATED index over them. Add the entry to the right file, then run
+`tools/gen_decisions_index.py`; `tools/check_docs.py` fails the build if
+you forget. Never hand-edit the index.
+
 Only add one when the change answers a "why does toy-os work this
 way" question a future session would plausibly hit again -- most
 changes don't clear that bar (the Nordic-keyboard change did, because

@@ -333,7 +333,7 @@ Selected tools (each documented in its own docstring):
 
 | Document | Contents |
 |---|---|
-| [docs/decisions.md](docs/decisions.md) | Topic-indexed answers to "why is this built this way?". Start here when something looks odd. |
+| [docs/decisions.md](docs/decisions.md) | Topic-indexed answers to "why is this built this way?", over [docs/decisions/](docs/decisions/) — split by area. Start here when something looks odd. |
 | [docs/roadmap.md](docs/roadmap.md) | What's planned, grouped into layers from the kernel up, with a "ready now" list and the known issues. |
 | [docs/roadmap-details.md](docs/roadmap-details.md) | The per-item reasoning and test plans behind that list. |
 | [docs/commands.md](docs/commands.md) | The full shell command reference. |
@@ -348,7 +348,6 @@ Selected tools (each documented in its own docstring):
 | [docs/live-cd-design.md](docs/live-cd-design.md) | How the Live CD carries a filesystem image as a GRUB module. |
 | [docs/arch-portability.md](docs/arch-portability.md) | What is and isn't x86-64-specific, and what a second architecture would take. |
 | [kernel/README.md](kernel/README.md), [apps/README.md](apps/README.md) | Where a new file goes, and how to add an app. |
-| [the git history](the git history) | History through 2026-08-15, now **frozen** — `git log` is the chronological record, and reasoning lives in `docs/decisions.md`. |
 
 ## Releases
 

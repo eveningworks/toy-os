@@ -546,6 +546,9 @@ twice more.**
     VIEW-ONLY VNC viewer to a running VM so the user can watch. Remmina's
     `-c vnc://...` URI cannot be view-only, and a viewer whose mouse
     fights the synthetic input looks exactly like a flaky test.
+  - `python3 tools/gen_decisions_index.py` -- regenerates
+    `docs/decisions.md` from `docs/decisions/`. Run it after adding a
+    decision entry; `--check` is what check_docs.py calls.
   - `python3 tools/check_docs.py` -- the documentation rules: no
     pointer to the deleted changelog, no numbered or versioned milestone
     heading, no duplicated roadmap entry, no link to a doc that does not

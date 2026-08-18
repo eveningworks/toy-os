@@ -114,6 +114,19 @@ def check_no_duplicate_roadmap_entries(problems):
                                     f"\n      {line[:90]}")
 
 
+def check_decisions_index_is_current(problems):
+    """docs/decisions.md is generated from docs/decisions/. A stale index
+    is the failure the generator exists to prevent -- an entry added to a
+    file and never linked is invisible, which is how the hand-maintained
+    version quietly stopped being an index."""
+    gen = os.path.join(REPO, "tools", "gen_decisions_index.py")
+    r = subprocess.run([sys.executable, gen, "--check"],
+                       capture_output=True, text=True, cwd=REPO)
+    if r.returncode != 0:
+        problems.append("docs/decisions.md is stale -- run "
+                        "tools/gen_decisions_index.py")
+
+
 def check_internal_doc_links(problems):
     """A relative link from one doc to another that does not exist. The
     roadmap split produced exactly this: a pointer to a `## Details`
@@ -135,13 +148,14 @@ def main():
                   check_roadmap_has_no_versions,
                   check_milestones_are_named,
                   check_no_duplicate_roadmap_entries,
+                  check_decisions_index_is_current,
                   check_internal_doc_links):
         check(problems)
 
     if not problems:
         print("check_docs: ok -- no dead changelog pointers, no numbered or "
-              "versioned milestones, no duplicated roadmap entries, no broken "
-              "doc links")
+              "versioned milestones, no duplicated roadmap entries, the "
+              "decisions index is current, no broken doc links")
         return 0
 
     print(f"check_docs: {len(problems)} problem(s)\n")
