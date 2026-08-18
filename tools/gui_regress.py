@@ -127,28 +127,37 @@ TOOLS = [
 # it the straggler everything else waits behind -- which is the exact
 # problem this table exists to fix.
 COST_S = {
+    # Re-measured 2026-08-18, against the ring-3 desktop (which is the
+    # only desktop now). Three of these moved a long way when their
+    # tools were reshaped: `compositor` no longer spawns a stand-in
+    # compositor and waits for it, `screen` drives its client in `auto`
+    # mode instead of one keystroke at a time, and `compdeath` kills the
+    # desktop directly. A stale cost is not a correctness problem -- it
+    # only makes the start order slightly wrong -- but a tool whose real
+    # cost has tripled would quietly become the straggler.
     "forcequit": 71,   # waits out real ping timeouts; inherently slow
-    "notepad": 51,
-    "menubar": 34,
-    "gfxdemo": 29,
-    "uapp": 21,
-    "scrollbar": 21,
-    "uidemo": 20,
-    "compositor": 19,
-    "screen": 16,
-    "compdeath": 20,
-    "cursor": 22,
-    "crash": 12,
-    "entries": 26,
-    "uterm": 18,
+    "notepad": 37,
+    "menubar": 32,
+    "gfxdemo": 24,
+    "cursor": 21,
+    "uapp": 19,
+    "taskmgr": 19,
+    "uidemo": 17,
     "blank": 17,
-    "calculator": 15,
-    "singleinst": 22,  # six launches, each waiting out a client's first frame
+    "uterm": 16,
+    "singleinst": 16,  # six launches, each waiting out a client's first frame
+    "scrollbar": 15,
+    "cpanel": 15,
+    "calculator": 14,
+    "entries": 13,
     "sched": 12,
     "winclient": 12,
+    "compdeath": 11,
+    "screen": 9,
+    "crash": 9,
     "uiclient": 9,
     "dialog": 9,
-    "cpanel": 20,
+    "compositor": 8,
 }
 COST_UNKNOWN_S = 90
 

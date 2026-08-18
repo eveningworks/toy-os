@@ -9,63 +9,44 @@ trusting them blindly** -- this repo's conventions have changed before
 skill file), so a stale template here is a real risk, not a
 hypothetical one.
 
-## CHANGELOG.md entry
+## The commit message (this replaced the CHANGELOG entry)
 
-Current format (Keep a Changelog style): every change gets an entry
-under the `## [Unreleased]` heading, in the appropriate subsection --
-`### Added`, `### Changed`, `### Fixed`, `### Removed`, `### Deprecated`,
-`### Security` -- pick whichever fits, most toy-os entries are `Added`
-(a new capability) or `Changed`/`Fixed`. No version number or tier
-attaches to an individual entry anymore; that only happens when
-`tools/set_version.sh <version>` (no `-dev`) cuts a release and stamps
-the whole `[Unreleased]` section at once. (You'll still see old
-`## Build <N> (<tier>, +<delta>)` headings further down in the file, or
-in `CHANGELOG-archive.md` -- those are frozen history from before the
-versioning switch, not a format to write new entries in.)
+**`CHANGELOG.md` is CLOSED and has been since 2026-08-15. Do not write
+entries for it.** This section used to teach that format, and a session
+following it would have been adding to a frozen file -- which is exactly
+the stale-template risk the top of this file warns about, caught on
+2026-08-18.
 
-Within an entry, roughly this order (not every entry needs every part
--- a small fix is often 2-3 sentences total):
+What replaced it, and where each kind of thing goes now:
 
-1. **What was asked**, close to verbatim if it's a direct quote-worthy
-   request, otherwise a faithful paraphrase.
-2. **What research found** -- what the code actually did before this
-   change, including anything surprising (a stale doc claim, a
-   landmine, a terminology mixup that got cleared up first).
-3. **What choices were presented and what got picked**, with a one-line
-   "why" for the winning option and, often, a one-line "why not" for
-   what got passed over. This is the connective tissue between "we
-   asked" and "here's what shipped" -- don't skip the why.
-4. **Specific technical detail on what changed**, naming files in
-   backticks -- not "updated X" but what changed about X and why that
-   shape was chosen. A multi-file change often becomes its own bullet
-   list within the entry.
-5. **A closing note on what was verified** -- what was actually tested
-   and how (`boot_smoke_test.py`, specific QMP interactions, a reboot
-   to check persistence, a regression re-run of other tests), naming
-   the proof, not just asserting correctness.
+- **What changed, file by file** -> the COMMIT MESSAGE. Subject line is
+  a short summary; the body lists each changed or added file with a
+  one-line note. That is what makes a commit skimmable on GitHub
+  without opening the diff.
+- **How a mechanism works, and the trap in it** -> a comment next to the
+  code. This is what actually gets found by whoever edits it.
+- **Why this way and not the obvious way** -> `docs/decisions.md`,
+  written out in full rather than as a pointer (template below).
+- **What is broken or not built yet** -> `docs/roadmap.md`, with a
+  reproduction precise enough to replay (template below).
 
-Real example -- the entry written for the versioning switch itself,
-live in `CHANGELOG.md`'s `## [Unreleased]` section:
+The commit body is where a real change earns its length. The shape that
+has held up:
 
-> ### Changed
-> - Versioning switched from a per-change build-number scheme
->   (`tools/bump_build.sh <fix|feature|major>`, a git tag `build-N` on
->   every push) to semantic versioning with a `-dev` suffix during
->   development. `VERSION` (repo root) now holds a plain semver string
->   -- `0.1.0-dev` to start -- read by `tools/gen_version.sh` into
->   `kernel/include/version.h`/`TOYOS_VERSION` exactly like
->   `BUILD_NUMBER` was before... Requested directly, to stop needing a
->   fix/feature/major judgment call and a tag on every small change --
->   see `docs/decisions.md`'s entry on this for the full reasoning.
-> - Commit messages going forward list each changed/added file with a
->   one-line note in the body..., so a commit is skimmable on GitHub
->   without opening the full diff.
+1. **What was wrong**, stated as the symptom someone would report.
+2. **What actually caused it** -- especially when that differs from the
+   obvious suspect, which in this repo it often does.
+3. **The file list**, one line each.
+4. **What was verified**, naming the numbers: which suites, how many
+   checks, and the positive control if one was run.
+5. **What was NOT established.** A measured "this stopped reproducing
+   and I do not know why" is worth more than a claimed fix.
 
-Notice this real example is much more compact than a full 5-part
-writeup -- it's a process/tooling change, not a feature, so it skips
-straight to what changed and why. Match the entry's weight to the
-change's, the same judgment call the main skill file describes for
-when to skip ceremony entirely.
+Match the weight to the change. A docs-only or one-line fix is two or
+three sentences and a file list; a feature or a real bug hunt is the
+full five. The same judgment the main skill file describes for when to
+skip ceremony entirely.
+
 
 ## docs/decisions.md entry
 

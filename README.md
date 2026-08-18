@@ -53,12 +53,15 @@ QEMU, and it does not stop at "hello world from the kernel":
   (the original, kept as a second backend). Both journal metadata, so
   files survive a power cut, and both come with an `fsck`. The VFS picks
   by superblock probe; `fsformat` switches live.
-- **A real GUI** — a window manager with movable, resizable windows, a
-  taskbar, a Start menu built from `.desktop` files (picked up live —
-  drop a file in and it appears), and a desktop of draggable icons with
-  rubber-band selection. Most apps are ordinary **ring-3 processes** that own
-  their windows over **TWP**, the Toy Window Protocol, served by **TWS**
-  and programmed against with **Toykit**.
+- **A real GUI, and it is not in the kernel** — the window manager is
+  itself a **ring-3 process**: movable, resizable windows, a taskbar, a
+  Start menu built from `.desktop` files (picked up live — drop a file
+  in and it appears), and a desktop of draggable icons with rubber-band
+  selection. Apps are ordinary ring-3 processes too, owning their
+  windows over **TWP**, the Toy Window Protocol, served by **TWS** and
+  programmed against with **Toykit**. The kernel keeps the framebuffer
+  and the protocol; everything above them is a process, and killing the
+  desktop is survivable.
 - **Its own test suite** — `make test` boots the OS headless, runs
   in-kernel tests including deliberate fault injection, and exits
   non-zero on failure. A separate GUI suite drives the desktop over a
@@ -75,14 +78,18 @@ production software. What that means concretely:
 **Works today** — booting on real hardware and QEMU, the shell and its
 line editor, both filesystems with `fsck` and live reformatting, the
 window manager and its apps, ring-3 processes with pipes and job
-control, and the full test suite (183 in-kernel tests, 8 ring-3
-diagnostics, 192 GUI checks across 14 tools).
+control, and the full test suite (270 in-kernel tests, 9 ring-3
+diagnostics, ~300 GUI checks across 23 tools).
 
-**In flight** — [Milestone 41](docs/wm-ring3-design.md) is moving the
-window manager itself out of the kernel and into ring 3, in stages.
-Stage 0 is done: the GUI apps are now ring-3 processes, and `apps/ui/`
-is deliberately *shrinking* as its widgets retire in favour of
-`userland/ui/`. The WM's own event loop is still kernel-space.
+**[Milestone 41](docs/wm-ring3-design.md) is complete** (2026-08-18):
+the window manager is an ordinary ring-3 process. `gui` spawns
+`/bin/wm/system/toywm`, which claims the compositor role, is granted the
+real framebuffer, composites the desktop and serves every client through
+the window protocol. The ring-0 window manager and its widget set are
+deleted — about 10,400 lines — so there is one implementation again.
+Killing the desktop (`kill 1`) is survivable: the kernel revokes the
+grant, asks client windows to close, restores the text console, and
+`spawn /bin/wm/system/toywm` starts a new one.
 
 **Known gaps** — there is no USB stack ([Milestone
 32](docs/roadmap.md)), so input on real hardware currently depends on
@@ -250,10 +257,11 @@ kernel/
                 api/ (what apps may use), abi/ (the kernel<->userland
                 contract), kernel/ (internal, off apps/'s path)
 
-apps/           kernel-space programs: the shell and editor, and the
-                window manager (apps/wm/). apps/ui/ holds the widgets
-                the WM itself draws with -- deliberately shrinking as
-                Milestone 41 proceeds.
+apps/           kernel-space programs: the shell, the editor, the
+                scripted demo. NO GUI lives here any more -- the window
+                manager and its widgets moved to userland/wm/ and
+                userland/ui/. What is left of apps/ui/ is the one text
+                widget the kernel's own `edit` command draws with.
 
 userland/       ring-3 programs, split by ROLE:
   rt/           crt0, libsys, linker script
@@ -332,7 +340,7 @@ Selected tools (each documented in its own docstring):
 | [docs/filesystem-layout.md](docs/filesystem-layout.md) | What lives where on the OS's own disk. Checked against the built image by `tools/check_layout.py`. |
 | [docs/gui-guidelines.md](docs/gui-guidelines.md) | How the GUI should look and behave, and how to verify a change to it properly. |
 | [docs/uapp-design.md](docs/uapp-design.md) | Toykit's design: how a ring-3 GUI app is written, and the staging that got there. |
-| [docs/wm-ring3-design.md](docs/wm-ring3-design.md) | Milestone 41 — the staged plan for moving the window manager out of the kernel. |
+| [docs/wm-ring3-design.md](docs/wm-ring3-design.md) | Milestone 41 — how the window manager was moved out of the kernel, stage by stage. Complete. |
 | [docs/process-isolation.md](docs/process-isolation.md) | The full ring0/ring3 build-up, told as it was built, bugs included. |
 | [docs/tfs3-spec.md](docs/tfs3-spec.md) / [design](docs/tfs3-design.md) | Byte-level format of the default filesystem, and the reasoning behind it. |
 | [docs/tfs2-spec.md](docs/tfs2-spec.md) | Byte-level format of the legacy second backend. |

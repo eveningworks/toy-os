@@ -138,7 +138,7 @@ mcp__remote-devices__device_bash:
 
 <file path>   - <one-line note on what changed in it>
 <file path>   - <one-line note on what changed in it>
-CHANGELOG.md  - Unreleased entry
+docs/decisions.md - <only when the change answers a "why this way" question>
 EOF
 )"
 ```

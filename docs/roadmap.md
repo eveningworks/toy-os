@@ -1264,6 +1264,69 @@ guess.*
       captures): `uidemo`, `dialog`, `scrollbar`, `menubar`, `uiclient`,
       `winclient`, `screen`.
 
+- [ ] **A syscall TABLE, and handlers in the subsystem that owns them.**
+      `kernel/proc/syscall.c` is 1,492 lines and one `if/else` chain of
+      37 branches over ~40 syscalls, and it grows with every capability
+      added.
+
+      **How Linux and Windows do it, because they agree on the shape.**
+      Linux has no syscall file at all: each call is defined by a
+      `SYSCALL_DEFINEn()` macro IN THE SUBSYSTEM THAT OWNS IT (`read`
+      and `write` in `fs/read_write.c`, `fork` in `kernel/fork.c`), and
+      dispatch is a TABLE of function pointers (`sys_call_table[]`)
+      generated at build time from one registry file
+      (`arch/x86/entry/syscalls/syscall_64.tbl`). Windows NT is the same
+      idea: the SSDT is an array of service pointers plus an
+      argument-size table, indexed by `KiSystemService`, with
+      implementations in the owning managers (Io, Ob, Ps, Mm) and a
+      separate shadow table for win32k. Neither has a dispatch chain,
+      and neither keeps the implementations together -- the table is the
+      only central thing.
+
+      **The specific reason to do it here, beyond file size:** there is
+      already a SECOND table keyed by syscall number -- `strace`'s
+      `SC_TABLE` -- and it drifted. Fourteen entries were missing on
+      2026-08-18, some for months, and the gap was invisible because
+      nothing ties the two together. One table holding
+      `{name, handler, argument kinds}` makes dispatch and tracing
+      unable to disagree, and `kstack syscalls` reads it too.
+
+      **Shape:**
+
+      * R1. One table indexed by syscall number. `syscall_dispatch()`
+        becomes ~100 lines of entry/exit plumbing (the strace hook, the
+        block/park bookkeeping, the stack-depth accounting) plus a
+        bounds-checked call.
+      * R2. Handlers move to the owning subsystem --
+        `kernel/fs/fs_syscalls.c`, `kernel/proc/proc_syscalls.c`,
+        `kernel/proc/win_syscalls.c`. Today's `noinline` handlers are
+        already this shape, arrived at by accident while chasing a stack
+        frame.
+      * R3. A uniform handler signature. This is where the risk is:
+        ~40 handlers have to agree on one, and the ones that park the
+        caller (`SYS_READ` on a pipe, `SYS_WAIT_EVENT`) need to report
+        "I blocked, do not write a return value" through it.
+      * R4. `abi/syscall_abi.h` stays the single source of truth for
+        numbers, and the table is GENERATED from it (the `gen_syms.py` /
+        `genrelocs.py` precedent). That keeps the compile-time
+        guarantee that a number is defined once -- which a
+        self-registering registry like `display_driver` or `.ktests`
+        would lose, since duplicate or missing numbers become a runtime
+        concern. This is the one place to deviate from this repo's usual
+        registry instinct, and the reason should be stated where the
+        table is generated.
+      * R5. `strace`'s names and argument kinds come from the same
+        table, so R2's move cannot leave a syscall untraceable.
+
+      **A structural bonus:** each handler gets its own stack frame, so
+      no syscall can put its locals on every other syscall's frame --
+      which is precisely the bug that made `syscall_dispatch()` 4832
+      bytes and cost a kernel-stack overflow to find.
+
+      Estimated at about a day, mostly mechanical, with the risk
+      concentrated in R3. Worth doing BEFORE the settings daemon below,
+      which will add syscalls of its own.
+
 - [ ] **Settings: a ring-3 settings daemon (stage 2).** The remaining
       half, and the one that needs infrastructure toy-os does not have.
 
@@ -1308,17 +1371,13 @@ guess.*
       so it is the same identity whichever side of the boundary the
       registry ends up on.
 
-- [ ] **`strace`'s syscall-name table stops at `SYS_GETRANDOM`.**
-      Everything added since -- `SYS_PROC_INFO`, `SYS_SETTING`,
-      `SYS_SYSINFO`, `SYS_TICKS`, `SYS_KILL`, `SYS_SPAWN`, `SYS_PIPE`,
-      `SYS_WAITPID`, `SYS_WIN_REQUEST`, `SYS_MONOTONIC_NS`,
-      `SYS_FS_GENERATION`, `SYS_CRASHTEST` -- traces as an unnamed
-      number, which is most of the interesting ones. `SC_TABLE` in
-      `kernel/proc/strace.c` is a designated-initialiser array, so each
-      is one line plus its argument types. Noticed because
-      `kstack syscalls` reads the same table (deliberately -- it is the
-      kernel's only list of these names) and reported the culprit as
-      `#34`.
+- [x] ~~**`strace`'s syscall-name table stops at `SYS_GETRANDOM`.**~~
+      FIXED 2026-08-18: the fourteen syscalls added since it was written
+      -- process control (spawn/waitpid/kill/pipe), the window protocol,
+      the settings registry, the crash and power paths -- have names and
+      argument types now. `kstack syscalls` reads the same table on
+      purpose (it is the kernel's only list of these names), so it stopped
+      reporting the deepest syscall as `#34`.
 
 - [x] ~~**`syscall_dispatch()` has a 4832-byte stack frame.**~~ FIXED
       2026-08-18: ~864 bytes now, and the deepest measured path in the
@@ -1331,18 +1390,6 @@ guess.*
       total by nothing, because GCC already overlapped them in the big
       buffer's shadow. `-fstack-usage` said so in one command. See
       `docs/decisions.md`.
-
-- [ ] **`strace`'s syscall-name table stops at `SYS_GETRANDOM`.**
-      Everything added since -- `SYS_PROC_INFO`, `SYS_SETTING`,
-      `SYS_SYSINFO`, `SYS_TICKS`, `SYS_KILL`, `SYS_SPAWN`, `SYS_PIPE`,
-      `SYS_WAITPID`, `SYS_WIN_REQUEST`, `SYS_MONOTONIC_NS`,
-      `SYS_FS_GENERATION`, `SYS_CRASHTEST` -- traces as an unnamed
-      number, which is most of the interesting ones. `SC_TABLE` in
-      `kernel/proc/strace.c` is a designated-initialiser array, so each
-      is one line plus its argument types. Noticed because
-      `kstack syscalls` reads the same table (deliberately -- it is the
-      kernel's only list of these names) and reported the culprit as
-      `#34`.
 
 - [ ] **`syscall_dispatch()` has a 4832-byte stack frame, on every
       syscall.** Found by `-Wframe-larger-than=1024` (added 2026-08-18)

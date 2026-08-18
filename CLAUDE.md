@@ -40,6 +40,36 @@ technical conventions below:
   established better way to do something (a real OS's approach, a
   better data structure, a cleaner API shape), say so and suggest it,
   rather than only doing exactly what's literally asked.
+- **SAY WHAT REAL SYSTEMS DO, before proposing a design.** Name how
+  Linux and Windows solve it -- and for anything on the desktop side,
+  Wayland and a compositor that implements it (KWin, Mutter, wlroots),
+  or X11 where the history explains the shape. Then say whether toy-os
+  should follow or deliberately differ, and why. Having something to
+  compare against is what turns "this seems fine" into a judgement.
+
+  Where to look, by area: kernel and process model -> Linux, Windows NT;
+  filesystem -> ext2/3/4, NTFS; compositor and windowing -> Wayland
+  (+ KWin/Mutter/wlroots/XFCE), X11; settings -> sysctl, dconf/GSettings,
+  macOS `defaults`, the Windows registry; init and services -> systemd,
+  launchd; IPC -> D-Bus, Binder, Mach ports.
+
+  This has repeatedly changed decisions here rather than decorating
+  them: kernel stacks got a guard page because that is
+  `CONFIG_VMAP_STACK` and Linux had toy-os's exact bug before 4.9;
+  settings are `(namespace, name)` because sysctl, GSettings and
+  `defaults` all namespace and a flat global name was the outlier;
+  a revoked compositor mapping is poisoned rather than unmapped, which
+  is the problem `wl_buffer.release` exists for; the cursor is named by
+  the client and drawn by the compositor because Wayland added
+  `cursor-shape-v1` to undo the opposite.
+
+  Two cautions. **Copy the SHAPE, not the size** -- these systems carry
+  decades of compatibility baggage toy-os has no reason to inherit, and
+  "Linux has 400 syscalls" is not an argument for anything. And **check
+  the claim before leaning on it**: "Linux can switch schedulers" is a
+  common misreading (it has compile-time classes; `sched_ext` is an
+  escape hatch), and a wrong premise argued confidently is worse than
+  no comparison at all.
 
 ## Conventions worth knowing before editing
 
@@ -2677,7 +2707,7 @@ repeated manual steps to be worth automating:
   version of that check stayed green through the positive control.
 - **`gui_regress.py`** -- runs every GUI test tool, each against
   its own freshly-copied disk image and its own VM, and prints one
-  pass/fail table (~1.5 minutes, 280 checks across twenty tools). This is the standard check
+  pass/fail table (~1.5 minutes, ~300 checks across 23 tools). This is the standard check
   after touching `apps/ui/`, `userland/`, or anything the WM draws.
   Tools are **STARTED longest-first** (`COST_S`/`pick_order()`), because
   a parallel run cannot end before its slowest member does and
