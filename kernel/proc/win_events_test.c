@@ -142,7 +142,14 @@ KTEST("win_events", "a ring-3 process blocks in SYS_WAIT_EVENT and is woken") {
 // real ring-3 client against the real WM -- stronger evidence than a
 // stub would give, and with nothing to clobber.
 KTEST("win_server", "requests are refused when no server is registered") {
-    if (win_server_active()) KTEST_SKIP("a window server is registered (desktop is up)");
+    // EITHER KIND OF SERVER counts. This guard read `win_server_active()`
+    // alone, which answers "is a RING-0 presentation layer registered" --
+    // and the desktop stopped being one when it became a ring-3
+    // compositor, so the skip silently stopped firing while its comment
+    // went on claiming it did. Nothing noticed until init started the
+    // desktop at boot (docs/init-design.md stage 2) and `make test`
+    // finally ran with one up.
+    if (win_server_any()) KTEST_SKIP("a window server is registered (desktop is up)");
 
     struct win_request_msg req = {0};
     req.type = WIN_REQ_CREATE;

@@ -175,6 +175,14 @@ KTEST("wintransport", "an unrecognised subcommand is distinct from an empty repl
 }
 
 KTEST("wintransport", "a presentation layer with no debug_command refuses cleanly") {
+    // A REGISTERED COMPOSITOR also answers a debug command
+    // (win_server_debug()'s `else if (g_comp_pid)`), so with the desktop
+    // up this stub layer is not the only thing that could reply and the
+    // refusal under test cannot happen. Same stale-precondition family
+    // as the two skips in win_events_test.c and win_server_test.c --
+    // win_server_any() is the predicate that covers both kinds.
+    if (win_server_any()) KTEST_SKIP("a compositor would answer instead");
+
     static const struct win_server_ops NO_DEBUG_OPS = { 0 };
     const struct win_server_ops *prev = save_ops();
     win_server_register(&NO_DEBUG_OPS);

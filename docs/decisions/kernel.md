@@ -2687,3 +2687,140 @@ never reached the branch. It compares the returned ADDRESS now: the list
 is address-ordered and first-fit, so a merged block starts where the
 first of the three did, and an allocator that did not merge cannot
 return that address. That version reddens exactly one check.
+
+## The boot target is a setting, and the boot flag overrides the LIVE value rather than the file
+
+`system.default_target` (`kernel/lib/target.c`) decides what init
+starts. Two things about it were real forks.
+
+**Why a registered setting rather than a word on the kernel command
+line.** The command line is where a target override belongs, but not
+where the target itself belongs: a machine's purpose survives reboots,
+and a flag does not. systemd puts the persistent answer in
+`default.target` on disk and lets `systemd.unit=` override it for one
+boot; Windows keeps it in the BCD. The setting registry already gives a
+persisted value a Control Panel row, a `config` entry and a namespace
+for free, so declaring it there cost one `struct setting` and no edit to
+anything that displays settings.
+
+**Why the override is not written to the file.** The obvious
+implementation of `target=text` is "set the setting" -- and that would
+mean booting once with an override silently reconfigures the machine,
+so the escape hatch you reached for because the desktop was faulting
+also removes your desktop permanently. Instead `target_init()` reads the
+file, then applies the command-line word over the top of the in-memory
+value only. The registry already models exactly this state: a setting's
+live value and its stored value are separate fields in
+`struct setting_msg`, `config diff` reports the pair, so an overridden
+boot is *visible* rather than mysterious.
+
+The cost, which is real and is why this is written down: `config reload`
+re-reads every setting from its file and therefore DISCARDS the
+override. That is an explicit user action rather than a surprise, and
+the alternative -- teaching reload which values are pinned -- means a
+second notion of where a setting's value comes from, which is the thing
+the registry exists to prevent.
+
+**The matching rule is stricter than every other boot word here.** The
+others are plain substring tests. `target=` cannot be, because
+`default_target=` -- the key's own name, and therefore exactly what
+somebody will eventually type on the GRUB line -- CONTAINS it. So the
+match must begin the line or follow a space. A boot word that silently
+matches a longer word is only ever found by the person it bites.
+
+## A service is a FILE, and the give-up matters more than the restart
+
+init reads `/etc/services.d/<name>` -- `Name`/`Exec`/`Target`/`Restart`,
+the same `name=value` parser every other config file here uses -- and
+starts the ones whose target matches. The alternative was a compiled-in
+list of one, and this is the same call the Start menu already made when
+it stopped being a C table and became `/usr/wm/desktop`: adding a
+service is dropping a file.
+
+What is deliberately NOT copied from systemd is everything that needs a
+dependency graph -- `After=`, `Wants=`, `Requires=`, socket activation.
+There are two services' worth of ordering requirements here (none), and
+a unit graph with no edges is a data structure pretending to be a
+design. Ordering arrives when a second service actually needs it.
+
+**The give-up is the part worth defending.** `Restart=always` with no
+limit turns a binary that faults at its entry point into a machine that
+spins forever starting it -- and on a `graphical` target there is no
+console left to fix it from, because the desktop owns the screen. So a
+service that keeps dying QUICKLY (five consecutive failures inside two
+seconds each) is declared a crash loop and left down with a line saying
+so, which is systemd's `StartLimitBurst`. The backoff between attempts
+doubles from 0 ms to a 2 s cap, so the first restart of a healthy
+service the user just killed is immediate and only actual failure pays
+the wait.
+
+The threshold is on how long the service RAN, not on how often it has
+been restarted. That distinction is what lets a desktop be killed by
+hand twenty times without ever being given up on, while a binary that
+cannot start at all is abandoned in four seconds.
+
+**Removing a descriptor DISABLES the service rather than stopping it**,
+and init notices without a reboot -- it rescans when `fs_generation()`
+moves, the same free poll the desktop uses for `.desktop` files. That is
+systemd's `disable`/`stop` split, and it is the right way round: killing
+a running process because somebody edited a file in `/etc` is a
+surprise, while declining to restart it is what removing it means.
+
+This was NOT designed in advance -- it was forced by two test tools, and
+the way it was forced is the interesting part. `screen_surface_test.py`
+and `compositor_death_test.py` both have to be the only compositor on
+the machine, so both kill the desktop first. Under supervision that
+stopped working: init restarted it with a zero backoff and the new
+desktop claimed the role straight back, so one tool measured a role that
+was never free and the other lost the role mid-run and never reached its
+own release step. Both had been passing for months.
+
+The lesson generalises past this repo: **making something automatic
+removes an interlock somebody was relying on.** `gui` blocking the shell
+for the desktop's whole lifetime was never a feature, but two tools and
+the physical console's keyboard all depended on it. When you automate a
+lifecycle, look for what was previously guaranteed by the manual step.
+
+And the fix's shape is worth copying: the tools now ESTABLISH their
+precondition (`rm /etc/services.d/toywm`, then kill) and keep their
+original assertions, rather than weakening the assertions to tolerate the
+new behaviour. The first attempt did the latter -- replacing "the role is
+released" with a check on a log line -- and it was strictly worse
+evidence for the same property.
+
+## The keyboard's blocking readers are suspended while a compositor holds the role
+
+Once init started the desktop at boot, the physical shell was left
+sitting at a prompt BEHIND it -- and both were draining the same
+keyboard ring. Whichever polled first won, so a key typed at the
+desktop could be executed by an invisible shell. This was measured, not
+predicted: `ps` typed over QMP into a running desktop ran the program.
+
+It could not happen before, and the reason is worth keeping: `gui`
+blocked the shell inside its own spawn-and-wait loop for as long as the
+desktop lived, so the shell was never a competing reader. Making the
+desktop init's child removed that accidental interlock.
+
+The fix is one flag (`keyboard_suspend_blocking()`), set from the single
+place the compositor role changes -- so registering, deregistering, a
+kill and a fault are the same path, the argument `win_surface_revoke()`
+already makes there. While it is set, ring 0's BLOCKING readers idle
+instead of returning a key; the NON-blocking `keyboard_try_getchar*` are
+untouched, which is what keeps `win_input.c` feeding the compositor.
+
+**Why not the obvious alternative** -- don't start the shell at all on a
+graphical boot. Because the desktop can die, and something has to be
+there when it does. Suspending a live shell means the console comes back
+usable the instant the compositor role is dropped, with no second
+decision about when to start one.
+
+This is NOT real console ownership and is labelled as such in
+`keyboard.h`. A per-TTY input queue with a foreground process is the TTY
+milestone's job. What it buys today is that exactly one thing reads the
+keyboard at a time, which is the property that was actually broken.
+
+The trap it introduces, recorded because nothing warns you: a compositor
+that registers and then never draws leaves a console that is both blank
+and deaf, which looks exactly like a hung machine. `target=text` on the
+GRUB line is the way back, and the role being dropped on death is what
+makes that rare.

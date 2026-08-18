@@ -182,6 +182,20 @@ def main():
     if owner > 0:
         print(f"  (the ring-3 desktop holds the role as pid {owner} -- "
               f"taking it down for this run)")
+        # DELETE THE DESCRIPTOR FIRST, or the kill below is undone before
+        # the client has finished. init supervises the desktop since
+        # docs/init-design.md stage 2 and restarts it with a ZERO backoff,
+        # and the restarted desktop CLAIMS THE ROLE BACK -- so this tool
+        # took the role, lost it mid-run, and its client never reached
+        # its own release/exit steps. Removing the descriptor makes init
+        # stop restarting it without touching the running one, which is
+        # the precondition every check below assumes: the client is the
+        # only compositor.
+        #
+        # The image is gui_regress's per-tool throwaway copy, so deleting
+        # a seeded file costs nothing beyond this run.
+        dbg.send("sh rm /etc/services.d/toywm")
+        time.sleep(0.4)
         dbg.send(f"sh kill {owner}")
         time.sleep(2.0)
         NO_WM["on"] = True

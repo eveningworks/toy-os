@@ -6,6 +6,7 @@
 // abi/win_proto.h for TWP, the protocol it serves, and
 // userland/wm/wm_client.c for the presentation half.
 #include "win_server.h"
+#include "keyboard.h" // keyboard_suspend_blocking() -- who owns the keyboard follows the compositor role
 #include "vmm.h"
 #include "pmm.h"
 #include "klog.h"
@@ -94,6 +95,8 @@ const struct win_server_ops *win_server_ops_current(void) {
 int win_server_active(void) {
     return g_ops != NULL;
 }
+
+int win_server_any(void) { return win_server_active() || g_comp_pid != 0; }
 
 // Tells the registered compositor that a client did something.
 //
@@ -1110,6 +1113,15 @@ int win_server_set_compositor(int pid, uint64_t pml4) {
 
     g_comp_pid = pid;
     g_comp_pml4 = pid ? pml4 : 0;
+
+    // WHO OWNS THE KEYBOARD follows the role, and this is the one place
+    // the role changes -- so registering, deregistering, a kill and a
+    // fault all arrive here, the same argument the framebuffer revoke
+    // above makes. While a compositor holds it, ring 0's BLOCKING
+    // readers stop consuming: the physical shell sits at a prompt behind
+    // the desktop and was draining the same ring, so keys typed at the
+    // desktop were being run by an invisible shell (see keyboard.h).
+    keyboard_suspend_blocking(pid != 0);
 
     // AFTER the registration is cleared, not before: compositor_gone()
     // pushes events and repaints, and anything it reaches must already

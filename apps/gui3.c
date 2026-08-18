@@ -20,10 +20,28 @@
 #include "gui3.h"
 #include "kapi.h"
 #include "apps.h"
+#include "win_server.h" // win_server_compositor_pid() -- is a desktop already up?
 
 #define TOYWM_PATH "/bin/wm/system/toywm"
 
 void gui3_main(void) {
+    // THE ROLE IS SINGLE. Since init started supervising the desktop
+    // (docs/init-design.md stage 2) a `graphical` boot already has one,
+    // and a second toywm would come up, be refused the compositor role
+    // by win_server.c, and exit -- silently, from the user's side, which
+    // is the exact shape of bug this repo keeps writing up. Ask first.
+    //
+    // This is not a lock and does not need to be: the only caller is a
+    // person typing `gui`. What it buys is a sentence instead of a
+    // mystery.
+    int held = win_server_compositor_pid();
+    if (held > 0) {
+        vga_printf("gui: the desktop is already running (pid %d)\n", held);
+        vga_write("gui: `ps` to see it; `kill <pid>` to stop it -- init "
+                  "will restart it\n");
+        return;
+    }
+
     int pid = scheduler_spawn(TOYWM_PATH, 0);
     if (pid <= 0) {
         vga_write("gui3: could not spawn " TOYWM_PATH "\n");

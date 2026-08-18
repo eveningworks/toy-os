@@ -14,6 +14,7 @@
 #include "cursor_config.h"
 #include "keyboard_config.h"
 #include "cursor_theme_config.h"
+#include "target.h"
 #include "setting_abi.h"
 #include "config_file.h"
 #include "fs.h"
@@ -372,5 +373,6 @@ void settings_init(void) {
     cursor_config_setting_register();
     keyboard_config_setting_register();
     cursor_theme_setting_register();
+    target_setting_register();
     config_files_scan();
 }

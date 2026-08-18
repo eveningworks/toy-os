@@ -559,11 +559,43 @@ the start -- a service that crashes instantly and is restarted instantly
 is an infinite loop that will look like a hung machine.
 
 The last item matters most: **one real service, not a framework with no
-users.** The serial debug console is the natural candidate, since it's
-already a thing that should always be running and currently just gets
-polled from an idle loop. A supervisor with nothing to supervise proves
-nothing, and this project has the `k_strcasecmp` precedent for what
-happens to a mechanism without a caller.
+users.** A supervisor with nothing to supervise proves nothing, and this
+project has the `k_strcasecmp` precedent for what happens to a mechanism
+without a caller.
+
+**STAGES 0-2 ARE DONE** (`docs/init-design.md` is the staged plan; stage
+2 landed 2026-08-18). What exists: init holds pid 1 and cannot be
+killed, orphans are adopted and reaped, `system.default_target` decides
+what boots with `target=` on the GRUB line overriding it for one boot,
+and `/etc/services.d/<name>` descriptors say what to start. The desktop
+is the one real service -- it is init's child now, not the shell's, so
+its clients are init's grandchildren and killing it reparents them here.
+`Restart=always` restarts with a doubling backoff and gives up on a
+crash loop.
+
+The service candidate went the other way from the guess above: the
+serial debug console stayed kernel-side (it is `scheduler_idle()`'s
+work, and every GUI test tool arrives over it), and the DESKTOP became
+the service instead -- which is better evidence, because it is a real
+process with a real lifetime that a person can kill and watch come
+back.
+
+Three things that are NOT built, and the middle one is the interesting
+one. Nothing ORDERS the services: they all start at once, because with
+two services' worth of ordering requirements (none) a unit graph with no
+edges would be a data structure pretending to be a design. Nothing shuts
+them down in reverse order on `reboot`. And a service's output still
+goes to the kernel log via stderr rather than anywhere a person would
+choose -- readable with `dmesg`, which is enough for one service and
+will not be for six.
+
+**What stage 2 exposed rather than built:** the physical shell and the
+desktop were competing for the keyboard the moment both were running at
+once (see `docs/decisions.md`). Ring 0's blocking readers are suspended
+while a compositor holds the role, which is a placeholder for real
+console ownership -- the TTY milestone's per-TTY input queue with a
+foreground process is the actual answer, and stage 3's console device is
+the next step toward it.
 
 ### In-OS documentation
 
@@ -2392,529 +2424,137 @@ it serves. Small, and it makes everything above it discoverable.*
 
 ## Known issues and papercuts (unscheduled)
 
-      Answering it needs each kernel-side owner of a frame to declare
-      what it holds -- roughly what a `struct page` array buys a real
-      kernel. Worth doing after demand paging, which introduces the
-      per-frame bookkeeping (refcounts) that this would ride on rather
-      than duplicating.
-
-      The kernel HEAP is a separate and much cheaper case: `heap debug
-      on` already red-zones blocks, so tagging each with its caller's
-      return address (`__builtin_return_address(0)`) and adding a
-      `heap leaks` report grouped by allocation site would answer "who
-      allocated this and never freed it" without any of the above --
-      the `.ksyms` table already resolves an address to a function name.
-
-      An allocation failure is LOGGED as well as returning 0, because
-      the return value alone cannot distinguish it from a real failure
-      -- a diagnostic reporting "DMA is broken" when it merely could not
-      get 1 KiB would send someone after the wrong thing.
-
-      **It is waived rather than converted on purpose.** The obvious fix
-      -- a table of `{name, handler}`, as `kernel/proc/syscall_table.c`
-      now does for syscalls -- would be the wrong table. Most of these
-      commands are kernel INTROSPECTION (`meminfo`, `kstack`, `heap
-      debug`, `ktest`, `ata nodma`, `fsck`, `dmesg`), which is why they
-      are in the kernel at all: they read kernel state directly rather
-      than through any interface. A registry of function pointers would
-      make that permanent.
-
-      What Linux does instead is the shape worth copying: `free`, `ps`
-      and `dmesg` are ordinary userspace binaries reading `/proc` and
-      `/sys`, and the kernel exports state as FILES rather than as
-      commands. So the ordering is: a `/proc`-shaped interface, then
-      these commands become `/bin` programs one at a time, then the
-      front end follows the TTY into ring 3 -- at which point the chain
-      is gone because most of its branches are.
-
-      **Needs:** TTY / virtual terminals, for the front end. The
-      `/proc`-shaped part needs nothing outstanding and is what makes
-      the rest possible.
-
-      The teardown now runs at kill time rather than at reap, which is
-      the split Linux makes too (`exit_mm()` drops the mm at death; the
-      `task_struct` lingers to hold an exit code). It needed its own
-      entry point rather than reusing the exit one: that switches CR3 to
-      the kernel's address space, which is free when the dying process
-      is the one running and wrong when the caller is somebody else --
-      the window manager force-quitting a client would have resumed in
-      the wrong address space. See `docs/decisions.md`.
-
-      `tools/frame_balance.py` covers both paths now, and its positive
-      control is the measurement above: reverting the fix takes the kill
-      cycles from flat to -18 each, compounding.
-
-      * Buttons shrink until their labels truncate ("Termina",
-        "Calcula", "Task Ma"), so they stop being identifiable well
-        before they stop fitting.
-      * Nothing reserves the clock's strip, so the overflowing button
-        draws underneath it rather than stopping short.
-
-      **The suggested shape (maintainer's, and it matches every real
-      desktop): stop shrinking at a floor, and put the remainder behind
-      an overflow control** -- a chevron at the end of the strip that
-      opens the rest as a list. Windows' taskbar chevron, GNOME's
-      window list overflow and macOS's Dock stack all do a version of
-      this; the common rule is that a button never shrinks below the
-      point where its label is readable, and everything past the last
-      whole button moves into the popup rather than being clipped.
-
-      Worth deciding at the same time, because they are the same
-      geometry: whether the clock's strip is reserved space the buttons
-      lay out against (it should be), and whether the popup reuses the
-      Start menu's list rendering rather than growing a second one.
-
-      Not urgent -- it needs enough windows open that a person is
-      unlikely to hit it by accident -- but it is a visible defect, and
-      the fix is layout work with no protocol implications, so it is a
-      good self-contained item.
-
-      `wm_reap_launched()` checked its launched processes with
-      `sys_waitpid()`, which **BLOCKS** -- its own first ABI line says
-      so. The comment introducing it asserted it was "non-blocking in
-      the same sense scheduler_poll() was", which was an assumption
-      never checked against the header. So the desktop parked on the
-      first client that did not immediately exit, which is every client.
-
-      `SYS_WNOHANG` now exists (POSIX's flag, same meaning) and
-      `sys_waitpid_nohang()` wraps it. The kernel primitive underneath
-      (`scheduler_poll()`) was always non-blocking -- the syscall had
-      simply been throwing that answer away, so ring 3 could not ask
-      "has it finished?" without committing to wait.
-
-      **A WRONG DIAGNOSIS WAS PUBLISHED FIRST and is worth recording.**
-      The previous entry blamed `debug_via_compositor()`'s `sti; hlt`
-      against `idt.c`'s single `g_next_kernel_rsp`, reasoning that it
-      survives two contexts and not three. It fitted every symptom, it
-      cited a real documented hazard, and it was wrong: that hazard is
-      about NESTED ISRs, and the wait runs in ordinary kernel code. The
-      lesson is the one this repo keeps relearning -- a mechanism that
-      explains the symptoms is not the same as the mechanism that caused
-      them, and the cheap check (read the ABI comment of the call you
-      changed) was never done.
-
-      The three that were left all failed the same way: they spawn their
-      own stand-in compositor, which is free when the role is unclaimed
-      and a contradiction when the desktop holds it -- the stand-in
-      EVICTS the desktop, and the tool then asks `gui` questions of a
-      client that does not implement them. Each asks
-      `gui compositor --json` who holds the role now and runs the
-      scenario that fits:
-
-      * `compdeath` kills the DESKTOP rather than a stand-in, which is
-        the milestone's exit criterion and was asserted by nothing at
-        all before: the framebuffer grant is revoked, clients are ASKED
-        to close (a client that declines is still alive afterwards, which
-        is how "asked" is told from "destroyed"), the console comes back,
-        the kernel answers `sh` afterwards, and a new desktop can be
-        started and takes the role.
-      * `compositor` asserts what only exists in the ring-3 world: a
-        REAL hardware click reaching a window through the desktop. Every
-        other tool injects with `gui click`, which enters the WM loop
-        BELOW the PS/2 driver, so the chain from a real interrupt
-        through `win_input.c` and `WIN_EV_RAW_*` was covered by nothing.
-      * `screen` takes the desktop down for its run, since the client
-        under test must itself be the compositor, and drives the client
-        with `screenclient auto` -- with no desktop the physical shell
-        owns the keyboard, so injected keystrokes never reach a
-        compositor.
-
-      Two shell commands came out of it, both filling real gaps:
-      `kill <pid>` (the WM cannot kill itself through `gui kill`, since
-      `scheduler_kill()` refuses the current process) and
-      `spawn <path>` (the legacy `run` loader is not a scheduled
-      process, so its `win_request()` is refused and it can never claim
-      the compositor role).
-
-      **MILESTONE 41 IS COMPLETE**: `apps/wm/` and the `gui0` flag were
-      deleted the same day -- ~10,400 lines, with `apps/ui/`'s widget set
-      and `apps/gui_apps.c`, since the WM was their only caller.
-
-      **1. Captures taken mid-paint.** Every check in that tool compares
-      one screendump against another, so a capture that lands while the
-      frame is still being painted fails a comparison with nothing wrong
-      with it. A client having drawn into its own buffer -- and having
-      LOGGED that it did -- does not mean the compositor has painted it
-      to the screen, and with the window manager in ring 3 that is an
-      extra process hop whose timing varies with load. A probe confirmed
-      the mechanism rather than inferring it from the pass rate: EVERY
-      capture needed at least one retry, and the startup reference two.
-
-      The fix is `QMPSession.stable_pixels()` -- a capture is two
-      identical consecutive reads -- and it lives there rather than in
-      the tool because every GUI tool that compares screendumps has the
-      same exposure. **Reach for it in a new tool by default**; the
-      exception is a window you EXPECT to animate, where it would spend
-      its retries and hand back the last read.
-
-      **2. The startup poll broke on the FIRST layout line** while the
-      very next check requires all of them. The client logs one line per
-      widget, so "a layout line arrived" and "the layout is complete"
-      are different conditions; it waits for the second now. This is the
-      general shape of a poll whose exit condition is weaker than what
-      the code after it needs.
-
-      NOT reproducible here: 9 runs clean, including 3 after a full
-      `ktest_run.py` (the CI step that runs before it, and the one that
-      deliberately injects ATA and allocation failures -- the obvious
-      suspect for leaving the image in a state the unlink/listdir phases
-      trip over). CI differs in building a fresh disk image and running
-      TCG on a shared runner, so timing and filesystem state are both
-      candidates and neither is established.
-
-      Both diagnostics are fixed rather than the bug: the test's SUMMARY
-      line now names the first failing phase ("...FAILED -- first was
-      unlink"), which is the line a truncating harness keeps, and
-      `usertest_run.py` prints the test's own lines instead of the last
-      eight. So the next occurrence should say what it was without a
-      second round trip. Positive control run on both.
-
-      `calculator` and `notepad` use `QMPSession.stable_pixels()` now
-      (two identical consecutive reads). **That fixed `calculator`
-      outright (8/8) and only reduced `notepad`'s rate** -- it still
-      failed once in a full suite run on 2026-08-18 after the change,
-      on the same two checks ("New clears the editor" and its partner),
-      then passed 3/3 on re-run. So something else is going on there:
-      both checks follow a MENU interaction, so the popup still being
-      on screen, or the caret, are the first things to look at rather
-      than paint timing. Not diagnosed.
-
-      The rest have NOT been converted, deliberately -- `notepad` was converted because it
-      actually failed that way, and converting blind risks a tool whose
-      window is SUPPOSED to animate: `gfxdemo` rotates, and there
-      stable_pixels() would spend its retries and hand back the last
-      read anyway.
-
-      So convert one when it flakes, not pre-emptively, and check what
-      the window is doing first. Candidates by shape (they compare
-      captures): `uidemo`, `dialog`, `scrollbar`, `menubar`, `uiclient`,
-      `winclient`, `screen`.
-
-      Three things landed differently from the plan above, all in
-      `docs/decisions.md`. The table is HAND-WRITTEN, not generated (R4):
-      designated initializers already give the compile-time guarantee
-      generation was proposed for, and a generator would add a parser
-      over a header that is mostly prose. `strace`'s table is MERGED
-      into it rather than kept in step with it (R5), which is not how
-      Linux splits it -- worth reading the entry before assuming it is.
-      And a handler reports "I parked" as its RETURN VALUE while writing
-      its own result into the trapframe (R3), because `SYS_SBRK` returns
-      a pointer and no 64-bit sentinel is free.
-
-      `syscall_dispatch()`'s frame went from 864 bytes to 96, and the
-      largest handler frame (576, `SYS_WIN_DEBUG`) is now paid only by
-      the syscall that needs it.
-
-      **The gap it closes:** a ring-3 program still cannot register a
-      setting AT ALL -- the registry is a compiled-in table, so "which
-      settings exist" is a kernel-build-time question. Qualified names
-      make two programs *able* to own the same setting name; this is
-      what would let a program own a setting in the first place.
-
-      Moving the registry out matches every system except Windows
-      (Linux has no kernel settings registry -- sysctl is kernel
-      parameters only, user config is dconf/gsettings in userspace;
-      macOS has `cfprefsd`; Windows' configuration manager genuinely is
-      in ntoskrnl).
-
-      **What toy-os does not have yet, which is the real content of this
-      item:**
-
-      * R6. **Supervision.** Nothing restarts a dead process. A settings
-        daemon that dies takes every client's settings with it, and
-        `MAX_PROCS` reaping is currently whoever spawned it.
-      * R7. **Discovery.** A client has to find the daemon. There is no
-        name service; TWS is found by being the registered compositor,
-        which is a single role the kernel tracks -- a second such role
-        is a pattern to copy or a general mechanism to build.
-      * R8. **An IPC that is not TWP.** Pipes are parent/child only and
-        TWP is the window protocol. A request/response channel between
-        unrelated processes does not exist.
-      * R9. **Boot order.** Timezone, font size and keymap are read
-        before any process could be running. Either those stay kernel
-        settings (the split below) or the kernel must tolerate not
-        knowing them until the daemon is up.
-      * R10. **The kernel keeps what is kernel state.** `apply` for
-        timezone/font/keymap/cursor mutates live kernel subsystems and
-        cannot run in ring 3. That half stays a kernel registry --
-        sysctl's actual scope -- and the daemon owns program settings.
-
-      Sequencing: R6-R8 are general infrastructure that a printing
-      service, a name service or a session manager would want too, so
-      this is a milestone rather than a change. Stage 1 is independent
-      and worth doing first -- (namespace, name) is transport-agnostic,
-      so it is the same identity whichever side of the boundary the
-      registry ends up on.
-
-      The cause was one local -- a 4 KiB `SYS_GETRANDOM_MAX` bounce
-      buffer -- not the dozen message structs everyone (including two
-      rounds of this session) assumed. Extracting those changed the
-      total by nothing, because GCC already overlapped them in the big
-      buffer's shadow. `-fstack-usage` said so in one command. See
-      `docs/decisions.md`.
-
-          wm: force-quitting pid 3
-          syscall: kill(pid 3) by pid 1
-          RING-3 CRASH: Page fault
-            RIP=0x80000132a0  CS=0x23 (ring 3)  error_code=0x4
-            CR2=0x8014000000
-
-      `CR2` is `win_compositor_vaddr(3, 0)` -- the victim's own window
-      buffer as mapped into the compositor -- and `addr2line` puts the
-      RIP in `ugfx_blit`. `destroy_window()` unmapped the compositor's
-      view and freed the frames synchronously while only QUEUEING
-      `WIN_EV_CLIENT_DESTROYED`, so the WM returned from its own
-      `sys_kill()` with the dead window still in its list and blitted
-      it. A revoked slot is remapped to a shared read-only zero page now
-      rather than unmapped; see `docs/decisions.md`, "Revoking a
-      compositor's window mapping leaves the zero page behind, not a
-      hole".
-
-      Not force-quit-specific: the same unmap runs when any client exits
-      on its own, and a ring-3 compositor preempted mid-blit could always
-      have faulted on it. Force Quit only made it deterministic, by
-      having the compositor itself trigger the teardown.
-
-      Measured 2026-08-18: 1 fail in 3 in the morning; 12 consecutive
-      clean runs later the same day, before the tool was touched.
-      Something between those two points changed the timing (the ring-3
-      desktop became the default, and syscall_dispatch()'s frame lost
-      4 KiB), but nothing was measured tying either to this.
-
-      What WAS wrong and is now fixed: the check clicked rows 0..7 until
-      one answered, which is fragile in three ways at once -- it gave up
-      after 8 rows, it could not tell "the victim is not in the table
-      YET" (it is spawned moments earlier and the table refreshes on a
-      500ms tick) from "not found", and a re-sort between two of its
-      clicks could move the victim into a row it had already visited.
-      The app reports `taskmgr: order <pid> ...` in screen order, so the
-      row is a lookup now, with up to three attempts because the order
-      can change between reading it and clicking. Positive control: an
-      absent pid reddens exactly that check.
-
-      The trap it re-taught, which is this repo's oldest: **`logs()`
-      clears what it returns.** The order line had already been drained
-      by an earlier check, so the first version waited 8s for a line
-      that was never coming again -- the app logs the order ON CHANGE,
-      not on request.
-
-      Reproduce:
-
-          python3 tools/vm.py --disk <copy> start
-          # type `gui3` at the physical shell (QMP), then:
-          gui spawn /bin/wm/demos/uidemo
-          gui windows        -> "0 window(s)"
-
-      The spawned client creates no window and logs NOTHING -- no error
-      from the WM, no stderr from the app, and no `wm: client pid N
-      opened window` line. The compositor is demonstrably alive and
-      pumping events while this happens, because `gui windows` is
-      answered by it, over the same event queue the create would arrive
-      on.
-
-      **What already works, measured with `gui` flipped to the ring-3
-      desktop and the full suite run against it:** it claims the
-      compositor role, takes the framebuffer grant (900 pages), loads
-      its cursor theme 6 of 6, enters GUI mode at 1280x720, reads its 9
-      desktop entries, composites a real desktop (27 distinct colours,
-      background and taskbar where they belong), and answers the serial
-      debug console. `desktop_entries` passes 12/14 and `cursor_theme`
-      5/9 against it. Everything needing a client window fails.
-
-      **Where to start:** the create path is
-      `win_server.c`'s `create_window()` -> `tell_compositor(WIN_EV_
-      CLIENT_CREATED)` -> the compositor's `wm_client_handle_event()`
-      -> `query_window()` + `map_client_window()` -> `on_window_created`.
-      Nothing in that chain logs on failure, which is the first thing to
-      fix -- a silent path is why this is a mystery rather than a bug
-      report. Note the log also shows an unexplained `syscall: exit()
-      called by ring-3 process` immediately before the spawn, which has
-      not been attributed to anything.
-
-      Two real bugs were already found and fixed by getting this far,
-      both of which had to be hit before anything else could be:
-      `SYS_WIN_REQUEST`'s "is there a window server?" gate rejected every
-      request from a ring-3 WM after it claimed the role (a registered
-      COMPOSITOR is a window server now), and `wm_run()`'s idle `hlt` is
-      a PRIVILEGED instruction -- a #GP the moment a ring-3 desktop
-      reached its first frame.
-
-      The fix is a compositor-side timer, the same shape `WIN_REQ_TIMER`
-      already gives a window client. A plain blocking wait is NOT the
-      answer and is worth writing down so nobody tries it: a compositor
-      is woken by input, by client requests AND by its own cadence (the
-      taskbar clock, client timers), and only the first two arrive as
-      events -- so blocking on the event queue would stop the clock.
-
-      **Measured 2026-08-17, both on `HEAD` (ff5ae94) and on the M41
-      stage 4b working tree, with the same fingerprint on each** -- so
-      it is PRE-EXISTING, established by rebuilding HEAD rather than by
-      reasoning:
-
-      - `menubar`: 5/5 PASS run alone (`flake_hunt.py menubar -n 5`),
-        and ~30-50% failure in the suite. Always the same two checks:
-        `releasing on a submenu item commits exactly that command` and
-        `committing closes the whole chain`. Every earlier check passes,
-        including `hovering a submenu parent opens the next level` and
-        `a submenu opens to the RIGHT of its parent` -- so the submenu
-        IS open and correctly placed, and only the click on the deepest
-        item fails to commit.
-      - `gfxdemo`, in the same run: `the 2D / 3D button switches back`,
-        `returning to the 2D scene restores it exactly`, `speed returns
-        for the cube`, `the cube is rotating`. All of the form "a click
-        did not take effect".
-
-      That second tool is what makes this worth one entry rather than
-      two: it is not a menu bug, it is injected clicks going missing.
-
-      **The same third shape again, 2026-08-18:** `gfxdemo` failed the
-      whole tool with `Shapes never logged its layout`, having logged
-      `ready`, `aa on` and its CANVAS rect but not its buttons -- so the
-      app started and was talking, and one later line went missing.
-      `flake_hunt.py gfxdemo -n 4` gives 3 pass, 1 error; alone it is
-      23/23. Same entry because it is the same fingerprint.
-
-      **A third shape, 2026-08-17:** `uidemo` failed the whole tool with
-      `RuntimeError: UI Demo reported no layout` -- the app never
-      reported its geometry at all, so this is not only lost CLICKS but
-      lost or late app STARTUP. 3/3 pass under `flake_hunt.py`, and the
-      very next full suite run was all clear. Whatever the mechanism is,
-      it costs a message somewhere between the tool, the WM and a
-      freshly spawned client, and only when four guests are running.
-
-      **Ruled out:** a dirty disk image. `make iso` re-seeds by sync and
-      `menubar_test` saves a file, so a stale recent-files entry
-      changing the submenu's contents was the obvious candidate --
-      `make clean-disk && make iso` does NOT fix it.
-
-      **Hypothesis, NOT verified:** the test parks the REAL PS/2 cursor
-      with `warp_cursor()`, reads the layout, then injects a click.
-      Injected input overrides the real mouse for exactly ONE
-      `wm_run()` iteration (see CLAUDE.md), so under load the real
-      cursor's position can re-assert between the injected move and the
-      press, collapsing the submenu so the press lands on nothing. One
-      cause would explain both menubar checks (nothing commits, so the
-      chain never closes). The discriminating experiment: warp the real
-      cursor ONTO the target before clicking instead of relying on the
-      injected move, and see whether the rate goes to zero. This is the
-      same family as the menubar flake fixed in 2026-08-16 ("item
-      enabled, hover lost"), which suggests that fix addressed one site
-      rather than the mechanism.
-
-      **Confirmed pre-existing, 2026-08-17**, by the measurement this
-      repo asks for rather than by reasoning: stashed the whole of M41
-      stage 4b's surface work (`git stash push -u`, applied back by
-      SHA), rebuilt at `ff5ae94`, and got the identical 0/3. So it is
-      not the ring-3 heap change, the per-process `SYS_SBRK` change or
-      the `UADDR_STACK_VADDR` move, all of which touch exactly the
-      paths these tests exercise -- which is why it was worth
-      establishing before anything else.
-
-      **What is NOT established:** whether the kernel's fault reporting
-      regressed or the tool's own harness did. All three failing with
-      the same "log never said" shape, including `crash_test` (a plain
-      null dereference, nothing to do with the address map), points at
-      the harness -- it types at the PHYSICAL shell over QMP and reads
-      the serial log, and either half could have drifted. Start by
-      running one of these by hand (`run nx_test` at the physical shell
-      over QMP) and looking at whether the kernel prints the expected
-      line at all, before touching the fault path.
-
-      Not in `preflight.sh` or `gui_regress.py`, which is why it went
-      unnoticed: it is the only gate covering the deliberate-fault
-      binaries, and nothing runs it automatically.
-
-      The work: move the `.desktop` reload and the cursor-theme load
-      onto the step-per-frame machinery `fs_read_range_step()` already
-      provides, so no single frame can block on the disk. The reason it
-      has not been done is not effort but risk -- open windows hold
-      `struct gui_app *` pointers into `gui_app_registry[]`, so an
-      incremental rebuild needs the registry double-buffered and
-      swapped atomically, and getting that wrong rebinds a live window
-      to a different app's callbacks (which is exactly what
-      `poll_desktop_entries()`'s existing deferral guard exists to
-      prevent).
-
-      Also worth pairing with: `DMA_WAIT_TICKS`'s per-attempt budget is
-      escalating now (0.3s / 1.0s / 5.0s), so a transient miss costs
-      0.3s -- but a genuinely stalled host can still hold a frame for
-      the full total.
-
-      The work: derive the screen size once from the guest
-      (`gui state`/`gui windows` already report real geometry, and the
-      WM knows `screen_w`/`screen_h`) and compute the cursor centre and
-      any remaining calibrated point from it, rather than from a
-      constant. Most tools are already safe -- they take geometry from
-      each app's own `layout` lines, which is the rule that exists for
-      exactly this reason.
-
-      Worth doing BEFORE any change to the default resolution, not
-      after: without it, moving the default turns the whole 19-tool
-      suite red for a reason unrelated to whatever else changed. And
-      note the runtime cost that makes the default worth measuring
-      rather than assuming -- a full 1920x1080 repaint moves 8.3 MB
-      against 3.5 MB at 1280x720, and on real hardware that is
-      uncached/write-combined MMIO (see the `gfxbench` entries).
-
-          wm: DAMAGE BUG -- 81055 px changed outside the damage rect,
-          first at (779,120); damage was (120,120 752x496);
-          diff bbox (120,120 752x496); scene stable (real missed damage)
-
-      `scene stable` means the comparison is trustworthy (the third
-      render agreed), so this is not a `verdict void`.
-      **Confirmed PRE-EXISTING, 2026-08-16**: it reproduces identically
-      on the committed `apps/wm/desktop.c` with the rubber-band work
-      reverted, so it is not the band's damage bookkeeping. Established
-      by rebuilding with the old file rather than by reasoning about it.
-      **What is NOT established:** why the diff's bounding box EQUALS the
-      declared damage rect while 81055 px are reported outside it. Those
-      two statements look contradictory and one of them is measuring
-      something other than what its name suggests -- worth reading
-      `wm_render.c`'s verify path before trusting either number. Start
-      there rather than at the resize code.
-      **Wider than one step, and INTERMITTENT under a random walk
-      (measured 2026-08-16, M41 stage 3).** `python3 tools/damage_hunt.py
-      --seeds 1 2 3 4 5 6` reports violations on 5 of 6 seeds, and every
-      one is a `resize` interaction -- both the fixed `resize-shrink`
-      step above and random-walk steps like
-      `[8] resize Terminal by (179,-95)`. All carry `scene stable (real
-      missed damage)`. Confirmed pre-existing by rebuilding
-      `origin/main` and re-running: seed 4 reproduces byte for byte, and
-      seed 6 gave 4 violations on one main run and 5 on the next, so the
-      per-seed COUNT varies run to run even on an unchanged build. Treat
-      a count difference between two builds as noise unless it is backed
-      by a rate over several runs. The likely single root cause is
-      whatever the entry above names; this is the same defect seen from
-      more angles, not a separate one.
-
-Small things that are real, reproducible, and not worth their own
-milestone -- bugs too minor to schedule, rough edges, and behaviour
-that's defensible but surprising. This is the ONE list for them: don't
-start a second one in a `known-issues.md` or in `CLAUDE.md`, for the
-same reason this file asks not to duplicate the roadmap itself.
-
-Two rules keep it useful rather than a graveyard. **Say how to
-reproduce it**, precisely enough that a future session doesn't have to
-rediscover the setup -- a seed, a command, a click sequence. And
-**delete the entry when it's fixed** rather than striking it through;
-completed *features* stay struck through above because the milestone
-history is worth reading, but a fixed papercut is just noise.
-
-      **The trap, which cost real time here.** The message names the
-      kernel, so it reads exactly like a kernel regression, and an A/B
-      against a suspected kernel change is worthless at this failure
-      rate: disabling a suspected change "fixed" it and re-enabling it
-      did not bring it back, purely because the run happened to pass.
-      Get a RATE (`tools/flake_hunt.py`) before believing any A/B.
-
-      **What is NOT established: any correlation with the VM slot.** A
-      slot-0 correlation was written here first and then withdrawn --
-      it was inferred from the `damage_hunt.py` entry above rather than
-      observed, and the two passing A/B runs were the only ones whose
-      slot was ever actually seen. `--logs` does not record which slot a
-      tool ran on, which is exactly why this could not be settled after
-      the fact; it does now (see `gui_regress.py`'s per-tool log
-      header), so the next occurrence can answer it.
+### Two win-server KTESTs only run on a `target=text` boot, since a live desktop removes what they test
+
+`win_server`'s "requests are refused when no server is registered" and
+`winshare`'s "claiming needs no registered presentation layer" both
+assert what happens with NO window server present. Since init started
+the desktop at boot (2026-08-18) the default boot always has one, so
+both skip -- `make test` and CI report 3 skipped where they used to
+report 1.
+
+They are not dead, and that was checked rather than assumed:
+
+    make iso KCMDLINE="target=text" && python3 tools/ktest_run.py
+
+reports 284 passed / 1 skipped, i.e. both run and both pass. Rebuild the
+plain ISO afterwards.
+
+The reason this is recorded rather than fixed: the honest alternatives
+are all worse. Evicting the live compositor inside a KTEST would tear
+down the user's desktop to test a refusal path. Faking "no server" needs
+a way to lie to `win_server_request()` about global state, which is a
+test hook in production code. Leaving the guard off -- which is how they
+were until this was found -- meant they silently asserted the opposite
+of what they were written for.
+
+The right fix is probably that these two belong to a boot-mode-specific
+suite that `ktest_run.py` runs in a second, `target=text` VM. That is a
+harness change, not a kernel one, and it is worth doing once a third
+test wants the same regime.
+
+### The desktop died once at 1.15 s while a `/bin` program ran through the legacy loader -- cause unestablished
+
+Seen exactly once, in a `tools/init_test.py` run on 2026-08-18: init
+logged `toywm (pid 2) exited with code -1 after 1150 ms` at t=1.57 s and
+restarted it correctly. Nothing in the test had killed it. The tool's
+first actions after boot include `config get system.default_target`,
+which runs `/bin/config` through `elf_run.c`'s LEGACY loader while the
+desktop is a live scheduled process -- and that combination is a known
+hazard with an existing roadmap item (`g_next_kernel_rsp` reentrancy: a
+legacy `run` inherits a client's RSP0 and can overwrite its saved
+trapframe).
+
+**That is a suspicion, not a diagnosis, and the difference matters.**
+What was actually established: six fresh boots with no serial commands
+showed zero spontaneous exits, and a deliberate `config get` against a
+live desktop did not reproduce it once. So the rate is at most low and
+the mechanism is unconfirmed.
+
+Why it is worth writing down anyway: init starting the desktop makes
+this class of interaction the DEFAULT rather than something you had to
+set up. Every `python3 tools/vm.py exec "<some /bin program>"` now runs
+the legacy loader alongside a live desktop. If the reentrancy item is
+ever picked up, this is the observation to try to reproduce first.
+
+To hunt it: `python3 tools/flake_hunt.py` has no init entry, so loop
+`init_test.py` directly and grep for a `toywm ... exited` line that no
+`kill` explains. The check that catches it is scoped to the kill now, so
+a spurious exit no longer makes the restart check pass for the wrong
+reason -- but it does not fail either, so grep rather than trusting the
+exit code.
+
+### `tools/ktest_run.py` reports the debug console never came up, on 5 boots in 9
+
+Symptom: either `ktest_run: FAIL -- the serial debug console never came
+up` or a bare `ConnectionResetError: [Errno 104] Connection reset by
+peer` from the socket read. The run measures NOTHING either way, and
+passes on re-run.
+
+**PRE-EXISTING, and measured rather than assumed.** Nine runs against the
+previous commit with the whole of the init-stage-2 work stashed: 5
+connection resets, 4 clean passes, zero assertion failures. So it is not
+the desktop now starting at boot, and it is not the guest being slower --
+it is the harness or the QEMU serial socket.
+
+One contributing cause WAS found and fixed on the way: init used to be
+spawned before `debug_console_init()`, so the desktop was loading its
+font, cursor theme and nine desktop entries off the disk while the
+console was still coming up. Moving the spawn after the console init is
+correct regardless, but the rate above shows it was not the whole story.
+
+The cheap next step is a number rather than a verdict: have
+`ktest_run.py` report how long it waited and how many bytes it had
+received before giving up, which distinguishes "the guest never printed"
+from "the socket died mid-reply". `python3 tools/flake_hunt.py ktest -n
+10` is the loop for measuring any change to it, and it already scores
+these runs as `error` rather than `pass`.
+
+### `heap-debug`'s use-after-free check fails about 1 run in 15
+
+`mm_test.c`'s "a write through a freed pointer is caught by
+heap_check()" intermittently reports `FAIL: heap_check() == 1` -- i.e.
+the scan found no violation, so the block it deliberately damaged was no
+longer a damaged free block by the time the scan ran.
+
+**PRE-EXISTING**: reproduced 1 in 15 on the previous commit, in-guest
+(`ktest heap-debug` repeated in one boot, no desktop running). Three
+SIBLING tests in the same suite had a related fragility that WAS fixed --
+they compared `heap_used_bytes()` against a pre-test snapshot, which any
+concurrent kernel allocation breaks, and they now hold
+`scheduler_preempt_disable()` across the measured section.
+
+That fix does not extend to this one, and the reason is the interesting
+part: the window here is between `kfree(b)` and `heap_check()`, and
+`heap_check()` walks the WHOLE heap -- so the test is not asserting about
+its own block in isolation, it is asserting that nothing else in the
+system tidied that block away first. Making it robust means either
+asking `heap_check()` about one address (a narrower API that does not
+exist) or accepting a tolerance, and a tolerance on "did the corruption
+detector fire" is worse than an occasional red.
+
+### One `etc_config_set()` write failed on a graphical boot, and did not reproduce
+
+Seen once, in a full `ktest_run.py` on 2026-08-18:
+`FAIL: etc_config_set(SCRATCH, "colour", "amber") expected 1, got 0`, a
+write to `/tmp/ktest_etc.conf` reporting failure. The two runs after it
+failed `fsck`'s `r.leaked == 0` with 2 leaked blocks -- which is the
+DOCUMENTED dirty-fixture cascade, not a second bug: `make iso` re-seeds
+`disk.img` by sync and never reformats, so blocks leaked by one run are
+still leaked for the next. `make clean-disk && make iso` cleared it.
+
+**Not reproduced**: 12 consecutive in-guest `ktest etc_config` runs with
+the desktop up were clean, and `fsck` was clean afterwards. So there is
+one observation of a failed write and no mechanism.
+
+Why it is worth recording anyway: since init starts the desktop, EVERY
+ktest run now has a compositing process doing its own file I/O
+concurrently, and `etc_config_set()` bumping `fs_generation()` is exactly
+what makes the desktop re-read `/usr/wm/desktop`. That is a legitimate
+thing for an OS to support -- it is what Notepad saving a file does --
+but it is newly the default during the test suite. If a write failure
+recurs, this is the interaction to instrument first, and
+`kernel/fs/vfs.c`'s `FS_OP()` preemption guard is where to look.
 
 ## Idea: make heap debug reachable from boot (2026-08-17)
 

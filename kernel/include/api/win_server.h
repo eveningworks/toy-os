@@ -150,7 +150,26 @@ void win_server_register(const struct win_server_ops *ops);
 
 // Whether a presentation layer is registered. The normal state before
 // `gui` is entered is "no".
+//
+// NOTE THE NARROWNESS, because it has bitten three times: this asks
+// about a RING-0 layer only. The desktop is a ring-3 compositor and is
+// therefore NOT one, so a machine with a perfectly good window server
+// answers 0 here. Anything meaning "is there a window server at all"
+// wants win_server_any() below.
 int win_server_active(void);
+
+// Whether there is a window server of EITHER kind -- a registered
+// ring-0 presentation layer or a registered compositor. This is the
+// predicate `win_server_request()` itself gates on, and the one a caller
+// almost always means.
+//
+// It exists because three places open-coded it and two of them got it
+// wrong by omitting the compositor half: two KTESTs guarded themselves
+// with win_server_active() so they would skip while the desktop was up,
+// and quietly stopped skipping the moment the desktop became a process.
+// Nothing noticed until init started the desktop at boot and `make test`
+// finally ran with one registered.
+int win_server_any(void);
 
 // The registered presentation layer, or NULL. For KTESTs, which swap in
 // a stub and must put the live desktop's back -- the suite runs inside

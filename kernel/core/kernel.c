@@ -39,6 +39,7 @@
 #define INIT_PATH "/bin/init"
 #include "process.h"  // process_guard_page_init() -- the legacy loader's stack
 #include "gui3.h"     // gui3_main() -- the desktop, a ring-3 process
+#include "target.h"   // target_init() -- the boot target init starts services for
 #include "debug_console.h"
 #include "krandom.h"      // entropy source -- krandom_init()
 #include "reloc.h"        // the image's own relocation table -- kernel_relocate()
@@ -224,6 +225,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
     font_config_init(); // loads the persisted font size, if any -- see kernel/lib/font_config.c
     cursor_config_init(); // console cursor style, same /etc plumbing as the font size
     keyboard_config_init(); // loads the persisted keyboard layout, if any -- see kernel/lib/keyboard_config.c
+    target_init(); // what this machine is for -- read BEFORE init is spawned below, since init asks for it first thing
     vga_reflow(); // apply it to the console's cell layout (no-op if nothing was persisted)
     // Announce those four to the settings registry, AFTER their own
     // init(): a timezone registered before tz_init() would offer an
@@ -281,10 +283,23 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // an ordinary fatal fault.
     uheap_fault_init();
 
+    debug_console_init(); // serial debug console (COM1) -- see docs/decisions.md; polled from keyboard_getchar()'s and wm_run()'s idle-wait loops
+
+    klog_printf("toy-os: boot target '%s'%s\n", target_get(),
+                target_overridden() ? " (from the kernel command line)" : "");
+
     // init, pid 1 -- spawned HERE, before anything else can take a
     // slot, because a pid is a slot index plus one and slots are handed
     // out lowest-first. Nothing enforces that init is pid 1; being
     // first is what makes it so, which is also how Linux does it.
+    //
+    // AFTER debug_console_init(), and that ordering is load-bearing now
+    // that init starts the desktop itself (docs/init-design.md stage 2):
+    // spawning first meant the desktop was loading its font, cursor
+    // theme and nine desktop entries off the disk while the console was
+    // still coming up, and `tools/ktest_run.py` timed out waiting for
+    // the prompt on the first boot after a rebuild. The console owns no
+    // process slot, so moving it ahead cannot cost init pid 1.
     //
     // A boot without it is survivable and deliberately quiet about
     // everything except the warning: scheduler_init_pid() stays 0, so
@@ -301,8 +316,6 @@ void kernel_main(uint64_t multiboot_info_addr) {
                         "; orphaned processes will hold their slots\n");
         }
     }
-
-    debug_console_init(); // serial debug console (COM1) -- see docs/decisions.md; polled from keyboard_getchar()'s and wm_run()'s idle-wait loops
 
     // Boot is over; stop putting kernel log lines on top of whatever the
     // shell or the GUI draws. `dmesg`, the serial port and the console's

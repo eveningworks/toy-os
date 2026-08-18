@@ -688,6 +688,17 @@ seed: $(DISK_IMG) $(USERLAND_ELVES)
 	    mkdir -p $(SEED_DIR)/sync/usr/share/cursors/$$(basename $$t); \
 	    cp $$t* $(SEED_DIR)/sync/usr/share/cursors/$$(basename $$t)/; \
 	done
+	# Service descriptors -- what init starts, one file per service (see
+	# docs/init-design.md and data/etc/services.d/README.md). Tracked
+	# under data/ and staged here for the same reason pci.ids and the
+	# cursor themes are: sync/ is deleted by `make clean`.
+	# Every file but the README, so adding a service is dropping a file
+	# here -- the same rule data/wm/desktop/ follows.
+	mkdir -p $(SEED_DIR)/sync/etc/services.d
+	@for f in data/etc/services.d/*; do \
+	    if [ "$$(basename $$f)" != "README.md" ]; then \
+	        cp $$f $(SEED_DIR)/sync/etc/services.d/; fi; \
+	done
 	# The scripted tour. Seeded always -- it is inert unless `demo` is on
 	# the kernel command line, and having it present means a live image
 	# can be edited into a demo without a rebuild.

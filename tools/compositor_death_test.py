@@ -111,6 +111,35 @@ def check(name, ok, detail=""):
     print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"    [{detail}]" if detail else ""))
 
 
+# The descriptor init supervises the desktop through.
+TOYWM_SVC = "/etc/services.d/toywm"
+
+
+def unsupervise(dbg):
+    """Take the desktop out of init's hands, so it can be killed and STAY dead.
+
+    Since init started supervising the desktop (docs/init-design.md stage
+    2) killing it is no longer the end of it: init restarts it with a
+    ZERO backoff, because a desktop that had been up for more than two
+    seconds is a restart rather than a crash loop. Every check below
+    about the role being free, or the console coming back, is then racing
+    a new desktop that has already claimed both -- and the restart REUSES
+    the dead process's slot, so the pid looks unchanged too.
+
+    Deleting the descriptor makes init stop RESTARTING it without
+    stopping the one that is running (systemd's `disable`, not `stop`),
+    which is exactly the precondition this tool needs. init notices on
+    its next pass, via `fs_generation()`.
+
+    The image is a throwaway copy -- gui_regress gives every tool its own
+    -- so deleting a seeded file here costs nothing. Say so, because a
+    tool that quietly edits /etc is the kind of thing the NEXT tool's
+    failure gets blamed on.
+    """
+    dbg.send(f"sh rm {TOYWM_SVC}")
+    time.sleep(0.4)
+
+
 def run_ring3(dbg, desktop_pid):
     """Kill the actual ring-3 desktop -- Milestone 41's exit criterion.
 
@@ -119,6 +148,8 @@ def run_ring3(dbg, desktop_pid):
     `gui` is about to stop existing, so using it as the liveness probe
     would make "it died" and "the kernel died with it" the same result.
     """
+    unsupervise(dbg)
+
     # Something for the kernel to ask to close. winclient REFUSES its
     # first closes, which is deliberate here: it makes the difference
     # between "asked" and "destroyed" observable, because a refused ask
@@ -171,6 +202,11 @@ def run_ring3(dbg, desktop_pid):
     # The role must be free afterwards. With no desktop there is nothing
     # to answer `gui`, and that refusal IS the observation: the message
     # means neither a ring-0 layer nor a compositor is registered.
+    #
+    # This only holds because unsupervise() ran first -- see its comment.
+    # Without it init restarts the desktop with a ZERO backoff and the
+    # role is refilled before this line executes, reusing the dead
+    # process's slot so even the pid looks unchanged.
     gone = dbg.send("gui compositor")
     check("the compositor role is released",
           "no window manager running" in gone, gone.strip()[:60])
@@ -247,6 +283,7 @@ def main():
         return summarise()
 
     # --- the death, by kill: the least graceful of the three paths ----
+    unsupervise(dbg)
     dbg.logs()
     dbg.send(f"gui kill {comp_pid}")
     time.sleep(1.5)
@@ -286,6 +323,12 @@ def main():
           "console restored" not in after,
           next((l for l in after.split("\n") if "compositor" in l), "no line"))
 
+    # 2 + 4. The role was given up and is re-claimable -- a desktop that
+    # cannot be restarted after a crash is not survivable in any useful
+    # sense. Asserted from the LOG, not by sampling `gui compositor`: see
+    # the note on the same check earlier in this file. Under init's
+    # supervision the role is refilled before a sample can see it empty,
+    # and the refill reuses the pid.
     # 2 + 4. The role is free and re-claimable -- a desktop that cannot
     # be restarted after a crash is not survivable in any useful sense.
     comp2 = dbg.json("gui compositor --json") or {}

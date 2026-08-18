@@ -1149,8 +1149,73 @@ technical conventions below:
   `spawn` reparents to init explicitly and why `gui` and the KTESTs
   deliberately do not. **init is BLOCKED whenever it is idle**, never
   spinning; if `ps` ever shows it ready, something has regressed to a
-  poll loop. And **it starts nothing** -- the desktop is still `gui`'s;
-  starting a TARGET is stage 2.
+  poll loop.
+- **INIT STARTS AND SUPERVISES THE DESKTOP NOW, and the desktop is a
+  SERVICE.** Stage 2 of `docs/init-design.md` (2026-08-18). `/bin/init`
+  reads `system.default_target` -- `text` or `graphical`, persisted in
+  `/etc/toyos.conf` -- and starts every descriptor in `/etc/services.d`
+  whose `Target=` matches. `data/etc/services.d/toywm` is the one real
+  service; its README is the format. Six things to know.
+  **`target=text` on the GRUB line overrides the setting for ONE boot
+  and does not write the file**, which is the escape hatch for a desktop
+  that faults at boot -- and it shows up as a live-vs-stored difference
+  in `config diff` rather than silently reconfiguring the machine.
+  **`config reload` DISCARDS that override**, since it re-reads every
+  file; that is the one place the two can diverge, and it is deliberate.
+  **A dying desktop is restarted with a doubling backoff (0/250/500/
+  1000/2000 ms) and a crash-loop give-up** after five consecutive
+  failures that each lasted under two seconds -- the threshold is on how
+  long it RAN, so killing it by hand twenty times never gives up on it
+  while a binary that cannot start is abandoned in four seconds.
+  **`gui` at the shell now REFUSES when a desktop is already up** and
+  names the pid; it is still how you reach one from a `target=text`
+  boot. **init is spawned AFTER `debug_console_init()`**, and that
+  ordering is load-bearing: spawning first had the desktop doing its
+  startup disk I/O while the console came up, and `ktest_run.py` timed
+  out waiting for the prompt. And **nothing ORDERS the services** -- they
+  all start at once, because with one service an ordering graph would be
+  a data structure pretending to be a design. And **`rm
+  /etc/services.d/<name>` DISABLES a service without stopping it** --
+  init rescans when `fs_generation()` moves, so the running copy is left
+  alone and simply not restarted (systemd's `disable`, not `stop`). That
+  is the ONLY way to take the desktop out of init's hands without a
+  reboot, and **a test that needs to be the only compositor must do it**:
+  `screen_surface_test.py` and `compositor_death_test.py` both kill the
+  desktop, and without this init restarts it with a ZERO backoff and the
+  new desktop claims the role straight back -- one tool then measures a
+  role that is never free, and the other loses the role mid-run. Both had
+  passed for months on the accidental interlock that `gui` blocking the
+  shell provided. **Automating a lifecycle removes interlocks somebody
+  depended on**; look for them.
+- **RING 0's BLOCKING KEYBOARD READERS ARE SUSPENDED WHILE A COMPOSITOR
+  HOLDS THE ROLE** (`keyboard_suspend_blocking()`, set from the one place
+  in `win_server.c` the role changes). With init starting the desktop,
+  the physical shell sits at a prompt BEHIND it and both were draining
+  the same key ring -- so a key typed at the desktop could be executed
+  by an invisible shell. That was MEASURED, not predicted. `gui`'s
+  spawn-and-wait used to block the shell for the desktop's whole life,
+  which is the accidental interlock this replaces. The non-blocking
+  `keyboard_try_getchar*` are untouched, which is what keeps
+  `win_input.c` feeding the compositor. Two consequences: **the physical
+  console is deaf (and hidden) for as long as a desktop is up** -- drive
+  the machine over the serial debug console, or `target=text` -- and **a
+  compositor that registers and never draws leaves a console both blank
+  and deaf**, which looks exactly like a hung machine. Real console
+  ownership is the TTY milestone's job; this is a placeholder that makes
+  exactly one thing read the keyboard at a time.
+- **`win_server_active()` MEANS A RING-0 LAYER, and the desktop is not
+  one.** Use **`win_server_any()`** for "is there a window server at
+  all" -- either a ring-0 presentation layer or a registered compositor,
+  which is what `win_server_request()` itself gates on. Three places
+  open-coded this and two got it wrong by omitting the compositor half:
+  two KTESTs guarded themselves with `win_server_active()` so they would
+  SKIP while the desktop was up, and quietly stopped skipping the moment
+  the desktop became a process. Nothing noticed until init started the
+  desktop at boot and `make test` finally ran with one registered -- at
+  which point they failed, and a third (`wintransport`) failed
+  intermittently for the same reason. **A predicate named for the thing
+  that used to be the only implementation is worth re-reading whenever
+  that stops being true.**
 - **`SYS_SLEEP` exists, and a caller with no scheduler slot gets -1.**
   RDI is milliseconds; the caller parks on a deadline and the timer tick
   releases it, so the RESOLUTION is one tick and a sleep never returns
@@ -2702,19 +2767,29 @@ repeated manual steps to be worth automating:
   borrowed-mapping path. Run it after touching `vmm.c`'s mapping or
   teardown paths, or after adding any mapping of memory a process does
   not own.
-- **`init_test.py`** -- init as pid 1, end to end (11 checks): the
-  kernel spawns it, it holds pid 1, an idle init is BLOCKED rather than
-  spinning, `kill 1` is refused, abandoned children are adopted AND
-  reaped, the process table returns to its baseline, and `SYS_SLEEP`
-  passes its own checks. **The slot count is the assertion** -- a zombie
-  nobody reaps is invisible until the table fills up, and every
-  individual process behaves perfectly either way. Its fixture is the
-  load-bearing part: `/tests/orphan_test` must be started with `spawn`,
-  not `run`, because the legacy loader's children have ppid 0 already
-  and there is nothing to orphan. Positive control: put back
-  `heir = 0` in `reparent_children()`; exactly 2 of 11 go red. Not in
-  `gui_regress.py` (no desktop involved); run it after touching the
-  scheduler's parentage, reaping, or `SYS_SLEEP`.
+- **`init_test.py`** -- init as pid 1 AND as a supervisor, end to end:
+  the kernel spawns it, it holds pid 1, an idle init is BLOCKED rather
+  than spinning, `kill 1` is refused, abandoned children are adopted AND
+  reaped, the process table returns to its baseline, `SYS_SLEEP` passes
+  its own checks, the target it read matches the settings REGISTRY, the
+  desktop is init's child, a service that cannot start is given up on
+  without taking the desktop with it, and killing the desktop brings it
+  back with no shell involved. **The slot count is the assertion** for
+  the reaping half -- a zombie nobody reaps is invisible until the table
+  fills up, and every individual process behaves perfectly either way.
+  Two fixtures are load-bearing: `/tests/orphan_test` must be started
+  with `spawn`, not `run` (the legacy loader's children have ppid 0
+  already, so there is nothing to orphan), and the crash-loop fixture is
+  a descriptor naming a nonexistent binary, written onto the disk COPY
+  from the host so the machine boots with it already in place. Two
+  positive controls, in its docstring: `heir = 0` in
+  `reparent_children()` reddens the two adoption checks, and dropping
+  init's give-up reddens the crash-loop one while the desktop check stays
+  green. **What it does NOT cover, and says so: the `target=text`
+  command-line override**, which needs its own ISO -- `make iso
+  KCMDLINE="target=text"`. Not in `gui_regress.py`; run it after
+  touching the scheduler's parentage, reaping, `SYS_SLEEP`, the target
+  setting or the service descriptors.
 - **`pixel_probe.py`** -- reads exact pixel values out of screenshots,
   and tabulates the same points across several (`--compare a.png b.png
   --at 85,100 --at 215,100`), flagging which moved and which didn't.
@@ -3097,7 +3172,17 @@ repeated manual steps to be worth automating:
   summary as `error`, not `pass`: a run that measured nothing must not
   look like a good one. Also the way to check a fix -- and to catch a
   fix that starts a DIFFERENT check failing, which is what happened when
-  the menubar flake was fixed.
+  the menubar flake was fixed. **`flake_hunt.py ktest -n N` drives the
+  IN-KERNEL suite** the same way, reporting each failure as
+  `<suite>/<test>`: the 285 ktests run inside the live kernel, so a
+  handful are sensitive to what else the machine is doing, and telling
+  that from a regression needs a rate per ASSERTION rather than a
+  verdict. One caveat unique to ktest -- a run leaves state on
+  `disk.img`, so a test that leaks blocks fails the NEXT run's `fsck`
+  checks; a rate that CLIMBS run over run is a dirty fixture, and
+  `make clean-disk && make iso` between batches is the control. For one
+  suite, booting once and repeating `vm.py exec "ktest <suite>"` is much
+  faster, and is how the `heap-debug` flake's 1-in-15 rate was measured.
 - **`damage_hunt.py`** -- `damage_sweep.py` over MANY seeds, a fresh
   disk copy and its own `vm.py --instance` slot each, as one pass/fail
   table; non-zero if any seed violated the invariant. One seed is one

@@ -277,8 +277,7 @@ int sys_win_request(struct syscall_ctx *c) {
         // the framebuffer grant, so the desktop exited before
         // drawing a pixel. SET_COMPOSITOR was already exempt for the
         // same reason; that exemption was just one request short.
-        if (!win_server_active() && !win_server_compositor_pid()
-            && req.type != WIN_REQ_SET_COMPOSITOR) {
+        if (!win_server_any() && req.type != WIN_REQ_SET_COMPOSITOR) {
             // No desktop running. Refused rather than silently
             // succeeding, so a client started outside GUI mode finds
             // out immediately instead of drawing into a buffer nothing

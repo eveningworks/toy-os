@@ -1,10 +1,31 @@
 #!/usr/bin/env python3
-"""init as pid 1: adoption, reaping, unkillability -- and SYS_SLEEP under it.
+"""init as pid 1: the target, service supervision, adoption and reaping.
 
-Stage 1 of docs/init-design.md, asserted end to end. The exit criterion
-it encodes, in the plan's own words: pid 1 is init on every boot, a
-spawned program nobody waits on is reaped rather than holding its slot
-for the rest of the boot, and `kill 1` is refused.
+Stages 1 and 2 of docs/init-design.md, asserted end to end. The exit
+criteria they encode, in the plan's own words: pid 1 is init on every
+boot, a spawned program nobody waits on is reaped rather than holding
+its slot for the rest of the boot, `kill 1` is refused, the target
+setting decides what boots, and the desktop comes back without the shell
+being involved.
+
+THE CRASH-LOOP FIXTURE IS A PAIR, and neither half means much alone. A
+second service descriptor naming a binary that does not exist is written
+onto the disk copy before boot, so this boot has one service that works
+(the desktop) and one that cannot possibly start. What is asserted is
+BOTH that the broken one is eventually given up on -- an unbounded
+`Restart=always` is a machine that spins forever starting a binary that
+faults, with no console left to fix it from -- and that the desktop is
+untouched by its neighbour failing. A give-up that took the desktop with
+it would pass the first check on its own.
+
+WHAT THIS DOES NOT COVER, stated rather than implied: the `target=text`
+kernel command-line override, which needs its own ISO. Settle it by hand
+with
+
+    make iso KCMDLINE="target=text" && python3 tools/vm.py run "ps"
+
+-- init must report `target text` and the table must hold init alone.
+Rebuild the plain ISO afterwards; `make iso` bakes KCMDLINE in.
 
 WHY A SLOT COUNT IS THE ASSERTION. A zombie is only ever cleared by
 somebody waiting for it, so before init a process whose parent died
@@ -28,6 +49,10 @@ returns to its baseline" checks must go red and everything else must
 stay green. Verified: 2 of 11 red, which is the right two -- the init
 identity, unkillability and SYS_SLEEP checks are not testing adoption
 and must not move.
+
+The stage-2 half has its own control: in init.c's service_failed(), drop
+the `fast_failures >= SVC_MAX_FAST` give-up. The "given up on" check must
+go red while "the desktop survives its neighbour" stays green.
 
 That control already earned its keep once: the reap check originally
 asked for `>= 1` reap and stayed GREEN through it, because the shell's
@@ -125,6 +150,23 @@ def main():
                        check=True)
         args.disk = tmp.name
 
+        # The crash-loop fixture -- see the module docstring. Written
+        # from the HOST so the machine boots with it already in place:
+        # the give-up happens in the first few seconds and there is
+        # nothing to observe if the file arrives afterwards.
+        broken = tempfile.NamedTemporaryFile("w", suffix=".svc", delete=False)
+        broken.write("Name=broken\nExec=/bin/does-not-exist\n"
+                     "Target=graphical\nRestart=always\n")
+        broken.close()
+        r = subprocess.run([sys.executable, os.path.join(REPO, "tools", "tfs3_writer.py"),
+                            "write", args.disk, broken.name, "/etc/services.d/broken"],
+                           cwd=REPO, capture_output=True, text=True)
+        os.unlink(broken.name)
+        if r.returncode != 0:
+            print("init_test: could not stage the crash-loop fixture\n"
+                  + r.stdout + r.stderr, file=sys.stderr)
+            return 2
+
     vm = VMSession(args.disk, args.instance)
     try:
         if "ready" not in vm.run("start"):
@@ -132,14 +174,28 @@ def main():
             return 2
 
         # --- init exists, and is what the kernel says it is -----------
-        boot = vm.sh("dmesg")
+        #
+        # POLLED. `vm.py start` returns when the shell prompt appears,
+        # and the desktop is coming up right then -- a `dmesg` reply read
+        # in that window has come back INCOMPLETE, which showed up as
+        # this tool reporting that the kernel never spawned init on
+        # roughly one run in five. The line is printed before the prompt
+        # exists, so its absence is always the read, never the kernel.
+        deadline = time.time() + 20
+        boot = ""
+        while time.time() < deadline:
+            boot = vm.sh("dmesg")
+            if "init started as pid" in boot:
+                break
+            time.sleep(0.5)
+
         m = re.search(r"init started as pid (\d+)", boot)
         check("the kernel spawns init at boot", bool(m),
               (m.group(0) if m else "no 'init started as pid' line"))
         init_pid = int(m.group(1)) if m else 0
 
         check("init holds pid 1", init_pid == 1, f"pid {init_pid}")
-        check("init announced itself from ring 3", "init: reaping orphans" in boot)
+        check("init announced itself from ring 3", "init: starting" in boot)
 
         table = vm.ps()
         row = table.get(1)
@@ -153,6 +209,58 @@ def main():
         # regression to a yield-loop.
         check("an idle init is BLOCKED, not spinning",
               bool(row) and row[1] == "block", str(row))
+
+        # --- the target, and the services it selects ------------------
+        m = re.search(r"init: target (\w+)", boot)
+        check("init reports the target it read", bool(m),
+              (m.group(0) if m else "no 'init: target' line"))
+        target = m.group(1) if m else ""
+
+        # Against the REGISTRY rather than against a literal: the whole
+        # point of `system.default_target` being a registered setting is
+        # that one place answers what it is, and a tool asserting its own
+        # copy of the expected value would not notice the two diverging.
+        want = vm.sh("config get system.default_target")
+        check("init's target is what the settings registry says",
+              bool(target) and target in want, f"init said {target!r}")
+
+        m = re.search(r"init: started toywm as pid (\d+)", boot)
+        check("init starts the desktop from its service file", bool(m),
+              (m.group(0) if m else "no 'started toywm' line"))
+        wm_pid = int(m.group(1)) if m else 0
+
+        # The desktop being init's CHILD is the milestone, not merely the
+        # desktop running: it is what makes a client window init's
+        # grandchild, so killing the desktop reparents its clients here
+        # instead of stranding them.
+        row = table.get(wm_pid)
+        check("the desktop is init's child", bool(row) and row[0] == 1
+              and row[2] == "toywm", str(row))
+
+        # --- a service that cannot start is given up on ---------------
+        #
+        # POLLED, not read from the dmesg captured above: the backoff
+        # ladder takes ~4 s to run out and that snapshot is taken within
+        # half a second of the prompt appearing. Read once, this check
+        # asserted that a service had failed exactly once so far, which
+        # is true of a healthy retry and of a broken one.
+        deadline = time.time() + 20
+        svc = boot
+        while time.time() < deadline:
+            svc = vm.sh("dmesg")
+            if "broken is crash-looping" in svc:
+                break
+            time.sleep(0.5)
+
+        attempts = len(re.findall(r"init: broken failed to start", svc))
+        check("a broken service is retried, not abandoned at once",
+              attempts >= 2, f"{attempts} attempt(s)")
+        check("a crash-looping service is given up on",
+              "broken is crash-looping, giving up" in svc,
+              f"after {attempts} attempts")
+        # The pair: a neighbour failing must not cost the desktop.
+        check("the desktop survives its neighbour crash-looping",
+              wm_pid in table and table[wm_pid][2] == "toywm", str(table.get(wm_pid)))
 
         # --- init cannot be killed -----------------------------------
         out = vm.sh("kill 1")
@@ -204,6 +312,44 @@ def main():
         check("SYS_SLEEP passes its own checks",
               "sleep: all checks passed" in out and not bad,
               bad[0].strip()[:90] if bad else "")
+
+        # --- the desktop comes back without the shell -----------------
+        #
+        # LAST, because it perturbs the table every check above reads.
+        # This is stage 2's exit criterion: before it, killing the
+        # desktop left the machine at a text console until somebody
+        # typed `spawn`.
+        if wm_pid:
+            # How many desktop exits had ALREADY been logged. Matching
+            # "exited with code" anywhere in the log makes this check
+            # pass on an unrelated earlier death -- which is not
+            # hypothetical: an intermittent one was observed while
+            # writing this (see docs/roadmap.md), and the first version
+            # of the check reported that exit as proof the kill worked.
+            before = len(re.findall(r"init: toywm \(pid \d+\) exited", vm.sh("dmesg")))
+            vm.sh(f"kill {wm_pid}")
+            deadline = time.time() + 20
+            back = None
+            while time.time() < deadline:
+                for pid, (ppid, _state, name) in vm.ps().items():
+                    if name == "toywm" and ppid == 1:
+                        back = pid
+                        break
+                if back:
+                    break
+                time.sleep(0.5)
+            logs = vm.sh("dmesg")
+            exits = re.findall(r"init: toywm \(pid \d+\) exited with code [-\d]+ after \d+ ms",
+                              logs)
+            check("killing the desktop is noticed", len(exits) > before,
+                  exits[-1][:90] if exits else "no exit logged at all")
+            check("init restarts the desktop with no shell involved",
+                  bool(back), f"back as pid {back}" if back else "never came back")
+            # A restart after a long run must NOT count toward the crash
+            # loop -- otherwise killing the desktop five times gives up
+            # on it, which is the opposite of what supervision is for.
+            check("a killed-after-running desktop is not treated as a crash loop",
+                  "toywm is crash-looping" not in logs)
     finally:
         vm.run("stop", check_rc=False)
         if tmp:

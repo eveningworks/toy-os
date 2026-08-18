@@ -344,7 +344,14 @@ KTEST("winshare", "claiming needs no registered presentation layer") {
     // must not be. Skipped when the desktop is up, since the condition
     // under test is then not present -- `make test` runs before GUI mode,
     // which is when this actually means something.
-    if (win_server_active()) KTEST_SKIP("desktop is up -- no !g_ops regime to test");
+    // EITHER KIND OF SERVER counts. This guard read `win_server_active()`
+    // alone, which answers "is a RING-0 presentation layer registered" --
+    // and the desktop stopped being one when it became a ring-3
+    // compositor, so the skip silently stopped firing while its comment
+    // went on claiming it did. Nothing noticed until init started the
+    // desktop at boot (docs/init-design.md stage 2) and `make test`
+    // finally ran with one up.
+    if (win_server_any()) KTEST_SKIP("desktop is up -- no !g_ops regime to test");
 
     struct win_request_msg req = {0};
     req.type = WIN_REQ_PRESENT;

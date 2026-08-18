@@ -1,0 +1,9 @@
+# The desktop. Started by init when the boot target is `graphical`.
+#
+# See data/etc/services.d/README.md for the format, and
+# docs/init-design.md for what init does with it.
+Name=toywm
+Description=The desktop
+Exec=/bin/wm/system/toywm
+Target=graphical
+Restart=always

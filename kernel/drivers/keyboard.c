@@ -215,12 +215,23 @@ void keyboard_feed_byte(uint8_t sc) {
     ring_push((uint8_t)c);
 }
 
+// See keyboard.h. Not static state the shell can reach around: the
+// blocking readers below are the only consumers.
+static int g_blocking_suspended;
+
+void keyboard_suspend_blocking(int on) { g_blocking_suspended = on ? 1 : 0; }
+int  keyboard_blocking_suspended(void) { return g_blocking_suspended; }
+
 int keyboard_getchar(void) { return keyboard_getchar_mods(0); }
 
 int keyboard_getchar_mods(uint8_t *out_mods) {
     uint32_t ev;
     for (;;) {
-    while (!ring_pop(&ev)) {
+    // The suspend check comes FIRST and short-circuits, so a suspended
+    // reader never pops -- it must not consume a key the compositor is
+    // about to be given (win_input.c drains the same ring, from the
+    // scheduler_idle() call below).
+    while (keyboard_blocking_suspended() || !ring_pop(&ev)) {
         // hlt wakes on every interrupt, not just a real keypress -- most
         // commonly the 100Hz PIT tick -- so this is a convenient, cheap
         // place to drive the framebuffer console's blinking cursor while

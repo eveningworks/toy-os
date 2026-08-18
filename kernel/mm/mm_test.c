@@ -58,19 +58,52 @@ KTEST("mm", "freeing then reallocating the same size reuses space") {
 // MIDDLE of three keeps both neighbours in use, which makes it
 // deterministic.
 
+// PREEMPTION IS DISABLED AROUND EVERY heap_used_bytes() COMPARISON below.
+//
+// These tests run in the LIVE kernel and assert that the heap's used
+// total returns to exactly what it was -- which is only true if nobody
+// else allocates in between. That held for as long as `ktest` was
+// something you typed at a text console with no desktop running. It
+// stopped holding when init started the desktop at boot
+// (docs/init-design.md stage 2): a compositing desktop is a scheduled
+// process making kernel allocations, so the total moved under the test
+// and it failed on roughly one run in eight.
+//
+// The fix ESTABLISHES the precondition rather than weakening the
+// assertion -- a tolerance would have made these tests unable to see the
+// leak they exist to catch. scheduler_preempt_disable() is the same
+// primitive vfs.c uses for the same reason; nothing in these sections
+// blocks, so holding it is safe.
+//
+// NOTE WHAT THIS DOES NOT FIX. "a write through a freed pointer is
+// caught by heap_check()" below is fragile for a related but different
+// reason -- it needs the block it damaged to still be in the free list
+// when the scan runs -- and it fails intermittently on the PREVIOUS
+// commit too (measured: 1 run in 15 with no desktop at all). Guarding it
+// the same way would not help: the window that matters there is between
+// the kfree and the scan, and the scan itself walks the whole heap. See
+// docs/roadmap.md.
 KTEST("heap-debug", "a red-zoned block survives a full-width write") {
+    scheduler_preempt_disable();
     uint64_t bad = heap_violations();
     uint64_t used = heap_used_bytes();
 
     heap_set_debug(1);
     uint8_t *p = kmalloc(64);
-    KTEST_ASSERT(p != 0);
-    for (int i = 0; i < 64; i++) p[i] = (uint8_t)i; // every byte the caller was promised
-    kfree(p);
     heap_set_debug(0);
+    int got = (p != 0);
+    if (got) {
+        for (int i = 0; i < 64; i++) p[i] = (uint8_t)i; // every byte the caller was promised
+        heap_set_debug(1);
+        kfree(p);
+        heap_set_debug(0);
+    }
+    uint64_t bad_after = heap_violations(), used_after = heap_used_bytes();
+    scheduler_preempt_enable();
 
-    KTEST_ASSERT(heap_violations() == bad);   // writing inside the request is not a violation
-    KTEST_ASSERT(heap_used_bytes() == used);  // and the block really went back
+    KTEST_ASSERT(got);
+    KTEST_ASSERT(bad_after == bad);   // writing inside the request is not a violation
+    KTEST_ASSERT(used_after == used); // and the block really went back
 }
 
 KTEST("heap-debug", "one byte past the request is caught at free") {
@@ -169,6 +202,7 @@ KTEST("heap-debug", "an untouched freed block passes heap_check()") {
 // both kinds coexist, and kfree() tells them apart from the pointer
 // alone. If that ever breaks, it breaks silently on the freeing path.
 KTEST("heap-debug", "blocks allocated either side of a toggle both free correctly") {
+    scheduler_preempt_disable();
     uint64_t bad = heap_violations();
     uint64_t used = heap_used_bytes();
 
@@ -176,31 +210,41 @@ KTEST("heap-debug", "blocks allocated either side of a toggle both free correctl
     uint8_t *plain = kmalloc(64);
     heap_set_debug(1);
     uint8_t *armed = kmalloc(64);
-    KTEST_ASSERT(plain != 0 && armed != 0);
-
-    kfree(plain); // freed while debug is ON, but was allocated without red-zones
+    int got = (plain != 0 && armed != 0);
+    if (got) {
+        kfree(plain); // freed while debug is ON, allocated without red-zones
+        heap_set_debug(0);
+        kfree(armed); // freed while debug is OFF, but carries red-zones
+    }
     heap_set_debug(0);
-    kfree(armed); // freed while debug is OFF, but carries red-zones
+    uint64_t bad_after = heap_violations(), used_after = heap_used_bytes();
+    scheduler_preempt_enable();
 
-    KTEST_ASSERT(heap_violations() == bad);
-    KTEST_ASSERT(heap_used_bytes() == used);
+    KTEST_ASSERT(got);
+    KTEST_ASSERT(bad_after == bad);
+    KTEST_ASSERT(used_after == used);
 }
 
 KTEST("heap-debug", "debug off allocates plain blocks") {
+    scheduler_preempt_disable();
     uint64_t bad = heap_violations();
     uint64_t used = heap_used_bytes();
 
     heap_set_debug(0);
     uint8_t *p = kmalloc(64);
-    KTEST_ASSERT(p != 0);
+    int got = (p != 0);
     // A plain block has the header's `prev` immediately before the
     // payload, never the red-zone magic -- that is exactly what kfree()
     // keys on.
-    KTEST_ASSERT(*((uint64_t *)p - 1) != 0xC0DEFACE5A5A5A5AULL);
-    kfree(p);
+    int plain = got && *((uint64_t *)p - 1) != 0xC0DEFACE5A5A5A5AULL;
+    if (got) kfree(p);
+    uint64_t bad_after = heap_violations(), used_after = heap_used_bytes();
+    scheduler_preempt_enable();
 
-    KTEST_ASSERT(heap_violations() == bad);
-    KTEST_ASSERT(heap_used_bytes() == used);
+    KTEST_ASSERT(got);
+    KTEST_ASSERT(plain);
+    KTEST_ASSERT(bad_after == bad);
+    KTEST_ASSERT(used_after == used);
 }
 
 // ---- error paths, reachable only via fault injection ----

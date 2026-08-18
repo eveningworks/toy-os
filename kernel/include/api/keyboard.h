@@ -194,6 +194,32 @@ int keyboard_try_getchar(void);
 // the key was produced. `out_mods` may be NULL, in which case these are
 // exactly the two functions above -- which is how those are implemented.
 int keyboard_getchar_mods(uint8_t *out_mods);
+
+// WHO OWNS THE KEYBOARD. While this is set, the BLOCKING readers above
+// never return a key -- they idle instead, exactly as if nobody were
+// typing. The non-blocking `keyboard_try_getchar*` below are untouched.
+//
+// It exists because init started supervising the desktop
+// (docs/init-design.md stage 2): the desktop is now up while the
+// physical shell is still sitting at a prompt behind it, and both were
+// draining the same ring. Whichever polled first won, so keys typed at
+// the desktop were being executed by an invisible shell -- measured, not
+// theorised. Before this, `gui` blocked the shell inside its own
+// spawn-and-wait loop, so the question could not arise.
+//
+// Set from ONE place -- win_server.c, wherever the compositor role
+// changes -- so registering, deregistering, a kill and a fault are the
+// same path. THE TRAP: a compositor that registers and then never draws
+// leaves a console that is both blank and deaf, which looks exactly like
+// a hung machine; `target=text` on the GRUB line is the way back, and
+// the role clearing on death is what makes that rare.
+//
+// This is a placeholder for real console ownership, not the finished
+// article -- a per-TTY input queue with a foreground process is the TTY
+// milestone's job (docs/init-design.md's R9). What it buys today is that
+// exactly one thing reads the keyboard at a time.
+void keyboard_suspend_blocking(int on);
+int  keyboard_blocking_suspended(void);
 int keyboard_try_getchar_mods(uint8_t *out_mods);
 
 // The modifiers held RIGHT NOW (KEY_MOD_*), for a caller that has no key

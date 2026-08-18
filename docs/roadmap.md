@@ -28,15 +28,15 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~A parent link (`ppid`) and reparenting of orphans~~ DONE 2026-08-18
 - [x] ~~`waitpid(-1)`, so init can reap any child rather than a named one~~ DONE 2026-08-18
 - [x] ~~pid 1 refuses to be killed~~ DONE 2026-08-18
-- [ ] A TARGET setting (`text` / `graphical`) deciding what init starts
-- [ ] A service description format in `/etc` (name, command, restart policy)
-- [ ] Start services at boot, in a declared order
-- [ ] Restart a service that exits unexpectedly, with a backoff so a crash loop doesn't spin the machine
-- [ ] `service start|stop|status|list` as a shell command
+- [x] ~~A TARGET setting (`text` / `graphical`) deciding what init starts~~ DONE 2026-08-18
+- [x] ~~A service description format in `/etc` (name, command, restart policy)~~ DONE 2026-08-18
+- [ ] Start services at boot in a DECLARED ORDER -- they start, but nothing orders them
+- [x] ~~Restart a service that exits unexpectedly, with a backoff so a crash loop doesn't spin the machine~~ DONE 2026-08-18
+- [ ] `service start|stop|status|list` as a shell command -- `rm`ing a descriptor is the only lever today
 - [x] ~~Reap orphans -- init adopts them, which is half of why it exists~~ DONE 2026-08-18
 - [ ] Shut services down in reverse order on `reboot`/`poweroff`
-- [ ] A service's output routed somewhere readable rather than the console it doesn't own
-- [ ] One real service to prove it, rather than a framework with no users
+- [ ] A service's output routed somewhere readable rather than the console it doesn't own (stderr reaches `dmesg` today)
+- [x] ~~One real service to prove it, rather than a framework with no users~~ DONE 2026-08-18 -- the desktop
 
 ### Scheduler: blocking, priorities, classes
 
@@ -367,10 +367,10 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [ ] Kernel command-line switches for the protections, not just `nokaslr`
 - [x] ~~A Live-CD boot: run from the ISO with no disk~~ done
 - [ ] Let TFS3 blocks-per-group vary for small volumes
-- [ ] Raw input to the compositor
-- [ ] A ring-3 allocator, and four smaller syscalls
-- [ ] An abstract transport behind that protocol
-- [ ] A bigger process table (4 slots)
+- [x] ~~Raw input to the compositor~~ DONE 2026-08-18
+- [x] ~~A ring-3 allocator, and four smaller syscalls~~ DONE 2026-08-18
+- [x] ~~An abstract transport behind that protocol~~ DONE 2026-08-18 -- `struct win_transport`
+- [x] ~~A bigger process table (4 slots)~~ DONE 2026-08-18 -- `SCHED_MAX_PROCS` is 64
 - [ ] `tosh` improvements once the kernel supports them: pipelines (`a | b`
 - [ ] A GROWABLE user stack
 - [x] ~~A userland drawing runtime, so a client can render more than flat colour~~ done
@@ -384,25 +384,25 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~A not-responding timeout and a way to force-quit a client that ignores `WIN_EV_CLOSE`~~ done
 - [ ] `WIN_REQ_POPUP` -- a popup SURFACE, so a menu can leave its window
 - [ ] Fill a POLYGON, not just an ellipse
-- [ ] Clipping RECTANGLES as a first-class concept in `ugfx`
-- [ ] An animation/timer event, so a client does not have to poll
+- [x] ~~Clipping RECTANGLES as a first-class concept in `ugfx`~~ DONE 2026-08-18
+- [x] ~~An animation/timer event, so a client does not have to poll~~ DONE 2026-08-18 -- `tick_ms` / `WIN_EV_TIMER`
 - [ ] Decide whether the userland widget/graphics code becomes a real shared library rather than being
 - [x] ~~Make the ring-3 apps reachable from the desktop~~ done
-- [ ] Remove the kernel-space Calculator once the ring-3 one is the default
-- [ ] ELF loader hardening
+- [x] ~~Remove the kernel-space Calculator once the ring-3 one is the default~~ DONE 2026-08-18 -- `apps/` holds no GUI at all
+- [x] ~~ELF loader hardening~~ DONE 2026-08-18
 
 ### A layout engine for the GUI
 
-- [ ] A layout primitive: a box that stacks children in a direction with spacing and padding, sized from its content
-- [ ] Grow/shrink weights, so one child can absorb the leftover space
-- [ ] Minimum and preferred sizes propagated up from the leaves
-- [ ] `apps/ui/` widgets taught to report their own preferred size instead of being handed a rectangle
-- [ ] Resizable windows: a drag handle, and a relayout on resize
-- [ ] A minimum window size that falls out of the content's own minimum rather than being a guessed constant
-- [ ] Convert one real app as the proof -- Calculator's grid is the obvious first, being pure arithmetic today
-- [ ] Then convert the rest, deleting the per-app pixel math
+- [x] ~~A layout primitive: a box that stacks children in a direction with spacing and padding, sized from its content~~ DONE 2026-08-18
+- [x] ~~Grow/shrink weights, so one child can absorb the leftover space~~ DONE 2026-08-18 -- `UUI_FILL_*`, and a shortfall too
+- [x] ~~Minimum and preferred sizes propagated up from the leaves~~ DONE 2026-08-18
+- [x] ~~Widgets report their own preferred size instead of being handed a rectangle~~ DONE 2026-08-18 -- in `userland/ui/`
+- [x] ~~Resizable windows: a drag handle, and a relayout on resize~~ DONE 2026-08-18
+- [ ] A minimum window size that falls out of the content's own minimum -- `uapp_desc.min_w/min_h` is still a declared hint
+- [x] ~~Convert one real app as the proof -- Calculator's grid is the obvious first, being pure arithmetic today~~ DONE 2026-08-18
+- [ ] Then convert the rest, deleting the per-app pixel math -- 4 of 10 ring-3 apps are laid out today
 - [ ] Scale factor as a single input, so a HiDPI mode is a multiplier and not a rewrite
-- [ ] Decide explicitly whether layout is immediate-mode
+- [x] ~~Decide explicitly whether layout is immediate-mode~~ DONE 2026-08-18 -- it is; rects at open and on resize, drawing immediate
 
 ### Runtime font loading & text metrics
 **Needs:** Runtime + interop -- loading a font at runtime means allocating for it.
@@ -690,6 +690,11 @@ were found at all.
 - [x] ~~`taskmgr_test.py`'s "found the victim's row" is INTERMITTENT~~ done
 - [x] ~~The ring-3 desktop cannot give a client a window~~ done
 - [ ] The ring-3 WM busy-waits instead of sleeping
+- [ ] Two win-server KTESTs only run on a `target=text` boot, since a live desktop removes what they test
+- [ ] The desktop died once at 1.15 s while a `/bin` program ran through the legacy loader -- cause unestablished
+- [ ] `tools/ktest_run.py` reports the debug console never came up, on 5 boots in 9 -- PRE-EXISTING
+- [ ] `heap-debug`'s use-after-free check fails about 1 run in 15 -- PRE-EXISTING
+- [ ] One `etc_config_set()` write failed on a graphical boot, and did not reproduce
 - [ ] Injected clicks are LOST under parallel `gui_regress` load, and the failing checks are finally named
 - [ ] `tools/faulttest_run.py` reports 0/3, and it is PRE-EXISTING
 - [ ] Get blocking disk I/O out of the WM's event loop
