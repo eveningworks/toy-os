@@ -1666,21 +1666,20 @@ it serves. Small, and it makes everything above it discoverable.*
       allocated this and never freed it" without any of the above --
       the `.ksyms` table already resolves an address to a function name.
 
-- [ ] **`ata_dma_nonblocking_selftest()` has a 1040-byte stack frame**,
-      16 bytes over `-Wframe-larger-than=1024`, so every build prints a
-      warning. Two `uint8_t[ATA_SECTOR_SIZE]` buffers (`via_blocking`
-      and `via_poll`, `kernel/drivers/ata.c`) are 1024 of it, and GCC
-      cannot overlap them because the whole point is comparing one
-      against the other.
+- [x] ~~**`ata_dma_nonblocking_selftest()` has a 1040-byte stack
+      frame.**~~ FIXED 2026-08-18: 64 bytes. Its two
+      `uint8_t[ATA_SECTOR_SIZE]` buffers were 1024 of it and GCC cannot
+      overlap them -- comparing one against the other is the point of
+      the function -- so both moved to the heap as ONE allocation, which
+      keeps the cleanup to a single `kfree()` across its six exits and
+      makes the pair all-or-nothing. No alignment constraint applies:
+      `dma_issue()` copies through its own bounce buffer, so the DMA
+      engine never sees the pointer.
 
-      Pre-existing -- confirmed on 2026-08-18 by compiling the file as
-      committed at `HEAD`, which warns identically. Harmless in itself:
-      a 1 KiB frame is fine on a 16 KiB kernel stack, and this runs once
-      from a selftest. It is worth fixing anyway because a warning
-      nobody acts on trains everyone to ignore the one that matters,
-      which is the entire reason that flag was added. One of the two
-      buffers from `kmalloc` fixes it, as the syscall bounce buffers
-      already do.
+      An allocation failure is LOGGED as well as returning 0, because
+      the return value alone cannot distinguish it from a real failure
+      -- a diagnostic reporting "DMA is broken" when it merely could not
+      get 1 KiB would send someone after the wrong thing.
 
 - [ ] **The shell's command dispatch is a 60-branch chain, and the fix
       is not the obvious one.** `apps/shell.c`'s `dispatch()` is 60

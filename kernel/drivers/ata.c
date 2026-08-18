@@ -16,6 +16,7 @@
 #include "pic.h"
 #include "timer.h"
 #include "klog.h"
+#include "heap.h" // the selftest's sector buffers -- see its comment
 #include "string.h"
 #include "idt.h"
 #include "debugflags.h"
@@ -1150,11 +1151,31 @@ int ata_dma_nonblocking_selftest(uint32_t lba, uint32_t *out_polls) {
     *out_polls = 0;
     if (!g_present || !dma_in_use()) return 0;
 
-    uint8_t via_blocking[ATA_SECTOR_SIZE];
-    if (!ata_read_sector(lba, via_blocking)) return 0;
+    // Both sector buffers from the HEAP, in one allocation.
+    //
+    // On the stack they were 1024 of a 1040-byte frame, 16 over
+    // CFLAGS' -Wframe-larger-than=1024, and GCC cannot overlap them --
+    // comparing one against the other is the entire point of the
+    // function. One kmalloc rather than two so there is a single thing
+    // to free on each of the six exits, and so the pair is all-or-
+    // nothing. No alignment or contiguity requirement: dma_issue()
+    // copies through its own bounce buffer (g_dma_buf), so the DMA
+    // engine never sees this pointer.
+    uint8_t *buf = kmalloc(2 * ATA_SECTOR_SIZE);
+    if (!buf) {
+        // Distinguished from a real failure in the log, because the
+        // return value cannot be: a diagnostic reporting "DMA is
+        // broken" when it simply could not get 1 KiB would send someone
+        // after the wrong thing.
+        klog_write("ata: dma selftest skipped -- out of memory for its buffers\n");
+        return 0;
+    }
+    uint8_t *via_blocking = buf;
+    uint8_t *via_poll = buf + ATA_SECTOR_SIZE;
 
-    uint8_t via_poll[ATA_SECTOR_SIZE];
-    if (!dma_transfer_start(lba, 1, via_poll, 0)) return 0;
+    int rc = 0;
+    if (!ata_read_sector(lba, via_blocking)) goto out;
+    if (!dma_transfer_start(lba, 1, via_poll, 0)) goto out;
 
     uint32_t polls = 0;
     enum ata_poll_result r;
@@ -1165,13 +1186,15 @@ int ata_dma_nonblocking_selftest(uint32_t lba, uint32_t *out_polls) {
     // generous for a single sector.
     while ((r = dma_transfer_poll()) == ATA_POLL_PENDING) {
         polls++;
-        if (polls > ATA_POLL_LIMIT) return 0; // driver bug, not a real timeout -- poll() itself already times out via DMA_WAIT_TICKS
+        if (polls > ATA_POLL_LIMIT) goto out; // driver bug, not a real timeout -- poll() itself already times out via DMA_WAIT_TICKS
     }
     *out_polls = polls;
-    if (r != ATA_POLL_DONE) return 0;
+    if (r != ATA_POLL_DONE) goto out;
 
-    if (k_memcmp(via_blocking, via_poll, ATA_SECTOR_SIZE) != 0) return 0;
-    return 1;
+    rc = k_memcmp(via_blocking, via_poll, ATA_SECTOR_SIZE) == 0;
+out:
+    kfree(buf);
+    return rc;
 }
 
 // ---------------------------------------------------------------------
