@@ -25,6 +25,7 @@
 //     leaves the corruption invisible.
 #include "rt/sys.h"
 #include "lib/string.h"
+#include "proc_info.h"
 
 static int failures;
 
@@ -61,50 +62,47 @@ int main(void) {
 
     // --- the gap is finite -----------------------------------------
     //
-    // **The size of the request used to be a hardcoded 2 MiB, and that
-    // is exactly how this check stopped measuring anything.** The
-    // comment justifying the number said "the gap is about 1 MiB, so
-    // this is comfortably past it" -- true until M41 stage 4b widened
-    // the heap to ~14 MiB for a ring-3 compositor's back buffer, at
-    // which point the request simply succeeded and the branch under
-    // test was never reached. A number chosen against an address map is
-    // stale the moment that map moves, and it goes stale SILENTLY.
+    // **This block has now gone stale TWICE against the address map,
+    // and the second time is why it no longer walks.** It began as a
+    // hardcoded 2 MiB request ("comfortably past the ~1 MiB gap"),
+    // which simply succeeded once the heap grew to ~14 MiB. It was then
+    // rewritten to walk 1 MiB at a time up to 64 MiB, which stopped
+    // reaching the bound the moment the heap became ~2 GiB -- and, with
+    // sbrk lazy, walking now means WRITING through gigabytes to find
+    // out where the ceiling is, i.e. trying to allocate the machine.
     //
-    // So walk to the boundary instead of guessing where it is: grow in
-    // modest steps until one is refused. That measures the property --
-    // "sbrk stops before the stack" -- at any heap size, and needs no
-    // edit the next time the map changes.
+    // So it does two separate things instead of one walk, and neither
+    // depends on knowing where the limit is:
     //
-    // The step matters for the same reason the old constant did. It is
-    // small enough that a guest can really allocate each one, so a
-    // refusal means "the bound refused it" rather than "physical memory
-    // ran out" -- asking for 1 GiB in one go made this whole block pass
-    // against a kernel with the bound REMOVED, because the allocator
-    // gave up long before the stack did. And the cap bounds a kernel
-    // with no bound at all: without it, such a kernel loops here until
-    // it has mapped the entire address space.
+    //   * grow a MODEST amount and write through all of it, which is
+    //     what proves growth is real and mapped (and is what the canary
+    //     check at the end needs -- aliasing costs nothing until
+    //     somebody writes);
+    //   * ask for an increment NO heap could hold, and require the
+    //     refusal. A kernel with the bound removed accepts it, so this
+    //     is the check the control reddens.
     #define STEP  (1024 * 1024)
-    #define MAX_STEPS 64        // 64 MiB, far past any plausible heap
+    #define STEPS 8              // 8 MiB: real growth, trivial cost
     void *before = sys_sbrk(0);
-    void *big = (void *)-1;
     int steps = 0;
-    while (steps < MAX_STEPS) {
-        before = sys_sbrk(0);
-        big = sys_sbrk(STEP);
-        if (big == (void *)-1) break;
-        // Write through EVERY chunk handed back, not just the last.
-        // A refused request is visible immediately; an ALLOWED one that
-        // overlaps the stack is not -- the aliasing costs nothing until
-        // somebody writes, at which point the canary below reports it.
-        memset(big, 0, STEP);
+    for (int i = 0; i < STEPS; i++) {
+        void *chunk = sys_sbrk(STEP);
+        if (chunk == (void *)-1) break;
+        // Every chunk, not just the last: an ALLOWED request that
+        // overlaps the stack is invisible until something writes.
+        memset(chunk, 0, STEP);
         steps++;
     }
-    check(big == (void *)-1,
+    check(steps == STEPS, "sbrk grows, and every page it hands back is writable");
+
+    before = sys_sbrk(0);
+    // A terabyte. Bigger than the address space the map reserves, so no
+    // bound-checking kernel can accept it and an unbounded one will.
+    check(sys_sbrk((int64_t)1 << 40) == (void *)-1,
           "sbrk stops before the stack rather than growing forever");
-    check(steps > 0, "and it allowed real growth before stopping");
     check(sys_sbrk(0) == before, "a refused request left the break alone");
     #undef STEP
-    #undef MAX_STEPS
+    #undef STEPS
 
     // The kernel reads the increment as UNSIGNED (see SYS_SBRK in
     // syscall.c -- there is no shrink), so a negative value is a
@@ -115,6 +113,34 @@ int main(void) {
     check(sys_sbrk(-4096) == (void *)-1,
           "a request that overflows the sum is refused");
     check(sys_sbrk(0) == before, "that one left the break alone too");
+
+    // --- a page the KERNEL touches first ----------------------------
+    //
+    // The half of demand paging that never faults, and would therefore
+    // never be exercised by any test that simply uses its memory.
+    //
+    // The kernel does not dereference user pointers: it walks the page
+    // tables and copies through its own identity map (that is what
+    // makes SMAP absolute here). So handing a syscall a page that sbrk
+    // has reserved and ring 3 has NOT touched produces no #PF at all --
+    // it produces a walk that finds nothing. Without a fault-in on that
+    // path the syscall reports a perfectly legal buffer as a bad
+    // pointer, and every syscall taking a caller-allocated buffer
+    // breaks the moment sbrk goes lazy.
+    //
+    // Deliberately untouched between the sbrk and the syscall, which is
+    // the entire point -- a memset here would map the page from ring 3
+    // and the check would pass either way.
+    struct proc_info *info = (struct proc_info *)sys_sbrk(4096);
+    check(info != (struct proc_info *)-1, "sbrk handed back a fresh page");
+    if (info != (struct proc_info *)-1) {
+        int got = sys_proc_info(0, info);
+        check(got != 0, "a syscall can write into an untouched sbrk page");
+        // And it wrote something real, not zeros a blank page would
+        // also show: slot 0 is init on any boot that has one.
+        check(got != 0 && info->pid != 0,
+              "and what it wrote is the real process table");
+    }
 
     // --- and the stack survived ------------------------------------
     int intact = 1;

@@ -70,6 +70,7 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_KILL]          = { "kill",          sys_kill,          { A_INT, A_INT } },
     [SYS_TICKS]         = { "ticks",         sys_ticks,         { A_END } },
     [SYS_MONOTONIC_NS]  = { "monotonic_ns",  sys_monotonic_ns,  { A_END } },
+    [SYS_SLEEP]         = { "sleep",         sys_sleep,         { A_INT } },
     [SYS_SETTING]       = { "setting",       sys_setting,       { A_HEX } },
     [SYS_SYSINFO]       = { "sysinfo",       sys_sysinfo,       { A_HEX } },
     [SYS_FS_GENERATION] = { "fs_generation", sys_fs_generation, { A_END } },

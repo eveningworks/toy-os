@@ -71,6 +71,14 @@ history search, `Alt-.` last argument. `help` lists them all.
 | `dmesg`, `lspci`, `parttable` | |
 | `gfxbench [iterations]` | Times full-screen framebuffer fills *and* console scrolls, reporting ms/frame, an fps ceiling, MB/s, which write-combining mechanism is live, and whether the console is double-buffered. Meaningful only under `make run-kvm` or on real hardware — plain QEMU's TCG ignores memory types, so both console modes measure the same there. See `decisions.md`. |
 
+What is running is `/bin/ps`, not a builtin either: pid, **ppid**,
+state, cumulative CPU seconds, mapped memory and name, with `--tree`
+drawing the process tree under each root. It reads `SYS_PROC_INFO`, so
+it answers from the ring-3 Terminal as well as from the physical shell
+— and note it cannot see *itself* when typed at the physical shell,
+because that runs a `/bin` binary through the legacy loader, which has
+no process-table slot at all.
+
 CPU identification is `/bin/lscpu`, not a builtin: vendor, brand string,
 family/model/stepping, calibrated MHz, cache hierarchy, and every CPUID
 feature flag marked both **supported** and, separately, whether this
@@ -133,8 +141,8 @@ form, which is the one that always works.
 | `dmatest [lba]`, `steptest <mb>` | Read-only and small-write proofs of the non-blocking DMA primitive and the steppable write/read APIs. |
 | `debug [<subsystem> on\|off]` | Per-subsystem runtime debug-log switches (`fs`/`wm`/`ata`), off by default, no rebuild needed. |
 | `ktest [suite]` | Runs the in-kernel test suite — see `make test`. |
-| `kill <pid>` | Ends a process. Runs in the kernel context, so unlike `gui kill` it can end the window manager itself — `scheduler_kill()` refuses the *current* process, and `gui kill` is dispatched from inside the WM's own loop. |
-| `spawn <path> [args]` | Starts a program without waiting for it — the async counterpart to `run`. Needed to start a compositor: a legacy `run` process is not a scheduled one, so its `win_request()` is refused. `kill 1` then `spawn /bin/wm/system/toywm` restarts the desktop. |
+| `kill <pid>` | Ends a process. Runs in the kernel context, so unlike `gui kill` it can end the window manager itself — `scheduler_kill()` refuses the *current* process, and `gui kill` is dispatched from inside the WM's own loop. **It refuses init**, whose pid is reported separately from the generic refusal: killing it would leave every orphan unreapable. |
+| `spawn <path> [args]` | Starts a program without waiting for it — the async counterpart to `run`. Needed to start a compositor: a legacy `run` process is not a scheduled one, so its `win_request()` is refused. What it spawns is handed to **init**, because the kernel context can never wait for anything — without that a fire-and-forget child becomes a zombie holding its slot for the rest of the boot. To restart the desktop: `ps` for the `toywm` pid, `kill <pid>`, then `spawn /bin/wm/system/toywm`. |
 | `kstack [slots]`, `kstack track [on\|off]`, `kstack syscalls` | The kernel stacks. Plain: each process's high-water usage against its 16 KiB stack, plus the legacy loader's (the stack a command typed at this shell runs on), and whether its canary is intact. `slots` shows what a slot would be resumed *into* — saved trapframe RIP/CS — which is how a corrupted one is spotted before it is used. `track on` then `syscalls` attributes the depth to the syscall that pushed the water line down. The numbers matter *before* a crash: the overflow this was built after sat at 8680 of 8192 bytes, and the WM's own path at 7672 of 8192, with nothing reporting either. |
 | `fsck [repair]` | Walks every file's block tree against the free-block bitmap. On TFS3 it also verifies inode checksums, link counts and `.`/`..`, reclaims orphans, and on `repair` restores a damaged primary superblock from its backups. Read-only unless `repair` is passed. |
 | `fsformat <tfs2\|tfs3> confirm` | **Destroys the disk's contents**, reformats with the named filesystem and remounts live. Physical shell only. |

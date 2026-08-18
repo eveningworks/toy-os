@@ -391,7 +391,7 @@ uint64_t vmm_current_pml4(void) {
 // process-private mappings -- it always descends to an individual 4KiB
 // PTE -- and a huge PDE reaching here would be read as a pointer to a
 // page table, so it is refused explicitly rather than mis-walked.
-static uint64_t user_phys_of(uint64_t pml4_phys, uint64_t vaddr) {
+static uint64_t user_phys_of_walk(uint64_t pml4_phys, uint64_t vaddr) {
     int pml4_index = (int)((vaddr >> 39) & 0x1FF);
     int pdpt_index = (int)((vaddr >> 30) & 0x1FF);
     int pd_index   = (int)((vaddr >> 21) & 0x1FF);
@@ -412,6 +412,24 @@ static uint64_t user_phys_of(uint64_t pml4_phys, uint64_t vaddr) {
     if (!(e & PAGE_PRESENT) || !(e & PAGE_USER)) return 0;
 
     return (e & ADDR_MASK) | (vaddr & 0xFFF);
+}
+
+// The walk every user access goes through, with ONE retry through the
+// fault-in hook.
+//
+// This is where demand paging meets the copy helpers, and it is the
+// half that is easy to forget: the kernel never dereferences a user
+// address, so a page the process is entitled to but has not touched yet
+// produces no #PF here -- it produces a walk that finds nothing, and
+// without this the syscall would report a perfectly legal buffer as a
+// bad pointer. Asked once: a handler that claims to have mapped a page
+// and leaves the walk failing is a bug in the handler, and looping
+// would turn it into a hang.
+static uint64_t user_phys_of(uint64_t pml4_phys, uint64_t vaddr) {
+    uint64_t phys = user_phys_of_walk(pml4_phys, vaddr);
+    if (phys) return phys;
+    if (!vmm_fault_in(pml4_phys, vaddr & ~0xFFFULL)) return 0;
+    return user_phys_of_walk(pml4_phys, vaddr);
 }
 
 // Copies between a kernel buffer and user memory THROUGH THE KERNEL'S
@@ -523,6 +541,19 @@ static int page_is_valid_user(uint64_t pml4_phys, uint64_t vaddr) {
     return 1;
 }
 
+// --- demand paging: the fault-in hook ---------------------------------
+//
+// Registered by the process layer, which owns the break. See vmm.h for
+// why the copy helpers need this and not only the #PF handler.
+static vmm_fault_fn g_fault_fn = 0;
+
+void vmm_set_fault_handler(vmm_fault_fn fn) { g_fault_fn = fn; }
+
+int vmm_fault_in(uint64_t pml4_phys, uint64_t vaddr) {
+    if (!g_fault_fn) return 0;
+    return g_fault_fn(pml4_phys, vaddr);
+}
+
 int vmm_validate_user_range(uint64_t pml4_phys, uint64_t vaddr, uint64_t len) {
     if (len == 0) return 1; // nothing to touch -- trivially fine
 
@@ -533,7 +564,15 @@ int vmm_validate_user_range(uint64_t pml4_phys, uint64_t vaddr, uint64_t len) {
     uint64_t last_page = (end - 1) & ~0xFFFULL;
 
     for (;;) {
-        if (!page_is_valid_user(pml4_phys, page)) return 0;
+        // A miss is not a refusal until the fault-in hook has had a
+        // look: with a lazy heap the page may be perfectly legal and
+        // simply absent. Asked ONCE per page -- a handler that mapped
+        // something and still leaves the walk failing is a bug in the
+        // handler, and retrying would spin.
+        if (!page_is_valid_user(pml4_phys, page)) {
+            if (!vmm_fault_in(pml4_phys, page)) return 0;
+            if (!page_is_valid_user(pml4_phys, page)) return 0;
+        }
         if (page == last_page) break;
         page += 4096;
     }

@@ -1110,6 +1110,40 @@ technical conventions below:
   so nothing it spawns has a parent. Use `spawn`, which goes through
   the scheduler. `scheduler_reparent()` is the adoption half, which
   stage 1 uses to hand orphans to init.
+- **THERE IS AN INIT NOW, IT HOLDS PID 1, AND IT CANNOT BE KILLED.**
+  `/bin/init` (`userland/bin/init.c`) is spawned from `kernel_main()`
+  before anything else, which is the only reason it is pid 1 -- slots
+  are handed out lowest-first, so being FIRST is what makes it so, as
+  on Linux. Stage 1 of `docs/init-design.md`. Five things to know.
+  **`kill 1` no longer restarts the desktop**: find the `toywm` pid with
+  `ps` and kill that. **A boot with no `/bin/init` is supported and
+  quiet** -- `scheduler_init_pid()` stays 0, orphans stay parentless as
+  before, and everything that treats init specially ASKS for the pid
+  rather than testing `pid == 1` (see `docs/decisions.md` for the boot
+  that would otherwise have an unkillable desktop). **Adoption only
+  covers orphans**, i.e. children of a parent that DIED -- a live parent
+  that never waits still leaks its zombies, which is why the shell's
+  `spawn` reparents to init explicitly and why `gui` and the KTESTs
+  deliberately do not. **init is BLOCKED whenever it is idle**, never
+  spinning; if `ps` ever shows it ready, something has regressed to a
+  poll loop. And **it starts nothing** -- the desktop is still `gui`'s;
+  starting a TARGET is stage 2.
+- **`SYS_SLEEP` exists, and a caller with no scheduler slot gets -1.**
+  RDI is milliseconds; the caller parks on a deadline and the timer tick
+  releases it, so the RESOLUTION is one tick and a sleep never returns
+  EARLY. The refusal is the part to know: `run` uses the legacy loader,
+  which has no process-table slot, so a `/bin` program that sleeps
+  cannot be tested with `run <name>` -- use `spawn`. Returning 0 there
+  would say "you slept" and a polling loop would spin on it.
+- **`ps` is a REAL `/bin` PROGRAM, not a builtin** (`userland/bin/ps.c`,
+  over `SYS_PROC_INFO`) -- pid, ppid, state, cumulative CPU, memory,
+  name, with `--tree`. It is where the process tree finally has a
+  reader: `ppid` had existed in the ABI since stage 0 with nothing able
+  to show it. Two things worth knowing. **It cannot see itself at the
+  physical shell** (the legacy loader has no slot, so there is nothing
+  in the table to report), and **kfmt's numeric width ZERO-pads** --
+  `%5u` of 1 is `00001`, so a right-aligned column means formatting the
+  number first and padding it with `%5s`.
 - **A PROCESS'S MEMORY IS FREED WHEN IT DIES, NOT WHEN IT IS REAPED --
   and killing needs a DIFFERENT entry point from exiting.**
   `syscall_process_exit_cleanup()` is for a process ending itself and
@@ -1175,7 +1209,9 @@ technical conventions below:
   `apps/` now holds no GUI at all: the shell, the editor, the demo, and
   `gui3.c`, which spawns the desktop and waits for it.
 - **Killing the desktop is survivable, and that is the milestone's exit
-  criterion**: `kill 1` at the shell revokes the framebuffer grant, ASKS
+  criterion**: killing the desktop at the shell (`ps` for the `toywm`
+  pid, then `kill <pid>` -- it was `kill 1` until init took that pid)
+  revokes the framebuffer grant, ASKS
   each client window to close (never destroys it -- that would fault a
   client mid-draw), restores the text console and leaves the kernel
   running; `spawn /bin/wm/system/toywm` starts a new one.
@@ -1224,6 +1260,37 @@ technical conventions below:
   `sys_waitpid_nohang()` for any "has it finished?" poll, and note it
   has NO retry loop on purpose: `SYS_RETRY` is the answer there ("still
   running"), not a signal to ask again.
+- **`SYS_SBRK` RESERVES; THE PAGE ARRIVES ON TOUCH.** The break is a
+  claim, not a mapping (2026-08-18), which is what makes the ~2046 MiB
+  per-process heap affordable -- it was ~14 MiB and eagerly mapped.
+  Four things to know. **sbrk can no longer report OUT OF MEMORY** -- it
+  refuses only a request past `UADDR_HEAP_LIMIT`, and the machine
+  running out kills the process at the page it cannot be given; that is
+  overcommit, as on Linux. **The fault handler is NOT the only entry
+  point**, which is the trap: ring 0 walks page tables rather than
+  dereferencing user pointers, so a syscall handed an untouched buffer
+  never faults -- it gets a walk that finds nothing. Hence a REGISTERED
+  hook (`vmm_set_fault_handler`, `kernel/mm/vmm.c`) with three callers:
+  the #PF handler, the copy helpers, and `vmm_validate_user_range()`.
+  **Those last two are redundant with each other**, so a positive
+  control that disables one reddens NOTHING -- disable both, and
+  `guard_test`'s two "untouched sbrk page" checks are the ones that
+  fire. And **`mapped_end` is gone** from `struct sched_heap`: the page
+  tables already record which pages exist, and a second record could
+  only disagree with them silently.
+- **THE RING-3 MAP IS SIZED FOR 4K, and a region's END is what the next
+  thing must clear.** `WIN_BUFFER_STRIDE` is 64 MiB (a 3840x2160x4
+  buffer is 31.6 MiB), `WIN_CLIENT_BASE` `0x8080000000`,
+  `WIN_COMPOSITOR_BASE` `0x80A0000000` (16 GiB -- 64 pids x 4 windows),
+  `WIN_FB_VADDR` `0x8500000000`, heap ~2046 MiB below the stack. The
+  trap that caught this change first: the compositor region is DERIVED
+  (`MAX_PIDS * CLIENT_MAX * STRIDE`), so its base looks isolated while
+  it spans gigabytes, and growing the heap to `0x8080000000` landed
+  inside where it used to be. **This does NOT make 4K work** --
+  `WIN_CLIENT_MAX_W/H` is still 1280x720 and window buffers still come
+  from `pmm_alloc_contiguous()` (8192 contiguous frames at 4K, refused
+  silently under fragmentation). Raising the caps before that is fixed
+  turns a hard limit into an intermittent silent failure.
 - **`SYS_SBRK` is PER PROCESS, and it used to be reachable only from
   the legacy loader.** The break lives in `struct sched_process` as a
   `struct sched_heap`, armed when the slot is created; the syscall
@@ -1235,8 +1302,8 @@ technical conventions below:
   only that legacy slot, armed by `syscall_reset_heap()`, so **every
   scheduler-spawned process got -1 from `sbrk()` unconditionally** --
   silently, because Toykit has no allocator and nothing spawned had ever
-  asked. The ring-3 heap is also ~14 MiB now, not 1 MiB, because a
-  compositor's back buffer is 3.5 MiB at 1280x720. See
+  asked. The ring-3 heap is ~2046 MiB now (it was 1 MiB, then ~14 MiB once a
+  compositor's back buffer needed 3.5 MiB at 1280x720). See
   `docs/decisions.md`.
 - **The ring-3 address-space map is `kernel/include/kernel/uaddr.h`,
   stated once.** Heap base, heap limit, guard region, stack bottom/top
@@ -2575,10 +2642,12 @@ repeated manual steps to be worth automating:
   the screen, so there is nothing in the log to assert on.
 - **`mem_stress.py`** -- several memory hogs at once: does the machine
   survive running out, and is the memory each one got actually its own?
-  Drives `/tests/memtest`, which takes everything `SYS_SBRK` will give
-  (~14 MiB, the per-process bound in `uaddr.h`), writes a pattern
-  derived from the ADDRESS plus a random per-process salt, and reads it
-  back. **The address-derived pattern is the whole design**: a constant
+  Drives `/tests/memtest`, which takes a DEFAULT 64 MiB (the bound is
+  ~2046 MiB of address space now, and taking all of it would mean trying
+  to allocate the machine), writes a pattern derived from the ADDRESS
+  plus a random per-process salt, and reads it back. The heap LIMIT is
+  still asserted, by asking for a terabyte and requiring the refusal --
+  a cap silently stops covering a bound unless something else does. **The address-derived pattern is the whole design**: a constant
   fill cannot detect two virtual pages sharing one physical frame,
   because both read back the constant and look perfect -- with this,
   the loser reads a value that is a valid pattern for a different
@@ -2604,6 +2673,19 @@ repeated manual steps to be worth automating:
   borrowed-mapping path. Run it after touching `vmm.c`'s mapping or
   teardown paths, or after adding any mapping of memory a process does
   not own.
+- **`init_test.py`** -- init as pid 1, end to end (11 checks): the
+  kernel spawns it, it holds pid 1, an idle init is BLOCKED rather than
+  spinning, `kill 1` is refused, abandoned children are adopted AND
+  reaped, the process table returns to its baseline, and `SYS_SLEEP`
+  passes its own checks. **The slot count is the assertion** -- a zombie
+  nobody reaps is invisible until the table fills up, and every
+  individual process behaves perfectly either way. Its fixture is the
+  load-bearing part: `/tests/orphan_test` must be started with `spawn`,
+  not `run`, because the legacy loader's children have ppid 0 already
+  and there is nothing to orphan. Positive control: put back
+  `heir = 0` in `reparent_children()`; exactly 2 of 11 go red. Not in
+  `gui_regress.py` (no desktop involved); run it after touching the
+  scheduler's parentage, reaping, or `SYS_SLEEP`.
 - **`pixel_probe.py`** -- reads exact pixel values out of screenshots,
   and tabulates the same points across several (`--compare a.png b.png
   --at 85,100 --at 215,100`), flagging which moved and which didn't.

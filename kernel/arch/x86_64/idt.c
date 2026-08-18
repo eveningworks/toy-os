@@ -304,6 +304,21 @@ void isr_dispatch(uint64_t *regs) {
         uint64_t cr2 = 0;
         if (vector == 14) { // page fault: CR2 holds the faulting address
             __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
+
+            // DEMAND PAGING, and it belongs here -- before any of the
+            // reporting below -- because a heap page arriving on first
+            // touch is not an exception, it is the normal way memory
+            // gets mapped now (SYS_SBRK reserves and maps nothing, see
+            // kernel/uaddr.h). Returning immediately retries the
+            // faulting instruction with the page present.
+            //
+            // The handler answers only for an address inside the
+            // faulting address space's own heap reservation; anything
+            // else -- a wild pointer, the stack guard, a page past the
+            // break -- falls through to the report exactly as before.
+            // So this cannot swallow a real fault: it can only satisfy
+            // one the process was entitled to.
+            if ((cs & 3) == 3 && vmm_fault_in(vmm_current_pml4(), cr2)) return;
         }
 
         // A ring-3 fault is recoverable -- tear the process down and

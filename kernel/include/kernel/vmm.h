@@ -175,6 +175,37 @@ uint64_t vmm_current_pml4(void);
 // read it on the process's behalf.
 int vmm_validate_user_range(uint64_t pml4_phys, uint64_t vaddr, uint64_t len);
 
+// --- demand paging: the fault-in hook ---------------------------------
+//
+// SYS_SBRK reserves address space and maps nothing (kernel/uaddr.h), so
+// a heap page exists only once something touches it. Three places have
+// to be able to produce that page, and they are NOT all faults:
+//
+//   - the #PF handler, when ring 3 touches it (idt.c);
+//   - the copy helpers, which walk to the frame themselves and would
+//     otherwise report a perfectly legal buffer as unmapped;
+//   - vmm_validate_user_range(), for the same reason.
+//
+// The second and third are the ones that make this a hook rather than
+// a line in the fault handler. A freshly sbrk'd buffer handed to
+// sys_read() never faults -- the kernel never dereferences the user
+// address -- so without this it would simply be rejected, and demand
+// paging would silently break every syscall that takes a buffer.
+//
+// vmm cannot answer "is this address inside somebody's heap" itself:
+// the break lives in the process layer. So that layer REGISTERS a
+// handler, the same shape as display_driver and block_device. Returns 1
+// if it mapped a page and the access should be retried, 0 if the
+// address is not its business (a wild pointer, the stack guard, or a
+// heap page it could not allocate a frame for -- all of which must stay
+// fatal).
+typedef int (*vmm_fault_fn)(uint64_t pml4_phys, uint64_t vaddr);
+void vmm_set_fault_handler(vmm_fault_fn fn);
+
+// Asks the registered handler to fault `vaddr` in. 0 when there is no
+// handler, which is what every path saw before demand paging existed.
+int vmm_fault_in(uint64_t pml4_phys, uint64_t vaddr);
+
 // **The ONLY sanctioned way for kernel code to touch user memory.**
 //
 // These walk the page tables to each frame and copy through the

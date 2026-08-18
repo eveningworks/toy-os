@@ -746,20 +746,38 @@ struct win_request_msg {
 // compute the address from the window id the server handed back.
 //
 // Spaced WIN_BUFFER_STRIDE apart, which is comfortably more than the
-// largest buffer WIN_CLIENT_MAX_W * WIN_CLIENT_MAX_H * 4 can need
-// (3.52 MiB), so two windows' mappings can never overlap regardless of
-// their sizes. The stride is the SECOND cap on window size and the one
-// that is easy to miss -- it bounded windows to 2 MiB of pixels no
-// matter what WIN_CLIENT_MAX_* said. Kept at a comfortable multiple
-// rather than the tight fit, since virtual address space costs nothing
+// largest buffer WIN_CLIENT_MAX_W * WIN_CLIENT_MAX_H * 4 can need, so
+// two windows' mappings can never overlap regardless of their sizes.
+// The stride is the SECOND cap on window size and the one that is easy
+// to miss -- it bounded windows to 2 MiB of pixels no matter what
+// WIN_CLIENT_MAX_* said.
+//
+// **It is 64 MiB so that a 4K window is an allocator question rather
+// than an addressing one.** 3840x2160x4 is 31.6 MiB, which the previous
+// 8 MiB stride could not hold however the other caps were set -- so
+// every future step toward a 4K desktop would have had to move these
+// addresses first. Address space is the cheap part; it is reserved now
+// and nothing is spent until a window is actually that big. What still
+// bounds a 4K window is `pmm_alloc_contiguous()` (31.6 MiB is 8192
+// CONTIGUOUS frames, which fragmentation can refuse, silently and by
+// design) and WIN_CLIENT_MAX_W/H below -- see docs/roadmap.md.
+//
+// Kept at a comfortable multiple rather than the tight fit, since
+// virtual address space costs nothing
 // here: nothing else in a client's address space lives above
-// WIN_CLIENT_BASE (the stack tops out at 0x8000F00000, the heap below
+// WIN_CLIENT_BASE (the stack tops out just below it, the heap below
 // that), so the whole region and the font above it are free to grow.
-// Note the gap under this address is no longer spare: the heap was
-// widened into it to hold a ring-3 compositor's back buffer, so raising
-// WIN_CLIENT_BASE is what buys more heap now (see kernel/uaddr.h).
-#define WIN_CLIENT_BASE   0x8001000000ULL
-#define WIN_BUFFER_STRIDE 0x0000800000ULL // 8 MiB per window slot
+//
+// **This address is what bounds the HEAP, and it has been moved up once
+// already for exactly that reason.** It was 0x8001000000, which left a
+// process ~14 MiB of heap -- enough for a 1080p compositor back buffer
+// and not much else, and a hard ceiling with no mechanism behind it.
+// Moving it to 0x8080000000 leaves ~2 GiB, which is more than any
+// machine this OS boots on has, so PHYSICAL memory is the limit now
+// rather than a constant. It stays below WIN_FB_VADDR (0x8100000000)
+// with the font region in between; see kernel/uaddr.h for the map.
+#define WIN_CLIENT_BASE   0x8080000000ULL
+#define WIN_BUFFER_STRIDE 0x0004000000ULL // 64 MiB per window slot
 #define WIN_CLIENT_MAX    4 // windows one client may hold at once
 
 static inline uint64_t win_buffer_vaddr(uint32_t window) {
@@ -795,7 +813,13 @@ static inline uint64_t win_buffer_vaddr(uint32_t window) {
 // enough above that the whole compositor region (MAX_PROCS x
 // WIN_CLIENT_MAX slots) fits underneath the next round address. Virtual
 // space costs nothing here.
-#define WIN_COMPOSITOR_BASE 0x8010000000ULL
+//
+// It was 0x8010000000, and that is the trap this whole map has to be
+// read as a whole to avoid: the region below it looked spare, and it
+// was not -- 64 pids x 4 windows x the stride is GIGABYTES, so the
+// region's END is what the next thing has to clear, never its base. A
+// change that grew the heap into 0x8080000000 landed inside it.
+#define WIN_COMPOSITOR_BASE 0x80A0000000ULL
 
 // How many processes' windows the region has room for. Must be >=
 // SCHED_MAX_PROCS (api/scheduler.h) -- win_server.c static_asserts
@@ -803,16 +827,18 @@ static inline uint64_t win_buffer_vaddr(uint32_t window) {
 // one. The server refuses a pid outside it rather than computing an
 // address that overlaps someone else's.
 //
-// Costs nothing but virtual address space: 64 x WIN_CLIENT_MAX x 8 MiB
-// is 2 GiB of vaddr in a region with nothing above it.
+// Costs nothing but virtual address space: 64 x WIN_CLIENT_MAX x the
+// 64 MiB stride is 16 GiB of vaddr in a region with nothing mapped in
+// it until a window exists.
 #define WIN_COMPOSITOR_MAX_PIDS 64
 
 // --- the compositor's framebuffer grant -------------------------------
 //
 // Where WIN_REQ_FB_MAP maps the real linear framebuffer. Above the
-// compositor region (64 x WIN_CLIENT_MAX slots, ~2 GiB) so the three
+// compositor region (64 x WIN_CLIENT_MAX slots, 16 GiB) so the three
 // mapped regions -- own buffers, other windows, the screen itself --
-// cannot collide.
+// cannot collide. A 4K screen is 31.6 MiB here, which is why the gap
+// above this address matters as much as the one below it.
 //
 // A FIXED address rather than one the kernel returns, for the reason
 // the derived addresses above give: an address that varies per boot is
@@ -825,7 +851,7 @@ static inline uint64_t win_buffer_vaddr(uint32_t window) {
 // the ring-3 address map) because a CLIENT needs this number and
 // uaddr.h is kernel-internal -- the same reason WIN_FONT_VADDR lives
 // here. uaddr.h carries a pointer to it.
-#define WIN_FB_VADDR 0x8100000000ULL
+#define WIN_FB_VADDR 0x8500000000ULL
 
 static inline uint64_t win_compositor_vaddr(int pid, uint32_t window) {
     return WIN_COMPOSITOR_BASE

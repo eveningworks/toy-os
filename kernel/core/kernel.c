@@ -32,6 +32,11 @@
 #include "apps.h"
 #include "demo.h"
 #include "scheduler.h"
+#include "syscalls.h"   // uheap_fault_init() -- demand paging for ring-3 heaps
+
+// The one place this path is written. init is an ordinary ring-3
+// program seeded to /bin like any other.
+#define INIT_PATH "/bin/init"
 #include "process.h"  // process_guard_page_init() -- the legacy loader's stack
 #include "gui3.h"     // gui3_main() -- the desktop, a ring-3 process
 #include "debug_console.h"
@@ -269,6 +274,32 @@ void kernel_main(uint64_t multiboot_info_addr) {
     if (!process_guard_page_init()) {
         klog_write("toy-os: WARNING -- the legacy loader's kernel stack has no "
                    "guard page (split table pool exhausted)\n");
+    }
+
+    // Demand paging for ring-3 heaps, BEFORE anything is spawned: with
+    // no handler registered, the first heap page a process touches is
+    // an ordinary fatal fault.
+    uheap_fault_init();
+
+    // init, pid 1 -- spawned HERE, before anything else can take a
+    // slot, because a pid is a slot index plus one and slots are handed
+    // out lowest-first. Nothing enforces that init is pid 1; being
+    // first is what makes it so, which is also how Linux does it.
+    //
+    // A boot without it is survivable and deliberately quiet about
+    // everything except the warning: scheduler_init_pid() stays 0, so
+    // orphans are left parentless exactly as they were before init
+    // existed, and slot 0 is an ordinary process again.
+    {
+        int init_pid = scheduler_spawn(INIT_PATH, 0);
+        if (init_pid > 0) {
+            scheduler_set_init_pid(init_pid);
+            klog_printf("toy-os: init started as pid %d (" INIT_PATH ")\n",
+                        init_pid);
+        } else {
+            klog_printf("toy-os: WARNING -- could not spawn " INIT_PATH
+                        "; orphaned processes will hold their slots\n");
+        }
     }
 
     debug_console_init(); // serial debug console (COM1) -- see docs/decisions.md; polled from keyboard_getchar()'s and wm_run()'s idle-wait loops

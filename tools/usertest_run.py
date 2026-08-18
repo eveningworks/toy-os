@@ -102,6 +102,12 @@ EXCLUDED = [
                           "`run` uses the legacy loader, which has no pid, so nothing it "
                           "spawns has a parent and wait-any has nobody to ask about. "
                           "Drive it with `spawn /tests/waitany_test` instead"),
+    ("orphan_test",      "abandons children on purpose and exits at once; the "
+                          "assertion is whether INIT reaps them, which is the process "
+                          "table before and after -- tools/init_test.py"),
+    ("sleep_test",       "SYS_SLEEP refuses a caller with no scheduler slot, and `run` "
+                          "is the legacy loader, which has none. Driven by "
+                          "tools/init_test.py through `spawn` instead"),
     ("pipe_test",        "needs a parent to spawn it and reap it; exits 3 under `run`, "
                           "and kernel/proc/pipe_test.c's KTEST covers it properly"),
     ("cputime_test",     "must be SCHEDULER-spawned to have a procs[] slot at all; "

@@ -92,22 +92,118 @@ above: a process model without demand paging, or SMP without a scheduler
 that can block, is a different design rather than a smaller one.
 
 ### Demand paging & shared memory (memory)
-- [ ] Page-fault-driven mapping (allocate on first touch, not up front)
-- [ ] File-backed `mmap`
-- [ ] `MAP_SHARED` memory between two processes
-- [ ] Shared read-only text pages between instances of the same binary
-- [ ] Accounting: resident vs. mapped, visible in Task Manager
-- [ ] A page-fault handler that can tell "this address is legitimately
-      unmapped, map it now" from "this is a real fault"
+*Listed in BUILD ORDER, not as a wish list -- reordered 2026-08-18 after
+the first two items landed and made the dependencies visible. Two things
+the old list hid: everything below the first heading needs per-process
+address-space bookkeeping that does not exist yet, and everything under
+"sharing" needs a per-frame refcount that also does not.*
+
+**Done, and what they proved**
+- [x] ~~Page-fault-driven mapping (allocate on first touch, not up
+      front)~~ DONE 2026-08-18, for the ring-3 HEAP. `SYS_SBRK` reserves
+      and maps nothing; the frame arrives on touch
+- [x] ~~A page-fault handler that can tell "this address is legitimately
+      unmapped, map it now" from "this is a real fault"~~ DONE
+      2026-08-18 -- and the finding to carry into everything below is
+      that the FAULT HANDLER IS NOT THE ONLY ENTRY POINT: ring 0 walks
+      page tables rather than dereferencing user pointers, so a syscall
+      handed an untouched buffer never faults at all. It is a registered
+      hook with three callers; see `docs/decisions.md`
+
+**First: address-space bookkeeping.** The keystone. Today
+`uheap_fault()` answers "is this address yours?" by testing ONE
+hardcoded range, which is exactly enough for a single grow-only heap and
+cannot express anything else. Everything after this section is written
+in terms of the structure this adds.
+- [ ] A per-process list of mapped REGIONS with attributes (base, length,
+      protection, backing) -- Linux's VMAs, a maple tree there since 6.1
+      and an rbtree before; a sorted array is plenty at this scale
+- [ ] `mmap(MAP_ANONYMOUS)` and `munmap` over it. Anonymous first
+      because it needs no filesystem and immediately gives `free()`
+      somewhere to return memory to, which `sbrk` structurally cannot
+- [ ] The fault handler consults the region list instead of one range
+- [ ] A `pmap`-style command showing one process's mappings. **Build it
+      WITH this, not after** -- it is how the rest of the milestone gets
+      debugged, and the current list had it last
+- [ ] Accounting: resident vs. mapped, visible in Task Manager. Falls
+      out of the same structure -- "mapped" is the region list, "resident"
+      is the page tables, and having both is what makes the difference
+      observable at all
 - [ ] Lazy zero-filling: one shared zero page mapped read-only until
-      first write
-- [ ] `munmap`, and the address-space bookkeeping that makes it possible
+      first write. A small optimisation ON the anonymous path, so it
+      wants the anonymous path to exist first
+
+**Then: file backing.** Needs the region list to record what a region is
+backed BY.
+- [ ] File-backed `mmap`
+- [ ] **Note the hazard before starting:** a fault can happen inside a
+      syscall, and this filesystem is NOT re-entrant (`vfs.c` holds a
+      preemption guard, and `fs_read()` refuses a nested whole-file
+      read). Reading a page from disk on the fault path is therefore a
+      re-entrancy question, not just an I/O one
+- [ ] Shared read-only text pages between instances of the same binary
+      -- the first real payoff, and the cheapest sharing case because
+      read-only needs no copy path
+
+**Then: sharing, which needs a refcount first.**
+- [ ] **A per-frame reference count.** Nothing in this kernel has one.
+      `PAGE_BORROWED` says "somebody else frees this", NOT "count me",
+      so it cannot express two owners -- which is what every item below
+      needs. Roughly what Linux's `struct page` array buys, and the same
+      structure the one-directional `meminfo audit` would need to find
+      ordinary leaks
+- [ ] `MAP_SHARED` memory between two processes
+- [ ] Copy-on-write, shared between this and `fork()` -- one
+      implementation, not two (see the fork()/exec() milestone's
+      ordering note)
+
+**Unrelated to the sequence above, found while measuring it**
 - [ ] Guard pages around each stack, so overflow faults precisely
       instead of corrupting a neighbour
-- [ ] Copy-on-write shared between this and `fork()` -- one
-      implementation, not two (see the fork()/exec() milestone's ordering note)
-- [ ] A `pmap`-style command showing one process's mappings, which is
-      also how any of this gets debugged
+- [ ] **`USERLAND_CFLAGS` has no `-Wframe-larger-than`**, so a ring-3
+      function with a frame bigger than the single 4 KiB guard page can
+      step OVER it -- the Stack Clash shape (CVE-2017-1000364), which is
+      why Linux widened its guard gap to 256 pages in 4.11. The kernel
+      side is bounded (1024 bytes, 2048 for `apps/`); ring 3 is not.
+      Found by measuring, 2026-08-18. Cheap either way: a flag, or more
+      guard pages, and the flag is the one that names the offender
+- [ ] **Nothing checks the ~1 MiB between a ring-3 image and its heap.**
+      `link.ld` puts text at `0x8000000000` and `UADDR_HEAP_BASE` is
+      `0x8000100000`, so a binary whose sections pass 1 MiB would
+      overlap its own heap with no diagnostic anywhere. The largest
+      today is `toywm` at ~557 KB -- about 2x headroom, which is less
+      than it sounds
+
+### More than 4 GiB of RAM (memory)
+*Measured 2026-08-18, while raising the per-process heap. This is not a
+constant to raise -- it is a structural property of how this kernel
+reaches physical memory, and it is worth stating precisely before
+anyone tries.*
+
+**There is no higher-half kernel and no separate kernel address space.**
+`boot.asm` identity-maps the low 4 GiB with 2 MiB pages before long
+mode, every user PML4 shares kernel entry 0, and ALL physical access
+goes through that map: `vmm.c` reads page tables as `table_at(phys)`,
+and the copy helpers reach user frames through it (which is exactly what
+makes SMAP absolute here, with no STAC/CLAC window). So a frame above
+4 GiB would have no kernel virtual address at all -- unreachable, not
+merely unallocated.
+
+- [ ] A direct map that is not the identity map -- Linux's
+      `__va`/`__pa` at `0xffff888000000000`, i.e. a higher-half kernel.
+      This is the real work; everything below is bookkeeping behind it
+- [ ] `PMM_MAX_FRAMES` and its fixed 128 KiB bitmap, both sized from the
+      4 GiB assumption (`kernel/mm/pmm.c`)
+- [ ] **`kfree()`'s red-zone detection depends on heap pointers fitting
+      in 32 bits.** It tells a red-zoned block from a plain one by
+      reading the eight bytes before the payload -- unambiguous only
+      because a heap pointer's top half is zero while the magic's is
+      not. A kernel heap above 4 GiB breaks that SILENTLY, on the
+      freeing path. See CLAUDE.md and `docs/decisions.md`
+- [ ] The multiboot memory map is already parsed; what is missing is
+      anywhere to put what it reports
+- [ ] A test that can actually reach the case -- QEMU `-m 8G`, and a
+      check that frames above 4 GiB are both handed out and readable
 
 ### Swap / paging to disk (memory)
 **Needs:** Demand paging & shared memory -- swap is demand paging with a backing store.
@@ -769,7 +865,9 @@ needs processes to outlive the thing that started them.
 stages this together with the process tree it needs, the console device
 a ring-3 shell needs, and retiring the kernel shell.
 
-**Needs:** nothing outstanding for the first two stages. **Unlocks:**
+**Needs:** nothing outstanding for stage 2 (a TARGET setting); stages
+0 and 1 are done. Stage 3 (a console device) is what the ring-3 shell
+waits on. **Unlocks:**
 the ring-3 settings daemon, a ring-3 shell, and any future name service.
 
 *This item used to say it needed `fork`/`exec`, signals and job control.
@@ -782,14 +880,17 @@ gate the later checkboxes rather than the first three. The TTY is
 genuinely needed, but only for the shell half; see the design doc's
 staging.*
 
-- [ ] A real `init`: the first process, started by the kernel, parent of
-      everything else
+- [x] ~~A real `init`: the first process, started by the kernel, parent
+      of everything else~~ DONE 2026-08-18 (stage 1). `/bin/init` reaps
+      orphans; it starts nothing yet -- that is the TARGET below
 - [x] ~~A parent link (`ppid`) and reparenting of orphans~~ DONE
       2026-08-18 (stage 0). Reparenting goes to 0 until init exists;
       `scheduler_reparent()` is the adoption half stage 1 uses
 - [x] ~~`waitpid(-1)`, so init can reap any child rather than a named
       one~~ DONE 2026-08-18 (stage 0)
-- [ ] pid 1 refuses to be killed
+- [x] ~~pid 1 refuses to be killed~~ DONE 2026-08-18 (stage 1), by
+      asking which pid init holds rather than testing `pid == 1` -- see
+      `docs/decisions.md` for the boot where the difference matters
 - [ ] A TARGET setting (`text` / `graphical`) deciding what init starts
       -- systemd's `multi-user.target` / `graphical.target`, SysV's
       runlevels 3 and 5 -- with a `target=` boot word overriding it so a
@@ -1088,6 +1189,16 @@ caller is a test.
       helper for today -- everything kernel-side is identity-mapped.
       Related to Demand paging & shared memory's demand paging, and the natural time to
       do it is alongside that rather than on its own.
+
+      **This is now the ONLY thing between here and a 4K desktop**
+      (2026-08-18). The address space was sized for one in the same
+      change that made the heap lazy: `WIN_BUFFER_STRIDE` is 64 MiB, so
+      a 3840x2160x4 buffer (31.6 MiB) has a slot, and the compositor
+      region and framebuffer moved up to clear it. What is left is this
+      item plus raising `WIN_CLIENT_MAX_W/H` -- and raising the caps
+      FIRST would be worse than not raising them, since it turns a hard
+      limit into an intermittent silent refusal: 31.6 MiB is 8192
+      contiguous frames.
 - [ ] Multiple windows per process: the protocol already carries window
       ids and `win_server.c` already tracks WIN_CLIENT_MAX per client,
       but `userland/tests/winclient.c` only ever opens one, so the path is

@@ -79,17 +79,34 @@ int scheduler_current_pid(void);
 // --- the running process's heap ---------------------------------------
 //
 // SYS_SBRK's per-process state, reached by the syscall layer rather than
-// held there. `brk` is what the process sees; `mapped_end` is how far
-// pages have actually been allocated behind it, which is only ever a
-// whole number of pages ahead of or equal to `brk`.
+// held there.
 //
-// Kept as a struct handed out by pointer, not as a get/set pair,
-// because sbrk has to read both and advance both together -- two
-// accessors would make a partially-applied grow representable.
+// ONE field, and it is a RESERVATION: `brk` is the first address past
+// the heap the process has claimed, and nothing below it is necessarily
+// mapped. Pages arrive on first touch (proc_syscalls.c's uheap_fault(),
+// registered with vmm), which is what makes a ~2 GiB heap affordable.
+//
+// It used to carry a second field, `mapped_end` -- how far pages had
+// actually been allocated behind the break. Demand paging deletes the
+// concept rather than tracking it: the page tables already record which
+// pages exist, and a second record of the same fact could only ever
+// disagree with them, silently and in the direction that matters (a
+// page believed mapped that is not).
+//
+// Still a struct handed out by pointer rather than a get/set pair,
+// because there are two owners of one representation (a scheduler slot
+// and the legacy loader's single slot) and they must not drift.
 struct sched_heap {
     uint64_t brk;
-    uint64_t mapped_end;
 };
+
+// The heap belonging to a given address space, or NULL if none does.
+//
+// By PML4 rather than by "who is running", because the fault-in path
+// has an address space in hand and asking who is current would be an
+// assumption -- true today for the copy helpers, and not a thing to
+// rely on in a fault handler.
+struct sched_heap *scheduler_heap_for_pml4(uint64_t pml4_phys);
 
 // The heap of the process currently on the CPU, or NULL when the kernel
 // context is running (current_index == -1) -- which is the legacy
@@ -174,6 +191,34 @@ enum sched_poll_result scheduler_poll(int pid, int *out_exit_code);
 #define SCHED_WAIT_EVENT 1 // a window/input event for this process
 #define SCHED_WAIT_PIPE  2 // data (or EOF) on a pipe this process reads
 #define SCHED_WAIT_CHILD 3 // a spawned child of this process exited
+#define SCHED_WAIT_TIMER 4 // a deadline this process asked to sleep until
+
+// Parks the caller until clocksource_now_ns() reaches `wake_at_ns`, the
+// SYS_SLEEP half of the block/wake pair above. Same contract as
+// scheduler_block_current() -- 1 means parked (do not touch regs), 0
+// means the caller has no slot and must not sleep.
+//
+// The deadline is per process rather than a shared wake reason, because
+// scheduler_wake() releases EVERY process parked on a reason and two
+// sleepers rarely want the same instant. scheduler_wake_timers() below
+// is the matching, deadline-aware release.
+int scheduler_sleep_current(uint64_t *regs, uint64_t wake_at_ns);
+
+// Wakes every sleeper whose deadline has passed. Called once per timer
+// tick, which is what makes the resolution of a sleep one TICK: a
+// process asking for 1 ms sleeps until the next tick, never less.
+int scheduler_wake_timers(uint64_t now_ns);
+
+// The pid init holds, or 0 before it has been started (and on a boot
+// where it could not be). Set once by scheduler_set_init_pid() from
+// kernel_main(); read by the two places that must treat pid 1 specially
+// -- adoption, and scheduler_kill()'s refusal.
+//
+// A getter rather than a constant, so a boot with no /bin/init behaves
+// as it did before init existed instead of adopting orphans to a pid
+// nothing is running. Stage 1 of docs/init-design.md.
+int scheduler_init_pid(void);
+void scheduler_set_init_pid(int pid);
 
 // Parks the calling process until scheduler_wake() names its `reason`,
 // and hands the CPU to whatever is next. `regs` must be the syscall

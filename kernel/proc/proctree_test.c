@@ -96,8 +96,14 @@ KTEST("proctree", "a dead parent's children are reparented, not left pointing at
     // corpse.
     scheduler_kill(parent, 0);
 
+    // The heir is INIT where there is one and 0 ("nobody") where there
+    // is not, so this asks the kernel rather than hardcoding either --
+    // the same test then covers a normal boot and one where /bin/init
+    // is missing. What must NOT survive is the dead parent's pid.
+    int heir = scheduler_init_pid();
     KTEST_ASSERT(scheduler_proc_info(find_slot(child), &info));
-    KTEST_ASSERT_EQ(info.ppid, 0);
+    KTEST_ASSERT_EQ(info.ppid, heir);
+    KTEST_ASSERT(info.ppid != parent);
 
     int code = 0;
     scheduler_poll(parent, &code);
@@ -145,4 +151,64 @@ KTEST("proctree", "a reused slot does not inherit the last tenant's children") {
     scheduler_poll(reused, &code);
     scheduler_kill(child, 0);
     scheduler_poll(child, &code);
+}
+
+// --- stage 1: init, and what having one changes -----------------------
+//
+// These SKIP when there is no init rather than failing: a boot with no
+// /bin/init is a supported outcome (the kernel warns and carries on),
+// and a test that demanded one would fail on exactly the configuration
+// where declining was correct -- the same rule reloc_test.c applies to
+// a boot that did not relocate.
+
+KTEST("proctree", "init cannot be killed") {
+    int init = scheduler_init_pid();
+    if (init <= 0) KTEST_SKIP("no init on this boot");
+
+    // Killing it would leave every orphan unreapable and nothing
+    // supervising anything -- Linux discards SIGKILL to pid 1 for the
+    // same reason.
+    KTEST_ASSERT(!scheduler_kill(init, 0));
+
+    // And it is still there, which is the half that matters: a refusal
+    // that had already zombied the slot would report the same 0.
+    struct proc_info info;
+    KTEST_ASSERT(scheduler_proc_info(find_slot(init), &info));
+    KTEST_ASSERT_EQ(info.pid, init);
+    KTEST_ASSERT(info.state != PROC_STATE_ZOMBIE);
+}
+
+KTEST("proctree", "an orphan is adopted by init, and init can reap it") {
+    if (!fs_exists(SPIN_PATH)) KTEST_SKIP("no " SPIN_PATH " on this boot");
+    int init = scheduler_init_pid();
+    if (init <= 0) KTEST_SKIP("no init on this boot");
+
+    int parent = scheduler_spawn(SPIN_PATH, 0);
+    int child  = scheduler_spawn(SPIN_PATH, 0);
+    KTEST_ASSERT(parent > 0 && child > 0);
+    KTEST_ASSERT(scheduler_reparent(child, parent));
+
+    int code = 0;
+    scheduler_kill(parent, 0);
+    scheduler_poll(parent, &code);
+
+    // Adopted, not orphaned. This is the one line of stage 1 that turns
+    // a zombie from permanent into reapable.
+    struct proc_info info;
+    KTEST_ASSERT(scheduler_proc_info(find_slot(child), &info));
+    KTEST_ASSERT_EQ(info.ppid, init);
+
+    // And the adoption is REAL, not just a number: init's own wait-any
+    // must now hand back this corpse. Asserted here rather than left to
+    // the ring-3 tool, because "the ppid changed" is satisfied by a
+    // kernel that writes the field and reaps nothing.
+    scheduler_kill(child, 3);
+    int got = 0, got_code = 0;
+    int found = 0;
+    for (int i = 0; i < SCHED_MAX_PROCS && !found; i++) {
+        if (scheduler_poll_any(init, &got, &got_code) != SCHED_POLL_EXITED) break;
+        if (got == child) found = 1; // somebody else's orphan; keep looking
+    }
+    KTEST_ASSERT(found);
+    KTEST_ASSERT_EQ(got_code, 3);
 }

@@ -32,7 +32,6 @@ static struct sched_heap g_legacy_heap;
 void syscall_reset_heap(uint64_t pml4_phys, uint64_t heap_base) {
     g_heap_pml4 = pml4_phys;
     g_legacy_heap.brk = heap_base;
-    g_legacy_heap.mapped_end = heap_base;
 }
 
 SYSCALL_HANDLER sys_do_proc_info(uint64_t *regs, uint64_t rdi, uint64_t rsi) {
@@ -116,37 +115,85 @@ int sys_sbrk(struct syscall_ctx *c) {
         klog_write("syscall: sbrk() rejected -- would grow into the stack guard\n");
         c->regs[14] = (uint64_t)-1;
     } else {
+        // THE BREAK IS A RESERVATION. Nothing is mapped here: the frame
+        // for a heap page arrives when something first touches it, via
+        // uheap_fault() below. Two consequences a caller must know.
+        //
+        // sbrk() can no longer report OUT OF MEMORY -- it only refuses
+        // a request that runs past UADDR_HEAP_LIMIT. The machine
+        // running out is discovered at the page that cannot be given,
+        // which kills the process. That is OVERCOMMIT, and it is the
+        // only reason a ~2 GiB heap is affordable at all: mapping what
+        // it reserves would have meant handing out 2 GiB of frames to a
+        // process that asked for address space. Linux makes the same
+        // trade and backs it with an OOM killer; here the fault is
+        // fatal to the process that took it, which is a smaller blast
+        // radius than a kernel that cannot allocate.
+        //
+        // And the break only ever moves UP. sbrk() with a negative
+        // increment is not supported (`inc` is unsigned and the check
+        // above refuses anything that would run past the limit), so
+        // there is no unmapping path to get wrong.
         uint64_t old_brk = hp->brk;
-        uint64_t new_brk = old_brk + inc;
-        int ok = 1;
-
-        while (hp->mapped_end < new_brk) {
-            uint64_t frame = pmm_alloc_frame();
-            if (!frame) { ok = 0; break; }
-            for (size_t i = 0; i < 4096; i++) ((uint8_t *)(uintptr_t)frame)[i] = 0;
-            if (!vmm_map_user_page(pml4, hp->mapped_end, frame)) {
-                pmm_free_frame(frame);
-                ok = 0;
-                break;
-            }
-            hp->mapped_end += 4096;
-        }
-
-        // Pages already mapped before a failure STAY mapped and
-        // stay accounted for -- that is what makes the retry after a
-        // partial grow start where this one stopped rather than
-        // re-mapping over live pages. Only the break is left where it
-        // was, so the process sees the whole request refused.
-        if (!ok) {
-            klog_write("syscall: sbrk() rejected -- out of physical memory\n");
-            c->regs[14] = (uint64_t)-1;
-        } else {
-            hp->brk = new_brk;
-            c->regs[14] = old_brk; // classic sbrk() contract: returns the OLD break
-        }
+        hp->brk = old_brk + inc;
+        c->regs[14] = old_brk; // classic sbrk() contract: returns the OLD break
     }
     return 0;
 }
+
+// Faults in one heap page, for whatever is asking -- the #PF handler,
+// or vmm's copy helpers walking to a frame that is not there yet.
+//
+// Registered with vmm at boot (uheap_fault_init()), rather than called
+// from idt.c directly, because the fault handler is NOT the only entry:
+// a freshly sbrk'd buffer handed to sys_read() never faults at all --
+// the kernel walks to the frame instead of dereferencing the user
+// address -- so without the hook that buffer would be reported as
+// unmapped and demand paging would silently break every syscall taking
+// a pointer. See vmm.h.
+//
+// Returns 1 only if it mapped something and the access should be
+// retried. Everything else is 0 and stays fatal: a wild pointer, the
+// stack guard, an address past the break, or a heap page it could not
+// find a frame for.
+static int uheap_fault(uint64_t pml4_phys, uint64_t vaddr) {
+    if (vaddr < UADDR_HEAP_BASE || vaddr >= UADDR_HEAP_LIMIT) return 0;
+
+    // WHOSE heap this is, resolved by address space rather than by "who
+    // is running": the copy helpers run inside a syscall made by the
+    // owner, but saying so is an assumption, and the legacy loader's
+    // single slot is armed per pml4 anyway.
+    struct sched_heap *hp = scheduler_heap_for_pml4(pml4_phys);
+    if (!hp && g_heap_pml4 && pml4_phys == g_heap_pml4) hp = &g_legacy_heap;
+    if (!hp) return 0;
+
+    // Past the break is NOT a heap page. This is the check that keeps
+    // the reservation meaningful -- without it the whole ~2 GiB region
+    // would fault in on any stray pointer, and a wild write would be
+    // answered with memory instead of a fault report.
+    uint64_t page = vaddr & ~0xFFFULL;
+    if (page < UADDR_HEAP_BASE || page >= hp->brk) return 0;
+
+    uint64_t frame = pmm_alloc_frame();
+    if (!frame) {
+        klog_printf("heap: no frame for user page %#lx -- the process dies here\n",
+                    page);
+        return 0;
+    }
+    // Zeroed, because a fresh heap page carrying somebody else's data
+    // is both a surprise to the program and a disclosure between
+    // processes. sbrk's eager version zeroed too; nothing changes for a
+    // caller.
+    for (size_t i = 0; i < 4096; i++) ((uint8_t *)(uintptr_t)frame)[i] = 0;
+
+    if (!vmm_map_user_page(pml4_phys, page, frame)) {
+        pmm_free_frame(frame);
+        return 0;
+    }
+    return 1;
+}
+
+void uheap_fault_init(void) { vmm_set_fault_handler(uheap_fault); }
 
 int sys_yield(struct syscall_ctx *c) {
     // Reuse the timer's exact rotation instead of inventing a second
@@ -318,6 +365,30 @@ int sys_waitpid(struct syscall_ctx *c) {
     return 0;
 }
 
+// SYS_SLEEP -- park for `ms` milliseconds.
+//
+// The deadline is computed HERE, from the clock, rather than being
+// counted down per tick: a sleeper that is not running cannot decrement
+// anything, and a duration counted in ticks drifts with whatever else
+// the machine is doing. Same reasoning as uapp's timers computing the
+// next firing from now.
+//
+// A caller with no scheduler slot gets -1 rather than an instant
+// return. Returning 0 would say "you slept", which is a lie a polling
+// loop would then spin on; -1 makes the refusal visible.
+int sys_sleep(struct syscall_ctx *c) {
+    int64_t ms = (int64_t)c->a0;
+    if (ms < 0) ms = 0;
+    if (ms > SYS_SLEEP_MAX_MS) ms = SYS_SLEEP_MAX_MS;
+
+    uint64_t deadline = clocksource_now_ns() + (uint64_t)ms * 1000000ull;
+    if (!scheduler_sleep_current(c->regs, deadline)) {
+        c->regs[14] = (uint64_t)-1;
+        return 0;
+    }
+    return 1; // parked -- scheduler_wake_timers() writes the 0 return
+}
+
 // The legacy heap's "armed for this pml4" bookkeeping. Not part of the
 // address space itself, even though the PAGES it describes are and get
 // freed with everything else.
@@ -331,6 +402,5 @@ void proc_syscall_release(uint64_t pml4_phys) {
     if (g_heap_pml4 == pml4_phys) {
         g_heap_pml4 = 0;
         g_legacy_heap.brk = 0;
-        g_legacy_heap.mapped_end = 0;
     }
 }

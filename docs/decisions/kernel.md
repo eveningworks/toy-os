@@ -2432,3 +2432,206 @@ is off `apps/`'s include path, so `vmm.h` is unreachable from there.
 That boundary was right: walking page tables is not something an app may
 do. The walk is `kernel/mm/mm_audit.c` and `apps/` sees one function
 that prints a report.
+
+## init idles with SYS_SLEEP, and the alternatives were both worse
+
+Stage 1 of `docs/init-design.md` gives toy-os an init at pid 1 whose job
+is to reap orphans. The plan said it "reaps orphans in a `waitpid(-1)`
+loop and otherwise sleeps", and building it found that *there was no
+otherwise*: nothing in this ABI could sleep.
+
+`waitpid(-1)` blocks perfectly well while init has children. The problem
+is the other state, which at stage 1 is nearly all of the time -- the
+desktop is still started by `gui` from the kernel context, so init is
+nobody's parent until some process dies leaving children behind. And
+"no children at all" is a permanent -1 by design (stage 0 wrote that ABI
+comment deliberately: a caller conflating it with "not yet" either spins
+forever or stops reaping).
+
+Three ways out, and the cost of each is what decided it:
+
+- **Yield-spin.** No new mechanism, and init then runs flat out forever.
+  This repo has already paid for one process reading a fake 100% CPU and
+  the confusion it caused; making pid 1 permanently busy would poison
+  every CPU figure in Task Manager and every measurement taken from one.
+- **Let `waitpid(-1)` park with no children**, woken by any exit --
+  which is what `scheduler_wake(SCHED_WAIT_CHILD, ...)` already
+  broadcasts, so it is SIGCHLD in all but name and costs zero idle
+  wakeups. Rejected because it contradicts the documented answer for
+  every OTHER caller: a program asking "do I have children?" would hang
+  instead of being told no, and the trap is invisible at the call site.
+- **A real sleep.** `SYS_SLEEP` parks on a deadline and the timer tick
+  releases it.
+
+The third is what real systems have, even though none of them idles
+their init this way: Linux's init blocks in `epoll_wait` and is woken by
+SIGCHLD, because it has file descriptors and signals to wait on. toy-os
+has neither, so the honest primitive is a clock. init blocks in
+`waitpid(-1)` when it has children and sleeps when it does not, which is
+also the shape stage 2 needs -- a restart rate limit ("N restarts in T
+seconds") is a clock, not an event.
+
+**The design points inside it.** The deadline is computed once, from
+`clocksource_now_ns()`, rather than counted down per tick: a sleeper is
+not running and cannot decrement anything, and a duration counted in
+ticks drifts with whatever else the machine is doing. The wake is
+deadline-aware and therefore separate from `scheduler_wake()`, which
+releases *every* process parked on a reason -- right for "a pipe has
+data", wrong for "it is 09:00". The resolution is one timer tick and a
+sleep never returns EARLY, because programming a one-shot timer per
+sleeper is a real tickless design this kernel does not have; promising
+better precision than the clock the wake loop runs on would be a lie.
+And a caller with no scheduler slot -- the legacy loader, kernel code --
+gets -1 rather than an instant return, because returning 0 would say
+"you slept" and a polling loop would spin on it. That is why
+`/tests/sleep_test` is excluded from `usertest_run.py`, which drives
+everything through `run`.
+
+## A fire-and-forget spawn is handed to init at the CALL SITE, not in the spawner
+
+Adoption fixes orphans -- children whose parent died. It does nothing
+for the other way a zombie becomes permanent: a parent that is alive and
+simply never waits.
+
+The kernel context is exactly that parent, permanently. It is not a
+process, so it never dies (nothing to trigger adoption) and it can never
+call `waitpid` (nothing to trigger a reap). The shell's `spawn` is
+fire-and-forget by definition, so before this every `spawn` leaked a
+process-table slot the moment its child exited -- silently, until the
+table filled up. `tools/init_test.py` caught it on its first run, as
+`{2: (0, 'zombie', 'orphan_test')}` left behind after the four children
+it abandoned had all been reaped correctly.
+
+The obvious fix is to have `scheduler_spawn()` give every
+kernel-context spawn a ppid of init. That is wrong, and the reason is
+worth keeping: **`gui` and the KTESTs spawn and then poll the pid
+themselves.** `scheduler_poll_any()` reaps any zombie whose ppid names
+init, so init would race those callers for the corpse -- `gui3_main()`
+would report a bogus exit code for a desktop that exited cleanly, and
+`proctree_test.c`'s assertions on `scheduler_poll(parent)` would fail
+intermittently.
+
+So the choice belongs to the call site, which is the only place that
+knows whether it intends to wait: `cmd_spawn()` calls
+`scheduler_reparent(pid, scheduler_init_pid())` and `gui` does not.
+That is what `scheduler_reparent()` was built for -- adoption as a
+deliberate act rather than a policy applied to everyone.
+
+## Init is refused by ASKING which pid it holds, not by testing `pid == 1`
+
+`scheduler_kill()` refuses init, as Linux discards SIGKILL to pid 1 and
+for the same reason: killing it leaves every orphan unreapable and
+nothing supervising anything.
+
+It is written as `pid == g_init_pid`, with `g_init_pid` set once from
+`kernel_main()` after the spawn succeeds. Testing `pid == 1` would have
+been shorter and would have been wrong on the boot that matters most --
+the one where `/bin/init` is missing or fails to spawn. That boot is
+supported and deliberately quiet: `scheduler_init_pid()` stays 0, so
+orphans are left parentless exactly as they were before init existed,
+slot 0 is an ordinary process again, and nothing is mysteriously
+unkillable. A hardcoded 1 would have made whatever landed in slot 0 on
+such a boot -- the desktop, most likely -- refuse to die, with no
+mechanism anywhere naming why.
+
+The same reasoning runs through `reparent_children()` (the heir is
+`g_init_pid`, which is 0 when there is no init, which is the old
+behaviour exactly) and through `proctree_test.c`, whose adoption check
+asks for the heir rather than hardcoding either value -- so one test
+covers a normal boot and a boot with no init.
+
+## sbrk RESERVES and the page arrives on touch -- and the copy helpers need the hook, not just the fault
+
+The heap was ~14 MiB per process, bounded by where `WIN_CLIENT_BASE`
+happened to sit, and `SYS_SBRK` mapped a frame for every page it moved
+past. Both halves had to change together, and the second is why:
+reserving ~2 GiB is only affordable because nothing is spent until it is
+touched. A limit raised without demand paging would have meant handing
+2 GiB of real frames to a process that asked for address space.
+
+**What sbrk does now.** It moves a number and maps nothing. The break is
+the process's claim; the frame arrives on first touch. The consequence
+to know is that **sbrk can no longer report out of memory** -- it
+refuses only a request past `UADDR_HEAP_LIMIT`, and the machine running
+out is discovered at a page that cannot be given, which kills that
+process. That is overcommit. Linux makes the same trade and backs it
+with an OOM killer; here the fault is fatal to the process that took it,
+which is a smaller blast radius than a kernel that cannot allocate.
+
+**THE PART THAT IS EASY TO MISS: most of this kernel's user-memory
+access never faults.** Ring 0 does not dereference user pointers -- it
+walks the page tables and copies through its own identity map, which is
+what makes SMAP absolute here with no STAC/CLAC window. So a buffer that
+`sbrk` reserved and ring 3 has not touched, handed to `sys_read()`,
+produces no #PF at all: it produces a walk that finds nothing, and the
+syscall reports a perfectly legal buffer as a bad pointer. Demand paging
+that only hooks the fault handler silently breaks every syscall taking a
+caller-allocated buffer.
+
+Hence a registered hook (`vmm_set_fault_handler`, the same shape as
+`display_driver` and `block_device`) rather than a line in `idt.c`, with
+three callers: the #PF handler, `user_phys_of()` inside the copy
+helpers, and `vmm_validate_user_range()`. vmm cannot answer "is this
+address inside somebody's heap" itself -- the break lives in the process
+layer -- so that layer registers the answer.
+
+**Its positive control is worth repeating before touching any of it.**
+Disabling the retry in `user_phys_of()` ALONE reddens nothing, because
+`sys_proc_info()` validates its pointer first and the validate path has
+its own fault-in. Both had to be disabled for `guard_test`'s two new
+checks to fail -- and they were the only two that failed, which is what
+makes them load-bearing. A redundant path is exactly the shape that
+makes a control look like it is measuring nothing.
+
+**Two bounds, deliberately.** `sys_sbrk()` refuses a request past the
+limit, and the fault handler independently refuses any address outside
+`[UADDR_HEAP_BASE, UADDR_HEAP_LIMIT)` and past the caller's own break.
+Either alone would do on a correct kernel; together, a bug in one still
+cannot map a page over the stack, which is the failure this heap has
+already had once.
+
+**And `mapped_end` was DELETED rather than kept.** `struct sched_heap`
+tracked how far pages had actually been allocated behind the break. With
+demand paging the page tables already record which pages exist, and a
+second record of the same fact can only ever disagree with them --
+silently, and in the direction that matters (a page believed mapped that
+is not). Same instinct as deleting the `fb_present_pending` flag that
+duplicated `gfx.c`'s dirty box.
+
+## The ring-3 map is sized for 4K, and the compositor region is why it had to be re-read as a whole
+
+Raising the heap meant moving `WIN_CLIENT_BASE`, and the first attempt
+moved it to `0x8080000000` -- straight into the middle of the
+compositor's region. `WIN_COMPOSITOR_BASE` was `0x8010000000` and spans
+`WIN_COMPOSITOR_MAX_PIDS * WIN_CLIENT_MAX * WIN_BUFFER_STRIDE`, which
+was 2 GiB. The space below it looked spare and was not.
+
+**The rule that falls out: in a map of derived regions, what the next
+thing must clear is a region's END, never its base.** Three of the four
+windowing addresses here are computed (`WIN_FONT_VADDR` from the client
+base and stride; every window's address from the pair (pid, id)), so a
+constant that looks isolated is the start of a range whose size lives
+somewhere else entirely.
+
+While the addresses were moving anyway, the map was sized for a 4K
+display rather than for today's 1280x720, because virtual address space
+is the one resource here that costs nothing:
+
+- `WIN_BUFFER_STRIDE` 8 MiB -> 64 MiB. A 3840x2160x4 buffer is 31.6 MiB,
+  so the old stride could not hold one however the other caps were set.
+- `WIN_CLIENT_BASE` -> `0x8080000000`, `WIN_COMPOSITOR_BASE` ->
+  `0x80A0000000` (16 GiB), `WIN_FB_VADDR` -> `0x8500000000`.
+- The heap gets everything below the stack: ~2046 MiB.
+
+Everything still sits inside one PML4 entry, with ~468 GiB spare above
+the framebuffer.
+
+**What this does NOT do is make 4K work**, and saying so is the point of
+writing it down. Two things still bound it, neither of them addressing:
+`WIN_CLIENT_MAX_W/H` is 1280x720, and a window buffer comes from
+`pmm_alloc_contiguous()` -- 31.6 MiB is 8192 CONTIGUOUS frames from a
+bitmap allocator with no buddy system, which fragmentation can refuse,
+silently and by design (a refusal is a normal protocol outcome,
+indistinguishable from a client declining). Raising the caps before
+buffers are non-contiguous would convert a hard limit into an
+intermittent silent failure, which is worse. See `docs/roadmap.md`.

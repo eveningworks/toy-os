@@ -84,11 +84,33 @@ KTEST("reloc", "a relocated kernel is where it says it is") {
 // paging_enforce_wx() and vmm_map_user_page() make would land in a
 // table nobody walks. Nothing faults; W^X just silently stops applying.
 // Asserting the CPU and the symbols agree is the whole test.
-KTEST("reloc", "CR3 walks the same page tables the symbols name") {
+// It compares the KERNEL ENTRY rather than CR3 itself, and that is not
+// a weakening -- it is what makes the test survive a process existing.
+// The kernel context runs under whatever CR3 was last loaded (correct:
+// every user PML4 shares kernel entry 0, see vmm.h), so `cr3 ==
+// p4_table` holds only on a boot where nothing has ever been scheduled.
+// It stopped being true the moment init became pid 1, and would have
+// been silently false for any suite run after a `spawn` long before
+// that.
+//
+// Entry 0 keeps the property intact: it is the pointer to the kernel's
+// own p3 table, so a relocation that copied the tables and forgot to
+// repoint CR3 would leave the live tables naming the ABANDONED image's
+// p3 -- a different physical address from the one the relocated
+// p4_table names. That is exactly the bug being guarded against.
+KTEST("reloc", "the live page tables are the ones the symbols name") {
     extern uint64_t p4_table[512];
     uint64_t cr3;
     __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
-    KTEST_ASSERT((cr3 & ~0xFFFULL) == ((uint64_t)(uintptr_t)p4_table & ~0xFFFULL));
+
+    uint64_t *live = (uint64_t *)(uintptr_t)(cr3 & ~0xFFFULL);
+    KTEST_ASSERT(live[0] != 0);          // a kernel entry at all
+    KTEST_ASSERT_EQ(live[0], p4_table[0]); // and the same one
+
+    // The stronger `cr3 == p4_table` this test used to make is NOT kept
+    // as a conditional: init exists on every boot from here, so the
+    // condition would never be true and a check that cannot run is
+    // worse than one that is honest about what it asserts.
 }
 
 KTEST("reloc", "the table sits between its own linker symbols") {

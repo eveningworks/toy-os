@@ -248,6 +248,16 @@ int sys_waitpid(int pid, int *out_code);
 // caller wants.
 int sys_waitpid_nohang(int pid, int *out_code);
 
+// Sleeps for `ms` milliseconds, then returns 0. Returns -1 if the
+// caller has no scheduler slot to park in.
+//
+// Never returns EARLY, and never returns LATE by more than one timer
+// tick -- the kernel wakes sleepers from the tick, so that is the
+// resolution available. For an idle loop with nothing to wait on; if
+// there IS something to wait on (a child, a pipe, an event), block on
+// that instead and the process consumes nothing at all.
+int sys_sleep_ms(int ms);
+
 // --- windowing -------------------------------------------------------
 
 // One typed message in, one out. See abi/win_proto.h.

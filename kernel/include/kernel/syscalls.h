@@ -113,6 +113,12 @@ int sys_kill(struct syscall_ctx *c);
 int sys_proc_info(struct syscall_ctx *c);
 int sys_ticks(struct syscall_ctx *c);
 int sys_monotonic_ns(struct syscall_ctx *c);
+int sys_sleep(struct syscall_ctx *c);
+
+// Registers the heap's demand-paging handler with vmm. Called once from
+// kernel_main(); until it runs, a heap page fault is fatal exactly as
+// any other unmapped access is.
+void uheap_fault_init(void);
 
 // kernel/proc/win_syscalls.c -- windows, events, and the raw keyboard
 int sys_gui_init(struct syscall_ctx *c);

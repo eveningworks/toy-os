@@ -215,6 +215,9 @@ struct sched_process {
     // is not tidiness -- see its comment for the stale-pid bug it
     // exists to prevent.
     int ppid;
+    // When a SCHED_WAIT_TIMER sleeper wants to be woken, in
+    // clocksource nanoseconds. Meaningless in any other state.
+    uint64_t wake_at_ns;
     // Pipe index this process's stdout goes to, or -1 for the console.
     // Lives here rather than in the fd table because fd 1 has always
     // been a hardcoded console in SYS_WRITE -- see scheduler.h.
@@ -262,6 +265,17 @@ static struct sched_process procs[MAX_PROCS];
 
 // Defined further down, beside scheduler_kill() -- its other caller.
 static void reparent_children(int dead_pid);
+
+// The pid init holds, or 0 on a boot that has no init (nothing spawned
+// it, or /bin/init is missing). Everything that treats pid 1 specially
+// asks this rather than testing `pid == 1`, so a boot without an init
+// behaves exactly as this kernel did before one existed -- rather than
+// adopting orphans to a pid nobody is running and refusing to kill
+// whatever happens to be in slot 0.
+static int g_init_pid = 0;
+
+int scheduler_init_pid(void) { return g_init_pid; }
+void scheduler_set_init_pid(int pid) { g_init_pid = pid; }
 
 // When the CURRENT occupant of the CPU (a process, or the kernel
 // context when current_index is -1) started running, in clocksource
@@ -707,7 +721,6 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_pipe) {
     // in the spawn path ever armed a heap, so SYS_SBRK refused every
     // scheduled process.
     procs[slot].heap.brk = UADDR_HEAP_BASE;
-    procs[slot].heap.mapped_end = UADDR_HEAP_BASE;
     procs[slot].state      = SCHED_READY;
     alive_count++;
     return slot;
@@ -798,7 +811,14 @@ static void bill_current(void) {
 // see bill_current() above.
 static void scheduler_rotate(uint64_t *regs);
 
-void scheduler_tick(uint64_t *regs) { scheduler_rotate(regs); }
+void scheduler_tick(uint64_t *regs) {
+    // BEFORE the rotation, and outside scheduler_rotate()'s armed
+    // check: a sleeper's deadline has nothing to do with whether the
+    // scheduler is currently rotating, and a woken process wants to be
+    // eligible for the switch this very tick rather than the next one.
+    scheduler_wake_timers(clocksource_now_ns());
+    scheduler_rotate(regs);
+}
 
 // SYS_YIELD's entry into the same rotation. Distinct from the tick only
 // so the call sites read honestly; the accounting difference that used
@@ -959,6 +979,48 @@ int scheduler_block_current(uint64_t *regs, int reason) {
     return 1;
 }
 
+// SYS_SLEEP's half of the block/wake pair: park until a DEADLINE rather
+// than until an event.
+//
+// It is a separate entry point from scheduler_block_current() only
+// because the deadline has to be recorded somewhere before the switch,
+// and a wait reason cannot carry it: scheduler_wake() releases every
+// process parked on a reason at once, which is right for "a pipe has
+// data" and wrong for "it is 09:00" -- two sleepers almost never share
+// an instant.
+int scheduler_sleep_current(uint64_t *regs, uint64_t wake_at_ns) {
+    if (current_index < 0) return 0;
+    procs[current_index].wake_at_ns = wake_at_ns;
+    return scheduler_block_current(regs, SCHED_WAIT_TIMER);
+}
+
+// The deadline-aware counterpart of scheduler_wake(), called once per
+// timer tick. Returns how many sleepers it released.
+//
+// Same restraint as scheduler_wake() and for the same reason: this runs
+// in the timer IRQ, so it only flips state and writes an already-saved
+// trapframe. The woken process runs at the next ordinary rotation.
+//
+// The sleep's RESOLUTION is therefore one tick -- a process asking for
+// 1 ms sleeps until the next tick, never less. That is deliberate:
+// programming a one-shot timer per sleeper is a real tickless design
+// and this kernel does not have one, so a caller gets no more precision
+// than the clock this loop runs on.
+int scheduler_wake_timers(uint64_t now_ns) {
+    int woken = 0;
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (procs[i].state != SCHED_BLOCKED) continue;
+        if (procs[i].wait_reason != SCHED_WAIT_TIMER) continue;
+        if (procs[i].wake_at_ns > now_ns) continue;
+
+        uint64_t *tf = (uint64_t *)(uintptr_t)procs[i].kernel_rsp;
+        tf[TF_RAX] = 0; // slept as asked -- SYS_SLEEP returns 0
+        procs[i].state = SCHED_READY;
+        woken++;
+    }
+    return woken;
+}
+
 // Wakes every process blocked on `reason`, giving each `value` as its
 // blocking syscall's return value. Returns how many were woken (0 is
 // perfectly normal -- an event with nobody waiting on it).
@@ -1054,6 +1116,19 @@ struct sched_heap *scheduler_current_heap(void) {
     return &procs[current_index].heap;
 }
 
+// The heap behind a given address space. Walks the table because the
+// caller (a page fault, or a copy helper) has a pml4 and not a pid --
+// and a ZOMBIE is skipped deliberately: its address space is already
+// destroyed, so a fault naming it is a stale mapping, not a heap page.
+struct sched_heap *scheduler_heap_for_pml4(uint64_t pml4_phys) {
+    if (!pml4_phys) return 0;
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (procs[i].state == SCHED_UNUSED || procs[i].state == SCHED_ZOMBIE) continue;
+        if (procs[i].pml4_phys == pml4_phys) return &procs[i].heap;
+    }
+    return 0;
+}
+
 int scheduler_spawn(const char *path, const char *args) {
     return scheduler_spawn_piped(path, args, -1);
 }
@@ -1102,17 +1177,30 @@ int scheduler_pid_valid(int pid) {
 // the child claims to be the new process's child -- and a waitpid(-1)
 // from that new process would hand it somebody else's corpse.
 //
-// They become parentless (ppid 0) rather than being adopted, because
-// there is nothing to adopt them yet. Stage 1 of docs/init-design.md
-// introduces init as pid 1 and changes this one line to name it, which
-// is when an orphan starts being reaped instead of holding its slot.
+// They are adopted by INIT when there is one, and become parentless
+// (ppid 0) when there is not -- which is every boot before init is
+// spawned, and any boot where /bin/init is missing. Adoption is what
+// makes an orphan reapable: a zombie is only ever reaped by somebody
+// waiting for it, so a corpse whose parent is 0 holds its slot for the
+// rest of the boot.
+//
+// Init adopting ITSELF is impossible (it has no parent to die), but
+// init dying would hand its children to itself; the guard below keeps
+// the tree acyclic whatever happens.
 static void reparent_children(int dead_pid) {
     if (dead_pid <= 0) return;
+    int heir = (g_init_pid != dead_pid) ? g_init_pid : 0;
     for (int i = 0; i < MAX_PROCS; i++) {
         if (procs[i].state != SCHED_UNUSED && procs[i].ppid == dead_pid) {
-            procs[i].ppid = 0;
+            procs[i].ppid = heir;
         }
     }
+    // An adopted ZOMBIE is one init can reap immediately, and it may be
+    // parked in waitpid(-1) right now with no children of its own -- in
+    // which case it was told "never" and is asleep on a timer instead.
+    // Waking child-waiters here is what turns adoption into a reap
+    // rather than a slot that frees at init's next poll.
+    if (heir) scheduler_wake(SCHED_WAIT_CHILD, SYS_RETRY);
 }
 
 // Give `pid` a new parent. 0 means "no parent".
@@ -1171,6 +1259,13 @@ int scheduler_kill(int pid, int exit_code) {
     // SYS_EXIT. Refused rather than half-implemented: the caller here is
     // the window manager, which is never the process it is killing.
     if (slot == current_index) return 0;
+
+    // Killing init would leave every orphan unreapable and nothing
+    // supervising anything, so it is refused -- Linux's rule (SIGKILL
+    // to pid 1 is discarded), for the same reason. Refused by ASKING
+    // which pid init holds rather than testing `pid == 1`, so a boot
+    // with no init leaves slot 0 an ordinary process.
+    if (pid == g_init_pid) return 0;
 
     if (procs[slot].state != SCHED_READY && procs[slot].state != SCHED_BLOCKED)
         return 0; // unused, already a zombie, or running (handled above)

@@ -19,12 +19,20 @@
 // The map, low to high:
 //
 //     UADDR_HEAP_BASE   0x8000100000   heap, grows UP via SYS_SBRK
-//         ...                          (~14 MiB, minus the guard)
+//         ...                          (~2046 MiB, minus the guard)
 //     UADDR_HEAP_LIMIT                 sbrk refuses at or past here
 //     UADDR_GUARD_BASE                 UADDR_GUARD_PAGES unmapped pages
 //     UADDR_STACK_BOTTOM               lowest mapped stack page
 //         ...                          stack, grows DOWN
-//     UADDR_STACK_VADDR 0x8000F00000   TOP page: argv, and RSP at entry
+//     UADDR_STACK_VADDR 0x807FF00000   TOP page: argv, and RSP at entry
+//
+// **HEAP PAGES ARE NOT MAPPED BY sbrk.** The break is a RESERVATION;
+// the frame arrives on the first touch, through vmm's fault-in hook.
+// So the span above is address space, not memory -- a process may
+// reserve far more than the machine has, and finds out on the page it
+// cannot be given rather than at the sbrk call. That is overcommit, and
+// it is the only reason a 2 GiB reservation is affordable at all; see
+// docs/decisions.md.
 //
 // **The guard region is defined by being UNMAPPED, and that is the
 // whole mechanism** -- there is no PTE to set, because a page that was
@@ -42,22 +50,21 @@
 
 // TOP page; the stack grows DOWN.
 //
-// It was 0x8000200000, which left the heap below it exactly 1 MiB. That
-// was fine for as long as the only ring-3 allocation was a few KiB, and
-// it stops being fine at Milestone 41 stage 4b: R1 assigns the back
-// buffer to the COMPOSITOR, and one screen's worth of 32bpp pixels is
-// 3.5 MiB at 1280x720 and 8.3 MiB at 1920x1080 -- so a ring-3
-// compositor could not allocate the one buffer it exists to own.
+// It has moved twice, and both times the heap below it was the reason.
+// It was 0x8000200000 (1 MiB of heap), which stopped being enough at
+// Milestone 41 stage 4b -- a ring-3 compositor's back buffer is 3.5 MiB
+// at 1280x720 and 8.3 MiB at 1920x1080, so it could not allocate the
+// one buffer it exists to own. Then 0x8000F00000 (~14 MiB), which held
+// a 1080p back buffer but not that AND the damage-verify scratch copy
+// at the same time (8.3 + 8.3 > 14).
 //
-// Moved up into the gap that was already free: nothing lives between
-// here and WIN_CLIENT_BASE (0x8001000000, abi/win_proto.h), whose own
-// comment says so. The heap is ~14 MiB now, which holds a 1080p back
-// buffer plus the WM's window table with room to spare. What does NOT
-// fit is a 1080p back buffer AND the damage-verify scratch copy at the
-// same time (8.3 + 8.3 > 14) -- that is debug-only and fails by
-// reporting rather than by faulting, and raising WIN_CLIENT_BASE is the
-// lever if it ever needs to.
-#define UADDR_STACK_VADDR   0x8000F00000ULL
+// It is 0x807FF00000 now, one MiB below WIN_CLIENT_BASE, which the same
+// change moved to 0x8080000000. That leaves ~2046 MiB of heap -- more
+// than any machine this OS boots on has, which is the point: the limit
+// stops being an arbitrary constant somebody has to keep raising and
+// becomes physical memory. It is affordable only because sbrk no longer
+// maps what it reserves.
+#define UADDR_STACK_VADDR   0x807FF00000ULL
 
 // How many pages of user stack a process gets.
 //

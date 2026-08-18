@@ -224,17 +224,57 @@ next tenant -- whose `waitpid(-1)` would then reap somebody else's
 child. That is testable today, with no init anywhere, and it is what
 the fourth KTEST asserts.
 
-### Stage 1 -- init as pid 1 (R4, R5, R6 minimum)
+### Stage 1 -- init as pid 1 (R4, R5, R6 minimum) -- DONE 2026-08-18
 
 `/bin/init`, spawned from `kernel_main()` before anything else so it
 holds slot 0. It reaps orphans in a `waitpid(-1)` loop and otherwise
 sleeps. `scheduler_kill()` refuses pid 1.
 
-**This is where something visible breaks -- see below.**
+**Exit criterion:** pid 1 is init on every boot; a spawned program that
+nobody waits on is reaped rather than holding its slot for the rest of
+the boot; `kill 1` is refused. **All met** --
+`tools/init_test.py` asserts all three plus the slot balance, and
+`kernel/proc/proctree_test.c` gained two KTESTs (init is unkillable; an
+orphan is adopted AND reapable by init).
 
-**Exit criterion:** pid 1 is init on every boot; a `gui spawn`ed
-program that nobody waits on is reaped rather than holding its slot for
-the rest of the boot; `kill 1` is refused.
+Four things came out of building it that the plan did not predict.
+
+**init needed a way to IDLE, and there was none.** `waitpid(-1)` blocks
+while it has children, but at this stage it usually has none -- and the
+no-children answer is a permanent -1 by design, so there is nothing to
+block on. The alternatives were a yield-loop (burns a core forever and
+makes every CPU figure in the system meaningless) or extending
+`waitpid(-1)` to park with no children, which contradicts the ABI
+comment stage 0 had just written. So **`SYS_SLEEP` exists now**: park on
+a deadline, woken from the timer tick, resolution one tick. init blocks
+in `waitpid(-1)` when it has children and sleeps when it does not,
+which is the shape a supervising init should have anyway.
+
+**A fire-and-forget spawn from the KERNEL context had no reaper, and
+adoption does not fix it.** Adoption only happens when a parent dies,
+and the kernel context is not a process -- it never dies and can never
+wait. So the shell's `spawn` left a zombie per invocation, exactly as
+before. The fix is one line at the call site that knows it will never
+wait (`cmd_spawn()` reparents to init), deliberately NOT inside
+`scheduler_spawn()`: `gui` and the KTESTs spawn and then poll the pid
+themselves, and handing those children to init would let it reap a
+corpse out from under the code waiting for it.
+
+**The first version of the reap check was not load-bearing.** It asked
+for at least one reap, and stayed GREEN with adoption removed entirely,
+because the `spawn` fix above produces one reap on its own. It counts
+against what the fixture says it abandoned now. The control reddens 2
+of 11.
+
+**A KTEST elsewhere assumed no process had ever run.** `reloc_test.c`
+asserted `CR3 == p4_table`, which holds only while nothing has been
+scheduled -- the kernel context runs under whatever CR3 was last
+loaded, correctly, since every user PML4 shares kernel entry 0. init
+made that false on every boot. Verified pre-existing by spawning any
+process on `HEAD` and watching it fail identically; the check compares
+the kernel PML4 ENTRY now, which keeps the property it was written for
+(a relocation that forgot CR3 would leave the live tables naming the
+abandoned image's p3).
 
 ### Stage 2 -- init supervises the tree, and starts a TARGET (R7a)
 
@@ -292,13 +332,11 @@ working throughout.
 Stated up front because one of these is load-bearing in the docs and
 the test suite.
 
-- **`kill 1` stops meaning "restart the desktop", at stage 1.** pid 1
-  becomes init, which refuses to die. Today `kill 1` is how the
-  desktop is killed, and it is documented in `docs/commands.md`, in
-  `CLAUDE.md` as Milestone 41's exit criterion, and asserted by
-  `tools/compositor_death_test.py`. All three move to killing the
-  desktop by looked-up pid instead -- which is a better test anyway,
-  since it stops depending on spawn order.
+- **`kill 1` stopped meaning "restart the desktop", at stage 1.** pid 1
+  is init, which refuses to die. `docs/commands.md` and `CLAUDE.md` say
+  so now; `tools/compositor_death_test.py` already looked the pid up
+  rather than assuming 1, which is why it needed no change -- and is
+  the reason to look a pid up in general.
 - **Every process gains a parent at stage 0**, including ones spawned
   by the kernel, which get ppid 0. Anything that assumed a flat process
   list is unaffected, but `proc_info`'s struct grows -- and that is an

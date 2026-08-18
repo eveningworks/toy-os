@@ -1903,6 +1903,15 @@ void cmd_kill(const char *args) {
     for (int i = 0; scheduler_proc_info(i, &info); i++) {
         if (info.pid == (int)pid) { k_strlcpy(name, info.name, sizeof name); break; }
     }
+    // Named separately from the generic refusal below: "init cannot be
+    // killed" is a rule, where the others are states that will pass.
+    // Telling them apart is the difference between a user trying again
+    // and a user trying something else.
+    if ((int)pid == scheduler_init_pid()) {
+        vga_printf("kill: refused -- pid %u is init, which is unkillable "
+                    "(orphans would stop being reaped)\n", pid);
+        return;
+    }
     if (!scheduler_kill((int)pid, -1)) {
         vga_printf("kill: refused for pid %u -- it is the running process, or "
                     "already a zombie\n", pid);
@@ -1953,6 +1962,22 @@ void cmd_spawn(const char *args) {
         vga_printf("spawn: could not start %s -- is it there? (`ls`)\n", path);
         return;
     }
+    // HAND IT TO INIT. This command spawns from the kernel context,
+    // which is not a process and can therefore never wait for anything
+    // -- so without this the child becomes a zombie holding its slot
+    // for the rest of the boot the moment it exits. Nothing would say
+    // so: a fire-and-forget spawn looks identical either way until the
+    // table fills up.
+    //
+    // Deliberately NOT done inside scheduler_spawn() for every
+    // kernel-context spawn: `gui` and the KTESTs spawn and then poll
+    // the pid themselves, and giving those children to init would let
+    // it reap a corpse out from under the code that is waiting for it.
+    // The choice belongs at the call site that knows whether it will
+    // wait, which is what scheduler_reparent() is for.
+    int heir = scheduler_init_pid();
+    if (heir > 0) scheduler_reparent(pid, heir);
+
     // The pid, because the caller's next move is usually to wait for it
     // or to kill it, and both need the number.
     vga_printf("spawn: %s started as pid %d (not waited for -- `kill %d` to end it)\n",

@@ -254,6 +254,10 @@ int sys_waitpid(int pid, int *out_code) {
     return (int)r;
 }
 
+int sys_sleep_ms(int ms) {
+    return (int)syscall1(SYS_SLEEP, (uint64_t)(int64_t)ms);
+}
+
 int sys_waitpid_nohang(int pid, int *out_code) {
     // NO retry loop, deliberately: SYS_RETRY is the answer here ("still
     // running"), not a signal to ask again. Looping on it is exactly the

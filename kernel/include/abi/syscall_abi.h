@@ -713,6 +713,36 @@ struct dirent {
                           // mounted, so 0 is usable as "not sampled
                           // yet"; it only ever increases.
 
+#define SYS_SLEEP 40 // RDI = milliseconds. Parks the caller until that
+                          // long has passed, then returns 0. Returns -1
+                          // for a caller with no scheduler slot (the
+                          // legacy loader, kernel code), which is a
+                          // refusal rather than an instant return: a
+                          // caller that cannot sleep must decide what to
+                          // do instead, not silently spin.
+                          //
+                          // The RESOLUTION is one timer tick, so a 1 ms
+                          // sleep lasts until the next tick and a sleep
+                          // never returns EARLY. 0 ms is a valid
+                          // request and means "until the next tick",
+                          // which is a yield that gives up the rest of
+                          // the slice rather than re-entering the
+                          // rotation immediately -- SYS_YIELD is still
+                          // the call for the latter.
+                          //
+                          // Why this exists: an idle loop with nothing
+                          // to wait ON had no way to stop consuming CPU.
+                          // init spends most of its life in exactly that
+                          // state -- it blocks in waitpid(-1) while it
+                          // has children and has nothing to block on
+                          // when it does not. See docs/init-design.md.
+
+// The longest single SYS_SLEEP, one hour. Not a security limit: it
+// keeps a garbage argument from parking a process for the rest of the
+// boot, which looks exactly like a hang. A caller wanting longer calls
+// it again.
+#define SYS_SLEEP_MAX_MS 3600000
+
 // The number of process-table slots SYS_PROC_INFO can be asked about.
 // Mirrors the kernel's SCHED_MAX_PROCS; a caller loops 0..this-1.
 #define SYS_PROC_MAX 64

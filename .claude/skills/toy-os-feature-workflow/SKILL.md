@@ -2378,8 +2378,10 @@ Where the project stands now, so a session does not re-derive it:
   `gui kill` cannot end the WM (dispatched from inside its own loop, and
   `scheduler_kill()` refuses the CURRENT process) and `run` cannot start
   one (the legacy loader is not a scheduled process, so its
-  `win_request()` is refused). `kill 1` then
-  `spawn /bin/wm/system/toywm` kills and restarts the desktop.
+  `win_request()` is refused). `ps` for the desktop's pid, `kill <pid>`
+  then `spawn /bin/wm/system/toywm` kills and restarts it -- it was
+  `kill 1` until init took pid 1 (docs/init-design.md stage 1), which is
+  the argument for looking a pid up rather than assuming one.
 - **Settings are namespaced**: identity is (namespace, name), the
   namespace being the registered name of the file, so `system.font_size`.
   A bare name works when unique and is REFUSED when ambiguous.

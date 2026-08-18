@@ -17,19 +17,33 @@
 // pattern the memory DOES hold, which turns "memory is wrong" into
 // "this is another process's data".
 //
-// What it does NOT do is exhaust the machine's RAM: SYS_SBRK is bounded
-// per process by UADDR_HEAP_LIMIT (~14 MiB), so one copy tests the
-// bound and its own integrity. Filling a machine takes several copies
-// at once -- tools/mem_stress.py drives that, with a smaller guest so
-// the total is actually reachable.
+// **IT TAKES A DEFAULT CAP, and that is not timidity.** SYS_SBRK's
+// bound is ~2 GiB of ADDRESS SPACE now, and the break is a reservation
+// -- pages arrive on touch. So "take everything sbrk will give and
+// write to all of it" stopped meaning "test the bound" and started
+// meaning "try to allocate every frame in the machine", which ends with
+// this process killed on a fault it cannot be given a page for. The
+// bound is still tested, by asking for an increment nothing could
+// satisfy and requiring the refusal; the integrity pass runs over
+// DEFAULT_CAP.
 //
-//   run/spawn: spawn /tests/memtest          (as much as sbrk allows)
+// Filling a machine deliberately takes several copies at once --
+// tools/mem_stress.py drives that, with a smaller guest so the total is
+// actually reachable.
+//
+//   run/spawn: spawn /tests/memtest          (DEFAULT_CAP MiB)
 //              spawn /tests/memtest 4        (cap at 4 MiB, for a quick pass)
+//              spawn /tests/memtest 0        (no cap -- as much as sbrk gives)
 #include "rt/sys.h"
 #include "lib/stdio.h"
 #include "lib/string.h"
 
 #define CHUNK (64 * 1024)     // one sbrk step
+
+// How much to take when nobody said. Big enough to cross many pages,
+// many page tables and the fault-in path thousands of times; small
+// enough that it is a rounding error against any machine this boots on.
+#define DEFAULT_CAP_MIB 64
 #define MIN_USEFUL_BYTES (1 << 20) // below this the test proves nothing -- see below
 
 // Invertible on purpose: salt == value ^ (va * K), so a mismatch can be
@@ -43,11 +57,11 @@ static uint64_t pattern(uint64_t va, uint64_t salt) {
 static void say(const char *s) { sys_eprint(s); }
 
 int main(int argc, char **argv) {
-    uint64_t cap = 0; // 0 = no cap
+    uint64_t cap = (uint64_t)DEFAULT_CAP_MIB << 20;
     if (argc > 1) {
         uint64_t mib = 0;
         for (const char *p = argv[1]; *p >= '0' && *p <= '9'; p++) mib = mib * 10 + (uint64_t)(*p - '0');
-        cap = mib << 20;
+        cap = mib << 20; // an explicit 0 means "no cap", as before
     }
 
     uint64_t salt = 0;
@@ -78,6 +92,18 @@ int main(int argc, char **argv) {
     snprintf(line, sizeof line, "memtest: got %lu KiB (%lu chunks), sbrk %s\n",
              got / 1024, got / CHUNK, refusals ? "refused as expected" : "capped by request");
     say(line);
+
+    // THE BOUND, asked directly. With a default cap the loop above
+    // stops before reaching UADDR_HEAP_LIMIT, so the refusal has to be
+    // provoked -- an increment no heap could hold. Without this the
+    // test would silently stop covering the limit the moment the cap
+    // was introduced, which is the fixture-too-small trap one line up
+    // arriving from the other direction.
+    if (sys_sbrk((int64_t)1 << 40) != (void *)-1) {
+        say("memtest: FAIL -- sbrk accepted a terabyte\n");
+        return 1;
+    }
+    say("memtest: sbrk refused as expected at the heap limit\n");
 
     // A run that got almost nothing cannot detect anything, and must
     // say so rather than passing: this is the fixture-too-small trap --
