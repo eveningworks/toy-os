@@ -82,6 +82,14 @@ static void dispatch(char *line) {
         args = 0;
     }
 
+    // dispatch-ok: KNOWN, and the last big chain in the tree -- see
+    // docs/roadmap.md's "The shell's command dispatch is a 60-branch
+    // chain". It is waived rather than converted because the conversion
+    // is entangled with moving the shell to ring 3: most of these
+    // commands are kernel introspection (meminfo, kstack, heap debug,
+    // ktest), so the table they want is a /proc-shaped one, not a
+    // registry of function pointers. Converting first would build the
+    // wrong table.
     if (k_strlen(cmd) == 0) {
         return;
     } else if (k_strcmp(cmd, "help") == 0) {

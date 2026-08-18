@@ -1644,6 +1644,56 @@ it serves. Small, and it makes everything above it discoverable.*
 
 ## Known issues and papercuts (unscheduled)
 
+- [ ] **The shell's command dispatch is a 60-branch chain, and the fix
+      is not the obvious one.** `apps/shell.c`'s `dispatch()` is 60
+      `else if (k_strcmp(cmd, ...))` branches whose handlers spread
+      across `shell_sys.c` (1,950 lines) and `shell_fs.c`. It is the
+      largest dispatch chain left in the tree and the one
+      `tools/check_dispatch.py` waives by name.
+
+      **It is waived rather than converted on purpose.** The obvious fix
+      -- a table of `{name, handler}`, as `kernel/proc/syscall_table.c`
+      now does for syscalls -- would be the wrong table. Most of these
+      commands are kernel INTROSPECTION (`meminfo`, `kstack`, `heap
+      debug`, `ktest`, `ata nodma`, `fsck`, `dmesg`), which is why they
+      are in the kernel at all: they read kernel state directly rather
+      than through any interface. A registry of function pointers would
+      make that permanent.
+
+      What Linux does instead is the shape worth copying: `free`, `ps`
+      and `dmesg` are ordinary userspace binaries reading `/proc` and
+      `/sys`, and the kernel exports state as FILES rather than as
+      commands. So the ordering is: a `/proc`-shaped interface, then
+      these commands become `/bin` programs one at a time, then the
+      front end follows the TTY into ring 3 -- at which point the chain
+      is gone because most of its branches are.
+
+      **Needs:** TTY / virtual terminals, for the front end. The
+      `/proc`-shaped part needs nothing outstanding and is what makes
+      the rest possible.
+
+- [ ] **Killing a process leaks its entire address space.**
+      `scheduler_kill()` sets the victim to `SCHED_ZOMBIE` and
+      `scheduler_poll()` reaps it by setting `SCHED_UNUSED`. Neither
+      calls `syscall_process_exit_cleanup()` -- that runs only when a
+      process calls `sys_exit` on itself. So a killed process's ELF
+      pages, stack, heap and any window buffer are never freed, and its
+      open fds are never released.
+
+      **Reproduction**, measured 2026-08-18: boot, `spawn
+      /bin/wm/system/toywm`, then repeatedly `gui spawn
+      /bin/wm/apps/calculator` and `gui kill <pid>`, reading `meminfo`
+      between cycles. The free-frame count falls by ~18 per cycle and
+      never recovers. A cycle that lets the app exit normally (Alt+F4,
+      the close handshake) balances exactly, which is the control that
+      identifies the kill path rather than teardown generally.
+
+      This is the reaping half of an init/PID-1 story: nothing in this
+      system is the universal reaper, and the WM only reaps what it
+      launched itself. Force Quit goes through `scheduler_kill()`, so
+      the leak is reachable from the desktop, not only from a test.
+      `tools/frame_balance.py` is the tool to extend once it is fixed.
+
 - [ ] **The taskbar overflows off the right edge once enough windows are
       open.** Reported with a screenshot, 2026-08-17: thirteen windows,
       and the last button is clipped by the screen edge and runs under

@@ -279,6 +279,11 @@ enum kline_action kline_key(struct kline_edit *e, int key) {
     // to reach (it did, until a test caught it).
     if (key != CTRL('y') && key != KEY_ESC) e->last_was_yank = 0;
 
+    // dispatch-ok: a KEYMAP, bounded by the key set rather than by the
+    // system's capabilities -- it does not grow when toy-os gains a
+    // feature, which is the growth a table would be protecting against.
+    // Each arm is also two or three lines of editing, not a subsystem
+    // wanting somewhere else to live. See tools/check_dispatch.py.
     switch (key) {
     case KEY_ESC:
         e->meta_pending = 1;

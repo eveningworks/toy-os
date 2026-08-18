@@ -1209,6 +1209,24 @@ technical conventions below:
   CR3 leaves W^X silently not applied -- **and all six W^X KTESTs stay
   green**, because they read the same symbol the code wrote. Only the
   KTEST that asks the CPU for CR3 catches it. See `docs/decisions.md`.
+- **A DISPATCH CHAIN OVER ~20 BRANCHES SHOULD BE A TABLE, and
+  `tools/check_dispatch.py` fails the build when one isn't.** The
+  recurring shape here: something dispatches on a kind -- a syscall
+  number, a command name, a message type -- as one `if/else` or
+  `switch`, and it grows by a branch per capability until the handlers
+  have nowhere to live but beside it. This project already has the right
+  pattern and applied it inconsistently (`display_driver`,
+  `block_device`, `clocksource`, `struct setting`, `.ktests`,
+  `syscall_table.c` are all registries or tables); what was missing was
+  anything that noticed the growth. **Waive with a `dispatch-ok:
+  <reason>` comment** when the branch set is genuinely BOUNDED -- a
+  keymap is bounded by the keyboard, a PCI class table is data -- and
+  note the reason is the mechanism, not the waiver. The two waived today
+  are `klineedit.c`'s keymap and `apps/shell.c`'s 60-branch command
+  chain, the latter deliberately NOT converted: most of those commands
+  are kernel introspection, so the table they want is a `/proc`-shaped
+  interface reached once the shell moves to ring 3, and converting first
+  would build the wrong table (see `docs/roadmap.md`).
 - **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
   The number in `abi/syscall_abi.h`, a handler in the subsystem that
   owns it (`kernel/proc/syscall_fd.c` for anything taking an fd,
@@ -2379,6 +2397,19 @@ repeated manual steps to be worth automating:
   `Milestone N` in prose (historical, and `docs/roadmap-details.md` ends
   with a legend for those); the noise would be what stopped anyone
   running it. In `preflight.sh` and CI.
+- **`check_dispatch.py`** -- refuses a dispatch chain that has grown big
+  enough to want a table. Counts branches in an `if/else` chain or a
+  `switch` and fails past 20; waive one with a `dispatch-ok: <reason>`
+  comment above it. Exists because `syscall.c` reached 37 branches over
+  40 syscalls in 1,492 lines and NOTHING NOTICED it growing -- one more
+  `else if` is always cheaper than a table right up until it isn't, and
+  a written convention with no check is the shape this repo keeps having
+  to delete. Deliberately dumb: it cannot tell a chain that grows with
+  the system from a bounded one (a keymap, a PCI class table), which is
+  what the waiver is for -- and having to write the reason IS the
+  mechanism. Two are waived today, both with their reasoning in place.
+  In `preflight.sh` and CI. `--list` shows the biggest chains whether
+  waived or not.
 - **`check_deps.py`** -- proves the build's header dependency tracking
   is actually live: touches one header per build directory (discovered
   from `build/`, not listed, so a new source directory is covered as
