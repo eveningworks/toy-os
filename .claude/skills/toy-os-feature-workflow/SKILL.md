@@ -546,6 +546,12 @@ twice more.**
     VIEW-ONLY VNC viewer to a running VM so the user can watch. Remmina's
     `-c vnc://...` URI cannot be view-only, and a viewer whose mouse
     fights the synthetic input looks exactly like a flaky test.
+  - `python3 tools/check_docs.py` -- the documentation rules: no
+    pointer to the deleted changelog, no numbered or versioned milestone
+    heading, no duplicated roadmap entry, no link to a doc that does not
+    exist. In `preflight.sh`, so you rarely run it by hand; reach for it
+    directly after any bulk docs edit, because a slice-replacement that
+    lands on the wrong boundary is invisible in a diff.
   - `python3 tools/usertest_run.py` -- the NON-GUI ring-3 diagnostics in
     `/tests`, as one table. In `preflight.sh`, so you rarely run it by
     hand; reach for it directly after touching `userland/rt/`,
@@ -2437,14 +2443,22 @@ index: "see `uui_route.c`'s pointer grab", not "see build 412". The safe
 targets are the ones addressed by title -- a file or symbol, a
 `docs/decisions.md` section, a named milestone in `docs/roadmap.md`, a
 rule in CLAUDE.md or in this skill -- because a title survives edits and
-reordering.
+reordering. Each of those four has a bar for entry, though: decisions =
+why-this-way; roadmap = not built, or broken with a repro; CLAUDE.md = a
+convention or trap that changes how you edit; this skill = how to work.
+Anything meeting none of them goes in a comment beside the code or in
+the commit message -- do not add content to a doc just to have somewhere
+to point at.
 
-And when history really is the reference, **cite the COMMIT** -- a short
-SHA is the one number that cannot go stale, since nothing has to be
-maintained for it to keep meaning what it meant. Pair it with what it
-did ("the poison-page fix, 978ebf7"), because a bare hash tells a reader
-nothing. CLAUDE.md carries the full version, including the one hazard
-(a history rewrite invalidates every SHA, and this repo has done one).
+**The split that makes this easy: for the PRESENT, point at a title; for
+the PAST, point at a COMMIT.** A short SHA is the one number that cannot
+go stale, because nothing has to be maintained for it to keep meaning
+what it meant -- which is exactly what build numbers and changelog
+entries failed at. Pair it with what it did ("the poison-page fix,
+978ebf7"), since a bare hash tells a reader nothing, and reach for it
+whenever the thing being referenced is a change rather than a state.
+CLAUDE.md carries the full version, including the one hazard (a history
+rewrite invalidates every SHA, and this repo has done one).
 
 **Two process notes, both mine and both worth avoiding:**
 

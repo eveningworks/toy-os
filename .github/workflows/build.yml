@@ -63,6 +63,9 @@ jobs:
       - name: Filesystem layout matches its doc
         run: python3 tools/check_layout.py
 
+      - name: Documentation checks (dead pointers, duplicated entries)
+        run: python3 tools/check_docs.py
+
       - name: Boot smoke test (headless, no GUI)
         run: python3 tools/boot_smoke_test.py -v
 

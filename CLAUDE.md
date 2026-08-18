@@ -1300,8 +1300,10 @@ technical conventions below:
   snapshot ("~300 checks across 23 tools" beats an exact number nobody
   will re-measure), or leave it out.
 
-  **When history genuinely IS the reference, cite the COMMIT.** A short
-  SHA is the one number here that cannot go stale -- nothing has to be
+  **The split, stated once: for the PRESENT point at a title; for the
+  PAST point at a COMMIT.** A state has a name and keeps it; a change
+  does not, which is what build numbers and changelog entries kept
+  failing at. A short SHA is the one number here that cannot go stale -- nothing has to be
   maintained for `978ebf7` to keep meaning what it meant. Pair it with
   what it did, because a bare hash tells a reader nothing: "the
   poison-page fix (978ebf7)", not "see 978ebf7". `git show <sha>` and
@@ -2320,6 +2322,17 @@ repeated manual steps to be worth automating:
   named prerequisite and `.PRECIOUS` or make deletes it as an
   intermediate, and `linker.ld`'s `.krelocs` must stay after `.data`.
   See `docs/decisions.md`.
+- **`check_docs.py`** -- the documentation rules a script can check,
+  because the ones that rotted before were the ones nobody checked. Five
+  checks, all narrow: a pointer to the DELETED changelog, a milestone
+  heading that reintroduces a number or a target version, a DUPLICATED
+  roadmap entry, and a link to a doc that does not exist. The duplicate
+  check earns its place on its own -- two of this repo's own roadmap
+  edits duplicated an entry and a third silently deleted three, and
+  nothing else tests documentation. It deliberately does NOT flag
+  `Milestone N` in prose (historical, and `docs/roadmap-details.md` ends
+  with a legend for those); the noise would be what stopped anyone
+  running it. In `preflight.sh` and CI.
 - **`check_deps.py`** -- proves the build's header dependency tracking
   is actually live: touches one header per build directory (discovered
   from `build/`, not listed, so a new source directory is covered as

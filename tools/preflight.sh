@@ -85,6 +85,9 @@ python3 tools/check_deps.py || fail "header dependency tracking"
 step "check_layout.py (disk layout vs docs/filesystem-layout.md)"
 python3 tools/check_layout.py || fail "filesystem layout check"
 
+step "check_docs.py (dead pointers, numbered milestones, duplicated entries)"
+python3 tools/check_docs.py || fail "documentation check"
+
 step "boot_smoke_test.py"
 python3 tools/boot_smoke_test.py || fail "boot smoke test"
 

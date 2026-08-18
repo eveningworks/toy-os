@@ -227,6 +227,7 @@ there when you add an entry, or the index quietly stops being one.
 - [`strace` traces an address space, and prints each line after the handler returns](#strace-traces-an-address-space-and-prints-each-line-after-the-handler-returns)
 
 **Build, versioning & project docs**
+- [There is no changelog, milestones are named, and nothing carries a target version](#there-is-no-changelog-milestones-are-named-and-nothing-carries-a-target-version)
 
 - [The demo ISO is a separate image, and its tour is a file on it](#the-demo-iso-is-a-separate-image-and-its-tour-is-a-file-on-it)
 - [Build-number scheme: fix/feature/major tiers, not dates or semver](#build-number-scheme-fixfeaturemajor-tiers-not-dates-or-semver)
@@ -7480,3 +7481,60 @@ settings daemon needs supervision, discovery and an IPC that toy-os does
 not have yet. Qualified names were built first deliberately, because
 (namespace, name) is transport-agnostic -- it is the same identity
 whichever side of that boundary the registry ends up on.
+
+## There is no changelog, milestones are named, and nothing carries a target version
+
+Three separate-looking decisions with one cause, so they are answered
+together. Anyone arriving at "where is the changelog?", "which milestone
+number is this?" or "what version does this land in?" is meeting the
+same rot from a different side.
+
+**The cause: each of them made a FILE responsible for keeping a NUMBER
+true, and nobody kept it true.**
+
+- The **changelog** indexed changes by build number. Entries pointed at
+  it from 272 places. It reached ~12,000 lines across four files, and
+  the reasoning in it was already being written twice more -- in a
+  comment beside the code and in this file. Closed 2026-08-15, deleted
+  2026-08-18.
+- **Milestone numbers** encoded position, so inserting a milestone meant
+  renumbering. That happened three times; the third moved eight at once
+  and left a translation table from the original numbering that nobody
+  read. Milestones are named now, and `docs/roadmap.md`'s LAYERS carry
+  the ordering that numbers used to pretend to.
+- **Target versions** on roadmap items predicted which release the work
+  would land in. Before that the convention was one milestone per minor
+  release. Both said where work would go and were then wrong. The
+  versioning scheme is unchanged -- semver with a `-dev` suffix -- but
+  the maintainer picks the number and the contents at release time.
+
+**The rule that replaced all three: point at things addressed by NAME,
+and at commits for anything historical.** A name survives edits, moves
+and reordering; a commit SHA cannot change at all. What rots is the
+third category -- an index maintained by hand.
+
+  - **Present state** -> a file or symbol, a section in this file, a
+    named milestone in the roadmap, a rule in `CLAUDE.md` or the skill.
+  - **Past change** -> the commit, paired with what it did ("the
+    poison-page fix, 978ebf7"), because a bare hash tells a reader
+    nothing.
+
+**What this cost, stated plainly rather than glossed:** commit messages
+before the freeze are one-liners ("Build 263 (feature, +10): keyboard
+Page Up/Page Down scrolling"), so for pre-2026-08-15 work the changelog
+was the only detailed account of a change. Before deleting, all 94
+entries in this file that cited it were measured: 89 carried their own
+reasoning already, and the 5 that did not were read by hand -- each
+stated its decision, and three described code that no longer exists. The
+decisions survived; the blow-by-blow of old changes did not.
+
+**And the enforcement, because a rule nobody checks is the thing that
+rotted in the first place:** `tools/check_docs.py` fails the build on a
+pointer to the deleted changelog, a numbered or versioned milestone
+heading, a duplicated roadmap entry, or a link to a doc that does not
+exist. It is deliberately narrow -- the duplicated-entry check exists
+because two of this repo's own roadmap edits duplicated an entry and a
+third silently deleted three, and nothing tests documentation. It does
+NOT flag `Milestone N` in prose: those are historical, the roadmap's
+details file ends with a legend for resolving them, and the noise would
+be what stopped anyone running it.
