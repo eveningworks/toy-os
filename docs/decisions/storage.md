@@ -680,12 +680,12 @@ under an old doc" trap a future session could hit again elsewhere:
   TFS2's live in-RAM table into a scratch buffer before executing,
   since that memory "isn't stable the way a GRUB module's reserved
   region is." Checking `elf_load()` (`kernel/proc/elf.c`) and
-  `heap.c`'s own top comment together showed this wasn't needed:
+  `heap_core.c`'s own top comment together showed this wasn't needed:
   `elf_load()` just casts its `elf_phys_addr` argument straight to a
   pointer with zero translation, which only works because GRUB modules
   sit in identity-mapped low physical memory -- and `kmalloc()` is
   *also* carved out of that same identity-mapped low-4GiB range (see
-  `paging.c`'s top comment, referenced from `heap.c`), so `fs_read()`'s
+  `paging.c`'s top comment, referenced from `heap_core.c`), so `fs_read()`'s
   returned buffer address already works there directly. One real
   constraint this does leave, not present in the GRUB-module path:
   nothing may call `fs_read()` again until the loaded process finishes,

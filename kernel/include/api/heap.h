@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 // A general-purpose KERNEL-space heap: kmalloc()/kfree(), built
-// directly on top of pmm.h's physical frame allocator. See heap.c's
+// directly on top of pmm.h's physical frame allocator. See heap_core.c's
 // top comment for how it's implemented (first-fit, address-ordered
 // free list, coalescing on free) and why no separate page-table
 // mapping step is needed to make a freshly allocated physical frame
@@ -21,7 +21,7 @@
 // app's state was a single static struct because there was nothing
 // else to allocate it from.
 //
-// Not interrupt-safe or reentrant -- see heap.c's top comment.
+// Not interrupt-safe or reentrant -- see heap_core.c's top comment.
 
 void heap_init(void);
 
@@ -60,7 +60,7 @@ uint64_t heap_used_bytes(void);
 // through an already-freed pointer.
 //
 // Toggling affects SUBSEQUENT allocations only. Blocks of both kinds
-// coexist safely; see heap.c's top comment for the invariant that lets
+// coexist safely; see heap_core.c's top comment for the invariant that lets
 // kfree() tell them apart, and why breaking it would fail silently.
 //
 // A detected violation is reported to the kernel log and the block is

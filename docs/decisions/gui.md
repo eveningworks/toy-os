@@ -63,7 +63,10 @@ it is `gfx.c`'s 8 MiB of `.bss`.
 the compositor could not allocate the one buffer it exists to own.
 Fixed by moving the stack top to `0x8000F00000`, into address space that
 was already free -- nothing lives between there and `WIN_CLIENT_BASE`
-(`0x8001000000`), whose own comment said so. ~14 MiB now, which is a
+(`0x8001000000`), whose own comment said so. ~14 MiB at the time -- and
+SUPERSEDED on 2026-08-18, when the stack top moved again to
+`0x807FF00000` and `sbrk` stopped mapping what it reserves, making the
+heap ~2046 MiB; see this file's sibling entry in `kernel.md`. ~14 MiB was a
 1080p buffer with room to spare. What does not fit is that buffer AND
 the damage-verify scratch copy at once (8.3 + 8.3 > 14); that is
 debug-only, fails by reporting rather than faulting, and raising

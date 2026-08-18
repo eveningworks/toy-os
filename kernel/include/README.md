@@ -19,7 +19,9 @@ is a promise: console, graphics, keyboard/mouse, timer/RTC, filesystem
 (incl. the backend-capability surface -- `FS_CAP_*`, `fs_has()`,
 `fs_backend_name()`, `fs_link()`, and `fs_stat()`'s ino+epoch
 `struct fs_stat_info`),
-heap, PCI, version, and the shared toolkit (`string.h`, `knum.h`,
+heap (`heap.h` for the kernel's kmalloc, `heap_os.h` for the three
+platform hooks the shared allocator is built on), PCI, version, and the
+shared toolkit (`string.h`, `knum.h`,
 `kfmt.h`, `kpath.h`, `klineedit.h` -- see CLAUDE.md's note to check
 these before hand-rolling a digit loop, a formatter or a path join).
 Three of those (`string.h`, `knum.h`, `kfmt.h`) are also on

@@ -1,7 +1,7 @@
 // Memory tests: the physical frame allocator and the kernel heap.
 //
 // The first two wrap the pre-existing pmm_selftest()/heap_selftest()
-// bodies, which live in pmm.c/heap.c because they poke at file-static
+// bodies, which live in pmm.c/heap_core.c because they poke at file-static
 // state (the frame bitmap, the free list) that isn't exposed. They used
 // to run on every boot; now they run when asked. The rest are new, and
 // exist because the harness made them cheap to write.

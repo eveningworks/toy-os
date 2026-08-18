@@ -759,6 +759,12 @@ providing it silently, and R1 had already decided ring 3 must own it.
   `WIN_CLIENT_BASE` -- giving ~14 MiB. A 1080p back buffer plus the
   verify scratch does NOT fit (8.3 + 8.3); that path reports rather
   than faults, and raising `WIN_CLIENT_BASE` is the lever.
+
+  **SUPERSEDED 2026-08-18**, and by exactly that lever:
+  `WIN_CLIENT_BASE` moved to `0x8080000000`, the stack top to
+  `0x807FF00000`, and `sbrk` stopped mapping what it reserves -- so the
+  heap is ~2046 MiB and both buffers fit with room. See
+  `docs/decisions.md`.
 - **Reachability.** `SYS_SBRK` was armed only by
   `syscall_reset_heap()`, whose sole caller is `elf_run.c`'s legacy
   blocking loader. A scheduler-spawned process -- every GUI app, and

@@ -6,7 +6,8 @@
 // is the whole of what the kernel knows about the desktop now.
 //
 // The waiting is what makes the death path work as a user sees it: when
-// the desktop exits -- normally, killed (`kill 1`), or faulting -- this
+// the desktop exits -- normally, killed (`ps` for its pid, then
+// `kill <pid>`), or faulting -- this
 // returns and the caller redraws the text console. The kernel has
 // already revoked the framebuffer grant and asked any client windows to
 // close by then (kernel/proc/win_server.c's compositor_gone()).

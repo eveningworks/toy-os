@@ -20,7 +20,7 @@
 // any other dynamic array here) -- json_free() walks the tree and
 // kfree()s everything. There is deliberately no arena/pool allocator:
 // this kernel's kmalloc()/kfree() already coalesces freed memory (see
-// heap.c), and JSON documents in this codebase are expected to be
+// heap_core.c), and JSON documents in this codebase are expected to be
 // small (config files), so per-node allocation overhead isn't worth
 // optimizing away yet.
 #include "json.h"

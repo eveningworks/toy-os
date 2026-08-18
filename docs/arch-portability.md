@@ -48,7 +48,8 @@ path fixes, not a rewrite):
   lines) -- font rendering and the framebuffer blit/blend primitives.
 - The scheduler's round-robin *policy* in `scheduler.c` (289 lines) --
   only one `hlt` in the idle path.
-- `kernel/mm/heap.c`/`heap.h` (the kernel heap allocator) and
+- `kernel/lib/heap_core.c`/`heap.h` (the allocator, shared with ring 3's
+  malloc since 2026-08-18) and
   `kernel/lib/json.c`/`json.h` (the JSON parser/serializer) -- plain
   freestanding C, no CPU-specific content.
 - Most of `apps/*.c`, `etc_config.c`, `klog.c`, `string.c`.
@@ -158,7 +159,7 @@ kernel/
   arch/x86_64/   boot.asm context_switch.asm isr.asm       <- exists
                  gdt.c idt.c pic.c irq.c paging.c
     riscv64/     (mirror image, once/if that port starts)  <- doesn't
-  mm/            pmm.c vmm.c heap.c                        <- exists
+  mm/            pmm.c vmm.c heap_os.c                     <- exists
   proc/          process.c scheduler.c elf.c elf_run.c
                  syscall.c ring3_test.c
   fs/            vfs.c tfs3.c tfs.c fs_test.c

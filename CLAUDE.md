@@ -479,7 +479,9 @@ technical conventions below:
 - **`uui_table` is the multi-column widget** (`userland/ui/uui_table.h`)
   -- columns with per-column width (in CHARACTERS, or 0 to stretch) and
   alignment, a header, selection, scrolling. **It PULLS its rows through
-  a callback and stores none of them**: Toykit has no allocator, and
+  a callback and stores none of them**: Toykit had no allocator when this
+  was written (it has `malloc` now, which changes nothing here -- see
+  below), and
   Task Manager re-reads the process table several times a second, so
   there is nothing cached to go stale. Sizing is derived, so a resizable
   window reflows with no arithmetic in the app. See `docs/decisions.md`.
@@ -871,7 +873,8 @@ technical conventions below:
   `apps/ui/` holds itself to. Two of them have no kernel-side twin and
   were written here first: **`uui_menubar`** (a menu bar with submenus
   nested to any depth -- a menu is const arrays pointing at each other,
-  since Toykit has no allocator, and per-item checked/disabled state is
+  which is still the right shape now that ring 3 HAS `malloc`: a declared
+  tree needs no teardown and cannot leak. Per-item checked/disabled state is
   ASKED FOR through an `item_flags` hook rather than stored in the tree)
   and **`uui_statusbar`** (panes: a message that stretches, indicators
   that don't, widths in characters). Both are Notepad's. Three things
@@ -1342,7 +1345,9 @@ technical conventions below:
   poisoned on free; a violation is logged and the block QUARANTINED
   (leaked on purpose -- its metadata is what proved untrustworthy), so
   detection stays assertable from a KTEST instead of needing a panic.
-  The trap, if you touch `heap.c`: blocks of both shapes coexist, and
+  The trap, if you touch the allocator (`kernel/lib/heap_core.c` --
+  SHARED with ring 3's malloc now, so a change there lands in both):
+  blocks of both shapes coexist, and
   `kfree()` tells them apart by reading the eight bytes before the
   payload -- `HEAP_RZ_MAGIC` in a red-zoned block, the header's `prev`
   in a plain one. **That is only unambiguous because every heap pointer
@@ -2548,9 +2553,12 @@ repeated manual steps to be worth automating:
 - **`check_docs.py`** -- the documentation rules a script can check,
   because the ones that rotted before were the ones nobody checked. A
   pointer to the DELETED changelog, a milestone heading that reintroduces
-  a number or a target version, a DUPLICATED roadmap entry, a stale
+  a number or a target version, a DUPLICATED roadmap entry, a roadmap item
+  that WRAPS onto a second line or runs past 140 characters, a stale
   decisions index, a link to a doc that does not exist, and a tool in
-  `tools/` that CLAUDE.md never mentions. The duplicate check earns its
+  `tools/` that CLAUDE.md never mentions. The one-line rule is checked
+  rather than stated for the usual reason: the roadmap reached 2,939
+  lines by accumulating a paragraph per item, and nothing noticed. The duplicate check earns its
   place on its own -- two of this repo's own roadmap edits duplicated an
   entry and a third silently deleted three. The tool check enforces a
   rule this file already stated and nothing verified; it is deliberately
@@ -2635,7 +2643,8 @@ repeated manual steps to be worth automating:
   moved as evidence it is testing the old copy.
 - **`usertest_run.py`** -- runs the self-checking ring-3 diagnostics in
   `/tests` (`libc_test`, `fpu_test`, `newsyscalls_test`, `file_test`,
-  `write_test`, `exit_test`, `random_test`) as one pass/fail table, asserting BOTH an
+  `write_test`, `exit_test`, `random_test`, `memtest`, `guard_test`,
+  `malloc_test`) as one pass/fail table, asserting BOTH an
   exit code and required output. In `preflight.sh`. It fills a real gap:
   `make test` runs inside the kernel and `gui_regress.py` covers the
   windowed clients, so nothing ever ran a plain `/tests` binary except a

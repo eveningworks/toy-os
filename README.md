@@ -42,10 +42,13 @@ decision written down as it happened. It boots on real hardware and under
 QEMU, and it does not stop at "hello world from the kernel":
 
 - **Real memory management** — a physical frame allocator, per-process
-  page tables, a kernel heap with optional red-zones, NX/W^X on both the
-  kernel and userspace, SMEP/SMAP, stack canaries and kernel ASLR.
+  page tables, **demand-paged heaps** (`sbrk` reserves; the page arrives
+  on first touch), one allocator serving both `kmalloc` and ring-3
+  `malloc`, NX/W^X on both the kernel and userspace, SMEP/SMAP, stack
+  canaries and kernel ASLR.
 - **Real processes** — an ELF64 loader, ring-3 user mode, a table-driven
-  syscall layer, a preemptive scheduler, a process tree with pipes and
+  syscall layer, a preemptive scheduler, **an `init` as pid 1** that
+  adopts and reaps orphans, a process tree with pipes and
   `spawn`/`waitpid`, and per-process FPU state across context switches.
 - **Two real filesystems** — TFS3 (the default: block groups, real
   inodes, hardlinks, journal transactions, superblock backups) and TFS2

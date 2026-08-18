@@ -395,7 +395,7 @@ static void write_batch_end(void) {
 // Allocates one free block, disk-backed or RAM-only depending on
 // g_disk_backed -- returns 0 (the reserved null value) if out of
 // space. Scans forward from a hint, wrapping once, same simple
-// first-fit approach the kernel heap (heap.c) uses for its own
+// first-fit approach the kernel heap (lib/heap_core.c) uses for its own
 // allocation -- fine at this scale (a handful of files, a
 // gigabyte-class disk), not trying to be a sophisticated allocator.
 static uint32_t alloc_block(void) {
@@ -545,7 +545,7 @@ static uint32_t g_walk_scratch[FS_PTRS_PER_BLOCK];
 // that offset overwrites it in full anyway.
 #define BLK_NO_ALLOC     0
 #define BLK_ALLOC        1
-#define BLK_ALLOC_NOZERO 2 // one block's worth of pointers -- 4KB, static (not stack) since this isn't reentrant, see heap.c's own precedent
+#define BLK_ALLOC_NOZERO 2 // one block's worth of pointers -- 4KB, static (not stack) since this isn't reentrant, see heap_core.c's own precedent
 
 static uint32_t walk_indirect(uint32_t *top_slot, int depth, uint32_t index, int allocate) {
     if (*top_slot == 0) {
@@ -627,7 +627,7 @@ static uint32_t block_for_index(struct file *f, uint32_t index, int allocate) {
 // frame in one call chain has a distinct depth value (3, then 2, then
 // 1), so frames never alias the slice they're using even though the
 // backing array is shared -- and this whole file is already
-// documented as non-reentrant/single-threaded (see heap.c's identical
+// documented as non-reentrant/single-threaded (see heap_core.c's identical
 // reasoning), so there's no concurrent caller to worry about either.
 static uint32_t g_free_scratch[4][FS_PTRS_PER_BLOCK];
 
@@ -858,7 +858,7 @@ static uint32_t contiguous_run(struct file *f, uint32_t first_index, uint32_t ma
 
 // One block's worth of scratch per block in a run -- 64KB of .bss, the
 // same "static, not stack, this file is single-threaded" reasoning
-// g_io_scratch/g_walk_scratch already use (and see heap.c's precedent).
+// g_io_scratch/g_walk_scratch already use (and see heap_core.c's precedent).
 static uint8_t g_run_scratch[FS_MAX_BLOCKS_PER_RUN * FS_BLOCK_SIZE];
 
 static uint32_t g_io_scratch[FS_BLOCK_SIZE / 4]; // one block, reused for every partial-block copy below
@@ -2047,7 +2047,7 @@ static void tfs_list(const char *dir_path, void (*cb)(const char *name, uint32_t
 // forcing the triple-indirect chain to be built) exercises exactly the
 // same pointer-walking code a real multi-gigabyte file would use, at
 // the cost of one small write instead of gigabytes of them. This is
-// the same "prove the mechanism, not the scale" reasoning heap.c's
+// the same "prove the mechanism, not the scale" reasoning heap_core.c's
 // heap_selftest() already uses for its own coalescing checks. See
 // docs/decisions.md for the full writeup, including why this can't
 // also prove real multi-GB write *throughput* (that needs an actual

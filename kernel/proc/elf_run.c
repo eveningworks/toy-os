@@ -159,7 +159,7 @@ int elf_run_from_fs(const char *path, const char *args) {
 
     // fs_read()'s buffer is a kmalloc()'d heap allocation -- and, like
     // every kmalloc() allocation, carved out of the same identity-mapped
-    // low-4GiB physical range a GRUB module lives in (see heap.c's top
+    // low-4GiB physical range a GRUB module lives in (see heap_core.c's top
     // comment on why: this kernel identity-maps the whole low 4GiB as
     // kernel/supervisor-only, and heap_init() just hands out pieces of
     // that same range). elf_load() takes its address directly here with

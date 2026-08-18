@@ -736,7 +736,7 @@ were found at all.
 - [x] ~~Kernel ASLR (randomize load base)~~ DONE 2026-08-16
 - [x] ~~Enable SMEP/SMAP (CR4)~~ done
 - [x] ~~Guard page below each user stack~~ done
-- [x] ~~Heap red-zones + use-after-free poisoning in `heap.c`, behind a `debug` flag~~ done
+- [x] ~~Heap red-zones + use-after-free poisoning in the allocator, behind a `debug` flag~~ done
 - [ ] Virtio drivers (disk/net)
 - [ ] Multi-architecture support (RISC-V) -- see `docs/arch-portability.md`
 - [ ] A RAM disk backend, once Real mount points makes a second backend addressable

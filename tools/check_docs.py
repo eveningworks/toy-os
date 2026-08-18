@@ -96,6 +96,37 @@ def check_milestones_are_named(problems):
                                 f"milestones are named\n      {line.strip()[:90]}")
 
 
+# The roadmap is ONE LINE PER ITEM (restructured 2026-08-18, from 2,939
+# lines to ~750). Long enough that the ordering is readable at a glance
+# is the entire point of it; the reasoning lives in roadmap-details.md.
+ROADMAP_ITEM_MAX = 140
+
+
+def check_roadmap_items_are_one_line(problems):
+    """The roadmap grew to 2,939 lines by accumulating a paragraph per
+    item, and nobody could read the build order out of it any more. The
+    rule that replaced it -- one line per item, detail in
+    roadmap-details.md -- is exactly the kind nobody remembers, so it is
+    checked rather than stated: every convention this project has lost
+    was one nothing verified."""
+    text = read("docs/roadmap.md")
+    lines = text.split("\n")
+    for i, line in enumerate(lines, 1):
+        if not re.match(r"^- \[[ x]\]", line):
+            continue
+        # A continuation line is an indented non-blank directly under an
+        # item -- which is how a paragraph gets in.
+        nxt = lines[i] if i < len(lines) else ""
+        if nxt.startswith("  ") and nxt.strip():
+            problems.append(f"docs/roadmap.md:{i}: roadmap item wraps onto a "
+                            f"second line -- move the detail to "
+                            f"roadmap-details.md\n      {line.strip()[:90]}")
+        elif len(line) > ROADMAP_ITEM_MAX:
+            problems.append(f"docs/roadmap.md:{i}: roadmap item is "
+                            f"{len(line)} chars (max {ROADMAP_ITEM_MAX})"
+                            f"\n      {line.strip()[:90]}")
+
+
 def check_no_duplicate_roadmap_entries(problems):
     """Two of this repo's own roadmap edits duplicated an entry and one
     deleted three, all silently: nothing tests documentation, and a
@@ -208,6 +239,7 @@ def main():
                   check_roadmap_has_no_versions,
                   check_milestones_are_named,
                   check_no_duplicate_roadmap_entries,
+                  check_roadmap_items_are_one_line,
                   check_no_duplicated_sections,
                   check_decisions_index_is_current,
                   check_internal_doc_links,
@@ -216,9 +248,9 @@ def main():
 
     if not problems:
         print("check_docs: ok -- no dead changelog pointers, no numbered or "
-              "versioned milestones, no duplicated roadmap entries, the "
-              "decisions index is current, no broken doc links, every tool "
-              "documented")
+              "versioned milestones, no duplicated roadmap entries, one line "
+              "per roadmap item, the decisions index is current, no broken "
+              "doc links, every tool documented")
         return 0
 
     print(f"check_docs: {len(problems)} problem(s)\n")

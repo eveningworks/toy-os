@@ -193,7 +193,10 @@ Four things, and the third is a class of bug worth carrying anywhere.**
   into `libuapp.a`, so the ring-3 and kernel versions cannot diverge.
   For a fixed-width number reach for `knum.h`'s `k_utoa`/`k_htoa`
   directly: kfmt's printf has zero-pad widths for numbers but no `*`
-  width and no left-justify. Still NOT a libc -- no `malloc`, `FILE`,
+  width and no left-justify. **`malloc`/`free`/`calloc` DO exist now**
+  (`lib/stdlib.h`, added 2026-08-18) and are the KERNEL's allocator
+  compiled a second time over `sbrk` -- so do not write a second one.
+  Still NOT a libc -- no `realloc`, `FILE`,
   `printf`, `errno` or TLS (M24). Two `/bin` programs had each grown
   their own `my_strlen` + decimal loop + hex loop, with a comment in
   each calling it deliberate, which it was: the toolkit genuinely could
@@ -2615,6 +2618,96 @@ changed itself in four places purely by measuring: no parent field
 existed at all, there is no stdin, `/proc` needs a mount table, and the
 roadmap's claim that init needs `fork()` was wrong. Half an hour of
 greps beat a stage of building.
+
+**2026-08-18 (second session that day: init as pid 1, a demand-paged
+heap, malloc, and the roadmap reordered). Read the first two before
+touching memory; the third is about tests, and it is the one that cost
+the most.**
+
+Where the project stands after it:
+
+- **There is an `init`, it holds pid 1, and it cannot be killed.**
+  `/bin/init` (`userland/bin/init.c`), spawned from `kernel_main()`
+  before anything else -- being FIRST is the only reason it is pid 1,
+  as on Linux. `kill 1` no longer restarts the desktop: find the
+  `toywm` pid with **`ps`** (a real `/bin` program now, over
+  `SYS_PROC_INFO`, with `--tree`) and kill that.
+- **`SYS_SLEEP` exists**, because init had nothing to block on: it
+  blocks in `waitpid(-1)` while it has children and sleeps when it does
+  not. A caller with no scheduler slot gets -1, so a `/bin` program that
+  sleeps CANNOT be driven with `run` -- use `spawn`.
+- **`sbrk` reserves and maps nothing**; the heap is ~2046 MiB of address
+  space and pages arrive on touch. The ring-3 map is sized for 4K
+  (64 MiB per-window stride), which does NOT make 4K work --
+  `pmm_alloc_contiguous()` and `WIN_CLIENT_MAX_W/H` still bound it.
+- **`malloc`/`free` in ring 3 are the KERNEL's allocator compiled
+  twice** (`kernel/lib/heap_core.c` + `api/heap_os.h`), the same
+  shared-source rule as `geom.c`. `kernel/mm/heap.c` no longer exists.
+- **The roadmap is ordered by what to build FIRST** -- four dependency
+  phases, then tracks that depend on nothing. Every item is ONE LINE;
+  detail goes to `roadmap-details.md` under the same heading. Keep it
+  that way when you tick something.
+
+**THE LESSON THAT COST THE MOST: A REDUNDANT CODE PATH MAKES A POSITIVE
+CONTROL LIE.** Demand paging needed a fault-in hook in three places --
+the #PF handler, the copy helpers, and `vmm_validate_user_range()` --
+because ring 0 walks page tables rather than dereferencing user
+pointers, so a syscall handed an untouched buffer never faults at all.
+Disabling the hook in the copy helpers ALONE reddened nothing, because
+the syscall under test validates its pointer first and that path has its
+own fault-in. Both had to be disabled before anything failed. **When a
+control fires nothing, ask what OTHER path could satisfy the same
+assertion** -- this repo's existing "the fixture never reached the
+branch" rule, arriving from a different direction.
+
+**And it happened twice more in the same session, on checks I had just
+written:**
+
+- The init tool asked for "at least one orphan reaped" and stayed GREEN
+  with adoption removed entirely, because a separate fix produces
+  exactly one reap on its own. It counts against what the fixture says
+  it abandoned now.
+- The malloc test asked whether the process FOOTPRINT grew after freeing
+  three blocks and requesting their combined size -- green with
+  coalescing disabled outright, because the allocator claims memory in
+  64 KiB regions and the region's own leftover satisfied the request
+  either way. It compares the returned ADDRESS now (a merged block
+  starts where the first of the three did), and that version reddens
+  exactly one check.
+
+**A FLAG YOU HAVE NOT GOT IS A CLASS OF BUG YOU CANNOT SEE.**
+`USERLAND_CFLAGS` had no `-Wframe-larger-than` while the kernel has had
+one for months. Adding it named four oversized frames in the WM the same
+minute, the worst at **20,608 bytes against a 16 KiB ring-3 stack** --
+a frame that does not merely overflow but steps clean over the single
+4 KiB guard page into unmapped space (Stack Clash; Linux widened its
+guard gap to 256 pages in 4.11 for exactly this). All four were
+`struct dirent` arrays on the stack. Ask what the kernel side checks
+that userland does not, and vice versa.
+
+**Two smaller ones worth recognising:**
+
+- **A region's END is what the next thing must clear, not its base.**
+  Growing the heap into `0x8080000000` landed inside the compositor's
+  window region, whose base looked isolated at `0x8010000000` while it
+  spans gigabytes -- because its size is DERIVED
+  (`MAX_PIDS * CLIENT_MAX * STRIDE`). Read a map of derived regions as
+  a whole before moving anything in it.
+- **A test's own bound goes stale with the map it was written against.**
+  `guard_test` walked 1 MiB at a time up to 64 MiB to find the heap
+  limit -- fine at ~14 MiB, meaningless at ~2 GiB, and with a lazy
+  `sbrk` "walking to the limit" means trying to allocate the machine.
+  Its own comment had predicted this after the FIRST time it happened.
+  Provoke a bound directly (ask for a terabyte) rather than walking to
+  it.
+
+**One process note.** Four separate mid-task requests arrived while
+building (4K, >4 GiB RAM, TTF fonts, GPUs). Three were already roadmap
+items and one was not; the useful move was to MEASURE each against the
+code before answering -- which found that ">4 GiB" is not a constant to
+raise but a direct-map project, and that `kfree()`'s red-zone detection
+silently depends on heap pointers fitting in 32 bits. Answer with the
+dependency, not with enthusiasm.
 
 ## Verification habits this project rewards
 

@@ -8,11 +8,11 @@ question to answer when adding one.
 |---|---|---|
 | `arch/x86_64/` | Multiboot entry, GDT/TSS, IDT, PIC, IRQ dispatch, page tables, the ring switch, FPU/SSE enable + FXSAVE, CPUID, RDSEED/RDRAND/RDTSC (`random_hw.c`) | Would this be rewritten wholesale on a different CPU architecture? |
 | `core/` | `kernel_main`, multiboot parsing, timer, serial + the debug console, power | Does it own the machine as a whole, rather than one resource? |
-| `mm/` | Physical frames, address spaces, the kernel heap | Is it about memory? |
+| `mm/` | Physical frames, address spaces, the kernel heap's platform half (`heap_os.c`; the allocator itself is `lib/heap_core.c`, shared with ring 3) | Is it about memory? |
 | `proc/` | ELF loading, the syscall table + dispatcher, the fd namespace, processes, the scheduler | Is it about *running* something? |
 | `fs/` | The probe-selecting VFS + two backends (TFS3 default, TFS2 legacy), and the path-keyed syscalls | Is it about files? |
 | `drivers/` | Console, graphics, PS/2, ATA, PCI, partitions, speaker | Does it talk to a specific piece of hardware? |
-| `lib/` | the toolkit (`string.c`, `knum.c`, `kfmt.c` + `kfmt_print.c`, `kpath.c`, `fixed.c`, `geom.c`, `krandom.c`), JSON, klog, debug flags, `/etc` config, timezone/font/keyboard settings | Is it a service with no hardware and no policy of its own? |
+| `lib/` | the toolkit (`string.c`, `knum.c`, `kfmt.c` + `kfmt_print.c`, `kpath.c`, `fixed.c`, `geom.c`, `krandom.c`, `heap_core.c`), JSON, klog, debug flags, `/etc` config, timezone/font/keyboard settings | Is it a service with no hardware and no policy of its own? |
 | `include/` | Headers, split by audience | See `include/README.md` |
 
 ## Why this shape

@@ -1932,8 +1932,13 @@ void cmd_kill(const char *args) {
 //
 // Which makes this the way to bring the desktop BACK after killing it:
 //
-//     kill 1                       # end the ring-3 desktop
+//     ps                           # find the desktop's pid
+//     kill <pid>                   # end it
 //     spawn /bin/wm/system/toywm   # and start another one
+//
+// It used to be `kill 1`, and that stopped working when init took pid 1
+// -- which is the argument for looking a pid up rather than assuming
+// one, and why `ps` exists.
 //
 // A role that cannot be re-claimed after a crash is not survivable in
 // any useful sense, and until this nothing could demonstrate it.

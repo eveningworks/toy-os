@@ -143,7 +143,8 @@ see the git history.
 
 ## Kernel heap: coalesces by real address adjacency, not list order
 
-`kmalloc()`/`kfree()` (`kernel/mm/heap.c`) grow the heap by calling
+`kmalloc()`/`kfree()` (`kernel/lib/heap_core.c`, with the kernel's half
+of the platform hooks in `kernel/mm/heap_os.c`) grow the heap by calling
 `pmm_alloc_contiguous()` again whenever the free list can't satisfy a
 request, appending the new region's block to the end of the list. That
 means list order and physical-address order agree *within* a region,
@@ -2645,7 +2646,8 @@ back buffer was a single lifetime allocation that is never freed.
 
 The obvious implementation is a small `malloc` in `userland/lib/`. This
 repo's standing rule says otherwise, and an allocator is the worst place
-to break it: `kernel/mm/heap.c` was already a first-fit, address-ordered,
+to break it: `kernel/mm/heap.c` (as it then was) was already a
+first-fit, address-ordered,
 coalescing free list with red-zones and use-after-free poisoning behind a
 runtime toggle, all of it covered by KTESTs. A second implementation
 would have started as a subset and drifted, and the drift would surface
