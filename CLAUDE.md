@@ -179,6 +179,25 @@ technical conventions below:
   a column (and `UUI_FILL_W` in a row) absorbs the leftover space,
   flexbox's flex-grow. Before that nothing in a column could get taller
   and a resized window just grew empty space under the last child.
+- **A PAGE THAT CAN OVERFLOW GOES IN A `uui_scrollview`, and the
+  chrome stays outside it.** `uui_layout` does not shrink children
+  below their natural size -- given too little room it OVERFLOWS,
+  placing the last ones past its bottom edge with no scrollbar and
+  nothing to say they are gone. Control Panel shrunk below its content
+  lost its status bar entirely and left six of seven timezones
+  unreachable. Wrap the page's layout in `uui_scrollview`
+  (`UUI_FILL_W | UUI_FILL_H`) and the app writes no scrolling code at
+  all. Three things to know. **Keep tabs and status bars OUTSIDE the
+  scroll view** or they scroll away. **One scroll region per page** --
+  a listbox inside one is laid out at full height and has nothing left
+  to scroll itself, which is what you want. And **a `UUI_FILL` child
+  now absorbs a SHORTFALL as well as leftover space**, which is what
+  stops a too-tall child evicting its siblings; a container with
+  nothing stretchable still overflows. Containers declare their items
+  through `uui_widget_ops.children`, and a container with a `hit`
+  CLIPS them (that is how a scroll view stops off-screen rows being
+  clickable) while one without -- a plain layout -- does not. See
+  `docs/decisions.md`.
 - **Anything drawn follows `docs/gui-guidelines.md`.** Three things
   bite most often. (1) **`gfx_draw_string()` does not clip** -- use
   `gfx_draw_string_clipped()` and `gfx_text_width()` for anything in a

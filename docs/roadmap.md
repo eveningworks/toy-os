@@ -2171,6 +2171,13 @@ it serves. Small, and it makes everything above it discoverable.*
       That second tool is what makes this worth one entry rather than
       two: it is not a menu bug, it is injected clicks going missing.
 
+      **The same third shape again, 2026-08-18:** `gfxdemo` failed the
+      whole tool with `Shapes never logged its layout`, having logged
+      `ready`, `aa on` and its CANVAS rect but not its buttons -- so the
+      app started and was talking, and one later line went missing.
+      `flake_hunt.py gfxdemo -n 4` gives 3 pass, 1 error; alone it is
+      23/23. Same entry because it is the same fingerprint.
+
       **A third shape, 2026-08-17:** `uidemo` failed the whole tool with
       `RuntimeError: UI Demo reported no layout` -- the app never
       reported its geometry at all, so this is not only lost CLICKS but

@@ -2559,3 +2559,73 @@ clip, and a computed rectangle with nothing in it must clip everything
 out, for the same reason a formatter that can't fit writes nothing.
 See the commit that added it for the full diagnosis.
 
+
+## A scroll view is a CONTAINER widget, and scrolling re-runs the layout at a shifted origin
+
+`uui_layout` deliberately OVERFLOWS when given less room than its
+children want: each child gets its natural size and the rest are placed
+past the container's bottom edge. That is the right call for a layout --
+squashing a control into a size it said it could not use is worse -- but
+it means a window shrunk below its content silently HIDES part of it,
+with no scrollbar and nothing on screen to say so.
+
+Control Panel showed it plainly: shrink the window and six of seven
+timezones became unreachable and the status bar vanished entirely.
+Nothing in Toykit scrolled a PAGE; `uui_listbox` and `uui_table` scroll
+their own rows and that is all.
+
+**Scrolling re-runs the content layout at a shifted origin.** Everything
+else follows from that one decision. A child's rect is always its real
+on-screen rect, so hit-testing, focus and drawing need no coordinate
+translation anywhere -- which is the part that usually makes scroll
+views fiddly. The cost is that a child scrolled out of view is genuinely
+somewhere else rather than hidden, so input has to be CLIPPED to the
+viewport or a row above the top would still take clicks. Re-laying out
+per wheel notch is not the extravagance it sounds: `uui_layout` is not
+retained mode, a re-run is arithmetic over a handful of items, and a
+window resize already does exactly this.
+
+**The router gained a generic `children` slot, replacing a type check.**
+`uui_route.c` used to recognise containers by comparing `ops` against
+`uui_layout_ops`. That worked for exactly one container and silently
+swallowed every other container's child ids -- a press inside a scroll
+view reported the SCROLL VIEW's id, so Control Panel's radio buttons
+stopped applying: the app switches on `ID_CHOICES` and was being told
+`ID_PAGE`. Any widget can now declare the items it holds, and a child
+reports its own id however deeply it is nested.
+
+Two rules ride with that slot. **A container with a `hit` clips its
+children to itself** -- that is how the scroll view stops children
+outside the viewport being clickable, and why `uui_layout` deliberately
+declares no `hit` at all. And **when no child consumes an event, it
+falls through to the container**, which is how the scroll view's own
+scrollbar gets its clicks and how the wheel reaches it only after the
+children have declined: child first, then ancestor, as every real
+toolkit does it.
+
+**Drawing needed two more slots, and the reason is a trap worth
+stating.** The ROUTER paints the children, so a container cannot clip
+what it does not paint -- `children_begin`/`children_end` wrap that
+pass, and the scroll view sets its clip in one and clears it (and paints
+its scrollbar) in the other. The container's own `draw` is deliberately
+NOT called when it has children: `uui_layout_ops` has one that paints
+its items, for callers driving a layout directly, and calling it here
+painted every child twice. A container's background therefore goes in
+`children_begin`.
+
+**And `uui_layout` now lets a UUI_FILL child ABSORB A SHORTFALL, not
+just leftover space.** A child flagged to stretch is elastic by
+declaration, so `spare` is allowed to go negative and the same share-out
+that grows it shrinks it, down to a floor. Without that the scroll view
+was placed at its full natural height and pushed the status bar off the
+window regardless -- the scroll view fixed what was inside it and could
+do nothing about what came after it. A container with nothing
+stretchable still overflows, which remains better than squashing a child
+below the size it stated.
+
+Tested by `tools/cpanel_test.py`'s last four checks. Their positive
+control is worth reading before trusting them: reverting the layout
+change alone left "the status bar survives" GREEN at its first
+threshold, because the scrolled page's own content lands in those rows
+and "is there any ink" is satisfied either way. Measured 4675 px
+present against 777 px with the bug, so the check asserts 2000.

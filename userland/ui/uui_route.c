@@ -20,10 +20,17 @@ void uui_router_reset(struct uui_router *r) {
 // needs no input code of its own -- it is a placement device, not a
 // widget with behaviour.
 static struct uui_item *nested(struct uui_item *it, int *out_count) {
-    if (it->ops != &uui_layout_ops) return NULL;
-    struct uui_layout *l = (struct uui_layout *)it->widget;
-    *out_count = l->count;
-    return l->items;
+    if (!it->ops || !it->ops->children) return NULL;
+    return it->ops->children(it->widget, out_count);
+}
+
+// May the pointer reach this container's children at all? A container
+// with a `hit` clips them to itself -- a scroll view's children are
+// laid out past its edges and must not be clickable out there. One
+// without (a plain layout) never clips, which is what it wants.
+static int container_admits(struct uui_item *it, int cx, int cy) {
+    if (!it->ops->hit) return 1;
+    return it->ops->hit(it->widget, cx, cy);
 }
 
 // Deliver a press to one item; returns the consuming item, or NULL.
@@ -33,12 +40,15 @@ static struct uui_item *press_item(struct uui_item *it, int cx, int cy,
     int n = 0;
     struct uui_item *sub = nested(it, &n);
     if (sub) {
+        if (!container_admits(it, cx, cy)) return NULL;
         // Back to front within the nested container too.
         for (int i = n - 1; i >= 0; i--) {
             struct uui_item *hit = press_item(&sub[i], cx, cy, changed);
             if (hit) return hit;
         }
-        return NULL;
+        // No child took it -- fall through to the container's OWN press.
+        // That is how a scroll view's scrollbar gets its clicks: it is
+        // part of the container, not one of the children.
     }
     if (!it->ops || !it->ops->press) return NULL;
     // A widget with an active overlay is asked WITHOUT a hit test: its
@@ -151,7 +161,17 @@ static void draw_items(struct ugfx_surface *s, struct uui_item *items, int count
         if (items[i].hidden) continue;
         int n = 0;
         struct uui_item *sub = nested(&items[i], &n);
-        if (sub) { draw_items(s, sub, n); continue; }
+        if (sub) {
+            // NOT the container's own `draw`: uui_layout's paints its
+            // items itself, for callers that drive a layout directly,
+            // and calling it here would paint every child twice. A
+            // container that wants a background paints it in
+            // children_begin, which runs in the right place anyway.
+            if (items[i].ops->children_begin) items[i].ops->children_begin(s, items[i].widget);
+            draw_items(s, sub, n);
+            if (items[i].ops->children_end) items[i].ops->children_end(s, items[i].widget);
+            continue;
+        }
         if (items[i].ops && items[i].ops->draw) items[i].ops->draw(s, items[i].widget);
     }
 }
@@ -179,10 +199,12 @@ static int wheel_item(struct uui_item *it, int cx, int cy, int notches,
     int n = 0;
     struct uui_item *sub = nested(it, &n);
     if (sub) {
+        if (!container_admits(it, cx, cy)) return 0;
         for (int i = n - 1; i >= 0; i--) {
             if (wheel_item(&sub[i], cx, cy, notches, changed, id)) return 1;
         }
-        return 0;
+        // No child wanted it -- the container scrolls instead. Child
+        // first, then the ancestor, as every real toolkit does.
     }
     if (!it->ops || !it->ops->wheel) return 0;
     int overlay = it->ops->overlay_active && it->ops->overlay_active(it->widget);

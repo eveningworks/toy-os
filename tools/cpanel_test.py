@@ -320,6 +320,107 @@ def main():
           back_px != sysinfo_px and back_ink > 500,
           f"{back_ink} non-background px")
 
+    # --- the page SCROLLS when the window is too small for it --------
+    #
+    # Before uui_scrollview, a Control Panel shrunk below its content
+    # did not clip or scroll -- uui_layout handed every child its full
+    # natural size and placed the rest past the window's bottom edge.
+    # So the status bar vanished entirely and all but the first of a
+    # setting's choices became unreachable, with nothing on screen to
+    # say so.
+    #
+    # Selecting Time zone first, because it is the setting with enough
+    # choices to overflow a short window. A setting with two choices
+    # would fit and prove nothing -- the fixture has to cross the
+    # boundary being tested.
+    # ESTABLISH the baseline BEFORE interacting. Settings persist to the
+    # disk image and `make iso` re-seeds by sync rather than reformat, so
+    # a previous run's timezone is still there -- and if it happens to be
+    # the row this ends up clicking, "it changed" is false while
+    # everything works. Done here rather than just before the click
+    # because writing a setting bumps the registry's generation, and the
+    # app reloads and drops its selection when it sees that.
+    dbg.send("sh config set system.timezone utc")
+    dbg.settle()
+
+    lx, ly, lw, lh = geo["list"]
+    # click() takes CONTENT-RELATIVE coordinates and adds the origin
+    # itself -- passing absolute ones offsets them twice and lands
+    # outside the window, which looks exactly like a dead control.
+    click(lx + lw // 2, ly + 8)                    # the first row: Time zone
+    dbg.settle()
+
+    win = dbg.window("Control Panel")
+    short_h = win["h"] - 160
+    dbg.send("gui drag %d %d %d %d" % (win["x"] + win["w"] - 2, win["y"] + win["h"] - 2,
+                                        win["x"] + win["w"] - 2, win["y"] + short_h))
+    dbg.settle()
+    win = dbg.window("Control Panel")
+    c = win["content"]
+    scx, scy, scw, sch = c["x"], c["y"], c["w"], c["h"]
+
+    check("the window really did shrink", win["h"] < short_h + 40,
+          f"{win['h']}px tall")
+
+    # THE ONE THAT WOULD HAVE CAUGHT THE ORIGINAL BUG. The status bar is
+    # OUTSIDE the scroll view, so it must survive a window too small for
+    # the page -- it used to be laid out past the bottom edge and simply
+    # disappear. Measured as ink in the bottom rows of the content.
+    bar_h = 20
+    bar_ink, _ = crop_ink(qmp, f"{args.tmp}/cpanel_statusbar.png",
+                           (scx, scy + sch - bar_h, scw, bar_h))
+    # THE THRESHOLD IS THE CHECK. Measured: 4675 px with the status bar
+    # present, 777 with the positive control in place (uui_layout back
+    # to overflowing, so the bar is laid out past the window). It is not
+    # zero in the broken case -- the scrolled page's own content sits in
+    # those rows instead -- so "is there any ink" passes either way,
+    # which is exactly what this check did on its first run. 2000 sits
+    # between the two with room on both sides.
+    check("the status bar survives a window too small for the page",
+          bar_ink > 2000, f"{bar_ink} non-background px in the bottom {bar_h} rows")
+
+    # Scrolling must REACH what a short window hides. Capture the page,
+    # wheel to the bottom, capture again: the two must differ, and the
+    # cursor has to be parked inside the page first because the wheel
+    # goes to the widget under it (gui_debug.py's warp_cursor).
+    page_rect = (scx, scy + 30, scw, sch - 60)
+    before_ink, before_px = crop_ink(qmp, f"{args.tmp}/cpanel_scroll_top.png", page_rect)
+    dbg.warp_cursor(qmp, scx + scw // 3, scy + sch // 2)
+    for _ in range(8):
+        dbg.send("gui wheel -1")
+    dbg.settle()
+    after_ink, after_px = crop_ink(qmp, f"{args.tmp}/cpanel_scroll_bottom.png", page_rect)
+    check("the wheel scrolls the page", after_px != before_px,
+          f"{before_ink} -> {after_ink} non-background px")
+
+    # And the payoff: a choice that was off-screen is now selectable.
+    # Asserted on the FILE, not on the app's own claim -- the same
+    # independent path the earlier checks use.
+    before_tz = stored_value(dbg, "timezone")
+    drain(dbg)
+    # The last row of the scrolled page. Sampling from the bottom of the
+    # viewport rather than a computed row index: what is under it
+    # depends on the scroll offset, which is the widget's business.
+    # The FIRST visible row of the scrolled page, derived from the tabs'
+    # reported geometry rather than a magic offset: the viewport starts
+    # just below them, so a row centre is a little under that. Clicking
+    # near the BOTTOM instead was the first attempt and it landed in the
+    # gap between the last row and the status bar -- which reads exactly
+    # like a broken scroll view and was not one.
+    t0x, t0y, t0w, t0h = geo["tab0"]
+    click(40, t0y + t0h + 12)
+    dbg.settle()
+    # settle() waits for the WM's queue to drain, which is not the same
+    # as the CLIENT having written the file: the write happens in the
+    # app's own process, one hop further out. Give it that hop before
+    # reading the disk, or this reads the old value and blames the
+    # scroll view.
+    time.sleep(0.5)
+    after_tz = stored_value(dbg, "timezone")
+    check("a choice only reachable by scrolling can be applied",
+          after_tz is not None and after_tz != before_tz,
+          f"{before_tz} -> {after_tz}")
+
     dbg.send("gui close 0")
     dbg.settle()
     return report()

@@ -73,6 +73,38 @@ struct uui_widget_ops {
     // its `hit` only covers the closed control. A widget with no
     // overlay leaves this NULL.
     int (*overlay_active)(const void *w);
+
+    // --- containers -------------------------------------------------
+    //
+    // A widget that HOLDS other items says so here, and the router
+    // recurses into them: a container needs no input code of its own,
+    // and -- the part that matters -- a child reports its OWN id to the
+    // app rather than the container's. An app switching on ID_CHOICES
+    // keeps working when the page it is on gains a scroll view.
+    //
+    // This replaced a type check on uui_layout_ops in uui_route.c. The
+    // check worked for exactly one container and silently swallowed
+    // every child's id for any other, which is what a scroll view
+    // discovered by breaking Control Panel's radio buttons.
+    //
+    // A container that also has `hit` CLIPS its children to itself: the
+    // router will not recurse into a container the pointer is outside.
+    // That is what a scroll view needs (its children are laid out
+    // beyond its edges and must not be clickable there) and what a
+    // plain layout does not want, which is why uui_layout declares no
+    // hit at all.
+    struct uui_item *(*children)(void *w, int *out_count);
+
+    // Wrapped around the painting of `children`. A container that needs
+    // its children CLIPPED does it here, because the router is what
+    // draws them -- a scroll view cannot clip what it does not paint.
+    // `children_end` is also where a container paints anything that
+    // belongs ON TOP of its children and is not one of them, which for
+    // a scroll view is its scrollbar.
+    //
+    // The container's own `draw` still runs first, for a background.
+    void (*children_begin)(struct ugfx_surface *s, void *w);
+    void (*children_end)(struct ugfx_surface *s, void *w);
 };
 
 // One thing in a container. `widget` is whatever `ops` expects, not

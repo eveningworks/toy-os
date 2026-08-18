@@ -32,6 +32,7 @@
 #include "ui/uui_radio_list.h"
 #include "ui/uui_button_group.h"
 #include "ui/uui_statusbar.h"
+#include "ui/uui_scrollview.h"
 #include "ui/utheme.h"
 #include "setting_abi.h"
 #include "cpuinfo.h"
@@ -42,7 +43,7 @@
 #define MAX_SETTINGS  SETTING_ABI_MAX
 #define MAX_CHOICES   48
 
-enum { ID_TABS = 1, ID_LIST, ID_CHOICES, ID_STATUS };
+enum { ID_TABS = 1, ID_PAGE, ID_LIST, ID_CHOICES, ID_STATUS };
 // NON-ZERO on purpose: uui_button_group_take_activated() returns 0
 // for "nothing committed", so a button whose code is 0 can never be
 // told apart from a press that was dragged off.
@@ -305,7 +306,22 @@ static void draw_sysinfo(struct ugfx_surface *s, int x, int y, int w, int h) {
 
 // --- uapp plumbing ----------------------------------------------------
 
-static struct uui_item ITEMS[4];
+// The settings page SCROLLS. The tabs and the status bar do not: they
+// sit outside the scroll view, so shrinking the window moves the page
+// under them rather than pushing them off the bottom, which is what it
+// used to do -- a short window lost the status bar entirely and left
+// most of a setting's choices unreachable.
+//
+// The list and the choices are inside ONE scroll region rather than
+// each scrolling itself. Two nested scrollbars would be the obvious
+// alternative and the worse one: the list is laid out at its natural
+// height in here, so every row is present and there is nothing for it
+// to scroll -- one page, one scrollbar, one thing the wheel does.
+static struct uui_item PAGE[2];
+static struct uui_layout PAGE_LAYOUT;
+static struct uui_scrollview PAGE_SCROLL;
+
+static struct uui_item ITEMS[3];
 static struct uui_layout LAYOUT;
 
 static void set_tab(int tab) {
@@ -313,8 +329,10 @@ static void set_tab(int tab) {
     // `hidden` removes a widget from BOTH the picture and hit-testing,
     // which is what makes this a page switch rather than an overlay a
     // stray click could still reach.
+    // The whole page, not the two widgets inside it -- hiding the
+    // container removes its children from the picture and from
+    // hit-testing in one move.
     ITEMS[1].hidden = (tab != TAB_SETTINGS);
-    ITEMS[2].hidden = (tab != TAB_SETTINGS);
     logf_("cpanel: tab %s\n", tab == TAB_SETTINGS ? "settings" : "sysinfo");
 }
 
@@ -452,16 +470,27 @@ int main(void) {
     g_choices.bg = UTHEME_PANEL_BG;
     g_choices.fg = UTHEME_TEXT;
 
+    PAGE[0] = (struct uui_item){ .ops = &uui_listbox_ops, .widget = &g_list,
+                                  .id = ID_LIST, .flags = UUI_FILL_W };
+    PAGE[1] = (struct uui_item){ .ops = &uui_radio_list_ops, .widget = &g_choices,
+                                  .id = ID_CHOICES, .flags = UUI_FILL_W };
+    PAGE_LAYOUT = (struct uui_layout){ .dir = UUI_COLUMN, .items = PAGE,
+                                        .count = (int)(sizeof PAGE / sizeof PAGE[0]),
+                                        .margin = 0 };
+    uui_scrollview_init(&PAGE_SCROLL, &PAGE_LAYOUT);
+    // How tall the window asks to be at open. Capped at the content, so
+    // a setting with two choices does not reserve room for twelve.
+    uui_scrollview_set_preferred_rows(&PAGE_SCROLL, 14);
+
     ITEMS[0] = (struct uui_item){ .ops = &uui_button_group_ops, .widget = &g_tabs,
                                    .id = ID_TABS };
-    ITEMS[1] = (struct uui_item){ .ops = &uui_listbox_ops, .widget = &g_list,
-                                   .id = ID_LIST, .flags = UUI_FILL_W | UUI_FILL_H };
-    ITEMS[2] = (struct uui_item){ .ops = &uui_radio_list_ops, .widget = &g_choices,
-                                   .id = ID_CHOICES, .flags = UUI_FILL_W };
-    ITEMS[3] = (struct uui_item){ .ops = &uui_statusbar_ops, .widget = &g_status_bar,
+    ITEMS[1] = (struct uui_item){ .ops = &uui_scrollview_ops, .widget = &PAGE_SCROLL,
+                                   .id = ID_PAGE, .flags = UUI_FILL_W | UUI_FILL_H };
+    ITEMS[2] = (struct uui_item){ .ops = &uui_statusbar_ops, .widget = &g_status_bar,
                                    .id = ID_STATUS, .flags = UUI_FILL_W };
 
-    LAYOUT = (struct uui_layout){ .dir = UUI_COLUMN, .items = ITEMS, .count = 4 };
+    LAYOUT = (struct uui_layout){ .dir = UUI_COLUMN, .items = ITEMS,
+                                  .count = (int)(sizeof ITEMS / sizeof ITEMS[0]) };
 
     struct uapp_desc desc = {
         .title = "Control Panel",
@@ -472,7 +501,11 @@ int main(void) {
         .layout = &LAYOUT,
         .flags = UAPP_RESIZABLE | UAPP_SINGLE_INSTANCE,
         .widgets = ITEMS,
-        .widget_count = 4,
+        // DERIVED, not written out: this said 4 while ITEMS was 3 for
+        // exactly one build, and the router walked one item past the
+        // end and dereferenced a garbage ops table. Same hazard as any
+        // table sized by a literal.
+        .widget_count = (int)(sizeof ITEMS / sizeof ITEMS[0]),
         .on_widget = on_widget,
         .on_draw = on_draw,
         .on_open = on_open,

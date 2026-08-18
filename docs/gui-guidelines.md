@@ -8,6 +8,38 @@ This is a working document for writing apps and widgets, not a style
 manifesto. Where a rule exists because something went wrong, that's
 said, because the reason is the useful part.
 
+## A page that can overflow needs a scroll view
+
+`uui_layout` does not shrink children below their natural size. Given
+less room than it wants it OVERFLOWS -- the last children are placed
+past the container's bottom edge and simply are not there. No scrollbar,
+no clipping, nothing on screen to say anything is missing.
+
+So **any page whose content can grow -- a list of settings, a list of
+choices, anything driven by data rather than by a fixed design -- goes
+in a `uui_scrollview`** (`userland/ui/uui_scrollview.h`). Wrap the
+page's layout, put the wrapper in the window's layout with
+`UUI_FILL_W | UUI_FILL_H`, and the app writes no scrolling code: the
+wheel, the scrollbar, its thumb and trough, clipping and clamping are
+the widget's.
+
+Two placement rules that matter more than they look:
+
+- **Keep the chrome OUTSIDE the scroll view.** Tabs, a status bar, a
+  button row: these should not scroll away, and if they are inside the
+  scrolled page they will. Control Panel puts its tabs above and its
+  status bar below, with only the page between them.
+- **One scroll region per page, not one per widget.** A `uui_listbox`
+  inside a scroll view is laid out at its natural height, so every row
+  is present and it has nothing of its own left to scroll -- one page,
+  one scrollbar, one thing the wheel does. Nesting two scrollable
+  widgets gives the user two bars and an ambiguous wheel.
+
+The scrollbar itself follows "Scrollbars: what a real one does" below,
+because it IS that scrollbar -- the same `uui_scrollbar` the listbox
+draws, so the behaviour `tools/scrollbar_test.py` pins down applies
+unchanged.
+
 ## Behaviour belongs to the component, not to the app
 
 **A widget owns how it behaves. An app owns whether and how it looks.**

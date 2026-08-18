@@ -12,6 +12,10 @@ static int lay_gap(const struct uui_layout *l) {
     return l->gap > 0 ? l->gap : ugfx_char_w() / 2 + 2;
 }
 
+// The least a UUI_FILL child is ever squeezed to. See the shortfall
+// note in uui_layout_run().
+#define MIN_STRETCHED 8
+
 static void item_natural(const struct uui_item *it, int *w, int *h) {
     *w = 0; *h = 0;
     // A HIDDEN child asks for nothing, so it reserves no space. Without
@@ -131,10 +135,28 @@ void uui_layout_run(struct uui_layout *l, int x, int y, int w, int h) {
 
     int inner_main = (l->dir == UUI_COLUMN) ? inner_h : inner_w;
     int spare = inner_main - natural_total;
-    if (spare < 0) spare = 0; // given less than it wants, it overflows
-                               // rather than shrinking children below
-                               // their stated minimum -- the same call
-                               // the grid above makes.
+
+    // A SHORTFALL COMES OUT OF THE CHILDREN THAT SAID THEY STRETCH.
+    //
+    // `spare` is allowed to be negative here, so the same share-out
+    // below that grows UUI_FILL_H children by an equal slice also
+    // shrinks them by one. That is the honest reading of the flag: a
+    // child that can absorb extra space can absorb a shortfall -- a
+    // scroll view scrolls, a list shows fewer rows -- while a child
+    // WITHOUT the flag stated a size it needs and keeps it.
+    //
+    // Before this, a container given less than it wanted handed every
+    // child its full natural size and placed the remainder past its own
+    // bottom edge. The children that fell off simply vanished, with
+    // nothing on screen to say so: Control Panel shrunk below its
+    // content lost its status bar entirely, and no amount of scrolling
+    // within the page could bring back something laid out beyond the
+    // window.
+    //
+    // With nothing stretchable to take it from, the old behaviour
+    // stands -- overflowing is still better than squashing a child
+    // below the size it said it needed.
+    if (grow_count == 0 && spare < 0) spare = 0;
     int grow_each = grow_count > 0 ? spare / grow_count : 0;
     int grow_seen = 0;
 
@@ -152,7 +174,12 @@ void uui_layout_run(struct uui_layout *l, int x, int y, int w, int h) {
             grow_seen++;
             int extra = (grow_seen == grow_count)
                           ? spare - grow_each * (grow_count - 1) : grow_each;
-            if (l->dir == UUI_COLUMN) ih += extra; else iw += extra;
+            int size = ((l->dir == UUI_COLUMN) ? ih : iw) + extra;
+            // A floor, because a stretchable child squeezed to nothing
+            // is indistinguishable from a bug -- and leaving it a few
+            // pixels keeps its scrollbar on screen to say there is more.
+            if (size < MIN_STRETCHED) size = MIN_STRETCHED;
+            if (l->dir == UUI_COLUMN) ih = size; else iw = size;
         }
 
         // 0 means "no preference" (uui_primitives.h), so a child that
@@ -198,7 +225,19 @@ static void layout_draw(struct ugfx_surface *s, const void *w) {
     uui_layout_draw(s, (const struct uui_layout *)w);
 }
 
+// A layout is a placement device, not a widget with behaviour: it
+// declares its items and nothing else, so the router recurses into them
+// and each child reports its own id. It deliberately has no `hit` --
+// that would CLIP its children to it, which is a scroll view's job and
+// not a plain container's.
+static struct uui_item *layout_children(void *w, int *out_count) {
+    struct uui_layout *l = w;
+    *out_count = l->count;
+    return l->items;
+}
+
 const struct uui_widget_ops uui_layout_ops = {
+    .children = layout_children,
     .natural_size = layout_natural,
     .set_geometry = layout_geometry,
     .draw         = layout_draw,
