@@ -16,6 +16,7 @@
 #include "timer.h"
 #include "elf_run.h" // elf_run_from_fs() -- the legacy blocking path
 #include "fs.h"
+#include "paging.h"  // paging_kernel_leaf() -- the guard-page checks below
 
 // The silent long-running spinner this test drives -- see
 // userland/spin_test.c for why it has to be silent (this test's own
@@ -148,4 +149,45 @@ KTEST("sched", "a scheduled process survives a legacy process running alongside"
     }
     KTEST_ASSERT(exited);
     KTEST_ASSERT_EQ(code, 0);
+}
+
+// --- kernel stack guard pages ----------------------------------------
+//
+// These assert a property nothing else can observe and whose failure is
+// SILENT: if scheduler_guard_pages_init() runs out of split tables (or
+// is never called, or runs before paging_enforce_wx() and gets its work
+// undone), every stack is back to being a plain array with the next
+// slot's saved trapframe directly below it -- which is the bug this
+// whole mechanism was built for, presenting as a #GP on iretq in a
+// process that did nothing wrong.
+//
+// The check has to ask the PAGE TABLES. A guard page that is still
+// mapped behaves identically to one that is not, right up until
+// something overflows.
+KTEST("sched", "every kernel stack has an unmapped guard page below it") {
+    int mapped = 0;
+    for (int i = 0; i < 4; i++) {   // a sample: the pattern is uniform
+        uint64_t base = scheduler_kstack_base(i);
+        KTEST_ASSERT(base != 0);
+        // The guard is the page immediately below the stack's lowest
+        // address, so this is the address an overflow reaches first.
+        uint64_t guard = base - 4096;
+        if (paging_kernel_leaf(guard) & 1 /* PRESENT */) mapped++;
+        // ...and the stack itself must still be there, which is the
+        // half that would fail if the unmapping were off by one page.
+        KTEST_ASSERT(paging_kernel_leaf(base) & 1);
+    }
+    KTEST_ASSERT_EQ(mapped, 0);
+}
+
+KTEST("sched", "the guard page is BELOW the stack, not inside it") {
+    // An off-by-one that unmapped the stack's own first page would pass
+    // the test above only if it also broke the second assertion there --
+    // so this states the geometry directly instead.
+    uint64_t b0 = scheduler_kstack_base(0);
+    uint64_t b1 = scheduler_kstack_base(1);
+    KTEST_ASSERT(b1 > b0);
+    // Slot 1's stack starts a whole stack plus a whole guard above
+    // slot 0's, which is what leaves room for a guard between them.
+    KTEST_ASSERT_EQ(b1 - b0, (uint64_t)scheduler_kstack_kib() * 1024 + 4096);
 }

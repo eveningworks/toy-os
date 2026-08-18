@@ -48,6 +48,20 @@ static struct tss tss;
 // an interrupt/exception fires while running in ring 3.
 static uint8_t kernel_stack0[8192] __attribute__((aligned(16)));
 
+// The DOUBLE FAULT stack (IST slot 1, i.e. tss.ist[0]).
+//
+// A #DF is raised when the CPU cannot deliver a fault -- and the case
+// that matters here is a kernel stack overflow: RSP walks onto the
+// guard page, the push faults, and delivering that #PF needs to push
+// again onto the same broken stack. Without an IST the second push
+// faults too and the CPU triple-faults, which reboots the machine with
+// nothing printed. With one, the #DF handler runs on a known-good stack
+// and can say what happened.
+//
+// Its own stack rather than kernel_stack0: the whole point is that it
+// must be usable when the current stack is not.
+static uint8_t df_stack[8192] __attribute__((aligned(16)));
+
 static void set_tss_descriptor(uint64_t *desc_lo, uint64_t *desc_hi, uint64_t base, uint32_t limit) {
     uint64_t low = 0;
     low |= (uint64_t)(limit & 0xFFFF);
@@ -70,6 +84,9 @@ void gdt_init(void) {
 
     for (size_t i = 0; i < sizeof(tss); i++) ((uint8_t *)&tss)[i] = 0;
     tss.rsp0 = (uint64_t)(kernel_stack0 + sizeof(kernel_stack0));
+    // IST slot 1 (the descriptor's IST field is 1-based, this array is
+    // not). idt_init() points the #DF gate at it.
+    tss.ist[0] = (uint64_t)(df_stack + sizeof(df_stack));
     tss.iomap_base = sizeof(struct tss); // beyond the limit => no IO bitmap
 
     set_tss_descriptor(&gdt[5], &gdt[6], (uint64_t)&tss, sizeof(struct tss) - 1);

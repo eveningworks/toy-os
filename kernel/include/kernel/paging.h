@@ -41,6 +41,17 @@ int paging_enforce_wx(void);
 // paging_enforce_wx() split it. Returns 0 if nothing is mapped. For
 // tests and diagnostics; nothing in the kernel's normal operation needs
 // to ask.
+// Makes one 4KiB page of the identity map NOT PRESENT, splitting the
+// 2MiB huge page that covers it first if needed (siblings keep exactly
+// the permissions they had). Returns 0 if the address is out of the
+// identity map or the split pool is exhausted.
+//
+// For GUARD PAGES: the per-process kernel stacks (scheduler.c) each have
+// one below them, so an overflow faults instead of silently overwriting
+// the next slot's saved trapframe. Must run AFTER paging_enforce_wx(),
+// which rewrites every PDE.
+int paging_unmap_kernel_page(uint64_t vaddr);
+
 uint64_t paging_kernel_leaf(uint64_t vaddr);
 
 // How many pages in the kernel's own map are simultaneously writable

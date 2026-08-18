@@ -60,7 +60,10 @@ KTEST("uaccess", "a copy spanning a page boundary is correct on both sides") {
     uint64_t as = make_space(2, frames);
     KTEST_ASSERT(as != 0);
 
-    char out[512], back[512];
+    // static, not automatic: 1 KiB of buffers is over the kernel's
+    // per-function frame budget (Makefile's -Wframe-larger-than), and a
+    // KTEST body is never reentered, so there is nothing to share.
+    static char out[512], back[512];
     for (int i = 0; i < 512; i++) out[i] = (char)(i ^ 0x5A);
 
     // Starts 256 bytes before the boundary, so 256 bytes land in each page.

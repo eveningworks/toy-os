@@ -710,6 +710,24 @@ technical conventions below:
   file?** The rewrite loop that `etc_config_set()` and
   `etc_config_unset()` each carried a copy of is now one
   buffer-to-buffer function, which is what made it shareable.
+- **Kernel stacks are 16 KiB, have a GUARD PAGE, and carry a CANARY**
+  (`kernel/proc/scheduler.c`). They are their own page-aligned array,
+  not a member of `struct sched_process`, so the page below each one can
+  be unmapped -- Linux's `CONFIG_VMAP_STACK`. Three things ride with it.
+  **The `#DF` gate runs on an IST** (`gdt.c`'s `df_stack`, `tss.ist[0]`,
+  set in `idt_init()`): without it an overflow triple-faults and the
+  machine reboots with nothing printed, because the push that would
+  report the #PF is itself on the broken stack. **A canary at each stack
+  base is checked on every switch**, covering the frame big enough to
+  step OVER the guard. And **`-Wframe-larger-than=1024` is in CFLAGS**
+  (2048 for `apps/`, which runs on the kernel context's stack, not a
+  per-process one) -- it found `syscall_dispatch()`'s **4832-byte
+  frame** the moment it existed, which is waived by name with the
+  extraction on the roadmap. The bug that caused all this: an 8 KiB
+  stack overflowed on `SYS_SETTING` -> `etc_config` -> VFS -> TFS3 ->
+  ATA and zeroed the NEXT SLOT'S saved trapframe, so the window manager
+  `iretq`'d into CS=0. **Do not grow a kernel stack dynamically** -- no
+  mainstream kernel does, and the reasoning is in `docs/decisions.md`.
 - **A compositor's view of a dead window is POISONED, not unmapped**
   (`comp_poison()` in `kernel/proc/win_server.c`). The invariant: while
   a compositor is registered, a window buffer's slot in its address

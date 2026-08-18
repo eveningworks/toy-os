@@ -81,9 +81,18 @@ KERNEL_INCLUDES = $(API_INCLUDES) -Ikernel/include/kernel
 
 CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-protector-guard=global -fno-pic -fno-pie \
          -mno-red-zone -mcmodel=kernel -mno-mmx -mno-sse -mno-sse2 \
-         -Wall -Wextra -O2 -g -c $(KERNEL_INCLUDES) -Iapps -MMD -MP
+         -Wall -Wextra -Wframe-larger-than=1024 -O2 -g -c $(KERNEL_INCLUDES) -Iapps -MMD -MP
 
-APPS_CFLAGS = $(subst -Ikernel/include/kernel,,$(CFLAGS))
+# apps/ gets a looser frame budget than kernel/ on purpose. The tight
+# 1024 above bounds what runs on a PER-PROCESS kernel stack -- i.e. what
+# a syscall from ring 3 can reach -- and that is kernel/ only. apps/ (the
+# shell, the WM) runs in the kernel CONTEXT, on its own stack, and three
+# of its functions are legitimately 1.4-1.8 KiB of local buffers at the
+# top of their call chains (gui_apps_load, shell_main, cmd_parttable).
+# 2048 still catches the realistic mistake, which is a new multi-KiB
+# buffer declared as a local.
+APPS_CFLAGS = $(subst -Wframe-larger-than=1024,-Wframe-larger-than=2048,\
+              $(subst -Ikernel/include/kernel,,$(CFLAGS)))
 
 LDFLAGS = -n -T linker.ld -nostdlib
 

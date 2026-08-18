@@ -11,6 +11,7 @@
 #include "mouse.h"
 #include "syscall.h"
 #include "scheduler.h"
+#include "paging.h"   // paging_kernel_leaf() -- is this stack page mapped?
 #include "vmm.h"
 #include "reloc.h" // kernel_reloc_delta() -- a panic RIP is meaningless without it
 #include "process.h"
@@ -130,6 +131,14 @@ void idt_init(void) {
         idt_set_gate(i, isr_table[i], 0, 0x8E); // present, ring0, 64-bit interrupt gate
     }
 
+    // The DOUBLE FAULT gate runs on IST slot 1 (gdt.c's df_stack). It
+    // is the ONLY gate that needs one, and it needs it for one reason:
+    // a kernel stack overflow. RSP walks onto a stack's guard page, the
+    // push faults, and delivering that #PF has to push onto the same
+    // broken stack -- so without a known-good stack to switch to, the
+    // CPU triple-faults and the machine reboots with nothing printed.
+    idt_set_gate(8, isr_table[8], 1, 0x8E);
+
     // Syscall gate needs DPL=3 (0xEE, not 0x8E) -- otherwise ring-3 code
     // executing `int 0x80` gets a #GP instead of reaching the handler,
     // since a software interrupt's DPL is the *minimum* privilege
@@ -193,7 +202,15 @@ extern char __ktext_end[];
 // stale return addresses from earlier calls are still down there -- and
 // that is the honest trade, because the alternative is nothing at all.
 // Read the list as candidates, most recent first, not as a call chain.
-static void panic_report_context(uint64_t rip, const uint64_t *regs) {
+// `scan_from` overrides where the stack scan starts. 0 means "use RSP",
+// which is right for every fault except a kernel stack OVERFLOW: there
+// RSP is on the unmapped guard page, so the scan reads nothing and the
+// one thing worth having -- the call chain that got too deep -- is
+// exactly what is missing. For that case the caller passes the stack's
+// BASE, i.e. the first mapped word above the guard, where the deepest
+// frames are.
+static void panic_report_context(uint64_t rip, const uint64_t *regs,
+                                  uint64_t scan_from) {
     uint64_t delta = kernel_reloc_delta();
     uint64_t tstart = (uint64_t)(uintptr_t)__ktext_start;
     uint64_t tend   = (uint64_t)(uintptr_t)__ktext_end;
@@ -210,7 +227,7 @@ static void panic_report_context(uint64_t rip, const uint64_t *regs) {
     klog_printf("  resolve with: addr2line -f -e build/kernel.bin 0x%lx\n",
                  rip - delta);
 
-    uint64_t rsp = regs[20];
+    uint64_t rsp = scan_from ? scan_from : regs[20];
     // Only walk a stack that could plausibly be one. A wild RSP is
     // exactly what some faults leave behind, and faulting again inside
     // the panic handler loses the report entirely -- which is the one
@@ -224,6 +241,19 @@ static void panic_report_context(uint64_t rip, const uint64_t *regs) {
     const uint64_t *sp = (const uint64_t *)(uintptr_t)rsp;
     int shown = 0;
     for (int i = 0; i < 128 && shown < 12; i++) {
+        // Every page, not just the first: a stack OVERFLOW leaves RSP on
+        // an unmapped guard page, so the plausibility check above is
+        // satisfied and the read still faults -- inside the panic
+        // handler, which loses the report. That is not hypothetical; it
+        // is what the first armed guard page did.
+        uint64_t at = (uint64_t)(uintptr_t)&sp[i];
+        if ((at & 0xFFF) < 8 || i == 0) {
+            if (!(paging_kernel_leaf(at) & 1 /* PRESENT */)) {
+                klog_printf("    (stack scan stopped: 0x%lx is not mapped -- "
+                            "an overflow leaves RSP on a guard page)\n", at);
+                break;
+            }
+        }
         uint64_t v = sp[i];
         if (v < tstart || v >= tend) continue;
         uint32_t off = 0;
@@ -308,6 +338,19 @@ void isr_dispatch(uint64_t *regs) {
         int stack_overflow = vector == 14 && (cs & 3) == 3 &&
                               uaddr_is_stack_guard(cr2);
 
+        // The KERNEL's own stacks have guard pages too (scheduler.c), so
+        // the same question gets asked of them. Two ways in: the
+        // ordinary one is a #PF whose CR2 lands in a slot's guard page;
+        // the violent one is a #DF, raised because the push that would
+        // report the #PF cannot itself happen -- RSP is already on the
+        // broken stack. That second case is why the #DF gate runs on an
+        // IST (idt_init()); without it the CPU triple-faults and the
+        // machine reboots with nothing printed at all.
+        int kstack_slot = -1;
+        if (vector == 14) kstack_slot = scheduler_kstack_guard_slot(cr2);
+        else if (vector == 8) kstack_slot = scheduler_kstack_guard_slot(regs[20]);
+        int kstack_overflow = kstack_slot >= 0;
+
         vga_set_color(VGA_WHITE, VGA_RED);
         vga_printf("\n*** %s%s ***\n",
                     recoverable ? "RING-3 PROCESS CRASHED: " : "KERNEL PANIC: ",
@@ -330,6 +373,13 @@ void isr_dispatch(uint64_t *regs) {
                        "(0x%lx..0x%lx) into its guard page.\n",
                        (uint64_t)UADDR_STACK_BOTTOM,
                        (uint64_t)UADDR_STACK_VADDR + 4096);
+        }
+        if (kstack_overflow) {
+            vga_printf("Process slot %d (pid %d) ran off the bottom of its "
+                       "KERNEL stack into the guard page below it.\n",
+                       kstack_slot, kstack_slot + 1);
+            vga_printf("The call chain in the stack scan below is too deep "
+                       "for one -- shorten it, or move a big local off it.\n");
         }
 
         // WHO was running, which is the line that would have pointed
@@ -357,7 +407,15 @@ void isr_dispatch(uint64_t *regs) {
                     (unsigned long)(clocksource_now_ns() / 1000000000ULL));
 
         klog_printf("%s%s\n", recoverable ? "RING-3 CRASH: " : "PANIC: ",
-                     stack_overflow ? "Stack overflow" : exception_names[vector]);
+                     kstack_overflow ? "Kernel stack overflow"
+                                     : stack_overflow ? "Stack overflow"
+                                                      : exception_names[vector]);
+        if (kstack_overflow) {
+            klog_printf("  process slot %d (pid %d) overran its %d KiB KERNEL "
+                        "stack into the guard page below it -- the call chain "
+                        "below is too deep for one\n",
+                        kstack_slot, kstack_slot + 1, scheduler_kstack_kib());
+        }
         // Everything above went to the SCREEN only, which is why a panic
         // used to arrive as a photograph. The serial log is where a
         // report can actually be pasted from, so it gets the same facts.
@@ -368,7 +426,11 @@ void isr_dispatch(uint64_t *regs) {
         // userland ELF, so resolving it against the kernel image would
         // be confidently wrong -- and its stack is a user mapping this
         // has no business walking.
-        if ((cs & 3) == 0) panic_report_context(rip, regs);
+        if ((cs & 3) == 0) {
+            panic_report_context(rip, regs,
+                                  kstack_overflow
+                                      ? scheduler_kstack_base(kstack_slot) : 0);
+        }
 
         // The console draws into a back buffer and normally publishes
         // from the keyboard's idle loop (see vga.h's vga_present()). A

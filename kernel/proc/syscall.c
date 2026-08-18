@@ -336,6 +336,21 @@ void syscall_process_exit_cleanup(uint64_t pml4_phys) {
     vmm_destroy_address_space(pml4_phys);
 }
 
+// KNOWN OFFENDER, and the frame check is how it was found: this
+// function's frame is ~4.8 KiB, because it is one long if/else chain and
+// GCC does not overlap the message structs of branches that can never
+// run together (win_debug_msg alone is 528 bytes). That is ~4.8 KiB
+// consumed on EVERY syscall entry, on a per-process kernel stack, before
+// any handler does anything -- by a distance the biggest consumer of
+// that stack, and the reason 8 KiB was not enough.
+//
+// The fix is to extract the big branches into noinline handlers so each
+// pays for its own locals only; it is a real refactor of this file and
+// is scheduled separately (docs/roadmap.md). Until then the budget is
+// waived HERE, by name, rather than raised for the whole kernel -- a
+// warning that always fires is one everybody learns to ignore.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wframe-larger-than="
 void syscall_dispatch(uint64_t *regs) {
     uint64_t rax = regs[14]; // syscall number
     uint64_t rdi = regs[9];  // first argument
@@ -1348,3 +1363,4 @@ void syscall_dispatch(uint64_t *regs) {
     // isr_dispatch returns normally, isr_common's usual epilogue runs,
     // and ring 3 resumes right after its `int 0x80`.
 }
+#pragma GCC diagnostic pop

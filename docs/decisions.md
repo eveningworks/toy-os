@@ -148,6 +148,7 @@ there when you add an entry, or the index quietly stops being one.
 - [The ring-3 UI Demo selects on contact where the kernel one committed on release](#the-ring-3-ui-demo-selects-on-contact-where-the-kernel-one-committed-on-release)
 - [A compositor's view of a window is at a DERIVED address, and revocation is the feature](#a-compositors-view-of-a-window-is-at-a-derived-address-and-revocation-is-the-feature)
 - [Revoking a compositor's window mapping leaves the zero page behind, not a hole](#revoking-a-compositors-window-mapping-leaves-the-zero-page-behind-not-a-hole)
+- [Kernel stacks are 16 KiB, guarded, and canaried -- and the syscall dispatcher is why they had to be](#kernel-stacks-are-16-kib-guarded-and-canaried----and-the-syscall-dispatcher-is-why-they-had-to-be)
 - [The third inert scrollbar: drawing one and handling it are separate jobs](#the-third-inert-scrollbar-drawing-one-and-handling-it-are-separate-jobs)
 - [The toolkit routes pointer input; an app configures and is told what changed](#the-toolkit-routes-pointer-input-an-app-configures-and-is-told-what-changed)
 - [What editing text MEANS lives in one place, and the storage does not](#what-editing-text-means-lives-in-one-place-and-the-storage-does-not)
@@ -6384,6 +6385,85 @@ Force quit was the deterministic case, not the only one: the same
 unmap runs when any client exits on its own, and a ring-3 compositor
 preempted mid-blit could always have faulted on it. That race is what
 the invariant closes.
+
+
+## Kernel stacks are 16 KiB, guarded, and canaried -- and the syscall dispatcher is why they had to be
+
+A `/bin/config` write from the ring-3 desktop panicked the machine with
+a #GP on `iretq` in a process that had done nothing wrong. The chain
+took a day to find and none of it was where the symptom pointed:
+
+  * The spawned child's syscall path -- `SYS_SETTING` -> the setting's
+    `apply` -> `etc_config` rewrite -> VFS -> TFS3 journal -> ATA --
+    used more than its whole 8 KiB kernel stack. Measured with a
+    canary-painted stack: **8192 of 8192**, i.e. it ran off the bottom.
+  * `kstack[]` was the LAST member of `struct sched_process`, so past
+    the bottom lay ~670 bytes of that slot's own fields and then the
+    PREVIOUS slot's stack -- including the saved trapframe sitting at
+    its top.
+  * The overflow zeroed that trapframe. The victim was the window
+    manager, which was resumed from it on the next switch and `iretq`'d
+    into CS=0, RIP=0.
+
+**The single biggest consumer was `syscall_dispatch()` itself: a 4832-byte
+frame**, because it is one long if/else chain and GCC does not overlap
+the message structs of branches that cannot run together. Nearly 5 KiB
+gone on every syscall entry before any handler starts. That was found by
+adding `-Wframe-larger-than` -- not by reading the code, which several
+sessions had done.
+
+Four changes, which together are what Linux and Windows both do:
+
+**16 KiB stacks.** `THREAD_SIZE` on x86-64 Linux, and Windows' x64
+kernel stack. Linux ran 8 KiB for years and raised it for the same
+reason: depth here is many medium frames, not one big one.
+
+**A guard page below each stack.** The stacks moved out of
+`struct sched_process` into their own page-aligned array with an
+unmapped page beneath each, so an overflow FAULTS. This is
+`CONFIG_VMAP_STACK`; before 4.9 Linux had precisely this bug, stacks in
+the direct map with the next task's data underneath. `paging_unmap_kernel_page()`
+splits the 2 MiB identity mapping to do it, and must run after
+`paging_enforce_wx()`, which rewrites every PDE.
+
+**A double-fault handler on an IST.** Without it the guard page is worse
+than useless: RSP lands on the guard, the push that would report the #PF
+faults too, and the CPU triple-faults -- a silent reboot. `tss.ist[0]`
+existed as a field and had never been populated. This is the only gate
+that needs one.
+
+**A canary at each stack base**, checked on every switch
+(Linux's `STACK_END_MAGIC` / `CONFIG_SCHED_STACK_END_CHECK`). It covers
+what the guard page cannot: a frame big enough to STEP OVER the guard
+and land in the neighbour anyway.
+
+Plus the preventive half: `-Wframe-larger-than=1024` for `kernel/`
+(2048 for `apps/`, which runs on the kernel context's own stack rather
+than a per-process one). `syscall_dispatch()` is waived by name, with
+its extraction scheduled -- a warning that always fires is one everybody
+learns to ignore.
+
+**Dynamic growth was considered and rejected**, and no mainstream kernel
+does it: growing on demand means taking a fault with no usable stack, so
+every kernel path must tolerate a fault at any push. Linux stacks are
+fixed; a 2024 dynamic-kernel-stacks RFC is not merged. Windows' one
+escape hatch is `KeExpandKernelStackAndCallout()`, where a driver
+explicitly runs one callout on a temporarily bigger stack. Growth also
+hides depth problems rather than surfacing them, and surfacing them is
+what the frame check and the canary are for.
+
+Two things the reporting needed, both found by running the control
+(shrink back to 8 KiB and re-run the original repro):
+
+  * **The panic's stack scan faulted inside the panic handler**, because
+    an overflow leaves RSP on an unmapped page and the existing
+    plausibility check only rejected wild values. It checks each page is
+    present now.
+  * **The scan starts from the stack's BASE after an overflow**, not
+    from RSP. RSP is on the guard page, so scanning from it yields
+    nothing -- and the call chain that got too deep is the entire
+    actionable content. It now prints `resolve -> tfs3_size ->
+    read_inode -> atac_read`, which names the path to shorten.
 
 ## A dev build shows its commit; a release shows only its version
 

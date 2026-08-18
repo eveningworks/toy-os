@@ -254,6 +254,14 @@ void kernel_main(uint64_t multiboot_info_addr) {
     scheduler_init();
     klog_write("toy-os: scheduler initialized (continuously armed; see `schedtest`)\n");
 
+    // AFTER paging_enforce_wx() above, which rewrites every PDE and
+    // would put the huge pages back over these. A kernel stack that
+    // overflows now faults on its guard page instead of silently
+    // overwriting the next slot's saved trapframe -- which is exactly
+    // what it used to do, presenting as a #GP on iretq in an innocent
+    // process. See scheduler.c's PROC_KSTACK_SIZE comment.
+    scheduler_guard_pages_init();
+
     debug_console_init(); // serial debug console (COM1) -- see docs/decisions.md; polled from keyboard_getchar()'s and wm_run()'s idle-wait loops
 
     // Boot is over; stop putting kernel log lines on top of whatever the

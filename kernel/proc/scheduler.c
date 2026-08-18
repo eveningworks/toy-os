@@ -98,6 +98,8 @@
 #include "win_server.h"
 #include "win_input.h" // raw input to a ring-3 compositor // win_server_client_gone() -- see scheduler_on_exit()
 #include "pipe.h"      // pipe_close_writer() when a piped child exits
+#include "paging.h"    // paging_unmap_kernel_page() -- the guard pages
+#include "kfmt.h"      // klog_printf, vga_printf
 #include "syscall_abi.h" // SYS_RETRY -- the wake value a blocked waiter sees
 #include "fs.h"
 #include "gdt.h"
@@ -121,7 +123,44 @@ extern uint64_t g_next_kernel_rsp;
 // See api/scheduler.h -- one definition, shared with everything that
 // sizes a table per process.
 #define MAX_PROCS        SCHED_MAX_PROCS
-#define PROC_KSTACK_SIZE 8192
+// 16 KiB, matching Linux's THREAD_SIZE and Windows' x64 kernel stack.
+// It was 8 KiB and that was not enough: a `/bin/config` write measured
+// 8192 of 8192 used on the setting -> etc_config -> VFS -> TFS3 journal
+// -> ATA path, ran off the bottom and zeroed the NEXT SLOT'S saved
+// trapframe, which then #GP'd on iretq in a process that had done
+// nothing wrong. Depth here is many medium frames, not one big one --
+// the largest single frame in the kernel is 928 bytes, which is why
+// CFLAGS carries -Wframe-larger-than=1024 rather than a smaller number.
+#define PROC_KSTACK_SIZE 16384
+
+// Written at the very bottom of every kernel stack and checked whenever
+// a process is switched away from or resumed. Linux's STACK_END_MAGIC /
+// CONFIG_SCHED_STACK_END_CHECK, and it earns its keep for the case the
+// guard page below cannot catch: a frame big enough to STEP OVER the
+// guard entirely and land in the neighbour. Value is arbitrary and
+// deliberately not a plausible pointer, length, or ASCII.
+#define KSTACK_MAGIC 0x57ACC0DE0BADF00DULL
+
+// Each stack gets an unmapped page BELOW it, so an overflow faults on
+// the guard rather than reaching the previous slot -- Linux's
+// CONFIG_VMAP_STACK in miniature (before 4.9 Linux had exactly this
+// bug: stacks in the direct map, an overflow silently corrupting the
+// adjacent task).
+//
+// The stacks are their own page-aligned array rather than a member of
+// struct sched_process for precisely this reason: a guard page has to
+// be page-aligned and must not share a page with anything the kernel
+// still needs. As a struct member it also put ~670 bytes of per-process
+// fields between one stack's bottom and the next slot's, which is what
+// let the overflow reach a trapframe at all.
+#define PROC_KSTACK_GUARD 4096
+
+struct proc_kstack {
+    uint8_t guard[PROC_KSTACK_GUARD];
+    uint8_t stack[PROC_KSTACK_SIZE];
+} __attribute__((aligned(4096)));
+
+static struct proc_kstack kstacks[MAX_PROCS];
 // The user stack's address and size, plus the guard region below it,
 // come from uaddr.h -- this spawn path and elf_run.c's legacy loader
 // build the SAME ring-3 layout, and used to say so in two places with
@@ -234,7 +273,6 @@ struct sched_process {
     // 16-byte aligned because FXSAVE/FXRSTOR #GP otherwise -- see fpu.h,
     // including why only ring-3 processes need one of these at all.
     uint8_t fpu[FPU_STATE_SIZE] __attribute__((aligned(FPU_STATE_ALIGN)));
-    uint8_t kstack[PROC_KSTACK_SIZE] __attribute__((aligned(16)));
 };
 
 static struct sched_process procs[MAX_PROCS];
@@ -283,7 +321,69 @@ static volatile int alive_count = 0;
 static int rotation_pos = ROT_KERNEL;
 
 static uint64_t kernel_stack_top(int idx) {
-    return (uint64_t)&procs[idx].kstack[PROC_KSTACK_SIZE];
+    return (uint64_t)&kstacks[idx].stack[PROC_KSTACK_SIZE];
+}
+
+static uint64_t kernel_stack_base(int idx) {
+    return (uint64_t)&kstacks[idx].stack[0];
+}
+
+// Lays the canary down. Called wherever a stack starts a new life.
+static void kstack_arm(int idx) {
+    *(volatile uint64_t *)kernel_stack_base(idx) = KSTACK_MAGIC;
+}
+
+// The check. Deliberately a PANIC rather than a log: the canary being
+// gone means something has already written outside its stack, so every
+// piece of state this scheduler is about to act on is suspect -- and
+// carrying on is how the original bug presented, as a fault in an
+// innocent process several context switches later.
+static void kstack_verify(int idx) {
+    if (*(volatile uint64_t *)kernel_stack_base(idx) == KSTACK_MAGIC) return;
+    klog_printf("KERNEL STACK OVERFLOW: slot %d (pid %d, \"%s\") overran its "
+                "%d-byte stack -- canary at %lx destroyed\n",
+                idx, idx + 1, procs[idx].name, PROC_KSTACK_SIZE,
+                kernel_stack_base(idx));
+    vga_printf("KERNEL STACK OVERFLOW: pid %d (\"%s\") overran its kernel stack\n",
+               idx + 1, procs[idx].name);
+    // There is no panic() to call -- the panic machinery lives in the
+    // fault handler, and going through it is what buys the function
+    // name, the registers and the stack scan. `ud2` is the cheapest way
+    // in, and the line above says what it really was.
+    __asm__ volatile ("ud2");
+}
+
+// Unmaps the guard page below every kernel stack. Called from
+// kernel_main() AFTER paging_enforce_wx(), which rewrites every PDE and
+// would otherwise put the huge page back.
+int scheduler_kstack_kib(void) { return PROC_KSTACK_SIZE / 1024; }
+
+uint64_t scheduler_kstack_base(int idx) {
+    if (idx < 0 || idx >= MAX_PROCS) return 0;
+    return kernel_stack_base(idx);
+}
+
+void scheduler_guard_pages_init(void) {
+    int ok = 0;
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (paging_unmap_kernel_page((uint64_t)&kstacks[i].guard[0])) ok++;
+    }
+    klog_printf("sched: %d/%d kernel-stack guard pages armed (%d KiB stacks, "
+                "guards %lx..%lx)\n",
+                ok, MAX_PROCS, PROC_KSTACK_SIZE / 1024,
+                (uint64_t)&kstacks[0].guard[0],
+                (uint64_t)&kstacks[MAX_PROCS - 1].guard[PROC_KSTACK_GUARD]);
+}
+
+// Which slot's guard page contains `addr`, or -1. The fault reporter
+// asks, so a page fault on a guard page is reported as what it is
+// instead of as an anonymous #PF in the middle of the kernel.
+int scheduler_kstack_guard_slot(uint64_t addr) {
+    for (int i = 0; i < MAX_PROCS; i++) {
+        uint64_t lo = (uint64_t)&kstacks[i].guard[0];
+        if (addr >= lo && addr < lo + PROC_KSTACK_GUARD) return i;
+    }
+    return -1;
 }
 
 void scheduler_init(void) {
@@ -363,6 +463,7 @@ static int find_next_runnable(int start) {
 // places that has to grow a save (the other is scheduler_tick()'s
 // outgoing branch), and the ISR path becomes a third -- see fpu.h.
 static void switch_to(int idx) {
+    kstack_verify(idx);   // before trusting anything else about this slot
     fpu_restore(procs[idx].fpu);
     g_next_kernel_rsp = procs[idx].kernel_rsp;
     vmm_switch_address_space(procs[idx].pml4_phys);
@@ -481,6 +582,7 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_pipe) {
 
     procs[slot].pml4_phys  = as;
     procs[slot].kernel_rsp = (uint64_t)tf;
+    kstack_arm(slot);
     // A pristine FP state, not whatever the previous tenant of this
     // slot left behind -- slots get reused (scheduler_poll() reaps back
     // to SCHED_UNUSED), and inheriting the last process's registers
@@ -671,6 +773,7 @@ static void scheduler_rotate(uint64_t *regs) {
         // this is the only place that knows a whole tick elapsed under
         // it -- see abi/proc_info.h on why the total, not a percentage.
         procs[current_index].kernel_rsp = (uint64_t)regs;
+        kstack_verify(current_index);  // it just stopped running -- check its stack
         // Paired with switch_to()'s FXRSTOR. Saved on the way out
         // whether or not the process has touched FP: "has it?" is
         // exactly the question the lazy scheme answered with CR0.TS,
@@ -739,6 +842,7 @@ int scheduler_block_current(uint64_t *regs, int reason) {
     bill_current(); // this slice ends here -- see bill_current()
     int idx = current_index;
     procs[idx].kernel_rsp = (uint64_t)regs;
+    kstack_verify(idx);
     fpu_save(procs[idx].fpu);
     procs[idx].state = SCHED_BLOCKED;
     procs[idx].wait_reason = reason;

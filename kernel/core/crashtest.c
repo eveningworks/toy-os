@@ -70,6 +70,24 @@ static void crash_write_text(void) {
     *(volatile uint8_t *)(uintptr_t)&crash_write_text = 0x90;
 }
 
+// Runs off the bottom of the current kernel stack, to prove the guard
+// page below it is armed (scheduler.c). `volatile` on the recursion
+// depth and a real use of the buffer, because the whole function is
+// otherwise exactly what an optimiser is entitled to delete or turn
+// into a loop -- the same trap the ring-3 stack-overflow test hit, where
+// -O2's tail-recursion elimination reused one frame forever.
+static void crash_kstack_overflow(void) {
+    volatile char pad[512];
+    pad[0] = 1;
+    pad[511] = (char)(pad[0] + 1);
+    // noinline via the volatile pointer: a direct self-call is what GCC
+    // rewrites into a loop.
+    static void (*volatile again)(void) = crash_kstack_overflow;
+    again();
+    // Read the frame AFTER the call so it cannot be collapsed away.
+    if (pad[511] == 99) klog_write("");
+}
+
 static const struct crash_kind g_kinds[] = {
     { "null-write",  "Write to address 0 (page fault)",        crash_null_write },
     { "null-read",   "Read from address 0 (page fault)",       crash_null_read },
@@ -77,6 +95,8 @@ static const struct crash_kind g_kinds[] = {
     { "divide-zero", "Integer divide by zero (#DE)",           crash_divide_by_zero },
     { "bad-opcode",  "Execute ud2 (invalid opcode, #UD)",      crash_invalid_opcode },
     { "write-text",  "Write to .text -- proves W^X is on",     crash_write_text },
+    { "kstack-overflow", "Overrun the kernel stack -- proves its guard page",
+      crash_kstack_overflow },
 };
 
 int crash_kind_count(void) {

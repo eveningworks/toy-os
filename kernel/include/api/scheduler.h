@@ -203,6 +203,27 @@ enum sched_poll_result scheduler_poll(int pid, int *out_exit_code);
 //
 // A killed process is a zombie like any other and still has to be
 // reaped -- see scheduler_poll(). The WM reaps the ones it launched.
+// How big each per-process kernel stack is, in KiB -- exported only so
+// the fault reporter can say what was overrun without a second copy of
+// the number. The definition lives in scheduler.c beside the guard-page
+// machinery it belongs to.
+int scheduler_kstack_kib(void);
+
+// The lowest address of a slot's kernel stack -- the first mapped word
+// above its guard page. The fault reporter starts its stack scan here
+// after an overflow, since RSP itself is on the unmapped guard.
+uint64_t scheduler_kstack_base(int idx);
+
+// Unmaps the guard page below every per-process kernel stack, so an
+// overflow faults instead of overwriting the neighbouring slot. Call
+// once at boot, AFTER paging_enforce_wx() (which rewrites every PDE).
+void scheduler_guard_pages_init(void);
+
+// Which process slot's guard page contains `addr`, or -1 if none. The
+// fault reporter asks, so a stack overflow is named as one rather than
+// printed as an anonymous #PF somewhere in the kernel.
+int scheduler_kstack_guard_slot(uint64_t addr);
+
 int scheduler_kill(int pid, int exit_code);
 
 // Fills `out` with a report on process-table slot `index`

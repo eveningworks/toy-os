@@ -176,6 +176,68 @@ int paging_enforce_wx(void) {
     return 1;
 }
 
+// --- guard pages (kernel stacks) -------------------------------------
+//
+// One 4KiB page of the identity map made NOT PRESENT, so a touch faults
+// instead of scribbling on whatever the neighbour happens to be. Its one
+// caller is the per-process kernel stack array (scheduler.c), which
+// leaves a guard page below each stack -- Linux's CONFIG_VMAP_STACK in
+// miniature, and the same reasoning uaddr.h already gives for the ring-3
+// stack: an overflow that faults is a diagnosable bug, one that silently
+// overwrites the next slot is a mystery in some unrelated process.
+//
+// The kernel stacks live in .bss, which paging_enforce_wx() leaves as
+// 2MiB huge pages, so the slot has to be split first. The split
+// populates every sibling entry from wx_page_flags(), i.e. with exactly
+// the permissions the huge page was already providing -- nothing else
+// sharing the 2MiB changes behaviour.
+//
+// Its own pool, not the user-page or W^X one: those hand out pages to
+// ring 3 and describe .text respectively, and a guard page has no
+// business landing inside either table.
+#define MAX_GUARD_TABLES 4
+static uint64_t guard_tables[MAX_GUARD_TABLES][512] __attribute__((aligned(4096)));
+static int guard_table_pde[MAX_GUARD_TABLES];
+static int guard_table_count = 0;
+
+int paging_unmap_kernel_page(uint64_t vaddr) {
+    uint64_t pde_index = (vaddr >> 21) & 0x7FF;
+    if (pde_index >= PDE_COUNT) return 0;
+    uint64_t pte_index = (vaddr >> 12) & 0x1FF;
+
+    uint64_t pde = p2_tables[pde_index];
+    uint64_t *pt;
+
+    if (pde & PAGE_HUGE) {
+        // Not split yet. Reuse a table if this slot already has one --
+        // 64 guard pages fall in very few 2MiB slots, which is why the
+        // pool can be this small.
+        pt = 0;
+        for (int i = 0; i < guard_table_count; i++) {
+            if (guard_table_pde[i] == (int)pde_index) { pt = guard_tables[i]; break; }
+        }
+        if (!pt) {
+            if (guard_table_count >= MAX_GUARD_TABLES) return 0;
+            pt = guard_tables[guard_table_count];
+            guard_table_pde[guard_table_count] = (int)pde_index;
+            guard_table_count++;
+            uint64_t base = (uint64_t)pde_index * HUGE_SIZE;
+            for (int i = 0; i < 512; i++) {
+                uint64_t addr = base + (uint64_t)i * 4096;
+                pt[i] = addr | wx_page_flags(addr);
+            }
+        }
+        p2_tables[pde_index] = (uint64_t)(uintptr_t)pt | PAGE_PRESENT | PAGE_WRITABLE;
+    } else {
+        if (!(pde & PAGE_PRESENT)) return 0;
+        pt = (uint64_t *)(uintptr_t)(pde & 0x000FFFFFFFFFF000ULL);
+    }
+
+    pt[pte_index] = 0; // not present -- the whole point
+    flush_tlb();
+    return 1;
+}
+
 uint64_t paging_kernel_leaf(uint64_t vaddr) {
     uint64_t pde_index = (vaddr >> 21) & 0x7FF;
     if (pde_index >= PDE_COUNT) return 0;
