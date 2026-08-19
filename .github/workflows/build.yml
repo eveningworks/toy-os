@@ -90,60 +90,21 @@ jobs:
       # it still work" -- and unlike the pre-2026-08-13 boot-time
       # self-tests it actually fails the build when something is wrong,
       # instead of printing FAILED into a log nobody reads.
-      # THE FILESYSTEM RUNS ON VIRTIO-BLK HERE, not ATA, and that is a
-      # deliberate choice rather than a coincidence of flags.
+      # The in-kernel test suite, on the DEFAULT (ATA) configuration.
       #
-      # CI's recurring red build was `ata: dma write failed after 3
-      # attempts (... drive stayed busy, command never issued)` -- a
-      # HOST I/O stall, not a kernel bug: this job runs `make iso`
-      # (grub-mkrescue writing a ~750 MB image) immediately before the
-      # tests on a shared, I/O-throttled runner, and ATA's ~1 s
-      # pre-issue budget cannot absorb that. A virtqueue is not exposed
-      # to it at all.
+      # An attempt to run this with the filesystem on virtio-blk was
+      # reverted: virtio-blk never came up on the runner at all (zero
+      # "block: virtio-blk active" lines, and the suite reported the
+      # skip count of an ATA boot), so it changed nothing while adding
+      # a second image and a second job. Diagnosing why belongs with
+      # the driver, not in CI. See docs/bugs.md.
       #
-      # Measured locally, clean disk each run: ATA passed 2 runs in 3,
-      # virtio 3 in 3, and the suite takes 6.4 s on virtio against
-      # 11.9 s on ATA.
-      #
-      # BOTH disks are attached on purpose. virtio-blk is preferred and
-      # carries the filesystem; the IDE drive stays so the [ata]/[atac]
-      # KTESTs keep a real drive instead of skipping, which would trade
-      # a flake for a coverage hole. A separate image file because QEMU
-      # write-locks one and the same file cannot be attached twice.
-      # FLUSH THE HOST'S DIRTY PAGES BEFORE BOOTING A GUEST.
-      #
-      # `make iso` hands grub-mkrescue a ~750 MB image to write, and on
-      # a shared runner those pages are still being written back when
-      # the guest starts. The guest CPU runs at full speed while its
-      # emulated disk waits on that writeback, so a request can outlive
-      # any budget the guest sets -- measured here at more than the 5 s
-      # virtqueue_poll() allows, which abandoned a chain and failed
-      # every filesystem write after it.
-      #
-      # This is the cause the earlier transport change did NOT address:
-      # ATA and virtio both sit behind the same host writeback, so
-      # moving between them changed which error appeared, not whether
-      # one did.
-      - name: Let host I/O settle before booting a guest
-        run: sync
-
-      - name: Second disk image for virtio-blk
-        run: cp --reflink=auto --sparse=always disk.img ci-virtio.img
-
-      - name: Kernel test suite (ktest, filesystem on virtio-blk)
-        run: python3 tools/ktest_run.py -v --virtio-disk ci-virtio.img
-
-      # ...and the legacy path, so ATA does not quietly stop being
-      # tested the moment it stops being the default. Allowed to fail:
-      # it carries the known host-I/O-stall flake above, and the point
-      # of this step is that a REAL ATA regression is still visible in
-      # the log rather than that the build turns red on a stall.
-      # docs/bugs.md tracks the flake; when it is fixed, drop this line.
-      - name: Kernel test suite (ktest, legacy ATA path)
-        continue-on-error: true
-        run: |
-          make clean-disk && make iso KCMDLINE="novirtio"
-          python3 tools/ktest_run.py -v
+      # `sync` above stays: `make iso` hands grub-mkrescue a ~750 MB
+      # image and the guest boots while those pages are still being
+      # written back, which is the documented cause of this job's
+      # recurring `dma write failed (drive stayed busy)`.
+      - name: Kernel test suite (ktest)
+        run: python3 tools/ktest_run.py -v
 
       # The same question one privilege ring out. ktest runs INSIDE the
       # kernel, so it cannot tell whether a /tests binary still links,
