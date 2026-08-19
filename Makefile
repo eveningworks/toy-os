@@ -318,6 +318,16 @@ help:
 	@echo "  run-virtio     Same as run, but the disk is on VIRTIO-BLK and there is no IDE"
 	@echo "                 controller at all -- so the filesystem mounts only if the whole"
 	@echo "                 virtio path works. run-virtio-kvm is the KVM-accelerated form"
+	@echo ""
+	@echo " Every run* target above is ONE recipe with one axis varied, and the axes are"
+	@echo " variables -- so any COMBINATION works without needing its own target:"
+	@echo "   make run KVM=1            KVM instead of TCG emulation"
+	@echo "   make run VIRTIO=1         disk on virtio-blk, no IDE controller at all"
+	@echo "   make run VGA=vmware       the adapter with a hardware cursor"
+	@echo "   make run AUDIO=1          PC speaker wired to sound (AUDIODEV=alsa etc.)"
+	@echo "   make run NOGRAPHIC=1      serial only, no window"
+	@echo "   make run MEM=512          a smaller machine"
+	@echo "   make run KVM=1 VIRTIO=1   ...or any mix"
 	@echo "  live-iso       Build toy-os-live.iso -- carries a filesystem image, boots with NO disk"
 	@echo "  run-live       Boot that live ISO with no disk attached (implies live-iso)"
 	@echo "  demo-iso       Build toy-os-demo.iso -- boots straight into a scripted tour"
@@ -819,14 +829,18 @@ demo-iso: version $(KERNEL) $(USERLAND_ELVES) seed $(LIVE_IMG)
 	$(GRUB_MKRESCUE) -o $(DEMO_ISO) iso-demo
 	@echo "demo-iso: $(DEMO_ISO) -- boots the tour with no input; see data/wm/demo.script"
 
+run-demo: QEMU_ISO=$(DEMO_ISO)
+run-demo: NODISK=1
 run-demo: demo-iso
-	qemu-system-x86_64 -cdrom $(DEMO_ISO) -serial stdio -vga std -display sdl,grab-mod=rctrl -m 2048
+	$(QEMU_RUN)
 
 # Boot the live ISO the way a user would: NO -drive at all. That is the
 # whole point -- pointing it at disk.img would let the ordinary disk path
 # run and prove nothing about the live one.
+run-live: QEMU_ISO=$(LIVE_ISO)
+run-live: NODISK=1
 run-live: live-iso
-	qemu-system-x86_64 -cdrom $(LIVE_ISO) -serial stdio -vga std -display sdl,grab-mod=rctrl -m 2048
+	$(QEMU_RUN)
 
 # -vga std: explicit (matches QEMU's own default, but pinned here so the
 #   higher 1280x720 mode boot.asm requests isn't at the mercy of a
@@ -857,12 +871,75 @@ run-live: live-iso
 # see it. Rebuilds the ISO because the timeout is baked into grub.cfg at
 # ISO build time -- so switching between `make run` and `make run-menu`
 # re-runs grub-mkrescue, which is a couple of seconds.
+# --- ONE QEMU RUN RECIPE, five axes ---------------------------------
+#
+# Every `run*` target below is this one command line with one thing
+# varied. They used to be twelve copies of it, which grew by
+# MULTIPLICATION rather than addition: adding `run-virtio` immediately
+# forced `run-virtio-kvm`, and `run-virtio-audio` or `run-vmware-kvm`
+# do not exist only because nobody has asked yet.
+#
+# This is the same shape CLAUDE.md legislates for C -- "a dispatch chain
+# over ~20 branches should be a table", which tools/check_dispatch.py
+# enforces on .c files and cannot see in a Makefile.
+#
+# So the axes are VARIABLES and every combination is reachable without
+# a new target:
+#
+#   make run KVM=1                  KVM instead of TCG emulation
+#   make run VIRTIO=1               disk on virtio-blk, no IDE at all
+#   make run VGA=vmware             the adapter with a hardware cursor
+#   make run AUDIO=1                PC speaker wired to PulseAudio
+#   make run NOGRAPHIC=1            serial only, no window
+#   make run MEM=512                a smaller machine
+#   make run KVM=1 VIRTIO=1         ...and any mix of them
+#
+# The named targets below are kept as thin ALIASES that set these, both
+# for muscle memory and because the docs reference them by name.
+#
+# EVERY DEFINITION HERE IS DEFERRED (`=`, never `:=`) AND USES $(if ...)
+# RATHER THAN ifeq. That is load-bearing: `ifeq` is evaluated once when
+# the Makefile is read, so a target-specific `run-kvm: KVM=1` would be
+# invisible to it. $(if) expands when the recipe runs, which is when
+# the target-specific value exists.
+COMMA := ,
+
+MEM ?= 2048
+
+QEMU_ISO     = $(ISO)
+QEMU_ACCEL   = $(if $(KVM),-enable-kvm -cpu host,)
+QEMU_VGA     = $(if $(VGA),$(VGA),std)
+QEMU_DISPLAY = $(if $(NOGRAPHIC),none,sdl$(COMMA)grab-mod=rctrl)
+
+# The disk. IDE by default; VIRTIO=1 swaps it for a virtio-blk device
+# and NO IDE controller, which is the point of that mode -- ata_init()
+# then finds nothing, so the filesystem mounts only if the whole virtio
+# path works. DISK= empty is how the live and demo ISOs run with none.
+QEMU_DISK_IDE    = -drive file=$(DISK_IMG),format=raw,if=ide,discard=unmap
+QEMU_DISK_VIRTIO = -drive file=$(DISK_IMG),format=raw,if=none,id=vblk,discard=unmap \
+                   -device virtio-blk-pci,drive=vblk,disable-legacy=on
+QEMU_DISK = $(if $(NODISK),,$(if $(VIRTIO),$(QEMU_DISK_VIRTIO),$(QEMU_DISK_IDE)))
+
+# QEMU has had no default audio backend since 5.x, and -machine
+# pcspk-audiodev is what routes the emulated i8254 speaker to it.
+# Without both, `beep` runs correctly and is simply silent. `pa` is what
+# this was confirmed with; AUDIODEV= overrides it for an alsa/coreaudio
+# host (`qemu-system-x86_64 -audiodev help` lists them).
+AUDIODEV ?= pa
+QEMU_AUDIO = $(if $(AUDIO),-audiodev $(AUDIODEV)$(COMMA)id=snd0 -machine pcspk-audiodev=snd0,)
+
+QEMU_EXTRA =
+
+QEMU_RUN = qemu-system-x86_64 -cdrom $(QEMU_ISO) $(QEMU_ACCEL) $(QEMU_DISK) \
+	  -serial stdio -vga $(QEMU_VGA) -display $(QEMU_DISPLAY) -m $(MEM) \
+	  $(QEMU_AUDIO) $(QEMU_EXTRA)
+
 run-menu:
 	@$(MAKE) --no-print-directory GRUB_TIMEOUT=5 iso
-	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide,discard=unmap -serial stdio -vga std -display sdl,grab-mod=rctrl -m 2048
+	$(QEMU_RUN)
 
 run: iso $(DISK_IMG)
-	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide,discard=unmap -serial stdio -vga std -display sdl,grab-mod=rctrl -m 2048
+	$(QEMU_RUN)
 
 # Same as `run`, but on the VMware SVGA II adapter, which has a HARDWARE
 # MOUSE CURSOR -- kernel/drivers/vmsvga.c detects it, takes the display
@@ -877,8 +954,8 @@ run: iso $(DISK_IMG)
 # `screendump` does NOT capture it, and every screenshot-based test
 # would stop seeing the pointer. Use `run` for anything you intend to
 # screenshot; use this to see the cursor the adapter draws.
-run-vmware: iso $(DISK_IMG)
-	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide,discard=unmap -serial stdio -vga vmware -display sdl,grab-mod=rctrl -m 2048
+run-vmware: VGA=vmware
+run-vmware: run
 
 # Same as `run`, but the disk is on VIRTIO-BLK instead of IDE -- and
 # there is NO IDE controller at all, which is the point: ata_init()
@@ -895,20 +972,15 @@ run-vmware: iso $(DISK_IMG)
 # use `-drive file=...,if=virtio`, to get a TRANSITIONAL one (1af4:1001)
 # -- the driver handles both, and the transitional form is what QEMU
 # gives by default, so it is worth exercising too.
-run-virtio: iso $(DISK_IMG)
-	qemu-system-x86_64 -cdrom $(ISO) \
-	  -drive file=$(DISK_IMG),format=raw,if=none,id=vblk,discard=unmap \
-	  -device virtio-blk-pci,drive=vblk,disable-legacy=on \
-	  -serial stdio -display sdl,grab-mod=rctrl -m 2048
+run-virtio: VIRTIO=1
+run-virtio: run
 
 # ...and the same under KVM, which is where a timing-sensitive driver
 # bug actually shows up -- every automated test here runs TCG, which
 # models neither real device latency nor guest memory types.
-run-virtio-kvm: iso $(DISK_IMG)
-	qemu-system-x86_64 -enable-kvm -cpu host -cdrom $(ISO) \
-	  -drive file=$(DISK_IMG),format=raw,if=none,id=vblk,discard=unmap \
-	  -device virtio-blk-pci,drive=vblk,disable-legacy=on \
-	  -serial stdio -display sdl,grab-mod=rctrl -m 2048
+run-virtio-kvm: VIRTIO=1
+run-virtio-kvm: KVM=1
+run-virtio-kvm: run
 
 # Same as `run`, but with KVM hardware virtualization instead of QEMU's
 # TCG software emulation -- guest instructions run natively on the host
@@ -928,8 +1000,8 @@ run-virtio-kvm: iso $(DISK_IMG)
 # nanoseconds -- so the PIO disk path and other `inb`/`outb`-heavy loops
 # can get SLOWER here. Any throughput figure recorded in the git history
 # should say which of the two it came from; they aren't comparable.
-run-kvm: iso $(DISK_IMG)
-	qemu-system-x86_64 -enable-kvm -cpu host -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide,discard=unmap -serial stdio -vga std -display sdl,grab-mod=rctrl -m 2048
+run-kvm: KVM=1
+run-kvm: run
 
 # Same as `run`, plus a PulseAudio backend wired to the PC speaker
 # (kernel/drivers/speaker.c's `beep`, Milestone 19 -- see
@@ -945,8 +1017,8 @@ run-kvm: iso $(DISK_IMG)
 # isn't it. Kept as a separate target rather than folding into `run`
 # itself since the right backend is host-specific, not something safe
 # to assume by default.
-run-audio: iso $(DISK_IMG)
-	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide,discard=unmap -serial stdio -vga std -display sdl,grab-mod=rctrl -m 2048 -audiodev pa,id=snd0 -machine pcspk-audiodev=snd0
+run-audio: AUDIO=1
+run-audio: run
 
 # -s: shorthand for -gdb tcp::1234 -- QEMU's own built-in GDB remote
 #   stub, exposed on the standard GDB-over-QEMU port. Emulates the CPU
@@ -961,11 +1033,11 @@ run-audio: iso $(DISK_IMG)
 # In another terminal once this is running: `gdb build/kernel.bin -ex
 #   "target remote localhost:1234"`, then `continue` (or `break
 #   kernel_main` first if you want to stop right at kernel entry).
-debug: iso $(DISK_IMG)
-	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide,discard=unmap -serial stdio -vga std -display sdl,grab-mod=rctrl -m 2048 -s -S
+debug: QEMU_EXTRA=-s -S
+debug: run
 
-run-nographic: iso $(DISK_IMG)
-	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide,discard=unmap -serial stdio -display none -m 2048
+run-nographic: NOGRAPHIC=1
+run-nographic: run
 
 # Runs the in-kernel test suite and turns it into an exit code: boots
 # headless, drives `ktest` over the serial debug console, exits non-zero

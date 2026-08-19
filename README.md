@@ -160,12 +160,30 @@ make run        # build + boot in QEMU with a graphical window
 make run-kvm    # same, KVM-accelerated instead of emulated (needs /dev/kvm)
 make run-menu   # same, with the GRUB boot menu visible
 make run-nographic  # serial console only -- use this over SSH
+make run-virtio # disk on virtio-blk with NO IDE controller at all
 make live-iso   # a Live CD that boots with no disk attached at all
 make demo-iso   # boots straight into a scripted tour
 make debug      # boot frozen (-s -S) for GDB
 make test       # boot headless, run the in-kernel test suite
 make verify     # full gate: clean build + iso + boot test + test suite
 ```
+
+Every `run*` target is **one recipe with a single axis varied**, and the
+axes are plain variables — so any combination works without needing its
+own target:
+
+```bash
+make run KVM=1              # KVM instead of TCG emulation
+make run VIRTIO=1           # disk on virtio-blk, no IDE controller
+make run VGA=vmware         # the adapter with a hardware cursor
+make run AUDIO=1            # PC speaker wired to sound (AUDIODEV=alsa, ...)
+make run NOGRAPHIC=1        # serial only, no window
+make run MEM=512            # a smaller machine
+make run KVM=1 VIRTIO=1     # ...or any mix
+```
+
+The named targets are thin aliases over exactly these. `make help`
+lists them.
 
 <details>
 <summary>Troubleshooting</summary>

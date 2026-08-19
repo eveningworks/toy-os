@@ -1956,8 +1956,36 @@ make run-demo   # boots that; for showing the system with nobody typing
 make run-audio  # same as run, + a PulseAudio backend so the PC speaker (`beep`) is audible
 make run-kvm    # same as run, but KVM-accelerated (-enable-kvm -cpu host) instead of
                 # TCG emulation -- needs /dev/kvm readable
+make run-virtio # same as run, but the disk is on VIRTIO-BLK and there is NO IDE
+                # controller -- so the filesystem mounts only if the virtio path works
 make debug # boots frozen (-s -S) for real GDB debugging -- see "Debugging with GDB" below
 ```
+
+**EVERY `run*` TARGET IS ONE RECIPE WITH ONE AXIS VARIED, and the axes
+are VARIABLES -- so do not add a target for a new combination.** They
+were twelve near-identical `qemu-system-x86_64` lines, which grew by
+MULTIPLICATION rather than addition: adding `run-virtio` immediately
+forced `run-virtio-kvm`, and `run-virtio-audio` and `run-vmware-kvm`
+did not exist only because nobody had asked. This is the same shape
+CLAUDE.md already legislates for C -- a dispatch chain over ~20
+branches should be a table -- which `tools/check_dispatch.py` enforces
+on `.c` files and cannot see in a Makefile.
+
+```
+make run KVM=1 VIRTIO=1 VGA=vmware AUDIO=1 NOGRAPHIC=1 MEM=512
+```
+
+The named targets are thin aliases that set exactly these, kept for
+muscle memory and because the docs reference them. Two traps if you
+touch it. **Every definition is DEFERRED (`=`, never `:=`) and uses
+`$(if ...)` rather than `ifeq`** -- `ifeq` is evaluated once when the
+Makefile is read, so a target-specific `run-kvm: KVM=1` would be
+invisible to it, and the flag would silently not appear. And **a
+target-specific line takes ONE assignment**: `run-virtio-kvm: VIRTIO=1
+KVM=1` sets `VIRTIO` to the string `"1 KVM=1"` and never defines `KVM`
+at all, which shipped a `run-virtio-kvm` with no `-enable-kvm` until
+`make -n` was read. **Check a change here with `make -n <target>`,**
+which prints the command line without running it.
 
 **Source discovery is recursive now** -- every `.c` under `kernel/` or
 `apps/` is compiled and every `.asm` under `kernel/` assembled, with
