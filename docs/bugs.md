@@ -38,6 +38,7 @@ it has exonerated one this session and convicted another.
 ## Intermittent -- a rate, not a verdict
 
 - [ ] `tools/ktest_run.py` reports the debug console never came up, on 5 boots in 9 -- PRE-EXISTING
+- [ ] Disk requests time out under host I/O pressure on CI, on BOTH transports -- ATA reports `dma write failed (drive stayed busy)` and virtio abandons a chain (`virtqueue_lost_chains()` nonzero); the cause is host writeback from `make iso`'s ~750 MB grub-mkrescue still draining when the guest boots, so it outlives even virtqueue_poll's 5 s budget
 - [ ] ATA writes time out under host I/O pressure -- `dma write failed after 3 attempts (drive stayed busy, command never issued)`; measured 1 run in 3 locally on a clean disk, and it was CI's recurring red build until the filesystem moved to virtio-blk
 - [ ] `heap-debug`'s use-after-free check fails about 1 run in 15 -- PRE-EXISTING
 - [ ] `newsyscalls_test` fails intermittently in CI, and not locally

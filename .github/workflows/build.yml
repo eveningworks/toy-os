@@ -110,6 +110,23 @@ jobs:
       # KTESTs keep a real drive instead of skipping, which would trade
       # a flake for a coverage hole. A separate image file because QEMU
       # write-locks one and the same file cannot be attached twice.
+      # FLUSH THE HOST'S DIRTY PAGES BEFORE BOOTING A GUEST.
+      #
+      # `make iso` hands grub-mkrescue a ~750 MB image to write, and on
+      # a shared runner those pages are still being written back when
+      # the guest starts. The guest CPU runs at full speed while its
+      # emulated disk waits on that writeback, so a request can outlive
+      # any budget the guest sets -- measured here at more than the 5 s
+      # virtqueue_poll() allows, which abandoned a chain and failed
+      # every filesystem write after it.
+      #
+      # This is the cause the earlier transport change did NOT address:
+      # ATA and virtio both sit behind the same host writeback, so
+      # moving between them changed which error appeared, not whether
+      # one did.
+      - name: Let host I/O settle before booting a guest
+        run: sync
+
       - name: Second disk image for virtio-blk
         run: cp --reflink=auto --sparse=always disk.img ci-virtio.img
 
