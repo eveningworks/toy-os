@@ -599,3 +599,56 @@ because the new file added a header.
 And when it does go wrong: `git checkout` the files and redo it. The
 restore cost seconds; the alternative was reasoning about a
 half-migrated pair of files.
+
+## 2026-08-19 (the CI hunt): instrumentation that prints a CONSTANT is worse than none
+
+Four wrong diagnoses in a row on one bug, and every one of them was
+enabled by a tool or a message that could not distinguish the cases it
+was being asked about. The bug was real -- `virtqueue_poll()` timing
+out on a budget that was ~12 ms rather than the 5 s it appeared to
+offer, then letting late completions permanently desync the used ring
+-- and it reproduced only on CI, whose QEMU (8.2.2 against 11.1) and
+host CPU made the kernel choose a different clocksource.
+
+The sequence, because the SHAPE repeats:
+
+1. **A verbose flag that filtered.** `ktest_run.py -v` said "print the
+   whole serial transcript" and applied the failure report's line
+   filter, dropping every boot message. Grepping its output for
+   `block: virtio-blk active` found nothing, so I concluded virtio
+   never came up -- and filed it as a bug. The same grep finds nothing
+   locally on a run where virtio provably carries the filesystem.
+2. **A grep string that could not match.** Twice, including once with
+   backticks around the term. Reported lost content that was never lost.
+3. **A timeout that named no budget.** "It timed out" is not a
+   diagnosis when the two code paths differ by two orders of magnitude.
+   Printing WHICH branch was taken answered it in one run.
+4. **A message printing the constant instead of the measurement.**
+   `after 5000 ms` read identically whether the wait really took five
+   seconds or the clock jumped and expired instantly -- opposite
+   diagnoses, same text. Printing MEASURED elapsed *and* the poll count
+   made the contradiction visible immediately: `after 927725008 us and
+   454 poll(s)` cannot both be true, so the clock was lying.
+
+**The rule: make the instrumentation distinguish the hypotheses, not
+just report that something happened.** Two numbers whose ratio is
+impossible beat one number that is merely large. And when a check comes
+back clean or empty, ask whether it COULD have come back otherwise
+before believing it.
+
+**The fix that finally worked was to stop trusting the clock.** A poll
+count is monotonic and cannot lie; a wall clock is exactly right until
+it is catastrophically wrong. Bounding by count is approximate on a
+fast or slow machine and that is the better trade.
+
+## `workflow_dispatch` -- do not push to test CI
+
+`.github/workflows/build.yml` already carries `workflow_dispatch: {}`,
+so `gh workflow run build.yml` runs the whole pipeline with NO commit.
+I pushed six times iterating on a CI failure before noticing. Check for
+it before treating a push as the only way to get a CI run.
+
+Better still for a version-specific bug: the runner's image is public,
+so the exact toolchain can be reproduced locally in a container
+(`docker run ubuntu:24.04`, which is where QEMU 8.2.2 came from) rather
+than round-tripping through CI at ~90 s per attempt.

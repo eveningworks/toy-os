@@ -106,26 +106,28 @@ jobs:
       - name: Kernel test suite (ktest)
         run: python3 tools/ktest_run.py -v
 
-      # DIAGNOSTIC, non-blocking: does virtio-blk come up on a GitHub
-      # runner, and can it carry the filesystem?
+      # ...and again with the filesystem on VIRTIO-BLK.
       #
-      # An earlier attempt to make this the default was reverted on the
-      # claim that virtio-blk "never comes up here" -- a claim drawn
-      # from grepping a log that, at the time, filtered out every line
-      # the kernel printed at boot. With `-v` now printing the whole
-      # transcript and the suite announcing its own block device, this
-      # step answers the question from evidence instead.
+      # Both, because they are different code paths and each has caught
+      # something the other could not. This one started as a
+      # `continue-on-error` diagnostic to settle whether virtio-blk
+      # even works on a runner (it does); it found a real driver bug
+      # instead -- virtqueue_poll() timing out on a ~12 ms budget and
+      # then letting late completions desync the used ring -- which
+      # reproduced NOWHERE locally, because the runner has QEMU 8.2.2
+      # against 11.1 here and picks a different clocksource.
       #
-      # continue-on-error so a finding cannot turn main red while it is
-      # still being investigated. Remove this step once the question is
-      # settled either way.
-      - name: DIAGNOSTIC -- ktest with the filesystem on virtio-blk
-        continue-on-error: true
+      # That is the argument for keeping it blocking now: this
+      # configuration is the only place that class of bug has ever been
+      # visible.
+      #
+      # A separate image because QEMU write-locks one and the same file
+      # cannot be attached twice; the IDE drive stays attached so the
+      # [ata]/[atac] suites keep a real drive rather than skipping.
+      - name: Kernel test suite (ktest, filesystem on virtio-blk)
         run: |
-          qemu-system-x86_64 --version | head -1
           cp --reflink=auto --sparse=always disk.img ci-virtio.img
-          python3 tools/ktest_run.py -v --virtio-disk ci-virtio.img 2>&1 | \
-            grep -E "^pci: |block device =|virtio|block: |ktest: (PASSED|FAILED)" || true
+          python3 tools/ktest_run.py -v --virtio-disk ci-virtio.img
 
       # The same question one privilege ring out. ktest runs INSIDE the
       # kernel, so it cannot tell whether a /tests binary still links,

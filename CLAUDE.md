@@ -1147,6 +1147,19 @@ technical conventions below:
   permission and the more permissive one always wins. Adding to the
   `paging` KTESTs is the cheap way to keep this honest; their positive
   controls are in the commit that added them.
+- **CI RUNS THE KERNEL SUITE TWICE, on ATA and on virtio-blk, and the
+  second one earns its place.** It found a driver bug that reproduced
+  NOWHERE locally: the runner has QEMU 8.2.2 against 11.1 here, and its
+  CPU makes the kernel pick a different clocksource, under which
+  `virtqueue_poll()` spent a ~12 ms budget rather than the 5 s it
+  appeared to offer and then let late completions desync the used ring.
+  **A second CONFIGURATION is worth more than a second run of the
+  first.** Two things follow for anyone iterating on a CI failure:
+  `.github/workflows/build.yml` carries `workflow_dispatch: {}`, so
+  `gh workflow run build.yml` runs the pipeline with NO commit (six
+  pushes were spent before noticing); and the runner image is public,
+  so its exact toolchain reproduces locally in a container rather than
+  round-tripping at ~90 s an attempt.
 - **VIRTIO-BLK IS THE PREFERRED DISK; ATA IS THE LEGACY PATH.** When a
   virtio disk is attached it carries the filesystem, and `novirtio` on
   the boot line forces ATA back (which is what keeps that path

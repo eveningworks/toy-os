@@ -195,7 +195,7 @@ lists them.
 | ISO builds but QEMU says *"no bootable device"* | The BIOS modules package is missing — `grub-pc-bin` (Debian), `grub2-pc-modules` (Fedora), `grub2-i386-pc` (openSUSE), `grub-bios` (Alpine). |
 | No window appears (e.g. over SSH) | `make run-nographic`. |
 | The mouse doesn't move in QEMU | Don't add `-device usb-tablet`/`usb-mouse`. This kernel's mouse driver is PS/2 only, and an explicit USB pointer device makes QEMU route motion there instead. |
-| Everything is very slow | `make run` emulates the CPU; `make run-kvm` runs it natively. That only helps compute-bound code — disk I/O measures ~1.9× *slower* under KVM, since each port-I/O instruction becomes a VM exit. |
+| Everything is very slow | `make run` emulates the CPU; `make run-kvm` runs it natively. That only helps compute-bound code — *ATA* disk I/O measures ~1.9× **slower** under KVM, since each port-I/O instruction becomes a VM exit. That penalty is ATA's, not KVM's: `make run KVM=1 VIRTIO=1` puts the disk on virtio-blk and measures ~10× ATA's write throughput, because a virtqueue barely touches port I/O at all. |
 | Drawing is slow on real hardware but fine in QEMU | Reproduce it with `make run-kvm`. Plain `make run` **ignores guest memory types entirely**, so a write-combined framebuffer behaves like cached RAM and a whole class of graphics bug is invisible. `gfxbench` reports which mechanisms are live. |
 | `disk.img` is 9 GB | It's a *sparse* file — it costs only what is actually written. `make clean-disk` wipes it. |
 
@@ -222,8 +222,14 @@ what you can pass on the GRUB command line.
 transition done by hand. Linear RGB framebuffer falling back to 80×25 VGA
 text. PS/2 keyboard and mouse sharing the 8042 through one dispatcher,
 with keyboard layouts as *data files* generated from Linux's own XKB data
-rather than a compiled-in table. PIT, CMOS RTC, PC speaker, PCI
-enumeration, MBR/GPT partition parsing.
+rather than a compiled-in table. PIT, CMOS RTC, PC speaker, MBR/GPT
+partition parsing, and a **virtio** stack: PCI capability walking and
+64-bit BAR decoding underneath a shared modern-virtio transport, with
+`virtio-blk` on top of it as the preferred disk. One transport, so the
+next device (net, GPU, entropy, input) is a driver rather than a
+bring-up project — and it is about **10× ATA's write throughput under
+KVM**, because a virtqueue is shared memory with one doorbell where ATA
+is dense with port I/O and every one of those is a VM exit.
 
 **Memory hardening.** NX and W^X from each ELF segment's real `p_flags`,
 and the kernel's own identity map is W^X too — `.text` is the only

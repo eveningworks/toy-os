@@ -131,6 +131,24 @@ So: useful as a second mode to test in, and useful for anything
 CPU-bound, but always say which mode a benchmark came from --
 `tools/vm.py --kvm` runs the same configuration headlessly.
 
+**TESTING ON VIRTIO-BLK, and why CI does.** `ktest_run.py
+--virtio-disk PATH` and `vm.py --virtio-disk PATH` attach a second disk
+on virtio-blk; it then carries the filesystem, while the IDE drive
+stays attached so the `[ata]`/`[atac]` suites keep a real drive instead
+of skipping. `make run VIRTIO=1` is the interactive form, and boots
+with NO IDE controller at all -- so the filesystem mounts only if the
+whole virtio path works.
+
+**The reason this is a CI job and not just an option:** it found a real
+driver bug that reproduced NOWHERE locally. The runner has QEMU 8.2.2
+against 11.1 here and its CPU makes the kernel pick a different
+clocksource, and under that combination `virtqueue_poll()` timed out on
+a budget that was ~12 ms rather than the 5 s it appeared to offer, then
+let late completions permanently desync the used ring. Three
+diagnoses were wrong before the instrumentation was good enough to
+answer it. Which is the general point: **a second configuration is
+worth more than a second run of the first one.**
+
 **THAT PENALTY IS ATA'S, NOT KVM'S -- and virtio-blk removes it.**
 Measured on the same host with `make run KVM=1 VIRTIO=1`:
 

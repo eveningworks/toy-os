@@ -19,9 +19,12 @@ data files, not a compiled-in enum), `qmp_test.py`
 non-GUI boot check — see `docs/testing.md`), `gen_version.sh`/`set_version.sh`
 (versioning — see CLAUDE.md's `version.h`/`VERSION` bullets),
 `ktest_run.py` (drives the in-kernel test suite over serial and turns
-it into an exit code -- what `make test` and CI run), `vm.py` (start a
-headless VM and run shell commands against it, getting text back — see
-`docs/testing.md`).
+it into an exit code -- what `make test` and CI run; `--virtio-disk
+PATH` attaches a second disk on virtio-blk, which then carries the
+filesystem while the IDE drive stays for the `[ata]`/`[atac]` suites,
+and `-v` prints the WHOLE transcript, boot messages included), `vm.py`
+(start a headless VM and run shell commands against it, getting text
+back, `--virtio-disk` likewise — see `docs/testing.md`).
 
 The rest, added once the build/test/delivery loop had enough repeated
 manual steps to be worth automating:
