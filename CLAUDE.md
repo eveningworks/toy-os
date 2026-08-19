@@ -2031,6 +2031,18 @@ Four things worth knowing without opening it:
 - **Never `pkill -f qemu-system-x86_64`.** It cannot tell your headless
   launch from the user's interactive `make run` window. Kill only the
   PID your own launch wrote to its `-pidfile`.
+- **DON'T ADD A WAIT LOOP FOR WORK THAT IS ALREADY IN THE BACKGROUND --
+  and if you do write one, never `pgrep` for a pattern your own command
+  line contains.** `gui_regress.py` and `preflight.sh` take minutes, so
+  they get run in the background; their COMPLETION is already the
+  signal, and a second `until ! pgrep -f gui_regress; do sleep 10; done`
+  beside them is redundant. It is also broken: that shell's own command
+  line contains `gui_regress`, so `pgrep -f` matches the waiter itself
+  and the loop can never exit. Four of them accumulated in one session,
+  each reporting a finished suite as still RUNNING -- which is worse
+  than the leak, because the false "still going" is indistinguishable
+  from the real thing. If a wait genuinely is needed, wait on the
+  ARTIFACT (`until [ -s out.log ]`), which cannot match itself.
 - **Prefer `tools/gui_debug.py` to pixels** for anything not literally
   about rendering -- it returns facts to assert on rather than an image
   to interpret. It is asynchronous: call `DebugConsole.settle()` before
