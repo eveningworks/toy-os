@@ -720,6 +720,18 @@ seed: $(DISK_IMG) $(USERLAND_ELVES)
 	    if [ "$$(basename $$f)" != "README.md" ]; then \
 	        cp $$f $(SEED_DIR)/sync/etc/services.d/; fi; \
 	done
+	# The human-facing text for each setting -- descriptions, choice
+	# display names and presentation hints, one file per setting (see
+	# data/etc/settings.d/README.md). Same rule again: every file but
+	# the README, so adding text for a setting is dropping a file here.
+	# Absent is a supported state -- a setting with no file falls back to
+	# its compiled-in label -- which is exactly why these are seeded
+	# rather than compiled in.
+	mkdir -p $(SEED_DIR)/sync/etc/settings.d
+	@for f in data/etc/settings.d/*; do \
+	    if [ "$$(basename $$f)" != "README.md" ]; then \
+	        cp $$f $(SEED_DIR)/sync/etc/settings.d/; fi; \
+	done
 	# The scripted tour. Seeded always -- it is inert unless `demo` is on
 	# the kernel command line, and having it present means a live image
 	# can be edited into a demo without a rebuild.

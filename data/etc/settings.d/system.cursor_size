@@ -1,0 +1,7 @@
+Description=How large the mouse pointer is drawn
+Choice.small=Small
+Choice.normal=Normal
+Choice.large=Large
+# Appearance first, then behaviour -- which is NOT registration
+# order, since cursor_config registers before mouse_config.
+Order=20

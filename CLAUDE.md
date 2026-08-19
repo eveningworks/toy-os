@@ -502,6 +502,39 @@ technical conventions below:
   row-only hit meant header and scrollbar presses reached nothing), and
   anything comparing `selected` against `top` is mixing an app row with
   a view offset. See `docs/decisions.md`.
+- **A WIDGET'S OPS TABLE IS THE CONTRACT, AND A MISSING SLOT FAILS
+  SILENTLY AND AT A DISTANCE.** Three tables were short on 2026-08-19,
+  every function they needed already written: `uui_dropdown_ops` had no
+  `natural_size`/`set_geometry`, so a dropdown in a `uui_layout` was
+  never positioned or measured; `uui_checkbox_ops` had neither of those
+  NOR `release`, and **the router names a widget to its app only when
+  that widget has a `release` op** -- so a checkbox toggled on screen
+  and the app was never told. None of it was noticed because no app had
+  put either widget in a layout. **Fill a new widget's table against
+  `uui_widget.h`, never against the widget you copied** -- a copied
+  table inherits its gaps. And **when a layout misbehaves, check the ops
+  tables of everything in it before suspecting the layout**: this
+  presented as `uui_layout` stopping after four children, and
+  `uui_layout_run()` has no early exit at all. Reading it settled in
+  minutes what three experiments from the outside had not.
+- **A `uui_scrollview` NOTICES when its content's item list changes**
+  (`sv_children()` compares the `items` pointer and `count` against what
+  it last laid out). It used to re-lay-out only when its own rect or its
+  offset moved -- its own comment named those two and the item list is a
+  third -- so an app that swapped a page's items left every NEW widget
+  at a ZERO RECT, invisible and unclickable, while widgets carried over
+  from the previous page kept the PREVIOUS page's geometry. That reads
+  as a broken layout, one layer away from the cause.
+  `uui_scrollview_content_changed()` is still the honest thing to call
+  at the point of change and is no longer load-bearing.
+- **`uui_label` is the caption widget** (`userland/ui/uui_label.h`) --
+  one line of text the LAYOUT reserves a row for, with no behaviour and
+  **no `hit`**, so a click passes through to whatever is behind. Reach
+  for it instead of painting a caption in `on_draw`: that runs AFTER
+  the toolkit paints widgets, so hand-drawn text lands ON TOP of a
+  control, and reserving space by hand leaves content sliding under it
+  the moment the page scrolls. Its natural HEIGHT does not depend on
+  its text (`rows`), or a caption changing would reflow the page.
 - **`uui_tree` is the navigation widget** (`userland/ui/uui_tree.h`) --
   rows at a DEPTH with collapsible parents, written for System
   Settings' sidebar and general enough for the file manager the roadmap

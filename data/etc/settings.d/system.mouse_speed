@@ -1,0 +1,9 @@
+Description=How far the pointer moves for a given movement of the mouse
+Widget=radio
+Choice.slow=Slow
+Choice.normal=Normal (1x)
+Choice.fast=Fast
+Choice.veryfast=Very fast
+# Appearance first, then behaviour -- which is NOT registration
+# order, since cursor_config registers before mouse_config.
+Order=30

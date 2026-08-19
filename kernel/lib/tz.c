@@ -27,6 +27,7 @@
 #include "tz.h"
 #include "fs.h"
 #include "string.h"
+#include "klog.h"
 #include "knum.h"
 #include "etc_config.h"
 #include "setting.h"
@@ -44,9 +45,11 @@ struct tz_city {
 // The in-memory city table, loaded from /etc/timezones by
 // tz_load_or_seed_db() (called once from tz_init()). No heap allocator
 // exists in this kernel, so this is a fixed-capacity array rather than
-// something sized to the file's actual content -- TZ_MAX_CITIES is
-// generous headroom above the 7 cities this ships with.
-#define TZ_MAX_CITIES 32
+// something sized to the file's actual content. Headroom above the
+// shipped list, which is what TZ_DEFAULT_CITY_COUNT counts -- a
+// hand-edited /etc/timezones may add its own rows, and anything past
+// this is silently not loaded, which is why the headroom is generous.
+#define TZ_MAX_CITIES 128
 static struct tz_city TZ_CITIES[TZ_MAX_CITIES];
 static int tz_city_count_loaded = 0;
 
@@ -57,14 +60,117 @@ static int tz_city_count_loaded = 0;
 // to at least one real row, IT is the source of truth, not this list
 // -- these defaults never silently override a file that's actually
 // there and valid.
+// THE DST RULE IS ONLY EVER ONE THIS KERNEL CAN ACTUALLY APPLY.
+//
+// There are three (EU, US, none), so a city whose real rule is neither
+// -- Sydney, Sao Paulo, Tehran, Santiago, Newfoundland -- is listed as
+// TZ_DST_NONE and is therefore an hour out during ITS summer. That is a
+// deliberate, stated limitation rather than a claim: marking Sydney
+// "EU" would put its clocks forward in April, which is not merely
+// approximate but backwards, since the southern hemisphere's summer is
+// the northern one's winter.
+//
+// The same reasoning rules out importing the IANA database wholesale:
+// completeness that is confidently wrong is worse than a shorter list
+// that is right about what it says. Adding a rule here is what makes a
+// city eligible for it -- see enum dst_rule.
+//
+// Ordered WEST TO EAST rather than alphabetically, so the list a user
+// scrolls reads geographically; the setting's choice enumerator hands
+// them out in this order and the UI does not sort.
 static const struct tz_city TZ_DEFAULT_CITIES[] = {
-    { "utc",         0,    TZ_DST_NONE },
-    { "helsinki",  120,    TZ_DST_EU   },
-    { "london",      0,    TZ_DST_EU   },
-    { "berlin",     60,    TZ_DST_EU   },
-    { "newyork",  -300,    TZ_DST_US   },
-    { "losangeles", -480,  TZ_DST_US   },
-    { "tokyo",     540,    TZ_DST_NONE },
+    { "bakerisland",    -720, TZ_DST_NONE },
+    { "midway",         -660, TZ_DST_NONE },
+    { "honolulu",       -600, TZ_DST_NONE },
+    { "anchorage",      -540, TZ_DST_US   },
+    { "losangeles",     -480, TZ_DST_US   },
+    { "vancouver",      -480, TZ_DST_US   },
+    { "phoenix",        -420, TZ_DST_NONE },
+    { "denver",         -420, TZ_DST_US   },
+    { "chicago",        -360, TZ_DST_US   },
+    { "mexicocity",     -360, TZ_DST_NONE },
+    { "newyork",        -300, TZ_DST_US   },
+    { "toronto",        -300, TZ_DST_US   },
+    { "bogota",         -300, TZ_DST_NONE },
+    { "lima",           -300, TZ_DST_NONE },
+    { "caracas",        -240, TZ_DST_NONE },
+    { "halifax",        -240, TZ_DST_US   },
+    { "santiago",       -240, TZ_DST_NONE },
+    { "newfoundland",   -210, TZ_DST_NONE },
+    { "saopaulo",       -180, TZ_DST_NONE },
+    { "buenosaires",    -180, TZ_DST_NONE },
+    { "montevideo",     -180, TZ_DST_NONE },
+    { "southgeorgia",   -120, TZ_DST_NONE },
+    { "azores",          -60, TZ_DST_EU   },
+    { "capeverde",       -60, TZ_DST_NONE },
+    { "utc",               0, TZ_DST_NONE },
+    { "london",            0, TZ_DST_EU   },
+    { "dublin",            0, TZ_DST_EU   },
+    { "lisbon",            0, TZ_DST_EU   },
+    { "reykjavik",         0, TZ_DST_NONE },
+    { "accra",             0, TZ_DST_NONE },
+    { "berlin",           60, TZ_DST_EU   },
+    { "paris",            60, TZ_DST_EU   },
+    { "madrid",           60, TZ_DST_EU   },
+    { "rome",             60, TZ_DST_EU   },
+    { "amsterdam",        60, TZ_DST_EU   },
+    { "brussels",         60, TZ_DST_EU   },
+    { "vienna",           60, TZ_DST_EU   },
+    { "prague",           60, TZ_DST_EU   },
+    { "warsaw",           60, TZ_DST_EU   },
+    { "stockholm",        60, TZ_DST_EU   },
+    { "oslo",             60, TZ_DST_EU   },
+    { "copenhagen",       60, TZ_DST_EU   },
+    { "budapest",         60, TZ_DST_EU   },
+    { "lagos",            60, TZ_DST_NONE },
+    { "helsinki",        120, TZ_DST_EU   },
+    { "athens",          120, TZ_DST_EU   },
+    { "bucharest",       120, TZ_DST_EU   },
+    { "kyiv",            120, TZ_DST_EU   },
+    { "riga",            120, TZ_DST_EU   },
+    { "tallinn",         120, TZ_DST_EU   },
+    { "vilnius",         120, TZ_DST_EU   },
+    { "sofia",           120, TZ_DST_EU   },
+    { "cairo",           120, TZ_DST_NONE },
+    { "johannesburg",    120, TZ_DST_NONE },
+    { "istanbul",        180, TZ_DST_NONE },
+    { "moscow",          180, TZ_DST_NONE },
+    { "nairobi",         180, TZ_DST_NONE },
+    { "riyadh",          180, TZ_DST_NONE },
+    { "tehran",          210, TZ_DST_NONE },
+    { "dubai",           240, TZ_DST_NONE },
+    { "baku",            240, TZ_DST_NONE },
+    { "kabul",           270, TZ_DST_NONE },
+    { "karachi",         300, TZ_DST_NONE },
+    { "tashkent",        300, TZ_DST_NONE },
+    { "delhi",           330, TZ_DST_NONE },
+    { "colombo",         330, TZ_DST_NONE },
+    { "kathmandu",       345, TZ_DST_NONE },
+    { "dhaka",           360, TZ_DST_NONE },
+    { "almaty",          360, TZ_DST_NONE },
+    { "yangon",          390, TZ_DST_NONE },
+    { "bangkok",         420, TZ_DST_NONE },
+    { "jakarta",         420, TZ_DST_NONE },
+    { "hanoi",           420, TZ_DST_NONE },
+    { "singapore",       480, TZ_DST_NONE },
+    { "hongkong",        480, TZ_DST_NONE },
+    { "beijing",         480, TZ_DST_NONE },
+    { "taipei",          480, TZ_DST_NONE },
+    { "perth",           480, TZ_DST_NONE },
+    { "manila",          480, TZ_DST_NONE },
+    { "seoul",           540, TZ_DST_NONE },
+    { "tokyo",           540, TZ_DST_NONE },
+    { "adelaide",        570, TZ_DST_NONE },
+    { "brisbane",        600, TZ_DST_NONE },
+    { "sydney",          600, TZ_DST_NONE },
+    { "melbourne",       600, TZ_DST_NONE },
+    { "guam",            600, TZ_DST_NONE },
+    { "noumea",          660, TZ_DST_NONE },
+    { "auckland",        720, TZ_DST_NONE },
+    { "fiji",            720, TZ_DST_NONE },
+    { "chatham",         765, TZ_DST_NONE },
+    { "apia",            780, TZ_DST_NONE },
+    { "kiritimati",      840, TZ_DST_NONE },
 };
 #define TZ_DEFAULT_CITY_COUNT ((int)(sizeof(TZ_DEFAULT_CITIES) / sizeof(TZ_DEFAULT_CITIES[0])))
 
@@ -335,7 +441,16 @@ static int tz_load_cities(const char *data, uint32_t size) {
 // on disk rather than a compiled-in list you'd have to read tz.c's
 // source to see.
 static void tz_seed_default_db(void) {
-    char buf[512];
+    // STATIC, not a local: the shipped list is ~1.9 KB and the kernel's
+    // frame budget is 1 KiB (-Wframe-larger-than), on a 16 KiB stack
+    // with one guard page. This runs once, at boot, from a single
+    // context, so there is nothing to share it with.
+    //
+    // It was `char buf[512]` and SILENTLY WROTE 27 OF 92 CITIES -- the
+    // loop below simply stopped when the next line would not fit, and
+    // nothing said so. Sized from the table now, so it cannot truncate,
+    // and the break below is a backstop rather than the normal path.
+    static char buf[TZ_DEFAULT_CITY_COUNT * (TZ_NAME_MAX + 16) + 1];
     uint32_t len = 0;
     static const char *const DST_NAMES[] = { "none", "eu", "us" };
     for (int i = 0; i < TZ_DEFAULT_CITY_COUNT; i++) {
@@ -344,7 +459,13 @@ static void tz_seed_default_db(void) {
         // "name,offset,dst\n" -- 32 bytes of headroom per line is
         // generous (an offset is at most a sign + 3 digits, dst at
         // most "none"'s 4 chars).
-        if (len + nlen + 32 >= sizeof(buf)) break;
+        // Cannot fire with the buffer sized from the table above -- kept
+        // as a backstop, because the day somebody adds a longer name is
+        // the day a silent truncation would come back.
+        if (len + nlen + 32 >= sizeof(buf)) {
+            klog_write("tz: default city list truncated -- buffer too small\n");
+            break;
+        }
         k_memcpy(buf + len, c->name, nlen); len += nlen;
         buf[len++] = ',';
         len += tz_format_int(buf + len, c->base_offset_minutes);

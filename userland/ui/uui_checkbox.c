@@ -104,7 +104,36 @@ static void cb_ops_draw(struct ugfx_surface *s, const void *w) {
     uui_checkbox_draw(s, (const struct uui_checkbox *)w);
 }
 
+static void cb_ops_natural_size(const void *w, int *out_w, int *out_h) {
+    uui_checkbox_natural_size((const struct uui_checkbox *)w, out_w, out_h);
+}
+
+static void cb_ops_set_geometry(void *w, int x, int y, int width, int height) {
+    (void)width; (void)height; // its size is its own -- see the header
+    uui_checkbox_set_geometry((struct uui_checkbox *)w, x, y);
+}
+
+// A NO-OP THAT RETURNS 1, and it is not decoration: the router only
+// names a widget to the app when that widget HAS a release op
+// (uui_route.c), so without this a checkbox in a routed layout toggled
+// on screen and the app was never told. It toggles on PRESS -- there is
+// no partial state for a commit-on-release rule to protect -- so there
+// is nothing to do here except be present.
+static int cb_ops_release(void *w, int cx, int cy) {
+    (void)w; (void)cx; (void)cy;
+    return 1;
+}
+
+// NATURAL_SIZE, SET_GEOMETRY AND RELEASE WERE ALL MISSING until
+// 2026-08-19, so a checkbox declared in a uui_layout was never
+// positioned, never measured, and never reported to its app. Every
+// function it needed already existed; only the table was short -- the
+// same gap uui_dropdown_ops had, found the same day. See
+// docs/decisions.md on the ops table being the contract.
 const struct uui_widget_ops uui_checkbox_ops = {
+    .natural_size = cb_ops_natural_size,
+    .set_geometry = cb_ops_set_geometry,
+    .release = cb_ops_release,
     .draw   = cb_ops_draw,
     .hit    = cb_ops_hit,
     .press  = cb_ops_press,

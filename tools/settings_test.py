@@ -2,31 +2,41 @@
 """Drives the RING-3 System Settings app (userland/gui/system/settings.c).
 
 Run it after touching the settings registry (kernel/lib/setting.c,
-api/setting.h), SYS_SETTING/SYS_SYSINFO, or any of the widgets the page
-is built from -- uui_listbox, uui_radio_list, uui_statusbar and
+api/setting.h, kernel/lib/setting_text.c), SYS_SETTING/SYS_SYSINFO, or
+any widget the page is built from -- uui_tree, uui_label,
+uui_radio_list, uui_dropdown, uui_checkbox, uui_statusbar and
 uui_layout's `hidden` handling.
 
-THREE CHECKS HERE CARRY THE WEIGHT, and each exists because of a bug
-that everything else stayed green through:
+FOUR CHECKS CARRY THE WEIGHT, and each exists because of a bug
+everything else stayed green through:
 
-1. A change is verified through an INDEPENDENT PATH: the BYTES ON DISK,
-   read with `cat`. Clicking a choice makes the app log a success, and
-   the app believing itself proves nothing -- the same reasoning
-   notepad_client_test.py uses when it `cat`s the file it just saved.
-   (`/bin/config get` was the first attempt and is useless here: a
-   spawned program's STDOUT goes to its parent's pipe, not to the kernel
-   log, so the debug console cannot see it. Only stderr is readable from
-   outside -- see CLAUDE.md on sys_eprint.)
+1. Selecting a choice must STAGE it and NOT write anything. The app was
+   instant-apply until 2026-08-19; a staged model that quietly still
+   applied would look identical on screen and differ only on disk.
+   Asserted as: after clicking a choice, /etc is UNCHANGED; after
+   clicking Apply, it changed.
 
-2. The hidden page is asserted to be GONE FROM THE PIXELS, not merely
-   "the tab switched". `hidden` was honoured by the input router and not
-   by the layout's draw, so the settings page stayed fully visible and
-   painted over System Info while every log line said the tab had
-   changed. A log-only check passes that.
+2. A change is verified through an INDEPENDENT PATH: the BYTES ON DISK,
+   read with `cat`. The app believing itself proves nothing -- the same
+   reasoning notepad_client_test.py uses. (`/bin/config get` is useless
+   here: a spawned program's STDOUT goes to its parent's pipe, not the
+   kernel log, so the debug console cannot see it. Only stderr is
+   readable from outside -- CLAUDE.md on sys_eprint.)
 
-3. The two pages must DIFFER, and returning to the first must restore it
-   EXACTLY. "It changed" alone is satisfied by almost anything; the
-   round trip is what rules out a page that merely redraws differently.
+3. A GROUP PAGE must carry every setting in its group. The Mouse page is
+   the fixture precisely because it holds four, from TWO different
+   kernel files -- a page that showed only its own file's settings would
+   pass any single-setting check.
+
+4. The sidebar and the page must both come from the KERNEL. The counts
+   are asserted as >=, never ==: the registry is meant to grow, and
+   pinning a count turns a future setting into a failure in an unrelated
+   file.
+
+The app REPORTS its own geometry and its own rows (`settings: row ...`,
+`settings: slot ...`), and this tool looks things up BY LABEL from that.
+Never re-derive a row position from a font size here: that is what
+gui_flow.py's calibrated constants have cost three re-measurements.
 
 Typical use, against a VM someone else started:
 
@@ -130,6 +140,61 @@ def crop_ink(qmp, path, rect):
     return sum(1 for p in px if p != bg), px
 
 
+def _since(mark, pattern):
+    """Matches of `pattern` logged AFTER `mark`.
+
+    drain() ACCUMULATES into one list rather than returning only what is
+    new, so anything read without a mark sees every page ever opened --
+    which is how the first version of this tool asked about the Mouse
+    page and got the timezone page's control back.
+    """
+    out = []
+    for line in _log[mark:]:
+        m = re.search(pattern, line)
+        if m:
+            out.append(m)
+    return out
+
+
+CONTROL_RE = (r"settings: control (\d+) (\S+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) "
+               r"rows (\d+) kind (radio|combo)")
+
+
+def slots(dbg, mark):
+    """The controls on the page opened since `mark`.
+
+    Read from the app's per-page `control` lines, NOT from a dump at
+    startup: on_open runs once, so a startup dump describes the first
+    page forever and a tool reading it while looking at another page
+    gets a confident wrong answer.
+    """
+    drain(dbg)
+    return [{"slot": int(m.group(1)), "name": m.group(2),
+              "kind": m.group(8), "choices": int(m.group(7))}
+            for m in _since(mark, CONTROL_RE)]
+
+
+def controls(dbg, mark):
+    """Each control's rect on the page opened since `mark`."""
+    drain(dbg)
+    out = {}
+    for m in _since(mark, CONTROL_RE):
+        out[m.group(2)] = {"x": int(m.group(3)), "y": int(m.group(4)),
+                            "w": int(m.group(5)), "h": int(m.group(6)),
+                            "rows": int(m.group(7))}
+    return out
+
+
+def advanced_toggle(dbg, mark):
+    drain(dbg)
+    hits = _since(mark, r"settings: advanced_toggle (-?\d+) (-?\d+) (-?\d+) (-?\d+) shown (\d+)")
+    if not hits:
+        return None
+    m = hits[-1]
+    return {"x": int(m.group(1)), "y": int(m.group(2)), "w": int(m.group(3)),
+             "h": int(m.group(4)), "shown": int(m.group(5))}
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--sock", default=DEFAULT_SOCK)
@@ -147,9 +212,8 @@ def main():
     dbg = DebugConsole(args.sock)
     print("system settings (the settings registry, in ring 3)")
 
-    # NOT DebugConsole.spawn(): it polls with logs(), which clears what
-    # it returns, and would eat the app's own startup lines before this
-    # tool could read them.
+    # NOT DebugConsole.spawn(): it polls with logs(), which CLEARS what
+    # it returns, and would eat the app's own startup lines.
     dbg.send(f"gui spawn {SETTINGS}")
     deadline = time.time() + 8
     while time.time() < deadline:
@@ -170,35 +234,23 @@ def main():
           f"client_pid={win.get('client_pid')}")
 
     cx, cy = win["content"]["x"], win["content"]["y"]
-    cw, ch = win["content"]["w"], win["content"]["h"]
-
     geo = layout(dbg)
     check("it reports its own geometry",
-          all(k in geo for k in ("tree", "page", "choices")),
+          all(k in geo for k in ("tree", "page", "buttons")),
           f"keys={sorted(geo)}")
     if "tree" not in geo:
         return report()
 
-    n = setting_count(dbg)
-    # From the REGISTRY, not from a list in the app -- so this number
-    # tracks whatever the kernel registered. >= 4 rather than == 4: the
-    # registry is meant to grow, and pinning the count turns a future
-    # setting into a failure in an unrelated file.
-    check("it listed the registered settings", (n or 0) >= 4, f"{n} settings")
-
-    def click(rel_x, rel_y):
-        dbg.send(f"gui click {cx + rel_x} {cy + rel_y}")
-        dbg.settle()
-        time.sleep(0.4)
-        drain(dbg)
-
     tx, ty, tw, th = geo["tree"]
-    chx, chy, chw, chh = geo["choices"]
+    px0, py0, pw0, ph0 = geo["page"]
+    bx, by, bw, bh = geo["buttons"]
 
-    # The sidebar's rows AS THE APP REPORTS THEM -- id, click y, depth
-    # and label. Never re-derived here: a tool that computes row offsets
-    # from a font size drifts the moment an inset changes, which is what
-    # gui_flow.py's calibrated numbers have cost three times.
+    n = setting_count(dbg)
+    # From the REGISTRY, not a list in the app. >= rather than ==: the
+    # registry is meant to grow.
+    check("it listed the registered settings", (n or 0) >= 9, f"{n} settings")
+
+    # --- the sidebar is a tree, built from the kernel's grouping ------
     rows = []
     for line in _log:
         m = re.search(r"settings: row (\d+) id (\d+) y (-?\d+) depth (\d+) (.+)", line)
@@ -210,7 +262,7 @@ def main():
           any(r["depth"] == 0 for r in rows) and any(r["depth"] == 1 for r in rows),
           f"{len(rows)} rows, depths={sorted({r['depth'] for r in rows})}")
     check("its headings come from the registry's categories",
-          len([r for r in rows if r["depth"] == 0]) >= 2,
+          len([r for r in rows if r["depth"] == 0]) >= 3,
           f"{len([r for r in rows if r['depth'] == 0])} headings")
 
     def row_named(sub):
@@ -219,293 +271,189 @@ def main():
                 return r
         return None
 
-    # --- the settings page is DRAWN ----------------------------------
-    settings_ink, settings_px = crop_ink(
-        qmp, f"{args.tmp}/settings_settings.png", (cx, cy, cw, ch))
-    check("the settings page draws something", settings_ink > 500,
-          f"{settings_ink} non-background px")
-
-    # The SAME RECT the hidden-page check below measures, captured while
-    # the page is visible. Without this baseline that check has nothing
-    # to be compared against except the whole page's ink, which is so
-    # much larger that the comparison passes whatever happens -- the
-    # first version of this tool did exactly that, and a positive
-    # control (making uui_layout_draw ignore `hidden` again) failed to
-    # redden a single check. Measure the same region in both states.
-    # The PAGE's band, captured while a setting page is shown -- the
-    # baseline the hidden-page check below is compared against. The same
-    # rect in both states: comparing a band against the WHOLE page's ink
-    # is what made the first version of this check pass with the bug
-    # present.
-    px0, py0, pw0, ph0 = geo["page"]
-    band_shown, _ = crop_ink(qmp, f"{args.tmp}/settings_band_shown.png",
-                              (cx + px0, cy + py0, pw0, ph0))
-
-    # --- selecting a setting in the sidebar loads ITS page ------------
-    #
-    # The cursor style, chosen because its values are cheap and
-    # reversible -- unlike the font size (which reflows the whole UI) or
-    # the timezone (which moves the taskbar clock). Found BY LABEL from
-    # the app's own row table, so inserting a category above it does not
-    # silently move the click onto a different setting.
-    cursor_row = row_named("cursor style") or row_named("cursor")
-    if not check("the sidebar offers a cursor setting", cursor_row is not None,
-                 f"labels={[r['label'] for r in rows][:8]}"):
-        return report()
-    click(tx + tw // 2, cursor_row["y"])
-    sel = last(r"settings: page (\S+)")
-    check("selecting a row opens that setting's page",
-          sel is not None and "cursor_style" in sel, sel or "no page line")
-
-    # --- HOVERING MUST NOT COMMIT ANYTHING ---------------------------
-    #
-    # The bug this guards: settings's on_widget() discarded `reason`, so
-    # every router event -- including plain UUI_REASON_MOTION -- was
-    # treated as a commit. Moving the pointer across the choice list
-    # applied a setting per motion event, each of which wrote
-    # /etc/toyos.conf, bumped fs_generation() and made the desktop
-    # re-read every .desktop file. The machine froze for seconds while
-    # hovering, and the churn exposed a re-entrancy bug in fs_read()
-    # that panicked the kernel.
-    #
-    # `gui move` lasts one WM iteration, which is precisely what is
-    # wanted here: several separate motion events, no press, no release.
-    # drain() ACCUMULATES into one list rather than returning only what
-    # is new, so take a mark first -- counting the whole log here would
-    # include the sets made earlier in this test and fail always.
-    mark = len(drain(dbg))
-    for i in range(6):
-        dbg.send(f"gui move {cx + chx + 30} {cy + chy + 11 + i * 8}")
+    def click(rel_x, rel_y):
+        dbg.send(f"gui click {cx + rel_x} {cy + rel_y}")
         dbg.settle()
-    time.sleep(0.4)
-    hover_sets = [l for l in drain(dbg)[mark:] if "settings: set " in l]
-    check("hovering the choice list commits nothing",
-          len(hover_sets) == 0,
-          f"{len(hover_sets)} set(s) while only moving: {hover_sets[:2]}")
+        # A SECOND FRAME, forced. The app reports its control geometry
+        # from on_draw, which runs BEFORE the layout has placed a newly
+        # opened page -- so the first frame after a page change still
+        # describes the previous page. A redraw requested from inside
+        # on_draw coalesces into the frame already in progress, so the
+        # nudge has to come from out here.
+        dbg.send(f"gui move {cx + rel_x} {cy + rel_y + 1}")
+        dbg.settle()
+        time.sleep(0.4)
+        drain(dbg)
 
-    # --- applying a choice, verified through an INDEPENDENT path ------
-    old_value = stored_value(dbg, "cursor_style")
-    # Pick a choice that is NOT the current one, so "it changed" cannot
-    # pass by the value already being right.
-    want_row = 2 if old_value != "beam" else 0
-    click(chx + 30, chy + int(22 * want_row + 11))
-
-    applied = last(r"settings: set (\S+) (\S+) result (\d+)")
-    check("clicking a choice applies it", applied is not None, applied or "no set line")
-    result = int(re.search(r"result (\d+)", applied).group(1)) if applied else 0
-    # 1 is SETTING_SAVED. 2 is SETTING_UNSAVED -- applied but NOT
-    # persisted, which a settings UI must never report as success, so it
-    # is a FAILURE here rather than a pass with a caveat.
-    check("...and the registry reports it SAVED (not merely applied)",
-          result == 1, f"enum setting_result = {result}")
-
-    new_value = re.search(r"settings: set \S+ (\S+) result", applied).group(1) if applied else ""
-    on_disk = stored_value(dbg, "cursor_style")
-    # THE CHECK THAT MATTERS: the file itself, read by a path sharing
-    # nothing with the one that wrote it. Paired with old_value so it
-    # cannot pass by the value having been right all along.
-    check("the value CHANGED on disk",
-          on_disk is not None and on_disk != old_value,
-          f"{old_value!r} -> {on_disk!r}")
-    check("...and it is what the app said it set",
-          bool(new_value) and on_disk == new_value,
-          f"app said {new_value!r}, disk says {on_disk!r}")
-
-    # --- the System Information node HIDES the settings page ----------
-    sysinfo_row = row_named("System Information")
-    if not check("the sidebar offers System Information", sysinfo_row is not None):
-        return report()
-    click(tx + tw // 2, sysinfo_row["y"])
-
-    sysinfo_ink, sysinfo_px = crop_ink(
-        qmp, f"{args.tmp}/settings_sysinfo.png", (cx, cy, cw, ch))
-    check("the page changed", sysinfo_px != settings_px,
-          f"{sysinfo_ink} vs {settings_ink} non-background px")
-
-    # THE LOAD-BEARING ONE, and its shape had to change with the
-    # redesign. It used to measure INK: the settings list was hidden and
-    # the same band had to collapse. That premise is gone -- System
-    # Information now draws INTO the page's rect, so the band gains ink
-    # when the choices are hidden (measured: 2395 -> 8870). An ink check
-    # here would now fail against a correct app, which is worse than not
-    # checking.
+    # --- A GROUP PAGE CARRIES SEVERAL SETTINGS ------------------------
     #
-    # So it asserts the PROPERTY instead of a proxy for it: `hidden`
-    # removes a widget from HIT-TESTING as well as from the picture. A
-    # click where a choice used to be must change nothing. That is a
-    # stronger check than the ink one ever was -- a widget still drawn
-    # but unclickable would have passed the old version, and a widget
-    # invisible but still live is exactly the bug `hidden` exists to
-    # prevent.
+    # The Mouse page is the fixture because its four settings come from
+    # TWO kernel files (cursor_theme_config.c and mouse_config.c), so a
+    # page that only gathered its own file's settings would fail here
+    # and pass any single-setting check.
+    mouse_row = row_named("Mouse")
+    if not check("the sidebar offers a Mouse page", mouse_row is not None,
+                 f"labels={[r['label'] for r in rows]}"):
+        return report()
     mark = len(drain(dbg))
-    click(chx + 30, chy + 11)
-    time.sleep(0.4)
-    ghost_sets = [l for l in drain(dbg)[mark:] if "settings: set " in l]
-    check("a hidden choice list cannot be clicked",
-          len(ghost_sets) == 0,
-          f"{len(ghost_sets)} set(s) from a click on a hidden widget: {ghost_sets[:2]}")
+    click(tx + tw // 2, mouse_row["y"])
+    page_slots = slots(dbg, mark)
+    qmp.screenshot(f"{args.tmp}/settings_mousepage.png")
+    check("a group page carries SEVERAL settings", len(page_slots) >= 4,
+          f"{len(page_slots)} controls: {[s['name'] for s in page_slots]}")
+    # EVERY control positioned, not just present. This is the direct
+    # guard for the bug that cost this page most of a session: a scroll
+    # view lays its content out only when its own rect or offset moves,
+    # so swapping the item list left every NEW widget at a zero rect --
+    # invisible and unclickable, and reading exactly like a layout that
+    # stops after four children. uui_scrollview notices for itself now;
+    # this is what would catch it coming back.
+    zero = [k for k, v in controls(dbg, mark).items() if v["w"] <= 0 or v["h"] <= 0]
+    check("every control on the page was positioned", not zero,
+          f"zero-sized: {zero}" if zero else "all have a real rect")
 
-    # --- and back: a round trip must restore the settings page --------
-    click(tx + tw // 2, cursor_row["y"])
-    back_ink, back_px = crop_ink(qmp, f"{args.tmp}/settings_back.png", (cx, cy, cw, ch))
-    # Pixel-identical to the FIRST settings capture would be wrong here
-    # -- the selection moved and a value changed since. So: it must be
-    # the settings page again (differing from System Info) and must have
-    # real content, which together rule out both a dead tab and a blank
-    # page.
-    check("switching back restores the settings page",
-          back_px != sysinfo_px and back_ink > 500,
-          f"{back_ink} non-background px")
+    check("...gathered from more than one kernel file",
+          any("mouse_" in s["name"] for s in page_slots) and
+          any("cursor_" in s["name"] for s in page_slots),
+          f"{[s['name'] for s in page_slots]}")
 
-    # --- the page SCROLLS when the window is too small for it --------
-    #
-    # Before uui_scrollview, a settings window shrunk below its content
-    # did not clip or scroll -- uui_layout handed every child its full
-    # natural size and placed the rest past the window's bottom edge.
-    # So the status bar vanished entirely and all but the first of a
-    # setting's choices became unreachable, with nothing on screen to
-    # say so.
-    #
-    # Selecting Time zone first, because it is the setting with enough
-    # choices to overflow a short window. A setting with two choices
-    # would fit and prove nothing -- the fixture has to cross the
-    # boundary being tested.
-    # ESTABLISH the baseline BEFORE interacting. Settings persist to the
-    # disk image and `make iso` re-seeds by sync rather than reformat, so
-    # a previous run's timezone is still there -- and if it happens to be
-    # the row this ends up clicking, "it changed" is false while
-    # everything works. Done here rather than just before the click
-    # because writing a setting bumps the registry's generation, and the
-    # app reloads and drops its selection when it sees that.
-    dbg.send("sh config set system.timezone utc")
-    dbg.settle()
-
-    # click() takes CONTENT-RELATIVE coordinates and adds the origin
-    # itself -- passing absolute ones offsets them twice and lands
-    # outside the window, which looks exactly like a dead control.
-    tz_row = row_named("time zone") or row_named("timezone")
-    if not check("the sidebar offers a timezone setting", tz_row is not None):
+    # --- the control TYPE follows the choice count / the text file ----
+    tz_row = row_named("Time zone") or row_named("Time")
+    if not check("the sidebar offers a timezone page", tz_row is not None):
         return report()
+    mark = len(drain(dbg))
     click(tx + tw // 2, tz_row["y"])
-    dbg.settle()
-    time.sleep(0.3)
-    # ASSERTED, not assumed: everything below depends on this page being
-    # the one with enough choices to overflow, and a silent failure here
-    # would surface as "scrolling does not work".
-    check("the timezone page opened",
-          "timezone" in (last(r"settings: page (\S+)") or ""),
-          last(r"settings: page (\S+)") or "no page line")
-    dbg.settle()
+    tz_slots = slots(dbg, mark)
+    tz = [s for s in tz_slots if "timezone" in s["name"]]
+    check("the timezone page loaded every city", tz and tz[-1]["choices"] >= 50,
+          f"{tz[-1]['choices'] if tz else 0} choices")
+    check("...and a long list uses a DROPDOWN, not radio buttons",
+          bool(tz) and tz[-1]["kind"] == "combo",
+          f"kind={tz[-1]['kind'] if tz else '?'}")
+    mouse_speed = [s for s in page_slots if "mouse_speed" in s["name"]]
+    check("...while a short list stays radio buttons",
+          bool(mouse_speed) and mouse_speed[-1]["kind"] == "radio",
+          f"kind={mouse_speed[-1]['kind'] if mouse_speed else '?'}")
 
-    win = dbg.window("System Settings")
-    short_h = win["h"] - 160
-    dbg.send("gui drag %d %d %d %d" % (win["x"] + win["w"] - 2, win["y"] + win["h"] - 2,
-                                        win["x"] + win["w"] - 2, win["y"] + short_h))
-    dbg.settle()
-    win = dbg.window("System Settings")
-    c = win["content"]
-    scx, scy, scw, sch = c["x"], c["y"], c["w"], c["h"]
-
-    check("the window really did shrink", win["h"] < short_h + 40,
-          f"{win['h']}px tall")
-
-    # THE ONE THAT WOULD HAVE CAUGHT THE ORIGINAL BUG. The status bar is
-    # OUTSIDE the scroll view, so it must survive a window too small for
-    # the page -- it used to be laid out past the bottom edge and simply
-    # disappear. Measured as ink in the bottom rows of the content.
-    bar_h = 20
-    bar_ink, _ = crop_ink(qmp, f"{args.tmp}/settings_statusbar.png",
-                           (scx, scy + sch - bar_h, scw, bar_h))
-    # THE THRESHOLD IS THE CHECK. Measured: 4675 px with the status bar
-    # present, 777 with the positive control in place (uui_layout back
-    # to overflowing, so the bar is laid out past the window). It is not
-    # zero in the broken case -- the scrolled page's own content sits in
-    # those rows instead -- so "is there any ink" passes either way,
-    # which is exactly what this check did on its first run. 2000 sits
-    # between the two with room on both sides.
-    check("the status bar survives a window too small for the page",
-          bar_ink > 2000, f"{bar_ink} non-background px in the bottom {bar_h} rows")
-
-    # Scrolling must REACH what a short window hides. Capture the page,
-    # wheel to the bottom, capture again: the two must differ, and the
-    # cursor has to be parked inside the page first because the wheel
-    # goes to the widget under it (gui_debug.py's warp_cursor).
-    # THE RECT AND THE CURSOR MUST BOTH BE INSIDE THE PAGE, and neither
-    # was: the rect spanned the whole content width and warp_cursor
-    # parked at scw//3, which is INSIDE the sidebar -- it is wide enough
-    # to hold "Cursor theme  (system)". So the wheel scrolled the TREE,
-    # the page never moved, and this check passed anyway because the
-    # tree's own scrolling changed pixels inside the measured rect.
+    # --- SELECTING STAGES; APPLY WRITES -------------------------------
     #
-    # The general form is this repo's own rule: a check whose region
-    # includes something other than the thing under test can be
-    # satisfied by that other thing. Measure the page; point at the page.
-    page_x = scx + tw
-    page_w = scw - tw
-    page_rect = (page_x, scy + 30, page_w, sch - 60)
-    before_ink, before_px = crop_ink(qmp, f"{args.tmp}/settings_scroll_top.png", page_rect)
-    dbg.warp_cursor(qmp, page_x + page_w // 2, scy + sch // 2)
-    for _ in range(8):
-        dbg.send("gui wheel -1")
+    # The check that would catch a staged model that quietly still
+    # applied: /etc must be UNCHANGED after the click and CHANGED after
+    # Apply. Cursor style is not used -- it is marked Advanced and so is
+    # not on a page by default, which is itself asserted below.
+    # ESTABLISH the baseline rather than inherit it. The key may never
+    # have been written, in which case stored_value() is None -- and
+    # "None -> None" passes the unchanged check vacuously, which is
+    # exactly the shape of a test that measures nothing.
+    dbg.send("sh config set system.mouse_speed normal")
     dbg.settle()
-    after_ink, after_px = crop_ink(qmp, f"{args.tmp}/settings_scroll_bottom.png", page_rect)
-    check("the wheel scrolls the page", after_px != before_px,
-          f"{before_ink} -> {after_ink} non-background px")
+    time.sleep(0.4)
+    mark = len(drain(dbg))
+    click(tx + tw // 2, mouse_row["y"])
+    page_slots = slots(dbg, mark)
+    before = stored_value(dbg, "mouse_speed")
+    if not check("the baseline is on disk to begin with", before == "normal",
+                 f"stored={before!r}"):
+        return report()
+    speed = [s for s in page_slots if "mouse_speed" in s["name"]]
+    if not check("the Mouse page has the speed control", bool(speed)):
+        return report()
 
-    # And the payoff: a choice that was off-screen is now selectable.
-    # Asserted on the FILE, not on the app's own claim -- the same
-    # independent path the earlier checks use.
-    before_tz = stored_value(dbg, "timezone")
-    drain(dbg)
-    # The last row of the scrolled page. Sampling from the bottom of the
-    # viewport rather than a computed row index: what is under it
-    # depends on the scroll offset, which is the widget's business.
-    # THE PAGE MOVED WHEN THE WINDOW DID, so the geometry reported at
-    # OPEN is stale here -- using it clicks where the page used to be,
-    # which reads exactly like a scroll view that scrolled nothing. The
-    # page starts just right of the sidebar, whose width the layout does
-    # not change on a vertical resize, so its own reported width is the
-    # offset that stays true.
-    #
-    # Clicking near the BOTTOM instead was an earlier attempt and it
-    # landed in the gap between the last row and the status bar.
-    # The page's HORIZONTAL MIDDLE, not a few pixels past the sidebar:
-    # `tw + 20` landed in the layout's gap between the two, which
-    # produced no event at all and read exactly like a scroll view that
-    # scrolled nothing. The sidebar keeps its width across a vertical
-    # resize, so its reported width plus half of what remains is inside
-    # the page whatever the window is doing.
-    # The CHOICE LIST's own x, not the page's middle: a radio list
-    # recomputes its width rather than filling what the layout offers
-    # (uui_radio_list.h says so), so the page's centre can be past its
-    # right edge and hit nothing. Its x does not move on a vertical
-    # resize, which is what makes the open-time value still true here.
-    click(chx + 30, 20)
-    dbg.settle()
-    # settle() waits for the WM's queue to drain, which is not the same
-    # as the CLIENT having written the file: the write happens in the
-    # app's own process, one hop further out. Give it that hop before
-    # reading the disk, or this reads the old value and blames the
-    # scroll view.
+    # The CONTROL's own rect, reported by the app after the layout ran.
+    ctls = controls(dbg, mark)
+    speed_ctl = ctls.get("system.mouse_speed")
+    if not check("the app reported the speed control's rect", speed_ctl is not None,
+                 f"controls={sorted(ctls)}"):
+        return report()
+
+    # Pick a row that is NOT the current one, so "it changed" cannot pass
+    # by the value already being right.
+    row_h = speed_ctl["h"] // max(speed_ctl["rows"], 1)
+    target_row = 0 if before != "slow" else 2
+    click_y = speed_ctl["y"] + row_h * target_row + row_h // 2
+    click(speed_ctl["x"] + 20, click_y)
+    # ASSERTED ON A LOGGED FACT, not on the status bar's pixels: the
+    # first version looked for the bar's wording in the log, where it
+    # never appears, so it failed while the app was working perfectly.
+    staged = last(r"settings: staged (\S+) (\S+)")
+    check("clicking a choice reaches the control",
+          staged is not None and "mouse_speed" in staged,
+          f"rect={speed_ctl}, clicked ({speed_ctl['x'] + 20}, {click_y}), "
+          f"staged: {staged or 'nothing'}")
+
+    # THE LOAD-BEARING CHECK. Selecting must STAGE, not write. A staged
+    # model that quietly still applied would look identical on screen.
+    mid = stored_value(dbg, "mouse_speed")
+    check("selecting a choice does NOT write it yet",
+          mid == before, f"{before!r} -> {mid!r} (should be unchanged)")
+    check("...and the app staged it rather than applying it",
+          staged is not None and last(r"settings: set \S+") is None,
+          f"staged={staged!r}, any set line={last(r'settings: set .*')!r}")
+
+    # Now Apply.
+    click(bx + bw + 6 + bw // 2, by + bh // 2)   # the middle button
     time.sleep(0.5)
-    after_tz = stored_value(dbg, "timezone")
-    # Reports what the APP said as well as what the disk says: "utc ->
-    # utc" alone cannot tell a click that missed from a click that
-    # landed on the value already in effect, and those need different
-    # fixes.
+    drain(dbg)
+    after = stored_value(dbg, "mouse_speed")
+    check("Apply writes the staged change",
+          after is not None and after != before, f"{before!r} -> {after!r}")
     said = last(r"settings: set (\S+) (\S+) result (\d+)")
-    check("a choice only reachable by scrolling can be applied",
-          after_tz is not None and after_tz != before_tz,
-          f"{before_tz} -> {after_tz}; app last said: {said or 'nothing'}")
+    check("...and the registry reported it SAVED (not merely applied)",
+          bool(said) and said.rstrip().endswith("result 1"), said or "no set line")
 
-    dbg.send("gui close 0")
-    dbg.settle()
+    # --- Advanced= keeps a setting off the page until asked ----------
+    #
+    # system.cursor_style is marked Advanced=1 in /etc/settings.d, so it
+    # must NOT be on its page by default and MUST appear once the toggle
+    # is checked. Both halves matter: the first alone would pass if the
+    # setting had simply vanished from the registry.
+    appearance = row_named("Console cursor") or row_named("Appearance")
+    if appearance:
+        mark = len(drain(dbg))
+        click(tx + tw // 2, appearance["y"])
+        page = slots(dbg, mark)
+        check("an Advanced setting is NOT on the page by default",
+              not any("cursor_style" in s["name"] for s in page),
+              f"{[s['name'] for s in page]}")
+        adv = advanced_toggle(dbg, mark)
+        if adv and adv["shown"]:
+            mark2 = len(drain(dbg))
+            click(adv["x"] + 6, adv["y"] + adv["h"] // 2)
+            page = slots(dbg, mark2)
+            check("...and the toggle reveals it",
+                  any("cursor_style" in s["name"] for s in page),
+                  f"{[s['name'] for s in page]}")
+
+    # --- Cancel closes without writing --------------------------------
+    mark = len(drain(dbg))
+    click(tx + tw // 2, mouse_row["y"])
+    speed_ctl = controls(dbg, mark).get("system.mouse_speed", speed_ctl)
+    row_h = speed_ctl["h"] // max(speed_ctl["rows"], 1)
+    on_disk = stored_value(dbg, "mouse_speed")
+    click(speed_ctl["x"] + 20, speed_ctl["y"] + row_h * (target_row + 1) + row_h // 2)
+    click(bx + 2 * (bw + 6) + bw // 2, by + bh // 2)   # Cancel
+    time.sleep(0.6)
+    check("Cancel discards the staged change",
+          stored_value(dbg, "mouse_speed") == on_disk,
+          f"{on_disk!r} still on disk")
+
     return report()
 
 
 def report():
     passed = sum(1 for _, ok, _ in checks if ok)
     failed = len(checks) - passed
+    if failed:
+        # THE APP'S OWN LINES, on failure only. This tool drains them
+        # into _log to make its assertions and used to print none of
+        # them, so a failing check reported a coordinate and nothing
+        # about what the app thought it drew -- and the log file this
+        # writes contained no trace of the app at all. Same rule as
+        # naming the phase in a truncated ktest summary.
+        print("\n--- what the app reported ---")
+        for line in _log:
+            if "settings:" in line:
+                print("   ", line)
     print(f"\nsettings_test: {passed} passed, {failed} failed")
     for name, ok, _ in checks:
         if not ok:

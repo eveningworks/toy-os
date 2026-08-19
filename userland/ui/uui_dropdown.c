@@ -199,7 +199,28 @@ static void dd_ops_draw_overlay(struct ugfx_surface *s, const void *w) {
     uui_dropdown_draw_popup(s, (const struct uui_dropdown *)w);
 }
 
+static void dd_ops_natural_size(const void *w, int *out_w, int *out_h) {
+    uui_dropdown_natural_size((const struct uui_dropdown *)w, out_w, out_h);
+}
+
+static void dd_ops_set_geometry(void *w, int x, int y, int width, int height) {
+    uui_dropdown_set_geometry((struct uui_dropdown *)w, x, y, width, height);
+}
+
+// NATURAL_SIZE AND SET_GEOMETRY WERE MISSING UNTIL 2026-08-19, so a
+// dropdown declared in a uui_layout was never positioned OR measured --
+// it stayed at 0x0 at the origin, and the layout, unable to size the
+// child, placed nothing after it either. A whole page below the
+// dropdown simply did not appear.
+//
+// It went unnoticed because no app had put one in a layout: UI Demo
+// positions its widgets by hand, and System Settings was the first to
+// declare one. Both functions already existed -- only the table was
+// short. Worth remembering when adding a widget: the ops table is the
+// contract, and a missing slot fails SILENTLY and at a distance.
 const struct uui_widget_ops uui_dropdown_ops = {
+    .natural_size   = dd_ops_natural_size,
+    .set_geometry   = dd_ops_set_geometry,
     .draw           = dd_ops_draw,
     .draw_overlay   = dd_ops_draw_overlay,
     .hit            = dd_ops_hit,

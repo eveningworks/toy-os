@@ -30,6 +30,7 @@
 #include "setting.h"
 #include "query.h"   // the fact registry -- query_init()/mem_query_init()
 #include "cursor_config.h"
+#include "mouse_config.h"
 #include "keyboard_config.h"
 #include "apps.h"
 #include "demo.h"
@@ -243,6 +244,7 @@ void kernel_main(uint64_t multiboot_info_addr) {
     tz_init(); // loads the persisted timezone choice, if any -- needs fs_init()/"/etc" first
     font_config_init(); // loads the persisted font size, if any -- see kernel/lib/font_config.c
     cursor_config_init(); // console cursor style, same /etc plumbing as the font size
+    mouse_config_init();  // pointer speed and acceleration
     keyboard_config_init(); // loads the persisted keyboard layout, if any -- see kernel/lib/keyboard_config.c
     target_init(); // what this machine is for -- read BEFORE init is spawned below, since init asks for it first thing
     vga_reflow(); // apply it to the console's cell layout (no-op if nothing was persisted)

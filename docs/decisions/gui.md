@@ -2724,3 +2724,146 @@ Three consequences worth stating:
   own click -- the same rule `uui_button_group_natural_size()` broke by
   measuring from the origin, and for the same reason: natural size is
   what a widget WANTS, asked before anyone knows its state.
+
+---
+
+## A widget's ops table is the contract, and a missing slot fails silently
+
+THREE widgets had short tables, all found in one afternoon and all with
+every function they needed already written:
+
+- `uui_dropdown_ops` -- no `natural_size`, no `set_geometry`.
+- `uui_checkbox_ops` -- no `natural_size`, no `set_geometry`, and no
+  `release`, so the router never even NAMED it to its app (it reports a
+  widget only when that widget has a release op). The checkbox toggled
+  on screen and the app was never told.
+- And the same shape one level up: `uui_scrollview` re-laid its content
+  out when its own rect or its offset moved, but not when the content's
+  ITEM LIST changed -- see the entry below.
+
+`uui_dropdown_ops` is the worked example. Both functions existed -- `uui_dropdown_natural_size()`
+and `uui_dropdown_set_geometry()` are right there in the same file --
+and only the table was short.
+
+The consequence: **a dropdown declared in a `uui_layout` was never
+positioned or measured.** It stayed 0x0 at the origin, and the layout,
+unable to size a child, placed nothing sensible after it. A whole page
+below the dropdown simply did not appear.
+
+It went unnoticed for as long as it did because no app had put one in a
+layout: UI Demo positions its widgets by hand, and System Settings was
+the first to declare one. That is the general shape worth remembering --
+**an ops slot nobody fills is a capability nobody has tested**, and it
+fails at a distance from its cause, in a container, as a missing
+sibling rather than as a broken widget.
+
+Two habits follow. When adding a widget, fill the table against
+`uui_widget.h` rather than against the widget you copied -- a table
+copied from a neighbour inherits its gaps. And **when a layout
+misbehaves, check the ops tables of everything in it before suspecting
+the layout**: the whole of this failure looked like `uui_layout`
+stopping after four children, and `uui_layout_run()` turned out to have
+no early exit at all. Reading it settled in two minutes what three
+experiments from the outside had not.
+
+---
+
+## `uui_label` exists because a caption is a layout child
+
+Every app that wanted a caption drew it in `on_draw` and worked out its
+own coordinates. That is fine until the thing it captions moves, and
+until the page scrolls -- System Settings hit both in one day. A page
+heading painted in `on_draw` landed on top of the first control, because
+the toolkit paints declared widgets first and calls `on_draw` after;
+reserving space for it by hand would then have left content sliding
+underneath it as the page scrolled.
+
+So: a widget with no behaviour whose entire job is to occupy a row the
+layout has accounted for. It has **no `hit`**, deliberately, so the
+router never offers it a press and a click passes through to whatever is
+behind -- a caption that swallowed clicks would be a control that does
+nothing, which is a bug shape this toolkit keeps a rule about.
+
+Its text is POINTED AT rather than copied, so a buffer must outlive it.
+And its natural HEIGHT does not depend on its text (`rows`, default 1),
+because a caption whose height varied with its content would reflow the
+page every time it changed.
+
+---
+
+## Settings carry text in `/etc`, and behaviour in the kernel
+
+`struct setting` gained `category` and `group` -- which page a setting
+appears on -- but its DESCRIPTION, its choices' display names and its
+presentation hints live in `/etc/settings.d/<namespace>.<name>`, in
+`etc_config`'s existing `name=value` format.
+
+**Why the split.** `label` is compiled in because a setting without one
+cannot be presented at all. Prose is the part somebody rewords, and
+eventually translates, and neither should need a kernel rebuild. It is
+also the part that can be ABSENT without breaking anything, which is
+what makes a file safe for it: the compiled-in label is the floor, so a
+missing file costs one setting its extra text and nothing else, and the
+files can be added one at a time.
+
+**Why one file per setting** rather than sections in one file: the
+parser is compiled twice (kernel and ring 3) and shared with `.desktop`
+entries and `/etc/services.d`, so teaching it sections would change
+`etc_config_get(file, key)` at every call site and make identity
+(file, section, name) when the whole registry says (namespace, name).
+A directory of small descriptors needs no parser change and is the
+convention `/etc/services.d`, `/etc/config.d` and `/usr/wm/desktop`
+already teach.
+
+**The display name is not the value.** `Choice.losangeles=Los Angeles`
+changes only what is shown; `losangeles` is still what is stored and
+what `config set` takes. Keeping them apart is what lets the UI read
+well without `/etc` filling with prettified tokens a later parser would
+have to accept.
+
+**`Widget=` is a HINT, never an instruction.** A client with no such
+control must still show the setting some other way, because the setting
+has to remain changeable. It lives in the text file rather than in
+`struct setting` because it is presentation, and the kernel's descriptor
+says what a setting IS.
+
+**`Applies=reboot` says the thing `result` cannot.** `SETTING_OP_SET`
+answers SAVED / UNSAVED / INVALID, which is about persistence.
+`system.default_target` persists perfectly and yet visibly does nothing,
+because init reads it at boot -- and a UI reporting plain "saved" there
+tells the same kind of lie `SETTING_UNSAVED` exists to prevent.
+
+**Grouping changes nothing about storage.** `category` and `group` are
+registry metadata; each setting still writes its own `name=value` line
+to its own file. Moving a setting between groups migrates no data.
+
+---
+
+## A scroll view lays out its content when the ITEM LIST changes, too
+
+`place_content()` was called from two places -- the viewport's rect
+moving, and the scroll offset moving -- and its own comment said so:
+"called whenever anything it depends on moves: the viewport's rect, or
+the offset". The content's ITEM LIST is a third dependency, and nothing
+called it because no app had ever changed a scroll view's contents at
+runtime.
+
+System Settings does: picking a different page rebuilds the item list.
+Without a re-layout the NEW widgets were never positioned at all --
+zero rect, invisible, unclickable -- while the widgets carried over from
+the previous page kept the PREVIOUS page's rects. On screen that reads
+as a layout that stops after four children, which is the wrong place to
+look by a whole layer.
+
+**It is automatic, not a call an app must remember.** `sv_children()` --
+the one accessor the router uses before routing input into the children
+and before painting them -- compares the content's `items` pointer and
+`count` against what was last laid out, and re-positions if they differ.
+`uui_scrollview_content_changed()` still exists and is still the honest
+thing to call at the point of change, but an app that forgets it now
+gets a correct page rather than an invisible one.
+
+That choice is this project's standing rule applied: an init step
+reachable by only one entry point is a bug waiting for a second entry
+point. Verified by removing the app's explicit call and confirming the
+geometry was identical.

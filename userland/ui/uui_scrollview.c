@@ -46,7 +46,15 @@ static int clamp_offset(struct uui_scrollview *sv) {
 }
 
 // The one place the content is positioned. Called whenever anything it
-// depends on moves: the viewport's rect, or the offset.
+// depends on moves: the viewport's rect, the offset, or -- since
+// 2026-08-19 -- the content's ITEM LIST (uui_scrollview_content_changed).
+//
+// That third dependency was missing, and it was invisible for as long as
+// no app changed a scroll view's contents at runtime. System Settings
+// rebuilds its page's item list when you pick a different page, and
+// without a re-layout the new widgets kept x/y/w/h at zero while the
+// ones carried over from the previous page kept the PREVIOUS page's
+// rects. It reads exactly like a layout that stops after four children.
 static void place_content(struct uui_scrollview *sv) {
     if (!sv->content) { sv->content_h = 0; return; }
 
@@ -66,6 +74,8 @@ static void place_content(struct uui_scrollview *sv) {
     // children are laid out at the size they asked for and the viewport
     // shows a window onto them.
     uui_layout_run(sv->content, sv->x, sv->y - sv->offset, inner_w, sv->content_h);
+    sv->seen_items = sv->content->items;
+    sv->seen_count = sv->content->count;
 }
 
 void uui_scrollview_init(struct uui_scrollview *sv, struct uui_layout *content) {
@@ -74,6 +84,9 @@ void uui_scrollview_init(struct uui_scrollview *sv, struct uui_layout *content) 
     sv->offset = 0;
     sv->content_h = 0;
     sv->thumb_grab = -1;
+    sv->seen_items = 0;
+    sv->seen_count = -1; // -1, not 0: an EMPTY content list is a real
+                          // state, and 0 would read as "already seen".
     sv->pref_rows = 0;
     sv->step = 0;
     sv->bar_w = 0;
@@ -141,6 +154,20 @@ static void sv_natural_size(const void *w, int *out_w, int *out_h) {
     if (out_h) *out_h = (nh > 0 && want > nh) ? nh : want;
 }
 
+// Has the content's item list been swapped since it was last laid out?
+static int content_moved(const struct uui_scrollview *sv) {
+    if (!sv->content) return 0;
+    return sv->content->items != sv->seen_items ||
+           sv->content->count != sv->seen_count;
+}
+
+void uui_scrollview_content_changed(struct uui_scrollview *sv) {
+    // The offset is CLAMPED rather than reset: a page whose content grew
+    // should not jump to the top, and place_content() clamps for us.
+    // A caller that wants the top asks for it separately.
+    place_content(sv);
+}
+
 static void sv_set_geometry(void *w, int x, int y, int width, int height) {
     struct uui_scrollview *sv = w;
     sv->x = x; sv->y = y; sv->w = width; sv->h = height;
@@ -179,9 +206,23 @@ static void sv_children_end(struct ugfx_surface *s, void *w) {
                         total, vis, off_lines, sv->track_bg, sv->thumb_bg, 0);
 }
 
+// THE ONE ACCESSOR for the children, which is why the staleness check
+// lives here: the router calls this before it routes input into them and
+// before it paints them, so an item list swapped since the last layout
+// is re-positioned before anything can use a zero rect.
+//
+// Making it AUTOMATIC rather than a call an app must remember is
+// deliberate. The explicit uui_scrollview_content_changed() still
+// exists and is still the honest thing to call, but an app that forgets
+// it now gets a correctly laid-out page instead of a page whose new
+// widgets are invisible and unclickable -- a failure that reads as a
+// broken LAYOUT and cost a long hunt to trace back to a missing call.
+// This project's own rule: an init step reachable by only one entry
+// point is a bug waiting for a second entry point.
 static struct uui_item *sv_children(void *w, int *out_count) {
     struct uui_scrollview *sv = w;
     if (!sv->content) { *out_count = 0; return 0; }
+    if (content_moved(sv)) place_content(sv);
     *out_count = sv->content->count;
     return sv->content->items;
 }

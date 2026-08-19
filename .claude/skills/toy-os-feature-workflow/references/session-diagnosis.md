@@ -652,3 +652,56 @@ Better still for a version-specific bug: the runner's image is public,
 so the exact toolchain can be reproduced locally in a container
 (`docker run ubuntu:24.04`, which is where QEMU 8.2.2 came from) rather
 than round-tripping through CI at ~90 s per attempt.
+
+## READ THE COMPONENT BEFORE EXPERIMENTING ON IT (2026-08-19)
+
+A settings page rendered its first control and nothing after it. I spent
+three build-and-test cycles on experiments from the OUTSIDE -- ruling out
+frame ordering, ruling out hidden sibling widgets, ruling out the scroll
+view by removing it -- each of which was a real discriminating experiment
+and none of which found the bug.
+
+Then the user asked "could it be at component level or lower?", I opened
+`uui_layout.c` for the first time, and the answer was visible in ninety
+seconds: **`uui_layout_run()` walks every child with no early exit.** It
+was never the layout. The real cause was one layer away -- a scroll view
+that re-positions its content when its own rect or its offset moves, and
+not when the content's ITEM LIST changes.
+
+The lesson is not "experiments are bad" -- the three of them correctly
+eliminated three suspects. It is that **an experiment tells you where the
+bug ISN'T, and reading tells you where it IS**, and I had reached for
+the expensive one first on a component I had never opened. The rule
+this repo already has ("when something fails twice, stop reasoning and
+go look") needs a companion: *look at the CODE, not only at the screen.*
+
+Three specific things that generalise:
+
+- **A symptom names a layer; the cause is often one layer up or down.**
+  "The layout stops after four children" was an accurate description of
+  the screen and pointed at the wrong file entirely.
+- **When a container misbehaves, suspect the ops tables of its
+  children.** Three widgets had short tables that day
+  (`uui_dropdown_ops`, `uui_checkbox_ops`, and the scroll view's missing
+  third dependency), each failing silently and at a distance.
+- **A comment that enumerates what something depends on is a checklist.**
+  `place_content()`'s own comment said "the viewport's rect, or the
+  offset" -- exactly two of the three things it actually depends on.
+  When a list like that is one short, the missing item is the bug.
+
+## Make it impossible, then prove it (2026-08-19)
+
+Having fixed the scroll view by adding an explicit
+`uui_scrollview_content_changed()` call, the honest next question was
+whether the next app would remember to call it. It would not.
+
+So the check moved INTO the widget: `sv_children()` -- the single
+accessor the router uses before routing input and before painting --
+compares the content's `items` pointer and `count` against what was last
+laid out. The explicit call still exists and is still worth writing at
+the point of change; it is simply no longer load-bearing.
+
+**Then prove it, the same way any other claim gets proved here:** delete
+the explicit call, rebuild, and confirm the geometry is byte-identical.
+A "now it's impossible" that was never tested without the belt is just a
+belt and a claim.

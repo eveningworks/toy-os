@@ -12,6 +12,8 @@
 #include "tz.h"
 #include "font_config.h"
 #include "cursor_config.h"
+#include "mouse_config.h"
+#include "setting_text.h"
 #include "keyboard_config.h"
 #include "cursor_theme_config.h"
 #include "target.h"
@@ -290,6 +292,18 @@ int setting_dispatch(struct setting_msg *msg) {
         // would be a second place it is written down.
         k_strlcpy(msg->category, s->category ? s->category : SETTING_CATEGORY_DEFAULT,
                   sizeof msg->category);
+        // Empty rather than substituted: "no group" is a real answer a
+        // UI acts on (give it a page of its own), unlike "no category",
+        // where every setting must land somewhere.
+        k_strlcpy(msg->group, s->group ? s->group : SETTING_GROUP_DEFAULT,
+                  sizeof msg->group);
+        // The text half, from /etc/settings.d -- absent is normal, and
+        // leaves the description empty and the widget AUTO.
+        setting_text_description(setting_namespace(s), s->name,
+                                 msg->description, sizeof msg->description);
+        msg->widget = setting_text_widget(setting_namespace(s), s->name);
+        msg->sflags = setting_text_sflags(setting_namespace(s), s->name);
+        msg->order  = setting_text_order(setting_namespace(s), s->name);
         msg->type = (s->type == SETTING_TYPE_ENUM) ? SETTING_ABI_TYPE_ENUM
                                                    : SETTING_ABI_TYPE_STRING;
         msg->count = choice_count(s);
@@ -308,6 +322,11 @@ int setting_dispatch(struct setting_msg *msg) {
         if (!s || s->type != SETTING_TYPE_ENUM || !s->choice) return 0;
         msg->value[0] = '\0';
         if (!s->choice(msg->choice, msg->value, sizeof msg->value)) return 0;
+        // The DISPLAY name rides alongside the value, falling back to
+        // the value itself -- so a client draws `label` unconditionally
+        // and never decides. `value` stays the token that gets stored.
+        setting_text_choice(setting_namespace(s), s->name, msg->value,
+                            msg->label, sizeof msg->label);
         return 1;
     }
 
@@ -328,6 +347,26 @@ int setting_dispatch(struct setting_msg *msg) {
         // would make a client unable to tell "the ABI is wrong" from
         // "you typed a bad value".
         return 1;
+
+    case SETTING_OP_GROUP_TEXT: {
+        // "<category>/<group>" in `name`, split on the first slash --
+        // neither half may contain one, and a category is a UI section
+        // name rather than a path.
+        char cat[SETTING_ABI_CATEGORY_MAX];
+        const char *slash = 0;
+        for (const char *p = msg->name; *p; p++)
+            if (*p == '/') { slash = p; break; }
+        if (!slash) return 0;
+        uint32_t n = (uint32_t)(slash - msg->name);
+        if (n >= sizeof cat) return 0;
+        for (uint32_t i = 0; i < n; i++) cat[i] = msg->name[i];
+        cat[n] = '\0';
+        msg->label[0] = '\0';
+        msg->description[0] = '\0';
+        return setting_text_group(cat, slash + 1,
+                                  msg->label, sizeof msg->label,
+                                  msg->description, sizeof msg->description);
+    }
 
     case SETTING_OP_FILE_COUNT:
         msg->count = config_file_count();
@@ -376,6 +415,7 @@ void settings_init(void) {
     tz_setting_register();
     font_config_setting_register();
     cursor_config_setting_register();
+    mouse_config_setting_register();
     keyboard_config_setting_register();
     cursor_theme_setting_register();
     target_setting_register();

@@ -1,0 +1,4 @@
+# 92 cities, so this one asks for a dropdown explicitly rather than
+# relying on the count rule -- see /etc/settings.d/README.md.
+Description=Local time is shown in this city's zone, with EU or US summer time where it applies
+Widget=dropdown

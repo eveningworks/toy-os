@@ -71,7 +71,12 @@ struct uui_scrollview {
     // --- state the widget owns --------------------------------------
     int offset;      // pixels scrolled down; 0 = top. Clamped, always.
     int content_h;   // the content's natural height, measured at layout
-    int thumb_grab;  // grab offset within the thumb, or -1 when not dragging
+    int thumb_grab;
+    // What the content looked like when it was last positioned. Compared
+    // on every draw so a changed item list re-lays itself out WITHOUT
+    // the app having to say so -- see uui_scrollview_content_changed().
+    struct uui_item *seen_items;
+    int seen_count;  // grab offset within the thumb, or -1 when not dragging
 
     // --- what the app may configure ---------------------------------
     int pref_rows;   // natural height, in text rows (0 = a default)
@@ -96,6 +101,17 @@ void uui_scrollview_init(struct uui_scrollview *sv, struct uui_layout *content);
 // the content's own height -- asking for twenty rows of a five-row page
 // reserves empty space, which is never what the caller meant.
 void uui_scrollview_set_preferred_rows(struct uui_scrollview *sv, int rows);
+
+// TELL IT THE CONTENT'S ITEM LIST CHANGED, and it re-measures and
+// re-positions. Required after adding, removing or replacing items in
+// the layout a scroll view was handed -- the view otherwise lays its
+// content out only when its own rect or its offset moves, so brand-new
+// widgets are never positioned at all and keep a zero rect.
+//
+// This is not a repaint request (that is uapp_redraw): it is the third
+// thing place_content() depends on, and the one an app can change
+// without touching the view.
+void uui_scrollview_content_changed(struct uui_scrollview *sv);
 
 // Pixels per wheel notch and per trough-arrow click. 0 restores the
 // default of one text row.

@@ -301,6 +301,13 @@ No dependency on the phases above; ordered among themselves.
 - [ ] Boot-time `fsck` report (check, never repair) behind a config key
 - [ ] Per-record checksums in the table itself
 
+### Timezones out of the kernel
+**Needs:** an epoch-based time ABI -- the kernel would hand out UTC and a ring-3 library convert.
+
+- [ ] The kernel returns UTC, not local time -- `fs_stat` converts at the syscall boundary today
+- [ ] A ring-3 timezone library reading `/etc/timezones`, so the city database and the DST rules leave the kernel
+- [ ] More DST rules than EU/US/none, which is what a bigger city list needs to stop being wrong about the southern hemisphere
+
 ### Real mount points
 
 - [ ] A mount table (path prefix -> backend), replacing vfs.c's single `g_fs`
@@ -427,6 +434,7 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Resizable windows: a drag handle, and a relayout on resize~~ DONE 2026-08-18
 - [ ] A minimum window size that falls out of the content's own minimum -- `uapp_desc.min_w/min_h` is still a declared hint
 - [x] ~~Convert one real app as the proof -- Calculator's grid is the obvious first, being pure arithmetic today~~ DONE 2026-08-18
+- [ ] `uui_slider`, so a setting with ordered levels (pointer acceleration) can say `Widget=slider`
 - [ ] Then convert the rest, deleting the per-app pixel math -- 4 of 10 ring-3 apps are laid out today
 - [ ] Scale factor as a single input, so a HiDPI mode is a multiplier and not a rewrite
 - [x] ~~Decide explicitly whether layout is immediate-mode~~ DONE 2026-08-18 -- it is; rects at open and on resize, drawing immediate

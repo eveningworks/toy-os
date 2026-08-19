@@ -15,6 +15,26 @@ static int bound_w = 80, bound_h = 25;
 // once the driver asks for it via a specific sample-rate "magic knock"
 // (see mouse_init()). packet_size reflects whichever this device turned
 // out to support, decided once at init and constant after.
+// Pointer speed and acceleration, both settings (kernel/lib/mouse_config.c
+// registers them). Defaults are 1x and off, so a machine with no
+// /etc keys behaves exactly as it did before these existed.
+static int g_speed_num = MOUSE_SPEED_UNIT;
+static int g_accel_threshold = 0;
+
+void mouse_set_speed(int numerator) {
+    // Clamped rather than trusted: a zero would freeze the pointer with
+    // no way to reach the setting that did it, which is the kind of
+    // knob that needs a boot to undo.
+    if (numerator < 1) numerator = 1;
+    if (numerator > MOUSE_SPEED_UNIT * 4) numerator = MOUSE_SPEED_UNIT * 4;
+    g_speed_num = numerator;
+}
+
+void mouse_set_accel_threshold(int threshold) {
+    if (threshold < 0) threshold = 0;
+    g_accel_threshold = threshold;
+}
+
 static uint8_t packet[4];
 static int packet_index = 0;
 static int packet_size = 3;
@@ -134,6 +154,31 @@ void mouse_feed_byte(uint8_t data) {
 
     if (flags & 0x10) dx -= 256; // sign-extend 9th bit (negative X)
     if (flags & 0x20) dy -= 256; // sign-extend 9th bit (negative Y)
+
+    // SPEED, then ACCELERATION -- both applied here, at the one place
+    // raw device deltas become screen motion, so nothing downstream
+    // needs to know either exists.
+    //
+    // Speed is a numerator over MOUSE_SPEED_UNIT rather than a float:
+    // there is no floating point in this kernel (-mno-sse). Doing it in
+    // one multiply-then-divide keeps a slow setting from rounding every
+    // small movement to zero, which dividing first would.
+    dx = dx * g_speed_num / MOUSE_SPEED_UNIT;
+    dy = dy * g_speed_num / MOUSE_SPEED_UNIT;
+
+    // Acceleration is the classic threshold rule -- move faster than
+    // `threshold` counts in one packet and the excess is doubled. This
+    // is what PS/2 mice and X11's original "mouse acceleration" did,
+    // deliberately rather than a curve: a curve needs tuning constants
+    // nobody here can measure, and the threshold rule is predictable.
+    // Applied per AXIS on the raw magnitude; a diagonal flick therefore
+    // accelerates on both, which is what makes it feel symmetric.
+    if (g_accel_threshold > 0) {
+        if (dx > g_accel_threshold)  dx += dx - g_accel_threshold;
+        if (dx < -g_accel_threshold) dx += dx + g_accel_threshold;
+        if (dy > g_accel_threshold)  dy += dy - g_accel_threshold;
+        if (dy < -g_accel_threshold) dy += dy + g_accel_threshold;
+    }
 
     mouse_x += dx;
     mouse_y -= dy; // PS/2 Y increases upward; screen Y increases downward

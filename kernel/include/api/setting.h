@@ -50,6 +50,11 @@ _Static_assert(SETTING_MAX == SETTING_ABI_MAX,
 // otherwise each carry the string.
 #define SETTING_CATEGORY_DEFAULT "General"
 
+// A setting with no `group` gets a page to itself. The UI substitutes
+// the setting's own label, so this is only ever seen if something
+// registers with neither a group nor a label.
+#define SETTING_GROUP_DEFAULT ""
+
 // QUALIFIED NAMES: a setting's identity is (namespace, name), not name.
 //
 // The namespace is the registered NAME OF THE FILE it persists to
@@ -106,6 +111,18 @@ struct setting {
     // of. The UI groups by exact match and puts anything unrecognised
     // under the default -- which is a real answer, not an error.
     const char *category;
+
+    // Which PAGE within that category this setting appears on, so
+    // several related settings share one page: cursor theme, size,
+    // speed and acceleration all declare group "Mouse". NULL means the
+    // setting gets a page of its own, named by its label -- which is
+    // what every setting did before groups existed, so nothing had to
+    // be edited to keep working.
+    //
+    // The sidebar is category -> group; the settings themselves are not
+    // tree rows. That is KDE System Settings' shape: a leaf opens a
+    // MODULE with several controls, not a single control.
+    const char *group;
 
     // ENUM only: writes choice `index` into `out`, returning 1, or
     // returns 0 once `index` is past the last one. A callback rather

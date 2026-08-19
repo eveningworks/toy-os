@@ -1,0 +1,9 @@
+Description=Move the mouse quickly and the pointer travels further still
+Widget=radio
+Choice.off=Off
+Choice.low=Low
+Choice.medium=Medium
+Choice.high=High
+# Appearance first, then behaviour -- which is NOT registration
+# order, since cursor_config registers before mouse_config.
+Order=40

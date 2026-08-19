@@ -1,0 +1,9 @@
+Description=How the text cursor is drawn on the console
+Choice.block=Block
+Choice.underline=Underline
+Choice.beam=Beam
+Choice.translucent=Translucent block
+# The console's text caret, which almost nobody sees now that the
+# default boot target is the desktop -- so it is kept out of the way
+# rather than sitting beside the settings people actually change.
+Advanced=1

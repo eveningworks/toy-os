@@ -829,3 +829,43 @@ Three things to carry:
   `gui_flow.py`'s calibrated constants have needed re-measuring three
   times. Adding "the timezone page opened" as its own check is what
   turned a mystery into a coordinate bug in one run.
+
+## Assert on a logged FACT, never on what the screen says (2026-08-19)
+
+`settings_test.py` checked that selecting a choice staged rather than
+applied it by looking for the status bar's wording ("not applied yet")
+in the debug log. The status bar is PIXELS -- that string never reaches
+the log -- so the check failed while the app was working perfectly, and
+the neighbouring checks that DID assert on disk contents passed.
+
+The app logs `settings: staged <name> <value>` now and the test asserts
+on that. The general rule this repo already has ("prefer
+tools/gui_debug.py to pixels") has a corollary: **if you find yourself
+grepping a log for text the app draws rather than logs, you are
+asserting on something that is not there.**
+
+Two more from the same tool, both worth recognising:
+
+- **Accumulated logs need a MARK.** `drain()` appends to one list, so
+  anything read without a starting index sees every page ever opened.
+  The first version asked about the Mouse page and got the timezone
+  page's control back -- a confident wrong answer. Take
+  `mark = len(drain(dbg))` before the action and read `_log[mark:]`.
+- **A tool that reads a log should PRINT it on failure.** This one
+  drained the app's lines to make its assertions and printed none of
+  them, so a failing check reported a coordinate and nothing about what
+  the app thought it drew -- and the saved log file contained no trace
+  of the app at all. Same rule as naming the phase in a truncated ktest
+  summary.
+
+## A check that passes on absent data is measuring nothing (2026-08-19)
+
+"selecting a choice does NOT write it yet" compared `/etc` before and
+after and passed -- with both readings `None`, because the key had never
+been written. `None -> None` satisfies "unchanged" perfectly.
+
+Establish the baseline rather than inherit it: the test now does
+`sh config set system.mouse_speed normal` first and ASSERTS the value is
+on disk before going near the staging checks. Same family as this repo's
+existing rule about a fixture whose data never reaches the branch under
+test.

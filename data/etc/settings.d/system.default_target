@@ -1,0 +1,8 @@
+Description=What init starts at boot -- the desktop, or a text console
+Widget=radio
+Choice.graphical=Graphical desktop
+Choice.text=Text console
+# The one setting whose change is NOT visible when it is made:
+# init reads this at boot, so changing it here does nothing until
+# the machine restarts. Nothing else in the ABI can say that.
+Applies=reboot

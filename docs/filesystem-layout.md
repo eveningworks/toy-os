@@ -46,6 +46,7 @@ in check_layout.py changes with it.)
 | `/etc/kbs` | Generated keyboard layout data (`us`, `se`) | build | optional |
 | `/etc/config.d` | One descriptor per registered config file (`Name`/`Path`/`Description`) -- see `api/config_file.h` | boot | present |
 | `/etc/services.d` | One descriptor per service init starts (`Name`/`Exec`/`Target`/`Restart`) -- see `data/etc/services.d/README.md` | build | present |
+| `/etc/settings.d` | One text file per setting -- description, choice display names and presentation hints -- see `data/etc/settings.d/README.md`. A setting with no file falls back to its compiled-in label, so this directory may legitimately be empty | build | present |
 | `/tests` | Test/demo binaries -- one kernel mechanism each | build | present |
 | `/tmp` | Scratch space | boot | present |
 | `/usr` | Container only -- holds `share/`, nothing of its own | build | present |

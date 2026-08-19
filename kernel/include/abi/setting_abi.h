@@ -56,6 +56,22 @@ enum setting_result {
 // still read the real count from SETTING_OP_COUNT rather than assume
 // this many exist.
 #define SETTING_ABI_CATEGORY_MAX 24 // a UI section name, e.g. "Appearance"
+#define SETTING_ABI_DESC_MAX 120 // one line of explanation, not a paragraph
+
+// `widget` above.
+#define SETTING_ABI_WIDGET_AUTO     0
+#define SETTING_ABI_WIDGET_RADIO    1
+#define SETTING_ABI_WIDGET_DROPDOWN 2
+
+// `sflags` above.
+//
+// REBOOT is the one that matters: system.default_target takes effect at
+// the next boot, and nothing else in this ABI can say so -- `result`
+// reports whether the value PERSISTED, which is a different question. A
+// UI that reported "saved" for a setting the user can see did nothing is
+// telling the same kind of lie SETTING_UNSAVED exists to prevent.
+#define SETTING_ABI_SF_REBOOT   (1u << 0) // takes effect at the next boot
+#define SETTING_ABI_SF_ADVANCED (1u << 1) // a UI may keep it behind a disclosure
 #define SETTING_ABI_MAX       16
 
 #define SETTING_ABI_NAME_MAX  24 // the /etc key, e.g. "font_size"
@@ -79,7 +95,15 @@ enum setting_op {
     // In: `index`. Fills name/label/file/type/value, and `count` with
     // how many choices this setting has.
     SETTING_OP_INFO   = 1,
-    // In: `index`, `choice`. Fills `value` with that choice's name.
+    // In: `index`, `choice`. Fills `value` with that choice's name, and
+    // `label` with its DISPLAY name if a text file gives one ("Los
+    // Angeles" for `losangeles`) -- otherwise `label` repeats `value`,
+    // so a client can always draw `label` and never has to decide.
+    //
+    // The VALUE is what gets stored and what `config set` takes; the
+    // display name is only ever shown. Keeping them apart is what lets
+    // the UI read well without /etc gaining prettified tokens that a
+    // later parser would have to accept.
     // Fails once `choice` is past the last one, which is also how a
     // caller that did not read `count` can walk to the end.
     SETTING_OP_CHOICE = 2,
@@ -101,6 +125,17 @@ enum setting_op {
     // pile of files in /etc cannot answer for itself.
 
     // No inputs. Fills `count` with the number of registered files.
+    // In: `name`, as "<category>/<group>". Out: `label` and
+    // `description` for that PAGE, from /etc/settings.d/group.<category>.<group>.
+    // Fails when no such file exists, which is normal -- a page with no
+    // text of its own is titled by its group key.
+    //
+    // Its own op rather than a field on INFO because the text belongs to
+    // the GROUP, not to any setting in it: putting it on INFO would mean
+    // every setting in a group carrying a copy, and four copies of one
+    // string is four chances to disagree.
+    SETTING_OP_GROUP_TEXT = 9,
+
     SETTING_OP_FILE_COUNT = 5,
     // In: `index`. Fills name/file/label with the umbrella name, the
     // path and the one-line description. `type` is 1 for a built-in
@@ -169,6 +204,38 @@ struct setting_msg {
     // exactly this, so a setting registered anywhere in the kernel
     // appears under a heading with no edit to the app.
     char category[SETTING_ABI_CATEGORY_MAX];
+    // The PAGE within that category (api/setting.h's `group`), or empty
+    // when the setting declared none -- in which case a UI gives it a
+    // page of its own. Out on INFO.
+    char group[SETTING_ABI_CATEGORY_MAX];
+
+    // A one-line explanation of what this setting DOES, from
+    // /etc/settings.d/<ns>.<name> (api/setting_text.h). Empty when no
+    // text file describes it, which is a normal state -- the label is
+    // the floor and a UI shows nothing extra. Out on INFO.
+    char description[SETTING_ABI_DESC_MAX];
+
+    // How a UI should PRESENT this setting -- SETTING_ABI_WIDGET_*, from
+    // the text file's `Widget=` key. AUTO (the default, and what every
+    // setting with no text file gets) leaves the choice to the client,
+    // which picks by how many options there are.
+    //
+    // A HINT, never an instruction: a client that has no such control
+    // falls back to whatever it does have, because the setting must
+    // still be changeable. It lives in the text file rather than in
+    // struct setting because it is presentation, and the kernel's
+    // descriptor says what a setting IS.
+    uint32_t widget;
+
+    // SETTING_ABI_SF_* -- when the change takes effect, and whether a UI
+    // should keep it out of the way. From the text file's Applies= and
+    // Advanced= keys.
+    uint32_t sflags;
+
+    // Position within its page. Lower first; settings with the same
+    // order keep registration order between them, so a file that sets
+    // none is unaffected by one that does. Default 0.
+    int32_t order;
     char value[SETTING_ABI_VALUE_MAX]; // in (SET), out (INFO/CHOICE/GET)
 
     // What the FILE currently says, filled by INFO alongside the live
