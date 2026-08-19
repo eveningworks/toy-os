@@ -106,6 +106,27 @@ jobs:
       - name: Kernel test suite (ktest)
         run: python3 tools/ktest_run.py -v
 
+      # DIAGNOSTIC, non-blocking: does virtio-blk come up on a GitHub
+      # runner, and can it carry the filesystem?
+      #
+      # An earlier attempt to make this the default was reverted on the
+      # claim that virtio-blk "never comes up here" -- a claim drawn
+      # from grepping a log that, at the time, filtered out every line
+      # the kernel printed at boot. With `-v` now printing the whole
+      # transcript and the suite announcing its own block device, this
+      # step answers the question from evidence instead.
+      #
+      # continue-on-error so a finding cannot turn main red while it is
+      # still being investigated. Remove this step once the question is
+      # settled either way.
+      - name: DIAGNOSTIC -- ktest with the filesystem on virtio-blk
+        continue-on-error: true
+        run: |
+          qemu-system-x86_64 --version | head -1
+          cp --reflink=auto --sparse=always disk.img ci-virtio.img
+          python3 tools/ktest_run.py -v --virtio-disk ci-virtio.img 2>&1 | \
+            grep -E "^pci: |block device =|virtio|block: |ktest: (PASSED|FAILED)" || true
+
       # The same question one privilege ring out. ktest runs INSIDE the
       # kernel, so it cannot tell whether a /tests binary still links,
       # loads and passes its own checks -- which is exactly the gap
