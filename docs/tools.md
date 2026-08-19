@@ -36,8 +36,12 @@ manual steps to be worth automating:
   drift. **15 s per version** on a cached image (69 MB each), so ~45 s
   for all three -- cheap enough to run whenever "could this behave
   differently on another QEMU?" has a plausible yes: a driver, a poll
-  loop, a timeout, a clocksource, DMA. Deliberately NOT part of
-  `preflight.sh`, which must not start requiring Docker.
+  loop, a timeout, a clocksource, DMA. **Run at a RELEASE and when
+  asked** -- deliberately not part of `preflight.sh` (which must not
+  start requiring Docker) and not an automatic per-change habit. A
+  disagreement between versions is a REPORT: an older QEMU can be
+  quirky rather than right, so it is the maintainer's call whether a
+  finding is worth fixing, filing, or noting as a known limitation.
   **It exists because a whole class of bug is invisible on one QEMU.**
   A virtio-blk defect -- `virtqueue_poll()` spending a ~12 ms budget it
   believed was 5 s, then letting late completions desync the used ring

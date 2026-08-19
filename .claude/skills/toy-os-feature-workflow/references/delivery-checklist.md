@@ -75,6 +75,30 @@ tools/set_version.sh 0.2.0       # cuts a release -- rewrites VERSION AND stamps
 Rebuild after either (`make all && make iso`) so `version.h` picks up
 the change, and re-run the boot smoke test.
 
+## 1b. At a release: run the QEMU matrix
+
+`python3 tools/qemu_matrix.py` -- the suite against QEMU 6.2, 7.2 and
+8.2 in Docker, ~15s per version once the images are cached. Run it
+BEFORE cutting the tag, alongside `preflight.sh`.
+
+Why at a release specifically: the ISOs you are about to publish will
+be booted by people on whatever QEMU their distro ships, which is
+routinely years behind the developer's. A defect that depends on the
+host -- and there has been at least one, a virtio-blk poll budget that
+was invisible on 11.1 and fired every time on 8.2.2 -- ships silently
+otherwise.
+
+**A failure here is a CONVERSATION, not a blocker.** An older QEMU
+disagreeing may be an emulator quirk rather than a bug in this OS.
+Bring the user: which versions differ, what the failure is, and whether
+it reproduces on the current QEMU. They decide whether it is worth
+fixing before the release, worth filing in `docs/bugs.md`, or worth
+noting in the release notes as a known limitation. Do not delay a
+release on it by yourself, and do not quietly ignore it either.
+
+GitHub CI also runs on a release tag (and only then, plus on demand),
+so the clean-checkout build is covered without you doing anything.
+
 ## 2. List what changed
 
 Standing project instruction: compact list of every file added or

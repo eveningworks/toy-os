@@ -2320,17 +2320,22 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
 
 Five standing rules that are cheaper to know than to rediscover:
 
-- **`qemu_matrix.py` is the standard check after touching a DRIVER, a
-  WAIT, or anything timing-dependent** -- `kernel/drivers/`, a poll
-  loop, a timeout, a clocksource, DMA. **15 seconds per version** on a
-  cached image (69 MB each; the first run per version pulls a base),
-  so ~45s for all three. Not per build: most changes cannot depend on
-  the host's QEMU, and `preflight.sh` stays the per-change gate --
-  which also must not start requiring Docker.
-  **The bar for "run it" is: could this behave differently on a
-  different QEMU or a different host CPU?** If yes, run it, because the
-  local QEMU answers only for itself. Also run it when a failure will
-  not reproduce locally, and before cutting a release tag.
+- **`qemu_matrix.py` RUNS AT A RELEASE AND WHEN THE USER ASKS -- not
+  automatically** (standing instruction, 2026-08-19). It is ~15s per
+  version on a cached image (69 MB each; the first run per version
+  pulls a base), so ~45s for all three, and it is deliberately NOT in
+  `preflight.sh` -- which must not start requiring Docker -- and not a
+  per-change habit.
+  **OFFER it, do not silently run it,** when a change plausibly depends
+  on the host's QEMU or CPU: a driver, a poll loop, a timeout, a
+  clocksource, DMA. And reach for it unasked only when a failure will
+  not reproduce locally, which is the case it was built for.
+  **A finding is a REPORT, not a blocker.** An older QEMU disagreeing
+  can be an emulator quirk rather than a bug in this OS, and deciding
+  which is the user's call -- bring them the evidence (which versions,
+  what differed, whether it reproduces on the current one) and let them
+  choose whether it is worth fixing. Do not hold up a release on it
+  unaided.
 - **GITHUB CI NO LONGER RUNS ON EVERY PUSH** (2026-08-19). It runs on a
   **release tag** and on demand (`gh workflow run build.yml`). What it
   is uniquely good for is a CLEAN-CHECKOUT build on somebody else's
