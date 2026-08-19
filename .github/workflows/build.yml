@@ -21,6 +21,14 @@ on:
 jobs:
   build-and-smoke-test:
     runs-on: ubuntu-latest
+    # A HUNG STEP MUST FAIL, NOT SIT THERE. GitHub's default job timeout
+    # is SIX HOURS, so when apt-get wedged on 2026-08-19 three runs sat
+    # "in progress" for one, two and three hours -- long enough that the
+    # commit list showed no verdict at all for the whole afternoon, which
+    # is worse than a red X: a pending run looks like a test still
+    # thinking rather than infrastructure that has died. A full run is
+    # 1-7 minutes, so 20 is generous.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -31,14 +39,20 @@ jobs:
       # qemu-system-x86 for both `make run` and this workflow's own
       # smoke test.
       - name: Install build + QEMU dependencies
+        # Its own tighter timeout, because this step is the one that
+        # hung: it depends on a mirror this repo does not control, and a
+        # network stall here should be distinguishable from a slow test.
+        timeout-minutes: 8
         run: |
-          sudo apt-get update -qq
+          # Retries rather than one attempt: apt against a flaky mirror
+          # is the single most common transient failure in CI here.
+          sudo apt-get update -qq -o Acquire::Retries=3
           # libxkbcommon-tools provides xkbcli, which the Makefile's `seed`
           # target uses to generate /etc/kbs/<layout> from XKB's own data.
           # Without it that step SKIPS SILENTLY, so CI was building images
           # with no keyboard layouts at all -- which nothing noticed until
           # check_layout.py started comparing the image against its doc.
-          sudo apt-get install -y -qq nasm grub-pc-bin grub-common xorriso qemu-system-x86 mtools libxkbcommon-tools
+          sudo apt-get install -y -qq -o Acquire::Retries=3 nasm grub-pc-bin grub-common xorriso qemu-system-x86 mtools libxkbcommon-tools
 
       - name: make clean && make all
         run: make clean && make all

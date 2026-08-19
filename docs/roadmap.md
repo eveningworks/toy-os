@@ -183,6 +183,19 @@ only expensive part of it.
 Needs phases 2 and 3. A libc is mostly a question of what the kernel can
 already be asked for.
 
+### Error codes: a failed syscall says WHY
+**Needs:** nothing. Deliberately placed here rather than under POSIX
+compatibility, which is gated on `fork()` and a TTY -- this is not, and
+everything libc-shaped is waiting on it. Full plan and staging:
+[errno-design.md](errno-design.md).
+
+- [ ] Stage 0: the encoding -- `abi/errno.h`, and how it sits against `SYS_RETRY` (-2)
+- [ ] Stage 1: libsys maps a negative return to -1 plus `sys_errno()`
+- [ ] Stage 2: the fd and filesystem handlers -- 28 of the 58 `-1` sites, and the ones a shell hits
+- [ ] Stage 3: the process, window and system handlers
+- [ ] Stage 4: the callers that were guessing -- `find_program()` treats every failure as "not found"
+- [ ] `strerror()` in ring 3, once the numbers exist
+
 ### Runtime + interop
 
 - [ ] Inter-process IPC (message passing)
@@ -246,7 +259,7 @@ already be asked for.
 - [ ] Pick the target: our own POSIX-shaped libc, or Linux syscall-ABI emulation
 - [ ] Enable SSE (CR4.OSFXSR) and save FPU/SSE state per process
 - [ ] `time_t`: epoch seconds and a UTC offset stored alongside, next to today's broken-down local `struct rtc_time`
-- [ ] An `errno`-style return convention across every syscall
+- [ ] ~~An `errno`-style return convention~~ moved up to its own section (errno-design.md); it needs none of this milestone's prerequisites
 - [ ] The unglamorous syscall surface: `lseek`, `stat`, `getpid`, `chdir` and the rest (`dup`/`dup2` landed 2026-08-19)
 - [ ] A per-process cwd (it lives in the shell today, not the process)
 - [ ] `crt0` + a real `_start`, replacing each binary's hand-written syscall stubs

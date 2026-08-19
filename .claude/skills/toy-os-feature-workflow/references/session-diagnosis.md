@@ -453,3 +453,63 @@ DECISION TURNS OUT WRONG, RE-PUT IT.** Three times here:
   Linux has scheduling CLASSES, compiled in; pluggable schedulers were
   rejected for years and `sched_ext` (6.12) is an escape hatch. Say so
   rather than building the thing that was asked for.
+
+## 2026-08-19: three deadlocks, and the tool that lied about all of them
+
+Building pipes produced three hangs in a row. What settled each is worth
+more than the bugs.
+
+**`strace` runs the binary on the LEGACY LOADER, which cannot park.**
+The first trace showed a write to a full pipe returning 0 instead of
+blocking, which reads exactly like the blocking-writer change not
+working. It was correct: `strace <binary>` goes through the shell's
+`run`, and that path has no scheduler slot, so `scheduler_block_current()`
+refuses and the handler falls back to "report 0 rather than spin". The
+same class as `SYS_SLEEP` returning -1 there and `pipe_test` exiting 3.
+**Before believing a trace, ask which loader started the process** --
+`spawn` for anything that blocks, `run` only for programs that just
+compute and exit.
+
+**A blocked pair is not evidence of the mechanism you just changed.**
+Two processes both in state 4 looked like the lost wakeup I had just
+theorised, so I fixed that -- and they still hung. The actual cause was
+somewhere else entirely (the child inherited the pipe's write end, so
+EOF was impossible). The preemption fix was real and needed, which is
+what made it convincing. **Two plausible bugs can both be present; fixing
+one and re-testing is the only way to tell them apart, and "it still
+hangs" is information, not a refutation of the fix you just made.**
+
+**`kstack slots` shows a state, not a REASON.** Both processes read as
+blocked and that was as far as the state got me. What actually settled
+it was `strace` showing `write(4, ..., 256) = 0` -- one line naming the
+count, from which "the pipe thinks it has no readers" follows
+immediately. Reach for the tool that prints VALUES over the one that
+prints states.
+
+**A test can create the failure it reports.** `fd_test`'s "what was
+printed landed in the file" check failed because `check()` itself writes
+to fd 1 -- so its own `ok` line went into the file it was asserting
+about. Anything that redirects a stream must not print between the
+redirect and the restore, including the test harness. Capture results
+into variables and assert AFTER restoring.
+
+## CI hanging is infrastructure until proven otherwise
+
+Three runs sat "in progress" for one, two and three hours. The hung step
+was `Install build + QEMU dependencies` -- an `apt-get` against a mirror,
+before a single line of this project ran. GitHub's default job timeout is
+SIX HOURS, so nothing failed; the commit list simply showed no verdict
+all afternoon, which is worse than a red X because a pending run looks
+like a test still thinking rather than infrastructure that has died.
+
+Two things to carry: **check WHICH STEP is hung before suspecting the
+code** (`gh run view --job=<id>` lists them with the running one marked),
+and **a job with no `timeout-minutes` cannot tell you it is stuck**. The
+workflow has 20 minutes on the job and 8 on the install step now, against
+a normal run of 1-7 minutes.
+
+The same look also confirmed something useful about the ATA
+fault-injection flake: it turned CI red on a DOCS-ONLY commit, which is
+independent evidence it is environmental rather than caused by any code
+change -- the sort of confirmation that is hard to get from a local
+bisect.

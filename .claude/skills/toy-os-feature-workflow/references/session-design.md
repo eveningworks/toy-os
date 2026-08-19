@@ -715,3 +715,58 @@ passes (line plus covering spaces, back to column 0, then the prefix).
 Its limit is real and belongs in a comment rather than hidden: `\r`
 returns to the start of the ROW, so a line wider than the console
 repaints wrongly. That is the TTY layer's problem, not `vga_putc()`'s.
+
+## 2026-08-19 (second half): descriptors, redirection and pipes
+
+Where the project stands after it:
+
+- **File descriptors are TWO LEVELS.** A refcounted DESCRIPTION is what
+  a stream is; a DESCRIPTOR is a number one address space uses to name
+  one. `dup`/`dup2` copy the name. fds 0/1/2 are ordinary entries that
+  merely start out on the console and the kernel log, and read/write
+  route on the description's KIND rather than on the number.
+- **A spawned child inherits 0/1/2 ONLY**, which is what makes `>`, `<`
+  and `|` work with no `fork()`: the shell redirects ITSELF around the
+  spawn.
+- **A full pipe BLOCKS its writer.** `/bin/tosh` has `>`, `>>`, `<` and
+  N-stage `|`.
+- **There are still no error codes.** Every syscall returns -1 and
+  writes the reason to the kernel log. `docs/errno-design.md` is the
+  plan; it is the next objective.
+
+**THE DESIGN LESSON: ask what the mechanism is FOR before copying its
+shape.** Unix hands a child every descriptor not marked close-on-exec,
+and that is only safe because the shell runs code IN the child, between
+fork and exec, to close what it must not keep. Copying "inherit
+everything" into a system with no fork and no `CLOEXEC` produced a
+pipeline that could never see EOF -- the reading stage was itself a
+writer of the pipe it was reading. The right default here is the one
+`posix_spawn()` and Windows' `STARTUPINFO` use: the three standard
+streams and nothing else.
+
+The same question answered "why not build `fork()` first": what fork
+BUYS is a moment for the child to call `dup2`. Inheritance gives that
+without an address-space duplication, which is exactly why POSIX added
+`posix_spawn()`. Fork stays on the roadmap and will inherit this table
+when it lands -- building descriptions first is a prerequisite for it,
+not a detour.
+
+**AND THE ONE THAT COST THE MOST TIME: when a refcount moves down a
+layer, DELETE THE OLD ONE.** `SYS_SPAWN` kept calling
+`pipe_add_writer()` after the child began taking a reference to the
+DESCRIPTION. The child was counted twice, so the pipe never reached EOF
+and the reader hung on a child that had already exited.
+
+**A latent bug becomes unavoidable when something else changes around
+it.** `pipe_write()` took what fitted and reported a short count. Nothing
+in ring 3 loops on a short write, so a producer faster than its reader
+silently lost the remainder -- survivable while the only reader was a
+shell draining continuously, and guaranteed once `|` made the reader a
+process that might not have been scheduled yet. Before building ON
+something, read what it PROMISES, not what it has got away with.
+
+**Making one side of a wait blocking makes lost wakeups fatal.** "The
+pipe is empty -> park" can be split by the other end in a preemptible
+kernel, and the wake then fires with nobody parked. That was a delay
+while only readers slept; with both ends able to sleep it deadlocked.
+Check-and-park needs `scheduler_preempt_disable()` around it.

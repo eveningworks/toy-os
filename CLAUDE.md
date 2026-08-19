@@ -2251,6 +2251,13 @@ comment beside the code, what is broken goes in `docs/roadmap.md`.
 chronological record; this exists because neither is indexed by TOPIC,
 so "why is X built this way" otherwise means grep and guesswork.
 
+`docs/errno-design.md` -- **the next objective**: giving a failed syscall
+a REASON. Every syscall returns -1 today and writes the reason to the
+kernel log, where a person can read it and a program cannot -- 58 `-1`
+sites across five handler files, 23 distinct rejection reasons already
+written out as text. Staged so each step ships on its own, and it needs
+none of the POSIX milestone's prerequisites (no `fork()`, no TTY).
+
 `docs/filesystem-layout.md` -- what lives where on the OS's own disk
 (`/bin` vs `/tests` vs `/usr/share` vs `/etc`), the rules for adding to
 it, the deliberate divergences from the FHS, and the budgets that constrain it
