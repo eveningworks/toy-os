@@ -118,6 +118,14 @@ EXCLUDED = [
     ("sleep_test",       "SYS_SLEEP refuses a caller with no scheduler slot, and `run` "
                           "is the legacy loader, which has none. Driven by "
                           "tools/init_test.py through `spawn` instead"),
+    ("pipefull_test",    "the writer must BLOCK on a full pipe, and the legacy "
+                          "`run` loader has no scheduler slot to park in -- so the "
+                          "write reports 0 there and the test fails against a "
+                          "correct kernel; kernel/proc/fd_test.c spawns it"),
+    ("pipedrain",        "the reading half of pipefull_test; on its own it waits "
+                          "on a console that never reaches EOF"),
+    ("catin",            "copies stdin to stdout; without a `<` it waits on the "
+                          "console, which has no EOF"),
     ("fd_test",          "spawns a child and waits for it, which the legacy `run` "
                           "loader cannot do (no scheduler slot, so waitpid returns "
                           "at once and it reads the child's file too early); "

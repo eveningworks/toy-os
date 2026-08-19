@@ -56,7 +56,19 @@ void sys_yield(void) { syscall0(SYS_YIELD); }
 // --- console and files -----------------------------------------------
 
 int64_t sys_write(int fd, const void *buf, size_t len) {
-    return syscall3(SYS_WRITE, (uint64_t)fd, (uint64_t)(uintptr_t)buf, (uint64_t)len);
+    int64_t r;
+    // Loops on SYS_RETRY, which a write to a FULL PIPE returns when the
+    // process is woken -- the mirror of sys_read() below. Re-sending the
+    // whole buffer is correct because a pipe write is all-or-nothing
+    // (api/pipe.h): a parked write took none of the bytes, so the retry
+    // cannot duplicate them.
+    //
+    // Without this loop the caller would see -2 and treat it as a
+    // count, which is worse than the short write this replaced.
+    do {
+        r = syscall3(SYS_WRITE, (uint64_t)fd, (uint64_t)(uintptr_t)buf, (uint64_t)len);
+    } while (r == SYS_RETRY);
+    return r;
 }
 
 int64_t sys_read(int fd, void *buf, size_t len) {

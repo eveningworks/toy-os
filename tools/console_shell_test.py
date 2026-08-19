@@ -397,6 +397,45 @@ def main():
         out = dbg.send("sh cat /redir_ls.txt") or ""
         check("a builtin's output redirects too", "bin" in out, out.strip()[:60])
 
+        # --- PIPELINES ---------------------------------------------
+        #
+        # `a | b` is the descriptor table's other payoff: the shell
+        # points stage A's fd 1 and stage B's fd 0 at the two ends of a
+        # pipe, spawns both, and closes its own copies -- the last of
+        # which is what lets B ever see EOF.
+        print("pipelines")
+
+        dbg.send("sh rm /pipe_out.txt")
+        time.sleep(0.4)
+        # hello writes one line; catin copies stdin to stdout. Asserted
+        # through a file, so nothing depends on what the shell echoes.
+        type_line(flow, "hello | catin > /pipe_out.txt")
+        time.sleep(3.0)
+        out = dbg.send("sh cat /pipe_out.txt") or ""
+        check("a two-stage pipeline carries data between processes",
+              "Hello" in out, out.strip()[:60])
+
+        # THREE stages, so the loop is exercised rather than a special
+        # case for two. Each catin is a real process copying the stream
+        # on, so the text has to survive two pipes.
+        dbg.send("sh rm /pipe3.txt")
+        time.sleep(0.4)
+        type_line(flow, "hello | catin | catin > /pipe3.txt")
+        time.sleep(3.5)
+        out = dbg.send("sh cat /pipe3.txt") or ""
+        check("a three-stage pipeline works, not just two",
+              "Hello" in out, out.strip()[:60])
+
+        # A BUILTIN as the producer. tosh's `ls` prints through the
+        # shell's own sink, so this is the check that a builtin's output
+        # reaches a pipe at all.
+        dbg.send("sh rm /pipe_ls.txt")
+        time.sleep(0.4)
+        type_line(flow, "ls / | catin > /pipe_ls.txt")
+        time.sleep(3.0)
+        out = dbg.send("sh cat /pipe_ls.txt") or ""
+        check("a builtin can feed a pipeline", "bin" in out, out.strip()[:60])
+
         # And a redirect that cannot be opened must NOT run the command.
         # `cat < missing` printing nothing is not enough -- a shell that
         # ran the command anyway would also print nothing.

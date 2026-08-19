@@ -13,8 +13,10 @@ console. `/bin/tosh` is a much smaller shell -- `ls`, `cat`, `cd`,
 `pwd`, `echo`, `help`, and anything on `PATH` -- and none of the
 kernel-introspection commands below exist there. It does have
 REDIRECTION, which this one does not: `cmd > file`, `cmd >> file`
-and `cmd < file`, with the operators space-separated. `|` between
-two commands is not built yet (`docs/roadmap.md`).
+and `cmd < file`, plus `a | b | c` pipelines (up to four stages), with
+the operators space-separated. A builtin may appear anywhere in a
+pipeline; it runs inside the shell, after every external stage is
+already draining.
 
 ## How a command is resolved
 

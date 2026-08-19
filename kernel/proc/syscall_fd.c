@@ -191,7 +191,26 @@ void fd_inherit(uint64_t child, uint64_t parent) {
 
     struct fd_space *cs = space_find(child);
     if (!cs) return;
-    for (int i = 0; i < FD_MAX; i++) {
+
+    // ONLY THE STANDARD THREE, and this is the whole design rather than
+    // a simplification.
+    //
+    // Unix hands a child everything not marked close-on-exec, and gets
+    // away with it because the shell runs code IN the child (between
+    // fork and exec) to close the pipe ends it must not keep. There is
+    // no fork here and no CLOEXEC, so "inherit the whole table" means
+    // every spawn silently hands the child every pipe end the parent
+    // happens to hold -- and a pipeline can then NEVER see EOF, because
+    // the reading stage is itself a writer of the pipe it is reading.
+    // Observed exactly that way: two processes blocked forever, one
+    // waiting for data and holding the write end that would have ended
+    // it.
+    //
+    // 0/1/2 is also precisely what posix_spawn() and Windows'
+    // STARTUPINFO pass by default, for the same reason: they are the
+    // streams a child is *meant* to be given, and everything else is
+    // the parent's private business.
+    for (int i = 0; i <= FD_STDERR; i++) {
         if (cs->d[i] >= 0) { fd_desc_unref(cs->d[i]); cs->d[i] = -1; }
         int di = ps->d[i];
         if (di < 0 || !fd_desc[di].refs) continue;
@@ -214,6 +233,18 @@ sys_do_read_pipe(uint64_t *regs, uint64_t pml4, int pipe_idx,
     char *kbuf = kmalloc(SYS_WRITE_MAX);
     if (!kbuf) { regs[14] = (uint64_t)-1; return 0; }
 
+    // CHECK AND PARK MUST BE ATOMIC AGAINST THE OTHER END.
+    //
+    // The kernel is preemptible, so without this the sequence "pipe is
+    // empty -> park" can be interrupted between its two halves by the
+    // writer, whose wake then fires while nobody is parked yet and is
+    // LOST. That was survivable while only readers parked -- the next
+    // write or the EOF woke them. It deadlocks now that a full pipe
+    // parks its WRITER too: reader sleeps on an empty check it made
+    // before the pipe filled, writer sleeps on a full one, and neither
+    // will ever wake the other. Observed exactly that way: two blocked
+    // processes and a pipe with data in it.
+    scheduler_preempt_disable();
     int64_t n = pipe_read(pipe_idx, kbuf, (uint32_t)len);
     int blocked = 0;
     if (n >= 0 && !vmm_copy_to_user(pml4, buf_ptr, kbuf, (uint64_t)n)) {
@@ -229,6 +260,7 @@ sys_do_read_pipe(uint64_t *regs, uint64_t pml4, int pipe_idx,
     } else {
         blocked = 1;
     }
+    scheduler_preempt_enable();
     kfree(kbuf);
     return blocked;
 }
@@ -359,17 +391,45 @@ SYSCALL_HANDLER sys_do_write_console(uint64_t *regs, uint64_t pml4, int kind,
 // what fd 1 refers to in a process whose parent redirected it. There
 // is no per-process "stdout pipe" any more: the redirection lives in
 // the descriptor table, where dup2 can also put it.
-SYSCALL_HANDLER sys_do_write_pipe(uint64_t *regs, uint64_t pml4, int pipe_idx,
-                                   uint64_t buf_ptr, uint64_t len) {
+// Returns 1 if the caller was PARKED, like sys_do_read_pipe() -- a full
+// pipe blocks its writer now rather than taking what fits.
+static __attribute__((noinline)) int
+sys_do_write_pipe(uint64_t *regs, uint64_t pml4, int pipe_idx,
+                  uint64_t buf_ptr, uint64_t len) {
     char *kbuf = kmalloc(SYS_WRITE_MAX); // heap -- see sys_do_write_console()
-    if (!kbuf) { regs[14] = (uint64_t)-1; return; }
+    if (!kbuf) { regs[14] = (uint64_t)-1; return 0; }
+
+    int blocked = 0;
     if (!vmm_copy_from_user(pml4, kbuf, buf_ptr, len)) {
         klog_write("syscall: write() rejected -- invalid buffer pointer\n");
         regs[14] = (uint64_t)-1;
     } else {
-        regs[14] = (uint64_t)pipe_write(pipe_idx, kbuf, (uint32_t)len);
+        // Atomic against the reader, for the reason sys_do_read_pipe()
+        // gives above: a wake that fires between "it is full" and
+        // "park" is lost, and with both ends able to sleep that is a
+        // deadlock rather than a delay.
+        scheduler_preempt_disable();
+        int64_t n = pipe_write(pipe_idx, kbuf, (uint32_t)len);
+        if (n >= 0) {
+            regs[14] = (uint64_t)n; // all of it, or 0 for "no readers left"
+        } else if (!scheduler_block_current(regs, SCHED_WAIT_PIPE)) {
+            // Nowhere to park -- kernel code, or the legacy loader.
+            // Report 0 rather than spinning, for the same reason the
+            // read side reports EOF there: a caller that cannot block
+            // must not be told "try again forever".
+            regs[14] = 0;
+        } else {
+            // Parked. libsys's sys_write() loops on SYS_RETRY, and the
+            // retry re-sends the WHOLE buffer -- which is only correct
+            // because pipe_write() is all-or-nothing, so nothing was
+            // taken. A partial write here would duplicate those bytes
+            // on the retry.
+            blocked = 1;
+        }
+        scheduler_preempt_enable();
     }
     kfree(kbuf);
+    return blocked;
 }
 
 SYSCALL_HANDLER sys_do_write_file(uint64_t *regs, uint64_t pml4, struct open_file *f,
@@ -458,8 +518,9 @@ int sys_write(struct syscall_ctx *c) {
         sys_do_write_console(c->regs, pml4, f->kind, buf_ptr, len);
         break;
     case FD_KIND_PIPE_W:
-        sys_do_write_pipe(c->regs, pml4, f->pipe.idx, buf_ptr, len);
-        break;
+        // The one write that can PARK its caller, so its return value
+        // is this function's -- exactly as the pipe read is.
+        return sys_do_write_pipe(c->regs, pml4, f->pipe.idx, buf_ptr, len);
     case FD_KIND_FILE:
         if (f->file.mode != FD_MODE_WRITE) {
             klog_write("syscall: write() rejected -- fd is read-only\n");

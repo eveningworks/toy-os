@@ -921,6 +921,26 @@ technical conventions below:
   description, counted the child twice, and the pipe never reached EOF.
   `/bin/tosh` has `>`, `>>` and `<`; `/tests/catin` is the fixture that
   reads stdin. See `docs/decisions/kernel.md`.
+- **A FULL PIPE BLOCKS ITS WRITER, AND A CHILD INHERITS ONLY 0/1/2.**
+  Both were forced by `|`. `pipe_write()` is ALL-OR-NOTHING and parks
+  when the buffer is full: it used to take what fitted and report a
+  short count, which nothing in ring 3 loops on, so a producer faster
+  than its reader silently lost the remainder. Atomicity is affordable
+  because `SYS_WRITE_MAX` (1024) is well under `PIPE_BUF_SIZE` (4096),
+  so a write always fits once drained -- POSIX's `PIPE_BUF` guarantee,
+  for the same reason. Three traps ride with it. **Check-and-park must
+  be atomic** (`scheduler_preempt_disable()` around both pipe paths): a
+  wake that fires between "it is full" and "park" is LOST, which was a
+  delay when only readers slept and is a DEADLOCK now both ends can.
+  **The retry re-sends the whole buffer**, which is only correct because
+  nothing was taken. And **inheriting the whole descriptor table was
+  wrong**: with no fork and no `CLOEXEC`, it hands a child every pipe
+  end the shell holds, so a pipeline never sees EOF -- the reading stage
+  is itself a writer of the pipe it reads. 0/1/2 is what
+  `posix_spawn()` and `STARTUPINFO` pass, and for this reason.
+  `/bin/tosh` has N-stage `|`; see `docs/decisions/kernel.md` for the
+  shell-side ordering, where builtins run LAST and the capture drain
+  sits between them and the waits -- each a deadlock, not a preference.
 - **One process can run another and read its output**: `SYS_PIPE` +
   `SYS_SPAWN` + `SYS_WAITPID`, wrapped by libsys. `userland/lib/tosh.c` is a
   shell built on them and `userland/gui/terminal.c` the ring-3 Terminal

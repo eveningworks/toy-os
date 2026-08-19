@@ -409,6 +409,218 @@ static int run_stripped(struct tosh *sh, const char *line, int stdout_redirected
     return code;
 }
 
+// --- pipelines ---------------------------------------------------------
+//
+// `a | b | c`. Each stage but the last writes into a pipe the next
+// stage reads, and the plumbing is the same dance `>` uses: the shell
+// points its OWN fd 0/1 at the right ends, spawns, and puts them back.
+// The child needs no cooperation, which is the whole reason no fork()
+// is required.
+//
+// TWO THINGS THAT WOULD DEADLOCK IF DONE THE OBVIOUS WAY.
+//
+// The parent must CLOSE every pipe end once the stage holding it has
+// been spawned. A pipe reports EOF when its last writer goes, and the
+// shell counts as a writer -- so a forgotten close leaves the reading
+// stage waiting forever for a producer that has already exited.
+//
+// And a BUILTIN stage runs inside this shell, synchronously. Since a
+// full pipe now BLOCKS its writer (api/pipe.h), a builtin producing
+// more than 4 KiB before its reader exists would block the shell
+// against a stage it has not spawned yet -- a deadlock with itself. So
+// builtins are spawned-last: every external stage is running and
+// draining before any builtin writes a byte.
+#define TOSH_STAGE_MAX 4
+
+struct tosh_stage {
+    const char *cmd;   // into the caller's mutable line
+    int in_fd, out_fd; // -1 = inherit whatever the shell has
+    int pid;           // -1 = a builtin, run in pass 2
+};
+
+// Splits on `|` IN PLACE. Returns the stage count, or -1 if there are
+// too many or one is empty (`a |` and `| b` are errors, not silence).
+static int split_stages(struct tosh *sh, char *line, struct tosh_stage *st) {
+    int n = 0;
+    char *p = line;
+    for (;;) {
+        if (n >= TOSH_STAGE_MAX) {
+            emit(sh, "tosh: too many pipeline stages\n");
+            return -1;
+        }
+        char *bar = 0;
+        for (char *q = p; *q; q++) if (*q == '|') { bar = q; break; }
+        if (bar) *bar = '\0';
+
+        while (*p == ' ') p++;
+        int len = slen(p);
+        while (len > 0 && p[len - 1] == ' ') p[--len] = '\0';
+        if (!p[0]) {
+            emit(sh, "tosh: empty pipeline stage\n");
+            return -1;
+        }
+        st[n].cmd = p;
+        st[n].in_fd = st[n].out_fd = -1;
+        st[n].pid = -1;
+        n++;
+        if (!bar) return n;
+        p = bar + 1;
+    }
+}
+
+// The command word of a stage, for deciding builtin vs external.
+static int stage_is_builtin(const char *cmd) {
+    char w[TOSH_PATH_MAX];
+    int i = 0, c = 0;
+    while (cmd[i] == ' ') i++;
+    while (cmd[i] && cmd[i] != ' ' && c < TOSH_PATH_MAX - 1) w[c++] = cmd[i++];
+    w[c] = '\0';
+    return seq(w, "ls") || seq(w, "cat") || seq(w, "cd") || seq(w, "pwd")
+        || seq(w, "echo") || seq(w, "help");
+}
+
+static int run_pipeline(struct tosh *sh, struct tosh_stage *st, int n,
+                        int stdout_redirected) {
+    // Stage i's output goes to a fresh pipe, whose read end becomes
+    // stage i+1's input. The LAST stage keeps the shell's own fd 1 --
+    // which is a `>` file if the line had one, and otherwise whatever
+    // run_stage() below arranges for capture.
+    int prev_read = -1;
+    for (int i = 0; i < n; i++) {
+        st[i].in_fd = prev_read;
+        prev_read = -1;
+        if (i < n - 1) {
+            int fds[2];
+            if (sys_pipe(fds) != 1) { emit(sh, "tosh: out of pipes\n"); return -1; }
+            st[i].out_fd = fds[1];
+            prev_read = fds[0];
+        }
+    }
+
+    // THE LAST STAGE IS CAPTURED, unless the line redirected it. Not an
+    // optimisation: this shell's sink is not always fd 1. The GUI
+    // Terminal draws into a window and has no descriptor to hand over,
+    // so a last stage left on the shell's own fd 1 would print to the
+    // PHYSICAL CONSOLE -- output that silently appears on another
+    // screen. Skipped for a builtin last stage, which already prints
+    // through the sink.
+    int capture_r = -1;
+    int last = n - 1;
+    if (!stdout_redirected && !stage_is_builtin(st[last].cmd)) {
+        int fds[2];
+        if (sys_pipe(fds) != 1) { emit(sh, "tosh: out of pipes\n"); return -1; }
+        capture_r = fds[0];
+        st[last].out_fd = fds[1];
+    }
+
+    // Pass 1: the external stages, in order.
+    for (int i = 0; i < n; i++) {
+        if (stage_is_builtin(st[i].cmd)) continue;
+
+        char path[TOSH_PATH_MAX];
+        char cmd[TOSH_PATH_MAX];
+        int k = 0, c = 0;
+        while (st[i].cmd[k] == ' ') k++;
+        while (st[i].cmd[k] && st[i].cmd[k] != ' ' && c < TOSH_PATH_MAX - 1)
+            cmd[c++] = st[i].cmd[k++];
+        cmd[c] = '\0';
+        while (st[i].cmd[k] == ' ') k++;
+        const char *args = st[i].cmd[k] ? st[i].cmd + k : 0;
+
+        if (!find_program(cmd, path, TOSH_PATH_MAX)) {
+            emit(sh, cmd);
+            emit(sh, ": not found\n");
+            continue; // its stage simply produces nothing
+        }
+
+        int saved_in = -1, saved_out = -1;
+        if (st[i].in_fd  >= 0) { saved_in  = sys_dup(0); sys_dup2(st[i].in_fd, 0); }
+        if (st[i].out_fd >= 0) { saved_out = sys_dup(1); sys_dup2(st[i].out_fd, 1); }
+
+        st[i].pid = sys_spawn(path, args, -1); // -1 = inherit what we just set
+
+        if (saved_in  >= 0) { sys_dup2(saved_in, 0);  sys_close(saved_in); }
+        if (saved_out >= 0) { sys_dup2(saved_out, 1); sys_close(saved_out); }
+    }
+
+    // Every pipe end this shell still holds must go NOW, before anything
+    // is waited for: each spawned stage has its own copy, and a stage
+    // reading a pipe this shell still writes would never see EOF.
+    //
+    // The ONE exception is a builtin's own output end, which this shell
+    // is about to write through in pass 2. It is closed immediately
+    // after that builtin runs, which is the same rule -- close as soon
+    // as the writer is finished with it -- applied to a writer that
+    // happens to be us.
+    for (int i = 0; i < n; i++) {
+        if (st[i].in_fd  >= 0) { sys_close(st[i].in_fd);  st[i].in_fd  = -1; }
+        int builtin_producer = stage_is_builtin(st[i].cmd) && st[i].pid <= 0;
+        if (st[i].out_fd >= 0 && !builtin_producer) {
+            sys_close(st[i].out_fd);
+            st[i].out_fd = -1;
+        }
+    }
+
+    // Pass 2: the builtins, LAST, and that ordering is the point. A
+    // builtin runs inside this shell, synchronously, and a full pipe now
+    // blocks its writer -- so a builtin producing more than 4 KiB before
+    // its reader existed would block the shell against a stage it had
+    // not spawned yet. By here every external stage is running and
+    // draining, so it cannot deadlock against itself.
+    for (int i = 0; i < n; i++) {
+        if (!stage_is_builtin(st[i].cmd) || st[i].pid > 0) continue;
+
+        // Its output goes to its stage's pipe, not to the shell's sink.
+        // A builtin prints through sh->out (the GUI Terminal's draws
+        // into a window), so pointing fd 1 somewhere would miss it --
+        // the same reason `>` swaps the sink rather than only dup2ing.
+        tosh_out_fn prev = sh->out;
+        void *prev_ctx = sh->ctx;
+        if (st[i].out_fd >= 0) {
+            sh->out = fd_sink;
+            sh->ctx = (void *)(long)st[i].out_fd;
+        }
+
+        run_stripped(sh, st[i].cmd, stdout_redirected);
+
+        sh->out = prev;
+        sh->ctx = prev_ctx;
+        if (st[i].out_fd >= 0) {
+            // NOW, so the next stage sees EOF. This shell was the last
+            // writer of that pipe.
+            sys_close(st[i].out_fd);
+            st[i].out_fd = -1;
+        }
+    }
+
+    // Drain the last stage into this shell's sink. AFTER the builtins
+    // and BEFORE the waits, and both halves of that are deadlocks
+    // avoided rather than style. Draining before pass 2 would block
+    // this shell on output from a pipeline whose first stage -- a
+    // builtin, run by this same shell -- had not started. Waiting
+    // before draining would block on a stage that is itself blocked
+    // writing into a capture pipe nobody is emptying.
+    if (capture_r >= 0) {
+        char buf[256];
+        for (;;) {
+            int64_t got = sys_read(capture_r, buf, sizeof buf - 1);
+            if (got <= 0) break; // 0 = EOF
+            buf[got] = '\0';
+            emit(sh, buf);
+        }
+        sys_close(capture_r);
+    }
+
+    int code = 0;
+    for (int i = 0; i < n; i++) {
+        if (st[i].pid <= 0) continue;
+        int c2 = -1;
+        sys_waitpid(st[i].pid, &c2);
+        code = c2; // the pipeline's status is its LAST stage's, as in sh
+    }
+    return code;
+}
+
 int tosh_run_line(struct tosh *sh, const char *line) {
     // A MUTABLE copy: redirection is stripped off the line in place,
     // and the caller's buffer is not ours to edit (the GUI Terminal
@@ -434,7 +646,20 @@ int tosh_run_line(struct tosh *sh, const char *line) {
     void *saved_ctx = sh->ctx;
     if (r.out_fd >= 0) { sh->out = fd_sink; sh->ctx = (void *)(long)1; }
 
-    int code = run_stripped(sh, work, r.out_fd >= 0);
+    // A PIPELINE if the line has a `|`, otherwise the single-command
+    // path. Split after redirection was stripped, so `a | b > f`
+    // redirects the LAST stage -- which is what a real shell does,
+    // because `>` binds to the whole pipeline's output.
+    struct tosh_stage st[TOSH_STAGE_MAX];
+    int nst = split_stages(sh, work, st);
+    int code;
+    if (nst < 0) {
+        code = -1;
+    } else if (nst > 1) {
+        code = run_pipeline(sh, st, nst, r.out_fd >= 0);
+    } else {
+        code = run_stripped(sh, work, r.out_fd >= 0);
+    }
 
     sh->out = saved_out;
     sh->ctx = saved_ctx;

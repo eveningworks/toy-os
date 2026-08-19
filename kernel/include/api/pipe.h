@@ -42,9 +42,23 @@ void pipe_add_writer(int idx);
 void pipe_close_reader(int idx);
 void pipe_close_writer(int idx);
 
-// Copies up to `len` bytes in. Returns how many were taken -- less than
-// `len` when the buffer filled, and 0 when there are no readers left
-// (the write is discarded; see the header note on SIGPIPE).
+// Copies `len` bytes in, ALL OR NOTHING. Returns `len` on success, -1
+// when they do not fit right now and a reader still exists ("would
+// block" -- park and retry, exactly as pipe_read() means it), and 0
+// when there are no readers left (the write is discarded; see the
+// header note on SIGPIPE).
+//
+// It used to take what fitted and report a short count. Nothing in ring
+// 3 loops on a short write, so a producer faster than its reader
+// silently lost the remainder -- latent while the only reader was a
+// shell draining continuously, and unavoidable once `|` made the reader
+// a second process that may not have run yet.
+//
+// Atomic because it can afford to be: a single write is capped at
+// SYS_WRITE_MAX (1024) against a PIPE_BUF_SIZE (4096) buffer, so one
+// write always fits once the pipe drains and a parked writer cannot
+// wait on a request too large to ever satisfy. POSIX guarantees the
+// same for writes up to PIPE_BUF.
 int64_t pipe_write(int idx, const char *src, uint32_t len);
 
 // Copies up to `len` bytes out.

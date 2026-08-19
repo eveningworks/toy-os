@@ -261,8 +261,10 @@ manual steps to be worth automating:
   identical to a working `>`), `<` feeding `/tests/catin`, a
   BUILTIN redirecting (tosh's `ls` prints through the shell's own
   sink rather than fd 1, so this is the check that the sink swap
-  works), and a failed redirect NOT running the command. Three more
-  assert the SHARED LINE EDITOR at that prompt --
+  works), and a failed redirect NOT running the command. Three assert
+  PIPELINES -- two stages, three stages (so the loop is exercised
+  rather than a special case for two), and a BUILTIN feeding one.
+  Three more assert the SHARED LINE EDITOR at that prompt --
   Home+Delete editing mid-line, Ctrl-U killing a line before it runs,
   and Up recalling the previous command -- each through a filesystem
   round trip, so a redraw that merely looks plausible cannot satisfy

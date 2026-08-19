@@ -14,6 +14,7 @@
 #include "timer.h"
 
 #define FD_TEST_PATH "/tests/fd_test"
+#define PIPEFULL_PATH "/tests/pipefull_test"
 #define TIMEOUT_TICKS 600 // 6s at the PIT's 100Hz
 
 KTEST("fd", "dup, dup2 and inheritance, in a real process") {
@@ -33,5 +34,31 @@ KTEST("fd", "dup, dup2 and inheritance, in a real process") {
     // The exit code is the number of FAILED checks, so this reports how
     // many rather than only that something broke. The individual lines
     // are on the serial console either way.
+    KTEST_ASSERT_EQ(code, 0);
+}
+
+// A pipe that fills must BLOCK its writer rather than truncating.
+//
+// Spawned rather than `run`, and that is not incidental: the legacy
+// loader has no scheduler slot, so it CANNOT park -- a full-pipe write
+// there reports 0 instead of blocking, and the test would fail against
+// a kernel that is behaving correctly. The trace showed exactly that
+// before this KTEST existed.
+KTEST("fd", "a full pipe blocks its writer instead of truncating") {
+    if (!fs_exists(PIPEFULL_PATH)) KTEST_SKIP("no " PIPEFULL_PATH " on this boot");
+    if (!fs_exists("/tests/pipedrain")) KTEST_SKIP("no /tests/pipedrain on this boot");
+
+    int pid = scheduler_spawn(PIPEFULL_PATH, 0);
+    KTEST_ASSERT(pid != 0);
+
+    int code = -1;
+    int exited = 0;
+    uint64_t start = pit_ticks();
+    while (pit_ticks() - start < TIMEOUT_TICKS) {
+        if (scheduler_poll(pid, &code) == SCHED_POLL_EXITED) { exited = 1; break; }
+    }
+    // Not exiting is itself the failure this guards: before the writer
+    // could park, the pair deadlocked and sat blocked forever.
+    KTEST_ASSERT(exited);
     KTEST_ASSERT_EQ(code, 0);
 }

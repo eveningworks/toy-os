@@ -89,14 +89,11 @@ and job control is what a terminal on that TTY makes possible.
 - [ ] An environment passed to a child
 - [ ] Ctrl-C
 - [ ] **`#!` handling**, which is the loader's job, not the shell's: `elf_load()` rejects a non-ELF file
-- [ ] `|` pipes between two commands
+- [x] ~~`|` pipes between two commands~~ DONE 2026-08-19 -- N stages, not two
 - [ ] Quoting/escaping, `&&`/`||`/`;`, globbing, aliases, `$?`/`$1`, and a history buffer
 - [ ] Line editing
-- [ ] Background jobs (`&`) and `fg`/`bg`/`jobs`
-- [ ] `|` pipes between two commands
 - [x] ~~`>`/`<`/`>>` redirection~~ DONE 2026-08-19 -- in `/bin/tosh` and the GUI Terminal
-- [ ] Background jobs (`&`)
-- [ ] `fg`/`bg`/`jobs`
+- [ ] Background jobs (`&`) and `fg`/`bg`/`jobs`
 - [x] ~~Tab completion (commands, then paths)~~ done
 - [ ] Globbing (`*`, `?`) expanded by the shell, not each command
 - [ ] Environment variables + `export`

@@ -85,6 +85,10 @@ _SPECIAL_CHARS = {
     # else entirely.
     ">": lambda s: s.combo(["shift", "dot"]),
     "<": lambda s: s.combo(["shift", "comma"]),
+    # Shift+backslash on a US layout. Same caveat as the two above: this
+    # names a PHYSICAL key by its US label, so the guest must be on
+    # `kbd=us` or it produces something else.
+    "|": lambda s: s.combo(["shift", "backslash"]),
 }
 
 

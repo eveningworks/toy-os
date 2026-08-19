@@ -3020,3 +3020,59 @@ reference to the DESCRIPTION already makes it a second writer, so doing
 both counted it twice and the pipe never reached EOF -- the reader hung
 forever on a child that had exited. When a refcount moves down a layer,
 delete the old one rather than keeping both.
+
+## A full pipe blocks its writer, and a spawned child inherits only 0/1/2
+
+Two decisions from building `|`, and both were forced by bugs the
+pipeline made unavoidable rather than merely likely.
+
+**`pipe_write()` is all-or-nothing and parks the writer.** It used to
+take what fitted and report a short count -- a correct-looking answer
+that nothing in ring 3 acts on, because no program here loops on a short
+write. A producer faster than its reader therefore lost the remainder
+SILENTLY. That was latent while the only reader was a shell draining
+continuously; `|` makes the reader another process that may not have
+been scheduled yet, so the pipe fills every time.
+
+Atomicity is affordable rather than aspirational: a single write is
+capped at `SYS_WRITE_MAX` (1024) against a `PIPE_BUF_SIZE` (4096)
+buffer, so one write always fits once the pipe drains and a parked
+writer can never be waiting on a request too large to satisfy. POSIX
+guarantees the same for writes up to `PIPE_BUF`, for the same reason.
+The retry lives in libsys, which already loops on `SYS_RETRY` for reads;
+re-sending the whole buffer is only correct BECAUSE the write was
+all-or-nothing, since a partial write would duplicate those bytes.
+
+**Check-and-park had to become atomic.** The kernel is preemptible, so
+"the pipe is empty -> park" can be split by the other end, whose wake
+then fires with nobody parked and is lost. That was survivable while
+only readers parked -- the next write or the EOF woke them. With both
+ends able to sleep it is a deadlock, and it was observed as one. Both
+pipe paths hold `scheduler_preempt_disable()` across the check and the
+park now.
+
+**A child inherits ONLY fds 0, 1 and 2.** The first version copied the
+parent's whole descriptor table, which is what Unix does -- and Unix
+gets away with it because the shell runs code IN the child, between
+fork and exec, to close the pipe ends it must not keep, or marks them
+close-on-exec. There is no fork here and no `CLOEXEC`, so inheriting
+everything hands each child every pipe end the shell happens to hold.
+A pipeline then never sees EOF, because the reading stage is itself a
+writer of the pipe it is reading: two processes blocked forever, one
+waiting for data and holding the write end that would have ended it.
+
+0/1/2 is also exactly what `posix_spawn()`'s default and Windows'
+`STARTUPINFO` pass, and for the same reason -- they are the streams a
+child is meant to be given; everything else is the parent's private
+business. If a future `fork()` arrives it will copy the whole table, as
+it should, because there the child can close what it does not want.
+
+**The shell-side ordering that follows**, recorded because each is a
+deadlock rather than a preference. Builtins run LAST, after every
+external stage is spawned and draining: a builtin runs inside the shell
+synchronously, and one producing more than 4 KiB before its reader
+existed would block the shell against a stage it had not spawned yet.
+The last stage is drained AFTER the builtins (draining first blocks on
+output from a pipeline whose first stage has not run) and BEFORE the
+waits (waiting first blocks on a stage that is itself blocked writing
+into a capture pipe nobody is emptying).
