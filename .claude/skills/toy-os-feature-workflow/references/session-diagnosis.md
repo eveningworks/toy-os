@@ -1,0 +1,455 @@
+# What past sessions learned: diagnosing a failure
+
+For when something is broken and you do not yet know why -- especially
+a report you cannot reproduce. Entries are verbatim from the running log
+past sessions kept, dated where they were written.
+
+**The three that have cost the most, stated once:**
+
+- A mechanism that EXPLAINS the symptoms is not the one that CAUSED
+  them. Do the cheap disproving check before publishing a root cause.
+- Prove a failure is pre-existing before owning it -- one build cycle
+  against `HEAD` answers it.
+- Ask what the user's environment does differently before doubting the
+  report. `make run-kvm` was the whole answer to a three-cause freeze,
+  and it was mentioned in passing three exchanges in.
+
+`docs/roadmap.md` holds the live known issues; this file holds the
+method.
+
+**2026-08-15 (same day, third half): that undiagnosed violation was
+real, and finding it was mostly about not trusting green.**
+
+- **A rare bug survives by looking absent.** The recorded repro came
+  back CLEAN six times -- four idle, and one each at `-j 1` and `-j 2`
+  with fourteen of sixteen cores busy-looping -- then reproduced with
+  the recorded fingerprint byte for byte, and four more times after
+  that. If a report names an exact fingerprint, a handful of clean runs
+  is not evidence of anything; get a rate, not a verdict. And prove the
+  harness awake FIRST (break one `wm_damage_rect()`), or "clean" and
+  "measuring nothing" are the same output.
+- **Two harness bugs, and both made broken runs look fine.**
+  `damage_hunt.py` matched violations by searching output for the
+  substring `DAMAGE BUG` -- which `gui_debug.py`'s own SOURCE contains,
+  so a Python traceback was reported as a damage violation, quoting a
+  line of Python as evidence. And a sweep that died in its first ten
+  seconds (four guests booting at once, QMP connect timing out) was
+  scored **PASS**, because the tool discarded `vm.py start`'s exit
+  code. It reports `pass`/`fail`/`error` now. Generalise: a harness
+  needs a third state for "did not measure", or its failures arrive
+  disguised as successes.
+- **Sparse files: `shutil.copyfile` fills the holes in.** `disk.img` is
+  ~4 MB of data in a 9 GB sparse file, so each parallel slot was
+  materialising 9 GB into a tmpfs -- `-j 4` died of ENOSPC, and `-j 2`
+  ran every sweep behind ~18 GB of host memory pressure, which is most
+  of what made "parallel" differ from "serial" at all. `cp
+  --reflink=auto --sparse=always`.
+- **Make the report carry SHAPE, not just a count.** "63 px at
+  (349,264)" was unattributable for a week; adding the diff's bounding
+  box turned it into `(349,264 9x15)` and `(115,20 12x19)` -- cursor
+  sprite-shaped (13x19), sitting under the cursor -- and the bug was
+  obvious within minutes. Same for naming the owning window and the
+  cursor's last-drawn position. When a diagnostic keeps failing to
+  diagnose, add a dimension to it rather than collecting more samples.
+- **The mechanism was already written down, filed as harmless.** The
+  cheap cursor path (`wm_render_cursor_move()`) drew the sprite without
+  recording `prev_cursor_*`, so a later full frame erased the cursor
+  from the wrong place. `docs/roadmap.md` had that as a papercut naming
+  the exact function and missing bookkeeping -- two entries away from an
+  unexplained report of its own symptom. **Before opening a hypothesis
+  hunt, read the known-issues list for a mechanism that would produce
+  the symptom.**
+- **A test that cannot go red must not be committed.** Two versions of a
+  targeted `cursor_damage_test.py` reported nothing against a kernel
+  that was actively failing (a `gui click` queues four events consumed
+  one per iteration, and its leading move is itself a cheap frame that
+  cleans up), so it was DELETED rather than committed looking green.
+  The knowledge went into a source comment instead.
+- **The kernel has entropy now** -- `kernel/include/api/krandom.h`
+  (`krandom_u64`/`krandom_bytes`/`krandom_quality`), RDSEED then RDRAND
+  then TSC jitter, plus `SYS_GETRANDOM` and a `random` shell command.
+  Three things worth carrying forward from building it: **CPU-dependent
+  code needs two QEMU models** (default `qemu64` reports neither
+  instruction, so `--cpu max` is the only way the hardware path runs at
+  all); **a fallback's key claim has to be measured** (three boots gave
+  three different values, so the jitter is not deterministic under TCG
+  -- it could easily have been, and would then have been worthless);
+  and **changing `__stack_chk_guard` while an instrumented frame is
+  live panics that frame on return**, so the randomize call lives
+  directly in `kernel_main()` and its function is
+  `no_stack_protector`.
+- **Never leave a busy loop running on the user's machine, and do not
+  trust `jobs -p` to clean one up.** Generating host load with
+  `for i in $(seq 1 14); do (while :; do :; done) & done` and killing
+  it via `HOGS=$(jobs -p); kill $HOGS` does NOT work in a
+  non-interactive `zsh -c`: `jobs -p` reports nothing, `kill` gets an
+  empty list, `2>/dev/null` hides the error, and the script still
+  prints "hogs stopped". Fourteen cores stayed pinned for an hour until
+  the user noticed. If load is genuinely needed, capture `$!` per
+  spawned job, kill by those exact PIDs, and VERIFY with `ps` before
+  claiming it stopped -- the same "a fallible call whose caller ignores
+  the result is a silent failure" rule this repo applies to C.
+- **`gui move` holds for ONE wm_run() iteration.** An injected event
+  overrides the real mouse for that iteration only, so the cursor snaps
+  back to the real PS/2 position (640,360 after `mouse_init()`) on the
+  next one. That is why strandings kept appearing at screen centre, and
+  it is worth knowing before writing any cursor-position test.
+
+**Three process lessons from that session, all of which generalise:**
+
+- **When a decision's premise turns out wrong, re-put the decision --
+  do not quietly proceed.** A history-rewrite scope was quoted as 60
+  commits, then measured at 264 once file contents were included. The
+  user had already chosen on the smaller number; the right move was to
+  stop and ask again with the real one.
+- **Estimate by measuring, before asking the user to choose.** Kernel
+  ASLR's whole plan came from `ld --emit-relocs` plus a relocation
+  count. The same half hour would have been spent guessing.
+- **A green suite can be self-consistently wrong when a subsystem is
+  reached through an indirection.** Test and code both read
+  `p2_tables` by symbol, so both agreed while the hardware walked a
+  different table. At least one check has to bypass the indirection.
+
+**2026-08-16 (real-hardware performance): a whole bug class QEMU cannot
+show you, and what to do about it.**
+
+Reported as "drawing is really slow" on the maintainer's laptop (ASUS
+Zenbook UX305FA) while being fine under QEMU. Four lessons, and the
+first generalises well past this repo.
+
+- **QEMU's framebuffer is cached host RAM, so an entire class of bug is
+  structurally invisible to every test here.** Real hardware's linear
+  framebuffer is UNCACHED MMIO: each store is a bus transaction the CPU
+  stalls on. `gfx_present()` was writing three bytes per pixel, so a
+  1920x1080 frame was 6.2 million individually-stalled writes -- seconds
+  per repaint on metal, unmeasurable in emulation. A green
+  `gui_regress` said nothing about it and could not have. **When a user
+  reports something that reproduces only on hardware, ask FIRST what
+  the emulator models differently, before doubting the report.**
+- **Nothing in this kernel had ever set a memory type**, and the tell
+  was cheap: `pat` and `mtrr` appeared only as CPUID feature-name
+  strings in `cpu_features.h`. Grepping for whether a feature is
+  *used* versus merely *named* took one command and pointed straight at
+  the cause. The fix is PAT (per-page, so no alignment or sizing
+  constraints), with slot 4 repointed at WC and slots 0-3 left alone.
+- **The dangerous bit is silent: bit 12 is PAT on a 2MiB page and part
+  of the PHYSICAL ADDRESS on a 4KiB one.** Writing the huge-page bit
+  into a 4KiB PTE does not fault -- it repoints the mapping. Check
+  `PAGE_HUGE` rather than reasoning that the range is never split.
+- **A fallback nobody can execute is a guess, so give it a switch.**
+  Every machine this OS runs on has PAT, which would have made the MTRR
+  path permanently dead code. `nopat` on the GRUB line forces it, and
+  both paths were then confirmed to boot and to report which mechanism
+  they used -- the same rule `ata nodma` and `nokaslr` already follow.
+  New: `docs/boot-flags.md` is the ONE list of these words (matching is
+  by substring, spread across five files, no registry).
+- **Say plainly what you could not verify.** The speed claim itself went
+  to `docs/roadmap.md` with the exact command to settle it on the real
+  machine, rather than being quietly implied by a green suite.
+  **CORRECTION, from the next session:** this block's claim that it was
+  "untestable in this environment" was WRONG, and the error is
+  instructive -- `make run-kvm` / `vm.py --kvm` honours guest memory
+  types where TCG ignores them, so the whole bug class IS reproducible
+  locally. "QEMU can't show this" was true of `make run` and got
+  over-generalised to QEMU. Before recording something as unverifiable,
+  check whether a different QEMU mode changes the answer.
+- **LOOK at a thing you drew, even after the pixels assert correctly.**
+  The new `rammeter` overlay passed its pixel probe and then, on screen,
+  showed the heap at "89%" in warning yellow -- meaningless, because
+  `heap_total_bytes()` is what the allocator has claimed so far and it
+  claims more on demand. A meter that cries wolf every boot teaches the
+  reader to ignore the one row where the colour means something.
+
+**2026-08-16 (the other half of write-combining): an optimisation has a
+DIRECTION, and six lessons that cost a green suite.**
+
+The previous session's write-combining fix made the GUI fast on real
+hardware and made the CLI console much slower. Both halves are the same
+mechanism, and the session that shipped the first half did not think
+about the second.
+
+- **Write-combining helps writes and HURTS reads, and the same is true of
+  most memory-type work.** WC coalesces stores into burst transfers; a
+  load is still a full uncached bus round trip, with no cache fill and no
+  prefetch, and it loses whatever caching the region had before. So
+  marking a surface WC makes every read-modify-write path on it worse.
+  The framebuffer console was the one surface that read the framebuffer
+  back -- it scrolled by shifting visible pixels in place, and its cursor
+  saved the cell underneath itself before painting over it. Measured with
+  `gfxbench 20` under KVM: **178.5 ms -> 0.5 ms per scrolled text line**
+  once the console got a back buffer, with full-screen FILL throughput
+  identical (17.3 GB/s) either way -- which is the number that proves
+  only the read path moved. **When you change a memory type, enumerate
+  who READS that region, not just who writes it.**
+- **`make run-kvm` honours guest memory types; plain `make run` (TCG)
+  ignores them entirely.** This is the single most useful fact from the
+  session, because it converts "reproduces only on the maintainer's
+  laptop" from untestable into a measurement:
+  `python3 tools/vm.py --kvm run "gfxbench 20"`. The previous session
+  recorded the bug class as structurally invisible to every test here,
+  which was true of the default mode and wrong in general. Try the other
+  emulator mode before declaring something unverifiable.
+- **A suite that reads the BACK BUFFER cannot see a present bug.** After
+  185 KTESTs and 212 GUI checks passed, one screenshot of the physical
+  console showed the boot log missing entirely and a single stray glyph
+  on screen: `gfx_flush()`'s last act is to clear the dirty box, which is
+  harmless when drawing goes straight at the display and destroys the
+  record of pending work once there is a back buffer. Every test passed
+  because every one of them reads the back buffer or goes over serial.
+  This is the repo's own "LOOK at a thing you drew" rule catching a real
+  bug for the second session running -- treat it as mandatory for
+  anything touching how pixels reach the screen, not as a nicety.
+- **Do not keep a flag that duplicates a lower layer's truth.** The first
+  cut of the fix set a `fb_present_pending` flag by hand at five call
+  sites. `gfx.c` already tracked a dirty bounding box and `gfx_present()`
+  already no-ops when it is empty, so the flag could only ever disagree
+  with reality -- and the direction it would disagree in is the silent
+  one (text drawn, flag unset, nothing shown, no error anywhere). Deleted
+  before shipping. Same instinct as this repo's "one source of truth"
+  rules elsewhere: ask what the lower layer already knows.
+- **Two publish paths is one too many.** The same change briefly left
+  `gfx_flush()` and `vga_present()` both meaning "make it visible", which
+  is exactly the ambiguity that produced the bug above. Collapsed into
+  one function that is correct in both modes, so no caller has to know
+  which is live.
+- **Test the MECHANISM before promising the feature.** Asked for a GRUB
+  flag selecting the legacy text console, the obvious `gfxpayload=text`
+  menu entry was built and did nothing. Two experiments settled it
+  instead of two theories: with the multiboot2 header requesting
+  1280x720x32, `gfxpayload=800x600x32` changed nothing (header wins); with
+  the header set to 0/0/0 the resolution DID change to 1280x800 (proving
+  the edit took effect) and `gfxpayload=text` still produced a graphics
+  mode. GRUB always sets a graphics mode when the kernel carries a
+  framebuffer request tag, and by the time a cmdline word could be read
+  the adapter has already switched, so `0xB8000` shows nothing. Both
+  experiments were reverted and the finding written to
+  `docs/decisions.md` rather than a half-working entry being shipped.
+  **A feature request answered with "here is why not, measured" is a real
+  delivery**; one answered with a menu entry that silently does nothing
+  is a defect.
+- **A positive control tells you which check is load-bearing.** Breaking
+  the scroll reddened exactly one of the two new KTESTs -- the shift
+  check -- while the whole-height case stayed green, correctly, because
+  it takes the `gfx_clear()` path instead of the memmove. Note which
+  checks did NOT fire; those are the ones that would not have caught it.
+- **Arm the capture for an intermittent BEFORE it fires.** The known
+  `menubar_test.py` flake failed once in three full-suite runs this
+  session, and that run had no `--logs`, so the failing check is still
+  unnamed after three sessions. `docs/roadmap.md` now says to pass
+  `--logs DIR` on every full-suite run: it costs nothing green, and a
+  failure too rare to reproduce on demand can only be diagnosed by a
+  capture that was already running.
+
+**2026-08-16 (M41 stage 2, the desktop, and a data-loss bug): six things,
+and the first is worth more than the rest.**
+
+- **An intermittent is diagnosed by a RATE and a PROBE, never by
+  reasoning.** `menubar_test.py`'s flake had survived three sessions of
+  "re-run it and it passes". What settled it: get the rate under both
+  conditions (5/5 pass ALONE, 2/4 fail in the parallel suite -- which
+  alone rules out a logic bug), then instrument a REAL failure with a
+  probe whose outcomes differ under each hypothesis. Two theories were
+  wrong first (slow disk write, lagging recent-list); one probe killed
+  both -- the file was on disk in 0.00s, and a SECOND identical hover
+  opened the submenu. Item enabled, hover lost. **And record what you
+  did NOT establish**: the "amplifier" that seemed to reproduce it on
+  demand turned out not to (four more runs passed with the fix reverted
+  AND the amplifier in place), so the fix rests on the mechanism, not on
+  a measured before/after. Claiming the rate would have been wrong.
+  `tools/flake_hunt.py` is the loop for this now -- run a tool N times,
+  report which CHECKS failed and how often.
+- **A tool that PARKS the real cursor must un-park it.**
+  `warp_cursor()` is the right way to hold a hover (`gui move` lasts one
+  WM iteration), but the cursor STAYS there, so a menu opened later
+  finds the pointer already inside it. Applying the fix turned a
+  DIFFERENT check red 5/5 -- while its partner ("a click outside
+  dismisses the menu") stayed GREEN for the wrong reason: the menu had
+  never opened. Park, measure, un-park.
+- **`append` destroyed data for as long as TFS3 has existed**, and it
+  was found by trying to write a config file from the shell rather than
+  by any test. `do_write_inner()` asked whether the WRITE OFFSET was
+  past EOF before skipping a partial block's read -- true on every
+  append by definition -- so it zeroed the block: `write f AAAA` then
+  `append f BBBB` left four NULs and BBBB. Two lessons. The regression
+  test's fixture must be SMALLER than a block (a block-aligned append
+  takes the fresh-block path and passes against the bug), and a
+  size-only assertion passes too: the file was the right LENGTH and full
+  of NULs. Also: `stat` said 8 bytes, `cat` printed nothing, every
+  command returned success -- `tfs3_writer.py read` plus `cat -A` is
+  what broke it open.
+- **Before "fixing" something, prove it is yours.** Reverting one file
+  and rebuilding took 40 seconds and turned "I broke append" into "this
+  predates me". The same move settled a `damage_sweep.py` violation as
+  pre-existing. Do it before writing the commit message, not after.
+- **An orphan the layout checker reports may be LOAD-BEARING.**
+  `check_layout.py` flagged six stale `/bin/<name>` binaries; deleting
+  them (the remedy it prints) turned eight GUI tools red, because those
+  tools had been spawning the stale copies long after seeding moved to
+  `/bin/wm/{class}/`. The repair is to update the tools, not keep the
+  corpse -- but re-run `gui_regress.py` after acting on that warning,
+  and treat a test that still works after a file moved as evidence it is
+  testing the old copy.
+- **A per-process table sized by a literal WILL drift.**
+  `win_events.c` read `4` long after `SCHED_MAX_PROCS` became 64, so any
+  client in slot 4+ received no window events at all -- drawing
+  perfectly, answering nothing. Its neighbour in `win_server.c` had a
+  `_Static_assert` and did not drift. When you size anything per
+  process, per window or per slot, assert the relationship.
+
+**Three diagnostic habits from the same session:**
+
+- **An arithmetic impossibility in a user's screenshot IS the
+  diagnosis.** Two processes each reporting 100% CPU on a single-core
+  machine cannot both be true, so the bug was in the accounting rather
+  than in the scheduling -- established before reading any code, and it
+  ruled out the entire "it polls too much" theory the roadmap had
+  already written down. Look for a claim the system makes that cannot be
+  true, before looking for the mechanism.
+- **A recorded known issue can be confidently wrong.** `docs/roadmap.md`
+  said Task Manager's 100% was "accurate rather than wrong, which is why
+  this is a papercut and not a bug". It was an artefact. The entry was
+  DELETED rather than amended -- an amended known-issue entry still
+  implies something is broken.
+- **Prove a failure is pre-existing before owning it.** A `sched` KTEST
+  failed under KVM; stashing every local change and rebuilding showed it
+  failing identically on the committed tree, which turned "I broke the
+  scheduler" into a roadmap entry in about two minutes. In a
+  worktree-isolated session use `git stash push -u -m <unique-tag>`,
+  capture the SHA, and `git stash apply <sha>` -- never a bare
+  `stash`/`pop`, since the stack is shared with every other worktree.
+
+**A panic is diagnosable from a pasted log now** (`kernel/arch/x86_64/
+idt.c`): the relocation offset, the LINK-TIME RIP and a stack scan, all
+to the SERIAL log with the `addr2line` command printed ready to paste.
+The RIP line used to go to the screen only, which is why panics arrived
+as photographs. The backtrace is a stack scan, not an RBP walk (-O2
+omits frame pointers), so it overreports -- read it as candidates. When
+a panic lands in `kfree`/`try_merge_next`, that is heap CORRUPTION
+written earlier, not a bug at that line: reproduce with `heap debug on`
+typed at the physical shell BEFORE `gui`, which red-zones every
+subsequent allocation and names the offending block at the free.
+
+**Debugging a crash, end to end -- the loop that worked:**
+
+1. `heap debug on` at the PHYSICAL shell, before `gui`. Red-zoned
+   blocks report the violation at the offending free WITH the block
+   named. Three scripted reproductions had failed to fire; this named
+   the culprit in one run, and the corrupting bytes (`ame=Calc`) named
+   the writer.
+2. Read the panic. It now prints the function, the faulting context,
+   the registers, the build id and a named stack scan -- and
+   `tools/panic_resolve.py` resolves a pasted one (it checks the BUILD
+   ID first, because resolving against a different build gives
+   confident, wrong names).
+3. Reproduce it deliberately with the Crash Test app or
+   `SYS_CRASHTEST`, booting with `faultinject`.
+4. **Prove it is yours before owning it**: stash, rebuild, run the same
+   seed against HEAD. A damage sweep that reported three violations
+   showed FIVE on HEAD, each of the three a subset -- pre-existing, in
+   one build cycle.
+
+**When a panic lands in `kfree`/`try_merge_next`/`split_block`, that is
+heap CORRUPTION written earlier, not a bug at that line.** The RIP will
+point nowhere near the cause. Go to step 1.
+
+**And three process lessons from the same day:**
+
+- **`grep -E "error|warning"` over a build log is CASE-SENSITIVE and
+  hides `Error 1`.** A kernel link failure read as a clean build for two
+  rounds because of that filter. Grep case-insensitively, or check the
+  exit status -- a filter that can hide the failure is worse than no
+  filter.
+
+- **`grep -E "error|warning"` over a build log is case-sensitive and
+  hides `Error 1`.** A kernel link failure (a struct copy GCC lowered to
+  a `memcpy` this kernel has no symbol for) read as a clean build for
+  two rounds because of that filter. Grep case-insensitively, or check
+  the exit status.
+- **Prove a failure is pre-existing rather than assuming it.** A damage
+  sweep reported three violations; stashing the session's work
+  (`git stash push -u -m <tag>`, apply by SHA, never a bare pop) and
+  rebuilding showed the same seed producing FIVE on `HEAD`, each of the
+  three a byte-for-byte subset. That took one build cycle and turned "I
+  broke the compositor" into a recorded pre-existing issue.
+
+**2026-08-17 (a user-reported desktop freeze): THE MOST IMPORTANT
+LESSON IN THIS FILE FOR ANYONE DEBUGGING A REPORT YOU CANNOT
+REPRODUCE.**
+
+The report was "Control Panel sticks for a few seconds". It had THREE
+independent causes, none of which any test here could see, because
+**every automated test in this repo runs under TCG and the user runs
+`make run-kvm`.**
+
+- **A lost-wakeup race in the ATA driver.** `dma_issue()` cleared its
+  completion flag AFTER writing the command byte, so an interrupt
+  arriving in that window was wiped; the waiter then burned the full 5s
+  `DMA_WAIT_TICKS` and the retry succeeded instantly. The window is a
+  function of how FAST the transfer completes, so TCG never hit it and
+  KVM (microsecond completions) hit it constantly. **Generalise: anything
+  armed after its own trigger has this bug**, and emulator speed decides
+  whether you ever see it.
+- **54 whole-file reads per desktop reload.** `etc_config_get()` re-reads
+  the file per key and each `.desktop` entry was asked six questions.
+  40ms under TCG, 2.5s under KVM where each port-I/O is a VM exit.
+- **The filesystem was not re-entrant.** `tfs3.c` uses module-level
+  scratch buffers and the kernel context is preemptible, so any ring-3
+  app doing file I/O corrupted kernel-side lookups. This was WORSE than
+  the freeze -- the desktop silently lost cursor shapes on ~1 boot in 3
+  -- and invisible because a fallback covered it.
+
+**The debugging loop that worked, in order:**
+
+1. **Ask what the user's environment does differently before doubting
+   the report.** `make run-kvm` was mentioned in passing, three
+   exchanges in, and it was the whole answer. Ask early.
+2. **Measure from INSIDE the guest.** `userland/wm/wm_watchdog.c` times each
+   `wm_run()` iteration by phase and logs anything over a threshold
+   (`gui watchdog [<ms>|off]`). Its design point is worth copying: it
+   measures only the work AFTER the frame's `hlt`, which makes a SILENT
+   watchdog during a visible freeze a real answer ("the stall was not
+   ours") rather than a missing measurement.
+3. **Narrow by bisecting the WORK, not the code.** The watchdog named
+   the phase; per-file timing inside that phase named the call; ATA
+   debug (`debug ata on`) showed `dma read attempt 1 failed / ok on
+   attempt 2`, which is a timeout, not slowness.
+4. **A quantised duration is a TIMEOUT, not throughput.** Stalls
+   clustered at ~2.5s and ~5.5s against a 5.0s `DMA_WAIT_TICKS`. Read
+   the constant before theorising about disk speed.
+
+**Three ways I fooled MYSELF, all worth recognising:**
+
+- **My harness produced clean 6.2-second "stalls" that did not exist.**
+  Two threads shared one `DebugConsole` socket, so replies interleaved
+  and every read hit its 6.0s timeout. `gui_debug`'s console is ONE
+  request/response channel -- never poll it from a second thread. Single
+  -threaded, the stalls vanished. Suspect the harness when a number
+  lands suspiciously close to one of its own timeouts.
+- **My filter hid the evidence I had asked for.** Two separate times a
+  script printed only lines matching `SLOW FRAME`, so the diagnostic
+  lines I had just added were drained and discarded, and I concluded the
+  code was not running. `DebugConsole.logs()` CLEARS what it returns --
+  print everything you drained, or you are debugging your grep.
+- **A positive control that reddens nothing means the check is not
+  load-bearing -- and mine did, twice.** A flush-failure KTEST wrapped
+  its assertions in `if (!ok)`, so making a failed write-back report
+  success changed no result. It checks its precondition explicitly now
+  (`ata_cache_dirty() != 0`, else SKIP) and asserts unconditionally.
+  **Run the control on the test you just wrote, not only on old ones.**
+
+**And one thing that generalises past this repo: WHEN THE PREMISE OF A
+DECISION TURNS OUT WRONG, RE-PUT IT.** Three times here:
+
+- The brief said "cache in the block layer, under both filesystems".
+  Those cannot both be true -- TFS2 and `partition.c` bypass the block
+  layer -- and a bypass past a WRITE-BACK cache is a silent correctness
+  hole in both directions. Asked, got "the ATA driver", built there.
+- "Lower `DMA_WAIT_TICKS`" was the obvious fix and would have re-broken
+  a documented one: the comment records it being WIDENED from 3s to 5s
+  after a real host-side stall. Read the comment above a constant before
+  changing it. The resolution was to make the per-ATTEMPT budget
+  escalate (0.3s / 1.0s / 5.0s) while leaving the total intact.
+- The premise "Linux can switch schedulers" is a common misreading:
+  Linux has scheduling CLASSES, compiled in; pluggable schedulers were
+  rejected for years and `sched_ext` (6.12) is an escape hatch. Say so
+  rather than building the thing that was asked for.

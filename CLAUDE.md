@@ -2219,10 +2219,22 @@ outside version control, which meant ~1,750 lines of accumulated project
 knowledge had no history, no diff review and no backup. It is tracked
 here now for the same reason everything else is.
 
-Two consequences. **Update it in the repo**, not in the home directory,
-or the two copies drift and the untracked one silently wins. And
-`.gitignore` excludes `/.claude/worktrees/` specifically rather than all
-of `.claude/`, because those are transient checkouts while the skill
+**`SKILL.md` is the PLAYBOOK; the accumulated lessons live in
+`references/`.** Everything a session learned the hard way was inline
+until it made `SKILL.md` bigger than this file, at which point the whole
+thing loaded on every invocation whether or not any of it applied. It is
+split by what an entry is ABOUT -- `session-testing.md`,
+`session-diagnosis.md`, `session-gui.md`, `session-design.md`, beside
+the existing `delivery-checklist.md`, `questions-that-worked.md` and
+`doc-templates.md` -- the same split-by-area call `docs/decisions.md`
+already made, and for the same reason. **A new lesson goes in the
+reference file for its area, not back into `SKILL.md`**, which holds the
+sequence and nothing else.
+
+Two more consequences. **Update it in the repo**, not in the home
+directory, or the two copies drift and the untracked one silently wins.
+And `.gitignore` excludes `/.claude/worktrees/` specifically rather than
+all of `.claude/`, because those are transient checkouts while the skill
 beside them is real content.
 
 ## Delivering changes
