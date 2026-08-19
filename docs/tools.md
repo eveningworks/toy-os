@@ -28,6 +28,22 @@ back, `--virtio-disk` likewise — see `docs/testing.md`).
 
 The rest, added once the build/test/delivery loop had enough repeated
 manual steps to be worth automating:
+- **`qemu_matrix.py`** -- runs the kernel test suite against SEVERAL
+  QEMU versions in Docker (6.2, 7.2, 8.2 -- the last is what GitHub's
+  runner has). Nothing is BUILT in the container: the ISO comes from
+  the host's `make iso` and is mounted read-only, so what runs is
+  byte-for-byte a normal build and there is no second toolchain to
+  drift. Reach for it before a driver change lands, and after any CI
+  failure that will not reproduce locally.
+  **It exists because a whole class of bug is invisible on one QEMU.**
+  A virtio-blk defect -- `virtqueue_poll()` spending a ~12 ms budget it
+  believed was 5 s, then letting late completions desync the used ring
+  -- never appeared on QEMU 11.1 and reproduced every time on 8.2.2,
+  because which clocksource the kernel picks depends on the host. It
+  was found through CI instead, at six pushes and several wrong
+  diagnoses, on a loop costing ~90 s at best and sometimes failing for
+  reasons of GitHub's own (one run died with `apt-get install` timing
+  out after 8 minutes). This makes the second QEMU local and fast.
 - **`backup_repo.sh`** -- a complete, verifiable backup of the GitHub
   repo: mirror clone, a bundle of LOCAL refs (catching branches never
   pushed), **every release asset**, and the repo/PR/issue metadata.

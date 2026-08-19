@@ -95,3 +95,6 @@ ktest_qemu.log
 # repo content -- the skill beside them IS tracked, so this ignores the
 # one directory rather than all of .claude/.
 /.claude/worktrees/
+
+# tools/qemu_matrix.py's scratch: copied disk images and QEMU logs.
+.qemu_matrix/

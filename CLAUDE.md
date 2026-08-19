@@ -2289,6 +2289,12 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   prompt with the kernel shell stood down; boots twice and rewrites
   `/etc`), `stdin_test.py` (blocking fd 0 and `/bin/tosh`, which
   needs the physical console and so takes the desktop down first),
+  `qemu_matrix.py` (the suite against SEVERAL QEMU
+  versions in Docker -- **the bug class one QEMU cannot show you**: a
+  virtio-blk defect was invisible on 11.1 and reproduced every time on
+  8.2.2, which is what GitHub's runner has, because the host decides
+  which clocksource the kernel picks. Faster and more controllable than
+  finding it through CI),
   `kvm_soak.py` (the timing bugs TCG cannot show),
   `ls_test.py` (`/bin/ls`'s flags, ordering and the listing cap -- it
   stages a 300-entry directory from the HOST, since the cap is

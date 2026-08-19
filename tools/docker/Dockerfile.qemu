@@ -1,0 +1,28 @@
+# A pinned QEMU version, for testing toy-os against something other than
+# the developer's own.
+#
+# WHY THIS EXISTS. Every automated test here runs on whatever QEMU the
+# machine happens to have. That hides a whole class of bug: on
+# 2026-08-19 a virtio-blk defect -- virtqueue_poll() spending a ~12 ms
+# budget it believed was 5 s, then letting late completions desync the
+# used ring -- was invisible on QEMU 11.1 and reproduced every time on
+# 8.2.2, because which clocksource the kernel picks depends on the host.
+# It took six pushes and several wrong diagnoses to find through CI,
+# where a run costs 90 s at best and the dependency install times out
+# at worst.
+#
+# ARG so one Dockerfile serves every version worth testing:
+#   ubuntu:22.04 -> QEMU 6.2    debian:12 -> QEMU 7.2
+#   ubuntu:24.04 -> QEMU 8.2    (what GitHub's runner has)
+#
+# Only qemu-system-x86 and python3 are installed: the ISO is BUILT on
+# the host and mounted in, so this image never needs a toolchain and
+# stays small. That also keeps the thing under test identical to what a
+# normal `make iso` produces.
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+RUN apt-get update -qq \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+      qemu-system-x86 python3 \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /toyos
