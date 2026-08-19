@@ -146,6 +146,12 @@ def cmd_start(args):
     if args.iso == "toy-os.iso":
         iso_guard.assert_iso_fresh()
 
+    # And a COPY of disk.img taken before the last seed, which runs the
+    # new kernel against the OLD /bin binaries. A warning, not a refusal:
+    # a copy is often deliberately old (a staged fixture, a kept
+    # reproduction). See iso_guard.check_disk_fresh().
+    iso_guard.warn_if_disk_stale(args.disk)
+
     # Likewise a guest already holding this slot's ports -- see
     # tools/port_guard.py for why that has to be refused HERE rather
     # than surfacing later as somebody else's broken socket.

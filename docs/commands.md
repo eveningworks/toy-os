@@ -49,7 +49,7 @@ Paths may be relative to the cwd or absolute.
 
 | Command | Notes |
 |---|---|
-| `ls [-al] [dir]` | Coloured by default; `-l` shows type/size/mtime, `-a` is a no-op. A real disk-hosted `/bin/ls` binary, not a builtin — see `decisions.md`. |
+| `ls [flags] [dir]` | Sorted by name, one entry per line, directories coloured. `-l` type/size/mtime, `-h` human sizes, `-C` columns, `-1` one per line, `-t` newest first, `-S` largest first, `-r` reverse, `-R` recurse, `--color=never\|always`; `-a`/`-F` accepted as no-ops (no dotfile convention, no mode bits). Colour is ANSI escapes the console parses, so it survives a pipe and can be turned off — there is no `--color=auto` because nothing can yet ask whether an fd is a terminal. A real disk-hosted `/bin/ls` binary, not a builtin — see `decisions.md`. |
 | `cd [dir]`, `pwd`, `mkdir <dir>` | |
 | `cat <f>`, `touch <f>` | |
 | `write <f> <text>`, `append <f> <text>` | Each writes one LINE, terminated — `write` truncates first, `append` adds. Neither used to terminate, which made a multi-line file impossible to author from the shell at all. A line too long to fit is refused, not truncated. |

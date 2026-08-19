@@ -2045,7 +2045,9 @@ here on 2026-08-17. Note this is NOT a universal explanation: the same
 day, a `menubar`/`gfxdemo` failure survived `clean-disk` and turned out
 to be a pre-existing parallel-load flake (see `docs/roadmap.md`).
 
-**A COPY of `disk.img` GOES STALE the moment you rebuild.** `make iso`
+**A COPY of `disk.img` GOES STALE the moment you rebuild** (and
+`iso_guard.py` warns about it now, naming the re-copy command -- a
+warning rather than a refusal, since a copy is often deliberately old). `make iso`
 re-seeds the real `disk.img` with the newly built `/bin` binaries; a
 copy taken before that still holds the OLD ones. So a VM booted from the
 copy runs the NEW kernel (from the ISO) against the OLD userland, and a

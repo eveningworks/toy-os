@@ -94,15 +94,13 @@ to this file too).
    vs. just planning it). Skip this step only for a genuinely
    unambiguous one-line fix. If a change touches the GUI and could
    plausibly be a reusable primitive (a button, a field, a toggle), that
-   choice -- build it as an `apps/ui/` widget (note there is now a
-   ring-3 mirror of that toolkit in `userland/uui.c`/`uwidgets.c` for
-   client apps; a widget needed by both is ported, not shared, since
-   the kernel one draws to the framebuffer and takes WM callbacks) (see
-   `apps/README.md`'s
-   "Shared widgets" section -- one file per widget, pulled together via
-   the `apps/ui/ui.h` umbrella include) vs. one-off -- belongs in this
-   round of questions too, per the project's own instruction to ask
-   before adding widgets.
+   choice -- build it as a reusable **`userland/ui/`** widget vs. a
+   one-off -- belongs in this round of questions too, per the project's
+   own instruction to ask before adding widgets. (This used to say
+   `apps/ui/`, and that is now wrong: the desktop is a ring-3 process,
+   `apps/ui/` is down to the single widget the kernel's own `edit` draws
+   with, and THERE IS NO LONGER ANY SUCH THING AS A KERNEL-SIDE WIDGET.
+   See CLAUDE.md, which is the current word on this.)
    See `references/questions-that-worked.md` for real examples from past
    sessions, including ones the user directly praised (phasing options,
    storage-design tradeoffs, encoding choices).

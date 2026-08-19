@@ -49,6 +49,33 @@ python3 tools/vm.py --vga vmware start   # the MODESETTING driver (vmsvga); `std
 python3 tools/vm.py --instance 2 --disk /tmp/b.img start  # a second VM, alongside
 ```
 
+**`vm.py exec` OUTPUT NEVER REACHES THE SCREEN, so do not look for it in
+a screendump.** A command sent this way runs over the serial debug
+console, whose replies go back down the wire -- the console output is
+redirected into a SINK for the duration (`vga_set_sink()`, api/vga.h)
+rather than being drawn. So `vm.py exec "ls /"` and `vm.py shot` show
+two different things, and a screenshot taken to check what a command
+printed shows whatever was on screen BEFORE it. Two consequences worth
+knowing:
+
+- To see a command's output on the physical console, TYPE it --
+  `tools/shell_flow.py`'s `ShellFlow.run_command()`, which handles the
+  spaces and punctuation `send_text()` drops (a hand-typed
+  `ls -1 /etc` arrived as `ls1etc`). That also means the guest needs the
+  US keyboard layout pinned, since a qcode names a physical key by its
+  US label -- `kbd=us` on the GRUB line, or `sh keyboard us`.
+- Anything about COLOUR is invisible over `exec` by construction, since
+  the console parses `ESC[...m` into a colour before the sink ever sees
+  a byte (kernel/lib/ansi.c). What `exec` CAN prove is the negative: if
+  the parser were not wired in, the escapes would arrive as literal
+  `[1;36m` text. The colour itself has to be read as PIXELS from a
+  typed-at console -- which is how `/bin/ls`'s was verified.
+
+**And the physical console may not be visible at all.** On a
+`graphical` boot the desktop owns the screen and the kernel shell stands
+down (CLAUDE.md); a text console to type at means booting with
+`target=text`.
+
 `--instance N` is how you run more than one VM at once: pidfile, serial
 socket, QMP port and VNC display are all derived from N, so slot 2 can
 never stop slot 0's VM or connect to its console. Slot 0 is the default

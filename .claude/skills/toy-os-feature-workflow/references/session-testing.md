@@ -652,3 +652,85 @@ hazard: ~15 ktest runs had accumulated state on `disk.img` without a
 `make clean-disk`. The comparison measured the fixture, not the code.
 **`make clean-disk && make iso` before any flake rate you intend to
 believe**, on BOTH sides of the comparison.
+
+## A STALE COPY OF disk.img MADE A POSITIVE CONTROL LIE (2026-08-19)
+
+The control looked like it disproved the feature. `ls` reports a
+truncated listing when it fills its array; to prove that check could
+fire, the cap was lowered to 32 against a 40-file directory. It listed
+32 and printed NO message -- exactly the failure the change was supposed
+to have fixed.
+
+Nothing was wrong. The VM was booting a COPY of `disk.img` taken before
+the rebuild, so the guest ran the OLD `/bin/ls` -- built when the cap was
+256 -- against the NEW kernel, which clamped to 32. The binary compared
+`count` against a maximum it had never asked for, so its own detection
+could not fire. Re-running against a freshly seeded `disk.img` produced
+the message immediately.
+
+`CLAUDE.md` already says a copy goes stale the moment you rebuild. The
+addition worth carrying is the SHAPE: **a stale copy does not only break
+a feature, it invalidates a CONTROL** -- and a control that fails is read
+as "the code is broken", which is the most expensive possible way to be
+wrong about a fixture. Before believing a control, ask whether the ISO
+*and* the disk under test both contain the change.
+
+The general form, since this is the third variant of it recorded here:
+when a positive control produces a surprising answer, suspect the
+plumbing between the change and the machine before suspecting the change.
+
+## The output you captured may be from a surface the output never reached
+
+Two screenshots were taken to check whether `ls` colour appeared on the
+console. Both showed only grey, which read as "the ANSI parser is not
+working". The parser was fine: `vm.py exec` runs commands over the serial
+debug console, whose output is redirected into a SINK for the duration --
+so that output never went to the screen at all, and the screendump showed
+what had been there beforehand.
+
+**Match the evidence to the surface.** Three distinct surfaces exist here
+and a given command reaches exactly one: the debug console sink
+(`vm.py exec`, and what every GUI tool reads), the physical framebuffer
+console (what a screendump shows, and only what was TYPED reaches it),
+and a ring-3 client's own window. Asking the wrong one produces confident
+negative evidence.
+
+Colour has a second twist worth knowing: it can never appear over
+`vm.py exec` by construction, because the console turns `ESC[...m` into a
+colour before the sink sees a byte. What text CAN prove is the negative
+-- an unwired parser shows up as literal `[1;36m` in the captured output.
+The colour itself needs pixels from a typed-at console
+(`ShellFlow.run_command()`, `target=text`, `kbd=us`).
+
+## Changing a program's OUTPUT FORMAT is an API change
+
+`/bin/ls` was given multi-column output as its default, which is what
+`ls` looks like at a terminal. It broke `notepad_client_test.py`, whose
+premise is that `sh ls /` can be read one name per line to derive which
+row to click in a file dialog.
+
+Real `ls` avoids this with `isatty()`: columns to a terminal, one per
+line to a pipe. toy-os has no `isatty()`, so there is no way to make that
+choice correctly -- which means **the default has to be the parseable
+shape**, and columns became a flag.
+
+Two things generalise. A program's output format is consumed by
+something, and here that something is the test suite -- so "make the
+output nicer" is a change with downstream callers, exactly like changing
+a function signature. And when a capability real systems rely on is
+MISSING (isatty), the honest move is to pick the conservative default and
+record the gap, not to pick the pretty default and hope.
+
+## Sorting in two places means the two orders are a contract
+
+`/bin/ls` was made to sort by name -- a genuine improvement, since
+`SYS_LISTDIR` returns whatever order the filesystem walked and the same
+directory could list differently twice. It broke a check that derives a
+row index from `ls` output and clicks that row in Notepad's file dialog,
+because the dialog still listed unsorted.
+
+The fix was to share one `dirsort()` between them rather than to sort the
+dialog separately, so the two orders cannot drift again. **When a test
+derives an index in one program and applies it in another, the ordering
+is part of the interface** -- and the cheapest way to keep an interface
+true is to make it one piece of code rather than two that agree today.

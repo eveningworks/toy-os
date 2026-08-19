@@ -513,3 +513,61 @@ fault-injection flake: it turned CI red on a DOCS-ONLY commit, which is
 independent evidence it is environmental rather than caused by any code
 change -- the sort of confirmation that is hard to get from a local
 bisect.
+
+## A SUBSTRING ANCHOR MATCHES A LONGER HEADING (2026-08-19)
+
+The doc-slice hazard already recorded here bit again, in a new variant,
+and the line-count check is the only thing that caught it.
+
+Trimming a stray tail from `docs/roadmap-details.md`:
+
+```python
+start = s.index("## Backlog")     # intended: the "## Backlog" heading
+s = s[:start]                      # 39 lines expected
+```
+
+It deleted **1,347 lines**. `## Backlog` occurs earlier in the file as a
+substring of `### Backlog` -- a different, real section -- and `index()`
+found that first. `grep -n "^## Backlog"` had reported exactly one match,
+which is what made the mistake feel safe: the anchored grep and the
+unanchored `index()` were asking different questions.
+
+**Anchor on the line, not the text**: `s.index("\n## Backlog\n")`. And
+the rule that saved it is the one already written down -- *check the line
+count afterwards*. A docs edit that changes a file's size by an order of
+magnitude more than intended is not the edit you meant. Both guards are
+cheap; only one of them fired.
+
+## An in-place permutation is the wrong amount of clever
+
+Sorting a directory listing, the sort produced an index permutation and
+the caller applied it in place with the standard cycle walk:
+
+```c
+while (idx[i] != i) { j = idx[i]; swap(e[i], e[j]); swap(idx[i], idx[j]); }
+```
+
+Tracing three elements by hand -- `[C,A,B]` with `idx=[1,2,0]` -- gives
+`[B,C,A]`, not `[A,B,C]`. The failure mode is the dangerous one: a
+listing that is plausibly ordered and wrong, which no glance at a screen
+would catch.
+
+The fix was to retreat, not to debug: sort the ENTRIES with an insertion
+sort and one scratch element. It moves more memory -- ~80 bytes an entry
+against 4 for an index -- and at a few hundred entries that is nothing
+next to a bug of that shape. **Reach for the obviously-correct algorithm
+when the data is small enough that the clever one buys nothing you can
+measure.** The permutation was solving a problem this code did not have.
+
+## Prove it is yours the same way you prove it is not
+
+`gui_regress` went red on `notepad` in the middle of a change. The
+established move here is to stash and rebuild `HEAD` to show a failure
+PREDATES the work -- and it is just as useful run the other way. `HEAD`
+passed 20/20, which converted "probably a flake, the fixture has been
+rewritten a lot today" into "this is mine" in one build cycle, and
+pointed straight at the two output changes responsible.
+
+The habit worth keeping: **run the comparison before forming a theory**,
+in either direction. It costs one build and removes the entire class of
+wrong explanations that begin "it was probably already broken".

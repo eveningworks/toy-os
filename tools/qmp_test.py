@@ -162,6 +162,9 @@ def launch_qemu_cmd(iso="toy-os.iso", disk="disk.img", serial_log="serial.log",
     if iso == "toy-os.iso":
         iso_guard.assert_iso_fresh()
 
+    # A copy of disk.img older than the last seed -- see vm.py's note.
+    iso_guard.warn_if_disk_stale(disk)
+
     # And refuse to start ON TOP OF another guest. Same chokepoint, same
     # reasoning as the ISO check: a QMP port shared with a running guest
     # does not fail here, it fails minutes later as a BrokenPipeError in

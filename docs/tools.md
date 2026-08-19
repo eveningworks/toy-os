@@ -639,6 +639,20 @@ manual steps to be worth automating:
   correctly rewrites nothing. `TOYOS_ALLOW_STALE_ISO=1` bypasses it, for
   deliberately booting an older image -- e.g. building an earlier commit
   to prove a failure predates your work.
+
+  It also WARNS (never refuses) when a COPY of `disk.img` passed with
+  `--disk` is older than the last seed. Testing against a copy is the
+  documented way to dodge QEMU's write lock and to stop `make iso`
+  re-seeding an image underneath a running VM -- but `make iso` re-seeds
+  the real `disk.img` with the newly built `/bin` binaries, so a copy
+  taken before a rebuild runs the NEW kernel against the OLD userland,
+  which reads exactly like a bug in the app. Measured 2026-08-19, in the
+  worst possible place: a POSITIVE CONTROL for `/bin/ls`'s truncation
+  message, where the guest ran the previous `ls` and the message did not
+  appear -- a control that fails reads as "the feature is broken", not
+  "the fixture is stale". A warning rather than a refusal because a copy
+  is often deliberately old (a fixture staged by `tfs3_writer.py`, an
+  image kept for a reproduction); it names the re-copy command.
 - **`taskmgr_test.py`** -- the ring-3 Task Manager: `uui_table`, resize
   reflow, and ending a process (12 checks). Its resize check asserts the
   table grew by ROUGHLY WHAT THE WINDOW GREW BY, not merely that it

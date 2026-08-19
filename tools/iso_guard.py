@@ -29,6 +29,10 @@ Both rounds are needed. Only the first, and a failed `make iso` still
 boots a consistent-but-old pair; only the second, and a successful
 `make all` looks fine while the ISO lags.
 
+There is a third, separate check for a COPY of disk.img passed with
+`--disk` -- see check_disk_fresh(). That one WARNS rather than refuses,
+because a copy is often deliberately old.
+
 Pairing each tree with ITS OWN output matters more than it sounds: the
 first version compared everything against build/kernel.bin and cried
 wolf on the first userland-only edit. A guard that false-alarms is a
@@ -163,6 +167,63 @@ def check_iso_fresh(repo: Path = REPO, iso_name: str = "toy-os.iso"):
             )
 
     return problems
+
+
+def check_disk_fresh(disk: str, repo: Path = REPO):
+    """Complain if `disk` is a COPY taken before the last seed.
+
+    THE BUG THIS EXISTS FOR, measured 2026-08-19. Testing against a copy
+    of disk.img is the documented way to avoid QEMU's write lock and to
+    stop `make iso` re-seeding the image underneath a running VM
+    (CLAUDE.md). But `make iso` re-seeds the REAL disk.img with the newly
+    built /bin binaries, so a copy taken before a rebuild still holds the
+    OLD ones -- and the VM then runs the NEW kernel from the ISO against
+    the OLD userland.
+
+    That reads exactly like a bug in the app. It cost a session a wrong
+    conclusion in the worst possible place: a POSITIVE CONTROL, lowering
+    a kernel limit to prove /bin/ls would report a truncated listing. The
+    guest ran the previous ls, which compared against a limit it had
+    never been given, so the message did not appear -- and a control that
+    fails reads as "the feature is broken", not "the fixture is stale".
+
+    Returns complaints rather than raising: a copy is often deliberately
+    old (a fixture staged by tfs3_writer.py, an image kept for a
+    reproduction), so this is a WARNING at the call site, not a refusal.
+    """
+    problems = []
+    d = Path(disk)
+    if not d.exists():
+        return [f"{disk} does not exist."]
+
+    # The repo's own disk.img is re-seeded by `make iso` itself, so it is
+    # covered by the ARTIFACT_PAIRS check above and never stale here.
+    try:
+        if d.resolve() == (repo / "disk.img").resolve():
+            return []
+    except OSError:
+        return []
+
+    seeded = repo / "build" / ".seeded"
+    if not seeded.exists():
+        return []
+    lag = seeded.stat().st_mtime - d.stat().st_mtime
+    if lag > 0:
+        problems.append(
+            f"{disk} was copied {lag:.0f}s BEFORE the last seed -- it holds the "
+            f"previous /bin binaries, so the guest would run the new kernel "
+            f"against the old userland. Re-copy it: "
+            f"cp --reflink=auto --sparse=always disk.img {disk}"
+        )
+    return problems
+
+
+def warn_if_disk_stale(disk, repo: Path = REPO):
+    """Print check_disk_fresh()'s complaints to stderr. Never fatal."""
+    if not disk or os.environ.get(BYPASS_ENV) == "1":
+        return
+    for p in check_disk_fresh(disk, repo):
+        print(f"iso_guard: WARNING -- {p}", file=sys.stderr)
 
 
 def assert_iso_fresh(repo: Path = REPO, iso_name: str = "toy-os.iso"):

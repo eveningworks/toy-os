@@ -11,6 +11,34 @@
 // numbers without duplicating them -- kernel/include is on both build's
 // include path (see the Makefile), so both just include this file.
 
+// HOW TO READ THE PER-CALL RETURN NOTES BELOW, since error codes landed.
+//
+// Many of them say "returns -1 on failure". That is what a RING-3 CALLER
+// sees, and it is still true -- but it is true one layer up: the raw
+// syscall returns the NEGATED error number (abi/errno.h), and libsys's
+// wrapper turns that into -1 while stashing the code for sys_errno()
+// (userland/rt/sys.h). So `open()` of a missing file puts -2 in RAX and
+// hands a program -1 with ENOENT behind it.
+//
+// Three things follow, and the second is the one that bites:
+//
+//   - Code using libsys is unaffected. `if (fd < 0)` means what it
+//     always did.
+//   - Code poking the RAW interface -- the /tests diagnostics, which
+//     exist to do exactly that -- sees the code, not -1. A raw test
+//     asserting `== -1` is asserting EPERM, since EPERM is 1.
+//   - The calls documented as returning 0 ON FAILURE (SYS_UNLINK,
+//     SYS_KILL, SYS_GETTIME, SYS_PROC_INFO, SYS_WIN_CREATE) were
+//     deliberately NOT converted: a negative code is TRUTHY, so
+//     returning one would make every `if (!sys_unlink(p))` caller read a
+//     failure as success. A call whose SUCCESS is 1 and whose failure
+//     was -1 (SYS_SET_COLOR) was converted like any other -- it is the
+//     failure value, not the success value, that decides.
+//     See docs/errno-design.md.
+//
+// Stated once here rather than edited into two dozen comments that would
+// then have to be kept true individually.
+
 #define SYS_EXIT  1 // RDI = exit code
 #define SYS_WRITE 2 // RDI = fd, RSI = buffer pointer, RDX = length;
                     // returns bytes written (RAX), or -1 on a bad fd or

@@ -770,3 +770,98 @@ pipe is empty -> park" can be split by the other end in a preemptible
 kernel, and the wake then fires with nobody parked. That was a delay
 while only readers slept; with both ends able to sleep it deadlocked.
 Check-and-park needs `scheduler_preempt_disable()` around it.
+
+## Error codes: the polarity trap, and what a sentinel costs later (2026-08-19)
+
+The errno milestone (`docs/errno-design.md`) landed all five stages at
+once. Three design points worth carrying beyond this project.
+
+**A negative error code is TRUTHY, so polarity decides what can be
+converted.** 58 sites returned `-1` and became `-ERRNO`. But a handful of
+syscalls report failure as **0** (`unlink`, `kill`, `gettime`,
+`proc_info`, `win_create`) -- and returning `-EFAULT` from one of those
+would make every `if (!sys_unlink(p))` caller read a failure as SUCCESS,
+silently, at every call site at once. It is the FAILURE value, not the
+success value, that decides whether a call can join the scheme: a call
+returning 1 on success and -1 on failure converts fine. Those five were
+left alone and recorded, because flipping them is a caller-visible change
+that deserves its own commit and its own testing.
+
+**A pointer-returning call must keep its own sentinel.** `sbrk` hands
+back an address, and `(void *)-1` is what every caller already tests
+against -- a small negative code there is a plausible and WRONG address.
+It keeps `-1` and libsys records ENOMEM beside it, which is exactly what
+POSIX `sbrk()` does. The knock-on: `strace` must not decode a
+pointer-returning syscall's `-1` either, because `-1` is `EPERM`'s value
+and printing that names a reason the call never gave.
+
+**An existing sentinel constrains the new number space.** `SYS_RETRY` was
+`-2`, which is `-ENOENT` under Linux numbering, so it had to move. The
+tempting fix -- make it `-EAGAIN` -- is wrong: EAGAIN is an ERROR a
+caller reports, while SYS_RETRY means the call did not fail at all and
+libsys absorbs it in a loop nobody sees. Folding them would make every
+blocking call's spurious wakeup look like a failure one layer up, which
+is the same mistake as the original "0 means try again" that made a pipe
+read report EOF. It moved outside the error range instead.
+
+**And the layering question the plan got right in advance:** the kernel
+returns the code, and the -1-plus-`errno` shape is put back by libsys.
+That is Linux's split (kernel returns `-errno`, libc owns the global) and
+NT's (an `NTSTATUS` return, `GetLastError()` layered on top). It matters
+because the global is the part that needs thread-local storage once
+threads exist -- keeping it in ring 3 means that day changes one
+declaration and no kernel code.
+
+## Colour on a side channel lands somewhere other than its text
+
+`/bin/ls` coloured directories with a syscall that set the console's
+attributes directly. It worked for years because the output always went
+to the console -- and `ls > out.txt` recoloured the console while its
+bytes went to the file.
+
+The general shape: **a property of some output that travels OUTSIDE that
+output will be applied to whatever happens to be there instead.** An
+escape sequence rides in the byte stream, so it lands wherever the stream
+lands. That is also what makes suppression expressible -- `--color=never`
+has something to omit, where a syscall has nothing to suppress.
+
+Two things came out of building it. A parser for it belongs at the ONE
+funnel every byte passes (`vga_putc`), in front of the output-sink check,
+so the physical console and a GUI Terminal's scrollback share one
+implementation and neither learns what an escape is. And sequences the
+console cannot honour must be SWALLOWED rather than printed -- declining
+quietly is what a terminal is supposed to do, where printing `[2J`
+reads as a bug in the program.
+
+## A comment claiming a limit "cannot be exceeded" is worth measuring
+
+`SYS_LISTDIR_MAX` was 32, with a comment saying that "matches
+FS_MAX_FILES, since that's the most any directory could ever hold".
+`FS_MAX_FILES` is 256, and TFS3 has no per-directory cap at all. So `ls`
+listed 32 of a 40-file directory and stopped -- no message, just output
+that ended. Found by making 40 files and counting, which took a minute.
+
+**A limit justified by an invariant is only as good as the invariant, and
+this one had been outlived by a filesystem added after it.** The comment
+was the thing that made it invisible: it explained why nobody needed to
+check. When a constant carries a justification, the cheap move is to test
+the justification, not to read it.
+
+The fix worth copying is not the bigger number -- 256 still does not
+bound TFS3 -- it is that a caller can now DETECT the cap and say so. A
+truncation that reports itself is a limitation; one that does not is a
+bug.
+
+## Two implementations of one command, found by testing the other one
+
+Typing `ls -1 /etc` at the ring-3 prompt printed nothing, while the same
+command through the kernel shell worked perfectly. `/bin/tosh` has its
+own `ls` BUILTIN, so the two shells run different code for the same word.
+
+Worth knowing structurally: this project deleted `apps/widgets.c`, merged
+two window managers and compiles `klineedit.c` twice specifically to
+avoid this, and it grew back unnoticed in a new shell because a builtin
+is the obvious way to make a shell useful before `/bin` exists. **When a
+program gains a second implementation for bootstrapping reasons, that is
+a debt with a name** -- it is on the roadmap now rather than waiting to
+surface as the two disagreeing about a flag.
