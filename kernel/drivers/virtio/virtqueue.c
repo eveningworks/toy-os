@@ -46,6 +46,7 @@
 #include "string.h"
 #include "idt.h"
 #include "timer.h"
+#include "clocksource.h"
 
 // The two-path wait budget, taken from ata.c's rather than picked as a
 // round number -- the reasoning there applies unchanged. A wall-clock
@@ -53,8 +54,11 @@
 // because `int 0x80` is an interrupt gate so IF stays clear for the
 // whole handler (see idt.h's isr_in_progress()). So this spends real
 // time when it can and falls back to a fixed spin when it cannot.
-#define VIRTQ_POLL_LIMIT 100000   // ~12ms on this emulated hardware
-#define VIRTQ_WAIT_TICKS 500      // ~5s at the 100Hz PIT rate
+// A real duration, not an iteration count -- see virtqueue_poll().
+#define VIRTQ_WAIT_MS 5000
+// Backstop for a clocksource that has stopped advancing; large enough
+// that it is never the thing that fires on a merely slow host.
+#define VIRTQ_POLL_BACKSTOP 500000000ull
 
 // Descriptors abandoned by a timeout. See virtqueue_poll().
 static uint32_t g_lost_chains = 0;
@@ -304,20 +308,31 @@ int virtqueue_poll(struct virtqueue *vq, int head, uint32_t *used_len) {
     // orders of magnitude (a fixed ~12ms spin against a 5s wall clock),
     // so "it timed out" means nothing without saying which one, and
     // that ambiguity cost a wrong diagnosis of a CI failure.
-    int spun = isr_in_progress();
-    uint64_t started = pit_ticks();
-
-    if (isr_in_progress()) {
-        // Inside a syscall: pit_ticks() does not advance, so a
-        // wall-clock budget would never expire. Fixed spin instead.
-        for (uint32_t i = 0; i < VIRTQ_POLL_LIMIT; i++) {
-            if (chain_done(vq, head, used_len)) return 1;
-        }
-    } else {
-        uint32_t start = pit_ticks();
-        while (pit_ticks() - start <= VIRTQ_WAIT_TICKS) {
-            if (chain_done(vq, head, used_len)) return 1;
-        }
+    // ONE BUDGET, FROM A CLOCKSOURCE, because pit_ticks() is not
+    // usable here and a fixed spin count is not a duration.
+    //
+    // This used to branch on isr_in_progress(): a 5s wall clock when
+    // interrupts were on, and otherwise a fixed VIRTQ_POLL_LIMIT spin
+    // -- copied from ata.c, where it is bounded the same way. The spin
+    // measures out to about 12ms on this emulated hardware, and that
+    // turned out to be the budget almost everything actually got: the
+    // kernel test suite runs with interrupts off, so every filesystem
+    // request had ~12ms to complete. It passed locally and failed on a
+    // slower CI runner, where a round trip simply takes longer than
+    // that -- and the timeout then abandoned the chain, which is what
+    // made it look like a driver fault rather than a stopwatch set
+    // wrong. ATA's ATA_POLL_LIMIT has the identical shape and is why
+    // ATA failed there too; one root cause, two transports.
+    //
+    // clocksource_now_ns() reads a counter (PIT or TSC) rather than a
+    // tick COUNT, so it advances with interrupts disabled -- which is
+    // exactly the case the old code could not measure and had to guess
+    // at. The iteration cap stays only as a backstop for a clocksource
+    // that is not advancing at all.
+    uint64_t deadline = clocksource_now_ns() + (uint64_t)VIRTQ_WAIT_MS * 1000000ull;
+    for (uint64_t i = 0; i < VIRTQ_POLL_BACKSTOP; i++) {
+        if (chain_done(vq, head, used_len)) return 1;
+        if (clocksource_now_ns() >= deadline) break;
     }
 
     // TIMED OUT, AND THE DESCRIPTORS ARE DELIBERATELY LEAKED.
@@ -334,11 +349,9 @@ int virtqueue_poll(struct virtqueue *vq, int head, uint32_t *used_len) {
     // which is the right end state for a device that has stopped
     // answering.
     g_lost_chains++;
-    klog_printf("virtio: queue %u timed out on chain %d after %s (%u tick(s)) --"
+    klog_printf("virtio: queue %u timed out on chain %d after %u ms --"
                 " %u descriptor(s) abandoned, %u still free\n",
-                vq->index, head,
-                spun ? "a fixed spin, interrupts off" : "the 5s wall-clock budget",
-                (unsigned)(pit_ticks() - started),
+                vq->index, head, (unsigned)VIRTQ_WAIT_MS,
                 vq->size - vq->num_free, vq->num_free);
     return 0;
 }
