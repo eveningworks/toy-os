@@ -275,7 +275,7 @@ ASM_SOURCES = $(shell find kernel -name '*.asm' | sort)
 C_OBJECTS   = $(patsubst %.c,   $(BUILD)/%.o, $(C_SOURCES))
 ASM_OBJECTS = $(patsubst %.asm, $(BUILD)/%.o, $(ASM_SOURCES))
 
-.PHONY: all clean clean-disk iso run run-menu run-audio run-kvm run-nographic debug help version seed test verify
+.PHONY: all clean clean-disk iso run run-menu run-audio run-kvm run-nographic run-virtio run-virtio-kvm debug help version seed test verify
 
 # Regenerates kernel/include/api/version.h from VERSION (see
 # tools/gen_version.sh) -- listed first so it always runs before
@@ -315,6 +315,9 @@ help:
 	@echo "                 needs /dev/kvm; port-I/O-heavy paths can get slower, so"
 	@echo "                 don't compare its throughput numbers against run's"
 	@echo "  run-nographic  Boot toy-os.iso in QEMU with no display, serial only (implies iso)"
+	@echo "  run-virtio     Same as run, but the disk is on VIRTIO-BLK and there is no IDE"
+	@echo "                 controller at all -- so the filesystem mounts only if the whole"
+	@echo "                 virtio path works. run-virtio-kvm is the KVM-accelerated form"
 	@echo "  live-iso       Build toy-os-live.iso -- carries a filesystem image, boots with NO disk"
 	@echo "  run-live       Boot that live ISO with no disk attached (implies live-iso)"
 	@echo "  demo-iso       Build toy-os-demo.iso -- boots straight into a scripted tour"
@@ -876,6 +879,36 @@ run: iso $(DISK_IMG)
 # screenshot; use this to see the cursor the adapter draws.
 run-vmware: iso $(DISK_IMG)
 	qemu-system-x86_64 -cdrom $(ISO) -drive file=$(DISK_IMG),format=raw,if=ide,discard=unmap -serial stdio -vga vmware -display sdl,grab-mod=rctrl -m 2048
+
+# Same as `run`, but the disk is on VIRTIO-BLK instead of IDE -- and
+# there is NO IDE controller at all, which is the point: ata_init()
+# finds nothing, so the filesystem can only mount if the whole virtio
+# path works (PCI capability walk, 64-bit BAR, feature negotiation, the
+# virtqueue, the block adapter). `dmesg` should say
+# "block: virtio-blk active" and `df` should report a persistent TFS3.
+#
+# Deliberately its own target rather than a flag on `run`: a virtio disk
+# appearing in every interactive run is a behaviour change nobody asked
+# for, and ATA needs to stay the exercised default.
+#
+# disable-legacy=on asks for a MODERN device (1af4:1042). Drop it, or
+# use `-drive file=...,if=virtio`, to get a TRANSITIONAL one (1af4:1001)
+# -- the driver handles both, and the transitional form is what QEMU
+# gives by default, so it is worth exercising too.
+run-virtio: iso $(DISK_IMG)
+	qemu-system-x86_64 -cdrom $(ISO) \
+	  -drive file=$(DISK_IMG),format=raw,if=none,id=vblk,discard=unmap \
+	  -device virtio-blk-pci,drive=vblk,disable-legacy=on \
+	  -serial stdio -display sdl,grab-mod=rctrl -m 2048
+
+# ...and the same under KVM, which is where a timing-sensitive driver
+# bug actually shows up -- every automated test here runs TCG, which
+# models neither real device latency nor guest memory types.
+run-virtio-kvm: iso $(DISK_IMG)
+	qemu-system-x86_64 -enable-kvm -cpu host -cdrom $(ISO) \
+	  -drive file=$(DISK_IMG),format=raw,if=none,id=vblk,discard=unmap \
+	  -device virtio-blk-pci,drive=vblk,disable-legacy=on \
+	  -serial stdio -display sdl,grab-mod=rctrl -m 2048
 
 # Same as `run`, but with KVM hardware virtualization instead of QEMU's
 # TCG software emulation -- guest instructions run natively on the host

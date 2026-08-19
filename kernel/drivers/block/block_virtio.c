@@ -66,18 +66,9 @@ int blk_virtio_init(void) {
     // already exercised through ATA. Declaring no bit and providing no
     // trim() passes blk_register()'s both-directions honesty check.
 
-    if (!blk_register(&VIRTIO_DEV)) {
-        klog_write("block: virtio-blk was refused by the registry\n");
-        return 0;
-    }
-    // probe_and_mount() runs more than once per boot (a mount, and
-    // again after a reformat), so the registration is idempotent but
-    // the announcement should not repeat -- a line printed twice reads
-    // as two devices.
-    static int announced = 0;
-    if (!announced) {
-        announced = 1;
-        klog_printf("block: virtio-blk active (%u sectors)\n", virtio_blk_sector_count());
-    }
-    return 1;
+    // No announcement here: blk_register() already logs
+    // "block: <name> active (<n> sectors)" for every device it accepts,
+    // and block_ata.c stays quiet for the same reason. A line here made
+    // the boot log report virtio-blk twice, which reads as two disks.
+    return blk_register(&VIRTIO_DEV);
 }
