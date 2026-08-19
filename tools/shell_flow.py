@@ -78,6 +78,13 @@ _SPECIAL_CHARS = {
     ";": lambda s: s.send_key("semicolon"),
     "'": lambda s: s.send_key("apostrophe"),
     "=": lambda s: s.send_key("equal"),
+    # Redirection. On a US layout these are shifted comma/dot -- which
+    # is why the guest MUST be on `kbd=us` before any of this is typed
+    # (see the module docstring): a qcode names a physical key by its US
+    # label, and on the `se` default the same key produces something
+    # else entirely.
+    ">": lambda s: s.combo(["shift", "dot"]),
+    "<": lambda s: s.combo(["shift", "comma"]),
 }
 
 

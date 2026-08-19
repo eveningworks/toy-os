@@ -346,6 +346,68 @@ def main():
         check("Up recalls the previous command and it runs again",
               "filetest.txt" in root_names(dbg))
 
+        # --- REDIRECTION -------------------------------------------
+        #
+        # `>` and `<` are the payoff of the descriptor table: the shell
+        # points its OWN fd 1 (or 0) at a file around the spawn and the
+        # child inherits it, which is the dance fork() normally exists
+        # to allow. Each is asserted by reading the file back through a
+        # completely different path (the debug console's `sh cat`), not
+        # by anything the shell reports about itself.
+        print("redirection")
+
+        dbg.send("sh rm /redir.txt")
+        time.sleep(0.4)
+        # An EXTERNAL program: /bin/hello writes to fd 1 and exits, and
+        # is told nothing about the file.
+        type_line(flow, "hello > /redir.txt")
+        time.sleep(2.5)
+        out = dbg.send("sh cat /redir.txt") or ""
+        check("`>` sends an external program's output to a file",
+              "Hello" in out, out.strip()[:60])
+
+        # `>>` appends where `>` truncated. Running the same command
+        # twice must leave TWO copies -- a `>>` that silently truncated
+        # would leave one and look identical to a working `>`.
+        type_line(flow, "hello >> /redir.txt")
+        time.sleep(2.5)
+        out = dbg.send("sh cat /redir.txt") or ""
+        check("`>>` appends rather than truncating",
+              out.count("Hello") >= 2, f"{out.count('Hello')} copies")
+
+        # `<` points fd 0 at a file. /tests/catin reads stdin and writes
+        # it out, so this is a round trip through both redirections at
+        # once -- and it can only work if the CHILD inherited fd 0.
+        dbg.send("sh rm /redir_in.txt")
+        time.sleep(0.4)
+        type_line(flow, "catin < /redir.txt > /redir_in.txt")
+        time.sleep(2.5)
+        out = dbg.send("sh cat /redir_in.txt") or ""
+        check("`<` feeds a file to a program's stdin",
+              "Hello" in out, out.strip()[:60])
+
+        # A BUILTIN redirects too. tosh's `ls` prints through the
+        # shell's own sink rather than writing to fd 1, so this is the
+        # check that the sink swap works -- without it `ls > f` would
+        # silently print to the screen and leave an empty file.
+        dbg.send("sh rm /redir_ls.txt")
+        time.sleep(0.4)
+        type_line(flow, "ls / > /redir_ls.txt")
+        time.sleep(2.0)
+        out = dbg.send("sh cat /redir_ls.txt") or ""
+        check("a builtin's output redirects too", "bin" in out, out.strip()[:60])
+
+        # And a redirect that cannot be opened must NOT run the command.
+        # `cat < missing` printing nothing is not enough -- a shell that
+        # ran the command anyway would also print nothing.
+        dbg.send("sh rm /redir_never.txt")
+        time.sleep(0.4)
+        type_line(flow, "hello < /no_such_file > /redir_never.txt")
+        time.sleep(2.0)
+        check("a failed redirect does not run the command",
+              "redir_never.txt" not in root_names(dbg))
+
+
     finally:
         if not args.keep:
             vm_run(args.disk, args.instance, "stop")

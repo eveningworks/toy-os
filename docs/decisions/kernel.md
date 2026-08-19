@@ -2958,3 +2958,65 @@ None of this is console ownership done properly. A per-TTY input queue
 with a foreground process is the TTY milestone's job; what this buys is
 that exactly one thing reads the keyboard at a time, which is the same
 thing the compositor flag buys and for the same reason.
+
+## File descriptors are two levels, and fds 0/1/2 are ordinary entries
+
+A descriptor table used to be a single global array of eight entries,
+each tagged with its owner's CR3, with fds numbered from 3. fds 0, 1 and
+2 were not in it at all: they were numbers matched in an `if` inside
+`sys_read`/`sys_write`, and "this process's stdout is redirected" was a
+single `stdout_pipe` field on `struct sched_process`, set once at spawn.
+
+That shape cannot express redirection. `dup2(pipe, 1)` had nowhere to
+record itself, so `>` and `<` were impossible and a pipeline could only
+ever be the one hardcoded case the spawn argument covered.
+
+**The split, which is POSIX's.** A DESCRIPTION is what a stream is -- a
+file, a pipe end, the console, the kernel log -- and is refcounted. A
+DESCRIPTOR is a number one address space uses to name a description.
+`dup2` copies the NAME; the description dies with the last descriptor
+naming it. Routing then switches on the description's KIND rather than
+on the fd number, which is what makes 0/1/2 unremarkable: they merely
+start out pointing at the console and the kernel log.
+
+**Keyed by CR3, not by pid.** The legacy blocking loader (`run` at the
+physical shell) has its own address space and NO scheduler slot, so a
+pid-keyed table would leave it with no descriptors at all -- the trap
+`SYS_SBRK` already documents. This was not theoretical: the first
+version of the spawn path read the parent from
+`procs[current_index].pml4_phys`, and children of a `run` silently
+inherited nothing. `vmm_current_pml4()` is the identifier every path
+has.
+
+**CONSOLE and KLOG are separate kinds** because stdout and stderr
+genuinely differ here: stdout goes to the screen and may be redirected
+into a pipe, while stderr goes to the kernel log so a GUI client with no
+terminal can still say something a test can read. Making stderr a
+description rather than a test on the number is what lets a process
+redirect stdout without dragging its diagnostics along.
+
+**Inheritance is what removes the need for `fork()`.** A spawned child
+copies its parent's whole descriptor table, sharing every description.
+So a shell redirects ITSELF around the spawn --
+
+    saved = dup(1); dup2(f, 1); spawn(...); dup2(saved, 1); close(saved);
+
+-- and the child needs no cooperation and runs no code of its own. That
+is precisely why `posix_spawn()` exists: fork's real purpose is to give
+the child a moment to call `dup2` before `exec`, and a system without
+cheap copy-on-write should not pay for a whole address-space
+duplication to get it. Windows does the same thing with
+`STARTUPINFO`'s handle inheritance. `SYS_SPAWN`'s existing stdout
+argument survives as the one-call shortcut, applied after inheriting.
+
+This also DELETED the `stdout_pipe` field and its two teardown sites: a
+dying process's descriptors are unref'd by `fd_release_all()`, and the
+last reference to a pipe write end is what turns a blocked reader's wait
+into EOF -- one path instead of three.
+
+**The counting trap it exposed.** `SYS_SPAWN` used to call
+`pipe_add_writer()` for the child. With inheritance the child taking a
+reference to the DESCRIPTION already makes it a second writer, so doing
+both counted it twice and the pipe never reached EOF -- the reader hung
+forever on a child that had exited. When a refcount moves down a layer,
+delete the old one rather than keeping both.

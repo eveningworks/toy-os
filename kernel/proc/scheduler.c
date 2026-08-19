@@ -89,6 +89,7 @@
 // only the mechanism that used to keep it that way (a flag flipped
 // off) changed to a different one (an empty table).
 #include "scheduler.h"
+#include "syscalls.h" // the fd table: a child inherits its parent's descriptors
 #include "vmm.h"
 #include "pmm.h"
 #include "elf.h"
@@ -221,7 +222,6 @@ struct sched_process {
     // Pipe index this process's stdout goes to, or -1 for the console.
     // Lives here rather than in the fd table because fd 1 has always
     // been a hardcoded console in SYS_WRITE -- see scheduler.h.
-    int stdout_pipe;
 
     // --- what a task manager needs to show (see api/proc_info.h) ------
     //
@@ -619,7 +619,7 @@ static void switch_to_kernel(void) {
 // (>= 0) or -1 on any failure (no free slot, missing/unreadable file,
 // `args` too long to fit the one stack page, or the same allocation
 // failures every other ELF-loading path already handles the same way).
-static int spawn_from_fs(const char *path, const char *args, int stdout_pipe) {
+static int spawn_from_fs(const char *path, const char *args, int stdout_desc) {
     int slot = -1;
     for (int i = 0; i < MAX_PROCS; i++) {
         if (procs[i].state == SCHED_UNUSED) { slot = i; break; }
@@ -704,7 +704,37 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_pipe) {
     // would be both wrong and an information leak between processes.
     fpu_init_state(procs[slot].fpu);
     procs[slot].wait_reason = 0;
-    procs[slot].stdout_pipe = stdout_pipe;
+
+    // THE CHILD'S FILE DESCRIPTORS, built here because this is where
+    // its address space first exists. It inherits the caller's whole
+    // table (sharing every description, refcounted), which is what
+    // lets a shell redirect a child by redirecting ITSELF around the
+    // spawn -- the dance fork() normally exists to make possible:
+    //
+    //     saved = dup(1); dup2(f, 1); spawn(...); dup2(saved, 1);
+    //
+    // A kernel-context spawn has no table to inherit and the child
+    // gets the standard three (console, console, kernel log).
+    // THE PARENT IS WHOEVER IS EXECUTING, and that is CR3 -- not
+    // procs[current_index]. The legacy blocking loader (`run` at the
+    // physical shell) has its own address space and NO scheduler slot,
+    // so a slot lookup answers "no parent" for it and its children
+    // silently inherited nothing. The fd table is keyed by CR3
+    // precisely so that path is not a special case; asking the
+    // scheduler instead reintroduced the special case at the one site
+    // that mattered.
+    //
+    // The kernel context has no user address space, so vmm_current_pml4()
+    // is the kernel's own there and fd_inherit() finds no table for it --
+    // which is the right answer: a kernel-spawned process gets the
+    // standard three rather than somebody else's descriptors.
+    fd_inherit(as, vmm_current_pml4());
+    if (stdout_desc >= 0) {
+        // SYS_SPAWN's explicit stdout override, which predates
+        // inheritance and stays as the one-call shortcut. Applied
+        // AFTER inheriting, so it wins.
+        fd_set_desc(as, FD_STDOUT, stdout_desc);
+    }
     // The CALLER is the parent. 0 when the kernel context spawned this
     // -- scheduler_current_pid() returns 0 there, which is exactly the
     // "no parent" value, so this needs no special case.
@@ -1080,14 +1110,11 @@ void scheduler_on_exit(int code) {
     // again if it was somebody else's that exited.
     scheduler_wake(SCHED_WAIT_CHILD, SYS_RETRY);
 
-    // Closing the write end is what turns the parent's blocking read
-    // into EOF rather than an indefinite wait. Done here, at exit,
-    // because a process that dies without closing its own stdout is
-    // the normal case, not an error.
-    if (procs[current_index].stdout_pipe >= 0) {
-        pipe_close_writer(procs[current_index].stdout_pipe);
-        procs[current_index].stdout_pipe = -1;
-    }
+    // The write end that turns a parent's blocking read into EOF is
+    // closed by fd_release_all() now, along with every other
+    // descriptor this process held -- there is no separate
+    // "stdout_pipe" to remember, because stdout is an ordinary
+    // descriptor like the rest.
 
     bill_current(); // the exiting process's last slice
     current_index = -1;
@@ -1157,12 +1184,6 @@ uint64_t scheduler_slot_pml4(int slot) {
     if (slot < 0 || slot >= MAX_PROCS) return 0;
     if (procs[slot].state == SCHED_UNUSED || procs[slot].state == SCHED_ZOMBIE) return 0;
     return procs[slot].pml4_phys;
-}
-
-int scheduler_stdout_pipe(int pid) {
-    if (pid < 1 || pid > MAX_PROCS) return -1;
-    if (procs[pid - 1].state == SCHED_UNUSED) return -1;
-    return procs[pid - 1].stdout_pipe;
 }
 
 int scheduler_pid_valid(int pid) {
@@ -1280,10 +1301,6 @@ int scheduler_kill(int pid, int exit_code) {
     // window drawing stale pixels and answering no input.
     win_server_client_gone(pid);
     scheduler_wake(SCHED_WAIT_CHILD, SYS_RETRY);
-    if (procs[slot].stdout_pipe >= 0) {
-        pipe_close_writer(procs[slot].stdout_pipe);
-        procs[slot].stdout_pipe = -1;
-    }
 
     // The victim's memory goes NOW, not at reap. A zombie exists to
     // hold an exit code for whoever waits on it; holding an entire

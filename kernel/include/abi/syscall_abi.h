@@ -458,8 +458,18 @@ struct dirent {
 #define SYS_SPAWN   27 // RDI = path, RSI = whitespace-separated args
                         // (NULL/"" for none), RDX = an fd from
                         // SYS_PIPE's WRITE end to use as the child's
-                        // stdout, or -1 for the console. Returns the
-                        // child's pid (> 0), or -1.
+                        // stdout, or -1 to inherit. Returns the child's
+                        // pid (> 0), or -1.
+                        //
+                        // THE CHILD INHERITS THE CALLER'S WHOLE
+                        // DESCRIPTOR TABLE -- every fd names the same
+                        // open file in both, refcounted. That is what
+                        // makes redirection possible with no fork():
+                        // the parent points its own fd 1 wherever it
+                        // wants the child's to go, spawns, and puts its
+                        // own back. RDX stays as the one-call shortcut
+                        // for the common "capture this child's stdout"
+                        // case, and is applied after inheriting.
                         //
                         // This is what lets a ring-3 program run
                         // another and read its output -- the thing a
@@ -733,6 +743,36 @@ struct dirent {
                           // for. Never zero once a filesystem is
                           // mounted, so 0 is usable as "not sampled
                           // yet"; it only ever increases.
+
+// --- descriptor plumbing --------------------------------------------
+//
+// fds 0/1/2 are ORDINARY DESCRIPTORS, not special numbers: they simply
+// start out naming the console (0, 1) and the kernel log (2). So they
+// can be redirected like any other, which is what these two are for.
+//
+// Together with SYS_SPAWN's inheritance they give a shell the classic
+// redirection dance WITHOUT fork() -- the parent redirects itself
+// around the spawn, rather than the child redirecting itself before an
+// exec that does not exist here:
+//
+//     int saved = dup(1);
+//     dup2(file_fd, 1);
+//     spawn("/bin/ls", 0, -1);   // inherits fd 1 -> the file
+//     dup2(saved, 1);
+//     close(saved);              // refcounted: does NOT close the file
+#define SYS_DUP  41 // RDI = fd. Returns the LOWEST FREE descriptor
+                     // naming the same open file, or -1. The two share
+                     // everything about the stream, including a file's
+                     // read offset -- they are two names, not two opens.
+
+#define SYS_DUP2 42 // RDI = oldfd, RSI = newfd. Makes newfd name what
+                     // oldfd names, CLOSING whatever newfd named first,
+                     // and returns newfd (or -1 if oldfd is not open).
+                     //
+                     // dup2(fd, fd) is a NO-OP and specifically does not
+                     // close -- POSIX says so, and getting it wrong
+                     // destroys the stream the call was asked to
+                     // preserve.
 
 #define SYS_SLEEP 40 // RDI = milliseconds. Parks the caller until that
                           // long has passed, then returns 0. Returns -1

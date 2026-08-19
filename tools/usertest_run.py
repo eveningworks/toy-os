@@ -118,6 +118,10 @@ EXCLUDED = [
     ("sleep_test",       "SYS_SLEEP refuses a caller with no scheduler slot, and `run` "
                           "is the legacy loader, which has none. Driven by "
                           "tools/init_test.py through `spawn` instead"),
+    ("fd_test",          "spawns a child and waits for it, which the legacy `run` "
+                          "loader cannot do (no scheduler slot, so waitpid returns "
+                          "at once and it reads the child's file too early); "
+                          "kernel/proc/fd_test.c's KTEST spawns it properly"),
     ("pipe_test",        "needs a parent to spawn it and reap it; exits 3 under `run`, "
                           "and kernel/proc/pipe_test.c's KTEST covers it properly"),
     ("cputime_test",     "must be SCHEDULER-spawned to have a procs[] slot at all; "

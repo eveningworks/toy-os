@@ -255,7 +255,14 @@ manual steps to be worth automating:
   (asserted through the FILESYSTEM -- `file_test` writes
   `/filetest.txt`), a kernel-shell builtin typed at that prompt creates
   nothing, and Ctrl-D is followed by a fresh prompt rather than a dead
-  console. Three more assert the SHARED LINE EDITOR at that prompt --
+  console. Five more assert REDIRECTION -- `>` to a file, `>>`
+  appending rather than truncating (running the same command twice
+  must leave TWO copies, since a `>>` that silently truncated looks
+  identical to a working `>`), `<` feeding `/tests/catin`, a
+  BUILTIN redirecting (tosh's `ls` prints through the shell's own
+  sink rather than fd 1, so this is the check that the sink swap
+  works), and a failed redirect NOT running the command. Three more
+  assert the SHARED LINE EDITOR at that prompt --
   Home+Delete editing mid-line, Ctrl-U killing a line before it runs,
   and Up recalling the previous command -- each through a filesystem
   round trip, so a redraw that merely looks plausible cannot satisfy

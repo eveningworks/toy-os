@@ -32,26 +32,61 @@
 // isolation trick the legacy heap and window state use.
 //
 // One shared namespace for every kind, as in real Unix, rather than a
-// parallel table per kind: SYS_CLOSE and fd_release_all() only ever
-// look at `used` and `owner_pml4`, so they work on a socket or a pipe
-// end for free. Socket fds carry no real state yet (no domain/type
-// distinction, no transport) -- the `socket` arm of the union below is
-// deliberately empty; it exists so a socket slot has *some* member to
-// be valid C, and as the obvious place to grow per-socket state once a
-// NIC driver exists.
+// parallel table per kind: a new kind costs close and teardown nothing.
+// Socket fds carry no real state yet (no domain/type distinction, no
+// transport) -- the `socket` arm of the union below is deliberately
+// empty; it exists so a socket slot has *some* member to be valid C,
+// and as the obvious place to grow per-socket state once a NIC driver
+// exists.
 //
-// Declared here rather than kept private to syscall_fd.c because three
-// files index it: the fd layer itself, SYS_OPEN (fs), and SYS_SPAWN
-// resolving a pipe write end (proc).
-#define FD_TABLE_SIZE 8
-#define FD_BASE 3 // fds 0/1/2 are reserved for stdin/stdout/stderr
+// ---- TWO LEVELS, which is the whole design ----
+//
+// A DESCRIPTION is what a stream IS -- a file, a pipe end, the console.
+// A DESCRIPTOR is a number one address space uses to name a
+// description. `dup2` copies the NAME, not the stream, so two
+// descriptors share one description and the description dies with the
+// last of them. That is POSIX's split, and it is what fds 0/1/2 need
+// in order to be REDIRECTABLE at all.
+//
+// Before this, 0/1/2 were not table entries: they were numbers matched
+// in an `if`, and "stdout is redirected" was a single `stdout_pipe`
+// field on the process, set once at spawn. So there was nowhere for
+// `dup2(pipe, 1)` to record itself, and `>` could not be expressed.
+// Now they are ordinary descriptors that merely start out pointing at
+// the console, and every routing decision is made on the description's
+// KIND rather than on the number.
+//
+// ---- keyed by CR3, not by pid ----
+//
+// A descriptor table belongs to an ADDRESS SPACE. The legacy blocking
+// loader (`run` at the physical shell) has no scheduler slot and
+// therefore no pid, so keying this by pid would leave it with no fds
+// at all -- the same trap `SYS_SBRK` documents. CR3 is the identifier
+// every path has.
+#define FD_DESC_MAX  32 // open-file DESCRIPTIONS, shared across dup()
+#define FD_MAX       16 // DESCRIPTORS per address space (0..15)
+#define FD_SPACE_MAX 24 // address spaces that may hold fds at once
+
+// The three every process starts with. Not magic numbers any more --
+// just the descriptors fd_space_open() pre-fills.
+#define FD_STDIN  0
+#define FD_STDOUT 1
+#define FD_STDERR 2
 
 enum fd_mode { FD_MODE_READ, FD_MODE_WRITE };
-enum fd_kind { FD_KIND_FILE, FD_KIND_SOCKET, FD_KIND_PIPE_R, FD_KIND_PIPE_W };
+
+// CONSOLE and KLOG are descriptions like any other, which is what lets
+// a descriptor be moved off them. They are kept apart because stdout
+// and stderr genuinely differ here: stdout goes to the screen and may
+// be redirected into a pipe, while stderr goes to the kernel log so a
+// client with no terminal can still say something a test can read.
+enum fd_kind {
+    FD_KIND_FILE, FD_KIND_SOCKET, FD_KIND_PIPE_R, FD_KIND_PIPE_W,
+    FD_KIND_CONSOLE, FD_KIND_KLOG
+};
 
 struct open_file {
-    int used;
-    uint64_t owner_pml4;
+    int refs; // 0 = free. dup() makes it 2; the last unref tears down.
     enum fd_kind kind;
     union {
         struct {
@@ -68,10 +103,40 @@ struct open_file {
     };
 };
 
-extern struct open_file fd_table[FD_TABLE_SIZE];
+extern struct open_file fd_desc[FD_DESC_MAX];
 
-int alloc_fd(uint64_t pml4, enum fd_kind kind, int pipe_idx);
-struct open_file *fd_lookup(int fd, uint64_t pml4);
+// --- descriptions ---
+// Allocates one with refs = 1. `pipe_idx` is ignored for other kinds.
+int  fd_desc_alloc(enum fd_kind kind, int pipe_idx);
+// Drops a reference, tearing the description down at zero -- which is
+// where a pipe end is closed and a file forgotten. Every close path
+// goes through here so there is one place that decides "really gone".
+void fd_desc_unref(int di);
+
+// --- descriptors ---
+// Gives `pml4` a descriptor table with 0/1 on the console and 2 on the
+// kernel log. Idempotent. Called for a process's own address space the
+// first time anything asks about its fds.
+int  fd_space_open(uint64_t pml4);
+// The lowest free descriptor in `pml4` naming description `di`, which
+// it takes a reference to. -1 when the table is full.
+int  fd_install(uint64_t pml4, int di);
+// The description behind one descriptor, or NULL if it is not open.
+struct open_file *fd_get(uint64_t pml4, int fd);
+// Its index, for callers that need to share it (dup, spawn).
+int  fd_desc_index(uint64_t pml4, int fd);
+int  fd_close(uint64_t pml4, int fd);
+// POSIX's: `newfd` is closed first if open, and dup2(fd, fd) is a
+// no-op rather than a close-then-reopen.
+int  fd_dup2(uint64_t pml4, int oldfd, int newfd);
+// Points one descriptor of `pml4` at description `di`, taking a
+// reference and closing whatever was there. The kernel-side half of
+// dup2, used by spawn to place a child's stdout before it runs.
+int  fd_set_desc(uint64_t pml4, int fd, int di);
+// Copies `parent`'s whole descriptor table into `child`, sharing every
+// description. What a spawned process inherits, and the reason a shell
+// can redirect a child without running code in it.
+void fd_inherit(uint64_t child, uint64_t parent);
 
 // --- what a dying process leaves behind ------------------------------
 //
@@ -92,6 +157,8 @@ void win_syscall_release(uint64_t pml4_phys);
 int sys_write(struct syscall_ctx *c);
 int sys_read(struct syscall_ctx *c);
 int sys_close(struct syscall_ctx *c);
+int sys_dup(struct syscall_ctx *c);
+int sys_dup2(struct syscall_ctx *c);
 int sys_socket(struct syscall_ctx *c);
 int sys_send(struct syscall_ctx *c);
 int sys_recv(struct syscall_ctx *c);

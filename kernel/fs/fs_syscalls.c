@@ -108,11 +108,13 @@ int sys_open(struct syscall_ctx *c) {
             klog_write("syscall: open() rejected -- file not found\n");
             c->regs[14] = (uint64_t)-1;
         } else {
-            int slot = -1;
-            for (int i = 0; i < FD_TABLE_SIZE; i++) {
-                if (!fd_table[i].used) { slot = i; break; }
-            }
-            if (slot < 0) {
+            // A DESCRIPTION plus a descriptor naming it. Two steps
+            // rather than one because dup2 can later point a second
+            // descriptor at this same open file.
+            int di = fd_desc_alloc(FD_KIND_FILE, -1);
+            int fd = di >= 0 ? fd_install(pml4, di) : -1;
+            if (fd < 0) {
+                if (di >= 0) fd_desc_unref(di);
                 klog_write("syscall: open() rejected -- fd table full\n");
                 c->regs[14] = (uint64_t)-1;
             } else {
@@ -120,13 +122,10 @@ int sys_open(struct syscall_ctx *c) {
                     if (!exists) fs_touch(name);
                     if (want_trunc) fs_write(name, "", 0); // 0 = overwrite, not append
                 }
-                fd_table[slot].kind = FD_KIND_FILE;
-                k_strcpy(fd_table[slot].file.name, name);
-                fd_table[slot].used = 1;
-                fd_table[slot].owner_pml4 = pml4;
-                fd_table[slot].file.mode = want_write ? FD_MODE_WRITE : FD_MODE_READ;
-                fd_table[slot].file.offset = 0;
-                c->regs[14] = (uint64_t)(FD_BASE + slot);
+                k_strcpy(fd_desc[di].file.name, name);
+                fd_desc[di].file.mode = want_write ? FD_MODE_WRITE : FD_MODE_READ;
+                fd_desc[di].file.offset = 0;
+                c->regs[14] = (uint64_t)fd;
             }
         }
     }

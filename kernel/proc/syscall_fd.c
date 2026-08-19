@@ -28,37 +28,176 @@
 // (kernel/fs/fs_syscalls.c) and SYS_SPAWN (proc_syscalls.c) index it
 // too; the storage is here, with the code that owns it.
 
-struct open_file fd_table[FD_TABLE_SIZE];
+struct open_file fd_desc[FD_DESC_MAX];
+
+// One descriptor table per ADDRESS SPACE. A flat array scanned
+// linearly: FD_SPACE_MAX is small, this is touched once per fd
+// operation rather than per byte, and a hash would be a data structure
+// pretending to be a design at this size.
+struct fd_space {
+    uint64_t pml4;      // 0 = free slot
+    short    d[FD_MAX]; // d[fd] = index into fd_desc, or -1
+};
+static struct fd_space g_spaces[FD_SPACE_MAX];
 
 // Which address space holds the console claim, so fd_release_all() can
 // tell "this process is dying" from "some other process is". Keyed by
-// CR3 like the fd table itself, because that is what the release hook
-// is handed.
+// CR3 like everything else here.
 static uint64_t g_console_owner_pml4;
 
-// Slot allocation and lookup, factored out when pipes needed both and
-// found the logic inlined at half a dozen call sites. `fd_lookup()` in
-// particular carries the ownership check that keeps one process from
-// touching another's fds -- having that written once is worth more than
-// the line count saved.
-int alloc_fd(uint64_t pml4, enum fd_kind kind, int pipe_idx) {
-    for (int i = 0; i < FD_TABLE_SIZE; i++) {
-        if (fd_table[i].used) continue;
-        fd_table[i].used = 1;
-        fd_table[i].owner_pml4 = pml4;
-        fd_table[i].kind = kind;
-        if (kind == FD_KIND_PIPE_R || kind == FD_KIND_PIPE_W) fd_table[i].pipe.idx = pipe_idx;
-        return FD_BASE + i;
+int fd_desc_alloc(enum fd_kind kind, int pipe_idx) {
+    for (int i = 0; i < FD_DESC_MAX; i++) {
+        if (fd_desc[i].refs) continue;
+        fd_desc[i].refs = 1;
+        fd_desc[i].kind = kind;
+        if (kind == FD_KIND_PIPE_R || kind == FD_KIND_PIPE_W)
+            fd_desc[i].pipe.idx = pipe_idx;
+        return i;
     }
     return -1;
 }
 
-struct open_file *fd_lookup(int fd, uint64_t pml4) {
-    int slot = fd - FD_BASE;
-    if (slot < 0 || slot >= FD_TABLE_SIZE) return NULL;
-    struct open_file *f = &fd_table[slot];
-    if (!f->used || f->owner_pml4 != pml4) return NULL;
-    return f;
+// The one place that decides a stream is really gone. Everything that
+// closes an fd -- SYS_CLOSE, dup2 over an open descriptor, a process
+// dying -- lands here, so a pipe end cannot be closed twice or leaked
+// depending on which path got there.
+void fd_desc_unref(int di) {
+    if (di < 0 || di >= FD_DESC_MAX) return;
+    struct open_file *f = &fd_desc[di];
+    if (f->refs <= 0) return;
+    if (--f->refs > 0) return; // somebody else still names it
+
+    switch (f->kind) {
+    case FD_KIND_PIPE_R: pipe_close_reader(f->pipe.idx); break;
+    case FD_KIND_PIPE_W: pipe_close_writer(f->pipe.idx); break;
+    default: break; // a file needs nothing: fs.c holds no per-open state
+    }
+    f->kind = FD_KIND_FILE;
+}
+
+static struct fd_space *space_find(uint64_t pml4) {
+    for (int i = 0; i < FD_SPACE_MAX; i++)
+        if (g_spaces[i].pml4 == pml4) return &g_spaces[i];
+    return NULL;
+}
+
+int fd_space_open(uint64_t pml4) {
+    if (!pml4) return -1;
+    if (space_find(pml4)) return 0; // idempotent
+
+    struct fd_space *sp = NULL;
+    for (int i = 0; i < FD_SPACE_MAX; i++)
+        if (!g_spaces[i].pml4) { sp = &g_spaces[i]; break; }
+    if (!sp) {
+        klog_write("fd: no free descriptor table -- too many address spaces\n");
+        return -1;
+    }
+
+    sp->pml4 = pml4;
+    for (int i = 0; i < FD_MAX; i++) sp->d[i] = -1;
+
+    // The three a process starts with. They are descriptions like any
+    // other, so a later dup2 can move them.
+    int con = fd_desc_alloc(FD_KIND_CONSOLE, -1);
+    int err = fd_desc_alloc(FD_KIND_KLOG, -1);
+    if (con < 0 || err < 0) {
+        if (con >= 0) fd_desc_unref(con);
+        if (err >= 0) fd_desc_unref(err);
+        sp->pml4 = 0;
+        return -1;
+    }
+    fd_desc[con].refs++; // named twice: stdin and stdout
+    sp->d[FD_STDIN]  = (short)con;
+    sp->d[FD_STDOUT] = (short)con;
+    sp->d[FD_STDERR] = (short)err;
+    return 0;
+}
+
+// Every lookup goes through here, so a process that has not touched an
+// fd yet still gets its standard three rather than an empty table --
+// which matters because nothing calls fd_space_open() at spawn for the
+// legacy loader.
+static struct fd_space *space_get(uint64_t pml4) {
+    struct fd_space *sp = space_find(pml4);
+    if (sp) return sp;
+    if (fd_space_open(pml4) < 0) return NULL;
+    return space_find(pml4);
+}
+
+int fd_install(uint64_t pml4, int di) {
+    struct fd_space *sp = space_get(pml4);
+    if (!sp || di < 0) return -1;
+    for (int i = 0; i < FD_MAX; i++) {
+        if (sp->d[i] >= 0) continue;
+        sp->d[i] = (short)di;
+        return i;
+    }
+    return -1;
+}
+
+int fd_desc_index(uint64_t pml4, int fd) {
+    struct fd_space *sp = space_get(pml4);
+    if (!sp || fd < 0 || fd >= FD_MAX) return -1;
+    int di = sp->d[fd];
+    if (di < 0 || !fd_desc[di].refs) return -1;
+    return di;
+}
+
+struct open_file *fd_get(uint64_t pml4, int fd) {
+    int di = fd_desc_index(pml4, fd);
+    return di < 0 ? NULL : &fd_desc[di];
+}
+
+int fd_close(uint64_t pml4, int fd) {
+    struct fd_space *sp = space_get(pml4);
+    if (!sp || fd < 0 || fd >= FD_MAX) return -1;
+    int di = sp->d[fd];
+    if (di < 0) return -1;
+    sp->d[fd] = -1;
+    fd_desc_unref(di);
+    return 0;
+}
+
+int fd_dup2(uint64_t pml4, int oldfd, int newfd) {
+    struct fd_space *sp = space_get(pml4);
+    if (!sp || newfd < 0 || newfd >= FD_MAX) return -1;
+    int di = fd_desc_index(pml4, oldfd);
+    if (di < 0) return -1;
+    // POSIX: dup2(fd, fd) is a no-op and specifically does NOT close.
+    // Getting that wrong destroys the stream it was asked to preserve.
+    if (oldfd == newfd) return newfd;
+    if (sp->d[newfd] >= 0) fd_desc_unref(sp->d[newfd]);
+    fd_desc[di].refs++;
+    sp->d[newfd] = (short)di;
+    return newfd;
+}
+
+int fd_set_desc(uint64_t pml4, int fd, int di) {
+    struct fd_space *sp = space_get(pml4);
+    if (!sp || fd < 0 || fd >= FD_MAX) return -1;
+    if (di < 0 || di >= FD_DESC_MAX || !fd_desc[di].refs) return -1;
+    if (sp->d[fd] == di) return fd; // already there -- do not unref it
+    if (sp->d[fd] >= 0) fd_desc_unref(sp->d[fd]);
+    fd_desc[di].refs++;
+    sp->d[fd] = (short)di;
+    return fd;
+}
+
+void fd_inherit(uint64_t child, uint64_t parent) {
+    if (!child) return;
+    struct fd_space *ps = parent ? space_find(parent) : NULL;
+    if (fd_space_open(child) < 0) return;
+    if (!ps) return; // kernel-spawned: the standard three are right
+
+    struct fd_space *cs = space_find(child);
+    if (!cs) return;
+    for (int i = 0; i < FD_MAX; i++) {
+        if (cs->d[i] >= 0) { fd_desc_unref(cs->d[i]); cs->d[i] = -1; }
+        int di = ps->d[i];
+        if (di < 0 || !fd_desc[di].refs) continue;
+        fd_desc[di].refs++;
+        cs->d[i] = (short)di;
+    }
 }
 
 // Returns 1 if the caller was PARKED (its syscall has no return value
@@ -179,7 +318,7 @@ sys_do_read_console(uint64_t *regs, uint64_t pml4, uint64_t buf_ptr, uint64_t le
     return 0;
 }
 
-SYSCALL_HANDLER sys_do_write_console(uint64_t *regs, uint64_t pml4, int fd,
+SYSCALL_HANDLER sys_do_write_console(uint64_t *regs, uint64_t pml4, int kind,
                                       uint64_t buf_ptr, uint64_t len) {
     // len is capped at SYS_WRITE_MAX by the caller, so the
     // bounce buffer is always big enough. Copying first (rather
@@ -197,40 +336,43 @@ SYSCALL_HANDLER sys_do_write_console(uint64_t *regs, uint64_t pml4, int fd,
         regs[14] = (uint64_t)-1; // simplified error indicator (no errno yet)
     } else {
         const char *buf = kbuf;
-        // stderr goes to the KERNEL LOG, never to the pipe.
-        //
-        // Redirecting stdout is a request to capture a program's
-        // OUTPUT; folding its diagnostics into the same stream
-        // corrupts whatever the parent was trying to read, which
-        // is exactly why Unix has two descriptors rather than
-        // one. The kernel log is the right sink for the second:
-        // it reaches the serial console and `dmesg` no matter
-        // who spawned the process or where its stdout went, so a
-        // GUI client with no terminal attached can still say
-        // something a test (or a person) can read -- the same
-        // path strace's lines take.
-        if (fd == 2) {
+        // KLOG (stderr's default) goes to the KERNEL LOG. It is a
+        // separate DESCRIPTION rather than a test on the fd number,
+        // which is what lets a process redirect stdout without
+        // dragging its diagnostics along: folding the two corrupts
+        // whatever the parent was trying to read, and is exactly why
+        // Unix has two descriptors rather than one. The kernel log
+        // reaches the serial console and `dmesg` no matter where
+        // stdout went, so a GUI client with no terminal attached can
+        // still say something a test can read.
+        if (kind == FD_KIND_KLOG) {
             for (uint64_t i = 0; i < len; i++) klog_putc(buf[i]);
-            regs[14] = len;
         } else {
-            // A process spawned with SYS_SPAWN's stdout redirection
-            // writes into a pipe instead of the console. That is
-            // what lets a parent READ this output; without it every
-            // child's stdout goes to whatever sink the console has
-            // installed and the parent never sees it.
-            int out_pipe = scheduler_stdout_pipe(scheduler_current_pid());
-            if (out_pipe >= 0) {
-                regs[14] = (uint64_t)pipe_write(out_pipe, buf, (uint32_t)len);
-            } else {
-                for (uint64_t i = 0; i < len; i++) vga_putc(buf[i]);
-                regs[14] = len; // bytes written, back via RAX
-            }
+            for (uint64_t i = 0; i < len; i++) vga_putc(buf[i]);
         }
+        regs[14] = len; // bytes written, back via RAX
     }
     kfree(kbuf);
 }
 
-SYSCALL_HANDLER sys_do_write_file(uint64_t *regs, uint64_t pml4, int slot,
+// A write to a pipe WRITE end -- which after this change is simply
+// what fd 1 refers to in a process whose parent redirected it. There
+// is no per-process "stdout pipe" any more: the redirection lives in
+// the descriptor table, where dup2 can also put it.
+SYSCALL_HANDLER sys_do_write_pipe(uint64_t *regs, uint64_t pml4, int pipe_idx,
+                                   uint64_t buf_ptr, uint64_t len) {
+    char *kbuf = kmalloc(SYS_WRITE_MAX); // heap -- see sys_do_write_console()
+    if (!kbuf) { regs[14] = (uint64_t)-1; return; }
+    if (!vmm_copy_from_user(pml4, kbuf, buf_ptr, len)) {
+        klog_write("syscall: write() rejected -- invalid buffer pointer\n");
+        regs[14] = (uint64_t)-1;
+    } else {
+        regs[14] = (uint64_t)pipe_write(pipe_idx, kbuf, (uint32_t)len);
+    }
+    kfree(kbuf);
+}
+
+SYSCALL_HANDLER sys_do_write_file(uint64_t *regs, uint64_t pml4, struct open_file *f,
                                    uint64_t buf_ptr, uint64_t len) {
     // fs_write() (fs.c) works on NUL-terminated C strings, not
     // explicit-length buffers -- see syscall_abi.h's comment on
@@ -250,12 +392,12 @@ SYSCALL_HANDLER sys_do_write_file(uint64_t *regs, uint64_t pml4, int slot,
         return;
     }
     tmp[len] = '\0';
-    fs_write(fd_table[slot].file.name, tmp, 1); // 1 = append
+    fs_write(f->file.name, tmp, 1); // 1 = append
     regs[14] = len;
     kfree(tmp);
 }
 
-SYSCALL_HANDLER sys_do_read_file(uint64_t *regs, uint64_t pml4, int slot,
+SYSCALL_HANDLER sys_do_read_file(uint64_t *regs, uint64_t pml4, struct open_file *f,
                                   uint64_t buf_ptr, uint64_t len) {
     // fs_read_range() reports 0 both at EOF and on any error (fs.h says
     // so explicitly), which is exactly the behaviour wanted here -- a
@@ -263,17 +405,17 @@ SYSCALL_HANDLER sys_do_read_file(uint64_t *regs, uint64_t pml4, int slot,
     // fabricate data or fault. It fills a KERNEL buffer which is then
     // copied out; handing it the user pointer directly is what SMAP
     // forbids (vmm.h). len is capped at SYS_WRITE_MAX by the caller.
-    uint32_t off = fd_table[slot].file.offset;
+    uint32_t off = f->file.offset;
     char *kbuf = kmalloc(SYS_WRITE_MAX);   // heap -- see sys_do_write_console()
     if (!kbuf) { regs[14] = (uint64_t)-1; return; }
-    uint32_t n = fs_read_range(fd_table[slot].file.name, off, kbuf, (uint32_t)len);
+    uint32_t n = fs_read_range(f->file.name, off, kbuf, (uint32_t)len);
     if (!vmm_copy_to_user(pml4, buf_ptr, kbuf, n)) {
         klog_write("syscall: read() rejected -- invalid buffer pointer\n");
         regs[14] = (uint64_t)-1;
         kfree(kbuf);
         return;
     }
-    fd_table[slot].file.offset += n;
+    f->file.offset += n;
     regs[14] = n;
     kfree(kbuf);
 }
@@ -297,31 +439,43 @@ int sys_write(struct syscall_ctx *c) {
     // could never legally read that address itself.
     uint64_t pml4 = c->pml4;
 
-    if (fd == 1 || fd == 2) { // stdout / stderr
-        sys_do_write_console(c->regs, pml4, fd, buf_ptr, len);
-    } else { // a real file, opened via SYS_OPEN
-        int slot = fd - FD_BASE;
-        // kind check: a socket fd (SYS_SOCKET) reaching here means
-        // the caller used the wrong syscall -- SYS_SEND is the only
-        // way to write to a socket fd -- so it's rejected the same
-        // as any other bad fd, not silently treated as a file.
-        if (slot < 0 || slot >= FD_TABLE_SIZE || !fd_table[slot].used ||
-            fd_table[slot].kind != FD_KIND_FILE ||
-            fd_table[slot].owner_pml4 != pml4 || fd_table[slot].file.mode != FD_MODE_WRITE) {
-            klog_write("syscall: write() rejected -- bad fd\n");
+    // ROUTED ON THE DESCRIPTION'S KIND, not on the fd number. That is
+    // the whole point of the two-level table: after `dup2(pipe_w, 1)`
+    // fd 1 IS a pipe, and nothing here needs to know that a
+    // redirection happened. The `if (fd == 1)` this replaced could not
+    // express that, which is why redirection used to be a field on the
+    // process instead.
+    struct open_file *f = fd_get(pml4, fd);
+    if (!f) {
+        klog_write("syscall: write() rejected -- bad fd\n");
+        c->regs[14] = (uint64_t)-1;
+        return 0;
+    }
+
+    switch (f->kind) {
+    case FD_KIND_CONSOLE:
+    case FD_KIND_KLOG:
+        sys_do_write_console(c->regs, pml4, f->kind, buf_ptr, len);
+        break;
+    case FD_KIND_PIPE_W:
+        sys_do_write_pipe(c->regs, pml4, f->pipe.idx, buf_ptr, len);
+        break;
+    case FD_KIND_FILE:
+        if (f->file.mode != FD_MODE_WRITE) {
+            klog_write("syscall: write() rejected -- fd is read-only\n");
             c->regs[14] = (uint64_t)-1;
         } else {
-            // fs_write() (fs.c) works on NUL-terminated C strings,
-            // not explicit-length buffers -- see syscall_abi.h's
-            // comment on SYS_OPEN for why. Copy into a NUL-terminated
-            // scratch buffer (len is already capped at
-            // SYS_WRITE_MAX, so this is always big enough) before
-            // handing it to fs_write(), rather than changing fs.c
-            // itself this round. The copy was a manual loop through
-            // the user pointer; it is the same copy, done the one way
-            // SMAP permits (vmm.h).
-            sys_do_write_file(c->regs, pml4, slot, buf_ptr, len);
+            sys_do_write_file(c->regs, pml4, f, buf_ptr, len);
         }
+        break;
+    default:
+        // A socket fd (SYS_SEND is its only writer) or a pipe READ end
+        // reaching here means the caller used the wrong syscall or the
+        // wrong end. Rejected like any other bad fd rather than
+        // silently treated as something it is not.
+        klog_write("syscall: write() rejected -- wrong kind of fd\n");
+        c->regs[14] = (uint64_t)-1;
+        break;
     }
     return 0;
 }
@@ -334,87 +488,86 @@ int sys_read(struct syscall_ctx *c) {
 
     uint64_t pml4 = c->pml4;
 
-    if (fd == 0) { // stdin -- the physical console
-        if (!vmm_validate_user_range(pml4, buf_ptr, len)) {
-            klog_write("syscall: read() rejected -- invalid buffer pointer\n");
-            c->regs[14] = (uint64_t)-1;
-            return 0;
-        }
-        return sys_do_read_console(c->regs, pml4, buf_ptr, len);
-    }
-
-    // A pipe fd reads from the pipe, and BLOCKS when it is empty
-    // with a writer still alive. Handled before the file path
-    // because the two have nothing in common beyond the fd table.
-    struct open_file *pf = fd_lookup(fd, pml4);
-    if (pf && pf->kind == FD_KIND_PIPE_R) {
-        if (!vmm_validate_user_range(pml4, buf_ptr, len)) {
-            klog_write("syscall: read() rejected -- invalid buffer pointer\n");
-            c->regs[14] = (uint64_t)-1;
-            return 0;
-        }
-        // The one handler that can PARK its caller and still be a plain
-        // read: its return value is this function's.
-        return sys_do_read_pipe(c->regs, pml4, pf->pipe.idx, buf_ptr, len);
-    }
-
-    int slot = fd - FD_BASE;
-    // Same kind check as SYS_WRITE above -- SYS_RECV is the only
-    // way to read from a socket fd.
-    if (slot < 0 || slot >= FD_TABLE_SIZE || !fd_table[slot].used ||
-        fd_table[slot].kind != FD_KIND_FILE ||
-        fd_table[slot].owner_pml4 != pml4 || fd_table[slot].file.mode != FD_MODE_READ) {
+    // Routed on the description's KIND, exactly as SYS_WRITE is, so
+    // `dup2(pipe_r, 0)` makes fd 0 a pipe with nothing here changed.
+    struct open_file *f = fd_get(pml4, fd);
+    if (!f) {
         klog_write("syscall: read() rejected -- bad fd\n");
         c->regs[14] = (uint64_t)-1;
-    } else if (!vmm_validate_user_range(pml4, buf_ptr, len)) {
+        return 0;
+    }
+    if (!vmm_validate_user_range(pml4, buf_ptr, len)) {
         klog_write("syscall: read() rejected -- invalid buffer pointer\n");
         c->regs[14] = (uint64_t)-1;
-    } else {
-        // fs_read_range(), NOT fs_read(). This used to call
-        // fs_read(), which reads the WHOLE file into a kmalloc'd
-        // buffer, and then copied out just the `len` bytes at the
-        // fd's offset -- so streaming a file cost (file size) of
-        // disk reads per call. Fine while the only things ring 3
-        // ever opened were a few hundred bytes; quadratic the
-        // moment anything real showed up. /bin/lspci reading the
-        // 1.6MB pci.ids in 1KB chunks turned that into ~2.6GB of
-        // reads and took 35 seconds. With a range read it's ~0.6s.
-        //
-        // fs_read_range() reports 0 both at EOF and on any error
-        // (fs.h says so explicitly), which happens to be exactly
-        // the behaviour wanted here -- a file deleted mid-read by
-        // another shell should read as EOF, not fabricate data or
-        // fault.
-        //
-        // fs_read_range() fills a KERNEL buffer, which is then
-        // copied out -- it used to be handed the user pointer
-        // directly, which SMAP forbids (vmm.h). len is capped at
-        // SYS_WRITE_MAX above, so the bounce buffer always fits.
-        sys_do_read_file(c->regs, pml4, slot, buf_ptr, len);
+        return 0;
+    }
+
+    switch (f->kind) {
+    case FD_KIND_CONSOLE:
+        // The physical console. Blocks, claims the keyboard, and never
+        // reports EOF -- see sys_do_read_console().
+        return sys_do_read_console(c->regs, pml4, buf_ptr, len);
+
+    case FD_KIND_PIPE_R:
+        // Reads from the pipe, and BLOCKS when it is empty with a
+        // writer still alive. The one handler that can PARK its caller
+        // and still be a plain read: its return value is this
+        // function's.
+        return sys_do_read_pipe(c->regs, pml4, f->pipe.idx, buf_ptr, len);
+
+    case FD_KIND_FILE:
+        if (f->file.mode != FD_MODE_READ) {
+            klog_write("syscall: read() rejected -- fd is write-only\n");
+            c->regs[14] = (uint64_t)-1;
+            break;
+        }
+        // fs_read_range(), NOT fs_read(). fs_read() reads the WHOLE
+        // file into a kmalloc'd buffer, so streaming one cost (file
+        // size) of disk reads per call -- /bin/lspci reading the 1.6MB
+        // pci.ids in 1KB chunks turned that into ~2.6GB of reads and 35
+        // seconds. With a range read it is ~0.6s.
+        sys_do_read_file(c->regs, pml4, f, buf_ptr, len);
+        break;
+
+    default:
+        // A socket fd (SYS_RECV is its only reader), a pipe WRITE end,
+        // or the kernel-log description, which has no reader.
+        klog_write("syscall: read() rejected -- wrong kind of fd\n");
+        c->regs[14] = (uint64_t)-1;
+        break;
     }
     return 0;
 }
 
 int sys_close(struct syscall_ctx *c) {
-    // Kind-agnostic on purpose -- a socket fd (SYS_SOCKET) has no
-    // file-specific state to tear down, so the same "just clear
-    // `used`" logic that's always worked for file fds already works
-    // for socket fds too, with no changes needed here.
+    // Kind-agnostic, and refcount-aware: fd_close() drops the
+    // DESCRIPTOR, and the description behind it is torn down only when
+    // the last descriptor naming it goes. That is what makes the
+    // shell's save/restore dance safe --
+    //
+    //     saved = dup(1); dup2(f, 1); spawn(...); dup2(saved, 1); close(saved);
+    //
+    // -- because closing `saved` must not close the stream it named.
+    // Closing the LAST writer of a pipe is still what turns a blocked
+    // reader's wait into EOF; that now happens inside fd_desc_unref().
+    c->regs[14] = (uint64_t)fd_close(c->pml4, (int)c->a0);
+    return 0;
+}
+
+int sys_dup(struct syscall_ctx *c) {
+    // Lowest free descriptor naming the same description, as POSIX.
     uint64_t pml4 = c->pml4;
-    int fd = (int)c->a0;
-    int slot = fd - FD_BASE;
-    if (slot < 0 || slot >= FD_TABLE_SIZE || !fd_table[slot].used ||
-        fd_table[slot].owner_pml4 != pml4) {
-        c->regs[14] = (uint64_t)-1;
-    } else {
-        // A pipe end is reference counted, unlike a file or socket
-        // fd: closing the LAST writer is what turns a blocked
-        // reader's wait into EOF, so this cannot just clear `used`.
-        if (fd_table[slot].kind == FD_KIND_PIPE_R) pipe_close_reader(fd_table[slot].pipe.idx);
-        else if (fd_table[slot].kind == FD_KIND_PIPE_W) pipe_close_writer(fd_table[slot].pipe.idx);
-        fd_table[slot].used = 0;
-        c->regs[14] = 0;
-    }
+    int di = fd_desc_index(pml4, (int)c->a0);
+    if (di < 0) { c->regs[14] = (uint64_t)-1; return 0; }
+    fd_desc[di].refs++;
+    int fd = fd_install(pml4, di);
+    if (fd < 0) fd_desc_unref(di); // undo: the table was full
+    c->regs[14] = (uint64_t)fd;
+    return 0;
+}
+
+int sys_dup2(struct syscall_ctx *c) {
+    c->regs[14] = (uint64_t)fd_dup2(c->pml4, (int)c->a0, (int)c->a1);
     return 0;
 }
 
@@ -430,18 +583,14 @@ int sys_socket(struct syscall_ctx *c) {
         klog_write("syscall: socket() rejected -- nonzero domain/type (not supported yet)\n");
         c->regs[14] = (uint64_t)-1;
     } else {
-        int slot = -1;
-        for (int i = 0; i < FD_TABLE_SIZE; i++) {
-            if (!fd_table[i].used) { slot = i; break; }
-        }
-        if (slot < 0) {
+        int di = fd_desc_alloc(FD_KIND_SOCKET, -1);
+        int fd = di >= 0 ? fd_install(pml4, di) : -1;
+        if (fd < 0) {
+            if (di >= 0) fd_desc_unref(di);
             klog_write("syscall: socket() rejected -- fd table full\n");
             c->regs[14] = (uint64_t)-1;
         } else {
-            fd_table[slot].kind = FD_KIND_SOCKET;
-            fd_table[slot].used = 1;
-            fd_table[slot].owner_pml4 = pml4;
-            c->regs[14] = (uint64_t)(FD_BASE + slot);
+            c->regs[14] = (uint64_t)fd;
         }
     }
     return 0;
@@ -457,9 +606,8 @@ int sys_socket(struct syscall_ctx *c) {
 static int send_recv(struct syscall_ctx *c, int is_send) {
     uint64_t pml4 = c->pml4;
     int fd = (int)c->a0;
-    int slot = fd - FD_BASE;
-    if (slot < 0 || slot >= FD_TABLE_SIZE || !fd_table[slot].used ||
-        fd_table[slot].kind != FD_KIND_SOCKET || fd_table[slot].owner_pml4 != pml4) {
+    struct open_file *f = fd_get(pml4, fd);
+    if (!f || f->kind != FD_KIND_SOCKET) {
         klog_write(is_send ? "syscall: send() rejected -- bad fd\n"
                                     : "syscall: recv() rejected -- bad fd\n");
     } else {
@@ -480,13 +628,16 @@ int sys_pipe(struct syscall_ctx *c) {
         c->regs[14] = (uint64_t)-1;
     } else {
         int idx = pipe_create();
-        int rfd = idx >= 0 ? alloc_fd(pml4, FD_KIND_PIPE_R, idx) : -1;
-        int wfd = rfd >= 0 ? alloc_fd(pml4, FD_KIND_PIPE_W, idx) : -1;
-        if (idx < 0 || rfd < 0 || wfd < 0) {
+        int rd = idx >= 0 ? fd_desc_alloc(FD_KIND_PIPE_R, idx) : -1;
+        int wd = rd  >= 0 ? fd_desc_alloc(FD_KIND_PIPE_W, idx) : -1;
+        int rfd = wd >= 0 ? fd_install(pml4, rd) : -1;
+        int wfd = rfd >= 0 ? fd_install(pml4, wd) : -1;
+        if (idx < 0 || rd < 0 || wd < 0 || rfd < 0 || wfd < 0) {
             // Unwind rather than leak. A half-made pipe with only
             // one end is worse than none: the caller cannot tell,
             // and would block forever on the end that is missing.
-            if (rfd >= 0) fd_table[rfd - FD_BASE].used = 0;
+            if (rfd >= 0) fd_close(pml4, rfd); else if (rd >= 0) fd_desc_unref(rd);
+            if (wd >= 0 && wfd < 0) fd_desc_unref(wd);
             if (idx >= 0) { pipe_close_reader(idx); pipe_close_writer(idx); }
             klog_write("syscall: pipe() failed -- no free pipe or fd\n");
             c->regs[14] = (uint64_t)-1;
@@ -513,16 +664,21 @@ void fd_release_all(uint64_t pml4_phys) {
         g_console_owner_pml4 = 0;
         keyboard_claim_console(0);
     }
-    for (int i = 0; i < FD_TABLE_SIZE; i++) {
-        if (fd_table[i].used && fd_table[i].owner_pml4 == pml4_phys) {
-            // A pipe end must be RELEASED, not just forgotten: a
-            // process that dies holding the last write end is exactly
-            // how a reader learns there is no more output coming, and
-            // dropping the reference silently would leave that reader
-            // blocked forever on a dead writer.
-            if (fd_table[i].kind == FD_KIND_PIPE_R) pipe_close_reader(fd_table[i].pipe.idx);
-            else if (fd_table[i].kind == FD_KIND_PIPE_W) pipe_close_writer(fd_table[i].pipe.idx);
-            fd_table[i].used = 0;
+    // Every descriptor this space holds, dropped through the same
+    // refcounted path SYS_CLOSE uses. A pipe end must be RELEASED, not
+    // just forgotten: a process that dies holding the last write end is
+    // exactly how a reader learns there is no more output coming, and
+    // dropping the reference silently would leave that reader blocked
+    // forever on a dead writer. Sharing the unref path is also what
+    // makes an INHERITED fd safe -- the parent's copy survives its
+    // child dying.
+    struct fd_space *sp = space_find(pml4_phys);
+    if (sp) {
+        for (int i = 0; i < FD_MAX; i++) {
+            if (sp->d[i] < 0) continue;
+            fd_desc_unref(sp->d[i]);
+            sp->d[i] = -1;
         }
+        sp->pml4 = 0; // the table itself is reusable now
     }
 }

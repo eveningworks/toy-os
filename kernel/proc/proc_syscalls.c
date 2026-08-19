@@ -260,31 +260,31 @@ int sys_spawn(struct syscall_ctx *c) {
         const char *args = 0;
         if (c->a1 && vmm_copy_string_from_user(pml4, argbuf, c->a1, FS_PATH_MAX)) args = argbuf;
 
-        // Resolve the caller's write-end fd to a pipe index. An fd
-        // that isn't this process's own write end is REFUSED rather
-        // than quietly ignored: spawning with console output
-        // instead would leave the parent blocked on a pipe nothing
-        // will ever write to.
-        int stdout_pipe = -1;
+        // The child's stdout override, as a DESCRIPTION index rather
+        // than a pipe index: the child's fd 1 will simply name this
+        // same open file, which is the general mechanism now and not a
+        // pipe special case. An fd that isn't this process's own write
+        // end is REFUSED rather than quietly ignored -- spawning with
+        // console output instead would leave the parent blocked on a
+        // pipe nothing will ever write to.
+        int stdout_desc = -1;
         int ok = 1;
         int64_t wfd = (int64_t)c->a2;
         if (wfd >= 0) {
-            struct open_file *f = fd_lookup((int)wfd, pml4);
+            struct open_file *f = fd_get(pml4, (int)wfd);
             if (!f || f->kind != FD_KIND_PIPE_W) {
                 klog_write("syscall: spawn() rejected -- stdout fd isn't this process's pipe write end\n");
                 ok = 0;
             } else {
-                stdout_pipe = f->pipe.idx;
-                // The child becomes a SECOND writer; the parent
-                // keeps its own. Without this the parent closing
-                // its copy would signal EOF while the child is
-                // still producing output.
-                pipe_add_writer(stdout_pipe);
+                stdout_desc = fd_desc_index(pml4, (int)wfd);
             }
         }
         if (ok) {
-            int pid = scheduler_spawn_piped(path, args, stdout_pipe);
-            if (pid == 0 && stdout_pipe >= 0) pipe_close_writer(stdout_pipe); // undo
+            // No pipe_add_writer() here any more: the child taking a
+            // reference to the DESCRIPTION is what makes it a second
+            // writer, and fd_set_desc() does that. Doing both counted
+            // the child twice, so the pipe never reached EOF.
+            int pid = scheduler_spawn_piped(path, args, stdout_desc);
             spawn_rc = pid > 0 ? pid : -1;
         }
     }

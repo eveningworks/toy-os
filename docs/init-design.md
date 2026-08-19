@@ -390,8 +390,16 @@ the test suite.
   worth saying clearly because it is the intuitive assumption.
   `SYS_SPAWN` is already `posix_spawn()`-shaped, which is what an init
   needs. What `fork()` buys is inheriting the parent's address space
-  cheaply, which needs copy-on-write, which needs demand paging -- so
-  it depends on a milestone below this one, not above it. Windows has
+  cheaply, which needs copy-on-write. Demand paging LANDED on
+  2026-08-18, so the outstanding dependency is now specifically a
+  per-frame refcount in `pmm` -- `vmm_map_user_borrowed()` records
+  "somebody else frees this", not "count me". The conclusion is
+  unchanged; the reason stated here was stale.
+  Note the one thing fork+exec is really for -- letting the child run
+  `dup2` before `exec` -- is covered without it as of 2026-08-19: a
+  spawned child INHERITS its parent's descriptor table, so the parent
+  redirects itself around the spawn. That is why `posix_spawn()` exists
+  too. Windows has
   only `CreateProcess`, and POSIX added `posix_spawn()` precisely
   because fork+exec is awkward to implement well. It stays where the
   roadmap has it.

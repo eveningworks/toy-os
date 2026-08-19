@@ -82,9 +82,9 @@ and job control is what a terminal on that TTY makes possible.
 **Needs:** Signals & process control (signals) and TTY / virtual terminals (the process groups job control suspends and resumes).
 
 - [x] ~~A standalone `/bin/tosh`, so the ring-3 shell is a program and not only a library~~ DONE 2026-08-19
-- [ ] stdin redirection in `SYS_SPAWN` -- fd 0 exists now, so this is plumbing rather than a new concept
+- [x] ~~stdin redirection in `SYS_SPAWN`~~ DONE 2026-08-19 -- by INHERITANCE, so every fd carries over, not just 0
 - [x] ~~init starting `/bin/tosh` on the `text` target, in place of the kernel shell~~ DONE 2026-08-19
-- [ ] **`dup`/`dup2`-style fd plumbing**, so the shell can wire an arbitrary fd to 0/1/2 rather than the two
+- [x] ~~**`dup`/`dup2`-style fd plumbing**, so the shell can wire an arbitrary fd to 0/1/2~~ DONE 2026-08-19
 - [ ] A per-process cwd
 - [ ] An environment passed to a child
 - [ ] Ctrl-C
@@ -94,7 +94,7 @@ and job control is what a terminal on that TTY makes possible.
 - [ ] Line editing
 - [ ] Background jobs (`&`) and `fg`/`bg`/`jobs`
 - [ ] `|` pipes between two commands
-- [ ] `>`/`<`/`>>` redirection
+- [x] ~~`>`/`<`/`>>` redirection~~ DONE 2026-08-19 -- in `/bin/tosh` and the GUI Terminal
 - [ ] Background jobs (`&`)
 - [ ] `fg`/`bg`/`jobs`
 - [x] ~~Tab completion (commands, then paths)~~ done
@@ -154,7 +154,7 @@ Needs phase 2: copy-on-write is what `fork()` actually is, and it is the
 only expensive part of it.
 
 ### `fork()`/`exec()`-style process model
-**Needs:** Demand paging & shared memory (shared memory / copy-on-write is what makes `fork()` cheap rather than a full copy).
+**Needs:** a per-frame refcount in `pmm` -- copy-on-write is what makes `fork()` cheap, and demand paging (landed 2026-08-18) was only half of it.
 
 - [x] ~~Hardware floating point / SSE for ring-3 processes~~ done
 - [ ] A `kernel_fpu_begin()`/`kernel_fpu_end()` bracket
@@ -250,7 +250,7 @@ already be asked for.
 - [ ] Enable SSE (CR4.OSFXSR) and save FPU/SSE state per process
 - [ ] `time_t`: epoch seconds and a UTC offset stored alongside, next to today's broken-down local `struct rtc_time`
 - [ ] An `errno`-style return convention across every syscall
-- [ ] The unglamorous syscall surface: `lseek`, `dup`, `stat`, `getpid`, `chdir` and the rest
+- [ ] The unglamorous syscall surface: `lseek`, `stat`, `getpid`, `chdir` and the rest (`dup`/`dup2` landed 2026-08-19)
 - [ ] A per-process cwd (it lives in the shell today, not the process)
 - [ ] `crt0` + a real `_start`, replacing each binary's hand-written syscall stubs
 - [ ] Prove it: build and run a real ported program nobody here wrote
@@ -611,6 +611,7 @@ were found at all.
 - [ ] `klineedit_test.c`'s 12 oversized-frame warnings bury the frame budget's signal in that file
 - [x] ~~`gfxdemo_test`'s two scene-restore checks fail under heavy parallel load~~ DONE 2026-08-19 -- it polls for the log line now
 - [ ] `flake_hunt.py` does not reset `disk.img` between runs, so any rate involving the filesystem is contaminated
+- [ ] The ATA fault-injection KTESTs leak a failed write into the NEXT test -- measured 2 fails in 4 clean runs
 - [ ] Per-test timing, so a test that quietly becomes slow is visible
 - [ ] A `ktest -v` that reports each assertion, not just pass/fail
 - [ ] Tests for the boundary this kernel enforces by include path

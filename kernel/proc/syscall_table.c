@@ -77,6 +77,8 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_CRASHTEST]     = { "crashtest",     sys_crashtest,     { A_HEX } },
     [SYS_POWEROFF]      = { "poweroff",      sys_poweroff,      { A_INT } },
     [SYS_WIN_DEBUG]     = { "win_debug",     sys_win_debug,     { A_HEX } },
+    [SYS_DUP]           = { "dup",           sys_dup,           { A_FD } },
+    [SYS_DUP2]          = { "dup2",          sys_dup2,          { A_FD, A_FD } },
 };
 
 #define SYSCALL_TABLE_COUNT (sizeof SYSCALL_TABLE / sizeof SYSCALL_TABLE[0])

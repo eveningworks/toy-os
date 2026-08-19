@@ -63,6 +63,13 @@ int64_t sys_write(int fd, const void *buf, size_t len);
 int64_t sys_read(int fd, void *buf, size_t len);
 int     sys_open(const char *path, int flags); // SYS_O_* flags
 int     sys_close(int fd);
+
+// Descriptor plumbing. fds 0/1/2 are ordinary descriptors that merely
+// start out on the console and the kernel log, so they redirect like
+// any other -- see SYS_DUP2 in abi/syscall_abi.h for the shell dance
+// this enables without a fork().
+int     sys_dup(int fd);            // lowest free fd naming the same stream
+int     sys_dup2(int oldfd, int newfd); // newfd names it too; returns newfd
 int     sys_unlink(const char *path);
 int     sys_listdir(const char *path, struct dirent *out, int max);
 

@@ -11,7 +11,10 @@ on a `text` boot init starts `/bin/tosh` on the console instead and this
 one stands down, staying reachable as `sh <cmd>` over the serial debug
 console. `/bin/tosh` is a much smaller shell -- `ls`, `cat`, `cd`,
 `pwd`, `echo`, `help`, and anything on `PATH` -- and none of the
-kernel-introspection commands below exist there.
+kernel-introspection commands below exist there. It does have
+REDIRECTION, which this one does not: `cmd > file`, `cmd >> file`
+and `cmd < file`, with the operators space-separated. `|` between
+two commands is not built yet (`docs/roadmap.md`).
 
 ## How a command is resolved
 

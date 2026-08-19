@@ -90,7 +90,12 @@ static void bi_ls(struct tosh *sh, const char *arg) {
     char path[TOSH_PATH_MAX];
     resolve(sh, arg, path, TOSH_PATH_MAX);
 
-    struct dirent ents[32];
+    // STATIC, not a local: 32 dirents is ~2.6 KiB against
+    // USERLAND_CFLAGS' -Wframe-larger-than=2048 and a 16 KiB ring-3
+    // stack with ONE guard page below it -- the Stack Clash shape the
+    // WM's own dirent arrays were moved off the stack for. This shell
+    // is single-threaded and never lists two directories at once.
+    static struct dirent ents[32];
     int n = sys_listdir(path, ents, 32);
     if (n < 0) { emit(sh, "ls: cannot read "); emit(sh, path); emit(sh, "\n"); return; }
     for (int i = 0; i < n; i++) {
@@ -136,13 +141,168 @@ static void bi_cd(struct tosh *sh, const char *arg) {
     scopy(sh->cwd, path, TOSH_PATH_MAX);
 }
 
+// --- redirection -------------------------------------------------------
+//
+// `cmd > file`, `cmd >> file`, `cmd < file`, parsed off the END of the
+// line and applied by pointing THIS SHELL's own fd 0/1 at the file
+// around the spawn, then putting them back:
+//
+//     saved = dup(1); dup2(file, 1); spawn(...); dup2(saved, 1); close(saved);
+//
+// That is the dance fork() normally exists to allow, done without one
+// because a spawned child INHERITS this table (abi/syscall_abi.h's
+// SYS_SPAWN). The child needs no cooperation and runs no setup code.
+//
+// The parser is deliberately crude and matches this shell's existing
+// level: operators must be space-separated, so `ls >x` is not
+// recognised. A shell that quietly half-parses redirection is worse
+// than one that plainly does not, since the difference only shows up
+// as a file that was never written.
+struct tosh_redir {
+    int out_fd;     // the file opened for >, or -1
+    int in_fd;      // the file opened for <, or -1
+    int saved_out;  // this shell's own fd 1, parked
+    int saved_in;   // ... and fd 0
+};
+
+static void redir_init(struct tosh_redir *r) {
+    r->out_fd = r->in_fd = r->saved_out = r->saved_in = -1;
+}
+
+// Strips the operators off `line` IN PLACE and opens what they name.
+// Returns 0 on success, -1 if a file could not be opened -- in which
+// case nothing is left open and the command must not run, exactly as a
+// real shell refuses to run `catin < missing`.
+//
+// LEFT TO RIGHT, which is observable. The first version scanned for the
+// LAST operator and worked backwards, so `catin < missing > out`
+// created `out` before it ever looked at the input -- leaving a file
+// behind for a command that never ran. bash processes redirections in
+// order and stops at the first failure; so does this.
+#define TOSH_REDIR_MAX 4
+
+static int redir_parse(struct tosh *sh, char *line, struct tosh_redir *r) {
+    redir_init(r);
+
+    // Offsets, not pointers into a line being edited. Terminating each
+    // name in place overwrote the SPACE before the next operator, and
+    // the scan's own "an operator must follow a space" rule then
+    // skipped that operator -- so `catin < a > b` silently lost its
+    // `> b` and wrote to the console instead of the file.
+    struct { int op; int at, len; } found[TOSH_REDIR_MAX];
+    int n = 0;
+    int cut = -1; // where the command text ends
+
+    for (int i = 0; line[i]; i++) {
+        if (line[i] != '>' && line[i] != '<') continue;
+        if (i > 0 && line[i - 1] != ' ') continue; // must be its own word
+        int op = line[i] == '<' ? 3 : (line[i + 1] == '>' ? 2 : 1);
+        int at = i + (op == 2 ? 2 : 1);
+        while (line[at] == ' ') at++;
+        if (!line[at]) {
+            emit(sh, "tosh: expected a filename after the redirect\n");
+            return -1;
+        }
+        if (cut < 0) cut = i;
+
+        int end = at;
+        while (line[end] && line[end] != ' ') end++;
+        if (n < TOSH_REDIR_MAX) {
+            found[n].op = op; found[n].at = at; found[n].len = end - at; n++;
+        }
+        i = end - 1; // the for's i++ lands on the space, or the NUL
+    }
+
+    if (cut >= 0) {
+        line[cut] = '\0';
+        // Trim what the operator left behind: `ls / > f` would
+        // otherwise hand `ls` the argument "/ ", and a listdir of "/ "
+        // reports zero entries rather than an error -- so the redirect
+        // "worked" and produced an empty file.
+        while (cut > 0 && line[cut - 1] == ' ') line[--cut] = '\0';
+    }
+
+    for (int i = 0; i < n; i++) {
+        char name[TOSH_PATH_MAX];
+        int len = found[i].len;
+        if (len > TOSH_PATH_MAX - 1) len = TOSH_PATH_MAX - 1;
+        for (int j = 0; j < len; j++) name[j] = line[found[i].at + j];
+        name[len] = '\0';
+
+        char path[TOSH_PATH_MAX];
+        resolve(sh, name, path, TOSH_PATH_MAX);
+        int fd;
+        if (found[i].op == 3) {
+            fd = sys_open(path, 0);
+            if (fd < 0) { emit(sh, "tosh: cannot read "); emit(sh, path); emit(sh, "\n"); return -1; }
+            if (r->in_fd >= 0) sys_close(r->in_fd);
+            r->in_fd = fd;
+        } else {
+            // `>` truncates, `>>` does not. Everything this filesystem
+            // writes APPENDS (see SYS_WRITE), so the difference is
+            // entirely in the O_TRUNC at open time.
+            fd = sys_open(path, SYS_O_WRITE | SYS_O_CREAT | (found[i].op == 1 ? SYS_O_TRUNC : 0));
+            if (fd < 0) { emit(sh, "tosh: cannot write "); emit(sh, path); emit(sh, "\n"); return -1; }
+            if (r->out_fd >= 0) sys_close(r->out_fd);
+            r->out_fd = fd;
+        }
+    }
+    return 0;
+}
+
+// Points this shell's own 0/1 at the redirected files, remembering
+// where they pointed.
+static void redir_apply(struct tosh_redir *r) {
+    if (r->out_fd >= 0) { r->saved_out = sys_dup(1); sys_dup2(r->out_fd, 1); }
+    if (r->in_fd  >= 0) { r->saved_in  = sys_dup(0); sys_dup2(r->in_fd, 0); }
+}
+
+// ...and puts them back. Closing `saved_*` is safe because a
+// descriptor is refcounted: it drops this shell's second name for the
+// console, not the console.
+static void redir_undo(struct tosh_redir *r) {
+    if (r->saved_out >= 0) { sys_dup2(r->saved_out, 1); sys_close(r->saved_out); }
+    if (r->saved_in  >= 0) { sys_dup2(r->saved_in, 0);  sys_close(r->saved_in); }
+    if (r->out_fd >= 0) sys_close(r->out_fd);
+    if (r->in_fd  >= 0) sys_close(r->in_fd);
+    redir_init(r);
+}
+
+// A sink that writes to a descriptor, so a BUILTIN's output can be
+// redirected too. Builtins print through sh->out, which for the GUI
+// Terminal draws into a window rather than writing to fd 1 -- so
+// redirecting fd 1 alone would silently do nothing there. Swapping the
+// sink makes `ls > f` mean the same thing in both front ends.
+static void fd_sink(void *ctx, const char *text, int len) {
+    int fd = (int)(long)ctx;
+    sys_write(fd, text, (unsigned long)len);
+}
+
 // --- external programs -------------------------------------------------
 
 // Runs `path` with `args`, streaming its output through a pipe into
 // this shell's sink. THIS is the part that could not exist before
 // SYS_SPAWN/SYS_PIPE: a ring-3 program starting another and reading
 // what it prints.
-static int run_external(struct tosh *sh, const char *path, const char *args) {
+static int run_external(struct tosh *sh, const char *path, const char *args,
+                        int stdout_redirected) {
+    // WITH `>` IN EFFECT THERE IS NO PIPE AT ALL. Normally this shell
+    // captures the child's stdout so it can stream it into its own sink
+    // (the GUI Terminal draws it into a window, and has no fd to hand
+    // over). But when the line said `> file`, this shell has already
+    // pointed its OWN fd 1 at that file, and the child inherits it --
+    // so the right thing is to get out of the way and let the child
+    // write straight there. Piping and re-writing would copy every byte
+    // through this process for no reason, and would lose the child's
+    // output entirely if it outlived the read loop.
+    if (stdout_redirected) {
+        int pid = sys_spawn(path, args, -1); // -1 = inherit, i.e. the file
+        if (pid < 0) return -1;
+        int code = -1;
+        sys_waitpid(pid, &code);
+        return code;
+    }
+
     int fds[2];
     if (sys_pipe(fds) != 1) { emit(sh, "tosh: out of pipes\n"); return -1; }
 
@@ -199,7 +359,10 @@ static int find_program(const char *name, char *out, int cap) {
     return 0;
 }
 
-int tosh_run_line(struct tosh *sh, const char *line) {
+// The body, once redirection has been stripped off and applied. Split
+// out so every `return` below cannot forget to put fd 0/1 back -- the
+// one thing in this file that leaks a descriptor if it is missed.
+static int run_stripped(struct tosh *sh, const char *line, int stdout_redirected) {
     // Split into command and the rest. Everything after the first space
     // is handed to the program verbatim -- there is no quoting or
     // globbing here, and pretending otherwise would be worse than not
@@ -223,6 +386,7 @@ int tosh_run_line(struct tosh *sh, const char *line) {
     if (seq(cmd, "help")) {
         emit(sh, "tosh -- the toy-os shell, running in ring 3.\n"
                  "builtins: ls cat cd pwd echo help\n"
+                 "redirection: cmd > file, cmd >> file, cmd < file\n"
                  "anything else is spawned from /bin, /usr/bin or /tests\n");
         return 0;
     }
@@ -235,12 +399,45 @@ int tosh_run_line(struct tosh *sh, const char *line) {
         return -1;
     }
 
-    int code = run_external(sh, path, args);
+    int code = run_external(sh, path, args, stdout_redirected);
     sh->last_status = code;
     if (code != 0) {
         emit(sh, "[exit ");
         emit_int(sh, code);
         emit(sh, "]\n");
     }
+    return code;
+}
+
+int tosh_run_line(struct tosh *sh, const char *line) {
+    // A MUTABLE copy: redirection is stripped off the line in place,
+    // and the caller's buffer is not ours to edit (the GUI Terminal
+    // hands us its editor's live buffer).
+    char work[TOSH_PATH_MAX];
+    scopy(work, line, TOSH_PATH_MAX);
+
+    struct tosh_redir r;
+    if (redir_parse(sh, work, &r) < 0) {
+        // Nothing was opened and nothing runs -- `cat < missing` must
+        // not execute `cat` against the console.
+        redir_undo(&r);
+        sh->last_status = -1;
+        return -1;
+    }
+    redir_apply(&r);
+
+    // A builtin prints through sh->out, so redirecting fd 1 alone would
+    // miss it in the GUI Terminal, whose sink draws into a window.
+    // Swapping the sink is what makes `ls > f` mean one thing in both
+    // front ends.
+    tosh_out_fn saved_out = sh->out;
+    void *saved_ctx = sh->ctx;
+    if (r.out_fd >= 0) { sh->out = fd_sink; sh->ctx = (void *)(long)1; }
+
+    int code = run_stripped(sh, work, r.out_fd >= 0);
+
+    sh->out = saved_out;
+    sh->ctx = saved_ctx;
+    redir_undo(&r);
     return code;
 }

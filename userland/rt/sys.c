@@ -76,6 +76,10 @@ int sys_open(const char *path, int flags) {
 }
 
 int sys_close(int fd) { return (int)syscall1(SYS_CLOSE, (uint64_t)fd); }
+int sys_dup(int fd) { return (int)syscall1(SYS_DUP, (uint64_t)fd); }
+int sys_dup2(int oldfd, int newfd) {
+    return (int)syscall2(SYS_DUP2, (uint64_t)oldfd, (uint64_t)newfd);
+}
 
 int sys_unlink(const char *path) {
     return (int)syscall1(SYS_UNLINK, (uint64_t)(uintptr_t)path);

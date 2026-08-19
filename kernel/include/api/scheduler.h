@@ -152,9 +152,6 @@ int scheduler_spawn(const char *path, const char *args);
 // syscall.c.
 int scheduler_spawn_piped(const char *path, const char *args, int pipe_idx);
 
-// The pipe `pid`'s stdout is redirected into, or -1 for the console.
-// Called from SYS_WRITE to decide where fd 1 goes.
-int scheduler_stdout_pipe(int pid);
 
 // Whether `pid` names a live or reaped-pending process started by
 // scheduler_spawn*(). For SYS_WAITPID's validation.

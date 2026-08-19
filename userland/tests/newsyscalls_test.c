@@ -119,7 +119,9 @@ int main(void) {
         // file in it on any system that's ever set a timezone or font
         // size, but don't depend on that -- an empty result is also a
         // legitimate pass as long as the call itself succeeds (RAX >= 0).
-        struct dirent entries[SYS_LISTDIR_MAX];
+        // static: SYS_LISTDIR_MAX dirents overflow the ring-3 frame
+        // budget, and a big local array here steps toward the guard page.
+        static struct dirent entries[SYS_LISTDIR_MAX];
         int64_t count = sys_listdir("/etc", entries, SYS_LISTDIR_MAX);
         int ok = (count >= 0);
         if (ok) {

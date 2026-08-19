@@ -901,6 +901,26 @@ technical conventions below:
   objects can't be shared, but the source can, which is why the ring-3
   and kernel Calculators cannot disagree about arithmetic. Only
   freestanding files qualify.
+- **FILE DESCRIPTORS ARE TWO LEVELS, AND 0/1/2 ARE ORDINARY ENTRIES.**
+  A DESCRIPTION is what a stream is (file, pipe end, console, kernel
+  log) and is refcounted; a DESCRIPTOR is a number one address space
+  uses to name one, and `dup`/`dup2` copy the NAME. `sys_read`/
+  `sys_write` route on the description's KIND, never on the fd number --
+  which is what makes redirection expressible at all, and what deleted
+  the old `stdout_pipe` field on `struct sched_process`. Four things to
+  know. **The table is keyed by CR3, not by pid**: the legacy `run`
+  loader has an address space and no scheduler slot, and reading the
+  parent from `procs[current_index]` made its children inherit nothing
+  (use `vmm_current_pml4()`). **A spawned child INHERITS the whole
+  table**, which is why no `fork()` is needed for `>` and `<` -- the
+  shell redirects itself around the spawn, exactly what `posix_spawn()`
+  exists for. **CONSOLE and KLOG are different kinds** so stdout can be
+  redirected without dragging stderr along. And **when a refcount moves
+  down a layer, delete the old one**: `SYS_SPAWN` kept its
+  `pipe_add_writer()` after the child began taking a reference to the
+  description, counted the child twice, and the pipe never reached EOF.
+  `/bin/tosh` has `>`, `>>` and `<`; `/tests/catin` is the fixture that
+  reads stdin. See `docs/decisions/kernel.md`.
 - **One process can run another and read its output**: `SYS_PIPE` +
   `SYS_SPAWN` + `SYS_WAITPID`, wrapped by libsys. `userland/lib/tosh.c` is a
   shell built on them and `userland/gui/terminal.c` the ring-3 Terminal
