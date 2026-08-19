@@ -57,7 +57,28 @@
 // drive attached (very possible: this is a hobby OS, most runs won't
 // have a `-drive` argument), every wait_*() here needs to give up and
 // report failure rather than hang the boot forever.
-#define ATA_POLL_LIMIT 100000
+// Measured at roughly 12 ms of emulated time per 100,000 iterations.
+//
+// IT WAS 100000, AND THAT IS THE WHOLE BUDGET WHENEVER INTERRUPTS ARE
+// OFF -- which is most of the kernel test suite, and every syscall,
+// because `int 0x80` is an interrupt gate. The wall-clock bounds below
+// look like the real limits and are unreachable in exactly the cases
+// that matter: pit_ticks() cannot advance with interrupts disabled, so
+// the code falls back to this count.
+//
+// ~12 ms was enough on a developer machine and not on a shared CI
+// runner, where the same suite failed 15 tests with `dma write failed
+// (drive stayed busy, command never issued)` while passing locally.
+// That is not a slow drive; it is a stopwatch set wrong.
+//
+// virtqueue_poll() had the identical defect and the identical symptom,
+// which is what identified this one -- see kernel/drivers/virtio/
+// virtqueue.c, where the three attempts at getting this right are
+// written up. Its conclusion applies here: a poll COUNT is monotonic
+// and cannot lie, while a clock is exactly right until it is
+// catastrophically wrong, so the count is the bound and the clock is
+// only ever an additional early exit.
+#define ATA_POLL_LIMIT 20000000
 
 static int g_present = 0;
 // IDENTIFY word 169 bit 0 -- see ata_trim() at the end of this file.

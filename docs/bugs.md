@@ -38,7 +38,6 @@ it has exonerated one this session and convicted another.
 ## Intermittent -- a rate, not a verdict
 
 - [ ] `tools/ktest_run.py` reports the debug console never came up, on 5 boots in 9 -- PRE-EXISTING
-- [ ] ATA's `ATA_POLL_LIMIT` is a FIXED SPIN of ~12 ms whenever interrupts are off, which is most of the kernel test suite -- the same defect virtqueue_poll() had until it moved to a clocksource deadline; it is why CI reports `dma write failed (drive stayed busy)` on a slower runner while passing locally
 - [ ] ATA writes time out under host I/O pressure -- `dma write failed after 3 attempts (drive stayed busy, command never issued)`; measured 1 run in 3 locally on a clean disk, and it was CI's recurring red build until the filesystem moved to virtio-blk
 - [ ] `heap-debug`'s use-after-free check fails about 1 run in 15 -- PRE-EXISTING
 - [ ] `newsyscalls_test` fails intermittently in CI, and not locally
