@@ -54,6 +54,15 @@ The stage-2 half has its own control: in init.c's service_failed(), drop
 the `fast_failures >= SVC_MAX_FAST` give-up. The "given up on" check must
 go red while "the desktop survives its neighbour" stays green.
 
+THE ORDERING CHECKS ARE WRITTEN AGAINST THE ORDER THEY CREATE THE FILES
+IN, which is what makes them a test rather than a coincidence. Both
+groups of three demand the REVERSE of the order their descriptors were
+written, and they express it from opposite ends -- one group with
+`After=`, one with `Before=` -- so an init that ignored both keys would
+have to be handed a perfectly reversed directory listing, twice, to pass.
+Verified by making start_due() walk g_svc[] instead of g_order[]:
+exactly the two ordering checks go red and nothing else moves.
+
 That control already earned its keep once: the reap check originally
 asked for `>= 1` reap and stayed GREEN through it, because the shell's
 own `spawn` hands the fixture ITSELF to init, so one reap happens even
@@ -388,6 +397,105 @@ def main():
                   "oneshot exited cleanly -- not restarting it" in logs
                   and starts == 1,
                   f"{starts} start(s)")
+
+            # --- ORDERING: After=/Before= decide the spawn order -------
+            #
+            # THE CONTROL IS BUILT IN: both groups demand the REVERSE of
+            # the order their files are created in, expressed from
+            # opposite ends of the relation. An init that ignored the
+            # keys entirely starts them in whatever order listdir hands
+            # back, which would have to be perfectly reversed -- twice --
+            # to pass. Asserting an order that happens to match creation
+            # order would pass against a version that does nothing.
+            #
+            # /bin/hello exits 0 at once and Restart=no keeps it down, so
+            # these six leave nothing running behind them.
+            groups = [
+                # Written x, y, z; constrained to start z, y, x.
+                [("ordx", "After=ordy"),
+                 ("ordy", "After=ordz"),
+                 ("ordz", "")],
+                # Written p, q, r; constrained to start r, q, p --
+                # again the reverse of write order, so listdir order
+                # cannot satisfy it either. The key is carried by the
+                # LATER file each time, which is what expresses the same
+                # relation from its other end.
+                [("ordp", ""),
+                 ("ordq", "Before=ordp"),
+                 ("ordr", "Before=ordq")],
+            ]
+            for grp in groups:
+                for name, order_key in grp:
+                    vm.sh(f"write /etc/services.d/{name} Name={name}")
+                    vm.sh(f"append /etc/services.d/{name} Exec=/bin/hello")
+                    vm.sh(f"append /etc/services.d/{name} Restart=no")
+                    if order_key:
+                        vm.sh(f"append /etc/services.d/{name} {order_key}")
+
+            vm.sh("spawn /bin/hello")   # wake init, as above
+
+            wanted = ["ordz", "ordy", "ordx", "ordr", "ordq", "ordp"]
+            deadline = time.time() + 25
+            logs = ""
+            while time.time() < deadline:
+                logs = vm.sh("dmesg")
+                if all(f"init: started {n} as pid" in logs for n in wanted):
+                    break
+                time.sleep(0.5)
+
+            started = re.findall(r"init: started (ord\w+) as pid", logs)
+            def seq(names):
+                return [n for n in started if n in names]
+
+            g1 = seq({"ordx", "ordy", "ordz"})
+            g2 = seq({"ordp", "ordq", "ordr"})
+            check("After= starts the named service first",
+                  g1 == ["ordz", "ordy", "ordx"], " ".join(g1) or "none started")
+            check("Before= orders from the other end of the same relation",
+                  g2 == ["ordr", "ordq", "ordp"], " ".join(g2) or "none started")
+
+            # A cycle must cost one edge and nothing else. Both halves
+            # matter: an init that refused the cycle by refusing to start
+            # anything would satisfy "it said cycle" on its own, and a
+            # machine that starts nothing has no console left to fix
+            # itself from.
+            for a, b in (("ordm", "ordn"), ("ordn", "ordm")):
+                vm.sh(f"write /etc/services.d/{a} Name={a}")
+                vm.sh(f"append /etc/services.d/{a} Exec=/bin/hello")
+                vm.sh(f"append /etc/services.d/{a} Restart=no")
+                vm.sh(f"append /etc/services.d/{a} After={b}")
+            vm.sh("spawn /bin/hello")
+
+            deadline = time.time() + 25
+            while time.time() < deadline:
+                logs = vm.sh("dmesg")
+                if "ordering cycle" in logs:
+                    break
+                time.sleep(0.5)
+            cyc = re.findall(r"init: started (ordm|ordn) as pid", logs)
+            check("a cycle is reported rather than hung on",
+                  "init: ordering cycle" in logs)
+            check("...and both services in it still start",
+                  set(cyc) == {"ordm", "ordn"}, " ".join(cyc) or "none started")
+
+            # An unresolvable name is normal, not fatal: naming a service
+            # on the other boot target reaches here identically.
+            vm.sh("write /etc/services.d/ordu Name=ordu")
+            vm.sh("append /etc/services.d/ordu Exec=/bin/hello")
+            vm.sh("append /etc/services.d/ordu Restart=no")
+            vm.sh("append /etc/services.d/ordu After=nosuchservice")
+            vm.sh("spawn /bin/hello")
+
+            deadline = time.time() + 25
+            while time.time() < deadline:
+                logs = vm.sh("dmesg")
+                if "init: started ordu as pid" in logs:
+                    break
+                time.sleep(0.5)
+            check("an After= naming nothing loaded is reported and ignored",
+                  "names no loaded service" in logs
+                  and "init: started ordu as pid" in logs)
+
     finally:
         vm.run("stop", check_rc=False)
         if tmp:

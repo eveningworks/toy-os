@@ -272,8 +272,14 @@ manual steps to be worth automating:
   reaped, the process table returns to its baseline, `SYS_SLEEP` passes
   its own checks, the target it read matches the settings REGISTRY, the
   desktop is init's child, a service that cannot start is given up on
-  without taking the desktop with it, and killing the desktop brings it
-  back with no shell involved. **The slot count is the assertion** for
+  without taking the desktop with it, killing the desktop brings it back
+  with no shell involved, and `After=`/`Before=` decide the order the
+  services are spawned in. **The ordering checks are written against
+  the order they create the files in** -- both groups of three demand
+  the REVERSE of it, from opposite ends of the relation, so an init
+  ignoring the keys would have to be handed a perfectly reversed
+  directory listing twice to pass; a group whose expected order happened
+  to match creation order would be no test at all. **The slot count is the assertion** for
   the reaping half -- a zombie nobody reaps is invisible until the table
   fills up, and every individual process behaves perfectly either way.
   Two fixtures are load-bearing: `/tests/orphan_test` must be started

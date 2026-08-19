@@ -464,7 +464,7 @@ desktop or the filesystem -- most of it invalidates older advice above.**
   This also recovered ~127 MB on a 9 GiB disk that floor division had
   been wasting.
 - **There is a Live CD and a demo ISO**, both SEPARATE artifacts:
-  `make live-iso` / `make run-live`, `make demo-iso` / `make run-demo`.
+  `make live-iso` / `make run LIVE=1`, `make demo-iso` / `make run DEMO=1`.
   The ordinary ISO carries no GRUB module on purpose -- a 129 MiB one
   took the boot smoke test from 1.6s to 7.0s and turned CI red, because
   GRUB reads the whole module off the emulated CD before the kernel

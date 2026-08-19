@@ -127,7 +127,7 @@ Always sample a control that should NOT have changed too.
 
 **`ata nodma on|off`** forces the PIO disk path -- the fallback is
 otherwise unreachable, and it's also the PIO-vs-DMA comparison that has
-root-caused a real DMA bug before. **`make run-kvm`/`vm.py --kvm`**
+root-caused a real DMA bug before. **`make run KVM=1`/`vm.py --kvm`**
 exist now, but KVM is ~1.9x SLOWER for disk I/O, so never compare a
 throughput number across the two modes.
 

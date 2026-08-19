@@ -166,7 +166,7 @@ def cmd_start(args):
         "-m", str(getattr(args, "mem", 0) or 2048),
     ]
     if args.kvm:
-        # Matches `make run-kvm`'s flags, so what this measures is what
+        # Matches `make run KVM=1`'s flags, so what this measures is what
         # that target actually does. Off by default because /dev/kvm
         # isn't guaranteed to be readable (CI runners typically have no
         # nested virt at all) and every existing caller expects TCG.
@@ -382,7 +382,7 @@ def main():
                           "qemu64 reports as AMD and has no CPUID leaf 4, so this is "
                           "how you exercise CPU-model-dependent paths. Ignored with --kvm.")
     ap.add_argument("--kvm", action="store_true",
-                    help="use KVM acceleration (like `make run-kvm`) instead of TCG "
+                    help="use KVM acceleration (like `make run KVM=1`) instead of TCG "
                          "emulation; needs /dev/kvm. Timing numbers from the two modes "
                          "are not comparable -- see cmd_start().")
     sub = ap.add_subparsers(dest="cmd", required=True)

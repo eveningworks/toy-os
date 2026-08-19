@@ -246,7 +246,7 @@ is the one that stops a future change from quietly writing to a disk.
 
 - `df` and `about` name the device (`ram` vs `ata`).
 - The GRUB menu entry is worth having even with a disk present, which
-  means `make run` gains a `run-live` target.
+  means `make run` gains a `LIVE=1` axis.
 - `tools/run_release.sh` learns to boot the ISO alone, which is the
   whole point for someone downloading a release: today it needs the
   gzipped disk image as well.

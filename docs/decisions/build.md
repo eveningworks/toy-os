@@ -657,3 +657,48 @@ race and gives a different port every run, which makes re-driving a
 failed tool by hand harder than it needs to be; `-j4` always means
 slots 0-3.
 
+
+## Why there is exactly one `run` target
+
+`make run-kvm`, `run-virtio`, `run-virtio-kvm`, `run-vmware`,
+`run-audio`, `run-nographic`, `run-menu`, `run-live` and `run-demo` are
+gone (2026-08-19). There is `make run`, with every way to boot expressed
+as a variable on it, and `make debug`.
+
+This is the second half of a fix whose first half was already recorded
+here. Twelve near-identical `qemu-system-x86_64` lines had grown by
+MULTIPLICATION rather than addition -- adding `run-virtio` immediately
+forced `run-virtio-kvm`, and `run-virtio-audio` and `run-vmware-kvm` did
+not exist only because nobody had asked. Collapsing them into one recipe
+with `$(if ...)` axes fixed the duplicated COMMAND LINE and left the
+NAMES behind as thin aliases, on the grounds of muscle memory.
+
+That was the same problem one level up. A name per combination
+multiplies exactly as fast as a recipe per combination: the aliases
+covered five of the useful combinations and none of the rest, so
+`make run KVM=1 VIRTIO=1` -- the fast configuration, and the one worth
+typing most -- had no name and looked second-class beside targets that
+did. The aliases were also what the docs taught, so the flags stayed
+invisible.
+
+**`debug` survives because it is not one of the axes.** It freezes the
+CPU for a debugger; that is a different thing to do with the same
+command line, not a different way to configure the machine.
+
+**`LIVE=1` and `DEMO=1` were the interesting ones to fold in.** They are
+not pure command-line axes -- each selects a different ISO and has to
+BUILD it first -- so they change the prerequisite list as well. That
+works because a command-line variable is set before the Makefile is
+parsed, so `$(if $(LIVE),live-iso,iso)` expands correctly in a
+prerequisite. A target-specific variable would not have; this is
+precisely why they were targets in the first place.
+
+**`MENU=1` is the odd axis**, since GRUB's timeout is baked into
+`grub.cfg` at ISO build time rather than passed to QEMU. It derives
+`GRUB_TIMEOUT` (`?= $(if $(MENU),5,0)`), so the ISO is rebuilt with the
+menu and `GRUB_TIMEOUT=` still overrides both.
+
+Verified with `make -n run <FLAGS>` across every axis, which is the
+check worth repeating: it prints the command line without running it,
+and it is what previously caught a `run-virtio-kvm` that shipped with no
+`-enable-kvm` at all.

@@ -1307,9 +1307,19 @@ technical conventions below:
     is load-bearing: spawning first had the desktop doing its startup
     disk I/O while the console came up, and `ktest_run.py` timed out
     waiting for the prompt.
-  - **Nothing ORDERS the services** -- they all start at once, because
-    with one service an ordering graph would be a data structure
-    pretending to be a design.
+  - **`After=`/`Before=` ORDER the starts**, topologically sorted, one
+    relation written from either end as in systemd. Ordering is LAUNCH
+    ORDER, not availability: a service is started the instant
+    `SYS_SPAWN` returns a pid, because nothing here can say "I am ready"
+    yet (that is `Type=notify`, and it is a roadmap item). It is NOT a
+    dependency -- `After=` neither starts the named service nor declines
+    to start this one if it failed. A cycle drops an edge and says so,
+    an unresolvable name is ignored and says so, and neither can fail a
+    boot: a machine that starts nothing has no console left to fix
+    itself from. The sort is stable, so a service with no constraints
+    keeps the order its descriptor was read in. Names, not a priority
+    number, for this file's own reason -- a number needs renumbering the
+    day something is inserted between two others.
 
   And **`rm /etc/services.d/<name>` DISABLES a service without stopping
   it** -- init rescans when `fs_generation()` moves, so the running copy
@@ -1992,20 +2002,20 @@ make verify # the full pre-delivery gate: clean build + iso + boot test + ktest
             # (same as tools/preflight.sh, which also summarises `git status`)
 make run   # boots in QEMU with an SDL window (the user's machine, not usable headlessly)
 make live-iso   # toy-os-live.iso -- carries a TFS3 image as a GRUB module
-make run-live   # boots that with NO disk attached at all
 make demo-iso   # toy-os-demo.iso -- boots straight into a scripted tour
-make run-demo   # boots that; for showing the system with nobody typing
-make run-audio  # same as run, + a PulseAudio backend so the PC speaker (`beep`) is audible
-make run-kvm    # same as run, but KVM-accelerated (-enable-kvm -cpu host) instead of
-                # TCG emulation -- needs /dev/kvm readable
-make run-virtio # same as run, but the disk is on VIRTIO-BLK and there is NO IDE
-                # controller -- so the filesystem mounts only if the virtio path works
 make debug # boots frozen (-s -S) for real GDB debugging -- see "Debugging with GDB" below
 ```
 
-**EVERY `run*` TARGET IS ONE RECIPE WITH ONE AXIS VARIED, and the axes
-are VARIABLES -- so do not add a target for a new combination.** They
-were twelve near-identical `qemu-system-x86_64` lines, which grew by
+**THERE IS ONE RUN TARGET, AND EVERY WAY TO BOOT IS A VARIABLE ON IT --
+so do not add a target for a new combination.**
+
+```
+make run KVM=1 VIRTIO=1 VGA=vmware AUDIO=1 NOGRAPHIC=1 MENU=1 MEM=512
+make run LIVE=1    # the live ISO, no disk attached (implies live-iso)
+make run DEMO=1    # the scripted tour, no disk (implies demo-iso)
+```
+
+It was twelve near-identical `qemu-system-x86_64` lines, which grew by
 MULTIPLICATION rather than addition: adding `run-virtio` immediately
 forced `run-virtio-kvm`, and `run-virtio-audio` and `run-vmware-kvm`
 did not exist only because nobody had asked. This is the same shape
@@ -2013,21 +2023,29 @@ CLAUDE.md already legislates for C -- a dispatch chain over ~20
 branches should be a table -- which `tools/check_dispatch.py` enforces
 on `.c` files and cannot see in a Makefile.
 
-```
-make run KVM=1 VIRTIO=1 VGA=vmware AUDIO=1 NOGRAPHIC=1 MEM=512
-```
+**Collapsing the RECIPE was only half of it.** The first pass left the
+names behind as thin aliases (`run-kvm: KVM=1`), which is the same
+problem one level up: a name per combination multiplies exactly as fast
+as a recipe per combination, and the aliases were still the thing the
+docs taught. They are gone (2026-08-19). `debug` is the one relative
+that survives, because it is not a combination of the axes -- it
+freezes the CPU for a debugger.
 
-The named targets are thin aliases that set exactly these, kept for
-muscle memory and because the docs reference them. Two traps if you
-touch it. **Every definition is DEFERRED (`=`, never `:=`) and uses
-`$(if ...)` rather than `ifeq`** -- `ifeq` is evaluated once when the
-Makefile is read, so a target-specific `run-kvm: KVM=1` would be
-invisible to it, and the flag would silently not appear. And **a
-target-specific line takes ONE assignment**: `run-virtio-kvm: VIRTIO=1
-KVM=1` sets `VIRTIO` to the string `"1 KVM=1"` and never defines `KVM`
-at all, which shipped a `run-virtio-kvm` with no `-enable-kvm` until
-`make -n` was read. **Check a change here with `make -n <target>`,**
-which prints the command line without running it.
+Three traps if you touch it. **`LIVE` and `DEMO` change the
+PREREQUISITE as well as the command line**, which works only because a
+command-line variable is set before the Makefile is parsed, so `$(if)`
+expands correctly even in a prerequisite list -- a target-specific
+variable would not. **Every definition is DEFERRED (`=`, never `:=`)
+and uses `$(if ...)` rather than `ifeq`** -- `ifeq` is evaluated once
+when the Makefile is read, so a flag arriving later is invisible to it
+and silently does not appear. And **`MENU=1` works by deriving
+`GRUB_TIMEOUT`** (`GRUB_TIMEOUT ?= $(if $(MENU),5,0)`), because the
+timeout is baked into `grub.cfg` at ISO build time rather than passed
+to QEMU. **Check a change here with `make -n run <FLAGS>`,** which
+prints the command line without running it -- that is what caught a
+`run-virtio-kvm` shipping with no `-enable-kvm`, since a
+target-specific line takes ONE assignment and `VIRTIO=1 KVM=1` set
+`VIRTIO` to the string `"1 KVM=1"`.
 
 **Source discovery is recursive now** -- every `.c` under `kernel/` or
 `apps/` is compiled and every `.asm` under `kernel/` assembled, with

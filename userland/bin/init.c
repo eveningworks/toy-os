@@ -17,6 +17,22 @@
 //   grandchildren, and killing the desktop reparents them here instead
 //   of stranding them.
 //
+// ...and it starts them in a DECLARED ORDER. `After=` and `Before=`
+// name other services; init topologically sorts them and spawns in that
+// order. That is systemd's shape, and the reason to copy it rather than
+// SysV's `S20foo` priority number is this repo's own rule against facts
+// somebody else has to keep true -- a number needs renumbering the day a
+// service is inserted between two others, while a name does not.
+//
+// ORDERING IS LAUNCH ORDER, NOT AVAILABILITY. A service is "started"
+// the instant sys_spawn() returns a pid; init cannot observe more than
+// that, because nothing in this system can say "I am ready" yet. So
+// `After=` guarantees the spawn happened first and nothing else --
+// systemd's Type=simple, which is also its default, and the honest
+// description of what a fire-and-forget spawn can promise. A readiness
+// protocol (systemd's Type=notify / sd_notify) is a separate item on
+// docs/roadmap.md.
+//
 // WHY A DIRECTORY OF FILES rather than a compiled-in list: it is the
 // same call the Start menu already made when it stopped being a C table
 // and became /usr/wm/desktop. Adding a service is dropping a file, and
@@ -52,9 +68,19 @@
 #define SERVICES_DIR   "/etc/services.d"
 #define TARGET_SETTING "system.default_target"
 
-#define SVC_MAX        8
+// Sixteen, not eight: ordering only means anything with several
+// services, and the table is static rather than on the stack, so the
+// cap costs address space instead of the ring-3 guard page. Overflow
+// is refused with a line naming the descriptor, never silently.
+#define SVC_MAX        16
 #define SVC_NAME_MAX   24
 #define SVC_EXEC_MAX   64
+// After= and Before= are stored as the raw space-separated text and
+// resolved to indices only once the WHOLE directory has been scanned --
+// a descriptor may name a service whose file has not been read yet, so
+// resolving as we parse would depend on listdir order, which is exactly
+// what this feature exists to stop depending on.
+#define SVC_DEPS_MAX   64
 
 // A service that dies within this of starting counts as a FAST failure,
 // which is what a crash loop is made of. Anything longer ran, did
@@ -103,6 +129,8 @@ struct service {
     unsigned long long due_ms;  // when it may next be started
     int  fast_failures;
     int  started_once;
+    char after[SVC_DEPS_MAX];   // names that must be spawned before this
+    char before[SVC_DEPS_MAX];  // names this must be spawned before
     int  seen;         // survived the last scan
     int  stopped;      // exited cleanly and asked to stay down
     int  disabled;     // its descriptor is gone -- do not start it again
@@ -229,6 +257,15 @@ static void load_service(const char *file) {
         return;
     }
 
+    // Absent means unconstrained, which is the common case and must
+    // stay the terse one. Cleared rather than left alone, so removing
+    // the key from a descriptor and letting init rescan actually drops
+    // the constraint.
+    if (!etc_config_buf_get(&g_cfg, "After", s->after, sizeof s->after))
+        s->after[0] = '\0';
+    if (!etc_config_buf_get(&g_cfg, "Before", s->before, sizeof s->before))
+        s->before[0] = '\0';
+
     char restart[16];
     s->restart = SVC_RESTART_ON_FAILURE;
     if (etc_config_buf_get(&g_cfg, "Restart", restart, sizeof restart)) {
@@ -241,6 +278,123 @@ static void load_service(const char *file) {
             // policy is found the day the service dies and stays dead.
             logf1("init: %s has an unknown Restart=, using on-failure\n",
                   s->name);
+    }
+}
+
+// --- start order -----------------------------------------------------
+//
+// A topological sort over the After=/Before= edges, recomputed after
+// every scan and read by start_due(). Three properties, each a choice
+// rather than a consequence:
+//
+//   IT IS STABLE. Ties are broken by a service's index in g_svc[], i.e.
+//   the order its descriptor was read, so services with no ordering
+//   constraints between them keep exactly the behaviour they had before
+//   this existed. An unstable sort would let an unrelated edit reshuffle
+//   unrelated services, which is the failure mode that makes an
+//   ordering feature untrustworthy.
+//
+//   BOTH KEYS PRODUCE THE SAME EDGE. `After=B` on A and `Before=A` on B
+//   are the same constraint written from either end, exactly as in
+//   systemd -- which matters because the two ends are usually owned by
+//   different people: a service can order itself against one it must not
+//   have to edit.
+//
+//   A MALFORMED GRAPH NEVER FAILS A BOOT. A cycle logs a line and has
+//   one edge dropped; a name that matches no loaded service logs a line
+//   and is ignored. systemd does the former; the reason to do it here is
+//   harsher than tidiness -- a machine that starts nothing has no
+//   console left to fix itself from, so a typo in an ordering key must
+//   never be able to reach that state.
+
+static int g_order[SVC_MAX];
+static unsigned char g_edge[SVC_MAX][SVC_MAX]; // g_edge[a][b]: a spawns before b
+
+// The loaded service called `tok` (a token of `len` bytes, not
+// NUL-terminated), or -1.
+static int find_service_n(const char *tok, int len) {
+    for (int i = 0; i < g_svc_count; i++) {
+        if (k_strncmp(g_svc[i].name, tok, (size_t)len) == 0
+            && g_svc[i].name[len] == '\0')
+            return i;
+    }
+    return -1;
+}
+
+// Walks a space-separated name list and records one edge per name.
+// `self_first` is what the key means: Before= puts self first, After=
+// puts the named service first.
+static void add_edges(int self, const char *list, int self_first,
+                      const char *key) {
+    const char *p = list;
+    while (*p) {
+        while (*p == ' ' || *p == '\t' || *p == ',') p++;
+        const char *start = p;
+        while (*p && *p != ' ' && *p != '\t' && *p != ',') p++;
+        int len = (int)(p - start);
+        if (len <= 0) continue;
+
+        int other = find_service_n(start, len);
+        if (other < 0) {
+            // Not necessarily a typo: a service on the OTHER boot target
+            // was never loaded, and naming it is a perfectly reasonable
+            // thing for a descriptor to do. init cannot tell the two
+            // apart, so it says what it saw rather than guessing which.
+            char nm[SVC_NAME_MAX];
+            int n = len < (int)sizeof nm - 1 ? len : (int)sizeof nm - 1;
+            k_memcpy(nm, start, (size_t)n);
+            nm[n] = '\0';
+            snprintf(g_msg, sizeof g_msg,
+                     "init: %s: %s=%s names no loaded service, ignoring it\n",
+                     g_svc[self].name, key, nm);
+            sys_eprint(g_msg);
+            continue;
+        }
+        if (other == self) continue; // ordering against yourself is a no-op
+
+        if (self_first) g_edge[self][other] = 1;
+        else            g_edge[other][self] = 1;
+    }
+}
+
+// Recomputes g_order[]. Called once per scan, never per pass -- the
+// graph can only change when a descriptor does.
+static void build_order(void) {
+    k_memset(g_edge, 0, sizeof g_edge);
+    for (int i = 0; i < g_svc_count; i++) {
+        if (g_svc[i].after[0])  add_edges(i, g_svc[i].after, 0, "After");
+        if (g_svc[i].before[0]) add_edges(i, g_svc[i].before, 1, "Before");
+    }
+
+    // Kahn's algorithm, scanning from the front each round so the first
+    // eligible service always wins -- that is what makes it stable.
+    unsigned char done[SVC_MAX];
+    k_memset(done, 0, sizeof done);
+
+    for (int out = 0; out < g_svc_count; out++) {
+        int pick = -1;
+        for (int i = 0; i < g_svc_count && pick < 0; i++) {
+            if (done[i]) continue;
+            int blocked = 0;
+            for (int j = 0; j < g_svc_count; j++)
+                if (!done[j] && g_edge[j][i]) { blocked = 1; break; }
+            if (!blocked) pick = i;
+        }
+
+        if (pick < 0) {
+            // Everything left is inside a cycle. Take the lowest index,
+            // which drops its incoming edges -- systemd's "breaking
+            // ordering cycle by deleting job". Named loudly: an ordering
+            // that is silently not honoured is worse than none, because
+            // the descriptor still says it was asked for.
+            for (int i = 0; i < g_svc_count; i++)
+                if (!done[i]) { pick = i; break; }
+            logf1("init: ordering cycle -- starting %s anyway\n",
+                  g_svc[pick].name);
+        }
+
+        done[pick] = 1;
+        g_order[out] = pick;
     }
 }
 
@@ -279,6 +433,8 @@ static void load_services(int announce) {
         sv->disabled = 1;
         logf1("init: %s -- descriptor gone, will not restart it\n", sv->name);
     }
+
+    build_order();
 }
 
 // Has anything on the filesystem changed since the last look? One
@@ -382,8 +538,12 @@ static int start_due(void) {
     unsigned long long now = now_ms();
     int pending = 0;
 
-    for (int i = 0; i < g_svc_count; i++) {
-        struct service *s = &g_svc[i];
+    for (int oi = 0; oi < g_svc_count; oi++) {
+        // g_order[] is the topological order, not g_svc[]'s. A service
+        // waiting on a backoff does NOT hold up the ones after it: this
+        // is launch ORDER, not a barrier, and blocking here would let a
+        // crash-looping service keep the rest of the machine down.
+        struct service *s = &g_svc[g_order[oi]];
         // `Restart=no` still gets its ONE start -- the key says what
         // happens when it EXITS, not whether it runs at all. Reading it
         // as "do not start" is the obvious misreading and would leave a

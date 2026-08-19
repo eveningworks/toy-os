@@ -14,6 +14,8 @@ so there is no second format to maintain.
 | `Exec` | yes | An absolute path to a `/bin` binary. No arguments, no shell -- `SYS_SPAWN` takes a path. |
 | `Target` | no | `text`, `graphical`, or absent. Absent means **every** target. |
 | `Restart` | no | `on-failure` (default), `always`, or `no`. |
+| `After` | no | Space-separated service **names** that must be spawned first. |
+| `Before` | no | Space-separated service names this one must be spawned before. |
 
 `Restart=on-failure` (the default) restarts the service if it CRASHED or
 was killed, and leaves it down if it exited cleanly -- a process that
@@ -36,6 +38,60 @@ from.
 `.gitignore` excludes -- a file written straight into it exists only on
 the machine that made it. The Makefile's `seed` target stages this
 directory to `/etc/services.d`.
+
+## `After=` and `Before=` order the STARTS
+
+init topologically sorts the services it loaded and spawns them in that
+order. The two keys are the same constraint written from either end --
+`After=b` on `a` and `Before=a` on `b` mean exactly the same thing, as in
+systemd -- which matters because the two ends are usually owned by
+different people: a service can order itself against one whose file it
+must not have to edit.
+
+They name a service's `Name`, not its filename, for the same reason the
+rescan matches on `Name`: a file can be renamed without the thing it
+describes changing identity.
+
+    Name=toywm
+    Exec=/bin/wm/system/toywm
+    After=udevd dbus
+
+**ORDERING IS LAUNCH ORDER, NOT AVAILABILITY.** A service is "started"
+the instant `SYS_SPAWN` returns a pid -- nothing in this system can yet
+say "I am ready", so that is the most init can observe. `After=` promises
+the spawn happened first and nothing more. That is systemd's
+`Type=simple` (also its default); a readiness protocol
+(`Type=notify`/`sd_notify`) is a separate roadmap item, and until it
+exists a service that genuinely needs another one to be USABLE has to
+retry rather than assume.
+
+A backoff does not become a barrier. A service waiting to be restarted
+does not hold up the ones ordered after it -- otherwise a crash-looping
+service would keep the rest of the machine down, which is the opposite of
+what supervision is for.
+
+**Nothing here is a dependency.** `After=` does not start the named
+service, and does not stop this one from starting if the named one failed.
+That is systemd's split between ordering (`After=`) and requirement
+(`Requires=`), and it is worth keeping separate: there is exactly one
+thing to say per key.
+
+### A malformed graph never fails a boot
+
+A name matching no loaded service is ignored with a line saying so. That
+is not necessarily a typo -- naming a service that lives on the *other*
+boot target is perfectly reasonable, and init cannot tell the two apart,
+so it reports what it saw rather than guessing.
+
+A cycle is broken by dropping one edge, and says which service it started
+anyway. systemd does the same; the reason to do it here is harsher than
+tidiness, and it is the same reason the crash-loop give-up exists -- a
+machine that starts nothing has no console left to fix itself from, so a
+typo in an ordering key must never be able to reach that state.
+
+Services with no constraints between them keep the order their
+descriptors were read in: the sort is stable, so adding an ordering key
+to one service cannot reshuffle unrelated ones.
 
 ## Removing a descriptor DISABLES the service
 

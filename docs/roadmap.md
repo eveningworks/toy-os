@@ -30,7 +30,8 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~pid 1 refuses to be killed~~ DONE 2026-08-18
 - [x] ~~A TARGET setting (`text` / `graphical`) deciding what init starts~~ DONE 2026-08-18
 - [x] ~~A service description format in `/etc` (name, command, restart policy)~~ DONE 2026-08-18
-- [ ] Start services at boot in a DECLARED ORDER -- they start, but nothing orders them
+- [x] ~~Start services at boot in a DECLARED ORDER~~ DONE 2026-08-19 -- `After=`/`Before=`, topologically sorted
+- [ ] A readiness signal, so `After=` can mean "usable" rather than "spawned" (systemd's `Type=notify`)
 - [x] ~~Restart a service that exits unexpectedly, with a backoff so a crash loop doesn't spin the machine~~ DONE 2026-08-18
 - [ ] `service start|stop|status|list` as a shell command -- `rm`ing a descriptor is the only lever today
 - [x] ~~Reap orphans -- init adopts them, which is half of why it exists~~ DONE 2026-08-18

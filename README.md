@@ -157,15 +157,27 @@ scrolls the console history, including the boot log.
 make            # kernel.bin + the userland ELF binaries
 make iso        # + toy-os.iso, seeding disk.img
 make run        # build + boot in QEMU with a graphical window
-make run-kvm    # same, KVM-accelerated instead of emulated (needs /dev/kvm)
-make run-menu   # same, with the GRUB boot menu visible
-make run-nographic  # serial console only -- use this over SSH
-make run-virtio # disk on virtio-blk with NO IDE controller at all
 make live-iso   # a Live CD that boots with no disk attached at all
 make demo-iso   # boots straight into a scripted tour
 make debug      # boot frozen (-s -S) for GDB
 make test       # boot headless, run the in-kernel test suite
 make verify     # full gate: clean build + iso + boot test + test suite
+```
+
+There is **one run target**, and everything that would otherwise be its
+own is a variable on it — so any combination works without a target per
+combination:
+
+```bash
+make run KVM=1        # KVM-accelerated instead of emulated (needs /dev/kvm)
+make run VIRTIO=1     # disk on virtio-blk, with NO IDE controller at all
+make run NOGRAPHIC=1  # serial console only -- use this over SSH
+make run MENU=1       # show GRUB's boot menu instead of booting straight through
+make run VGA=vmware   # the adapter with a hardware mouse cursor
+make run AUDIO=1      # PC speaker wired to sound, so `beep` is audible
+make run LIVE=1       # the Live CD, with no disk attached
+make run DEMO=1       # the scripted tour
+make run KVM=1 VIRTIO=1   # ...or any mix
 ```
 
 Every `run*` target is **one recipe with a single axis varied**, and the
@@ -193,10 +205,10 @@ lists them.
 | `grub-mkrescue not found` | Install GRUB's rescue tools (`grub-common` on Debian, `grub2-tools` on Fedora). The build looks for both `grub-mkrescue` and `grub2-mkrescue`. |
 | `grub-mkrescue` fails on *"cannot find `xorriso`"* or mtools | Install `xorriso` **and** `mtools`; it needs both even for a BIOS-only image. |
 | ISO builds but QEMU says *"no bootable device"* | The BIOS modules package is missing — `grub-pc-bin` (Debian), `grub2-pc-modules` (Fedora), `grub2-i386-pc` (openSUSE), `grub-bios` (Alpine). |
-| No window appears (e.g. over SSH) | `make run-nographic`. |
+| No window appears (e.g. over SSH) | `make run NOGRAPHIC=1`. |
 | The mouse doesn't move in QEMU | Don't add `-device usb-tablet`/`usb-mouse`. This kernel's mouse driver is PS/2 only, and an explicit USB pointer device makes QEMU route motion there instead. |
-| Everything is very slow | `make run` emulates the CPU; `make run-kvm` runs it natively. That only helps compute-bound code — *ATA* disk I/O measures ~1.9× **slower** under KVM, since each port-I/O instruction becomes a VM exit. That penalty is ATA's, not KVM's: `make run KVM=1 VIRTIO=1` puts the disk on virtio-blk and measures ~10× ATA's write throughput, because a virtqueue barely touches port I/O at all. |
-| Drawing is slow on real hardware but fine in QEMU | Reproduce it with `make run-kvm`. Plain `make run` **ignores guest memory types entirely**, so a write-combined framebuffer behaves like cached RAM and a whole class of graphics bug is invisible. `gfxbench` reports which mechanisms are live. |
+| Everything is very slow | `make run` emulates the CPU; `make run KVM=1` runs it natively. That only helps compute-bound code — *ATA* disk I/O measures ~1.9× **slower** under KVM, since each port-I/O instruction becomes a VM exit. That penalty is ATA's, not KVM's: `make run KVM=1 VIRTIO=1` puts the disk on virtio-blk and measures ~10× ATA's write throughput, because a virtqueue barely touches port I/O at all. |
+| Drawing is slow on real hardware but fine in QEMU | Reproduce it with `make run KVM=1`. Plain `make run` **ignores guest memory types entirely**, so a write-combined framebuffer behaves like cached RAM and a whole class of graphics bug is invisible. `gfxbench` reports which mechanisms are live. |
 | `disk.img` is 9 GB | It's a *sparse* file — it costs only what is actually written. `make clean-disk` wipes it. |
 
 For breakpoint debugging, `make debug` boots frozen against QEMU's own

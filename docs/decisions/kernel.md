@@ -1722,7 +1722,7 @@ before painting over it, which is another read per blink. So the GUI got
 faster (double-buffered, writes only) while the CLI got slower, and the
 symptom was a scanline you could watch travel down a real display.
 
-Measured with `gfxbench 20` under `make run-kvm`, same build, the only
+Measured with `gfxbench 20` under `make run KVM=1`, same build, the only
 difference being whether the console had a back buffer:
 
 | | ms per scrolled text line |
@@ -1752,7 +1752,7 @@ with it, in the silent direction.
 
 Why this was invisible for so long: plain QEMU's TCG ignores guest
 memory types entirely, so both paths are equally fast under `make run`
-and every test in this repo. `make run-kvm` honours them, which is what
+and every test in this repo. `make run KVM=1` honours them, which is what
 made it reproducible at all -- and is the reason `gfxbench` reports
 which mode is live rather than just a number. See `kernel/drivers/vga.c`'s
 double-buffering comment and `kernel/drivers/gfx_test.c`'s scroll KTESTs,
@@ -3145,3 +3145,72 @@ silently, everywhere, at once. Their polarity flip is caller-visible and
 belongs in its own change; the roadmap carries it. This is the same rule
 the plan set for itself: this change alters only what a syscall
 REPORTS, never what it does.
+
+## Why service ordering is `After=`/`Before=` and not a priority number
+
+Services in `/etc/services.d` used to start in whatever order
+`sys_listdir()` handed them back. Two candidates for fixing that.
+
+**SysV's shape: a number.** `rc5.d/S20foo` -- a two-digit priority in
+the name, a total order, no graph and no cycles possible. It is by far
+the smaller change: one integer per descriptor, one sort.
+
+**systemd's shape: names.** `After=`/`Before=` naming other services,
+topologically sorted. Chosen, and the deciding argument is this repo's
+own rule against facts somebody else has to keep true. A priority
+number is exactly that shape: inserting a service between two existing
+ones means renumbering them, and every number is only correct while
+nobody has looked away. A name does not go stale -- it is the same
+reason milestones here are titles rather than numbers, and the same
+reason the changelog's build numbers were deleted.
+
+The two keys are one relation written from either end, as in systemd.
+That is not redundancy: the two ends are usually owned by different
+people, so a service must be able to order itself against one whose
+descriptor it has no business editing.
+
+**It is ORDERING, not dependency.** `After=` does not start the named
+service and does not stop this one from starting if the named one
+failed. systemd separates ordering (`After=`) from requirement
+(`Requires=`) for the same reason, and Windows' SCM conflates them in
+`DependOnService`. Keeping them apart means each key says exactly one
+thing; a `Requires=` can be added later without changing what `After=`
+means.
+
+**And ordering is LAUNCH ORDER, not availability -- which is the honest
+limit.** A service is "started" the instant `SYS_SPAWN` returns a pid,
+because nothing in this system can yet say "I am ready". So `After=`
+promises the spawn happened first and nothing more. That is systemd's
+`Type=simple`, which is also its default, so the weaker guarantee is
+the common case there too. The stronger one (`Type=notify`/`sd_notify`)
+needs an IPC path and a timeout policy and is a roadmap item; until it
+exists, a service that needs another to be USABLE has to retry rather
+than assume. Saying so in `data/etc/services.d/README.md` matters more
+than the feature does -- an ordering key that quietly means less than a
+reader assumes is worse than no key.
+
+**A malformed graph never fails a boot.** A cycle drops one edge and
+logs which service was started anyway; a name matching nothing loaded is
+ignored with a line. systemd breaks cycles the same way. The reason here
+is harsher than tidiness and is the same one behind the crash-loop
+give-up: a machine that starts nothing has no console left to fix itself
+from, so a typo in an ordering key must not be able to reach that state.
+An unresolved name is not even necessarily a typo -- naming a service
+that lives on the *other* boot target reaches that path identically, and
+init cannot tell the two apart, so it reports what it saw rather than
+guessing which.
+
+**The sort is stable**, ties broken by the order descriptors were read.
+Services with no constraints between them keep the behaviour they had
+before any of this existed; an unstable sort would let adding a key to
+one service reshuffle unrelated ones, which is what makes an ordering
+feature untrustworthy.
+
+`tools/init_test.py` covers it, and the shape of the test is the part
+worth keeping: both groups of three demand the REVERSE of the order
+their files are created in, expressed from opposite ends of the
+relation. An init that ignored the keys would have to be handed a
+perfectly reversed directory listing, twice, to pass -- and the control
+run (`start_due()` walking `g_svc[]` instead of `g_order[]`) confirmed
+listdir order really is creation order, so the assertion is not a
+coincidence.

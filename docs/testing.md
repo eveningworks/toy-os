@@ -43,7 +43,7 @@ python3 tools/vm.py exec "fsck" "df"     # real shell output, as text
 python3 tools/vm.py shot look.png        # pixels when you want them
 python3 tools/vm.py stop
 python3 tools/vm.py run "ktest"          # start+exec+stop in one
-python3 tools/vm.py --kvm run "stress 150"   # same, KVM-accelerated (see `make run-kvm`)
+python3 tools/vm.py --kvm run "stress 150"   # same, KVM-accelerated (see `make run KVM=1`)
 python3 tools/vm.py --cpu Skylake-Client run "lscpu"  # a specific QEMU CPU model
 python3 tools/vm.py --vga vmware start   # the MODESETTING driver (vmsvga); `std` has none
 python3 tools/vm.py --instance 2 --disk /tmp/b.img start  # a second VM, alongside
@@ -120,7 +120,7 @@ whether a button is drawn in the right place.
 
 ## What the emulator does and does not model
 
-**`make run-kvm` is not a straight speedup, and throughput numbers from
+**`make run KVM=1` is not a straight speedup, and throughput numbers from
 the two modes are not comparable.** Measured on the same disk image,
 same host, `stress 150`: TCG 22.8 MB/s write / 29.2 MB/s read, KVM
 12.1 / 18.7 -- KVM about 1.9x *slower* for disk I/O. Guest code that's
@@ -182,7 +182,7 @@ HONOURS GUEST MEMORY TYPES and TCG does not.** Under `make run` a
 write-combined or uncached framebuffer behaves exactly like cached RAM,
 so an entire class of graphics performance bug cannot happen there --
 which is what made the console's write-combined scroll regression
-reproduce on the maintainer's laptop and under `make run-kvm`, and
+reproduce on the maintainer's laptop and under `make run KVM=1`, and
 nowhere else. If a report is "slow only on real hardware", try
 `python3 tools/vm.py --kvm run "gfxbench 20"` BEFORE concluding it is
 untestable here; a previous session recorded exactly that conclusion and
@@ -209,7 +209,7 @@ this project shipped: `dma_issue()` cleared `g_dma_irq_fired` AFTER the
 command byte, an interrupt landing in that window was wiped, and the
 waiter then burned the whole 5s `DMA_WAIT_TICKS` budget before a retry
 that succeeded instantly. The desktop froze for 2-5 seconds per disk
-read under `make run-kvm` and was perfect under `make run`.
+read under `make run KVM=1` and was perfect under `make run`.
 
 Generalise it: **every automated test in this repo runs TCG**, so a
 green suite says nothing about anything whose behaviour depends on how
@@ -218,7 +218,7 @@ environment cannot reproduce, try `--kvm` before doubting the report --
 and note the report may be of a symptom (a freeze) whose cause is a race,
 not slowness. `tools/kvm_soak.py` is the standing check for this.
 
-**But `make run-kvm` DOES honour guest memory types, and that is the one
+**But `make run KVM=1` DOES honour guest memory types, and that is the one
 way to reproduce this class of bug locally.** TCG ignores PAT entirely,
 so a write-combined framebuffer behaves exactly like a cached one under
 plain `make run`; KVM does not. That distinction is what turned "slow

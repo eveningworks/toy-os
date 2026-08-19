@@ -32,7 +32,7 @@ position. Pick names that cannot be substrings of each other.
 word to the `multiboot2` line, then `Ctrl-X` to boot.
 
 Note `grub.cfg` sets `timeout=0`, so no menu is drawn by default: hold
-**Shift** during boot to force it, or build with `make run-menu`, which
+**Shift** during boot to force it, or build with `make run MENU=1`, which
 sets a non-zero `GRUB_TIMEOUT`.
 
 **Permanently** — add the word to the `multiboot2` line in `grub.cfg`

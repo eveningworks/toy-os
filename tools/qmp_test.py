@@ -172,7 +172,7 @@ def launch_qemu_cmd(iso="toy-os.iso", disk="disk.img", serial_log="serial.log",
     # unlucky rather than the one that caused it. See tools/port_guard.py.
     port_guard.assert_ports_free(qmp_port, vnc_display)
 
-    # KVM instead of TCG, matching `make run-kvm`'s flags so what a
+    # KVM instead of TCG, matching `make run KVM=1`'s flags so what a
     # caller measures is what that target does. OPT-IN, never the
     # default: every automated test here runs TCG, and the TCG/KVM
     # difference is load-bearing rather than incidental -- KVM is where

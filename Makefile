@@ -3,8 +3,9 @@
 # so `make iso` just works on those distributions.
 # Seconds GRUB waits on its menu before booting the default entry. 0
 # (the default) draws no menu at all and boots instantly, which is what
-# every automated path wants -- `make run-menu` overrides it.
-GRUB_TIMEOUT ?= 0
+# every automated path wants -- `make run MENU=1` asks for the menu, and
+# GRUB_TIMEOUT= still overrides both.
+GRUB_TIMEOUT ?= $(if $(MENU),5,0)
 
 # Extra words appended to the kernel's GRUB command line, baked into the
 # ISO at build time. Empty by default, so every automated path (the boot
@@ -275,7 +276,7 @@ ASM_SOURCES = $(shell find kernel -name '*.asm' | sort)
 C_OBJECTS   = $(patsubst %.c,   $(BUILD)/%.o, $(C_SOURCES))
 ASM_OBJECTS = $(patsubst %.asm, $(BUILD)/%.o, $(ASM_SOURCES))
 
-.PHONY: all clean clean-disk iso run run-menu run-audio run-kvm run-nographic run-virtio run-virtio-kvm debug help version seed test verify
+.PHONY: all clean clean-disk iso run debug help version seed test verify
 
 # Regenerates kernel/include/api/version.h from VERSION (see
 # tools/gen_version.sh) -- listed first so it always runs before
@@ -307,31 +308,26 @@ help:
 	@echo "  all            Build kernel.bin and the userland test ELFs (default)"
 	@echo "  iso            Build toy-os.iso, a bootable GRUB ISO (implies all)"
 	@echo "  run            Boot toy-os.iso in QEMU with an SDL window (implies iso)"
-	@echo "  run-menu       Same, but with the GRUB boot menu visible (5s timeout)"
-	@echo "  run-audio      Same as run, plus a PulseAudio backend so the PC speaker"
-	@echo "                 (beep) is actually audible -- see the Makefile for how to"
-	@echo "                 swap the backend if you're not on PulseAudio"
-	@echo "  run-kvm        Same as run, but KVM-accelerated instead of TCG emulation --"
-	@echo "                 needs /dev/kvm; port-I/O-heavy paths can get slower, so"
-	@echo "                 don't compare its throughput numbers against run's"
-	@echo "  run-nographic  Boot toy-os.iso in QEMU with no display, serial only (implies iso)"
-	@echo "  run-virtio     Same as run, but the disk is on VIRTIO-BLK and there is no IDE"
-	@echo "                 controller at all -- so the filesystem mounts only if the whole"
-	@echo "                 virtio path works. run-virtio-kvm is the KVM-accelerated form"
-	@echo ""
-	@echo " Every run* target above is ONE recipe with one axis varied, and the axes are"
-	@echo " variables -- so any COMBINATION works without needing its own target:"
-	@echo "   make run KVM=1            KVM instead of TCG emulation"
-	@echo "   make run VIRTIO=1         disk on virtio-blk, no IDE controller at all"
-	@echo "   make run VGA=vmware       the adapter with a hardware cursor"
-	@echo "   make run AUDIO=1          PC speaker wired to sound (AUDIODEV=alsa etc.)"
-	@echo "   make run NOGRAPHIC=1      serial only, no window"
-	@echo "   make run MEM=512          a smaller machine"
-	@echo "   make run KVM=1 VIRTIO=1   ...or any mix"
 	@echo "  live-iso       Build toy-os-live.iso -- carries a filesystem image, boots with NO disk"
-	@echo "  run-live       Boot that live ISO with no disk attached (implies live-iso)"
 	@echo "  demo-iso       Build toy-os-demo.iso -- boots straight into a scripted tour"
-	@echo "  run-demo       Boot that demo ISO (implies demo-iso)"
+	@echo ""
+	@echo " THERE IS ONE RUN TARGET. Everything that used to be its own run-* target is a"
+	@echo " variable on it, so any COMBINATION works without a target per combination:"
+	@echo "   make run KVM=1            KVM instead of TCG emulation (needs /dev/kvm;"
+	@echo "                             port-I/O-heavy paths can get SLOWER, so do not"
+	@echo "                             compare throughput numbers against plain run)"
+	@echo "   make run VIRTIO=1         disk on virtio-blk, no IDE controller at all --"
+	@echo "                             so the filesystem mounts only if virtio works"
+	@echo "   make run VGA=vmware       the adapter with a hardware cursor (which"
+	@echo "                             screendump cannot capture -- see the Makefile)"
+	@echo "   make run AUDIO=1          PC speaker wired to sound (AUDIODEV=alsa etc.)"
+	@echo "   make run NOGRAPHIC=1      serial only, no window -- use this over SSH"
+	@echo "   make run MENU=1           show the GRUB boot menu (5s) instead of booting"
+	@echo "   make run MEM=512          a smaller machine"
+	@echo "   make run LIVE=1           the live ISO, with NO disk attached (implies live-iso)"
+	@echo "   make run DEMO=1           the scripted tour, no disk (implies demo-iso)"
+	@echo "   make run KVM=1 VIRTIO=1   ...or any mix"
+	@echo ""
 	@echo "  debug          Boot toy-os.iso frozen (QEMU's -s -S) for real GDB"
 	@echo "                 debugging -- attach with: gdb build/kernel.bin -ex"
 	@echo "                 'target remote localhost:1234', then continue"
@@ -829,19 +825,6 @@ demo-iso: version $(KERNEL) $(USERLAND_ELVES) seed $(LIVE_IMG)
 	$(GRUB_MKRESCUE) -o $(DEMO_ISO) iso-demo
 	@echo "demo-iso: $(DEMO_ISO) -- boots the tour with no input; see data/wm/demo.script"
 
-run-demo: QEMU_ISO=$(DEMO_ISO)
-run-demo: NODISK=1
-run-demo: demo-iso
-	$(QEMU_RUN)
-
-# Boot the live ISO the way a user would: NO -drive at all. That is the
-# whole point -- pointing it at disk.img would let the ordinary disk path
-# run and prove nothing about the live one.
-run-live: QEMU_ISO=$(LIVE_ISO)
-run-live: NODISK=1
-run-live: live-iso
-	$(QEMU_RUN)
-
 # -vga std: explicit (matches QEMU's own default, but pinned here so the
 #   higher 1280x720 mode boot.asm requests isn't at the mercy of a
 #   per-host/per-distro QEMU default changing underneath us).
@@ -867,35 +850,38 @@ run-live: live-iso
 # DIFFERENT bus than -cdrom's ATAPI drive (QEMU's default piix3-ide
 # puts -cdrom on the secondary bus), so ata.c's IDENTIFY never sees the
 # boot CD and mistakes it for a plain disk.
-# Boots with the GRUB menu visible (5s to choose), for when you want to
-# see it. Rebuilds the ISO because the timeout is baked into grub.cfg at
-# ISO build time -- so switching between `make run` and `make run-menu`
-# re-runs grub-mkrescue, which is a couple of seconds.
-# --- ONE QEMU RUN RECIPE, five axes ---------------------------------
+# --- ONE QEMU RUN RECIPE, AND ONE TARGET ----------------------------
 #
-# Every `run*` target below is this one command line with one thing
-# varied. They used to be twelve copies of it, which grew by
+# There is exactly one way to boot this OS interactively -- `make run`
+# -- and everything that used to be its own target is a VARIABLE on it.
+#
+# It was twelve near-identical qemu-system-x86_64 lines, which grew by
 # MULTIPLICATION rather than addition: adding `run-virtio` immediately
-# forced `run-virtio-kvm`, and `run-virtio-audio` or `run-vmware-kvm`
-# do not exist only because nobody has asked yet.
+# forced `run-virtio-kvm`, and `run-virtio-audio` and `run-vmware-kvm`
+# did not exist only because nobody had asked. Collapsing the recipe
+# fixed the duplication and left the NAMES behind as thin aliases --
+# which turned out to be the same problem one level up, because a name
+# per combination multiplies just as fast as a recipe per combination.
+# So the aliases are gone too, and the axes are all there is:
 #
-# This is the same shape CLAUDE.md legislates for C -- "a dispatch chain
-# over ~20 branches should be a table", which tools/check_dispatch.py
-# enforces on .c files and cannot see in a Makefile.
-#
-# So the axes are VARIABLES and every combination is reachable without
-# a new target:
-#
+#   make run                        the default: TCG, IDE disk, a window
 #   make run KVM=1                  KVM instead of TCG emulation
 #   make run VIRTIO=1               disk on virtio-blk, no IDE at all
 #   make run VGA=vmware             the adapter with a hardware cursor
 #   make run AUDIO=1                PC speaker wired to PulseAudio
-#   make run NOGRAPHIC=1            serial only, no window
+#   make run NOGRAPHIC=1            serial only, no window (over SSH)
+#   make run MENU=1                 show GRUB's menu instead of booting
 #   make run MEM=512                a smaller machine
+#   make run LIVE=1                 the live ISO, with NO disk attached
+#   make run DEMO=1                 the scripted tour, with no disk
 #   make run KVM=1 VIRTIO=1         ...and any mix of them
 #
-# The named targets below are kept as thin ALIASES that set these, both
-# for muscle memory and because the docs reference them by name.
+# `make debug` is the one remaining relative, and it is not a
+# combination of the above: it freezes the CPU for a debugger.
+#
+# This is the same shape CLAUDE.md legislates for C -- "a dispatch chain
+# over ~20 branches should be a table", which tools/check_dispatch.py
+# enforces on .c files and cannot see in a Makefile.
 #
 # EVERY DEFINITION HERE IS DEFERRED (`=`, never `:=`) AND USES $(if ...)
 # RATHER THAN ifeq. That is load-bearing: `ifeq` is evaluated once when
@@ -906,7 +892,13 @@ COMMA := ,
 
 MEM ?= 2048
 
-QEMU_ISO     = $(ISO)
+# WHICH ISO, and what has to be built first. LIVE and DEMO are ordinary
+# axes like the rest, but they are the two that change the PREREQUISITE
+# as well as the command line -- which works because a command-line
+# variable is set before the Makefile is parsed, so $(if) expands
+# correctly even in a prerequisite list.
+QEMU_ISO     = $(if $(DEMO),$(DEMO_ISO),$(if $(LIVE),$(LIVE_ISO),$(ISO)))
+RUN_PREREQ   = $(if $(DEMO),demo-iso,$(if $(LIVE),live-iso,iso $(DISK_IMG)))
 QEMU_ACCEL   = $(if $(KVM),-enable-kvm -cpu host,)
 QEMU_VGA     = $(if $(VGA),$(VGA),std)
 QEMU_DISPLAY = $(if $(NOGRAPHIC),none,sdl$(COMMA)grab-mod=rctrl)
@@ -918,7 +910,11 @@ QEMU_DISPLAY = $(if $(NOGRAPHIC),none,sdl$(COMMA)grab-mod=rctrl)
 QEMU_DISK_IDE    = -drive file=$(DISK_IMG),format=raw,if=ide,discard=unmap
 QEMU_DISK_VIRTIO = -drive file=$(DISK_IMG),format=raw,if=none,id=vblk,discard=unmap \
                    -device virtio-blk-pci,drive=vblk,disable-legacy=on
-QEMU_DISK = $(if $(NODISK),,$(if $(VIRTIO),$(QEMU_DISK_VIRTIO),$(QEMU_DISK_IDE)))
+# LIVE and DEMO attach NO -drive at all, and that is the whole point of
+# them rather than an optimisation: pointing the live ISO at disk.img
+# would let the ordinary disk path run and prove nothing about the live
+# one.
+QEMU_DISK = $(if $(NODISK)$(LIVE)$(DEMO),,$(if $(VIRTIO),$(QEMU_DISK_VIRTIO),$(QEMU_DISK_IDE)))
 
 # QEMU has had no default audio backend since 5.x, and -machine
 # pcspk-audiodev is what routes the emulated i8254 speaker to it.
@@ -934,91 +930,59 @@ QEMU_RUN = qemu-system-x86_64 -cdrom $(QEMU_ISO) $(QEMU_ACCEL) $(QEMU_DISK) \
 	  -serial stdio -vga $(QEMU_VGA) -display $(QEMU_DISPLAY) -m $(MEM) \
 	  $(QEMU_AUDIO) $(QEMU_EXTRA)
 
-run-menu:
-	@$(MAKE) --no-print-directory GRUB_TIMEOUT=5 iso
+run: $(RUN_PREREQ)
 	$(QEMU_RUN)
 
-run: iso $(DISK_IMG)
-	$(QEMU_RUN)
-
-# Same as `run`, but on the VMware SVGA II adapter, which has a HARDWARE
-# MOUSE CURSOR -- kernel/drivers/vmsvga.c detects it, takes the display
-# over from GRUB's VBE mode and hands the cursor to the adapter, so the
-# WM stops drawing one. `-vga std` above has no cursor hardware at all
-# (plain VGA's only cursor is the text-mode underline), which is why
-# this is a separate target rather than the default.
+# WHAT EACH AXIS IS FOR, since the targets that used to carry this are
+# gone and the knowledge is not obvious from a variable name.
 #
-# Not the default for two reasons: it's emulator-only (a real machine
-# needs a real GPU driver), and a hardware cursor is composited by the
-# display frontend rather than living in the framebuffer -- so QEMU's
-# `screendump` does NOT capture it, and every screenshot-based test
-# would stop seeing the pointer. Use `run` for anything you intend to
-# screenshot; use this to see the cursor the adapter draws.
-run-vmware: VGA=vmware
-run-vmware: run
-
-# Same as `run`, but the disk is on VIRTIO-BLK instead of IDE -- and
-# there is NO IDE controller at all, which is the point: ata_init()
-# finds nothing, so the filesystem can only mount if the whole virtio
-# path works (PCI capability walk, 64-bit BAR, feature negotiation, the
-# virtqueue, the block adapter). `dmesg` should say
-# "block: virtio-blk active" and `df` should report a persistent TFS3.
+# VGA=vmware -- the VMware SVGA II adapter, which has a HARDWARE MOUSE
+#   CURSOR: kernel/drivers/vmsvga.c detects it, takes the display over
+#   from GRUB's VBE mode and hands the cursor to the adapter, so the WM
+#   stops drawing one. The default `std` has no cursor hardware at all
+#   (plain VGA's only cursor is the text-mode underline). NOT the
+#   default for two reasons: it is emulator-only (a real machine needs a
+#   real GPU driver), and a hardware cursor is composited by the display
+#   frontend rather than living in the framebuffer -- so QEMU's
+#   `screendump` does NOT capture it, and every screenshot-based test
+#   would stop seeing the pointer. Leave it off for anything you intend
+#   to screenshot.
 #
-# Deliberately its own target rather than a flag on `run`: a virtio disk
-# appearing in every interactive run is a behaviour change nobody asked
-# for, and ATA needs to stay the exercised default.
+# VIRTIO=1 -- the disk on virtio-blk and NO IDE controller at all, which
+#   is the point rather than a detail: ata_init() then finds nothing, so
+#   the filesystem mounts only if the whole virtio path works (PCI
+#   capability walk, 64-bit BAR, feature negotiation, the virtqueue, the
+#   block adapter). `dmesg` should say "block: virtio-blk active" and
+#   `df` should report a persistent TFS3. Not the default because ATA
+#   needs to stay the exercised path for an interactive run.
+#   disable-legacy=on asks for a MODERN device (1af4:1042); drop it, or
+#   use `-drive file=...,if=virtio`, for a TRANSITIONAL one (1af4:1001)
+#   -- the driver handles both, and transitional is QEMU's default, so
+#   it is worth exercising too.
 #
-# disable-legacy=on asks for a MODERN device (1af4:1042). Drop it, or
-# use `-drive file=...,if=virtio`, to get a TRANSITIONAL one (1af4:1001)
-# -- the driver handles both, and the transitional form is what QEMU
-# gives by default, so it is worth exercising too.
-run-virtio: VIRTIO=1
-run-virtio: run
-
-# ...and the same under KVM, which is where a timing-sensitive driver
-# bug actually shows up -- every automated test here runs TCG, which
-# models neither real device latency nor guest memory types.
-run-virtio-kvm: VIRTIO=1
-run-virtio-kvm: KVM=1
-run-virtio-kvm: run
-
-# Same as `run`, but with KVM hardware virtualization instead of QEMU's
-# TCG software emulation -- guest instructions run natively on the host
-# CPU. Needs /dev/kvm to be readable (usually membership of the `kvm`
-# group, or a world-accessible node); `make run` remains the portable
-# default precisely because that isn't guaranteed anywhere.
+# KVM=1 -- hardware virtualization instead of TCG software emulation;
+#   guest instructions run natively. Needs /dev/kvm readable (usually
+#   membership of the `kvm` group), which is why plain `make run` stays
+#   the portable default. `-cpu host` is what makes it worth having:
+#   without it QEMU masks the guest down to a conservative model.
+#   NOT a uniform speedup -- compute-bound guest code gets much faster,
+#   but every port-I/O instruction becomes a hardware VM exit costing
+#   ~a microsecond where TCG services one in-process in tens of
+#   nanoseconds, so the PIO disk path and other inb/outb-heavy loops can
+#   get SLOWER. Any throughput figure in the git history should say
+#   which of the two it came from; they are not comparable.
 #
-# `-cpu host` is what makes the acceleration worth having: without it
-# QEMU still masks the guest down to a conservative CPU model. Safe for
-# this kernel, which reads no CPUID feature bits and enables nothing
-# beyond long mode + NX (see boot.asm).
+# AUDIO=1 -- a PulseAudio backend wired to the PC speaker
+#   (kernel/drivers/speaker.c's `beep`). QEMU has had no default audio
+#   backend since 5.x and -machine pcspk-audiodev=<id> is what routes
+#   the emulated i8254 speaker to it; without both, `beep` runs
+#   correctly (the PIT/port-0x61 programming completes fine) and is
+#   simply silent. `pa` is what this was confirmed with -- set
+#   AUDIODEV=alsa/coreaudio for a host that has something else
+#   (`qemu-system-x86_64 -audiodev help` lists them).
 #
-# Worth knowing before comparing numbers across the two: this is NOT a
-# uniform speedup. Compute-bound guest code gets much faster, but every
-# port-I/O instruction becomes a hardware VM exit costing on the order
-# of a microsecond, where TCG services one in-process for tens of
-# nanoseconds -- so the PIO disk path and other `inb`/`outb`-heavy loops
-# can get SLOWER here. Any throughput figure recorded in the git history
-# should say which of the two it came from; they aren't comparable.
-run-kvm: KVM=1
-run-kvm: run
-
-# Same as `run`, plus a PulseAudio backend wired to the PC speaker
-# (kernel/drivers/speaker.c's `beep`, Milestone 19 -- see
-# docs/roadmap.md) -- QEMU needs an explicit -audiodev backend to play
-# anything at all (no default audio backend since QEMU 5.x), and
-# -machine pcspk-audiodev=<id> is what actually routes the emulated
-# i8254 PC speaker's output to it; without both, `beep` still runs
-# correctly (the PIT/port-0x61 programming completes fine) but is
-# silent. `pa` (PulseAudio) is what this was confirmed working with --
-# swap it for whatever backend your host actually has
-# (`qemu-system-x86_64 -audiodev help` lists what's available, e.g.
-# `alsa` on plain ALSA-only Linux, `coreaudio` on macOS) if PulseAudio
-# isn't it. Kept as a separate target rather than folding into `run`
-# itself since the right backend is host-specific, not something safe
-# to assume by default.
-run-audio: AUDIO=1
-run-audio: run
+# MENU=1 -- GRUB's menu, with 5 seconds to choose. It rebuilds the ISO,
+#   because the timeout is baked into grub.cfg at ISO build time.
 
 # -s: shorthand for -gdb tcp::1234 -- QEMU's own built-in GDB remote
 #   stub, exposed on the standard GDB-over-QEMU port. Emulates the CPU
@@ -1035,9 +999,6 @@ run-audio: run
 #   kernel_main` first if you want to stop right at kernel entry).
 debug: QEMU_EXTRA=-s -S
 debug: run
-
-run-nographic: NOGRAPHIC=1
-run-nographic: run
 
 # Runs the in-kernel test suite and turns it into an exit code: boots
 # headless, drives `ktest` over the serial debug console, exits non-zero

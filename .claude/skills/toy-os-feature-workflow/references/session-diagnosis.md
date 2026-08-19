@@ -11,7 +11,7 @@ past sessions kept, dated where they were written.
 - Prove a failure is pre-existing before owning it -- one build cycle
   against `HEAD` answers it.
 - Ask what the user's environment does differently before doubting the
-  report. `make run-kvm` was the whole answer to a three-cause freeze,
+  report. `make run KVM=1` was the whole answer to a three-cause freeze,
   and it was mentioned in passing three exchanges in.
 
 `docs/roadmap.md` holds the live known issues; this file holds the
@@ -148,7 +148,7 @@ first generalises well past this repo.
   machine, rather than being quietly implied by a green suite.
   **CORRECTION, from the next session:** this block's claim that it was
   "untestable in this environment" was WRONG, and the error is
-  instructive -- `make run-kvm` / `vm.py --kvm` honours guest memory
+  instructive -- `make run KVM=1` / `vm.py --kvm` honours guest memory
   types where TCG ignores them, so the whole bug class IS reproducible
   locally. "QEMU can't show this" was true of `make run` and got
   over-generalised to QEMU. Before recording something as unverifiable,
@@ -181,7 +181,7 @@ about the second.
   identical (17.3 GB/s) either way -- which is the number that proves
   only the read path moved. **When you change a memory type, enumerate
   who READS that region, not just who writes it.**
-- **`make run-kvm` honours guest memory types; plain `make run` (TCG)
+- **`make run KVM=1` honours guest memory types; plain `make run` (TCG)
   ignores them entirely.** This is the single most useful fact from the
   session, because it converts "reproduces only on the maintainer's
   laptop" from untestable into a measurement:
@@ -379,7 +379,7 @@ REPRODUCE.**
 The report was "Control Panel sticks for a few seconds". It had THREE
 independent causes, none of which any test here could see, because
 **every automated test in this repo runs under TCG and the user runs
-`make run-kvm`.**
+`make run KVM=1`.**
 
 - **A lost-wakeup race in the ATA driver.** `dma_issue()` cleared its
   completion flag AFTER writing the command byte, so an interrupt
@@ -401,7 +401,7 @@ independent causes, none of which any test here could see, because
 **The debugging loop that worked, in order:**
 
 1. **Ask what the user's environment does differently before doubting
-   the report.** `make run-kvm` was mentioned in passing, three
+   the report.** `make run KVM=1` was mentioned in passing, three
    exchanges in, and it was the whole answer. Ask early.
 2. **Measure from INSIDE the guest.** `userland/wm/wm_watchdog.c` times each
    `wm_run()` iteration by phase and logs anything over a threshold
