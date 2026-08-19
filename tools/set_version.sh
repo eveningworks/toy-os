@@ -22,8 +22,7 @@
 #       docs/release-notes-template.md gives the shape.
 #       Doesn't touch git at all --
 #       tagging (`git tag v0.2.0`) and pushing are still separate,
-#       deliberate steps you run yourself (or via tools/device_git.sh),
-#       same as before.
+#       deliberate steps, same as before.
 #
 # Run this once, by hand, as part of finishing a change or cutting a
 # release -- not on every build. kernel/include/api/version.h itself is

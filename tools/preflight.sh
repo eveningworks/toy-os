@@ -7,8 +7,8 @@
 # section) -- but that's three separate commands run by hand, and it's
 # easy to deliver after only re-running one of them, or after a stray
 # uncommitted file got left out. This wraps all of it into a single
-# pass/fail so there's one command to run right before SendUserFile/
-# device_commit_files, not three to remember.
+# pass/fail so there's one command to run right before committing, not
+# three to remember.
 #
 # What it checks, in order (stops at the first failure):
 #   1. make clean && make all -- full rebuild from scratch, no stale .o
@@ -29,18 +29,12 @@
 #       that gap is what libc_test was written into, and without this
 #       step it would have been run once by hand and never again.
 #   4. git status --short -- just informational: lists what's dirty so
-#      you can eyeball it against the file list you're about to
-#      deliver. This does NOT run git through the device bridge (that's
-#      tools/device_git.sh's job) -- it only inspects whatever checkout
-#      this script is actually running in, local or sandbox.
+#      you can eyeball it against the file list you are about to report.
 #
-# The closing message differs depending on whether `git config
-# user.name` is already set: unset means this is very likely a Cowork
-# device-bridge sandbox clone (see CLAUDE.md's "Working in the cloud
-# sandbox vs. directly on the user's machine" section -- that's the
-# documented, deterministic tell), so it prints the SendUserFile/
-# device_commit_files reminder; set means a direct local checkout, so
-# it just confirms you're clear to commit (and push, if asked).
+# The closing message warns if `git config user.name` is unset, since a
+# commit would then either fail or carry the wrong identity -- this repo
+# commits as `toy-os <noreply@toy-os.local>` on purpose (see
+# docs/decisions.md's history-scrub entry).
 #
 # Usage:
 #   tools/preflight.sh              # full check
@@ -112,12 +106,9 @@ echo
 echo "preflight: PASS -- build, iso, boot smoke test, ktest and the"
 echo "preflight: ring-3 /tests diagnostics all clean."
 if [ -z "$(git config user.name 2>/dev/null)" ]; then
-  echo "preflight: no git identity configured -- this looks like a Cowork"
-  echo "preflight: device-bridge sandbox clone. Deliver via SendUserFile +"
-  echo "preflight: device_commit_files, then tools/device_git.sh commit on"
-  echo "preflight: the device checkout (see CLAUDE.md)."
+  echo "preflight: WARNING -- no git identity configured. This repo commits"
+  echo "preflight: as toy-os <noreply@toy-os.local>; set it before committing"
+  echo "preflight: so a real name cannot leak into history (see CLAUDE.md)."
 else
-  echo "preflight: git identity is configured -- this looks like a direct"
-  echo "preflight: local checkout. Safe to commit directly; push only if"
-  echo "preflight: asked (see CLAUDE.md)."
+  echo "preflight: safe to commit; push verified work (see CLAUDE.md)."
 fi

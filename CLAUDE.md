@@ -1745,83 +1745,7 @@ technical conventions below:
   in the body** (subject line stays a short summary) -- see
   `docs/decisions.md`'s versioning entry for the exact format.
 
-## Working in the cloud sandbox vs. directly on the user's machine
-
-This repo gets worked on both ways: from a Cowork cloud session with
-the user's real checkout reachable only through the device bridge
-(`mcp__remote-devices__*`), and directly on the user's own machine
-(e.g. a local Claude Code session) with normal file/Bash tools against
-the real checkout. The mechanics below differ a lot between the two,
-so **figure out which one you're in before following either half**:
-
-- **Deterministic tell: run `git config user.name`.** A device-bridge
-  session has NO git identity configured at all, local or global (it's
-  its own isolated VM) -- empty output means Cowork/device-bridge.
-  Non-empty (this repo's convention sets it to `toy-os`, see below)
-  means a direct local checkout.
-- Corroborating signal: are `mcp__remote-devices__*` tools (or
-  equivalent device-bridge tools) actually available to call this
-  session? Present means Cowork; absent means direct.
-- If those disagree, or it's still unclear, just ask the user directly
-  rather than guessing -- getting this wrong means either trying to
-  push from a session where it's actually blocked, or going through
-  the whole SendUserFile/device_commit_files dance unnecessarily.
-
-### Cowork cloud sandbox (device bridge)
-
-Four things about that setup that aren't obvious until you hit them:
-
-- **`Makefile` and anything under `.github/workflows/*.yml` are
-  protected against `device_commit_files`** (writes get rejected --
-  check its response's `rejected` array, don't assume a batch landed
-  in full). Edit + verify in the cloud sandbox as normal, deliver as
-  `Makefile.new` / `build.yml.new` via `SendUserFile` +
-  `device_commit_files`, then apply it yourself over `device_bash`
-  (`cp Makefile.new Makefile`, `diff` to confirm, move `Makefile.new`
-  into `_to_delete/`) -- `device_bash` is NOT blocked from writing
-  these files directly, only `device_commit_files` is. See
-  `docs/decisions.md` for the full mechanics.
-- **The device bridge can't delete files, and `git` run through it
-  leaves stale `.git/index.lock` files behind** (even a read-only
-  `git status`). Both fixed the same way -- `mv`, not `rm`. To remove a
-  file, `mv` it into a `_to_delete/` subfolder and tell the user to
-  delete that folder themselves. For git, **always use
-  `tools/device_git.sh`**, never run `git` directly via `device_bash`
-  -- it sweeps stale locks both before and after the real command, so
-  the repo comes back lock-free. See `docs/decisions.md` for why this
-  is needed even for reads.
-- **The device-bridge session has NO git identity configured, local or
-  global** -- confirmed directly: `git config user.name`/`user.email`
-  and `git config --global --list` all come back empty in a fresh
-  `device_bash` call, because that call runs in its own isolated VM,
-  not the user's actual desktop environment. A plain `device_git.sh
-  commit` will fail outright ("Please tell me who you are") unless the
-  identity is passed explicitly every time:
-  `bash tools/device_git.sh -c user.name="toy-os" -c
-  user.email="noreply@toy-os.local" commit -m "..."`. This is also the
-  standing privacy convention for this repo now, not just a workaround
-  -- **never let a commit here carry the maintainer's real name or
-  personal email**, session-made or otherwise (see `docs/decisions.md`'s
-  entry on the history rewrite that scrubbed a real name out of every
-  prior commit -- don't reintroduce what that fixed).
-- Build and test in the cloud sandbox first (`make clean && make all
-  && make iso`), confirm it's clean, *then* deliver + commit files to
-  the user's machine. Don't commit unverified changes.
-- **`git push`/`gh release create` from the cloud sandbox is not just
-  discouraged, it's actually blocked.** Confirmed directly (v0.0.9
-  release): pushing with the repo's token embedded in the remote URL
-  still fails with `remote: access denied by the git proxy: ... not in
-  this session's authorized repository set` -- the sandbox's outbound
-  git egress goes through an allow-list proxy, independent of
-  credentials. Read-only git (`fetch`, `ls-remote`) works fine through
-  the same proxy. The device bridge has no network access at all
-  either (by design). So there is no path in this environment to
-  actually publish -- always tag/prep locally on both checkouts, then
-  give the user the exact commands to run from their own machine's
-  terminal. `gh` isn't preinstalled in the sandbox (`apt-get install
-  -y gh` if needed there for read-only checks).
-
-### Direct local checkout
+## This checkout, and the repo it pushes to
 
 **The repo is `eveningworks/toy-os`** -- an ORGANIZATION, since
 2026-08-16. It moved off a personal account because a personal repo has
@@ -1835,33 +1759,28 @@ tree should name a personal account (`grep -rn` for one before
 believing a doc), and **run `tools/backup_repo.sh` before any further
 change to the repo's identity or history**.
 
-Confirmed directly in a real local session (2026-08-12): this is
-simpler than the Cowork setup in every way that setup works around --
+Sessions work directly against this checkout with ordinary file and
+Bash tools:
 
 - Git identity is already configured (`toy-os` /
-  `noreply@toy-os.local`, matching this repo's standing privacy
-  convention -- see above), so plain `git commit` just works with no
-  `-c user.name=...`/`-c user.email=...` needed on every call. Still
-  worth double-checking `git config user.name` if it's ever in doubt
-  rather than assuming.
-- Plain `git` works throughout -- no stale-`index.lock` issue, no
-  `tools/device_git.sh` wrapper needed, no `mv`-instead-of-`rm`
-  workaround for deleting a file.
-- No protected-file restriction -- `Makefile` and
-  `.github/workflows/*.yml` can be edited and committed directly, no
-  `.new`-suffix relay needed.
-- `git push origin main` and `gh release create` both work directly
-  from the session -- confirmed by actually doing both (pushing
-  ordinary commits repeatedly, and cutting the `v0.1.0` GitHub Release
-  end-to-end with `gh release create` + `gh release upload`). Still
-  treat both as actions to confirm with the user first per this file's
-  general "Executing actions with care" guidance (pushing/publishing is
-  visible to others), just don't tell the user it's *impossible* the
-  way the Cowork section above correctly says it is there.
-- `tools/preflight.sh`'s closing message and the QMP-launch pattern in
-  `tools/qmp_test.py` are both mode-aware/updated for this case now --
-  see their own comments if either looks like it's giving Cowork-only
-  advice.
+  `noreply@toy-os.local`), so plain `git commit` just works. **That
+  identity is the standing privacy convention, not a default to
+  override** -- never let a commit here carry the maintainer's real
+  name or personal email (see `docs/decisions.md`'s entry on the
+  history rewrite that scrubbed one out of every prior commit; don't
+  reintroduce what that fixed).
+- `git push origin main` and `gh release create`/`gh release upload`
+  all work from the session -- confirmed by doing both, including
+  cutting the `v0.1.0` Release end to end. Push ordinary verified work
+  without asking; confirm tags, Releases, force-pushes and history
+  rewrites first, since those are one-way.
+
+(This repo used to also be worked on from a Cowork cloud session
+through a device bridge, which needed a `.new`-file relay for protected
+files, a `git` wrapper that swept stale lock files, and `mv`-instead-of-
+`rm` because the bridge could not delete. That mode is retired as of
+2026-08-19 and all of it is gone -- `git log` has it if it is ever
+needed again.)
 
 ## Building
 
@@ -2112,7 +2031,7 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
 - **Verify before delivering** -- `preflight.sh` (the gate: clean build +
   iso + `check_deps.py` + `check_layout.py` + `check_dispatch.py` +
   `boot_smoke_test.py` + `ktest_run.py` + `usertest_run.py`),
-  `check_docs.py`, `deliver.py`.
+  `check_docs.py`.
 - **Drive a VM** -- `vm.py` (text in, text out: the fastest path for
   anything that is not about pixels), `qmp_test.py` (QMP GUI helpers),
   `gui_debug.py` (ask the WM what it is doing), `gui_flow.py`,
@@ -2153,7 +2072,7 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   panic symbol table), `gen_decisions_index.py`.
 - **The repo itself** -- `backup_repo.sh` (run it before ANY change to
   the repo's identity or history -- a mirror clone is not a backup here,
-  release assets live only on GitHub), `device_git.sh` (Cowork only).
+  release assets live only on GitHub).
 
 Five standing rules that are cheaper to know than to rediscover:
 
@@ -2304,14 +2223,5 @@ scratch/one-off -- see `## tools/` above for the bar ("does this fix a
 rederive-from-scratch cost"). Update the files that describe `tools/`
 (this file at minimum) to match when something's added there.
 
-How the change actually reaches the user depends on which mode this
-session is in (see "Working in the cloud sandbox vs. directly on the
-user's machine" above for how to tell):
-
-- **Cowork/device-bridge:** deliver files via `SendUserFile` +
-  `mcp__remote-devices__device_commit_files` to the user's real
-  checkout -- editing only the cloud sandbox copy doesn't reach the
-  user's machine on its own.
-- **Direct local checkout:** the files are already on the user's real
-  checkout -- there's nothing to "deliver," just commit (and push, if
-  asked) directly with plain `git`.
+The files are already on the real checkout -- there is nothing to
+"deliver". Commit with plain `git`, and push verified work.

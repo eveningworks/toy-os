@@ -21,11 +21,7 @@ non-GUI boot check — see `docs/testing.md`), `gen_version.sh`/`set_version.sh`
 `ktest_run.py` (drives the in-kernel test suite over serial and turns
 it into an exit code -- what `make test` and CI run), `vm.py` (start a
 headless VM and run shell commands against it, getting text back — see
-`docs/testing.md`),
-`device_git.sh` (Cowork-only: wraps a `git` command run over the device
-bridge with the stale-`index.lock` workaround, see CLAUDE.md's
-"Working in the cloud sandbox vs. directly on the user's machine" -- not needed,
-and not applicable, on a direct local checkout).
+`docs/testing.md`).
 
 The rest, added once the build/test/delivery loop had enough repeated
 manual steps to be worth automating:
@@ -91,13 +87,6 @@ manual steps to be worth automating:
   after `kernel/fs/` changes), so
   "am I safe to deliver?" is one call instead of three run by hand.
   `--skip-clean` skips the initial `make clean`.
-- **`deliver.py`** -- builds the delivery file-list/device-path/
-  protected-file manifest and a commit-message skeleton for the
-  shipping step (see "Delivering changes" below), from `git
-  status --short` (or explicit file args) -- flags `Makefile`/
-  `.github/workflows/*.yml` as PROTECTED with the `.new`-suffix
-  workaround instructions before a real `device_commit_files` call
-  would reject them.
 - **`gui_flow.py`** -- named, composable QMP click-flows on top of
   `qmp_test.py`'s `QMPSession` (`GuiFlow` class: `enter_gui()`,
   `open_app(name)`, `run_system_action(label)`, `screenshot_named()`),

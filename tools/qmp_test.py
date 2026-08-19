@@ -54,7 +54,7 @@ Gotchas this module already gets right for you:
   background job.** A bare `&` tied to one shell invocation gets killed
   when that invocation ends, which is why earlier sessions reached for
   `setsid nohup ... & ); disown -a` to detach it -- but that pattern
-  turned out to be unreliable in at least one sandboxed environment
+  turned out to be unreliable in at least one environment
   this project has been driven from (spurious non-zero exit codes on
   the launching call, and the process silently not surviving to the
   next tool call, leaving a *stale* `serial.log`/QMP port from an
@@ -372,7 +372,7 @@ class QMPSession:
 
     def screenshot(self, png_path, ppm_path=None, settle=0.3):
         """screendump -> .ppm (native QMP format) -> .png (via Pillow),
-        so the result can go straight to SendUserFile / an image viewer.
+        so the result can go straight to the Read tool / an image viewer.
         """
         ppm_path = ppm_path or (png_path.rsplit(".", 1)[0] + ".ppm")
         # QEMU resolves `filename` relative to ITS OWN working directory,

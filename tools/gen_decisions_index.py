@@ -43,7 +43,6 @@ ORDER = [
     ("gui.md",      "GUI: window manager, compositor & widgets"),
     ("shell.md",    "Shell, apps & console"),
     ("build.md",    "Build, versioning & project docs"),
-    ("workflow.md", "Session workflow & environment"),
 ]
 
 

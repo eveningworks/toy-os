@@ -27,7 +27,7 @@ is the normal case for this project's QEMU launch flags -- so 0xB8000
 stays stale/unwritten and there's no memory-read shortcut to plain
 text the way there might be for a kernel that only ever used legacy
 VGA text mode. run_command() returns a screenshot path instead; Read
-it (or hand it to SendUserFile) to see the actual result, the same way
+it to see the actual result, the same way
 every other QMP-testing session already does.
 
 Usage:

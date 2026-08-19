@@ -2,9 +2,8 @@
 name: toy-os-feature-workflow
 description: >
   Use this skill whenever the user asks for a new feature, fix, or change to
-  toy-os (their x86-64 hobby OS, repo at ~/CodingProjects/toy-os -- reached
-  either through the Cowork device bridge or directly on the user's own
-  machine, see the skill body for how to tell which). Triggers on things like "add support for X",
+  toy-os (their x86-64 hobby OS, repo at ~/CodingProjects/toy-os).
+  Triggers on things like "add support for X",
   "can we improve Y", "let's build Z", or any bug report against the OS,
   shell, GUI, or filesystem -- even if the user doesn't say "toy-os" by name,
   treat any request touching kernel/, apps/, userland/, or the shell/GUI/
@@ -27,10 +26,9 @@ sequence every time. This skill is that sequence.
 `CLAUDE.md` (repo root) is the reference for *mechanics* -- file layout,
 build commands, git gotchas, the QMP testing tool's API. Read it before
 your first edit if you haven't already; this skill won't repeat it.
-What this skill covers instead is the *order of operations* and the
-Cowork-specific tool choreography CLAUDE.md doesn't (and shouldn't) --
-things like when to pause and ask, how to test what you built, and how
-to actually get a change from your sandbox onto the user's machine.
+What this skill covers instead is the *order of operations* CLAUDE.md
+doesn't (and shouldn't) -- when to pause and ask, how to test what you
+built, and how to ship it.
 
 **Re-read `CLAUDE.md` and `docs/decisions.md` fresh each session --
 don't assume the conventions this skill describes are still current.**
@@ -76,20 +74,6 @@ to this file too).
 
 ## The sequence
 
-0. **Figure out which mode this session is in before anything else.**
-   This repo gets worked on two ways: a Cowork cloud session where the
-   user's real checkout is reachable only through the device bridge
-   (`mcp__remote-devices__*`), or a session (e.g. local Claude Code)
-   with normal file/Bash tools directly against the user's real
-   checkout. Deterministic tell: run `git config user.name` -- empty
-   means Cowork/device-bridge (that session has no git identity
-   configured at all), non-empty means direct local. Corroborate with
-   whether `mcp__remote-devices__*`-style tools are actually available
-   to call. If those disagree or it's still unclear, ask the user
-   directly rather than guessing -- see CLAUDE.md's "Working in the
-   cloud sandbox vs. directly on the user's machine" section, which
-   this step summarizes. Steps 3 and 6 below branch on the answer.
-
 1. **Research before proposing anything.** Even a request that sounds
    simple ("add X support") usually touches more of the codebase than it
    first appears -- this repo has caught real terminology mixups (EFI vs.
@@ -123,17 +107,9 @@ to this file too).
    sessions, including ones the user directly praised (phasing options,
    storage-design tradeoffs, encoding choices).
 
-3. **Implement -- where, depends on step 0's answer.**
-   - **Cowork/device-bridge:** edit in `/home/claude/toy-os` (or
-     wherever this session's sandbox clone lives) using normal file
-     tools, build and test there first, and only copy verified results
-     out to the user's real machine at the end (step 6). Editing the
-     device checkout directly means every trial-and-error build cycle
-     round-trips through the device bridge for no reason.
-   - **Direct local checkout:** just edit the real checkout directly
-     with normal file tools -- there's no separate mirror to keep in
-     sync, no round-trip cost to avoid. Step 6 becomes "commit what's
-     already there," not "copy it somewhere."
+3. **Implement.** Edit the real checkout directly with normal file
+   tools -- there is no mirror to keep in sync, so step 6 is "commit
+   what is already there", not "copy it somewhere".
 
 4. **Build and test -- scale the testing to what changed.**
    - **Check in order of cost.** `tools/boot_smoke_test.py` answers
@@ -327,19 +303,10 @@ to this file too).
    conventions changing).
 
 6. **Ship it -- usually without a version bump.** Most changes are a
-   commit under the current `-dev` version, not a release. Shared by
-   both modes:
+   commit under the current `-dev` version, not a release.
    - List every file you added or edited in your response to the user --
-     standing instruction, keep it compact. `tools/deliver.py` builds
-     the delivery file-list, device-path mapping, and a commit-message
-     skeleton from `git status --short` -- a faster and less
-     error-prone starting point than reconstructing the list by hand
-     (Cowork mode especially; a local checkout can just read `git
-     status --short` directly), though it doesn't distinguish a deleted
-     file from a modified one (see the Cowork bullets below for the
-     "can't delete over the device bridge, `mv` to `_to_delete/`"
-     handling a deletion still needs there -- not applicable locally,
-     where a plain `git rm`/delete just works).
+     standing instruction, keep it compact. `git status --short` is
+     the list.
    - Rebuild (`make all && make iso`) and re-run the boot smoke test one
      more time against the final state (`tools/preflight.sh` again is
      the fastest way to do this), so what you deliver is what you
@@ -356,61 +323,13 @@ to this file too).
      call (does this feel milestone-worthy enough to want a pinned,
      downloadable version), not something to do by default per change.
      If the user does want to cut a release as part of this change, see
-     `references/delivery-checklist.md` for the full mechanics (both
-     modes).
+     `references/delivery-checklist.md` for the full mechanics.
 
-   **Cowork/device-bridge:**
-   - Deliver every changed/added file with `SendUserFile`, then
-     `mcp__remote-devices__device_commit_files` to land them on the
-     user's real checkout.
-   - Commit on the device checkout via `tools/device_git.sh` (never a
-     raw `git` call over the device bridge -- even a read-only `status`
-     leaves a stale lock file behind; see `CLAUDE.md`). **Always pass
-     `-c user.name="toy-os" -c user.email="noreply@toy-os.local"`
-     explicitly** -- the device-bridge session has no git identity
-     configured at all, so a plain commit fails, and this is also the
-     repo's standing privacy convention (a real name/email had to be
-     scrubbed from history once already; see `docs/decisions.md`). The
-     commit message body lists each changed/added file with a one-line
-     note (subject line stays a short summary) -- see
+   - `git add` the changed/added files and commit with plain `git`
+     (identity is already configured, see CLAUDE.md). The commit
+     message body lists each changed/added file with a one-line note,
+     subject line a short summary -- see
      `references/delivery-checklist.md` for the exact shape.
-   - Mirror the same commit (and tag, if one was cut) in the cloud
-     sandbox clone too (plain `git` works there, it's not going
-     through the device bridge -- but still use the same `-c
-     user.name="toy-os" -c user.email="noreply@toy-os.local"` identity,
-     not a distinct "sandbox" one; see `references/delivery-checklist.md`
-     step 5 for why that matters even though this mirror is never
-     pushed) -- keeps the sandbox's history matching the real repo's
-     for the next thing in this session, but this mirror is
-     **intentionally never pushed**.
-   - **Never push from the session, on either checkout -- and this is
-     enforced, not just a rule.** The cloud sandbox's outbound git
-     proxy blocks `git push`/`gh release create` outright regardless
-     of the repo token in the remote URL (confirmed by an actual
-     failed push while cutting v0.0.9: `access denied by the git
-     proxy: ... not in this session's authorized repository set`), and
-     the device bridge has no network access at all. Give the user the
-     exact command to run themselves: `git push origin main` (add
-     `--tags` only if a release tag was actually cut this round). If a
-     release tag was cut, see `references/delivery-checklist.md` step
-     6 for the full asset list (it's `toy-os.iso` +
-     gzipped `disk.img.gz` + `tools/run_release.sh`, not just the ISO)
-     and the `gh release create` command to hand over alongside the
-     push.
-   - See `references/delivery-checklist.md` for the full mechanical
-     rundown (exact tool calls, the Makefile-is-a-protected-file
-     workaround, what "list every file" should look like) if any of
-     this is unfamiliar.
-
-   **Direct local checkout:**
-   - The files are already on the user's real checkout -- there's no
-     separate deliver step. Just `git add` the changed/added files and
-     commit with plain `git` (identity is already configured, see
-     CLAUDE.md) -- the same per-file-body-line commit message
-     convention still applies (see `references/delivery-checklist.md`).
-   - `git push origin main` and `gh release create`/`gh release upload`
-     both work directly from here -- confirmed in real sessions, not
-     blocked the way Cowork's proxy blocks them.
    - **Push policy (user's standing grant, 2026-08-14, reaffirmed in
      session): push ordinary commits to `origin/main` WITHOUT asking**
      when the change is clear-cut -- built, tested, in scope of what
@@ -420,18 +339,12 @@ to this file too).
      GitHub releases, force-pushes, history rewrites, and anything the
      user framed as tentative.
 
-## A recurring wrinkle worth knowing about upfront (Cowork mode)
+## A recurring wrinkle worth knowing about upfront
 
 An automated stop-hook may warn about "unpushed commits" after nearly
-every turn in this repo. In Cowork/device-bridge mode, that's almost
-always the cloud sandbox mirror from step 6 (intentionally never
-pushed), not the user's real checkout -- check which one it means
-before reacting; if it's the sandbox mirror, a one-line explanation is
-enough, the same explanation every time (no need to re-litigate it). In
-a direct local checkout there's no separate mirror, so this warning
-means exactly what it says -- real unpushed work on the real
-checkout -- and is worth surfacing to the user rather than
-explaining away.
+every turn in this repo. It means exactly what it says -- real unpushed
+work on the real checkout -- and is worth surfacing to the user rather
+than explaining away.
 
 **2026-08-17 (the M41 migration day): the ring-3 desktop RUNS, and the
 day's lessons are mostly about DIAGNOSIS rather than about this OS.**

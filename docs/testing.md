@@ -367,9 +367,9 @@ committed, working helper module (`QMPSession`, with `goto()`/`click()`/
 `drag()`/`wheel()`/`mouse_down()`/`mouse_up()`/`recalibrate()`/
 `send_key()`/`send_text()`/`screenshot()`) built from exactly this kind
 of testing, with the gotchas below already handled. Past sessions each
-independently hand-rolled similar scripts in the cloud sandbox (never
-committed, so lost between sessions) and paid the cost of hitting these
-gotchas fresh each time -- that's why this module exists now. Import it
+independently hand-rolled similar scripts, never committed them, and
+paid the cost of hitting these gotchas fresh each time -- that's why
+this module exists now. Import it
 (`sys.path.insert(0, "tools"); from qmp_test import QMPSession`) rather
 than writing new inline socket/JSON code, and add to it (rather than
 writing a one-off script) if you need a capability it doesn't have yet.
@@ -512,7 +512,7 @@ The gotchas it already gets right, for when you need to know why:
   is worth reshaping rather than documenting.
 - **Screenshots:** `screendump` writes a `.ppm`; `QMPSession.screenshot()`
   converts to `.png` via Pillow in one call so it's ready for the Read
-  tool / `SendUserFile`. It hands QEMU an ABSOLUTE path on purpose --
+  tool. It hands QEMU an ABSOLUTE path on purpose --
   QEMU resolves `screendump`'s filename against its own working
   directory, and `-daemonize` leaves that somewhere other than the repo,
   so a relative path reports `{"return": {}}` (success) and writes the

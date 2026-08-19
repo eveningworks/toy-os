@@ -39,12 +39,6 @@ Everything below assumes you've already built and tested the change
 (step 3-4 of the main workflow) and it's clean. This is the mechanical
 part: getting it into git history correctly.
 
-**Which mode is this?** Steps 3-6 fork hard between Cowork/
-device-bridge and a direct local checkout -- see SKILL.md's step 0 for
-the deterministic tell (`git config user.name`: empty = Cowork, set =
-local) if you haven't already settled this. Steps 1-2 below are
-shared.
-
 **Versioning here is semver + a `-dev` suffix (`VERSION`, repo root),
 not a per-change build number** -- this replaced an earlier
 `BUILD_NUMBER`/`tools/bump_build.sh <fix|feature|major>` scheme (see
@@ -88,171 +82,14 @@ edited, in your final response to the user. `git status --short` in
 the sandbox clone is the fastest way to get the exact list right
 before you start delivering -- don't reconstruct it from memory.
 
-## 3. Deliver files to the user's real checkout (Cowork/device-bridge)
+## 3. Commit, tag and publish
 
-For every file in that list:
-
-```
-SendUserFile(files=[...])   # returns a file_uuid per file
-```
-then
-```
-mcp__remote-devices__device_commit_files(files=[
-  {"fileUuid": "...", "devicePath": "/home/user/CodingProjects/toy-os/<relative path>"},
-  ...
-])
-```
-Batch these in as few calls as practical. Check the response's
-`rejected` array -- `Makefile` and anything under `.github/workflows/`
-are protected paths `device_commit_files` refuses to overwrite.
-`device_bash` is NOT blocked from writing them directly, though, so the
-fix isn't asking the user to copy anything by hand: deliver the file as
-`Makefile.new` (any name that doesn't match the protected path) via
-`SendUserFile` + `device_commit_files` as normal, then finish it over
-`device_bash`:
-```
-cp Makefile.new Makefile
-diff Makefile.new Makefile     # confirm identical
-mv Makefile.new _to_delete/    # can't delete outright over this bridge -- see step 4
-```
-Same trick for anything under `.github/workflows/`.
-
-Never write personally identifiable information into any file you're
-about to deliver. If a change seems to genuinely need some, stop and
-ask first, or anonymize it and say so plainly -- don't guess.
-
-## 4. Commit on the device checkout (Cowork/device-bridge)
-
-Always through the wrapper, never a raw `git` call over the device
-bridge -- this matters even for read-only commands like `git status`,
-which still leaves a stale `.git/index.lock` behind on this bridge (see
-CLAUDE.md). `tools/device_git.sh` sweeps stale locks both before AND
-after the real command runs, so the repo is actually lock-free by the
-time it returns, not just for the next `device_git.sh` call:
-
-```
-mcp__remote-devices__device_bash:
-  cd <device-bridge session mount path>/toy-os && \
-  bash tools/device_git.sh add -A -- <the same file list> && \
-  bash tools/device_git.sh -c user.name="toy-os" -c user.email="noreply@toy-os.local" commit -m "$(cat <<'EOF'
-<short summary as the subject line>
-
-<file path>   - <one-line note on what changed in it>
-<file path>   - <one-line note on what changed in it>
-docs/decisions.md - <only when the change answers a "why this way" question>
-EOF
-)"
-```
-**The `-c user.name=... -c user.email=...` is not optional.** The
-device-bridge session has no git identity configured at all (local or
-global -- it's an isolated VM, not the user's real desktop), so a
-plain `commit` fails outright ("Please tell me who you are"). It's
-also the standing privacy convention for this repo now, independent of
-that failure mode -- every commit here uses the generic `toy-os
-<noreply@toy-os.local>` identity, never the maintainer's real name or
-personal email (a full history rewrite was needed once already to
-scrub those out after they'd crept into 91 commits' authorship; see
-`docs/decisions.md`'s entry on it -- don't reintroduce what that
-fixed). Match the same identity on the sandbox mirror commit in step 5
-below.
-
-The per-file body lines are a real convention here now (adopted
-alongside the versioning switch, but independent of it) -- align the
-`-` separators loosely, don't sweat exact column alignment. This is
-what makes a commit skimmable on GitHub without opening the full diff.
-
-Only add a tag if you're actually cutting a release this round (see
-step 1) -- `bash tools/device_git.sh tag v<version>`, not a tag on
-every commit.
-
-The device-bridge session's actual mount path isn't always the same
-string as what `mcp__remote-devices__device_list_dir` shows -- if
-`cd`/`device_bash` can't find the repo at the path
-`get_device_info`/`device_list_dir` reported, look under
-`/sessions/<this-session's-id>/mnt/<folder-name>` instead (confirmed
-working in past sessions; re-derive once per session if the exact
-session ID differs, it's stable within a session).
-
-You may still see a `warning: unable to unlink '.../index.lock'` or
-similar in the output even with `device_git.sh` -- that's expected and
-already handled (the wrapper renames the stale lock out of the way
-rather than deleting it, since the device bridge blocks deletes). The
-command still succeeded; don't treat that warning as a failure.
-
-## 5. Mirror the same commit in the cloud sandbox clone (Cowork/device-bridge)
-
-This is a plain local `git` in the sandbox (`/home/claude/toy-os` or
-wherever this session cloned it) -- not going through the device
-bridge, so no wrapper script needed. Use the same generic identity as
-step 4, not a separate "sandbox mirror" one -- a past session used
-`Claude (sandbox mirror) <claude@sandbox>` here, and when that
-session's history later got bundled and force-pushed for an unrelated
-reason, that identity ended up genuinely public on GitHub instead of
-staying sandbox-local like it was supposed to. Harmless (not PII), but
-avoid it recurring:
-
-```
-git add -A
-git -c user.name="toy-os" -c user.email="noreply@toy-os.local" \
-  commit -m "<same message>"
-git tag v<version>   # only if a release was actually cut this round
-```
-
-This keeps the sandbox's history matching the real repo for whatever
-comes next in *this* session, but it is intentionally, permanently
-**never pushed** -- it's scratch, discarded when the session ends.
-
-## 6. Tell the user how to actually publish it (Cowork/device-bridge)
-
-Never push from the session, on either checkout -- and this isn't just
-a courtesy, it's enforced: confirmed directly cutting v0.0.9, a push
-with the repo's own token embedded in the remote URL still fails with
-`remote: access denied by the git proxy: ... not in this session's
-authorized repository set`. The cloud sandbox's outbound git egress
-goes through an allow-list proxy independent of credentials (read-only
-`fetch`/`ls-remote` works fine through the same proxy, only writes are
-blocked), and the device bridge has no network access at all. There is
-genuinely no path to publish from inside the session -- end your
-response with the exact command:
-
-```
-git push origin main
-```
-Add `--tags` only if a release tag was actually cut this round --
-otherwise there's nothing new to push tag-wise and the flag is just
-noise.
-
-If a release was cut and feels milestone-worthy enough to want a
-downloadable artifact, prep the GitHub Release too (title `v<version>`,
-body = release notes written from `git log`, in the shape
-docs/release-notes-template.md gives) -- but the `gh release
-create` call itself needs real network access, so it goes in the same
-"run this yourself" bucket as the push, not something to attempt from
-the sandbox (`gh` isn't even preinstalled there). Three assets, not
-just the ISO: `toy-os.iso`, `disk.img.gz`, `tools/run_release.sh` --
-see `docs/decisions.md`'s versioning entry for why all three and the
-exact `gh release create` invocation shape. Two things worth doing
-before packaging: `make clean-disk && make iso` so the release's disk
-image doesn't carry session-local test data, and `gzip -k -9 disk.img`
--- it's a large SPARSE file (~9GB apparent size as of v0.0.9, actual
-data far smaller), and shipping it raw both blows past GitHub's 2GB
-asset limit and wastes bandwidth on zeros. Deliver the built assets
-(iso/gz/script) to the user via `SendUserFile` +
-`device_commit_files` the same way as any other file, so the commands
-you hand them can reference a real local path. This is a judgment call
-per release now, not tied to a fixed tier the way it used to be.
-
-## Steps 3-6, direct local checkout
-
-Confirmed directly in a real session (2026-08-12): all of this
-collapses to plain `git`, no relay/mirror/wrapper machinery needed.
-
-- **Deliver + commit:** the files are already on the real checkout --
+- **Commit:** the files are already on the real checkout --
   `git add <the file list from step 2>` then commit with plain `git`
   (identity is already configured as `toy-os <noreply@toy-os.local>`,
   confirmed via `git config user.name`/`user.email`, so no `-c
-  user.name=...` flags needed). Same commit message shape as the
-  Cowork path -- short subject line, then a per-file body:
+  user.name=...` flags needed). Short subject line, then a per-file
+  body:
   ```
   git commit -m "$(cat <<'EOF'
   <short summary as the subject line>
@@ -263,10 +100,6 @@ collapses to plain `git`, no relay/mirror/wrapper machinery needed.
   EOF
   )"
   ```
-- **No protected-file workaround needed** -- `Makefile` and
-  `.github/workflows/*.yml` commit normally, no `.new`-suffix relay.
-- **No mirror step** -- there's only one checkout, so nothing to keep
-  in sync.
 - **Tag, if cutting a release:** `git tag -a v<version> <commit> -m
   "..."` directly.
 - **Publish:** `git push origin main` (`--tags` if a tag was cut) and
@@ -277,24 +110,20 @@ collapses to plain `git`, no relay/mirror/wrapper machinery needed.
   ordinary commits needs no confirmation** -- the user's standing
   grant (2026-08-14) is push-to-main-without-asking for clear-cut,
   tested changes. Tags and `gh release` publishing still get
-  confirmed first. And don't tell them pushing is *impossible* the
-  way it genuinely is from Cowork.
-- **Release assets, if cutting one:** same three as the Cowork path --
+  confirmed first.
+- **Release assets, if cutting one:** three of them --
   `toy-os.iso`, gzipped `disk.img.gz` (`make clean-disk && make iso`
   first so it's not carrying session-local test data, then `gzip -k -9
-  disk.img`), and `tools/run_release.sh`. No `SendUserFile` relay
-  needed -- `gh release create v<version> toy-os.iso disk.img.gz
+  disk.img`), and `tools/run_release.sh` -- `gh release create v<version> toy-os.iso disk.img.gz
   tools/run_release.sh --title ... --notes ...` attaches them directly.
 
 ## Direct local checkout, but as a background job (worktree-isolated)
 
 Confirmed directly across four separate changes in one session
 (2026-08-12, the tray feature, its bug fix, NX/W^X, and
-`shell_flow.py`): a *background* Claude Code session against the
-user's real local checkout is still "direct local checkout" for step 0
-purposes (`git config user.name` returns `toy-os`, no device-bridge
-tools) -- but the harness enforces its own isolation on top, which
-changes the mechanics of steps 3-6 above:
+`shell_flow.py`): a *background* Claude Code session runs against the
+user's real local checkout, but the harness enforces its own isolation
+on top, which changes the mechanics above:
 
 - **File edits are rejected against the shared checkout** until the
   session calls `EnterWorktree` -- do this before the first `Write`/
@@ -337,18 +166,11 @@ changes the mechanics of steps 3-6 above:
   merging on GitHub doesn't update a different local directory on its
   own.
 
-## The recurring stop-hook warning (Cowork/device-bridge)
+## The recurring stop-hook warning
 
-An automated check may fire after a turn saying something like "there
-are N unpushed commits on branch 'main'". In Cowork/device-bridge mode,
-this has meant the cloud sandbox mirror from step 5 -- the disposable
-one that's never supposed to be pushed -- not the user's real
-checkout. A one-line explanation is enough once you've confirmed which
-repo it's actually talking about; no need to re-derive the full
-reasoning each time it fires. In a direct local checkout there's no
-separate mirror, so this warning means exactly what it says -- worth
-surfacing to the user, not explaining away.
-
+An automated stop-hook may warn about "unpushed commits" after nearly
+every turn. It means what it says -- real unpushed work on the real
+checkout -- so surface it rather than explaining it away.
 
 ## Ring-3 apps (added after the Milestone 41 work)
 

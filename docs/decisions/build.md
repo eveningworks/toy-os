@@ -181,24 +181,11 @@ the actual asset/publish mechanics, corrected below:**
   packaging a release** -- otherwise whatever's on the working
   checkout's disk image (test files, session-local state) ships as
   part of the "clean" release.
-- **The publish step (`git push --tags` and `gh release create`)
-  cannot run from the Cowork cloud sandbox, even with the repo's own
-  token in the remote URL.** Confirmed directly (v0.0.9): the push
-  failed with `remote: access denied by the git proxy: ... is not in
-  this session's authorized repository set` -- the sandbox's outbound
-  git egress goes through an allow-list proxy that blocks this
-  regardless of credentials embedded in the URL. Read-only git
-  (`fetch`, `ls-remote`) works fine through the same proxy -- only
-  writes are blocked. The device bridge to the user's real machine has
-  no network access at all (by design, see `CLAUDE.md`), so it can't
-  publish either. Net effect: the "never push from the session" rule
-  in this skill/`CLAUDE.md` isn't just a caution, it's enforced -- tag
-  and prep everything locally (both checkouts), then hand the user the
-  exact `git push origin main --tags` + `gh release create` commands
-  to run from their own machine's terminal, which has real network
-  access. `gh` isn't preinstalled in the cloud sandbox either
-  (`apt-get install -y gh` if you need it there for anything read-only
-  going forward, e.g. checking release state via `gh api`).
+- **Publishing happens from this checkout**, which has real network
+  access: `git push origin main --tags` then `gh release create`. (It
+  used to have to be handed to the maintainer to run by hand, because
+  the retired Cowork sandbox's outbound git egress went through an
+  allow-list proxy that blocked writes regardless of credentials.)
 - **Version-vs-milestone note:** v0.0.9 was cut *ahead of* Milestone 1
   on purpose (a pre-milestone testing snapshot the user explicitly
   asked for), not part of the `v0.1.0` = Milestone-1-done mapping
@@ -344,10 +331,9 @@ directly:
   name and both emails -- zero hits is the actual proof, not just
   "the current file looks right."
 
-**Delivery mechanic, because this session can't push (see the git-proxy
-entry above):** `git bundle create --all` packaged the rewritten
-history into one file, delivered via `SendUserFile` +
-`device_commit_files` same as any other file. The user applied it
+**Delivery mechanic, because that session could not push (see the
+publishing entry above):** `git bundle create --all` packaged the
+rewritten history into one file and handed it over. The user applied it
 themselves: fresh `git clone` from the bundle, fix the `origin` remote
 (cloning from a local bundle auto-sets `origin` to the bundle's own
 path, so `git remote add origin <url>` collides -- use `git remote
@@ -382,10 +368,9 @@ own just for this.
 **Standing convention going forward:** every commit in this repo,
 whether made by a session or by the maintainer directly, should use
 the `toy-os <noreply@toy-os.local>` identity -- never a real name or
-personal email. See `CLAUDE.md`'s "Working in the cloud sandbox"
-section for the mechanical detail (the device-bridge session has no
-git identity configured at all by default, so this has to be passed
-explicitly on every commit, not assumed).
+personal email. It is configured in this checkout, so an ordinary
+`git commit` already does the right thing; the thing to avoid is
+overriding it.
 
 ## The repo lives in an organization because a personal repo has no read-only collaborator
 
