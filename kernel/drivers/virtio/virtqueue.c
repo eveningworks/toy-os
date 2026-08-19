@@ -54,11 +54,10 @@
 // because `int 0x80` is an interrupt gate so IF stays clear for the
 // whole handler (see idt.h's isr_in_progress()). So this spends real
 // time when it can and falls back to a fixed spin when it cannot.
-// A real duration, not an iteration count -- see virtqueue_poll().
-#define VIRTQ_WAIT_MS 5000
-// Backstop for a clocksource that has stopped advancing; large enough
-// that it is never the thing that fires on a merely slow host.
-#define VIRTQ_POLL_BACKSTOP 500000000ull
+// THE bound -- a poll count, not a duration. See virtqueue_poll() for
+// why a clock could not be trusted here. ~100k polls measured out to
+// roughly 12 ms of emulated time, so this is on the order of seconds.
+#define VIRTQ_POLL_BACKSTOP 20000000ull
 
 // Descriptors abandoned by a timeout. See virtqueue_poll().
 static uint32_t g_lost_chains = 0;
@@ -308,34 +307,37 @@ int virtqueue_poll(struct virtqueue *vq, int head, uint32_t *used_len) {
     // orders of magnitude (a fixed ~12ms spin against a 5s wall clock),
     // so "it timed out" means nothing without saying which one, and
     // that ambiguity cost a wrong diagnosis of a CI failure.
-    // ONE BUDGET, FROM A CLOCKSOURCE, because pit_ticks() is not
-    // usable here and a fixed spin count is not a duration.
+    // BOUNDED BY POLL COUNT, with the clock only along for the ride.
     //
-    // This used to branch on isr_in_progress(): a 5s wall clock when
-    // interrupts were on, and otherwise a fixed VIRTQ_POLL_LIMIT spin
-    // -- copied from ata.c, where it is bounded the same way. The spin
-    // measures out to about 12ms on this emulated hardware, and that
-    // turned out to be the budget almost everything actually got: the
-    // kernel test suite runs with interrupts off, so every filesystem
-    // request had ~12ms to complete. It passed locally and failed on a
-    // slower CI runner, where a round trip simply takes longer than
-    // that -- and the timeout then abandoned the chain, which is what
-    // made it look like a driver fault rather than a stopwatch set
-    // wrong. ATA's ATA_POLL_LIMIT has the identical shape and is why
-    // ATA failed there too; one root cause, two transports.
+    // Three attempts, and the measurements are worth keeping because
+    // each one looked right:
     //
-    // clocksource_now_ns() reads a counter (PIT or TSC) rather than a
-    // tick COUNT, so it advances with interrupts disabled -- which is
-    // exactly the case the old code could not measure and had to guess
-    // at. The iteration cap stays only as a backstop for a clocksource
-    // that is not advancing at all.
+    // 1. A fixed spin when interrupts were off, a 5s wall clock
+    //    otherwise -- copied from ata.c. The test suite runs with
+    //    interrupts off, so everything got the spin: ~12 ms. Fine
+    //    locally, too short on a slower CI runner.
+    // 2. A clocksource_now_ns() deadline, on the reasoning that it
+    //    reads a COUNTER and so advances with interrupts disabled.
+    //    That is true of the TSC and NOT of the PIT, whose 16-bit
+    //    counter wraps every ~55 ms and needs the tick to track wraps.
+    //    CI reported "timed out after 927725008 us and 454 poll(s)" --
+    //    927 seconds across 454 polls, i.e. the clock jumped and
+    //    expired the deadline instantly. Which clocksource wins is a
+    //    property of the HOST (the TSC needs to qualify), so this
+    //    passed locally and failed there.
+    // 3. This: the bound is the POLL COUNT, which is monotonic and
+    //    cannot lie. The elapsed time is still measured and printed,
+    //    because it is what diagnosed (2) -- but it decides nothing.
+    //
+    // The cost is that the budget is a count rather than a duration,
+    // so it is worth more or less time on a faster or slower machine.
+    // Accepted deliberately: a bound that is approximately right always
+    // beats one that is exactly right except when it is catastrophically
+    // wrong. Sized so that even a slow emulated host gets seconds.
     uint64_t began = clocksource_now_ns();
-    uint64_t deadline = began + (uint64_t)VIRTQ_WAIT_MS * 1000000ull;
     uint64_t polls = 0;
-    for (uint64_t i = 0; i < VIRTQ_POLL_BACKSTOP; i++) {
-        polls++;
+    for (; polls < VIRTQ_POLL_BACKSTOP; polls++) {
         if (chain_done(vq, head, used_len)) return 1;
-        if (clocksource_now_ns() >= deadline) break;
     }
 
     // TIMED OUT, AND THE DESCRIPTORS ARE DELIBERATELY LEAKED.
