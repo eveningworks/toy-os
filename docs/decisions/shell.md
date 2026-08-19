@@ -456,3 +456,53 @@ See `kernel/proc/strace.c`'s top comment and the commit that added it for the fu
 resolves binaries through `shell_path_find()` instead of the usual
 `shell_exec_name()`.
 
+
+## The kernel shell stands down from the TARGET, not from the console claim
+
+On a `text` boot init starts `/bin/tosh` on the console
+(`data/etc/services.d/tosh`) and `apps/apps.c` skips its ring-0 REPL
+entirely. The obvious implementation is the one already in the kernel:
+`keyboard_claim_console()` exists precisely so that two shells cannot
+drain one key ring, so the kernel shell could simply keep running and
+let the claim silence it -- which is exactly what it did before this
+change.
+
+The reason that is not enough is WHEN the claim happens. It is taken by
+the first fd-0 READ, which is tosh reaching its prompt -- ten
+milliseconds into the boot, but after `apps_start()` has already run.
+A REPL started there prints a banner and a prompt onto a console that is
+about to belong to somebody else, and consumes anything typed in the
+meantime. Neither is fatal, and both are the kind of thing that reads as
+a bug in the new shell rather than as a handoff nobody sequenced.
+
+The boot TARGET is a fact the kernel has before init is even spawned
+(`target_init()` runs beside the other `/etc` readers, deliberately
+ahead of the spawn), so deciding from it removes the race rather than
+narrowing it. `graphical` is untouched: the desktop owns the screen and
+the kernel shell sits behind it, which is what *Exit to shell* returns
+to.
+
+Two conditions ride with it, and both are about not making the machine
+unreachable. It is gated on `scheduler_init_pid() != 0`, because a boot
+with no `/bin/init` is supported and quiet -- with nobody to start a
+shell, standing down would leave no console at all. And the standby loop
+calls `scheduler_idle()` and nothing else: that is what polls the serial
+debug console, through which every one of the kernel shell's ~60
+commands is still reachable as `sh <cmd>`. What it must NOT call is
+`vga_cursor_tick()`/`vga_present()` -- console upkeep belongs to
+whoever owns the screen, and a suspended reader whose loop BODY kept
+drawing is how a blinking text cursor once ended up on top of a desktop
+icon.
+
+What the measurement showed, since it is the part worth carrying:
+disabling the gate reddens only the "stood down" log check in
+`tools/console_shell_test.py`, not the behavioural probe. That is
+correct -- the claim really does cover the steady state -- and it is why
+the gate's value has to be stated as the boot WINDOW rather than as
+"two shells would fight".
+
+The descriptor says `Restart=always` for the reason a getty unit does:
+Ctrl-D is how you leave a shell, and a console with nobody on it must
+not be a state reachable by pressing a key. init's crash-loop give-up
+still applies, so a tosh that cannot start is abandoned rather than
+respawned forever.

@@ -253,8 +253,9 @@ static void load_services(int announce) {
                         (int)(sizeof g_ents / sizeof g_ents[0]));
     if (n <= 0) {
         // Not an error. A machine with no service files is a machine
-        // that starts nothing, which is exactly what a `text` boot
-        // wants and what a bare disk image gives you.
+        // that starts nothing, which is what a bare disk image gives
+        // you -- and is recoverable, since the kernel's own shell only
+        // stands down for a console service that exists.
         if (announce) sys_eprint("init: no services in " SERVICES_DIR "\n");
     }
 

@@ -248,6 +248,29 @@ manual steps to be worth automating:
   KCMDLINE="target=text"`. Not in `gui_regress.py`; run it after
   touching the scheduler's parentage, reaping, `SYS_SLEEP`, the target
   setting or the service descriptors.
+- **`console_shell_test.py`** -- a `text` boot reaches a RING-3 shell
+  prompt and the kernel shell is not involved (`docs/init-design.md`'s
+  stage 4). Eleven checks: init is what started `/bin/tosh`, an idle
+  tosh is BLOCKED rather than spinning, a typed line spawns a program
+  (asserted through the FILESYSTEM -- `file_test` writes
+  `/filetest.txt`), a kernel-shell builtin typed at that prompt creates
+  nothing, and Ctrl-D is followed by a fresh prompt rather than a dead
+  console. It BOOTS TWICE against a disk copy: the first boot sets
+  `system.default_target text` and the US keyboard layout, the second is
+  the one under test. Two traps it encodes. **The restart check is a
+  second `init: started tosh` in the log, never a changed pid** -- a pid
+  is a slot index plus one and slots are reused, so the replacement
+  lands in the slot the dead one just left and reports the same number.
+  And **`dmesg` is `sh dmesg`**: the debug console has no such command
+  of its own, and the first version of this tool "read the log"
+  successfully because the serial stream carries live klog lines, so
+  recent lines were there and older ones were not. Its positive control
+  is recorded honestly in its docstring -- disabling the stand-down
+  reddens only the log check, because `keyboard_claim_console()` covers
+  the steady state and what the gate removes is the ten-millisecond
+  window before that claim exists. Not in `gui_regress.py` (it reboots
+  and rewrites `/etc`); run it after touching init's services, the
+  console claim, or `apps/apps.c`.
 - **`pixel_probe.py`** -- reads exact pixel values out of screenshots,
   and tabulates the same points across several (`--compare a.png b.png
   --at 85,100 --at 215,100`), flagging which moved and which didn't.

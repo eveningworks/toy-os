@@ -308,14 +308,32 @@ keyboard ring, with one owner at a time.
 without spinning, and the desktop and that program cannot both consume
 the same keystroke.
 
-### Stage 4 -- the ring-3 shell
+### Stage 4 -- the ring-3 shell -- DONE 2026-08-19
 
-`tosh` (already ring-3, already the Terminal's shell) spawned by init
-on the console device. It is the user's shell; `apps/shell.c` remains
-as the kernel's debug shell for now.
+`/bin/tosh` is a service (`data/etc/services.d/tosh`, `Target=text`,
+`Restart=always`), so init starts it on a `text` boot exactly as
+systemd starts a getty, and puts a new prompt back when Ctrl-D ends the
+old one. `apps/shell.c` STANDS DOWN on that target rather than racing
+it for the keyboard: it draws no prompt, takes no keys, and stays
+reachable as `sh <cmd>` over the serial debug console, which is how the
+test suite drives it anyway.
 
-**Exit criterion:** the boot reaches a ring-3 shell prompt with no
-kernel-side shell involved, and running a `/bin` program from it works.
+The stand-down is decided from the TARGET, not from the console claim.
+`keyboard_claim_console()` is taken by tosh's first fd-0 READ, which is
+about ten milliseconds after init spawns it -- and `apps_start()` runs
+inside that same window, so neither side controls the ordering. A REPL
+started there prints a banner and a prompt onto a console that is about
+to belong to somebody else, and eats anything typed in the meantime.
+The target is a fact the kernel has before init is even spawned, so
+deciding from it removes the race rather than narrowing it. It is gated on init actually
+running, because a boot with no `/bin/init` is supported and quiet, and
+standing down there would leave the machine with no console at all.
+
+**Exit criterion:** met -- `tools/console_shell_test.py`, 11 checks: the
+boot reaches a ring-3 prompt, init is what started it, a typed line
+spawns a program, a kernel-shell builtin typed at that prompt creates
+nothing, and Ctrl-D is followed by a fresh prompt rather than a dead
+console.
 
 ### Stage 5 -- `/proc`, and retiring the kernel shell
 

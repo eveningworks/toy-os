@@ -1186,6 +1186,30 @@ technical conventions below:
   passed for months on the accidental interlock that `gui` blocking the
   shell provided -- **automating a lifecycle removes interlocks somebody
   depended on**; look for them.
+- **A `text` BOOT REACHES A RING-3 SHELL, AND THE KERNEL SHELL STANDS
+  DOWN FOR IT.** `data/etc/services.d/tosh` (`Target=text`,
+  `Restart=always`) makes `/bin/tosh` a service, so init starts it as
+  systemd starts a getty and puts a new prompt back when Ctrl-D ends
+  the old one. `apps/apps.c` then skips the ring-0 REPL entirely: no
+  prompt drawn, no keys taken, and every one of its ~60 commands still
+  reachable as `sh <cmd>` over the serial debug console -- which is how
+  the whole suite drives it anyway. Three things to know. **The
+  decision comes from the TARGET, not from the console claim**:
+  `keyboard_claim_console()` is taken by tosh's first fd-0 READ, about
+  ten milliseconds after init spawns it, and `apps_start()` runs inside
+  that same window -- so a REPL started there draws a banner and a
+  prompt onto a console about to belong to somebody else and eats
+  whatever is typed meanwhile. The target is known before init is even
+  spawned, so deciding from it removes the race rather than narrowing
+  it. **It is gated on init actually running**, because a boot with
+  no `/bin/init` is supported and quiet and standing down there would
+  leave the machine with no console at all. And **the standby loop
+  calls `scheduler_idle()` and nothing else** -- that is what polls the
+  debug console, while `vga_cursor_tick()`/`vga_present()` are console
+  upkeep belonging to whoever owns the screen (a suspended reader whose
+  loop BODY kept drawing is how a blinking text cursor once landed on a
+  desktop icon). `tools/console_shell_test.py` is the check;
+  `docs/init-design.md`'s stage 4.
 - **RING 3 CAN READ THE CONSOLE NOW -- fd 0, and it BLOCKS.**
   `sys_read(0, buf, n)` parks the caller on `SCHED_WAIT_KEY` and
   `keyboard.c`'s `ring_push()` wakes it from the IRQ, the same
@@ -2054,7 +2078,9 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   `uiclient_test.py`, `uidemo_test.py`, `uterm_test.py`,
   `winclient_test.py`.
 - **Run on demand, not in the gate** -- `init_test.py` (init and service
-  supervision), `stdin_test.py` (blocking fd 0 and `/bin/tosh`, which
+  supervision), `console_shell_test.py` (a `text` boot reaching a ring-3
+  prompt with the kernel shell stood down; boots twice and rewrites
+  `/etc`), `stdin_test.py` (blocking fd 0 and `/bin/tosh`, which
   needs the physical console and so takes the desktop down first),
   `kvm_soak.py` (the timing bugs TCG cannot show),
   `mem_stress.py`, `frame_balance.py` (does teardown balance),

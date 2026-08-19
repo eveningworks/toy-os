@@ -5,6 +5,14 @@ Everything `tosh` responds to, grouped the way `help` itself groups them
 version of what `help` prints — the README links here rather than
 carrying it inline.
 
+**This is the KERNEL's shell** (`apps/shell.c`). On a `graphical` boot
+it is what sits behind the desktop and what *Exit to shell* returns to;
+on a `text` boot init starts `/bin/tosh` on the console instead and this
+one stands down, staying reachable as `sh <cmd>` over the serial debug
+console. `/bin/tosh` is a much smaller shell -- `ls`, `cat`, `cd`,
+`pwd`, `echo`, `help`, and anything on `PATH` -- and none of the
+kernel-introspection commands below exist there.
+
 ## How a command is resolved
 
 Executables run by name, with no prefix: typing `nx_test` searches

@@ -1,0 +1,20 @@
+# The console shell. Started by init when the boot target is `text`.
+#
+# This is what makes a `text` boot reach a RING-3 prompt: /bin/tosh
+# reads the physical console through fd 0 and spawns everything else,
+# with no more privilege than the programs it starts. The kernel's own
+# shell (apps/shell.c) stands down on this target and stays reachable
+# over the serial debug console -- see apps/apps.c.
+#
+# Restart=always is what getty gets on Linux, and for the same reason:
+# Ctrl-D is how you leave a shell, and a console with nobody on it is
+# not a state a machine should be able to reach by pressing a key. The
+# crash-loop give-up still applies, so a tosh that cannot start is
+# abandoned rather than spun forever.
+#
+# See data/etc/services.d/README.md for the format.
+Name=tosh
+Description=The console shell
+Exec=/bin/tosh
+Target=text
+Restart=always

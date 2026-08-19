@@ -79,7 +79,7 @@ and job control is what a terminal on that TTY makes possible.
 
 - [x] ~~A standalone `/bin/tosh`, so the ring-3 shell is a program and not only a library~~ DONE 2026-08-19
 - [ ] stdin redirection in `SYS_SPAWN` -- fd 0 exists now, so this is plumbing rather than a new concept
-- [ ] init starting `/bin/tosh` on the `text` target, in place of the kernel shell
+- [x] ~~init starting `/bin/tosh` on the `text` target, in place of the kernel shell~~ DONE 2026-08-19
 - [ ] **`dup`/`dup2`-style fd plumbing**, so the shell can wire an arbitrary fd to 0/1/2 rather than the two
 - [ ] A per-process cwd
 - [ ] An environment passed to a child
