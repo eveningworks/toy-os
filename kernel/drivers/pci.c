@@ -1,6 +1,7 @@
 // See pci.h's top comment for the enumeration strategy (brute-force,
 // legacy CONFIG_ADDRESS/CONFIG_DATA port I/O) and why it was chosen.
 #include "pci.h"
+#include "pci_internal.h"
 #include "io.h"
 #include "klog.h"
 #include "knum.h"
@@ -182,7 +183,6 @@ uint32_t pci_bar_addr(uint32_t bar) {
 }
 
 void pci_enable_bus_master(const struct pci_device *dev) {
-    if (!dev) return;
     // PCI Command register, offset 0x04, bit 2 ("Bus Master Enable") --
     // without this set, the device won't actually issue memory
     // read/write cycles for DMA at all, even though its I/O-mapped
@@ -190,10 +190,109 @@ void pci_enable_bus_master(const struct pci_device *dev) {
     // BM_PRDT, say) keep accepting reads/writes and can still report a
     // nominal "transfer complete" status -- the classic, easy-to-miss
     // reason a DMA engine that looks fully programmed correctly still
-    // silently moves no real data. Read-modify-write (not a blind
-    // overwrite) so the other Command register bits (I/O space enable,
-    // memory space enable, etc. -- already set by firmware/QEMU before
-    // this kernel ever runs) aren't disturbed.
-    uint16_t cmd = config_read16(dev->bus, dev->device, dev->function, 0x04);
-    config_write16(dev->bus, dev->device, dev->function, 0x04, cmd | 0x0004);
+    // silently moves no real data.
+    //
+    // Kept as its own name because that comment is the value here and
+    // ata.c calls it; the read-modify-write it used to do inline is now
+    // pci_command_update()'s, so there is one implementation of "touch
+    // the Command register" rather than one per bit somebody wanted.
+    pci_command_update(dev, PCI_CMD_BUS_MASTER, 0);
+}
+
+// --- config space, for drivers (see pci_internal.h) ------------------
+//
+// Thin unpackers over the file-local B/D/F forms above. The narrowing
+// and the read-modify-write live there; these exist so a caller holding
+// a `struct pci_device` never has to spread it back out into three
+// arguments.
+
+uint8_t pci_config_read8(const struct pci_device *dev, uint8_t offset) {
+    if (!dev) return 0xFF;
+    return config_read8(dev->bus, dev->device, dev->function, offset);
+}
+
+uint16_t pci_config_read16(const struct pci_device *dev, uint8_t offset) {
+    if (!dev) return 0xFFFF;
+    return config_read16(dev->bus, dev->device, dev->function, offset);
+}
+
+uint32_t pci_config_read32(const struct pci_device *dev, uint8_t offset) {
+    if (!dev) return 0xFFFFFFFFu;
+    return config_read32(dev->bus, dev->device, dev->function, offset);
+}
+
+void pci_config_write16(const struct pci_device *dev, uint8_t offset, uint16_t value) {
+    if (!dev) return;
+    config_write16(dev->bus, dev->device, dev->function, offset, value);
+}
+
+// A device with no capability list reports so in Status (offset 0x06)
+// bit 4. Walking one anyway would read whatever offset 0x34 happens to
+// hold, which on such a device is not a pointer to anything.
+#define PCI_STATUS          0x06
+#define PCI_STATUS_CAP_LIST 0x0010
+#define PCI_CAP_PTR         0x34
+
+// The smallest legal capability offset: everything below 0x40 is the
+// standard header, so a `next` pointing there is a malformed device
+// rather than a capability.
+#define PCI_CAP_MIN_OFFSET  0x40
+
+// 256 bytes of config space with a 4-byte minimum capability gives 64 as
+// the true ceiling on chain length. 48 is comfortably past any real
+// device (QEMU's present three or four) and still terminates promptly on
+// a cycle -- the point is to bound it, not to admit the maximum.
+#define PCI_CAP_MAX_HOPS    48
+
+uint8_t pci_capability_find(const struct pci_device *dev, uint8_t cap_id, uint8_t from) {
+    if (!dev) return 0;
+    if (!(pci_config_read16(dev, PCI_STATUS) & PCI_STATUS_CAP_LIST)) return 0;
+
+    // `from` == 0 starts a walk at the list head; anything else resumes
+    // through THAT capability's own next pointer, so a caller can ask
+    // for the same id repeatedly and step through every instance of it
+    // (which is exactly what virtio needs -- it publishes four or five
+    // vendor-specific capabilities and they are told apart by a field
+    // inside the payload, not by the id).
+    uint8_t offset = from ? pci_config_read8(dev, (uint8_t)(from + 1))
+                          : pci_config_read8(dev, PCI_CAP_PTR);
+
+    for (int hops = 0; hops < PCI_CAP_MAX_HOPS; hops++) {
+        offset &= 0xFC;                        // spec: dword-aligned
+        if (offset < PCI_CAP_MIN_OFFSET) return 0;  // 0 (end) or malformed
+        if (pci_config_read8(dev, offset) == cap_id) return offset;
+        offset = pci_config_read8(dev, (uint8_t)(offset + 1));
+    }
+    return 0;  // cycle, or a chain longer than any real device has
+}
+
+int pci_bar_is_64(uint32_t bar) {
+    if (pci_bar_is_io(bar)) return 0;
+    return ((bar >> 1) & 0x3) == 0x2;
+}
+
+uint64_t pci_bar_mem_addr(const struct pci_device *dev, int index) {
+    if (!dev || index < 0 || index > 5) return 0;
+
+    uint32_t low = dev->bar[index];
+    if (low == 0) return 0;            // unimplemented
+    if (pci_bar_is_io(low)) return 0;  // caller wanted memory
+
+    if (!pci_bar_is_64(low)) return (uint64_t)(low & 0xFFFFFFF0u);
+
+    // A 64-bit BAR consumes the NEXT slot as its upper half, so one in
+    // slot 5 has nowhere to put those bits. That is a malformed device,
+    // not a 32-bit BAR to fall back on -- reading bar[6] would be off
+    // the end of the array.
+    if (index == 5) return 0;
+
+    return ((uint64_t)dev->bar[index + 1] << 32) | (uint64_t)(low & 0xFFFFFFF0u);
+}
+
+uint16_t pci_command_update(const struct pci_device *dev, uint16_t set, uint16_t clear) {
+    if (!dev) return 0;
+    uint16_t cmd = pci_config_read16(dev, 0x04);
+    uint16_t updated = (uint16_t)((cmd & ~clear) | set);
+    pci_config_write16(dev, 0x04, updated);
+    return updated;
 }

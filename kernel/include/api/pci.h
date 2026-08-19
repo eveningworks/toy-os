@@ -3,9 +3,9 @@
 
 #include <stdint.h>
 
-// A minimal PCI config-space enumerator -- the first piece of
-// networking-prerequisite infrastructure (see README.md's "Ideas for
-// what's next" entry on TCP/IP). Legacy port-I/O config-space access
+// A minimal PCI config-space enumerator -- the bus every other device
+// driver here finds its hardware on (see docs/roadmap.md's hardware
+// track). Legacy port-I/O config-space access
 // (CONFIG_ADDRESS/CONFIG_DATA, ports 0xCF8/0xCFC), not the newer
 // memory-mapped ECAM mechanism -- CF8/CFC is universally supported
 // (including by QEMU's emulated chipset) and needs no ACPI/MCFG table
@@ -75,17 +75,24 @@ int pci_bar_is_io(uint32_t bar);
 
 // The base address encoded in `bar`, with the low decode-type bits
 // masked off (bit 0 for I/O BARs; bits 0-3 for memory BARs -- see the
-// PCI spec's BAR layout). Doesn't distinguish 32-bit/64-bit/prefetchable
-// memory BARs beyond that masking -- see this header's top comment on
-// why full decoding (and size probing) is deferred to whichever future
-// driver actually needs to map one.
+// PCI spec's BAR layout). Takes a raw dword, so it CANNOT see the
+// neighbouring BAR slot and therefore cannot decode a 64-bit memory BAR
+// (whose upper half lives in the next one) -- it returns the low half.
+//
+// That is fine for every caller here, which pass I/O BARs (vmsvga.c's
+// bar[0], ata.c's bar4), and it is why the 64-bit decode landed as a
+// SEPARATE function rather than as a fix to this one: see
+// pci_bar_mem_addr() in kernel/include/kernel/pci_internal.h, added
+// when virtio-modern -- whose register windows live in a 64-bit BAR --
+// became the first driver that needed one. `lspci` still prints the low
+// half of such a BAR; harmless for identification, which is all it does.
 uint32_t pci_bar_addr(uint32_t bar);
 
 // Sets the "Bus Master Enable" bit (bit 2) in `dev`'s PCI Command
 // register (config-space offset 0x04) -- required before a device can
 // actually issue memory read/write cycles for DMA, even though its
 // I/O-mapped control registers (a Bus-Master IDE controller's
-// BM_CMD/BM_STATUS/BM_PRDT, say -- see ata.c, build 430) will keep
+// BM_CMD/BM_STATUS/BM_PRDT, say -- see ata.c) will keep
 // accepting reads/writes and can still report a nominal "transfer
 // complete" status without this set. Read-modify-write, so other
 // Command register bits already set by firmware/QEMU are left alone.
