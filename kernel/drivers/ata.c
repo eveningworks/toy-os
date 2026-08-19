@@ -81,14 +81,22 @@
 // WHY 2,000,000 AND NOT MORE. Unlike the virtqueue's, these loops call
 // io_wait() every iteration -- a port write, far more expensive than
 // the volatile memory read a used-ring poll does -- and one of them is
-// bounded at ATA_POLL_LIMIT * 200. Raising this to 20,000,000 took a
-// CI run from ~1.5 minutes to over four, because the FAILURE path grew
-// in proportion: a genuinely stalled drive was now waited on 200x
-// longer, three times over. ~240 ms absorbs the stall that was
-// breaking these tests without turning a dead drive into a multi-minute
-// hang. The constant is shared by loops with very different per-
-// iteration costs, which is the thing to remember before scaling it
-// again.
+// bounded at ATA_POLL_LIMIT * 200, so this constant is shared by loops
+// with very different per-iteration costs. At 20,000,000 a dead drive
+// would be waited on for ~2.4 s per attempt and three attempts per
+// transfer, which is a long time to spend establishing that a disk is
+// gone. ~240 ms absorbs the stall that was failing these tests and
+// keeps that bounded.
+//
+// A correction worth recording, because the wrong version of it was
+// briefly committed: 20,000,000 was reverted on the evidence of a CI
+// run that took 7m39s, read as the failure path scaling up. It was
+// not. That run's `apt-get install` step alone took 6m16s -- a
+// GitHub infrastructure stall -- and the build and tests inside it
+// were their usual speed. The value here is still the right one, for
+// the reason above, but the measurement that prompted it was
+// misattributed. CHECK WHICH STEP IS SLOW BEFORE BLAMING YOUR OWN
+// CHANGE FOR A SLOW PIPELINE.
 #define ATA_POLL_LIMIT 2000000
 
 static int g_present = 0;
