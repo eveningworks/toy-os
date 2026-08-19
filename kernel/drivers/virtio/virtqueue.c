@@ -329,8 +329,11 @@ int virtqueue_poll(struct virtqueue *vq, int head, uint32_t *used_len) {
     // exactly the case the old code could not measure and had to guess
     // at. The iteration cap stays only as a backstop for a clocksource
     // that is not advancing at all.
-    uint64_t deadline = clocksource_now_ns() + (uint64_t)VIRTQ_WAIT_MS * 1000000ull;
+    uint64_t began = clocksource_now_ns();
+    uint64_t deadline = began + (uint64_t)VIRTQ_WAIT_MS * 1000000ull;
+    uint64_t polls = 0;
     for (uint64_t i = 0; i < VIRTQ_POLL_BACKSTOP; i++) {
+        polls++;
         if (chain_done(vq, head, used_len)) return 1;
         if (clocksource_now_ns() >= deadline) break;
     }
@@ -349,9 +352,18 @@ int virtqueue_poll(struct virtqueue *vq, int head, uint32_t *used_len) {
     // which is the right end state for a device that has stopped
     // answering.
     g_lost_chains++;
-    klog_printf("virtio: queue %u timed out on chain %d after %u ms --"
+    // MEASURED elapsed and the poll count, not the constant budget.
+    // Printing VIRTQ_WAIT_MS here said "after 5000 ms" whether the wait
+    // really took five seconds or the clocksource jumped and expired it
+    // instantly -- which are opposite diagnoses, and the message could
+    // not tell them apart. A low poll count with a large elapsed means
+    // the clock jumped; a huge poll count means the device really was
+    // silent for that long.
+    klog_printf("virtio: queue %u timed out on chain %d after %u us and %u poll(s) --"
                 " %u descriptor(s) abandoned, %u still free\n",
-                vq->index, head, (unsigned)VIRTQ_WAIT_MS,
+                vq->index, head,
+                (unsigned)((clocksource_now_ns() - began) / 1000ull),
+                (unsigned)polls,
                 vq->size - vq->num_free, vq->num_free);
     return 0;
 }
