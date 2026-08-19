@@ -177,7 +177,21 @@ def main():
         except subprocess.TimeoutExpired:
             qemu.kill()
 
-    if args.verbose or verdict is not True:
+    if args.verbose:
+        # THE WHOLE TRANSCRIPT, boot messages included -- which is what
+        # this flag has always claimed and did not do.
+        #
+        # It used to apply the same filter as the failure report below,
+        # so every line the KERNEL printed before the test suite ran --
+        # `pci:`, `block:`, `tfs3: mounted`, every driver's bring-up --
+        # was silently dropped. That cost real time: a CI run was
+        # diagnosed as "virtio-blk never came up on the runner" purely
+        # because grepping this output for `block: virtio-blk active`
+        # found nothing, and the same grep found nothing locally on a
+        # run where virtio demonstrably WAS carrying the filesystem.
+        # A verbose flag that filters is worse than no verbose flag.
+        print(transcript)
+    elif verdict is not True:
         # On failure the interesting part is the per-test lines, which
         # are the whole point of having a report rather than a bare code.
         for line in transcript.splitlines():

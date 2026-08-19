@@ -9,6 +9,7 @@
 // to decide whether `make test` passed. A klog_write() report would
 // always go to the serial log and never to the window the user typed in.
 #include "ktest.h"
+#include "block.h"
 #include "kapi.h"
 #include "fault_inject.h"
 
@@ -84,6 +85,22 @@ int ktest_run_all(const char *suite_filter) {
         vga_write(suite_filter);
         vga_write("'");
     }
+    vga_write("\n");
+
+    // THE ENVIRONMENT THE SUITE IS RUNNING IN, stated rather than
+    // inferred. Which block device carries the filesystem changes what
+    // several suites can even test -- the ATA cache tests need the
+    // filesystem on ATA, and a fault injector reaches one layer and not
+    // another -- so a report that does not say which one it had leaves
+    // every result ambiguous.
+    //
+    // This exists because a CI failure was misdiagnosed twice for want
+    // of exactly this line: the run's own output could not answer "was
+    // the filesystem on virtio or ATA?", and two different wrong
+    // conclusions were drawn from greps that measured nothing.
+    vga_write("ktest: block device = ");
+    vga_write(blk_present() ? blk_name() : "none");
+    vga_write(blk_present() && blk_persistent() ? " (persistent)" : " (RAM-only)");
     vga_write("\n");
 
     // One pass per test, printing the suite header whenever it changes.
