@@ -81,7 +81,7 @@ from gui_debug import DebugConsole          # noqa: E402
 from qmp_test import QMPSession             # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CPANEL = "/bin/wm/system/cpanel"
+CPANEL = "/bin/wm/system/settings"
 
 # Control Panel is the workload because it is what the reported freeze
 # was hit through, and because changing a setting is the cheapest thing
@@ -158,7 +158,7 @@ def drive_workload(dbg, qmp, rounds):
         time.sleep(0.3)
         seen.extend(l.strip() for l in dbg.logs())
         for line in seen:
-            m = re.search(r"cpanel: layout (\w+) (-?\d+) (-?\d+) (-?\d+) (-?\d+)", line)
+            m = re.search(r"settings: layout (\w+) (-?\d+) (-?\d+) (-?\d+) (-?\d+)", line)
             if m:
                 geo[m.group(1)] = tuple(int(v) for v in m.groups()[1:])
         if "list" in geo and "choices" in geo:
@@ -167,7 +167,7 @@ def drive_workload(dbg, qmp, rounds):
         return seen, False
 
     wins = [w for w in dbg.json("gui windows --json")["windows"]
-            if w["title"] == "Control Panel"]
+            if w["title"] == "System Settings"]
     if not wins:
         return seen, False
     c = wins[-1]["content"]

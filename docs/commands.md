@@ -145,12 +145,14 @@ directory of text cannot provide about itself. See
 | `config register <name> <path> [description]` | Declare a new config file by writing a descriptor into `/etc/config.d`. Picked up live. |
 | `config unregister <name>` | Remove that descriptor. A built-in cannot be unregistered. |
 
-**Control Panel is GENERATED from the same registry** — it holds no list
-of its own, it asks (`SETTING_OP_COUNT`/`INFO`/`CHOICE`) and draws a row
-per answer. A setting registered anywhere in the kernel gains a Control
-Panel row and a `config` entry with no edit to either. It deliberately
-shows settings only, not facts: it is the "what can I change" screen,
-and read-only counters would bury the settings.
+**System Settings is GENERATED from the same registry** — it holds no
+list of settings and no list of categories, it asks
+(`SETTING_OP_COUNT`/`INFO`/`CHOICE`) and draws what comes back. A
+setting registered anywhere in the kernel gains a sidebar home, a page
+and a `config` entry with no edit to any of them. It deliberately shows
+settings only, not facts: it is the "what can I change" screen, and
+read-only counters would bury the settings. (It was *Control Panel*
+until 2026-08-19 — that is Windows' name.)
 
 **Settings are named `<namespace>.<name>`** — the namespace being the
 registered name of the file the setting lives in, so `font_size` in

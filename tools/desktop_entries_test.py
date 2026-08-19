@@ -265,19 +265,19 @@ def main():
     # guard rather than at a mystery rebinding bug months later.
     dbg.send(f"sh rm {TEST_FILE}")
     wait_for_reload(dbg, TEST_NAME, present=False)
-    dbg.open_app("Control Panel")
+    dbg.open_app("System Settings")
     dbg.settle()
     time.sleep(1.2)
 
-    win = dbg.window("Control Panel")
+    win = dbg.window("System Settings")
     if win is None:
         check("a reload lands while an app window is open", False,
-              "Control Panel did not open")
+              "System Settings did not open")
     else:
         # It is a RING-3 client, which is the reason the reload is safe.
         # Asserted from client_pid rather than from the title, so a
         # kernel-space app wearing the same name could not pass it.
-        check("Control Panel is a ring-3 client",
+        check("System Settings is a ring-3 client",
               win.get("client_pid", 0) != 0,
               f"client_pid={win.get('client_pid')}")
 

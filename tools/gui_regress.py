@@ -121,7 +121,7 @@ TOOLS = [
     ("entries", "desktop_entries_test.py", "ShowIn= and live .desktop reload"),
     ("taskmgr", "taskmgr_test.py", "the table widget, resize reflow, ending a process"),
     ("singleinst", "single_instance_test.py", "one copy of an app, and relaunch raises it"),
-    ("cpanel", "cpanel_test.py", "the settings registry, in ring 3"),
+    ("settings", "settings_test.py", "the settings registry, in ring 3"),
     ("idle", "idle_desktop_test.py", "nothing paints over an idle desktop"),
 ]
 
@@ -159,7 +159,7 @@ COST_S = {
     "uterm": 16,
     "singleinst": 16,  # six launches, each waiting out a client's first frame
     "scrollbar": 15,
-    "cpanel": 20,   # +4 scroll checks, incl. a resize and a wheel
+    "settings": 20,   # +4 scroll checks, incl. a resize and a wheel
     "calculator": 14,
     "entries": 13,
     "sched": 12,

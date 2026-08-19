@@ -190,8 +190,7 @@ def check_maximize(dbg, qmp, tmp, res):
     check 7 stays green -- and the painted-extent half goes red, which
     is the half that was missing.
     """
-    st = dbg.state()
-    screen_w, screen_h = st["screen"]["w"], st["screen"]["h"]
+    dbg.state()  # asserts the WM is answering before anything below
 
     win = dbg.window(TITLE)
     if not win:
@@ -315,11 +314,11 @@ def check_focus_caret(dbg, qmp, tmp, res):
     # play this part; it retired in M41's stage 0, so a kernel app that
     # is still kernel-side takes it -- the Terminal under test was
     # dragged clear to the right above, so this cannot overlap it.
-    dbg.open_app("Control Panel")
+    dbg.open_app("System Settings")
     dbg.settle()
-    thief = dbg.window("Control Panel")
+    thief = dbg.window("System Settings")
     if thief is None:
-        res.check("a second window exists to take focus", False, "no 'Control Panel' window")
+        res.check("a second window exists to take focus", False, "no 'System Settings' window")
         return
     dbg.click(thief["x"] + 40, thief["y"] + 8)
     dbg.settle()

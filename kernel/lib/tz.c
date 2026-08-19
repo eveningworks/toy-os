@@ -448,6 +448,7 @@ static const struct setting g_tz_setting = {
     .label  = "Time zone",
     .type   = SETTING_TYPE_ENUM,
     .file   = TZ_CONFIG_FILE,
+    .category = "Time & Locale",
     .choice = tz_choice,
     .get    = tz_get,
     .apply  = tz_apply,

@@ -170,7 +170,7 @@ def run(dbg, qmp, tmp, shot_dir, res):
 
     # The file must exist on the real filesystem, verified from OUTSIDE
     # the app -- the editor claiming success proves nothing.
-    listing = dbg.send(f"sh ls /")
+    listing = dbg.send("sh ls /")
     res.check("the file really exists on disk afterwards",
               SAVE_NAME in listing,
               f"`ls /` did not mention {SAVE_NAME}")

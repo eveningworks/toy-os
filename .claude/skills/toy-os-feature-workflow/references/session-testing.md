@@ -765,3 +765,67 @@ cache lives below that layer and cannot be reached from it.
 
 Ask of any test using a fault injector, a fixture, or a device: **what
 happens to this when the thing underneath is swapped?**
+
+## Host tools: use the LSP and the linters (2026-08-19)
+
+The machine gained `bear`, `ccache`, `ruff` and `shellcheck` this
+session, and `clangd`/`clang-tidy`/`scan-build` were already there but
+unusable. `docs/tools.md`'s "Host tools this repo expects" is the full
+reference; what a SESSION needs to know:
+
+- **`bear -- make all` (from a `make clean`) regenerates
+  `compile_commands.json`, which is what makes `clangd` work here.**
+  Reach for the LSP instead of grepping for a signature. The day this
+  was set up, writing one new widget against `userland/ui/`'s 24
+  existing ones produced FIVE wrong guesses in a single file --
+  `uui_scrollbar_draw`'s arity, three `uui_widget_ops` function-pointer
+  types, and `KEY_UP` where this kernel spells it `KEY_ARROW_UP` -- and
+  cost a build cycle to find out. A toolkit with 24 widgets is exactly
+  the shape where guessing a signature feels safe and is not.
+- **Run `ruff check tools/` and `shellcheck tools/*.sh` after touching
+  a harness**, before believing its result. Neither is in
+  `preflight.sh` and neither should be. `ruff.toml` pins `F` + `E9`
+  deliberately: the default ruleset reports ~320 findings here, all
+  style, which buries the one class that matters -- a harness bug that
+  reports a healthy system as broken. On its first run the narrow set
+  found 8 real (benign) findings and NO undefined names, and
+  shellcheck found one genuine bug: an unguarded `cd` in
+  `preflight.sh` that would have run the whole gate, `make clean`
+  included, in the caller's directory.
+
+**And the general lesson, which is not about the tools:** the checks
+worth running are the ones aimed at the failure mode you actually have.
+This project's is not "the Python is ugly", it is "the harness lied".
+Selecting for that is why the linter is usable at all.
+
+## A measured rect must contain ONLY the thing under test (2026-08-19)
+
+`settings_test.py`'s scroll check measured a rect spanning the whole
+window content and parked the cursor at `content_width // 3` -- which,
+with the new sidebar, is INSIDE the sidebar. So the wheel scrolled the
+sidebar, the page never moved, and **the check passed anyway**, because
+the sidebar's own scrolling changed pixels inside the measured rect.
+The failure surfaced two checks later as "a choice only reachable by
+scrolling can be applied: utc -> utc", which points nowhere near the
+cause.
+
+Three things to carry:
+
+- **A region that includes something other than the thing under test
+  can be satisfied by that other thing.** Measure the widget, point at
+  the widget.
+- **A layout change silently invalidates every coordinate a tool
+  computed.** This tool's other three failures that day were all the
+  same shape: geometry captured at OPEN, used after a RESIZE; a click
+  at "just past the sidebar" landing in the layout's gap; and a click
+  at the page's centre missing a radio list, because a radio list
+  RECOMPUTES its width rather than filling what the layout offers
+  (`uui_radio_list.h` says so).
+- **Make the app report its own geometry, and assert the intermediate
+  step.** The fix that made all of it tractable was having the app log
+  one line per sidebar row -- id, click y, depth, label -- so the tool
+  looks a row up BY LABEL instead of deriving it from a font size.
+  Same reasoning as `DebugConsole.menu_row()`, and the same reason
+  `gui_flow.py`'s calibrated constants have needed re-measuring three
+  times. Adding "the timezone page opened" as its own check is what
+  turned a mystery into a coordinate bug in one run.

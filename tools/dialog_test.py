@@ -123,7 +123,6 @@ def main():
     if len(btns) != 2:
         return 1
 
-    img = Image.open(a).convert("RGB")
     runs = [(b["x"], b["x"] + b["w"] - 1) for b in btns]
     row = btns[0]["cy"]
     print(f"  buttons: {[(b['label'], b['cx'], b['cy']) for b in btns]}")

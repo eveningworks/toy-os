@@ -50,7 +50,6 @@ validate the header and print both entries.
 """
 import argparse
 import struct
-import sys
 
 SECTOR = 512
 

@@ -45,6 +45,11 @@ _Static_assert(SETTING_MAX == SETTING_ABI_MAX,
                "its array from the ABI one and would truncate the list");
 #define SETTING_NAME_MAX   24 // the /etc key, e.g. "font_size"
 
+// What a setting with no `category` is filed under. Named rather than
+// spelled in three places -- a UI, the ABI default and a test would
+// otherwise each carry the string.
+#define SETTING_CATEGORY_DEFAULT "General"
+
 // QUALIFIED NAMES: a setting's identity is (namespace, name), not name.
 //
 // The namespace is the registered NAME OF THE FILE it persists to
@@ -85,6 +90,22 @@ struct setting {
     const char *label; // human-facing; a UI shows this, never `name`
     enum setting_type type;
     const char *file;  // which /etc file it persists to
+
+    // Which section of a settings UI this belongs under -- "Appearance",
+    // "Input", "System". NULL means SETTING_CATEGORY_DEFAULT, so an
+    // existing setting needs no edit and a new one may ignore this.
+    //
+    // Declared HERE rather than mapped by the app, for the reason
+    // System Settings has no list of settings at all: a table in the app
+    // is a second source of truth that drifts the moment a subsystem
+    // adds a key. A setting registered anywhere in the kernel gets a
+    // sidebar home the same way it already gets a row.
+    //
+    // It is a free STRING, not an enum, so a ring-3 program declaring
+    // its own config file can name a section the kernel has never heard
+    // of. The UI groups by exact match and puts anything unrecognised
+    // under the default -- which is a real answer, not an error.
+    const char *category;
 
     // ENUM only: writes choice `index` into `out`, returning 1, or
     // returns 0 once `index` is past the last one. A callback rather

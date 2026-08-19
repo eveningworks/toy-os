@@ -44,7 +44,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from qmp_test import QMPSession, launch_qemu_cmd  # noqa: E402
+from qmp_test import launch_qemu_cmd  # noqa: E402
 from shell_flow import ShellFlow  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

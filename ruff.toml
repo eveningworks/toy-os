@@ -1,0 +1,29 @@
+# Linting for tools/ -- the ~40 Python programs that drive this OS.
+#
+# WHY A NARROW RULESET. Ruff's defaults report ~320 findings here, and
+# essentially all of them are style: shebangs, import order, %-formatting,
+# unused `noqa`s. That is noise a gate cannot survive -- a check that
+# cries wolf gets ignored, which this project has already decided once
+# about CI running on every push.
+#
+# What IS selected is the class this repo actually gets bitten by: HARNESS
+# BUGS THAT REPORT A HEALTHY SYSTEM AS BROKEN. A `pgrep -f` waiter that
+# matched its own command line and could never exit; a forbidden-substring
+# check scoped to the whole console, so the kernel's own "FLUSH FAILED"
+# failed a passing test; a drain that accumulated a cumulative source and
+# double-counted. Pyflakes (F) catches the subset of that family a linter
+# can see -- undefined names, unused bindings, f-strings with no
+# placeholder -- and E9 catches syntax and IO errors.
+#
+# Run it as `ruff check tools/`. Not in preflight.sh: the gate must not
+# start requiring a tool a checkout may not have, same rule that keeps
+# Docker out of it.
+line-length = 100
+
+[lint]
+select = ["F", "E9"]
+
+[format]
+# Not used -- nothing here is auto-formatted, and reformatting 40 files
+# would bury the next real diff.
+exclude = ["*"]

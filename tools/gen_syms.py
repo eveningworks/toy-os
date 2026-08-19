@@ -127,7 +127,7 @@ def main():
 
     if args.verify:
         want = open(args.verify).read()
-        cur = f"const unsigned char ksyms_blob[] = {{"
+        cur = "const unsigned char ksyms_blob[] = {"
         if cur not in want:
             sys.exit(f"gen_syms: {args.verify} is not a generated table")
         # Compare the byte count only: the table records link-time

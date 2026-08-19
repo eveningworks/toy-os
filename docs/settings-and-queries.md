@@ -132,8 +132,16 @@ among several.
 ## Adding a setting
 
 Register a `struct setting` (`api/setting.h`) from `settings_init()`:
-a name, a label, a type, its file, a choice enumerator, a getter, and
-one `apply` that validates, applies AND persists.
+a name, a label, a type, its file, a **category**, a choice enumerator,
+a getter, and one `apply` that validates, applies AND persists.
+
+The `category` is a free string — `"Appearance"`, `"Input"`,
+`"Startup"` — and it is what files the setting under a heading in System
+Settings' sidebar. Omit it and the setting lands under `"General"`; a
+ring-3 program declaring its own config file may name a section the
+kernel has never heard of. It is declared here rather than mapped by
+the app for the same reason the app holds no list of settings: a table
+in the UI drifts the moment a subsystem adds a key.
 
 **Do not add a setting as a bare `etc_config_get`/`_set` pair.** That is
 the shape the registry replaced, and it leaves nothing able to answer
@@ -163,6 +171,20 @@ storage duration — a stack local leaves the registry holding a dangling
 pointer that reads as plausible garbage. And a **LIST class gets no
 field table**: an index baked into a name means a different record a
 second later, which is sysctl's worst corner.
+
+## The UI
+
+**System Settings** (`userland/gui/system/settings.c`, `/bin/wm/system/settings`)
+— a navigation tree on the left, one page on the right, a status line
+underneath. KDE System Settings' shape.
+
+It contains **no list of settings and no list of categories**. Both come
+from the registry, so a setting registered anywhere in the kernel
+appears under a heading, with its legal values, with no edit to the app.
+Selecting a heading opens its first setting rather than an empty pane.
+
+Renamed from *Control Panel* on 2026-08-19: that is Windows' name, and
+this shows exactly the setting registry.
 
 ## Related
 

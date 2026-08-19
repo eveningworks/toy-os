@@ -55,6 +55,7 @@ enum setting_result {
 // Mirrors the kernel's SETTING_MAX (api/setting.h); a client should
 // still read the real count from SETTING_OP_COUNT rather than assume
 // this many exist.
+#define SETTING_ABI_CATEGORY_MAX 24 // a UI section name, e.g. "Appearance"
 #define SETTING_ABI_MAX       16
 
 #define SETTING_ABI_NAME_MAX  24 // the /etc key, e.g. "font_size"
@@ -162,6 +163,12 @@ struct setting_msg {
     char ns[SETTING_ABI_NS_MAX];       // out (INFO)
     char label[SETTING_ABI_LABEL_MAX]; // out (INFO)
     char file[SETTING_ABI_FILE_MAX];   // out (INFO)
+    // The UI section this setting belongs under (api/setting.h's
+    // `category`), or "General" when it declared none. Out on INFO.
+    // A client GROUPS by it -- System Settings' sidebar is built from
+    // exactly this, so a setting registered anywhere in the kernel
+    // appears under a heading with no edit to the app.
+    char category[SETTING_ABI_CATEGORY_MAX];
     char value[SETTING_ABI_VALUE_MAX]; // in (SET), out (INFO/CHOICE/GET)
 
     // What the FILE currently says, filled by INFO alongside the live

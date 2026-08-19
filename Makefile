@@ -22,7 +22,17 @@ KCMDLINE ?=
 
 GRUB_MKRESCUE := $(shell command -v grub-mkrescue 2>/dev/null || command -v grub2-mkrescue 2>/dev/null)
 
-CC = gcc
+# ccache in front of the compiler when it is installed, and plain gcc
+# when it is not -- so a checkout without it builds identically.
+#
+# It earns its keep on the GATE, not on an ordinary edit: preflight.sh
+# and `make verify` both start with `make clean`, so every run is a full
+# rebuild of a tree that mostly did not change. Nothing else here is
+# affected -- ccache hashes the preprocessed source and the flags, so a
+# CFLAGS change correctly misses the cache (which matters, because the
+# .d files do NOT track flags; see CLAUDE.md).
+CCACHE := $(shell command -v ccache 2>/dev/null)
+CC = $(CCACHE) gcc
 LD = ld
 AR = ar
 ASM = nasm

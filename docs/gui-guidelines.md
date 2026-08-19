@@ -25,10 +25,20 @@ the widget's.
 
 Two placement rules that matter more than they look:
 
-- **Keep the chrome OUTSIDE the scroll view.** Tabs, a status bar, a
-  button row: these should not scroll away, and if they are inside the
-  scrolled page they will. Control Panel puts its tabs above and its
-  status bar below, with only the page between them.
+- **Keep the chrome OUTSIDE the scroll view.** A sidebar, a status bar,
+  a button row, a page heading: these should not scroll away, and if
+  they are inside the scrolled page they will. System Settings puts its
+  navigation tree beside the page and its status bar below it, with only
+  the choices in between.
+
+  **A HEADING IS CHROME, and that is easy to get wrong.** Drawing a
+  page title in `on_draw` puts it ON TOP of the widgets, because the
+  toolkit paints them first; reserving space for it only moves the
+  problem, since the page scrolls and content then slides underneath a
+  title that stays put. System Settings' first version did exactly this
+  and the title landed on the first radio row. It carries the title in
+  the status bar instead -- already chrome, already outside, and no new
+  widget. Ask what a piece of text IS before deciding where to draw it.
 - **One scroll region per page, not one per widget.** A `uui_listbox`
   inside a scroll view is laid out at its natural height, so every row
   is present and it has nothing of its own left to scroll -- one page,

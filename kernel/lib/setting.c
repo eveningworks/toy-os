@@ -285,6 +285,11 @@ int setting_dispatch(struct setting_msg *msg) {
         k_strlcpy(msg->label, s->label, sizeof msg->label);
         k_strlcpy(msg->file, s->file ? s->file : "", sizeof msg->file);
         k_strlcpy(msg->ns, setting_namespace(s), sizeof msg->ns);
+        // NULL becomes the default here, at the boundary, rather than
+        // in each client: a UI that had to know the fallback string
+        // would be a second place it is written down.
+        k_strlcpy(msg->category, s->category ? s->category : SETTING_CATEGORY_DEFAULT,
+                  sizeof msg->category);
         msg->type = (s->type == SETTING_TYPE_ENUM) ? SETTING_ABI_TYPE_ENUM
                                                    : SETTING_ABI_TYPE_STRING;
         msg->count = choice_count(s);

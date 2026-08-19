@@ -502,6 +502,43 @@ technical conventions below:
   row-only hit meant header and scrollbar presses reached nothing), and
   anything comparing `selected` against `top` is mixing an app row with
   a view offset. See `docs/decisions.md`.
+- **`uui_tree` is the navigation widget** (`userland/ui/uui_tree.h`) --
+  rows at a DEPTH with collapsible parents, written for System
+  Settings' sidebar and general enough for the file manager the roadmap
+  names. **The nodes are the app's flat `const` array**, each carrying
+  its depth; the widget derives parent/child from the depth run, so
+  there is no allocation, no ownership and no teardown -- the same call
+  `uui_menubar`'s const menu trees make, and still right now that ring 3
+  has `malloc`. Five things to know. **The easy path is three lines**
+  (declare nodes, read `uui_tree_selected_id()`): everything starts
+  expanded with row 0 selected, so a tree told nothing else already
+  behaves. **An app stores an ID, never a row** -- rows move as things
+  collapse -- and `uui_tree_select_id()` EXPANDS whatever was hiding the
+  node, because selecting something invisible looks exactly like doing
+  nothing. **Collapsed state is a BITMAP on the widget**, not a flag on
+  the node, since the nodes are the caller's `const` array. **The
+  expander toggles without navigating**, because exploring a section is
+  not choosing it. And **`natural_size` counts every node, collapsed or
+  not** -- a tree that shrank when collapsed would make the layout
+  twitch under the user's own click.
+- **A SETTING DECLARES ITS CATEGORY, and the sidebar is generated from
+  it.** `struct setting.category` (`api/setting.h`) is a free string --
+  `"Appearance"`, `"Input"`, `"Startup"` -- carried to ring 3 on
+  `SETTING_OP_INFO`, with NULL becoming `SETTING_CATEGORY_DEFAULT` at
+  the ABI boundary rather than in each client. So a setting registered
+  anywhere in the kernel gets a sidebar home the same way it already
+  gets a Control Panel row, and **System Settings holds no list of
+  categories any more than it holds a list of settings** -- a table in
+  the app is the second source of truth the whole app exists to avoid.
+- **Control Panel is now SYSTEM SETTINGS** --
+  `userland/gui/system/settings.c`, `/bin/wm/system/settings`, driven by
+  `tools/settings_test.py`. Renamed 2026-08-19 because Control Panel is
+  Windows' name and this shows exactly the SETTINGS registry (not facts,
+  not tunables). The shape is KDE System Settings': a `uui_tree` sidebar,
+  one page, a status bar. **The rename left a stale
+  `/bin/wm/system/cpanel` on any existing `disk.img`**, because `make
+  iso` re-seeds by SYNC -- `make clean-disk && make iso` for a fresh
+  image, or delete it by hand.
 - **`uui_table` is the multi-column widget** (`userland/ui/uui_table.h`)
   -- columns with per-column width (in CHARACTERS, or 0 to stretch) and
   alignment, a header, selection, scrolling. **It PULLS its rows through
@@ -1101,8 +1138,9 @@ technical conventions below:
   there is no user model to gate it on, and killing the ring-3 WM is
   stage 4's exit criterion rather than a hole.
 - **`Exec=builtin:` is GONE, and ring 0 contains no applications.**
-  Control Panel was the last one; it is `userland/gui/system/cpanel.c`
-  now, and the builtin table, its lookup and its struct are deleted from
+  Control Panel was the last one; it is `userland/gui/system/settings.c`
+  now (renamed to **System Settings** on 2026-08-19 -- Control Panel is
+  Windows' name, and this shows exactly the SETTINGS registry), and the builtin table, its lookup and its struct are deleted from
   `gui_apps.c`. An entry still naming that form is refused loudly rather
   than shown as a row that does nothing -- an entry file can outlive the
   mechanism it names. One live consequence: the WM's live-`.desktop`-
@@ -2206,7 +2244,7 @@ class in one run) over a plausible story.
 earlier run wrote is still there -- and several tools' apps WRITE.
 `menubar_test` saves a file (a stale recent-files entry changes a
 submenu's contents, so every later click in it lands on a different
-row), `cpanel_test` and `cursor_theme_test` both persist settings to
+row), `settings_test` and `cursor_theme_test` both persist settings to
 `/etc`. A dirty fixture fails in a way that reads exactly like a code
 regression or a flake. So: `make clean-disk && make iso`, then re-run
 with `--logs DIR`. If it still fails, prove it is not yours by
@@ -2377,7 +2415,7 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   `damage_sweep.py` / `damage_hunt.py` (the damage invariant).
 - **GUI tools**, all run by `gui_regress.py` -- `blank_window_test.py`,
   `calculator_client_test.py`, `compositor_test.py`,
-  `compositor_death_test.py`, `cpanel_test.py`, `crashtest_test.py`,
+  `compositor_death_test.py`, `settings_test.py`, `crashtest_test.py`,
   `cursor_theme_test.py`, `desktop_entries_test.py`, `dialog_test.py`,
   `forcequit_test.py`, `gfxdemo_test.py`, `idle_desktop_test.py`,
   `menubar_test.py`, `notepad_client_test.py`, `sched_gui_test.py`,
@@ -2418,6 +2456,29 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
 - **The repo itself** -- `backup_repo.sh` (run it before ANY change to
   the repo's identity or history -- a mirror clone is not a backup here,
   release assets live only on GitHub).
+
+**HOST TOOLS THIS REPO EXPECTS, none required to build it** --
+`docs/tools.md`'s "Host tools this repo expects" has the full entry for
+each. The two worth knowing before you start:
+
+- **`bear -- make all` regenerates `compile_commands.json`, and that is
+  what makes `clangd` work here.** Run it from a `make clean`, since it
+  only captures what actually recompiles. Reach for the LSP rather than
+  grepping for a signature: `userland/ui/` has 24 widgets whose ops
+  tables are easy to guess wrong, and guessing cost a build cycle and
+  five wrong signatures in one file the day this was set up.
+- **`ruff check tools/` and `shellcheck tools/*.sh`** before touching a
+  harness. `ruff.toml` pins a narrow ruleset (`F` + `E9`) on purpose --
+  the default reports ~320 style findings and buries the class that
+  matters here, which is a harness bug reporting a healthy system as
+  broken. NEITHER is in `preflight.sh`: the gate must not start
+  requiring a tool a checkout may not have, same rule that keeps Docker
+  out of it.
+
+`ccache` is wired into the Makefile (`CC = $(CCACHE) gcc`, falling back
+to plain `gcc`), so a checkout without it is unaffected. It matters on
+the GATE, which always starts with `make clean` -- measured 2.37s ->
+0.40s for a full rebuild.
 
 Five standing rules that are cheaper to know than to rediscover:
 

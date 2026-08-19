@@ -137,6 +137,7 @@ static const struct setting g_kb_setting = {
     .label  = "Keyboard layout",
     .type   = SETTING_TYPE_ENUM,
     .file   = KEYBOARD_CONFIG_FILE,
+    .category = "Input",
     .choice = kb_choice,
     .get    = kb_get,
     .apply  = kb_apply,

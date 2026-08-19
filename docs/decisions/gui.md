@@ -2632,3 +2632,95 @@ change alone left "the status bar survives" GREEN at its first
 threshold, because the scrolled page's own content lands in those rows
 and "is there any ink" is satisfied either way. Measured 4675 px
 present against 777 px with the bug, so the check asserts 2000.
+
+---
+
+## The settings UI is a tree and a page, and it is called System Settings
+
+Rebuilt 2026-08-19. Two decisions, and the second is the one that keeps
+the app honest.
+
+**The shape is KDE System Settings': a navigation tree on the left, one
+page on the right.** GNOME Settings, Windows Settings and macOS Ventura
+all converged on sidebar-plus-pane; the TREE half is specifically KDE's,
+and it is what lets a category collapse once the registry grows past a
+screenful. What it replaced was two tab buttons and a flat listbox --
+honest, generated from the registry, and with exactly two levels of
+structure available no matter how many settings existed.
+
+**The categories come from the KERNEL, not from the app.** `struct
+setting` gained a `category` string, so the sidebar is generated exactly
+as the rows already were: a setting registered anywhere appears under a
+heading with no edit to the app. The alternative -- a name-to-category
+table in System Settings -- was rejected for the reason the app holds no
+list of settings either: it is a second source of truth that drifts the
+moment a subsystem adds a key, which is the specific failure the
+registry was built to end. Grouping by NAMESPACE was the free
+alternative and would have produced exactly one branch, since every
+setting today lives in `system`.
+
+A free string rather than an enum, so a ring-3 program declaring its own
+config file can name a section the kernel has never heard of; the UI
+groups by exact match and files anything unrecognised under `"General"`.
+NULL becomes that default at the ABI boundary, not in each client --
+otherwise every UI would carry its own copy of the fallback.
+
+**And the name.** *Control Panel* is Windows', and this app shows
+exactly the SETTINGS registry -- not facts, not tunables (see
+`docs/settings-and-queries.md`'s vocabulary). KDE and macOS both call it
+System Settings, and the qualifier earns its keep because a
+per-application settings window is something toy-os may grow later,
+which is why GNOME's bare *Settings* was not taken.
+
+## A page heading is chrome, and drawing it in the page is wrong
+
+Worth its own entry because the wrong version looked right in the code
+and only failed at a particular scroll offset.
+
+System Settings' first version painted the setting's name at the top of
+the page rect in `on_draw`. That runs AFTER the toolkit paints the
+declared widgets, so the heading landed on top of the first choice.
+Reserving space for it only moves the problem: the page SCROLLS, so the
+content slides underneath a heading that stays put.
+
+A fixed heading is CHROME and belongs outside the scroll view, which
+needs a label widget this toolkit does not have -- and adding one for a
+string with no behaviour is a widget for the sake of having one. The
+information (which setting, which file) went into the status bar
+instead, which is already chrome and already outside. One less widget,
+and nothing overlaps at any scroll offset.
+
+The general form: ask what a piece of text IS -- content that scrolls,
+or chrome that does not -- before deciding where to draw it.
+
+## `uui_tree`: the nodes are the app's, the structure is the widget's
+
+The app supplies one flat `const` array in display order, each node
+carrying its DEPTH; the widget derives parent/child from the depth run,
+exactly as an indented outline reads. No allocation, no ownership, no
+teardown -- the same call `uui_menubar` made for its const menu trees,
+and still the right one now that ring 3 has `malloc`: a declared tree
+needs no teardown and cannot leak.
+
+What the widget owns is what a tree DOES: which rows are collapsed,
+which is selected, where the view is scrolled, and the mapping from a
+screen row to a node once collapsing has hidden some. Collapsed state is
+a BITMAP on the widget rather than a flag on the node, because the nodes
+are the caller's `const` array and writing into it would make that
+`const` a lie.
+
+Three consequences worth stating:
+
+- **Every public index is a NODE, and every stored handle is an ID.**
+  Rows move as things collapse; ids do not. `uui_tree_select_id()`
+  expands whatever was hiding the node, because selecting something and
+  leaving it invisible looks exactly like the call doing nothing.
+- **The expander toggles without navigating.** Clicking a triangle to
+  see what is inside a section is not the same gesture as choosing that
+  section, and conflating them would change the page every time somebody
+  explored.
+- **`natural_size` counts every node, collapsed or not.** A tree that
+  shrank when collapsed would make the layout twitch under the user's
+  own click -- the same rule `uui_button_group_natural_size()` broke by
+  measuring from the origin, and for the same reason: natural size is
+  what a widget WANTS, asked before anyone knows its state.

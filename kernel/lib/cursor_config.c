@@ -55,6 +55,7 @@ static const struct setting g_cursor_setting = {
     .label  = "Console cursor",
     .type   = SETTING_TYPE_ENUM,
     .file   = CURSOR_CONFIG_FILE,
+    .category = "Appearance",
     .choice = cursor_choice,
     .get    = cursor_get,
     .apply  = cursor_apply,

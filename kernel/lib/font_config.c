@@ -71,6 +71,7 @@ static const struct setting g_font_setting = {
     .label  = "Font size",
     .type   = SETTING_TYPE_ENUM,
     .file   = FONT_CONFIG_FILE,
+    .category = "Appearance",
     .choice = font_choice,
     .get    = font_get,
     .apply  = font_apply,

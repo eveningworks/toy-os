@@ -102,6 +102,7 @@ static const struct setting g_target_setting = {
     .label  = "Startup target",
     .type   = SETTING_TYPE_ENUM,
     .file   = TARGET_FILE,
+    .category = "Startup",
     .choice = target_choice,
     .get    = target_setting_get,
     .apply  = target_apply,

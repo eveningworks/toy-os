@@ -61,7 +61,7 @@ SPIN_PATH = "/tests/spin_test 40"   # `gui spawn` forwards the argument
 
 # A kernel-space app, opened only so there is a window on screen for
 # `gui windows` to walk -- the second half of the liveness claim.
-WINDOW_APP = "Control Panel"
+WINDOW_APP = "System Settings"
 
 K_RET = "0x0d"
 K_SPACE = "0x20"  # `gui key` splits on whitespace, so space must be hex

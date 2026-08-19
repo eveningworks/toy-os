@@ -48,7 +48,11 @@
 set -uo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$repo_root"
+# GUARDED, because `set -e` is deliberately not in effect here (this is
+# `set -uo pipefail`, so each step's status is checked by hand). An
+# unguarded cd that failed would run the whole gate -- make clean
+# included -- in whatever directory the caller happened to be in.
+cd "$repo_root" || { echo "preflight: cannot cd to $repo_root" >&2; exit 1; }
 
 skip_clean=0
 for arg in "$@"; do

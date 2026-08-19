@@ -40,7 +40,7 @@ CLIENT_TITLE = "Ring 3 Client"
 # Spawned directly with `gui spawn` (DebugConsole.spawn) rather than by
 # typing at a Terminal -- see BEHIND_TITLE's comment in run().
 SPAWN_PATH = "/tests/winclient"
-BEHIND_TITLE = "Control Panel"
+BEHIND_TITLE = "System Settings"
 
 # userland/tests/winclient.c's COLORS[], as (r, g, b). The client starts on
 # the first and advances one step per key or click.

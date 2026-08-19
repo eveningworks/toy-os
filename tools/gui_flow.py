@@ -82,7 +82,7 @@ START_BTN = (50, 703)  # inside the taskbar's Start button, safely off any edge
 # mirror of that rather than of a table in gui_apps.c. Most entries
 # spawn a ring-3 program, so open_app() returns before any window
 # exists: a caller that wants the window must poll `gui windows`.
-APP_ORDER = ["About", "Control Panel", "Task Manager",
+APP_ORDER = ["About", "System Settings", "Task Manager",
              "Calculator", "Notepad", "Terminal",
              "Shapes", "UI Demo"]
 # Keep in sync with userland/wm/start_menu.c's wm_system_actions[] order.

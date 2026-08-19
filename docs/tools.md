@@ -656,11 +656,13 @@ manual steps to be worth automating:
   first version asserted only absence and passed with the filter
   disabled outright, because `write` truncates and the check was racing
   the transient invalid file. In `gui_regress.py`.
-- **`cpanel_test.py`** -- the ring-3 Control Panel and, through it, the
-  settings registry (14 checks). Run it after touching
+- **`settings_test.py`** -- the ring-3 System Settings app and, through
+  it, the settings registry. Run it after touching
   `kernel/lib/setting.c`, `SYS_SETTING`/`SYS_SYSINFO`, or
-  `uui_listbox`/`uui_radio_list`/`uui_statusbar`/`uui_layout`'s `hidden`
-  handling. Two things it encodes. A change is verified by reading the
+  `uui_tree`/`uui_radio_list`/`uui_statusbar`/`uui_layout`'s `hidden`
+  handling. (It was `cpanel_test.py` until the app was renamed on
+  2026-08-19 -- Control Panel is Windows' name, and this shows exactly
+  the SETTINGS registry.) Two things it encodes. A change is verified by reading the
   BYTES ON DISK through the console's own `sh cat`, not by believing the
   app -- and note `/bin/config get` does NOT work for this, because a
   spawned program's stdout goes to its parent's pipe rather than the
@@ -971,3 +973,62 @@ manual steps to be worth automating:
   -- sparseness is only ever lost, and an untrimmed image compresses
   whatever stale data it is still carrying. See
   `docs/decisions.md`'s versioning entry for the full v0.0.9 writeup.
+
+---
+
+## Host tools this repo expects (not in `tools/`)
+
+Installed on the maintainer's machine rather than checked in. Nothing
+here is required to BUILD toy-os — `make all`, `make iso` and
+`preflight.sh` work without every one of them — but each removes a
+rederive-from-scratch cost, which is the same bar `tools/` holds itself
+to. Arch package names; all are in the official repos.
+
+- **`bear`** — generates `compile_commands.json` from the real build:
+  `bear -- make all` (start from `make clean`, or it only captures what
+  actually recompiled). Gitignored, because it holds machine-specific
+  absolute paths.
+
+  **This is what makes `clangd` work on this repo**, and it earns its
+  keep on a codebase of this shape: `userland/ui/` alone has 24 widgets
+  whose ops tables and helper signatures are easy to guess wrong.
+  Writing `uui_tree.c` without it cost a build cycle to five wrong
+  guesses in one file — `uui_scrollbar_draw`'s arity, three `uui_widget_ops`
+  function-pointer types, and `KEY_UP` where this kernel spells it
+  `KEY_ARROW_UP`. Regenerate it after adding a source directory.
+
+- **`ccache`** — wired into the Makefile as `CC = $(CCACHE) gcc`, which
+  falls back to plain `gcc` when it is not installed, so a checkout
+  without it builds identically. It pays for itself on the GATE rather
+  than on an ordinary edit: `preflight.sh` and `make verify` both start
+  with `make clean`, so every run is a full rebuild of a tree that
+  mostly did not change. Measured here: **2.37s → 0.40s** for
+  `make clean && make all`. It hashes preprocessed source plus flags, so
+  a CFLAGS change correctly MISSES the cache — which matters, because
+  the `.d` files do not track flags at all (CLAUDE.md).
+
+- **`ruff`** — `ruff check tools/`, configured by `ruff.toml` at the
+  repo root. Deliberately narrow (`F` + `E9`): the default ruleset
+  reports ~320 findings here and essentially all are style. What is
+  selected is the class this repo actually gets bitten by — **harness
+  bugs that report a healthy system as broken**. Not in `preflight.sh`,
+  for the same reason Docker is not: the gate must not start requiring
+  a tool a checkout may not have.
+
+- **`shellcheck`** — `shellcheck tools/*.sh`. Small surface (six
+  scripts) and directly relevant: the repo has already been bitten by a
+  `pkill ...; rm ...` chain aborting under `errexit` because `pkill`
+  exits 1 when nothing matched, which shellcheck flags directly. It
+  found one real thing on first run: an unguarded `cd` in
+  `preflight.sh`, which would have run the whole gate — `make clean`
+  included — in the caller's directory if it ever failed.
+
+- **`clang-tidy` / `scan-build`** — a second opinion on the C, usable
+  only once `bear` has produced the compilation database. Building the
+  kernel with `clang` occasionally is worth it for the same reason: a
+  different compiler's warnings find real bugs a single toolchain hides.
+
+- **`docker`** — `qemu_matrix.py` needs it, and nothing else does.
+
+Deliberately NOT used: `gcovr`/`lcov` (coverage needs runtime support a
+freestanding kernel does not have) and `valgrind` (same reason).

@@ -272,3 +272,58 @@ originally had clients supply the pixels and added `cursor-shape-v1` to
 undo it -- don't repeat that. A shape file carries COVERAGE, not colour,
 so one shape set serves a light theme and a dark one. Nothing touches
 the kernel, so it all moves to ring 3 with the WM.
+
+## The sidebar-and-pages redesign, and `uui_tree` (2026-08-19)
+
+Control Panel became **System Settings** -- a `uui_tree` sidebar on the
+left and one page on the right, KDE System Settings' shape. Four things
+worth carrying.
+
+**A new widget needs a second REAL caller, and the roadmap named one.**
+`uui_tree` was written for this sidebar and deliberately says nothing
+about settings, because the file manager the roadmap already lists needs
+a directory pane. That is the toolkit's standing bar; a widget shaped
+around one app's data is one nobody else can use.
+
+**Make the easy path three lines and the powerful path available.** The
+nodes are the app's flat `const` array with a `depth` per row, and the
+widget derives parent/child from the depth run -- no allocation, no
+ownership, no teardown, the same call `uui_menubar`'s const menu trees
+make and still right now that ring 3 has `malloc`. Everything starts
+expanded with row 0 selected, so a tree that is never told anything else
+already behaves correctly; collapsing, ids and keyboard navigation are
+there and cost nothing when unused.
+
+**An app stores an ID, never a row.** Rows move as categories collapse.
+`uui_tree_select_id()` also EXPANDS whatever was hiding the node --
+selecting something and leaving it invisible looks to a user exactly
+like the call did nothing.
+
+**A sidebar needs categories, and the app must not own the list.**
+`struct setting` gained a `category` string, so the sidebar is generated
+exactly as the rows already were: a setting registered anywhere in the
+kernel gets a sidebar home with no edit to the app. A category table in
+the app would be the second source of truth the whole app exists to
+avoid. NULL becomes `SETTING_CATEGORY_DEFAULT` at the ABI boundary, not
+in each client.
+
+**And one design mistake worth recognising:** the first version drew the
+page's heading in `on_draw`, which runs AFTER the toolkit paints the
+widgets -- so it landed on top of the first choice. Reserving space only
+moves the problem, because the page SCROLLS and content would then slide
+under a fixed heading. A heading is CHROME and belongs outside the
+scroll view, which needs a label widget this toolkit does not have; the
+information went in the status bar instead, which is already chrome and
+already outside. Ask what a piece of text IS before deciding where to
+draw it.
+
+## Renaming a seeded app leaves the old binary behind (2026-08-19)
+
+`make iso` re-seeds by SYNC, never reformat, so renaming
+`/bin/wm/system/cpanel` to `.../settings` left BOTH on the image -- the
+new one working, the old one orphaned and no longer named by any
+`.desktop` entry. `make clean-disk && make iso` is the fix for a fresh
+image; an existing disk keeps the stale binary until it is deleted by
+hand. CLAUDE.md already states this ("moving a seeded file needs an
+explicit delete"); it is easy to read past and obvious the moment
+`ls /bin/wm/system` shows two.
