@@ -291,6 +291,11 @@ void cmd_cd(const char *args) {
         return;
     }
     k_strcpy(cwd, path);
+    // Tell the kernel too, so a ring-3 program started from here with
+    // `run` or `spawn` inherits where this shell is standing. Without
+    // it the two notions of "here" silently disagree: `cd /docs` then
+    // `spawn /bin/mkdir notes` would create /notes.
+    scheduler_set_kernel_cwd(path);
 }
 
 // Hardlink: `ln <existing> <newname>`. The caps mechanism's showcase

@@ -100,6 +100,49 @@ struct sched_heap {
     uint64_t brk;
 };
 
+// A process's CURRENT DIRECTORY -- a normalized absolute path, exactly
+// what fs.h's every entry point demands, so nothing below the syscall
+// boundary ever sees a relative path.
+//
+// It lives in the KERNEL rather than in each shell because it is the
+// thing a spawned program inherits: without it, `mkdir docs` typed in
+// /tmp reaches /bin/mkdir as the bare word "docs" and creates /docs,
+// silently. Linux (chdir/getcwd) and NT (the PEB's current directory)
+// both keep it per process for the same reason; a shell rewriting its
+// children's arguments would be a SECOND path-resolution rule beside
+// kpath.c's, which is the drift that file exists to have fixed once.
+//
+// Same two-owners-one-representation shape as struct sched_heap above:
+// a scheduler slot holds one, and the legacy elf_run.c loader (which
+// has no slot) holds a single one of the same type in fs_syscalls.c.
+// The array size is checked against FS_PATH_MAX by a _Static_assert in
+// scheduler.c rather than by including fs.h here, so the two cannot
+// drift without the build saying so.
+struct sched_cwd {
+    char path[64];
+};
+
+// The current directory of the process on the CPU, or NULL when the
+// kernel context is running -- which means "not a scheduled process"
+// (the legacy loader's single slot applies there), never "this process
+// has no cwd". Every slot is armed at creation.
+//
+// Prefer scheduler_cwd() for READING: it answers for the kernel context
+// too, so a caller needs no special case. This one is for writing.
+struct sched_cwd *scheduler_current_cwd(void);
+
+// The current directory of whatever is running -- a scheduler slot's, or
+// the kernel context's when that is what is on the CPU. NEVER NULL, and
+// always a normalized absolute path ("/" until something sets one).
+const char *scheduler_cwd(void);
+
+// Points the KERNEL CONTEXT's directory at `path`, which must already be
+// a normalized absolute path. The kernel shell's `cd` calls it, so a
+// program that shell starts with `run` or `spawn` inherits where the
+// shell is standing rather than always starting at "/" -- without it the
+// two notions of "here" disagree silently.
+void scheduler_set_kernel_cwd(const char *path);
+
 // The heap belonging to a given address space, or NULL if none does.
 //
 // By PML4 rather than by "who is running", because the fault-in path

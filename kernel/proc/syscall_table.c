@@ -80,6 +80,16 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_DUP]           = { "dup",           sys_dup,           { A_FD } },
     [SYS_DUP2]          = { "dup2",          sys_dup2,          { A_FD, A_FD } },
     [SYS_CONSOLE_SIZE]  = { "console_size",  sys_console_size,  { A_END } },
+    [SYS_CHDIR]         = { "chdir",         sys_chdir,         { A_PATH } },
+    // The buffer is filled by the handler, so it traces as a pointer --
+    // same reason read() and recv() do (strace.c formats the line first).
+    [SYS_GETCWD]        = { "getcwd",        sys_getcwd,        { A_HEX, A_INT } },
+    [SYS_MKDIR]         = { "mkdir",         sys_mkdir,         { A_PATH } },
+    [SYS_RENAME]        = { "rename",        sys_rename,        { A_PATH, A_PATH } },
+    [SYS_TRUNCATE]      = { "truncate",      sys_truncate,      { A_PATH, A_INT } },
+    [SYS_STAT]          = { "stat",          sys_stat,          { A_PATH, A_HEX } },
+    [SYS_LINK]          = { "link",          sys_link,          { A_PATH, A_PATH } },
+    [SYS_SYNC]          = { "sync",          sys_sync,          { A_END } },
 };
 
 #define SYSCALL_TABLE_COUNT (sizeof SYSCALL_TABLE / sizeof SYSCALL_TABLE[0])

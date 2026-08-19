@@ -634,6 +634,41 @@ technical conventions below:
   that looks for it in a screenshot fails against a working kernel;
   assert the mapping is the real screen by comparing a client read
   against a screendump of the same pixel. See `docs/decisions.md`.
+- **THE CURRENT DIRECTORY IS THE KERNEL'S, and every path syscall
+  resolves against it.** `struct sched_cwd` in the process slot beside
+  `struct sched_heap` (`api/scheduler.h`), reached by `SYS_CHDIR`/
+  `SYS_GETCWD`, INHERITED across `SYS_SPAWN`, starting at `/`. It used
+  to be a `char cwd[]` in `apps/shell.c` and another in `struct tosh`,
+  each resolving before calling -- which broke the moment a filesystem
+  command became a `/bin` program, because `SYS_SPAWN` passes its
+  argument string VERBATIM: `mkdir docs` typed in `/tmp` reached
+  `/bin/mkdir` as the bare word `docs` and created `/docs`, silently,
+  exiting 0. Four things to know. **`open`, `unlink` and `listdir`
+  resolve too**, through the same `resolve_user_path()` in
+  `kernel/fs/fs_syscalls.c` -- an absolute path is unchanged by
+  resolution, so nothing that already worked behaves differently.
+  **`tosh` no longer resolves anything** and its private `resolve()`/
+  `up_one()` are deleted rather than moved: `k_path_resolve()` handles
+  `..` and `.`, which `up_one()` did not, and it now runs below the
+  syscall where every caller reaches it. **The kernel shell's `cd`
+  calls `scheduler_set_kernel_cwd()`**, so `run`/`spawn` from it
+  inherit where it is standing. And **`getcwd` REFUSES rather than
+  truncating** -- a shortened path names a different directory.
+- **Six filesystem syscalls exist now**: `SYS_MKDIR`, `SYS_RENAME`,
+  `SYS_TRUNCATE`, `SYS_STAT`, `SYS_LINK`, `SYS_SYNC`, each one `fs.h`
+  call the kernel could already do and ring 3 had no way to ask for.
+  `/bin/mkdir`, `rm`, `mv`, `ln`, `stat`, `truncate`, `touch`, `sync`
+  and `df` are programs over them, so `/bin/tosh` and the GUI Terminal
+  can do what the kernel shell could. Two conventions they set. **A
+  handler checks what it CAN distinguish before falling back to
+  `-EIO`** -- `fs_mkdir()` returns one 0 for three different reasons,
+  so the handler tests existence itself and says `-EEXIST`. And **a
+  small `/bin` command prints its errors through `userland/lib/cmd.h`**
+  (`cmd_fail`/`cmd_usage`), which writes to STDOUT and not stderr on
+  purpose: fd 2 is the KERNEL LOG here, so a diagnostic written there
+  is perfectly recorded in `dmesg` and invisible to whoever typed the
+  command. That flips the day a TTY gives fd 2 somewhere a terminal can
+  see -- one line, in one file, which is why the header exists.
 - **THE FILESYSTEM IS NOT RE-ENTRANT, and `vfs.c` holds a preemption
   guard because of it.** `tfs3.c` walks directories, inodes and data
   through module-level scratch buffers (`g_blk`, `g_ptr_blk`); the
@@ -2437,6 +2472,19 @@ comment beside the code, what is broken goes in `docs/roadmap.md`.
 `README.md`/`apps/README.md` cover architecture and `git log` is the
 chronological record; this exists because neither is indexed by TOPIC,
 so "why is X built this way" otherwise means grep and guesswork.
+
+`docs/query-design.md` -- **how kernel state reaches ring 3, and why it
+is NOT `/proc`.** One syscall with an information class and a provider
+registry, NT's `NtQuerySystemInformation` shape rather than Linux's
+filesystem -- because a `/proc` needs a mount table `vfs.c` does not
+have, it puts diagnostics ON TOP of storage (so a machine that failed to
+mount loses them), and it makes the ABI text nobody can sort or graph.
+Designed, not built. It supersedes `docs/init-design.md`'s R10, and it
+is what the kernel shell's ~15 introspection commands are waiting on.
+
+`docs/settings-and-queries.md` -- the compact USAGE side of the same
+split: facts vs settings vs tunables, `config`'s verbs, and how an app
+reads or changes either. Read it before adding a setting.
 
 `docs/errno-design.md` -- **the next objective**: giving a failed syscall
 a REASON. Every syscall returns -1 today and writes the reason to the

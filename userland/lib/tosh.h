@@ -27,7 +27,10 @@
 typedef void (*tosh_out_fn)(void *ctx, const char *text, int len);
 
 struct tosh {
-    char cwd[TOSH_PATH_MAX];
+    // No `cwd` here: the current directory belongs to the PROCESS and
+    // lives in the kernel (SYS_CHDIR/SYS_GETCWD), so a path means the
+    // same thing to this shell's builtins and to anything it spawns.
+    // A copy here could only ever disagree with it.
     tosh_out_fn out;
     void *ctx;
     int last_status; // exit code of the last external command

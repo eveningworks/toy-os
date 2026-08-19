@@ -169,6 +169,15 @@ int sys_open(struct syscall_ctx *c);
 int sys_unlink(struct syscall_ctx *c);
 int sys_listdir(struct syscall_ctx *c);
 int sys_fs_generation(struct syscall_ctx *c);
+int sys_chdir(struct syscall_ctx *c);
+int sys_getcwd(struct syscall_ctx *c);
+int sys_mkdir(struct syscall_ctx *c);
+int sys_rename(struct syscall_ctx *c);
+int sys_truncate(struct syscall_ctx *c);
+int sys_stat(struct syscall_ctx *c);
+int sys_link(struct syscall_ctx *c);
+int sys_sync(struct syscall_ctx *c);
+
 
 // kernel/proc/proc_syscalls.c -- processes, the heap, and time
 int sys_exit(struct syscall_ctx *c);

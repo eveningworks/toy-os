@@ -854,6 +854,84 @@ struct dirent {
 // knowing the width (a line longer than the console repaints wrongly).
 #define SYS_CONSOLE_SIZE 43
 
+// ---- the current directory, and the rest of the path-keyed calls ----
+//
+// THE CWD IS THE KERNEL'S, NOT EACH SHELL'S. Every path argument in
+// this ABI -- open, unlink, listdir, and the six below -- is resolved
+// against the calling process's cwd inside the kernel, so a relative
+// path means one thing everywhere. Before this, `apps/shell.c` and
+// `struct tosh` each held a private `cwd` and resolved before calling,
+// which made a bare "docs" mean "/docs" to any program started from
+// either -- silently creating the wrong thing rather than failing.
+// A cwd is inherited across SYS_SPAWN and starts at "/".
+//
+// Absolute paths are unaffected, and a process that never calls
+// SYS_CHDIR sees exactly the old behaviour.
+
+#define SYS_CHDIR 44 // RDI = path (relative paths resolve against the
+                      // current cwd, as everywhere else). Returns 0, or
+                      // -ENOENT / -ENOTDIR / -ENAMETOOLONG / -EFAULT.
+                      // -EPERM for a caller with no scheduler slot and
+                      // no legacy slot armed.
+
+#define SYS_GETCWD 45 // RDI = buffer (out), RSI = its capacity. Copies
+                       // the cwd as a NUL-terminated normalized
+                       // absolute path and returns its LENGTH (not
+                       // counting the NUL), or -ERANGE if the buffer is
+                       // too small -- never a truncated path, which is
+                       // a different directory, not a shorter answer.
+
+#define SYS_MKDIR 46 // RDI = path. Returns 0, or -EEXIST / -ENOENT (no
+                      // parent) / -ENAMETOOLONG / -EFAULT / -EIO.
+
+#define SYS_RENAME 47 // RDI = old path, RSI = new path. Returns 0, or a
+                       // negative errno. Whether a cross-directory
+                       // rename of a DIRECTORY is possible depends on
+                       // the volume's journal (fs.h / TFS3 credits): a
+                       // v1 image refuses exactly that one case.
+
+#define SYS_TRUNCATE 48 // RDI = path, RSI = new size in bytes (grow or
+                         // shrink). Returns 0, or a negative errno.
+
+#define SYS_STAT 49 // RDI = path, RSI = pointer to a `struct sys_stat`
+                     // (out, below). Returns 0, or a negative errno.
+
+#define SYS_LINK 50 // RDI = existing path, RSI = the new name. Returns
+                     // 0, or -EPERM when the mounted filesystem's format
+                     // has no link counts (tfs2 -- ask
+                     // SYS_STAT/FS_CAP_HARDLINKS through sysinfo first
+                     // for a better message), -EISDIR for a directory.
+
+#define SYS_SYNC 51 // No arguments. Flushes the disk write-back cache
+                     // and returns the number of SECTORS written, or a
+                     // negative errno if some could not be. Zero is a
+                     // real answer (nothing was pending), which is why
+                     // this reports a count rather than a bare status:
+                     // "the flush failed and your data is still only in
+                     // RAM" is the one disk answer a caller must not
+                     // read as success.
+
+// What SYS_STAT reports. Deliberately NOT POSIX's `struct stat` -- there
+// are no modes, owners, devices or link counts to put in one, and a
+// struct full of zeroed fields invites a caller to believe them. The
+// timestamps are `struct rtc_time` for the same reason `struct dirent`'s
+// is: the epoch shape is kernel-internal (fs.h's fs_stat_info) and is
+// converted back to civil time at this boundary.
+struct sys_stat {
+    uint64_t size;          // bytes; 0 for a directory, as fs_list() reports
+    uint64_t ino;           // real on a backend with inodes, otherwise a
+                            // stable synthetic (the table slot) -- see
+                            // SYS_STAT_INODES below for which
+    uint32_t is_dir;
+    uint32_t flags;         // SYS_STAT_*
+    struct rtc_time created;
+    struct rtc_time modified;
+};
+
+// The inode number above is the filesystem's own, not a synthetic one.
+// Mirrors fs.h's FS_CAP_INODES for the one caller that needs to say so.
+#define SYS_STAT_INODES (1u << 0)
+
 #define SYS_SLEEP 40 // RDI = milliseconds. Parks the caller until that
                           // long has passed, then returns 0. Returns -1
                           // for a caller with no scheduler slot (the

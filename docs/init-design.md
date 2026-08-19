@@ -335,15 +335,33 @@ spawns a program, a kernel-shell builtin typed at that prompt creates
 nothing, and Ctrl-D is followed by a fresh prompt rather than a dead
 console.
 
-### Stage 5 -- `/proc`, and retiring the kernel shell
+### Stage 5 -- the commands move, and the kernel shell becomes a rescue shell
 
-Gated on R10's open question. Then the ~60 commands move one at a time,
-each becoming a `/bin` program, and `apps/shell.c` shrinks to nothing
-and is deleted.
+**R10's assumption -- that this needs `/proc` -- is superseded.** The
+introspection commands get a QUERY SYSCALL instead of a filesystem, for
+the three reasons in `docs/query-design.md`: a `/proc` needs a mount
+table `vfs.c` does not have, it puts diagnostics on top of storage so a
+machine that failed to mount loses them, and it makes the ABI text. That
+document is the plan for this half.
 
-This is deliberately last and deliberately incremental: each command
-that moves is independently verifiable, and the kernel shell keeps
-working throughout.
+The commands move one at a time, each becoming a `/bin` program, in
+three groups by what blocks them:
+
+- **Nothing blocks them** -- the filesystem and settings commands. The
+  filesystem group moved on 2026-08-19 (`mkdir`, `rm`, `mv`, `ln`,
+  `stat`, `truncate`, `touch`, `sync`, `df`), which needed six syscalls
+  and, first, a **per-process cwd**: without one, `/bin/mkdir docs` run
+  from `/tmp` created `/docs`.
+- **The query registry blocks them** -- `meminfo`, `heap`, `kstack`,
+  `dmesg`, `ata`, `parttable` and the test harnesses. See
+  `docs/query-design.md`.
+- **Nothing should move them** -- the rescue set. Open question 4 is
+  answered: the kernel shell SURVIVES as a rescue shell, so
+  `apps/shell.c` shrinks rather than being deleted. Which commands it
+  keeps is decided per command as each one moves, not up front.
+
+Deliberately incremental: each command that moves is independently
+verifiable, and the kernel shell keeps working throughout.
 
 ## What breaks, and when
 
@@ -430,13 +448,14 @@ of them blocks stage 0.
    limit (N restarts in T seconds, then give up and say so). Needed at
    stage 2, and the answer should probably be "restart, but fall back
    to `text` and say why".
-3. **`/proc` via a real mount table, or a special case in path
-   resolution?** The mount table is the honest answer and is already a
-   roadmap milestone; the special case is much less work and would be
-   a second path-resolution rule to remember. Needed at stage 5, which
-   is far enough out that it can wait.
-4. **Does the kernel shell survive as a debug shell?** Stage 5 assumes
-   it is eventually deleted. There is a real argument for keeping a
-   kernel-side rescue shell that works when userland is broken -- most
-   real kernels have some form of it, and this one already has the
-   serial debug console playing that role.
+3. ~~`/proc` via a real mount table, or a special case in path
+   resolution?~~ **ANSWERED: neither.** Kernel state is reached by a
+   QUERY SYSCALL with an information class, NT's shape rather than
+   Linux's -- so nothing about introspection depends on the filesystem.
+   `docs/query-design.md` has the reasoning and the staging.
+4. ~~Does the kernel shell survive as a debug shell?~~ **ANSWERED:
+   yes.** It keeps a rescue set that works when userland is broken,
+   which is what most real kernels have and what the serial debug
+   console already half-plays here. `apps/shell.c` shrinks rather than
+   being deleted; which commands stay is decided per command as each
+   one moves.

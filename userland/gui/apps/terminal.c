@@ -44,6 +44,9 @@
 #define WIN_H 400
 #define MARGIN 6
 
+// Defined below, beside the prompt it paints.
+static const char *prompt_cwd(void);
+
 static struct utext g_out;      // the scrollback
 static struct tosh g_shell;
 static int g_running;  // 1 while a command is executing
@@ -113,8 +116,8 @@ static void draw(struct ugfx_surface *s, int focused) {
     int bottom = s->h - MARGIN - ugfx_char_h();
     if (py > bottom) py = bottom;
     g_prompt_y = py;
-    ugfx_draw_string(s, MARGIN, py, g_shell.cwd, ugfx_rgb(120, 200, 120), ugfx_rgb(0, 0, 0));
-    int px = MARGIN + ugfx_text_width(g_shell.cwd);
+    ugfx_draw_string(s, MARGIN, py, prompt_cwd(), ugfx_rgb(120, 200, 120), ugfx_rgb(0, 0, 0));
+    int px = MARGIN + ugfx_text_width(prompt_cwd());
     ugfx_draw_string(s, px, py, "> ", ugfx_rgb(120, 200, 120), ugfx_rgb(0, 0, 0));
     px += 2 * ugfx_char_w();
     ugfx_draw_string_clipped(s, px, py, s->w - px - MARGIN, g_ed.buf,
@@ -137,8 +140,18 @@ static void draw(struct ugfx_surface *s, int focused) {
     }
 }
 
+// The prompt's directory. Asked of the KERNEL rather than kept here:
+// the cwd belongs to this process (SYS_CHDIR), and a copy in the app
+// could only ever disagree with the one `cd` actually moved -- which
+// would show as a prompt naming a directory the shell is not in.
+static const char *prompt_cwd(void) {
+    static char here[64]; // TOSH_PATH_MAX
+    if (sys_getcwd(here, sizeof here) < 0) here[0] = '/', here[1] = '\0';
+    return here;
+}
+
 static void run_current_line(struct uapp *a) {
-    put(g_shell.cwd);
+    put(prompt_cwd());
     put("> ");
     put(g_ed.buf);
     put("\n");
@@ -212,7 +225,7 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
         break;
 
     case KLINE_CANCEL:
-        put(g_shell.cwd);
+        put(prompt_cwd());
         put("> ");
         put(g_ed.buf);
         put("^C\n");

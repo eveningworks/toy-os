@@ -59,6 +59,19 @@
 #define EMFILE 24  // THIS PROCESS's descriptor table is full -- distinct from
                    // ENFILE, and distinct from ENOENT, which is the whole
                    // reason this header exists
+#define ENOTDIR 20 // a path component that had to be a directory is not one --
+                   // chdir() into a file, distinct from ENOENT, which is
+                   // the difference between "wrong" and "absent"
+#define EISDIR  21 // the target IS a directory and the operation is
+                   // meaningless on one (truncate, hardlink)
+#define ERANGE  34 // the answer does not fit the buffer the caller
+                   // supplied -- getcwd(), where a TRUNCATED path names a
+                   // different directory rather than being a shorter
+                   // answer to the same question
+#define ENAMETOOLONG 36 // the path is longer than FS_PATH_MAX once
+                   // resolved. Its own code because it is the one path
+                   // failure that says nothing about the filesystem: the
+                   // file may well exist, this kernel just cannot name it
 #define ENOSYS 38  // the call exists and does nothing yet
 
 #endif // ABI_ERRNO_H

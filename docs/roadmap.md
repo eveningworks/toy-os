@@ -89,7 +89,7 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~stdin redirection in `SYS_SPAWN`~~ DONE 2026-08-19 -- by INHERITANCE, so every fd carries over, not just 0
 - [x] ~~init starting `/bin/tosh` on the `text` target, in place of the kernel shell~~ DONE 2026-08-19
 - [x] ~~**`dup`/`dup2`-style fd plumbing**, so the shell can wire an arbitrary fd to 0/1/2~~ DONE 2026-08-19
-- [ ] A per-process cwd
+- [x] ~~A per-process cwd~~ DONE 2026-08-19 -- in the kernel, inherited across spawn; every path syscall resolves against it
 - [ ] `/bin/tosh` has its own `ls` builtin beside `/bin/ls` -- two implementations of one command
 - [ ] An environment passed to a child
 - [ ] Ctrl-C
@@ -269,8 +269,8 @@ everything libc-shaped is waiting on it. Full plan and staging:
 - [ ] Enable SSE (CR4.OSFXSR) and save FPU/SSE state per process
 - [ ] `time_t`: epoch seconds and a UTC offset stored alongside, next to today's broken-down local `struct rtc_time`
 - [ ] ~~An `errno`-style return convention~~ moved up to its own section (errno-design.md); it needs none of this milestone's prerequisites
-- [ ] The unglamorous syscall surface: `lseek`, `stat`, `getpid`, `chdir` and the rest (`dup`/`dup2` landed 2026-08-19)
-- [ ] A per-process cwd (it lives in the shell today, not the process)
+- [ ] The unglamorous syscall surface: `lseek`, `getpid` and the rest -- the path-keyed half landed 2026-08-19
+- [x] ~~A per-process cwd~~ DONE 2026-08-19 -- `SYS_CHDIR`/`SYS_GETCWD`
 - [ ] `crt0` + a real `_start`, replacing each binary's hand-written syscall stubs
 - [ ] Prove it: build and run a real ported program nobody here wrote
 - [ ] Decide, in writing, what is deliberately NOT pursued
@@ -665,7 +665,7 @@ were found at all.
 ### Observability
 
 - [ ] Panic backtraces with function names, using the DWARF symbols the build already emits
-- [ ] A `/proc`-style read-only introspection tree (processes, memory, open files) exposed through the VFS
+- [ ] Kernel state queryable without a filesystem -- one syscall, an information class, a provider registry (`docs/query-design.md`)
 - [ ] A sampling profiler driven off the timer interrupt
 - [ ] Per-subsystem counters (cache hits, DMA retries, allocation failures) behind the existing `debug` flags
 - [ ] `dmesg` filtering by subsystem

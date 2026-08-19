@@ -106,6 +106,10 @@ static const struct { int code; const char *msg; } g_errmsg[] = {
     { EINVAL, "invalid argument" },
     { ENFILE, "too many open files in system" },
     { EMFILE, "too many open files" },
+    { ENOTDIR, "not a directory" },
+    { EISDIR, "is a directory" },
+    { ERANGE, "buffer too small" },
+    { ENAMETOOLONG, "path too long" },
     { ENOSYS, "not implemented" },
 };
 
@@ -192,6 +196,41 @@ int sys_unlink(const char *path) {
 int sys_listdir(const char *path, struct dirent *out, int max) {
     return (int)err(syscall3(SYS_LISTDIR, (uint64_t)(uintptr_t)path,
                               (uint64_t)(uintptr_t)out, (uint64_t)(int64_t)max));
+}
+
+int sys_chdir(const char *path) {
+    return (int)err(syscall1(SYS_CHDIR, (uint64_t)(uintptr_t)path));
+}
+
+int sys_getcwd(char *buf, unsigned long cap) {
+    return (int)err(syscall2(SYS_GETCWD, (uint64_t)(uintptr_t)buf, (uint64_t)cap));
+}
+
+int sys_mkdir(const char *path) {
+    return (int)err(syscall1(SYS_MKDIR, (uint64_t)(uintptr_t)path));
+}
+
+int sys_rename(const char *oldpath, const char *newpath) {
+    return (int)err(syscall2(SYS_RENAME, (uint64_t)(uintptr_t)oldpath,
+                              (uint64_t)(uintptr_t)newpath));
+}
+
+int sys_truncate(const char *path, unsigned long long size) {
+    return (int)err(syscall2(SYS_TRUNCATE, (uint64_t)(uintptr_t)path, (uint64_t)size));
+}
+
+int sys_stat(const char *path, struct sys_stat *out) {
+    return (int)err(syscall2(SYS_STAT, (uint64_t)(uintptr_t)path,
+                              (uint64_t)(uintptr_t)out));
+}
+
+int sys_link(const char *existing, const char *newpath) {
+    return (int)err(syscall2(SYS_LINK, (uint64_t)(uintptr_t)existing,
+                              (uint64_t)(uintptr_t)newpath));
+}
+
+int sys_sync(void) {
+    return (int)err(syscall0(SYS_SYNC));
 }
 
 int64_t sys_print(const char *s) {

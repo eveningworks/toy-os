@@ -34,34 +34,21 @@ static void scopy(char *dst, const char *src, int cap) {
     dst[i] = '\0';
 }
 
-// Joins the shell's cwd and a possibly-relative path. Kept here rather
-// than in the caller because every builtin needs it and getting "/" vs
-// "/a" vs "a" subtly different per command is exactly how a shell ends
-// up with paths that mean different things in different places -- the
-// bug kernel/lib/kpath.c exists to have fixed once, on that side.
-static void resolve(struct tosh *sh, const char *path, char *out, int cap) {
-    if (!path || !path[0]) { scopy(out, sh->cwd, cap); return; }
-    if (path[0] == '/') { scopy(out, path, cap); return; }
-
-    int i = 0;
-    for (; sh->cwd[i] && i < cap - 2; i++) out[i] = sh->cwd[i];
-    if (i > 0 && out[i - 1] != '/') out[i++] = '/';
-    for (int j = 0; path[j] && i < cap - 1; j++) out[i++] = path[j];
-    out[i] = '\0';
-}
-
-static void up_one(char *dir) {
-    int n = slen(dir);
-    while (n > 1 && dir[n - 1] == '/') n--;
-    while (n > 1 && dir[n - 1] != '/') n--;
-    if (n < 1) n = 1;
-    dir[n] = '\0';
-    if (n > 1 && dir[n - 1] == '/') dir[n - 1] = '\0';
-    if (!dir[0]) scopy(dir, "/", TOSH_PATH_MAX);
-}
+// THIS SHELL NO LONGER RESOLVES PATHS, AND THAT IS THE POINT.
+//
+// It used to hold its own `cwd` and join every relative path against it
+// before calling, which meant a bare "docs" became "/docs" for any
+// PROGRAM it spawned -- the shell resolved for its own builtins and had
+// no way to resolve for anybody else's arguments. The cwd is the
+// kernel's now (SYS_CHDIR/SYS_GETCWD, api/scheduler.h's struct
+// sched_cwd), inherited across a spawn, so a path means the same thing
+// to `cat` here and to /bin/stat over there. The private resolve() and
+// up_one() this file carried are deleted rather than moved: kpath.c's
+// k_path_resolve() is the one implementation, it handles ".." and "."
+// which up_one() did not, and it now runs below the syscall where every
+// caller reaches it.
 
 void tosh_init(struct tosh *sh, tosh_out_fn out, void *ctx) {
-    scopy(sh->cwd, "/", TOSH_PATH_MAX);
     sh->out = out;
     sh->ctx = ctx;
     sh->last_status = 0;
@@ -87,8 +74,8 @@ static void emit_int(struct tosh *sh, int v) {
 // --- builtins ---------------------------------------------------------
 
 static void bi_ls(struct tosh *sh, const char *arg) {
-    char path[TOSH_PATH_MAX];
-    resolve(sh, arg, path, TOSH_PATH_MAX);
+    // "" means the cwd, which SYS_LISTDIR resolves to for itself.
+    const char *path = (arg && arg[0]) ? arg : ".";
 
     // STATIC, not a local: 32 dirents is ~2.6 KiB against
     // USERLAND_CFLAGS' -Wframe-larger-than=2048 and a 16 KiB ring-3
@@ -107,8 +94,7 @@ static void bi_ls(struct tosh *sh, const char *arg) {
 
 static void bi_cat(struct tosh *sh, const char *arg) {
     if (!arg || !arg[0]) { emit(sh, "cat: needs a filename\n"); return; }
-    char path[TOSH_PATH_MAX];
-    resolve(sh, arg, path, TOSH_PATH_MAX);
+    const char *path = arg;
 
     int fd = sys_open(path, 0);
     if (fd < 0) { emit(sh, "cat: cannot open "); emit(sh, path); emit(sh, "\n"); return; }
@@ -123,22 +109,18 @@ static void bi_cat(struct tosh *sh, const char *arg) {
 }
 
 static void bi_cd(struct tosh *sh, const char *arg) {
-    if (!arg || !arg[0]) { scopy(sh->cwd, "/", TOSH_PATH_MAX); return; }
-    if (seq(arg, "..")) { up_one(sh->cwd); return; }
-
-    char path[TOSH_PATH_MAX];
-    resolve(sh, arg, path, TOSH_PATH_MAX);
-    // Verified with a listdir rather than assumed: `cd` onto a file (or
-    // onto nothing) silently "succeeding" leaves every later relative
-    // path wrong, with nothing pointing at the cd as the cause.
-    struct dirent probe[1];
-    if (sys_listdir(path, probe, 1) < 0) {
-        emit(sh, "cd: no such directory: ");
-        emit(sh, path);
+    // One syscall. The checks this used to do by hand -- does it exist,
+    // is it a directory -- are the kernel's now and come back as
+    // distinct errno values, so `cd notes.txt` says "not a directory"
+    // rather than the "no such directory" a listdir probe could only
+    // guess at.
+    if (sys_chdir((arg && arg[0]) ? arg : "/") < 0) {
+        emit(sh, "cd: ");
+        emit(sh, (arg && arg[0]) ? arg : "/");
+        emit(sh, ": ");
+        emit(sh, sys_strerror(sys_errno()));
         emit(sh, "\n");
-        return;
     }
-    scopy(sh->cwd, path, TOSH_PATH_MAX);
 }
 
 // --- redirection -------------------------------------------------------
@@ -229,8 +211,7 @@ static int redir_parse(struct tosh *sh, char *line, struct tosh_redir *r) {
         for (int j = 0; j < len; j++) name[j] = line[found[i].at + j];
         name[len] = '\0';
 
-        char path[TOSH_PATH_MAX];
-        resolve(sh, name, path, TOSH_PATH_MAX);
+        const char *path = name;
         int fd;
         if (found[i].op == 3) {
             fd = sys_open(path, 0);
@@ -392,7 +373,13 @@ static int run_stripped(struct tosh *sh, const char *line, int stdout_redirected
     if (seq(cmd, "ls"))   { bi_ls(sh, args);  return 0; }
     if (seq(cmd, "cat"))  { bi_cat(sh, args); return 0; }
     if (seq(cmd, "cd"))   { bi_cd(sh, args);  return 0; }
-    if (seq(cmd, "pwd"))  { emit(sh, sh->cwd); emit(sh, "\n"); return 0; }
+    if (seq(cmd, "pwd"))  {
+        char here[TOSH_PATH_MAX];
+        if (sys_getcwd(here, sizeof here) < 0) scopy(here, "?", sizeof here);
+        emit(sh, here);
+        emit(sh, "\n");
+        return 0;
+    }
     if (seq(cmd, "echo")) { if (args) emit(sh, args); emit(sh, "\n"); return 0; }
     if (seq(cmd, "help")) {
         emit(sh, "tosh -- the toy-os shell, running in ring 3.\n"

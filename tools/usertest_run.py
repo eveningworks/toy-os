@@ -132,6 +132,11 @@ EXCLUDED = [
                           "on a console that never reaches EOF"),
     ("catin",            "copies stdin to stdout; without a `<` it waits on the "
                           "console, which has no EOF"),
+    ("cwd_test",         "its load-bearing check spawns /bin/mkdir with a bare name "
+                          "and waits for it, which the legacy `run` loader cannot do "
+                          "(no scheduler slot, so waitpid returns before the child has "
+                          "created anything and inheritance reads as broken); "
+                          "kernel/fs/cwd_test.c's KTEST spawns it properly"),
     ("fd_test",          "spawns a child and waits for it, which the legacy `run` "
                           "loader cannot do (no scheduler slot, so waitpid returns "
                           "at once and it reads the child's file too early); "

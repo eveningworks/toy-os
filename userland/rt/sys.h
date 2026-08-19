@@ -105,6 +105,35 @@ int     sys_dup2(int oldfd, int newfd); // newfd names it too; returns newfd
 int     sys_unlink(const char *path);
 int     sys_listdir(const char *path, struct dirent *out, int max);
 
+// THE CURRENT DIRECTORY IS THE KERNEL'S, and every path above resolves
+// against it -- so a relative path means the same thing here as at any
+// shell, and a spawned child starts where its parent was standing. It
+// begins at "/" and is inherited across sys_spawn().
+//
+// This is what makes a /bin program a real command rather than something
+// only usable with absolute paths: `mkdir docs` run from /tmp creates
+// /tmp/docs because the KERNEL joined it, not because some shell rewrote
+// the argument first.
+int     sys_chdir(const char *path);
+// Fills `buf` with the cwd and returns its length, or -1 (errno ERANGE)
+// if it would not fit -- never a truncated path, which names a different
+// directory rather than being a shorter answer.
+int     sys_getcwd(char *buf, unsigned long cap);
+
+int     sys_mkdir(const char *path);
+int     sys_rename(const char *oldpath, const char *newpath);
+int     sys_truncate(const char *path, unsigned long long size);
+int     sys_stat(const char *path, struct sys_stat *out);
+// A second NAME for an existing file. -1 with errno EPERM when the
+// mounted filesystem's format has no link counts, which is a property
+// of the volume rather than of these two paths.
+int     sys_link(const char *existing, const char *newpath);
+// Flushes the disk write-back cache. Returns the number of SECTORS
+// written (0 is a real answer -- nothing was pending), or -1 with errno
+// EIO if some could NOT be written, which is the one disk answer a
+// caller must not read as success: that data is in RAM only.
+int     sys_sync(void);
+
 // Convenience over sys_write(): writes a NUL-terminated string to
 // stdout. The one wrapper here that is not a bare syscall, because
 // "print this string" is what nearly every caller actually wants and

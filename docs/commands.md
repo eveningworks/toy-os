@@ -26,10 +26,17 @@ to right with the first match winning) and runs what it finds. `run
 <name>` still works as the explicit form, going through the same
 resolver. `path` shows the search order.
 
-**Shell builtins win over both.** That is what keeps `ls` able to
-resolve a cwd-relative argument before handing `/bin/ls` an absolute
-path — `ls` is a builtin *wrapper* around a real `/bin/ls` ELF, not a
-reimplementation of it.
+**Shell builtins win over both**, and `ls` is a builtin *wrapper*
+around a real `/bin/ls` ELF rather than a reimplementation of it.
+
+**The cwd is the KERNEL's, and every path syscall resolves against it**
+(`SYS_CHDIR`/`SYS_GETCWD`, 2026-08-19). It is inherited across a spawn,
+so a relative argument means the same directory to a builtin and to a
+`/bin` program — `mkdir docs` typed in `/tmp` creates `/tmp/docs`
+because the kernel joined it, not because a shell rewrote the argument
+on the way past. It used to live in `apps/shell.c` and in `struct tosh`
+as two private copies, which is why a bare name handed to a spawned
+program silently meant `/docs`.
 
 Tab completes commands, paths, and known argument sets (`run`, `color`,
 `debug`, `keyboard`, `timezone`, `fontsize`, `fsck`, `fsformat`,
@@ -51,15 +58,17 @@ Paths may be relative to the cwd or absolute.
 |---|---|
 | `less [file]` | Pager: one screenful at a time. Space/PageDown forward, `b`/PageUp back, arrows by line, `g`/Home and `G`/End to the ends, `q` to quit; a status line shows the position. With no argument it reads STDIN, so `ls -l \| less` works. It reads keys through `SYS_READ_KEY` rather than fd 0 — which is what makes the pipe case possible at all, since in a pipeline fd 0 is the pipe (real `less` opens `/dev/tty` for the same reason; this OS has none). Page height comes from `SYS_CONSOLE_SIZE`, not a baked 80x25, because the console is font-derived. **Run it with `spawn`, not `run`** — the legacy loader has no scheduler slot, so `SYS_SLEEP` fails there and the key poll spins. Holds the input in memory (256 KB cap, then says TRUNCATED) because a pipe cannot be rewound. |
 | `ls [flags] [dir]` | Sorted by name, one entry per line, directories coloured. `-l` type/size/mtime, `-h` human sizes, `-C` columns, `-1` one per line, `-t` newest first, `-S` largest first, `-r` reverse, `-R` recurse, `--color=never\|always`; `-a`/`-F` accepted as no-ops (no dotfile convention, no mode bits). Colour is ANSI escapes the console parses, so it survives a pipe and can be turned off — there is no `--color=auto` because nothing can yet ask whether an fd is a terminal. A real disk-hosted `/bin/ls` binary, not a builtin — see `decisions.md`. |
-| `cd [dir]`, `pwd`, `mkdir <dir>` | |
-| `cat <f>`, `touch <f>` | |
+| `cd [dir]`, `pwd` | `cd` with no argument goes to `/` — there is no `$HOME`. `..` and `.` are resolved by the kernel, so they mean the same thing everywhere. |
+| `cat <f>`, `touch <f>` | `touch` creates an empty file; it does not update an existing file's timestamp, and does not claim to. |
 | `write <f> <text>`, `append <f> <text>` | Each writes one LINE, terminated — `write` truncates first, `append` adds. Neither used to terminate, which made a multi-line file impossible to author from the shell at all. A line too long to fit is refused, not truncated. |
 | `rm <f>` | Does not recurse — see `decisions.md`. |
 | `stat <f>` | Type, size, inode number, created/modified. |
+| `mkdir <dir>` | Creates one directory; the parent must exist. |
 | `mv <a> <b>` | Rename or move a file or directory. Never overwrites: remove the destination first, since there is no atomic replace. |
 | `truncate <f> <n>` | Sets a file's size exactly. Growing is sparse, so it costs no blocks. |
 | `ln <file> <new>` | Hardlink. TFS3 only; on TFS2 it explains that the format has no link counts. |
 | `sync` | Writes out anything the disk cache is still holding, and reports how many sectors it wrote — a `sync` that printed nothing would be indistinguishable from one that did nothing. Runs automatically at shutdown and reboot, and at the journal's barriers, so this is for "write it out NOW" rather than routine use. Says so loudly if a sector could not be written, since that data then exists in RAM only. |
+| — | **`mkdir`, `rm`, `mv`, `ln`, `stat`, `truncate`, `touch`, `sync` and `df` are `/bin` PROGRAMS as well as builtins** (2026-08-19), so they work from `/bin/tosh` and the GUI Terminal too. The builtins are the kernel shell's rescue set and call the same `fs.h` entry points the syscalls do, so the two cannot disagree about what an operation means — only about how the result is printed. |
 | `edit <f>` / `nano <f>` | Full-screen nano/pico-style editor — arrows/Home/End/Delete to navigate, F2 save, F3 exit. Works from both front ends (`apps/editor.c`). |
 
 ## Command-line editing

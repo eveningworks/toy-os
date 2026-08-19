@@ -255,11 +255,22 @@ struct sched_process {
     // compositor asks for a whole screen of back buffer on its first
     // line (M41 stage 4b), which is how this surfaced.
     struct sched_heap heap;
+    // This process's current directory (scheduler.h's struct sched_cwd).
+    // Armed at creation from whatever spawned it, so a child starts
+    // where its parent was standing -- the property that makes
+    // `mkdir docs` typed in a subdirectory mean the same thing to a
+    // /bin program as to a shell builtin.
+    struct sched_cwd cwd;
     // This process's x87/SSE registers while it isn't the one running.
     // 16-byte aligned because FXSAVE/FXRSTOR #GP otherwise -- see fpu.h,
     // including why only ring-3 processes need one of these at all.
     uint8_t fpu[FPU_STATE_SIZE] __attribute__((aligned(FPU_STATE_ALIGN)));
 };
+
+// scheduler.h deliberately does not include fs.h, so struct sched_cwd
+// spells its size as a literal. This is what stops the two drifting.
+_Static_assert(sizeof(((struct sched_cwd *)0)->path) == FS_PATH_MAX,
+               "struct sched_cwd::path must match FS_PATH_MAX");
 
 static struct sched_process procs[MAX_PROCS];
 
@@ -751,6 +762,14 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_desc) {
     // in the spawn path ever armed a heap, so SYS_SBRK refused every
     // scheduled process.
     procs[slot].heap.brk = UADDR_HEAP_BASE;
+    // INHERITED, unlike the name and the CPU time above: the cwd is the
+    // one piece of a parent's state a child is supposed to start with,
+    // which is what makes `mkdir docs` from a shell standing in /tmp
+    // create /tmp/docs rather than /docs. syscall_current_cwd() answers
+    // for the kernel context too (the legacy loader's single slot), so
+    // this needs no special case for a process the shell's `spawn`
+    // started.
+    k_strlcpy(procs[slot].cwd.path, scheduler_cwd(), sizeof procs[slot].cwd.path);
     procs[slot].state      = SCHED_READY;
     alive_count++;
     return slot;
@@ -1141,6 +1160,31 @@ struct sched_heap *scheduler_current_heap(void) {
     // Every slot gets one at creation.
     if (current_index < 0) return 0;
     return &procs[current_index].heap;
+}
+
+// The KERNEL CONTEXT's own directory -- the legacy elf_run.c loader and
+// anything the kernel shell starts. Same two-owners-one-representation
+// shape SYS_SBRK's heap has (proc_syscalls.c's g_legacy_heap): the
+// legacy path has no scheduler slot to keep this in, so it gets one of
+// the same TYPE, reached through the same accessors, and the two cannot
+// drift in behaviour.
+static struct sched_cwd kernel_cwd = { "/" };
+
+const char *scheduler_cwd(void) {
+    struct sched_cwd *c = scheduler_current_cwd();
+    return c ? c->path : kernel_cwd.path;
+}
+
+void scheduler_set_kernel_cwd(const char *path) {
+    if (!path || path[0] != '/') return; // callers pass an already-resolved path
+    k_strlcpy(kernel_cwd.path, path, sizeof kernel_cwd.path);
+}
+
+struct sched_cwd *scheduler_current_cwd(void) {
+    // Same NULL convention as scheduler_current_heap(): "the kernel
+    // context is running", i.e. the legacy loader's slot applies.
+    if (current_index < 0) return 0;
+    return &procs[current_index].cwd;
 }
 
 // The heap behind a given address space. Walks the table because the

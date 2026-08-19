@@ -3214,3 +3214,110 @@ perfectly reversed directory listing, twice, to pass -- and the control
 run (`start_due()` walking `g_svc[]` instead of `g_order[]`) confirmed
 listdir order really is creation order, so the assertion is not a
 coincidence.
+
+---
+
+## The current directory belongs to the PROCESS, not to each shell
+
+Until 2026-08-19 there was no cwd in the kernel at all: `apps/shell.c`
+held a `char cwd[]`, `struct tosh` held another, and each resolved a
+relative path against its own copy before calling `fs_*`. That works
+exactly as long as the only things resolving paths are shells.
+
+It stopped working the moment a filesystem command became a `/bin`
+program. `SYS_SPAWN` passes its argument string VERBATIM, so `mkdir
+docs` typed in `/tmp` reached `/bin/mkdir` as the bare word `docs`,
+which the kernel then treated as `/docs` (`fs.h`: a bare name is
+silently root-relative, for callers predating directories). The wrong
+directory was created, silently, with an exit code of 0.
+
+**The three ways out, and why this one.** A shell could rewrite its
+children's arguments -- but it cannot tell a path argument from a flag
+or a plain word, it leaves anything not started by a shell with no
+notion of "here", and it is a SECOND path-resolution rule beside
+`kpath.c`'s, which is the drift `kpath.c` exists to have fixed once
+(`edit ../x` meaning different things in two windows). New programs
+could demand absolute paths -- honest, and it makes the ring-3 shell
+noticeably worse to use than the kernel one. Or the kernel holds it,
+which is what Linux (`chdir`/`getcwd`) and NT (the PEB's current
+directory) both do, and for this reason.
+
+So `struct sched_cwd` sits in the process slot beside `struct
+sched_heap`, with the same two-owners-one-representation shape: a
+scheduler slot holds one, and the kernel context holds a single one of
+the same type for the legacy `elf_run.c` loader, reached through the
+same accessors so the two cannot drift.
+
+**Every path-taking syscall resolves, including the three that predate
+this.** `open`, `unlink` and `listdir` go through the same
+`resolve_user_path()` as the six new ones -- otherwise `cat notes.txt`
+would still mean a different file depending on who typed it. An
+absolute path is unchanged by resolution and a process that never calls
+`SYS_CHDIR` starts at `/`, so nothing that already worked behaves
+differently.
+
+**It is INHERITED across a spawn**, unlike the name and the CPU time in
+the same slot, which are reset. That is the whole point: a child starts
+where its parent was standing. The kernel shell's `cd` sets the kernel
+context's copy for the same reason, so `cd /docs` followed by `spawn
+/bin/mkdir notes` does not create `/notes`.
+
+**The check that proves it is two-sided.** `userland/tests/cwd_test.c`
+chdirs into a subdirectory, spawns `/bin/mkdir` with a bare name, and
+asserts both that the directory appeared where the cwd pointed AND that
+nothing of that name appeared at the root. Only the first would stay
+green if the kernel resolved against `/` and the check happened to look
+there too; only the second cannot tell a correct spawn from one that
+failed outright. A positive control that pins a child's cwd to `/`
+reddens exactly those two and nothing else.
+
+It is a KTEST that spawns the ELF (`kernel/fs/cwd_test.c`) rather than
+a `tools/usertest_run.py` entry, for the reason `fd_test` and
+`pipe_test` are the same: under the shell's `run` the legacy loader has
+no scheduler slot, so the test's own `waitpid` cannot park and it looks
+for the child's work before the child has done any.
+
+---
+
+## Six filesystem syscalls, and what each refusal is allowed to say
+
+`SYS_MKDIR`, `SYS_RENAME`, `SYS_TRUNCATE`, `SYS_STAT`, `SYS_LINK` and
+`SYS_SYNC` (2026-08-19). Every one is a single `fs.h` call that already
+existed -- the kernel could do all of this and ring 3 simply had no way
+to ask, which is why the kernel shell's filesystem commands could not
+become programs.
+
+**The handlers check what they CAN distinguish before falling back.**
+`fs_mkdir()` returns one 0 for "already exists", "no parent" and "the
+disk refused", so the handler tests existence itself and reports
+`-EEXIST` rather than collapsing three reasons into `-EIO`. That is the
+whole point of `abi/errno.h`: `/bin/mkdir` printing "file exists" and
+"no such file or directory" as different sentences is the difference
+between a usable command and one that says `-1`.
+
+Four codes were added to serve them, each genuinely distinguished by a
+handler rather than because POSIX has a name for it: `ENOTDIR` (`chdir`
+onto a file, which is not the same as `chdir` onto nothing), `EISDIR`
+(truncate or hardlink a directory), `ERANGE` (`getcwd` into too small a
+buffer) and `ENAMETOOLONG` (the one path failure that says nothing
+about the filesystem -- the file may well exist, this kernel just
+cannot name it).
+
+**`getcwd` refuses rather than truncating.** A shortened path names a
+different directory; it is not a shorter answer to the same question.
+Same reasoning as `kernel/lib/`'s rule that a formatter which does not
+fit its buffer writes nothing.
+
+**`SYS_SYNC` returns a COUNT, not a status.** With a write-back cache in
+front of the disk, a write that returned success can be refused later,
+at the flush -- and "the flush failed and your data is still only in
+RAM" is the one disk answer a caller must not read as success. Zero is a
+real answer (nothing was pending), which is exactly why a bare ok/failed
+would not do.
+
+**`SYS_STAT` is deliberately not POSIX's `struct stat`.** There are no
+modes, owners, devices or link counts to put in one, and a struct full
+of zeroed fields invites a caller to believe them. Its timestamps are
+`struct rtc_time` for the same reason `struct dirent`'s are: the epoch
+shape is kernel-internal (`fs.h`'s `fs_stat_info`) and is converted back
+to civil time at the boundary.
