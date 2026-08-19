@@ -18,6 +18,22 @@ probe-selected second backend). No cross-compiler needed -- host and target are
 both x86-64, so plain system `gcc`/`ld`/`nasm` with freestanding flags
 work.
 
+## Before you edit
+
+- **Pull first.** This checkout is worked on from more than one session.
+- **Read in this order**, and stop when you have what you need: this
+  file (conventions and traps), `docs/decisions.md` -- **its INDEX
+  first**, which is what makes it usable at all -- then
+  `docs/roadmap.md` for whether the thing is already known broken.
+  Anything drawn adds `docs/gui-guidelines.md`, which is binding.
+- **THE CODE WINS OVER A DOC THAT DISAGREES WITH IT.** A doc records
+  what was true when someone wrote it; the code is what runs. So when
+  the two conflict, believe the code, FIX THE DOC in the same change,
+  and say plainly in your response that you did -- a silent fix leaves
+  the next session re-deriving the same contradiction. This is not a
+  licence to skip the docs: they are right far more often than not, and
+  the ones that were wrong are wrong in ways worth recording.
+
 ## How the user wants to collaborate
 
 Standing preferences from working on this project, independent of the
