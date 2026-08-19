@@ -171,7 +171,19 @@ static void probe_and_mount(int allow_format) {
     // block device is what makes the probe below read from RAM instead
     // of ATA -- the backends are unchanged and never learn which it is.
     int live = try_live_module();
-    if (!live) blk_ata_init();
+    if (!live) {
+        // WHICH DISK WINS, decided here because blk_register() is
+        // last-writer-wins and order alone would otherwise decide it
+        // somewhere nobody looks.
+        //
+        // virtio-blk takes the disk only when ATA has none, or when the
+        // `virtioblk` boot flag asks for it. That is the same
+        // conservative rule try_live_module() follows just above, and
+        // for the same reason: a machine with a real installed system
+        // must not have it quietly displaced by whatever else happens
+        // to be attached.
+        if (!blk_virtio_init()) blk_ata_init();
+    }
 
     if (!blk_present()) {
         // No disk: the default backend's init() sets up its RAM-only

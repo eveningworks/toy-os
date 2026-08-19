@@ -1,0 +1,208 @@
+// virtio-blk: a disk that is not ATA.
+//
+// The whole driver is the request FORMAT plus a capacity read -- the
+// mechanism (finding the device, negotiating, the ring) belongs to
+// virtio_pci.c and virtqueue.c and is shared with every other virtio
+// device. That split is the reason this file is short.
+//
+// A request is a descriptor chain of two or three buffers:
+//
+//     desc[0]  header  {type, reserved, sector}   16 B  device READS
+//     desc[1]  data    count * 512 bytes                device WRITES (read)
+//                                                       device READS  (write)
+//     desc[2]  status  1 byte                            device WRITES
+//
+// A FLUSH has no data buffer, so it is two descriptors. Getting the
+// direction of desc[1] wrong is the mistake worth watching for: a read
+// whose data buffer is not marked device-writable completes normally
+// and silently returns whatever the buffer already held.
+#include "virtio.h"
+#include "virtio_blk.h"
+#include "block.h"
+#include "klog.h"
+#include "kfmt.h"
+#include "string.h"
+
+#define VIRTIO_BLK_T_IN    0   // read
+#define VIRTIO_BLK_T_OUT   1   // write
+#define VIRTIO_BLK_T_FLUSH 4
+
+#define VIRTIO_BLK_S_OK     0
+#define VIRTIO_BLK_S_IOERR  1
+#define VIRTIO_BLK_S_UNSUPP 2
+
+// Device-configuration offsets (spec 5.2.4).
+#define VIRTIO_BLK_CFG_CAPACITY 0x00  // u64, ALWAYS in 512-byte sectors
+#define VIRTIO_BLK_CFG_SIZE_MAX 0x08  // u32
+
+#define VIRTIO_BLK_F_SIZE_MAX (1ull << 1)
+#define VIRTIO_BLK_F_SEG_MAX  (1ull << 2)
+#define VIRTIO_BLK_F_RO       (1ull << 5)
+#define VIRTIO_BLK_F_FLUSH    (1ull << 9)
+
+// One transfer at a time, so one header and one status byte. Both are
+// DMA targets, so they must be in memory the device can reach: a
+// kernel-image static below 4 GiB is its own physical address here.
+// `status` is volatile because the DEVICE writes it and the compiler
+// must re-read it after the poll rather than caching the pre-request
+// value.
+struct virtio_blk_req_hdr {
+    uint32_t type;
+    uint32_t reserved;
+    uint64_t sector;
+};
+
+static struct virtio_blk_req_hdr g_hdr __attribute__((aligned(16)));
+static volatile uint8_t g_status;
+
+static struct virtio_device g_dev;
+static struct virtqueue g_vq;
+static int g_present = 0;
+static int g_readonly = 0;
+static uint64_t g_capacity = 0;   // 512-byte sectors, as the device reports
+static uint32_t g_max_xfer = 128; // sectors per transfer
+
+// Not a lock -- there is no lock primitive in this kernel. It makes a
+// re-entrant call FAIL rather than corrupt the ring: outside syscall
+// context interrupts are on and the scheduler can preempt between
+// submit and poll, and two requests interleaving through one shared
+// header would produce silently wrong data.
+static int g_busy = 0;
+
+int virtio_blk_present(void) { return g_present; }
+int virtio_blk_max_sectors_per_xfer(void) { return (int)g_max_xfer; }
+int virtio_blk_flush_supported(void) {
+    return g_present && virtio_has_feature(&g_dev, VIRTIO_BLK_F_FLUSH);
+}
+
+uint32_t virtio_blk_sector_count(void) {
+    // The block layer indexes sectors with a uint32_t, so a device
+    // larger than 2 TiB is exposed truncated rather than wrapped. ATA
+    // has the same ceiling (LBA28), so this is not a new limitation --
+    // but it is one worth saying out loud rather than silently.
+    if (g_capacity > 0xFFFFFFFFull) return 0xFFFFFFFFu;
+    return (uint32_t)g_capacity;
+}
+
+// The one request path. `data` may be NULL for a FLUSH.
+static int do_request(uint32_t type, uint64_t sector, void *data, uint32_t len, int device_writes) {
+    if (!g_present) return 0;
+    if (g_busy) {
+        klog_write("virtio-blk: re-entrant request refused\n");
+        return 0;
+    }
+
+    // The device DMAs straight into the caller's buffer -- no bounce
+    // buffer, because the low 4 GiB is identity-mapped and therefore a
+    // virtually-contiguous kernel buffer is physically contiguous by
+    // construction. What that DOES require is that it be down there.
+    if (data && ((uint64_t)(uintptr_t)data + len) > 0xFFFFFFFFull) {
+        klog_write("virtio-blk: buffer above 4 GiB refused\n");
+        return 0;
+    }
+
+    g_busy = 1;
+
+    g_hdr.type = type;
+    g_hdr.reserved = 0;
+    g_hdr.sector = sector;
+    g_status = 0xFF;   // not a legal status, so "untouched" is visible
+
+    struct virtio_sg out[2];
+    struct virtio_sg in[2];
+    int n_out = 0, n_in = 0;
+
+    out[n_out].phys = (uint64_t)(uintptr_t)&g_hdr;
+    out[n_out].len = sizeof g_hdr;
+    n_out++;
+
+    if (data) {
+        // Direction is from the DEVICE's point of view: a disk READ is
+        // a buffer the device WRITES.
+        if (device_writes) { in[n_in].phys = (uint64_t)(uintptr_t)data; in[n_in].len = len; n_in++; }
+        else               { out[n_out].phys = (uint64_t)(uintptr_t)data; out[n_out].len = len; n_out++; }
+    }
+
+    in[n_in].phys = (uint64_t)(uintptr_t)&g_status;
+    in[n_in].len = 1;
+    n_in++;
+
+    int head = virtqueue_submit(&g_vq, out, n_out, in, n_in);
+    if (head < 0) {
+        klog_write("virtio-blk: no free descriptors\n");
+        g_busy = 0;
+        return 0;
+    }
+    virtqueue_kick(&g_vq);
+
+    uint32_t used_len = 0;
+    int done = virtqueue_poll(&g_vq, head, &used_len);
+    g_busy = 0;
+
+    if (!done) return 0;   // virtqueue_poll() logged, and leaked the chain
+    if (g_status != VIRTIO_BLK_S_OK) {
+        klog_printf("virtio-blk: request type %u at sector %llu failed, status %u\n",
+                    type, (unsigned long long)sector, (unsigned)g_status);
+        return 0;
+    }
+    return 1;
+}
+
+int virtio_blk_read_sectors(uint32_t lba, int count, void *buf) {
+    if (!buf || count <= 0 || (uint32_t)count > g_max_xfer) return 0;
+    return do_request(VIRTIO_BLK_T_IN, lba, buf, (uint32_t)count * 512u, 1);
+}
+
+int virtio_blk_write_sectors(uint32_t lba, int count, const void *buf) {
+    if (!buf || count <= 0 || (uint32_t)count > g_max_xfer) return 0;
+    if (g_readonly) {
+        klog_write("virtio-blk: device is read-only, write refused\n");
+        return 0;
+    }
+    return do_request(VIRTIO_BLK_T_OUT, lba, (void *)buf, (uint32_t)count * 512u, 0);
+}
+
+int virtio_blk_flush(void) {
+    if (!virtio_blk_flush_supported()) return 1;  // nothing to do, not a failure
+    return do_request(VIRTIO_BLK_T_FLUSH, 0, 0, 0, 0);
+}
+
+void virtio_blk_init(void) {
+    g_dev.name = "virtio-blk";
+    // No such device is the ordinary case: silent, no allocation, no
+    // PCI writes. Anything past here is a device that IS present.
+    if (!virtio_pci_find(VIRTIO_ID_BLK, 0, &g_dev)) return;
+
+    uint64_t wanted = VIRTIO_BLK_F_FLUSH | VIRTIO_BLK_F_SIZE_MAX
+                    | VIRTIO_BLK_F_SEG_MAX | VIRTIO_BLK_F_RO;
+    if (!virtio_begin(&g_dev, wanted)) return;   // logged its own reason
+
+    if (!virtqueue_setup(&g_dev, 0, &g_vq)) {
+        klog_write("virtio-blk: could not set up its request queue\n");
+        virtio_fail(&g_dev);
+        return;
+    }
+
+    // Capacity is readable after FEATURES_OK; only USING a queue has to
+    // wait for DRIVER_OK.
+    g_capacity = virtio_cfg_read64(&g_dev, VIRTIO_BLK_CFG_CAPACITY);
+    g_readonly = virtio_has_feature(&g_dev, VIRTIO_BLK_F_RO);
+
+    if (virtio_has_feature(&g_dev, VIRTIO_BLK_F_SIZE_MAX)) {
+        uint32_t size_max = virtio_cfg_read32(&g_dev, VIRTIO_BLK_CFG_SIZE_MAX);
+        uint32_t sectors = size_max / 512u;
+        if (sectors > 0 && sectors < g_max_xfer) g_max_xfer = sectors;
+    }
+
+    virtio_driver_ok(&g_dev);
+    g_present = 1;
+
+    if (g_capacity > 0xFFFFFFFFull) {
+        klog_printf("virtio-blk: capacity %llu sectors exceeds the block layer's 32-bit"
+                    " sector index -- exposing 4294967295\n", (unsigned long long)g_capacity);
+    }
+    klog_printf("virtio-blk: %llu sectors, max %u per transfer, flush %s%s\n",
+                (unsigned long long)g_capacity, g_max_xfer,
+                virtio_blk_flush_supported() ? "yes" : "no",
+                g_readonly ? ", READ-ONLY" : "");
+}

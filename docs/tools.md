@@ -556,6 +556,17 @@ manual steps to be worth automating:
   and a 35-check suite passed it: every check asserted on the app's LOG,
   and the widgets were live, hit-testable and simply never painted. In
   `gui_regress.py`.
+- **`virtio_boot_test.py`** -- boots with **no IDE controller at all**
+  and the filesystem on virtio-blk, then writes a file, REBOOTS, and
+  reads it back (6 checks). Builds its own QEMU; on demand, not in the
+  gate. It exists because the `virtio` KTESTs cannot cover this: on
+  those boots ATA still owns the filesystem, so nothing exercises
+  `block_virtio.c`'s adapter or `vfs.c`'s precedence rule. And the
+  reboot is the point -- a write that only reached a cache passes a
+  same-boot read-back, so the round trip is what proves the bytes
+  landed on the disk. Its positive control is to make
+  `virtio_blk_write_sectors()` return success without issuing anything:
+  that reddens exactly the round-trip check.
 - **`live_boot_test.py`** -- boots `toy-os-live.iso` with NO disk and
   asserts a shipped binary RUNS, plus that `df` reports the image's real
   size and says RAM-only. Not in `gui_regress.py` (it builds its own

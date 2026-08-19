@@ -2224,7 +2224,9 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   stages a 300-entry directory from the HOST, since the cap is
   unreachable by typing `touch`),
   `mem_stress.py`, `frame_balance.py` (does teardown balance),
-  `live_boot_test.py`, `fs_switch_test.py`, `tfs3_v1_test.py`,
+  `virtio_boot_test.py` (TFS3 mounting off virtio-blk on a
+  machine with NO IDE controller, written and read back across a
+  REBOOT), `live_boot_test.py`, `fs_switch_test.py`, `tfs3_v1_test.py`,
   `mkpart_test.py`, `demo_test.py`.
 - **Disk images, from the host** -- `seed_disk.py` (the format-aware
   front end `make iso` calls), `tfs2_writer.py`, `tfs3_writer.py`.
@@ -2396,6 +2398,44 @@ beside them is real content.
 
 List every file added or edited in the final response, as a compact
 list (standing project instruction) -- always, regardless of mode.
+
+**AND WHEN A CHANGE MOVES A LAYER BOUNDARY, DRAW THE STACK** (standing
+project instruction). If the work adds a layer, removes one, moves a
+seam, or changes who calls whom, the final response shows the layering
+-- an ASCII diagram of the stack with the changed part marked, and the
+directory tree when files moved or appeared. Not prose describing it.
+
+**ONCE, WHEN THE WORK IS DONE** -- this is a delivery-time summary, not
+a running commentary. Draw the stack as it ENDS UP, in the response
+that hands the finished work over. Not per stage, not per commit, and
+not mid-task while the shape is still moving: a diagram of an
+intermediate state is worse than none, because it describes something
+that was never true for longer than an hour.
+
+The reason is that a file list says WHAT changed and never says what
+the system now looks like, and this project's structure is the thing
+sessions most often re-derive from scratch: the `apps/` vs `userland/`
+split, `kapi.h` as the one app-facing header, the registries
+(`display_driver`, `block_device`, `clocksource`) that a new driver
+plugs into instead of inventing a mechanism beside. A picture at
+delivery is what makes the NEXT session inherit that instead of
+grepping for it.
+
+What counts as moving a boundary: a new subsystem directory; a new
+registry or a new implementation of an existing one; a header changing
+audience (`kernel/` -> `api/`, or a new one in either); a call site
+moving between rings, or between the kernel and a driver; anything that
+changes what a component is allowed to include. An ordinary bug fix,
+a new widget in an existing toolkit, or a doc edit does NOT -- do not
+draw a diagram for the sake of having one.
+
+Show BOTH axes when they differ, because in this codebase they usually
+do: what the thing sits ON (the vertical call stack) and what it
+PLUGS INTO (the class registry). virtio is the worked example -- the
+transport is one vertical stack, while virtio-blk reaching
+`block_device` and a later virtio-gpu reaching `display_driver` is a
+second, orthogonal one, and a single diagram of either alone is
+misleading about where the next device goes.
 
 Never write personal information (PII) into any file being edited or
 added. If a change genuinely seems to need some, ask first, or

@@ -198,6 +198,15 @@ def cmd_start(args):
         # 80000005H/6H fallback there and the leaf-4 path never runs.
         # `--cpu max` or `--cpu Skylake-Client` exercises the other side.
         cmd += ["-cpu", args.cpu]
+    # An optional SECOND disk on virtio, off by default so every existing
+    # invocation is byte-for-byte unchanged. `if=none` plus an explicit
+    # -device rather than `if=virtio`, so disable-legacy can be chosen:
+    # bare `if=virtio` on pc-i440fx yields a TRANSITIONAL device
+    # (1af4:1001), which the driver does handle, but the modern form is
+    # what the transport is written against.
+    if getattr(args, "virtio_disk", None):
+        cmd += ["-drive", f"file={args.virtio_disk},format=raw,if=none,id=vblk",
+                "-device", "virtio-blk-pci,drive=vblk,disable-legacy=on"]
     cmd += [
         # A VNC head rather than -display none: input routing needs a
         # display head to exist even when nothing connects to it (see
@@ -359,6 +368,10 @@ def main():
                     help="guest RAM in MiB (default 2048). Smaller makes "
                           "memory exhaustion reachable -- see tools/mem_stress.py")
     ap.add_argument("--timeout", type=float, default=30.0)
+    ap.add_argument("--virtio-disk", default=None,
+                    help="attach PATH as a virtio-blk disk. Off by default; with it "
+                         "the guest gets a second disk on virtio-blk-pci, which is "
+                         "what exercises the virtio transport and virtqueue.")
     ap.add_argument("--vga", default="std",
                     help="QEMU -vga adapter (std, vmware, ...). `vmware` is the only "
                          "one this kernel has a modesetting driver for, and the only "

@@ -88,6 +88,16 @@ int blk_trim(uint32_t lba, uint32_t count);
 // at boot before the filesystem mounts.
 void blk_ata_init(void);
 
+// Registers the virtio disk as the active device, if there is one and
+// it should have it. Returns 1 if it took the role.
+//
+// PRECEDENCE, since blk_register() is last-writer-wins and order alone
+// decides: virtio-blk takes the disk only when ATA has none, or when
+// the `virtioblk` boot flag asks. See kernel/fs/vfs.c, where that
+// choice is made in one place -- the same conservative rule
+// try_live_module() follows there, and for the same reason.
+int blk_virtio_init(void);
+
 // Registers a RAM-backed device over [base, base + bytes). For a live
 // image handed over by the bootloader; see kernel/drivers/block/ram.c.
 int blk_ram_register(uint64_t base, uint64_t bytes);

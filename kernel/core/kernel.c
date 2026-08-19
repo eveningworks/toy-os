@@ -18,6 +18,7 @@
 #include "heap.h"
 #include "rammeter.h"
 #include "pci.h"
+#include "virtio_blk.h"
 #include "vmsvga.h"
 #include "vesafb.h"
 #include "display.h"
@@ -202,6 +203,23 @@ void kernel_main(uint64_t multiboot_info_addr) {
     klog_write("toy-os: physical frame allocator initialized\n");
 
     heap_init(); // kmalloc()/kfree() -- built on pmm, needs it initialized first
+
+    // virtio devices, if any.
+    //
+    // AFTER pmm_init(), and that ordering is load-bearing rather than
+    // tidy: a virtqueue's rings come from pmm_alloc_contiguous(), so
+    // this next to pci_init() -- where a PCI-scanning driver otherwise
+    // belongs -- found its device, negotiated features, and then failed
+    // with "queue 0 needs 3 contiguous frames and none were free". It
+    // fails softly enough to look like a device problem rather than an
+    // ordering one, which is why it is written down here.
+    //
+    // Still BEFORE fs_init(), because probe_and_mount() asks
+    // blk_virtio_init() whether to hand it the disk. Kept out of
+    // fs_init() itself: the driver existing is independent of whether
+    // anything mounts off it, and `dmesg` should report a virtio disk
+    // either way. Silent and allocation-free when there is none.
+    virtio_blk_init();
     klog_write("toy-os: kernel heap initialized\n");
 
     // No self-tests run here any more. pmm/heap/json/tfs each used to be

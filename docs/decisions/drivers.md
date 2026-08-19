@@ -293,3 +293,119 @@ defaults its FORMAT to one entry per line, which is the shape safe to
 parse. Making columns the default broke Notepad's dialog test the same
 day, because that test reads `ls /` a line at a time -- which is exactly
 the pipe case a real ls would have detected.
+
+## virtio: one shared transport, modern-only, polled
+
+**Why a shared core rather than a self-contained virtio-blk.** Every
+virtio device -- block, net, GPU, entropy, input -- speaks the same
+transport: the same PCI capability discovery, the same feature
+negotiation, the same ring. Only the payload differs. Writing that once
+means the next device is a `.c` file rather than a bring-up project,
+which is what `docs/roadmap.md` means by "every item below depends only
+on this". Linux splits it the same way (`drivers/virtio/` beneath the
+drivers that use it) and so does Windows' virtio-win (one `VirtIOLib`
+inside viostor and netkvm).
+
+What was deliberately NOT copied is their size: no bus type, no
+driver-match table, no probe/remove callbacks, no vtable over several
+transports, no packed ring, no indirect descriptors, no event-index
+suppression, no MSI-X, no DMA/IOMMU layer, no hotplug. A driver here
+scans PCI in its own init and calls the transport functions directly,
+which is `vmsvga.c`'s existing precedent. The core is ~600 lines
+against Linux's ~9,000 for the equivalent.
+
+**Note the two axes.** The virtio core is orthogonal to the class
+registries this kernel already has. virtio-blk plugs into
+`block_device` exactly as ATA does; a later virtio-gpu plugs into
+`display_driver` beside vmsvga. There is no "virtio registry", because
+the thing a device needs to be discoverable is a registry for its
+CLASS, and those already exist. virtio-net is the one that will need a
+new one, since nothing here describes a NIC yet.
+
+**Modern-only (virtio 1.x), and a device offering no
+`VIRTIO_F_VERSION_1` is refused rather than half-driven.** The legacy
+0.9.5 I/O-port layout would be a second path that nothing exercises,
+and this repo's standing rule is that an unexercised path is an
+unvalidated one. Refusing in one place (`virtio_begin()`) is what keeps
+that decision from leaking into every device driver.
+
+This does NOT mean only modern DEVICES work, and the distinction cost
+real time to discover: QEMU's `virtio-blk-pci` defaults to
+`disable-legacy=auto`, so `-drive if=virtio` on the default pc-i440fx
+machine produces a **transitional** device -- PCI id `1af4:1001`,
+revision 0 -- not the modern `1af4:1042`. A driver matching only
+`0x1040 + type` finds nothing on the most natural command line anyone
+would type, and the feature looks silently broken. The type is
+therefore read from the PCI device id for a modern device and from the
+SUBSYSTEM device id for a transitional one; the transitional device is
+then claimed through its modern half.
+
+**Polling, not interrupts, for now.** An interrupt would only be the
+device saying "used->idx changed", which the poll reads directly -- so
+polling is a correct implementation rather than a shortcut. It costs
+CPU, and it buys proving the ring, the DMA and the descriptor chaining
+before legacy INTx is introduced as a second thing that can be wrong.
+INTx here is level-triggered and shared, and `irq.c`'s handler table is
+one-per-line with a silent replace on re-registration, so a second
+virtio device sharing ATA's line would make ATA's handler vanish with
+no error. That is a real change, and it is separable. `virtio_pci_find()`
+sets `PCI_CMD_INTX_DISABLE` to match, which is the one line the
+interrupt work will delete.
+
+MSI-X, which is what Linux actually uses and which sidesteps sharing
+entirely, needs a local APIC, an IOAPIC and IDT vectors above 47 --
+this kernel installs 0-47 plus `0x80`. That is an APIC project wearing
+a virtio hat, and is deliberately out of scope.
+
+**No BAR size probing.** virtio 1.x gives every capability a
+`bar`/`offset`/`length` triple, so a driver never needs the BAR's
+extent. Size probing exists so an OS can ASSIGN addresses, which
+SeaBIOS did before GRUB loaded us.
+
+**Which disk wins, and why it is decided in `vfs.c`.** `blk_register()`
+is last-writer-wins, so order alone would decide it somewhere nobody
+looks. virtio-blk takes the filesystem only when ATA has no disk, or
+when the `virtioblk` boot flag asks -- the same conservative rule
+`try_live_module()` follows immediately above it, and for the same
+reason: a machine with a real installed system must not have it quietly
+displaced by whatever else is attached.
+
+A rating field like `clocksource`'s was rejected. With two block
+devices a rating is a number nobody can justify, and a mechanism with
+one real user. It becomes the right answer at three.
+
+**Capabilities from negotiated features, unlike `block_ata.c`.** ATA
+advertises `BLK_CAP_FLUSH`/`TRIM` unconditionally and refuses per call,
+because identify data is not necessarily settled when its adapter
+registers. virtio feature negotiation has already completed by then and
+definitively answers "can this device flush", so here the bit can mean
+exactly that. The divergence is the point, not an inconsistency.
+
+**A timed-out chain's descriptors are leaked on purpose.** The device
+still owns those buffers and may write into them at any later moment,
+so returning them to the free pool would hand a live DMA target to the
+next request. The queue runs down and then refuses, which is the right
+end state for a device that has stopped answering; the alternative is
+silent corruption. `virtqueue_lost_chains()` counts them.
+
+**Init ordering is load-bearing.** `virtio_blk_init()` runs after
+`heap_init()`, not beside `pci_init()` where a PCI-scanning driver
+otherwise belongs: a virtqueue's rings come from
+`pmm_alloc_contiguous()`. Placed early it found its device, negotiated
+features, and then failed with "queue 0 needs 3 contiguous frames and
+none were free" -- which reads as a device problem rather than an
+ordering one.
+
+**What is knowingly not right.** The register windows are reached
+through the identity map, which is write-back cached; device registers
+should be uncacheable, and the only memory-type control this kernel has
+is `paging_set_write_combining()` (also wrong -- WC gathers and
+reorders, which is fine for a framebuffer and fatal for a doorbell).
+TCG ignores PAT entirely, so this is invisible here and would only
+matter on hardware. Recorded rather than papered over; a
+`paging_set_uncacheable()` is its own change.
+
+Likewise a BAR above 4 GiB is refused with a message rather than
+supported, because this kernel identity-maps only the low 4 GiB and has
+no kernel-range mapper. Not reachable on pc-i440fx, where SeaBIOS fits
+the 16 KiB virtio BAR into the 32-bit hole.
