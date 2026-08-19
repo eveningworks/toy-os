@@ -39,7 +39,7 @@
 
 // The keys a text file may carry:
 //   Description=<one line>
-//   Widget=auto | radio | dropdown
+//   Widget=auto | radio | dropdown | slider
 //   Applies=now | reboot
 //   Advanced=1 | 0
 //   Order=<integer, lower first>

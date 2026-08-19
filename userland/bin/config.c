@@ -290,19 +290,26 @@ static int cmd_set(const char *name, const char *value) {
     // and look.
     if (m.result == SETTING_INVALID) {
         int rc = report(name, value, m.result);
-        struct setting_msg q;
-        if (!op(&q, SETTING_OP_COUNT)) return rc;
-        int n = q.count;
+        // `found` IS REUSED here rather than a third message declared.
+        // struct setting_msg passed a kilobyte when it gained a
+        // description, so three of them on one frame is 2160 bytes
+        // against USERLAND_CFLAGS' 2048-byte budget -- on a 16 KiB
+        // ring-3 stack with a single guard page below it. `found` has
+        // done its job by now (its name was copied into `m` above), and
+        // the inner `ch` stays separate because it is live at the same
+        // time as this one.
+        if (!op(&found, SETTING_OP_COUNT)) return rc;
+        int n = found.count;
         for (int i = 0; i < n; i++) {
-            memset(&q, 0, sizeof q);
-            q.op = SETTING_OP_INFO;
-            q.index = i;
-            if (sys_setting(&q) != 0) continue;
-            if (!name_matches(&q, name)) continue;
-            if (q.type != SETTING_ABI_TYPE_ENUM || q.count <= 0) break;
+            memset(&found, 0, sizeof found);
+            found.op = SETTING_OP_INFO;
+            found.index = i;
+            if (sys_setting(&found) != 0) continue;
+            if (!name_matches(&found, name)) continue;
+            if (found.type != SETTING_ABI_TYPE_ENUM || found.count <= 0) break;
 
             put("  try one of:");
-            for (int c = 0; c < q.count; c++) {
+            for (int c = 0; c < found.count; c++) {
                 struct setting_msg ch;
                 memset(&ch, 0, sizeof ch);
                 ch.op = SETTING_OP_CHOICE;
@@ -310,7 +317,9 @@ static int cmd_set(const char *name, const char *value) {
                 ch.choice = c;
                 if (sys_setting(&ch) != 0) break;
                 put(" ");
-                put(ch.value);
+                // The DISPLAY name, which falls back to the value, so a
+                // refusal lists what a reader will see in the UI.
+                put(ch.label[0] ? ch.label : ch.value);
             }
             put("\n");
             break;

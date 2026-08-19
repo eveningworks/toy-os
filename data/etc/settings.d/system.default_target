@@ -1,4 +1,4 @@
-Description=What init starts at boot -- the desktop, or a text console
+Description=What init starts at boot: the desktop, or a text console
 Widget=radio
 Choice.graphical=Graphical desktop
 Choice.text=Text console

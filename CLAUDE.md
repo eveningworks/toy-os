@@ -527,6 +527,23 @@ technical conventions below:
   as a broken layout, one layer away from the cause.
   `uui_scrollview_content_changed()` is still the honest thing to call
   at the point of change and is no longer load-bearing.
+- **`uui_slider` is for an ORDERED enum** (`userland/ui/uui_slider.h`)
+  -- discrete stops, one per choice, with the value an INDEX into the
+  same `options` array `uui_radio_list` and `uui_dropdown` take. So a
+  setting can switch between all three by changing `Widget=` in
+  `/etc/settings.d`, with no code change. It is deliberately NOT
+  continuous: the registry's only list-carrying type is an enum, so a
+  continuous slider would need a numeric setting type that does not
+  exist. A drag tracks x ONLY (leaving the track vertically must not
+  cancel it) and `press` returns non-zero on any hit, because the router
+  takes its pointer grab only when press does.
+- **A CONTROL BELOW THE FOLD IS UNREACHABLE, not merely hard to hit.**
+  A scroll view with a `hit` clips its children from ROUTING, so a press
+  never reaches a child outside the viewport -- correct, and the reason
+  a tool must scroll before clicking rather than aiming at unscrolled
+  coordinates, where it gets silence rather than an error. An app driven
+  by tools should report a control's rect whenever it MOVES (a page
+  change and a scroll alike), not only when a page changes.
 - **`uui_label` is the caption widget** (`userland/ui/uui_label.h`) --
   one line of text the LAYOUT reserves a row for, with no behaviour and
   **no `hit`**, so a click passes through to whatever is behind. Reach

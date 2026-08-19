@@ -62,6 +62,10 @@ enum setting_result {
 #define SETTING_ABI_WIDGET_AUTO     0
 #define SETTING_ABI_WIDGET_RADIO    1
 #define SETTING_ABI_WIDGET_DROPDOWN 2
+// Discrete stops, one per choice. For an ORDERED enum -- off/low/medium/
+// high -- where "more" and "less" is what the user means and a radio
+// list says nothing about the order.
+#define SETTING_ABI_WIDGET_SLIDER   3
 
 // `sflags` above.
 //

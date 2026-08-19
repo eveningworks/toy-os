@@ -2867,3 +2867,52 @@ That choice is this project's standing rule applied: an init step
 reachable by only one entry point is a bug waiting for a second entry
 point. Verified by removing the app's explicit call and confirming the
 geometry was identical.
+
+---
+
+## `uui_slider` has DISCRETE stops, and that is not a limitation to fix
+
+Written for pointer acceleration, where the values are ordered levels --
+off, low, medium, high -- and what a user means is "more" or "less". A
+radio list says the same thing while saying nothing about the ORDER; a
+dropdown hides every value but one behind a click. That ordering is the
+whole argument for the control.
+
+**Continuous was never an option, and building it would have been the
+mistake.** The settings registry has exactly one value type that carries
+a choice list -- an enum -- so every setting this can serve has a finite,
+ordered, named set. A continuous slider needs a numeric setting type
+with a range and a unit, which does not exist; building the widget for
+it first would be a control with nothing to control, which is the
+framework-with-no-users shape this project keeps refusing.
+
+**The value is an INDEX into the same `options` array** the radio list
+and the dropdown take, so an app reads it identically and a setting can
+change its `Widget=` in `/etc` with no code change anywhere. Ticks are
+drawn per stop, deliberately: a slider that looked continuous and then
+snapped would read as a bug rather than as a design.
+
+Two input details worth keeping. A drag tracks **x only** -- leaving the
+track vertically must not cancel it, which is how every real slider
+behaves -- and `press` returns non-zero on any hit even when the value
+does not move, because the router takes its pointer grab only when press
+does, and without the grab a drag stops the moment the cursor leaves the
+thumb.
+
+---
+
+## A control below the fold is UNREACHABLE, not merely hard to reach
+
+A scroll view with a `hit` clips its children from routing, so a press
+never reaches a child outside the viewport. That is correct and
+deliberate -- it is what stops off-screen rows being clickable -- and it
+has a consequence for anything driving the UI: a control that has not
+been scrolled into view is not a control that is awkward to click, it is
+one that cannot be clicked at all, and a tool aiming at its unscrolled
+coordinates gets silence rather than an error.
+
+System Settings therefore reports each control's rect whenever it
+MOVES, which covers a page change and a scroll with one rule. The
+earlier version reported only on a page change and said nothing when the
+page scrolled, so a tool driving a control below the fold had no idea
+where it had gone -- and the control looked dead.

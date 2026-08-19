@@ -35,6 +35,7 @@
 #include "ui/uui_label.h"
 #include "ui/uui_radio_list.h"
 #include "ui/uui_dropdown.h"
+#include "ui/uui_slider.h"
 #include "ui/uui_checkbox.h"
 #include "ui/uui_button.h"
 #include "ui/uui_button_group.h"
@@ -58,6 +59,9 @@
 // buttons, unless /etc/settings.d says otherwise. Few mutually-exclusive
 // options are better all visible; ninety-two timezones are not.
 #define CHOICES_DROPDOWN_MIN 7
+
+// struct slot's `kind`.
+enum { CTRL_RADIO = 0, CTRL_COMBO, CTRL_SLIDER };
 
 enum { ID_TREE = 1, ID_BODY, ID_PAGE, ID_ADVANCED, ID_BUTTONS, ID_STATUS,
        ID_CONTROL_BASE = 100 }; // + slot, so a control names its own row
@@ -108,15 +112,17 @@ static int  g_show_advanced;
 static int  g_page_group = -1;
 // Does the current page have anything the toggle would reveal?
 static int  g_advanced_has;
-// Counts DOWN over frames after a page change, and the geometry is
-// reported when it reaches 1 -- i.e. on the SECOND draw.
+// The last control geometry reported, so a CHANGE is what triggers the
+// next report -- a page change and a SCROLL alike.
 //
-// Not the first, and that cost an hour: on_draw runs before the layout
-// has placed the new page's widgets, so reporting there logs the
-// PREVIOUS page's rects. It looks like a layout that positions only its
-// first child, because the slots a shorter previous page never used are
-// still zeroed -- a completely convincing wrong answer.
-static int  g_report_geom;
+// It was a flag set on page change, which reported the previous page's
+// rects (on_draw runs before the layout places a new page) and said
+// nothing at all when the page scrolled. A tool driving a control below
+// the fold then had no idea where it had moved to, and a scroll view
+// correctly refuses to route a press to a child outside its viewport --
+// so the control was simply unreachable and looked dead.
+static int g_last_y[PAGE_MAX];
+static int g_last_reported_count = -1;
 
 // --- the page's controls ---------------------------------------------
 //
@@ -131,7 +137,11 @@ struct slot {
     struct uui_label     explain;
     struct uui_radio_list radio;
     struct uui_dropdown   combo;
-    int use_combo;
+    struct uui_slider     slider;
+    // Which of the three is showing. A KIND rather than a pair of flags:
+    // two booleans can express "both" and "neither", and neither is a
+    // state this page has.
+    int kind;
     // The staged selection, and the value the page opened with. The
     // baseline is what the "(current)" marker names, which is what makes
     // an accidental click visible before it is committed.
@@ -317,13 +327,13 @@ static void load_slot(struct slot *sl, int idx) {
     uui_label_set_text(&sl->explain, g_desc[idx]);
 
     if (g_type[idx] != SETTING_ABI_TYPE_ENUM) {
+        sl->kind = CTRL_RADIO;
         // Free text has no choices to offer. Shown as an empty control
         // with an explanation rather than omitted, so the row does not
         // look broken -- editing one needs a text field, which is why
         // `config set` exists for these.
         sl->radio.options = 0;
         sl->radio.count = 0;
-        sl->use_combo = 0;
         return;
     }
 
@@ -359,9 +369,10 @@ static void load_slot(struct slot *sl, int idx) {
     // WHICH CONTROL. /etc/settings.d may say; otherwise the count
     // decides. The file's word wins because it knows things the count
     // cannot -- a setting with five choices today that will have fifty.
-    if (g_widget[idx] == SETTING_ABI_WIDGET_DROPDOWN) sl->use_combo = 1;
-    else if (g_widget[idx] == SETTING_ABI_WIDGET_RADIO) sl->use_combo = 0;
-    else sl->use_combo = sl->choice_count >= CHOICES_DROPDOWN_MIN;
+    if (g_widget[idx] == SETTING_ABI_WIDGET_DROPDOWN) sl->kind = CTRL_COMBO;
+    else if (g_widget[idx] == SETTING_ABI_WIDGET_RADIO) sl->kind = CTRL_RADIO;
+    else if (g_widget[idx] == SETTING_ABI_WIDGET_SLIDER) sl->kind = CTRL_SLIDER;
+    else sl->kind = sl->choice_count >= CHOICES_DROPDOWN_MIN ? CTRL_COMBO : CTRL_RADIO;
 
     sl->radio.options = sl->choice_ptr;
     sl->radio.count = sl->choice_count;
@@ -372,6 +383,8 @@ static void load_slot(struct slot *sl, int idx) {
     // that just changed.
     uui_dropdown_init(&sl->combo, 0, 0, 0, 0, sl->choice_ptr, sl->choice_count);
     sl->combo.list.selected = sl->staged;
+    uui_slider_set_options(&sl->slider, sl->choice_ptr, sl->choice_count);
+    sl->slider.selected = sl->staged;
 }
 
 // Does this page have anything staged but not yet applied?
@@ -447,7 +460,6 @@ static void open_group(int g) {
     if (!g_status[0] || g_page_group == g)
         snprintf(g_status, sizeof g_status, "%s", g_page_title_text);
     relayout_page();
-    g_report_geom = 2;
     logf_("settings: page %s/%s slots %d advanced %d\n",
           g_group_cat[g], g_group_key[g], g_slot_count, hidden_advanced);
 }
@@ -637,10 +649,15 @@ static void relayout_page(void) {
         // contributing nothing. Emitting one keeps the item list
         // describing exactly what is on screen, which is also what makes
         // the reported geometry mean something.
-        if (sl->use_combo) {
+        if (sl->kind == CTRL_COMBO) {
             PAGE[n++] = (struct uui_item){ .ops = &uui_dropdown_ops,
                                             .widget = &sl->combo,
                                             .id = ID_CONTROL_BASE + i };
+        } else if (sl->kind == CTRL_SLIDER) {
+            PAGE[n++] = (struct uui_item){ .ops = &uui_slider_ops,
+                                            .widget = &sl->slider,
+                                            .id = ID_CONTROL_BASE + i,
+                                            .flags = UUI_FILL_W };
         } else {
             PAGE[n++] = (struct uui_item){ .ops = &uui_radio_list_ops,
                                             .widget = &sl->radio,
@@ -700,8 +717,9 @@ static void on_widget(struct uapp *a, int id, int reason) {
         // STAGED, not applied. The selection is remembered; Apply or OK
         // is what writes it.
         struct slot *sl = &g_slot[id - ID_CONTROL_BASE];
-        sl->staged = sl->use_combo ? uui_dropdown_selected(&sl->combo)
-                                   : sl->radio.selected;
+        sl->staged = sl->kind == CTRL_COMBO   ? uui_dropdown_selected(&sl->combo)
+                    : sl->kind == CTRL_SLIDER ? sl->slider.selected
+                                              : sl->radio.selected;
         if (sl->setting >= 0 && sl->staged >= 0) {
             snprintf(g_status, sizeof g_status, "%s -> %s   (not applied yet)",
                      g_label[sl->setting], sl->choice_raw[sl->staged]);
@@ -756,6 +774,7 @@ static void on_widget(struct uapp *a, int id, int reason) {
 
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
     struct ugfx_surface *s = uapp_surface(d);
+    (void)a;
     // THE PAGE AREA IS THE SCROLL VIEW'S RECT, asked of the widget
     // rather than recomputed from the window size: the layout owns where
     // things ended up, and a second calculation here would be a second
@@ -776,41 +795,36 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     // painted here, which is what stops it landing on top of a control:
     // on_draw runs AFTER the widgets.
 
-    // WHERE EACH CONTROL ENDED UP, reported once per page change. Only
-    // here because geometry does not exist until the layout has run, and
-    // a tool that computed these itself would drift the moment a caption
-    // gained a line -- the trap DebugConsole.menu_row() exists to avoid.
-    // REPORTED ONLY ONCE THE LAYOUT HAS PLACED THE PAGE, which is not
-    // this frame: on_draw runs BEFORE the new page is laid out, so a
-    // report here describes the PREVIOUS page -- and a redraw requested
-    // from inside on_draw coalesces into the frame already in progress,
-    // so counting frames does not help either.
-    //
-    // The test for "has it been laid out" is the first control having a
-    // non-zero rect. A page with no controls (System Information, or an
-    // all-advanced group) has nothing to wait for, so it reports at once.
-    int laid_out = g_slot_count == 0 ||
-                   (g_slot[0].use_combo ? g_slot[0].combo.w : g_slot[0].radio.w) > 0;
-    if (g_report_geom && !laid_out) {
-        uapp_redraw(a); // ask for another frame; the layout runs before it
-    } else if (g_report_geom) {
-        g_report_geom = 0;
+    // WHERE EACH CONTROL ENDED UP, reported whenever it MOVES -- which
+    // covers a page change and a scroll with one rule. Geometry does not
+    // exist until the layout has run, and on_draw is the first hook that
+    // is reliably after it.
+    int moved = g_slot_count != g_last_reported_count;
+    for (int i = 0; i < g_slot_count && !moved; i++) {
+        struct slot *sl = &g_slot[i];
+        int y = sl->kind == CTRL_COMBO ? sl->combo.y
+                : sl->kind == CTRL_SLIDER ? sl->slider.y : sl->radio.y;
+        if (y != g_last_y[i]) moved = 1;
+    }
+    if (moved) {
+        g_last_reported_count = g_slot_count;
         for (int i = 0; i < g_slot_count; i++) {
             struct slot *sl = &g_slot[i];
             int x, y, w, hh;
-            if (sl->use_combo) {
+            if (sl->kind == CTRL_COMBO) {
                 x = sl->combo.x; y = sl->combo.y; w = sl->combo.w; hh = sl->combo.h;
+            } else if (sl->kind == CTRL_SLIDER) {
+                x = sl->slider.x; y = sl->slider.y; w = sl->slider.w; hh = sl->slider.h;
             } else {
                 x = sl->radio.x; y = sl->radio.y; w = sl->radio.w; hh = sl->radio.h;
             }
-            logf_("settings: caption %d %d %d %d %d\n", i,
-                  sl->caption.x, sl->caption.y, sl->caption.w, sl->caption.h);
+            g_last_y[i] = y;
             logf_("settings: control %d %s %d %d %d %d rows %d kind %s\n", i,
                   sl->setting >= 0 ? g_name[sl->setting] : "-", x, y, w, hh,
-                  sl->choice_count, sl->use_combo ? "combo" : "radio");
+                  sl->choice_count,
+                  sl->kind == CTRL_COMBO ? "combo"
+                    : sl->kind == CTRL_SLIDER ? "slider" : "radio");
         }
-        logf_("settings: pagecount %d scroll %d %d %d %d\n", PAGE_COUNT,
-              PAGE_SCROLL.x, PAGE_SCROLL.y, PAGE_SCROLL.w, PAGE_SCROLL.h);
         logf_("settings: advanced_toggle %d %d %d %d shown %d\n",
               g_advanced_cb.x, g_advanced_cb.y, g_advanced_cb.w, g_advanced_cb.h,
               g_advanced_has);
@@ -903,6 +917,9 @@ int main(void) {
         g_slot[i].radio.bg = UTHEME_PANEL_BG;
         g_slot[i].radio.fg = UTHEME_TEXT;
         uui_dropdown_init(&g_slot[i].combo, 0, 0, 0, 0, 0, 0);
+        uui_slider_init(&g_slot[i].slider, 0, 0);
+        g_slot[i].slider.bg = UTHEME_PANEL_BG;
+        g_slot[i].slider.fg = UTHEME_TEXT;
     }
     uui_checkbox_init(&g_advanced_cb, 0, 0, 0, "Show advanced settings",
                        UTHEME_PANEL_BG, UTHEME_TEXT);

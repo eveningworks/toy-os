@@ -22,7 +22,7 @@ Choice.veryfast=Very fast
 | Key | Meaning |
 |---|---|
 | `Description` | One line, shown under the setting's label. Not a paragraph. |
-| `Widget` | `auto` (default), `radio`, `dropdown`. A **hint** — a client with no such control still shows the setting some other way. |
+| `Widget` | `auto` (default), `radio`, `dropdown`, `slider`. A **hint** — a client with no such control still shows the setting some other way. `slider` suits an ORDERED enum (off/low/medium/high), where a radio list says nothing about the order. |
 | `Choice.<value>` | The display name for one choice. The stored value is still `<value>`; only what is shown differs. |
 
 **The compiled-in label is the floor.** A missing or malformed file costs

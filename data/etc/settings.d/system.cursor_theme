@@ -1,4 +1,4 @@
-Description=Which set of pointer shapes to draw, from /usr/share/cursors
+Description=Which set of pointer shapes to draw
 # Appearance first, then behaviour -- which is NOT registration
 # order, since cursor_config registers before mouse_config.
 Order=10

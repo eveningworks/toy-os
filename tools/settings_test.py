@@ -157,7 +157,7 @@ def _since(mark, pattern):
 
 
 CONTROL_RE = (r"settings: control (\d+) (\S+) (-?\d+) (-?\d+) (-?\d+) (-?\d+) "
-               r"rows (\d+) kind (radio|combo)")
+               r"rows (\d+) kind (radio|combo|slider)")
 
 
 def slots(dbg, mark):
@@ -335,6 +335,18 @@ def main():
           bool(mouse_speed) and mouse_speed[-1]["kind"] == "radio",
           f"kind={mouse_speed[-1]['kind'] if mouse_speed else '?'}")
 
+    # --- Widget= in /etc overrides the count rule ---------------------
+    #
+    # Pointer acceleration has four choices -- fewer than the dropdown
+    # threshold -- and asks for a SLIDER, because its values are ordered
+    # levels. So this checks the FILE's word beating the count, which is
+    # the whole point of the hint.
+    accel = [s for s in page_slots if "mouse_accel" in s["name"]]
+    check("a setting can ask for a slider, and /etc's word wins",
+          bool(accel) and accel[-1]["kind"] == "slider",
+          f"kind={accel[-1]['kind'] if accel else '?'}, choices="
+          f"{accel[-1]['choices'] if accel else 0}")
+
     # --- SELECTING STAGES; APPLY WRITES -------------------------------
     #
     # The check that would catch a staged model that quietly still
@@ -400,6 +412,48 @@ def main():
     said = last(r"settings: set (\S+) (\S+) result (\d+)")
     check("...and the registry reported it SAVED (not merely applied)",
           bool(said) and said.rstrip().endswith("result 1"), said or "no set line")
+
+    # --- the slider stages a change like any other control -----------
+    #
+    # Dragged, not clicked, because a slider's whole job is the drag --
+    # and the pointer GRAB is what makes a drag keep reaching the widget
+    # once the cursor leaves it. A click-only check would pass on a
+    # slider whose motion handling was missing entirely.
+    # SCROLL IT INTO VIEW FIRST. The Mouse page is taller than the
+    # window, and a scroll view correctly refuses to route a press to a
+    # child outside its viewport -- so a control below the fold is not
+    # merely hard to hit, it is unreachable, and a test clicking at its
+    # unscrolled coordinates gets silence. The app re-reports its rects
+    # whenever they move, so the post-scroll geometry is what to use.
+    mark_scroll = len(drain(dbg))
+    dbg.warp_cursor(qmp, cx + px0 + pw0 // 2, cy + py0 + ph0 // 2)
+    for _ in range(6):
+        dbg.send("gui wheel -1")
+    dbg.settle()
+    time.sleep(0.4)
+    scrolled = controls(dbg, mark_scroll)
+    accel_ctl = scrolled.get("system.mouse_accel") or ctls.get("system.mouse_accel")
+    qmp.screenshot(f"{args.tmp}/settings_slider.png")
+    check("scrolling moved the page's controls",
+          bool(scrolled), f"{len(scrolled)} control(s) re-reported after the wheel")
+    if accel_ctl:
+        mark3 = len(drain(dbg))
+        y_mid = accel_ctl["y"] + 5
+        dbg.send(f"gui drag {cx + accel_ctl['x'] + 4} {cy + y_mid} "
+                 f"{cx + accel_ctl['x'] + accel_ctl['w'] - 4} {cy + y_mid}")
+        dbg.settle()
+        time.sleep(0.4)
+        drain(dbg)
+        dragged = None
+        for m in _since(mark3, r"settings: staged (\S+) (\S+)"):
+            if "mouse_accel" in m.group(1):
+                dragged = m.group(2)
+        check("dragging the slider stages a new value", dragged is not None,
+              f"staged {dragged!r} from a drag across the track")
+        # To the far END of the track, so the value is the LAST option --
+        # a drag that moved one stop would pass a weaker check.
+        check("...and a drag to the end selects the last option",
+              dragged == "high", f"got {dragged!r}, wanted 'high'")
 
     # --- Advanced= keeps a setting off the page until asked ----------
     #

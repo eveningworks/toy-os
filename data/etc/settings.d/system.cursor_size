@@ -1,7 +1,6 @@
 Description=How large the mouse pointer is drawn
-Choice.small=Small
+# The values are cursor_theme_config.c's g_sizes[] -- there is no
+# "small", and a Choice line naming one would simply never match.
 Choice.normal=Normal
 Choice.large=Large
-# Appearance first, then behaviour -- which is NOT registration
-# order, since cursor_config registers before mouse_config.
-Order=20
+Choice.huge=Huge

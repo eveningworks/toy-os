@@ -434,7 +434,8 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [x] ~~Resizable windows: a drag handle, and a relayout on resize~~ DONE 2026-08-18
 - [ ] A minimum window size that falls out of the content's own minimum -- `uapp_desc.min_w/min_h` is still a declared hint
 - [x] ~~Convert one real app as the proof -- Calculator's grid is the obvious first, being pure arithmetic today~~ DONE 2026-08-18
-- [ ] `uui_slider`, so a setting with ordered levels (pointer acceleration) can say `Widget=slider`
+- [x] ~~`uui_slider`, so a setting with ordered levels can say `Widget=slider`~~ DONE 2026-08-19 -- discrete stops, one per choice
+- [ ] `uui_label` wraps, so a setting description longer than its column is not simply clipped
 - [ ] Then convert the rest, deleting the per-app pixel math -- 4 of 10 ring-3 apps are laid out today
 - [ ] Scale factor as a single input, so a HiDPI mode is a multiplier and not a rewrite
 - [x] ~~Decide explicitly whether layout is immediate-mode~~ DONE 2026-08-18 -- it is; rects at open and on resize, drawing immediate

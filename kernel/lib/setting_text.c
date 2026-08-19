@@ -76,6 +76,7 @@ uint32_t setting_text_widget(const char *ns, const char *name) {
         return SETTING_ABI_WIDGET_AUTO;
     if (k_strcmp(value, "radio") == 0) return SETTING_ABI_WIDGET_RADIO;
     if (k_strcmp(value, "dropdown") == 0) return SETTING_ABI_WIDGET_DROPDOWN;
+    if (k_strcmp(value, "slider") == 0) return SETTING_ABI_WIDGET_SLIDER;
     // An unrecognised name is AUTO, not an error: a file naming a
     // control this build has no widget for must still leave the setting
     // changeable, and a later build may well understand it.

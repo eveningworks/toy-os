@@ -1,5 +1,8 @@
-Description=Move the mouse quickly and the pointer travels further still
-Widget=radio
+Description=Move faster, and the pointer travels further still
+# A SLIDER, because these are ordered levels: what a user means is
+# "more" or "less", which a radio list cannot express and a dropdown
+# hides behind a click.
+Widget=slider
 Choice.off=Off
 Choice.low=Low
 Choice.medium=Medium
