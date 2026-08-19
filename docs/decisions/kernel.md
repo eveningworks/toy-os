@@ -3076,3 +3076,72 @@ The last stage is drained AFTER the builtins (draining first blocks on
 output from a pipeline whose first stage has not run) and BEFORE the
 waits (waiting first blocks on a stage that is itself blocked writing
 into a capture pipe nobody is emptying).
+
+## A failed syscall returns -ERRNO, and the global lives in ring 3
+
+Every syscall reported failure as `-1` and wrote the reason to the
+kernel log -- 58 such sites, 23 distinct reasons already spelled out as
+English sentences that only a person reading `dmesg` could act on. The
+concrete cost: `/bin/tosh` probes each PATH candidate with `open()` and
+read any `-1` as "not there", so a machine out of descriptors reported
+"command not found" for a program that was sitting right where it
+looked.
+
+**Why a returned code and not a global `errno`.** A global needs
+thread-local storage the moment a process can have two threads inside a
+syscall at once, and toy-os has no TLS. A returned code needs nothing.
+This is Linux's split exactly: the kernel returns `-errno` and the C
+library -- not the kernel -- turns that into `-1` plus a per-thread
+variable. NT does the same thing one layer differently, returning an
+`NTSTATUS` whose severity is encoded in the value and letting Win32 put
+`GetLastError()` on top. Both keep the reason IN the return value and
+push the global up into userland, which is where it can be made
+per-thread later without the kernel knowing.
+
+So `libsys` holds the global (`userland/rt/sys.c`). It is a plain `int`
+today and it is the one thing here with a known expiry -- when TLS lands
+(`docs/roadmap.md`) that declaration moves and nothing else does.
+
+**Why Linux's actual numbers.** `EPERM` 1, `ENOENT` 2, `EBADF` 9. A
+private numbering would have to be learned by anyone reading this
+kernel, and buys nothing. What is deliberately NOT copied is the size:
+`abi/errno.h` defines fourteen codes, not Linux's ~130, and the bar for
+a fifteenth is a handler that genuinely tells that case apart -- the
+same bar `kernel/lib/` holds for a new helper. Copy the shape, not the
+size.
+
+**Why `SYS_RETRY` moved rather than becoming `-EAGAIN`.** It was -2,
+which is now `-ENOENT`, so it had to move regardless; it went to -4095,
+one past the top of the error range. Making it `-EAGAIN` looks tidier
+and is wrong: EAGAIN is an error a caller reports, while SYS_RETRY means
+the call did NOT fail -- the process was woken and must ask again, which
+libsys absorbs in a loop no caller ever sees. Folding them together
+would make every blocking call's spurious wakeup look like a failure one
+layer up. That is the same mistake as the original "0 means try again",
+which made a pipe read report EOF the instant its writer produced
+something, and is why SYS_RETRY exists at all.
+
+**Why the range is small, and what depends on it.** Errors are
+`[-4094, -1]`; anything else is a result. That test has to stay
+unambiguous against every syscall's legitimate return, which is why the
+codes are dense at the bottom rather than spread out. The call that
+makes it non-obvious is `SYS_SBRK`, which returns a POINTER -- a ring-3
+heap address is nowhere near that window, so it cannot be mistaken for
+an error.
+
+**Why sbrk keeps a bare -1.** `(void *)-1` is its contract, and what
+`heap_os.c`, `ugfx.c` and the WM already test against; a small negative
+code there would be a plausible and wrong ADDRESS. It refuses with -1
+and libsys records ENOMEM beside it, exactly as POSIX `sbrk()` does.
+The consequence for `strace`: it does not decode a pointer-returning
+syscall's -1, because -1 is EPERM's value and naming it would print a
+reason sbrk never gave.
+
+**Why the boolean syscalls were left alone.** `unlink`, `kill`,
+`gettime`, `proc_info`, `win_create` and friends report failure as **0**,
+not -1. A negative code is TRUTHY, so returning one from those would
+make every `if (!sys_unlink(p))` caller read a failure as SUCCESS --
+silently, everywhere, at once. Their polarity flip is caller-visible and
+belongs in its own change; the roadmap carries it. This is the same rule
+the plan set for itself: this change alters only what a syscall
+REPORTS, never what it does.

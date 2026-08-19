@@ -37,6 +37,98 @@ static inline int64_t syscall0(uint64_t num) {
     return syscall3(num, 0, 0, 0);
 }
 
+// --- errors ----------------------------------------------------------
+//
+// THE KERNEL RETURNS -ERRNO; THIS IS WHERE IT BECOMES -1 PLUS A REASON.
+// A handler that refuses returns the negated error number (abi/errno.h),
+// and every wrapper below that has the "-1 on failure" contract runs its
+// result through err() -- which records the code and hands the caller
+// back the -1 it has always had. So no existing call site changes
+// behaviour, and one that wants the reason asks sys_errno().
+//
+// A GLOBAL, and the caveat that comes with it: this is exactly the
+// variable that needs thread-local storage once a process can have two
+// threads in a syscall at once (docs/roadmap.md lists TLS and threads).
+// It is correct today because there is only ever one thread per process,
+// and it is here rather than in the kernel because the RETURNED code is
+// the ABI -- see abi/errno.h. When TLS lands, this declaration moves and
+// nothing else does.
+//
+// NOT CLEARED ON SUCCESS, as POSIX specifies: a caller reads it only
+// after a call has told it something failed. Clearing it would cost
+// every successful syscall a store for the benefit of nobody.
+static int g_errno;
+
+int sys_errno(void) { return g_errno; }
+
+// Is this return value an error code rather than a result?
+//
+// The range test is the whole contract, and it is why ERRNO_MAX is small
+// (abi/errno.h): a legitimate result must never land inside it. The one
+// call that makes this non-obvious is sbrk(), which returns a POINTER --
+// a ring-3 heap address is nowhere near the top of the address space, so
+// it cannot be mistaken for one of these. SYS_RETRY sits one past the
+// top of the range on purpose and is NOT an error: it means the process
+// was woken and must ask again, which the loops below handle.
+static int is_err(int64_t r) {
+    return r < 0 && r >= -(int64_t)ERRNO_MAX;
+}
+
+// Record the reason and give the caller the -1 its contract promises.
+static int64_t err(int64_t r) {
+    if (is_err(r)) { g_errno = (int)-r; return -1; }
+    return r;
+}
+
+// The name for a code, for a program that has to tell a person.
+//
+// A TABLE, not a switch, because the set is data and the compiler puts
+// it in .rodata where --gc-sections drops it from any binary that never
+// asks (CLAUDE.md's note on how each ELF gets only the members it
+// references). The strings are the sentence a user reads, not the POSIX
+// macro name: "no such file or directory" beats "ENOENT" at a prompt,
+// and the macro name is one grep away for anyone who wants it.
+//
+// An unknown code is reported AS a number rather than as "unknown
+// error", so a value this table has not caught up with is still
+// diagnosable from the message alone.
+static const struct { int code; const char *msg; } g_errmsg[] = {
+    { EPERM,  "operation not permitted" },
+    { ENOENT, "no such file or directory" },
+    { ESRCH,  "no such process" },
+    { EIO,    "input/output error" },
+    { EBADF,  "bad file descriptor" },
+    { ECHILD, "no child processes" },
+    { ENOMEM, "out of memory" },
+    { EFAULT, "bad address" },
+    { EEXIST, "file exists" },
+    { ENODEV, "no such device" },
+    { EINVAL, "invalid argument" },
+    { ENFILE, "too many open files in system" },
+    { EMFILE, "too many open files" },
+    { ENOSYS, "not implemented" },
+};
+
+const char *sys_strerror(int e) {
+    for (unsigned i = 0; i < sizeof g_errmsg / sizeof g_errmsg[0]; i++)
+        if (g_errmsg[i].code == e) return g_errmsg[i].msg;
+    if (e == 0) return "no error";
+
+    // Static, so the caller can hold it -- and overwritten by the next
+    // call, which is exactly what POSIX allows strerror() to do.
+    static char unknown[24];
+    static const char pfx[] = "unknown error ";
+    unsigned n = 0;
+    while (pfx[n]) { unknown[n] = pfx[n]; n++; }
+    if (e < 0) { unknown[n++] = '-'; e = -e; }
+    char digits[12];
+    int d = 0;
+    do { digits[d++] = (char)('0' + e % 10); e /= 10; } while (e);
+    while (d > 0 && n < sizeof unknown - 1) unknown[n++] = digits[--d];
+    unknown[n] = '\0';
+    return unknown;
+}
+
 int64_t sys_call(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3) {
     return syscall3(num, a1, a2, a3);
 }
@@ -68,7 +160,7 @@ int64_t sys_write(int fd, const void *buf, size_t len) {
     do {
         r = syscall3(SYS_WRITE, (uint64_t)fd, (uint64_t)(uintptr_t)buf, (uint64_t)len);
     } while (r == SYS_RETRY);
-    return r;
+    return err(r);
 }
 
 int64_t sys_read(int fd, void *buf, size_t len) {
@@ -80,17 +172,17 @@ int64_t sys_read(int fd, void *buf, size_t len) {
     do {
         r = syscall3(SYS_READ, (uint64_t)fd, (uint64_t)(uintptr_t)buf, (uint64_t)len);
     } while (r == SYS_RETRY);
-    return r;
+    return err(r);
 }
 
 int sys_open(const char *path, int flags) {
-    return (int)syscall2(SYS_OPEN, (uint64_t)(uintptr_t)path, (uint64_t)(int64_t)flags);
+    return (int)err(syscall2(SYS_OPEN, (uint64_t)(uintptr_t)path, (uint64_t)(int64_t)flags));
 }
 
-int sys_close(int fd) { return (int)syscall1(SYS_CLOSE, (uint64_t)fd); }
-int sys_dup(int fd) { return (int)syscall1(SYS_DUP, (uint64_t)fd); }
+int sys_close(int fd) { return (int)err(syscall1(SYS_CLOSE, (uint64_t)fd)); }
+int sys_dup(int fd) { return (int)err(syscall1(SYS_DUP, (uint64_t)fd)); }
 int sys_dup2(int oldfd, int newfd) {
-    return (int)syscall2(SYS_DUP2, (uint64_t)oldfd, (uint64_t)newfd);
+    return (int)err(syscall2(SYS_DUP2, (uint64_t)oldfd, (uint64_t)newfd));
 }
 
 int sys_unlink(const char *path) {
@@ -98,8 +190,8 @@ int sys_unlink(const char *path) {
 }
 
 int sys_listdir(const char *path, struct dirent *out, int max) {
-    return (int)syscall3(SYS_LISTDIR, (uint64_t)(uintptr_t)path,
-                          (uint64_t)(uintptr_t)out, (uint64_t)(int64_t)max);
+    return (int)err(syscall3(SYS_LISTDIR, (uint64_t)(uintptr_t)path,
+                              (uint64_t)(uintptr_t)out, (uint64_t)(int64_t)max));
 }
 
 int64_t sys_print(const char *s) {
@@ -127,7 +219,15 @@ int sys_gettime(struct rtc_time *out) {
 // --- memory ----------------------------------------------------------
 
 void *sys_sbrk(int64_t increment) {
-    return (void *)(uintptr_t)syscall1(SYS_SBRK, (uint64_t)increment);
+    // KEEPS RETURNING (void *)-1 ON FAILURE, unlike every wrapper above.
+    // That value is this call's contract -- POSIX sbrk()'s, and what
+    // heap_os.c, ugfx.c and the WM already test against -- so err()'s -1
+    // would be right by accident and wrong in type. The kernel refuses
+    // with a plain -1 here for the same reason (proc_syscalls.c), so
+    // there is no code to record; ENOMEM is the only thing it can mean.
+    int64_t r = syscall1(SYS_SBRK, (uint64_t)increment);
+    if (r == -1) g_errno = ENOMEM;
+    return (void *)(uintptr_t)r;
 }
 
 // --- windowing -------------------------------------------------------
@@ -137,7 +237,7 @@ int sys_win_request(struct win_request_msg *req) {
 }
 
 int sys_poll_event(struct win_event *out) {
-    return (int)syscall1(SYS_POLL_EVENT, (uint64_t)(uintptr_t)out);
+    return (int)err(syscall1(SYS_POLL_EVENT, (uint64_t)(uintptr_t)out));
 }
 
 int sys_wait_event(struct win_event *out) {
@@ -150,21 +250,21 @@ int sys_wait_event(struct win_event *out) {
     do {
         r = syscall1(SYS_WAIT_EVENT, (uint64_t)(uintptr_t)out);
     } while (r == 0);
-    return (int)r;
+    return (int)err(r);
 }
 
 // --- sockets ---------------------------------------------------------
 
 int sys_socket(int domain, int type) {
-    return (int)syscall2(SYS_SOCKET, (uint64_t)(int64_t)domain, (uint64_t)(int64_t)type);
+    return (int)err(syscall2(SYS_SOCKET, (uint64_t)(int64_t)domain, (uint64_t)(int64_t)type));
 }
 
 int64_t sys_send(int fd, const void *buf, size_t len) {
-    return syscall3(SYS_SEND, (uint64_t)fd, (uint64_t)(uintptr_t)buf, (uint64_t)len);
+    return err(syscall3(SYS_SEND, (uint64_t)fd, (uint64_t)(uintptr_t)buf, (uint64_t)len));
 }
 
 int64_t sys_recv(int fd, void *buf, size_t len) {
-    return syscall3(SYS_RECV, (uint64_t)fd, (uint64_t)(uintptr_t)buf, (uint64_t)len);
+    return err(syscall3(SYS_RECV, (uint64_t)fd, (uint64_t)(uintptr_t)buf, (uint64_t)len));
 }
 
 // --- machine info ----------------------------------------------------
@@ -172,15 +272,15 @@ int64_t sys_recv(int fd, void *buf, size_t len) {
 int sys_pci_count(void) { return (int)syscall0(SYS_PCI_COUNT); }
 
 int sys_pci_info(int index, struct pci_device *out) {
-    return (int)syscall2(SYS_PCI_INFO, (uint64_t)(int64_t)index, (uint64_t)(uintptr_t)out);
+    return (int)err(syscall2(SYS_PCI_INFO, (uint64_t)(int64_t)index, (uint64_t)(uintptr_t)out));
 }
 
 int sys_cpu_info(struct cpu_info *out) {
-    return (int)syscall1(SYS_CPU_INFO, (uint64_t)(uintptr_t)out);
+    return (int)err(syscall1(SYS_CPU_INFO, (uint64_t)(uintptr_t)out));
 }
 
 int sys_getrandom(void *buf, unsigned long n) {
-    return (int)syscall2(SYS_GETRANDOM, (uint64_t)(uintptr_t)buf, (uint64_t)n);
+    return (int)err(syscall2(SYS_GETRANDOM, (uint64_t)(uintptr_t)buf, (uint64_t)n));
 }
 
 int sys_proc_info(int index, struct proc_info *out) {
@@ -189,11 +289,11 @@ int sys_proc_info(int index, struct proc_info *out) {
 }
 
 int sys_setting(struct setting_msg *msg) {
-    return (int)syscall1(SYS_SETTING, (uint64_t)(uintptr_t)msg);
+    return (int)err(syscall1(SYS_SETTING, (uint64_t)(uintptr_t)msg));
 }
 
 int sys_sysinfo(struct sys_info *out) {
-    return (int)syscall1(SYS_SYSINFO, (uint64_t)(uintptr_t)out);
+    return (int)err(syscall1(SYS_SYSINFO, (uint64_t)(uintptr_t)out));
 }
 
 unsigned long sys_ticks(void) {
@@ -205,7 +305,7 @@ unsigned long long sys_monotonic_ns(void) {
 }
 
 int sys_crashtest(struct crash_msg *msg) {
-    return (int)syscall1(SYS_CRASHTEST, (uint64_t)(uintptr_t)msg);
+    return (int)err(syscall1(SYS_CRASHTEST, (uint64_t)(uintptr_t)msg));
 }
 
 unsigned long long sys_fs_generation(void) {
@@ -213,11 +313,11 @@ unsigned long long sys_fs_generation(void) {
 }
 
 int sys_win_debug(struct win_debug_msg *msg) {
-    return (int)syscall1(SYS_WIN_DEBUG, (uint64_t)(uintptr_t)msg);
+    return (int)err(syscall1(SYS_WIN_DEBUG, (uint64_t)(uintptr_t)msg));
 }
 
 int sys_poweroff(int reboot) {
-    return (int)syscall1(SYS_POWEROFF, (uint64_t)reboot);
+    return (int)err(syscall1(SYS_POWEROFF, (uint64_t)reboot));
 }
 
 int sys_kill(int pid, int exit_code) {
@@ -226,7 +326,7 @@ int sys_kill(int pid, int exit_code) {
 }
 
 int sys_set_color(int fg, int bg) {
-    return (int)syscall2(SYS_SET_COLOR, (uint64_t)(int64_t)fg, (uint64_t)(int64_t)bg);
+    return (int)err(syscall2(SYS_SET_COLOR, (uint64_t)(int64_t)fg, (uint64_t)(int64_t)bg));
 }
 
 // --- the older, modal GUI syscalls -----------------------------------
@@ -241,17 +341,17 @@ int sys_win_create(struct win_request *req) {
     return (int)syscall1(SYS_WIN_CREATE, (uint64_t)(uintptr_t)req);
 }
 
-int sys_win_present(void) { return (int)syscall0(SYS_WIN_PRESENT); }
+int sys_win_present(void) { return (int)err(syscall0(SYS_WIN_PRESENT)); }
 
 // --- processes and pipes ----------------------------------------------
 
 int sys_pipe(int fds[2]) {
-    return (int)syscall1(SYS_PIPE, (uint64_t)(uintptr_t)fds);
+    return (int)err(syscall1(SYS_PIPE, (uint64_t)(uintptr_t)fds));
 }
 
 int sys_spawn(const char *path, const char *args, int stdout_fd) {
-    return (int)syscall3(SYS_SPAWN, (uint64_t)(uintptr_t)path,
-                          (uint64_t)(uintptr_t)args, (uint64_t)(int64_t)stdout_fd);
+    return (int)err(syscall3(SYS_SPAWN, (uint64_t)(uintptr_t)path,
+                              (uint64_t)(uintptr_t)args, (uint64_t)(int64_t)stdout_fd));
 }
 
 // `pid` may be -1 for "any child of mine" (SYS_WAITPID's ABI comment).
@@ -267,17 +367,19 @@ int sys_waitpid(int pid, int *out_code) {
         r = syscall3(SYS_WAITPID, (uint64_t)(int64_t)pid,
                      (uint64_t)(uintptr_t)out_code, 0);
     } while (r == SYS_RETRY);
-    return (int)r;
+    return (int)err(r);
 }
 
 int sys_sleep_ms(int ms) {
-    return (int)syscall1(SYS_SLEEP, (uint64_t)(int64_t)ms);
+    return (int)err(syscall1(SYS_SLEEP, (uint64_t)(int64_t)ms));
 }
 
 int sys_waitpid_nohang(int pid, int *out_code) {
     // NO retry loop, deliberately: SYS_RETRY is the answer here ("still
     // running"), not a signal to ask again. Looping on it is exactly the
     // mistake that turned this call into a block.
-    return (int)syscall3(SYS_WAITPID, (uint64_t)(int64_t)pid,
-                         (uint64_t)(uintptr_t)out_code, SYS_WNOHANG);
+    // SYS_RETRY passes through untouched -- err() ignores it, which is
+    // what keeps "still running" distinct from a failure here.
+    return (int)err(syscall3(SYS_WAITPID, (uint64_t)(int64_t)pid,
+                             (uint64_t)(uintptr_t)out_code, SYS_WNOHANG));
 }

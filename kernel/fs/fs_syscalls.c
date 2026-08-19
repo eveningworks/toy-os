@@ -6,6 +6,7 @@
 // What is here is everything that takes a path.
 #include "syscalls.h"
 #include "syscall_abi.h"
+#include "errno.h"
 #include "klog.h"
 #include "vmm.h"
 #include "fs.h"
@@ -93,7 +94,7 @@ int sys_open(struct syscall_ctx *c) {
     char name[FS_PATH_MAX];
     if (!vmm_copy_string_from_user(pml4, name, c->a0, FS_PATH_MAX)) {
         klog_write("syscall: open() rejected -- invalid path pointer\n");
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
 
         uint32_t flags = (uint32_t)c->a1;
@@ -106,7 +107,7 @@ int sys_open(struct syscall_ctx *c) {
 
         if (!exists && !(want_write && want_creat)) {
             klog_write("syscall: open() rejected -- file not found\n");
-            c->regs[14] = (uint64_t)-1;
+            c->regs[14] = (uint64_t)(int64_t)-ENOENT;
         } else {
             // A DESCRIPTION plus a descriptor naming it. Two steps
             // rather than one because dup2 can later point a second
@@ -115,8 +116,13 @@ int sys_open(struct syscall_ctx *c) {
             int fd = di >= 0 ? fd_install(pml4, di) : -1;
             if (fd < 0) {
                 if (di >= 0) fd_desc_unref(di);
+                // EMFILE, NOT ENOENT -- these two being the same answer
+                // is the concrete failure that motivated error codes at
+                // all: /bin/tosh probes each PATH candidate with open()
+                // and reads any failure as "not there", so a machine out
+                // of descriptors reported "command not found".
                 klog_write("syscall: open() rejected -- fd table full\n");
-                c->regs[14] = (uint64_t)-1;
+                c->regs[14] = (uint64_t)(int64_t)-EMFILE;
             } else {
                 if (want_write) {
                     if (!exists) fs_touch(name);
@@ -136,6 +142,13 @@ int sys_unlink(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
     char name[FS_PATH_MAX];
     if (!vmm_copy_string_from_user(pml4, name, c->a0, FS_PATH_MAX)) {
+        // 0, NOT -EFAULT. This call reports success as 1 and failure as
+        // 0 -- the opposite polarity to everything error codes were
+        // added for -- so a negative code here would be TRUTHY and every
+        // `if (!sys_unlink(p))` caller would read a failure as success.
+        // Flipping it is a caller-visible change and belongs in its own
+        // commit; see docs/roadmap.md's item on the boolean-returning
+        // syscalls, which still cannot say why they refused.
         klog_write("syscall: unlink() rejected -- invalid path pointer\n");
         c->regs[14] = 0;
     } else {
@@ -153,7 +166,7 @@ int sys_listdir(struct syscall_ctx *c) {
     if (!vmm_validate_user_range(pml4, c->a1, (uint64_t)max * sizeof(struct dirent)) ||
         !vmm_copy_string_from_user(pml4, path, c->a0, FS_PATH_MAX)) {
         klog_write("syscall: listdir() rejected -- invalid pointer\n");
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         // The output array stays a USER address here, and
         // listdir_collect() copies each entry out individually --

@@ -901,6 +901,28 @@ technical conventions below:
   objects can't be shared, but the source can, which is why the ring-3
   and kernel Calculators cannot disagree about arithmetic. Only
   freestanding files qualify.
+- **A FAILED SYSCALL RETURNS `-ERRNO` NOW, AND `-1` IS `-EPERM`.**
+  `abi/errno.h` -- Linux's numbers, fourteen of them, and a return in
+  `[-4094, -1]` means failure. A new handler REPORTS A CODE
+  (`c->regs[14] = (uint64_t)(int64_t)-EBADF;`) and **keeps its
+  `klog_write()` line**: a person reading `dmesg` wants the sentence, a
+  program wants the number. Ring 3 is unchanged at the call site --
+  libsys turns the code back into `-1` and stashes it for
+  `sys_errno()`/`sys_strerror()` (`userland/rt/sys.h`), so every
+  existing `if (fd < 0)` still works. Four things to know.
+  **`SYS_RETRY` is -4095**, not -2, because -2 is `-ENOENT` -- and it is
+  deliberately NOT `-EAGAIN`, since it means the call did not fail at
+  all. **The syscalls whose failure value is 0 were left alone**
+  (`unlink`, `kill`, `gettime`, `proc_info`, `win_create`): a negative
+  code is TRUTHY, so `if (!sys_unlink(p))` would read a failure as
+  success -- flipping them is caller-visible and is its own change.
+  **`sbrk` keeps a bare `(void *)-1`**, because it returns a POINTER and
+  a small negative would be a plausible wrong address; `strace` does not
+  decode a pointer-returning syscall's -1 for the same reason. And
+  **adding a code needs a handler that genuinely distinguishes it**, the
+  bar `kernel/lib/` holds for a new helper -- not because POSIX has a
+  name for it. `/tests/errno_test` is the check, and its load-bearing
+  case exhausts a real descriptor table. See `docs/errno-design.md`.
 - **FILE DESCRIPTORS ARE TWO LEVELS, AND 0/1/2 ARE ORDINARY ENTRIES.**
   A DESCRIPTION is what a stream is (file, pipe end, console, kernel
   log) and is refcounted; a DESCRIPTOR is a number one address space

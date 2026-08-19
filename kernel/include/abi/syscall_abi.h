@@ -2,6 +2,7 @@
 #define SYSCALL_ABI_H
 
 #include <stdint.h>
+#include "errno.h" // error numbers -- what a failed syscall returns
 #include "timer.h" // struct rtc_time -- reused by SYS_GETTIME and struct dirent's `modified` below
 
 // Syscall numbers (passed in RAX) and argument conventions for `int
@@ -34,13 +35,25 @@
 // hand over the result at wake time: the wake runs in an interrupt,
 // under an address space where the caller's buffer is not addressable).
 //
-// It is -2, and NOT 0, for a concrete reason: 0 is a legitimate result
-// for SYS_READ (end of file). Using it as the retry sentinel made a
-// reader treat "woken, ask again" as "there will never be more data" --
-// a pipe read that returned empty the instant its writer produced
-// something. A sentinel has to be a value the call can never otherwise
-// return.
-#define SYS_RETRY (-2)
+// It is NOT 0, for a concrete reason: 0 is a legitimate result for
+// SYS_READ (end of file). Using it as the retry sentinel made a reader
+// treat "woken, ask again" as "there will never be more data" -- a pipe
+// read that returned empty the instant its writer produced something. A
+// sentinel has to be a value the call can never otherwise return.
+//
+// It was -2 until error codes existed, and -2 is now -ENOENT. So it
+// sits one past the top of the error range instead (abi/errno.h), which
+// keeps the same property against a set of values that did not exist
+// when it was chosen.
+//
+// AND IT IS NOT SIMPLY -EAGAIN, which is the obvious-looking move. The
+// two mean different things here: EAGAIN is an ERROR a caller reports,
+// while SYS_RETRY means the call did not fail at all -- the process was
+// woken and must ask again, which libsys does in a loop the caller
+// never sees (sys_read/sys_write). Merging them would make every
+// blocking call's spurious wakeup look like a failure to the layer
+// above, which is the same mistake as using 0.
+#define SYS_RETRY (-4095)
 
 // Experimental userspace-GUI syscalls (see kernel/core/gui_test.c /
 // apps/README.md's "GUI in user space" note for the honest scope of

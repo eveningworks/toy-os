@@ -189,12 +189,14 @@ compatibility, which is gated on `fork()` and a TTY -- this is not, and
 everything libc-shaped is waiting on it. Full plan and staging:
 [errno-design.md](errno-design.md).
 
-- [ ] Stage 0: the encoding -- `abi/errno.h`, and how it sits against `SYS_RETRY` (-2)
-- [ ] Stage 1: libsys maps a negative return to -1 plus `sys_errno()`
-- [ ] Stage 2: the fd and filesystem handlers -- 28 of the 58 `-1` sites, and the ones a shell hits
-- [ ] Stage 3: the process, window and system handlers
-- [ ] Stage 4: the callers that were guessing -- `find_program()` treats every failure as "not found"
-- [ ] `strerror()` in ring 3, once the numbers exist
+- [x] ~~Stage 0: the encoding -- `abi/errno.h`, and how it sits against `SYS_RETRY`~~ done, and SYS_RETRY moved to -4095
+- [x] ~~Stage 1: libsys maps a negative return to -1 plus `sys_errno()`~~ done
+- [x] ~~Stage 2: the fd and filesystem handlers~~ done
+- [x] ~~Stage 3: the process, window and system handlers~~ done
+- [x] ~~Stage 4: the callers that were guessing -- `find_program()` treats every failure as "not found"~~ done
+- [x] ~~`strerror()` in ring 3, once the numbers exist~~ done -- `sys_strerror()`, with the C name forwarding to it
+- [ ] The syscalls whose failure value is 0 still cannot say why -- flipping their polarity is caller-visible
+- [ ] `find_program()`'s own EMFILE branch is verified by inspection: nothing can leak fds from the shell to test it
 
 ### Runtime + interop
 

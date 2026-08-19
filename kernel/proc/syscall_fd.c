@@ -13,6 +13,7 @@
 // ends of each are the two sys_do_*_file() helpers below.
 #include "syscalls.h"
 #include "syscall_abi.h"
+#include "errno.h"
 #include "klog.h"
 #include "heap.h"  // bounce buffers come from here, not the stack
 #include "vga.h"
@@ -231,7 +232,7 @@ sys_do_read_pipe(uint64_t *regs, uint64_t pml4, int pipe_idx,
     // (vmm.h). len is capped at SYS_WRITE_MAX by the caller. Heap
     // rather than stack, for the reason sys_do_write_console() gives.
     char *kbuf = kmalloc(SYS_WRITE_MAX);
-    if (!kbuf) { regs[14] = (uint64_t)-1; return 0; }
+    if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
 
     // CHECK AND PARK MUST BE ATOMIC AGAINST THE OTHER END.
     //
@@ -249,7 +250,7 @@ sys_do_read_pipe(uint64_t *regs, uint64_t pml4, int pipe_idx,
     int blocked = 0;
     if (n >= 0 && !vmm_copy_to_user(pml4, buf_ptr, kbuf, (uint64_t)n)) {
         klog_write("syscall: read() rejected -- invalid buffer pointer\n");
-        regs[14] = (uint64_t)-1;
+        regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else if (n >= 0) {
         regs[14] = (uint64_t)n; // bytes, or 0 for EOF
     } else if (!scheduler_block_current(regs, SCHED_WAIT_PIPE)) {
@@ -343,7 +344,7 @@ sys_do_read_console(uint64_t *regs, uint64_t pml4, uint64_t buf_ptr, uint64_t le
 
     if (!vmm_copy_to_user(pml4, buf_ptr, kbuf, got)) {
         klog_write("syscall: read() rejected -- invalid buffer pointer\n");
-        regs[14] = (uint64_t)-1;
+        regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         regs[14] = got;
     }
@@ -362,10 +363,10 @@ SYSCALL_HANDLER sys_do_write_console(uint64_t *regs, uint64_t pml4, int kind,
     // costs far more than an allocation. Same call as the one
     // etc_config_file.c makes, and for the same reason.
     char *kbuf = kmalloc(SYS_WRITE_MAX);
-    if (!kbuf) { regs[14] = (uint64_t)-1; return; }
+    if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return; }
     if (!vmm_copy_from_user(pml4, kbuf, buf_ptr, len)) {
         klog_write("syscall: write() rejected -- invalid buffer pointer\n");
-        regs[14] = (uint64_t)-1; // simplified error indicator (no errno yet)
+        regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         const char *buf = kbuf;
         // KLOG (stderr's default) goes to the KERNEL LOG. It is a
@@ -397,12 +398,12 @@ static __attribute__((noinline)) int
 sys_do_write_pipe(uint64_t *regs, uint64_t pml4, int pipe_idx,
                   uint64_t buf_ptr, uint64_t len) {
     char *kbuf = kmalloc(SYS_WRITE_MAX); // heap -- see sys_do_write_console()
-    if (!kbuf) { regs[14] = (uint64_t)-1; return 0; }
+    if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return 0; }
 
     int blocked = 0;
     if (!vmm_copy_from_user(pml4, kbuf, buf_ptr, len)) {
         klog_write("syscall: write() rejected -- invalid buffer pointer\n");
-        regs[14] = (uint64_t)-1;
+        regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         // Atomic against the reader, for the reason sys_do_read_pipe()
         // gives above: a wake that fires between "it is full" and
@@ -444,10 +445,10 @@ SYSCALL_HANDLER sys_do_write_file(uint64_t *regs, uint64_t pml4, struct open_fil
     // directly above the whole TFS3 journal and ATA path, which is the
     // deepest chain in the kernel.
     char *tmp = kmalloc(SYS_WRITE_MAX + 1);
-    if (!tmp) { regs[14] = (uint64_t)-1; return; }
+    if (!tmp) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return; }
     if (!vmm_copy_from_user(pml4, tmp, buf_ptr, len)) {
         klog_write("syscall: write() rejected -- invalid buffer pointer\n");
-        regs[14] = (uint64_t)-1;
+        regs[14] = (uint64_t)(int64_t)-EFAULT;
         kfree(tmp);
         return;
     }
@@ -467,11 +468,11 @@ SYSCALL_HANDLER sys_do_read_file(uint64_t *regs, uint64_t pml4, struct open_file
     // forbids (vmm.h). len is capped at SYS_WRITE_MAX by the caller.
     uint32_t off = f->file.offset;
     char *kbuf = kmalloc(SYS_WRITE_MAX);   // heap -- see sys_do_write_console()
-    if (!kbuf) { regs[14] = (uint64_t)-1; return; }
+    if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return; }
     uint32_t n = fs_read_range(f->file.name, off, kbuf, (uint32_t)len);
     if (!vmm_copy_to_user(pml4, buf_ptr, kbuf, n)) {
         klog_write("syscall: read() rejected -- invalid buffer pointer\n");
-        regs[14] = (uint64_t)-1;
+        regs[14] = (uint64_t)(int64_t)-EFAULT;
         kfree(kbuf);
         return;
     }
@@ -508,7 +509,7 @@ int sys_write(struct syscall_ctx *c) {
     struct open_file *f = fd_get(pml4, fd);
     if (!f) {
         klog_write("syscall: write() rejected -- bad fd\n");
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)-EBADF;
         return 0;
     }
 
@@ -524,7 +525,7 @@ int sys_write(struct syscall_ctx *c) {
     case FD_KIND_FILE:
         if (f->file.mode != FD_MODE_WRITE) {
             klog_write("syscall: write() rejected -- fd is read-only\n");
-            c->regs[14] = (uint64_t)-1;
+            c->regs[14] = (uint64_t)(int64_t)-EBADF;
         } else {
             sys_do_write_file(c->regs, pml4, f, buf_ptr, len);
         }
@@ -535,7 +536,7 @@ int sys_write(struct syscall_ctx *c) {
         // wrong end. Rejected like any other bad fd rather than
         // silently treated as something it is not.
         klog_write("syscall: write() rejected -- wrong kind of fd\n");
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)-EBADF;
         break;
     }
     return 0;
@@ -554,12 +555,12 @@ int sys_read(struct syscall_ctx *c) {
     struct open_file *f = fd_get(pml4, fd);
     if (!f) {
         klog_write("syscall: read() rejected -- bad fd\n");
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)-EBADF;
         return 0;
     }
     if (!vmm_validate_user_range(pml4, buf_ptr, len)) {
         klog_write("syscall: read() rejected -- invalid buffer pointer\n");
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
         return 0;
     }
 
@@ -579,7 +580,7 @@ int sys_read(struct syscall_ctx *c) {
     case FD_KIND_FILE:
         if (f->file.mode != FD_MODE_READ) {
             klog_write("syscall: read() rejected -- fd is write-only\n");
-            c->regs[14] = (uint64_t)-1;
+            c->regs[14] = (uint64_t)(int64_t)-EBADF;
             break;
         }
         // fs_read_range(), NOT fs_read(). fs_read() reads the WHOLE
@@ -594,7 +595,7 @@ int sys_read(struct syscall_ctx *c) {
         // A socket fd (SYS_RECV is its only reader), a pipe WRITE end,
         // or the kernel-log description, which has no reader.
         klog_write("syscall: read() rejected -- wrong kind of fd\n");
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)-EBADF;
         break;
     }
     return 0;
@@ -611,7 +612,7 @@ int sys_close(struct syscall_ctx *c) {
     // -- because closing `saved` must not close the stream it named.
     // Closing the LAST writer of a pipe is still what turns a blocked
     // reader's wait into EOF; that now happens inside fd_desc_unref().
-    c->regs[14] = (uint64_t)fd_close(c->pml4, (int)c->a0);
+    c->regs[14] = fd_close(c->pml4, (int)c->a0) < 0 ? (uint64_t)(int64_t)-EBADF : 0;
     return 0;
 }
 
@@ -619,16 +620,24 @@ int sys_dup(struct syscall_ctx *c) {
     // Lowest free descriptor naming the same description, as POSIX.
     uint64_t pml4 = c->pml4;
     int di = fd_desc_index(pml4, (int)c->a0);
-    if (di < 0) { c->regs[14] = (uint64_t)-1; return 0; }
+    if (di < 0) { c->regs[14] = (uint64_t)(int64_t)-EBADF; return 0; }
     fd_desc[di].refs++;
     int fd = fd_install(pml4, di);
-    if (fd < 0) fd_desc_unref(di); // undo: the table was full
-    c->regs[14] = (uint64_t)fd;
+    if (fd < 0) {
+        fd_desc_unref(di); // undo: the table was full
+        c->regs[14] = (uint64_t)(int64_t)-EMFILE;
+    } else {
+        c->regs[14] = (uint64_t)fd;
+    }
     return 0;
 }
 
 int sys_dup2(struct syscall_ctx *c) {
-    c->regs[14] = (uint64_t)fd_dup2(c->pml4, (int)c->a0, (int)c->a1);
+    // fd_dup2() reports -1 for both "oldfd is not open" and "newfd is out
+    // of range", which are the same answer to the caller: EBADF names a
+    // descriptor that cannot be used, whichever of the two it was.
+    int r = fd_dup2(c->pml4, (int)c->a0, (int)c->a1);
+    c->regs[14] = r < 0 ? (uint64_t)(int64_t)-EBADF : (uint64_t)r;
     return 0;
 }
 
@@ -642,14 +651,14 @@ int sys_socket(struct syscall_ctx *c) {
     uint64_t type = c->a1;
     if (domain != 0 || type != 0) {
         klog_write("syscall: socket() rejected -- nonzero domain/type (not supported yet)\n");
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)-EINVAL;
     } else {
         int di = fd_desc_alloc(FD_KIND_SOCKET, -1);
         int fd = di >= 0 ? fd_install(pml4, di) : -1;
         if (fd < 0) {
             if (di >= 0) fd_desc_unref(di);
             klog_write("syscall: socket() rejected -- fd table full\n");
-            c->regs[14] = (uint64_t)-1;
+            c->regs[14] = (uint64_t)(int64_t)-EMFILE;
         } else {
             c->regs[14] = (uint64_t)fd;
         }
@@ -671,11 +680,17 @@ static int send_recv(struct syscall_ctx *c, int is_send) {
     if (!f || f->kind != FD_KIND_SOCKET) {
         klog_write(is_send ? "syscall: send() rejected -- bad fd\n"
                                     : "syscall: recv() rejected -- bad fd\n");
+        c->regs[14] = (uint64_t)(int64_t)-EBADF;
     } else {
+        // A REAL socket fd, and no transport behind it. ENOSYS rather
+        // than EBADF: the fd is fine and the caller did nothing wrong,
+        // the call simply is not implemented -- which is a different
+        // thing to tell a caller, and telling them apart is the point
+        // of having codes at all. See syscall_abi.h.
         klog_write(is_send ? "syscall: send() -- no transport yet, failing\n"
                                     : "syscall: recv() -- no transport yet, failing\n");
+        c->regs[14] = (uint64_t)(int64_t)-ENOSYS;
     }
-    c->regs[14] = (uint64_t)-1; // always fails for now -- see syscall_abi.h
     return 0;
 }
 
@@ -686,7 +701,7 @@ int sys_pipe(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
     if (!vmm_validate_user_range(pml4, c->a0, sizeof(int) * 2)) {
         klog_write("syscall: pipe() rejected -- invalid user pointer\n");
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         int idx = pipe_create();
         int rd = idx >= 0 ? fd_desc_alloc(FD_KIND_PIPE_R, idx) : -1;
@@ -700,8 +715,11 @@ int sys_pipe(struct syscall_ctx *c) {
             if (rfd >= 0) fd_close(pml4, rfd); else if (rd >= 0) fd_desc_unref(rd);
             if (wd >= 0 && wfd < 0) fd_desc_unref(wd);
             if (idx >= 0) { pipe_close_reader(idx); pipe_close_writer(idx); }
+            // ENFILE when the system-wide pipe table is out, EMFILE
+            // when it was this process's descriptors -- the caller can
+            // do something about the second and nothing about the first.
             klog_write("syscall: pipe() failed -- no free pipe or fd\n");
-            c->regs[14] = (uint64_t)-1;
+            c->regs[14] = (uint64_t)(int64_t)(idx < 0 ? -ENFILE : -EMFILE);
         } else {
             int out[2] = { rfd, wfd };
             vmm_copy_to_user(pml4, c->a0, out, sizeof out); // range validated above

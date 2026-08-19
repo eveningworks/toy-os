@@ -3,6 +3,7 @@
 #include "syscalls.h"
 #include "syscall.h"   // syscall_reset_heap()'s own declaration
 #include "syscall_abi.h"
+#include "errno.h"
 #include "klog.h"
 #include "kfmt.h"      // klog_printf
 #include "vmm.h"
@@ -98,6 +99,12 @@ int sys_sbrk(struct syscall_ctx *c) {
     // scheduler's notion of who is running, so it cannot be the
     // wrong one.
     if (!sh && (g_heap_pml4 == 0 || pml4 != g_heap_pml4)) {
+        // sbrk KEEPS RETURNING -1 ON FAILURE, and that is deliberate:
+        // it hands back a POINTER, and (void *)-1 is the value every
+        // caller here already tests against (userland/lib/heap_os.c,
+        // ugfx.c, the WM). A small negative code would be a plausible
+        // -- and wrong -- address. libsys turns the sign into errno
+        // without touching the value, exactly as POSIX sbrk() does.
         klog_write("syscall: sbrk() rejected -- no heap armed for this process\n");
         c->regs[14] = (uint64_t)-1;
     } else if (inc > UADDR_HEAP_LIMIT - hp->brk) {
@@ -248,7 +255,7 @@ int sys_kill(struct syscall_ctx *c) {
 
 int sys_spawn(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
-    int spawn_rc = -1;
+    int64_t spawn_rc = -ENOENT; // no such program, unless something below says otherwise
     char path[FS_PATH_MAX];
     // The argument string gets the same budget as the path: it is
     // handed to elf_build_argv_on_stack(), which enforces the real
@@ -256,6 +263,7 @@ int sys_spawn(struct syscall_ctx *c) {
     char argbuf[FS_PATH_MAX];
     if (!vmm_copy_string_from_user(pml4, path, c->a0, FS_PATH_MAX)) {
         klog_write("syscall: spawn() rejected -- invalid path pointer\n");
+        spawn_rc = -EFAULT;
     } else {
         const char *args = 0;
         if (c->a1 && vmm_copy_string_from_user(pml4, argbuf, c->a1, FS_PATH_MAX)) args = argbuf;
@@ -274,6 +282,7 @@ int sys_spawn(struct syscall_ctx *c) {
             struct open_file *f = fd_get(pml4, (int)wfd);
             if (!f || f->kind != FD_KIND_PIPE_W) {
                 klog_write("syscall: spawn() rejected -- stdout fd isn't this process's pipe write end\n");
+                spawn_rc = -EBADF;
                 ok = 0;
             } else {
                 stdout_desc = fd_desc_index(pml4, (int)wfd);
@@ -284,8 +293,13 @@ int sys_spawn(struct syscall_ctx *c) {
             // reference to the DESCRIPTION is what makes it a second
             // writer, and fd_set_desc() does that. Doing both counted
             // the child twice, so the pipe never reached EOF.
+            // scheduler_spawn_piped() reports one failure value for
+            // "no such file", "not an ELF" and "no free slot" alike, so
+            // the code stays the default ENOENT rather than inventing a
+            // distinction the layer below does not make. Splitting it
+            // means giving that function a reason to return first.
             int pid = scheduler_spawn_piped(path, args, stdout_desc);
-            spawn_rc = pid > 0 ? pid : -1;
+            if (pid > 0) spawn_rc = pid;
         }
     }
     c->regs[14] = (uint64_t)(int64_t)spawn_rc;
@@ -321,19 +335,24 @@ int sys_waitpid(struct syscall_ctx *c) {
         } else if (r == SCHED_POLL_INVALID) {
             // No children AT ALL -- a permanent answer, not "not yet",
             // so parking here would be a wait nothing could ever end.
-            c->regs[14] = (uint64_t)-1;
+            // ECHILD is what makes that permanence readable: an init
+            // loop must not confuse it with "none have exited yet",
+            // which is SYS_RETRY.
+            c->regs[14] = (uint64_t)(int64_t)-ECHILD;
         } else if (c->a2 & SYS_WNOHANG) {
             c->regs[14] = (uint64_t)(int64_t)SYS_RETRY;
         } else if (!scheduler_block_current(c->regs, SCHED_WAIT_CHILD)) {
-            c->regs[14] = (uint64_t)-1; // nowhere to park
+            c->regs[14] = (uint64_t)(int64_t)-EPERM; // nowhere to park -- not a scheduled process
         } else {
             return 1; // parked -- the wake writes the return value
         }
         return 0;
     }
 
-    if (bad || !scheduler_pid_valid(pid)) {
-        c->regs[14] = (uint64_t)-1;
+    if (bad) {
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+    } else if (!scheduler_pid_valid(pid)) {
+        c->regs[14] = (uint64_t)(int64_t)-ECHILD;
     } else {
         int code = 0;
         enum sched_poll_result r = scheduler_poll(pid, &code);
@@ -341,7 +360,7 @@ int sys_waitpid(struct syscall_ctx *c) {
             if (out) vmm_copy_to_user(pml4, out, &code, sizeof code);
             c->regs[14] = (uint64_t)(int64_t)pid;
         } else if (r == SCHED_POLL_INVALID) {
-            c->regs[14] = (uint64_t)-1;
+            c->regs[14] = (uint64_t)(int64_t)-ECHILD;
         } else if (c->a2 & SYS_WNOHANG) {
             // Asked, not waited. SYS_RETRY is the right answer
             // rather than a distinct "still running" code: it
@@ -356,7 +375,7 @@ int sys_waitpid(struct syscall_ctx *c) {
             // against the exit that would wake us -- the same
             // lost-wakeup argument as SYS_WAIT_EVENT.
             if (!scheduler_block_current(c->regs, SCHED_WAIT_CHILD)) {
-                c->regs[14] = (uint64_t)-1; // nowhere to park
+                c->regs[14] = (uint64_t)(int64_t)-EPERM; // nowhere to park
             } else {
                 return 1;
             }
@@ -373,9 +392,11 @@ int sys_waitpid(struct syscall_ctx *c) {
 // the machine is doing. Same reasoning as uapp's timers computing the
 // next firing from now.
 //
-// A caller with no scheduler slot gets -1 rather than an instant
-// return. Returning 0 would say "you slept", which is a lie a polling
-// loop would then spin on; -1 makes the refusal visible.
+// A caller with no scheduler slot is REFUSED rather than given an
+// instant return. Returning 0 would say "you slept", which is a lie a
+// polling loop would then spin on. EPERM names the reason: the legacy
+// loader has no slot to park, so `run <prog>` cannot sleep and `spawn`
+// must be used instead.
 int sys_sleep(struct syscall_ctx *c) {
     int64_t ms = (int64_t)c->a0;
     if (ms < 0) ms = 0;
@@ -383,7 +404,7 @@ int sys_sleep(struct syscall_ctx *c) {
 
     uint64_t deadline = clocksource_now_ns() + (uint64_t)ms * 1000000ull;
     if (!scheduler_sleep_current(c->regs, deadline)) {
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)-EPERM;
         return 0;
     }
     return 1; // parked -- scheduler_wake_timers() writes the 0 return

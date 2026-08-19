@@ -63,6 +63,12 @@ VM = os.path.join(REPO, "tools", "vm.py")
 TESTS = [
     ("libc_test", 0,
      ["libc_test: all checks passed"], ["FAIL"]),
+    # Error codes reaching ring 3. Its load-bearing check is that a full
+    # descriptor table and a missing file are DIFFERENT answers, which
+    # needs a process that has really run out of fds -- see the file.
+    ("errno_test", 0,
+     ["errno_test: all checks passed",
+      "ENOENT and EMFILE are distinct: yes"], ["FAIL"]),
     ("fpu_test", 0,
      ["fpu_test: all checks passed"], ["FAIL"]),
     # The shared line editor's SECOND compilation. Same gap libc_test

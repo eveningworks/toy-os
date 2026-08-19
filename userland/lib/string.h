@@ -1,6 +1,7 @@
 #ifndef ULIB_STRING_H
 #define ULIB_STRING_H
 
+#include "rt/sys.h" // strerror() -- one table, in libsys
 #include <stddef.h>
 #include <stdint.h>
 // ANGLE BRACKETS ARE REQUIRED HERE, not a style choice: this file is
@@ -77,6 +78,12 @@ static inline int strcasecmp(const char *a, const char *b) { return k_strcasecmp
 // and returns strlen(src) so truncation is detectable.
 static inline size_t strlcpy(char *dst, const char *src, size_t n) { return k_strlcpy(dst, src, n); }
 static inline size_t strlcat(char *dst, const char *src, size_t n) { return k_strlcat(dst, src, n); }
+
+// <string.h>'s error message, under the C name. ONE implementation --
+// this forwards to libsys's, which is where the table lives beside the
+// codes it names (rt/sys.h). A second table here is exactly the drift
+// this repo's shared-source rule exists to prevent.
+static inline char *strerror(int e) { return (char *)sys_strerror(e); }
 
 // <ctype.h>'s handful, ASCII-only (which is all k_tolower/k_toupper
 // promise -- see api/string.h).

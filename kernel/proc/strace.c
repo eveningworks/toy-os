@@ -44,6 +44,7 @@
 #include "strace.h"
 #include "strace_internal.h"
 #include "syscall_abi.h"
+#include "errno.h"
 #include "syscall_table.h"
 #include "vmm.h"
 #include "vga.h"
@@ -311,16 +312,59 @@ size_t strace_format_call(char *out, size_t cap, uint64_t nr,
     return len;
 }
 
+// The NAME of an error code, for the trace line. Deliberately the macro
+// name (EBADF) rather than the sentence libsys's sys_strerror() gives:
+// this line is read by somebody debugging the kernel, who wants the
+// identifier they will grep abi/errno.h for.
+//
+// A table again rather than a switch, for the reason errno.h gives, and
+// it holds only the codes this kernel actually returns -- anything else
+// falls through to the bare number, which is still readable.
+// dispatch-ok: this is a lookup table already, not a dispatch chain.
+static const char *errno_name(int64_t e) {
+    switch ((int)-e) {
+    case EPERM:  return "EPERM";
+    case ENOENT: return "ENOENT";
+    case ESRCH:  return "ESRCH";
+    case EIO:    return "EIO";
+    case EBADF:  return "EBADF";
+    case ECHILD: return "ECHILD";
+    case ENOMEM: return "ENOMEM";
+    case EFAULT: return "EFAULT";
+    case EEXIST: return "EEXIST";
+    case ENODEV: return "ENODEV";
+    case EINVAL: return "EINVAL";
+    case ENFILE: return "ENFILE";
+    case EMFILE: return "EMFILE";
+    case ENOSYS: return "ENOSYS";
+    default:     return 0;
+    }
+}
+
 size_t strace_format_ret(char *out, size_t cap, uint64_t nr, uint64_t rax) {
     size_t len = 0;
     if (cap == 0) return 0;
     out[0] = '\0';
     ap_str(out, cap, &len, " = ");
     const struct syscall_desc *d = syscall_desc_at(nr);
-    if (d && d->name && d->ret == R_HEX && (int64_t)rax != -1) {
+    int pointer_ret = d && d->name && d->ret == R_HEX;
+    if (pointer_ret && (int64_t)rax != -1) {
         ap_hex(out, cap, &len, rax); // sbrk's break pointer; -1 stays decimal
     } else {
         ap_sdec(out, cap, &len, rax);
+        // A failure names itself: `open(...) = -2 ENOENT` rather than a
+        // number the reader has to go and look up. This is the half of
+        // the syscall table's description that error codes finally make
+        // possible -- the reason was already being written to the log as
+        // a sentence, just never beside the call that produced it.
+        //
+        // NOT for a pointer-returning syscall. sbrk() refuses with a
+        // plain -1 (it hands back an address, so a small negative code
+        // would be a plausible and wrong one -- see proc_syscalls.c),
+        // and -1 happens to be -EPERM, so decoding here would confidently
+        // print a reason sbrk never gave.
+        const char *e = pointer_ret ? 0 : errno_name((int64_t)rax);
+        if (e) { ap_ch(out, cap, &len, ' '); ap_str(out, cap, &len, e); }
     }
     return len;
 }

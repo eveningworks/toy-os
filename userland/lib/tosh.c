@@ -339,6 +339,12 @@ static int run_external(struct tosh *sh, const char *path, const char *args,
 static const char *const PATH_DIRS[] = { "/bin", "/usr/bin", "/tests" };
 #define PATH_DIR_COUNT (int)(sizeof(PATH_DIRS) / sizeof(PATH_DIRS[0]))
 
+// Returns 1 if `out` names a program, 0 if no PATH entry had it, and -1
+// if the search could not be COMPLETED -- which is a third answer, not a
+// shade of "no". Until open() could say why it refused, running out of
+// descriptors was indistinguishable from the file not existing, so a
+// machine with a full fd table reported "not found" for a command that
+// was sitting right there. See docs/errno-design.md.
 static int find_program(const char *name, char *out, int cap) {
     for (const char *p = name; *p; p++) {
         if (*p == '/') { scopy(out, name, cap); return 1; }
@@ -355,6 +361,11 @@ static int find_program(const char *name, char *out, int cap) {
         // case worth carrying code for.
         int fd = sys_open(out, 0);
         if (fd >= 0) { sys_close(fd); return 1; }
+        // ENOENT is the ordinary answer -- keep looking. Anything else
+        // is about this SHELL, not about this candidate: EMFILE means
+        // the next probe cannot succeed either, so continuing would
+        // walk the whole PATH to arrive at a wrong conclusion.
+        if (sys_errno() != ENOENT) return -1;
     }
     return 0;
 }
@@ -392,9 +403,18 @@ static int run_stripped(struct tosh *sh, const char *line, int stdout_redirected
     }
 
     char path[TOSH_PATH_MAX];
-    if (!find_program(cmd, path, TOSH_PATH_MAX)) {
+    int found = find_program(cmd, path, TOSH_PATH_MAX);
+    if (found <= 0) {
         emit(sh, cmd);
-        emit(sh, ": not found\n");
+        if (found < 0) {
+            // The search was abandoned, so "not found" would be a claim
+            // about the filesystem this shell is in no position to make.
+            emit(sh, ": cannot search PATH: ");
+            emit(sh, sys_strerror(sys_errno()));
+            emit(sh, "\n");
+        } else {
+            emit(sh, ": not found\n");
+        }
         sh->last_status = -1;
         return -1;
     }

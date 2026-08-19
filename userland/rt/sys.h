@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "syscall_abi.h"
+#include "errno.h"   // sys_errno()'s values
 #include "proc_info.h" // struct proc_info -- sys_proc_info() below
 #include "pci.h"     // struct pci_device, for sys_pci_info()
 #include "cpuinfo.h" // struct cpu_info, for sys_cpu_info()
@@ -30,10 +31,41 @@
 // two apart is what makes it obvious which calls actually enter the
 // kernel.
 //
-// The return convention is the kernel's own, unchanged and documented
-// per-call in abi/syscall_abi.h: mostly "0 or positive on success, -1
-// on failure", with the exceptions called out there. Nothing here
-// translates it into errno, because there is no errno yet.
+// The return convention is the kernel's own, documented per-call in
+// abi/syscall_abi.h: mostly "0 or positive on success, -1 on failure",
+// with the exceptions called out there. What the wrappers DO add is the
+// error reason -- the kernel returns -ERRNO (abi/errno.h) and each
+// wrapper with the -1 contract turns that back into -1 plus a code
+// readable through sys_errno(). Call sites are unchanged by that; a
+// caller that wants to know WHY simply has somewhere to ask now.
+
+// --- errors ----------------------------------------------------------
+
+// The reason the last failed syscall gave, as an errno value from
+// abi/errno.h -- 0 if nothing has failed yet.
+//
+// READ IT ONLY AFTER A CALL REPORTED FAILURE. It is not cleared on
+// success (POSIX's rule), so a stale value from an earlier failure is
+// still sitting here after a hundred successful calls.
+//
+// WHICH CALLS SET IT: every wrapper below whose failure value is -1.
+// The ones that do NOT are the ones where -1 is not a failure --
+// sys_read_key() and sys_gui_poll_key() return -1 for "no key waiting"
+// -- and the handful whose failure value is 0 rather than -1
+// (sys_unlink, sys_kill, sys_gettime, sys_proc_info, sys_win_create),
+// which cannot carry a negative code without a caller-visible flip and
+// so still cannot say why. sys_sbrk() is the exception in the other
+// direction: it keeps returning (void *)-1 and sets this to ENOMEM.
+int sys_errno(void);
+
+// The message for a code -- what a program prints when it has to tell a
+// person. `sys_strerror(sys_errno())` is the whole idiom. An unrecognised
+// code comes back as "unknown error <n>" rather than a shrug, in a static
+// buffer the next call overwrites (POSIX permits exactly that).
+//
+// This is what userland/lib/string.h's strerror() calls, so there is one
+// table rather than a libc copy that can drift from it.
+const char *sys_strerror(int e);
 
 // --- the raw escape hatch --------------------------------------------
 

@@ -7,6 +7,7 @@
 // a typed TWP message (abi/win_proto.h).
 #include "syscalls.h"
 #include "syscall_abi.h"
+#include "errno.h"
 #include "klog.h"
 #include "vmm.h"
 #include "pmm.h"
@@ -234,7 +235,7 @@ int sys_win_create(struct syscall_ctx *c) {
 int sys_win_present(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
     if (g_win_pml4 == 0 || pml4 != g_win_pml4) {
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)-EPERM; // not this process's window
     } else {
         win_present();
         c->regs[14] = 1;
@@ -248,10 +249,10 @@ int sys_win_request(struct syscall_ctx *c) {
 
     if (!vmm_validate_user_range(pml4, c->a0, sizeof(struct win_request_msg))) {
         klog_write("syscall: win_request() rejected -- invalid user pointer\n");
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else if (pid == 0) {
         klog_write("syscall: win_request() rejected -- caller isn't a scheduled process\n");
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)-EPERM;
     } else {
         // Copy in, act, copy back: the request is handled against a
         // KERNEL copy, never against the user page directly. The
@@ -288,7 +289,7 @@ int sys_win_request(struct syscall_ctx *c) {
             // presentation layer, and in stage 4 there is never a
             // kernel-side one. See abi/win_proto.h.
             klog_write("syscall: win_request() rejected -- no window server registered\n");
-            c->regs[14] = (uint64_t)-1;
+            c->regs[14] = (uint64_t)(int64_t)-ENODEV;
         } else {
             // Over the transport rather than straight into the
             // server: SYS_WIN_REQUEST is now ONE carriage for TWP,
@@ -298,6 +299,12 @@ int sys_win_request(struct syscall_ctx *c) {
 
             // Only copy back a request the server actually looked at
             // -- a malformed one leaves the client's buffer as sent.
+            // The SERVER's own return value, passed through unchanged.
+            // TWP has its own failure vocabulary inside `req` and this
+            // is not translated into an error code -- doing so would
+            // put two error systems on one return value, and the
+            // protocol is the one that knows what went wrong. See
+            // abi/win_proto.h.
             if (rc >= 0) vmm_copy_to_user(pml4, c->a0, &req, sizeof req);
             c->regs[14] = (uint64_t)(int64_t)rc;
         }
@@ -315,9 +322,9 @@ int sys_win_debug(struct syscall_ctx *c) {
     int pid = scheduler_current_pid();
     if (!vmm_validate_user_range(pml4, c->a0, sizeof(struct win_debug_msg))) {
         klog_write("syscall: win_debug() rejected -- invalid user pointer\n");
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else if (pid == 0) {
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)-EPERM;
     } else {
         struct win_debug_msg msg;
         vmm_copy_from_user(pml4, &msg, c->a0, sizeof msg);
@@ -342,14 +349,14 @@ static int event_get(struct syscall_ctx *c, int blocking) {
 
     if (!vmm_validate_user_range(pml4, c->a0, sizeof(struct win_event))) {
         klog_write("syscall: event() rejected -- invalid user pointer\n");
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else if (pid == 0) {
         // No scheduler slot, so no event queue and nowhere to park.
         // Refused rather than silently degraded to a never-blocking
         // call, which would turn the documented `while (... != 1)`
         // client loop into a busy spin.
         klog_write("syscall: event() rejected -- caller has no event queue\n");
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)-EPERM;
     } else {
         struct win_event ev;
         if (win_events_pop(pid, &ev)) {
@@ -371,7 +378,7 @@ static int event_get(struct syscall_ctx *c, int blocking) {
             // the trapframe saved here. Writing it now would
             // clobber that.
             if (!scheduler_block_current(c->regs, SCHED_WAIT_EVENT)) {
-                c->regs[14] = (uint64_t)-1; // couldn't park -- see above
+                c->regs[14] = (uint64_t)(int64_t)-EPERM; // couldn't park -- see above
             } else {
                 // Parked. c->regs[14] is NOT this call's return value
                 // (it still holds the syscall number), so the

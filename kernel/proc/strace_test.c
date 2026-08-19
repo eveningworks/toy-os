@@ -11,6 +11,7 @@
 #include "ktest.h"
 #include "strace_internal.h"
 #include "syscall_abi.h"
+#include "errno.h"
 #include "kapi.h"
 
 static int eq(const char *a, const char *b) { return k_strcmp(a, b) == 0; }
@@ -53,15 +54,31 @@ KTEST("strace", "return values: decimal, negative, and sbrk's pointer") {
     strace_format_ret(buf, sizeof(buf), SYS_WRITE, 12);
     KTEST_ASSERT(eq(buf, " = 12"));
 
+    // A FAILURE NAMES ITSELF now. -1 is -EPERM, which is what a
+    // syscall returning it is actually saying since error codes landed.
     strace_format_ret(buf, sizeof(buf), SYS_OPEN, (uint64_t)-1);
-    KTEST_ASSERT(eq(buf, " = -1"));
+    KTEST_ASSERT(eq(buf, " = -1 EPERM"));
+
+    // The one this whole change exists for, in the trace line: a full
+    // descriptor table and a missing file no longer read the same.
+    strace_format_ret(buf, sizeof(buf), SYS_OPEN, (uint64_t)(int64_t)-ENOENT);
+    KTEST_ASSERT(eq(buf, " = -2 ENOENT"));
+    strace_format_ret(buf, sizeof(buf), SYS_OPEN, (uint64_t)(int64_t)-EMFILE);
+    KTEST_ASSERT(eq(buf, " = -24 EMFILE"));
+
+    // A code this table has not caught up with stays a bare number
+    // rather than being guessed at.
+    strace_format_ret(buf, sizeof(buf), SYS_OPEN, (uint64_t)(int64_t)-77);
+    KTEST_ASSERT(eq(buf, " = -77"));
 
     // sbrk is the one syscall returning a pointer -- hex on success...
     strace_format_ret(buf, sizeof(buf), SYS_SBRK, 0x8000100000ULL);
     KTEST_ASSERT(eq(buf, " = 0x8000100000"));
     // ...but its failure value is still the plain -1 every other
     // syscall uses, and printing that as a 64-bit hex blob would hide
-    // that it's an error.
+    // that it's an error. It is NOT decoded as EPERM either, even though
+    // -1 is EPERM's value: sbrk does not return error codes at all, so a
+    // name here would be a reason it never gave.
     strace_format_ret(buf, sizeof(buf), SYS_SBRK, (uint64_t)-1);
     KTEST_ASSERT(eq(buf, " = -1"));
 }

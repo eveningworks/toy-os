@@ -17,6 +17,7 @@
 #include "pci.h"
 #include "cpuinfo.h"
 #include "krandom.h"
+#include "errno.h"
 #include "setting.h"
 #include "power.h"     // SYS_POWEROFF -- the desktop's shut down/restart
 #include "crashtest.h" // SYS_CRASHTEST -- deliberate faults, see crash_abi.h
@@ -51,7 +52,7 @@ SYSCALL_HANDLER sys_do_getrandom(uint64_t *regs, uint64_t pml4,
         // partial copy here means the mapping changed underneath us --
         // report the failure rather than the count.
         if (!vmm_copy_to_user(pml4, dst + done, chunk, n)) {
-            regs[14] = (uint64_t)-1;
+            regs[14] = (uint64_t)(int64_t)-EFAULT;
             return;
         }
         done += n;
@@ -64,12 +65,16 @@ SYSCALL_HANDLER sys_do_setting(uint64_t *regs, uint64_t rdi) {
     struct setting_msg msg;
     if (!vmm_validate_user_range(pml4, rdi, sizeof msg)) {
         klog_write("syscall: setting() rejected -- invalid user pointer\n");
-        regs[14] = (uint64_t)-1;
+        regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         vmm_copy_from_user(pml4, &msg, rdi, sizeof msg);
         int ok = setting_dispatch(&msg);
         vmm_copy_to_user(pml4, rdi, &msg, sizeof msg); // validated above
-        regs[14] = ok ? 0 : (uint64_t)-1;
+        // setting_dispatch() answers yes or no. EINVAL covers both of
+        // its refusals -- an unknown setting and a value it will not
+        // accept -- because it does not distinguish them either, and a
+        // code invented here would be a claim this kernel cannot make.
+        regs[14] = ok ? 0 : (uint64_t)(int64_t)-EINVAL;
     }
 }
 
@@ -98,7 +103,7 @@ int sys_pci_info(struct syscall_ctx *c) {
     const struct pci_device *dev = pci_device_at(index);
     if (!dev || !vmm_validate_user_range(pml4, c->a1, sizeof(struct pci_device))) {
         klog_write("syscall: pci_info() rejected -- bad index or invalid pointer\n");
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)(dev ? -EFAULT : -EINVAL);
     } else {
         vmm_copy_to_user(pml4, c->a1, dev, sizeof *dev); // range validated just above
         c->regs[14] = 1;
@@ -110,7 +115,7 @@ int sys_cpu_info(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
     if (!vmm_validate_user_range(pml4, c->a0, sizeof(struct cpu_info))) {
         klog_write("syscall: cpu_info() rejected -- invalid user pointer\n");
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         struct cpu_info ci;
         cpu_info_get(&ci);
@@ -124,7 +129,7 @@ int sys_getrandom(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
     if (c->a1 > SYS_GETRANDOM_MAX) {
         klog_write("syscall: getrandom() rejected -- count over SYS_GETRANDOM_MAX\n");
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)-EINVAL;
     } else if (c->a1 == 0) {
         // A zero-length request is a legal no-op, NOT an error --
         // validating a zero-length range would reject a NULL
@@ -132,7 +137,7 @@ int sys_getrandom(struct syscall_ctx *c) {
         c->regs[14] = 0;
     } else if (!vmm_validate_user_range(pml4, c->a0, c->a1)) {
         klog_write("syscall: getrandom() rejected -- invalid user pointer\n");
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         sys_do_getrandom(c->regs, pml4, c->a0, c->a1);
     }
@@ -149,7 +154,7 @@ int sys_sysinfo(struct syscall_ctx *c) {
     struct sys_info info;
     if (!vmm_validate_user_range(pml4, c->a0, sizeof info)) {
         klog_write("syscall: sysinfo() rejected -- invalid user pointer\n");
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else {
         uint64_t used = 0, total = 0;
         k_memset(&info, 0, sizeof info);
@@ -182,7 +187,10 @@ int sys_poweroff(struct syscall_ctx *c) {
     } else if (c->a0 == 1) {
         system_reboot();
     }
-    c->regs[14] = (uint64_t)-1;
+    // Only reached by an op we do not know, or a platform that refused
+    // to stop. EINVAL for the first; the second is EIO in spirit and
+    // indistinguishable here, since system_poweroff() does not report.
+    c->regs[14] = (uint64_t)(int64_t)(c->a0 > 1 ? -EINVAL : -EIO);
     return 0;
 }
 
@@ -194,7 +202,7 @@ int sys_crashtest(struct syscall_ctx *c) {
     uint64_t pml4 = c->pml4;
     struct crash_msg m;
     if (!vmm_copy_from_user(pml4, &m, c->a0, sizeof m)) {
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else if (m.op == CRASH_OP_LIST) {
         m.count = crash_kind_count();
         m.flags = crash_armed() ? CRASH_F_ARMED : 0;
@@ -212,16 +220,19 @@ int sys_crashtest(struct syscall_ctx *c) {
         m.flags = crash_armed() ? CRASH_F_ARMED : 0;
         m.count = crash_kind_count();
         vmm_copy_to_user(pml4, c->a0, &m, sizeof m);
-        c->regs[14] = ok ? 0 : (uint64_t)-1;
+        // Refused because the build is not armed with `faultinject`,
+        // or the index names no kind. EPERM either way: the caller may
+        // not do this, which is exactly what the Crash Test app shows.
+        c->regs[14] = ok ? 0 : (uint64_t)(int64_t)-EPERM;
     } else {
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)-EINVAL; // no such op
     }
     return 0;
 }
 
 int sys_set_color(struct syscall_ctx *c) {
     if (c->a0 > VGA_WHITE || c->a1 > VGA_WHITE) {
-        c->regs[14] = (uint64_t)-1;
+        c->regs[14] = (uint64_t)(int64_t)-EINVAL;
     } else {
         vga_set_color((enum vga_color)c->a0, (enum vga_color)c->a1);
         c->regs[14] = 1;
