@@ -412,7 +412,9 @@ LIBUAPP_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBUAPP_SRCS)) \
                $(BUILD)/userland/shared/string.o \
                $(BUILD)/userland/shared/knum.o \
                $(BUILD)/userland/shared/kfmt.o \
-               $(BUILD)/userland/shared/heap_core.o
+               $(BUILD)/userland/shared/heap_core.o \
+               $(BUILD)/userland/shared/klineedit.o \
+               $(BUILD)/userland/shared/klineedit_cases.o
 LIBUAPP      = $(BUILD)/userland/libuapp.a
 
 # The `rm -f` is load-bearing: `ar rcs` UPDATES an existing archive,

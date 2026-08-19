@@ -7,6 +7,7 @@
 // wrong, so each has its own test.
 #include "ktest.h"
 #include "klineedit.h"
+#include "klineedit_cases.h"
 #include "keyboard.h"
 #include "string.h"
 
@@ -239,4 +240,19 @@ KTEST("klineedit", "a full line refuses more input rather than corrupting") {
     KTEST_ASSERT_EQ(e.len, KLINE_MAX - 1);
     KTEST_ASSERT_EQ(e.buf[e.len], '\0');
     KTEST_ASSERT_EQ(e.cursor, e.len);
+}
+
+// The shared case table, asserted in the KERNEL's build of the editor.
+// userland/tests/klineedit_test.c runs the identical table against the
+// ring-3 build; a case that passes here and fails there means the two
+// compilations of one source have diverged, which is the whole risk
+// the shared-source rule takes on. See klineedit_cases.h.
+KTEST("klineedit", "the shared case table holds in ring 0") {
+    static struct kline_edit e; // ~1.2 KiB -- see kline_case_run()
+    static char got[KLINE_MAX];
+    int cursor = 0;
+    for (int i = 0; i < kline_case_count; i++) {
+        KTEST_ASSERT(kline_case_run(&kline_cases[i], &e, got, sizeof got, &cursor));
+    }
+    KTEST_ASSERT(kline_case_count >= 10); // the table is reachable, not empty
 }

@@ -1,37 +1,47 @@
 // /bin/tosh -- the standalone toy-os shell.
 //
 // The thin main() userland/lib/tosh.h has promised since it was
-// written: tosh_init() plus a read loop. Everything a shell DOES lives
-// in the library, which the GUI Terminal drives from its own event
-// loop -- so this file is only the half a terminal already owns, the
-// part that turns keystrokes into a line.
+// written: an editor plus a read loop. Everything a shell DOES lives in
+// the library, which the GUI Terminal drives from its own event loop --
+// so this file is only the half a terminal already owns, the part that
+// turns keystrokes into a line.
 //
 // What made it possible is a blocking stdin. Until fd 0 could be read
 // (kernel/proc/syscall_fd.c's sys_do_read_console), a ring-3 program
 // had only the non-blocking SYS_READ_KEY and would have had to
-// spin-poll the keyboard for its entire idle life -- which is why
-// docs/decisions.md said there was no /bin/tosh yet rather than that
-// nobody had got round to it.
+// spin-poll the keyboard for its entire idle life.
 //
-// LINE EDITING IS DELIBERATELY MINIMAL HERE: printable characters,
-// Backspace, Enter, Ctrl-C to abandon a line and Ctrl-D to exit. The
-// kernel's front ends share a real readline-style editor
-// (kernel/lib/klineedit.c) and this should too, but that file reaches
-// for kernel headers today; making it freestanding is its own change
-// (docs/roadmap.md). A worse editor that is honestly the whole editor
-// beats a second copy of a good one that drifts from the first.
+// LINE EDITING IS THE KERNEL'S OWN EDITOR, compiled a second time.
+// kernel/lib/klineedit.c is the readline-style buffer/cursor/kill-ring
+// the physical shell and the GUI Terminal already share, and it turned
+// out to be freestanding already -- it includes klineedit.h, string.h
+// and keyboard.h and touches no kernel state -- so this is the
+// shared-source rule (geom.c, etc_config.c, calc_engine.c), not a port.
+// There is ONE definition of what Ctrl-A means on this machine.
 //
 // THERE IS NO ECHO FROM THE KERNEL. fd 0 is raw -- bytes as typed, no
-// line discipline -- so what the user sees is what this loop prints.
-// That is the shape a program with its own editor wants anyway.
+// line discipline -- so what the user sees is what redraw() prints.
+// That is the shape a program with its own editor wants anyway, and it
+// is why a real TTY layer (docs/roadmap.md) belongs under both of us
+// rather than inside either.
 #include "rt/sys.h"
 #include "lib/tosh.h"
 #include "lib/string.h"
+#include "lib/uhistory.h"
+#include "klineedit.h"
 
-#define LINE_MAX 256
+// Static, not local: `struct kline_edit` is ~1.2 KiB and `struct
+// uhistory` ~4 KiB, against USERLAND_CFLAGS' -Wframe-larger-than=2048
+// and a 16 KiB ring-3 stack with ONE guard page below it.
+static struct kline_edit g_ed;
+static struct uhistory   g_hist;
+static struct tosh       g_sh;
 
-// The shell's output sink. `struct tosh` streams through this rather
-// than returning text, so a long `cat` appears as it is read.
+// How much of the line the screen currently shows. Redrawing needs it
+// because erasing is done by overwriting with spaces, so the painter
+// has to know how far the last paint reached.
+static int g_shown;
+
 static void out_fd1(void *ctx, const char *text, int len) {
     (void)ctx;
     sys_write(1, text, (size_t)len);
@@ -39,28 +49,73 @@ static void out_fd1(void *ctx, const char *text, int len) {
 
 static void put(const char *s) { sys_write(1, s, (size_t)strlen(s)); }
 
-// Key codes this shell acts on. The printable range and the control
-// codes are ASCII; keyboard.h's specials (arrows, Home, F-keys) arrive
-// as 0x91-0xA6 and are simply not handled yet, which is the same thing
-// as saying this editor has no history or cursor movement.
-#define K_BACKSPACE 8
-#define K_TAB       9
-#define K_ENTER    '\n'
-#define K_RETURN   '\r'
-#define K_CTRL_C    3
-#define K_CTRL_D    4
+static const char *prompt(void) { return "$ "; }
+
+// Repaints prompt + line and leaves the caret at ed.cursor.
+//
+// TWO PASSES, using only '\r'. The kernel front end moves the caret
+// with vga_cursor_move(), which is a non-destructive seek a ring-3
+// process cannot reach -- there is no drawing syscall and there should
+// not be one. What fd 1 does carry is '\r' (vga.c's fb_putc sets col to
+// 0), so: return to column 0, paint the whole line plus enough spaces
+// to cover whatever the previous paint left behind, then return to
+// column 0 again and paint only the prefix. The caret ends up exactly
+// where the cursor is, having moved only by writing characters.
+//
+// THE LIMIT, stated because it is real: '\r' returns to the start of
+// the CURRENT ROW, so a prompt plus line longer than the console is
+// wide repaints wrongly. A terminal solves this with escape sequences
+// it parses itself, which is the TTY layer's job (docs/roadmap.md) --
+// not something to bolt onto vga_putc for one caller.
+static void redraw(void) {
+    put("\r");
+    put(prompt());
+    sys_write(1, g_ed.buf, (size_t)g_ed.len);
+
+    for (int i = g_ed.len; i < g_shown; i++) sys_write(1, " ", 1);
+
+    put("\r");
+    put(prompt());
+    sys_write(1, g_ed.buf, (size_t)g_ed.cursor);
+
+    g_shown = g_ed.len;
+}
+
+// Ends the current line on screen and starts a fresh one. Used before
+// anything that prints (a command's output, ^C) so it does not land on
+// top of the line being edited.
+static void end_line(void) {
+    put("\r");
+    put(prompt());
+    sys_write(1, g_ed.buf, (size_t)g_ed.len);
+    put("\n");
+    g_shown = 0;
+}
+
+static void fresh_prompt(void) {
+    kline_init(&g_ed);
+    uhist_reset(&g_hist);
+    g_shown = 0;
+    redraw();
+}
+
+// Alt-. -- the last whitespace-delimited word of the previous command.
+static void insert_last_arg(void) {
+    const char *last = uhist_last(&g_hist);
+    if (!last) return;
+    int n = (int)strlen(last);
+    int start = kline_ws_word_start(last, n, n);
+    kline_insert_str(&g_ed, last + start);
+}
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
 
-    struct tosh sh;
-    tosh_init(&sh, out_fd1, 0);
+    tosh_init(&g_sh, out_fd1, 0);
+    uhist_init(&g_hist);
 
     put("tosh -- toy-os shell in ring 3. Ctrl-D to exit.\n");
-
-    char line[LINE_MAX];
-    int len = 0;
-    put("$ ");
+    fresh_prompt();
 
     for (;;) {
         char buf[32];
@@ -71,37 +126,81 @@ int main(int argc, char **argv) {
         if (n <= 0) break; // a console has no EOF; this is an error
 
         for (int64_t i = 0; i < n; i++) {
-            unsigned char k = (unsigned char)buf[i];
+            // Specials arrive as the same 0x91-0xA6 codes keyboard.h
+            // defines and klineedit already switches on, so a byte off
+            // fd 0 is fed in as-is. That identity is what makes the
+            // shared editor work with no translation layer.
+            int key = (unsigned char)buf[i];
 
-            if (k == K_ENTER || k == K_RETURN) {
-                line[len] = '\0';
-                put("\n");
-                if (len > 0) tosh_run_line(&sh, line);
-                len = 0;
-                put("$ ");
-                continue;
+            switch (kline_key(&g_ed, key)) {
+            case KLINE_REDRAW:
+                redraw();
+                break;
+
+            case KLINE_ACCEPT: {
+                end_line();
+                if (g_ed.len > 0) {
+                    uhist_add(&g_hist, g_ed.buf);
+                    tosh_run_line(&g_sh, g_ed.buf);
+                }
+                fresh_prompt();
+                break;
             }
-            if (k == K_BACKSPACE) {
-                // Erase on the screen too: with no echo from the kernel
-                // there is nothing else to un-draw the character.
-                if (len > 0) { len--; put("\b \b"); }
-                continue;
-            }
-            if (k == K_CTRL_C) {
-                put("^C\n$ ");
-                len = 0;
-                continue;
-            }
-            if (k == K_CTRL_D) {
+
+            case KLINE_CANCEL:
+                end_line();
+                put("^C\n");
+                fresh_prompt();
+                break;
+
+            case KLINE_EOF:
                 put("\n");
                 return 0;
-            }
-            if (k == K_TAB) continue; // no completion here yet
-            if (k < 32 || k > 126) continue; // specials and unmapped keys
 
-            if (len < LINE_MAX - 1) {
-                line[len++] = (char)k;
-                sys_write(1, (const char *)&k, 1);
+            case KLINE_HISTORY_PREV: {
+                const char *e = uhist_prev(&g_hist, g_ed.buf);
+                if (e) { kline_set(&g_ed, e); redraw(); }
+                break;
+            }
+
+            case KLINE_HISTORY_NEXT: {
+                const char *e = uhist_next(&g_hist);
+                if (e) { kline_set(&g_ed, e); redraw(); }
+                break;
+            }
+
+            case KLINE_LAST_ARG:
+                insert_last_arg();
+                redraw();
+                break;
+
+            case KLINE_CLEAR_SCREEN:
+                // No clear-screen control code reaches ring 3 (that is
+                // a terminal's job, and there is no terminal under this
+                // yet), so the honest thing is a fresh line rather than
+                // a screen that half-clears.
+                put("\n");
+                g_shown = 0;
+                redraw();
+                break;
+
+            case KLINE_COMPLETE:
+                // Tab does nothing here YET. Completion lives in
+                // apps/completion.c, which is kernel-side and reaches
+                // the filesystem through kernel APIs; a ring-3 version
+                // is its own change (docs/roadmap.md) and a second
+                // half-built one would be the drift this whole file is
+                // avoiding.
+                break;
+
+            case KLINE_SEARCH:
+                // Ctrl-R needs a second prompt line to type the query
+                // into, which needs the caret control redraw() does not
+                // have. Also a roadmap item; ignored rather than faked.
+                break;
+
+            case KLINE_IGNORED:
+                break;
             }
         }
     }

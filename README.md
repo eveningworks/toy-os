@@ -243,8 +243,11 @@ too big for its window scrolls.
 `_start` over the standard SysV stack layout, and libsys gives one typed
 wrapper per syscall. The shared kernel toolkit is compiled a second time
 under the C names, so a ring-3 `strlen` and the kernel's `k_strlen`
-cannot diverge. Adding a program is a `.c` file with no Makefile edit.
-Still deliberately not a libc — no `malloc`, `FILE`, `printf` or `errno`.
+cannot diverge — and the same rule gives ring 3 the kernel's own
+allocator as `malloc`/`free`, and its line editor, so the two shells and
+the physical one agree about what Ctrl-A does. Adding a program is a
+`.c` file with no Makefile edit. Still deliberately not a libc — no
+`realloc`, `FILE`, `printf` or `errno`.
 
 **Syscalls.** One table maps each number to its handler, and the handlers
 live with the subsystem that owns them — the shape Linux and NT both

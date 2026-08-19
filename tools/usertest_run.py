@@ -65,6 +65,11 @@ TESTS = [
      ["libc_test: all checks passed"], ["FAIL"]),
     ("fpu_test", 0,
      ["fpu_test: all checks passed"], ["FAIL"]),
+    # The shared line editor's SECOND compilation. Same gap libc_test
+    # covers: klineedit.c has KTESTs, and they would pass whether or not
+    # ring 3 could link a byte of it.
+    ("klineedit_test", 0,
+     ["klineedit_test: all checks passed"], ["FAIL"]),
     ("newsyscalls_test", 0,
      ["newsyscalls_test: all phases passed"], ["FAILED"]),
     ("file_test", 0,

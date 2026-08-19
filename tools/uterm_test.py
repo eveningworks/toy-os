@@ -156,6 +156,46 @@ def run(dbg, qmp, tmp, shot_dir, res):
     if shot_dir:
         qmp.screenshot(os.path.abspath(os.path.join(shot_dir, "ring3-terminal.png")))
 
+    # --- THE SHARED LINE EDITOR --------------------------------------
+    #
+    # This window edits with kernel/lib/klineedit.c, compiled a second
+    # time into libuapp.a, rather than the append-only loop it used to
+    # carry. Asserted through the FILESYSTEM, not through ink: every
+    # other check here counts non-background pixels, and both a working
+    # edit and a `not found` line add some, so ink cannot tell them
+    # apart. /tests/file_test writes /filetest.txt and `zfile_test`
+    # does not exist, so the file is present only if Home and Delete
+    # really moved the cursor and removed the z.
+    #
+    # An append-only editor fails both of these: it ignores Home,
+    # Delete and Up entirely.
+    def root_has(name):
+        out = dbg.send("sh ls /") or ""
+        return any(tok.rstrip("/") == name
+                   for line in out.splitlines() for tok in line.split())
+
+    dbg.send("sh rm /filetest.txt")
+    dbg.settle()
+    for ch in "zfile_test":
+        key(dbg, HEX.get(ch, ch))
+    dbg.settle()
+    key(dbg, "0x97")   # KEY_HOME
+    key(dbg, "0x99")   # KEY_DELETE
+    dbg.settle()
+    key(dbg, "0x0d")
+    time.sleep(2.5)
+    res.check("Home + Delete edit mid-line, and the edited command runs",
+              root_has("filetest.txt"))
+
+    dbg.send("sh rm /filetest.txt")
+    dbg.settle()
+    key(dbg, "0x91")   # KEY_ARROW_UP -- recall the previous line
+    dbg.settle()
+    key(dbg, "0x0d")
+    time.sleep(2.5)
+    res.check("Up recalls the previous command and it runs again",
+              root_has("filetest.txt"))
+
     # An EXTERNAL program: only reachable via spawn + pipe.
     type_line(dbg, "lscpu", settle=2.5)
     after_lscpu = ink(qmp, tmp, "ut_lscpu.png", box)

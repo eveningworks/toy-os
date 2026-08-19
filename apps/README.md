@@ -81,9 +81,12 @@ ring-3 processes now; see the next section.)
   the candidate logic is genuinely common. See `completion.h`'s top
   comment. *Line editing*, by contrast, IS shared and lives outside
   `apps/` entirely: `kernel/lib/klineedit.c` owns the buffer, cursor,
-  kill ring, undo and the whole bash keymap, and each front end only
-  paints the result (`repaint_line()` here, `term_repaint_line()` in
-  the ring-3 Terminal). The split is deliberate and the opposite of
+  kill ring, undo and the whole bash keymap, and each of the THREE front
+  ends only paints the result -- `repaint_line()` here, `redraw()` in
+  `/bin/tosh`, and the prompt row in the ring-3 Terminal. The two ring-3
+  ones got it on 2026-08-19, when klineedit.c started being compiled a
+  second time into `libuapp.a`; until then each carried its own
+  append-only loop. The split is deliberate and the opposite of
   completion's for a reason -- candidate generation has no state to
   keep, whereas two copies of an editor drift, and a drifted editor
   means the same keystroke doing different things in the two windows. The shell itself is four files (`shell.c` + `shell_fs.c` +
