@@ -2320,6 +2320,23 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
 
 Five standing rules that are cheaper to know than to rediscover:
 
+- **WHAT THE USER SAYS, AND WHAT IT MEANS.** Three checks, three
+  phrasings, and they are easy to confuse because two of them mention
+  QEMU:
+  - **"run the matrix"** / "check the old QEMUs" / "test on 8.2" ->
+    `python3 tools/qemu_matrix.py` (add `--versions 8.2`, `--virtio`).
+    LOCAL, Docker, ~15s per version. This is the one for "does this
+    depend on the host's QEMU?".
+  - **"run CI"** / "trigger the GitHub build" / "kick off Actions" ->
+    `gh workflow run build.yml`, then poll `gh run list`. REMOTE, on
+    GitHub's runner, ~90s when it behaves. This is the one for "does it
+    build from a clean clone on someone else's machine?". It no longer
+    runs on push, so it only happens when asked or on a release tag.
+  - **"run preflight"** / "verify" / "is it safe to commit" ->
+    `bash tools/preflight.sh`. The ordinary per-change gate.
+  "Run the tests" with no qualifier means preflight. If a request is
+  ambiguous between the local matrix and GitHub, ask -- they answer
+  different questions and one of them costs a remote round trip.
 - **`qemu_matrix.py` RUNS AT A RELEASE AND WHEN THE USER ASKS -- not
   automatically** (standing instruction, 2026-08-19). It is ~15s per
   version on a cached image (69 MB each; the first run per version
