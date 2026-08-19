@@ -192,6 +192,7 @@ enum sched_poll_result scheduler_poll(int pid, int *out_exit_code);
 #define SCHED_WAIT_PIPE  2 // data (or EOF) on a pipe this process reads
 #define SCHED_WAIT_CHILD 3 // a spawned child of this process exited
 #define SCHED_WAIT_TIMER 4 // a deadline this process asked to sleep until
+#define SCHED_WAIT_KEY   5 // a keystroke on the physical console (fd 0)
 
 // Parks the caller until clocksource_now_ns() reaches `wake_at_ns`, the
 // SYS_SLEEP half of the block/wake pair above. Same contract as

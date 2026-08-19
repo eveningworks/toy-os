@@ -1170,6 +1170,40 @@ technical conventions below:
   passed for months on the accidental interlock that `gui` blocking the
   shell provided -- **automating a lifecycle removes interlocks somebody
   depended on**; look for them.
+- **RING 3 CAN READ THE CONSOLE NOW -- fd 0, and it BLOCKS.**
+  `sys_read(0, buf, n)` parks the caller on `SCHED_WAIT_KEY` and
+  `keyboard.c`'s `ring_push()` wakes it from the IRQ, the same
+  park-and-return shape pipes, `waitpid` and `sleep` already use --
+  nothing reopens the `sti`-in-the-handler hazard `SYS_READ_KEY`'s
+  comment describes, because the handler does not wait, it RETURNS.
+  That is what `/bin/tosh` (`userland/bin/tosh.c`) needed to exist.
+  Five things to know. **It never returns 0** -- a console has no EOF,
+  and 0 would tell a shell its input had closed. **It is RAW**: one byte
+  per key, exactly the code `keyboard_try_getchar()` gives (specials are
+  0x91-0xA6), with no echo, no editing and no escape translation, so
+  the reader echoes what it reads -- all three are a line discipline and
+  belong above a real TTY. **The first fd-0 read CLAIMS the console**
+  and the kernel shell stands down until that process dies; the claim is
+  a SECOND flag beside the compositor's, released from
+  `fd_release_all()` so a crashing shell gives the keyboard back on its
+  own. **A ring-3 reader tests `keyboard_compositor_owns()`, never
+  `keyboard_blocking_suspended()`** -- the combined predicate is true of
+  its own claim and would deadlock it. And **whoever waits for a key
+  also presents the screen**, so the handler flushes the console back
+  buffer before parking; the ring-0 loop that normally does it is
+  suspended on this reader's behalf. See `docs/decisions.md`.
+- **A QMP TEST THAT TYPES PUNCTUATION MUST PIN THE GUEST'S KEYBOARD
+  LAYOUT.** A qcode names a PHYSICAL key by its US-layout label, and
+  this OS defaults to `se`, where that key produces something else: every
+  `/` `tools/shell_flow.py` typed arrived as `-`, so `spawn /bin/tosh`
+  became `spawn -bin-tosh` and `touch /probe.txt` created a file
+  genuinely called `-probe.txt` -- which a substring assertion passed.
+  `kbd=us` on the GRUB line (`docs/boot-flags.md`) or `sh keyboard us`
+  over the debug console fixes it; porting the table per layout was
+  rejected, since it would then be silently wrong for anyone who changed
+  the setting. The general form is this file's existing rule about
+  assertions a broken version still passes -- **an exact match would
+  have caught it and a substring did not**.
 - **RING 0's BLOCKING KEYBOARD READERS ARE SUSPENDED WHILE A COMPOSITOR
   HOLDS THE ROLE** (`keyboard_suspend_blocking()`, set from the one place
   in `win_server.c` the role changes). With init starting the desktop,
@@ -2085,7 +2119,9 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   `uiclient_test.py`, `uidemo_test.py`, `uterm_test.py`,
   `winclient_test.py`.
 - **Run on demand, not in the gate** -- `init_test.py` (init and service
-  supervision), `kvm_soak.py` (the timing bugs TCG cannot show),
+  supervision), `stdin_test.py` (blocking fd 0 and `/bin/tosh`, which
+  needs the physical console and so takes the desktop down first),
+  `kvm_soak.py` (the timing bugs TCG cannot show),
   `mem_stress.py`, `frame_balance.py` (does teardown balance),
   `live_boot_test.py`, `fs_switch_test.py`, `tfs3_v1_test.py`,
   `mkpart_test.py`, `demo_test.py`.

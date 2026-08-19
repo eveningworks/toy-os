@@ -16,6 +16,7 @@
 #include "klog.h"
 #include "heap.h"  // bounce buffers come from here, not the stack
 #include "vga.h"
+#include "keyboard.h"
 #include "vmm.h"
 #include "scheduler.h"
 #include "pipe.h"
@@ -28,6 +29,12 @@
 // too; the storage is here, with the code that owns it.
 
 struct open_file fd_table[FD_TABLE_SIZE];
+
+// Which address space holds the console claim, so fd_release_all() can
+// tell "this process is dying" from "some other process is". Keyed by
+// CR3 like the fd table itself, because that is what the release hook
+// is handed.
+static uint64_t g_console_owner_pml4;
 
 // Slot allocation and lookup, factored out when pipes needed both and
 // found the logic inlined at half a dozen call sites. `fd_lookup()` in
@@ -85,6 +92,91 @@ sys_do_read_pipe(uint64_t *regs, uint64_t pml4, int pipe_idx,
     }
     kfree(kbuf);
     return blocked;
+}
+
+// READING THE PHYSICAL CONSOLE FROM RING 3 -- fd 0.
+//
+// The counterpart of sys_do_write_console() below, and the reason
+// /bin/tosh can exist: a ring-3 shell needs somewhere to read a line
+// from, and until this there was nowhere. SYS_READ_KEY is the only
+// other way in and is non-blocking BY REQUIREMENT (see its handler in
+// win_syscalls.c), so a program wanting a keystroke had to spin.
+//
+// Blocking here is safe for the reason the pipe path above is safe: the
+// handler does not WAIT, it PARKS and returns. keyboard.c's ring_push()
+// is the wake site.
+//
+// THREE THINGS THIS DELIBERATELY DOES NOT DO, all of them the TTY
+// milestone's job (docs/roadmap.md):
+//   - No line discipline. Bytes arrive as typed; there is no cooked
+//     mode, no editing and no echo, so the reader echoes what it reads.
+//     That is a program in raw mode, which is what a shell wanting its
+//     own editor asks for anyway.
+//   - No translation. One byte per key, exactly the code
+//     keyboard_try_getchar() returns -- every value this driver
+//     produces fits in a byte, specials (KEY_ARROW_* et al, 0x91-0xA6)
+//     included. An ANSI escape encoding belongs above a real TTY, not
+//     baked in here where it could not be turned off.
+//   - No per-terminal queue. There is ONE console, so the first ring-3
+//     reader claims it (keyboard.h) and the kernel shell stands down
+//     until that process dies.
+static __attribute__((noinline)) int
+sys_do_read_console(uint64_t *regs, uint64_t pml4, uint64_t buf_ptr, uint64_t len) {
+    if (len == 0) { regs[14] = 0; return 0; }
+
+    // A DESKTOP OWNING THE SCREEN OWNS THE KEYBOARD WITH IT. Park
+    // without popping anything and without claiming: win_input.c drains
+    // this same ring to feed the compositor, so taking a key here would
+    // make keystrokes vanish from the desktop at random. The reader
+    // simply gets nothing until the desktop exits, which is exactly what
+    // the kernel shell behind the desktop already does.
+    if (keyboard_compositor_owns()) {
+        if (scheduler_block_current(regs, SCHED_WAIT_KEY)) return 1;
+        regs[14] = (uint64_t)SYS_RETRY;
+        return 0;
+    }
+
+    // Claiming on the FIRST read rather than at spawn: a process that
+    // never reads the console must not silence the kernel shell, and
+    // there is no other moment the kernel could learn the difference.
+    keyboard_claim_console(1);
+    g_console_owner_pml4 = pml4;
+
+    // Whoever waits for a key is also who flushes the screen -- the
+    // console draws into a back buffer and the ring-0 reader's idle loop
+    // is what normally presents it (vga.h). That loop is now suspended
+    // on this reader's behalf, so this is the moment "output is
+    // finished, we are waiting for a human" is true. Cheap when nothing
+    // changed.
+    vga_present();
+
+    char kbuf[SYS_WRITE_MAX < 64 ? SYS_WRITE_MAX : 64];
+    uint64_t want = len < sizeof kbuf ? len : sizeof kbuf;
+    uint64_t got = 0;
+    while (got < want) {
+        int k = keyboard_try_getchar();
+        if (k < 0) break;
+        kbuf[got++] = (char)(unsigned char)k;
+    }
+
+    if (got == 0) {
+        // Nothing queued. Park rather than report EOF: a console has no
+        // end of file, and 0 would tell a shell its input had closed.
+        if (scheduler_block_current(regs, SCHED_WAIT_KEY)) return 1;
+        // Nowhere to park -- kernel code, or the legacy loader's single
+        // slot. Answer "nothing yet" the only way a non-blocking caller
+        // can be answered, rather than lying about end of input.
+        regs[14] = (uint64_t)SYS_RETRY;
+        return 0;
+    }
+
+    if (!vmm_copy_to_user(pml4, buf_ptr, kbuf, got)) {
+        klog_write("syscall: read() rejected -- invalid buffer pointer\n");
+        regs[14] = (uint64_t)-1;
+    } else {
+        regs[14] = got;
+    }
+    return 0;
 }
 
 SYSCALL_HANDLER sys_do_write_console(uint64_t *regs, uint64_t pml4, int fd,
@@ -241,6 +333,15 @@ int sys_read(struct syscall_ctx *c) {
     if (len > SYS_WRITE_MAX) len = SYS_WRITE_MAX;
 
     uint64_t pml4 = c->pml4;
+
+    if (fd == 0) { // stdin -- the physical console
+        if (!vmm_validate_user_range(pml4, buf_ptr, len)) {
+            klog_write("syscall: read() rejected -- invalid buffer pointer\n");
+            c->regs[14] = (uint64_t)-1;
+            return 0;
+        }
+        return sys_do_read_console(c->regs, pml4, buf_ptr, len);
+    }
 
     // A pipe fd reads from the pipe, and BLOCKS when it is empty
     // with a writer still alive. Handled before the file path
@@ -403,6 +504,15 @@ int sys_pipe(struct syscall_ctx *c) {
 // mapped into the process), so vmm_destroy_address_space() would not
 // reclaim any of it.
 void fd_release_all(uint64_t pml4_phys) {
+    // The console claim is not an fd, but it is the same kind of thing:
+    // a kernel resource keyed by address space that nothing else would
+    // reclaim. Releasing it here is what brings the kernel shell's
+    // prompt back when a ring-3 shell exits OR crashes -- both reach
+    // this hook, which is why the claim is not tracked in the reader.
+    if (g_console_owner_pml4 == pml4_phys) {
+        g_console_owner_pml4 = 0;
+        keyboard_claim_console(0);
+    }
     for (int i = 0; i < FD_TABLE_SIZE; i++) {
         if (fd_table[i].used && fd_table[i].owner_pml4 == pml4_phys) {
             // A pipe end must be RELEASED, not just forgotten: a

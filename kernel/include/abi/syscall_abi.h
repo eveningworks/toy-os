@@ -173,6 +173,27 @@ struct win_request {
                       // (RAX) -- 0 at end of file, or -1 on a bad fd or
                       // bad pointer. Capped at SYS_WRITE_MAX per call,
                       // same as SYS_WRITE.
+                      //
+                      // fd 0 is STDIN: the physical console keyboard.
+                      // BLOCKS when nothing is typed -- the process is
+                      // parked and the keyboard IRQ releases it, so an
+                      // idle reader costs no CPU. It NEVER returns 0:
+                      // a console has no end of file, and reporting one
+                      // would tell a shell its input had closed.
+                      //
+                      // Raw, one byte per key, exactly the code
+                      // keyboard.h's KEY_* namespace uses (specials are
+                      // 0x91-0xA6) -- no echo, no line editing, no
+                      // escape-sequence translation. All three are a
+                      // line discipline, which belongs above a real TTY
+                      // (docs/roadmap.md), so a reader echoes what it
+                      // reads and does its own editing.
+                      //
+                      // THE FIRST fd-0 READ CLAIMS THE CONSOLE: the
+                      // kernel shell stops taking keys until the
+                      // claiming process dies. There is one keyboard,
+                      // and two readers splitting it at random is worse
+                      // than one reader having it.
 #define SYS_OPEN  10 // RDI = pointer to a NUL-terminated path (at most
                       // FS_PATH_MAX - 1 bytes -- fs.c's own limit; a
                       // bare name like "notes.txt" is treated as

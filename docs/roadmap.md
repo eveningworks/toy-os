@@ -60,7 +60,9 @@ and job control is what a terminal on that TTY makes possible.
 ### TTY / virtual terminals
 **Needs:** Signals & process control -- a terminal without signals cannot deliver Ctrl-C, which is most of what makes it a terminal.
 
-- [ ] A line discipline (line editing, echo control) separate from the shell's own input loop
+- [x] ~~A ring-3 process can read the console at all (`SYS_READ`'s fd 0, blocking)~~ DONE 2026-08-19
+- [ ] A line discipline (line editing, echo control) separate from the shell's own input loop -- fd 0 is RAW today
+- [ ] `kernel/lib/klineedit.c` compiled a second time for ring 3, so `/bin/tosh` shares the readline keymap
 - [ ] `Ctrl+C`/`Ctrl+D`/`Ctrl+Z` as terminal signals, not keystrokes an app happens to notice
 - [ ] The concept of a foreground process for a terminal
 - [ ] Multiple virtual terminals on `Ctrl+Alt+F1..F4`
@@ -75,7 +77,9 @@ and job control is what a terminal on that TTY makes possible.
 ### Shell pipes & job control
 **Needs:** Signals & process control (signals) and TTY / virtual terminals (the process groups job control suspends and resumes).
 
-- [ ] stdin redirection in `SYS_SPAWN`
+- [x] ~~A standalone `/bin/tosh`, so the ring-3 shell is a program and not only a library~~ DONE 2026-08-19
+- [ ] stdin redirection in `SYS_SPAWN` -- fd 0 exists now, so this is plumbing rather than a new concept
+- [ ] init starting `/bin/tosh` on the `text` target, in place of the kernel shell
 - [ ] **`dup`/`dup2`-style fd plumbing**, so the shell can wire an arbitrary fd to 0/1/2 rather than the two
 - [ ] A per-process cwd
 - [ ] An environment passed to a child

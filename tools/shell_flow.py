@@ -45,6 +45,22 @@ import time
 sys.path.insert(0, "tools")
 from qmp_test import QMPSession  # noqa: E402
 
+# THIS TABLE ASSUMES THE GUEST IS ON THE US KEYBOARD LAYOUT. A QMP
+# qcode names a PHYSICAL KEY by its US-layout label, so what the guest
+# actually types depends on the layout IT has loaded -- and this OS
+# defaults to `se` (Swedish/Finnish), where the key labelled `/` on a US
+# board produces `-` and `/` is Shift-7. Sending "slash" there typed a
+# HYPHEN into every path: `spawn /bin/tosh` arrived as `spawn -bin-tosh`
+# and `touch /probe.txt` created a file called `-probe.txt`, so a test
+# asserting on a substring PASSED while nothing it meant had happened.
+# Found while building stdin_test.py.
+#
+# So a tool that types punctuation must put the guest on the US layout
+# first -- `keyboard us` at the shell, or `sh keyboard us` over the
+# serial debug console, which is what stdin_test.py does. Fixing the
+# table per layout was the other option and is worse: the mapping would
+# then be silently wrong for anyone who changes the setting.
+#
 # Characters send_text() can't handle directly (lowercase letters/digits
 # only) but that show up constantly in real toy-os shell commands --
 # `run <name>` arguments, paths (`cat /etc/toyos.conf`), flags. Extend

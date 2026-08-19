@@ -219,6 +219,28 @@ int keyboard_getchar_mods(uint8_t *out_mods);
 // milestone's job (docs/init-design.md's R9). What it buys today is that
 // exactly one thing reads the keyboard at a time.
 void keyboard_suspend_blocking(int on);
+
+// The SECOND reason the ring-0 reader stands down: a ring-3 process is
+// reading the physical console through fd 0 (syscall_fd.c). Claimed by
+// the first such read and released when that process dies, so the
+// kernel shell's prompt comes back on its own if the reader crashes.
+//
+// A separate flag from the compositor's above rather than the same one:
+// both can hold at once, and one boolean would let whichever released
+// second hand the keyboard back while the other still owned it.
+void keyboard_claim_console(int on);
+int  keyboard_console_claimed(void);
+
+// True while a COMPOSITOR owns the console -- the first reason above,
+// on its own. The ring-3 fd-0 reader tests this rather than the
+// combined predicate below: a desktop owning the screen owns the
+// keyboard with it, so a console read must park instead of popping a
+// key win_input.c is about to hand the compositor. It must NOT test the
+// combined one, which is true of its own claim and would deadlock it.
+int  keyboard_compositor_owns(void);
+
+// True when EITHER reason holds. This is what the blocking reader tests
+// -- never one of the two flags directly.
 int  keyboard_blocking_suspended(void);
 int keyboard_try_getchar_mods(uint8_t *out_mods);
 

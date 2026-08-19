@@ -209,6 +209,33 @@ manual steps to be worth automating:
   borrowed-mapping path. Run it after touching `vmm.c`'s mapping or
   teardown paths, or after adding any mapping of memory a process does
   not own.
+- **`stdin_test.py`** -- blocking stdin (fd 0) and the standalone ring-3
+  shell `/bin/tosh`. Three properties, each with a failure the others
+  miss: a line typed at tosh RUNS (asserted through the filesystem --
+  `file_test` is on tosh's PATH and writes `/filetest.txt`, so the check
+  is a round trip from keystroke to key ring to a parked process's
+  trapframe to a spawn, and nothing short of the whole path satisfies
+  it); an idle tosh is BLOCKED, not spinning (`kstack slots` reports
+  state 4, and a spin-poll implementation passes the first check
+  perfectly); and the console has exactly ONE reader, checked in both
+  directions -- `touch` is a kernel-shell builtin and NOT on tosh's
+  PATH, so typing `touch /claimprobe.txt` at tosh must create nothing,
+  and after Ctrl-D the same line must work. Without both directions
+  "the claim works" and "the claim is stuck on" look identical.
+  **Two preconditions it establishes itself**, and both are the point:
+  it puts the guest on the US keyboard layout (`sh keyboard us`, or
+  `kbd=us` on the GRUB line), because a QMP qcode names a PHYSICAL key
+  by its US label and under this OS's `se` default every `/` arrived as
+  `-` -- `spawn /bin/tosh` became `spawn -bin-tosh` and the substring
+  assertions passed against a file genuinely called `-claimprobe.txt`;
+  and it takes the desktop out of init's hands (`rm
+  /etc/services.d/toywm`, then kill) because a desktop owns the
+  keyboard and a supervised one comes straight back. It therefore edits
+  `/etc` -- run it against a throwaway copy of `disk.img`.
+  Positive controls, measured: removing `keyboard.c`'s
+  `scheduler_wake(SCHED_WAIT_KEY)` reddens three checks, removing
+  `keyboard_claim_console()` reddens two, and neither reddens the
+  other's.
 - **`init_test.py`** -- init as pid 1 AND as a supervisor, end to end:
   the kernel spawns it, it holds pid 1, an idle init is BLOCKED rather
   than spinning, `kill 1` is refused, abandoned children are adopted AND

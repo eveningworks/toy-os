@@ -10,12 +10,54 @@
 #include "string.h"
 #include "etc_config.h"
 #include "setting.h"
+#include "multiboot.h"
 
 #define KEYBOARD_CONFIG_FILE "/etc/toyos.conf"
 #define KEYBOARD_CONFIG_KEY "keyboard_layout"
 
+// Finds `kbd=<name>` on the kernel command line -- the layout override
+// for ONE boot, in the same shape as target.c's `target=` and for a
+// related reason: a test that types punctuation over QMP needs a known
+// layout, because a QMP qcode names a PHYSICAL KEY by its US label and
+// the character it produces is whatever the GUEST's layout says. Under
+// the `se` default that made `/` arrive as `-`, so `spawn /bin/tosh`
+// became `spawn -bin-tosh` -- and a substring assertion passed anyway.
+// See tools/shell_flow.py's table comment.
+//
+// NOT written back to /etc, exactly like `target=`: an override is for
+// this boot, and a test harness must not silently reconfigure the
+// machine it borrowed. `config diff` shows it as a live-vs-stored
+// difference.
+//
+// The match must start the line or follow a space, so a longer word
+// ending in `kbd=` cannot be read as this one -- target.c's own trap,
+// stated once there and worth not re-learning.
+static int cmdline_layout(char *out, uint32_t out_size) {
+    const char *cmdline = multiboot_cmdline();
+    if (!cmdline) return 0;
+
+    for (const char *p = cmdline; (p = k_strstr(p, "kbd=")) != 0; p += 4) {
+        if (p != cmdline && p[-1] != ' ') continue;
+        const char *v = p + 4;
+        uint32_t n = 0;
+        while (v[n] && v[n] != ' ' && n + 1 < out_size) n++;
+        if (n == 0) return 0;
+        k_memcpy(out, v, n);
+        out[n] = '\0';
+        return 1;
+    }
+    return 0;
+}
+
 void keyboard_config_init(void) {
     char value[KB_LAYOUT_NAME_MAX];
+
+    // The override wins over the persisted value, and a name that has
+    // no table is IGNORED rather than fatal -- keyboard_layout_load()
+    // reports that, and a typo on the GRUB line must not be what stops
+    // a machine booting or leaves it with no keyboard at all.
+    if (cmdline_layout(value, sizeof value) && keyboard_layout_load(value)) return;
+
     // Always call keyboard_layout_load() -- even with no persisted
     // value -- so the layout tables are actually populated by the
     // time this returns. keyboard_layout_load()'s own fallback chain

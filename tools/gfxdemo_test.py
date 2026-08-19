@@ -160,11 +160,22 @@ class Shapes:
 
         # The ELF has to be loaded and the window created before any of
         # this is answerable; poll rather than guessing at a sleep.
+        #
+        # WAIT FOR BOTH LINES, not just the first. This used to break on
+        # `layout canvas` and then require `layout buttons` immediately
+        # after -- a poll whose exit condition is weaker than what the
+        # code following it needs, which is a flake by construction. It
+        # failed roughly one run in three under `gui_regress`'s parallel
+        # load and never once when the tool ran alone, which is how a
+        # timing bug in a HARNESS disguises itself as a regression in
+        # whatever happened to be built that day. Same bug, same fix, as
+        # calculator_client_test.py's (see CLAUDE.md).
         deadline = time.time() + 15
         lines = []
         while time.time() < deadline:
             lines += self.dbg.logs("gfxdemo:", clear=True)
-            if any("layout canvas" in l for l in lines):
+            if (any("layout canvas" in l for l in lines)
+                    and any("layout buttons" in l for l in lines)):
                 break
             time.sleep(0.3)
         self.startup = lines

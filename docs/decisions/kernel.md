@@ -1300,14 +1300,15 @@ search for it:
 and was accepted deliberately: for a hobby OS's shell it reads as
 self-aware rather than rude, and no software owns the name.
 
-**There is no `/bin/tosh` yet.** The ring-3 shell is a LIBRARY, because
-its first caller is a GUI terminal that owns its own event loop and
-cannot sit blocked in a `read()` (see `tosh.h`). A standalone binary
-would be a thin `main()` over the same `tosh_init()`/`tosh_run_line()`
-calls -- the header has said so since it was written -- but it needs an
-interactive stdin story first: a process started by the physical
-shell's `run` has nowhere useful to read a line from, which is the same
-limitation that makes `echotest` hang under headless testing.
+**`/bin/tosh` exists now** (`userland/bin/tosh.c`), and is the thin
+`main()` `tosh.h` has promised since it was written: `tosh_init()` plus
+a read loop. The shell itself is still a LIBRARY, because its other
+caller is a GUI terminal that owns its own event loop and cannot sit
+blocked in a `read()`.
+
+What it was waiting for was an interactive stdin, which is why this
+entry used to say the binary did not exist rather than that nobody had
+written it. That is [fd 0](#fd-0-is-the-console-it-blocks-and-the-first-ring-3-reader-takes-the-keyboard).
 
 ## The process entry ABI is SysV, and crt0 owns the stack alignment
 
@@ -2873,3 +2874,87 @@ that happens when nobody touches it** -- every GUI tool here interacts and
 then asserts on what changed, so a screen that paints itself while idle
 was structurally invisible to all of them. `tools/idle_desktop_test.py`
 asks that question now, with the taskbar clock as its own control.
+
+## fd 0 is the console, it BLOCKS, and the first ring-3 reader takes the keyboard
+
+`sys_read(0, ...)` reads the physical console keyboard and parks the
+caller when nothing is typed (`kernel/proc/syscall_fd.c`'s
+`sys_do_read_console()`). It exists because a ring-3 shell had nowhere
+to read a line from: `SYS_READ_KEY` is non-blocking by hard requirement,
+so `/bin/tosh` would have had to spin-poll the keyboard for its whole
+idle life. That is why this file used to say there was no `/bin/tosh`
+yet -- not that nobody had written the `main()`.
+
+**Blocking is safe now, and the old autopsy is still correct about the
+thing it describes.** The version that was tried and abandoned turned
+interrupts on inside the syscall handler and sat in a `hlt` loop, so a
+keyboard IRQ landed with the handler still on the stack and clobbered
+`g_next_kernel_rsp` -- one keystroke, then a hang. Nothing here reopens
+that: the handler does not WAIT, it PARKS and returns, through
+`scheduler_block_current()`, exactly as the pipe, `waitpid` and `sleep`
+paths already do. The wake site is `keyboard.c`'s `ring_push()`, in the
+IRQ, where all it may do is flip scheduler state and write an
+already-saved trapframe -- which is all `scheduler_wake()` does.
+
+The wake value is `SYS_RETRY`, not the key. Three consumers drain that
+one ring (the ring-0 reader, `win_input.c`, and now this), so a woken
+reader may find the key already gone; `SYS_RETRY` makes that "park
+again" instead of a spurious answer, and libsys's `sys_read()` already
+loops on it.
+
+**Why fd 0 rather than a `SYS_READ_KEY_BLOCK`.** It is the Unix shape,
+it costs no new syscall number, libsys needed no change at all, and it
+is the same fd a later `dup2` and `SYS_SPAWN` stdin redirection have to
+plumb anyway. A second key-reading syscall would have had to be
+deprecated the moment either landed.
+
+**It never returns 0.** A console has no end of file, and 0 is EOF for
+every other reader of `SYS_READ` -- returning it would tell a shell its
+input had closed, which is the same class of mistake as the `SYS_RETRY`
+sentinel itself.
+
+**One byte per key, exactly the driver's code.** Every value
+`keyboard_try_getchar()` produces fits in a byte, `KEY_ARROW_*` and the
+Nordic characters included, so no encoding decision had to be made and
+none was. There is no echo, no editing and no escape-sequence
+translation: all three are a line discipline, which belongs above a real
+TTY where it can be turned off, and a program with its own editor wants
+them off. The reader echoes what it reads.
+
+**The first fd-0 read CLAIMS the console** (`keyboard_claim_console()`),
+and the kernel shell stands down until that process dies. There is one
+keyboard and no TTY layer, so the alternative is two readers splitting a
+typed line between them -- which is not a thought experiment: removing
+the claim as a positive control left `claimpobe.txt` AND
+`claimprobe.txt` on disk from one typed `touch /claimprobe.txt`, the two
+shells having taken alternate characters.
+
+The claim is a SECOND flag beside the compositor's, not the same one.
+Both can hold at once, and with one boolean whichever released second
+would hand the keyboard back while the other still owned it -- which is
+the exact bug `keyboard_suspend_blocking()` was added to fix. So:
+two setters, one predicate (`keyboard_blocking_suspended()`), and the
+ring-3 reader tests `keyboard_compositor_owns()` instead, because
+testing the combined predicate would deadlock it against its own claim.
+
+**A desktop owning the screen owns the keyboard with it.** A console
+read while a compositor is registered parks without popping anything and
+without claiming, because `win_input.c` drains the same ring to feed the
+compositor -- taking a key there would make keystrokes vanish from the
+desktop at random.
+
+**The claim is released from `fd_release_all()`**, the per-address-space
+teardown hook, which both exit and kill reach. A shell that crashes
+therefore gives the console back on its own; tracking the release in the
+reader would have made a crash a machine you cannot type at.
+
+Whoever waits for a key also FLUSHES the screen: the console draws into
+a back buffer and the ring-0 reader's idle loop is what normally
+presents it. That loop is suspended on this reader's behalf, so
+`sys_do_read_console()` presents once before parking -- the same
+"output is finished, we are waiting for a human" moment.
+
+None of this is console ownership done properly. A per-TTY input queue
+with a foreground process is the TTY milestone's job; what this buys is
+that exactly one thing reads the keyboard at a time, which is the same
+thing the compositor flag buys and for the same reason.

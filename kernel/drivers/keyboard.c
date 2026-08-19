@@ -3,7 +3,8 @@
 #include "io.h"
 #include "vga.h"
 #include "klog.h"
-#include "scheduler.h" // scheduler_idle() -- the kernel's idle work, in one place
+#include "scheduler.h" // scheduler_idle(), and the fd-0 reader wake below
+#include "syscall_abi.h" // SYS_RETRY -- the wake value a parked fd-0 read gets
 #include "string.h" // k_tolower() -- the Ctrl-key fold
 
 #define KBD_DATA_PORT 0x60
@@ -76,6 +77,17 @@ static void ring_push(uint16_t c) {
     if (next == ring_tail) return; // full, drop
     ring_buf[ring_head] = ((uint32_t)current_mods() << 16) | c;
     ring_head = next;
+    // Release anything parked in a ring-3 read of fd 0 (syscall_fd.c).
+    // This runs in the IRQ1 handler, so it may only flip scheduler state
+    // and write an already-saved trapframe -- which is all
+    // scheduler_wake() does; see its own comment on that restraint. The
+    // woken reader pops the key at the next ordinary rotation, not here.
+    //
+    // Waking unconditionally is deliberate: the ring is shared with the
+    // ring-0 blocking reader and with win_input.c, so a woken reader may
+    // find the key already gone. SYS_RETRY is the wake value, so that
+    // case simply parks again rather than reporting a spurious EOF.
+    scheduler_wake(SCHED_WAIT_KEY, SYS_RETRY);
 }
 
 static int ring_pop(uint32_t *out) {
@@ -217,10 +229,25 @@ void keyboard_feed_byte(uint8_t sc) {
 
 // See keyboard.h. Not static state the shell can reach around: the
 // blocking readers below are the only consumers.
+// TWO INDEPENDENT REASONS THE RING-0 BLOCKING READER STANDS DOWN, and
+// they must not share one flag: a compositor holds the screen
+// (win_server.c), or a ring-3 process is reading the console through
+// fd 0 (syscall_fd.c). Both can be true at once, and with a single
+// boolean whichever released second would hand the keyboard back while
+// the other still owned it -- a shell executing keys typed at somebody
+// else's prompt, which is the exact bug keyboard_suspend_blocking() was
+// added to fix in the first place.
+//
+// So: two setters, one predicate. Everything that asks "may I take a
+// key?" asks the predicate.
 static int g_blocking_suspended;
+static int g_console_claimed;
 
 void keyboard_suspend_blocking(int on) { g_blocking_suspended = on ? 1 : 0; }
-int  keyboard_blocking_suspended(void) { return g_blocking_suspended; }
+void keyboard_claim_console(int on)    { g_console_claimed = on ? 1 : 0; }
+int  keyboard_console_claimed(void)    { return g_console_claimed; }
+int  keyboard_compositor_owns(void)    { return g_blocking_suspended; }
+int  keyboard_blocking_suspended(void) { return g_blocking_suspended || g_console_claimed; }
 
 int keyboard_getchar(void) { return keyboard_getchar_mods(0); }
 
