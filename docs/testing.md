@@ -246,9 +246,27 @@ gui dialog [--json]      the open confirm dialog's message and button CENTRES
 gui compositor [--json]  the registered compositor pid, queue depth, drops
 gui spawn PATH [args]    run a ring-3 binary directly -- no Terminal in the loop
 gui watchdog [<ms>|off]  slow-frame threshold, plus how often it fired
+gui pingtimeout [<ticks>] not-responding timeout -- a TEST LEVER, see below
 gui kill PID             end a process -- `gui spawn`'s counterpart
 gui click X Y | gui rclick X Y | gui drag X1 Y1 X2 Y2 | gui key <c> [alt|ctrl|shift]
 ```
+
+**`gui pingtimeout` exists to make a test faster, and that is a
+legitimate reason.** The WM marks a client not-responding after 3
+seconds (`wm_internal.h`), and `tools/forcequit_test.py` waits that out
+about ten times -- which made it a 72-second tool and therefore the whole
+GUI suite's wall-clock floor, since a fan-out's wall clock is its slowest
+item and not its total. The timeout's VALUE is not what that tool
+asserts (its own docstring already treats raising it as a positive
+control), so it turns it down to 0.4s and finishes in 34s, taking the
+suite from 76s to 61s. Two rules if you use it: the tool must ASSERT the
+knob took, or every wait silently becomes shorter than the thing it is
+waiting for and the tool fails looking like the feature is broken; and
+any negative check ("no dialog appears") must wait a MULTIPLE of the
+timeout, so shrinking it cannot quietly weaken the proof. It is
+deliberately not a registered setting -- it has no user-facing meaning,
+and a persisted value would change how the desktop treats a slow app on
+every later boot.
 
 `gui spawn` is the ONLY way a test starts a client now -- since M41's
 stage 0 there is no kernel-space Terminal to type `run <name>` at, and

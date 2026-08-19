@@ -43,7 +43,30 @@ ORDER = [
     ("gui.md",      "GUI: window manager, compositor & widgets"),
     ("shell.md",    "Shell, apps & console"),
     ("build.md",    "Build, versioning & project docs"),
+    ("workflow.md", "Workflow, testing & tooling"),
 ]
+
+
+def check_order_covers_everything():
+    """Every docs/decisions/*.md must appear in ORDER.
+
+    ORDER is a hand-kept list, which is the shape this generator exists
+    to abolish everywhere else -- so at minimum it has to notice when it
+    has gone stale. It had: `workflow.md` was named in CLAUDE.md as one
+    of the areas, was absent from here, and a file added under that name
+    was indexed by nothing while `check_docs.py` still reported the
+    index as current. An entry nobody can find is the exact failure the
+    index exists to prevent.
+    """
+    listed = {name for name, _ in ORDER}
+    on_disk = {f for f in os.listdir(DIR) if f.endswith(".md")}
+    missing = sorted(on_disk - listed)
+    if missing:
+        raise SystemExit(
+            "gen_decisions_index: docs/decisions/ has file(s) ORDER does not "
+            "name: " + ", ".join(missing) +
+            "\n  Add each to ORDER with the heading it should appear under, "
+            "or its entries are indexed by nothing.")
 
 
 def anchor(title):
@@ -92,6 +115,7 @@ def current_preamble():
 
 
 def main():
+    check_order_covers_everything()
     want = current_preamble() + build()
     check = "--check" in sys.argv
     with open(INDEX) as f:

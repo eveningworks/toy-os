@@ -222,11 +222,25 @@ void wm_request_close(int idx);
 // --- client liveness (apps/wm/wm_client.c) ---------------------------
 //
 // How long an unanswered ping means "not responding". At the PIT's
-// 100Hz this is 3 seconds -- long enough that an app doing a slow disk
-// read is not slandered, short enough that a user who has just pressed
-// Alt+F4 is not left wondering. Windows uses 5s before ghosting a
-// window; KDE's is comparable.
-#define WM_PING_TIMEOUT_TICKS 300
+// 100Hz the default is 3 seconds -- long enough that an app doing a
+// slow disk read is not slandered, short enough that a user who has
+// just pressed Alt+F4 is not left wondering. Windows uses 5s before
+// ghosting a window; KDE's is comparable.
+//
+// A VARIABLE, not a constant, so `gui pingtimeout <ticks>` can move it
+// -- the same shape as `gui watchdog <ms>`, and for a related reason.
+// It is a TEST lever rather than a user setting: tools/forcequit_test.py
+// waits out this timeout about ten times, which made it the slowest tool
+// in the suite and therefore the suite's whole wall-clock floor. The
+// timeout's VALUE is not what that tool is testing (its own docstring
+// already treats raising it as a positive control), so nothing is lost
+// by shortening it there and ~30 seconds is gained.
+//
+// Deliberately not a registered setting: it has no user-facing meaning
+// worth a Control Panel row, and a persisted value would silently
+// change how the desktop treats a slow app on every later boot.
+#define WM_PING_TIMEOUT_DEFAULT 300
+extern int wm_ping_timeout_ticks;
 
 void wm_client_ping(struct window *win);
 

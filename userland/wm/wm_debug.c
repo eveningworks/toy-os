@@ -801,6 +801,7 @@ static void usage(struct dbg_out *o) {
     dbg_out_write(o, "  key <c|0xNN>          synthetic keypress to the focused window\r\n");
     dbg_out_write(o, "  wheel <n>             synthetic wheel notches (+up / -down)\r\n");
     dbg_out_write(o, "  watchdog [<ms>|off]   slow-frame threshold, and how often it fired\r\n");
+    dbg_out_write(o, "  pingtimeout [<ticks>] not-responding timeout (a TEST lever)\r\n");
     dbg_out_write(o, "Injected input enters at the WM loop, below the PS/2 driver -- it tests\r\n");
     dbg_out_write(o, "WM/app logic, not the mouse driver. It is also asynchronous: the events\r\n");
     dbg_out_write(o, "drain one per frame, so allow ~100ms before reading the result back.\r\n");
@@ -839,6 +840,25 @@ int wm_debug_dispatch_out(char *line, struct dbg_out *o) {
                      wm_damage_verify_enabled() ? "on" : "off");
         return 1;
     }
+    // The not-responding ping timeout. A TEST lever, not a setting --
+    // see wm_internal.h. Reports the value either way, so a tool can
+    // assert it actually took rather than assuming.
+    if (k_strcmp(sub, "pingtimeout") == 0) {
+        char *arg = next_tok(&p);
+        if (arg) {
+            int ticks;
+            if (parse_int(arg, &ticks) && ticks > 0) {
+                wm_ping_timeout_ticks = ticks;
+            } else {
+                dbg_out_write(o, "usage: gui pingtimeout [<ticks>]\r\n");
+                return 1;
+            }
+        }
+        dbg_out_printf(o, "pingtimeout: %d ticks (%d ms at 100Hz)\r\n",
+                       wm_ping_timeout_ticks, wm_ping_timeout_ticks * 10);
+        return 1;
+    }
+
     // The slow-frame watchdog (wm_watchdog.c). Reporting the counters
     // matters as much as the threshold: "no SLOW FRAME lines in the log"
     // is only evidence the WM was fast if the watchdog was actually

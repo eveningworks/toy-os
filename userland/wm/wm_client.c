@@ -744,7 +744,9 @@ void wm_client_send_close(struct window *win) {
 // So it asks. WIN_EV_PING carries a serial, the client's event loop
 // echoes it back in WIN_REQ_PONG (uapp does this, so no application
 // contains ping code), and a client that does not answer within
-// WM_PING_TIMEOUT_TICKS is not answering its queue at all. That is
+int wm_ping_timeout_ticks = WM_PING_TIMEOUT_DEFAULT;
+
+// wm_ping_timeout_ticks is not answering its queue at all. That is
 // xdg_shell's ping and ICCCM's _NET_WM_PING, for the same reason.
 //
 // The serial is not decoration: without it a late pong from a previous
@@ -792,7 +794,7 @@ int wm_client_check_liveness(void) {
         struct window *w = &windows[i];
         if (!wm_client_is_client_window(w)) continue;
         if (!w->ping_serial) continue;
-        if (now - w->ping_sent_tick < WM_PING_TIMEOUT_TICKS) continue;
+        if (now - w->ping_sent_tick < (uint64_t)wm_ping_timeout_ticks) continue;
 
         if (!w->not_responding) {
             w->not_responding = 1;

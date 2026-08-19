@@ -659,3 +659,59 @@ in a tracked directory (`data/...`) and is staged by the Makefile's
 `seed` target. **Generalise it: when a feature has a fallback, the
 fallback will hide the feature's absence** -- which is the same trap as
 the next bullet, arriving from a direction the test could not see.
+
+## 2026-08-19: the shell reaches ring 3, and one editor serves three front ends
+
+Where the project stands after it, so a session does not re-derive it:
+
+- **A `text` boot reaches a RING-3 prompt.** `/bin/tosh` is a service
+  (`data/etc/services.d/tosh`, `Target=text`, `Restart=always`), so init
+  starts it as systemd starts a getty. `apps/shell.c` STANDS DOWN on
+  that target -- no prompt, no keys -- and stays reachable as `sh <cmd>`
+  over the serial debug console, which is how the whole suite drives it.
+- **There is ONE line editor.** `kernel/lib/klineedit.c` is compiled a
+  second time into `libuapp.a`, so `/bin/tosh`, the ring-3 GUI Terminal
+  and the physical shell share the keymap. Both ring-3 front ends
+  previously carried their own append-only loop.
+
+**THE DESIGN CALL WORTH CARRYING: decide from a fact you already have,
+not from a race you can narrow.** The obvious way to stop two shells
+fighting for the keyboard was the mechanism already in the kernel --
+`keyboard_claim_console()`, taken by the first fd-0 read. But that claim
+lands about ten milliseconds after init spawns tosh, and `apps_start()`
+runs inside the same window, so a REPL started there draws a banner onto
+a console about to belong to somebody else and eats whatever is typed
+meanwhile. The boot TARGET is known before init is even spawned, so
+deciding from it REMOVES the race rather than narrowing it.
+
+The honest follow-up, because the control was run: disabling that gate
+reddens only the log check, not the behavioural probe -- the claim really
+does cover the steady state. So the gate's value had to be stated as the
+boot WINDOW, not as "two shells would fight". **Run the control even when
+the change is obviously right; it tells you what your test actually
+covers.**
+
+**A FILE MAY ALREADY BE FREESTANDING -- CHECK BEFORE ASSUMING A PORT.**
+`klineedit.c` needed no source change at all: it includes only
+`klineedit.h`, `string.h` and `keyboard.h` and touches no kernel state.
+The work was one Makefile line. Nobody had looked. The same is worth
+checking for anything the roadmap describes as needing a "port".
+
+**AND THE TESTING SHAPE FOR SHARED SOURCE: assert the SECOND BUILD, not
+the logic.** The existing KTESTs would pass whether or not ring 3 could
+link a byte of the editor -- the gap `libc_test.c` was written into. So
+the cases became DATA (`kernel/include/api/klineedit_cases.h`), run by a
+KTEST in ring 0 and by a `/tests` ELF in ring 3; adding a case gives both
+rings an assertion. State plainly what it does not establish: a genuine
+two-build divergence cannot be manufactured cheaply, so what is asserted
+is that the two builds agree today and are compared on every run.
+
+One mechanical note that generalises to any ring-3 renderer: **ring 3
+has no cursor addressing.** `vga_cursor_move()` is a non-destructive seek
+the kernel front end uses and a process cannot reach -- and should not
+get a syscall for, since only the framebuffer is privileged, not drawing.
+What fd 1 carries is `\r`, so the console front end repaints in two
+passes (line plus covering spaces, back to column 0, then the prefix).
+Its limit is real and belongs in a comment rather than hidden: `\r`
+returns to the start of the ROW, so a line wider than the console
+repaints wrongly. That is the TTY layer's problem, not `vga_putc()`'s.

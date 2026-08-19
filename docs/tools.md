@@ -648,8 +648,9 @@ manual steps to be worth automating:
   are the parts that matter: several tools write files, and every one
   of them expects an empty desktop -- a tool inheriting the previous
   one's state fails in ways that look exactly like real widget bugs.
-  It runs **four tools at a time** (`-j N` to change, `-j1` for the old
-  serial behaviour -- that took 107s), each in its own **VM slot**:
+  It runs **half the host's cores' worth of tools at a time**, capped at
+  8 (`-j N` to change, `-j1` for the old serial behaviour -- that took
+  107s), each in its own **VM slot**:
   `vm.py --instance N` derives that VM's pidfile, serial socket, QMP
   port and VNC display from one number, and the slot is LEASED for as
   long as the VM lives rather than derived from the tool's position in
@@ -666,6 +667,21 @@ manual steps to be worth automating:
   `gfxdemo` failed two checks with five guests up and passed 23/23
   alone). Slot 0 is the plain
   `.vm.pid`/`.vm.serial`/4445 every existing caller assumes.
+  **WHERE THE WALL-CLOCK TIME ACTUALLY GOES, measured rather than
+  assumed, because the obvious answers were both wrong.** A full run is
+  ~425 tool-seconds across 24 tools, so the wall clock is the SLOWEST
+  SINGLE TOOL, not the total: at `-j4` it was 76s and at `-j8` 72s,
+  because both are pinned by the same one tool. **KVM (`--kvm`) buys
+  almost nothing either** -- 64s -- since what the slow tools spend
+  their time on is WAITING for real timeouts, which no amount of guest
+  CPU shortens. The lever that worked was cutting the floor itself:
+  `forcequit_test.py` waits out the WM's not-responding timeout about
+  ten times, so shortening that timeout for its run (`gui pingtimeout`)
+  took it from 72s to 34s and the whole suite from 76s to 61s. The next
+  floor is `notepad` at 42s. The general lesson is worth more than the
+  seconds: **on a fan-out like this, look at the maximum, never the
+  sum** -- parallelism and faster guests both act on the sum.
+
   `damage_sweep.py` is deliberately NOT in it (much slower under
   `gui damage verify on`, and it has its own `--positive-control`
   protocol) -- run that separately.
@@ -695,7 +711,14 @@ manual steps to be worth automating:
   a recorded case of a real bug coming back clean six times before
   reproducing five times running. Scores a run that never printed a
   summary as `error`, not `pass`: a run that measured nothing must not
-  look like a good one. Also the way to check a fix -- and to catch a
+  look like a good one. **IT DOES NOT RESET `disk.img` BETWEEN
+  RUNS, so any rate involving the filesystem is contaminated** -- a
+  KTEST run leaves state behind, so runs 2..N inherit run 1's and the
+  rate climbs for reasons that have nothing to do with the code.
+  Measured: `ktest` reported fs checks failing 2-of-4 that way, and
+  passed 3 of 3 when each run got its own `make clean-disk && make iso`.
+  Until it does that itself, believe only its FIRST run for anything
+  touching storage. Also the way to check a fix -- and to catch a
   fix that starts a DIFFERENT check failing, which is what happened when
   the menubar flake was fixed. **`flake_hunt.py ktest -n N` drives the
   IN-KERNEL suite** the same way, reporting each failure as

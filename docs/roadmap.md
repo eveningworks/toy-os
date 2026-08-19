@@ -609,7 +609,8 @@ were found at all.
 - [ ] `gui icons [--json]` -- desktop icon geometry
 - [ ] Finer `gui drag` interpolation
 - [ ] `klineedit_test.c`'s 12 oversized-frame warnings bury the frame budget's signal in that file
-- [ ] `gfxdemo_test`'s two scene-restore checks fail under heavy parallel load -- 5 guests up, passes alone
+- [x] ~~`gfxdemo_test`'s two scene-restore checks fail under heavy parallel load~~ DONE 2026-08-19 -- it polls for the log line now
+- [ ] `flake_hunt.py` does not reset `disk.img` between runs, so any rate involving the filesystem is contaminated
 - [ ] Per-test timing, so a test that quietly becomes slow is visible
 - [ ] A `ktest -v` that reports each assertion, not just pass/fail
 - [ ] Tests for the boundary this kernel enforces by include path

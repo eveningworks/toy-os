@@ -559,3 +559,96 @@ the reload is skipped when the directory is unchanged and a cached read
 never reaches the drive), and **when reintroducing one bug does not
 reproduce the symptom, the right control is the ORIGINAL TREE** -- build
 the pre-fix commit in a scratch worktree and run the tool against that.
+
+## 2026-08-19: making the GUI suite faster, and why three of the four levers did nothing
+
+**ON A FAN-OUT, THE WALL CLOCK IS THE MAXIMUM, NOT THE SUM. Look at the
+slowest single item before touching parallelism.** `gui_regress.py` runs
+24 tools totalling ~425 tool-seconds. Three levers were tried and
+measured:
+
+| change | wall |
+|---|---|
+| `-j4` (as it was) | 76s |
+| `-j8` on a 16-core box | 72s |
+| `-j8` + KVM (`--kvm`) | 64s |
+| cutting the slowest tool's floor | **61s** |
+
+Raising `-j` bought 4 seconds and KVM another 8, because the suite was
+never CPU-bound: its slow tools sit WAITING on real timeouts, and no
+amount of guest speed shortens a wall-clock wait. `forcequit_test.py`
+alone waits out the WM's 3-second not-responding timeout about ten
+times, which made it a 72s floor under every configuration. Turning that
+timeout down for its run (a `gui pingtimeout` debug command, the same
+shape as the existing `gui watchdog`) took the tool to 34s and the suite
+to 61s.
+
+Two things generalise. **Measure the baseline before believing your own
+impression of it** -- this session opened by asserting the suite took
+"about seven minutes", which was simply wrong; it was 76s, and the
+seven minutes were the session's own polling. And **a constant that only
+a test waits on is a legitimate test lever**: the timeout's VALUE was not
+what `forcequit_test.py` asserts, so shortening it lost no coverage. Say
+so in the code, and have the tool ASSERT the knob took -- otherwise every
+wait silently becomes shorter than the thing it waits for, and the tool
+fails looking like the feature is broken.
+
+## Settled is not the same as UPDATED
+
+`QMPSession.stable_pixels()` returns two identical consecutive reads. It
+does not, and cannot, know whether the app has repainted YET -- two reads
+of a stale frame are identical too. Under parallel load
+`notepad_client_test.py`'s "New clears the editor" sampled the frame from
+BEFORE Ctrl-N was handled and reported that New had cleared nothing.
+
+The fix is not a longer settle. **Wait for something the app SAYS**, then
+capture: Notepad's title returns to `untitled` when New clears the path,
+so poll for that. Same shape fixed `gfxdemo_test.py`, whose failing check
+was a LOG assertion read once after `dbg.settle()` -- settle knows the
+console went quiet, not that this client has handled the click and
+logged. Both tools now poll for the observable and both stopped flaking.
+
+**Reading the failure text matters before theorising**: gfxdemo's failing
+check was `check_log(...)`, not a pixel comparison, so "add
+`stable_pixels`" would have been the wrong fix confidently applied.
+
+## A guard that fires on a transient is worse than no guard
+
+Everything here defaults to QMP port 4445, and two guests sharing it do
+not fail as a port clash -- they fail minutes later as a
+`BrokenPipeError` in whichever tool was mid-command, accusing the
+innocent. `tools/port_guard.py` refuses at launch instead, from the two
+chokepoints `iso_guard.py` already guards.
+
+Its first version refused OUTRIGHT, and immediately turned a clean pair
+of back-to-back suite runs into eighteen "Connection refused" failures:
+a guest that has just been told to stop still holds its socket for a
+moment, so the guard fired on a shutdown. It waits briefly now -- a real
+clash lasts, a shutdown does not.
+
+And the second half of that bug was worse than the first: `gui_regress.py`
+IGNORED `vm.py`'s exit code, so a refused launch was invisible and
+surfaced only as the tool failing to connect. **A launcher's exit code is
+not optional.** Check it and report why, or every launch failure gets
+attributed to whatever ran next.
+
+## Do not add a wait loop for work that is already in the background
+
+`until ! pgrep -f gui_regress; do sleep 10; done` beside a backgrounded
+suite is both redundant (the completion notification is the signal) and
+BROKEN: the waiting shell's own command line contains the pattern, so
+`pgrep -f` matches the waiter and the loop never exits. Four accumulated
+in one session, each reporting a finished suite as still running -- which
+is worse than the leak, since a false "still going" is indistinguishable
+from the real thing. Wait on the ARTIFACT (`until [ -s out.log ]`), which
+cannot match itself.
+
+## A dirty disk.img makes a flake comparison measure nothing
+
+Chasing whether a `win_server` KTEST failure was this session's, the
+comparison against `HEAD` came back WORSE -- 4 runs of 4 failing. The
+failing checks were filesystem ones, i.e. the documented dirty-fixture
+hazard: ~15 ktest runs had accumulated state on `disk.img` without a
+`make clean-disk`. The comparison measured the fixture, not the code.
+**`make clean-disk && make iso` before any flake rate you intend to
+believe**, on BOTH sides of the comparison.

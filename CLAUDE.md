@@ -2155,7 +2155,13 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
 Five standing rules that are cheaper to know than to rediscover:
 
 - **`gui_regress.py` is the standard check** after touching `apps/ui/`,
-  `userland/`, or anything the WM draws -- always with `--logs DIR`.
+  `userland/`, or anything the WM draws -- always with `--logs DIR`. It
+  is ~61s; **its wall clock is the SLOWEST SINGLE TOOL, not the total**
+  (~425 tool-seconds over 24 tools), so raising `-j` and even `--kvm`
+  barely move it -- 76s at `-j4`, 72s at `-j8`, 64s under KVM. What
+  moved it was cutting the floor: the slow tools WAIT on real timeouts,
+  which no amount of guest CPU shortens. On any fan-out here, look at
+  the maximum, never the sum.
 - **`demo_test.py` is ON DEMAND ONLY.** Never add it to `preflight.sh`,
   `gui_regress.py` or CI; it boots its own ISO and the demo is a
   showpiece, not something an ordinary change breaks.
@@ -2180,13 +2186,18 @@ OS, the QMP mechanics, what the emulator does and does not model) and
 detail there, and keep the pointer here to a line.
 
 `docs/decisions.md` -- the INDEX over `docs/decisions/`, which holds the
-answers to "why does toy-os work this way?" split by area: `kernel.md`
-(55 entries), `gui.md` (75), `storage.md` (35), `build.md`, `shell.md`,
-`drivers.md`, `workflow.md`. Add an entry to the file for its area and
-run `tools/gen_decisions_index.py`; the index is GENERATED and
+answers to "why does toy-os work this way?" split by area: `kernel.md`,
+`gui.md`, `storage.md`, `build.md`, `shell.md`, `drivers.md`,
+`workflow.md` (the generated index carries each file's entry count, so
+this does not -- see this file's own rule about pointing at numbers
+somebody else has to keep true). Add an entry to the file for its area
+and run `tools/gen_decisions_index.py`; the index is GENERATED and
 `tools/check_docs.py` fails the build when it is stale, because an index
 kept true by someone remembering is the shape of every convention this
-project has had to delete.
+project has had to delete. **A NEW FILE must be added to that script's
+`ORDER`** -- it refuses to run otherwise, since `workflow.md` was named
+here for a long time while the file did not exist, and creating it
+indexed nothing while every check still reported the index as current.
 
 **Entries are SELF-CONTAINED.** They used to be pointers into a
 changelog that held the real writeup, and when that was deleted the

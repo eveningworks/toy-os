@@ -195,7 +195,23 @@ def run(dbg, qmp, tmp, shot_dir, res):
     # editor, so it drives the accelerator.
     key(dbg, "0x0e")  # Ctrl-N
     dbg.settle()
-    time.sleep(0.5)
+    # WAIT FOR THE APP TO SAY IT ACTED, not for the frame to go quiet.
+    # text_pixels() settles (stable_pixels: two identical consecutive
+    # reads), and settled is not the same as UPDATED -- two reads of a
+    # frame that has not been repainted yet are identical too. So under
+    # load, where Ctrl-N has not been handled by the time the capture
+    # starts, this check sampled the OLD frame and reported that New had
+    # not cleared anything. Measured: it failed here with four other
+    # guests running and passed 19/19 alone.
+    #
+    # New clears g_path, so the title goes back to "untitled" -- an
+    # observable the app owns, unlike a sleep.
+    deadline = time.time() + 8.0
+    while find_window(dbg, "untitled") is None and time.time() < deadline:
+        time.sleep(0.2)
+    res.check("New put the window back to `untitled`",
+              find_window(dbg, "untitled") is not None,
+              "the title never returned to untitled after Ctrl-N")
     cleared = text_pixels(qmp, tmp, "np_cleared.png", box)
     res.check("New clears the editor", cleared != typed)
     blank_ref = cleared

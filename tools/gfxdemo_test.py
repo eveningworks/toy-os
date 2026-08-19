@@ -86,12 +86,44 @@ class Shapes:
         self.dbg.settle()
         return self.events()
 
+    def key_until(self, k, want, timeout=6.0):
+        """key(), waiting for the line the app logs in response. See
+        click_content_until() for why one read is not enough."""
+        got = self.key(k)
+        deadline = time.time() + timeout
+        while not any(want in l for l in got) and time.time() < deadline:
+            time.sleep(0.2)
+            got += self.events()
+        return got
+
     def click_content(self, cx, cy):
         x = self.win["content"]["x"] + cx
         y = self.win["content"]["y"] + cy
         self.dbg.send(f"gui click {x} {y}")
         self.dbg.settle()
         return self.events()
+
+    def click_content_until(self, cx, cy, want, timeout=6.0):
+        """Click, then WAIT for the line the app logs in response.
+
+        One read after dbg.settle() is a poll whose exit condition is
+        weaker than what the caller needs: settle() knows the debug
+        console has gone quiet, not that this client has handled the
+        click and logged. Under parallel load that gap is wide enough to
+        lose the line -- `the 2D / 3D button switches back` failed that
+        way with four other guests running and passed alone, which reads
+        exactly like a broken toggle.
+
+        Accumulates, because events() CLEARS as it reads: a line that
+        arrived in an earlier poll would otherwise be dropped by the
+        next one.
+        """
+        got = self.click_content(cx, cy)
+        deadline = time.time() + timeout
+        while not any(want in l for l in got) and time.time() < deadline:
+            time.sleep(0.2)
+            got += self.events()
+        return got
 
     def park_cursor(self):
         """Get the mouse sprite out of the canvas before sampling pixels.
@@ -209,6 +241,14 @@ class Shapes:
             raise IndexError(f"button {index} of {count}")
         return self.click_content(bx + index * pitch + bw // 2, by + bh // 2)
 
+    def click_button_until(self, index, want, timeout=6.0):
+        """click_button(), waiting for the log line it should produce."""
+        bx, by, bw, bh, pitch, count = self.buttons
+        if index >= count:
+            raise IndexError(f"button {index} of {count}")
+        return self.click_content_until(bx + index * pitch + bw // 2,
+                                        by + bh // 2, want, timeout)
+
     def set_speed(self, target):
         """Walk the speed to `target` with the keyboard, confirming as it
         goes -- the app logs `gfxdemo: speed N` on every change, so this
@@ -259,7 +299,7 @@ def check_cube(d):
     flat_2d = d.canvas_image("scene-2d")
     colors_2d = d.distinct_colors(flat_2d)
 
-    got = d.key(K_S)
+    got = d.key_until(K_S, "gfxdemo: scene 3d")
     d.check_log("pressing S switches to the 3D scene", got, "gfxdemo: scene 3d")
     time.sleep(0.5)
     cube = d.canvas_image("scene-3d")
@@ -281,8 +321,9 @@ def check_cube(d):
     # the two captures may advance the angle. The first draft ran the
     # spin checks in between and failed here for exactly that reason --
     # the assertion was wrong, not the app.
-    got = d.click_button(3)   # "2D / 3D" -- the BUTTON, not the key, so
-                               # both paths into the toggle are covered
+    got = d.click_button_until(3, "gfxdemo: scene 2d")  # the BUTTON, not
+                               # the key, so both paths into the toggle
+                               # are covered
     d.check_log("the 2D / 3D button switches back", got, "gfxdemo: scene 2d")
     time.sleep(0.5)
     back = d.canvas_image("scene-2d-again")
@@ -376,11 +417,11 @@ def run(d):
     # 5. The buttons work, and report through the same log grammar.
     #    Clicked at the centre the APP reported, not at an offset derived
     #    here -- see click_button().
-    got = d.click_button(0)   # "Slower"
+    got = d.click_button_until(0, "gfxdemo: speed 2")   # "Slower"
     d.check_log("the Slower button changes speed", got, "gfxdemo: speed 2")
 
     # 5. It exits cleanly when asked, rather than being killed.
-    got = d.key(K_Q)
+    got = d.key_until(K_Q, "gfxdemo: exiting")
     d.check_log("q exits the app", got, "gfxdemo: exiting")
     time.sleep(0.5)
     d.check("the window is gone after exit", d.dbg.window("Shapes") is None)

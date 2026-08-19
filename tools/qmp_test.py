@@ -135,7 +135,8 @@ import port_guard
 
 
 def launch_qemu_cmd(iso="toy-os.iso", disk="disk.img", serial_log="serial.log",
-                     qmp_port=4445, vnc_display=5, pidfile="qemu.pid"):
+                     qmp_port=4445, vnc_display=5, pidfile="qemu.pid",
+                     kvm=False):
     """Return the shell command to launch toy-os headlessly with QMP + a
     working input head. Run it as a plain foreground shell command --
     `-daemonize` makes QEMU fork/detach/return on its own, so it
@@ -168,9 +169,19 @@ def launch_qemu_cmd(iso="toy-os.iso", disk="disk.img", serial_log="serial.log",
     # unlucky rather than the one that caused it. See tools/port_guard.py.
     port_guard.assert_ports_free(qmp_port, vnc_display)
 
+    # KVM instead of TCG, matching `make run-kvm`'s flags so what a
+    # caller measures is what that target does. OPT-IN, never the
+    # default: every automated test here runs TCG, and the TCG/KVM
+    # difference is load-bearing rather than incidental -- KVM is where
+    # guest MEMORY TYPES and microsecond-wide driver races behave like
+    # hardware, which is exactly why tools/kvm_soak.py exists as a
+    # separate check. A gate quietly switched to KVM would stop covering
+    # the emulated path without anyone deciding to.
+    accel = "-enable-kvm -cpu host " if kvm else ""
+
     drive = (f"-drive file={disk},format=raw,if=ide,discard=unmap " if disk else "")
     return (
-        f"qemu-system-x86_64 -cdrom {iso} "
+        f"qemu-system-x86_64 {accel}-cdrom {iso} "
         # discard=unmap: the guest's ATA TRIM becomes a hole punch in the
         # backing file, so a test that writes and deletes doesn't grow it.
         f"{drive}"

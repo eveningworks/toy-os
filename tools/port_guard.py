@@ -36,6 +36,7 @@ Set TOYOS_ALLOW_PORT_CLASH=1 to bypass it deliberately.
 import os
 import socket
 import sys
+import time
 
 BYPASS_ENV = "TOYOS_ALLOW_PORT_CLASH"
 
@@ -76,10 +77,28 @@ def _owner_hint():
     return running
 
 
-def assert_ports_free(qmp_port, vnc_display=None):
-    """Refuse to launch if either port is taken. Raises SystemExit."""
+def assert_ports_free(qmp_port, vnc_display=None, wait_s=6.0):
+    """Refuse to launch if either port is taken. Raises SystemExit.
+
+    WAITS BRIEFLY FIRST, which is not politeness -- it is correctness.
+    A guest that has just been asked to stop holds its listening socket
+    for a moment while it exits, so two back-to-back runs of
+    gui_regress.py can see the previous run's ports still bound. The
+    first version refused outright there and turned a clean sequential
+    pair of runs into eighteen "Connection refused" failures: a guard
+    that fires on a transient is worse than no guard, because it
+    produces exactly the confusing downstream error it exists to
+    prevent. A real clash lasts; a shutdown does not.
+    """
     if os.environ.get(BYPASS_ENV) == "1":
         return
+
+    deadline = time.time() + wait_s
+    while time.time() < deadline:
+        if port_is_free(qmp_port) and (vnc_display is None
+                                       or port_is_free(5900 + int(vnc_display))):
+            return
+        time.sleep(0.25)
 
     clashes = []
     if not port_is_free(qmp_port):

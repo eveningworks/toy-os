@@ -62,11 +62,27 @@ CLIENT_TITLE = "Ring 3 Client"
 
 ALT_F4 = "gui key 0xa5 alt"
 
-# WM_PING_TIMEOUT_TICKS is 300 at the PIT's 100Hz, i.e. 3s. Waiting
-# rather more than that distinguishes "slower than expected" from "never
-# happens" -- and the negative checks below wait the SAME time, so a
-# dialog that is merely late cannot pass them.
-DIALOG_WAIT_S = 8.0
+# The WM's not-responding timeout, shortened for this run.
+#
+# THIS TOOL WAITS OUT THAT TIMEOUT ABOUT TEN TIMES -- once per dialog it
+# raises, six of them in the repeat loop -- which made it the slowest
+# tool in gui_regress.py and therefore the suite's entire wall-clock
+# floor (72s, against a 462s total across 24 tools running 8 at a time).
+# The timeout's VALUE is not what is under test here; the detection, the
+# dialog and force quit are. So it is turned down to 0.4s over the debug
+# console (`gui pingtimeout`, wm_internal.h) and the waits below scale
+# with it.
+#
+# The negative checks are the reason this cannot simply be tiny: they
+# prove a dialog does NOT appear, and they have to wait longer than a
+# real one would take. They wait a MULTIPLE of the timeout, so shrinking
+# it keeps that relationship intact rather than quietly weakening them.
+PING_TIMEOUT_TICKS = 40          # 0.4s at the PIT's 100Hz
+PING_TIMEOUT_S = PING_TIMEOUT_TICKS / 100.0
+
+# Rather more than the timeout, so "slower than expected" is
+# distinguishable from "never happens".
+DIALOG_WAIT_S = max(2.0, PING_TIMEOUT_S * 6)
 
 CYCLES = 6
 
@@ -199,7 +215,10 @@ def run(dbg, qmp, tmp, res):
     # Tidy up: it has been asked twice now, so a third ask closes it.
     dbg.send(ALT_F4)
     dbg.settle()
-    time.sleep(1.0)
+    for _ in range(40):
+        if not has_window(dbg, CLIENT_TITLE):
+            break
+        time.sleep(0.15)
 
     # --- a WEDGED client ----------------------------------------------
     res.check("the hang-test client spawns", spawn(dbg, HANG_BIN, HANG_TITLE))
@@ -208,14 +227,17 @@ def run(dbg, qmp, tmp, res):
 
     dbg.send("gui key h")   # it stops pumping its event queue, permanently
     dbg.settle()
-    time.sleep(1.0)
+    for _ in range(40):
+        if any("hanging now" in l for l in dbg.logs("hangclient:", clear=True)):
+            break
+        time.sleep(0.15)
 
     # It is hung, but nobody has asked it for anything, so it must NOT
     # interrupt the user. A modal appearing on its own, over whatever
     # they were doing, for a window they never touched, is worse than
     # the hang.
     res.check("a hung app nobody is closing does NOT raise a dialog on its own",
-              not wait_dialog(dbg, 5.0))
+              not wait_dialog(dbg, max(2.0, PING_TIMEOUT_S * 4)))
 
     dbg.send(ALT_F4)
     dbg.settle()
@@ -261,7 +283,10 @@ def run(dbg, qmp, tmp, res):
     # --- Wait ----------------------------------------------------------
     dbg.click(*button(dbg, "Wait"))
     dbg.settle()
-    time.sleep(0.6)
+    for _ in range(40):
+        if not dialog_open(dbg):
+            break
+        time.sleep(0.15)
     res.check("Wait dismisses the dialog and keeps the window",
               not dialog_open(dbg) and has_window(dbg, HANG_TITLE))
 
@@ -277,7 +302,10 @@ def run(dbg, qmp, tmp, res):
     if b:
         dbg.click(*b)
         dbg.settle()
-        time.sleep(1.2)
+        for _ in range(60):
+            if not has_window(dbg, HANG_TITLE):
+                break
+            time.sleep(0.15)
     # `wm_alive` first: a dead desktop reports NO windows, so the window
     # check would otherwise pass vacuously on precisely the failure the
     # next one is about.
@@ -299,7 +327,16 @@ def run(dbg, qmp, tmp, res):
         ok_cycles += 1
         dbg.send("gui key h")
         dbg.settle()
-        time.sleep(0.7)
+        # Wait for the client to SAY it hung, rather than sleeping at it.
+        # The ordering is load-bearing: if 'h' has not landed, the Alt+F4
+        # below closes the window normally and no dialog ever appears, so
+        # a fixed sleep here is both slower than it needs to be and, on a
+        # loaded machine, not long enough.
+        hung_deadline = time.time() + 6.0
+        while time.time() < hung_deadline:
+            if any("hanging now" in l for l in dbg.logs("hangclient:", clear=True)):
+                break
+            time.sleep(0.15)
         dbg.send(ALT_F4)
         dbg.settle()
         if not wait_dialog(dbg):
@@ -309,7 +346,14 @@ def run(dbg, qmp, tmp, res):
             break
         dbg.click(*fq)
         dbg.settle()
-        time.sleep(1.2)
+        # Poll for the window actually going, instead of assuming 1.2s
+        # is enough. Faster in the common case AND a stronger statement:
+        # the next cycle's spawn depends on this one's slot having been
+        # returned, so "the window is gone" is the precondition rather
+        # than an incidental.
+        gone_deadline = time.time() + 8.0
+        while has_window(dbg, HANG_TITLE) and time.time() < gone_deadline:
+            time.sleep(0.15)
 
     res.check(f"force quit is repeatable ({CYCLES} spawn/kill cycles)",
               ok_cycles == CYCLES,
@@ -335,6 +379,15 @@ def main():
     res = Result()
     with DebugConsole(args.sock) as dbg:
         dbg.settle()
+        # Shorten the WM's not-responding timeout for this run, and
+        # ASSERT it took rather than assuming: if the command were
+        # missing or refused, every wait below would silently be shorter
+        # than the timeout it is waiting for, and the whole tool would
+        # fail in a way that looks like the feature being broken.
+        got = dbg.send(f"gui pingtimeout {PING_TIMEOUT_TICKS}")
+        res.check("the ping timeout was shortened for this run",
+                  f"{PING_TIMEOUT_TICKS} ticks" in (got or ""),
+                  f"`gui pingtimeout` said {got!r}")
         run(dbg, qmp, args.tmp, res)
 
     n_ok, n_bad = len(res.passes), len(res.fails)

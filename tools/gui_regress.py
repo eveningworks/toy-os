@@ -81,9 +81,19 @@ REPO = os.path.dirname(HERE)
 
 # How many tools run at once by default. Each one is a QEMU with 256 MB
 # of guest RAM under TCG, so this is bounded by host cores far more than
-# by memory; four keeps a 7-tool run to two rounds while leaving the
-# machine usable. `-j1` restores the original serial behaviour exactly.
-DEFAULT_JOBS = 4
+# by memory. `-j1` restores the original serial behaviour exactly.
+#
+# DERIVED from the host rather than fixed at 4: the tool-seconds in a
+# full run total roughly 460s, so the ceiling is the slowest single tool
+# (forcequit, ~71s) and everything between 4 and that is just how many
+# cores are free. Half the cores, capped at 8 -- a TCG guest is a busy
+# CPU thread plus its I/O, so oversubscribing turns wall-clock into
+# settle flakes rather than speed, which is measurable: at five
+# concurrent guests both gfxdemo and notepad failed comparisons they
+# pass alone. Those two now wait on an OBSERVABLE instead of a sleep,
+# which is what makes raising this safe at all -- raise it further only
+# after checking that the tools still wait for something the app says.
+DEFAULT_JOBS = min(8, max(2, (os.cpu_count() or 4) // 2))
 
 # In rough dependency order: the widget toolkit first, so a toolkit
 # regression is reported before the apps built on it start failing for
@@ -185,7 +195,7 @@ def pick_order(picked):
     return sorted(picked, key=lambda t: -COST_S.get(t[0], COST_UNKNOWN_S))
 
 
-def run_one(name, script, disk_src, timeout, keep_logs, slot):
+def run_one(name, script, disk_src, timeout, keep_logs, slot, kvm=False):
     """Run one tool against its own image, in VM slot `slot`.
 
     Everything that could collide between two concurrently running
@@ -220,10 +230,29 @@ def run_one(name, script, disk_src, timeout, keep_logs, slot):
     subprocess.run(["cp", "--reflink=auto", "--sparse=always", disk_src, img],
                    cwd=REPO, check=True)
 
+    # KVM is a per-run choice, passed straight to vm.py. Opt-in, never
+    # the default -- see launch_qemu_cmd()'s comment on why a gate
+    # quietly switched to KVM stops covering the emulated path.
+    kvm_args = ["--kvm"] if kvm else []
+
     started = time.time()
     try:
-        subprocess.run([sys.executable, vm] + inst + ["--disk", img, "start"],
-                       cwd=REPO, capture_output=True, timeout=120)
+        # CHECK vm.py's exit code. It used to be ignored, so a guest
+        # that never started -- a refused port, a stale ISO, a QEMU
+        # that died -- showed up only as the TOOL failing with
+        # "could not connect to QMP", which says nothing about why and
+        # points at the tool rather than at the launch. Eighteen tools
+        # reported that at once before this existed, and the actual
+        # reason was one line on vm.py's stderr that nobody read.
+        boot = subprocess.run([sys.executable, vm] + inst + kvm_args +
+                              ["--disk", img, "start"],
+                              cwd=REPO, capture_output=True, text=True,
+                              timeout=120)
+        if boot.returncode != 0:
+            why = (boot.stderr or boot.stdout or "").strip().splitlines()
+            return ("FAIL", time.time() - started,
+                    "the guest never started: "
+                    + (why[0] if why else f"vm.py exited {boot.returncode}"))
         r = subprocess.run([sys.executable, tool,
                             "--sock", sock, "--qmp-port", str(qmp_port)],
                            cwd=REPO, capture_output=True, text=True,
@@ -282,6 +311,12 @@ def main():
     ap.add_argument("--logs", metavar="DIR",
                     help="write each tool's full output to DIR/<name>.log")
     ap.add_argument("--list", action="store_true", help="list the tools and exit")
+    ap.add_argument("--kvm", action="store_true",
+                    help="run the guests under KVM instead of TCG -- much "
+                         "faster, and deliberately NOT the default: every "
+                         "automated test here runs TCG, and the difference is "
+                         "load-bearing (see tools/kvm_soak.py). Use it to "
+                         "iterate, not to judge a release.")
     ap.add_argument("-j", "--jobs", type=int, default=DEFAULT_JOBS, metavar="N",
                     help=f"run N tools concurrently, each in its own VM slot "
                          f"(default: {DEFAULT_JOBS}). -j1 is the old serial "
@@ -336,7 +371,7 @@ def main():
         slot = free_slots.get()
         try:
             status, secs, summary = run_one(name, script, disk, args.timeout,
-                                            args.logs, slot)
+                                            args.logs, slot, args.kvm)
         finally:
             free_slots.put(slot)
         return (name, what, slot, status, secs, summary)
