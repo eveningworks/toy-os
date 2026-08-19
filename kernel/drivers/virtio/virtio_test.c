@@ -108,3 +108,109 @@ KTEST("virtio", "a device of the wrong type is declined") {
     // A NULL out pointer is refused rather than written through.
     KTEST_ASSERT_EQ(virtio_pci_find(VIRTIO_ID_RNG, 0, 0), 0);
 }
+
+// --- the virtqueue, end to end ---------------------------------------
+//
+// virtio-rng is the smallest possible consumer of a virtqueue: one
+// queue, put a device-WRITABLE buffer in, get entropy back. That makes
+// it the right thing to prove the ring with -- if this passes, then
+// descriptor chaining, the available ring, the doorbell address
+// arithmetic, DMA into guest memory and the used ring all work. A disk
+// driver on top is then payload rather than mechanism.
+
+// The device DMAs into this, so it must live at a physical address --
+// which for a kernel-image static below 4 GiB is its own address, since
+// this kernel identity-maps that range. Static rather than on the stack
+// because the kernel stack has a 1 KiB frame budget and the device may
+// still be writing after a timeout.
+static uint8_t g_entropy[64];
+
+KTEST("virtio", "a buffer round-trips through a virtqueue") {
+    if (!virtio_hw_present()) KTEST_SKIP("no virtio device on this machine");
+
+    struct virtio_device d = {0};
+    d.name = "virtio-rng";
+    KTEST_ASSERT(virtio_pci_find(VIRTIO_ID_RNG, 0, &d));
+    KTEST_ASSERT(virtio_begin(&d, 0));
+
+    struct virtqueue vq;
+    KTEST_ASSERT(virtqueue_setup(&d, 0, &vq));
+    KTEST_ASSERT(vq.size > 0);
+    KTEST_ASSERT(vq.notify != 0);
+
+    // The spec forbids using a queue before DRIVER_OK.
+    virtio_driver_ok(&d);
+
+    // A fresh pool: every descriptor free.
+    KTEST_ASSERT_EQ(virtqueue_free_count(&vq), vq.size);
+
+    // Fill with a known pattern so "the device wrote here" is
+    // distinguishable from "this memory happened to be zero". A device
+    // that writes nothing at all leaves the pattern intact.
+    for (unsigned i = 0; i < sizeof g_entropy; i++) g_entropy[i] = 0xA5;
+
+    struct virtio_sg in = { .phys = (uint64_t)(uintptr_t)g_entropy, .len = sizeof g_entropy };
+    int head = virtqueue_submit(&vq, 0, 0, &in, 1);
+    KTEST_ASSERT(head >= 0);
+    KTEST_ASSERT_EQ(virtqueue_free_count(&vq), vq.size - 1);
+
+    virtqueue_kick(&vq);
+
+    uint32_t len = 0;
+    KTEST_ASSERT(virtqueue_poll(&vq, head, &len));
+    KTEST_ASSERT(len > 0);
+    KTEST_ASSERT(len <= sizeof g_entropy);
+
+    // The device really wrote: the pattern is gone. (Entropy could in
+    // principle produce 0xA5 bytes, but not all of them -- so this asks
+    // whether ANY byte in what it claims to have written changed.)
+    int changed = 0;
+    for (uint32_t i = 0; i < len; i++) if (g_entropy[i] != 0xA5) changed = 1;
+    KTEST_ASSERT(changed);
+
+    // The chain came back to the pool. A chain that is never returned
+    // leaks silently and only kills the driver much later.
+    KTEST_ASSERT_EQ(virtqueue_free_count(&vq), vq.size);
+
+    virtqueue_teardown(&vq);
+    *(volatile uint8_t *)(d.common + VIRTIO_COMMON_STATUS) = 0;  // leave it reset
+}
+
+// The free-descriptor pool must BALANCE across many requests, not just
+// one. This is the check that catches a chain never returned -- which
+// otherwise shows up as the driver dying after a few hundred requests,
+// hours into a session, with nothing pointing at the cause.
+KTEST("virtio", "the descriptor pool balances across many transfers") {
+    if (!virtio_hw_present()) KTEST_SKIP("no virtio device on this machine");
+
+    struct virtio_device d = {0};
+    d.name = "virtio-rng";
+    KTEST_ASSERT(virtio_pci_find(VIRTIO_ID_RNG, 0, &d));
+    KTEST_ASSERT(virtio_begin(&d, 0));
+
+    struct virtqueue vq;
+    KTEST_ASSERT(virtqueue_setup(&d, 0, &vq));
+    virtio_driver_ok(&d);
+
+    uint16_t start_free = virtqueue_free_count(&vq);
+    KTEST_ASSERT_EQ(start_free, vq.size);
+
+    // More iterations than the queue is deep would be better still, but
+    // the pool is 256 and each request takes one descriptor -- 16 is
+    // enough to catch a leak of one per request while keeping the test
+    // quick, and the balance assertion is exact rather than approximate.
+    for (int i = 0; i < 16; i++) {
+        struct virtio_sg in = { .phys = (uint64_t)(uintptr_t)g_entropy, .len = 8 };
+        int head = virtqueue_submit(&vq, 0, 0, &in, 1);
+        KTEST_ASSERT(head >= 0);
+        virtqueue_kick(&vq);
+        uint32_t len = 0;
+        KTEST_ASSERT(virtqueue_poll(&vq, head, &len));
+    }
+
+    KTEST_ASSERT_EQ(virtqueue_free_count(&vq), start_free);
+    KTEST_ASSERT_EQ(virtqueue_lost_chains(), 0);
+
+    virtqueue_teardown(&vq);
+    *(volatile uint8_t *)(d.common + VIRTIO_COMMON_STATUS) = 0;
+}

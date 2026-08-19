@@ -214,4 +214,73 @@ uint16_t virtio_cfg_read16(const struct virtio_device *d, uint32_t off);
 uint32_t virtio_cfg_read32(const struct virtio_device *d, uint32_t off);
 uint64_t virtio_cfg_read64(const struct virtio_device *d, uint32_t off);
 
+
+// --- virtqueues -------------------------------------------------------
+
+// The largest queue this driver will use. Modern virtio explicitly lets
+// a driver SHRINK a queue by writing a smaller size back, so a device
+// offering more is clamped rather than refused. QEMU's default is 256,
+// so this never fires today -- what it buys is a bounded allocation
+// (3 frames) instead of "whatever the device asked for".
+#define VIRTQ_MAX_SIZE 256
+
+struct virtqueue {
+    struct virtio_device *vdev;
+    uint16_t index;
+    uint16_t size;
+
+    volatile struct vring_desc  *desc;
+    volatile struct vring_avail *avail;
+    volatile struct vring_used  *used;
+    volatile uint16_t *notify;   // precomputed doorbell
+
+    uint64_t ring_phys;          // pmm_alloc_contiguous() base
+    uint32_t ring_frames;
+
+    uint16_t free_head;          // head of the free-descriptor list
+    uint16_t num_free;
+    uint16_t avail_shadow;       // our copy of avail->idx
+    uint16_t last_used;          // our copy of used->idx
+};
+
+// One buffer in a request. `phys` must be a physical address the device
+// can reach; below 4 GiB that is the same as the kernel virtual address,
+// since this kernel identity-maps that range.
+struct virtio_sg {
+    uint64_t phys;
+    uint32_t len;
+};
+
+// Allocates queue `index`'s rings and tells the device where they are.
+// Returns 0 if the device reports queue size 0 (no such queue) or the
+// contiguous allocation fails.
+int virtqueue_setup(struct virtio_device *d, uint16_t index, struct virtqueue *vq);
+void virtqueue_teardown(struct virtqueue *vq);
+
+// Chains n_out device-READABLE buffers then n_in device-WRITABLE ones
+// into one descriptor chain and publishes it. Returns the chain's head
+// descriptor index, or -1 when there are not enough free descriptors.
+// Does NOT notify the device -- call virtqueue_kick().
+int  virtqueue_submit(struct virtqueue *vq,
+                      const struct virtio_sg *out, int n_out,
+                      const struct virtio_sg *in,  int n_in);
+
+// Rings the doorbell for whatever has been submitted.
+void virtqueue_kick(struct virtqueue *vq);
+
+// Spins until the chain headed by `head` is retired. 1 on completion
+// (*used_len, when non-NULL, gets the byte count the DEVICE reported),
+// 0 on timeout -- after which the chain's descriptors are deliberately
+// NOT reclaimed; see virtqueue.c.
+int  virtqueue_poll(struct virtqueue *vq, int head, uint32_t *used_len);
+
+// Free descriptors currently available. Exported so a test can assert
+// the pool BALANCES across many transfers -- a chain that is never
+// returned leaks silently and only kills the driver hours later.
+uint16_t virtqueue_free_count(const struct virtqueue *vq);
+
+// Chains abandoned by a timeout, cumulative. Nonzero means the device
+// stopped answering at some point and the queue is running down.
+uint32_t virtqueue_lost_chains(void);
+
 #endif
