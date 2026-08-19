@@ -37,7 +37,7 @@ in check_layout.py changes with it.)
 
 | Path | Holds | Created by | Status |
 |---|---|---|---|
-| `/bin` | Real user-facing programs a person runs by name (`ls`, `ps`, `lspci`, `lscpu`, `hello`), plus `init` — pid 1, spawned by the kernel rather than by a person | build | present |
+| `/bin` | Real user-facing programs a person runs by name (`ls`, `ps`, `less`, `lspci`, `lscpu`, `hello`, `tosh`), plus `init` — pid 1, spawned by the kernel rather than by a person | build | present |
 | `/bin/wm` | Container only -- holds the windowed apps, split by class | build | present |
 | `/bin/wm/system` | The desktop's own (`about`) | build | present |
 | `/bin/wm/apps` | Windowed applications (`calculator`, `notepad`, `uterm`) | build | present |

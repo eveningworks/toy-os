@@ -219,6 +219,11 @@ outcome, not the decision.
 - TFS3's two funnels and six direct `ata_*` calls go through it.
 - **No behaviour change**: ATA is the only device, registered at boot,
   and `fs_switch_test.py` plus the TFS3 KTESTs must pass untouched.
+  (True when this stage was written and no longer: `block.h` has three
+  implementations now -- ATA, a RAM image, and virtio-blk, which is the
+  PREFERRED disk when one is attached. The indirection this stage
+  introduced is exactly what made that a new file rather than a
+  rewrite, which is the outcome it was arguing for.)
 
 **Proven by:** the existing filesystem suite, unchanged. This stage is
 pure indirection, so anything that goes red is a mistake in it.

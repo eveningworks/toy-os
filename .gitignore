@@ -98,3 +98,10 @@ ktest_qemu.log
 
 # tools/qemu_matrix.py's scratch: copied disk images and QEMU logs.
 .qemu_matrix/
+
+# tools/virtio_boot_test.py's working image and log (it copies disk.img
+# rather than writing to it, and the copy is disposable), and the second
+# disk image CI's virtio job makes.
+virtio_boot.img
+virtio_boot_qemu.log
+ci-virtio.img

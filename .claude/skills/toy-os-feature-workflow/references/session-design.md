@@ -865,3 +865,64 @@ is the obvious way to make a shell useful before `/bin` exists. **When a
 program gains a second implementation for bootstrapping reasons, that is
 a debt with a name** -- it is on the roadmap now rather than waiting to
 surface as the two disagreeing about a flag.
+
+## 2026-08-19: a virtio stack, and CI stopped running on every push
+
+Where the project stands after it, so a session does not re-derive it:
+
+- **There is a virtio stack, and virtio-blk is the PREFERRED disk.**
+  `kernel/drivers/virtio/` holds the transport (`virtio_pci.c` -- PCI
+  capability walk into MMIO windows, feature negotiation) and the ring
+  (`virtqueue.c`); `virtio_blk.c` is the first device on top, adapted
+  into the existing `block_device` registry by
+  `kernel/drivers/block/block_virtio.c`. ATA is the legacy path and
+  `novirtio` on the boot line forces it, which is what keeps it
+  reachable and therefore tested.
+- **The core is orthogonal to the class registries.** There is no
+  "virtio registry": virtio-blk plugs into `block_device` exactly as
+  ATA does, and a later virtio-gpu plugs into `display_driver` beside
+  vmsvga. virtio-net is the one that will need something new, because
+  nothing here describes a NIC yet.
+- **Modern transport only** (virtio 1.x), refused in one place if the
+  device offers no `VIRTIO_F_VERSION_1`. But note QEMU's default is a
+  TRANSITIONAL device (`1af4:1001`, not `1af4:1042`), whose type lives
+  in the PCI *subsystem* id -- a driver matching only `0x1040 + type`
+  finds nothing on the most obvious command line anyone types.
+- **Fault injection moved to the BLOCK LAYER**
+  (`fault_should_fail_block_read/write()`), because four filesystem
+  error-path KTESTs were armed against the ATA-specific injector and
+  silently stopped testing anything the moment the filesystem was not
+  on ATA. The ATA pair stays for ATA's write-back cache, which sits
+  below the block layer.
+- **`SYS_CONSOLE_SIZE` exists** and `/bin/less` is the first caller. It
+  reads keys through `SYS_READ_KEY` rather than fd 0, which is what
+  makes `cmd | less` possible at all.
+- **`make run` is one recipe with variables**, not twelve copies:
+  `make run KVM=1 VIRTIO=1 VGA=vmware`. Do not add a target for a new
+  combination.
+- **`docs/bugs.md` exists**, split out of the roadmap. A fixed bug is
+  DELETED from it, not struck through.
+- **GITHUB CI NO LONGER RUNS ON EVERY PUSH** -- release tags and
+  `gh workflow run build.yml` only. The half worth keeping, a second
+  QEMU, is `tools/qemu_matrix.py` (6.2/7.2/8.2 in Docker, ~15s per
+  version), which runs at releases and on request.
+
+**THE DESIGN LESSON, which generalises past virtio: A BOUND THAT CAN
+LIE IS WORSE THAN AN APPROXIMATE ONE.** `virtqueue_poll()` took three
+attempts. A fixed spin (~12 ms) that the code presented as 5 s, because
+`pit_ticks()` cannot advance with interrupts off and interrupts are off
+for most of the test suite and every syscall. Then a
+`clocksource_now_ns()` deadline, which is correct for the TSC and wrong
+for the PIT -- whose counter wraps every ~55 ms and needs the tick --
+so CI reported "timed out after 927725008 us and 454 poll(s)", 927
+seconds across 454 polls. Finally a poll COUNT, which is monotonic and
+cannot lie, and is merely approximate on a fast or slow machine. ATA's
+`ATA_POLL_LIMIT` had the identical defect and is why it failed the same
+way; one root cause, two transports.
+
+The corollary, which cost most of the day: **a timeout must abandon
+work safely.** On a timeout the chain's descriptors are deliberately
+LEAKED (the device may still be writing to them), but a late completion
+of such a chain must be RECLAIMED and the poll must keep looking.
+Consuming it and returning an error desynced the used ring
+permanently -- one timeout poisoned every request after it.
