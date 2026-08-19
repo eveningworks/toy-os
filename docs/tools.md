@@ -33,8 +33,11 @@ manual steps to be worth automating:
   runner has). Nothing is BUILT in the container: the ISO comes from
   the host's `make iso` and is mounted read-only, so what runs is
   byte-for-byte a normal build and there is no second toolchain to
-  drift. Reach for it before a driver change lands, and after any CI
-  failure that will not reproduce locally.
+  drift. **15 s per version** on a cached image (69 MB each), so ~45 s
+  for all three -- cheap enough to run whenever "could this behave
+  differently on another QEMU?" has a plausible yes: a driver, a poll
+  loop, a timeout, a clocksource, DMA. Deliberately NOT part of
+  `preflight.sh`, which must not start requiring Docker.
   **It exists because a whole class of bug is invisible on one QEMU.**
   A virtio-blk defect -- `virtqueue_poll()` spending a ~12 ms budget it
   believed was 5 s, then letting late completions desync the used ring

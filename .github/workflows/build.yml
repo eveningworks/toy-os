@@ -1,21 +1,42 @@
 name: build
 
-# Catches a build break (or a boot regression) automatically on every
-# push/PR, independent of whether a Claude session or a human remembered
-# to verify locally first -- see CLAUDE.md's "Working in the cloud
-# sandbox" section for why local verification has historically been a
-# manual, session-by-session thing up to this point. This is deliberately
-# narrow in scope: build + boot smoke test, not the full QMP GUI-testing
-# dance (tools/qmp_test.py) -- that needs a real display head / VNC and
-# is meant for interactive-ish verification of a specific GUI change, not
-# a fast per-push gate. See tools/boot_smoke_test.py's own docstring for
-# that division.
+# THIS NO LONGER RUNS ON EVERY PUSH, and that is deliberate.
+#
+# What CI is uniquely good for here is a CLEAN-CHECKOUT build on a
+# machine that is not the developer's -- it catches "works because of an
+# untracked file, a stale object, or something only installed locally",
+# which nothing run on the dev machine can. It found a real driver bug
+# on 2026-08-19 for exactly that reason: the runner has QEMU 8.2.2
+# against 11.1 locally, and the host decides which clocksource the
+# kernel picks.
+#
+# What it was BAD at was being a per-push gate. Runs cost ~90 s at best,
+# and two in one afternoon went red for reasons that had nothing to do
+# with this repo -- one with `apt-get install` timing out after 8
+# minutes. A gate that cries wolf gets ignored, and then it is worse
+# than no gate.
+#
+# So the second QEMU moved local and fast (tools/qemu_matrix.py, which
+# runs the suite against 6.2/7.2/8.2 in Docker), and what stays here is
+# the part that genuinely needs somebody else's machine:
+#
+#   - a RELEASE TAG is verified from a clean clone before ISOs ship
+#   - `gh workflow run build.yml` runs the whole pipeline on demand
+#
+# Ordinary pushes are covered by tools/preflight.sh locally.
+#
+# Deliberately narrow in scope regardless: build + boot smoke test +
+# the kernel/userland suites, not the QMP GUI-testing dance
+# (tools/qmp_test.py), which needs a display head and is for
+# interactive verification of a specific GUI change.
 
 on:
+  # A release tag: the one moment correctness really matters, and the
+  # one build nobody should cut from a dirty working tree.
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    tags: ['v*']
+  # On demand -- and note this exists, because six pushes were spent
+  # iterating on a CI failure before somebody noticed it was here.
   workflow_dispatch: {}
 
 jobs:

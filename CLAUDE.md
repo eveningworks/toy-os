@@ -2320,6 +2320,27 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
 
 Five standing rules that are cheaper to know than to rediscover:
 
+- **`qemu_matrix.py` is the standard check after touching a DRIVER, a
+  WAIT, or anything timing-dependent** -- `kernel/drivers/`, a poll
+  loop, a timeout, a clocksource, DMA. **15 seconds per version** on a
+  cached image (69 MB each; the first run per version pulls a base),
+  so ~45s for all three. Not per build: most changes cannot depend on
+  the host's QEMU, and `preflight.sh` stays the per-change gate --
+  which also must not start requiring Docker.
+  **The bar for "run it" is: could this behave differently on a
+  different QEMU or a different host CPU?** If yes, run it, because the
+  local QEMU answers only for itself. Also run it when a failure will
+  not reproduce locally, and before cutting a release tag.
+- **GITHUB CI NO LONGER RUNS ON EVERY PUSH** (2026-08-19). It runs on a
+  **release tag** and on demand (`gh workflow run build.yml`). What it
+  is uniquely good for is a CLEAN-CHECKOUT build on somebody else's
+  machine -- "works because of an untracked file, a stale object, or
+  something only installed locally" is invisible to any local run. What
+  it was bad at was being a per-push gate: ~90 s at best, and red for
+  reasons that were not this repo's (one run died with `apt-get
+  install` timing out after 8 minutes). A gate that cries wolf gets
+  ignored, which is worse than no gate. The half worth keeping -- a
+  second QEMU -- is `qemu_matrix.py` now.
 - **`gui_regress.py` is the standard check** after touching `apps/ui/`,
   `userland/`, or anything the WM draws -- always with `--logs DIR`. It
   is ~61s; **its wall clock is the SLOWEST SINGLE TOOL, not the total**

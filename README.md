@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://github.com/eveningworks/toy-os/actions/workflows/build.yml">
-    <img alt="CI" src="https://github.com/eveningworks/toy-os/actions/workflows/build.yml/badge.svg">
+    <img alt="release build" src="https://github.com/eveningworks/toy-os/actions/workflows/build.yml/badge.svg">
   </a>
   <img alt="Language" src="https://img.shields.io/badge/language-C%20%2B%20NASM-blue">
   <img alt="Target" src="https://img.shields.io/badge/target-x86__64-lightgrey">
