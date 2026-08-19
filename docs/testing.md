@@ -131,6 +131,34 @@ So: useful as a second mode to test in, and useful for anything
 CPU-bound, but always say which mode a benchmark came from --
 `tools/vm.py --kvm` runs the same configuration headlessly.
 
+**THAT PENALTY IS ATA'S, NOT KVM'S -- and virtio-blk removes it.**
+Measured on the same host with `make run KVM=1 VIRTIO=1`:
+
+| | write | read |
+|---|---|---|
+| ATA, TCG (`stress 150`) | 22.8 MB/s | 29.2 MB/s |
+| ATA, KVM (`stress 150`) | 12.1 MB/s | 18.7 MB/s |
+| **virtio-blk, KVM** (`stress 100`) | **120.4 MB/s** | **74.6 MB/s** |
+| **virtio-blk, KVM** (`stress 2000`) | **115.3 MB/s** | **72.5 MB/s** |
+
+About **10x ATA's write throughput under KVM**, and it barely degrades
+with size -- 2000 MB written, read back and verified byte for byte in
+44 s, where the same work over ATA would have taken minutes.
+
+The mechanism is the point, and it is why the numbers invert rather
+than merely improve. ATA is slower under KVM because its path is dense
+with `inb`/`outb` and every one of those is a hardware VM exit costing
+~1us. A virtqueue has almost no port I/O at all: the driver writes
+descriptors into shared memory the device reads directly, and the only
+register access per request is a single doorbell store. So the exits
+that made ATA slow under KVM simply are not there, and KVM's compute
+advantage is left with nothing working against it.
+
+Practical consequence: **quote the transport as well as the mode.**
+"22.8 MB/s write" now means nothing without saying whether it was ATA
+or virtio, and a throughput figure recorded before virtio-blk existed
+is an ATA figure whether or not it says so.
+
 **The other reason to reach for KVM has nothing to do with speed: it
 HONOURS GUEST MEMORY TYPES and TCG does not.** Under `make run` a
 write-combined or uncached framebuffer behaves exactly like cached RAM,

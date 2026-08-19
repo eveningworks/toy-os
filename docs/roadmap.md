@@ -703,55 +703,28 @@ were found at all.
 
 - [ ] Group DRAG for a rubber-band selection
 - [ ] **A ring-3 file manager**, the second caller the rubber-band module was shaped for
-## Known issues and papercuts (unscheduled)
+## Known limitations and papercuts (unscheduled)
+
+Things this OS does not do yet, or does in a way worth improving --
+**not defects**. Anything actually behaving wrongly is in
+`docs/bugs.md`; the test is "is something broken?", not "would I like
+this to be better?".
 
 - [ ] `SYS_LISTDIR` still truncates at 256 entries, and TFS3 has no such cap -- the fix is an offset argument
-- [ ] `SYS_LISTDIR` returns 0 for a missing directory and for an empty one alike, so `ls` cannot tell them apart
 - [ ] Nothing detects an ordinary memory LEAK, in either allocator
-- [x] ~~`ata_dma_nonblocking_selftest()` has a 1040-byte stack frame~~ done
 - [ ] The shell's command dispatch is a 60-branch chain, and the fix is not the obvious one
-- [x] ~~Killing a process leaks its entire address space~~ done
-- [ ] The taskbar overflows off the right edge once enough windows are open
-- [x] ~~The ring-3 WM stops the moment it spawns a process~~ done
-- [x] ~~GUI tools that assume the desktop is NOT a process~~ done
-- [x] ~~`calculator_client_test.py` is INTERMITTENT~~ done
-- [ ] `newsyscalls_test` fails intermittently in CI, and not locally
-- [ ] Other GUI tools may share the calculator's mid-paint flake
-- [x] ~~A syscall TABLE, and handlers in the subsystem that owns them~~ DONE 2026-08-18
 - [ ] Settings: a ring-3 settings daemon (stage 2)
-- [x] ~~`strace`'s syscall-name table stops at `SYS_GETRANDOM`~~ done
-- [x] ~~`syscall_dispatch()` has a 4832-byte stack frame~~ done
-- [x] ~~Force Quit kills the ring-3 desktop~~ done
-- [x] ~~`taskmgr` clicks row 0 and calls it the first listed process~~ done
-- [x] ~~`taskmgr_test.py`'s "found the victim's row" is INTERMITTENT~~ done
-- [x] ~~The ring-3 desktop cannot give a client a window~~ done
 - [ ] The ring-3 WM busy-waits instead of sleeping
 - [ ] The kernel ships ~62 KB of `.eh_frame` unwind tables nothing can ever read
 - [ ] The in-kernel test suite is ~30% of `.text` and ships in release images
 - [ ] Two win-server KTESTs only run on a `target=text` boot, since a live desktop removes what they test
-- [ ] The desktop died once at 1.15 s while a `/bin` program ran through the legacy loader -- cause unestablished
-- [ ] `tools/ktest_run.py` reports the debug console never came up, on 5 boots in 9 -- PRE-EXISTING
-- [ ] `heap-debug`'s use-after-free check fails about 1 run in 15 -- PRE-EXISTING
-- [ ] One `etc_config_set()` write failed on a graphical boot, and did not reproduce
-- [ ] Injected clicks are LOST under parallel `gui_regress` load, and the failing checks are finally named
-- [ ] `tools/faulttest_run.py` reports 0/3, and it is PRE-EXISTING
 - [ ] Get blocking disk I/O out of the WM's event loop
 - [ ] Make the GUI test tooling RESOLUTION-AGNOSTIC
 - [ ] Retire `uui_button_group` once nothing needs it
-- [ ] `damage_sweep.py`'s `resize-shrink Terminal` step reports a real missed damage
-- [ ] A `sched` KTEST fails under KVM, and only under KVM
 - [ ] On a machine with no invariant TSC, CPU percentages round to 0% for sub-tick work
 - [ ] `gfxbench`'s numbers are only meaningful under KVM or on real hardware
-- [ ] `rammeter` doesn't appear at the physical console
-- [ ] Control Panel applets can't show hover
-- [ ] `ui_checkbox` and `ui_radio_list` aren't in the focus ring
-- [ ] `tools/damage_sweep.py`'s random walk sometimes drives Notepad's file picker open by clicking where its
-- [ ] `damage_hunt.py -j 4` loses VM SLOT 0 every run
-- [ ] `gui_regress.py`'s `uidemo` fails intermittently in the full parallel suite
-- [ ] Resizing a window by its grip sometimes doesn't take on the first drag
 - [ ] **Kernel-side `fsformat tfs3` writes ~73 MB of zeroed inode tables
 - [ ] The vmsvga HARDWARE cursor is off by default because it fights the relative PS/2 mouse
-- [x] Time sources -- DONE (2026-08-17)
 - [ ] Time sources -- the strongest candidate (superseded above)
 - [ ] Stack block devices rather than hooking the filesystem, for M18 encryption at rest
 - [ ] M16 block checksums are NOT simply a block layer, and that is the decision to make

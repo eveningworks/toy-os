@@ -1801,8 +1801,20 @@ technical conventions below:
     the code. This is what gets found by whoever edits it.
   - *Why this way and not the obvious way* -- `docs/decisions.md`,
     written IN FULL there rather than as a pointer elsewhere.
-  - *What is broken / not built yet* -- `docs/roadmap.md`, with a
-    reproduction precise enough to replay.
+  - *What is BROKEN* -- `docs/bugs.md`. One line each, with the
+    reproduction under a matching heading in `docs/roadmap-details.md`.
+    A fixed bug is DELETED from there rather than struck through (the
+    opposite of the roadmap's rule, and deliberate: a bug list is only
+    useful as a list of what is still wrong; `git log` records fixes).
+    Say the RATE for anything intermittent -- "5 boots in 9" is a
+    measurement, "sometimes" is a shrug -- and say plainly when a cause
+    was never established. PRE-EXISTING means MEASURED against an
+    earlier commit, not assumed.
+  - *What is NOT BUILT YET* -- `docs/roadmap.md`. Its "Known
+    limitations and papercuts" section is for things that work as
+    designed and could be better; anything actually misbehaving belongs
+    in `docs/bugs.md` instead. The test is "is something broken?", not
+    "would I like this to be better?".
 
   **What was lost, stated rather than glossed:** commit messages before
   the freeze are one-liners, so for pre-2026-08-15 work the changelog
