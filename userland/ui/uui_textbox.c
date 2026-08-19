@@ -253,7 +253,34 @@ static void tb_ops_draw(struct ugfx_surface *s, const void *w) {
     uui_textbox_draw(s, (const struct uui_textbox *)w);
 }
 
+static void te_ops_natural_size(const void *w, int *out_w, int *out_h) {
+    uui_textbox_natural_size((const struct uui_textbox *)w, out_w, out_h);
+}
+
+static void te_ops_set_geometry(void *w, int x, int y, int width, int height) {
+    uui_textbox_set_geometry((struct uui_textbox *)w, x, y, width, height);
+}
+
+static int te_ops_release(void *w, int cx, int cy) {
+    (void)w; (void)cx; (void)cy;
+    // Nothing to undo -- a textbox has no drag state of its own to end.
+    // It is here purely so the router NAMES this widget to its app: the
+    // router reports a widget only when it has a release op, so without
+    // this a textbox took clicks and keys while the app was never told
+    // anything had happened.
+    return 1;
+}
+
+// NATURAL_SIZE AND SET_GEOMETRY were missing until 2026-08-19, so a
+// uui_textbox declared in a uui_layout was never positioned or measured
+// -- it stayed at a zero rect and the layout could not size it. Both
+// functions already existed; only the table was short. Three other
+// widgets had the same gap the same day; tools/check_widget_ops.py
+// exists to stop a fourth. See docs/decisions.md.
 const struct uui_widget_ops uui_textbox_ops = {
+    .natural_size = te_ops_natural_size,
+    .set_geometry = te_ops_set_geometry,
+    .release = te_ops_release,
     .draw          = tb_ops_draw,
     .hit           = ops_hit,
     .key           = ops_key,

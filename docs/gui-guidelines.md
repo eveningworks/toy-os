@@ -8,6 +8,40 @@ This is a working document for writing apps and widgets, not a style
 manifesto. Where a rule exists because something went wrong, that's
 said, because the reason is the useful part.
 
+
+## The widgets, and what each is for
+
+`userland/ui/` is the toolkit. Reach for one of these before drawing
+something by hand -- and before writing a new one, which needs a SECOND
+REAL CALLER, not a plausible one.
+
+| Widget | For |
+|---|---|
+| `uui_button`, `uui_button_group` | One button; a GRID of them (a keypad) |
+| `uui_checkbox` | An independent on/off |
+| `uui_radio_list` | A few mutually-exclusive options, all visible |
+| `uui_dropdown` | Many mutually-exclusive options, one visible |
+| `uui_slider` | An ORDERED enum, where "more" and "less" is the point |
+| `uui_listbox`, `uui_table` | Rows; rows with columns, a header and sorting |
+| `uui_tree` | Rows at a DEPTH, with collapsible parents -- navigation |
+| `uui_label` | A line of text the LAYOUT reserves a row for |
+| `uui_textbox`, `utext` | One line of editable text; a document |
+| `uui_menubar`, `uui_statusbar` | Menus with submenus; status panes |
+| `uui_layout`, `uui_scrollview` | Arrangement; a viewport onto more than fits |
+| `uui_canvas` | Drawing, clipped, when no widget fits |
+
+**The same data can take three shapes.** A radio list, a dropdown and a
+slider all take the same `options` array and yield an index, so a
+setting chooses between them in `/etc/settings.d` with no code change.
+Pick by what the values ARE: few and unordered, many, or ordered.
+
+**A NEW WIDGET MUST FILL ITS OPS TABLE** (`uui_widget.h`), and
+`tools/check_widget_ops.py` fails the build if it does not. Fill it
+against that header, never against the widget you copied -- a copied
+table inherits its gaps, which is how four widgets ended up missing
+`natural_size`/`set_geometry` (never positioned by a layout) or
+`release` (never reported to the app) on one day.
+
 ## A page that can overflow needs a scroll view
 
 `uui_layout` does not shrink children below their natural size. Given
@@ -162,6 +196,11 @@ Concretely:
 **`on_click` is a trap here.** Despite the name, the WM fires it on
 button-*down* (`wm_input.c`), so nothing armed by `on_press` exists yet.
 A control that commits there fires on press and can never be cancelled.
+(**"Control Panel" throughout this file is the app now called System
+Settings** -- renamed 2026-08-19, since Control Panel is Windows' name.
+The anecdotes below are kept in the tense they happened in; renaming
+them would falsify the history they exist to carry.)
+
 This was found by building it wrong: the Control Panel's applets used
 `on_click`, and the drag-away-and-release test simply opened the applet
 anyway. Use `on_click` only for things that genuinely act on contact --

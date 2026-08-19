@@ -237,7 +237,23 @@ static void tv_ops_draw(struct ugfx_surface *s, const void *w) {
     uui_textview_draw(s, (struct uui_textview *)(void *)(const void *)w);
 }
 
+static void te_ops_natural_size(const void *w, int *out_w, int *out_h) {
+    uui_textview_natural_size((const struct uui_textview *)w, out_w, out_h);
+}
+
+static void te_ops_set_geometry(void *w, int x, int y, int width, int height) {
+    uui_textview_set_geometry((struct uui_textview *)w, x, y, width, height);
+}
+
+// NATURAL_SIZE AND SET_GEOMETRY were missing until 2026-08-19, so a
+// uui_textview declared in a uui_layout was never positioned or measured
+// -- it stayed at a zero rect and the layout could not size it. Both
+// functions already existed; only the table was short. Three other
+// widgets had the same gap the same day; tools/check_widget_ops.py
+// exists to stop a fourth. See docs/decisions.md.
 const struct uui_widget_ops uui_textview_ops = {
+    .natural_size = te_ops_natural_size,
+    .set_geometry = te_ops_set_geometry,
     .draw    = tv_ops_draw,
     .hit     = tv_ops_hit,
     .press   = tv_ops_press,

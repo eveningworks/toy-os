@@ -1823,6 +1823,14 @@ technical conventions below:
   CR3 leaves W^X silently not applied -- **and all six W^X KTESTs stay
   green**, because they read the same symbol the code wrote. Only the
   KTEST that asks the CPU for CR3 catches it. See `docs/decisions.md`.
+- **`tools/check_widget_ops.py` FAILS THE BUILD on a widget ops table
+  with a slot it needs left NULL**, because four widgets shipped that
+  way in one day and every one of them failed silently and at a
+  distance. A table with `draw` needs `natural_size` and `set_geometry`
+  (a layout cannot place what it cannot measure); a table with `press`
+  needs `release` (`uui_route.c` names a widget to its app only when it
+  has one). Waive with a `widget-ops-ok: <reason>` comment, as with
+  `check_dispatch.py`.
 - **A DISPATCH CHAIN OVER ~20 BRANCHES SHOULD BE A TABLE, and
   `tools/check_dispatch.py` fails the build when one isn't.** The
   recurring shape here: something dispatches on a kind -- a syscall

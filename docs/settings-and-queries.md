@@ -152,6 +152,56 @@ Put the key in `/etc/toyos.conf` by default. A feature with enough keys
 to be unwieldy there gets its own `/etc/<name>.conf` and an
 `/etc/config.d` descriptor, which also gives it its own namespace.
 
+## The text and hints in `/etc/settings.d`
+
+The kernel says what a setting IS; `/etc/settings.d` says how it reads
+and looks. One file per setting, named by its qualified name, in
+`etc_config`'s ordinary `name=value` format — no sections, no new parser.
+
+```
+# /etc/settings.d/system.mouse_accel
+Description=Move faster, and the pointer travels further still
+Widget=slider
+Applies=now
+Order=40
+Choice.off=Off
+Choice.low=Low
+Choice.high=High
+```
+
+| Key | Meaning |
+|---|---|
+| `Description` | One line, shown under the label. Not a paragraph — `uui_label` does not wrap yet, so a long one is clipped. |
+| `Widget` | `auto` (default), `radio`, `dropdown`, `slider`. A **hint**: a client without that control still shows the setting some other way. |
+| `Applies` | `now` (default) or `reboot`. `reboot` is the thing `SETTING_OP_SET`'s result cannot say — `system.default_target` persists perfectly and visibly does nothing until you restart. |
+| `Advanced` | `1` keeps it off the page behind a "Show advanced settings" toggle. |
+| `Order` | Lower first within a page; ties keep registration order. |
+| `Choice.<value>` | Display name for one choice. The stored value is still `<value>`. |
+
+A **page** gets its own file, `group.<category>.<group>`, carrying
+`Label` and `Description` — the text belongs to the group, not to any
+setting in it.
+
+**The compiled-in label is the floor.** A missing or malformed file
+costs that one setting its extra text and nothing else: no description,
+and choices shown as raw values. So these are added one at a time, and
+an empty `/etc/settings.d` still leaves a completely usable UI.
+
+## Where a setting appears
+
+`category` and `group` on `struct setting` steer the sidebar:
+`category` is a heading, `group` is a page. Several settings sharing a
+group land on one page — cursor theme, cursor size, pointer speed and
+pointer acceleration all declare `group = "Mouse"`, from two different
+kernel files.
+
+A setting with no `group` gets a page of its own, named by its label,
+which is what every setting did before groups existed.
+
+**Grouping never touches the config file.** Both are registry metadata;
+each setting still writes its own `name=value` line to its own file, so
+moving a setting between groups migrates no data.
+
 ## Adding a fact
 
 Three things, in the subsystem that owns the numbers — there is no

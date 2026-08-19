@@ -265,3 +265,37 @@ report separates the two -- mechanism established by direct evidence,
 rate improvement not established -- and the docs record that the
 amplifier does not work, so the next session does not rediscover it.
 Reporting "fixed, suite green" would have been true and misleading.
+
+
+## Settings, groups and widgets (2026-08-19)
+
+A long session where the user kept adding scope mid-turn, and the
+question rounds are what kept it coherent. Four that earned their place:
+
+- **"Which new UI component should the sidebar be?"** offering a real
+  tree, a flat sidebar list, or extending the listbox -- with the honest
+  cost of each. The project rule is to ASK before adding a widget, and
+  the answer (a real `uui_tree`) was justified by naming the SECOND
+  caller the roadmap already has (a file manager), which is this
+  toolkit's actual bar.
+- **"Where do the sidebar's categories come from?"** -- the kernel, the
+  namespace, or a table in the app. Framing the third option as "the
+  second source of truth the whole app exists to avoid" is what made the
+  choice obvious, and it came straight from the app's own top comment.
+- **"What should the app be called?"** with what KDE, GNOME, macOS and
+  Windows each call it, so the answer was informed rather than a
+  preference. Naming questions are cheap to ask and expensive to redo.
+- **"How should I land this? It has grown well past the original
+  scope."** Asked when `settings.c` was mid-rewrite and nothing was
+  committable, with an honest status table of what built and what did
+  not. That is the question to ask when scope has doubled -- not at the
+  end, and not silently pressing on.
+
+**And one that should have been asked and was not.** The user asked "we
+need to change etc_config format, give me few choices" and I offered
+four format options; the real question was what problem the change was
+for, and the answer turned out to be human-facing TEXT (descriptions,
+choice display names) rather than the file layout at all. When a request
+names a SOLUTION, ask what it is a solution TO before enumerating
+variants of it -- the four options were all technically sound and all
+aimed at the wrong thing.

@@ -974,6 +974,20 @@ manual steps to be worth automating:
   whatever stale data it is still carrying. See
   `docs/decisions.md`'s versioning entry for the full v0.0.9 writeup.
 
+- **`check_widget_ops.py`** -- refuses a `struct uui_widget_ops` table
+  with a slot it needs left NULL, and it exists because FOUR widgets
+  shipped with short tables on one day (`uui_dropdown`, `uui_checkbox`,
+  `uui_textview`, `uui_textbox`), every function they needed already
+  written. Two rules: a table with `draw` needs `natural_size` and
+  `set_geometry` (a layout cannot place what it cannot measure), and a
+  table with `press` needs `release` (`uui_route.c` names a widget to
+  its app only when it has one). Both failures are SILENT and surface in
+  a different file from their cause -- one of them presented as
+  "`uui_layout` stops after four children" and cost most of a session,
+  when `uui_layout_run()` has no early exit at all. Waive in place with
+  a `widget-ops-ok: <reason>` comment, the same mechanism
+  `check_dispatch.py` uses. In `preflight.sh`.
+
 ---
 
 ## Host tools this repo expects (not in `tools/`)

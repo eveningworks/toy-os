@@ -327,3 +327,55 @@ image; an existing disk keeps the stale binary until it is deleted by
 hand. CLAUDE.md already states this ("moving a seeded file needs an
 explicit delete"); it is easy to read past and obvious the moment
 `ls /bin/wm/system` shows two.
+
+## Fill a widget's ops table against the header, not against a neighbour (2026-08-19)
+
+FOUR widgets shipped with short `struct uui_widget_ops` tables, every
+function they needed already written and only the table missing an
+entry: `uui_dropdown` and `uui_textview` (no `natural_size`/
+`set_geometry`), `uui_checkbox` and `uui_textbox` (those plus no
+`release`).
+
+Both gaps fail silently and at a distance:
+
+- **No `natural_size`/`set_geometry`** and a layout cannot place the
+  widget. It sits at a zero rect -- invisible, unclickable -- and the
+  CONTAINER looks like the broken thing.
+- **No `release`** and `uui_route.c` never names the widget to its app,
+  because it reports one only when it has a release op. The control
+  works perfectly on screen and the app hears nothing.
+
+None of it had been noticed because no app had put those widgets in a
+routed layout. **An ops slot nobody fills is a capability nobody has
+tested.**
+
+`tools/check_widget_ops.py` enforces both rules now and is in
+`preflight.sh`; waive in place with `widget-ops-ok: <reason>`. It found
+the last two on its first run, which is the argument for writing it
+rather than writing a rule nobody re-reads.
+
+## A control below the fold is UNREACHABLE (2026-08-19)
+
+A scroll view with a `hit` clips its children from ROUTING, not just
+from drawing -- so a press never reaches a child outside the viewport.
+That is correct and deliberate. The consequence for anything driving the
+UI is that a control which has not been scrolled into view cannot be
+clicked at all, and a tool aiming at its unscrolled coordinates gets
+SILENCE rather than an error, which looks exactly like a dead control.
+
+Two habits: scroll first, and have the app report each control's rect
+whenever it MOVES (a page change and a scroll alike) rather than only
+when the page changes -- otherwise the tool has no idea where the
+control went.
+
+## Three shapes for one list, chosen by data not by code (2026-08-19)
+
+`uui_radio_list`, `uui_dropdown` and `uui_slider` all take the same
+`options` array and yield an INDEX, so one setting picks between them
+with a `Widget=` line in `/etc/settings.d` and no code change anywhere.
+Choose by what the values ARE: few and unordered (radio), many
+(dropdown), ordered levels (slider).
+
+That is worth copying whenever a toolkit grows a second way to show the
+same data -- keeping the VALUE type identical is what makes the choice a
+presentation decision rather than a rewrite.
