@@ -76,9 +76,20 @@
 // virtqueue.c, where the three attempts at getting this right are
 // written up. Its conclusion applies here: a poll COUNT is monotonic
 // and cannot lie, while a clock is exactly right until it is
-// catastrophically wrong, so the count is the bound and the clock is
-// only ever an additional early exit.
-#define ATA_POLL_LIMIT 20000000
+// catastrophically wrong.
+//
+// WHY 2,000,000 AND NOT MORE. Unlike the virtqueue's, these loops call
+// io_wait() every iteration -- a port write, far more expensive than
+// the volatile memory read a used-ring poll does -- and one of them is
+// bounded at ATA_POLL_LIMIT * 200. Raising this to 20,000,000 took a
+// CI run from ~1.5 minutes to over four, because the FAILURE path grew
+// in proportion: a genuinely stalled drive was now waited on 200x
+// longer, three times over. ~240 ms absorbs the stall that was
+// breaking these tests without turning a dead drive into a multi-minute
+// hang. The constant is shared by loops with very different per-
+// iteration costs, which is the thing to remember before scaling it
+// again.
+#define ATA_POLL_LIMIT 2000000
 
 static int g_present = 0;
 // IDENTIFY word 169 bit 0 -- see ata_trim() at the end of this file.
