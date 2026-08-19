@@ -383,3 +383,12 @@ int sys_waitpid_nohang(int pid, int *out_code) {
     return (int)err(syscall3(SYS_WAITPID, (uint64_t)(int64_t)pid,
                              (uint64_t)(uintptr_t)out_code, SYS_WNOHANG));
 }
+
+int sys_console_size(int *cols) {
+    // Rows in the low 32 bits, columns in the high 32 -- two small
+    // numbers in one return value, so there is no user-memory copy to
+    // validate. See SYS_CONSOLE_SIZE in abi/syscall_abi.h.
+    uint64_t packed = (uint64_t)sys_call(SYS_CONSOLE_SIZE, 0, 0, 0);
+    if (cols) *cols = (int)(packed >> 32);
+    return (int)(packed & 0xFFFFFFFFu);
+}

@@ -129,6 +129,14 @@ int64_t sys_eprint(const char *s);
 // use sys_wait_event() instead for anything new.
 int sys_read_key(void);
 
+// The console's size in text cells. Returns rows, and stores columns
+// through `cols` when it is non-NULL. Never fails.
+//
+// Ask rather than assume: the console is font-derived here, and
+// `font_size` is a runtime setting, so a baked 80x25 is wrong on any
+// machine whose font was changed.
+int sys_console_size(int *cols);
+
 int sys_gettime(struct rtc_time *out);
 
 // --- memory ----------------------------------------------------------

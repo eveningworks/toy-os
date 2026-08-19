@@ -835,6 +835,25 @@ struct dirent {
                      // destroys the stream the call was asked to
                      // preserve.
 
+// The console's size in TEXT CELLS: rows in the low 32 bits of RAX,
+// columns in the high 32. No arguments, cannot fail.
+//
+// Ring 3 had no way to ask. The console's size is not a constant here
+// -- it is derived from the active font (gfx_char_h()/gfx_char_w()),
+// and `font_size` is a runtime setting -- so a program that pages or
+// draws columns had nothing to work from but a guess, and a guess is
+// wrong on any machine whose font was changed. That is the same
+// font-derived rule the GUI's whole layout already follows.
+//
+// Rows and columns in ONE return value rather than a struct through a
+// pointer: two small numbers fit, and it keeps the call free of a
+// user-memory copy (and of the validation that goes with one).
+//
+// First caller is /bin/less. The TTY milestone wants this too --
+// klineedit's console front end already has a documented bug from not
+// knowing the width (a line longer than the console repaints wrongly).
+#define SYS_CONSOLE_SIZE 43
+
 #define SYS_SLEEP 40 // RDI = milliseconds. Parks the caller until that
                           // long has passed, then returns 0. Returns -1
                           // for a caller with no scheduler slot (the

@@ -239,3 +239,17 @@ int sys_set_color(struct syscall_ctx *c) {
     }
     return 0;
 }
+
+// The console's size in text cells, rows in the low 32 bits and columns
+// in the high 32.
+//
+// vga_rows()/vga_cols() already answer this kernel-side -- they are
+// derived from the active font, which is why this is a syscall rather
+// than a constant in a header: `font_size` is a runtime setting, so a
+// baked number is wrong the moment somebody changes it.
+int sys_console_size(struct syscall_ctx *c) {
+    uint64_t rows = vga_rows();
+    uint64_t cols = vga_cols();
+    c->regs[14] = (cols << 32) | (rows & 0xFFFFFFFFull);
+    return 0;
+}
