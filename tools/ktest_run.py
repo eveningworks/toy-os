@@ -53,6 +53,25 @@ def launch(iso, disk, qemu_log):
         # (which this script waits for) had already gone by the time it
         # connected, and it hung until the timeout every single run.
         "-serial", f"tcp:127.0.0.1:{SERIAL_PORT},server",
+        # A virtio device on the bus, purely so the PCI capability walk
+        # and the 64-bit BAR decode (kernel/include/kernel/pci_internal.h)
+        # are COVERED by `make test` rather than only when a virtio disk
+        # is deliberately attached.
+        #
+        # Measured, which is why it is here: QEMU's default pc-i440fx
+        # topology publishes NO PCI capabilities at all -- not on the
+        # host bridge, the PIIX3 IDE/ISA, the PIIX4 ACPI bridge, stdvga
+        # or the e1000 -- and no 64-bit BAR either. So the walk that
+        # every virtio device depends on ran zero times and its KTEST
+        # reported a skip. virtio-rng-pci publishes five vendor-specific
+        # capabilities and puts its registers in a 64-bit BAR, which is
+        # exactly the two uncovered branches.
+        #
+        # rng rather than blk deliberately: it is not the device under
+        # test, so it also exercises virtio_blk_init() DECLINING a virtio
+        # device of the wrong type. Nothing here asserts a PCI device
+        # count, so adding one disturbs no existing test.
+        "-device", "virtio-rng-pci",
         "-no-reboot",
         "-no-shutdown",
     ]

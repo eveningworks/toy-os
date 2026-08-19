@@ -53,6 +53,7 @@
 #include "ktest.h"
 #include "win_server.h"
 #include "vmm.h"
+#include "scheduler.h"
 #include <stddef.h>
 
 // Two synthetic pids, both inside WIN_SERVER_MAX_PIDS. Deliberately not
@@ -309,6 +310,15 @@ KTEST("winshare", "clearing the compositor drops its mappings") {
 KTEST("winshare", "WIN_REQ_SET_COMPOSITOR claims and releases the role") {
     struct win_request_msg req = {0};
 
+    // Preemption off for the body -- see the sibling test below
+    // ("only the holder may release the compositor role") for the full
+    // reasoning. Short version: the compositor role is a single global,
+    // the ring-3 desktop init starts at boot really holds it, and this
+    // test EVICTS it to run. The moment the desktop is scheduled again
+    // it re-claims, so "after releasing, nobody holds it" reads the
+    // desktop's pid rather than 0.
+    scheduler_preempt_disable();
+
     req.type = WIN_REQ_SET_COMPOSITOR;
     req.a = 1;
     KTEST_ASSERT_EQ(win_server_request(COMP_PID, &req), 1);
@@ -317,11 +327,33 @@ KTEST("winshare", "WIN_REQ_SET_COMPOSITOR claims and releases the role") {
     req.a = 0;
     KTEST_ASSERT_EQ(win_server_request(COMP_PID, &req), 1);
     KTEST_ASSERT_EQ(win_server_compositor_pid(), 0);
+
+    scheduler_preempt_enable();
 }
 
 KTEST("winshare", "only the holder may release the compositor role") {
     struct win_request_msg req = {0};
     req.type = WIN_REQ_SET_COMPOSITOR;
+
+    // PREEMPTION OFF FOR THE WHOLE BODY, and this is a precondition
+    // rather than tidiness. The compositor role is a single global, and
+    // since init started the desktop at boot there is a REAL compositor
+    // (the ring-3 toywm) running beside this test that re-claims the
+    // role the moment it gets scheduled. So the closing assertion --
+    // "after the holder releases it, nobody holds it" -- was racing the
+    // desktop and reading its pid instead of 0.
+    //
+    // It passed for a long time on timing luck alone. What exposed it
+    // was an unrelated change adding PCI KTESTs, whose thousands of
+    // extra config-space port reads shifted boot timing enough to lose
+    // the race about half the time; HEAD measured 4 runs in 4 clean and
+    // the same suite with those tests present failed ~4 in 7.
+    //
+    // Disabling preemption ESTABLISHES the precondition instead of
+    // loosening the assertion, which keeps the property under test
+    // exactly as strong as it was -- the same call, and the same
+    // reasoning, as the heap KTESTs that compare against a snapshot.
+    scheduler_preempt_disable();
 
     req.a = 1;
     KTEST_ASSERT_EQ(win_server_request(COMP_PID, &req), 1);
@@ -335,6 +367,8 @@ KTEST("winshare", "only the holder may release the compositor role") {
 
     KTEST_ASSERT_EQ(win_server_request(COMP_PID, &req), 1);
     KTEST_ASSERT_EQ(win_server_compositor_pid(), 0);
+
+    scheduler_preempt_enable();
 }
 
 KTEST("winshare", "claiming needs no registered presentation layer") {
