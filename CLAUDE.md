@@ -286,6 +286,29 @@ technical conventions below:
   PNG and was invisible in practice; the number is what caught it.
   Always sample a control that should NOT have changed as well -- half
   the assertion is the neighbour staying put.
+- **THERE IS ONE LINE EDITOR AND IT IS COMPILED TWICE.**
+  `kernel/lib/klineedit.c` now also builds into `libuapp.a`, so
+  `/bin/tosh` and the ring-3 GUI Terminal edit with the SAME code as the
+  physical shell -- both used to carry their own append-only loop, which
+  is the drift `klineedit.h`'s header warns about. Adding an editing key
+  means adding it to the core's keymap; all three gain it. Four things
+  to know. **A byte off fd 0 is fed in as-is** -- specials arrive as
+  0x91-0xA6, which ARE the `KEY_*` codes `kline_key()` switches on, so a
+  translation layer would be a third place to drift. **The console front
+  end repaints with `\r` and TWO passes** (paint the line plus covering
+  spaces, return to column 0, paint the prefix), because
+  `vga_cursor_move()` is a non-destructive seek ring 3 cannot reach and
+  must not get a syscall for; the cost is that a line longer than the
+  console is wide repaints wrongly, which is the TTY layer's problem to
+  fix, not `vga_putc()`'s. **History is the FRONT END's**
+  (`userland/lib/uhistory.c`, shared by both ring-3 shells), as are Tab
+  and Ctrl-R -- which do nothing in ring 3 yet, on purpose, because
+  `apps/completion.c` is kernel-side. And **the shared CASE TABLE is
+  what checks the second build**: `kernel/include/api/klineedit_cases.h`
+  is run by a KTEST in ring 0 and by `/tests/klineedit_test` in ring 3,
+  because the existing KTESTs cover the logic and would pass whether or
+  not ring 3 could link a byte of it (the gap `libc_test` was written
+  into). Add a case once; both rings assert it.
 - **Line editing is `kernel/lib/klineedit.c`'s, in both front ends.**
   The physical shell and the GUI Terminal share one readline-style
   editor (buffer/cursor/kill ring/undo/keymap); each front end only
@@ -2031,6 +2054,23 @@ Four things worth knowing without opening it:
 - **Never `pkill -f qemu-system-x86_64`.** It cannot tell your headless
   launch from the user's interactive `make run` window. Kill only the
   PID your own launch wrote to its `-pidfile`.
+- **TWO GUESTS ON ONE QMP PORT DO NOT FAIL AS A PORT CLASH.** Everything
+  here defaults to 4445, so a second launch fights the first and the
+  error surfaces MINUTES LATER as a `BrokenPipeError` or
+  `ConnectionResetError` in whichever tool was mid-command -- which is
+  never the tool that caused it. Three "failures" in one session
+  (`scrollbar`, then `uapp` and `forcequit`) were all one careless
+  concurrent run. `tools/port_guard.py` now refuses at the launch, from
+  the same two chokepoints `iso_guard.py` guards. **Use `--instance
+  auto` (or `--instance N`) whenever anything else might be running** --
+  `gui_regress.py` holds slots 0-3, i.e. QMP 4445-4448 -- and read the
+  slot it prints, because that is what makes the run replayable.
+  **What it does NOT fix is CPU contention.** A tool run beside the full
+  suite is port-safe and still competes for cores, and an app that
+  ANIMATES can fail a settled-frame comparison under that load: measured
+  here, `gfxdemo` failed two checks with five guests up and passed 23/23
+  alone. So a concurrent run is fine for getting an answer, and not
+  evidence when the suite is the thing being judged.
 - **DON'T ADD A WAIT LOOP FOR WORK THAT IS ALREADY IN THE BACKGROUND --
   and if you do write one, never `pgrep` for a pattern your own command
   line contains.** `gui_regress.py` and `preflight.sh` take minutes, so

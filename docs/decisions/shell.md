@@ -506,3 +506,67 @@ Ctrl-D is how you leave a shell, and a console with nobody on it must
 not be a state reachable by pressing a key. init's crash-loop give-up
 still applies, so a tosh that cannot start is abandoned rather than
 respawned forever.
+
+## One line editor, compiled twice, with a case table asserted in both rings
+
+`kernel/lib/klineedit.c` is the readline-style editor the physical shell
+has used for a long time. The two ring-3 front ends -- `/bin/tosh` and
+the GUI Terminal -- each carried their own append-only loop instead:
+printable characters and Backspace, nothing else. That is precisely the
+divergence `klineedit.h`'s own header warns about, and it had already
+happened twice over.
+
+The fix is the shared-source rule this repo already uses for `geom.c`,
+`etc_config.c` and `calc_engine.c`: the same `.c` compiled a second time
+with `USERLAND_CFLAGS` into `libuapp.a`. It needed no change to
+`klineedit.c` at all -- it includes only `klineedit.h`, `string.h` and
+`keyboard.h`, and touches no kernel state. The reason it was not done
+sooner appears to be that nobody checked.
+
+**Why the raw fd-0 stream needs no translation.** `SYS_READ` on fd 0
+hands back one byte per key, with specials as 0x91-0xA6 -- which *are*
+the `KEY_*` codes `keyboard.h` defines and `kline_key()` already
+switches on. So a byte off the console goes straight in. That identity
+is load-bearing: a translation layer between the two would be a third
+place for the keymap to drift.
+
+**Why the console front end repaints with `\r` and two passes.** The
+kernel front end positions the caret with `vga_cursor_move()`, a
+non-destructive seek. Ring 3 cannot reach it, and should not get a
+syscall for it -- only the framebuffer is privileged, not drawing. What
+fd 1 does carry is `\r`, so `/bin/tosh` returns to column 0, paints the
+whole line plus spaces covering the previous paint, returns to column 0
+again and paints only the prefix. The caret lands on the cursor having
+moved only by writing characters. The limit is stated in the code and on
+the roadmap rather than hidden: `\r` returns to the start of the current
+ROW, so a line longer than the console is wide repaints wrongly. A
+terminal solves that with escape sequences it parses itself, which is
+the TTY layer's job and not something to bolt onto `vga_putc()` for one
+caller.
+
+**Why there is a shared CASE TABLE and not just the existing KTESTs.**
+`klineedit_test.c` covers the logic and would keep passing whether or
+not ring 3 could link a single byte of the editor -- the same gap
+`userland/tests/libc_test.c` was written into. What is actually new is
+the second compilation and the link, and those can only be checked by
+running the identical inputs through both builds.
+`kernel/include/api/klineedit_cases.h` holds the cases as data; a KTEST
+runs them in ring 0 and `/tests/klineedit_test` runs them in ring 3, so
+a case added once is asserted in both. The cases are the bash-fidelity
+details on purpose -- the two different word definitions for Ctrl-W and
+Alt-Backspace, the kill ring, undo, Ctrl-D meaning two things -- because
+those are what a divergence would show up in first.
+
+`kline_case_run()` takes the editor from its caller rather than holding
+one, because `struct kline_edit` is ~1.2 KiB: over the kernel's
+1024-byte frame budget by itself, and in ring 3 a local that size steps
+toward the single guard page. It also keeps the helper free of hidden
+state.
+
+**What this does NOT establish, stated because the control was run.**
+Breaking one case's expectation reddens both rings, which proves both
+read the table and both run their own build of the editor. It does not
+simulate a genuine two-build divergence -- a compiler-flag difference,
+say -- because there is no cheap way to manufacture one. What is
+asserted is that the two builds agree today and will be compared again
+on every run.

@@ -138,9 +138,9 @@ manual steps to be worth automating:
   on that warning**, and treat a test that still works after a file
   moved as evidence it is testing the old copy.
 - **`usertest_run.py`** -- runs the self-checking ring-3 diagnostics in
-  `/tests` (`libc_test`, `fpu_test`, `newsyscalls_test`, `file_test`,
-  `write_test`, `exit_test`, `random_test`, `memtest`, `guard_test`,
-  `malloc_test`) as one pass/fail table, asserting BOTH an
+  `/tests` (`libc_test`, `fpu_test`, `klineedit_test`, `newsyscalls_test`,
+  `file_test`, `write_test`, `exit_test`, `random_test`, `memtest`,
+  `guard_test`, `malloc_test`) as one pass/fail table, asserting BOTH an
   exit code and required output. In `preflight.sh`. It fills a real gap:
   `make test` runs inside the kernel and `gui_regress.py` covers the
   windowed clients, so nothing ever ran a plain `/tests` binary except a
@@ -255,9 +255,13 @@ manual steps to be worth automating:
   (asserted through the FILESYSTEM -- `file_test` writes
   `/filetest.txt`), a kernel-shell builtin typed at that prompt creates
   nothing, and Ctrl-D is followed by a fresh prompt rather than a dead
-  console. It BOOTS TWICE against a disk copy: the first boot sets
-  `system.default_target text` and the US keyboard layout, the second is
-  the one under test. Two traps it encodes. **The restart check is a
+  console. Three more assert the SHARED LINE EDITOR at that prompt --
+  Home+Delete editing mid-line, Ctrl-U killing a line before it runs,
+  and Up recalling the previous command -- each through a filesystem
+  round trip, so a redraw that merely looks plausible cannot satisfy
+  them and an append-only editor fails all three. It BOOTS TWICE against
+  a disk copy: the first boot sets `system.default_target text` and the
+  US keyboard layout, the second is the one under test. Two traps it encodes. **The restart check is a
   second `init: started tosh` in the log, never a changed pid** -- a pid
   is a slot index plus one and slots are reused, so the replacement
   lands in the slot the dead one just left and reports the same number.
@@ -271,6 +275,24 @@ manual steps to be worth automating:
   window before that claim exists. Not in `gui_regress.py` (it reboots
   and rewrites `/etc`); run it after touching init's services, the
   console claim, or `apps/apps.c`.
+- **`port_guard.py`** -- refuses to start a guest on a QMP or VNC port
+  another guest already holds, and picks a free slot for callers that
+  ask. It exists because **a QMP port clash does not fail as a port
+  clash**: everything here defaults to 4445, a second launch silently
+  fights the first, and the error lands minutes later as a
+  `BrokenPipeError`/`ConnectionResetError` against whichever tool was
+  mid-command -- accusing whichever one was unlucky, never the one that
+  caused it. Three "failures" in one session (`scrollbar`, then `uapp`
+  and `forcequit`) were all this. Wired into the same two places
+  `iso_guard.py` is, which are the only two places anything here starts
+  a guest: `launch_qemu_cmd()` and `vm.py`'s start path. Two things to
+  know. **The check is a BIND, not a connect** -- QEMU's monitor accepts
+  ONE client, so a second connect can hang rather than refuse, while a
+  bind asks exactly the question QEMU is about to ask. And
+  **`find_free_instance()` is NOT a lock**: two callers picking "the
+  lowest free slot" in the same instant get the same answer, so it
+  narrows the window and `assert_ports_free()` at the launch catches the
+  residue. `TOYOS_ALLOW_PORT_CLASH=1` bypasses it deliberately.
 - **`pixel_probe.py`** -- reads exact pixel values out of screenshots,
   and tabulates the same points across several (`--compare a.png b.png
   --at 85,100 --at 215,100`), flagging which moved and which didn't.
@@ -632,7 +654,17 @@ manual steps to be worth automating:
   port and VNC display from one number, and the slot is LEASED for as
   long as the VM lives rather than derived from the tool's position in
   the list. Use `--instance` yourself any time you need a second
-  headless VM alongside one that's already up; slot 0 is the plain
+  headless VM alongside one that's already up -- **`--instance auto` takes the lowest FREE slot and
+  prints which one**, the right thing when a `gui_regress.py` may be
+  running in another terminal. It prints because a slot that differs
+  per run must still be replayable (`--instance <that number>`), and
+  it is a narrowing rather than a lock -- `port_guard.py` at the
+  launch is what makes a residual clash loud instead of silent.
+  **It does NOT fix CPU contention**: a tool run beside the full
+  suite is port-safe but competes for cores, and an animating app
+  can fail a settled-frame comparison under that load (measured --
+  `gfxdemo` failed two checks with five guests up and passed 23/23
+  alone). Slot 0 is the plain
   `.vm.pid`/`.vm.serial`/4445 every existing caller assumes.
   `damage_sweep.py` is deliberately NOT in it (much slower under
   `gui damage verify on`, and it has its own `--positive-control`

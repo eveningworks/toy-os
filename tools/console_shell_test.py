@@ -79,6 +79,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "tools"))
 from gui_debug import DebugConsole      # noqa: E402
 from shell_flow import ShellFlow        # noqa: E402
+import port_guard                       # noqa: E402
 
 VM = os.path.join(REPO, "tools", "vm.py")
 PROBE = "/kprobe.txt"
@@ -167,9 +168,25 @@ def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--disk", default=None)
-    ap.add_argument("--instance", type=int, default=0)
+    # `auto` by default: this tool owns its guest end to end and nothing
+    # else needs to attach to it, so there is no reason to fight a
+    # gui_regress.py (slots 0-3) that may be running in another
+    # terminal. It prints the slot it took -- see
+    # port_guard.find_free_instance() on why that reporting is the
+    # point, and why it is a narrowing rather than a lock.
+    ap.add_argument("--instance", default="auto",
+                    help="slot number, or `auto` for the lowest free one")
     ap.add_argument("--keep", action="store_true", help="leave the VM running")
     args = ap.parse_args()
+
+    if args.instance == "auto":
+        n = port_guard.find_free_instance()
+        if n is None:
+            print("console_shell_test: no free VM slot")
+            return 2
+        args.instance = n
+        print(f"console_shell_test: slot {args.instance} (QMP {4445 + args.instance})")
+    args.instance = int(args.instance)
 
     tmp = None
     if not args.disk:
@@ -272,6 +289,62 @@ def main():
         check("the restarted shell runs a typed line", "filetest.txt" in names)
         check("the kernel shell did not take the console back in the gap",
               "kprobe.txt" not in names)
+
+        # --- the SHARED line editor, at the real prompt ---------------
+        #
+        # /bin/tosh edits with kernel/lib/klineedit.c, compiled a second
+        # time into libuapp.a. userland/tests/klineedit_test.c already
+        # proves that build produces the right BUFFER; what it cannot
+        # reach is the console front end around it -- the raw fd-0 key
+        # stream, the '\r' redraw, and history. These three assert that
+        # end, and each asserts through the FILESYSTEM, so a redraw that
+        # merely looks plausible cannot satisfy them.
+        print("the shared line editor at the console")
+
+        # 1. Cursor movement. `zfile_test` is not a program; Home then
+        #    Delete removes the leading z and leaves `file_test`, which
+        #    is. An append-only editor cannot pass this: Home and Delete
+        #    would be ignored and `zfile_test: not found` is all that
+        #    happens.
+        dbg.send(f"sh rm {MADE}")
+        time.sleep(0.4)
+        flow.type_command("zfile_test")
+        flow.session.send_key("home")
+        time.sleep(0.2)
+        flow.session.send_key("delete")
+        time.sleep(0.2)
+        flow.session.send_key("ret")
+        time.sleep(2.5)
+        check("Home + Delete edit mid-line, and the edited line runs",
+              "filetest.txt" in root_names(dbg))
+
+        # 2. Ctrl-U kills the line. Typing a command that WOULD leave a
+        #    trace, killing it, then running one that does: the probe
+        #    file must be absent and the other present, so "the kill
+        #    worked" is distinguishable from "nothing ran at all".
+        dbg.send(f"sh rm {MADE}")
+        time.sleep(0.4)
+        flow.type_command("touch /kprobe.txt")
+        flow.session.combo(["ctrl", "u"])
+        time.sleep(0.3)
+        type_line(flow, "file_test")
+        time.sleep(2.5)
+        names = root_names(dbg)
+        check("Ctrl-U killed the line before it ran",
+              "kprobe.txt" not in names and "filetest.txt" in names,
+              " ".join(sorted(names)))
+
+        # 3. History. Up recalls the previous line and Enter runs it --
+        #    with nothing typed in between, so the only way the file can
+        #    come back is the editor having refilled the buffer.
+        dbg.send(f"sh rm {MADE}")
+        time.sleep(0.4)
+        flow.session.send_key("up")
+        time.sleep(0.3)
+        flow.session.send_key("ret")
+        time.sleep(2.5)
+        check("Up recalls the previous command and it runs again",
+              "filetest.txt" in root_names(dbg))
 
     finally:
         if not args.keep:

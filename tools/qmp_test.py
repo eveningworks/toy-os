@@ -131,6 +131,7 @@ import os
 import socket
 import time
 import iso_guard
+import port_guard
 
 
 def launch_qemu_cmd(iso="toy-os.iso", disk="disk.img", serial_log="serial.log",
@@ -159,6 +160,13 @@ def launch_qemu_cmd(iso="toy-os.iso", disk="disk.img", serial_log="serial.log",
     # which are built by separate targets and legitimately lag.
     if iso == "toy-os.iso":
         iso_guard.assert_iso_fresh()
+
+    # And refuse to start ON TOP OF another guest. Same chokepoint, same
+    # reasoning as the ISO check: a QMP port shared with a running guest
+    # does not fail here, it fails minutes later as a BrokenPipeError in
+    # whichever tool was mid-command -- accusing whichever one was
+    # unlucky rather than the one that caused it. See tools/port_guard.py.
+    port_guard.assert_ports_free(qmp_port, vnc_display)
 
     drive = (f"-drive file={disk},format=raw,if=ide,discard=unmap " if disk else "")
     return (

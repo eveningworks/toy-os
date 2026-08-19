@@ -44,12 +44,20 @@ import subprocess
 import sys
 import time
 import iso_guard
+import port_guard
 
 PIDFILE = ".vm.pid"
 SERIAL_SOCK = ".vm.serial"
 QMP_PORT = 4445
 VNC_DISPLAY = 5
 PROMPT = "dbg> "
+
+
+def _instance_arg(v):
+    """`--instance N`, or `auto` to take the lowest free slot."""
+    if v == "auto":
+        return "auto"
+    return int(v)
 
 
 def _apply_instance(args):
@@ -62,9 +70,18 @@ def _apply_instance(args):
     is always `.vm.3.pid`/`.vm.3.serial`/port 4448/display :8, so a
     failing parallel run can be re-driven by hand with the same numbers.
 
-    Deliberately derived rather than allocated by probing for free
-    ports: a probe has a bind/close race, and a port that differs on
-    every run makes a failure harder to reproduce than it needs to be.
+    Derived rather than allocated, by default, for two reasons: a probe
+    has a bind/close race, and a port that differs on every run makes a
+    failure harder to reproduce than it needs to be.
+
+    `--instance auto` opts into picking the lowest FREE slot, and
+    answers the second objection by PRINTING the number it chose, so a
+    failure is replayed with `--instance <that number>`. It does not
+    answer the first -- see port_guard.find_free_instance(), which is
+    explicitly not a lock -- which is why assert_ports_free() still runs
+    at the launch itself. Reach for it when something else may already
+    be running (a gui_regress.py in another terminal); leave it alone
+    for a plain interactive session.
 
     Slot 0 keeps the original, unsuffixed names and the original port,
     so every existing caller and every test tool's default still works
@@ -72,6 +89,15 @@ def _apply_instance(args):
     """
     global PIDFILE, SERIAL_SOCK
     n = getattr(args, "instance", 0) or 0
+    if n == "auto":
+        n = port_guard.find_free_instance()
+        if n is None:
+            print("vm: no free slot -- 16 guests are already running?", file=sys.stderr)
+            raise SystemExit(2)
+        print(f"vm: instance {n} (QMP {QMP_PORT + n}) -- re-run with "
+              f"--instance {n} to reach this guest")
+    n = int(n)
+    args.instance = n
     if n:
         PIDFILE = f".vm.{n}.pid"
         SERIAL_SOCK = f".vm.{n}.serial"
@@ -119,6 +145,11 @@ def cmd_start(args):
     # this repo starts a guest.
     if args.iso == "toy-os.iso":
         iso_guard.assert_iso_fresh()
+
+    # Likewise a guest already holding this slot's ports -- see
+    # tools/port_guard.py for why that has to be refused HERE rather
+    # than surfacing later as somebody else's broken socket.
+    port_guard.assert_ports_free(args.qmp_port, args.vnc)
 
     cmd = [
         "qemu-system-x86_64",
@@ -309,7 +340,7 @@ def main():
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--iso", default="toy-os.iso")
     ap.add_argument("--disk", default="disk.img")
-    ap.add_argument("--instance", type=int, default=0, metavar="N",
+    ap.add_argument("--instance", type=_instance_arg, default=0, metavar="N",
                     help="run as VM slot N: pidfile .vm.N.pid, socket .vm.N.serial, "
                          f"QMP port {QMP_PORT}+N, VNC :{VNC_DISPLAY}+N. Slot 0 (the "
                          "default) keeps the original unsuffixed names. Lets several "

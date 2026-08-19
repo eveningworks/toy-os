@@ -62,7 +62,11 @@ and job control is what a terminal on that TTY makes possible.
 
 - [x] ~~A ring-3 process can read the console at all (`SYS_READ`'s fd 0, blocking)~~ DONE 2026-08-19
 - [ ] A line discipline (line editing, echo control) separate from the shell's own input loop -- fd 0 is RAW today
-- [ ] `kernel/lib/klineedit.c` compiled a second time for ring 3, so `/bin/tosh` shares the readline keymap
+- [x] ~~`klineedit.c` compiled a second time for ring 3, so both ring-3 shells share the keymap~~ DONE 2026-08-19
+- [ ] Tab completion in ring 3 -- `apps/completion.c` is kernel-side, so `/bin/tosh` and the GUI Terminal ignore Tab
+- [ ] Ctrl-R reverse search in ring 3 -- needs a query line the console front end cannot yet paint
+- [ ] `/bin/tosh` history that persists -- the kernel shell writes `/etc/history`, ring 3 keeps its ring in memory
+- [ ] A console line longer than the screen is wide repaints wrongly in `/bin/tosh` -- `\r` returns to the start of the ROW
 - [ ] `Ctrl+C`/`Ctrl+D`/`Ctrl+Z` as terminal signals, not keystrokes an app happens to notice
 - [ ] The concept of a foreground process for a terminal
 - [ ] Multiple virtual terminals on `Ctrl+Alt+F1..F4`
@@ -604,6 +608,8 @@ were found at all.
 - [ ] A scriptable POINTER, not a one-frame override
 - [ ] `gui icons [--json]` -- desktop icon geometry
 - [ ] Finer `gui drag` interpolation
+- [ ] `klineedit_test.c`'s 12 oversized-frame warnings bury the frame budget's signal in that file
+- [ ] `gfxdemo_test`'s two scene-restore checks fail under heavy parallel load -- 5 guests up, passes alone
 - [ ] Per-test timing, so a test that quietly becomes slow is visible
 - [ ] A `ktest -v` that reports each assertion, not just pass/fail
 - [ ] Tests for the boundary this kernel enforces by include path
