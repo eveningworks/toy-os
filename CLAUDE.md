@@ -723,6 +723,35 @@ technical conventions below:
   Caught as a heap red-zone violation on a 96-byte block holding
   `ame=Calc`. **The cost to know**: a refusal looks exactly like "no such
   file" at the call site, so it is logged. See `docs/decisions.md`.
+- **A FACT IS READ THROUGH `SYS_QUERY`, AND ADDING ONE IS A PROVIDER,
+  NOT A SYSCALL.** `api/query.h` + `abi/query_abi.h`: one syscall, an
+  information CLASS, a typed record, and a registry a subsystem
+  announces itself to -- the same pattern as `display_driver`,
+  `block_device`, `clocksource` and `struct setting`. NT's
+  `NtQuerySystemInformation`, deliberately not Linux's `/proc`: a
+  `/proc` needs a mount table `vfs.c` does not have, it puts
+  diagnostics ON TOP of storage, and it makes the ABI text (see
+  `docs/decisions.md`). Adding a fact is a record in `abi/`, a
+  `struct query_provider` in the subsystem that owns the numbers, and a
+  `query_register()` call -- `kernel/mm/mem_query.c` is the ~60-line
+  worked example. Six things to know. **Class 0 is the registry
+  describing itself**, so a program needs exactly one number to
+  discover every other class -- and it is what gives the LIST path a
+  caller instead of an unvalidated half. **`len` is version
+  tolerance**: the kernel writes `min(len, record)` and reports
+  `returned`, so a record may GAIN fields but existing ones never move.
+  **`count` is a HINT, not a bound** -- a list's length is itself a
+  fact, so an enumerator ends on `-ERANGE`, not on a count it read
+  earlier. **A provider is stored BY POINTER**, so it must be static;
+  a stack local leaves a dangling pointer reading as plausible garbage.
+  **Field OFFSETS never cross the syscall boundary** -- names and
+  values do (`config get mem.frame_free`), which is what keeps a record
+  free to grow. And **a LIST class has no field table on purpose**:
+  `-ENOTSUP`, distinct from `-ENOENT`, because "that fact is a table"
+  and "no such fact" send a reader to different places.
+  **There is ONE READER** -- `query_read()` -- so the kernel shell's
+  `meminfo`, `/bin/meminfo` and `SYS_SYSINFO` cannot report different
+  numbers; they are not three readers agreeing.
 - **THERE ARE THREE WORDS FOR SYSTEM STATE AND THEY ARE FIXED: FACT,
   SETTING, TUNABLE.** A **fact** is read-only and computed fresh on
   every read (`mem_free`, the process list) and has NO stored form, so

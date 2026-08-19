@@ -108,8 +108,9 @@ static const struct { int code; const char *msg; } g_errmsg[] = {
     { EMFILE, "too many open files" },
     { ENOTDIR, "not a directory" },
     { EISDIR, "is a directory" },
-    { ERANGE, "buffer too small" },
+    { ERANGE, "out of range" },
     { ENAMETOOLONG, "path too long" },
+    { ENOTSUP, "not a single value" },
     { ENOSYS, "not implemented" },
 };
 
@@ -231,6 +232,57 @@ int sys_link(const char *existing, const char *newpath) {
 
 int sys_sync(void) {
     return (int)err(syscall0(SYS_SYNC));
+}
+
+// The message is zeroed before each call rather than partly filled: it
+// carries out-fields the kernel writes, and a stale `value` from a
+// previous call reading as this call's answer is the kind of bug that
+// only shows up once two calls happen in the wrong order.
+static void query_msg_init(struct query_msg *m, unsigned op, unsigned cls,
+                           unsigned index) {
+    for (unsigned i = 0; i < sizeof *m; i++) ((char *)m)[i] = 0;
+    m->op = op;
+    m->cls = cls;
+    m->index = index;
+}
+
+int sys_query_record(unsigned cls, unsigned index, void *out, unsigned len) {
+    struct query_msg m;
+    query_msg_init(&m, QUERY_OP_RECORD, cls, index);
+    m.buf = (uint64_t)(uintptr_t)out;
+    m.len = len;
+    if (err(syscall1(SYS_QUERY, (uint64_t)(uintptr_t)&m)) < 0) return -1;
+    return (int)m.returned;
+}
+
+int sys_query_field_count(unsigned cls) {
+    struct query_msg m;
+    query_msg_init(&m, QUERY_OP_FIELD_COUNT, cls, 0);
+    if (err(syscall1(SYS_QUERY, (uint64_t)(uintptr_t)&m)) < 0) return -1;
+    return (int)m.returned;
+}
+
+int sys_query_field_info(unsigned cls, unsigned index, char *name, unsigned *out_type) {
+    struct query_msg m;
+    query_msg_init(&m, QUERY_OP_FIELD_INFO, cls, index);
+    if (err(syscall1(SYS_QUERY, (uint64_t)(uintptr_t)&m)) < 0) return -1;
+    for (unsigned i = 0; i < sizeof m.name; i++) name[i] = m.name[i];
+    if (out_type) *out_type = m.type;
+    return 0;
+}
+
+int sys_query_field_get(const char *qualified, unsigned long long *out_value,
+                        unsigned *out_type) {
+    struct query_msg m;
+    query_msg_init(&m, QUERY_OP_FIELD_GET, 0, 0);
+    unsigned i = 0;
+    for (; qualified && qualified[i] && i < sizeof m.name - 1; i++)
+        m.name[i] = qualified[i];
+    m.name[i] = 0;
+    if (err(syscall1(SYS_QUERY, (uint64_t)(uintptr_t)&m)) < 0) return -1;
+    if (out_value) *out_value = m.value;
+    if (out_type) *out_type = m.type;
+    return 0;
 }
 
 int64_t sys_print(const char *s) {

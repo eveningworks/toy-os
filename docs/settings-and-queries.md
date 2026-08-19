@@ -29,9 +29,10 @@ obvious-looking wrong answer:
   `config diff` has nothing to compare. That is why the two live in
   separate registries rather than one with a read-only flag.
 
-> The query registry is DESIGNED, not built — see
-> [query-design.md](query-design.md). Everything about settings below is
-> live today.
+> The query registry's first stage is LIVE as of 2026-08-19 — the
+> mechanism, the memory provider, `/bin/meminfo`, and `config`'s fact
+> fallback. Tunables are still designed only; see
+> [query-design.md](query-design.md) for what is left.
 
 ## Names
 
@@ -64,10 +65,22 @@ so is the whole reason the third answer exists.
 The files stay hand-editable. `config` is an INDEX over them, which is
 the half `/etc` cannot provide about itself.
 
-Once the query registry lands, `config get` falls back to it for facts —
-`config get system.mem_free` will answer, **labelled as read-only kernel
-state** so it cannot be mistaken for an `/etc` key. `config set` on a
-fact fails because no setting has that name.
+`config get` falls back to the query registry for facts, and **labels
+the answer** so it cannot be mistaken for an `/etc` key:
+
+```
+config get mem.frame_free
+514887
+  (kernel fact, read-only -- a count, not stored in any file)
+
+config get providers.anything
+config: 'providers.anything' is a list of records, not a single value
+  read it with a command built for it (e.g. `meminfo --list`)
+```
+
+A setting wins over a fact of the same name, so `get` and `set` can
+never be talking about different objects. `config set` on a fact fails
+because no setting has that name — no special case needed.
 
 ## From an app
 
@@ -90,9 +103,31 @@ GENERATED from the registry, which is why **a setting registered
 anywhere in the kernel gets a Control Panel row and a `config` entry
 with no edit to either.**
 
-Facts will be `SYS_QUERY(class, index, buf, len)` — one syscall, an
-information class, a typed struct back. Nothing about `config` is
-privileged; it is one client of that call among several.
+Facts go through `SYS_QUERY` (`struct query_msg`), wrapped by libsys:
+
+```c
+struct query_meminfo m;
+sys_query_record(QUERY_MEMINFO, 0, &m, sizeof m);   // a whole record
+
+unsigned long long v; unsigned type;
+sys_query_field_get("mem.frame_free", &v, &type);   // one named field
+```
+
+**Class 0 is the registry describing itself**, so a program that knows
+only the number 0 can walk `struct query_provider_info` records and find
+every other class by name — which is how a generic tool works, while a
+purpose-built one (`/bin/meminfo`) asks for its class directly.
+
+Two rules worth knowing. **`len` is version tolerance**: the kernel
+writes `min(len, record)` and reports how much in `returned`, so a
+struct that GAINS a field does not break an older binary — growth is
+append-only and existing fields never move. And **`count` is a hint, not
+a bound**: a list's length is itself a fact and can change between
+calls, so an enumerator ends on the record that is not there (`-ERANGE`)
+rather than on a count it read earlier.
+
+Nothing about `config` is privileged; it is one client of that call
+among several.
 
 ## Adding a setting
 
@@ -108,6 +143,26 @@ both depend on.
 Put the key in `/etc/toyos.conf` by default. A feature with enough keys
 to be unwieldy there gets its own `/etc/<name>.conf` and an
 `/etc/config.d` descriptor, which also gives it its own namespace.
+
+## Adding a fact
+
+Three things, in the subsystem that owns the numbers — there is no
+central table to edit and no init call to forget:
+
+1. A record struct and a class number in `abi/query_abi.h`.
+2. A `struct query_provider` (`api/query.h`) with `count`/`fill`, plus a
+   `query_field` table if the fields should be addressable by name.
+   Use `QUERY_FIELD()` so the offset is derived from the member rather
+   than written out.
+3. A `query_register()` call at boot.
+
+`kernel/mm/mem_query.c` is the worked example, at about 60 lines.
+
+Two rules. A provider is stored **by pointer**, so it must have static
+storage duration — a stack local leaves the registry holding a dangling
+pointer that reads as plausible garbage. And a **LIST class gets no
+field table**: an index baked into a name means a different record a
+second later, which is sysctl's worst corner.
 
 ## Related
 

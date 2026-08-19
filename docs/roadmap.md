@@ -665,7 +665,8 @@ were found at all.
 ### Observability
 
 - [ ] Panic backtraces with function names, using the DWARF symbols the build already emits
-- [ ] Kernel state queryable without a filesystem -- one syscall, an information class, a provider registry (`docs/query-design.md`)
+- [x] ~~Kernel state queryable without a filesystem -- one syscall, an information class, a provider registry~~ stage 0 DONE 2026-08-19
+- [ ] Move the introspection commands onto it (`meminfo` done; `dmesg`, `kstack`, `heap`, `ata`, `parttable` left) -- `docs/query-design.md`
 - [ ] A sampling profiler driven off the timer interrupt
 - [ ] Per-subsystem counters (cache hits, DMA retries, allocation failures) behind the existing `debug` flags
 - [ ] `dmesg` filtering by subsystem

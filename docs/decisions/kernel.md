@@ -3367,3 +3367,95 @@ it currently trusts wholesale. And a fact has no stored form at all, so
 `config unset` and `config diff` -- both of which compare live against
 file -- have nothing to operate on. A flag would have to disable half
 the command's verbs per row, which is a registry wearing two shapes.
+
+---
+
+## Kernel state is a QUERY SYSCALL, not a `/proc`
+
+Built 2026-08-19 as stage 0 of `docs/query-design.md`, which has the
+full staging. This entry is the decision.
+
+`/proc` is the obvious answer and is wrong here for three reasons that
+get worse in order. It needs a MOUNT TABLE that does not exist --
+`vfs.c` holds one global `struct fs_ops *`, chosen by probing the disk,
+so a second filesystem mounted at a path is the "Real mount points"
+milestone, taken on in order to print `mem_free`. It INVERTS A
+DEPENDENCY: diagnostics would sit on top of storage, so a machine whose
+disk failed to mount loses its introspection at exactly the moment
+somebody needs it, and `dmesg` explaining why the mount failed must not
+itself be a file. And its ABI would be TEXT, which every consumer
+re-parses -- the rule `uui_table` already states (it cannot sort the
+text it draws), and it costs real features: a Task Manager that graphs
+memory needs a number.
+
+Linux is the only mainstream system that made this a filesystem.
+Windows uses `NtQuerySystemInformation(class, buf, len, &returned)`;
+macOS and the BSDs use `sysctl(mib[], ...)`. Both are syscalls. The
+filesystem is the outlier, and it is the one shape this kernel cannot
+cheaply afford.
+
+**What was already here** is most of the NT shape without the name:
+`SYS_SYSINFO`, `SYS_PROC_INFO`, `SYS_PCI_INFO` and `SYS_CPU_INFO` are
+four syscalls that are each ONE information class, each with its own
+number, struct and handler. The number grows by one per fact -- the
+growth `tools/check_dispatch.py` exists to notice -- and not one of them
+can answer "what facts exist?", which is what `config` needs in order to
+read a fact at all.
+
+**Why a registry rather than a switch.** A provider registers from the
+subsystem that owns the numbers, the way a `display_driver`, a
+`block_device`, a `clocksource` and a `struct setting` already do.
+Adding a fact is a struct in `abi/`, a provider, and a registration; no
+central table, no init call to forget. A duplicate class is REFUSED
+rather than resolved first- or last-wins, because either would make the
+answer depend on link order.
+
+**Class 0 is the registry describing itself**, and that is not
+decoration. It means a program needs to know exactly one number to
+discover every other class -- and it gives the LIST path (`count`,
+`index`, the walk) a real caller from the first commit, rather than
+leaving it an unvalidated half. This project's standing rule is that a
+seam with one implementation has not been tested; a registry whose only
+provider is a scalar would have shipped exactly that.
+
+**`len` is the version tolerance, and it is why the message carries a
+length at all.** The kernel writes `min(len, record)` and reports how
+much in `returned`, so a record that GAINS a field does not break a
+binary built against the shorter one. The rule that makes it work:
+existing fields never move and never change meaning -- growth is
+append-only. Same contract as `NtQuerySystemInformation`'s returned
+length.
+
+## `config get` reads facts, and named fields are how
+
+A record has several fields, so `config get mem.frame_free` needs a way
+to name one -- without it a fact has no flat name at all and nothing
+could read a single value or list facts beside settings.
+
+`struct query_field` (name, type, offset) declares them, and
+`QUERY_FIELD()` derives the offset from the struct member so nobody
+maintains a number. **The offsets never cross the syscall boundary**:
+ring 3 sends a name and gets back a value and a type, which is what
+keeps a record free to grow append-only and stops a bad offset arriving
+from userland. Every field is 64 bits, so the reader copies eight bytes
+and has no per-type switch that could disagree with a declared width.
+
+**A LIST class deliberately has no field table.** `config get
+providers.anything` answers `-ENOTSUP`, which is a DIFFERENT answer from
+`-ENOENT`: the class exists and is a table, so the message sends the
+reader to a tool that can show one instead of leaving them hunting for a
+typo they did not make. The alternative -- `proc.3.name` -- is sysctl's
+worst corner: an index baked into a name shifts as the list changes, so
+the same string means a different process a second later. Linux keeps
+processes out of sysctl entirely and reaches them through `/proc/<pid>/`.
+
+**A setting wins over a fact of the same name.** None can collide today
+(the registries are separate and nothing checks across them), but
+resolving settings first means `config get` and `config set` can never
+be talking about different objects.
+
+**And the answer is LABELLED.** A fact prints as read-only kernel state
+rather than in the shape a setting prints in, because the two have
+different lifetimes: a setting survives a reboot and a fact does not
+EXIST between them. A reader who cannot tell which they just read has
+been told something misleading, however correct the number is.

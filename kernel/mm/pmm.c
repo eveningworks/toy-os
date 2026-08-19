@@ -238,6 +238,8 @@ int pmm_frame_is_used(uint64_t phys_addr) {
     return bit_is_used(f);
 }
 
+uint64_t pmm_frame_size(void) { return FRAME_SIZE; }
+
 uint64_t pmm_total_frames(void) { return total_frames; }
 uint64_t pmm_free_frames(void) { return free_frames; }
 

@@ -179,16 +179,53 @@ exists, and for looking at a class that has no command yet.
 
 Each stage builds, boots and passes the existing suites on its own.
 
-### Stage 0 -- the mechanism, and one real provider
+### Stage 0 -- the mechanism, and one real provider -- DONE 2026-08-19
 
-`SYS_QUERY`, `struct query_provider`, the registry, and **memory** as
-the first class, with `/bin/meminfo` over it. One provider rather than
-none, for this project's own bar: a registry with no users is a
-framework, and its first real caller is what finds the shape wrong.
+`SYS_QUERY` (`abi/query_abi.h`), `struct query_provider`, the registry
+(`api/query.h`, `kernel/lib/query.c`), and **memory** as the first class
+(`kernel/mm/mem_query.c`), with `/bin/meminfo` over it.
 
-**Exit criterion:** `meminfo` at the kernel shell and `/bin/meminfo`
-report the same numbers, and a positive control that makes the provider
-return stale values reddens the ring-3 one.
+**Exit criterion: met.** `meminfo` at the kernel shell and
+`/bin/meminfo` report the same numbers -- `total: 524159` and a 4096-byte
+frame from both. They agree because they are ONE READER: `cmd_meminfo()`
+calls `query_read()`, and so does the syscall. `used`/`free` legitimately
+differ between the two runs by ~14 frames, because the ring-3 one is
+itself a process that consumed some; a fact is live, and a check that
+demanded byte-identical output would be asserting the wrong thing.
+
+Four things came out of building it that the plan did not have:
+
+- **Two classes, not one.** `QUERY_PROVIDERS` (class 0, the registry
+  describing itself) ships beside `QUERY_MEMINFO`. Without it the LIST
+  half of the mechanism -- `count()`, `index`, the walk -- would have had
+  no caller and therefore no test, which by this project's own rule is a
+  half nobody has validated. It also means a program needs to know
+  exactly ONE number to discover every other class.
+- **`config get` needed named fields.** A record has several fields, so
+  `config get mem.frame_free` cannot work without a way to name one.
+  `struct query_field` (name, type, offset) declares them, `QUERY_FIELD()`
+  derives the offset from the member so nobody maintains a number, and
+  the FIELD ops carry names and values across the syscall boundary while
+  offsets stay kernel-side -- so a record can still grow append-only.
+- **A LIST class is not addressable as a value, and says so.** `config
+  get providers.anything` answers `-ENOTSUP`, deliberately distinct from
+  `-ENOENT`: "that fact is a table, use a tool that can show one" versus
+  "no such fact". The first sends a reader somewhere useful; the second
+  sends them hunting for a typo they did not make. Linux keeps processes
+  out of sysctl for the same reason.
+- **`SYS_SYSINFO` folded in early** (stage 1's first half). It computed
+  `mem_free_kb` from `pmm_free_frames() * 4` -- a second reader of the
+  same numbers, and a hardcoded frame size. It reads through the
+  registry now, so there is one reader rather than three that agree.
+
+**The positive controls both fired, and one of them found a bug in the
+test.** Making the provider cache `frame_free` reddened exactly the
+liveness check. Making the syscall ignore the caller's `len` reddened
+the truncation check -- but NOT the sentinel beside it, because the
+first version of that fixture handed the kernel a full-size buffer and
+only a short length, so a kernel writing the whole record still fit. The
+buffer is genuinely short now and both fire. That is the control earning
+its keep on the test rather than on the code.
 
 ### Stage 1 -- fold the four existing syscalls in
 

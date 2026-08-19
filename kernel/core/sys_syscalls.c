@@ -19,6 +19,7 @@
 #include "krandom.h"
 #include "errno.h"
 #include "setting.h"
+#include "query.h"     // SYS_QUERY -- the fact registry
 #include "power.h"     // SYS_POWEROFF -- the desktop's shut down/restart
 #include "crashtest.h" // SYS_CRASHTEST -- deliberate faults, see crash_abi.h
 #include "tz.h"
@@ -158,8 +159,19 @@ int sys_sysinfo(struct syscall_ctx *c) {
     } else {
         uint64_t used = 0, total = 0;
         k_memset(&info, 0, sizeof info);
-        info.mem_free_kb  = (uint64_t)pmm_free_frames() * 4;
-        info.mem_total_kb = (uint64_t)pmm_total_frames() * 4;
+        // THROUGH THE REGISTRY, not straight to pmm. This syscall and
+        // the kernel shell's `meminfo` and /bin/meminfo are now one
+        // reader rather than three that agree -- which is the property
+        // that makes them unable to drift, instead of a test that has
+        // to notice afterwards when they have.
+        //
+        // The KB conversion derives the frame size rather than assuming
+        // 4096, which is what the `* 4` here used to do.
+        struct query_meminfo mem;
+        if (query_read(QUERY_MEMINFO, 0, &mem, sizeof mem) > 0) {
+            info.mem_free_kb  = mem.frame_free * mem.frame_bytes / 1024;
+            info.mem_total_kb = mem.frame_total * mem.frame_bytes / 1024;
+        }
         if (fs_disk_usage(&used, &total)) {
             info.disk_used_bytes = used;
             info.disk_total_bytes = total;
@@ -168,6 +180,91 @@ int sys_sysinfo(struct syscall_ctx *c) {
         vmm_copy_to_user(pml4, c->a0, &info, sizeof info); // validated above
         c->regs[14] = 0;
     }
+    return 0;
+}
+
+int sys_query(struct syscall_ctx *c) {
+    uint64_t pml4 = c->pml4;
+    struct query_msg msg;
+    if (!vmm_copy_from_user(pml4, &msg, c->a0, sizeof msg)) {
+        klog_write("syscall: query() rejected -- invalid message pointer\n");
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+
+    int err = 0;
+    switch (msg.op) {
+    case QUERY_OP_RECORD: {
+        // The record is filled in KERNEL memory and copied out, never
+        // written through the user pointer (vmm.h). QUERY_RECORD_MAX
+        // bounds the stack cost -- this kernel has a frame budget and a
+        // guard page, so an unbounded local here is exactly the shape
+        // -Wframe-larger-than exists to catch.
+        uint8_t rec[QUERY_RECORD_MAX];
+        int n = query_read(msg.cls, (int)msg.index, rec, sizeof rec);
+        if (n < 0) { err = n; break; }
+
+        // min(len, record) -- the version tolerance the ABI promises. A
+        // client built against an older, shorter struct gets what it
+        // asked for and `returned` says how much, rather than the call
+        // failing because the kernel's struct grew.
+        uint32_t want = (uint32_t)n;
+        if (msg.len < want) want = msg.len;
+        if (!want || !vmm_validate_user_range(pml4, msg.buf, want)) {
+            err = -EFAULT;
+            break;
+        }
+        vmm_copy_to_user(pml4, msg.buf, rec, want); // validated above
+        msg.returned = want;
+        break;
+    }
+    case QUERY_OP_FIELD_COUNT: {
+        const struct query_provider *p = query_find(msg.cls);
+        if (!p) { err = -ENOENT; break; }
+        msg.returned = p->field_count;
+        break;
+    }
+    case QUERY_OP_FIELD_INFO: {
+        const struct query_provider *p = query_find(msg.cls);
+        if (!p) { err = -ENOENT; break; }
+        if (msg.index >= p->field_count) { err = -ERANGE; break; }
+        // The NAME and the TYPE cross; the offset does not. See
+        // api/query.h -- that is what keeps a record's layout free to
+        // grow append-only without any client caring.
+        k_strlcpy(msg.name, p->fields[msg.index].name, sizeof msg.name);
+        msg.type = p->fields[msg.index].type;
+        break;
+    }
+    case QUERY_OP_FIELD_GET: {
+        // The caller's `name` came out of user memory in the copy above,
+        // so terminate it rather than trusting it -- a name with no NUL
+        // would run k_strcmp off the end of the message.
+        msg.name[sizeof msg.name - 1] = '\0';
+        uint64_t value = 0;
+        uint32_t type = 0;
+        err = query_field_get(msg.name, &value, &type);
+        if (err) break;
+        msg.value = value;
+        msg.type = type;
+        break;
+    }
+    default:
+        klog_printf("syscall: query() rejected -- unknown op %u\n", msg.op);
+        err = -EINVAL;
+        break;
+    }
+
+    if (err) {
+        c->regs[14] = (uint64_t)(int64_t)err;
+        return 0;
+    }
+    // Copied back whole: every op writes at least one out field, and
+    // writing the message back in one place means no op can forget to.
+    if (!vmm_copy_to_user(pml4, c->a0, &msg, sizeof msg)) {
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+    c->regs[14] = 0;
     return 0;
 }
 

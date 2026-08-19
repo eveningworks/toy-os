@@ -9,6 +9,7 @@
 #include "shell.h" // shell_path_find() -- cmd_strace() resolves a binary itself
 #include "apps.h"
 #include "mm_audit.h" // `meminfo audit`
+#include "query.h"    // the fact registry -- `meminfo` reads through it
 
 static const char *MONTHS[] = {
     "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"
@@ -431,15 +432,28 @@ void cmd_meminfo(const char *args) {
 
     multiboot_print_meminfo();
 
-    uint64_t total = pmm_total_frames();
-    uint64_t free = pmm_free_frames();
-    uint64_t used = total - free;
+    // THROUGH THE FACT REGISTRY, not straight to pmm. /bin/meminfo asks
+    // the same provider through SYS_QUERY, so this command and that one
+    // are one reader rather than two that agree -- they cannot report
+    // different numbers, which is a stronger guarantee than a test
+    // comparing their output after the fact.
+    //
+    // The memory MAP above stays a direct call: it is multiboot's, not
+    // the allocator's, and no provider reports it yet.
+    struct query_meminfo m;
+    if (query_read(QUERY_MEMINFO, 0, &m, sizeof m) < 0) {
+        vga_write("\nmeminfo: the memory provider is not registered\n");
+        return;
+    }
+    uint64_t used = m.frame_total - m.frame_free;
 
-    vga_write("\nPhysical frame allocator (4KB frames):\n");
-    vga_write("  total: "); vga_write_dec((uint32_t)total);
-    vga_write(" ("); vga_write_dec((uint32_t)(total * 4 / 1024)); vga_write(" MB)\n");
-    vga_write("  used:  "); vga_write_dec((uint32_t)used);
-    vga_write("  free:  "); vga_write_dec((uint32_t)free); vga_putc('\n');
+    vga_printf("\nPhysical frame allocator (%uKB frames):\n",
+               (uint32_t)(m.frame_bytes / 1024));
+    vga_printf("  total: %u (%u MB)\n", (uint32_t)m.frame_total,
+               (uint32_t)(m.frame_total * m.frame_bytes / (1024 * 1024)));
+    vga_printf("  used:  %u  free:  %u\n", (uint32_t)used, (uint32_t)m.frame_free);
+    vga_printf("Kernel heap: %u of %u bytes used\n",
+               (uint32_t)m.heap_used_bytes, (uint32_t)m.heap_total_bytes);
 }
 
 // `heap` -- the kernel heap's stats, and the switch for its debug mode.

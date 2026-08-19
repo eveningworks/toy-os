@@ -9,6 +9,7 @@
 #include "pci.h"     // struct pci_device, for sys_pci_info()
 #include "cpuinfo.h" // struct cpu_info, for sys_cpu_info()
 #include "setting_abi.h"
+#include "query_abi.h"
 #include "crash_abi.h" // struct setting_msg, struct sys_info
 
 // libsys -- typed wrappers for every syscall a ring-3 program can make.
@@ -223,6 +224,26 @@ int sys_setting(struct setting_msg *msg);
 // sys_cpu_info(), the PCI count sys_pci_count() and uptime
 // sys_monotonic_ns() -- none are duplicated here.
 int sys_sysinfo(struct sys_info *out);
+
+// ---- facts (SYS_QUERY) ----------------------------------------------
+//
+// A FACT is live kernel state, computed on every read and never stored
+// -- as opposed to a SETTING, which is persisted and writable. See
+// docs/settings-and-queries.md's "The vocabulary".
+//
+// Four thin wrappers over one syscall. Class 0 (QUERY_PROVIDERS) is the
+// registry describing itself, so a program needs to know exactly one
+// number to discover every other class -- and a purpose-built command
+// that already knows its class skips discovery and asks directly.
+int sys_query_record(unsigned cls, unsigned index, void *out, unsigned len);
+int sys_query_field_count(unsigned cls);
+// Fills `name` (at least QUERY_FIELD_PATH_MAX bytes) and `*out_type`.
+int sys_query_field_info(unsigned cls, unsigned index, char *name, unsigned *out_type);
+// `qualified` is "<provider>.<field>", e.g. "mem.frame_free". Fails with
+// errno ENOTSUP when the class is a LIST and so has no single value --
+// which is a different answer from ENOENT ("no such fact").
+int sys_query_field_get(const char *qualified, unsigned long long *out_value,
+                        unsigned *out_type);
 
 // Terminates `pid` immediately, reporting `exit_code`. Returns 1 if it
 // was killed, 0 if there is no such process.

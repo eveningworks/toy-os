@@ -90,6 +90,7 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_STAT]          = { "stat",          sys_stat,          { A_PATH, A_HEX } },
     [SYS_LINK]          = { "link",          sys_link,          { A_PATH, A_PATH } },
     [SYS_SYNC]          = { "sync",          sys_sync,          { A_END } },
+    [SYS_QUERY]         = { "query",         sys_query,         { A_HEX } },
 };
 
 #define SYSCALL_TABLE_COUNT (sizeof SYSCALL_TABLE / sizeof SYSCALL_TABLE[0])

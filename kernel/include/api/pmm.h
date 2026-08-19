@@ -59,6 +59,12 @@ void pmm_free_contiguous(uint64_t phys_addr, uint64_t count);
 int pmm_frame_is_managed(uint64_t phys_addr);
 int pmm_frame_is_used(uint64_t phys_addr);
 
+// Bytes in one frame. Exposed so a caller reporting BYTES multiplies by
+// this rather than by a literal 4096 -- which is the assumption that
+// would silently produce wrong numbers the day this allocator gains a
+// second page size. sys_sysinfo() open-coded it as `* 4` for KB.
+uint64_t pmm_frame_size(void);
+
 uint64_t pmm_total_frames(void);
 uint64_t pmm_free_frames(void);
 

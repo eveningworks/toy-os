@@ -87,7 +87,8 @@ history search, `Alt-.` last argument. `help` lists them all.
 |---|---|
 | `time`, `timezone [city]`, `uptime` | |
 | `random [n]` | The entropy source and some values from it. |
-| `meminfo` | Physical frame allocator. |
+| `meminfo` | The memory map, the physical frame allocator and the kernel heap. Reads through the FACT registry (`SYS_QUERY`), so it and `/bin/meminfo` are one reader and cannot report different numbers. |
+| `meminfo --list` | *(`/bin/meminfo` only)* Every registered fact provider: class, name, record count, record size, and whether it is a scalar or a list. |
 | `meminfo audit` | Compares every live process's page tables against the frame allocator, and reports any mapping of a frame the allocator considers free. |
 | `heap` | Kernel heap stats. `heap debug on\|off` red-zones new allocations and poisons freed ones; `heap check` sweeps for a use-after-free. |
 | `df` | Total/used/free, and the name of the active filesystem backend. |
@@ -132,7 +133,7 @@ directory of text cannot provide about itself. See
 | Command | Notes |
 |---|---|
 | `config list` | Every registered setting, its value, and **the file it lives in**. Flags any whose file no longer matches what is live. |
-| `config get <name>` | One value. |
+| `config get <name>` | One value. Falls back to the FACT registry when no setting has that name, so `config get mem.frame_free` answers — **labelled as read-only kernel state**, since a setting survives a reboot and a fact does not exist between them. A list-shaped fact says so and names a tool that can show it. |
 | `config set <name> <value>` | Validate, apply and persist. `name=value` works too. A refusal lists the legal values; a value that applied but did **not** save says so rather than reporting success. |
 | `config unset <name>` | Removes the key, so the built-in default applies at the next boot. |
 | `config where <name>` | Just the owning file's path — scriptable. |
@@ -143,6 +144,13 @@ directory of text cannot provide about itself. See
 | `config find <text>` | Search key names **and** values across every registered config file, `file:key=value` per hit. Case-insensitive. |
 | `config register <name> <path> [description]` | Declare a new config file by writing a descriptor into `/etc/config.d`. Picked up live. |
 | `config unregister <name>` | Remove that descriptor. A built-in cannot be unregistered. |
+
+**Control Panel is GENERATED from the same registry** — it holds no list
+of its own, it asks (`SETTING_OP_COUNT`/`INFO`/`CHOICE`) and draws a row
+per answer. A setting registered anywhere in the kernel gains a Control
+Panel row and a `config` entry with no edit to either. It deliberately
+shows settings only, not facts: it is the "what can I change" screen,
+and read-only counters would bury the settings.
 
 **Settings are named `<namespace>.<name>`** — the namespace being the
 registered name of the file the setting lives in, so `font_size` in

@@ -28,6 +28,7 @@
 #include "timer.h"
 #include "font_config.h"
 #include "setting.h"
+#include "query.h"   // the fact registry -- query_init()/mem_query_init()
 #include "cursor_config.h"
 #include "keyboard_config.h"
 #include "apps.h"
@@ -248,6 +249,11 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // Announce those four to the settings registry, AFTER their own
     // init(): a timezone registered before tz_init() would offer an
     // empty city list, since the choices ARE the loaded database.
+    // The FACT registry, before settings_init() only because a setting
+    // may later want to read one. Each subsystem announces its own
+    // providers; the core registers the registry's self-description.
+    query_init();
+    mem_query_init();
     settings_init();
 
     // One-shot boot-time CMOS/RTC readout, logged for the same reason a

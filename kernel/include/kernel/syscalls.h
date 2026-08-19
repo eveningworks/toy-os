@@ -216,6 +216,7 @@ int sys_cpu_info(struct syscall_ctx *c);
 int sys_getrandom(struct syscall_ctx *c);
 int sys_setting(struct syscall_ctx *c);
 int sys_sysinfo(struct syscall_ctx *c);
+int sys_query(struct syscall_ctx *c);
 int sys_set_color(struct syscall_ctx *c);
 int sys_poweroff(struct syscall_ctx *c);
 int sys_crashtest(struct syscall_ctx *c);

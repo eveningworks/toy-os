@@ -189,15 +189,64 @@ static int cmd_list(void) {
     return 0;
 }
 
+// The FACT fallback: `config get mem.frame_free`.
+//
+// Facts and settings share an addressing scheme -- (namespace, name) --
+// so one command can read both, and only settings can be written. A
+// `config set` on a fact fails because no setting has that name, which
+// needs no special case.
+//
+// IT LABELS THE ANSWER. A fact prints with its provenance, never in the
+// shape a setting prints in, because the two have different lifetimes: a
+// setting survives a reboot and a fact does not EXIST between them. A
+// reader who cannot tell which they just read has been told something
+// misleading, however correct the number is.
+//
+// Returns 1 if this was a fact and it was handled, 0 to fall through to
+// the "no setting named" message.
+static int try_fact(const char *name) {
+    unsigned long long value = 0;
+    unsigned type = 0;
+    char line[160];
+
+    if (sys_query_field_get(name, &value, &type) == 0) {
+        const char *what = (type == QUERY_TYPE_BYTES) ? "a byte count" : "a count";
+        snprintf(line, sizeof line, "%llu", value);
+        putline(line);
+        snprintf(line, sizeof line,
+                 "  (kernel fact, read-only -- %s, not stored in any file)", what);
+        putline(line);
+        return 1;
+    }
+    // ENOTSUP is a DIFFERENT answer from "no such fact": the class is
+    // there and is a table, so send the reader to a tool that can show
+    // one rather than leaving them hunting for a typo they did not make.
+    if (sys_errno() == ENOTSUP) {
+        snprintf(line, sizeof line,
+                 "config: '%s' is a list of records, not a single value", name);
+        putline(line);
+        putline("  read it with a command built for it (e.g. `meminfo --list`)");
+        return 1;
+    }
+    return 0;
+}
+
 static int cmd_get(const char *name) {
     struct setting_msg found;
     int hits = resolve(name, &found, 1);
     if (hits < 0) { putline("config: registry unavailable"); return 1; }
     if (hits > 1) return 1;             // resolve() listed them
     if (hits == 0) {
+        // A SETTING WINS over a fact of the same name. Not that one can
+        // exist today -- the registries are separate and nothing checks
+        // across them -- but resolving settings first means the writable
+        // thing is what `config get` reports, so `get` and `set` can
+        // never be talking about different objects.
+        if (try_fact(name)) return 0;
         char line[128];
         snprintf(line, sizeof line, "config: no setting named '%s'", name);
         putline(line);
+        putline("  (`config list` shows settings; a kernel fact is read-only)");
         return 1;
     }
     // The live value, not the one INFO reported a moment ago: GET is

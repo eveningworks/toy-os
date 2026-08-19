@@ -932,6 +932,24 @@ struct sys_stat {
 // Mirrors fs.h's FS_CAP_INODES for the one caller that needs to say so.
 #define SYS_STAT_INODES (1u << 0)
 
+#define SYS_QUERY 52 // RDI = pointer to a `struct query_msg`
+                      // (abi/query_abi.h), in and out.
+                      //
+                      // Reads a FACT: live kernel state, computed on
+                      // every read and never persisted (see
+                      // docs/settings-and-queries.md's "The vocabulary").
+                      // One syscall with an information class rather
+                      // than one syscall per fact, which is the growth
+                      // SYS_SYSINFO / SYS_PROC_INFO / SYS_PCI_INFO /
+                      // SYS_CPU_INFO were on -- and none of those four
+                      // could answer "what facts exist?".
+                      //
+                      // Class 0 is the registry describing itself, so a
+                      // caller needs to know exactly one number to
+                      // discover every other class.
+                      //
+                      // Returns 0, or a negative errno.
+
 #define SYS_SLEEP 40 // RDI = milliseconds. Parks the caller until that
                           // long has passed, then returns 0. Returns -1
                           // for a caller with no scheduler slot (the

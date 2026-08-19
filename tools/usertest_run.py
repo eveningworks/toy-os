@@ -99,6 +99,11 @@ TESTS = [
      ["malloc_test: all checks passed"], ["FAIL"]),
     ("fsgen_test", 0,
      ["fsgen_test: all checks passed"], ["FAIL"]),
+    # SYS_QUERY from ring 3. Runs fine under `run`: it spawns nothing and
+    # waits for nothing, so the legacy loader's missing scheduler slot
+    # costs it nothing.
+    ("query_test", 0,
+     ["query_test: all checks passed"], ["FAIL"]),
     # Not a self-checker: it exists to prove an exit code survives the
     # round trip out of ring 3, so the CODE is the whole assertion.
     ("exit_test", 42, [], []),
