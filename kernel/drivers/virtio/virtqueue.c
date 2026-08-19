@@ -270,9 +270,25 @@ static int chain_done(struct virtqueue *vq, int head, uint32_t *used_len) {
     vq->last_used++;
 
     if ((int)id != head) {
-        // Only one request is ever in flight in this kernel, so this is
-        // a device that answered with something we did not ask for.
-        klog_printf("virtio: queue %u completed chain %u, expected %d\n", vq->index, id, head);
+        // A LATE COMPLETION OF A CHAIN WE ALREADY GAVE UP ON. Reclaim
+        // it and keep looking, rather than treating it as an error.
+        //
+        // This is the whole reason virtqueue_poll() loops instead of
+        // testing once. The old code consumed the used entry and
+        // returned 0, which lost synchronisation PERMANENTLY: every
+        // stale completion ate one slot while the driver waited for a
+        // head that had already been passed, so one timeout poisoned
+        // every request after it. Observed on CI as a cascade --
+        // "completed chain 0, expected 6", then chain 2, then 4, with
+        // descriptors draining away two at a time.
+        //
+        // Freeing here is safe precisely because the device is DONE
+        // with the chain: a used-ring entry is the device saying so.
+        // That is the opposite of the timeout path, where it may still
+        // be writing and the descriptors must be leaked.
+        klog_printf("virtio: queue %u reclaimed abandoned chain %u (waiting on %d)\n",
+                    vq->index, id, head);
+        free_chain(vq, (uint16_t)id);
         return 0;
     }
     if (used_len) *used_len = len;
@@ -282,6 +298,14 @@ static int chain_done(struct virtqueue *vq, int head, uint32_t *used_len) {
 
 int virtqueue_poll(struct virtqueue *vq, int head, uint32_t *used_len) {
     if (!vq || head < 0) return 0;
+
+    // Which budget was spent, and how much of it -- reported in the
+    // timeout message below. The two paths differ by more than two
+    // orders of magnitude (a fixed ~12ms spin against a 5s wall clock),
+    // so "it timed out" means nothing without saying which one, and
+    // that ambiguity cost a wrong diagnosis of a CI failure.
+    int spun = isr_in_progress();
+    uint64_t started = pit_ticks();
 
     if (isr_in_progress()) {
         // Inside a syscall: pit_ticks() does not advance, so a
@@ -310,7 +334,11 @@ int virtqueue_poll(struct virtqueue *vq, int head, uint32_t *used_len) {
     // which is the right end state for a device that has stopped
     // answering.
     g_lost_chains++;
-    klog_printf("virtio: queue %u timed out on chain %d -- %u descriptor(s) abandoned,"
-                " %u still free\n", vq->index, head, vq->size - vq->num_free, vq->num_free);
+    klog_printf("virtio: queue %u timed out on chain %d after %s (%u tick(s)) --"
+                " %u descriptor(s) abandoned, %u still free\n",
+                vq->index, head,
+                spun ? "a fixed spin, interrupts off" : "the 5s wall-clock budget",
+                (unsigned)(pit_ticks() - started),
+                vq->size - vq->num_free, vq->num_free);
     return 0;
 }
