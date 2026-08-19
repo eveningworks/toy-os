@@ -364,11 +364,41 @@ SeaBIOS did before GRUB loaded us.
 
 **Which disk wins, and why it is decided in `vfs.c`.** `blk_register()`
 is last-writer-wins, so order alone would decide it somewhere nobody
-looks. virtio-blk takes the filesystem only when ATA has no disk, or
-when the `virtioblk` boot flag asks -- the same conservative rule
-`try_live_module()` follows immediately above it, and for the same
-reason: a machine with a real installed system must not have it quietly
-displaced by whatever else is attached.
+looks.
+
+It shipped conservative -- virtio only when ATA had no disk -- on the
+reasoning that a real installed system must not be quietly displaced.
+**That was reversed once there were numbers.** virtio-blk is preferred
+whenever a virtio disk is attached, and ATA is the fallback and the
+legacy path:
+
+- ~10x ATA's write throughput under KVM (`docs/testing.md` has the table)
+- the kernel test suite runs 6.4 s on virtio against 11.9 s on ATA
+- and it passed 3 runs in 3 where ATA passed 2 in 3, on a clean disk
+  each time -- ATA's remaining flake being a host-I/O stall its ~1 s
+  pre-issue budget cannot absorb, which a virtqueue is not exposed to
+
+A machine with only an IDE disk is unaffected: there is no virtio
+device to prefer. `novirtio` on the boot line forces ATA, which is what
+keeps the legacy path reachable and therefore tested -- the same reason
+`nopat` and `notsc` exist.
+
+**FAULT INJECTION MOVED TO THE BLOCK LAYER because of this.** The four
+filesystem error-path KTESTs armed `fault_fail_next_ata_writes()`, an
+ATA-specific injector, so the moment the filesystem was mounted on
+virtio they stopped testing anything -- the writes they expected to
+fail simply succeeded, and all four failed. That is this repo's
+recurring "an interface with one implementation is unvalidated" problem
+pointed at the test infrastructure: only one backend could be made to
+fail on demand, and virtio-blk's error paths could not be tested at
+all.
+
+`blk_read_sectors()`/`blk_write_sectors()` now consult
+`fault_should_fail_block_read/write()`, so any backend can be failed.
+The ATA-specific pair STAYS, and that is not redundancy: ATA's
+write-back cache sits below the block layer, so "the drive refused this
+write" happens on a path `blk_*` cannot reach -- which is why ATA
+already had two injection points rather than one.
 
 A rating field like `clocksource`'s was rejected. With two block
 devices a rating is a number nobody can justify, and a mechanism with

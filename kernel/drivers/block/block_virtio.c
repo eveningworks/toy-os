@@ -38,14 +38,17 @@ static struct block_device VIRTIO_DEV = {
     .trim = 0,
 };
 
-// Did the boot line ask for virtio-blk explicitly? Matched as a whole
-// word, so `virtioblk` does not also match some longer flag.
-static int virtioblk_requested(void) {
+// Did the boot line ask to stay on ATA? Matched as a whole word, so
+// `novirtio` does not also match a longer flag. Same shape as
+// `nokaslr`/`nopat`/`notsc`, and it exists for the same reason those
+// do: a fallback nothing can reach is a guess, and ATA is still the
+// only disk on real hardware.
+static int virtio_disabled(void) {
     const char *cmdline = multiboot_cmdline();
     if (!cmdline) return 0;
-    for (const char *p = cmdline; (p = k_strstr(p, "virtioblk")) != 0; p += 9) {
+    for (const char *p = cmdline; (p = k_strstr(p, "novirtio")) != 0; p += 8) {
         if (p != cmdline && p[-1] != ' ') continue;
-        char after = p[9];
+        char after = p[8];
         if (after == 0 || after == ' ') return 1;
     }
     return 0;
@@ -54,8 +57,19 @@ static int virtioblk_requested(void) {
 int blk_virtio_init(void) {
     if (!virtio_blk_present()) return 0;
 
-    // ATA has a disk and nobody asked -- leave it alone. See block.h.
-    if (ata_present() && !virtioblk_requested()) return 0;
+    // VIRTIO-BLK IS THE PREFERRED DISK when one is attached; ATA is the
+    // fallback and the legacy path. That is the opposite of the rule
+    // this shipped with, and the reason is measured rather than
+    // aesthetic: ~10x ATA's write throughput under KVM (docs/testing.md
+    // has the table), and the kernel test suite runs 6.4 s on virtio
+    // against 11.9 s on ATA, passing 3 runs in 3 where ATA passed 2 in
+    // 3. ATA's remaining flake is a host-I/O stall its ~1 s pre-issue
+    // budget cannot absorb, and a virtqueue simply is not exposed to
+    // it.
+    //
+    // A machine with only an IDE disk is unaffected: virtio_blk_present()
+    // is 0 there and this returns immediately.
+    if (virtio_disabled()) return 0;
 
     if (virtio_blk_flush_supported()) {
         VIRTIO_DEV.caps |= BLK_CAP_FLUSH;

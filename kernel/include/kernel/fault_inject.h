@@ -35,6 +35,23 @@ void fault_fail_next_ata_writes(uint32_t count);
 // Same for ata_read_sector()/ata_read_sectors().
 void fault_fail_next_ata_reads(uint32_t count);
 
+// The next `count` blk_write_sectors()/blk_read_sectors() calls fail
+// without reaching whatever device is registered.
+//
+// USE THESE, NOT THE ATA PAIR ABOVE, FOR ANYTHING TESTING THE
+// FILESYSTEM. The ATA injectors reach only one backend, so a
+// filesystem error-path test written against them silently stops
+// testing anything the moment the filesystem is mounted on something
+// else -- measured: with the filesystem on virtio-blk, four fs error
+// tests failed outright, because the writes they expected to fail
+// simply succeeded. The block layer is where "the device refused this"
+// belongs, since that is the seam every backend passes through.
+//
+// The ATA pair stays for ATA's OWN tests (the write-back cache, which
+// lives below this layer and cannot be reached from here).
+void fault_fail_next_block_writes(uint32_t count);
+void fault_fail_next_block_reads(uint32_t count);
+
 // The next `count` kmalloc()/kzalloc() calls return NULL without
 // allocating. Note kfree() is unaffected -- freeing is not a failure
 // path in this heap.
@@ -47,6 +64,8 @@ int fault_any_armed(void);
 
 // Called by the injection points themselves; returns 1 if this call
 // should be failed (and consumes one from the countdown).
+int fault_should_fail_block_write(void);
+int fault_should_fail_block_read(void);
 int fault_should_fail_ata_write(void);
 int fault_should_fail_ata_read(void);
 int fault_should_fail_alloc(void);

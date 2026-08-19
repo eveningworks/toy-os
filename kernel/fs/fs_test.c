@@ -414,9 +414,9 @@ KTEST("fs", "a failed metadata write is reported, not swallowed") {
     // persist_record() writes the journal data, the commit header and
     // the table slot. Fail all of them: fs_touch() must report failure
     // rather than returning success for a file that isn't on disk.
-    fault_fail_next_ata_writes(64);
+    fault_fail_next_block_writes(64);
     int created = fs_touch("/.ktest_meta");
-    fault_fail_next_ata_writes(0);
+    fault_fail_next_block_writes(0);
 
     KTEST_ASSERT_EQ(created, 0);
     // And the in-memory table must agree -- the rollback in tfs_touch()
@@ -431,9 +431,9 @@ KTEST("fs", "a failed data write is reported") {
 
     static char chunk[4096];
     for (int i = 0; i < 4096; i++) chunk[i] = 'x';
-    fault_fail_next_ata_writes(64);
+    fault_fail_next_block_writes(64);
     int ok = fs_write_range("/.ktest_dwrite", 0, chunk, sizeof(chunk));
-    fault_fail_next_ata_writes(0);
+    fault_fail_next_block_writes(0);
     KTEST_ASSERT_EQ(ok, 0);
 
     fs_delete("/.ktest_dwrite");
@@ -447,9 +447,9 @@ KTEST("fs", "a failed read is reported, not silently short") {
     KTEST_ASSERT(fs_write_range("/.ktest_dread", 0, chunk, sizeof(chunk)) == 1);
 
     static char readback[4096];
-    fault_fail_next_ata_reads(64);
+    fault_fail_next_block_reads(64);
     uint32_t got = fs_read_range("/.ktest_dread", 0, readback, sizeof(readback));
-    fault_fail_next_ata_reads(0);
+    fault_fail_next_block_reads(0);
     // A read that can't reach the disk must come back short (or zero),
     // never claim a full-length read of whatever was in the buffer.
     KTEST_ASSERT(got < sizeof(readback));
@@ -468,9 +468,9 @@ KTEST("fs", "a failed rename leaves both names as they were") {
     // the destination still absent. Half a rename is the failure this
     // is guarding against, and it is invisible to any test that only
     // checks the return value.
-    fault_fail_next_ata_writes(64);
+    fault_fail_next_block_writes(64);
     int ok = fs_rename("/.ktest_mvf_a", "/.ktest_mvf_b");
-    fault_fail_next_ata_writes(0);
+    fault_fail_next_block_writes(0);
     KTEST_ASSERT_EQ(ok, 0);
     KTEST_ASSERT(fs_exists("/.ktest_mvf_a") == 1);
     KTEST_ASSERT_EQ(fs_exists("/.ktest_mvf_b"), 0);

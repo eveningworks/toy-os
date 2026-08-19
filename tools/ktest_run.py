@@ -34,7 +34,7 @@ DEFAULT_TIMEOUT = 60.0
 SERIAL_PORT = 4555  # COM1 exposed as a TCP socket; not the QMP port (4445)
 
 
-def launch(iso, disk, qemu_log):
+def launch(iso, disk, qemu_log, virtio_disk=None):
     cmd = [
         "qemu-system-x86_64",
         "-cdrom", iso,
@@ -75,6 +75,23 @@ def launch(iso, disk, qemu_log):
         "-no-reboot",
         "-no-shutdown",
     ]
+    # An optional SECOND disk on virtio-blk, alongside the IDE one.
+    #
+    # BOTH, deliberately. The [ata]/[atac] KTESTs need a real IDE drive
+    # and skip without one, so replacing the disk rather than adding to
+    # it would trade a flake for a coverage hole. With both attached the
+    # `virtioblk` boot flag decides which one carries the FILESYSTEM
+    # (kernel/fs/vfs.c), so the ata tests keep their drive and every
+    # fs/setting test runs over virtio.
+    #
+    # A separate image file because QEMU takes a write lock -- the same
+    # file cannot be attached twice.
+    if virtio_disk:
+        cmd[cmd.index("-no-reboot"):cmd.index("-no-reboot")] = [
+            "-drive", f"file={virtio_disk},format=raw,if=none,id=vblk",
+            "-device", "virtio-blk-pci,drive=vblk,disable-legacy=on",
+        ]
+
     log = open(qemu_log, "wb")
     return subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
 
@@ -86,6 +103,10 @@ def main():
     ap.add_argument("--disk", default="disk.img")
     ap.add_argument("--suite", default="", help="run only this suite (e.g. fs, mm, lib)")
     ap.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
+    ap.add_argument("--virtio-disk", default=None,
+                    help="also attach PATH as a virtio-blk disk. With the `virtioblk` "
+                         "boot flag baked into the ISO, the filesystem then lives on "
+                         "virtio while the [ata] KTESTs keep the IDE drive.")
     ap.add_argument("--qemu-log", default="ktest_qemu.log")
     ap.add_argument("-v", "--verbose", action="store_true", help="print the whole serial transcript")
     args = ap.parse_args()
@@ -94,7 +115,7 @@ def main():
         print(f"ktest_run: {args.iso} not found -- build it first (make iso)")
         return 1
 
-    qemu = launch(args.iso, args.disk, args.qemu_log)
+    qemu = launch(args.iso, args.disk, args.qemu_log, args.virtio_disk)
     transcript = ""
     verdict = None
     try:

@@ -38,6 +38,7 @@ it has exonerated one this session and convicted another.
 ## Intermittent -- a rate, not a verdict
 
 - [ ] `tools/ktest_run.py` reports the debug console never came up, on 5 boots in 9 -- PRE-EXISTING
+- [ ] ATA writes time out under host I/O pressure -- `dma write failed after 3 attempts (drive stayed busy, command never issued)`; measured 1 run in 3 locally on a clean disk, and it was CI's recurring red build until the filesystem moved to virtio-blk
 - [ ] `heap-debug`'s use-after-free check fails about 1 run in 15 -- PRE-EXISTING
 - [ ] `newsyscalls_test` fails intermittently in CI, and not locally
 - [ ] `tools/faulttest_run.py` reports 0/3, and it is PRE-EXISTING

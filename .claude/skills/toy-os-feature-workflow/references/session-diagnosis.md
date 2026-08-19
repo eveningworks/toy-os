@@ -571,3 +571,31 @@ pointed straight at the two output changes responsible.
 The habit worth keeping: **run the comparison before forming a theory**,
 in either direction. It costs one build and removes the entire class of
 wrong explanations that begin "it was probably already broken".
+
+## 2026-08-19: verify a bulk doc edit against CONTENT, not a grep you typed
+
+Splitting `docs/bugs.md` out of the roadmap, I made the same class of
+mistake three times in one session, and it is worth naming because each
+one FELT like careful checking.
+
+- The extraction regex assumed `- [ ]` bullets where the file uses
+  `###` headings, so it matched 4 of 19 entries and silently left the
+  rest.
+- Checking what had been lost, `grep -c "rammeter doesn't appear"`
+  returned 0 -- because the file says `` `rammeter` doesn't appear ``,
+  with backticks. I reported lost content to the user that was never
+  lost.
+- Earlier the same day, "2 of 6 bugs have no repro" was wrong for the
+  same reason: the search strings were too literal.
+
+**The fix is method, not care.** A hand-typed grep tests your memory of
+the text, not the text. Verify a bulk edit by SET COMPARISON in the
+script that performs it -- assert every line removed from A appears
+verbatim in B, before either file is written -- and let it throw rather
+than reporting a count you then have to interpret. Line counts are
+equally useless here: the total went UP while an entry was missing,
+because the new file added a header.
+
+And when it does go wrong: `git checkout` the files and redo it. The
+restore cost seconds; the alternative was reasoning about a
+half-migrated pair of files.

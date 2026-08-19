@@ -1147,6 +1147,23 @@ technical conventions below:
   permission and the more permissive one always wins. Adding to the
   `paging` KTESTs is the cheap way to keep this honest; their positive
   controls are in the commit that added them.
+- **VIRTIO-BLK IS THE PREFERRED DISK; ATA IS THE LEGACY PATH.** When a
+  virtio disk is attached it carries the filesystem, and `novirtio` on
+  the boot line forces ATA back (which is what keeps that path
+  reachable, and therefore tested -- same reason as `nopat`/`notsc`). A
+  machine with only an IDE disk is unaffected. The reversal was
+  measured, not preferred: ~10x ATA's write throughput under KVM, the
+  kernel test suite in 6.4 s against 11.9 s, and 3 clean runs in 3
+  where ATA managed 2 in 3. **CI runs the filesystem on virtio for that
+  last reason** and keeps a non-blocking ATA job beside it.
+  **Fault injection moved to the BLOCK LAYER because of this**
+  (`fault_should_fail_block_read/write()`, consulted in
+  `blk_read_sectors()`/`blk_write_sectors()`): four filesystem
+  error-path KTESTs armed the ATA-specific injector and stopped testing
+  anything the moment the filesystem was not on ATA. **Use the
+  `fault_fail_next_block_*` pair for anything testing a FILESYSTEM**;
+  the ATA pair stays for ATA's own write-back cache, which sits below
+  the block layer and cannot be reached from it.
 - **A filesystem talks to a `block_device`, not to a disk.**
   `kernel/include/kernel/block.h` -- five required ops, two optional
   behind capability bits, one active device, registered like

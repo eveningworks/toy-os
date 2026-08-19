@@ -176,12 +176,13 @@ static void probe_and_mount(int allow_format) {
         // last-writer-wins and order alone would otherwise decide it
         // somewhere nobody looks.
         //
-        // virtio-blk takes the disk only when ATA has none, or when the
-        // `virtioblk` boot flag asks for it. That is the same
-        // conservative rule try_live_module() follows just above, and
-        // for the same reason: a machine with a real installed system
-        // must not have it quietly displaced by whatever else happens
-        // to be attached.
+        // VIRTIO-BLK FIRST, ATA as the fallback. virtio is the faster
+        // and better-tested path now (see block_virtio.c for the
+        // numbers); ATA is the legacy one, and still the only disk on
+        // real hardware, so it keeps working untouched on any machine
+        // without a virtio device. `novirtio` on the boot line forces
+        // it, which is what keeps that path reachable and therefore
+        // tested.
         if (!blk_virtio_init()) blk_ata_init();
     }
 

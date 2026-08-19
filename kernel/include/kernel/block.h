@@ -92,10 +92,10 @@ void blk_ata_init(void);
 // it should have it. Returns 1 if it took the role.
 //
 // PRECEDENCE, since blk_register() is last-writer-wins and order alone
-// decides: virtio-blk takes the disk only when ATA has none, or when
-// the `virtioblk` boot flag asks. See kernel/fs/vfs.c, where that
-// choice is made in one place -- the same conservative rule
-// try_live_module() follows there, and for the same reason.
+// decides: virtio-blk is PREFERRED when a virtio disk is attached, and
+// ATA is the fallback and the legacy path. `novirtio` on the boot line
+// forces ATA. See kernel/fs/vfs.c, where the choice is made in one
+// place, and block_virtio.c for the measurements behind it.
 int blk_virtio_init(void);
 
 // Registers a RAM-backed device over [base, base + bytes). For a live

@@ -1,6 +1,7 @@
 // The block-device registry -- see kernel/include/kernel/block.h for
 // why a filesystem talks to this rather than to a disk driver.
 #include "block.h"
+#include "fault_inject.h"
 #include "klog.h"
 #include "kfmt.h" // klog_printf
 #include <stddef.h>
@@ -56,11 +57,17 @@ const char *blk_name(void) { return g_dev ? g_dev->name : "none"; }
 
 uint32_t blk_sector_count(void) { return g_dev ? g_dev->sector_count() : 0; }
 
+// Fault injection lives HERE, not in a driver, so a filesystem error
+// path can be tested whatever the filesystem is mounted on. See
+// fault_inject.h -- the ATA-specific pair still exists for ATA's own
+// write-back cache tests, which sit below this layer.
 int blk_read_sectors(uint32_t lba, int count, void *buf) {
+    if (fault_should_fail_block_read()) return 0;
     return g_dev ? g_dev->read_sectors(lba, count, buf) : 0;
 }
 
 int blk_write_sectors(uint32_t lba, int count, const void *buf) {
+    if (fault_should_fail_block_write()) return 0;
     return g_dev ? g_dev->write_sectors(lba, count, buf) : 0;
 }
 

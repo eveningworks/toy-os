@@ -734,3 +734,34 @@ dialog separately, so the two orders cannot drift again. **When a test
 derives an index in one program and applies it in another, the ordering
 is part of the interface** -- and the cheapest way to keep an interface
 true is to make it one piece of code rather than two that agree today.
+
+## 2026-08-19 (virtio-blk): the fixture decides what your test measures
+
+**START FROM A CLEAN DISK BEFORE COMPARING TWO CONFIGURATIONS, or you
+will compare neither.** Benchmarking ATA against virtio-blk, the virtio
+run failed 7 filesystem tests and it looked like a real driver bug. It
+was not: an earlier failing run had leaked blocks into `disk.img`, and
+`r.leaked` from `fsck` is the documented dirty-fixture symptom. The
+proof was running the ATA config -- the supposed control -- and
+watching it fail identically. `make clean-disk && make iso` between
+runs, and treat "the control also fails" as the fastest way to find out
+your fixture is the variable.
+
+**AND RUN EACH CONFIGURATION MORE THAN ONCE.** One clean ATA run passed,
+the next failed, the third passed. A single run of each would have said
+either "ATA is fine" or "virtio broke ATA" depending purely on which
+one you happened to take. Three runs each gave the answer that actually
+mattered: ATA 2 in 3, virtio 3 in 3.
+
+**A TEST TIED TO ONE IMPLEMENTATION SILENTLY STOPS TESTING WHEN THE
+IMPLEMENTATION CHANGES.** Four filesystem error-path KTESTs armed
+`fault_fail_next_ata_writes()` and asserted the write failed. Mount the
+same filesystem on virtio-blk and the injector controls nothing: the
+writes succeed, and the tests fail -- which at least is loud. The
+quieter version of this is a test that keeps PASSING for the wrong
+reason. The fix was moving injection to the block layer, where every
+backend passes through; the ATA pair stayed, because ATA's write-back
+cache lives below that layer and cannot be reached from it.
+
+Ask of any test using a fault injector, a fixture, or a device: **what
+happens to this when the thing underneath is swapped?**
