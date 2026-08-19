@@ -723,6 +723,25 @@ technical conventions below:
   Caught as a heap red-zone violation on a 96-byte block holding
   `ame=Calc`. **The cost to know**: a refusal looks exactly like "no such
   file" at the call site, so it is logged. See `docs/decisions.md`.
+- **THERE ARE THREE WORDS FOR SYSTEM STATE AND THEY ARE FIXED: FACT,
+  SETTING, TUNABLE.** A **fact** is read-only and computed fresh on
+  every read (`mem_free`, the process list) and has NO stored form, so
+  it does not exist between boots. A **setting** is read/write and
+  persisted to `/etc` (`font_size`, `timezone`). A **tunable** is a
+  SETTING whose `apply` also writes a live kernel variable -- a kind of
+  setting, not a third registry. Facts live in the query registry
+  (`docs/query-design.md`, designed not built); settings and tunables
+  both live in the setting registry (`api/setting.h`), which is what
+  `config` and Control Panel are generated from.
+  **Do not invent a fourth word** -- "property", "metric", "reading",
+  "parameter" -- for any of these. A codebase with four names for two
+  concepts is one nobody can grep. `docs/settings-and-queries.md`'s
+  "The vocabulary" is the definition and the only copy of the table;
+  point at it rather than restating it. The distinction that is easy to
+  get wrong: a fact is NOT a setting with the write refused, which is
+  why the two are separate registries rather than one with a read-only
+  flag -- "reset it to the default" is meaningless for a fact, and
+  `config diff` has nothing to compare.
 - **Setting a setting to the value it already has does NOTHING** --
   `setting_set()` compares the live value AND the file first, and skips
   the write and the generation bump. This is not micro-optimisation:

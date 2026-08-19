@@ -3,11 +3,31 @@
 How to read and change what the system knows about itself. Two
 registries, one addressing scheme.
 
-**Facts** are read-only and computed fresh — memory free, the process
-list. **Settings** are read/write and persisted to `/etc` — `font_size`,
-`timezone`. **Tunables** are settings whose `apply` also writes a live
-kernel variable. Facts live in the query registry; settings and tunables
-live in the setting registry.
+## The vocabulary
+
+**These three words are the project's terms for these three things. Use
+them; do not invent a fourth.** A codebase with "facts", "properties",
+"metrics" and "readings" for one concept is one where nobody can grep
+for the thing they mean.
+
+| Term | What it is | Registry | Writable | Survives a reboot |
+|---|---|---|---|---|
+| **Fact** | Read-only, computed fresh on every read — `mem_free`, the process list, a PCI device | query | no | it does not EXIST between boots |
+| **Setting** | Read/write, persisted to `/etc` — `font_size`, `timezone`, `PATH` | setting | yes | yes |
+| **Tunable** | A setting whose `apply` also writes a live kernel variable — a scheduler slice, a cache depth | setting | yes | optionally |
+
+Two distinctions the table is making precise, both of which were live
+questions while this was being designed and both of which have an
+obvious-looking wrong answer:
+
+- **A tunable is a KIND OF SETTING, not a third registry.** It differs
+  only in what its `apply` touches. The word exists because "setting"
+  alone does not tell you whether changing it does anything before the
+  next boot.
+- **A fact is not a setting with the write refused.** It has no stored
+  form at all, so "reset it to the default" is meaningless and
+  `config diff` has nothing to compare. That is why the two live in
+  separate registries rather than one with a read-only flag.
 
 > The query registry is DESIGNED, not built — see
 > [query-design.md](query-design.md). Everything about settings below is

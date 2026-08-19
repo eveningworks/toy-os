@@ -118,13 +118,13 @@ same property that makes adding a syscall three edits and no registry.
 
 ## Facts, settings and tunables
 
-Three kinds, ONE addressing scheme, two registries.
-
-| kind | example | registry | writable | persisted |
-|---|---|---|---|---|
-| **fact** | `mem_free`, the process list | query | no | never |
-| **config setting** | `font_size`, `timezone` | setting | yes | yes |
-| **tunable** | a scheduler slice, a cache depth | setting | yes | optionally |
+Three kinds, ONE addressing scheme, two registries. **The terms are
+defined once, in
+[settings-and-queries.md](settings-and-queries.md#the-vocabulary)** --
+a fact is read-only and computed, a setting is read/write and
+persisted, a tunable is a setting whose `apply` also writes a live
+kernel variable. They are the project's words for these three things;
+repeating the table here would be a second copy to keep true.
 
 **A tunable is a setting, not a third thing.** `struct setting` already
 carries a namespace derived from its file and one `apply` that

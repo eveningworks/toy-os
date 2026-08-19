@@ -3321,3 +3321,49 @@ of zeroed fields invites a caller to believe them. Its timestamps are
 `struct rtc_time` for the same reason `struct dirent`'s are: the epoch
 shape is kernel-internal (`fs.h`'s `fs_stat_info`) and is converted back
 to civil time at the boundary.
+
+---
+
+## Three words for system state: fact, setting, tunable
+
+Fixed as project vocabulary on 2026-08-19, while designing the query
+registry. Defined once in `docs/settings-and-queries.md`'s "The
+vocabulary"; this entry is why those three and not others.
+
+**The problem a name solves here is telling apart things that look
+alike at the call site.** `mem_free` and `font_size` are both "a named
+value the system knows", both addressed as `namespace.name`, and both
+readable with one call -- and they behave completely differently.
+One is computed on every read and has no stored form; the other has a
+file behind it, survives a reboot, and can be reset to a default. A
+single word for both invites exactly the API that has to explain, per
+value, which one you are holding.
+
+**Why "fact" rather than "property" or "metric".** *Property* implies
+something the object HAS and could in principle set; the whole point is
+that nothing can. *Metric* implies a measurement over time -- fine for
+`mem_free`, wrong for the process list or a PCI device, which are half
+of them. *Fact* carries neither implication and reads correctly for a
+scalar and for a list.
+
+**Why "tunable" is a kind of setting rather than a third thing.** It
+differs from an ordinary setting only in what its `apply` touches: a
+live kernel variable as well as a file. Giving it its own registry
+would mean three mechanisms and three places to keep the `(namespace,
+name)` addressing consistent, to express one extra behaviour that
+`struct setting` already has a slot for. The word still earns its keep,
+because "setting" alone does not tell a reader whether changing it does
+anything before the next boot -- which is the first question anybody
+asks about a kernel knob. Same split sysctl makes: `/etc/sysctl.conf`
+persists, `sysctl -w` writes live, and both are the same names.
+
+**Why a fact is not a setting with the write refused.** This was the
+tempting simplification -- one registry, a read-only flag, `config
+list` showing everything. Two things break. The setting registry's
+value is answering "what can I change?", which is what GENERATES
+Control Panel; two hundred read-only counters in that list bury the ten
+real settings, and Control Panel would have to start filtering a list
+it currently trusts wholesale. And a fact has no stored form at all, so
+`config unset` and `config diff` -- both of which compare live against
+file -- have nothing to operate on. A flag would have to disable half
+the command's verbs per row, which is a registry wearing two shapes.
