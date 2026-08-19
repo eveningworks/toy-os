@@ -901,6 +901,27 @@ technical conventions below:
   objects can't be shared, but the source can, which is why the ring-3
   and kernel Calculators cannot disagree about arithmetic. Only
   freestanding files qualify.
+- **COLOUR IS AN ESCAPE SEQUENCE, NOT A SYSCALL.** `kernel/lib/ansi.c`
+  parses SGR (`ESC[...m`) at the top of `vga_putc()` -- in front of the
+  sink check, so the physical console and a GUI Terminal's scrollback
+  both get the COLOUR rather than the bytes, and neither knows what an
+  escape is. **Write escapes, don't call `sys_set_color()`** from a
+  program: that syscall reaches around the byte stream and changes
+  console state directly, so `ls > out.txt` recoloured the console while
+  its output went to the file. Four things to know. **ANSI's colour
+  order is not VGA's** (ANSI 1 is red, VGA 1 is blue), so the mapping is
+  a TABLE -- `ansi_color()` -- and index 7 is `VGA_LIGHT_GREY` so that
+  its bright form is white rather than off the end of the palette.
+  **Sequences this console cannot honour are SWALLOWED, not printed**
+  (a cursor move, a clear), which is what a terminal declining something
+  is supposed to do rather than spraying `[2J` on screen. **There is no
+  `isatty()`**, so a program cannot tell a terminal from a pipe and
+  `--color=auto` does not exist -- `/bin/ls` offers `never`/`always` and
+  defaults to one-entry-per-line output, which is the parseable shape.
+  And **a program's flags are its own**: `apps/shell_sys.c`'s
+  `cmd_ls_bin()` used to re-parse `ls`'s flags into a `char[8]` and
+  mangled `--color=never` into `--color=`; it forwards them verbatim now
+  and only resolves the path against the shell's cwd.
 - **A FAILED SYSCALL RETURNS `-ERRNO` NOW, AND `-1` IS `-EPERM`.**
   `abi/errno.h` -- Linux's numbers, fourteen of them, and a return in
   `[-4094, -1]` means failure. A new handler REPORTS A CODE
@@ -2197,6 +2218,9 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   `/etc`), `stdin_test.py` (blocking fd 0 and `/bin/tosh`, which
   needs the physical console and so takes the desktop down first),
   `kvm_soak.py` (the timing bugs TCG cannot show),
+  `ls_test.py` (`/bin/ls`'s flags, ordering and the listing cap -- it
+  stages a 300-entry directory from the HOST, since the cap is
+  unreachable by typing `touch`),
   `mem_stress.py`, `frame_balance.py` (does teardown balance),
   `live_boot_test.py`, `fs_switch_test.py`, `tfs3_v1_test.py`,
   `mkpart_test.py`, `demo_test.py`.

@@ -74,7 +74,10 @@ and job control is what a terminal on that TTY makes possible.
 - [ ] `termios`-style settings: raw vs cooked, echo on/off, and the per-terminal state to hold them
 - [ ] A per-TTY input queue, so two terminals don't share one keyboard buffer
 - [ ] Window size as a property a program can ask for (the `ioctl` every full-screen program expects)
+- [x] ~~Output processing: ANSI SGR (colour) parsed by the console~~ done -- `kernel/lib/ansi.c`, for the console and any sink
 - [ ] Output processing: newline translation, tab expansion
+- [ ] `isatty()`, so a program can tell a terminal from a pipe -- what `ls --color=auto` needs
+- [ ] Cursor movement and screen clearing escapes are swallowed, not implemented
 - [ ] A controlling terminal per process, and what happens when it goes away
 - [ ] Scrollback per virtual terminal, not one global console buffer
 
@@ -86,6 +89,7 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~init starting `/bin/tosh` on the `text` target, in place of the kernel shell~~ DONE 2026-08-19
 - [x] ~~**`dup`/`dup2`-style fd plumbing**, so the shell can wire an arbitrary fd to 0/1/2~~ DONE 2026-08-19
 - [ ] A per-process cwd
+- [ ] `/bin/tosh` has its own `ls` builtin beside `/bin/ls` -- two implementations of one command
 - [ ] An environment passed to a child
 - [ ] Ctrl-C
 - [ ] **`#!` handling**, which is the loader's job, not the shell's: `elf_load()` rejects a non-ELF file
@@ -701,6 +705,8 @@ were found at all.
 - [ ] **A ring-3 file manager**, the second caller the rubber-band module was shaped for
 ## Known issues and papercuts (unscheduled)
 
+- [ ] `SYS_LISTDIR` still truncates at 256 entries, and TFS3 has no such cap -- the fix is an offset argument
+- [ ] `SYS_LISTDIR` returns 0 for a missing directory and for an empty one alike, so `ls` cannot tell them apart
 - [ ] Nothing detects an ordinary memory LEAK, in either allocator
 - [x] ~~`ata_dma_nonblocking_selftest()` has a 1040-byte stack frame~~ done
 - [ ] The shell's command dispatch is a 60-branch chain, and the fix is not the obvious one
@@ -760,7 +766,7 @@ Smaller or lower-priority items not yet slotted into a section above.
 - [ ] Virtio drivers (disk/net)
 - [ ] Multi-architecture support (RISC-V) -- see `docs/arch-portability.md`
 - [ ] A RAM disk backend, once Real mount points makes a second backend addressable
-- [ ] `ls` colour/format options beyond `-l`/`-a`
+- [x] ~~`ls` colour/format options beyond `-l`/`-a`~~ done -- `-1CFhlRrSt`, `--color`, sorted by name, and colour as ANSI
 - [ ] Serial debug console: make it writable -- read-only inspection today, deliberately (`docs/decisions.md`)
 - [ ] Replace the fixed `MAX_WINDOWS`-style compile-time caps (and TFS2's `FS_MAX_FILES`) with growable structures
 - [ ] Stretch: port a small classic game (e.g. Doom, `doomgeneric`-style) -- see `docs/roadmap-details.md` for the prerequisites

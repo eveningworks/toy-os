@@ -7,6 +7,7 @@
 // doesn't need to know which backend is actually active.
 
 #include "vga.h"
+#include "ansi.h"
 #include "io.h"
 #include "gfx.h"
 #include "timer.h"
@@ -826,7 +827,32 @@ uint32_t vga_color_rgb(enum vga_color c) {
     return palette_rgb(c);
 }
 
+// ANSI ESCAPES ARE PARSED HERE, IN FRONT OF EVERYTHING ELSE -- before
+// the sink check below, so a GUI Terminal's scrollback gets the COLOUR
+// rather than the escape bytes, and both surfaces behave the same
+// without either of them knowing what an escape is. One parser, because
+// there is one console; a per-terminal one is the TTY milestone's job.
+//
+// The state it carries is why colour cannot simply be re-derived per
+// call: a sequence arrives one byte at a time through vga_putc(), so
+// `ESC [ 3 1 m` is five separate calls with the decision made on the
+// last one.
+static struct ansi_parser g_ansi;
+static int g_ansi_armed;
+
 void vga_putc(char c) {
+    if (!g_ansi_armed) { ansi_init(&g_ansi, cur_fg, cur_bg); g_ansi_armed = 1; }
+    switch (ansi_feed(&g_ansi, c)) {
+    case ANSI_PASS:
+        break;
+    case ANSI_SGR:
+        vga_set_color(g_ansi.fg, g_ansi.bg);
+        return;
+    case ANSI_EATEN:
+    default:
+        return;
+    }
+
     if (active_sink) {
         if (c == '\b') {
             if (active_sink->backspace) active_sink->backspace(active_sink->ctx);

@@ -251,12 +251,32 @@ struct dirent {
     struct rtc_time modified;
 };
 
-#define SYS_LISTDIR_MAX 32 // caps how many entries a single SYS_LISTDIR
-                            // call can fill -- matches FS_MAX_FILES
-                            // (fs.h), since that's the most any
-                            // directory could ever hold anyway. A `max`
-                            // argument above this is silently clamped
-                            // down to it, not rejected.
+#define SYS_LISTDIR_MAX 256 // caps how many entries a single SYS_LISTDIR
+                            // call can fill. A `max` argument above this
+                            // is silently clamped down to it, not
+                            // rejected.
+                            //
+                            // IT WAS 32, and its comment claimed that
+                            // "matches FS_MAX_FILES (fs.h), since that's
+                            // the most any directory could ever hold" --
+                            // which was wrong twice: FS_MAX_FILES is 256,
+                            // and TFS3 has no per-directory cap at all.
+                            // So `ls` silently listed the first 32
+                            // entries of a bigger directory and stopped,
+                            // with nothing said. Measured 2026-08-19 by
+                            // putting 40 files in one directory.
+                            //
+                            // 256 matches FS_MAX_FILES for real, which
+                            // bounds a TFS2 volume. IT STILL DOES NOT
+                            // BOUND TFS3, so this remains a truncation
+                            // point rather than a guarantee -- the real
+                            // fix is an offset argument so a caller can
+                            // page through, which changes this call's
+                            // ABI and is a roadmap item. What changed
+                            // here is that a caller can now DETECT it:
+                            // a full array means "there may be more",
+                            // and /bin/ls says so instead of stopping
+                            // quietly.
 
 #define SYS_LISTDIR 13 // RDI = pointer to a NUL-terminated directory
                         // path (same length limit as SYS_OPEN), RSI =

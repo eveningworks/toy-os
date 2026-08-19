@@ -1216,14 +1216,26 @@ void cmd_strace(const char *name_and_args) {
 // neither does userland/ls.c, so this is the one place a relative path
 // gets turned into an absolute one before crossing into ring 3.
 void cmd_ls_bin(const char *args) {
-    char flags[8];
-    size_t flags_len = 0;
+    // FLAGS ARE PASSED THROUGH VERBATIM. This used to take each token
+    // apart, collect the flag LETTERS into a char[8] and rebuild them as
+    // one `-abc` cluster -- which meant this ring-0 function had to know
+    // /bin/ls's flag vocabulary, and silently mangled anything it did
+    // not. `--color=never` arrived at ls as `--color=`: the letters were
+    // gathered, the buffer filled, and the value fell off the end.
+    //
+    // The only thing that genuinely belongs to the SHELL here is
+    // resolving the positional path against its cwd, because fs.c has no
+    // cwd concept and ls only ever receives an absolute path. Everything
+    // else is ls's business, and forwarding it unread is what stops a
+    // flag added there from having to be re-taught here.
     char positional[FS_PATH_MAX];
+    char passthrough[LINE_MAX];
     positional[0] = '\0';
+    passthrough[0] = '\0';
 
     if (args) {
         char scratch[LINE_MAX];
-        k_strcpy(scratch, args);
+        k_strlcpy(scratch, args, sizeof scratch);
         char *p = scratch;
         while (*p) {
             while (*p == ' ') p++;
@@ -1233,16 +1245,15 @@ void cmd_ls_bin(const char *args) {
             int had_space = (*p == ' ');
             *p = '\0';
             if (start[0] == '-') {
-                for (size_t j = 1; start[j] && flags_len + 1 < sizeof(flags); j++) {
-                    flags[flags_len++] = start[j];
-                }
+                // Verbatim, in order, separated by single spaces.
+                if (passthrough[0]) k_strlcat(passthrough, " ", sizeof passthrough);
+                k_strlcat(passthrough, start, sizeof passthrough);
             } else if (positional[0] == '\0') {
-                k_strcpy(positional, start);
+                k_strlcpy(positional, start, sizeof positional);
             }
             if (had_space) p++;
         }
     }
-    flags[flags_len] = '\0';
 
     char path[FS_PATH_MAX];
     if (!resolve_path(positional[0] ? positional : 0, path)) {
@@ -1250,15 +1261,14 @@ void cmd_ls_bin(const char *args) {
         return;
     }
 
-    // Bounded appends. This used to be four k_strcpy()s ending in
+    // Bounded appends. This used to end in
     // `k_strcpy(run_args + k_strlen(run_args), path)`, which is an
     // UNBOUNDED append: enough flags in front of a full-length path
     // wrote past the end of run_args.
-    char run_args[FS_PATH_MAX + 8];
+    char run_args[LINE_MAX];
     run_args[0] = '\0';
-    if (flags_len > 0) {
-        k_strlcat(run_args, "-", sizeof run_args);
-        k_strlcat(run_args, flags, sizeof run_args);
+    if (passthrough[0]) {
+        k_strlcat(run_args, passthrough, sizeof run_args);
         k_strlcat(run_args, " ", sizeof run_args);
     }
     if (k_strlcat(run_args, path, sizeof run_args) >= sizeof run_args) {

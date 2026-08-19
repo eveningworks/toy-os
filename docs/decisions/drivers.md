@@ -243,3 +243,53 @@ failed in `g_pio_fail_reason`, mirroring `g_dma_fail_reason` -- a
 pass/fail return for control flow, a reason string for whoever reads
 `dmesg`. See `ata.c` and the git history.
 
+
+## Colour is an escape sequence the console parses, not a syscall
+
+`/bin/ls` coloured directories by calling `SYS_SET_COLOR`, which sets the
+console's current attributes directly. That works exactly as long as the
+program's output goes to the console -- and `ls > out.txt` recoloured the
+console while its bytes went to the file, while `ls | cat` coloured
+whatever the console happened to be printing at the time. The colour was
+travelling on a side channel, so it landed somewhere other than the text
+it belonged to.
+
+An escape sequence travels IN the byte stream, so it lands wherever the
+output lands. That is why every real terminal does it this way, and it
+is what makes `--color=never` a thing a program can meaningfully offer:
+with a syscall there is nothing to suppress, because the escape never
+existed as data.
+
+**Where the parser sits, and why.** `kernel/lib/ansi.c`, driven from the
+top of `vga_putc()` -- BEFORE the output-sink check. One parser serves
+the physical console and any installed sink (a GUI Terminal's
+scrollback), and neither of them knows what an escape is. Putting it
+after the sink check would have meant a second parser for the second
+surface, which is the drift this repo keeps paying to avoid. The parser
+itself touches no hardware, which is what lets a KTEST exercise it with
+no display at all.
+
+**What is implemented is SGR only.** Colour and attributes. Cursor
+movement, clearing and scrolling regions are RECOGNISED and swallowed,
+not printed -- a terminal that cannot do something should decline
+quietly rather than spray `[2J` across the screen, and that swallowing
+is the parser's third state rather than an afterthought. Real terminal
+emulation belongs to the TTY milestone; this console owns its own cursor
+and scrollback, and a program moving the cursor would fight both.
+
+**The mapping is a table because the two orders differ.** ANSI counts
+0..7 as black/red/green/yellow/blue/magenta/cyan/white; VGA's bits are
+blue-green-red, so ANSI's 1 (red) is VGA's 4 and VGA's 1 is blue.
+Arithmetic here would be a bug waiting for somebody to simplify it.
+Index 7 maps to `VGA_LIGHT_GREY` rather than `VGA_WHITE` so that its
+bright form is white instead of running off the end of the 16-colour
+palette.
+
+**What is deliberately missing: `isatty()`.** `--color=auto` means
+"colour to a terminal, plain to a pipe", and nothing here can ask what
+an fd is -- the kernel knows a description's kind (`syscall_fd.c`) and
+exposes it to nobody. So `/bin/ls` offers `never` and `always` and
+defaults its FORMAT to one entry per line, which is the shape safe to
+parse. Making columns the default broke Notepad's dialog test the same
+day, because that test reads `ls /` a line at a time -- which is exactly
+the pipe case a real ls would have detected.

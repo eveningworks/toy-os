@@ -38,6 +38,7 @@
 // window on them, which is exactly why every desktop editor has one.
 #include <stdint.h>
 #include "rt/sys.h"
+#include "lib/dirsort.h"
 #include "ui/ugfx.h"
 #include "ui/uui.h"
 #include "ui/uapp.h"
@@ -493,7 +494,18 @@ static void refresh_listing(void) {
 
     int n = sys_listdir(g_dialog_dir, g_entries + g_entry_count,
                          DIALOG_MAX_FILES - g_entry_count);
-    if (n > 0) g_entry_count += n;
+    if (n > 0) {
+        // SORTED, and by the SAME function /bin/ls uses (lib/dirsort.h).
+        // SYS_LISTDIR returns whatever order the filesystem walked, so
+        // this dialog used to list files in an order nothing could
+        // predict -- bad on its own, and it also has to match `ls`,
+        // since that is how a test derives which row to click.
+        //
+        // Only the entries AFTER the ".." row are sorted; that row is
+        // already at index 0 and belongs there.
+        dirsort(g_entries + g_entry_count, n, DIRSORT_NAME, 0);
+        g_entry_count += n;
+    }
     if (g_entry_count == 0) set_status("empty directory");
 }
 

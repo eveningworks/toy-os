@@ -1,160 +1,269 @@
-// The second real disk-hosted ELF64 program (after userland/lspci.c) --
-// a genuine syscall-driven userland process that replaces the shell's
-// old kernel-space `ls` built-in (apps/shell_fs.c's cmd_ls()/list_cb(),
-// removed the same build this file was added -- see the git history). No
-// libc (freestanding, same as every other userland/*.c here) -- same
-// syscall-wrapper/print-helper shape newsyscalls_test.c/lspci.c already
-// established.
+// /bin/ls -- list a directory.
 //
-// Takes real argc/argv (process_run_ring3_args(), process.c) instead of
-// a minimal opaque-string syscall -- see docs/decisions.md for why:
-// this is meant to be the first of several /bin binaries that want
-// ordinary C-style arguments, not a one-off. argv[0] is whatever path
-// the shell invoked this binary as (always "/bin/ls" today, from
-// apps/shell_sys.c's cmd_ls_bin()); argv[1..] are `-a`/`-l`/`-al`/`-la`
-// flags and/or a single positional directory path. The shell resolves
-// a relative positional path against its own `cwd` before ever handing
-// it to this binary (see cmd_ls_bin()'s comment in shell_sys.c) --
-// fs.c/fs.h has no cwd concept at all, and neither does this file; it
-// only ever receives (or defaults to) a ready-to-use absolute path.
+// A real ring-3 program over SYS_LISTDIR, taking ordinary C argc/argv.
+// argv[0] is whatever path the shell invoked it as; argv[1..] are flags
+// and at most one positional directory path. The shell resolves a
+// relative path against its own cwd before handing it over -- fs.c has
+// no cwd concept, and neither does this file.
 //
-// `-a` is accepted but a no-op: there's no dotfile-hiding convention on
-// this filesystem (fs_list() already returns everything a directory
-// has), so there's nothing for `-a` to additionally reveal. Accepted
-// rather than rejected so a habitual `ls -la` doesn't produce a usage
-// error.
+// COLOUR IS AN ESCAPE SEQUENCE NOW, NOT A SYSCALL. This used to call
+// sys_set_color(), which reaches around the byte stream and changes the
+// console's state directly -- so `ls > out.txt` recoloured the console
+// while its bytes went to the file, and `ls | cat` coloured whatever the
+// console was printing instead. `ESC[36m` travels IN the stream and
+// lands wherever the output lands, which is what every real terminal
+// does and what makes `--color=never` a thing worth offering.
 //
-// Default output is colored via the new SYS_SET_COLOR syscall
-// (directories vs. files), mirroring GNU coreutils' `ls --color=auto`
-// -- unconditionally, not gated on a flag, per this feature's own
-// scope (see `docs/decisions.md`).
+// WHAT `--color=auto` WOULD NEED, and why it is not here: "colour to a
+// terminal, plain to a pipe" requires asking whether fd 1 IS a terminal,
+// and there is no isatty() -- the kernel knows an fd's kind but nothing
+// exposes it. So the choice is explicit (`never`/`always`, default
+// always) and `auto` is a roadmap item, not a silent lie.
+//
+// WHAT IS NOT COLOURED, and why: executables. Real ls colours them from
+// the mode bits, and this filesystem has none -- struct dirent carries a
+// name, a size, is_dir and a timestamp. Colouring /bin's contents by
+// their DIRECTORY would be a rule about where a file sits rather than
+// what it is, so directories are coloured and everything else is left
+// alone until file permissions exist (docs/roadmap.md).
 #include <stdint.h>
 #include "rt/sys.h"
-#include "vga.h" // enum vga_color only -- see this file's top comment
+#include "lib/string.h"
+#include "lib/stdio.h"
+#include "lib/dirsort.h"
 
+// The output flags, gathered so the recursion below can pass one thing.
+struct opts {
+    int long_form;  // -l
+    int columns;    // -C -- multi-column; one per line otherwise
+    int human;      // -h
+    int recurse;    // -R
+    int reverse;    // -r
+    int sort;       // 'n' name (default), 't' time, 'S' size
+    int color;
+};
 
+static void put(const char *s) { sys_write(1, s, strlen(s)); }
 
+// ---- colour ----------------------------------------------------------
+//
+// Only two, deliberately: see this file's top comment on why an
+// executable cannot be told apart from a plain file here.
+#define C_DIR   "\033[1;36m" // bright cyan
+#define C_RESET "\033[0m"
 
-
-
-
-
-
-
-
-
-
-
-
-static uint64_t my_strlen(const char *s) {
-    uint64_t n = 0;
-    while (s[n]) n++;
-    return n;
+static void put_name(const struct opts *o, const struct dirent *e) {
+    if (o->color && e->is_dir) put(C_DIR);
+    put(e->name);
+    if (o->color && e->is_dir) put(C_RESET);
+    // The trailing slash is NOT gated on colour: it is the one piece of
+    // type information that survives being piped into another program,
+    // which is exactly when colour has been turned off.
+    if (e->is_dir) put("/");
 }
 
-static void put(const char *s) {
-    sys_write(1, s, my_strlen(s));
-}
+// ---- sizes -----------------------------------------------------------
 
-static void put_udec(uint32_t n) {
-    char buf[11]; // max uint32_t is 10 digits + '\0'
-    int i = 10;
-    buf[10] = '\0';
-    if (n == 0) {
-        put("0");
-        return;
+// 1.2K / 4.0M, one decimal, the coreutils `-h` shape. Integer only --
+// this kernel has no floating point (-mno-sse), so the tenth is
+// computed from the remainder rather than by dividing.
+static void put_human(uint32_t n) {
+    static const char unit[] = { 'B', 'K', 'M', 'G' };
+    int u = 0;
+    uint32_t whole = n, rem = 0;
+    while (whole >= 1024 && u < 3) {
+        rem = whole % 1024;
+        whole /= 1024;
+        u++;
     }
-    while (n > 0 && i > 0) {
-        buf[--i] = (char)('0' + (n % 10));
-        n /= 10;
-    }
-    put(&buf[i]);
+    char buf[16];
+    if (u == 0) snprintf(buf, sizeof buf, "%u", whole);
+    else if (whole >= 10) snprintf(buf, sizeof buf, "%u%c", whole, unit[u]);
+    else snprintf(buf, sizeof buf, "%u.%u%c", whole, (rem * 10) / 1024, unit[u]);
+
+    // Right-aligned in a fixed field, like the plain size column.
+    for (int i = (int)strlen(buf); i < 6; i++) put(" ");
+    put(buf);
 }
 
-static void put_padded(uint32_t n, int width) {
-    uint32_t div = 1;
-    for (int i = 1; i < width; i++) div *= 10;
-    while (div > 1 && n < div) { put("0"); div /= 10; }
-    put_udec(n);
+static void put_size(const struct opts *o, uint32_t n) {
+    if (o->human) { put_human(n); return; }
+    char buf[16];
+    snprintf(buf, sizeof buf, "%u", n);
+    for (int i = (int)strlen(buf); i < 10; i++) put(" ");
+    put(buf);
 }
 
 static void put_timestamp(const struct rtc_time *t) {
-    put_padded(t->month, 2);
-    put("/");
-    put_padded(t->day, 2);
-    put("/");
-    put_padded(t->year, 4);
-    put(" ");
-    put_padded(t->hour, 2);
-    put(":");
-    put_padded(t->minute, 2);
-    put(":");
-    put_padded(t->second, 2);
+    char buf[32];
+    snprintf(buf, sizeof buf, "%04u-%02u-%02u %02u:%02u:%02u",
+             t->year, t->month, t->day, t->hour, t->minute, t->second);
+    put(buf);
+}
+
+// ---- ordering --------------------------------------------------------
+//
+// Sorting lives in userland/lib/dirsort.c, NOT here, because Notepad's
+// file dialog has to produce the same order -- see that header. Default
+// is BY NAME, which is new: this used to print whatever order fs_list()
+// happened to walk the directory in, so the same directory could list
+// differently on two machines.
+
+// ---- one directory ---------------------------------------------------
+
+// The entry buffer is STATIC and there is one of it, which is what
+// forces -R below to be a queue rather than recursion: SYS_LISTDIR_MAX
+// dirents is far past ring 3's 2 KiB frame budget (USERLAND_CFLAGS), so
+// a recursive call could not have its own.
+static struct dirent g_entries[SYS_LISTDIR_MAX];
+
+// -R's work list. Breadth-first, because a depth-first walk means
+// recursion and recursion means a per-level buffer this program cannot
+// afford. The bound is stated rather than assumed: a tree deeper or
+// wider than this reports that it stopped.
+#define QUEUE_MAX 64
+static char g_queue[QUEUE_MAX][64];
+static int g_qhead, g_qtail, g_qdropped;
+
+static void queue_push(const char *dir, const char *name) {
+    if (g_qtail >= QUEUE_MAX) { g_qdropped++; return; }
+    char *dst = g_queue[g_qtail];
+    // "/" + name, avoiding the double slash at the root.
+    if (dir[1] == '\0' && dir[0] == '/') snprintf(dst, 64, "/%s", name);
+    else snprintf(dst, 64, "%s/%s", dir, name);
+    g_qtail++;
+}
+
+// Lists one directory. Returns 0 on success, 1 if the path could not be
+// read at all.
+static int list_one(const struct opts *o, const char *path, int with_header) {
+    int64_t count = sys_listdir(path, g_entries, SYS_LISTDIR_MAX);
+    if (count < 0) {
+        put("ls: cannot access '");
+        put(path);
+        put("': ");
+        put(strerror(sys_errno()));
+        put("\n");
+        return 1;
+    }
+
+    if (with_header) { put("\n"); put(path); put(":\n"); }
+
+    dirsort(g_entries, (int)count,
+            o->sort == 'S' ? DIRSORT_SIZE : o->sort == 't' ? DIRSORT_TIME : DIRSORT_NAME,
+            o->reverse);
+
+    for (int i = 0; i < (int)count; i++) {
+        struct dirent *e = &g_entries[i];
+
+        if (o->recurse && e->is_dir) queue_push(path, e->name);
+
+        if (o->long_form) {
+            put(e->is_dir ? "d " : "- ");
+            if (e->is_dir) put(o->human ? "      " : "          ");
+            else put_size(o, e->size);
+            put(" ");
+            put_timestamp(&e->modified);
+            put("  ");
+        }
+        put_name(o, e);
+        // ONE PER LINE BY DEFAULT, columns only when asked. Real ls
+        // columnises to a TERMINAL and prints one per line when its
+        // output is a pipe -- and with no isatty() here (see this file's
+        // top comment) it cannot tell, so the default is the one that is
+        // safe to parse. Making columns the default broke Notepad's
+        // dialog test, which reads `ls /` a line at a time, the moment
+        // it was tried.
+        put(o->columns && !o->long_form ? "  " : "\n");
+    }
+    if (o->columns && !o->long_form && count > 0) put("\n");
+
+    // A FULL ARRAY MEANS THERE MAY BE MORE. SYS_LISTDIR fills up to its
+    // cap and says nothing about what it left, so this is the only place
+    // that can notice -- and before it did, `ls` on a directory of 40
+    // files listed 32 and stopped silently. See syscall_abi.h.
+    if (count == SYS_LISTDIR_MAX) {
+        put("ls: ");
+        put(path);
+        put(": listing truncated at ");
+        char buf[16];
+        snprintf(buf, sizeof buf, "%u", (unsigned)SYS_LISTDIR_MAX);
+        put(buf);
+        put(" entries\n");
+        return 1;
+    }
+    return 0;
+}
+
+static void usage(void) {
+    put("usage: ls [-1aCFhlRrSt] [--color=never|always] [dir]\n"
+        "  -l  long form      -C  multi-column     -h  human sizes\n"
+        "  -t  newest first   -S  largest first    -r  reverse\n"
+        "  -R  recurse        -a  accepted, no-op (no dotfile convention)\n");
 }
 
 int main(int argc, char **argv) {
-    int show_long = 0;
-    int show_all = 0; // accepted, no-op -- see this file's top comment
-    const char *path = "/"; // shell always passes a resolved absolute
-                             // path (its own cwd if none given); this
-                             // default only matters if ls is ever
-                             // invoked with no path at all some other way
+    struct opts o = { 0, 0, 0, 0, 0, 'n', 1 };
+    const char *path = "/";
+    int got_path = 0, bad = 0;
 
-    int got_path = 0;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
-        if (a[0] == '-') {
-            for (uint64_t j = 1; a[j]; j++) {
-                if (a[j] == 'l') show_long = 1;
-                else if (a[j] == 'a') show_all = 1;
+        if (a[0] == '-' && a[1] == '-') {
+            // The one long option. Compared in full rather than by
+            // prefix, so a typo is refused instead of guessed at --
+            // this file's own rule about parsers rejecting rather than
+            // guessing (CLAUDE.md).
+            if (strcmp(a, "--color=never") == 0) o.color = 0;
+            else if (strcmp(a, "--color=always") == 0) o.color = 1;
+            else if (strcmp(a, "--help") == 0) { usage(); sys_exit(0); }
+            else {
+                put("ls: unknown option: ");
+                put(a);
+                put("\n");
+                bad = 1;
+            }
+        } else if (a[0] == '-' && a[1]) {
+            for (int j = 1; a[j]; j++) {
+                switch (a[j]) {
+                case 'l': o.long_form = 1; break;
+                case '1': o.columns = 0; break;
+                case 'C': o.columns = 1; break;
+                case 'h': o.human = 1; break;
+                case 'R': o.recurse = 1; break;
+                case 'r': o.reverse = 1; break;
+                case 't': o.sort = 't'; break;
+                case 'S': o.sort = 'S'; break;
+                case 'a': break; // accepted, no-op -- no dotfile convention here
+                case 'F': break; // accepted: the trailing '/' is unconditional
+                default:
+                    put("ls: unknown flag\n");
+                    bad = 1;
+                    break;
+                }
             }
         } else if (!got_path) {
             path = a;
             got_path = 1;
+        } else {
+            put("ls: only one directory at a time\n");
+            bad = 1;
         }
     }
-    (void)show_all;
+    if (bad) { usage(); sys_exit(2); }
 
-    static struct dirent entries[SYS_LISTDIR_MAX];
-    int64_t count = sys_listdir(path, entries, SYS_LISTDIR_MAX);
-    if (count < 0) {
-        put("ls: cannot access '");
-        put(path);
-        put("'\n");
-        sys_exit(1);
+    int rc = list_one(&o, path, 0);
+
+    // -R, iteratively. Each directory found is appended and processed in
+    // turn, so the walk costs one static buffer however deep the tree is.
+    while (o.recurse && g_qhead < g_qtail) {
+        const char *next = g_queue[g_qhead++];
+        if (list_one(&o, next, 1)) rc = 1;
+    }
+    if (g_qdropped) {
+        put("ls: too many subdirectories -- some were not listed\n");
+        rc = 1;
     }
 
-    for (int64_t i = 0; i < count; i++) {
-        struct dirent *e = &entries[i];
-        enum vga_color color = e->is_dir ? VGA_LIGHT_CYAN : VGA_LIGHT_GREY;
-
-        if (show_long) {
-            put(e->is_dir ? "d " : "- ");
-            if (e->is_dir) {
-                put("           "); // no size column for directories
-            } else {
-                // Right-align the size into a fixed 10-char field, same
-                // shape as apps/shell_fs.c's print_stat_timestamp()
-                // neighbor print_padded() but for decimal width instead
-                // of leading zeros (a size has no natural digit count
-                // to pad to).
-                uint32_t n = e->size, t = n;
-                int w = 1;
-                while (t >= 10) { t /= 10; w++; }
-                for (int p = 0; p < 10 - w; p++) put(" ");
-                put_udec(n);
-                put(" ");
-            }
-            put_timestamp(&e->modified);
-            put("  ");
-        }
-
-        sys_set_color(color, VGA_BLACK);
-        put(e->name);
-        sys_set_color(VGA_LIGHT_GREY, VGA_BLACK);
-        if (e->is_dir) put("/");
-        put("\n");
-    }
-
-    sys_exit(0);
+    sys_exit(rc);
 }

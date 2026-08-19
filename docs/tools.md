@@ -225,6 +225,21 @@ manual steps to be worth automating:
   `scheduler_wake(SCHED_WAIT_KEY)` reddens three checks, removing
   `keyboard_claim_console()` reddens two, and neither reddens the
   other's.
+- **`ls_test.py`** -- `/bin/ls`: ordering, the format flags, colour and
+  the listing cap. Fourteen checks against a THROWAWAY copy of
+  `disk.img`, into which it stages a 300-entry directory from the host
+  with `tfs3_writer.py` -- the cap is 256, so nothing a person could
+  reasonably type at a shell reaches that branch, and a test that made a
+  handful of files would be green with the whole limit removed. Two of
+  the checks exist because their failures are SILENT: `ls` listed a
+  40-file directory as 32 entries and simply stopped, and the console's
+  ANSI parser being unwired shows up as literal `[1;36m` beside every
+  directory name rather than as missing colour (the captured console
+  output cannot show colour at all). Positive controls, measured:
+  disabling `ansi_feed()`'s dispatch reddens the escape check -- with
+  `\x1b[1;36mbin\x1b[0m/` printed in the failure detail -- and dropping
+  ls's truncation message reddens the other, each naming its own
+  failure.
 - **`init_test.py`** -- init as pid 1 AND as a supervisor, end to end:
   the kernel spawns it, it holds pid 1, an idle init is BLOCKED rather
   than spinning, `kill 1` is refused, abandoned children are adopted AND
