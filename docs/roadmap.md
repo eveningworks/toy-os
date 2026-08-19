@@ -204,6 +204,8 @@ everything libc-shaped is waiting on it. Full plan and staging:
 - [ ] `g_next_kernel_rsp` reentrancy fixed properly
 - [ ] `wintest` made non-modal
 - [ ] Kernel threads (a scheduler entity without an address space of its own)
+- [ ] User threads (a second thread of execution sharing one address space)
+- [ ] Thread-local storage (FS.base) -- what a per-thread `errno` needs, and GCC's default stack-protector guard
 - [ ] `mmap`-style anonymous memory for userspace
 - [ ] Time syscalls (a monotonic clock and wall-clock read)
 - [ ] A consistent `errno`-style error convention
@@ -691,8 +693,12 @@ were found at all.
 - [ ] Seed the pages at build time via `tools/seed_disk.py`, like `/bin` already is
 - [ ] A GUI documentation viewer reusing the scrollback widget
 - [ ] A check that every builtin actually has a page, run in CI
+## Not built yet, and deliberately so
+
 - [ ] Group DRAG for a rubber-band selection
 - [ ] **A ring-3 file manager**, the second caller the rubber-band module was shaped for
+## Known issues and papercuts (unscheduled)
+
 - [ ] Nothing detects an ordinary memory LEAK, in either allocator
 - [x] ~~`ata_dma_nonblocking_selftest()` has a 1040-byte stack frame~~ done
 - [ ] The shell's command dispatch is a 60-branch chain, and the fix is not the obvious one
@@ -745,6 +751,18 @@ were found at all.
 - [ ] **Interfaces that exist with exactly ONE implementation are the same problem seen from the other side
 - [ ] Keep shaped, do not build (one implementation each)
 
+## Backlog
+
+Smaller or lower-priority items not yet slotted into a section above.
+
+- [ ] Virtio drivers (disk/net)
+- [ ] Multi-architecture support (RISC-V) -- see `docs/arch-portability.md`
+- [ ] A RAM disk backend, once Real mount points makes a second backend addressable
+- [ ] `ls` colour/format options beyond `-l`/`-a`
+- [ ] Serial debug console: make it writable -- read-only inspection today, deliberately (`docs/decisions.md`)
+- [ ] Replace the fixed `MAX_WINDOWS`-style compile-time caps (and TFS2's `FS_MAX_FILES`) with growable structures
+- [ ] Stretch: port a small classic game (e.g. Doom, `doomgeneric`-style) -- see `docs/roadmap-details.md` for the prerequisites
+
 ## Completed milestones
 
 ### ~~Async I/O to the desktop~~ (gui, v0.1.0, released 2026-08-12)
@@ -766,10 +784,3 @@ were found at all.
 - [x] ~~Enable SMEP/SMAP (CR4)~~ done
 - [x] ~~Guard page below each user stack~~ done
 - [x] ~~Heap red-zones + use-after-free poisoning in the allocator, behind a `debug` flag~~ done
-- [ ] Virtio drivers (disk/net)
-- [ ] Multi-architecture support (RISC-V) -- see `docs/arch-portability.md`
-- [ ] A RAM disk backend, once Real mount points makes a second backend addressable
-- [ ] `ls` colour/format options beyond `-l`/`-a`
-- [ ] Serial debug console: make it writable (it's read-only inspection today, deliberately
-- [ ] Replace the fixed `MAX_WINDOWS`-style compile-time
-- [ ] Stretch: port a small classic game (e.g
