@@ -713,14 +713,14 @@ were found at all.
 **Needs:** TTY / virtual terminals, for the front end.
 
 - [ ] A `man <topic>` command reading from `/usr/share/man`
-- [ ] A simple page format -- not troff; something a shell can render and a person can hand-write
-- [ ] Pages for every shell builtin, generated from the same table `help` already uses so the two can't drift
-- [ ] Pages for each `/bin` binary
+- [ ] A simple page format -- the pages are Markdown today, read on the host; an in-OS renderer still needs one
+- [x] ~~Pages for every shell builtin~~ DONE 2026-08-20 -- one hand-written page per command in `docs/commands/`
+- [x] ~~Pages for each `/bin` binary~~ DONE 2026-08-20 -- the same folder covers programs and builtins alike
 - [ ] `apropos`/`man -k` keyword search across page titles
 - [ ] Paging through the existing `console_page()` helper
 - [ ] Seed the pages at build time via `tools/seed_disk.py`, like `/bin` already is
 - [ ] A GUI documentation viewer reusing the scrollback widget
-- [ ] A check that every builtin actually has a page, run in CI
+- [x] ~~A check that every builtin actually has a page, run in CI~~ DONE 2026-08-20 -- `tools/check_docs.py`
 ## Not built yet, and deliberately so
 
 - [ ] Group DRAG for a rubber-band selection

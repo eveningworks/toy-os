@@ -224,7 +224,8 @@ userland ELF have real DWARF symbols.
 
 ### Using it
 
-Type `help` at the prompt. [docs/commands.md](docs/commands.md) is the
+Type `help` at the prompt. [docs/commands.md](docs/commands.md) indexes
+one page per command under [docs/commands/](docs/commands/), and is the
 full command reference; [docs/boot-flags.md](docs/boot-flags.md) covers
 what you can pass on the GRUB command line.
 
@@ -410,7 +411,7 @@ Selected tools, each documented in its own docstring:
 | [docs/testing.md](docs/testing.md) | How to run and drive this OS headlessly, the QMP mechanics, and what the emulator does not model. |
 | [docs/tools.md](docs/tools.md) | Every script in `tools/`: what it does, why it exists, and the traps it encodes. |
 | [docs/settings-and-queries.md](docs/settings-and-queries.md) | Facts vs settings vs tunables, and how an app reads or changes either. |
-| [docs/commands.md](docs/commands.md) | The full shell command reference. |
+| [docs/commands.md](docs/commands.md) | The command index; [docs/commands/](docs/commands/) has one page each. |
 | [docs/boot-flags.md](docs/boot-flags.md) | Every word the kernel looks for on the GRUB command line. |
 | [docs/filesystem-layout.md](docs/filesystem-layout.md) | What lives where on the OS's own disk. Checked against the built image by `tools/check_layout.py`. |
 | [docs/gui-guidelines.md](docs/gui-guidelines.md) | How the GUI should look and behave, and how to verify a change to it properly. |

@@ -574,6 +574,7 @@ whenever a headline here tells you something you did not already know.
 
 `docs/conventions/shell.md`
 
+- **EVERY COMMAND HAS A PAGE IN `docs/commands/`, AND THE BUILD CHECKS IT.**
 - **AN EVERYDAY COMMAND IS A `/bin` PROGRAM, NOT A BUILTIN, AND THE KERNEL'S OWN COPIES LIVE BEHIND ONE NAME: `rescue`.**
 - **A PROGRAM STARTED BY A BARE NAME PRINTS NOTHING EXTRA WHEN IT SUCCEEDS -- AND `run <name>` STILL DOES.**
 - **TAB COMPLETION IN COMMAND POSITION IS BUILTINS PLUS ALL OF `PATH`, DEDUPLICATED AND SORTED, WITH NO DIRECTORIES.**
@@ -1061,6 +1062,11 @@ detail there, and keep the pointer here to a line. What each file is:
 
 - **`docs/testing.md`** -- how to run and drive this OS, the QMP
   mechanics, what the emulator does and does not model.
+- **`docs/commands/`** -- one page per command; see the entry for
+  `docs/commands.md` below. **A NEW COMMAND NEEDS ITS PAGE IN THE SAME
+  CHANGE** -- the build refuses otherwise, which is the point, but a
+  page written later by somebody reconstructing the reasoning is worth
+  much less than one written by the person who had it.
 - **`docs/tools.md`** -- the full reference for every script in
   `tools/`.
 - **`docs/conventions/`** -- the BODY of every convention this file
@@ -1099,8 +1105,18 @@ detail there, and keep the pointer here to a line. What each file is:
   is the authority on which introspection commands have moved.
 - **`docs/errno-design.md`** -- giving a failed syscall a REASON, staged
   so each step ships on its own.
-- **`docs/commands.md`** -- the full shell command reference, grouped
-  the way `help` groups it. Update it when adding a command.
+- **`docs/commands.md`** -- the INDEX over `docs/commands/`, which holds
+  ONE PAGE PER COMMAND (every `/bin` program and every shell builtin).
+  The index keeps only what is true of the shell rather than of any one
+  command -- how a name is resolved, the line-editing keys.
+  **`tools/check_docs.py` FAILS THE BUILD when a command has no page**,
+  and when a page documents nothing that exists; where a program
+  declares a `cmd_usage()` string, the page must carry it verbatim, so a
+  flag added to the program and not to the page is a build failure. The
+  prose is deliberately unchecked -- that is the part only a person can
+  write. Exemptions are listed by name with a reason in that script's
+  `COMMAND_PAGE_EXEMPT` (`init`, `hello`, `tosh`, and the `gui3`/`nano`
+  aliases). See `docs/commands/README.md`.
 - **`docs/bugs.md`** / **`docs/roadmap.md`** / **`docs/roadmap-details.md`**
   -- what is broken, what is not built yet, and the long form of both.
 

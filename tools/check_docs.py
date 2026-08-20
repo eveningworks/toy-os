@@ -233,6 +233,111 @@ def check_tools_are_documented(problems):
                              f"add it to the `## tools/` listing")
 
 
+# Commands that are real but are not something a person types at a
+# prompt, so a page for them would document the wrong thing. Each line
+# is a reason, not an apology.
+COMMAND_PAGE_EXEMPT = {
+    "init":  "pid 1, spawned by the kernel -- nobody runs it",
+    "hello": "the smallest possible ELF, a loader fixture",
+    "tosh":  "a shell, not a command -- docs/conventions/shell.md covers it",
+    "gui3":  "an alias for `gui`, kept so older notes still resolve",
+    "nano":  "an alias for `edit`",
+}
+
+
+def shell_commands():
+    """Every command a person can type: /bin programs and shell builtins.
+
+    The /bin list comes from the SEED TREE rather than from
+    userland/bin/*.c, because the Makefile renames three of them on the
+    way in (tests/echo -> echo_test and friends) and the name on disk is
+    the name people type. The builtins come from dispatch() itself,
+    which is the only authority on what the shell handles.
+    """
+    names = set()
+    seed_bin = os.path.join(REPO, "seed", "sync", "bin")
+    if os.path.isdir(seed_bin):
+        for n in os.listdir(seed_bin):
+            if os.path.isfile(os.path.join(seed_bin, n)):
+                names.add(n)
+    for m in re.finditer(r'k_strcmp\(cmd, "([a-z0-9_]+)"\)', read("apps/shell.c")):
+        names.add(m.group(1))
+    return names
+
+
+def check_every_command_has_a_page(problems):
+    """Every command has a page in docs/commands/, and every page a command.
+
+    THE HALF THAT MATTERS IS THE FIRST ONE. A command that ships with no
+    documentation is not discovered by anybody reading the docs -- it is
+    discovered by somebody typing `help` and finding a name nothing
+    explains. docs/roadmap.md has wanted "a check that every builtin
+    actually has a page" since the man-pages milestone was written.
+
+    The second half catches the opposite drift: a page for a command
+    that has been deleted or renamed, which is worse than no page,
+    because it reads as current.
+
+    It needs the SEED TREE to exist (`make iso`), which preflight always
+    runs first. Skipped rather than failed when it does not, so a bare
+    `check_docs.py` in a fresh checkout still does its other work.
+    """
+    seed_bin = os.path.join(REPO, "seed", "sync", "bin")
+    if not os.path.isdir(seed_bin):
+        return
+    pages_dir = os.path.join(REPO, "docs", "commands")
+    if not os.path.isdir(pages_dir):
+        problems.append("docs/commands/ does not exist -- one page per command")
+        return
+    pages = {os.path.splitext(n)[0] for n in os.listdir(pages_dir)
+             if n.endswith(".md")}
+    commands = shell_commands()
+
+    for name in sorted(commands - pages):
+        if name in COMMAND_PAGE_EXEMPT:
+            continue
+        problems.append(f"`{name}` has no docs/commands/{name}.md")
+    for name in sorted(pages - commands - {"README"}):
+        problems.append(f"docs/commands/{name}.md documents nothing that "
+                         f"exists -- renamed or deleted?")
+
+
+def check_command_synopsis_matches(problems):
+    """A page's Synopsis is the program's own cmd_usage() string.
+
+    ONLY WHERE THE PROGRAM DECLARES ONE. Sixteen of the /bin programs
+    call cmd_usage() with a literal; the rest take no arguments or print
+    their own help, and there is nothing to compare against. Checking
+    where it is possible is worth more than a rule that applies
+    everywhere and verifies nothing.
+
+    This is the anti-drift half of the folder: the PROSE on a page is
+    what only a person can write and no script should police, while the
+    SYNTAX is exactly what goes quietly wrong when a flag is added.
+    """
+    pages_dir = os.path.join(REPO, "docs", "commands")
+    if not os.path.isdir(pages_dir):
+        return
+    bin_dir = os.path.join(REPO, "userland", "bin")
+    if not os.path.isdir(bin_dir):
+        return
+    for src in sorted(os.listdir(bin_dir)):
+        if not src.endswith(".c"):
+            continue
+        name = os.path.splitext(src)[0]
+        page = os.path.join(pages_dir, name + ".md")
+        if not os.path.isfile(page):
+            continue  # the coverage check above already said so
+        body = open(os.path.join(bin_dir, src), encoding="utf-8").read()
+        m = re.search(r'cmd_usage\("([^"]*)"', body)
+        if not m:
+            continue
+        usage = m.group(1)
+        if usage not in open(page, encoding="utf-8").read():
+            problems.append(f"docs/commands/{name}.md does not carry the "
+                             f"program's own usage line: {usage!r}")
+
+
 def main():
     problems = []
     for check in (check_no_changelog_pointers,
@@ -243,14 +348,16 @@ def main():
                   check_no_duplicated_sections,
                   check_decisions_index_is_current,
                   check_internal_doc_links,
-                  check_tools_are_documented):
+                  check_tools_are_documented,
+                  check_every_command_has_a_page,
+                  check_command_synopsis_matches):
         check(problems)
 
     if not problems:
         print("check_docs: ok -- no dead changelog pointers, no numbered or "
               "versioned milestones, no duplicated roadmap entries, one line "
               "per roadmap item, the decisions index is current, no broken "
-              "doc links, every tool documented")
+              "doc links, every tool documented, every command has a page")
         return 0
 
     print(f"check_docs: {len(problems)} problem(s)\n")

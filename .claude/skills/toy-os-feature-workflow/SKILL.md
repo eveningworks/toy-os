@@ -291,7 +291,19 @@ to this file too).
    list, what was verified, what was NOT established) rather than
    inventing a format. Add a `docs/decisions.md` entry only when the change answers
    a "why does toy-os work this way" question a future session would
-   plausibly hit again -- most changes don't need one. Update
+   plausibly hit again -- most changes don't need one.
+
+   **A NEW COMMAND NEEDS ITS PAGE IN `docs/commands/` IN THE SAME
+   CHANGE.** Every `/bin` program and every shell builtin has one, and
+   `tools/check_docs.py` fails the build without it -- so this is not a
+   thing to remember, it is a thing the gate will tell you. What the
+   gate cannot tell you is the part worth having: a page should say what
+   the command is FOR, what it deliberately does NOT do, and the trap in
+   it. Written a week later by somebody reconstructing that, it is worth
+   much less. Where the program declares a `cmd_usage()` string the page
+   must carry it verbatim; the prose is unchecked on purpose.
+
+   Update
    `docs/roadmap.md` (checkbox list, `- [ ]`/`- [x]`) if this session
    only planned something rather than building it, striking it through
    once it actually ships; update `README.md`'s own feature/command description instead

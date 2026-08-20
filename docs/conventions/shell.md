@@ -127,6 +127,15 @@ this the obvious way), not from how much history it accumulated.
   established a desktop is NOT up**, and a tool asserting on kernel
   output should prefer the serial console outright.
 
+- **EVERY COMMAND HAS A PAGE IN `docs/commands/`, AND THE BUILD CHECKS
+  IT.** One page per `/bin` program and per `dispatch()` builtin;
+  `tools/check_docs.py` fails when a command has none, when a page
+  documents nothing that exists, or when a page's synopsis has drifted
+  from the program's own `cmd_usage()` string. The PROSE is unchecked on
+  purpose -- it is the part only a person can write, and the syntax is
+  the part that goes quietly wrong. `docs/commands.md` is the index and
+  holds only what is true of the SHELL rather than of one command.
+
 - **AN EVERYDAY COMMAND IS A `/bin` PROGRAM, NOT A BUILTIN, AND THE
   KERNEL'S OWN COPIES LIVE BEHIND ONE NAME: `rescue`.**
   `cat`, `echo`, `rm`, `touch`, `mkdir`, `mv`, `ln`, `stat`,

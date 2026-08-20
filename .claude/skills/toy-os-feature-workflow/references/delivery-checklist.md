@@ -120,6 +120,8 @@ before you start delivering -- don't reconstruct it from memory.
 
   <file path>   - <one-line note on what changed in it>
   <file path>   - <one-line note on what changed in it>
+  docs/commands/<name>.md - REQUIRED for a new command; the gate fails
+                            the build without it
   docs/decisions.md - only when the change answers a "why this way"
   EOF
   )"

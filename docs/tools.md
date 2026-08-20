@@ -96,6 +96,23 @@ manual steps to be worth automating:
   (historical, and `docs/roadmap-details.md` ends with a legend for
   those); the noise would be what stopped anyone running it. In
   `preflight.sh` and CI.
+
+  **It also checks that every command has a page** in `docs/commands/`
+  -- every `/bin` program and every `dispatch()` builtin -- and that
+  every page documents something that exists. `docs/roadmap.md` had
+  wanted this since the man-pages milestone was written, and it is the
+  half of a per-command docs folder that makes it stay true: a command
+  shipping undocumented is not found by anyone reading the docs, it is
+  found by someone typing `help` and meeting a name nothing explains.
+  Where a program declares a `cmd_usage()` string the page must carry it
+  verbatim, so a flag added to the program and not to the page fails the
+  build; the PROSE is deliberately unchecked, since that is the part
+  only a person can write. The `/bin` list comes from the SEED TREE
+  rather than from `userland/bin/*.c`, because the Makefile renames some
+  programs on the way in and the name on disk is the name people type --
+  which also means this check is skipped in a checkout that has not run
+  `make iso`. Exemptions are named with reasons in
+  `COMMAND_PAGE_EXEMPT`.
 - **`check_deps.py`** -- proves the build's header dependency tracking
   is actually live: touches one header per build directory (discovered
   from `build/`, not listed, so a new source directory is covered as
