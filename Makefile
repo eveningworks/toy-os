@@ -326,17 +326,23 @@ help:
 	@echo "   make run KVM=1            KVM instead of TCG emulation (needs /dev/kvm;"
 	@echo "                             port-I/O-heavy paths can get SLOWER, so do not"
 	@echo "                             compare throughput numbers against plain run)"
-	@echo "   make run VIRTIO=1         disk on virtio-blk, no IDE controller at all --"
-	@echo "                             so the filesystem mounts only if virtio works"
+	@echo "   make run VIRTIO=1         virtio for EVERY device class below -- disk,"
+	@echo "                             GPU and input at once. The modern machine."
+	@echo "   make run DISK=virtio      just the disk (no IDE controller at all, so"
+	@echo "                             the filesystem mounts only if virtio works)"
+	@echo "   make run VGA=virtio       just the GPU -- the virtio-gpu driver, which"
+	@echo "                             nothing else in the build ever exercises"
 	@echo "   make run VGA=vmware       the adapter with a hardware cursor (which"
 	@echo "                             screendump cannot capture -- see the Makefile)"
+	@echo "   make run INPUT=virtio     just input: virtio keyboard/mouse/tablet"
 	@echo "   make run AUDIO=1          PC speaker wired to sound (AUDIODEV=alsa etc.)"
 	@echo "   make run NOGRAPHIC=1      serial only, no window -- use this over SSH"
 	@echo "   make run MENU=1           show the GRUB boot menu (5s) instead of booting"
 	@echo "   make run MEM=512          a smaller machine"
 	@echo "   make run LIVE=1           the live ISO, with NO disk attached (implies live-iso)"
 	@echo "   make run DEMO=1           the scripted tour, no disk (implies demo-iso)"
-	@echo "   make run KVM=1 VIRTIO=1   ...or any mix"
+	@echo "   make run KVM=1 VIRTIO=1   ...or any mix; a per-class value such as"
+	@echo "                             VGA=std overrides what VIRTIO=1 chose"
 	@echo ""
 	@echo "  debug          Boot toy-os.iso frozen (QEMU's -s -S) for real GDB"
 	@echo "                 debugging -- attach with: gdb build/kernel.bin -ex"
@@ -888,15 +894,19 @@ demo-iso: version $(KERNEL) $(USERLAND_ELVES) seed $(LIVE_IMG)
 #
 #   make run                        the default: TCG, IDE disk, a window
 #   make run KVM=1                  KVM instead of TCG emulation
-#   make run VIRTIO=1               disk on virtio-blk, no IDE at all
+#   make run VIRTIO=1               virtio for disk, GPU and input at once
+#   make run DISK=virtio            just the disk, no IDE controller at all
+#   make run VGA=virtio             just the GPU -- the virtio-gpu driver
 #   make run VGA=vmware             the adapter with a hardware cursor
+#   make run INPUT=virtio           just input: virtio keyboard/mouse/tablet
 #   make run AUDIO=1                PC speaker wired to PulseAudio
 #   make run NOGRAPHIC=1            serial only, no window (over SSH)
 #   make run MENU=1                 show GRUB's menu instead of booting
 #   make run MEM=512                a smaller machine
 #   make run LIVE=1                 the live ISO, with NO disk attached
 #   make run DEMO=1                 the scripted tour, with no disk
-#   make run KVM=1 VIRTIO=1         ...and any mix of them
+#   make run KVM=1 VIRTIO=1         ...and any mix; a per-class value like
+#                                   VGA=std overrides what VIRTIO=1 chose
 #
 # `make debug` is the one remaining relative, and it is not a
 # combination of the above: it freezes the CPU for a debugger.
@@ -922,13 +932,33 @@ MEM ?= 2048
 QEMU_ISO     = $(if $(DEMO),$(DEMO_ISO),$(if $(LIVE),$(LIVE_ISO),$(ISO)))
 RUN_PREREQ   = $(if $(DEMO),demo-iso,$(if $(LIVE),live-iso,iso $(DISK_IMG)))
 QEMU_ACCEL   = $(if $(KVM),-enable-kvm -cpu host,)
-QEMU_VGA     = $(if $(VGA),$(VGA),std)
 QEMU_DISPLAY = $(if $(NOGRAPHIC),none,sdl$(COMMA)grab-mod=rctrl)
 
-# The disk. IDE by default; VIRTIO=1 swaps it for a virtio-blk device
-# and NO IDE controller, which is the point of that mode -- ata_init()
+# --- the three DEVICE-CLASS axes, and the one switch over all of them --
+#
+# Each class picks an implementation by NAME rather than by a boolean,
+# because a boolean cannot express a third one and this machine is going
+# to grow them: NVMe is a roadmap item, and `NVME=1` sitting beside a
+# `VIRTIO=1` would immediately raise "what does setting both mean?".
+# A named value has no such question, and `DISK=ide` is the explicit
+# spelling of today's default rather than a thing you can only get by
+# leaving something unset.
+#
+# **VIRTIO=1 SETS THE DEFAULT FOR ALL THREE**, so it is the "give me the
+# modern machine" switch and not a disk flag. It USED to mean the disk
+# alone, which read as a general statement and was not one -- a
+# `make run KVM=1 VIRTIO=1` still booted `-vga std`, so the virtio GPU
+# driver was never exercised by the invocation everyone reached for.
+# Per-class values still win over it, so `VIRTIO=1 VGA=std` is a legal
+# and meaningful thing to ask for.
+DISK_KIND  = $(if $(DISK),$(DISK),$(if $(VIRTIO),virtio,ide))
+QEMU_VGA   = $(if $(VGA),$(VGA),$(if $(VIRTIO),virtio,std))
+INPUT_KIND = $(if $(INPUT),$(INPUT),$(if $(VIRTIO),virtio,ps2))
+
+# The disk. `DISK=virtio` also removes the IDE controller entirely, and
+# that is the point of the mode rather than a side effect -- ata_init()
 # then finds nothing, so the filesystem mounts only if the whole virtio
-# path works. DISK= empty is how the live and demo ISOs run with none.
+# path works.
 QEMU_DISK_IDE    = -drive file=$(DISK_IMG),format=raw,if=ide,discard=unmap
 QEMU_DISK_VIRTIO = -drive file=$(DISK_IMG),format=raw,if=none,id=vblk,discard=unmap \
                    -device virtio-blk-pci,drive=vblk,disable-legacy=on
@@ -936,7 +966,18 @@ QEMU_DISK_VIRTIO = -drive file=$(DISK_IMG),format=raw,if=none,id=vblk,discard=un
 # them rather than an optimisation: pointing the live ISO at disk.img
 # would let the ordinary disk path run and prove nothing about the live
 # one.
-QEMU_DISK = $(if $(NODISK)$(LIVE)$(DEMO),,$(if $(VIRTIO),$(QEMU_DISK_VIRTIO),$(QEMU_DISK_IDE)))
+QEMU_DISK = $(if $(NODISK)$(LIVE)$(DEMO),,\
+              $(if $(filter virtio,$(DISK_KIND)),$(QEMU_DISK_VIRTIO),$(QEMU_DISK_IDE)))
+
+# Input. PS/2 by default (the 8042 the console has always used);
+# `INPUT=virtio` attaches the three virtio-input devices BESIDE it, so
+# the input core has two sources registered and the shared-IRQ path is
+# exercised -- see kernel/drivers/virtio/virtio_input.c and
+# tools/virtio_input_test.py, which is the only thing that attaches them
+# in the suite.
+QEMU_INPUT = $(if $(filter virtio,$(INPUT_KIND)),\
+               -device virtio-keyboard-pci -device virtio-mouse-pci \
+               -device virtio-tablet-pci,)
 
 # QEMU has had no default audio backend since 5.x, and -machine
 # pcspk-audiodev is what routes the emulated i8254 speaker to it.
@@ -949,6 +990,7 @@ QEMU_AUDIO = $(if $(AUDIO),-audiodev $(AUDIODEV)$(COMMA)id=snd0 -machine pcspk-a
 QEMU_EXTRA =
 
 QEMU_RUN = qemu-system-x86_64 -cdrom $(QEMU_ISO) $(QEMU_ACCEL) $(QEMU_DISK) \
+	  $(QEMU_INPUT) \
 	  -serial stdio -vga $(QEMU_VGA) -display $(QEMU_DISPLAY) -m $(MEM) \
 	  $(QEMU_AUDIO) $(QEMU_EXTRA)
 
@@ -970,8 +1012,25 @@ run: $(RUN_PREREQ)
 #   would stop seeing the pointer. Leave it off for anything you intend
 #   to screenshot.
 #
-# VIRTIO=1 -- the disk on virtio-blk and NO IDE controller at all, which
-#   is the point rather than a detail: ata_init() then finds nothing, so
+# VIRTIO=1 -- virtio for EVERY device class at once: DISK, VGA and INPUT.
+#   A per-class value still wins over it, so `VIRTIO=1 VGA=std` is a
+#   legal and meaningful thing to ask for.
+#
+#   **IT USED TO MEAN THE DISK ALONE**, and that was the whole problem:
+#   the name reads as a general statement and was not one, so the
+#   `make run KVM=1 VIRTIO=1` everybody reached for still booted
+#   `-vga std` and never once exercised the virtio-gpu driver. A flag
+#   whose name is broader than its effect is a flag people will misread,
+#   and they did.
+#
+#   Each class picks its implementation BY NAME rather than by a boolean
+#   (DISK=ide|virtio, VGA=std|virtio|vmware, INPUT=ps2|virtio), because a
+#   boolean cannot express a third one and this machine is going to grow
+#   them -- NVMe is a roadmap item, and an `NVME=1` sitting beside a
+#   `VIRTIO=1` would immediately raise "what does setting both mean?".
+#
+# DISK=virtio -- the disk on virtio-blk and NO IDE controller at all,
+#   which is the point rather than a detail: ata_init() then finds nothing, so
 #   the filesystem mounts only if the whole virtio path works (PCI
 #   capability walk, 64-bit BAR, feature negotiation, the virtqueue, the
 #   block adapter). `dmesg` should say "block: virtio-blk active" and

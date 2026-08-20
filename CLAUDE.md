@@ -654,10 +654,23 @@ make debug  # boots frozen (-s -S) for real GDB debugging -- see below
 so do not add a target for a new combination.**
 
 ```
-make run KVM=1 VIRTIO=1 VGA=vmware AUDIO=1 NOGRAPHIC=1 MENU=1 MEM=512
+make run KVM=1 VIRTIO=1 AUDIO=1 NOGRAPHIC=1 MENU=1 MEM=512
+make run DISK=virtio VGA=virtio INPUT=virtio   # what VIRTIO=1 is short for
 make run LIVE=1    # the live ISO, no disk attached (implies live-iso)
 make run DEMO=1    # the scripted tour, no disk (implies demo-iso)
 ```
+
+**`VIRTIO=1` MEANS EVERY DEVICE CLASS -- disk, GPU and input -- not the
+disk.** It used to mean the disk alone, which is a name broader than its
+effect, so the `make run KVM=1 VIRTIO=1` everyone reached for still
+booted `-vga std` and never exercised the virtio-gpu driver. Each class
+now picks its implementation BY NAME (`DISK=ide|virtio`,
+`VGA=std|virtio|vmware`, `INPUT=ps2|virtio`) and a per-class value
+overrides `VIRTIO=1`, so `VIRTIO=1 VGA=std` is legal. A name rather than
+a boolean because a boolean cannot express a third one and NVMe is a
+roadmap item. **An old `VIRTIO=1` invocation now switches more than it
+used to** rather than failing -- deliberate, and the reason the help text
+says so.
 
 It was twelve near-identical `qemu-system-x86_64` lines, which grew by
 MULTIPLICATION rather than addition -- the same shape CLAUDE.md already

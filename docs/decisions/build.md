@@ -676,7 +676,7 @@ NAMES behind as thin aliases, on the grounds of muscle memory.
 That was the same problem one level up. A name per combination
 multiplies exactly as fast as a recipe per combination: the aliases
 covered five of the useful combinations and none of the rest, so
-`make run KVM=1 VIRTIO=1` -- the fast configuration, and the one worth
+`make run KVM=1 DISK=virtio` -- the fast configuration, and the one worth
 typing most -- had no name and looked second-class beside targets that
 did. The aliases were also what the docs taught, so the flags stayed
 invisible.

@@ -898,7 +898,7 @@ Where the project stands after it, so a session does not re-derive it:
   reads keys through `SYS_READ_KEY` rather than fd 0, which is what
   makes `cmd | less` possible at all.
 - **`make run` is one recipe with variables**, not twelve copies:
-  `make run KVM=1 VIRTIO=1 VGA=vmware`. Do not add a target for a new
+  `make run KVM=1 DISK=virtio VGA=vmware`. Do not add a target for a new
   combination.
 - **`docs/bugs.md` exists**, split out of the roadmap. A fixed bug is
   DELETED from it, not struck through.

@@ -2604,7 +2604,11 @@ the scan found no violation, so the block it deliberately damaged was no
 longer a damaged free block by the time the scan ran.
 
 **PRE-EXISTING**: reproduced 1 in 15 on the previous commit, in-guest
-(`ktest heap-debug` repeated in one boot, no desktop running). Three
+(`ktest heap-debug` repeated in one boot, no desktop running). Still
+live on 2026-08-20 and at about that rate: it failed 2 of ~8 full
+`preflight.sh` runs in one session while every standalone `ktest_run.py`
+in between passed, which is what the rate predicts and is also why it
+reads as a flaky GATE rather than a flaky test. Three
 SIBLING tests in the same suite had a related fragility that WAS fixed --
 they compared `heap_used_bytes()` against a pre-test snapshot, which any
 concurrent kernel allocation breaks, and they now hold

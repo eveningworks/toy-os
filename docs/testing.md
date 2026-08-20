@@ -135,9 +135,11 @@ CPU-bound, but always say which mode a benchmark came from --
 --virtio-disk PATH` and `vm.py --virtio-disk PATH` attach a second disk
 on virtio-blk; it then carries the filesystem, while the IDE drive
 stays attached so the `[ata]`/`[atac]` suites keep a real drive instead
-of skipping. `make run VIRTIO=1` is the interactive form, and boots
+of skipping. `make run DISK=virtio` is the interactive form, and boots
 with NO IDE controller at all -- so the filesystem mounts only if the
-whole virtio path works.
+whole virtio path works. (`VIRTIO=1` also does it, along with the GPU
+and input -- it is the switch over every device class, not a disk
+flag.)
 
 **The reason this is a CI job and not just an option:** it found a real
 driver bug that reproduced NOWHERE locally. The runner has QEMU 8.2.2
@@ -150,7 +152,7 @@ answer it. Which is the general point: **a second configuration is
 worth more than a second run of the first one.**
 
 **THAT PENALTY IS ATA'S, NOT KVM'S -- and virtio-blk removes it.**
-Measured on the same host with `make run KVM=1 VIRTIO=1`:
+Measured on the same host with `make run KVM=1 DISK=virtio`:
 
 | | write | read |
 |---|---|---|

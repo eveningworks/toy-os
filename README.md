@@ -171,32 +171,31 @@ combination:
 
 ```bash
 make run KVM=1        # KVM-accelerated instead of emulated (needs /dev/kvm)
-make run VIRTIO=1     # disk on virtio-blk, with NO IDE controller at all
+make run VIRTIO=1     # virtio for EVERY device class: disk, GPU and input
 make run NOGRAPHIC=1  # serial console only -- use this over SSH
 make run MENU=1       # show GRUB's boot menu instead of booting straight through
-make run VGA=vmware   # the adapter with a hardware mouse cursor
 make run AUDIO=1      # PC speaker wired to sound, so `beep` is audible
+make run MEM=512      # a smaller machine
 make run LIVE=1       # the Live CD, with no disk attached
 make run DEMO=1       # the scripted tour
 make run KVM=1 VIRTIO=1   # ...or any mix
 ```
 
-Every `run*` target is **one recipe with a single axis varied**, and the
-axes are plain variables — so any combination works without needing its
-own target:
+**Each device class picks its implementation by name**, and `VIRTIO=1`
+is simply the switch that sets all three at once. A per-class value
+overrides it, so `VIRTIO=1 VGA=std` is a legal thing to ask for:
 
 ```bash
-make run KVM=1              # KVM instead of TCG emulation
-make run VIRTIO=1           # disk on virtio-blk, no IDE controller
+make run DISK=virtio        # virtio-blk, and NO IDE controller at all
+make run VGA=virtio         # the virtio-gpu driver
 make run VGA=vmware         # the adapter with a hardware cursor
-make run AUDIO=1            # PC speaker wired to sound (AUDIODEV=alsa, ...)
-make run NOGRAPHIC=1        # serial only, no window
-make run MEM=512            # a smaller machine
-make run KVM=1 VIRTIO=1     # ...or any mix
+make run INPUT=virtio       # virtio keyboard, mouse and tablet
 ```
 
-The named targets are thin aliases over exactly these. `make help`
-lists them.
+A *name* rather than a boolean because a boolean cannot express a third
+one, and this machine is going to grow them — NVMe is on the roadmap,
+and an `NVME=1` beside a `VIRTIO=1` would immediately raise "what does
+setting both mean?". `make help` lists every axis.
 
 <details>
 <summary>Troubleshooting</summary>
@@ -208,7 +207,7 @@ lists them.
 | ISO builds but QEMU says *"no bootable device"* | The BIOS modules package is missing — `grub-pc-bin` (Debian), `grub2-pc-modules` (Fedora), `grub2-i386-pc` (openSUSE), `grub-bios` (Alpine). |
 | No window appears (e.g. over SSH) | `make run NOGRAPHIC=1`. |
 | The mouse doesn't move in QEMU | Don't add `-device usb-tablet`/`usb-mouse`. This kernel's mouse driver is PS/2 only, and an explicit USB pointer device makes QEMU route motion there instead. |
-| Everything is very slow | `make run` emulates the CPU; `make run KVM=1` runs it natively. That only helps compute-bound code — *ATA* disk I/O measures ~1.9× **slower** under KVM, since each port-I/O instruction becomes a VM exit. That penalty is ATA's, not KVM's: `make run KVM=1 VIRTIO=1` puts the disk on virtio-blk and measures ~10× ATA's write throughput, because a virtqueue barely touches port I/O at all. |
+| Everything is very slow | `make run` emulates the CPU; `make run KVM=1` runs it natively. That only helps compute-bound code — *ATA* disk I/O measures ~1.9× **slower** under KVM, since each port-I/O instruction becomes a VM exit. That penalty is ATA's, not KVM's: `make run KVM=1 DISK=virtio` puts the disk on virtio-blk and measures ~10× ATA's write throughput, because a virtqueue barely touches port I/O at all. |
 | Drawing is slow on real hardware but fine in QEMU | Reproduce it with `make run KVM=1`. Plain `make run` **ignores guest memory types entirely**, so a write-combined framebuffer behaves like cached RAM and a whole class of graphics bug is invisible. `gfxbench` reports which mechanisms are live. |
 | `disk.img` is 9 GB | It's a *sparse* file — it costs only what is actually written. `make clean-disk` wipes it. |
 
