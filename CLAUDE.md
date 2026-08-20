@@ -22,9 +22,12 @@ work.
 
 - **Pull first.** This checkout is worked on from more than one session.
 - **Read in this order**, and stop when you have what you need: this
-  file (conventions and traps), `docs/decisions.md` -- **its INDEX
-  first**, which is what makes it usable at all -- then
-  `docs/roadmap.md` for whether the thing is already known broken.
+  file (the rules and the trap index), then
+  **`docs/conventions/<area>.md` for the area you are about to touch**
+  -- this file indexes every convention by headline and that file
+  carries the body -- then `docs/decisions.md` for "why is it like
+  this" (**its INDEX first**, which is what makes it usable at all),
+  then `docs/roadmap.md` for whether the thing is already known broken.
   Anything drawn adds `docs/gui-guidelines.md`, which is binding.
 - **THE CODE WINS OVER A DOC THAT DISAGREES WITH IT.** A doc records
   what was true when someone wrote it; the code is what runs. So when
@@ -88,6 +91,9 @@ technical conventions below:
   no comparison at all.
 
 ## Conventions worth knowing before editing
+
+The ones below are in full because they fire UNANNOUNCED -- a session
+trips them before it knows to look anything up.
 
 - **`kapi.h` is the one header apps include** for kernel capabilities
   (console, keyboard, mouse, timer/RTC, filesystem, graphics). Never
@@ -265,154 +271,6 @@ technical conventions below:
   `kapi.h` -- it's the GUI-specific equivalent, included by GUI apps
   for `window_*` helpers. `kapi.h` never includes `wm/wm.h` or
   `gui_apps.h`.
-- **`apps/ui/` IS DOWN TO ONE WIDGET, and the GUI toolkit is
-  `userland/ui/`.** What is left is `ui_scrollback.{c,h}`, which the
-  KERNEL's own `edit` command draws with (`apps/editor.c`) and which
-  therefore cannot move to ring 3. **A new widget goes in
-  `userland/ui/`. There is no longer any such thing as a kernel-side
-  one.** `apps/theme.h` survives for the same kind of reason:
-  `apps/completion.c` colours the shell's tab-completion with it.
-  Three rules the deleted widgets taught still apply to their ring-3
-  twins: draw a popup LAST (drawing is immediate-mode, so z-order is
-  call order); **route keys through the focus ring, never by trying each
-  widget in turn** -- the first one tried swallows every key it
-  recognises, which left a listbox next to a dropdown unreachable from
-  the keyboard; and **a widget's BEHAVIOUR belongs to it, not to the
-  app**. See `docs/gui-guidelines.md`'s "Behaviour belongs to the
-  component" for the escape hatch.
-- **`userland/` is split by ROLE, and the build derives things from it
-  -- adding a program is a `.c` file and nothing else.** `rt/` (crt0,
-  libsys, stack_chk, link.ld), `ui/` (the GUI toolkit), `lib/`
-  (userland libraries that aren't UI -- `tosh`, plus the C names over
-  the toolkit), `gui/` (windowed apps), `bin/` (command-line programs),
-  `tests/` (single-mechanism diagnostics). **The first three produce
-  objects; the last three produce one ELF per `.c`, and the directory
-  also says where it seeds** -- `gui/` and `bin/` to `/bin`, `tests/` to
-  `/tests`, which is `docs/filesystem-layout.md`'s distinction stated
-  once instead of restated as a Makefile list that could drift from it.
-  Only three programs' on-disk names differ from their file names
-  (`SEED_NAME_*` in the Makefile: terminal->uterm, gfxdemo->shapes,
-  echo->echo_test). Note `tests/` holds windowed diagnostics too
-  (`winclient`, `uiclient`) -- the directories name a DESTINATION.
-  **Includes are path-qualified** (`#include "ui/ugfx.h"`) off a single
-  `-Iuserland`, so an include line says which layer it reaches into.
-  ELFs build to `build/userland/**`, not into the source tree.
-- **In ring 3 the toolkit is reachable under the C names -- don't
-  hand-roll a `my_strlen` or a digit loop there either.**
-  `#include "lib/string.h"` for `strlen`/`strcmp`/`strlcpy`/`mem*`/the
-  `ctype` handful, `#include "lib/stdio.h"` for `snprintf`. These are
-  NOT a second implementation: they are the same `k_*` code, compiled a
-  second time into `libuapp.a`, so a ring-3 `strlen` and the kernel's
-  `k_strlen` cannot diverge. Reach for `knum.h`'s `k_utoa`/`k_htoa`
-  directly when you need a fixed-width number -- kfmt's printf has
-  zero-pad widths for numbers and `%Ns`/`%-Ns` column padding for
-  STRINGS (a value longer than its field pushes the column rather than
-  being truncated), but no `*` width.
-  **`malloc`/`free`/`calloc` DO exist** (`#include "lib/stdlib.h"`), and
-  they are not a second allocator: they are `kernel/lib/heap_core.c` --
-  the kernel's own free list -- compiled a second time with `SYS_SBRK`
-  behind it instead of the frame allocator (`api/heap_os.h`). Two things
-  a caller inherits from sbrk: **`free()` never returns memory to the
-  kernel** (the break cannot move down, so a process's footprint only
-  grows), and a fresh region's pages arrive on touch. What still does
-  NOT exist, on purpose: `realloc`, `FILE`, `printf`, `errno`, TLS.
-  Three traps, all of which fail quietly: a header named `string.h`
-  including `"string.h"` finds ITSELF (hence the `<>`), an archive
-  member cannot be named `string.o` twice (hence `cmem.c`), and
-  `USERLAND_CFLAGS`'s `-fno-tree-loop-distribute-patterns` is what stops
-  a real `memcpy` recursing into itself through `k_memcpy` -- it LINKS
-  and blows the stack at runtime.
-- **RING-3 CODE HAS A FRAME BUDGET, and a link-time bound on the
-  image.** `USERLAND_CFLAGS` carries `-Wframe-larger-than=2048` and
-  `userland/rt/link.ld` `ASSERT`s that the image stays below
-  `UADDR_HEAP_BASE`. **A big local array in ring 3 is the thing to look
-  for** -- the worst found was 20,608 bytes against a 16 KiB stack,
-  which does not merely overflow but steps clean OVER the single 4 KiB
-  guard page into unmapped space (the Stack Clash shape). Note the
-  warning names the function where a wider guard would only hide it.
-- **Every ring-3 program is just a `main()`.** `userland/rt/crt0.asm`
-  provides `_start` (reads argc/argv off the stack per SysV, calls
-  `main`, passes its return to `sys_exit`) and `userland/rt/sys.c` is
-  libsys -- one typed wrapper per syscall. **Never hand-roll an
-  `int $0x80` stub in a new program**; that duplication across twenty
-  files is exactly what libsys replaced. **A program names no other
-  objects either** -- `build/userland/libuapp.a` is linked into every
-  ELF with `--gc-sections`, so each binary gets exactly the members it
-  references. Adding a GUI app is a `.c` file in `userland/gui/` with no
-  Makefile edit. Three things this depends on, all easy to break:
-  `userland/rt/link.ld` must match `.text.*` (function-sections put
-  every function in its own section, and a script matching only `.text`
-  links an empty program that faults at its entry point); the archive
-  must come LAST on the link line; and the archive rule **deletes
-  `libuapp.a` before rebuilding it**, because `ar rcs` never removes a
-  member whose source file is gone, so a deleted or renamed `.c` leaves
-  its object inside forever and the build quietly links the deleted
-  file's code until the two versions differ. `sys_call()` is the raw
-  escape hatch, for the `/tests` diagnostics that poke the raw ABI on
-  purpose. Two things before touching `crt0.asm`: the entry ABI is the
-  STANDARD SysV stack layout (argc at `(%rsp)`), and `%rsp` must be
-  **16-aligned before `call main`** -- a `sub rsp, 8` there looks like
-  it restores the old convention and instead faults every SSE-using
-  binary while leaving plain ones working, see `docs/decisions.md`.
-- **Ring-3 GUI apps are written against Toykit's `uapp`, and a new one
-  is a `.c` file in `userland/gui/` with NO Makefile edit.** Describe
-  the app in a `struct uapp_desc` -- title, a `uui_layout`, callbacks --
-  and `uapp_run()` owns the TWP handshake and the event loop
-  (`userland/ui/uapp.h`). Every callback is optional with a library
-  default, which is what lets TWS gain a feature without apps being
-  edited. Do not hand-roll a window handshake or an event loop in a new
-  client. Layout (`uui_layout.h`) means an app writes no coordinates:
-  declare a column/row/grid, and the window sizes itself from the
-  content. Resize, focus and wheel all arrive for free.
-  `docs/uapp-design.md` is the full design.
-- **Monotonic time is an INTERFACE, and wall clock is not one of its
-  implementations.** `kernel/clocksource.h` -- sources register like
-  `display_driver`s, best rating wins (PIT 110, TSC 300), and the core
-  converts a raw counter with a mult/shift pair so the overflow
-  reasoning lives in one audited place. `rtc_read_local()` stays out of
-  it: "what time is it" jumps when the clock is set and says nothing
-  about elapsed time, which is why Linux separates clocksource from RTC
-  too. **The TSC needs an INVARIANT TSC** (CPUID 8000_0007H EDX bit 8),
-  or its rate changes as the CPU throttles and every duration is
-  silently wrong. **Reaching that path is the trap**: plain TCG cannot
-  and KVM withholds it even under `-cpu host`, so the ONLY way is
-  `python3 tools/vm.py --kvm --cpu host,+invtsc`. `notsc` on the GRUB
-  line forces the PIT back, so the coarse path stays reachable -- same
-  rule as `nopat`/`ata nodma`.
-- **An app with a cadence sets `tick_ms` and BLOCKS between frames.**
-  `uapp_desc.tick_ms` arms a TWS timer (`WIN_REQ_TIMER` ->
-  `WIN_EV_TIMER`), so `on_tick` arrives as an event instead of the loop
-  spinning. Leaving it 0 keeps the old polling loop, which wakes a
-  process 100 times a second whatever it actually wanted. Three rules:
-  the interval is in MILLISECONDS and is floored at one tick, never
-  zero; the next firing is computed from NOW so a slow client never
-  accumulates a backlog of overdue firings; and there is ONE timer per
-  window. See `docs/decisions.md`.
-- **An app refuses its OWN second copy -- the launcher never does.** A
-  `uapp_desc` with an `app_id` and `UAPP_SINGLE_INSTANCE` sends
-  `WIN_REQ_ACTIVATE` before creating anything: TWS raises the window
-  already carrying that id and the second copy exits 0 without ever
-  appearing. Three things to know. The id rides `WIN_REQ_CREATE`'s
-  `text` field so a window can never exist without it (a later "register
-  my id" message leaves a gap exactly long enough for a second copy to
-  miss its twin). It is an opaque token -- `"taskmgr"`, not a path and
-  not the title. And **it is not a lock**: two launches in the same
-  instant can both be told "nobody there", which is recorded rather than
-  fixed because every launch path here is a human clicking a menu. See
-  `docs/decisions.md`.
-- **`uui_table` sorts on a header click, and an app supplies only a
-  COMPARATOR.** `uui_table_set_compare()` + `uui_table_set_sort()`; the
-  widget owns the ordering (an `int order[]` permutation), the clickable
-  header, the arrow and the toggle-to-reverse rule, exactly as Win32's
-  `ListView_SortItems` and Qt's `lessThan` split it. **It cannot sort
-  the text it draws** -- cells are formatted strings, so "10" would come
-  before "9"; comparison has to be on the app's real values. Every
-  public row index on the widget is an APP row, not a screen position,
-  so a selection survives a re-sort. Two traps it exposed: a widget's
-  `ops->hit` must cover the WHOLE widget (routing on the row-only hit
-  meant header and scrollbar presses reached nothing), and anything
-  comparing `selected` against `top` is mixing an app row with a view
-  offset. See `docs/decisions.md`.
 - **A WIDGET'S OPS TABLE IS THE CONTRACT, AND A MISSING SLOT FAILS
   SILENTLY AND AT A DISTANCE.** A table with no
   `natural_size`/`set_geometry` is never positioned or measured in a
@@ -424,225 +282,6 @@ technical conventions below:
   tables of everything in it before suspecting the layout**: three short
   tables presented as `uui_layout` stopping after four children, and
   `uui_layout_run()` has no early exit at all.
-- **A `uui_scrollview` NOTICES when its content's item list changes**
-  (`sv_children()` compares the `items` pointer and `count` against what
-  it last laid out). It used to re-lay-out only on its own rect or
-  offset moving, so an app that swapped a page's items left every NEW
-  widget at a ZERO RECT, invisible and unclickable, while widgets
-  carried over kept the PREVIOUS page's geometry -- which reads as a
-  broken layout, one layer away from the cause.
-  `uui_scrollview_content_changed()` is still the honest thing to call
-  at the point of change and is no longer load-bearing.
-- **`uui_slider` is for an ORDERED enum** (`userland/ui/uui_slider.h`)
-  -- discrete stops, one per choice, with the value an INDEX into the
-  same `options` array `uui_radio_list` and `uui_dropdown` take. So a
-  setting can switch between all three by changing `Widget=` in
-  `/etc/settings.d`, with no code change. It is deliberately NOT
-  continuous: the registry's only list-carrying type is an enum, so a
-  continuous slider would need a numeric setting type that does not
-  exist. A drag tracks x ONLY (leaving the track vertically must not
-  cancel it) and `press` returns non-zero on any hit, because the router
-  takes its pointer grab only when press does.
-- **A CONTROL BELOW THE FOLD IS UNREACHABLE, not merely hard to hit.**
-  A scroll view with a `hit` clips its children from ROUTING, so a press
-  never reaches a child outside the viewport -- correct, and the reason
-  a tool must scroll before clicking rather than aiming at unscrolled
-  coordinates, where it gets silence rather than an error. An app driven
-  by tools should report a control's rect whenever it MOVES (a page
-  change and a scroll alike), not only when a page changes.
-- **`uui_label` is the caption widget** (`userland/ui/uui_label.h`) --
-  one line of text the LAYOUT reserves a row for, with no behaviour and
-  **no `hit`**, so a click passes through to whatever is behind. Reach
-  for it instead of painting a caption in `on_draw`: that runs AFTER
-  the toolkit paints widgets, so hand-drawn text lands ON TOP of a
-  control, and reserving space by hand leaves content sliding under it
-  the moment the page scrolls. Its natural HEIGHT does not depend on
-  its text (`rows`), or a caption changing would reflow the page.
-- **`uui_tree` is the navigation widget** (`userland/ui/uui_tree.h`) --
-  rows at a DEPTH with collapsible parents. **The nodes are the app's
-  flat `const` array**, each carrying its depth; the widget derives
-  parent/child from the depth run, so there is no allocation, no
-  ownership and no teardown -- the same call `uui_menubar`'s const menu
-  trees make, and still right now that ring 3 has `malloc`. Five things
-  to know. **The easy path is three lines** (declare nodes, read
-  `uui_tree_selected_id()`): everything starts expanded with row 0
-  selected. **An app stores an ID, never a row** -- rows move as things
-  collapse -- and `uui_tree_select_id()` EXPANDS whatever was hiding the
-  node, because selecting something invisible looks exactly like doing
-  nothing. **Collapsed state is a BITMAP on the widget**, not a flag on
-  the node, since the nodes are the caller's `const` array. **The
-  expander toggles without navigating**, because exploring a section is
-  not choosing it. And **`natural_size` counts every node, collapsed or
-  not** -- a tree that shrank when collapsed would make the layout
-  twitch under the user's own click.
-- **A SETTING DECLARES ITS CATEGORY, and the sidebar is generated from
-  it.** `struct setting.category` (`api/setting.h`) is a free string --
-  `"Appearance"`, `"Input"`, `"Startup"` -- carried to ring 3 on
-  `SETTING_OP_INFO`, with NULL becoming `SETTING_CATEGORY_DEFAULT` at
-  the ABI boundary rather than in each client. So a setting registered
-  anywhere in the kernel gets a sidebar home the same way it already
-  gets a System Settings row, and **System Settings holds no list of
-  categories any more than it holds a list of settings** -- a table in
-  the app is the second source of truth the whole app exists to avoid.
-- **Control Panel is now SYSTEM SETTINGS** --
-  `userland/gui/system/settings.c`, `/bin/wm/system/settings`, driven by
-  `tools/settings_test.py`. Renamed because Control Panel is Windows'
-  name and this shows exactly the SETTINGS registry (not facts, not
-  tunables). The shape is KDE System Settings': a `uui_tree` sidebar,
-  one page, a status bar. **The rename left a stale
-  `/bin/wm/system/cpanel` on any existing `disk.img`**, because `make
-  iso` re-seeds by SYNC -- `make clean-disk && make iso` for a fresh
-  image, or delete it by hand.
-- **`uui_table` is the multi-column widget** (`userland/ui/uui_table.h`)
-  -- columns with per-column width (in CHARACTERS, or 0 to stretch) and
-  alignment, a header, selection, scrolling. **It PULLS its rows through
-  a callback and stores none of them**: Task Manager re-reads the
-  process table several times a second, so there is nothing cached to go
-  stale (ring 3 having `malloc` now changes nothing here). Sizing is
-  derived, so a resizable window reflows with no arithmetic in the app.
-  See `docs/decisions.md`.
-- **Editable text has ONE implementation of what editing means**
-  (`userland/ui/uui_edit.h`): the caret, the selection and the keymap --
-  Ctrl+A, Shift+arrows, typing replaces the selection, Backspace and
-  Delete remove it -- with STORAGE delegated through four accessors, so
-  the single-line `uui_textbox` and the multi-line `utext` share
-  behaviour without sharing a buffer. Same split as
-  `kernel/lib/klineedit.c` kernel-side. Don't add a keymap to a widget:
-  add the accessors and call `uui_edit_key()`. It deliberately declines
-  Enter (a field commits, a document inserts a newline) and declines
-  Up/Down unless the caller supplies line accessors.
-- **A ring-3 app does NOT route mouse input to its widgets -- the
-  toolkit does** (`userland/ui/uui_route.h`). Declare
-  `uapp_desc.widgets` (a `struct uui_item[]`, each with an app-chosen
-  `id`) and the library hit-tests them, delivers
-  press/motion/release/wheel, and holds a **pointer GRAB** so a drag
-  keeps reaching the widget that started it. The app gets
-  `on_widget(a, id, reason)` and reads the new value from the widget
-  (`uui_dropdown_selected()`, `cb.checked`, `list.selected`). **Do not
-  hand-dispatch input in a new app** -- a widget an app forgets to
-  forward is not an error: it draws perfectly and does nothing, which
-  is how `uui_listbox` shipped an undraggable scrollbar. Two things to
-  know: a widget with a popup declares `overlay_active` so it is
-  offered presses before anything is hit-tested (input order is the
-  reverse of draw order), and **the wheel goes to the widget under the
-  cursor**, so a test has to park the REAL cursor first
-  (`DebugConsole.warp_cursor()`; `gui move` lasts one WM iteration).
-- **The toolkit DRAWS the declared widgets too, popups last.** A widget
-  owns its colours (defaulted from the theme at init), exports a `draw`
-  slot, and `uapp` paints every item in `uapp_desc.widgets` before
-  calling `on_draw` -- which an app needs only for painting the toolkit
-  has no widget for. `uui_item.hidden` removes a widget from BOTH the
-  picture and hit-testing, which is how an app shows and hides a
-  control. Note `struct uui_item` is initialised with DESIGNATED
-  initialisers (`.ops`, `.widget`, `.id`): positional ones silently
-  re-bind when a field is added, and adding `hidden` did exactly that
-  -- every widget's id landed in `hidden`, and the compiler's
-  missing-initializer warning was the only thing that noticed.
-- **The GUI stack has names -- use them.** **TWP** (Toy Window Protocol,
-  `abi/win_proto.h`) is the client<->server contract; **TWS** (Toy Window
-  Server, `kernel/proc/win_server.c` + `userland/wm/wm_client.c`)
-  implements it; **Toykit** (`userland/ui/`) is the client toolkit an app
-  programs against -- roughly Wayland, its compositor, and GTK. Three
-  names rather than one because the protocol is meant to outlive this
-  server. Symbol prefixes are unchanged and stay that way (`uui_`,
-  `ugfx_`, `uapp_`, `WIN_REQ_*`); a toolkit's name and its prefix need
-  not match. See `docs/decisions.md`.
-
-  **How a TWP message is CARRIED is its own seam** -- `struct
-  win_transport` (`kernel/include/kernel/win_transport.h`), with
-  `SYS_WIN_REQUEST` as one implementation rather than the only path. Two
-  things follow. The `gui` debug commands are protocol messages
-  (`WIN_REQ_DEBUG_CMD`/`WIN_EV_DEBUG_OUT`), so `debug_console.c` does
-  NOT call into `userland/wm/` -- add a new `gui` subcommand in
-  `wm_debug.c` as before, but write its output through its `struct
-  dbg_out` sink, **never `klog_write()`** (a stray klog call still
-  reaches the serial port, so it silently vanishes from the reply). And
-  the seam has exactly ONE implementation, which by this repo's own
-  unreachable-path rule means it is UNVALIDATED -- see
-  `docs/decisions.md` before leaning on it.
-
-  **`tools/vm.py --vga vmware` is how you reach the modesetting driver
-  at all** -- the default `std` adapter has neither modesetting nor a
-  cursor plane, same shape as `--cpu max` for SMEP/SMAP. The hardware
-  cursor is switched off on the only driver that has one (`vmsvga`'s
-  `g_cursor_enabled = 0`, because a hw cursor over a relative PS/2 mouse
-  makes the pointer jump), so it is unreachable on every configuration
-  this OS boots.
-- **The kernel's idle work has ONE owner: `scheduler_idle()`**
-  (`api/scheduler.h`). Any loop that is waiting rather than working
-  calls it -- the physical shell's key wait, `wm.c`'s event loop, a
-  long `cat`, the demo's timer. What it owns today is
-  `debug_console_poll()`, and it exists because the serial debug console
-  had no owner at all: it was polled by whichever loop happened to be
-  running, and every GUI tool's checks arrive over that console.
-  **Don't add a bare `debug_console_poll()` to a new waiting loop** --
-  call `scheduler_idle()`. Two things it deliberately does NOT do: run
-  from the timer tick (a dispatched command can be `sh cat big`, which
-  blocks on the filesystem; nothing is lost waiting for a normal
-  context, since COM1's receive is already interrupt-driven into a ring
-  buffer), and touch `vga_cursor_tick()`/`vga_present()` (console upkeep
-  belongs to whoever owns the screen, and the desktop owns it while it
-  is up). The poll is NOT re-entrant and refuses a nested call:
-  `dbg_dispatch()`'s `arg` points into `line_buf`, so a command typed
-  during a long `sh` used to overwrite the running one's arguments. See
-  `docs/decisions.md`.
-- **`ugfx` has a SCREEN surface now, and it is the compositor's**
-  (`struct ugfx_screen`). `ugfx_screen_init()` takes ring 1's
-  framebuffer grant and allocates a matching back buffer from sbrk;
-  `ugfx_screen_present()` copies out only the damaged box and publishes
-  it. Three rules ride with it. **Never read the mapped framebuffer** --
-  it is write-combining, where a read is a full uncached round trip, so
-  a compositor composites in the back buffer and copies OUT. **Present
-  is required, not advisory** (a driver may declare
-  `DISPLAY_CAP_NEEDS_FLUSH`). And **there is no free**: the back buffer
-  and the verify scratch come from sbrk, which only grows, so a screen
-  is initialised once per process and `ugfx_verify_release()`
-  deliberately keeps its memory. The surface also gained a **clip rect
-  and a damage box** shared with ordinary window surfaces -- same
-  contract as the kernel's, including that a non-positive w/h is an
-  EMPTY clip rather than an absent one.
-- **The registered compositor can be GRANTED the real framebuffer**
-  (`WIN_REQ_FB_MAP` / `WIN_REQ_FB_PRESENT`, owned by
-  `kernel/proc/win_surface.c`). Writable and WRITE-COMBINING at
-  `WIN_FB_VADDR`, refused to anyone but the compositor, and revoked
-  wherever the role is cleared -- one place, so deregistration, a kill
-  and a fault are the same path. Two things to know. **The memory
-  type must reach the USER PTE** (`vmm_map_user_page_type()`,
-  `VMM_MT_WC`): the kernel's identity map and the compositor's mapping
-  are separate PTEs, and `paging_set_write_combining()` only touches
-  the former, so without this a ring-3 compositor gets a CACHED
-  framebuffer -- the bug class TCG cannot show you. And **present is
-  required, not advisory**: `vmsvga` declares `DISPLAY_CAP_NEEDS_FLUSH`,
-  where written pixels are invisible until the driver is told. See
-  `docs/decisions.md`.
-- **THE CURRENT DIRECTORY IS THE KERNEL'S, and every path syscall
-  resolves against it.** `struct sched_cwd` in the process slot beside
-  `struct sched_heap` (`api/scheduler.h`), reached by `SYS_CHDIR`/
-  `SYS_GETCWD`, INHERITED across `SYS_SPAWN`, starting at `/`. A
-  `char cwd[]` per shell broke the moment a filesystem command became a
-  `/bin` program, because `SYS_SPAWN` passes its argument string
-  VERBATIM: `mkdir docs` typed in `/tmp` created `/docs`, silently,
-  exiting 0. Three things to know. **`open`, `unlink` and `listdir`
-  resolve too**, through the same `resolve_user_path()` in
-  `kernel/fs/fs_syscalls.c` -- an absolute path is unchanged by
-  resolution, so nothing that already worked behaves differently.
-  **`tosh` no longer resolves anything**: `k_path_resolve()` handles
-  `..` and `.` below the syscall where every caller reaches it. And
-  **`getcwd` REFUSES rather than truncating** -- a shortened path names
-  a different directory.
-- **Six filesystem syscalls exist**: `SYS_MKDIR`, `SYS_RENAME`,
-  `SYS_TRUNCATE`, `SYS_STAT`, `SYS_LINK`, `SYS_SYNC`, with `/bin/mkdir`,
-  `rm`, `mv`, `ln`, `stat`, `truncate`, `touch`, `sync` and `df` as
-  programs over them. Two conventions they set. **A handler checks what
-  it CAN distinguish before falling back to `-EIO`** -- `fs_mkdir()`
-  returns one 0 for three different reasons, so the handler tests
-  existence itself and says `-EEXIST`. And **a small `/bin` command
-  prints its errors through `userland/lib/cmd.h`**
-  (`cmd_fail`/`cmd_usage`), which writes to STDOUT and not stderr on
-  purpose: fd 2 is the KERNEL LOG here, so a diagnostic written there is
-  perfectly recorded in `dmesg` and invisible to whoever typed the
-  command. That flips the day a TTY gives fd 2 somewhere a terminal can
-  see -- one line, in one file, which is why the header exists.
 - **THE FILESYSTEM IS NOT RE-ENTRANT, and `vfs.c` holds a preemption
   guard because of it.** `tfs3.c` walks directories, inodes and data
   through module-level scratch buffers, and a ring-3 process is
@@ -678,403 +317,6 @@ technical conventions below:
   has its buffer freed underneath it. **The cost to know**: a refusal
   looks exactly like "no such file" at the call site, so it is logged.
   See `docs/decisions.md`.
-- **The disk has a WRITE-BACK CACHE, and its flush can fail**
-  (`kernel/drivers/ata_cache.c`, under `ata_read_sectors()`/
-  `ata_write_sectors()` rather than in the block layer -- TFS2 and
-  `partition.c` bypass the block layer, and a bypass past a write-back
-  cache is a silent correctness hole in both directions). The
-  consequence that matters: a write that returned success can be refused
-  LATER, at the flush, so `blk_flush()`, `ata_flush_now()` and the block
-  device's flush op all RETURN A STATUS and TFS3's `txn_commit()` checks
-  it -- barrier 1 failing ABANDONS the transaction rather than
-  overwriting targets. A failed write-back keeps its line dirty rather
-  than dropping it. **Fault injection sits at the public entry AND on
-  the write-back path**, because with a cache in front "the drive
-  refused this write" no longer happens during the caller's `write()` at
-  all.
-- **A FACT IS READ THROUGH `SYS_QUERY`, AND ADDING ONE IS A PROVIDER,
-  NOT A SYSCALL.** `api/query.h` + `abi/query_abi.h`: one syscall, an
-  information CLASS, a typed record, and a registry a subsystem
-  announces itself to -- the same pattern as `display_driver`,
-  `block_device`, `clocksource` and `struct setting`. NT's
-  `NtQuerySystemInformation`, deliberately not Linux's `/proc` (see
-  `docs/decisions.md`). Adding a fact is a record in `abi/`, a
-  `struct query_provider` in the subsystem that owns the numbers, and a
-  `query_register()` call -- `kernel/mm/mem_query.c` is the worked
-  example. Six things to know. **Class 0 is the registry describing
-  itself**, so a program needs exactly one number to discover every
-  other class. **`len` is version tolerance**: the kernel writes
-  `min(len, record)` and reports `returned`, so a record may GAIN fields
-  but existing ones never move. **`count` is a HINT, not a bound** -- a
-  list's length is itself a fact, so an enumerator ends on `-ERANGE`,
-  not on a count it read earlier. **A provider is stored BY POINTER**,
-  so it must be static; a stack local leaves a dangling pointer reading
-  as plausible garbage. **Field OFFSETS never cross the syscall
-  boundary** -- names and values do (`config get mem.frame_free`), which
-  is what keeps a record free to grow. And **a LIST class has no field
-  table on purpose**: `-ENOTSUP`, distinct from `-ENOENT`, because "that
-  fact is a table" and "no such fact" send a reader to different places.
-  **There is ONE READER** -- `query_read()` -- so `meminfo`,
-  `/bin/meminfo` and `SYS_SYSINFO` cannot report different numbers.
-- **THERE ARE THREE WORDS FOR SYSTEM STATE AND THEY ARE FIXED: FACT,
-  SETTING, TUNABLE.** A **fact** is read-only and computed fresh on
-  every read (`mem_free`, the process list) and has NO stored form. A
-  **setting** is read/write and persisted to `/etc`. A **tunable** is a
-  SETTING whose `apply` also writes a live kernel variable -- a kind of
-  setting, not a third registry. Facts live in the query registry
-  (`docs/query-design.md`, designed not built); settings and tunables
-  both live in the setting registry (`api/setting.h`).
-  **Do not invent a fourth word** -- "property", "metric", "reading",
-  "parameter". A codebase with four names for two concepts is one nobody
-  can grep. `docs/settings-and-queries.md`'s "The vocabulary" is the
-  definition and the only copy of the table; point at it rather than
-  restating it. The distinction that is easy to get wrong: a fact is NOT
-  a setting with the write refused, which is why the two are separate
-  registries rather than one with a read-only flag -- "reset it to the
-  default" is meaningless for a fact, and `config diff` has nothing to
-  compare.
-- **Setting a setting to the value it already has does NOTHING** --
-  `setting_set()` compares the live value AND the file first, and skips
-  the write and the generation bump. This is not micro-optimisation:
-  everything watching `setting_generation()` does real work when it
-  moves (the desktop re-reads every `.desktop` file), so a UI that
-  over-reports a change turns into disk I/O and a desktop-wide reload.
-- **`uui_radio_list` arms on press and COMMITS ON RELEASE**, restoring
-  the previous row if the pointer left the list -- the rule
-  `docs/gui-guidelines.md` states for every control. Two traps came out
-  of adding it. The router only names a widget to the app when that
-  widget HAS a `release` op; and `press` must return non-zero on ANY
-  hit, because the router takes its pointer grab only when press does --
-  with 0 for the already-selected row, that one row silently loses its
-  release. **An app must honour `reason`**: discarding it applies a
-  setting on every pointer-motion event, which froze the desktop for
-  seconds and exposed the `fs_read()` bug above.
-- **The WM has a SLOW-FRAME WATCHDOG** (`userland/wm/wm_watchdog.c`): it
-  times each `wm_run()` iteration by phase and logs anything over a
-  threshold (150ms by default). The design point worth preserving: it
-  measures only the work AFTER the frame's `hlt`, so a SILENT watchdog
-  during a visible freeze is a real answer -- the loop was not running,
-  i.e. the stall is below us (host scheduling, the display backend, an
-  emulator's fsync) -- rather than a missing measurement. `gui watchdog
-  [<ms>|off]` tunes it and reports the fired/peak counters, which matter
-  as much as the threshold: "no SLOW FRAME lines" is only evidence of a
-  fast WM if it was armed. The attribution trap: `wmwd_phase()` names
-  the phase ABOUT TO START, so the interval it closes belongs to the
-  PREVIOUS one.
-- **A panic NAMES THE FUNCTION**, on screen and in the log:
-  `in crash_gp_fault+0xa`, plus the faulting context, the general
-  registers, the build id and the uptime. The symbol table is baked into
-  the image by `tools/gen_syms.py` into its own `.ksyms` section -- the
-  same two-pass trick `.krelocs` uses, and for the same reason:
-  `linker.ld` places it after every address it records, so pass 1's
-  addresses stay correct in pass 2, and `--verify` fails the build if
-  that stops holding. The blob contains NO POINTERS (link-time addresses
-  as u32 literals, names in a string table), so it adds nothing to the
-  relocations the kernel patches at boot.
-- **A kernel panic prints enough to diagnose from a pasted log** -- the
-  relocation offset, the LINK-TIME RIP (the kernel relocates itself, so
-  a raw RIP is meaningless on its own) and a stack scan, all to the
-  SERIAL log. Paste the printed `addr2line -f -e build/kernel.bin 0x...`
-  straight in; `tools/panic_resolve.py` names every address at once. The
-  backtrace is a STACK SCAN, not a frame-pointer walk (this kernel
-  builds at -O2, so an RBP chain would be fiction): it overreports stale
-  return addresses, so read it as candidates rather than a call chain.
-  Ring 0 only -- a ring-3 RIP belongs to some userland ELF, and
-  resolving it against the kernel image would be confidently wrong.
-- **There is a Crash Test app** (`userland/gui/demos/crashtest.c`,
-  Start menu only -- no desktop icon on purpose). Ring-3 buttons fault
-  in the app's own code and prove the desktop survives; Ring-0 buttons
-  ask the KERNEL to panic and are **refused unless booted with
-  `faultinject`**. The kernel owns the fault list (`api/crashtest.h`),
-  so adding a kind there gives the app a button with no edit -- and
-  `tools/crashtest_test.py` is safe in `gui_regress` precisely because
-  the dangerous half is disarmed by default. To exercise a real panic:
-  `make iso KCMDLINE="faultinject"`.
-- **The cursor's shapes are DATA FILES, and a theme is a directory.**
-  `/usr/share/cursors/<theme>/<shape>` (six shapes: `arrow`,
-  `resize-h`, `resize-v`, `resize-diag`, `text`, `wait`), generated by
-  `tools/gen_cursors.py` and loaded by `userland/wm/cursor_theme.c`. Two
-  registered settings pick the theme and the size. Four things to know.
-  **A shape file carries COVERAGE, not colour** -- an outline mask and a
-  fill mask, coloured by the compositor -- so one shape set serves a
-  light theme and a dark one. **The built-in shapes are the floor**: a
-  missing or malformed file costs its own shape, not the pointer --
-  which also means **a theme that loads NOTHING still draws a perfect
-  pointer**, so never test this by checking that a cursor is on screen
-  (the first version shipped loading 0 of 6 and looked right).
-  **Scaling is integer nearest-neighbour** and the size is its own
-  setting, not derived from `font_size`. And **the generator EXTRACTS
-  the arrow from `wm_render.c`'s own arrays**, so re-run it after
-  touching those or the shipped theme drifts from the fallback
-  (`--check` fails on stale). See `docs/decisions.md`.
-- **The cursor's drawn extent is DERIVED, not a constant.**
-  `cursor_rect()` (`userland/wm/wm_render.c`) is the one place that
-  answers "what box does the pointer occupy", and the save/restore pair
-  and the damage rect both ask it. A theme's size, its hotspot and the
-  size setting all move that box, so a fixed `CURSOR_BOX_SIZE` could not
-  survive themes -- and the two consumers disagreeing is the
-  stale-sprite bug this file's comments record paying for twice. The
-  previous box is STORED rather than recomputed, because the shape under
-  the old position may not be the shape there now.
-- **`etc_config.c` is SPLIT: the parser is shared, the file I/O is
-  kernel-only.** `kernel/lib/etc_config.c` holds the `name=value` parser
-  plus the buffer accessors, is freestanding, and is compiled a second
-  time into `libuapp.a`; `etc_config_file.c` holds the entry points that
-  reach for `fs.h`. Same shape as `kfmt.c`/`kfmt_print.c` and for the
-  same reason -- the ring-3 WM reads `.desktop` files and writes its own
-  icon positions, and a second `name=value` parser drifts from the
-  first, surfacing as the system and `config` disagreeing about a file.
-  **If you add an entry point, ask which half it belongs in: does it
-  look at a buffer, or at a file?**
-- **Kernel stacks are 16 KiB, have a GUARD PAGE, and carry a CANARY**
-  (`kernel/proc/scheduler.c`). They are their own page-aligned array,
-  not a member of `struct sched_process`, so the page below each one can
-  be unmapped -- Linux's `CONFIG_VMAP_STACK`. Three things ride with it.
-  **The `#DF` gate runs on an IST** (`gdt.c`'s `df_stack`, `tss.ist[0]`,
-  set in `idt_init()`): without it an overflow triple-faults and the
-  machine reboots with nothing printed, because the push that would
-  report the #PF is itself on the broken stack. **A canary at each stack
-  base is checked on every switch**, covering the frame big enough to
-  step OVER the guard. And **`-Wframe-larger-than=1024` is in CFLAGS**
-  (2048 for `apps/`, which runs on the kernel context's stack). **A
-  frame is not the sum of what you can see** -- GCC overlaps disjoint
-  locals and stops once an address escapes; `-fstack-usage` answers it
-  in one command, where reasoning about which struct was biggest
-  answered it wrongly twice. The bug that caused all this: an 8 KiB
-  stack overflowed on `SYS_SETTING` -> `etc_config` -> VFS -> TFS3 ->
-  ATA and zeroed the NEXT SLOT'S saved trapframe, so the window manager
-  `iretq`'d into CS=0. **Do not grow a kernel stack dynamically** -- no
-  mainstream kernel does; the reasoning is in `docs/decisions.md`.
-  **There are TWO owners and they share `kernel/kstack.h`**: the
-  scheduler's per-slot stacks and `process.c`'s LEGACY loader stack,
-  which is the one a `run` or `config set` typed at the physical shell
-  actually uses -- fixing only the first left `config set`
-  double-faulting the kernel. **`kstack` at the shell reports all of
-  it**, including (`kstack track on`) which syscall pushed the water
-  line down. Reach for it BEFORE a crash.
-- **A compositor's view of a dead window is POISONED, not unmapped**
-  (`comp_poison()` in `kernel/proc/win_server.c`). The invariant: while
-  a compositor is registered, a window buffer's slot in its address
-  space is never a HOLE -- frames that go away are replaced by one
-  shared read-only zero page. A compositor is a PROCESS: it learns a
-  window died from a queued event and may blit the slot once more before
-  it drains that, and a hole there is a page fault, i.e. the desktop
-  dying (which is exactly what Force Quit did). The frames really are
-  freed, so this is not a use-after-free; the mapping that stays live
-  IS one. **The trap: `vmm_map_user_page_type()` does NOT invalidate the
-  TLB when it replaces a PRESENT entry**, so poison has to be unmapped
-  (`comp_unpoison()`, from `comp_map()`) before real frames go over it,
-  or a live compositor reads zeros from a window that draws perfectly.
-  See `docs/decisions.md`.
-- **A ring-3 compositor delivers events through TWP, not by calling the
-  kernel.** `WIN_REQ_EVENT_PUSH` (put an event on a client's queue) and
-  `WIN_REQ_EVENT_STATS` (queue depth), both **refused to anyone but the
-  registered compositor** -- this is the one request that reaches across
-  into another process's queue, and without that check any client could
-  synthesise a keystroke into any other.
-- **`SYS_FS_GENERATION` is how ring 3 asks "has the filesystem
-  changed?"** -- no arguments, the counter in RAX. Its own syscall
-  rather than a `SYS_SYSINFO` field on purpose: the desktop polls it
-  ONCE PER FRAME to decide whether to re-read `/usr/wm/desktop/`, and a
-  free poll is the entire reason the counter exists instead of a
-  directory scan. It says something changed, never what.
-- **A ring-3 process can own a real window** (`userland/wm/wm_client.c` +
-  `kernel/proc/win_server.c`, protocol in
-  `kernel/include/abi/win_proto.h`). Two rules matter before touching
-  it. **Every client operation is a typed MESSAGE carried by the one
-  `SYS_WIN_REQUEST` syscall, never a syscall of its own** -- that is
-  what keeps the boundary a protocol; see `docs/decisions.md`. And
-  **the split is memory vs. presentation**: `win_server.c` owns
-  ids/buffers/mappings/teardown (page tables and the frame allocator),
-  `wm_client.c` owns the window list, chrome, z-order and input routing,
-  and they meet at a registered `struct win_server_ops` -- the same
-  registry pattern as `display_driver`. **A client draws with
-  `userland/ui/ugfx.c`**, not with syscalls -- there is no drawing
-  syscall and there shouldn't be, since only the framebuffer is
-  privileged, not drawing. The one thing a client can't produce for
-  itself is the font, which `WIN_REQ_FONT` maps READ-ONLY out of the
-  kernel's own tables rather than copying (one instance in memory, and
-  client text can't drift from the desktop's when `font_size` changes).
-  Two widgets have no kernel-side ancestor and were written here first:
-  **`uui_menubar`** (submenus nested to any depth -- a menu is const
-  arrays pointing at each other, which is still the right shape now that
-  ring 3 HAS `malloc`: a declared tree needs no teardown and cannot
-  leak; per-item checked/disabled state is ASKED FOR through an
-  `item_flags` hook rather than stored in the tree) and
-  **`uui_statusbar`**. Three things to know: **the menu bar opens on
-  PRESS**, the one deliberate bend in the commit-on-release rule (the
-  item still commits on release -- see `docs/decisions.md`); **a popup
-  is clamped to a bounds rect the app passes in**, which is the client's
-  window today and becomes the screen when `WIN_REQ_POPUP` lands, so the
-  flip/slide/clamp code is already the right code; and **there are no
-  Alt+letter mnemonics on purpose** -- Alt is an ESC prefix here, so
-  Alt-F is ambiguous with Esc, and `KEY_F10` focuses the bar instead.
-  **A file needed by both the kernel and a client is COMPILED TWICE,
-  never copied** (`build/userland/shared/`): the two builds use
-  different code models so the objects can't be shared, but the source
-  can. Only freestanding files qualify.
-- **COLOUR IS AN ESCAPE SEQUENCE, NOT A SYSCALL.** `kernel/lib/ansi.c`
-  parses SGR (`ESC[...m`) at the top of `vga_putc()` -- in front of the
-  sink check, so the physical console and a GUI Terminal's scrollback
-  both get the COLOUR rather than the bytes, and neither knows what an
-  escape is. **Write escapes, don't call `sys_set_color()`** from a
-  program: that syscall reaches around the byte stream and changes
-  console state directly, so `ls > out.txt` recoloured the console while
-  its output went to the file. Four things to know. **ANSI's colour
-  order is not VGA's** (ANSI 1 is red, VGA 1 is blue), so the mapping is
-  a TABLE -- `ansi_color()` -- and index 7 is `VGA_LIGHT_GREY` so that
-  its bright form is white rather than off the end of the palette.
-  **Sequences this console cannot honour are SWALLOWED, not printed**,
-  which is what a terminal declining something is supposed to do rather
-  than spraying `[2J` on screen. **There is no `isatty()`**, so a
-  program cannot tell a terminal from a pipe and `--color=auto` does not
-  exist -- `/bin/ls` offers `never`/`always` and defaults to
-  one-entry-per-line output, which is the parseable shape. And **a
-  program's flags are its own**: re-parsing a child's flags into a fixed
-  buffer mangled `--color=never` into `--color=`; `apps/shell_sys.c`
-  forwards them verbatim now and only resolves the path against the
-  shell's cwd.
-- **A FAILED SYSCALL RETURNS `-ERRNO`, AND `-1` IS `-EPERM`.**
-  `abi/errno.h` -- Linux's numbers, fourteen of them, and a return in
-  `[-4094, -1]` means failure. A new handler REPORTS A CODE
-  (`c->regs[14] = (uint64_t)(int64_t)-EBADF;`) and **keeps its
-  `klog_write()` line**: a person reading `dmesg` wants the sentence, a
-  program wants the number. Ring 3 is unchanged at the call site --
-  libsys turns the code back into `-1` and stashes it for
-  `sys_errno()`/`sys_strerror()`, so every existing `if (fd < 0)` still
-  works. Four things to know. **`SYS_RETRY` is -4095**, not -2, because
-  -2 is `-ENOENT` -- and it is deliberately NOT `-EAGAIN`, since it
-  means the call did not fail at all. **The syscalls whose failure value
-  is 0 were left alone** (`unlink`, `kill`, `gettime`, `proc_info`,
-  `win_create`): a negative code is TRUTHY, so `if (!sys_unlink(p))`
-  would read a failure as success. **`sbrk` keeps a bare `(void *)-1`**,
-  because it returns a POINTER and a small negative would be a plausible
-  wrong address. And **adding a code needs a handler that genuinely
-  distinguishes it** -- not because POSIX has a name for it.
-  `/tests/errno_test` is the check. See `docs/errno-design.md`.
-- **FILE DESCRIPTORS ARE TWO LEVELS, AND 0/1/2 ARE ORDINARY ENTRIES.**
-  A DESCRIPTION is what a stream is (file, pipe end, console, kernel
-  log) and is refcounted; a DESCRIPTOR is a number one address space
-  uses to name one, and `dup`/`dup2` copy the NAME. `sys_read`/
-  `sys_write` route on the description's KIND, never on the fd number --
-  which is what makes redirection expressible at all. Four things to
-  know. **The table is keyed by CR3, not by pid**: the legacy `run`
-  loader has an address space and no scheduler slot, and reading the
-  parent from `procs[current_index]` made its children inherit nothing
-  (use `vmm_current_pml4()`). **A spawned child INHERITS the whole
-  table**, which is why no `fork()` is needed for `>` and `<` -- the
-  shell redirects itself around the spawn, exactly what `posix_spawn()`
-  exists for. **CONSOLE and KLOG are different kinds** so stdout can be
-  redirected without dragging stderr along. And **when a refcount moves
-  down a layer, delete the old one**: `SYS_SPAWN` kept its
-  `pipe_add_writer()` after the child began taking a reference to the
-  description, counted the child twice, and the pipe never reached EOF.
-  See `docs/decisions/kernel.md`.
-- **A FULL PIPE BLOCKS ITS WRITER, AND A CHILD INHERITS ONLY 0/1/2.**
-  Both were forced by `|`. `pipe_write()` is ALL-OR-NOTHING and parks
-  when the buffer is full: taking what fitted and reporting a short
-  count is something nothing in ring 3 loops on, so a producer faster
-  than its reader silently lost the remainder. Atomicity is affordable
-  because `SYS_WRITE_MAX` (1024) is well under `PIPE_BUF_SIZE` (4096),
-  so a write always fits once drained -- POSIX's `PIPE_BUF` guarantee,
-  for the same reason. Three traps ride with it. **Check-and-park must
-  be atomic** (`scheduler_preempt_disable()` around both pipe paths): a
-  wake that fires between "it is full" and "park" is LOST, which was a
-  delay when only readers slept and is a DEADLOCK now both ends can.
-  **The retry re-sends the whole buffer**, which is only correct because
-  nothing was taken. And **inheriting the whole descriptor table was
-  wrong**: with no fork and no `CLOEXEC`, it hands a child every pipe
-  end the shell holds, so a pipeline never sees EOF -- the reading stage
-  is itself a writer of the pipe it reads. 0/1/2 is what
-  `posix_spawn()` and `STARTUPINFO` pass, and for this reason. See
-  `docs/decisions/kernel.md` for the shell-side ordering, where builtins
-  run LAST and the capture drain sits between them and the waits -- each
-  a deadlock, not a preference.
-- **One process can run another and read its output**: `SYS_PIPE` +
-  `SYS_SPAWN` + `SYS_WAITPID`, wrapped by libsys. Two rules to know.
-  **The retry sentinel is `SYS_RETRY`, never 0** -- 0 is a real answer
-  for `read` (EOF), and using it as "ask again" made a pipe read report
-  end-of-file the instant its writer produced something. And **a client
-  that spawns must close its own copy of the pipe's write end**, or the
-  read never sees EOF even after the child exits, because a live writer
-  (itself) still exists.
-- **Per-process facts exist, and Task Manager is a ring-3 app.**
-  `abi/proc_info.h` is what userland sees, reached by `SYS_PROC_INFO`
-  (by SLOT, not pid -- an empty slot is a SUCCESSFUL report of pid 0, so
-  enumeration skips rather than stops). **CPU time is MEASURED, not
-  counted** -- the scheduler asks a clocksource how long each slice
-  actually was, so the field is NANOSECONDS and `SYS_MONOTONIC_NS` is
-  its denominator; `cpu_ns` is deliberately a TOTAL, not a percentage,
-  and `sys_gettime` (RTC wall-clock) cannot serve as the denominator.
-  Counting timer interrupts instead was wrong twice: billing from
-  `SYS_YIELD` charged a whole tick for microseconds (every polling app
-  read a fake 100%), and billing only from the timer made anything
-  finishing inside a tick read 0%. **The invariant: every path that
-  stops running the current process bills BEFORE changing
-  `current_index`** -- missing the kernel-context case charged one
-  process 9.51 seconds across a 300ms window. **`SYS_KILL` is
-  unprivileged on purpose** -- there is no user model to gate it on.
-  See `docs/decisions.md`.
-- **`Exec=builtin:` is GONE, and ring 0 contains no applications.**
-  An entry still naming that form is refused loudly rather than shown as
-  a row that does nothing -- an entry file can outlive the mechanism it
-  names. One live consequence: the WM's live-`.desktop`-reload deferral
-  (`userland/wm/wm.c`) is now UNREACHABLE, because it triggers on a
-  window holding a `gui_app_registry[]` pointer and only a kernel-space
-  app ever held one. The guard is kept and correct;
-  `desktop_entries_test.py` asserts the property that makes it
-  unreachable, so a kernel-space app coming back turns that check red
-  instead of producing a mystery rebinding bug.
-- **The Start menu and desktop icons are built from FILES**, one
-  `.desktop`-style entry per app in `/usr/wm/desktop/` (source of truth:
-  `data/wm/desktop/`, format documented in its README). `gui_apps.c`
-  scans that directory at desktop startup, so **adding an app to the
-  desktop is dropping a file there**, not editing a table -- and it is
-  picked up LIVE, no restart: the WM watches `fs_generation()` and
-  re-reads the directory when it moves. **One directory feeds BOTH
-  surfaces**, with `ShowIn=desktop startmenu` choosing which; a second
-  directory per surface was rejected because an app wanted in both would
-  have its file duplicated and the copies drift. **Anything positional
-  must go through `gui_app_visible_count()`/`_at()`** -- the Start
-  menu's rows are indexed by position, so filtering the draw while
-  hit-testing the unfiltered registry lands every click on the wrong app
-  and looks correct in a screenshot. Windowed binaries live under
-  `/bin/wm/{system,apps,demos}/` -- the class is the SOURCE directory
-  (`userland/gui/<class>/`) and the Makefile derives the destination,
-  same rule that already made `userland/gui` mean `/bin`.
-- **A Start-menu entry launches a RING-3 program**, named by `exec_path`
-  on the registry entry (`apps/gui_apps.h`): `open_app()` spawns it and
-  the process makes its own window through the windowing protocol. Two
-  consequences before adding one: a launcher always SPAWNS (it never
-  focuses an existing window -- the WM can't enforce single-instance on
-  a ring-3 program, and shouldn't; the APP refuses a second copy of
-  itself instead), and **a real ring-3 app is seeded to `/bin`, not
-  `/tests`** -- see `docs/filesystem-layout.md`, and note that moving a
-  seeded file needs an explicit delete since `sync` is additive.
-- **There is no limit on open windows** -- `windows[]` is a grown-on-
-  demand block (`wm_windows_reserve()`), not a fixed array. Two rules
-  follow from it MOVING when it grows: never hold a `struct window *`
-  across anything that can open a window, and index rather than cache.
-  `WM_WINDOWS_INITIAL` is a starting capacity, not a limit.
-- **Super/Win toggles the Start menu, and Alt+F4 closes a window** --
-  both are WM shortcuts consumed before keys reach the focused window,
-  so a full-screen app cannot swallow either. `KEY_SUPER` comes from the
-  0xE0-prefixed 0x5B/0x5C scancodes; left and right send the same code.
-- **A window may be dragged off the left/right/bottom edges and UNDER
-  the taskbar**, keeping 8 character-widths of title bar grabbable and
-  never above the top edge (every other edge is recoverable by dragging
-  the title bar; the title bar cannot recover itself). A window that
-  ends up unreachable anyway is pulled back by `wm_ensure_reachable()`
-  when its taskbar button is clicked -- this desktop has no
-  Alt+Space/Win+arrow escape, so that button is the only handle such a
-  window has.
-- **The window manager lives in `userland/wm/`** -- the core event
-  loop/input/render split (`wm.c`/`wm_input.c`/`wm_render.c`, sharing
-  state through `wm_internal.h`'s `extern`s) plus the pieces that grew
-  their own files as they appeared: `desktop.c`, `start_menu.c`,
-  `context_menu.c`, `confirm_dialog.c`, `file_picker.c`, `wm_tray.c`,
-  `cursor_theme.c`, `wm_client.c`. Split by concern for readability --
-  it's still one tightly-coupled event loop, not decoupled components.
 - **Split a file once it's grown big enough to be genuinely harder to
   work with -- don't wait for it to become unmanageable, but don't
   split preemptively either.** There's no hard line-count rule; the
@@ -1093,447 +335,6 @@ technical conventions below:
   boundary -- see `docs/decisions.md`) rather than inventing a new
   pattern each time, and record the split's own reasoning in a
   top-of-file comment.
-- **`linker.ld` decides kernel memory PERMISSIONS, not just placement.**
-  Four PT_LOAD segments (R / R+X / R / RW) and four boundary symbols --
-  `__kimage_start`, `__ktext_start`, `__ktext_end`, `__kdata_start` --
-  which `paging_enforce_wx()` reads at boot to rewrite the identity map:
-  `.text` read-only and the only executable range, the rest of the image
-  read-only and NX, everything else writable and NX, plus CR0.WP. Two
-  things follow. **A new output section must be placed explicitly and
-  assigned to a segment** -- with PHDRS declared, an orphan's
-  permissions are wherever `ld` decided to put it, and the failure is
-  silent in the direction that matters (a section landing in the R+X
-  band becomes executable). **The `ALIGN(4096)`s between the bands are
-  load-bearing**: W^X is enforced per 4KiB page, so two sections sharing
-  a page get one permission and the more permissive one always wins.
-- **CI RUNS THE KERNEL SUITE TWICE, on ATA and on virtio-blk, and the
-  second one earns its place.** It found a driver bug that reproduced
-  NOWHERE locally: the runner's older QEMU and its CPU make the kernel
-  pick a different clocksource, under which `virtqueue_poll()` spent a
-  ~12 ms budget rather than the 5 s it appeared to offer and then let
-  late completions desync the used ring. **A second CONFIGURATION is
-  worth more than a second run of the first.** Two things follow for
-  anyone iterating on a CI failure: `.github/workflows/build.yml`
-  carries `workflow_dispatch: {}`, so `gh workflow run build.yml` runs
-  the pipeline with NO commit; and the runner image is public, so its
-  exact toolchain reproduces locally in a container rather than
-  round-tripping at ~90 s an attempt.
-- **VIRTIO-BLK IS THE PREFERRED DISK; ATA IS THE LEGACY PATH.** When a
-  virtio disk is attached it carries the filesystem, and `novirtio` on
-  the boot line forces ATA back (which is what keeps that path
-  reachable, and therefore tested -- same reason as `nopat`/`notsc`).
-  The reversal was measured, not preferred: ~10x ATA's write throughput
-  under KVM, and 3 clean runs in 3 where ATA managed 2 in 3. **Fault
-  injection moved to the BLOCK LAYER because of this**
-  (`fault_should_fail_block_read/write()`, consulted in
-  `blk_read_sectors()`/`blk_write_sectors()`): four filesystem
-  error-path KTESTs armed the ATA-specific injector and stopped testing
-  anything the moment the filesystem was not on ATA. **Use the
-  `fault_fail_next_block_*` pair for anything testing a FILESYSTEM**;
-  the ATA pair stays for ATA's own write-back cache, which sits below
-  the block layer and cannot be reached from it.
-- **A filesystem talks to a `block_device`, not to a disk.**
-  `kernel/include/kernel/block.h` -- five required ops, two optional
-  behind capability bits, one active device, registered like
-  `display_driver`. TFS3 uses it (that is what lets a live image mount
-  from RAM); **TFS2 deliberately still calls `ata_*` directly**, since a
-  live image is always TFS3. Two things to know: capabilities are
-  checked at registration (claim FLUSH with no `flush()` and you are
-  refused), and **`persistent` is a field on the DEVICE** -- a backend
-  cannot tell RAM from disk, so `fs_is_persistent()` is
-  `fs->init() && blk_persistent()`. Getting that wrong makes a live
-  session tell the user their files are saved.
-- **TFS3's last block group may be PARTIAL** (ext2/3/4's rule), so a
-  volume need not be a multiple of 128 MiB. `group_span(g)` is the one
-  place that answers "how big is group g"; `T3_BPG` still means the
-  STRIDE between groups. Blocks past the volume's end are marked used in
-  the last group's bitmap at format time, which is why nothing else
-  needed special-casing. The host writer must agree exactly or an image
-  will not mount.
-- **A graphics card is a `display_driver`, not a special case.**
-  `kernel/include/kernel/display.h` defines the interface (required
-  probe/get_surface; optional flush, cursor, accel, modeset, each behind
-  a capability bit) and `kernel/drivers/display/` holds the registry plus
-  the drivers -- `vesafb` (GRUB's framebuffer, registers last, always
-  claims) and `vmsvga`. Adding a card is one file and one
-  `display_register()` line; `gfx.c` is a rasteriser that never learns
-  which card it's on. `display_probe()` REFUSES a driver whose
-  capability bits and function pointers disagree, because a card that
-  needs a flush and doesn't get one shows a frozen screen while memory
-  holds the right pixels -- a hard bug to read, and one this project has
-  already paid for twice.
-- **`kernel/` directories are subsystems, not filing cabinets** --
-  `arch/x86_64/` (anything a different CPU would need rewritten),
-  `core/` (bring-up and whole-machine concerns), `mm/`, `proc/`, `fs/`,
-  `drivers/` (one piece of hardware each), `lib/` (services with no
-  hardware of their own). `kernel/README.md` has the "does it belong
-  here?" test per directory. Two lines worth holding: nothing outside
-  `arch/` should contain `inb`/`outb`, inline assembly or a
-  control-register access; and a filesystem backend goes in `fs/`, not
-  `drivers/` -- the block device is the driver, the filesystem on top
-  of it isn't.
-- **`meminfo audit` COMPARES PAGE TABLES AGAINST THE ALLOCATOR.**
-  The invariant: every frame a live mapping points at must be one pmm
-  considers HANDED OUT. A mapping of a free frame is memory the
-  allocator may give to somebody else while the process is still using
-  it -- and it costs nothing until that happens, which is exactly why
-  nobody noticed. `api/mm_audit.h` (`mm_audit_report()`) walks every
-  live address space; `vmm_audit_space()` does one. Three counters are
-  descriptive and one is a bug: **`dangling`**. Two things to know.
-  **`unmanaged` is NORMAL, not a finding** -- a framebuffer is MMIO, not
-  RAM pmm ever accounted for, and the desktop legitimately shows ~900
-  such pages. And **borrowed pages are audited too, on purpose**: a
-  borrowed mapping whose real owner freed the frame is precisely the
-  use-after-free worth catching. **It does NOT find ordinary leaks** (a
-  used frame nothing references) -- page tables, the heap, the kernel
-  image and DMA buffers all hold frames no page table points at, so that
-  direction needs every owner to declare its frames; see
-  `docs/roadmap.md`.
-- **THERE IS A PROCESS TREE: `ppid`, reparenting, and `waitpid(-1)`.**
-  Stage 0 of `docs/init-design.md`. Four things to know. **ppid 0 means
-  the KERNEL spawned it** (`scheduler_current_pid()` is 0 in kernel
-  context), which is every process started by `spawn`, `gui` or a
-  KTEST. **A dying process's children are reparented to 0 rather than
-  left naming it**, and that is correctness rather than tidiness: a pid
-  is a slot index plus one and slots are reused, so a stale ppid makes
-  the orphan look like a child of whatever process gets that slot next,
-  and THAT process's `waitpid(-1)` would hand it somebody else's corpse.
-  **`waitpid(-1)`'s two negative answers are different**: -1 means "no
-  children at all" and is PERMANENT, while a live-but-not-dead child
-  blocks (or answers `SYS_RETRY` under `SYS_WNOHANG`) -- an init that
-  conflates them either spins forever or stops reaping. And **wait-any
-  cannot work under the shell's `run`**: the legacy loader is not a
-  scheduled process, so it has no pid, so nothing it spawns has a
-  parent. Use `spawn`, which goes through the scheduler.
-  `scheduler_reparent()` is the adoption half.
-- **THERE IS AN INIT, IT HOLDS PID 1, AND IT CANNOT BE KILLED.**
-  `/bin/init` (`userland/bin/init.c`) is spawned from `kernel_main()`
-  before anything else, which is the only reason it is pid 1 -- slots
-  are handed out lowest-first, so being FIRST is what makes it so, as
-  on Linux. Four things to know. **`kill 1` does not restart the
-  desktop**: find the `toywm` pid with `ps` and kill that. **A boot with
-  no `/bin/init` is supported and quiet** -- `scheduler_init_pid()`
-  stays 0, orphans stay parentless, and everything that treats init
-  specially ASKS for the pid rather than testing `pid == 1` (see
-  `docs/decisions.md` for the boot that would otherwise have an
-  unkillable desktop). **Adoption only covers orphans**, i.e. children
-  of a parent that DIED -- a live parent that never waits still leaks
-  its zombies, which is why the shell's `spawn` reparents to init
-  explicitly and why `gui` and the KTESTs deliberately do not. And
-  **init is BLOCKED whenever it is idle**, never spinning; if `ps` ever
-  shows it ready, something has regressed to a poll loop.
-- **INIT STARTS AND SUPERVISES THE DESKTOP, and the desktop is a
-  SERVICE.** `/bin/init` reads `system.default_target` -- `text` or
-  `graphical`, persisted in `/etc/toyos.conf` -- and starts every
-  descriptor in `/etc/services.d` whose `Target=` matches.
-  **`data/etc/services.d/README.md` is the format and the full
-  behaviour** (`Restart=`, the doubling backoff and crash-loop give-up,
-  `After=`/`Before=` ordering, exactly when the rescan happens); read it
-  before changing anything there. Four things that bite from outside it:
-  - **`target=text` on the GRUB line overrides the setting for ONE boot
-    and does not write the file** -- the escape hatch for a desktop that
-    faults at boot. It shows as a live-vs-stored difference in `config
-    diff`, and **`config reload` DISCARDS the override**.
-  - **`Restart=on-failure` is the DEFAULT, and a clean exit means stop**
-    -- the Start menu's *Exit to shell* returns 0, and under an
-    unconditional `always` that menu item silently did nothing.
-  - **`gui` at the shell REFUSES when a desktop is already up** and
-    names the pid; it is still how you reach one from a `target=text`
-    boot.
-  - **init is spawned AFTER `debug_console_init()`**, and the ordering
-    is load-bearing: spawning first had the desktop doing its startup
-    disk I/O while the console came up, and `ktest_run.py` timed out
-    waiting for the prompt.
-
-  And **`rm /etc/services.d/<name>` DISABLES a service without stopping
-  it** (systemd's `disable`, not `stop`). That is the ONLY way to take
-  the desktop out of init's hands without a reboot, and **a test that
-  needs to be the only compositor must do it**: `screen_surface_test.py`
-  and `compositor_death_test.py` both kill the desktop, and without this
-  init restarts it with a ZERO backoff and the new desktop claims the
-  role straight back. Both had passed for months on the accidental
-  interlock that `gui` blocking the shell provided -- **automating a
-  lifecycle removes interlocks somebody depended on**; look for them.
-- **A `text` BOOT REACHES A RING-3 SHELL, AND THE KERNEL SHELL STANDS
-  DOWN FOR IT.** `data/etc/services.d/tosh` (`Target=text`,
-  `Restart=always`) makes `/bin/tosh` a service, so init starts it as
-  systemd starts a getty and puts a new prompt back when Ctrl-D ends
-  the old one. `apps/apps.c` then skips the ring-0 REPL entirely: no
-  prompt drawn, no keys taken, and every one of its commands still
-  reachable as `sh <cmd>` over the serial debug console. Three things to
-  know. **The decision comes from the TARGET, not from the console
-  claim**: `keyboard_claim_console()` is taken by tosh's first fd-0
-  READ, about ten milliseconds after init spawns it, and `apps_start()`
-  runs inside that same window -- so a REPL started there draws a prompt
-  onto a console about to belong to somebody else and eats whatever is
-  typed meanwhile. The target is known before init is even spawned, so
-  deciding from it removes the race rather than narrowing it. **It is
-  gated on init actually running**, because a boot with no `/bin/init`
-  is supported and quiet and standing down there would leave the machine
-  with no console at all. And **the standby loop calls
-  `scheduler_idle()` and nothing else** -- that is what polls the debug
-  console, while `vga_cursor_tick()`/`vga_present()` are console upkeep
-  belonging to whoever owns the screen. `tools/console_shell_test.py` is
-  the check; `docs/init-design.md`'s stage 4.
-- **RING 3 CAN READ THE CONSOLE -- fd 0, and it BLOCKS.**
-  `sys_read(0, buf, n)` parks the caller on `SCHED_WAIT_KEY` and
-  `keyboard.c`'s `ring_push()` wakes it from the IRQ, the same
-  park-and-return shape pipes, `waitpid` and `sleep` already use --
-  nothing reopens the `sti`-in-the-handler hazard `SYS_READ_KEY`'s
-  comment describes, because the handler does not wait, it RETURNS.
-  Five things to know. **It never returns 0** -- a console has no EOF,
-  and 0 would tell a shell its input had closed. **It is RAW**: one byte
-  per key, exactly the code `keyboard_try_getchar()` gives (specials are
-  0x91-0xA6), with no echo, no editing and no escape translation, so
-  the reader echoes what it reads -- all three are a line discipline and
-  belong above a real TTY. **The first fd-0 read CLAIMS the console**
-  and the kernel shell stands down until that process dies; the claim is
-  a SECOND flag beside the compositor's, released from
-  `fd_release_all()` so a crashing shell gives the keyboard back on its
-  own. **A ring-3 reader tests `keyboard_compositor_owns()`, never
-  `keyboard_blocking_suspended()`** -- the combined predicate is true of
-  its own claim and would deadlock it. And **whoever waits for a key
-  also presents the screen**, so the handler flushes the console back
-  buffer before parking. See `docs/decisions.md`.
-- **A QMP TEST THAT TYPES PUNCTUATION MUST PIN THE GUEST'S KEYBOARD
-  LAYOUT.** A qcode names a PHYSICAL key by its US-layout label, and
-  this OS defaults to `se`, where that key produces something else:
-  every `/` typed arrived as `-`, so `touch /probe.txt` created a file
-  genuinely called `-probe.txt` -- which a substring assertion passed.
-  `kbd=us` on the GRUB line (`docs/boot-flags.md`) or `sh keyboard us`
-  over the debug console fixes it; porting the table per layout was
-  rejected, since it would then be silently wrong for anyone who changed
-  the setting. The general form is this file's existing rule about
-  assertions a broken version still passes -- **an exact match would
-  have caught it and a substring did not**.
-- **RING 0's BLOCKING KEYBOARD READERS ARE SUSPENDED WHILE A COMPOSITOR
-  HOLDS THE ROLE** (`keyboard_suspend_blocking()`, set from the one
-  place in `win_server.c` the role changes). With init starting the
-  desktop, the physical shell sits at a prompt BEHIND it and both were
-  draining the same key ring -- so a key typed at the desktop could be
-  executed by an invisible shell. The non-blocking `keyboard_try_getchar*`
-  are untouched, which is what keeps `win_input.c` feeding the
-  compositor. Two consequences: **the physical console is deaf (and
-  hidden) for as long as a desktop is up** -- drive the machine over the
-  serial debug console, or `target=text` -- and **a compositor that
-  registers and never draws leaves a console both blank and deaf**,
-  which looks exactly like a hung machine. Real console ownership is the
-  TTY milestone's job; this is a placeholder that makes exactly one
-  thing read the keyboard at a time.
-  **SUSPENDING THE READ WAS NOT ENOUGH -- the loop BODY draws.** With
-  the check in the `while` condition only, the blocking reader stopped
-  returning keys and went on calling `vga_cursor_tick()` and
-  `vga_present()` every iteration: console upkeep, published straight
-  into the framebuffer the compositor owns, which put a blinking text
-  cursor on a desktop icon with every GUI tool green. Both calls are
-  guarded now; `scheduler_idle()` is not, because it is the one thing in
-  that loop that is not the console's. The general form: when you
-  suspend a loop, ask what its BODY does as well as what its exit
-  condition is.
-- **`win_server_active()` MEANS A RING-0 LAYER, and the desktop is not
-  one.** Use **`win_server_any()`** for "is there a window server at
-  all" -- either a ring-0 presentation layer or a registered compositor,
-  which is what `win_server_request()` itself gates on. Three places
-  open-coded this and two got it wrong by omitting the compositor half:
-  two KTESTs guarded themselves with `win_server_active()` so they would
-  SKIP while the desktop was up, and quietly stopped skipping the moment
-  the desktop became a process. **A predicate named for the thing that
-  used to be the only implementation is worth re-reading whenever that
-  stops being true.**
-- **`SYS_SLEEP` exists, and a caller with no scheduler slot gets -1.**
-  RDI is milliseconds; the caller parks on a deadline and the timer tick
-  releases it, so the RESOLUTION is one tick and a sleep never returns
-  EARLY. The refusal is the part to know: `run` uses the legacy loader,
-  which has no process-table slot, so a `/bin` program that sleeps
-  cannot be tested with `run <name>` -- use `spawn`. Returning 0 there
-  would say "you slept" and a polling loop would spin on it.
-- **`ps` is a REAL `/bin` PROGRAM, not a builtin** (`userland/bin/ps.c`,
-  over `SYS_PROC_INFO`) -- pid, ppid, state, cumulative CPU, memory,
-  name, with `--tree`. Two things worth knowing. **It cannot see itself
-  at the physical shell** (the legacy loader has no slot, so there is
-  nothing in the table to report), and **kfmt's numeric width
-  ZERO-pads** -- `%5u` of 1 is `00001`, so a right-aligned column means
-  formatting the number first and padding it with `%5s`.
-- **A PROCESS'S MEMORY IS FREED WHEN IT DIES, NOT WHEN IT IS REAPED --
-  and killing needs a DIFFERENT entry point from exiting.**
-  `syscall_process_exit_cleanup()` is for a process ending itself and
-  switches CR3 to the kernel's address space on the way;
-  `syscall_process_kill_cleanup()` is for `scheduler_kill()` and leaves
-  CR3 alone, because the caller there is a different, still-running
-  process (the WM force-quitting a client) that would otherwise resume
-  in the wrong address space. Neither used to run on the kill path at
-  all, so every kill leaked ~18 frames permanently, reachable from the
-  desktop via Force Quit. Two ordering rules: the teardown runs AFTER
-  `win_server_client_gone()` (which reaches into address spaces and
-  needs this one alive), and `pml4_phys` is zeroed straight after so
-  nothing follows it again. `tools/frame_balance.py` covers both paths.
-- **A USER MAPPING SAYS WHETHER IT OWNS ITS FRAME, and getting that
-  wrong is silent.** `vmm_destroy_address_space()` frees every frame it
-  finds in a dying process's page tables, so anything mapped in that the
-  process does NOT own must go through `vmm_map_user_borrowed()`
-  (`PAGE_BORROWED`, a spare PTE bit). The question to ask at any new
-  mapping site is **who calls `pmm_free_frame()` for this frame?** -- if
-  the answer is not "this address space's teardown", it is borrowed.
-  Five sites were wrong, including the font (pages of the KERNEL IMAGE,
-  mapped read-only into every GUI client) and the poison page -- one
-  frame mapped at every page of a slot, so an owning teardown freed a
-  permanent singleton dozens of times.
-  **The trap in MEASURING it: an over-free fires ONCE and then goes
-  quiet**, because `pmm_free_frame()` only counts a frame that was
-  marked used -- so `+4, +0, +0` reads as noise then health, and is not.
-  Check on a fresh boot and believe only the first cycle;
-  `tools/frame_balance.py` does exactly that. This is NOT refcounting --
-  it says "somebody else frees this", not "count me" -- and CoW and
-  `MAP_SHARED` still need a real per-frame refcount. See
-  `docs/decisions.md`.
-- **Kernel code touches user memory ONLY through `vmm.h`'s copy
-  helpers** (`vmm_copy_from_user`/`_to_user`/`_string_from_user`).
-  CR4.SMEP and CR4.SMAP are on wherever the CPU has them
-  (`paging_enable_smep_smap()`), so a raw `*(T *)user_ptr` in ring-0
-  code is a page fault, not a subtle bug. The helpers walk to the frame
-  and copy through the kernel's own identity map (U=0), which SMAP does
-  not police -- **so this kernel sets EFLAGS.AC nowhere and there is no
-  STAC/CLAC window in which the protection is off.** They also subsume
-  `vmm_validate_user_range()` where it used to be paired with a manual
-  copy loop, closing the gap between checking a mapping and using it.
-  Two traps: `paging_make_user_page()` adds U=1 to the KERNEL's own
-  identity mapping, so any page it touches becomes SMAP-protected
-  against the kernel's normal access to it; and **both bits are absent
-  on QEMU's default `qemu64`**, so `--cpu max` is the only way the
-  hardware path runs (the KTESTs assert CR4 against CPUID rather than
-  demanding the bits, so they are meaningful under both). See
-  `docs/decisions.md`.
-- **THE DESKTOP IS A RING-3 PROCESS.** `/bin/wm/system/toywm` is
-  `userland/wm/` compiled as a ring-3 program, spawned and waited on by
-  `apps/gui3.c`; `gui` starts it. It claims the compositor role, takes
-  the framebuffer grant, loads the font, composites, opens client
-  windows and answers the `gui` debug console. There is exactly ONE
-  window manager, and `apps/` holds no GUI at all: the shell, the
-  editor, the demo, and `gui3.c`.
-- **Killing the desktop is survivable, and that is the milestone's exit
-  criterion**: killing it at the shell (`ps` for the `toywm` pid, then
-  `kill <pid>`) revokes the framebuffer grant, ASKS each client window
-  to close (never destroys it -- that would fault a client mid-draw),
-  restores the text console and leaves the kernel running; `spawn
-  /bin/wm/system/toywm` starts a new one. **`kill` and `spawn` are shell
-  commands for exactly this reason.** `gui kill` cannot end the desktop
-  (it is dispatched from inside the WM's own loop and `scheduler_kill()`
-  refuses the CURRENT process), and `run` cannot start one (the legacy
-  loader is not a scheduled process, so its `win_request()` is refused).
-  `compositor_death_test.py` asserts the whole cycle.
-- **A GUI tool that needs the compositor role must ASK WHO HOLDS IT**
-  (`gui compositor --json`). The role is SINGLE, so a tool that spawns
-  its own stand-in evicts the desktop and then asks questions of a
-  client that does not implement them -- which is how three tools failed
-  the moment the desktop became a process. Each picks its scenario from
-  that answer now.
-- **A client that needs raw input without a desktop cannot be driven by
-  keystrokes** -- with no WM the physical shell owns the keyboard, so
-  injected keys go there. `screenclient auto` runs its whole sequence
-  itself for this reason, announcing each step so a reply can be
-  attributed to the command that produced it.
-- **Four things a ring-0 component loses the moment it becomes a
-  process:** (1) **`hlt` is PRIVILEGED** -- `sys_yield()` replaces it
-  (and busy-waits, see the roadmap). (2) **The font is not free**:
-  anything drawing in ring 3 must call `ugfx_font_init()`, which every
-  window client gets inside `uapp_run()` and the WM has to ask for
-  itself -- without it `ugfx_char_h()` is 0 and every font-derived
-  measurement silently collapses (chrome becomes a sliver, icon labels
-  vanish while their boxes still draw). It must happen BEFORE any
-  geometry is computed from it. (3) **Nobody polls the hardware any
-  more** -- `kernel/proc/win_input.c` polls and pushes `WIN_EV_RAW_*`
-  from `scheduler_idle()`, and starts the mouse, staying silent while a
-  ring-0 layer is registered so it cannot steal that WM's keys. (4) **A
-  single `!g_ops` guard refused everything** -- a window server is now
-  either a ring-0 layer or a registered compositor.
-- **`SYS_WNOHANG` exists, and the bug that produced it is the lesson.**
-  `SYS_WAITPID` BLOCKS -- its own first ABI line says so -- and a
-  per-frame reap that used it parked the desktop on the first client
-  that did not immediately exit, silently and forever. Use
-  `sys_waitpid_nohang()` for any "has it finished?" poll, and note it
-  has NO retry loop on purpose: `SYS_RETRY` is the answer there ("still
-  running"), not a signal to ask again.
-- **`SYS_SBRK` RESERVES; THE PAGE ARRIVES ON TOUCH.** The break is a
-  claim, not a mapping, which is what makes the ~2046 MiB per-process
-  heap affordable. Four things to know. **sbrk can no longer report OUT
-  OF MEMORY** -- it refuses only a request past `UADDR_HEAP_LIMIT`, and
-  the machine running out kills the process at the page it cannot be
-  given; that is overcommit, as on Linux. **The fault handler is NOT the
-  only entry point**, which is the trap: ring 0 walks page tables rather
-  than dereferencing user pointers, so a syscall handed an untouched
-  buffer never faults -- it gets a walk that finds nothing. Hence a
-  REGISTERED hook (`vmm_set_fault_handler`, `kernel/mm/vmm.c`) with
-  three callers: the #PF handler, the copy helpers, and
-  `vmm_validate_user_range()`. **Those last two are redundant with each
-  other**, so a positive control that disables one reddens NOTHING --
-  disable both, and `guard_test`'s two "untouched sbrk page" checks are
-  the ones that fire. And **`mapped_end` is gone** from
-  `struct sched_heap`: the page tables already record which pages exist,
-  and a second record could only disagree with them silently.
-- **THE RING-3 MAP IS SIZED FOR 4K, and a region's END is what the next
-  thing must clear.** `WIN_BUFFER_STRIDE` is 64 MiB (a 3840x2160x4
-  buffer is 31.6 MiB), `WIN_CLIENT_BASE` `0x8080000000`,
-  `WIN_COMPOSITOR_BASE` `0x80A0000000` (16 GiB -- 64 pids x 4 windows),
-  `WIN_FB_VADDR` `0x8500000000`, heap ~2046 MiB below the stack. The
-  trap: the compositor region is DERIVED
-  (`MAX_PIDS * CLIENT_MAX * STRIDE`), so its base looks isolated while
-  it spans gigabytes. **This does NOT make 4K work** --
-  `WIN_CLIENT_MAX_W/H` is still 1280x720 and window buffers still come
-  from `pmm_alloc_contiguous()` (8192 contiguous frames at 4K, refused
-  silently under fragmentation). Raising the caps before that is fixed
-  turns a hard limit into an intermittent silent failure.
-- **`SYS_SBRK` is PER PROCESS.** The break lives in
-  `struct sched_process` as a `struct sched_heap`, armed when the slot
-  is created; the syscall reaches it through `scheduler_current_heap()`,
-  which returns NULL for the kernel context -- meaning "not a scheduled
-  process", never "no heap". `elf_run.c`'s legacy blocking loader keeps
-  its own single slot (it has no scheduler slot to use) of the SAME type
-  through the same handler, so the two owners cannot drift. See
-  `docs/decisions.md`.
-- **The ring-3 address-space map is `kernel/include/kernel/uaddr.h`,
-  stated once.** Heap base, heap limit, guard region, stack bottom/top
-  and page counts, read by `scheduler.c`'s spawn path, `elf_run.c`'s
-  legacy loader, `SYS_SBRK` and `idt.c`'s fault report. **The guard
-  region below the stack is defined by being UNMAPPED** -- there is no
-  PTE to set, so an overflow always faulted; what the header buys is
-  that sbrk is bounded against it (it had NO ceiling, and a big enough
-  request mapped pages over the live stack with nothing faulting or
-  logged) and that a fault there is reported as `Stack overflow` rather
-  than as an anonymous #PF. Adding an mmap or ASLR replaces this
-  header rather than adding beside it; see `docs/decisions.md`.
-- **The kernel heap has a debug mode, and it is a RUNTIME toggle**
-  (`heap debug on|off`, `heap check`; `heap_set_debug()` from a test).
-  Blocks allocated while it is on get a red-zone each side and are
-  poisoned on free; a violation is logged and the block QUARANTINED
-  (leaked on purpose -- its metadata is what proved untrustworthy), so
-  detection stays assertable from a KTEST instead of needing a panic.
-  The trap, if you touch the allocator (`kernel/lib/heap_core.c` --
-  SHARED with ring 3's malloc, so a change there lands in both): blocks
-  of both shapes coexist, and `kfree()` tells them apart by reading the
-  eight bytes before the payload -- `HEAP_RZ_MAGIC` in a red-zoned
-  block, the header's `prev` in a plain one. **That is only unambiguous
-  because every heap pointer fits in 32 bits (identity-mapped low 4 GiB)
-  while the magic's top half is nonzero**, and because `prev` is the
-  header's LAST field. Break either and the failure is silent, on the
-  freeing path. See `docs/decisions.md`.
-- **The kernel RELOCATES ITSELF at boot -- it is not running where it
-  was linked.** `kernel_relocate_boot()` (`kernel/arch/x86_64/reloc.c`)
-  runs from `long_mode_start`, picks a random 2 MiB-aligned base, copies
-  the image there, patches its absolute references from the `.krelocs`
-  table and repoints CR3 at the copied page tables. `dmesg` says where
-  it landed; **`nokaslr` on the GRUB command line turns it off**, which
-  is the first thing to try if something breaks in a way that smells
-  address-dependent. Four things to know before touching any of it: it
-  **cannot log** (serial isn't up -- decisions go into globals that
-  `kernel_main()` prints), it **cannot call `krandom_init()`** (that
-  spins on a PIT that hasn't started), every global it sets must be
-  assigned **before the copy** or it lands only in the abandoned image,
-  and `.krelocs` must stay after `.data` and before `.bss` in
-  `linker.ld`. The one that cost a near-miss: `paging.c` reaches the
-  page tables by LINKER SYMBOL, so a relocation that forgets CR3 leaves
-  W^X silently not applied -- **and every W^X KTEST stays green**,
-  because they read the same symbol the code wrote. Only the KTEST that
-  asks the CPU for CR3 catches it. See `docs/decisions.md`.
 - **`tools/check_widget_ops.py` FAILS THE BUILD on a widget ops table
   with a slot it needs left NULL**, because four widgets shipped that
   way in one day and every one of them failed silently and at a
@@ -1560,30 +361,6 @@ technical conventions below:
   introspection, so the table they want is a `/proc`-shaped interface
   reached once the shell moves to ring 3, and converting first would
   build the wrong table (see `docs/roadmap.md`).
-- **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
-  The number in `abi/syscall_abi.h`, a handler in the subsystem that
-  owns it (`kernel/proc/syscall_fd.c` for anything taking an fd,
-  `kernel/fs/fs_syscalls.c`, `kernel/proc/proc_syscalls.c`,
-  `kernel/proc/win_syscalls.c`, `kernel/core/sys_syscalls.c`) with its
-  prototype in `kernel/include/kernel/syscalls.h`, and a row in
-  `kernel/proc/syscall_table.c`. There is no registry and no init call
-  to forget -- `syscall_dispatch()` is a bounds-checked call through
-  that table and nothing else. The shape is Linux's `sys_call_table[]`
-  and NT's SSDT, deliberately without their generators. Four things to
-  know. **The row carries the `strace` description too** (name,
-  argument kinds, return kind) -- that is one table where there were
-  two, because the second one DRIFTED and fourteen syscalls traced as a
-  bare number for months; `kstack syscalls` reads it as well. **A
-  handler writes its own return value into `c->regs[14]` and RETURNS
-  whether it parked the caller**, because `SYS_SBRK` returns a pointer
-  so no 64-bit value is free to be a "blocked" sentinel. **A local
-  added to `syscall_dispatch()` is paid for by every syscall** -- that
-  is how its frame once reached 4832 bytes; each handler pays for its
-  own now. And **`syscall_process_exit_cleanup()` calls one release hook
-  per file** (`fd_release_all`, `proc_syscall_release`,
-  `win_syscall_release`): kernel-side state keyed by an address space
-  is not part of that address space, so tearing it down frees none of
-  it. See `docs/decisions.md`.
 - **`kernel/include/` is split by audience and the build enforces it**
   -- `api/` (what `apps/` may use), `abi/` (the kernel<->userland
   contract `userland/` shares), `kernel/` (internal, and NOT on
@@ -1591,68 +368,6 @@ technical conventions below:
   than a review catch). See `kernel/include/README.md`, including where
   a new header starts life (`kernel/`, moving to `api/` only when an app
   genuinely needs it).
-- **A new TFS3 operation must COUNT ITS JOURNAL CREDITS, and the count
-  is the design.** `txn_begin(n)` reserves `n` distinct metadata blocks
-  up front (jbd2's discipline in miniature) and refuses before anything
-  changes if the volume's journal can't hold them; `txn_stage()` past
-  the reservation fails rather than tearing. Count the worst case, not
-  the common one -- rename needs five for a cross-parent DIRECTORY move
-  (both dirent blocks, the child's `..`, both parents' link counts) and
-  three or four for everything else, which is why v1 images (four
-  slots) refuse exactly that one operation and nothing else. Two rules
-  around it: the reservation is a MAX, so dedup via `txn_stage()`
-  returning the same image is free; and an insert that may GROW a
-  directory has to be staged FIRST, because the grow commits its own
-  transaction and can only do that while nothing else is staged.
-- **Shrinking a file, or anything else that stops referencing a block,
-  commits the pointer change BEFORE freeing the bit.** A crash between
-  costs a leak (fsck reclaims); the other order hands a live file's
-  blocks to the next allocation. That forces a commit into the middle
-  of truncation, which is why both backends keep the straddling pointer
-  tables' original images in memory across it -- see
-  `docs/decisions.md`'s truncation entry before touching either.
-- **`/etc` on the persistent filesystem is the config-file convention.**
-  `vfs.c`'s `ensure_layout()` creates it, and `/tmp`, after EVERY mount
-  -- at boot and when `fsformat` reformats a live disk, because two
-  `fs_mkdir()` calls in `kernel_main()` are correct exactly once per
-  boot and left a reformatted disk with neither directory. **Anything
-  that belongs to "having a filesystem" rather than "booting" goes
-  beside the mount.**
-
-  **A NEW SETTING REGISTERS ITSELF** (`kernel/include/api/setting.h`) --
-  a `struct setting` with a name, label, type, file, a choice
-  enumerator, a getter and one `apply` that validates, applies AND
-  persists, announced from `settings_init()` the way a `display_driver`
-  announces itself. That is what lets `SYS_SETTING` hand ring 3 the
-  whole list, so System Settings is GENERATED and a setting added
-  anywhere in the kernel gains a row there and a `config` entry with no
-  edit to either. **`docs/settings-and-queries.md` is the reference** --
-  the vocabulary, names, `config`'s verbs, and the worked "Adding a
-  setting". Five things worth knowing before you open it:
-  - **Don't add a setting as a bare `etc_config_get`/`_set` pair** --
-    that is the shape the registry replaced, and it leaves nothing able
-    to answer "what settings exist". Don't hand-roll a parser either:
-    `kernel/include/api/etc_config.h` is the one `name=value` reader.
-  - **A setting says whether it actually PERSISTED** -- the `apply`
-    path returns `enum setting_result`
-    (`SETTING_INVALID`/`SAVED`/`UNSAVED`) and shell commands print
-    `(NOT saved -- ...)` rather than an unqualified success, because
-    reporting "applied" as "saved" is a lie the user only finds after a
-    reboot.
-  - **A setting's identity is (NAMESPACE, name), and the namespace is
-    the registered name of its FILE** -- `system.font_size` for
-    `font_size` in `/etc/toyos.conf`. Derived, not declared. **A bare
-    name works only when exactly one setting has it and is REFUSED when
-    several do** -- never resolved by registration order, which would
-    make the answer depend on boot sequence.
-  - **`/etc/config.d` is how a config FILE declares itself** -- one
-    `Name`/`Path`/`Description` descriptor each, so a ring-3 program can
-    register its config with no kernel change (`api/config_file.h`).
-  - **Put a new key in the shared `/etc/toyos.conf` by default**;
-    nothing forces one file, and a setting with enough of its own keys
-    to be unwieldy there should get its own `/etc/<name>.conf` rather
-    than cramming in to match convention.
-
 - **PREFER FACTS THAT CANNOT GO STALE. Do not cite a number that some
   other file has to keep true.** Every maintenance burden this repo has
   deleted was the same shape: a pointer to a number -- build numbers,
@@ -1724,52 +439,141 @@ technical conventions below:
   so for pre-2026-08-15 work the changelog was the only detailed
   account of a CHANGE -- the decisions themselves are in
   `docs/decisions.md`.
-- **`kernel/include/api/version.h` is GENERATED, not hand-edited** --
-  `tools/gen_version.sh` regenerates it from `VERSION` (repo root) as
-  the first step of `make all`/`make iso`. Never edit `version.h`
-  directly. It defines three macros: `TOYOS_VERSION` (the bare string),
-  `TOYOS_BUILD_ID` (the short commit plus `-dirty` when the tree did not
-  match it) and **`TOYOS_VERSION_FULL`, which is what anything
-  human-facing should display** -- `0.3.0-dev (2034bb1)` on a dev build
-  and a bare `0.3.0` on a release, always. A dirty RELEASE build is a
-  loud stderr warning from `gen_version.sh` instead of a display string:
-  the person who needs to know is the one running the build, and "dirty"
-  means nothing to someone reading an About window. **Never add a build
-  TIMESTAMP to it**: the script is deliberately idempotent (it rewrites
-  `version.h` only when the content changed) because `kapi.h` includes
-  it, and a value that differs every build turns every build into a full
-  rebuild. See `docs/decisions.md`.
-  **The build DATE lives in its own generated header for exactly that
-  reason** -- `kernel/include/api/build_date.h` (`TOYOS_BUILD_DATE`),
-  also written by `gen_version.sh`, at DAY granularity, and included by
-  ONE file (`userland/wm/desktop.c`, the desktop's watermark). So it
-  rebuilds one object at most once a day instead of the tree every
-  build. Include it only where it is displayed; pulling it into a widely
-  included header recreates the problem it is shaped to avoid. Both
-  generated headers are gitignored.
-- **Versioning is semver + a `-dev` suffix, not a per-change build
-  number.** `VERSION` only changes via `tools/set_version.sh <version>`:
-  `0.2.0-dev` starts a new dev round, `0.2.0` (no `-dev`) cuts a
-  release. Git tags (`v<version>`) and GitHub Releases happen at real
-  releases only, cut by hand after `set_version.sh` -- see
-  `docs/decisions.md` for the full mechanics and commands.
-- **A GitHub Release's notes follow ONE shape, and it is terse.**
-  `docs/release-notes-template.md` is the worked example -- copy its
-  shape rather than re-deriving it. **Install first**, then one `##` per
-  area that changed (Windowing / Filesystem / Memory protection /
-  Process model / Testing / Structure), flat bullets under each, and
-  nothing else. Deliberately NOT in them: commit counts, milestone
-  numbers, a pointer to a changelog (there isn't one), or promotional
-  framing -- state what exists.
-  **And the accuracy rule that caused this:** a release note is the one
-  document written from memory rather than from the code, and v0.2.0
-  shipped with a title that was not yet true of the tag. So **check
-  every claim against the TAG** -- `git ls-tree -r v<x> --name-only` and
-  `git show v<x>:<file>` answer it in seconds -- and say plainly what is
-  still in progress.
 - **Commit messages list each changed/added file with a one-line note
   in the body** (subject line stays a short summary) -- see
   `docs/decisions.md`'s versioning entry for the exact format.
+
+## Conventions indexed here, written up in `docs/conventions/`
+
+**Every headline below is a real rule; the body is one file away.**
+CLAUDE.md is the always-loaded context, so it carries the RULE and
+`docs/conventions/<area>.md` carries the reasoning and the trap -- the
+same split this file already asks for everywhere else. **Read the file
+for the area you are touching before you edit it**, and read the entry
+whenever a headline here tells you something you did not already know.
+
+### The kernel: syscalls, memory, processes, init
+
+`docs/conventions/kernel.md`
+
+- **Monotonic time is an INTERFACE, and wall clock is not one of its implementations.**
+- **The kernel's idle work has ONE owner: `scheduler_idle()`**
+- **A panic NAMES THE FUNCTION**
+- **A kernel panic prints enough to diagnose from a pasted log**
+- **Kernel stacks are 16 KiB, have a GUARD PAGE, and carry a CANARY**
+- **A FAILED SYSCALL RETURNS `-ERRNO`, AND `-1` IS `-EPERM`.**
+- **FILE DESCRIPTORS ARE TWO LEVELS, AND 0/1/2 ARE ORDINARY ENTRIES.**
+- **A FULL PIPE BLOCKS ITS WRITER, AND A CHILD INHERITS ONLY 0/1/2.**
+- **One process can run another and read its output**
+- **Per-process facts exist, and Task Manager is a ring-3 app.**
+- **`meminfo audit` COMPARES PAGE TABLES AGAINST THE ALLOCATOR.**
+- **THERE IS A PROCESS TREE: `ppid`, reparenting, and `waitpid(-1)`.**
+- **THERE IS AN INIT, IT HOLDS PID 1, AND IT CANNOT BE KILLED.**
+- **INIT STARTS AND SUPERVISES THE DESKTOP, and the desktop is a SERVICE.**
+- **`SYS_SLEEP` exists, and a caller with no scheduler slot gets -1.**
+- **`ps` is a REAL `/bin` PROGRAM, not a builtin**
+- **A PROCESS'S MEMORY IS FREED WHEN IT DIES, NOT WHEN IT IS REAPED -- and killing needs a DIFFERENT entry point from exiting.**
+- **A USER MAPPING SAYS WHETHER IT OWNS ITS FRAME, and getting that wrong is silent.**
+- **Kernel code touches user memory ONLY through `vmm.h`'s copy helpers**
+- **`SYS_WNOHANG` exists, and the bug that produced it is the lesson.**
+- **`SYS_SBRK` RESERVES; THE PAGE ARRIVES ON TOUCH.**
+- **THE RING-3 MAP IS SIZED FOR 4K, and a region's END is what the next thing must clear.**
+- **`SYS_SBRK` is PER PROCESS.**
+- **The ring-3 address-space map is `kernel/include/kernel/uaddr.h`, stated once.**
+- **The kernel heap has a debug mode, and it is a RUNTIME toggle**
+- **The kernel RELOCATES ITSELF at boot -- it is not running where it was linked.**
+- **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
+
+### GUI, Toykit and the desktop
+
+`docs/conventions/gui.md`
+
+- **`apps/ui/` IS DOWN TO ONE WIDGET, and the GUI toolkit is `userland/ui/`.**
+- **Ring-3 GUI apps are written against Toykit's `uapp`, and a new one is a `.c` file in `userland/gui/` with NO Makefile edit.**
+- **An app with a cadence sets `tick_ms` and BLOCKS between frames.**
+- **An app refuses its OWN second copy -- the launcher never does.**
+- **`uui_table` sorts on a header click, and an app supplies only a COMPARATOR.**
+- **A `uui_scrollview` NOTICES when its content's item list changes**
+- **`uui_slider` is for an ORDERED enum**
+- **A CONTROL BELOW THE FOLD IS UNREACHABLE, not merely hard to hit.**
+- **`uui_label` is the caption widget**
+- **`uui_tree` is the navigation widget**
+- **A SETTING DECLARES ITS CATEGORY, and the sidebar is generated from it.**
+- **Control Panel is now SYSTEM SETTINGS**
+- **`uui_table` is the multi-column widget**
+- **Editable text has ONE implementation of what editing means**
+- **A ring-3 app does NOT route mouse input to its widgets -- the toolkit does**
+- **The toolkit DRAWS the declared widgets too, popups last.**
+- **The GUI stack has names -- use them.**
+- **`ugfx` has a SCREEN surface now, and it is the compositor's**
+- **The registered compositor can be GRANTED the real framebuffer**
+- **`uui_radio_list` arms on press and COMMITS ON RELEASE**
+- **The WM has a SLOW-FRAME WATCHDOG**
+- **There is a Crash Test app**
+- **The cursor's shapes are DATA FILES, and a theme is a directory.**
+- **The cursor's drawn extent is DERIVED, not a constant.**
+- **A compositor's view of a dead window is POISONED, not unmapped**
+- **A ring-3 compositor delivers events through TWP, not by calling the kernel.**
+- **`SYS_FS_GENERATION` is how ring 3 asks "has the filesystem changed?"**
+- **A ring-3 process can own a real window**
+- **`Exec=builtin:` is GONE, and ring 0 contains no applications.**
+- **The Start menu and desktop icons are built from FILES**
+- **A Start-menu entry launches a RING-3 program**
+- **There is no limit on open windows**
+- **Super/Win toggles the Start menu, and Alt+F4 closes a window**
+- **A window may be dragged off the left/right/bottom edges and UNDER the taskbar**
+- **The window manager lives in `userland/wm/`**
+- **`win_server_active()` MEANS A RING-0 LAYER, and the desktop is not one.**
+- **THE DESKTOP IS A RING-3 PROCESS.**
+- **Killing the desktop is survivable, and that is the milestone's exit criterion**
+- **A GUI tool that needs the compositor role must ASK WHO HOLDS IT**
+- **A client that needs raw input without a desktop cannot be driven by keystrokes**
+- **Four things a ring-0 component loses the moment it becomes a process:**
+
+### Storage, the filesystem, and /etc
+
+`docs/conventions/storage.md`
+
+- **THE CURRENT DIRECTORY IS THE KERNEL'S, and every path syscall resolves against it.**
+- **Six filesystem syscalls exist**
+- **The disk has a WRITE-BACK CACHE, and its flush can fail**
+- **A FACT IS READ THROUGH `SYS_QUERY`, AND ADDING ONE IS A PROVIDER, NOT A SYSCALL.**
+- **THERE ARE THREE WORDS FOR SYSTEM STATE AND THEY ARE FIXED: FACT, SETTING, TUNABLE.**
+- **Setting a setting to the value it already has does NOTHING**
+- **`etc_config.c` is SPLIT: the parser is shared, the file I/O is kernel-only.**
+- **VIRTIO-BLK IS THE PREFERRED DISK; ATA IS THE LEGACY PATH.**
+- **A filesystem talks to a `block_device`, not to a disk.**
+- **TFS3's last block group may be PARTIAL**
+- **A new TFS3 operation must COUNT ITS JOURNAL CREDITS, and the count is the design.**
+- **Shrinking a file, or anything else that stops referencing a block, commits the pointer change BEFORE freeing the bit.**
+- **`/etc` on the persistent filesystem is the config-file convention.**
+
+### The shell, the console, and line editing
+
+`docs/conventions/shell.md`
+
+- **COLOUR IS AN ESCAPE SEQUENCE, NOT A SYSCALL.**
+- **A `text` BOOT REACHES A RING-3 SHELL, AND THE KERNEL SHELL STANDS DOWN FOR IT.**
+- **RING 3 CAN READ THE CONSOLE -- fd 0, and it BLOCKS.**
+- **A QMP TEST THAT TYPES PUNCTUATION MUST PIN THE GUEST'S KEYBOARD LAYOUT.**
+- **RING 0's BLOCKING KEYBOARD READERS ARE SUSPENDED WHILE A COMPOSITOR HOLDS THE ROLE**
+
+### The build, the userland layout, and releases
+
+`docs/conventions/build.md`
+
+- **`userland/` is split by ROLE, and the build derives things from it -- adding a program is a `.c` file and nothing else.**
+- **In ring 3 the toolkit is reachable under the C names -- don't hand-roll a `my_strlen` or a digit loop there either.**
+- **RING-3 CODE HAS A FRAME BUDGET, and a link-time bound on the image.**
+- **Every ring-3 program is just a `main()`.**
+- **`linker.ld` decides kernel memory PERMISSIONS, not just placement.**
+- **CI RUNS THE KERNEL SUITE TWICE, on ATA and on virtio-blk, and the second one earns its place.**
+- **A graphics card is a `display_driver`, not a special case.**
+- **`kernel/` directories are subsystems, not filing cabinets**
+- **`kernel/include/api/version.h` is GENERATED, not hand-edited**
+- **Versioning is semver + a `-dev` suffix, not a per-change build number.**
+- **A GitHub Release's notes follow ONE shape, and it is terse.**
+
 ## This checkout, and the repo it pushes to
 
 **The repo is `eveningworks/toy-os`** -- an ORGANIZATION, since
@@ -2208,6 +1012,12 @@ detail there, and keep the pointer here to a line. What each file is:
   mechanics, what the emulator does and does not model.
 - **`docs/tools.md`** -- the full reference for every script in
   `tools/`.
+- **`docs/conventions/`** -- the BODY of every convention this file
+  indexes by headline: `kernel.md`, `gui.md`, `storage.md`, `shell.md`,
+  `build.md`. Read the one for the area you are touching. A new
+  convention goes in the file for its area **and** gets its headline
+  added to this file's index, or it is invisible to the next session --
+  that pairing is the whole mechanism, and half of it is not optional.
 - **`docs/decisions.md`** -- the INDEX over `docs/decisions/`, which
   answers "why does toy-os work this way?" split by area (`kernel.md`,
   `gui.md`, `storage.md`, `build.md`, `shell.md`, `drivers.md`,

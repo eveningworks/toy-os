@@ -1,0 +1,183 @@
+# The build, the userland layout, and releases
+
+The Makefile, how `userland/` is laid out and linked, the driver
+registries, versioning and CI.
+
+These are the conventions CLAUDE.md indexes by headline but does not
+carry in full -- it is the always-loaded context, so it holds the rule
+and this file holds the reasoning and the trap. **The headline of every
+entry here also appears in CLAUDE.md**, so a session sees the warning
+without loading the body; come here when you are actually working in
+this area, or when a headline there tells you something you did not
+know.
+
+Same bar as `docs/decisions.md`: an entry earns its length from the
+INVARIANT (what must stay true) and the TRAP (what breaks if you edit
+this the obvious way), not from how much history it accumulated.
+
+---
+
+- **`userland/` is split by ROLE, and the build derives things from it
+  -- adding a program is a `.c` file and nothing else.** `rt/` (crt0,
+  libsys, stack_chk, link.ld), `ui/` (the GUI toolkit), `lib/`
+  (userland libraries that aren't UI -- `tosh`, plus the C names over
+  the toolkit), `gui/` (windowed apps), `bin/` (command-line programs),
+  `tests/` (single-mechanism diagnostics). **The first three produce
+  objects; the last three produce one ELF per `.c`, and the directory
+  also says where it seeds** -- `gui/` and `bin/` to `/bin`, `tests/` to
+  `/tests`, which is `docs/filesystem-layout.md`'s distinction stated
+  once instead of restated as a Makefile list that could drift from it.
+  Only three programs' on-disk names differ from their file names
+  (`SEED_NAME_*` in the Makefile: terminal->uterm, gfxdemo->shapes,
+  echo->echo_test). Note `tests/` holds windowed diagnostics too
+  (`winclient`, `uiclient`) -- the directories name a DESTINATION.
+  **Includes are path-qualified** (`#include "ui/ugfx.h"`) off a single
+  `-Iuserland`, so an include line says which layer it reaches into.
+  ELFs build to `build/userland/**`, not into the source tree.
+- **In ring 3 the toolkit is reachable under the C names -- don't
+  hand-roll a `my_strlen` or a digit loop there either.**
+  `#include "lib/string.h"` for `strlen`/`strcmp`/`strlcpy`/`mem*`/the
+  `ctype` handful, `#include "lib/stdio.h"` for `snprintf`. These are
+  NOT a second implementation: they are the same `k_*` code, compiled a
+  second time into `libuapp.a`, so a ring-3 `strlen` and the kernel's
+  `k_strlen` cannot diverge. Reach for `knum.h`'s `k_utoa`/`k_htoa`
+  directly when you need a fixed-width number -- kfmt's printf has
+  zero-pad widths for numbers and `%Ns`/`%-Ns` column padding for
+  STRINGS (a value longer than its field pushes the column rather than
+  being truncated), but no `*` width.
+  **`malloc`/`free`/`calloc` DO exist** (`#include "lib/stdlib.h"`), and
+  they are not a second allocator: they are `kernel/lib/heap_core.c` --
+  the kernel's own free list -- compiled a second time with `SYS_SBRK`
+  behind it instead of the frame allocator (`api/heap_os.h`). Two things
+  a caller inherits from sbrk: **`free()` never returns memory to the
+  kernel** (the break cannot move down, so a process's footprint only
+  grows), and a fresh region's pages arrive on touch. What still does
+  NOT exist, on purpose: `realloc`, `FILE`, `printf`, `errno`, TLS.
+  Three traps, all of which fail quietly: a header named `string.h`
+  including `"string.h"` finds ITSELF (hence the `<>`), an archive
+  member cannot be named `string.o` twice (hence `cmem.c`), and
+  `USERLAND_CFLAGS`'s `-fno-tree-loop-distribute-patterns` is what stops
+  a real `memcpy` recursing into itself through `k_memcpy` -- it LINKS
+  and blows the stack at runtime.
+- **RING-3 CODE HAS A FRAME BUDGET, and a link-time bound on the
+  image.** `USERLAND_CFLAGS` carries `-Wframe-larger-than=2048` and
+  `userland/rt/link.ld` `ASSERT`s that the image stays below
+  `UADDR_HEAP_BASE`. **A big local array in ring 3 is the thing to look
+  for** -- the worst found was 20,608 bytes against a 16 KiB stack,
+  which does not merely overflow but steps clean OVER the single 4 KiB
+  guard page into unmapped space (the Stack Clash shape). Note the
+  warning names the function where a wider guard would only hide it.
+- **Every ring-3 program is just a `main()`.** `userland/rt/crt0.asm`
+  provides `_start` (reads argc/argv off the stack per SysV, calls
+  `main`, passes its return to `sys_exit`) and `userland/rt/sys.c` is
+  libsys -- one typed wrapper per syscall. **Never hand-roll an
+  `int $0x80` stub in a new program**; that duplication across twenty
+  files is exactly what libsys replaced. **A program names no other
+  objects either** -- `build/userland/libuapp.a` is linked into every
+  ELF with `--gc-sections`, so each binary gets exactly the members it
+  references. Adding a GUI app is a `.c` file in `userland/gui/` with no
+  Makefile edit. Three things this depends on, all easy to break:
+  `userland/rt/link.ld` must match `.text.*` (function-sections put
+  every function in its own section, and a script matching only `.text`
+  links an empty program that faults at its entry point); the archive
+  must come LAST on the link line; and the archive rule **deletes
+  `libuapp.a` before rebuilding it**, because `ar rcs` never removes a
+  member whose source file is gone, so a deleted or renamed `.c` leaves
+  its object inside forever and the build quietly links the deleted
+  file's code until the two versions differ. `sys_call()` is the raw
+  escape hatch, for the `/tests` diagnostics that poke the raw ABI on
+  purpose. Two things before touching `crt0.asm`: the entry ABI is the
+  STANDARD SysV stack layout (argc at `(%rsp)`), and `%rsp` must be
+  **16-aligned before `call main`** -- a `sub rsp, 8` there looks like
+  it restores the old convention and instead faults every SSE-using
+  binary while leaving plain ones working, see `docs/decisions.md`.
+- **`linker.ld` decides kernel memory PERMISSIONS, not just placement.**
+  Four PT_LOAD segments (R / R+X / R / RW) and four boundary symbols --
+  `__kimage_start`, `__ktext_start`, `__ktext_end`, `__kdata_start` --
+  which `paging_enforce_wx()` reads at boot to rewrite the identity map:
+  `.text` read-only and the only executable range, the rest of the image
+  read-only and NX, everything else writable and NX, plus CR0.WP. Two
+  things follow. **A new output section must be placed explicitly and
+  assigned to a segment** -- with PHDRS declared, an orphan's
+  permissions are wherever `ld` decided to put it, and the failure is
+  silent in the direction that matters (a section landing in the R+X
+  band becomes executable). **The `ALIGN(4096)`s between the bands are
+  load-bearing**: W^X is enforced per 4KiB page, so two sections sharing
+  a page get one permission and the more permissive one always wins.
+- **CI RUNS THE KERNEL SUITE TWICE, on ATA and on virtio-blk, and the
+  second one earns its place.** It found a driver bug that reproduced
+  NOWHERE locally: the runner's older QEMU and its CPU make the kernel
+  pick a different clocksource, under which `virtqueue_poll()` spent a
+  ~12 ms budget rather than the 5 s it appeared to offer and then let
+  late completions desync the used ring. **A second CONFIGURATION is
+  worth more than a second run of the first.** Two things follow for
+  anyone iterating on a CI failure: `.github/workflows/build.yml`
+  carries `workflow_dispatch: {}`, so `gh workflow run build.yml` runs
+  the pipeline with NO commit; and the runner image is public, so its
+  exact toolchain reproduces locally in a container rather than
+  round-tripping at ~90 s an attempt.
+- **A graphics card is a `display_driver`, not a special case.**
+  `kernel/include/kernel/display.h` defines the interface (required
+  probe/get_surface; optional flush, cursor, accel, modeset, each behind
+  a capability bit) and `kernel/drivers/display/` holds the registry plus
+  the drivers -- `vesafb` (GRUB's framebuffer, registers last, always
+  claims) and `vmsvga`. Adding a card is one file and one
+  `display_register()` line; `gfx.c` is a rasteriser that never learns
+  which card it's on. `display_probe()` REFUSES a driver whose
+  capability bits and function pointers disagree, because a card that
+  needs a flush and doesn't get one shows a frozen screen while memory
+  holds the right pixels -- a hard bug to read, and one this project has
+  already paid for twice.
+- **`kernel/` directories are subsystems, not filing cabinets** --
+  `arch/x86_64/` (anything a different CPU would need rewritten),
+  `core/` (bring-up and whole-machine concerns), `mm/`, `proc/`, `fs/`,
+  `drivers/` (one piece of hardware each), `lib/` (services with no
+  hardware of their own). `kernel/README.md` has the "does it belong
+  here?" test per directory. Two lines worth holding: nothing outside
+  `arch/` should contain `inb`/`outb`, inline assembly or a
+  control-register access; and a filesystem backend goes in `fs/`, not
+  `drivers/` -- the block device is the driver, the filesystem on top
+  of it isn't.
+- **`kernel/include/api/version.h` is GENERATED, not hand-edited** --
+  `tools/gen_version.sh` regenerates it from `VERSION` (repo root) as
+  the first step of `make all`/`make iso`. Never edit `version.h`
+  directly. It defines three macros: `TOYOS_VERSION` (the bare string),
+  `TOYOS_BUILD_ID` (the short commit plus `-dirty` when the tree did not
+  match it) and **`TOYOS_VERSION_FULL`, which is what anything
+  human-facing should display** -- `0.3.0-dev (2034bb1)` on a dev build
+  and a bare `0.3.0` on a release, always. A dirty RELEASE build is a
+  loud stderr warning from `gen_version.sh` instead of a display string:
+  the person who needs to know is the one running the build, and "dirty"
+  means nothing to someone reading an About window. **Never add a build
+  TIMESTAMP to it**: the script is deliberately idempotent (it rewrites
+  `version.h` only when the content changed) because `kapi.h` includes
+  it, and a value that differs every build turns every build into a full
+  rebuild. See `docs/decisions.md`.
+  **The build DATE lives in its own generated header for exactly that
+  reason** -- `kernel/include/api/build_date.h` (`TOYOS_BUILD_DATE`),
+  also written by `gen_version.sh`, at DAY granularity, and included by
+  ONE file (`userland/wm/desktop.c`, the desktop's watermark). So it
+  rebuilds one object at most once a day instead of the tree every
+  build. Include it only where it is displayed; pulling it into a widely
+  included header recreates the problem it is shaped to avoid. Both
+  generated headers are gitignored.
+- **Versioning is semver + a `-dev` suffix, not a per-change build
+  number.** `VERSION` only changes via `tools/set_version.sh <version>`:
+  `0.2.0-dev` starts a new dev round, `0.2.0` (no `-dev`) cuts a
+  release. Git tags (`v<version>`) and GitHub Releases happen at real
+  releases only, cut by hand after `set_version.sh` -- see
+  `docs/decisions.md` for the full mechanics and commands.
+- **A GitHub Release's notes follow ONE shape, and it is terse.**
+  `docs/release-notes-template.md` is the worked example -- copy its
+  shape rather than re-deriving it. **Install first**, then one `##` per
+  area that changed (Windowing / Filesystem / Memory protection /
+  Process model / Testing / Structure), flat bullets under each, and
+  nothing else. Deliberately NOT in them: commit counts, milestone
+  numbers, a pointer to a changelog (there isn't one), or promotional
+  framing -- state what exists.
+  **And the accuracy rule that caused this:** a release note is the one
+  document written from memory rather than from the code, and v0.2.0
+  shipped with a title that was not yet true of the tag. So **check
+  every claim against the TAG** -- `git ls-tree -r v<x> --name-only` and
+  `git show v<x>:<file>` answer it in seconds -- and say plainly what is
+  still in progress.
