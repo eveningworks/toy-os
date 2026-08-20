@@ -4,6 +4,7 @@
 #include "pci_internal.h"
 #include "io.h"
 #include "klog.h"
+#include "bootstage.h"
 #include "knum.h"
 
 #define PCI_CONFIG_ADDRESS 0xCF8
@@ -118,13 +119,22 @@ void pci_init(void) {
     klog_write("pci: ");
     klog_write_dec((uint32_t)g_count);
     klog_write(" device(s) found\n");
+
+    // Marked HERE rather than from kernel_main(), so the flag cannot
+    // drift from the thing it claims. See bootstage.h.
+    boot_subsystem_up(BOOT_SUB_PCI);
 }
 
 int pci_device_count(void) {
+    // A scan before pci_init() finds nothing, which reads as "there is
+    // no such hardware" rather than as a boot-order bug -- the exact
+    // misdirection bootstage.h exists for.
+    BOOT_REQUIRE(BOOT_SUB_PCI);
     return g_count;
 }
 
 const struct pci_device *pci_device_at(int index) {
+    BOOT_REQUIRE(BOOT_SUB_PCI);
     if (index < 0 || index >= g_count) return 0;
     return &g_devices[index];
 }

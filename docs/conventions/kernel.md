@@ -451,3 +451,27 @@ this the obvious way), not from how much history it accumulated.
   `win_syscall_release`): kernel-side state keyed by an address space
   is not part of that address space, so tearing it down frees none of
   it. See `docs/decisions.md`.
+
+## USING A SUBSYSTEM BEFORE ITS init() IS A PANIC, not a soft failure
+
+`kernel/include/kernel/bootstage.h`. `pmm_alloc_frame()`,
+`pmm_alloc_contiguous()`, the pmm free calls and `pci_device_count()` /
+`pci_device_at()` panic when called before `pmm_init()` / `pci_init()`,
+naming the caller:
+
+    PANIC: pmm_alloc_contiguous ran before pmm_init() -- see kernel_main()
+
+It exists because those failures used to point AWAY from the cause --
+allocating too early returns 0, which every caller reports as out of
+memory, and scanning PCI too early finds nothing, which reads as absent
+hardware. Two drivers paid for this before it was guarded.
+
+Two rules if you add a subsystem to it. **Mark it up at the END of its
+own init function**, never from `kernel_main()`, so the flag cannot
+drift from what it claims. And **do not guard anything in a file that is
+compiled twice** (`heap_core.c`, `kfmt.c`, `geom.c`) -- a kernel-only
+include there takes the function away from ring 3 silently.
+
+`kernel_main()`'s hand-written order stays, deliberately: the list is
+good documentation, and the silent failure was the defect. See
+`docs/decisions.md` for why not initcall levels.

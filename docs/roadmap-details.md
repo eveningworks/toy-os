@@ -2963,3 +2963,21 @@ the new surface), revoking and re-granting the compositor's framebuffer
 mapping, and telling the compositor its screen changed size so it can
 re-lay out. None of that is driver work; all of it is display-layer and
 `win_server` work. See `docs/decisions.md`.
+
+### Initcall levels: drivers declare a boot slot instead of being called by name from `kernel_main()`
+
+Linux's shape: a linker section collects `DRIVER_INIT(core, foo)` and
+the core runs each level in turn, with link order deciding within a
+level. This repo already has the machinery -- `.ktests` is exactly that
+trick.
+
+Not built yet, on purpose. The problem ordering mistakes actually caused
+was that they failed SILENTLY, and that is fixed
+(`kernel/include/kernel/bootstage.h` panics naming the caller). What is
+left is the ergonomics of `kernel_main()` being edited for every new
+driver -- which is a cost worth paying while the list is short enough to
+read, because the list is also the best documentation of boot that
+exists. Build this when a third driver needs a slot and the ordering
+argument is being had for the third time, not before. Note that levels
+alone do not express dependencies: Linux needs `-EPROBE_DEFER` on top
+for that, which is its own project.

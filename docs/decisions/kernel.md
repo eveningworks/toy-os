@@ -3571,3 +3571,60 @@ plus retiring `g_next_kernel_rsp` as a single global -- and a sleeping
 lock is a consequence of that, not an alternative to it. The guard stays
 until then. Recorded because the lock is an obvious-looking change that
 survives every argument except reading the gate type.
+
+## Boot order is a hand-written list, and a violation of it PANICS
+
+**The defect was never the list.** `kernel_main()` is a sequence of
+init calls in a deliberate order, and reading it top to bottom is the
+clearest description of this kernel's boot that exists. What made
+ordering mistakes expensive is that they failed SOFTLY and pointed
+somewhere else: a driver probing before `pmm_init()` got "queue 0 needs
+3 contiguous frames and none were free", which reads as a broken device;
+a PCI scan before `pci_init()` finds no devices, which reads as absent
+hardware. Both were paid for -- the first is why virtio-blk's init call
+carries a comment about its position, and virtio-gpu hit the same wall
+from the display side.
+
+So the fix is loudness, not structure. `kernel/include/kernel/bootstage.h`
+records which subsystems are up, and `pmm_alloc_frame()`,
+`pmm_alloc_contiguous()`, the pmm free calls and `pci_device_count()` /
+`pci_device_at()` panic when used before theirs. The panic names the
+calling function and the init it needed:
+
+    PANIC: pmm_alloc_contiguous ran before pmm_init() -- see kernel_main()
+
+**A BITMASK, not a stage number.** An ascending "boot stage" would
+encode a total order that is not a fact -- PCI before PMM before the
+heap is what the sequence happens to be, not something anything depends
+on. The question a caller has is "is the thing I am about to use up?",
+which is one bit per subsystem and claims no ordering.
+
+**A subsystem marks ITSELF up**, at the end of its own init function,
+never from `kernel_main()`. A flag set from the caller can drift from
+the thing it describes; that is the failure mode of every
+"remember to update the other file" convention this repo has deleted.
+
+**Why not initcall levels** (Linux's shape: linker sections collecting
+`DRIVER_INIT(core, foo)`, which this repo already has the machinery for
+in `.ktests`): they would replace a readable list with an order derived
+from link order, and -- the part that matters -- they do not make a
+violation loud on their own. Linux needs them because it has hundreds of
+drivers and a real dependency graph; it also needs `-EPROBE_DEFER` on
+top, because levels alone do not express dependencies. This kernel has
+had exactly one ordering edge that ever mattered. Levels stay on the
+roadmap for when a third driver needs a slot rather than being built on
+speculation.
+
+**No BOOT_SUB_HEAP, and the reason is a trap worth restating.**
+`kernel/lib/heap_core.c` is compiled twice -- kernel and `libuapp.a` --
+so a kernel-only include there would silently take `malloc()` away from
+ring 3, exactly as `kfmt.c` would. It would also buy nothing: the heap's
+state is zero-initialised BSS, so an early `kmalloc()` does not
+misbehave, it grows the heap through `pmm_alloc_frame()`, which is
+already guarded. The useful assertion is on the path either way.
+
+**The panic itself cannot be unit-tested** -- it halts the machine,
+which is what it is for. The KTEST covers the half that rots silently
+(an init that stopped marking itself up); the failing case is verified
+by a positive control at the source, where the boot smoke test catches
+the panic line.

@@ -4,6 +4,7 @@
 // simple, matching the rest of toy-os's approach so far: correct and
 // easy to reason about, not optimized.
 #include "pmm.h"
+#include "bootstage.h"
 #include "multiboot.h"
 #include "klog.h"
 #include "reloc.h"
@@ -150,9 +151,16 @@ void pmm_init(void) {
     for (uint64_t f = 0; f < PMM_MAX_FRAMES; f++) {
         if (!bit_is_used(f)) free_frames++;
     }
+
+    // See bootstage.h: allocating before this point returns 0, which
+    // every caller reports as "out of memory" -- a driver probing too
+    // early therefore looks like a device or a memory problem. Marked
+    // at the end of pmm_init() itself so it cannot drift.
+    boot_subsystem_up(BOOT_SUB_PMM);
 }
 
 uint64_t pmm_alloc_frame(void) {
+    BOOT_REQUIRE(BOOT_SUB_PMM);
     for (uint64_t i = 0; i < PMM_MAX_FRAMES; i++) {
         uint64_t f = (alloc_hint + i) % PMM_MAX_FRAMES;
         if (!bit_is_used(f)) {
@@ -166,6 +174,7 @@ uint64_t pmm_alloc_frame(void) {
 }
 
 void pmm_free_frame(uint64_t phys_addr) {
+    BOOT_REQUIRE(BOOT_SUB_PMM);
     uint64_t f = phys_addr / FRAME_SIZE;
     if (f >= PMM_MAX_FRAMES) return;
     if (bit_is_used(f)) {
@@ -181,6 +190,7 @@ void pmm_free_frame(uint64_t phys_addr) {
 // ground -- unlike pmm_alloc_frame()'s hint, which earns its keep by
 // running on every single-frame allocation.
 uint64_t pmm_alloc_contiguous(uint64_t count) {
+    BOOT_REQUIRE(BOOT_SUB_PMM);
     if (count == 0) return 0;
     if (count == 1) return pmm_alloc_frame(); // fast path, identical to before this existed
 
@@ -204,6 +214,7 @@ uint64_t pmm_alloc_contiguous(uint64_t count) {
 }
 
 void pmm_free_contiguous(uint64_t phys_addr, uint64_t count) {
+    BOOT_REQUIRE(BOOT_SUB_PMM);
     uint64_t f = phys_addr / FRAME_SIZE;
     for (uint64_t i = 0; i < count; i++) {
         if (f + i >= PMM_MAX_FRAMES) break;

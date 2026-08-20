@@ -462,6 +462,7 @@ whenever a headline here tells you something you did not already know.
 
 - **Monotonic time is an INTERFACE, and wall clock is not one of its implementations.**
 - **The kernel's idle work has ONE owner: `scheduler_idle()`**
+- **USING A SUBSYSTEM BEFORE ITS init() IS A PANIC, not a soft failure**
 - **A panic NAMES THE FUNCTION**
 - **A kernel panic prints enough to diagnose from a pasted log**
 - **Kernel stacks are 16 KiB, have a GUARD PAGE, and carry a CANARY**
