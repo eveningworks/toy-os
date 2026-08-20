@@ -24,6 +24,7 @@ struct uui_checkbox {
 
     int checked;        // the value
     int hovered;        // OWNED -- driven by uui_checkbox_hover()
+    int focused;        // OWNED -- driven by the focus ring's set_focused
     int disabled;
 
     // Draw a hover wash behind the box and label? **OFF by default**,
@@ -51,6 +52,17 @@ int  uui_checkbox_hover(struct uui_checkbox *cb, int cx, int cy);
 // to the press-then-commit rule (docs/gui-guidelines.md), since the
 // result is instantly visible and instantly reversible.
 int  uui_checkbox_toggle(struct uui_checkbox *cb);
+
+// Keyboard: SPACE toggles, and nothing else does anything. That is what
+// a checkbox does in Win32, GTK and Qt alike -- Enter is the default
+// BUTTON's key there, not the focused control's, so claiming it here
+// would take a key the app may want. Returns 1 if the key was consumed.
+//
+// Committing on a key press is not an exception to
+// docs/gui-guidelines.md's press-then-commit rule: that rule exists so a
+// press can be cancelled by dragging away before release, and a key has
+// no drag. There is nothing to cancel.
+int  uui_checkbox_key(struct uui_checkbox *cb, int key);
 
 // Full table with ROUTED POINTER INPUT (ui/uui_route.h): toggling is
 // the widget's once this is declared.

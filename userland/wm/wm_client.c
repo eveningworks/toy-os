@@ -438,6 +438,26 @@ static int query_window(int pid, uint32_t id, int *w, int *h,
     return 1;
 }
 
+// The window's APP ID -- what its client called itself. Asked once, at
+// create: an app id never changes, unlike the title, and it needs its
+// own request because WIN_REQ_WINDOW_INFO's single `text` is already the
+// title (win_proto.h). Leaves `out` empty rather than failing if the
+// window is already gone; an empty id groups with nothing, which is the
+// safe direction.
+static void query_app_id(int pid, uint32_t id, char *out, unsigned cap) {
+    if (!out || !cap) return;
+    out[0] = '\0';
+    struct win_request_msg q;
+    for (unsigned i = 0; i < sizeof q; i++) ((uint8_t *)&q)[i] = 0;
+    q.type = WIN_REQ_WINDOW_APPID;
+    q.a = pid;
+    q.window = id;
+    if (sys_win_request(&q) != 0) return;
+    unsigned n = 0;
+    while (n + 1 < cap && n < WIN_APP_ID_LEN && q.text[n]) { out[n] = q.text[n]; n++; }
+    out[n] = '\0';
+}
+
 // Maps a client's buffer into this process, so the compositor can read
 // its pixels. Idempotent, and must be re-done after a resize: the frames
 // are reallocated, and the old mapping is revoked with them.
@@ -526,10 +546,15 @@ int wm_client_handle_event(const struct win_event *ev) {
                           title, sizeof title)) return 1;
         uint32_t *buf = map_client_window(pid, id);
         if (!buf) return 1;
+        // The app id came through as "" until WIN_REQ_WINDOW_APPID
+        // existed, which left every window on this desktop anonymous --
+        // see query_app_id().
+        char app_id[WIN_APP_ID_MAX];
+        query_app_id(pid, id, app_id, sizeof app_id);
         // x/y are the compositor's to choose -- the kernel never had an
         // opinion about placement, it only forwarded what the client
         // asked for. 0,0 lets the existing handler place it.
-        on_window_created(pid, id, buf, w, h, 0, 0, "");
+        on_window_created(pid, id, buf, w, h, 0, 0, app_id);
         break;
     }
     case WIN_EV_CLIENT_PRESENT:

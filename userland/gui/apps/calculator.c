@@ -266,6 +266,7 @@ int main(void) {
 
     struct uapp_desc desc = {
         .title     = "Calculator",
+        .app_id    = "calculator",
         .x         = 340,
         .y         = 150,
         .layout    = &g_root,

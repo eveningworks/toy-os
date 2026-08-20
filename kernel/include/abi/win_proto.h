@@ -513,6 +513,31 @@ struct win_event {
                            // between the event and this call, and the
                            // right response is to drop the window rather
                            // than to retry).
+#define WIN_REQ_WINDOW_APPID 23 // Read one client window's APP ID.
+                           //   a      = owning pid (in)
+                           //   window = its window id (in)
+                           //   text   = the app id, NUL-terminated (out)
+                           //
+                           // A SECOND request rather than a second field
+                           // on WIN_REQ_WINDOW_INFO because that message
+                           // carries exactly one `text`, and the title
+                           // and the app id are both WIN_TITLE_LEN --
+                           // so they do not both fit and widening the
+                           // struct would cost every WIN_REQ_PRESENT on
+                           // the hot path (see struct win_request_msg).
+                           //
+                           // Asked ONCE, when the window is created: an
+                           // app id never changes, unlike the title.
+                           // Before this existed the ring-3 compositor
+                           // simply passed "" -- the kernel held every
+                           // app id and nothing could ask for one, which
+                           // left `struct window.app_id` permanently
+                           // empty on the desktop that replaced the
+                           // ring-0 one. The taskbar groups by it
+                           // (userland/wm/wm_taskbar.h).
+                           //
+                           // Compositor only, and same -1-means-gone
+                           // contract as WIN_REQ_WINDOW_INFO.
 #define WIN_REQ_FB_PRESENT 16 // a, b, c, d: x, y, w, h of the region
                            // just written. Publishes it.
                            //

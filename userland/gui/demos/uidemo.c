@@ -164,7 +164,7 @@ static struct {
     int hover_name;
     int hover_x, hover_y;
     struct uui_focus focus;
-    struct uui_focusable focus_items[3];
+    struct uui_focusable focus_items[6];
     int focus_was;
     int pressing;
     // Whether the press in progress actually armed a button.
@@ -216,7 +216,8 @@ static void log_and_status(const char *msg) {
 }
 
 // Names matching focus_items[]'s order, for the log.
-static const char *const FOCUS_NAMES[] = { "textbox", "dropdown", "listbox" };
+static const char *const FOCUS_NAMES[] = { "textbox", "dropdown", "listbox",
+                                            "checkbox0", "checkbox1", "radio" };
 
 // Reports a focus change if one happened. The manager owns the state
 // itself; this only reports, since a `focus` line per tick would drown
@@ -376,13 +377,23 @@ static void on_open(struct uapp *a) {
     g.chk[0].checked = g.chk[1].checked = 0;
     g.hover_name = W_NONE;
     g.armed = 0;
-    // Tab order is array order. The checkbox and radio list are absent
-    // on purpose: both are act-on-contact with no keyboard behaviour, so
-    // a tab stop there would be a stop that does nothing.
+    // Tab order is array order. The checkbox and radio list USED to be
+    // absent, on the grounds that a tab stop with no keyboard behaviour
+    // is a stop that does nothing -- which was true of them and is the
+    // reason a keyboard-only user could not toggle a checkbox at all.
+    // They have Space and the arrow keys now (docs/bugs.md, fixed), so
+    // they belong in the ring like every other control.
+    //
+    // These three carry their FULL ops tables rather than a `_focus_ops`
+    // pair, which is what lets uui_focus_click() move focus to them: it
+    // tests `ops->hit`, and the cut-down focus tables do not have one.
     g.focus_items[0] = (struct uui_focusable){ &g.textbox,  &uui_textbox_focus_ops };
     g.focus_items[1] = (struct uui_focusable){ &g.dropdown, &uui_dropdown_focus_ops };
     g.focus_items[2] = (struct uui_focusable){ &g.list,     &uui_listbox_focus_ops };
-    uui_focus_init(&g.focus, g.focus_items, 3);
+    g.focus_items[3] = (struct uui_focusable){ &g.chk[0],   &uui_checkbox_ops };
+    g.focus_items[4] = (struct uui_focusable){ &g.chk[1],   &uui_checkbox_ops };
+    g.focus_items[5] = (struct uui_focusable){ &g.radio,    &uui_radio_list_ops };
+    uui_focus_init(&g.focus, g.focus_items, 6);
     g.focus_was = -1;
     set_status("ready");
     layout();
@@ -607,9 +618,26 @@ static void on_key(struct uapp *a, int key, unsigned mods) {
                          LIST_ITEMS[g.list.selected]);
                 log_and_status(m);
             }
+        } else if (now == 3 || now == 4) {
+            // The SAME grammar the mouse path emits (see ID_CHK_ALPHA
+            // in on_widget), so a test cannot tell which device caused
+            // it -- which is the point: Space and a click are the same
+            // event as far as this app is concerned.
+            int i = now - 3;
+            snprintf(m, sizeof m, "check %s %s", i ? "beta" : "alpha",
+                     g.chk[i].checked ? "on" : "off");
+            log_and_status(m);
+        } else if (now == 5) {
+            if (g.radio.selected >= 0) {
+                snprintf(m, sizeof m, "radio %s", RADIO_LABELS[g.radio.selected]);
+                log_and_status(m);
+            }
         }
     } else {
-        snprintf(m, sizeof m, "key %d (no focus)", key);
+        // "unconsumed", not "no focus": the focused widget may have
+        // simply declined the key, which is a different fact and read
+        // as a focus bug for a while.
+        snprintf(m, sizeof m, "key %d unconsumed", key);
         log_and_status(m);
     }
     // Keys change the same widgets the mouse does, so the comparison
@@ -639,6 +667,7 @@ static struct uui_item ITEMS[] = {
 int main(void) {
     struct uapp_desc desc = {
         .title        = "UI Demo",
+        .app_id       = "uidemo",
         .on_size      = on_size,
         .on_open      = on_open,
         .on_draw      = on_draw,

@@ -348,23 +348,53 @@ def run(d, qmp):
     # with the popup shut, which the kernel widget did. Both are real
     # toolkit behaviours; this one means an arrow key can never change a
     # setting the user cannot see.
-    d.check("Home while closed does nothing", d.key(K_HOME), "(no focus)")
+    # "unconsumed", not "(no focus)": the app used to print the latter
+    # for a key the FOCUSED widget declined, which is what this case is
+    # -- the dropdown has focus and simply does not want Home.
+    d.check("Home while closed does nothing", d.key(K_HOME), "unconsumed")
     d.check("down arrow opens it instead of cycling", d.key(K_DOWN), "dropdown open")
     d.key(K_ESC)
     d.events()
 
     print("\n== Tab / Shift-Tab move focus ==")
-    # Tab order is the app's array order: textbox, dropdown, listbox.
-    # The button group is NOT a stop -- the ring-3 group has no keyboard
-    # activation, so a stop there would be a stop that does nothing.
+    # Tab order is the app's array order: textbox, dropdown, listbox,
+    # checkbox0, checkbox1, radio. The checkbox and radio list JOINED
+    # the ring when they gained keyboard behaviour (docs/bugs.md, fixed)
+    # -- before that they were deliberately left out, on the grounds
+    # that a stop with no keyboard behaviour is a stop that does
+    # nothing, which was true and was also why a keyboard-only user
+    # could not toggle a checkbox at all. The button group is still not
+    # a stop, for that original reason.
     # Focus is on the dropdown (index 1) here.
     d.check("Tab moves forward", d.key(K_TAB), "focus listbox")
+    d.check("Tab reaches the checkbox", d.key(K_TAB), "focus checkbox0")
+    d.check("Tab reaches the second checkbox", d.key(K_TAB), "focus checkbox1")
+    d.check("Tab reaches the radio list", d.key(K_TAB), "focus radio")
     d.check("Tab wraps", d.key(K_TAB), "focus textbox")
     # Shift-Tab is the case modifier bits exist for at all: Tab has no
     # shifted character, so without them this is indistinguishable from
     # plain Tab and a ring can only ever cycle one way.
-    d.check("Shift-Tab moves backward", d.key(K_TAB, "shift"), "focus listbox")
-    d.check("Shift-Tab again", d.key(K_TAB, "shift"), "focus dropdown")
+    d.check("Shift-Tab moves backward", d.key(K_TAB, "shift"), "focus radio")
+
+    print("\n== the keyboard reaches act-on-contact controls ==")
+    # Focus is on the radio list. ARROWING IS CHOOSING on a radio group
+    # -- Win32, GTK and Qt all commit on the arrow rather than
+    # previewing -- so one Down is a whole selection change, reported in
+    # the SAME grammar a mouse release produces.
+    d.check("Down moves the radio selection", d.key(K_DOWN), "radio ")
+    d.check("Up moves it back", d.key(K_UP), "radio ")
+
+    # Back to the checkboxes: Shift-Tab twice from the radio list.
+    d.key(K_TAB, "shift")
+    d.key(K_TAB, "shift")
+    # SPACE TOGGLES, and the assertion is on the VALUE, not merely that
+    # something was logged: a checkbox that reported "check alpha off"
+    # every time would pass a "did it respond" check while never
+    # toggling. Two presses, and they must report different states.
+    on = d.key(K_SPACE)
+    off = d.key(K_SPACE)
+    d.check("Space checks the box", on, "check alpha on")
+    d.check("Space unchecks it again", off, "check alpha off")
 
     print("\n== buttons still commit on RELEASE, not on press ==")
     # The one control where commit-on-release matters, and the reason

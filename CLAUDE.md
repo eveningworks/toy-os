@@ -285,7 +285,13 @@ trips them before it knows to look anything up.
   table inherits its gaps. And **when a layout misbehaves, check the ops
   tables of everything in it before suspecting the layout**: three short
   tables presented as `uui_layout` stopping after four children, and
-  `uui_layout_run()` has no early exit at all.
+  `uui_layout_run()` has no early exit at all. **AND THE INVERSE
+  HAPPENS TOO -- a slot that is PRESENT and read by nobody.**
+  `accepts_focus` was declared by five widgets while
+  `uui_focus_next()` walked to the next index unconditionally, so a
+  listbox with no rows was still a tab stop that did nothing; found by a
+  positive control that disabled it and watched Tab arrive anyway. When
+  you add a slot, grep for the code that is supposed to consult it.
 - **THE FILESYSTEM IS NOT RE-ENTRANT, and `vfs.c` holds a preemption
   guard because of it.** `tfs3.c` walks directories, inodes and data
   through module-level scratch buffers, and a ring-3 process is
@@ -345,8 +351,11 @@ trips them before it knows to look anything up.
   distance. A table with `draw` needs `natural_size` and `set_geometry`
   (a layout cannot place what it cannot measure); a table with `press`
   needs `release` (`uui_route.c` names a widget to its app only when it
-  has one). Waive with a `widget-ops-ok: <reason>` comment, as with
-  `check_dispatch.py`.
+  has one); a table with `key` needs `accepts_focus` (the focus ring
+  SKIPS a widget that refuses focus, so one that takes keys has to say
+  whether it wants them -- that rule found `uui_tree` relying on the
+  default the hour it was added). Waive with a `widget-ops-ok: <reason>`
+  comment, as with `check_dispatch.py`.
 - **A DISPATCH CHAIN OVER ~20 BRANCHES SHOULD BE A TABLE, and
   `tools/check_dispatch.py` fails the build when one isn't.** The
   recurring shape here: something dispatches on a kind -- a syscall
@@ -517,6 +526,7 @@ whenever a headline here tells you something you did not already know.
 - **`ugfx` has a SCREEN surface now, and it is the compositor's**
 - **The registered compositor can be GRANTED the real framebuffer**
 - **`uui_radio_list` arms on press and COMMITS ON RELEASE**
+- **The TASKBAR'S LAYOUT IS ONE FUNCTION, and past a floor it groups by app**
 - **The WM has a SLOW-FRAME WATCHDOG**
 - **There is a Crash Test app**
 - **The cursor's shapes are DATA FILES, and a theme is a directory.**
@@ -904,6 +914,9 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   `ls_test.py` (`/bin/ls`'s flags, ordering and the listing cap -- it
   stages a 300-entry directory from the HOST, since the cap is
   unreachable by typing `touch`),
+  `taskbar_test.py` (opens enough windows to overflow the taskbar and
+  asserts the strip never reaches the tray -- shrink, then grouping by
+  application; slow, since every window is a real process),
   `mem_stress.py`, `frame_balance.py` (does teardown balance),
   `virtio_boot_test.py` (TFS3 mounting off virtio-blk on a
   machine with NO IDE controller, written and read back across a

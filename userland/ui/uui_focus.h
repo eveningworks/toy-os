@@ -35,7 +35,17 @@ struct uui_focus {
 };
 
 void uui_focus_init(struct uui_focus *f, struct uui_focusable *items, int count);
+
+// Focus a specific item BY INDEX, without asking whether it accepts
+// focus -- the caller named it, so it is not the ring's place to
+// refuse. Index -1 clears focus.
 void uui_focus_set(struct uui_focus *f, int index);
+
+// Move to the next/previous item that ACCEPTS focus, skipping any whose
+// `accepts_focus` says no (a listbox with no rows, a slider with no
+// options). Both return 1: a Tab is consumed by the ring whether or not
+// anything took it, or it would fall through to the app as a literal
+// tab character. See uui_focus.c for why the walk is bounded.
 int  uui_focus_next(struct uui_focus *f);
 int  uui_focus_prev(struct uui_focus *f);
 

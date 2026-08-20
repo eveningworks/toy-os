@@ -977,6 +977,16 @@ int win_server_request(int pid, struct win_request_msg *req) {
         copy_text(req->text, cw->title, WIN_TITLE_LEN);
         return 0;
     }
+    case WIN_REQ_WINDOW_APPID: {
+        // Same access rule and same "gone is not an error" contract as
+        // WIN_REQ_WINDOW_INFO above -- see win_proto.h for why the app
+        // id needs its own request rather than a field on that one.
+        if (!g_comp_pid || pid != g_comp_pid) return -1;
+        struct client_window *cw = lookup(req->a, req->window);
+        if (!cw) return -1;
+        copy_text(req->text, cw->app_id, WIN_APP_ID_LEN);
+        return 0;
+    }
     case WIN_REQ_FONT:
         return map_font(pid, req);
     default:

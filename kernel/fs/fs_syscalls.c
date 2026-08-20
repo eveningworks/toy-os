@@ -194,6 +194,26 @@ int sys_listdir(struct syscall_ctx *c) {
         c->regs[14] = g_listdir_count;
         g_listdir_out = 0; // don't leave a stale user pointer armed
                             // between calls -- next call re-arms it
+
+        // AN EMPTY DIRECTORY AND A MISSING ONE BOTH LEAVE THE COUNT AT
+        // ZERO, because fs_list() returns void and "does nothing" is its
+        // documented behaviour for a path that is not a listable
+        // directory (fs.h). So `ls /nope` printed an empty listing and
+        // exited 0, which is the one thing a caller must not conclude.
+        //
+        // Disambiguated HERE rather than by giving fs_list() a return
+        // value: every backend would have to grow one, and the VFS is
+        // not where this matters -- a syscall is, because ring 3 is the
+        // only caller that cannot look for itself. Same shape as
+        // opendir(), which is where ENOENT/ENOTDIR come from.
+        //
+        // Only on the zero path, so an ordinary listing pays nothing:
+        // the two probes are directory walks, and a non-empty result has
+        // already proved the directory exists by producing its children.
+        if (g_listdir_count == 0) {
+            if (!fs_exists(path))      c->regs[14] = (uint64_t)(int64_t)-ENOENT;
+            else if (!fs_is_dir(path)) c->regs[14] = (uint64_t)(int64_t)-ENOTDIR;
+        }
     }
     return 0;
 }

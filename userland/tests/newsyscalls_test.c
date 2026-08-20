@@ -71,6 +71,12 @@ static void put_udec(uint32_t v, int min_digits) {
     }
 }
 
+// Signed, for a syscall return that may be a negative errno.
+static void put_dec(int64_t v) {
+    if (v < 0) { put("-"); v = -v; }
+    put_udec((uint32_t)v, 0);
+}
+
 #define TESTFILE "/newsyscalls_test.txt"
 
 // Which phase failed first, for the SUMMARY line.
@@ -137,6 +143,58 @@ int main(void) {
             put("  FAIL: listdir() returned an error\n");
             all_ok = 0; phase_failed("listdir");
         }
+    }
+
+    // --- Phase 2b: SYS_LISTDIR tells EMPTY apart from MISSING ----------
+    //
+    // The three outcomes have to be distinguishable, and they were not:
+    // a missing directory and an empty one both came back as 0, so `ls`
+    // could not tell them apart (docs/bugs.md, fixed). An empty
+    // directory has to be MADE here rather than assumed -- /etc is
+    // seeded, and a test that inherits its fixture from whatever ran
+    // before it is the shape this repo has been bitten by.
+    put("newsyscalls_test: listdir empty-vs-missing phase\n");
+    {
+        static struct dirent entries[8];
+        const char *empty_dir = "/tmp_listdir_empty";
+        const char *missing   = "/tmp_listdir_missing";
+        const char *a_file    = "/tmp_listdir_file";
+
+        sys_unlink(empty_dir);  // in case a previous run left them behind
+        sys_unlink(a_file);
+        int made_dir = sys_mkdir(empty_dir) == 0; // SYS_MKDIR returns 0 on SUCCESS
+        int fd = sys_open(a_file, SYS_O_WRITE | SYS_O_CREAT);
+        int made_file = fd >= 0;
+        if (fd >= 0) sys_close(fd);
+
+        // The WRAPPER's contract, not the kernel's: rt/sys.c's err()
+        // collapses every -errno to -1 and parks the reason in
+        // sys_errno(). So the three cases are distinguished by (return,
+        // errno) pairs, which is exactly what /bin/ls reads.
+        int64_t r_empty = sys_listdir(empty_dir, entries, 8);
+        int e_empty = sys_errno();
+        int64_t r_missing = sys_listdir(missing, entries, 8);
+        int e_missing = sys_errno();
+        int64_t r_file = sys_listdir(a_file, entries, 8);
+        int e_file = sys_errno();
+
+        int ok = made_dir && made_file &&
+                  r_empty == 0 &&
+                  r_missing == -1 && e_missing == ENOENT &&
+                  r_file == -1 && e_file == ENOTDIR;
+        if (ok) {
+            put("  OK: empty=0, missing=-1/ENOENT, file=-1/ENOTDIR\n");
+        } else {
+            put("  FAIL: listdir() empty/missing/file were ");
+            put_dec(r_empty); put("("); put_dec(e_empty); put(")/");
+            put_dec(r_missing); put("("); put_dec(e_missing); put(")/");
+            put_dec(r_file); put("("); put_dec(e_file); put(")");
+            put(" (wanted 0/-1(2)/-1(20))\n");
+            all_ok = 0; phase_failed("listdir-empty-vs-missing");
+        }
+
+        sys_unlink(empty_dir);
+        sys_unlink(a_file);
     }
 
     // --- Phase 3: SYS_GETTIME ------------------------------------------

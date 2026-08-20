@@ -1,5 +1,7 @@
 // See wm_debug.h for what this is for and why it lives here.
 #include "wm_internal.h"
+#include "wm_taskbar.h"
+#include "wm_tray.h"
 #include "wm_debug.h"
 #include "start_menu.h"
 #include "context_menu.h"
@@ -446,38 +448,54 @@ static void cmd_menu(struct dbg_out *o, int json) {
 
 // Taskbar: the Start button and one button per open window, with the
 // rects wm_render.c actually draws and wm_input.c actually hit-tests.
+// The strip's live layout, from the SAME taskbar_layout() that draws it
+// and hit-tests it (wm_taskbar.h).
+//
+// This used to be a fourth, independent walk of the windows -- and it
+// was already wrong: it placed button 0 at `sw + 4` where the real one
+// sat at `4 + sw + 8`, so every centre this reported, and every test
+// click aimed at one, was 8 pixels left of the button. A report a test
+// trusts has to come from the code under test, not from a copy of it.
+//
+// `count` is how many windows a button stands for (>1 = a collapsed
+// group) and `hidden` is how many windows did not fit on the strip at
+// all -- which is the number a test asserts is zero.
 static void cmd_taskbar(struct dbg_out *o, int json) {
     int bar_y = screen_h - taskbar_h;
     int sw = start_btn_w();
-    int bw = win_btn_w();
+    static struct taskbar_button btns[64];
+    int nb = taskbar_layout(btns, 64);
 
     if (json) {
         dbg_out_printf(o, "{\"y\":%d,\"h\":%d,\"start\":{\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,"
-                     "\"cx\":%d,\"cy\":%d},\"buttons\":[",
+                     "\"cx\":%d,\"cy\":%d},\"tray_x\":%d,\"hidden\":%d,\"buttons\":[",
                      bar_y, taskbar_h, 0, bar_y, sw, taskbar_h,
-                     sw / 2, bar_y + taskbar_h / 2);
-        for (int i = 0; i < window_count; i++) {
-            int bx = sw + 4 + i * (bw + 4);
-            dbg_out_printf(o, "%s{\"index\":%d,\"title\":\"%s\",\"x\":%d,\"w\":%d,"
-                         "\"cx\":%d,\"cy\":%d}",
-                         i ? "," : "", i, windows[i].title, bx, bw,
-                         bx + bw / 2, bar_y + taskbar_h / 2);
+                     sw / 2, bar_y + taskbar_h / 2, tray_left(), taskbar_hidden());
+        for (int i = 0; i < nb; i++) {
+            dbg_out_printf(o, "%s{\"index\":%d,\"title\":\"%s\",\"app_id\":\"%s\","
+                         "\"label\":\"%s\",\"x\":%d,\"w\":%d,"
+                         "\"count\":%d,\"cx\":%d,\"cy\":%d}",
+                         i ? "," : "", btns[i].first, windows[btns[i].first].title,
+                         windows[btns[i].first].app_id, btns[i].label,
+                         btns[i].x, btns[i].w, btns[i].count,
+                         btns[i].x + btns[i].w / 2, bar_y + taskbar_h / 2);
         }
         dbg_out_write(o, "]}\r\n");
         return;
     }
 
-    dbg_out_printf(o, "taskbar: y=%d h=%d\r\n", bar_y, taskbar_h);
+    dbg_out_printf(o, "taskbar: y=%d h=%d tray_x=%d hidden=%d\r\n",
+                 bar_y, taskbar_h, tray_left(), taskbar_hidden());
     dbg_out_write(o, "  start   x="); col_int(o, 0, 6);
     dbg_out_write(o, "w="); col_int(o, sw, 6);
     dbg_out_printf(o, "centre=(%d,%d)\r\n", sw / 2, bar_y + taskbar_h / 2);
-    for (int i = 0; i < window_count; i++) {
-        int bx = sw + 4 + i * (bw + 4);
-        dbg_out_write(o, "  win "); col_int(o, i, 4);
-        dbg_out_write(o, "x="); col_int(o, bx, 6);
-        dbg_out_write(o, "w="); col_int(o, bw, 6);
+    for (int i = 0; i < nb; i++) {
+        dbg_out_write(o, "  win "); col_int(o, btns[i].first, 4);
+        dbg_out_write(o, "x="); col_int(o, btns[i].x, 6);
+        dbg_out_write(o, "w="); col_int(o, btns[i].w, 6);
+        dbg_out_write(o, "n="); col_int(o, btns[i].count, 4);
         dbg_out_printf(o, "centre=(%d,%d)  %s\r\n",
-                     bx + bw / 2, bar_y + taskbar_h / 2, windows[i].title);
+                     btns[i].x + btns[i].w / 2, bar_y + taskbar_h / 2, btns[i].label);
     }
 }
 
@@ -495,6 +513,14 @@ static void cmd_state(struct dbg_out *o, int json) {
     if (json) {
         dbg_out_printf(o, "{\"screen\":{\"w\":%d,\"h\":%d},\"taskbar_h\":%d,",
                      screen_w, screen_h, taskbar_h);
+        // The frontmost window, named by its client's pid, so "which
+        // window is on top" can be asked WITHOUT pulling the whole
+        // window list -- which is capped at WIN_DEBUG_REPLY_MAX and
+        // truncates past about twenty-five windows (docs/bugs.md).
+        // -1 when there are no windows at all.
+        dbg_out_printf(o, "\"windows\":%d,\"front_pid\":%d,",
+                     window_count,
+                     window_count > 0 ? windows[window_count - 1].client_pid : -1);
         dbg_out_printf(o, "\"cursor\":{\"x\":%d,\"y\":%d,\"buttons\":%u},",
                      cx, cy, (unsigned)buttons);
         dbg_out_printf(o, "\"overlays\":{\"start_menu\":%s,\"context_menu\":%s,",

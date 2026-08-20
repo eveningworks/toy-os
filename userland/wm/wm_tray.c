@@ -107,6 +107,22 @@ void tray_update_clock(void) {
     tray_set_text(clock_tray_id, buf);
 }
 
+// The x the leftmost tray item starts at -- i.e. how far right the
+// window buttons may run before they would draw under the clock.
+// Computed by the SAME right-to-left walk draw_tray() does, so the two
+// cannot disagree; a taskbar that lays its buttons out against a
+// separately-guessed tray width is the shape that let buttons run under
+// the clock in the first place (docs/bugs.md, fixed).
+int tray_left(void) {
+    int cx = screen_w - 16;
+    for (int i = TRAY_MAX_ITEMS - 1; i >= 0; i--) {
+        if (!tray_items[i].active) continue;
+        cx -= (int)k_strlen(tray_items[i].text) * ugfx_char_w();
+        cx -= 12;
+    }
+    return cx - 4; // the fill rect draw_tray() paints starts 4px left of the text
+}
+
 void draw_tray(int taskbar_y, uint32_t bg, uint32_t fg) {
     int cx = screen_w - 16;
     for (int i = TRAY_MAX_ITEMS - 1; i >= 0; i--) {

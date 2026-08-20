@@ -293,6 +293,7 @@ int main(void) {
         // kernel-space one -- the suffix existed only to tell two
         // identically-named Terminals apart, and there is one now.
         .title   = "Terminal",
+        .app_id  = "terminal",
         .w       = WIN_W,
         .h       = WIN_H,
         .x       = 120,

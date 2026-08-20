@@ -432,6 +432,7 @@ static void on_open(struct uapp *a) {
 int main(void) {
     struct uapp_desc desc = {
         .title     = "Shapes",
+        .app_id    = "gfxdemo",
         .w         = WIN_W,
         .h         = WIN_H,
         .x         = 220,

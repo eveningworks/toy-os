@@ -1,6 +1,7 @@
 // checkbox. See ui/uui_checkbox.h.
 #include "ui/uui_checkbox.h"
 #include "ui/uui_widget.h"  // the ops table at the bottom of this file
+#include "keyboard.h"       // KEY_* codes, as delivered by WIN_EV_KEY
 
 #define CHECKBOX_LABEL_GAP 6
 
@@ -27,6 +28,7 @@ void uui_checkbox_init(struct uui_checkbox *cb, int x, int y, int size,
     cb->fg = fg;
     cb->checked = 0;
     cb->hovered = 0;
+    cb->focused = 0;
     // OFF by default -- see uui_checkbox.h and the exception recorded in
     // docs/gui-guidelines.md.
     cb->hover_effect = 0;
@@ -57,6 +59,16 @@ void uui_checkbox_draw(struct ugfx_surface *s, const struct uui_checkbox *cb) {
                                   cb->y + (cb->size - ugfx_char_h()) / 2,
                                   cb->w - cb->size - CHECKBOX_LABEL_GAP,
                                   cb->label, fg, bg);
+    }
+
+    // The focus indicator LAST, so it sits over the label rather than
+    // under it, and around the whole clickable area -- which is what
+    // Space acts on. Drawn as an outline rather than a wash because the
+    // hover wash is off by default here (see the header) and two
+    // different meanings sharing one visual is worse than either.
+    if (cb->focused && !cb->disabled) {
+        ugfx_draw_rect(s, cb->x - 2, cb->y - 2, cb->w + 4, cb->h + 4,
+                        uui_state_bg(fg, UUI_STATE_HOVER));
     }
 }
 
@@ -113,6 +125,12 @@ static void cb_ops_set_geometry(void *w, int x, int y, int width, int height) {
     uui_checkbox_set_geometry((struct uui_checkbox *)w, x, y);
 }
 
+int uui_checkbox_key(struct uui_checkbox *cb, int key) {
+    if (cb->disabled || key != ' ') return 0;
+    uui_checkbox_toggle(cb);
+    return 1;
+}
+
 // A NO-OP THAT RETURNS 1, and it is not decoration: the router only
 // names a widget to the app when that widget HAS a release op
 // (uui_route.c), so without this a checkbox in a routed layout toggled
@@ -130,6 +148,20 @@ static int cb_ops_release(void *w, int cx, int cy) {
 // function it needed already existed; only the table was short -- the
 // same gap uui_dropdown_ops had, found the same day. See
 // docs/decisions.md on the ops table being the contract.
+static int cb_ops_key(void *w, int key, unsigned mods) {
+    (void)mods;
+    return uui_checkbox_key((struct uui_checkbox *)w, key);
+}
+
+static void cb_ops_set_focused(void *w, int focused) {
+    ((struct uui_checkbox *)w)->focused = focused;
+}
+
+// A checkbox always accepts focus. There is no "empty" state to refuse
+// for, unlike a listbox with no rows -- an unchecked box is still a
+// control with something to do.
+static int cb_ops_accepts_focus(const void *w) { return !((const struct uui_checkbox *)w)->disabled; }
+
 const struct uui_widget_ops uui_checkbox_ops = {
     .natural_size = cb_ops_natural_size,
     .set_geometry = cb_ops_set_geometry,
@@ -138,4 +170,7 @@ const struct uui_widget_ops uui_checkbox_ops = {
     .hit    = cb_ops_hit,
     .press  = cb_ops_press,
     .motion = cb_ops_motion,
+    .key    = cb_ops_key,
+    .set_focused  = cb_ops_set_focused,
+    .accepts_focus = cb_ops_accepts_focus,
 };

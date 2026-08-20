@@ -997,6 +997,7 @@ static void on_open_cb(struct uapp *a) {
 int main(void) {
     struct uapp_desc desc = {
         .title      = "untitled",
+        .app_id     = "notepad",
         .w          = WIN_W,
         .h          = WIN_H,
         .x          = 180,

@@ -1,5 +1,6 @@
 // radio list. Split out of uwidgets.c -- see ui/uui_radio_list.h.
 #include "ui/uui_radio_list.h"
+#include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
 #include "ui/uui_widget.h"  // the ops table at the bottom of this file
 
 // ---------------------------------------------------------------------
@@ -87,6 +88,15 @@ void uui_radio_list_draw(struct ugfx_surface *s, const struct uui_radio_list *l)
         }
         ugfx_draw_string_clipped(s, cx + m + 6, cy + (radio_row_h(l) - ugfx_char_h()) / 2,
                                   radio_col_w(l) - m - 8, l->options[i], fg, row_bg);
+
+        // The focus indicator rings the SELECTED row, not a separate
+        // cursor row, because arrowing moves the selection itself here
+        // (see uui_radio_list_key) -- a second highlight would be a
+        // position that can never differ from this one.
+        if (l->focused && i == selected) {
+            ugfx_draw_rect(s, cx, cy, radio_col_w(l) - 2, radio_row_h(l) - 2,
+                            uui_state_bg(fg, UUI_STATE_HOVER));
+        }
     }
 }
 
@@ -178,6 +188,44 @@ static void rl_ops_draw(struct ugfx_surface *s, const void *w) {
     uui_radio_list_draw(s, (const struct uui_radio_list *)w);
 }
 
+int uui_radio_list_key(struct uui_radio_list *l, int key) {
+    if (l->count <= 0) return 0;
+    int cols = l->cols > 0 ? l->cols : 1;
+    int step;
+    switch (key) {
+        // In a multi-column grid, left/right step by one and up/down
+        // step by a ROW -- the movement the layout implies, not the
+        // array order, which is what makes a 2-column list feel like a
+        // grid rather than a list folded in half.
+        case KEY_ARROW_LEFT:  step = -1;    break;
+        case KEY_ARROW_RIGHT: step = 1;     break;
+        case KEY_ARROW_UP:    step = -cols; break;
+        case KEY_ARROW_DOWN:  step = cols;  break;
+        default: return 0;
+    }
+    int next = (l->selected < 0 ? 0 : l->selected + step);
+    if (next < 0 || next >= l->count) return 0; // at an end -- consumed nothing, moved nothing
+    if (next == l->selected) return 0;
+    l->selected = next;
+    return 1;
+}
+
+static int rl_ops_key(void *w, int key, unsigned mods) {
+    (void)mods;
+    return uui_radio_list_key((struct uui_radio_list *)w, key);
+}
+
+static void rl_ops_set_focused(void *w, int focused) {
+    ((struct uui_radio_list *)w)->focused = focused;
+}
+
+// A list with no options has no option to choose, so it is skipped in
+// the tab order rather than being a stop that does nothing -- the same
+// call uui_slider_ops makes.
+static int rl_ops_accepts_focus(const void *w) {
+    return ((const struct uui_radio_list *)w)->count > 0;
+}
+
 const struct uui_widget_ops uui_radio_list_ops = {
     .natural_size = rl_ops_natural_size,
     .set_geometry = rl_ops_set_geometry,
@@ -186,4 +234,7 @@ const struct uui_widget_ops uui_radio_list_ops = {
     .press  = rl_ops_press,
     .release = rl_ops_release,
     .motion = rl_ops_motion,
+    .key    = rl_ops_key,
+    .set_focused   = rl_ops_set_focused,
+    .accepts_focus = rl_ops_accepts_focus,
 };

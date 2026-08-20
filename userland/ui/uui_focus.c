@@ -24,17 +24,39 @@ void uui_focus_set(struct uui_focus *f, int index) {
     }
 }
 
-int uui_focus_next(struct uui_focus *f) {
+// A WIDGET THAT REFUSES FOCUS IS SKIPPED, not stopped on.
+//
+// `accepts_focus` was declared by five widgets and read by NOBODY: this
+// walked to the next index unconditionally, so a listbox with no rows or
+// a slider with no options was still a tab stop that did nothing. Found
+// by a positive control that disabled a widget's accepts_focus and
+// watched Tab reach it anyway (tools/uidemo_test.py) -- the mirror of
+// this project's usual ops-table trap, a slot that is present and
+// ignored rather than absent and needed.
+//
+// Bounded by `count` attempts rather than looping until something
+// accepts: a ring where every widget refuses would otherwise spin
+// forever, and "nothing here takes focus" is a legitimate state (an
+// empty form). In that case focus is CLEARED rather than parked on a
+// widget that said no.
+static int focus_step(struct uui_focus *f, int dir) {
     if (f->count <= 0) return 0;
-    uui_focus_set(f, (f->current + 1) % f->count);
-    return 1;
+    int i = f->current;
+    for (int tries = 0; tries < f->count; tries++) {
+        i = (i + dir + f->count) % f->count;
+        const struct uui_focusable *it = &f->items[i];
+        if (!it->ops->accepts_focus || it->ops->accepts_focus(it->widget)) {
+            uui_focus_set(f, i);
+            return 1;
+        }
+    }
+    uui_focus_set(f, -1);
+    return 1; // the Tab was still consumed -- it must not fall through to the app
 }
 
-int uui_focus_prev(struct uui_focus *f) {
-    if (f->count <= 0) return 0;
-    uui_focus_set(f, (f->current - 1 + f->count) % f->count);
-    return 1;
-}
+int uui_focus_next(struct uui_focus *f) { return focus_step(f, 1); }
+
+int uui_focus_prev(struct uui_focus *f) { return focus_step(f, -1); }
 
 int uui_focus_key(struct uui_focus *f, int key, unsigned mods) {
     if (key == '\t') return (mods & KEY_MOD_SHIFT) ? uui_focus_prev(f) : uui_focus_next(f);

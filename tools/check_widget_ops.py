@@ -27,6 +27,13 @@ THE RULES, and each names the failure it prevents:
      what it cannot measure.
   2. A table with `press` must have `release`. Otherwise the app is
      never told the widget was used.
+  3. A table with `key` must have `accepts_focus`. The focus ring SKIPS
+     a widget that refuses focus (uui_focus.c), so a widget that takes
+     keys but never says whether it wants them is relying on the
+     default -- which is "yes" today and is not a statement. The
+     inverse also holds and is not checkable here: `accepts_focus`
+     without `key` is a tab stop that does nothing, which is exactly
+     what uui_checkbox and uui_radio_list were before they gained one.
 
 WAIVE IN PLACE with a `widget-ops-ok: <reason>` comment in the same file,
 the same mechanism tools/check_dispatch.py uses -- and note the reason is
@@ -68,6 +75,11 @@ def check_file(path):
             problems.append(
                 (name, "release",
                  "uui_route.c names a widget to its app only when it has one"))
+        if "key" in slots and "accepts_focus" not in slots:
+            problems.append(
+                (name, "accepts_focus",
+                 "the focus ring skips a widget that refuses focus, and a "
+                 "widget that takes keys must say whether it wants them"))
     if problems and waived:
         return []
     return [(path, *p) for p in problems]

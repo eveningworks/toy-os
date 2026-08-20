@@ -2916,3 +2916,66 @@ MOVES, which covers a page change and a scroll with one rule. The
 earlier version reported only on a page change and said nothing when the
 page scrolled, so a tool driving a control below the fold had no idea
 where it had gone -- and the control looked dead.
+
+---
+
+## The taskbar's layout is ONE function, and past a floor it groups by application
+
+`win_btn_w()` used to return a constant, and three separate places
+walked the window list with it -- `draw_taskbar()`, and both hit-tests in
+`wm_input.c`. That is how buttons came to run off the screen edge and
+under the clock with thirteen windows open: nothing could shrink a
+button without the other two disagreeing about where it now was. A
+fourth walk lived in the debug console and had ALREADY drifted, placing
+button 0 at `sw + 4` where the real one sat at `4 + sw + 8` -- so every
+button centre a test aimed at was eight pixels left of the button.
+
+`taskbar_layout()` (`userland/wm/wm_taskbar.c`) is the only answer now
+and all four callers read it. Recomputed per call rather than cached: it
+depends on the window list, the live font metrics and the tray's width,
+and a cache would be a fourth thing that can disagree with the other
+three.
+
+**The policy is Windows', not an invention.** Buttons take their natural
+width while they fit, shrink toward a font-derived floor (three
+characters plus padding -- below that a label stops telling you
+anything, which is roughly where Windows and KDE both stop shrinking),
+and past the floor windows of the same application collapse into one
+button carrying a count, which opens a list of its windows on click.
+Windows has shrunk-then-grouped since XP; KDE Plasma shrinks then wraps
+to extra rows or scrolls; GNOME has no taskbar and Wayland has no
+protocol for one, so this is panel-side either way.
+
+**Where toy-os deliberately differs: it runs out.** Past the point where
+even collapsed floor-width buttons will not fit, the extras are DROPPED
+and counted through `taskbar_hidden()` rather than drawn off-screen.
+Windows and KDE never run out because they scroll or wrap. A second row
+was the tempting fix and was not taken, because `taskbar_h` is a
+constant that the desktop icon area, the Start menu's anchor, the
+context-menu clamp and every `wm_damage_rect(0, screen_h - taskbar_h,
+...)` all derive from -- a variable height is a change to all of those,
+for a case reached at about thirty windows. Reporting the shortfall
+honestly costs nothing and is what a test can assert on; drawing
+off-screen was the bug.
+
+**Grouping needed an identity, and one already existed but was empty.**
+`struct window.app_id` is the client's own name for what its window IS,
+and on the ring-3 desktop it was `""` for every window: `wm_client.c`
+passed a literal empty string to `on_window_created()`, because
+`WIN_REQ_WINDOW_INFO` carries exactly one `text` field and that was
+already the title. Both are `WIN_TITLE_LEN`, so they do not both fit,
+and widening `struct win_request_msg` would cost every `WIN_REQ_PRESENT`
+on the hot path. `WIN_REQ_WINDOW_APPID` is a second request instead,
+asked once at create -- an app id never changes, unlike a title. Every
+`uapp` declares one now, not just the single-instance ones, which is
+what makes two Notepad processes group and Notepad plus Calculator not.
+A window with no app id falls back to its client pid, so it can never be
+merged with an unrelated window that also said nothing.
+
+The naming rule that follows: a GROUPED button is named after the
+application and an ungrouped one after its window. That is what Windows
+and KDE show, and it is the only naming that stays true when the group's
+frontmost window changes underneath it. A grouped button is also allowed
+to be wider than a plain one, because there are by definition few of
+them and its label carries a count -- at the plain natural width
+"notepad (32)" truncates to "not (32)", which names nothing.

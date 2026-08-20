@@ -262,6 +262,26 @@ this the obvious way), not from how much history it accumulated.
   release. **An app must honour `reason`**: discarding it applies a
   setting on every pointer-motion event, which froze the desktop for
   seconds and exposed the `fs_read()` bug above.
+- **The TASKBAR'S LAYOUT IS ONE FUNCTION, and past a floor it groups by
+  app.** `taskbar_layout()` (`userland/wm/wm_taskbar.c`) decides which
+  buttons exist, how wide they are and what each stands for; the
+  renderer, both hit-tests in `wm_input.c` and the debug console all
+  read it. **Do not reintroduce a width constant** -- `win_btn_w()` was
+  one, three places walked the list with it, and buttons ran off the
+  screen edge and under the clock because no single place could shrink
+  them. The fourth walk, in the debug console, had already drifted eight
+  pixels, so tests were clicking beside the buttons they aimed at.
+  Buttons shrink to a font-derived floor, then windows of one
+  APPLICATION collapse into one counted button whose click opens a list
+  of them; anything that still will not fit is dropped and counted by
+  `taskbar_hidden()` rather than drawn off-screen. Grouping is by
+  `struct window.app_id`, which every `uapp` now sets -- it reaches the
+  compositor through `WIN_REQ_WINDOW_APPID`, asked once at create,
+  because `WIN_REQ_WINDOW_INFO`'s single `text` is the title. A window
+  with no app id groups by client pid instead. See
+  `docs/decisions.md`, and `tools/taskbar_test.py` for the thresholds.
+
+
 - **The WM has a SLOW-FRAME WATCHDOG** (`userland/wm/wm_watchdog.c`): it
   times each `wm_run()` iteration by phase and logs anything over a
   threshold (150ms by default). The design point worth preserving: it

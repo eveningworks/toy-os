@@ -32,6 +32,7 @@ struct uui_radio_list {
     // nothing that already worked had to change.
     int selected;
     int hovered;   // OWNED -- driven through the ops table's motion
+    int focused;   // OWNED -- driven by the focus ring's set_focused
 
     // What `selected` was before the press currently in flight, so a
     // press dragged off the list can put it back. -1 means no press is
@@ -58,6 +59,19 @@ void uui_radio_list_set_geometry(struct uui_radio_list *l, int x, int y);
 void uui_radio_list_draw(struct ugfx_surface *s, const struct uui_radio_list *l);
 // Index under the content-relative point (cx, cy), or -1.
 int uui_radio_list_hit(const struct uui_radio_list *l, int cx, int cy);
+
+// Keyboard: the ARROW KEYS move the selection and Space/Enter do
+// nothing extra, because on a radio group in Win32, GTK and Qt alike
+// ARROWING IS CHOOSING -- there is no separate commit step, and a group
+// where the arrows only previewed would be the odd one out. Up/Left go
+// back, Down/Right go forward, and the ends do not wrap (Win32 wraps,
+// GTK does not; not wrapping is the one that cannot silently jump the
+// selection across the whole list on a key repeat).
+//
+// Returns 1 if the key was consumed AND the selection moved, which is
+// also the app's signal to act -- the same event a mouse release
+// produces. 0 for any other key, so the app still sees it.
+int uui_radio_list_key(struct uui_radio_list *l, int key);
 
 // Full table with ROUTED POINTER INPUT (ui/uui_route.h): selecting an
 // option is the widget's job once this is declared, not the app's.

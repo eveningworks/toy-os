@@ -312,11 +312,22 @@ struct dirent {
                         // RDX = capacity of that array (clamped to
                         // SYS_LISTDIR_MAX). Wraps fs_list() (fs.c).
                         // Returns the number of entries written (RAX,
-                        // 0..max) -- 0 if the directory is empty or
-                        // doesn't exist, same as fs_list()'s own
-                        // no-op-on-missing-dir behavior; -1 only for a
-                        // bad path or output-array pointer. Table
-                        // order, not sorted, same as fs_list().
+                        // 0..max), or a NEGATIVE ERRNO. Table order,
+                        // not sorted, same as fs_list().
+                        //
+                        // **0 MEANS AN EMPTY DIRECTORY AND NOTHING
+                        // ELSE.** It used to also mean "no such
+                        // directory", because fs_list() returns void
+                        // and simply does nothing for a path that is
+                        // not a listable directory -- so `ls /nope`
+                        // printed an empty listing and exited 0. The
+                        // handler now probes the path when the count
+                        // comes back zero: -ENOENT if nothing is
+                        // there, -ENOTDIR if something is but is not a
+                        // directory. -EFAULT for a bad path or
+                        // output-array pointer, as before (the older
+                        // comment here said -1, which this syscall has
+                        // not returned since it grew errnos).
 
 #define SYS_GETTIME 14 // RDI = pointer to a `struct rtc_time` (out, see
                         // timer.h). Wraps rtc_read_local() (tz.c) --

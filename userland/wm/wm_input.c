@@ -5,6 +5,7 @@
 #include "wm_internal.h"
 #include "start_menu.h"
 #include "context_menu.h"
+#include "wm_taskbar.h"
 #include "confirm_dialog.h"
 #include "file_picker.h"
 #include "desktop.h"
@@ -65,37 +66,18 @@ void wm_handle_left_click(int mx, int my) {
 
     if (my >= screen_h - taskbar_h) {
         int ty = screen_h - taskbar_h;
-        int sbw = start_btn_w(), wbw = win_btn_w();
+        int sbw = start_btn_w();
         if (uui_hit(4, ty, sbw, taskbar_h, mx, my)) {
             start_menu_open_now();
             redraw_pending = 1;
             return;
         }
-        int bx = 4 + sbw + 8;
-        for (int i = 0; i < window_count; i++) {
-            if (uui_hit(bx, ty, wbw, taskbar_h, mx, my)) {
-                if (windows[i].state == WIN_MINIMIZED) {
-                    windows[i].state = WIN_NORMAL;
-                    wm_ensure_reachable(i);
-                    bring_to_front(i);
-                } else if (wm_ensure_reachable(i)) {
-                    // It was somewhere it could not be grabbed -- off an
-                    // edge, or behind the taskbar. RECOVERING it is the
-                    // action, taking priority over the minimize toggle
-                    // below: minimizing something the user cannot see
-                    // does nothing they can perceive, and this button is
-                    // the only handle such a window has left.
-                    bring_to_front(i);
-                } else if (i == window_count - 1) {
-                    windows[i].state = WIN_MINIMIZED;
-                } else {
-                    bring_to_front(i);
-                }
-                redraw_pending = 1;
-                return;
-            }
-            bx += wbw + 4;
-        }
+        // The window buttons, their layout and what a click on one does
+        // all live in wm_taskbar.c -- this used to walk the windows with
+        // a fixed button width, as did the right-click path below and
+        // draw_taskbar(), and three walks of one strip is how buttons
+        // came to be drawn where nothing would hit-test them.
+        taskbar_handle_click(mx, my);
         return;
     }
 
@@ -331,21 +313,7 @@ void wm_handle_right_click(int mx, int my) {
     if (context_menu_open) context_menu_close();
 
     if (my >= screen_h - taskbar_h) {
-        int ty = screen_h - taskbar_h;
-        int sbw = start_btn_w(), wbw = win_btn_w();
-        int bx = 4 + sbw + 8;
-        for (int i = 0; i < window_count; i++) {
-            if (uui_hit(bx, ty, wbw, taskbar_h, mx, my)) {
-                g_ctx_window_target = i;
-                static struct context_menu_item item[1];
-                item[0].label = "Close window";
-                item[0].on_select = ctx_close_window;
-                item[0].ctx = &g_ctx_window_target;
-                context_menu_open_at(mx, my, item, 1);
-                return;
-            }
-            bx += wbw + 4;
-        }
+        taskbar_handle_right_click(mx, my);
         return; // taskbar area, but not over an app button (or the Start button -- no menu there)
     }
 

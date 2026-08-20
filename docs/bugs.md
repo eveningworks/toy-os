@@ -58,11 +58,8 @@ it has exonerated one this session and convicted another.
 
 ## Reproducible
 
-- [ ] `SYS_LISTDIR` returns 0 for a missing directory and for an empty one alike, so `ls` cannot tell them apart
-- [ ] The taskbar overflows off the right edge once enough windows are open
+- [ ] `gui windows --json` truncates past ~25 windows -- the reply is capped at `WIN_DEBUG_REPLY_MAX` (4096) and the JSON comes back unparseable, so any tool asking the window list on a busy desktop gets a `ValueError` rather than a short answer
 - [ ] `damage_sweep.py`'s `resize-shrink Terminal` step reports a real missed damage
 - [ ] `rammeter` doesn't appear at the physical console
-- [ ] Control Panel applets can't show hover
-- [ ] `ui_checkbox` and `ui_radio_list` aren't in the focus ring
 - [ ] Resizing a window by its grip sometimes doesn't take on the first drag
 - [ ] `tools/damage_sweep.py`'s random walk sometimes drives Notepad's file picker open by clicking where its

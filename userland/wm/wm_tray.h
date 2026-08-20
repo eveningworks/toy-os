@@ -31,4 +31,9 @@ void tray_update_clock(void);
 // own locals exactly.
 void draw_tray(int taskbar_y, uint32_t bg, uint32_t fg);
 
+// The x the leftmost tray item starts at -- the right edge of the strip
+// the window buttons get. See the definition for why it re-walks the
+// items rather than caching a width.
+int tray_left(void);
+
 #endif

@@ -13,6 +13,7 @@
 #include "file_picker.h"
 #include "desktop.h"
 #include "wm_tray.h"
+#include "wm_taskbar.h"
 #include "cursor_theme.h"
 #include "ui/uui.h"
 #include "ui/utheme.h"
@@ -525,22 +526,23 @@ static void draw_taskbar(void) {
     int ty = screen_h - taskbar_h;
     ugfx_fill_rect(wm_surface(), 0, ty, screen_w, taskbar_h, bg);
 
-    int sbw = start_btn_w(), wbw = win_btn_w();
+    int sbw = start_btn_w();
 
     uint32_t start_bg = start_menu_open ? ugfx_rgb(70, 70, 90) : ugfx_rgb(50, 50, 60);
     uui_button_draw(wm_surface(), 4, ty + 4, sbw, taskbar_h - 8, START_LABEL, start_bg, fg, UUI_STATE_REST);
 
-    int bx = 4 + sbw + 8;
-    for (int i = 0; i < window_count; i++) {
+    // The buttons come from taskbar_layout(), which is also what
+    // wm_input.c hit-tests against -- this loop used to walk the windows
+    // itself with a fixed step, and so did both hit-tests, which is how
+    // the strip came to run off the screen edge (wm_taskbar.h).
+    static struct taskbar_button btns[64];
+    int nb = taskbar_layout(btns, 64);
+    for (int b = 0; b < nb; b++) {
+        int i = btns[b].first;
         int is_front_and_visible = (i == window_count - 1 && windows[i].state != WIN_MINIMIZED);
         uint32_t wbg = is_front_and_visible ? ugfx_rgb(70, 70, 90) : ugfx_rgb(50, 50, 60);
-
-        char label[WIN_LABEL_MAX_CHARS + 1];
-        int n = 0;
-        for (; windows[i].title[n] && n < WIN_LABEL_MAX_CHARS; n++) label[n] = windows[i].title[n];
-        label[n] = '\0';
-        uui_button_draw(wm_surface(), bx, ty + 4, wbw, taskbar_h - 8, label, wbg, fg, UUI_STATE_REST);
-        bx += wbw + 4;
+        uui_button_draw(wm_surface(), btns[b].x, ty + 4, btns[b].w, taskbar_h - 8,
+                         btns[b].label, wbg, fg, UUI_STATE_REST);
     }
 
     draw_tray(ty, bg, fg);

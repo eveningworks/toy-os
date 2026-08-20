@@ -295,6 +295,25 @@ manual steps to be worth automating:
   `\x1b[1;36mbin\x1b[0m/` printed in the failure detail -- and dropping
   ls's truncation message reddens the other, each naming its own
   failure.
+- **`taskbar_test.py`** -- opens Notepad until the taskbar overflows,
+  and asserts the strip never reaches the tray. Eleven checks against
+  `gui taskbar --json`, which comes from the SAME `taskbar_layout()`
+  that draws the buttons and hit-tests them (`userland/wm/wm_taskbar.c`)
+  -- before that fix the debug console was a fourth, independent walk of
+  the window list and was already eight pixels wrong, so every test
+  click aimed at a reported button centre missed it. Drives every
+  threshold the layout has: natural width, shrink-to-fit, the floor, and
+  collapsing windows of one application into a counted button with a
+  jump-list popup. Slow (each window is a real process, so budget a
+  couple of minutes), deliberately NOT in `gui_regress.py`.
+  Its positive control is worth reading in the file: the first attempt
+  reddened three checks and left the OVERFLOW check green, because the
+  layout's placement guard still refused to put a button past the strip
+  -- the control never reached the code the check was about. Removing
+  the width policy AND the guard reproduces the reported bug at 14
+  windows, and the first run is why there is now an unconditional
+  assertion that no window is left off the strip.
+
 - **`init_test.py`** -- init as pid 1 AND as a supervisor, end to end:
   the kernel spawns it, it holds pid 1, an idle init is BLOCKED rather
   than spinning, `kill 1` is refused, abandoned children are adopted AND

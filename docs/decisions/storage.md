@@ -1138,3 +1138,34 @@ a NOZERO block fails, the block keeps stale content. It's past the
 file's size (which only advances for bytes actually written), so no read
 can reach it. See the commit that added it.
 
+
+---
+
+## `SYS_LISTDIR` disambiguates empty from missing in the SYSCALL, not in `fs_list()`
+
+`fs_list()` returns void, and "does nothing for a path that is not a
+listable directory" is its documented behaviour (`api/fs.h`). So a
+missing directory and an empty one both left `SYS_LISTDIR`'s count at
+zero, and `ls /nope` printed an empty listing and exited 0 -- the one
+conclusion a caller must not be allowed to draw.
+
+The obvious fix is to give `fs_list()` a return value, and it is the
+wrong one: every backend would have to grow one, and the VFS is not
+where this distinction matters. Ring 3 is the only caller that cannot
+look for itself; the kernel can call `fs_exists()`/`fs_is_dir()` any
+time it likes. So the syscall handler probes and returns `-ENOENT` or
+`-ENOTDIR`, which is the same shape `opendir()` has and the same place
+POSIX puts it.
+
+**Only on the zero path**, so an ordinary listing pays nothing: the two
+probes are directory walks, and a non-empty result has already proved
+the directory exists by producing its children. That is also why this
+did not need `fs_stat()` -- it is meaningless for the implicit root "/",
+which `fs_is_dir()` handles.
+
+Nothing in ring 3 broke, because `/bin/ls`, `/bin/tosh`, `init`, Notepad
+and the file picker all already tested for a negative return; they
+simply had no negative to see. `ls` was already printing
+`strerror(sys_errno())` for the `-EFAULT` case, so the reason reaches a
+person with no change at the call site -- which is what the errno
+convention was for.
