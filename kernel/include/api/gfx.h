@@ -273,9 +273,12 @@ void gfx_scroll_up(int pixel_rows, uint32_t bg_color);
 // The console (vga.c) leaves this OFF, so its writes go straight to the
 // display and appear immediately, exactly as before.
 //
-// Returns 1 if double buffering could be enabled (the back buffer is a
-// fixed-size static array, so a mode larger than GFX_MAX_PIXELS can't be
-// buffered), 0 otherwise -- callers can still draw either way.
+// Returns 1 if double buffering could be enabled, 0 otherwise --
+// callers can still draw either way. The back buffer is allocated at
+// gfx_init() and sized to the mode that is on screen, so the only way
+// this fails is that allocation having failed (it is logged); it used
+// to be a fixed 1920x1080 array, which made this a silent ceiling on
+// the display mode -- see docs/decisions.md.
 int gfx_set_double_buffered(int enabled);
 
 // Copies the back buffer to the visible framebuffer. No-op when double

@@ -90,18 +90,28 @@ int display_write_combining(void) { return g_wc; }
 #define DISPLAY_DEFAULT_W 1280
 #define DISPLAY_DEFAULT_H 720
 
-// gfx.c's back buffer is a fixed array, so no mode above it can ever be
-// used however capable the adapter is. Stated here as well so the
-// ladder never offers a candidate gfx_init() would refuse -- a driver
-// that programmed one would come up with a live display the rasteriser
-// declines to draw into, which is a black screen with no error.
-#define DISPLAY_MAX_W 1920
-#define DISPLAY_MAX_H 1080
+// The largest mode this OS will ask for. It used to be 1920x1080
+// because gfx.c's back buffer was a fixed array of exactly that many
+// pixels; that array is allocated from the frame allocator now (see
+// gfx.c's `back_buffer`), so the ceiling is a policy rather than a
+// hard limit -- 4K at 4 bytes a pixel is 33 MiB of contiguous frames
+// for the back buffer alone, plus whatever the adapter needs, and
+// past that the numbers stop being sensible on a machine this OS
+// boots on.
+//
+// Raising it is not free elsewhere: a mode wider than vga.c's
+// SB_COLS columns truncates console scrollback, and a window still
+// cannot exceed WIN_CLIENT_MAX_W/H (abi/win_proto.h). Both of those
+// were raised alongside this; a future rise has to check them again.
+#define DISPLAY_MAX_W 3840
+#define DISPLAY_MAX_H 2160
 
 // The standard sizes, largest first. Deliberately common VESA/panel
 // geometries rather than a computed sequence: a mode a real BIOS or a
 // virtual adapter actually offers is what makes a fallback useful.
 static const struct { int w, h; } DISPLAY_LADDER[] = {
+    { 3840, 2160 },
+    { 2560, 1440 },
     { 1920, 1080 },
     { 1600, 900 },
     { 1366, 768 },

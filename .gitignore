@@ -99,6 +99,9 @@ ktest_qemu.log
 # tools/qemu_matrix.py's scratch: copied disk images and QEMU logs.
 .qemu_matrix/
 
+# tools/hires_test.py's screendumps (its default --shots directory).
+.hires_shots/
+
 # tools/virtio_boot_test.py's working image and log (it copies disk.img
 # rather than writing to it, and the copy is disposable), and the second
 # disk image CI's virtio job makes.

@@ -5,6 +5,9 @@
 #include "font_ttf.h"
 #include "random_hw.h" // arch_rdtsc(), for gfx_bench_fill()
 #include "paging.h"    // paging_wc_name(), for gfx_write_combining_name()
+#include "pmm.h"       // pmm_alloc_contiguous(), for the back buffer
+#include "klog.h"
+#include "kfmt.h"   // klog_printf()
 #include <stddef.h>
 
 static uint8_t *fb = 0;
@@ -58,13 +61,29 @@ const char *gfx_font_size_name(enum font_size size) {
 }
 
 // --- double buffering ---
-// Sized for the largest mode we're willing to buffer. 1920x1080 gives
-// headroom above the 1280x720 mode boot.asm actually requests (in case
-// GRUB/QEMU picks something bigger than the preference), at 4
-// bytes/pixel that's ~8 MiB of .bss, which is fine given we
-// identity-map the first 1 GiB and the kernel loads at 1 MiB.
-#define GFX_MAX_PIXELS (1920 * 1080)
-static uint32_t back_buffer[GFX_MAX_PIXELS];
+//
+// **Allocated from the frame allocator at gfx_init(), sized to the mode
+// that is actually on screen -- it used to be a fixed 1920x1080 array in
+// .bss.** A fixed array is the wrong shape here twice over: it costs
+// 8 MiB of image on a machine that boots at 640x480 and never needs it,
+// and it is a hard ceiling on the display mode that nothing at the
+// display layer can see -- a driver that programmed a bigger mode came
+// up with a live screen the rasteriser silently declined to
+// double-buffer (gfx_set_double_buffered() returns 0), which reads as a
+// mysteriously slow console rather than as a size limit.
+//
+// CONTIGUOUS frames, because this is indexed as one flat array and the
+// kernel's identity map is what makes a physical address usable as a
+// pointer. That is also why it is allocated at gfx_init(), which runs
+// early enough (kernel_main() calls it right after pmm_init(), before
+// anything else has taken a frame) that a 33 MiB 4K buffer is still a
+// request a pristine allocator can satisfy.
+//
+// A failure is not fatal and never has been: `back_buffer` stays NULL,
+// gfx_set_double_buffered() refuses, and every path falls back to
+// drawing straight into the framebuffer -- slower, and correct.
+static uint32_t *back_buffer;
+static uint32_t back_buffer_pixels;   // capacity, in pixels
 static int double_buffered = 0;
 
 // --- dirty-rectangle tracking ---
@@ -235,6 +254,28 @@ int gfx_init(void) {
     blue_pos = 0; blue_size = 8;
     double_buffered = 0;
     dirty_x0 = dirty_y0 = dirty_x1 = dirty_y1 = 0;
+
+    // The back buffer, sized to this mode. Allocated once: gfx_init()
+    // runs exactly once (from vga_init()), and nothing here changes mode
+    // afterwards -- no display driver advertises DISPLAY_CAP_MODESET for
+    // precisely that reason. If that changes, this is the allocation
+    // that has to be redone, and every ring-3 compositor mapping with it.
+    uint32_t pixels = (uint32_t)width * (uint32_t)height;
+    if (!back_buffer) {
+        uint64_t pages = ((uint64_t)pixels * 4 + 4095) / 4096;
+        uint64_t phys = pmm_alloc_contiguous(pages);
+        if (phys) {
+            back_buffer = (uint32_t *)(uintptr_t)phys;
+            back_buffer_pixels = pixels;
+        } else {
+            // Not fatal -- see back_buffer's comment. Logged because the
+            // symptom (a console that redraws visibly slowly) points
+            // nowhere near a failed allocation.
+            klog_printf("gfx: no back buffer for %dx%d (%uKB contiguous) -- "
+                         "drawing direct to the framebuffer\n",
+                         width, height, (uint32_t)(pages * 4));
+        }
+    }
     return 1;
 }
 
@@ -339,7 +380,8 @@ int gfx_set_double_buffered(int enabled) {
         return 1;
     }
     if (width <= 0 || height <= 0) return 0;
-    if ((uint32_t)width * (uint32_t)height > GFX_MAX_PIXELS) return 0;
+    if (!back_buffer) return 0;
+    if ((uint32_t)width * (uint32_t)height > back_buffer_pixels) return 0;
     double_buffered = 1;
     dirty_x0 = dirty_x1 = dirty_y0 = dirty_y1 = 0; // nothing dirty in a freshly (re)enabled buffer yet
     return 1;
@@ -459,8 +501,9 @@ void gfx_scroll_up(int pixel_rows, uint32_t bg_color) {
     // writes, and it is slow enough to watch the scanline travel down
     // the display. Every ordinary console reaches the double-buffered
     // branch above instead and never reads the framebuffer at all; this
-    // survives only for a surface too large for back_buffer
-    // (GFX_MAX_PIXELS), where there is nothing else to shift.
+    // survives only for a surface with no back buffer behind it (the
+    // allocation at gfx_init() failed), where there is nothing else to
+    // shift.
     uint32_t row_bytes = (uint32_t)width * (bpp / 8);
     for (int y = 0; y < height - pixel_rows; y++) {
         uint8_t *dst = fb + (uint32_t)y * pitch;

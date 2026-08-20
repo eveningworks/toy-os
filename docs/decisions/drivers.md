@@ -701,3 +701,93 @@ claimant would leave a second device asserting forever.
 the drain lock-free: the idle path never touches a queue the handler
 owns. A device the chipset routed nowhere keeps its poll instead, so no
 device ends up with neither.
+
+## The `bochs` driver DECLINES the display unless it can improve the mode
+
+`video=<W>x<H>` (docs/boot-flags.md) existed for months and did nothing
+on the adapter every default boot and every headless test actually uses.
+The reason is a layering fact that is easy to miss: `vesafb` is not a
+driver in the modesetting sense at all -- it reports the framebuffer GRUB
+negotiated from `boot.asm`'s multiboot2 request and has no way to ask for
+another. `vmsvga` and `virtio-gpu` can program a CRTC, but they own
+specific hardware (`VGA=vmware`, `VGA=virtio`); the ordinary `-vga std`
+adapter had no modesetting driver, so its mode was fixed at build time by
+an assembled constant.
+
+`kernel/drivers/display/bochs.c` is that missing driver: the Bochs DISPI
+register window (ports 0x01CE/0x01CF), which QEMU's stdvga and
+`bochs-display` implement and Linux's `bochs-drm` drives. It is what
+makes `make iso KCMDLINE="video=1920x1080"` mean something on a default
+boot.
+
+**The design call worth recording is that it DECLINES rather than
+claims.** `display_probe()` activates the first driver whose `probe()`
+returns 1, and the obvious implementation claims the hardware whenever it
+finds it. That would be wrong here: `display_mode_candidate()`'s ladder
+walks largest-first and ends at whatever GRUB already gave us, so on an
+ordinary boot with no `video=` flag the driver would find itself
+"setting" the mode already on screen -- which means blanking and
+re-programming a live console that has already drawn into it, on every
+single boot, to achieve nothing. So the probe breaks out of the ladder
+the moment a candidate is no larger than GRUB's own geometry and returns
+0, and `vesafb` -- a strictly simpler driver for the same pixels -- claims
+instead. Verified as a pair, which is what makes it evidence: the default
+ISO logs `display: using "vesafb" -- 1280x720`, and an ISO built with
+`KCMDLINE="video=1920x1080"` logs `bochs: set 1920x1080 (GRUB had
+1280x720)`.
+
+**The bound that actually bites is video MEMORY, not the resolution.**
+The adapter's advertised `max_w`/`max_h` (read through the `GETCAPS`
+mode, which temporarily repurposes the XRES/YRES/BPP registers) are
+generous and say nothing about whether the mode fits: QEMU's stdvga
+defaults to 16 MiB of `vgamem_mb`, which holds 1920x1080x4 at 8.3 MiB and
+does not hold 3840x2160x4 at 33.2 MiB. Programming a mode that does not
+fit gives a live display scanning past the end of its own memory -- a
+torn or black screen with nothing logged anywhere. So the driver reads
+`DISPI_INDEX_VIDEO_MEMORY_64K` and refuses the candidate, which puts it
+on the next ladder rung instead of on a broken screen. `-device
+VGA,vgamem_mb=64` is the host-side answer for a 4K guest.
+
+Two smaller things, both the same shape as `vmsvga`'s: every check
+happens BEFORE the first register write of the mode-set sequence, because
+once XRES goes out the old mode is gone whether or not the rest succeeds
+-- that is what makes walking a ladder safe. And `DISPLAY_CAP_MODESET` is
+deliberately NOT advertised: the cap means the display layer may change a
+mode at RUNTIME, and nothing above here survives that yet (gfx.c's back
+buffer and every ring-3 compositor mapping are sized at their own init),
+so claiming it would be exactly the dishonest capability
+`display_probe()` exists to refuse.
+
+## gfx.c's back buffer is allocated, and the constant it used to be was a hidden ceiling on the display
+
+It was `static uint32_t back_buffer[1920 * 1080]` -- 8 MiB of `.bss`,
+sized for the largest mode anyone expected to want. Two things were wrong
+with that, and only the second one matters much.
+
+It costs 8 MiB of kernel image on a machine that comes up at 640x480 and
+will never use it. That is the small one.
+
+The real problem is that it was a ceiling on the DISPLAY MODE that
+nothing at the display layer could see. `gfx_set_double_buffered()`
+returns 0 for a surface larger than the array, so a driver that
+programmed a bigger mode came up with a perfectly live screen that the
+rasteriser silently declined to double-buffer, falling back to drawing
+straight into the framebuffer -- correct, and slow enough to watch. The
+symptom is "the console got mysteriously slow", which points nowhere near
+an array bound. `display.c` compensated by stating `DISPLAY_MAX_W/H` as a
+mirror of the array's dimensions with a comment explaining that the two
+had to be kept in step by hand: exactly the "a number some other file has
+to keep true" shape CLAUDE.md says to delete rather than document.
+
+It is `pmm_alloc_contiguous()` at `gfx_init()` now, sized to the mode
+that is actually on screen. Contiguous because it is indexed as one flat
+array and the kernel's identity map is what makes a physical address
+usable as a pointer; at `gfx_init()` because `kernel_main()` calls it
+right after `pmm_init()`, before anything else has taken a frame, which
+is the only point where a 33 MiB request is one a pristine allocator can
+still satisfy. A failure is not fatal and never was -- the pointer stays
+NULL and every path takes the existing direct-to-framebuffer fallback.
+
+`DISPLAY_MAX_W/H` is 3840x2160 now, and it is a policy rather than a
+mirror of an array: past that the numbers stop being sensible for a
+machine this OS boots on.

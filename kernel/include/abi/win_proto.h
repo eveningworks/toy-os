@@ -769,22 +769,35 @@ struct win_debug_msg {
 // name would collide with the title the user sees.
 #define WIN_APP_ID_LEN WIN_TITLE_LEN
 
-// Largest client window, in pixels -- the 1280x720 mode boot.asm asks
-// for, so a client can be dragged to fill the screen and the window
-// manager's own screen-bounds clamp (wm_update_drag_resize()) becomes
-// the effective limit rather than this one. That is the point: at 640x480
-// a resize past the cap was refused SILENTLY, since a refusal is a normal
+// Largest client window, in pixels. **It tracks the largest mode the
+// display layer will select (DISPLAY_MAX_W/H in
+// kernel/drivers/display/display.c), not the mode boot.asm requests** --
+// so a client can be dragged or maximized to fill the screen and the
+// window manager's own screen-bounds clamp (wm_update_drag_resize())
+// becomes the effective limit rather than this one. That is the point:
+// a resize past the cap is refused SILENTLY, since a refusal is a normal
 // protocol outcome and looks identical to a client that simply declined.
 //
-// Still bounded, because the server allocates and maps the whole buffer
-// up front and does it CONTIGUOUSLY (see create_window()): at 4 bytes
-// per pixel this is 900 frames from pmm_alloc_contiguous(), the most
-// this kernel is willing to hand one window without a growable-mapping
-// story. Growing past the display, or dropping the contiguity
-// requirement so fragmentation can't refuse a resize, is docs/roadmap.md's
-// growable client buffers item -- not this constant getting bigger again.
-#define WIN_CLIENT_MAX_W 1280
-#define WIN_CLIENT_MAX_H 720
+// **This is the constant a bigger screen breaks FIRST, and it breaks
+// quietly.** It was 1280x720, matching what GRUB was asked for; the
+// moment a modesetting driver (bochs.c, vmsvga.c) came up at 1920x1080,
+// maximize asked for 1918x1038, the server refused, and the window
+// wore full-screen chrome around a stale 1280x720 buffer with undrawn
+// desktop filling the difference -- exactly the failure this header
+// describes for the resize grip. So: raise it WITH DISPLAY_MAX_W/H,
+// or the display gains pixels no window can use.
+//
+// It is 1080p rather than the 4K DISPLAY_MAX_W/H now allows, and that
+// gap is deliberate. The server allocates and maps the whole buffer up
+// front and does it CONTIGUOUSLY (see create_window()): 1920x1080x4 is
+// 2025 frames from pmm_alloc_contiguous() per window, and a resize
+// allocates the new buffer BEFORE freeing the old, so a 4K window would
+// ask a fragmented allocator for 8100 contiguous frames twice over.
+// Dropping the contiguity requirement is docs/roadmap.md's growable
+// client buffers item, and it is the prerequisite for raising this to
+// the display ceiling -- not this constant getting bigger on its own.
+#define WIN_CLIENT_MAX_W 1920
+#define WIN_CLIENT_MAX_H 1080
 
 // Same fixed-layout discipline as struct win_event: no pointers, so the
 // identical bytes work whether copied by a syscall or read out of a

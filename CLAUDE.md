@@ -505,6 +505,8 @@ whenever a headline here tells you something you did not already know.
 
 `docs/conventions/gui.md`
 
+- **`WIN_CLIENT_MAX_W/H` TRACKS THE DISPLAY CEILING, AND A SCREEN BIGGER THAN IT BREAKS MAXIMIZE SILENTLY.**
+- **A DESKTOP-SIZED WINDOW IS "MAXIMIZED", AND THERE IS NO FULLSCREEN STATE.**
 - **`-vga virtio` IS A REAL DISPLAY DRIVER, and nothing else boots it**
 - **`apps/ui/` IS DOWN TO ONE WIDGET, and the GUI toolkit is `userland/ui/`.**
 - **Ring-3 GUI apps are written against Toykit's `uapp`, and a new one is a `.c` file in `userland/gui/` with NO Makefile edit.**
@@ -936,6 +938,10 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   `ls_test.py` (`/bin/ls`'s flags, ordering and the listing cap -- it
   stages a 300-entry directory from the HOST, since the cap is
   unreachable by typing `touch`),
+  `hires_test.py` (a desktop above 1280x720, and whether a client window
+  can actually FILL it -- the `WIN_CLIENT_MAX_W/H` vs `DISPLAY_MAX_W/H`
+  pair; needs an ISO built with `KCMDLINE="video=1920x1080"`, since at
+  the default mode every check in it passes vacuously),
   `taskbar_test.py` (opens enough windows to overflow the taskbar and
   asserts the strip never reaches the tray -- shrink, then grouping by
   application; slow, since every window is a real process),

@@ -473,12 +473,18 @@ static void fb_backspace(void) {
 //
 // Sized as a fixed .bss array rather than a heap allocation for the same
 // reason the free-block bitmap is: it must work before heap_init(), and
-// its size is a compile-time constant either way. 256 lines x 256 cols
-// x 2 bytes = 128KB. 256 columns covers the widest this console gets
-// (1280px / the 8pt font's cell width); a narrower font just leaves the
+// its size is a compile-time constant either way. 256 lines x 512 cols
+// x 2 bytes = 256KB. 512 columns covers the widest this console gets at
+// the largest mode display.c will now ask for (3840px / the 8pt font's
+// cell width is 480); a narrower screen or a wider font just leaves the
 // tail of each row unused.
+//
+// It was 256, sized against a 1280px screen, and the failure it produced
+// was quiet by design: sb_record_char() simply stops recording past
+// SB_COLS, so scrollback of a wide console showed correct lines with
+// their right-hand ends missing. Raise it alongside DISPLAY_MAX_W.
 #define SB_LINES 256
-#define SB_COLS  256
+#define SB_COLS  512
 
 static char sb_char[SB_LINES][SB_COLS];
 static uint8_t sb_attr[SB_LINES][SB_COLS];

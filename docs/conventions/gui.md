@@ -19,6 +19,41 @@ this the obvious way), not from how much history it accumulated.
 
 ---
 
+- **`WIN_CLIENT_MAX_W/H` TRACKS THE DISPLAY CEILING, AND A SCREEN BIGGER
+  THAN IT BREAKS MAXIMIZE SILENTLY.** `abi/win_proto.h`'s
+  `WIN_CLIENT_MAX_W/H` is the largest pixel buffer the window server
+  will hand a ring-3 client, and it used to be 1280x720 because that is
+  what `boot.asm` asks GRUB for. The moment a modesetting driver
+  (`bochs.c`, `vmsvga.c`, virtio-gpu) came up at 1920x1080, maximize
+  asked for a 1918x1038 content area, `resize_window()` refused it, and
+  **nothing anywhere said so** -- a refusal is a normal protocol outcome
+  and is indistinguishable from a client declining. What you get is the
+  failure `win_proto.h` already describes for the resize grip:
+  full-screen chrome around a stale buffer, with undrawn desktop filling
+  the difference. So **raise it WITH `DISPLAY_MAX_W/H`**
+  (`kernel/drivers/display/display.c`), or the display gains pixels no
+  window can use. It is 1920x1080 against a 3840x2160 display ceiling
+  today, and the gap is deliberate: the server allocates a window's
+  pixels CONTIGUOUSLY and up front, so 4K is 8100 contiguous frames
+  asked for twice over on every resize -- `docs/roadmap.md`'s growable
+  client buffers item is the prerequisite, not a bigger constant.
+  `tools/hires_test.py` is the check, and it needs an ISO built with
+  `KCMDLINE="video=..."` because at the default mode every assertion in
+  it passes vacuously.
+- **A DESKTOP-SIZED WINDOW IS "MAXIMIZED", AND THERE IS NO FULLSCREEN
+  STATE.** `wm_toggle_maximize()` (`userland/wm/wm_input.c`) fills the
+  screen ABOVE the taskbar and keeps the title bar; nothing removes
+  chrome or covers the taskbar, and no client can ask for it. That is
+  the same one implementation behind both the title-bar button and the
+  context menu, and the client half is the part to read before touching
+  it: a client is PROPOSED the new content size (the same configure/ack
+  the resize grip uses, and the shape Wayland's
+  `xdg_toplevel.configure` has) and `wm_client.c`'s
+  `on_window_resized()` adopts w/h when the client answers. Imposing a
+  size instead produces the stale-buffer failure above. A real
+  fullscreen state is `docs/roadmap.md`'s window-size-as-a-property
+  item.
+
 - **`apps/ui/` IS DOWN TO ONE WIDGET, and the GUI toolkit is
   `userland/ui/`.** What is left is `ui_scrollback.{c,h}`, which the
   KERNEL's own `edit` command draws with (`apps/editor.c`) and which

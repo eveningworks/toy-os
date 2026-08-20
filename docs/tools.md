@@ -365,6 +365,45 @@ manual steps to be worth automating:
   `\x1b[1;36mbin\x1b[0m/` printed in the failure detail -- and dropping
   ls's truncation message reddens the other, each naming its own
   failure.
+- **`hires_test.py`** -- a desktop ABOVE the mode this OS boots into by
+  default, and whether a ring-3 client window can actually fill it. Two
+  constants have to move together and did not: the mode the display
+  layer selects (`DISPLAY_MAX_W/H` plus the ladder in
+  `kernel/drivers/display/display.c`, and whether a modesetting driver
+  picked it up) and `WIN_CLIENT_MAX_W/H` (`abi/win_proto.h`), the
+  largest buffer the window server will hand a client. When the second
+  is smaller, MAXIMIZE FAILS SILENTLY -- the WM proposes the new content
+  size, `resize_window()` refuses, and the window wears full-screen
+  chrome around a stale buffer with nothing logged.
+
+  The load-bearing check is a PIXEL, not the WM's own numbers:
+  `gui windows --json` reporting w=1920 is second-hand (the WM adopts a
+  client's size only when the client acks), so the test samples a point
+  far outside any 1280x720 buffer and requires it to change from the
+  desktop's background colour to the client's. A taskbar pixel is
+  sampled alongside it and must NOT change, so "everything repainted"
+  cannot pass it. Positive control, measured: with
+  `WIN_CLIENT_MAX_W/H` put back to 1280x720 it reddens exactly three
+  checks -- the frame size, the content size and the far-corner pixel --
+  and leaves the taskbar neighbour green.
+
+  **It needs an ISO built differently from the one every other tool
+  wants**, which is why it is not in `gui_regress.py` or
+  `preflight.sh`: the mode is chosen at boot, so it comes from the
+  kernel command line.
+
+  ```
+  make iso KCMDLINE="video=1920x1080"     # re-seeds disk.img
+  python3 tools/vm.py start
+  python3 tools/hires_test.py
+  python3 tools/vm.py stop
+  make iso                                # put the default ISO back
+  ```
+
+  `--require-min` (default 1920x1080) FAILS rather than skips when the
+  guest is not actually running big enough -- at 1280x720 every
+  assertion in the file passes vacuously, which is this repo's "the data
+  never reached the code under test" trap exactly.
 - **`taskbar_test.py`** -- opens Notepad until the taskbar overflows,
   and asserts the strip never reaches the tray. Eleven checks against
   `gui taskbar --json`, which comes from the SAME `taskbar_layout()`
