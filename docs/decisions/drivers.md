@@ -439,3 +439,68 @@ Likewise a BAR above 4 GiB is refused with a message rather than
 supported, because this kernel identity-maps only the low 4 GiB and has
 no kernel-range mapper. Not reachable on pc-i440fx, where SeaBIOS fits
 the 16 KiB virtio BAR into the 32-bit hole.
+
+## virtio-rng SEEDS krandom, it does not serve it
+
+**Why an entropy device at all.** Under QEMU's default CPU model the
+guest has neither RDSEED nor RDRAND, so `krandom` falls back to TSC
+jitter -- and the timestamp counter it measures against is itself
+software under TCG, which makes that fallback weakest in exactly the
+environment this OS usually runs in. `virtio-rng` is real host entropy,
+one `-device virtio-rng-pci` away, on a transport that already existed.
+
+**Seeding, not serving, and that is how everyone does it.** A draw is a
+device round trip plus a spin-poll, so `krandom_u64()` cannot be one.
+The device registers as a krandom SOURCE instead
+(`krandom_register_source()`): mixed in once at registration and again
+every `KRANDOM_RESEED_DRAWS` draws. Linux splits it identically --
+virtio-rng is an hwrng that reseeds the CRNG, never the per-call
+generator -- and Windows' viorng feeds CNG rather than answering each
+request.
+
+**The seam is a callback, not an include.** `krandom.c` knows nothing
+about virtio; the driver hands it a `fill` function. That is what lets
+the entropy source arrive long after `krandom_init()`, which it must:
+a virtqueue needs PCI, the frame allocator and contiguous frames, none
+of which exist that early in `kernel_main()`.
+
+**Which means the stack canary does not get it.** `stack_guard_randomize()`
+runs before `pmm_init()`, so the canary keeps whatever `krandom_init()`
+had -- jitter, on a machine with no RDSEED. Reordering boot so the
+canary could use the device would put the frame allocator ahead of the
+guard-page work that depends on it, to improve a value that is drawn
+once and never rotated. Everything drawn after boot gets the device.
+
+**`KRANDOM_VIRTIO` sits between JITTER and HW, and the enum is ordered
+by trust** so that registering a source is a comparison rather than an
+assignment (a CPU with RDSEED does not become less trustworthy because
+a virtio device turned up). Below HW because RDSEED is the CPU's own
+source, available per draw with no device round trip and no third
+party; above JITTER because host entropy is real and emulated jitter
+may be nearly deterministic. The hypervisor is not a new party to
+trust -- it already owns this machine's memory.
+
+**The driver probes before it registers.** A present-but-wedged device
+that raised the reported quality to virtio-rng while contributing
+nothing would be the one lie this tier must not tell, so
+`virtio_rng_init()` completes a real 8-byte request first and stays
+unregistered if it fails.
+
+**The bounce buffer is not an optimisation.** virtio-blk hands the
+device the caller's buffer after checking it is below 4 GiB; that is
+wrong here, because a caller may pass a kernel stack address and kernel
+stacks are mapped with a guard page rather than identity mapped -- so
+their virtual address is not their physical one. Filling through a
+64-byte static removes the question.
+
+**Testing it cost a second device, and that is measured rather than
+tidy.** The transport KTESTs in `virtio_test.c` claim a device and
+reset it when they are done. Once a driver holds the rng for the life
+of the kernel, running them against that device kills the live entropy
+source: with the tests pointed at index 0, "krandom: the registered
+entropy source declined a reseed" appears in `dmesg` a few hundred
+draws later, and nothing else says anything at all. So
+`tools/serial_console.py` attaches TWO `virtio-rng-pci` and the tests
+claim the LAST one. The decline line exists for the same reason -- it
+is the only way a source that has stopped answering is visible, since
+a failed reseed is otherwise indistinguishable from a busy one.

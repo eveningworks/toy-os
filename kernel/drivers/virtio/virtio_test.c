@@ -13,10 +13,22 @@
 // a skip. A broken capability walk therefore reddens the suite instead
 // of quietly turning it green.
 //
-// tools/ktest_run.py attaches `-device virtio-rng-pci` for exactly this
-// reason. rng rather than blk on purpose: it is not the device under
-// test anywhere else, so it also exercises a virtio device of the WRONG
-// type being declined.
+// tools/serial_console.py attaches TWO `-device virtio-rng-pci` for
+// exactly this reason -- and the second one is not belt-and-braces, it
+// is the whole arrangement: kernel/drivers/virtio/virtio_rng.c claims
+// index 0 at boot and holds it for the life of the kernel, so a test
+// that claimed and reset THAT device would kill the live entropy source
+// and leave every later draw coming from the pool alone. Measured, not
+// assumed: running these tests against index 0 puts "krandom: the
+// registered entropy source declined a reseed" in dmesg a few hundred
+// draws later, and nothing else says anything. The tests here claim the
+// LAST rng on the bus, which is the one nothing drives.
+//
+// Two consequences worth knowing. A machine with only one rng skips
+// these rather than fighting the driver for it -- stated in the skip
+// message, not inferred. And claiming index 1 is the only coverage
+// virtio_pci_find()'s index argument has for a value that must SUCCEED;
+// everywhere else it is asked for one that must fail.
 #include "virtio.h"
 #include "pci.h"
 #include "pci_internal.h"
@@ -32,15 +44,43 @@ static int virtio_hw_present(void) {
     return 0;
 }
 
+// The PCI device ids virtio assigns an entropy device: 0x1040 + type
+// for a modern one, and 0x1000 + (type - 1) for the transitional id
+// QEMU's default virtio-rng-pci presents. Both are spec constants, so
+// this counts rng devices WITHOUT going through virtio_pci_find() --
+// the same independence rule as virtio_hw_present() above.
+#define PCI_ID_RNG_MODERN 0x1044
+#define PCI_ID_RNG_LEGACY 0x1005
+
+static int rng_count(void) {
+    int n = 0;
+    for (int i = 0; i < pci_device_count(); i++) {
+        const struct pci_device *d = pci_device_at(i);
+        if (!d || d->vendor_id != VIRTIO_PCI_VENDOR) continue;
+        if (d->device_id == PCI_ID_RNG_MODERN || d->device_id == PCI_ID_RNG_LEGACY) n++;
+    }
+    return n;
+}
+
+// The rng the boot-time driver did NOT claim -- see the file comment.
+// Only meaningful when rng_count() >= 2.
+static int spare_rng_index(void) { return rng_count() - 1; }
+
+#define REQUIRE_SPARE_RNG() \
+    do { \
+        if (rng_count() < 2) \
+            KTEST_SKIP("no spare virtio-rng (the driver owns the only one)"); \
+    } while (0)
+
 KTEST("virtio", "a virtio device on the bus is claimed and its windows mapped") {
-    if (!virtio_hw_present()) KTEST_SKIP("no virtio device on this machine");
+    REQUIRE_SPARE_RNG();
 
     struct virtio_device d = {0};
     d.name = "virtio-rng";
     // If this fails while a 1AF4 device is present, the capability walk
     // or the BAR decode is broken -- which is the whole point of the
     // gate above being independent of them.
-    KTEST_ASSERT(virtio_pci_find(VIRTIO_ID_RNG, 0, &d));
+    KTEST_ASSERT(virtio_pci_find(VIRTIO_ID_RNG, spare_rng_index(), &d));
 
     // Every required window must have been found and must be reachable.
     KTEST_ASSERT(d.common != 0);
@@ -58,11 +98,11 @@ KTEST("virtio", "a virtio device on the bus is claimed and its windows mapped") 
 // The device-status handshake, end to end, checked through the device's
 // own status register rather than through our return value alone.
 KTEST("virtio", "feature negotiation reaches FEATURES_OK and DRIVER_OK") {
-    if (!virtio_hw_present()) KTEST_SKIP("no virtio device on this machine");
+    REQUIRE_SPARE_RNG();
 
     struct virtio_device d = {0};
     d.name = "virtio-rng";
-    KTEST_ASSERT(virtio_pci_find(VIRTIO_ID_RNG, 0, &d));
+    KTEST_ASSERT(virtio_pci_find(VIRTIO_ID_RNG, spare_rng_index(), &d));
 
     // Ask for nothing device-specific; VERSION_1 is added by virtio_begin.
     KTEST_ASSERT(virtio_begin(&d, 0));
@@ -126,11 +166,11 @@ KTEST("virtio", "a device of the wrong type is declined") {
 static uint8_t g_entropy[64];
 
 KTEST("virtio", "a buffer round-trips through a virtqueue") {
-    if (!virtio_hw_present()) KTEST_SKIP("no virtio device on this machine");
+    REQUIRE_SPARE_RNG();
 
     struct virtio_device d = {0};
     d.name = "virtio-rng";
-    KTEST_ASSERT(virtio_pci_find(VIRTIO_ID_RNG, 0, &d));
+    KTEST_ASSERT(virtio_pci_find(VIRTIO_ID_RNG, spare_rng_index(), &d));
     KTEST_ASSERT(virtio_begin(&d, 0));
 
     struct virtqueue vq;
@@ -181,11 +221,11 @@ KTEST("virtio", "a buffer round-trips through a virtqueue") {
 // otherwise shows up as the driver dying after a few hundred requests,
 // hours into a session, with nothing pointing at the cause.
 KTEST("virtio", "the descriptor pool balances across many transfers") {
-    if (!virtio_hw_present()) KTEST_SKIP("no virtio device on this machine");
+    REQUIRE_SPARE_RNG();
 
     struct virtio_device d = {0};
     d.name = "virtio-rng";
-    KTEST_ASSERT(virtio_pci_find(VIRTIO_ID_RNG, 0, &d));
+    KTEST_ASSERT(virtio_pci_find(VIRTIO_ID_RNG, spare_rng_index(), &d));
     KTEST_ASSERT(virtio_begin(&d, 0));
 
     struct virtqueue vq;

@@ -86,7 +86,7 @@ history search, `Alt-.` last argument. `help` lists them all.
 | Command | Notes |
 |---|---|
 | `time`, `timezone [city]`, `uptime` | |
-| `random [n]` | The entropy source and some values from it. |
+| `random [n]` | The entropy source (RDSEED/RDRAND, virtio-rng, or TSC jitter) and some values from it. |
 | `meminfo` | The memory map, the physical frame allocator and the kernel heap. Reads through the FACT registry (`SYS_QUERY`), so it and `/bin/meminfo` are one reader and cannot report different numbers. |
 | `meminfo --list` | *(`/bin/meminfo` only)* Every registered fact provider: class, name, record count, record size, and whether it is a scalar or a list. |
 | `meminfo audit` | Compares every live process's page tables against the frame allocator, and reports any mapping of a frame the allocator considers free. |

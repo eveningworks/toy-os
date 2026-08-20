@@ -1,12 +1,17 @@
 // The kernel's entropy source. See kernel/include/api/krandom.h for the
 // contract, and docs/decisions.md for why it stops where it does.
 //
-// THREE LAYERS, AND ONLY THE FIRST IS REAL ENTROPY
-// ------------------------------------------------
+// THE SOURCES, IN ORDER OF TRUST
+// ------------------------------
 // 1. RDSEED, then RDRAND (kernel/arch/x86_64/random_hw.c). The CPU's own
 //    entropy source. When this is available it is used for every value,
 //    not just to seed -- there is no reason to prefer a software mixer
 //    over the hardware it would be seeded from.
+// 1b. A REGISTERED SOURCE -- virtio-rng, which cannot exist this early
+//    (it needs PCI, frames and a virtqueue) and so arrives later through
+//    krandom_register_source(). It SEEDS rather than serves: a draw is a
+//    device round trip, so it is folded in at registration and every
+//    KRANDOM_RESEED_DRAWS draws thereafter.
 // 2. TSC jitter, when the CPU has neither. Sampled at init: read the
 //    timestamp counter repeatedly around work whose duration the caller
 //    cannot predict (a PIT tick boundary, a cache-missing walk), and
@@ -32,6 +37,21 @@
 
 static uint64_t pool;                  // mixed state, advanced on every draw
 static enum krandom_quality quality = KRANDOM_NONE;
+
+// A registered external source (virtio-rng today) and its reseed
+// schedule. See krandom_register_source() below.
+static krandom_source_fn source_fill = 0;
+static uint32_t draws_since_reseed = 0;
+static int declined = 0;               // has the source ever refused? logged once
+
+// How many draws between reseeds from the registered source.
+//
+// A reseed is a device round trip and a spin-poll, so this is a rate
+// limit, not a security parameter: the pool is a mixer either way, and
+// what the schedule buys is that a long-running kernel is not still
+// living off one boot-time seed. 256 draws is well under a millisecond
+// of ordinary use and makes the cost of the round trip invisible.
+#define KRANDOM_RESEED_DRAWS 256
 
 // splitmix64's finalizer. A well-known bijective avalanche step: every
 // input bit affects every output bit, so a counter, a timestamp, or a
@@ -91,6 +111,40 @@ static void harvest_jitter(void) {
     }
 }
 
+// Pull from the registered source and fold it in. Silent when there is
+// no source or when it declines -- a device that is busy (the driver
+// refuses a re-entrant request) contributes nothing this time, which is
+// not a failure worth logging on a path that runs every 256 draws.
+static void reseed_from_source(void) {
+    draws_since_reseed = 0;
+    if (!source_fill) return;
+    uint64_t v[4];
+    if (!source_fill(v, sizeof v)) {
+        // Said ONCE, and only once, because the two causes are worlds
+        // apart and neither is visible from here: a busy source (the
+        // driver refusing a re-entrant request, harmless and expected)
+        // and a source that has stopped answering entirely (the pool is
+        // now living off its boot-time seed, which is not). A silent
+        // second case is what this line exists for -- it is how a
+        // stomped device shows up at all.
+        if (!declined) {
+            declined = 1;
+            klog_write("krandom: the registered entropy source declined a reseed\n");
+        }
+        return;
+    }
+    for (int i = 0; i < 4; i++) pool = mix64(pool ^ v[i]);
+}
+
+void krandom_register_source(krandom_source_fn fill, enum krandom_quality q) {
+    if (!fill) return;
+    source_fill = fill;
+    reseed_from_source();
+    // Ordered by trust, so this is a genuine comparison rather than an
+    // assignment -- see krandom.h.
+    if (q > quality) quality = q;
+}
+
 void krandom_init(void) {
     uint64_t hw;
     if (hw_u64(&hw)) {
@@ -111,6 +165,12 @@ void krandom_init(void) {
 }
 
 uint64_t krandom_u64(void) {
+    // The reseed is counted on every draw, including the hardware path:
+    // a machine with RDSEED still benefits from the pool it mixes with
+    // being freshened, and skipping it there would make the schedule
+    // depend on which source is active.
+    if (source_fill && ++draws_since_reseed >= KRANDOM_RESEED_DRAWS) reseed_from_source();
+
     uint64_t hw;
     if (quality == KRANDOM_HW && hw_u64(&hw)) {
         // Still mixed with the pool rather than returned raw: it costs
@@ -151,6 +211,7 @@ enum krandom_quality krandom_quality(void) { return quality; }
 const char *krandom_quality_name(enum krandom_quality q) {
     switch (q) {
         case KRANDOM_HW:     return "hardware (RDSEED/RDRAND)";
+        case KRANDOM_VIRTIO: return "virtio-rng (host entropy)";
         case KRANDOM_JITTER: return "TSC jitter";
         default:             return "none";
     }

@@ -123,7 +123,11 @@ trips them before it knows to look anything up.
     pitch then roll, a fixed order because rotations don't commute.
   - **`krandom.h` is deliberately NOT a CSPRNG, and
     `krandom_quality()` is how a caller finds that out** instead of
-    assuming. The stack canary is randomized from it at boot -- read
+    assuming. The quality enum is ORDERED BY TRUST, and a source that
+    cannot exist at boot registers later through
+    `krandom_register_source()` -- which is how virtio-rng raises a
+    QEMU guest above TSC jitter, and why it SEEDS rather than answering
+    each draw. The stack canary is randomized from it at boot -- read
     `kernel/lib/stack_protector.c`'s comment before moving that call.
   - **Draw through the `gfx_draw_line()`/`gfx_draw_circle()`/
     `gfx_fill_ellipse()` wrappers in the kernel and `uui_canvas` in

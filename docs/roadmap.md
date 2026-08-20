@@ -506,7 +506,7 @@ run on, not by order.
 - [ ] `virtio-gpu`: resource create/attach, set_scanout, transfer + flush, and the CURSOR queue
 - [ ] `virtio-net`: a NIC on the same transport, likely easier than e1000 once virtqueues exist
 - [x] ~~`virtio-blk`: a block device that isn't ATA~~
-- [ ] `virtio-rng`: entropy
+- [x] ~~`virtio-rng`: entropy, registered as a krandom source~~
 - [ ] `virtio-input`: keyboard/mouse that isn't PS/2
 
 ### other emulated hardware worth claiming

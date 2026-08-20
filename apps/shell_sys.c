@@ -379,6 +379,13 @@ void cmd_random(const char *args) {
 
     vga_write("Entropy source: ");
     vga_write(krandom_quality_name(krandom_quality()));
+    if (krandom_quality() == KRANDOM_VIRTIO) {
+        // Worth saying because the trust boundary moved rather than
+        // improved: these bytes are real entropy, and they come from
+        // the hypervisor -- which already owns this machine's memory,
+        // so it is not a new party to trust, just a named one.
+        vga_write("\n  (from the host, via virtio-rng)");
+    }
     if (krandom_quality() == KRANDOM_JITTER) {
         // Said plainly rather than left for the reader to infer from
         // the label -- this is the case where the numbers below are

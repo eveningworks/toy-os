@@ -17,12 +17,21 @@
 // krandom_quality(), so a caller that needs to know how much to trust
 // its bytes can ask instead of assuming -- the same "a setting says
 // whether it actually persisted" instinct as enum setting_result.
+//
+// The values are ORDERED BY TRUST and compared as such (a registered
+// source may raise the quality, never lower it), so a new tier goes in
+// its place in that order rather than on the end.
 enum krandom_quality {
     KRANDOM_NONE = 0,   // krandom_init() has not run; output is a fixed sequence
-    KRANDOM_JITTER,     // TSC jitter only -- unpredictable in principle, WEAK
+    KRANDOM_JITTER = 1, // TSC jitter only -- unpredictable in principle, WEAK
                         // under an emulator, where the "hardware" timing this
                         // measures is itself software (see krandom.c)
-    KRANDOM_HW,         // RDSEED/RDRAND -- the CPU's own entropy source
+    KRANDOM_VIRTIO = 2, // virtio-rng -- entropy the HOST supplies. Real
+                        // randomness, and far better than jitter under an
+                        // emulator, but it arrives by device round trip and
+                        // is only as trustworthy as the hypervisor, which
+                        // already owns this machine's memory anyway.
+    KRANDOM_HW = 3,     // RDSEED/RDRAND -- the CPU's own entropy source
 };
 
 // Seeds the pool. Call once from kernel_main(), AFTER idt_init() and
@@ -41,11 +50,37 @@ uint64_t krandom_u64(void);
 // shorter than 8 bytes.
 void krandom_bytes(void *buf, size_t n);
 
+// --- an external entropy source ---------------------------------------
+//
+// A source that cannot exist at krandom_init() time -- it needs PCI,
+// the frame allocator and a virtqueue, all of which come up long after
+// the pool is first seeded. virtio-rng is the one implementation
+// (kernel/drivers/virtio/virtio_rng.c), and this seam is why krandom.c
+// includes nothing about it: the same shape as display_driver, minus
+// the registry, since a second entropy device is not a thing that is
+// coming.
+//
+// `fill` returns 1 when it wrote all n bytes, 0 otherwise -- a source
+// that declines is not an error, it just contributes nothing that time.
+typedef int (*krandom_source_fn)(void *buf, size_t n);
+
+// Mixes an immediate draw into the pool and keeps the source for
+// periodic reseeding. The quality is raised to `q` if `q` is higher
+// than what the pool already has, and NEVER lowered: a CPU with RDSEED
+// does not become less trustworthy because a virtio device turned up.
+//
+// Seeding rather than serving: a draw costs a device round trip and a
+// spin-poll, so krandom_u64() cannot be one. Linux does the same thing
+// (virtio-rng feeds the hwrng framework, which reseeds the CRNG; it is
+// not the per-call source), and the reason is the same.
+void krandom_register_source(krandom_source_fn fill, enum krandom_quality q);
+
 // Which source the values are actually coming from.
 enum krandom_quality krandom_quality(void);
 
-// "hardware (RDSEED/RDRAND)" / "TSC jitter" / "none". Never NULL, so a
-// caller can print it without a null check.
+// "hardware (RDSEED/RDRAND)" / "virtio-rng (host entropy)" /
+// "TSC jitter" / "none". Never NULL, so a caller can print it without a
+// null check.
 const char *krandom_quality_name(enum krandom_quality q);
 
 #endif

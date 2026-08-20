@@ -85,6 +85,15 @@ def launch_cmd(iso, disk, port, virtio_disk=None, memory=256):
         # test, so it also exercises virtio_blk_init() DECLINING a virtio
         # device of the wrong type.
         "-device", "virtio-rng-pci",
+        # A SECOND rng, and it is load-bearing rather than belt-and-
+        # braces. kernel/drivers/virtio/virtio_rng.c now claims index 0
+        # at boot and holds it for the life of the kernel, so the
+        # transport KTESTs -- which claim a device and reset it when
+        # they are done -- would silently kill the live entropy source
+        # if they used the same one. They take the LAST rng on the bus;
+        # this is it. Drop it and those tests skip themselves (with a
+        # message saying why) rather than fighting the driver.
+        "-device", "virtio-rng-pci",
         "-no-reboot",
         "-no-shutdown",
     ]

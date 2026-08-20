@@ -45,6 +45,7 @@
 #include "target.h"   // target_init() -- the boot target init starts services for
 #include "debug_console.h"
 #include "krandom.h"      // entropy source -- krandom_init()
+#include "virtio_rng.h"   // virtio-rng -- registers itself as a krandom source
 #include "reloc.h"        // the image's own relocation table -- kernel_relocate()
 
 // Where the running image starts -- a relocated symbol, so under kernel
@@ -222,6 +223,14 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // anything mounts off it, and `dmesg` should report a virtio disk
     // either way. Silent and allocation-free when there is none.
     virtio_blk_init();
+
+    // The entropy device, same ordering constraint (it wants a
+    // virtqueue) and the same silence when absent. It raises krandom's
+    // reported quality from TSC jitter to real host entropy, which
+    // under QEMU's default CPU model -- no RDSEED, no RDRAND -- is the
+    // only real entropy this machine can get. It cannot come early
+    // enough to seed the stack canary; see virtio_rng.h.
+    virtio_rng_init();
     klog_write("toy-os: kernel heap initialized\n");
 
     // No self-tests run here any more. pmm/heap/json/tfs each used to be
