@@ -409,6 +409,24 @@ this the obvious way), not from how much history it accumulated.
   W^X silently not applied -- **and every W^X KTEST stays green**,
   because they read the same symbol the code wrote. Only the KTEST that
   asks the CPU for CR3 catches it. See `docs/decisions.md`.
+- **A BLOCKED PROCESS WAITS ON A CHANNEL, AND A CHANNEL IS AN ADDRESS.**
+  `scheduler_block_current(regs, chan, reason)` parks on an address and
+  `scheduler_wake(chan, value)` releases exactly the processes parked on
+  that one -- so a waker names THE OBJECT that changed (`pipe_wait_chan(i)`,
+  `win_events_wait_chan(pid)`, `scheduler_wait_chan_pid(pid)`) and
+  nobody else is disturbed. It is FreeBSD's `tsleep`/`wakeup`; the
+  `SCHED_WAIT_*` values that used to decide a wake are now LABELS for
+  the `kstack` debug surface and are never matched. Four things to know.
+  **A channel must outlive the wait, so never park on a stack address.**
+  **A channel whose object is freed must have its waiters woken first**,
+  or they are parked on an address that means nothing -- the pipe close
+  paths are the worked example. **Waking somebody who is not ready is
+  still fine**: every waiter re-runs its syscall and re-parks, so a
+  spurious wake costs a syscall and never a wrong answer, which is what
+  makes one channel per pipe (rather than one per direction) correct.
+  And **the assertion that matters is that the OTHER waiter did not
+  wake** -- asserting only that A woke passes on the broken version too,
+  because it woke everybody. See `docs/decisions.md`.
 - **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
   The number in `abi/syscall_abi.h`, a handler in the subsystem that
   owns it (`kernel/proc/syscall_fd.c` for anything taking an fd,

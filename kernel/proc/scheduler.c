@@ -197,9 +197,13 @@ enum sched_state { SCHED_UNUSED = 0, SCHED_READY, SCHED_RUNNING, SCHED_ZOMBIE, S
 
 struct sched_process {
     enum sched_state state;
-    // What this process is parked on while SCHED_BLOCKED (one of
-    // scheduler.h's SCHED_WAIT_*), and the value its blocking syscall
-    // will return once woken. Both meaningless in any other state.
+    // What this process is parked on while SCHED_BLOCKED. The CHANNEL
+    // is what a wake matches -- an address naming the object waited on
+    // (see scheduler.h) -- and the REASON is a label carried purely so
+    // the `kstack` debug surface can print a word instead of a pointer.
+    // Nothing ever matches on the reason. Both meaningless in any other
+    // state.
+    const void *wait_chan;
     int wait_reason;
     uint64_t pml4_phys;
     uint64_t kernel_rsp; // this process's saved trapframe pointer --
@@ -714,6 +718,7 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_desc) {
     // to SCHED_UNUSED), and inheriting the last process's registers
     // would be both wrong and an information leak between processes.
     fpu_init_state(procs[slot].fpu);
+    procs[slot].wait_chan = 0;
     procs[slot].wait_reason = 0;
 
     // THE CHILD'S FILE DESCRIPTORS, built here because this is where
@@ -1010,7 +1015,86 @@ static void scheduler_rotate(uint64_t *regs) {
 // return is not an error the caller may ignore: it means "you must fall
 // back to non-blocking behaviour", because there is nowhere to put this
 // process to sleep.
-int scheduler_block_current(uint64_t *regs, int reason) {
+// The two global wait channels. Their CONTENTS are never read -- only
+// their addresses matter, which is the whole point of a channel. `char`
+// rather than `int` so each is guaranteed its own distinct address.
+const char sched_chan_key;
+const char sched_chan_timer;
+
+// A process's own channel, woken by ITS children when they exit. Using
+// the slot's address means the channel is stable for as long as the
+// slot is, and unique across processes without a second table.
+//
+// Note this is the slot's address, not the pid: a reaped slot that is
+// reused hands the new occupant the same channel, which is correct --
+// the old occupant is gone and cannot be waiting on it.
+const void *scheduler_wait_chan_pid(int pid) {
+    int idx = pid - 1;
+    if (idx < 0 || idx >= MAX_PROCS) return 0;
+    return &procs[idx];
+}
+
+// See scheduler.h for the two rules a caller must keep. Claims the
+// first free slot; -1 when the table is full. Deliberately does NOT
+// touch alive_count -- this slot holds no process, and counting it
+// would make the scheduler believe there is one more thing to run.
+int scheduler_test_park(uint64_t *tf, const void *chan) {
+    if (!tf) return -1;
+    for (int i = 0; i < MAX_PROCS; i++) {
+        if (procs[i].state != SCHED_UNUSED) continue;
+        procs[i].state = SCHED_BLOCKED;
+        procs[i].wait_chan = chan;
+        procs[i].wait_reason = 0;
+        procs[i].kernel_rsp = (uint64_t)tf;
+        return i;
+    }
+    return -1;
+}
+
+// Releases a slot parked above, in EITHER state: a woken one is READY,
+// and refusing to free that was the bug this comment exists to stop --
+// it would leave the scheduler a runnable slot whose trapframe is a
+// dead stack local.
+void scheduler_test_release(int idx) {
+    if (idx < 0 || idx >= MAX_PROCS) return;
+    if (procs[idx].state != SCHED_BLOCKED && procs[idx].state != SCHED_READY) return;
+    procs[idx].state = SCHED_UNUSED;
+    procs[idx].wait_chan = 0;
+    procs[idx].kernel_rsp = 0;
+}
+
+// Reported as PROC_STATE_*, never the internal enum: abi/proc_info.h
+// keeps those two enumerations deliberately separate (they do not even
+// agree on the value of BLOCKED), and a test asserting on the internal
+// one would silently start lying if it gained a state.
+int scheduler_test_state(int idx) {
+    if (idx < 0 || idx >= MAX_PROCS) return -1;
+    switch (procs[idx].state) { // dispatch-ok: bounded by enum sched_state
+    case SCHED_RUNNING: return PROC_STATE_RUNNING;
+    case SCHED_READY:   return PROC_STATE_READY;
+    case SCHED_BLOCKED: return PROC_STATE_BLOCKED;
+    case SCHED_ZOMBIE:  return PROC_STATE_ZOMBIE;
+    default:            return PROC_STATE_UNUSED;
+    }
+}
+
+_Static_assert(TF_RAX < SCHED_TF_SLOTS,
+               "a test trapframe must be big enough to hold the RAX slot a wake writes");
+_Static_assert(TF_RAX == SCHED_TF_RAX,
+               "scheduler.h's public RAX slot index must match the real trapframe layout");
+
+const char *sched_wait_reason_name(int reason) {
+    switch (reason) { // dispatch-ok: bounded by scheduler.h's SCHED_WAIT_* labels
+    case SCHED_WAIT_EVENT: return "event";
+    case SCHED_WAIT_PIPE:  return "pipe";
+    case SCHED_WAIT_CHILD: return "child";
+    case SCHED_WAIT_TIMER: return "timer";
+    case SCHED_WAIT_KEY:   return "key";
+    default:               return "?";
+    }
+}
+
+int scheduler_block_current(uint64_t *regs, const void *chan, int reason) {
     if (current_index < 0) return 0;
 
     bill_current(); // this slice ends here -- see bill_current()
@@ -1019,6 +1103,7 @@ int scheduler_block_current(uint64_t *regs, int reason) {
     kstack_verify(idx);
     fpu_save(procs[idx].fpu);
     procs[idx].state = SCHED_BLOCKED;
+    procs[idx].wait_chan = chan;
     procs[idx].wait_reason = reason;
     current_index = -1;
 
@@ -1040,7 +1125,7 @@ int scheduler_block_current(uint64_t *regs, int reason) {
 int scheduler_sleep_current(uint64_t *regs, uint64_t wake_at_ns) {
     if (current_index < 0) return 0;
     procs[current_index].wake_at_ns = wake_at_ns;
-    return scheduler_block_current(regs, SCHED_WAIT_TIMER);
+    return scheduler_block_current(regs, SCHED_CHAN_TIMER, SCHED_WAIT_TIMER);
 }
 
 // The deadline-aware counterpart of scheduler_wake(), called once per
@@ -1059,7 +1144,7 @@ int scheduler_wake_timers(uint64_t now_ns) {
     int woken = 0;
     for (int i = 0; i < MAX_PROCS; i++) {
         if (procs[i].state != SCHED_BLOCKED) continue;
-        if (procs[i].wait_reason != SCHED_WAIT_TIMER) continue;
+        if (procs[i].wait_chan != SCHED_CHAN_TIMER) continue;
         if (procs[i].wake_at_ns > now_ns) continue;
 
         uint64_t *tf = (uint64_t *)(uintptr_t)procs[i].kernel_rsp;
@@ -1082,11 +1167,11 @@ int scheduler_wake_timers(uint64_t now_ns) {
 // picks it up. That restraint is deliberate: an IRQ handler that tried
 // to switch directly to the woken process is exactly the reentrancy
 // this design exists to avoid.
-int scheduler_wake(int reason, int64_t value) {
+int scheduler_wake(const void *chan, int64_t value) {
     int woken = 0;
     for (int i = 0; i < MAX_PROCS; i++) {
         if (procs[i].state != SCHED_BLOCKED) continue;
-        if (procs[i].wait_reason != reason) continue;
+        if (procs[i].wait_chan != chan) continue;
 
         // The saved trapframe's RAX slot IS the syscall's return value:
         // isr_common's epilogue pops it straight into the register the
@@ -1122,12 +1207,12 @@ void scheduler_on_exit(int code) {
     // slot -- see reparent_children() for why that ordering matters.
     reparent_children(current_index + 1);
 
-    // A parent blocked in SYS_WAITPID has to hear about this. Waking
-    // every child-waiter rather than only this one's parent is the
-    // same "name the event, not the waiter" rule the wait reasons
-    // follow -- each woken parent re-checks its own child and parks
-    // again if it was somebody else's that exited.
-    scheduler_wake(SCHED_WAIT_CHILD, SYS_RETRY);
+    // A parent blocked in SYS_WAITPID has to hear about this -- and
+    // ONLY that parent. This used to wake every child-waiter in the
+    // system, each to re-check its own children and park again; the
+    // channel is the parent's slot, so an exit reaches exactly the
+    // process that might care.
+    scheduler_wake(scheduler_wait_chan_pid(procs[current_index].ppid), SYS_RETRY);
 
     // The write end that turns a parent's blocking read into EOF is
     // closed by fd_release_all() now, along with every other
@@ -1265,7 +1350,7 @@ static void reparent_children(int dead_pid) {
     // which case it was told "never" and is asleep on a timer instead.
     // Waking child-waiters here is what turns adoption into a reap
     // rather than a slot that frees at init's next poll.
-    if (heir) scheduler_wake(SCHED_WAIT_CHILD, SYS_RETRY);
+    if (heir) scheduler_wake(scheduler_wait_chan_pid(heir), SYS_RETRY);
 }
 
 // Give `pid` a new parent. 0 means "no parent".
@@ -1344,7 +1429,7 @@ int scheduler_kill(int pid, int exit_code) {
     // off the screen now rather than at reap, or a dead process leaves a
     // window drawing stale pixels and answering no input.
     win_server_client_gone(pid);
-    scheduler_wake(SCHED_WAIT_CHILD, SYS_RETRY);
+    scheduler_wake(scheduler_wait_chan_pid(procs[slot].ppid), SYS_RETRY);
 
     // The victim's memory goes NOW, not at reap. A zombie exists to
     // hold an exit code for whoever waits on it; holding an entire

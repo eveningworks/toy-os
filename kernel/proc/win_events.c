@@ -72,15 +72,25 @@ int win_events_push(int pid, const struct win_event *ev) {
     q->ring[tail] = *ev;
     q->count++;
 
-    // Wake anything parked in SYS_WAIT_EVENT. The woken syscall returns
+    // Wake THIS CLIENT, and only this client. The woken syscall returns
     // 0 ("try again"), NOT the event itself -- the event lives in
     // kernel memory and the client's buffer is in an address space that
     // is not current here (this may be running in an IRQ under some
     // other process's CR3), so the copy has to happen back inside the
     // client's own syscall. See syscall.c's SYS_WAIT_EVENT handler.
-    scheduler_wake(SCHED_WAIT_EVENT, 0);
+    //
+    // The channel is this queue's address. It used to be the category
+    // SCHED_WAIT_EVENT, which woke every process blocked in
+    // SYS_WAIT_EVENT -- so one client's keystroke woke all of them, each
+    // to pop an empty queue and park again. That is the thundering herd,
+    // on the busiest path in the system: every mouse MOVE hit it.
+    scheduler_wake(q, 0);
     return 1;
 }
+
+// This client's wait channel -- see scheduler.h. The queue's own
+// address, so a wake reaches exactly the process whose queue grew.
+const void *win_events_wait_chan(int pid) { return queue_for(pid); }
 
 int win_events_pop(int pid, struct win_event *out) {
     struct event_queue *q = queue_for(pid);

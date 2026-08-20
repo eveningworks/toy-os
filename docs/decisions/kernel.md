@@ -3459,3 +3459,115 @@ rather than in the shape a setting prints in, because the two have
 different lifetimes: a setting survives a reboot and a fact does not
 EXIST between them. A reader who cannot tell which they just read has
 been told something misleading, however correct the number is.
+
+## A wait channel is an ADDRESS, not a category
+
+`scheduler_wake(chan, value)` releases the processes parked on one
+address. A waiter names the object it is waiting for -- this pipe, this
+client's event queue, this process's own slot -- and nobody else is
+disturbed.
+
+It used to be a category. `wait_reason` was a small enum
+(`SCHED_WAIT_EVENT`, `SCHED_WAIT_PIPE`, ...) and a wake released
+everything in it, with the header arguing the case in as many words:
+"it names the EVENT that happened and every process parked on it
+wakes." That is correct -- every woken process re-runs its syscall and
+re-parks if it is still not ready, so a spurious wake costs a syscall
+and never a wrong answer -- and it is O(waiters) per event on the two
+busiest paths in the system. `win_events_push()` queues an event for ONE
+pid and then woke every process blocked in `SYS_WAIT_EVENT`, so with N
+windows open every keystroke and every mouse MOVE woke all N clients,
+each to pop an empty queue and park again. Pipes had the same shape: a
+write to one pipe woke the readers of every other.
+
+**Why an address rather than a wait queue.** The three real designs:
+
+- **Linux** embeds a `wait_queue_head_t` in the object (pipe, inode,
+  socket) and `wake_up()` walks that object's list. It also carries
+  `WQ_FLAG_EXCLUSIVE`, which exists precisely to stop thundering herds
+  on `accept()`.
+- **Windows NT** gives every waitable thing a dispatcher header with its
+  own wait list, and `KeWaitForSingleObject` queues onto it.
+- **FreeBSD** has no per-object structure at all: `tsleep(chan)` /
+  `wakeup(chan)` take an arbitrary address and hash it into sleepqueues.
+
+FreeBSD's is the shape taken, because this scheduler already walks a
+fixed `procs[]` array on every wake. Per-object wakeups therefore cost
+one POINTER compare where the enum cost one INT compare -- there is
+nothing to allocate, nothing to initialise in each waitable object, and
+nothing to tear down when one is freed. Linux's and NT's designs buy
+ordering and exclusive wakeups, and neither is needed by a uniprocessor
+kernel whose waker already holds every slot in one array. Copy the
+shape, not the size.
+
+**The two rules a channel must obey**, both consequences of it being a
+bare address. It must OUTLIVE the wait, so a stack address is never a
+channel -- the frame is gone by the time anyone wakes it. And a channel
+whose object is freed must have its waiters woken first, or they are
+parked on an address that no longer means anything; the per-object wake
+sites sit next to the teardown that frees them for this reason
+(`pipe_close_reader()`/`pipe_close_writer()` are the worked example).
+
+**`wait_reason` still exists, and is never matched.** It is a label, so
+the `kstack` debug surface can print "pipe" instead of a pointer. Keeping
+it is not the rejected "encode the fact twice" option: nothing decides a
+wake from it, and it is free to be wrong without affecting behaviour.
+
+**What made the change testable** is `scheduler_test_park()`, which
+fabricates a blocked slot. The property is selectivity, and it needs two
+processes blocked on different channels at one instant -- a race to
+arrange with real processes. Two rules make fabricating safe, and both
+were learned by getting them wrong first: hold `scheduler_preempt_disable()`
+across the window (a woken fabricated slot is READY, so the scheduler
+would otherwise switch to it and `iretq` through a stack local), and
+RELEASE BEFORE ASSERTING (a `KTEST_ASSERT` returns from the body, so an
+assertion made while a slot is fabricated leaks exactly the READY slot
+the first rule exists to prevent). The first version instead refused
+unless the process table was empty, which was safe and useless: the
+default boot is graphical, so the one test that matters skipped on every
+ordinary run.
+
+## `FS_OP()` is a preemption guard and NOT a sleeping lock, because syscalls run with interrupts OFF
+
+The recurring proposal is to replace `vfs.c`'s
+`scheduler_preempt_disable()`/`_enable()` pair with a real mutex, so the
+machine keeps running during disk I/O. `docs/roadmap.md` carries it as
+an item. It does not work, and the reason is worth writing down because
+the argument for it is superficially very strong.
+
+**`int 0x80` goes through an INTERRUPT gate** -- `idt_set_gate(128,
+isr128, 0, 0xEE)`, type `0xE` -- so the CPU clears IF on entry and
+interrupts are off for the whole syscall. `kernel/drivers/ata.c`'s
+`wait_dma_irq()` is built around this: it polls the Bus-Master status
+register rather than blocking, because `hlt` there would park forever
+with not even the timer able to tick, and `sti`-then-block is the
+`g_next_kernel_rsp` reentrancy bug this kernel has already been bitten
+by.
+
+Three consequences, in order of how badly they break the idea:
+
+1. **A spin lock would HANG.** A contender inside a syscall cannot be
+   preempted -- no tick -- so the holder never runs and the wait never
+   ends. Not slow: deadlocked.
+2. **A sleeping lock cannot live where the guard lives.** Parking a
+   caller needs the syscall's saved trapframe, and no `fs_*` entry point
+   takes one; this kernel blocks by descheduling and RE-RUNNING the
+   syscall, not by switching kernel stacks the way Linux's
+   `mutex_lock()` → `schedule()` does. Twenty-five files call the
+   filesystem -- `elf.c`, `scheduler.c`, `tz.c`, `keyboard_layout.c`,
+   `etc_config.c`, ATA code, KTESTs -- and most have neither a trapframe
+   nor a scheduler slot.
+3. **The benefit was misattributed.** "Every disk read freezes the
+   machine" is true, and the guard is not what causes it: a ring-3
+   syscall is already atomic because IF is 0. The guard only adds
+   serialization for KERNEL-CONTEXT callers, which run with interrupts
+   on and are genuinely preemptible -- and that is exactly the
+   interleaving its own comment describes, the WM and an app both
+   reading files. Swapping it for a lock would change nothing for the
+   syscall path.
+
+**So the real item is INTERRUPTIBLE SYSCALLS** -- a trap gate (`0xEF`)
+plus retiring `g_next_kernel_rsp` as a single global -- and a sleeping
+lock is a consequence of that, not an alternative to it. The guard stays
+until then. Recorded because the lock is an obvious-looking change that
+survives every argument except reading the gate type.

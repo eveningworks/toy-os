@@ -253,7 +253,7 @@ sys_do_read_pipe(uint64_t *regs, uint64_t pml4, int pipe_idx,
         regs[14] = (uint64_t)(int64_t)-EFAULT;
     } else if (n >= 0) {
         regs[14] = (uint64_t)n; // bytes, or 0 for EOF
-    } else if (!scheduler_block_current(regs, SCHED_WAIT_PIPE)) {
+    } else if (!scheduler_block_current(regs, pipe_wait_chan(pipe_idx), SCHED_WAIT_PIPE)) {
         // Nowhere to park (kernel code or the legacy path). Report EOF
         // rather than spinning: a caller that cannot block must not be
         // told "try again forever".
@@ -303,7 +303,7 @@ sys_do_read_console(uint64_t *regs, uint64_t pml4, uint64_t buf_ptr, uint64_t le
     // simply gets nothing until the desktop exits, which is exactly what
     // the kernel shell behind the desktop already does.
     if (keyboard_compositor_owns()) {
-        if (scheduler_block_current(regs, SCHED_WAIT_KEY)) return 1;
+        if (scheduler_block_current(regs, SCHED_CHAN_KEY, SCHED_WAIT_KEY)) return 1;
         regs[14] = (uint64_t)SYS_RETRY;
         return 0;
     }
@@ -334,7 +334,7 @@ sys_do_read_console(uint64_t *regs, uint64_t pml4, uint64_t buf_ptr, uint64_t le
     if (got == 0) {
         // Nothing queued. Park rather than report EOF: a console has no
         // end of file, and 0 would tell a shell its input had closed.
-        if (scheduler_block_current(regs, SCHED_WAIT_KEY)) return 1;
+        if (scheduler_block_current(regs, SCHED_CHAN_KEY, SCHED_WAIT_KEY)) return 1;
         // Nowhere to park -- kernel code, or the legacy loader's single
         // slot. Answer "nothing yet" the only way a non-blocking caller
         // can be answered, rather than lying about end of input.
@@ -413,7 +413,7 @@ sys_do_write_pipe(uint64_t *regs, uint64_t pml4, int pipe_idx,
         int64_t n = pipe_write(pipe_idx, kbuf, (uint32_t)len);
         if (n >= 0) {
             regs[14] = (uint64_t)n; // all of it, or 0 for "no readers left"
-        } else if (!scheduler_block_current(regs, SCHED_WAIT_PIPE)) {
+        } else if (!scheduler_block_current(regs, pipe_wait_chan(pipe_idx), SCHED_WAIT_PIPE)) {
             // Nowhere to park -- kernel code, or the legacy loader.
             // Report 0 rather than spinning, for the same reason the
             // read side reports EOF there: a caller that cannot block

@@ -377,7 +377,7 @@ static int event_get(struct syscall_ctx *c, int blocking) {
             // write the return value (0, "ask again") straight into
             // the trapframe saved here. Writing it now would
             // clobber that.
-            if (!scheduler_block_current(c->regs, SCHED_WAIT_EVENT)) {
+            if (!scheduler_block_current(c->regs, win_events_wait_chan(pid), SCHED_WAIT_EVENT)) {
                 c->regs[14] = (uint64_t)(int64_t)-EPERM; // couldn't park -- see above
             } else {
                 // Parked. c->regs[14] is NOT this call's return value

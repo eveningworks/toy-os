@@ -341,7 +341,7 @@ int sys_waitpid(struct syscall_ctx *c) {
             c->regs[14] = (uint64_t)(int64_t)-ECHILD;
         } else if (c->a2 & SYS_WNOHANG) {
             c->regs[14] = (uint64_t)(int64_t)SYS_RETRY;
-        } else if (!scheduler_block_current(c->regs, SCHED_WAIT_CHILD)) {
+        } else if (!scheduler_block_current(c->regs, scheduler_wait_chan_pid(scheduler_current_pid()), SCHED_WAIT_CHILD)) {
             c->regs[14] = (uint64_t)(int64_t)-EPERM; // nowhere to park -- not a scheduled process
         } else {
             return 1; // parked -- the wake writes the return value
@@ -374,7 +374,7 @@ int sys_waitpid(struct syscall_ctx *c) {
             // handler, so "still running" and "park" are atomic
             // against the exit that would wake us -- the same
             // lost-wakeup argument as SYS_WAIT_EVENT.
-            if (!scheduler_block_current(c->regs, SCHED_WAIT_CHILD)) {
+            if (!scheduler_block_current(c->regs, scheduler_wait_chan_pid(scheduler_current_pid()), SCHED_WAIT_CHILD)) {
                 c->regs[14] = (uint64_t)(int64_t)-EPERM; // nowhere to park
             } else {
                 return 1;

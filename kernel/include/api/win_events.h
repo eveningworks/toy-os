@@ -32,6 +32,10 @@ int win_events_push(int pid, const struct win_event *ev);
 // waiting, 0 if the queue is empty or `pid` is bad.
 int win_events_pop(int pid, struct win_event *out);
 
+// The wait channel a client parks on for its own events. 0 for a pid
+// with no queue.
+const void *win_events_wait_chan(int pid);
+
 // How many events are queued for `pid` (0 for a bad pid). For tests and
 // `gui state`, not for delivery decisions.
 int win_events_pending(int pid);

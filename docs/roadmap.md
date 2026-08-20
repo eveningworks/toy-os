@@ -41,10 +41,11 @@ and job control is what a terminal on that TTY makes possible.
 
 ### Scheduler: blocking, priorities, classes
 
-- [ ] Blocking + wait queues
+- [x] ~~Blocking + wait queues~~ DONE 2026-08-20 -- a wait channel is an ADDRESS, so a wake reaches one pipe/client, not a category
 - [ ] Retire `uapp_desc.tick_ms` as a REQUIREMENT
 - [ ] Two scheduling classes, Linux-shaped
-- [ ] Replace the preemption guard with a real sleeping lock
+- [ ] **Interruptible syscalls** -- a trap gate plus retiring `g_next_kernel_rsp` as a single global
+- [ ] Replace the preemption guard with a real sleeping lock -- **Needs:** interruptible syscalls, above
 - [ ] Bound how long a frame can block on I/O
 
 ### Signals & process control

@@ -224,25 +224,71 @@ enum sched_poll_result {
 // reaped.
 enum sched_poll_result scheduler_poll(int pid, int *out_exit_code);
 
-// What a blocked process is waiting for. One flat namespace rather than
-// a per-subsystem one, so a wake site never has to know which flavour
-// of waiter it is answering -- it names the EVENT that happened and
-// every process parked on it wakes.
+// A BLOCKED PROCESS WAITS ON A CHANNEL, AND A CHANNEL IS JUST AN
+// ADDRESS. `scheduler_wake(chan, value)` releases exactly the processes
+// parked on that address -- so a waker names THE OBJECT that changed
+// (this pipe, this client's event queue) rather than a category, and
+// nobody else is disturbed.
+//
+// This is FreeBSD's `tsleep(chan)`/`wakeup(chan)`, chosen over Linux's
+// embedded `wait_queue_head_t` and NT's dispatcher headers because it
+// needs no data structure at all: the scheduler already walks a fixed
+// `procs[]` array, so per-object wakeups cost one pointer compare
+// instead of one enum compare. There is nothing to allocate, nothing to
+// initialise in each waitable object, and nothing to tear down.
+//
+// WHAT IT REPLACED, because the bug is the reason this exists: waiting
+// used to be by CATEGORY, and a wake released every process in it. An
+// event queued for ONE client woke every process blocked in
+// SYS_WAIT_EVENT -- so with N windows open, every keystroke and every
+// mouse move woke all N, each to re-check its own queue, find nothing,
+// and park again. Pipes had the same shape: a write to one pipe woke
+// the readers of every other. That is the thundering herd, in the two
+// hottest paths in the system.
+//
+// A channel must be an address that OUTLIVES the wait and is unique to
+// what is being waited for. Two rules follow. **Never park on a stack
+// address** -- the frame is gone by the time anyone wakes it. And **a
+// channel whose object is freed must have its waiters woken first**,
+// or they wait on an address that no longer means anything; the
+// per-object wake sites all sit next to the teardown that frees them.
+
+// The channels for events that are genuinely global -- there is one
+// physical keyboard, and one timer. Addresses of unique objects; their
+// contents are never read.
+extern const char sched_chan_key;   // a keystroke on the physical console (fd 0)
+extern const char sched_chan_timer; // a deadline a sleeper asked for
+#define SCHED_CHAN_KEY   ((const void *)&sched_chan_key)
+#define SCHED_CHAN_TIMER ((const void *)&sched_chan_timer)
+
+// The channel a process's own children wake when they exit, so a
+// `waitpid` parent is woken by ITS child rather than by every exit in
+// the system. 0 for a pid with no slot.
+const void *scheduler_wait_chan_pid(int pid);
+
+// What a blocked process is waiting for, as a LABEL for the `kstack`
+// debug surface. Never matched against anything: a wake is decided
+// purely by channel, and these exist so a diagnostic can print a word
+// instead of a pointer. Keep them in step with sched_wait_reason_name().
 #define SCHED_WAIT_EVENT 1 // a window/input event for this process
 #define SCHED_WAIT_PIPE  2 // data (or EOF) on a pipe this process reads
 #define SCHED_WAIT_CHILD 3 // a spawned child of this process exited
 #define SCHED_WAIT_TIMER 4 // a deadline this process asked to sleep until
 #define SCHED_WAIT_KEY   5 // a keystroke on the physical console (fd 0)
 
+// The label above as a word, for diagnostics. Never 0 -- an unknown
+// reason reports "?" rather than being left to a caller to handle.
+const char *sched_wait_reason_name(int reason);
+
 // Parks the caller until clocksource_now_ns() reaches `wake_at_ns`, the
 // SYS_SLEEP half of the block/wake pair above. Same contract as
 // scheduler_block_current() -- 1 means parked (do not touch regs), 0
 // means the caller has no slot and must not sleep.
 //
-// The deadline is per process rather than a shared wake reason, because
-// scheduler_wake() releases EVERY process parked on a reason and two
-// sleepers rarely want the same instant. scheduler_wake_timers() below
-// is the matching, deadline-aware release.
+// The deadline is per process rather than a channel of its own, because
+// two sleepers rarely want the same instant: they share
+// SCHED_CHAN_TIMER and scheduler_wake_timers() releases only the ones
+// whose deadline has actually passed.
 int scheduler_sleep_current(uint64_t *regs, uint64_t wake_at_ns);
 
 // Wakes every sleeper whose deadline has passed. Called once per timer
@@ -261,9 +307,10 @@ int scheduler_wake_timers(uint64_t now_ns);
 int scheduler_init_pid(void);
 void scheduler_set_init_pid(int pid);
 
-// Parks the calling process until scheduler_wake() names its `reason`,
+// Parks the calling process until scheduler_wake() names its `chan`,
 // and hands the CPU to whatever is next. `regs` must be the syscall
-// handler's own trapframe pointer.
+// handler's own trapframe pointer; `reason` is a SCHED_WAIT_* label
+// used only by diagnostics, never to decide a wake.
 //
 // A blocking syscall in this kernel MUST go through this rather than
 // waiting in place with interrupts on -- that was tried, and hangs
@@ -402,17 +449,56 @@ int scheduler_reparent(int pid, int new_ppid);
 // How many slots that table has. The bound for the loop above.
 int scheduler_max_procs(void);
 
-int scheduler_block_current(uint64_t *regs, int reason);
+int scheduler_block_current(uint64_t *regs, const void *chan, int reason);
 
-// Wakes every process blocked on `reason`, handing each `value` as its
+// Wakes every process blocked on `chan`, handing each `value` as its
 // blocking syscall's return value. Returns the number woken; 0 just
-// means nobody was waiting.
+// means nobody was waiting -- which is normal and not an error, since
+// a waker cannot know whether anyone happened to be parked.
 //
 // Safe from an interrupt handler, and deliberately limited to make that
 // true: it only flips state and writes an already-saved trapframe, and
 // never touches g_next_kernel_rsp, so the woken process runs at the
 // next ordinary tick rather than being switched to from inside an IRQ.
-int scheduler_wake(int reason, int64_t value);
+int scheduler_wake(const void *chan, int64_t value);
+
+// --- TEST SUPPORT, for kernel/proc/sched_test.c ----------------------
+//
+// Wake SELECTIVITY is the property the wait channels exist for, and it
+// cannot be asserted from outside: it needs two processes blocked on
+// different channels at the same instant, and a KTEST runs on the
+// kernel context where getting two real ring-3 processes to park at a
+// chosen moment is a race, not a test. These park a slot directly.
+//
+// `scheduler_test_park()` CLAIMS A FREE SLOT and returns its index, or
+// -1 if there is none. Two rules make that safe with a desktop running,
+// and both are the caller's to keep:
+//
+//   1. **Hold `scheduler_preempt_disable()` across the whole window.**
+//      Otherwise a spawn can take the slot being fabricated, and -- far
+//      worse -- once a fabricated slot is woken it is READY, so the
+//      scheduler would switch to it and iretq through a trapframe that
+//      is a local array rather than a real saved frame.
+//   2. **Release before asserting.** A KTEST_ASSERT returns from the
+//      test body, so an assertion made while a slot is still fabricated
+//      leaks a READY slot with a fake frame on the failure path -- the
+//      exact crash rule 1 exists to prevent, reintroduced by the error
+//      handling. Capture what you need, release, then assert.
+//
+// The earlier version of these refused unless the process table was
+// EMPTY, which was safe and useless: the default boot is graphical, so
+// the one test that matters skipped on every ordinary run.
+//
+// `tf` must point at storage of at least SCHED_TF_SLOTS uint64_t that
+// OUTLIVES the park, because a wake writes the return value into it.
+#define SCHED_TF_SLOTS 16
+// Where a wake writes the return value, so a test can read it back.
+// Checked against the real trapframe layout by a _Static_assert.
+#define SCHED_TF_RAX 14
+int  scheduler_test_park(uint64_t *tf, const void *chan);
+void scheduler_test_release(int idx);
+// The state of one slot, as a PROC_STATE_* value. -1 for a bad index.
+int  scheduler_test_state(int idx);
 
 // The kernel's own "while I have nothing else to do" work, in ONE
 // place. Call it from any loop that is waiting rather than working;

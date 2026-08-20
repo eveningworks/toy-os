@@ -482,6 +482,7 @@ whenever a headline here tells you something you did not already know.
 - **The ring-3 address-space map is `kernel/include/kernel/uaddr.h`, stated once.**
 - **The kernel heap has a debug mode, and it is a RUNTIME toggle**
 - **The kernel RELOCATES ITSELF at boot -- it is not running where it was linked.**
+- **A BLOCKED PROCESS WAITS ON A CHANNEL, AND A CHANNEL IS AN ADDRESS.**
 - **ADDING A SYSCALL IS THREE EDITS, AND ONE OF THEM IS A TABLE ROW.**
 
 ### GUI, Toykit and the desktop

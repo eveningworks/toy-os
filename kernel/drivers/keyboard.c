@@ -87,7 +87,7 @@ static void ring_push(uint16_t c) {
     // ring-0 blocking reader and with win_input.c, so a woken reader may
     // find the key already gone. SYS_RETRY is the wake value, so that
     // case simply parks again rather than reporting a spurious EOF.
-    scheduler_wake(SCHED_WAIT_KEY, SYS_RETRY);
+    scheduler_wake(SCHED_CHAN_KEY, SYS_RETRY);
 }
 
 static int ring_pop(uint32_t *out) {

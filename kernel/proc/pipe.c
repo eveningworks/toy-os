@@ -26,6 +26,11 @@ static struct pipe *at(int idx) {
 
 int pipe_valid(int idx) { return at(idx) != NULL; }
 
+// This pipe's wait channel -- see scheduler.h. The struct's own address,
+// so a waiter and a waker name the same thing without a second table,
+// and a write to one pipe cannot wake the readers of another.
+const void *pipe_wait_chan(int idx) { return at(idx); }
+
 int pipe_create(void) {
     for (int i = 0; i < PIPE_MAX; i++) {
         if (pipes[i].used) continue;
@@ -64,7 +69,7 @@ void pipe_close_reader(int idx) {
         // whose reader then died would wait forever for room that can
         // never be made -- a hang rather than the dropped write pipe.h
         // documents.
-        scheduler_wake(SCHED_WAIT_PIPE, SYS_RETRY);
+        scheduler_wake(p, SYS_RETRY);
     }
     release_if_orphaned(p);
 }
@@ -77,7 +82,7 @@ void pipe_close_writer(int idx) {
         // The last writer going away is what turns a blocking read into
         // EOF. A reader parked right now would otherwise wait forever
         // for data that can no longer arrive.
-        scheduler_wake(SCHED_WAIT_PIPE, SYS_RETRY);
+        scheduler_wake(p, SYS_RETRY);
     }
     release_if_orphaned(p);
 }
@@ -115,7 +120,7 @@ int64_t pipe_write(int idx, const char *src, uint32_t len) {
 
     // Wake any parked reader. Harmless when none is: scheduler_wake()
     // returns 0 and does nothing.
-    if (written > 0) scheduler_wake(SCHED_WAIT_PIPE, SYS_RETRY);
+    if (written > 0) scheduler_wake(p, SYS_RETRY);
     return written;
 }
 
@@ -140,10 +145,12 @@ int64_t pipe_read(int idx, char *dst, uint32_t len) {
     }
 
     // Draining makes room, so a WRITER parked on a full pipe can now
-    // proceed. Readers and writers share SCHED_WAIT_PIPE and this wakes
-    // both -- which is correct rather than merely tolerable: every
-    // waiter re-runs its syscall and re-parks if it is still not ready,
-    // so a spurious wake costs a syscall and never a wrong answer.
-    if (n > 0) scheduler_wake(SCHED_WAIT_PIPE, SYS_RETRY);
+    // proceed. Readers and writers share THIS PIPE's channel and this
+    // wakes both -- which is correct rather than merely tolerable:
+    // every waiter re-runs its syscall and re-parks if it is still not
+    // ready, so a spurious wake costs a syscall and never a wrong
+    // answer. What it no longer does is disturb the readers of OTHER
+    // pipes, which is what a shared category channel did.
+    if (n > 0) scheduler_wake(p, SYS_RETRY);
     return n;
 }

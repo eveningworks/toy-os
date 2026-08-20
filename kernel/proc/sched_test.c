@@ -13,6 +13,10 @@
 // driven from the serial console that CI runs through at all.
 #include "ktest.h"
 #include "scheduler.h"
+#include "pipe.h"        // pipe_wait_chan() -- one channel per pipe
+#include "win_events.h" // win_events_wait_chan() -- one channel per client
+#include "proc_info.h"  // PROC_STATE_*
+#include <stddef.h>
 #include "timer.h"
 #include "elf_run.h" // elf_run_from_fs() -- the legacy blocking path
 #include "fs.h"
@@ -190,4 +194,96 @@ KTEST("sched", "the guard page is BELOW the stack, not inside it") {
     // Slot 1's stack starts a whole stack plus a whole guard above
     // slot 0's, which is what leaves room for a guard between them.
     KTEST_ASSERT_EQ(b1 - b0, (uint64_t)scheduler_kstack_kib() * 1024 + 4096);
+}
+
+// --- wait channels ---------------------------------------------------
+//
+// The property these assert is SELECTIVITY: a wake reaches the channel
+// it names and nothing else. Waiting used to be by category, so one
+// client's event woke every process blocked in SYS_WAIT_EVENT and one
+// pipe's write woke the readers of every other -- correct, because each
+// re-checked and re-parked, but O(waiters) wakeups per event on the two
+// busiest paths in the system.
+//
+// Note what a WEAKER version of this test would still pass: asserting
+// only that A woke proves nothing, because the broken implementation
+// woke everybody and therefore also woke A. The load-bearing assertion
+// is that B is STILL BLOCKED.
+
+KTEST("sched", "a wake reaches only the channel it names") {
+    uint64_t tf_a[SCHED_TF_SLOTS] = {0}, tf_b[SCHED_TF_SLOTS] = {0};
+    static const char chan_a, chan_b; // two distinct addresses
+
+    // Preemption OFF for the whole fabricated window -- see
+    // scheduler.h. Nothing may spawn into these slots, and nothing may
+    // try to RUN one once the wake below marks it READY.
+    scheduler_preempt_disable();
+
+    int a = scheduler_test_park(tf_a, &chan_a);
+    int b = scheduler_test_park(tf_b, &chan_b);
+
+    // Everything is captured, then the slots are released, and only
+    // then is anything asserted: KTEST_ASSERT returns from the body, so
+    // asserting here would leak a READY slot with a stack-local
+    // trapframe on the failure path.
+    int woke_a = -1, woke_b = -1;
+    int state_a = -1, state_b = -1, state_b_after = -1;
+    int64_t rax_a = -1, rax_b = -1, rax_b_after = -1;
+
+    if (a >= 0 && b >= 0) {
+        woke_a      = scheduler_wake(&chan_a, 4242);
+        state_a     = scheduler_test_state(a);
+        state_b     = scheduler_test_state(b);
+        rax_a       = (int64_t)tf_a[SCHED_TF_RAX];
+        rax_b       = (int64_t)tf_b[SCHED_TF_RAX];
+
+        woke_b      = scheduler_wake(&chan_b, 7);
+        state_b_after = scheduler_test_state(b);
+        rax_b_after   = (int64_t)tf_b[SCHED_TF_RAX];
+    }
+
+    scheduler_test_release(a);
+    scheduler_test_release(b);
+    scheduler_preempt_enable();
+
+    if (a < 0 || b < 0) KTEST_SKIP("no free process slots to fabricate");
+
+    KTEST_ASSERT_EQ(woke_a, 1);                      // exactly one, not both
+    KTEST_ASSERT_EQ(state_a, PROC_STATE_READY);      // A woke
+    KTEST_ASSERT_EQ(state_b, PROC_STATE_BLOCKED);    // <- THE POINT: B did not
+    KTEST_ASSERT_EQ(rax_a, 4242);                    // and A was answered
+    KTEST_ASSERT_EQ(rax_b, 0);                       // and B was not
+
+    KTEST_ASSERT_EQ(woke_b, 1);
+    KTEST_ASSERT_EQ(state_b_after, PROC_STATE_READY);
+    KTEST_ASSERT_EQ(rax_b_after, 7);
+}
+
+KTEST("sched", "a wake on a channel nobody holds wakes nothing") {
+    static const char lonely;
+    // 0 is a normal answer, not an error: a waker cannot know whether
+    // anybody happened to be parked.
+    KTEST_ASSERT_EQ(scheduler_wake(&lonely, 1), 0);
+}
+
+KTEST("sched", "every waitable object has its own channel") {
+    // Selectivity above is only worth anything if the channels actually
+    // differ -- a per-object wake whose objects share an address is the
+    // category wake again, wearing a pointer.
+    KTEST_ASSERT(scheduler_wait_chan_pid(1) != scheduler_wait_chan_pid(2));
+    KTEST_ASSERT(win_events_wait_chan(1) != win_events_wait_chan(2));
+    KTEST_ASSERT(SCHED_CHAN_KEY != SCHED_CHAN_TIMER);
+    KTEST_ASSERT(SCHED_CHAN_KEY != scheduler_wait_chan_pid(1));
+
+    int a = pipe_create(), b = pipe_create();
+    if (a >= 0 && b >= 0) {
+        KTEST_ASSERT(pipe_wait_chan(a) != pipe_wait_chan(b));
+        KTEST_ASSERT(pipe_wait_chan(a) != 0);
+    }
+    if (a >= 0) { pipe_close_reader(a); pipe_close_writer(a); }
+    if (b >= 0) { pipe_close_reader(b); pipe_close_writer(b); }
+
+    // A bad pid has no channel, rather than aliasing slot 0's.
+    KTEST_ASSERT_EQ(scheduler_wait_chan_pid(0), NULL);
+    KTEST_ASSERT_EQ(scheduler_wait_chan_pid(99999), NULL);
 }

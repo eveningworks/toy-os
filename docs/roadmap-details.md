@@ -2904,3 +2904,28 @@ refer to them by number.
       from the OLD image and only ever jumping into the new one at the
       end, in the two lines of assembly that adjust `rsp` and the call
       target.
+
+### Interruptible syscalls
+
+`int 0x80` runs through an INTERRUPT gate (`idt_set_gate(128, isr128, 0,
+0xEE)`), so IF is clear for the whole syscall and a ring-3 process
+cannot be preempted inside one. That is what actually freezes the
+machine during disk I/O -- not `vfs.c`'s preemption guard -- and it is
+why `ata.c`'s `wait_dma_irq()` polls the Bus-Master status register
+instead of blocking.
+
+The work is a trap gate (`0xEF`, leaving IF set) plus the reason that was
+unsafe before: `g_next_kernel_rsp` (idt.c) is a single global "where to
+resume" pointer, so a nested interrupt overwrites it while an outer
+`int 0x80` handler is still on the stack. That bug has been hit twice
+here -- once for `SYS_READ_KEY`, once during the ring-3 GUI migration --
+and descheduling was adopted specifically to sidestep it rather than fix
+it. Making syscalls interruptible means finally making it per-context.
+
+It unlocks three things below it: a real sleeping lock in place of the
+FS preemption guard, bounding how long a frame can block on I/O, and
+`hlt`-based waiting inside a syscall instead of polling.
+
+See `docs/decisions.md`'s entry on why `FS_OP()` is not a sleeping lock,
+which records the full measurement -- including that a spin lock inside a
+syscall would deadlock rather than merely wait.

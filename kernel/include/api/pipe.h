@@ -26,6 +26,10 @@
 // than raising anything. Both are recorded in the roadmap instead of
 // being half-implemented here.
 
+// This pipe's wait channel, for a caller that needs to park on it.
+// 0 for an invalid index.
+const void *pipe_wait_chan(int idx);
+
 #define PIPE_BUF_SIZE 4096
 #define PIPE_MAX      8 // concurrent pipes, kernel-wide
 
