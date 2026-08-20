@@ -12,14 +12,19 @@
 // became UTHEME_*, and the size callback derives from ugfx_char_w/h()
 // the way the kernel version derived from gfx_char_w/h().
 //
-// ONE LINE IS MISSING ON PURPOSE. The kernel version printed the
-// filesystem backend and whether it persists (`fs_backend_name()` /
-// `fs_is_persistent()`), which are kernel calls with no syscall behind
-// them -- ring 3 cannot ask. Stage 0 is deliberately the stage that
-// needs NO new kernel capability, and stage 4's list already carries
-// the settings/process syscalls this would join, so the line waits for
-// that rather than growing the ABI here. `df` and `fsck` report the
-// same two facts in the meantime.
+// ONE LINE IS STILL MISSING, BUT NOT FOR THE REASON IT USED TO BE.
+// The kernel version printed the filesystem backend and whether it
+// persists, and this comment used to say ring 3 could not ask --
+// `fs_backend_name()`/`fs_is_persistent()` had no syscall behind them.
+// That is no longer true: QUERY_FSINFO reports both (2026-08-20, added
+// so `df` could stop being a builtin), and `sys_query_record(
+// QUERY_FSINFO, 0, ...)` is all this would need.
+//
+// It is simply not done yet -- adding it means widening this window and
+// re-checking the size callback that derives from the widest line, which
+// is a change to make deliberately rather than as a side effect of
+// somebody else`s work. See docs/roadmap.md. `df` reports both facts
+// in the meantime.
 #include <stdint.h>
 #include "rt/sys.h"
 #include "ui/ugfx.h"

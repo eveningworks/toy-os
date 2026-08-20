@@ -9,13 +9,21 @@
 // across files sharing state via `extern`s, not independent
 // components.
 //
-// MOST EVERYDAY FILE COMMANDS ARE NOT HERE AT ALL. `cat`, `rm`,
-// `touch`, `mkdir`, `mv`, `ln`, `stat`, `truncate`, `sync`, `echo` and
-// `uptime` are /bin programs, reached through shell_path.c's resolver
-// like any other executable -- there is no branch for them below, and
-// adding one would put a second implementation of `rm` in front of the
-// real one. shell_rescue.c holds the kernel's own copies, behind a name
-// that cannot shadow them. See docs/conventions/shell.md.
+// MOST EVERYDAY COMMANDS ARE NOT HERE AT ALL. `cat`, `rm`, `touch`,
+// `mkdir`, `mv`, `ln`, `stat`, `truncate`, `sync`, `echo`, `uptime`,
+// `df` and `meminfo` are /bin programs, reached through shell_path.c's
+// resolver like any other executable -- there is no branch for them
+// below, and adding one would put a second implementation of `rm` in
+// front of the real one. shell_rescue.c holds the kernel's own copies
+// of the FILE commands, behind a name that cannot shadow them.
+//
+// `df` and `meminfo` were the last two holdouts, and the reason they
+// held out is the useful part: they were not waiting on a program, they
+// were waiting on a QUESTION RING 3 COULD NOT ASK -- which filesystem
+// is mounted, what the firmware memory map says, what a page-table
+// audit found. The fix for that is a query provider, never a builtin
+// and never a syscall of its own. See docs/query-design.md's stage 2
+// and docs/conventions/shell.md.
 #include "shell.h"
 #include "shell_internal.h"
 #include "apps.h"
@@ -116,8 +124,6 @@ static void dispatch(char *line) {
         cmd_about();
     } else if (k_strcmp(cmd, "beep") == 0) {
         cmd_beep();
-    } else if (k_strcmp(cmd, "meminfo") == 0) {
-        cmd_meminfo(args ? args : "");
     } else if (k_strcmp(cmd, "heap") == 0) {
         cmd_heap(args ? args : "");
     } else if (k_strcmp(cmd, "kstack") == 0) {
@@ -130,8 +136,6 @@ static void dispatch(char *line) {
         cmd_hwcursor(args ? args : "");
     } else if (k_strcmp(cmd, "gfxbench") == 0) {
         cmd_gfxbench(args ? args : "");
-    } else if (k_strcmp(cmd, "df") == 0) {
-        cmd_df();
     } else if (k_strcmp(cmd, "stress") == 0) {
         cmd_stress(args ? args : "");
     } else if (k_strcmp(cmd, "dmatest") == 0) {

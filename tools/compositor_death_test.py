@@ -171,7 +171,15 @@ def run_ring3(dbg, desktop_pid):
     # THE exit criterion. `sh` is served by the kernel context, which is
     # not the process that just died, so an answer here is a liveness
     # proof for the kernel alone -- which is the claim being made.
-    df = dbg.send("sh df")
+    #
+    # `rescue df`, NOT `df`. Plain `df` became a ring-3 program
+    # (/bin/df, over QUERY_FSINFO), so asking for it would prove the
+    # kernel can still LOAD AND SCHEDULE a process -- a strictly larger
+    # claim than the one this check makes, and one that fails for
+    # reasons unrelated to the exit criterion. `rescue df` is the
+    # kernel's own copy (apps/shell_rescue.c) and runs entirely in
+    # ring 0, which is what "the kernel alone" means here.
+    df = dbg.send("sh rescue df")
     check("the KERNEL survives killing the desktop",
           "Filesystem:" in df, df.strip().splitlines()[0] if df.strip() else "no answer")
 

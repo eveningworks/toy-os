@@ -81,8 +81,25 @@ this the obvious way), not from how much history it accumulated.
   is what keeps a record free to grow. And **a LIST class has no field
   table on purpose**: `-ENOTSUP`, distinct from `-ENOENT`, because "that
   fact is a table" and "no such fact" send a reader to different places.
-  **There is ONE READER** -- `query_read()` -- so `meminfo`,
-  `/bin/meminfo` and `SYS_SYSINFO` cannot report different numbers.
+  **There is ONE READER** -- `query_read()` -- so every consumer of a
+  fact, in either ring, cannot report different numbers.
+
+  Three more, learned adding `QUERY_FSINFO`/`QUERY_MEMMAP`/
+  `QUERY_MMAUDIT` (`docs/query-design.md`'s stage 2). **A STRING CANNOT
+  BE A NAMED FIELD**: every `struct query_field` is 64 bits, so the
+  filesystem's name lives in the RECORD and `config get fs.backend`
+  cannot print it while `config get fs.used_bytes` works. That is the
+  right trade -- the field facility exists to make NUMBERS addressable,
+  and widening it would put a length and an encoding in the ABI for one
+  caller. **PUT EVERYTHING ONE COMMAND NEEDS IN ONE RECORD**: `df` reads
+  the name and the byte counts together because a `used` sampled at one
+  moment beside a `total` sampled at another describes no filesystem
+  that ever existed. And **REGISTER A PROVIDER EARLY, even before the
+  thing it describes exists** -- `fs_query_init()` runs before anything
+  is mounted and simply reports "not mounted" until something is.
+  Registering it late is the bug: a fact absent from the registry cannot
+  be asked for at all, and "nothing is mounted" is an answer a caller
+  needs to be able to receive.
 - **THERE ARE THREE WORDS FOR SYSTEM STATE AND THEY ARE FIXED: FACT,
   SETTING, TUNABLE.** A **fact** is read-only and computed fresh on
   every read (`mem_free`, the process list) and has NO stored form. A

@@ -7,7 +7,15 @@ shell's ~15 introspection commands (`meminfo`, `heap`, `kstack`,
 answers it **differently from that document's assumption**, which was
 Linux's `/proc`.
 
-Nothing here is built yet.
+**Status: the mechanism is BUILT.** Stage 0 shipped 2026-08-19 --
+`kernel/lib/query.c`, `SYS_QUERY`, the self-describing
+`QUERY_PROVIDERS` class and `/bin/meminfo` as its first consumer --
+and stage 2 is under way (see its section below for what has moved).
+This line used to read "nothing here is built yet" while the staging
+section below it already marked stage 0 done, which is the shape of
+staleness worth naming: a status sentence at the TOP of a staged plan
+has to be re-read every time a stage lands, and nothing makes anyone
+do that. The per-stage markers are the authority.
 
 ## Why not `/proc`
 
@@ -241,6 +249,29 @@ One at a time, each becoming a `/bin` program over its own class:
 `meminfo` (done in stage 0), `dmesg`, `kstack`, `heap`, `ata`,
 `parttable`, `lspci` (already a program, now over a class). Each is
 independently verifiable and the kernel shell keeps working throughout.
+
+**Done 2026-08-20: `df` and `meminfo` fully.** Both had already been
+`/bin` programs for their arithmetic, and both still had a kernel
+builtin in front of them holding the part ring 3 could not ask for.
+Three classes closed that gap and the builtins were deleted:
+
+- `QUERY_FSINFO` (scalar) -- the mounted backend's NAME and whether it
+  persists, beside the usage numbers. It is what `df` was a builtin
+  for, and it also restores the filesystem line
+  `userland/gui/system/about.c` had been omitting with a comment
+  saying ring 3 could not ask.
+- `QUERY_MEMMAP` (list) -- the firmware memory map, one record per
+  region, over the `multiboot_mmap_foreach()` walk that already
+  existed. The first LIST provider outside `QUERY_PROVIDERS` itself.
+- `QUERY_MMAUDIT` (list) -- one record per DANGLING mapping, so zero
+  records means healthy. A list rather than a count because the
+  addresses are the diagnostic: a space with two violations is exactly
+  when "how many" stops being enough. It needed
+  `vmm_audit_space_cb()`, since the summary records only the first.
+
+The shape worth copying: **the question to ask of a builtin is not "is
+this a file command" but "can ring 3 ask?"** -- and when the answer is
+no, the fix is a provider, not a syscall and not keeping the builtin.
 
 ### Stage 3 -- tunables
 

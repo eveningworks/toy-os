@@ -79,8 +79,7 @@ void cmd_timezone(const char *args);
 void cmd_random(const char *args);
 void cmd_about(void);
 void cmd_beep(void);
-void cmd_meminfo(const char *args);
-void cmd_df(void);
+void cmd_df(void);   // shell_sys.c -- only reachable through `rescue df` now
 void cmd_fsck(const char *args);
 void cmd_sync(const char *args);
 void cmd_fsformat(const char *args); // shell_fs.c -- destructive, physical shell only

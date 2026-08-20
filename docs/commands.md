@@ -26,10 +26,10 @@ to right with the first match winning) and runs what it finds. `run
 <name>` still works as the explicit form, going through the same
 resolver. `path` shows the search order.
 
-**Shell builtins win over both** — but the everyday file commands are
+**Shell builtins win over both** — but the everyday commands are
 no longer builtins. `cat`, `echo`, `rm`, `touch`, `mkdir`, `mv`, `ln`,
-`stat`, `truncate`, `sync` and `uptime` are `/bin` programs and resolve
-through `PATH` like anything else, which is why they behave identically
+`stat`, `truncate`, `sync`, `uptime`, `df` and `meminfo` are `/bin`
+programs and resolve through `PATH` like anything else, which is why they behave identically
 at this prompt, in `/bin/tosh` and in the GUI Terminal. `ls` and
 `lspci` are builtin *wrappers* around their ELFs (`ls` only so a
 relative directory argument is resolved against the cwd — `/bin/ls`
@@ -65,6 +65,14 @@ Tab completes commands, paths, and known argument sets (`run`, `color`,
 `cursor`, `help`). One Tab extends as far as the candidates agree and
 lists them in columns if more than one remains, zsh-style. Identical in
 the physical shell and the GUI Terminal.
+
+In command position the candidates are the shell's own builtins plus
+**every executable on `PATH`**, and they come back **deduplicated and
+sorted**, with directories excluded — bash's behaviour. A name that
+exists in two places (`ls` is both a builtin wrapper and `/bin/ls`) is
+offered once; that does not change which one runs, since the first
+`PATH` match still wins at run time. `kernel/test/completion_test.c`
+asserts all three properties.
 
 ## General
 
@@ -120,8 +128,8 @@ history search, `Alt-.` last argument. `help` lists them all.
 | `meminfo --list` | *(`/bin/meminfo` only)* Every registered fact provider: class, name, record count, record size, and whether it is a scalar or a list. |
 | `meminfo audit` | Compares every live process's page tables against the frame allocator, and reports any mapping of a frame the allocator considers free. |
 | `heap` | Kernel heap stats. `heap debug on\|off` red-zones new allocations and poisons freed ones; `heap check` sweeps for a use-after-free. |
-| `df` | Total/used/free, and the name of the active filesystem backend. **Still a builtin**, unlike its neighbours: `fs_backend_name()`/`fs_is_persistent()` have no syscall behind them, so `/bin/df` cannot report which filesystem is mounted. `userland/gui/system/about.c` omits the same line for the same reason. |
-| `meminfo [audit]` | **Still a builtin.** `/bin/meminfo` reads the same `QUERY_MEMINFO` provider, but the multiboot memory map has no provider, and `meminfo audit` walks live page tables — neither is reachable from ring 3. |
+| `df` | Size, used, free, use%, and which filesystem backend is mounted plus whether it persists. `/bin/df`, over `QUERY_FSINFO` — one record, so the name and the numbers describe the same instant. It was a builtin until 2026-08-20, purely because ring 3 could not ask for the backend name; the fix was a provider, not a syscall. |
+| `meminfo [--map \| --audit \| --list]` | `/bin/meminfo`. Plain: the firmware memory map, then the frame allocator and kernel heap. `--map` just the map (`QUERY_MEMMAP`, a list). `--audit` every mapping pointing at a frame the allocator considers FREE (`QUERY_MMAUDIT`) — **zero findings is the healthy answer**, and it exits non-zero when there are any. `--list` walks the provider registry itself. |
 | `dmesg`, `lspci`, `parttable` | |
 | `gfxbench [iterations]` | Times full-screen framebuffer fills *and* console scrolls, reporting ms/frame, an fps ceiling, MB/s, which write-combining mechanism is live, and whether the console is double-buffered. Meaningful only under `make run KVM=1` or on real hardware — plain QEMU's TCG ignores memory types, so both console modes measure the same there. See `decisions.md`. |
 | `hwcursor [demo [x y] \| off]` | The display adapter's own cursor plane: reports whether this display has one, and `demo` puts a 32x32 magenta square on it. A DIAGNOSTIC, not the pointer — the compositor still draws a software sprite, so this is the only caller `gfx_hw_cursor_*()` has. Present on `-vga virtio` (virtio-gpu's cursor queue); absent on plain `-vga std`. Note a device-composited cursor never appears in a `screendump`. |

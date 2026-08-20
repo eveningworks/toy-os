@@ -18,4 +18,11 @@
 // separate job; see docs/roadmap.md.
 uint64_t mm_audit_report(void);
 
+// Registers QUERY_MMAUDIT, which reports the same walk to ring 3 as a
+// LIST -- one record per dangling mapping, so zero records is the
+// healthy answer. `/bin/meminfo --audit` reads it. See the comment at
+// the bottom of mm_audit.c for why it re-walks per record rather than
+// snapshotting.
+void mm_audit_query_init(void);
+
 #endif

@@ -159,4 +159,18 @@ void query_init(void);
 // because it is about the registry, not about the allocator.
 void mem_query_init(void);
 
+// kernel/core/'s provider for the firmware memory map. Declared here
+// rather than in multiboot.h for the same reason -- it is about the
+// registry, not about parsing multiboot tags.
+void multiboot_query_init(void);
+
+// kernel/fs/'s provider (which filesystem is mounted, and how full).
+// MUST be registered after the filesystem is mounted is NOT true --
+// the provider reads fs.h on every read, so registering it early simply
+// means it reports "not mounted" until something is. Registering it
+// late would be the bug: a fact absent from the registry cannot be
+// asked for at all, and "nothing is mounted" is a legitimate answer
+// that a caller needs to be able to receive.
+void fs_query_init(void);
+
 #endif // QUERY_H

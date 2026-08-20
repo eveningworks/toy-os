@@ -574,6 +574,7 @@ whenever a headline here tells you something you did not already know.
 
 - **AN EVERYDAY COMMAND IS A `/bin` PROGRAM, NOT A BUILTIN, AND THE KERNEL'S OWN COPIES LIVE BEHIND ONE NAME: `rescue`.**
 - **A PROGRAM STARTED BY A BARE NAME PRINTS NOTHING EXTRA WHEN IT SUCCEEDS -- AND `run <name>` STILL DOES.**
+- **TAB COMPLETION IN COMMAND POSITION IS BUILTINS PLUS ALL OF `PATH`, DEDUPLICATED AND SORTED, WITH NO DIRECTORIES.**
 - **COLOUR IS AN ESCAPE SEQUENCE, NOT A SYSCALL.**
 - **A `text` BOOT REACHES A RING-3 SHELL, AND THE KERNEL SHELL STANDS DOWN FOR IT.**
 - **RING 3 CAN READ THE CONSOLE -- fd 0, and it BLOCKS.**
@@ -1089,8 +1090,9 @@ detail there, and keep the pointer here to a line. What each file is:
   `config`'s verbs, and how an app reads or changes either. Read it
   before adding a setting.
 - **`docs/query-design.md`** -- how kernel state reaches ring 3, and why
-  it is NOT `/proc`. Designed, not built; it is what the kernel shell's
-  introspection commands are waiting on.
+  it is NOT `/proc`. BUILT: `SYS_QUERY`, the self-describing
+  `QUERY_PROVIDERS` class, and a provider per fact. Its staging section
+  is the authority on which introspection commands have moved.
 - **`docs/errno-design.md`** -- giving a failed syscall a REASON, staged
   so each step ships on its own.
 - **`docs/commands.md`** -- the full shell command reference, grouped

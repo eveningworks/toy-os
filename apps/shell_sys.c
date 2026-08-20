@@ -8,7 +8,6 @@
 #include "shell_internal.h"
 #include "shell.h" // shell_path_find() -- cmd_strace() resolves a binary itself
 #include "apps.h"
-#include "mm_audit.h" // `meminfo audit`
 #include "query.h"    // the fact registry -- `meminfo` reads through it
 
 static const char *MONTHS[] = {
@@ -419,42 +418,6 @@ void cmd_about(void) {
 void cmd_beep(void) {
     vga_write("beep!\n");
     speaker_beep(800, 200);
-}
-
-void cmd_meminfo(const char *args) {
-    // `meminfo audit` walks every live process's page tables and
-    // compares them against the frame allocator. The walk itself is
-    // kernel-side (api/mm_audit.h) -- page tables are not something
-    // apps/ may reach into, and the include path enforces that.
-    if (args && k_strcmp(args, "audit") == 0) {
-        mm_audit_report();
-        return;
-    }
-
-    multiboot_print_meminfo();
-
-    // THROUGH THE FACT REGISTRY, not straight to pmm. /bin/meminfo asks
-    // the same provider through SYS_QUERY, so this command and that one
-    // are one reader rather than two that agree -- they cannot report
-    // different numbers, which is a stronger guarantee than a test
-    // comparing their output after the fact.
-    //
-    // The memory MAP above stays a direct call: it is multiboot's, not
-    // the allocator's, and no provider reports it yet.
-    struct query_meminfo m;
-    if (query_read(QUERY_MEMINFO, 0, &m, sizeof m) < 0) {
-        vga_write("\nmeminfo: the memory provider is not registered\n");
-        return;
-    }
-    uint64_t used = m.frame_total - m.frame_free;
-
-    vga_printf("\nPhysical frame allocator (%uKB frames):\n",
-               (uint32_t)(m.frame_bytes / 1024));
-    vga_printf("  total: %u (%u MB)\n", (uint32_t)m.frame_total,
-               (uint32_t)(m.frame_total * m.frame_bytes / (1024 * 1024)));
-    vga_printf("  used:  %u  free:  %u\n", (uint32_t)used, (uint32_t)m.frame_free);
-    vga_printf("Kernel heap: %u of %u bytes used\n",
-               (uint32_t)m.heap_used_bytes, (uint32_t)m.heap_total_bytes);
 }
 
 // `heap` -- the kernel heap's stats, and the switch for its debug mode.

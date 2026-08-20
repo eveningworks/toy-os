@@ -121,6 +121,12 @@ static const struct rescue_cmd RESCUE_CMDS[] = {
 };
 #define RESCUE_COUNT (sizeof(RESCUE_CMDS) / sizeof(RESCUE_CMDS[0]))
 
+// dispatch() asks this when a name resolved to nothing, so a missing
+// /bin/<name> is reported as a missing PROGRAM rather than as an
+// unknown command. `df` is in the table below, so `df` with no /bin/df
+// is told about `rescue df`; `meminfo` is not, and gets the ordinary
+// unknown-command message -- which is correct, since there is no kernel
+// copy of it to point at any more.
 int shell_rescue_has(const char *name) {
     if (!name) return 0;
     for (unsigned i = 0; i < RESCUE_COUNT; i++) {

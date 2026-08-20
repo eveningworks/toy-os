@@ -119,6 +119,23 @@ struct vmm_audit {
 // call from a shell command or a KTEST at any point.
 uint64_t vmm_audit_space(uint64_t pml4_phys, struct vmm_audit *out);
 
+// Reported once per dangling mapping, in walk order (ascending virtual
+// address). `frame` is the physical frame the mapping points at.
+typedef void (*vmm_dangling_cb)(uint64_t va, uint64_t frame, void *ctx);
+
+// The same walk, also calling `cb` for EVERY dangling mapping rather
+// than only recording the first in `first_bad_va`. `/bin/meminfo
+// --audit` reports findings as a list and needs each one; the summary
+// alone cannot say where the second violation is, and a space with two
+// of them is exactly when you want to know.
+//
+// `cb` may be NULL, which makes this identical to vmm_audit_space().
+// The callback must not allocate or map anything -- this is a read-only
+// walk over live page tables, and changing them underneath it would
+// invalidate the walk in progress.
+uint64_t vmm_audit_space_cb(uint64_t pml4_phys, struct vmm_audit *out,
+                            vmm_dangling_cb cb, void *ctx);
+
 void vmm_switch_address_space(uint64_t pml4_phys);
 
 // Frees every physical frame this address space privately owns -- every

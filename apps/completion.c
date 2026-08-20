@@ -25,9 +25,9 @@
 // that dispatch() does not handle is reported as an internal error.
 const char *const COMPLETION_COMMANDS[] = {
     "about", "append", "apps", "ata", "beep", "cd", "clear", "color",
-    "cursor", "debug", "df", "dmatest", "dmesg", "edit", "fontsize",
+    "cursor", "debug", "dmatest", "dmesg", "edit", "fontsize",
     "fputest", "fsck", "fsformat", "gui", "heap", "help", "ktest", "history", "keyboard", "lspci", "ls",
-    "meminfo", "nano", "parttable", "pwd", "reboot", "rescue",
+    "nano", "parttable", "pwd", "reboot", "rescue",
     "ring3test", "run", "schedtest", "steptest", "strace", "stress",
     "path", "random", "time", "timezone", "write",
     0
@@ -90,6 +90,25 @@ static void add_candidate_named(struct collector *c, const char *match, const ch
     if (len >= COMPLETION_MAX_LEN) return; // can't represent it; skip rather than truncate into a wrong completion
     if (k_strncmp(match, c->prefix, (int)c->prefix_len) != 0) return;
 
+    // A NAME OFFERED TWICE IS OFFERED ONCE. Several domains overlap by
+    // design -- `ls` and `lspci` are builtin wrappers AND real programs
+    // in /bin, so both the command table and the PATH walk produce them
+    // -- and `l<Tab>` listed each of them twice. Two costs, not one: the
+    // list looks broken, and duplicates spend slots against
+    // COMPLETION_MAX_CANDIDATES, so enough of them can push a real
+    // candidate out and set `truncated`.
+    //
+    // Linear, and deliberately: COMPLETION_MAX_CANDIDATES is 48, so the
+    // worst case is a couple of thousand k_strcmp()s of short strings
+    // once per Tab. A hash set would be more code than the thing it
+    // speeds up.
+    //
+    // Note this cannot affect `insert`: the common prefix of a set is
+    // unchanged by adding a member it already has.
+    for (int i = 0; i < c->out->count; i++) {
+        if (k_strcmp(c->out->candidates[i], text) == 0) return;
+    }
+
     if (c->out->count == 0) {
         k_strcpy(c->out->insert, text);
     } else {
@@ -111,11 +130,39 @@ static void add_candidate(struct collector *c, const char *name) {
     add_candidate_named(c, name, name);
 }
 
+// Sorts the candidates in place, so a listing reads alphabetically
+// rather than in the order the domains happened to produce it --
+// builtin-table order, then the app registry, then raw directory order
+// per PATH entry, which is what a reader was being asked to scan.
+// bash and zsh both sort; an unsorted list of forty is unusable.
+//
+// Insertion sort on at most COMPLETION_MAX_CANDIDATES (48) short
+// strings, once per Tab. The array is fixed-size rows, so this swaps
+// whole rows through one scratch row rather than moving pointers --
+// still nothing at this scale, and it keeps the storage a plain 2D
+// array that the callers already read directly.
+//
+// Sorting cannot affect `insert` either: the common prefix of a set
+// does not depend on the order its members arrived in.
+static void sort_candidates(struct completion_result *out) {
+    for (int i = 1; i < out->count; i++) {
+        char key[COMPLETION_MAX_LEN];
+        k_strcpy(key, out->candidates[i]);
+        int j = i - 1;
+        while (j >= 0 && k_strcmp(out->candidates[j], key) > 0) {
+            k_strcpy(out->candidates[j + 1], out->candidates[j]);
+            j--;
+        }
+        k_strcpy(out->candidates[j + 1], key);
+    }
+}
+
 // Turns the accumulated common prefix into "what to actually insert",
 // and decides whether a trailing space belongs.
 static void collector_finish(struct collector *c) {
     struct completion_result *out = c->out;
     if (out->count == 0) { out->insert[0] = '\0'; return; }
+    sort_candidates(out);
 
     uint32_t common_len = (uint32_t)k_strlen(out->insert);
     if (common_len < c->prefix_len) {
@@ -150,9 +197,18 @@ static void collector_finish(struct collector *c) {
 // is single-threaded and nothing re-enters completion mid-listing.
 static struct collector *g_active_collector;
 static const char *g_dir_prefix; // the part of the word before the last '/', kept so candidates come back as full words
+static int g_skip_dirs;          // set while walking PATH: a directory is not a command
 
 static void fs_list_cb(const char *name, uint32_t size, int is_dir) {
     (void)size;
+    // A DIRECTORY IS NEVER A COMMAND. Walking PATH used to offer
+    // /bin/wm as the candidate `wm/`, which cannot be a first word --
+    // shell_path_find() explicitly refuses a directory. Costs nothing
+    // to filter: `is_dir` is already an argument here, so the "a second
+    // fs_is_dir() call per entry" this once traded away was never the
+    // price. Path completion still lists directories, which is the
+    // whole point there.
+    if (g_skip_dirs && is_dir) return;
     // `named` (with the trailing '/' for a directory) is what the
     // filename prefix is matched against; `full` prepends the directory
     // part the user already typed, and is what gets inserted.
@@ -231,9 +287,16 @@ static void complete_from_list(struct collector *c, const char *const *names) {
 // `run <name>` and -- since the `run` prefix became optional -- for the
 // first word of a line, alongside the builtin command names.
 //
-// Directories inside a PATH entry are listed too (fs_list_cb appends
-// '/'), which is harmless: they simply won't resolve, and filtering them
-// out would mean a second fs_is_dir() call per entry for no real gain.
+// Directories inside a PATH entry are SKIPPED (g_skip_dirs): a
+// directory cannot be a first word, and shell_path_find() refuses one
+// explicitly, so offering /bin/wm as `wm/` was offering something that
+// could never run.
+//
+// A name appearing in more than one PATH directory, or in both the app
+// registry and /bin, is offered once -- add_candidate_named() dedupes.
+// That is not the same as PATH order becoming irrelevant: the FIRST
+// match still wins at run time (shell_path.c), and completion is only
+// saying the name exists.
 static void complete_executables(struct collector *c) {
     for (int i = 0; i < app_registry_count; i++) add_candidate(c, app_registry[i].name);
 
@@ -241,10 +304,12 @@ static void complete_executables(struct collector *c) {
     struct collector inner = *c;
     g_active_collector = &inner;
     g_dir_prefix = empty;
+    g_skip_dirs = 1;
     for (int i = 0; i < shell_path_count(); i++) {
         const char *dir = shell_path_dir(i);
         if (dir && fs_is_dir(dir)) fs_list(dir, fs_list_cb);
     }
+    g_skip_dirs = 0;
     g_active_collector = 0;
     *c = inner;
 }

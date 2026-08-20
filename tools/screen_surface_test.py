@@ -355,7 +355,11 @@ def main():
         # There is no desktop to survive; what must is the KERNEL, and
         # `sh` is served by the kernel context rather than by any
         # process, so an answer here is exactly that claim.
-        df = dbg.send("sh df")
+        # `rescue df`, not `df`: plain df is a ring-3 program now, and
+        # this check is about the KERNEL being alive, not about it
+        # still being able to load one. shell_rescue.c's copy runs
+        # entirely in ring 0. See compositor_death_test.py.
+        df = dbg.send("sh rescue df")
         check("the kernel survives a process that mapped the screen",
               "Filesystem:" in df,
               df.strip().splitlines()[0] if df.strip() else "no answer")

@@ -63,3 +63,90 @@ uint64_t mm_audit_report(void) {
     }
     return dangling;
 }
+
+// ---- the audit as a queryable FACT ----------------------------------
+//
+// One record per DANGLING mapping, so ZERO RECORDS MEANS HEALTHY. A
+// list rather than a count because the addresses are the whole
+// diagnostic: a summary can say a space has two violations and cannot
+// say where the second one is, which is exactly where "how many" stops
+// being enough.
+//
+// THE COST, stated plainly because it is unusual: counting requires the
+// same full walk as reading, so a read of N findings walks every live
+// address space N+1 times. That is cheap where it matters -- a healthy
+// machine has N=0 and pays exactly ONE walk, which is the case that
+// runs on every check. A machine with findings is already broken.
+//
+// The alternative was to snapshot findings into a static array on
+// count(). Rejected: the array would have to be bounded (so a badly
+// broken machine reports a truncated audit, the one case you want it
+// complete), and it would hold a view of page tables that anything
+// running between the two syscalls could invalidate. Re-walking always
+// reports what is true NOW.
+#include "query.h"
+
+// vmm_audit_space_cb()'s callback takes a ctx, so unlike the memmap
+// provider this needs no file-scope state -- the walk is re-entrant
+// through its argument.
+struct audit_pick {
+    uint64_t want;    // which finding across ALL spaces, or ~0 to count
+    uint64_t seen;    // findings walked so far
+    uint64_t pid;     // the space currently being walked
+    struct query_mmaudit hit;
+    int found;
+};
+
+static void audit_pick_cb(uint64_t va, uint64_t frame, void *ctx) {
+    struct audit_pick *p = ctx;
+    if (p->seen == p->want) {
+        p->hit.pid = p->pid;
+        p->hit.vaddr = va;
+        p->hit.frame = frame;
+        p->found = 1;
+    }
+    p->seen++;
+}
+
+// Walks every live address space, counting dangling mappings and
+// capturing the `want`-th. Returns the total seen.
+static uint64_t audit_walk(struct audit_pick *p) {
+    for (int slot = 0; slot < SCHED_MAX_PROCS; slot++) {
+        uint64_t as = scheduler_slot_pml4(slot);
+        if (!as) continue; // empty slot, or a zombie whose space is gone
+        p->pid = (uint64_t)slot + 1;
+        vmm_audit_space_cb(as, 0, audit_pick_cb, p);
+    }
+    return p->seen;
+}
+
+static int mmaudit_count(void) {
+    struct audit_pick p = { (uint64_t)-1, 0, 0, {0, 0, 0}, 0 };
+    return (int)audit_walk(&p);
+}
+
+static int mmaudit_fill(int index, void *out) {
+    if (index < 0) return 0;
+    struct audit_pick p = { (uint64_t)index, 0, 0, {0, 0, 0}, 0 };
+    audit_walk(&p);
+    if (!p.found) return 0; // past the end
+    *(struct query_mmaudit *)out = p.hit;
+    return 1;
+}
+
+// A LIST has no named fields -- an index baked into a flat name means a
+// different record a second later. See struct query_provider.
+static const struct query_provider mmaudit_provider = {
+    .cls = QUERY_MMAUDIT,
+    .name = "mmaudit",
+    .record_size = sizeof(struct query_mmaudit),
+    .flags = QUERY_F_LIST,
+    .count = mmaudit_count,
+    .fill = mmaudit_fill,
+    .fields = 0,
+    .field_count = 0,
+};
+
+void mm_audit_query_init(void) {
+    query_register(&mmaudit_provider);
+}

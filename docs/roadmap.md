@@ -92,7 +92,8 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~**`dup`/`dup2`-style fd plumbing**, so the shell can wire an arbitrary fd to 0/1/2~~ DONE 2026-08-19
 - [x] ~~A per-process cwd~~ DONE 2026-08-19 -- in the kernel, inherited across spawn; every path syscall resolves against it
 - [ ] `/bin/tosh` has its own `ls`/`cat`/`echo` builtins beside the `/bin` programs -- two implementations of one command
-- [ ] `SYS_SYSINFO` does not report the filesystem backend name, so `/bin/df` and the About page cannot say which one is mounted
+- [x] ~~Ring 3 cannot ask which filesystem is mounted~~ DONE 2026-08-20 -- `QUERY_FSINFO`, a provider rather than a wider `SYS_SYSINFO`
+- [ ] The About window still omits its filesystem line, though `QUERY_FSINFO` reports it now -- needs the window widened
 - [ ] An environment passed to a child
 - [ ] Ctrl-C
 - [ ] **`#!` handling**, which is the loader's job, not the shell's: `elf_load()` rejects a non-ELF file

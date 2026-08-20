@@ -92,6 +92,18 @@ struct query_msg {
 // Memory: the frame allocator and the kernel heap. SCALAR.
 #define QUERY_MEMINFO   1
 
+// The mounted filesystem: which backend, whether it persists, and how
+// full it is. SCALAR.
+#define QUERY_FSINFO    2
+
+// The firmware memory map, one record per region. LIST.
+#define QUERY_MEMMAP    3
+
+// One record per DANGLING mapping found by walking every live address
+// space against the frame allocator -- so ZERO RECORDS MEANS HEALTHY.
+// LIST.
+#define QUERY_MMAUDIT   4
+
 
 // QUERY_PROVIDERS' record.
 struct query_provider_info {
@@ -121,6 +133,65 @@ struct query_meminfo {
     uint64_t frame_bytes;      // bytes per frame
     uint64_t heap_total_bytes; // the KERNEL heap (api/heap.h), not a process's
     uint64_t heap_used_bytes;
+};
+
+// QUERY_FSINFO's record.
+//
+// THE NAME IS IN THE RECORD, NOT A NAMED FIELD. Every named field is 64
+// bits (see struct query_field), so a string cannot be one -- which is
+// why `config get fs.backend` cannot print the name while
+// `config get fs.used_bytes` works. That is the right trade: the fields
+// facility exists to make NUMBERS addressable, and widening it to
+// strings would put a length and an encoding into the ABI for one
+// caller. A tool that wants the name reads the whole record, which is
+// what /bin/df does.
+//
+// `flags` rather than a bool per property, and the record carries the
+// usage numbers as well, so `df` is ONE read rather than this plus
+// SYS_SYSINFO -- two reads of a changing filesystem can disagree with
+// each other, and a "used" from one moment beside a "total" from
+// another is a number nobody can trust.
+#define QUERY_FS_PERSISTENT (1u << 0) // survives a reboot; absent means RAM-only
+#define QUERY_FS_MOUNTED    (1u << 1) // a filesystem is mounted at all
+
+struct query_fsinfo {
+    uint64_t used_bytes;   // meaningful only with QUERY_FS_MOUNTED
+    uint64_t total_bytes;  // usable DATA space, excluding metadata
+    uint64_t flags;        // QUERY_FS_*
+    char     name[QUERY_NAME_MAX]; // "tfs3" -- fs_backend_name()
+};
+
+// QUERY_MEMMAP's record. One firmware-reported region.
+//
+// The TYPE is the multiboot number, passed through rather than
+// translated: a name is a formatter's business, and inventing an enum
+// here would mean two tables to keep in step for no gain.
+#define QUERY_MEMMAP_USABLE   1 // the one value worth naming in the ABI
+
+struct query_memmap {
+    uint64_t base;
+    uint64_t length;
+    uint64_t type; // 1 = usable RAM; anything else is reserved of some kind
+};
+
+// QUERY_MMAUDIT's record -- ONE DANGLING MAPPING.
+//
+// A list rather than a count, because the ADDRESSES are the diagnostic.
+// A summary can say a space has two violations and cannot say where the
+// second one is, which is exactly the point at which "how many" stops
+// being enough. Zero records is the healthy answer, and it is a
+// successful read rather than an error.
+//
+// The cost, stated because it is unusual for a provider: counting the
+// records requires the same full walk as reading one, so a read of N
+// findings walks every live address space N+1 times. That is deliberate
+// and it is cheap where it matters -- a HEALTHY machine has N=0 and
+// pays exactly one walk. A machine with findings is already broken and
+// can afford a few more.
+struct query_mmaudit {
+    uint64_t pid;
+    uint64_t vaddr; // the mapping
+    uint64_t frame; // the physical frame it points at, which pmm thinks is FREE
 };
 
 #endif // ABI_QUERY_ABI_H

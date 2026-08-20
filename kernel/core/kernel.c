@@ -27,7 +27,8 @@
 #include "timer.h"
 #include "font_config.h"
 #include "setting.h"
-#include "query.h"   // the fact registry -- query_init()/mem_query_init()
+#include "query.h"   // the fact registry -- query_init() and the core's providers
+#include "mm_audit.h" // mm_audit_query_init() -- QUERY_MMAUDIT
 #include "cursor_config.h"
 #include "mouse_config.h"
 #include "keyboard_config.h"
@@ -283,6 +284,9 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // providers; the core registers the registry's self-description.
     query_init();
     mem_query_init();
+    multiboot_query_init();
+    fs_query_init();
+    mm_audit_query_init();
     settings_init();
 
     // One-shot boot-time CMOS/RTC readout, logged for the same reason a

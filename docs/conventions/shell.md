@@ -139,15 +139,60 @@ this the obvious way), not from how much history it accumulated.
   It is emphatically not `cmd.exe`'s split, where `dir`/`copy`/`del`
   are internal because DOS could not load a program cheaply.
 
-  **What is still a builtin, and the test for whether yours should be:
-  can ring 3 ask?** `df` and `meminfo` stayed because
-  `fs_backend_name()`, `fs_is_persistent()`, the multiboot memory map
-  and `mm_audit_report()`'s page-table walk have no syscall behind them
-  -- the same gap `userland/gui/system/about.c` documents for its own
-  missing line. `ls` and `lspci` are thin builtin WRAPPERS around their
-  ELFs, `ls` only because `/bin/ls` defaults to `/` rather than the
-  cwd. Everything else in the chain is kernel introspection waiting on
-  a `/proc`-shaped interface (`docs/query-design.md`).
+  **THE TEST IS "CAN RING 3 ASK?", AND WHEN THE ANSWER IS NO THE FIX IS
+  A PROVIDER -- not keeping the builtin, and not a syscall.** `df` and
+  `meminfo` were the last two holdouts, and they were never waiting on
+  a program: `/bin/df` and `/bin/meminfo` already existed and did the
+  arithmetic. They were waiting on four questions ring 3 could not put
+  -- which filesystem is mounted, does it persist, what does the
+  firmware memory map say, what did a page-table audit find. Three
+  query providers answered all four (`QUERY_FSINFO`, `QUERY_MEMMAP`,
+  `QUERY_MMAUDIT`) and both builtins were deleted. No syscall number
+  was spent; that is the point of the registry
+  (`docs/conventions/storage.md`'s "adding one is a PROVIDER, not a
+  syscall", and `docs/query-design.md`'s stage 2).
+
+  **So a builtin that survives should name the capability it is waiting
+  on**, and that capability should be a provider nobody has written
+  yet -- not a permanent excuse. `ls` and `lspci` are thin builtin
+  WRAPPERS around their ELFs, `ls` only because `/bin/ls` defaults to
+  `/` rather than the cwd. What is left in the chain is kernel
+  introspection (`heap`, `kstack`, `dmesg`, `ata`, `parttable`,
+  `fsck`), each of which is one provider away by the same route.
+
+- **TAB COMPLETION IN COMMAND POSITION IS BUILTINS PLUS ALL OF `PATH`,
+  DEDUPLICATED AND SORTED, WITH NO DIRECTORIES.** That is bash's
+  behaviour and it is the bar. All three properties were missing at
+  once, and none of them announced itself: `ls` and `lspci` were listed
+  TWICE (both a builtin wrapper and a real `/bin` program), candidates
+  came back in builtin-table-then-app-registry-then-raw-directory
+  order, and `/bin/wm` was offered as the command `wm/` even though
+  `shell_path_find()` refuses a directory outright.
+
+  **The reason all three survived is that completion had NO TESTS AT
+  ALL** -- it is a pure function (`completion_run()` takes a line and a
+  cursor and returns candidates), so it is among the cheapest things in
+  the tree to test, and nothing did. `kernel/test/completion_test.c`
+  asserts the three properties over whatever the live system produces,
+  never against an exact candidate list, which would fail the day a
+  program is added and teach everyone to ignore it.
+
+  **It lives in `kernel/test/` rather than beside the code**, which
+  breaks this project's usual "a `*_test.c` next to the thing" rule for
+  a real reason: `apps/` is compiled with `-Ikernel/include/kernel`
+  REMOVED (`APPS_CFLAGS`), and `ktest.h` is behind that boundary.
+  Kernel code may include `apps/` headers, so the test can look down
+  while the code cannot look up. Moving `ktest.h` into `api/` would
+  widen an audience boundary for a test facility, which is the worse
+  trade.
+
+  **And the inverse test is the one that matters when you touch this.**
+  The directory filter must apply to the COMMAND domain only -- path
+  completion still has to offer directories, or `cd /b<TAB>` breaks. A
+  fix that suppressed directories everywhere passes every other check
+  in the file; "path completion still offers directories" is what
+  catches it, and it stayed green under the positive control that
+  reddened the other three.
 
   **`rescue` is one command rather than eleven `-rm`-style names**, and
   the reason is the reason the whole change exists: kernel-side file

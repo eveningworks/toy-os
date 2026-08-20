@@ -637,3 +637,60 @@ And when `/bin/<name>` is missing, the shell does not fall back. It
 fails, and says specifically that the name is a program and `/bin` does
 not have it, naming the `rescue` copy. One diagnostic, driven off the
 rescue table, instead of a fallback per command.
+
+## Tab completion dedupes, sorts and skips directories -- and had no tests until it did
+
+Completion in command position offers the shell's builtins plus every
+executable on `PATH`. It always did; what it did not do was any of the
+three things that make such a list usable, and all three were wrong at
+once.
+
+`ls` and `lspci` appeared **twice**, because each is both a builtin
+wrapper and a real `/bin` program and the two domains were concatenated
+without checking. Candidates came back in **arrival order** -- the
+builtin table, then the app registry, then each `PATH` directory in raw
+`fs_list()` order -- so a forty-candidate listing had no structure to
+scan. And `/bin/wm`, a directory, was offered as the command `wm/`,
+which `shell_path_find()` refuses outright, so it could never have run.
+
+All three are now fixed the way bash does them. Two notes on the fixes
+themselves. Deduplication does **not** change which program runs: the
+first `PATH` match still wins at run time, and completion is only saying
+that a name exists. And neither the dedupe nor the sort can affect the
+`insert` string, because the common prefix of a set depends on neither
+repeated members nor their order -- which is why both could be added
+without touching the prefix arithmetic.
+
+**The interesting part is why none of this was noticed.** Completion is
+a pure function -- `completion_run()` takes a line and a cursor index
+and fills a struct, with no state between calls, no I/O and no display
+-- which makes it about the cheapest thing in this tree to test. It had
+no tests at all. Every defect above is visible in one call. The lesson
+generalises past completion: **the code most likely to go untested is
+not the code that is hard to test, it is the code nobody thought of as
+a unit** because it is reached only through a keystroke.
+
+`kernel/test/completion_test.c` asserts PROPERTIES -- sorted, unique, no
+trailing `/` in command position -- over whatever the live system
+produces, never an exact candidate list. An exact list would fail the
+day a program is added to `/bin`, and a test that fails for being
+correct is a test people learn to ignore.
+
+**The file lives in `kernel/test/`, not beside the code, and that is a
+deliberate exception** to the "a `*_test.c` next to the thing it tests"
+rule. `apps/` is compiled with `-Ikernel/include/kernel` removed
+(`APPS_CFLAGS` in the Makefile) -- the boundary that stops an app
+reaching into drivers and page tables -- and `ktest.h` is behind it.
+Kernel code carries `-Iapps`, so a test in `kernel/` can include
+`apps/completion.h` while the reverse is a compile error. The
+alternative was moving `ktest.h` into `api/`, which widens an audience
+boundary for a test facility and would let any app register kernel
+tests; one file in an unexpected place is the cheaper price.
+
+**The test worth copying is the inverse one.** The directory filter must
+apply to the command domain ONLY -- path completion still has to offer
+directories or `cd /b<TAB>` stops working. A fix that suppressed
+directories everywhere passes every other assertion in the file. "Path
+completion still offers directories" is the check that catches it, and
+the positive control proved it: breaking all three fixes reddened
+exactly four tests and left that one green.

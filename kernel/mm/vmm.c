@@ -320,7 +320,20 @@ void vmm_destroy_address_space(uint64_t pml4_phys) {
 // whose owner has already freed the frame is exactly the use-after-free
 // PAGE_BORROWED exists to make possible to reason about, so leaving it
 // unchecked would audit away the interesting half.
-static void audit_pt(uint64_t pt_phys, uint64_t base_va, struct vmm_audit *a) {
+// The walk carries a callback as well as the counters, because a caller
+// that wants EVERY dangling mapping cannot get them from the summary --
+// `first_bad_va` records one. `/bin/meminfo --audit` reports them as a
+// list, one record per finding, so it needs each. A callback rather than
+// an array in `struct vmm_audit` for the reason geom.h draws through
+// one: the walk should not have to guess how many the caller can hold.
+struct audit_ctx {
+    struct vmm_audit *a;
+    vmm_dangling_cb   cb;   // may be NULL
+    void             *ctx;
+};
+
+static void audit_pt(uint64_t pt_phys, uint64_t base_va, struct audit_ctx *c) {
+    struct vmm_audit *a = c->a;
     uint64_t *pt = table_at(pt_phys);
     for (int i = 0; i < 512; i++) {
         if (!(pt[i] & PAGE_PRESENT)) continue;
@@ -336,26 +349,33 @@ static void audit_pt(uint64_t pt_phys, uint64_t base_va, struct vmm_audit *a) {
         } else if (!pmm_frame_is_used(frame)) {
             if (!a->dangling) { a->first_bad_va = va; a->first_bad_frame = frame; }
             a->dangling++;
+            if (c->cb) c->cb(va, frame, c->ctx);
         }
     }
 }
 
-static void audit_pd(uint64_t pd_phys, uint64_t base_va, struct vmm_audit *a) {
+static void audit_pd(uint64_t pd_phys, uint64_t base_va, struct audit_ctx *c) {
     uint64_t *pd = table_at(pd_phys);
     for (int i = 0; i < 512; i++) {
         if (!(pd[i] & PAGE_PRESENT)) continue;
         // A huge page is a leaf here, not a table pointer -- walking
         // into one would read pixel data as page-table entries.
-        if (pd[i] & PAGE_HUGE) { a->huge++; continue; }
-        audit_pt(pd[i] & ADDR_MASK, base_va + (uint64_t)i * 0x200000, a);
+        if (pd[i] & PAGE_HUGE) { c->a->huge++; continue; }
+        audit_pt(pd[i] & ADDR_MASK, base_va + (uint64_t)i * 0x200000, c);
     }
 }
 
 uint64_t vmm_audit_space(uint64_t pml4_phys, struct vmm_audit *out) {
+    return vmm_audit_space_cb(pml4_phys, out, 0, 0);
+}
+
+uint64_t vmm_audit_space_cb(uint64_t pml4_phys, struct vmm_audit *out,
+                            vmm_dangling_cb cb, void *cbctx) {
     struct vmm_audit zero = {0};
     if (!out) out = &zero;
     *out = zero;
     if (!pml4_phys) return 0;
+    struct audit_ctx c = { out, cb, cbctx };
 
     uint64_t *pml4 = table_at(pml4_phys);
     // From 1, not 0: entry 0 is the shared kernel mapping every address
@@ -369,7 +389,7 @@ uint64_t vmm_audit_space(uint64_t pml4_phys, struct vmm_audit *out) {
             if (!(pdpt[j] & PAGE_PRESENT)) continue;
             if (pdpt[j] & PAGE_HUGE) { out->huge++; continue; }
             uint64_t base = ((uint64_t)i << 39) | ((uint64_t)j << 30);
-            audit_pd(pdpt[j] & ADDR_MASK, base, out);
+            audit_pd(pdpt[j] & ADDR_MASK, base, &c);
         }
     }
     return out->dangling;
