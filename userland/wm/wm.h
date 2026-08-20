@@ -97,6 +97,16 @@ struct window {
     // draws it.
     char app_id[WIN_APP_ID_MAX];
 
+    // WHAT THIS WINDOW'S APPLICATION IS, as an opaque number the kernel
+    // derived from the owning process's spawn path -- equal for two
+    // windows of the same PROGRAM, different otherwise, -1 for a window
+    // with no identity (a kernel-space app window, or a client with no
+    // scheduler slot). The taskbar groups by THIS, not by app_id: an
+    // identity an app declares about itself is one two apps can collide
+    // on, and the collision is silent. See abi/win_proto.h's
+    // WIN_REQ_WINDOW_APPID.
+    int app_identity;
+
     int client_pid;
     uint32_t client_win;
     uint32_t *client_buf;

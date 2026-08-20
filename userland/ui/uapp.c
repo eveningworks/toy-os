@@ -346,12 +346,13 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
 // safer direction of the two.
 static int activate_existing(const struct uapp_desc *desc) {
     if (!(desc->flags & UAPP_SINGLE_INSTANCE)) return 0;
-    if (!desc->app_id || !desc->app_id[0]) return 0;
-
+    // NOTHING IS SENT. The server answers from this process's own spawn
+    // path, so the flag alone is the whole declaration -- an app_id is
+    // no longer required, and cannot be got wrong. See
+    // WIN_REQ_ACTIVATE.
     struct win_request_msg req;
     req_clear(&req);
     req.type = WIN_REQ_ACTIVATE;
-    copy_text(req.text, desc->app_id);
     return req_send(&req) == 1;
 }
 

@@ -76,6 +76,16 @@ void scheduler_on_exit(int code);
 // function's problem). Lets syscall.c pick the right exit path.
 int scheduler_current_pid(void);
 
+// The full path `pid` was spawned from, copied into `out`. Returns 1 on
+// success, 0 for a pid with no scheduler slot (the legacy loader, or a
+// dead one), leaving `out` an empty string.
+//
+// This is a process's APPLICATION IDENTITY, and it is the kernel's
+// rather than the app's on purpose -- see the field's own comment in
+// scheduler.c. The window server keys window grouping and
+// single-instance activation on it.
+int scheduler_exec_path(int pid, char *out, unsigned cap);
+
 // --- the running process's heap ---------------------------------------
 //
 // SYS_SBRK's per-process state, reached by the syscall layer rather than

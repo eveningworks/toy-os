@@ -70,7 +70,7 @@ _Static_assert(WIN_APP_ID_MAX == WIN_APP_ID_LEN,
 
 static int on_window_created(int pid, uint32_t id, uint32_t *buf,
                               int w, int h, int x, int y,
-                              const char *app_id) {
+                              const char *app_id, int app_identity) {
     // Grow the table instead of refusing at a fixed count. A refusal is
     // still a legal protocol outcome (the client sees the create fail),
     // but now it means the kernel is out of memory rather than that the
@@ -109,8 +109,12 @@ static int on_window_created(int pid, uint32_t id, uint32_t *buf,
     win->client_last_mx = INT32_MIN; // nothing delivered yet
     win->client_last_my = INT32_MIN;
 
+    // The IDENTITY the taskbar groups by -- see wm.h. -1 means "no
+    // identity", which groups with nothing.
+    win->app_identity = app_identity;
+
     // Already truncated by win_server.c, and "" when the client named
-    // nothing -- which is most of them, and stays matched by nothing.
+    // nothing. A DISPLAY name only.
     if (app_id) {
         int i = 0;
         for (; app_id[i] && i < WIN_APP_ID_MAX - 1; i++) win->app_id[i] = app_id[i];
@@ -172,8 +176,16 @@ static void on_window_title(int pid, uint32_t id, const char *title) {
     for (; title[i] && i < WIN_TITLE_MAX - 1; i++) windows[idx].title[i] = title[i];
     windows[idx].title[i] = '\0';
 
-    // The title bar only -- see on_window_present() on over-damaging.
+    // The title bar -- see on_window_present() on over-damaging.
     wm_damage_rect(windows[idx].x, windows[idx].y, windows[idx].w, WM_TITLEBAR_H);
+    // AND THE TASKBAR STRIP, because the button carries this title too
+    // (wm_taskbar.c's make_label). Damaging only the title bar left the
+    // button showing the placeholder "Client" until something unrelated
+    // repainted the strip -- every ring-3 window sets its real title
+    // just after it opens, so this was the common path, not an edge.
+    // Found by `gui damage verify on` once the client-content noise
+    // stopped drowning it out (docs/decisions.md).
+    wm_damage_rect(0, screen_h - taskbar_h, screen_w, taskbar_h);
     redraw_pending = 1;
 }
 
@@ -444,18 +456,22 @@ static int query_window(int pid, uint32_t id, int *w, int *h,
 // title (win_proto.h). Leaves `out` empty rather than failing if the
 // window is already gone; an empty id groups with nothing, which is the
 // safe direction.
-static void query_app_id(int pid, uint32_t id, char *out, unsigned cap) {
-    if (!out || !cap) return;
-    out[0] = '\0';
+static void query_app_id(int pid, uint32_t id, char *out, unsigned cap,
+                          int *out_identity) {
+    if (out && cap) out[0] = '\0';
+    if (out_identity) *out_identity = -1;
     struct win_request_msg q;
     for (unsigned i = 0; i < sizeof q; i++) ((uint8_t *)&q)[i] = 0;
     q.type = WIN_REQ_WINDOW_APPID;
     q.a = pid;
     q.window = id;
     if (sys_win_request(&q) != 0) return;
-    unsigned n = 0;
-    while (n + 1 < cap && n < WIN_APP_ID_LEN && q.text[n]) { out[n] = q.text[n]; n++; }
-    out[n] = '\0';
+    if (out_identity) *out_identity = q.a;
+    if (out && cap) {
+        unsigned n = 0;
+        while (n + 1 < cap && n < WIN_APP_ID_LEN && q.text[n]) { out[n] = q.text[n]; n++; }
+        out[n] = '\0';
+    }
 }
 
 // Maps a client's buffer into this process, so the compositor can read
@@ -550,11 +566,12 @@ int wm_client_handle_event(const struct win_event *ev) {
         // existed, which left every window on this desktop anonymous --
         // see query_app_id().
         char app_id[WIN_APP_ID_MAX];
-        query_app_id(pid, id, app_id, sizeof app_id);
+        int identity = -1;
+        query_app_id(pid, id, app_id, sizeof app_id, &identity);
         // x/y are the compositor's to choose -- the kernel never had an
         // opinion about placement, it only forwarded what the client
         // asked for. 0,0 lets the existing handler place it.
-        on_window_created(pid, id, buf, w, h, 0, 0, app_id);
+        on_window_created(pid, id, buf, w, h, 0, 0, app_id, identity);
         break;
     }
     case WIN_EV_CLIENT_PRESENT:

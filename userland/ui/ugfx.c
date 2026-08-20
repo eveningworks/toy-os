@@ -505,6 +505,19 @@ int ugfx_verify_snapshot(struct ugfx_screen *sc) {
 }
 
 int ugfx_verify_diff(struct ugfx_screen *sc, struct ugfx_diff *out) {
+    return ugfx_verify_diff_masked(sc, out, 0, 0);
+}
+
+static int in_skip(const struct ugfx_skip_rect *skip, int nskip, int x, int y) {
+    for (int i = 0; i < nskip; i++) {
+        if (x >= skip[i].x && x < skip[i].x + skip[i].w &&
+            y >= skip[i].y && y < skip[i].y + skip[i].h) return 1;
+    }
+    return 0;
+}
+
+int ugfx_verify_diff_masked(struct ugfx_screen *sc, struct ugfx_diff *out,
+                             const struct ugfx_skip_rect *skip, int nskip) {
     struct ugfx_diff d = { 0, -1, -1, 0, 0, 0, 0 };
     if (!sc || !sc->back.pixels || !sc->snapshot || !sc->snapshot_valid) {
         if (out) *out = d;
@@ -514,6 +527,7 @@ int ugfx_verify_diff(struct ugfx_screen *sc, struct ugfx_diff *out) {
         for (int x = 0; x < sc->back.w; x++) {
             uint32_t i = (uint32_t)y * (uint32_t)sc->back.w + (uint32_t)x;
             if (sc->back.pixels[i] == sc->snapshot[i]) continue;
+            if (nskip && in_skip(skip, nskip, x, y)) continue;
             if (d.count == 0) {
                 d.first_x = x; d.first_y = y;
                 d.x0 = x; d.y0 = y; d.x1 = x + 1; d.y1 = y + 1;

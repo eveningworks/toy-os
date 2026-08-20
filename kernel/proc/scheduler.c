@@ -239,6 +239,24 @@ struct sched_process {
     // does not outlive the call.
     char name[PROC_NAME_MAX];
 
+    // The FULL spawn path ("/bin/wm/apps/notepad"), not just the last
+    // component. `name` above is deliberately short because a task
+    // manager column is, and that is the right call for DISPLAY -- but
+    // a basename is not an identity: two programs in different
+    // directories can share one.
+    //
+    // This is what the window server keys a window's application
+    // identity on (see win_server.c's create_window). The alternative
+    // was to trust a string each app declares about itself, and that
+    // cannot be made safe: two apps declaring the same one silently
+    // raise each other's windows, and no runtime check can tell that
+    // apart from the legitimate case of two copies of ONE program,
+    // which must share an identity. A path the kernel derives cannot be
+    // misdeclared. Windows falls back to the executable for exactly
+    // this, and Wayland's app_id is only trustworthy because a
+    // compositor matches it against a .desktop FILE.
+    char exec_path[FS_PATH_MAX];
+
     // Timer ticks this process has been the RUNNING one for. Cumulative
     // and monotonic; a percentage is the DIFFERENCE between two reads
     // divided by the ticks elapsed between them, which is the consumer's
@@ -760,6 +778,7 @@ static int spawn_from_fs(const char *path, const char *args, int stdout_desc) {
     // name and CPU time showing up on its successor would be a
     // reporting bug that looks like a scheduling one.
     proc_name_from_path(procs[slot].name, sizeof procs[slot].name, path);
+    k_strlcpy(procs[slot].exec_path, path ? path : "", sizeof procs[slot].exec_path);
     procs[slot].cpu_ns = 0;
     // Armed here, at creation, rather than by a separate "set up this
     // process's heap" call the way the legacy loader does it: an init
@@ -1238,6 +1257,16 @@ void scheduler_on_exit(int code) {
 
 int scheduler_current_pid(void) {
     return current_index < 0 ? 0 : current_index + 1;
+}
+
+int scheduler_exec_path(int pid, char *out, unsigned cap) {
+    if (!out || !cap) return 0;
+    out[0] = '\0';
+    if (pid < 1 || pid > MAX_PROCS) return 0;   // slot is pid - 1, as everywhere here
+    struct sched_process *p = &procs[pid - 1];
+    if (p->state == SCHED_UNUSED) return 0;
+    k_strlcpy(out, p->exec_path, cap);
+    return out[0] ? 1 : 0;
 }
 
 struct sched_heap *scheduler_current_heap(void) {

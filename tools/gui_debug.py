@@ -190,15 +190,40 @@ class DebugConsole:
             self.log_lines = [l for l in self.log_lines if match not in l]
         return hits
 
-    def damage_bugs(self, clear=True):
+    # A verdict the WM itself declared void: the comparison measured
+    # nothing, so the line is a note and not a finding. See
+    # wm_render_frame()'s verification block for each one's reasoning --
+    # the big one is that a client window's content lives in another
+    # process's memory and cannot be held still for three renders.
+    VOID_VERDICTS = ("verdict void",)
+
+    def damage_bugs(self, clear=True, include_void=False):
         """`wm: DAMAGE BUG` reports seen so far -- the assertion for any
         test run under `gui damage verify on`.
 
         Assert this is empty after exercising whatever you changed. The
         WM reports each distinct failure once (see wm_render.c), so a
         long exercise yields one line per distinct bug, not per frame.
+
+        VOID VERDICTS ARE EXCLUDED BY DEFAULT, and that is the whole
+        difference between a useful signal and a wall of noise: the WM
+        prints a line whenever the two renders differ, then says whether
+        the difference means anything. Counting the voided ones as
+        failures made damage_sweep.py report 22 violations on a desktop
+        with no damage bug in it at all. Pass include_void=True to see
+        them -- worth doing when a real one is suspected of hiding among
+        them.
         """
-        return self.logs("DAMAGE BUG", clear=clear)
+        hits = self.logs("DAMAGE BUG", clear=clear)
+        if include_void:
+            return hits
+        return [h for h in hits if not any(v in h for v in self.VOID_VERDICTS)]
+
+    def damage_bugs_void(self, clear=False):
+        """The reports the WM declared void, for a caller that wants to
+        show them without failing on them."""
+        return [h for h in self.logs("DAMAGE BUG", clear=clear)
+                if any(v in h for v in self.VOID_VERDICTS)]
 
     def settle(self, seconds=SETTLE_S):
         """Wait for queued synthetic input to actually drain, then pause

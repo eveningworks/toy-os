@@ -332,6 +332,23 @@ int ugfx_verify_snapshot(struct ugfx_screen *sc);
 // Zero without a snapshot, with `out` zeroed -- see above.
 int ugfx_verify_diff(struct ugfx_screen *sc, struct ugfx_diff *out);
 
+// A rectangle to leave OUT of the comparison.
+struct ugfx_skip_rect { int x, y, w, h; };
+
+// The same comparison, ignoring any pixel inside one of `skip`.
+//
+// It exists because a caller can have regions whose content is not its
+// own to hold still -- the window manager composites client windows out
+// of another process's memory, which that process may rewrite at any
+// moment, so those pixels can differ between two renders with nothing
+// wrong. Masking them PER PIXEL rather than voiding the whole report is
+// the point: a single difference spanning a client's content AND the
+// taskbar underneath it would otherwise throw away the half that is
+// genuinely verifiable, which is exactly how a deliberately broken
+// taskbar declaration went undetected once.
+int ugfx_verify_diff_masked(struct ugfx_screen *sc, struct ugfx_diff *out,
+                             const struct ugfx_skip_rect *skip, int nskip);
+
 // Drops the snapshot. The scratch memory is KEPT, unlike the kernel's
 // gfx_verify_release(), which kfree()s it: sbrk cannot return pages, so
 // releasing would leak the address range and then allocate a second one

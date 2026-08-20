@@ -58,8 +58,8 @@ it has exonerated one this session and convicted another.
 
 ## Reproducible
 
-- [ ] `gui windows --json` truncates past ~25 windows -- the reply is capped at `WIN_DEBUG_REPLY_MAX` (4096) and the JSON comes back unparseable, so any tool asking the window list on a busy desktop gets a `ValueError` rather than a short answer
-- [ ] `damage_sweep.py`'s `resize-shrink Terminal` step reports a real missed damage
-- [ ] `rammeter` doesn't appear at the physical console
-- [ ] Resizing a window by its grip sometimes doesn't take on the first drag
-- [ ] `tools/damage_sweep.py`'s random walk sometimes drives Notepad's file picker open by clicking where its
+*(Empty. Every entry that was here on 2026-08-20 is fixed, was already
+fixed, or turned out not to be a defect -- see `git log`. That is a
+snapshot and not a claim about the system: the intermittents above are
+still open, and the sections above this one are where anything new
+should go first.)*

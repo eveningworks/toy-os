@@ -727,6 +727,7 @@ Things this OS does not do yet, or does in a way worth improving --
 `docs/bugs.md`; the test is "is something broken?", not "would I like
 this to be better?".
 
+- [ ] `damage_sweep.py`'s random walk can open Notepad's file picker by chance -- harmless, but confusing in a state dump
 - [ ] `SYS_LISTDIR` still truncates at 256 entries, and TFS3 has no such cap -- the fix is an offset argument
 - [ ] Nothing detects an ordinary memory LEAK, in either allocator
 - [ ] The shell's command dispatch is a 60-branch chain, and the fix is not the obvious one

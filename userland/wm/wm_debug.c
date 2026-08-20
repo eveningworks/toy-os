@@ -103,11 +103,27 @@ int wm_debug_next_key_mods(uint8_t *out_mods) {
 
 void dbg_out_write(struct dbg_out *o, const char *s) {
     if (!o || !o->buf || !s) return;
+    int limit = o->cap - o->reserve;
     while (*s) {
-        if (o->len + 1 >= o->cap) { o->overflow = 1; break; }
+        if (o->len + 1 >= limit) { o->overflow = 1; break; }
         o->buf[o->len++] = *s++;
     }
     o->buf[o->len] = '\0';
+}
+
+int dbg_out_mark(const struct dbg_out *o) { return o ? o->len : 0; }
+
+void dbg_out_rollback(struct dbg_out *o, int mark) {
+    if (!o || !o->buf || mark < 0 || mark > o->len) return;
+    o->len = mark;
+    o->buf[o->len] = '\0';
+}
+
+void dbg_out_reserve(struct dbg_out *o, int bytes) {
+    if (!o) return;
+    if (bytes < 0) bytes = 0;
+    if (bytes > o->cap - 1) bytes = o->cap - 1;
+    o->reserve = bytes;
 }
 
 void dbg_out_printf(struct dbg_out *o, const char *fmt, ...) {
@@ -226,7 +242,14 @@ static void cmd_windows(struct dbg_out *o, int json) {
         dbg_out_write(o, "{\"count\":");
         dbg_out_printf(o, "%d,\"focused\":%d,\"windows\":[", window_count,
                      window_count > 0 ? window_count - 1 : -1);
+        // Enough for `],"listed":NNN,"truncated":true}` whatever happens
+        // in the loop -- see dbg_out_reserve(). `count` above is the real
+        // total, so a caller can always tell how much it is missing.
+        dbg_out_reserve(o, 48);
+        int listed = 0;
         for (int i = 0; i < window_count; i++) {
+            if (o->overflow) break;
+            int mark = dbg_out_mark(o);
             const struct window *w = &windows[i];
             dbg_out_printf(o, "%s{\"z\":%d,\"title\":\"%s\",\"app\":\"%s\",",
                          i ? "," : "", i, w->title,
@@ -251,8 +274,16 @@ static void cmd_windows(struct dbg_out *o, int json) {
                          state_name(w->state),
                          (i == window_count - 1) ? "true" : "false",
                          w->resizable ? "true" : "false");
+            // ALL OR NOTHING: a half-written element in front of the
+            // closing bracket is as unparseable as no bracket at all.
+            if (o->overflow) { dbg_out_rollback(o, mark); break; }
+            listed++;
         }
-        dbg_out_write(o, "]}\r\n");
+        int cut = o->overflow;
+        o->overflow = 0;          // the ending is not a failure to write
+        dbg_out_reserve(o, 0);
+        dbg_out_printf(o, "],\"listed\":%d,\"truncated\":%s}\r\n",
+                     listed, cut ? "true" : "false");
         return;
     }
 
@@ -471,7 +502,11 @@ static void cmd_taskbar(struct dbg_out *o, int json) {
                      "\"cx\":%d,\"cy\":%d},\"tray_x\":%d,\"hidden\":%d,\"buttons\":[",
                      bar_y, taskbar_h, 0, bar_y, sw, taskbar_h,
                      sw / 2, bar_y + taskbar_h / 2, tray_left(), taskbar_hidden());
+        dbg_out_reserve(o, 48); // room for the ending -- see cmd_windows()
+        int listed = 0;
         for (int i = 0; i < nb; i++) {
+            if (o->overflow) break;
+            int mark = dbg_out_mark(o);
             dbg_out_printf(o, "%s{\"index\":%d,\"title\":\"%s\",\"app_id\":\"%s\","
                          "\"label\":\"%s\",\"x\":%d,\"w\":%d,"
                          "\"count\":%d,\"cx\":%d,\"cy\":%d}",
@@ -479,8 +514,14 @@ static void cmd_taskbar(struct dbg_out *o, int json) {
                          windows[btns[i].first].app_id, btns[i].label,
                          btns[i].x, btns[i].w, btns[i].count,
                          btns[i].x + btns[i].w / 2, bar_y + taskbar_h / 2);
+            if (o->overflow) { dbg_out_rollback(o, mark); break; }
+            listed++;
         }
-        dbg_out_write(o, "]}\r\n");
+        int cut = o->overflow;
+        o->overflow = 0;
+        dbg_out_reserve(o, 0);
+        dbg_out_printf(o, "],\"listed\":%d,\"truncated\":%s}\r\n",
+                     listed, cut ? "true" : "false");
         return;
     }
 

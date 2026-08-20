@@ -56,6 +56,8 @@ struct dbg_out {
     int   cap;      // buffer size INCLUDING room for the NUL
     int   len;      // bytes written so far, never >= cap
     int   overflow; // set once something did not fit; see dbg_out_write
+    int   reserve;  // bytes at the end nothing may write into; see
+                     // dbg_out_reserve()
 };
 
 // Append to the sink. A write that does not fit is TRUNCATED and sets
@@ -66,6 +68,28 @@ struct dbg_out {
 // makes that visible instead of silent.
 void dbg_out_write(struct dbg_out *o, const char *s);
 void dbg_out_printf(struct dbg_out *o, const char *fmt, ...);
+
+// Holds `bytes` at the end of the sink back, so a caller that MUST be
+// able to finish -- a JSON emitter that owes a `]}` -- can guarantee
+// room for the ending before it starts the middle.
+//
+// It exists because a truncated transcript is merely short while a
+// truncated JSON document is UNPARSEABLE: `gui windows --json` on a
+// desktop with twenty-five windows overran WIN_DEBUG_REPLY_MAX and every
+// tool asking for the window list got a ValueError rather than a partial
+// answer. Reserve, fill until `overflow`, then release and close.
+void dbg_out_reserve(struct dbg_out *o, int bytes);
+
+// A rollback point, so an ARRAY ELEMENT is all-or-nothing.
+//
+// Reserving room for the ending is only half of it: dbg_out_write()
+// stops mid-string when it runs out, which would leave a half-written
+// `{"z":5,"tit` in front of the closing bracket -- still unparseable.
+// Mark before each element, and roll back to that mark if the element
+// did not fit, so what survives is a shorter VALID document rather than
+// a longer broken one.
+int  dbg_out_mark(const struct dbg_out *o);
+void dbg_out_rollback(struct dbg_out *o, int mark);
 
 // Handles a `gui ...` command line: `line` is everything AFTER the word
 // `gui`, already trimmed (empty string for a bare `gui`). Output goes to

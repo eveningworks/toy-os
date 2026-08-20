@@ -861,16 +861,31 @@ manual steps to be worth automating:
   capture a Terminal's content focused, take focus away and require it
   to CHANGE, give focus back and require it to match the first capture
   EXACTLY -- "it changed" alone is satisfied by almost anything.
-- **`damage_sweep.py`** -- drives the WM through the interactions that
-  historically break the damage invariant with `gui damage verify on`,
-  and exits non-zero on a violation. Run it after touching anything
-  that draws, damages, focuses or changes window chrome. `--random N
-  --seed S` adds a seeded random walk (the seed prints on every run, so
-  a failure replays exactly); `--positive-control` inverts the exit
-  code, for proving the harness detects a real violation before
-  trusting a clean run -- a clean sweep otherwise can't be told apart
-  from a sweep that isn't checking anything, which has happened here
-  for real.
+- **`damage_sweep.py`** -- drives a fixed sequence of window
+  interactions (open, raise, drag, minimize/restore, resize by the grip,
+  overlays, close) with `gui damage verify on`, and reports every
+  distinct damage violation with the interaction that produced it.
+  `--random N --seed S` walks the same interactions in orders nobody
+  thought to list.
+
+  **Read the two counts in its summary.** A *violation* is a real missed
+  damage declaration and fails the run; a *report the WM declared void*
+  is one the compositor itself could not conclude anything from, printed
+  so it stays visible (`-v`) but not counted. Before that distinction
+  existed the tool reported 22 violations on a desktop with no damage bug
+  in it at all -- every one of them the verifier comparing two renders of
+  a CLIENT window whose content had moved underneath it, which a
+  compositor with no buffer-release protocol cannot prevent. See
+  `docs/decisions.md`.
+
+  **Its positive control is an injected defect, not a flag** --
+  `--positive-control` only inverts the exit code. Remove a
+  `wm_damage_rect()` call in something the WM draws itself (the taskbar
+  strip in `wm_client.c`'s `on_window_created()` is a good one) and
+  rebuild; three checks should redden, all at the taskbar's y. Injecting
+  it in CLIENT content proves nothing, since that is masked out by
+  design.
+
 - **`flake_hunt.py`** -- one GUI tool run N times, reporting which
   CHECKS failed and how often (`python3 tools/flake_hunt.py menubar -n 6
   --keep /tmp/flake`). The sibling of `damage_hunt.py`: that one varies

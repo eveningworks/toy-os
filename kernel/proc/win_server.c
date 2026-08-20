@@ -20,7 +20,8 @@
 #include "kfmt.h"        // klog_printf
 #include <stddef.h>
 
-#include "scheduler.h" // SCHED_MAX_PROCS -- this table is per process
+#include "scheduler.h" // SCHED_MAX_PROCS, scheduler_exec_path() -- see app_path
+#include "fs.h"       // FS_PATH_MAX, the size of that path
 
 #define WIN_SERVER_MAX_PIDS SCHED_MAX_PROCS
 
@@ -56,6 +57,28 @@ struct client_window {
     // unmapped again before the slot can be mapped for real.
     uint32_t comp_poisoned;
 
+    // How many pages of this window's compositor slot currently have a
+    // PTE AT ALL -- real frames plus any poison beyond them. It is the
+    // HIGH-WATER MARK of every size this window has ever been, and it
+    // never shrinks while the window lives.
+    //
+    // **THIS IS WHAT MAKES A SHRINK SAFE.** comp_poison()'s invariant --
+    // a live window's slot is never a hole -- was written for a window
+    // being DESTROYED and quietly did not cover one being made SMALLER.
+    // A shrink remaps the slot to fewer pages while the compositor is
+    // still holding the OLD width and height (it does not learn the new
+    // ones until it drains WIN_EV_CLIENT_RESIZED, and it is a process,
+    // so that is some frames later). Its very next blit then reads past
+    // the new mapping into nothing and the desktop dies -- measured as
+    // a page fault in ugfx_blit() at exactly the pixel where the old
+    // size ran past the new one.
+    //
+    // Keeping the tail mapped to the poison page turns that into one
+    // frame of black at the bottom of a shrinking window, which the
+    // compositor corrects the moment it adopts the new size. Costs only
+    // PTEs: every poison page in the system is the same borrowed frame.
+    uint32_t comp_span;
+
     // What the kernel used to receive and throw away, passing it
     // straight through to a ring-0 WM. A ring-3 one is TOLD a window
     // changed and reads the detail back (WIN_REQ_WINDOW_INFO), so the
@@ -64,7 +87,46 @@ struct client_window {
     // that used to need a round trip into the WM: does a window with
     // this app_id exist? (WIN_REQ_ACTIVATE.)
     char title[WIN_TITLE_LEN];
+
+    // The client's own NAME for what this window is ("notepad"). A
+    // display string and a hint -- **NOT the identity**. See app_path
+    // below for why, and abi/win_proto.h's WIN_REQ_CREATE.
     char app_id[WIN_APP_ID_LEN];
+
+    // WHAT THIS WINDOW'S APPLICATION ACTUALLY IS: an index into
+    // g_app_paths, interned from the full path its owning process was
+    // spawned from -- taken from the SCHEDULER at create time and never
+    // from anything the client said.
+    //
+    // Identity has to be something a client cannot get wrong, because
+    // the two things keyed on it both fail silently when it is wrong.
+    // Two apps declaring the same app_id would raise each other's
+    // windows through WIN_REQ_ACTIVATE -- a single-instance app told
+    // "your twin is already up" exits without ever drawing, so the
+    // symptom is an app that simply does not start -- and a taskbar
+    // grouping by it would merge two unrelated programs into one
+    // button. No runtime check can catch that either, because two
+    // copies of ONE program legitimately share an identity and look
+    // identical to any such check.
+    //
+    // A path the kernel derives cannot be misdeclared, and every real
+    // system anchors identity the same way: Windows falls back to the
+    // executable behind an AppUserModelID, macOS to the bundle, and
+    // Wayland's app_id is only dependable because a compositor matches
+    // it against a .desktop FILE rather than trusting the string.
+    // A NUMBER rather than the path itself, for two reasons. The
+    // compositor has to compare these, and `struct win_request_msg`'s
+    // only string field is WIN_TITLE_LEN (32) while a path is
+    // FS_PATH_MAX (64) -- so shipping the path would truncate it, and
+    // two long paths sharing a prefix would collide silently, which is
+    // the very failure this replaced. And an integer is what a
+    // comparison actually wants.
+    //
+    // APP_IDENTITY_NONE for a process with no scheduler slot (the
+    // legacy loader), which therefore matches nothing -- the safe
+    // direction.
+    int app_identity;
+
     unsigned hint_flags;
     int min_w, min_h;
 };
@@ -140,6 +202,36 @@ static struct client_window *lookup(int pid, uint32_t id) {
 // Allocated on first use and never freed -- there is exactly one, and
 // the whole point is that it is always available at the moment a window
 // dies.
+// --- application identity ---------------------------------------------
+//
+// Spawn paths, interned so a window can carry a small comparable number
+// instead of a string (see struct client_window::app_identity).
+//
+// Never reclaimed. A bounded, never-shrinking table is the right shape
+// here: entries are program paths, of which a running system has a
+// handful, and freeing one would need a reference count whose only
+// purpose would be to save 64 bytes. Full means the next new program
+// gets APP_IDENTITY_NONE -- it groups with nothing and single-instance
+// stops working for it, which is a degradation rather than a failure.
+#define APP_IDENTITY_NONE (-1)
+#define APP_IDENTITY_MAX  32
+
+static char g_app_paths[APP_IDENTITY_MAX][FS_PATH_MAX];
+static int  g_app_count;
+
+static int app_identity_for(const char *path) {
+    if (!path || !path[0]) return APP_IDENTITY_NONE;
+    for (int i = 0; i < g_app_count; i++) {
+        if (k_strcmp(g_app_paths[i], path) == 0) return i;
+    }
+    if (g_app_count >= APP_IDENTITY_MAX) {
+        klog_write("win_server: app identity table full -- window ungrouped\n");
+        return APP_IDENTITY_NONE;
+    }
+    k_strlcpy(g_app_paths[g_app_count], path, FS_PATH_MAX);
+    return g_app_count++;
+}
+
 static uint64_t g_poison_frame;
 
 static uint64_t poison_frame(void) {
@@ -155,13 +247,45 @@ static uint64_t poison_frame(void) {
 // Takes a poisoned slot's zero-page mappings back out. Must run before
 // anything maps real frames there, and before the compositor's address
 // space goes away.
-static void comp_unpoison(struct client_window *cw) {
-    if (!cw->comp_poisoned || !g_comp_pml4) { cw->comp_poisoned = 0; return; }
+// Takes EVERY page of the slot back out -- real frames and poison alike
+// -- leaving it with no PTEs at all. The only caller that may leave it
+// that way is the teardown of the compositor's address space itself;
+// every other one maps something back immediately.
+//
+// It walks `comp_span`, not `pages`, because the two differ exactly
+// when this matters: after a shrink the slot spans more pages than the
+// window now needs, and unmapping only `pages` of them would strand the
+// tail's PTEs pointing at the poison page forever.
+static void comp_clear(struct client_window *cw) {
+    if (!g_comp_pml4) { cw->comp_span = cw->comp_poisoned = 0; cw->comp_mapped = 0; return; }
     uint64_t vaddr = win_compositor_vaddr(cw->pid, cw->id);
-    for (uint32_t i = 0; i < cw->comp_poisoned; i++) {
+    for (uint32_t i = 0; i < cw->comp_span; i++) {
         vmm_unmap_user_page(g_comp_pml4, vaddr + (uint64_t)i * 4096);
     }
+    cw->comp_span = 0;
     cw->comp_poisoned = 0;
+    cw->comp_mapped = 0;
+}
+
+// Maps the poison page over [from, to) of the slot. Returns how many
+// pages it managed; the caller decides whether a short result matters.
+static uint32_t comp_poison_range(struct client_window *cw, uint32_t from, uint32_t to) {
+    if (to <= from) return 0;
+    uint64_t phys = poison_frame();
+    if (!phys) return 0;               // out of memory: a hole, as before
+    uint64_t vaddr = win_compositor_vaddr(cw->pid, cw->id);
+    uint32_t n = 0;
+    for (uint32_t i = from; i < to; i++) {
+        // BORROWED, and doubly so: one frame mapped at every page of the
+        // slot, so an owning teardown would free the same frame `pages`
+        // times -- and it is a permanent singleton nothing ever frees.
+        if (!vmm_map_user_borrowed(g_comp_pml4, vaddr + (uint64_t)i * 4096,
+                                   phys, 0, 0, VMM_MT_NORMAL)) {
+            break;
+        }
+        n++;
+    }
+    return n;
 }
 
 // Maps a window's frames into the compositor at its derived address.
@@ -170,12 +294,19 @@ static void comp_unpoison(struct client_window *cw) {
 static int comp_map(struct client_window *cw) {
     if (!g_comp_pid || !g_comp_pml4) return 0;
     uint64_t vaddr = win_compositor_vaddr(cw->pid, cw->id);
+
+    // The slot's extent never shrinks while the window lives -- see
+    // comp_span. Remember it before clearing, because the tail beyond
+    // the new frames has to be poisoned back over, not left as a hole.
+    uint32_t span = cw->comp_span;
+    if (span < cw->pages) span = cw->pages;
+
     // A poisoned slot has PRESENT page-table entries pointing at the
     // zero page, and mapping over a present entry does NOT invalidate
     // the TLB (vmm_map_user_page_type() only counts it) -- so the
     // compositor would go on reading zeros from a live window. Unmap
     // first, which does invalidate.
-    comp_unpoison(cw);
+    comp_clear(cw);
     for (uint32_t i = 0; i < cw->pages; i++) {
         uint64_t phys = (uint64_t)(uintptr_t)cw->buf + (uint64_t)i * 4096;
         // BORROWED: these frames are the window server's (allocated in
@@ -191,6 +322,13 @@ static int comp_map(struct client_window *cw) {
         }
     }
     cw->comp_mapped = 1;
+    cw->comp_span = cw->pages;
+
+    // THE TAIL. Everything the slot used to cover and no longer does
+    // reads as black rather than faulting, for as long as it takes the
+    // compositor to notice the window got smaller.
+    cw->comp_poisoned = comp_poison_range(cw, cw->pages, span);
+    cw->comp_span += cw->comp_poisoned;
     return 1;
 }
 
@@ -199,11 +337,7 @@ static int comp_map(struct client_window *cw) {
 // them should have to know whether a mapping exists.
 static void comp_unmap(struct client_window *cw) {
     if (!cw->comp_mapped) return;
-    uint64_t vaddr = win_compositor_vaddr(cw->pid, cw->id);
-    for (uint32_t i = 0; i < cw->pages; i++) {
-        vmm_unmap_user_page(g_comp_pml4, vaddr + (uint64_t)i * 4096);
-    }
-    cw->comp_mapped = 0;
+    comp_clear(cw);
 }
 
 // THE INVARIANT: while a compositor is registered, a window buffer's
@@ -226,21 +360,13 @@ static void comp_unmap(struct client_window *cw) {
 // rather than silently absorbing into a page every dead window shares.
 static void comp_poison(struct client_window *cw) {
     if (!cw->comp_mapped) return;
-    uint32_t pages = cw->pages;
-    comp_unmap(cw);                    // also invalidates the TLB
-    uint64_t phys = poison_frame();
-    if (!phys) return;                 // out of memory: a hole, as before
-    uint64_t vaddr = win_compositor_vaddr(cw->pid, cw->id);
-    for (uint32_t i = 0; i < pages; i++) {
-        // BORROWED, and doubly so: one frame mapped at every page of the
-        // slot, so an owning teardown would free the same frame `pages`
-        // times -- and it is a permanent singleton nothing ever frees.
-        if (!vmm_map_user_borrowed(g_comp_pml4, vaddr + (uint64_t)i * 4096,
-                                   phys, 0, 0, VMM_MT_NORMAL)) {
-            break;
-        }
-        cw->comp_poisoned = i + 1;
-    }
+    // The WHOLE span, not just the live frames: a slot that has been
+    // shrunk already has a poisoned tail, and the compositor may still
+    // blit out to the largest size this window ever was.
+    uint32_t span = cw->comp_span;
+    comp_clear(cw);                    // also invalidates the TLB
+    cw->comp_poisoned = comp_poison_range(cw, 0, span);
+    cw->comp_span = cw->comp_poisoned;
 }
 
 // Frees a window's frames and unmaps them from its owner's address
@@ -357,6 +483,13 @@ static int create_window(int pid, uint64_t pml4, int w, int h, int x, int y,
     // keeping. WIN_REQ_WINDOW_INFO reads it back.
     k_strlcpy(cw->title, "", sizeof cw->title);
     k_strlcpy(cw->app_id, app_id ? app_id : "", sizeof cw->app_id);
+    // THE IDENTITY, and it comes from the scheduler rather than from
+    // anything the client said -- see the field's comment.
+    {
+        char path[FS_PATH_MAX];
+        cw->app_identity = scheduler_exec_path(pid, path, sizeof path)
+                            ? app_identity_for(path) : APP_IDENTITY_NONE;
+    }
     cw->hint_flags = 0;
     cw->min_w = 0;
     cw->min_h = 0;
@@ -798,12 +931,22 @@ int win_server_request(int pid, struct win_request_msg *req) {
     // Same unprivileged reasoning as CLOSE_PID above, and weaker still:
     // the worst outcome is raising a window the user can already see.
     if (req->type == WIN_REQ_ACTIVATE) {
-        char app_id[WIN_APP_ID_LEN];
-        copy_text(app_id, req->text, WIN_APP_ID_LEN);
-        // An empty id matches nothing, rather than matching every
-        // window that never set one. Without this, one app opting in
-        // would start raising unrelated windows.
-        if (!app_id[0]) return 0;
+        // **THE CALLER NAMES NOTHING.** This asks "is a window of MY
+        // program already open?", and the kernel answers from the
+        // caller's own spawn path -- see struct client_window::app_path.
+        //
+        // It used to take an app id in `text`, which made the answer
+        // depend on a string each app declared about itself: two apps
+        // declaring the same one raised each other's windows, and the
+        // single-instance caller reads a "yes" as "my twin is up, exit
+        // now" -- so the app simply never appeared. Nothing could check
+        // for that either, because two copies of one program are
+        // SUPPOSED to match. A question whose answer the asker cannot
+        // influence has no such failure mode.
+        char self_path[FS_PATH_MAX];
+        if (!scheduler_exec_path(pid, self_path, sizeof self_path)) return 0;
+        int self_id = app_identity_for(self_path);
+        if (self_id == APP_IDENTITY_NONE) return 0;   // matches nothing
 
         // **THE KERNEL ANSWERS THIS ONE ITSELF**, and that is what
         // removes the last thing needing a round trip into ring 3.
@@ -818,17 +961,22 @@ int win_server_request(int pid, struct win_request_msg *req) {
         // ACTION, raising the window, which needs no answer at all.
         //
         // Search order is deliberate: the first match wins, and with one
-        // window per app_id by construction (that is what single
+        // window per program by construction (that is what single
         // instance MEANS) there is never a second.
+        //
+        // The caller's OWN windows are skipped. It is asking whether a
+        // twin exists, and matching itself would make every
+        // single-instance app refuse its own first window.
         for (int p = 0; p < WIN_SERVER_MAX_PIDS; p++) {
             for (int i = 0; i < WIN_CLIENT_MAX; i++) {
                 struct client_window *cw = &windows[p][i];
                 if (!cw->used) continue;
-                if (k_strcmp(cw->app_id, app_id) != 0) continue;
+                if (cw->pid == pid) continue;
+                if (cw->app_identity != self_id) continue;
                 tell_compositor(WIN_EV_CLIENT_ACTIVATE, cw->pid, cw->id, 0, 0);
                 // The ring-0 WM still raises it through its own callback
                 // while it exists; both run, neither disturbs the other.
-                if (g_ops && g_ops->window_activate) g_ops->window_activate(app_id);
+                if (g_ops && g_ops->window_activate) g_ops->window_activate(cw->app_id);
                 return 1;
             }
         }
@@ -979,11 +1127,19 @@ int win_server_request(int pid, struct win_request_msg *req) {
     }
     case WIN_REQ_WINDOW_APPID: {
         // Same access rule and same "gone is not an error" contract as
-        // WIN_REQ_WINDOW_INFO above -- see win_proto.h for why the app
-        // id needs its own request rather than a field on that one.
+        // WIN_REQ_WINDOW_INFO above -- see win_proto.h for why this
+        // needs its own request rather than a field on that one.
+        //
+        // Answers with the window's IDENTITY (its owner's spawn path),
+        // not with the app_id the client declared: the compositor groups
+        // taskbar buttons by this, and grouping must not be something an
+        // app can get wrong. `text` is WIN_TITLE_LEN and a path is
+        // FS_PATH_MAX -- both 64 today, and the copy is bounded by the
+        // smaller either way.
         if (!g_comp_pid || pid != g_comp_pid) return -1;
         struct client_window *cw = lookup(req->a, req->window);
         if (!cw) return -1;
+        req->a = cw->app_identity;
         copy_text(req->text, cw->app_id, WIN_APP_ID_LEN);
         return 0;
     }
@@ -1097,12 +1253,12 @@ int win_server_set_compositor(int pid, uint64_t pml4) {
     if (g_comp_pid && g_comp_pml4) {
         for (int p = 0; p < WIN_SERVER_MAX_PIDS; p++) {
             for (int i = 0; i < WIN_CLIENT_MAX; i++) {
-                comp_unmap(&windows[p][i]);
-                // The poison mappings of already-destroyed windows go
-                // the same way and for the same reason -- they live in
-                // the OLD compositor's address space, and the record of
-                // them must not outlive it.
-                comp_unpoison(&windows[p][i]);
+                // comp_clear() takes real frames AND poison in one
+                // pass, which is what this needs: an already-destroyed
+                // window's slot holds only poison, and a shrunk one
+                // holds both. Both live in the OLD compositor's address
+                // space, and the record of them must not outlive it.
+                comp_clear(&windows[p][i]);
             }
         }
         // The framebuffer grant goes the same way and for the same

@@ -82,7 +82,8 @@ production software. What that means concretely:
 line editor, both filesystems with `fsck` and live reformatting, the
 window manager and its apps, ring-3 processes with pipes and
 `spawn`/`waitpid`, and the full test suite: a few hundred in-kernel
-tests, the ring-3 diagnostics, and ~300 GUI checks across 23 tools.
+tests, the ring-3 diagnostics, and the GUI tools `gui_regress.py` runs
+as one table.
 
 **[Milestone 41](docs/wm-ring3-design.md) is complete** (2026-08-18):
 the window manager is an ordinary ring-3 process. `gui` spawns
@@ -279,9 +280,14 @@ could not be read rather than destroying a possibly-good filesystem.
 bitmaps at build time) in eight switchable sizes — and because the whole
 UI is font-*derived*, changing the size reflows everything rather than
 clipping it. Double-buffered rendering with damage-region clipping, and a
-compositor whose damage invariant is enforced by a verification mode that
-renders every frame twice and reports any pixel that changed without
-being declared. Apps declare a layout rather than coordinates, and a page
+compositor whose damage invariant is enforced by a verification mode
+that re-renders each frame unrestricted and reports any pixel that
+changed without being declared — over the chrome, desktop, taskbar,
+menus and cursor it draws itself. A *client's* content is another
+process's memory with no buffer-release handshake to hold it still, so
+those pixels are masked out rather than judged, which is the difference
+between a check that finds real bugs and one that reports twenty-two
+imaginary ones. Apps declare a layout rather than coordinates, and a page
 too big for its window scrolls.
 
 **Userland.** Every ring-3 program is just a `main()`: crt0 provides
@@ -386,7 +392,7 @@ Selected tools, each documented in its own docstring:
 | `flake_hunt.py` | Runs one tool N times and reports which CHECKS failed and how often — a rate, not a verdict. |
 | `pixel_probe.py` | Reads exact pixel values out of screenshots, so a rendering change is a number rather than an impression. |
 | `frame_balance.py`, `mem_stress.py` | Physical memory: does a process's teardown return exactly what it took, and does the machine survive running out? The patterns written are address-derived, so two mappings sharing one frame is detectable. |
-| `check_deps.py`, `check_layout.py`, `check_docs.py`, `check_dispatch.py` | The build's own invariants: header tracking is live, the disk matches its documented layout, the docs have no dead pointers, and no dispatch chain has quietly grown big enough to want a table. |
+| `check_deps.py`, `check_layout.py`, `check_docs.py`, `check_dispatch.py`, `check_widget_ops.py` | The build's own invariants: header tracking is live, the disk matches its documented layout, the docs have no dead pointers, no dispatch chain has quietly grown big enough to want a table, and no widget's ops table is missing a slot it needs. |
 | `qmp_test.py`, `gui_flow.py`, `shell_flow.py` | Drive the GUI over QEMU's QMP socket, with the mouse/keyboard gotchas already handled. |
 | `tfs3_writer.py`, `tfs2_writer.py` | Read, write, inspect and corrupt-for-testing files inside a `disk.img` from the host, without booting. Each refuses the other's images. |
 | `fs_switch_test.py` | Proves probe, wipefs, live `fsformat` both ways, and reboot persistence. |
@@ -400,6 +406,11 @@ Selected tools, each documented in its own docstring:
 | [docs/decisions.md](docs/decisions.md) | Topic-indexed answers to "why is this built this way?", over [docs/decisions/](docs/decisions/) — split by area. Start here when something looks odd. |
 | [docs/roadmap.md](docs/roadmap.md) | What's planned, grouped into layers from the kernel up, with a "ready now" list and the known issues. |
 | [docs/roadmap-details.md](docs/roadmap-details.md) | The per-item reasoning and test plans behind that list. |
+| [docs/bugs.md](docs/bugs.md) | What is currently BROKEN, one line each, with the reproduction in roadmap-details. Separate from the roadmap because "not built yet" and "misbehaving" are different questions. |
+| [docs/conventions/](docs/conventions/) | The conventions `CLAUDE.md` indexes by headline, written up in full and split by area: kernel, GUI, storage, shell, build. |
+| [docs/testing.md](docs/testing.md) | How to run and drive this OS headlessly, the QMP mechanics, and what the emulator does not model. |
+| [docs/tools.md](docs/tools.md) | Every script in `tools/`: what it does, why it exists, and the traps it encodes. |
+| [docs/settings-and-queries.md](docs/settings-and-queries.md) | Facts vs settings vs tunables, and how an app reads or changes either. |
 | [docs/commands.md](docs/commands.md) | The full shell command reference. |
 | [docs/boot-flags.md](docs/boot-flags.md) | Every word the kernel looks for on the GRUB command line. |
 | [docs/filesystem-layout.md](docs/filesystem-layout.md) | What lives where on the OS's own disk. Checked against the built image by `tools/check_layout.py`. |

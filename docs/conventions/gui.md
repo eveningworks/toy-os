@@ -262,6 +262,23 @@ this the obvious way), not from how much history it accumulated.
   release. **An app must honour `reason`**: discarding it applies a
   setting on every pointer-motion event, which froze the desktop for
   seconds and exposed the `fs_read()` bug above.
+- **A WINDOW'S APPLICATION IDENTITY IS THE KERNEL'S, not the app's.**
+  What a window's application IS comes from the full path its owning
+  process was spawned from (`scheduler_exec_path()`), interned by the
+  kernel into `struct window.app_identity`. **Do not key anything on
+  `uapp_desc.app_id`** -- that is a DISPLAY NAME now, and two apps
+  declaring the same one used to raise each other's windows (a
+  single-instance app told "your twin is up" exits without ever drawing,
+  so the symptom is an app that does not start) and merge into one
+  taskbar button. No runtime check can catch that, because two copies of
+  one program are supposed to match. `WIN_REQ_ACTIVATE` therefore takes
+  NO INPUT: it asks "is a window of MY program open?" and the kernel
+  answers from a fact the asker cannot influence, which is why
+  `UAPP_SINGLE_INSTANCE` no longer needs an `app_id` at all. The
+  compositor receives an opaque NUMBER rather than the path, because
+  `win_request_msg.text` is 32 bytes and a path is 64 -- shipping it
+  would truncate and re-create the collision. See `docs/decisions.md`.
+
 - **The TASKBAR'S LAYOUT IS ONE FUNCTION, and past a floor it groups by
   app.** `taskbar_layout()` (`userland/wm/wm_taskbar.c`) decides which
   buttons exist, how wide they are and what each stands for; the
@@ -275,10 +292,10 @@ this the obvious way), not from how much history it accumulated.
   APPLICATION collapse into one counted button whose click opens a list
   of them; anything that still will not fit is dropped and counted by
   `taskbar_hidden()` rather than drawn off-screen. Grouping is by
-  `struct window.app_id`, which every `uapp` now sets -- it reaches the
-  compositor through `WIN_REQ_WINDOW_APPID`, asked once at create,
-  because `WIN_REQ_WINDOW_INFO`'s single `text` is the title. A window
-  with no app id groups by client pid instead. See
+  `struct window.app_identity` (see above), which reaches the compositor
+  through `WIN_REQ_WINDOW_APPID`, asked once at create because
+  `WIN_REQ_WINDOW_INFO`'s single `text` is the title. A window with no
+  identity groups by client pid instead. See
   `docs/decisions.md`, and `tools/taskbar_test.py` for the thresholds.
 
 

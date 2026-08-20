@@ -361,10 +361,28 @@ struct win_event {
                            // same reason -- and strictly weaker than it,
                            // since the target may decline.
 
-#define WIN_REQ_ACTIVATE   13 // `text`: an app id. If any window carries
-                           // it, raise that window (un-minimizing it if
-                           // needed), give it focus, and return 1.
-                           // Return 0 if no window has that id.
+#define WIN_REQ_ACTIVATE   13 // NO INPUTS. "Is a window of MY program
+                           // already open?" If one is, raise it
+                           // (un-minimizing it if needed), give it
+                           // focus, and return 1. Return 0 if not.
+                           //
+                           // **THE CALLER NAMES NOTHING**, and that is
+                           // the point. It used to pass an app id in
+                           // `text`, which made the answer depend on a
+                           // string each app declared about itself --
+                           // so two apps declaring the same one raised
+                           // each other's windows, and since a "yes"
+                           // means "my twin is up, exit now", the second
+                           // app simply never appeared. No runtime check
+                           // could catch it either: two copies of ONE
+                           // program are SUPPOSED to match. The kernel
+                           // answers from the caller's own spawn path
+                           // now (win_server.c's app_identity_for()),
+                           // which is a fact the asker cannot influence.
+                           //
+                           // The caller's own windows are skipped, or
+                           // every single-instance app would refuse its
+                           // own first window.
                            //
                            // SINGLE INSTANCE, and the reason it is the
                            // CLIENT that decides: a launcher launches
@@ -513,10 +531,27 @@ struct win_event {
                            // between the event and this call, and the
                            // right response is to drop the window rather
                            // than to retry).
-#define WIN_REQ_WINDOW_APPID 23 // Read one client window's APP ID.
+#define WIN_REQ_WINDOW_APPID 23 // Read one client window's IDENTITY.
                            //   a      = owning pid (in)
                            //   window = its window id (in)
-                           //   text   = the app id, NUL-terminated (out)
+                           // and on return:
+                           //   a      = the application identity, an
+                           //            opaque number that is equal for
+                           //            two windows of the same PROGRAM
+                           //            and different otherwise; -1 for
+                           //            a window whose owner has no
+                           //            identity, which matches nothing
+                           //   text   = the app id the client declared,
+                           //            a DISPLAY NAME with no
+                           //            correctness role
+                           //
+                           // The identity is the owning process's spawn
+                           // path, interned by the kernel -- see
+                           // win_server.c. A number rather than the path
+                           // because `text` is WIN_TITLE_LEN and a path
+                           // is FS_PATH_MAX, so shipping the path would
+                           // truncate it and two long paths sharing a
+                           // prefix would collide silently.
                            //
                            // A SECOND request rather than a second field
                            // on WIN_REQ_WINDOW_INFO because that message
@@ -526,15 +561,9 @@ struct win_event {
                            // struct would cost every WIN_REQ_PRESENT on
                            // the hot path (see struct win_request_msg).
                            //
-                           // Asked ONCE, when the window is created: an
-                           // app id never changes, unlike the title.
-                           // Before this existed the ring-3 compositor
-                           // simply passed "" -- the kernel held every
-                           // app id and nothing could ask for one, which
-                           // left `struct window.app_id` permanently
-                           // empty on the desktop that replaced the
-                           // ring-0 one. The taskbar groups by it
-                           // (userland/wm/wm_taskbar.h).
+                           // Asked ONCE, when the window is created:
+                           // neither an identity nor an app id ever
+                           // changes, unlike the title.
                            //
                            // Compositor only, and same -1-means-gone
                            // contract as WIN_REQ_WINDOW_INFO.
@@ -651,7 +680,18 @@ struct win_event {
 // In the ABI rather than private to win_server.c because both ends size
 // a buffer by it, and two ends disagreeing about a maximum is how a
 // reply gets silently truncated at whichever end guessed smaller.
-#define WIN_DEBUG_REPLY_MAX 4096
+//
+// **IT WAS 4096, and that is about twenty-five windows' worth of
+// `gui windows --json`** -- past which the reply was cut mid-object and
+// every tool asking for the window list got a parse error rather than a
+// short answer. Two separate things were wrong and both are fixed: the
+// emitters reserve room for their own ending and roll back a partial
+// element (dbg_out_reserve()/dbg_out_rollback()), so what comes back is
+// always VALID and says `"truncated":true`; and this bound is now
+// 16 KiB, which is roughly a hundred windows. The first fix is the one
+// that matters -- a bound can always be reached, and a reply that
+// cannot be parsed at its bound is a bug at any size.
+#define WIN_DEBUG_REPLY_MAX 16384
 
 #define WIN_DEBUG_F_MORE  0x01 // set on a reply when more chunks follow:
                                // ask again with WIN_REQ_DEBUG_MORE. The

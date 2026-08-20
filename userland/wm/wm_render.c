@@ -548,6 +548,27 @@ static void draw_taskbar(void) {
     draw_tray(ty, bg, fg);
 }
 
+// The content rectangles of every visible CLIENT window -- the pixels
+// the damage verifier must not judge. See wm_render_frame().
+//
+// Chrome is deliberately NOT included: a title bar is drawn by this
+// compositor out of its own state, so it is fully verifiable and is
+// exactly where a missed damage declaration for a client window would
+// show up.
+static int client_content_rects(struct ugfx_skip_rect *out, int max) {
+    int n = 0;
+    for (int i = 0; i < window_count && n < max; i++) {
+        const struct window *w = &windows[i];
+        if (!wm_client_is_client_window(w) || w->state == WIN_MINIMIZED) continue;
+        out[n].x = window_content_x(w);
+        out[n].y = window_content_y(w);
+        out[n].w = w->client_w;
+        out[n].h = w->client_h;
+        n++;
+    }
+    return n;
+}
+
 // ---- scene damage region (compositor) ----
 //
 // Separate from gfx.c's own dirty-PIXEL tracking (which operates on the
@@ -942,6 +963,7 @@ void wm_render_frame(int mx, int my) {
     // reported. No damage this frame (menus, dialogs, the clock tick,
     // the first frame) means "unknown, be safe" -- full screen.
     int has_damage = damage_x1 > damage_x0;
+
     render_scene(mx, my, has_damage);
 
     if (verify_enabled && has_damage) {
@@ -950,8 +972,17 @@ void wm_render_frame(int mx, int my) {
         // frame is trivially equal to itself.
         if (ugfx_verify_snapshot(&g_wm_screen)) {
             render_scene(mx, my, 0);
+            // MASK OUT CLIENT CONTENT, per pixel. Those pixels come from
+            // another process's memory and can differ between two
+            // renders with nothing wrong -- see client_content_rects().
+            // Masking rather than voiding the report is what keeps a
+            // difference that spans a client AND the taskbar underneath
+            // it: voiding the whole thing hid a deliberately broken
+            // taskbar declaration, which is how this was found.
+            struct ugfx_skip_rect skip[16];
+            int nskip = client_content_rects(skip, 16);
             struct ugfx_diff d;
-            int diff = ugfx_verify_diff(&g_wm_screen, &d);
+            int diff = ugfx_verify_diff_masked(&g_wm_screen, &d, skip, nskip);
             if (diff && !verify_reported) {
                 verify_reported = 1;
                 // THE IDEMPOTENCE PROBE. A difference between the two
@@ -981,8 +1012,9 @@ void wm_render_frame(int mx, int my) {
                 int probed = ugfx_verify_snapshot(&g_wm_screen);
                 if (probed) {
                     render_scene(mx, my, 0);
-                    ugfx_verify_diff(&g_wm_screen, &again);
+                    ugfx_verify_diff_masked(&g_wm_screen, &again, skip, nskip);
                 }
+
                 // Which window the difference landed in, and whether
                 // that window was inside this frame's damage box at
                 // all. "63 px at (349,264)" says nothing on its own;
@@ -998,6 +1030,7 @@ void wm_render_frame(int mx, int my) {
                         break;
                     }
                 }
+
                 // The cursor is the other half of the picture: its box
                 // is damaged from prev_cursor_* and (mx,my), and
                 // wm_render_cursor_move()'s cheap path draws the sprite
@@ -1049,13 +1082,6 @@ void wm_render_frame(int mx, int my) {
                  &prev_cursor_box_w, &prev_cursor_box_h);
 
     ugfx_screen_present(&g_wm_screen);
-    // The `rammeter` overlay does NOT move here. It is painted straight
-    // at the framebuffer after the present, deliberately outside anything
-    // composited -- which in ring 0 meant "after gfx_present()", and in
-    // ring 3 would mean a second writer to a surface the compositor
-    // believes it owns. It stays kernel-side; if it is ever wanted over a
-    // ring-3 desktop it should become a normal overlay this compositor
-    // draws, not a second hand reaching into the same framebuffer.
     damage_reset();
 }
 

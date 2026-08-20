@@ -189,6 +189,6 @@ shell commands.
 ## See also
 
 - [boot-flags.md](boot-flags.md) — what you can put on the GRUB command
-  line (`nokaslr`, `nopat`, `rammeter`, `live`, `demo`).
+  line (`nokaslr`, `nopat`, `live`, `demo`).
 - [filesystem-layout.md](filesystem-layout.md) — what lives where on the
   OS's own disk, and the rules for adding to it.

@@ -526,6 +526,7 @@ whenever a headline here tells you something you did not already know.
 - **`ugfx` has a SCREEN surface now, and it is the compositor's**
 - **The registered compositor can be GRANTED the real framebuffer**
 - **`uui_radio_list` arms on press and COMMITS ON RELEASE**
+- **A WINDOW'S APPLICATION IDENTITY IS THE KERNEL'S, not the app's**
 - **The TASKBAR'S LAYOUT IS ONE FUNCTION, and past a floor it groups by app**
 - **The WM has a SLOW-FRAME WATCHDOG**
 - **There is a Crash Test app**
@@ -1065,7 +1066,7 @@ detail there, and keep the pointer here to a line. What each file is:
   in either direction. Read it before adding a directory, a config file
   or any seeded data.
 - **`docs/boot-flags.md`** -- every word the kernel looks for on the
-  GRUB command line (`nokaslr`, `nopat`, `rammeter`, `live`, `demo`).
+  GRUB command line (`nokaslr`, `nopat`, `live`, `demo`).
   Matching is by SUBSTRING with no parser, spread across five files with
   no registry, so **this table is the only list of them** -- add a row
   when adding a flag.

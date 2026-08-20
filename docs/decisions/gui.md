@@ -2979,3 +2979,135 @@ frontmost window changes underneath it. A grouped button is also allowed
 to be wider than a plain one, because there are by definition few of
 them and its label carries a count -- at the plain natural width
 "notepad (32)" truncates to "not (32)", which names nothing.
+
+---
+
+## A window's application identity is the KERNEL's, not the app's
+
+The taskbar groups by application and `UAPP_SINGLE_INSTANCE` asks "is a
+copy of me already running?". Both were keyed on `app_id` -- a string
+each app declares about itself -- and that cannot be made safe.
+
+**Two apps declaring the same string fail silently, in two directions.**
+`WIN_REQ_ACTIVATE` returned the first window carrying the id, so if Task
+Manager and System Settings both said `"system"`, launching Task Manager
+while Settings was open would raise SETTINGS, answer "yes, your twin is
+up", and Task Manager would exit 0 without ever drawing -- an app that
+simply does not start. An app need not even be single-instance to be the
+victim: it never asks, but its window is in the search set. And a taskbar
+grouping by the string would merge two unrelated programs into one
+button.
+
+**No runtime check can catch it.** Two copies of ONE program legitimately
+share an identity -- that is the case grouping exists for -- and they are
+indistinguishable from a collision at the point of the check. A
+build-time uniqueness check over the tree was considered and rejected: it
+would keep a hand-maintained registry of names that must stay unique,
+which is the "a fact someone has to remember to keep true" shape this
+project has deleted everywhere else, and it does nothing for a binary
+built outside the tree.
+
+**So identity is derived, not declared:** the full path the owning
+process was spawned from, taken from the scheduler at window-create time
+(`scheduler_exec_path()`, `struct sched_process::exec_path`). Two
+processes of one program share it; two programs never can; and no app can
+influence it. `app_id` survives as a display name with no correctness
+role.
+
+This is what every real system does, and the giveaway is always the
+fallback. Windows has AppUserModelID but groups by the EXECUTABLE when
+none is set; macOS ties the bundle id to a bundle on disk; Wayland's
+`xdg_toplevel.set_app_id` is a free string that is only dependable
+because a compositor matches it against a `.desktop` FILE -- GNOME's
+"my app doesn't group" bugs are almost all app_id/desktop-file
+mismatches. X11 goes further and makes `WM_CLASS` a *(instance, class)*
+pair. None of them trusts a self-declared name as the primary key.
+
+Two consequences worth knowing. **The compositor receives a NUMBER, not
+the path** -- `struct win_request_msg`'s only string field is
+`WIN_TITLE_LEN` (32) while a path is `FS_PATH_MAX` (64), so shipping the
+path would truncate it and two long paths sharing a prefix would collide
+silently, reintroducing the exact bug. The kernel interns paths
+(`app_identity_for()`) and hands out small indices. And
+**`WIN_REQ_ACTIVATE` now takes no input at all**: a question whose answer
+the asker cannot influence has no misdeclaration failure mode, and
+`UAPP_SINGLE_INSTANCE` no longer needs an `app_id` to work.
+
+---
+
+## A shrinking window's compositor mapping keeps a POISONED TAIL
+
+`comp_poison()` states the invariant: while a compositor is registered, a
+window buffer's slot in its address space is never a HOLE, because the
+compositor is a process and cannot be stopped mid-frame. That was written
+for a window being DESTROYED, and it quietly did not cover one being made
+SMALLER.
+
+A shrink allocates new frames, remaps the slot to FEWER pages and frees
+the old ones. But the compositor still holds the window's old width and
+height -- it does not learn the new ones until it drains
+`WIN_EV_CLIENT_RESIZED`, which is some frames later. Its very next blit
+runs off the end of the new mapping into nothing, and the desktop dies.
+Measured as a page fault in `ugfx_blit()` at exactly the pixel where the
+old size passed the new one.
+
+`comp_span` is the fix: the slot's extent is a HIGH-WATER MARK of every
+size the window has ever been, and it never shrinks while the window
+lives. Real frames occupy the first `pages` of it and the poison page
+covers the rest, so a stale-size blit reads black for at most one frame,
+which the compositor corrects the moment it adopts the new size. It costs
+only page-table entries -- every poison page in the system is the same
+borrowed frame.
+
+The general lesson is the one the original entry already half-stated: a
+ring-0 component becoming a process turns every "and then it will notice"
+into a race, and an invariant written for one lifecycle event has to be
+re-read against every other one that changes the same state.
+
+---
+
+## The damage verifier cannot judge client content, and says so
+
+`gui damage verify on` renders each frame twice -- once clipped to the
+declared damage, once unrestricted -- and reports a difference as a
+missed damage declaration. It renders a third time to check the scene is
+stable, which separates a real miss from a `render_scene()` that is not a
+pure function of the frame.
+
+That probe has a hole, and it is structural rather than an oversight: a
+client window's content is **another process's memory**. TWP has no
+`wl_buffer.release`-style handshake, so `WIN_REQ_PRESENT` is a
+notification and not a promise to hold still, and a client may rewrite
+its buffer between any two of those renders. The third render does not
+catch it, because both renders it compares are unrestricted. The result
+was 22 confident "real missed damage" reports on a desktop with no damage
+bug in it -- every one of them on Terminal or Notepad, which blink a text
+caret, and none on Calculator, which does not.
+
+So `ugfx_verify_diff_masked()` excludes client CONTENT rectangles from
+the comparison. What stays fully verified is everything the compositor
+draws itself -- chrome, the desktop, the taskbar, menus, the cursor --
+which is also where a missed damage declaration can actually originate,
+since the WM is what declares damage.
+
+**Masking is PER PIXEL, and that is the whole design.** The first attempt
+voided any report whose diff landed in client content, and the positive
+control caught it immediately: a deliberately removed taskbar damage
+declaration produced one diff spanning a client window AND the taskbar
+strip underneath it, so voiding the report threw away the half that was
+genuinely verifiable and the control passed against a broken kernel. With
+per-pixel masking the same control reddens three checks, every one at
+y=700 -- the taskbar strip, exactly where it was broken.
+
+Verifying client content properly needs a buffer-release protocol, which
+is a real feature and not a fix for this. Until then the honest thing is
+a narrower guarantee that holds, rather than a broad one that does not.
+
+**And the narrowing immediately earned itself.** With the noise gone, a
+random-walk sweep found a real missed declaration on the first run:
+`on_window_title()` damaged the title bar and nothing else, while the
+TASKBAR BUTTON carries the same title -- so every ring-3 window's button
+showed the placeholder `Client` until something unrelated repainted the
+strip. That is the common path rather than an edge, since a client sets
+its real title immediately after opening, and it had been sitting under
+22 confident false reports.

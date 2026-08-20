@@ -329,21 +329,5 @@ int gfx_double_buffered(void);
 int gfx_bpp(void);
 const char *gfx_write_combining_name(void);
 
-// --- overlay drawing: straight to the visible framebuffer ---
-//
-// These bypass the back buffer, the clip rect AND the dirty-rect box.
-// That is normally the exact recipe for stale pixels, and it is right
-// only for something that sits ON TOP of a finished frame and is never
-// composited -- today, the `rammeter` debug readout. Anything the user
-// interacts with belongs in the back buffer with its damage declared,
-// or `gui damage verify on` will correctly call it a violation.
-//
-// Text composites against the caller's `bg`, never against what is on
-// screen: blending against the screen would mean reading the
-// framebuffer back, which on real hardware is uncached and costs more
-// than the write it was meant to improve.
-void gfx_overlay_fill(int x, int y, int w, int h, uint32_t color);
-void gfx_overlay_char(int x, int y, char c, uint32_t fg, uint32_t bg);
-void gfx_overlay_string(int x, int y, const char *s, uint32_t fg, uint32_t bg);
 
 #endif

@@ -70,6 +70,7 @@ class Sweep:
         self.dbg = dbg
         self.verbose = verbose
         self.hits = []
+        self.voided = []
         self.steps = 0
 
     def step(self, label, command):
@@ -79,6 +80,15 @@ class Sweep:
             print(f"  {label}: {command}")
         self.dbg.send(command)
         self.dbg.settle()
+        # Void verdicts first, so they stay VISIBLE rather than being
+        # silently dropped -- a report the WM could not conclude
+        # anything from is still worth seeing when hunting a real one.
+        # They do not count toward the exit status.
+        for line in self.dbg.damage_bugs_void(clear=False):
+            if line not in self.voided:
+                self.voided.append(line)
+                if self.verbose:
+                    print(f"  (void) [{label}] {line}")
         for line in self.dbg.damage_bugs():
             print(f"  DAMAGE BUG [{label}] {line}")
             self.hits.append((label, line))
@@ -253,7 +263,8 @@ def main():
     finally:
         dbg.damage_verify(False)
 
-    print(f"\ndamage_sweep: {sw.steps} interactions, {len(sw.hits)} distinct violation(s)")
+    print(f"\ndamage_sweep: {sw.steps} interactions, {len(sw.hits)} distinct "
+          f"violation(s), {len(sw.voided)} report(s) the WM declared void")
     for label, line in sw.hits:
         print(f"  {label}: {line}")
 

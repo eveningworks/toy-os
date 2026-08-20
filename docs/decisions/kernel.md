@@ -1672,38 +1672,42 @@ What is NOT proven by anything committed: that write-combining is
 *faster*. It cannot be, in this environment. The speed claim can only be
 settled by `gfxbench` on the real machine.
 
-## The RAM meter is an uncomposited overlay, which is why it is debug-only
+## The `rammeter` overlay was REMOVED, and what it was for still matters
 
-`rammeter` (a GRUB flag, see `docs/boot-flags.md`) draws a live
-frame-allocator and heap readout in the top-right corner. It writes
-STRAIGHT to the visible framebuffer through `gfx_overlay_*`, bypassing
-the back buffer, the clip rect and the dirty-rect box alike.
+It drew a live physical-frame and kernel-heap readout in the top-right
+corner, once a second, behind a `rammeter` GRUB flag. Deleted 2026-08-20
+at the maintainer's request.
 
-That combination is normally a bug — it is precisely what leaves stale
-pixels behind, and it is the family `gui damage verify on` exists to
-catch. It is correct here only because the overlay is never composited:
-the WM knows nothing about it, paints over it whenever it repaints that
-corner, and the meter reappears on its next tick. Nothing it draws is
-interactive, so nothing is lost when a repaint eats it.
+**Why it was built:** those are the two pools that actually run out on
+this machine, and they fail in unrelated ways -- the frame allocator is
+what a leaking compositor or an unreaped process exhausts (window
+buffers are contiguous frames), while the heap is what fragments under
+kmalloc churn. A meter showing one would routinely point at the wrong
+subsystem.
 
-**A control the user touches must not be built this way.** It belongs in
-the back buffer with its damage declared, or the verifier will correctly
-call it a violation.
+**Why it went:** it only ever ticked from `wm_render_frame()`, so it
+appeared on the desktop and nowhere else -- never at the physical
+console, which has no repaint loop to hang it off. The two obvious hooks
+were both worse than the gap: drawing from the PIT IRQ can interleave
+with a compositor mid-blit, and hooking `keyboard_getchar()`'s wait
+would have a driver calling into gfx. Then the desktop became a ring-3
+process, and an overlay painted straight at the framebuffer by the
+KERNEL became a second writer to a surface the compositor believes it
+owns. A debug instrument that works in one of the two places you want it
+and fights the compositor in that one is not worth the seam.
 
-Two consequences worth knowing. The damage verifier compares BACK BUFFER
-contents, so the overlay is invisible to it and reports no violations —
-which is a property of where it draws, not an exemption anyone coded.
-And it ticks only from `wm_render_frame()`, so it appears on the desktop
-and NOT at the physical console, which has no repaint loop to hang it
-off.
+**What went with it:** `gfx_overlay_fill/char/string` and their
+`raw_put()` helper, which existed only for this. They bypassed the back
+buffer, the clip rect AND the dirty-rect box, which is exactly what
+`gui damage verify on` correctly calls a violation -- so leaving an
+unused API whose whole purpose is to evade the damage system would have
+been a footgun with no user.
 
-**The heap row is deliberately not warn-coloured.** `heap_total_bytes()`
-is what the allocator has claimed from pmm so far, and it claims more on
-demand, so heap-used-against-claimed sits near full as a matter of
-course — it read 89% on a freshly booted desktop. Colouring that yellow
-would cry wolf every boot and teach the reader to ignore the one row
-where the colour means something. Only the physical-frame row has a real
-ceiling, so only it gets the green/amber/red bands.
+**If it is ever wanted again:** it should be a normal widget the ring-3
+compositor draws, with its damage declared like anything else, reading
+the numbers through `SYS_QUERY` -- not a second hand reaching into the
+framebuffer. Task Manager is the natural home. `git log` has the
+original.
 
 ## The console is double-buffered because write-combining made its scroll 357x slower
 

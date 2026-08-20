@@ -22,19 +22,27 @@ int taskbar_hidden(void) { return g_hidden; }
 
 // Do these two windows belong to the same application?
 //
-// By app_id when both have one -- the client's own name for what it is,
-// so two Notepad processes group and Notepad plus Calculator do not.
-// A window with no app_id falls back to its client pid, which groups a
+// By app_identity: an opaque number the KERNEL derived from each owning
+// process's spawn path (wm.h), so two Notepad processes group and
+// Notepad plus Calculator cannot -- whatever either of them declares
+// about itself.
+//
+// It used to compare `app_id`, the name an app gives itself, and that
+// cannot be made safe: two apps declaring the same string would merge
+// into one taskbar button, and no check at this end could tell that
+// from the legitimate case of two copies of one program, which MUST
+// merge. An identity the app cannot influence has no such case.
+//
+// -1 means "no identity" -- a kernel-space app window, or a client with
+// no scheduler slot. Those fall back to the client pid, which groups a
 // single process's own windows and can never merge two unrelated ones;
-// pid 0 (a kernel-space app window) is nobody's peer, hence the
-// explicit `!= 0`, without which every such window would collapse into
-// one button.
+// pid 0 is nobody's peer, hence the explicit `!= 0`, without which
+// every such window would collapse into one button.
 static int same_app(int a, int b) {
-    const char *ia = windows[a].app_id, *ib = windows[b].app_id;
-    if (ia[0] && ib[0]) return k_strcmp(ia, ib) == 0;
-    if (!ia[0] && !ib[0]) return windows[a].client_pid != 0 &&
-                                  windows[a].client_pid == windows[b].client_pid;
-    return 0; // one named itself and the other did not -- not the same thing
+    int ia = windows[a].app_identity, ib = windows[b].app_identity;
+    if (ia >= 0 || ib >= 0) return ia == ib;
+    return windows[a].client_pid != 0 &&
+            windows[a].client_pid == windows[b].client_pid;
 }
 
 // Window i starts a group iff no earlier window shares its app. That

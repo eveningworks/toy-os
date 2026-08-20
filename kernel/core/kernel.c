@@ -16,7 +16,6 @@
 #include "multiboot.h"
 #include "pmm.h"
 #include "heap.h"
-#include "rammeter.h"
 #include "pci.h"
 #include "virtio_blk.h"
 #include "vmsvga.h"
@@ -149,10 +148,6 @@ void kernel_main(uint64_t multiboot_info_addr) {
     vmsvga_register();
     vesafb_register();
     display_probe();
-
-    // Reads the command line only -- nothing is drawn until something
-    // with a frame to sit on top of calls rammeter_tick().
-    rammeter_init();
 
     vga_init();
     // Mirror the kernel log to the screen for the rest of boot, the way
