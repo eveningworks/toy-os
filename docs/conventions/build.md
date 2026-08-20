@@ -121,7 +121,10 @@ this the obvious way), not from how much history it accumulated.
   probe/get_surface; optional flush, cursor, accel, modeset, each behind
   a capability bit) and `kernel/drivers/display/` holds the registry plus
   the drivers -- `vesafb` (GRUB's framebuffer, registers last, always
-  claims) and `vmsvga`. Adding a card is one file and one
+  claims), `bochs` (the Bochs DISPI register window, i.e. QEMU's
+  ordinary `-vga std`; it DECLINES unless it can set a bigger mode than
+  GRUB negotiated, so vesafb keeps the simple case), `vmsvga` and
+  virtio-gpu. Adding a card is one file and one
   `display_register()` line; `gfx.c` is a rasteriser that never learns
   which card it's on. `display_probe()` REFUSES a driver whose
   capability bits and function pointers disagree, because a card that

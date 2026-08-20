@@ -388,9 +388,11 @@ def main():
                          "pair, which is what exercises the input core's "
                          "multiple-source path.")
     ap.add_argument("--vga", default="std",
-                    help="QEMU -vga adapter (std, vmware, ...). `vmware` is the only "
-                         "one this kernel has a modesetting driver for, and the only "
-                         "one offering a hardware cursor -- so those paths are "
+                    help="QEMU -vga adapter (std, vmware, ...). All three of std, "
+                         "vmware and virtio have a modesetting driver now (std "
+                         "through kernel/drivers/display/bochs.c), so `video=` in "
+                         "the ISO's KCMDLINE works on any of them; `vmware` is the "
+                         "only one offering a HARDWARE cursor, so that path is "
                          "unreachable under the default `std`.")
     ap.add_argument("--cpu", default=None,
                      help="QEMU -cpu model (e.g. max, Skylake-Client). The default "

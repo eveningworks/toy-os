@@ -337,6 +337,8 @@ help:
 	@echo " Any of the three ISO targets can BAKE IN boot flags, so they need not be"
 	@echo " typed into the GRUB menu every boot -- docs/boot-flags.md lists every word:"
 	@echo "   make iso KCMDLINE=\"video=1920x1080 nokaslr\""
+	@echo "   video= goes up to 3840x2160 and works on EVERY VGA= below now (std"
+	@echo "   included, through the bochs driver). A WINDOW still caps at 1920x1080."
 	@echo ""
 	@echo " THERE IS ONE RUN TARGET. Everything that used to be its own run-* target is a"
 	@echo " variable on it, so any COMBINATION works without a target per combination:"
@@ -352,7 +354,10 @@ help:
 	@echo "     VGA=std|virtio|vmware   virtio is the virtio-gpu driver, which nothing"
 	@echo "                             else in the build exercises; vmware has a"
 	@echo "                             HARDWARE cursor, which screendump cannot"
-	@echo "                             capture -- do not use it for screenshot tests"
+	@echo "                             capture -- do not use it for screenshot tests."
+	@echo "                             ALL THREE CAN SET MODES now (std through the"
+	@echo "                             bochs DISPI driver), so video= works on any"
+	@echo "                             of them -- see the KCMDLINE line above"
 	@echo "     INPUT=ps2|virtio        virtio attaches keyboard/mouse/tablet BESIDE"
 	@echo "                             PS/2, so the input core has two sources"
 	@echo "   Which driver actually claimed the display: type lsdev at the serial"
@@ -1023,6 +1028,20 @@ run: $(RUN_PREREQ)
 
 # WHAT EACH AXIS IS FOR, since the targets that used to carry this are
 # gone and the knowledge is not obvious from a variable name.
+#
+# VGA -- WHICH ADAPTER, and therefore WHAT SCREEN SIZE IS REACHABLE.
+#   All three have a modesetting driver now, so `video=<W>x<H>` baked in
+#   with KCMDLINE (docs/boot-flags.md) is honoured whichever you pick:
+#   `std` through kernel/drivers/display/bochs.c (the Bochs DISPI
+#   register window, which QEMU's stdvga implements), `vmware` through
+#   vmsvga.c, `virtio` through the virtio-gpu driver. Before bochs
+#   existed `std` had none, so the flag was inert on the default -- and
+#   the default is what every headless test boots.
+#
+#   A guest bigger than 1920x1080 gets a bigger DESKTOP and not a bigger
+#   WINDOW: WIN_CLIENT_MAX_W/H (kernel/include/abi/win_proto.h) caps a
+#   client's buffer at 1080p, because the window server allocates those
+#   pixels contiguously. See docs/roadmap.md's growable client buffers.
 #
 # VGA=vmware -- the VMware SVGA II adapter, which has a HARDWARE MOUSE
 #   CURSOR: kernel/drivers/vmsvga.c detects it, takes the display over

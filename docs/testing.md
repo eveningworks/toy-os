@@ -45,7 +45,8 @@ python3 tools/vm.py stop
 python3 tools/vm.py run "ktest"          # start+exec+stop in one
 python3 tools/vm.py --kvm run "stress 150"   # same, KVM-accelerated (see `make run KVM=1`)
 python3 tools/vm.py --cpu Skylake-Client run "lscpu"  # a specific QEMU CPU model
-python3 tools/vm.py --vga vmware start   # the MODESETTING driver (vmsvga); `std` has none
+python3 tools/vm.py --vga vmware start   # vmsvga: the one with a HARDWARE cursor
+#   (std, vmware and virtio can all set modes -- std through the bochs driver)
 python3 tools/vm.py --instance 2 --disk /tmp/b.img start  # a second VM, alongside
 ```
 
