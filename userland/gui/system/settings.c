@@ -108,6 +108,18 @@ static int g_node_count;
 static char g_status[160];
 static int  g_loaded;
 static int  g_show_sysinfo;
+
+// Cleared on every PAGE CHANGE, set once that page's prose labels have
+// been re-fitted to the widths the layout gave them.
+//
+// ONCE PER PAGE, not once per app and not once per frame. Once per app
+// was the second version and fitted only whichever page happened to be
+// open first -- every later page's labels are laid out for the first
+// time when it opens, so fill_slot() sees width 0, reserves one row,
+// and a long description ellipsises. Every frame was the first version
+// and relayouts under the user, resetting the scroll position so a long
+// page could not be scrolled at all.
+static int  g_prose_fitted;
 static int  g_show_advanced;
 static int  g_page_group = -1;
 // Does the current page have anything the toggle would reveal?
@@ -314,6 +326,29 @@ static int reload_settings(void) {
 
 // Fills slot `s` for setting `idx`: its caption, its description, its
 // choices, and which control shows them.
+// How many rows of PROSE to reserve, from the text and the width the
+// label actually has. One row for almost everything; two when the text
+// will not fit.
+//
+// WHY NOT JUST RESERVE TWO. That was the first version, and it cost a
+// row on the nine descriptions out of ten that fit on one -- enough
+// extra height to push the last control of the Mouse page BELOW THE
+// SCROLL FOLD, where a control is not merely hard to click but
+// unreachable (CLAUDE.md). Wrapping is meant to save the reader a
+// resize, not spend the space it saved.
+//
+// This does NOT break the natural_size rule. That forbids a widget
+// measuring itself from where it currently is, DURING layout; this is
+// the app deciding what to ask for BEFORE layout runs -- the same thing
+// it already did by writing `rows` by hand, computed instead of
+// guessed. `l->w` is the previous layout's width, which is the current
+// one on every frame but the first; zero there reserves one row and the
+// next frame corrects it.
+static void fit_rows(struct uui_label *l, const char *text) {
+    int need = (text && text[0] && l->w > 0 && ugfx_text_width(text) > l->w) ? 2 : 1;
+    uui_label_set_wrap(l, need);
+}
+
 static void load_slot(struct slot *sl, int idx) {
     sl->setting = idx;
     sl->choice_count = 0;
@@ -325,6 +360,22 @@ static void load_slot(struct slot *sl, int idx) {
     // setting with no file simply has no description. The label reserves
     // its row either way, so a page does not reflow when text appears.
     uui_label_set_text(&sl->explain, g_desc[idx]);
+    // ROWS FROM THE TEXT, at the width this page actually has. A flat
+    // two rows for every explanation was the first version, and it cost
+    // a row on the nine descriptions out of ten that fit on one --
+    // enough extra height to push the last control of the Mouse page
+    // BELOW THE SCROLL FOLD, where it is not merely hard to click but
+    // unreachable (CLAUDE.md).
+    //
+    // This does NOT break the natural_size rule. That rule forbids a
+    // widget MEASURING itself from where it currently is, during layout;
+    // this is the app deciding, before layout runs, how many rows to
+    // ask for -- the same thing it already does by writing `rows` by
+    // hand, just computed instead of guessed. PAGE_SCROLL.w is the
+    // previous layout's width, which is the current one on every frame
+    // but the first; a zero there simply reserves one row and the next
+    // frame corrects it.
+    fit_rows(&sl->explain, g_desc[idx]);
 
     if (g_type[idx] != SETTING_ABI_TYPE_ENUM) {
         sl->kind = CTRL_RADIO;
@@ -442,6 +493,7 @@ static void open_group(int g) {
 
     // The page's own title and description, from /etc/settings.d.
     strlcpy(g_page_title_text, g_group_label[g], sizeof g_page_title_text);
+    fit_rows(&g_page_desc, g_page_desc_text);
     g_page_desc_text[0] = '\0';
     struct setting_msg m;
     memset(&m, 0, sizeof m);
@@ -679,6 +731,8 @@ static void relayout_page(void) {
 // --- navigation and events -------------------------------------------
 
 static void navigate(int node_id) {
+    // A new page means new labels at new widths -- see g_prose_fitted.
+    g_prose_fitted = 0;
     if (node_id == NODE_SYSINFO) {
         g_show_sysinfo = 1;
         g_page_group = -1;
@@ -772,28 +826,97 @@ static void on_widget(struct uapp *a, int id, int reason) {
     uapp_redraw(a);
 }
 
+// Painted OVER the widgets, which is the only way anything reaches the
+// page area: uui_scrollview fills its rect, so the two things this app
+// draws itself -- the System Information page and the empty-registry
+// notice -- would otherwise be covered the moment they were drawn. See
+// uapp.c's note on the ordering and why on_draw_over exists.
+static void on_draw_over(struct uapp *a, struct uapp_draw *d) {
+    struct ugfx_surface *s = uapp_surface(d);
+    (void)a;
+    int pad = ugfx_char_w();
+    // BELOW THE TITLE, and the position is ASKED OF THE LAYOUT rather
+    // than computed from the page rect. The title and description are
+    // real widgets at the top of the page (relayout_page() adds them
+    // first, on every page including this one), so drawing from the
+    // page's own top lands on top of them -- which is exactly what the
+    // first version did, printing the version string through the words
+    // "System Information". `g_page_desc` is the lower of the two and
+    // is present-but-empty here, so its bottom edge is the first free
+    // row whether or not a description was set.
+    int top = g_page_desc.y + g_page_desc.h;
+    if (top < PAGE_SCROLL.y + pad) top = PAGE_SCROLL.y + pad; // before the first layout
+    int avail = PAGE_SCROLL.y + PAGE_SCROLL.h - top - pad;
+
+    if (g_show_sysinfo) {
+        draw_sysinfo(s, PAGE_SCROLL.x + pad, top,
+                     PAGE_SCROLL.w - 2 * pad, avail);
+        return;
+    }
+    if (g_setting_count == 0)
+        ugfx_draw_string_clipped(s, PAGE_SCROLL.x + pad, top,
+                                  PAGE_SCROLL.w - 2 * pad,
+                                  "No settings are registered.",
+                                  UTHEME_TEXT, UTHEME_PANEL_BG);
+}
+
+// Re-asks fit_rows() for every prose label now that the layout has
+// given them real widths, and relayouts if any changed. Returns 1 if it
+// did, so the caller can ask for the extra frame.
+//
+// THIS IS A FEEDBACK LOOP, AND IT IS THE SAFE DIRECTION. `rows` is
+// computed from WIDTH and only ever changes HEIGHT; width comes from
+// UUI_FILL_W and does not depend on height, so the second pass sees the
+// same widths as the first and settles. The dangerous version -- the
+// one CLAUDE.md's natural_size rule forbids -- is a widget whose
+// measurement depends on its own placement, which oscillates.
+//
+// It exists because a label's width is 0 until the first layout, so
+// fit_rows() at fill_slot() time reserves one row for everything and a
+// long description ellipsises where it should have wrapped. Asking
+// again once is what makes the answer right on the frame after.
+static int refit_prose(void) {
+    int changed = 0;
+    int was = g_page_desc.rows;
+    fit_rows(&g_page_desc, g_page_desc_text);
+    if (g_page_desc.rows != was) changed = 1;
+    for (int i = 0; i < g_slot_count; i++) {
+        struct slot *sl = &g_slot[i];
+        if (sl->setting < 0) continue;
+        was = sl->explain.rows;
+        fit_rows(&sl->explain, g_desc[sl->setting]);
+        if (sl->explain.rows != was) changed = 1;
+    }
+    if (changed) relayout_page();
+    return changed;
+}
+
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
+    if (!g_prose_fitted && g_page_desc.w > 0) {
+        g_prose_fitted = 1;
+        if (refit_prose()) uapp_redraw(a);
+    }
     struct ugfx_surface *s = uapp_surface(d);
     (void)a;
     // THE PAGE AREA IS THE SCROLL VIEW'S RECT, asked of the widget
     // rather than recomputed from the window size: the layout owns where
     // things ended up, and a second calculation here would be a second
     // answer.
-    int pad = ugfx_char_w();
-    if (g_show_sysinfo) {
-        draw_sysinfo(s, PAGE_SCROLL.x + pad, PAGE_SCROLL.y + pad,
-                     PAGE_SCROLL.w - 2 * pad, PAGE_SCROLL.h - pad);
-        return;
-    }
-    if (g_setting_count == 0)
-        ugfx_draw_string_clipped(s, PAGE_SCROLL.x + pad, PAGE_SCROLL.y + pad,
-                                  PAGE_SCROLL.w - 2 * pad,
-                                  "No settings are registered.",
-                                  UTHEME_TEXT, UTHEME_PANEL_BG);
-    // Everything else on a settings page is a real widget the toolkit
-    // draws -- captions included, now that uui_label exists. Nothing is
-    // painted here, which is what stops it landing on top of a control:
-    // on_draw runs AFTER the widgets.
+    (void)s;
+    // NOTHING IS PAINTED HERE, and the reason is the opposite of what
+    // this comment used to claim. It said "on_draw runs AFTER the
+    // widgets", so painting here was safe; uapp.c says the order is
+    // "clear, then the APP's own painting, then the widgets, then
+    // overlays" -- on_draw runs FIRST, deliberately, so that an app
+    // whose first line clears the surface can only ever wipe its own
+    // backdrop.
+    //
+    // That wrong comment cost the System Information page: it drew its
+    // text here, the scroll view then painted its background over the
+    // whole page area, and the page came up EMPTY with the title and
+    // status bar still correct -- so it looked like a data problem
+    // rather than a paint-order one. Anything that must appear ON TOP
+    // of a widget goes in on_draw_over(), below.
 
     // WHERE EACH CONTROL ENDED UP, reported whenever it MOVES -- which
     // covers a page change and a scroll with one rule. Geometry does not
@@ -819,6 +942,15 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
                 x = sl->radio.x; y = sl->radio.y; w = sl->radio.w; hh = sl->radio.h;
             }
             g_last_y[i] = y;
+            // The description's ROW COUNT, beside the control's
+            // geometry and for the same reason: it is the only
+            // observable difference between a wrapped explanation and a
+            // truncated one, and settings_test asserts that at least
+            // one description on a page actually took two rows.
+            logf_("settings: prose %d %s rows %d width %d text %d\n", i,
+                  sl->setting >= 0 ? g_name[sl->setting] : "-",
+                  sl->explain.rows, sl->explain.w,
+                  sl->setting >= 0 ? ugfx_text_width(g_desc[sl->setting]) : 0);
             logf_("settings: control %d %s %d %d %d %d rows %d kind %s\n", i,
                   sl->setting >= 0 ? g_name[sl->setting] : "-", x, y, w, hh,
                   sl->choice_count,
@@ -907,10 +1039,25 @@ int main(void) {
 
     uui_label_init(&g_page_title, g_page_title_text);
     uui_label_init(&g_page_desc, g_page_desc_text);
+    // THE PROSE WRAPS; THE HEADINGS DO NOT. A page description and a
+    // setting's explanation are sentences written by whoever registered
+    // the setting, and there is no length they are promised to fit --
+    // so they were being clipped mid-word and the only way to read one
+    // was to widen the window. A title and a caption are short by
+    // construction and wrapping one would look broken.
+    //
+    // Two rows, not one: `rows` is what a wrapping label reserves and
+    // cannot exceed (see uui_label.h), and two lines of this page's
+    // width holds every description the kernel currently registers with
+    // room to spare. A longer one ellipsises rather than vanishing.
+    uui_label_set_wrap(&g_page_desc, 1); // grown per text by fit_rows()
     for (int i = 0; i < PAGE_MAX; i++) {
         g_slot[i].setting = -1;
         uui_label_init(&g_slot[i].caption, 0);
         uui_label_init(&g_slot[i].explain, 0);
+        // One row until a description arrives that needs two -- the row
+        // count is recomputed per text in fill_slot(), see there.
+        uui_label_set_wrap(&g_slot[i].explain, 1);
         g_slot[i].radio.cols = 1;
         g_slot[i].radio.selected = -1;
         g_slot[i].radio.hovered = -1;
@@ -969,6 +1116,7 @@ int main(void) {
         .widget_count = (int)(sizeof ITEMS / sizeof ITEMS[0]),
         .on_widget = on_widget,
         .on_draw = on_draw,
+        .on_draw_over = on_draw_over,
         .on_open = on_open,
         .on_size = on_size,
     };

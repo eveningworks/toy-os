@@ -502,6 +502,77 @@ def main():
                   any("cursor_style" in s["name"] for s in page),
                   f"{[s['name'] for s in page]}")
 
+    # --- A LONG DESCRIPTION WRAPS; A SHORT ONE DOES NOT ---------------
+    #
+    # Both halves, and the second is the one that keeps the first
+    # honest. Reserving two rows for EVERY description also makes every
+    # long one fit -- and it was the first implementation, which pushed
+    # the last control of this page below the scroll fold, where a
+    # control is unreachable rather than merely awkward. So this asserts
+    # that a description wraps ONLY when it has to.
+    #
+    # Self-calibrating: the app reports the text's width and the label's
+    # width alongside the row count, so the expected answer is computed
+    # from the same numbers the app used rather than from a threshold
+    # someone picked and nobody re-checks when the font changes.
+    prose = []
+    for line in drain(dbg) + _log:
+        m = re.search(r"settings: prose \d+ (\S+) rows (\d+) width (\d+) text (\d+)", line)
+        if m:
+            prose.append({"name": m.group(1), "rows": int(m.group(2)),
+                          "width": int(m.group(3)), "text": int(m.group(4))})
+    if check("the app reports its description metrics", len(prose) > 0,
+             f"{len(prose)} prose lines"):
+        wrapped = [p for p in prose if p["text"] > p["width"] > 0]
+        plain = [p for p in prose if 0 < p["text"] <= p["width"]]
+        check("a description too wide for its label wraps to two rows",
+              all(p["rows"] >= 2 for p in wrapped),
+              f"{[(p['name'], p['rows'], p['text'], p['width']) for p in wrapped if p['rows'] < 2]}")
+        check("...and one that fits does NOT spend a second row",
+              all(p["rows"] == 1 for p in plain),
+              f"{[(p['name'], p['rows'], p['text'], p['width']) for p in plain if p['rows'] != 1]}")
+
+    # --- THE SYSTEM INFORMATION PAGE ACTUALLY DRAWS -------------------
+    #
+    # PIXELS, not the app's log, and that is the whole point of this
+    # check. The page shipped EMPTY: it painted its text from on_draw,
+    # which uapp.c runs BEFORE the widgets, so the scroll view's
+    # background covered every line the moment it was drawn. Nothing
+    # else could see it -- the title, the status bar and the sidebar
+    # selection were all correct, and the app logged that it had drawn.
+    # "It responds" is not "it is drawn" (CLAUDE.md).
+    #
+    # It compares against the SAME REGION on a settings page, so the
+    # threshold is not a number picked out of the air: a page that draws
+    # controls has ink there, and a blank one does not.
+    sysinfo_row = row_named("System Information")
+    if check("the sidebar offers a System Information page",
+             sysinfo_row is not None,
+             f"labels={[r['label'] for r in rows]}"):
+        from PIL import Image
+
+        def page_ink(tag):
+            path = os.path.abspath(os.path.join(args.tmp, f"settings-{tag}.png"))
+            qmp.screenshot(path)
+            im = Image.open(path).convert("RGB")
+            # The page BODY: below the title/description rows, so the
+            # title -- which drew correctly even when the body did not --
+            # cannot satisfy this on its own.
+            bx = cx + px0 + 8
+            by = cy + py0 + 3 * 22
+            crop = im.crop((bx, by, bx + pw0 - 16, cy + py0 + ph0 - 8))
+            px = list(crop.getdata())
+            bg = max(set(px), key=px.count)     # the panel colour, whatever it is
+            return sum(1 for p in px if p != bg)
+
+        click(tx + tw // 2, mouse_row["y"])
+        control_ink = page_ink("mouse")
+        click(tx + tw // 2, sysinfo_row["y"])
+        info_ink = page_ink("sysinfo")
+        check("the System Information page draws its text",
+              info_ink > control_ink // 4,
+              f"sysinfo={info_ink} px vs a settings page={control_ink} px")
+
     # --- Cancel closes without writing --------------------------------
     mark = len(drain(dbg))
     click(tx + tw // 2, mouse_row["y"])

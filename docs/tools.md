@@ -166,7 +166,7 @@ manual steps to be worth automating:
 - **`usertest_run.py`** -- runs the self-checking ring-3 diagnostics in
   `/tests` (`libc_test`, `fpu_test`, `klineedit_test`, `newsyscalls_test`,
   `file_test`, `write_test`, `exit_test`, `random_test`, `memtest`,
-  `guard_test`, `malloc_test`) as one pass/fail table, asserting BOTH an
+  `guard_test`, `malloc_test`, `wrap_test`) as one pass/fail table, asserting BOTH an
   exit code and required output. In `preflight.sh`. It fills a real gap:
   `make test` runs inside the kernel and `gui_regress.py` covers the
   windowed clients, so nothing ever ran a plain `/tests` binary except a
@@ -176,6 +176,17 @@ manual steps to be worth automating:
   says nothing about the code under test. `pipe_test` is the worked
   example: it exits 3 under `run` because its `waitpid` finds no parent,
   and passes fine under the KTEST that spawns it properly.
+  **An expected exit code of `None` means SPAWN IT INSTEAD**, and judge
+  it by what it printed. `run` uses the legacy loader, which has no
+  scheduler slot, so anything reaching the window server is refused
+  there -- `wrap_test` needs a real font (`ugfx_font_init()` goes
+  through `SYS_WIN_REQUEST`) and measures nothing at all under `run`,
+  where every width comes back 0 and every check passes for the wrong
+  reason. A spawned test has no exit code to read, so its printed
+  verdict carries the whole assertion, and it writes that verdict to
+  `/tmp/<name>.out`: a spawned program's console output arrives while
+  the harness is between commands, where it is dropped, so the harness
+  waits on the ARTIFACT rather than on the timing.
 - **`serial_console.py`** -- boot a guest with COM1 as a SOCKET and drive
   it as text in / text out. Not a test: the shared channel under
   `ktest_run.py` and `faulttest_run.py`, which had written half of it

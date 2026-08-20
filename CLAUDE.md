@@ -514,6 +514,8 @@ whenever a headline here tells you something you did not already know.
 - **A `uui_scrollview` NOTICES when its content's item list changes**
 - **`uui_slider` is for an ORDERED enum**
 - **A CONTROL BELOW THE FOLD IS UNREACHABLE, not merely hard to hit.**
+- **`on_draw` RUNS BEFORE THE WIDGETS; `on_draw_over` RUNS AFTER.**
+- **`uui_label` WRAPS ONLY IF ASKED, AND THE CALLER RESERVES THE ROWS.**
 - **`uui_label` is the caption widget**
 - **`uui_tree` is the navigation widget**
 - **A SETTING DECLARES ITS CATEGORY, and the sidebar is generated from it.**

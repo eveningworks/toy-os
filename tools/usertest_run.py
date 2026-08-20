@@ -45,12 +45,22 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VM = os.path.join(REPO, "tools", "vm.py")
 
 # name -> (expected exit code, [substrings that must appear],
 #          [substrings that must NOT appear])
+#
+# AN EXIT CODE OF None MEANS "SPAWN IT, AND JUDGE IT BY WHAT IT PRINTS".
+# `run` uses the legacy loader, which has no scheduler slot -- so a test
+# needing anything that goes through the window server (ugfx_font_init()
+# asks for the kernel's glyph tables through SYS_WIN_REQUEST) gets
+# refused there and would measure nothing. Such a test is spawned as a
+# real process instead, which costs the exit code, so its own printed
+# verdict has to carry the whole assertion. That is why wrap_test prints
+# "0 failure(s)" rather than only exiting 0.
 #
 # A FORBIDDEN substring is matched only against lines the test itself
 # printed -- lines carrying its own name -- never against everything the
@@ -63,6 +73,12 @@ VM = os.path.join(REPO, "tools", "vm.py")
 TESTS = [
     ("libc_test", 0,
      ["libc_test: all checks passed"], ["FAIL"]),
+    # uui_label's word wrapping. Its load-bearing check is that a word
+    # wider than the line is BROKEN rather than refused: refusing it
+    # returns the same cursor and loops forever inside a draw call,
+    # which hangs the compositor rather than drawing something wrong.
+    ("wrap_test", None,
+     ["0 failure(s)"], ["FAIL"]),
     # Error codes reaching ring 3. Its load-bearing check is that a full
     # descriptor table and a missing file are DIFFERENT answers, which
     # needs a process that has really run out of fds -- see the file.
@@ -166,6 +182,11 @@ EXCLUDED = [
     ("socket_test",      "needs a network peer"),
 ]
 
+# How long a spawned test is given before its output is collected. These
+# are small programs; the wait is for the scheduler to run them at all,
+# not for them to do work.
+SPAWN_SETTLE_S = 3.0
+
 EXIT_RE = re.compile(r"Exit code:\s*(-?\d+)")
 
 
@@ -180,7 +201,24 @@ def vm(args, *argv, check=True):
     return r
 
 
-def run_one(args, name):
+def run_one(args, name, spawned=False):
+    if spawned:
+        # Spawned, then dmesg'd: `spawn` returns as soon as the child
+        # exists, so the child's own output is collected on the second
+        # command rather than from the first. There is no exit code to
+        # read -- see the TESTS table comment.
+        a = vm(args, "exec", f"spawn /tests/{name}", "--label", check=False)
+        # THE VERDICT IS READ BACK FROM A FILE, not from the console.
+        # `spawn` returns as soon as the child exists, so its output
+        # arrives while this harness is between commands -- where it is
+        # dropped. Chaining `dmesg` onto the same exec collects the log
+        # from BEFORE the test ran; sleeping and then asking collects it
+        # from after the output was already discarded. Both were tried.
+        # The test writes its own verdict to /tmp, which can be asked for
+        # at any time -- waiting on the artifact rather than the timing.
+        time.sleep(SPAWN_SETTLE_S)
+        b = vm(args, "exec", f"cat /tmp/{name}.out", "--label", check=False)
+        return None, a.stdout + a.stderr + b.stdout + b.stderr
     r = vm(args, "exec", f"run {name}", "--label", check=False)
     out = r.stdout + r.stderr
     m = EXIT_RE.search(out)
@@ -234,9 +272,12 @@ def main():
             return 2
         results = []
         for name, want_code, want, forbid in selected:
-            code, out = run_one(args, name)
+            spawned = want_code is None
+            code, out = run_one(args, name, spawned)
             problems = []
-            if code is None:
+            if spawned:
+                pass  # judged by its printed verdict alone
+            elif code is None:
                 problems.append("no exit code (did it hang?)")
             elif int(code) != want_code:
                 problems.append(f"exit {code}, wanted {want_code}")

@@ -105,6 +105,44 @@ this the obvious way), not from how much history it accumulated.
   coordinates, where it gets silence rather than an error. An app driven
   by tools should report a control's rect whenever it MOVES (a page
   change and a scroll alike), not only when a page changes.
+- **`on_draw` RUNS BEFORE THE WIDGETS; `on_draw_over` RUNS AFTER.**
+  `uapp.c`'s order is "clear, then the APP's own painting, then the
+  widgets, then overlays", and it is that way deliberately: an app whose
+  first line clears the surface -- the natural thing to write -- can
+  then only ever wipe its own backdrop, which is a bug that shipped
+  twice before the order was fixed. **So anything that must appear ON
+  TOP of a widget goes in `on_draw_over`.** System Settings' System
+  Information page painted from `on_draw`, the scroll view filled its
+  rect straight over it, and the page came up EMPTY with the title,
+  sidebar selection and status bar all still correct -- which reads as
+  a data problem, not a paint-order one. Its own comment had asserted
+  the opposite order, which is what made it invisible.
+
+- **`uui_label` WRAPS ONLY IF ASKED, AND THE CALLER RESERVES THE ROWS.**
+  `uui_label_set_wrap(l, rows)` is Qt's `QLabel::setWordWrap` and
+  GtkLabel's `wrap` -- opt-in, because most labels are a word or two in
+  a control and wrapping one would look broken. The height still comes
+  from `rows`, NOT from the text: a real toolkit asks "how tall are you
+  at this width?" (Qt's `heightForWidth`) and needs a second measure
+  pass through the layout, which this does not have.
+
+  **RESERVING A ROW FOR EVERYONE IS NOT THE ANSWER.** Turning wrapping
+  on for every description with a flat two rows made nine descriptions
+  in ten a row taller than they need, and that was enough to push the
+  last control of a page BELOW THE SCROLL FOLD -- where it is
+  unreachable, not merely awkward. Compute the rows from the text and
+  the width instead.
+
+  **And that computation belongs to the APP, once per page.** It does
+  not break the `natural_size` rule, which forbids a widget measuring
+  itself from where it currently IS during layout; this is the app
+  deciding what to ask for before layout runs. Two wrong cadences were
+  tried first: every frame relayouts under the user and resets the
+  scroll position, so a long page cannot be scrolled at all; once per
+  APP fits only whichever page opened first, because every later page's
+  labels are laid out for the first time when it opens and so report a
+  width of 0. Once per PAGE is the one that works.
+
 - **`uui_label` is the caption widget** (`userland/ui/uui_label.h`) --
   one line of text the LAYOUT reserves a row for, with no behaviour and
   **no `hit`**, so a click passes through to whatever is behind. Reach

@@ -3111,3 +3111,87 @@ showed the placeholder `Client` until something unrelated repainted the
 strip. That is the common path rather than an edge, since a client sets
 its real title immediately after opening, and it had been sitting under
 22 confident false reports.
+
+## Word wrapping is opt-in, and the row count is the APP's decision
+
+`uui_label` gained `uui_label_set_wrap(l, rows)`: off by default, which
+is `QLabel::setWordWrap` and `GtkLabel:wrap`. Most labels are a word or
+two inside a control and wrapping one would look broken; the ones that
+need it are PROSE -- a page description, a setting's explanation --
+written by whoever registered the setting, with no length they are
+promised to fit. Those were being clipped mid-word, and the only way to
+read one was to widen the window.
+
+**The height comes from `rows`, not from the text.** A real toolkit asks
+a widget "how tall are you at this width?" -- Qt's `heightForWidth` --
+which needs a second measure pass through the layout. `uui_layout` has
+one pass and a rule (CLAUDE.md) that a widget's `natural_size` must not
+depend on where it currently is. So the caller reserves rows and
+wrapping fills them; text that still does not fit ellipsises on the last
+line, so a shortfall is visible rather than being a sentence that
+appears to end early.
+
+**Reserving a row for everyone is not the answer, and this is the part
+worth remembering.** The first version simply gave every description two
+rows. It works, it is one line, and it made nine descriptions in ten a
+row taller than they needed -- which was enough to push the last control
+of the Mouse page below the scroll fold, where a control is UNREACHABLE
+rather than merely awkward. Four settings-test checks caught it, all of
+them about clicking a control that was no longer on screen. Wrapping is
+meant to save the reader a resize, not to spend the space it saved.
+
+So the row count is computed from the text and the label's width. That
+does not break the `natural_size` rule: the rule forbids a widget
+MEASURING ITSELF from its own placement during layout, and this is the
+app deciding what to ask for before layout runs -- the same thing it
+already did by writing `rows` by hand, computed instead of guessed. The
+loop is safe in the direction it runs: width decides rows, rows changes
+only height, and height does not feed back into width.
+
+**The cadence took three attempts and each failure is instructive.**
+Every frame: `relayout_page()` runs under the user and resets the scroll
+position, so a long page cannot be scrolled at all. Once per APP: fits
+only whichever page happened to open first, because every later page's
+labels are laid out for the first time when that page opens and so
+report a width of 0 -- the description that needed two rows silently
+ellipsised. Once per PAGE is correct, and it is one extra layout per
+navigation.
+
+`settings_test.py` asserts BOTH halves -- that a description wider than
+its label takes two rows, and that one which fits does not spend a
+second -- from the widths the app itself reports, so there is no
+threshold to re-check when the font changes. The second half is what
+keeps the first honest: reserving two rows for everything passes the
+first check and fails the second.
+
+## `on_draw` runs BEFORE the widgets, and a wrong comment cost a whole page
+
+`uapp.c`'s order is "clear, then the APP's own painting, then the
+widgets, then overlays". The app paints UNDER its widgets deliberately:
+an app whose `on_draw` begins by clearing the surface -- the natural
+first line, and what every client wrote before the toolkit cleared for
+them -- can then only wipe its own backdrop instead of everything the
+toolkit just drew. That bug shipped twice before the order was settled.
+
+System Settings' System Information page drew its text from `on_draw`.
+The scroll view filled its rect immediately afterwards, and the page came
+up EMPTY -- while the page title, the sidebar selection and the status
+bar were all correct, because those are widgets. It read as a data
+problem: the app was clearly navigating, clearly logging that it had
+drawn, and the only thing missing was the content.
+
+`settings.c`'s own comment asserted the opposite order ("on_draw runs
+AFTER the widgets"), which is why nobody looked there. The fix is
+`on_draw_over`, the hook that exists for exactly this and is documented
+as "deliberately separate and deliberately last".
+
+**Two things generalise.** A page that draws over widgets must also
+avoid the widgets it is drawing over -- the first fix printed the
+version string through the words "System Information", because both
+started at the top of the page area; the overlay now starts below the
+title, asked of the layout rather than computed a second time. And the
+page had NO TEST: `settings_test` drove the Mouse page and the timezone
+page and never opened this one, so the suite was built entirely from
+"do X, check Y changed" and could not see a page nobody drove. It now
+asserts on PIXELS -- ink in the page body, compared against the same
+region on a settings page -- because "it responds" is not "it is drawn".
