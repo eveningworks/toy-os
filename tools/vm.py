@@ -207,6 +207,16 @@ def cmd_start(args):
     if getattr(args, "virtio_disk", None):
         cmd += ["-drive", f"file={args.virtio_disk},format=raw,if=none,id=vblk",
                 "-device", "virtio-blk-pci,drive=vblk,disable-legacy=on"]
+    # virtio input devices, off by default so every existing test keeps
+    # the PS/2 pair it was written against. With this the guest gets a
+    # keyboard, a relative mouse and an absolute tablet on the virtio
+    # transport -- which is the only way to reach
+    # kernel/drivers/virtio/virtio_input.c at all, the same reason
+    # --vga virtio exists for the GPU.
+    if getattr(args, "virtio_input", False):
+        cmd += ["-device", "virtio-keyboard-pci",
+                "-device", "virtio-mouse-pci",
+                "-device", "virtio-tablet-pci"]
     cmd += [
         # A VNC head rather than -display none: input routing needs a
         # display head to exist even when nothing connects to it (see
@@ -372,6 +382,11 @@ def main():
                     help="attach PATH as a virtio-blk disk. Off by default; with it "
                          "the guest gets a second disk on virtio-blk-pci, which is "
                          "what exercises the virtio transport and virtqueue.")
+    ap.add_argument("--virtio-input", action="store_true",
+                    help="attach virtio keyboard/mouse/tablet devices. Off by "
+                         "default; with it the guest has BOTH these and the PS/2 "
+                         "pair, which is what exercises the input core's "
+                         "multiple-source path.")
     ap.add_argument("--vga", default="std",
                     help="QEMU -vga adapter (std, vmware, ...). `vmware` is the only "
                          "one this kernel has a modesetting driver for, and the only "

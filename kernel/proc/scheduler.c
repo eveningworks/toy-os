@@ -113,6 +113,7 @@
 #include "clocksource.h" // CPU time is measured, not counted -- bill_current()
 #include "debug_console.h"
 #include "ata_cache.h" // the idle work scheduler_idle() owns
+#include "input.h"     // input_poll_sources() -- ditto, for a device with no IRQ
 #include "string.h" // k_strlcpy -- proc_name_from_path()
 #include <stddef.h>
 
@@ -1523,6 +1524,11 @@ void scheduler_demo_run(void) {
 // repo holds: it must be safe wherever the kernel is idle.
 void scheduler_idle(void) {
     debug_console_poll();
+    // Input devices that have no interrupt of their own. Empty unless
+    // something registered a poll() -- the PS/2 pair does not, being
+    // IRQ-driven, so this costs a loop over two NULLs on a machine with
+    // no other input hardware. See kernel/include/kernel/input.h.
+    input_poll_sources();
     // Raw input to a ring-3 compositor. Silent unless one is registered
     // AND no ring-0 presentation layer is -- see win_input.c. It lives
     // here because this is the kernel's one owner of idle work, so

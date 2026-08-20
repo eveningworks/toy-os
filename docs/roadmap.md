@@ -510,7 +510,9 @@ run on, not by order.
 - [ ] `virtio-net`: a NIC on the same transport, likely easier than e1000 once virtqueues exist
 - [x] ~~`virtio-blk`: a block device that isn't ATA~~
 - [x] ~~`virtio-rng`: entropy, registered as a krandom source~~
-- [ ] `virtio-input`: keyboard/mouse that isn't PS/2
+- [x] ~~`virtio-input`: keyboard/mouse/tablet that isn't PS/2, on an input core with a source registry~~
+- [ ] A Local APIC, and MSI-X interrupts on top of it
+- [ ] Re-key `/etc/kbs` layouts to evdev keycodes, removing the input core's translation table
 
 ### other emulated hardware worth claiming
 

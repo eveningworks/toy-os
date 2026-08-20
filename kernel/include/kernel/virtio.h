@@ -207,8 +207,41 @@ void virtio_fail(struct virtio_device *d);
 
 int virtio_has_feature(const struct virtio_device *d, uint64_t bit);
 
+// --- interrupts (legacy INTx) -----------------------------------------
+//
+// OPT-IN, and the default is off. virtio_pci_find() sets
+// PCI_CMD_INTX_DISABLE for every device it claims, because a device
+// left free to assert a LEVEL-triggered line with no handler to service
+// it holds that line down and the PIC re-delivers it forever -- a storm
+// that presents as a hang. Block, entropy and GPU poll and stay that
+// way; virtio-input asks for interrupts, because an event queue has
+// nothing to poll FOR.
+//
+// NOT MSI-X, and the reason is not virtio's: MSI is delivered as a
+// memory write to the Local APIC, and this kernel has none (the PIC is
+// all there is -- kernel/arch/x86_64/irq.c). See docs/roadmap.md.
+//
+// Returns the IRQ line the chipset routed this function to, or 0 when
+// there is none usable. The caller installs the handler itself, and
+// that handler MUST read the ISR -- see virtio_isr_read().
+uint8_t virtio_enable_intx(struct virtio_device *d);
+
+#define VIRTIO_ISR_HAS_QUEUE  0x1
+#define VIRTIO_ISR_HAS_CONFIG 0x2
+
+// Reads and CLEARS the ISR status byte -- destructive, so exactly once
+// per interrupt per device. On a shared line, a zero result means this
+// device was not the source and the handler should do nothing.
+uint8_t virtio_isr_read(const struct virtio_device *d);
+
 // Device-configuration space (the DEVICE_CFG window). A 64-bit read is
 // TWO 32-bit reads, low half first -- see virtio_pci.c.
+// Writes one byte of device-configuration space. Needed only by a
+// device whose config space is a selectable WINDOW rather than a plain
+// struct -- virtio-input, whose `select`/`subsel` bytes choose what the
+// rest of the window then reports. See virtio_pci.c.
+void virtio_cfg_write8(const struct virtio_device *d, uint32_t off, uint8_t v);
+
 uint8_t  virtio_cfg_read8 (const struct virtio_device *d, uint32_t off);
 uint16_t virtio_cfg_read16(const struct virtio_device *d, uint32_t off);
 uint32_t virtio_cfg_read32(const struct virtio_device *d, uint32_t off);
@@ -273,6 +306,22 @@ void virtqueue_kick(struct virtqueue *vq);
 // 0 on timeout -- after which the chain's descriptors are deliberately
 // NOT reclaimed; see virtqueue.c.
 int  virtqueue_poll(struct virtqueue *vq, int head, uint32_t *used_len);
+
+// NON-BLOCKING completion, for a queue the DEVICE drives.
+//
+// virtqueue_poll() answers "has MY chain come back?", which is the
+// request-response shape every virtio device here has had so far: the
+// driver asks, the device answers, the driver waits. An input event
+// queue is the other shape -- the driver hands the device a pile of
+// empty buffers and the device fills them WHENEVER SOMETHING HAPPENS,
+// which may be never. There is no chain to wait for, and waiting would
+// be waiting for the user to press a key.
+//
+// So this takes whatever is there. Returns 1 and fills *out_head (the
+// retired chain, whose descriptors are returned to the pool) and
+// *out_len (bytes the device wrote), or 0 when the used ring is empty.
+// Call it in a loop until it returns 0.
+int virtqueue_take(struct virtqueue *vq, int *out_head, uint32_t *out_len);
 
 // Free descriptors currently available. Exported so a test can assert
 // the pool BALANCES across many transfers -- a chain that is never

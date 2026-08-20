@@ -138,6 +138,13 @@ void mouse_init(void) {
 
 // Processes one byte already read from the 8042 by i8042_poll(). This
 // must NOT read port 0x60 itself -- see i8042.h for why.
+static void clamp_to_bounds(void) {
+    if (mouse_x < 0) mouse_x = 0;
+    if (mouse_y < 0) mouse_y = 0;
+    if (mouse_x >= bound_w) mouse_x = bound_w - 1;
+    if (mouse_y >= bound_h) mouse_y = bound_h - 1;
+}
+
 void mouse_feed_byte(uint8_t data) {
 
     if (packet_index == 0 && !(data & 0x08)) {
@@ -155,6 +162,32 @@ void mouse_feed_byte(uint8_t data) {
     if (flags & 0x10) dx -= 256; // sign-extend 9th bit (negative X)
     if (flags & 0x20) dy -= 256; // sign-extend 9th bit (negative Y)
 
+    mouse_feed_rel(dx, dy);
+    mouse_feed_buttons(flags & 0x07);
+
+    if (packet_size == 4) {
+        // Wheel byte is a signed 8-bit notch count -- almost always
+        // -1 or +1 per physical click of the wheel, occasionally more
+        // if it's spun fast. Convention (matches every real mouse):
+        // negative raw value = wheel pushed away from the user, which
+        // is the "scroll up / reveal older content" direction, so this
+        // is negated before accumulating into wheel_delta's
+        // positive-means-up sense documented in mouse.h.
+        int8_t raw = (int8_t)packet[3];
+        mouse_feed_wheel(-raw);
+    }
+}
+
+// --- the pointer state, reachable by ANY device -----------------------
+//
+// Extracted from the PS/2 packet decoder above so that a device which is
+// not a PS/2 mouse -- virtio-input today, USB HID later -- moves the
+// same pointer through the same speed, acceleration and bounds rules,
+// rather than each driver growing its own copy of them. The core
+// (kernel/drivers/input/input.c) is what routes to these; the decoder
+// above is now just one caller among several.
+
+void mouse_feed_rel(int dx, int dy) {
     // SPEED, then ACCELERATION -- both applied here, at the one place
     // raw device deltas become screen motion, so nothing downstream
     // needs to know either exists.
@@ -182,31 +215,53 @@ void mouse_feed_byte(uint8_t data) {
 
     mouse_x += dx;
     mouse_y -= dy; // PS/2 Y increases upward; screen Y increases downward
-
-    if (mouse_x < 0) mouse_x = 0;
-    if (mouse_y < 0) mouse_y = 0;
-    if (mouse_x >= bound_w) mouse_x = bound_w - 1;
-    if (mouse_y >= bound_h) mouse_y = bound_h - 1;
-
-    mouse_buttons = flags & 0x07;
-
-    if (packet_size == 4) {
-        // Wheel byte is a signed 8-bit notch count -- almost always
-        // -1 or +1 per physical click of the wheel, occasionally more
-        // if it's spun fast. Convention (matches every real mouse):
-        // negative raw value = wheel pushed away from the user, which
-        // is the "scroll up / reveal older content" direction, so this
-        // is negated before accumulating into wheel_delta's
-        // positive-means-up sense documented in mouse.h.
-        int8_t raw = (int8_t)packet[3];
-        wheel_delta -= raw;
-    }
+    clamp_to_bounds();
 }
+
+// An ABSOLUTE device -- a tablet or a touchscreen -- reports a position
+// in its own axis range, and the scaling to the screen happens HERE
+// rather than in the driver: the range is a property of the device, the
+// screen size is not something a driver should have to track, and doing
+// it in one place means both facts meet exactly once.
+//
+// Speed and acceleration are deliberately NOT applied. They exist to
+// turn a relative device's counts into comfortable screen motion; an
+// absolute device is already saying where the pointer IS, and scaling
+// that would move the pointer somewhere the user is not pointing.
+void mouse_feed_abs(int x, int y, int max_x, int max_y) {
+    if (max_x <= 0 || max_y <= 0) return;   // no range: nothing to scale by
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    if (x > max_x) x = max_x;
+    if (y > max_y) y = max_y;
+
+    // 64-bit intermediates: a tablet's range is commonly 0..32767 and
+    // the screen can be 1920 wide, which overflows a 32-bit multiply
+    // only just -- but "only just" is how this class of bug ships.
+    mouse_x = (int)(((int64_t)x * (bound_w - 1)) / max_x);
+    mouse_y = (int)(((int64_t)y * (bound_h - 1)) / max_y);
+    clamp_to_bounds();
+}
+
+void mouse_feed_buttons(uint8_t mask) { mouse_buttons = mask & 0x07; }
+
+void mouse_feed_wheel(int notches) { wheel_delta += notches; }
 
 int mouse_get_wheel_delta(void) {
     int d = wheel_delta;
     wheel_delta = 0;
     return d;
+}
+
+// The bounds the pointer is currently clamped to. NOT necessarily the
+// display's size: they start at a small default and are set by whoever
+// owns presentation (win_input.c, once a compositor appears). A caller
+// that needs to reason about where the pointer can go must ASK rather
+// than assume the screen -- a KTEST assuming gfx_width() computed
+// positions 16x too small on a boot where nothing had set them yet.
+void mouse_get_bounds(int *w, int *h) {
+    if (w) *w = bound_w;
+    if (h) *h = bound_h;
 }
 
 void mouse_get_state(int *x, int *y, uint8_t *buttons) {

@@ -150,12 +150,47 @@ int virtio_pci_find(uint16_t type, int index, struct virtio_device *out) {
         return 0;
     }
 
-    // Memory decode and DMA, and INTx off because this driver POLLS.
+    // Memory decode and DMA, and INTx off by DEFAULT because most of
+    // these drivers poll. A driver that wants interrupts calls
+    // virtio_enable_intx() to clear the bit -- opt-in, because the
+    // failure mode of getting it wrong is not a missed interrupt, it is
+    // a line asserted forever with nobody to clear it.
     // INTx is level-triggered and shared: a device left free to assert
     // it with no handler installed holds the line down for everything
     // else on it.
     pci_command_update(dev, PCI_CMD_MEMORY | PCI_CMD_BUS_MASTER | PCI_CMD_INTX_DISABLE, 0);
     return 1;
+}
+
+// Clears PCI_CMD_INTX_DISABLE and reports the line the chipset routed
+// this function to, or 0 if there is none to use.
+//
+// The caller must install an irq handler that READS THE ISR REGISTER --
+// the read is what deasserts a level-triggered line, and without it the
+// first interrupt never ends. Returning the line rather than
+// registering the handler here keeps this file free of any opinion
+// about how a driver services its device.
+uint8_t virtio_enable_intx(struct virtio_device *d) {
+    if (!d || !d->pci) return 0;
+    uint8_t line = d->pci->interrupt_line;
+    // 0xFF is the PCI convention for "not connected", and 0 is IRQ0 --
+    // the timer, which no PCI device is routed to. Either means there
+    // is nothing to enable, and enabling anyway would leave the device
+    // free to assert a line nobody listens on.
+    if (line == 0xFF || line == 0 || line >= 16) return 0;
+
+    pci_command_update(d->pci, 0, PCI_CMD_INTX_DISABLE);
+    return line;
+}
+
+// Reads (and thereby CLEARS) the ISR status byte. Bit 0 means "one of
+// my queues has activity"; bit 1 means the device configuration
+// changed. On a shared line this is how a handler answers "was it me?"
+// -- and it must be called exactly once per interrupt per device,
+// because the read is destructive.
+uint8_t virtio_isr_read(const struct virtio_device *d) {
+    if (!d || !d->isr) return 0;
+    return *(volatile uint8_t *)d->isr;
 }
 
 static void status_set(struct virtio_device *d, uint8_t bits) {
@@ -252,6 +287,17 @@ int virtio_begin(struct virtio_device *d, uint64_t wanted) {
 // single 64-bit access: the spec permits a device to declare a maximum
 // MMIO access width, and a wider access to such a window silently does
 // not work. Low half first, because a device may latch on the high one.
+// The device-configuration space is READ-ONLY for most devices, and
+// this exists because virtio-input's is not: its config space is a
+// WINDOW, selected by writing `select`/`subsel` and then reading back
+// whatever those name (the device's name, its supported event types,
+// an axis range). Without a write there is no way to ask the second
+// question. Spec 5.8.5.
+void virtio_cfg_write8(const struct virtio_device *d, uint32_t off, uint8_t v) {
+    if (!d || !d->cfg || off >= d->cfg_len) return;
+    *(volatile uint8_t *)(d->cfg + off) = v;
+}
+
 uint8_t virtio_cfg_read8(const struct virtio_device *d, uint32_t off) {
     if (!d || !d->cfg || off >= d->cfg_len) return 0;
     return mmio_r8(d->cfg, off);

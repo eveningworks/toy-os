@@ -44,9 +44,11 @@
 #include "gui3.h"     // gui3_main() -- the desktop, a ring-3 process
 #include "target.h"   // target_init() -- the boot target init starts services for
 #include "debug_console.h"
+#include "i8042.h"      // i8042_register_sources() -- the PS/2 pair, into the input core
 #include "krandom.h"      // entropy source -- krandom_init()
 #include "virtio_rng.h"   // virtio-rng -- registers itself as a krandom source
 #include "virtio_gpu.h"   // virtio-gpu -- a display_driver on the virtio transport
+#include "virtio_input.h" // virtio-input -- keyboards/mice/tablets, into the input core
 #include "reloc.h"        // the image's own relocation table -- kernel_relocate()
 
 // Where the running image starts -- a relocated symbol, so under kernel
@@ -212,6 +214,12 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // this point (it never returns). See kernel/lib/stack_protector.c.
     stack_guard_randomize();
 
+    // The input devices declare themselves to the input core. After
+    // idt_init(), because the PS/2 pair is serviced by its own IRQs and
+    // registering a device the machine cannot yet interrupt on would
+    // advertise something that does not work yet.
+    i8042_register_sources();
+
     serial_irq_init(); // COM1 RX -- see serial.c for why this can't run inside serial_init() itself
     klog_write("toy-os: serial RX enabled (debug console on COM1, see docs/decisions.md)\n");
 
@@ -241,6 +249,11 @@ void kernel_main(uint64_t multiboot_info_addr) {
     // only real entropy this machine can get. It cannot come early
     // enough to seed the stack canary; see virtio_rng.h.
     virtio_rng_init();
+
+    // Input devices on the same transport -- a keyboard, a mouse, a
+    // tablet. They register with the input core, so the desktop and the
+    // console consume them without knowing which bus they arrived on.
+    virtio_input_init();
     klog_write("toy-os: kernel heap initialized\n");
 
     // No self-tests run here any more. pmm/heap/json/tfs each used to be

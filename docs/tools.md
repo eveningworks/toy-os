@@ -647,6 +647,25 @@ manual steps to be worth automating:
   repaints no framebuffer pixels), because a device-composited cursor
   is handed to the display client out of band and never appears in a
   `screendump` at all. On demand, not in the gate.
+- **`virtio_input_test.py`** -- the virtio keyboard, mouse and tablet
+  (`vm.py --virtio-input`, which is the only thing that attaches them).
+  The guest keeps its PS/2 pair as well, deliberately: the input core is
+  supposed to take several sources at once. Four checks earn their
+  place. The tablet must report `abs` and the mouse must NOT, or the
+  capability is telling us nothing. Two devices must SHARE an interrupt
+  line -- QEMU routes the mouse and tablet onto IRQ 10 together, which
+  is the case `kernel/arch/x86_64/irq.c`'s handler chain was rewritten
+  for. An absolute position must land EXACTLY where the arithmetic says
+  (the tablet's 0..32767 range scaled to the screen). And Super must
+  open the Start menu, which is one assertion covering the whole path
+  from the virtqueue through the input core, the key ring and the
+  kernel's raw-input forwarder to the ring-3 compositor.
+
+  It reads the IRQ assignments from `lsdev`, NOT from `dmesg`: the boot
+  line saying which line each device took has rolled out of the kernel's
+  ring buffer by the time a desktop has been up a few seconds. An oracle
+  that expires fails for reasons unrelated to the code. On demand, not
+  in the gate.
 - **`live_boot_test.py`** -- boots `toy-os-live.iso` with NO disk and
   asserts a shipped binary RUNS, plus that `df` reports the image's real
   size and says RAM-only. Not in `gui_regress.py` (it builds its own

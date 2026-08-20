@@ -299,6 +299,34 @@ static int chain_done(struct virtqueue *vq, int head, uint32_t *used_len) {
     return 1;
 }
 
+int virtqueue_take(struct virtqueue *vq, int *out_head, uint32_t *out_len) {
+    if (!vq || !vq->used) return 0;
+    if (vq->used->idx == vq->last_used) return 0;
+
+    // Same ordering rule as chain_done(): used->idx before the entry it
+    // publishes. Load-load, so free on TSO -- the compiler is the only
+    // thing to stop.
+    kbarrier();
+
+    volatile struct vring_used_elem *e = &vq->used->ring[vq->last_used % vq->size];
+    uint32_t id = e->id;
+    uint32_t len = e->len;
+    vq->last_used++;
+
+    if (id >= vq->size) {
+        // A device naming a descriptor that cannot exist. Refusing is
+        // the only safe answer -- free_chain() would walk a `next` chain
+        // out of the table.
+        klog_printf("virtio: queue %u retired an impossible chain %u\n", vq->index, id);
+        return 0;
+    }
+
+    if (out_head) *out_head = (int)id;
+    if (out_len) *out_len = len;
+    free_chain(vq, (uint16_t)id);
+    return 1;
+}
+
 int virtqueue_poll(struct virtqueue *vq, int head, uint32_t *used_len) {
     if (!vq || head < 0) return 0;
 

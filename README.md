@@ -242,8 +242,12 @@ the kernel's entropy pool (a QEMU guest usually has no RDSEED/RDRAND,
 and the jitter fallback is weakest under emulation), and **`virtio-gpu`
 as a real display driver** — resource, scanout, transfer-and-flush and
 its own cursor queue, programming the mode itself so `video=1920x1080`
-is honoured rather than left to whatever GRUB negotiated. One
-transport, so the next device (net, input) is a driver rather than a
+is honoured rather than left to whatever GRUB negotiated, and
+**`virtio-input`** (keyboard, mouse and tablet) feeding an **input core**
+whose canonical event is evdev-shaped, so PS/2, virtio and a future USB
+HID driver are all sources in one registry — and the first virtio
+devices here to complete on a real interrupt rather than a poll. One
+transport, so the next device (net) is a driver rather than a
 bring-up project — and it is about **10× ATA's write throughput under
 KVM**, because a virtqueue is shared memory with one doorbell where ATA
 is dense with port I/O and every one of those is a VM exit.

@@ -475,3 +475,42 @@ include there takes the function away from ring 3 silently.
 `kernel_main()`'s hand-written order stays, deliberately: the list is
 good documentation, and the silent failure was the defect. See
 `docs/decisions.md` for why not initcall levels.
+
+## INPUT DEVICES REGISTER WITH THE INPUT CORE, and the canonical event is evdev
+
+`kernel/include/kernel/input.h`. A device driver does not touch the
+keyboard ring or the pointer state directly -- it calls
+`input_report_key()` / `_rel()` / `_abs()` / `_buttons()` / `_wheel()`,
+and registers a `struct input_source` (name, capabilities, IRQ if it has
+one, `poll()` if it does not). `lsdev` lists them.
+
+**A key is an evdev KEYCODE**, Linux's numbering, not an AT scancode --
+so a table lifted from a HID or virtio specification lines up without
+adjustment. That is the point: a USB keyboard has no scancodes to speak
+of. The PS/2 driver is the exception and feeds its own state machine
+directly, because it already speaks set 1 and so do the layout tables.
+
+Three traps. **`INPUT_KEY_*` and `KEY_*` are different vocabularies**
+(the wire's numbers versus the key ring's; four of them collided when
+this was written). **A pointer's bounds are not the screen** -- ask
+`mouse_get_bounds()`, since they are whatever `mouse_set_bounds()` was
+last given. And **an absolute device is not scaled by speed or
+acceleration**: those turn a relative device's counts into comfortable
+motion, while an absolute device is already saying where the pointer IS.
+
+## VIRTIO INTERRUPTS ARE OPT-IN, and a forgotten ISR read hangs the machine
+
+`virtio_pci_find()` sets `PCI_CMD_INTX_DISABLE` on every device it
+claims. A driver that wants interrupts calls `virtio_enable_intx()`,
+gets its line back, and MUST install a handler that reads the ISR
+(`virtio_isr_read()`) -- the read is what deasserts a level-triggered
+line. Skip it and the PIC re-delivers forever: measured, not feared, by
+a positive control that hung the guest rather than merely losing events.
+
+Lines are SHARED (three virtio-input functions land on two IRQs on
+QEMU's default topology), so `irq.c` runs every handler registered on a
+line and each asks its own device whether it was the source. Registering
+the same handler twice is a no-op rather than a double call.
+
+Not MSI-X: MSI is a memory write to a Local APIC, and this kernel is
+8259-only. See `docs/roadmap.md`.

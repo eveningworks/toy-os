@@ -21,6 +21,8 @@
 #include "serial.h"
 #include "klog.h"
 #include "display.h"  // lsdev names the active display driver
+#include "input.h"    // ...and every registered input source
+#include "virtio_input.h" // ...and whether virtio input is actually delivering
 #include "win_transport.h" // `gui` travels as a protocol message now
 #include "kfmt.h"
 #include "string.h"
@@ -190,6 +192,34 @@ static void dbg_cmd_lsdev(void) {
                      display_has(DISPLAY_CAP_MODESET)     ? " modeset" : "");
     } else {
         klog_write("Display: none claimed\r\n");
+    }
+
+    int ns = input_source_count();
+    klog_printf("Input sources (%d):\r\n", ns);
+    for (int i = 0; i < ns; i++) {
+        const struct input_source *src = input_source_at(i);
+        if (!src) continue;
+        // The SERVICING is printed beside the capabilities because the
+        // two answer different questions -- what a device can report,
+        // and whether anything is listening. A device that is claimed
+        // and polled looks identical to one that is claimed and
+        // interrupt-driven until you ask.
+        char how[16];
+        if (src->irq) k_snprintf(how, sizeof how, "irq %u", (unsigned)src->irq);
+        else k_strlcpy(how, "polled", sizeof how);
+        klog_printf("  %s%s%s%s%s  [%s]\r\n", src->name,
+                     (src->caps & INPUT_CAP_KEYS)  ? "  keys" : "",
+                     (src->caps & INPUT_CAP_REL)   ? "  rel" : "",
+                     (src->caps & INPUT_CAP_ABS)   ? "  abs" : "",
+                     (src->caps & INPUT_CAP_WHEEL) ? "  wheel" : "", how);
+    }
+
+    if (virtio_input_count() > 0) {
+        // The event count, not just the device list: "is it claimed?"
+        // and "is it delivering?" are different questions, and only the
+        // second one distinguishes a working driver from a present one.
+        klog_printf("  (virtio-input: %u event(s) decoded)\r\n",
+                     (unsigned)virtio_input_events());
     }
 
     int n = pci_device_count();

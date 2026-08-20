@@ -31,6 +31,13 @@ typedef void (*irq_handler_fn)(uint64_t *regs);
 // sharing/chaining. Registering a second handler for the same IRQ
 // replaces the first (last call wins); pass NULL to unregister.
 // Out-of-range `irq` values are silently ignored.
+// Adds a handler to `irq`'s chain. Several devices may share a line
+// (that is what PCI INTx does), so every registered handler runs on
+// every interrupt and each must decide whether its own device was the
+// source -- typically by reading a status register. Registering the
+// same function twice is a no-op rather than a second call per
+// interrupt. EOI is sent here once, after the chain, so no handler
+// sends its own.
 void irq_register_handler(uint8_t irq, irq_handler_fn handler);
 
 // Called by idt.c's isr_dispatch() for every hardware-IRQ vector

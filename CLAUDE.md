@@ -462,6 +462,8 @@ whenever a headline here tells you something you did not already know.
 
 - **Monotonic time is an INTERFACE, and wall clock is not one of its implementations.**
 - **The kernel's idle work has ONE owner: `scheduler_idle()`**
+- **INPUT DEVICES REGISTER WITH THE INPUT CORE, and the canonical event is evdev**
+- **VIRTIO INTERRUPTS ARE OPT-IN, and a forgotten ISR read hangs the machine**
 - **USING A SUBSYSTEM BEFORE ITS init() IS A PANIC, not a soft failure**
 - **A panic NAMES THE FUNCTION**
 - **A kernel panic prints enough to diagnose from a pasted log**
@@ -908,7 +910,10 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   REBOOT), `virtio_gpu_test.py` (the GPU -- the ONLY thing here that
   boots `-vga virtio`, so it is also what stops the driver's KTESTs
   skipping on every run; its pixel-format oracle is a second boot on
-  `-vga std`), `live_boot_test.py`, `fs_switch_test.py`, `tfs3_v1_test.py`,
+  `-vga std`), `virtio_input_test.py` (keyboard, mouse and
+  TABLET on virtio -- `vm.py --virtio-input`; it is the only thing that
+  attaches them, and it asserts the shared-IRQ case `irq.c`'s handler
+  chain exists for), `live_boot_test.py`, `fs_switch_test.py`, `tfs3_v1_test.py`,
   `mkpart_test.py`, `demo_test.py`.
 - **Disk images, from the host** -- `seed_disk.py` (the format-aware
   front end `make iso` calls), `tfs2_writer.py`, `tfs3_writer.py`.

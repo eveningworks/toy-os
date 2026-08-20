@@ -2981,3 +2981,44 @@ exists. Build this when a third driver needs a slot and the ordering
 argument is being had for the third time, not before. Note that levels
 alone do not express dependencies: Linux needs `-EPROBE_DEFER` on top
 for that, which is its own project.
+
+### A Local APIC, and MSI-X interrupts on top of it
+
+virtio-input uses legacy INTx, because MSI-X is not deliverable on this
+kernel: an MSI interrupt is a memory write the device performs to
+`0xFEE00000`, and it is the **Local APIC** that turns that write into a
+CPU vector. This kernel has no APIC code at all --
+`kernel/arch/x86_64/irq.c` is the 8259 PIC's 16 lines with a handler
+chain per line.
+
+What a LAPIC would buy, in rough order of value: MSI-X (no shared lines,
+so no "was it me?" ISR read, and one vector PER VIRTQUEUE rather than
+one per device); more than 16 interrupt vectors; a per-CPU timer better
+than the PIT; and it is the prerequisite for SMP, which is the real
+reason to want it. What it costs: enabling the LAPIC, moving IRQ routing
+to the I/O APIC (which needs ACPI table parsing, or the MP tables), and
+keeping the PIC path working for a machine that has no APIC.
+
+Worth doing before a NIC, since a busy network device is where per-queue
+interrupts start to matter. Not worth doing for input, which is why INTx
+was the right size here.
+
+### Re-key `/etc/kbs` layouts to evdev keycodes, removing the input core's translation table
+
+The canonical input event is an evdev keycode
+(`kernel/include/kernel/input.h`), but the keyboard layout files are
+keyed on AT set-1 scancodes, so `input_report_key()` translates keycode
+-> set 1 before feeding the existing state machine. The table is small
+(codes 1..83 are identical; only the 0xE0-prefixed block needs
+entries), and it is the seam's one piece of legacy.
+
+Removing it means regenerating `/etc/kbs/*` keyed on evdev codes --
+`tools/gen_kbs.py` already reads XKB keycodes, which ARE evdev + 8, so
+it is arguably a simplification of the generator -- and changing
+`keyboard.c` to switch on keycodes rather than scancodes. The PS/2
+driver then translates set 1 -> keycode at its edge, which is exactly
+what Linux's `atkbd` does.
+
+Not done with the input core because it touches every layout file and
+the keyboard state machine at once, and the seam is correct either way:
+what a new driver reports is evdev today.

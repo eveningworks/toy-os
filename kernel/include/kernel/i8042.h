@@ -13,4 +13,8 @@
 // each byte to the right device by its AUX bit.
 void i8042_poll(void);
 
+// Declares the PS/2 keyboard and mouse to the input core. Called from
+// kernel_main() once, after the IDT is up. See kernel/drivers/input/input.c.
+void i8042_register_sources(void);
+
 #endif

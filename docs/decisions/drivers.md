@@ -600,3 +600,104 @@ drawing the same desktop on a known-good layout, which is the only check
 that survived the positive controls -- "is anything on screen" passes on
 a black screen, and a channel-order test passes on a format that rotates
 channels rather than swapping two.
+
+## The input core: one vocabulary, a source registry, and evdev as canonical
+
+**What was wrong.** There was no seam at all. `i8042_poll()` fed bytes
+straight into `keyboard_feed_byte()` and `mouse_feed_byte()`, and each
+of those owned both the decoding AND the state every consumer reads. A
+second kind of input device had nowhere to plug in: "add a driver" would
+have meant "edit the PS/2 driver". virtio-input was the second kind and
+USB HID will be the third, so the seam went in first.
+
+**The canonical event is evdev-shaped**, which is the whole design
+decision. A key is a KEYCODE, not an AT scancode; a pointer reports
+relative motion, an absolute position, a button mask or wheel notches.
+Linux made the same call for the same reason -- `atkbd` translates AT
+set 1 INTO keycodes, USB HID translates usages into them, and
+virtio-input carries them natively because its events ARE
+`struct input_event`. Windows does the equivalent with HID as the
+internal model. Either way the PC encoding is a SOURCE format and never
+the internal one: a USB keyboard has no scancodes, and making it invent
+some would be inventing a legacy it never had.
+
+**What PS/2 does, stated rather than hidden.** The 8042 driver does NOT
+round-trip through the vocabulary -- it already speaks set 1, and the
+layout tables (`/etc/kbs/*`) are keyed on set 1, so it feeds its own
+state machine directly. New sources come in through
+`input_report_key()`, which translates keycode -> set 1 once. That table
+is the seam's only piece of legacy and it is small, because evdev
+keycodes 1..83 ARE the set-1 make codes (not a coincidence: that is
+where the numbering came from). It disappears when the layout files are
+re-keyed to evdev codes, which is a roadmap item rather than a
+prerequisite.
+
+**The registry is the same pattern as everything else here** --
+`display_driver`, `block_device`, `clocksource`. A source declares a
+name, its capabilities, its IRQ if it has one, and a `poll()` if it does
+not. Keeping both servicing shapes in one table is what stops "how does
+this device get serviced?" being a different question per driver, and
+`lsdev` prints the answer.
+
+**`INPUT_KEY_*` is prefixed and `KEY_*` is not, deliberately.**
+`keyboard.h`'s `KEY_*` are the codes this kernel's key RING carries
+(`KEY_HOME` is 0x9B, chosen to sit outside ASCII); `INPUT_KEY_*` are
+what the wire carries before translation (`INPUT_KEY_HOME` is 102,
+Linux's number). Four collided outright when the header was first
+written -- a silent collision between two key vocabularies would have
+surfaced as "Home does something odd on one keyboard".
+
+**Bounds are asked for, not assumed.** `mouse_get_bounds()` exists
+because a KTEST computed absolute positions against `gfx_width()` and
+was wrong by 16x: the pointer's bounds are whatever
+`mouse_set_bounds()` was last given, which on a boot where nothing has
+set them is a small default, not the screen.
+
+## virtio-input, and the transport's first interrupts
+
+**An event queue is the shape no virtio device here had.** Block,
+entropy and GPU are request-response: the driver asks, the device
+answers, the driver waits on `virtqueue_poll()`. An input queue is the
+opposite -- the driver hands over a pile of EMPTY buffers and the device
+fills them when the user does something, which may be never. Waiting
+would be waiting for a keypress. Hence `virtqueue_take()`: non-blocking,
+"whatever is there", loop until empty. Every buffer taken goes straight
+back, because a queue that runs out of buffers does not fail loudly, it
+just stops reporting input.
+
+**Config space is a WINDOW, not a struct.** Write `select`/`subsel`,
+then read what they name -- which is how a device says whether it is a
+keyboard, a mouse or a tablet. It does not say so directly; it says
+which event types it emits, and the useful fact is that the answer's
+SIZE is nonzero, so no bitmap is decoded here at all. This is also why
+`virtio_cfg_write8()` had to exist: every previous device's config space
+was read-only.
+
+**INTERRUPTS, and why INTx rather than MSI-X.** MSI is delivered as a
+memory write to a Local APIC, and this kernel has none -- the 8259 PIC
+is all there is. So virtio-input uses legacy INTx, and that forced two
+changes worth recording:
+
+- `irq.c` now holds a CHAIN of handlers per line. The old one-per-line
+  rule was justified on the measured grounds that every device sat on
+  its own line; three virtio-input functions are routed by the chipset
+  onto whichever PIRQ their slot maps to, and QEMU duly puts the mouse
+  and the tablet on IRQ 10 together. Sharing is what INTx IS.
+- Interrupts are OPT-IN per device. `virtio_pci_find()` sets
+  `PCI_CMD_INTX_DISABLE` for everything it claims, and only a driver
+  that installs a handler clears it. The failure mode of getting this
+  wrong is not a missed interrupt: an INTx line is LEVEL-triggered and
+  stays asserted until the device is serviced, so a device left free to
+  assert it with nobody reading its ISR wedges the machine. That is not
+  a theoretical hazard -- the positive control that made the handler
+  return immediately did not merely stop events, it hung the guest.
+
+**The ISR read is the "was it me?"**, and it is destructive, so it
+happens exactly once per device per interrupt. On a shared line every
+handler runs and each asks its own device; stopping at the first
+claimant would leave a second device asserting forever.
+
+**An interrupt-driven source has no `poll()`**, which is also what makes
+the drain lock-free: the idle path never touches a queue the handler
+owns. A device the chipset routed nowhere keeps its poll instead, so no
+device ends up with neither.
