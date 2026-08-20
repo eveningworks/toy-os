@@ -114,3 +114,15 @@ this the obvious way), not from how much history it accumulated.
   that loop that is not the console's. The general form: when you
   suspend a loop, ask what its BODY does as well as what its exit
   condition is.
+  **AND A HARNESS THAT TYPES AT THE PHYSICAL SHELL IS BROKEN BY THIS,
+  SILENTLY.** `faulttest_run.py` drove `run <name>` over QMP keystrokes
+  and went to 0/3 the day the desktop began starting at boot -- every
+  entry failing identically, with the reports missing because the
+  binaries never ran. Nothing said "your keys went to the desktop"; it
+  read as three broken fault paths. The fix is the one this entry
+  already names -- drive it over COM1 (`tools/serial_console.py`), which
+  is a separate input path and does not care who owns the screen, the
+  same reason a Linux guest gets driven through `console=ttyS0`. So:
+  **injected keystrokes are only a valid channel for a tool that has
+  established a desktop is NOT up**, and a tool asserting on kernel
+  output should prefer the serial console outright.

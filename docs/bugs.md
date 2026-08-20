@@ -37,11 +37,10 @@ it has exonerated one this session and convicted another.
 
 ## Intermittent -- a rate, not a verdict
 
-- [ ] `tools/ktest_run.py` reports the debug console never came up, on 5 boots in 9 -- PRE-EXISTING
+- [ ] `tools/ktest_run.py` reports the debug console never came up -- 5 boots in 9 when measured 2026-08-18, then 0 in 29 on 2026-08-20 with nothing in between that targeted it; cause never established
 - [ ] ATA writes time out under host I/O pressure -- `dma write failed after 3 attempts (drive stayed busy, command never issued)`; measured 1 run in 3 locally on a clean disk, and it was CI's recurring red build until the filesystem moved to virtio-blk
 - [ ] `heap-debug`'s use-after-free check fails about 1 run in 15 -- PRE-EXISTING
 - [ ] `newsyscalls_test` fails intermittently in CI, and not locally
-- [ ] `tools/faulttest_run.py` reports 0/3, and it is PRE-EXISTING
 - [ ] `gui_regress.py`'s `uidemo` fails intermittently in the full parallel suite
 - [ ] `damage_hunt.py -j 4` loses VM SLOT 0 every run
 - [ ] Injected clicks are LOST under parallel `gui_regress` load, and the failing checks are finally named

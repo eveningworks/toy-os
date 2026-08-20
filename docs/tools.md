@@ -176,6 +176,26 @@ manual steps to be worth automating:
   says nothing about the code under test. `pipe_test` is the worked
   example: it exits 3 under `run` because its `waitpid` finds no parent,
   and passes fine under the KTEST that spawns it properly.
+- **`serial_console.py`** -- boot a guest with COM1 as a SOCKET and drive
+  it as text in / text out. Not a test: the shared channel under
+  `ktest_run.py` and `faulttest_run.py`, which had written half of it
+  each. A serial console is the standard answer to "the graphical
+  session owns the keyboard", the same reason Linux developers drive a
+  guest with `console=ttyS0` -- it does not care who holds the screen.
+  Two things it adds over a raw socket. It launches with **`wait=on`**,
+  so QEMU blocks until the harness connects and the transcript starts at
+  the kernel's first byte (with `nowait` the banner a caller waits for
+  has already gone, which hung every run until the timeout) -- which is
+  also why it cannot use `qmp_test.py`'s `launch_qemu_cmd()`, whose
+  `-daemonize` never returns for a QEMU blocked on `accept()`. And it
+  turns a dead wire into a REPORT rather than a traceback:
+  `diagnostics()` gives elapsed time, bytes received, whether QEMU is
+  alive and with what code, the tail of QEMU's own log, and the last
+  thing the guest said. "0 bytes, QEMU exited 1, could not bind" and
+  "40 KB, QEMU healthy, guest never reached the banner" are different
+  bugs that used to print the same sentence. **Sample `diagnostics()`
+  while the guest is still up** -- after teardown every failure reports
+  "QEMU exited with code 0", which is the harness's own kill.
 - **`faulttest_run.py`** -- the ring-3 diagnostics that FAULT ON
   PURPOSE, which `usertest_run.py` correctly excludes and which
   therefore nothing ran at all. A faulting binary has no exit code and
@@ -184,10 +204,19 @@ manual steps to be worth automating:
   substrings, which is where the value is -- a stack overflow and a
   null dereference are both page faults, and every entry doubles as the
   positive control for its neighbours. Each test gets its own QEMU,
-  because a ring-3 crash takes the serial debug console down with it
-  (`vm.py` cannot drive these at all -- `crash_test` included), so the
-  command is typed at the PHYSICAL shell over QMP instead. Not in
-  `gui_regress.py`; run it after touching the fault path, the ELF
+  because a ring-3 crash takes the debug console's command loop down
+  with it. **The command goes over COM1, not the keyboard**
+  (`serial_console.py`), and that is what makes it work at all: it used
+  to type at the physical shell over QMP, which stopped working the day
+  the desktop began starting at boot -- a compositor holding the role
+  parks every ring-0 blocking reader, so the keystrokes went to the
+  desktop and all three entries failed identically having never run.
+  **Assertions match only what arrives AFTER the command**, anchored on
+  the guest going quiet rather than on the console's banner: the banner
+  lands early and the kernel keeps printing for seconds afterwards, so a
+  banner-anchored window still contains boot output and an entry
+  requiring a boot string passed vacuously (measured, on a control).
+  Not in `gui_regress.py`; run it after touching the fault path, the ELF
   loader, or the user address-space layout. `stack_smash_test` is
   deliberately absent -- its message goes to the process's stdout, i.e.
   the screen, so there is nothing in the log to assert on.

@@ -9,7 +9,8 @@ Why the serial console rather than the graphical shell: it needs no
 display, no QMP, no keyboard emulation and no screenshot -- just a pipe
 in and a pipe out. Same reasoning as tools/boot_smoke_test.py, which
 this is modelled on, except that one only reads and this one also
-writes.
+writes. The socket, the launch flags and the read loop live in
+tools/serial_console.py, shared with tools/faulttest_run.py.
 
     python3 tools/ktest_run.py                 # every test
     python3 tools/ktest_run.py --suite fs      # one suite
@@ -18,6 +19,13 @@ writes.
 Exit code 0 = "ktest: PASSED" seen. 1 = a test failed, the report never
 appeared within the timeout, or the kernel panicked on the way.
 
+A run that never got a verdict prints WHY as facts -- how long it
+waited, how many bytes arrived, whether QEMU is alive, what it last
+said. That is not decoration: this harness has a recorded intermittent
+(docs/bugs.md) whose two symptoms, a bare ConnectionResetError and a
+verdict-free timeout, measure nothing and used to look like unrelated
+problems.
+
 Note this boots against the REAL disk.img by default, and the tests
 write to it (creating and deleting /.ktest_tmp). Pass --disk to point at
 a scratch copy if that matters.
@@ -25,75 +33,28 @@ a scratch copy if that matters.
 
 import argparse
 import os
-import socket
-import subprocess
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from serial_console import DEFAULT_PORT, SerialGuest  # noqa: E402
+
 DEFAULT_TIMEOUT = 60.0
-SERIAL_PORT = 4555  # COM1 exposed as a TCP socket; not the QMP port (4445)
 
 
-def launch(iso, disk, qemu_log, virtio_disk=None):
-    cmd = [
-        "qemu-system-x86_64",
-        "-cdrom", iso,
-        # discard=unmap -- see kernel/drivers/ata.c's ata_trim().
-        "-drive", f"file={disk},format=raw,if=ide,discard=unmap",
-        "-m", "256",
-        "-display", "none",
-        # COM1 as a listening socket instead of a file: this script has
-        # to TYPE the `ktest` command, not just read output, and a
-        # `-serial file:` sink is write-only from the guest's side.
-        #
-        # `server` WITHOUT `nowait` on purpose -- QEMU then blocks until
-        # this script connects before starting the guest. With `nowait`
-        # the guest boots immediately and everything it prints before the
-        # connection lands is discarded, so the debug console's banner
-        # (which this script waits for) had already gone by the time it
-        # connected, and it hung until the timeout every single run.
-        "-serial", f"tcp:127.0.0.1:{SERIAL_PORT},server",
-        # A virtio device on the bus, purely so the PCI capability walk
-        # and the 64-bit BAR decode (kernel/include/kernel/pci_internal.h)
-        # are COVERED by `make test` rather than only when a virtio disk
-        # is deliberately attached.
-        #
-        # Measured, which is why it is here: QEMU's default pc-i440fx
-        # topology publishes NO PCI capabilities at all -- not on the
-        # host bridge, the PIIX3 IDE/ISA, the PIIX4 ACPI bridge, stdvga
-        # or the e1000 -- and no 64-bit BAR either. So the walk that
-        # every virtio device depends on ran zero times and its KTEST
-        # reported a skip. virtio-rng-pci publishes five vendor-specific
-        # capabilities and puts its registers in a 64-bit BAR, which is
-        # exactly the two uncovered branches.
-        #
-        # rng rather than blk deliberately: it is not the device under
-        # test, so it also exercises virtio_blk_init() DECLINING a virtio
-        # device of the wrong type. Nothing here asserts a PCI device
-        # count, so adding one disturbs no existing test.
-        "-device", "virtio-rng-pci",
-        "-no-reboot",
-        "-no-shutdown",
-    ]
-    # An optional SECOND disk on virtio-blk, alongside the IDE one.
-    #
-    # BOTH, deliberately. The [ata]/[atac] KTESTs need a real IDE drive
-    # and skip without one, so replacing the disk rather than adding to
-    # it would trade a flake for a coverage hole. With both attached the
-    # `virtioblk` boot flag decides which one carries the FILESYSTEM
-    # (kernel/fs/vfs.c), so the ata tests keep their drive and every
-    # fs/setting test runs over virtio.
-    #
-    # A separate image file because QEMU takes a write lock -- the same
-    # file cannot be attached twice.
-    if virtio_disk:
-        cmd[cmd.index("-no-reboot"):cmd.index("-no-reboot")] = [
-            "-drive", f"file={virtio_disk},format=raw,if=none,id=vblk",
-            "-device", "virtio-blk-pci,drive=vblk,disable-legacy=on",
-        ]
+def fail(message, facts):
+    """One failure shape: the verdict, then the facts behind it.
 
-    log = open(qemu_log, "wb")
-    return subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
+    Takes the facts already GATHERED rather than the guest, because
+    diagnostics have to be read while the guest is still up -- sampling
+    them after teardown reports "QEMU exited with code 0" for every
+    failure, which is this harness's own teardown and says nothing
+    about the run.
+    """
+    print(f"ktest_run: FAIL -- {message}")
+    for line in facts:
+        print(f"              {line}")
+    return 1
 
 
 def main():
@@ -107,6 +68,8 @@ def main():
                     help="also attach PATH as a virtio-blk disk. With the `virtioblk` "
                          "boot flag baked into the ISO, the filesystem then lives on "
                          "virtio while the [ata] KTESTs keep the IDE drive.")
+    ap.add_argument("--port", type=int, default=DEFAULT_PORT,
+                    help="COM1's TCP port on the host")
     ap.add_argument("--qemu-log", default="ktest_qemu.log")
     ap.add_argument("-v", "--verbose", action="store_true", help="print the whole serial transcript")
     args = ap.parse_args()
@@ -115,50 +78,32 @@ def main():
         print(f"ktest_run: {args.iso} not found -- build it first (make iso)")
         return 1
 
-    qemu = launch(args.iso, args.disk, args.qemu_log, args.virtio_disk)
-    transcript = ""
+    guest = SerialGuest(args.iso, args.disk, port=args.port,
+                        qemu_log=args.qemu_log, virtio_disk=args.virtio_disk)
     verdict = None
+    timeout_facts = []
     try:
-        # QEMU is waiting for this connection before it boots anything
-        # (see the launch flags), so connecting is step one and the
-        # transcript starts at the very first byte the kernel prints.
-        sock = None
+        guest.start()
         deadline = time.time() + args.timeout
-        while time.time() < deadline and sock is None:
-            try:
-                sock = socket.create_connection(("127.0.0.1", SERIAL_PORT), timeout=1.0)
-            except OSError:
-                time.sleep(0.2)
-        if sock is None:
-            print("ktest_run: FAIL -- QEMU's serial socket never accepted a connection")
-            return 1
-        sock.settimeout(0.5)
 
-        def pump():
-            nonlocal transcript
-            try:
-                chunk = sock.recv(65536)
-            except socket.timeout:
-                return
-            if chunk:
-                transcript += chunk.decode("utf-8", errors="replace")
+        # QEMU is waiting for this connection before it boots anything
+        # (see serial_console.py's launch flags), so connecting is step
+        # one and the transcript starts at the very first byte.
+        if not guest.connect(deadline):
+            return fail("QEMU's serial socket never accepted a connection", guest.diagnostics())
 
-        # Wait for the debug console to announce itself.
-        while time.time() < deadline and "debug console ready" not in transcript:
-            pump()
-        if "debug console ready" not in transcript:
-            print("ktest_run: FAIL -- the serial debug console never came up")
-            return 1
+        if not guest.wait_for("debug console ready", deadline):
+            return fail("the serial debug console never came up", guest.diagnostics())
 
-        cmd = f"ktest {args.suite}\n" if args.suite else "ktest\n"
-        sock.sendall(cmd.encode())
+        if not guest.send(f"ktest {args.suite}".strip()):
+            return fail("could not send the ktest command", guest.diagnostics())
 
-        while time.time() < deadline:
-            pump()
-            if "ktest: PASSED" in transcript:
+        while time.time() < deadline and guest.sock is not None:
+            guest.pump()
+            if "ktest: PASSED" in guest.transcript:
                 verdict = True
                 break
-            if "ktest: FAILED" in transcript or "KERNEL PANIC" in transcript:
+            if "ktest: FAILED" in guest.transcript or "KERNEL PANIC" in guest.transcript:
                 verdict = False
                 break
 
@@ -167,16 +112,15 @@ def main():
         # ("14 passed, 0 failed, ...") are still on the wire -- so
         # breaking out and terminating immediately truncates the summary
         # this script then tries to print.
-        drain_until = time.time() + 1.0
-        while time.time() < drain_until:
-            pump()
-    finally:
-        qemu.terminate()
-        try:
-            qemu.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            qemu.kill()
+        guest.drain(1.0)
 
+        # Sampled here, with the guest still alive -- see fail().
+        if verdict is None:
+            timeout_facts = guest.diagnostics()
+    finally:
+        guest.stop()
+
+    transcript = guest.transcript
     if args.verbose:
         # THE WHOLE TRANSCRIPT, boot messages included -- which is what
         # this flag has always claimed and did not do.
@@ -205,8 +149,7 @@ def main():
     if verdict is False:
         print("ktest_run: FAIL -- see the report above")
         return 1
-    print(f"ktest_run: FAIL -- no verdict within {args.timeout}s (timed out)")
-    return 1
+    return fail(f"no verdict within {args.timeout:.0f}s", timeout_facts)
 
 
 if __name__ == "__main__":

@@ -860,7 +860,9 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
 - **Drive a VM** -- `vm.py` (text in, text out: the fastest path for
   anything that is not about pixels), `qmp_test.py` (QMP GUI helpers),
   `gui_debug.py` (ask the WM what it is doing), `gui_flow.py`,
-  `shell_flow.py`, `serial_capture.py` (read a guest that is DYING),
+  `shell_flow.py`, `serial_console.py` (COM1 as a socket: text in, text
+  out, and it does not care who owns the keyboard), `serial_capture.py`
+  (read a guest that is DYING),
   `watch_vm.sh` (view-only VNC onto a headless run), `run_release.sh`.
 - **Test runners** -- `boot_smoke_test.py` (does it boot),
   `ktest_run.py` (`make test`), `usertest_run.py` (the `/tests` ELFs),

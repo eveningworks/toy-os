@@ -2554,31 +2554,47 @@ a spurious exit no longer makes the restart check pass for the wrong
 reason -- but it does not fail either, so grep rather than trusting the
 exit code.
 
-### `tools/ktest_run.py` reports the debug console never came up, on 5 boots in 9
+### `tools/ktest_run.py` reports the debug console never came up
 
 Symptom: either `ktest_run: FAIL -- the serial debug console never came
 up` or a bare `ConnectionResetError: [Errno 104] Connection reset by
 peer` from the socket read. The run measures NOTHING either way, and
 passes on re-run.
 
-**PRE-EXISTING, and measured rather than assumed.** Nine runs against the
-previous commit with the whole of the init-stage-2 work stashed: 5
-connection resets, 4 clean passes, zero assertion failures. So it is not
-the desktop now starting at boot, and it is not the guest being slower --
-it is the harness or the QEMU serial socket.
+**Measured 5 boots in 9 on 2026-08-18**, against the previous commit
+with that session's work stashed: 5 connection resets, 4 clean passes,
+zero assertion failures. So it was not the desktop starting at boot and
+not the guest being slower -- it was the harness or the QEMU serial
+socket.
 
-One contributing cause WAS found and fixed on the way: init used to be
-spawned before `debug_console_init()`, so the desktop was loading its
-font, cursor theme and nine desktop entries off the disk while the
-console was still coming up. Moving the spawn after the console init is
-correct regardless, but the rate above shows it was not the whole story.
+**Measured again 2026-08-20: 0 in 29** (9 runs, then 20 more on a
+`make clean-disk` image), zero errors. Nothing in between targeted it.
+A true rate of 5-in-9 would produce 29 clean runs about once in ten
+billion, so the rate genuinely changed; 29 clean runs bound it below
+roughly 10% at 95% confidence, which is not the same as zero. **The
+cause was never established**, so this stays here rather than being
+deleted. One contributing cause WAS found and fixed on the way (init
+used to be spawned before `debug_console_init()`, so the desktop was
+loading its font, cursor theme and nine desktop entries off the disk
+while the console was still coming up); on the current evidence that may
+have been more of the story than it looked at the time.
 
-The cheap next step is a number rather than a verdict: have
-`ktest_run.py` report how long it waited and how many bytes it had
-received before giving up, which distinguishes "the guest never printed"
-from "the socket died mid-reply". `python3 tools/flake_hunt.py ktest -n
-10` is the loop for measuring any change to it, and it already scores
-these runs as `error` rather than `pass`.
+**What changed on 2026-08-20 is that the next occurrence will be
+diagnosable in one run instead of another nine-boot measurement.** The
+harness now reports the failure as facts rather than a verdict --
+elapsed time, bytes received on the wire, whether QEMU is still alive
+and with what exit code, the tail of QEMU's own log, and the last thing
+the guest said (`tools/serial_console.py`'s `diagnostics()`). A dead
+socket is CAUGHT and reported rather than raised, so the
+`ConnectionResetError` symptom becomes a report instead of a traceback,
+and the two symptoms above stop looking like unrelated problems. The
+value was demonstrated accidentally during the same session: a run
+launched beside the batch failed, and instead of "the debug console
+never came up" it said `Failed to get "write" lock -- Is another
+process using the image [disk.img]?`.
+
+`python3 tools/flake_hunt.py ktest -n 10` is the loop for measuring any
+change to it, and it scores these runs as `error` rather than `pass`.
 
 ### `heap-debug`'s use-after-free check fails about 1 run in 15
 
@@ -2748,8 +2764,6 @@ refer to them by number.
 - [ ] **The ring-3 WM busy-waits instead of sleeping.** `wm.c`'s frame loop halted on `hlt` in ring 0; in ring 3 that is privileged, so it calls `sys_yield()` and gives up the rest of its slice. Correct, but an idle desktop now costs a round-robin slot per tick rather than nothing.
 
 - [ ] **Injected clicks are LOST under parallel `gui_regress` load, and the failing checks are finally named.** Reproduce by running the full suite (`python3 tools/gui_regress.py --logs DIR`) at the default `-j4`; it needs the parallel load, so a single tool cannot show it.
-
-- [ ] **`tools/faulttest_run.py` reports 0/3, and it is PRE-EXISTING.** All three entries fail identically -- `stackovf_test`, `crash_test` and `nx_test` each with "log never said 'RING-3 CRASH: ...'". Reproduce with `python3 tools/faulttest_run.py` (no VM needed; it launches its own QEMU per test).
 
 - [ ] **Get blocking disk I/O out of the WM's event loop.** The desktop still reads files synchronously inside `wm_run()`, so a frame can block for as long as the disk takes. That is much less painful than it was (2026-08-17: the lost-DMA-wakeup race is fixed, the `.desktop` reload only runs when that directory actually changed, each entry costs one read instead of six, and a write-back cache sits underneath) -- a reload now measures in tens of milliseconds where it measured 2.5-5.6 SECONDS. But the worst case is still unbounded in principle rather than by construction.
 

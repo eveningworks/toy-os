@@ -19,11 +19,19 @@ entry therefore doubles as the positive control for its neighbours --
 `stackovf_test` requires "Stack overflow" AND requires that
 `crash_test` does not produce it.
 
-Each test gets its OWN QEMU, because a ring-3 crash takes the serial
-debug console down with it (tools/vm.py cannot drive these at all -- it
-gets no response to anything afterwards, `crash_test` included). The
-command is typed at the PHYSICAL shell over QMP instead, and the result
-is read out of the serial log as text.
+Each test gets its OWN QEMU, because a ring-3 crash takes the debug
+console's command loop down with it -- the report still reaches the wire,
+but nothing after it does.
+
+THE COMMAND GOES OVER COM1, NOT THE KEYBOARD, and that is the whole
+reason this tool works at all. It used to type `run <name>` at the
+physical shell over QMP, which stopped working the day the desktop began
+starting at boot: a compositor holding the role parks every ring-0
+blocking reader (kernel/proc/win_server.c's keyboard_suspend_blocking()),
+so the keystrokes went to the desktop and all three entries failed
+identically, having never run. A serial console does not care who owns
+the screen -- the same reason `console=ttyS0` is what kernel developers
+drive a Linux guest with. See tools/serial_console.py.
 
 Usage:
     python3 tools/faulttest_run.py               # against a copy of disk.img
@@ -37,26 +45,25 @@ run at all.
 
 import argparse
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from qmp_test import launch_qemu_cmd  # noqa: E402
-from shell_flow import ShellFlow  # noqa: E402
+from serial_console import DEFAULT_PORT, SerialGuest  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # (binary, [required substrings], [forbidden substrings]).
 #
-# Matched against the whole serial log, so a required string that also
-# appears during boot would pass vacuously -- none of these do, and a
-# new entry should be checked against a plain boot log before being
-# trusted. The forbidden list is where the specificity lives: dropping
-# it turns every entry into "something crashed", which every one of
-# these binaries satisfies by construction.
+# Matched against what arrives AFTER the command is sent, never against
+# the whole transcript. That is what stops an entry passing vacuously on
+# a string the kernel happens to print during boot -- the old whole-log
+# match left that as a hazard to remember rather than a thing the tool
+# could not do. The forbidden list is where the specificity lives:
+# dropping it turns every entry into "something crashed", which every
+# one of these binaries satisfies by construction.
 TESTS = [
     ("stackovf_test",
      ["RING-3 CRASH: Stack overflow"],
@@ -84,36 +91,32 @@ TESTS = [
 # under test rather than to the test. It stays a manual check until one
 # of those is worth doing.
 
-# How long to wait after pressing Enter before reading the log. A fault
-# is reported synchronously, but the binary has to be read off the disk
-# and loaded first, and `stackovf_test` recurses a few thousand times
-# under TCG before it gets there.
-SETTLE = 6.0
+# How long to keep reading after sending the command. A fault is
+# reported synchronously, but the binary has to be read off the disk and
+# loaded first, and `stackovf_test` recurses a few thousand times under
+# TCG before it gets there. The wait ENDS EARLY on the required string,
+# so this is the ceiling on a failing run, not the cost of a passing one.
+SETTLE = 15.0
 
-# The physical shell is ready once this has appeared. Same substring
-# boot_smoke_test.py's own PASS_PATTERNS end on.
-BOOT_MARKER = "scheduler initialized"
-BOOT_TIMEOUT = 40.0
+# The debug console has announced itself and is accepting commands.
+# NOT the boundary the window starts at -- see QUIET_FOR.
+BOOT_MARKER = "debug console ready"
 
-
-def read_log(path):
-    if not os.path.exists(path):
-        return ""
-    with open(path, "r", errors="replace") as f:
-        return f.read()
-
-
-def wait_for_boot(log_path, deadline):
-    while time.time() < deadline:
-        if BOOT_MARKER in read_log(log_path):
-            return True
-        time.sleep(0.3)
-    return False
+# How long the guest must say nothing before the command is sent. The
+# banner above arrives early and the kernel keeps printing for seconds
+# after it (init, the desktop, the cursor theme), so a window anchored
+# on the banner still contains boot output -- and a control proved it,
+# passing an entry that required a string only the BOOT prints.
+QUIET_FOR = 1.5
+BOOT_TIMEOUT = 60.0
 
 
 def run_one(name, required, forbidden, workdir, slot, keep_logs):
-    """Boots one guest, types `run <name>` at the physical shell, and
-    returns (ok, detail, log_text)."""
+    """Boots one guest, sends `sh run <name>` over COM1, and returns
+    (ok, detail, facts) -- `facts` being the guest diagnostics, sampled
+    while it is still alive. Single exit on purpose: sampling them after
+    the teardown in `finally` reports this harness killing its own QEMU
+    rather than anything about the run."""
     disk = os.path.join(workdir, f"disk{slot}.img")
     # --sparse=always: disk.img is a few MB of data in a 9 GB sparse
     # file, and a hole-filling copy costs the full 9 GB of the
@@ -121,42 +124,54 @@ def run_one(name, required, forbidden, workdir, slot, keep_logs):
     subprocess.run(["cp", "--reflink=auto", "--sparse=always",
                     os.path.join(REPO, "disk.img"), disk], check=True)
 
-    serial_log = os.path.join(workdir, f"serial{slot}.log")
-    pidfile = os.path.join(workdir, f"qemu{slot}.pid")
-    cmd = launch_qemu_cmd(iso=os.path.join(REPO, "toy-os.iso"), disk=disk,
-                           serial_log=serial_log, qmp_port=4445 + slot,
-                           vnc_display=5 + slot, pidfile=pidfile)
-    subprocess.run(cmd, shell=True, check=True, cwd=REPO)
-
+    guest = SerialGuest(os.path.join(REPO, "toy-os.iso"), disk,
+                        port=DEFAULT_PORT + slot,
+                        qemu_log=os.path.join(workdir, f"qemu{slot}.log"))
+    ok, detail = False, "did not run"
     try:
-        if not wait_for_boot(serial_log, time.time() + BOOT_TIMEOUT):
-            return False, f"never reached '{BOOT_MARKER}' within {BOOT_TIMEOUT:.0f}s", ""
+        guest.start()
+        if not guest.connect(time.time() + BOOT_TIMEOUT):
+            detail = "QEMU's serial socket never accepted a connection"
+        elif not guest.wait_for(BOOT_MARKER, time.time() + BOOT_TIMEOUT):
+            detail = f"never reached {BOOT_MARKER!r} within {BOOT_TIMEOUT:.0f}s"
+        elif not guest.wait_quiet(QUIET_FOR, time.time() + BOOT_TIMEOUT):
+            detail = f"the guest never went quiet for {QUIET_FOR:.1f}s -- boot output would land in the window"
+        else:
+            # Everything from here on is this test's evidence. Anything
+            # the boot printed is behind us and cannot satisfy an
+            # assertion -- which is what stops a vacuous pass.
+            before = len(guest.transcript)
+            if not guest.send(f"sh run {name}"):
+                detail = "could not send the command"
+            else:
+                # Ends early on the required report, but otherwise reads
+                # to the ceiling: a forbidden string arriving late still
+                # has to be caught.
+                deadline = time.time() + SETTLE
+                while time.time() < deadline and guest.sock is not None:
+                    guest.pump()
+                    if required and required[0] in guest.transcript[before:]:
+                        break
 
-        flow = ShellFlow(qmp_port=4445 + slot)
-        flow.type_command(f"run {name}")
-        flow.session.send_key("ret")
-        time.sleep(SETTLE)
+                window = guest.transcript[before:]
+                missing = [s for s in required if s not in window]
+                present = [s for s in forbidden if s in window]
+                if missing:
+                    detail = f"log never said {missing[0]!r}"
+                elif present:
+                    detail = f"log said {present[0]!r}, which this test forbids"
+                else:
+                    ok, detail = True, required[0] if required else "ok"
 
-        log = read_log(serial_log)
-        missing = [s for s in required if s not in log]
-        present = [s for s in forbidden if s in log]
-        if missing:
-            return False, f"log never said {missing[0]!r}", log
-        if present:
-            return False, f"log said {present[0]!r}, which this test forbids", log
-        return True, required[0] if required else "ok", log
+        facts = [] if ok else guest.diagnostics()
     finally:
         if keep_logs:
             os.makedirs(keep_logs, exist_ok=True)
-            shutil.copyfile(serial_log, os.path.join(keep_logs, f"{name}.log"))
-        # Kill only the PID our own launch wrote -- never a pattern
-        # match across every qemu-system-x86_64, which cannot tell this
-        # guest apart from an interactive `make run` the user has open.
-        try:
-            with open(pidfile) as f:
-                os.kill(int(f.read().strip()), 15)
-        except (OSError, ValueError):
-            pass
+            with open(os.path.join(keep_logs, f"{name}.log"), "w") as f:
+                f.write(guest.transcript)
+        guest.stop()
+
+    return ok, detail, facts
 
 
 def main():
@@ -189,12 +204,14 @@ def main():
         for slot, (name, req, forb) in enumerate(tests):
             print(f"  {name:20s} ... ", end="", flush=True)
             try:
-                ok, detail, _ = run_one(name, req, forb, workdir, slot, args.keep_logs)
-            except Exception as e:  # a harness failure is not a pass -- see below
-                ok, detail = False, f"harness error: {e}"
+                ok, detail, facts = run_one(name, req, forb, workdir, slot, args.keep_logs)
+            except Exception as e:  # a harness failure is not a pass
+                ok, detail, facts = False, f"harness error: {e}", []
             print("ok" if ok else "FAIL")
             if not ok:
                 print(f"  {'':20s}     {detail}")
+                for line in facts:
+                    print(f"  {'':20s}     {line}")
                 failures += 1
 
     print()

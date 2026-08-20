@@ -114,7 +114,7 @@ TESTS = [
 # table that says nothing about the code under test.
 EXCLUDED = [
     ("crash_test",       "faults on purpose; the point is the kernel's recovery"),
-    ("nx_test",          "faults on purpose (jumps into a data page) -- see shell_flow.py"),
+    ("nx_test",          "faults on purpose (jumps into a data page) -- see faulttest_run.py"),
     ("stack_smash_test", "faults on purpose (trips the stack canary)"),
     ("stackovf_test",    "runs off the stack on purpose; the assertion is the KERNEL's "
                           "report, not an exit code -- see its own top comment"),
