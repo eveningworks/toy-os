@@ -97,5 +97,6 @@ void cmd_kstack(const char *args);
 void cmd_kill(const char *args);
 void cmd_spawn(const char *args);
 void cmd_gfxbench(const char *args);
+void cmd_hwcursor(const char *args);
 
 #endif

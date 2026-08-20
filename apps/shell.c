@@ -120,6 +120,8 @@ static void dispatch(char *line) {
         cmd_kill(args ? args : "");
     } else if (k_strcmp(cmd, "spawn") == 0) {
         cmd_spawn(args ? args : "");
+    } else if (k_strcmp(cmd, "hwcursor") == 0) {
+        cmd_hwcursor(args ? args : "");
     } else if (k_strcmp(cmd, "gfxbench") == 0) {
         cmd_gfxbench(args ? args : "");
     } else if (k_strcmp(cmd, "df") == 0) {

@@ -2022,3 +2022,84 @@ void cmd_spawn(const char *args) {
     vga_printf("spawn: %s started as pid %d (not waited for -- `kill %d` to end it)\n",
                 path, pid, pid);
 }
+
+// `hwcursor [demo [x y] | off]` -- the display adapter's own cursor
+// plane, from the shell.
+//
+// IT EXISTS BECAUSE NOTHING ELSE CALLS IT. The hardware cursor has been
+// in `struct display_driver` since vmsvga, and no caller ever appeared:
+// the ring-3 compositor draws a software sprite, so gfx_hw_cursor_*()
+// was reachable code with zero users -- which means an adapter could
+// claim DISPLAY_CAP_CURSOR, implement it wrongly, and nothing would
+// ever notice. virtio-gpu's cursor queue is real hardware work (its own
+// virtqueue, its own resource, its own transfer), so it gets a caller
+// that can be pointed at and a test that can read the pixels.
+//
+// This is a diagnostic, not the feature: the compositor using the plane
+// for the real pointer is a roadmap item, and it needs the WM's damage
+// bookkeeping to stand down rather than a shell command.
+static uint32_t g_hwcursor_img[32 * 32];   // static: the ring-0 frame budget is 1 KiB
+
+void cmd_hwcursor(const char *args) {
+    if (!gfx_hw_cursor_available()) {
+        vga_write("hwcursor: this display has no cursor plane\n");
+        vga_write("  (`-vga virtio` has one; plain `-vga std` does not)\n");
+        return;
+    }
+
+    if (!args || !args[0]) {
+        vga_write("hwcursor: available on this display\n");
+        vga_write("usage: hwcursor demo [x y] | hwcursor off\n");
+        return;
+    }
+
+    if (k_strncmp(args, "off", 3) == 0) {
+        gfx_hw_cursor_show(0);
+        vga_write("hwcursor: hidden\n");
+        return;
+    }
+
+    if (k_strncmp(args, "demo", 4) != 0) {
+        vga_write("usage: hwcursor demo [x y] | hwcursor off\n");
+        return;
+    }
+
+    // Optional position, defaulting to somewhere unambiguously inside
+    // any mode the ladder can produce.
+    uint32_t x = 400, y = 300;
+    const char *p = args + 4;
+    while (*p == ' ') p++;
+    if (*p) {
+        const char *sp = p;
+        while (*sp && *sp != ' ') sp++;
+        char first[16];
+        unsigned n = (unsigned)(sp - p);
+        if (n >= sizeof first) n = sizeof first - 1;
+        for (unsigned i = 0; i < n; i++) first[i] = p[i];
+        first[n] = 0;
+        while (*sp == ' ') sp++;
+        if (!k_parse_u32(first, &x) || !*sp || !k_parse_u32(sp, &y)) {
+            vga_write("usage: hwcursor demo [x y] | hwcursor off\n");
+            return;
+        }
+    }
+
+    // A solid magenta square with an opaque alpha. Deliberately a colour
+    // this desktop uses nowhere, so a pixel probe reading it cannot be
+    // reading anything else -- the whole point of the test being a
+    // number rather than a look at a screenshot.
+    for (int i = 0; i < 32 * 32; i++) g_hwcursor_img[i] = 0xFFFF00FFu;
+
+    if (!gfx_hw_cursor_define(g_hwcursor_img, 32, 32, 0, 0)) {
+        vga_write("hwcursor: the adapter refused the image\n");
+        return;
+    }
+    gfx_hw_cursor_move((int)x, (int)y);
+    gfx_hw_cursor_show(1);
+
+    vga_write("hwcursor: 32x32 magenta square at ");
+    char buf[16];
+    k_utoa(x, buf, sizeof buf); vga_write(buf); vga_write(",");
+    k_utoa(y, buf, sizeof buf); vga_write(buf);
+    vga_write(" (hwcursor off to hide)\n");
+}

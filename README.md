@@ -237,11 +237,14 @@ with keyboard layouts as *data files* generated from Linux's own XKB data
 rather than a compiled-in table. PIT, CMOS RTC, PC speaker, MBR/GPT
 partition parsing, and a **virtio** stack: PCI capability walking and
 64-bit BAR decoding underneath a shared modern-virtio transport, with
-`virtio-blk` on top of it as the preferred disk and `virtio-rng`
-feeding the kernel's entropy pool (a QEMU guest usually has no
-RDSEED/RDRAND, and the jitter fallback is weakest under emulation).
-One transport, so the next device (net, GPU, input) is a driver rather
-than a bring-up project — and it is about **10× ATA's write throughput under
+`virtio-blk` on top of it as the preferred disk, `virtio-rng` feeding
+the kernel's entropy pool (a QEMU guest usually has no RDSEED/RDRAND,
+and the jitter fallback is weakest under emulation), and **`virtio-gpu`
+as a real display driver** — resource, scanout, transfer-and-flush and
+its own cursor queue, programming the mode itself so `video=1920x1080`
+is honoured rather than left to whatever GRUB negotiated. One
+transport, so the next device (net, input) is a driver rather than a
+bring-up project — and it is about **10× ATA's write throughput under
 KVM**, because a virtqueue is shared memory with one doorbell where ATA
 is dense with port I/O and every one of those is a VM exit.
 

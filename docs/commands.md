@@ -94,6 +94,7 @@ history search, `Alt-.` last argument. `help` lists them all.
 | `df` | Total/used/free, and the name of the active filesystem backend. |
 | `dmesg`, `lspci`, `parttable` | |
 | `gfxbench [iterations]` | Times full-screen framebuffer fills *and* console scrolls, reporting ms/frame, an fps ceiling, MB/s, which write-combining mechanism is live, and whether the console is double-buffered. Meaningful only under `make run KVM=1` or on real hardware — plain QEMU's TCG ignores memory types, so both console modes measure the same there. See `decisions.md`. |
+| `hwcursor [demo [x y] \| off]` | The display adapter's own cursor plane: reports whether this display has one, and `demo` puts a 32x32 magenta square on it. A DIAGNOSTIC, not the pointer — the compositor still draws a software sprite, so this is the only caller `gfx_hw_cursor_*()` has. Present on `-vga virtio` (virtio-gpu's cursor queue); absent on plain `-vga std`. Note a device-composited cursor never appears in a `screendump`. |
 
 What is running is `/bin/ps`, not a builtin either: pid, **ppid**,
 state, cumulative CPU seconds, mapped memory and name, with `--tree`

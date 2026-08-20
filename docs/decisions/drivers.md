@@ -504,3 +504,99 @@ draws later, and nothing else says anything at all. So
 claim the LAST one. The decline line exists for the same reason -- it
 is the only way a source that has stopped answering is visible, since
 a failed reseed is otherwise indistinguishable from a busy one.
+
+## virtio-gpu: a display driver that had to move the boot order
+
+**Why it is two files.** `kernel/drivers/virtio/virtio_gpu.c` speaks the
+command protocol; `kernel/drivers/display/display_virtio.c` adapts it to
+the `display_driver` registry. That is the same split virtio-blk already
+makes (`virtio_blk.c` plus `block_virtio.c` for `block_device`), and it
+is the two-axis shape this repo keeps returning to: what a device SITS
+ON (the virtio transport) is not what it PLUGS INTO (the class
+registry).
+
+**pmm_init() moved, and that is the interesting part.** Every display
+driver before this one probed with nothing but port I/O and a BAR, so
+`display_probe()` ran long before the frame allocator existed. A virtio
+device cannot: its virtqueues come from `pmm_alloc_contiguous()`, and so
+does the framebuffer it is about to own. `pmm_init()` depends only on
+the multiboot memory map and the kernel's own symbols -- both true from
+the first instruction of `kernel_main()` -- so it moved ahead of the
+display block, which is a one-line change with no new mechanism.
+
+The alternative was a late handover: boot on vesafb, bring virtio-gpu up
+after the heap, then re-point the active driver. That needs `gfx` to
+re-read its surface, the console and the compositor to repaint, and it
+has to deal with a ring-3 compositor already holding a framebuffer
+grant. Moving a call that had no dependencies was smaller by a wide
+margin.
+
+**The framebuffer is CONTIGUOUS because gfx needs one linear mapping.**
+`RESOURCE_ATTACH_BACKING` takes a scatter-gather list and would happily
+accept scattered frames, but this kernel's only kernel-side mapping is
+the identity map of the low 4 GiB, so physically contiguous is what
+makes it virtually contiguous. One allocation, one memory entry.
+
+**No DISPLAY_CAP_MODESET, even though it sets modes.** It programs a
+mode at probe, which is what makes `video=<W>x<H>` work on a device
+where GRUB's own mode list would have decided instead. What it cannot do
+is change mode AFTER boot: `virtio_gpu_set_mode()` allocates a new
+framebuffer and frees the old one, while `gfx.c` caches the surface
+pointer from `gfx_init()` and `win_surface.c` has mapped those exact
+frames into the compositor. A live mode change would leave both writing
+into freed memory. Advertising the capability and returning success
+while handing the system a dangling framebuffer is precisely the failure
+`display_probe()`'s honesty check exists to prevent, arriving from the
+other side -- so the capability is not claimed, and the runtime switch
+is a roadmap item that needs a gfx re-init and a compositor re-grant.
+
+**The mode LADDER wins over the host's preference, which looks
+backwards.** `display_mode_candidate(0)` IS `video=<W>x<H>` when that
+flag was given, and a flag the user typed must not be silently overruled
+by what QEMU happens to be showing. `GET_DISPLAY_INFO`'s preferred rect
+is the last resort instead. QEMU resizes its window to whatever scanout
+the guest sets, so honouring the flag costs nothing.
+
+**The cursor plane is real and has no consumer yet.** virtio-gpu's
+second queue carries `UPDATE_CURSOR`/`MOVE_CURSOR`, and this driver
+implements them -- but the ring-3 compositor draws a software sprite, so
+`gfx_hw_cursor_*()` had ZERO callers and had had none since vmsvga
+introduced them. A capability with no caller is a capability nobody
+would notice being wrong, so the shell gained `hwcursor`, a diagnostic
+that defines, moves and hides a square through the plane. The
+compositor actually using it is a roadmap item: the WM's damage
+bookkeeping (`prev_cursor_*`, `damage_cursor()`) has to stand down for
+the pointer, which is a change to the careful part of the renderer
+rather than to a driver.
+
+**A HARDWARE CURSOR IS INVISIBLE TO `screendump`, and that is not a
+harness bug.** QEMU hands a device-composited cursor to the display
+client out of band -- the VNC cursor pseudo-encoding, an SDL cursor --
+exactly as a real GPU hands it to scanout hardware. It is never drawn
+into the surface `screendump` captures. So `tools/virtio_gpu_test.py`
+asserts what CAN be observed: the commands complete, and showing the
+pointer repaints no framebuffer pixels (which is the property a plane
+has and a sprite does not). Anyone reaching for a pixel assertion here
+is asserting that the cursor failed to be a cursor.
+
+**Polled, like every other virtio device here.** Linux's `drm/virtio`
+completes on an interrupt with fences; this transport deliberately has
+no interrupts yet (see `virtqueue.c`), and the used ring says the same
+thing at the cost of CPU. Measured under TCG, a full-screen `gfxbench`
+frame is FASTER on virtio-gpu than on stdvga (3.0 ms against 3.9 ms),
+because the framebuffer is ordinary guest RAM rather than emulated MMIO
+and the two round trips per flush cost less than the MMIO writes they
+replace. That is a TCG number and says nothing about hardware.
+
+**How it is tested, and why it needed a tool of its own.** Nothing else
+here boots with a virtio GPU -- every GUI tool and `make test` launch
+`-vga std` -- so the driver's KTESTs would have skipped on every run,
+which is worse than having none because the suite stays green either
+way. `tools/virtio_gpu_test.py` supplies the hardware and checks both
+halves: `ktest virtio-gpu` inside the guest for the driver's own state,
+and the pixels from outside for what actually reached the screen. Its
+oracle for the PIXEL FORMAT is a second boot on `-vga std`: the same OS
+drawing the same desktop on a known-good layout, which is the only check
+that survived the positive controls -- "is anything on screen" passes on
+a black screen, and a channel-order test passes on a format that rotates
+channels rather than swapping two.

@@ -20,6 +20,7 @@
 #include "debug_console.h"
 #include "serial.h"
 #include "klog.h"
+#include "display.h"  // lsdev names the active display driver
 #include "win_transport.h" // `gui` travels as a protocol message now
 #include "kfmt.h"
 #include "string.h"
@@ -170,6 +171,27 @@ static void dbg_cmd_meminfo(void) {
 }
 
 static void dbg_cmd_lsdev(void) {
+    // The active DISPLAY first, because it is the one device whose
+    // driver is chosen by a probe race rather than being visible in the
+    // PCI list -- `0x1af4:0x1050` below says a virtio GPU is on the bus,
+    // not that anything claimed it. A test asking "which driver won?"
+    // had only `dmesg` to read, and the kernel log is a ring buffer that
+    // has rolled over long before a GUI test gets to ask.
+    const struct display_driver *disp = display_active();
+    if (disp) {
+        struct display_surface s;
+        display_get_surface(&s);
+        klog_printf("Display: %s  %ux%u x%u pitch %u  caps:%s%s%s%s%s\r\n",
+                     disp->name, s.width, s.height, (unsigned)s.bpp, s.pitch,
+                     display_has(DISPLAY_CAP_NEEDS_FLUSH) ? " flush" : "",
+                     display_has(DISPLAY_CAP_CURSOR)      ? " cursor" : "",
+                     display_has(DISPLAY_CAP_ACCEL_FILL)  ? " fill" : "",
+                     display_has(DISPLAY_CAP_ACCEL_COPY)  ? " copy" : "",
+                     display_has(DISPLAY_CAP_MODESET)     ? " modeset" : "");
+    } else {
+        klog_write("Display: none claimed\r\n");
+    }
+
     int n = pci_device_count();
     klog_printf("PCI devices (%d):\r\n", n);
     for (int i = 0; i < n; i++) {

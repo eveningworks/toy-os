@@ -503,7 +503,9 @@ run on, not by order.
 
 - [ ] A live bug to fix when the hardware path is reachable
 - [x] ~~virtio transport: PCI capability parsing, virtqueue (descriptor table / avail / used rings)~~
-- [ ] `virtio-gpu`: resource create/attach, set_scanout, transfer + flush, and the CURSOR queue
+- [x] ~~`virtio-gpu`: resource create/attach, set_scanout, transfer + flush, and the CURSOR queue~~
+- [ ] The compositor should use the hardware cursor plane instead of a software sprite
+- [ ] Runtime mode switching: a display driver can set a mode after boot
 - [ ] `virtio-net`: a NIC on the same transport, likely easier than e1000 once virtqueues exist
 - [x] ~~`virtio-blk`: a block device that isn't ATA~~
 - [x] ~~`virtio-rng`: entropy, registered as a krandom source~~

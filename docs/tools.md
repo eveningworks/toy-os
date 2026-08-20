@@ -628,6 +628,25 @@ manual steps to be worth automating:
   landed on the disk. Its positive control is to make
   `virtio_blk_write_sectors()` return success without issuing anything:
   that reddens exactly the round-trip check.
+- **`virtio_gpu_test.py`** -- the ONLY thing here that boots
+  `-vga virtio`, which is the whole reason it exists: every other GUI
+  tool and `make test` launch the default adapter, so the virtio-gpu
+  KTESTs would skip on every run and the suite would stay green either
+  way. It launches a guest through `vm.py --vga virtio`, runs
+  `ktest virtio-gpu` INSIDE it (the driver's own state -- active
+  display, surface geometry, a flush being exactly two commands) and
+  reads the PIXELS from outside (the desktop is drawn, and it keeps
+  changing, which is the control that separates a live display from one
+  frozen after its first frame). Its pixel-format oracle is a second
+  boot on `-vga std`: the same OS drawing the same desktop on a
+  known-good layout. That comparison is the only check that survived
+  the positive controls -- "is anything on screen" passes on a black
+  screen, and a red/blue channel test passes on a format that rotates
+  channels rather than swapping two. The cursor plane is checked by
+  what CAN be observed (the commands complete, and showing the pointer
+  repaints no framebuffer pixels), because a device-composited cursor
+  is handed to the display client out of band and never appears in a
+  `screendump` at all. On demand, not in the gate.
 - **`live_boot_test.py`** -- boots `toy-os-live.iso` with NO disk and
   asserts a shipped binary RUNS, plus that `df` reports the image's real
   size and says RAM-only. Not in `gui_regress.py` (it builds its own

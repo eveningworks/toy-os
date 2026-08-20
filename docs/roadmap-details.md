@@ -2929,3 +2929,37 @@ FS preemption guard, bounding how long a frame can block on I/O, and
 See `docs/decisions.md`'s entry on why `FS_OP()` is not a sleeping lock,
 which records the full measurement -- including that a spin lock inside a
 syscall would deadlock rather than merely wait.
+
+### The compositor should use the hardware cursor plane instead of a software sprite
+
+`display_driver` has had `cursor_define`/`cursor_move`/`cursor_show`
+since vmsvga, and virtio-gpu implements them on its own queue -- but
+nothing calls `gfx_hw_cursor_*()`. The ring-3 WM draws a sprite into the
+framebuffer and maintains the bookkeeping that erases it again
+(`prev_cursor_*`, `damage_cursor()` in `userland/wm/wm_render.c`).
+
+Moving the pointer to the plane means a `win_proto` request the
+compositor can call, and the sprite path standing down when the display
+reports `DISPLAY_CAP_CURSOR` -- which is the delicate half: that
+bookkeeping is what a stranded-sprite bug already came out of, so it has
+to be disabled cleanly rather than bypassed. The payoff is that pointer
+motion stops costing a damage rectangle, a transfer and a flush; on a
+NEEDS_FLUSH device that is two virtqueue round trips per mouse move.
+
+Until then `hwcursor` (the shell command) is the only caller, and it
+exists so the plane has one at all.
+
+### Runtime mode switching: a display driver can set a mode after boot
+
+virtio-gpu can program a mode -- that is what its probe does, and what
+makes `video=<W>x<H>` work there. It does not advertise
+`DISPLAY_CAP_MODESET` because a mode change AFTER boot would allocate a
+new framebuffer and free the old one, while `gfx.c` caches the surface
+pointer it got at `gfx_init()` and `win_surface.c` has mapped those
+frames into the compositor. Both would keep writing into freed memory.
+
+What it needs: `display_set_mode()` re-plumbing `gfx` (a re-init against
+the new surface), revoking and re-granting the compositor's framebuffer
+mapping, and telling the compositor its screen changed size so it can
+re-lay out. None of that is driver work; all of it is display-layer and
+`win_server` work. See `docs/decisions.md`.

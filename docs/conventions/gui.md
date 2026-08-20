@@ -483,3 +483,35 @@ this the obvious way), not from how much history it accumulated.
   ring-0 layer is registered so it cannot steal that WM's keys. (4) **A
   single `!g_ops` guard refused everything** -- a window server is now
   either a ring-0 layer or a registered compositor.
+
+## `-vga virtio` IS A REAL DISPLAY DRIVER, and nothing else boots it
+
+`virtio-gpu` (`kernel/drivers/virtio/virtio_gpu.c` plus
+`kernel/drivers/display/display_virtio.c`) claims the display ahead of
+vesafb and programs its own mode, so `video=<W>x<H>` is honoured there.
+Three things follow that are easy to get wrong.
+
+**It NEEDS_FLUSH, and it means it.** The framebuffer is ordinary guest
+RAM that the device reads on command -- pixels written and never
+published are invisible. The kernel's own drawing goes through
+`gfx_present()`; a ring-3 compositor's goes through
+`win_surface_present()` (`WIN_REQ_FB_PRESENT`). Before this driver every
+adapter here scanned memory continuously, so that path was never
+actually load-bearing and a compositor that skipped it looked fine.
+
+**Its mode is set at PROBE, not at runtime.** It does not advertise
+`DISPLAY_CAP_MODESET`: changing mode later frees the framebuffer that
+`gfx.c` caches a pointer to and that the compositor has mapped. See
+`docs/decisions.md`.
+
+**Test it with `tools/virtio_gpu_test.py`.** Every other GUI tool and
+`make test` launch `-vga std`, so the driver's KTESTs skip everywhere
+else -- that tool is what supplies the hardware, and it runs
+`ktest virtio-gpu` inside the guest as well as reading pixels from
+outside. Its pixel-format oracle is a second boot on `-vga std`,
+because "something is on screen" passes on a black screen and a
+red/blue check passes on a format that rotates channels.
+
+**A hardware cursor is invisible to `screendump`** -- QEMU hands a
+device-composited cursor to the display client out of band, exactly as
+real scanout hardware does. Do not write a pixel assertion for one.

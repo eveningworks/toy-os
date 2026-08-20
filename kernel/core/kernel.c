@@ -46,6 +46,7 @@
 #include "debug_console.h"
 #include "krandom.h"      // entropy source -- krandom_init()
 #include "virtio_rng.h"   // virtio-rng -- registers itself as a krandom source
+#include "virtio_gpu.h"   // virtio-gpu -- a display_driver on the virtio transport
 #include "reloc.h"        // the image's own relocation table -- kernel_relocate()
 
 // Where the running image starts -- a relocated symbol, so under kernel
@@ -125,12 +126,24 @@ void kernel_main(uint64_t multiboot_info_addr) {
     pci_init();
     klog_write("toy-os: PCI bus enumerated\n");
 
+    // The frame allocator, HERE rather than beside the heap where it
+    // used to sit, and the reason is the display block immediately
+    // below: virtio-gpu's probe needs frames for its virtqueues and for
+    // the framebuffer it is about to own, and every other card here
+    // probes with nothing but port I/O. pmm_init() depends on the
+    // multiboot memory map and the kernel's own symbols, both true
+    // since the first instruction of kernel_main() -- it sat later
+    // purely because nothing earlier had asked for a frame.
+    pmm_init();
+    klog_write("toy-os: physical frame allocator initialized\n");
+
     // Display drivers register, then probe -- specific cards first, the
     // generic GRUB framebuffer last as the fallback that always claims.
     // Must happen before vga_init(), which calls gfx_init() and needs a
     // surface to exist. vmsvga's probe does its own PCI config-space
     // read rather than waiting for pci_init(), because the console has
     // to come up before that.
+    virtio_gpu_display_register();
     vmsvga_register();
     vesafb_register();
     display_probe();
@@ -201,9 +214,6 @@ void kernel_main(uint64_t multiboot_info_addr) {
 
     serial_irq_init(); // COM1 RX -- see serial.c for why this can't run inside serial_init() itself
     klog_write("toy-os: serial RX enabled (debug console on COM1, see docs/decisions.md)\n");
-
-    pmm_init();
-    klog_write("toy-os: physical frame allocator initialized\n");
 
     heap_init(); // kmalloc()/kfree() -- built on pmm, needs it initialized first
 

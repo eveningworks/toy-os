@@ -493,6 +493,7 @@ whenever a headline here tells you something you did not already know.
 
 `docs/conventions/gui.md`
 
+- **`-vga virtio` IS A REAL DISPLAY DRIVER, and nothing else boots it**
 - **`apps/ui/` IS DOWN TO ONE WIDGET, and the GUI toolkit is `userland/ui/`.**
 - **Ring-3 GUI apps are written against Toykit's `uapp`, and a new one is a `.c` file in `userland/gui/` with NO Makefile edit.**
 - **An app with a cadence sets `tick_ms` and BLOCKS between frames.**
@@ -903,7 +904,10 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   `mem_stress.py`, `frame_balance.py` (does teardown balance),
   `virtio_boot_test.py` (TFS3 mounting off virtio-blk on a
   machine with NO IDE controller, written and read back across a
-  REBOOT), `live_boot_test.py`, `fs_switch_test.py`, `tfs3_v1_test.py`,
+  REBOOT), `virtio_gpu_test.py` (the GPU -- the ONLY thing here that
+  boots `-vga virtio`, so it is also what stops the driver's KTESTs
+  skipping on every run; its pixel-format oracle is a second boot on
+  `-vga std`), `live_boot_test.py`, `fs_switch_test.py`, `tfs3_v1_test.py`,
   `mkpart_test.py`, `demo_test.py`.
 - **Disk images, from the host** -- `seed_disk.py` (the format-aware
   front end `make iso` calls), `tfs2_writer.py`, `tfs3_writer.py`.
