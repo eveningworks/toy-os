@@ -49,6 +49,7 @@ and job control is what a terminal on that TTY makes possible.
 - [ ] Bound how long a frame can block on I/O
 
 ### Signals & process control
+**Needs:** nothing outstanding to START -- `docs/signals-design.md` is the plan, and stage 1 needs interruptible syscalls.
 
 - [ ] Basic signal delivery (kill-equivalent)
 - [ ] Default dispositions (terminate, ignore)

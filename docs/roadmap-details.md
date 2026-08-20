@@ -374,6 +374,10 @@ is in the foreground, what `Ctrl+C` means, whether input is line-buffered
 or raw.
 
 This is the milestone that keeps showing up as a prerequisite elsewhere.
+**The plan is `docs/signals-design.md`** (written 2026-08-20), which
+covers signals, the foreground process and `Ctrl-C` as ONE problem for
+the reason stated here.
+
 Signals & process control can deliver a signal, but "deliver SIGINT to the foreground
 process" has no meaning without a foreground process. Shell pipes & job control's job
 control (`fg`/`bg`) is the same problem wearing a different hat. Doing

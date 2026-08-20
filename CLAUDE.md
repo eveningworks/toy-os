@@ -1105,6 +1105,12 @@ detail there, and keep the pointer here to a line. What each file is:
   is the authority on which introspection commands have moved.
 - **`docs/errno-design.md`** -- giving a failed syscall a REASON, staged
   so each step ships on its own.
+- **`docs/signals-design.md`** -- signals, a foreground process, and what
+  `Ctrl-C` actually needs. Designed, not built. **Read it before
+  starting any of Phase 1's signal/TTY/job-control work**: its whole
+  point is that those are one problem, and that building signal delivery
+  alone yields a working `kill -TERM` and a `Ctrl-C` that still does
+  nothing.
 - **`docs/commands.md`** -- the INDEX over `docs/commands/`, which holds
   ONE PAGE PER COMMAND (every `/bin` program and every shell builtin).
   The index keeps only what is true of the shell rather than of any one
