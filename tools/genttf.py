@@ -11,13 +11,25 @@ is what actually ships in the kernel image.
 Bakes EIGHT sizes (8/10/12/14/16/18/20/24, named and selected by their
 point size -- see the commit for build 347 for why these replaced the
 original four tiny/small/medium/large names) into one font_ttf.c/h,
-selectable at runtime via gfx_set_font_size() (see gfx.c) -- the shell's
-`fontsize` command switches between them by typing the number. Baking
-multiple fixed sizes offline is the tradeoff that avoids needing a real
-runtime TrueType rasterizer (see the git history for why that's a much bigger
-undertaking): you get a choice of sizes, not arbitrary ones, but each one
-is genuinely anti-aliased at its native resolution rather than scaled
-from another baked size.
+selectable at runtime via gfx_set_font_px() (see gfx.c) -- the shell's
+`fontsize` command switches between them by typing the number.
+
+**WHAT THIS IS FOR NOW.** There IS a real runtime TrueType rasterizer
+(kernel/lib/ttf.c), so these baked tables are no longer how the machine
+gets glyphs -- they are how it gets glyphs when nothing else can: before
+the filesystem is mounted, on the panic path, and on an image with no
+font files. That makes what this script produces the FALLBACK, and the
+reason it is still hand-tuned rather than deleted: a console that could
+not draw text until a disk font loaded could not report why the disk
+font did not load.
+
+Two consequences worth knowing before editing this. The baked sizes are
+what gfx_set_font_px() SNAPS to when no face is loaded, so they are the
+whole answer on a font-less image and want to stay a sensible ladder.
+And these glyphs are hinted by FreeType offline, which a runtime atlas
+is not -- so below about 10px the baked font still looks BETTER than a
+rasterized face, and that is a real roadmap item rather than a
+measurement error.
 
 Font: JetBrains Mono (Regular), SIL Open Font License 1.1. Chosen for
 being a well-hinted, widely used, freely embeddable monospace face -- see
@@ -30,6 +42,8 @@ from https://www.jetbrains.com/lp/mono/ to regenerate.
 
 Run from the repo root: `python3 tools/genttf.py`
 """
+import sys
+
 from PIL import Image, ImageDraw, ImageFont
 
 FONT_PATH = "/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Regular.ttf"
@@ -106,22 +120,43 @@ def render_glyph(font, ch, cell_w, cell_h, baseline_y):
 ALL_CODEPOINTS = list(range(32, 32 + ASCII_GLYPH_COUNT)) + [cp for cp, _label in EXTRA_CHARS]
 
 
-def emit_h():
+def header_text():
+    """The exact contents of kernel/include/api/font_ttf.h.
+
+    Split out from emit_h() so --check can compare it against the
+    committed file WITHOUT needing the .ttf installed -- see main().
+    """
     lines = []
     lines.append("#ifndef FONT_TTF_H")
     lines.append("#define FONT_TTF_H")
     lines.append("")
+    # KEEP THIS IN STEP WITH THE COMMITTED font_ttf.h. The header is
+    # generated, so a hand-edit there is lost the next time anybody runs
+    # this -- and regenerating needs JetBrainsMono-Regular.ttf installed,
+    # which most checkouts do not have. So an edit to the header's prose
+    # has to be made HERE as well, and the two were last reconciled when
+    # the runtime rasterizer landed.
     lines.append("// Anti-aliased bitmap fonts baked from a real TrueType face")
     lines.append("// (JetBrains Mono, OFL 1.1 -- see tools/OFL.txt) at build time by")
     lines.append("// tools/genttf.py. Each glyph is a flat grayscale alpha map (0 =")
     lines.append("// background, 255 = fully the ink color), rendered once offline")
     lines.append("// with real font hinting + anti-aliasing, so it looks like an")
     lines.append("// actual font instead of blocky upscaled pixel art -- gfx.c's")
-    lines.append("// gfx_draw_char() alpha-blends it straight into the framebuffer,")
-    lines.append("// no runtime rasterization involved.")
+    lines.append("// gfx_draw_char() alpha-blends it straight into the framebuffer.")
     lines.append("//")
-    lines.append(f"// {len(SIZES)} sizes are baked in; gfx_set_font_size() (gfx.c) picks which")
-    lines.append("// one gfx_draw_char()/gfx_char_w()/gfx_char_h() actually use.")
+    lines.append("// **THIS IS THE FALLBACK NOW, NOT THE ONLY FONT.** There IS a runtime")
+    lines.append("// rasterizer (kernel/lib/ttf.c) and a face loaded from")
+    lines.append("// /usr/share/fonts (api/font_face.h) takes precedence when one is")
+    lines.append("// selected. These tables remain because they are the only glyphs that")
+    lines.append("// need no filesystem, no allocator and no parsing: they draw before")
+    lines.append("// the disk is mounted, on the panic path, and whenever a font file is")
+    lines.append("// missing or malformed.")
+    lines.append("//")
+    lines.append(f"// {len(SIZES)} sizes are baked in. gfx_set_font_px() (gfx.c) SNAPS to the nearest")
+    lines.append("// of them when no face is loaded, which is why an arbitrary size is")
+    lines.append("// answerable only with one; gfx_font_size() reports which it snapped")
+    lines.append(f"// to. The {GLYPH_COUNT}-glyph set here is also the set a runtime atlas")
+    lines.append("// rasterizes, so the two are interchangeable everywhere.")
     lines.append("#include <stddef.h>")
     lines.append("")
     lines.append("enum font_size {")
@@ -152,8 +187,7 @@ def emit_h():
     lines.append("extern const unsigned char font_ttf_extra_codepoints[FONT_TTF_EXTRA_COUNT];")
     lines.append("")
     lines.append("#endif")
-    with open(OUT_H, "w") as f:
-        f.write("\n".join(lines) + "\n")
+    return "\n".join(lines) + "\n"
 
 
 def emit_c(all_glyphs):
@@ -226,12 +260,52 @@ def render_preview():
     out.save(PREVIEW)
 
 
+def check_header():
+    """Does the committed header match what this script would emit?
+
+    **THE DRIFT THIS CATCHES.** font_ttf.h is GENERATED, and regenerating
+    it needs JetBrainsMono-Regular.ttf installed -- which most checkouts
+    do not have. So the tempting move when its prose goes stale (and it
+    did: it claimed "no runtime rasterization involved" for a while after
+    kernel/lib/ttf.c landed) is to hand-edit the header, which works
+    perfectly until the next person who DOES have the font regenerates
+    and silently reverts it.
+
+    Deliberately compares only the parts that need no font: the comment
+    block, the enum and the counts. The glyph DATA cannot be checked
+    without rendering it, and pretending otherwise would be a check that
+    passes for the wrong reason. Exit code 0 if they agree.
+    """
+    want = header_text()
+    try:
+        with open(OUT_H, encoding="utf-8") as f:
+            have = f.read()
+    except OSError as e:
+        print(f"genttf --check: cannot read {OUT_H}: {e}")
+        return 1
+    if have == want:
+        print(f"genttf --check: {OUT_H} matches what this script would emit")
+        return 0
+    print(f"genttf --check: {OUT_H} is NOT what this script would emit.")
+    print("  A generated header was hand-edited, or SIZES/EXTRA_CHARS moved.")
+    print("  Make the SAME edit in genttf.py's header_text() so a regeneration")
+    print("  keeps it, then re-run this. Diff:")
+    import difflib
+    for line in list(difflib.unified_diff(have.splitlines(), want.splitlines(),
+                                           "committed", "would emit", lineterm=""))[:40]:
+        print("   " + line)
+    return 1
+
+
 def main():
+    if "--check" in sys.argv:
+        sys.exit(check_header())
     all_glyphs = {}
     for name, size, cw, ch, baseline in SIZES:
         font = ImageFont.truetype(FONT_PATH, size)
         all_glyphs[name] = {cp: render_glyph(font, chr(cp), cw, ch, baseline) for cp in ALL_CODEPOINTS}
-    emit_h()
+    with open(OUT_H, "w", encoding="utf-8") as f:
+        f.write(header_text())
     emit_c(all_glyphs)
     render_preview()
     print("ok: preview + kernel/drivers/font_ttf.c + kernel/include/api/font_ttf.h written")

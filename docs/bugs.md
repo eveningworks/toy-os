@@ -38,6 +38,7 @@ it has exonerated one this session and convicted another.
 ## Intermittent -- a rate, not a verdict
 
 - [ ] `tools/ktest_run.py` reports the debug console never came up -- 5 boots in 9 when measured 2026-08-18, then 0 in 29 on 2026-08-20 with nothing in between that targeted it; cause never established
+- [ ] `winshare/destroying a window poisons the compositor's mapping` KTEST fails -- 1 run in 18 on 2026-08-20, against 0 in 18 on the previous commit, which at those counts does not distinguish the two; cause never established
 - [ ] `tools/ktest_run.py` failed twice on 2026-08-20 during a long session and neither failure reproduced (0 in 7, then 0 in 1) -- the output was not captured either time, so it is NOT known to be the debug-console one above; capture the log before re-running
 - [ ] ATA writes time out under host I/O pressure -- `dma write failed after 3 attempts (drive stayed busy, command never issued)`; measured 1 run in 3 locally on a clean disk, and it was CI's recurring red build until the filesystem moved to virtio-blk
 - [ ] `heap-debug`'s use-after-free check fails about 1 run in 15 -- PRE-EXISTING

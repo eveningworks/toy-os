@@ -854,33 +854,101 @@ Convert Calculator first. Its grid is pure arithmetic today, it's
 `multi_instance` so two windows can be compared side by side, and if the
 engine can't express a uniform button grid it can't express anything.
 
+### `winshare/destroying a window poisons the compositor's mapping` KTEST fails
+
+Measured 2026-08-20, on the commit that added the runtime font
+rasterizer: **1 failure in 18 `tools/ktest_run.py` runs**, against **0 in
+18** on the commit before it (`git stash push -u`, rebuild, count --
+both batches via `tools/flake_hunt.py ktest`, both from a
+`make clean-disk` image).
+
+**That difference does not distinguish the two.** A 1-in-18 rate shows
+zero failures in 18 runs about 40% of the time, so the earlier commit is
+not exonerated by its clean batch and the later one is not convicted by
+its single failure. Recorded with both counts rather than a verdict.
+
+Reproduce with `python3 tools/flake_hunt.py ktest -n 20`; the failing
+check names itself in the summary. No cause was established. Two things
+that would plausibly matter and were not tested: the KTESTs added in
+that commit rasterize several hundred glyphs while a desktop is live,
+which is a real timing perturbation in the area this check measures; and
+the check runs against a compositor whose window is being destroyed, so
+it is sensitive to when the compositor next drains its event queue.
+
+The check itself guards a real invariant with a known history -- a
+revoked compositor mapping must be poisoned rather than left as a hole
+(see `docs/decisions/gui.md`) -- so a failure here is worth taking
+seriously rather than raising the tolerance.
+
 ### Runtime font loading & text metrics
 
-The layout engine above needs to ask "how wide is this string?" and get
-a true answer. Today the only honest answer is "character count times a
-fixed cell width", because the console and every widget assume one
-character is one fixed-width cell -- an assumption baked in deep enough
-that `docs/decisions.md` has an entry about it (the Latin-1 choice)
-and UTF-8 migration exists to revisit it.
+**Most of this shipped on 2026-08-20** -- `kernel/lib/ttf.c` parses and
+rasterizes a TrueType face in fixed point, `kernel/drivers/font_face.c`
+is the `/usr/share/fonts` registry, `fontface`/`fontsize` switch face and
+size (any size, not just a baked one), and text is MEASURED through
+`gfx_char_advance()`/`ugfx_char_advance()` rather than multiplied.
+`docs/decisions/drivers.md` and `docs/decisions/gui.md` carry the
+reasoning; what follows is only what is still missing, and why each piece
+is where it is.
 
-That makes this the natural next step after layout, and it's why the two
-are adjacent: proportional text without a layout engine has nothing to
-inform, and a layout engine over monospace-only text is measuring
-something it doesn't need to measure.
+**The 101-glyph ceiling is the one that actually limits the feature, and
+it is not a font problem.** A runtime atlas rasterizes exactly the set
+`tools/genttf.py` bakes -- ASCII 32-126 plus six Nordic letters -- so
+DejaVu Sans Mono's other ~3,270 glyphs are loaded, parsed, and
+unreachable. That set is deliberate and is the same one everywhere, which
+is what makes an atlas a drop-in for a baked variant; widening it means
+answering "what is a character?" first, and this OS says Latin-1 (see
+`docs/decisions/drivers.md`'s Nordic/Latin-1 entry). So this unblocks
+behind UTF-8 migration rather than inside this milestone. Until then the
+honest description is a real font renderer drawing a 1980s character set.
 
-The font data itself is currently baked at build time by
-`tools/genttf.py` into `kernel/drivers/font_ttf.c` -- 11,800+ lines of
-generated glyph data, and a fixed set of characters. Loading a TTF from
-disk at runtime replaces the *source* of glyphs, not the rendering; the
-baked font stays as a guaranteed fallback, because a console that can't
-draw text until a disk font loads is a console that can't report why the
-disk font didn't load.
+**Weights are blocked by there being one active face.** `font_face.c`
+holds one selected face and one atlas per size of it, so `-Bold.ttf` can
+be *chosen* as its own face but cannot be drawn BESIDE the regular one --
+no bold window title, no emphasised label. That is the same gap as
+"multiple faces live at once, selected per widget", and weight is its
+first real caller: a `uui_label` that could ask for bold would justify
+the API, where "an app might want a different font" never quite did.
 
-Deliberately bounded: this milestone stops at advance widths, kerning
-pairs and multiple faces. Complex-script shaping -- bidirectional text,
-ligature substitution, combining marks -- needs UTF-8 migration's UTF-8
-work first, and pretending otherwise would put a dependency here on
-something 16 milestones below it.
+**Hinting is the cheapest visible win left.** Glyphs are rendered
+unhinted -- outlines scaled and filled with no grid-fitting -- so below
+about 10px stems land between pixel centres and the result is muddier
+than the baked font at the same size, which FreeType hinted offline. This
+is worth knowing before treating small-size rendering as a bug: it is a
+missing feature with a name.
+
+**Kerning** (`kern`/`GPOS`) matters only once proportional faces are in
+normal use; `AV` and `To` sit visibly wrong, and nothing on the desktop
+uses a proportional face by default.
+
+**Moving the parse out of ring 0** is the security item, and it is not a
+font task. A `.ttf` is untrusted input being parsed in the kernel -- the
+surface Windows spent a decade of GDI CVEs on before Windows 10 moved it
+to `fontdrvhost` -- and `ttf.c` is bounds-checked throughout because of
+it. Actually moving it needs a way to hand a rasterized atlas from a
+ring-3 process to the compositor and the console, i.e. shared memory this
+OS does not have. Doing it without that would mean copying an atlas
+through a syscall per font change, which is the wrong shape.
+
+**Composite 2x2 transforms** are skipped: a component glyph is placed by
+its offset and drawn at natural size. Every accent in both shipped faces
+is a pure translation, so nothing renders wrong today, and this is
+recorded so that a face which DOES scale a component is a known
+limitation rather than a mystery.
+
+**Complex-script shaping** -- bidirectional text, ligature substitution,
+combining marks -- stays out. It needs UTF-8 first, and pretending
+otherwise would put a dependency here on something far below it.
+
+Two bounds that are decisions rather than gaps, stated so they are not
+mistaken for bugs. The atlas cache holds 8 entries / 4 MiB and REFUSES a
+build past either, keeping the current size drawing rather than evicting
+an atlas a client still has mapped. And the cell is measured with
+`genttf.py`'s tightening formula so a runtime face at 14px matches the
+baked 14px to within a pixel -- layout everywhere is font-derived, so
+disagreeing would reflow every window the moment a face was selected. The
+cost is the slight accent and descender clipping every fixed-cell
+terminal font accepts.
 
 ### Desktop productivity apps
 

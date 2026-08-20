@@ -40,6 +40,25 @@ this the obvious way), not from how much history it accumulated.
   -- a terminal is monospace by definition -- so a proportional face
   gets a cell as wide as its widest advance there.
 
+- **A LOADED FACE STILL ONLY DRAWS 101 GLYPHS, AND THERE ARE NO
+  WEIGHTS.** Two boundaries that surprise people who have just seen a
+  real TTF load. An atlas rasterizes exactly the set `tools/genttf.py`
+  bakes -- ASCII 32-126 plus six Nordic letters (`font_ttf.h`'s
+  `FONT_TTF_GLYPH_COUNT`) -- so DejaVu Sans Mono's other ~3,270 glyphs
+  are parsed and unreachable, and anything outside the set falls back to
+  `?`. That set is deliberate: it is what makes an atlas a DROP-IN for a
+  baked variant everywhere from `gfx_draw_char()` to a client's own
+  glyph indexing, and widening it means answering "what is a character?"
+  first -- this OS says Latin-1 (`docs/decisions/drivers.md`), so it
+  waits on UTF-8. **Do not "fix" it by widening the atlas alone**: the
+  slot order is ABI, shared through `WIN_REQ_FONT`, so a client built
+  against the old count indexes into the wrong glyph rather than failing.
+
+  And `font_face.c` holds ONE selected face, so a `-Bold.ttf` can be
+  chosen as its own face but cannot be drawn beside the regular one --
+  there is no bold window title and no emphasised label, and adding one
+  is the "multiple faces live at once" roadmap item, not a flag.
+
 - **THE FONT CAN CHANGE UNDER A RUNNING CLIENT, AND `WIN_EV_FONT` IS
   HOW IT FINDS OUT.** A client maps the font once, at
   `ugfx_font_init()`, and caches the cell size; a face or size change

@@ -44,10 +44,9 @@ static void open_common(const char *message, void (*on_yes)(void), void (*on_no)
     g_on_no = on_no;
 
     int ch = ugfx_char_h();
-    // gfx_text_width(), not k_strlen() * gfx_char_w() -- that identity
-    // holds only while every glyph is one fixed cell wide, which is
-    // exactly what Milestone 21's proportional metrics stop being true
-    // (see api/gfx.h).
+    // ugfx_text_width(), not strlen() * ugfx_char_w() -- that identity
+    // stopped holding when a proportional face became loadable, and it
+    // sums per-glyph advances now (see api/gfx.h, ugfx_char_advance()).
     int msg_w = ugfx_text_width(message);
 
     const char *yes_label = g_yes_label, *no_label = g_no_label;

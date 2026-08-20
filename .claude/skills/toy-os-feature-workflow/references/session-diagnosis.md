@@ -705,3 +705,30 @@ the point of change; it is simply no longer load-bearing.
 the explicit call, rebuild, and confirm the geometry is byte-identical.
 A "now it's impossible" that was never tested without the belt is just a
 belt and a claim.
+
+## A broadcast that reaches N-1 of N looks exactly like a broadcast nobody sent (2026-08-20)
+
+`WIN_EV_FONT` tells every GUI client that the font changed. The first
+version walked `windows[pid][slot]` -- the window table -- and pushed the
+event to every live window. Every client got it. The screen did not
+change at all, and the symptom was indistinguishable from "the event is
+never delivered": no repaint, no log line, nothing.
+
+The compositor owns NO WINDOW. It draws the screen, it is not a client
+of it, so it is not in that table -- and the chrome, the taskbar, the
+icons and every window frame are drawn by it. `tell_compositor()` is a
+separate call for exactly this reason, and it was sitting three
+functions up in the same file, used by fourteen other events.
+
+The generalisable part: **when a broadcast appears to reach nobody, first
+ask who the recipient list is DERIVED from, and which participants are
+not in that data structure.** A list built from "everything with a
+window" silently excludes the one process whose job is windows. The
+existing code already knew this -- the fix was to use the helper the
+file's other broadcasts use, not to invent anything.
+
+The tell I missed for a while: the kernel logged the font change (so the
+setting applied), and the client-side handler was correct in isolation
+(so reading either half proved nothing). What settled it in one step was
+looking at the WM's own log and seeing NO line from the handler at all --
+i.e. asking "did the recipient run?" rather than "did the sender send?".

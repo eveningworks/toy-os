@@ -379,3 +379,41 @@ Choose by what the values ARE: few and unordered (radio), many
 That is worth copying whenever a toolkit grows a second way to show the
 same data -- keeping the VALUE type identical is what makes the choice a
 presentation decision rather than a rewrite.
+
+## Metrics cached at startup, and the two things that changed under them (2026-08-20)
+
+A ring-3 client maps the font ONCE (`ugfx_font_init()`) and caches the
+cell size. That was safe while the font could only change at boot. It
+stopped being safe the moment a face could be selected at runtime, and
+the failure mode is quiet: the setting applies, the kernel logs it,
+`/etc` records it, and the screen keeps the old glyphs until the desktop
+restarts -- so the Appearance setting looks broken rather than deferred.
+
+`WIN_EV_FONT` is the answer, and `uapp` handles it for every app whether
+or not the app has heard of fonts: re-map, re-run the layout, repaint --
+the same deal `WIN_EV_RESIZE` already gave them. The compositor handles
+it by re-mapping and forcing one full frame, which is enough only
+because every piece of its chrome is measured from `ugfx_char_h()` FRESH
+each frame. That property is worth not losing: it is what made the
+handler three lines instead of an invalidation pass.
+
+The shape to copy: this is Wayland's `wl_output` scale change and X11's
+XSETTINGS notification. The server does not re-lay-out anybody. It says
+the metrics moved, and each client decides what that means.
+
+## The console will paint over the compositor if you let it (2026-08-20)
+
+`vga_reflow()` recomputes the console's rows and columns and then clears
+the screen -- and the clear ends in `vga_present()`, which blits the
+console's whole buffer. With a desktop up, `fontsize` at the physical
+shell wiped the top two thirds of it. Pre-existing (the old `fontsize`
+did it too), found only because a new command called the same function.
+
+The fix is the same shape as the suspended keyboard reader: recompute
+always, PAINT only when `win_server_any()` says nobody else owns the
+screen. The console the user cannot see is the one that does not need
+clearing.
+
+Worth generalising while working anywhere in `vga.c`: every path in it
+that ends in a present is a path that can overwrite the desktop, and the
+ring-0 console has no idea a compositor exists unless it asks.

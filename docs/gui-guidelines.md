@@ -593,6 +593,13 @@ isn't a button group.
 - **Size boxes from font metrics, not constants.** `gfx_char_w()`/
   `gfx_char_h()` change with the font size setting; a hardcoded cell
   width is correct at exactly one font.
+- **Measure text with `gfx_text_width()`, never `strlen * char_w`.**
+  That identity STOPPED HOLDING when a proportional face became
+  loadable from `/usr/share/fonts`: widths are the sum of per-glyph
+  advances (`gfx_char_advance()`, `ugfx_char_advance()`) now. The trap
+  is that the wrong version still looks right on the default face,
+  which is monospace -- a call site that multiplies is invisible until
+  somebody selects a proportional face, and then its labels overlap.
 - **Budget both axes.** A row sized to exactly `gfx_char_h()` has the
   glyph's own background painting over its border.
 - **One hit-test per control, shared by drawing and input.** The
@@ -647,8 +654,14 @@ reflowed correctly, with all 82 GUI regression checks passing unchanged.
 A single hardcoded height would have been a visible break at that
 moment and nowhere else.
 
-Two corollaries:
+Three corollaries:
 
+- **The FACE can change too, not just the size**, and a running client
+  is told through `WIN_EV_FONT` -- `uapp` re-maps the font, re-runs the
+  layout and repaints for any app, whether or not it has heard of
+  fonts. So "measured at open time" is not enough on its own: anything
+  that caches a pixel measurement outside `natural_size`/`set_geometry`
+  has to re-derive it on that event, exactly as it would on a resize.
 - **A label in a fixed box must be clipped**, because the box is
   font-sized and the text may not fit at every font. Use
   `gfx_draw_string_clipped()` and mark the cut (the desktop appends

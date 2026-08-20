@@ -516,6 +516,7 @@ whenever a headline here tells you something you did not already know.
 `docs/conventions/gui.md`
 
 - **MEASURE TEXT, NEVER MULTIPLY: `gfx_char_advance()` / `ugfx_char_advance()`.**
+- **A LOADED FACE STILL ONLY DRAWS 101 GLYPHS, AND THERE ARE NO WEIGHTS.**
 - **THE FONT CAN CHANGE UNDER A RUNNING CLIENT, AND `WIN_EV_FONT` IS HOW IT FINDS OUT.**
 - **A FONT FACE IS NAMED BY ITS FILENAME, AND `builtin` IS NOT A FACE.**
 - **`WIN_CLIENT_MAX_W/H` TRACKS THE DISPLAY CEILING, AND A SCREEN BIGGER THAN IT BREAKS MAXIMIZE SILENTLY.**

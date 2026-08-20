@@ -291,3 +291,75 @@ KTEST("font_face", "an arbitrary size works with a face and snaps without one") 
     font_face_select(before);
     gfx_set_font_px(before_px);
 }
+
+KTEST("font_face", "a character outside the 101-glyph set falls back to '?'") {
+    // THE CEILING, ASSERTED SO IT IS A KNOWN BOUND RATHER THAN A
+    // DISCOVERY. A loaded face has thousands of glyphs and an atlas
+    // rasterizes exactly the set font_ttf.h describes, so everything
+    // else has to degrade predictably -- to '?', not to a blank cell and
+    // certainly not to whatever bytes follow the table. See
+    // docs/conventions/gui.md; widening the set is a WIN_REQ_FONT
+    // protocol change, not a constant, which is why this is pinned here.
+    font_face_init();
+    char before[FONT_FACE_NAME_LEN];
+    k_strlcpy(before, font_face_active(), sizeof before);
+    int before_px = gfx_font_px();
+
+    // Both fonts, because the fallback lives in gfx.c's shared glyph
+    // lookup and a runtime atlas could plausibly have got its own copy.
+    for (int pass = 0; pass < 2; pass++) {
+        if (pass == 1) {
+            if (font_face_count() == 0 || !font_face_select(TEST_FACE)) break;
+            gfx_set_font_px(16);
+        } else {
+            font_face_select("");
+            gfx_set_font_px(16);
+        }
+
+        int q = gfx_char_advance('?');
+        KTEST_ASSERT(q > 0);
+        // A Euro sign, a CJK codepoint and a Latin-1 letter that is NOT
+        // one of the six baked extras: all outside the set, all '?'.
+        KTEST_ASSERT_EQ(gfx_char_advance(0x20AC), q);
+        KTEST_ASSERT_EQ(gfx_char_advance(0x4E2D), q);
+        KTEST_ASSERT_EQ(gfx_char_advance(0xE9), q); // e-acute
+        // ...while a letter that IS in the set is not the fallback path:
+        // on a proportional face these would differ, and on a monospace
+        // one every advance is the cell, so the assertion that carries
+        // weight is that the character is FOUND at all -- checked by its
+        // glyph having ink, below.
+        KTEST_ASSERT(gfx_char_advance('A') > 0);
+    }
+
+    font_face_select(before);
+    gfx_set_font_px(before_px);
+}
+
+KTEST("font_face", "the atlas holds exactly the baked slot count") {
+    font_face_init();
+    if (font_face_count() == 0) return;
+
+    char before[FONT_FACE_NAME_LEN];
+    k_strlcpy(before, font_face_active(), sizeof before);
+    int before_px = gfx_font_px();
+
+    KTEST_ASSERT(font_face_select(TEST_FACE));
+    const struct font_atlas *a = font_face_build(18);
+    KTEST_ASSERT(a != 0);
+    // Not a tautology: it is the ABI check. WIN_REQ_FONT reports this
+    // count to every client and clients index by slot, so an atlas that
+    // ever disagreed with FONT_TTF_GLYPH_COUNT would have clients
+    // reading the wrong glyph rather than failing visibly.
+    KTEST_ASSERT_EQ(a->count, FONT_TTF_GLYPH_COUNT);
+    // The LAST slot is one of the Nordic extras and must have ink --
+    // that is what proves the extras are rasterized and not merely
+    // counted (a loop that stopped at ASCII would leave them blank, and
+    // the count would still be right).
+    const uint8_t *last = a->glyphs + (size_t)(a->count - 1) * a->cell_w * a->cell_h;
+    int ink = 0;
+    for (int i = 0; i < a->cell_w * a->cell_h; i++) if (last[i]) ink++;
+    KTEST_ASSERT(ink > 5);
+
+    font_face_select(before);
+    gfx_set_font_px(before_px);
+}

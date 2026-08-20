@@ -873,6 +873,19 @@ sizes were generated with keeps the two within a pixel, at the cost of
 the same slight accent and descender clipping every fixed-cell terminal
 font accepts.
 
+**The atlas is the BAKED glyph set, and that is a bound rather than an
+oversight.** A runtime atlas rasterizes exactly the 101 slots
+`font_ttf.h` describes, in the same order, so a loaded face's remaining
+thousands of glyphs are parsed and unreachable. Two reasons it is drawn
+here. The slot order is ABI -- `WIN_REQ_FONT` shares it, and a client
+built against a different count would index into the wrong glyph rather
+than fail -- so widening it is a protocol change, not a constant. And
+the question underneath it is "what is a character?", which this OS has
+already answered as Latin-1 (see the Nordic/Latin-1 entry above); a
+loaded font does not change that answer, so the ceiling belongs to UTF-8
+migration and not here. `docs/roadmap-details.md` states it as the
+limitation it is.
+
 **A face is named by its filename, and the baked font is not a face.**
 `dejavu-sans-mono.ttf` is `dejavu-sans-mono`, the same convention cursor
 themes use for directories -- so listing what is available is a

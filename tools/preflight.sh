@@ -92,6 +92,13 @@ python3 tools/check_dispatch.py || fail "dispatch-chain check"
 step "check_widget_ops.py (widget ops tables with a slot left NULL)"
 python3 tools/check_widget_ops.py || fail "widget ops check"
 
+# The baked font's header is GENERATED, and regenerating it needs a font
+# most checkouts do not have installed -- so a hand-edit there survives
+# until somebody who DOES have it regenerates and silently reverts it.
+# Comment-and-counts only; no font needed to run this.
+step "genttf.py --check (the generated font header matches its generator)"
+python3 tools/genttf.py --check || fail "generated font header check"
+
 step "boot_smoke_test.py"
 python3 tools/boot_smoke_test.py || fail "boot smoke test"
 

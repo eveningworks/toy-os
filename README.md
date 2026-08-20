@@ -80,8 +80,9 @@ production software. What that means concretely:
 
 **Works today** — booting on real hardware and QEMU, the shell and its
 line editor, both filesystems with `fsck` and live reformatting, the
-window manager and its apps, ring-3 processes with pipes and
-`spawn`/`waitpid`, and the full test suite: a few hundred in-kernel
+window manager and its apps, fonts loaded and rasterized from disk at
+runtime, ring-3 processes with pipes and `spawn`/`waitpid`, and the full
+test suite: a few hundred in-kernel
 tests, the ring-3 diagnostics, and the GUI tools `gui_regress.py` runs
 as one table.
 
@@ -282,7 +283,13 @@ fixed-point TrueType rasterizer that loads a `.ttf` from
 `/usr/share/fonts` at runtime — so any size works, not just a baked one,
 and a proportional face gets genuine per-glyph advance widths. Because
 the whole UI is font-*derived*, changing the face or the size reflows
-everything rather than clipping it, live, without restarting anything. Double-buffered rendering with damage-region clipping, and a
+everything rather than clipping it, live, without restarting anything.
+The honest limit: a loaded face is rasterized into the same 101-glyph
+set the baked one carries — ASCII plus six Nordic letters — so its other
+few thousand glyphs are parsed and unreachable until UTF-8 lands, and
+there are no weights yet.
+
+Double-buffered rendering with damage-region clipping, and a
 compositor whose damage invariant is enforced by a verification mode
 that re-renders each frame unrestricted and reports any pixel that
 changed without being declared — over the chrome, desktop, taskbar,

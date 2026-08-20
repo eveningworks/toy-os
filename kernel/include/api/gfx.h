@@ -218,9 +218,12 @@ void gfx_draw_string(int x, int y, const char *s, uint32_t fg, uint32_t bg);
 // written up as a lesson.
 
 // Pixel width of one row of `s` (stops at a newline). Ask this instead
-// of `k_strlen(s) * gfx_char_w()`: that identity holds only while every
-// glyph is one fixed cell wide, and Milestone 21's proportional metrics
-// are where it stops holding.
+// of `k_strlen(s) * gfx_char_w()`: that identity has STOPPED HOLDING --
+// a face loaded from /usr/share/fonts may be proportional, so it sums
+// gfx_char_advance() per character now. The trap is that the wrong
+// version still looks right on the default face, which is monospace:
+// a call site that multiplies is invisible until somebody selects a
+// proportional face, and then its labels overlap.
 int gfx_text_width(const char *s);
 
 // How many leading characters of `s` fit within `max_w` pixels, whole

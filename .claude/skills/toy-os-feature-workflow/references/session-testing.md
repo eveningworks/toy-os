@@ -869,3 +869,80 @@ Establish the baseline rather than inherit it: the test now does
 on disk before going near the staging checks. Same family as this repo's
 existing rule about a fixture whose data never reaches the branch under
 test.
+
+## I bisected my own change for four cycles before running `clean-disk` (2026-08-20)
+
+The runtime-font session ended with `gui_regress` reporting two
+failures, `settings_test` (4 checks) and `screen_surface_test` (1).
+Both had been green earlier the same session. So I went looking for
+which of my changes did it, with genuinely well-chosen discriminating
+experiments -- disable the newly registered setting, rebuild, run;
+disable the new client-side event handler, rebuild, run; make the
+kernel-side broadcast a no-op, rebuild, run. Four build-and-boot cycles.
+Every one of them still failed, and the third one changed the failure
+COUNT (34 passed, then 36), which I noted and did not act on.
+
+Then `make clean-disk && make iso`: **38/38 and 14/14**. The failures
+were the disk image. `settings_test` and several others WRITE to `/etc`,
+`make iso` re-seeds by sync and never reformats, and I had run
+`ktest_run` and a full suite over the same image in between.
+
+CLAUDE.md already says this, in capitals, as the first thing to do
+before believing any GUI test failure. I read it at the start of the
+session and still bisected first, because the failure looked so much
+like a regression in the specific thing I had just built.
+
+Three things to take from it:
+
+- **`make clean-disk && make iso` costs one cycle and comes FIRST.** Not
+  after the cheap experiments -- before them. It is cheaper than any
+  single bisect step and it eliminates the whole class.
+- **A failure set that CHANGES between runs of the same binary is a
+  fixture or a flake, never a deterministic regression.** 34 then 36
+  passing was the tell, and it was sitting in front of me. If the code
+  under test did not change and the answer did, stop bisecting the code.
+- **A well-chosen experiment on the wrong hypothesis is still wasted.**
+  All four experiments were discriminating and correctly interpreted;
+  the hypothesis space simply never included the fixture. Ask what else
+  changed besides the code -- the image, the config, the previous test.
+
+## Pick a ruler whose signal is large, and crop what you measure (2026-08-20)
+
+`font_test.py` had to show that a proportional face draws text NARROWER
+than a monospace one. The obvious target was the desktop icon captions,
+which gave 121px against 117px -- a 4-pixel difference that any
+antialiasing change could produce. The reason is that captions are
+CLIPPED to the icon cell, so a narrower font mostly just un-truncates
+them rather than getting shorter.
+
+The right target was the version text in the bottom-right corner: ~40
+characters, drawn RIGHT-ALIGNED against the screen edge, so its leftmost
+ink moves by the whole difference in string width. 1012 against 1063 --
+51 pixels, and a measurement nobody has to squint at.
+
+**Ask what the measurement's dynamic range IS before trusting it.** A
+check comparing two numbers four apart is a check about noise.
+
+And a mechanical trap in the same function: `QMPSession.stable_pixels()`
+takes a `box`, but the box is what it COMPARES for stability -- the file
+it writes is the whole screen. Scanning that file counts the taskbar and
+every icon as ink. It read 53,968 "ink pixels" in a band with 20,300
+pixels in it, which is the kind of number that is obviously wrong only
+once you divide.
+
+## A check that cannot fail is worse than no check (2026-08-20)
+
+I wrote "an out-of-set character does not take the desktop down" to
+document the 101-glyph ceiling, and it passed. It would also have passed
+if the fallback drew a blank cell, drew garbage, or drew the wrong
+letter -- the desktop survives all of those. It was a comment wearing a
+check's clothes, and it would have been read as coverage.
+
+It became a KTEST instead, where the fallback semantics are actually
+reachable: `gfx_char_advance()` of a Euro sign, a CJK codepoint and an
+unbaked Latin-1 letter must each equal the advance of `?`. That one can
+fail, and it fails for the right reason.
+
+**The test to apply is the repo's own: what would a broken version still
+pass?** If the answer is "this check", delete it or move it somewhere it
+can bite.

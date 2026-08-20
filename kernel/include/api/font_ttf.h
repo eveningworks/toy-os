@@ -7,11 +7,21 @@
 // background, 255 = fully the ink color), rendered once offline
 // with real font hinting + anti-aliasing, so it looks like an
 // actual font instead of blocky upscaled pixel art -- gfx.c's
-// gfx_draw_char() alpha-blends it straight into the framebuffer,
-// no runtime rasterization involved.
+// gfx_draw_char() alpha-blends it straight into the framebuffer.
 //
-// 8 sizes are baked in; gfx_set_font_size() (gfx.c) picks which
-// one gfx_draw_char()/gfx_char_w()/gfx_char_h() actually use.
+// **THIS IS THE FALLBACK NOW, NOT THE ONLY FONT.** There IS a runtime
+// rasterizer (kernel/lib/ttf.c) and a face loaded from
+// /usr/share/fonts (api/font_face.h) takes precedence when one is
+// selected. These tables remain because they are the only glyphs that
+// need no filesystem, no allocator and no parsing: they draw before
+// the disk is mounted, on the panic path, and whenever a font file is
+// missing or malformed.
+//
+// 8 sizes are baked in. gfx_set_font_px() (gfx.c) SNAPS to the nearest
+// of them when no face is loaded, which is why an arbitrary size is
+// answerable only with one; gfx_font_size() reports which it snapped
+// to. The 101-glyph set here is also the set a runtime atlas
+// rasterizes, so the two are interchangeable everywhere.
 #include <stddef.h>
 
 enum font_size {
