@@ -104,6 +104,16 @@ struct query_msg {
 // LIST.
 #define QUERY_MMAUDIT   4
 
+// Where the random bytes SYS_GETRANDOM returns are coming from. SCALAR.
+#define QUERY_RANDOM    5
+
+// The attached disk's partition table itself -- which kind, how many
+// entries. SCALAR. The entries are QUERY_PARTITION.
+#define QUERY_PARTTABLE 6
+
+// One record per partition. LIST.
+#define QUERY_PARTITION 7
+
 
 // QUERY_PROVIDERS' record.
 struct query_provider_info {
@@ -192,6 +202,58 @@ struct query_mmaudit {
     uint64_t pid;
     uint64_t vaddr; // the mapping
     uint64_t frame; // the physical frame it points at, which pmm thinks is FREE
+};
+
+// QUERY_RANDOM's record -- how good SYS_GETRANDOM's bytes are.
+//
+// WHY THIS IS A FACT AND NOT PART OF SYS_GETRANDOM. That syscall
+// deliberately does not report quality (see abi/syscall_abi.h), and the
+// reasoning there still holds: a program that could check it per draw
+// would mostly use it to carry on anyway. This is the DIAGNOSTIC
+// question -- "what is this machine's entropy source?" -- which is a
+// different question with a different audience, and the answer nobody
+// could get from ring 3 at all. `quality` is ORDERED BY TRUST, so a
+// caller may compare it; the name is for printing.
+#define QUERY_RANDOM_NONE   0 // krandom_init() has not run
+#define QUERY_RANDOM_JITTER 1 // TSC jitter -- WEAK under an emulator
+#define QUERY_RANDOM_VIRTIO 2 // virtio-rng: the host's entropy
+#define QUERY_RANDOM_HW     3 // RDSEED/RDRAND
+
+struct query_random {
+    uint64_t quality;              // QUERY_RANDOM_*, ordered by trust
+    char     name[QUERY_NAME_MAX]; // "TSC jitter", "hardware (RDSEED/RDRAND)"
+};
+
+// QUERY_PARTTABLE's record -- the table, not its entries.
+//
+// SEPARATE FROM THE ENTRIES because a table with no partitions and NO
+// TABLE AT ALL are different answers, and a list alone cannot tell them
+// apart: both are zero records. This repo's own disk has no partition
+// table, so that is the common case rather than a corner one.
+#define QUERY_PART_NONE 0
+#define QUERY_PART_MBR  1
+#define QUERY_PART_GPT  2
+
+struct query_parttable {
+    uint64_t kind;        // QUERY_PART_*
+    uint64_t entry_count; // how many QUERY_PARTITION records exist
+    uint8_t  disk_guid[16]; // GPT only; all-zero otherwise
+};
+
+// QUERY_PARTITION's record -- one partition.
+//
+// MBR and GPT fields in one record rather than two classes: a caller
+// switches on `kind` (carried here too, so a record is readable on its
+// own) and reads the half that applies. Two classes would mean a
+// program that had to ask which one to walk before walking it.
+struct query_partition {
+    uint64_t kind;         // QUERY_PART_*, so a record stands alone
+    uint64_t lba_start;    // both flavours, in sectors
+    uint64_t lba_count;    // GPT reports an END; this is the length either way
+    uint64_t mbr_type;     // MBR only
+    uint8_t  type_guid[16];   // GPT only
+    uint8_t  unique_guid[16]; // GPT only
+    char     name[40];     // GPT only; "" for MBR
 };
 
 #endif // ABI_QUERY_ABI_H

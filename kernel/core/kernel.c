@@ -287,6 +287,8 @@ void kernel_main(uint64_t multiboot_info_addr) {
     multiboot_query_init();
     fs_query_init();
     mm_audit_query_init();
+    krandom_query_init();
+    partition_query_init();
     settings_init();
 
     // One-shot boot-time CMOS/RTC readout, logged for the same reason a

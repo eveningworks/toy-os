@@ -24,12 +24,12 @@
 // PATH -- which is also what keeps this table honest, since a name here
 // that dispatch() does not handle is reported as an internal error.
 const char *const COMPLETION_COMMANDS[] = {
-    "about", "append", "apps", "ata", "beep", "cd", "clear", "color",
+    "append", "apps", "ata", "beep", "cd", "clear", "color",
     "cursor", "debug", "dmatest", "dmesg", "edit", "fontsize",
     "fputest", "fsck", "fsformat", "gui", "heap", "help", "ktest", "history", "keyboard",
-    "nano", "parttable", "pwd", "reboot", "rescue",
+    "kstack", "nano", "pwd", "rescue",
     "ring3test", "run", "schedtest", "steptest", "strace", "stress",
-    "path", "random", "time", "timezone", "write",
+    "path", "timezone", "write",
     0
 };
 

@@ -74,10 +74,7 @@ void cmd_stat(const char *name);
 
 // System-info/settings commands -- defined in shell_sys.c.
 void cmd_help(const char *args);
-void cmd_time(void);
 void cmd_timezone(const char *args);
-void cmd_random(const char *args);
-void cmd_about(void);
 void cmd_beep(void);
 void cmd_df(void);   // shell_sys.c -- only reachable through `rescue df` now
 void cmd_fsck(const char *args);
@@ -92,7 +89,6 @@ void cmd_stress(const char *args);
 void cmd_dmatest(const char *args);
 void cmd_steptest(const char *args);
 void cmd_dmesg(void);
-void cmd_reboot(void);
 void cmd_apps(void);
 void cmd_run(const char *name);
 void cmd_strace(const char *name_and_args);
@@ -101,13 +97,10 @@ void cmd_fontsize(const char *args);
 void cmd_keyboard(const char *args);
 void cmd_color(const char *args);
 void cmd_history(void);
-void cmd_parttable(void);
 void cmd_debug(const char *args);
 void cmd_ata(const char *args);
 void cmd_heap(const char *args);
 void cmd_kstack(const char *args);
-void cmd_kill(const char *args);
-void cmd_spawn(const char *args);
 void cmd_gfxbench(const char *args);
 void cmd_hwcursor(const char *args);
 

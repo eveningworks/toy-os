@@ -1,6 +1,8 @@
-// System-info/settings shell commands: help/time/timezone/uptime/
-// about/echo/meminfo/dmesg/reboot/apps/run/fontsize/keyboard/color/
-// history/lspci. Split out of shell.c once it crossed 900 lines mixing every
+// System-info/settings shell commands: help/timezone/dmesg/apps/run/
+// fontsize/keyboard/color/history, plus the kernel-introspection set
+// (heap, kstack, ata, debug, ktest and the *test diagnostics). Most of
+// what this file used to hold is /bin programs now -- see
+// docs/conventions/shell.md. Split out of shell.c once it crossed 900 lines mixing every
 // command category together -- see shell_internal.h's top comment for
 // the split's own reasoning and the git history for the build this
 // happened in. Shares `shell_fg`/history[]/history_count with shell.c
@@ -8,16 +10,6 @@
 #include "shell_internal.h"
 #include "shell.h" // shell_path_find() -- cmd_strace() resolves a binary itself
 #include "apps.h"
-#include "query.h"    // the fact registry -- `meminfo` reads through it
-
-static const char *MONTHS[] = {
-    "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"
-};
-
-static void print_two_digit(uint32_t n) {
-    if (n < 10) vga_putc('0');
-    vga_write_dec(n);
-}
 
 // Prints `lines` one at a time (each expected to be one console line,
 // i.e. end in '\n'), pausing with a "-- more --" prompt whenever a
@@ -75,7 +67,6 @@ static const char *const HELP_LINES[] = {
     "  help          - show this list ('help tests' for developer/\n",
     "                  diagnostic test commands)\n",
     "  clear         - clear the screen\n",
-    "  about         - show OS info\n",
     "  beep          - a short test tone via the PC speaker\n",
     "  apps          - list all registered apps\n",
     "  <name> [args] - run an executable: a console app, or a binary\n",
@@ -108,8 +99,14 @@ static const char *const HELP_LINES[] = {
     "  Ctrl-L        - clear the screen, keeping the line you're typing\n",
     "  Ctrl-C        - abandon the line and start a fresh one\n",
     "  (all of these work in the GUI Terminal too -- same editor)\n",
-    "  echo <text>   - print the given text back\n",
-    "  reboot        - reset the machine\n",
+
+    "\n",
+    "Programs (in /bin, run by name -- not builtins):\n",
+    "  ls cat echo rm touch mkdir mv ln stat truncate sync less\n",
+    "  df meminfo uptime time about random ps kill spawn reboot\n",
+    "  lspci lscpu parttable config tosh\n",
+    "  (`<name> --help` where it has one; `path` shows where they are\n",
+    "   found, and `rescue` is the kernel's own copy of the file ones)\n",
     "\n",
     "Files & filesystem:\n",
     "  (most of these are PROGRAMS in /bin, not builtins -- `path` shows\n",
@@ -142,28 +139,17 @@ static const char *const HELP_LINES[] = {
     "  (paths may be relative to cwd or absolute, e.g. /docs/todo.txt)\n",
     "\n",
     "System info:\n",
-    "  time          - show date/time (local, see `timezone`)\n",
     "  timezone      - show/pick your timezone (interactive list)\n",
     "  timezone <c>  - set timezone directly, e.g. `timezone helsinki`\n",
-    "  uptime        - how long the machine has been up\n",
-    "  random [n]    - show the entropy source and n random values\n",
-    "  meminfo       - show memory map + physical frame allocator stats\n",
     "  heap          - show kernel heap stats (kmalloc/kfree)\n",
     "  heap debug on - red-zone new allocations + poison freed ones,\n",
     "                  reporting overflows/underflows/use-after-free\n",
     "  heap check    - scan poisoned free blocks for use-after-free now\n",
-    "  df            - show filesystem disk space (total/used/free),\n",
-    "                  and which filesystem backend is mounted\n",
     "  rescue        - the kernel's own copies of the file commands, for\n",
     "                  when /bin is missing or damaged. `rescue` alone\n",
     "                  lists them; they never shadow a real program\n",
     "  dmesg         - show the kernel log (boot messages, driver/\n",
     "                  syscall diagnostics, timestamped)\n",
-    "  lspci         - list PCI devices found at boot (bus:dev.func,\n",
-    "                  vendor:device ID, class, IRQ, BARs)\n",
-    "  parttable     - show the attached disk's MBR/GPT partition table,\n",
-    "                  if any (today's disk.img has none -- one raw\n",
-    "                  filesystem volume, TFS3 by default)\n",
     "\n",
     "Appearance:\n",
     "  color <name>  - change shell text color\n",
@@ -258,26 +244,6 @@ void cmd_help(const char *args) {
     }
 }
 
-void cmd_time(void) {
-    struct rtc_time t;
-    rtc_read_local(&t); // local time for the selected `timezone`, not raw UTC
-
-    vga_write(MONTHS[(t.month >= 1 && t.month <= 12) ? t.month - 1 : 0]);
-    vga_putc(' ');
-    print_two_digit(t.day);
-    vga_write(", ");
-    vga_write_dec(t.year);
-    vga_write("  ");
-    print_two_digit(t.hour);
-    vga_putc(':');
-    print_two_digit(t.minute);
-    vga_putc(':');
-    print_two_digit(t.second);
-    vga_write("  (");
-    vga_write(tz_city_name(tz_current_index()));
-    vga_write(")\n");
-}
-
 // `timezone` alone: numbered list, prompts for a choice.
 // `timezone <name>`: sets directly, matching tz_city_name() as a whole
 // but ignoring ASCII case, so `timezone losangeles` and `timezone
@@ -358,57 +324,6 @@ void cmd_timezone(const char *args) {
     vga_write(tz_city_name(choice - 1));
     print_save_result(r);
     vga_write(".\n");
-}
-
-// `random` -- what the entropy source is and what it produces. Prints
-// the SOURCE first and the bytes second, deliberately: the numbers look
-// equally random either way, and the only thing a reader can actually
-// judge is which source they came from (see api/krandom.h).
-void cmd_random(const char *args) {
-    unsigned count = 4;
-    if (args && args[0]) {
-        uint32_t n;
-        if (!k_parse_u32(args, &n) || n == 0 || n > 32) {
-            vga_write("usage: random [count]   (1..32 values, default 4)\n");
-            return;
-        }
-        count = n;
-    }
-
-    vga_write("Entropy source: ");
-    vga_write(krandom_quality_name(krandom_quality()));
-    if (krandom_quality() == KRANDOM_VIRTIO) {
-        // Worth saying because the trust boundary moved rather than
-        // improved: these bytes are real entropy, and they come from
-        // the hypervisor -- which already owns this machine's memory,
-        // so it is not a new party to trust, just a named one.
-        vga_write("\n  (from the host, via virtio-rng)");
-    }
-    if (krandom_quality() == KRANDOM_JITTER) {
-        // Said plainly rather than left for the reader to infer from
-        // the label -- this is the case where the numbers below are
-        // least trustworthy, and under QEMU it is the usual one.
-        vga_write("\n  (no RDSEED/RDRAND on this CPU -- weak under emulation)");
-    }
-    vga_write("\n");
-
-    for (unsigned i = 0; i < count; i++) {
-        char buf[24];
-        k_htoa(krandom_u64(), buf, sizeof buf, 16); // fixed width -- the values line up as a column
-        vga_write("  0x");
-        vga_write(buf);
-        vga_write("\n");
-    }
-}
-
-void cmd_about(void) {
-    vga_write("toy-os v"); vga_write(TOYOS_VERSION_FULL);
-    vga_write(" -- a small x86-64 hobby kernel\n");
-    vga_write("Boot: GRUB/Multiboot2 | C + ASM | Tested on QEMU\n");
-    vga_write("Storage: ");
-    vga_write(fs_backend_name());
-    vga_write(fs_is_persistent() ? ", disk-backed (files persist across reboots)\n"
-                                  : ", RAM only (no disk found -- files won't survive a reboot)\n");
 }
 
 // Milestone 25 (docs/roadmap.md): "the simplest possible output" -- a
@@ -1043,11 +958,6 @@ void cmd_dmesg(void) {
     klog_dump(dmesg_putc_cb);
 }
 
-void cmd_reboot(void) {
-    vga_write("Rebooting...\n");
-    system_reboot();
-}
-
 static void apps_list_cb(const char *name, const char *description) {
     vga_write("  ");
     vga_write(name);
@@ -1305,18 +1215,6 @@ void cmd_history(void) {
     }
 }
 
-// Prints exactly `digits` lowercase hex digits of `v`, no "0x" prefix
-// and no digit-trimming -- unlike vga_write_hex() (vga.h), which is
-// meant for arbitrary-width values and trims leading zeros. Fixed-width
-// fields are what makes a column of them line up; `parttable`'s GUID and
-// LBA columns are the remaining caller (lspci was the original one, and
-// is a /bin program now).
-static void print_hex_digits(uint32_t v, int digits) {
-    char buf[17];
-    k_htoa(v, buf, sizeof buf, (unsigned)digits); // fixed width -- see knum.h
-    vga_write(buf);
-}
-
 // Runs /bin/lspci rather than listing the devices itself -- same
 // precedent (and same one-line implementation) as cmd_ls_bin() above
 // running /bin/ls.
@@ -1407,72 +1305,6 @@ void cmd_ata(const char *args) {
     vga_write("ata: now using ");
     vga_write(ata_dma_active() ? "DMA" : "PIO");
     vga_write(off ? " (forced)\n" : "\n");
-}
-
-// Standard 8-4-4-4-12 hex GUID formatting -- the first three fields
-// are little-endian 32/16/16-bit integers (read_le-style, same as
-// partition.c's own parsing), the last two are raw bytes with no
-// endian reinterpretation at all (Microsoft's "mixed-endian" GUID
-// encoding -- see kernel/drivers/partition.c's top comment).
-static void print_guid(const uint8_t *g) {
-    uint32_t d1 = (uint32_t)g[0] | ((uint32_t)g[1] << 8) | ((uint32_t)g[2] << 16) | ((uint32_t)g[3] << 24);
-    print_hex_digits(d1, 8);
-    vga_putc('-');
-    print_hex_digits((uint32_t)g[4] | ((uint32_t)g[5] << 8), 4);
-    vga_putc('-');
-    print_hex_digits((uint32_t)g[6] | ((uint32_t)g[7] << 8), 4);
-    vga_putc('-');
-    print_hex_digits(g[8], 2);
-    print_hex_digits(g[9], 2);
-    vga_putc('-');
-    for (int i = 10; i < 16; i++) print_hex_digits(g[i], 2);
-}
-
-// Reads and prints whatever partition table (if any) is on the
-// attached disk -- MBR, GPT, or neither (today's disk.img: one raw
-// filesystem volume, TFS3 by default, which deliberately leaves
-// LBA 0-63 untouched for exactly this
-// from LBA 0, no partition table at all, see kernel/include/api/partition.h's
-// top comment). Read-only, diagnostic only, same spirit as `lspci`.
-void cmd_parttable(void) {
-    struct partition_table t;
-    if (!partition_read_table(&t)) {
-        vga_write("parttable: disk read failed (no disk attached?)\n");
-        return;
-    }
-
-    if (t.kind == PART_TABLE_NONE) {
-        vga_write("No partition table found (LBA 0 has no 0x55AA signature).\n");
-        return;
-    }
-
-    if (t.kind == PART_TABLE_MBR) {
-        vga_write("Legacy MBR partition table:\n");
-        if (t.entry_count == 0) { vga_write("  (no non-empty entries)\n"); return; }
-        for (int i = 0; i < t.entry_count; i++) {
-            struct partition_entry *e = &t.entries[i];
-            vga_write("  "); vga_write_dec((uint32_t)(i + 1));
-            vga_write("  type=0x"); print_hex_digits(e->mbr_type, 2);
-            vga_write("  lba="); vga_write_dec(e->mbr_lba_start);
-            vga_write("  sectors="); vga_write_dec(e->mbr_num_sectors);
-            vga_putc('\n');
-        }
-        return;
-    }
-
-    // PART_TABLE_GPT
-    vga_write("GPT partition table (disk GUID ");
-    print_guid(t.disk_guid);
-    vga_write("):\n");
-    if (t.entry_count == 0) { vga_write("  (no non-empty entries)\n"); return; }
-    for (int i = 0; i < t.entry_count; i++) {
-        struct partition_entry *e = &t.entries[i];
-        vga_write("  "); vga_write_dec((uint32_t)(i + 1));
-        vga_write("  type="); print_guid(e->gpt_type_guid);
-        vga_write("\n      lba="); vga_write_hex(e->gpt_lba_start);
-        vga_write("-"); vga_write_hex(e->gpt_lba_end);
-        vga_write("  name=\""); vga_write(e->gpt_name); vga_write("\"\n");
-    }
 }
 
 // `debug` (no args): lists every subsystem and its current on/off
@@ -1718,124 +1550,6 @@ void cmd_kstack(const char *args) {
                     k.name, (unsigned long)k.used, (unsigned long)k.size, pct,
                     k.canary_ok ? "ok" : "DESTROYED");
     }
-}
-
-// `kill <pid>` -- end a process from the shell.
-//
-// It exists because Milestone 41's exit criterion is that killing the
-// window manager is SURVIVABLE, and until this there was no way to do
-// it: `gui kill` is dispatched from inside the WM's own loop, and
-// scheduler_kill() refuses to kill the CURRENT process, so the one
-// process a test most needs to end was the one process nothing could
-// end. This runs in the kernel context, which is not any process, so it
-// has no such restriction.
-//
-// Unprivileged, like SYS_KILL itself -- there is no user model here to
-// gate it on, so a gate would be decoration (docs/decisions.md).
-void cmd_kill(const char *args) {
-    while (*args == ' ') args++;
-    uint32_t pid = 0;
-    if (!k_parse_u32(args, &pid) || pid == 0) {
-        vga_write("usage: kill <pid>    (`taskmgr`, or `gui windows`, for pids)\n");
-        return;
-    }
-    if (!scheduler_pid_valid((int)pid)) {
-        vga_printf("kill: no process with pid %u\n", pid);
-        return;
-    }
-    // Name it BEFORE killing it: after the kill the slot is a zombie
-    // and the name is still there, but saying which process was ended
-    // is only useful if it is the name the caller was thinking of.
-    struct proc_info info;
-    char name[PROC_NAME_MAX];
-    name[0] = '\0';
-    for (int i = 0; scheduler_proc_info(i, &info); i++) {
-        if (info.pid == (int)pid) { k_strlcpy(name, info.name, sizeof name); break; }
-    }
-    // Named separately from the generic refusal below: "init cannot be
-    // killed" is a rule, where the others are states that will pass.
-    // Telling them apart is the difference between a user trying again
-    // and a user trying something else.
-    if ((int)pid == scheduler_init_pid()) {
-        vga_printf("kill: refused -- pid %u is init, which is unkillable "
-                    "(orphans would stop being reaped)\n", pid);
-        return;
-    }
-    if (!scheduler_kill((int)pid, -1)) {
-        vga_printf("kill: refused for pid %u -- it is the running process, or "
-                    "already a zombie\n", pid);
-        return;
-    }
-    vga_printf("kill: ended pid %u%s%s\n", pid,
-                name[0] ? " -- " : "", name[0] ? name : "");
-}
-
-// `spawn <path> [args]` -- start a program WITHOUT waiting for it.
-//
-// The kernel-context counterpart to `gui spawn`, which needs a window
-// manager to dispatch it, and to `run`, which uses the legacy blocking
-// loader. Both gaps are real: after the desktop dies there is no `gui`
-// to spawn with, and a legacy process is not a scheduled one -- so
-// `run /tests/screenclient` is refused by win_request() with "caller
-// isn't a scheduled process" and cannot claim the compositor role.
-//
-// Which makes this the way to bring the desktop BACK after killing it:
-//
-//     ps                           # find the desktop's pid
-//     kill <pid>                   # end it
-//     spawn /bin/wm/system/toywm   # and start another one
-//
-// It used to be `kill 1`, and that stopped working when init took pid 1
-// -- which is the argument for looking a pid up rather than assuming
-// one, and why `ps` exists.
-//
-// A role that cannot be re-claimed after a crash is not survivable in
-// any useful sense, and until this nothing could demonstrate it.
-void cmd_spawn(const char *args) {
-    while (*args == ' ') args++;
-    if (!*args) {
-        vga_write("usage: spawn <path> [args]    (`run` waits; this does not)\n");
-        return;
-    }
-
-    // Split the path from its arguments at the first space.
-    char path[64];
-    const char *sp = args;
-    while (*sp && *sp != ' ') sp++;
-    size_t n = (size_t)(sp - args);
-    if (n >= sizeof path) {
-        vga_write("spawn: path too long\n");
-        return;
-    }
-    k_memcpy(path, args, n);
-    path[n] = '\0';
-    while (*sp == ' ') sp++;
-
-    int pid = scheduler_spawn(path, *sp ? sp : 0);
-    if (pid <= 0) {
-        vga_printf("spawn: could not start %s -- is it there? (`ls`)\n", path);
-        return;
-    }
-    // HAND IT TO INIT. This command spawns from the kernel context,
-    // which is not a process and can therefore never wait for anything
-    // -- so without this the child becomes a zombie holding its slot
-    // for the rest of the boot the moment it exits. Nothing would say
-    // so: a fire-and-forget spawn looks identical either way until the
-    // table fills up.
-    //
-    // Deliberately NOT done inside scheduler_spawn() for every
-    // kernel-context spawn: `gui` and the KTESTs spawn and then poll
-    // the pid themselves, and giving those children to init would let
-    // it reap a corpse out from under the code that is waiting for it.
-    // The choice belongs at the call site that knows whether it will
-    // wait, which is what scheduler_reparent() is for.
-    int heir = scheduler_init_pid();
-    if (heir > 0) scheduler_reparent(pid, heir);
-
-    // The pid, because the caller's next move is usually to wait for it
-    // or to kill it, and both need the number.
-    vga_printf("spawn: %s started as pid %d (not waited for -- `kill %d` to end it)\n",
-                path, pid, pid);
 }
 
 // `hwcursor [demo [x y] | off]` -- the display adapter's own cursor

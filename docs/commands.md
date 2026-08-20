@@ -30,15 +30,21 @@ resolver. `path` shows the search order.
 no longer builtins. `cat`, `echo`, `rm`, `touch`, `mkdir`, `mv`, `ln`,
 `stat`, `truncate`, `sync`, `uptime`, `df` and `meminfo` are `/bin`
 programs and resolve through `PATH` like anything else, which is why they behave identically
-at this prompt, in `/bin/tosh` and in the GUI Terminal. So are `ls` and
-`lspci`, which were the last two builtin *wrappers*: `ls` existed only
-to resolve a relative argument against the cwd, and `/bin/ls` does that
-itself now.
+at this prompt, in `/bin/tosh` and in the GUI Terminal. So are `ls`,
+`lspci`, `about`, `time`, `random`, `reboot`, `kill`, `spawn` and
+`parttable`.
 
 What is left as a builtin is what a builtin is FOR — commands that
 change the shell's own state (`cd`, `pwd`, `path`, `history`, `color`),
-the console's (`clear`, `cursor`, `fontsize`, `keyboard`), or that
-reach kernel state no syscall exposes yet.
+the console's (`clear`, `cursor`, `fontsize`, `keyboard`, `timezone`),
+or that reach kernel state no syscall exposes yet.
+
+Three are held back by one thing: `heap`, `ata` and `kstack` each have
+a *read* half and a *write* half (`heap debug on|off`, `ata nodma
+on|off`, `kstack track on|off`). Moving only the read half would put
+one command in two rings, which is the shape the `ls` wrapper had. The
+write halves want to be **tunables** — see `docs/query-design.md`'s
+stage 3.
 
 **A program started by a bare name prints nothing extra when it
 succeeds**; a non-zero exit prints one line, `<name>: exit <code>`. The
@@ -126,7 +132,14 @@ history search, `Alt-.` last argument. `help` lists them all.
 
 | Command | Notes |
 |---|---|
-| `time`, `timezone [city]` | |
+| `time` | `/bin/time` — the date and time, in the configured timezone. Not coreutils' `time` (which measures a command); this is `date` under the name this shell has always used. `SYS_GETTIME` already returns LOCAL time, so there is no conversion here and no second copy of the timezone table; the city name comes from the settings registry, the same string `config get system.timezone` prints. |
+| `timezone [city]` | Still a builtin — it drives an interactive picker over the shell's own input loop. |
+| `about` | `/bin/about` — version, boot method, and the filesystem line, which it can print because `QUERY_FSINFO` exists. |
+| `random [n]` | `/bin/random` — **the entropy source first, then the values.** The numbers look equally random whatever produced them, so the source is the only part a reader can judge, and under QEMU it is usually TSC jitter (the weakest case), which it says. The source comes from `QUERY_RANDOM`, not `SYS_GETRANDOM` — that syscall deliberately refuses to report quality. |
+| `reboot [--poweroff]` | `/bin/reboot` — one program for both, with the destructive one not the default. It does not sync: the kernel flushes on the way down, and a second place that has to remember is the one that gets forgotten. |
+| `kill <pid>...` | `/bin/kill` — **not signals.** This OS has none, so there is no `-9` and nothing pretends otherwise: it ends the process and sets its exit code. It names the process before ending it, since "ended pid 4" is only useful if it says which. |
+| `spawn <path> [args]` | `/bin/spawn` — start a program and do **not** wait; the child reparents to init and survives. What `nohup`/`setsid` are for elsewhere. It also matters for correctness: the legacy `run` loader has no scheduler slot, so `SYS_SLEEP` fails under it and anything that paces itself misbehaves — a spawned program is a real scheduled process. |
+| `parttable` | `/bin/parttable` — the disk's MBR/GPT table, read-only. This repo's stock `disk.img` has **no** table (one raw filesystem volume), so "none" is the normal answer. Two query classes back it, because a list alone cannot tell "a table with no partitions" from "no table at all". |
 | `uptime` | How long the machine has been up, as a duration. `/bin/uptime`, over `SYS_MONOTONIC_NS` — uptime is an INTERVAL, and the RTC can step, so wall clock is not an implementation of it. The builtin printed raw ticks, which answers "is the timer running" rather than "how long has this been up". |
 | `random [n]` | The entropy source (RDSEED/RDRAND, virtio-rng, or TSC jitter) and some values from it. |
 | `meminfo` | The memory map, the physical frame allocator and the kernel heap. Reads through the FACT registry (`SYS_QUERY`), so it and `/bin/meminfo` are one reader and cannot report different numbers. |

@@ -114,24 +114,14 @@ static void dispatch(char *line) {
         cmd_help(args);
     } else if (k_strcmp(cmd, "clear") == 0) {
         vga_clear();
-    } else if (k_strcmp(cmd, "time") == 0) {
-        cmd_time();
     } else if (k_strcmp(cmd, "timezone") == 0) {
         cmd_timezone(args);
-    } else if (k_strcmp(cmd, "random") == 0) {
-        cmd_random(args ? args : "");
-    } else if (k_strcmp(cmd, "about") == 0) {
-        cmd_about();
     } else if (k_strcmp(cmd, "beep") == 0) {
         cmd_beep();
     } else if (k_strcmp(cmd, "heap") == 0) {
         cmd_heap(args ? args : "");
     } else if (k_strcmp(cmd, "kstack") == 0) {
         cmd_kstack(args ? args : "");
-    } else if (k_strcmp(cmd, "kill") == 0) {
-        cmd_kill(args ? args : "");
-    } else if (k_strcmp(cmd, "spawn") == 0) {
-        cmd_spawn(args ? args : "");
     } else if (k_strcmp(cmd, "hwcursor") == 0) {
         cmd_hwcursor(args ? args : "");
     } else if (k_strcmp(cmd, "gfxbench") == 0) {
@@ -154,8 +144,6 @@ static void dispatch(char *line) {
         cmd_debug(args ? args : "");
     } else if (k_strcmp(cmd, "ata") == 0) {
         cmd_ata(args ? args : "");
-    } else if (k_strcmp(cmd, "reboot") == 0) {
-        cmd_reboot();
     } else if (k_strcmp(cmd, "color") == 0) {
         cmd_color(args ? args : "");
     } else if (k_strcmp(cmd, "cd") == 0) {
@@ -206,8 +194,6 @@ static void dispatch(char *line) {
         cmd_keyboard(args ? args : "");
     } else if (k_strcmp(cmd, "history") == 0) {
         cmd_history();
-    } else if (k_strcmp(cmd, "parttable") == 0) {
-        cmd_parttable();
     } else if (shell_exec_name(cmd, args, 0)) {
         // Not a builtin -- a console app from apps.c's registry, or an
         // executable found by searching PATH (shell_path.c). This is

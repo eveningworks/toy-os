@@ -754,3 +754,83 @@ what I meant to". This repo already records the same failure for docs
 edits (CLAUDE.md's rule about search anchors and line counts); it
 applies to code with a worse failure mode, because a missing function
 is a link error only if something still calls it.
+
+## The entropy source is a FACT, even though `SYS_GETRANDOM` refuses to report one
+
+`abi/syscall_abi.h` says of `SYS_GETRANDOM` that it "cannot tell the
+caller how GOOD the bytes are", and that `krandom_quality` "has
+deliberately not been exposed here -- a ring-3 program that could read
+it would mostly use it to decide to carry on anyway". That reasoning
+still holds, and `QUERY_RANDOM` does not overturn it.
+
+The two answer different questions. The syscall's is "are these bytes
+usable?", asked per draw by code, where a quality flag mostly invites a
+caller to proceed regardless. The provider's is "what is this machine's
+entropy source?", asked once by a person running a diagnostic -- and it
+is the entire point of the `random` command, because the numbers look
+equally random whatever produced them. The source is the only part a
+reader can judge, and under QEMU it is usually TSC jitter, which is the
+weakest case and the one worth saying out loud.
+
+So `random` stayed a kernel builtin long after `SYS_GETRANDOM` existed:
+the bytes were reachable from ring 3 and the sentence about them was
+not. A fact class answers it without attaching a promise to the syscall
+that this kernel cannot keep.
+
+The ABI numbers are `enum krandom_quality`'s numbers, asserted with
+`_Static_assert` rather than mapped. A translation table between two
+enums that must agree is a thing somebody has to keep true; an
+assertion is a build error instead of a program confidently reporting
+the wrong source, which would be worse than reporting nothing.
+
+## `parttable` is two query classes, because "no partitions" and "no table" differ
+
+`QUERY_PARTTABLE` is a scalar describing the TABLE -- which kind, how
+many entries, the GPT disk GUID -- and `QUERY_PARTITION` is a list of
+its entries. One list would have been the obvious shape and is wrong
+here: a disk with a valid table and no partitions, and a disk with no
+partition table at all, are both zero records.
+
+That is not a hypothetical corner. This repo's own `disk.img` has no
+partition table -- it is one raw filesystem volume -- so "no table" is
+the NORMAL answer `parttable` gives, and a program that could not
+distinguish it would report the common case as an empty list.
+
+Every read hits the disk: `partition_read_table()` reads LBA 0, and for
+a GPT also LBA 1 and the entry array, with no caching, so walking N
+partitions costs N+1 reads. Deliberate. A cache would be a second copy
+of on-disk state needing invalidation by anything that rewrites the
+table, and this is a handful of sectors behind a diagnostic somebody
+typed. If it ever moves somewhere hot, cache it there.
+
+## A command with a read half and a write half moves as one piece, or not at all
+
+`heap`, `ata` and `kstack` each report something and toggle something:
+`heap debug on|off`, `heap check`, `ata nodma on|off`, `kstack track
+on|off`. All three were candidates for becoming `/bin` programs and all
+three were deliberately left alone.
+
+Moving only the read half is the `ls` wrapper again -- one command with
+two halves in two rings, where the half nobody is looking at drifts.
+The whole sequence of changes that emptied this dispatch chain exists
+to delete that shape, so reintroducing it three times to shorten a list
+would be trading the point for the metric.
+
+**The fix is not a syscall per toggle.** `struct setting` already
+crosses the ring boundary in both directions -- `SYS_SETTING` is how
+`config set system.font_size 16` works from ring 3 -- so a toggle wants
+to be a setting. The only thing missing is that these three must not
+survive a reboot, which is exactly the non-persisting flavour
+(`docs/query-design.md`'s stage 3). With it, each command moves whole:
+read a provider, write a tunable, no new syscall number spent.
+
+That stage was explicitly waiting for "a tunable somebody actually
+wants", to avoid building the flavour with no users. There are three
+now, which is the trigger rather than a coincidence -- and the shape
+generalises: **when several commands are blocked on the same missing
+mechanism, that is the argument for building it, and the count is the
+argument.**
+
+`heap check` is an ACTION rather than a toggle, and a write-triggered
+action has direct precedent: Linux's `/proc/sys/vm/drop_caches` and
+SLUB's `validate` are both "do it now" on write.

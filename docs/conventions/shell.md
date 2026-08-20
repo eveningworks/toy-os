@@ -154,12 +154,31 @@ this the obvious way), not from how much history it accumulated.
 
   **So a builtin that survives should name the capability it is waiting
   on**, and that capability should be a provider nobody has written
-  yet -- not a permanent excuse. What is left in the chain is kernel
-  introspection (`heap`, `kstack`, `dmesg`, `ata`, `parttable`,
-  `fsck`), each of which is one provider away by the same route, plus
-  the commands that are builtins because that is what a builtin is FOR:
-  the shell's own state (`cd`, `pwd`, `path`, `history`, `color`) and
-  the console's (`clear`, `cursor`, `fontsize`, `keyboard`).
+  yet -- not a permanent excuse. What is left is the commands that are
+  builtins because that is what a builtin is FOR -- the shell's own
+  state (`cd`, `pwd`, `path`, `history`, `color`), the console's
+  (`clear`, `cursor`, `fontsize`, `keyboard`, `timezone`) -- plus the
+  kernel introspection still waiting on a class (`dmesg`, `fsck`,
+  `debug`) and the in-kernel demos that cannot be processes at all
+  (`ring3test`, `schedtest`, `fputest`).
+
+- **A COMMAND WITH A READ HALF AND A WRITE HALF MOVES AS ONE PIECE OR
+  NOT AT ALL.** `heap`, `ata` and `kstack` each report something AND
+  toggle something (`heap debug on|off`, `ata nodma on|off`, `kstack
+  track on|off`). It is tempting to move the read half to a provider
+  and leave the toggle in ring 0 -- and that is the `ls` wrapper again:
+  one command, two halves, two rings, and the half you are not looking
+  at drifts.
+
+  **The answer is not a syscall per toggle.** `struct setting` already
+  crosses the boundary in BOTH directions -- `SYS_SETTING` is how
+  `config set system.font_size 16` works from ring 3 -- so a toggle
+  wants to be a setting, and a toggle that must not survive a reboot
+  wants the non-persisting flavour, a TUNABLE. Then the whole command
+  moves: read a provider, write a tunable, no new syscall. See
+  `docs/query-design.md`'s stage 3. A write-triggered ACTION like
+  `heap check` has precedent too -- `/proc/sys/vm/drop_caches` and
+  SLUB's `validate` are both "do it now" on write.
 
 - **A WRAPPER BUILTIN IS ONE COMMAND WITH TWO HALVES IN TWO RINGS, AND
   THE RING-3 HALF WILL BE WRONG.** `ls` and `lspci` were the last two:

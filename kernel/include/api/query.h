@@ -173,4 +173,13 @@ void multiboot_query_init(void);
 // that a caller needs to be able to receive.
 void fs_query_init(void);
 
+// kernel/lib/'s provider for the entropy source. Separate from
+// SYS_GETRANDOM on purpose -- see the comment in krandom_query.c.
+void krandom_query_init(void);
+
+// kernel/drivers/'s providers for the disk's partition table and its
+// entries. Two classes, because "no partitions" and "no partition
+// table" are different answers a list alone cannot distinguish.
+void partition_query_init(void);
+
 #endif // QUERY_H

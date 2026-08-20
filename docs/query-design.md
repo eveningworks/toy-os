@@ -273,12 +273,53 @@ The shape worth copying: **the question to ask of a builtin is not "is
 this a file command" but "can ring 3 ask?"** -- and when the answer is
 no, the fix is a provider, not a syscall and not keeping the builtin.
 
+**Done 2026-08-20: `about`, `time`, `random`, `reboot`, `kill`, `spawn`
+and `parttable`.** Four needed nothing new (`sys_gettime`, `sys_kill`,
+`sys_spawn`, `sys_poweroff` all existed). Three more classes covered
+the rest:
+
+- `QUERY_RANDOM` (scalar) -- the entropy SOURCE. Deliberately not part
+  of `SYS_GETRANDOM`, whose ABI comment refuses to report quality on
+  the grounds that a caller checking it per draw "would mostly use it
+  to decide to carry on anyway". That reasoning is about a guarantee
+  attached to bytes. "What is this machine's entropy source?" is a
+  different question with a human audience, and it was the entire point
+  of the `random` command -- the numbers look equally random whatever
+  produced them. A fact answers it without putting a promise on the
+  syscall that this kernel cannot keep.
+- `QUERY_PARTTABLE` (scalar) + `QUERY_PARTITION` (list) -- **two
+  classes for one command, and the split is the point.** A list alone
+  cannot distinguish "a table with no partitions" from "no partition
+  table at all": both are zero records, and the second is what this
+  repo's own `disk.img` is. The table class carries the kind.
+
+**What did NOT move, and why it is the same reason three times.**
+`heap`, `ata` and `kstack` each have a READ half and a WRITE half
+(`heap debug on|off`, `heap check`, `ata nodma on|off`, `kstack track
+on|off`). Moving only the read half would put one command in two rings
+-- the exact shape the `ls` wrapper had, and the thing this whole
+sequence exists to delete. They are stage 3 work: the write halves want
+to be TUNABLES, which `struct setting` already carries across the ring
+boundary in both directions, so `/bin/heap` would read a provider and
+flip a tunable with no new syscall at all. That is now three tunables
+somebody actually wants, which is the trigger stage 3 was waiting for.
+
 ### Stage 3 -- tunables
 
 The non-persisting flavour of `struct setting`, plus the first real
-kernel tunable and its `/etc` file. Needs a tunable somebody actually
-wants; adding the flavour without one is the framework-with-no-users
-mistake again.
+kernel tunables. It needed "a tunable somebody actually wants", and as
+of 2026-08-20 there are three: `heap debug`, `ata nodma` and `kstack
+track`. Each is the write half of a command whose read half is ready to
+move, and each is blocked on exactly this.
+
+`heap check` is an ACTION rather than a toggle, and has precedent as
+one: Linux's `/proc/sys/vm/drop_caches` and SLUB's `validate` are both
+"do it now" on write.
+
+The mechanism looks contained -- `setting.c` already guards `s->file`
+in two places, so a non-persisting setting is guarding the remaining
+`etc_config_*` call sites and giving `config list` a "runtime" marker
+in place of a filename.
 
 ### Stage 4 -- `config` reads facts
 
