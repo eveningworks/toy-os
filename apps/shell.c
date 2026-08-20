@@ -1,12 +1,21 @@
 // The shell: REPL loop (shell_main()/shell_read_line()), the single
 // command dispatcher (dispatch()/shell_dispatch()), and the state every
 // command shares (cwd, shell_fg, history). The commands themselves live
-// in apps/shell_fs.c (filesystem) and apps/shell_sys.c (system-info/
-// settings) -- split out once this file crossed 900 lines mixing every
-// command category together (see the git history for the build this
-// happened in). See shell_internal.h's top comment for why this is a
-// three-file split sharing state via `extern`s, not three independent
+// in apps/shell_fs.c (filesystem), apps/shell_sys.c (system-info/
+// settings) and apps/shell_rescue.c (`rescue`) -- split out once this
+// file crossed 900 lines mixing every command category together (see
+// the git history for the build this happened in). See
+// shell_internal.h's top comment for why this is one component split
+// across files sharing state via `extern`s, not independent
 // components.
+//
+// MOST EVERYDAY FILE COMMANDS ARE NOT HERE AT ALL. `cat`, `rm`,
+// `touch`, `mkdir`, `mv`, `ln`, `stat`, `truncate`, `sync`, `echo` and
+// `uptime` are /bin programs, reached through shell_path.c's resolver
+// like any other executable -- there is no branch for them below, and
+// adding one would put a second implementation of `rm` in front of the
+// real one. shell_rescue.c holds the kernel's own copies, behind a name
+// that cannot shadow them. See docs/conventions/shell.md.
 #include "shell.h"
 #include "shell_internal.h"
 #include "apps.h"
@@ -83,10 +92,11 @@ static void dispatch(char *line) {
     }
 
     // dispatch-ok: KNOWN, and the last big chain in the tree -- see
-    // docs/roadmap.md's "The shell's command dispatch is a 60-branch
-    // chain". It is waived rather than converted because the conversion
-    // is entangled with moving the shell to ring 3: most of these
-    // commands are kernel introspection (meminfo, kstack, heap debug,
+    // docs/roadmap.md's "The shell's command dispatch is a long
+    // if/else chain". It is waived rather than converted because the
+    // conversion is entangled with moving the shell to ring 3: what is
+    // left here after the file commands became /bin programs is
+    // overwhelmingly kernel introspection (meminfo, kstack, heap debug,
     // ktest), so the table they want is a /proc-shaped one, not a
     // registry of function pointers. Converting first would build the
     // wrong table.
@@ -100,16 +110,12 @@ static void dispatch(char *line) {
         cmd_time();
     } else if (k_strcmp(cmd, "timezone") == 0) {
         cmd_timezone(args);
-    } else if (k_strcmp(cmd, "uptime") == 0) {
-        cmd_uptime();
     } else if (k_strcmp(cmd, "random") == 0) {
         cmd_random(args ? args : "");
     } else if (k_strcmp(cmd, "about") == 0) {
         cmd_about();
     } else if (k_strcmp(cmd, "beep") == 0) {
         cmd_beep();
-    } else if (k_strcmp(cmd, "echo") == 0) {
-        cmd_echo(args ? args : "");
     } else if (k_strcmp(cmd, "meminfo") == 0) {
         cmd_meminfo(args ? args : "");
     } else if (k_strcmp(cmd, "heap") == 0) {
@@ -132,18 +138,10 @@ static void dispatch(char *line) {
         cmd_dmatest(args ? args : "");
     } else if (k_strcmp(cmd, "steptest") == 0) {
         cmd_steptest(args ? args : "");
-    } else if (k_strcmp(cmd, "sync") == 0) {
-        cmd_sync(args ? args : "");
     } else if (k_strcmp(cmd, "fsck") == 0) {
         cmd_fsck(args ? args : "");
     } else if (k_strcmp(cmd, "fsformat") == 0) {
         cmd_fsformat(args ? args : "");
-    } else if (k_strcmp(cmd, "ln") == 0) {
-        cmd_ln(args ? args : "");
-    } else if (k_strcmp(cmd, "mv") == 0) {
-        cmd_mv(args ? args : "");
-    } else if (k_strcmp(cmd, "truncate") == 0) {
-        cmd_truncate(args ? args : "");
     } else if (k_strcmp(cmd, "ktest") == 0) {
         cmd_ktest(args ? args : "");
     } else if (k_strcmp(cmd, "dmesg") == 0) {
@@ -158,26 +156,22 @@ static void dispatch(char *line) {
         cmd_color(args ? args : "");
     } else if (k_strcmp(cmd, "ls") == 0) {
         cmd_ls_bin(args ? args : "");
-    } else if (k_strcmp(cmd, "cat") == 0) {
-        cmd_cat(args ? args : "");
-    } else if (k_strcmp(cmd, "touch") == 0) {
-        cmd_touch(args ? args : "");
-    } else if (k_strcmp(cmd, "mkdir") == 0) {
-        cmd_mkdir(args ? args : "");
     } else if (k_strcmp(cmd, "cd") == 0) {
         cmd_cd(args ? args : "");
     } else if (k_strcmp(cmd, "pwd") == 0) {
         cmd_pwd();
     } else if (k_strcmp(cmd, "path") == 0) {
         cmd_path();
+    } else if (k_strcmp(cmd, "rescue") == 0) {
+        // Deliberately BEFORE the PATH resolver and deliberately not a
+        // name any ordinary command has -- see shell_rescue.c on why
+        // the kernel's file-command copies live behind one name that
+        // can never shadow /bin.
+        cmd_rescue(args ? args : "");
     } else if (k_strcmp(cmd, "write") == 0) {
         cmd_write_or_append(args ? args : "", 0);
     } else if (k_strcmp(cmd, "append") == 0) {
         cmd_write_or_append(args ? args : "", 1);
-    } else if (k_strcmp(cmd, "rm") == 0) {
-        cmd_rm(args ? args : "");
-    } else if (k_strcmp(cmd, "stat") == 0) {
-        cmd_stat(args ? args : "");
     } else if (k_strcmp(cmd, "edit") == 0 || k_strcmp(cmd, "nano") == 0) {
         cmd_edit(args ? args : "");
     } else if (k_strcmp(cmd, "gui") == 0) {
@@ -214,7 +208,7 @@ static void dispatch(char *line) {
         cmd_lspci();
     } else if (k_strcmp(cmd, "parttable") == 0) {
         cmd_parttable();
-    } else if (shell_exec_name(cmd, args)) {
+    } else if (shell_exec_name(cmd, args, 0)) {
         // Not a builtin -- a console app from apps.c's registry, or an
         // executable found by searching PATH (shell_path.c). This is
         // what makes `nx_test` work with no `run` prefix; `run` itself
@@ -232,8 +226,24 @@ static void dispatch(char *line) {
     } else {
         vga_write("Unknown command: ");
         vga_write(cmd);
-        vga_write("\n(type 'help' for commands, or `path` for where\n");
-        vga_write("executables are searched for)\n");
+        vga_putc('\n');
+        // MOST OF THESE NAMES ARE PROGRAMS NOW, not builtins, so
+        // "unknown command" for one of them means the FILE is missing
+        // rather than that the name was never valid -- a very
+        // different thing to be told when /bin is damaged, and the
+        // situation shell_rescue.c exists for. Say so once, here,
+        // instead of giving each evicted command a fallback of its own.
+        if (shell_rescue_has(cmd)) {
+            vga_write("`");
+            vga_write(cmd);
+            vga_write("` is a program, and /bin does not have it. The\n");
+            vga_write("kernel's own copy is `rescue ");
+            vga_write(cmd);
+            vga_write("` -- see `rescue`.\n");
+        } else {
+            vga_write("(type 'help' for commands, or `path` for where\n");
+            vga_write("executables are searched for)\n");
+        }
     }
 }
 

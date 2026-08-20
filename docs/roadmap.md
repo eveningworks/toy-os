@@ -91,7 +91,8 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~init starting `/bin/tosh` on the `text` target, in place of the kernel shell~~ DONE 2026-08-19
 - [x] ~~**`dup`/`dup2`-style fd plumbing**, so the shell can wire an arbitrary fd to 0/1/2~~ DONE 2026-08-19
 - [x] ~~A per-process cwd~~ DONE 2026-08-19 -- in the kernel, inherited across spawn; every path syscall resolves against it
-- [ ] `/bin/tosh` has its own `ls` builtin beside `/bin/ls` -- two implementations of one command
+- [ ] `/bin/tosh` has its own `ls`/`cat`/`echo` builtins beside the `/bin` programs -- two implementations of one command
+- [ ] `SYS_SYSINFO` does not report the filesystem backend name, so `/bin/df` and the About page cannot say which one is mounted
 - [ ] An environment passed to a child
 - [ ] Ctrl-C
 - [ ] **`#!` handling**, which is the loader's job, not the shell's: `elf_load()` rejects a non-ELF file
@@ -730,7 +731,7 @@ this to be better?".
 - [ ] `damage_sweep.py`'s random walk can open Notepad's file picker by chance -- harmless, but confusing in a state dump
 - [ ] `SYS_LISTDIR` still truncates at 256 entries, and TFS3 has no such cap -- the fix is an offset argument
 - [ ] Nothing detects an ordinary memory LEAK, in either allocator
-- [ ] The shell's command dispatch is a 60-branch chain, and the fix is not the obvious one
+- [ ] The shell's command dispatch is a long `if/else` chain, and the fix is not the obvious one
 - [ ] Settings: a ring-3 settings daemon (stage 2)
 - [ ] The ring-3 WM busy-waits instead of sleeping
 - [ ] The kernel ships ~62 KB of `.eh_frame` unwind tables nothing can ever read

@@ -570,3 +570,70 @@ simulate a genuine two-build divergence -- a compiler-flag difference,
 say -- because there is no cheap way to manufacture one. What is
 asserted is that the two builds agree today and will be compared again
 on every run.
+
+## Everyday commands are `/bin` programs, and the kernel's copies live behind `rescue`
+
+`cat`, `echo`, `rm`, `touch`, `mkdir`, `mv`, `ln`, `stat`, `truncate`,
+`sync` and `uptime` are ring-3 programs found on `PATH`. Their builtin
+versions were DELETED rather than left in front of them, and the
+kernel's own copies were gathered behind one new command, `rescue`.
+
+**Why not leave the builtins.** Eight of these already had a `/bin`
+twin, and the builtin won every time because `dispatch()` checks
+builtins first -- so the better implementation was unreachable from the
+prompt where it mattered. `/bin/rm` takes several paths, the builtin
+took one; `/bin/df` and `/bin/sync` report through the errno the
+syscall actually returned. Worse, every builtin here is RING-0 CODE:
+a bug in the kernel shell's `truncate` is a bug in the kernel. The Unix
+split is the one that fits -- a builtin exists to change the SHELL's
+own state (`cd`, `pwd`, `path`, `history`, `color`) or because nothing
+else can do the job. `cmd.exe` made `dir`/`copy`/`del` internal, but
+that was DOS not being able to load a program cheaply, which is not a
+constraint here.
+
+**Why some stayed.** The test applied was "can ring 3 ask?", not "is it
+a file command". `df` reports `fs_backend_name()` and
+`fs_is_persistent()`; `meminfo` prints the multiboot memory map and,
+under `meminfo audit`, walks live page tables. None of those has a
+syscall behind it -- `userland/gui/system/about.c` omits a line for
+exactly this gap -- so evicting them would have LOST information rather
+than moved it. `ls` and `lspci` remain thin wrappers around their ELFs;
+`ls` earns its wrapper only because `/bin/ls` defaults to `/` rather
+than the cwd, so a relative argument needs resolving before it crosses
+into ring 3.
+
+**Why the fallback is one command and not a silent one.** A shell that
+cannot list a directory because `/bin` is damaged is a bad place to
+stand, so the kernel copies survive -- but two things about HOW they
+survive were the actual decision.
+
+They are addressed by a distinct name, so a rescue copy can never
+shadow a real program. This is `sash`'s answer (the stand-alone shell
+spells its built-in copies `-ls`, `-rm`) and busybox's (`busybox rm`
+works when the `/bin` symlinks do not). The property both buy, and the
+one that matters, is that you always know which implementation ran. The
+rejected alternative was the `lspci` pattern already in the tree --
+try the ELF, fall back silently if the file is missing -- which keeps
+every duplicate AND hides which one you got, i.e. the exact conditions
+under which two implementations drift.
+
+They are ONE command rather than eleven `-` names because the point of
+the change is that ring-0 file code should be a small bounded thing,
+and a table in `apps/shell_rescue.c` can be read and asked "is this
+still small?". Eleven entries spread through `dispatch()`'s chain
+cannot. It also gives one place to say "this is a fallback" instead of
+eleven help lines.
+
+**What `rescue` deliberately is not: a repair tool.** A shell cannot
+write an ELF, so nothing here can put `/bin` back. Recovery is booting
+`toy-os-live.iso` (which carries a TFS3 image as a GRUB module) or
+re-seeding from the host -- the same answer a real system gives, which
+is "boot the install media". Its job is diagnosis: see what is on the
+disk, make the small changes that let a boot get further. `sync` is in
+the set for that reason and no other -- a rescue edit sitting in the
+write-back cache when the machine resets is not a rescue.
+
+And when `/bin/<name>` is missing, the shell does not fall back. It
+fails, and says specifically that the name is a program and `/bin` does
+not have it, naming the `rescue` copy. One diagnostic, driven off the
+rescue table, instead of a fallback per command.

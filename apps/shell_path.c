@@ -131,13 +131,16 @@ int shell_path_find(const char *name, char *out) {
 
 // The one place that answers "run this name" for both a typed bare name
 // (dispatch()) and an explicit `run <name>` -- so the two can't drift.
+// `report` is the one thing that differs between them: `run` announces
+// the exit code, a bare name does not (see the comment at the call to
+// elf_run_from_fs() below).
 // Order: console apps from apps.c's registry first, then PATH. Shell
 // builtins are handled by dispatch() before this is ever reached; see
 // docs/decisions.md for why they win.
 //
 // Returns 1 if something was found and run (whatever its exit code), 0
 // if the name resolved to nothing, leaving the caller to report it.
-int shell_exec_name(const char *name, const char *args) {
+int shell_exec_name(const char *name, const char *args, int report) {
     if (!name || name[0] == '\0') return 0;
 
     if (app_run(name)) {
@@ -152,11 +155,38 @@ int shell_exec_name(const char *name, const char *args) {
     if (!shell_path_find(name, bin_path)) return 0;
 
     int exit_code = elf_run_from_fs(bin_path, args);
-    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
-    vga_write("Process finished. Exit code: ");
-    vga_write_exit_code(exit_code);
-    vga_putc('\n');
     vga_set_color(shell_fg, VGA_BLACK);
+
+    // SILENT ON SUCCESS WHEN THE NAME WAS TYPED BARE. The banner below
+    // used to print after EVERY program, which was right when `run
+    // <name>` was the only way to start one and the loader itself was
+    // the thing being demonstrated. It became wrong once `rm`, `cat`
+    // and `touch` were programs: a banner after every command buries
+    // the output you asked for, and no shell does it.
+    //
+    // `run` KEEPS IT (report=1), and that is the one place `run <name>`
+    // and a bare `<name>` deliberately differ. They still RESOLVE
+    // identically -- that is what this one function guarantees, and the
+    // reason it exists -- but `run` is the explicit, demonstrative form:
+    // it is what `tools/usertest_run.py` drives, and the exit code it
+    // prints is that harness's entire assertion (a kernel that lost the
+    // code and reported 0 would otherwise pass). Reporting is a
+    // different axis from resolution.
+    if (report) {
+        vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+        vga_write("Process finished. Exit code: ");
+        vga_write_exit_code(exit_code);
+        vga_putc('\n');
+        vga_set_color(shell_fg, VGA_BLACK);
+    } else if (exit_code != 0) {
+        // One terse line, the shape cmd_ls_bin() and cmd_lspci()
+        // already used for the two commands that reached ring 3 before
+        // the rest of them did.
+        vga_write(name);
+        vga_write(": exit ");
+        vga_write_exit_code(exit_code);
+        vga_putc('\n');
+    }
     return 1;
 }
 

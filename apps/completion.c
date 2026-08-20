@@ -18,13 +18,18 @@
 #include "tz.h"
 #include "theme.h"
 
+// The names dispatch() handles ITSELF. Deliberately NOT a list of
+// everything you can type: `rm`, `cat`, `touch` and friends are ring-3
+// programs now, and complete_executables() below finds them by listing
+// PATH -- which is also what keeps this table honest, since a name here
+// that dispatch() does not handle is reported as an internal error.
 const char *const COMPLETION_COMMANDS[] = {
-    "about", "append", "apps", "ata", "beep", "cat", "cd", "clear", "color",
-    "cursor", "debug", "df", "dmatest", "dmesg", "echo", "edit", "fontsize",
-    "fputest", "fsck", "fsformat", "gui", "heap", "help", "ktest", "history", "keyboard", "ln", "lspci", "ls",
-    "meminfo", "mkdir", "mv", "nano", "parttable", "pwd", "reboot",
-    "ring3test", "rm", "run", "schedtest", "stat", "steptest", "strace", "stress", "sync",
-    "path", "random", "time", "timezone", "touch", "truncate", "uptime", "write",
+    "about", "append", "apps", "ata", "beep", "cd", "clear", "color",
+    "cursor", "debug", "df", "dmatest", "dmesg", "edit", "fontsize",
+    "fputest", "fsck", "fsformat", "gui", "heap", "help", "ktest", "history", "keyboard", "lspci", "ls",
+    "meminfo", "nano", "parttable", "pwd", "reboot", "rescue",
+    "ring3test", "run", "schedtest", "steptest", "strace", "stress",
+    "path", "random", "time", "timezone", "write",
     0
 };
 

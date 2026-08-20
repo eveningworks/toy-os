@@ -113,6 +113,9 @@ static const char *const HELP_LINES[] = {
     "  reboot        - reset the machine\n",
     "\n",
     "Files & filesystem:\n",
+    "  (most of these are PROGRAMS in /bin, not builtins -- `path` shows\n",
+    "   where they are found, and `rescue` is the kernel's own copy of\n",
+    "   them for a disk whose /bin is damaged)\n",
     "  ls [flags] [d]- list a directory (default: cwd). -l type/size/\n",
     "                  mtime, -h human sizes, -1 one per line, -C in\n",
     "                  columns, -t newest first, -S largest first, -r\n",
@@ -143,14 +146,18 @@ static const char *const HELP_LINES[] = {
     "  time          - show date/time (local, see `timezone`)\n",
     "  timezone      - show/pick your timezone (interactive list)\n",
     "  timezone <c>  - set timezone directly, e.g. `timezone helsinki`\n",
-    "  uptime        - show ticks since boot\n",
+    "  uptime        - how long the machine has been up\n",
     "  random [n]    - show the entropy source and n random values\n",
     "  meminfo       - show memory map + physical frame allocator stats\n",
     "  heap          - show kernel heap stats (kmalloc/kfree)\n",
     "  heap debug on - red-zone new allocations + poison freed ones,\n",
     "                  reporting overflows/underflows/use-after-free\n",
     "  heap check    - scan poisoned free blocks for use-after-free now\n",
-    "  df            - show filesystem disk space (total/used/free)\n",
+    "  df            - show filesystem disk space (total/used/free),\n",
+    "                  and which filesystem backend is mounted\n",
+    "  rescue        - the kernel's own copies of the file commands, for\n",
+    "                  when /bin is missing or damaged. `rescue` alone\n",
+    "                  lists them; they never shadow a real program\n",
     "  dmesg         - show the kernel log (boot messages, driver/\n",
     "                  syscall diagnostics, timestamped)\n",
     "  lspci         - list PCI devices found at boot (bus:dev.func,\n",
@@ -354,14 +361,6 @@ void cmd_timezone(const char *args) {
     vga_write(".\n");
 }
 
-void cmd_uptime(void) {
-    uint64_t ticks = pit_ticks(); // 100 Hz
-    vga_write_dec((uint32_t)(ticks / 100));
-    vga_write(".");
-    print_two_digit((uint32_t)(ticks % 100));
-    vga_write(" seconds since boot\n");
-}
-
 // `random` -- what the entropy source is and what it produces. Prints
 // the SOURCE first and the bytes second, deliberately: the numbers look
 // equally random either way, and the only thing a reader can actually
@@ -420,11 +419,6 @@ void cmd_about(void) {
 void cmd_beep(void) {
     vga_write("beep!\n");
     speaker_beep(800, 200);
-}
-
-void cmd_echo(const char *args) {
-    vga_write(args);
-    vga_putc('\n');
 }
 
 void cmd_meminfo(const char *args) {
@@ -587,7 +581,7 @@ void cmd_ktest(const char *args) {
 // fine (and necessary) for a test command.
 void cmd_fputest(void) {
     vga_write("Single-process float check (/tests/fpu_test):\n");
-    if (!shell_exec_name("fpu_test", 0)) {
+    if (!shell_exec_name("fpu_test", 0, 1)) {
         vga_write("  could not run /tests/fpu_test -- is it seeded onto\n");
         vga_write("  disk.img? (see the Makefile's `seed` target)\n");
         return;
@@ -1130,7 +1124,7 @@ void cmd_run(const char *name_and_args) {
     // Everything past this point is shell_path.c's shell_exec_name() --
     // the same resolver a bare typed name goes through, so `run foo` and
     // `foo` can never resolve differently.
-    if (!shell_exec_name(name, bin_args)) {
+    if (!shell_exec_name(name, bin_args, 1)) {
         vga_write("run: no such app or executable: ");
         vga_write(name);
         vga_write("\n(`path` shows where executables are searched for)\n");

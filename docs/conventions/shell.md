@@ -126,3 +126,65 @@ this the obvious way), not from how much history it accumulated.
   **injected keystrokes are only a valid channel for a tool that has
   established a desktop is NOT up**, and a tool asserting on kernel
   output should prefer the serial console outright.
+
+- **AN EVERYDAY COMMAND IS A `/bin` PROGRAM, NOT A BUILTIN, AND THE
+  KERNEL'S OWN COPIES LIVE BEHIND ONE NAME: `rescue`.**
+  `cat`, `echo`, `rm`, `touch`, `mkdir`, `mv`, `ln`, `stat`,
+  `truncate`, `sync` and `uptime` resolve through `PATH` like anything
+  else, so they behave identically at the physical prompt, in
+  `/bin/tosh` and in the GUI Terminal -- one implementation, one set of
+  flags, one set of error messages. That is the Unix split: a builtin
+  exists to change the SHELL's own state (`cd`, `pwd`, `path`,
+  `history`, `color`, `clear`) or because nothing else can do the job.
+  It is emphatically not `cmd.exe`'s split, where `dir`/`copy`/`del`
+  are internal because DOS could not load a program cheaply.
+
+  **What is still a builtin, and the test for whether yours should be:
+  can ring 3 ask?** `df` and `meminfo` stayed because
+  `fs_backend_name()`, `fs_is_persistent()`, the multiboot memory map
+  and `mm_audit_report()`'s page-table walk have no syscall behind them
+  -- the same gap `userland/gui/system/about.c` documents for its own
+  missing line. `ls` and `lspci` are thin builtin WRAPPERS around their
+  ELFs, `ls` only because `/bin/ls` defaults to `/` rather than the
+  cwd. Everything else in the chain is kernel introspection waiting on
+  a `/proc`-shaped interface (`docs/query-design.md`).
+
+  **`rescue` is one command rather than eleven `-rm`-style names**, and
+  the reason is the reason the whole change exists: kernel-side file
+  code should be a small BOUNDED thing, and a table in
+  `apps/shell_rescue.c` is something you can look at and ask "is this
+  still small?" -- eleven entries scattered through `dispatch()` is
+  not. The precedent for having them at all is `sash` (which spells its
+  copies `-ls`, `-rm`) and busybox (one binary, many applets); both buy
+  the same guarantee this does, that a rescue copy can NEVER shadow the
+  real program, so you always know which one ran.
+
+  **Two things the rescue set is not.** It is not a repair tool -- a
+  shell cannot write an ELF, so a missing `/bin` is fixed by booting
+  `toy-os-live.iso` or re-seeding from the host, exactly as a real
+  system fixes it from install media. And it is not a fallback that
+  fires by itself: `rm` with no `/bin/rm` FAILS, and says specifically
+  that the program is missing and where the kernel copy is, rather than
+  silently running a different implementation. A silent fallback is how
+  two implementations drift without anyone noticing which one they were
+  using.
+
+- **A PROGRAM STARTED BY A BARE NAME PRINTS NOTHING EXTRA WHEN IT
+  SUCCEEDS -- AND `run <name>` STILL DOES.** `shell_exec_name()` used to
+  announce `Process finished. Exit code: 0` after every ring-3 program,
+  which was right when `run <name>` was the only way to start one and
+  the loader itself was what was being demonstrated. It became wrong the
+  moment `rm` and `cat` were programs: a banner after every command
+  buries the output you asked for, and no shell does it. A bare name
+  gets one terse line on a NON-ZERO exit only, `<name>: exit <code>` --
+  the shape `cmd_ls_bin()` and `cmd_lspci()` already used.
+
+  **`run` keeps the banner, and this is the one place the two forms
+  deliberately differ.** They still RESOLVE through the same function,
+  which is the guarantee that matters and the reason that function
+  exists; `report` is a separate axis. Do not "fix" the inconsistency by
+  silencing `run`: `tools/usertest_run.py` drives `run <name>` and
+  parses that exact line, and the exit code is its ENTIRE assertion --
+  a kernel that lost the code and reported 0 would otherwise pass. That
+  harness went 0/14, all "did it hang?", the first time the banner was
+  removed unconditionally.

@@ -1,8 +1,9 @@
-// Internal, sharing-only header for the shell's split into four files
+// Internal, sharing-only header for the shell's split into five files
 // -- shell.c (the REPL loop, dispatch(), and the state everything else
 // here shares), shell_fs.c (filesystem commands), shell_sys.c
-// (system-info/settings commands), and shell_path.c (PATH lookup and
-// the shared "run this name" resolver). Split out once shell.c crossed 900
+// (system-info/settings commands), shell_path.c (PATH lookup and
+// the shared "run this name" resolver), and shell_rescue.c (the
+// kernel-side file-command copies behind `rescue`). Split out once shell.c crossed 900
 // lines mixing every command category together (see the git history for
 // the build this happened in).
 //
@@ -41,8 +42,24 @@ int resolve_path(const char *input, char *out);
 // both a bare typed name (dispatch()) and an explicit `run <name>`.
 // Returns 1 if something was found and run, 0 if the name resolved to
 // nothing. Defined in shell_path.c.
-int shell_exec_name(const char *name, const char *args);
+//
+// `report` non-zero prints "Process finished. Exit code: N" afterwards.
+// `run` passes 1 (it is the explicit form, and the exit code is what
+// tools/usertest_run.py asserts on); a bare typed name passes 0, since
+// a shell that announced itself after every `rm` would bury the output
+// you asked for.
+int shell_exec_name(const char *name, const char *args, int report);
 void cmd_path(void);
+
+// `rescue <cmd> [args...]` -- the kernel's own copies of the file
+// commands, for a disk whose /bin is damaged. Defined in
+// shell_rescue.c, which is also where the set of them is listed.
+void cmd_rescue(const char *args);
+
+// Is `name` one of the commands `rescue` carries? dispatch() asks so
+// that a name whose /bin program is MISSING gets told where the kernel
+// copy is, rather than a flat "unknown command".
+int shell_rescue_has(const char *name);
 
 // Filesystem commands -- defined in shell_fs.c.
 void cmd_cat(const char *name);
@@ -59,11 +76,9 @@ void cmd_stat(const char *name);
 void cmd_help(const char *args);
 void cmd_time(void);
 void cmd_timezone(const char *args);
-void cmd_uptime(void);
 void cmd_random(const char *args);
 void cmd_about(void);
 void cmd_beep(void);
-void cmd_echo(const char *args);
 void cmd_meminfo(const char *args);
 void cmd_df(void);
 void cmd_fsck(const char *args);

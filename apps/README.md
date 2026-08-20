@@ -89,10 +89,15 @@ ring-3 processes now; see the next section.)
   append-only loop. The split is deliberate and the opposite of
   completion's for a reason -- candidate generation has no state to
   keep, whereas two copies of an editor drift, and a drifted editor
-  means the same keystroke doing different things in the two windows. The shell itself is four files (`shell.c` + `shell_fs.c` +
-  `shell_sys.c` + `shell_path.c`, sharing state through
-  `shell_internal.h`); `shell_path.c` owns PATH lookup and the single
-  "run this name" resolver behind both a bare typed name and `run`.
+  means the same keystroke doing different things in the two windows. The shell itself is five files (`shell.c` + `shell_fs.c` +
+  `shell_sys.c` + `shell_path.c` + `shell_rescue.c`, sharing state
+  through `shell_internal.h`); `shell_path.c` owns PATH lookup and the
+  single "run this name" resolver behind both a bare typed name and
+  `run`. Most everyday file commands are NOT builtins -- `cat`, `rm`,
+  `touch`, `mkdir`, `mv`, `ln`, `stat`, `truncate`, `sync`, `echo` and
+  `uptime` are `/bin` programs found by that resolver, and
+  `shell_rescue.c` holds the kernel's own copies behind `rescue`, a
+  name that cannot shadow them. See `docs/conventions/shell.md`.
 - **gui** (`gui3.c`) -- starts the DESKTOP, which is a ring-3 process:
   it spawns `/bin/wm/system/toywm` and waits for it. Registered as both
   `gui` and `gui3`, the second an alias kept so notes and scripts that

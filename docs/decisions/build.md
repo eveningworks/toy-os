@@ -702,3 +702,32 @@ Verified with `make -n run <FLAGS>` across every axis, which is the
 check worth repeating: it prints the command line without running it,
 and it is what previously caught a `run-virtio-kvm` that shipped with no
 `-enable-kvm` at all.
+
+## The seed rename table is keyed by PATH, not by basename
+
+`make seed` copies each built ELF to its on-disk name, with a small
+override table for the three that are not just their own basename
+(`gui/apps/terminal` -> `uterm`, `gui/demos/gfxdemo` -> `shapes`,
+`tests/echo` -> `echo_test`). That table used to be keyed by BASENAME:
+`SEED_NAME_echo = echo_test`.
+
+It broke the day `/bin/echo` was written. The rename meant for the
+syscall exercise in `userland/tests/` matched the real `echo(1)` in
+`userland/bin/` as well, so the new program was seeded to
+`/bin/echo_test` -- on top of the entry `tests/echo` was already
+producing there in the same build.
+
+**The failure mode is the reason this is written down.** Nothing went
+red. The compile succeeded, the link succeeded, `make iso` succeeded,
+`check_layout.py` passed (it checks directories, not names), and
+`ls /bin` listed a plausible set of programs. The only symptom was
+`echo` reporting `Unknown command` at a prompt where `cat` and
+`uptime`, added in the same commit, both worked -- which reads as a
+bug in the new program, not in the build.
+
+Keying by the ELF's path under `build/userland/` (`tests/echo`) makes
+each override name exactly the one thing it was meant to rename. The
+general form, and the reason this is a decision rather than a fix: **a
+rename table addressed less specifically than the thing it renames will
+eventually rename something else**, and it will do it silently, because
+a rename cannot fail.

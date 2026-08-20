@@ -572,6 +572,8 @@ whenever a headline here tells you something you did not already know.
 
 `docs/conventions/shell.md`
 
+- **AN EVERYDAY COMMAND IS A `/bin` PROGRAM, NOT A BUILTIN, AND THE KERNEL'S OWN COPIES LIVE BEHIND ONE NAME: `rescue`.**
+- **A PROGRAM STARTED BY A BARE NAME PRINTS NOTHING EXTRA WHEN IT SUCCEEDS -- AND `run <name>` STILL DOES.**
 - **COLOUR IS AN ESCAPE SEQUENCE, NOT A SYSCALL.**
 - **A `text` BOOT REACHES A RING-3 SHELL, AND THE KERNEL SHELL STANDS DOWN FOR IT.**
 - **RING 3 CAN READ THE CONSOLE -- fd 0, and it BLOCKS.**

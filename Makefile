@@ -235,17 +235,30 @@ USERLAND_ELVES    = $(patsubst userland/%.c,$(BUILD)/userland/%.elf,$(USERLAND_P
 # The handful of programs whose on-disk name isn't their file name --
 # three exceptions spelled once each, instead of a name column on every
 # entry of a 29-line list:
-#   terminal -> uterm      so it doesn't collide with the kernel-space
-#                          Terminal in the Start menu while both exist
-#   gfxdemo  -> shapes     the demo's user-facing name
-#   echo     -> echo_test  a syscall exercise, not a real echo(1)
-SEED_NAME_terminal = uterm
-SEED_NAME_gfxdemo  = shapes
-SEED_NAME_echo     = echo_test
+#   gui/apps/terminal -> uterm      so it doesn't collide with the
+#                                   kernel-space Terminal in the Start
+#                                   menu while both exist
+#   gui/demos/gfxdemo -> shapes     the demo's user-facing name
+#   tests/echo        -> echo_test  a syscall exercise, not echo(1)
+#
+# KEYED BY PATH UNDER userland/, NOT BY BASENAME, and that is not
+# decoration. It was `SEED_NAME_echo` until /bin/echo was written --
+# whereupon the rename meant for the syscall exercise in tests/ captured
+# the real echo(1) in bin/ as well, and seeded it to /bin/echo_test.
+# Nothing failed: the build was green, `ls /bin` looked plausible, and
+# the only symptom was `echo` reporting "Unknown command" at a prompt
+# where every other new program worked. A rename table addressed less
+# specifically than the thing it renames will eventually rename
+# something else.
+SEED_NAME_gui/apps/terminal = uterm
+SEED_NAME_gui/demos/gfxdemo = shapes
+SEED_NAME_tests/echo        = echo_test
 
 # The on-disk name for one ELF path: its override if it has one, else
-# its own basename.
-seed_name = $(or $(SEED_NAME_$(basename $(notdir $(1)))),$(basename $(notdir $(1))))
+# its own basename. The override is looked up by the ELF's path under
+# build/userland/ ("tests/echo"), so a name is only ever renamed where
+# it was meant to be.
+seed_name = $(or $(SEED_NAME_$(basename $(subst $(BUILD)/userland/,,$(1)))),$(basename $(notdir $(1))))
 
 # Seed directory for the writer tools' `sync` (reached through
 # tools/seed_disk.py, which probes the image's format) -- see the

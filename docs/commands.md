@@ -26,8 +26,30 @@ to right with the first match winning) and runs what it finds. `run
 <name>` still works as the explicit form, going through the same
 resolver. `path` shows the search order.
 
-**Shell builtins win over both**, and `ls` is a builtin *wrapper*
-around a real `/bin/ls` ELF rather than a reimplementation of it.
+**Shell builtins win over both** — but the everyday file commands are
+no longer builtins. `cat`, `echo`, `rm`, `touch`, `mkdir`, `mv`, `ln`,
+`stat`, `truncate`, `sync` and `uptime` are `/bin` programs and resolve
+through `PATH` like anything else, which is why they behave identically
+at this prompt, in `/bin/tosh` and in the GUI Terminal. `ls` and
+`lspci` are builtin *wrappers* around their ELFs (`ls` only so a
+relative directory argument is resolved against the cwd — `/bin/ls`
+defaults to `/`).
+
+**A program started by a bare name prints nothing extra when it
+succeeds**; a non-zero exit prints one line, `<name>: exit <code>`. The
+old `Process finished. Exit code: N` banner made sense when `run` was
+the only way to start a program and the loader was the thing being
+shown, and stopped making sense when `rm` became one.
+
+`run <name>` still prints it, and that is the one place the two forms
+deliberately differ. They RESOLVE identically — one function answers
+"run this name" for both — but `run` is the explicit, demonstrative
+form, and the exit code it reports is the whole assertion
+`tools/usertest_run.py` makes. Reporting is a different axis from
+resolution.
+
+**`rescue <cmd>` is the kernel's own copy of the file commands**, for a
+disk whose `/bin` is damaged — see the table below.
 
 **The cwd is the KERNEL's, and every path syscall resolves against it**
 (`SYS_CHDIR`/`SYS_GETCWD`, 2026-08-19). It is inherited across a spawn,
@@ -47,8 +69,12 @@ the physical shell and the GUI Terminal.
 ## General
 
 `help`, `clear`, `about`, `beep`, `apps`, `run <app>`, `gui`,
-`history` (persists across reboot via `/etc/history`), `echo <text>`,
-`reboot`
+`history` (persists across reboot via `/etc/history`), `reboot`
+
+`echo [-n] <text>` is a `/bin` program. It honours `-n` and nothing
+else: backslash escapes are the one part of `echo` every shell
+implements differently, and a parser that guesses is worse than one
+that does not exist.
 
 ## Files and filesystem
 
@@ -59,7 +85,8 @@ Paths may be relative to the cwd or absolute.
 | `less [file]` | Pager: one screenful at a time. Space/PageDown forward, `b`/PageUp back, arrows by line, `g`/Home and `G`/End to the ends, `q` to quit; a status line shows the position. With no argument it reads STDIN, so `ls -l \| less` works. It reads keys through `SYS_READ_KEY` rather than fd 0 — which is what makes the pipe case possible at all, since in a pipeline fd 0 is the pipe (real `less` opens `/dev/tty` for the same reason; this OS has none). Page height comes from `SYS_CONSOLE_SIZE`, not a baked 80x25, because the console is font-derived. **Run it with `spawn`, not `run`** — the legacy loader has no scheduler slot, so `SYS_SLEEP` fails there and the key poll spins. Holds the input in memory (256 KB cap, then says TRUNCATED) because a pipe cannot be rewound. |
 | `ls [flags] [dir]` | Sorted by name, one entry per line, directories coloured. `-l` type/size/mtime, `-h` human sizes, `-C` columns, `-1` one per line, `-t` newest first, `-S` largest first, `-r` reverse, `-R` recurse, `--color=never\|always`; `-a`/`-F` accepted as no-ops (no dotfile convention, no mode bits). Colour is ANSI escapes the console parses, so it survives a pipe and can be turned off — there is no `--color=auto` because nothing can yet ask whether an fd is a terminal. A real disk-hosted `/bin/ls` binary, not a builtin — see `decisions.md`. |
 | `cd [dir]`, `pwd` | `cd` with no argument goes to `/` — there is no `$HOME`. `..` and `.` are resolved by the kernel, so they mean the same thing everywhere. |
-| `cat <f>`, `touch <f>` | `touch` creates an empty file; it does not update an existing file's timestamp, and does not claim to. |
+| `cat [f...]` | Copies files, or STDIN with no argument, to stdout. Streams in fixed chunks rather than reading a file whole, so file size is irrelevant. A missing file is reported and the remaining ones still print, with a non-zero exit. |
+| `touch <f>` | Creates an empty file; it does not update an existing file's timestamp, and does not claim to. |
 | `write <f> <text>`, `append <f> <text>` | Each writes one LINE, terminated — `write` truncates first, `append` adds. Neither used to terminate, which made a multi-line file impossible to author from the shell at all. A line too long to fit is refused, not truncated. |
 | `rm <f>` | Does not recurse — see `decisions.md`. |
 | `stat <f>` | Type, size, inode number, created/modified. |
@@ -68,7 +95,8 @@ Paths may be relative to the cwd or absolute.
 | `truncate <f> <n>` | Sets a file's size exactly. Growing is sparse, so it costs no blocks. |
 | `ln <file> <new>` | Hardlink. TFS3 only; on TFS2 it explains that the format has no link counts. |
 | `sync` | Writes out anything the disk cache is still holding, and reports how many sectors it wrote — a `sync` that printed nothing would be indistinguishable from one that did nothing. Runs automatically at shutdown and reboot, and at the journal's barriers, so this is for "write it out NOW" rather than routine use. Says so loudly if a sector could not be written, since that data then exists in RAM only. |
-| — | **`mkdir`, `rm`, `mv`, `ln`, `stat`, `truncate`, `touch`, `sync` and `df` are `/bin` PROGRAMS as well as builtins** (2026-08-19), so they work from `/bin/tosh` and the GUI Terminal too. The builtins are the kernel shell's rescue set and call the same `fs.h` entry points the syscalls do, so the two cannot disagree about what an operation means — only about how the result is printed. |
+| `rescue [cmd ...]` | The kernel's own copies of everything above, for when `/bin` is missing or damaged: `rescue ls`, `rescue cat`, `rescue stat`, `rescue df`, `rescue rm`, `rescue touch`, `rescue mkdir`, `rescue mv`, `rescue ln`, `rescue truncate`, `rescue sync`. `rescue` alone lists them. They can never shadow a real program — plain `rm` always runs `/bin/rm` — so you always know which one ran, the guarantee `sash` gets from spelling its copies `-ls`/`-rm`. They DIAGNOSE; they cannot put `/bin` back, since a shell cannot write an ELF. For that, boot `toy-os-live.iso` or re-seed from the host. `sync` is in the set so a rescue edit actually reaches the disk. |
+| — | **The file commands are `/bin` PROGRAMS, not builtins** — the builtin versions were deleted (2026-08-20) rather than left to shadow them, because two implementations of `rm` is two places for it to mean something. If `/bin/<name>` is missing, the shell says so specifically and names the `rescue` copy instead of reporting an unknown command. |
 | `edit <f>` / `nano <f>` | Full-screen nano/pico-style editor — arrows/Home/End/Delete to navigate, F2 save, F3 exit. Works from both front ends (`apps/editor.c`). |
 
 ## Command-line editing
@@ -85,13 +113,15 @@ history search, `Alt-.` last argument. `help` lists them all.
 
 | Command | Notes |
 |---|---|
-| `time`, `timezone [city]`, `uptime` | |
+| `time`, `timezone [city]` | |
+| `uptime` | How long the machine has been up, as a duration. `/bin/uptime`, over `SYS_MONOTONIC_NS` — uptime is an INTERVAL, and the RTC can step, so wall clock is not an implementation of it. The builtin printed raw ticks, which answers "is the timer running" rather than "how long has this been up". |
 | `random [n]` | The entropy source (RDSEED/RDRAND, virtio-rng, or TSC jitter) and some values from it. |
 | `meminfo` | The memory map, the physical frame allocator and the kernel heap. Reads through the FACT registry (`SYS_QUERY`), so it and `/bin/meminfo` are one reader and cannot report different numbers. |
 | `meminfo --list` | *(`/bin/meminfo` only)* Every registered fact provider: class, name, record count, record size, and whether it is a scalar or a list. |
 | `meminfo audit` | Compares every live process's page tables against the frame allocator, and reports any mapping of a frame the allocator considers free. |
 | `heap` | Kernel heap stats. `heap debug on\|off` red-zones new allocations and poisons freed ones; `heap check` sweeps for a use-after-free. |
-| `df` | Total/used/free, and the name of the active filesystem backend. |
+| `df` | Total/used/free, and the name of the active filesystem backend. **Still a builtin**, unlike its neighbours: `fs_backend_name()`/`fs_is_persistent()` have no syscall behind them, so `/bin/df` cannot report which filesystem is mounted. `userland/gui/system/about.c` omits the same line for the same reason. |
+| `meminfo [audit]` | **Still a builtin.** `/bin/meminfo` reads the same `QUERY_MEMINFO` provider, but the multiboot memory map has no provider, and `meminfo audit` walks live page tables — neither is reachable from ring 3. |
 | `dmesg`, `lspci`, `parttable` | |
 | `gfxbench [iterations]` | Times full-screen framebuffer fills *and* console scrolls, reporting ms/frame, an fps ceiling, MB/s, which write-combining mechanism is live, and whether the console is double-buffered. Meaningful only under `make run KVM=1` or on real hardware — plain QEMU's TCG ignores memory types, so both console modes measure the same there. See `decisions.md`. |
 | `hwcursor [demo [x y] \| off]` | The display adapter's own cursor plane: reports whether this display has one, and `demo` puts a 32x32 magenta square on it. A DIAGNOSTIC, not the pointer — the compositor still draws a software sprite, so this is the only caller `gfx_hw_cursor_*()` has. Present on `-vga virtio` (virtio-gpu's cursor queue); absent on plain `-vga std`. Note a device-composited cursor never appears in a `screendump`. |
