@@ -271,6 +271,30 @@ def main():
                 return r
         return None
 
+    # --- KERNEL TUNABLES APPEAR, AND UNDER THEIR OWN HEADING ----------
+    #
+    # A tunable is a setting with no config file (kernel/lib/tunables.c),
+    # and the sidebar is generated from the registry -- so this asserts
+    # that "no file" did not quietly mean "no row". It is filed under
+    # "Kernel" deliberately, separate from Appearance and Input: these
+    # are machine knobs, and a heap-debug toggle sitting beside the
+    # wallpaper would be a worse app.
+    kernel_head = None
+    for r in rows:
+        if r["depth"] == 0 and r["label"].strip().lower() == "kernel":
+            kernel_head = r
+            break
+    check("the sidebar has a Kernel heading for the tunables",
+          kernel_head is not None,
+          f"headings={[r['label'] for r in rows if r['depth'] == 0]}")
+    # Its three groups, which is what proves the ROWS came through and
+    # not just the heading -- a category with no settings under it would
+    # not be drawn at all, so the heading alone is weaker than it looks.
+    for group in ("Memory", "Storage", "Diagnostics"):
+        check(f"the Kernel section offers a {group} page",
+              row_named(group) is not None,
+              f"labels={[r['label'] for r in rows]}")
+
     def click(rel_x, rel_y):
         dbg.send(f"gui click {cx + rel_x} {cy + rel_y}")
         dbg.settle()

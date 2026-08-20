@@ -304,22 +304,24 @@ boundary in both directions, so `/bin/heap` would read a provider and
 flip a tunable with no new syscall at all. That is now three tunables
 somebody actually wants, which is the trigger stage 3 was waiting for.
 
-### Stage 3 -- tunables
+### Stage 3 -- tunables -- DONE 2026-08-20
 
-The non-persisting flavour of `struct setting`, plus the first real
-kernel tunables. It needed "a tunable somebody actually wants", and as
-of 2026-08-20 there are three: `heap debug`, `ata nodma` and `kstack
-track`. Each is the write half of a command whose read half is ready to
-move, and each is blocked on exactly this.
+The non-persisting flavour of `struct setting`, and the first three real
+kernel tunables: `kernel.heap_debug`, `kernel.ata_nodma` and
+`kernel.kstack_track` (`kernel/lib/tunables.c`). It had been waiting for
+"a tunable somebody actually wants" so the flavour would not ship
+without users; three arrived at once, each the write half of a command
+whose read half was ready to move.
 
-`heap check` is an ACTION rather than a toggle, and has precedent as
-one: Linux's `/proc/sys/vm/drop_caches` and SLUB's `validate` are both
-"do it now" on write.
+`struct setting` gained NOTHING. A tunable names `CONFIG_PATH_RUNTIME`
+as its file, which both marks it as unpersisted and gives it the
+`kernel` namespace -- see `docs/decisions.md` for why that is a sentinel
+path rather than a flag or an empty string.
 
-The mechanism looks contained -- `setting.c` already guards `s->file`
-in two places, so a non-persisting setting is guarding the remaining
-`etc_config_*` call sites and giving `config list` a "runtime" marker
-in place of a filename.
+**Still open: `heap check`**, which is an ACTION rather than a toggle.
+It has precedent as a write-triggered one (Linux's
+`/proc/sys/vm/drop_caches`, SLUB's `validate`) and simply has not been
+built; the `heap` builtin still performs it.
 
 ### Stage 4 -- `config` reads facts
 

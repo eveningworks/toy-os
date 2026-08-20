@@ -112,6 +112,11 @@ void config_files_scan(void) {
                          "Keyboard layout tables (dir)", 1);
     config_file_register("apps", "/usr/wm/desktop",
                          "Start-menu/desktop entries (dir)", 1);
+    // The one namespace with NO file. Registered like the others so
+    // that `kernel.heap_debug` resolves through the same path lookup
+    // every other setting's namespace does -- see CONFIG_PATH_RUNTIME.
+    config_file_register(CONFIG_NAME_RUNTIME, CONFIG_PATH_RUNTIME,
+                         "Kernel tunables -- runtime only, reset at boot", 1);
 
     g_scan_count = 0;
     fs_list(CONFIG_DESCRIPTOR_DIR, scan_collect);
@@ -133,4 +138,8 @@ void config_files_scan(void) {
 
         config_file_register(name, path, desc, 0);
     }
+}
+
+int config_file_is_runtime(const struct config_file *f) {
+    return f && k_strcmp(f->path, CONFIG_PATH_RUNTIME) == 0;
 }

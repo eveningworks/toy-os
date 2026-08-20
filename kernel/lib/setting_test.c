@@ -98,20 +98,63 @@ KTEST("setting", "the kernel's own settings are registered") {
     KTEST_ASSERT(setting_find("no_such_setting") == 0);
 }
 
-KTEST("setting", "every registered setting reports a value and a file") {
+KTEST("setting", "every registered setting reports a value and a home") {
     // The property a settings UI depends on: a row it can draw. A
     // setting with no current value renders as an empty control that
-    // looks broken, and one with no file cannot answer "where is this
+    // looks broken, and one with no home cannot answer "where is this
     // stored?" -- the question the registry exists to answer.
+    //
+    // "A HOME" RATHER THAN "A FILE", since tunables. This asserted
+    // `s->file[0] == '/'` until kernel.heap_debug and its two siblings
+    // arrived, which is the moment the invariant genuinely changed: a
+    // setting's `file` is now either an absolute path OR the runtime
+    // sentinel. Widened here rather than deleted, and paired with the
+    // rule that makes the new case safe -- a tunable holds its value in
+    // the kernel, so one with no `apply` would hold it nowhere at all.
     char v[SETTING_VALUE_MAX];
     for (int i = 0; i < setting_count(); i++) {
         const struct setting *s = setting_at(i);
         KTEST_ASSERT(s != 0);
-        KTEST_ASSERT(s->file != 0 && s->file[0] == '/');
+        KTEST_ASSERT(s->file != 0);
+        if (setting_persists(s)) {
+            KTEST_ASSERT(s->file[0] == '/');
+        } else {
+            KTEST_ASSERT(k_strcmp(s->file, CONFIG_PATH_RUNTIME) == 0);
+            KTEST_ASSERT(s->apply != 0);
+        }
         v[0] = '\0';
         s->get(v, sizeof v);
         KTEST_ASSERT(v[0] != '\0');
     }
+}
+
+KTEST("setting", "a tunable is applied but never written") {
+    // The defining property, asserted rather than assumed. A tunable
+    // that quietly persisted would look identical at the prompt and
+    // differ only after a reboot -- the slowest possible way to find
+    // out, and the reason this is a test rather than a comment.
+    const struct setting *s = setting_find("kernel.heap_debug");
+    KTEST_ASSERT(s != 0);
+    KTEST_ASSERT_EQ(setting_persists(s), 0);
+    // Its namespace still resolves, which is the whole point of the
+    // sentinel path: identity is (namespace, name), so a tunable with
+    // no namespace would be addressable only as a bare name.
+    KTEST_ASSERT(k_strcmp(setting_namespace(s), CONFIG_NAME_RUNTIME) == 0);
+
+    // Round-trip through the registry, and put it back. Reading the
+    // value through get() rather than trusting the setter is what makes
+    // this a round trip instead of an echo.
+    char before[SETTING_VALUE_MAX], after[SETTING_VALUE_MAX];
+    s->get(before, sizeof before);
+    KTEST_ASSERT(setting_set("kernel.heap_debug", "on") != SETTING_INVALID);
+    s->get(after, sizeof after);
+    KTEST_ASSERT(k_strcmp(after, "on") == 0);
+    setting_set("kernel.heap_debug", before);
+
+    // And a value it does not accept is REFUSED, not coerced to off --
+    // a tunable that reads an unrecognised word as "off" silently
+    // disarms itself.
+    KTEST_ASSERT_EQ(setting_set("kernel.heap_debug", "yes"), SETTING_INVALID);
 }
 
 KTEST("setting", "a duplicate name IN THE SAME FILE is refused, not shadowed") {

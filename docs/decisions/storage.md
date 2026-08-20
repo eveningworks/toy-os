@@ -1169,3 +1169,48 @@ simply had no negative to see. `ls` was already printing
 `strerror(sys_errno())` for the `-EFAULT` case, so the reason reaches a
 person with no change at the call site -- which is what the errno
 convention was for.
+
+## A tunable says "do not persist me" with its FILE, not with a flag
+
+A tunable is a setting whose `apply` writes a live kernel variable, and
+the vocabulary table has always said its "survives a reboot" is
+*optionally*. Building that half raised the question of how a setting
+expresses it. The answer: `struct setting` gained NOTHING. A tunable
+declares `CONFIG_PATH_RUNTIME` as its `file`, and `setting_persists()`
+is a predicate over that.
+
+**Why not a flag.** A `SETTING_F_RUNTIME` bit would be a second thing to
+keep in step with the file, and the failure mode is silent in the worst
+direction — a setting with a real path and the flag set would apply and
+never write, looking correct until a reboot. The file already had to say
+where the value goes; letting it also say *nowhere* keeps one source of
+truth. It also makes the opposite case free: a tunable that SHOULD
+survive a reboot names a real `/etc` file and needs no other change,
+which is exactly sysctl's split — runtime by default, persistence opted
+into through `sysctl.conf`.
+
+**Why a sentinel path rather than an empty one.** A setting's identity
+is `(namespace, name)`, and the namespace is derived by looking its file
+up in the config-file registry. A fileless tunable would have namespace
+`""` and be addressable only as a bare name — which the registry refuses
+when ambiguous, so `heap_debug` would work only until something else
+claimed that name. The sentinel registers as an ordinary config file
+named `kernel`, so the existing by-path lookup resolves it unchanged and
+these read as `kernel.heap_debug`. That is the word sysctl uses for the
+same kind of knob (`kernel.printk`), which is the point of choosing it.
+
+Registration refuses a tunable with no `apply`. The persisted-only
+flavour (`apply == NULL`) works because the registry writes the file
+itself; with no file AND no apply a value is neither held nor stored, so
+`set` would report success having changed nothing observable. That is a
+class of bug worth a build-time refusal rather than a runtime surprise.
+
+**They appear in System Settings, under a `Kernel` heading.** The
+alternative — hiding anything with no config file — is what sysctl vs
+GSettings does, and was rejected because this desktop's Settings app is
+GENERATED from the registry and hiding part of it would make the app
+quietly incomplete. A visible, separate heading keeps the honesty
+without putting a heap-debug toggle beside the wallpaper.
+`tools/settings_test.py` asserts both the heading and its three group
+pages, and the positive control (filing them under `Appearance`)
+reddens the heading check alone.

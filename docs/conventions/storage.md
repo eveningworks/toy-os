@@ -106,8 +106,14 @@ this the obvious way), not from how much history it accumulated.
   **setting** is read/write and persisted to `/etc`. A **tunable** is a
   SETTING whose `apply` also writes a live kernel variable -- a kind of
   setting, not a third registry. Facts live in the query registry
-  (`docs/query-design.md`, designed not built); settings and tunables
-  both live in the setting registry (`api/setting.h`).
+  (`docs/query-design.md`); settings and tunables both live in the
+  setting registry (`api/setting.h`), and all three are BUILT. A
+  tunable says "do not persist me" by naming `CONFIG_PATH_RUNTIME` as
+  its file rather than by a flag -- which also gives it the `kernel`
+  namespace, since identity is (namespace, name) and one without a
+  namespace would be addressable only bare. `setting_persists()` is
+  the predicate; a tunable with no `apply` is refused at registration,
+  because with no file either it would hold its value nowhere.
   **Do not invent a fourth word** -- "property", "metric", "reading",
   "parameter". A codebase with four names for two concepts is one nobody
   can grep. `docs/settings-and-queries.md`'s "The vocabulary" is the

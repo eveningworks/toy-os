@@ -31,6 +31,12 @@ int setting_register(const struct setting *s) {
     // picker -- a control that draws and cannot be used, which this
     // project has shipped before. Refuse at registration instead.
     if (s->type == SETTING_TYPE_ENUM && !s->choice) return 0;
+    // A TUNABLE WITH NO `apply` HOLDS ITS VALUE NOWHERE. The
+    // persisted-only flavour (apply == NULL) works because the registry
+    // writes the file itself; with no file there is nothing to write
+    // and nothing to apply, so a `set` would report success and change
+    // nothing observable. Refused here rather than discovered later.
+    if (!setting_persists(s) && !s->apply) return 0;
     if (k_strlen(s->name) >= SETTING_NAME_MAX) return 0;
     if (k_strlen(s->label) >= SETTING_LABEL_MAX) return 0;
     if (g_count >= SETTING_MAX) {
@@ -83,6 +89,16 @@ int setting_count(void) { return g_count; }
 const struct setting *setting_at(int index) {
     if (index < 0 || index >= g_count) return 0;
     return g_settings[index];
+}
+
+int setting_persists(const struct setting *s) {
+    // A setting with no file at all, and one in the RUNTIME namespace,
+    // are the same answer: nothing to write. Kept as one predicate so
+    // the five etc_config_* sites below cannot each decide differently
+    // -- which is exactly how a tunable would end up half-persisted,
+    // written by `set` and never read back at boot.
+    if (!s || !s->file || !s->file[0]) return 0;
+    return k_strcmp(s->file, CONFIG_PATH_RUNTIME) != 0;
 }
 
 const char *setting_namespace(const struct setting *s) {
@@ -194,6 +210,12 @@ enum setting_result setting_set(const char *name, const char *value) {
     cur[0] = '\0';
     if (s->get) s->get(cur, sizeof cur);
     if (cur[0] && k_strcmp(cur, value) == 0) {
+        // A TUNABLE HAS NO SECOND PLACE TO CHECK, so the live value
+        // matching IS the whole answer -- there is no file that could
+        // disagree with it. Falling through to etc_config_get() here
+        // would ask for a key in "(runtime)" and, finding nothing,
+        // re-apply on every set of an unchanged value.
+        if (!setting_persists(s)) return SETTING_SAVED;
         char on_disk[SETTING_VALUE_MAX];
         if (etc_config_get(s->file, s->name, on_disk, sizeof on_disk) &&
             k_strcmp(on_disk, value) == 0) {
@@ -208,7 +230,12 @@ enum setting_result setting_set(const char *name, const char *value) {
         // Persisted-only: nothing in this kernel applies it, so the
         // registry does the one thing it can do honestly -- write it
         // down and bump the generation so its real owner notices.
-        r = etc_config_set(s->file, s->name, value) ? SETTING_SAVED : SETTING_UNSAVED;
+        // A runtime setting with no apply would be a value nothing
+        // holds -- neither applied nor stored -- so it is refused
+        // rather than silently accepted. Registration rejects it too;
+        // this is the belt to that braces.
+        r = !setting_persists(s) ? SETTING_INVALID
+          : (etc_config_set(s->file, s->name, value) ? SETTING_SAVED : SETTING_UNSAVED);
     }
     // The generation tracks APPLIED, not SAVED: a value that took effect
     // in memory but failed to persist is still a change a cache holder
@@ -238,6 +265,10 @@ int settings_reload(void) {
     for (int i = 0; i < g_count; i++) {
         const struct setting *s = g_settings[i];
         if (!s->apply) continue; // persisted-only: no live copy to refresh
+        // A TUNABLE IS NOT RELOADED, and that is the point of it: there
+        // is no file to have been edited, and re-applying would mean
+        // inventing a value. `config reload` leaves it exactly as it is.
+        if (!setting_persists(s)) continue;
         if (!etc_config_get(s->file, s->name, value, sizeof value)) continue;
         if (!value[0]) continue;
         if (s->apply(value) == SETTING_INVALID) rejected++;
@@ -313,7 +344,14 @@ int setting_dispatch(struct setting_msg *msg) {
         // see `stored` in setting_abi.h. Left empty when the key is
         // absent, meaning the setting is at its built-in default.
         msg->stored[0] = '\0';
-        etc_config_get(s->file, s->name, msg->stored, sizeof msg->stored);
+        // A tunable has no stored form at all, so `stored` stays empty
+        // -- which is what a client already renders as "at its default,
+        // nothing written". That reads correctly here for a different
+        // reason (there is nowhere to write), and is why this needs no
+        // new ABI field to say so.
+        if (setting_persists(s)) {
+            etc_config_get(s->file, s->name, msg->stored, sizeof msg->stored);
+        }
         return 1;
     }
 
@@ -383,7 +421,10 @@ int setting_dispatch(struct setting_msg *msg) {
         // file a program has not written yet, and filtering those out
         // would leave "where do my settings go?" unanswerable until
         // after the first save -- so it is reported, not hidden.
-        msg->count = fs_exists(f->path) ? 1 : 0;
+        // The runtime namespace has no file to be there, so it reports
+        // present rather than "missing" -- a sentinel stat'd as a path
+        // would say the kernel's own tunables are not installed.
+        msg->count = config_file_is_runtime(f) ? 1 : (fs_exists(f->path) ? 1 : 0);
         msg->value[0] = '\0';
         return 1;
     }
@@ -392,8 +433,13 @@ int setting_dispatch(struct setting_msg *msg) {
         msg->name[sizeof msg->name - 1] = '\0';
         const struct setting *s = setting_find(msg->name);
         if (!s) { msg->result = SETTING_INVALID; return 1; }
-        msg->result = etc_config_unset(s->file, s->name) ? SETTING_SAVED
-                                                         : SETTING_INVALID;
+        // `unset` means "forget what was written and fall back to the
+        // default". A tunable has nothing written, so there is nothing
+        // to forget -- refused rather than reported as done, since a
+        // caller expecting the value to revert would be misled.
+        msg->result = !setting_persists(s) ? SETTING_INVALID
+                    : (etc_config_unset(s->file, s->name) ? SETTING_SAVED
+                                                          : SETTING_INVALID);
         // The generation moves because what is STORED changed, even
         // though nothing applied -- a client showing "modified on disk"
         // has to notice.
@@ -419,5 +465,6 @@ void settings_init(void) {
     keyboard_config_setting_register();
     cursor_theme_setting_register();
     target_setting_register();
+    tunables_register();
     config_files_scan();
 }

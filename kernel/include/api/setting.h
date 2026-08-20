@@ -145,6 +145,29 @@ struct setting {
     int (*apply)(const char *value);
 };
 
+// 1 if this setting has a file to persist to; 0 for a TUNABLE.
+//
+// A tunable is a setting whose `apply` writes a live kernel variable
+// and which deliberately does NOT survive a reboot -- `heap_debug`,
+// `ata_nodma`, `kstack_track`. It declares CONFIG_PATH_RUNTIME as its
+// `file`, which gives it the "kernel" namespace (so it is
+// `kernel.heap_debug`, the way sysctl spells `kernel.printk`) while
+// telling every persistence site here that there is nothing to write.
+//
+// Persistence is OPTIONAL for a tunable, not forbidden -- see
+// docs/settings-and-queries.md's vocabulary table. One that should
+// survive a reboot simply names a real file instead, and needs nothing
+// else; that is the sysctl.conf model, and it is why this is a
+// predicate on the file rather than a flag on the setting.
+//
+// A tunable MUST have an `apply`: with no apply and no file, a value
+// would be neither held nor stored. Registration refuses that.
+int setting_persists(const struct setting *s);
+
+// Registers the kernel's runtime tunables (kernel/lib/tunables.c).
+// Called from settings_init() beside the persisted ones.
+void tunables_register(void);
+
 // Adds `s` to the registry. Returns 1, or 0 if the registry is full, if
 // `s` is malformed (no name, no label, no `get`, or an ENUM with no
 // `choice`), or if that name is already registered -- a duplicate is

@@ -94,7 +94,8 @@ and job control is what a terminal on that TTY makes possible.
 - [ ] `/bin/tosh` has its own `ls`/`cat`/`echo` builtins beside the `/bin` programs -- two implementations of one command
 - [x] ~~Ring 3 cannot ask which filesystem is mounted~~ DONE 2026-08-20 -- `QUERY_FSINFO`, a provider rather than a wider `SYS_SYSINFO`
 - [ ] The About window still omits its filesystem line, though `QUERY_FSINFO` reports it now -- needs the window widened
-- [ ] Tunables: the non-persisting `struct setting`, which `heap debug`, `ata nodma` and `kstack track` all wait on
+- [x] ~~Tunables: the non-persisting `struct setting`~~ DONE 2026-08-20 -- `kernel.heap_debug`, `kernel.ata_nodma`, `kernel.kstack_track`
+- [ ] `heap`, `ata` and `kstack` still builtins -- their read halves need query classes before they can be `/bin` programs
 - [ ] An environment passed to a child
 - [ ] Ctrl-C
 - [ ] **`#!` handling**, which is the loader's job, not the shell's: `elf_load()` rejects a non-ELF file

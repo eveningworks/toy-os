@@ -24,14 +24,35 @@ obvious-looking wrong answer:
   only in what its `apply` touches. The word exists because "setting"
   alone does not tell you whether changing it does anything before the
   next boot.
+
+  **"Survives a reboot: optionally" is expressed by the FILE, not by a
+  flag.** A tunable that should not persist declares
+  `CONFIG_PATH_RUNTIME` as its `file`; one that should names a real
+  `/etc` file and needs nothing else. That is the sysctl/sysctl.conf
+  split — a runtime knob by default, persistence opted into — and it is
+  why `setting_persists()` is a predicate over the file rather than a
+  bit somebody has to remember to set.
+
+  A tunable still needs a NAMESPACE, because identity is
+  `(namespace, name)` and a bare name is refused when ambiguous. The
+  sentinel path resolves to the registered name `kernel`, so these read
+  as `kernel.heap_debug` — the same word sysctl uses for the same kind
+  of thing (`kernel.printk`).
+
+  **A tunable MUST have an `apply`.** The persisted-only flavour
+  (`apply == NULL`) works because the registry writes the file itself;
+  with no file and no apply, a value would be neither held nor stored,
+  and `set` would report success having changed nothing.
+  `setting_register()` refuses it.
 - **A fact is not a setting with the write refused.** It has no stored
   form at all, so "reset it to the default" is meaningless and
   `config diff` has nothing to compare. That is why the two live in
   separate registries rather than one with a read-only flag.
 
-> The query registry's first stage is LIVE as of 2026-08-19 — the
-> mechanism, the memory provider, `/bin/meminfo`, and `config`'s fact
-> fallback. Tunables are still designed only; see
+> Both registries are LIVE. The query registry's first stage shipped
+> 2026-08-19; **tunables shipped 2026-08-20** — `kernel.heap_debug`,
+> `kernel.ata_nodma` and `kernel.kstack_track`, the first three, each
+> the write half of a shell command. See
 > [query-design.md](query-design.md) for what is left.
 
 ## Names

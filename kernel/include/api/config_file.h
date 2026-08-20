@@ -39,6 +39,27 @@
 // keys are Name, Path and Description (etc_config.h's format).
 #define CONFIG_DESCRIPTOR_DIR "/etc/config.d"
 
+// A NAMESPACE WITH NO FILE. Registered in `path` for the config file
+// that holds kernel TUNABLES -- runtime knobs that are applied live and
+// deliberately do NOT survive a reboot (see api/setting.h's
+// setting_persists()). It is a SENTINEL, not a path: nothing opens it,
+// `config files` reports it as runtime rather than as a missing file,
+// and settings_dispatch() skips every etc_config_* call for a setting
+// naming it.
+//
+// A namespace is needed even without a file because a setting's
+// identity is (namespace, name) and the namespace IS its file's
+// registered name -- so a fileless tunable would be addressable only as
+// a bare name, and a bare name is refused when ambiguous. The namespace
+// is "kernel", which is the word sysctl uses for exactly these
+// (`kernel.printk`), and the reason this is a sentinel path rather than
+// a fifth field on struct config_file: the lookup that resolves a
+// namespace is by PATH, and it keeps working unchanged.
+#define CONFIG_PATH_RUNTIME "(runtime)"
+
+// The registered name of that namespace -- `kernel.heap_debug`.
+#define CONFIG_NAME_RUNTIME "kernel"
+
 struct config_file {
     char name[CONFIG_NAME_MAX]; // how `config show <name>` addresses it
     char path[CONFIG_PATH_MAX];
@@ -79,6 +100,12 @@ const struct config_file *config_file_find(const char *name);
 // NULL for a path nothing has registered, which is why a setting in an
 // unregistered file has no namespace and can only be addressed bare.
 const struct config_file *config_file_find_by_path(const char *path);
+
+// 1 if `f` names the runtime namespace -- no file, nothing persisted.
+// A predicate rather than a string compare at each site, because
+// "is this a file?" is asked by the listing, by the settings dispatch
+// and by anything that would otherwise stat a sentinel.
+int config_file_is_runtime(const struct config_file *f);
 
 // Registers the kernel's own config files and then scans
 // CONFIG_DESCRIPTOR_DIR for the rest. Called from settings_init(), and
