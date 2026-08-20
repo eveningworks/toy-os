@@ -791,3 +791,94 @@ NULL and every path takes the existing direct-to-framebuffer fallback.
 `DISPLAY_MAX_W/H` is 3840x2160 now, and it is a policy rather than a
 mirror of an array: past that the numbers stop being sensible for a
 machine this OS boots on.
+
+---
+
+## A TrueType rasterizer in the kernel, with the baked font kept as the fallback
+
+`tools/genttf.py` has always rendered JetBrains Mono offline into
+`kernel/drivers/font_ttf.c` -- eight sizes, 101 glyphs, decided at build
+time. Loading a real `.ttf` from `/usr/share/fonts` and rasterizing it
+on demand replaces where glyphs COME FROM, and the interesting decisions
+are all about where that code runs and what it is allowed to touch.
+
+**Ring 0, deliberately, and this is the one place toy-os copies Windows
+rather than Linux.** Linux has no font rasterizer in the kernel at all:
+`fbcon` uses baked bitmap fonts, FreeType and fontconfig are userspace,
+and under X11 and Wayland the CLIENT rasterizes -- a compositor never
+opens a font file. Windows put font parsing in `win32k.sys` (GDI), spent
+a decade of remote-code-execution CVEs on it, and moved it out to a
+sandboxed user-mode font driver (`fontdrvhost.exe`) in Windows 10. That
+history is not an argument for doing it in ring 0; two local facts are.
+The console needs glyphs before any process exists -- including on the
+panic path -- so a userspace font service cannot serve the whole
+machine. And `WIN_REQ_FONT` exists precisely so every GUI client shares
+ONE font with the desktop; a client-side rasterizer would put a copy of
+the font in every process and let each one drift.
+
+So the mitigation had to go in the parser instead. `kernel/lib/ttf.c`
+touches the file buffer only through `rd_u8`/`rd_u16`/`rd_i16`/`rd_u32`,
+each of which bounds-checks against the file length and answers 0 rather
+than reading past it; there is no pointer arithmetic into the file
+anywhere in it. Per-glyph complexity is capped (points, contours, edges)
+and a glyph past a cap renders BLANK rather than partially -- a half-
+decoded outline fills wrongly, and a wrong glyph is worse than a missing
+one. Composite recursion is depth-limited, because a composite cycle is
+a hostile font rather than a deep one. Moving the parse to ring 3 is a
+roadmap item, and what it needs is a shared-memory mechanism that does
+not exist yet.
+
+**Fixed point, because there is no floating point here.** `-mno-sse` is
+deliberate (see `fpu.h`), so outlines are scaled and flattened in Q16.16
+through `fixed.h`. A font unit is an `int16_t` and `unitsPerEm` is
+1000-2048, so `fu << 16` fits in an `int32_t` with nothing to spare and
+everything past that goes through `fx_mul`'s `int64_t`. Anti-aliasing is
+four sub-scanlines per pixel row with exact horizontal span coverage:
+one is visibly aliased at 8px, eight is indistinguishable from four.
+Filling is NONZERO winding, not even-odd -- with even-odd an `o` comes
+out solid, which is recognisable enough in a screenshot to pass an
+eyeball check, and is therefore asserted numerically in a KTEST.
+
+**No allocation, so one implementation serves both rings.** Everything
+transient lives in a caller-supplied `struct ttf_scratch` (~69 KB, far
+past either ring's stack budget), which is what lets `ttf.c` be compiled
+a second time into `libuapp.a` under the repo's shared-source rule
+(`geom.c`, `klineedit.c`, `heap_core.c`). `/tests/ttf_test` is the real
+second caller, and it exists for the reason `klineedit_test` does: the
+KTESTs would pass whether or not a byte of this were reachable from ring
+3.
+
+**An atlas comes from the frame allocator and is never freed.** Two
+separate reasons, both about the mapping. `WIN_REQ_FONT` maps the active
+atlas read-only into every client and a mapping is page-granular, so an
+atlas allocated with `kmalloc` would hand every client a read-only
+window onto whatever else shared its pages -- `pmm_alloc_contiguous()`
+gives it pages of its own. And clients hold that mapping for as long as
+they live, with no way for the kernel to ask them to let go, so freeing
+an atlas on a font-size change would point the compositor at reallocated
+memory: the same class of bug the poison-page fix (978ebf7) exists to
+prevent. Atlases are therefore cached and retained, bounded by entry
+count and total bytes, and a build past either bound is REFUSED (the
+current size keeps drawing) rather than evicting something that is being
+read.
+
+**The cell is measured with `genttf.py`'s formula, not the font's raw
+metrics.** Layout everywhere in this OS is derived from `gfx_char_w()`
+and `gfx_char_h()`, so a runtime face at 14px producing a visibly
+different cell from the baked 14px would reflow every window on the
+machine the moment a face was selected. The raw `hhea` ascent and
+descent fit every glyph with no clipping and produce a taller, looser
+cell than a terminal font has; the same 0.89/0.6 tightening the baked
+sizes were generated with keeps the two within a pixel, at the cost of
+the same slight accent and descender clipping every fixed-cell terminal
+font accepts.
+
+**A face is named by its filename, and the baked font is not a face.**
+`dejavu-sans-mono.ttf` is `dejavu-sans-mono`, the same convention cursor
+themes use for directories -- so listing what is available is a
+directory listing rather than something that must open every file and
+parse its internal `name` table. `builtin` names the absence of a face,
+so "go back to the kernel's own glyphs" is a value the setting can hold
+and round-trip rather than a missing key. A failed select leaves the
+previous face active: dropping to the baked font because of a typo would
+lose the user's font for the wrong reason.

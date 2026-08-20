@@ -18,6 +18,7 @@
 #include "timer.h"     // pit_ticks, rtc_read
 #include "tz.h"        // rtc_read_local, timezone selection (see kernel/lib/tz.c)
 #include "font_config.h" // font size persistence (see kernel/lib/font_config.c)
+#include "font_face.h"   // fonts loaded from /usr/share/fonts at runtime
 #include "cursor_config.h" // console cursor-style persistence (see kernel/lib/cursor_config.c)
 #include "etc_config.h" // shared /etc/*.conf name=value reader/writer (see kernel/lib/etc_config.c) -- for an app's own /etc/<name>.conf, not just the kernel-internal settings above that already wrap it
 #include "fs.h"        // the filesystem (backend-agnostic API -- see fs.h's top comment)

@@ -125,6 +125,15 @@ int ugfx_font_init(void);
 // Font metrics, valid once ugfx_font_init() has succeeded. Both are 0
 // before that, which is what makes a forgotten init show up as text
 // that doesn't draw rather than as a wild pointer.
+// How far the pen moves after drawing one character: the cell width on
+// the baked font or any monospace face, genuinely per-glyph on a
+// proportional one (see ugfx_font_init(), which picks the advance table
+// up out of the same mapping the glyphs arrive in). ugfx_text_width()
+// and ugfx_text_fit_chars() are both built on it, which is why a client
+// that asks THEM rather than multiplying by ugfx_char_w() needed no
+// change at all when proportional faces became loadable.
+int ugfx_char_advance(char c);
+
 int ugfx_char_w(void);
 int ugfx_char_h(void);
 

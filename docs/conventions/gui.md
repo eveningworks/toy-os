@@ -19,6 +19,55 @@ this the obvious way), not from how much history it accumulated.
 
 ---
 
+- **MEASURE TEXT, NEVER MULTIPLY: `gfx_char_advance()` in the kernel,
+  `ugfx_char_advance()` in ring 3.** A face loaded from
+  `/usr/share/fonts` may be PROPORTIONAL, so `k_strlen(s) *
+  gfx_char_w()` is no longer a width -- it is the width of the widest
+  possible string of that length. Everything that measures or steps
+  through text is built on the advance:
+  `gfx_text_width()`/`gfx_text_fit_chars()` and their `ugfx` peers, and
+  the string-drawing functions. **The trap is that the wrong version
+  still LOOKS right on the default face**, because `dejavu-sans-mono`
+  is monospace and every advance equals the cell -- so a call site that
+  multiplies is invisible until somebody selects `liberation-sans`, at
+  which point its labels overlap. `tools/font_test.py`'s one
+  load-bearing check exists for exactly this.
+
+  Two related facts. `gfx_draw_char()` still paints the WHOLE cell,
+  background included, because the console depends on it (a character
+  replacing a wider one must leave nothing behind); string drawing
+  paints only the advance. And the CONSOLE stays fixed-cell on purpose
+  -- a terminal is monospace by definition -- so a proportional face
+  gets a cell as wide as its widest advance there.
+
+- **THE FONT CAN CHANGE UNDER A RUNNING CLIENT, AND `WIN_EV_FONT` IS
+  HOW IT FINDS OUT.** A client maps the font once, at
+  `ugfx_font_init()`, and caches the cell size; a face or size change
+  makes every one of those numbers stale. The server broadcasts
+  `WIN_EV_FONT` to every window AND to the compositor, and `uapp`
+  handles it for an app that has never heard of fonts (re-map, re-run
+  the layout, repaint) exactly as it handles `WIN_EV_RESIZE`. **The
+  trap, which cost a debugging cycle: the compositor owns no window**,
+  so a broadcast that only walks the window table reaches every client
+  and misses the process that draws the chrome, the taskbar and the
+  icons -- and the symptom is indistinguishable from the event never
+  being delivered at all. `tell_compositor()` is a separate call, on
+  purpose.
+
+- **A FONT FACE IS NAMED BY ITS FILENAME, AND `builtin` IS NOT A
+  FACE.** `/usr/share/fonts/dejavu-sans-mono.ttf` is the face
+  `dejavu-sans-mono`, the same convention cursor themes use for
+  directories, so listing what is available is a directory listing and
+  nothing parses a font's internal `name` table. `builtin` names the
+  ABSENCE of a face -- the glyphs `tools/genttf.py` baked into the
+  kernel image -- so "go back to the built-in font" is a value the
+  setting can hold and round-trip rather than a missing key. **The
+  baked font is the guaranteed fallback and is not optional**: it is
+  what draws before the filesystem is mounted, on the panic path, and
+  whenever a face is missing or malformed. A console that could not
+  draw text until a disk font loaded could not report why the disk font
+  did not load.
+
 - **`WIN_CLIENT_MAX_W/H` TRACKS THE DISPLAY CEILING, AND A SCREEN BIGGER
   THAN IT BREAKS MAXIMIZE SILENTLY.** `abi/win_proto.h`'s
   `WIN_CLIENT_MAX_W/H` is the largest pixel buffer the window server

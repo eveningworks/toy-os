@@ -12,6 +12,7 @@
 #include "klog.h"
 #include "string.h"
 #include "font_ttf.h" // the glyph tables WIN_REQ_FONT shares out
+#include "font_face.h" // ...or the runtime atlas, when a face is loaded
 #include "gfx.h"      // gfx_font_size() -- which variant is active
 #include "win_surface.h" // the compositor's framebuffer grant (M41 stage 4a)
 #include "timer.h"       // pit_ticks() -- the ring-3 debug leg's deadline
@@ -525,15 +526,41 @@ static int create_window(int pid, uint64_t pml4, int w, int h, int x, int y,
 static int map_font(int pid, struct win_request_msg *req) {
     (void)pid;
 
+    // WHICHEVER FONT THE DESKTOP IS ACTUALLY DRAWING WITH -- a face
+    // rasterized from /usr/share/fonts if one is selected, the baked
+    // tables otherwise. Clients get the same glyphs either way, which is
+    // the whole reason this request exists (see WIN_REQ_FONT in
+    // abi/win_proto.h): a client carrying its own copy would keep
+    // rendering the old face after `fontface` changed it.
+    const struct font_atlas *atlas = font_face_atlas();
     const struct font_ttf_variant *fv = &font_ttf_variants[gfx_font_size()];
-    uint64_t phys = (uint64_t)(uintptr_t)fv->glyphs;
-    uint64_t bytes = (uint64_t)FONT_TTF_GLYPH_COUNT * (uint64_t)fv->w * (uint64_t)fv->h;
+
+    uint64_t phys, bytes, adv_off;
+    int cw, ch, count;
+    if (atlas) {
+        // A runtime atlas is a page-aligned pmm run holding the glyph
+        // data and the advance table and NOTHING ELSE -- which is why
+        // font_face.c allocates it from the frame allocator rather than
+        // from kmalloc. A page-granular mapping of a kmalloc'd atlas
+        // would hand every client a read-only window onto whatever else
+        // shared its pages.
+        phys = atlas->phys;
+        bytes = atlas->bytes;
+        cw = atlas->cell_w; ch = atlas->cell_h; count = atlas->count;
+        adv_off = (uint64_t)count * (uint64_t)cw * (uint64_t)ch;
+    } else {
+        phys = (uint64_t)(uintptr_t)fv->glyphs;
+        cw = fv->w; ch = fv->h; count = FONT_TTF_GLYPH_COUNT;
+        bytes = (uint64_t)count * (uint64_t)cw * (uint64_t)ch;
+        adv_off = 0; // the baked tables carry no advances: every cell is cw wide
+    }
 
     // The glyph tables are ordinary kernel .rodata, which this kernel
     // identity-maps -- so their physical address IS the pointer we
     // already hold, and mapping them to a user vaddr is just pointing
     // more PTEs at the same frames. No copy, one instance in memory
-    // however many clients ask.
+    // however many clients ask. The same is true of an atlas, whose
+    // frames come from the identity-mapped physical allocator.
     uint64_t page_base = phys & ~0xFFFULL;
     uint64_t offset_in_page = phys - page_base;
     uint64_t pages = (offset_in_page + bytes + 4095) / 4096;
@@ -544,10 +571,11 @@ static int map_font(int pid, struct win_request_msg *req) {
         // writable mapping would let any client scribble on kernel
         // .rodata. executable = 0 for the same no-surprises reason
         // every other user mapping here is NX.
-        // BORROWED: pages of the KERNEL IMAGE. Nothing here ever frees
-        // them, and an owning mapping made an exiting client return
-        // kernel .rodata to the physical allocator -- measured, two
-        // frames per boot, on the first GUI app to close.
+        // BORROWED: pages of the KERNEL IMAGE, or of an atlas the font
+        // cache owns forever. Nothing here ever frees them, and an
+        // owning mapping made an exiting client return kernel .rodata to
+        // the physical allocator -- measured, two frames per boot, on
+        // the first GUI app to close.
         if (!vmm_map_user_borrowed(pml4, WIN_FONT_VADDR + i * 4096,
                                     page_base + i * 4096, 0, 0, VMM_MT_NORMAL)) {
             for (uint64_t j = 0; j < i; j++) {
@@ -561,10 +589,14 @@ static int map_font(int pid, struct win_request_msg *req) {
     // The client sees the mapping at WIN_FONT_VADDR + the same offset
     // the data has within its first page, so glyph 0 starts exactly
     // there. Reported as `d`'s companion rather than assumed.
-    req->a = fv->w;
-    req->b = fv->h;
-    req->c = FONT_TTF_GLYPH_COUNT;
+    req->a = cw;
+    req->b = ch;
+    req->c = count;
     req->d = (int32_t)offset_in_page;
+    // `mods` carries the advance table's offset within the mapping, or 0
+    // when there is none. 0 is unambiguous because a table can never
+    // START the mapping -- the glyph data does.
+    req->mods = adv_off ? (uint32_t)(offset_in_page + adv_off) : 0;
     return 1;
 }
 
@@ -1147,6 +1179,32 @@ int win_server_request(int pid, struct win_request_msg *req) {
         return map_font(pid, req);
     default:
         return -1;
+    }
+}
+
+// Tells every window the font moved. See WIN_EV_FONT in
+// abi/win_proto.h for why this is a notification rather than the server
+// doing anything about it, and font_config.c for the one place that
+// calls it.
+void win_server_font_changed(void) {
+    // THE COMPOSITOR FIRST, AND SEPARATELY -- it is not in windows[][].
+    // It owns no window of its own (it draws the screen), so a broadcast
+    // that only walked the window table reached every client and missed
+    // the one process that draws the chrome, the taskbar and the icons.
+    // That is exactly how the first version of this looked like the
+    // event was never delivered at all.
+    tell_compositor(WIN_EV_FONT, 0, 0, 0, 0);
+
+    for (int p = 0; p < WIN_SERVER_MAX_PIDS; p++) {
+        for (int i = 0; i < WIN_CLIENT_MAX; i++) {
+            struct client_window *cw = &windows[p][i];
+            if (!cw->used) continue;
+            struct win_event ev;
+            k_memset(&ev, 0, sizeof ev);
+            ev.type = WIN_EV_FONT;
+            ev.window = cw->id;
+            win_events_push(cw->pid, &ev);
+        }
     }
 }
 

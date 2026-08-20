@@ -148,6 +148,30 @@
 #define WIN_EV_CLIENT_CLOSE     23 // a: pid, window unused. Close every
                                     // window this pid owns -- the
                                     // desktop's own "quit that app".
+#define WIN_EV_FONT      26 // No payload. THE FONT CHANGED -- a different
+                           // face, or a different size. Call
+                           // ugfx_font_init() again (the mapping is at a
+                           // fixed address and re-mapping over it is a
+                           // no-op in effect, so this needs no unmap),
+                           // re-derive any layout measured from the cell,
+                           // and repaint.
+                           //
+                           // Broadcast to EVERY window, the compositor's
+                           // included, because font size is the one
+                           // setting this whole UI is derived from --
+                           // window chrome, the taskbar, icon pitch and
+                           // every widget's natural size all come out of
+                           // gfx_char_w()/gfx_char_h(). Without it a
+                           // client keeps the metrics it mapped at
+                           // startup and the Appearance setting appears
+                           // to do nothing until the desktop restarts.
+                           //
+                           // This is what Wayland's wl_output scale
+                           // change and X11's XSETTINGS notification are
+                           // for; the shape is deliberately theirs --
+                           // the server does not re-lay-out anybody, it
+                           // says the metrics moved and each client
+                           // decides what that means for it.
 #define WIN_EV_CLIENT_DEBUG     25 // No payload. A `gui` command is
                                     // waiting; fetch it with
                                     // WIN_REQ_DEBUG_TAKE and answer with

@@ -171,6 +171,12 @@ int win_server_active(void);
 // finally ran with one registered.
 int win_server_any(void);
 
+// Broadcasts WIN_EV_FONT to every window: the active face or size has
+// changed and every client's cached metrics are stale. Called from
+// font_config.c, which is the one place a font change is applied for the
+// machine as a whole -- see WIN_EV_FONT in abi/win_proto.h.
+void win_server_font_changed(void);
+
 // The registered presentation layer, or NULL. For KTESTs, which swap in
 // a stub and must put the live desktop's back -- the suite runs inside
 // the LIVE kernel, so a test that leaves a stub registered takes the

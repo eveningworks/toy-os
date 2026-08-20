@@ -10,6 +10,7 @@
 #include "ansi.h"
 #include "io.h"
 #include "gfx.h"
+#include "win_server.h" // win_server_any() -- is anything else painting the screen?
 #include "timer.h"
 #include "klog.h"
 #include "knum.h"
@@ -715,7 +716,14 @@ void vga_reflow(void) {
     if (!fb_mode) return; // legacy 80x25 text mode has no variable cell size
     console_cols = (size_t)gfx_width() / CELL_W;
     console_rows = (size_t)gfx_height() / CELL_H;
-    fb_clear();
+    // THE CLEAR IS SKIPPED WHILE A COMPOSITOR OWNS THE SCREEN. Recomputing
+    // the geometry is always right; painting is not -- fb_clear() ends in
+    // vga_present(), which blits the console's whole buffer over whatever
+    // the desktop has on screen. `fontsize` at a running desktop wiped the
+    // top two thirds of it, and the console the user cannot see is the one
+    // that does not need clearing. Same reasoning as the suspended keyboard
+    // reader (win_server_set_compositor()); see docs/conventions/gui.md.
+    if (!win_server_any()) fb_clear();
 }
 
 uint32_t vga_rows(void) {

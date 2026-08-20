@@ -92,6 +92,13 @@ TESTS = [
     # ring 3 could link a byte of it.
     ("klineedit_test", 0,
      ["klineedit_test: all checks passed"], ["FAIL"]),
+    # The TrueType rasterizer's SECOND compilation, and the same gap
+    # klineedit_test covers: kernel/lib/ttf.c has KTESTs, and every one
+    # of them would pass whether or not ring 3 could link a byte of it.
+    # SKIPS ITSELF on an image built with no fonts, so it must not
+    # require a pass line that only appears when there is a font.
+    ("ttf_test", 0,
+     ["ttf_test:"], ["FAIL"]),
     ("newsyscalls_test", 0,
      ["newsyscalls_test: all phases passed"], ["FAILED"]),
     ("file_test", 0,

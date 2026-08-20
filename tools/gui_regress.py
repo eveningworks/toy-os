@@ -122,6 +122,7 @@ TOOLS = [
     ("taskmgr", "taskmgr_test.py", "the table widget, resize reflow, ending a process"),
     ("singleinst", "single_instance_test.py", "one copy of an app, and relaunch raises it"),
     ("settings", "settings_test.py", "the settings registry, in ring 3"),
+    ("font", "font_test.py", "runtime TTF faces, live switching, proportional widths"),
     ("idle", "idle_desktop_test.py", "nothing paints over an idle desktop"),
 ]
 
@@ -148,6 +149,7 @@ COST_S = {
     # cost has tripled would quietly become the straggler.
     "forcequit": 71,   # waits out real ping timeouts; inherently slow
     "idle": 10,        # eight captures a third of a second apart
+    "font": 19,        # two face switches and a size change, each settled
     "notepad": 37,
     "menubar": 32,
     "gfxdemo": 24,

@@ -29,8 +29,25 @@ bitmaps baked from JetBrains Mono (Regular), which is licensed under
 the SIL Open Font License, Version 1.1, not the MIT License above.
 The full OFL text is included at tools/OFL.txt and must accompany any
 redistribution of that font data (or substantial rendered derivatives
-of it), per the OFL's own terms. The MIT License above governs the
-rest of this repository (all original toy-os source code).
+of it), per the OFL's own terms.
+
+data/fonts/ contains two complete third-party font files, shipped
+verbatim onto the disk image as /usr/share/fonts and loaded at runtime
+(see kernel/drivers/font_face.c). Neither is covered by the MIT License
+above:
+
+  dejavu-sans-mono.ttf  DejaVu Sans Mono, under the Bitstream Vera
+                        Fonts Copyright and the Arev Fonts Copyright.
+                        Full text: data/fonts/LICENSE-DejaVu.txt.
+
+  liberation-sans.ttf   Liberation Sans, under the SIL Open Font
+                        License, Version 1.1. Full text:
+                        data/fonts/LICENSE-Liberation.txt.
+
+Both license files are copied onto the disk image alongside the fonts
+themselves, because both licenses require the notice to travel with the
+font. The MIT License above governs the rest of this repository (all
+original toy-os source code).
 
 ---
 

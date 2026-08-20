@@ -109,8 +109,9 @@ trips them before it knows to look anything up.
   <-> strings), `kfmt.h` (`k_snprintf`, `vga_printf`/`klog_printf`),
   `kpath.h` (`k_path_join`/`_normalize`/`_resolve`/`_basename`/
   `_dirname`), `fixed.h` (Q16.16 and trig), `geom.h` (2D rasterising
-  plus a small 3D section), `rubberband.h` (band + selection set), and
-  `krandom.h`. Six things about them:
+  plus a small 3D section), `rubberband.h` (band + selection set),
+  `ttf.h` (TrueType parsing and glyph rasterising), and `krandom.h`.
+  Seven things about them:
   - **`kfmt.h` is one header but TWO files**: `kfmt.c` is freestanding
     and shared with ring 3, the kernel sinks live in `kfmt_print.c`; a
     kernel include in the former silently takes `snprintf` away from
@@ -129,6 +130,15 @@ trips them before it knows to look anything up.
     QEMU guest above TSC jitter, and why it SEEDS rather than answering
     each draw. The stack canary is randomized from it at boot -- read
     `kernel/lib/stack_protector.c`'s comment before moving that call.
+  - **`ttf.h` PARSES UNTRUSTED INPUT, and every read in `ttf.c` is
+    bounds-checked for that reason** -- a font file is attacker-shaped
+    data being parsed in ring 0, which is the surface Windows spent a
+    decade of GDI CVEs on before moving it to a sandboxed user-mode host
+    (`docs/decisions/drivers.md` says why toy-os differs anyway). It
+    allocates NOTHING: the ~69 KB of working state is a caller-supplied
+    `struct ttf_scratch`, which is what lets one implementation serve
+    ring 0, ring 3 and a test. Glyph coverage comes out in exactly the
+    layout `font_ttf.h`'s baked tables use, so an atlas is a drop-in.
   - **Draw through the `gfx_draw_line()`/`gfx_draw_circle()`/
     `gfx_fill_ellipse()` wrappers in the kernel and `uui_canvas` in
     ring 3**, not `geom_*` directly (both handle the plot callback; the
@@ -505,6 +515,9 @@ whenever a headline here tells you something you did not already know.
 
 `docs/conventions/gui.md`
 
+- **MEASURE TEXT, NEVER MULTIPLY: `gfx_char_advance()` / `ugfx_char_advance()`.**
+- **THE FONT CAN CHANGE UNDER A RUNNING CLIENT, AND `WIN_EV_FONT` IS HOW IT FINDS OUT.**
+- **A FONT FACE IS NAMED BY ITS FILENAME, AND `builtin` IS NOT A FACE.**
 - **`WIN_CLIENT_MAX_W/H` TRACKS THE DISPLAY CEILING, AND A SCREEN BIGGER THAN IT BREAKS MAXIMIZE SILENTLY.**
 - **A DESKTOP-SIZED WINDOW IS "MAXIMIZED", AND THERE IS NO FULLSCREEN STATE.**
 - **`-vga virtio` IS A REAL DISPLAY DRIVER, and nothing else boots it**
@@ -916,6 +929,7 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
 - **GUI tools**, all run by `gui_regress.py` -- `blank_window_test.py`,
   `calculator_client_test.py`, `compositor_test.py`,
   `compositor_death_test.py`, `settings_test.py`, `crashtest_test.py`,
+  `font_test.py`,
   `cursor_theme_test.py`, `desktop_entries_test.py`, `dialog_test.py`,
   `forcequit_test.py`, `gfxdemo_test.py`, `idle_desktop_test.py`,
   `menubar_test.py`, `notepad_client_test.py`, `sched_gui_test.py`,

@@ -19,6 +19,9 @@ static inline int64_t syscall2(uint64_t num, uint64_t arg1, uint64_t arg2) {
 // a forgotten init draw nothing rather than dereference a wild pointer
 // -- see ugfx.h.
 static const unsigned char *g_glyphs = 0;
+// Per-glyph advances, or NULL when the desktop's font is the baked one
+// (every cell is g_char_w wide). See ugfx_char_advance().
+static const unsigned char *g_advances = 0;
 static int g_char_w = 0;
 static int g_char_h = 0;
 static int g_glyph_count = 0;
@@ -172,6 +175,16 @@ void ugfx_draw_rect(struct ugfx_surface *s, int x, int y, int w, int h, uint32_t
     ugfx_fill_rect(s, x + w - 1, y, 1, h, color);
 }
 
+// Character -> glyph slot. The shared table is ASCII 32..126 laid out
+// contiguously from index 0; anything outside that draws as a space,
+// which is the quiet-degradation choice (a client rendering a stray
+// byte should look wrong, not read out of bounds).
+static int glyph_index(unsigned char c) {
+    int idx = (int)c - WIN_FONT_FIRST_CHAR;
+    if (idx < 0 || idx >= g_glyph_count) return 0;
+    return idx;
+}
+
 int ugfx_font_init(void) {
     struct win_request_msg req;
     for (unsigned i = 0; i < sizeof(req); i++) ((uint8_t *)&req)[i] = 0;
@@ -186,7 +199,28 @@ int ugfx_font_init(void) {
     // not start on a page boundary. Ignoring `d` here would shift every
     // glyph by a few bytes and render convincing-looking garbage.
     g_glyphs = (const unsigned char *)(uintptr_t)(WIN_FONT_VADDR + (uint32_t)req.d);
+    // `mods` is the advance table's offset in the same mapping, 0 when
+    // the font has none. A proportional face loaded from
+    // /usr/share/fonts has one; the baked tables never do.
+    g_advances = req.mods
+        ? (const unsigned char *)(uintptr_t)(WIN_FONT_VADDR + (uint32_t)req.mods)
+        : 0;
     return 1;
+}
+
+// How far the pen moves after drawing `c`.
+//
+// The ring-3 half of gfx_char_advance(), and the reason every
+// measurement below stopped multiplying by ugfx_char_w(): with the
+// desktop on a proportional face an 'i' is genuinely narrower than a
+// 'W', and a client that assumed a fixed cell would draw its labels on
+// top of each other. Falls back to the cell width, so a client on the
+// baked font behaves exactly as it always did.
+int ugfx_char_advance(char c) {
+    if (!g_advances) return g_char_w;
+    int idx = glyph_index((unsigned char)c);
+    int adv = g_advances[idx];
+    return adv > 0 ? adv : g_char_w;
 }
 
 int ugfx_char_w(void) { return g_char_w; }
@@ -194,15 +228,20 @@ int ugfx_char_h(void) { return g_char_h; }
 
 int ugfx_text_width(const char *str) {
     if (!str) return 0;
-    int n = 0;
-    while (str[n]) n++;
-    return n * g_char_w;
+    int w = 0;
+    for (int n = 0; str[n]; n++) w += ugfx_char_advance(str[n]);
+    return w;
 }
 
 int ugfx_text_fit_chars(const char *str, int max_w) {
-    if (!str || g_char_w <= 0 || max_w < g_char_w) return 0;
+    if (!str || g_char_w <= 0) return 0;
     int n = 0, used = 0;
-    while (str[n] && used + g_char_w <= max_w) { used += g_char_w; n++; }
+    while (str[n]) {
+        int adv = ugfx_char_advance(str[n]);
+        if (used + adv > max_w) break;
+        used += adv;
+        n++;
+    }
     return n;
 }
 
@@ -214,16 +253,6 @@ int ugfx_text_next(const char *str, int i) {
 int ugfx_text_prev(const char *str, int i) {
     (void)str;
     return i > 0 ? i - 1 : 0;
-}
-
-// Character -> glyph slot. The shared table is ASCII 32..126 laid out
-// contiguously from index 0; anything outside that draws as a space,
-// which is the quiet-degradation choice (a client rendering a stray
-// byte should look wrong, not read out of bounds).
-static int glyph_index(unsigned char c) {
-    int idx = (int)c - WIN_FONT_FIRST_CHAR;
-    if (idx < 0 || idx >= g_glyph_count) return 0;
-    return idx;
 }
 
 // Blends `fg` over `bg` by `alpha` (0..255), per channel. The glyph
@@ -268,10 +297,11 @@ void ugfx_draw_char(struct ugfx_surface *s, int x, int y, char c,
 void ugfx_draw_string(struct ugfx_surface *s, int x, int y,
                        const char *str, uint32_t color, uint32_t bg) {
     if (!s || !str) return;
+    int gx = x;
     for (int n = 0; str[n]; n++) {
-        int gx = x + n * g_char_w;
         if (gx >= s->w) break; // the rest is off the right edge
         ugfx_draw_char(s, gx, y, str[n], color, bg);
+        gx += ugfx_char_advance(str[n]);
     }
 }
 
@@ -282,7 +312,7 @@ int ugfx_draw_string_clipped(struct ugfx_surface *s, int x, int y, int max_w,
     // How many WHOLE glyphs fit. Whole glyphs rather than a pixel clip:
     // half a letter reads as a rendering bug, while a short label just
     // reads as a short label.
-    int fits = max_w / (g_char_w > 0 ? g_char_w : 1);
+    int fits = ugfx_text_fit_chars(str, max_w);
     int len = 0;
     while (str[len]) len++;
 
@@ -295,11 +325,13 @@ int ugfx_draw_string_clipped(struct ugfx_surface *s, int x, int y, int max_w,
     // copy of the string because there is nowhere to put one (a client
     // has no allocator), and a fixed scratch buffer would just move the
     // length limit somewhere less obvious.
+    int gx = x;
     for (int n = 0; n < fits; n++) {
         char one[2];
         one[0] = str[n];
         one[1] = '\0';
-        ugfx_draw_string(s, x + n * g_char_w, y, one, color, bg);
+        ugfx_draw_string(s, gx, y, one, color, bg);
+        gx += ugfx_char_advance(str[n]);
     }
     return 0;
 }

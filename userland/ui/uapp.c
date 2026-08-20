@@ -209,6 +209,19 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
         if (d->on_tick && d->on_tick(a)) a->dirty = 1;
         break;
 
+    case WIN_EV_FONT:
+        // The desktop's font changed. Re-map it (the mapping is at a
+        // fixed address, so this writes over itself and needs no unmap),
+        // re-run the layout because every widget's natural size is
+        // measured from the cell, and repaint. An app gets all of this
+        // without knowing fonts exist -- the same deal WIN_EV_RESIZE
+        // gives it, and for the same reason: an app that has never heard
+        // of the thing should still behave correctly when it happens.
+        ugfx_font_init();
+        if (d->layout) uui_layout_run(d->layout, 0, 0, a->w, a->h);
+        a->dirty = 1;
+        break;
+
     case WIN_EV_CLOSE:
         // The default ACCEPTS. An app that wants to refuse says so;
         // an app that has never heard of closing still closes.

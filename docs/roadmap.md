@@ -450,14 +450,17 @@ The desktop is in ring 3 already. These are what it still lacks.
 ### Runtime font loading & text metrics
 **Needs:** Runtime + interop -- loading a font at runtime means allocating for it.
 
-- [ ] Load a TTF from disk at runtime, rather than only the glyphs `tools/genttf.py` bakes in at build time
-- [ ] A real glyph cache, since rasterizing per frame is not viable
-- [ ] Per-glyph advance widths -- the first step away from assuming every character is one fixed cell wide
+- [x] ~~Load a TTF from disk at runtime, not only the glyphs `tools/genttf.py` bakes in~~ DONE 2026-08-20 -- `kernel/lib/ttf.c`
+- [x] ~~A real glyph cache, since rasterizing per frame is not viable~~ DONE 2026-08-20 -- an atlas per (face, size)
+- [x] ~~Per-glyph advance widths, instead of one fixed cell per character~~ DONE 2026-08-20 -- `gfx_char_advance()`/`ugfx_char_advance()`
 - [ ] Kerning pairs from the font's own tables
-- [ ] `gfx_text_width()` that measures rather than multiplies
-- [ ] Multiple faces and sizes live at once, selected per widget
-- [ ] A `/usr/share/fonts` convention and a `fonts` command to list what loaded
-- [ ] Keep the baked font as the guaranteed fallback -- the console must still work when no disk font is present
+- [x] ~~`gfx_text_width()` that measures rather than multiplies~~ DONE 2026-08-20
+- [ ] Multiple faces live at once, selected per widget -- one face is active machine-wide today
+- [x] ~~A `/usr/share/fonts` convention and a command to list what loaded~~ DONE 2026-08-20 -- `fontface`
+- [x] ~~Keep the baked font as the guaranteed fallback, so the console works with no disk font~~ DONE 2026-08-20
+- [ ] Move font PARSING out of ring 0, once an atlas can be handed across -- what Windows 10 did with `fontdrvhost`
+- [ ] Apply a composite glyph's 2x2 transform instead of skipping it (accents are pure translations, so nothing shipped needs it yet)
+- [ ] Hinting -- glyphs are rendered unhinted, which is visible below about 10px
 - [ ] Note the boundary: complex-script shaping
 
 ### Desktop visual polish

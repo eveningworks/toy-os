@@ -468,6 +468,7 @@ LIBUAPP_OBJS = $(patsubst userland/%.c,$(BUILD)/userland/%.o,$(LIBUAPP_SRCS)) \
                $(BUILD)/userland/shared/kfmt.o \
                $(BUILD)/userland/shared/heap_core.o \
                $(BUILD)/userland/shared/klineedit.o \
+               $(BUILD)/userland/shared/ttf.o \
                $(BUILD)/userland/shared/klineedit_cases.o
 LIBUAPP      = $(BUILD)/userland/libuapp.a
 
@@ -744,6 +745,16 @@ seed: $(DISK_IMG) $(USERLAND_ELVES)
 	    mkdir -p $(SEED_DIR)/sync/usr/share/cursors/$$(basename $$t); \
 	    cp $$t* $(SEED_DIR)/sync/usr/share/cursors/$$(basename $$t)/; \
 	done
+	# Runtime-loadable fonts -- one .ttf per face (see
+	# docs/filesystem-layout.md and kernel/drivers/font_face.c). The face
+	# NAME is the filename without the extension, so adding a face is
+	# dropping a file into data/fonts/ and nothing else. Tracked (not
+	# copied from the host's installed fonts) deliberately: a build-time
+	# dependency on a system font is the same failure that shipped images
+	# with no keyboard layouts at all for months, silently. The LICENSE-*
+	# files travel with them, which the fonts' own licenses require.
+	mkdir -p $(SEED_DIR)/sync/usr/share/fonts
+	cp data/fonts/*.ttf data/fonts/LICENSE-*.txt $(SEED_DIR)/sync/usr/share/fonts/
 	# Service descriptors -- what init starts, one file per service (see
 	# docs/init-design.md and data/etc/services.d/README.md). Tracked
 	# under data/ and staged here for the same reason pci.ids and the

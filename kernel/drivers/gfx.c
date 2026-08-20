@@ -3,6 +3,8 @@
 #include "heap.h"
 #include "multiboot.h"
 #include "font_ttf.h"
+#include "font_face.h" // the runtime /usr/share/fonts atlas, when one is active
+#include "knum.h"      // k_parse_u32(), for the baked sizes' numeric names
 #include "random_hw.h" // arch_rdtsc(), for gfx_bench_fill()
 #include "paging.h"    // paging_wc_name(), for gfx_write_combining_name()
 #include "pmm.h"       // pmm_alloc_contiguous(), for the back buffer
@@ -44,13 +46,84 @@ static uint8_t red_pos, red_size, green_pos, green_size, blue_pos, blue_size;
 // (kernel/lib/font_config.c).
 static enum font_size cur_font_size = FONT_SIZE_14;
 
-int gfx_char_w(void) { return font_ttf_variants[cur_font_size].w; }
-int gfx_char_h(void) { return font_ttf_variants[cur_font_size].h; }
+// The em size everything is actually drawn at, in pixels.
+//
+// **THIS, NOT cur_font_size, IS THE REAL SETTING NOW.** The eight baked
+// sizes are a fallback set; with a face loaded from /usr/share/fonts
+// (font_face.h) any size in FONT_PX_MIN..FONT_PX_MAX is rasterized on
+// demand, which is the whole point of having a rasterizer -- `fontsize
+// 13` and `fontsize 32` for a HiDPI panel are now questions the machine
+// can answer rather than sizes somebody has to bake. cur_font_size
+// tracks the NEAREST baked size and exists so that (a) the settings
+// registry still has a bounded choice list to show and (b) a machine
+// with no disk font behaves exactly as it did before.
+static int cur_font_px = 14;
+
+// The atlas in use, or NULL when the baked tables are. Everything below
+// asks through active_*() rather than reading either source directly,
+// which is what keeps the fallback honest: there is one place that
+// decides, and it is three lines long.
+static const struct font_atlas *active_atlas(void) { return font_face_atlas(); }
+
+// A baked size's name IS its point size ("8".."24", see genttf.py), so
+// this parses rather than carrying a second table that could drift from
+// font_ttf_variants[].
+static int baked_px(enum font_size size) {
+    uint32_t v = 0;
+    if (size < 0 || size >= FONT_SIZE_COUNT) return 14;
+    if (!k_parse_u32(font_ttf_variants[size].name, &v)) return 14;
+    return (int)v;
+}
+
+static enum font_size nearest_baked(int px) {
+    enum font_size best = FONT_SIZE_8;
+    int best_d = -1;
+    for (enum font_size i = 0; i < FONT_SIZE_COUNT; i++) {
+        int d = baked_px(i) - px;
+        if (d < 0) d = -d;
+        if (best_d < 0 || d < best_d) { best_d = d; best = i; }
+    }
+    return best;
+}
+
+int gfx_char_w(void) {
+    const struct font_atlas *a = active_atlas();
+    return a ? a->cell_w : font_ttf_variants[cur_font_size].w;
+}
+
+int gfx_char_h(void) {
+    const struct font_atlas *a = active_atlas();
+    return a ? a->cell_h : font_ttf_variants[cur_font_size].h;
+}
+
+int gfx_font_px(void) { return cur_font_px; }
+
+// Sets the em size. With a runtime face active this rasterizes a new
+// atlas (cached, so going back to a previous size is free); with none
+// it snaps to the nearest baked size, which is the honest answer -- a
+// machine with no font file cannot produce a 13px glyph out of nothing,
+// and silently drawing 12 while reporting 13 would be worse than
+// rounding visibly.
+//
+// Returns 1 if the size took effect. A failed atlas build (see
+// font_face_build) leaves the previous size in place and returns 0
+// rather than dropping the machine back to the baked font mid-session.
+int gfx_set_font_px(int px) {
+    if (px < 1 || px > 256) return 0;
+    if (font_face_active()[0]) {
+        if (!font_face_build(px)) return 0;
+        cur_font_px = px;
+        cur_font_size = nearest_baked(px);
+        return 1;
+    }
+    cur_font_size = nearest_baked(px);
+    cur_font_px = baked_px(cur_font_size);
+    return 1;
+}
 
 int gfx_set_font_size(enum font_size size) {
     if (size < 0 || size >= FONT_SIZE_COUNT) return 0;
-    cur_font_size = size;
-    return 1;
+    return gfx_set_font_px(baked_px(size));
 }
 
 enum font_size gfx_font_size(void) { return cur_font_size; }
@@ -589,11 +662,31 @@ static int font_ttf_glyph_index(int c) {
     return -1;
 }
 
-void gfx_draw_char(int x, int y, char c, uint32_t fg, uint32_t bg) {
-    int idx = font_ttf_glyph_index((unsigned char)c);
+// Draws `cols` leftmost columns of one glyph's cell. gfx_draw_char()
+// below passes the whole cell, which is the contract the console
+// depends on (every cell fully painted, background included, so a
+// character that replaces a wider one leaves nothing behind). String
+// drawing passes the glyph's ADVANCE instead, so a proportional face
+// does not paint cell_w of background past the last letter and over
+// whatever the caller drew beside it.
+static void draw_glyph(int x, int y, int c, int cols, uint32_t fg, uint32_t bg) {
+    const struct font_atlas *a = active_atlas();
+    int idx = font_ttf_glyph_index(c);
     if (idx < 0) idx = font_ttf_glyph_index('?');
-    const struct font_ttf_variant *fv = &font_ttf_variants[cur_font_size];
-    const unsigned char *glyph = fv->glyphs + (size_t)idx * (size_t)fv->w * (size_t)fv->h;
+
+    int gw, gh;
+    const unsigned char *glyph;
+    if (a) {
+        if (idx >= a->count) idx = 0;
+        gw = a->cell_w; gh = a->cell_h;
+        glyph = a->glyphs + (size_t)idx * (size_t)gw * (size_t)gh;
+    } else {
+        const struct font_ttf_variant *fv = &font_ttf_variants[cur_font_size];
+        gw = fv->w; gh = fv->h;
+        glyph = fv->glyphs + (size_t)idx * (size_t)gw * (size_t)gh;
+    }
+    if (cols > gw) cols = gw;
+    if (cols <= 0) return;
 
     uint8_t fg_r = unpack_channel(fg, red_pos, red_size);
     uint8_t fg_g = unpack_channel(fg, green_pos, green_size);
@@ -602,18 +695,18 @@ void gfx_draw_char(int x, int y, char c, uint32_t fg, uint32_t bg) {
     uint8_t bg_g = unpack_channel(bg, green_pos, green_size);
     uint8_t bg_b = unpack_channel(bg, blue_pos, blue_size);
 
-    for (int row = 0; row < fv->h; row++) {
-        for (int col = 0; col < fv->w; col++) {
-            uint8_t a = glyph[row * fv->w + col];
+    for (int row = 0; row < gh; row++) {
+        for (int col = 0; col < cols; col++) {
+            uint8_t alpha = glyph[row * gw + col];
             uint32_t color;
-            if (a == 0) {
+            if (alpha == 0) {
                 color = bg;
-            } else if (a == 255) {
+            } else if (alpha == 255) {
                 color = fg;
             } else {
-                uint8_t r = blend_channel(bg_r, fg_r, a);
-                uint8_t g = blend_channel(bg_g, fg_g, a);
-                uint8_t b = blend_channel(bg_b, fg_b, a);
+                uint8_t r = blend_channel(bg_r, fg_r, alpha);
+                uint8_t g = blend_channel(bg_g, fg_g, alpha);
+                uint8_t b = blend_channel(bg_b, fg_b, alpha);
                 color = pack_channel(r, red_pos, red_size)
                       | pack_channel(g, green_pos, green_size)
                       | pack_channel(b, blue_pos, blue_size);
@@ -623,21 +716,45 @@ void gfx_draw_char(int x, int y, char c, uint32_t fg, uint32_t bg) {
     }
 }
 
+void gfx_draw_char(int x, int y, char c, uint32_t fg, uint32_t bg) {
+    draw_glyph(x, y, (unsigned char)c, gfx_char_w(), fg, bg);
+}
+
+// How far the pen moves after drawing `c`, in pixels.
+//
+// **THE FUNCTION THAT MAKES PROPORTIONAL TEXT POSSIBLE AT ALL**, and
+// the reason every measurement below goes through it rather than
+// multiplying by gfx_char_w(). With the baked font (or any monospace
+// face) it returns the cell width for every character and the arithmetic
+// is what it always was; with a proportional face loaded from
+// /usr/share/fonts an 'i' is genuinely narrower than a 'W'.
+int gfx_char_advance(int c) {
+    const struct font_atlas *a = active_atlas();
+    if (!a || !a->advances) return gfx_char_w();
+    int idx = font_ttf_glyph_index(c);
+    if (idx < 0) idx = font_ttf_glyph_index('?');
+    if (idx < 0 || idx >= a->count) return a->cell_w;
+    int adv = a->advances[idx];
+    return adv > 0 ? adv : a->cell_w;
+}
+
 // Pixel width of `s` at the current font. A multiplication today
-// (every glyph is one fixed cell wide), a real measurement once
-// Milestone 21 lands proportional metrics -- which is exactly why
-// callers should ask this rather than writing `k_strlen(s) *
-// gfx_char_w()` themselves. Stops at a newline: a multi-line string has
-// no single width, and every caller of this is measuring one row.
+// A REAL MEASUREMENT: it sums per-glyph advances (gfx_char_advance())
+// rather than multiplying a character count by the cell width, which is
+// why callers were always told to ask this rather than writing
+// `k_strlen(s) * gfx_char_w()` themselves -- those call sites would all
+// have had to change when a proportional face became loadable, and this
+// one did instead. Stops at a newline: a multi-line string has no single
+// width, and every caller of this is measuring one row.
 int gfx_text_width(const char *s) {
     // NULL is an answer, not a fault: an optional label (a button with
     // none is legal, see ui_button_draw) reaches measuring code
     // unguarded, and the ring-3 ugfx_text_width() has always accepted
     // it. Two halves of one API disagreeing about NULL is its own bug.
     if (!s) return 0;
-    int n = 0;
-    while (s[n] && s[n] != '\n') n++;
-    return n * gfx_char_w();
+    int w = 0;
+    for (int i = 0; s[i] && s[i] != '\n'; i++) w += gfx_char_advance((unsigned char)s[i]);
+    return w;
 }
 
 // How many leading characters of `s` fit within `max_w` pixels --
@@ -647,11 +764,15 @@ int gfx_text_width(const char *s) {
 // apps/ui/ui_textbox.c) need the count without the drawing.
 int gfx_text_fit_chars(const char *s, int max_w) {
     if (!s) return 0;
-    int cw = gfx_char_w();
-    if (cw <= 0 || max_w < cw) return 0;
+    if (gfx_char_w() <= 0) return 0;
     int n = 0;
     int used = 0;
-    while (s[n] && s[n] != '\n' && used + cw <= max_w) { used += cw; n++; }
+    while (s[n] && s[n] != '\n') {
+        int adv = gfx_char_advance((unsigned char)s[n]);
+        if (used + adv > max_w) break;
+        used += adv;
+        n++;
+    }
     return n;
 }
 
@@ -684,21 +805,26 @@ int gfx_text_prev(const char *s, int i) {
 int gfx_draw_string_clipped(int x, int y, int max_w, const char *s,
                              uint32_t fg, uint32_t bg) {
     int n = gfx_text_fit_chars(s, max_w);
-    int cw = gfx_char_w();
-    for (int i = 0; i < n; i++) gfx_draw_char(x + i * cw, y, s[i], fg, bg);
+    int cx = x;
+    for (int i = 0; i < n; i++) {
+        int adv = gfx_char_advance((unsigned char)s[i]);
+        draw_glyph(cx, y, (unsigned char)s[i], adv, fg, bg);
+        cx += adv;
+    }
     return s[n] == '\0' || s[n] == '\n';
 }
 
 void gfx_draw_string(int x, int y, const char *s, uint32_t fg, uint32_t bg) {
     int cx = x;
-    int cw = gfx_char_w(), ch = gfx_char_h();
+    int ch = gfx_char_h();
     while (*s) {
         if (*s == '\n') {
             cx = x;
             y += ch;
         } else {
-            gfx_draw_char(cx, y, *s, fg, bg);
-            cx += cw;
+            int adv = gfx_char_advance((unsigned char)*s);
+            draw_glyph(cx, y, (unsigned char)*s, adv, fg, bg);
+            cx += adv;
         }
         s++;
     }

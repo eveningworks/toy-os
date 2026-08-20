@@ -94,6 +94,7 @@ void cmd_run(const char *name);
 void cmd_strace(const char *name_and_args);
 void cmd_cursor(const char *args);
 void cmd_fontsize(const char *args);
+void cmd_fontface(const char *args);
 void cmd_keyboard(const char *args);
 void cmd_color(const char *args);
 void cmd_history(void);

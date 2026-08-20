@@ -584,6 +584,24 @@ manual steps to be worth automating:
   explicitly at the start -- they persist to the disk image, so
   inheriting them makes every measurement relative to a silently wrong
   baseline. In `gui_regress.py`.
+- **`font_test.py`** -- runtime fonts end to end (9 checks): a `.ttf`
+  under `/usr/share/fonts` rasterizes, switching faces reaches the
+  screen with NO restart (the compositor is told through `WIN_EV_FONT`),
+  a size nobody baked works, and the baked font still draws when no face
+  is selected. Read its docstring before editing, for the same reason
+  `cursor_theme_test.py`'s says so: the baked font is a complete working
+  fallback, so "text is on screen" proves nothing at all -- every check
+  is a DIFFERENCE between two states. The load-bearing one is that
+  `liberation-sans` (proportional) draws the same right-aligned text
+  starting ~50px further right than `dejavu-sans-mono` does; a build
+  that ignored per-glyph advances passes every other check in the file
+  and fails exactly that one, which was verified by making it do so.
+  Two measurement traps it encodes: measure the RIGHT-ALIGNED version
+  text rather than the desktop icon captions (those are clipped to the
+  icon cell, so a narrower font mostly just un-truncates them and moves
+  three pixels), and crop the frame yourself -- `stable_pixels()` writes
+  the whole screen and only COMPARES the box, so scanning its output
+  counts the taskbar as ink. In `gui_regress.py`.
 - **`check_layout.py`** -- see CLAUDE.md's `docs/` section: verifies the built
   image's directories against `docs/filesystem-layout.md`, and warns
   about orphaned seeded files. Runs in `preflight.sh` and CI.

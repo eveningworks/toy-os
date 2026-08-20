@@ -3195,3 +3195,49 @@ page and never opened this one, so the suite was built entirely from
 "do X, check Y changed" and could not see a page nobody drove. It now
 asserts on PIXELS -- ink in the page body, compared against the same
 region on a settings page -- because "it responds" is not "it is drawn".
+
+---
+
+## Text is MEASURED now, not multiplied -- one advance chokepoint per ring
+
+Every string width in this OS used to be `length * cell_width`, which
+was true because every glyph was one fixed cell wide. With a
+proportional face loadable from `/usr/share/fonts` it stopped being
+true, and the interesting part is how small the change turned out to be:
+`gfx_char_advance(c)` in the kernel and `ugfx_char_advance(c)` in ring
+3, with `gfx_text_width()`, `gfx_text_fit_chars()`,
+`gfx_draw_string()`, `gfx_draw_string_clipped()` and their `ugfx` peers
+all rebuilt on them.
+
+**Nothing else had to change, and that is the payoff of a rule this repo
+already had.** `gfx.h` has told callers for a long time to ask
+`gfx_text_width()` rather than writing `k_strlen(s) * gfx_char_w()`
+themselves, and `gfx_test.c` exists specifically to pin those
+chokepoints down "while every answer is still obvious, so the migration
+has something that fails when it breaks them". Widgets that obeyed the
+rule needed no edit at all; the migration was four functions in each
+ring rather than every call site in the toolkit. This is the strongest
+evidence the project has that a chokepoint added before it is needed
+pays for itself.
+
+**Drawing a glyph and advancing past it are now two different widths.**
+`gfx_draw_char()` still paints the WHOLE cell, background included,
+because that is the contract the console depends on -- a character
+replacing a wider one must leave nothing behind. String drawing paints
+only the glyph's advance instead, so a proportional face does not lay
+down a cell's worth of background past the last letter and over whatever
+the caller drew beside it.
+
+**The console stays fixed-cell on purpose.** A terminal is monospace by
+definition -- `fbcon` and the Windows console both are -- so a
+proportional face gets a cell as wide as its WIDEST advance and the
+console draws in it. Text in the console is then loosely spaced rather
+than overlapping, which is the correct failure: ugly, and correct.
+
+**Advances reach ring 3 in the font mapping, not in a second message.**
+`WIN_REQ_FONT` already maps the glyph data; the advance table sits
+immediately after it in the same allocation, and the request returns its
+offset in `mods` (0 meaning "no advances -- every cell is `a` wide",
+which is unambiguous because the glyph data always starts the mapping).
+A separate request would have been a second thing a client could forget
+to make, and a client that forgot would silently go back to multiplying.

@@ -29,6 +29,19 @@ void font_config_init(void);
 // unqualified success, see the shell's `fontsize`.
 int font_config_save(enum font_size size);
 
+// Persists an arbitrary point size, and the selected face's name (an
+// empty name meaning the baked font). Both write into the same
+// /etc/toyos.conf the size has always lived in.
+// APPLY: set the font, persist it, and notify every GUI client that its
+// cached metrics are stale. The entry point the shell and the settings
+// registry both use -- see font_config.c for why the notification lives
+// here rather than at each caller. Returns a SETTING_* code.
+int font_config_apply_px(int px);
+int font_config_apply_face(const char *name);
+
+int font_config_save_px(int px);
+int font_config_save_face(const char *name);
+
 // Announces this setting to the registry (setting.h), so it appears in
 // `settings` and in the ring-3 Control Panel. Called from
 // settings_init(); the registry's `apply` does what `fontsize` does --

@@ -1053,38 +1053,87 @@ static void print_fontsize_choices(void) {
     }
 }
 
-// Changes the console's font size (see gfx_set_font_size() / font_ttf.h
-// -- eight point sizes baked at build time by tools/genttf.py, not
-// runtime TrueType rendering). Only affects the framebuffer console; the
-// legacy 80x25 text-mode fallback has one fixed cell size and can't
-// resize. Persists the choice to /etc/fontsize (see font_config.h) so it
-// survives a reboot -- same pattern as `timezone` persisting via tz.c.
+// Changes the font size, in points/pixels.
+//
+// **Any size is legal once a face is loaded from /usr/share/fonts** --
+// gfx_set_font_px() rasterizes it on demand (font_face.h). With no face
+// loaded the eight sizes tools/genttf.py baked into the kernel are all
+// there is, so the request SNAPS to the nearest one and this reports
+// what it snapped to rather than the number that was typed. Only
+// affects the framebuffer console; the legacy 80x25 text-mode fallback
+// has one fixed cell size and cannot resize. Persists to
+// /etc/toyos.conf (font_config.h) so it survives a reboot -- the same
+// pattern as `timezone` and `keyboard`.
 void cmd_fontsize(const char *args) {
     if (!args || k_strlen(args) == 0) {
-        vga_write("usage: fontsize <n>  (");
-        print_fontsize_choices();
-        vga_write(")  (currently: ");
-        vga_write(gfx_font_size_name(gfx_font_size()));
+        vga_printf("usage: fontsize <points>  (currently: %d", gfx_font_px());
+        if (font_face_active()[0]) vga_printf(", %s", font_face_active());
+        else {
+            vga_write(", built-in sizes only: ");
+            print_fontsize_choices();
+        }
         vga_write(")\n");
         return;
     }
-    enum font_size want = FONT_SIZE_COUNT;
-    for (enum font_size i = 0; i < FONT_SIZE_COUNT; i++) {
-        if (k_strcmp(args, gfx_font_size_name(i)) == 0) { want = i; break; }
-    }
-    if (want == FONT_SIZE_COUNT) {
-        vga_write("fontsize: unknown size '");
+    uint32_t px = 0;
+    if (!k_parse_u32(args, &px) || px == 0) {
+        vga_write("fontsize: '");
         vga_write(args);
-        vga_write("' -- try ");
-        print_fontsize_choices();
-        vga_write("\n");
+        vga_write("' is not a size -- give a number of points\n");
         return;
     }
-    gfx_set_font_size(want);
-    vga_reflow(); // recompute console_cols/rows for the new cell size and clear
-    int r = font_config_save(want); // persist to /etc/toyos.conf so it survives a reboot
-    vga_write("Font size set to ");
-    vga_write(gfx_font_size_name(want));
+    int before = gfx_font_px();
+    int r = font_config_apply_px((int)px);
+    if (r == SETTING_INVALID) {
+        vga_printf("fontsize: %u could not be rasterized -- still %d\n",
+                   (unsigned)px, before);
+        return;
+    }
+    vga_reflow(); // recompute console_cols/rows for the new cell and clear
+    vga_printf("Font size set to %d", gfx_font_px());
+    if ((int)px != gfx_font_px()) {
+        vga_printf(" (nearest built-in size to %u -- no font loaded)", (unsigned)px);
+    }
+    print_save_result(r);
+    vga_write(".\n");
+}
+
+// Lists the faces in /usr/share/fonts and switches between them.
+//
+// `fontface` alone lists; `fontface <name>` selects; `fontface builtin`
+// goes back to the glyphs baked into the kernel image. A face is named
+// by its filename without the extension, the same way a cursor theme is
+// named by its directory -- so what this lists IS a directory listing,
+// and nothing has to parse a font's internal name table to answer it.
+void cmd_fontface(const char *args) {
+    if (!args || k_strlen(args) == 0) {
+        int n = font_face_count();
+        const char *active = font_face_active();
+        vga_printf("Font faces in /usr/share/fonts (%d):\n", n);
+        vga_printf("  %-24s %s%s\n", "builtin",
+                   "baked into the kernel image",
+                   active[0] ? "" : "  <- active");
+        for (int i = 0; i < n; i++) {
+            struct font_face_info info;
+            if (!font_face_info(i, &info)) continue;
+            vga_printf("  %-24s %uKB%s\n", info.name,
+                       (unsigned)(info.size / 1024),
+                       k_strcmp(info.name, active) == 0 ? "  <- active" : "");
+        }
+        if (n == 0) vga_write("  (none -- the built-in font is the only one)\n");
+        return;
+    }
+
+    int builtin = k_strcmp(args, "builtin") == 0;
+    int r = font_config_apply_face(args);
+    if (r == SETTING_INVALID) {
+        vga_write("fontface: cannot use '");
+        vga_write(args);
+        vga_write("' -- no such face, or not a TrueType outline font\n");
+        return;
+    }
+    vga_reflow();
+    vga_printf("Font face set to %s", builtin ? "builtin" : args);
     print_save_result(r);
     vga_write(".\n");
 }

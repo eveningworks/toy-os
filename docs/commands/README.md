@@ -106,6 +106,7 @@ a command), and the `gui3`/`nano` aliases.
 - [`color`](color.md)
 - [`cursor`](cursor.md)
 - [`echo`](echo.md)
+- [`fontface`](fontface.md)
 - [`fontsize`](fontsize.md)
 - [`help`](help.md)
 - [`history`](history.md)

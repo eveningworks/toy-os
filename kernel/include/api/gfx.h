@@ -25,6 +25,25 @@ int gfx_set_font_size(enum font_size size);
 enum font_size gfx_font_size(void);
 const char *gfx_font_size_name(enum font_size size);
 
+// The em size actually in use, in pixels, and the way to change it.
+//
+// **This is the real setting; enum font_size is the fallback set.**
+// With a face loaded from /usr/share/fonts (font_face.h) any size
+// between FONT_PX_MIN and FONT_PX_MAX is rasterized on demand, so
+// `fontsize 13` and `fontsize 32` are answerable; with no disk font the
+// request snaps to the nearest baked size and gfx_font_px() reports
+// what it actually snapped to, rather than the number that was asked
+// for. Returns 1 if the size took effect, 0 if it did not (an atlas
+// that could not be built leaves the previous size in place).
+int gfx_set_font_px(int px);
+int gfx_font_px(void);
+
+// How far the pen moves after drawing `c`. The cell width for the baked
+// font and for any monospace face; genuinely per-glyph for a
+// proportional one. Every measurement in this header is built on it --
+// see gfx_text_width().
+int gfx_char_advance(int c);
+
 // Returns 1 on success (a usable RGB framebuffer was found), 0 otherwise.
 int gfx_init(void);
 

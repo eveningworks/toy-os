@@ -621,6 +621,18 @@ int wm_client_handle_event(const struct win_event *ev) {
         // (it holds the app_ids), so this is only the action.
         on_window_activate_window(pid, id);
         break;
+    case WIN_EV_FONT:
+        // The metrics moved under us. Everything this compositor draws
+        // is derived from ugfx_char_w()/ugfx_char_h() FRESH each frame
+        // (chrome, the taskbar, the icon grid, menu rows), so re-mapping
+        // the font and forcing one full repaint is the whole job -- no
+        // cached geometry to invalidate, which is a property worth not
+        // losing. wm_render_reset() is what makes the next frame
+        // unconditional rather than damage-limited.
+        ugfx_font_init();
+        wm_render_reset();
+        wm_logf("wm: font changed -- %dx%d cell\n", ugfx_char_w(), ugfx_char_h());
+        break;
     default:
         return 0; // not ours -- raw input, see wm_rawin.c
     }

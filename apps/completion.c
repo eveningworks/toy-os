@@ -25,7 +25,7 @@
 // that dispatch() does not handle is reported as an internal error.
 const char *const COMPLETION_COMMANDS[] = {
     "append", "apps", "beep", "cd", "clear", "color",
-    "cursor", "debug", "dmatest", "dmesg", "edit", "fontsize",
+    "cursor", "debug", "dmatest", "dmesg", "edit", "fontface", "fontsize",
     "fputest", "fsck", "fsformat", "gui", "help", "ktest", "history", "keyboard",
     "nano", "pwd", "rescue",
     "ring3test", "run", "schedtest", "steptest", "strace", "stress",
@@ -338,6 +338,18 @@ static int complete_argument(struct collector *c, const char *cmd, int arg_index
         return 1;
     }
     if (k_strcmp(cmd, "keyboard") == 0) { complete_keyboard_layout(c); return 1; }
+    if (k_strcmp(cmd, "fontface") == 0) {
+        // From the REGISTRY, not a list: the faces are whatever files
+        // are in /usr/share/fonts, so a hand-maintained list here would
+        // stop matching the moment somebody dropped a font in. `builtin`
+        // is offered too, since it is a legal value and not a file.
+        add_candidate(c, "builtin");
+        for (int i = 0; i < font_face_count(); i++) {
+            struct font_face_info info;
+            if (font_face_info(i, &info)) add_candidate(c, info.name);
+        }
+        return 1;
+    }
     if (k_strcmp(cmd, "run") == 0) { complete_executables(c); return 1; }
     // `strace <binary>`'s first argument is an executable, same as
     // `run`'s -- only its own arguments after that are free text.

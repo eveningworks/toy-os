@@ -276,10 +276,13 @@ single/double/triple-indirect pointers, batch ATA flushes, TRIM freed
 blocks back to the host, and refuse to touch a disk whose superblock
 could not be read rather than destroying a possibly-good filesystem.
 
-**Graphics and GUI.** A real anti-aliased font (JetBrains Mono, baked to
-bitmaps at build time) in eight switchable sizes — and because the whole
-UI is font-*derived*, changing the size reflows everything rather than
-clipping it. Double-buffered rendering with damage-region clipping, and a
+**Graphics and GUI.** Real fonts, two ways: eight sizes of JetBrains Mono
+baked to bitmaps at build time as the guaranteed fallback, and a
+fixed-point TrueType rasterizer that loads a `.ttf` from
+`/usr/share/fonts` at runtime — so any size works, not just a baked one,
+and a proportional face gets genuine per-glyph advance widths. Because
+the whole UI is font-*derived*, changing the face or the size reflows
+everything rather than clipping it, live, without restarting anything. Double-buffered rendering with damage-region clipping, and a
 compositor whose damage invariant is enforced by a verification mode
 that re-renders each frame unrestricted and reports any pixel that
 changed without being declared — over the chrome, desktop, taskbar,
@@ -439,6 +442,7 @@ friends on the filesystem — the ISO alone boots into a near-empty one.
 
 MIT — see [LICENSE](LICENSE). The baked JetBrains Mono glyph data in
 `kernel/drivers/font_ttf.c` is separately covered by the SIL Open Font
-License 1.1 ([tools/OFL.txt](tools/OFL.txt)), and the bundled `pci.ids`
-database in `data/` has its own terms — see LICENSE's "Third-party data"
-section.
+License 1.1 ([tools/OFL.txt](tools/OFL.txt)); the two runtime-loadable
+fonts in `data/fonts/` carry their own licenses beside them; and the
+bundled `pci.ids` database in `data/` has its own terms — see LICENSE's
+"Third-party font" and "Third-party data" sections.

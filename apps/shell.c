@@ -184,6 +184,8 @@ static void dispatch(char *line) {
         cmd_cursor(args ? args : "");
     } else if (k_strcmp(cmd, "fontsize") == 0) {
         cmd_fontsize(args ? args : "");
+    } else if (k_strcmp(cmd, "fontface") == 0) {
+        cmd_fontface(args ? args : "");
     } else if (k_strcmp(cmd, "keyboard") == 0) {
         cmd_keyboard(args ? args : "");
     } else if (k_strcmp(cmd, "history") == 0) {
