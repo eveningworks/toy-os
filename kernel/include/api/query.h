@@ -31,7 +31,11 @@
 // duration. Registering a stack local leaves the registry holding a
 // dangling pointer that reads as plausible garbage rather than crashing.
 
-#define QUERY_MAX 16 // registered providers
+// Registered providers. Raised from 16 as the introspection commands
+// moved to /bin: each one is a class, and the remaining set (dmesg,
+// fsck, debug) will want more. A provider is a pointer, so the table is
+// cheap; the cap exists to bound the walk, not to ration them.
+#define QUERY_MAX 32
 
 // The largest record any class may declare. It bounds the one stack
 // buffer that reads a record in order to pull a named field out of it,
@@ -181,5 +185,16 @@ void krandom_query_init(void);
 // entries. Two classes, because "no partitions" and "no partition
 // table" are different answers a list alone cannot distinguish.
 void partition_query_init(void);
+
+// kernel/mm/'s heap providers -- the counters, and the scan that runs
+// on read (see heap_query.c on why those are two classes).
+void heap_query_init(void);
+
+// kernel/drivers/'s provider for the ATA transfer path. The FORCING
+// half is kernel.ata_nodma, a tunable -- this only reports.
+void ata_query_init(void);
+
+// kernel/proc/'s providers for kernel stacks and per-syscall depth.
+void kstack_query_init(void);
 
 #endif // QUERY_H

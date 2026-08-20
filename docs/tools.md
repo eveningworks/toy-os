@@ -187,6 +187,17 @@ manual steps to be worth automating:
   `/tmp/<name>.out`: a spawned program's console output arrives while
   the harness is between commands, where it is dropped, so the harness
   waits on the ARTIFACT rather than on the timing.
+- **`/bin/mkfiles`** (a guest program, not a host tool, but this is
+  where anyone looks for it) -- fills a directory with N files to test
+  the filesystem at scale: `mkfiles /big 5000`, `mkfiles /docs 100 512`,
+  `mkfiles /docs 100 0-64000`, and `mkfiles --verify` to read them back.
+  Content is derived from (file index, offset), so `--verify` proves
+  every file still holds ITS OWN bytes -- a constant fill cannot detect
+  two files sharing a block, since both read back the constant and look
+  perfect. Sizes in a range are derived from the index too, so a verify
+  reproduces them without being told a seed. **Pass `vm.py --timeout`**:
+  the default is 30s and 5,000 files takes ~50s. It found the
+  binary-write truncation the day it was written.
 - **`serial_console.py`** -- boot a guest with COM1 as a SOCKET and drive
   it as text in / text out. Not a test: the shared channel under
   `ktest_run.py` and `faulttest_run.py`, which had written half of it

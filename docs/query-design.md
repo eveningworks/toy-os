@@ -318,10 +318,38 @@ as its file, which both marks it as unpersisted and gives it the
 `kernel` namespace -- see `docs/decisions.md` for why that is a sentinel
 path rather than a flag or an empty string.
 
-**Still open: `heap check`**, which is an ACTION rather than a toggle.
-It has precedent as a write-triggered one (Linux's
-`/proc/sys/vm/drop_caches`, SLUB's `validate`) and simply has not been
-built; the `heap` builtin still performs it.
+**`heap check` did NOT need a write-triggered action after all.** It
+became `QUERY_HEAPCHECK`, a class whose READ performs the scan -- which
+is what a fact already is here ("computed fresh on every read, no
+stored form"), and the shape `QUERY_MMAUDIT` had been using since the
+day before. The drop_caches precedent would have worked; it was simply
+the wrong tool for something that returns a RESULT rather than
+performing a side effect.
+
+The one care it needs: that class declares NO named fields, so
+`config get heapcheck.damaged` cannot exist. A field is what `config`
+and any generated UI enumerate, and a full heap scan running as a side
+effect of something that reads like an inspection would be a trap.
+
+### Stage 2, continued -- `heap`, `ata` and `kstack` -- DONE 2026-08-20
+
+The last three introspection commands, and the ones that needed BOTH
+registries: a query class for the read half and a tunable for the
+write half. `QUERY_HEAP` + `QUERY_HEAPCHECK`, `QUERY_ATA`,
+`QUERY_KSTACK` + `QUERY_KSTACK_SYSCALL`.
+
+Two things worth carrying:
+
+- **A list can be legitimately EMPTY, and that is not the same as a
+  table of zeroes.** `QUERY_KSTACK_SYSCALL` has no records at all while
+  `kernel.kstack_track` is off, which is why `/bin/kstack syscalls`
+  says "tracking is off" rather than printing a heading with nothing
+  under it.
+- **Check the OLD command for modes before deleting it.** `/bin/kstack`
+  shipped without the builtin's `slots` view, and
+  `compositor_death_test.py` caught it -- that view is how the test
+  proves a declining client is still alive. A dropped mode looks
+  exactly like a broken feature from the outside.
 
 ### Stage 4 -- `config` reads facts
 

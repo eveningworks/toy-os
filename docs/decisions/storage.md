@@ -1214,3 +1214,43 @@ without putting a heap-debug toggle beside the wallpaper.
 `tools/settings_test.py` asserts both the heading and its three group
 pages, and the positive control (filing them under `Appearance`)
 reddens the heading check alone.
+
+## `write()` to a file took a C string, and said it had written the rest
+
+`sys_do_write_file()` copied the user's buffer into a NUL-terminated
+scratch buffer and called `fs_write(name, tmp, 1)`. `fs_write()` takes a
+**C string**, not a length -- so a write containing a zero byte stored
+only the prefix. And then it did the damaging part: it set the return
+value to `len` regardless, so every caller was told all of it had
+landed.
+
+**Why it survived so long.** Nothing in this OS wrote binary through a
+file descriptor. Notepad saves text, `tosh`'s redirection carries text,
+`config` writes `key=value` lines -- none of which contain a zero byte,
+so all of them worked perfectly. `/bin/mkfiles` was the first program to
+write a derived byte pattern, and it broke on file 0.
+
+The arithmetic is worth recording because it is what turned a suspicion
+into a diagnosis. Asked for 1,207 bytes in two chunks, file 1 came back
+**82 bytes**. Its pattern is `31 ^ (offset * 7)`, which is zero when
+`offset * 7 ≡ 31 (mod 256)`, i.e. at offset 41 -- and the second chunk
+starts at 1,024, which is `0 (mod 256)`, so it hits zero at its own
+offset 41 too. 41 + 41 = 82, exactly. A prediction that lands on the
+observed number is a different kind of evidence from a story that fits
+it.
+
+The fix is `fs_write_range()`, which takes an explicit length and treats
+the buffer as raw bytes -- `fs.h` describes it as "the call a large
+binary file actually wants". Append semantics are unchanged (the current
+size is passed as the offset, which `fs.h` documents as the way to say
+append), because making writes honour the fd's `offset` field is a
+separate change: that field is maintained by the READ path only, and
+every existing caller relies on writes appending.
+
+**The lesson is about the RETURN VALUE, not the string.** A truncating
+write that reported the truncation would have been found the first time
+anything wrote a zero byte; one that reports success cannot be found by
+checking return values at all, which is what every caller was doing.
+`userland/tests/file_test.c` now round-trips a buffer with zero bytes in
+the middle and asserts on the SIZE READ BACK -- deliberately not on the
+write's return value, since believing that is precisely the mistake.

@@ -435,16 +435,22 @@ sys_do_write_pipe(uint64_t *regs, uint64_t pml4, int pipe_idx,
 
 SYSCALL_HANDLER sys_do_write_file(uint64_t *regs, uint64_t pml4, struct open_file *f,
                                    uint64_t buf_ptr, uint64_t len) {
-    // fs_write() (fs.c) works on NUL-terminated C strings, not
-    // explicit-length buffers -- see syscall_abi.h's comment on
-    // SYS_OPEN for why. Copy into a NUL-terminated scratch buffer (len
-    // is already capped at SYS_WRITE_MAX by the caller, so this is
-    // always big enough) before handing it over. The copy is done the
-    // one way SMAP permits (vmm.h).
+    // fs_write_range(), NOT fs_write(). This used to copy into a
+    // NUL-terminated scratch buffer and call fs_write(name, tmp, 1),
+    // which treats its argument as a C STRING -- so a write containing
+    // a zero byte stopped there, wrote only the prefix, AND RETURNED
+    // `len` as if all of it had landed. Text files were unaffected and
+    // everything binary was silently truncated: /bin/mkfiles asking for
+    // 1207 bytes of a derived pattern got 82, because each of its two
+    // chunks stopped at its own first zero.
+    //
+    // fs_write_range() takes an explicit length and treats the buffer
+    // as raw bytes, which is what a write(2) means.
+    //
     // Heap, not stack -- see sys_do_write_console(). This one sits
     // directly above the whole TFS3 journal and ATA path, which is the
     // deepest chain in the kernel.
-    char *tmp = kmalloc(SYS_WRITE_MAX + 1);
+    char *tmp = kmalloc(SYS_WRITE_MAX);
     if (!tmp) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return; }
     if (!vmm_copy_from_user(pml4, tmp, buf_ptr, len)) {
         klog_write("syscall: write() rejected -- invalid buffer pointer\n");
@@ -452,9 +458,17 @@ SYSCALL_HANDLER sys_do_write_file(uint64_t *regs, uint64_t pml4, struct open_fil
         kfree(tmp);
         return;
     }
-    tmp[len] = '\0';
-    fs_write(f->file.name, tmp, 1); // 1 = append
-    regs[14] = len;
+    // APPEND, which is what this fd has always done -- fs.h documents
+    // passing the current size as the way to say so. The fd's `offset`
+    // is deliberately not used: it is maintained by the READ path only,
+    // and making writes honour it would change what every existing
+    // caller does, which is a separate change from fixing truncation.
+    uint64_t at = fs_size(f->file.name);
+    int ok = fs_write_range(f->file.name, at, tmp, (uint32_t)len);
+    // The COUNT IS NOW HONEST. Reporting `len` unconditionally is what
+    // let the truncation go unnoticed: every caller checked its return
+    // value and every one of them was told it had succeeded.
+    regs[14] = ok ? len : (uint64_t)(int64_t)-EIO;
     kfree(tmp);
 }
 

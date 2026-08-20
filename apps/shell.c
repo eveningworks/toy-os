@@ -118,10 +118,6 @@ static void dispatch(char *line) {
         cmd_timezone(args);
     } else if (k_strcmp(cmd, "beep") == 0) {
         cmd_beep();
-    } else if (k_strcmp(cmd, "heap") == 0) {
-        cmd_heap(args ? args : "");
-    } else if (k_strcmp(cmd, "kstack") == 0) {
-        cmd_kstack(args ? args : "");
     } else if (k_strcmp(cmd, "hwcursor") == 0) {
         cmd_hwcursor(args ? args : "");
     } else if (k_strcmp(cmd, "gfxbench") == 0) {
@@ -142,8 +138,6 @@ static void dispatch(char *line) {
         cmd_dmesg();
     } else if (k_strcmp(cmd, "debug") == 0) {
         cmd_debug(args ? args : "");
-    } else if (k_strcmp(cmd, "ata") == 0) {
-        cmd_ata(args ? args : "");
     } else if (k_strcmp(cmd, "color") == 0) {
         cmd_color(args ? args : "");
     } else if (k_strcmp(cmd, "cd") == 0) {

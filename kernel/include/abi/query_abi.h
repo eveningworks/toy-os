@@ -114,6 +114,29 @@ struct query_msg {
 // One record per partition. LIST.
 #define QUERY_PARTITION 7
 
+// The kernel heap: what kmalloc has, what it has handed out, and what
+// its debug mode has caught. SCALAR.
+#define QUERY_HEAP      8
+
+// READING THIS PERFORMS A SCAN. Every poisoned free block is verified
+// right now and the damage count comes back -- which is a FACT by this
+// project's definition (computed fresh on every read, no stored form),
+// not an action needing a write. QUERY_MMAUDIT already works this way.
+// SCALAR.
+#define QUERY_HEAPCHECK 9
+
+// The ATA disk: which transfer path is in use, and what the hardware
+// offers. SCALAR.
+#define QUERY_ATA       10
+
+// One record per live kernel stack. LIST.
+#define QUERY_KSTACK    11
+
+// One record per syscall that has been measured, when kernel.kstack_track
+// is on. LIST -- and legitimately EMPTY when tracking is off, which is a
+// different answer from "every syscall used 0 bytes".
+#define QUERY_KSTACK_SYSCALL 12
+
 
 // QUERY_PROVIDERS' record.
 struct query_provider_info {
@@ -254,6 +277,82 @@ struct query_partition {
     uint8_t  type_guid[16];   // GPT only
     uint8_t  unique_guid[16]; // GPT only
     char     name[40];     // GPT only; "" for MBR
+};
+
+// QUERY_HEAP's record.
+//
+// `quarantined` is its own field and does NOT belong to either of the
+// other two: a block withdrawn by a red-zone violation is deliberately
+// stranded, so used + free stops summing to total once it is nonzero.
+// Reporting it separately is what stops that looking like an accounting
+// bug (see api/heap.h).
+struct query_heap {
+    uint64_t total_bytes;       // claimed from pmm
+    uint64_t used_bytes;
+    uint64_t free_bytes;
+    uint64_t quarantined_bytes;
+    uint64_t rz_checks;         // red-zone checks performed since boot
+    uint64_t violations;        // and how many found damage
+    uint64_t debug;             // 1 when kernel.heap_debug is on
+};
+
+// QUERY_HEAPCHECK's record. `damaged` is 0 for a healthy heap, which is
+// the normal answer; `checked` says how many blocks the scan looked at,
+// so "0 damaged" and "nothing to look at" are distinguishable.
+struct query_heapcheck {
+    uint64_t damaged;
+    uint64_t checked;
+};
+
+// QUERY_ATA's record.
+#define QUERY_ATA_PRESENT   (1u << 0) // a drive answered IDENTIFY
+#define QUERY_ATA_DMA_HW    (1u << 1) // the controller offers Bus-Master DMA
+#define QUERY_ATA_DMA_ON    (1u << 2) // transfers are actually going through it
+#define QUERY_ATA_TRIM      (1u << 3) // DATA SET MANAGEMENT: freed blocks are discarded
+
+struct query_ata {
+    uint64_t flags;             // QUERY_ATA_*
+    uint64_t max_sectors_xfer;  // per transfer
+    uint64_t sector_count;      // the drive's capacity, in sectors
+};
+
+// QUERY_KSTACK's record -- one live kernel stack.
+//
+// `used` is a HIGH-WATER MARK, not a current depth: it is how deep this
+// stack has ever been, which is the number that says whether 16 KiB is
+// enough. A current depth would be near zero for every process that is
+// not running right now, i.e. all of them.
+#define QUERY_KSTACK_CANARY_OK (1u << 0)
+#define QUERY_KSTACK_FRAME_OK  (1u << 1) // kernel_rsp points inside this stack
+// The legacy `run` loader's stack. It has no scheduler slot and so no
+// pid, which is exactly why it is flagged rather than left to be
+// inferred from a pid of 0 -- a reader would take that for init's.
+#define QUERY_KSTACK_LEGACY    (1u << 2)
+
+// The ABI carries its OWN name length rather than including
+// api/scheduler.h: abi/ is the kernel<->userland contract and must not
+// depend on a kernel API header (kernel/include/README.md). The two are
+// kept in step by a _Static_assert in the provider, so a mismatch is a
+// build error rather than a truncated name.
+#define QUERY_KSTACK_NAME_MAX 32
+
+struct query_kstack {
+    uint64_t slot, pid, state;
+    uint64_t size, used;        // bytes
+    uint64_t flags;             // QUERY_KSTACK_*
+    uint64_t base, guard;       // the stack, and the unmapped page below it
+    uint64_t kernel_rsp, rip, cs;
+    char     name[QUERY_KSTACK_NAME_MAX];
+};
+
+// QUERY_KSTACK_SYSCALL's record. The NAME travels with the number
+// because the kernel's syscall-name table is strace's and has no
+// ring-3 copy -- a client left to map numbers itself would grow a
+// second table that drifts.
+struct query_kstack_syscall {
+    uint64_t nr;
+    uint64_t peak;              // deepest this syscall has ever gone, bytes
+    char     name[24];
 };
 
 #endif // ABI_QUERY_ABI_H

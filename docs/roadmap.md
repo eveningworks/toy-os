@@ -95,7 +95,8 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~Ring 3 cannot ask which filesystem is mounted~~ DONE 2026-08-20 -- `QUERY_FSINFO`, a provider rather than a wider `SYS_SYSINFO`
 - [ ] The About window still omits its filesystem line, though `QUERY_FSINFO` reports it now -- needs the window widened
 - [x] ~~Tunables: the non-persisting `struct setting`~~ DONE 2026-08-20 -- `kernel.heap_debug`, `kernel.ata_nodma`, `kernel.kstack_track`
-- [ ] `heap`, `ata` and `kstack` still builtins -- their read halves need query classes before they can be `/bin` programs
+- [x] ~~`heap`, `ata` and `kstack` still builtins~~ DONE 2026-08-20 -- `/bin` programs over their query classes and tunables
+- [ ] Directory lookup is O(n) -- measured 2026-08-20 with `mkfiles`: creates stay flat to 5,000 entries, lookups grow with position
 - [ ] An environment passed to a child
 - [ ] Ctrl-C
 - [ ] **`#!` handling**, which is the loader's job, not the shell's: `elf_load()` rejects a non-ELF file

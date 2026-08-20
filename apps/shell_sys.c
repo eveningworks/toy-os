@@ -104,7 +104,7 @@ static const char *const HELP_LINES[] = {
     "Programs (in /bin, run by name -- not builtins):\n",
     "  ls cat echo rm touch mkdir mv ln stat truncate sync less\n",
     "  df meminfo uptime time about random ps kill spawn reboot\n",
-    "  lspci lscpu parttable config tosh\n",
+    "  lspci lscpu parttable heap ata kstack config tosh\n",
     "  (`<name> --help` where it has one; `path` shows where they are\n",
     "   found, and `rescue` is the kernel's own copy of the file ones)\n",
     "\n",
@@ -141,10 +141,6 @@ static const char *const HELP_LINES[] = {
     "System info:\n",
     "  timezone      - show/pick your timezone (interactive list)\n",
     "  timezone <c>  - set timezone directly, e.g. `timezone helsinki`\n",
-    "  heap          - show kernel heap stats (kmalloc/kfree)\n",
-    "  heap debug on - red-zone new allocations + poison freed ones,\n",
-    "                  reporting overflows/underflows/use-after-free\n",
-    "  heap check    - scan poisoned free blocks for use-after-free now\n",
     "  rescue        - the kernel's own copies of the file commands, for\n",
     "                  when /bin is missing or damaged. `rescue` alone\n",
     "                  lists them; they never shadow a real program\n",
@@ -199,10 +195,6 @@ static const char *const TEST_HELP_LINES[] = {
     "                  decoded line per syscall (`write(1, \"hi\\n\", 3)\n",
     "                  = 3`), plus a count when it exits. Also captured\n",
     "                  in `dmesg`. Ring-3 binaries only.\n",
-    "  ata           - show whether disk transfers use DMA or PIO\n",
-    "  ata nodma on|off - force the PIO fallback / restore DMA --\n",
-    "                  makes the fallback path reachable, and lets a\n",
-    "                  suspect DMA transfer be compared against PIO\n",
     "  debug         - list per-subsystem debug-log switches (off by\n",
     "                  default)\n",
     "  debug <s> on|off - flip one on/off at runtime, no rebuild --\n",
@@ -333,73 +325,6 @@ void cmd_timezone(const char *args) {
 void cmd_beep(void) {
     vga_write("beep!\n");
     speaker_beep(800, 200);
-}
-
-// `heap` -- the kernel heap's stats, and the switch for its debug mode.
-// Separate from `meminfo` (which reports the physical frame allocator)
-// because the two answer different questions: pmm says how much machine
-// is left, this says what kmalloc() is doing with its share of it.
-//
-// The debug mode is deliberately a runtime toggle rather than a build
-// flag; see heap.h. Reporting the violation count unconditionally is
-// half the point -- a violation is logged when it happens, and dmesg
-// scrolls, so a running total is what makes "has this kernel corrupted
-// its heap since boot?" answerable at a glance.
-void cmd_heap(const char *args) {
-    while (*args == ' ') args++;
-
-    if (k_strncmp(args, "debug", 5) == 0) {
-        const char *v = args + 5;
-        while (*v == ' ') v++;
-        if (k_strcmp(v, "on") == 0) {
-            heap_set_debug(1);
-        } else if (k_strcmp(v, "off") == 0) {
-            heap_set_debug(0);
-        } else if (*v != '\0') {
-            vga_write("usage: heap debug [on|off]\n");
-            return;
-        }
-        vga_printf("heap: debug mode %s\n", heap_debug() ? "ON -- new allocations get red-zones" : "off");
-        if (heap_debug()) {
-            vga_write("  (affects allocations made from now on; existing blocks are unchanged)\n");
-        }
-        return;
-    }
-
-    if (k_strcmp(args, "check") == 0) {
-        uint64_t bad = heap_check();
-        if (bad) {
-            vga_printf("heap: %lu damaged free block(s) found -- see dmesg\n", bad);
-        } else {
-            vga_write("heap: no damage found in poisoned free blocks\n");
-            if (!heap_debug()) {
-                vga_write("  (debug mode is off -- blocks freed while it was off carry no poison to check)\n");
-            }
-        }
-        return;
-    }
-
-    if (*args != '\0') {
-        vga_write("usage: heap [debug on|off] [check]\n");
-        return;
-    }
-
-    uint64_t total = heap_total_bytes();
-    uint64_t used = heap_used_bytes();
-    vga_printf("Kernel heap (kmalloc/kfree):\n");
-    vga_printf("  claimed from pmm: %lu bytes (%lu KB)\n", total, total / 1024);
-    vga_printf("  handed out:       %lu bytes\n", used);
-    vga_printf("  free:             %lu bytes\n", total - used);
-    vga_printf("  debug mode:       %s\n", heap_debug() ? "on" : "off");
-    vga_printf("  red-zone checks:  %lu\n", heap_rz_checks());
-
-    uint64_t bad = heap_violations();
-    if (bad) {
-        vga_printf("  VIOLATIONS:       %lu (%lu bytes quarantined -- see dmesg)\n",
-                   bad, heap_quarantined_bytes());
-    } else {
-        vga_printf("  violations:       0\n");
-    }
 }
 
 // `df` -- disk usage, meminfo's sibling for fs.c's data blocks instead
@@ -1232,81 +1157,6 @@ void cmd_history(void) {
 // SYS_PCI_COUNT/SYS_PCI_INFO; only the formatting and the pci.ids
 // lookup moved out.
 
-// `ata` -- report which transfer path is in use; `ata nodma on|off`
-// forces the PIO fallback or releases it.
-//
-// The toggle exists because the PIO path is otherwise unreachable: DMA
-// comes up on every machine this OS boots, so the fallback driver never
-// runs and cannot be tested (see ata.c's g_dma_forced_off comment, and
-// kernel/drivers/ata_test.c, which drives this same switch). It's also
-// the PIO-vs-DMA comparison that root-caused a real DMA failure once,
-// which previously meant hand-editing the driver.
-void cmd_ata(const char *args) {
-    while (*args == ' ') args++;
-
-    if (*args == '\0') {
-        vga_write("ata: transfers are going through ");
-        vga_write(ata_dma_active() ? "DMA" : "PIO");
-        if (!ata_dma_hardware_available()) {
-            vga_write(" (this machine has no Bus-Master DMA)");
-        } else if (!ata_dma_active()) {
-            vga_write(" (forced -- `ata nodma off` to restore DMA)");
-        }
-        vga_write("\n  max sectors/transfer: ");
-        vga_write_dec((uint32_t)ata_max_sectors_per_xfer());
-        // Whether TRIM actually reaches the drive decides whether
-        // deleting a file gives space back to the HOST image or only to
-        // this filesystem (see ata.h's ata_trim()), so it belongs in the
-        // same one-glance status as DMA.
-        //
-        // Reported as three distinguishable states rather than a bare
-        // yes/no, because "no" has two completely different causes with
-        // different answers -- and because the DMA interaction is
-        // genuinely surprising: TRIM keeps working while `nodma` is on,
-        // since DSM has no PIO form and this driver issues it over the
-        // bus master regardless of where data transfers are going.
-        vga_write("\n  TRIM (DATA SET MANAGEMENT): ");
-        if (ata_trim_supported()) {
-            vga_write("in use -- freed blocks are discarded to the host image");
-            if (!ata_dma_active()) {
-                vga_write("\n    (still over DMA: DSM has no PIO form, so `nodma` doesn't stop it)");
-            }
-        } else if (!ata_dma_hardware_available()) {
-            vga_write("unavailable -- needs Bus-Master DMA, which this machine lacks");
-        } else {
-            vga_write("not advertised by this drive");
-        }
-        vga_putc('\n');
-        return;
-    }
-
-    if (k_strncmp(args, "nodma", 5) != 0) {
-        vga_write("usage: ata [nodma on|off]\n");
-        return;
-    }
-    args += 5;
-    while (*args == ' ') args++;
-
-    int off;
-    if (k_strcmp(args, "on") == 0) off = 1;
-    else if (k_strcmp(args, "off") == 0) off = 0;
-    else { vga_write("usage: ata [nodma on|off]\n"); return; }
-
-    if (off && !ata_dma_hardware_available()) {
-        vga_write("ata: this machine has no DMA to turn off -- already on PIO.\n");
-        return;
-    }
-    if (!ata_set_dma_forced_off(off)) {
-        // Refused rather than applied -- reported, not swallowed, since
-        // the caller would otherwise believe the mode changed.
-        vga_write("ata: refused -- a transfer is in flight, try again.\n");
-        return;
-    }
-    vga_write("ata: now using ");
-    vga_write(ata_dma_active() ? "DMA" : "PIO");
-    vga_write(off ? " (forced)\n" : "\n");
-}
-
 // `debug` (no args): lists every subsystem and its current on/off
 // state. `debug <subsys> on|off`: flips one. Backed by
 // kernel/include/api/debugflags.h's dbgflag_*() -- see its top comment for
@@ -1449,107 +1299,6 @@ void cmd_gfxbench(const char *args) {
     vga_write(" ms per text line, ");
     vga_write(gfx_double_buffered() ? "buffered" : "DIRECT (reads the framebuffer)");
     vga_putc('\n');
-}
-
-// `kstack` -- the kernel stacks: how close each process is to the edge,
-// what a slot would be resumed into, and which syscall goes deepest.
-//
-// Every one of these was a hand-rolled throwaway probe during the
-// overflow hunt that produced the guard pages (docs/decisions.md). The
-// numbers matter BEFORE a crash, which is the whole point: the bug that
-// prompted this read 8192 of 8192, and the window manager's own path
-// was sitting at 7672 of 8192 -- 520 bytes of margin -- with nothing
-// anywhere reporting it.
-void cmd_kstack(const char *args) {
-    while (*args == ' ') args++;
-
-    if (k_strncmp(args, "track", 5) == 0) {
-        const char *v = args + 5;
-        while (*v == ' ') v++;
-        if (k_strcmp(v, "on") == 0)       scheduler_kstack_track_set(1);
-        else if (k_strcmp(v, "off") == 0) scheduler_kstack_track_set(0);
-        else if (*v != '\0') { vga_write("usage: kstack track [on|off]\n"); return; }
-        vga_printf("kstack: per-syscall depth tracking %s\n",
-                    scheduler_kstack_track_get() ? "ON (table cleared)" : "off");
-        return;
-    }
-
-    if (k_strcmp(args, "syscalls") == 0) {
-        if (!scheduler_kstack_track_get()) {
-            vga_write("kstack: tracking is off -- `kstack track on` first, then\n"
-                       "        exercise the paths you care about\n");
-        }
-        vga_write("syscall            peak stack\n");
-        int shown = 0;
-        for (int nr = 0; nr < SCHED_KSTACK_SYSCALL_MAX; nr++) {
-            uint32_t peak = scheduler_kstack_syscall_peak(nr);
-            if (!peak) continue;
-            // Names come from strace's table -- the kernel's only list
-            // of them. kfmt's numeric widths ZERO-PAD (see kfmt.h), so
-            // the column is built as a string, not with %-7d.
-            const char *nm = strace_syscall_name(nr);
-            char label[24];
-            if (nm) {
-                k_snprintf(label, sizeof label, "%s(%d)", nm, nr);
-            } else {
-                k_snprintf(label, sizeof label, "#%d", nr);
-            }
-            vga_printf("%-18s %lu bytes\n", label, (unsigned long)peak);
-            shown++;
-        }
-        // A table of zeroes and "nothing was recorded" are different
-        // answers, and only one of them means the tracking is working.
-        if (!shown) vga_write("  (nothing recorded yet)\n");
-        return;
-    }
-
-    if (*args != '\0' && k_strcmp(args, "slots") != 0) {
-        vga_write("usage: kstack [slots] | kstack track [on|off] | kstack syscalls\n");
-        return;
-    }
-    int slots = k_strcmp(args, "slots") == 0;
-
-    vga_printf("kernel stacks: %d KiB each, guard page below (unmapped)\n",
-                scheduler_kstack_kib());
-    if (slots) vga_write("slot pid name              state  krsp             cs   rip\n");
-    else       vga_write("slot pid name              used / size    canary\n");
-
-    struct sched_kstack_info k;
-    int live = 0;
-    for (int i = 0; i < 64; i++) {
-        if (!scheduler_kstack_info(i, &k)) break;
-        if (k.state == 0) continue; // SCHED_UNUSED -- skip, don't stop
-        live++;
-        if (slots) {
-            if (k.frame_ok) {
-                vga_printf("%-4d %-3d %-17s %-6d 0x%lx  0x%lx 0x%lx\n",
-                            k.slot, k.pid, k.name, k.state, k.kernel_rsp,
-                            k.cs, k.rip);
-            } else {
-                // The interesting case: a saved rsp that is not inside
-                // this slot's own stack is the finding, not a gap.
-                vga_printf("%-4d %-3d %-17s %-6d 0x%lx  <not in this stack>\n",
-                            k.slot, k.pid, k.name, k.state, k.kernel_rsp);
-            }
-        } else {
-            unsigned pct = k.size ? (unsigned)((uint64_t)k.used * 100 / k.size) : 0;
-            vga_printf("%-4d %-3d %-17s %lu / %lu  (%u%%)  %s\n",
-                        k.slot, k.pid, k.name,
-                        (unsigned long)k.used, (unsigned long)k.size, pct,
-                        k.canary_ok ? "ok" : "DESTROYED");
-        }
-    }
-    if (!live && !slots) vga_write("  (no live processes)\n");
-
-    // The legacy loader's stack is not a scheduler slot, and it is the
-    // one a command typed at THIS shell actually runs on -- so leaving
-    // it out would omit the only stack the reader is standing on.
-    if (!slots && scheduler_kstack_legacy(&k)) {
-        unsigned pct = k.size ? (unsigned)((uint64_t)k.used * 100 / k.size) : 0;
-        vga_printf("--   --  %-17s %lu / %lu  (%u%%)  %s\n",
-                    k.name, (unsigned long)k.used, (unsigned long)k.size, pct,
-                    k.canary_ok ? "ok" : "DESTROYED");
-    }
 }
 
 // `hwcursor [demo [x y] | off]` -- the display adapter's own cursor

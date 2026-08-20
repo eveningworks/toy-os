@@ -3046,3 +3046,31 @@ what Linux's `atkbd` does.
 Not done with the input core because it touches every layout file and
 the keyboard state machine at once, and the seam is correct either way:
 what a new driver reports is evdev today.
+
+### Directory lookup is O(n)
+
+Measured 2026-08-20 with `/bin/mkfiles`, on TFS3, 5,000 files in one
+directory:
+
+- **Creating is flat.** 2,500 ms per 250 files for all twenty batches,
+  first to last -- 10 ms per file, with no visible dependence on how
+  many entries the directory already had. The per-file cost is the
+  journal and the write-back, not the directory.
+- **Looking up is not.** The verify pass, which opens each file by
+  name in order, went from 80 ms per 250 at index 3,000 to 150 ms per
+  250 at index 5,000 -- time per lookup growing with position, which
+  is a linear scan of the directory.
+
+It is invisible at the ~300 entries anything else in this repo creates
+and obvious at 5,000, which is the argument for the tool existing: this
+was not reachable by typing `touch`.
+
+Not yet a bug entry because nothing is misbehaving -- it is a design
+limitation with a measurement attached. What it costs is any workload
+that opens many files in a large directory. The usual answers are a
+hashed directory (ext4's htree, NTFS's B+ tree) or keeping directories
+small; TFS3 has neither today.
+
+`ls` on such a directory also stops at `SYS_LISTDIR_MAX` (256) and says
+so, which is the listing cap working as designed rather than a second
+finding.

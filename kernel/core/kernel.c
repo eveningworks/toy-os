@@ -289,6 +289,9 @@ void kernel_main(uint64_t multiboot_info_addr) {
     mm_audit_query_init();
     krandom_query_init();
     partition_query_init();
+    heap_query_init();
+    ata_query_init();
+    kstack_query_init();
     settings_init();
 
     // One-shot boot-time CMOS/RTC readout, logged for the same reason a

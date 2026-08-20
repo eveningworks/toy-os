@@ -98,9 +98,6 @@ void cmd_keyboard(const char *args);
 void cmd_color(const char *args);
 void cmd_history(void);
 void cmd_debug(const char *args);
-void cmd_ata(const char *args);
-void cmd_heap(const char *args);
-void cmd_kstack(const char *args);
 void cmd_gfxbench(const char *args);
 void cmd_hwcursor(const char *args);
 
