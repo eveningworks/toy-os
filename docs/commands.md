@@ -30,10 +30,15 @@ resolver. `path` shows the search order.
 no longer builtins. `cat`, `echo`, `rm`, `touch`, `mkdir`, `mv`, `ln`,
 `stat`, `truncate`, `sync`, `uptime`, `df` and `meminfo` are `/bin`
 programs and resolve through `PATH` like anything else, which is why they behave identically
-at this prompt, in `/bin/tosh` and in the GUI Terminal. `ls` and
-`lspci` are builtin *wrappers* around their ELFs (`ls` only so a
-relative directory argument is resolved against the cwd — `/bin/ls`
-defaults to `/`).
+at this prompt, in `/bin/tosh` and in the GUI Terminal. So are `ls` and
+`lspci`, which were the last two builtin *wrappers*: `ls` existed only
+to resolve a relative argument against the cwd, and `/bin/ls` does that
+itself now.
+
+What is left as a builtin is what a builtin is FOR — commands that
+change the shell's own state (`cd`, `pwd`, `path`, `history`, `color`),
+the console's (`clear`, `cursor`, `fontsize`, `keyboard`), or that
+reach kernel state no syscall exposes yet.
 
 **A program started by a bare name prints nothing extra when it
 succeeds**; a non-zero exit prints one line, `<name>: exit <code>`. The
@@ -91,7 +96,7 @@ Paths may be relative to the cwd or absolute.
 | Command | Notes |
 |---|---|
 | `less [file]` | Pager: one screenful at a time. Space/PageDown forward, `b`/PageUp back, arrows by line, `g`/Home and `G`/End to the ends, `q` to quit; a status line shows the position. With no argument it reads STDIN, so `ls -l \| less` works. It reads keys through `SYS_READ_KEY` rather than fd 0 — which is what makes the pipe case possible at all, since in a pipeline fd 0 is the pipe (real `less` opens `/dev/tty` for the same reason; this OS has none). Page height comes from `SYS_CONSOLE_SIZE`, not a baked 80x25, because the console is font-derived. **Run it with `spawn`, not `run`** — the legacy loader has no scheduler slot, so `SYS_SLEEP` fails there and the key poll spins. Holds the input in memory (256 KB cap, then says TRUNCATED) because a pipe cannot be rewound. |
-| `ls [flags] [dir]` | Sorted by name, one entry per line, directories coloured. `-l` type/size/mtime, `-h` human sizes, `-C` columns, `-1` one per line, `-t` newest first, `-S` largest first, `-r` reverse, `-R` recurse, `--color=never\|always`; `-a`/`-F` accepted as no-ops (no dotfile convention, no mode bits). Colour is ANSI escapes the console parses, so it survives a pipe and can be turned off — there is no `--color=auto` because nothing can yet ask whether an fd is a terminal. A real disk-hosted `/bin/ls` binary, not a builtin — see `decisions.md`. |
+| `ls [flags] [dir]` | **With no argument it lists the current directory.** It defaulted to `/` until 2026-08-20, and nothing noticed because a builtin wrapper resolved the cwd and passed it in — one command with two halves in two rings, where the ring-3 half was wrong on its own and could not be run on its own. It asks `SYS_GETCWD` up front rather than passing `.` down, so `-R` headers and joined child paths stay absolute. Sorted by name, one entry per line, directories coloured. `-l` type/size/mtime, `-h` human sizes, `-C` columns, `-1` one per line, `-t` newest first, `-S` largest first, `-r` reverse, `-R` recurse, `--color=never\|always`; `-a`/`-F` accepted as no-ops (no dotfile convention, no mode bits). Colour is ANSI escapes the console parses, so it survives a pipe and can be turned off — there is no `--color=auto` because nothing can yet ask whether an fd is a terminal. A real disk-hosted `/bin/ls` binary with no builtin in front of it; `rescue ls` is the only ring-0 listing left. |
 | `cd [dir]`, `pwd` | `cd` with no argument goes to `/` — there is no `$HOME`. `..` and `.` are resolved by the kernel, so they mean the same thing everywhere. |
 | `cat [f...]` | Copies files, or STDIN with no argument, to stdout. Streams in fixed chunks rather than reading a file whole, so file size is irrelevant. A missing file is reported and the remaining ones still print, with a non-zero exit. |
 | `touch <f>` | Creates an empty file; it does not update an existing file's timestamp, and does not claim to. |
@@ -130,7 +135,8 @@ history search, `Alt-.` last argument. `help` lists them all.
 | `heap` | Kernel heap stats. `heap debug on\|off` red-zones new allocations and poisons freed ones; `heap check` sweeps for a use-after-free. |
 | `df` | Size, used, free, use%, and which filesystem backend is mounted plus whether it persists. `/bin/df`, over `QUERY_FSINFO` — one record, so the name and the numbers describe the same instant. It was a builtin until 2026-08-20, purely because ring 3 could not ask for the backend name; the fix was a provider, not a syscall. |
 | `meminfo [--map \| --audit \| --list]` | `/bin/meminfo`. Plain: the firmware memory map, then the frame allocator and kernel heap. `--map` just the map (`QUERY_MEMMAP`, a list). `--audit` every mapping pointing at a frame the allocator considers FREE (`QUERY_MMAUDIT`) — **zero findings is the healthy answer**, and it exits non-zero when there are any. `--list` walks the provider registry itself. |
-| `dmesg`, `lspci`, `parttable` | |
+| `dmesg`, `parttable` | Still builtins — kernel state with no syscall behind it yet. |
+| `lspci` | `/bin/lspci`, with no builtin and **no ring-0 fallback** — the kernel-side device lister was deleted with the wrapper, so a damaged `/bin` has no way to list PCI devices. `dmesg` still logs what was found at boot. |
 | `gfxbench [iterations]` | Times full-screen framebuffer fills *and* console scrolls, reporting ms/frame, an fps ceiling, MB/s, which write-combining mechanism is live, and whether the console is double-buffered. Meaningful only under `make run KVM=1` or on real hardware — plain QEMU's TCG ignores memory types, so both console modes measure the same there. See `decisions.md`. |
 | `hwcursor [demo [x y] \| off]` | The display adapter's own cursor plane: reports whether this display has one, and `demo` puts a 32x32 magenta square on it. A DIAGNOSTIC, not the pointer — the compositor still draws a software sprite, so this is the only caller `gfx_hw_cursor_*()` has. Present on `-vga virtio` (virtio-gpu's cursor queue); absent on plain `-vga std`. Note a device-composited cursor never appears in a `screendump`. |
 

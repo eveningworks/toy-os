@@ -179,9 +179,9 @@ int shell_exec_name(const char *name, const char *args, int report) {
         vga_putc('\n');
         vga_set_color(shell_fg, VGA_BLACK);
     } else if (exit_code != 0) {
-        // One terse line, the shape cmd_ls_bin() and cmd_lspci()
-        // already used for the two commands that reached ring 3 before
-        // the rest of them did.
+        // One terse line -- the shape the two builtin wrappers used
+        // for the commands that reached ring 3 before the rest of
+        // them did. Both wrappers are gone now; the shape stayed.
         vga_write(name);
         vga_write(": exit ");
         vga_write_exit_code(exit_code);

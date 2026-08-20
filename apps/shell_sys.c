@@ -1187,85 +1187,6 @@ void cmd_strace(const char *name_and_args) {
     vga_set_color(shell_fg, VGA_BLACK);
 }
 
-// The real /bin/ls ELF64 binary's shell-side wrapper (see
-// userland/ls.c) -- gets its own dedicated dispatch entry rather than
-// going through the generic `run` path, same precedent as cmd_lspci()
-// below having its own entry instead of requiring `run lspci`. Splits
-// `-a`/`-l`/`-al`/`-la` flags from an optional trailing positional
-// directory argument, resolves that argument (or defaults to `cwd`)
-// through resolve_path() -- fs.c/fs.h has no cwd concept at all, and
-// neither does userland/ls.c, so this is the one place a relative path
-// gets turned into an absolute one before crossing into ring 3.
-void cmd_ls_bin(const char *args) {
-    // FLAGS ARE PASSED THROUGH VERBATIM. This used to take each token
-    // apart, collect the flag LETTERS into a char[8] and rebuild them as
-    // one `-abc` cluster -- which meant this ring-0 function had to know
-    // /bin/ls's flag vocabulary, and silently mangled anything it did
-    // not. `--color=never` arrived at ls as `--color=`: the letters were
-    // gathered, the buffer filled, and the value fell off the end.
-    //
-    // The only thing that genuinely belongs to the SHELL here is
-    // resolving the positional path against its cwd, because fs.c has no
-    // cwd concept and ls only ever receives an absolute path. Everything
-    // else is ls's business, and forwarding it unread is what stops a
-    // flag added there from having to be re-taught here.
-    char positional[FS_PATH_MAX];
-    char passthrough[LINE_MAX];
-    positional[0] = '\0';
-    passthrough[0] = '\0';
-
-    if (args) {
-        char scratch[LINE_MAX];
-        k_strlcpy(scratch, args, sizeof scratch);
-        char *p = scratch;
-        while (*p) {
-            while (*p == ' ') p++;
-            if (!*p) break;
-            char *start = p;
-            while (*p && *p != ' ') p++;
-            int had_space = (*p == ' ');
-            *p = '\0';
-            if (start[0] == '-') {
-                // Verbatim, in order, separated by single spaces.
-                if (passthrough[0]) k_strlcat(passthrough, " ", sizeof passthrough);
-                k_strlcat(passthrough, start, sizeof passthrough);
-            } else if (positional[0] == '\0') {
-                k_strlcpy(positional, start, sizeof positional);
-            }
-            if (had_space) p++;
-        }
-    }
-
-    char path[FS_PATH_MAX];
-    if (!resolve_path(positional[0] ? positional : 0, path)) {
-        vga_write("ls: path too long\n");
-        return;
-    }
-
-    // Bounded appends. This used to end in
-    // `k_strcpy(run_args + k_strlen(run_args), path)`, which is an
-    // UNBOUNDED append: enough flags in front of a full-length path
-    // wrote past the end of run_args.
-    char run_args[LINE_MAX];
-    run_args[0] = '\0';
-    if (passthrough[0]) {
-        k_strlcat(run_args, passthrough, sizeof run_args);
-        k_strlcat(run_args, " ", sizeof run_args);
-    }
-    if (k_strlcat(run_args, path, sizeof run_args) >= sizeof run_args) {
-        vga_write("ls: too many flags for that path\n");
-        return;
-    }
-
-    int exit_code = elf_run_from_fs("/bin/ls", run_args);
-    vga_set_color(shell_fg, VGA_BLACK);
-    if (exit_code != 0) {
-        vga_write("ls: exited with code ");
-        vga_write_exit_code(exit_code);
-        vga_putc('\n');
-    }
-}
-
 static enum vga_color color_from_name(const char *s) {
     if (k_strcmp(s, "black") == 0) return VGA_BLACK;
     if (k_strcmp(s, "blue") == 0) return VGA_BLUE;
@@ -1386,9 +1307,10 @@ void cmd_history(void) {
 
 // Prints exactly `digits` lowercase hex digits of `v`, no "0x" prefix
 // and no digit-trimming -- unlike vga_write_hex() (vga.h), which is
-// meant for arbitrary-width values and trims leading zeros. lspci-style
-// output wants fixed-width fields (e.g. "8086:1237", not "8086:1237"
-// one time and "86:237" the next) so columns actually line up.
+// meant for arbitrary-width values and trims leading zeros. Fixed-width
+// fields are what makes a column of them line up; `parttable`'s GUID and
+// LBA columns are the remaining caller (lspci was the original one, and
+// is a /bin program now).
 static void print_hex_digits(uint32_t v, int digits) {
     char buf[17];
     k_htoa(v, buf, sizeof buf, (unsigned)digits); // fixed width -- see knum.h
@@ -1411,70 +1333,6 @@ static void print_hex_digits(uint32_t v, int digits) {
 // The device list itself still comes from the kernel, through
 // SYS_PCI_COUNT/SYS_PCI_INFO; only the formatting and the pci.ids
 // lookup moved out.
-static void cmd_lspci_builtin(void);
-
-void cmd_lspci(void) {
-    // Checked with fs_exists() rather than by looking at
-    // elf_run_from_fs()'s return value: that returns -1 for "couldn't
-    // read it", which is indistinguishable from a process that really
-    // did exit -1. Asking first is unambiguous.
-    if (!fs_exists("/bin/lspci")) {
-        cmd_lspci_builtin();
-        return;
-    }
-
-    int exit_code = elf_run_from_fs("/bin/lspci", "");
-    vga_set_color(shell_fg, VGA_BLACK);
-    if (exit_code != 0) {
-        vga_write("lspci: exited with code ");
-        vga_write_exit_code(exit_code);
-        vga_putc('\n');
-    }
-}
-
-// The old kernel-space implementation, now only the fallback for a disk
-// with no /bin/lspci on it -- a hand-built image, or one seeded before
-// that binary existed. Reachable only through the check above. It prints
-// numeric ids with no vendor/device names, since looking those up means
-// reading /usr/share/hwdata/pci.ids, which is exactly the work that
-// belongs in the userland program rather than in here.
-static void cmd_lspci_builtin(void) {
-    int count = pci_device_count();
-    if (count == 0) {
-        vga_write("No PCI devices found.\n");
-        return;
-    }
-    for (int i = 0; i < count; i++) {
-        const struct pci_device *d = pci_device_at(i);
-        if (!d) continue;
-
-        print_hex_digits(d->bus, 2);
-        vga_putc(':');
-        print_hex_digits(d->device, 2);
-        vga_putc('.');
-        print_hex_digits(d->function, 1);
-        vga_write("  ");
-        print_hex_digits(d->vendor_id, 4);
-        vga_putc(':');
-        print_hex_digits(d->device_id, 4);
-        vga_write("  ");
-        vga_write(pci_class_name(d->class_code, d->subclass));
-
-        if (d->interrupt_line != 0 && d->interrupt_line != 0xFF) {
-            vga_write("  irq ");
-            vga_write_dec(d->interrupt_line);
-        }
-        for (int b = 0; b < 6; b++) {
-            if (d->bar[b] == 0) continue;
-            vga_write("  bar");
-            vga_write_dec((uint32_t)b);
-            vga_putc('=');
-            vga_write_hex(pci_bar_addr(d->bar[b]));
-            vga_write(pci_bar_is_io(d->bar[b]) ? "(io)" : "(mem)");
-        }
-        vga_putc('\n');
-    }
-}
 
 // `ata` -- report which transfer path is in use; `ata nodma on|off`
 // forces the PIO fallback or releases it.

@@ -694,3 +694,63 @@ directories everywhere passes every other assertion in the file. "Path
 completion still offers directories" is the check that catches it, and
 the positive control proved it: breaking all three fixes reddened
 exactly four tests and left that one green.
+
+## The `ls` and `lspci` wrapper builtins are gone, and `/bin/ls` learned the cwd
+
+Both were a ring-0 dispatch branch whose only job was to run the ELF.
+`lspci`'s did nothing else at all, plus carried a complete second PCI
+lister as a fallback for a missing `/bin/lspci`. `ls`'s split a flag
+list from a positional argument and resolved that argument against the
+shell's cwd before handing it over.
+
+**That last part is why this is a decision and not a cleanup.**
+Because the wrapper supplied the cwd, `/bin/ls` defaulted to `/` when
+given no path -- so a bare `ls` listed the ROOT, and was only ever
+correct because the kernel shell never let it be called that way. Run
+from `/bin/tosh`, from a pipeline, or from anything that was not the
+wrapper, `ls` in `/docs` listed `/`. One command had two halves in two
+rings and the ring-3 half was wrong on its own, which nobody could see
+for as long as the wrapper was its only caller.
+
+The fix was to move the capability rather than keep the wrapper:
+`/bin/ls` asks `SYS_GETCWD` itself, and the wrapper had nothing left to
+do. **The general form worth carrying: when a builtin exists to supply
+an argument the program should be able to obtain for itself, the
+program is missing a capability and the wrapper is hiding it.** Ask
+what the program does when run WITHOUT its wrapper; if the answer is
+"something wrong", that is the bug.
+
+It resolves the cwd once, up front, rather than passing `.` down.
+Either works for the listing itself -- the cwd is the kernel's and
+every path syscall resolves against it -- but the path is also printed
+in `-R` headers and joined onto child names, and `./docs:` is not what
+a reader wants where `/docs:` was. The fallback when `SYS_GETCWD` fails
+is still `/`: it needs a scheduler slot, and the legacy `run` loader is
+not a process, so a bare `ls` under `run` lists something rather than
+failing.
+
+**What was accepted as a loss.** Deleting `cmd_lspci_builtin()` means a
+disk with no `/bin/lspci` has no way to list PCI devices at all. That
+is deliberate: the fallback was a second implementation of a command,
+which is the thing this whole sequence of changes exists to delete, and
+it could drift from the real one without anyone knowing which had run.
+`dmesg` still reports what the PCI scan found at boot, which is the
+diagnostic that matters on a broken image. `rescue` deliberately did
+not gain an `lspci`: its set is the FILE commands, the ones that let
+you see and repair what is on a damaged disk, and listing PCI devices
+is not that.
+
+**A note on how the deletion itself went, because it went wrong twice.**
+Removing these three functions by slicing the file between two text
+anchors deleted four innocent neighbours on the first attempt
+(`cmd_color`, `cmd_fontsize`, `cmd_keyboard`, `cmd_history`) and one on
+the second (`color_from_name`, which a guard missed because the guard
+counted only `void` functions). A slice is bounded by where the next
+thing is ASSUMED to start. The version that worked deletes by BRACE
+EXTENT -- find the signature, match braces to the close -- and then
+diffs the set of function definitions in the file before and against
+after, which is the check that actually answers "did I remove exactly
+what I meant to". This repo already records the same failure for docs
+edits (CLAUDE.md's rule about search anchors and line counts); it
+applies to code with a worse failure mode, because a missing function
+is a link error only if something still calls it.

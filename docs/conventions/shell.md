@@ -154,11 +154,37 @@ this the obvious way), not from how much history it accumulated.
 
   **So a builtin that survives should name the capability it is waiting
   on**, and that capability should be a provider nobody has written
-  yet -- not a permanent excuse. `ls` and `lspci` are thin builtin
-  WRAPPERS around their ELFs, `ls` only because `/bin/ls` defaults to
-  `/` rather than the cwd. What is left in the chain is kernel
+  yet -- not a permanent excuse. What is left in the chain is kernel
   introspection (`heap`, `kstack`, `dmesg`, `ata`, `parttable`,
-  `fsck`), each of which is one provider away by the same route.
+  `fsck`), each of which is one provider away by the same route, plus
+  the commands that are builtins because that is what a builtin is FOR:
+  the shell's own state (`cd`, `pwd`, `path`, `history`, `color`) and
+  the console's (`clear`, `cursor`, `fontsize`, `keyboard`).
+
+- **A WRAPPER BUILTIN IS ONE COMMAND WITH TWO HALVES IN TWO RINGS, AND
+  THE RING-3 HALF WILL BE WRONG.** `ls` and `lspci` were the last two:
+  a ring-0 branch whose whole job was to invoke the ELF. `lspci`'s did
+  nothing but run `/bin/lspci`, and carried a full second PCI lister as
+  a fallback. `ls`'s existed to resolve a relative argument against the
+  cwd -- and that is what made it dangerous, because `/bin/ls`
+  therefore defaulted to `/` instead of the current directory. A bare
+  `ls` was CORRECT only when the wrapper called it, and wrong anywhere
+  else: from `/bin/tosh`, from a pipeline, from anything that was not
+  the kernel shell. Nobody noticed for as long as the wrapper was the
+  only caller.
+
+  The fix was to give the program the capability rather than the
+  wrapper: `/bin/ls` asks `SYS_GETCWD` itself, and the wrapper deleted
+  itself. **The general form: when a builtin exists to supply an
+  argument a program should be able to obtain, the program is missing a
+  capability -- and the wrapper is hiding it.** Ask what the program
+  does when run WITHOUT the wrapper; if the answer is "something
+  wrong", that is the bug, not the missing wrapper.
+
+  It asks for the cwd rather than passing `.` down, deliberately: the
+  path is printed in `-R` headers and joined onto child names, and
+  `./docs:` is not what a reader wants where `/docs:` was. Resolve
+  once, up front, and every later use stays absolute.
 
 - **TAB COMPLETION IN COMMAND POSITION IS BUILTINS PLUS ALL OF `PATH`,
   DEDUPLICATED AND SORTED, WITH NO DIRECTORIES.** That is bash's

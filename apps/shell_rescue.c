@@ -60,9 +60,12 @@ static void rescue_ls_cb(const char *name, uint32_t size, int is_dir) {
 }
 
 // Not a copy of /bin/ls. This is the one rescue command with no ring-0
-// implementation left to reuse -- `ls` became a wrapper around the ELF
-// some time ago (cmd_ls_bin() in shell_sys.c) -- so it is written here
-// as the minimum that answers the question.
+// implementation left to reuse: the kernel shell has not listed a
+// directory itself since `ls` became a /bin program, and the builtin
+// wrapper that used to invoke that program is gone too. So this is
+// written here as the minimum that answers the question -- and it is
+// now the ONLY way to see a directory when /bin is damaged, which
+// raises its stakes rather than lowering them.
 static void rescue_ls(const char *args) {
     char path[FS_PATH_MAX];
     if (!resolve_path((args && k_strlen(args) > 0) ? args : 0, path)) {

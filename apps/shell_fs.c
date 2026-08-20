@@ -6,10 +6,11 @@
 // shell_sys.c via shell_internal.h.
 //
 // `ls` used to live here as a kernel-space built-in (fs_list() called
-// directly) -- it migrated to a real /bin binary (userland/ls.c),
-// invoked via cmd_ls_bin() in shell_sys.c, alongside the rest of the
-// disk-hosted-binary commands (cmd_run(), cmd_lspci()'s sibling). See
-// `docs/decisions.md` for why.
+// directly). It is a /bin program now (userland/bin/ls.c) with no
+// builtin in front of it at all -- resolved through PATH like any other
+// executable. The only ring-0 listing left is `rescue ls`
+// (apps/shell_rescue.c), for a disk whose /bin is damaged. See
+// `docs/decisions.md`.
 #include "shell_internal.h"
 #include "editor.h"
 

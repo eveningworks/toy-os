@@ -26,7 +26,7 @@
 const char *const COMPLETION_COMMANDS[] = {
     "about", "append", "apps", "ata", "beep", "cd", "clear", "color",
     "cursor", "debug", "dmatest", "dmesg", "edit", "fontsize",
-    "fputest", "fsck", "fsformat", "gui", "heap", "help", "ktest", "history", "keyboard", "lspci", "ls",
+    "fputest", "fsck", "fsformat", "gui", "heap", "help", "ktest", "history", "keyboard",
     "nano", "parttable", "pwd", "reboot", "rescue",
     "ring3test", "run", "schedtest", "steptest", "strace", "stress",
     "path", "random", "time", "timezone", "write",

@@ -158,8 +158,6 @@ static void dispatch(char *line) {
         cmd_reboot();
     } else if (k_strcmp(cmd, "color") == 0) {
         cmd_color(args ? args : "");
-    } else if (k_strcmp(cmd, "ls") == 0) {
-        cmd_ls_bin(args ? args : "");
     } else if (k_strcmp(cmd, "cd") == 0) {
         cmd_cd(args ? args : "");
     } else if (k_strcmp(cmd, "pwd") == 0) {
@@ -208,8 +206,6 @@ static void dispatch(char *line) {
         cmd_keyboard(args ? args : "");
     } else if (k_strcmp(cmd, "history") == 0) {
         cmd_history();
-    } else if (k_strcmp(cmd, "lspci") == 0) {
-        cmd_lspci();
     } else if (k_strcmp(cmd, "parttable") == 0) {
         cmd_parttable();
     } else if (shell_exec_name(cmd, args, 0)) {

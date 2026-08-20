@@ -2,9 +2,22 @@
 //
 // A real ring-3 program over SYS_LISTDIR, taking ordinary C argc/argv.
 // argv[0] is whatever path the shell invoked it as; argv[1..] are flags
-// and at most one positional directory path. The shell resolves a
-// relative path against its own cwd before handing it over -- fs.c has
-// no cwd concept, and neither does this file.
+// and at most one positional directory path.
+//
+// WITH NO ARGUMENT IT LISTS THE CURRENT DIRECTORY, which is what every
+// ls does and what this one did not: it defaulted to `/`, so a bare
+// `ls` in /docs listed the root. Nothing noticed because the kernel
+// shell had a BUILTIN WRAPPER whose only remaining job was to resolve
+// the cwd and pass it in -- one command with two halves in two rings,
+// where the ring-3 half was wrong on its own and could not be run on
+// its own. Fixing the default deleted the wrapper.
+//
+// It asks SYS_GETCWD rather than passing "." down, deliberately. The
+// cwd is the KERNEL's and every path syscall already resolves against
+// it, so "." would work for the listing itself -- but the path is also
+// printed in -R headers and joined onto child names, and "./docs:" is
+// not what a reader wants where "/docs:" was. Resolving once, up
+// front, keeps every later use absolute.
 //
 // COLOUR IS AN ESCAPE SEQUENCE NOW, NOT A SYSCALL. This used to call
 // sys_set_color(), which reaches around the byte stream and changes the
@@ -122,15 +135,21 @@ static struct dirent g_entries[SYS_LISTDIR_MAX];
 // afford. The bound is stated rather than assumed: a tree deeper or
 // wider than this reports that it stopped.
 #define QUEUE_MAX 64
-static char g_queue[QUEUE_MAX][64];
+// 64 is FS_PATH_MAX, the kernel's own limit -- a path longer than this
+// cannot name a file here, so nothing is lost by bounding at it. Named
+// rather than repeated: it is the queue row width, the snprintf bound
+// and the cwd buffer, and those three must agree.
+#define LS_PATH_MAX 64
+
+static char g_queue[QUEUE_MAX][LS_PATH_MAX];
 static int g_qhead, g_qtail, g_qdropped;
 
 static void queue_push(const char *dir, const char *name) {
     if (g_qtail >= QUEUE_MAX) { g_qdropped++; return; }
     char *dst = g_queue[g_qtail];
     // "/" + name, avoiding the double slash at the root.
-    if (dir[1] == '\0' && dir[0] == '/') snprintf(dst, 64, "/%s", name);
-    else snprintf(dst, 64, "%s/%s", dir, name);
+    if (dir[1] == '\0' && dir[0] == '/') snprintf(dst, LS_PATH_MAX, "/%s", name);
+    else snprintf(dst, LS_PATH_MAX, "%s/%s", dir, name);
     g_qtail++;
 }
 
@@ -204,7 +223,14 @@ static void usage(void) {
 
 int main(int argc, char **argv) {
     struct opts o = { 0, 0, 0, 0, 0, 'n', 1 };
+    // The default, if no positional argument arrives. `/` is the
+    // fallback for a caller with no scheduler slot: SYS_GETCWD needs a
+    // process, and the legacy `run` loader is not one (see its ABI
+    // comment), so a bare `ls` under `run` still lists something rather
+    // than failing.
+    char cwd[LS_PATH_MAX];
     const char *path = "/";
+    if (sys_getcwd(cwd, sizeof cwd) > 0 && cwd[0]) path = cwd;
     int got_path = 0, bad = 0;
 
     for (int i = 1; i < argc; i++) {
