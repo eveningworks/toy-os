@@ -2,6 +2,8 @@
 
 **a `/bin` program.**
 
+**Category:** System information
+
 ## Synopsis
 
     lspci

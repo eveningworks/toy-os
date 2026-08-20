@@ -2,6 +2,8 @@
 
 **a shell builtin.**
 
+**Category:** System information
+
 ## Synopsis
 
     timezone [city]

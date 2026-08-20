@@ -2,6 +2,8 @@
 
 **a `/bin` program.**
 
+**Category:** Developer and diagnostic (`help tests`)
+
 ## Synopsis
 
     reboot [--poweroff]

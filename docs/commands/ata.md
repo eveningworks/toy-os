@@ -2,6 +2,8 @@
 
 **a `/bin` program.**
 
+**Category:** System information
+
 ## Synopsis
 
     ata | ata nodma [on|off]

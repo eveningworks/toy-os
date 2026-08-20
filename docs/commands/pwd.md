@@ -2,6 +2,8 @@
 
 **a shell builtin.**
 
+**Category:** Files and the filesystem
+
 ## Synopsis
 
     cd [dir], pwd

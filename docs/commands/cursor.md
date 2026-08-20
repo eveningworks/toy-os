@@ -2,6 +2,8 @@
 
 **a shell builtin.**
 
+**Category:** Appearance and the console
+
 ## Synopsis
 
     cursor <translucent\

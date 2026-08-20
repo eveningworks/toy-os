@@ -2,6 +2,8 @@
 
 **a `/bin` program.**
 
+**Category:** Files and the filesystem
+
 ## Synopsis
 
     sync

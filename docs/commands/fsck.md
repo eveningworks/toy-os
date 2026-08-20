@@ -2,6 +2,8 @@
 
 **a shell builtin.**
 
+**Category:** Disk and filesystem maintenance
+
 ## Synopsis
 
     fsck [repair]

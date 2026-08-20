@@ -32,11 +32,9 @@ will need updating to match (there's no runtime query for them over
 QMP, this mirrors the kernel's own math with numbers instead of live
 gfx_char_w()/gfx_char_h() calls).
 
-APP_ORDER mirrors what the WM builds from /usr/wm/desktop/ -- entries
-sorted by CATEGORY (system, apps, demos) then by name, with
-SYSTEM_ACTIONS below a 1px divider. Adding a .desktop file changes it,
-so prefer asking the kernel (`gui apps`, or DebugConsole.menu_row) over
-trusting this copy.
+Menu rows are found BY LABEL, from the kernel's own geometry -- there is
+no list of apps in this file to keep in step with /usr/wm/desktop/. See
+the note above `class GuiFlow` for the bug that came of having one.
 
 Usage:
     import sys; sys.path.insert(0, "tools")
@@ -75,37 +73,45 @@ TASKBAR_H = 24       # WM_TITLEBAR_H -- taskbar strip is the same height as a ti
 ITEM_H = 22           # Start menu row height (gfx_char_h() + 6 -- see above)
 START_BTN = (50, 703)  # inside the taskbar's Start button, safely off any edge
 
-# Ask the kernel instead where you can: `gui apps` / `gui menu --json`
-# list the registry live, in order (tools/gui_debug.py).
-# Order comes from /usr/wm/desktop/ now -- the WM sorts entries by
-# CATEGORY (system, apps, demos) and then by name, so this list is a
-# mirror of that rather than of a table in gui_apps.c. Most entries
-# spawn a ring-3 program, so open_app() returns before any window
-# exists: a caller that wants the window must poll `gui windows`.
-APP_ORDER = ["About", "System Settings", "Task Manager",
-             "Calculator", "Notepad", "Terminal",
-             "Shapes", "UI Demo"]
-# Keep in sync with userland/wm/start_menu.c's wm_system_actions[] order.
-SYSTEM_ACTIONS = ["Exit to shell", "Shutdown"]
-
-# Deriving the menu's top Y from SCREEN_H - TASKBAR_H - ITEM_H*total_items
-# (start_menu.c's own geometry() formula) matched a live-measured
-# screenshot exactly at these corrected constants -- menu top border at
-# y=475, back when the menu had 8 rows at the old 18pt default.
+# THERE IS NO MIRRORED LIST OF APPS HERE ANY MORE, and there was one
+# until 2026-08-20. `APP_ORDER` copied what the WM builds from
+# /usr/wm/desktop/, and the Start menu's top edge was DERIVED from its
+# length (the menu grows upward from the taskbar, so every app added
+# moves it). "Crash Test" was added to the desktop entries and not to
+# the list, which did two things at once: the index of every app after
+# it was wrong, AND the computed origin was one row too low -- so
+# open_app("System Settings") clicked Task Manager. Both symptoms, one
+# cause, and neither failed loudly.
 #
-# It is COMPUTED from the lists above now rather than hardcoded, because
-# the menu grows UPWARD from the taskbar: every app added to the registry
-# moves this number, and a stale constant doesn't fail loudly -- it just
-# clicks the wrong row. Adding the four ring-3 launchers moved it by 108
-# pixels; dropping the default font to 14pt moved it again. Better
-# still, don't rely on it at all: DebugConsole.menu_row
-# (tools/gui_debug.py) asks the kernel where a row actually is, by label.
-MENU_TOP_Y = SCREEN_H - TASKBAR_H - ITEM_H * (len(APP_ORDER) + len(SYSTEM_ACTIONS))
-
+# Rows are asked for BY LABEL now, from the kernel's own geometry
+# (`gui menu --json`, via DebugConsole.menu_row). A name cannot go
+# stale the way an index can.
 
 class GuiFlow:
-    def __init__(self, qmp_port=4445, **session_kwargs):
+    def __init__(self, qmp_port=4445, console=None, serial=None, **session_kwargs):
+        """Menu rows are found by LABEL, which needs the debug console.
+
+        **PASS YOUR OWN `console` IF YOU HAVE ONE.** Two DebugConsole
+        objects are two connections to the SAME serial socket, and the
+        guest's reply goes to whichever happens to be reading -- so a
+        caller holding its own console while this opened a second saw
+        queries answered with somebody else's output, or with nothing.
+        That presented as "the Start menu did not open" on a menu that
+        was demonstrably open, which is a long way from the cause.
+
+        `serial` (a path) is the fallback for a caller that has no
+        console of its own; it is opened lazily, so a flow that never
+        touches the menu needs no socket at all.
+        """
         self.session = QMPSession(port=qmp_port, **session_kwargs)
+        self._serial = serial or ".vm.serial"
+        self._dbg = console
+
+    def _console(self):
+        if self._dbg is None:
+            from gui_debug import DebugConsole
+            self._dbg = DebugConsole(self._serial)
+        return self._dbg
 
     # -- entry / menu -----------------------------------------------------
 
@@ -119,44 +125,89 @@ class GuiFlow:
         self.session.send_key("ret")
         time.sleep(settle)
 
-    def open_start_menu(self, settle=0.4):
+    def open_start_menu(self, settle=0.4, timeout=4.0):
+        """Clicks Start and WAITS UNTIL THE MENU EXISTS.
+
+        Not a fixed sleep: `gui menu --json` answers with nothing at all
+        while the menu is closed, so a caller that slept and then asked
+        got an empty reply and a confusing parse error rather than "the
+        menu did not open". Waiting on the artifact is this repo's own
+        rule for exactly this shape.
+        """
+        # IDEMPOTENT, because the Start button TOGGLES. Clicking it when
+        # the menu is already open closes it, and the poll below then
+        # waits out its whole timeout on a menu the caller had already
+        # opened -- which is how this presented: an "open" that closed.
+        # `open`, NOT `rows`. `gui menu --json` reports the menu's
+        # GEOMETRY whether it is showing or not -- a full row list with
+        # "open": false -- so a rows-are-present test is true always,
+        # and this returned without ever clicking. The one field that
+        # answers the question is the one named after it.
+        try:
+            if self._console().menu().get("open"):
+                self._menu_open_hint = True
+                return
+        except (ValueError, KeyError):
+            pass
+        # RECALIBRATE FIRST. QMP moves the mouse in RELATIVE steps, so a
+        # process that did not itself put the pointer somewhere known has
+        # no idea where it is -- and the click lands wherever it happens
+        # to be. It worked within one script and failed in the next,
+        # which is the signature of exactly this (see qmp_test.py's
+        # cursor-drift note). Cheap, and it makes the helper safe to call
+        # as the first thing a script does.
+        self.session.recalibrate()
         self.session.click_at(*START_BTN)
-        time.sleep(settle)
-        self._menu_open_hint = True
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            time.sleep(0.2)
+            try:
+                if self._console().menu().get("open"):
+                    self._menu_open_hint = True
+                    time.sleep(settle)
+                    return
+            except (ValueError, KeyError):
+                continue
+        raise RuntimeError(
+            "gui_flow: the Start menu did not open within "
+            f"{timeout}s -- is a desktop running, and is the Start "
+            "button where START_BTN says? `gui taskbar` reports its real "
+            "position.")
 
-    def _menu_row_center(self, row_index):
-        return (80, MENU_TOP_Y + ITEM_H * row_index + ITEM_H // 2)
+    def click_menu_row(self, label, settle=0.5, _menu_already_open=False):
+        """Clicks the Start menu row with this LABEL.
 
-    def click_menu_row_by_index(self, row_index, settle=0.5, _menu_already_open=False):
-        """0-based row index into APP_ORDER + SYSTEM_ACTIONS, top to
-        bottom -- opens the Start menu first unless the caller already
-        did (`_menu_already_open=True`, used by open_app()/
-        run_system_action() so a single logical "open menu, click row"
-        flow doesn't toggle the menu open-then-closed with two
-        separate clicks on the Start button)."""
+        The position comes from the kernel (`gui menu --json`), so this
+        cannot drift when an app is added -- which is exactly what the
+        row-index version did. A label that is not in the menu raises,
+        rather than clicking whatever is at that height.
+        """
         if not _menu_already_open and not getattr(self, "_menu_open_hint", False):
             self.open_start_menu()
-        x, y = self._menu_row_center(row_index)
+        x, y = self._console().menu_row(label)
         self.session.click_at(x, y)
         time.sleep(settle)
         self._menu_open_hint = False
 
     def open_app(self, name, settle=0.5):
-        """Opens the Start menu and clicks the named app -- name must
-        match APP_ORDER exactly (case-sensitive, matches the registry's
-        `.name` string)."""
-        if name not in APP_ORDER:
-            raise ValueError(f"gui_flow: {name!r} not in APP_ORDER {APP_ORDER} -- "
-                              "update APP_ORDER to match userland/wm/gui_apps.c's registry")
+        """Opens the Start menu and clicks the named app.
+
+        For most purposes prefer `DebugConsole.open_app(name)`, which
+        sends `gui open <name>` and lets the WM resolve it -- no menu, no
+        pixels, nothing to drift. This exists for a test that wants the
+        real menu EXERCISED rather than bypassed.
+        """
         self.open_start_menu()
-        self.click_menu_row_by_index(APP_ORDER.index(name), settle=settle, _menu_already_open=True)
+        self.click_menu_row(name, settle=settle, _menu_already_open=True)
 
     def run_system_action(self, label, settle=0.5):
-        if label not in SYSTEM_ACTIONS:
-            raise ValueError(f"gui_flow: {label!r} not in SYSTEM_ACTIONS {SYSTEM_ACTIONS}")
+        """`Exit to shell` / `Shutdown` -- the rows below the divider.
+        Same mechanism as open_app(); they are menu rows like any other,
+        and were only ever a separate list because the index arithmetic
+        needed to know how many apps came first.
+        """
         self.open_start_menu()
-        self.click_menu_row_by_index(len(APP_ORDER) + SYSTEM_ACTIONS.index(label),
-                                      settle=settle, _menu_already_open=True)
+        self.click_menu_row(label, settle=settle, _menu_already_open=True)
 
     # -- misc ---------------------------------------------------------------
 

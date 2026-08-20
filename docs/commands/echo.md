@@ -2,6 +2,8 @@
 
 **a `/bin` program.**
 
+**Category:** Appearance and the console
+
 ## Synopsis
 
     echo [-n] <text...>

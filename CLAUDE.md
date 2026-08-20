@@ -959,7 +959,7 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   (versioning), `genfont.py` / `genttf.py`, `gen_kbs.py` (keyboard
   layouts from XKB data), `gen_cursors.py` (cursor themes),
   `genrelocs.py` (the kernel's own relocation table), `gen_syms.py` (the
-  panic symbol table), `gen_decisions_index.py`.
+  panic symbol table), `gen_decisions_index.py`, `gen_commands_index.py`.
 - **The repo itself** -- `backup_repo.sh` (run it before ANY change to
   the repo's identity or history -- a mirror clone is not a backup here,
   release assets live only on GitHub).

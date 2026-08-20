@@ -2,6 +2,8 @@
 
 **a `/bin` program.**
 
+**Category:** System information
+
 ## Synopsis
 
     kstack | kstack slots | kstack syscalls | kstack track [on|off]

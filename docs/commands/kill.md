@@ -2,6 +2,8 @@
 
 **a `/bin` program.**
 
+**Category:** Processes and programs
+
 ## Synopsis
 
     kill <pid> [pid...]    (`ps` for pids)

@@ -113,6 +113,18 @@ manual steps to be worth automating:
   which also means this check is skipped in a checkout that has not run
   `make iso`. Exemptions are named with reasons in
   `COMMAND_PAGE_EXEMPT`.
+- **`gen_commands_index.py`** -- regenerates the categorised index of
+  command pages into `docs/commands/README.md`, the same shape (and for
+  the same reason) as `gen_decisions_index.py`. **The category comes
+  from each PAGE**, a `**Category:**` line near its top -- not from a
+  table in the script, which would be the central list the settings
+  registry deliberately does not have, where a new command means editing
+  two files and the one nobody edits is the table. A page with no
+  category is reported rather than filed under a default, since a
+  catch-all is the pile nobody reads. `check_docs.py` runs it with
+  `--check` and fails the build when the committed index is stale: the
+  coverage check refuses a command with no page, and this refuses a page
+  nobody can find.
 - **`check_deps.py`** -- proves the build's header dependency tracking
   is actually live: touches one header per build directory (discovered
   from `build/`, not listed, so a new source directory is covered as
@@ -134,8 +146,27 @@ manual steps to be worth automating:
   `qmp_test.py`'s `QMPSession` (`GuiFlow` class: `enter_gui()`,
   `open_app(name)`, `run_system_action(label)`, `screenshot_named()`),
   so a testing session doesn't hand-derive Start-menu row pixel math
-  from scratch every time. `APP_ORDER` must stay in sync with
-  `apps/gui_apps.c`'s registry order.
+  from scratch every time.
+
+  **Rows are found BY LABEL, from the kernel's own geometry** -- there
+  is no list of apps in the file to keep in sync, and there was one
+  until 2026-08-20. `APP_ORDER` mirrored the WM's desktop entries and
+  the menu's top edge was DERIVED from its length, so when `Crash Test`
+  was added to `/usr/wm/desktop/` and not to the list, two things broke
+  at once: every later app's index, and the computed origin. The visible
+  symptom was `open_app("System Settings")` opening Task Manager.
+
+  **Pass your own `console=` if you already hold a `DebugConsole`.** Two
+  of them are two connections to one serial socket and the guest's reply
+  goes to whichever is reading -- which presented as "the Start menu did
+  not open" on a menu that was demonstrably open. `open_start_menu()` is
+  idempotent (the Start button TOGGLES) and recalibrates the pointer
+  first, so it is safe as the first thing a script does.
+
+  For most purposes prefer `DebugConsole.open_app(name)`, which sends
+  `gui open <name>` and involves no menu, no pixels and nothing to
+  drift. `GuiFlow.open_app()` is for a test that wants the real menu
+  exercised rather than bypassed -- which is why it still exists.
 - **`shell_flow.py`** -- the same idea as `gui_flow.py`, for the
   PHYSICAL (pre-`gui`) shell instead of the GUI: `ShellFlow.
   run_command(cmd, subdir=...)` types a full command -- including

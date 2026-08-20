@@ -2,6 +2,8 @@
 
 **a `/bin` program.**
 
+**Category:** Developer and diagnostic (`help tests`)
+
 ## Synopsis
 
     random [count]   (1..32 values, default 4)

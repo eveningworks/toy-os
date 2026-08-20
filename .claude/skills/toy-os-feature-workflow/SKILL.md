@@ -149,8 +149,16 @@ to this file too).
      `screenshot_named()`) so a common flow like "enter GUI, open
      Notepad" doesn't need re-deriving pixel math each session -- prefer
      it over hand-rolled coordinates when the flow it needs already
-     exists; its `APP_ORDER` list needs to stay in sync with
-     `apps/gui_apps.c`'s registry order if a GUI app is added/reordered.
+     exists. It finds menu rows BY LABEL from the kernel's own geometry
+     -- it used to carry an `APP_ORDER` list mirroring the WM's desktop
+     entries, and when one was added and the list was not, `open_app`
+     silently opened the wrong app (the menu's origin is derived from
+     the list's LENGTH, so a stale list breaks the position as well as
+     the index). Prefer `DebugConsole.open_app(name)` outright unless
+     the test genuinely wants the menu exercised; it sends `gui open
+     <name>` with no pixels involved. Pass `console=` if you already
+     hold a `DebugConsole` -- two of them on one serial socket steal
+     each other's replies.
      `GuiFlow(qmp_port=4445)` builds its own internal `QMPSession` --
      don't construct a `QMPSession` yourself and pass it in (that's a
      confusing `TypeError`, not an obvious "wrong argument" one); reach

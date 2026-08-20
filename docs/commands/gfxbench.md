@@ -2,6 +2,8 @@
 
 **a shell builtin.**
 
+**Category:** Developer and diagnostic (`help tests`)
+
 ## Synopsis
 
     gfxbench [iterations]

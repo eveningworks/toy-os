@@ -2,6 +2,8 @@
 
 **a shell builtin.**
 
+**Category:** Processes and programs
+
 ## Synopsis
 
     run <name> [args...]

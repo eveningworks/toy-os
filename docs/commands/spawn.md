@@ -2,6 +2,8 @@
 
 **a `/bin` program.**
 
+**Category:** Processes and programs
+
 ## Synopsis
 
     spawn <path> [args...]    (typing the name instead waits for it)

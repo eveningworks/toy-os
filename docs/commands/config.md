@@ -2,6 +2,8 @@
 
 **a `/bin` program.**
 
+**Category:** Configuration
+
 ## Synopsis
 
     config list

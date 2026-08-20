@@ -302,6 +302,25 @@ def check_every_command_has_a_page(problems):
                          f"exists -- renamed or deleted?")
 
 
+def check_commands_index_is_current(problems):
+    """docs/commands/README.md's index matches the pages on disk.
+
+    The coverage check above refuses a command with no page; this
+    refuses a page nobody can FIND. Both halves are needed -- a page
+    that exists and is unlinked is documentation only somebody who
+    already knew about it will read.
+    """
+    gen = os.path.join(REPO, "tools", "gen_commands_index.py")
+    if not os.path.isfile(gen):
+        return
+    r = subprocess.run([sys.executable, gen, "--check"],
+                        capture_output=True, text=True)
+    if r.returncode != 0:
+        problems.append((r.stdout or r.stderr).strip() or
+                         "docs/commands/README.md is stale -- run "
+                         "tools/gen_commands_index.py")
+
+
 def check_command_synopsis_matches(problems):
     """A page's Synopsis is the program's own cmd_usage() string.
 
@@ -350,6 +369,7 @@ def main():
                   check_internal_doc_links,
                   check_tools_are_documented,
                   check_every_command_has_a_page,
+                  check_commands_index_is_current,
                   check_command_synopsis_matches):
         check(problems)
 
@@ -357,7 +377,8 @@ def main():
         print("check_docs: ok -- no dead changelog pointers, no numbered or "
               "versioned milestones, no duplicated roadmap entries, one line "
               "per roadmap item, the decisions index is current, no broken "
-              "doc links, every tool documented, every command has a page")
+              "doc links, every tool documented, every command has a page "
+              "and a link")
         return 0
 
     print(f"check_docs: {len(problems)} problem(s)\n")
