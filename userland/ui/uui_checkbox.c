@@ -1,6 +1,7 @@
 // checkbox. See ui/uui_checkbox.h.
 #include "ui/uui_checkbox.h"
 #include "ui/uui_widget.h"  // the ops table at the bottom of this file
+#include "ui/utheme.h"      // utheme_indicator() -- the box's default size
 #include "keyboard.h"       // KEY_* codes, as delivered by WIN_EV_KEY
 
 #define CHECKBOX_LABEL_GAP 6
@@ -14,9 +15,7 @@
 // checkbox indicator from the font too, so "0 means the font height" is
 // the expected default, not a guess. Never returns 0.
 static int box_size(const struct uui_checkbox *cb) {
-    if (cb->size > 0) return cb->size;
-    int h = ugfx_char_h();
-    return h > 0 ? h : 1;
+    return cb->size > 0 ? cb->size : utheme_indicator();
 }
 
 void uui_checkbox_natural_size(const struct uui_checkbox *cb, int *out_w, int *out_h) {
