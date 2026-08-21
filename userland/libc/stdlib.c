@@ -223,3 +223,84 @@ int rand(void) {
 }
 
 void srand(unsigned seed) { g_seed = seed; }
+
+// --- strtod -----------------------------------------------------------
+//
+// The same accuracy caveat as printf's float side, and for the same
+// reason: digits are accumulated by multiply-and-add rather than by
+// exact arithmetic over the mantissa, so the last place is not
+// guaranteed. strtod(printf("%.17g")) is NOT a round trip. What works:
+// the ~15 significant digits anything here actually writes down.
+#include <math.h>
+
+double strtod(const char *nptr, char **endptr) {
+    const char *s = nptr;
+    while (isspace((unsigned char)*s)) s++;
+
+    int neg = 0;
+    if (*s == '+' || *s == '-') { neg = (*s == '-'); s++; }
+
+    // inf/nan before digits, because "inf" is a legal input and would
+    // otherwise parse as no conversion at all.
+    if ((s[0] == 'i' || s[0] == 'I') && (s[1] == 'n' || s[1] == 'N') &&
+        (s[2] == 'f' || s[2] == 'F')) {
+        if (endptr) *endptr = (char *)(s + 3);
+        return neg ? -INFINITY : INFINITY;
+    }
+    if ((s[0] == 'n' || s[0] == 'N') && (s[1] == 'a' || s[1] == 'A') &&
+        (s[2] == 'n' || s[2] == 'N')) {
+        if (endptr) *endptr = (char *)(s + 3);
+        return NAN;
+    }
+
+    double v = 0.0;
+    int any = 0;
+    for (; isdigit((unsigned char)*s); s++) { v = v * 10.0 + (*s - '0'); any = 1; }
+    if (*s == '.') {
+        s++;
+        // The fraction is accumulated as an INTEGER and scaled once at
+        // the end. Dividing as it goes (v += d / scale) compounds a
+        // rounding error per digit; one division at the end has one.
+        double frac = 0.0, scale = 1.0;
+        for (; isdigit((unsigned char)*s); s++) {
+            frac = frac * 10.0 + (*s - '0');
+            scale *= 10.0;
+            any = 1;
+        }
+        if (scale > 1.0) v += frac / scale;
+    }
+    if (!any) { if (endptr) *endptr = (char *)nptr; return 0.0; }
+
+    if (*s == 'e' || *s == 'E') {
+        const char *save = s;
+        s++;
+        int eneg = 0;
+        if (*s == '+' || *s == '-') { eneg = (*s == '-'); s++; }
+        if (!isdigit((unsigned char)*s)) {
+            // "1e" with no exponent digits: the 'e' is NOT part of the
+            // number, so back up rather than treating it as e0.
+            s = save;
+        } else {
+            int e = 0;
+            for (; isdigit((unsigned char)*s); s++) {
+                if (e < 100000) e = e * 10 + (*s - '0');
+            }
+            if (eneg) e = -e;
+            // Powers of ten by squaring rather than a loop of
+            // multiplies: 1e308 is 308 roundings the slow way and about
+            // nine this way.
+            double p = 1.0, base = 10.0;
+            int n = e < 0 ? -e : e;
+            while (n) {
+                if (n & 1) p *= base;
+                base *= base;
+                n >>= 1;
+            }
+            v = e < 0 ? v / p : v * p;
+        }
+    }
+    if (endptr) *endptr = (char *)s;
+    return neg ? -v : v;
+}
+
+double atof(const char *s) { return strtod(s, 0); }

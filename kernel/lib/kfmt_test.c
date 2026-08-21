@@ -175,3 +175,31 @@ KTEST("kfmt", "the sink form is not bounded by KFMT_LINE_MAX") {
     KTEST_ASSERT(sb.n == 300);
     KTEST_ASSERT(sb.b[0] == '0' && sb.b[299] == '9');
 }
+
+// --- the kernel has no floating point, and says so ------------------
+//
+// The half of the k_fmt_float() split that lives in the KERNEL
+// (kfmt_nofloat.c) returns 0, and this is what proves the formatter
+// then does the right thing with that. It matters because the wrong
+// behaviours are both silent: printing a garbage number read out of an
+// integer register, or consuming an argument that was never passed and
+// desynchronising every conversion after it.
+//
+// A ring-3 test cannot check this -- there, %f works.
+KTEST("kfmt", "%f in the KERNEL emits literally and consumes no argument") {
+    char b[64];
+    // The %d after it is the real assertion: if %f had eaten an
+    // argument, 7 would print where 42 should be.
+    k_snprintf(b, sizeof b, "[%f][%d]", 42);
+    KTEST_ASSERT(eq(b, "[%f][42]"));
+}
+
+KTEST("kfmt", "a precision is parsed rather than emitted literally") {
+    char b[64];
+    // %.3d is not a conversion this formatter honours, but it must be
+    // RECOGNISED -- emitting "%.3d" into the output is what happened
+    // before precision was parsed, and it looks like a typo in the
+    // caller rather than a limit of the formatter.
+    k_snprintf(b, sizeof b, "[%.3d]", 5);
+    KTEST_ASSERT(eq(b, "[5]"));
+}

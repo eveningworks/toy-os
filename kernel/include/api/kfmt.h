@@ -27,6 +27,9 @@
 //
 //   %d  signed decimal      %u  unsigned decimal    %x  lowercase hex
 //   %s  const char * (NULL prints as "(null)")
+//   %f %e %g (and %F %E %G) -- RING 3 ONLY, see k_fmt_float() below;
+//              in the kernel these emit literally, since there is no
+//              floating point there at all
 //   %c  char                %%  a literal '%'
 //
 // with an optional zero-pad width between the '%' and the conversion
@@ -40,13 +43,46 @@
 // catches a mismatched argument at the call site instead of it becoming
 // a garbage value at runtime.
 //
-// There is no `%f` (this kernel has no floating point and compiles with
-// -mno-sse), no `%p`, no precision, and no `*` width. Width on `%s`
+// There is no `%p` and no `*` width. A `.N` PRECISION is parsed and is
+// honoured only by the float conversions -- on `%s` C's precision
+// truncates, and truncating a string is the one thing these formatters
+// are not allowed to do (see the width note below). Width on `%s`
 // pads (and `%-Ns` left-justifies); a string longer than its field
 // pushes the column rather than being truncated.
 // Anything unrecognised is emitted literally and consumes no argument,
 // so a typo shows up in the output instead of silently eating the rest
 // of the format string and desynchronising every argument after it.
+
+// FLOATING POINT: kfmt.c CANNOT DO IT, and each build links one of two
+// implementations of this.
+//
+// The formatter is compiled into a kernel built `-mno-sse`, where
+// `va_arg(ap, double)` alone emits SSE instructions -- so the whole
+// conversion sits behind this function, exactly as the sinks sit behind
+// kfmt_print.c. `kernel/lib/kfmt_nofloat.c` is the kernel's and returns
+// 0; `userland/libc/printf_float.c` is ring 3's and formats.
+//
+// Returning 0 means "not supported here", and the formatter falls
+// through to its emit-it-literally path -- so `%f` in a KERNEL format
+// string appears in the output as `%f`, rather than printing a wrong
+// number or eating an argument.
+//
+// `conv` is one of f F e E g G, and `prec` is the precision or -1 for
+// "not given" (which means 6, as C says).
+//
+// THE va_list IS PASSED BY VALUE AND THE CALLEE CONSUMES FROM IT. That
+// reads wrong and is right here: on the SysV AMD64 ABI a `va_list` is an
+// array type, so a `va_list` parameter is already a POINTER to the
+// caller's state and a va_arg in the callee advances it. The caller must
+// therefore NOT also consume the argument -- only this side knows a
+// double is there. (C calls the caller's va_list indeterminate after
+// this; on the one ABI this OS targets, it is the mechanism.)
+//
+// The buffer is the caller's and KFMT_FLOAT_MAX is what it must be:
+// enough for %f of DBL_MAX's integer part plus a sign, a point and the
+// precision cap.
+#define KFMT_FLOAT_MAX 512
+size_t k_fmt_float(char *out, size_t cap, va_list ap, char conv, int prec);
 
 // C99 snprintf semantics: writes at most `cap` bytes INCLUDING the NUL,
 // always NUL-terminates when cap > 0, and returns the length the full

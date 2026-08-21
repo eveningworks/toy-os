@@ -106,6 +106,22 @@ static void vformat(struct out *o, const char *fmt, va_list ap) {
         unsigned width = 0;
         while (k_isdigit(*p)) { width = width * 10 + (unsigned)(*p - '0'); p++; }
 
+        // Precision. Parsed for every conversion and HONOURED ONLY BY
+        // THE FLOAT ONES, which is the same shape '-' already has above
+        // (parsed, then ignored on a number). It is not laziness: C's
+        // precision on %s TRUNCATES, and truncating a string is the one
+        // thing this file's formatters are not allowed to do -- see the
+        // %s case below, which pushes the column instead. Silently
+        // ignoring it is better than emitting `%.3s` literally, which
+        // is what happened before this and looked like a typo.
+        int has_prec = 0;
+        unsigned prec = 0;
+        if (*p == '.') {
+            has_prec = 1;
+            p++;
+            while (k_isdigit(*p)) { prec = prec * 10 + (unsigned)(*p - '0'); p++; }
+        }
+
         // Length modifiers matter here, they aren't decoration: varargs
         // are only promoted as far as `int`, so reading a plain `int`
         // argument as a 64-bit one would pick up whatever happened to
@@ -144,8 +160,34 @@ static void vformat(struct out *o, const char *fmt, va_list ap) {
             if (left) { for (size_t i = len; i < width; i++) put(o, ' '); }
             break;
         }
+        // Floating point, which THIS FILE CANNOT DO. kfmt.c is compiled
+        // into a kernel built -mno-sse, where `va_arg(ap, double)` alone
+        // would emit SSE instructions -- so the conversion lives behind
+        // k_fmt_float(), of which each build links exactly one
+        // implementation. That is the same one-header-two-files split
+        // kfmt_print.c already uses for the sinks, and for the same
+        // reason: what differs between the rings is not the formatter.
+        //
+        // The kernel's implementation returns 0, which falls through to
+        // the "emit it literally" path below -- so `%f` in a kernel
+        // format string shows up in the output as `%f` rather than
+        // silently printing a wrong number or eating an argument.
+        case 'f': case 'F': case 'e': case 'E': case 'g': case 'G': {
+            char fbuf[KFMT_FLOAT_MAX];
+            size_t n = k_fmt_float(fbuf, sizeof fbuf, ap, *p,
+                                    has_prec ? (int)prec : -1);
+            if (!n) goto literal;
+            // Width padding is done HERE rather than in the float
+            // implementation, so a number and a string pad by the same
+            // rule and there is one place that knows what `-` means.
+            if (!left) { for (size_t i = n; i < width; i++) put(o, ' '); }
+            put_str(o, fbuf);
+            if (left) { for (size_t i = n; i < width; i++) put(o, ' '); }
+            break;
+        }
         case '%': put(o, '%'); break;
         default:
+        literal:
             // Unrecognised: emit the whole thing literally, including
             // the '%' and any width, and DON'T consume an argument --
             // a typo should be visible in the output, not silently eat

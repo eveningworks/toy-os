@@ -295,25 +295,56 @@ other eight itself, rather than growing `api/string.h` with eight
 functions no kernel code calls. ASCII only, permanently -- there is no
 locale and locales are on the deliberately-not-pursued list.
 
-### Stage 4 -- floating point in the formatter
+### Stage 4 -- floating point in the formatter -- DONE
 
-**Not a second formatter.** `kfmt.c` is compiled into a kernel built
-`-mno-sse`, so it cannot contain float conversion; and a private libc
-`printf` beside it is exactly the duplication the toolkit exists to
-prevent.
+`%f %e %g` (and `%F %E %G`), `strtod`/`atof`, and the algebraic half of
+`<math.h>`.
 
-The shape that keeps one formatter: **a conversion hook.** `kfmt.c`
-handles `%f/%e/%g` by calling a function pointer that is NULL in the
-kernel -- where the existing "unrecognised conversion is emitted
-literally" behaviour is already correct and already documented -- and is
-set by the libc's initialiser in ring 3, where the hook body is the only
-object file compiled with SSE. This is picolibc's tiered printf reached
-by a different route, and it keeps the kernel FP-free by construction
-rather than by discipline.
+**The shape predicted here was right, but the mechanism is a LINKED
+SPLIT rather than a runtime hook.** `kfmt.c` calls `k_fmt_float()`
+unconditionally and each build links exactly one implementation:
+`kernel/lib/kfmt_nofloat.c` returns 0, `userland/libc/printf_float.c`
+formats. That is the same one-header-two-files split `kfmt_print.c`
+already uses for the sinks, so the module gained no new pattern -- and
+it is better than the function pointer originally sketched here, which
+would have needed something to register it before the first `printf`.
 
-Then `strtod`, and a `<math.h>` subset. Note that `kernel/lib/fixed.h`
-is NOT this and must not be confused with it: its angles are in turns
-and it exists precisely because the kernel has no float.
+The kernel's returning 0 falls through to the formatter's
+emit-it-literally path, so `%f` in a kernel format string appears in the
+output AS `%f`. That is the right failure: visible, consumes no
+argument, and cannot desynchronise the rest of the line. A KTEST asserts
+it, because a ring-3 test cannot -- there, `%f` works.
+
+**A precision had to be added to the shared parser.** `.N` is parsed for
+every conversion and honoured only by the float ones -- the same shape
+`-` already had (parsed, then ignored on a number). Not laziness: C's
+precision on `%s` TRUNCATES, and truncating a string is the one thing
+these formatters are not allowed to do.
+
+**ACCURACY IS LIMITED AND SAID SO OUT LOUD.** Digits come from repeated
+scaling by ten, not from exact arithmetic over the mantissa, so the last
+place is not guaranteed and `strtod(printf("%.17g"))` does not round
+trip. Getting that right means Dragon4 or Grisu/Ryu -- several hundred
+lines and a table of powers of ten, buying accuracy in the 17th digit
+that nothing here uses. `printf_float.c` is the whole surface to replace
+if it ever matters, which is the reason the conversion is behind one
+function.
+
+`<math.h>` carries only what is EXACT: `sqrt` (one SSE instruction,
+correctly rounded by the hardware), `fabs`, `floor`, `ceil`, `trunc`,
+`round`, `fmod`, `copysign`, `ldexp`, `frexp`, and the classification
+macros -- all written against the IEEE bits, because
+`(double)(long long)x` is undefined once `|x|` passes `LLONG_MAX` and
+that is not hypothetical for `floor(1e300)`. **The transcendentals are
+deliberately absent**: `sin`, `exp`, `pow` need argument reduction and a
+polynomial with an accuracy claim attached, which is a numerical-library
+project rather than a corner of this one. A port that calls `sin()` gets
+a link error naming it -- the same choice `<unistd.h>` makes about
+`fork()`.
+
+Not to be confused with `kernel/lib/fixed.h`, which is the KERNEL's
+Q16.16 maths and exists precisely because ring 0 has no floating point.
+Its angles are in turns. The two never meet.
 
 ### Stage 5 -- time
 

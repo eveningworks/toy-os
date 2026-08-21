@@ -140,6 +140,12 @@ TESTS = [
     # restored rsp, because it also restores rbp. See the test's header.
     ("libc3_test", 0,
      ["libc3_test: all checks passed"], ["FAIL"]),
+    # Stage 4: %f/%e/%g, strtod and math.h. Asserted as formatted TEXT
+    # against literals, since that is the only thing a printf caller can
+    # observe -- and the accuracy limit is real (printf_float.c), so
+    # nothing here asserts a 17th significant digit.
+    ("libc4_test", 0,
+     ["libc4_test: all checks passed"], ["FAIL"]),
     ("stdio_test", 0,
      ["stdio_test: all checks passed", "atexit:BA"], ["FAIL"]),
     # SYS_QUERY from ring 3. Runs fine under `run`: it spawns nothing and

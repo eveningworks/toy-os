@@ -78,8 +78,13 @@ this the obvious way), not from how much history it accumulated.
   a caller inherits from sbrk: **`free()` never returns memory to the
   kernel** (the break cannot move down, so a process's footprint only
   grows), and a fresh region's pages arrive on touch. What still does
-  NOT exist, on purpose: floating-point conversions in `printf`, a
-  locale, threads, TLS. (`errno`
+  **`%f`/`%e`/`%g` work in ring 3 and NOT in the kernel**, which is a
+  linked split rather than a flag: `kfmt.c` calls `k_fmt_float()` and
+  each build links one implementation, so a `%f` in a KERNEL format
+  string emits literally instead of printing a wrong number. `<math.h>`
+  carries the exact functions only -- no `sin`/`exp`/`pow`, which are a
+  link error by design. What does NOT exist, on purpose: a locale,
+  threads, TLS. (`errno`
   DOES -- `sys_errno()`/`sys_strerror()` over `abi/errno.h`; the C
   spelling is what is still missing. See `docs/libc-design.md`.)
   Three traps, all of which fail quietly: a header named `string.h`

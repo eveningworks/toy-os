@@ -55,6 +55,14 @@ unsigned long  strtoul(const char *nptr, char **endptr, int base);
 int            atoi(const char *s);
 long           atol(const char *s);
 
+// Floating point from text. THE SAME ACCURACY CAVEAT as printf's %f
+// (userland/libc/printf_float.c): digits are accumulated by
+// multiply-and-add rather than by exact arithmetic over the mantissa,
+// so the last place is not guaranteed and strtod(printf("%.17g")) is
+// not a round trip. "inf" and "nan" are accepted, as C requires.
+double         strtod(const char *nptr, char **endptr);
+double         atof(const char *s);
+
 // --- arithmetic -------------------------------------------------------
 
 int   abs(int v);

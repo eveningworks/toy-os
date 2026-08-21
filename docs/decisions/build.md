@@ -898,3 +898,43 @@ renamed: it carries `d_type` and `d_name` and no `d_ino`, because
 `SYS_LISTDIR` does not report an inode and a field that was always zero
 would invite somebody to believe it. `SYS_STAT` reports one, and a
 caller that needs it has the name to ask with.
+
+## `%f` is a LINKED SPLIT, not an `#ifdef` and not a runtime hook
+
+`kfmt.c` is compiled into the kernel and into ring 3 from one source,
+and the kernel is built `-mno-sse`. That is not a stylistic constraint
+on floating point -- `va_arg(ap, double)` on x86-64 reads the varargs FP
+save area, so the ONE LINE that fetches the argument is SSE, in a kernel
+that does not save SSE state on the interrupt path
+(`kernel/include/kernel/fpu.h` has why that split is worth copying).
+
+So the conversion sits behind `k_fmt_float()`, and each build links a
+different implementation: `kernel/lib/kfmt_nofloat.c` returns 0,
+`userland/libc/printf_float.c` formats. **This is not a new pattern in
+this module** -- it is exactly the one-header-two-files split
+`kfmt_print.c` already uses for the sinks, which is what makes it the
+obvious answer once you see it.
+
+Two alternatives were weighed. An `#ifdef` on a `-D` flag added to
+`USERLAND_CFLAGS` works and makes the two compilations of one file
+differ in behaviour, which is the thing the shared-source rule exists to
+prevent -- the flag would be a second, invisible input to what
+`kfmt.c` means. A registered function pointer works too and needs
+something to call the registration before the first `printf`, which in a
+libc with no constructors means either an initialiser check on every
+call or a rule nobody can see.
+
+**The kernel returning 0 is a designed failure, not a stub.** It falls
+through to the formatter's emit-it-literally path, so `%f` in a kernel
+format string appears in the output as `%f`: visible, consumes no
+argument, cannot desynchronise the rest of the line. The two silent
+alternatives -- printing a garbage number read out of an integer
+register, or eating an argument that was never passed -- both look like
+data. A KTEST asserts it, and it has to be a KTEST rather than a ring-3
+test, because in ring 3 `%f` works.
+
+The same split is where `%f`'s accuracy limit is confined: digits come
+from repeated scaling rather than exact arithmetic over the mantissa, so
+`printf_float.c` is the entire surface to replace if correctly-rounded
+output ever matters. That is the payoff for putting the conversion
+behind one function rather than spreading it through the formatter.
