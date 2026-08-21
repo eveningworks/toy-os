@@ -156,7 +156,28 @@ struct ugfx_font {
     const unsigned char *glyphs;   // count cells of char_w x char_h coverage
     const unsigned char *advances; // count bytes, or NULL for a fixed cell
     const signed char   *kern;     // count x count, or NULL -- see ugfx_kern()
-    int char_w, char_h;
+    int char_w;
+
+    // **THE BITMAP IS TALLER THAN THE LINE.** `char_h` is how many rows
+    // a glyph's coverage map has -- the stride between cells, so it is
+    // what INDEXING uses and the only value win_glyph_offset() may be
+    // given. `line_h` is how far apart two lines of text sit, which is
+    // what LAYOUT uses and what ugfx_char_h() returns.
+    //
+    // The difference is the descender: the cell extends below the
+    // baseline far enough to hold a 'g' tail, while the pitch stays at
+    // the height everything is laid out against, so nothing reflowed
+    // when the tails appeared. A glyph therefore PAINTS BELOW ITS LINE,
+    // which is ordinary (FreeType, Pango and CoreText all separate the
+    // line box from a glyph's ink extent) and has one consequence worth
+    // knowing: anything painting an opaque background over the row below
+    // will erase a descender. A widget that wants to keep its tails
+    // reserves the overhang -- uui_label does.
+    //
+    // Equal for the BAKED font, whose bitmaps were rasterized squeezed
+    // at build time; it still clips.
+    int char_h;   // rows per glyph bitmap -- the indexing stride
+    int line_h;   // rows between lines -- what layout uses
     int count;
 };
 
@@ -177,6 +198,12 @@ int ugfx_font_init(void);
 // that asks THEM rather than multiplying by ugfx_char_w() needed no
 // change at all when proportional faces became loadable.
 int ugfx_char_advance(char c);
+
+// The glyph BITMAP height -- taller than ugfx_char_h() (the line pitch)
+// by however much descender overhang the font has. Needed only by code
+// that indexes glyph bytes or reserves room for a tail; everything doing
+// layout wants ugfx_char_h().
+int ugfx_glyph_h(void);
 
 // One of the two session fonts. Valid after ugfx_font_init(); the bold
 // one falls back to a copy of regular on a machine whose font has no

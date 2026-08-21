@@ -47,7 +47,25 @@ void uui_label_natural_size(const struct uui_label *l, int *out_w, int *out_h) {
         if (l->wrap) *out_w = ugfx_char_w() * 8;
         else         *out_w = l->text ? ugfx_text_width(l->text) : 0;
     }
-    if (out_h) *out_h = ugfx_char_h() * (l->rows > 0 ? l->rows : 1);
+    // ROWS AT THE LINE PITCH, PLUS THE LAST ROW'S OVERHANG. A glyph
+    // bitmap is taller than a line (ugfx.h's struct ugfx_font says why),
+    // so a descender on the final row hangs below the label's box -- and
+    // whatever the layout puts underneath paints its own background over
+    // it, cutting the tail off a 'g' that the font was perfectly willing
+    // to draw. Reserving the difference is what stops that.
+    //
+    // Only the LAST row needs it: the rows above overhang into each
+    // other, which is exactly what the pitch already accounts for.
+    //
+    // Not a flag. The overhang is a couple of pixels and there is no
+    // case for wanting it back -- an opt-out would only be a way to ask
+    // for clipped text.
+    if (out_h) {
+        int rows = l->rows > 0 ? l->rows : 1;
+        int overhang = ugfx_glyph_h() - ugfx_char_h();
+        if (overhang < 0) overhang = 0;
+        *out_h = ugfx_char_h() * rows + overhang;
+    }
     ugfx_set_font(was);
 }
 

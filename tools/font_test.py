@@ -290,6 +290,17 @@ def check_weights_and_kerning(dbg, qmp):
         check("the private font's descenders are not clipped",
               slack >= 1, desc)
 
+    # The SESSION font's descenders too, now that its bitmap is taller
+    # than its line. Only meaningful for a loaded face: `builtin`'s
+    # bitmaps were rasterized squeezed at build time by genttf.py, so it
+    # still clips and always will until those are regenerated.
+    sdesc = rep.get("session-descender", "")
+    if sdesc:
+        reg = int(sdesc.split("regular")[1].split()[0])
+        bold = int(sdesc.split("bold")[1].split()[0])
+        check("the session font's descenders survive its line pitch",
+              reg >= 1 and bold >= 1, sdesc)
+
     priv = rep.get("private", "")
     sess = rep.get("session regular", "")
     check("a face this app rasterized for itself loaded", "loaded" in priv, priv)

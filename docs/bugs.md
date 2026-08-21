@@ -55,6 +55,8 @@ it has exonerated one this session and convicted another.
 
 - [ ] `stress 200` failed with "couldn't create test file" on the first command after a boot that had just replayed a journal transaction, then the identical command passed moments later -- virtio-blk, KVM
 
+- [ ] A GUI client read a session-font glyph cell as entirely BLANK once, after many font-face switches in one long-lived VM -- Font Demo reported `session-descender g regular -1` (its "no ink at all" value) for `liberation-sans` while the kernel had logged that atlas building 101/101 glyphs. Did not reproduce: 6 consecutive face switches on a fresh boot, and a clean boot on the same face, were all correct. The session had also been changing font SIZE, so a refused `font_face_build()` (the atlas cache is bounded at 16 entries / 4 MiB and REFUSES rather than evicting) is a plausible mechanism and is NOT established -- the refusal is logged, and that log was not captured before the VM was destroyed
+
 - [ ] The desktop died once at 1.15 s while a `/bin` program ran through the legacy loader -- cause unestablished
 - [ ] One `etc_config_set()` write failed on a graphical boot, and did not reproduce
 

@@ -30,6 +30,8 @@
 //   fontdemo: session bold <w>x<h> distinct <0|1>
 //   fontdemo: private <path> <px> <loaded|failed> <w>x<h>
 //   fontdemo: kern <sample> plain <w> unkerned <w>
+//   fontdemo: descender g slack <rows> cell <h>
+//   fontdemo: session-descender g regular <rows> bold <rows> cell <h>
 #include "rt/sys.h"
 #include "ui/uapp.h"
 #include "lib/stdio.h"
@@ -52,6 +54,7 @@
 
 static struct ugfx_font g_private;
 static int g_private_ok;
+static int g_private_tried;
 
 static int g_session_w, g_session_h;
 static int g_bold_w, g_bold_h;
@@ -71,9 +74,10 @@ static int draw_unkerned(struct ugfx_surface *s, int x, int y,
     return cx - x;
 }
 
+static void load_private(struct uapp *a);
+
 static void on_draw(struct uapp *a, struct uapp_draw *d) {
     struct ugfx_surface *s = d->surface;
-    (void)a;
 
     // **CLEAR FIRST, AND THIS APP MUST DO IT ITSELF.** An app with
     // widgets or a layout gets its surface cleared by the toolkit; one
@@ -110,7 +114,10 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
         y += ugfx_char_h() + 8;
     } else {
         ugfx_set_font(ugfx_font_session(UGFX_FONT_REGULAR));
-        ugfx_draw_string(s, 8, y, "Private face unavailable", d->fg, d->bg);
+        ugfx_draw_string(s, 8, y,
+                         g_private_tried ? "Private face unavailable"
+                                         : "Private face loading...",
+                         d->fg, d->bg);
         y += row_h;
     }
 
@@ -130,11 +137,11 @@ static void on_draw(struct uapp *a, struct uapp_draw *d) {
     // asks for in ring 0, and the reason ugfx_set_font() returns the
     // previous value.
     ugfx_set_font(0);
+
+    // AFTER the frame is drawn, never before -- see load_private().
+    if (!g_private_tried) load_private(a);
 }
 
-// Measures and logs everything a test wants to assert on. Called after
-// the font is mapped, and AGAIN on WIN_EV_FONT -- the session font can
-// change under a running app, and every number below is derived from it.
 // Non-zero coverage bytes in one character's cell. The atlas layout is
 // ABI (win_proto.h): cells are count x (char_w * char_h) coverage bytes,
 // back to back, slot 0 being WIN_FONT_FIRST_CHAR.
@@ -174,6 +181,10 @@ static void logf_line(const char *fmt, ...) {
     sys_eprint(line);
 }
 
+// Measures and logs everything a test wants to assert on. Called once
+// the private font has been dealt with, and AGAIN on WIN_EV_FONT -- the
+// session font can change under a running app, and every number below
+// is derived from it.
 static void report(void) {
     const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_REGULAR));
     g_session_w = ugfx_text_width("Handgloves");
@@ -200,6 +211,16 @@ static void report(void) {
            g_bold_w, g_bold_h,
            glyph_ink(ugfx_font_session(UGFX_FONT_BOLD), 'H')
                > glyph_ink(ugfx_font_session(UGFX_FONT_REGULAR), 'H') ? 1 : 0);
+
+    // Descender slack for the SESSION font too -- reported, not
+    // asserted: its cell is deliberately squeezed (it is the layout
+    // grid), so a 0 here is the documented trade rather than a defect.
+    // Reported anyway because "how much is it actually losing" is the
+    // number that decides whether the trade is still worth making.
+    logf_line("fontdemo: session-descender g regular %d bold %d cell %d\n",
+              glyph_bottom_slack(ugfx_font_session(UGFX_FONT_REGULAR), 'g'),
+              glyph_bottom_slack(ugfx_font_session(UGFX_FONT_BOLD), 'g'),
+              ugfx_char_h());
 
     ugfx_set_font(ugfx_font_session(UGFX_FONT_REGULAR));
     int plain = ugfx_text_width(KERN_SAMPLE);
@@ -230,12 +251,22 @@ static void report(void) {
     ugfx_set_font(was);
 }
 
-static void on_open(struct uapp *a) {
-    (void)a;
-    // ONCE, AT STARTUP, NEVER PER FRAME. ugfx_font_load() reads a
-    // ~400 KB file and rasterizes 95 glyphs; doing it in on_draw would
-    // put that on every paint. The arena is this process's, and the
-    // font points into it forever -- so it is never freed.
+// ONCE, NEVER PER FRAME: ugfx_font_load() reads a ~400 KB file and
+// rasterizes 95 glyphs.
+//
+// **BUT NOT IN on_open EITHER, AND THAT IS THE POINT WORTH KEEPING.**
+// uapp creates the window BEFORE calling on_open, so anything slow in
+// there runs with a window already on screen and nothing painted into
+// it -- the compositor shows a blank rectangle for as long as the work
+// takes. This app spent that window reading a font file, and
+// blank_window_test.py caught it as "only 1 distinct colour in its
+// content area", which is exactly what it is for.
+//
+// So the first frame paints with the session font alone, and the
+// private face is loaded immediately after it and drawn from the second
+// frame on. The rule generalises: an app's first paint should depend on
+// nothing it has to go and fetch.
+static void load_private(struct uapp *a) {
     unsigned long need = ugfx_font_arena_size(PRIVATE_PX);
     void *arena = malloc(need);
     if (arena)
@@ -244,7 +275,14 @@ static void on_open(struct uapp *a) {
     if (!g_private_ok)
         logf_line("fontdemo: %s would not load -- showing the session font only\n",
                PRIVATE_FACE);
+    g_private_tried = 1;
     report();
+    uapp_redraw(a); // the private row was a placeholder on frame one
+}
+
+static void on_open(struct uapp *a) {
+    (void)a;
+    // Cheap only. See load_private() for why the font is not opened here.
 }
 
 // The session font changed under us (`fontface`, `fontsize`). uapp has

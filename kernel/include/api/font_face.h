@@ -82,7 +82,35 @@ struct font_atlas {
     const int8_t *kern;
 
     int cell_w;               // the fixed cell: the WIDEST advance in the set
-    int cell_h;
+
+    // **THE BITMAP IS TALLER THAN THE LINE, AND THE TWO ARE DIFFERENT
+    // NUMBERS ON PURPOSE.**
+    //
+    // `cell_h` is how many rows each glyph's coverage map has -- the
+    // stride between cells, so it is what INDEXING must use. `line_h` is
+    // how far apart two lines of text sit, which is what LAYOUT must use.
+    //
+    // They used to be one number, and a descender was whatever survived
+    // it: the cell was squeezed to a terminal-like height and every 'g',
+    // 'y' and 'p' on the machine lost its tail. Separating them is what
+    // every real text stack does -- FreeType, Pango and CoreText all
+    // treat the line box and a glyph's ink extent as independent, and a
+    // glyph painting outside its line box is ordinary rather than a
+    // defect.
+    //
+    // `line_h` is EXACTLY the height the squeezed cell used to be, so
+    // nothing reflows: the baseline does not move and text sits where it
+    // always did. `cell_h` simply extends further DOWN, so the tail now
+    // exists in the bitmap and is painted into the space below the line.
+    //
+    // The cost, stated where it will be tripped over: a glyph may paint
+    // below its line, so anything that assumes a line's worth of rows is
+    // all a glyph touches must use `cell_h`, and anything that paints an
+    // OPAQUE background over the row below will erase a descender. Ring
+    // 0's console does exactly that and therefore still draws only
+    // `line_h` rows -- see gfx.c's draw_glyph_kerned().
+    int cell_h;               // rows per glyph bitmap -- the indexing stride
+    int line_h;               // rows between lines -- what layout uses
     int count;                // == FONT_TTF_GLYPH_COUNT
     int px;                   // em size this was rasterized at
     int baseline;             // rows from the cell top to the baseline

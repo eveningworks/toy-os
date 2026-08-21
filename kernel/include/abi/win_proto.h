@@ -341,12 +341,34 @@ struct win_event {
                            // font read-only into the client at
                            // win_font_vaddr(weight) and fills in the
                            // metrics:
-                           // a = glyph width, b = glyph height,
+                           // a = glyph width, b = glyph BITMAP height,
                            // c = glyph count, d = the byte offset of
                            // glyph 0 within the mapping (the data does
                            // not necessarily start on a page boundary,
                            // so glyph 0 lives at the mapping base + d,
                            // not at the base).
+                           // `window` OUT = the LINE PITCH.
+                           //
+                           // **`b` AND `window` ARE DIFFERENT NUMBERS
+                           // AND CONFUSING THEM IS SILENT.** `b` is how
+                           // many rows a glyph's coverage map has, so it
+                           // is the stride between cells and the ONLY
+                           // one win_glyph_offset() may be given -- pass
+                           // the pitch and every glyph past the first is
+                           // read from the wrong offset. `window` is how
+                           // far apart two lines sit, which is what
+                           // LAYOUT wants and what ugfx_char_h()
+                           // returns.
+                           //
+                           // They differ because a glyph bitmap is
+                           // taller than its line: the cell extends
+                           // below the baseline far enough to hold a
+                           // descender, while the pitch stays at the
+                           // terminal-like height everything is laid out
+                           // against. See struct font_atlas in
+                           // api/font_face.h. For the BAKED font the two
+                           // are equal -- its bitmaps were rasterized
+                           // squeezed at build time, so it still clips.
                            //
                            // A font belongs to the SESSION, not to one
                            // window -- which is why `window` was free

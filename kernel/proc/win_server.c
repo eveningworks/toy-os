@@ -555,7 +555,7 @@ static int map_font(int pid, struct win_request_msg *req) {
     if (weight == WIN_FONT_BOLD && !atlas) return 0;
 
     uint64_t phys, bytes, adv_off;
-    int cw, ch, count;
+    int cw, ch, count, line_h;
     if (atlas) {
         // A runtime atlas is a page-aligned pmm run holding the glyph
         // data and the advance table and NOTHING ELSE -- which is why
@@ -566,6 +566,7 @@ static int map_font(int pid, struct win_request_msg *req) {
         phys = atlas->phys;
         bytes = atlas->bytes;
         cw = atlas->cell_w; ch = atlas->cell_h; count = atlas->count;
+        line_h = atlas->line_h;
         adv_off = (uint64_t)count * (uint64_t)cw * (uint64_t)ch;
         // The kern matrix follows the advances and the client DERIVES
         // its offset (win_font_kern_offset()) rather than being told --
@@ -574,6 +575,11 @@ static int map_font(int pid, struct win_request_msg *req) {
     } else {
         phys = (uint64_t)(uintptr_t)fv->glyphs;
         cw = fv->w; ch = fv->h; count = FONT_TTF_GLYPH_COUNT;
+        // The baked bitmaps were rasterized at build time INTO the
+        // squeezed cell, so there is no taller bitmap to report -- the
+        // pitch is the cell. That is why `builtin` still clips its
+        // descenders and a loaded face does not.
+        line_h = fv->h;
         bytes = (uint64_t)count * (uint64_t)cw * (uint64_t)ch;
         adv_off = 0; // the baked tables carry no advances: every cell is cw wide
     }
@@ -616,6 +622,10 @@ static int map_font(int pid, struct win_request_msg *req) {
     req->b = ch;
     req->c = count;
     req->d = (int32_t)offset_in_page;
+    // `window` came in as the weight and goes out as the LINE PITCH --
+    // a different number from `b`, which is the bitmap height. See
+    // WIN_REQ_FONT in abi/win_proto.h for why confusing them is silent.
+    req->window = (uint32_t)line_h;
     // `mods` carries the advance table's offset within the mapping, or 0
     // when there is none. 0 is unambiguous because a table can never
     // START the mapping -- the glyph data does. The KERN table's offset

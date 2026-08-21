@@ -301,8 +301,23 @@ const struct font_atlas *font_face_build(int px, enum font_weight weight) {
     // fixed-cell terminal font accepts.
     int baseline = fx_round(fx_mul(fx_mul(fx_from_int(t->ascent), scale), (fx_t)(FX_ONE * 89 / 100)));
     int below = fx_round(fx_mul(fx_mul(fx_from_int(t->descent), scale), (fx_t)(FX_ONE * 60 / 100)));
-    int cell_h = baseline + below;
-    if (cell_h < 2) return 0;
+
+    // THE LINE PITCH IS THE SQUEEZED HEIGHT, UNCHANGED. Every
+    // font-derived measurement on the machine comes from this, so it
+    // must stay exactly what genttf.py's formula produced or the whole
+    // UI reflows and stops matching the baked tables.
+    int line_h = baseline + below;
+    if (line_h < 2) return 0;
+
+    // ...WHILE THE BITMAP GETS THE FULL DESCENT, so a 'g' has its tail.
+    // Extended DOWNWARD only -- the baseline is untouched, so text sits
+    // where it always did and the extra rows hang below the line. +1
+    // because baseline and the descent are rounded independently, so a
+    // glyph reaching exactly the descent line would otherwise land on
+    // the last row.
+    int full_below = fx_round(fx_mul(fx_from_int(t->descent), scale));
+    if (full_below < below) full_below = below;
+    int cell_h = baseline + full_below + 1;
 
     // The cell is as wide as the WIDEST advance in the set, so a
     // proportional face still has a fixed cell for the console and for
@@ -399,6 +414,7 @@ const struct font_atlas *font_face_build(int px, enum font_weight weight) {
     e->a.kern = kern;
     e->a.cell_w = cell_w;
     e->a.cell_h = cell_h;
+    e->a.line_h = line_h;
     e->a.count = count;
     e->a.px = px;
     e->a.baseline = baseline;
@@ -409,10 +425,10 @@ const struct font_atlas *font_face_build(int px, enum font_weight weight) {
     e->a.bytes = pages * 4096;
     cache_bytes += pages * 4096;
 
-    klog_printf("font: %s %s at %dpx -- %dx%d cell, %d/%d glyphs, %d kern pairs, %s, %uKB\n",
+    klog_printf("font: %s %s at %dpx -- %dx%d cell (line %d), %d/%d glyphs, %d kern pairs, %s, %uKB\n",
                 faces[active_face].name,
                 want_bold ? (synthetic ? "bold(synth)" : "bold") : "regular",
-                px, cell_w, cell_h, rendered, count, kern_nonzero,
+                px, cell_w, cell_h, line_h, rendered, count, kern_nonzero,
                 mono ? "monospace" : "proportional", (unsigned)(e->a.bytes / 1024));
     current[weight] = &e->a;
     return current[weight];

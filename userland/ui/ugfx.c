@@ -38,6 +38,8 @@ static const struct ugfx_font *g_font = &g_session[UGFX_FONT_REGULAR];
 #define g_glyphs      (g_font->glyphs)
 #define g_advances    (g_font->advances)
 #define g_char_w      (g_font->char_w)
+// The BITMAP height -- glyph indexing and the drawing loop. Layout goes
+// through ugfx_char_h(), which returns the line pitch instead.
 #define g_char_h      (g_font->char_h)
 #define g_glyph_count (g_font->count)
 
@@ -210,7 +212,9 @@ static int map_session_font(int weight, struct ugfx_font *out) {
 
     uint64_t base = win_font_vaddr(weight);
     out->char_w = req.a;
-    out->char_h = req.b;
+    out->char_h = req.b;              // the BITMAP height -- the stride
+    out->line_h = (int)req.window;    // ...and the LINE PITCH, separately
+    if (out->line_h <= 0) out->line_h = req.b;
     out->count  = req.c;
     // Glyph 0 sits at the mapping's base PLUS the data's offset within
     // its first page -- the tables are ordinary kernel .rodata and do
@@ -438,6 +442,10 @@ int ugfx_font_load(const char *path, int px, int bold,
     f->kern = kern;
     f->char_w = cell_w;
     f->char_h = cell_h;
+    // A private font is rasterized at full height already (see the
+    // ascent/descent comment above), so its bitmap IS its line -- there
+    // is no squeeze to hang below.
+    f->line_h = cell_h;
     f->count = PRIV_SLOTS;
     return 1;
 }
@@ -465,7 +473,11 @@ int ugfx_char_advance(char c) {
 }
 
 int ugfx_char_w(void) { return g_char_w; }
-int ugfx_char_h(void) { return g_char_h; }
+// THE LINE PITCH, not the bitmap height -- every caller of this is
+// laying something out. Indexing uses the font's char_h directly.
+int ugfx_char_h(void) { return g_font->line_h; }
+
+int ugfx_glyph_h(void) { return g_char_h; }
 
 int ugfx_text_width(const char *str) {
     if (!str) return 0;

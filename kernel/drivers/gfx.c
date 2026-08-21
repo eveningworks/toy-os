@@ -137,7 +137,11 @@ int gfx_char_w(void) {
 
 int gfx_char_h(void) {
     const struct font_atlas *a = active_atlas();
-    return a ? a->cell_h : font_ttf_variants[cur_font_size].h;
+    // THE LINE PITCH, NOT THE BITMAP HEIGHT. A glyph's coverage map is
+    // taller than this (font_face.h explains why), and every caller of
+    // gfx_char_h() is laying something out rather than indexing glyph
+    // bytes -- the one place that indexes uses a->cell_h directly.
+    return a ? a->line_h : font_ttf_variants[cur_font_size].h;
 }
 
 int gfx_font_px(void) { return cur_font_px; }
@@ -772,7 +776,22 @@ static void draw_glyph_kerned(int x, int y, int c, int cols, int kern,
     int overlap = kern < 0 ? -kern : 0;
     if (overlap > cols) overlap = cols;
 
-    for (int row = 0; row < gh; row++) {
+    // **RING 0 PAINTS ONLY THE LINE, NOT THE WHOLE BITMAP, so it still
+    // clips descenders -- and that is the deliberate half of the
+    // cell/line split.** A cell here is OPAQUE: every pixel is written,
+    // background included, which is what lets the console overwrite a
+    // character in place. Painting the taller bitmap would write two
+    // rows of background into the row BELOW, erasing the previous line's
+    // text on every character drawn.
+    //
+    // So the console keeps the old behaviour exactly, and it is ring 3 --
+    // where ugfx_draw_char() skips background pixels and can overhang
+    // harmlessly -- that gets full descenders. Fixing the console too
+    // means growing the line pitch, which costs it ~18% of its rows.
+    int rows = gh;
+    if (a && a->line_h > 0 && a->line_h < rows) rows = a->line_h;
+
+    for (int row = 0; row < rows; row++) {
         for (int col = 0; col < cols; col++) {
             uint8_t alpha = glyph[row * gw + col];
             if (col < overlap) {
