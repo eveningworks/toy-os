@@ -63,6 +63,13 @@ void desktop_update_drag(int mx, int my, uint8_t buttons);
 // doesn't land on any icon clears the current selection. Always
 // returns after acting -- there's nothing below this in the input
 // priority chain to fall through to.
+//
+// GROUP DRAG: pressing an icon that is already part of a multi-selection
+// (built with a marquee band or Ctrl/Shift) keeps the whole selection
+// and drags every member together, committing them as a group -- the
+// Windows/GNOME behaviour. Pressing it and releasing WITHOUT moving
+// singles that icon out instead (the only way to click one icon out of
+// a set). Pressing an UNselected icon replaces the selection with it.
 void desktop_handle_click(int mx, int my);
 
 // Opens a quick-launch context menu (one row per gui_app_registry

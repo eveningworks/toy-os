@@ -59,6 +59,24 @@ static int positions_loaded = 0;
 static struct icon_drag drag = { .active = 0, .index = -1 };
 static int drag_px, drag_py;
 
+// GROUP DRAG: when the grabbed icon is part of a multi-selection, every
+// selected icon moves together by the same delta and commits as a group
+// -- as on Windows and GNOME, where dragging any one of a marquee'd set
+// drags the whole set. `drag.index` is still the grabbed "primary"; the
+// rest follow it.
+//
+// drag_start_col/row remember each icon's cell at grab time, so the live
+// preview and the drop both offset from where the group STARTED rather
+// than from wherever a member has been shoved to mid-drag. drag_origin_*
+// is the primary's pixel position at grab, used to tell a real drag from
+// a plain click (which collapses the selection to just the primary, the
+// only way to single out one icon from a group by clicking it).
+static int group_drag = 0;
+static int drag_moved = 0;
+static int drag_origin_px, drag_origin_py;
+static int drag_start_col[DESKTOP_MAX_ICONS];
+static int drag_start_row[DESKTOP_MAX_ICONS];
+
 // The grid geometry, recomputed live (cheap -- a handful of registry
 // entries) rather than cached, same "derive fresh, don't persist a
 // stale answer" idiom wm_input.c's title-bar hover uses.
@@ -199,12 +217,25 @@ void desktop_draw(void) {
     uint32_t icon_fg = ugfx_rgb(230, 230, 235);
     uint32_t icon_selected_bg = ugfx_rgb(70, 110, 160);
 
+    // The primary follows the cursor; during a GROUP drag the other
+    // selected icons follow it by the same pixel delta, drawn from where
+    // the group started (their cells don't move until the drop commits).
+    int gdx = 0, gdy = 0;
+    if (group_drag && drag.active) {
+        gdx = drag_px - drag_origin_px;
+        gdy = drag_py - drag_origin_py;
+    }
+
     for (int i = 0; i < gui_app_registry_count; i++) {
         if (!gui_app_shows_in(&gui_app_registry[i], GUI_SHOW_DESKTOP)) continue;
         int x, y;
         if (drag.active && drag.index == i) {
             x = drag_px;
             y = drag_py;
+        } else if (group_drag && drag.active && rb_is_selected(&sel, i)) {
+            icon_grid_cell_rect(&g, drag_start_col[i], drag_start_row[i], &x, &y);
+            x += gdx;
+            y += gdy;
         } else {
             icon_grid_cell_rect(&g, icon_col[i], icon_row[i], &x, &y);
         }
@@ -325,6 +356,7 @@ int desktop_drag_active(void) { return drag.active || sel.armed; }
 void desktop_entries_changed(void) {
     positions_loaded = 0;   // re-read from DESKTOP_CONF_PATH, keyed by name
     rb_clear(&sel);         // indices into a table that just changed
+    group_drag = 0;         // its snapshot indexes the table that changed
     band_drawn = 0;
     last_click_index = -1;
     last_click_tick = 0;
@@ -368,15 +400,22 @@ void desktop_handle_click(int mx, int my) {
         return;
     }
 
+    int launched = 0;
     if (idx == last_click_index && now - last_click_tick <= DESKTOP_DOUBLE_CLICK_TICKS) {
         open_app(&gui_app_registry[idx]);
         last_click_index = -1; // avoid a third click within the window re-triggering as a double
+        launched = 1;
     } else {
-        // Clicking an icon selects just it, unless a modifier is held --
-        // then it joins the selection instead of replacing it, so a
-        // band can be topped up by hand.
-        if (mode == RB_REPLACE) rb_clear(&sel);
-        rb_select(&sel, idx, 1);
+        // Pressing an icon that is ALREADY part of the selection keeps
+        // the whole selection, so a drag can move the group -- pressing
+        // a SELECTED item must not collapse to it (that is what release
+        // without a drag does, below). Pressing an UNSELECTED icon
+        // replaces the selection with just it. A modifier always adds.
+        if (mode == RB_REPLACE) {
+            if (!rb_is_selected(&sel, idx)) { rb_clear(&sel); rb_select(&sel, idx, 1); }
+        } else {
+            rb_select(&sel, idx, 1);
+        }
         last_click_index = idx;
         last_click_tick = now;
     }
@@ -391,6 +430,22 @@ void desktop_handle_click(int mx, int my) {
     icon_drag_start(&drag, idx, mx, my, ix, iy);
     drag_px = ix;
     drag_py = iy;
+
+    // A group drag when the grabbed icon is one of several selected;
+    // otherwise the ordinary single-icon path. Snapshot every icon's
+    // cell so the group offsets from where it started (see the state
+    // declarations). group_drag stays 0 after a double-click launch.
+    drag_moved = 0;
+    drag_origin_px = ix;
+    drag_origin_py = iy;
+    group_drag = (!launched && drag.active &&
+                  rb_is_selected(&sel, idx) && rb_selected_count(&sel) > 1);
+    if (group_drag) {
+        for (int i = 0; i < gui_app_registry_count && i < DESKTOP_MAX_ICONS; i++) {
+            drag_start_col[i] = icon_col[i];
+            drag_start_row[i] = icon_row[i];
+        }
+    }
 
     redraw_pending = 1;
 }
@@ -528,15 +583,72 @@ void desktop_update_drag(int mx, int my, uint8_t buttons) {
         int old_py = drag_py;
         drag_px = mx - drag.grab_off_x;
         drag_py = my - drag.grab_off_y;
+        // A few pixels of slop before a press counts as a drag rather
+        // than a click -- a click on a grouped icon singles it out (on
+        // release, below), so a shaky hand must not silently drag.
+        if (!drag_moved) {
+            int ddx = drag_px - drag_origin_px, ddy = drag_py - drag_origin_py;
+            if (ddx * ddx + ddy * ddy > 9) drag_moved = 1;
+        }
         struct icon_grid g = current_grid();
-        int top = (old_py < drag_py ? old_py : drag_py) - DESKTOP_DRAG_DAMAGE_MARGIN;
-        int bottom = (old_py > drag_py ? old_py : drag_py) + g.cell_h;
-        wm_damage_rect(0, top, screen_w, bottom - top);
+        if (group_drag) {
+            // The group is spread across the desktop, not one strip;
+            // repaint the whole icon area. Cheap at this scale (a handful
+            // of icons) and always correct.
+            wm_damage_rect(0, 0, screen_w, screen_h - taskbar_h);
+        } else {
+            int top = (old_py < drag_py ? old_py : drag_py) - DESKTOP_DRAG_DAMAGE_MARGIN;
+            int bottom = (old_py > drag_py ? old_py : drag_py) + g.cell_h;
+            wm_damage_rect(0, top, screen_w, bottom - top);
+        }
         redraw_pending = 1;
         return;
     }
 
     struct icon_grid g = current_grid();
+
+    // Group drop: move every selected icon by the primary's cell delta,
+    // then settle each into the nearest free cell so a group landing
+    // partly off-grid or onto occupied cells fans out rather than
+    // stacking. A release that never became a drag singles the primary
+    // out of the group instead (the only way to click one icon out of a
+    // marquee'd set).
+    if (group_drag) {
+        if (!drag_moved) {
+            rb_clear(&sel);
+            rb_select(&sel, drag.index, 1);
+        } else {
+            int pcol, prow;
+            icon_drag_update(&drag, &g, mx, my, &pcol, &prow);
+            int dcol = pcol - drag_start_col[drag.index];
+            int drow = prow - drag_start_row[drag.index];
+            // Clear the movers first so a member's OLD cell never blocks
+            // another member's target during nearest_free_cell().
+            for (int i = 0; i < gui_app_registry_count && i < DESKTOP_MAX_ICONS; i++) {
+                if (rb_is_selected(&sel, i)) { icon_col[i] = -1; icon_row[i] = -1; }
+            }
+            for (int i = 0; i < gui_app_registry_count && i < DESKTOP_MAX_ICONS; i++) {
+                if (!rb_is_selected(&sel, i)) continue;
+                if (!gui_app_shows_in(&gui_app_registry[i], GUI_SHOW_DESKTOP)) continue;
+                int wc = drag_start_col[i] + dcol;
+                int wr = drag_start_row[i] + drow;
+                if (wc < 0) wc = 0;
+                if (wc >= g.cols) wc = g.cols - 1;
+                if (wr < 0) wr = 0;
+                int fc, fr;
+                nearest_free_cell(&g, wc, wr, i, &fc, &fr);
+                icon_col[i] = fc;
+                icon_row[i] = fr;
+                save_position(i);
+            }
+        }
+        wm_damage_rect(0, 0, screen_w, screen_h - taskbar_h);
+        icon_drag_end(&drag);
+        group_drag = 0;
+        redraw_pending = 1;
+        return;
+    }
+
     int col, row;
     icon_drag_update(&drag, &g, mx, my, &col, &row);
     nearest_free_cell(&g, col, row, drag.index, &col, &row);
