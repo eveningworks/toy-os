@@ -52,6 +52,8 @@
 // framework (or this framework without widgets) can have either.
 
 struct uapp;
+struct uui_focus;   // ui/uui_focus.h -- desc.focus is a pointer, so a
+                    // forward decl keeps that header out of every app.
 
 // Behaviour, declared to TWS at open. Absent = the defaults: a
 // fixed-size window. Declared rather than inferred -- the server does
@@ -185,6 +187,18 @@ struct uapp_desc {
     // about scrolling having been copy-pasted into three apps until the
     // third copy shipped a scrollbar that drew and did nothing.
     struct uui_button_group *buttons;
+
+    // Optional: a keyboard FOCUS ring over this app's focusable widgets.
+    // With this set, uapp click-updates it on a press and routes keys
+    // through it (Tab moves focus, everything else goes to the focused
+    // widget) BEFORE on_key -- exactly as it routes the mouse through
+    // `widgets`, so an app hand-rolls no uui_focus_click/uui_focus_key.
+    // A SEPARATE list from `widgets` on purpose: the tab order and the
+    // z-order are not the same, and a focusable carries a cut-down
+    // `_focus_ops`. on_key still fires for any key the ring did not take,
+    // and after a key the ring DID take (so an app can re-read the
+    // focused widget's new value, the same way it reacts to on_widget).
+    struct uui_focus *focus;
 
     // --- callbacks. ALL optional; NULL is not a special case. --------
 

@@ -324,18 +324,14 @@ static void on_widget(struct uapp *a, int id, int reason) {
     apply(a);
 }
 
-static void on_press(struct uapp *a, int cx, int cy, unsigned buttons) {
-    (void)buttons;
-    // Keyboard focus follows the click. The toolkit already routed the
-    // press to the widget for its own action; this only moves focus, so
-    // a typed key reaches the field/control under the last click.
-    if (uui_focus_click(&g.focus, cx, cy)) uapp_redraw(a);
-}
-
+// uapp owns the focus ring now (desc.focus): it click-updates it and
+// routes keys through it before calling this. So on_key just REACTS to
+// whatever the ring may have changed -- reload if the face/weight/size
+// moved, otherwise repaint (a textbox edit). apply() reads the widgets'
+// current state, so it needs neither the key nor a focus call.
 static void on_key(struct uapp *a, int key, unsigned mods) {
-    // One call: the focus manager handles Tab/Shift-Tab and routes every
-    // other key to the focused widget (see ui/uui_focus.h).
-    if (uui_focus_key(&g.focus, key, mods)) apply(a);
+    (void)key; (void)mods;
+    apply(a);
 }
 
 // Loads the fonts once, right after the first frame is on screen -- see
@@ -414,7 +410,7 @@ int main(void) {
         .widgets = g.items,
         .widget_count = 4,
         .on_widget = on_widget,
-        .on_press = on_press,
+        .focus = &g.focus,   // uapp routes clicks/keys through the ring
         .on_key = on_key,
     };
     return uapp_run(&desc);

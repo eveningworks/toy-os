@@ -2,6 +2,7 @@
 #include "rt/sys.h"   // TWP messages, sys_win_request(), sys_wait_event()
 #include "ui/uapp.h"
 #include "ui/uui_route.h"
+#include "ui/uui_focus.h"   // desc.focus -- keyboard focus ring
 #include "ui/utheme.h"
 
 struct uapp {
@@ -275,6 +276,11 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
         break;
 
     case WIN_EV_KEY:
+        // The focus ring gets the key first: Tab/Shift-Tab move focus,
+        // everything else goes to the focused widget. on_key still fires
+        // afterwards -- for a key the ring did not take, and so an app
+        // can re-read a focused widget whose value the ring just changed.
+        if (d->focus && uui_focus_key(d->focus, ev->a, ev->mods)) a->dirty = 1;
         if (d->on_key) d->on_key(a, ev->a, ev->mods);
         break;
 
@@ -290,6 +296,10 @@ static void dispatch(struct uapp *a, const struct win_event *ev) {
                      ? uui_router_press(&a->router, ev->a, ev->b, &changed) : 0;
         if (changed) a->dirty = 1;
         if (id && d->on_widget) d->on_widget(a, id, UUI_REASON_PRESS);
+        // Keyboard focus follows the click, after the widgets have had
+        // the press (a widget takes the pointer grab; this only moves
+        // which one keys go to). See uui_focus_click().
+        if (d->focus && uui_focus_click(d->focus, ev->a, ev->b)) a->dirty = 1;
         if (d->buttons && uui_button_group_press(d->buttons, ev->a, ev->b)) a->dirty = 1;
         if (d->on_press) d->on_press(a, ev->a, ev->b, ev->mods);
         break;
