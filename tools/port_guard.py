@@ -122,11 +122,12 @@ def assert_ports_free(qmp_port, vnc_display=None, wait_s=6.0):
     print("", file=sys.stderr)
     for r in _owner_hint():
         print(f"  running: {r}", file=sys.stderr)
-    print("  (gui_regress.py uses slots 0-3, i.e. QMP 4445-4448.)", file=sys.stderr)
+    print("  (gui_regress.py holds slots 0..DEFAULT_JOBS-1 while it runs --", file=sys.stderr)
+    print("   up to 8, i.e. QMP 4445-4452 -- so don't hand-pick a low slot.)", file=sys.stderr)
     print("", file=sys.stderr)
-    print("  Wait for it, stop it (vm.py stop), or pick another slot:", file=sys.stderr)
-    print("    python3 tools/<tool>.py --instance 5", file=sys.stderr)
-    print("    launch_qemu_cmd(..., qmp_port=4450, vnc_display=10)", file=sys.stderr)
+    print("  Wait for it, stop it (vm.py stop), or let a free slot be picked:", file=sys.stderr)
+    print("    python3 tools/<tool>.py --instance auto   # probes for the lowest free slot", file=sys.stderr)
+    print("    (or launch_qemu_cmd(..., qmp_port=<free>) via find_free_instance())", file=sys.stderr)
     print(f"  {BYPASS_ENV}=1 bypasses this deliberately.", file=sys.stderr)
     raise SystemExit(2)
 

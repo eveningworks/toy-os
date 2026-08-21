@@ -85,8 +85,9 @@ REPO = os.path.dirname(HERE)
 #
 # DERIVED from the host rather than fixed at 4: the tool-seconds in a
 # full run total roughly 460s, so the ceiling is the slowest single tool
-# (forcequit, ~71s) and everything between 4 and that is just how many
-# cores are free. Half the cores, capped at 8 -- a TCG guest is a busy
+# (notepad, ~41s -- forcequit dropped to ~35s in the 663d63b pass, so it
+# is no longer the straggler) and everything between 4 and that is just
+# how many cores are free. Half the cores, capped at 8 -- a TCG guest is a busy
 # CPU thread plus its I/O, so oversubscribing turns wall-clock into
 # settle flakes rather than speed, which is measurable: at five
 # concurrent guests both gfxdemo and notepad failed comparisons they
@@ -147,11 +148,14 @@ COST_S = {
     # desktop directly. A stale cost is not a correctness problem -- it
     # only makes the start order slightly wrong -- but a tool whose real
     # cost has tripled would quietly become the straggler.
-    "forcequit": 71,   # waits out real ping timeouts; inherently slow
+    # Re-measured 2026-08-21 from two full runs: the 663d63b pass cut
+    # forcequit from ~71s to ~35s (it waits on observable client death
+    # now, not a real ping timeout), so notepad (~41s) is the straggler.
+    "notepad": 41,     # the current ceiling -- slowest single tool
+    "forcequit": 35,
+    "menubar": 32,
     "idle": 10,        # eight captures a third of a second apart
     "font": 19,        # two face switches and a size change, each settled
-    "notepad": 37,
-    "menubar": 32,
     "gfxdemo": 24,
     "cursor": 21,
     "uapp": 19,
@@ -308,8 +312,10 @@ def main():
                     help="run only these tools (repeatable); matches on the short name")
     ap.add_argument("--disk", default="disk.img",
                     help="image to copy for each run (default: disk.img)")
-    ap.add_argument("--timeout", type=int, default=600,
-                    help="per-tool timeout in seconds (default: 600)")
+    ap.add_argument("--timeout", type=int, default=180,
+                    help="per-tool timeout in seconds (default: 180). The slowest "
+                         "real tool is ~41s; 180 keeps a wide margin while bounding "
+                         "a hung guest to minutes, not the old 10.")
     ap.add_argument("--logs", metavar="DIR",
                     help="write each tool's full output to DIR/<name>.log")
     ap.add_argument("--list", action="store_true", help="list the tools and exit")

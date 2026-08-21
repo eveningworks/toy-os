@@ -115,8 +115,14 @@ if [ "$local_name" != "$conv_name" ] || [ "$local_email" != "$conv_email" ]; the
   echo "preflight: not this project's convention ($conv_name <$conv_email>)." >&2
 fi
 
+# Glob every instance's pidfile, not a hard-coded 0-3 list: vm.py
+# --instance goes to 15 and gui_regress now uses up to 8 (DEFAULT_JOBS),
+# so a guest on any of those holds disk.img's write lock and must be
+# caught here -- the whole point of the check. `.vm.pid` is slot 0;
+# `.vm.N.pid` are the rest. nullglob via the `[ -f ]` guard: an unmatched
+# glob stays literal and is skipped.
 vm_pid_file=""
-for f in .vm.pid .vm.0.pid .vm.1.pid .vm.2.pid .vm.3.pid; do
+for f in .vm.pid .vm.*.pid; do
   [ -f "$f" ] || continue
   if kill -0 "$(cat "$f" 2>/dev/null)" 2>/dev/null; then vm_pid_file="$f"; break; fi
 done
