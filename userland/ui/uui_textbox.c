@@ -277,7 +277,13 @@ static int te_ops_release(void *w, int cx, int cy) {
 // functions already existed; only the table was short. Three other
 // widgets had the same gap the same day; tools/check_widget_ops.py
 // exists to stop a fourth. See docs/decisions.md.
+static void textbox_bounds_op(const void *w, int *x, int *y, int *ow, int *oh) {
+    const struct uui_textbox *c = w;
+    *x = c->x; *y = c->y; *ow = c->w; *oh = c->h;
+}
+
 const struct uui_widget_ops uui_textbox_ops = {
+    .bounds = textbox_bounds_op,
     .natural_size = te_ops_natural_size,
     .set_geometry = te_ops_set_geometry,
     .release = te_ops_release,

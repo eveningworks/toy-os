@@ -234,11 +234,12 @@ def _preview_text_w(face_line):
 
 def _family_rect(dbg):
     """The Font Demo's family-dropdown rect (content-relative), or None --
-    logged by the app so the click is a lookup, not a pixel guess."""
-    for line in reversed(dbg.logs("fontdemo: layout family", clear=False)):
-        nums = [int(v) for v in line.split("layout family", 1)[1].split()[:4]]
-        if len(nums) == 4:
-            return tuple(nums)
+    logged by uapp_log_layout() as `fontdemo: layout <id> x y w h`, so the
+    click is a lookup not a pixel guess. The family dropdown is id 1."""
+    for line in reversed(dbg.logs("fontdemo: layout ", clear=False)):
+        parts = line.split("fontdemo: layout ", 1)[1].split()
+        if len(parts) >= 5 and parts[0] == "1":
+            return tuple(int(v) for v in parts[1:5])
     return None
 
 

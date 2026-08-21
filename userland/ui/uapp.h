@@ -288,6 +288,12 @@ int uapp_run(const struct uapp_desc *desc);
 // don't forget to present".
 void uapp_redraw(struct uapp *a);
 
+// Logs `<prefix>: layout <id> x y w h` for each declared widget with an
+// id and a `bounds` op -- the geometry a test drives the app by. Replaces
+// the hand-rolled per-app geometry logger; call it from on_draw or
+// on_open (once the widgets are placed). Content-relative.
+void uapp_log_layout(struct uapp *a, const char *prefix);
+
 // Draw and present NOW, if anything is dirty, instead of waiting for
 // the loop to come round. For a handler that is about to BLOCK and
 // wants what it has already produced on screen first -- Terminal echoes

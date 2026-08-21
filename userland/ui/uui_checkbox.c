@@ -176,7 +176,13 @@ static void cb_ops_set_focused(void *w, int focused) {
 // control with something to do.
 static int cb_ops_accepts_focus(const void *w) { return !((const struct uui_checkbox *)w)->disabled; }
 
+static void checkbox_bounds_op(const void *w, int *x, int *y, int *ow, int *oh) {
+    const struct uui_checkbox *c = w;
+    *x = c->x; *y = c->y; *ow = c->w; *oh = c->h;
+}
+
 const struct uui_widget_ops uui_checkbox_ops = {
+    .bounds = checkbox_bounds_op,
     .natural_size = cb_ops_natural_size,
     .set_geometry = cb_ops_set_geometry,
     .release = cb_ops_release,

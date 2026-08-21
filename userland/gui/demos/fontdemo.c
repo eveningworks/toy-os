@@ -170,7 +170,7 @@ static void report(void) {
 
 // --- the previewer ----------------------------------------------------
 
-static void log_preview(void);
+static void log_preview(struct uapp *a);
 
 static void free_fonts(void) {
     for (int i = 0; i < PREVIEW_ROWS; i++) {
@@ -183,7 +183,7 @@ static void free_fonts(void) {
 // Rasterises the current family+weight at the size ladder. Called after
 // the first frame (see on_draw's deferred load, the blank-window rule
 // from the previous version) and on every family/weight/size change.
-static void reload_fonts(void) {
+static void reload_fonts(struct uapp *a) {
     int face = uui_dropdown_selected(&g.family);
     if (face < 0 || face >= FACE_COUNT) face = 0;
     int bold = g.bold.checked ? 1 : 0;
@@ -208,7 +208,7 @@ static void reload_fonts(void) {
     g.cur_face = face;
     g.cur_bold = bold;
     g.cur_base = base;
-    log_preview();
+    log_preview(a);
 }
 
 // Re-emits the whole preview report from the CURRENT state, without
@@ -217,7 +217,7 @@ static void reload_fonts(void) {
 // between test phases mean the preview lines have to be re-stated or a
 // reader waiting on "preview face" waits forever. The private preview
 // fonts are untouched; this only re-logs what they already are.
-static void log_preview(void) {
+static void log_preview(struct uapp *a) {
     for (int i = 0; i < PREVIEW_ROWS; i++)
         ulogf("fontdemo: preview size %d %s\n", g.px[i],
                   g.ok[i] ? "loaded" : "failed");
@@ -234,10 +234,10 @@ static void log_preview(void) {
     ulogf("fontdemo: preview face \"%s\" bold %d base %d text-w %d\n",
               FACES[g.cur_face].name, g.cur_bold, g.cur_base, tw);
 
-    // The family-dropdown rect (content-relative), so a test drives it by
-    // asking rather than guessing pixels -- the notepad/taskmgr pattern.
-    ulogf("fontdemo: layout family %d %d %d %d\n",
-              g.family.x, g.family.y, g.family.w, g.family.h);
+    // Each control's rect (content-relative), so a test drives it by
+    // asking rather than guessing pixels -- now the toolkit's job, one
+    // `fontdemo: layout <id> x y w h` line per declared widget.
+    uapp_log_layout(a, "fontdemo");
 }
 
 // Places the controls in a row and the preview area below them, from the
@@ -272,7 +272,7 @@ static void apply(struct uapp *a) {
     int bold = g.bold.checked ? 1 : 0;
     int base = uui_spinbox_value(&g.size);
     if (g.loaded && (face != g.cur_face || bold != g.cur_bold || base != g.cur_base))
-        reload_fonts();
+        reload_fonts(a);
     uapp_redraw(a);
 }
 
@@ -342,7 +342,7 @@ static int on_tick(struct uapp *a) {
     (void)a;
     if (g.loaded) return 0;
     g.loaded = 1;
-    reload_fonts();
+    reload_fonts(a);
     report();
     return 1;
 }
@@ -353,7 +353,7 @@ static void on_font(struct uapp *a) {
     // private preview fonts are deliberately untouched, but re-state them
     // too so a reader that drained the log still sees the full report.
     report();
-    if (g.loaded) log_preview();
+    if (g.loaded) log_preview(a);
 }
 
 static void on_open(struct uapp *a) {

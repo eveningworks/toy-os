@@ -150,7 +150,13 @@ static void label_geometry_op(void *w, int x, int y, int width, int height) {
 // and a click goes to whatever is behind it. A caption that swallowed
 // clicks would be a control that does nothing, which is the shape of
 // bug this toolkit keeps a rule about.
+static void label_bounds_op(const void *w, int *x, int *y, int *ow, int *oh) {
+    const struct uui_label *c = w;
+    *x = c->x; *y = c->y; *ow = c->w; *oh = c->h;
+}
+
 const struct uui_widget_ops uui_label_ops = {
+    .bounds = label_bounds_op,
     .draw = label_draw_op,
     .natural_size = label_natural_op,
     .set_geometry = label_geometry_op,

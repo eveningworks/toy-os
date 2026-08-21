@@ -218,7 +218,13 @@ static void dd_ops_set_geometry(void *w, int x, int y, int width, int height) {
 // declare one. Both functions already existed -- only the table was
 // short. Worth remembering when adding a widget: the ops table is the
 // contract, and a missing slot fails SILENTLY and at a distance.
+static void dropdown_bounds_op(const void *w, int *x, int *y, int *ow, int *oh) {
+    const struct uui_dropdown *c = w;
+    *x = c->x; *y = c->y; *ow = c->w; *oh = c->h;
+}
+
 const struct uui_widget_ops uui_dropdown_ops = {
+    .bounds = dropdown_bounds_op,
     .natural_size   = dd_ops_natural_size,
     .set_geometry   = dd_ops_set_geometry,
     .draw           = dd_ops_draw,

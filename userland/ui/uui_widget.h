@@ -31,6 +31,14 @@ struct uui_widget_ops {
     // is handed and recompute its own -- see uui_radio_list.h.
     void (*set_geometry)(void *w, int x, int y, int width, int height);
 
+    // Where the widget ENDED UP -- the getter set_geometry lacks. Lets a
+    // caller iterate a router's widgets and read each rect generically
+    // (uapp_log_layout(), so a test can drive a control by asking rather
+    // than guessing pixels, instead of every app hand-rolling the same
+    // geometry log). Content-relative, like every other rect here.
+    // OPTIONAL: a widget a test never drives leaves it NULL.
+    void (*bounds)(const void *w, int *x, int *y, int *out_w, int *out_h);
+
     void (*draw)(struct ugfx_surface *s, const void *w);
 
     // Anything this widget draws ON TOP of its siblings -- a dropdown's

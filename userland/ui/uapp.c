@@ -3,6 +3,7 @@
 #include "ui/uapp.h"
 #include "ui/uui_route.h"
 #include "ui/uui_focus.h"   // desc.focus -- keyboard focus ring
+#include "ui/ulog.h"        // uapp_log_layout()
 #include "ui/utheme.h"
 
 struct uapp {
@@ -109,6 +110,22 @@ static void flush(struct uapp *a) {
 // --- public: state ----------------------------------------------------
 
 void uapp_redraw(struct uapp *a) { a->dirty = 1; }
+
+// Emits `<prefix>: layout <id> x y w h` for every declared widget that
+// has an id and a `bounds` op -- the standard "log my geometry so a test
+// can drive me by asking, not by guessing pixels" that ~8 apps
+// hand-rolled. Content-relative, exactly as the apps logged it; a test
+// adds the window's content origin. Widgets with no id (0) or no bounds
+// op are skipped, as are hidden ones.
+void uapp_log_layout(struct uapp *a, const char *prefix) {
+    for (int i = 0; i < a->router.count; i++) {
+        struct uui_item *it = &a->router.items[i];
+        if (it->hidden || !it->id || !it->ops || !it->ops->bounds) continue;
+        int x, y, w, h;
+        it->ops->bounds(it->widget, &x, &y, &w, &h);
+        ulogf("%s: layout %d %d %d %d %d\n", prefix, it->id, x, y, w, h);
+    }
+}
 
 void uapp_flush(struct uapp *a) { flush(a); }
 

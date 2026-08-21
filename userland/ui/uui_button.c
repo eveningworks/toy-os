@@ -106,7 +106,13 @@ static int btn_release(void *w, int cx, int cy) {
     return was; // 1 = committed, and the app is told which widget by id
 }
 
+static void button_bounds_op(const void *w, int *x, int *y, int *ow, int *oh) {
+    const struct uui_button *c = w;
+    *x = c->x; *y = c->y; *ow = c->w; *oh = c->h;
+}
+
 const struct uui_widget_ops uui_button_ops = {
+    .bounds = button_bounds_op,
     .natural_size = btn_natural,
     .set_geometry = btn_geometry,
     .draw         = btn_draw,

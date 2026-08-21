@@ -289,7 +289,13 @@ static void set_geometry_op(void *w, int x, int y, int rw, int rh) {
 // spinbox with no value to edit is not a state it has.
 static int accepts_focus_op(const void *w) { (void)w; return 1; }
 
+static void spinbox_bounds_op(const void *w, int *x, int *y, int *ow, int *oh) {
+    const struct uui_spinbox *c = w;
+    *x = c->x; *y = c->y; *ow = c->w; *oh = c->h;
+}
+
 const struct uui_widget_ops uui_spinbox_ops = {
+    .bounds = spinbox_bounds_op,
     .draw = draw_op,
     .accepts_focus = accepts_focus_op,
     .hit = hit_op,
