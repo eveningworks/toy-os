@@ -26,8 +26,8 @@
 // LINES for that reason: grep semantics need no parser at all.
 #include <stdint.h>
 #include "rt/sys.h"
-#include "lib/string.h"
-#include "lib/stdio.h"
+#include <string.h>
+#include <stdio.h>
 #include "setting_abi.h" // enum setting_result, struct setting_msg
 
 static void put(const char *s) { sys_print(s); }

@@ -23,7 +23,7 @@
 // `atexit`, no `getenv`. Add one when a second real caller turns up --
 // the bar the toolkit has always held.
 #include <stddef.h>
-#include "heap.h"
+#include <heap.h> // the toolkit allocator this header renames
 
 // The same contract as kmalloc(): NULL for a zero-sized or unsatisfiable
 // request, 16-byte aligned otherwise.

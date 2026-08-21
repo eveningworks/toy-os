@@ -41,8 +41,8 @@
 #include "ui/uui_route.h" // UUI_REASON_RELEASE
 #include "ui/uui_statusbar.h"
 #include "ui/utheme.h"
-#include "lib/stdio.h"
-#include "lib/string.h"
+#include <stdio.h>
+#include <string.h>
 
 #define MAX_KERNEL_KINDS 12
 

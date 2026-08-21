@@ -59,8 +59,8 @@
 //   - A restart pending: polls with waitpid_nohang so the backoff can
 //     expire, since a blocking wait has no deadline.
 #include "rt/sys.h"
-#include "lib/stdio.h"
-#include "lib/string.h"
+#include <stdio.h>
+#include <string.h>
 #include "etc_config.h"
 #include "setting_abi.h"
 #include "syscall_abi.h" // struct dirent, SYS_O_*

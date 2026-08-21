@@ -36,7 +36,7 @@
 // -ffreestanding, which does not promise this. The kernel build does
 // not need it: it still has no memcpy symbol, so there the rewrite
 // remains a link error.
-#include "lib/string.h"
+#include <string.h>
 
 void *memcpy(void *dst, const void *src, size_t n) {
     k_memcpy(dst, src, n);

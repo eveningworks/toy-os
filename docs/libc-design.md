@@ -45,7 +45,7 @@ of these changed it.
   stack-protector and future-threads item, and listing it under libc has
   made it look like a blocker twice.
 - **`string.h` and `mem*` are done**, as the C names over the shared
-  `k_*` toolkit -- one implementation, not two (`userland/lib/string.h`).
+  `k_*` toolkit -- one implementation, not two (`userland/include/string.h`).
 - **`snprintf`/`vsnprintf` are done**, as kfmt's formatter. The
   conversion set is kfmt's: `%d %u %x %s %c %%`, zero-pad width, `l/ll/z`.
 - **`malloc`/`calloc`/`free` are done**, as `kernel/lib/heap_core.c`
@@ -157,16 +157,39 @@ staging buffer, since `fs_read()` returns NULL for "cannot load this
 whole" exactly as it does for "not there". A libc that opens real files
 walks into that immediately. It asks `fs_exists()` now.
 
-### Stage 1 -- an include root
+### Stage 1 -- an include root -- DONE
 
-`userland/include/` on the userland `-I`, so `<stdio.h>`, `<string.h>`,
-`<stdlib.h>` resolve. Today they are `"lib/stdio.h"`, which is a
-perfectly good internal toolkit and is not a libc: **a program written
-elsewhere includes `<stdio.h>` or it does not compile**, and that single
-build decision is what separates the two.
+`userland/include/` holds the C library's PUBLIC headers and is on the
+ring-3 `-I`, so `<stdio.h>`, `<string.h>` and `<stdlib.h>` resolve.
+`userland/lib/` keeps the toy-os-internal ones (`cmd.h`, `tosh.h`,
+`human.h`, `dirsort.h`, `tunable.h`, `uhistory.h`) and the
+implementation. The split is by AUDIENCE, the same call
+`kernel/include/api|abi|kernel` already made, because the alternative --
+putting `userland/lib/` itself on the angle-bracket path -- makes the
+libc's public surface "whatever happens to be in that directory".
 
-Verifiable alone: an existing `/tests` binary rewritten to include only
-angle-bracket headers, building and passing unchanged.
+**TWO THINGS COLLIDED, and both are worth knowing before touching the
+include path again.**
+
+`kernel/include/api/string.h` already owns the name `<string.h>`. The
+C library's has to WIN that -- an app asking for `<string.h>` means the
+C library's -- so `userland/include` goes ahead of `kernel/include/api`.
+That leaves the libc header with no way to name the toolkit's: both
+`<string.h>` and `"string.h"` come back to itself, where the include
+guard turns the reference into a silent no-op and every `k_*`
+disappears. `kernel/include/api/kstring.h` exists purely to give the
+toolkit a second name, and does nothing else.
+
+And **the shared sources had to have the libc taken back OFF their
+path.** `kernel/lib/klineedit.c`, `kfmt.c` and `heap_core.c` are
+compiled into both rings and all three include `"string.h"`. With
+`-Iuserland/include` in front, that one source line resolves to the C
+library's header in the ring-3 pass and the toolkit's in the kernel
+pass -- the same line meaning two different files depending on which
+pass compiled it. Demonstrated with `gcc -M`, not assumed. The
+shared-source rule strips the flag (`SHARED_CFLAGS`), which turns
+"freestanding, toolkit only" from a comment asking nicely into something
+the build enforces.
 
 ### Stage 2 -- stdio
 

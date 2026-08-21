@@ -1,8 +1,8 @@
 // See wm_fs.h.
 #include "wm/wm_fs.h"
 #include "rt/sys.h"
-#include "lib/string.h"
-#include "lib/stdio.h"
+#include <string.h>
+#include <stdio.h>
 
 // Enough for any directory this WM reads: /usr/wm/desktop (nine
 // entries), /usr/share/cursors (a handful of themes), and whatever the

@@ -92,8 +92,8 @@
 #include "ui/uui.h"
 #include "ui/uapp.h"
 #include "ui/utheme.h"
-#include "lib/stdio.h"
-#include "lib/string.h"
+#include <stdio.h>
+#include <string.h>
 
 #define PAD       10
 #define ROW_GAP   8

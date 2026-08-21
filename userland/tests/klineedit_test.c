@@ -19,8 +19,8 @@
 // `run klineedit_test` reports 0 when everything holds.
 #include <stdint.h>
 #include "rt/sys.h"
-#include "lib/string.h"
-#include "lib/stdio.h"
+#include <string.h>
+#include <stdio.h>
 #include "klineedit.h"
 #include "klineedit_cases.h"
 

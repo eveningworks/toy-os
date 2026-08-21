@@ -6,7 +6,7 @@
 // volume. Saying which is the difference between a fact and a number.
 #include "rt/sys.h"
 #include "lib/cmd.h"
-#include "lib/stdio.h"
+#include <stdio.h>
 
 // "MM/DD/YYYY HH:MM:SS" -- the kernel shell's `stat` shape, kept so the
 // two commands do not disagree about how a timestamp looks while both

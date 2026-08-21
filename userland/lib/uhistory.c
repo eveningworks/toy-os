@@ -15,7 +15,7 @@
 // the file is not the interesting half of this change. It is a named
 // roadmap item rather than a silent omission.
 #include "lib/uhistory.h"
-#include "lib/string.h"
+#include <string.h>
 
 void uhist_init(struct uhistory *h) {
     h->count = 0;

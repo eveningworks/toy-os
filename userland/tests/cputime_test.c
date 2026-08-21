@@ -55,7 +55,7 @@
 // could equally have meant the billing was dead.
 
 #include "rt/sys.h"
-#include "lib/stdio.h"
+#include <stdio.h>
 
 // Long enough that the ratio is unambiguous, short enough to stay a
 // quick test. At 100Hz this is roughly a third of a second.

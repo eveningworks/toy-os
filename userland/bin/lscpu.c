@@ -23,7 +23,7 @@
 // place. See api/cpuinfo.h.
 #include <stdint.h>
 #include "rt/sys.h"
-#include "lib/string.h" // strlen, memcpy
+#include <string.h> // strlen, memcpy
 #include "knum.h"       // k_utoa/k_htoa -- fixed-width hex has no kfmt
                          // conversion (its printf has no `*` width)
 #include "cpuinfo.h"

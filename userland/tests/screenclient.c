@@ -49,8 +49,8 @@
 // and wm_request_close() has nothing to ask.
 #include <stdint.h>
 #include "rt/sys.h"
-#include "lib/stdio.h"
-#include "lib/string.h"
+#include <stdio.h>
+#include <string.h>
 #include "ui/ugfx.h"
 #include "win_proto.h"
 

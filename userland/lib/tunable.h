@@ -16,7 +16,7 @@
 // because that would strand its poller -- so a caller that assumed
 // success would print "PIO forced" while DMA carried on.
 #include "rt/sys.h"
-#include "lib/string.h"
+#include <string.h>
 
 // Fills `out` with the tunable's current value. 1 on success, 0 if the
 // registry has no such name.

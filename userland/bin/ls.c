@@ -41,8 +41,8 @@
 // alone until file permissions exist (docs/roadmap.md).
 #include <stdint.h>
 #include "rt/sys.h"
-#include "lib/string.h"
-#include "lib/stdio.h"
+#include <string.h>
+#include <stdio.h>
 #include "lib/dirsort.h"
 
 // The output flags, gathered so the recursion below can pass one thing.

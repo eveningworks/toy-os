@@ -29,8 +29,8 @@
 // it has no window, so wm_request_close() has nothing to ask.
 #include <stdint.h>
 #include "rt/sys.h"
-#include "lib/stdio.h"
-#include "lib/string.h" // memset -- the request structs are zeroed
+#include <stdio.h>
+#include <string.h> // memset -- the request structs are zeroed
 #include "win_proto.h"
 
 // The one request this program makes. `a` is claim(1)/release(0); every

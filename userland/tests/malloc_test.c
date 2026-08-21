@@ -14,9 +14,9 @@
 // hands the same block to two callers, so every check below is about
 // what happens between two allocations, not about one.
 #include "rt/sys.h"
-#include "lib/stdlib.h"
-#include "lib/stdio.h"
-#include "lib/string.h"
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
 
 static int fails;
 

@@ -37,8 +37,8 @@
 #include <stdint.h>
 #include <stdarg.h>
 #include "rt/sys.h"
-#include "lib/string.h"
-#include "lib/stdio.h"
+#include <string.h>
+#include <stdio.h>
 #include "ui/ugfx.h"
 #include "ui/uapp.h"
 #include "ui/utheme.h"

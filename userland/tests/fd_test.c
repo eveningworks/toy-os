@@ -11,8 +11,8 @@
 // `run fd_test` reports 0 when everything holds.
 #include <stdint.h>
 #include "rt/sys.h"
-#include "lib/string.h"
-#include "lib/stdio.h"
+#include <string.h>
+#include <stdio.h>
 #include "syscall_abi.h"
 
 static int g_fail;

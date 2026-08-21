@@ -24,8 +24,8 @@
 // wrongly on any machine whose font was changed. Same rule the GUI's
 // whole layout follows.
 #include "rt/sys.h"
-#include "lib/string.h"
-#include "lib/stdio.h"
+#include <string.h>
+#include <stdio.h>
 #include <keyboard.h>  // KEY_* -- specials arrive as these codes
 
 // printf() and putchar() deliberately do not exist here (lib/stdio.h

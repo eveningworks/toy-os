@@ -4,16 +4,19 @@
 #include "rt/sys.h" // strerror() -- one table, in libsys
 #include <stddef.h>
 #include <stdint.h>
-// ANGLE BRACKETS ARE REQUIRED HERE, not a style choice: this file is
-// itself called string.h, and a quoted include searches the including
-// file's own directory first, so "string.h" resolves to THIS header.
-// The include guard turns that into a silent no-op rather than a loop,
-// and every k_* below is then undeclared -- a confusing failure for a
-// line that looks obviously correct. <> skips the current directory and
-// finds kernel/include/api/string.h on -I, which is what is wanted.
-#include <string.h> // the k_* implementations this header renames
+// <kstring.h>, NOT <string.h>, and that is not a style choice. THIS
+// file is the one <string.h> now resolves to: userland/include comes
+// ahead of kernel/include/api on the ring-3 include path, or an app's
+// <string.h> would find the toolkit's header instead of the C library's.
+// So neither spelling of "string.h" can reach the other header from
+// here -- both come back to this one, where the include guard turns the
+// reference into a silent no-op and every k_* below goes undeclared, a
+// confusing failure for a line that looks obviously correct.
+// kernel/include/api/kstring.h exists to give the toolkit a second name
+// this file can say.
+#include <kstring.h> // the k_* implementations this header renames
 
-// The C names, for ring 3 only. `#include "lib/string.h"`.
+// The C names, for ring 3 only. `#include <string.h>`.
 //
 // WHAT THIS IS. Every function here is the toolkit's k_* equivalent
 // under its standard name -- there is no second implementation, and

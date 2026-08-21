@@ -13,8 +13,8 @@
 // machine thinks it is.
 #include "rt/sys.h"
 #include "lib/cmd.h"
-#include "lib/stdio.h"
-#include "lib/string.h"
+#include <stdio.h>
+#include <string.h>
 
 // Spelled out rather than derived: three-letter abbreviations would be
 // shorter and are ambiguous across languages, and the kernel shell's

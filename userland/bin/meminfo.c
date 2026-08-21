@@ -11,8 +11,8 @@
 // tool that does not know what it is looking for, and this one does.
 #include "rt/sys.h"
 #include "lib/cmd.h"
-#include "lib/stdio.h"
-#include "lib/string.h"
+#include <stdio.h>
+#include <string.h>
 #include "lib/human.h"
 
 // --list walks the registry instead -- the generic path, and the reason

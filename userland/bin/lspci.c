@@ -31,7 +31,7 @@
 // kernel driver rather than in the shared toolkit.
 #include <stdint.h>
 #include "rt/sys.h"
-#include "lib/string.h" // strlen
+#include <string.h> // strlen
 #include "knum.h"       // k_htoa -- fixed-width hex, which kfmt has no
                          // conversion for (no `*` width in its printf)
 #include "pci.h" // struct pci_device only -- see this file's top comment

@@ -13,7 +13,7 @@
 #include <stdint.h>
 #include "rt/sys.h"
 #include "lib/cmd.h"
-#include "lib/stdio.h"
+#include <stdio.h>
 #include <knum.h>   // k_parse_u32 -- rejects rather than guessing
 
 #define MAX_VALUES 32

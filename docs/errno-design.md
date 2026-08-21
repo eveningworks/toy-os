@@ -143,7 +143,7 @@ it used to answer -1.
 
 - ~~**`strerror()`**~~ -- built after all, since it was four lines once
   the numbers existed. `sys_strerror()` in libsys, with the POSIX name
-  forwarding to it from `userland/lib/string.h` so there is one table
+  forwarding to it from `userland/include/string.h` so there is one table
   rather than a libc copy that drifts. It returns the SENTENCE ("no such
   file or directory"); `strace` prints the macro name (`ENOENT`),
   because a person debugging the kernel greps for the identifier and a

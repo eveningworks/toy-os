@@ -88,6 +88,16 @@ ASM = nasm
 # This is the boundary CLAUDE.md has always described; before the split
 # every header sat in one flat directory and nothing enforced it.
 API_INCLUDES    = -Ikernel/include/api -Ikernel/include/abi
+# The C library's PUBLIC headers, ring 3 only, and FIRST on the include
+# path ahead of API_INCLUDES -- which it has to be, because both
+# directories contain a `string.h` and an app asking for <string.h>
+# means the C library's. The toolkit's is still reachable as
+# <kstring.h>; see that file for why it exists.
+#
+# It is a separate variable rather than another -I on USERLAND_CFLAGS so
+# that the shared-source rule can take it back OUT -- see the
+# build/userland/shared/ rules near the bottom of this file.
+LIBC_INCLUDES   = -Iuserland/include
 KERNEL_INCLUDES = $(API_INCLUDES) -Ikernel/include/kernel
 
 CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-protector-guard=global -fno-pic -fno-pie \
@@ -165,7 +175,7 @@ DISK_IMG = disk.img
 # interrupt vector rather than only where the scheduler swaps processes.
 USERLAND_CFLAGS = -std=gnu11 -ffreestanding -fstack-protector-strong -mstack-protector-guard=global -fno-pic -fno-pie \
                    -mno-red-zone -mcmodel=large \
-                   -Wall -Wextra -Wframe-larger-than=2048 -O2 -g -c $(API_INCLUDES) -Iuserland \
+                   -Wall -Wextra -Wframe-larger-than=2048 -O2 -g -c $(LIBC_INCLUDES) $(API_INCLUDES) -Iuserland \
                    -ffunction-sections -fdata-sections -MMD -MP \
                    -fno-tree-loop-distribute-patterns
 # -Wframe-larger-than for RING 3, which had none while the kernel side
@@ -570,13 +580,24 @@ $(BUILD)/userland/%.elf: $(BUILD)/userland/%.o $(USERLAND_RT) userland/rt/link.l
 #
 # -Iapps is needed for calc_engine.h and is scoped to this rule alone,
 # so an ordinary userland program still cannot include apps/ headers.
+# AND THE C LIBRARY IS TAKEN BACK OFF THE INCLUDE PATH HERE. A file on
+# this list is compiled into BOTH rings, so it may only use the toolkit
+# -- kernel/lib/klineedit.c, kfmt.c and heap_core.c all include
+# "string.h", and with -Iuserland/include in front that quoted include
+# would silently resolve to the C library's header in the ring-3 build
+# and the toolkit's in the kernel build: the same source line meaning
+# two different files depending on which pass compiled it. Removing the
+# flag makes "freestanding, toolkit only" something the build ENFORCES
+# rather than something the comment above asks for.
+SHARED_CFLAGS = $(subst $(LIBC_INCLUDES),,$(USERLAND_CFLAGS))
+
 $(BUILD)/userland/shared/%.o: kernel/lib/%.c | version
 	@mkdir -p $(dir $@)
-	$(CC) $(USERLAND_CFLAGS) -Iapps $< -o $@
+	$(CC) $(SHARED_CFLAGS) -Iapps $< -o $@
 
 $(BUILD)/userland/shared/%.o: apps/%.c | version
 	@mkdir -p $(dir $@)
-	$(CC) $(USERLAND_CFLAGS) -Iapps $< -o $@
+	$(CC) $(SHARED_CFLAGS) -Iapps $< -o $@
 
 # calculator.c is the one ordinary userland program that includes an
 # apps/ header (calc_engine.h). Scoped to this object with a

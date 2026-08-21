@@ -10,7 +10,7 @@
 // computes the deadline from, so this is not comparing two unrelated
 // counters.
 #include "rt/sys.h"
-#include "lib/stdio.h"
+#include <stdio.h>
 
 static int fails = 0;
 

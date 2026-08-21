@@ -1217,7 +1217,7 @@ arithmetic. Retiring the old one is a separate decision
 
 ## Ring 3 gets the C names; the kernel keeps `k_`
 
-`userland/lib/string.h` and `userland/lib/stdio.h` declare `strlen`,
+`userland/include/string.h` and `userland/include/stdio.h` declare `strlen`,
 `memcpy`, `snprintf` and friends — but there is no second
 implementation. Every one of them is the toolkit's `k_*` function, and
 `kernel/lib/string.c`/`knum.c`/`kfmt.c` are compiled a second time into
@@ -1238,11 +1238,14 @@ are real functions (`userland/lib/cmem.c`) and everything else is a
 judgment.
 
 Three things that bit while building it, each now recorded where it
-bites rather than only here. `userland/lib/string.h` cannot include
+bites rather than only here. `userland/include/string.h` cannot include
 `"string.h"`, because a quoted include searches the including file's own
 directory first and that resolves to itself; the guard makes it a silent
-no-op and every `k_*` is then undeclared. It uses `<string.h>`, which
-skips the current directory. The implementation file cannot be called
+no-op and every `k_*` is then undeclared. It used `<string.h>` to skip
+the current directory — which stopped working the day
+`userland/include/` went on the path AHEAD of `kernel/include/api/`, so
+that BOTH spellings came back to itself. It says `<kstring.h>` now; see
+the include-root entry below. The implementation file cannot be called
 `string.c`, because `ar` stores members by BASENAME and `libuapp.a`
 already contains `shared/string.o` — two same-named members in one
 archive, which linked silently only because they happened to define
@@ -2664,7 +2667,7 @@ to `kernel/lib/heap_core.c` and is compiled twice, with everything
 platform-specific behind three functions in `api/heap_os.h` --
 `heap_os_alloc` (pmm frames / sbrk), `heap_os_report` (klog / stderr)
 and `heap_os_should_fail_alloc` (fault injection / never). Ring 3 gets
-the C names through `userland/lib/stdlib.h`.
+the C names through `userland/include/stdlib.h`.
 
 **The state stays in the file's statics rather than becoming a context
 struct**, which is deliberate and is what kept the diff small: each

@@ -27,8 +27,8 @@
 #include <stdint.h>
 #include "rt/sys.h"
 #include "lib/cmd.h"
-#include "lib/stdio.h"
-#include "lib/string.h"
+#include <stdio.h>
+#include <string.h>
 #include <knum.h>
 
 #define CHUNK 1024

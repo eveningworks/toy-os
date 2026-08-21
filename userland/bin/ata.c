@@ -15,8 +15,8 @@
 #include "rt/sys.h"
 #include "lib/cmd.h"
 #include "lib/human.h"
-#include "lib/stdio.h"
-#include "lib/string.h"
+#include <stdio.h>
+#include <string.h>
 #include "lib/tunable.h"
 
 #define NODMA_TUNABLE "kernel.ata_nodma"

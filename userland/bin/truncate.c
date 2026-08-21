@@ -7,7 +7,7 @@
 // docs/decisions.md's truncation entry.
 #include "rt/sys.h"
 #include "lib/cmd.h"
-#include "lib/string.h"
+#include <string.h>
 
 int main(int argc, char **argv) {
     if (argc != 3) {

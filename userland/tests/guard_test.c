@@ -24,7 +24,7 @@
 //     memset. Without it the control reddens the refusal checks and
 //     leaves the corruption invisible.
 #include "rt/sys.h"
-#include "lib/string.h"
+#include <string.h>
 #include "proc_info.h"
 
 static int failures;

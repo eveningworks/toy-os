@@ -4,7 +4,7 @@
 #include "syscall_abi.h"
 #include "rt/sys.h" // sys_sbrk, sys_win_request -- the screen half, below
 #include "ttf.h"    // the SAME rasterizer the kernel uses -- see ugfx_font_load
-#include "lib/stdlib.h"
+#include <stdlib.h>
 
 static inline int64_t syscall2(uint64_t num, uint64_t arg1, uint64_t arg2) {
     int64_t ret;

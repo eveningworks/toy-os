@@ -14,7 +14,7 @@
 // wait-any has nobody to ask about. That is why this is not in
 // tools/usertest_run.py, which drives everything through `run`.
 #include "rt/sys.h"
-#include "lib/stdio.h"
+#include <stdio.h>
 
 #define CHILD "/tests/exit_test"
 

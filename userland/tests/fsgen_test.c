@@ -17,7 +17,7 @@
 // Hence every mutation check here is paired with a no-op check. Asking
 // "did it change?" alone would pass against a free-running counter.
 #include "rt/sys.h"
-#include "lib/string.h"
+#include <string.h>
 
 static int failures;
 

@@ -731,3 +731,58 @@ general form, and the reason this is a decision rather than a fix: **a
 rename table addressed less specifically than the thing it renames will
 eventually rename something else**, and it will do it silently, because
 a rename cannot fail.
+
+## The C library's headers get their own root, and the shared sources have it taken away
+
+`docs/libc-design.md`'s Stage 1. The C library's public headers live in
+`userland/include/` and are reached with angle brackets; `userland/lib/`
+keeps the toy-os-internal headers (`cmd.h`, `tosh.h`, `human.h`,
+`dirsort.h`) and the implementation.
+
+**Why a separate directory rather than putting `userland/lib/` on the
+angle-bracket path**, which would have been one `-I` and no churn: the
+libc's public surface would then be "whatever file happens to be in that
+directory", so `<cmd.h>` and `<tosh.h>` would be part of the C library
+as far as any including program could tell. That is the audience
+question `kernel/include/api|abi|kernel` already answered here, and the
+answer is a directory per audience with the build enforcing it.
+
+**ORDER IS LOAD-BEARING, and it created the one real problem.**
+`kernel/include/api/string.h` -- the `k_*` toolkit -- already owned the
+name `string.h`. The C library's has to win it, because a program
+written elsewhere asking for `<string.h>` means the C library's, so
+`-Iuserland/include` goes ahead of `-Ikernel/include/api`. That leaves
+`userland/include/string.h` unable to name the header it is a renaming
+of: `<string.h>` and `"string.h"` both come back to itself, where the
+include guard turns the reference into a silent no-op and every `k_*`
+prototype disappears -- a confusing failure for a line that looks
+obviously correct.
+
+`kernel/include/api/kstring.h` exists for exactly that and contains
+nothing else: a quoted `#include "string.h"`, which searches its own
+directory first and therefore reaches the toolkit's header and cannot
+reach the libc's. A header whose whole content is a name.
+
+**AND THE SHARED SOURCES NEEDED THE FLAG REMOVED AGAIN.**
+`kernel/lib/klineedit.c`, `kfmt.c` and `heap_core.c` are compiled into
+both rings from one source, and all three include `"string.h"`. With
+`-Iuserland/include` in front, that single line resolves to the C
+library's header in the ring-3 pass and the toolkit's in the kernel
+pass: the same source line meaning two different files depending on
+which compilation it is. It would have compiled and linked either way,
+which is what makes it worth writing down -- nothing would have
+reported it.
+
+So `SHARED_CFLAGS` is `USERLAND_CFLAGS` with `$(LIBC_INCLUDES)`
+substituted out, and `LIBC_INCLUDES` is a separate variable only so that
+subtraction can be written. The Makefile already had the pattern
+(`APPS_CFLAGS` subtracts `-Ikernel/include/kernel` from `CFLAGS`), and
+the effect is the same in both places: a rule that says what a class of
+file is NOT allowed to reach.
+
+The gain beyond correctness is that "everything on the shared list must
+be freestanding and toolkit-only" stopped being a comment asking nicely
+and became something the build enforces. Verified with `gcc -M` on
+`kernel/lib/kfmt.c` both ways -- with the flag it pulls
+`userland/include/string.h`, without it `kernel/include/api/string.h` --
+rather than reasoned about.

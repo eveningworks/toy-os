@@ -6,7 +6,7 @@
 // your data is still only in RAM" is the one disk answer a caller must
 // not read as success, so it is loud and it says not to power off.
 #include "rt/sys.h"
-#include "lib/stdio.h"
+#include <stdio.h>
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;

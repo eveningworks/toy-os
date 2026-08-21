@@ -12,7 +12,7 @@
 // builtin at all. The GUI About window still omits this line and is a
 // roadmap item; this one has it.
 #include "rt/sys.h"
-#include "lib/stdio.h"
+#include <stdio.h>
 #include "version.h"   // TOYOS_VERSION_FULL, generated -- tools/gen_version.sh
 
 int main(int argc, char **argv) {

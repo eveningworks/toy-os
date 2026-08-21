@@ -18,10 +18,10 @@
 // Prints one line per check and exits with the number of failures.
 #include <stdint.h>
 #include "rt/sys.h"
-#include "lib/string.h"
-#include "lib/stdio.h"
+#include <string.h>
+#include <stdio.h>
 #include <stdarg.h>
-#include "lib/stdlib.h"
+#include <stdlib.h>
 #include "ttf.h"
 
 #define FONT_PATH "/usr/share/fonts/dejavu-sans-mono.ttf"

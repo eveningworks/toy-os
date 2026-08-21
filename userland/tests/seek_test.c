@@ -25,8 +25,8 @@
 // Prints one line per check and exits with the number of failures.
 #include <stdint.h>
 #include "rt/sys.h"
-#include "lib/string.h"
-#include "lib/stdio.h"
+#include <string.h>
+#include <stdio.h>
 #include "syscall_abi.h"
 
 #define PATH "/tmp/seek_test.bin"

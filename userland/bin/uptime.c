@@ -9,7 +9,7 @@
 // running" and not "how long has this been up"; ticks are still
 // available to anything that wants them, through the same syscall.
 #include "rt/sys.h"
-#include "lib/stdio.h"
+#include <stdio.h>
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;

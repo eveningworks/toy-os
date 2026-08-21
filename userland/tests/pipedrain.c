@@ -9,7 +9,7 @@
 // codes so a failure says WHICH way it went wrong.
 #include <stdint.h>
 #include "rt/sys.h"
-#include "lib/stdio.h"
+#include <stdio.h>
 
 #define TOTAL (16 * 1024)
 

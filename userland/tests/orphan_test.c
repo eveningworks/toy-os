@@ -15,8 +15,8 @@
 // so a child of it has ppid 0 already and there is no orphaning to
 // observe. Same reason waitany_test is not in usertest_run.py.
 #include "rt/sys.h"
-#include "lib/stdio.h"
-#include "lib/string.h"
+#include <stdio.h>
+#include <string.h>
 
 #define CHILD "/tests/exit_test"
 #define DEFAULT_N 4

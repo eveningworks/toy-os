@@ -2,7 +2,7 @@
 #include "wm/wm_conf.h"
 #include "wm/wm_fs.h"
 #include "rt/sys.h"
-#include "lib/string.h"
+#include <string.h>
 
 int wm_conf_load(const char *path, struct etc_config_buf *buf) {
     if (!buf) return 0;

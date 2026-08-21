@@ -2,7 +2,7 @@
 // does not change the value until it is committed.
 #include "ui/uui_spinbox.h"
 #include "ui/uui_widget.h"
-#include "lib/stdio.h"
+#include <stdio.h>
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
 
 // The steppers occupy a column on the right, split in half.

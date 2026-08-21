@@ -1,7 +1,7 @@
 // See wm_log.h.
 #include "wm/wm_log.h"
 #include "rt/sys.h"
-#include "lib/stdio.h"
+#include <stdio.h>
 #include <stdarg.h>
 
 void wm_logf(const char *fmt, ...) {

@@ -13,7 +13,7 @@
 // fails the kernel says so loudly there.
 #include "rt/sys.h"
 #include "lib/cmd.h"
-#include "lib/string.h"
+#include <string.h>
 
 int main(int argc, char **argv) {
     int poweroff = 0;

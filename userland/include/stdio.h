@@ -3,10 +3,10 @@
 
 #include <stddef.h>
 #include <stdarg.h>
-#include <kfmt.h> // angle brackets for the same reason as lib/string.h's
+#include <kfmt.h> // the toolkit's formatter; no name clash, unlike string.h's
 
 // The C names for formatted output, for ring 3 only.
-// `#include "lib/stdio.h"`. See lib/string.h's header comment for the
+// `#include <stdio.h>`. See <string.h>'s header comment for the
 // whole rationale -- this is its other half, and the two were built
 // together.
 //

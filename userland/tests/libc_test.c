@@ -18,8 +18,8 @@
 // shows nothing interesting; the output is the point.
 #include <stdint.h>
 #include "rt/sys.h"
-#include "lib/string.h"
-#include "lib/stdio.h"
+#include <string.h>
+#include <stdio.h>
 
 static int g_fail;
 

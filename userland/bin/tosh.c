@@ -26,7 +26,7 @@
 // rather than inside either.
 #include "rt/sys.h"
 #include "lib/tosh.h"
-#include "lib/string.h"
+#include <string.h>
 #include "lib/uhistory.h"
 #include "klineedit.h"
 

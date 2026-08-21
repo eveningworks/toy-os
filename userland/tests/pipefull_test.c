@@ -17,8 +17,8 @@
 // times", which is exactly the failure being tested for.
 #include <stdint.h>
 #include "rt/sys.h"
-#include "lib/string.h"
-#include "lib/stdio.h"
+#include <string.h>
+#include <stdio.h>
 
 #define TOTAL (16 * 1024)   // four times the pipe buffer
 #define CHUNK 256

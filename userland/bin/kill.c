@@ -12,8 +12,8 @@
 #include <stdint.h>
 #include "rt/sys.h"
 #include "lib/cmd.h"
-#include "lib/stdio.h"
-#include "lib/string.h"
+#include <stdio.h>
+#include <string.h>
 #include <knum.h>   // k_parse_u32 -- kernel/lib/, linked into libuapp.a
 
 // The name of `pid`, or "" if the process table has no such live entry.

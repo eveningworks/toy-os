@@ -1,7 +1,7 @@
 // See dirsort.h for why this is shared, and why it moves entries rather
 // than handing back a permutation.
 #include "lib/dirsort.h"
-#include "lib/string.h"
+#include <string.h>
 
 static int cmp(const struct dirent *a, const struct dirent *b,
                enum dirsort_key key, int reverse) {

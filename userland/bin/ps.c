@@ -25,8 +25,8 @@
 // else.
 #include <stdint.h>
 #include "rt/sys.h"
-#include "lib/string.h"
-#include "lib/stdio.h"
+#include <string.h>
+#include <stdio.h>
 #include "proc_info.h"
 
 static void put(const char *s) { sys_write(1, s, strlen(s)); }

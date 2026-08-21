@@ -18,7 +18,7 @@
 // Prints one line per check and exits with the number of FAILURES.
 #include <stdint.h>
 #include "rt/sys.h"
-#include "lib/string.h"
+#include <string.h>
 
 static int g_fail;
 

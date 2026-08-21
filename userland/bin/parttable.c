@@ -13,7 +13,7 @@
 #include "rt/sys.h"
 #include "lib/cmd.h"
 #include "lib/human.h"
-#include "lib/stdio.h"
+#include <stdio.h>
 
 #define SECTOR_BYTES 512
 

@@ -10,7 +10,7 @@
 #include "rt/sys.h"
 #include "wm/wm_rawin.h"
 #include "icon_grid.h"
-#include "lib/stdio.h"
+#include <stdio.h>
 #include "wm/wm_conf.h"
 
 #define DESKTOP_ICON_SIZE 48

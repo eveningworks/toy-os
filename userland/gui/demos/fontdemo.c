@@ -34,10 +34,10 @@
 //   fontdemo: session-descender g regular <rows> bold <rows> cell <h>
 #include "rt/sys.h"
 #include "ui/uapp.h"
-#include "lib/stdio.h"
+#include <stdio.h>
 #include <stdarg.h>
-#include "lib/stdlib.h"
-#include "lib/string.h"
+#include <stdlib.h>
+#include <string.h>
 
 // The face the private tier loads. Deliberately the PROPORTIONAL one
 // and deliberately not whatever the session is on: a private font that

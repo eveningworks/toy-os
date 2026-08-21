@@ -16,8 +16,8 @@
 //   * an oversized count is refused, and a zero count is a legal no-op
 //     rather than an error.
 #include "rt/sys.h"
-#include "lib/stdio.h"
-#include "lib/string.h"
+#include <stdio.h>
+#include <string.h>
 
 static int failures;
 

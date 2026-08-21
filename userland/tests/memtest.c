@@ -35,8 +35,8 @@
 //              spawn /tests/memtest 4        (cap at 4 MiB, for a quick pass)
 //              spawn /tests/memtest 0        (no cap -- as much as sbrk gives)
 #include "rt/sys.h"
-#include "lib/stdio.h"
-#include "lib/string.h"
+#include <stdio.h>
+#include <string.h>
 
 #define CHUNK (64 * 1024)     // one sbrk step
 

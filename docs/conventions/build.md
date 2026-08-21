@@ -19,10 +19,12 @@ this the obvious way), not from how much history it accumulated.
 
 - **`userland/` is split by ROLE, and the build derives things from it
   -- adding a program is a `.c` file and nothing else.** `rt/` (crt0,
-  libsys, stack_chk, link.ld), `ui/` (the GUI toolkit), `lib/`
-  (userland libraries that aren't UI -- `tosh`, plus the C names over
-  the toolkit), `gui/` (windowed apps), `bin/` (command-line programs),
-  `tests/` (single-mechanism diagnostics). **The first three produce
+  libsys, stack_chk, link.ld), `include/` (the C library's PUBLIC
+  headers, and ONLY those -- see below), `ui/` (the GUI toolkit),
+  `lib/` (userland libraries that aren't UI -- `tosh`, the C library's
+  implementation, and the toy-os-internal headers that are not part of
+  its public surface), `gui/` (windowed apps), `bin/` (command-line
+  programs), `tests/` (single-mechanism diagnostics). **The first three produce
   objects; the last three produce one ELF per `.c`, and the directory
   also says where it seeds** -- `gui/` and `bin/` to `/bin`, `tests/` to
   `/tests`, which is `docs/filesystem-layout.md`'s distinction stated
@@ -32,12 +34,19 @@ this the obvious way), not from how much history it accumulated.
   echo->echo_test). Note `tests/` holds windowed diagnostics too
   (`winclient`, `uiclient`) -- the directories name a DESTINATION.
   **Includes are path-qualified** (`#include "ui/ugfx.h"`) off a single
-  `-Iuserland`, so an include line says which layer it reaches into.
+  `-Iuserland`, so an include line says which layer it reaches into --
+  with ONE exception, and it is deliberate: the C library is reached
+  with angle brackets off `userland/include/`, because a program written
+  elsewhere says `#include <stdio.h>` or it does not compile.
   ELFs build to `build/userland/**`, not into the source tree.
 - **In ring 3 the toolkit is reachable under the C names -- don't
   hand-roll a `my_strlen` or a digit loop there either.**
-  `#include "lib/string.h"` for `strlen`/`strcmp`/`strlcpy`/`mem*`/the
-  `ctype` handful, `#include "lib/stdio.h"` for `snprintf`. These are
+  `#include <string.h>` for `strlen`/`strcmp`/`strlcpy`/`mem*`/the
+  `ctype` handful, `#include <stdio.h>` for `snprintf`. **They are
+  ANGLE-BRACKET includes off `userland/include/`**, which is on the
+  ring-3 path AHEAD of `kernel/include/api` -- both directories hold a
+  `string.h` and an app asking for `<string.h>` means the C library's.
+  The toolkit's own is `<kstring.h>`. These are
   NOT a second implementation: they are the same `k_*` code, compiled a
   second time into `libuapp.a`, so a ring-3 `strlen` and the kernel's
   `k_strlen` cannot diverge. Reach for `knum.h`'s `k_utoa`/`k_htoa`
@@ -45,14 +54,16 @@ this the obvious way), not from how much history it accumulated.
   zero-pad widths for numbers and `%Ns`/`%-Ns` column padding for
   STRINGS (a value longer than its field pushes the column rather than
   being truncated), but no `*` width.
-  **`malloc`/`free`/`calloc` DO exist** (`#include "lib/stdlib.h"`), and
+  **`malloc`/`free`/`calloc` DO exist** (`#include <stdlib.h>`), and
   they are not a second allocator: they are `kernel/lib/heap_core.c` --
   the kernel's own free list -- compiled a second time with `SYS_SBRK`
   behind it instead of the frame allocator (`api/heap_os.h`). Two things
   a caller inherits from sbrk: **`free()` never returns memory to the
   kernel** (the break cannot move down, so a process's footprint only
   grows), and a fresh region's pages arrive on touch. What still does
-  NOT exist, on purpose: `realloc`, `FILE`, `printf`, `errno`, TLS.
+  NOT exist, on purpose: `realloc`, `FILE`, `printf`, TLS. (`errno`
+  DOES -- `sys_errno()`/`sys_strerror()` over `abi/errno.h`; the C
+  spelling is what is still missing. See `docs/libc-design.md`.)
   Three traps, all of which fail quietly: a header named `string.h`
   including `"string.h"` finds ITSELF (hence the `<>`), an archive
   member cannot be named `string.o` twice (hence `cmem.c`), and

@@ -25,7 +25,7 @@
 #include "rt/sys.h"
 #include "lib/cmd.h"
 #include "lib/human.h"
-#include "lib/stdio.h"
+#include <stdio.h>
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;

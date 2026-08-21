@@ -29,7 +29,7 @@
 // Inline rather than a .c file for the same reason cmd.h is: it is a
 // dozen lines on the far side of --gc-sections, and a program that
 // includes it and never calls it links nothing.
-#include "lib/stdio.h"
+#include <stdio.h>
 
 static inline void human_size(char *out, unsigned long cap, unsigned long long n) {
     static const char unit[] = { 'B', 'K', 'M', 'G' };

@@ -18,8 +18,8 @@
 // through SYS_SPAWN directly; that is not this program's job.
 #include "rt/sys.h"
 #include "lib/cmd.h"
-#include "lib/stdio.h"
-#include "lib/string.h"
+#include <stdio.h>
+#include <string.h>
 
 int main(int argc, char **argv) {
     if (argc < 2) {

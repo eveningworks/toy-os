@@ -1,7 +1,7 @@
 // table -- rows in columns, with a header. See ui/uui_table.h.
 #include "ui/uui_table.h"
 #include "ui/uui_widget.h"
-#include "lib/string.h"
+#include <string.h>
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
 
 // Left/right inset inside a column. Hoisted so natural_size() reserves

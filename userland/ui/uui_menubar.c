@@ -1,7 +1,7 @@
 // menu bar + nested pull-down menus. See ui/uui_menubar.h for the design.
 #include "ui/uui_menubar.h"
 #include "keyboard.h" // KEY_* codes, as delivered by WIN_EV_KEY
-#include "lib/string.h" // tolower() -- the toolkit's, over k_tolower
+#include <string.h> // tolower() -- the toolkit's, over k_tolower
 
 // ---------------------------------------------------------------------
 // metrics -- all font-derived, per docs/gui-guidelines.md
