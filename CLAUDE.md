@@ -644,7 +644,13 @@ Sessions work directly against this checkout with ordinary file and
 Bash tools:
 
 - Git identity is already configured (`toy-os` /
-  `noreply@toy-os.local`), so plain `git commit` just works. **That
+  `noreply@toy-os.local`), so plain `git commit` just works. **It is
+  PER-REPOSITORY and a clone does not carry it** -- a fresh checkout on
+  another machine falls back to the global identity, which is the real
+  name a history rewrite once removed from every commit here.
+  `preflight.sh` refuses to run until it is set (`.git/hooks` is not
+  cloned either, so the guard has to live somewhere that travels);
+  README's "Setting up a second development machine" has the commands. **That
   identity is the standing privacy convention, not a default to
   override** -- never let a commit here carry the maintainer's real
   name or personal email (see `docs/decisions.md`'s entry on the

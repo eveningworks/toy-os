@@ -142,6 +142,13 @@ manual steps to be worth automating:
   after `kernel/fs/` changes), so
   "am I safe to deliver?" is one call instead of three run by hand.
   `--skip-clean` skips the initial `make clean`.
+  **It refuses to run until this repository's commit identity is set**
+  (`toy-os` / `noreply@toy-os.local`). That identity is per-repository,
+  so a CLONE DOES NOT CARRY IT and a fresh checkout falls back to the
+  global one -- the real name a history rewrite once removed from every
+  commit here, with nothing in git warning before the first commit puts
+  it back. The check lives in the gate rather than in a hook because
+  `.git/hooks` is not cloned either.
   **It REFUSES to start while a `vm.py` guest is running**, and that
   guard is worth its four lines: `make iso` re-seeds `disk.img` while
   the guest holds a write lock on it, and the first thing to complain is

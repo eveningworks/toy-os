@@ -75,6 +75,35 @@ fail() { echo "preflight: FAIL -- $1"; exit 1; }
 # Checked here rather than in iso_guard.py because this is about a
 # PROCESS, not about the ISO being stale, and because the fix is one the
 # person running it has to make.
+# THE COMMIT IDENTITY IS PER-REPOSITORY, AND A CLONE DOES NOT CARRY IT.
+#
+# `git config --local user.name/email` lives in .git/config, which is
+# not part of what gets cloned -- so a fresh checkout on a new machine
+# silently falls back to the GLOBAL identity, which is somebody's real
+# name and address. This project scrubbed exactly that out of every
+# prior commit with a history rewrite (docs/decisions.md), and nothing
+# in git warns you before the first commit reintroduces it.
+#
+# Checked in the gate rather than in a hook, because .git/hooks is not
+# cloned either -- the guard has to live somewhere that travels with the
+# repository, and this is the thing everyone runs before committing.
+want_name="toy-os"
+want_email="noreply@toy-os.local"
+have_name="$(git config user.name 2>/dev/null || true)"
+have_email="$(git config user.email 2>/dev/null || true)"
+if [ "$have_name" != "$want_name" ] || [ "$have_email" != "$want_email" ]; then
+  echo "preflight: this repository's commit identity is not set." >&2
+  echo "preflight:   have: ${have_name:-(unset)} <${have_email:-(unset)}>" >&2
+  echo "preflight:   want: $want_name <$want_email>" >&2
+  echo "preflight: it is per-repository and a CLONE DOES NOT CARRY IT, so a" >&2
+  echo "preflight: fresh checkout falls back to your global identity -- which" >&2
+  echo "preflight: is the real name and address a history rewrite once removed" >&2
+  echo "preflight: from every commit here (docs/decisions.md). Run:" >&2
+  echo "preflight:   git config --local user.name  '$want_name'" >&2
+  echo "preflight:   git config --local user.email '$want_email'" >&2
+  exit 1
+fi
+
 vm_pid_file=""
 for f in .vm.pid .vm.0.pid .vm.1.pid .vm.2.pid .vm.3.pid; do
   [ -f "$f" ] || continue
