@@ -259,11 +259,9 @@ static void layout(int surface_w) {
 
     uui_dropdown_set_geometry(&g.family, x, y, DD_W, rh);
     x += DD_W + GAP;
-    // FONT-DERIVED, and sized HERE not in main(): ugfx_char_h() is 0
-    // until uapp_run() has fetched the font, so a box sized at init comes
-    // out zero-pixel -- drawn as nothing, leaving just the "Bold" label
-    // with no tickbox (the same trap settings.c's checkbox carries).
-    g.bold.size = ugfx_char_h();
+    // The checkbox was init'd with size 0, which uui_checkbox now
+    // resolves to the font height at draw/measure time -- so it needs no
+    // sizing here, only vertical centring against the control row.
     uui_checkbox_set_geometry(&g.bold, x, y + (rh - ugfx_char_h()) / 2);
     x += g.bold.w + GAP;
     uui_spinbox_set_geometry(&g.size, x, y, SP_W, rh);

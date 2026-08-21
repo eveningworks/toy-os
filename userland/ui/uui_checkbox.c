@@ -5,13 +5,27 @@
 
 #define CHECKBOX_LABEL_GAP 6
 
+// The box's drawn edge. `cb->size` when the caller chose one, else the
+// FONT HEIGHT -- resolved HERE (measure/draw time) rather than baked at
+// init, because ugfx_char_h() is 0 until uapp_run() has fetched the
+// font, so a size computed in an app's main() comes out zero and the box
+// draws and hit-tests as nothing (it looked exactly like a dead control,
+// and cost two apps the same workaround before this). GTK and Qt size a
+// checkbox indicator from the font too, so "0 means the font height" is
+// the expected default, not a guess. Never returns 0.
+static int box_size(const struct uui_checkbox *cb) {
+    if (cb->size > 0) return cb->size;
+    int h = ugfx_char_h();
+    return h > 0 ? h : 1;
+}
+
 void uui_checkbox_natural_size(const struct uui_checkbox *cb, int *out_w, int *out_h) {
+    int bs = box_size(cb);
     if (out_w) {
-        *out_w = cb->label ? cb->size + CHECKBOX_LABEL_GAP + ugfx_text_width(cb->label)
-                            : cb->size;
+        *out_w = cb->label ? bs + CHECKBOX_LABEL_GAP + ugfx_text_width(cb->label) : bs;
     }
     // The box or the text, whichever is taller.
-    if (out_h) *out_h = cb->size > ugfx_char_h() ? cb->size : ugfx_char_h();
+    if (out_h) *out_h = bs > ugfx_char_h() ? bs : ugfx_char_h();
 }
 
 void uui_checkbox_set_geometry(struct uui_checkbox *cb, int x, int y) {
@@ -48,16 +62,17 @@ void uui_checkbox_draw(struct ugfx_surface *s, const struct uui_checkbox *cb) {
         ugfx_fill_rect(s, cb->x, cb->y, cb->w, cb->h, bg);
     }
 
-    ugfx_draw_rect(s, cb->x, cb->y, cb->size, cb->size, fg);
+    int bs = box_size(cb);
+    ugfx_draw_rect(s, cb->x, cb->y, bs, bs, fg);
     if (cb->checked) {
-        int inset = cb->size / 4 > 0 ? cb->size / 4 : 1;
+        int inset = bs / 4 > 0 ? bs / 4 : 1;
         ugfx_fill_rect(s, cb->x + inset, cb->y + inset,
-                        cb->size - 2 * inset, cb->size - 2 * inset, fg);
+                        bs - 2 * inset, bs - 2 * inset, fg);
     }
     if (cb->label) {
-        ugfx_draw_string_clipped(s, cb->x + cb->size + CHECKBOX_LABEL_GAP,
-                                  cb->y + (cb->size - ugfx_char_h()) / 2,
-                                  cb->w - cb->size - CHECKBOX_LABEL_GAP,
+        ugfx_draw_string_clipped(s, cb->x + bs + CHECKBOX_LABEL_GAP,
+                                  cb->y + (bs - ugfx_char_h()) / 2,
+                                  cb->w - bs - CHECKBOX_LABEL_GAP,
                                   cb->label, fg, bg);
     }
 

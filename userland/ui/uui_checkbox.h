@@ -19,7 +19,10 @@ struct uui_checkbox {
     // with what is drawn.
     int x, y, w, h;
 
-    int size;           // edge length of the box
+    int size;           // edge length of the box; <= 0 means "the font
+                        // height", resolved at draw/measure time (an app
+                        // sizing it in main() gets 0, because the font is
+                        // not up yet -- see uui_checkbox.c's box_size())
     const char *label;  // not owned; may be NULL
 
     int checked;        // the value
