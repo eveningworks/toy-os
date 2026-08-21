@@ -100,7 +100,7 @@ and job control is what a terminal on that TTY makes possible.
 - [x] ~~Tunables: the non-persisting `struct setting`~~ DONE 2026-08-20 -- `kernel.heap_debug`, `kernel.ata_nodma`, `kernel.kstack_track`
 - [x] ~~`heap`, `ata` and `kstack` still builtins~~ DONE 2026-08-20 -- `/bin` programs over their query classes and tunables
 - [ ] Directory lookup is O(n) -- measured 2026-08-20 with `mkfiles`: creates stay flat to 5,000 entries, lookups grow with position
-- [ ] An environment passed to a child
+- [x] ~~An environment passed to a child~~ DONE 2026-08-21 -- `SYS_SPAWN` carries it explicitly; `environ` and inheritance are libc's
 - [ ] Ctrl-C
 - [ ] **`#!` handling**, which is the loader's job, not the shell's: `elf_load()` rejects a non-ELF file
 - [x] ~~`|` pipes between two commands~~ DONE 2026-08-19 -- N stages, not two
@@ -484,7 +484,10 @@ The desktop is in ring 3 already. These are what it still lacks.
 - [ ] Window snapping (half/quarter screen)
 - [ ] Resize from any edge or corner -- only the bottom-right grip works today
 - [ ] Per-window back buffers, so a slow app's redraw can't tear the whole scene
-- [ ] Theme switching (a dark variant of `apps/theme.h`'s palette)
+- [ ] Theme switching -- the theme object landed (`utheme.{h,c}`); a dark mode now needs a dark palette + a `WIN_EV_THEME` broadcast
+- [ ] A user accent colour: a setting + an Appearance page (the `UTHEME_ACCENT` role exists; make it settable)
+- [ ] Migrate apps' `PAD`/`GAP`/size constants to the theme metrics (`utheme_pad/gap/indicator`), so chrome scales from one owner
+- [ ] Finish the 2026-08-21 toolkit centralizations: the remaining apps onto `uapp_log_layout()` and `desc.focus`
 - [ ] A screenshot tool that writes a real image file to disk
 - [ ] A tween/easing helper, once a second real caller exists
 - [ ] Scripted interaction that spans frames, so the demo tour can show real use

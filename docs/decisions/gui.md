@@ -3505,3 +3505,39 @@ starts narrow at its apex and widens. The first version varied the y
 direction instead and kept the widths, which drew both triangles upside
 down *symmetrically*, so they looked like a matched pair and read as
 deliberate until someone said so.
+
+## A central theme object splits palette (colours) from metrics (sizes), Qt's QPalette + QStyle
+
+The ring-3 toolkit's "theme" was a handful of fixed colour MACROS
+(`UTHEME_TEXT` = `ugfx_rgb(20,20,20)`) plus per-app `PAD`/`GAP` constants
+and per-widget hardcoded sizes. No single place owned appearance, so a
+dark mode or a user accent colour would have meant editing all 81
+`UTHEME_*` call sites and every spacing constant. `userland/ui/utheme.{h,c}`
+makes it one live `struct utheme`.
+
+**Why palette and metrics are split.** They change on different axes. A
+palette does not move when the font size does, but a checkbox box or a
+row's padding must -- so colours are struct fields (`utheme_current()`)
+and metrics are FUNCTIONS of `ugfx_char_h()` (`utheme_pad/gap/indicator/
+control_h`), which track `font_size` live with no rebuild. That is
+exactly Qt's `QPalette` (colour roles) vs `QStyle` (pixel metrics), and
+GTK's colours vs style properties. Rolling them into one struct would
+have forced a rebuild-on-font-change for the colours too, for nothing.
+
+**Why the `UTHEME_*` macros became accessors rather than a new API.**
+They are redefined from `ugfx_rgb()` calls to `utheme_current()->role`,
+so every existing site is theme-driven with no edit. This is only safe
+because `ugfx_rgb()` is a FUNCTION -- the macros were already runtime
+expressions, never usable in a file-scope static initialiser, so nothing
+depended on them folding to a constant. Had any been a compile-time
+constant, this would have had to be a mechanical migration of every site
+instead. Checked before relying on it.
+
+**Why the default values are apps/theme.h's, unchanged.** The whole
+first step is a PURE REFACTOR with no visual change -- verified by the
+full GUI suite staying green, since colours are used by every tool. Doing
+it before any variant exists is the point: a dark mode is then a
+`utheme_set()` swap that a green baseline can be diffed against, not a
+change tangled up with the mechanism that enables it. See
+`docs/roadmap.md`'s "Theme switching" for what a variant still needs
+(`WIN_EV_THEME` to tell live clients, a dark value per role).

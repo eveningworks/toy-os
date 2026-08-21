@@ -795,3 +795,36 @@ red/blue check passes on a format that rotates channels.
 **A hardware cursor is invisible to `screendump`** -- QEMU hands a
 device-composited cursor to the display client out of band, exactly as
 real scanout hardware does. Do not write a pixel assertion for one.
+
+- **COLOURS COME FROM THE THEME, SIZES FROM ITS METRICS -- neither is
+  hardcoded.** `userland/ui/utheme.{h,c}` is one live `struct utheme`:
+  colour ROLES read through `utheme_current()` (the `UTHEME_*` macros are
+  now accessors into it, so existing sites are theme-driven for free), and
+  METRICS (`utheme_pad/gap/indicator/control_h`) are functions of the font
+  so chrome scales with `font_size`. A new colour is a role, not a fresh
+  `ugfx_rgb()`; a control's default size is a metric, not a literal. The
+  split (palette vs metrics) is Qt's QPalette vs QStyle -- see
+  `docs/decisions/gui.md`. A dark mode / accent is a `utheme_set()` swap.
+
+- **AN APP LOGS THROUGH `ulog()`/`ulogf()`, not a hand-rolled `logf_`.**
+  `userland/ui/ulog.h` -- `ulog(s)` for a pre-formatted line, `ulogf(fmt,
+  ...)` for a formatted one. Two calls on purpose: `--gc-sections` drops
+  whichever an app doesn't use, so a lean app calling only `ulog()` never
+  links `vsnprintf`. Diagnostics go to stderr, which the kernel routes to
+  its log and a QMP test's console.
+
+- **THE TOOLKIT OWNS THE KEYBOARD FOCUS RING: set `uapp_desc.focus`.**
+  uapp click-updates it on a press and routes keys through it (Tab moves
+  focus, other keys reach the focused widget) before `on_key` -- like it
+  routes the mouse through `widgets`. A SEPARATE list from `widgets` (tab
+  order isn't z-order; a focusable uses cut-down `_focus_ops`). Don't
+  hand-roll `uui_focus_click`/`uui_focus_key` in `on_press`/`on_key`;
+  `on_key` still fires so an app can re-read a widget the ring changed.
+
+- **A WIDGET REPORTS ITS RECT THROUGH THE `bounds` OP; a test-facing
+  geometry log is `uapp_log_layout(a, prefix)`.** `uui_widget_ops.bounds`
+  is the getter `set_geometry` lacked; `uapp_log_layout()` walks the
+  router and emits `<prefix>: layout <id> x y w h` per declared widget, so
+  a test drives a control by asking rather than guessing pixels. Add
+  `bounds` to a widget when a test needs to drive it; don't re-hand-roll
+  the per-app geometry logger.

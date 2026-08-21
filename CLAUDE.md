@@ -574,6 +574,10 @@ whenever a headline here tells you something you did not already know.
 - **A GUI tool that needs the compositor role must ASK WHO HOLDS IT**
 - **A client that needs raw input without a desktop cannot be driven by keystrokes**
 - **Four things a ring-0 component loses the moment it becomes a process:**
+- **COLOURS COME FROM THE THEME, SIZES FROM ITS METRICS -- neither is hardcoded.**
+- **AN APP LOGS THROUGH `ulog()`/`ulogf()`, not a hand-rolled `logf_`.**
+- **THE TOOLKIT OWNS THE KEYBOARD FOCUS RING: set `uapp_desc.focus`.**
+- **A WIDGET REPORTS ITS RECT THROUGH THE `bounds` OP; a test-facing geometry log is `uapp_log_layout(a, prefix)`.**
 
 ### Storage, the filesystem, and /etc
 
