@@ -265,8 +265,18 @@ const char *const VGA_CURSOR_STYLE_NAMES[VGA_CURSOR_STYLE_COUNT] = {
 // Paints the cursor at (row, col) in the active style, saving whatever
 // it covers first. A no-op if the cursor is already on screen -- saving
 // then would capture the cursor's own pixels and "restore" them later.
+// DECTCEM (`ESC[?25l`) sets this. A full-screen program hides the
+// cursor for the whole time it is painting, and a blinking block left
+// wandering across its output is the difference between a drawn screen
+// and a flickering one.
+//
+// Checked in cursor_draw() rather than at each call site, because the
+// cursor is drawn from four places (after a putc, after a move, on the
+// blink tick, on resume) and one of them would eventually be missed.
+static int cursor_suppressed = 0;
+
 static void cursor_draw(void) {
-    if (cursor_on_screen) return;
+    if (cursor_on_screen || cursor_suppressed) return;
 
     int w = (int)CELL_W, h = (int)CELL_H;
     if (w > CURSOR_SAVE_W || h > CURSOR_SAVE_H || w <= 0 || h <= 0) {
@@ -854,6 +864,131 @@ uint32_t vga_color_rgb(enum vga_color c) {
 static struct ansi_parser g_ansi;
 static int g_ansi_armed;
 
+// --- ANSI cursor and erase ------------------------------------------
+//
+// The console's own row/col ARE the terminal cursor -- there is no
+// second position to keep in step, which is what makes this small.
+//
+// WHAT THIS DOES NOT FIX, stated because it is the reason cursor
+// movement was swallowed until now: the SCROLLBACK records the byte
+// stream (sb_record(), called from the printing path), so a program
+// that paints a screen by moving the cursor leaves a history that is
+// not a transcript of anything. Real terminals have the same problem
+// and answer it with an alternate screen buffer, which this console
+// does not have. Erasing does not touch the history either -- `ESC[2J`
+// clears the SCREEN, and a terminal that threw away scrollback on it
+// would be losing the user's data on a program's say-so. That is also
+// why ED mode 3 ("and the scrollback") is treated as mode 2.
+//
+// Every op snaps to live first: moving or erasing is an edit, and doing
+// one while the user is scrolled back would paint into a view of the
+// past. vga_cursor_move() already had that rule.
+
+// Clamps a 1-based ANSI coordinate to the console and stores it.
+static void ansi_goto(size_t r, size_t c) {
+    size_t rows = fb_mode ? console_rows : VGA_HEIGHT;
+    size_t cols = fb_mode ? console_cols : VGA_WIDTH;
+    if (rows == 0 || cols == 0) return;
+    if (r >= rows) r = rows - 1;
+    if (c >= cols) c = cols - 1;
+    row = r;
+    col = c;
+}
+
+// Blanks an inclusive span of cells, in reading order from (r0,c0) to
+// (r1,c1). Uses the CURRENT background, so erasing after a colour
+// change paints what the program asked for rather than the default --
+// which is how a full-screen program gets a coloured backdrop.
+static void erase_span(size_t r0, size_t c0, size_t r1, size_t c1) {
+    size_t rows = fb_mode ? console_rows : VGA_HEIGHT;
+    size_t cols = fb_mode ? console_cols : VGA_WIDTH;
+    if (rows == 0 || cols == 0) return;
+    if (r0 >= rows) return;
+    if (r1 >= rows) r1 = rows - 1;
+    if (c1 >= cols) c1 = cols - 1;
+
+    for (size_t r = r0; r <= r1; r++) {
+        size_t from = (r == r0) ? c0 : 0;
+        size_t to = (r == r1) ? c1 : cols - 1;
+        if (from > to || from >= cols) continue;
+        if (fb_mode) {
+            // One rect per row rather than one per cell: the whole
+            // point of erasing is that it is cheaper than printing
+            // spaces, and gfx_fill_rect is the call that makes it so.
+            gfx_fill_rect((int)(from * CELL_W), (int)(r * CELL_H),
+                          (int)((to - from + 1) * CELL_W), (int)CELL_H,
+                          palette_rgb(cur_bg));
+        } else {
+            for (size_t x = from; x <= to; x++)
+                buf[r * VGA_WIDTH + x] = make_entry(' ', legacy_color);
+        }
+    }
+}
+
+static size_t g_saved_row, g_saved_col;
+
+static void vga_ansi_ctrl(const struct ansi_parser *p) {
+    if (active_sink) return;  // a logger has no cursor -- see vga_sink
+
+    sb_snap_to_live();
+    if (fb_mode) cursor_hide();   // erase it before row/col move, as
+                                   // vga_cursor_move() does
+
+    size_t rows = fb_mode ? console_rows : VGA_HEIGHT;
+    size_t cols = fb_mode ? console_cols : VGA_WIDTH;
+    size_t n = p->a;
+
+    switch (p->op) {
+    case ANSI_OP_MOVE_TO: ansi_goto(p->a - 1, p->b - 1); break;
+    case ANSI_OP_UP:      ansi_goto(row > n ? row - n : 0, col); break;
+    case ANSI_OP_DOWN:    ansi_goto(row + n, col); break;
+    case ANSI_OP_RIGHT:   ansi_goto(row, col + n); break;
+    case ANSI_OP_LEFT:    ansi_goto(row, col > n ? col - n : 0); break;
+    case ANSI_OP_COLUMN:  ansi_goto(row, p->a - 1); break;
+    case ANSI_OP_ROW:     ansi_goto(p->a - 1, col); break;
+
+    case ANSI_OP_ERASE_DISPLAY:
+        if (p->a == 0)      erase_span(row, col, rows - 1, cols - 1);
+        else if (p->a == 1) erase_span(0, 0, row, col);
+        else {
+            erase_span(0, 0, rows - 1, cols - 1);
+            // ED 2 does NOT home the cursor -- that is `ESC[H` and
+            // programs send both. Clearing and homing together is a
+            // common shortcut and it breaks anything that erases, then
+            // positions, then draws.
+        }
+        break;
+
+    case ANSI_OP_ERASE_LINE:
+        if (p->a == 0)      erase_span(row, col, row, cols - 1);
+        else if (p->a == 1) erase_span(row, 0, row, col);
+        else                erase_span(row, 0, row, cols - 1);
+        break;
+
+    case ANSI_OP_SAVE:    g_saved_row = row; g_saved_col = col; break;
+    case ANSI_OP_RESTORE: ansi_goto(g_saved_row, g_saved_col); break;
+
+    case ANSI_OP_HIDE:
+        // cursor_hide() above already took it off the screen; the flag
+        // is what stops the next draw putting it back.
+        cursor_suppressed = 1;
+        break;
+    case ANSI_OP_SHOW:
+        cursor_suppressed = 0;
+        break;
+    default: break;
+    }
+
+    if (fb_mode) {
+        cursor_show_and_reset_blink();
+        vga_present();  // a cursor-addressed program paints in bursts and
+                         // may never emit a newline, so nothing else would
+                         // push this to the screen
+    } else {
+        legacy_update_cursor();
+    }
+}
+
 void vga_putc(char c) {
     if (!g_ansi_armed) { ansi_init(&g_ansi, cur_fg, cur_bg); g_ansi_armed = 1; }
     switch (ansi_feed(&g_ansi, c)) {
@@ -861,6 +996,9 @@ void vga_putc(char c) {
         break;
     case ANSI_SGR:
         vga_set_color(g_ansi.fg, g_ansi.bg);
+        return;
+    case ANSI_CTRL:
+        vga_ansi_ctrl(&g_ansi);
         return;
     case ANSI_EATEN:
     default:

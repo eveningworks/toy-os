@@ -950,8 +950,10 @@ real time. The bar is "does this fix a rederive-from-scratch cost".
   `single_instance_test.py`, `taskmgr_test.py`, `uapp_test.py`,
   `uiclient_test.py`, `uidemo_test.py`, `uterm_test.py`,
   `winclient_test.py`.
-- **Run on demand, not in the gate** -- `init_test.py` (init and service
-  supervision), `console_shell_test.py` (a `text` boot reaching a ring-3
+- **Run on demand, not in the gate** -- `ansi_cursor_test.py` (ANSI
+  cursor movement and erasing, as PIXELS -- it kills the desktop first,
+  since the console is what it photographs), `init_test.py` (init and
+  service supervision), `console_shell_test.py` (a `text` boot reaching a ring-3
   prompt with the kernel shell stood down; boots twice and rewrites
   `/etc`), `stdin_test.py` (blocking fd 0 and `/bin/tosh`, which
   needs the physical console and so takes the desktop down first),

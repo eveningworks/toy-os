@@ -163,3 +163,93 @@ KTEST("ansi", "more parameters than the array holds does not run off it") {
     feed(&p, "\033[1;2;3;4;5;6;7;8;9;10;11;12;31m", out, sizeof out);
     KTEST_ASSERT(p.nparam == 0); // consumed and reset, no overrun
 }
+
+// --- cursor and erase ------------------------------------------------
+//
+// These assert the PARSER's resolution, not what appears on screen:
+// ansi.c knows nothing about a display, which is what lets it be tested
+// with no hardware at all. What vga.c does with an op is checked by
+// tools/ansi_cursor_test.py, which reads pixels.
+
+// Feeds a sequence and returns the op it resolved to, or ANSI_OP_NONE
+// if it did not produce an ANSI_CTRL at all.
+static enum ansi_op ctrl_op(struct ansi_parser *p, const char *seq) {
+    p->op = ANSI_OP_NONE;
+    for (const char *s = seq; *s; s++)
+        if (ansi_feed(p, *s) == ANSI_CTRL) return p->op;
+    return ANSI_OP_NONE;
+}
+
+KTEST("ansi", "cursor movement resolves to an op with its arguments") {
+    struct ansi_parser p;
+    ansi_init(&p, VGA_LIGHT_GREY, VGA_BLACK);
+
+    KTEST_ASSERT(ctrl_op(&p, "\033[5;9H") == ANSI_OP_MOVE_TO);
+    KTEST_ASSERT(p.a == 5 && p.b == 9);
+    // `f` is the same operation as `H`, and programs use both.
+    KTEST_ASSERT(ctrl_op(&p, "\033[2;3f") == ANSI_OP_MOVE_TO);
+    KTEST_ASSERT(p.a == 2 && p.b == 3);
+    // A bare CUP means home, and BOTH defaults have to appear.
+    KTEST_ASSERT(ctrl_op(&p, "\033[H") == ANSI_OP_MOVE_TO);
+    KTEST_ASSERT(p.a == 1 && p.b == 1);
+
+    KTEST_ASSERT(ctrl_op(&p, "\033[3A") == ANSI_OP_UP && p.a == 3);
+    KTEST_ASSERT(ctrl_op(&p, "\033[B") == ANSI_OP_DOWN && p.a == 1);
+    KTEST_ASSERT(ctrl_op(&p, "\033[7C") == ANSI_OP_RIGHT && p.a == 7);
+    KTEST_ASSERT(ctrl_op(&p, "\033[2D") == ANSI_OP_LEFT && p.a == 2);
+    KTEST_ASSERT(ctrl_op(&p, "\033[12G") == ANSI_OP_COLUMN && p.a == 12);
+    KTEST_ASSERT(ctrl_op(&p, "\033[4d") == ANSI_OP_ROW && p.a == 4);
+}
+
+KTEST("ansi", "an explicit zero means the DEFAULT, not zero") {
+    // ANSI's rule, and the one that is invisible until a program emits
+    // the zero form: `ESC[0A` moves up ONE line. A parser that passed
+    // the zero through would move none and the display would look
+    // frozen for that program only.
+    struct ansi_parser p;
+    ansi_init(&p, VGA_LIGHT_GREY, VGA_BLACK);
+    KTEST_ASSERT(ctrl_op(&p, "\033[0A") == ANSI_OP_UP && p.a == 1);
+    KTEST_ASSERT(ctrl_op(&p, "\033[0;0H") == ANSI_OP_MOVE_TO);
+    KTEST_ASSERT(p.a == 1 && p.b == 1);
+}
+
+KTEST("ansi", "erase defaults to mode 0, the opposite end from a movement") {
+    struct ansi_parser p;
+    ansi_init(&p, VGA_LIGHT_GREY, VGA_BLACK);
+    // A bare ED/EL is "cursor to end" -- mode 0. Applying a movement's
+    // "absent means 1" rule here would give mode 1 and erase the wrong
+    // half of the screen.
+    KTEST_ASSERT(ctrl_op(&p, "\033[J") == ANSI_OP_ERASE_DISPLAY && p.a == 0);
+    KTEST_ASSERT(ctrl_op(&p, "\033[K") == ANSI_OP_ERASE_LINE && p.a == 0);
+    KTEST_ASSERT(ctrl_op(&p, "\033[2J") == ANSI_OP_ERASE_DISPLAY && p.a == 2);
+    KTEST_ASSERT(ctrl_op(&p, "\033[1K") == ANSI_OP_ERASE_LINE && p.a == 1);
+    // Mode 3 is "and the scrollback", reported as 2: the history is the
+    // user's, not the program's, to throw away.
+    KTEST_ASSERT(ctrl_op(&p, "\033[3J") == ANSI_OP_ERASE_DISPLAY && p.a == 2);
+    // An out-of-range mode is not an erase at all.
+    KTEST_ASSERT(ctrl_op(&p, "\033[9J") == ANSI_OP_NONE);
+}
+
+KTEST("ansi", "DECTCEM is the one private sequence that does something") {
+    struct ansi_parser p;
+    ansi_init(&p, VGA_LIGHT_GREY, VGA_BLACK);
+    KTEST_ASSERT(ctrl_op(&p, "\033[?25l") == ANSI_OP_HIDE);
+    KTEST_ASSERT(ctrl_op(&p, "\033[?25h") == ANSI_OP_SHOW);
+    // Every OTHER private sequence stays swallowed -- including the
+    // alternate-screen pair, which this console has no answer for and
+    // which would be worse guessed at than ignored.
+    KTEST_ASSERT(ctrl_op(&p, "\033[?1049h") == ANSI_OP_NONE);
+    KTEST_ASSERT(ctrl_op(&p, "\033[?7l") == ANSI_OP_NONE);
+}
+
+KTEST("ansi", "SGR still works, and does not resolve to a control op") {
+    // The regression that matters: cursor support added a second exit
+    // from the same final-byte branch, and a colour sequence must not
+    // take it.
+    struct ansi_parser p;
+    ansi_init(&p, VGA_LIGHT_GREY, VGA_BLACK);
+    char out[8];
+    feed(&p, "\033[31m", out, sizeof out);
+    KTEST_ASSERT(p.fg == VGA_RED);
+    KTEST_ASSERT(ctrl_op(&p, "\033[32m") == ANSI_OP_NONE);
+}

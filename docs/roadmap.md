@@ -78,6 +78,8 @@ and job control is what a terminal on that TTY makes possible.
 - [ ] A per-TTY input queue, so two terminals don't share one keyboard buffer
 - [ ] Window size as a property a program can ask for (the `ioctl` every full-screen program expects)
 - [x] ~~Output processing: ANSI SGR (colour) parsed by the console~~ done -- `kernel/lib/ansi.c`, for the console and any sink
+- [x] ~~ANSI cursor movement, erasing and `?25` visibility~~ done -- `tools/ansi_cursor_test.py` checks the pixels
+- [ ] Scrolling regions (DECSTBM) and the alternate screen buffer, which is what a full-screen program's scrollback needs
 - [ ] Output processing: newline translation, tab expansion
 - [ ] `isatty()`, so a program can tell a terminal from a pipe -- what `ls --color=auto` needs
 - [ ] Cursor movement and screen clearing escapes are swallowed, not implemented

@@ -191,6 +191,20 @@ manual steps to be worth automating:
   has appeared -- without that, `elf_run:`/`syscall:` noise around every
   `cat` looks like stable output and the first version returned three
   kernel lines for a benchmark that had not finished running.
+- **`ansi_cursor_test.py`** -- ANSI cursor movement and erasing, checked
+  as PIXELS. `kernel/lib/ansi.c` is a pure state machine whose KTESTs
+  assert what a sequence RESOLVES to with no display at all; this is the
+  other half, whether `vga.c` then puts ink in the right cell. **The
+  desktop owns the screen, so it removes the toywm service descriptor
+  and kills it first** -- the same unsupervise-then-kill pattern
+  `compositor_death_test.py` uses, and for the same reason.
+  **It SELF-CALIBRATES its cell size from the pattern it drew**, because
+  this project's layout is font-derived and a hardcoded 8x16 rots the
+  day the default font size moves. It did: the first version assumed 16
+  against a real 14, which presented as every row after the third being
+  "one row high" while the kernel was correct throughout. Every check
+  has a BLANK NEIGHBOUR -- "something was drawn" is satisfied by a
+  console that ignores cursor movement entirely. Run on demand.
 - **`shell_flow.py`** -- the same idea as `gui_flow.py`, for the
   PHYSICAL (pre-`gui`) shell instead of the GUI: `ShellFlow.
   run_command(cmd, subdir=...)` types a full command -- including

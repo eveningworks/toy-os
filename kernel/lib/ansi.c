@@ -5,7 +5,7 @@
 // matters: once `ESC [` has been seen, EVERY byte is consumed until a
 // final byte in 0x40..0x7E arrives. That is what stops a sequence this
 // kernel does not implement -- a cursor move, a clear -- from spraying
-// `[2J` across the screen. It is swallowed and ignored, which is the
+// `[2J` across the screen. An unimplemented one is swallowed, which is the
 // behaviour a terminal that does not support something is supposed to
 // have, rather than the one that looks like a bug.
 #include "ansi.h"
@@ -106,6 +106,58 @@ static int apply_sgr(struct ansi_parser *p) {
     return 1;
 }
 
+// A parameter with its default applied. An ABSENT parameter and an
+// explicit ZERO mean the same thing in ANSI -- both are "the default" --
+// which is why `ESC[0A` moves up one line rather than none. Getting
+// that wrong is invisible until a program emits the zero form.
+static uint16_t param_or(const struct ansi_parser *p, int i, uint16_t dflt) {
+    if (i >= p->nparam) return dflt;
+    return p->param[i] ? p->param[i] : dflt;
+}
+
+// Resolves a cursor/erase final byte into an op plus normalised
+// arguments, or ANSI_OP_NONE for a sequence this does not implement.
+static enum ansi_op resolve_ctrl(struct ansi_parser *p, unsigned char b) {
+    if (p->private) {
+        // Only DECTCEM, the cursor-visibility pair. Every other private
+        // sequence stays swallowed: they are terminal-specific modes
+        // this console has no equivalent of, and guessing at one is
+        // worse than ignoring it.
+        if ((b == 'h' || b == 'l') && p->nparam >= 1 && p->param[0] == 25) {
+            p->a = p->b = 0;
+            return b == 'h' ? ANSI_OP_SHOW : ANSI_OP_HIDE;
+        }
+        return ANSI_OP_NONE;
+    }
+    switch (b) {
+    case 'H': case 'f':
+        p->a = param_or(p, 0, 1);
+        p->b = param_or(p, 1, 1);
+        return ANSI_OP_MOVE_TO;
+    case 'A': p->a = param_or(p, 0, 1); return ANSI_OP_UP;
+    case 'B': p->a = param_or(p, 0, 1); return ANSI_OP_DOWN;
+    case 'C': p->a = param_or(p, 0, 1); return ANSI_OP_RIGHT;
+    case 'D': p->a = param_or(p, 0, 1); return ANSI_OP_LEFT;
+    case 'G': p->a = param_or(p, 0, 1); return ANSI_OP_COLUMN;
+    case 'd': p->a = param_or(p, 0, 1); return ANSI_OP_ROW;
+    case 'J':
+        // Mode 0 is the default here, NOT 1: an absent parameter means
+        // "cursor to end of screen", which is the opposite end from
+        // what a movement default would suggest.
+        p->a = (p->nparam >= 1) ? p->param[0] : 0;
+        if (p->a == 3) p->a = 2;   // "and the scrollback" -- see vga.c
+        if (p->a > 2) return ANSI_OP_NONE;
+        return ANSI_OP_ERASE_DISPLAY;
+    case 'K':
+        p->a = (p->nparam >= 1) ? p->param[0] : 0;
+        if (p->a > 2) return ANSI_OP_NONE;
+        return ANSI_OP_ERASE_LINE;
+    case 's': return ANSI_OP_SAVE;
+    case 'u': return ANSI_OP_RESTORE;
+    default: return ANSI_OP_NONE;
+    }
+}
+
 enum ansi_result ansi_feed(struct ansi_parser *p, char c) {
     unsigned char b = (unsigned char)c;
 
@@ -159,7 +211,10 @@ enum ansi_result ansi_feed(struct ansi_parser *p, char c) {
                 apply_sgr(p);
                 return ANSI_SGR;
             }
+            enum ansi_op op = resolve_ctrl(p, b);
+            p->op = op;
             p->nparam = 0;
+            if (op != ANSI_OP_NONE) return ANSI_CTRL;
             return ANSI_EATEN; // recognised, unimplemented, swallowed
         }
         // An intermediate byte (space through '/'), or something
