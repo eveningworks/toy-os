@@ -276,7 +276,7 @@ everything libc-shaped is waiting on it. Full plan and staging:
 - [x] ~~Enable SSE (CR4.OSFXSR) and save FPU/SSE state per process~~ -- eager FXSAVE/FXRSTOR, `/tests/fpu_race` proves it
 - [ ] `time_t`: epoch seconds and a UTC offset stored alongside, next to today's broken-down local `struct rtc_time`
 - [ ] ~~An `errno`-style return convention~~ moved up to its own section (errno-design.md); it needs none of this milestone's prerequisites
-- [ ] The three syscalls stdio needs: `lseek`, `fstat` on an fd, `O_APPEND` -- the rest of that surface has landed
+- [x] ~~The three syscalls stdio needs: `lseek`, `fstat` on an fd, `O_APPEND`~~ DONE -- `/tests/seek_test`
 - [x] ~~A per-process cwd~~ DONE 2026-08-19 -- `SYS_CHDIR`/`SYS_GETCWD`
 - [ ] `crt0` + a real `_start`, replacing each binary's hand-written syscall stubs
 - [ ] Prove it: build and run a real ported program nobody here wrote

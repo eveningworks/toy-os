@@ -130,16 +130,32 @@ cannot deliver anything is worse than one that does not declare it.
 
 ## Staging
 
-### Stage 0 -- the three missing syscalls
+### Stage 0 -- the three missing syscalls -- DONE
 
-`lseek`, `fstat` on an fd, and `O_APPEND`. Each is CLAUDE.md's usual
-three edits (a number in `abi/syscall_abi.h`, a handler plus prototype,
-a row in `syscall_table.c`). `isatty` is a FIELD of `fstat`, not its own
-call -- one round trip, and the buffering policy in Stage 2 is its only
-caller.
+`SYS_LSEEK`, `SYS_FSTAT` and `SYS_O_APPEND`, with `/tests/seek_test` as
+the proof. `isatty` is a FLAG of `fstat` (`SYS_STAT_TTY`) rather than a
+call of its own -- a syscall returning one bit is a syscall the next
+question makes redundant -- and `SYS_STAT_SEEKABLE` answers the other
+half stdio needs.
 
-Verifiable alone, with no libc: a `/tests/seek_test` that writes a file,
-seeks backwards, reads what it wrote, and appends to it.
+**What it changed underneath, and this is the part to know: a write to a
+file fd used to APPEND unconditionally**, ignoring the position the read
+path maintained. That is not a thing `lseek` can be added to -- a
+position one half of the interface ignores is not a position. So the
+position is now shared by reads and writes, as in POSIX, and
+`SYS_O_APPEND` is how a caller asks for the old behaviour. Nothing that
+opens with `SYS_O_TRUNC` (almost everything here) changed at all:
+position 0 of an emptied file is its end. The one real caller that DID
+rely on the old silence is the shell's `>>`, which now says
+`SYS_O_APPEND` -- and that is what finally makes `>` and `>>` different
+operations rather than the same one with a truncate in front.
+
+**And it fixed a bug found on the way.** `SYS_OPEN` tested a file's
+existence by `fs_read()`-ing the whole thing, which cost a full read per
+open and -- worse -- reported `-ENOENT` for any file too large for the
+staging buffer, since `fs_read()` returns NULL for "cannot load this
+whole" exactly as it does for "not there". A libc that opens real files
+walks into that immediately. It asks `fs_exists()` now.
 
 ### Stage 1 -- an include root
 
@@ -237,6 +253,9 @@ everything above.
   process footprint only grows. That is fine for everything here and is
   a surprise to ported code that allocates in phases; say so in the
   header rather than discovering it in a soak test.
-- **Whether `libc` and `libuapp` stay separate archives.** A GUI app
-  links the toolkit; a `/bin` program should not have to. Splitting them
-  is easy while the libc is new and awkward afterwards.
+- ~~**Whether `libc` and `libuapp` stay separate archives.**~~ DECIDED:
+  SEPARATE. A `/bin` program links `libc`; a GUI app links `libc` plus
+  the Toykit. It matches the split-by-role convention the build already
+  derives things from, and it keeps the libc's audience "any C program"
+  rather than "toy-os apps" -- which is the whole point of the
+  port-capable target. Cheap to do while the libc is new, awkward after.

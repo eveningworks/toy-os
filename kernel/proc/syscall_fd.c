@@ -458,13 +458,19 @@ SYSCALL_HANDLER sys_do_write_file(uint64_t *regs, uint64_t pml4, struct open_fil
         kfree(tmp);
         return;
     }
-    // APPEND, which is what this fd has always done -- fs.h documents
-    // passing the current size as the way to say so. The fd's `offset`
-    // is deliberately not used: it is maintained by the READ path only,
-    // and making writes honour it would change what every existing
-    // caller does, which is a separate change from fixing truncation.
-    uint64_t at = fs_size(f->file.name);
+    // AT THE FD'S POSITION, which is what write(2) means -- this used
+    // to append unconditionally and ignore the position the read path
+    // maintained, and a position that writes ignore is not a position
+    // to seek. SYS_O_APPEND is how a caller asks for the old behaviour;
+    // it re-reads the size on every write rather than trusting a cached
+    // end, because that is what makes two appenders to one file
+    // interleave whole writes instead of overwriting each other.
+    //
+    // Nothing that opens with SYS_O_TRUNC changes behaviour: position 0
+    // of an emptied file is its end.
+    uint64_t at = f->file.append ? fs_size(f->file.name) : f->file.pos;
     int ok = fs_write_range(f->file.name, at, tmp, (uint32_t)len);
+    if (ok) f->file.pos = at + len;
     // The COUNT IS NOW HONEST. Reporting `len` unconditionally is what
     // let the truncation go unnoticed: every caller checked its return
     // value and every one of them was told it had succeeded.
@@ -480,7 +486,7 @@ SYSCALL_HANDLER sys_do_read_file(uint64_t *regs, uint64_t pml4, struct open_file
     // fabricate data or fault. It fills a KERNEL buffer which is then
     // copied out; handing it the user pointer directly is what SMAP
     // forbids (vmm.h). len is capped at SYS_WRITE_MAX by the caller.
-    uint32_t off = f->file.offset;
+    uint64_t off = f->file.pos;
     char *kbuf = kmalloc(SYS_WRITE_MAX);   // heap -- see sys_do_write_console()
     if (!kbuf) { regs[14] = (uint64_t)(int64_t)-ENOMEM; return; }
     uint32_t n = fs_read_range(f->file.name, off, kbuf, (uint32_t)len);
@@ -490,7 +496,7 @@ SYSCALL_HANDLER sys_do_read_file(uint64_t *regs, uint64_t pml4, struct open_file
         kfree(kbuf);
         return;
     }
-    f->file.offset += n;
+    f->file.pos += n;
     regs[14] = n;
     kfree(kbuf);
 }
@@ -612,6 +618,99 @@ int sys_read(struct syscall_ctx *c) {
         c->regs[14] = (uint64_t)(int64_t)-EBADF;
         break;
     }
+    return 0;
+}
+
+// --- position and identity -------------------------------------------
+//
+// The two calls a buffered stdio cannot be written without: where am I
+// in this stream, and what KIND of stream is it. Both live here rather
+// than with the filesystem because both answer questions about a
+// DESCRIPTION, not about a path -- the same reason SYS_READ and
+// SYS_WRITE are in this file.
+
+int sys_lseek(struct syscall_ctx *c) {
+    struct open_file *f = fd_get(c->pml4, (int)c->a0);
+    if (!f) {
+        klog_write("syscall: lseek() rejected -- bad fd\n");
+        c->regs[14] = (uint64_t)(int64_t)-EBADF;
+        return 0;
+    }
+    // ESPIPE, not EINVAL, and the name is a historical accident worth
+    // keeping: POSIX spells "this stream has no position" this way for
+    // a pipe, a socket and a terminal alike, and a libc's fseek() turns
+    // exactly this code into the errno a program expects.
+    if (f->kind != FD_KIND_FILE) {
+        c->regs[14] = (uint64_t)(int64_t)-ESPIPE;
+        return 0;
+    }
+
+    int64_t off = (int64_t)c->a1;
+    uint64_t whence = c->a2;
+    // SIGNED arithmetic all the way, in 64 bits, because SEEK_END with
+    // a negative offset is the ordinary way to read a file's tail and
+    // an unsigned base would wrap it into a seek past the end -- which
+    // is legal, so nothing downstream would report it.
+    int64_t base;
+    switch (whence) {
+    case SYS_SEEK_SET: base = 0; break;
+    case SYS_SEEK_CUR: base = (int64_t)f->file.pos; break;
+    case SYS_SEEK_END: base = (int64_t)fs_size(f->file.name); break;
+    default:
+        c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+        return 0;
+    }
+    int64_t want = base + off;
+    // Before byte zero is the one result that is an ERROR rather than a
+    // strange-but-legal position. Past the end is fine: fs_write_range()
+    // zero-fills a gap and fs_read_range() reports 0 there, so both
+    // halves already behave the way POSIX says a sparse seek behaves.
+    if (want < 0) {
+        c->regs[14] = (uint64_t)(int64_t)-EINVAL;
+        return 0;
+    }
+    f->file.pos = (uint64_t)want;
+    c->regs[14] = (uint64_t)want;
+    return 0;
+}
+
+int sys_fstat(struct syscall_ctx *c) {
+    struct open_file *f = fd_get(c->pml4, (int)c->a0);
+    if (!f) {
+        klog_write("syscall: fstat() rejected -- bad fd\n");
+        c->regs[14] = (uint64_t)(int64_t)-EBADF;
+        return 0;
+    }
+    if (!vmm_validate_user_range(c->pml4, c->a1, sizeof(struct sys_stat))) {
+        klog_write("syscall: fstat() rejected -- invalid output pointer\n");
+        c->regs[14] = (uint64_t)(int64_t)-EFAULT;
+        return 0;
+    }
+
+    struct sys_stat out;
+    k_memset(&out, 0, sizeof out);
+    switch (f->kind) {
+    case FD_KIND_FILE:
+        out.flags |= SYS_STAT_SEEKABLE;
+        // Deliberately NOT a call into fs_stat() for the timestamps:
+        // this is the same path-keyed answer SYS_STAT gives, and
+        // duplicating the conversion here is how the two would drift.
+        // What an fd adds is the flags; for the rest, a caller that
+        // wants an inode and civil timestamps has SYS_STAT and a name.
+        out.size = fs_size(f->file.name);
+        out.is_dir = 0; // SYS_OPEN refuses a directory, so an fd is never one
+        break;
+    case FD_KIND_CONSOLE:
+        out.flags |= SYS_STAT_TTY;
+        break;
+    default:
+        // A pipe end or a socket: no size, no position, no timestamps.
+        // Zero is the honest answer rather than a lossy one -- there is
+        // no length for a pipe to have, and the flags say so.
+        break;
+    }
+    vmm_copy_to_user(c->pml4, c->a1, &out, sizeof out); // validated above
+    c->regs[14] = 0;
     return 0;
 }
 

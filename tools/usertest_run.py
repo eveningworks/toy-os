@@ -122,6 +122,11 @@ TESTS = [
      ["malloc_test: all checks passed"], ["FAIL"]),
     ("fsgen_test", 0,
      ["fsgen_test: all checks passed"], ["FAIL"]),
+    # lseek/fstat/O_APPEND. Its pattern is POSITION-DERIVED, so a seek
+    # landing at the wrong offset reads the wrong letter -- a file of
+    # identical bytes cannot tell a working seek from a dead one.
+    ("seek_test", None,
+     ["seek_test: all checks passed"], ["FAIL"]),
     # SYS_QUERY from ring 3. Runs fine under `run`: it spawns nothing and
     # waits for nothing, so the legacy loader's missing scheduler slot
     # costs it nothing.

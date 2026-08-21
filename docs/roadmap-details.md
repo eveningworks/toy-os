@@ -1532,6 +1532,9 @@ the same two directions) every time.
   open-then-sequential-read), `fstat` on an open fd (only paths can be
   stat'd), and `O_APPEND` (`SYS_O_*` is WRITE/CREAT/TRUNC only).
   `isatty` is a field of `fstat`, not a call of its own.
+  **All three landed** (Stage 0 of `docs/libc-design.md`), with
+  `/tests/seek_test` as the proof and `docs/decisions.md` recording what
+  giving an fd's position a meaning for WRITES changed underneath.
 - [x] ~~**`crt0`.**~~ DONE -- `userland/rt/crt0.asm` is shared, and a
   program is a `main()` over `userland/rt/sys.h`'s typed wrappers. What
   it still hands `main()` is an envp of exactly NULL: there is no

@@ -55,6 +55,12 @@
                    // no such hardware
 #define EINVAL 22  // the arguments are wrong: a bad size, a count over a
                    // maximum, a reserved field that is not zero
+#define ESPIPE 29  // this stream has no POSITION to move: lseek() on a
+                   // console, a pipe or a socket. POSIX's name for it
+                   // mentions a pipe only because a pipe was the first
+                   // one -- it covers every unseekable stream, and a
+                   // libc's fseek() turns it straight into the errno a
+                   // program expects
 #define ENFILE 23  // a SYSTEM-wide table is full (the pipe table)
 #define EMFILE 24  // THIS PROCESS's descriptor table is full -- distinct from
                    // ENFILE, and distinct from ENOENT, which is the whole

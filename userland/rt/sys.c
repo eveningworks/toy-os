@@ -104,6 +104,7 @@ static const struct { int code; const char *msg; } g_errmsg[] = {
     { EEXIST, "file exists" },
     { ENODEV, "no such device" },
     { EINVAL, "invalid argument" },
+    { ESPIPE, "illegal seek" },
     { ENFILE, "too many open files in system" },
     { EMFILE, "too many open files" },
     { ENOTDIR, "not a directory" },
@@ -223,6 +224,15 @@ int sys_truncate(const char *path, unsigned long long size) {
 int sys_stat(const char *path, struct sys_stat *out) {
     return (int)err(syscall2(SYS_STAT, (uint64_t)(uintptr_t)path,
                               (uint64_t)(uintptr_t)out));
+}
+
+long long sys_lseek(int fd, long long offset, int whence) {
+    return (long long)err(syscall3(SYS_LSEEK, (uint64_t)fd,
+                                    (uint64_t)offset, (uint64_t)whence));
+}
+
+int sys_fstat(int fd, struct sys_stat *out) {
+    return (int)err(syscall2(SYS_FSTAT, (uint64_t)fd, (uint64_t)(uintptr_t)out));
 }
 
 int sys_link(const char *existing, const char *newpath) {

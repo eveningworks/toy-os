@@ -111,9 +111,21 @@ int sys_open(struct syscall_ctx *c) {
         int want_write = (flags & SYS_O_WRITE) != 0;
         int want_creat = (flags & SYS_O_CREAT) != 0;
         int want_trunc = (flags & SYS_O_TRUNC) != 0;
+        int want_append = (flags & SYS_O_APPEND) != 0;
 
-        uint32_t existing_size = 0;
-        int exists = fs_read(name, &existing_size) != 0;
+        // fs_exists(), NOT a whole-file fs_read() to see whether the
+        // read succeeds. That probe cost a full read of the file on
+        // every open -- and worse, it made open() REPORT -ENOENT for a
+        // file too large for the staging buffer, since fs_read()
+        // returns NULL for "cannot load this whole" exactly as it does
+        // for "not there". A libc that opens real files walks into that
+        // immediately.
+        //
+        // A directory is deliberately NOT "exists" here: opening one
+        // used to fail as ENOENT (fs_read() refuses a directory), and
+        // an fd naming a directory would be a thing SYS_READ and
+        // SYS_FSTAT have no answer for.
+        int exists = fs_exists(name) && !fs_is_dir(name);
 
         if (!exists && !(want_write && want_creat)) {
             klog_write("syscall: open() rejected -- file not found\n");
@@ -140,7 +152,12 @@ int sys_open(struct syscall_ctx *c) {
                 }
                 k_strcpy(fd_desc[di].file.name, name);
                 fd_desc[di].file.mode = want_write ? FD_MODE_WRITE : FD_MODE_READ;
-                fd_desc[di].file.offset = 0;
+                fd_desc[di].file.pos = 0;
+                // Read-only fds ignore it, so it is not worth refusing
+                // the combination -- but it is worth not SETTING it,
+                // since SYS_FSTAT reports nothing about it and a stray
+                // flag on a reader would be state nobody could see.
+                fd_desc[di].file.append = (uint8_t)(want_write && want_append);
                 c->regs[14] = (uint64_t)fd;
             }
         }

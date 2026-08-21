@@ -54,6 +54,19 @@
                     // (stdout) as RDI. fd 1 and 2 (stdout/stderr) both
                     // go to the console (vga_putc), same behavior as
                     // before; fd >= 3 must come from SYS_OPEN.
+                    //
+                    // SECOND ABI NOTE, and the one that matters to an
+                    // existing caller: a write to a FILE fd used to
+                    // append UNCONDITIONALLY, ignoring the position the
+                    // read path maintained. Since SYS_LSEEK it writes
+                    // AT the fd's position and advances it, which is
+                    // what write(2) means and what any seek at all
+                    // requires -- a position a write ignores is not a
+                    // position. A caller that wants the old behaviour
+                    // asks for SYS_O_APPEND. Nothing that opens with
+                    // SYS_O_TRUNC (which is almost everything here)
+                    // changes behaviour at all: position 0 of an
+                    // emptied file IS its end.
 
 #define SYS_WRITE_MAX 1024
 
@@ -206,6 +219,17 @@ struct win_request {
 #define SYS_O_WRITE 1 // open for writing (default: read-only)
 #define SYS_O_CREAT 2 // create the file if it doesn't exist (write only)
 #define SYS_O_TRUNC 4 // truncate to empty on open (write only)
+#define SYS_O_APPEND 8 // every write goes to the CURRENT end of the file,
+                      // whatever the fd's position is, and the position
+                      // follows the write. Write-only, and the flag
+                      // exists because SYS_LSEEK gave the position a
+                      // meaning for writes that it did not have before:
+                      // a write used to append UNCONDITIONALLY (see
+                      // SYS_WRITE's ABI NOTE), so a caller that wanted
+                      // appending got it by saying nothing. Now it has
+                      // to ask -- which is what makes the shell's `>`
+                      // and `>>` genuinely different operations rather
+                      // than the same one with a truncate in front.
 
 #define SYS_READ  9  // RDI = fd (from SYS_OPEN, read mode), RSI =
                       // buffer pointer, RDX = length. Reads from the
@@ -942,6 +966,63 @@ struct sys_stat {
 // The inode number above is the filesystem's own, not a synthetic one.
 // Mirrors fs.h's FS_CAP_INODES for the one caller that needs to say so.
 #define SYS_STAT_INODES (1u << 0)
+
+// The next two are what SYS_FSTAT adds, and they are FLAGS rather than
+// new struct fields on purpose: a bare `is_tty` word would be a field
+// that means nothing for the path-keyed SYS_STAT, which is exactly the
+// "struct full of zeroed fields invites a caller to believe them"
+// hazard the struct's own comment above warns about. A flag that is
+// simply not set reads correctly either way.
+#define SYS_STAT_TTY      (1u << 1) // this fd is a terminal. What a
+                      // buffered stdio asks before choosing line
+                      // buffering over full buffering -- the ONE
+                      // question `isatty()` exists to answer, which is
+                      // why there is no SYS_ISATTY: it would be a
+                      // syscall returning a single bit that this call
+                      // already carries.
+#define SYS_STAT_SEEKABLE (1u << 2) // SYS_LSEEK works on this fd. Set
+                      // for a file, clear for a console, a pipe or a
+                      // socket. A path always names something seekable,
+                      // so SYS_STAT sets it unconditionally.
+
+#define SYS_LSEEK 53 // RDI = fd, RSI = a SIGNED byte offset, RDX =
+                      // one of SYS_SEEK_* below. Moves the fd's
+                      // position and returns the NEW position, or a
+                      // negative errno: -EBADF for a bad fd, -ESPIPE
+                      // for a console, pipe or socket (which have no
+                      // position to move), -EINVAL for an unknown
+                      // whence or a result that would land before byte
+                      // zero.
+                      //
+                      // Seeking PAST the end is legal and is not an
+                      // error -- a following write zero-fills the gap
+                      // (fs.h's fs_write_range() already does), which
+                      // is what makes a sparse-ish file possible and
+                      // what POSIX requires. Reading there returns 0.
+                      //
+                      // There is no SYS_TELL: `lseek(fd, 0, CUR)` is
+                      // it, as in every Unix.
+
+#define SYS_SEEK_SET 0 // from the start of the file
+#define SYS_SEEK_CUR 1 // from the current position
+#define SYS_SEEK_END 2 // from the end -- a NEGATIVE offset moves back
+                       // into the file, and 0 means "the end"
+
+#define SYS_FSTAT 54 // RDI = fd, RSI = pointer to a `struct sys_stat`
+                      // (out, the SAME struct SYS_STAT fills). Returns
+                      // 0, or -EBADF.
+                      //
+                      // One struct for both, as POSIX has it, rather
+                      // than a second one that would mean almost the
+                      // same thing -- the drift the shared-source rule
+                      // exists to prevent elsewhere in this tree. What
+                      // an fd adds is the two flags above: a path can
+                      // never name a terminal or a pipe, and an fd can.
+                      //
+                      // For a console, pipe or socket the size and the
+                      // timestamps are ZERO and `flags` says why. That
+                      // is honest rather than lossy: there is no length
+                      // for a pipe to have.
 
 #define SYS_QUERY 52 // RDI = pointer to a `struct query_msg`
                       // (abi/query_abi.h), in and out.

@@ -125,6 +125,23 @@ int     sys_mkdir(const char *path);
 int     sys_rename(const char *oldpath, const char *newpath);
 int     sys_truncate(const char *path, unsigned long long size);
 int     sys_stat(const char *path, struct sys_stat *out);
+
+// The fd's position, moved. `whence` is SYS_SEEK_SET/CUR/END. Returns
+// the NEW position, or -1 with errno ESPIPE on a console, a pipe or a
+// socket -- which is what a buffered stdio turns into fseek()'s failure
+// on an unseekable stream rather than pretending it worked.
+//
+// Seeking PAST the end is legal and is not an error: a following write
+// zero-fills the gap and a read there returns 0. There is no sys_tell()
+// -- sys_lseek(fd, 0, SYS_SEEK_CUR) is it, as in every Unix.
+long long sys_lseek(int fd, long long offset, int whence);
+
+// stat() for an OPEN fd, filling the same struct. What it adds over the
+// path-keyed one is `flags`: SYS_STAT_TTY (choose line buffering) and
+// SYS_STAT_SEEKABLE (fseek will work). For a console, a pipe or a
+// socket the size and timestamps are zero, honestly -- there is no
+// length for a pipe to have.
+int     sys_fstat(int fd, struct sys_stat *out);
 // A second NAME for an existing file. -1 with errno EPERM when the
 // mounted filesystem's format has no link counts, which is a property
 // of the volume rather than of these two paths.

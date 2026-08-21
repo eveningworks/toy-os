@@ -3632,3 +3632,56 @@ which is what it is for. The KTEST covers the half that rots silently
 (an init that stopped marking itself up); the failing case is verified
 by a positive control at the source, where the boot smoke test catches
 the panic line.
+
+## `lseek` made an fd's position mean something writes had been ignoring
+
+`SYS_LSEEK`, `SYS_FSTAT` and `SYS_O_APPEND` landed together as Stage 0
+of `docs/libc-design.md`, and adding the first one forced a change to
+the second-oldest assumption in the fd table.
+
+**A write to a file fd used to append unconditionally.** `struct
+open_file` carried an `offset` maintained by the READ path only, and
+`sys_do_write_file()` deliberately ignored it -- its comment said so,
+and the reasoning was sound at the time: making writes honour it would
+have changed what every existing caller did, which was a separate
+change from the truncation fix being made that day.
+
+`lseek` is that separate change arriving. A position that one half of
+the interface ignores is not a position, and "seek, then write" is not a
+thing that can be bolted onto an fd whose writes always go to the end.
+So the position is now shared by reads and writes, as POSIX has it, and
+`SYS_O_APPEND` is how a caller asks for the old behaviour.
+
+**What made this safe to do rather than a flag day**: almost everything
+that opens for writing here passes `SYS_O_TRUNC`, and position 0 of an
+emptied file IS its end -- so those callers changed behaviour by exactly
+nothing. Auditing the rest found ONE real caller relying on the old
+silence: the shell's `>>`, which had been getting appending by not
+asking for it. It asks now, and that is what finally makes `>` and `>>`
+different operations rather than the same operation with a truncate in
+front of one of them.
+
+**`isatty` is a FLAG, not a syscall.** `SYS_FSTAT` fills the same
+`struct sys_stat` the path-keyed `SYS_STAT` does -- one struct, as in
+POSIX, rather than a second one meaning almost the same thing -- and
+what an fd adds is `SYS_STAT_TTY` and `SYS_STAT_SEEKABLE` in the
+existing `flags` word. Flags rather than new struct fields because a
+bare `is_tty` member would mean nothing for a path stat, which is
+exactly the "a struct full of zeroed fields invites a caller to believe
+them" hazard that struct's own comment warns about; a flag that is
+simply not set reads correctly for both callers. And a dedicated
+`SYS_ISATTY` would have been a syscall returning a single bit that the
+very next thing stdio wants (a size, to pick a buffer) makes redundant.
+
+Linux and NT both have the fd-keyed and path-keyed stat share a
+structure for the same reason, and both spell "this stream has no
+position" as `ESPIPE` -- a name that mentions pipes only because a pipe
+was the first unseekable thing, and which a libc's `fseek()` turns
+straight into the errno a program expects.
+
+**A bug fell out of the audit.** `SYS_OPEN` tested existence by
+`fs_read()`-ing the whole file, which cost a full read on every open
+and, worse, reported `-ENOENT` for any file too large for the staging
+buffer -- `fs_read()` returns NULL for "cannot load this whole" exactly
+as it does for "not there". Nothing had noticed because nothing opened a
+large file; a libc does immediately. It asks `fs_exists()` now.

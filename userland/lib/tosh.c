@@ -219,10 +219,13 @@ static int redir_parse(struct tosh *sh, char *line, struct tosh_redir *r) {
             if (r->in_fd >= 0) sys_close(r->in_fd);
             r->in_fd = fd;
         } else {
-            // `>` truncates, `>>` does not. Everything this filesystem
-            // writes APPENDS (see SYS_WRITE), so the difference is
-            // entirely in the O_TRUNC at open time.
-            fd = sys_open(path, SYS_O_WRITE | SYS_O_CREAT | (found[i].op == 1 ? SYS_O_TRUNC : 0));
+            // `>` truncates and writes from the start; `>>` appends.
+            // Both flags are now REQUIRED to say so: a write used to
+            // append unconditionally, so `>>` got its behaviour by
+            // saying nothing, and SYS_LSEEK gave the fd's position a
+            // meaning for writes that made that silence wrong.
+            fd = sys_open(path, SYS_O_WRITE | SYS_O_CREAT |
+                                (found[i].op == 1 ? SYS_O_TRUNC : SYS_O_APPEND));
             if (fd < 0) { emit(sh, "tosh: cannot write "); emit(sh, path); emit(sh, "\n"); return -1; }
             if (r->out_fd >= 0) sys_close(r->out_fd);
             r->out_fd = fd;

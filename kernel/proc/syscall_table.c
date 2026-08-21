@@ -91,6 +91,11 @@ static const struct syscall_desc SYSCALL_TABLE[] = {
     [SYS_LINK]          = { "link",          sys_link,          { A_PATH, A_PATH } },
     [SYS_SYNC]          = { "sync",          sys_sync,          { A_END } },
     [SYS_QUERY]         = { "query",         sys_query,         { A_HEX } },
+    // The offset traces as a signed decimal and the whence as a plain
+    // one: SEEK_SET/CUR/END would want a third argument formatter for
+    // three values, and `lseek(3, -16, 2)` is already readable.
+    [SYS_LSEEK]         = { "lseek",         sys_lseek,         { A_FD, A_INT, A_INT } },
+    [SYS_FSTAT]         = { "fstat",         sys_fstat,         { A_FD, A_HEX } },
 };
 
 #define SYSCALL_TABLE_COUNT (sizeof SYSCALL_TABLE / sizeof SYSCALL_TABLE[0])

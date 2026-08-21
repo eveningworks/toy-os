@@ -92,7 +92,14 @@ struct open_file {
         struct {
             char name[FS_PATH_MAX];
             enum fd_mode mode;
-            uint32_t offset; // read position; unused in write mode (always appends)
+            // THE position, shared by reads and writes, as in POSIX.
+            // It was a read-only cursor until SYS_LSEEK existed and
+            // writes appended regardless; a position one half of the
+            // interface ignores cannot be seeked. 64-bit because
+            // fs_read_range()/fs_write_range() take a 64-bit offset --
+            // the old uint32_t was a 4 GiB ceiling nothing announced.
+            uint64_t pos;
+            uint8_t append; // SYS_O_APPEND: every write goes to the end
         } file;
         struct {
             int unused_placeholder; // no real socket state yet -- see SYS_SOCKET's doc comment
@@ -175,6 +182,8 @@ int sys_mkdir(struct syscall_ctx *c);
 int sys_rename(struct syscall_ctx *c);
 int sys_truncate(struct syscall_ctx *c);
 int sys_stat(struct syscall_ctx *c);
+int sys_lseek(struct syscall_ctx *c);
+int sys_fstat(struct syscall_ctx *c);
 int sys_link(struct syscall_ctx *c);
 int sys_sync(struct syscall_ctx *c);
 
