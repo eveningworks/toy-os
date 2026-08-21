@@ -584,7 +584,7 @@ manual steps to be worth automating:
   explicitly at the start -- they persist to the disk image, so
   inheriting them makes every measurement relative to a silently wrong
   baseline. In `gui_regress.py`.
-- **`font_test.py`** -- runtime fonts end to end (~18 checks): a `.ttf`
+- **`font_test.py`** -- runtime fonts end to end (~20 checks): a `.ttf`
   under `/usr/share/fonts` rasterizes, switching faces reaches the
   screen with NO restart (the compositor is told through `WIN_EV_FONT`),
   a size nobody baked works, and the baked font still draws when no face

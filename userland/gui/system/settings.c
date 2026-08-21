@@ -31,7 +31,7 @@
 #include "ui/uapp.h"
 #include "ui/uui.h"
 #include "ui/uui_layout.h"
-#include "ui/uui_tree.h"
+#include "ui/uui_sidebar.h"
 #include "ui/uui_label.h"
 #include "ui/uui_radio_list.h"
 #include "ui/uui_dropdown.h"
@@ -102,7 +102,7 @@ static char g_group_key[MAX_GROUPS][SETTING_ABI_CATEGORY_MAX];
 static char g_group_label[MAX_GROUPS][SETTING_ABI_LABEL_MAX];
 static int  g_group_count;
 
-static struct uui_tree_node g_nodes[MAX_CATEGORIES + MAX_GROUPS + 1];
+static struct uui_sidebar_row g_nodes[MAX_CATEGORIES + MAX_GROUPS + 1];
 static int g_node_count;
 
 static char g_status[160];
@@ -170,7 +170,7 @@ static int g_slot_count;
 static struct uui_label     g_page_title;
 static struct uui_label     g_page_desc;
 static struct uui_checkbox  g_advanced_cb;
-static struct uui_tree      g_tree;
+static struct uui_sidebar   g_tree;
 static struct uui_button    g_btn[3];
 static struct uui_button_group g_buttons;
 static struct uui_statusbar g_status_bar;
@@ -242,25 +242,36 @@ static void rebuild_sidebar(void) {
 
     for (int c = 0; c < g_cat_count; c++) {
         if (g_node_count >= (int)(sizeof g_nodes / sizeof g_nodes[0])) break;
-        g_nodes[g_node_count++] = (struct uui_tree_node){
-            .label = g_cat[c], .depth = 0, .id = NODE_CATEGORY_BASE + c
+        // A HEADING, not a row: a category is a caption over the pages
+        // beneath it and is not itself a destination, so it cannot be
+        // selected and the arrow keys step over it. That is the whole
+        // reason this is a uui_sidebar and not a uui_tree -- see that
+        // header. It keeps its id anyway, purely so the debug dump
+        // below can name it.
+        g_nodes[g_node_count++] = (struct uui_sidebar_row){
+            .label = g_cat[c], .kind = UUI_SIDEBAR_HEADING,
+            .id = NODE_CATEGORY_BASE + c
         };
         for (int g = 0; g < g_group_count; g++) {
             if (strcmp(g_group_cat[g], g_cat[c]) != 0) continue;
             if (g_node_count >= (int)(sizeof g_nodes / sizeof g_nodes[0])) break;
-            g_nodes[g_node_count++] = (struct uui_tree_node){
-                .label = g_group_label[g], .depth = 1, .id = NODE_GROUP_BASE + g
+            g_nodes[g_node_count++] = (struct uui_sidebar_row){
+                .label = g_group_label[g], .kind = UUI_SIDEBAR_ITEM,
+                .id = NODE_GROUP_BASE + g
             };
         }
     }
-    // A top-level LEAF, not a category: it has no pages under it, and a
-    // heading that cannot be expanded looks broken.
+    // AN ITEM WITH NO HEADING OVER IT. It is a page, so it has to be
+    // reachable -- a heading could not be selected and the page would
+    // become dead. It sits unindented-looking at the end rather than
+    // inventing a one-page category to hold it.
     if (g_node_count < (int)(sizeof g_nodes / sizeof g_nodes[0]))
-        g_nodes[g_node_count++] = (struct uui_tree_node){
-            .label = "System Information", .depth = 0, .id = NODE_SYSINFO
+        g_nodes[g_node_count++] = (struct uui_sidebar_row){
+            .label = "System Information", .kind = UUI_SIDEBAR_ITEM,
+            .id = NODE_SYSINFO
         };
 
-    uui_tree_set_nodes(&g_tree, g_nodes, g_node_count);
+    uui_sidebar_set_rows(&g_tree, g_nodes, g_node_count);
 }
 
 static int reload_settings(void) {
@@ -562,9 +573,9 @@ static int apply_page(void) {
     // what was asked for. Believing the request instead of the answer is
     // how a UI shows a setting that was refused.
     if (changed) {
-        int keep_node = uui_tree_selected_id(&g_tree);
+        int keep_node = uui_sidebar_selected_id(&g_tree);
         reload_settings();
-        uui_tree_select_id(&g_tree, keep_node);
+        uui_sidebar_select_id(&g_tree, keep_node);
         if (g_page_group >= 0 && g_page_group < g_group_count) open_group(g_page_group);
     }
     return failed == 0;
@@ -799,7 +810,7 @@ static void on_widget(struct uapp *a, int id, int reason) {
             // is how a user learns not to trust the app.
             strlcpy(g_status, "Unapplied changes were discarded", sizeof g_status);
         }
-        navigate(uui_tree_selected_id(&g_tree));
+        navigate(uui_sidebar_selected_id(&g_tree));
         break;
     }
     case ID_ADVANCED:
@@ -983,12 +994,26 @@ static void on_open(struct uapp *a) {
     // Every visible sidebar row, with the y a click should land on --
     // reported by the app rather than re-derived in Python, for the
     // reason DebugConsole.menu_row() exists.
-    int rh = uui_tree_row_h(&g_tree);
-    for (int r = 0; r < uui_tree_visible_count(&g_tree); r++) {
-        int node = uui_tree_node_at_row(&g_tree, r);
-        if (node < 0) break;
-        logf_("settings: row %d id %d y %d depth %d %s\n", r, g_nodes[node].id,
-              g_tree.y + r * rh + rh / 2, g_nodes[node].depth, g_nodes[node].label);
+    int rh = uui_sidebar_row_h(&g_tree);
+    for (int r = 0; r < g_node_count; r++) {
+        // A FLAT LIST: the row at screen position r IS row r, because a
+        // sidebar hides nothing (a tree needed an indirection here only
+        // because collapsing could).
+        //
+        // `depth` is still reported, as 0 for a heading and 1 for an
+        // item, because that is what the structure looks like and what
+        // tools/settings_test.py has always parsed. The KIND is the
+        // thing that actually decides behaviour now, so it is named too.
+        // GRAMMAR UNCHANGED, and the label stays LAST. `depth` is 0 for
+        // a heading and 1 for an item, which is what the structure looks
+        // like and what tools/settings_test.py parses; inserting a field
+        // before the label instead swallowed it into the label, because
+        // a label may contain spaces and is therefore captured as the
+        // rest of the line.
+        logf_("settings: row %d id %d y %d depth %d %s\n",
+              r, g_nodes[r].id, g_tree.y + r * rh + rh / 2,
+              g_nodes[r].kind == UUI_SIDEBAR_HEADING ? 0 : 1,
+              g_nodes[r].label);
     }
     // NO per-slot dump here: on_open runs ONCE, so it would describe the
     // first page forever and a tool reading it while looking at another
@@ -1008,10 +1033,13 @@ static void on_size(int *w, int *h) {
     if (!g_loaded) {
         g_loaded = 1;
         reload_settings();
-        if (g_node_count > 0) {
-            g_tree.selected = 0;
-            navigate(g_nodes[0].id);
-        }
+        // THE FIRST ITEM, NOT ROW 0. With a sidebar, row 0 is a category
+        // HEADING -- not selectable, and its id names no page. Setting
+        // `selected = 0` by hand would put the widget in a state it will
+        // not draw and navigate to nothing. uui_sidebar_set_rows() has
+        // already chosen the first item; ask it what that was.
+        if (g_node_count > 0)
+            navigate(uui_sidebar_selected_id(&g_tree));
     }
     // FONT-DERIVED, and sized HERE rather than in main(): ugfx_char_w()
     // is 0 until uapp_run() has fetched the font, so a checkbox sized
@@ -1028,12 +1056,19 @@ static void on_size(int *w, int *h) {
         g_btn[i].w = bw;
         g_btn[i].h = bh;
     }
+    // FONT-DERIVED, and TALL ENOUGH FOR THE DENSEST PAGE. 26 rows left
+    // the Mouse page's speed control below the fold of its own scroll
+    // view -- reachable by scrolling, but a control you have to go
+    // looking for on the default window size is a control most people
+    // will not find (docs/conventions/gui.md). The page still scrolls,
+    // because a page CAN always outgrow any window; this is about where
+    // the default sits, not about removing the scroll view.
     *w = ugfx_char_w() * 74;
-    *h = ugfx_char_h() * 26;
+    *h = ugfx_char_h() * 32;
 }
 
 int main(void) {
-    uui_tree_init(&g_tree, 0, 0, 0, 0, g_nodes, 0);
+    uui_sidebar_init(&g_tree, 0, 0, 0, 0, g_nodes, 0);
     g_tree.bg = UTHEME_PANEL_BG;
     g_tree.fg = UTHEME_TEXT;
 
@@ -1087,7 +1122,7 @@ int main(void) {
     uui_scrollview_init(&PAGE_SCROLL, &PAGE_LAYOUT);
     uui_scrollview_set_preferred_rows(&PAGE_SCROLL, 14);
 
-    ITEMS_BODY[0] = (struct uui_item){ .ops = &uui_tree_ops, .widget = &g_tree,
+    ITEMS_BODY[0] = (struct uui_item){ .ops = &uui_sidebar_ops, .widget = &g_tree,
                                         .id = ID_TREE, .flags = UUI_FILL_H };
     ITEMS_BODY[1] = (struct uui_item){ .ops = &uui_scrollview_ops, .widget = &PAGE_SCROLL,
                                         .id = ID_PAGE,

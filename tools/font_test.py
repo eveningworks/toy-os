@@ -314,6 +314,39 @@ def check_weights_and_kerning(dbg, qmp):
               priv_h > sess_h, f"private {priv_h}px vs session {sess_h}px")
 
 
+def check_boot_face_is_live(dbg):
+    """A face selected at BOOT must actually be drawing.
+
+    THE BUG THIS EXISTS FOR, and why it lives here rather than in a
+    KTEST. font_face_select() only loads and validates a .ttf; the atlas
+    that makes it drawable comes from gfx_set_font_px(). font_config_init()
+    called the first and -- with no `font_size` key in /etc/toyos.conf --
+    returned before the second. So `fontface` reported a face as active
+    while every glyph came from the BAKED tables, and proportional
+    advances, kerning and bold all silently fell back.
+
+    It survived a full green suite because a missing size key is the
+    state of a FRESHLY FORMATTED DISK and of no developer's image: the
+    key persists once anything sets it, and every check in this file used
+    to set a size before measuring anything. So this check runs FIRST,
+    before set_face() or set_size() touch a thing.
+
+    A KTEST cannot do this job: the font KTESTs that run before it build
+    an atlas and restore it, so the invariant would already hold by the
+    time one was asserted, and the test would pass on the broken build.
+    """
+    rep = demo_report(dbg)
+    if not check("Font Demo reported before any setting was touched", bool(rep),
+                 str(sorted(rep))):
+        return
+    # `distinct 1` needs a real face: the baked font has ONE weight, so a
+    # machine that fell back to it reports bold and regular identical.
+    # That makes this one line a test of the whole boot path.
+    bold = rep.get("session bold", "")
+    check("the face selected at boot is live, not just chosen",
+          bold.endswith("distinct 1"), bold)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--sock", default=DEFAULT_SOCK)
@@ -329,6 +362,15 @@ def main():
 
     dbg = DebugConsole(args.sock)
     print("runtime fonts")
+
+    # --- FIRST, before anything is set ---------------------------------
+    # This one is about what BOOT left behind, and every check below
+    # repairs the state it looks for by setting a face and a size. It
+    # only means anything on a fresh image, which is what
+    # `make clean-disk && make iso` gives the suite.
+    dbg.open_app("Font Demo")
+    dbg.settle()
+    check_boot_face_is_live(dbg)
 
     # --- the faces are on disk and one of them is in use ---------------
     # ESTABLISH the starting state rather than inherit it: font_face and
@@ -383,7 +425,17 @@ def main():
     # --- and the baked font is still there -----------------------------
     set_size(dbg, 14)
     set_face(dbg, "builtin")
-    time.sleep(1.0)
+    # WAIT FOR THE COMPOSITOR TO SAY IT CHANGED, rather than sleeping.
+    # This was a fixed 1.0s and it became a flake the moment a font
+    # change got more expensive: every client now re-maps TWO atlases
+    # (regular and bold) on WIN_EV_FONT instead of one, and the extra
+    # round trip was enough to land the capture on the previous face --
+    # which reads exactly like "switching to builtin did nothing".
+    #
+    # stable_pixels() below cannot save it: two identical reads of a
+    # frame that has not started repainting are still identical. A
+    # settled frame is not the same thing as the RIGHT frame.
+    wait_log(dbg, "font changed")
     builtin_left, builtin_ink = text_left(qmp, "builtin")
     check("the baked font still draws when no face is selected",
           builtin_ink > 200, f"left={builtin_left} ink={builtin_ink}")
@@ -392,6 +444,10 @@ def main():
           f"left {prop_left} -> {builtin_left}")
 
     # --- weights, kerning and a private face ---------------------------
+    #
+    # NOTE THE ORDER: check_boot_face_is_live() ran BEFORE any set_face()
+    # or set_size() above, because it is about what BOOT left behind and
+    # setting either would repair the state it is looking for.
     #
     # ON THE PROPORTIONAL FACE, deliberately: dejavu-sans-mono has no
     # `kern` table at all (it is monospace, so kerning it would be

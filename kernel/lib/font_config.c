@@ -64,9 +64,30 @@ void font_config_init(void) {
         font_face_select(FACE_DEFAULT); // absent key: the default, if it exists
     }
 
-    if (!etc_config_get(FONT_CONFIG_FILE, FONT_CONFIG_KEY, value, sizeof(value))) return;
+    // **A SELECTED FACE STILL HAS TO BE BUILT, AND THAT IS WHAT A
+    // MISSING SIZE KEY USED TO SKIP.** font_face_select() only loads and
+    // validates the file; the atlas is built by gfx_set_font_px(). So a
+    // machine with a `font_face` key (or the compiled-in default) and NO
+    // `font_size` key -- which is every freshly formatted disk --
+    // returned here having selected a face and built nothing, and drew
+    // with the BAKED font while `fontface` reported the face as active.
+    //
+    // It hid well because it is invisible on any disk that has ever had
+    // a size set: the key persists, so a developer's image and every
+    // test that sets a size explicitly took the other branch. What it
+    // cost was the whole runtime-font feature on a fresh image --
+    // proportional advances, kerning and bold all silently fell back,
+    // and "bold looks the same as regular" is exactly how it surfaced.
     uint32_t px = 0;
-    if (k_parse_u32(value, &px) && px > 0) gfx_set_font_px((int)px);
+    if (etc_config_get(FONT_CONFIG_FILE, FONT_CONFIG_KEY, value, sizeof(value))
+        && k_parse_u32(value, &px) && px > 0) {
+        gfx_set_font_px((int)px);
+    } else {
+        // No size on record: build the face at whatever size is already
+        // in effect, so the choice takes effect rather than being a
+        // stored preference nothing acts on.
+        gfx_set_font_px(gfx_font_px());
+    }
 }
 
 int font_config_save(enum font_size size) {

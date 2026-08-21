@@ -3392,3 +3392,37 @@ reads as a rasterizer bug rather than a spacing one).
 `draw_glyph_kerned()` blends exactly those columns over the framebuffer
 instead. Ring 3 needs none of this: `ugfx_draw_char()` already skips
 fully-background pixels.
+
+
+## A selected font face was never BUILT unless /etc had a size key
+
+`font_face_select()` loads and validates a `.ttf`; the atlas that makes
+it drawable comes from `gfx_set_font_px()`. `font_config_init()` called
+the first and then returned early when `/etc/toyos.conf` had no
+`font_size` key -- so a machine with a `font_face` key, or with the
+compiled-in default, had a face **active and unbuilt**. `fontface`
+reported it by name while every glyph on screen came from the baked
+tables.
+
+**Why it survived a green suite for a whole feature's lifetime.** A
+missing size key is the state of a freshly formatted disk and of no
+developer's image: the key persists once anything writes it, and every
+check in `tools/font_test.py` set a size before measuring. So the bug
+was invisible everywhere except the one configuration a user actually
+boots into. What it cost was the entire runtime-font feature on a fresh
+image -- proportional advances, kerning and both weights all silently
+fell back to the baked font, and the way it finally surfaced was "bold
+looks exactly like regular".
+
+The fix applies the size already in effect when there is no key, so a
+selected face is always a drawn face. The check lives in
+`font_test.py` and runs FIRST, before anything sets a face or a size,
+because every later check repairs the state it is looking for. **It
+cannot be a KTEST**: the font KTESTs that would run before it build an
+atlas and restore it, so the invariant already holds by the time one
+could assert it, and such a test passes on the broken build.
+
+The general shape, which is the part worth keeping: **a "choose" step
+and an "apply" step that can silently disagree.** Whenever a setting has
+both, the invariant to assert is that a chosen thing is an applied
+thing -- not that the key was read.

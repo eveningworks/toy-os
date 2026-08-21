@@ -110,20 +110,36 @@ def one(dbg, acc, key, prefix, settle=0.4):
     the fragility the markers exist to remove.
     """
     if NO_WM["on"]:
-        client_lines(dbg, acc)
         want = f"screenclient: step {key}"
-        # The LAST occurrence: `r` runs twice, and the second one is the
-        # one a screendump taken after the run can be compared with.
-        starts = [i for i, l in enumerate(acc) if want in l]
-        if not starts:
-            return ""
-        section = acc[starts[-1] + 1:]
-        for l in section:
-            if "screenclient: step " in l:
-                break
-            if f"screenclient: {prefix}" in l:
-                return l
-        return ""
+        # **A POLL, NOT A SINGLE SWEEP, AND THE MARKER IS WHY.** The
+        # client prints `step <k>` and then the reply for that step, as
+        # two separate writes. A sweep that lands BETWEEN them sees the
+        # marker with nothing after it and reports "no reply" -- for a
+        # client that was working perfectly and printed the line a
+        # moment later.
+        #
+        # That is what made this tool intermittent (2 runs in 4 at one
+        # point) with nothing wrong in the kernel: every other check
+        # passed, including the ones on either side, because only this
+        # one reads a reply whose marker can arrive without it. The
+        # accumulator already keeps everything, so polling costs nothing
+        # when the line is already there.
+        deadline = time.time() + 5.0
+        while True:
+            client_lines(dbg, acc)
+            # The LAST occurrence: `r` runs twice, and the second one is
+            # the one a screendump taken after the run can be compared
+            # with.
+            starts = [i for i, l in enumerate(acc) if want in l]
+            if starts:
+                for l in acc[starts[-1] + 1:]:
+                    if "screenclient: step " in l:
+                        break
+                    if f"screenclient: {prefix}" in l:
+                        return l
+            if time.time() >= deadline:
+                return ""
+            time.sleep(0.15)
 
     client_lines(dbg, acc)
     before = len(acc)

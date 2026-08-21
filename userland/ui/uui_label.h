@@ -68,6 +68,24 @@ struct uui_label {
     // box sized for a different font, which is the failure this field
     // exists to prevent.
     const struct ugfx_font *font;
+
+    // RESERVE ROOM FOR THE LAST ROW'S DESCENDERS. Off by default.
+    //
+    // A glyph bitmap is taller than a line (ugfx.h's struct ugfx_font
+    // says why), so a 'g' on the label's final row hangs a couple of
+    // pixels below its box. Usually that is harmless -- it lands in the
+    // gap a layout leaves between children, and the tail survives. It is
+    // only a problem when the next thing along paints an opaque
+    // background right there, which erases it.
+    //
+    // **THIS WAS ONCE ALWAYS-ON AND THAT WAS WRONG.** Two pixels a label
+    // is nothing until a page has twenty of them: System Settings' Mouse
+    // page grew 42px, which pushed its speed control past the bottom of
+    // the scroll view and made it unclickable -- the "a control below the
+    // fold is unreachable" trap, caused by trying to save a descender.
+    // So the caller decides, and the default is the one that cannot move
+    // anything.
+    int descender_room;
 };
 
 void uui_label_init(struct uui_label *l, const char *text);

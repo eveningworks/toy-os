@@ -33,6 +33,11 @@ static struct ugfx_font g_session[UGFX_FONT_WEIGHTS];
 // successful init.
 static const struct ugfx_font *g_font = &g_session[UGFX_FONT_REGULAR];
 
+// Has the bold weight been asked for since the last ugfx_font_init()?
+// See ugfx_font_session(): mapping it eagerly cost every client a
+// startup round trip for a weight most never use.
+static int g_bold_mapped;
+
 // Kept as the old module-level names so that everything below reads as
 // it did; they now just track g_font.
 #define g_glyphs      (g_font->glyphs)
@@ -239,16 +244,17 @@ static int map_session_font(int weight, struct ugfx_font *out) {
 int ugfx_font_init(void) {
     if (!map_session_font(UGFX_FONT_REGULAR, &g_session[UGFX_FONT_REGULAR]))
         return 0;
-    // BOLD IS ALLOWED TO FAIL AND THE INIT STILL SUCCEEDS. The baked
-    // font has one weight, so a machine with no face loaded has no bold
-    // at all -- and an app must not lose its regular text over that. A
-    // failed bold leaves that slot a copy of regular, so
-    // ugfx_font_bold() always returns something drawable and a widget
-    // asking for bold quietly gets regular. That is the same
-    // degradation GDI makes when a family has no bold: text that is not
-    // emphasised, rather than text that is not there.
-    if (!map_session_font(UGFX_FONT_BOLD, &g_session[UGFX_FONT_BOLD]))
-        g_session[UGFX_FONT_BOLD] = g_session[UGFX_FONT_REGULAR];
+    // **BOLD IS MAPPED LAZILY, ON FIRST USE.** Mapping it here cost every
+    // client a second WIN_REQ_FONT round trip at startup for a weight
+    // most of them never draw -- and that delay was measurable: it
+    // pushed screen_surface_test.py's client past the window its first
+    // log line was expected in, 2 runs in 4, against 0 in 4 without it.
+    //
+    // A startup cost paid by every client for a feature used by a few is
+    // the wrong trade even when it is small, and it is the shape that
+    // gets blamed on something else when it finally matters.
+    g_session[UGFX_FONT_BOLD] = g_session[UGFX_FONT_REGULAR];
+    g_bold_mapped = 0;
 
     // A re-init (WIN_EV_FONT) must not leave the current font pointing
     // at a private atlas whose backing the app may have freed, so this
@@ -261,6 +267,17 @@ int ugfx_font_init(void) {
 const struct ugfx_font *ugfx_font_session(int weight) {
     if (weight < 0 || weight >= UGFX_FONT_WEIGHTS)
         weight = UGFX_FONT_REGULAR;
+    if (weight == UGFX_FONT_BOLD && !g_bold_mapped) {
+        // ONCE, and once per font change (ugfx_font_init clears the
+        // flag). A failure leaves the slot as the copy of regular that
+        // ugfx_font_init put there, so this always returns something
+        // drawable -- the baked font has ONE weight, so a machine with
+        // no face loaded has no bold at all and an app must not lose its
+        // text over that. A widget asking for bold quietly gets regular,
+        // the same degradation GDI makes for a family with no bold.
+        g_bold_mapped = 1; // set FIRST: a failed map must not retry per draw
+        map_session_font(UGFX_FONT_BOLD, &g_session[UGFX_FONT_BOLD]);
+    }
     return &g_session[weight];
 }
 

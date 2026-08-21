@@ -537,6 +537,7 @@ whenever a headline here tells you something you did not already know.
 - **`on_draw` RUNS BEFORE THE WIDGETS; `on_draw_over` RUNS AFTER.**
 - **`uui_label` WRAPS ONLY IF ASKED, AND THE CALLER RESERVES THE ROWS.**
 - **`uui_label` is the caption widget**
+- **`uui_sidebar` IS THE NAVIGATION WIDGET; `uui_tree` MODELS CONTAINMENT.**
 - **`uui_tree` is the navigation widget**
 - **A SETTING DECLARES ITS CATEGORY, and the sidebar is generated from it.**
 - **Control Panel is now SYSTEM SETTINGS**

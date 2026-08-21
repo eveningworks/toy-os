@@ -331,7 +331,18 @@ this the obvious way), not from how much history it accumulated.
   control, and reserving space by hand leaves content sliding under it
   the moment the page scrolls. Its natural HEIGHT does not depend on
   its text (`rows`), or a caption changing would reflow the page.
-- **`uui_tree` is the navigation widget** (`userland/ui/uui_tree.h`) --
+- **`uui_sidebar` IS THE NAVIGATION WIDGET; `uui_tree` MODELS CONTAINMENT.**
+  They look alike and behave nothing alike. A sidebar's HEADING is a
+  caption: bold, no indent, and unreachable by mouse, hover, selection,
+  arrow keys or the focus ring -- five places that all route through one
+  `is_item()` predicate so they cannot drift apart. A tree's parent is a
+  destination that can be collapsed. Every desktop that ships a settings
+  sidebar (KDE, GNOME, macOS) ships a flat list with inert headers, not
+  an outline view; System Settings uses `uui_sidebar` for that reason.
+  A sidebar deliberately has no collapsing, no second level of nesting,
+  and no icons (the glyph set has no room for them).
+
+- **`uui_tree` models containment** (`userland/ui/uui_tree.h`) --
   rows at a DEPTH with collapsible parents. **The nodes are the app's
   flat `const` array**, each carrying its depth; the widget derives
   parent/child from the depth run, so there is no allocation, no
