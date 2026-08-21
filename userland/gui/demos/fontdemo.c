@@ -1,179 +1,117 @@
-// Font Demo -- the two font tiers, side by side, in one window.
+// Font Demo -- a font PREVIEWER, and the font-system plumbing probes.
 //
-// WHY THIS EXISTS. The font work is the kind that is easy to declare
-// done and hard to prove: bold that is silently regular, kerning that is
-// implemented and never applied, a private face that loads and is never
-// selected -- every one of those still draws perfectly readable text.
-// This app puts the four cases where a pixel probe can compare them
-// against each other, which is the only comparison that means anything
-// (an absolute width is a property of the shipped face; a RATIO between
-// two ways of drawing the same string is a property of the code).
+// TWO JOBS IN ONE WINDOW.
 //
-// **THE TWO TIERS** (see ui/ugfx.h for the full contract):
+//   1. THE PREVIEWER (what you see and drive). Pick a family from the
+//      dropdown, toggle Bold, set a size, and type your own text -- the
+//      string is drawn at a ladder of sizes in the chosen face, loaded
+//      from a .ttf into this process's own memory (the PRIVATE tier, see
+//      ui/ugfx.h). This is the "does font X actually render" tool a real
+//      font viewer is (Windows Font Viewer, GNOME Fonts, macOS Font
+//      Book all draw a pangram at a range of sizes); the interactivity
+//      is what makes it a test rather than a screenshot.
 //
-//   SESSION -- the desktop's active face, in regular and bold, mapped
-//   read-only by the server. Free, shared, and it changes under this app
-//   when `fontface`/`fontsize` change. Rows 1 and 2.
+//   2. THE PLUMBING PROBES (what a test asserts on). The previewer's own
+//      private fonts cannot prove the things that are easy to ship
+//      broken and still render readable text -- a bold that is silently
+//      regular, kerning that is implemented and never applied. Those are
+//      properties of the SESSION font path, so report() still measures
+//      the session face in both weights and logs the numbers, exactly as
+//      before, and font_test.py still asserts on them.
 //
-//   PRIVATE -- a .ttf this process opened and rasterized into its own
-//   heap (ugfx_font_load), at a size and face nothing else on the
-//   machine is using. Costs this app its own memory and its own
-//   rasterization time, and no setting moves it. Row 3.
-//
-// Row 4 is the kerning control: the same string drawn once normally and
-// once with every pair forced apart, so the difference is visible and
-// measurable rather than a claim.
-//
-// Log grammar, one line per state change, so a test can assert on text
-// without reading pixels:
+// Log grammar, one line per state change:
 //   fontdemo: session regular <w>x<h>
 //   fontdemo: session bold <w>x<h> distinct <0|1>
-//   fontdemo: private <path> <px> <loaded|failed> <w>x<h>
-//   fontdemo: kern <sample> plain <w> unkerned <w>
-//   fontdemo: descender g slack <rows> cell <h>
 //   fontdemo: session-descender g regular <rows> bold <rows> cell <h>
+//   fontdemo: kern "<sample>" plain <w> unkerned <w>
+//   fontdemo: preview face "<name>" bold <0|1> base <px> text-w <w>
+//   fontdemo: preview size <px> <loaded|failed>
 #include "rt/sys.h"
 #include "ui/uapp.h"
+#include "ui/ugfx.h"
+#include "ui/uui_dropdown.h"
+#include "ui/uui_checkbox.h"
+#include "ui/uui_spinbox.h"
+#include "ui/uui_textbox.h"
+#include "ui/uui_focus.h"
+#include "ui/utheme.h"
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 
-// The face the private tier loads. Deliberately the PROPORTIONAL one
-// and deliberately not whatever the session is on: a private font that
-// happened to match the session font would look identical on screen and
-// prove nothing.
-#define PRIVATE_FACE "/usr/share/fonts/liberation-sans.ttf"
-#define PRIVATE_PX   24
+// The families offered, each a regular file and (where one exists) a
+// bold file. Vera Mono ships no bold face on this disk, so Bold falls
+// back to its regular file -- see reload_fonts().
+static const struct {
+    const char *name;
+    const char *regular;
+    const char *bold;   // 0 = no bold face; Bold reuses `regular`
+} FACES[] = {
+    { "Liberation Sans",  "/usr/share/fonts/liberation-sans.ttf",
+                          "/usr/share/fonts/liberation-sans-bold.ttf" },
+    { "DejaVu Sans Mono", "/usr/share/fonts/dejavu-sans-mono.ttf",
+                          "/usr/share/fonts/dejavu-sans-mono-bold.ttf" },
+    { "Vera Mono",        "/usr/share/fonts/vera-mono.ttf", 0 },
+};
+#define FACE_COUNT ((int)(sizeof FACES / sizeof FACES[0]))
+static const char *const FACE_NAMES[FACE_COUNT] = {
+    "Liberation Sans", "DejaVu Sans Mono", "Vera Mono",
+};
 
-// The kerning sample. Every pair in it is one liberation-sans kerns
-// (see the `kern` KTEST in kernel/drivers/font_face_test.c), so the
-// kerned and unkerned widths differ by several pixels rather than by
-// rounding.
+// The classic pangram, editable in the field. Every ASCII letter, which
+// is exactly what a font preview wants to exercise.
+#define PANGRAM "The quick brown fox jumps over the lazy dog"
+
+// The size control: a BASE size, and the ladder is {base, 1.5x, 2x}.
+// Bounded so 2x still fits a sensible window -- the window is sized for
+// the top of this range in on_size().
+#define SIZE_MIN 10
+#define SIZE_MAX 28
+#define SIZE_DEF 16
+#define PREVIEW_ROWS 3
+
+// The kerning sample, unchanged from the plumbing probe: every pair in
+// it kerns on liberation-sans (see the `kern` KTEST in
+// kernel/drivers/font_face_test.c), so plain vs unkerned differ by
+// several pixels rather than by rounding.
 #define KERN_SAMPLE "AV To Ta Wa Yo PA"
 
-static struct ugfx_font g_private;
-static int g_private_ok;
-static int g_private_tried;
+enum { ID_FAMILY = 1, ID_BOLD, ID_SIZE, ID_TEXT };
 
-static int g_session_w, g_session_h;
-static int g_bold_w, g_bold_h;
+#define PAD 8
+#define GAP 8
+#define DD_W  180
+#define SP_W  92
 
-// Draws `str` with kerning DISABLED, by drawing one character at a time
-// -- a single-character run has no preceding character, so nothing
-// kerns. That is the control: it is the same glyphs from the same
-// atlas, positioned only by their advances.
-static int draw_unkerned(struct ugfx_surface *s, int x, int y,
-                          const char *str, uint32_t fg, uint32_t bg) {
-    int cx = x;
-    for (int i = 0; str[i]; i++) {
-        char one[2] = { str[i], 0 };
-        ugfx_draw_string(s, cx, y, one, fg, bg);
-        cx += ugfx_char_advance(str[i]);
-    }
-    return cx - x;
-}
+static struct {
+    struct uui_dropdown family;
+    struct uui_checkbox bold;
+    struct uui_spinbox  size;
+    struct uui_textbox  text;
 
-static void load_private(struct uapp *a);
+    struct uui_item     items[4];
+    struct uui_focus    focus;
+    struct uui_focusable focus_items[4];
 
-static void on_draw(struct uapp *a, struct uapp_draw *d) {
-    struct ugfx_surface *s = d->surface;
+    // The preview fonts: one per ladder rung, rasterised for the current
+    // (face, weight, base) and reloaded when any of those change. Text
+    // changes need no reload, only a redraw.
+    struct ugfx_font font[PREVIEW_ROWS];
+    void            *arena[PREVIEW_ROWS];
+    int              ok[PREVIEW_ROWS];
+    int              px[PREVIEW_ROWS];
 
-    // **CLEAR FIRST, AND THIS APP MUST DO IT ITSELF.** An app with
-    // widgets or a layout gets its surface cleared by the toolkit; one
-    // with neither owns the whole surface and is cleared by nobody (see
-    // uapp.h's on_draw). Leaving it means drawing onto an uninitialised
-    // buffer, and with THIS app that failure is spectacular rather than
-    // merely ugly: ugfx_draw_char() skips fully-background pixels, so
-    // the `bg` handed to it never actually fills anything -- it is only
-    // the colour the ANTIALIASED rim is blended toward. On a black
-    // buffer that paints the glyph interiors near-black (invisible) and
-    // the rim light, so every letter renders as a hollow outline.
-    //
-    // Worth knowing beyond this file: passing a `bg` to a text call is
-    // not the same as having a background, and an app that never clears
-    // gets outlines instead of letters.
-    ugfx_fill(s, d->bg);
+    int cur_face, cur_bold, cur_base;   // what font[] was loaded for
+    int loaded;                          // deferred first load done?
+    int preview_top;                     // y below the controls, from layout()
 
-    int row_h = ugfx_char_h() * 2;
-    int y = 4;
-
-    // --- tier 1, both weights ---------------------------------------
-    ugfx_set_font(ugfx_font_session(UGFX_FONT_REGULAR));
-    ugfx_draw_string(s, 8, y, "Session regular Handgloves", d->fg, d->bg);
-    y += row_h;
-
-    ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
-    ugfx_draw_string(s, 8, y, "Session bold Handgloves", d->fg, d->bg);
-    y += row_h;
-
-    // --- tier 2, this app's own -------------------------------------
-    if (g_private_ok) {
-        ugfx_set_font(&g_private);
-        ugfx_draw_string(s, 8, y, "Private 24px Handgloves", d->fg, d->bg);
-        y += ugfx_char_h() + 8;
-    } else {
-        ugfx_set_font(ugfx_font_session(UGFX_FONT_REGULAR));
-        ugfx_draw_string(s, 8, y,
-                         g_private_tried ? "Private face unavailable"
-                                         : "Private face loading...",
-                         d->fg, d->bg);
-        y += row_h;
-    }
-
-    // --- the kerning control ----------------------------------------
-    //
-    // BOTH ROWS IN THE SESSION FONT, so the only difference between
-    // them is whether pair adjustments were applied. Drawn one above
-    // the other and left-aligned, which is what makes the difference
-    // in end position visible without measuring anything.
-    ugfx_set_font(ugfx_font_session(UGFX_FONT_REGULAR));
-    ugfx_draw_string(s, 8, y, KERN_SAMPLE, d->fg, d->bg);
-    y += ugfx_char_h() + 2;
-    draw_unkerned(s, 8, y, KERN_SAMPLE, d->fg, d->bg);
-
-    // Never leave a font selected across a paint: the next widget or
-    // app-level draw would inherit it. Same discipline gfx_set_bold()
-    // asks for in ring 0, and the reason ugfx_set_font() returns the
-    // previous value.
-    ugfx_set_font(0);
-
-    // AFTER the frame is drawn, never before -- see load_private().
-    if (!g_private_tried) load_private(a);
-}
-
-// Non-zero coverage bytes in one character's cell. The atlas layout is
-// ABI (win_proto.h): cells are count x (char_w * char_h) coverage bytes,
-// back to back, slot 0 being WIN_FONT_FIRST_CHAR.
-static int glyph_ink(const struct ugfx_font *f, char c) {
-    if (!f || !f->glyphs) return 0;
-    int slot = (int)(unsigned char)c - WIN_FONT_FIRST_CHAR;
-    if (slot < 0 || slot >= f->count) return 0;
-    const unsigned char *cell =
-        f->glyphs + (unsigned long)slot * f->char_w * f->char_h;
-    int ink = 0;
-    for (int i = 0; i < f->char_w * f->char_h; i++) if (cell[i]) ink++;
-    return ink;
-}
-
-// Empty rows between a glyph's lowest ink and the bottom of its cell.
-// 0 means the outline reaches the last row -- i.e. it is being clipped,
-// or is about to be.
-static int glyph_bottom_slack(const struct ugfx_font *f, char c) {
-    if (!f || !f->glyphs) return -1;
-    int slot = (int)(unsigned char)c - WIN_FONT_FIRST_CHAR;
-    if (slot < 0 || slot >= f->count) return -1;
-    const unsigned char *cell =
-        f->glyphs + (unsigned long)slot * f->char_w * f->char_h;
-    for (int row = f->char_h - 1; row >= 0; row--)
-        for (int col = 0; col < f->char_w; col++)
-            if (cell[row * f->char_w + col])
-                return f->char_h - 1 - row;
-    return -1; // no ink at all
-}
+    // session plumbing measurements, for the log the test reads
+    int session_w, session_h, bold_w, bold_h;
+} g;
 
 static void logf_line(const char *fmt, ...) {
-    char line[160];
+    char line[192];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(line, sizeof line, fmt, ap);
@@ -181,42 +119,50 @@ static void logf_line(const char *fmt, ...) {
     sys_eprint(line);
 }
 
-// Measures and logs everything a test wants to assert on. Called once
-// the private font has been dealt with, and AGAIN on WIN_EV_FONT -- the
-// session font can change under a running app, and every number below
-// is derived from it.
+// --- the plumbing probes (session font), kept for font_test.py --------
+
+static int glyph_ink(const struct ugfx_font *f, char c) {
+    if (!f || !f->glyphs) return 0;
+    int slot = (int)(unsigned char)c - WIN_FONT_FIRST_CHAR;
+    if (slot < 0 || slot >= f->count) return 0;
+    const unsigned char *cell = f->glyphs + (unsigned long)slot * f->char_w * f->char_h;
+    int ink = 0;
+    for (int i = 0; i < f->char_w * f->char_h; i++) if (cell[i]) ink++;
+    return ink;
+}
+
+static int glyph_bottom_slack(const struct ugfx_font *f, char c) {
+    if (!f || !f->glyphs) return -1;
+    int slot = (int)(unsigned char)c - WIN_FONT_FIRST_CHAR;
+    if (slot < 0 || slot >= f->count) return -1;
+    const unsigned char *cell = f->glyphs + (unsigned long)slot * f->char_w * f->char_h;
+    for (int row = f->char_h - 1; row >= 0; row--)
+        for (int col = 0; col < f->char_w; col++)
+            if (cell[row * f->char_w + col]) return f->char_h - 1 - row;
+    return -1;
+}
+
+// Measures the SESSION font in both weights and logs it. Runs after the
+// first load and again on WIN_EV_FONT (the session face can change under
+// a running app). Unchanged in substance from the previous Font Demo --
+// this is the half font_test.py's font-plumbing checks read.
 static void report(void) {
     const struct ugfx_font *was = ugfx_set_font(ugfx_font_session(UGFX_FONT_REGULAR));
-    g_session_w = ugfx_text_width("Handgloves");
-    g_session_h = ugfx_char_h();
-    logf_line("fontdemo: session regular %dx%d\n", g_session_w, g_session_h);
+    g.session_w = ugfx_text_width("Handgloves");
+    g.session_h = ugfx_char_h();
+    logf_line("fontdemo: session regular %dx%d\n", g.session_w, g.session_h);
 
     ugfx_set_font(ugfx_font_session(UGFX_FONT_BOLD));
-    g_bold_w = ugfx_text_width("Handgloves");
-    g_bold_h = ugfx_char_h();
-    // DISTINCT IS THE ASSERTION THAT MATTERS, AND IT IS MEASURED IN INK
-    // RATHER THAN IN WIDTH. A bold that fell back to regular -- a failed
-    // mapping, a server that answered the wrong weight -- has to be
-    // caught, and the obvious probe is that bold text is wider. It is
-    // not: on a MONOSPACE face a designed bold has exactly the regular
-    // advances, because every cell is one width by definition. Width
-    // reports "distinct 0" for a perfectly working bold on the default
-    // face, which is worse than not checking.
-    //
-    // What is true of every bold, monospace or not, is that the same
-    // letter carries more ink. The client has the glyph coverage bytes
-    // mapped read-only, so it can count them -- the same data the
-    // server rasterized, read the same way ugfx_draw_char() reads it.
-    logf_line("fontdemo: session bold %dx%d distinct %d\n",
-           g_bold_w, g_bold_h,
-           glyph_ink(ugfx_font_session(UGFX_FONT_BOLD), 'H')
-               > glyph_ink(ugfx_font_session(UGFX_FONT_REGULAR), 'H') ? 1 : 0);
+    g.bold_w = ugfx_text_width("Handgloves");
+    g.bold_h = ugfx_char_h();
+    // DISTINCT MEASURED IN INK, not width: a designed bold on a MONOSPACE
+    // face carries the regular advances, so width reports "distinct 0"
+    // for a perfectly working bold. More ink in the same letter is what
+    // is true of every bold, monospace or not.
+    logf_line("fontdemo: session bold %dx%d distinct %d\n", g.bold_w, g.bold_h,
+              glyph_ink(ugfx_font_session(UGFX_FONT_BOLD), 'H')
+                  > glyph_ink(ugfx_font_session(UGFX_FONT_REGULAR), 'H') ? 1 : 0);
 
-    // Descender slack for the SESSION font too -- reported, not
-    // asserted: its cell is deliberately squeezed (it is the layout
-    // grid), so a 0 here is the documented trade rather than a defect.
-    // Reported anyway because "how much is it actually losing" is the
-    // number that decides whether the trade is still worth making.
     logf_line("fontdemo: session-descender g regular %d bold %d cell %d\n",
               glyph_bottom_slack(ugfx_font_session(UGFX_FONT_REGULAR), 'g'),
               glyph_bottom_slack(ugfx_font_session(UGFX_FONT_BOLD), 'g'),
@@ -225,96 +171,256 @@ static void report(void) {
     ugfx_set_font(ugfx_font_session(UGFX_FONT_REGULAR));
     int plain = ugfx_text_width(KERN_SAMPLE);
     int unkerned = 0;
-    for (int i = 0; KERN_SAMPLE[i]; i++)
-        unkerned += ugfx_char_advance(KERN_SAMPLE[i]);
-    logf_line("fontdemo: kern \"%s\" plain %d unkerned %d\n",
-           KERN_SAMPLE, plain, unkerned);
+    for (int i = 0; KERN_SAMPLE[i]; i++) unkerned += ugfx_char_advance(KERN_SAMPLE[i]);
+    logf_line("fontdemo: kern \"%s\" plain %d unkerned %d\n", KERN_SAMPLE, plain, unkerned);
 
-    if (g_private_ok) {
-        ugfx_set_font(&g_private);
-        // DESCENDER CLIPPING, REPORTED AS A NUMBER. A 'g' whose tail is
-        // cut flat is obvious in a screenshot and invisible to every
-        // width and ink measurement above -- the glyph has plenty of
-        // ink, it is simply missing its last two rows. So this reports
-        // how many rows of the 'g' cell are BELOW its lowest ink: 0
-        // means the outline runs into the cell's last row, which is
-        // what clipping looks like, and any positive number means the
-        // cell has room for the tail it actually has.
-        logf_line("fontdemo: descender g slack %d cell %d\n",
-                  glyph_bottom_slack(&g_private, 'g'), g_private.char_h);
-        logf_line("fontdemo: private %s %d loaded %dx%d\n",
-               PRIVATE_FACE, PRIVATE_PX, ugfx_text_width("Handgloves"),
-               ugfx_char_h());
-    } else {
-        logf_line("fontdemo: private %s %d failed 0x0\n", PRIVATE_FACE, PRIVATE_PX);
-    }
     ugfx_set_font(was);
 }
 
-// ONCE, NEVER PER FRAME: ugfx_font_load() reads a ~400 KB file and
-// rasterizes 95 glyphs.
-//
-// **BUT NOT IN on_open EITHER, AND THAT IS THE POINT WORTH KEEPING.**
-// uapp creates the window BEFORE calling on_open, so anything slow in
-// there runs with a window already on screen and nothing painted into
-// it -- the compositor shows a blank rectangle for as long as the work
-// takes. This app spent that window reading a font file, and
-// blank_window_test.py caught it as "only 1 distinct colour in its
-// content area", which is exactly what it is for.
-//
-// So the first frame paints with the session font alone, and the
-// private face is loaded immediately after it and drawn from the second
-// frame on. The rule generalises: an app's first paint should depend on
-// nothing it has to go and fetch.
-static void load_private(struct uapp *a) {
-    unsigned long need = ugfx_font_arena_size(PRIVATE_PX);
-    void *arena = malloc(need);
-    if (arena)
-        g_private_ok = ugfx_font_load(PRIVATE_FACE, PRIVATE_PX, 0,
-                                       &g_private, arena, need);
-    if (!g_private_ok)
-        logf_line("fontdemo: %s would not load -- showing the session font only\n",
-               PRIVATE_FACE);
-    g_private_tried = 1;
+// --- the previewer ----------------------------------------------------
+
+static void log_preview(void);
+
+static void free_fonts(void) {
+    for (int i = 0; i < PREVIEW_ROWS; i++) {
+        free(g.arena[i]);
+        g.arena[i] = 0;
+        g.ok[i] = 0;
+    }
+}
+
+// Rasterises the current family+weight at the size ladder. Called after
+// the first frame (see on_draw's deferred load, the blank-window rule
+// from the previous version) and on every family/weight/size change.
+static void reload_fonts(void) {
+    int face = uui_dropdown_selected(&g.family);
+    if (face < 0 || face >= FACE_COUNT) face = 0;
+    int bold = g.bold.checked ? 1 : 0;
+    int base = uui_spinbox_value(&g.size);
+    if (base < SIZE_MIN) base = SIZE_MIN;
+
+    const char *path = (bold && FACES[face].bold) ? FACES[face].bold
+                                                  : FACES[face].regular;
+
+    g.px[0] = base;
+    g.px[1] = base + base / 2;
+    g.px[2] = base * 2;
+
+    free_fonts();
+    for (int i = 0; i < PREVIEW_ROWS; i++) {
+        unsigned long need = ugfx_font_arena_size(g.px[i]);
+        g.arena[i] = malloc(need);
+        g.ok[i] = g.arena[i] && ugfx_font_load(path, g.px[i], 0,
+                                               &g.font[i], g.arena[i], need);
+    }
+
+    g.cur_face = face;
+    g.cur_bold = bold;
+    g.cur_base = base;
+    log_preview();
+}
+
+// Re-emits the whole preview report from the CURRENT state, without
+// reloading. Called at the end of a reload AND from on_font() -- a
+// session-font change makes a test re-read the log, and the drains
+// between test phases mean the preview lines have to be re-stated or a
+// reader waiting on "preview face" waits forever. The private preview
+// fonts are untouched; this only re-logs what they already are.
+static void log_preview(void) {
+    for (int i = 0; i < PREVIEW_ROWS; i++)
+        logf_line("fontdemo: preview size %d %s\n", g.px[i],
+                  g.ok[i] ? "loaded" : "failed");
+
+    // The width of the current text at the base size -- the number that
+    // lets a test prove selecting a DIFFERENT family actually rendered a
+    // different font (the metrics change), not just relabelled a control.
+    int tw = 0;
+    if (g.ok[0]) {
+        const struct ugfx_font *was = ugfx_set_font(&g.font[0]);
+        tw = ugfx_text_width(uui_textbox_text(&g.text));
+        ugfx_set_font(was);
+    }
+    logf_line("fontdemo: preview face \"%s\" bold %d base %d text-w %d\n",
+              FACES[g.cur_face].name, g.cur_bold, g.cur_base, tw);
+
+    // The family-dropdown rect (content-relative), so a test drives it by
+    // asking rather than guessing pixels -- the notepad/taskmgr pattern.
+    logf_line("fontdemo: layout family %d %d %d %d\n",
+              g.family.x, g.family.y, g.family.w, g.family.h);
+}
+
+// Places the controls in a row and the preview area below them, from the
+// live surface width -- FONT-DERIVED, never a pixel constant
+// (docs/gui-guidelines.md), so it reflows if the desktop font changes.
+static void layout(int surface_w) {
+    int rh = ugfx_char_h() + 10;
+    int y = PAD;
+    int x = PAD;
+
+    uui_dropdown_set_geometry(&g.family, x, y, DD_W, rh);
+    x += DD_W + GAP;
+    uui_checkbox_set_geometry(&g.bold, x, y + (rh - g.bold.h) / 2);
+    x += g.bold.w + GAP;
+    uui_spinbox_set_geometry(&g.size, x, y, SP_W, rh);
+
+    int ty = y + rh + GAP;
+    uui_textbox_set_geometry(&g.text, PAD, ty, surface_w - 2 * PAD, rh);
+
+    g.preview_top = ty + rh + GAP + 4;
+}
+
+// A change arrived by EITHER path -- a mouse-driven widget (on_widget)
+// or a key routed to the focused widget (on_key). Reload the fonts only
+// if the face/weight/size moved; a text edit just needs a repaint.
+static void apply(struct uapp *a) {
+    int face = uui_dropdown_selected(&g.family);
+    if (face < 0) face = 0;
+    int bold = g.bold.checked ? 1 : 0;
+    int base = uui_spinbox_value(&g.size);
+    if (g.loaded && (face != g.cur_face || bold != g.cur_bold || base != g.cur_base))
+        reload_fonts();
+    uapp_redraw(a);
+}
+
+static void on_draw(struct uapp *a, struct uapp_draw *d) {
+    struct ugfx_surface *s = d->surface;
+    // The toolkit cleared the surface and will paint the controls on top
+    // of this. Everything drawn here sits in the preview area below them.
+    layout(s->w);
+
+    uint32_t fg = UTHEME_TEXT, bg = UTHEME_PANEL_BG;
+
+    // A hairline under the controls, so the preview reads as its own pane.
+    ugfx_fill_rect(s, PAD, g.preview_top - 5, s->w - 2 * PAD, 1,
+                   ugfx_rgb(200, 205, 215));
+
+    const char *text = uui_textbox_text(&g.text);
+    int y = g.preview_top;
+
+    // The fonts load off the first TICK, not here: the window must draw
+    // its controls (toolkit) and this placeholder FAST -- a slow first
+    // frame reads as a blank window (blank_window_test catches exactly
+    // that). on_tick() does the ~1-2s rasterisation right after this
+    // frame is presented, then repaints with the real preview. A
+    // uapp_redraw() from here would not do: the event loop blocks between
+    // frames, so it would not repaint until the user touched something.
+    if (!g.loaded) {
+        ugfx_draw_string(s, PAD, y, "Loading fonts...", fg, bg);
+        return;
+    }
+
+    for (int i = 0; i < PREVIEW_ROWS; i++) {
+        if (!g.ok[i]) continue;
+        if (y + g.font[i].char_h > s->h) break;   // clip rows past the bottom
+        ugfx_set_font(&g.font[i]);
+        // Clipped to the content width: the pangram is long and runs off
+        // the right at large sizes -- showing as much as fits is what a
+        // real font viewer does, rather than forcing a huge window.
+        ugfx_draw_string_clipped(s, PAD, y, s->w - 2 * PAD, text, fg, bg);
+        y += g.font[i].char_h + 6;
+    }
+    // Never leave a font selected across a paint -- the toolkit's own
+    // widget draw would inherit it.
+    ugfx_set_font(0);
+}
+
+static void on_widget(struct uapp *a, int id, int reason) {
+    (void)id; (void)reason;
+    apply(a);
+}
+
+static void on_press(struct uapp *a, int cx, int cy, unsigned buttons) {
+    (void)buttons;
+    // Keyboard focus follows the click. The toolkit already routed the
+    // press to the widget for its own action; this only moves focus, so
+    // a typed key reaches the field/control under the last click.
+    if (uui_focus_click(&g.focus, cx, cy)) uapp_redraw(a);
+}
+
+static void on_key(struct uapp *a, int key, unsigned mods) {
+    // One call: the focus manager handles Tab/Shift-Tab and routes every
+    // other key to the focused widget (see ui/uui_focus.h).
+    if (uui_focus_key(&g.focus, key, mods)) apply(a);
+}
+
+// Loads the fonts once, right after the first frame is on screen -- see
+// on_draw's placeholder branch for why this cannot be a uapp_redraw().
+// Returns 1 (repaint) only for that one-shot load; idle otherwise, so
+// the timer keeps firing but nothing repaints.
+static int on_tick(struct uapp *a) {
+    (void)a;
+    if (g.loaded) return 0;
+    g.loaded = 1;
+    reload_fonts();
     report();
-    uapp_redraw(a); // the private row was a placeholder on frame one
+    return 1;
+}
+
+static void on_font(struct uapp *a) {
+    (void)a;
+    // The session measurements are all stale -- re-measure them. The
+    // private preview fonts are deliberately untouched, but re-state them
+    // too so a reader that drained the log still sees the full report.
+    report();
+    if (g.loaded) log_preview();
 }
 
 static void on_open(struct uapp *a) {
     (void)a;
-    // Cheap only. See load_private() for why the font is not opened here.
+    // Cheap only -- the fonts are loaded after the first frame, see
+    // on_draw. uapp creates the window before on_open, so slow work here
+    // shows a blank rectangle for as long as it takes.
 }
 
-// The session font changed under us (`fontface`, `fontsize`). uapp has
-// already re-mapped both weights by the time this runs; everything this
-// app measured from them is stale, so it measures again. The PRIVATE
-// font is deliberately untouched -- that is the point of it.
-static void on_font(struct uapp *a) {
-    (void)a;
-    report();
-}
-
-// FONT-DERIVED, never a pixel constant (docs/gui-guidelines.md): this
-// window holds six rows of text, the tallest of them the private font
-// at PRIVATE_PX, and it must stay big enough for them at whatever size
-// the desktop is on. A fixed 480x260 would be right at 14px and clip at
-// 24px -- which is exactly the failure this app exists to make visible,
-// so it would be a poor place to hardcode one.
+// FONT-DERIVED. Wide enough for the pangram at a middling size (clipped
+// past that) and tall enough for the ladder at the TOP of the size range,
+// so cranking the spinbox up never pushes the last row off the bottom.
 static void on_size(int *w, int *h) {
-    *w = ugfx_char_w() * 40;
-    if (*w < 380) *w = 380;
-    *h = ugfx_char_h() * 8 + PRIVATE_PX * 2 + 24;
+    *w = ugfx_char_w() * 56;
+    if (*w < 620) *w = 620;
+    int ladder = SIZE_MAX + (SIZE_MAX + SIZE_MAX / 2) + SIZE_MAX * 2; // ~4.5x
+    *h = (ugfx_char_h() + 10) * 2 + GAP * 2 + ladder + PREVIEW_ROWS * 8 + PAD * 3;
 }
 
 int main(void) {
+    uui_dropdown_init(&g.family, 0, 0, 0, 0, FACE_NAMES, FACE_COUNT);
+    uui_checkbox_init(&g.bold, 0, 0, 0, "Bold", UTHEME_PANEL_BG, UTHEME_TEXT);
+    uui_spinbox_init(&g.size, SIZE_DEF, SIZE_MIN, SIZE_MAX, 2, "px");
+    uui_textbox_init(&g.text, PANGRAM);
+
+    g.items[0] = (struct uui_item){ .ops = &uui_dropdown_ops, .widget = &g.family, .id = ID_FAMILY };
+    g.items[1] = (struct uui_item){ .ops = &uui_checkbox_ops, .widget = &g.bold,   .id = ID_BOLD };
+    g.items[2] = (struct uui_item){ .ops = &uui_spinbox_ops,  .widget = &g.size,   .id = ID_SIZE };
+    g.items[3] = (struct uui_item){ .ops = &uui_textbox_ops,  .widget = &g.text,   .id = ID_TEXT };
+
+    g.focus_items[0] = (struct uui_focusable){ &g.text,   &uui_textbox_focus_ops };
+    g.focus_items[1] = (struct uui_focusable){ &g.family, &uui_dropdown_focus_ops };
+    g.focus_items[2] = (struct uui_focusable){ &g.size,   &uui_spinbox_ops };
+    g.focus_items[3] = (struct uui_focusable){ &g.bold,   &uui_checkbox_ops };
+    uui_focus_init(&g.focus, g.focus_items, 4);
+
     struct uapp_desc desc = {
         .title = "Font Demo",
         .app_id = "fontdemo",
-        .on_size = on_size,
         .flags = UAPP_SINGLE_INSTANCE,
+        // A cadence purely to get ONE wake shortly after the first frame,
+        // where the fonts load (on_tick); the "Loading fonts..."
+        // placeholder covers the gap. It keeps firing after that, but
+        // on_tick goes idle -- so keep it SLOW (not 60ms), or the idle
+        // wakeups add CPU churn that destabilised font_test's own
+        // timing-sensitive desktop-font-switch checks while this app sat
+        // open beside them.
+        .tick_ms = 250,
+        .on_size = on_size,
         .on_open = on_open,
         .on_font = on_font,
+        .on_tick = on_tick,
         .on_draw = on_draw,
+        .widgets = g.items,
+        .widget_count = 4,
+        .on_widget = on_widget,
+        .on_press = on_press,
+        .on_key = on_key,
     };
     return uapp_run(&desc);
 }

@@ -149,17 +149,19 @@ def demo_report(dbg, timeout=10.0):
             words = body.split()
             if not words:
                 continue
-            # TWO words, not one: "session regular ..." and "session bold
-            # ..." are different measurements that both start with
-            # "session", and keying on the first word alone silently made
-            # the second overwrite the first -- so the bold line was read
-            # as the regular one and the bold check could never pass.
-            key = " ".join(words[:2]) if words[0] == "session" else words[0]
+            # TWO words, not one, for "session ..." and "preview ...":
+            # "session regular"/"session bold" and "preview face"/"preview
+            # size" are different measurements sharing a first word, and
+            # keying on it alone silently made the second overwrite the
+            # first -- so the bold line was read as the regular one and
+            # the bold check could never pass.
+            key = " ".join(words[:2]) if words[0] in ("session", "preview") else words[0]
             out[key] = body
-        # `private` is logged last, so its presence means the whole
-        # report landed -- waiting on the FIRST line and then requiring
-        # all of them is the flake docs/testing.md warns about.
-        if "private" in out:
+        # `preview face` is logged last (after the per-size loads), so its
+        # presence means the whole report landed -- waiting on the FIRST
+        # line and then requiring all of them is the flake docs/testing.md
+        # warns about.
+        if "preview face" in out:
             return out
         time.sleep(0.3)
     return out
@@ -220,15 +222,36 @@ def check_demo_pixels(dbg, qmp):
           200 < ink < total // 4, f"ink={ink}/{total}")
 
 
+def _preview_text_w(face_line):
+    """The `text-w <n>` width from a `preview face ...` line, or 0."""
+    if "text-w" not in face_line:
+        return 0
+    try:
+        return int(face_line.split("text-w", 1)[1].split()[0])
+    except (IndexError, ValueError):
+        return 0
+
+
+def _family_rect(dbg):
+    """The Font Demo's family-dropdown rect (content-relative), or None --
+    logged by the app so the click is a lookup, not a pixel guess."""
+    for line in reversed(dbg.logs("fontdemo: layout family", clear=False)):
+        nums = [int(v) for v in line.split("layout family", 1)[1].split()[:4]]
+        if len(nums) == 4:
+            return tuple(nums)
+    return None
+
+
 def check_weights_and_kerning(dbg, qmp):
-    """Bold beside regular, kerning applied, and a private face, in ring 3."""
+    """Bold vs regular and kerning (session font), plus the previewer:
+    the sample loads on open and picking a different family changes it."""
     dbg.open_app("Font Demo")
     dbg.settle()
     check_demo_pixels(dbg, qmp)
     rep = demo_report(dbg)
 
     check("Font Demo reported its measurements",
-          "session regular" in rep and "private" in rep, str(sorted(rep)))
+          "session regular" in rep and "preview face" in rep, str(sorted(rep)))
     if not rep:
         return
 
@@ -265,35 +288,11 @@ def check_weights_and_kerning(dbg, qmp):
     else:
         check("kerning was measured", False, kern)
 
-    # --- the private tier ---------------------------------------------
-    #
-    # A 24px face this app rasterized ITSELF, while the session sits at
-    # 14px. Asserting it is TALLER than the session font is what proves
-    # the private atlas is actually being drawn from: a private load
-    # that silently failed, or a ugfx_set_font() that did nothing, would
-    # report the session's own metrics.
-    # --- descenders are not clipped -----------------------------------
-    #
-    # A 'g' with its tail cut flat is glaring in a screenshot and
-    # INVISIBLE to every other check here: the glyph has plenty of ink
-    # and the right advance, it is just missing its last rows. The app
-    # reports the empty rows between its lowest ink and the bottom of
-    # its cell, so 0 means the outline runs into the last row.
-    #
-    # This is only asserted for the PRIVATE font. The session font's
-    # cell is deliberately squeezed (it is the layout grid -- see
-    # docs/decisions.md), so it clips descenders on purpose and a check
-    # here would be asserting the opposite of the design.
-    desc = rep.get("descender", "")
-    if desc:
-        slack = int(desc.split("slack")[1].split()[0])
-        check("the private font's descenders are not clipped",
-              slack >= 1, desc)
-
-    # The SESSION font's descenders too, now that its bitmap is taller
-    # than its line. Only meaningful for a loaded face: `builtin`'s
-    # bitmaps were rasterized squeezed at build time by genttf.py, so it
-    # still clips and always will until those are regenerated.
+    # The SESSION font's descenders survive its line pitch, now that its
+    # bitmap is taller than its line. Only meaningful for a loaded face:
+    # `builtin`'s bitmaps were rasterized squeezed at build time by
+    # genttf.py, so it still clips and always will until those are
+    # regenerated.
     sdesc = rep.get("session-descender", "")
     if sdesc:
         reg = int(sdesc.split("regular")[1].split()[0])
@@ -301,17 +300,45 @@ def check_weights_and_kerning(dbg, qmp):
         check("the session font's descenders survive its line pitch",
               reg >= 1 and bold >= 1, sdesc)
 
-    priv = rep.get("private", "")
-    sess = rep.get("session regular", "")
-    check("a face this app rasterized for itself loaded", "loaded" in priv, priv)
-    if "loaded" in priv and sess:
-        # Both lines end "<w>x<h>" but the private one has words after
-        # it, so take the last WxH token rather than splitting the whole
-        # line on "x" -- that read "13 distinct 1" as a number.
-        priv_h = int([t for t in priv.split() if "x" in t][-1].split("x")[1])
-        sess_h = int([t for t in sess.split() if "x" in t][-1].split("x")[1])
-        check("the private font is at ITS size, not the session's",
-              priv_h > sess_h, f"private {priv_h}px vs session {sess_h}px")
+    # --- the previewer, and the interactive check that earns its name -
+    #
+    # The ladder loads on open, and picking a DIFFERENT family actually
+    # rasterises a different face -- proven by the pangram's WIDTH
+    # changing, a metric no relabelled control could move. This is the
+    # half a static demo cannot have.
+    face0 = rep.get("preview face", "")
+    tw0 = _preview_text_w(face0)
+    check("the previewer loaded a face and measured the sample",
+          '"Liberation Sans"' in face0 and tw0 > 0, face0)
+
+    loaded = [l for l in dbg.logs("fontdemo: preview size", clear=False)
+              if l.rstrip().endswith("loaded")]
+    check("the size ladder rasterised (all rungs loaded)",
+          len(loaded) >= 3, f"{len(loaded)} rungs loaded")
+
+    fam = _family_rect(dbg)
+    win = dbg.window("Font Demo")
+    if fam and win:
+        cx, cy = win["content"]["x"], win["content"]["y"]
+        fx, fy, fw, fh = fam
+        dbg.logs("fontdemo: preview face")   # clear: demo_report waits for the NEW one
+        dbg.send("gui click %d %d" % (cx + fx + fw // 2, cy + fy + fh // 2))   # open the popup
+        dbg.settle()
+        # The popup lists items below the box, item N centred at
+        # box_bottom + N*box_h + box_h/2. Item 1 is DejaVu Sans Mono.
+        dbg.send("gui click %d %d" % (cx + fx + fw // 2, cy + fy + 2 * fh + fh // 2))
+        dbg.settle()
+        rep2 = demo_report(dbg)
+        face1 = rep2.get("preview face", "")
+        tw1 = _preview_text_w(face1)
+        # A DIFFERENT family with a DIFFERENT width -- which specific one
+        # the popup row landed on does not matter; that the face changed
+        # and the metrics moved with it is the whole point.
+        check("selecting a different family renders a genuinely different face",
+              '"Liberation Sans"' not in face1 and tw1 > 0 and tw1 != tw0,
+              f"was {tw0}px ({face0}), now {tw1}px ({face1})")
+    else:
+        check("the Font Demo reported its dropdown geometry", False, str(fam))
 
 
 def check_boot_face_is_live(dbg):
