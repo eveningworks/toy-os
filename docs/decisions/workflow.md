@@ -10,7 +10,8 @@ decision in this project and is GENERATED from these files -- run
 
 ## The GUI suite's wall clock is its slowest tool, so the fix was a timeout knob rather than parallelism
 
-`gui_regress.py` runs 24 tools totalling ~425 tool-seconds. The obvious
+`gui_regress.py` ran 24 tools totalling ~425 tool-seconds at the time
+(see the follow-up at the end for the current figures). The obvious
 levers were tried and measured, and two of the three did almost nothing:
 
 | change | wall |
@@ -57,3 +58,16 @@ both act on the sum, which is why both barely moved. The same session
 also opened by asserting from memory that the suite took "about seven
 minutes" when it took 76 seconds -- the difference was the session's own
 polling, not the suite. Measure the baseline before optimising it.
+
+**Follow-up (2026-08-21): once the max was cut, the SUM started to
+bind.** A later pass made every tool wait on an observable rather than a
+fixed sleep -- `enter_gui()` polls the desktop ready instead of sleeping
+~3s per tool, and `menubar`/`taskmgr` (the last fixed-sleep tools) poll
+their app's own layout/log reports. That took the sum to ~408
+tool-seconds over ~25 tools with `notepad` (~41s) the floor, and made a
+higher job count worth having, so `DEFAULT_JOBS` rose to `min(12,
+cores//2)` -- a ceiling against oversubscription (still ~one guest per
+physical core), which only bites a host with more than 24 threads. So the
+"look at the max, never the sum" rule is really "cut the max FIRST, then
+the sum begins to matter": the two passes complemented each other rather
+than one superseding the other.

@@ -1080,12 +1080,17 @@ Five standing rules that are cheaper to know than to rediscover:
   second QEMU -- is `qemu_matrix.py` now.
 - **`gui_regress.py` is the standard check** after touching `apps/ui/`,
   `userland/`, or anything the WM draws -- always with `--logs DIR`. It
-  is ~61s; **its wall clock is the SLOWEST SINGLE TOOL, not the total**
-  (~425 tool-seconds over 24 tools), so raising `-j` and even `--kvm`
-  barely move it -- 76s at `-j4`, 72s at `-j8`, 64s under KVM. What
-  moved it was cutting the floor: the slow tools WAIT on real timeouts,
-  which no amount of guest CPU shortens. On any fan-out here, look at
-  the maximum, never the sum.
+  is ~56s; **its wall clock is bounded by the SLOWEST SINGLE TOOL and by
+  the sum over the job count, whichever is larger** (~408 tool-seconds
+  over ~25 tools, `notepad` ~41s the ceiling), so on any fan-out here
+  look at the maximum, not just the total. The slow tools WAIT on real
+  timeouts no guest CPU shortens; the levers that worked were cutting
+  those floors and making every tool wait on an OBSERVABLE rather than a
+  fixed sleep -- `enter_gui()` (in `gui_debug.py`) polls the desktop
+  ready instead of sleeping ~3s, and `menubar`/`taskmgr` poll the app's
+  own layout/log reports. `DEFAULT_JOBS` is `min(12, cores//2)`: the cap
+  only bites a host with more than 24 hardware threads, so
+  oversubscription stays off the common box.
 - **`demo_test.py` is ON DEMAND ONLY.** Never add it to `preflight.sh`,
   `gui_regress.py` or CI; it boots its own ISO and the demo is a
   showpiece, not something an ordinary change breaks.

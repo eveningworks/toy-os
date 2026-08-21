@@ -640,11 +640,14 @@ manual steps to be worth automating:
   under `/usr/share/fonts` rasterizes, switching faces reaches the
   screen with NO restart (the compositor is told through `WIN_EV_FONT`),
   a size nobody baked works, and the baked font still draws when no face
-  is selected. Its second half opens **Font Demo** and asserts on the
-  numbers that app measures for itself: that bold is distinct from
-  regular, that kerning TIGHTENS a sample rather than loosening it, and
-  that a face the app rasterized privately is at ITS size and not the
-  session's. Those run on `liberation-sans` deliberately -- on the
+  is selected. Its second half opens **Font Demo** (now a font
+  previewer) and asserts on the numbers that app measures for itself:
+  that bold is distinct from regular and that kerning TIGHTENS a sample
+  rather than loosening it (both on the SESSION face) -- and the
+  interactive half a static demo cannot have: the previewer's size ladder
+  loads on open, and DRIVING ITS DROPDOWN to another family renders a
+  genuinely different face, proven by the pangram's width changing. The
+  bold/kerning checks run on `liberation-sans` deliberately -- on the
   default monospace face bold has the regular advances and there is no
   `kern` table at all, so every one of them would pass vacuously.
 
@@ -1019,8 +1022,9 @@ manual steps to be worth automating:
   are the parts that matter: several tools write files, and every one
   of them expects an empty desktop -- a tool inheriting the previous
   one's state fails in ways that look exactly like real widget bugs.
-  It runs **half the host's cores' worth of tools at a time**, capped at
-  8 (`-j N` to change, `-j1` for the old serial behaviour -- that took
+  It runs **half the host's cores' worth of tools at a time** (`cores//2`
+  counts hardware threads, ~one guest per physical core), capped at
+  12 (`-j N` to change, `-j1` for the old serial behaviour -- that took
   107s), each in its own **VM slot**:
   `vm.py --instance N` derives that VM's pidfile, serial socket, QMP
   port and VNC display from one number, and the slot is LEASED for as
@@ -1039,19 +1043,26 @@ manual steps to be worth automating:
   alone). Slot 0 is the plain
   `.vm.pid`/`.vm.serial`/4445 every existing caller assumes.
   **WHERE THE WALL-CLOCK TIME ACTUALLY GOES, measured rather than
-  assumed, because the obvious answers were both wrong.** A full run is
-  ~425 tool-seconds across ~25 tools, so the wall clock is the SLOWEST
-  SINGLE TOOL, not the total: at `-j4` it was 76s and at `-j8` 72s,
+  assumed, because the obvious answers were both wrong.** A full run
+  WAS ~425 tool-seconds across ~25 tools (it is ~408 now, see the end of
+  this entry), so the wall clock was the SLOWEST SINGLE TOOL, not the
+  total: at `-j4` it was 76s and at `-j8` 72s,
   because both are pinned by the same one tool. **KVM (`--kvm`) buys
   almost nothing either** -- 64s -- since what the slow tools spend
   their time on is WAITING for real timeouts, which no amount of guest
   CPU shortens. The lever that worked was cutting the floor itself:
   `forcequit_test.py` waits out the WM's not-responding timeout about
-  ten times, so shortening that timeout for its run (`gui pingtimeout`)
-  took it from 72s to 34s and the whole suite from 76s to 61s. The next
-  floor is `notepad` at 42s. The general lesson is worth more than the
-  seconds: **on a fan-out like this, look at the maximum, never the
-  sum** -- parallelism and faster guests both act on the sum.
+  ten times, so shortening that timeout for its run (`gui pingtimeout`,
+  the 663d63b pass) took it from 72s to ~35s. A later pass made every
+  tool wait on an OBSERVABLE rather than a fixed sleep -- `enter_gui()`
+  polls the desktop ready instead of sleeping ~3s per tool, and
+  `menubar`/`taskmgr` poll the app's own layout/log reports -- taking the
+  sum to ~408 tool-seconds and leaving `notepad` (~41s) the floor. The
+  general lesson is worth more than the seconds: **on a fan-out like
+  this, look at the maximum, not just the sum** -- but once the max is
+  cut, the sum over the job count starts to bind, which is why the two
+  passes complemented each other and why the `-j` cap could then rise to
+  12 for hosts with cores to spare.
 
   `damage_sweep.py` is deliberately NOT in it (much slower under
   `gui damage verify on`, and it has its own `--positive-control`

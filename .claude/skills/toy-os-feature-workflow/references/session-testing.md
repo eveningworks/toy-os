@@ -608,6 +608,56 @@ was a LOG assertion read once after `dbg.settle()` -- settle knows the
 console went quiet, not that this client has handled the click and
 logged. Both tools now poll for the observable and both stopped flaking.
 
+## 2026-08-21: the blind "gui" sleep, and converting the last fixed waits
+
+**THE DESKTOP IS ALREADY UP AT BOOT, so every tool's `send "gui" +
+sleep(2-3)` waited out something already finished.** init starts the
+desktop under the graphical target, so by the time a tool connects the
+desktop is running and the "gui" is refused. `gui state` returning a real
+screen is an observable readiness signal (the WM only answers it while it
+holds the compositor role), so `enter_gui()` in `gui_debug.py` polls that
+and returns in one round trip. ~3s off every one of ~25 tools.
+
+**Converting a fixed sleep is per-sleep judgment, in three buckets, and
+the third one CANNOT be converted.** (1) The assert reads a debug-console
+fact (a layout, a log line) -> poll that fact until it holds, with a
+deadline; the assert still runs on timeout and reports the wrong value.
+(2) The assert reads PIXELS -> `stable_pixels()` (a client draw plus a
+compositor hop that `settle()` does not cover). (3) The assert is
+NEGATIVE -- "commits nothing", "menu did not open" -- and **you cannot
+poll for the absence of an event**; keep a bounded wait. Best is to key
+even a negative check off a POSITIVE signal: taskmgr logs `armed pid N`,
+so wait for the arm, THEN assert nothing was killed.
+
+**A log that ACCUMULATES can still be polled if the reader cuts to the
+current frame.** menubar_test's `Layout` parses only from the last
+`notepad: layout scrollbar` line (emitted first every draw), so
+`popups()` reflects live menu state even though every popup line ever
+logged is still in the buffer -- which is what makes polling `popups() ==
+[]` after a dismiss correct rather than permanently stuck. Verify the
+reader's framing before assuming a poll converges.
+
+**A tool re-run on the SAME VM lies; the suite gives each tool a FRESH
+one.** taskmgr_test passed 20/20 on a fresh boot and failed at check 3 on
+an immediate re-run -- a leftover Task Manager window from the first run.
+`gui_regress.py` copies disk.img and boots a fresh VM per tool, so the
+fresh-boot run is the representative one; restart between manual re-runs
+or you will chase a state artifact.
+
+**`cores//2` counts hardware THREADS, and going past it oversubscribes.**
+The `DEFAULT_JOBS` cap is a ceiling against oversubscription, not a
+target: one busy TCG guest per physical core is the sweet spot, and more
+turns wall-clock into settle flakes. Raising the cap only helps a host
+with threads to spare.
+
+**A NEIGHBOURING app's cadence can flake an unrelated tool.** Font Demo
+loaded its fonts off a `tick_ms` timer (the event loop blocks between
+frames, so a `uapp_redraw()` from `on_draw` will not repaint until an
+event). At 60ms the idle wakeups, while the app sat open beside
+font_test's timing-sensitive desktop-font-switch checks, added enough
+guest-CPU churn to flake them. 250ms fixed it. When a change adds a
+cadence, ask what else is running in the same guest.
+
 **Reading the failure text matters before theorising**: gfxdemo's failing
 check was `check_log(...)`, not a pixel comparison, so "add
 `stable_pixels`" would have been the wrong fix confidently applied.
